@@ -24,8 +24,10 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
@@ -323,6 +325,56 @@ func TestIssue29133RenameAdmissionSerializesRoleRuleWrite(t *testing.T) {
 				"select count(*) from mo_catalog.mo_role_rule where role_id = ? and rule_name = ?",
 				roleID, ruleName).Scan(&ruleCount))
 			require.Zero(t, ruleCount, "recreating the old table must not activate a stale rule")
+		})
+
+		t.Run("stale SI snapshot rejects rename after committed rule", func(t *testing.T) {
+			rt := moruntime.ServiceRuntime(ddlCN.ServiceID())
+			oldMode, hadMode := rt.GetGlobalVariables(moruntime.TxnMode)
+			oldIsolation, hadIsolation := rt.GetGlobalVariables(moruntime.TxnIsolation)
+			rt.SetGlobalVariables(moruntime.TxnMode, pbtxn.TxnMode_Pessimistic)
+			rt.SetGlobalVariables(moruntime.TxnIsolation, pbtxn.TxnIsolation_SI)
+			t.Cleanup(func() {
+				if hadMode {
+					rt.SetGlobalVariables(moruntime.TxnMode, oldMode)
+				} else {
+					rt.SetGlobalVariables(moruntime.TxnMode, pbtxn.TxnMode_Pessimistic)
+				}
+				if hadIsolation {
+					rt.SetGlobalVariables(moruntime.TxnIsolation, oldIsolation)
+				} else {
+					rt.SetGlobalVariables(moruntime.TxnIsolation, pbtxn.TxnIsolation_RC)
+				}
+			})
+
+			staleDB := openDB(ddlCN.GetServiceConfig().CN.Frontend.Port)
+			staleConn, err := staleDB.Conn(ctx)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.NoError(t, staleConn.Close())
+				require.NoError(t, staleDB.Close())
+			})
+			require.NoError(t, execIssue29133(ctx, staleConn, "set session transaction isolation level repeatable read"))
+			staleTx, err := staleConn.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = staleTx.Rollback() })
+			var rowCount int
+			require.NoError(t, staleTx.QueryRowContext(ctx,
+				"select count(*) from mo_catalog.mo_role_rule where role_id = ? and rule_name = ?",
+				roleID, ruleName).Scan(&rowCount))
+			require.Zero(t, rowCount)
+
+			testutils.ExecSQL(t, "", writerCN, fmt.Sprintf(
+				"insert into mo_catalog.mo_role_rule (role_id, rule_name, `rule`) values (%d, '%s', '%s')",
+				roleID, ruleName, ruleSQL))
+			require.NoError(t, writerDB.QueryRowContext(ctx,
+				"select count(*) from mo_catalog.mo_role_rule where role_id = ? and rule_name = ?",
+				roleID, ruleName).Scan(&rowCount))
+			require.Equal(t, 1, rowCount)
+
+			_, err = staleTx.ExecContext(ctx, "alter table `"+database+"`.`t` rename to `"+database+"`.`t_stale_renamed`")
+			require.ErrorContains(t, err, "table rename is not supported outside pessimistic read-committed transactions")
+			require.NoError(t, staleTx.Rollback())
+			deleteRule()
 		})
 	})
 }
