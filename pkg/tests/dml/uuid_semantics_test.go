@@ -17,10 +17,12 @@ package dml
 import (
 	"context"
 	"database/sql"
-	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/stretchr/testify/require"
 )
 
 func TestUUIDSemantics(t *testing.T) {
@@ -112,7 +114,9 @@ func TestUUIDSemantics(t *testing.T) {
 			require.Equal(t, u, v)
 		}
 		for _, q := range []string{"select uuid_to_bin('invalid',null)", "select bin_to_uuid('short',null)", "select bin_to_uuid(repeat('x',15),null)", "select bin_to_uuid(repeat('x',17),null)", "select " + lit + "='invalid'"} {
-			require.Error(t, db.QueryRowContext(ctx, q).Scan(&v), q)
+			var value sql.NullString
+			var serverErr *mysql.MySQLError
+			require.ErrorAs(t, db.QueryRowContext(ctx, q).Scan(&value), &serverErr, q)
 		}
 		require.NoError(t, db.QueryRowContext(ctx, "select bin_to_uuid(uuid_to_bin('"+u+"',null),null)").Scan(&v))
 		require.Equal(t, u, v)
