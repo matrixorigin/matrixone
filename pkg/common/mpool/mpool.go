@@ -58,26 +58,94 @@ type MPoolStats struct {
 	xpoolFree map[string]detailInfo
 }
 
+type onHeapOwnershipShard struct {
+	// value packs objects in the high 32 bits and the low 32 bits of the byte
+	// count. byteOverflow holds complete 2^32-byte carry units, keeping the
+	// combined byte count exact within the int64 diagnostic range.
+	value        atomic.Uint64
+	byteOverflow atomic.Int64
+}
+
 // onHeapOwnership survives pool deletion through live pointer metadata. Keep
 // it separate from MPool so late frees do not retain the pool's diagnostic maps.
+// Counter updates follow the pointer's registry shard, avoiding one shared
+// cache line on every allocation and free. Diagnostics read only these fixed
+// slots and never scan pointer metadata.
 type onHeapOwnership struct {
-	id             int64 // Immutable identity; never retains the MPool.
-	bytes, objects atomic.Int64
+	id     int64 // Immutable identity; never retains the MPool.
+	shards [numPtrShards]onHeapOwnershipShard
 }
 
-func (s *onHeapOwnership) recordAlloc(sz int64) {
-	s.bytes.Add(sz)
-	s.objects.Add(1)
+func (s *onHeapOwnership) recordAlloc(shardIndex int, sz int64) {
+	shard := &s.shards[shardIndex]
+	shard.add(sz, 1)
 }
 
-func (s *onHeapOwnership) recordFree(sz, objects int64) {
+func (s *onHeapOwnership) recordFree(shardIndex int, sz, objects int64) {
 	if sz < 0 || objects < 0 {
 		panic(moerr.NewInternalErrorNoCtx("mpool on-heap ownership freed a negative value"))
 	}
-	bytes := s.bytes.Add(-sz)
-	count := s.objects.Add(-objects)
-	if bytes < 0 || count < 0 {
+	shard := &s.shards[shardIndex]
+	shard.add(-sz, -objects)
+}
+
+func (c *onHeapOwnershipShard) add(bytesDelta, objectsDelta int64) {
+	if bytesDelta > math.MaxInt32 || bytesDelta < math.MinInt32 {
+		panic(moerr.NewInternalErrorNoCtx("mpool on-heap ownership delta is too large"))
+	}
+	if objectsDelta > math.MaxUint32 || objectsDelta < -math.MaxUint32 {
+		panic(moerr.NewInternalErrorNoCtx("mpool on-heap ownership object delta is too large"))
+	}
+	current := c.value.Load()
+	currentObjects := int64(current >> 32)
+	if objectsDelta > 0 && currentObjects > math.MaxUint32-objectsDelta {
+		panic(moerr.NewInternalErrorNoCtx("mpool on-heap ownership object count overflow"))
+	}
+	if objectsDelta < 0 && currentObjects < -objectsDelta {
 		panic(moerr.NewInternalErrorNoCtx("mpool freed more on-heap ownership than allocated"))
+	}
+
+	delta := uint64(uint32(bytesDelta)) | uint64(uint32(objectsDelta))<<32
+	next := c.value.Add(delta)
+	currentBytes, nextBytes := uint32(current), uint32(next)
+	if nextBytes < currentBytes {
+		if bytesDelta > 0 {
+			c.byteOverflow.Add(1)
+			c.value.Add(uint64(math.MaxUint32) << 32)
+		} else if bytesDelta < 0 {
+			c.value.Add(uint64(math.MaxUint32) << 32)
+		}
+	} else if nextBytes > currentBytes && bytesDelta < 0 {
+		c.byteOverflow.Add(-1)
+	}
+	if bytesDelta < 0 || objectsDelta < 0 {
+		bytes, objects := c.outstanding()
+		if bytes < 0 || objects < 0 {
+			panic(moerr.NewInternalErrorNoCtx("mpool freed more on-heap ownership than allocated"))
+		}
+	}
+}
+
+func (c *onHeapOwnershipShard) outstanding() (bytes, objects int64) {
+	value := c.value.Load()
+	bytes = int64(uint32(value)) + c.byteOverflow.Load()<<32
+	objects = int64(value >> 32)
+	return bytes, objects
+}
+
+func (s *onHeapOwnership) outstanding() (bytes, objects int64) {
+	for shardIndex := range s.shards {
+		shardBytes, shardObjects := s.shards[shardIndex].outstanding()
+		bytes += shardBytes
+		objects += shardObjects
+	}
+	return bytes, objects
+}
+
+func (s *onHeapOwnership) reset() {
+	for shardIndex := range s.shards {
+		s.shards[shardIndex].value.Store(0)
+		s.shards[shardIndex].byteOverflow.Store(0)
 	}
 }
 
@@ -505,7 +573,7 @@ func (mp *MPool) recordPtrHdr(ptr unsafe.Pointer, pHdr memHdr) error {
 	}
 	mp.ptrs[ptr] = pHdr
 	if !pHdr.isOffHeap() {
-		mp.onHeap.recordAlloc(int64(pHdr.allocSz))
+		mp.onHeap.recordAlloc(getPtrShardIndex(ptr), int64(pHdr.allocSz))
 	}
 	return nil
 }
@@ -575,7 +643,7 @@ func (mp *MPool) removePtrMetadata(
 	if hdr, ok := mp.ptrs[ptr]; ok {
 		delete(mp.ptrs, ptr)
 		if !hdr.isOffHeap() {
-			mp.onHeap.recordFree(int64(hdr.allocSz), 1)
+			mp.onHeap.recordFree(getPtrShardIndex(ptr), int64(hdr.allocSz), 1)
 		}
 		return hdr, true
 	}
@@ -663,8 +731,8 @@ func (mp *MPool) destroy() {
 		}
 		if onHeapBytes != 0 {
 			globalOnHeapStats.recordFree(onHeapBytes, onHeapObjects)
-			mp.onHeap.recordFree(onHeapBytes, onHeapObjects)
 		}
+		mp.onHeap.reset()
 	}
 }
 
@@ -765,7 +833,7 @@ func (mp *MPool) OnHeapOutstanding() (bytes, objects int64) {
 	if mp == nil || mp.onHeap == nil {
 		return 0, 0
 	}
-	return mp.onHeap.bytes.Load(), mp.onHeap.objects.Load()
+	return mp.onHeap.outstanding()
 }
 
 // ResourcePeakLiveBytes returns the peak observed by token.  Ended tokens
@@ -1780,7 +1848,8 @@ func init() {
 }
 
 func gRecordPtr(ptr unsafe.Pointer, hdr memHdr, owner *onHeapOwnership) error {
-	shard := getPtrShard(ptr)
+	shardIndex := getPtrShardIndex(ptr)
+	shard := &globalPtrShards[shardIndex]
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 	if _, ok := shard.m[ptr]; ok {
@@ -1791,7 +1860,7 @@ func gRecordPtr(ptr unsafe.Pointer, hdr memHdr, owner *onHeapOwnership) error {
 	}
 	shard.m[ptr] = registeredPtr{owner: owner, allocSz: hdr.allocSz, guard: hdr.guard, kind: hdr.kind}
 	if !hdr.isOffHeap() {
-		owner.recordAlloc(int64(hdr.allocSz))
+		owner.recordAlloc(shardIndex, int64(hdr.allocSz))
 	}
 	return nil
 }
@@ -1850,13 +1919,14 @@ func gRemovePtrMetadata(
 	ptr unsafe.Pointer,
 	lease *allocationLease,
 ) (memHdr, bool) {
-	shard := getPtrShard(ptr)
+	shardIndex := getPtrShardIndex(ptr)
+	shard := &globalPtrShards[shardIndex]
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 	if metadata, ok := shard.m[ptr]; ok {
 		delete(shard.m, ptr)
 		if metadata.kind == memKindOnHeap {
-			metadata.owner.recordFree(int64(metadata.allocSz), 1)
+			metadata.owner.recordFree(shardIndex, int64(metadata.allocSz), 1)
 		}
 		return metadata.header(), true
 	}

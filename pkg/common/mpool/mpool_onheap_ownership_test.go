@@ -16,6 +16,7 @@ package mpool
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 	"unsafe"
@@ -140,6 +141,43 @@ func TestOnHeapOwnershipFailedRegistrationDoesNotCount(t *testing.T) {
 			require.Zero(t, objects)
 		})
 	}
+}
+
+func TestOnHeapOwnershipPackedCounterCarryAndBorrow(t *testing.T) {
+	var shard onHeapOwnershipShard
+
+	shard.add(0, 1)
+	shard.add(math.MaxInt32, 0)
+	shard.add(math.MaxInt32, 0)
+	requireBytes, requireObjects := shard.outstanding()
+	require.Equal(t, 2*int64(math.MaxInt32), requireBytes)
+	require.Equal(t, int64(1), requireObjects)
+
+	shard.add(1, 0)
+	requireBytes, requireObjects = shard.outstanding()
+	require.Equal(t, int64(math.MaxUint32), requireBytes)
+	require.Equal(t, int64(1), requireObjects)
+
+	shard.add(1, 0)
+	requireBytes, requireObjects = shard.outstanding()
+	require.Equal(t, int64(1)<<32, requireBytes)
+	require.Equal(t, int64(1), requireObjects)
+
+	shard.add(1, 0)
+	requireBytes, requireObjects = shard.outstanding()
+	require.Equal(t, int64(1)<<32+1, requireBytes)
+	require.Equal(t, int64(1), requireObjects)
+
+	shard.add(-2, -1)
+	requireBytes, requireObjects = shard.outstanding()
+	require.Equal(t, int64(1)<<32-1, requireBytes)
+	require.Zero(t, requireObjects)
+
+	shard.add(1, 1)
+	shard.add(-1, -1)
+	requireBytes, requireObjects = shard.outstanding()
+	require.Equal(t, int64(1)<<32-1, requireBytes)
+	require.Zero(t, requireObjects)
 }
 
 func TestOnHeapOwnershipReallocTransitions(t *testing.T) {
