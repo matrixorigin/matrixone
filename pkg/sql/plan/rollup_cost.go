@@ -43,8 +43,12 @@ import (
 // SORT, and HASH modes; the old rollupSort optimizer hint remains a
 // compatibility fallback for existing deployments.
 const (
-	rollupHashKeyCost           = 0.22
-	rollupHashAggCost           = 0.12
+	rollupHashKeyCost = 0.22
+	rollupHashAggCost = 0.12
+	// Shared grouping-set input materializes one row for every grouping set.
+	// Keep that projection work explicit so the shared baseline does not make
+	// small inputs look artificially cheaper than streaming SORT.
+	rollupHashExpandCost        = 0.40
 	rollupSortCompareCost       = 0.15
 	rollupSortBoundaryCost      = 0.02
 	rollupSortAggCost           = 0.12
@@ -53,9 +57,13 @@ const (
 	rollupHashWorkWeight        = 0.70
 	rollupHashLatencyWeight     = 0.30
 	rollupSpillCostWeight       = 0.35
-	rollupMaxKeyFactor          = 32.0
-	rollupMaxRowWidth           = 1 << 20
-	rollupSortSelectFactor      = 0.80
+	// Protocol 49+ grouping-set sharing can expand one input while keeping one
+	// scan and one aggregate. The cost probe uses the common possibility gate as
+	// a conservative lower envelope; detailed rewrite checks may still reject
+	// sharing and leave the executor on the independent branch model.
+	rollupMaxKeyFactor     = 32.0
+	rollupMaxRowWidth      = 1 << 20
+	rollupSortSelectFactor = 0.80
 )
 
 const rollupAlgorithmVariable = "rollup_algorithm"
@@ -123,23 +131,24 @@ func (builder *QueryBuilder) rollupAlgorithmMode() rollupAlgorithm {
 }
 
 type sortRollupCostEstimate struct {
-	Rows                float64
-	ScanCost            float64
-	HashCost            float64
-	SortCost            float64
-	HashMemory          float64
-	SortMemory          float64
-	SortAggMemory       float64
-	SortOutputMemory    float64
-	SortGroupUpperBound float64
-	SortFeasible        bool
-	BranchCount         int
-	HashWork            float64
-	SortWork            float64
-	PrefixGroups        float64
-	KeyWidth            float64
-	AggregateCost       float64
-	OrderedInput        bool
+	Rows                           float64
+	ScanCost                       float64
+	HashCost                       float64
+	SortCost                       float64
+	HashMemory                     float64
+	SortMemory                     float64
+	SortAggMemory                  float64
+	SortOutputMemory               float64
+	SortGroupUpperBound            float64
+	SortFeasible                   bool
+	BranchCount                    int
+	HashWork                       float64
+	SortWork                       float64
+	PrefixGroups                   float64
+	KeyWidth                       float64
+	AggregateCost                  float64
+	OrderedInput                   bool
+	HashGroupingSetSharingMayApply bool
 }
 
 // chooseSortRollup is the only automatic selector. Physical eligibility is
@@ -281,9 +290,16 @@ func estimateSortRollupCost(
 	sortSpillMem := rollupEffectiveSpillLimit(probe.builder.sortSpillMem)
 
 	prefixKeyFactor := estimateRollupPrefixKeyFactor(probe.groupExprs)
-	hashWork := float64(branches)*(scanCost+rollupHashBranchStartupCost) +
+	hashScanBranches := float64(branches)
+	if probe.hashGroupingSetSharingMayApply {
+		hashScanBranches = 1
+	}
+	hashWork := hashScanBranches*(scanCost+rollupHashBranchStartupCost) +
 		rowsForCPU*(rollupHashKeyCost*prefixKeyFactor+
 			rollupHashAggCost*aggregateCost*float64(branches))
+	if probe.hashGroupingSetSharingMayApply {
+		hashWork += rowsForCPU * rollupHashExpandCost * float64(branches)
+	}
 	parallelism := float64(system.GoMaxProcs())
 	if parallelism < 1 {
 		parallelism = 1
@@ -297,6 +313,12 @@ func estimateSortRollupCost(
 	hashLatencyWork := scanCost + rollupHashBranchStartupCost +
 		rowsForCPU*(rollupHashKeyCost*keyFactor+
 			rollupHashAggCost*aggregateCost)
+	if probe.hashGroupingSetSharingMayApply {
+		// The lower-envelope shared candidate has one aggregate state and no
+		// independent branch fan-out to overlap. Keep its latency estimate
+		// conservative instead of applying UNION branch parallelism reduction.
+		parallelism = 1
+	}
 	hashLatency := math.Max(hashLatencyWork, hashWork/parallelism)
 	hashCost := hashWork*rollupHashWorkWeight + hashLatency*rollupHashLatencyWeight
 
@@ -343,23 +365,24 @@ func estimateSortRollupCost(
 	}
 
 	estimate = sortRollupCostEstimate{
-		Rows:                rows,
-		ScanCost:            scanCost,
-		HashCost:            hashCost,
-		SortCost:            sortCost,
-		HashMemory:          hashMemory,
-		SortMemory:          sortMemory,
-		SortAggMemory:       sortAggMemory,
-		SortOutputMemory:    sortOutputMemory,
-		SortGroupUpperBound: sortGroupUpperBound,
-		SortFeasible:        sortFeasible,
-		BranchCount:         branches,
-		HashWork:            hashWork,
-		SortWork:            sortWork,
-		PrefixGroups:        prefixGroups,
-		KeyWidth:            keyWidth,
-		AggregateCost:       aggregateCost,
-		OrderedInput:        probe.orderedInput,
+		Rows:                           rows,
+		ScanCost:                       scanCost,
+		HashCost:                       hashCost,
+		SortCost:                       sortCost,
+		HashMemory:                     hashMemory,
+		SortMemory:                     sortMemory,
+		SortAggMemory:                  sortAggMemory,
+		SortOutputMemory:               sortOutputMemory,
+		SortGroupUpperBound:            sortGroupUpperBound,
+		SortFeasible:                   sortFeasible,
+		BranchCount:                    branches,
+		HashWork:                       hashWork,
+		SortWork:                       sortWork,
+		PrefixGroups:                   prefixGroups,
+		KeyWidth:                       keyWidth,
+		AggregateCost:                  aggregateCost,
+		OrderedInput:                   probe.orderedInput,
+		HashGroupingSetSharingMayApply: probe.hashGroupingSetSharingMayApply,
 	}
 	return estimate, true
 }

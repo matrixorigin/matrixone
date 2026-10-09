@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	orderop "github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -35,8 +36,9 @@ import (
 
 // BenchmarkRollupAlgorithms measures the physical work that is specific to a
 // ROLLUP implementation. The unordered sort case includes the ORDER operator;
-// the ordered sort case reuses the pre-sorted input. The hash cases execute
-// every grouping-set branch over the same materialized input.
+// the ordered sort case reuses the pre-sorted input. The shared hash case
+// models the protocol 49+ grouping-set expansion, while the serial and
+// parallel hash cases retain the genuinely unshared fallback.
 //
 // The serial hash case is a CPU baseline. The parallel hash case approximates
 // UNION ALL's concurrent topology and is useful when deciding whether a sort
@@ -82,14 +84,14 @@ func BenchmarkRollupAlgorithms(b *testing.B) {
 		// This models:
 		//   SELECT ... FROM (SELECT ... ORDER BY k1, k2, k3) d
 		//   GROUP BY k1, k2, k3 WITH ROLLUP
-		// The sort path pays for the derived ORDER BY once. The hash path sorts
-		// every grouping-set branch, matching the current expanded plan shape.
+		// The sort path pays for the derived ORDER BY once. Shared HASH pays it
+		// once before expansion; the unshared fallback sorts every branch.
 		{name: "million_derived_order_low_ndv", rows: 1000000, ndv: 4, keyCount: 3, derivedOrder: true},
 		{name: "million_derived_order_avg_low_ndv", rows: 1000000, ndv: 4, keyCount: 2, derivedOrder: true, aggregate: "avg"},
 	}
 
 	for _, tc := range cases {
-		for _, algorithm := range []string{"sort", "hash-serial", "hash-parallel"} {
+		for _, algorithm := range []string{"sort", "hash-shared", "hash-serial", "hash-parallel"} {
 			name := fmt.Sprintf("%s/%s", tc.name, algorithm)
 			b.Run(name, func(b *testing.B) {
 				runner, err := newRollupBenchmarkRunner(b, tc.rows, tc.ndv, tc.keyCount,
@@ -107,6 +109,8 @@ func BenchmarkRollupAlgorithms(b *testing.B) {
 					switch algorithm {
 					case "sort":
 						current, err = runner.runSort()
+					case "hash-shared":
+						current, err = runner.runHashShared()
 					case "hash-serial":
 						current, err = runner.runHash(false)
 					case "hash-parallel":
@@ -132,6 +136,7 @@ type rollupBenchmarkRunner struct {
 	specs        []*plan.OrderBySpec
 	ordered      bool
 	derivedOrder bool
+	aggregate    string
 	aggs         []aggexec.AggFuncExecExpression
 }
 
@@ -154,6 +159,7 @@ func newRollupBenchmarkRunner(
 		specs:        make([]*plan.OrderBySpec, keyCount),
 		ordered:      ordered,
 		derivedOrder: derivedOrder,
+		aggregate:    aggregate,
 	}
 	switch aggregate {
 	case "", "count":
@@ -178,10 +184,16 @@ func newRollupBenchmarkRunner(
 	// sharing mutable operator state.
 	for i := 0; i <= keyCount; i++ {
 		mp := mpool.MustNewZero()
-		proc := testutil.NewProcessWithMPool(t, "", mp)
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 		base, err := makeRollupBenchmarkBatch(proc, rows, ndv, keyCount, ordered, aggregate == "avg")
 		if err != nil {
-			proc.Free()
+			if base != nil {
+				base.Clean(proc.Mp())
+			}
+			// Release batches created for earlier branches as well. The owned
+			// process cleanup handles their pools at sub-benchmark teardown, but
+			// it must not be asked to reclaim still-referenced input vectors.
+			runner.free()
 			return nil, err
 		}
 		runner.inputs = append(runner.inputs, &rollupBenchmarkInput{
@@ -201,7 +213,6 @@ func (runner *rollupBenchmarkRunner) free() {
 			input.base.Clean(input.proc.Mp())
 			input.base = nil
 		}
-		input.proc.Free()
 	}
 	runner.inputs = nil
 }
@@ -318,6 +329,102 @@ func (runner *rollupBenchmarkRunner) runSort() (int64, error) {
 	peak, err := drainRollupBenchmarkOp(
 		group, source.proc, source.proc.Mp().CurrNB(), group.ctr.mp)
 	group.Free(source.proc, err != nil, err)
+	if order != nil {
+		order.Free(source.proc, err != nil, err)
+	}
+	child.Free(source.proc, err != nil, err)
+	return peak, err
+}
+
+// runHashShared models the protocol 49+ grouping-set plan: the input is
+// scanned once, expanded into all grouping sets, and consumed by one
+// grouping-aware hash aggregate. It intentionally uses the same projection
+// metadata as the production grouping-set rewrite so the benchmark measures
+// the shared topology rather than a hand-written approximation.
+func (runner *rollupBenchmarkRunner) runHashShared() (int64, error) {
+	source := runner.inputs[0]
+	bat, err := source.base.Dup(source.proc.Mp())
+	if err != nil {
+		return 0, err
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	var inputOp vm.Operator = child
+	var order *orderop.Order
+	if runner.derivedOrder {
+		order = orderop.NewArgument()
+		order.OrderBySpec = runner.specs
+		order.AppendChild(child)
+		inputOp = order
+	}
+
+	groupCount := len(runner.groupBy) - 1
+	projectList := make([]*plan.Expr, 0, groupCount+3)
+	for key := 0; key < groupCount; key++ {
+		projectList = append(projectList, colExpr(int32(key), types.T_int32))
+	}
+	if runner.aggregate == "avg" {
+		projectList = append(projectList, colExpr(int32(groupCount), types.T_int32))
+	}
+	projectList = append(projectList,
+		&plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_bool), NotNullable: true},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: false}}},
+		},
+		&plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: true},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}},
+		})
+	setIDPos := len(projectList) - 1
+	expand := projection.NewArgument()
+	expand.ProjectList = projectList
+	expand.GroupingSetCount = groupCount + 1
+	expand.GroupingFlags = make([]bool, 0, (groupCount+1)*groupCount)
+	for set := 0; set <= groupCount; set++ {
+		for key := 0; key < groupCount; key++ {
+			expand.GroupingFlags = append(expand.GroupingFlags, key < groupCount-set)
+		}
+	}
+	expand.AppendChild(inputOp)
+
+	groupBy := make([]*plan.Expr, 0, groupCount+1)
+	for key := 0; key < groupCount; key++ {
+		groupBy = append(groupBy, colExpr(int32(key), types.T_int32))
+	}
+	groupBy = append(groupBy, colExpr(int32(setIDPos), types.T_int64))
+	group := newGroupOp(source.proc, groupBy, runner.aggs)
+	group.NeedEval = false
+	group.DynamicGrouping = true
+	group.SpillMem = 1 << 30
+	group.AppendChild(expand)
+
+	if order != nil {
+		if err = order.Prepare(source.proc); err != nil {
+			order.Free(source.proc, true, err)
+			child.Free(source.proc, true, err)
+			return 0, err
+		}
+	}
+	if err = expand.Prepare(source.proc); err != nil {
+		expand.Free(source.proc, true, err)
+		if order != nil {
+			order.Free(source.proc, true, err)
+		}
+		child.Free(source.proc, true, err)
+		return 0, err
+	}
+	if err = group.Prepare(source.proc); err != nil {
+		group.Free(source.proc, true, err)
+		expand.Free(source.proc, true, err)
+		if order != nil {
+			order.Free(source.proc, true, err)
+		}
+		child.Free(source.proc, true, err)
+		return 0, err
+	}
+	peak, err := drainRollupBenchmarkOp(
+		group, source.proc, source.proc.Mp().CurrNB(), group.ctr.mp)
+	group.Free(source.proc, err != nil, err)
+	expand.Free(source.proc, err != nil, err)
 	if order != nil {
 		order.Free(source.proc, err != nil, err)
 	}

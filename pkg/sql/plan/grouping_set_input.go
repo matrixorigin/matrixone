@@ -101,17 +101,32 @@ func (builder *QueryBuilder) registerGroupingSetInput(nodes []int32, contexts []
 	})
 }
 
-func (builder *QueryBuilder) sharePendingGroupingSetInputs(rootID int32) int32 {
-	if builder.sharedComputationDisabled() || builder.sessionSelectLimitMayStopEarly {
-		return rootID
+// groupingSetInputSharingMayApply is the cheap common precondition for the
+// protocol 49+ grouping-set sharing rewrite. It is deliberately only a
+// possibility check: shape, determinism, drain, and capacity checks remain in
+// shareGroupingSetInput, and a failed detailed rewrite still falls back to the
+// independent branch model. The rollup cost probe uses this same possibility
+// check as a conservative lower-envelope baseline; it must not claim that the
+// detailed rewrite is guaranteed to succeed.
+func (builder *QueryBuilder) groupingSetInputSharingMayApply() bool {
+	if builder == nil || builder.sharedComputationDisabled() ||
+		builder.sessionSelectLimitMayStopEarly {
+		return false
+	}
+	if builder.compCtx == nil {
+		return false
 	}
 	proc := builder.compCtx.GetProcess()
 	if proc == nil {
-		return rootID
+		return false
 	}
 	version, _ := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.MOProtocolVersion)
 	protocolVersion, ok := version.(int64)
-	if !ok || protocolVersion < defines.MORPCVersion49 {
+	return ok && protocolVersion >= defines.MORPCVersion49
+}
+
+func (builder *QueryBuilder) sharePendingGroupingSetInputs(rootID int32) int32 {
+	if !builder.groupingSetInputSharingMayApply() {
 		return rootID
 	}
 	parents := builder.groupingSetConsumerParents()

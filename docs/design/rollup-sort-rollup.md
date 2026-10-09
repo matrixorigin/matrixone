@@ -206,14 +206,20 @@ proof before this path is enabled.
 The selector uses dimensionless relative work units. `Stats.Cost` supplies the
 scan component and the remaining coefficients are calibrated relative weights;
 they are not presented as elapsed time. Let `N` be the filtered input rows,
-`L` the number of grouping keys, and `B = L + 1` the number of hash branches.
+`L` the number of grouping keys, and `B = L + 1` the number of grouping sets.
+Let `S` be the number of input scan branches in the conservative HASH
+lower-envelope estimate: `S = 1` when the protocol 49+ sharing possibility gate
+is open, otherwise `S = B` for the legacy fallback. The possibility gate does
+not prove that the later detailed rewrite will succeed; a rejected rewrite
+executes the legacy branches and therefore costs more than this envelope.
 For each prefix, `K_i` is its key-width factor and `A` is the aggregate update
 factor derived from the selected aggregate functions:
 
 ```text
-HashWork = B * (ScanCost + hash-branch-startup)
+HashWork = S * (ScanCost + hash-branch-startup)
          + N * (hash-key-cost * sum(K_i)
-                + hash-aggregate-cost * A * B)
+                + hash-aggregate-cost * A * B
+                + shared-expand-cost * B, when S = 1)
 
 SortWork(unordered) = ScanCost
          + N * log2(N + 1) * compare-cost * full-key-factor
@@ -229,9 +235,16 @@ SortWork(ordered) = ScanCost
 Hash branches may overlap in wall time, so the estimate combines total CPU/IO
 work with a bounded branch-latency component. The overlap is capped by an
 explicit `max_dop`, or by the CN's effective `GOMAXPROCS` when `max_dop = 0`;
-it does not pretend that `UNION ALL` removes branch work. Unordered sort
-includes the full input sort and the per-level aggregate updates: it saves
-repeated scans and hash lookups, not aggregate updates. When order is reused,
+it does not pretend that `UNION ALL` removes branch work. Protocol 49+
+grouping-set sharing removes repeated scans and branch startup in the
+lower-envelope candidate, while the projection still emits every grouping set
+and therefore retains the `B` aggregate updates and an explicit expansion
+term in the formula. The planner and cost probe use the same sharing
+possibility gate (protocol, shared-computation setting, and LIMIT early-stop
+safety); if the detailed rewrite cannot prove the shape, the legacy `S = B`
+fallback is retained. Unordered sort includes the full input
+sort and the per-level aggregate updates: it saves repeated scans and hash
+lookups, not aggregate updates. When order is reused,
 the sort comparison/startup terms and row-scaled sort-workspace bound are
 removed. Configured sort workspace and aggregate-state limits add bounded
 penalties. Both ordered and unordered sort paths check the same bounded
@@ -268,7 +281,7 @@ The reproducible operator benchmark is:
 
 ```text
 go test -mod=mod ./pkg/sql/colexec/group -run '^$' \
-  -bench 'BenchmarkRollupAlgorithms/(large_ordered_low_ndv|large_unordered_low_ndv|large_ordered_one_key|large_ordered_single_group|large_ordered_many_levels|large_ordered_wider_ndv|large_ordered_high_ndv|large_ordered_avg_many_levels|large_ordered_very_many_levels|large_ordered_extreme_levels|million_ordered_low_ndv)/(sort|hash-serial|hash-parallel)$' \
+  -bench 'BenchmarkRollupAlgorithms/(large_ordered_low_ndv|large_unordered_low_ndv|large_ordered_one_key|large_ordered_single_group|large_ordered_many_levels|large_ordered_wider_ndv|large_ordered_high_ndv|large_ordered_avg_many_levels|large_ordered_very_many_levels|large_ordered_extreme_levels|million_ordered_low_ndv)/(sort|hash-shared|hash-serial|hash-parallel)$' \
   -benchtime=5x -count=3
 ```
 
@@ -276,15 +289,16 @@ The derived-order shape can be run separately with:
 
 ```text
 go test -mod=mod ./pkg/sql/colexec/group -run '^$' \
-  -bench 'BenchmarkRollupAlgorithms/million_(ordered_low_ndv|derived_order_low_ndv|derived_order_avg_low_ndv)/(sort|hash-serial|hash-parallel)$' \
+  -bench 'BenchmarkRollupAlgorithms/million_(ordered_low_ndv|derived_order_low_ndv|derived_order_avg_low_ndv)/(sort|hash-shared|hash-serial|hash-parallel)$' \
   -benchtime=5x -count=3
 ```
 
 It runs on the same materialized `int32` input, includes the sort operator for
-unordered cases, skips it for the paired ordered cases, and executes all
-legacy grouping-set branches in the hash case. Every large case has at least
-100,000 input rows. On the development M4 CN (`GOMAXPROCS=10`), the measured
-matrix was:
+unordered cases, skips it for paired ordered cases, and records both the
+protocol 49+ shared HASH topology (one scan, one grouping-set expansion, one
+grouping-aware aggregate) and the explicitly unshared serial/parallel
+fallbacks. Every large case has at least 100,000 input rows. On the
+development M4 CN (`GOMAXPROCS=10`), the measured matrix was:
 
 ```text
 shape                              sort          hash-serial       hash-parallel
@@ -302,6 +316,26 @@ shape                              sort          hash-serial       hash-parallel
 1000000 rows, child ORDER BY      24.49–24.64 ms   96.75–99.30 ms     40.65–41.55 ms
 1000000 rows, child ORDER BY + AVG 23.84–25.27 ms  64.06–69.27 ms     36.15–42.28 ms
 ```
+
+The shared HASH rerun (`-benchtime=3x -count=3`) produced these ranges on the
+same host; the values are shown separately so the older serial/parallel
+calibration remains comparable:
+
+```text
+shape                              hash-shared
+100000 rows, 3 keys, NDV=4         58.7–68.9 ms
+100000 rows, unordered              44.7–81.2 ms
+100000 rows, 12 keys, NDV=2        551.5–594.0 ms
+1000000 rows, 3 keys, NDV=4       2379–2487 ms
+1000000 rows, child ORDER BY      2292–2545 ms
+1000000 rows, child ORDER BY + AVG 1348–1450 ms
+```
+
+The shared path keeps one input scan and one aggregate state, but its
+grouping-set projection materializes `B` expanded rows and therefore remains a
+distinct calibration point. The cost model charges those per-set aggregate
+updates while removing only repeated scan/startup work; it must not treat
+sharing as a free reduction in all CPU terms.
 
 The 100000-row cases show the actual advantage of the new combination:
 reusing an existing order removes the global sort, and streaming keeps only
@@ -327,13 +361,15 @@ GROUP BY d.a, d.b, d.c WITH ROLLUP;
 ```
 
 For this shape, the forced SORT plan contains one table scan, one sort, and one
-streaming aggregate. The forced HASH plan expands to four table scans, four
-sorts, five aggregates, and three `UNION ALL` nodes. The derived-order benchmark
-therefore charges the child `ORDER BY` once for SORT and once per grouping-set
-branch for HASH; it is a comparison of the current physical plan shapes, not a
-claim that an arbitrary unordered ROLLUP should always sort. The additional
-`AVG` row uses two grouping keys plus a third measure column and matches the
-issue's `AVG(x)` shape.
+streaming aggregate. The shared HASH plan contains one child `ORDER BY`, one
+grouping-set expansion, and one grouping-aware aggregate; the unshared fallback
+expands to four table scans, four sorts, five aggregates, and three `UNION ALL`
+nodes. The derived-order benchmark therefore charges the child `ORDER BY` once
+for SORT and shared HASH, or once per grouping-set branch for the unshared
+fallback. It is a comparison of the current physical plan shapes, not a claim
+that an arbitrary unordered ROLLUP should always sort. The additional `AVG`
+row uses two grouping keys plus a third measure column and matches the issue's
+`AVG(x)` shape.
 
 The aggregate marker is carried in `ExtraOptions`, which is already part of
 the plan representation. The final group is compiled only after the global
@@ -423,11 +459,13 @@ contracts. Operator memory is reported through the existing group analyzer.
   input stream and explicit remote rejection;
 - cost-model tests prove hash selection for the measured high-cardinality
   counterexample, sort selection for a small/selective input, per-level
-  aggregate charging, unknown-statistics fallback, and aggregate-capacity
-  rejection;
+  aggregate charging, shared versus unshared scan/startup charging,
+  unknown-statistics fallback, and aggregate-capacity rejection;
 - SQL BVT proves `GROUPING()` and empty-input behavior through the real service;
 - benchmark uses identical deterministic data, repeated measured iterations,
-  the same plan shape, and the same output-draining behavior for hash and sort,
-  recording elapsed time and peak MPool usage. A cost selector is accepted only
-  after comparing NDV, key width, rollup depth, skew, ordering reuse, and
+  the same plan shape, and the same output-draining behavior for sort, shared
+  HASH, and unshared fallback HASH, recording elapsed time and peak MPool usage.
+  Benchmark-created processes own their pools and release all input batches on
+  both success and partial-construction failure. A cost selector is accepted
+  only after comparing NDV, key width, rollup depth, skew, ordering reuse, and
   spill/capacity behavior.
