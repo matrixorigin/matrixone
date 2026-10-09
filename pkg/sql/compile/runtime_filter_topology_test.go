@@ -401,8 +401,8 @@ func BenchmarkValidateLocalRuntimeFilterTopologyNoFilter(b *testing.B) {
 
 func TestRequiredIVFTopologyBroadcastAndRemoteFragment(t *testing.T) {
 	c, client := vectorPlacementCompile(t, engine.Nodes{{Id: "a", Addr: "a:6001"}, {Id: "b", Addr: "b:6001"}})
-	moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion108)
-	client.version = defines.MORPCVersion108
+	moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
+	client.version = defines.MORPCVersion109
 	c.proc.Base.TxnOperator = fakeTxnOperator{}
 	c.proc.Base.SessionInfo.TimeZone = time.UTC
 	c.proc.Ctx = defines.AttachAccountId(context.Background(), 0)
@@ -471,7 +471,7 @@ func TestRequiredIVFTopologyBroadcastAndRemoteFragment(t *testing.T) {
 	var required int64
 	data, err := encodeRemoteScopeWithVectorProtocol(roots[1], c.proc, &required)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion108, required)
+	require.Equal(t, defines.MORPCVersion109, required)
 	decoded, err := decodeScope(data, c.proc, true, nil)
 	require.NoError(t, err)
 	t.Cleanup(decoded.release)

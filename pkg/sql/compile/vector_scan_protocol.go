@@ -31,7 +31,7 @@ import (
 )
 
 // A fragment's bound handshake must cover every nested index search scan. Any
-// IndexSearchScan, as a data source or in APPLY, needs MORPCVersion108; it also
+// IndexSearchScan, as a data source or in APPLY, needs MORPCVersion109; it also
 // covers required distributed PRE (103) and coordinator-independent partition
 // ownership (96).
 func minimumRemoteVectorProtocol(p *pipeline.Pipeline) int64 {
@@ -41,11 +41,11 @@ func minimumRemoteVectorProtocol(p *pipeline.Pipeline) int64 {
 	var required int64
 	if p.DataSource != nil && p.DataSource.Node != nil &&
 		p.DataSource.Node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
-		required = defines.MORPCVersion108
+		required = defines.MORPCVersion109
 	}
 	for _, in := range p.InstructionList {
 		if in.GetApply().GetIndexSearchScan() != nil {
-			required = defines.MORPCVersion108
+			required = defines.MORPCVersion109
 		}
 	}
 	for _, child := range p.Children {
@@ -98,7 +98,7 @@ func validateVectorPartitionDestinationWithResult(proc *process.Process, p *pipe
 // Required PRE can only use workers that can receive the complete local domain
 // and honor a CPU centroid route. A GPU route, a non-coordinator ingress or a
 // write transaction falls back as a whole query; a worker without
-// MORPCVersion108 is an error.
+// MORPCVersion109 is an error.
 func (c *Compile) constrainRequiredIVFWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		return nil
@@ -134,13 +134,13 @@ func (c *Compile) constrainRequiredIVFWorkers(qry *plan.Query) error {
 		device = brute_force.DispatchesToDevice[float32](gpu)
 	}
 	if coordinator && readonly && !device {
-		supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion108)
+		supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion109)
 		if err != nil {
 			return err
 		}
 		if !supported {
 			return moerr.NewNotSupportedNoCtxf(
-				"index search scan requires MORPC protocol version %d on every CN", defines.MORPCVersion108)
+				"index search scan requires MORPC protocol version %d on every CN", defines.MORPCVersion109)
 		}
 		return nil
 	}

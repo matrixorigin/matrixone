@@ -8094,7 +8094,8 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	// EmptyByFlag includes borrowed Arrow validity. Avoid row lookup only
 	// when the source has no NULL/grouping bits; retain the full append path.
 	sourceGrouping := !w.gsp.EmptyByFlag() && nulls.Contains(&w.gsp, uint64(sel))
-	sourceNull := w.IsConstNull() ||
+	// Scalar NULL inspection is only needed for constant source vectors.
+	sourceNull := (w.IsConst() && w.IsConstNull()) ||
 		(!w.IsConst() && !w.nsp.EmptyByFlag() && nulls.Contains(&w.nsp, uint64(sel)))
 	// Uniform ordinary metadata needs neither per-row lookup nor sidecar
 	// admission. Include both vectors: an ordinary source can still append to

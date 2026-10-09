@@ -1065,6 +1065,72 @@ func TestBindViewRecordsCompleteTableSnapshot(t *testing.T) {
 	require.Zero(t, nodeID)
 }
 
+func TestBindViewPropagatesOuterRewriteOption(t *testing.T) {
+	storedCaseSensitive := int64(0)
+	mock := &lowerCaseTableNamesCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+		lowerCaseTableNames: 1,
+	}
+	mock.dbs["db"] = true
+	mock.objects["sales"] = &planpb.ObjectRef{SchemaName: "db", ObjName: "Sales", Db: 10, Obj: 11}
+	mock.tables["sales"] = &TableDef{
+		DbName: "db",
+		Name:   "Sales",
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: "tenant", Typ: planpb.Type{Id: int32(types.T_int32)}},
+		},
+	}
+
+	rewriteStmts, err := mysql.Parse(context.Background(),
+		"select * from db.sales where tenant = 1", 1)
+	require.NoError(t, err)
+	rewriteSelect, ok := rewriteStmts[0].(*tree.Select)
+	require.True(t, ok)
+
+	viewJSON, err := json.Marshal(ViewData{
+		Stmt:                "create view v_sales as select Sales.id, Sales.tenant from db.Sales",
+		DefaultDatabase:     "db",
+		LowerCaseTableNames: &storedCaseSensitive,
+	})
+	require.NoError(t, err)
+	builder := NewQueryBuilder(planpb.Query_SELECT, mock, true, false)
+	bindCtx := NewBindContext(builder, nil)
+	bindCtx.remapOption = &tree.RewriteOption{Rewrites: map[string][]*tree.Rewrite{
+		"db.sales": {{TableName: "sales", DbName: "db", Stmt: rewriteSelect}},
+	}}
+
+	viewNodeID, err := builder.bindView(
+		bindCtx,
+		&TableDef{DbName: "db", Name: "v_sales", ViewSql: &planpb.ViewDef{View: string(viewJSON)}},
+		nil,
+		&ObjectRef{SchemaName: "db", ObjName: "v_sales"},
+		"db",
+		"v_sales",
+		nil,
+	)
+	require.NoError(t, err)
+	require.NoError(t, builder.addBinding(viewNodeID, tree.AliasClause{}, bindCtx))
+
+	filtered := false
+	for _, node := range builder.qry.Nodes {
+		if node != nil && node.NodeType == planpb.Node_FILTER && len(node.FilterList) > 0 {
+			filtered = true
+			break
+		}
+	}
+	require.True(t, filtered, "view expansion must apply the outer row rewrite option to the base table")
+}
+
+type lowerCaseTableNamesCompilerContext struct {
+	*MockCompilerContext
+	lowerCaseTableNames int64
+}
+
+func (c *lowerCaseTableNamesCompilerContext) GetLowerCaseTableNames() int64 {
+	return c.lowerCaseTableNames
+}
+
 func TestCollectPrepareViewSchemasRejectsInvalidDependencies(t *testing.T) {
 	for _, testCase := range []struct {
 		name  string
