@@ -1971,6 +1971,9 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		if err := validateMaterializedViewQuery(ctx.GetContext(), stmt.AsSource); err != nil {
 			return nil, err
 		}
+		if err := validateMaterializedViewTimezoneColumns(ctx, stmt.AsSource); err != nil {
+			return nil, err
+		}
 	}
 	viewName := stmt.Name.ObjectName
 	if err := validateIdentifier(ctx.GetContext(), string(viewName)); err != nil {
@@ -2134,6 +2137,12 @@ func IsMaterializedViewTableDef(def *plan.TableDef) bool {
 	}
 	if def.TableType == catalog.SystemMaterializedRel || mvdefinition.PropertyValue(def, mvdefinition.Property) != "" {
 		return true
+	}
+	// Ordinary tables carry CREATE SQL too. Only raw View relations are
+	// legacy candidates for SQL classification; ordinary prepared reads must
+	// not reparse their DDL on every execution.
+	if def.TableType != catalog.SystemViewRel {
+		return false
 	}
 	return isExactMaterializedViewCreateSQL(def.Createsql) ||
 		isExactMaterializedViewCreateSQL(mvdefinition.PropertyValue(def, catalog.SystemRelAttr_CreateSQL))

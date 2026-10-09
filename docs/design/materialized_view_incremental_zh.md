@@ -93,7 +93,7 @@ DROP 先按目标 ID 注销所有活跃任务 generation，再删除拥有的关
 
 ## 升级与回退
 
-所有创建（包括 ON DEMAND）要求协议 64。除准入检查外，旧执行器也会在既有边界拒绝
+所有创建（包括 ON DEMAND）要求协议 108。除准入检查外，旧执行器也会在既有边界拒绝
 新对象：任务落盘使用已有 IndexSync 枚举、空 index selector 和新增 MVReference；
 旧 writer registry 在消费者构造及 SQL 执行之前拒绝空 selector。新解码器验证引用后
 恢复内存中的 MV 类型。

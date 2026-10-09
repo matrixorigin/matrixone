@@ -83,6 +83,48 @@ func materializedViewTimezoneSensitiveFunction(name string) bool {
 	}
 }
 
+// validateMaterializedViewTimezoneColumns closes the gap where binding inserts
+// a TIMESTAMP conversion into an otherwise ordinary comparison. The persisted
+// MV definition does not carry the defining session timezone, so any reference
+// to a TIMESTAMP source column is unsafe for a background refresh.
+func validateMaterializedViewTimezoneColumns(ctx CompilerContext, stmt *tree.Select) error {
+	sources, ok := materializedViewDefinitionSources(stmt, ctx.DefaultDatabase())
+	if !ok {
+		return nil
+	}
+	timestampColumns := make(map[string]struct{})
+	for _, source := range sources {
+		dbName := string(source.SchemaName)
+		if dbName == "" {
+			dbName = ctx.DefaultDatabase()
+		}
+		_, def, err := ctx.Resolve(dbName, string(source.ObjectName), ctx.GetSnapshot())
+		if err != nil {
+			return err
+		}
+		if def == nil {
+			continue
+		}
+		for _, col := range def.Cols {
+			if col != nil && types.T(col.Typ.Id) == types.T_timestamp {
+				timestampColumns[strings.ToLower(col.Name)] = struct{}{}
+			}
+		}
+	}
+	var err error
+	walkASTExpressions(stmt, func(expr tree.Expr) bool {
+		name, ok := expr.(*tree.UnresolvedName)
+		if ok && !name.Star {
+			if _, exists := timestampColumns[strings.ToLower(name.ColName())]; exists {
+				err = moerr.NewNotSupported(ctx.GetContext(), "materialized view requires deterministic expressions without timezone-dependent TIMESTAMP conversions")
+				return false
+			}
+		}
+		return true
+	})
+	return err
+}
+
 func buildMaterializedViewDefinition(ctx CompilerContext, stmt *tree.CreateView, createView *plan.CreateView) error {
 	if stmt.RefreshTiming == tree.MaterializedViewRefreshOnDemand && stmt.RefreshMethod != tree.MaterializedViewRefreshComplete {
 		return moerr.NewNotSupported(ctx.GetContext(), "materialized view ON DEMAND requires COMPLETE refresh")
