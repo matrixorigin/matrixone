@@ -347,3 +347,25 @@ merged-pin release/public/owning validation and required CI before readiness.
 D implementation begins after C merges and stays one complete public campaign
 PR. E/F remain behind their separate recovery-readiness design. Keep #28968
 and #28966 open.
+
+Merged-native delivery checks at executable C head `59aaa5d234`, on
+authoritative MO main `0eb746f37c22f57d2081331b25bf379c80168c81`, pass:
+
+- Clean release SDK regeneration from merged #29, all 73 SDK fingerprints,
+  and source/compiler/header/proto/runtime-package identity checks.
+- Default MO, Sirius-only and combined Sirius/cuVS release builds. An
+  independent C99 SDK consumer passes actual GPU execution, input/result credit,
+  cleanup and engine reuse. Same-process cuVS-before/Sirius/cuVS-after and the
+  complete combined native bridge suite pass.
+- All 22 native preparations and the complete public numeric fixture pass
+  against the merged release SDK. Its 31 terminal events have capability 31,
+  the exact profile, completed GPU tasks, no fallback, healthy cleanup and zero
+  retained input/result credit.
+- All four owning packages pass in default normal/race modes and with
+  Sirius-only native bindings. Native bridge data/cancellation passes 83 race
+  repetitions in one process (measured 0.36 seconds; 30-second budget).
+- Eight SDK exporter tests and sixteen MO SDK verifier tests pass.
+
+These checks establish merged-native delivery evidence. They do not replace
+the remaining merged-kernel integration/CI gate, D's full-data campaign,
+actual-memory/process baselines, or any performance acceptance gate.
