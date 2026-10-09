@@ -91,6 +91,10 @@ type sortRollupProbe struct {
 	tableDef     *TableDef
 	groupExprs   []*Expr
 	orderedInput bool
+	// This is a cost-model possibility, not proof that the later detailed
+	// grouping-set rewrite will succeed. A rejected rewrite uses the legacy
+	// independent branches at execution time.
+	hashGroupingSetSharingMayApply bool
 }
 
 func (builder *QueryBuilder) probeSortRollupInput(
@@ -213,12 +217,13 @@ func (builder *QueryBuilder) probeSortRollupInput(
 		tableDef = sortRollupLeafTableDef(probeBuilder, probeNodeID)
 	}
 	return &sortRollupProbe{
-		builder:      probeBuilder,
-		ctx:          probeCtx,
-		source:       source,
-		tableDef:     tableDef,
-		groupExprs:   boundExprs,
-		orderedInput: orderedInput,
+		builder:                        probeBuilder,
+		ctx:                            probeCtx,
+		source:                         source,
+		tableDef:                       tableDef,
+		groupExprs:                     boundExprs,
+		orderedInput:                   orderedInput,
+		hashGroupingSetSharingMayApply: builder.groupingSetInputSharingMayApply(),
 	}, true
 }
 

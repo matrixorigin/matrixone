@@ -39,7 +39,9 @@ func TestSortRollupCostModelSelectsFromKnownStats(t *testing.T) {
 			rt.SetGlobalVariables("optimizer_hints", "")
 		}
 	}()
-	rt.SetGlobalVariables("optimizer_hints", "determineShuffle=2")
+	// Keep this selector-boundary test on the genuinely unshared fallback; the
+	// shared protocol baseline has a dedicated cost-model assertion below.
+	rt.SetGlobalVariables("optimizer_hints", "determineShuffle=2,sharedComputation=1")
 
 	large := buildAutoRollupPlanWithStats(t, 500_000, "a, b")
 	require.False(t, planHasSortRollup(large.GetQuery()),
@@ -72,7 +74,9 @@ func TestSortRollupCostModelUsesFilterCardinality(t *testing.T) {
 			rt.SetGlobalVariables("optimizer_hints", "")
 		}
 	}()
-	rt.SetGlobalVariables("optimizer_hints", "determineShuffle=2")
+	// Keep this cardinality test on the genuinely unshared fallback; the
+	// shared protocol baseline has a dedicated cost-model assertion below.
+	rt.SetGlobalVariables("optimizer_hints", "determineShuffle=2,sharedComputation=1")
 
 	// The table is large enough that the unfiltered estimate favors hash. The
 	// isolated probe binds WHERE and charges the filtered cardinality instead.
@@ -199,6 +203,41 @@ func TestSortRollupCostModelAccountsForBranchConcurrency(t *testing.T) {
 	require.True(t, ok)
 	require.Greater(t, serial.HashCost, parallel.HashCost,
 		"a max_dop cap must make overlapping UNION ALL branches more expensive")
+}
+
+func TestSortRollupCostModelUsesHashSharingLowerEnvelope(t *testing.T) {
+	makeProbe := func(shared bool) *sortRollupProbe {
+		groupExprs := make([]*Expr, 3)
+		for i := range groupExprs {
+			groupExprs[i] = &Expr{
+				Typ:  plan.Type{Id: int32(types.T_int32)},
+				Ndv:  8,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(i)}},
+			}
+		}
+		return &sortRollupProbe{
+			builder: NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false),
+			source: &Node{Stats: &Stats{
+				TableCnt: 1_000_001,
+				Outcnt:   1_000_000,
+				Cost:     1_000_001,
+				Rowsize:  64,
+			}},
+			groupExprs:                     groupExprs,
+			hashGroupingSetSharingMayApply: shared,
+		}
+	}
+
+	unshared, ok := estimateSortRollupCost(makeProbe(false), nil)
+	require.True(t, ok)
+	shared, ok := estimateSortRollupCost(makeProbe(true), nil)
+	require.True(t, ok)
+	require.False(t, unshared.HashGroupingSetSharingMayApply)
+	require.True(t, shared.HashGroupingSetSharingMayApply)
+	require.Less(t, shared.HashWork, unshared.HashWork,
+		"possible sharing should remove repeated scan/startup work from the lower envelope")
+	require.Less(t, shared.HashCost, unshared.HashCost,
+		"possible sharing should lower the conservative hash baseline")
 }
 
 func TestSortRollupCostModelMatchesMeasuredShapeBoundary(t *testing.T) {
@@ -671,7 +710,9 @@ func buildAutoRollupPlanWithAlgorithm(
 			rt.SetGlobalVariables("optimizer_hints", "")
 		}
 	})
-	rt.SetGlobalVariables("optimizer_hints", "determineShuffle=2")
+	// This helper exercises algorithm controls against the unshared fallback;
+	// shared protocol calibration is covered by the direct cost-model probe.
+	rt.SetGlobalVariables("optimizer_hints", "determineShuffle=2,sharedComputation=1")
 
 	mock := NewMockCompilerContext(true, newPlanTestProcess(t))
 	table := mock.tables["bind_select"]
