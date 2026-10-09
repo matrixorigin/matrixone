@@ -118,21 +118,13 @@ create index ivf_ip using ivfflat on t(v) lists=2 op_type 'vector_ip_ops';
 
 -- @separator:table
 -- @regex("Vector Index Scan", true)
-explain select a from t order by inner_product(v,'[1,1,1,1]') desc limit 3;
--- @separator:table
--- @regex("Vector Index Scan", false)
-explain select a from t order by inner_product(v,'[1,1,1,1]') asc limit 3;
+explain select a from t order by inner_product(v,'[1,1,1,1]') limit 3;
 -- @separator:table
 -- @regex("Vector Index Scan", false)
 explain select a from t order by l2_distance(v,'[1,1,1,1]') limit 3;
 
-select a, inner_product(v,'[1,1,1,1]') as d from t order by inner_product(v,'[1,1,1,1]') desc limit 3;
-select a, inner_product(v,'[1,1,1,1]') as d from t_ref order by inner_product(v,'[1,1,1,1]') desc limit 3;
-select a, inner_product(v,'[1,1,1,1]') as d from t order by inner_product(v,'[1,1,1,1]') asc limit 3;
-select a, inner_product(v,'[1,1,1,1]') as d from t_ref order by inner_product(v,'[1,1,1,1]') asc limit 3;
--- 分数范围在 SQL 正内积域过滤，先过滤再截断候选。
-select a, inner_product(v,'[1,1,1,1]') as d from t where inner_product(v,'[1,1,1,1]') > 200 order by inner_product(v,'[1,1,1,1]') desc limit 2;
-select a, inner_product(v,'[1,1,1,1]') as d from t_ref where inner_product(v,'[1,1,1,1]') > 200 order by inner_product(v,'[1,1,1,1]') desc limit 2;
+select a, inner_product(v,'[1,1,1,1]') as d from t order by inner_product(v,'[1,1,1,1]') limit 3;
+select a, inner_product(v,'[1,1,1,1]') as d from t_ref order by inner_product(v,'[1,1,1,1]') limit 3;
 
 alter table t drop index ivf_ip;
 
@@ -223,20 +215,17 @@ select a, round(cosine_distance(v,'[1,0,0,0]'),4) as d from tc_ref order by cosi
 
 alter table hc drop index h_cos;
 
--- vector_ip_ops：usearch 返回 1-dot，SQL 内积返回 dot。
--- DESC 获取最高内积；ASC 必须回退精确路径，不能反排近邻候选。
+-- vector_ip_ops: usearch's IP metric is 1 - a·b while inner_product is -a·b, so the
+-- index score has to be rescaled to the SQL convention. Before that transform every
+-- HNSW ip score came back exactly 1 higher than brute force — the ordering was right,
+-- so only these value comparisons catch it.
 create index h_ip using hnsw on h(v) op_type 'vector_ip_ops';
 -- @separator:table
 -- @regex("hnsw_search", true)
-explain select a from h order by inner_product(v,'[1,1,1,1]') desc limit 3;
--- @separator:table
--- @regex("hnsw_search", false)
-explain select a from h order by inner_product(v,'[1,1,1,1]') asc limit 3;
+explain select a from h order by inner_product(v,'[1,1,1,1]') limit 3;
 
-select a, inner_product(v,'[1,1,1,1]') as d from h order by inner_product(v,'[1,1,1,1]') desc limit 3;
-select a, inner_product(v,'[1,1,1,1]') as d from t_ref order by inner_product(v,'[1,1,1,1]') desc limit 3;
-select a, inner_product(v,'[1,1,1,1]') as d from h order by inner_product(v,'[1,1,1,1]') asc limit 3;
-select a, inner_product(v,'[1,1,1,1]') as d from t_ref order by inner_product(v,'[1,1,1,1]') asc limit 3;
+select a, inner_product(v,'[1,1,1,1]') as d from h order by inner_product(v,'[1,1,1,1]') limit 3;
+select a, inner_product(v,'[1,1,1,1]') as d from t_ref order by inner_product(v,'[1,1,1,1]') limit 3;
 
 alter table h drop index h_ip;
 
