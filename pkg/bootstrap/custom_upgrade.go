@@ -114,11 +114,11 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 				return err
 			}
 			if latestVersion.Version != currentCN.Version {
-				s.logger.Fatal("BUG: current cn's version(" +
-					currentCN.Version +
-					") must equal cluster latest version(" +
-					latestVersion.Version +
-					")")
+				// A newer CN may still be recovering the retained target. Let
+				// the caller retry after its cluster route has been created.
+				return moerr.NewInvalidStateNoCtxf(
+					"tenant upgrade requires current cn version %s to match cluster latest version %s",
+					currentCN.Version, latestVersion.Version)
 			}
 			if currentCN.Version == version {
 				if latestVersion.VersionOffset != currentCN.VersionOffset {
