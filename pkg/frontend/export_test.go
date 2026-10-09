@@ -580,12 +580,13 @@ func TestExportCSVFiniteSplitGroupsRowsIntoOneWrite(t *testing.T) {
 	stubs.Stub(&openNewFile, func(_ context.Context, ep *ExportConfig, _ *MysqlResultSet) error {
 		ep.CurFileSize = 0
 		ep.hasCSVData = false
+		ep.Rows = 0
 		return nil
 	})
 
 	require.NoError(t, writeExportBatchToFile(ep, makeCSVTestBatch("1,a\n", "2,b\n", "3,c\n")))
 	require.Equal(t, []string{"1,a\n2,b\n", "3,c\n"}, writes)
-	require.Equal(t, uint64(3), ep.Rows)
+	require.Equal(t, uint64(1), ep.Rows)
 }
 
 func TestExportCSVBatchSplitsAreIndependentOfBatchDistribution(t *testing.T) {
@@ -639,12 +640,15 @@ func TestExportCSVBatchWriteErrorPreservesCompletedProgress(t *testing.T) {
 	stubs.Stub(&openNewFile, func(_ context.Context, ep *ExportConfig, _ *MysqlResultSet) error {
 		ep.CurFileSize = 0
 		ep.hasCSVData = false
+		ep.Rows = 0
 		return nil
 	})
 
 	require.ErrorIs(t, exportDataFromBatchToCSVFile(ep), writeErr)
 	require.Equal(t, 2, writes)
-	require.Equal(t, uint64(1), ep.Rows)
+	require.Equal(t, uint64(0), ep.Rows)
+	require.False(t, ep.hasCSVData)
+	require.Zero(t, ep.CurFileSize)
 	require.Equal(t, int32(0), ep.WriteIndex.Load())
 }
 
