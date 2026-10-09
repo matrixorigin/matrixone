@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
@@ -32,15 +33,31 @@ func TestBigDataBulkWriteAndPrimaryKeyCopyPreserveRows(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 		defer cancel()
+		var cnServices [2]cnservice.Service
 		open := func(index int) *sql.DB {
 			cn, err := cluster.GetCNService(index)
 			require.NoError(t, err)
+			cnServices[index] = cn.RawService().(cnservice.Service)
 			db, err := sql.Open("mysql", issue27487DSN(cn.GetServiceConfig().CN.Frontend.Port))
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, db.Close()) })
 			return db
 		}
 		creator, writer := open(0), open(1)
+		// Each CN may start at its latest applied logtail rather than wall time.
+		// Order the next cross-CN consumer after the producer's commit, including
+		// COPY DDL and its replacement table. SQL completion alone is not a
+		// visibility barrier for a different CN.
+		waitCrossCN := func(t *testing.T, producer, consumer int) {
+			t.Helper()
+			frontier := cnServices[producer].GetTxnClient().GetLatestCommitTS()
+			require.False(t, frontier.IsEmpty())
+			waitCtx, waitCancel := context.WithTimeout(ctx, 10*time.Second)
+			defer waitCancel()
+			snapshot, err := cnServices[consumer].GetTxnClient().WaitLogTailAppliedAt(waitCtx, frontier)
+			require.NoError(t, err)
+			require.True(t, frontier.Less(snapshot))
+		}
 		database := strings.ToLower(testutils.GetDatabaseName(t))
 		execSQLRequire(t, ctx, creator, "create database `"+database+"`")
 		t.Cleanup(func() {
@@ -97,9 +114,11 @@ func TestBigDataBulkWriteAndPrimaryKeyCopyPreserveRows(t *testing.T) {
 			require.Equal(t, want, count)
 		}
 		if !t.Run("cold CN bulk insert", func(t *testing.T) {
+			waitCrossCN(t, 0, 1)
 			execSQLRequire(t, ctx, writer, fmt.Sprintf(`insert into %s
 				select cast(result as bigint unsigned), if(result %% 2 = 0, null, repeat('i',23)),
 				repeat('a',24), '[1,2,3,4]', '[1,2,3]' from generate_series(1,%d) g`, table, rows))
+			waitCrossCN(t, 1, 0)
 			verify(t, creator, 0)
 			primaryKeys(t, 0)
 		}) {
@@ -107,6 +126,7 @@ func TestBigDataBulkWriteAndPrimaryKeyCopyPreserveRows(t *testing.T) {
 		}
 		if !t.Run("add primary key copies payloads", func(t *testing.T) {
 			execSQLRequire(t, ctx, creator, "alter table "+table+" add primary key(id)")
+			waitCrossCN(t, 0, 1)
 			verify(t, writer, 0)
 			primaryKeys(t, 1)
 		}) {
@@ -114,6 +134,7 @@ func TestBigDataBulkWriteAndPrimaryKeyCopyPreserveRows(t *testing.T) {
 		}
 		if !t.Run("drop primary key creates fresh hidden IDs", func(t *testing.T) {
 			execSQLRequire(t, ctx, creator, "alter table "+table+" drop primary key")
+			waitCrossCN(t, 0, 1)
 			verify(t, writer, 0)
 			primaryKeys(t, 0)
 		}) {
@@ -122,6 +143,7 @@ func TestBigDataBulkWriteAndPrimaryKeyCopyPreserveRows(t *testing.T) {
 		if !t.Run("duplicate copy rejects publication and remains writable", func(t *testing.T) {
 			duplicate := "insert into " + table + " select * from " + table + " where id=1 limit 1"
 			execSQLRequire(t, ctx, writer, duplicate)
+			waitCrossCN(t, 1, 0)
 			_, err := creator.ExecContext(ctx, "alter table "+table+" add primary key(id)")
 			issue289RequireMySQLError(t, err, 1062)
 			verify(t, writer, 1)
@@ -129,6 +151,7 @@ func TestBigDataBulkWriteAndPrimaryKeyCopyPreserveRows(t *testing.T) {
 			// A second duplicate remains legal only if the failed COPY did not
 			// publish its PRIMARY constraint or retire the source allocator.
 			execSQLRequire(t, ctx, writer, duplicate)
+			waitCrossCN(t, 1, 0)
 			verify(t, creator, 2)
 		}) {
 			return
@@ -138,7 +161,13 @@ func TestBigDataBulkWriteAndPrimaryKeyCopyPreserveRows(t *testing.T) {
 			userTable := "`" + database + "`.`visible_fakepk`"
 			column := "`" + catalog.FakePrimaryKeyColName + "`"
 			execSQLRequire(t, ctx, creator, "create table "+userTable+" ("+column+" bigint unsigned auto_increment primary key, payload varchar(24))")
-			execSQLRequire(t, ctx, writer, "insert into "+userTable+" (payload) values ('one'),('two'),('three')")
+			waitCrossCN(t, 0, 1)
+			inserted, err := writer.ExecContext(ctx, "insert into "+userTable+" (payload) values ('one'),('two'),('three')")
+			require.NoError(t, err)
+			affected, err := inserted.RowsAffected()
+			require.NoError(t, err)
+			require.Equal(t, int64(3), affected)
+			waitCrossCN(t, 1, 0)
 			var count, distinct int
 			var minID, maxID, total uint64
 			require.NoError(t, creator.QueryRowContext(ctx,
