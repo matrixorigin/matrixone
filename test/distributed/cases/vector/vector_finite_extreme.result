@@ -69,7 +69,7 @@ select a.id, inner_product(a.v, b.v) from tip a join tip b on b.id = 1 where a.i
 internal error: inner product: vector magnitude is too large, the result overflows the element domain
 select id, inner_product(v, '[1,1]') from tip where id = 2;
 ➤ id[4,32,0]  ¦  inner_product(v, [1,1])[8,53,31]  𝄀
-2  ¦  3.0
+2  ¦  -3.0
 create table tipbf(id int primary key, v vecbf16(2));
 insert into tipbf values (1, '[1e20,1e20]'), (2, '[1,2]');
 select id, inner_product(v, '[1e20,-1e20]') from tipbf order by id;
@@ -78,7 +78,7 @@ select a.id, inner_product(a.v, b.v) from tipbf a join tipbf b on b.id = 1 where
 internal error: inner product: vector magnitude is too large, the result overflows the element domain
 select id, inner_product(v, '[1,1]') from tipbf where id = 2;
 ➤ id[4,32,0]  ¦  inner_product(v, [1,1])[8,53,31]  𝄀
-2  ¦  3.0
+2  ¦  -3.0
 create table tu(id int primary key, v vecf64(2));
 insert into tu values (1, '[1e-200,0]'), (2, '[3,4]');
 select cosine_distance(v, '[1e-200,0]') from tu order by id;

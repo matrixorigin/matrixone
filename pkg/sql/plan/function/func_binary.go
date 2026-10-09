@@ -10439,8 +10439,7 @@ func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vecto
 		rs := vector.MustFunctionResult[float64](result)
 		rss := vector.MustFixedColNoTypeCheck[float64](rs.GetResultVector())
 		for i, d := range dist {
-			// 内部距离为负点积，SQL 返回数学点积。
-			rss[i] = -float64(d)
+			rss[i] = float64(d)
 		}
 		return nil
 	}
@@ -14854,9 +14853,6 @@ func arrayDistanceNarrow[T types.ArrayElement](
 		}
 		if sqrtResult {
 			d = math.Sqrt(d)
-		} else if m == metric.Metric_InnerProduct {
-			// 保留内部近邻距离约定，只在 SQL 结果边界反号。
-			d = -d
 		}
 		// The narrow kernels accumulate in float32 and return a raw non-finite value
 		// when the magnitude overflows the element domain (they do not check -- see
