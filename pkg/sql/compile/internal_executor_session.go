@@ -17,12 +17,14 @@ package compile
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type internalExecutorSessionKey struct{}
 type internalExecutorCompilerContextKey struct{}
+type internalExecutorRewriteOptionKey struct{}
 
 // internalExecutorPrivilegeCheckKey toggles internal SQL auth behavior:
 // absent -> bypass as internal executor; present -> run normal auth checks.
@@ -67,6 +69,56 @@ func getInternalExecutorCompilerContext(ctx context.Context) plan.CompilerContex
 	}
 	compilerContext, _ := ctx.Value(internalExecutorCompilerContextKey{}).(plan.CompilerContext)
 	return compilerContext
+}
+
+// attachInternalExecutorRewriteOption carries the effective, already parsed
+// rewrite policy across an internal SQL boundary. The policy is semantic AST
+// state owned by the caller; it must not be reconstructed from diagnostic SQL.
+func attachInternalExecutorRewriteOption(ctx context.Context, option *tree.RewriteOption) context.Context {
+	if option == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, internalExecutorRewriteOptionKey{}, option)
+}
+
+func getInternalExecutorRewriteOption(ctx context.Context) *tree.RewriteOption {
+	if ctx == nil {
+		return nil
+	}
+	option, _ := ctx.Value(internalExecutorRewriteOptionKey{}).(*tree.RewriteOption)
+	return option
+}
+
+// attachRewriteOptionToStatement installs one effective policy on the source
+// query that will be planned. CTAS generates an INSERT whose Rows wrapper may
+// contain a parenthesized SELECT, matching the parser's normal hint placement.
+func attachRewriteOptionToStatement(stmt tree.Statement, option *tree.RewriteOption) {
+	if stmt == nil || option == nil {
+		return
+	}
+	attachToSelect := func(sel *tree.Select) {
+		if sel == nil {
+			return
+		}
+		sel.RewriteOption = option
+		if paren, ok := sel.Select.(*tree.ParenSelect); ok && paren.Select != nil {
+			paren.Select.RewriteOption = option
+		}
+	}
+	switch stmt := stmt.(type) {
+	case *tree.Select:
+		attachToSelect(stmt)
+	case *tree.ParenSelect:
+		if stmt.Select != nil {
+			attachToSelect(stmt.Select)
+		}
+	case *tree.Insert:
+		attachToSelect(stmt.Rows)
+	case *tree.MultiInsert:
+		attachToSelect(stmt.Source)
+	case *tree.CreateTable:
+		attachToSelect(stmt.AsSource)
+	}
 }
 
 func attachInternalExecutorPrivilegeCheck(ctx context.Context) context.Context {

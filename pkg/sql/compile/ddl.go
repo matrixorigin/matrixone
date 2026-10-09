@@ -2495,10 +2495,6 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 
 func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbName, aliasName, tblName string) error {
 	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
-		// CTAS is executed as a generated internal INSERT ... SELECT. Preserve
-		// the outer role/session rewrite hint across this SQL boundary so the
-		// source scan cannot regain rows hidden by the original policy.
-		createAsSelectSql = prependCTASRewriteHint(c.originSQL, createAsSelectSql)
 		if isTemp {
 			aliasTable := fmt.Sprintf("`%s`.`%s`", dbName, aliasName)
 			realTable := fmt.Sprintf("`%s`.`%s`", dbName, tblName)
@@ -2584,6 +2580,11 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 					ctxWithSession = attachInternalExecutorCompilerContext(ctxWithSession, compilerContext)
 				}
 			}
+			// The frontend has already parsed and remapped the policy on the
+			// outer CTAS source. Carry that typed policy into the generated
+			// INSERT instead of reparsing redacted diagnostic SQL.
+			ctxWithSession = attachInternalExecutorRewriteOption(
+				ctxWithSession, c.ctasRewriteOption())
 			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
 			// Internal executor skips auth by default unless this flag is present.
 			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(ctxWithSession)
@@ -2606,12 +2607,12 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 	return nil
 }
 
-func prependCTASRewriteHint(originSQL, sql string) string {
-	hint, ok := leadingRewriteHint(originSQL)
-	if !ok {
-		return sql
+func (c *Compile) ctasRewriteOption() *tree.RewriteOption {
+	createTable, ok := c.stmt.(*tree.CreateTable)
+	if !ok || createTable.AsSource == nil {
+		return nil
 	}
-	return hint + " " + sql
+	return createTable.AsSource.RewriteOption
 }
 
 func physicalTemporaryTableName(proc *process.Process, dbName, alias string) string {

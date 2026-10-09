@@ -39,6 +39,7 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -429,9 +430,13 @@ func (exec *txnExecutor) Exec(
 	if err != nil {
 		return executor.Result{}, err
 	}
-	if hasLeadingRewriteHint(sql) {
+	if rewriteOption := getInternalExecutorRewriteOption(exec.ctx); rewriteOption != nil {
+		// CTAS carries the effective policy as typed AST state from the outer
+		// statement. Never recover execution semantics from redacted originSQL.
+		attachRewriteOptionToStatement(stmts[0], rewriteOption)
+	} else if hasLeadingRewriteHint(sql) {
 		if err = parsers.AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
-			exec.ctx, stmts, sql, "", lower,
+			exec.ctx, stmts, sql, internalExecutorSQLMode(exec.ctx), lower,
 		); err != nil {
 			return executor.Result{}, err
 		}
@@ -693,6 +698,15 @@ func (exec *txnExecutor) Exec(
 	result.AffectedRows = runResult.AffectRows
 	result.LogicalPlan = pn.GetQuery()
 	return result, nil
+}
+
+func internalExecutorSQLMode(ctx context.Context) string {
+	compilerContext := getInternalExecutorCompilerContext(ctx)
+	if compilerContext == nil || compilerContext.GetProcess() == nil ||
+		compilerContext.GetProcess().GetSessionInfo() == nil {
+		return ""
+	}
+	return mysql.SessionSQLModeForParser(compilerContext.GetProcess().GetSessionInfo().SqlMode)
 }
 
 func hasLeadingRewriteHint(sql string) bool {
