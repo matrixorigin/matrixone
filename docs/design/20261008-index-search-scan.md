@@ -130,9 +130,27 @@ black-box test: each item names the unit test that covers it, or says it rests o
 
 ## Performance
 
-The search kernels are unchanged: each reader calls the same index cache, cuVS and fulltext
-engine paths as the table function it replaces. No benchmark against main is recorded for
-this PR.
+Each reader calls the same index cache, cuVS and fulltext engine paths as the table function
+it replaces. The one native change is the cuVS host post-filter for a search with deleted
+rows and no filter: a per-row lookup into the deleted bitset.
+
+IVF-PQ, 1M wiki_all rows, dim 768, INCLUDE `file_id`, lists 1024, m 192, k=20,
+probe_limit 16, concurrency 8, 5000 queries, RTX 5070 Laptop. Baseline: main on
+2026-09-28; this PR: 2026-10-09. Same data, config and recipe (drop index, restart,
+create index, two recall passes).
+
+| | main | this PR |
+|---|---|---|
+| create index | 42 s | 52 s |
+| recall@20 | 0.8269 | 0.8297 |
+| QPS, pass 1 / pass 2 | 349.1 / 399.1 | 352.5 / 409.4 |
+| p50 | 19.12 ms | 18.31 / 18.01 ms |
+| p99 | 38.75 ms | 39.42 / 52.11 ms |
+
+The main baseline records one p50/p99 per run; this PR's are pass 1 / pass 2. Pass 2 QPS is
+2.6% higher and p50 1.1 ms lower than main; pass 2 p99 is 13 ms higher. Index build code is
+not changed by this PR. The run has no deleted rows and no filter, so the changed
+post-filter path is not exercised.
 
 ## Removed
 
