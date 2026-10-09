@@ -2594,21 +2594,20 @@ func nativeComparisonColumn(expr *plan.Expr) *plan.ColRef {
 		(fn.Func.ObjName == "cast" && fn.ExplicitCollation) {
 		return nativeComparisonColumn(fn.Args[0])
 	}
-	// Physical native-collation keys are stored as opaque VARBINARY values.
-	// The comparison binder may insert a VARCHAR cast when it selects the
-	// generic string comparison overload.  That cast does not change which
-	// table column is indexed; unwrap it only for an explicitly binary column
-	// so arbitrary user CAST expressions cannot be mistaken for indexable
-	// source columns.
-	if fn.Func.ObjName == "cast" {
-		if inner := fn.Args[0]; inner != nil {
-			if col := inner.GetCol(); col != nil &&
-				(types.T(inner.Typ.Id) == types.T_binary ||
-					types.T(inner.Typ.Id) == types.T_varbinary ||
-					types.T(inner.Typ.Id) == types.T_blob ||
-					inner.Typ.Charset == uint32(types.CharsetBinary)) {
-				return col
-			}
+	// The native physical key may be wrapped by the binder in an implicit,
+	// byte-preserving VARBINARY-to-binary-VARCHAR cast. A general cast, such
+	// as CAST(binary_col AS SIGNED), changes the comparison domain and must
+	// not become a restrictive probe of the source-byte index.
+	if fn.Func.ObjName == "cast" && !fn.SyntaxExplicitCast && !fn.ExplicitCollation &&
+		types.T(expr.Typ.Id) == types.T_varchar && expr.Typ.Charset == uint32(types.CharsetBinary) {
+		inner := fn.Args[0]
+		if inner != nil && inner.GetCol() != nil &&
+			types.T(inner.Typ.Id) == types.T_varbinary &&
+			(inner.Typ.Charset == uint32(types.CharsetLegacy) || inner.Typ.Charset == uint32(types.CharsetBinary)) &&
+			inner.Typ.Width > 0 && inner.Typ.Width == expr.Typ.Width &&
+			inner.Typ.Scale == expr.Typ.Scale &&
+			inner.Typ.CollationVersion == expr.Typ.CollationVersion {
+			return inner.GetCol()
 		}
 	}
 	return nil

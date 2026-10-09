@@ -10067,3 +10067,36 @@ func TestIsRangeOp(t *testing.T) {
 		assert.Equal(t, tt.expected, isRangeOp(fn), "isRangeOp(%q)", tt.op)
 	}
 }
+
+func TestBinaryCastDoesNotBecomeRestrictiveIndexColumn(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(600_000)
+	activity := ctx.tables["cost_activity"]
+	require.NotNil(t, activity)
+	pos := activity.Name2ColIndex["state"]
+	activity.Cols[pos].Typ = planpb.Type{Id: int32(types.T_varbinary), Width: 8, Charset: uint32(types.CharsetBinary)}
+	addCostActivityRegularIndex(t, ctx, "idx_state_binary", []string{"state", catalog.CreateAlias(catalog.CPrimaryKeyColName)}, true)
+	optimizer := &encodedIndexPlanTestOptimizer{ctx: ctx}
+	for _, sql := range []string{
+		"select amount from cost_activity where cast(state as signed)=1",
+		"select amount from cost_activity where cast(state as char(1))='a'",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			queryPlan, err := runOneStmt(optimizer, t, sql)
+			require.NoError(t, err)
+			for _, node := range queryPlan.GetQuery().Nodes {
+				for _, filter := range node.FilterList {
+					fn := filter.GetF()
+					if fn == nil {
+						continue
+					}
+					require.NotEqual(t, "prefix_eq", fn.Func.ObjName)
+					if fn.Func.ObjName == "=" {
+						kind, col := checkIndexFilter(fn)
+						require.Equal(t, UnsupportedIndexCondition, kind)
+						require.Nil(t, col)
+					}
+				}
+			}
+		})
+	}
+}

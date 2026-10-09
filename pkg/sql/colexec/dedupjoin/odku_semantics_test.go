@@ -189,7 +189,7 @@ func TestODKUValueEqualityUsesSQLJSONAndScaledFloatSemantics(t *testing.T) {
 		"FLOAT32 comparisons normalize values to the declared scale")
 }
 
-func TestODKUValueEqualityUsesNative0900Collation(t *testing.T) {
+func TestODKUValueEqualityUsesNative0900RowBytes(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
@@ -200,7 +200,9 @@ func TestODKUValueEqualityUsesNative0900Collation(t *testing.T) {
 		right   string
 		equal   bool
 	}{
-		{name: "ai case insensitive", charset: types.CharsetUTF8MB40900AI, left: "A", right: "a", equal: true},
+		{name: "ai case changes row", charset: types.CharsetUTF8MB40900AI, left: "A", right: "a", equal: false},
+		{name: "ai accent changes row", charset: types.CharsetUTF8MB40900AI, left: "é", right: "e", equal: false},
+		{name: "ai identical bytes", charset: types.CharsetUTF8MB40900AI, left: "A", right: "A", equal: true},
 		{name: "bin no pad", charset: types.CharsetUTF8MB40900Bin, left: "a", right: "a ", equal: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -382,6 +384,64 @@ func TestODKUValueEqualityUsesSQLStringSemantics(t *testing.T) {
 			require.NoError(t, vector.AppendBytes(left, []byte("a"), false, proc.Mp()))
 			require.NoError(t, vector.AppendBytes(right, []byte("a   "), false, proc.Mp()))
 			require.Equal(t, tc.equal, odkuValuesEqual(left, right))
+		})
+	}
+}
+
+func TestODKUNativeRowImageActionPreservesNewSpelling(t *testing.T) {
+	for _, tc := range []struct {
+		name, before, incoming   string
+		charset                  uint8
+		beforeNull, incomingNull bool
+		changed                  bool
+	}{
+		{name: "case change", before: "A", incoming: "a", changed: true},
+		{name: "accent change", before: "é", incoming: "e", changed: true},
+		{name: "same bytes", before: "A", incoming: "A"},
+		{name: "native bin no pad", before: "a", incoming: "a ", charset: types.CharsetUTF8MB40900Bin, changed: true},
+		{name: "null remains null", beforeNull: true, incomingNull: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			charset := tc.charset
+			if charset == 0 {
+				charset = types.CharsetUTF8MB40900AI
+			}
+			typ := types.NewWithCharset(types.T_varchar, 16, 0, charset)
+			stored, incoming := vector.NewVec(typ), vector.NewVec(typ)
+			defer stored.Free(proc.Mp())
+			defer incoming.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(stored, []byte(tc.before), tc.beforeNull, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(incoming, []byte(tc.incoming), tc.incomingNull, proc.Mp()))
+			exec, err := colexec.NewExpressionExecutor(proc, &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_varchar), Width: 16, Charset: uint32(charset)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+			})
+			require.NoError(t, err)
+			defer exec.Free()
+			leftBat := &batch.Batch{Vecs: []*vector.Vector{stored}}
+			rightBat := &batch.Batch{Vecs: []*vector.Vector{incoming}}
+			leftBat.SetRowCount(1)
+			rightBat.SetRowCount(1)
+			ctr := &container{joinBat1: leftBat, joinBat2: rightBat,
+				exprExecs: []colexec.ExpressionExecutor{exec}, stableCols: []int32{0}}
+			defer ctr.cleanStableUpdateVecs(proc)
+			before := []*vector.Vector{stored}
+			changed, err := ctr.applyUpdateExpressions(proc, []int32{0}, []int32{0})
+			require.NoError(t, err)
+			require.Equal(t, tc.changed, changed)
+			require.Equal(t, tc.changed, odkuPhysicalChanged(changed, before, ctr.joinBat1, []int32{0}))
+			if tc.changed {
+				require.EqualValues(t, 2, odkuAffectedRows(changed, false))
+				require.Equal(t, tc.incoming, string(ctr.joinBat1.Vecs[0].GetBytesAt(0)))
+			} else {
+				require.EqualValues(t, 0, odkuAffectedRows(changed, false))
+				require.Equal(t, tc.beforeNull, ctr.joinBat1.Vecs[0].IsNull(0))
+				if !tc.beforeNull {
+					require.Equal(t, tc.before, string(ctr.joinBat1.Vecs[0].GetBytesAt(0)))
+				}
+			}
 		})
 	}
 }
