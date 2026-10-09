@@ -84,6 +84,85 @@ prefixes, repeated SPACE, U+FFFF boundaries, scratch reuse, malformed UTF-8,
 invalid key framing, size overflow, and mb3 repertoire. A separate U4P1
 sample digest freezes bytes; existing V1 golden tests must remain unchanged.
 
+## Versioned supported subset
+
+This section is the versioned SQL integration contract for the first release of
+the backend.  It is intentionally narrower than MySQL's complete collation
+surface.  The maintainer approval recorded on PR #29601 applies to this
+fenced subset; changing any item below requires another design review.
+
+### Admitted operations
+
+The native names may be used on character values for scalar comparison,
+`IN`/`NOT IN`, grouping and hash/join keys, full and limited `ORDER BY`, and
+window peer/partition evaluation.  Non-unique secondary indexes, cluster keys,
+shuffle keys and their ordinary DML maintenance may use the tagged UCA physical
+key.  The same semantic identity is carried through `SHOW CREATE TABLE`,
+`INFORMATION_SCHEMA`, `LIKE`, checkpoint reconstruction and restore.
+
+### Deliberately rejected operations
+
+Native Unicode columns are not admitted as `PRIMARY KEY` or `UNIQUE` parts in
+this release.  The rejection is applied consistently to inline and table-level
+`CREATE TABLE` definitions, `CREATE UNIQUE INDEX`, `ALTER TABLE ADD`/`ADD
+COLUMN ... UNIQUE`, and `MODIFY`/`CHANGE` that would convert an existing indexed
+column to a native Unicode collation.  Existing binary/legacy primary and
+unique keys remain supported.  Existing experimental catalogs that already
+contain a native Unicode primary/unique key are not migrated by this PR; an
+explicit rebuild and collision check is required before such a table can enter
+the supported subset.
+
+Malformed UTF-8, values outside the `utf8mb3` repertoire, unknown collation
+revisions, and unknown physical-key formats fail closed at typed admission or
+plan validation.  A failed `CREATE`/`ALTER` leaves the source catalog and its
+legacy indexes usable.  No mixed-version deployment is claimed: a worker that
+does not understand the versioned identity must reject the plan rather than
+reinterpret it as `general_ci`.
+
+### Restore and ownership rules
+
+Persisted objects retain the charset, collation identity, UCA revision and
+physical-key format independently of the local `Domain` enum.  Restore,
+checkpoint replay and `LIKE` copy the metadata as a unit; legacy objects keep
+their original bytes.  A tagged UCA key is borrowed only for the duration of a
+comparison or hash probe unless the owning vector/index/hash table copies it.
+The owner of a retained key is also responsible for releasing its vector or
+hash-table allocation.  No backend scratch buffer or comparison key is shared
+between statements, operators or CNs, and no background worker is introduced
+by this feature.
+
+## Resource and cost contract
+
+Let `L` be the input byte length of one value.  The pinned UCA400 backend
+provides the following hard per-value bounds, which are independent of the
+number of rows in a batch:
+
+| Buffer | Bound | Lifetime |
+| --- | ---: | --- |
+| decoded-weight scratch | `36 * L` bytes | one key construction |
+| U4P1 key payload | `54 * L + 1` bytes | borrowed until the caller reuses scratch |
+| tagged equality/physical key | `54 * L + 2` bytes | copied and owned by the retaining consumer |
+
+The bounds are checked before backend work and are covered by the exhaustive
+scalar fixture.  With the current nil-scratch adapters, one comparison can
+temporarily materialize two operand keys and their weight buffers; that work is
+short-lived and is proportional to the two input lengths.  It is not retained
+across comparisons.  Hash sizing/encoding and shuffle may retain one tagged key
+per row in their existing map/vector owner, so retained bytes are `O(rows * key
+length)` and must be charged to that owner's existing memory budget.  Typed
+write/copy validation may build and immediately discard a key; it must not
+silently switch to a raw byte key on error.  A future scratch-aware adapter may
+reduce heap churn, but it must preserve these bounds and ownership rules.
+
+The acceptance requirement is linear scaling in input bytes and bounded peak
+workspace, not parity with bytewise comparison.  A review run records
+`ns/op`, `B/op` and `allocs/op` for representative 8/64/1024-byte values and
+256/64-row batches for the sort, grouping/hash and shuffle consumers.  The run
+must show no retained-memory growth after the operator/vector is released and
+must exercise both the Unicode path and the binary/legacy fast path.  A result
+that changes SQL equivalence, loses NULL/grouping semantics, or exceeds the
+per-value bounds is a correctness failure even if its microbenchmark is fast.
+
 ## Integration and rollout gates
 
 PR #29601 is the integration point for the metadata/tuple, SQL-consumer, and
@@ -95,6 +174,21 @@ utf8mb3 repertoire contract.
 
 Mixed-version plans and foreign pipeline owners still pass through
 `RequireLegacyCollations`; they must carry the explicit UCA400 revision and
-legacy physical key format. A missing or unknown version fails closed. Before
-merge, the maintainer approval for this contract should be recorded on PR
-#29601 together with the distributed semantic regression result.
+legacy physical key format. A missing or unknown version fails closed. The
+required maintainer approval for this contract is recorded on PR #29601.
+
+The release gate is the following semantic/cost matrix, run against the exact
+head that changes the contract:
+
+| Consumer | Required semantic evidence | Required resource evidence |
+| --- | --- | --- |
+| scalar/equality and membership | equality, `IN`/`NOT IN`, invalid-input and utf8mb3 rejection SQL cases | no tagged-key/raw-key alias; per-value bound |
+| sort and window/partition | full/limited order, secondary keys, dense-rank peers and partition peers | sort `ns/op`, `B/op`, `allocs/op`; no scratch retained after the operator |
+| grouping/hash and shuffle | equivalent values share one group/bucket; NULL and legacy controls remain unchanged | hash/shuffle allocation scales with retained rows and key bytes only |
+| physical/non-unique index and restore | indexed/full-scan agreement before and after flush, `SHOW`/`LIKE`/checkpoint replay | retained physical keys owned and released by the existing vector/index owner |
+
+The distributed charset/collation cases are the end-to-end oracle; targeted
+package tests and the consumer benchmarks are supporting evidence, not a
+replacement for the SQL result checks.  Native Unicode primary/unique key
+support, migration of experimental catalogs, full mixed-version rollout and
+byte-comparison performance parity remain outside this release gate.
