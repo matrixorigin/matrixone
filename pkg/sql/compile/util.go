@@ -348,7 +348,14 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%d, ", visible)
 
 					// 10. index vec_hidden
-					fmt.Fprintf(buffer, "%d, ", INDEX_HIDDEN_NO)
+					hidden := INDEX_HIDDEN_NO
+					for _, col := range tableDef.Cols {
+						if col.Name == part && col.Hidden && col.GeneratedCol != nil {
+							hidden = 1
+							break
+						}
+					}
+					fmt.Fprintf(buffer, "%d, ", hidden)
 
 					// 11. index vec_comment
 					fmt.Fprintf(buffer, "%s, ", sqlquote.String(indexDef.Comment))
