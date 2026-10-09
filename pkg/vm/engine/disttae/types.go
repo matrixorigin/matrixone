@@ -371,6 +371,11 @@ func (txn *Transaction) String() string {
 	return fmt.Sprintf("writes %v", txn.writes)
 }
 
+type statementTransferState struct {
+	lastTransferred types.TS
+	pendingTransfer bool
+}
+
 // Transaction represents a transaction
 type Transaction struct {
 	sync.Mutex
@@ -445,11 +450,10 @@ type Transaction struct {
 	statementID int
 	//offsets of the txn.writes for statements in a txn.
 	offsets []int
-	//for RC isolation, the txn's snapshot TS for each statement.
 
 	transfer struct {
 		lastTransferred types.TS
-		timestamps      []timestamp.Timestamp
+		statements      []statementTransferState
 		pendingTransfer bool
 	}
 
@@ -811,7 +815,7 @@ func (txn *Transaction) PPString() string {
 		return buf.String()
 	}
 
-	return fmt.Sprintf("Transaction{writes: %v, batchSelectList: %v, tableOps:%v, tablesInVain: %v,  tableCache: %v, insertCount: %v, snapshotWriteOffset: %v, rollbackCount: %v, statementID: %v, offsets: %v, timestamps: %v}",
+	return fmt.Sprintf("Transaction{writes: %v, batchSelectList: %v, tableOps:%v, tablesInVain: %v,  tableCache: %v, insertCount: %v, snapshotWriteOffset: %v, rollbackCount: %v, statementID: %v, offsets: %v, transferStatements: %v}",
 		writesString,
 		stringifyMap(txn.batchSelectList, func(k, v any) string {
 			return fmt.Sprintf("%p:%v", k, len(v.([]int64)))
@@ -826,7 +830,7 @@ func (txn *Transaction) PPString() string {
 		txn.rollbackCount,
 		txn.statementID,
 		stringifySlice(txn.offsets, func(a any) string { return fmt.Sprintf("%v", a) }),
-		stringifySlice(txn.transfer.timestamps, func(a any) string { t := a.(timestamp.Timestamp); return t.DebugString() }))
+		stringifySlice(txn.transfer.statements, func(a any) string { return fmt.Sprintf("%+v", a) }))
 }
 
 func (txn *Transaction) StartStatement() {
@@ -877,14 +881,16 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	txn.statementID++
 
 	if txn.op.Txn().IsRCIsolation() {
-		// each statement's start snapshot
-		// will be used by transfer than between statements
-		txn.transfer.timestamps = append(txn.transfer.timestamps, txn.op.SnapshotTS())
-
 		if txn.transfer.lastTransferred.IsEmpty() {
 			txn.start = time.Now()
-			txn.transfer.lastTransferred = types.TimestampToTS(txn.transfer.timestamps[0])
+			txn.transfer.lastTransferred = types.TimestampToTS(txn.op.SnapshotTS())
 		}
+		// Save the transfer state paired with this statement's write offset,
+		// before advancing the snapshot or appending replacement tombstones.
+		txn.transfer.statements = append(txn.transfer.statements, statementTransferState{
+			lastTransferred: txn.transfer.lastTransferred,
+			pendingTransfer: txn.transfer.pendingTransfer,
+		})
 
 		updated, err := txn.handleRCSnapshot(ctx, commit)
 		if err != nil {
@@ -1193,14 +1199,13 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) (err error) {
 
 		// transfer stuff
 		if txn.op.Txn().IsRCIsolation() {
-			txn.transfer.timestamps = txn.transfer.timestamps[:txn.statementID]
-
-			if txn.statementID == 0 {
-				txn.transfer.pendingTransfer = false
-				txn.transfer.lastTransferred = types.TS{}
-			} else if txn.transfer.timestamps[txn.statementID-1].Less(txn.transfer.lastTransferred.ToTimestamp()) {
-				txn.transfer.lastTransferred = types.TimestampToTS(txn.transfer.timestamps[txn.statementID-1])
-			}
+			entry := txn.transfer.statements[txn.statementID]
+			txn.transfer.statements = txn.transfer.statements[:txn.statementID]
+			txn.transfer.lastTransferred = entry.lastTransferred
+			// SnapshotTS does not rewind. Removed replacements must be recovered
+			// even when a young transaction would otherwise skip commit transfer.
+			snapshot := types.TimestampToTS(txn.op.SnapshotTS())
+			txn.transfer.pendingTransfer = entry.pendingTransfer || entry.lastTransferred.LT(&snapshot)
 		}
 	}
 	txn.assertWorkspaceAccountingLocked()
