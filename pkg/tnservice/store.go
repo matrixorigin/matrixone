@@ -259,9 +259,14 @@ func NewService(
 	rt runtime.Runtime,
 	fileService fileservice.FileService,
 	shutdownC chan struct{},
-	opts ...Option) (Service, error) {
+	publish func(Service),
+	opts ...Option) (result Service, err error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
+	}
+
+	if publish == nil {
+		return nil, moerr.NewInvalidStateNoCtx("TN service requires an owner")
 	}
 
 	configKVMap, _ := dumpTnConfig(*cfg)
@@ -276,9 +281,6 @@ func NewService(
 		return nil, err
 	}
 
-	// start I/O pipeline
-	ioutil.Start(cfg.UUID)
-
 	s := &store{
 		cfg:                 cfg,
 		rt:                  rt,
@@ -287,6 +289,16 @@ func NewService(
 		shutdownC:           shutdownC,
 		addressMgr:          address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 	}
+	constructed := false
+	defer func() {
+		if !constructed {
+			if closeErr := s.Close(); closeErr != nil {
+				result = s
+				s.rt.Logger().Error("failed to retire TN construction", zap.Error(closeErr))
+			}
+		}
+	}()
+	publish(s)
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -305,12 +317,8 @@ func NewService(
 	if err := s.initHAKeeperClient(); err != nil {
 		return nil, err
 	}
-	if err := s.initLockTableAllocator(); err != nil {
-		return nil, err
-	}
-	if err := s.initShardServer(); err != nil {
-		return nil, err
-	}
+	s.initLockTableAllocator()
+	s.initShardServer()
 	if err := s.initTxnSender(); err != nil {
 		return nil, err
 	}
@@ -324,15 +332,22 @@ func NewService(
 		return nil, err
 	}
 
-	s.initQueryService(cfg.InStandalone)
+	if err := s.initQueryService(cfg.InStandalone); err != nil {
+		return nil, err
+	}
 
 	s.initTaskHolder()
 	s.initSqlWriterFactory()
 	s.setupStatusServer()
+	ioutil.Start(cfg.UUID)
+	constructed = true
 	return s, nil
 }
 
 func (s *store) Start() error {
+	if s.quiesced.Load() {
+		return moerr.NewInvalidStateNoCtx("TN service is closed")
+	}
 	if err := s.startTNShards(); err != nil {
 		return err
 	}
@@ -387,45 +402,55 @@ func (s *store) close() error {
 
 	// No handler can acquire a replica after the drain gate. It is now safe to
 	// cancel replica start contexts and close their storage.
-	s.replicas.Range(func(_, value any) bool {
-		r := value.(*replica)
-		r.cancelStart(false)
-		return true
-	})
-	s.stopper.Stop()
-	s.moCluster.Close()
+	if s.replicas != nil {
+		s.replicas.Range(func(_, value any) bool {
+			r := value.(*replica)
+			r.cancelStart(false)
+			return true
+		})
+	}
+	if s.stopper != nil {
+		s.stopper.Stop()
+	}
+	if s.moCluster != nil {
+		s.moCluster.Close()
+		runtime.ServiceRuntime(s.cfg.UUID).CompareAndDeleteGlobalVariables(runtime.ClusterService, s.moCluster)
+	}
 
 	err = nil
 	if s.queryService != nil {
 		err = errors.Join(err, s.queryService.Close())
 	}
-	if s.cfg.ShardService.Enable {
+	if s.shardServer != nil {
 		err = errors.Join(err, s.shardServer.Close())
 	}
 	if s.server != nil {
 		err = errors.Join(err, s.server.Close())
 	}
-	s.replicas.Range(func(_, value any) bool {
-		r := value.(*replica)
-		if e := r.close(false); e != nil {
-			err = errors.Join(err, e)
-		}
-		return true
-	})
-	err = errors.Join(
-		err,
-		s.hakeeperClient.Close(),
-		s.sender.Close(),
-		s.lockTableAllocator.Close(),
-	)
-	if s.queryClient != nil {
-		err = errors.Join(err, s.queryClient.Close())
+	if s.replicas != nil {
+		s.replicas.Range(func(_, value any) bool {
+			r := value.(*replica)
+			err = errors.Join(err, r.close(false))
+			return true
+		})
 	}
 	s.task.RLock()
 	ts := s.task.serviceHolder
 	s.task.RUnlock()
 	if ts != nil {
 		err = errors.Join(err, ts.Close())
+	}
+	if s.sender != nil {
+		err = errors.Join(err, s.sender.Close())
+	}
+	if s.lockTableAllocator != nil {
+		err = errors.Join(err, s.lockTableAllocator.Close())
+	}
+	if s.hakeeperClient != nil {
+		err = errors.Join(err, s.hakeeperClient.Close())
+	}
+	if s.queryClient != nil {
+		err = errors.Join(err, s.queryClient.Close())
 	}
 	// stop I/O pipeline
 	ioutil.Stop(s.cfg.UUID)
@@ -631,25 +656,24 @@ func (s *store) initClocker() error {
 	return nil
 }
 
-func (s *store) initLockTableAllocator() error {
-	s.lockTableAllocator = lockservice.NewLockTableAllocator(
+func (s *store) initLockTableAllocator() {
+	lockservice.NewLockTableAllocator(
 		s.cfg.UUID,
 		s.lockServiceListenAddr(),
 		s.cfg.LockService.KeepBindTimeout.Duration,
 		s.cfg.RPC,
+		func(owner lockservice.LockTableAllocator) { s.lockTableAllocator = owner },
 	)
-	return nil
 }
 
-func (s *store) initShardServer() error {
+func (s *store) initShardServer() {
 	if !s.cfg.ShardService.Enable {
-		return nil
+		return
 	}
 
 	s.cfg.ShardService.RPC = s.cfg.RPC
 	s.cfg.ShardService.ListenAddress = s.shardServiceListenAddr()
-	s.shardServer = shardservice.NewShardServer(s.cfg.ShardService, s.rt.Logger())
-	return nil
+	shardservice.NewShardServer(s.cfg.ShardService, s.rt.Logger(), func(owner shardservice.ShardServer) { s.shardServer = owner })
 }
 
 func (s *store) initHAKeeperClient() error {
@@ -688,18 +712,18 @@ func (s *store) initClusterService() {
 //
 //	true: tn is boosted in a standalone cluster. cn has a queryservice already.
 //	false: tn is boosted in an independent process. tn needs a queryservice.
-func (s *store) initQueryService(inStandalone bool) {
+func (s *store) initQueryService(inStandalone bool) error {
 	if inStandalone {
-		s.queryService = nil
-		return
+		return nil
 	}
 	var err error
 	s.queryService, err = queryservice.NewQueryService(s.cfg.UUID,
 		s.queryServiceListenAddr(), s.cfg.RPC)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	s.initQueryCommandHandler()
+	return nil
 }
 
 func (s *store) initQueryCommandHandler() {

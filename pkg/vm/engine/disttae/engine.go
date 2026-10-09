@@ -99,10 +99,20 @@ func New(
 	hakeeper logservice.CNHAKeeperClient,
 	keyRouter client2.KeyRouter[pb.StatsInfoKey],
 	updateWorkerFactor int,
+	publish func(*Engine),
 	options ...EngineOptions,
 ) *Engine {
-	cluster := clusterservice.GetMOCluster(service)
-	services := cluster.GetAllTNServices()
+	if publish == nil {
+		panic("disttae engine requires an owner")
+	}
+	cluster, err := clusterservice.GetMOClusterWithContext(ctx, service)
+	if err != nil {
+		panic(err)
+	}
+	services, err := clusterservice.GetAllTNServicesWithContext(ctx, cluster)
+	if err != nil {
+		panic(err)
+	}
 
 	var tnID string
 	if len(services) > 0 {
@@ -136,6 +146,16 @@ func New(
 			},
 		),
 	}
+	constructed := false
+	defer func() {
+		if constructed {
+			return
+		}
+		if err := e.Close(); err != nil {
+			logutil.Error("failed to retire disttae engine construction", zap.Error(err))
+		}
+	}()
+	publish(e)
 	// Initialize snapshot manager
 	e.snapshotMgr = NewSnapshotManager()
 	e.snapshotMgr.Init()
@@ -147,6 +167,7 @@ func New(
 	e.gcPool = pool
 
 	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
+		func(owner *GlobalStats) { e.globalStats = owner },
 		WithUpdateWorkerFactor(updateWorkerFactor))
 
 	e.messageCenter = &message.MessageCenter{
@@ -209,19 +230,52 @@ func New(
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 
+	constructed = true
 	return e
 }
 
 func (e *Engine) Close() error {
-	if e.gcPool != nil {
-		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
-	}
+	e.closeOnce.Do(func() {
+		// Linearize statistics admission before waiting on any engine-owned
+		// resource. A callback must not start work after engine teardown begins.
+		e.dynamicCtx.closed.Store(true)
 
-	e.dynamicCtx.Close()
-	e.cloneTxnCache = nil
-	e.ccprTxnCache = nil
+		// The scheduler reads pClient and snapshotMgr. Stop and join it before
+		// retiring either dependency so a tick already in flight cannot use a
+		// closed resource.
+		e.gcMu.Lock()
+		cancel := e.gcSchedulerCancel
+		done := e.gcSchedulerDone
+		e.gcMu.Unlock()
+		if cancel != nil {
+			cancel()
+			<-done
+		}
 
-	return nil
+		if err := e.pClient.Close(); err != nil {
+			e.closeErr = err
+		}
+		if e.ccprTxnCache != nil {
+			e.ccprTxnCache.Close()
+		}
+		if e.snapshotMgr != nil {
+			e.snapshotMgr.Close()
+		}
+
+		if e.globalStats != nil {
+			e.globalStats.Close()
+		}
+		if e.gcPool != nil {
+			if err := e.gcPool.ReleaseContext(context.Background()); e.closeErr == nil {
+				e.closeErr = err
+			}
+		}
+		e.dynamicCtx.Close()
+		e.cloneTxnCache = nil
+		e.ccprTxnCache = nil
+	})
+
+	return e.closeErr
 }
 
 func (e *Engine) fillDefaults() {
@@ -1435,8 +1489,37 @@ func (e *Engine) AcquireLogtailReadBarrier(
 	return e.pClient.AcquireLogtailReadBarrier(ctx)
 }
 
-// RunGCScheduler runs all GC tasks in a single goroutine with different intervals
-func (e *Engine) RunGCScheduler(ctx context.Context) {
+// StartGCScheduler starts the engine-owned GC scheduler. The scheduler is
+// started at most once and is joined by Close.
+func (e *Engine) StartGCScheduler(ctx context.Context) error {
+	if ctx == nil {
+		return moerr.NewInvalidInputNoCtx("engine GC scheduler context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	e.gcMu.Lock()
+	defer e.gcMu.Unlock()
+	if e.dynamicCtx.closed.Load() {
+		return moerr.NewInvalidStateNoCtx("engine is closed")
+	}
+	if e.gcSchedulerDone != nil {
+		return nil
+	}
+	schedulerCtx, cancel := context.WithCancel(ctx)
+	e.gcSchedulerCancel = cancel
+	e.gcSchedulerDone = make(chan struct{})
+	done := e.gcSchedulerDone
+	go func() {
+		defer close(done)
+		e.runGCScheduler(schedulerCtx)
+	}()
+	return nil
+}
+
+// runGCScheduler runs all GC tasks in a single goroutine with different intervals.
+func (e *Engine) runGCScheduler(ctx context.Context) {
 	unusedTableTicker := time.NewTicker(unsubscribeProcessTicker)
 	partitionStateTicker := time.NewTicker(gcPartitionStateTicker)
 	snapshotTicker := time.NewTicker(gcSnapshotTicker)
