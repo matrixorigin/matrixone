@@ -323,11 +323,12 @@ func TestDedupLoadCleansUpAfterLoadCancel(t *testing.T) {
 	defer cancelWaiter()
 	var waiterLoadCount atomic.Int32
 	waiterDone := make(chan struct{})
+	var waiterValue []byte
 	var waiterErr error
 	go func() {
-		_, waiterErr = dedupLoad(waiterCtx, key, func() ([]byte, error) {
+		waiterValue, waiterErr = dedupLoad(waiterCtx, key, func() ([]byte, error) {
 			waiterLoadCount.Add(1)
-			return nil, errors.New("unexpected waiter load")
+			return []byte("ok"), nil
 		})
 		close(waiterDone)
 	}()
@@ -344,8 +345,10 @@ func TestDedupLoadCleansUpAfterLoadCancel(t *testing.T) {
 	<-ownerDone
 	<-waiterDone
 	assert.ErrorIs(t, ownerErr, context.Canceled)
-	assert.ErrorIs(t, waiterErr, context.Canceled)
-	assert.Zero(t, waiterLoadCount.Load())
+	assert.NoError(t, waiterCtx.Err())
+	assert.NoError(t, waiterErr)
+	assert.Equal(t, []byte("ok"), waiterValue)
+	assert.Equal(t, int32(1), waiterLoadCount.Load())
 
 	metaLoadMu.Lock()
 	_, ok := metaLoadCalls[key]

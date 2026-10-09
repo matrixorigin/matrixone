@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -38,6 +39,10 @@ type takeoverCheckpointExecutor struct {
 	ownerGeneration  uint64
 	durableWatermark types.TS
 	onCheckpoint     func()
+	onQuery          func()
+	sourceGeneration uint64
+	queries          int
+	claims           int
 }
 
 type legacyWatermarkProgressExecutor struct {
@@ -84,6 +89,7 @@ func TestGetWatermarkProgressIfExistsDistinguishesLegacyResume(t *testing.T) {
 
 func (e *takeoverCheckpointExecutor) Exec(_ context.Context, sql string, _ ie.SessionOverrideOptions) error {
 	if strings.HasPrefix(sql, "UPDATE `mo_catalog`.`mo_cdc_watermark` SET owner_generation") {
+		e.claims++
 		match := watermarkOwnerClaim.FindStringSubmatch(sql)
 		if len(match) != 2 {
 			return strconv.ErrSyntax
@@ -119,15 +125,29 @@ func (e *takeoverCheckpointExecutor) Exec(_ context.Context, sql string, _ ie.Se
 	return strconv.ErrSyntax
 }
 
+// Freeze the result before invoking the callback: it represents a SELECT that
+// completed before the interleaved publication, not a reread of mutable state.
 func (e *takeoverCheckpointExecutor) Query(_ context.Context, sql string, _ ie.SessionOverrideOptions) ie.InternalExecResult {
+	e.queries++
+	generation := e.sourceGeneration
+	if generation == 0 {
+		generation = 11
+	}
+	var data [][]interface{}
 	switch {
 	case strings.HasPrefix(sql, "SELECT owner_generation, watermark, source_table_id"):
-		return &InternalExecResultForTest{resultSet: &MysqlResultSetForTest{Data: [][]interface{}{{strconv.FormatUint(e.ownerGeneration, 10), e.durableWatermark.ToString(), "11"}}}}
+		data = [][]interface{}{{strconv.FormatUint(e.ownerGeneration, 10), e.durableWatermark.ToString(), strconv.FormatUint(generation, 10)}}
 	case strings.HasPrefix(sql, "SELECT watermark, source_table_id FROM `mo_catalog`.`mo_cdc_watermark`"):
-		return &InternalExecResultForTest{resultSet: &MysqlResultSetForTest{Data: [][]interface{}{{e.durableWatermark.ToString(), "11"}}}}
+		data = [][]interface{}{{e.durableWatermark.ToString(), strconv.FormatUint(generation, 10)}}
 	default:
 		return &InternalExecResultForTest{err: strconv.ErrSyntax}
 	}
+	if e.onQuery != nil {
+		callback := e.onQuery
+		e.onQuery = nil
+		callback()
+	}
+	return &InternalExecResultForTest{resultSet: &MysqlResultSetForTest{Data: data}}
 }
 
 func (*takeoverCheckpointExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
@@ -298,4 +318,173 @@ func TestDelayedOwnerAdmissionCannotReplaceNewerLocalFence(t *testing.T) {
 	updater.Unlock()
 	require.Same(t, newer, updater.activeWatermarkFence[*key])
 	require.NoError(t, newer.Check(ctx))
+}
+
+// A remote claim wins after the local fence check: a remote claim wins after the local fence check.
+func TestRemoteTakeoverMustNotPromoteNoOpCheckpoint(t *testing.T) {
+	for _, read := range []string{"typed-read", "owner-claim"} {
+		for _, evict := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/evict=%t", read, evict), func(t *testing.T) {
+				ctx := context.Background()
+				durable, attempted := types.BuildTS(100, 0), types.BuildTS(200, 0)
+				store := &takeoverCheckpointExecutor{durableWatermark: durable}
+				updater := NewCDCWatermarkUpdater(t.Name(), store, WithCustomizedScheduleJob(func(job *UpdaterJob) error { job.DoneWithErr(nil); return nil }))
+				updater.Start()
+				t.Cleanup(updater.Stop)
+				key := &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "table1"}
+				oldOwner := NewOwnerFenceForGeneration(time.UnixMicro(100), func(context.Context) error { return nil })
+				_, _, err := updater.ClaimWatermarkOwner(ctx, key, oldOwner)
+				require.NoError(t, err)
+				require.NoError(t, updater.UpdateWatermarkOnly(WithWatermarkOwnerFence(ctx, oldOwner, 11), key, &attempted))
+				// The other CN has a different updater: only durable ownership changes here.
+				store.onCheckpoint = func() { store.ownerGeneration = 200 }
+				updater.committingBuffer = append(updater.committingBuffer, NewCommittingWMJob(ctx))
+				_, err = updater.execBatchUpdateWM()
+				require.NoError(t, err)
+				require.Equal(t, durable, store.durableWatermark, "guarded UPDATE must be a no-op")
+				require.Equal(t, attempted, updater.cacheCommitted[*key], "exercise the real optimistic publication path")
+				if evict {
+					require.NoError(t, updater.EvictTaskLocalStateForOwner(ctx, key.AccountId, key.TaskId, oldOwner.GenerationToken()))
+				}
+				var got types.TS
+				var generation uint64
+				if read == "typed-read" {
+					got, generation, err = updater.GetWatermarkProgress(ctx, key)
+				} else {
+					newOwner := NewOwnerFenceForGeneration(time.UnixMicro(300), func(context.Context) error { return nil })
+					got, generation, err = updater.ClaimWatermarkOwner(ctx, key, newOwner)
+				}
+				require.NoError(t, err)
+				require.Equal(t, durable, got, "a rejected old-owner checkpoint is not a durable replay boundary")
+				require.Equal(t, uint64(11), generation)
+				require.Equal(t, durable, updater.cacheCommitted[*key])
+				require.Empty(t, updater.progressReads)
+			})
+		}
+	}
+
+}
+
+func TestDurableProgressPublicationInterleavings(t *testing.T) {
+	for _, claim := range []bool{false, true} {
+		for _, scenario := range []string{"ack", "ack-then-noop", "replacement", "retirement-reuse", "eviction", "deletion", "cancel", "two-conflicts", "unrelated-key"} {
+			t.Run(fmt.Sprintf("claim=%t/%s", claim, scenario), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				t.Cleanup(cancel)
+				key := &WatermarkKey{AccountId: 1, TaskId: "task", DBName: "db", TableName: "t"}
+				store := &takeoverCheckpointExecutor{durableWatermark: types.BuildTS(100, 0)}
+				u := NewCDCWatermarkUpdater(t.Name(), store, WithCustomizedScheduleJob(func(job *UpdaterJob) error { job.DoneWithErr(nil); return nil }))
+				owner := NewOwnerFenceForGeneration(time.UnixMicro(100), func(context.Context) error { return nil })
+				_, _, err := u.ClaimWatermarkOwner(ctx, key, owner)
+				require.NoError(t, err)
+				store.queries, store.claims = 0, 0
+				confirmed := types.BuildTS(20, 0)
+				acknowledge := func() {
+					store.durableWatermark, store.sourceGeneration = confirmed, 12
+					require.NoError(t, u.finishTargetAcknowledgement(ctx, key, owner, confirmed, 12))
+				}
+				store.onQuery = func() {
+					switch scenario {
+					case "ack", "ack-then-noop", "two-conflicts":
+						acknowledge()
+						if scenario == "ack-then-noop" {
+							// A remote claim rejects a later buffered checkpoint. The cache is
+							// optimistic again even though the earlier ACK was confirmed.
+							attempted := types.BuildTS(200, 0)
+							require.NoError(t, u.UpdateWatermarkOnly(WithWatermarkOwnerFence(ctx, owner, 12), key, &attempted))
+							store.onCheckpoint = func() { store.ownerGeneration = 200 }
+							u.committingBuffer = append(u.committingBuffer, NewCommittingWMJob(ctx))
+							_, err := u.execBatchUpdateWM()
+							require.NoError(t, err)
+							require.Equal(t, attempted, u.cacheCommitted[*key])
+						}
+						if scenario == "two-conflicts" {
+							store.onQuery = acknowledge
+						}
+					case "replacement":
+						store.durableWatermark = confirmed
+						replacement := NewOwnerFenceForGeneration(time.UnixMicro(200), func(context.Context) error { return nil })
+						_, _, err := u.ClaimWatermarkOwner(ctx, key, replacement)
+						require.NoError(t, err)
+					case "retirement-reuse":
+						u.Lock()
+						u.retireWatermarkProgressLocked(*key)
+						u.Unlock()
+						store.durableWatermark = confirmed
+						_, _, err := u.GetWatermarkProgress(ctx, key)
+						require.NoError(t, err)
+					case "eviction":
+						// No cache tier or active fence remains: cleanup must discover
+						// the key from the outstanding-read inventory alone.
+						u.Lock()
+						delete(u.cacheCommitted, *key)
+						delete(u.cacheCommittedGeneration, *key)
+						delete(u.activeWatermarkFence, *key)
+						u.Unlock()
+						require.NoError(t, u.EvictTaskLocalStateForOwner(ctx, key.AccountId, key.TaskId, owner.GenerationToken()))
+					case "deletion":
+						u.MarkTaskDeleted(key.TaskId)
+						u.Lock()
+						u.retireWatermarkProgressLocked(*key)
+						u.Unlock()
+					case "cancel":
+						cancel()
+					case "unrelated-key":
+						other := *key
+						other.TableName = "other"
+						u.Lock()
+						require.True(t, u.activateWatermarkFenceLocked(other, owner))
+						u.Unlock()
+						require.NoError(t, u.finishTargetAcknowledgement(ctx, &other, owner, confirmed, 12))
+					}
+				}
+				var got types.TS
+				var generation uint64
+				if claim {
+					got, generation, err = u.ClaimWatermarkOwner(ctx, key, owner)
+				} else {
+					got, generation, err = u.GetWatermarkProgress(ctx, key)
+				}
+				switch {
+				case scenario == "cancel":
+					require.ErrorIs(t, err, context.Canceled)
+				case scenario == "deletion" || scenario == "eviction" || scenario == "retirement-reuse" || scenario == "two-conflicts":
+					require.True(t, IsRetryableSnapshotEpochError(err), "%v", err)
+				case claim && (scenario == "replacement" || scenario == "ack-then-noop"):
+					require.True(t, IsOwnerFenceLostError(err), "%v", err)
+				default:
+					require.NoError(t, err)
+					if scenario == "unrelated-key" {
+						require.Equal(t, types.BuildTS(100, 0), got)
+						require.Equal(t, uint64(11), generation)
+						require.Equal(t, 1, store.queries)
+					} else {
+						require.Equal(t, confirmed, got)
+						expectedGeneration := store.sourceGeneration
+						if expectedGeneration == 0 {
+							expectedGeneration = 11
+						}
+						require.Equal(t, expectedGeneration, generation)
+					}
+				}
+				if scenario == "deletion" || scenario == "eviction" {
+					require.NotContains(t, u.cacheCommitted, *key)
+				}
+				if scenario == "retirement-reuse" {
+					require.Equal(t, confirmed, u.cacheCommitted[*key])
+				}
+				if scenario == "two-conflicts" {
+					require.Equal(t, 2, store.queries)
+					require.Equal(t, confirmed, u.cacheCommitted[*key])
+				}
+				if scenario != "replacement" {
+					require.LessOrEqual(t, store.queries, 2)
+				}
+				if claim && scenario != "replacement" {
+					require.Equal(t, 1, store.claims, "reread must not repeat the owner UPDATE")
+				}
+				require.Empty(t, u.progressReads)
+			})
+		}
+	}
 }

@@ -572,15 +572,6 @@ func (idx *IvfflatSearchIndex[T]) entryQueryExpression(
 		"ivfflat: cannot encode %T query for entries vector type %s", query, vectorType.String()))
 }
 
-// entryDistanceSQL 保持内部 SQL 候选查询的越小越近距离约定。
-func entryDistanceSQL(m metric.MetricType, column, query string) string {
-	expr := fmt.Sprintf("%s(%s, %s)", metric.MetricTypeToDistFuncName[m], column, query)
-	if m == metric.Metric_InnerProduct {
-		expr = "-" + expr
-	}
-	return expr
-}
-
 func (idx *IvfflatSearchIndex[T]) buildSearchRoundSQL(
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
@@ -600,8 +591,11 @@ func (idx *IvfflatSearchIndex[T]) buildSearchRoundSQL(
 	if err != nil {
 		return "", err
 	}
-	distExpr := entryDistanceSQL(metric.MetricType(idxcfg.Ivfflat.Metric),
-		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry), queryExpr) + " as vec_dist"
+	distExpr := fmt.Sprintf("%s(%s, %s) as vec_dist",
+		metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
+		queryExpr,
+	)
 
 	selectCols := []string{
 		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
@@ -644,8 +638,11 @@ func (idx *IvfflatSearchIndex[T]) buildExactSearchSQL(
 	if err != nil {
 		return "", err
 	}
-	distExpr := entryDistanceSQL(metric.MetricType(idxcfg.Ivfflat.Metric),
-		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry), queryExpr) + " as vec_dist"
+	distExpr := fmt.Sprintf("%s(%s, %s) as vec_dist",
+		metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
+		queryExpr,
+	)
 
 	selectCols := []string{
 		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
@@ -677,7 +674,6 @@ func sortAndLimitExactResults(
 	includeData map[string][]any,
 	includeNulls map[string][]bool,
 	limit uint,
-	desc bool,
 ) ([]any, []float64, map[string][]any, map[string][]bool) {
 	if len(keys) <= 1 {
 		if limit > 0 && len(keys) > int(limit) {
@@ -702,9 +698,6 @@ func sortAndLimitExactResults(
 		order[i] = i
 	}
 	sort.SliceStable(order, func(i, j int) bool {
-		if desc {
-			return distances[order[i]] > distances[order[j]]
-		}
 		return distances[order[i]] < distances[order[j]]
 	})
 
@@ -991,7 +984,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 				includeData = rt.IncludeResult.Data
 				includeNulls = rt.IncludeResult.Nulls
 			}
-			resid, distances, sortedInclude, sortedNulls = sortAndLimitExactResults(resid, distances, includeCols, includeData, includeNulls, exactLimit, rt.OrigFuncName == metric.DistFn_InnerProduct)
+			resid, distances, sortedInclude, sortedNulls = sortAndLimitExactResults(resid, distances, includeCols, includeData, includeNulls, exactLimit)
 			if rt.IncludeResult != nil {
 				rt.IncludeResult.Data = sortedInclude
 				rt.IncludeResult.Nulls = sortedNulls
@@ -1064,9 +1057,11 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			// a plain filtered read that returns the full candidate set; the downstream
 			// Node_SORT + LIMIT k does the ranking and truncation.
 			sql = fmt.Sprintf(
-				"SELECT %s, %s as vec_dist FROM %s WHERE %s = %d AND %s IN (%s)",
+				"SELECT %s, %s(%s, %s) as vec_dist FROM %s WHERE %s = %d AND %s IN (%s)",
 				sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
-				entryDistanceSQL(metric.MetricType(idxcfg.Ivfflat.Metric), entryCol, queryExpr),
+				metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
+				entryCol,
+				queryExpr,
 				sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.EntriesTable),
 				sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_version),
 				idx.Version,
@@ -1075,9 +1070,11 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			)
 		} else {
 			sql = fmt.Sprintf(
-				"SELECT %s, %s as vec_dist FROM %s WHERE %s = %d AND %s IN (%s) ORDER BY vec_dist LIMIT %d",
+				"SELECT %s, %s(%s, %s) as vec_dist FROM %s WHERE %s = %d AND %s IN (%s) ORDER BY vec_dist LIMIT %d",
 				sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
-				entryDistanceSQL(metric.MetricType(idxcfg.Ivfflat.Metric), entryCol, queryExpr),
+				metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
+				entryCol,
+				queryExpr,
 				sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.EntriesTable),
 				sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_version),
 				idx.Version,
@@ -1134,7 +1131,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 
 	if sqlproc != nil && sqlproc.ExactPkFilter != "" {
 		exactLimit := exactResultLimit(sqlproc, rt.Limit)
-		resid, distances, _, _ = sortAndLimitExactResults(resid, distances, nil, nil, nil, exactLimit, rt.OrigFuncName == metric.DistFn_InnerProduct)
+		resid, distances, _, _ = sortAndLimitExactResults(resid, distances, nil, nil, nil, exactLimit)
 	}
 
 	return resid, distances, nil

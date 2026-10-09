@@ -207,9 +207,9 @@ INSERT INTO inner_product_test VALUES
 SELECT id FROM inner_product_test
 ORDER BY inner_product(vec, '[1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0]') DESC
 LIMIT 3 by rank with option 'mode=pre';
-➤ id[4,32,0]  𝄀
-2  𝄀
-1  𝄀
+id
+5
+3
 4
 SELECT id, name FROM vector_test_advanced
 WHERE category IN ('cat1', 'cat2') AND score > 2.0

@@ -49,14 +49,14 @@ insert into t_ip values
 create index idx_ip_b using ivfflat on t_ip(b) lists=4 op_type 'vector_ip_ops';
 
 select group_concat(a order by a) as ip_ids, count(*) as row_count, count(distinct a) as distinct_count
-from (select a from t_ip order by inner_product(b, normalize_l2('[1,0.1,0,0]')) desc limit 3) s;
+from (select a from t_ip order by inner_product(b, normalize_l2('[1,0.1,0,0]')) asc limit 3) s;
 
 select count(*) as empty_count
-from (select a from t_ip where a < 0 order by inner_product(b, normalize_l2('[1,0.1,0,0]')) desc limit 3) s;
+from (select a from t_ip where a < 0 order by inner_product(b, normalize_l2('[1,0.1,0,0]')) asc limit 3) s;
 
 -- A query after the empty result must still use the same reader/connection.
 select group_concat(a order by a) as ip_followup_ids, count(*) as row_count, count(distinct a) as distinct_count
-from (select a from t_ip order by inner_product(b, normalize_l2('[1,0.1,0,0]')) desc limit 2) s;
+from (select a from t_ip order by inner_product(b, normalize_l2('[1,0.1,0,0]')) asc limit 2) s;
 
 create table t_str(a varchar(8) primary key, b vecf32(4));
 insert into t_str values
