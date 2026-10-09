@@ -255,6 +255,7 @@ test/development correctness and backpressure, not hostile-code containment.
 The reviewed change is not declared production-ready. Artifact GC/total-storage
 quota, cross-version migration rollback/restore, authenticated transport, and
 sandboxing remain explicit limits. The owner-approved acceptance is limited to
-the test/development stage. This approval closes the current-stage design gate;
-the reviewer must still complete the implementation/lifecycle review before the
-PR review is complete.
+the test/development stage. It closes the feature-owner scope record for that
+limited stage; it does not close the independent Architecture or SQL/Planner
+approval gate, which remains pending in the approval record. Implementation and
+lifecycle review, as well as any broader enablement, remain separate decisions.
