@@ -115,6 +115,10 @@ func buildParquetNode(typ defines.MysqlType, flag uint16) parquet.Node {
 		return parquet.Optional(parquet.Leaf(parquet.DoubleType))
 	case defines.MYSQL_TYPE_TIMESTAMP:
 		return parquet.Optional(parquet.TimestampAdjusted(parquet.Microsecond, true))
+	case defines.MYSQL_TYPE_YEAR:
+		// YEAR is represented as its canonical four-digit text so that the
+		// loader can preserve the MySQL YEAR domain (including 0000).
+		return parquet.Optional(parquet.String())
 	case defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIME:
 		// Use string representation for date/time types for simplicity and compatibility
 		return parquet.Optional(parquet.String())
@@ -155,11 +159,12 @@ func (pw *ParquetWriter) writeBatchRange(bat *batch.Batch, start, end int, timeZ
 		rows[i] = row
 	}
 
+	if len(bat.Vecs) != len(pw.columnNames) {
+		return moerr.NewInternalErrorf(pw.ctx, "parquet batch has %d vectors for %d columns", len(bat.Vecs), len(pw.columnNames))
+	}
+
 	// Convert each column
 	for colIdx, vec := range bat.Vecs {
-		if colIdx >= len(pw.columnNames) {
-			return moerr.NewInternalErrorf(pw.ctx, "parquet batch has %d vectors for %d columns", len(bat.Vecs), len(pw.columnNames))
-		}
 		if vec == nil {
 			return moerr.NewInternalErrorf(pw.ctx, "parquet batch vector %d is nil", colIdx)
 		}
@@ -170,7 +175,7 @@ func (pw *ParquetWriter) writeBatchRange(bat *batch.Batch, start, end int, timeZ
 				row[colName] = nil
 				continue
 			}
-			val, err := vectorValueToParquet(vec, rowIdx, timeZone)
+			val, err := pw.vectorValueToParquet(vec, colIdx, rowIdx, timeZone)
 			if err != nil {
 				return err
 			}
@@ -180,6 +185,18 @@ func (pw *ParquetWriter) writeBatchRange(bat *batch.Batch, start, end int, timeZ
 
 	_, err := pw.writer.Write(rows)
 	return err
+}
+
+// vectorValueToParquet preserves the MySQL column domain when the execution
+// vector carries a compatible temporal representation. YEAR can arrive as a
+// DATE vector on the SELECT projection path, but its exported value must still
+// be the four-digit year rather than a calendar date.
+func (pw *ParquetWriter) vectorValueToParquet(vec *vector.Vector, colIdx, rowIdx int, timeZone *time.Location) (any, error) {
+	if pw.columnTypes[colIdx] == defines.MYSQL_TYPE_YEAR && vec.GetType().Oid == types.T_date {
+		value := vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIdx)
+		return types.MoYear(value.Year()).String(), nil
+	}
+	return vectorValueToParquet(vec, rowIdx, timeZone)
 }
 
 // vectorValueToParquet converts a vector value to a parquet-compatible Go value
