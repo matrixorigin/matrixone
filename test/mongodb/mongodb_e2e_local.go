@@ -147,6 +147,10 @@ func runWithDSNAndTransferMonitor(ctx context.Context, db *sql.DB, dsn, host str
 		return err
 	}
 	r.Cases = append(r.Cases, "materialize-and-join-exact-rows")
+	if err := verifyTargetUniqueConflictRollback(ctx, db); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "target-unique-conflict-atomic-rollback")
 	if err := expectScalar(ctx, db, "select json_type(value) from mongodb_ci.json_scalar", "STRING"); err != nil {
 		return err
 	}
@@ -739,6 +743,40 @@ func verifyMaterializeAndJoin(ctx context.Context, db *sql.DB, expectedRows [][]
 		"select e.mongo_id,e.device_id,e.site_id,cast(e.ts as char),coalesce(cast(e.measurement as char),'NULL'),coalesce(e.source_batch,'NULL') from mongodb_ci.events e join mongodb_ci.events_copy c on e.mongo_id=c.mongo_id order by e.mongo_id",
 		expectedRows); err != nil {
 		return fmt.Errorf("MongoDB and local table join: %w", err)
+	}
+	return nil
+}
+
+func verifyTargetUniqueConflictRollback(ctx context.Context, db *sql.DB) error {
+	for _, statement := range []string{
+		"create table mongodb_ci.unique_sink(mongo_id char(24) primary key, device_id varchar(20))",
+		"insert into mongodb_ci.unique_sink values('64b000000000000000000002','seed')",
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("prepare constrained MongoDB target: %w", err)
+		}
+	}
+	// The five-row source contains the seeded key. A conflict at any scan
+	// position must leave no other source row in the ordinary MO target.
+	insertCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	_, err := db.ExecContext(insertCtx,
+		"insert into mongodb_ci.unique_sink select mongo_id,device_id from mongodb_ci.events")
+	cancel()
+	if err == nil {
+		return errors.New("multi-row MongoDB ingestion with duplicate target key unexpectedly succeeded")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("multi-row MongoDB ingestion timed out: %w", err)
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+		return fmt.Errorf("multi-row MongoDB ingestion failed for an unrelated reason: %w", err)
+	}
+	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.unique_sink", "1"); err != nil {
+		return fmt.Errorf("constrained MongoDB target changed after rejected ingestion: %w", err)
+	}
+	if err := expectScalar(ctx, db,
+		"select device_id from mongodb_ci.unique_sink where mongo_id='64b000000000000000000002'", "seed"); err != nil {
+		return fmt.Errorf("constrained MongoDB target seed changed after rejected ingestion: %w", err)
 	}
 	return nil
 }

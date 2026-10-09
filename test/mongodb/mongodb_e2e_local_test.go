@@ -581,6 +581,11 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectExec("create table mongodb_ci.events_copy as select").WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectQuery("select mongo_id.*from mongodb_ci.events_copy").WillReturnRows(fixtureRows())
 	mock.ExpectQuery("select e.mongo_id.*join mongodb_ci.events_copy").WillReturnRows(fixtureRows())
+	mock.ExpectExec("create table mongodb_ci.unique_sink").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("insert into mongodb_ci.unique_sink values").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("insert into mongodb_ci.unique_sink select").WillReturnError(errors.New("Duplicate entry for key PRIMARY"))
+	expectMongoDBE2EScalar(mock, "1")
+	expectMongoDBE2EScalar(mock, "seed")
 	expectMongoDBE2EScalar(mock, "STRING")
 	expectMongoDBE2EScalar(mock, "text")
 	expectMongoDBE2EScalar(mock, "2")
@@ -721,6 +726,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"show-connections-admin-metadata-redaction",
 		"show-create-redaction-roundtrip",
 		"materialize-and-join-exact-rows",
+		"target-unique-conflict-atomic-rollback",
 		"json-relaxed-extended-conversion",
 		"fixed-binary-padding",
 		"truncate-read-only-source-preserved",
@@ -786,6 +792,11 @@ func TestMongoDBLocalE2ERunPropagatesRelaxedJSONQueryFailures(t *testing.T) {
 			mock.ExpectExec("create table mongodb_ci.events_copy as select").WillReturnResult(sqlmock.NewResult(0, 5))
 			mock.ExpectQuery("select mongo_id.*from mongodb_ci.events_copy").WillReturnRows(fixtureRows())
 			mock.ExpectQuery("select e.mongo_id.*join mongodb_ci.events_copy").WillReturnRows(fixtureRows())
+			mock.ExpectExec("create table mongodb_ci.unique_sink").WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectExec("insert into mongodb_ci.unique_sink values").WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec("insert into mongodb_ci.unique_sink select").WillReturnError(errors.New("Duplicate entry for key PRIMARY"))
+			expectMongoDBE2EScalar(mock, "1")
+			expectMongoDBE2EScalar(mock, "seed")
 			expectMongoDBE2EScalar(mock, "STRING")
 			expectMongoDBE2EScalar(mock, "text")
 			if tc.failedQuery == "json_contains" {
