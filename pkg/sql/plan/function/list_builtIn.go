@@ -306,6 +306,10 @@ func commonConditionalStringType(result types.Type, source []types.Type) types.T
 			if typ.Width > maxWidth {
 				maxWidth = typ.Width
 			}
+		case types.T_uuid:
+			if width := formattedScalarStringType(typ).Width; width > maxWidth {
+				maxWidth = width
+			}
 		case types.T_text:
 			hasText = true
 			// Width zero is ordinary unbounded TEXT. The non-zero values are
