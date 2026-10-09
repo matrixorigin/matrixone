@@ -255,11 +255,12 @@ aggregate's required internal value can be exposed by a nullable MO projection.
 This retains physical width, precision and scale and leaves the result schema
 comparison intact. Legacy Flight emission retains its existing wire shape.
 
-Emit condition-free embedded INNER joins as Substrait CrossRel. MO has already
-placed their predicates in surrounding filters; JOIN ON true otherwise binds
-as DuckDB ANY_JOIN when the exact path intentionally skips its ordinary
-optimizer. This changes no join order, multiplicity, predicate or numeric join
-key admission and introduces no new native operator.
+Condition-free joins in exact plans also need a native preparation fix:
+DuckDB leaves JOIN ON true as ANY_JOIN when its ordinary optimizer is skipped.
+Native preparation can represent that condition with equal constant keys in
+its existing GPU join, preserving join kind, multiplicity, projection maps and
+outer NULLs for empty inputs. MO retains its original JoinRel emission. Public
+controls include scalar aggregates over empty/all-NULL input.
 
 For embedded DATE extraction, lower the already admitted year/month/day fields
 to their direct native functions. DuckDB's generic date_part function is not a

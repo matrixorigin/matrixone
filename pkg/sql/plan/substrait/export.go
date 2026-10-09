@@ -601,12 +601,6 @@ func (e *exporter) join(n *planpb.Node) (*spb.Rel, error) {
 		return nil, notEligiblef(EligibilityOperator, "node %d uses unsupported join type %s", n.NodeId, n.JoinType.String())
 	}
 	relation := &spb.Rel{RelType: &spb.Rel_Join{Join: &spb.JoinRel{Left: left, Right: right, Expression: condition, Type: joinType}}}
-	if (e.embeddedMO || e.embeddedBindings != nil) && n.JoinType == planpb.Node_INNER && len(n.OnList) == 0 {
-		// Exact preparation retains MO's optimized graph. Represent its
-		// Cartesian product directly instead of relying on DuckDB's ordinary
-		// optimizer to turn JOIN ... ON true into a cross product.
-		relation = &spb.Rel{RelType: &spb.Rel_Cross{Cross: &spb.CrossRel{Left: left, Right: right}}}
-	}
 	relation, err = e.applyFilter(relation, n.FilterList, projectInputs)
 	if err != nil {
 		return nil, err

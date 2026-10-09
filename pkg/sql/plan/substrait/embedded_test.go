@@ -121,12 +121,12 @@ func TestBuildEmbeddedSupportsMultipleMOReads(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	cross := embeddedPlan(t, wire).Relations[0].GetRoot().Input.GetCross()
-	require.NotNil(t, cross)
-	require.Equal(t, []string{embeddedNamedTable, "1"}, cross.Left.GetRead().GetNamedTable().Names)
-	require.Equal(t, []string{"col_0"}, cross.Left.GetRead().BaseSchema.Names)
-	require.Equal(t, []string{embeddedNamedTable, "2"}, cross.Right.GetRead().GetNamedTable().Names)
-	require.Equal(t, []string{"col_0"}, cross.Right.GetRead().BaseSchema.Names)
+	join := embeddedPlan(t, wire).Relations[0].GetRoot().Input.GetJoin()
+	require.NotNil(t, join)
+	require.Equal(t, []string{embeddedNamedTable, "1"}, join.Left.GetRead().GetNamedTable().Names)
+	require.Equal(t, []string{"col_0"}, join.Left.GetRead().BaseSchema.Names)
+	require.Equal(t, []string{embeddedNamedTable, "2"}, join.Right.GetRead().GetNamedTable().Names)
+	require.Equal(t, []string{"col_0"}, join.Right.GetRead().BaseSchema.Names)
 }
 
 func TestBuildEmbeddedRejectsInvalidBindings(t *testing.T) {
@@ -257,27 +257,6 @@ func embeddedPlan(t *testing.T, wire []byte) *spb.Plan {
 	plan := new(spb.Plan)
 	require.NoError(t, proto.Unmarshal(wire, plan))
 	return plan
-}
-
-func TestEmbeddedConditionFreeInnerJoinIsCrossProduct(t *testing.T) {
-	query := embeddedJoinQuery(false)
-	candidate, err := ExportEmbeddedMO(query, NewEmbeddedExportProfile(31))
-	require.NoError(t, err)
-	wire, err := candidate.BuildEmbedded(map[int32]EmbeddedReadBinding{
-		0: {BindingID: 1, Source: EmbeddedReadMO}, 1: {BindingID: 2, Source: EmbeddedReadMO},
-	})
-	require.NoError(t, err)
-	cross := embeddedPlan(t, wire).Relations[0].GetRoot().Input.GetCross()
-	require.NotNil(t, cross)
-	require.Equal(t, []string{"__sirius_embedded_v1", "1"}, cross.Left.GetRead().GetNamedTable().Names)
-	require.Equal(t, []string{"__sirius_embedded_v1", "2"}, cross.Right.GetRead().GetNamedTable().Names)
-	legacy, err := Export(query)
-	require.NoError(t, err)
-	wire, err = legacy.Build(map[int32][]byte{0: {1}, 1: {2}})
-	require.NoError(t, err)
-	join := embeddedPlan(t, wire).Relations[0].GetRoot().Input.GetJoin()
-	require.NotNil(t, join)
-	require.True(t, join.Expression.GetLiteral().GetBoolean())
 }
 
 func TestEmbeddedFetchIncludesBothConstantBounds(t *testing.T) {

@@ -97,6 +97,8 @@ func TestEmbeddedSiriusPublicMOReader(t *testing.T) {
 			"select sum(c),avg(c),min(c),max(c),count(c) from d where id<0",
 			"select x.id,x.c,y.c from d x join d y on x.c=y.c order by x.c,x.id,y.id",
 			"select c,count(c) from d group by c order by c",
+			"select x.id,x.c,y.v from d x left join (select sum(c) as v from d where id<0) y on true order by x.id",
+			"select x.id,x.c,y.v from d x left join (select sum(c) as v from d where id=3) y on true order by x.id",
 		} {
 			t.Run(statement, func(t *testing.T) {
 				names, values := readSiriusPublicRows(t, ctx, db, statement)
