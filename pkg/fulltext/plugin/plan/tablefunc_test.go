@@ -128,5 +128,12 @@ func TestBuildTokenizeErrors(t *testing.T) {
 	require.ErrorContains(t, err, "NARGS < 4")
 	_, err = buildTokenize(b, tokenizeTblFunc(param, notType), nil, tokenizeArgs(4), nil, values)
 	require.ErrorContains(t, err, "second parameter must be int32")
+	for _, lit := range []*tree.NumVal{
+		tree.NewNumVal[string]("x", "x", false, tree.P_char),
+		tree.NewNumVal[float64](1.5, "1.5", false, tree.P_float64),
+	} {
+		_, err = buildTokenize(b, tokenizeTblFunc(param, lit), nil, tokenizeArgs(4), nil, values)
+		require.ErrorContains(t, err, "second parameter must be int32")
+	}
 	require.Empty(t, b.nodes)
 }

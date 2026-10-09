@@ -137,7 +137,7 @@ func getTokenizeParams(pb planplugin.PlanBuilder, fn *tree.FuncExpr) (string, er
 }
 
 func getTokenizePkeyType(pb planplugin.PlanBuilder, fn *tree.FuncExpr) (plan.Type, error) {
-	if v, ok := fn.Exprs[1].(*tree.NumVal); ok {
+	if v, ok := fn.Exprs[1].(*tree.NumVal); ok && v.ValType == tree.P_int64 {
 		if t64, ok2 := v.Int64(); ok2 {
 			return plan.Type{
 				Id:          int32(t64),
