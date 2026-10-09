@@ -145,7 +145,7 @@ type pythonRevisionCatalogState struct {
 func newRepairTxnExecutor(t *testing.T, state *pythonRevisionCatalogState) executor.TxnExecutor {
 	t.Helper()
 	txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
-	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+	txnOperator.EXPECT().TxnOptions().Return(pbtxn.TxnOptions{}).AnyTimes()
 	return executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
 		lower := strings.ToLower(sql)
 		switch {
