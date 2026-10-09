@@ -184,8 +184,22 @@ Each latency of this PR is within the range of main's two rounds or below it, ex
 fulltext2 at k=100 in round 1 (1.75 ms against main's 1.46 ms; 1.33 ms on both in round 2).
 Build times differ from main's by at most 2.2 s.
 
-ivfflat is not benchmarked: its search calls are unchanged, and the change on its path is
-decoding its settings from `algo_options` once per reader (`NewPlanReader`).
+ivfflat: its search calls are unchanged; the change on its path is decoding its settings from
+`algo_options` once per reader (`NewPlanReader`). 1M wiki_all rows, dim 768, lists 1000,
+probe_limit 16, k=20, concurrency 8, 5000 queries, launch config `etc/bench` (8 GB memory
+cache). Each binary ran on its own instance (import, restart, create index); recall passes
+alternated main, this PR, this PR, main, each after a restart. Pass 2 of each round, round 1 /
+round 2:
+
+| | main | this PR |
+|---|---|---|
+| QPS | 369.5 / 276.8 | 379.8 / 337.0 |
+| p50 | 17.04 / 20.70 ms | 17.91 / 18.54 ms |
+| p99 | 101.2 / 184.4 ms | 68.8 / 76.6 ms |
+| recall@20 | 0.9298 | 0.9349 |
+
+Recall differs because each instance built its own index. Pass 1 (cold) ranged 56–135 QPS on
+both binaries.
 
 ## Removed
 
@@ -246,9 +260,6 @@ for the join shape.
   to the combination.
 - **No mixed-version operation** (Eric, 2026-10-09). Index search fails until every CN
   runs this version; there is no fallback in either direction.
-- **No ivfflat benchmark** (Eric, 2026-10-09). ivfflat's search calls are unchanged; the
-  benchmarks cover the paths whose code changed: cuVS (IVF-PQ) and the ported fulltext
-  readers.
 - **Rank-mode clause.** `BY RANK WITH OPTION 'mode=...'` is honored by ivfflat only;
   hnsw, cagra and ivfpq ignore it.
 - **Publisher identity on the node.** The fulltext readers take publisher identity
