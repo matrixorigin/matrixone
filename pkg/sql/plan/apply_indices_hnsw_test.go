@@ -777,6 +777,9 @@ func TestPrepareHnswIndexContext_DifferentDistanceFunctions(t *testing.T) {
 				scanNode: scanNode,
 			}
 
+			if tc.funcName == metric.DistFn_InnerProduct {
+				vecCtx.sortDirection = plan.OrderBySpec_DESC
+			}
 			idxAlgoParams := `{"op_type": "` + opType + `"}`
 			multiTableIndex := makeConsistentHnswMultiTableIndexForTest(
 				"idx_hnsw_distance_fn",

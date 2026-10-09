@@ -46,9 +46,12 @@ where relname='t' and reldatabase='cagra_metric')
 and name='ix' and algo_table_type='cagra_index';
 ➤ algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  ¦  algo_params[12,-1,0]  𝄀
 cagra  ¦  cagra_index  ¦  {"distribution_mode":"single","graph_degree":"8","intermediate_graph_degree":"16","itopk_size":"32","op_type":"vector_ip_ops","quantization":"float32","session_vars":{"cfg":{"cagra_threads_build":{"t":"I","v":7},"lower_case_table_names":{"t":"I","v":1}}}}
-select id, inner_product(v, '[16,15,14,13,12,11,10,9]') as score from t order by score asc limit 1;
+select id, inner_product(v, '[16,15,14,13,12,11,10,9]') as score from t order by score desc limit 1;
 ➤ id[-5,64,0]  ¦  score[8,9,0]  𝄀
-1  ¦  -1292.0
+1  ¦  1292.0
+select id, inner_product(v, '[16,15,14,13,12,11,10,9]') as score from t order by score asc limit 1;
+➤ id[-5,64,0]  ¦  score[8,53,31]  𝄀
+6  ¦  15.0
 drop index ix on t;
 create index ix using cagra on t (v) op_type 'vector_cosine_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32;
 select algo, algo_table_type, algo_params from mo_catalog.mo_indexes
