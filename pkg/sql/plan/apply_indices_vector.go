@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 func decodeVectorIndexAlgoParams(value string) (map[string]json.RawMessage, error) {
@@ -1082,20 +1083,21 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 }
 
 // filtersContainIndexedDistanceExpr reports whether a residual filter still
-// depends on the distance expression that drives the vector-index rewrite.
-// Such a predicate cannot run after the index has truncated its candidate
-// stream: rows outside the nearest K candidates would be lost before the
-// predicate is evaluated.  The walk is deliberately recursive so wrappers
-// such as BETWEEN, NOT, OR, and reversed comparisons are covered without
-// trying to normalize their SQL three-valued semantics into a range.
+// depends on a vector distance over the indexed scan column.  Any such
+// predicate cannot run after the index has truncated its candidate stream:
+// even a different query vector or metric can accept a row outside the
+// nearest K candidates for the ORDER BY distance.  The walk is deliberately
+// recursive so wrappers such as BETWEEN, NOT, OR, and reversed comparisons
+// are covered without trying to normalize their SQL three-valued semantics
+// into a range.
 func filtersContainIndexedDistanceExpr(
 	filters []*plan.Expr,
 	scanTag, partPos int32,
-	origFuncName string,
-	vecLitArg *plan.Expr,
+	_ string,
+	_ *plan.Expr,
 ) bool {
 	for _, filter := range filters {
-		if exprContainsIndexedDistanceExpr(filter, scanTag, partPos, origFuncName, vecLitArg) {
+		if exprContainsIndexedDistanceExpr(filter, scanTag, partPos) {
 			return true
 		}
 	}
@@ -1105,25 +1107,23 @@ func filtersContainIndexedDistanceExpr(
 func exprContainsIndexedDistanceExpr(
 	expr *plan.Expr,
 	scanTag, partPos int32,
-	origFuncName string,
-	vecLitArg *plan.Expr,
 ) bool {
 	if expr == nil {
 		return false
 	}
 	if fn := expr.GetF(); fn != nil {
-		if indexedDistanceExprMatches(fn, scanTag, partPos, origFuncName, vecLitArg) {
+		if indexedDistanceExprMatches(fn, scanTag, partPos) {
 			return true
 		}
 		for _, arg := range fn.Args {
-			if exprContainsIndexedDistanceExpr(arg, scanTag, partPos, origFuncName, vecLitArg) {
+			if exprContainsIndexedDistanceExpr(arg, scanTag, partPos) {
 				return true
 			}
 		}
 	}
 	if list := expr.GetList(); list != nil {
 		for _, item := range list.List {
-			if exprContainsIndexedDistanceExpr(item, scanTag, partPos, origFuncName, vecLitArg) {
+			if exprContainsIndexedDistanceExpr(item, scanTag, partPos) {
 				return true
 			}
 		}
@@ -1134,39 +1134,20 @@ func exprContainsIndexedDistanceExpr(
 func indexedDistanceExprMatches(
 	fn *plan.Function,
 	scanTag, partPos int32,
-	origFuncName string,
-	vecLitArg *plan.Expr,
 ) bool {
-	if fn == nil || fn.Func == nil || fn.Func.ObjName != origFuncName || len(fn.Args) != 2 {
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 {
 		return false
 	}
-
-	queryArg := (*plan.Expr)(nil)
-	for i, arg := range fn.Args {
+	if _, ok := metric.DistFuncOpTypes[fn.Func.ObjName]; !ok {
+		return false
+	}
+	for _, arg := range fn.Args {
 		col := arg.GetCol()
 		if col != nil && col.RelPos == scanTag && col.ColPos == partPos {
-			queryArg = fn.Args[1-i]
-			break
+			return true
 		}
 	}
-	if queryArg == nil {
-		return false
-	}
-
-	// A query vector that cannot be canonically decoded is conservatively
-	// treated as a match.  The planner cannot prove that it differs from the
-	// indexed vector, so retaining a bounded candidate rewrite would risk
-	// evaluating an exact distance predicate after truncation.
-	if vecLitArg == nil {
-		return true
-	}
-	elemType := types.T(vecLitArg.Typ.GetId())
-	expectedKey, expectedOK := vecFloatKey(vecLitArg, elemType)
-	actualKey, actualOK := vecFloatKey(queryArg, elemType)
-	if !expectedOK || !actualOK {
-		return true
-	}
-	return expectedKey == actualKey
+	return false
 }
 
 // mergeUpperBound folds a new upper bound into dr, keeping the tighter (smaller,

@@ -640,7 +640,7 @@ func TestFiltersContainIndexedDistanceExpr_ResidualShapes(t *testing.T) {
 		{name: "different column", expr: makeDistFnFilter("<", "l2_distance", scanTag, partPos+1, vecVal, f32Lit(1))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.name == "between" || tc.name == "reversed comparison" || tc.name == "not" || tc.name == "or", match(tc.expr))
+			require.Equal(t, tc.name != "different column", match(tc.expr))
 		})
 	}
 
