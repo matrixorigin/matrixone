@@ -2083,26 +2083,9 @@ func checkRoleRuleRenameAdmissionWithHooks(
 	if !hasRename {
 		return nil
 	}
-	// An account with no rewrite rules has no name-keyed dependency for this
-	// admission gate to protect. Keep the existing rename contract available
-	// for optimistic/SI transactions in that case. If rules are present, the
-	// conservative policy still requires a pessimistic RC transaction so the
-	// lifecycle lock and snapshot barrier can linearize the rename with rule
-	// writers.
+	// Non-RC transactions cannot prove role-rule absence against concurrent
+	// writers, so fail closed before consulting their potentially stale snapshot.
 	if !isPessimistic || !isReadCommitted {
-		if hooks.hasRoleRules == nil {
-			return moerr.NewNotSupported(
-				ctx,
-				"table rename is not supported outside pessimistic read-committed transactions",
-			)
-		}
-		roleRulesExist, err := hooks.hasRoleRules(ctx)
-		if err != nil {
-			return err
-		}
-		if !roleRulesExist {
-			return nil
-		}
 		return moerr.NewNotSupported(
 			ctx,
 			"table rename is not supported outside pessimistic read-committed transactions",

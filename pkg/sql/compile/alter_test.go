@@ -185,37 +185,17 @@ func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("unsupported transaction mode fails closed when rules exist", func(t *testing.T) {
+	t.Run("unsupported transaction mode fails closed", func(t *testing.T) {
 		err := checkRoleRuleRenameAdmissionWithHooks(
 			t.Context(), []*plan2.AlterTable{rename}, false, true, roleRuleRenameAdmissionHooks{},
 		)
 		require.ErrorContains(t, err, "pessimistic read-committed")
 		err = checkRoleRuleRenameAdmissionWithHooks(
-			t.Context(), []*plan2.AlterTable{rename}, false, true, roleRuleRenameAdmissionHooks{
-				hasRoleRules: func(context.Context) (bool, error) { return true, nil },
-			},
-		)
-		require.ErrorContains(t, err, "pessimistic read-committed")
-		err = checkRoleRuleRenameAdmissionWithHooks(
 			t.Context(), []*plan2.AlterTable{rename}, true, false, roleRuleRenameAdmissionHooks{
-				hasRoleRules: func(context.Context) (bool, error) { return true, nil },
+				hasRoleRules: func(context.Context) (bool, error) { return false, nil },
 			},
 		)
 		require.ErrorContains(t, err, "pessimistic read-committed")
-	})
-
-	t.Run("optimistic rename is allowed when no rules exist", func(t *testing.T) {
-		var queried bool
-		err := checkRoleRuleRenameAdmissionWithHooks(
-			t.Context(), []*plan2.AlterTable{rename}, false, true, roleRuleRenameAdmissionHooks{
-				hasRoleRules: func(context.Context) (bool, error) {
-					queried = true
-					return false, nil
-				},
-			},
-		)
-		require.NoError(t, err)
-		require.True(t, queried)
 	})
 
 	t.Run("lock and barrier precede the catalog existence query", func(t *testing.T) {
