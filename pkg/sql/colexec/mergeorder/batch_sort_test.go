@@ -32,7 +32,7 @@ import (
 )
 
 func TestSortBatchSpillsAndPreservesOrder(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := newValuesBatch(proc, []int8{7, 1, 5, 1, 3, 9})
 	var got *batch.Batch
 	t.Cleanup(func() {
@@ -64,7 +64,7 @@ func TestSortBatchEnforcesSpillResourceAdmission(t *testing.T) {
 		{name: "file descriptor", component: process.ExecutionResourceComponentSpillFD},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			t.Cleanup(func() {
 				proc.Free()
 				require.Zero(t, proc.Mp().CurrNB())
@@ -127,7 +127,7 @@ func TestSortBatchEnforcesSpillResourceAdmission(t *testing.T) {
 }
 
 func TestSortBatchFreesSingleBatchExpressionKey(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := newValuesBatch(proc, []int8{3, 1, 2})
 	key := testutil.NewVector(3, types.T_int8.ToType(), proc.Mp(), false, []int8{1, 2, 3})
 	ctr := &container{
@@ -152,7 +152,7 @@ func TestSortBatchFreesSingleBatchExpressionKey(t *testing.T) {
 }
 
 func TestSortBatchEmptyInputIsIndependent(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := newValuesBatch(proc, nil)
 	fs := []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8)}}
 	var sorted *batch.Batch
@@ -177,7 +177,7 @@ func TestSortBatchCarriesPrecomputedAndExtraVectors(t *testing.T) {
 	fs := []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8)}}
 
 	t.Run("precomputed order and extra argument", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		input := newPairBatch(proc, []int8{10, 20, 30}, []int64{1000, 2000, 3000})
 		input.Attrs = []string{"id", "payload"}
 		key := testutil.NewVector(3, types.T_int8.ToType(), proc.Mp(), false, []int8{3, 1, 2})
@@ -233,7 +233,7 @@ func TestSortBatchCarriesPrecomputedAndExtraVectors(t *testing.T) {
 	})
 
 	t.Run("evaluated extra vector", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		input := newValuesBatch(proc, []int8{3, 1, 2})
 		extra := testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{30, 10, 20})
 		delegatedInput := (*batch.Batch)(nil)
@@ -294,7 +294,7 @@ func TestSortBatchCarriesPrecomputedAndExtraVectors(t *testing.T) {
 }
 
 func TestSortBatchWithPrecomputedOrderAndReleaseTransfersSourceOwnership(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	var input = newPairBatch(proc, []int8{10, 20, 30}, []int64{1000, 2000, 3000})
 	key := testutil.NewVector(3, types.T_int8.ToType(), proc.Mp(), false, []int8{3, 1, 2})
 	extra := testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{100, 200, 300})
@@ -366,7 +366,7 @@ func TestSortBatchWithPrecomputedOrderAndReleaseBoundsWidePartitionPeak(t *testi
 	)
 
 	run := func(releaseSource bool) (uint64, int64) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		epoch := proc.Mp().StartResourcePeakEpoch()
 		require.NotNil(t, epoch)
 		input := batch.NewOffHeapWithSize(dataCols)
@@ -484,7 +484,7 @@ func TestSortBatchMergesResidentAndSpilledChunks(t *testing.T) {
 		{name: "spill runs", spill: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			input := newValuesBatch(proc, []int8{3, 1, 4, 2})
 			ctr := &container{
 				executors:   []colexec.ExpressionExecutor{&countingColumnExecutor{col: 0, maxCalls: 4}},
@@ -547,7 +547,7 @@ func TestSortBatchHonorsExplicitNullPlacement(t *testing.T) {
 		{name: "nulls last", flag: plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_LAST, want: []int8{3, 1}, nullIndex: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			input := newNullableValuesBatch(proc, []int8{2, 1, 3}, []uint64{0})
 			var sorted *batch.Batch
 			t.Cleanup(func() {
@@ -578,7 +578,7 @@ func TestSortBatchHonorsExplicitNullPlacement(t *testing.T) {
 }
 
 func TestSortBatchRejectsInvalidInputs(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := newValuesBatch(proc, []int8{3, 1, 2})
 	short := testutil.NewVector(2, types.T_int8.ToType(), proc.Mp(), false, []int8{1, 2})
 	t.Cleanup(func() {
@@ -643,7 +643,7 @@ func TestSortBatchCancellationAndEvaluationFailureCleanOwnedState(t *testing.T) 
 	fs := []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8)}}
 
 	t.Run("cancelled spill admission", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		baseCtx := proc.Ctx
 		ctx, cancel := context.WithCancel(baseCtx)
 		proc.Ctx = ctx
@@ -668,7 +668,7 @@ func TestSortBatchCancellationAndEvaluationFailureCleanOwnedState(t *testing.T) 
 	})
 
 	t.Run("order expression failure", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		input := newValuesBatch(proc, []int8{3, 1, 2})
 		ctr := &container{
 			executors:       []colexec.ExpressionExecutor{&failingExecutor{}},

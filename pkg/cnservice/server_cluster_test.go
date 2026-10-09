@@ -226,7 +226,7 @@ func TestServiceStartDoesNotBootstrapBeforeClusterSelfReady(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ls := mock_lock.NewMockLockService(ctrl)
-		ls.EXPECT().Close().Return(nil).Times(2)
+		ls.EXPECT().Close().Return(nil).Times(1)
 		cfg := &Config{
 			UUID:           t.Name(),
 			ServiceAddress: address,
