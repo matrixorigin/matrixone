@@ -529,6 +529,18 @@ func TestCompatibilityForV12PropagatesAppendError(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), err)
 	require.Zero(t, dest.RowCount())
+
+	successDest := ckputil.MakeDataScanTableIDBatch()
+	defer successDest.Clean(sourceMP)
+	err = compatibilityForV12(
+		objectio.NewBlockid(objectio.NewSegmentid(), 0, 0),
+		source,
+		source,
+		successDest,
+		sourceMP,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, successDest.RowCount())
 }
 
 func TestCompatibilityForV12PropagatesEveryAppendError(t *testing.T) {
