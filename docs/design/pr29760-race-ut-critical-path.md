@@ -1,6 +1,7 @@
 # Race UT critical path: bounded execution at existing owners
 
-Design revision: `pr29760-design-v4` with `pr29795-opt-in-v1` amendment (2026-10-09).
+Design revision: `pr29760-design-v4` with `pr29795-opt-in-v1` and bounded
+embedded-wave amendment (2026-10-09).
 Tracking: [#29562](https://github.com/matrixorigin/matrixone/issues/29562),
 [#29752](https://github.com/matrixorigin/matrixone/issues/29752).
 Implementation: [#29760](https://github.com/matrixorigin/matrixone/pull/29760).
@@ -44,6 +45,22 @@ admission overhead. This is a schedule estimate, not a CI result; the first
 matched Linux run must record wall time, CPU throttling, peak memory and OOM/max
 events before any further parallelism is considered.
 
+The same trace recorded 1705.7 seconds for the embedded package wave when run
+serially. The Linux embedded pool keeps `pkg/embed` as the first, exclusive
+package, then admits at most two ordinary package processes. The known
+high-footprint packages (`pkg/tests/issues/isolated`,
+`pkg/tests/sqlintegration`, and `pkg/tests/sqlintegration/multicn`) also run
+alone, so no second process is admitted while one is active. Replaying those
+durations through that admission policy gives a 1537.6-second makespan, or
+about 168.1 seconds (2.8 minutes) of estimated saving. The high-footprint set
+comes from the same 16 GiB cgroup trace: its sampled peaks were approximately
+15.0 GiB for `pkg/embed`, 14.2 GiB for `isolated`, and 13.7 GiB for
+`sqlintegration`, so co-resident light-package memory is not guessed. Newly
+discovered embedded owners are conservatively classified as high footprint
+until a matched trace classifies them; this can leave one slot unused but
+cannot silently widen the memory high-water mark. These figures are schedule
+estimates, not a CI result.
+
 This change does not merge embedded packages into one fixture or remove the
 multi-CN package. Embedded package `TestMain` and lifecycle hooks are
 process-scoped, while the multi-CN cases prove routing, metadata, index, and
@@ -54,14 +71,16 @@ about 78 seconds in the same trace and is not the critical path.
 |---|---|
 | Serial batching only | Lowest complexity; retains the established batching benefit. |
 | Serial default with optional bounded pool | Retained as the explicit rollback for constrained runners. |
-| Linux default with bounded two-process pool | Selected; existing admission/report ownership is reused and the serial override remains available. |
+| Linux default with bounded two-process pool | Selected for issues and embedded waves; existing admission/report ownership is reused and the serial override remains available. |
 
-For the four-batch Makefile/CI run, `UT_ISSUES_BATCH_PARALLEL` defaults to two
-on Linux and one on other platforms; `UT_EMBEDDED_PACKAGE_PARALLEL` remains
-one everywhere. Direct one-batch runner use remains serial unless the pool is
+For the four-batch Makefile/CI run, `UT_ISSUES_BATCH_PARALLEL` and
+`UT_EMBEDDED_PACKAGE_PARALLEL` default to two on Linux and one on other
+platforms; direct one-batch runner use remains serial unless a pool is
 explicitly selected. Each accepts an explicit value of two; the issues pool
 requires four batches. `UT_ISSUES_BATCHES=1` retains the single-process
-rollback. Invalid combinations fail before preparation. Preparation failure
+rollback and also keeps the embedded package wave serial. Invalid combinations
+fail before preparation. Reducing the issues pool to one also reduces the
+embedded default to one unless it is explicitly overridden. Preparation failure
 falls back before execution; runtime failure never reruns completed roots. Pool
 mode uses round-robin roots to avoid a contiguous long-tail batch; serial mode
 retains the historical contiguous partition.

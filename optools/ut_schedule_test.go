@@ -149,7 +149,8 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 		accepted        bool
 		validationError string
 	}{
-		{name: "linux-pool-default", want: "4 2 1", accepted: true},
+		{name: "linux-pool-default", want: "4 2 2", accepted: true},
+		{name: "issues-serial-embedded-rollback", args: []string{"UT_ISSUES_BATCH_PARALLEL=1"}, want: "4 1 1", accepted: true},
 		{name: "single-batch-rollback", args: []string{"UT_ISSUES_BATCHES=1"}, want: "1 1 1", accepted: true},
 		{name: "pool-opt-in", args: []string{"UT_ISSUES_BATCH_PARALLEL=2", "UT_EMBEDDED_PACKAGE_PARALLEL=2"}, want: "4 2 2", accepted: true},
 		{name: "invalid-single-batch-pool", args: []string{"UT_ISSUES_BATCHES=1", "UT_ISSUES_BATCH_PARALLEL=2"}, want: "1 2 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},

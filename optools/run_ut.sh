@@ -63,7 +63,15 @@ if [[ -z "${UT_ISSUES_BATCH_PARALLEL+x}" ]]; then
         UT_ISSUES_BATCH_PARALLEL="1"
     fi
 fi
-UT_EMBEDDED_PACKAGE_PARALLEL=${UT_EMBEDDED_PACKAGE_PARALLEL:-"1"}
+if [[ -z "${UT_EMBEDDED_PACKAGE_PARALLEL+x}" ]]; then
+    if [[ "${UT_ISSUES_BATCHES}" == 4 ]] &&
+        [[ "${UT_ISSUES_BATCH_PARALLEL}" == 2 ]] &&
+        [[ "$(uname -s)" == Linux ]]; then
+        UT_EMBEDDED_PACKAGE_PARALLEL="2"
+    else
+        UT_EMBEDDED_PACKAGE_PARALLEL="1"
+    fi
+fi
 # Nine race binaries currently occupy several GiB. Preserve enough workspace
 # headroom for Go's build cache, reports, and the running issues fixture.
 UT_PREBUILD_MIN_FREE_KB=${UT_PREBUILD_MIN_FREE_KB:-"6291456"}
@@ -1977,12 +1985,51 @@ function cleanup_embedded_prebuild(){
 # Callers prepare race_packages, race_dirs, race_binaries, race_patterns and
 # race_deadlines in their local scope. A nonzero deadline is shared by all
 # batches of that package; zero retains the ordinary per-package timeout.
+function prebuilt_race_package_is_high_footprint(){
+    # Synthetic package names are used by the shell scheduler harnesses; they
+    # do not represent production embedded owners.
+    case "$1" in
+        github.com/matrixorigin/matrixone/pkg/embed|\
+        github.com/matrixorigin/matrixone/pkg/tests/issues/isolated|\
+        github.com/matrixorigin/matrixone/pkg/tests/sqlintegration|\
+        github.com/matrixorigin/matrixone/pkg/tests/sqlintegration/multicn)
+            return 0
+            ;;
+        github.com/matrixorigin/matrixone/pkg/tests/arrowload|\
+        github.com/matrixorigin/matrixone/pkg/tests/dml|\
+        github.com/matrixorigin/matrixone/pkg/tests/partition|\
+        github.com/matrixorigin/matrixone/pkg/tests/shard|\
+        github.com/matrixorigin/matrixone/pkg/tests/testutils|\
+        github.com/matrixorigin/matrixone/pkg/tests/upgrade|\
+        example/*)
+            return 1
+            ;;
+        *)
+            # A newly discovered embedded owner is conservatively treated as
+            # high footprint until its cgroup trace is classified. That keeps
+            # a package addition from silently reintroducing the known memory
+            # overlap; the only cost is a temporary loss of one pool slot.
+            return 0
+            ;;
+    esac
+}
+
 function run_prebuilt_race_commands(){
     local stage=$1 report=$2 parallel=$3 hard_timeout_seconds=$4
-    local index next=0 active=0 progress status=0 child_status now remaining deadline
+    local serial_first=${5:-0}
+    local exclusive_high_footprint=${6:-0}
+    local index candidate scheduled=0 active=0 high_footprint_active=0 progress status=0 child_status now remaining deadline launch_parallel
     local previous_term_trap execution_term_trap term_pending=0
-    local -a child_pids=() test_pids=() watchdog_pids=()
+    local -a child_pids=() test_pids=() watchdog_pids=() started=()
     local -a reports=() expired=()
+    if ! [[ "${serial_first}" =~ ^[01]$ ]]; then
+        logger "ERR" "serial-first admission must be 0 or 1, got '${serial_first}'" >&2
+        return 2
+    fi
+    if ! [[ "${exclusive_high_footprint}" =~ ^[01]$ ]]; then
+        logger "ERR" "exclusive high-footprint admission must be 0 or 1, got '${exclusive_high_footprint}'" >&2
+        return 2
+    fi
     previous_term_trap=$(trap -p TERM)
     function stop_prebuilt_race_commands(){
         local expired_file
@@ -2007,10 +2054,37 @@ function run_prebuilt_race_commands(){
     execution_term_trap=$(trap -p TERM)
     rm -f "${report}" "${report}".*
 
-    while (( next < ${#race_packages[@]} || active > 0 )); do
-        while (( next < ${#race_packages[@]} && active < parallel )); do
-            index=${next}
-            next=$((next + 1))
+    while (( scheduled < ${#race_packages[@]} || active > 0 )); do
+        launch_parallel=${parallel}
+        # The embedded package owns the largest shared fixture in the wave.
+        # Let it finish before admitting the remaining packages, then reuse
+        # the same bounded pool. High-footprint packages remain exclusive
+        # while active because their sampled cgroup usage is close to the
+        # runner limit; this preserves one runner and one report owner without
+        # relying on a guessed light-package memory budget.
+        if (( serial_first == 1 && scheduled == 0 )); then launch_parallel=1; fi
+        while (( scheduled < ${#race_packages[@]} && active < launch_parallel )); do
+            candidate=-1
+            if (( serial_first == 1 && scheduled == 0 )); then
+                candidate=0
+            else
+                for (( index=0; index<${#race_packages[@]}; index++ )); do
+                    [[ "${started[index]:-0}" == 0 ]] || continue
+                    if (( exclusive_high_footprint == 1 && high_footprint_active > 0 )); then
+                        continue
+                    fi
+                    if (( exclusive_high_footprint == 1 && active > 0 )) &&
+                        prebuilt_race_package_is_high_footprint "${race_packages[index]}"; then
+                        continue
+                    fi
+                    candidate=${index}
+                    break
+                done
+            fi
+            (( candidate >= 0 )) || break
+            index=${candidate}
+            started[index]=1
+            scheduled=$((scheduled + 1))
             now=$(date +%s)
             deadline=${race_deadlines[index]:-0}
             if (( deadline == 0 )); then deadline=$((now + 10#${UT_TIMEOUT} * 60)); fi
@@ -2023,7 +2097,7 @@ function run_prebuilt_race_commands(){
                 if ! : > "${reports[index]}"; then
                     logger "ERR" "failed to create timeout report for ${race_packages[index]}" >&2
                     status=125
-                    next=${#race_packages[@]}
+                    scheduled=${#race_packages[@]}
                     break
                 fi
                 # The shared deadline can expire between two batches. Keep a
@@ -2033,11 +2107,11 @@ function run_prebuilt_race_commands(){
                     "${race_packages[index]}" "${race_packages[index]}" >> "${reports[index]}"; then
                     logger "ERR" "failed to write timeout report for ${race_packages[index]}" >&2
                     status=125
-                    next=${#race_packages[@]}
+                    scheduled=${#race_packages[@]}
                     break
                 fi
                 status=1
-                next=${#race_packages[@]}
+                scheduled=${#race_packages[@]}
                 break
             fi
             if ! exec 7>"${reports[index]}"; then
@@ -2085,9 +2159,12 @@ function run_prebuilt_race_commands(){
             restore_ut_term_trap "${execution_term_trap}"
             if (( term_pending != 0 )); then cancel_prebuilt_race_commands; fi
             active=$((active + 1))
+            if (( exclusive_high_footprint == 1 )) && prebuilt_race_package_is_high_footprint "${race_packages[index]}"; then
+                high_footprint_active=$((high_footprint_active + 1))
+            fi
         done
         progress=0
-        for (( index=0; index<next; index++ )); do
+        for (( index=0; index<${#race_packages[@]}; index++ )); do
             [[ "${test_pids[index]:-0}" != 0 ]] || continue
             if [[ -e "${expired[index]}.drain" ]]; then
                 stop_prebuilt_race_commands
@@ -2135,6 +2212,9 @@ function run_prebuilt_race_commands(){
                 "package_index=${index} phase=execute prebuilt=true"
             test_pids[index]=0
             active=$((active - 1))
+            if (( exclusive_high_footprint == 1 )) && prebuilt_race_package_is_high_footprint "${race_packages[index]}"; then
+                high_footprint_active=$((high_footprint_active - 1))
+            fi
             progress=1
         done
         if (( active > 0 && progress == 0 )); then sleep 0.1; fi
@@ -2147,6 +2227,8 @@ function run_prebuilt_embedded_tests(){
     local package_scope=$1 report_base=$2 hard_timeout_seconds=$3
     local package package_dir package_import package_index=0
     local package_parallel=${UT_EMBEDDED_PACKAGE_PARALLEL}
+    local serial_first=0
+    local high_footprint_package='github.com/matrixorigin/matrixone/pkg/embed'
     local -a race_packages=() race_dirs=() race_binaries=() race_patterns=() race_deadlines=()
     while IFS= read -r package; do
         [[ -n "${package}" ]] || continue
@@ -2162,11 +2244,39 @@ function run_prebuilt_embedded_tests(){
         race_patterns[package_index]='.*'
         package_index=$((package_index + 1))
     done <<< "${package_scope}"
+    # Keep the high-footprint shared-cluster package out of the first pooled
+    # overlap. The package list is derived from go list, so move it to the
+    # front together with its prebuilt artifact instead of depending on sort
+    # order. The existing runner pool then admits the remaining packages in
+    # their authoritative order.
+    for (( package_index = 0; package_index < ${#race_packages[@]}; package_index++ )); do
+        if [[ "${race_packages[package_index]}" == "${high_footprint_package}" ]]; then
+            if (( package_index != 0 )); then
+                package=${race_packages[0]}
+                race_packages[0]=${race_packages[package_index]}
+                race_packages[package_index]=${package}
+                package_dir=${race_dirs[0]}
+                race_dirs[0]=${race_dirs[package_index]}
+                race_dirs[package_index]=${package_dir}
+                package=${race_binaries[0]}
+                race_binaries[0]=${race_binaries[package_index]}
+                race_binaries[package_index]=${package}
+                package=${race_patterns[0]}
+                race_patterns[0]=${race_patterns[package_index]}
+                race_patterns[package_index]=${package}
+                package=${race_deadlines[0]}
+                race_deadlines[0]=${race_deadlines[package_index]}
+                race_deadlines[package_index]=${package}
+            fi
+            if (( 10#${package_parallel} > 1 )); then serial_first=1; fi
+            break
+        fi
+    done
     if (( 10#${package_parallel} > 1 )); then
-        logger "INF" "Run embedded packages with bounded parallelism ${package_parallel}" >&2
+        logger "INF" "Run embedded packages with bounded parallelism ${package_parallel} (serial high-footprint package first: ${serial_first})" >&2
         MO_TEST_CLUSTER_ADMISSION_POOL_SIZE="${package_parallel}" \
             run_prebuilt_race_commands embedded "${PREBUILT_RACE_REPORT:-${report_base}-execution}" \
-                "${package_parallel}" "${hard_timeout_seconds}"
+                "${package_parallel}" "${hard_timeout_seconds}" "${serial_first}" 1
     else
         run_prebuilt_race_commands embedded "${PREBUILT_RACE_REPORT:-${report_base}-execution}" \
             1 "${hard_timeout_seconds}"

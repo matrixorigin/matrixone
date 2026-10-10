@@ -145,6 +145,131 @@ grep -q 'shared test timeout exhausted before batch execution' "$CASE_DIR/report
 	}
 }
 
+func TestPrebuiltRaceSerialFirstAdmission(t *testing.T) {
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+UT_TIMEOUT=1
+race_packages=(github.com/matrixorigin/matrixone/pkg/embed github.com/matrixorigin/matrixone/pkg/tests/arrowload github.com/matrixorigin/matrixone/pkg/tests/dml)
+race_dirs=("$CASE_DIR" "$CASE_DIR" "$CASE_DIR")
+race_binaries=("$CASE_DIR/embed.test" "$CASE_DIR/arrowload.test" "$CASE_DIR/dml.test")
+race_patterns=('.*' '.*' '.*')
+race_deadlines=("$(( $(date +%s) + 60 ))" "$(( $(date +%s) + 60 ))" "$(( $(date +%s) + 60 ))")
+for binary in "${race_binaries[@]}"; do printf '#!/bin/sh\nexit 0\n' > "$binary"; chmod +x "$binary"; done
+touch "$CASE_DIR/run-driver"
+(
+ while [[ ! -e "$CASE_DIR/embed-start" ]]; do sleep 0.01; done
+ [[ ! -e "$CASE_DIR/arrowload-start" && ! -e "$CASE_DIR/dml-start" ]] || exit 91
+ touch "$CASE_DIR/release-embed"
+ while [[ ! -e "$CASE_DIR/arrowload-start" || ! -e "$CASE_DIR/dml-start" ]]; do sleep 0.01; done
+ touch "$CASE_DIR/release-rest"
+) &
+driver=$!
+status=0
+run_prebuilt_race_commands embedded "$CASE_DIR/report" 2 120 1 1 || status=$?
+wait "$driver" || status=$?
+[[ "$status" == 0 ]] || exit "$status"
+[[ -f "$CASE_DIR/embed-finished" && -f "$CASE_DIR/arrowload-start" && -f "$CASE_DIR/dml-start" ]] || exit 92
+grep -q '"Package":"github.com/matrixorigin/matrixone/pkg/embed"' "$CASE_DIR/report.00" || exit 93
+grep -q '"Package":"github.com/matrixorigin/matrixone/pkg/tests/arrowload"' "$CASE_DIR/report.01" || exit 94
+grep -q '"Package":"github.com/matrixorigin/matrixone/pkg/tests/dml"' "$CASE_DIR/report.02" || exit 95
+`
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$1" == tool && "$2" == test2json ]]; then
+ package=""
+ while (( $# > 0 )); do
+  if [[ "$1" == -p ]]; then package=$2; break; fi
+  shift
+ done
+ case "$package" in
+  github.com/matrixorigin/matrixone/pkg/embed)
+   touch "$CASE_DIR/embed-start"
+   while [[ ! -e "$CASE_DIR/release-embed" ]]; do sleep 0.01; done
+   touch "$CASE_DIR/embed-finished"
+   ;;
+  github.com/matrixorigin/matrixone/pkg/tests/arrowload|github.com/matrixorigin/matrixone/pkg/tests/dml)
+   touch "$CASE_DIR/${package##*/}-start"
+   while [[ ! -e "$CASE_DIR/release-rest" ]]; do sleep 0.01; done
+   ;;
+  *) exit 96 ;;
+ esac
+ printf '{"Action":"pass","Package":"%s"}\n' "$package"
+ exit 0
+fi
+exit 97
+`
+	out, err := scheduleHarnessWithMock(t, script, mock)
+	if err != nil {
+		t.Fatalf("high-footprint package must occupy the first pool slot alone: %v\n%s", err, out)
+	}
+}
+
+func TestPrebuiltRaceHighFootprintExclusion(t *testing.T) {
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+UT_TIMEOUT=1
+race_packages=(github.com/matrixorigin/matrixone/pkg/tests/issues/isolated github.com/matrixorigin/matrixone/pkg/tests/sqlintegration github.com/matrixorigin/matrixone/pkg/tests/newowner github.com/matrixorigin/matrixone/pkg/tests/arrowload)
+race_dirs=("$CASE_DIR" "$CASE_DIR" "$CASE_DIR" "$CASE_DIR")
+race_binaries=("$CASE_DIR/isolated.test" "$CASE_DIR/sqlintegration.test" "$CASE_DIR/newowner.test" "$CASE_DIR/arrowload.test")
+race_patterns=('.*' '.*' '.*' '.*')
+race_deadlines=("$(( $(date +%s) + 60 ))" "$(( $(date +%s) + 60 ))" "$(( $(date +%s) + 60 ))" "$(( $(date +%s) + 60 ))")
+for binary in "${race_binaries[@]}"; do printf '#!/bin/sh\nexit 0\n' > "$binary"; chmod +x "$binary"; done
+(
+ while [[ ! -e "$CASE_DIR/isolated-start" ]]; do sleep 0.01; done
+ [[ ! -e "$CASE_DIR/sqlintegration-start" && ! -e "$CASE_DIR/newowner-start" && ! -e "$CASE_DIR/arrowload-start" ]] || exit 91
+ touch "$CASE_DIR/release-isolated"
+ while [[ ! -e "$CASE_DIR/sqlintegration-start" ]]; do sleep 0.01; done
+ [[ ! -e "$CASE_DIR/newowner-start" && ! -e "$CASE_DIR/arrowload-start" ]] || exit 92
+ touch "$CASE_DIR/release-sqlintegration"
+ while [[ ! -e "$CASE_DIR/newowner-start" ]]; do sleep 0.01; done
+ [[ ! -e "$CASE_DIR/arrowload-start" ]] || exit 93
+ touch "$CASE_DIR/release-newowner"
+ while [[ ! -e "$CASE_DIR/arrowload-start" ]]; do sleep 0.01; done
+ touch "$CASE_DIR/release-arrowload"
+) &
+driver=$!
+status=0
+run_prebuilt_race_commands embedded "$CASE_DIR/report" 2 120 0 1 || status=$?
+wait "$driver" || status=$?
+[[ "$status" == 0 ]] || exit "$status"
+`
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$1" == tool && "$2" == test2json ]]; then
+ package=""
+ while (( $# > 0 )); do
+  if [[ "$1" == -p ]]; then package=$2; break; fi
+  shift
+ done
+ leaf=${package##*/}
+ touch "$CASE_DIR/${leaf}-start"
+ case "$package" in
+  github.com/matrixorigin/matrixone/pkg/tests/issues/isolated)
+   while [[ ! -e "$CASE_DIR/release-isolated" ]]; do sleep 0.01; done
+   ;;
+ github.com/matrixorigin/matrixone/pkg/tests/sqlintegration)
+   while [[ ! -e "$CASE_DIR/release-sqlintegration" ]]; do sleep 0.01; done
+   ;;
+  github.com/matrixorigin/matrixone/pkg/tests/newowner)
+   while [[ ! -e "$CASE_DIR/release-newowner" ]]; do sleep 0.01; done
+   ;;
+  github.com/matrixorigin/matrixone/pkg/tests/arrowload)
+   while [[ ! -e "$CASE_DIR/release-arrowload" ]]; do sleep 0.01; done
+   touch "$CASE_DIR/arrowload-finished"
+   ;;
+  *) exit 96 ;;
+ esac
+ printf '{"Action":"pass","Package":"%s"}\n' "$package"
+ exit 0
+fi
+exit 97
+`
+	out, err := scheduleHarnessWithMock(t, script, mock)
+	if err != nil {
+		t.Fatalf("heavy embedded packages must not overlap: %v\n%s", err, out)
+	}
+}
+
 func TestOuterCancellationKeepsUnpublishedDiscoveryArtifacts(t *testing.T) {
 	script := `source ./run_ut.sh UT
 function logger() { :; }

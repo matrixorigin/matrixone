@@ -614,9 +614,10 @@ UT_ISSUES_BATCHES ?= 4
 # is bounded to two processes; the one-batch rollback remains serial and all
 # modes are overrideable for constrained local runners.
 UT_ISSUES_BATCH_PARALLEL ?= $(if $(filter 1,$(UT_ISSUES_BATCHES)),1,$(if $(filter linux,$(UNAME_S)),2,1))
-# Set to 2 to opt into bounded prebuilt embedded-package overlap. The admission
-# gate keeps ordinary exclusive lifecycles out of the pool.
-UT_EMBEDDED_PACKAGE_PARALLEL ?= 1
+# Linux CI uses two bounded prebuilt embedded-package processes when the issues
+# pool is also two. The scheduler runs high-footprint package classes alone;
+# set to 1 for a constrained runner or unchanged serial baseline.
+UT_EMBEDDED_PACKAGE_PARALLEL ?= $(if $(and $(filter 4,$(UT_ISSUES_BATCHES)),$(filter 2,$(UT_ISSUES_BATCH_PARALLEL)),$(filter linux,$(UNAME_S))),2,1)
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1
