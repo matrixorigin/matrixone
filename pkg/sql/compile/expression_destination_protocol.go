@@ -39,7 +39,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		version              int64
 		missing, unsupported string
 	}{
-		{features.PythonRoutineContract, defines.MORPCVersion109,
+		{features.PythonRoutineContract, defines.MORPCVersion110,
 			"Python routine execution requires a versioned remote destination",
 			"remote destination does not support Python routine execution (MORPC version %d)"},
 		{features.IntegerArithmeticDomains, defines.MORPCVersion71,

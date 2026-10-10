@@ -143,13 +143,14 @@ func TestColumnsUpgradeLifecycle(t *testing.T) {
 			require.NoError(t, executor.AppendStringRows(r, 0, []string{sysview.InformationSchemaColumnsDDL}))
 			return r.GetResult(), nil
 		}, operator)
+		entry := upgradeInformationSchemaColumns()
 		require.NoError(t, Handler.Prepare(ctx, txn, true))
-		require.NoError(t, upgradeInformationSchemaColumns().Upgrade(txn, 1))
+		require.NoError(t, entry.Upgrade(txn, 1))
 		require.Error(t, Handler.HandleCreateFrameworkDeps(txn))
 
 		injected := errors.New("injected")
 		failed := executor.NewMemTxnExecutor(func(string) (executor.Result, error) { return executor.Result{}, injected }, operator)
-		require.ErrorIs(t, upgradeInformationSchemaColumns().Upgrade(failed, 7), injected)
+		require.ErrorIs(t, entry.Upgrade(failed, 7), injected)
 	})
 }
 
