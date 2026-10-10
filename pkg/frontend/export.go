@@ -973,6 +973,22 @@ func exportAllDataFromBatches(ep *ExportConfig) error {
 
 // finalizeParquetExport closes the parquet writer and writes the complete parquet file
 func finalizeParquetExport(ep *ExportConfig) error {
+	if ep.parquetWriter == nil {
+		// A writer that was just closed at a split boundary represents a
+		// complete export. Do not create a trailing empty split; only an export
+		// with no rows needs an explicitly initialized empty writer.
+		if ep.Rows > 0 {
+			return nil
+		}
+		if ep.mrs == nil {
+			return moerr.NewInternalError(ep.ctx, "mrs is nil for parquet export")
+		}
+		writer, err := NewParquetWriter(ep.ctx, ep.mrs)
+		if err != nil {
+			return err
+		}
+		ep.parquetWriter = writer
+	}
 	return ep.flushParquetFile()
 }
 
@@ -1065,7 +1081,13 @@ func cloneExportWorkerBatch(
 
 // writeParquet writes a batch to the parquet writer
 func (ec *ExportConfig) writeParquet(execCtx *ExecCtx, bat *batch.Batch) error {
+	if bat == nil {
+		return nil
+	}
 	defer bat.Clean(execCtx.ses.GetMemPool())
+	if bat.RowCount() == 0 {
+		return nil
+	}
 
 	// Initialize parquet writer if not already done
 	if ec.parquetWriter == nil {
@@ -1087,25 +1109,39 @@ func (ec *ExportConfig) writeParquet(execCtx *ExecCtx, bat *batch.Batch) error {
 		timeZone = time.UTC
 	}
 
-	// Write batch to parquet writer
-	if err := ec.parquetWriter.WriteBatch(bat, execCtx.ses.GetMemPool(), timeZone); err != nil {
-		return err
-	}
-
 	// Check if we need to split the file
 	splitSize := getEffectiveMaxFileSize(ec)
-	if shouldSplitParquetFile(uint64(ec.parquetWriter.Size()), splitSize) {
-		// Flush current parquet file
-		if err := ec.flushParquetFile(); err != nil {
+	if splitSize == 0 {
+		if err := ec.parquetWriter.WriteBatch(bat, execCtx.ses.GetMemPool(), timeZone); err != nil {
 			return err
 		}
-		// Increment file counter
-		ec.FileCnt++
-		// Create new parquet writer for next file
-		var err error
-		ec.parquetWriter, err = NewParquetWriter(execCtx.reqCtx, ec.mrs)
-		if err != nil {
+		ec.Rows += uint64(bat.RowCount())
+		return nil
+	}
+
+	// A result batch can itself be much larger than SPLITSIZE. Write one row at
+	// a time while splitting is enabled so a single executor batch cannot bypass
+	// the file boundary. A row remains indivisible and may exceed the target.
+	for row := 0; row < bat.RowCount(); row++ {
+		if ec.parquetWriter == nil {
+			var err error
+			ec.parquetWriter, err = NewParquetWriter(execCtx.reqCtx, ec.mrs)
+			if err != nil {
+				return err
+			}
+		}
+		if err := ec.parquetWriter.writeBatchRange(bat, row, row+1, timeZone); err != nil {
 			return err
+		}
+		ec.Rows++
+		if err := ec.parquetWriter.Flush(); err != nil {
+			return err
+		}
+		if shouldSplitParquetFile(uint64(ec.parquetWriter.Size()), splitSize) {
+			if err := ec.flushParquetFile(); err != nil {
+				return err
+			}
+			ec.FileCnt++
 		}
 	}
 
@@ -1126,8 +1162,13 @@ func (ec *ExportConfig) flushParquetFile() error {
 		return nil
 	}
 
+	writer := ec.parquetWriter
+	// Release the writer before writing the completed bytes. A failed
+	// fileservice write must not leave a closed writer attached to the session.
+	ec.parquetWriter = nil
+
 	// Close the parquet writer to get the complete parquet data (including footer)
-	parquetData, err := ec.parquetWriter.Close()
+	parquetData, err := writer.Close()
 	if err != nil {
 		return err
 	}
@@ -1137,7 +1178,6 @@ func (ec *ExportConfig) flushParquetFile() error {
 		return err
 	}
 
-	ec.parquetWriter = nil
 	return nil
 }
 
