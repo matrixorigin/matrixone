@@ -54,6 +54,39 @@ class SeedContractTests(unittest.TestCase):
         self.assertEqual(len(matches), 1)
         return matches[0]
 
+    def test_module_build_stages_allow_required_toolchain_selection(self):
+        # Published native images can lag go.mod's minimum patch release and
+        # inherit GOTOOLCHAIN=local. Each actual build stage must override it;
+        # changing an unrelated cache/runtime stage would not repair CI.
+        recipes = {
+            "Dockerfile": ["build-base"],
+            "Dockerfile.ci": ["native", "builder"],
+            "Dockerfile.ci-builder": ["warm", "final"],
+        }
+        for filename, required in recipes.items():
+            with self.subTest(recipe=filename):
+                stages = {}
+                stage = None
+                for line in (HERE / filename).read_text().splitlines():
+                    line = line.strip()
+                    if line.startswith("FROM "):
+                        stage = line.split(" AS ")[-1] if " AS " in line else "final"
+                        stages[stage] = []
+                    elif stage is not None:
+                        stages[stage].append(line)
+                for stage in required:
+                    lines = stages[stage]
+                    self.assertIn("ENV GOWORK=off", lines)
+                    self.assertEqual([line for line in lines if line.startswith("ENV GOTOOLCHAIN=")],
+                                     ["ENV GOTOOLCHAIN=auto"])
+                    first_run = next((i for i, line in enumerate(lines) if line.startswith("RUN ")),
+                                     len(lines))
+                    self.assertLess(lines.index("ENV GOTOOLCHAIN=auto"), first_run)
+                if filename == "Dockerfile":
+                    recipe = (HERE / filename).read_text()
+                    self.assertIn("FROM build-base AS native", recipe)
+                    self.assertIn("FROM build-base AS builder", recipe)
+
     def test_stage_order_and_final_export_layout(self):
         warm, final = [], []
         target = warm
