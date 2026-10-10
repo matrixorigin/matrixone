@@ -1271,13 +1271,51 @@ func Test_makeExecuteSql(t *testing.T) {
 			want: "",
 		},
 	}
+	require.NoError(t, ses1.SetPrepareStmt(ctx, "empty_sql", &PrepareStmt{Name: "empty_sql"}))
+	// Independent oracle: complete known diagnostic followed by a valid prefix.
+	abbreviate := func(full string, limit int) string {
+		if limit == 0 || limit < -1 {
+			return ""
+		}
+		if limit == -1 || len(full) <= limit {
+			return full
+		}
+		end := limit
+		for !utf8.ValidString(full[:end]) {
+			end--
+		}
+		return full[:end] + "..."
+	}
+	limits := func(full string) []int {
+		result := []int{-2, -1}
+		for limit := 0; limit <= len(full)+1; limit++ {
+			result = append(result, limit)
+		}
+		return result
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := makeExecuteSql(ctx, tt.args.ses, tt.args.stmt, false, ""); strings.TrimSpace(got) != strings.TrimSpace(tt.want) {
-				t.Errorf("makeExecuteSql() = %v, want %v", got, tt.want)
+			const env = "execute test"
+			full := env
+			if tt.want != "" {
+				full += " // " + tt.want
+				if strings.HasSuffix(tt.want, " ;") {
+					full += " "
+				}
+			}
+			for _, limit := range limits(full) {
+				got := makeExecuteSql(ctx, tt.args.ses, tt.args.stmt, false, "", env, limit)
+				require.Equal(t, abbreviate(full, limit), got, "limit=%d", limit)
 			}
 		})
 	}
+	for _, env := range []string{"", "你😀"} {
+		full := env + " //  ; "
+		for _, limit := range limits(full) {
+			require.Equal(t, abbreviate(full, limit), makeExecuteSql(ctx, ses1, &tree.Select{}, true, "empty_sql", env, limit))
+		}
+	}
+
 	for _, tc := range []struct{ name, value, want string }{
 		{"binary", "\xff\xfe", "x'fffe'"},
 		{"partial two", "\xc2", "x'c2'"},
@@ -1301,9 +1339,12 @@ func Test_makeExecuteSql(t *testing.T) {
 			}
 			params.GetNulls().Add(1)
 			require.NoError(t, ses1.SetPrepareStmt(ctx, prepared.Name, prepared))
-			got := makeExecuteSql(ctx, ses1, &tree.Select{}, true, prepared.Name)
-			require.Equal(t, "select ?, ?, ? ; "+tc.want+" ; NULL ; 42", got)
-			require.True(t, utf8.ValidString(got))
+			full := "execute binary_diagnostic // select ?, ?, ? ; " + tc.want + " ; NULL ; 42"
+			for _, limit := range limits(full) {
+				got := makeExecuteSql(ctx, ses1, &tree.Select{}, true, prepared.Name, "execute binary_diagnostic", limit)
+				require.Equal(t, abbreviate(full, limit), got, "limit=%d", limit)
+				require.True(t, utf8.ValidString(got))
+			}
 			require.Equal(t, tc.value, params.GetStringAt(0))
 			require.True(t, params.GetNulls().Contains(1))
 			require.Equal(t, "42", params.GetStringAt(2))
@@ -1312,9 +1353,9 @@ func Test_makeExecuteSql(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, []byte(tc.value), decoded)
 			} else {
-				var retained string
-				allocs := testing.AllocsPerRun(10, func() { retained = formatExecuteParamForDiagnostics(tc.value) })
-				require.Equal(t, tc.value, retained)
+				var retained bool
+				allocs := testing.AllocsPerRun(10, func() { retained = isTextExecuteParam(tc.value) })
+				require.True(t, retained)
 				require.Zero(t, allocs)
 			}
 		})

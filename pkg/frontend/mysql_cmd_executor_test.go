@@ -11780,15 +11780,25 @@ func TestRecordStatementUTF8(t *testing.T) {
 		name, text, want string
 		params           []string
 		nullIndex        int
+		limit            int
 	}{
-		{"Chinese", strings.Repeat("你", 400), strings.Repeat("你", 341) + "...", nil, -1},
-		{"emoji", "a" + strings.Repeat("😀", 300), "a" + strings.Repeat("😀", 255) + "...", nil, -1},
-		{"ASCII", strings.Repeat("x", 1100), strings.Repeat("x", 1024) + "...", nil, -1},
-		{"binary parameter", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1},
-		{"mixed parameters", "select ?, ?, ?, ?", "你😀 ; NULL ;  ; 42", []string{"你😀", "", "", "42"}, 1},
-		{"long Unicode parameter", "select ?", strings.Repeat("你😀", 300), []string{strings.Repeat("你😀", 300)}, -1},
-		{"long binary parameter", "select ?", "x'" + strings.Repeat("ff", 2048) + "'", []string{strings.Repeat("\xff", 2048)}, -1},
+		{"Chinese", strings.Repeat("你", 400), strings.Repeat("你", 341) + "...", nil, -1, 1024},
+		{"emoji", "a" + strings.Repeat("😀", 300), "a" + strings.Repeat("😀", 255) + "...", nil, -1, 1024},
+		{"ASCII", strings.Repeat("x", 1100), strings.Repeat("x", 1024) + "...", nil, -1, 1024},
+		{"binary parameter", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1, 1024},
+		{"mixed parameters", "select ?, ?, ?, ?", "你😀 ; NULL ;  ; 42", []string{"你😀", "", "", "42"}, 1, 1024},
+		{"long Unicode parameter", "select ?", strings.Repeat("你😀", 300), []string{strings.Repeat("你😀", 300)}, -1, 1024},
+		{"long binary parameter", "select ?", "x'" + strings.Repeat("ff", 2048) + "'", []string{strings.Repeat("\xff", 2048)}, -1, 1024},
+		{"exact empty parameter", "select ?", "", []string{""}, -1, len("execute utf8_query // select ? ; ")},
+		{"one byte overflow", "select ?", "a", []string{"a"}, -1, len("execute utf8_query // select ? ; ")},
+		{"limit before parameters", strings.Repeat("x", 1100), "x'fffe'", []string{"\xff\xfe"}, -1, 1024},
+		{"hex opening cut", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1, len("execute utf8_query // select ? ; x")},
+		{"hex odd digit cut", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1, len("execute utf8_query // select ? ; x'f")},
+		{"unlimited parameter", "select ?", "你😀", []string{"你😀"}, -1, -1},
+		{"zero parameter budget", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1, 0},
+		{"negative parameter budget", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1, -2},
 	} {
+		sv.LengthOfQueryPrinted = int64(tc.limit)
 		for _, path := range []string{"environment", "ordinary AST", "prepared"} {
 			if tc.params != nil && path != "prepared" {
 				continue
@@ -11825,14 +11835,17 @@ func TestRecordStatementUTF8(t *testing.T) {
 						}
 						cut := 0
 						for offset, r := range expanded {
-							if end := offset + utf8.RuneLen(r); end <= 1024 {
+							if end := offset + utf8.RuneLen(r); end <= tc.limit {
 								cut = end
 							} else {
 								break
 							}
 						}
 						want = expanded
-						if len(expanded) > 1024 {
+						if tc.limit == 0 || tc.limit < -1 {
+							want = ""
+						}
+						if tc.limit > 0 && len(expanded) > tc.limit {
 							want = expanded[:cut] + "..."
 						}
 					} else {
