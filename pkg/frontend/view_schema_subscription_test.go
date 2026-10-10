@@ -32,6 +32,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// This directory fixture supplies publication entry metadata explicitly; its
+// mocked databases have no mo_subs/mo_pubs SQL catalog. Source lookup remains
+// the real frontend adapter. The native fixture separately proves entry routing.
+type viewSchemaPublishedRootFixture struct{ *viewSchemaCompilerContext }
+
+func (c *viewSchemaPublishedRootFixture) ResolveViewSchemaRoot(database, name string, snapshot *plan.Snapshot) (*pb.ObjectRef, *pb.TableDef, error) {
+	if database != "sub" || c.GetQueryingSubscription() != nil {
+		return nil, nil, fmt.Errorf("entry root must resolve subscriber alias without inherited subscription")
+	}
+	obj, def, err := c.viewSchemaCompilerContext.Resolve("pub", name, snapshot)
+	if err == nil && obj != nil {
+		obj = plan.DeepCopyObjectRef(obj)
+		obj.PubInfo = &pb.PubInfo{TenantId: 23}
+		obj.SubscriptionName = "sub"
+	}
+	return obj, def, err
+}
+
+type viewSchemaEntryFixtureProvider func(context.Context) (*plan.ViewSchemaBinding, error)
+
+func (p viewSchemaEntryFixtureProvider) OpenViewSchemaBinding(ctx context.Context) (*plan.ViewSchemaBinding, error) {
+	return p(ctx)
+}
+
 func TestViewSchemaSubscriptionCrossDatabaseDescribe(t *testing.T) {
 	for _, nested := range []bool{false, true} {
 		for _, historical := range []bool{false, true} {
@@ -106,15 +130,22 @@ func TestViewSchemaSubscriptionCrossDatabaseDescribe(t *testing.T) {
 						snapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 50}, Tenant: &pb.SnapshotTenant{TenantID: 7}}
 					}
 					beforeSnapshot := plan.DeepCopySnapshot(snapshot)
-					r := plan.NewViewSchemaRequest(f.ctx, provider)
+					entryProvider := viewSchemaEntryFixtureProvider(func(ctx context.Context) (*plan.ViewSchemaBinding, error) {
+						binding, err := provider.OpenViewSchemaBinding(ctx)
+						if err == nil {
+							binding.Compiler = &viewSchemaPublishedRootFixture{viewSchemaCompilerContext: binding.Compiler.(*viewSchemaCompilerContext)}
+						}
+						return binding, err
+					})
+					r := plan.NewViewSchemaRequest(f.ctx, entryProvider)
 					t.Cleanup(r.Close)
 					for i := 0; i < 2; i++ {
 						if i == 1 && !reuseRequest {
 							r.Close()
-							r = plan.NewViewSchemaRequest(f.ctx, provider)
+							r = plan.NewViewSchemaRequest(f.ctx, entryProvider)
 							t.Cleanup(r.Close)
 						}
-						result, err := r.Describe("pub", "published_v", snapshot)
+						result, err := r.Describe("sub", "published_v", snapshot)
 						if result != nil {
 							t.Cleanup(result.Release)
 						}

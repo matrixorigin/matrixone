@@ -341,6 +341,19 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 		require.NoError(t, err)
 		_, err = subscriber.ExecContext(ctx, "create table schema_other.collision_source (id varchar(30))")
 		require.NoError(t, err)
+		for _, query := range []string{
+			"create view schema_other.local_view as select id from schema_other.collision_source",
+			"create view schema_other.local_nested as select id from schema_other.local_view",
+		} {
+			_, err = subscriber.ExecContext(ctx, query)
+			require.NoError(t, err, query)
+		}
+		localIDs := make(map[string]uint64)
+		for _, name := range []string{"collision_source", "local_view", "local_nested"} {
+			var id uint64
+			require.NoError(t, subscriber.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase = 'schema_other' and relname = ?", name).Scan(&id))
+			localIDs[name] = id
+		}
 		var account uint32
 		require.NoError(t, system.QueryRowContext(ctx, "select account_id from mo_catalog.mo_account where account_name = 'schema_subscriber'").Scan(&account))
 		tenant := &frontend.TenantInfo{Tenant: "schema_subscriber", User: "root", DefaultRole: frontend.GetAccountAdminRole(),
@@ -383,6 +396,42 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 						}
 						require.True(t, found)
 					}
+				})
+			}
+			// Alternate domains within one request, including memo reuse and an
+			// error between successful roots. Inherited state must govern neither
+			// the local root's identity nor its nested source binding.
+			for _, active := range []*pb.SubscriptionMeta{inherited, nil} {
+				t.Run(fmt.Sprintf("local_root/inherited=%t", active != nil), func(t *testing.T) {
+					compiler.SetQueryingSubscription(active)
+					defer compiler.SetQueryingSubscription(inherited)
+					mixed := compiler.NewViewSchemaRequest(tenantCtx, frontend.NativeViewSchemaRoleAuthorizerForTest(compiler))
+					defer mixed.Close()
+					for _, name := range []string{"local_view", "local_nested", "local_view", "local_nested"} {
+						value := describeNativeViewSchema(t, mixed, "schema_other", name, nil)
+						require.Len(t, value.columns, 1)
+						require.Equal(t, int32(types.T_varchar), value.columns[0].Typ.Id)
+						foundRoot, foundSource := false, false
+						for _, dependency := range value.dependencies {
+							require.Equal(t, account, dependency.AccountID)
+							require.Equal(t, "schema_other", dependency.DatabaseName)
+							require.Empty(t, dependency.SubscriptionName)
+							require.Equal(t, localIDs[dependency.RelationName], dependency.RelationID)
+							foundRoot = foundRoot || dependency.RelationName == name
+							foundSource = foundSource || dependency.RelationName == "collision_source"
+						}
+						require.True(t, foundRoot)
+						require.True(t, foundSource)
+						require.Equal(t, baseline, describeNativeViewSchema(t, mixed, "subscribed", "published", nil))
+						result, err := mixed.Describe("schema_other", "missing", nil)
+						if result != nil {
+							result.Release()
+						}
+						require.Nil(t, result)
+						require.Error(t, err)
+						require.Same(t, active, compiler.GetQueryingSubscription())
+					}
+					mixed.Close()
 				})
 			}
 			qualified := describeNativeViewSchema(t, request, "subscribed", "qualified", nil)

@@ -873,6 +873,69 @@ func TestViewSchemaRequestSubscriptionPublisherIsNotCreationDatabase(t *testing.
 	}
 }
 
+func TestViewSchemaRequestScopesSubscriptionToResolvedRoot(t *testing.T) {
+	for _, memoOff := range []bool{false, true} {
+		t.Run(fmt.Sprintf("memoOff=%t", memoOff), func(t *testing.T) {
+			f := newViewSchemaTestFixture(t)
+			f.addView(t, "local_v", "select n_name from nation")
+			f.addView(t, "published", "select n_name from nation")
+			f.compiler.objects["published"].PubInfo = &planpb.PubInfo{TenantId: 17}
+			f.compiler.objects["published"].SubscriptionName = "sub"
+			inherited := &SubscriptionMeta{AccountId: 17, DbName: "tpch", SubName: "sub", Tables: "published,nation"}
+			f.compiler.subscription = inherited
+			lookupError := errors.New("injected root lookup failure")
+			publisher := false
+			f.compiler.resolve = func(_ context.Context, _, name string, _ *Snapshot) error {
+				if name == "local_v" || name == "published" || name == "missing" {
+					require.Nil(t, f.compiler.GetQueryingSubscription(), "root lookup and capture must ignore inherited state")
+					if name == "missing" {
+						return lookupError
+					}
+				} else if publisher {
+					require.Same(t, inherited, f.compiler.GetQueryingSubscription(), "retain matching publication membership")
+				} else {
+					require.Nil(t, f.compiler.GetQueryingSubscription(), "local source must stay in the entry domain")
+				}
+				return nil
+			}
+			f.compiler.GetAccountIdFunc = func() (uint32, error) {
+				if sub := f.compiler.GetQueryingSubscription(); sub != nil {
+					return uint32(sub.AccountId), nil
+				}
+				return 42, nil
+			}
+			r := f.request(t)
+			r.memoDisabled = memoOff
+			for _, name := range []string{"local_v", "published", "local_v", "published", "missing", "local_v"} {
+				func() {
+					publisher = name == "published"
+					result, err := r.Describe("tpch", name, nil)
+					if result != nil {
+						defer result.Release()
+					}
+					require.Same(t, inherited, f.compiler.GetQueryingSubscription())
+					if name == "missing" {
+						require.Nil(t, result)
+						require.ErrorIs(t, err, lookupError)
+						return
+					}
+					require.NoError(t, err)
+					deps, err := result.Dependencies()
+					require.NoError(t, err)
+					require.Len(t, deps, 2)
+					for _, dep := range deps {
+						if publisher {
+							require.Equal(t, uint32(17), dep.AccountID)
+						} else {
+							require.Equal(t, uint32(42), dep.AccountID)
+						}
+					}
+				}()
+			}
+		})
+	}
+}
+
 func TestViewSchemaSubscriptionContextRequiresMatchingIdentity(t *testing.T) {
 	obj := &ObjectRef{SchemaName: "pub", SubscriptionName: "sub", PubInfo: &planpb.PubInfo{TenantId: 17}}
 	for _, previous := range []*SubscriptionMeta{

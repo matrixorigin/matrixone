@@ -212,6 +212,12 @@ func (s *viewSchemaDerivation) enter(obj *ObjectRef, def *TableDef, snapshot *Sn
 	return func() { delete(s.stack, key); s.depth-- }, nil
 }
 func (s *viewSchemaDerivation) describe(database, name string, snapshot *Snapshot) (*viewSchemaMemoEntry, error) {
+	// Each root starts in the caller's entry domain, including dependency
+	// capture. Only a resolved published root may establish a publisher domain
+	// for its stored SQL; inherited subscription state is not root identity.
+	previousSub := s.compiler.GetQueryingSubscription()
+	s.compiler.SetQueryingSubscription(nil)
+	defer s.compiler.SetQueryingSubscription(previousSub)
 	if snapshot == nil {
 		snapshot = s.compiler.GetSnapshot()
 	}
@@ -256,13 +262,11 @@ func (s *viewSchemaDerivation) describe(database, name string, snapshot *Snapsho
 		s.observeProtocol(*parsed.data.RequiredProtocolVersion)
 	}
 	if obj.PubInfo != nil {
-		previousSub := s.compiler.GetQueryingSubscription()
 		subscription, defaultDatabase, err := viewSchemaSubscriptionContext(s.compiler.ctx, obj, previousSub, parsed.data.DefaultDatabase)
 		if err != nil {
 			return nil, err
 		}
 		s.compiler.SetQueryingSubscription(subscription)
-		defer s.compiler.SetQueryingSubscription(previousSub)
 		parsed.ctx.defaultDatabase = defaultDatabase
 	}
 	s.lower = parsed.ctx.lowerCaseTableNames
