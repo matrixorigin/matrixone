@@ -657,8 +657,10 @@ func lcaProbeJoinCastType(typ types.Type) (string, bool) {
 		return "VARBINARY", true
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return typ.DescString(), true
-	case types.T_date, types.T_datetime, types.T_time, types.T_timestamp, types.T_year:
+	case types.T_date, types.T_year:
 		return typ.String(), true
+	case types.T_datetime, types.T_time, types.T_timestamp:
+		return fmt.Sprintf("%s(%d)", typ.String(), typ.Scale), true
 	default:
 		return "", false
 	}
@@ -1297,27 +1299,17 @@ func hashDiffIfHasLCA(
 						j++
 					} else {
 						// copt.conflictOpt == tree.CONFLICT_FAIL
-						tarRow := make([]any, 1)
-						if err3 = extractRowFromVector(
-							ctx, ses, tarVec, 0, tarRow, i, false,
-						); err3 != nil {
-							return
-						}
-
-						buf := acquireBuffer(tblStuff.bufPool)
-						if err3 = formatValIntoString(
-							ses, tarRow[0], tblStuff.def.colTypes[tblStuff.def.pkColIdx], buf,
-						); err3 != nil {
-							releaseBuffer(tblStuff.bufPool, buf)
+						key, keyErr := extractPKAsString(ses, tblStuff, tarWrapped.batch, i)
+						if keyErr != nil {
+							err3 = keyErr
 							return
 						}
 
 						err3 = moerr.NewInternalErrorNoCtxf(
 							"conflict: %s %s and %s %s on pk(%v) with different values",
 							tarWrapped.name, tarWrapped.kind,
-							baseWrapped.name, baseWrapped.kind, buf.String(),
+							baseWrapped.name, baseWrapped.kind, key,
 						)
-						releaseBuffer(tblStuff.bufPool, buf)
 						return
 					}
 				} else if cmp < 0 {
