@@ -1188,6 +1188,7 @@ func initFixed1() {
 	// cast [0] + [1] ==> [2] + [3]
 	ru := [][4]types.T{
 		{types.T_any, types.T_any, types.T_int64, types.T_int64},
+		{types.T_any, types.T_uuid, types.T_uuid, types.T_uuid},
 		{types.T_any, types.T_bool, types.T_bool, types.T_bool},
 		{types.T_any, types.T_int8, types.T_int8, types.T_int8},
 		{types.T_any, types.T_int16, types.T_int16, types.T_int16},
@@ -1714,6 +1715,7 @@ func initFixed1() {
 		{types.T_json, types.T_varbinary, types.T_json, types.T_json},
 		{types.T_json, types.T_blob, types.T_varchar, types.T_varchar},
 		{types.T_json, types.T_text, types.T_varchar, types.T_varchar},
+		{types.T_uuid, types.T_any, types.T_uuid, types.T_uuid},
 		{types.T_uuid, types.T_char, types.T_uuid, types.T_uuid},
 		{types.T_uuid, types.T_varchar, types.T_uuid, types.T_uuid},
 		{types.T_uuid, types.T_binary, types.T_uuid, types.T_uuid},
