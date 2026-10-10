@@ -387,9 +387,7 @@ func aesEncryptReturnType(parameters []types.Type) types.Type {
 
 func textStringResultType(bound stringResultBound, charset uint8) types.Type {
 	if bound.unknown || bound.bytes > uint64(types.MaxVarcharLen) {
-		result := types.T_text.ToType()
-		result.Charset = charset
-		return result
+		return types.NewWithCharset(types.T_text, 0, 0, charset)
 	}
 	result := types.NewWithCharset(types.T_varchar, int32(bound.bytes), 0, charset)
 	return result

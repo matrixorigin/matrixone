@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -1124,6 +1125,83 @@ func Test_MakeIntervalParamAny(t *testing.T) {
 	require.Zero(t, got)
 }
 
+func TestBuiltInConvertUsingCodecCancellation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"\xff"}, []bool{false}),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"utf8mb4"}, []bool{false}),
+	}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), builtInConvertUsingCharset)
+	t.Cleanup(fc.Free)
+	require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	defer cancel()
+	proc.Ctx = ctx
+	cancel()
+	// A cancellation is an error, not CONVERT's successful invalid-byte NULL.
+	require.ErrorIs(t, fc.fn(fc.parameters, fc.result, proc, fc.fnLength, nil), context.Canceled)
+	require.Zero(t, fc.result.GetResultVector().Length())
+}
+
+type convertCancelAtPublication struct {
+	context.Context
+	checks int
+}
+
+func (ctx *convertCancelAtPublication) Err() error {
+	ctx.checks++
+	if ctx.checks == 1 {
+		return nil
+	}
+	return context.Canceled
+}
+
+func TestBuiltInConvertUsingBatchPublication(t *testing.T) {
+	for _, target := range []string{"binary", "utf8mb4"} {
+		t.Run(target, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			values := make([]string, 128)
+			for i := range values {
+				values[i] = "abcdefgh"
+			}
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), values, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{target}, nil),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), builtInConvertUsingCharset)
+			t.Cleanup(fc.Free)
+			require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
+			ctx := &convertCancelAtPublication{Context: proc.Ctx}
+			proc.Ctx = ctx
+			require.ErrorIs(t, fc.fn(fc.parameters, fc.result, proc, fc.fnLength, nil), context.Canceled)
+			// Values are staged, not a successful result: publication must fail.
+			require.Equal(t, 128, fc.result.GetResultVector().Length())
+			require.Equal(t, 2, ctx.checks)
+			fn, err := GetFunctionByName(ctx.Context, "convert", []types.Type{
+				types.T_varchar.ToType(), types.T_varchar.ToType(),
+			})
+			require.NoError(t, err)
+			proc.Ctx = &convertCancelAtPublication{Context: ctx.Context}
+			before := proc.Mp().CurrNB()
+			out, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), fc.parameters, fc.fnLength)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Nil(t, out) // The public consumer must discard staged values.
+			require.Equal(t, before, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestBuiltInConvertUsingEmptyAndNUL(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inline := strings.Repeat("a", types.VarlenaInlineSize)
+	external := inline + "a"
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "\x00\xff", "\x00", "\ufffd", "", external, inline}, []bool{false, false, false, false, true, false, false}),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"utf8mb4", "binary", "utf8mb3", "utf8", "utf8mb4", "utf8mb4", "binary"}, []bool{false, false, false, false, false, false, false}),
+	}, NewFunctionTestResult(types.T_varchar.ToType(), false,
+		[]string{"", "\x00\xff", "\x00", "\ufffd", "", external, inline}, []bool{false, false, false, false, true, false, false}), builtInConvertUsingCharset)
+	ok, info := fc.RunAndFree()
+	require.True(t, ok, info)
+}
+
 func TestBuiltInConvertUsingUTF8InvalidBytes(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tc := tcTemp{
@@ -1905,6 +1983,67 @@ func TestSerialAndSerialFullEncodeNonNullRowsIdentically(t *testing.T) {
 			"non-NULL comparison bounds must be byte-compatible with stored keys",
 		)
 	}
+}
+
+func TestSerialFullUnicodeKeepsOriginalValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	unicodeType := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	input := newVectorByType(proc.Mp(), unicodeType, []string{"b"}, nil)
+	defer input.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	op := newOpSerial()
+	defer op.Close()
+	require.NoError(t, op.BuiltInSerialFull([]*vector.Vector{input}, result, proc, 1, nil))
+
+	tuple, err := types.Unpack(result.GetResultVector().GetBytesAt(0))
+	require.NoError(t, err)
+	require.Len(t, tuple, 1)
+	require.Equal(t, []byte("b"), tuple[0])
+}
+
+func TestSerialUnicodeKeepsOriginalValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	unicodeType := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	input := newVectorByType(proc.Mp(), unicodeType, []string{"b"}, nil)
+	defer input.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	op := newOpSerial()
+	defer op.Close()
+	require.NoError(t, op.BuiltInSerial([]*vector.Vector{input}, result, proc, 1, nil))
+
+	tuple, err := types.Unpack(result.GetResultVector().GetBytesAt(0))
+	require.NoError(t, err)
+	require.Len(t, tuple, 1)
+	require.Equal(t, []byte("b"), tuple[0])
+}
+
+func TestPhysicalSerialUsesUnicodeComparisonKeys(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	unicodeType := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	input := newVectorByType(proc.Mp(), unicodeType, []string{"b"}, nil)
+	defer input.Free(proc.Mp())
+
+	physicalResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer physicalResult.Free()
+	require.NoError(t, physicalResult.PreExtendAndReset(1))
+	op := newOpSerial()
+	defer op.Close()
+	require.NoError(t, op.BuiltInPhysicalSerial([]*vector.Vector{input}, physicalResult, proc, 1, nil))
+	tuple, err := types.Unpack(physicalResult.GetResultVector().GetBytesAt(0))
+	require.NoError(t, err)
+	require.Equal(t, []byte(types.CollationKeyOrOriginal(unicodeType.Charset, []byte("b"))), tuple[0])
+
+	keyResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer keyResult.Free()
+	require.NoError(t, keyResult.PreExtendAndReset(1))
+	require.NoError(t, BuiltInPhysicalCollationKey([]*vector.Vector{input}, keyResult, proc, 1, nil))
+	require.Equal(t, types.CollationKeyOrOriginal(unicodeType.Charset, []byte("b")), keyResult.GetResultVector().GetBytesAt(0))
 }
 
 func Test_BuiltIn_SerialFull(t *testing.T) {
@@ -3222,6 +3361,42 @@ func TestBuiltInExpOverflowAllocationsDoNotScaleWithRows(t *testing.T) {
 	require.LessOrEqual(t, batchAllocs, oneRowAllocs+16,
 		"EXP overflow handling must not allocate per row: one row=%v, 8192 rows=%v",
 		oneRowAllocs, batchAllocs)
+}
+
+// Keep setup, capacity growth and input construction outside the timer. The
+// same benchmark can run against the base/review/fixed evaluator revisions.
+func BenchmarkBuiltInConvertUsingBorrowedBatch(b *testing.B) {
+	const rows = 128
+	for _, charset := range []string{"binary", "utf8mb4"} {
+		b.Run(charset, func(b *testing.B) {
+			proc := testutil.NewProcess(b)
+			values := make([]string, rows)
+			for i := range values {
+				values[i] = "abcdefgh"
+			}
+			input := newVectorByType(proc.Mp(), types.T_varchar.ToType(), values, nil)
+			defer input.Free(proc.Mp())
+			target, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(charset), rows, proc.Mp())
+			require.NoError(b, err)
+			defer target.Free(proc.Mp())
+			parameters := []*vector.Vector{input, target}
+			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(b, result.PreExtendAndReset(rows))
+			require.NoError(b, builtInConvertUsingCharset(parameters, result, proc, rows, nil))
+			b.ReportAllocs()
+			b.SetBytes(rows * 8)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := result.PreExtendAndReset(rows); err != nil {
+					b.Fatal(err)
+				}
+				if err := builtInConvertUsingCharset(parameters, result, proc, rows, nil); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
 
 func BenchmarkBuiltInExpOverflowBatch(b *testing.B) {

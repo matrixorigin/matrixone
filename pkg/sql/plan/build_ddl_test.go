@@ -433,9 +433,7 @@ func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 func TestBuildCreateTableRejectsUnsupportedCollations(t *testing.T) {
 	for _, sql := range []string{
 		"create table t(v varchar(8)) collate utf8mb4_de_pb_0900_ai_ci",
-		"create table t(v varchar(8)) collate utf8mb4_unicode_ci",
 		"create table t(v varchar(8) collate utf8mb4_0900_bin)",
-		"create table t(v varchar(8) collate utf8_unicode_ci)",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
@@ -478,6 +476,29 @@ func TestBuildCreateTableAcceptsMySQL8DefaultCollationCompatibilityAlias(t *test
 	require.NoError(t, err)
 	require.NotContains(t, showSQL, "0900")
 	require.Contains(t, showSQL, "COLLATE utf8mb4_bin")
+}
+
+func TestBuildCreateTableAcceptsNativeUnicodeCollations(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		collation   string
+		wantCharset uint32
+	}{
+		{name: "utf8mb3", collation: "utf8_unicode_ci", wantCharset: uint32(types.CharsetUTF8MB3UnicodeCI)},
+		{name: "utf8mb4", collation: "utf8mb4_unicode_ci", wantCharset: uint32(types.CharsetUTF8MB4UnicodeCI)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+				"create table t(v varchar(8)) collate "+tc.collation, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			require.NoError(t, err)
+			tableDef := p.GetDdl().GetCreateTable().GetTableDef()
+			require.Equal(t, tc.wantCharset, tableDef.DefaultCharset)
+			require.Equal(t, tc.wantCharset, tableDef.Cols[0].Typ.Charset)
+		})
+	}
 }
 
 func TestBuildCreateTableAcceptsUTF32CompatibilityAliases(t *testing.T) {
@@ -525,7 +546,7 @@ func TestBuildCreateTableAcceptsUTF32CompatibilityAliases(t *testing.T) {
 
 func TestUnsupportedLegacyCollationExplainsDumpReplacement(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
-		"create table t(v varchar(8)) collate utf8mb4_unicode_ci", 1)
+		"create table t(v varchar(8)) collate utf8mb4_de_pb_0900_ai_ci", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
 

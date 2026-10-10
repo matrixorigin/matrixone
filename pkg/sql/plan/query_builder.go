@@ -694,7 +694,7 @@ func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
 			result.Width = typ.Width
 		}
 	}
-	result.Charset = types.MergeStringCharset(source, result.Charset)
+	result = types.MergeStringCollationMetadata(result, source)
 	return result, true
 }
 
