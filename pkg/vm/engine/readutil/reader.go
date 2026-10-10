@@ -151,6 +151,25 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	}
 
 	if pkPos != -1 {
+		// IVF entries use a composite physical primary key, but the membership
+		// filter is built from the source table's origin PK. Keep the composite
+		// key as the ordinary PK filter and explicitly pass origin_pk as the
+		// second vector; persisted objects may encode the composite key
+		// differently from in-memory rows.
+		if mixin.tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries && mixin.filterState.hasBF {
+			originPos := -1
+			for i, col := range cols {
+				if strings.EqualFold(col, catalog.SystemSI_IVFFLAT_TblCol_Entries_pk) {
+					originPos = i
+					break
+				}
+			}
+			if originPos != -1 && originPos != pkPos {
+				mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos], mixin.columns.seqnums[originPos]}
+				mixin.filterState.colTypes = []types.Type{mixin.columns.colTypes[pkPos], mixin.columns.colTypes[originPos]}
+				return
+			}
+		}
 		// For composite primary key, optimize BloomFilter filtering by using __mo_index_pri_col directly
 		// if all conditions are met (IVF entries table, has BF, last PK col is __mo_index_pri_col, query includes it).
 		if mixin.tableDef.Pkey != nil && len(mixin.tableDef.Pkey.Names) > 1 {
