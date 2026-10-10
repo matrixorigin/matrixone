@@ -58,8 +58,12 @@ const (
 	// asymmetric-prefix benchmark shapes, including intermediate cardinalities
 	// near the admitted boundary. Selective filters retain the baseline so a
 	// small result does not lose the measured SORT win.
-	rollupSortGroupFinalizeBaseCost    = 2.0
-	rollupSortGroupFinalizeMaxCost     = 8.0
+	rollupSortGroupFinalizeBaseCost = 2.0
+	// Asymmetric prefixes can under-report completed groups when derived-order
+	// stats are conservative.  Keep a calibrated ceiling that makes the
+	// 50,000-group control stay on shared HASH instead of admitting a measured
+	// slower SORT plan.
+	rollupSortGroupFinalizeMaxCost     = 16.0
 	rollupSortGroupFinalizeStartGroups = 10_000.0
 	rollupSortGroupFinalizeMaxGroups   = 25_000.0
 	rollupSortStartupCost              = 16.0
