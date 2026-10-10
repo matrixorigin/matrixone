@@ -32,8 +32,12 @@ select id from ft where match(body) against('苹果*' in boolean mode) order by 
 -- nothing.
 create table ftm(id int primary key, body varchar(200));
 insert into ftm values
-  (1,'苹果香蕉hello'),(2,'苹果香瓜hello'),(3,'苹果香蕉world'),(4,'苹果香蕉help'),(5,'苹果香蕉helloworld');
+  (1,'苹果香蕉hello'),(2,'苹果香瓜hello'),(3,'苹果香蕉world'),(4,'苹果香蕉help'),(5,'苹果香蕉helloworld'),
+  (6,'alpha 中国人民'),(7,'alpha 中国香蕉'),(8,'alpha 中华人民'),(9,'beta 中国人民');
 create fulltext2 index fim on ftm(body) with parser ngram;
+-- Nonempty exact+short-CJK-prefix phrase. The loaded prefix iterator's value locates each
+-- posting directory without changing positional matching: only 6 and 7 match.
+select id from ftm where match(body) against('alpha 中国') order by id;
 -- positive: the Latin tail prefix-matches hello/helloworld while the CJK head pins 苹果香蕉. Expect 1,5.
 select id from ftm where match(body) against('苹果香蕉hell*' in boolean mode) order by id;
 select id from ftm where match(body) against('+苹果香蕉hell*' in boolean mode) order by id;
