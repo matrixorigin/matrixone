@@ -857,6 +857,10 @@ func TestSession_Migrate(t *testing.T) {
 		for _, name := range []string{"a-b", "select", "a`b", "from"} {
 			assert.Contains(t, s.prepareStmts, name)
 		}
+		for name, stmt := range s.prepareStmts {
+			require.NotNil(t, stmt, name)
+			require.True(t, stmt.rewritePolicyCaptured, name)
+		}
 		assert.Equal(t, int64(7), s.GetLastAffectedRows())
 		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
 		assert.Equal(t, uint64(13), s.GetLastInsertID())
@@ -944,14 +948,10 @@ func TestSession_Migrate(t *testing.T) {
 
 		target := genSession(ctrl, "d1", nil)
 		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			ConnID:               88,
-			DB:                   exported.DB,
-			LastInsertIDExported: true,
-			SetVarStmts:          []string{"set sql_mode = @mode"},
-			PrepareStmts: append(exported.PrepareStmts, &query.PrepareStmt{
-				Name: "pending_isolation_prepare",
-				SQL:  "select ?",
-			}),
+			ConnID:                  88,
+			DB:                      exported.DB,
+			LastInsertIDExported:    true,
+			SetVarStmts:             []string{"set sql_mode = @mode"},
 			LastAffectedRows:        exported.LastAffectedRows,
 			UserDefinedVars:         exported.UserDefinedVars,
 			UserDefinedVarsExported: exported.UserDefinedVarsExported,
@@ -2106,6 +2106,196 @@ func TestRemoveAllPrepareStmts(t *testing.T) {
 	// safe to call again on an already-empty session
 	ses.RemoveAllPrepareStmts()
 	assert.Equal(t, 0, len(ses.prepareStmts))
+}
+
+func TestInvalidatePrivilegeCacheInvalidatesRewritePreparedStatements(t *testing.T) {
+	ctx := context.Background()
+	oldStmt := &PrepareStmt{Name: "old"}
+	ses := &Session{
+		cache:        &privilegeCache{},
+		prepareStmts: map[string]*PrepareStmt{"old": oldStmt},
+	}
+	ses.rewriteEnabled.Store(true)
+
+	ses.InvalidatePrivilegeCache()
+
+	_, err := ses.GetPrepareStmt(ctx, "old")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+	require.Equal(t, moerr.ER_NEED_REPREPARE, err.(*moerr.Error).MySQLCode())
+	// Explicit cleanup remains available for an invalidated handle.
+	got, err := ses.getPrepareStmtAllowInvalidated(ctx, "old")
+	require.NoError(t, err)
+	require.Same(t, oldStmt, got)
+
+	// A fresh PREPARE replaces the invalidated handle and is executable.
+	newStmt := &PrepareStmt{Name: "old"}
+	require.NoError(t, ses.SetPrepareStmt(ctx, "old", newStmt))
+	got, err = ses.GetPrepareStmt(ctx, "old")
+	require.NoError(t, err)
+	require.Same(t, newStmt, got)
+}
+
+func TestInvalidatePrivilegeCacheInvalidatesMandatoryRoleRulePreparedStatements(t *testing.T) {
+	stmt := &PrepareStmt{
+		Name:                  "role_rule",
+		rewritePolicyCaptured: true,
+		rewritePolicyEnabled:  true,
+	}
+	ses := &Session{
+		cache:        &privilegeCache{},
+		ruleCache:    map[string]string{"db.t": "select * from db.t where tenant = 1"},
+		prepareStmts: map[string]*PrepareStmt{"role_rule": stmt},
+	}
+	// Mandatory role rules remain active when the optional rewrite switch is
+	// disabled.
+	ses.rewriteEnabled.Store(false)
+
+	ses.InvalidatePrivilegeCache()
+
+	require.True(t, stmt.rewritePolicyInvalidated.Load())
+}
+
+func TestInvalidatePrivilegeCachePreservesPreparedStatementsWithoutRewrite(t *testing.T) {
+	ctx := context.Background()
+	stmt := &PrepareStmt{Name: "stmt"}
+	ses := &Session{
+		cache:        &privilegeCache{},
+		prepareStmts: map[string]*PrepareStmt{"stmt": stmt},
+	}
+
+	ses.InvalidatePrivilegeCache()
+
+	got, err := ses.GetPrepareStmt(ctx, "stmt")
+	require.NoError(t, err)
+	require.Same(t, stmt, got)
+}
+
+func TestSetPrepareStmtRejectsStaleRewritePolicyGeneration(t *testing.T) {
+	ctx := context.Background()
+	for _, testCase := range []struct {
+		name            string
+		capturedEnabled bool
+		currentEnabled  bool
+		currentRoleRule bool
+		invalidated     bool
+	}{
+		{name: "enabled to enabled", capturedEnabled: true, currentEnabled: true, invalidated: true},
+		{name: "enabled to disabled", capturedEnabled: true, currentEnabled: false, invalidated: true},
+		{name: "disabled to enabled", capturedEnabled: false, currentEnabled: true, invalidated: true},
+		{name: "disabled to disabled", capturedEnabled: false, currentEnabled: false},
+		{name: "disabled to mandatory role rule", capturedEnabled: false, currentRoleRule: true, invalidated: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ses := &Session{
+				cache:                   &privilegeCache{},
+				ruleCache:               map[string]string{},
+				prepareStmts:            make(map[string]*PrepareStmt),
+				rewritePolicyGeneration: 1,
+			}
+			if testCase.currentRoleRule {
+				ses.ruleCache["db.t"] = "select * from db.t where tenant = 1"
+			}
+			ses.rewriteEnabled.Store(testCase.currentEnabled)
+			stale := &PrepareStmt{
+				Name:                    "stale",
+				rewritePolicyCaptured:   true,
+				rewritePolicyEnabled:    testCase.capturedEnabled,
+				rewritePolicyGeneration: 0,
+			}
+			require.NoError(t, ses.SetPrepareStmt(ctx, stale.Name, stale))
+			require.Equal(t, testCase.invalidated, stale.rewritePolicyInvalidated.Load())
+			got, err := ses.GetPrepareStmt(ctx, stale.Name)
+			if testCase.invalidated {
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+				return
+			}
+			require.NoError(t, err)
+			require.Same(t, stale, got)
+		})
+	}
+
+	ses := &Session{
+		cache:                   &privilegeCache{},
+		prepareStmts:            make(map[string]*PrepareStmt),
+		rewritePolicyGeneration: 1,
+	}
+	ses.rewriteEnabled.Store(true)
+	fresh := &PrepareStmt{
+		Name:                    "fresh",
+		rewritePolicyCaptured:   true,
+		rewritePolicyEnabled:    true,
+		rewritePolicyGeneration: 1,
+	}
+	require.NoError(t, ses.SetPrepareStmt(ctx, fresh.Name, fresh))
+	got, err := ses.GetPrepareStmt(ctx, fresh.Name)
+	require.NoError(t, err)
+	require.Same(t, fresh, got)
+}
+
+func TestPreparedStatementsValidateRefreshedRewritePolicy(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name       string
+		enabled    bool
+		refreshErr error
+		generation uint64
+		invalid    bool
+	}{
+		{name: "disabled to mandatory", enabled: true, generation: 1, invalid: true},
+		{name: "disabled to disabled", generation: 1},
+		{name: "failed load", refreshErr: assert.AnError, generation: 1, invalid: true},
+		{name: "concurrent invalidation", generation: 0, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := &PrepareStmt{Name: "old", rewritePolicyCaptured: true}
+			fresh := &PrepareStmt{Name: "fresh", rewritePolicyCaptured: true, rewritePolicyGeneration: 1}
+			ses := &Session{
+				cache:        &privilegeCache{},
+				ruleCache:    map[string]string{},
+				prepareStmts: map[string]*PrepareStmt{"old": old},
+			}
+			ses.InvalidatePrivilegeCache()
+			require.False(t, old.rewritePolicyInvalidated.Load(), "disabled handle awaits the refreshed policy")
+			// Model the cache reload after an error path such as failed SET ROLE.
+			ses.ruleCache = map[string]string{}
+			if tc.enabled {
+				ses.ruleCache["db.t"] = "select * from db.t where tenant = 1"
+			}
+			ses.prepareStmts["fresh"] = fresh
+			ses.validatePreparedStatementsAfterRewritePolicyRefresh(
+				&rewritePolicySnapshot{generation: tc.generation, enabled: tc.enabled}, tc.refreshErr)
+			got, err := ses.GetPrepareStmt(ctx, "old")
+			require.Same(t, old, got)
+			if tc.invalid {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+			} else {
+				require.NoError(t, err)
+			}
+			_, err = ses.GetPrepareStmt(ctx, "fresh")
+			if tc.refreshErr != nil || tc.generation != 1 {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+			} else {
+				require.NoError(t, err, "refresh must preserve handles captured in the current generation")
+			}
+		})
+	}
+}
+
+func TestGetPrepareStmtRejectsStaleGenerationWithCurrentMandatoryRules(t *testing.T) {
+	stmt := &PrepareStmt{Name: "old", rewritePolicyCaptured: true}
+	ses := &Session{
+		ruleCache:               map[string]string{"db.t": "select * from db.t where tenant = 1"},
+		rewritePolicyGeneration: 1,
+		prepareStmts:            map[string]*PrepareStmt{"old": stmt},
+	}
+	got, err := ses.GetPrepareStmt(context.Background(), "old")
+	require.Same(t, stmt, got)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+	got, err = ses.getPrepareStmtAllowInvalidated(context.Background(), "old")
+	require.NoError(t, err, "explicit cleanup must remain available")
+	require.Same(t, stmt, got)
 }
 
 func TestPrepareStmtNamesAreCaseInsensitive(t *testing.T) {

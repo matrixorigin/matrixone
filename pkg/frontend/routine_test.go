@@ -813,8 +813,9 @@ func TestMigrateConnectionFromRejectsPendingPreparedLongData(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	prepared := &PrepareStmt{
-		Name:                GetPrepareStmtName(41),
-		getFromSendLongData: map[int]struct{}{0: {}},
+		Name:                  GetPrepareStmtName(41),
+		rewritePolicyCaptured: true,
+		getFromSendLongData:   map[int]struct{}{0: {}},
 	}
 	require.NoError(t, ses.SetPrepareStmt(context.Background(), prepared.Name, prepared))
 	rt := &Routine{mc: newMigrateController()}
@@ -842,14 +843,16 @@ func TestMigrateConnectionFromRejectsActivePreparedCursors(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	first := &PrepareStmt{
-		Name: GetPrepareStmtName(41),
-		Sql:  "select 1",
+		Name:                  GetPrepareStmtName(41),
+		Sql:                   "select 1",
+		rewritePolicyCaptured: true,
 		// An empty result is still fetchable until FETCH closes its cursor.
 		cursor: &preparedStmtCursor{result: &MysqlResultSet{}},
 	}
 	second := &PrepareStmt{
-		Name: GetPrepareStmtName(42),
-		Sql:  "select 2",
+		Name:                  GetPrepareStmtName(42),
+		Sql:                   "select 2",
+		rewritePolicyCaptured: true,
 		cursor: &preparedStmtCursor{
 			result: &MysqlResultSet{Data: [][]interface{}{{int64(1)}, {int64(2)}}},
 			offset: 1,
@@ -882,8 +885,9 @@ func TestMigrateConnectionFromWaitsForCursorCloseRequest(t *testing.T) {
 	const cursorBytes = 128
 	require.True(t, ses.tryReservePreparedCursorBytes(cursorBytes, cursorBytes))
 	stmt := &PrepareStmt{
-		Name: GetPrepareStmtName(41),
-		Sql:  "select 1",
+		Name:                  GetPrepareStmtName(41),
+		Sql:                   "select 1",
+		rewritePolicyCaptured: true,
 		cursor: &preparedStmtCursor{
 			result: &MysqlResultSet{Data: [][]interface{}{{int64(1)}}},
 			owner:  ses,
@@ -932,6 +936,56 @@ func TestMigrateConnectionFromWaitsForCursorCloseRequest(t *testing.T) {
 	}
 	require.True(t, resp.PreparedStmtCursorsChecked)
 	require.Len(t, resp.PrepareStmts, 1)
+}
+
+func TestMigrateConnectionFromRejectsInvalidatedRewritePreparedStmt(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.rewriteEnabled.Store(true)
+	prepared := &PrepareStmt{
+		Name: GetPrepareStmtName(41),
+		Sql:  "select 1",
+	}
+	require.NoError(t, ses.SetPrepareStmt(context.Background(), prepared.Name, prepared))
+	ses.SetLastStmtID(41)
+	ses.InvalidatePrivilegeCache()
+
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	err := rt.migrateConnectionFrom(&query.MigrateConnFromResponse{})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+
+	// The client must explicitly close the invalidated handle before migration;
+	// the next binary PREPARE must not reuse its statement ID.
+	require.True(t, ses.RemovePrepareStmt(prepared.Name))
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.Empty(t, resp.PrepareStmts)
+	require.Equal(t, uint32(41), ses.GetLastStmtId())
+	require.Equal(t, uint32(42), ses.GenNewStmtId())
+}
+
+func TestMigrateConnectionFromRejectsUnvalidatedRewriteGeneration(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	ses.prepareStmts = map[string]*PrepareStmt{
+		"old": {Name: "old", Sql: "select 1", rewritePolicyCaptured: true},
+	}
+	ses.rewritePolicyGeneration = 1
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	// A failed role switch can leave this disabled handle awaiting cache reload.
+	for _, rules := range []map[string]string{nil, {"db.t": "select * from db.t where tenant = 1"}} {
+		ses.ruleCache = rules
+		err := rt.migrateConnectionFrom(&query.MigrateConnFromResponse{})
+		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+	}
+	ses.ruleCache = map[string]string{}
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.Len(t, resp.PrepareStmts, 1, "known empty policy remains safe to migrate")
 }
 
 func TestMigrateConnectionFromExportsEvaluatedUserVariables(t *testing.T) {

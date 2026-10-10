@@ -396,7 +396,10 @@ func TestConcurrentRuleCacheAccess(t *testing.T) {
 			for j := 0; j < numIterations; j++ {
 				ses.ruleCacheMu.RLock()
 				_ = ses.ruleCache // Just read the cache
+				generation := ses.rewritePolicyGeneration
 				ses.ruleCacheMu.RUnlock()
+				ses.validatePreparedStatementsAfterRewritePolicyRefresh(
+					&rewritePolicySnapshot{generation: generation}, nil)
 			}
 		}()
 	}
@@ -512,6 +515,43 @@ func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
 	_, err := loadRuleCache(context.Background(), ses)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to parse rewrite rule")
+}
+
+func TestCaptureRewritePolicyValidatesExistingPreparedHandlesOnReload(t *testing.T) {
+	for _, mandatory := range []bool{false, true} {
+		t.Run(fmt.Sprintf("mandatory=%v", mandatory), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			bh := &backgroundExecTest{}
+			bh.init()
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer bhStub.Reset()
+			ses := newSes(&privilege{}, ctrl)
+			t.Cleanup(ses.Close)
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant: sysAccountName, TenantID: sysAccountID, UserID: 42, DefaultRoleID: 10,
+			})
+			ses.rewriteEnabled.Store(false)
+			old := &PrepareStmt{Name: "old", rewritePolicyCaptured: true}
+			ses.prepareStmts = map[string]*PrepareStmt{"old": old}
+			ses.rewritePolicyGeneration = 1
+			bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+			rules := [][]interface{}{}
+			if mandatory {
+				rules = append(rules, []interface{}{10, "db.t", "select id from db.t where tenant = 1"})
+			}
+			bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10})] = newMrsForRewriteRules(rules)
+			policy, err := captureRewritePolicy(context.Background(), ses)
+			require.NoError(t, err)
+			require.Equal(t, mandatory, policy.enabled)
+			require.Equal(t, mandatory, old.rewritePolicyInvalidated.Load())
+			_, err = ses.GetPrepareStmt(context.Background(), "old")
+			if mandatory {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestRewriteSQLPropagatesRuleCacheLoadError(t *testing.T) {
@@ -873,6 +913,21 @@ func TestRewritePolicySnapshotUsesCurrentSQLModeAndFrozenEnablement(t *testing.T
 		require.NoError(t, err)
 		require.Equal(t, map[string]string{"src": "dst"}, remapDb)
 	}
+}
+
+func TestDisabledRewritePolicySnapshotCapturesGeneration(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.rewriteEnabled.Store(false)
+	ses.ruleCache = map[string]string{}
+	ses.bumpRewritePolicyGeneration()
+
+	policy, err := captureRewritePolicy(ctx, ses)
+	require.NoError(t, err)
+	require.True(t, policy.captured)
+	require.False(t, policy.enabled)
+	require.Equal(t, uint64(1), policy.generation)
 }
 
 func TestRewriteSQLFromMaterializedPolicy(t *testing.T) {
