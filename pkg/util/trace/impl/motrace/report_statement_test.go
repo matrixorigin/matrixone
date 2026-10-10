@@ -22,10 +22,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -647,4 +649,40 @@ func Test_StringBuilder(t *testing.T) {
 	t.Logf("str1: %s", str1)
 	t.Logf("str2: %s", str2)
 	t.Logf("str3: %s", str3)
+}
+
+func TestStatementInfo_RecordStatementSql(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, raw, want, account, user, typ string
+		capacity                                  int
+	}{
+		{name: "zero", text: "你", capacity: 0, want: ""},
+		{name: "partial Chinese", text: "你x", capacity: 2, want: ""},
+		{name: "complete Chinese", text: "你x", capacity: 3, want: "你"},
+		{name: "partial emoji", text: "a😀x", capacity: 4, want: "a"},
+		{name: "exact", text: "你", capacity: 3, want: "你"},
+		{name: "ASCII", text: "abcdef", capacity: 3, want: "abc"},
+		{name: "logger Chinese", raw: strings.Repeat("你", 60), capacity: 200, account: "sys", user: db_holder.MOLoggerUser, typ: "Load", want: strings.Repeat("你", 13) + "..." + strings.Repeat("你", 23)},
+		{name: "logger emoji", raw: "a" + strings.Repeat("😀", 40), capacity: 200, account: "sys", user: db_holder.MOLoggerUser, typ: "Load", want: "a" + strings.Repeat("😀", 9) + "..." + strings.Repeat("😀", 17)},
+		{name: "logger ASCII", raw: strings.Repeat("x", 140), capacity: 200, account: "sys", user: db_holder.MOLoggerUser, typ: "Load", want: strings.Repeat("x", 40) + "..." + strings.Repeat("x", 70)},
+		{name: "logger malformed samples", raw: "\xff" + strings.Repeat("x", 138) + "\xe4\xbd", capacity: 200, account: "sys", user: db_holder.MOLoggerUser, typ: "Load", want: "?" + strings.Repeat("x", 39) + "..." + strings.Repeat("x", 68) + "??"},
+		{name: "logger malformed discarded middle", raw: strings.Repeat("x", 40) + strings.Repeat("\xff", 100) + strings.Repeat("你", 30), capacity: 200, account: "sys", user: db_holder.MOLoggerUser, typ: "Load", want: strings.Repeat("x", 40) + "..." + strings.Repeat("你", 23)},
+		{name: "ordinary Load", text: "你x", raw: strings.Repeat("你", 60), capacity: 2, typ: "Load", want: ""},
+		{name: "short logger Load", text: "你x", raw: strings.Repeat("你", 40), capacity: 3, account: "sys", user: db_holder.MOLoggerUser, typ: "Load", want: "你"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &StatementInfo{Statement: make([]byte, 0, tc.capacity), Account: tc.account, User: tc.user, StatementType: tc.typ}
+			s.RecordStatementSql(tc.text, tc.raw)
+			require.Equal(t, tc.want, string(s.Statement))
+			require.True(t, utf8.Valid(s.Statement))
+			row := SingleStatementTable.GetRow(context.Background())
+			defer row.Free()
+			s.FillRow(context.Background(), row)
+			for i, col := range SingleStatementTable.Columns {
+				if col.Name == "statement" {
+					require.Equal(t, tc.want, row.ToStrings()[i])
+				}
+			}
+		})
+	}
 }

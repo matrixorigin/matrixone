@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
@@ -11756,6 +11757,188 @@ func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
 				require.Same(t, cached, cw.Plan())
 				require.True(t, cw.planGenerationReused)
 				require.True(t, ses.isCached(input.getHash()))
+			}
+		})
+	}
+}
+
+func TestRecordStatementUTF8(t *testing.T) {
+	ctx := context.Background()
+	oldPu := getPuIfPresent("")
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	setPu("", config.NewParameterUnit(sv, nil, nil, nil))
+	defer setPu("", oldPu)
+	provider := motrace.GetTracerProvider()
+	enabled := provider.IsEnable()
+	provider.SetEnable(true)
+	defer provider.SetEnable(enabled)
+	// Keep the real producer and row serializer; only asynchronous delivery is stubbed.
+	sink := gostub.Stub(&motrace.ReportStatement, func(context.Context, *motrace.StatementInfo) error { return nil })
+	defer sink.Reset()
+	for _, tc := range []struct {
+		name, text, want string
+		params           []string
+		nullIndex        int
+		limit            int
+	}{
+		{"Chinese", strings.Repeat("你", 400), strings.Repeat("你", 341) + "...", nil, -1, 1024},
+		{"emoji", "a" + strings.Repeat("😀", 300), "a" + strings.Repeat("😀", 255) + "...", nil, -1, 1024},
+		{"ASCII", strings.Repeat("x", 1100), strings.Repeat("x", 1024) + "...", nil, -1, 1024},
+		{"malformed comment", "SELECT 1 /* \xff */", "SELECT 1 /* ? */", nil, -1, 1024},
+		{"malformed line comment", "SELECT 1 -- \xff\n", "SELECT 1 -- ?\n", nil, -1, 1024},
+		{"malformed literal", "SELECT 'a\xffb'", "SELECT 'a?b'", nil, -1, 1024},
+		{"partial rune comment", "SELECT 1 /* \xe4\xbd */", "SELECT 1 /* ?? */", nil, -1, 1024},
+		{"binary parameter", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1, 1024},
+		{"mixed parameters", "select ?, ?, ?, ?", "你😀 ; NULL ;  ; 42", []string{"你😀", "", "", "42"}, 1, 1024},
+		{"long Unicode parameter", "select ?", strings.Repeat("你😀", 300), []string{strings.Repeat("你😀", 300)}, -1, 1024},
+		{"long binary parameter", "select ?", "x'" + strings.Repeat("ff", 2048) + "'", []string{strings.Repeat("\xff", 2048)}, -1, 1024},
+		{"exact empty parameter", "select ?", "", []string{""}, -1, len("execute utf8_query // select ? ; ")},
+		{"one byte overflow", "select ?", "a", []string{"a"}, -1, len("execute utf8_query // select ? ; ")},
+		{"limit before parameters", strings.Repeat("x", 1100), "x'fffe'", []string{"\xff\xfe"}, -1, 1024},
+		{"hex opening cut", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1, len("execute utf8_query // select ? ; x")},
+		{"hex odd digit cut", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1, len("execute utf8_query // select ? ; x'f")},
+		{"unlimited parameter", "select ?", "你😀", []string{"你😀"}, -1, -1},
+		{"zero parameter budget", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1, 0},
+		{"negative parameter budget", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1, -2},
+	} {
+		sv.LengthOfQueryPrinted = int64(tc.limit)
+		for _, path := range []string{"environment", "ordinary AST", "prepared"} {
+			if tc.params != nil && path != "prepared" {
+				continue
+			}
+			t.Run(tc.name+"/"+path, func(t *testing.T) {
+				ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+				defer ses.Close()
+				env := tc.text
+				var cw ComputationWrapper
+				want := tc.want
+				if path != "environment" {
+					ctrl := gomock.NewController(t)
+					mock := mock_frontend.NewMockComputationWrapper(ctrl)
+					mock.EXPECT().GetUUID().Return(make([]byte, 16))
+					if path == "prepared" {
+						const name = "utf8_query"
+						prepared := &PrepareStmt{Name: name, Sql: tc.text}
+						if tc.params != nil {
+							proc := testutil.NewProc(t)
+							prepared.proc = proc
+							prepared.params = vector.NewVec(types.T_text.ToType())
+							defer prepared.Close()
+							for i, value := range tc.params {
+								require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), i == tc.nullIndex, proc.Mp()))
+							}
+						}
+						require.NoError(t, ses.SetPrepareStmt(ctx, name, prepared))
+						mock.EXPECT().GetAst().Return(&tree.Select{})
+						mock.EXPECT().BinaryExecute().Return(true, name)
+						env = "execute utf8_query"
+						preparedText := tc.text
+						if !utf8.ValidString(tc.text) {
+							preparedText = tc.want
+						}
+						expanded := env + " // " + strings.TrimSpace(preparedText) + " ; "
+						if tc.params != nil {
+							expanded += tc.want
+						}
+						cut := 0
+						for offset, r := range expanded {
+							if end := offset + utf8.RuneLen(r); end <= tc.limit {
+								cut = end
+							} else {
+								break
+							}
+						}
+						want = expanded
+						if tc.limit == 0 || tc.limit < -1 {
+							want = ""
+						}
+						if tc.limit > 0 && len(expanded) > tc.limit {
+							want = expanded[:cut] + "..."
+						}
+					} else {
+						mock.EXPECT().GetAst().Return(&tree.Select{})
+						mock.EXPECT().BinaryExecute().Return(false, "")
+					}
+					cw = mock
+				}
+				statementCtx, err := RecordStatement(ctx, ses, nil, cw, time.Now(), env, constant.ExternSql, true)
+				require.NoError(t, err)
+				stmt := ses.tStmt
+				require.NotNil(t, stmt)
+				row := motrace.SingleStatementTable.GetRow(ctx)
+				defer func() {
+					stmt.EndStatement(statementCtx, nil, 1, 0, 0)
+					stmt.FillRow(ctx, row)
+					row.Free()
+					stmt.Free()
+					ses.SetTStmt(nil)
+				}()
+				require.Equal(t, want, ses.GetSqlOfStmt())
+				require.Equal(t, want, string(stmt.Statement))
+				require.True(t, utf8.Valid(stmt.Statement))
+				if tc.params != nil {
+					prepared, err := ses.GetPrepareStmt(ctx, "utf8_query")
+					require.NoError(t, err)
+					for i, value := range tc.params {
+						require.Equal(t, value, prepared.params.GetStringAt(i))
+						require.Equal(t, i == tc.nullIndex, prepared.params.GetNulls().Contains(uint64(i)))
+					}
+				}
+				stmt.EndStatement(statementCtx, nil, 1, 0, 0)
+				stmt.FillRow(ctx, row)
+				for i, col := range motrace.SingleStatementTable.Columns {
+					if col.Name == "statement" {
+						require.Equal(t, want, row.ToStrings()[i])
+					}
+				}
+			})
+		}
+	}
+	for _, tc := range []struct{ name, raw, want string }{
+		{"malformed", "SELECT FROM /* \xff */", "SELECT FROM /* ? */"},
+		{"long Chinese cut", "SELECT FROM /* " + strings.Repeat("你", 400) + " */", "SELECT FROM /* " + strings.Repeat("你", (1024-len("SELECT FROM /* "))/3) + "..."},
+		{"long Chinese aligned", "SELECT FROM /*aa" + strings.Repeat("你", 400) + " */", "SELECT FROM /*aa" + strings.Repeat("你", (1024-len("SELECT FROM /*aa"))/3) + "..."},
+	} {
+		t.Run("parse error/"+tc.name, func(t *testing.T) {
+			sv.LengthOfQueryPrinted = 1024
+			ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+			defer ses.Close()
+			raw := tc.raw
+			_, parseErr := parsers.Parse(ctx, dialect.MYSQL, raw, 1)
+			require.Error(t, parseErr)
+			require.True(t, utf8.ValidString(parseErr.Error()))
+			recordErr := moerr.NewParseError(ctx, parseErr.Error())
+			ses.beginResponseAccounting()
+			statementCtx, err := RecordParseErrorStatement(ctx, ses, nil, time.Now(), []string{raw}, nil, parseErr)
+			require.NoError(t, err)
+			stmt := ses.tStmt
+			require.NotNil(t, stmt)
+			row := motrace.SingleStatementTable.GetRow(ctx)
+			defer func() {
+				ses.finishResponseAccounting(statementCtx, parseErr, true)
+				stmt.FillRow(ctx, row)
+				row.Free()
+				stmt.Free()
+				ses.SetTStmt(nil)
+			}()
+			ses.finishResponseAccounting(statementCtx, parseErr, true)
+			require.Equal(t, motrace.StatementStatusFailed, stmt.Status)
+			require.Equal(t, tc.want, ses.GetSqlOfStmt())
+			require.Equal(t, tc.want, string(stmt.Statement))
+			stmt.FillRow(ctx, row)
+			for i, col := range motrace.SingleStatementTable.Columns {
+				switch col.Name {
+				case "statement":
+					require.Equal(t, tc.want, row.ToStrings()[i])
+				case "error":
+					require.Equal(t, recordErr.Error(), row.ToStrings()[i])
+					require.True(t, utf8.ValidString(row.ToStrings()[i]))
+				case "status":
+					require.Equal(t, "Failed", row.ToStrings()[i])
+				case "err_code":
+					require.Equal(t, fmt.Sprintf("%d", moerr.ErrParseError), row.ToStrings()[i])
+				}
 			}
 		})
 	}

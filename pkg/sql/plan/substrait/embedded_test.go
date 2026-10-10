@@ -54,7 +54,7 @@ func TestEmbeddedMOAdmissionPreservesReaderOrderingWithoutChangingFlight(t *test
 	query.Nodes[0].OrderBy = []*planpb.OrderBySpec{{Expr: col(0), Flag: planpb.OrderBySpec_ASC}}
 	_, err := Export(query)
 	require.ErrorContains(t, err, "sort semantics outside a SORT node")
-	candidate, err := ExportEmbeddedMO(query)
+	candidate, err := ExportEmbeddedMO(query, EmbeddedExportProfile{})
 	require.NoError(t, err)
 	_, err = candidate.Build(map[int32][]byte{0: {1}})
 	require.ErrorContains(t, err, "cannot be emitted as Flight")
@@ -64,7 +64,7 @@ func TestEmbeddedMOAdmissionPreservesReaderOrderingWithoutChangingFlight(t *test
 	require.Len(t, query.Nodes[0].OrderBy, 1, "the MO producer must still receive the original ordering hint")
 	query.Nodes = append(query.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_PROJECT, Children: []int32{0}, ProjectList: []*planpb.Expr{col(0)}, OrderBy: query.Nodes[0].OrderBy})
 	query.Steps = []int32{1}
-	_, err = ExportEmbeddedMO(query)
+	_, err = ExportEmbeddedMO(query, EmbeddedExportProfile{})
 	require.ErrorContains(t, err, "sort semantics outside a SORT node", "only MO-owned scan annotations are admitted")
 }
 
@@ -257,4 +257,41 @@ func embeddedPlan(t *testing.T, wire []byte) *spb.Plan {
 	plan := new(spb.Plan)
 	require.NoError(t, proto.Unmarshal(wire, plan))
 	return plan
+}
+
+func TestEmbeddedFetchIncludesBothConstantBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		limit, offset *planpb.Expr
+		count, start  int64
+	}{
+		{name: "limit only", limit: u64(5), count: 5},
+		{name: "offset only", offset: u64(3), count: -1, start: 3},
+		{name: "zero limit", limit: u64(0)},
+		{name: "both", limit: u64(5), offset: u64(3), count: 5, start: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := exporter{embeddedMO: true}
+			relation, err := e.fetch(&spb.Rel{}, &planpb.Node{Limit: tc.limit, Offset: tc.offset})
+			require.NoError(t, err)
+			wire, err := proto.Marshal(relation)
+			require.NoError(t, err)
+			decoded := new(spb.Rel)
+			require.NoError(t, proto.Unmarshal(wire, decoded))
+			fetch := decoded.GetFetch()
+			require.IsType(t, &spb.FetchRel_Count{}, fetch.CountMode)
+			require.IsType(t, &spb.FetchRel_Offset{}, fetch.OffsetMode)
+			require.Equal(t, tc.count, fetch.GetCount())
+			require.Equal(t, tc.start, fetch.GetOffset())
+		})
+	}
+	input := &spb.Rel{}
+	e := exporter{embeddedMO: true}
+	unchanged, err := e.fetch(input, &planpb.Node{})
+	require.NoError(t, err)
+	require.Same(t, input, unchanged)
+	e.embeddedMO = false
+	flight, err := e.fetch(input, &planpb.Node{Limit: u64(5)})
+	require.NoError(t, err)
+	require.Nil(t, flight.GetFetch().OffsetMode, "preserve ordinary Flight emission")
 }

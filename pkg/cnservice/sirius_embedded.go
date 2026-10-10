@@ -58,6 +58,7 @@ func validateSiriusEmbeddedConfig(c *SiriusConfig) error {
 }
 
 type embeddedRuntime interface {
+	Capabilities() uint64
 	Accepting() bool
 	Close(context.Context) error
 	Prepare(context.Context, siriusbridge.Request) (*siriusbridge.Query, error)
@@ -69,6 +70,8 @@ type embeddedBackend struct {
 }
 
 func (b *embeddedBackend) Accepting() bool { return b.native.Accepting() }
+
+func (b *embeddedBackend) Capabilities() uint64 { return b.native.Capabilities() }
 
 func (b *embeddedBackend) Close(ctx context.Context) error      { return b.native.Close(ctx) }
 func (*embeddedBackend) CanFallbackBeforeVisibility(error) bool { return false }
@@ -228,9 +231,12 @@ func (e *embeddedExecution) Cleanup(ctx context.Context) error {
 			if stats.Fatal {
 				health = "unavailable"
 			}
+			schema, schemaDigest := embeddedSchemaEvidence(e.request)
 			logutil.Info("Sirius embedded execution",
 				zap.String("query_id", hex.EncodeToString(e.request.QueryID)), zap.Uint64("account_id", e.request.AccountID),
 				zap.String("backend", "embedded"), zap.String("scan_mode", "mo"), zap.Bool("fallback", false),
+				zap.Uint64("native_capabilities", e.request.NativeCapabilities), zap.String("numeric_profile", e.request.NumericProfile),
+				zap.Any("verified_output_schema", schema), zap.String("output_schema_sha256", schemaDigest),
 				zap.Uint32("gpu_streams", e.streams), zap.Int("read_bindings", len(e.request.Reads)),
 				zap.Uint64("input_rows", e.counters.inputRows.Load()), zap.Uint64("input_payload_bytes", e.counters.inputBytes.Load()),
 				zap.Float64("first_row_seconds", firstRow.Seconds()), zap.Float64("wall_seconds", wall.Seconds()),
