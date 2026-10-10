@@ -89,7 +89,10 @@ func (builder *QueryBuilder) applyRewriteMetadataVisibility(
 		if policy.all {
 			continue
 		}
-		canonical := strings.ToLower(db) + "\x00" + strings.ToLower(tableName)
+		canonical := db + "\x00" + tableName
+		if ctx.lower != 0 {
+			canonical = strings.ToLower(canonical)
+		}
 		if old, ok := policies[canonical]; ok {
 			old.names = intersectRewriteColumnNames(old.names, policy.names)
 			old.all = false
@@ -228,6 +231,9 @@ func rewriteVisibleColumns(stmt tree.Statement, database, table string) (map[str
 	var selectStmt tree.SelectStatement
 	switch statement := stmt.(type) {
 	case *tree.Select:
+		if statement.With != nil {
+			return nil, false, false
+		}
 		selectStmt = statement.Select
 	case *tree.ParenSelect:
 		selectStmt = statement.Select
@@ -239,6 +245,9 @@ func rewriteVisibleColumns(stmt tree.Statement, database, table string) (map[str
 		case *tree.ParenSelect:
 			selectStmt = statement.Select
 		case *tree.Select:
+			if statement.With != nil {
+				return nil, false, false
+			}
 			selectStmt = statement.Select
 		default:
 			goto projection

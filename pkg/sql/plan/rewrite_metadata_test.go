@@ -53,6 +53,10 @@ func TestRewriteVisibleColumns(t *testing.T) {
 			name: "join fails closed",
 			sql:  "select controlled.id from db.controlled join db.other on controlled.id = other.id",
 		},
+		{
+			name: "cte fails closed",
+			sql:  "with controlled as (select id from db.controlled) select * from controlled",
+		},
 	}
 
 	for _, test := range tests {
