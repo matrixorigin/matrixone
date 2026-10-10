@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -511,8 +512,9 @@ func (l *Lexer) Error(err string) {
 	var lenStr string
 	if len(near) > 1024 {
 		lenStr = " (total length " + strconv.Itoa(len(lenStr)) + ")"
-		near = near[:1024]
+		near = near[:commonutil.UTF8PrefixLen(near, 1024)]
 	}
+	near = commonutil.Abbreviate(near, -1)
 	l.scanner.LastError = PositionedErr{Err: errMsg, Line: l.scanner.Line, Col: l.scanner.Col, Near: near, LenStr: lenStr}
 }
 

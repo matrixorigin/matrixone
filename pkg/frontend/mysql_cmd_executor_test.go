@@ -11895,35 +11895,51 @@ func TestRecordStatementUTF8(t *testing.T) {
 			})
 		}
 	}
-	t.Run("malformed parse error", func(t *testing.T) {
-		sv.LengthOfQueryPrinted = 1024
-		ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
-		defer ses.Close()
-		raw := "SELECT FROM /* \xff */"
-		_, parseErr := parsers.Parse(ctx, dialect.MYSQL, raw, 1)
-		require.Error(t, parseErr)
-		ses.beginResponseAccounting()
-		statementCtx, err := RecordParseErrorStatement(ctx, ses, nil, time.Now(), []string{raw}, nil, parseErr)
-		require.NoError(t, err)
-		stmt := ses.tStmt
-		require.NotNil(t, stmt)
-		row := motrace.SingleStatementTable.GetRow(ctx)
-		defer func() {
+	for _, tc := range []struct{ name, raw, want string }{
+		{"malformed", "SELECT FROM /* \xff */", "SELECT FROM /* ? */"},
+		{"long Chinese cut", "SELECT FROM /* " + strings.Repeat("你", 400) + " */", "SELECT FROM /* " + strings.Repeat("你", (1024-len("SELECT FROM /* "))/3) + "..."},
+		{"long Chinese aligned", "SELECT FROM /*aa" + strings.Repeat("你", 400) + " */", "SELECT FROM /*aa" + strings.Repeat("你", (1024-len("SELECT FROM /*aa"))/3) + "..."},
+	} {
+		t.Run("parse error/"+tc.name, func(t *testing.T) {
+			sv.LengthOfQueryPrinted = 1024
+			ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+			defer ses.Close()
+			raw := tc.raw
+			_, parseErr := parsers.Parse(ctx, dialect.MYSQL, raw, 1)
+			require.Error(t, parseErr)
+			require.True(t, utf8.ValidString(parseErr.Error()))
+			recordErr := moerr.NewParseError(ctx, parseErr.Error())
+			ses.beginResponseAccounting()
+			statementCtx, err := RecordParseErrorStatement(ctx, ses, nil, time.Now(), []string{raw}, nil, parseErr)
+			require.NoError(t, err)
+			stmt := ses.tStmt
+			require.NotNil(t, stmt)
+			row := motrace.SingleStatementTable.GetRow(ctx)
+			defer func() {
+				ses.finishResponseAccounting(statementCtx, parseErr, true)
+				stmt.FillRow(ctx, row)
+				row.Free()
+				stmt.Free()
+				ses.SetTStmt(nil)
+			}()
 			ses.finishResponseAccounting(statementCtx, parseErr, true)
+			require.Equal(t, motrace.StatementStatusFailed, stmt.Status)
+			require.Equal(t, tc.want, ses.GetSqlOfStmt())
+			require.Equal(t, tc.want, string(stmt.Statement))
 			stmt.FillRow(ctx, row)
-			row.Free()
-			stmt.Free()
-			ses.SetTStmt(nil)
-		}()
-		ses.finishResponseAccounting(statementCtx, parseErr, true)
-		require.Equal(t, motrace.StatementStatusFailed, stmt.Status)
-		require.Equal(t, "SELECT FROM /* ? */", ses.GetSqlOfStmt())
-		require.Equal(t, "SELECT FROM /* ? */", string(stmt.Statement))
-		stmt.FillRow(ctx, row)
-		for i, col := range motrace.SingleStatementTable.Columns {
-			if col.Name == "statement" {
-				require.Equal(t, "SELECT FROM /* ? */", row.ToStrings()[i])
+			for i, col := range motrace.SingleStatementTable.Columns {
+				switch col.Name {
+				case "statement":
+					require.Equal(t, tc.want, row.ToStrings()[i])
+				case "error":
+					require.Equal(t, recordErr.Error(), row.ToStrings()[i])
+					require.True(t, utf8.ValidString(row.ToStrings()[i]))
+				case "status":
+					require.Equal(t, "Failed", row.ToStrings()[i])
+				case "err_code":
+					require.Equal(t, fmt.Sprintf("%d", moerr.ErrParseError), row.ToStrings()[i])
+				}
 			}
-		}
-	})
+		})
+	}
 }
