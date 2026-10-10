@@ -101,7 +101,7 @@ select * from db1.t_columns order by id;
 1  ¦  100
 select column_name from information_schema.columns where table_schema = 'db1' and table_name = 't_columns' order by ordinal_position;
 ➤ column_name[12,256,0]  𝄀
-id
+id  𝄀
 amount
 select count(*) from information_schema.columns where table_schema = 'db1' and table_name = 't_hidden';
 ➤ count(*)[-5,64,0]  𝄀
@@ -109,7 +109,7 @@ select count(*) from information_schema.columns where table_schema = 'db1' and t
 set enable_remap_hint = 0;
 select column_name from information_schema.columns where table_schema = 'db1' and table_name = 't_columns' order by ordinal_position;
 ➤ column_name[12,256,0]  𝄀
-id
+id  𝄀
 amount
 create database db2;
 create table db2.t2(a int, age int);
