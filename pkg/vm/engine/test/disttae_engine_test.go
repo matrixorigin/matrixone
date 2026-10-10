@@ -545,8 +545,6 @@ func TestAlterTableBasic(t *testing.T) {
 
 func TestColumnsTransfer(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
-	dir := testutil.MakeDefaultTestPath("partition_state", t)
-	opts.Fs = objectio.TmpNewSharedFileservice(context.Background(), dir)
 	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
 	defer p.Close()
 	tae := p.T.GetDB()
@@ -598,8 +596,6 @@ func TestColumnsTransfer(t *testing.T) {
 
 func TestInProgressTransfer(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
-	dir := testutil.MakeDefaultTestPath("partition_state", t)
-	opts.Fs = objectio.TmpNewSharedFileservice(context.Background(), dir)
 	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
 	defer p.Close()
 	tae := p.T.GetDB()
