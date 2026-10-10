@@ -467,8 +467,9 @@ func (c *BlockScaledCell) Dequantize(dst []float32) {
 func (c *BlockScaledCell) DequantizeRange(off int, dst []float32) {
 	end := off + len(dst)
 	if c.Format == BlockScaledMXFP8 {
-		// vecf8 global is always 1 and block scales are powers of two >= 2^-127, so global*blockScale
-		// never underflows; the plain float32 path needs no underflow recovery.
+		// vecf8 global is always 1, block scales are powers of two >= 2^-127 and e4m3 values are
+		// multiples of 2^-9, so element*blockScale is a multiple of 2^-136: exact in float32 and equal
+		// to blockScaledElem, with no underflow recovery needed.
 		for lo := off; lo < end; lo += 32 {
 			scale := c.Global * e8m0Values[c.Scales[lo/32]]
 			d := dst[lo-off:]

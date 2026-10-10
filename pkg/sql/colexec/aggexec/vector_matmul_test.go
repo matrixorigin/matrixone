@@ -530,22 +530,23 @@ func TestVectorMatmulNullAndConstInputs(t *testing.T) {
 	require.Error(t, exec.Fill(0, 0, []*vector.Vector{one, bad}))
 }
 
-// An overflowing row (its float32 lanes reach +Inf and -Inf, so the dot is NaN) ranks
-// last; it is an error only when it reaches the result.
-func TestVectorMatmulOverflowRanksLast(t *testing.T) {
+// A row whose float32 products overflow but cancel scores its exact distance: the kernel
+// recomputes an overflowed lane sum in float64. A distance outside the float32 range is an
+// error when it reaches the result.
+func TestVectorMatmulLaneOverflowScoresExactDistance(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()) }()
 	const m = 3e38
 	big := make([]float32, 32)
-	query := make([]float32, 32)
+	alternating := make([]float32, 32)
 	for i := range big {
-		big[i], query[i] = m, m
+		big[i], alternating[i] = m, m
 		if i%2 == 1 {
-			query[i] = -m
+			alternating[i] = -m
 		}
 	}
 	vt := types.New(types.T_array_float8, 32, 0)
-	mk := func(topk int) *vectorMatmulExec {
+	mk := func(topk int, query []float32) *vectorMatmulExec {
 		q, _ := json.Marshal([][]float32{query})
 		exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vt})
 		require.NoError(t, err)
@@ -565,20 +566,25 @@ func TestVectorMatmulOverflowRanksLast(t *testing.T) {
 	}
 	defer vmFree(mp, []*vector.Vector{idv, vv})
 
-	top2 := mk(2)
-	defer top2.Free()
-	require.NoError(t, top2.BulkFill(0, []*vector.Vector{idv, vv}))
-	out := vmFlush(t, mp, top2)
+	// big . alternating cancels pairwise to 0; small . alternating is about -3e38
+	top3 := mk(3, alternating)
+	defer top3.Free()
+	require.NoError(t, top3.BulkFill(0, []*vector.Vector{idv, vv}))
+	out := vmFlush(t, mp, top3)
 	require.Len(t, out, 1)
 	var got [][][]any
 	require.NoError(t, json.Unmarshal([]byte(out[0]), &got))
+	require.Len(t, got[0], 3)
 	require.Equal(t, "1", got[0][0][0])
 	require.Equal(t, "2", got[0][1][0])
+	require.Equal(t, "0", got[0][2][0])
+	require.Equal(t, 0.0, got[0][2][1])
 
-	top3 := mk(3)
-	defer top3.Free()
-	require.NoError(t, top3.BulkFill(0, []*vector.Vector{idv, vv}))
-	_, err := top3.Flush()
+	// big . big is 32 * 3e38^2, beyond the float32 range
+	over := mk(1, big)
+	defer over.Free()
+	require.NoError(t, over.BulkFill(0, []*vector.Vector{idv, vv}))
+	_, err := over.Flush()
 	require.ErrorContains(t, err, "overflows the float32 domain")
 }
 

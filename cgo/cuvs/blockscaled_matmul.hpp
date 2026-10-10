@@ -109,10 +109,9 @@ __device__ inline double bsmm_elem(int format, const uint8_t* row, const uint8_t
 
 // bsmm_fixup_kernel turns the raw matmul output d (query major, M rows per query) into
 // rank scores in place, the negated distance of the metric (largest is nearest). For float
-// formats the inner product is d * float(g_row * g_query) in float, as cuBLASLt applies
-// alpha = G_a * G_b to a GEMM with per-tensor global scales; cosine and l2sq take the dot
-// product d * g_row * g_query in double, with the squared norms. Integer formats take the
-// int32 sums with the uint8
+// formats every metric takes the dot product d * g_row * g_query in double, so a product of
+// global scales outside the float range neither overflows nor flushes to zero; cosine and
+// l2sq combine it with the squared norms. Integer formats take the int32 sums with the uint8
 // shift correction. The rank is rounded once to float; NaN and padding rows r >= n are
 // -Inf. The cosine similarity is clamped to [-1, 1] and the squared L2 to >= 0, so no
 // distance is negative. A zero vector has cosine distance 1.
@@ -139,9 +138,7 @@ __global__ void bsmm_fixup_kernel(float* d, int kind, int metric, uint64_t M, ui
         } else {
             double dot;
             if (kind == 0) {
-                dot = metric == kMetricInnerProduct
-                          ? double(__fmul_rn(d[i], __fmul_rn(g_row[r], g_query[q])))
-                          : double(d[i]) * double(g_row[r]) * double(g_query[q]);
+                dot = double(d[i]) * double(g_row[r]) * double(g_query[q]);
             } else {
                 int64_t s = int64_t(__float_as_int(d[i]));
                 if (kind == 2) s += 128 * (sum_row[r] + sum_query[q]) + base;

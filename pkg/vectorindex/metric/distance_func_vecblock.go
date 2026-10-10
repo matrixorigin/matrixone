@@ -118,6 +118,14 @@ func VecBlockDot(x, y *VecBlockOperand) (float64, error) {
 	for i := units * vecBlockUnit; i < n; i++ {
 		r += x.at(i) * y.at(i)
 	}
+	// A unit accumulates in float32: a sum that overflows a lane is recomputed in float64,
+	// where the products of float32 values are always finite.
+	if units > 0 && !isFiniteF64(r) {
+		r = 0
+		for i := 0; i < n; i++ {
+			r += x.at(i) * y.at(i)
+		}
+	}
 	return r, nil
 }
 
@@ -145,6 +153,14 @@ func VecBlockL2DistanceSq(x, y *VecBlockOperand) (float64, error) {
 	for i := units * vecBlockUnit; i < n; i++ {
 		d := x.at(i) - y.at(i)
 		r += d * d
+	}
+	// A unit accumulates in float32: a sum that overflows a lane is recomputed in float64.
+	if units > 0 && !isFiniteF64(r) {
+		r = 0
+		for i := 0; i < n; i++ {
+			d := x.at(i) - y.at(i)
+			r += d * d
+		}
 	}
 	// as the float32 kernels: a sum beyond the float32 range is +Inf
 	if r > math.MaxFloat32 {
@@ -176,6 +192,13 @@ func VecBlockL1Distance(x, y *VecBlockOperand) (float64, error) {
 	}
 	for i := units * vecBlockUnit; i < n; i++ {
 		r += math.Abs(x.at(i) - y.at(i))
+	}
+	// A unit accumulates in float32: a sum that overflows a lane is recomputed in float64.
+	if units > 0 && !isFiniteF64(r) {
+		r = 0
+		for i := 0; i < n; i++ {
+			r += math.Abs(x.at(i) - y.at(i))
+		}
 	}
 	return r, nil
 }
@@ -225,23 +248,13 @@ func VecBlockCosineParts(x, y *VecBlockOperand) (dot, nx, ny float64, err error)
 	return dot, nx, ny, nil
 }
 
-// vecBlockNaNToPosInf maps a NaN distance to +Inf. A unit accumulates in float32 lanes:
-// finite products can overflow one lane to +Inf and another to -Inf, and their sum is
-// NaN. +Inf ranks the overflowing candidate last; a genuine +-Inf is left as is.
-func vecBlockNaNToPosInf(d float64) float64 {
-	if math.IsNaN(d) {
-		return math.Inf(1)
-	}
-	return d
-}
-
-// VecBlockInnerProduct returns the inner product distance -dot(x, y); NaN maps to +Inf.
+// VecBlockInnerProduct returns the inner product distance -dot(x, y).
 func VecBlockInnerProduct(x, y *VecBlockOperand) (float64, error) {
 	dot, err := VecBlockDot(x, y)
 	if err != nil {
 		return 0, err
 	}
-	return vecBlockNaNToPosInf(-dot), nil
+	return -dot, nil
 }
 
 // VecBlockCosineSimilarity returns dot/(|x|*|y|) clamped to [-1, 1]. A zero vector is an error.
@@ -283,7 +296,6 @@ func vecBlockRoundedToElemDomain(fn func(x, y *VecBlockOperand) (float64, error)
 }
 
 // VecBlockCosineDistance returns 1 - cosine similarity; 1 when either vector is zero.
-// NaN maps to +Inf.
 func VecBlockCosineDistance(x, y *VecBlockOperand) (float64, error) {
 	dot, nx, ny, err := VecBlockCosineParts(x, y)
 	if err != nil {
@@ -293,5 +305,5 @@ func VecBlockCosineDistance(x, y *VecBlockOperand) (float64, error) {
 	if den == 0 {
 		return 1, nil
 	}
-	return vecBlockNaNToPosInf(1 - max(-1, min(1, dot/den))), nil
+	return 1 - max(-1, min(1, dot/den)), nil
 }

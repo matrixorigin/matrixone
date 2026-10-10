@@ -73,25 +73,17 @@ reference produce for the same input:
   round-to-nearest-even with the CUDA tie and saturation rules: the float64 quotient
   cannot fall on an E2M1/E4M3 midpoint unless the exact quotient is that midpoint.
 - Encoding is deterministic: equal inputs give equal cells.
-- **Decoded value, CPU ≡ GPU.** A cell's element decodes to `element × blockScale × global`. When the
-  block scale `global × blockScale` is a **normal** float32 the decode is the plain float32 product.
-  When it is **subnormal** (a tiny global), folding it in float32 first is wrong twice over: the
-  per-element `element × scale` then rounds in the subnormal range, which can zero a representable value
-  **and** distort the decoded **direction** (e.g. `1.5·s → 2s` but `6·s → 6s`, decoding a 1:4 vector as
-  1:3). For a subnormal block scale the global is therefore applied in **float64** so `element ×
-  blockScale` stays in normal range first — matching the GPU, which keeps `element × blockScale` in
-  float and applies the global in double on the row norm. So the decoded value — its magnitude, its
-  zero/nonzero classification, and the vector's direction — is a property of the cell, agreed on the
-  CPU and the tensor cores within tolerance and not an artifact of which executor runs (self cosine
-  distance is 1 for the zero vector, ~0 for a nonzero one). This is a decode-value rule at the type
-  owner, not a per-query fallback. Every CPU consumer applies it: `At`, `Dequantize`, and the generated
-  full-unit metric kernels, which decode a vecf4 unit whose `global × blockScale` is below the float32
-  normal range through `At` (`TestVecBlockMetricsUseAtDecode`; BVT `dtype/vecblock`). The agreement domain is every
-  value representable as a float32 — which is every encoder-produced cell, since the encoder's inputs
-  and outputs are float32 (nonzero magnitudes are ≥ 2^-149). A hand-built cell whose fully-scaled
-  value is **below** float32 range (e.g. 2^-159) correctly rounds to 0 on the CPU (it returns one
-  float32 per element) while the tensor path, applying the global in double on the row norm, may keep
-  it nonzero: a float32 representability boundary, not reachable from encoded data, not a decode error.
+- **Decoded value.** A cell's element decodes to `element × blockScale × global`. The CPU
+  returns one float32 per element (`blockScaledElem`, applied by `At`, `Dequantize` and the
+  generated full-unit metric kernels, `TestVecBlockMetricsUseAtDecode`): the float32 product
+  `element × (global × blockScale)` when `global × blockScale` is a normal float32, and the
+  float64 product rounded once when it is subnormal (a tiny vecf4 global), so `element ×
+  blockScale` is not rounded in the subnormal range first. The GPU multiplies `element ×
+  blockScale` on the tensor cores and applies the global scales in double. CPU and GPU agree on
+  the decoded vector when every nonzero decoded value is at least 2^-126 (a normal float32).
+  Below that the CPU rounds each value to the float32 subnormal grid: a vecf4 vector whose
+  largest magnitude is below 2688 × 2^-150 is stored with the global 2^-149, its values (for
+  example 7.5 × 2^-149) round on the CPU (to 8 × 2^-149), and its direction can change.
 
 ## Cell format
 
@@ -247,18 +239,20 @@ Device kernels around the matmul, on the engine's stream:
   rescale launch. Measured alternatives: float accumulation and 16-byte vector loads were
   not faster; a thread per row is 2–3× slower above 768 elements.
 - A fix-up kernel turns the matmul output into rank scores. The inner product is
-  `acc × fp32(g_row × g_query)` in fp32, as cuBLASLt applies `alpha = G_a × G_b` to a GEMM
-  with per-tensor global scales; cosine and squared L2 take the dot product with the
-  global scales in double, with the squared norms: `1 − x·q / (|x||q|)` and
+  `acc × g_row × g_query` in double for every metric, so a product of global scales outside the
+  float range neither overflows nor flushes to zero; cosine and squared L2 combine it with the
+  squared norms: `1 − x·q / (|x||q|)` and
   `|x|² + |q|² − 2·x·q` (integer formats take the corrected int64 sums, which are exact).
   The rank is rounded once to
   fp32; −Inf for NaN and for the padding rows. A zero vector has cosine distance 1, as
   `cosine_distance` returns.
 - With one global scale for all rows and one for all queries, the cells are exactly
-  NVIDIA's NVFP4 / MXFP8 operands, and the inner-product scores equal a direct cuBLASLt
-  block-scaled GEMM on the same bytes bit for bit at the same GEMM shape (another shape
-  can select another cuBLASLt algorithm and fp32 summation order);
-  `MatchesNvidiaBlockScaledGemm` in `cgo/cuvs/test/blockscaled_matmul_test.cu` checks it.
+  NVIDIA's NVFP4 / MXFP8 operands. At the same GEMM shape the inner-product scores equal a
+  direct cuBLASLt block-scaled GEMM on the same bytes bit for bit for MXFP8 (global scales 1)
+  and within 2 ulp for NVFP4, whose GEMM applies `alpha = G_a × G_b` in fp32 where the engine
+  applies the global scales in double; another shape can select another cuBLASLt algorithm and
+  fp32 summation order. `MatchesNvidiaBlockScaledGemm` in `cgo/cuvs/test/blockscaled_matmul_test.cu`
+  checks it.
 
 Two ways to read a tile's scores, both after the fix-up kernel:
 
@@ -297,7 +291,7 @@ cuBLASLt call sequence:
 | 4 | `cublasLtMatrixLayoutCreate` | A: element type, K × rows(D), ld = K; B: K × rows(Q), ld = K; D: `CUDA_R_32F` (`CUDA_R_32I` for integer formats), rows(D) × rows(Q) |
 | 5 | `cublasLtMatmulPreferenceCreate` / `SetAttribute` | workspace limit (32 MiB) |
 | 6 | `cublasLtMatmulAlgoGetHeuristic` | at construction, for each tile row bucket (128 × 2^i up to the tile capacity); a bucket without an algorithm fails the engine's creation |
-| 7 | `cublasLtMatmul` | alpha = 1, beta = 0, the bucket's cached algorithm; the per-vector `g` of row and query is applied by the fix-up kernel, in fp32 for the inner product and in double for cosine and squared L2 (plain formats have `g` = 1) |
+| 7 | `cublasLtMatmul` | alpha = 1, beta = 0, the bucket's cached algorithm; the per-vector `g` of row and query is applied by the fix-up kernel in double (plain formats have `g` = 1) |
 
 Contract (each point measured on sm_120 with cuBLASLt 13.6):
 
@@ -319,9 +313,9 @@ Contract (each point measured on sm_120 with cuBLASLt 13.6):
   The engine writes each row's scales to these offsets on the host while packing the tile.
 - **K padding.** The dimension is padded with zero elements to a multiple of 32 (NVFP4 at
   K = 48 has no algorithm; 32, 96, 512, 768, 1536 run). Storage keeps the true `N`.
-- **Precision.** Against a double-precision CPU reference: MXFP8 relative error ≤ 1e-6,
-  NVFP4 exact, at fp32 output; `vecint8`/`vecuint8` exact; `vecf32`/`vecf16`/`vecbf16`
-  within fp32 summation-order tolerance.
+- **Precision.** Against a double-precision reference over the dequantized values, both
+  block-scaled formats are within `1e-5 × max(1, Σ|xᵢqᵢ|)` (`check_engine`); `vecint8`/`vecuint8`
+  are exact; `vecf32`/`vecf16`/`vecbf16` are within fp32 summation-order tolerance.
 
 Engine state, per `vector_matmul` executor: a CUDA stream, the cuBLASLt handle and
 workspace, the queries on the device, and host and device buffers for one tile. No
@@ -426,11 +420,12 @@ folds into float64; elements past the last full unit take a per-element path.
 
 Parsing a cell (header and validation) adds 52 ns for `vecf4` and 186 ns for `vecf8`.
 
-Overflow: a unit accumulates in float32 lanes, so finite products can overflow one lane
-to +Inf and another to −Inf, whose sum is NaN. Following the metric package's
-non-finite contract, the inner product and cosine distances map NaN to +Inf (the largest
-distance); L2 and L1 are sums of non-negative terms and cannot produce NaN. The SQL
-functions report any non-finite result as an overflow error.
+Overflow: a unit accumulates in float32 lanes, so finite products can overflow a lane. Every
+metric then recomputes the distance in float64 over the decoded values (the cosine parts also
+when a squared norm underflows), where the products of float32 values are finite
+(`TestVecBlockLaneOverflowRecomputesInFloat64`). A non-finite result therefore means the
+distance itself is outside the float32 range; the SQL functions report it as an overflow
+error.
 
 ### Batch nearest-neighbour search
 
@@ -498,7 +493,7 @@ kernel (`metric.ResolveDistanceFn`) for the other types, as `inner_product`,
 function on the same row and query, including the float64 cosine recompute and the
 squared L2 of differences. The GPU's cosine and squared L2 are those of the fp32 GEMM
 expansion (see Decisions): within fp32 summation-order tolerance of the scalar function,
-relative to the squared norms. An overflowing score (NaN) ranks last; a non-finite score in
+relative to the squared norms. A GPU score that is NaN (an fp32 GEMM overflow) ranks last; a non-finite score in
 the result is an overflow error, since JSON has no infinity.
 
 #### Result format
@@ -670,10 +665,20 @@ within the fp32 GEMM's tolerance, rows closer than it in either order.
   the C API and its errors (an unknown metric included); the device baseline (compute capability 7–9 rejected, 10–12 accepted), the
   eligible-device count against the visible devices, and `host_bytes` for two shapes
   computed by hand.
-- **GPU binding** (`pkg/cuvs/blockscaled_matmul_test.go`): engine scores equal the CPU
-  kernel (`VecBlockDot`) over the same cells for both formats, dimensions 4–768, 1 and 5
-  queries; `RunTopK` against `Run` for MXFP8, NVFP4, int8 and uint8, including tied
-  queries; buffer and argument errors.
+- **GPU binding** (`pkg/cuvs/blockscaled_matmul_test.go`): engine scores within
+  `1e-4 × max(1, |score|)` of the CPU kernel (`VecBlockDot`) over the same cells for both
+  formats, dimensions 4–768, 1 and 5 queries; `RunTopK` against `Run` for MXFP8, NVFP4, int8
+  and uint8, including tied queries; buffer and argument errors.
+  `TestBlockScaledMatmulAgreesAcrossMagnitudes`: encoder-produced cells with element
+  magnitudes from 1e-41 to 1e36 (a query equal to a row included) and hand-built cells (vecf4
+  with a subnormal `global × blockScale`, vecf4 global scales whose float product overflows,
+  vecf8 with E8M0 codes 0–120 and E4M3 subnormal elements), inner product, cosine and squared
+  L2 from the engine and from the CPU functions against the exact float64 distance. Where every
+  nonzero decoded value is a normal float32: an exact distance in the float32 normal range is
+  matched by both (inner product within `1e-4 × Σ|xᵢqᵢ|`, squared L2 within `1e-4` of the
+  squared norms, cosine within `1e-4`); above the range both are infinite; below it both are
+  under 2^-100. Squared L2 of a row and an equal query is the GEMM expansion near 0 (see
+  Decisions) and is not compared.
 - **GPU aggregate** (`aggexec/vector_matmul_gpu_test.go`): the executor with `gpu_mode`
   on and off over the same rows — one group (GPU top-k) and three groups (full scores),
   tiles drained mid-batch, a merge from an executor whose rows are still in its tile, an
