@@ -216,6 +216,15 @@ var (
 	FSCachePressureMetaEvictCounter   = fsCachePressureCounter.WithLabelValues("meta", "evict")
 	FSCachePressureMemorySkipCounter  = fsCachePressureCounter.WithLabelValues("memory", "admission-skip")
 	FSCachePressureMetaSkipCounter    = fsCachePressureCounter.WithLabelValues("meta", "admission-skip")
+
+	fsCachePressureEvictedBytesCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "cache_pressure_evicted_bytes_total",
+			Help:      "Total physical cache bytes removed by pressure eviction.",
+		}, []string{"component"})
+	FSCachePressureMemoryEvictedBytesCounter = fsCachePressureEvictedBytesCounter.WithLabelValues("memory")
 )
 
 var (

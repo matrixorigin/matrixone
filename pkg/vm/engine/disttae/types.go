@@ -202,6 +202,12 @@ func WithExtraWorkspaceThreshold(th uint64) EngineOptions {
 	}
 }
 
+func WithMemoryReclamationMode(mode rscthrottler.ReclamationMode) EngineOptions {
+	return func(e *Engine) {
+		e.config.memoryReclamationMode = mode
+	}
+}
+
 func WithInsertEntryMaxCount(th int) EngineOptions {
 	return func(e *Engine) {
 		e.config.insertEntryMaxCount = th
@@ -273,6 +279,7 @@ type Engine struct {
 		writeWorkspaceThreshold  uint64
 		extraWorkspaceThreshold  uint64
 		quota                    atomic.Uint64
+		memoryReclamationMode    rscthrottler.ReclamationMode
 
 		memThrottler rscthrottler.RSCThrottler
 
