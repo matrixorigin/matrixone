@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -304,6 +305,12 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 			"create account schema_subscriber admin_name 'root' identified by 'test123'",
 			"create database schema_publisher",
 			"create table schema_publisher.source (id int)",
+			// Publisher database names can coincide with a subscriber-local alias.
+			"create database subscribed",
+			"create table subscribed.collision_source (id int)",
+			"create table schema_publisher.collision_source (id varchar(30))",
+			"create database schema_other",
+			"create table schema_other.collision_source (id int)",
 		} {
 			_, err := system.ExecContext(ctx, query)
 			require.NoError(t, err, query)
@@ -313,10 +320,26 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 		require.NoError(t, err)
 		_, err = publisher.ExecContext(ctx, "create view qualified as select id from schema_publisher.source")
 		require.NoError(t, err)
+		for _, query := range []string{
+			"create view v_collision as select id from subscribed.collision_source",
+			"create view v_nested as select id from schema_publisher.v_collision",
+			"create view v_other as select id from schema_other.collision_source",
+			"create view v_other_nested as select id from schema_publisher.v_other",
+		} {
+			_, err = publisher.ExecContext(ctx, query)
+			require.NoError(t, err, query)
+		}
+		collisionCreator := openNativeViewSchemaSQL(t, ctx, cn, "dump:111", "subscribed")
+		_, err = collisionCreator.ExecContext(ctx, "create view schema_publisher.v_saved_collision as select id from collision_source")
+		require.NoError(t, err)
 		_, err = system.ExecContext(ctx, "create publication schema_publication database schema_publisher account schema_subscriber")
 		require.NoError(t, err)
 		subscriber := openNativeViewSchemaSQL(t, ctx, cn, "schema_subscriber#root#accountadmin:test123", "")
 		_, err = subscriber.ExecContext(ctx, "create database subscribed from sys publication schema_publication")
+		require.NoError(t, err)
+		_, err = subscriber.ExecContext(ctx, "create database schema_other")
+		require.NoError(t, err)
+		_, err = subscriber.ExecContext(ctx, "create table schema_other.collision_source (id varchar(30))")
 		require.NoError(t, err)
 		var account uint32
 		require.NoError(t, system.QueryRowContext(ctx, "select account_id from mo_catalog.mo_account where account_name = 'schema_subscriber'").Scan(&account))
@@ -327,6 +350,10 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 		var baseline nativeViewSchemaValue
 		withNativeViewSchemaRead(t, tenantCtx, cn, svc, "subscribed", tenant, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) {
 			historical = op.SnapshotTS()
+			// Even an inherited active subscription cannot turn the entry alias
+			// into a publisher SQL identifier. Keep the two phases explicit.
+			inherited := &pb.SubscriptionMeta{AccountId: int32(catalog.System_Account), DbName: "schema_publisher", SubName: "subscribed", Tables: "*"}
+			compiler.SetQueryingSubscription(inherited)
 			generation, err := proc.GetExecutionResourceBudget()
 			require.NoError(t, err)
 			beforeUsed := generation.Used()
@@ -336,6 +363,28 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 			baseline = describeNativeViewSchema(t, request, "subscribed", "published", nil)
 			require.Len(t, baseline.columns, 1)
 			require.Equal(t, baseline, describeNativeViewSchema(t, request, "subscribed", "published", nil))
+			for _, test := range []struct{ view, sourceDatabase string }{
+				{"v_collision", "subscribed"}, {"v_nested", "subscribed"},
+				{"v_saved_collision", "subscribed"}, {"v_other", "schema_other"},
+				{"v_other_nested", "schema_other"},
+			} {
+				t.Run(test.view, func(t *testing.T) {
+					for i := 0; i < 2; i++ {
+						value := describeNativeViewSchema(t, request, "subscribed", test.view, nil)
+						require.Len(t, value.columns, 1)
+						require.Equal(t, int32(types.T_int32), value.columns[0].Typ.Id)
+						found := false
+						for _, dependency := range value.dependencies {
+							if dependency.RelationName == "collision_source" {
+								require.Equal(t, uint32(catalog.System_Account), dependency.AccountID)
+								require.Equal(t, test.sourceDatabase, dependency.DatabaseName)
+								found = true
+							}
+						}
+						require.True(t, found)
+					}
+				})
+			}
 			qualified := describeNativeViewSchema(t, request, "subscribed", "qualified", nil)
 			require.Len(t, qualified.columns, 1)
 			require.Equal(t, "id", qualified.columns[0].Name)
@@ -344,6 +393,7 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 				require.Equal(t, "subscribed", dependency.SubscriptionName)
 			}
 			request.Close()
+			require.Same(t, inherited, compiler.GetQueryingSubscription())
 			afterStamp, afterRevision := nativeViewSchemaStamp(t, op)
 			require.Equal(t, beforeStamp, afterStamp)
 			require.Equal(t, beforeRevision, afterRevision)

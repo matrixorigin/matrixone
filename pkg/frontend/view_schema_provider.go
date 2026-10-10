@@ -340,6 +340,12 @@ func (c *viewSchemaCompilerContext) CheckTimeStampValid(ts int64) (bool, error) 
 	return execResultArrayHasData(results), err
 }
 
+// ResolveViewSchemaRoot uses the caller's normal subscription lookup. Database
+// names in this entry-point namespace are not names in persisted publisher SQL.
+func (c *viewSchemaCompilerContext) ResolveViewSchemaRoot(database, table string, snapshot *plan.Snapshot) (*pb.ObjectRef, *pb.TableDef, error) {
+	return c.TxnCompilerContext.Resolve(database, table, snapshot)
+}
+
 // Resolve keeps every View source lookup in the publisher's catalog domain,
 // including databases other than the publication database. Ordinary Resolve
 // only switches tenants when the database itself is a subscription.
@@ -347,9 +353,6 @@ func (c *viewSchemaCompilerContext) Resolve(database, table string, snapshot *pl
 	sub := c.GetQueryingSubscription()
 	if sub == nil {
 		return c.TxnCompilerContext.Resolve(database, table, snapshot)
-	}
-	if database == sub.SubName {
-		database = sub.DbName
 	}
 	previous := c.GetContext()
 	c.SetContext(defines.AttachAccountId(previous, uint32(sub.AccountId)))
@@ -409,9 +412,6 @@ func (c *viewSchemaCompilerContext) GetDatabaseId(name string, snapshot *plan.Sn
 	if sub == nil {
 		return c.TxnCompilerContext.GetDatabaseId(name, snapshot)
 	}
-	if name == sub.SubName {
-		name = sub.DbName
-	}
 	previous := c.GetContext()
 	c.SetContext(defines.AttachAccountId(previous, uint32(sub.AccountId)))
 	defer c.SetContext(previous)
@@ -422,9 +422,6 @@ func (c *viewSchemaCompilerContext) ResolveViewUdf(name string, args []*pb.Expr,
 	sub := c.GetQueryingSubscription()
 	if sub == nil {
 		return c.TxnCompilerContext.ResolveViewUdf(name, args, database)
-	}
-	if database == sub.SubName {
-		database = sub.DbName
 	}
 	previous := c.GetContext()
 	c.SetContext(defines.AttachAccountId(previous, uint32(sub.AccountId)))

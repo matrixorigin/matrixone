@@ -43,9 +43,6 @@ func viewSchemaSubscriptionContext(ctx context.Context, obj *ObjectRef, previous
 			SubName: obj.SubscriptionName, Tables: pubsub.TableAll,
 		}
 	}
-	if defaultDatabase == obj.SchemaName {
-		defaultDatabase = obj.SubscriptionName
-	}
 	return subscription, defaultDatabase, nil
 }
 
@@ -92,6 +89,25 @@ func (c *viewSchemaCompiler) Resolve(database, name string, snapshot *Snapshot) 
 		return nil, nil, err
 	}
 	obj, def, err := c.CompilerContext.Resolve(database, name, snapshot)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c.record(obj, def, snapshot, database, name)
+}
+
+// resolveRoot distinguishes the subscriber entry-point name from names inside
+// persisted publisher SQL. Both paths retain the same admission and capture.
+func (c *viewSchemaCompiler) resolveRoot(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	root, ok := c.CompilerContext.(interface {
+		ResolveViewSchemaRoot(string, string, *Snapshot) (*ObjectRef, *TableDef, error)
+	})
+	if !ok {
+		return c.Resolve(database, name, snapshot)
+	}
+	if err := c.state.request.check(); err != nil {
+		return nil, nil, err
+	}
+	obj, def, err := root.ResolveViewSchemaRoot(database, name, snapshot)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -199,7 +215,7 @@ func (s *viewSchemaDerivation) describe(database, name string, snapshot *Snapsho
 	if snapshot == nil {
 		snapshot = s.compiler.GetSnapshot()
 	}
-	obj, def, err := s.compiler.Resolve(database, name, snapshot)
+	obj, def, err := s.compiler.resolveRoot(database, name, snapshot)
 	if err != nil {
 		return nil, err
 	}

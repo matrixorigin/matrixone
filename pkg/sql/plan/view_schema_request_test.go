@@ -896,7 +896,10 @@ func TestViewSchemaSubscriptionContextRequiresMatchingIdentity(t *testing.T) {
 	}
 	_, database, err := viewSchemaSubscriptionContext(t.Context(), obj, nil, "pub")
 	require.NoError(t, err)
-	require.Equal(t, "sub", database)
+	require.Equal(t, "pub", database, "creation database stays in the publisher namespace")
+	_, database, err = viewSchemaSubscriptionContext(t.Context(), obj, nil, "sub")
+	require.NoError(t, err)
+	require.Equal(t, "sub", database, "same-spelling publisher database is not a subscriber alias here")
 	obj.SchemaName = ""
 	_, _, err = viewSchemaSubscriptionContext(t.Context(), obj, nil, "")
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))

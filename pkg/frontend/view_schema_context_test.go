@@ -90,12 +90,12 @@ func TestViewSchemaSubscriptionDatabaseLookupRestoresContext(t *testing.T) {
 		cancel       bool
 		plain        bool
 	}{
-		{name: "current alias", database: "sub", wantDatabase: "pub"},
+		{name: "current publisher alias-named database", database: "sub", wantDatabase: "sub"},
 		{name: "current qualified publisher", database: "pub", wantDatabase: "pub"},
-		{name: "historical alias", database: "sub", wantDatabase: "pub", historical: true},
+		{name: "historical publisher alias-named database", database: "sub", wantDatabase: "sub", historical: true},
 		{name: "historical qualified publisher", database: "pub", wantDatabase: "pub", historical: true},
-		{name: "catalog error", database: "sub", wantDatabase: "pub", historical: true, failure: true},
-		{name: "cancel during catalog read", database: "sub", wantDatabase: "pub", historical: true, cancel: true},
+		{name: "catalog error", database: "sub", wantDatabase: "sub", historical: true, failure: true},
+		{name: "cancel during catalog read", database: "sub", wantDatabase: "sub", historical: true, cancel: true},
 		{name: "ordinary lookup", database: "ordinary", wantDatabase: "ordinary", plain: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -190,8 +190,8 @@ func TestViewSchemaSubscriptionSourceResolveUsesPublisherAccount(t *testing.T) {
 	}{
 		{name: "current cross database", database: "other", wantDatabase: "other"},
 		{name: "historical cross database", database: "other", wantDatabase: "other", historical: true},
-		{name: "current alias", database: "sub", wantDatabase: "pub"},
-		{name: "historical alias", database: "sub", wantDatabase: "pub", historical: true},
+		{name: "current publisher alias-named database", database: "sub", wantDatabase: "sub"},
+		{name: "historical publisher alias-named database", database: "sub", wantDatabase: "sub", historical: true},
 		{name: "catalog error", database: "other", wantDatabase: "other", historical: true, failure: true},
 		{name: "cancel during source read", database: "other", wantDatabase: "other", historical: true, cancel: true},
 		{name: "ordinary current source", database: "other", wantDatabase: "other", plain: true},
