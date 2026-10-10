@@ -599,8 +599,9 @@ UT_HARD_TIMEOUT ?= 120m
 # Emit one bounded progress heartbeat per interval while UT is running.
 UT_HEARTBEAT_INTERVAL ?= 60
 # Build embedded race binaries with one compiler while the exclusive issues
-# fixture runs, then execute those exact binaries serially. Build or admission
-# failures fall back before any prebuilt binary executes.
+# fixture runs, then execute those exact binaries through the bounded embedded
+# pool. High-footprint packages remain exclusive; build or admission failures
+# fall back before any prebuilt binary executes.
 UT_PREBUILD_EMBEDDED ?= 1
 UT_PREBUILD_MIN_FREE_KB ?= 6291456
 UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
