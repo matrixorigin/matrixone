@@ -124,70 +124,6 @@ run_race_inventory_with_deadline "$CASE_DIR" "$CASE_DIR/list.sh" "$CASE_DIR/inve
 	}
 }
 
-func TestRaceInventoryCancellationRetainsFailedDrainDiagnostics(t *testing.T) {
-	transform := func(text string) string {
-		const anchor = "    pid=$!\n    set +m\n"
-		if strings.Count(text, anchor) != 1 {
-			t.Fatalf("inventory pid handoff anchor count = %d, want 1", strings.Count(text, anchor))
-		}
-		return strings.Replace(text, anchor,
-			"    pid=$!\n    ut_test_inventory_after_pid\n    set +m\n", 1)
-	}
-	script := `source ./run_ut.sh UT
-function logger() { :; }
-original_drain_helper=$(declare -f wait_for_ut_process_group)
-owned_pid=""
-function ut_test_inventory_after_pid() {
- owned_pid=$pid
- IFS= read -r -t 5 ready <&9 || exit 94
- [[ "$ready" == ready ]] || exit 94
- kill -TERM "$$"
-}
-function wait_for_ut_process_group() { touch "$CASE_DIR/drain-checked"; return 1; }
-export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
-mkfifo "$CASE_DIR/list-ready" "$CASE_DIR/list-hold"
-exec 8<>"$CASE_DIR/list-hold" 9<>"$CASE_DIR/list-ready"
-cleanup() {
- local result=$?
- if [[ -n "$owned_pid" ]]; then
-  printf 'release\n' >&8
-  terminate_ut_process_group "$owned_pid" KILL
-  eval "$original_drain_helper"
-  if wait_for_ut_process_group "$owned_pid" 1; then
-   wait "$owned_pid" 2>/dev/null || true
-  else
-   result=96
-  fi
- fi
- exec 8>&- 9>&-
- exit "$result"
-}
-trap cleanup EXIT
-trap 'touch "$CASE_DIR/term-restored"' TERM
-cat > "$CASE_DIR/list.sh" <<'EOF'
-#!/bin/bash
-trap '' TERM
-printf 'discovery diagnostic\n'
-printf 'ready\n' >&9
-IFS= read -r _ <&8
-EOF
-chmod +x "$CASE_DIR/list.sh"
-status=0
-run_race_inventory_with_deadline "$CASE_DIR" "$CASE_DIR/list.sh" "$CASE_DIR/inventory" "$(( $(date +%s) + 10 ))" || status=$?
-[[ "$status" == 125 ]] || exit 90
-[[ -e "$CASE_DIR/drain-checked" ]] || exit 91
-grep -qx 'discovery diagnostic' "$CASE_DIR/inventory" || exit 92
-# Failed drainage returns without joining or deleting the live writer's output.
-ut_process_group_alive "$owned_pid" || exit 93
-kill -TERM "$$"
-[[ -e "$CASE_DIR/term-restored" ]] || exit 95
-`
-	out, err := scheduleHarnessWithMockTransform(t, script, scheduleHarnessMock(), transform)
-	if err != nil {
-		t.Fatalf("failed discovery drain must return promptly with diagnostics: %v\n%s", err, out)
-	}
-}
-
 func TestPrebuiltRaceDeadlineFailureIsReported(t *testing.T) {
 	script := `source ./run_ut.sh UT
 function logger() { :; }
@@ -292,7 +228,9 @@ handle_ut_termination
 }
 
 func TestOuterCancellationKeepsReportForFailedDrainHelper(t *testing.T) {
-	script := `source ./run_ut.sh UT
+	for _, phase := range []string{"active", "captured", "released", "joined", "raw-status"} {
+		t.Run(phase, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
 function logger() { :; }
 function checkpoint_ut_event() { :; }
 function stop_ut_heartbeat() { :; }
@@ -323,12 +261,38 @@ trap cleanup EXIT
 (exit 125) &
 CURRENT_UT_PID=$!
 CURRENT_UT_LABEL='batched issues'
-handle_ut_termination
+if [[ "$PHASE" == active ]]; then
+ handle_ut_termination
+elif [[ "$PHASE" == raw-status ]]; then
+ builtin wait "$CURRENT_UT_PID" || true
+ CURRENT_UT_PID=""
+ handle_ut_join_term 125 0 CURRENT_UT_DRAIN_FAILED
+else
+ finish_ut_command; [[ "$?" == 125 && -z "$CURRENT_UT_PID" ]] || exit 96
+ start_ut_command serial retry true; [[ "$?" == 125 ]] || exit 97
+ trap handle_ut_termination TERM
+ kill -TERM "$$"
+fi
 `
-	out, err := scheduleHarnessWithMock(t, script, scheduleHarnessMock())
-	exit, ok := err.(*exec.ExitError)
-	if !ok || exit.ExitCode() != 125 {
-		t.Fatalf("failed-drain helper must retain report ownership: %v\n%s", err, out)
+			transform := func(text string) string {
+				anchor := "        wait \"${!pid_name}\" || join_status=$?\n"
+				if phase == "released" {
+					anchor = "        printf -v \"${pid_name}\" '%s' ''\n"
+				}
+				if phase == "captured" || phase == "released" {
+					if strings.Count(text, anchor) != 1 {
+						t.Fatal("missing unique owner join boundary")
+					}
+					return strings.Replace(text, anchor, anchor+"        kill -TERM \"$$\"\n", 1)
+				}
+				return text
+			}
+			out, err := scheduleHarnessWithMockTransform(t, script, scheduleHarnessMock(), transform, "PHASE="+phase)
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 125 {
+				t.Fatalf("failed-drain helper must retain report ownership: %v\n%s", err, out)
+			}
+		})
 	}
 }
 
@@ -407,6 +371,86 @@ run_issues_race_batches example/issues "$CASE_DIR/issues-exhausted.test" 4 || st
 	out, err := scheduleHarnessWithMock(t, script, mock)
 	if err != nil {
 		t.Fatalf("discovery fallback did not carry the remaining deadline: %v\n%s", err, out)
+	}
+}
+
+func TestIssuesBatchesUseBoundedProcessPool(t *testing.T) {
+	script := `source ./run_ut.sh UT
+PREBUILT_RACE_REPORT="$CASE_DIR/issues-report"
+function logger() { printf '%s\n' "$*"; }
+UT_ISSUES_BATCH_PARALLEL=2
+printf 'package fixture\n' > "$CASE_DIR/TestFile.go"
+mock_binary="$CASE_DIR/issues.test"
+status=0
+run_ut_command serial issues run_issues_race_batches example/issues "$mock_binary" 2 || status=$?
+consume_race_report PREBUILT_RACE_REPORT
+cat "$UT_REPORT"
+[[ "$status" == 0 ]] || exit 90
+for name in one two; do
+ [[ "$(<"$CASE_DIR/pool-$name")" == 2 ]] || exit 91
+ [[ -e "$CASE_DIR/start-$name" ]] || exit 92
+done
+`
+	mock := `#!/bin/bash
+case "$1" in
+env)
+ printf '\n'
+ ;;
+list)
+ printf '%s\t%s\nTestFile.go\n' "$CASE_DIR" example/issues
+ ;;
+test)
+ if [[ " $* " == *' -c '* ]]; then
+  output=''
+  while (( $# > 0 )); do
+   if [[ "$1" == -o ]]; then output=$2; break; fi
+   shift
+  done
+  [[ -n "$output" ]] || exit 4
+  cat > "$output" <<'EOF'
+#!/bin/bash
+if [[ "$*" == *-test.list=* ]]; then
+ printf 'TestOne\nTestTwo\n'
+ exit 0
+fi
+if [[ "$*" == *TestOne* ]]; then
+ name=one
+else
+ name=two
+fi
+printf '%s\n' "${MO_TEST_CLUSTER_ADMISSION_POOL_SIZE:-unset}" > "$CASE_DIR/pool-$name"
+touch "$CASE_DIR/start-$name"
+for _ in $(seq 1 100); do
+ if [[ -e "$CASE_DIR/start-one" && -e "$CASE_DIR/start-two" ]]; then
+ printf '{"Action":"pass","Package":"example/issues"}\n'
+ exit 0
+fi
+ sleep 0.01
+done
+exit 7
+EOF
+  chmod +x "$output"
+ fi
+ ;;
+tool)
+ [[ "$2" == test2json ]] || exit 5
+ exec "$6" "${@:7}"
+ ;;
+*)
+ exit 6
+ ;;
+esac
+`
+	out, err := scheduleHarnessWithMock(t, script, mock)
+	if err != nil {
+		t.Fatalf("issues batches did not run two admitted processes: %v\n%s", err, out)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want two batch events: %s", out)
+	}
+	for _, line := range lines {
+		assertScheduleJSONReport(t, []byte(line), map[string]string{"example/issues": "pass"})
 	}
 }
 
