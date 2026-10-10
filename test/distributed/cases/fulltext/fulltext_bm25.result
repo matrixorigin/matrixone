@@ -237,11 +237,11 @@ Project
 desc src;
 Field    Type    Null    Key    Default    Extra    Comment
 id    BIGINT(64)    NO    PRI    null        
-body    VARCHAR(65535)    YES    MUL    null        
+body    VARCHAR(16383)    YES    MUL    null        
 title    TEXT    YES        null        
 show create table src;
 Table    Create Table
-src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`body`,`title`),\n FULLTEXT `ftidx2`(`body`)\n)
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(16383) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`body`,`title`),\n FULLTEXT `ftidx2`(`body`)\n)
 drop table src;
 create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2));
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
@@ -321,10 +321,10 @@ desc src;
 Field    Type    Null    Key    Default    Extra    Comment
 id    BIGINT(64)    NO    PRI    null        
 json1    TEXT    YES    MUL    null        
-json2    VARCHAR(65535)    YES        null        
+json2    VARCHAR(16383)    YES        null        
 show create table src;
 Table    Create Table
-src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` text DEFAULT NULL,\n  `json2` varchar(65535) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`json1`) WITH PARSER json,\n FULLTEXT `ftidx2`(`json1`,`json2`) WITH PARSER json\n)
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` text DEFAULT NULL,\n  `json2` varchar(16383) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`json1`) WITH PARSER json,\n FULLTEXT `ftidx2`(`json1`,`json2`) WITH PARSER json\n)
 drop table src;
 create table src (id bigint primary key, body varchar, title text, FULLTEXT(title, body));
 insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
@@ -434,11 +434,11 @@ count(*)
 desc src;
 Field    Type    Null    Key    Default    Extra    Comment
 id    BIGINT(64)    NO    PRI    null        
-body    VARCHAR(65535)    YES        null        
+body    VARCHAR(16383)    YES        null        
 title    TEXT    YES    MUL    null        
 show create table src;
 Table    Create Table
-src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`title`,`body`)\n)
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(16383) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`title`,`body`)\n)
 drop table src;
 create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2), FULLTEXT(body, title));
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
@@ -459,13 +459,13 @@ id2    2    blue    t3    0.09538849
 id3    3    blue red    t4    0.07879918
 desc src2;
 Field    Type    Null    Key    Default    Extra    Comment
-id1    VARCHAR(65535)    NO    PRI    null        
+id1    VARCHAR(16383)    NO    PRI    null        
 id2    BIGINT(64)    NO    PRI    null        
 body    CHAR(128)    YES    MUL    null        
 title    TEXT    YES        null        
 show create table src2;
 Table    Create Table
-src2    CREATE TABLE `src2` (\n  `id1` varchar(65535) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT (`body`,`title`)\n)
+src2    CREATE TABLE `src2` (\n  `id1` varchar(16383) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT (`body`,`title`)\n)
 drop table src2;
 create table src (id bigint primary key, json1 json, json2 json, FULLTEXT(json1) with parser json);
 insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
@@ -521,10 +521,10 @@ desc src;
 Field    Type    Null    Key    Default    Extra    Comment
 id    BIGINT(64)    NO    PRI    null        
 json1    TEXT    YES    MUL    null        
-json2    VARCHAR(65535)    YES        null        
+json2    VARCHAR(16383)    YES        null        
 show create table src;
 Table    Create Table
-src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` text DEFAULT NULL,\n  `json2` varchar(65535) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`json1`) WITH PARSER json,\n FULLTEXT `ftidx2`(`json1`,`json2`) WITH PARSER json\n)
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` text DEFAULT NULL,\n  `json2` varchar(16383) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`json1`) WITH PARSER json,\n FULLTEXT `ftidx2`(`json1`,`json2`) WITH PARSER json\n)
 drop table src;
 drop table if exists t1;
 create table t1(a int primary key, b varchar(200));

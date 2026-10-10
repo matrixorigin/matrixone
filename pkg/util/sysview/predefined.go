@@ -280,7 +280,7 @@ func informationSchemaSubscriptionColumnAuthorizationPredicate() string {
 }
 
 func informationSchemaCurrentColumnsDDL() string {
-	return informationSchemaDerivedColumnsDDL(InformationSchemaColumnsV58DDL())
+	return informationSchemaDerivedColumnsDDL(informationSchemaColumnsNativeUnicodeDDL())
 }
 
 // AdaptLegacyInformationSchemaColumnsDDL changes only the column authority of
@@ -289,6 +289,12 @@ func informationSchemaCurrentColumnsDDL() string {
 // to a template that did not expose them.
 func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
 	definition = canonicalColumnsViewName(definition)
+	// V100 already contains the subscription-derived branches. Keep it byte
+	// stable when binding historical snapshots; re-deriving it would duplicate
+	// those branches and could change the persisted legacy projection.
+	if definition == InformationSchemaColumnsV100DDL() {
+		return definition, true
+	}
 	for _, legacy := range []string{InformationSchemaColumnsV41DDL, InformationSchemaColumnsV46DDL, InformationSchemaColumnsV46UpgradeDDL, InformationSchemaColumnsV58DDL()} {
 		if definition == legacy {
 			return informationSchemaDerivedColumnsDDL(legacy), true
@@ -299,6 +305,17 @@ func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
 
 func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
 	return canonicalColumnsViewName(definition) == InformationSchemaColumnsDDL
+}
+
+// IsInformationSchemaColumnsMigrationDDL reports whether a persisted COLUMNS
+// definition has the on-demand View-column migration needed by historical
+// snapshot binding. The protocol-100 definition intentionally keeps the
+// historical selector projection, while the protocol-109 definition adds the
+// native Unicode selectors; both definitions are safe migration gates.
+func IsInformationSchemaColumnsMigrationDDL(definition string) bool {
+	definition = canonicalColumnsViewName(definition)
+	return definition == InformationSchemaColumnsV100DDL() ||
+		definition == InformationSchemaColumnsDDL
 }
 
 func canonicalColumnsViewName(definition string) string {
@@ -347,6 +364,27 @@ func InformationSchemaColumnsV58DDL() string {
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8_bin' else NULL end) AS COLLATION_NAME,",
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_general_ci' WHEN 1 then 'utf8mb4_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4_general_ci' else NULL end) AS COLLATION_NAME,",
 	).Replace(InformationSchemaColumnsV46DDL)
+}
+
+// InformationSchemaColumnsV100DDL is the protocol-100 view definition. It
+// preserves the V58 selector projection while adding the subscription-view
+// branches introduced by the protocol-100 metadata migration. Keep this
+// definition frozen: protocol 100 through 108 workers must not persist native
+// Unicode selector identities during a rolling upgrade.
+func InformationSchemaColumnsV100DDL() string {
+	return informationSchemaDerivedColumnsDDL(InformationSchemaColumnsV58DDL())
+}
+
+// informationSchemaColumnsNativeUnicodeDDL extends the V58 selector
+// projection with the native UCA 4.0.0 identities introduced after the
+// historical protocol-100 view.
+func informationSchemaColumnsNativeUnicodeDDL() string {
+	return strings.NewReplacer(
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8mb4' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4' else NULL end) AS CHARACTER_SET_NAME,",
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8mb4' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4' WHEN 4 then 'utf8' WHEN 5 then 'utf8mb4' else NULL end) AS CHARACTER_SET_NAME,",
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_general_ci' WHEN 1 then 'utf8mb4_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4_general_ci' else NULL end) AS COLLATION_NAME,",
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_general_ci' WHEN 1 then 'utf8mb4_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4_general_ci' WHEN 4 then 'utf8_unicode_ci' WHEN 5 then 'utf8mb4_unicode_ci' else NULL end) AS COLLATION_NAME,",
+	).Replace(InformationSchemaColumnsV58DDL())
 }
 
 func informationSchemaSubscriptionViewAuthorizationPredicate() string {
