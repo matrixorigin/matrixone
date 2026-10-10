@@ -3990,10 +3990,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	if !isTemp && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		if c.isLifecycleRC() {
-			// Unfiltered DELETE shares this physical path. Its ordinary DML
-			// cleanup must wait on a fresh gate; public TRUNCATE keeps the
-			// prompt-conflict contract.
-			if dbSource, rel, err = c.admitBroadTableLifecycleRC(db, relationName, oldID, !truncate.GetIsDelete()); err != nil {
+			// TRUNCATE and unfiltered DELETE wait on a fresh lifecycle gate.
+			// Retained owners still fast-fail promotion to avoid upgrade cycles.
+			if dbSource, rel, err = c.admitBroadTableLifecycleRC(db, relationName, oldID, false); err != nil {
 				return err
 			}
 		} else {

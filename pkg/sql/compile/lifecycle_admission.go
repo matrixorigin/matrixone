@@ -117,9 +117,8 @@ func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnaps
 	if exclusiveSnapshotGate {
 		gateMode = lock.LockMode_Exclusive
 		// An existing holder can create an upgrade wait cycle with its
-		// retained database/component keys. Public TRUNCATE also promises a
-		// prompt conflict. Fresh owners of other operations can wait for
-		// readers instead of failing ordinary concurrent DDL or DML.
+		// retained database/component keys. Fresh owners can wait for readers
+		// instead of failing ordinary concurrent DDL or DML.
 		if txnOp.HasLockTable(registry.GetTableID(systemCtx)) || fastFailFresh {
 			waitPolicy = []lock.WaitPolicy{lock.WaitPolicy_FastFail}
 		}

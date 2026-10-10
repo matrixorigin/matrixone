@@ -3567,6 +3567,110 @@ func TestTruncateLocksLifecycleBeforeTable(t *testing.T) {
 	require.Equal(t, []string{"lifecycle", "table", "storage", "barrier"}, order)
 }
 
+func TestTruncateLifecycleRCWaitPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		retained bool
+		cancel   bool
+	}{
+		{name: "fresh owner waits"},
+		{name: "fresh wait can be canceled", cancel: true},
+		{name: "retained owner fails promotion", retained: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			proc.Ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+			proc.ReplaceTopCtx(proc.Ctx)
+			service := proc.GetService()
+			const registryID uint64 = 41
+			op := mock_frontend.NewMockTxnOperator(ctrl)
+			op.EXPECT().Txn().Return(txn.TxnMeta{
+				ID: []byte("truncate"), LockService: service,
+				Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC,
+			}).AnyTimes()
+			op.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+			op.EXPECT().CreateTS().Return(timestamp.Timestamp{}).AnyTimes()
+			op.EXPECT().HasLockTable(registryID).Return(tc.retained)
+			var pending atomic.Int32
+			op.EXPECT().AddWaitLock(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+				func(uint64, [][]byte, lock.LockOptions) uint64 { pending.Add(1); return 1 }).AnyTimes()
+			op.EXPECT().RemoveWaitLock(gomock.Any()).Do(func(uint64) { pending.Add(-1) }).AnyTimes()
+			op.EXPECT().AddLockTable(gomock.Any()).Return(nil).AnyTimes()
+			proc.Base.TxnOperator = op
+			ls := mock_lock.NewMockLockService(ctrl)
+			ls.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: service}).AnyTimes()
+			ls.EXPECT().GetServiceID().Return(service).AnyTimes()
+			proc.Base.LockService = ls
+			eng := newStubEngine()
+			registry := newStubRelation(catalog.MO_FEATURE_REGISTRY)
+			registry.tableID = registryID
+			eng.dbs[catalog.MO_CATALOG].rels[catalog.MO_FEATURE_REGISTRY] = registry
+			db := newStubDatabase("test")
+			db.rels["t"] = newStubRelation("t")
+			eng.dbs["test"] = db
+			requested := make(chan struct{})
+			release := make(chan struct{})
+			stop := errors.New("gate owner released")
+			ls.EXPECT().Lock(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+				func(ctx context.Context, table uint64, _ [][]byte, _ []byte, opts lock.LockOptions) (lock.Result, error) {
+					if table != registryID {
+						return lock.Result{LockedOn: lock.LockTable{Table: table, Group: opts.Group, Valid: true}}, nil
+					}
+					close(requested)
+					if opts.Mode != lock.LockMode_Exclusive {
+						return lock.Result{}, errors.New("TRUNCATE must retain exclusive admission")
+					}
+					if opts.Policy == lock.WaitPolicy_FastFail {
+						return lock.Result{}, moerr.NewLockConflict(ctx)
+					}
+					select {
+					case <-release:
+						return lock.Result{}, stop
+					case <-ctx.Done():
+						return lock.Result{}, ctx.Err()
+					}
+				}).AnyTimes()
+			c := &Compile{e: eng, proc: proc}
+			s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+				Definition: &plan2.DataDefinition_TruncateTable{TruncateTable: &plan2.TruncateTable{
+					Database: "test", Table: "t", TableId: 1,
+				}},
+			}}}}
+			result := make(chan error, 1)
+			var worker sync.WaitGroup
+			worker.Add(1)
+			defer func() { cancel(); worker.Wait() }()
+			go func() { defer worker.Done(); result <- s.TruncateTable(c) }()
+			select {
+			case <-requested:
+			case <-ctx.Done():
+				t.Fatal("TRUNCATE did not request lifecycle admission")
+			}
+			if tc.cancel {
+				cancel()
+			} else if !tc.retained {
+				close(release)
+			}
+			select {
+			case err := <-result:
+				if tc.retained {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockConflict), "%v", err)
+				} else if tc.cancel {
+					require.ErrorIs(t, err, context.Canceled)
+				} else {
+					require.ErrorIs(t, err, stop)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("TRUNCATE did not leave admission after release/cancel")
+			}
+			require.Zero(t, pending.Load(), "admission must remove wait bookkeeping on every exit")
+		})
+	}
+}
+
 func TestAlterCopyAndTruncateSerializeBeforeTableLocks(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	ctrl := gomock.NewController(t)
