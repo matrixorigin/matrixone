@@ -10,6 +10,7 @@ drop user if exists test_rule_user_alias;
 drop user if exists test_rule_user_where;
 drop user if exists test_rule_user_dup_projection;
 drop user if exists test_rule_user_expr_projection;
+drop user if exists test_rule_user_columns;
 drop role if exists test_rule_role;
 drop role if exists test_rule_role_multi_a;
 drop role if exists test_rule_role_multi_b;
@@ -28,6 +29,7 @@ drop role if exists test_rule_role_dup_projection_a;
 drop role if exists test_rule_role_dup_projection_b;
 drop role if exists test_rule_role_expr_projection_a;
 drop role if exists test_rule_role_expr_projection_b;
+drop role if exists test_rule_role_columns;
 drop database if exists db1;
 drop database if exists db2;
 create database db1;
@@ -90,6 +92,24 @@ set enable_remap_hint = 1;
 select * from db1.v_t1;
 set enable_remap_hint = 0;
 select * from db1.v_t1;
+-- @session
+
+-- information_schema.COLUMNS must expose only columns selected by a row-column rule.
+create table db1.t_columns(id int, tenant int, amount int, secret varchar(20));
+create table db1.t_hidden(id int, secret varchar(20));
+insert into db1.t_columns values (1, 1, 100, 's1'), (2, 2, 200, 's2');
+create role test_rule_role_columns;
+alter role test_rule_role_columns add rule "select id, amount from db1.t_columns where tenant = 1" on table db1.t_columns;
+create user test_rule_user_columns identified by '123456' default role test_rule_role_columns;
+grant connect on account * to test_rule_role_columns;
+grant select on table db1.t_columns to test_rule_role_columns;
+-- @session:id=10&user=sys:test_rule_user_columns:test_rule_role_columns&password=123456
+set enable_remap_hint = 1;
+select * from db1.t_columns order by id;
+select column_name from information_schema.columns where table_schema = 'db1' and table_name = 't_columns' order by ordinal_position;
+select count(*) from information_schema.columns where table_schema = 'db1' and table_name = 't_hidden';
+set enable_remap_hint = 0;
+select column_name from information_schema.columns where table_schema = 'db1' and table_name = 't_columns' order by ordinal_position;
 -- @session
 
 -- 11. SET SECONDARY ROLE ALL merges select * rewrite rules from all active roles
@@ -251,6 +271,7 @@ drop user if exists test_rule_user_alias;
 drop user if exists test_rule_user_where;
 drop user if exists test_rule_user_dup_projection;
 drop user if exists test_rule_user_expr_projection;
+drop user if exists test_rule_user_columns;
 drop role if exists test_rule_role;
 drop role if exists test_rule_role_multi_a;
 drop role if exists test_rule_role_multi_b;
@@ -269,6 +290,7 @@ drop role if exists test_rule_role_dup_projection_a;
 drop role if exists test_rule_role_dup_projection_b;
 drop role if exists test_rule_role_expr_projection_a;
 drop role if exists test_rule_role_expr_projection_b;
+drop role if exists test_rule_role_columns;
 drop database if exists db1;
 drop database if exists db2;
 set global enable_privilege_cache = on;
