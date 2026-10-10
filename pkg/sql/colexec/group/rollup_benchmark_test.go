@@ -50,6 +50,7 @@ func BenchmarkRollupAlgorithms(b *testing.B) {
 		name         string
 		rows         int
 		ndv          int
+		ndvByKey     []int
 		keyCount     int
 		ordered      bool
 		derivedOrder bool
@@ -82,6 +83,18 @@ func BenchmarkRollupAlgorithms(b *testing.B) {
 		// for the completed-group flush/free/recreate lifecycle.
 		{name: "large_ordered_unique_keys", rows: 100000, ndv: 100000, keyCount: 3, ordered: true},
 		{name: "large_derived_order_unique_keys", rows: 100000, ndv: 100000, keyCount: 3, derivedOrder: true},
+		// The first two prefixes are singletons while the complete key has
+		// 50,000 values occurring twice. This catches a cost model that only
+		// calibrates the all-unique endpoint and misses deep-prefix finalization.
+		{name: "large_ordered_asymmetric_high_ndv", rows: 100000, ndv: 50000, ndvByKey: []int{1, 1, 50000}, keyCount: 3, ordered: true},
+		{name: "large_derived_order_asymmetric_high_ndv", rows: 100000, ndv: 50000, ndvByKey: []int{1, 1, 50000}, keyCount: 3, derivedOrder: true},
+		// Calibrate the admitted boundary and both neighboring sides, not only
+		// the high-cardinality endpoint. AVG challenges the aggregate weight.
+		{name: "large_derived_order_asymmetric_low_ndv", rows: 100000, ndv: 4, ndvByKey: []int{1, 1, 4}, keyCount: 3, derivedOrder: true},
+		{name: "large_derived_order_asymmetric_edge_ndv", rows: 100000, ndv: 5000, ndvByKey: []int{1, 1, 5000}, keyCount: 3, derivedOrder: true},
+		{name: "large_derived_order_asymmetric_intermediate_ndv", rows: 100000, ndv: 10000, ndvByKey: []int{1, 1, 10000}, keyCount: 3, derivedOrder: true},
+		{name: "large_derived_order_asymmetric_middle_ndv", rows: 100000, ndv: 25000, ndvByKey: []int{1, 1, 25000}, keyCount: 3, derivedOrder: true},
+		{name: "large_derived_order_asymmetric_avg_edge_ndv", rows: 100000, ndv: 5000, ndvByKey: []int{1, 1, 5000}, keyCount: 3, derivedOrder: true, aggregate: "avg"},
 		{name: "large_ordered_avg_many_levels", rows: 100000, ndv: 2, keyCount: 12, ordered: true, aggregate: "avg"},
 		{name: "large_ordered_very_many_levels", rows: 100000, ndv: 2, keyCount: 20, ordered: true},
 		{name: "large_ordered_extreme_levels", rows: 100000, ndv: 2, keyCount: 32, ordered: true},
@@ -99,7 +112,7 @@ func BenchmarkRollupAlgorithms(b *testing.B) {
 		for _, algorithm := range []string{"sort", "hash-shared", "hash-serial", "hash-parallel"} {
 			name := fmt.Sprintf("%s/%s", tc.name, algorithm)
 			b.Run(name, func(b *testing.B) {
-				runner, err := newRollupBenchmarkRunner(b, tc.rows, tc.ndv, tc.keyCount,
+				runner, err := newRollupBenchmarkRunner(b, tc.rows, tc.ndv, tc.ndvByKey, tc.keyCount,
 					tc.ordered, tc.derivedOrder, tc.aggregate)
 				if err != nil {
 					b.Fatal(err)
@@ -152,10 +165,25 @@ type rollupBenchmarkInput struct {
 
 func newRollupBenchmarkRunner(
 	t testing.TB,
-	rows, ndv, keyCount int, ordered, derivedOrder bool, aggregate string,
+	rows, ndv int, ndvByKey []int, keyCount int, ordered, derivedOrder bool, aggregate string,
 ) (*rollupBenchmarkRunner, error) {
 	if rows <= 0 || ndv <= 0 || keyCount <= 0 {
 		return nil, fmt.Errorf("invalid rollup benchmark shape: rows=%d ndv=%d keys=%d", rows, ndv, keyCount)
+	}
+	if len(ndvByKey) == 0 {
+		ndvByKey = make([]int, keyCount)
+		for key := range ndvByKey {
+			ndvByKey[key] = ndv
+		}
+	} else {
+		if len(ndvByKey) != keyCount {
+			return nil, fmt.Errorf("invalid per-key NDV shape: got %d keys, want %d", len(ndvByKey), keyCount)
+		}
+		for key, value := range ndvByKey {
+			if value <= 0 {
+				return nil, fmt.Errorf("invalid per-key NDV at key %d: %d", key, value)
+			}
+		}
 	}
 
 	runner := &rollupBenchmarkRunner{
@@ -190,7 +218,7 @@ func newRollupBenchmarkRunner(
 	for i := 0; i <= keyCount; i++ {
 		mp := mpool.MustNewZero()
 		proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-		base, err := makeRollupBenchmarkBatch(proc, rows, ndv, keyCount, ordered, aggregate == "avg")
+		base, err := makeRollupBenchmarkBatch(proc, rows, ndvByKey, keyCount, ordered, aggregate == "avg")
 		if err != nil {
 			if base != nil {
 				base.Clean(proc.Mp())
@@ -235,8 +263,11 @@ func makeRollupBenchmarkGroupBy(prefix int) []*plan.Expr {
 
 func makeRollupBenchmarkBatch(
 	proc *process.Process,
-	rows, ndv, keyCount int, ordered bool, withMeasure bool,
+	rows int, ndvByKey []int, keyCount int, ordered bool, withMeasure bool,
 ) (*batch.Batch, error) {
+	if len(ndvByKey) != keyCount {
+		return nil, fmt.Errorf("invalid per-key NDV shape: got %d keys, want %d", len(ndvByKey), keyCount)
+	}
 	columnCount := keyCount
 	if withMeasure {
 		columnCount++
@@ -250,7 +281,7 @@ func makeRollupBenchmarkBatch(
 			// runs and machines. The ordered fixture is sorted below, outside the
 			// timed operator path, to model an input property supplied by a scan or
 			// an earlier ORDER BY.
-			values[row] = int32((row*7919 + key*104729) % ndv)
+			values[row] = int32((row*7919 + key*104729) % ndvByKey[key])
 		}
 		allValues[key] = values
 	}

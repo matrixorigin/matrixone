@@ -214,11 +214,17 @@ not prove that the later detailed rewrite will succeed; a rejected rewrite
 executes the legacy branches and therefore costs more than this envelope.
 Let `G` be the estimated number of completed output groups across all prefixes,
 including the grand total: `G = 1 + sum_i min(N, product_{j<=i}(NDV_j))`.
-`F` is the fixed relative cost of flushing a completed prefix, freeing its
+`F(G,L)` is the relative cost of flushing a completed prefix, freeing its
 aggregate state, and recreating the single-group executor. The runtime performs
 this lifecycle for every completed prefix even when input order is already
-proven, so ordered high-NDV input must pay `F * G * A` rather than being modeled
-as boundary checks alone.
+proven, so ordered high-NDV input must pay `F(G,L) * G * A` rather than being
+modeled as boundary checks alone. For the three-or-more-level shapes, the
+current calibration uses `F(G,L) = 2 + 6 * min(1, (G - 10000) / 15000)` for
+`G > 10000`, and `F = 2` below that boundary. Two-level rollups retain the
+baseline because their selective-filter path has no deep-prefix fan-out. This
+keeps 5,000/10,000 late-prefix values on SORT while 25,000 and 50,000 values
+stay on shared HASH. The coefficient is calibrated with COUNT and AVG,
+together with the all-unique and multi-level shapes below.
 For each prefix, `K_i` is its key-width factor and `A` is the aggregate update
 factor derived from the selected aggregate functions:
 
@@ -232,13 +238,13 @@ SortWork(unordered) = ScanCost
          + N * log2(N + 1) * compare-cost * full-key-factor
          + N * boundary-cost * L
          + N * aggregate-cost * A * B
-         + finalize-cost * G * A
+         + finalize-cost(G,L) * G * A
          + sort-startup-cost
 
 SortWork(ordered) = ScanCost
          + N * boundary-cost * L
          + N * aggregate-cost * A * B
-         + finalize-cost * G * A
+         + finalize-cost(G,L) * G * A
 ```
 
 Hash branches may overlap in wall time, so the estimate combines total CPU/IO
@@ -290,15 +296,15 @@ missing/unknown statistics, non-finite values, and overflow all select hash.
 The reproducible operator benchmark is:
 
 ```text
-go test -mod=mod ./pkg/sql/colexec/group -run '^$' \
-  -bench 'BenchmarkRollupAlgorithms/(large_ordered_low_ndv|large_unordered_low_ndv|large_ordered_one_key|large_ordered_single_group|large_ordered_many_levels|large_ordered_wider_ndv|large_ordered_high_ndv|large_ordered_unique_keys|large_derived_order_unique_keys|large_ordered_avg_many_levels|large_ordered_very_many_levels|large_ordered_extreme_levels|million_ordered_low_ndv)/(sort|hash-shared|hash-serial|hash-parallel)$' \
+go test -mod=readonly ./pkg/sql/colexec/group -run '^$' \
+  -bench 'BenchmarkRollupAlgorithms/(large_ordered_low_ndv|large_unordered_low_ndv|large_ordered_one_key|large_ordered_single_group|large_ordered_many_levels|large_ordered_wider_ndv|large_ordered_high_ndv|large_ordered_unique_keys|large_derived_order_unique_keys|large_ordered_asymmetric_high_ndv|large_derived_order_asymmetric_high_ndv|large_derived_order_asymmetric_low_ndv|large_derived_order_asymmetric_edge_ndv|large_derived_order_asymmetric_intermediate_ndv|large_derived_order_asymmetric_middle_ndv|large_derived_order_asymmetric_avg_edge_ndv|large_ordered_avg_many_levels|large_ordered_very_many_levels|large_ordered_extreme_levels|million_ordered_low_ndv)/(sort|hash-shared|hash-serial|hash-parallel)$' \
   -benchtime=5x -count=3
 ```
 
 The derived-order shape can be run separately with:
 
 ```text
-go test -mod=mod ./pkg/sql/colexec/group -run '^$' \
+go test -mod=readonly ./pkg/sql/colexec/group -run '^$' \
   -bench 'BenchmarkRollupAlgorithms/million_(ordered_low_ndv|derived_order_low_ndv|derived_order_avg_low_ndv)/(sort|hash-shared|hash-serial|hash-parallel)$' \
   -benchtime=5x -count=3
 ```
@@ -321,6 +327,13 @@ shape                              sort          hash-serial       hash-parallel
 100000 rows, 12 keys, NDV=64       5.58–6.12 ms   38.40–39.01 ms     10.76–12.24 ms
 100000 rows, 3 unique keys          2164–2218 ms   65.8–97.1 ms       40.8–44.3 ms
 100000 rows, 3 unique keys + ORDER  2225–2279 ms   239.4–263.0 ms     56.2–94.8 ms
+100000 rows, NDV=(1,1,50000) + ORDER 313–375 ms  38–40 ms       26–31 ms
+100000 rows, derived ORDER, NDV=(1,1,50000) 428–481 ms  183–193 ms     64–71 ms
+100000 rows, derived ORDER, NDV=(1,1,4)     10.2–14.4 ms 59.8–62.4 ms    23.6–24.5 ms
+100000 rows, derived ORDER, NDV=(1,1,5000)  71.7–83.4 ms 147.7–150.5 ms   44.9–49.1 ms
+100000 rows, derived ORDER, NDV=(1,1,10000) 120.7–129.6 ms 149.4–163.9 ms 53.6–55.4 ms
+100000 rows, derived ORDER, NDV=(1,1,25000) 245.9–256.9 ms 152.6–160.9 ms 49.1–54.0 ms
+100000 rows, derived ORDER, NDV=(1,1,5000), AVG 87.9–118.2 ms 130.0–136.0 ms 27.3–55.8 ms
 100000 rows, 12 keys, AVG          6.37–6.52 ms   39.51–39.67 ms     11.26–12.25 ms
 100000 rows, 20 keys, NDV=2        6.63–6.86 ms   87.39–91.03 ms     22.72–24.37 ms
 100000 rows, 32 keys, NDV=2       10.19–10.60 ms  202.27–205.88 ms     46.93–53.68 ms
@@ -343,7 +356,18 @@ shape                              hash-shared
 1000000 rows, child ORDER BY + AVG 1348–1450 ms
 100000 rows, 3 unique keys         151.5–206.4 ms
 100000 rows, 3 unique keys + ORDER 184.4–208.4 ms
+100000 rows, NDV=(1,1,50000) + ORDER 73–116 ms
+100000 rows, derived ORDER, NDV=(1,1,50000) 139–150 ms
+100000 rows, derived ORDER, NDV=(1,1,4)      96.5–103.3 ms
+100000 rows, derived ORDER, NDV=(1,1,5000)   123.6–135.0 ms
+100000 rows, derived ORDER, NDV=(1,1,10000)  118.7–145.6 ms
+100000 rows, derived ORDER, NDV=(1,1,25000)  132.6–146.3 ms
+100000 rows, derived ORDER, NDV=(1,1,5000), AVG 122.5–136.0 ms
 ```
+
+The asymmetric rows and the AVG edge were rerun with `-benchtime=3x -count=3`;
+their ranges are calibration evidence rather than universal elapsed-time
+constants.
 
 The shared path keeps one input scan and one aggregate state, but its
 grouping-set projection materializes `B` expanded rows and therefore remains a
