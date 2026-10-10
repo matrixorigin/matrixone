@@ -5752,6 +5752,37 @@ func TestExecuteStmtFetchRejectsInvalidatedPreparedStatement(t *testing.T) {
 	require.Zero(t, ses.preparedCursorBytes.Load())
 }
 
+func TestResetInvalidatedCleansCursor(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	stmtID := uint32(276)
+	stmt := &PrepareStmt{
+		Name:                getPrepareStmtName(stmtID),
+		getFromSendLongData: map[int]struct{}{0: {}},
+		cursor: &preparedStmtCursor{
+			owner:  ses,
+			result: &MysqlResultSet{Data: [][]interface{}{{int64(1)}}},
+			bytes:  1,
+		},
+	}
+	ses.preparedCursorBytes.Store(1)
+	stmt.invalidateRewritePolicy()
+	require.NoError(t, ses.SetPrepareStmt(ctx, stmt.Name, stmt))
+
+	require.NoError(t, doReset(ctx, ses, tree.NewReset(tree.Identifier(stmt.Name))))
+	require.True(t, stmt.rewritePolicyInvalidated.Load())
+	require.Nil(t, stmt.cursor)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+	require.Empty(t, stmt.getFromSendLongData)
+
+	_, err := ses.GetPrepareStmt(ctx, stmt.Name)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+}
+
 func TestParseStmtExecuteRejectsInvalidatedPreparedStatement(t *testing.T) {
 	stmtID := uint32(275)
 	stmt := &PrepareStmt{Name: getPrepareStmtName(stmtID)}

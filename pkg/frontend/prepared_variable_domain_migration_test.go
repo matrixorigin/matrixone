@@ -37,6 +37,8 @@ import (
 func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 	ses, scratch, cw, execCtx := newPreparedExecuteEnv(t, 125)
 	t.Cleanup(ses.Close)
+	scratch.rewritePolicyCaptured = true
+	scratch.rewritePolicyGeneration = ses.rewritePolicyGeneration
 	staticType := plan.Type{Id: int32(types.T_varchar), Width: 8, Charset: uint32(types.CharsetBinary)}
 	require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
 		"bound_s", "你", "", false, staticType, vector.PrepareParamNone, false, types.RuntimeStringText))
@@ -48,7 +50,8 @@ func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 	require.NoError(t, err)
 	prepared := &PrepareStmt{
 		Name: "bound_migration", Sql: stmt.Sql, PreparePlan: p, PrepareStmt: parsed[0],
-		NativeMode: ses.sqlModeHasMatrixOneNative(), protocolVersion: currentProtocolVersion(cw.proc),
+		rewritePolicyCaptured: true,
+		NativeMode:            ses.sqlModeHasMatrixOneNative(), protocolVersion: currentProtocolVersion(cw.proc),
 		proc: cw.proc, ParamTypes: []byte{byte(defines.MYSQL_TYPE_NULL), 0},
 		params: vector.NewVec(types.T_varchar.ToType()),
 	}
@@ -118,7 +121,11 @@ func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 	markerPlan, err := buildPlan(execCtx.reqCtx, ses, ses.txnCompileCtx, markerStmt)
 	require.NoError(t, err)
 	require.NoError(t, ses.SetPrepareStmt(execCtx.reqCtx, "marker_migration", &PrepareStmt{
-		Name: "marker_migration", Sql: markerStmt.Sql, PreparePlan: markerPlan,
+		Name:                    "marker_migration",
+		Sql:                     markerStmt.Sql,
+		PreparePlan:             markerPlan,
+		rewritePolicyCaptured:   true,
+		rewritePolicyGeneration: ses.rewritePolicyGeneration,
 	}))
 	resp := &query.MigrateConnFromResponse{}
 	require.NoError(t, rt.migrateConnectionFrom(resp))

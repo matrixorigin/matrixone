@@ -3109,19 +3109,6 @@ func (ses *Session) getPrepareStmtAllowInvalidated(ctx context.Context, name str
 	return ses.getPrepareStmt(ctx, name, true)
 }
 
-func (ses *Session) GetPrepareStmts() []*PrepareStmt {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ret := make([]*PrepareStmt, 0, len(ses.prepareStmts))
-	for _, st := range ses.prepareStmts {
-		if st != nil && st.rewritePolicyInvalidated.Load() {
-			continue
-		}
-		ret = append(ret, st)
-	}
-	return ret
-}
-
 func (ses *Session) getPrepareStmtsForMigration() ([]*PrepareStmt, bool) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -3130,6 +3117,12 @@ func (ses *Session) getPrepareStmtsForMigration() ([]*PrepareStmt, bool) {
 	ret := make([]*PrepareStmt, 0, len(ses.prepareStmts))
 	for _, stmt := range ses.prepareStmts {
 		if stmt != nil {
+			// Migration replays only SQL and cannot prove the policy of an
+			// untagged handle. Fail closed rather than exporting a handle that
+			// would bypass later generation checks.
+			if !stmt.rewritePolicyCaptured {
+				return nil, true
+			}
 			// Do not replay a stale handle while the post-invalidation policy is
 			// still unknown. A normal checked lookup can reload an empty policy
 			// and preserve the harmless disabled-to-disabled control on the source.
@@ -4361,6 +4354,22 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
 		p.sql = fmt.Sprintf("prepare %s from %s", quotePrepareStmtName(p.name), p.sql)
 	}
+	// The exported SQL may already contain a materialized rewrite hint from
+	// the source session. The target cannot prove that hint represents its
+	// current policy, so refuse to replay it rather than stamping the old AST
+	// with a new generation. The authoritative export path rejects untagged
+	// handles; this guard protects direct replay too.
+	innerSQL, err := extractPrepareStmtSQL(ctx, p.sql, sessionSQLModeForParser(ses))
+	if err != nil {
+		return err
+	}
+	if _, ok := leadingHintContent(innerSQL); ok {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	policy, err := captureRewritePolicy(ctx, ses)
+	if err != nil {
+		return err
+	}
 
 	tempExecCtx := &ExecCtx{
 		reqCtx:            ctx,
@@ -4369,7 +4378,10 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 		executeParamTypes: p.paramTypes,
 	}
 	defer tempExecCtx.Close()
-	return doComQuery(ses, tempExecCtx, &UserInput{sql: p.sql})
+	return doComQuery(ses, tempExecCtx, &UserInput{
+		sql:           p.sql,
+		rewritePolicy: policy,
+	})
 }
 
 type migrateTempTableExec func(sql string) error

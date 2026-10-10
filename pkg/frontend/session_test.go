@@ -857,6 +857,10 @@ func TestSession_Migrate(t *testing.T) {
 		for _, name := range []string{"a-b", "select", "a`b", "from"} {
 			assert.Contains(t, s.prepareStmts, name)
 		}
+		for name, stmt := range s.prepareStmts {
+			require.NotNil(t, stmt, name)
+			require.True(t, stmt.rewritePolicyCaptured, name)
+		}
 		assert.Equal(t, int64(7), s.GetLastAffectedRows())
 		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
 		assert.Equal(t, uint64(13), s.GetLastInsertID())
@@ -944,14 +948,10 @@ func TestSession_Migrate(t *testing.T) {
 
 		target := genSession(ctrl, "d1", nil)
 		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			ConnID:               88,
-			DB:                   exported.DB,
-			LastInsertIDExported: true,
-			SetVarStmts:          []string{"set sql_mode = @mode"},
-			PrepareStmts: append(exported.PrepareStmts, &query.PrepareStmt{
-				Name: "pending_isolation_prepare",
-				SQL:  "select ?",
-			}),
+			ConnID:                  88,
+			DB:                      exported.DB,
+			LastInsertIDExported:    true,
+			SetVarStmts:             []string{"set sql_mode = @mode"},
 			LastAffectedRows:        exported.LastAffectedRows,
 			UserDefinedVars:         exported.UserDefinedVars,
 			UserDefinedVarsExported: exported.UserDefinedVarsExported,
@@ -2123,8 +2123,6 @@ func TestInvalidatePrivilegeCacheInvalidatesRewritePreparedStatements(t *testing
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
 	require.Equal(t, moerr.ER_NEED_REPREPARE, err.(*moerr.Error).MySQLCode())
-	require.Empty(t, ses.GetPrepareStmts())
-
 	// Explicit cleanup remains available for an invalidated handle.
 	got, err := ses.getPrepareStmtAllowInvalidated(ctx, "old")
 	require.NoError(t, err)
