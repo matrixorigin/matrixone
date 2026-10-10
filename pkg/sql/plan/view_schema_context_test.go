@@ -101,7 +101,9 @@ func TestViewSchemaHistoricalMigrationGateContextAndDependency(t *testing.T) {
 			require.Equal(t, 1, calls)
 			if failureAt == "none" {
 				require.NoError(t, err)
-				require.Equal(t, sysview.InformationSchemaColumnsDDL, definition)
+				// The current template admits the migration, not a projection upgrade.
+				require.Equal(t, sysview.InformationSchemaColumnsV100DDL(), definition)
+				require.NotEqual(t, sysview.InformationSchemaColumnsDDL, definition)
 				dependencies := state.capture.dependencies()
 				require.Len(t, dependencies, 1)
 				require.Equal(t, historicalAccount, dependencies[0].AccountID)

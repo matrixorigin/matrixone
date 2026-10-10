@@ -303,17 +303,37 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 		system := openNativeViewSchemaSQL(t, ctx, cn, "dump:111", "")
 		for _, query := range []string{
 			"create account schema_subscriber admin_name 'root' identified by 'test123'",
-			"create database schema_publisher",
-			"create table schema_publisher.source (id int)",
-			// Publisher database names can coincide with a subscriber-local alias.
+			// These source databases must predate the publication database.
 			"create database subscribed",
 			"create table subscribed.collision_source (id int)",
-			"create table schema_publisher.collision_source (id varchar(30))",
 			"create database schema_other",
 			"create table schema_other.collision_source (id int)",
 		} {
 			_, err := system.ExecContext(ctx, query)
 			require.NoError(t, err, query)
+		}
+		var sourceHistory timestamp.Timestamp
+		publisherCtx := defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
+		withNativeViewSchemaRead(t, publisherCtx, cn, svc, "subscribed", nil, func(_ *frontend.TxnCompilerContext, op client.TxnOperator, _ *process.Process) {
+			sourceHistory = op.SnapshotTS()
+		})
+		for _, query := range []string{
+			"create database schema_publisher",
+			"create table schema_publisher.source (id int)",
+			"create table schema_publisher.collision_source (id varchar(30))",
+		} {
+			_, err := system.ExecContext(ctx, query)
+			require.NoError(t, err, query)
+		}
+		for _, database := range []string{"subscribed", "schema_publisher"} {
+			var count uint64
+			query := fmt.Sprintf("select count(*) from mo_catalog.mo_database {MO_TS = '%s'} where account_id = 0 and datname = ?", sourceHistory.DebugString())
+			require.NoError(t, system.QueryRowContext(ctx, query, database).Scan(&count))
+			if database == "subscribed" {
+				require.EqualValues(t, 1, count)
+			} else {
+				require.Zero(t, count, "publication DB cannot stand in for the historical source")
+			}
 		}
 		publisher := openNativeViewSchemaSQL(t, ctx, cn, "dump:111", "schema_publisher")
 		_, err := publisher.ExecContext(ctx, "create view published as select id from source")
@@ -325,6 +345,9 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 			"create view v_nested as select id from schema_publisher.v_collision",
 			"create view v_other as select id from schema_other.collision_source",
 			"create view v_other_nested as select id from schema_publisher.v_other",
+			fmt.Sprintf("create view v_history_collision as select id from subscribed.collision_source {MO_TS = '%s'}", sourceHistory.DebugString()),
+			"create view v_history_nested as select id from schema_publisher.v_history_collision",
+			fmt.Sprintf("create view v_history_other as select id from schema_other.collision_source {MO_TS = '%s'}", sourceHistory.DebugString()),
 		} {
 			_, err = publisher.ExecContext(ctx, query)
 			require.NoError(t, err, query)
@@ -380,6 +403,8 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 				{"v_collision", "subscribed"}, {"v_nested", "subscribed"},
 				{"v_saved_collision", "subscribed"}, {"v_other", "schema_other"},
 				{"v_other_nested", "schema_other"},
+				{"v_history_collision", "subscribed"}, {"v_history_nested", "subscribed"},
+				{"v_history_other", "schema_other"},
 			} {
 				t.Run(test.view, func(t *testing.T) {
 					for i := 0; i < 2; i++ {
@@ -391,6 +416,10 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 							if dependency.RelationName == "collision_source" {
 								require.Equal(t, uint32(catalog.System_Account), dependency.AccountID)
 								require.Equal(t, test.sourceDatabase, dependency.DatabaseName)
+								if test.view == "v_history_collision" || test.view == "v_history_nested" || test.view == "v_history_other" {
+									require.NotNil(t, dependency.Snapshot)
+									require.Equal(t, sourceHistory, *dependency.Snapshot.TS)
+								}
 								found = true
 							}
 						}

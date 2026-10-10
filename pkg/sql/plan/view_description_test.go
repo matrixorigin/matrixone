@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -196,6 +197,47 @@ func TestSubscriptionViewDatabaseLookupUsesPublisherSnapshot(t *testing.T) {
 	require.True(t, exists)
 	require.Equal(t, uint32(17), subscriberSnapshot.Tenant.TenantID, "caller snapshot must remain unchanged")
 
+	ctx.sub.SubName, ctx.sub.DbName = "alias", "publication"
+	for _, optIn := range []bool{false, true} {
+		for _, historical := range []bool{false, true} {
+			t.Run(fmt.Sprintf("optIn=%t/history=%t", optIn, historical), func(t *testing.T) {
+				previous := ctx.GetContext()
+				if optIn {
+					ctx.SetContext(context.WithValue(previous, viewSchemaContextKey{}, &viewSchemaDerivation{}))
+				}
+				defer ctx.SetContext(previous)
+				var snapshot *Snapshot
+				if historical {
+					snapshot = subscriberSnapshot
+				}
+				for _, lookupError := range []error{nil, moerr.NewBadDB(t.Context(), "missing"), context.Canceled} {
+					mock.GetDatabaseIdFunc = func(name string, got *Snapshot) (uint64, error) {
+						if !optIn && historical {
+							require.Equal(t, "publication", name, "retain ordinary legacy alias behavior")
+						} else {
+							require.Equal(t, "alias", name, "S2 source spelling is already in publisher namespace")
+						}
+						if historical {
+							require.Equal(t, publisher, got.Tenant.TenantID)
+							require.Equal(t, subscriberSnapshot.TS, got.TS)
+							require.NotSame(t, subscriberSnapshot, got)
+						} else {
+							require.Nil(t, got)
+						}
+						return 42, lookupError
+					}
+					exists, err := checker.CheckViewDatabase("alias", snapshot)
+					if lookupError == context.Canceled {
+						require.ErrorIs(t, err, context.Canceled)
+					} else {
+						require.NoError(t, err)
+						require.Equal(t, lookupError == nil, exists)
+					}
+					require.Equal(t, uint32(17), subscriberSnapshot.Tenant.TenantID)
+				}
+			})
+		}
+	}
 	ctx.sub = nil
 	mock.GetDatabaseIdFunc = func(_ string, snapshot *Snapshot) (uint64, error) {
 		require.Same(t, subscriberSnapshot, snapshot)

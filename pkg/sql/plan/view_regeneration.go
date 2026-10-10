@@ -78,7 +78,9 @@ func (c *viewRegenerationContext) CheckViewDatabase(name string, snapshot *Snaps
 	// GetDatabaseId would otherwise switch back to that tenant and reject a
 	// valid publisher source (or accept an unrelated same-named database).
 	if sub := c.GetQueryingSubscription(); sub != nil && snapshot != nil {
-		if name == sub.SubName {
+		// Ordinary binding may use the subscriber alias as its default. S2
+		// stored SQL already names publisher databases, even on a collision.
+		if name == sub.SubName && c.GetContext().Value(viewSchemaContextKey{}) == nil {
 			name = sub.DbName
 		}
 		snapshot = DeepCopySnapshot(snapshot)
