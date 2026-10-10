@@ -477,7 +477,11 @@ func Example_result() { record("example"); fmt.Println("result")
 }
 `)
 	binary := filepath.Join(root, "inventory.test")
-	build := exec.CommandContext(t.Context(), "go", "test", "-race", "-c", "-o", binary)
+	// The parent optools package is already race-tested. This child only
+	// exercises the test binary's list/run protocol; compiling it with race
+	// instrumentation adds minutes of linker work without testing another
+	// ownership or scheduling path.
+	build := exec.CommandContext(t.Context(), "go", "test", "-c", "-o", binary)
 	build.Dir = root
 	build.Env = append(os.Environ(), "GOWORK=off", "GOTOOLCHAIN=local", "GOPROXY=off")
 	if out, err := build.CombinedOutput(); err != nil {

@@ -604,14 +604,16 @@ UT_HEARTBEAT_INTERVAL ?= 60
 UT_PREBUILD_EMBEDDED ?= 1
 UT_PREBUILD_MIN_FREE_KB ?= 6291456
 UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
-# Split the exclusive issues package into four contiguous root batches after
-# one race binary is built. The runner keeps one cluster owner and one shared
-# package deadline; set to 1 for an unchanged serial baseline.
+# Split the exclusive issues package into four root batches after one race
+# binary is built. The runner keeps one shared package deadline. Linux CI uses
+# two admitted processes by default; set the pool to 1 for the unchanged
+# serial baseline. Pool mode uses round-robin roots to avoid a long final
+# contiguous batch; serial mode keeps the established contiguous layout.
 UT_ISSUES_BATCHES ?= 4
-# Keep serial execution as the baseline. Set to 2 to opt into a bounded process
-# pool with four issues batches; each admitted process owns a complete cluster.
-# Default adoption requires matched final-wave timing and resource evidence.
-UT_ISSUES_BATCH_PARALLEL ?= 1
+# Each admitted process owns a complete cluster. The four-batch Linux default
+# is bounded to two processes; the one-batch rollback remains serial and all
+# modes are overrideable for constrained local runners.
+UT_ISSUES_BATCH_PARALLEL ?= $(if $(filter 1,$(UT_ISSUES_BATCHES)),1,$(if $(filter linux,$(UNAME_S)),2,1))
 # Set to 2 to opt into bounded prebuilt embedded-package overlap. The admission
 # gate keeps ordinary exclusive lifecycles out of the pool.
 UT_EMBEDDED_PACKAGE_PARALLEL ?= 1

@@ -23,26 +23,45 @@ against source `0094ef382a04a50773948cd8b5ab585b3e3ce53d` and base
 validation are separate gates.
 
 This amendment supersedes only v4's removal of optional two-process execution
-and exclusive-only process admission below. The serial default, inventory,
-deadline, report, cleanup, CDC, HAKeeper and engine-fixture contracts remain.
-Four serial issues batches measured 515.1 -> 407.8 seconds in PR29760; that
-benefit does not belong to the new pool. A historical embedded prototype subset
-(embed and sqlintegration) measured 545.5 -> 372.3 seconds with two processes.
-The historical 1057-second full serial wave included an arrowload failure.
-Neither record establishes successful, matched full-wave savings on this branch;
-no full-job savings estimate is an acceptance claim.
+and exclusive-only process admission below. The inventory, deadline, report,
+cleanup, CDC, HAKeeper and engine-fixture contracts remain. Four serial issues
+batches measured 515.1 -> 407.8 seconds in PR29760; that benefit does not
+belong to the new pool. A historical embedded prototype subset (embed and
+sqlintegration) measured 545.5 -> 372.3 seconds with two processes. The
+historical 1057-second full serial wave included an arrowload failure.
+
+The latest successful single-runner trace (2026-10-09) measured issue batches
+at 303.2, 143.6, 220.8 and 335.3 seconds, or 1002.9 seconds serialized.
+The Linux default now admits two issue processes and uses round-robin root
+partitioning in that mode; the serial override remains contiguous. A schedule
+replay of those measured durations gives a 638-second ordered pool wave before
+any CPU or startup overhead, so the expected critical-path reduction is about
+six minutes for this trace. This is a bounded estimate, not a claim that CI
+will realize it; the first matched Linux run must record wall time, CPU
+throttling, peak memory and OOM/max events before any further parallelism is
+considered.
+
+This change does not merge embedded packages into one fixture or remove the
+multi-CN package. Embedded package `TestMain` and lifecycle hooks are
+process-scoped, while the multi-CN cases prove routing, metadata, index, and
+cancellation contracts that a single-CN fixture cannot cover; that package was
+about 78 seconds in the same trace and is not the critical path.
 
 | Choice | Decision |
 |---|---|
 | Serial batching only | Lowest complexity; retains the established batching benefit. |
-| Serial default with optional bounded pool | Selected; permits controlled overlap using the existing dispatcher and admission owner. |
-| Two-process default | Deferred until matched successful final-wave timing and CPU/memory evidence justify adoption. |
+| Serial default with optional bounded pool | Retained as the explicit rollback for constrained runners. |
+| Linux default with bounded two-process pool | Selected; existing admission/report ownership is reused and the serial override remains available. |
 
-Make defaults `UT_ISSUES_BATCH_PARALLEL` and `UT_EMBEDDED_PACKAGE_PARALLEL` to
-one on every platform. Each accepts an explicit value of two; the issues pool
-requires four batches. `UT_ISSUES_BATCHES=1` retains the single-process rollback.
-Invalid combinations fail before preparation. Preparation failure falls back
-before execution; runtime failure never reruns completed roots.
+For the four-batch Makefile/CI run, `UT_ISSUES_BATCH_PARALLEL` defaults to two
+on Linux and one on other platforms; `UT_EMBEDDED_PACKAGE_PARALLEL` remains
+one everywhere. Direct one-batch runner use remains serial unless the pool is
+explicitly selected. Each accepts an explicit value of two; the issues pool
+requires four batches. `UT_ISSUES_BATCHES=1` retains the single-process
+rollback. Invalid combinations fail before preparation. Preparation failure
+falls back before execution; runtime failure never reruns completed roots. Pool
+mode uses round-robin roots to avoid a contiguous long-tail batch; serial mode
+retains the historical contiguous partition.
 
 The existing dispatcher owns children, watchdogs and reports for both wave
 types. It admits at most the configured number of commands, reaps completed
@@ -76,11 +95,12 @@ and cover cross-process slots, exclusive competition, cancellation and reuse.
 Run affected normal/race packages and incremental static checks; reuse unchanged
 embed lifecycle evidence. No new cluster fixture or SQL BVT is needed.
 
-The extra slot locks and retry work apply only to opted-in test startup. Existing
-subset measurements motivate experimentation, not a default resource budget.
-Default adoption requires matched successful serial/pool waves with elapsed,
-CPU and peak memory results on the intended runner. This requirement does not
-block optional execution with the deterministic correctness evidence above.
+The extra slot locks and retry work apply only to the bounded issues pool; other
+test lifecycles keep the existing exclusive admission path. Existing subset
+measurements motivate the two-process Linux default, not an unbounded resource
+budget. The first matched Linux run must record elapsed time, CPU throttling,
+peak memory, and OOM/max events. If that evidence violates the runner budget,
+`UT_ISSUES_BATCH_PARALLEL=1` is the immediate serial rollback.
 
 ## Original PR29760 design (v4)
 

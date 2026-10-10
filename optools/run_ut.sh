@@ -56,7 +56,13 @@ UT_SHARD=${UT_SHARD:-"all"}
 # the complete-scope go test before any prebuilt binary is executed.
 UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"1"}
 UT_ISSUES_BATCHES=${UT_ISSUES_BATCHES:-"1"}
-UT_ISSUES_BATCH_PARALLEL=${UT_ISSUES_BATCH_PARALLEL:-"1"}
+if [[ -z "${UT_ISSUES_BATCH_PARALLEL+x}" ]]; then
+    if [[ "${UT_ISSUES_BATCHES}" == 4 ]] && [[ "$(uname -s)" == Linux ]]; then
+        UT_ISSUES_BATCH_PARALLEL="2"
+    else
+        UT_ISSUES_BATCH_PARALLEL="1"
+    fi
+fi
 UT_EMBEDDED_PACKAGE_PARALLEL=${UT_EMBEDDED_PACKAGE_PARALLEL:-"1"}
 # Nine race binaries currently occupy several GiB. Preserve enough workspace
 # headroom for Go's build cache, reports, and the running issues fixture.
@@ -2260,7 +2266,11 @@ function run_issues_race_batches(){
         deadline=$(( $(date +%s) + 10#${UT_TIMEOUT} * 60 ))
         run_race_inventory_with_deadline "${directory}" "${binary}" "${inventory}" "${deadline}" || status=$?
     fi
-    if (( status == 0 )) && ! partition_race_test_inventory "${inventory}" "${batches}" contiguous; then status=1; fi
+    local partition_layout=contiguous
+    if (( status == 0 && 10#${UT_ISSUES_BATCH_PARALLEL} > 1 )); then
+        partition_layout=roundrobin
+    fi
+    if (( status == 0 )) && ! partition_race_test_inventory "${inventory}" "${batches}" "${partition_layout}"; then status=1; fi
     if (( status == 124 || status == 125 )); then
         logger "ERR" "issues batching discovery exhausted its shared timeout (status ${status}); refusing an unbounded fallback" >&2
         if (( status == 124 )); then
@@ -2301,7 +2311,7 @@ function run_issues_race_batches(){
     # The process pool is enabled only for this exact prebuilt batch wave.
     # Ordinary packages keep the exclusive cluster admission contract.
     if (( 10#${UT_ISSUES_BATCH_PARALLEL} > 1 )); then
-        logger "INF" "Run ${batches} issues batches with bounded parallelism ${UT_ISSUES_BATCH_PARALLEL}" >&2
+        logger "INF" "Run ${batches} issues batches with bounded parallelism ${UT_ISSUES_BATCH_PARALLEL} and ${partition_layout} partition" >&2
         MO_TEST_CLUSTER_ADMISSION_POOL_SIZE="${UT_ISSUES_BATCH_PARALLEL}" \
             run_prebuilt_race_commands serial "${PREBUILT_RACE_REPORT}" \
                 "${UT_ISSUES_BATCH_PARALLEL}" "$((10#${UT_TIMEOUT} * 60 + 120))"
