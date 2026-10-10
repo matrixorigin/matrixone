@@ -17,11 +17,13 @@ package motrace
 import (
 	"context"
 	"encoding/json"
-	"github.com/matrixorigin/matrixone/pkg/config"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
@@ -66,6 +68,78 @@ func TestTerminalDiagnosticsEarlyErrorAndAggregation(t *testing.T) {
 		})
 	}
 	require.Equal(t, 3, reports)
+}
+
+// Exercise the production aggregation and export path, rather than only its predicate.
+func TestStatementDiagnosticsAggregationExport(t *testing.T) {
+	old := GetTracerProvider()
+	t.Cleanup(func() { SetTracerProvider(old) })
+	stub := gostub.Stub(&ReportStatement, func(context.Context, *StatementInfo) error { return nil })
+	t.Cleanup(stub.Reset)
+	ctx := context.Background()
+	fixed := time.Date(2026, time.October, 10, 12, 0, 1, 0, time.UTC)
+	failure := errors.New("missing table")
+	for _, tc := range []struct {
+		name, format string
+		err          error
+		retain       bool
+	}{
+		{name: "compact success", format: "compact-v1"},
+		{name: "legacy failure", format: "legacy", err: failure},
+		{name: "compact failure", format: "compact-v1", err: failure, retain: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			SetTracerProvider(newMOTracerProvider(EnableTracer(true), WithStatementDiagnosticsFormat(tc.format), WithLongQueryTime(1), WithSelectThreshold(time.Second)))
+			aggr := NewAggregator(ctx, 5*time.Second, StatementInfoNew, StatementInfoUpdate, StatementInfoFilter)
+			t.Cleanup(aggr.Close)
+			row := SingleStatementTable.GetRow(ctx)
+			t.Cleanup(row.Free)
+			var output []table.Item
+			for i := 0; i < 2; i++ {
+				s := &StatementInfo{Account: "test", User: "admin", Statement: []byte("select 1"), RequestAt: fixed.Add(-time.Millisecond), ResponseAt: fixed, Duration: time.Millisecond, StatementType: "Select", SqlSourceType: "cloud_nonuser_sql"}
+				t.Cleanup(s.Free)
+				s.EndStatement(ctx, tc.err, 0, 0, 0)
+				returned, err := aggr.AddItem(s)
+				if tc.retain {
+					require.ErrorIs(t, err, ErrFilteredOut)
+					require.Same(t, s, returned)
+					output = append(output, returned)
+				} else {
+					require.NoError(t, err)
+					require.Nil(t, returned)
+				}
+			}
+			grouped := aggr.GetResults()
+			if tc.retain {
+				require.Empty(t, grouped)
+				require.Len(t, output, 2)
+			} else {
+				require.Len(t, grouped, 1)
+				output = grouped
+			}
+			for _, item := range output {
+				item.(*StatementInfo).FillRow(ctx, row)
+				values := statementCapacityValues(row.ToStrings())
+				if tc.err != nil {
+					require.Equal(t, "Failed", values["status"])
+					require.Equal(t, failure.Error(), values["error"])
+				} else {
+					require.Equal(t, "Success", values["status"])
+				}
+				if tc.retain {
+					require.Equal(t, "0", values["aggr_count"])
+					var payload models.ExplainData
+					require.NoError(t, json.Unmarshal([]byte(values["exec_plan"]), &payload))
+					require.NotNil(t, payload.StatementDiagnostics)
+					require.Equal(t, 2, payload.StatementDiagnostics.Level)
+					require.Equal(t, "failed", payload.StatementDiagnostics.Outcome)
+				} else {
+					require.Equal(t, "2", values["aggr_count"])
+					require.Equal(t, "{}", values["exec_plan"])
+				}
+			}
+		})
+	}
 }
 
 func TestStatementDiagnosticsFormatConfiguration(t *testing.T) {
