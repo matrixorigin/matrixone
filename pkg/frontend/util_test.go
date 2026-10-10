@@ -1910,6 +1910,27 @@ func Test_setMysqlColumnTypeMetadataDecimalLength(t *testing.T) {
 	}
 }
 
+func Test_setMysqlColumnTypeMetadataMediumIntLength(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    types.Type
+		signed bool
+		length uint32
+	}{
+		{name: "signed", typ: types.New(types.T_int32, 24, -1), signed: true, length: 9},
+		{name: "unsigned", typ: types.New(types.T_uint32, 24, -1), signed: false, length: 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			col.SetSigned(tc.signed)
+			setMysqlColumnTypeMetadata(col, tc.typ)
+
+			require.Equal(t, tc.length, col.Length())
+			require.Zero(t, col.Decimal())
+		})
+	}
+}
+
 func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 	cases := []struct {
 		name      string

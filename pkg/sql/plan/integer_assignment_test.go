@@ -89,18 +89,37 @@ func TestMediumIntAssignmentRequiresClusterProtocolFence(t *testing.T) {
 	var mediumType types.Type = types.New(types.T_int32, 24, -1)
 	mediumPlanType := makePlan2Type(&mediumType)
 	source := MakePlan2Int32ConstExprWithType(1)
+	targetExpr := &Expr{Typ: mediumPlanType, Expr: &pb.Expr_T{T: &pb.TargetType{}}}
+	preparedMedium := &Expr{
+		Typ:  mediumPlanType,
+		Expr: &pb.Expr_P{P: &pb.ParamRef{Pos: 0}},
+	}
+	builder := NewQueryBuilder(pb.Query_SELECT, NewMockCompilerContext(true, proc), false, true)
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion108)
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion109)
 	_, err := forceAssignmentCastExprWithProcess(t.Context(), source, mediumPlanType, false, proc)
+	require.ErrorContains(t, err, "protocol version 109")
+	_, err = forceCastExpr2WithProcess(t.Context(), source, mediumType, targetExpr, false, proc)
+	require.ErrorContains(t, err, "protocol version 109")
+	_, err = builder.forceProjectedAssignmentCastExpr(preparedMedium, preparedMedium, mediumPlanType, false)
 	require.ErrorContains(t, err, "protocol version 109")
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion108)
 	_, err = forceAssignmentCastExprWithProcess(t.Context(), source, mediumPlanType, false, proc)
 	require.ErrorContains(t, err, "authoring floor=108")
+	_, err = forceCastExpr2WithProcess(t.Context(), source, mediumType, targetExpr, false, proc)
+	require.ErrorContains(t, err, "authoring floor=108")
+	_, err = builder.forceProjectedAssignmentCastExpr(preparedMedium, preparedMedium, mediumPlanType, false)
+	require.ErrorContains(t, err, "authoring floor=108")
 
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion109)
 	_, err = forceAssignmentCastExprWithProcess(t.Context(), source, mediumPlanType, false, proc)
 	require.NoError(t, err)
+	_, err = forceCastExpr2WithProcess(t.Context(), source, mediumType, targetExpr, false, proc)
+	require.NoError(t, err)
+	preparedCast, err := builder.forceProjectedAssignmentCastExpr(preparedMedium, preparedMedium, mediumPlanType, false)
+	require.NoError(t, err)
+	require.Equal(t, "cast_assign", preparedCast.GetF().GetFunc().GetObjName())
 }

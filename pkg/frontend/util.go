@@ -2118,6 +2118,14 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	if typ.IsDecimal() {
 		// DECIMAL display length depends on scale and signedness, not just precision.
 		col.SetLength(mysqlDecimalDisplayLength(typ.Width, typ.Scale, col.IsSigned()))
+	} else if typ.IsMediumInt() {
+		// ColumnDefinition41 uses MySQL's default MEDIUMINT display widths:
+		// 9 characters for signed values and 8 for unsigned values.
+		if col.IsSigned() {
+			col.SetLength(9)
+		} else {
+			col.SetLength(8)
+		}
 	} else if typ.Oid == types.T_year {
 		// Keep YEAR metadata consistent with regular query result columns.
 		col.SetLength(4)
