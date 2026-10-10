@@ -1,6 +1,6 @@
 # Scalar RC TRUNCATE admission
 
-Status: design approved; implementation and validation pending.
+Status: design approved; implementation and validation tracked in the linked PR.
 Issue: https://github.com/matrixorigin/matrixone/issues/29400
 Implementation: https://github.com/matrixorigin/matrixone/pull/29837
 
@@ -45,6 +45,7 @@ Reuse the current distributed lifecycle keys and replacement executor:
 5. Authoritatively read both FK catalog directions and history in this same
    transaction without FOR UPDATE. Include physical and SnapshotTableID
    identities, existing scope rules and account identity resolved by account ID.
+   User snapshots are checked in the actor catalog as well as SYS history.
    Reserved protection snapshots select broad handling as well.
 6. Run existing SHOW CREATE/DROP/CREATE, omitting the G write, lineage preparation
    and preservation, and branch reclaim only for this certified root.
@@ -85,3 +86,13 @@ panic, and post-DROP/CREATE rollback. Preserve branch successor/history and
 DIFF/MERGE behavior, SI, temporary tables, optimized DELETE and auto-increment.
 Run affected normal/race/static checks and final gpt-6.1-sol/xhigh overall review.
 Unchanged v1 evidence remains reusable only where dependencies did not change.
+
+## Historical compatibility boundary
+
+The scoped path excludes tenant snapshots, including renamed tables identified
+by their stable logical ID. The existing broad path remains unchanged. QA found
+an existing tenant historical-lineage retention defect: broad positive probes
+and compaction read only SYS snapshots. This change does not claim to repair
+that defect or close historical convoy limits. Its red reproduction is retained
+outside the source tree for a separate correction. The same design session
+explicitly approved this narrower boundary after challenging retention scope.

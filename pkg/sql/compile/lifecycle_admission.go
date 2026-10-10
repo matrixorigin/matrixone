@@ -16,16 +16,20 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -233,4 +237,185 @@ func (c *Compile) verifyLifecycleRegistryRow() error {
 		return moerr.NewInternalError(c.proc.Ctx, "missing or duplicate SNAPSHOT lifecycle registry row")
 	}
 	return nil
+}
+
+// Scalar replacement consumes no external constraints or owned descendants.
+// Inspect live constraints as well as the planner-facing definition.
+func scalarReplacementShape(ctx context.Context, rel engine.Relation) (bool, error) {
+	def := rel.GetTableDef(ctx)
+	if def == nil || def.TableType != catalog.SystemOrdinaryRel || def.IsTemporary ||
+		def.Partition != nil || len(def.Indexes) != 0 || len(def.Fkeys) != 0 || len(def.RefChildTbls) != 0 {
+		return false, nil
+	}
+	extra := rel.GetExtraInfo()
+	if extra == nil || extra.FeatureFlag != 0 || extra.ParentTableID != 0 || len(extra.IndexTables) != 0 {
+		return false, nil
+	}
+	ct, err := GetConstraintDef(ctx, rel)
+	if err != nil {
+		return false, err
+	}
+	for _, constraint := range ct.Cts {
+		switch value := constraint.(type) {
+		case *engine.ForeignKeyDef:
+			if len(value.Fkeys) != 0 {
+				return false, nil
+			}
+		case *engine.RefChildTableDef:
+			if len(value.Tables) != 0 {
+				return false, nil
+			}
+		case *engine.IndexDef:
+			if len(value.Indexes) != 0 {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
+// These nonlocking reads overlay the caller's workspace. G/D/K/T ownership and
+// the applied frontier make the final negative result authoritative.
+func (c *Compile) scalarReplacementProtected(database, table string, physicalID, logicalID uint64) (bool, error) {
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return false, err
+	}
+	accountName, err := c.lifecycleAccountName()
+	if err != nil {
+		return false, err
+	}
+	dbName, tableName := sqlquote.String(database), sqlquote.String(table)
+	fkSQL := fmt.Sprintf("select 1 from mo_catalog.mo_foreign_keys where (db_name=%s and table_name=%s) or (refer_db_name=%s and refer_table_name=%s) limit 1", dbName, tableName, dbName, tableName)
+	fk, err := alterDataBranchHistoricalSourceExists(func(sql string) (executor.Result, error) {
+		return c.runSqlWithResultAndOptions(sql, int32(accountID), executor.StatementOption{}.WithDisableLog())
+	}, []string{fkSQL})
+	if err != nil || fk {
+		return fk, err
+	}
+	// User snapshots are owned by the actor catalog. SYS also contains
+	// cross-account history and the reserved branch protection snapshots.
+	if accountID != catalog.System_Account {
+		protected, err := alterDataBranchHistoricalSourceExists(func(sql string) (executor.Result, error) {
+			return c.runSqlWithResultAndOptions(sql, int32(accountID), executor.StatementOption{}.WithDisableLog())
+		}, []string{alterDataBranchHistoricalSnapshotSourceProbeSQL(accountName, database, table, physicalID, false, logicalID)})
+		if err != nil || protected {
+			return protected, err
+		}
+	}
+	sqls := []string{
+		alterDataBranchParticipationSQL(physicalID),
+		alterDataBranchHistoricalSnapshotSourceProbeSQL(accountName, database, table, physicalID, false, logicalID),
+		alterDataBranchHistoricalPitrSourceProbeSQL(accountName, database, table, physicalID, false, logicalID),
+		fmt.Sprintf("select 1 from mo_catalog.mo_snapshots where kind='branch' and sname in (%s,%s) limit 1", sqlquote.String(fmt.Sprintf("__mo_branch_%d", physicalID)), sqlquote.String(fmt.Sprintf("__mo_branch_%d", logicalID))),
+	}
+	return alterDataBranchHistoricalSourceExists(func(sql string) (executor.Result, error) {
+		return c.runSqlWithResultAndOptions(sql, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+	}, sqls)
+}
+
+func (c *Compile) retryBroadReplacement() error {
+	if err := c.admitLifecycleRC(nil, true); err != nil {
+		return err
+	}
+	return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+}
+
+func (c *Compile) admitScalarReplacementRC(database, table string, original engine.Relation) (engine.Database, engine.Relation, *dropLifecycleAdmission, error) {
+	ctx := c.proc.Ctx
+	eligible, err := scalarReplacementShape(ctx, original)
+	if err != nil || !eligible {
+		return nil, nil, nil, err
+	}
+	id := original.GetTableID(ctx)
+	logicalID := plan2.SnapshotTableID(original.GetTableDef(ctx))
+	protected, err := c.scalarReplacementProtected(database, table, id, logicalID)
+	if err != nil || protected {
+		return nil, nil, nil, err
+	}
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := c.admitLifecycleRC([]lifecycleDatabaseName{{accountID: accountID, name: database, mode: lock.LockMode_Shared}}, false); err != nil {
+		return nil, nil, nil, err
+	}
+	dag, err := c.loadBranchReclaimComponentsRC([]uint64{id})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if len(dag.Info) != 0 {
+		return nil, nil, nil, c.retryBroadReplacement()
+	}
+	catalogRel, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	keys, err := getLockBatch(c.proc, accountID, []string{database, table})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	_, err = lockop.LockRowsForAdmissionWithContext(ctx, c.e, c.proc,
+		catalogRel.GetTableID(ctx), keys, 0, *keys.Vecs[0].GetType(), lock.LockMode_Exclusive, accountID)
+	keys.Vecs[0].Free(c.proc.Mp())
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := lockTable(ctx, c.e, c.proc, original, database, false); err != nil {
+		return nil, nil, nil, err
+	}
+	if err := c.advanceLifecycleAdmissionSnapshot(); err != nil {
+		return nil, nil, nil, err
+	}
+	db, err := c.e.Database(ctx, database, c.proc.GetTxnOperator())
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	rel, err := db.Relation(ctx, table, nil)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	eligible, err = scalarReplacementShape(ctx, rel)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if !eligible || rel.GetTableID(ctx) != id || rel.GetDBID(ctx) != original.GetDBID(ctx) || plan2.SnapshotTableID(rel.GetTableDef(ctx)) != logicalID {
+		return nil, nil, nil, c.retryBroadReplacement()
+	}
+	protected, err = c.scalarReplacementProtected(database, table, id, logicalID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if protected {
+		return nil, nil, nil, c.retryBroadReplacement()
+	}
+	admission := &dropLifecycleAdmission{rootID: id, accountID: accountID,
+		root: dropLifecycleIdentity{database: database, table: table, databaseID: rel.GetDBID(ctx), logicalID: logicalID}}
+	return db, rel, admission, nil
+}
+
+func (c *Compile) lifecycleAccountName() (string, error) {
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return "", err
+	}
+	account, err := c.runSqlWithResultAndOptions(
+		fmt.Sprintf("select account_name from mo_catalog.mo_account where account_id=%d", accountID),
+		int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+	if err != nil {
+		account.Close()
+		return "", err
+	}
+	accountName := ""
+	account.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows != 0 {
+			accountName = executor.GetStringRows(cols[0])[0]
+		}
+		return false
+	})
+	account.Close()
+	if accountName == "" {
+		return "", moerr.NewInternalError(c.proc.Ctx, "missing lifecycle account identity")
+	}
+	return accountName, nil
 }
