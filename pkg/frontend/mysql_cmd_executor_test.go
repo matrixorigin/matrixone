@@ -11818,13 +11818,18 @@ func TestRecordStatementUTF8(t *testing.T) {
 				require.NoError(t, err)
 				stmt := ses.tStmt
 				require.NotNil(t, stmt)
-				defer func() { stmt.EndStatement(statementCtx, nil, 1, 0, 0); stmt.Free(); ses.SetTStmt(nil) }()
+				row := motrace.SingleStatementTable.GetRow(ctx)
+				defer func() {
+					stmt.EndStatement(statementCtx, nil, 1, 0, 0)
+					stmt.FillRow(ctx, row)
+					row.Free()
+					stmt.Free()
+					ses.SetTStmt(nil)
+				}()
 				require.Equal(t, want, ses.GetSqlOfStmt())
 				require.Equal(t, want, string(stmt.Statement))
 				require.True(t, utf8.Valid(stmt.Statement))
 				stmt.EndStatement(statementCtx, nil, 1, 0, 0)
-				row := motrace.SingleStatementTable.GetRow(ctx)
-				defer row.Free()
 				stmt.FillRow(ctx, row)
 				for i, col := range motrace.SingleStatementTable.Columns {
 					if col.Name == "statement" {
