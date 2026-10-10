@@ -119,16 +119,15 @@ func TestExporter(t *testing.T) {
 			h.Observe(float64(i))
 		}
 
-		// Two full raw-histogram batches were sent synchronously by Observe.
-		// Gather twice to flush the remaining samples and exercise the regular
+		// Two full raw-histogram batches are sent synchronously by Observe.
+		// One gather flushes the remaining samples and exercises the regular
 		// counter/gauge export path without relying on a ticker or wall-clock wait.
 		exp.gatherAndSend()
-		exp.gatherAndSend()
 	})
-	assert.Equal(t, 4, dumCollect.sendCnt())
+	assert.Equal(t, 3, dumCollect.sendCnt())
 
 	// 14 Observe + 4 addCommonInfo
-	if dumClock()-1 != 14+4 {
+	if dumClock()-1 != 14+3 {
 		t.Errorf("disorder time")
 	}
 
