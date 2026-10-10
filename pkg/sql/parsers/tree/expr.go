@@ -1897,7 +1897,11 @@ func (node *VarExpr) Format(ctx *FmtCtx) {
 			}
 			ctx.WriteString(node.Name)
 		} else {
-			ctx.WriteIdentifier(Identifier(node.Name))
+			name := node.Name
+			if ctx.canonicalUserVariableNames {
+				name = strings.ToLower(name)
+			}
+			ctx.WriteIdentifier(Identifier(name))
 		}
 	}
 }

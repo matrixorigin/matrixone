@@ -2337,6 +2337,21 @@ func (ses *Session) cachePlanWithSnapshotsAndStatsVersions(
 	planStatsVersions []map[optimizerStatsTableKey]uint64,
 	versions ...int64,
 ) {
+	ses.cachePlanWithSnapshotsAndStatsVersionsAndFingerprints(
+		sql, stmts, plans, planSnapshotTS, planStatsVersions,
+		make([]string, len(plans)), make([]bool, len(plans)), versions...)
+}
+
+func (ses *Session) cachePlanWithSnapshotsAndStatsVersionsAndFingerprints(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	planStatsVersions []map[optimizerStatsTableKey]uint64,
+	statementFingerprints []string,
+	statementFingerprintAttempted []bool,
+	versions ...int64,
+) {
 	if len(sql) == 0 {
 		return
 	}
@@ -2357,8 +2372,9 @@ func (ses *Session) cachePlanWithSnapshotsAndStatsVersions(
 	if len(versions) > 0 {
 		protocolVersion = versions[0]
 	}
-	ses.planCache.cacheWithPlanSnapshotsAndStatsVersions(
-		sql, stmts, plans, planSnapshotTS, planStatsVersions, protocolVersion)
+	ses.planCache.cacheWithPlanSnapshotsAndStatsVersionsAndFingerprints(
+		sql, stmts, plans, planSnapshotTS, planStatsVersions,
+		statementFingerprints, statementFingerprintAttempted, protocolVersion)
 }
 
 func (ses *Session) getCachedPlan(sql string) *cachedPlan {
@@ -2943,6 +2959,16 @@ func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareSt
 	}
 	ses.Errorf(ctx, "prepared statement '%s' does not exist on connection %d", name, connID)
 	return nil, moerr.NewInvalidStatef(ctx, "prepared statement '%s' does not exist", name)
+}
+
+// getPrepareStmtIfPresent looks up an optional prepared statement without
+// logging when it is absent. Callers that only capture a construction-time
+// snapshot must not report an execution error before the statement runs.
+func (ses *Session) getPrepareStmtIfPresent(name string) (*PrepareStmt, bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	prepareStmt, ok := ses.prepareStmts[strings.ToLower(name)]
+	return prepareStmt, ok
 }
 
 func (ses *Session) GetPrepareStmts() []*PrepareStmt {
