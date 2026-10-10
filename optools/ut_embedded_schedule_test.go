@@ -582,6 +582,7 @@ if [[ "$PHASE" == running ]]; then (read -r _ <&8; kill -TERM $$) & fi
 run_embedded_tests "$scope" 2
 `
 			var transform func(string) string
+			mock := embeddedGoMock
 			switch phase {
 			case "active-publication":
 				transform = func(text string) string {
@@ -592,19 +593,67 @@ run_embedded_tests "$scope" 2
 					return strings.Replace(text, anchor, "        ut_test_execution_spawned\n"+anchor, 1)
 				}
 			case "watchdog-publication":
+				mock = strings.Replace(mock, `trap 'touch "$CASE_DIR/stopped-execute-a"; exit 143' TERM`, `trap 'printf "MOCK_TERM shell=%s\n" "$BASHPID" >&16; touch "$CASE_DIR/stopped-execute-a"; printf "MOCK_STOPPED shell=%s\n" "$BASHPID" >&16; exit 143' TERM`, 1)
+				script = strings.Replace(script, " printf 'EXECUTE_CANCELLED %s\\n' \"$status\"", " cat \"$CASE_DIR/ut-signal-trace.log\"\n printf 'EXECUTE_CANCELLED %s\\n' \"$status\"", 1)
+				script = strings.Replace(script, "function ut_test_execution_spawned() {", `exec 16>"$CASE_DIR/ut-signal-trace.log"
+printf 'BASH %s outer=%s shell=%s\n' "$BASH_VERSION" "$$" "$BASHPID" >&16
+function kill() {
+ local result=0
+ builtin kill "$@" || result=$?
+ if [[ "$1" != -0 ]]; then printf 'KILL shell=%s result=%s args=%s\n' "$BASHPID" "$result" "$*" >&16; fi
+ return "$result"
+}
+function ut_test_execution_spawned() {`, 1)
+				script = strings.Replace(script, " kill -TERM $$\n}", " kill -TERM $$\n printf 'HOOK shell=%s watchdog=%s pending=%s\\n' \"$BASHPID\" \"$1\" \"$term_pending\" >&16\n}", 1)
 				transform = func(text string) string {
 					const anchor = "            watchdog_pids[index]=$!\n"
 					if strings.Count(text, anchor) != 1 {
 						t.Fatal("missing watchdog pid publication")
 					}
-					return strings.Replace(text, anchor, "        ut_test_execution_spawned\n"+anchor, 1)
+					boundary := strings.Index(text, "function run_prebuilt_race_commands(){")
+					if boundary < 0 {
+						t.Fatal("missing prebuilt execution owner")
+					}
+					prefix := text[:boundary]
+					text = text[boundary:]
+					text = strings.ReplaceAll(text, "trap 'term_pending=1' TERM", "trap 'term_pending=1; printf \"DEFERRED shell=%s\\n\" \"$BASHPID\" >&16' TERM")
+					text = strings.ReplaceAll(text, `            restore_ut_term_trap "${execution_term_trap}"`, `            restore_ut_term_trap "${execution_term_trap}"
+            printf 'RESTORED shell=%s pending=%s\n' "$BASHPID" "$term_pending" >&16`)
+					text = strings.Replace(text, `            child_pids[index*2]=${test_pids[index]}`, `            child_pids[index*2]=${test_pids[index]}
+            printf 'TEST_PUBLISHED shell=%s test=%s\n' "$BASHPID" "${test_pids[index]}" >&16`, 1)
+					text = strings.Replace(text, "    function cancel_prebuilt_race_commands(){\n", "    function cancel_prebuilt_race_commands(){\n        printf 'CANCEL shell=%s test=%s watchdog=%s\\n' \"$BASHPID\" \"${test_pids[*]}\" \"${watchdog_pids[*]}\" >&16\n", 1)
+					text = strings.Replace(text, "        wait 2>/dev/null || true\n", "        printf 'DRAINED shell=%s\\n' \"$BASHPID\" >&16\n        wait 2>/dev/null || true\n        printf 'JOINED shell=%s\\n' \"$BASHPID\" >&16\n", 1)
+					return prefix + strings.Replace(text, anchor, "        ut_test_execution_spawned \"$!\"\n"+anchor+"            printf 'PUBLISHED shell=%s watchdog=%s\\n' \"$BASHPID\" \"${watchdog_pids[index]}\" >&16\n", 1)
 				}
 			}
-			out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, transform,
+			out, err := scheduleHarnessWithMockTransform(t, script, mock, transform,
 				"MODE=execute-cancel", "PHASE="+phase, "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=")
 			exit, ok := err.(*exec.ExitError)
 			if !ok || exit.ExitCode() != 143 || !strings.Contains(string(out), "EXECUTE_CANCELLED 143") {
 				t.Fatalf("embedded execution cancellation %s: %v\n%s", phase, err, out)
+			}
+			if phase == "watchdog-publication" {
+				for _, event := range []string{"BASH ", "HOOK ", "PUBLISHED ", "CANCEL ", "DRAINED ", "JOINED ", "MOCK_TERM ", "MOCK_STOPPED "} {
+					if !strings.Contains(string(out), event) {
+						t.Fatalf("missing signal trace %s: %s", event, out)
+					}
+				}
+				var captured, published string
+				for _, line := range strings.Split(string(out), "\n") {
+					for _, field := range strings.Fields(line) {
+						if strings.HasPrefix(field, "watchdog=") {
+							if strings.HasPrefix(line, "HOOK ") {
+								captured = field
+							}
+							if strings.HasPrefix(line, "PUBLISHED ") {
+								published = field
+							}
+						}
+					}
+				}
+				if captured == "" || captured != published {
+					t.Fatalf("watchdog publication changed identity: %s", out)
+				}
 			}
 		})
 	}
