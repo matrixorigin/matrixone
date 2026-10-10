@@ -70,7 +70,6 @@ func TestDataBranchFractionalTemporalPrimaryKey(t *testing.T) {
 			{name: "time_zero_fraction", sqlType: "time(6)", scale: 6, sessionTimeZone: "+00:00"},
 		}
 		for _, tc := range temporalCases {
-			tc := tc
 			t.Run(tc.name, func(t *testing.T) {
 				execSQLDB(t, ctx, db, fmt.Sprintf("set time_zone = '%s'", tc.sessionTimeZone))
 				runTemporalPrimaryKeyBranchCase(t, ctx, db, tc.name, tc.sqlType, tc.scale, tc.fractional)
@@ -112,7 +111,6 @@ func TestDataBranchFractionalTemporalPrimaryKey(t *testing.T) {
 				},
 			}
 			for _, bc := range boundaryCases {
-				bc := bc
 				t.Run(bc.name, func(t *testing.T) {
 					execSQLDB(t, ctx, db, fmt.Sprintf("set time_zone = '%s'", bc.sessionTimeZone))
 					runTemporalPrimaryKeyValuesCase(t, ctx, db,
@@ -483,7 +481,6 @@ func runCompositeTemporalPrimaryKeyBranchCase(
 	temporalFirst bool,
 ) {
 	t.Helper()
-	const sqlType = "datetime(6)"
 	whole := temporalBranchKey("datetime", 6, 0, "000000")
 	first := temporalBranchKey("datetime", 6, 0, "000001")
 	second := temporalBranchKey("datetime", 6, 0, "000002")
