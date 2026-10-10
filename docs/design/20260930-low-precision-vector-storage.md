@@ -73,14 +73,18 @@ reference produce for the same input:
   round-to-nearest-even with the CUDA tie and saturation rules: the float64 quotient
   cannot fall on an E2M1/E4M3 midpoint unless the exact quotient is that midpoint.
 - Encoding is deterministic: equal inputs give equal cells.
-- **Decoded value, CPU ≡ GPU.** A cell's element decodes to `element × blockScale × global`, and
-  the decode preserves any value representable as a float32 subnormal: an intermediate float32
-  product (e.g. `global × blockScale` for a subnormal global) must not underflow an element to zero
-  when its fully-scaled value is representable. So the zero/nonzero classification — and therefore
-  the zero-vector convention (self cosine distance 1 for the zero vector, ~0 for a nonzero one) — is
-  a property of the cell, agreed on the CPU and the tensor cores (which apply the global in double)
-  within the domain below, not an artifact of which executor runs. The CPU finishes such a decode in float64; this is
-  a decode-value rule at the type owner, not a per-query fallback. The agreement domain is every
+- **Decoded value, CPU ≡ GPU.** A cell's element decodes to `element × blockScale × global`. When the
+  block scale `global × blockScale` is a **normal** float32 the decode is the plain float32 product.
+  When it is **subnormal** (a tiny global), folding it in float32 first is wrong twice over: the
+  per-element `element × scale` then rounds in the subnormal range, which can zero a representable value
+  **and** distort the decoded **direction** (e.g. `1.5·s → 2s` but `6·s → 6s`, decoding a 1:4 vector as
+  1:3). For a subnormal block scale the global is therefore applied in **float64** so `element ×
+  blockScale` stays in normal range first — matching the GPU, which keeps `element × blockScale` in
+  float and applies the global in double on the row norm. So the decoded value — its magnitude, its
+  zero/nonzero classification, and the vector's direction — is a property of the cell, agreed on the
+  CPU and the tensor cores within tolerance and not an artifact of which executor runs (self cosine
+  distance is 1 for the zero vector, ~0 for a nonzero one). This is a decode-value rule at the type
+  owner, not a per-query fallback. The agreement domain is every
   value representable as a float32 — which is every encoder-produced cell, since the encoder's inputs
   and outputs are float32 (nonzero magnitudes are ≥ 2^-149). A hand-built cell whose fully-scaled
   value is **below** float32 range (e.g. 2^-159) correctly rounds to 0 on the CPU (it returns one

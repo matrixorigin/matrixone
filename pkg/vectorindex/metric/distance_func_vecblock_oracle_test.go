@@ -15,6 +15,7 @@
 package metric
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"testing"
@@ -209,6 +210,41 @@ func TestVecBlockCPUMatchesGPUOracleCrossPair29554(t *testing.T) {
 					require.InDeltaf(t, want, got, 1e-5, "cosine distance must match the GPU oracle within float32 tolerance")
 				}
 			}
+		}
+	}
+}
+
+// TestVecBlockUnequalSubnormalDirection29554 is the review's unequal-coordinate witness. A row whose
+// two nonzero coordinates are deep float32 subnormals (s, 4s) must decode to direction 1:4. Folding
+// global*blockScale in float32 lands the per-element products in the subnormal range and distorts the
+// direction (1.5*s -> 2s but 6*s -> 6s gives 1:3), which self-cosine and zero/nonzero controls cannot
+// detect. The decode applies the global in float64 for subnormal block scales so the direction matches
+// the GPU. Row [s,4s] is parallel to query [1,4] (distance 0) and not to [4,1]; the CPU distance must
+// match the GPU oracle in both, at the scalar (dim 2), unit (dim 16) and unit+tail (dim 17) lengths.
+func TestVecBlockUnequalSubnormalDirection29554(t *testing.T) {
+	s := float32(math.SmallestNonzeroFloat32)
+	cases := []struct {
+		name           string
+		r0, r1, q0, q1 float32
+	}{
+		{"parallel", s, 4 * s, 1, 4},    // row 1:4 == query 1:4 -> distance 0
+		{"nonparallel", s, 4 * s, 4, 1}, // row 1:4 vs query 4:1 -> a large distance
+	}
+	for _, dim := range []int{2, 16, 17} {
+		for _, tc := range cases {
+			t.Run(fmt.Sprintf("dim%d/%s", dim, tc.name), func(t *testing.T) {
+				row := make([]float32, dim)
+				q := make([]float32, dim)
+				row[0], row[1] = tc.r0, tc.r1
+				q[0], q[1] = tc.q0, tc.q1
+				x, _ := vecBlockTestOperand(t, types.BlockScaledNVFP4, row)
+				y, _ := vecBlockTestOperand(t, types.BlockScaledNVFP4, q)
+				cpu, err := VecBlockCosineDistance(x, y)
+				require.NoError(t, err)
+				want := gpuCosineDistance(&x.Cell, &y.Cell)
+				require.InDeltaf(t, want, cpu, 1e-5,
+					"dim=%d %s: CPU cosine distance %v must match GPU oracle %v (subnormal decode must preserve direction)", dim, tc.name, cpu, want)
+			})
 		}
 	}
 }

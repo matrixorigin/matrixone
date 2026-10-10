@@ -423,21 +423,30 @@ func BlockScaledTables() (f8 *[256]float32, e8 *[256]float32, f4 *[256][2]float3
 const smallestNormalFloat32 = 0x1p-126
 
 // blockScaledElem is the one decoded-value contract for a block-scaled element: its value is
-// element*blockScale*global. The fast path is the plain float32 product element*(global*blockScale),
-// which is left unchanged, so every value that already decodes correctly keeps its exact rounding.
-// It finishes the multiply in float64 ONLY when that product lands on zero while all three factors
-// are nonzero -- an intermediate float32 underflow of global*blockScale (or of element*scale) that
-// would otherwise decode an element whose true value is a representable float32 subnormal to zero.
-// That misdecode would make an all-such vector the zero vector and its self-cosine 1 instead of 0,
-// disagreeing with the GPU, which applies the global scale in double precision. Recovering here makes
-// the zero/nonzero classification a property of the cell, identical on CPU and GPU and independent of
-// which executor runs. The float64 result is still zero when the value genuinely underflows float32.
+// element*blockScale*global. The fast path is the plain float32 product element*(global*blockScale)
+// and is left unchanged whenever the block scale global*blockScale is a NORMAL float32, so every
+// ordinary value keeps its exact rounding. When global*blockScale is SUBNORMAL (or zero), folding it
+// in float32 first is wrong: element*scale then lands in the subnormal range, where per-element
+// rounding either zeros a representable value or distorts the decoded direction (e.g. 1.5*s rounds to
+// 2s but 6*s stays 6s, decoding direction 1:3 for a 1:4 vector). In that case the global is applied in
+// float64 so element*blockScale stays in normal range first -- matching the GPU, which keeps
+// element*blockScale in float and applies the global in double on the row norm. This makes the decoded
+// value (and hence the zero/nonzero classification and the direction) a property of the cell,
+// consistent on CPU and GPU within tolerance and independent of which executor runs. A value that is
+// genuinely below float32 range still rounds to 0.
 func blockScaledElem(element, global, blockScale float32) float32 {
-	r := element * (global * blockScale)
-	if r == 0 && element != 0 && global != 0 && blockScale != 0 {
-		return float32(float64(element) * (float64(global) * float64(blockScale)))
+	scale := global * blockScale
+	if scale < smallestNormalFloat32 {
+		// global*blockScale is subnormal (or zero), so folding it in float32 first lands
+		// element*scale in the subnormal range, where per-element rounding distorts the decoded
+		// DIRECTION (e.g. 1.5*s rounds to 2s but 6*s stays 6s, giving direction 1:3 instead of the
+		// true 1:4) or zeros a representable value. Apply the global in float64 so element*blockScale
+		// stays in normal range first; the result then matches the GPU, which keeps element*blockScale
+		// in float and applies the global in double on the row norm. A genuinely tiny value still
+		// rounds to 0.
+		return float32(float64(element) * float64(blockScale) * float64(global))
 	}
-	return r
+	return element * scale
 }
 
 // At returns the dequantized element i (element*blockScale*global).
