@@ -686,6 +686,9 @@ func makeMinMaxExecWithLegacyText(
 			param.Charset == types.CharsetLegacy {
 			return newStrMinMaxExec(mp, aggID, isMin, param)
 		}
+		if types.IsUnicodeCollation(param.Charset) {
+			return newUnicodeMinMaxExec(mp, aggID, isMin, param)
+		}
 		if param.Charset == types.CharsetUTF8MB4Bin {
 			return newUTF8mb4BinMinMaxExec(mp, aggID, isMin, param)
 		}
@@ -801,6 +804,18 @@ func newTextMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Typ
 		exec.comp = compareUTF8mb4GeneralCI
 	} else {
 		exec.comp = func(x, y []byte) int { return -compareUTF8mb4GeneralCI(x, y) }
+	}
+	setupAggInfo(&exec.aggInfo, aggID, param)
+	return &exec
+}
+
+func newUnicodeMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) AggFuncExec {
+	var exec minMaxExecBytes
+	exec.mp = mp
+	if isMin {
+		exec.comp = func(x, y []byte) int { return types.CompareStringValues(param, x, y) }
+	} else {
+		exec.comp = func(x, y []byte) int { return -types.CompareStringValues(param, x, y) }
 	}
 	setupAggInfo(&exec.aggInfo, aggID, param)
 	return &exec

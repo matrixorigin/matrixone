@@ -28,19 +28,23 @@ SHOW COLLATION;
 binary  ¦  binary  ¦  63  ¦  YES  ¦  Yes  ¦  1  ¦  NO PAD  𝄀
 utf8_bin  ¦  utf8  ¦  83  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
 utf8_general_ci  ¦  utf8  ¦  33  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
+utf8_unicode_ci  ¦  utf8  ¦  192  ¦    ¦  Yes  ¦  8  ¦  PAD SPACE  𝄀
 utf8mb4_0900_ai_ci  ¦  utf8mb4  ¦  255  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
 utf8mb4_bin  ¦  utf8mb4  ¦  46  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
-utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE
+utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
+utf8mb4_unicode_ci  ¦  utf8mb4  ¦  224  ¦    ¦  Yes  ¦  8  ¦  PAD SPACE
 SHOW COLLATION LIKE 'utf8mb4%';
 ➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
 utf8mb4_0900_ai_ci  ¦  utf8mb4  ¦  255  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
 utf8mb4_bin  ¦  utf8mb4  ¦  46  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
-utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE
+utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
+utf8mb4_unicode_ci  ¦  utf8mb4  ¦  224  ¦    ¦  Yes  ¦  8  ¦  PAD SPACE
 SHOW COLLATION WHERE Charset = 'utf8mb4';
 ➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
 utf8mb4_0900_ai_ci  ¦  utf8mb4  ¦  255  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
 utf8mb4_bin  ¦  utf8mb4  ¦  46  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
-utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE
+utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
+utf8mb4_unicode_ci  ¦  utf8mb4  ¦  224  ¦    ¦  Yes  ¦  8  ¦  PAD SPACE
 SHOW COLLATION WHERE Collation = 'utf8mb4_bin';
 ➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
 utf8mb4_bin  ¦  utf8mb4  ¦  46  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE
@@ -201,7 +205,48 @@ CREATE TABLE t_utf8mb4_unicode_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-invalid input: unsupported collation 'utf8mb4_unicode_ci'; replace it with 'utf8mb4_general_ci' when restoring legacy MatrixOne DDL
+INSERT INTO t_utf8mb4_unicode_ci VALUES
+(1, 'Z'), (2, 'a'), (3, 'A'), (4, 'b');
+SELECT id FROM t_utf8mb4_unicode_ci WHERE name = 'a' ORDER BY id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+SELECT id FROM t_utf8mb4_unicode_ci WHERE name IN ('a') ORDER BY id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+SELECT id FROM t_utf8mb4_unicode_ci WHERE name NOT IN ('a') ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+4
+SELECT id, DENSE_RANK() OVER (ORDER BY name) AS r
+FROM t_utf8mb4_unicode_ci ORDER BY id;
+➤ id[4,32,0]  ¦  r[-5,64,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  2
+SELECT id, COUNT(*) OVER (PARTITION BY name) AS c
+FROM t_utf8mb4_unicode_ci ORDER BY id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  2  𝄀
+4  ¦  1
+SELECT COUNT(*) AS group_count
+FROM (SELECT name FROM t_utf8mb4_unicode_ci GROUP BY name) AS grouped;
+➤ group_count[-5,64,0]  𝄀
+3
+SELECT name FROM t_utf8mb4_unicode_ci ORDER BY name, id;
+➤ name[12,400,0]  𝄀
+a  𝄀
+A  𝄀
+b  𝄀
+Z
+SELECT name FROM t_utf8mb4_unicode_ci ORDER BY name, id LIMIT 2;
+➤ name[12,400,0]  𝄀
+a  𝄀
+A
 CREATE TABLE t_column_charset (
 id INT PRIMARY KEY,
 name_default VARCHAR(100),

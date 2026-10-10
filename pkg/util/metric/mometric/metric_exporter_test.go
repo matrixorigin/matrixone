@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type dummyCollect struct {
@@ -127,20 +126,20 @@ func TestExporter(t *testing.T) {
 			h.Observe(float64(i))
 		}
 
-		// Observe dispatches full batches asynchronously. Wait for both sends
-		// while the five-sample limit still applies, before gathering the tail
-		// or inspecting the clock and payloads.
-		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-		defer cancel()
+		// Observe dispatches full batches asynchronously. Wait for both to reach
+		// the collector before gathering or restoring the global buffer limit.
+		// The deadline bounds failure; notifications, not time, order the test.
+		deadline := time.NewTimer(5 * time.Second)
+		defer deadline.Stop()
 		for range 2 {
 			select {
 			case <-dumCollect.sent:
-			case <-ctx.Done():
-				require.NoError(t, ctx.Err(), "full raw-histogram batches did not finish")
+			case <-deadline.C:
+				t.Fatal("full histogram batches did not reach the collector")
 			}
 		}
-		// Gather twice to flush remaining samples and exercise counter/gauge
-		// export without relying on a ticker or scheduler timing.
+		// Gather twice to flush the remaining samples and exercise the regular
+		// counter/gauge export path without relying on a ticker.
 		exp.gatherAndSend()
 		exp.gatherAndSend()
 	})
