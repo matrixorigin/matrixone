@@ -1549,7 +1549,7 @@ func validateTableDumpAutoIncrementRestore(
 			offset = max(offset, def.AutoIncrOffset)
 			schemaOffset = max(schemaOffset, offset)
 		}
-		if err := incrservice.ValidateAutoColumnOffset(ctx, types.T(colDef.Typ.Id), offset); err != nil {
+		if err := incrservice.ValidateAutoColumnOffset(ctx, types.MustTypeFromPlan(colDef.Typ), offset); err != nil {
 			return nil, 0, err
 		}
 		restores = append(restores, tableDumpAutoIncrRestore{column: column, offset: offset})

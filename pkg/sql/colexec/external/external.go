@@ -837,13 +837,19 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 				}
 			}
 		case types.T_int32:
-			_, err := strconv.ParseInt(field.Val, 10, 32)
+			bits := 32
+			min, max := float64(math.MinInt32), float64(math.MaxInt32)
+			if (types.Type{Oid: types.T_int32, Width: col.Typ.Width}).IsMediumInt() {
+				bits = 24
+				min, max = -(1 << 23), (1<<23)-1
+			}
+			_, err := strconv.ParseInt(field.Val, 10, bits)
 			if err != nil {
 				if errors.Is(err, strconv.ErrRange) {
 					return false
 				}
 				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < math.MinInt32 || f > math.MaxInt32 {
+				if err != nil || f < min || f > max {
 					return false
 				}
 			}
@@ -881,13 +887,19 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 				}
 			}
 		case types.T_uint32:
-			_, err := strconv.ParseUint(field.Val, 10, 32)
+			bits := 32
+			max := float64(math.MaxUint32)
+			if (types.Type{Oid: types.T_uint32, Width: col.Typ.Width}).IsMediumInt() {
+				bits = 24
+				max = (1 << 24) - 1
+			}
+			_, err := strconv.ParseUint(field.Val, 10, bits)
 			if err != nil {
 				if errors.Is(err, strconv.ErrRange) {
 					return false
 				}
 				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < 0 || f > math.MaxUint32 {
+				if err != nil || f < 0 || f > max {
 					return false
 				}
 			}
@@ -1695,7 +1707,15 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_int32:
-		d, err := strconv.ParseInt(field.Val, 10, 32)
+		bits := 32
+		min, max := float64(math.MinInt32), float64(math.MaxInt32)
+		valueType := "int32"
+		if (types.Type{Oid: types.T_int32, Width: col.Typ.Width}).IsMediumInt() {
+			bits = 24
+			min, max = -(1 << 23), (1<<23)-1
+			valueType = "mediumint"
+		}
+		d, err := strconv.ParseInt(field.Val, 10, bits)
 		if err == nil {
 			if err := vector.AppendFixed(vec, int32(d), false, mp); err != nil {
 				return err
@@ -1703,12 +1723,12 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		} else {
 			if errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not int32 type for column %d", field.Val, colIdx)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, valueType, colIdx)
 			}
 			f, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil || f < math.MinInt32 || f > math.MaxInt32 {
+			if err != nil || f < min || f > max {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not int32 type for column %d", field.Val, colIdx)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, valueType, colIdx)
 			}
 			if err := vector.AppendFixed(vec, int32(f), false, mp); err != nil {
 				return err
@@ -1775,7 +1795,15 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_uint32:
-		d, err := strconv.ParseUint(field.Val, 10, 32)
+		bits := 32
+		max := float64(math.MaxUint32)
+		valueType := "uint32"
+		if (types.Type{Oid: types.T_uint32, Width: col.Typ.Width}).IsMediumInt() {
+			bits = 24
+			max = (1 << 24) - 1
+			valueType = "mediumint unsigned"
+		}
+		d, err := strconv.ParseUint(field.Val, 10, bits)
 		if err == nil {
 			if err := vector.AppendFixed(vec, uint32(d), false, mp); err != nil {
 				return err
@@ -1783,12 +1811,12 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		} else {
 			if errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint32 type for column %d", field.Val, colIdx)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, valueType, colIdx)
 			}
 			f, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil || f < 0 || f > math.MaxUint32 {
+			if err != nil || f < 0 || f > max {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint32 type for column %d", field.Val, colIdx)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, valueType, colIdx)
 			}
 			if err := vector.AppendFixed(vec, uint32(f), false, mp); err != nil {
 				return err

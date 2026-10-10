@@ -60,6 +60,9 @@ func AddColumn(
 	if err != nil {
 		return false, err
 	}
+	if err = requireMediumIntProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), colType); err != nil {
+		return false, err
+	}
 	colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
 	if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableDef.DefaultCharset, specNewColumn.Attributes); err != nil {
 		return false, err

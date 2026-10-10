@@ -4869,13 +4869,9 @@ func TestBuildCreateTableError(t *testing.T) {
 	runTestShouldError(mock, t, sqlerrs)
 }
 
-func TestBuildCreateTableRejectsMediumInt(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "CREATE TABLE t (m MEDIUMINT)")
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI), err)
-	require.Contains(t, strings.ToLower(err.Error()), "mediumint")
-
-	_, err = runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "CREATE TABLE t (m INT)")
+func TestBuildCreateTableSupportsMediumInt(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+		"CREATE TABLE t (m MEDIUMINT, mu MEDIUMINT UNSIGNED, i INT(24))")
 	require.NoError(t, err)
 }
 
@@ -5322,6 +5318,41 @@ func TestBuildPrefixIndexV2ProtocolGate(t *testing.T) {
 	require.NoError(t, err)
 	indexDef := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetIndexes()[0]
 	require.Equal(t, map[string]int{"head:line": 4}, catalog.IndexPrefixLengthsFromParams(indexDef.IndexAlgoParams))
+}
+
+func TestMediumIntCatalogAuthoringProtocolFence(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	proc := mock.CurrentContext().GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion108)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion109)
+	_, err := runOneStmt(mock, t, "CREATE TABLE mediumint_protocol_fence (m MEDIUMINT)")
+	require.ErrorContains(t, err, "protocol version 109")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
+	_, err = runOneStmt(mock, t, "CREATE TABLE mediumint_protocol_fence (m MEDIUMINT)")
+	require.NoError(t, err)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion108)
+	_, err = runOneStmt(mock, t, "ALTER TABLE nation ADD COLUMN mu MEDIUMINT UNSIGNED")
+	require.ErrorContains(t, err, "protocol version 109")
+	_, err = runOneStmt(mock, t, "ALTER TABLE nation MODIFY COLUMN n_nationkey MEDIUMINT UNSIGNED")
+	require.ErrorContains(t, err, "protocol version 109")
 }
 
 func TestBuildCompositeIndexMarksEncodedKeyBinary(t *testing.T) {

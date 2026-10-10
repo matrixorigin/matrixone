@@ -2025,6 +2025,18 @@ func mysqlDecimalType(precision, scale int32) types.Type {
 	}
 }
 
+// convertEngineColumnTypeToMysqlType preserves the logical integer subtype
+// when the physical vector OID is shared by INT and MEDIUMINT.
+func convertEngineColumnTypeToMysqlType(ctx context.Context, typ types.Type, col *MysqlColumn) error {
+	if err := convertEngineTypeToMysqlType(ctx, typ.Oid, col); err != nil {
+		return err
+	}
+	if typ.IsMediumInt() {
+		col.SetColumnType(defines.MYSQL_TYPE_INT24)
+	}
+	return nil
+}
+
 func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColumn) error {
 	if err := typ.ValidateCollation(); err != nil {
 		return err
@@ -2034,7 +2046,7 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 			return err
 		}
 	}
-	if err := convertEngineTypeToMysqlType(ctx, typ.Oid, col); err != nil {
+	if err := convertEngineColumnTypeToMysqlType(ctx, typ, col); err != nil {
 		return err
 	}
 	if typ.Oid == types.T_blob {

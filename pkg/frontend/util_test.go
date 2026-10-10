@@ -2216,6 +2216,25 @@ func TestMysqlBlobMetadataPreservesKnownAndUnknownBounds(t *testing.T) {
 	}
 }
 
+func TestMysqlMediumIntProtocolMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		sign bool
+	}{
+		{name: "signed", typ: types.New(types.T_int32, 24, -1), sign: true},
+		{name: "unsigned", typ: types.New(types.T_uint32, 24, -1), sign: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			require.NoError(t, setMysqlColumnTypeInfo(context.Background(), tc.typ, col))
+			require.Equal(t, defines.MYSQL_TYPE_INT24, col.ColumnType())
+			require.Equal(t, tc.sign, col.IsSigned())
+			require.Zero(t, col.Decimal())
+		})
+	}
+}
+
 func TestColDef2MysqlColumnConstraintFlags(t *testing.T) {
 	for _, tc := range []struct {
 		name string

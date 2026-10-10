@@ -69,3 +69,38 @@ func TestIntegerAssignmentSourceCastSelection(t *testing.T) {
 	_, ok = directIntegerAssignmentParam(wrapped)
 	require.False(t, ok)
 }
+
+func TestMediumIntAssignmentRequiresClusterProtocolFence(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		}
+		if hadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+
+	var mediumType types.Type = types.New(types.T_int32, 24, -1)
+	mediumPlanType := makePlan2Type(&mediumType)
+	source := MakePlan2Int32ConstExprWithType(1)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion108)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion109)
+	_, err := forceAssignmentCastExprWithProcess(t.Context(), source, mediumPlanType, false, proc)
+	require.ErrorContains(t, err, "protocol version 109")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion108)
+	_, err = forceAssignmentCastExprWithProcess(t.Context(), source, mediumPlanType, false, proc)
+	require.ErrorContains(t, err, "authoring floor=108")
+
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion109)
+	_, err = forceAssignmentCastExprWithProcess(t.Context(), source, mediumPlanType, false, proc)
+	require.NoError(t, err)
+}

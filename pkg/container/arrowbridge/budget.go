@@ -21,6 +21,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 // MaxOutputRows selects the largest non-empty prefix that fits the logical MO
@@ -105,8 +106,82 @@ func validateRecordColumns(
 		if _, err := validateArrowArrayValidity(ctx, column, validateDictionaryValues); err != nil {
 			return err
 		}
+		// MEDIUMINT shares the engine's 32-bit physical layout with INT. Check
+		// its narrower domain at the LOAD boundary before either borrowing the
+		// Arrow buffers or materializing a conversion. Ordinary integer columns
+		// keep the existing validation path.
+		if validateDictionaryValues && binding.target.Type.IsMediumInt() {
+			if err := validateMediumIntValues(ctx, column, binding.target.Type, binding.target.Name); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+func validateMediumIntValues(ctx context.Context, column arrow.Array, target types.Type, name string) error {
+	min, max, ok := target.MediumIntBounds()
+	if !ok {
+		return moerr.NewInvalidInputf(ctx, "invalid MEDIUMINT target type for Arrow column %q", name)
+	}
+	for row := 0; row < column.Len(); row++ {
+		if err := checkConvertContext(ctx, row); err != nil {
+			return err
+		}
+		if column.IsNull(row) {
+			continue
+		}
+		value, signed, err := mediumIntArrowValue(ctx, column, row)
+		if err != nil {
+			return err
+		}
+		if signed {
+			if value < min || value > max {
+				return moerr.NewInvalidInputf(ctx, "Arrow value %d at row %d is outside MEDIUMINT range [%d,%d] for column %q", value, row, min, max, name)
+			}
+		} else if value < 0 || value > max {
+			return moerr.NewInvalidInputf(ctx, "Arrow value %d at row %d is outside MEDIUMINT range [%d,%d] for column %q", value, row, min, max, name)
+		}
+	}
+	return nil
+}
+
+// mediumIntArrowValue follows the integer conversion matrix accepted by
+// BindLoad. Unsigned 64-bit inputs above MaxInt64 are immediately out of the
+// MEDIUMINT domain and are represented by MaxInt64 for the caller's check.
+func mediumIntArrowValue(ctx context.Context, column arrow.Array, row int) (int64, bool, error) {
+	if dictionary, ok := column.(*array.Dictionary); ok {
+		values := dictionary.Dictionary()
+		index, err := checkedDictionaryIndex(ctx, dictionary, row, values.Len())
+		if err != nil {
+			return 0, false, err
+		}
+		return mediumIntArrowValue(ctx, values, index)
+	}
+	switch values := column.(type) {
+	case *array.Int8:
+		return int64(values.Value(row)), true, nil
+	case *array.Int16:
+		return int64(values.Value(row)), true, nil
+	case *array.Int32:
+		return int64(values.Value(row)), true, nil
+	case *array.Int64:
+		return values.Value(row), true, nil
+	case *array.Uint8:
+		return int64(values.Value(row)), false, nil
+	case *array.Uint16:
+		return int64(values.Value(row)), false, nil
+	case *array.Uint32:
+		return int64(values.Value(row)), false, nil
+	case *array.Uint64:
+		value := values.Value(row)
+		if value > math.MaxInt64 {
+			return math.MaxInt64, false, nil
+		}
+		return int64(value), false, nil
+	default:
+		return 0, false, moerr.NewInvalidInputf(ctx, "unsupported Arrow value %T for MEDIUMINT", column)
+	}
 }
 
 // ValidateRecord validates an immutable record once before a caller splits it

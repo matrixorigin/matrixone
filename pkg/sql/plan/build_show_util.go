@@ -1238,7 +1238,12 @@ func FormatColType(colType plan.Type) string {
 	typ := types.T(colType.Id).ToType()
 
 	ts := typ.String()
-	if typ.Oid == types.T_text {
+	if (typ.Oid == types.T_int32 || typ.Oid == types.T_uint32) && colType.Width == 24 {
+		ts = "MEDIUMINT"
+		if typ.Oid == types.T_uint32 {
+			ts += " UNSIGNED"
+		}
+	} else if typ.Oid == types.T_text {
 		switch colType.Width {
 		case types.MaxTinyTextLen:
 			ts = "TINYTEXT"

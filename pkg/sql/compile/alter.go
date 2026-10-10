@@ -1911,7 +1911,7 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 		}
 		if err := incrservice.ValidateAutoColumnOffset(
 			c.proc.Ctx,
-			types.T(createdDef.Cols[col.ColIndex].Typ.Id),
+			types.MustTypeFromPlan(createdDef.Cols[col.ColIndex].Typ),
 			effectiveOffset,
 		); err != nil {
 			return err

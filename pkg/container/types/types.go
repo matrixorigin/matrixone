@@ -708,6 +708,24 @@ func (t Type) IsIntOrUint() bool {
 	return t.IsInt() || t.IsUInt()
 }
 
+// IsMediumInt reports whether this integer is a MySQL MEDIUMINT. The engine
+// stores MEDIUMINT in its existing 32-bit vectors; Width=24 carries the
+// narrower logical domain through plans and catalog metadata.
+func (t Type) IsMediumInt() bool {
+	return t.Width == 24 && (t.Oid == T_int32 || t.Oid == T_uint32)
+}
+
+// MediumIntBounds returns the inclusive assignment bounds for MEDIUMINT.
+func (t Type) MediumIntBounds() (min, max int64, ok bool) {
+	if !t.IsMediumInt() {
+		return 0, 0, false
+	}
+	if t.Oid == T_uint32 {
+		return 0, 1<<24 - 1, true
+	}
+	return -(1 << 23), 1<<23 - 1, true
+}
+
 func (t Type) IsFloat() bool {
 	switch t.Oid {
 	case T_float32, T_float64:

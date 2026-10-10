@@ -2052,6 +2052,77 @@ func TestValidatedDictionaryWindowsDoNotRescanImmutableValues(t *testing.T) {
 	alloc.AssertSize(t, 0)
 }
 
+func TestMediumIntArrowLoadEnforcesLogicalBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		target  types.Type
+		build   func(*memory.CheckedAllocator) arrow.Array
+		wantErr string
+	}{
+		{
+			name:   "signed upper boundary",
+			target: types.New(types.T_int32, 24, -1),
+			build: func(alloc *memory.CheckedAllocator) arrow.Array {
+				builder := array.NewInt32Builder(alloc)
+				builder.Append((1 << 23) - 1)
+				result := builder.NewArray()
+				builder.Release()
+				return result
+			},
+		},
+		{
+			name:   "signed overflow",
+			target: types.New(types.T_int32, 24, -1),
+			build: func(alloc *memory.CheckedAllocator) arrow.Array {
+				builder := array.NewInt32Builder(alloc)
+				builder.Append(1 << 23)
+				result := builder.NewArray()
+				builder.Release()
+				return result
+			},
+			wantErr: "outside MEDIUMINT range",
+		},
+		{
+			name:   "unsigned overflow",
+			target: types.New(types.T_uint32, 24, -1),
+			build: func(alloc *memory.CheckedAllocator) arrow.Array {
+				builder := array.NewUint32Builder(alloc)
+				builder.Append(1 << 24)
+				result := builder.NewArray()
+				builder.Release()
+				return result
+			},
+			wantErr: "outside MEDIUMINT range",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			values := tc.build(alloc)
+			schema := arrow.NewSchema([]arrow.Field{{Name: "m", Type: values.DataType()}}, nil)
+			record := array.NewRecordBatch(schema, []arrow.Array{values}, 1)
+			plan, err := BindLoad(context.Background(), schema, []TargetColumn{{Name: "m", Type: tc.target}}, MatchByName)
+			require.NoError(t, err)
+			mp := mpool.MustNewZero()
+			if tc.wantErr == "" {
+				require.NoError(t, plan.ValidateRecord(context.Background(), record))
+				converted, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+				require.NoError(t, err)
+				require.Equal(t, int32((1<<23)-1), vector.MustFixedColWithTypeCheck[int32](converted.Vecs[0])[0])
+				converted.Clean(mp)
+			} else {
+				require.ErrorContains(t, plan.ValidateRecord(context.Background(), record), tc.wantErr)
+				converted, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+				require.ErrorContains(t, err, tc.wantErr)
+				require.Nil(t, converted)
+			}
+			require.Zero(t, mp.CurrNB())
+			record.Release()
+			values.Release()
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
 func TestDictionaryFixedWidthAndTemporalGather(t *testing.T) {
 	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
 	indicesBuilder := array.NewUint16Builder(alloc)

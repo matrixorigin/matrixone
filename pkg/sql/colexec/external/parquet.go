@@ -865,6 +865,91 @@ func parquetListElementLeaf(sc *parquet.Column) (*parquet.Column, bool) {
 	return elem, true
 }
 
+// makeMediumIntMapper preserves the existing INT and INT UNSIGNED fast paths;
+// only width-24 targets take this checked path so Parquet loads for other
+// integer columns do not acquire per-row range checks.
+func makeMediumIntMapper(st parquet.Type, unsigned bool) func(*columnMapper, parquet.Page, *process.Process, *vector.Vector) error {
+	const signedMin, signedMax = -(1 << 23), (1 << 23) - 1
+	const unsignedMax = (1 << 24) - 1
+	targetName := "MEDIUMINT"
+	if unsigned {
+		targetName += " UNSIGNED"
+	}
+	if isParquetRoundedIntegerSource(st) {
+		if unsigned {
+			return func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, uint32(0), func(v parquet.Value) (uint32, error) {
+					value, err := parquetValueToRoundedUint64InRange(proc.Ctx, st, v, unsignedMax, targetName)
+					return uint32(value), err
+				})
+			}
+		}
+		return func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, int32(0), func(v parquet.Value) (int32, error) {
+				value, err := parquetValueToRoundedInt64InRange(proc.Ctx, st, v, signedMin, signedMax, targetName)
+				return int32(value), err
+			})
+		}
+	}
+	if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+		if unsigned {
+			return func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processStringToFixed(proc.Ctx, mp, page, proc, vec, func(data []byte) (uint32, error) {
+					value, err := strconv.ParseUint(util.UnsafeBytesToString(data), 10, 64)
+					if err != nil {
+						return 0, err
+					}
+					if value > unsignedMax {
+						return 0, moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows %s", value, targetName)
+					}
+					return uint32(value), nil
+				}, uint32(0))
+			}
+		}
+		return func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToFixed(proc.Ctx, mp, page, proc, vec, func(data []byte) (int32, error) {
+				value, err := strconv.ParseInt(util.UnsafeBytesToString(data), 10, 64)
+				if err != nil {
+					return 0, err
+				}
+				if value < signedMin || value > signedMax {
+					return 0, moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows %s", value, targetName)
+				}
+				return int32(value), nil
+			}, int32(0))
+		}
+	}
+	if !isParquetIntegerSource(st, true) {
+		return nil
+	}
+	if unsigned {
+		return func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, uint32(0), func(v parquet.Value) (uint32, error) {
+				value, err := parquetValueToUint64(proc.Ctx, st, v)
+				if err != nil {
+					return 0, err
+				}
+				if value > unsignedMax {
+					return 0, moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows %s", value, targetName)
+				}
+				return uint32(value), nil
+			})
+		}
+	}
+	return func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+		return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, int32(0), func(v parquet.Value) (int32, error) {
+			value, err := parquetValueToInt64(proc.Ctx, st, v)
+			if err != nil {
+				return 0, err
+			}
+			if value < signedMin || value > signedMax {
+				return 0, moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows %s", value, targetName)
+			}
+			return int32(value), nil
+		})
+	}
+}
+
 func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper {
 	if sc == nil || sc.Type() == nil {
 		return nil
@@ -1097,6 +1182,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			})
 		}
 	case types.T_int32:
+		if dt.Width == 24 {
+			mp.mapper = makeMediumIntMapper(st, false)
+			break
+		}
 		if isParquetRoundedIntegerSource(st) {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, int32(0), func(v parquet.Value) (int32, error) {
@@ -1193,6 +1282,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			})
 		}
 	case types.T_uint32:
+		if dt.Width == 24 {
+			mp.mapper = makeMediumIntMapper(st, true)
+			break
+		}
 		if isParquetRoundedIntegerSource(st) {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, uint32(0), func(v parquet.Value) (uint32, error) {

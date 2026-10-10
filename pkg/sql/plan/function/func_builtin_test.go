@@ -1469,6 +1469,8 @@ func Test_BuiltIn_MoShowVisibleBinIntegerMetadata(t *testing.T) {
 		{name: "smallint unsigned", typ: types.New(types.T_uint16, 0, 0), want: "SMALLINT UNSIGNED"},
 		{name: "int", typ: types.New(types.T_int32, 0, 0), want: "INT"},
 		{name: "int unsigned", typ: types.New(types.T_uint32, 0, 0), want: "INT UNSIGNED"},
+		{name: "mediumint", typ: types.New(types.T_int32, 24, -1), want: "MEDIUMINT"},
+		{name: "mediumint unsigned", typ: types.New(types.T_uint32, 24, -1), want: "MEDIUMINT UNSIGNED"},
 		{name: "bigint", typ: types.New(types.T_int64, 0, 0), want: "BIGINT"},
 		{name: "bigint unsigned", typ: types.New(types.T_uint64, 0, 0), want: "BIGINT UNSIGNED"},
 		{name: "int with physical width", typ: types.New(types.T_int32, 32, 0), want: "INT(32)"},
@@ -1491,6 +1493,25 @@ func Test_BuiltIn_MoShowVisibleBinIntegerMetadata(t *testing.T) {
 			succeed, info := tcc.RunAndFree()
 			require.True(t, succeed, input.info, info)
 		})
+	}
+}
+
+func Test_BuiltIn_MoShowVisibleBinMediumIntDataType(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, typ := range []types.Type{
+		types.New(types.T_int32, 24, -1),
+		types.New(types.T_uint32, 24, -1),
+	} {
+		typeBytes, err := types.Encode(&typ)
+		require.NoError(t, err)
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{string(typeBytes)}, nil),
+			NewFunctionTestInput(types.T_uint8.ToType(), []uint8{typNormal}, nil),
+		}
+		expected := NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"MEDIUMINT"}, nil)
+		testCase := NewFunctionTestCase(proc, inputs, expected, builtInMoShowVisibleBin)
+		ok, info := testCase.RunAndFree()
+		require.True(t, ok, info)
 	}
 }
 
