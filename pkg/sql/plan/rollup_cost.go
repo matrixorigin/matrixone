@@ -53,15 +53,20 @@ const (
 	rollupSortBoundaryCost = 0.02
 	rollupSortAggCost      = 0.12
 	// Every completed grouping prefix is flushed, freed, and recreated by the
-	// streaming executor.  Charge that lifecycle work explicitly; otherwise an
-	// already ordered high-NDV input looks almost free even though it emits and
-	// recreates one aggregate state per completed prefix.
-	rollupSortGroupFinalizeCost = 1.0
-	rollupSortStartupCost       = 16.0
-	rollupHashBranchStartupCost = 100.0
-	rollupHashWorkWeight        = 0.70
-	rollupHashLatencyWeight     = 0.30
-	rollupSpillCostWeight       = 0.35
+	// streaming executor. Charge that lifecycle work explicitly. The baseline
+	// and large-batch ceiling are calibrated against low-NDV, all-unique, and
+	// asymmetric-prefix benchmark shapes, including intermediate cardinalities
+	// near the admitted boundary. Selective filters retain the baseline so a
+	// small result does not lose the measured SORT win.
+	rollupSortGroupFinalizeBaseCost    = 2.0
+	rollupSortGroupFinalizeMaxCost     = 8.0
+	rollupSortGroupFinalizeStartGroups = 10_000.0
+	rollupSortGroupFinalizeMaxGroups   = 25_000.0
+	rollupSortStartupCost              = 16.0
+	rollupHashBranchStartupCost        = 100.0
+	rollupHashWorkWeight               = 0.70
+	rollupHashLatencyWeight            = 0.30
+	rollupSpillCostWeight              = 0.35
 	// Protocol 49+ grouping-set sharing can expand one input while keeping one
 	// scan and one aggregate. The cost probe uses the common possibility gate as
 	// a conservative lower envelope; detailed rewrite checks may still reject
@@ -346,7 +351,14 @@ func estimateSortRollupCost(
 	// all rollup levels, including the grand total.  It is also the number of
 	// times the executor performs the appendOutputRow/resetLevel lifecycle;
 	// include that work for both ordered input and input that is sorted here.
-	sortGroupFinalizeWork := prefixGroups * rollupSortGroupFinalizeCost * aggregateCost
+	finalizeCost := rollupSortGroupFinalizeBaseCost
+	if levels >= 3 && prefixGroups > rollupSortGroupFinalizeStartGroups {
+		groupScale := (prefixGroups - rollupSortGroupFinalizeStartGroups) /
+			(rollupSortGroupFinalizeMaxGroups - rollupSortGroupFinalizeStartGroups)
+		groupScale = math.Min(1, groupScale)
+		finalizeCost += (rollupSortGroupFinalizeMaxCost - rollupSortGroupFinalizeBaseCost) * groupScale
+	}
+	sortGroupFinalizeWork := prefixGroups * finalizeCost * aggregateCost
 	sortWork += sortGroupFinalizeWork
 	sortCost := sortWork
 	sortFeasible := aggregateStateBounded && sortOutputBounded
