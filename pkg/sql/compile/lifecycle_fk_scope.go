@@ -445,7 +445,7 @@ func (c *Compile) validateCreateForeignKeyParents(q *plan.CreateTable, database 
 	}
 	names, databases := q.GetFkTables(), q.GetFkDbs()
 	fkeys := q.GetTableDef().GetFkeys()
-	if len(names) != len(databases) || len(names) > len(fkeys) {
+	if len(names) != len(databases) || len(names) != len(fkeys) {
 		return moerr.NewInternalError(c.proc.Ctx, "inconsistent CREATE foreign-key parents")
 	}
 	for i, name := range names {
@@ -459,22 +459,6 @@ func (c *Compile) validateCreateForeignKeyParents(q *plan.CreateTable, database 
 			return err
 		}
 	}
-	// Clone/replay plans can carry materialized Fkeys without the SQL planner's
-	// parallel name lists. Check those physical endpoints on the same operator.
-	for _, fk := range fkeys[len(names):] {
-		if fk == nil {
-			return moerr.NewInternalError(c.proc.Ctx, "missing CREATE foreign-key parent")
-		}
-		if fk.ForeignTbl == 0 {
-			continue
-		}
-		_, _, parent, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), fk.ForeignTbl)
-		if err != nil {
-			return err
-		}
-		if parent.GetTableID(c.proc.Ctx) != fk.ForeignTbl {
-			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
-		}
-	}
+
 	return nil
 }

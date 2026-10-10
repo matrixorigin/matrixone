@@ -361,7 +361,8 @@ func (c *Compile) admitScalarReplacementRC(database, table string, original engi
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if err := lockTable(ctx, c.e, c.proc, original, database, false); err != nil {
+	// Nested DROP borrows this destructive lock, including its definition-change fence.
+	if err := lockTable(ctx, c.e, c.proc, original, database, true); err != nil {
 		return nil, nil, nil, err
 	}
 	if err := c.advanceLifecycleAdmissionSnapshot(); err != nil {

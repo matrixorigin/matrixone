@@ -18,14 +18,20 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
@@ -44,6 +50,193 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 		db1, err := sql.Open("mysql", issue27487DSN(cn1.GetServiceConfig().CN.Frontend.Port))
 		require.NoError(t, err)
 		defer db1.Close()
+		t.Run("replacement_revalidation", func(t *testing.T) {
+			const database = "issue29400_revalidation"
+			execSQLRequire(t, ctx, db0, "create database "+database)
+			defer func() {
+				cleanupCtx, stop := context.WithTimeout(context.Background(), 20*time.Second)
+				defer stop()
+				_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+database)
+			}()
+			idOf := func(table string) uint64 {
+				var id uint64
+				require.NoError(t, db0.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase=? and relname=?", database, table).Scan(&id))
+				return id
+			}
+			var registryID uint64
+			require.NoError(t, db0.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_feature_registry'").Scan(&registryID))
+			for _, indexed := range []bool{false, true} {
+				t.Run(fmt.Sprintf("retired_definition_fence/indexed_%t", indexed), func(t *testing.T) {
+					table := fmt.Sprintf("fence_%t", indexed)
+					ddl := "create table " + database + "." + table + "(id int primary key,v int"
+					if indexed {
+						ddl += ", index idx(v)"
+					}
+					execSQLRequire(t, ctx, db0, ddl+")")
+					oldID := idOf(table)
+					before := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
+					execSQLRequire(t, ctx, db0, "truncate table "+database+"."+table)
+					require.NotEqual(t, oldID, idOf(table))
+					ls := lockservice.GetLockServiceByServiceID(cn1.ServiceID())
+					txnID := []byte(fmt.Sprintf("issue29400-fence-%t", indexed))
+					result, err := ls.Lock(ctx, oldID, [][]byte{[]byte("review-row")}, txnID, lockpb.LockOptions{
+						Mode: lockpb.LockMode_Exclusive, Granularity: lockpb.Granularity_Row,
+						Policy: lockpb.WaitPolicy_FastFail, SnapShotTs: before,
+					})
+					defer func() { require.NoError(t, ls.Unlock(ctx, txnID, timestamp.Timestamp{})) }()
+					require.NoError(t, err)
+					require.NotNil(t, result.TableDefChangedAt, "a physical replacement must publish the definition-change fence for stale lock callers")
+				})
+			}
+			for _, dropped := range []bool{false, true} {
+				t.Run(fmt.Sprintf("fk_parent_changed_while_waiting/dropped_%t", dropped), func(t *testing.T) {
+					parent, child := fmt.Sprintf("parent_%t", dropped), fmt.Sprintf("child_%t", dropped)
+					execSQLRequire(t, ctx, db0, "create table "+database+"."+parent+"(id int primary key, v int)")
+					oldID := idOf(parent)
+					holder, err := db0.BeginTx(ctx, nil)
+					require.NoError(t, err)
+					operationCtx, stop := context.WithTimeout(ctx, 20*time.Second)
+					defer stop()
+					var done chan error
+					finished := false
+					defer func() {
+						stop()
+						_ = holder.Rollback()
+						if done != nil && !finished {
+							select {
+							case <-done:
+							case <-ctx.Done():
+								t.Error("CREATE did not terminate")
+							}
+						}
+					}()
+					query := "alter table " + database + "." + parent + " modify column v bigint"
+					if dropped {
+						query = "drop table " + database + "." + parent
+					}
+					_, err = holder.ExecContext(ctx, query)
+					require.NoError(t, err)
+					queued := make(chan struct{}, 1)
+					restore := lockservice.SetWaiterEnqueuedHookForTest(func(id uint64, _ []byte, _ [][]byte) {
+						if id == registryID {
+							select {
+							case queued <- struct{}{}:
+							default:
+							}
+						}
+					})
+					defer restore()
+					done = make(chan error, 1)
+					go func() {
+						_, err := db1.ExecContext(operationCtx, "create table "+database+"."+child+"(id int primary key,pid int,foreign key(pid) references "+database+"."+parent+"(id))")
+						done <- err
+					}()
+					select {
+					case <-queued:
+					case err := <-done:
+						finished = true
+						t.Fatalf("CREATE must wait on G: %v", err)
+					case <-operationCtx.Done():
+						t.Fatal("CREATE did not enqueue")
+					}
+					require.NoError(t, holder.Commit())
+					select {
+					case err = <-done:
+					case <-operationCtx.Done():
+						t.Fatal("operation did not terminate after releasing its blocker")
+					}
+					finished = true
+					if dropped {
+						require.Error(t, err)
+						var n int
+						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase=? and relname=?", database, child).Scan(&n))
+						require.Zero(t, n)
+						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_foreign_keys where db_name=? and table_name=?", database, child).Scan(&n))
+						require.Zero(t, n)
+					} else {
+						require.NoError(t, err)
+						require.NotEqual(t, oldID, idOf(parent))
+						execSQLRequire(t, ctx, db0, "insert into "+database+"."+parent+" values(1,7)")
+						execSQLRequire(t, ctx, db0, "insert into "+database+"."+child+" values(1,1)")
+						_, err = db0.ExecContext(ctx, "insert into "+database+"."+child+" values(2,999)")
+						require.Error(t, err)
+					}
+				})
+			}
+			for _, protection := range []string{"snapshot", "fk"} {
+				t.Run("late_"+protection, func(t *testing.T) {
+					table := "late_" + protection
+					execSQLRequire(t, ctx, db0, "create table "+database+"."+table+"(id int primary key,v int)")
+					execSQLRequire(t, ctx, db0, "insert into "+database+"."+table+" values(1,7)")
+					oldID := idOf(table)
+					rt := moruntime.ServiceRuntime(cn1.GetServiceConfig().CN.UUID)
+					original, ok := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+					require.True(t, ok)
+					gate := &issue29400NegativeProbeGate{SQLExecutor: original.(executor.SQLExecutor), match: fmt.Sprintf("'__mo_branch_%d'", oldID), entered: make(chan struct{}), release: make(chan struct{})}
+					operationCtx, stop := context.WithTimeout(ctx, 20*time.Second)
+					defer stop()
+					done := make(chan error, 1)
+					finished, released := false, false
+					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, gate)
+					defer func() {
+						stop()
+						if !released {
+							close(gate.release)
+						}
+						if !finished {
+							select {
+							case <-done:
+							case <-ctx.Done():
+								t.Error("TRUNCATE did not terminate")
+							}
+						}
+						rt.SetGlobalVariables(moruntime.InternalSQLExecutor, original)
+					}()
+					go func() { _, err := db1.ExecContext(operationCtx, "truncate table "+database+"."+table); done <- err }()
+					select {
+					case <-gate.entered:
+					case err := <-done:
+						finished = true
+						t.Fatalf("negative preflight was not intercepted: %v", err)
+					case <-operationCtx.Done():
+						t.Fatal("negative preflight not reached")
+					}
+					if protection == "snapshot" {
+						execSQLRequire(t, ctx, db0, "create snapshot issue29400_history for table "+database+" "+table)
+						defer func() { _, _ = db0.ExecContext(ctx, "drop snapshot issue29400_history") }()
+					} else {
+						execSQLRequire(t, ctx, db0, "create table "+database+".late_fk_child(id int primary key,pid int,foreign key(pid) references "+database+"."+table+"(id))")
+					}
+					close(gate.release)
+					released = true
+					select {
+					case err = <-done:
+					case <-operationCtx.Done():
+						t.Fatal("operation did not terminate after releasing its blocker")
+					}
+					finished = true
+					var n int
+					if protection == "snapshot" {
+						require.NoError(t, err)
+						require.NotEqual(t, oldID, idOf(table))
+						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+database+"."+table).Scan(&n))
+						require.Zero(t, n)
+						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+database+"."+table+"{snapshot='issue29400_history'} where id=1 and v=7").Scan(&n))
+						require.Equal(t, 1, n)
+						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_branch_metadata where table_id=? and p_table_id=? and level='alter' and not table_deleted", idOf(table), oldID).Scan(&n))
+						require.Equal(t, 1, n, "late protection must publish a successor edge from the original root")
+						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_snapshots where sname=? and kind='branch'", fmt.Sprintf("__mo_branch_%d", idOf(table))).Scan(&n))
+						require.Equal(t, 1, n, "successor edge must have its protection snapshot")
+					} else {
+						require.Error(t, err, "fresh planner must reject TRUNCATE of referenced parent")
+						require.Equal(t, oldID, idOf(table))
+						require.NoError(t, db0.QueryRowContext(ctx, "select v from "+database+"."+table+" where id=1").Scan(&n))
+						require.Equal(t, 7, n)
+						execSQLRequire(t, ctx, db0, "insert into "+database+".late_fk_child values(1,1)")
+					}
+				})
+			}
+		})
 		t.Run("tenant_logical_snapshot_uses_broad_gate", func(t *testing.T) {
 			const account = "issue29400_history_tenant"
 			execSQLRequire(t, ctx, db0, "create account "+account+" admin_name 'admin' identified by '111'")
@@ -1032,4 +1225,28 @@ func TestIssue29400BranchCloneFromForeignKeyBranch(t *testing.T) {
 			"select count(*) from mo_catalog.mo_foreign_keys where db_name=? and table_name='c2' and refer_table_name='p'", name).Scan(&count))
 		require.Equal(t, 1, count)
 	})
+}
+
+// issue29400NegativeProbeGate pauses after a real negative protection probe,
+// before lifecycle locks, so another CN can publish protection deterministically.
+type issue29400NegativeProbeGate struct {
+	executor.SQLExecutor
+	match   string
+	entered chan struct{}
+	release chan struct{}
+	used    atomic.Bool
+}
+
+func (g *issue29400NegativeProbeGate) Exec(ctx context.Context, query string, opts executor.Options) (executor.Result, error) {
+	res, err := g.SQLExecutor.Exec(ctx, query, opts)
+	if err == nil && strings.HasPrefix(query, "select 1 from mo_catalog.mo_snapshots where kind='branch'") && strings.Contains(query, g.match) && g.used.CompareAndSwap(false, true) {
+		close(g.entered)
+		select {
+		case <-g.release:
+		case <-ctx.Done():
+			res.Close()
+			return executor.Result{}, ctx.Err()
+		}
+	}
+	return res, err
 }

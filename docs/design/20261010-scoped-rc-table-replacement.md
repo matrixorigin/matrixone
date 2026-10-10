@@ -39,7 +39,8 @@ Reuse the current distributed lifecycle keys and replacement executor:
    TN-applied RC frontier and verify registry identity.
 3. Reuse the component loader to pin K even for an absent root. Require the
    complete touched component to be empty.
-4. Acquire exact root catalog T X and existing destructive storage X. Install
+4. Acquire exact root catalog T X and existing destructive storage X with definition-change intent. This outer lock
+   publishes the retired definition fence on commit; nested DROP borrows it. Install
    the final frontier, reopen the relation and verify physical/logical IDs and
    scalar shape.
 5. Authoritatively read both FK catalog directions and history in this same
