@@ -199,6 +199,7 @@ func TestIntegerArgumentPreparedRuntimeCandidates(t *testing.T) {
 		// provenance is covered by TestPreparedExecutionPlanMathPrecisionUsesSourceProvenance,
 		// and the retained CEIL precision contract by TestPreparedCeilPrecisionScalarRuntime.
 		{`select ceil(1.25,?)`, nil},
+		{`select ceil(1.25,cast(? as double))`, nil},
 		{`select ceiling(1.25,?)`, nil},
 		{`select floor(1.25,?)`, nil},
 		{`select round(1.25,?)`, nil},
