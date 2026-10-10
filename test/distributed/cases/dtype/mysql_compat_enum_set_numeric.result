@@ -130,7 +130,8 @@ null    null
 [99]    []
 []    []
 select sum(s) from special_numeric_text;
-invalid argument aggregate function sum, bad value [VARCHAR]
+➤ sum(s)[8,53,31]  𝄀
+0.0
 drop table special_numeric_text;
 drop view special_numeric_view;
 insert ignore into special_numeric_empty values (4, 0, null);
