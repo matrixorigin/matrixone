@@ -665,6 +665,8 @@ func TestStatementInfo_RecordStatementSql(t *testing.T) {
 		{name: "logger Chinese", raw: strings.Repeat("你", 60), capacity: 200, account: "sys", user: db_holder.MOLoggerUser, typ: "Load", want: strings.Repeat("你", 13) + "..." + strings.Repeat("你", 23)},
 		{name: "logger emoji", raw: "a" + strings.Repeat("😀", 40), capacity: 200, account: "sys", user: db_holder.MOLoggerUser, typ: "Load", want: "a" + strings.Repeat("😀", 9) + "..." + strings.Repeat("😀", 17)},
 		{name: "logger ASCII", raw: strings.Repeat("x", 140), capacity: 200, account: "sys", user: db_holder.MOLoggerUser, typ: "Load", want: strings.Repeat("x", 40) + "..." + strings.Repeat("x", 70)},
+		{name: "logger malformed samples", raw: "\xff" + strings.Repeat("x", 138) + "\xe4\xbd", capacity: 200, account: "sys", user: db_holder.MOLoggerUser, typ: "Load", want: "?" + strings.Repeat("x", 39) + "..." + strings.Repeat("x", 68) + "??"},
+		{name: "logger malformed discarded middle", raw: strings.Repeat("x", 40) + strings.Repeat("\xff", 100) + strings.Repeat("你", 30), capacity: 200, account: "sys", user: db_holder.MOLoggerUser, typ: "Load", want: strings.Repeat("x", 40) + "..." + strings.Repeat("你", 23)},
 		{name: "ordinary Load", text: "你x", raw: strings.Repeat("你", 60), capacity: 2, typ: "Load", want: ""},
 		{name: "short logger Load", text: "你x", raw: strings.Repeat("你", 40), capacity: 3, account: "sys", user: db_holder.MOLoggerUser, typ: "Load", want: "你"},
 	} {

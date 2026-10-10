@@ -859,14 +859,14 @@ var sqlConnector = []byte("...")
 // RecordStatementSql mainly to fill into StatementInfo.Statement.
 func (s *StatementInfo) RecordStatementSql(truncatedSql string, rawSql string) {
 	if s.IsMoLogger() && s.StatementType == "Load" && len(rawSql) > 128 {
-		s.Statement = append(s.Statement, rawSql[:util.UTF8PrefixLen(rawSql, 40)]...)
+		s.Statement = append(s.Statement, util.Abbreviate(rawSql[:util.UTF8PrefixLen(rawSql, 40)], -1)...)
 		s.Statement = append(s.Statement, sqlConnector...)
 		tail := len(rawSql) - 70
 		if start := util.UTF8PrefixLen(rawSql, tail); start < tail {
 			_, width := utf8.DecodeRuneInString(rawSql[start:])
 			tail = start + width
 		}
-		s.Statement = append(s.Statement, rawSql[tail:]...)
+		s.Statement = append(s.Statement, util.Abbreviate(rawSql[tail:], -1)...)
 	} else {
 		length := util.UTF8PrefixLen(truncatedSql, cap(s.Statement))
 		s.Statement = append(s.Statement, truncatedSql[:length]...)

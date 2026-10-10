@@ -1315,6 +1315,25 @@ func Test_makeExecuteSql(t *testing.T) {
 			require.Equal(t, abbreviate(full, limit), makeExecuteSql(ctx, ses1, &tree.Select{}, true, "empty_sql", env, limit))
 		}
 	}
+	t.Run("malformed EXECUTE USING text", func(t *testing.T) {
+		const rawSQL = "select /* \xff */ ?"
+		const rawVariable = "set @value = '你\xe4\xbd'"
+		require.NoError(t, ses1.SetPrepareStmt(ctx, "malformed_sql", &PrepareStmt{Name: "malformed_sql", Sql: rawSQL}))
+		ses1.SetUserDefinedVar("malformed_value", "unused", rawVariable)
+		stmt := &tree.Execute{Name: "malformed_sql", Variables: []*tree.VarExpr{{Name: "malformed_value"}}}
+		const full = "execute ? // select /* ? */ ? ; set @value = '你??'"
+		for _, limit := range limits(full) {
+			got := makeExecuteSql(ctx, ses1, stmt, false, "", "execute \xff", limit)
+			require.Equal(t, abbreviate(full, limit), got, "limit=%d", limit)
+			require.True(t, utf8.ValidString(got))
+		}
+		prepared, err := ses1.GetPrepareStmt(ctx, "malformed_sql")
+		require.NoError(t, err)
+		require.Equal(t, rawSQL, prepared.Sql)
+		value, err := ses1.GetUserDefinedVar("malformed_value")
+		require.NoError(t, err)
+		require.Equal(t, rawVariable, value.Sql)
+	})
 
 	for _, tc := range []struct{ name, value, want string }{
 		{"binary", "\xff\xfe", "x'fffe'"},

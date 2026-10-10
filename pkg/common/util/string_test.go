@@ -15,6 +15,7 @@
 package util
 
 import (
+	"strings"
 	"testing"
 	"unicode/utf8"
 
@@ -51,6 +52,44 @@ func TestSubStringFromBegin(t *testing.T) {
 		convey.So(result[:1024], convey.ShouldEqual, longStr[:1024])
 		convey.So(result[1024:], convey.ShouldEqual, "...")
 	})
+}
+
+func TestAbbreviateMalformedUTF8(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{"\xff", "?"},
+		{"\x80\xbf", "??"},
+		{"\xc0\xaf", "??"},
+		{"\xed\xa0\x80", "???"},
+		{"\xf4\x90\x80\x80", "????"},
+		{"\xe4\xbd", "??"},
+		{"\xf0\x9f\x98", "???"},
+		{"a你\xff😀�\xe4\xbdz", "a你?😀�??z"},
+		{"\x00\t\n\r\x7f你�", "\x00\t\n\r\x7f你�"},
+	} {
+		for budget := -2; budget <= len(tc.raw)+1; budget++ {
+			want := tc.want
+			if budget == 0 || budget < -1 {
+				want = ""
+			} else if budget > 0 && len(tc.raw) > budget {
+				end := 0
+				for offset, r := range tc.want {
+					if offset+utf8.RuneLen(r) > budget {
+						break
+					}
+					end = offset + utf8.RuneLen(r)
+				}
+				want = tc.want[:end] + "..."
+			}
+			got := Abbreviate(tc.raw, budget)
+			if got != want || !utf8.ValidString(got) {
+				t.Fatalf("raw %x budget %d: got %q want %q", tc.raw, budget, got, want)
+			}
+		}
+	}
+	// An invalid suffix is discarded without changing the retained text.
+	if got := Abbreviate("你"+strings.Repeat("\xff", 8192), 3); got != "你..." {
+		t.Fatalf("discarded suffix: %q", got)
+	}
 }
 
 func TestUTF8PrefixLen(t *testing.T) {

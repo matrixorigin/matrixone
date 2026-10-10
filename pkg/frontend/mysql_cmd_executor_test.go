@@ -11785,6 +11785,10 @@ func TestRecordStatementUTF8(t *testing.T) {
 		{"Chinese", strings.Repeat("你", 400), strings.Repeat("你", 341) + "...", nil, -1, 1024},
 		{"emoji", "a" + strings.Repeat("😀", 300), "a" + strings.Repeat("😀", 255) + "...", nil, -1, 1024},
 		{"ASCII", strings.Repeat("x", 1100), strings.Repeat("x", 1024) + "...", nil, -1, 1024},
+		{"malformed comment", "SELECT 1 /* \xff */", "SELECT 1 /* ? */", nil, -1, 1024},
+		{"malformed line comment", "SELECT 1 -- \xff\n", "SELECT 1 -- ?\n", nil, -1, 1024},
+		{"malformed literal", "SELECT 'a\xffb'", "SELECT 'a?b'", nil, -1, 1024},
+		{"partial rune comment", "SELECT 1 /* \xe4\xbd */", "SELECT 1 /* ?? */", nil, -1, 1024},
 		{"binary parameter", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1, 1024},
 		{"mixed parameters", "select ?, ?, ?, ?", "你😀 ; NULL ;  ; 42", []string{"你😀", "", "", "42"}, 1, 1024},
 		{"long Unicode parameter", "select ?", strings.Repeat("你😀", 300), []string{strings.Repeat("你😀", 300)}, -1, 1024},
@@ -11829,9 +11833,13 @@ func TestRecordStatementUTF8(t *testing.T) {
 						mock.EXPECT().GetAst().Return(&tree.Select{})
 						mock.EXPECT().BinaryExecute().Return(true, name)
 						env = "execute utf8_query"
-						expanded := env + " // " + tc.text
+						preparedText := tc.text
+						if !utf8.ValidString(tc.text) {
+							preparedText = tc.want
+						}
+						expanded := env + " // " + strings.TrimSpace(preparedText) + " ; "
 						if tc.params != nil {
-							expanded += " ; " + tc.want
+							expanded += tc.want
 						}
 						cut := 0
 						for offset, r := range expanded {
@@ -11887,4 +11895,35 @@ func TestRecordStatementUTF8(t *testing.T) {
 			})
 		}
 	}
+	t.Run("malformed parse error", func(t *testing.T) {
+		sv.LengthOfQueryPrinted = 1024
+		ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+		defer ses.Close()
+		raw := "SELECT FROM /* \xff */"
+		_, parseErr := parsers.Parse(ctx, dialect.MYSQL, raw, 1)
+		require.Error(t, parseErr)
+		ses.beginResponseAccounting()
+		statementCtx, err := RecordParseErrorStatement(ctx, ses, nil, time.Now(), []string{raw}, nil, parseErr)
+		require.NoError(t, err)
+		stmt := ses.tStmt
+		require.NotNil(t, stmt)
+		row := motrace.SingleStatementTable.GetRow(ctx)
+		defer func() {
+			ses.finishResponseAccounting(statementCtx, parseErr, true)
+			stmt.FillRow(ctx, row)
+			row.Free()
+			stmt.Free()
+			ses.SetTStmt(nil)
+		}()
+		ses.finishResponseAccounting(statementCtx, parseErr, true)
+		require.Equal(t, motrace.StatementStatusFailed, stmt.Status)
+		require.Equal(t, "SELECT FROM /* ? */", ses.GetSqlOfStmt())
+		require.Equal(t, "SELECT FROM /* ? */", string(stmt.Statement))
+		stmt.FillRow(ctx, row)
+		for i, col := range motrace.SingleStatementTable.Columns {
+			if col.Name == "statement" {
+				require.Equal(t, "SELECT FROM /* ? */", row.ToStrings()[i])
+			}
+		}
+	})
 }

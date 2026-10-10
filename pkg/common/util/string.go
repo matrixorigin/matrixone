@@ -14,9 +14,13 @@
 
 package util
 
-import "unicode/utf8"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
-// Abbreviate truncates a string from the beginning to the specified length.
+// Abbreviate truncates diagnostic text and replaces each malformed UTF-8 byte
+// in the retained prefix with '?'. Valid text and byte positions are preserved.
 // Parameters:
 //   - str: the input string
 //   - length: the maximum length to truncate to
@@ -28,15 +32,35 @@ func Abbreviate(str string, length int) string {
 		return ""
 	}
 
-	if length == -1 {
+	truncated := length > 0 && len(str) > length
+	if truncated {
+		str = str[:UTF8PrefixLen(str, length)]
+	}
+	if utf8.ValidString(str) {
+		if truncated {
+			return str + "..."
+		}
 		return str
 	}
-
-	l := min(len(str), length)
-	if l != len(str) {
-		return str[:UTF8PrefixLen(str, l)] + "..."
+	var repaired strings.Builder
+	repaired.Grow(len(str) + 3)
+	start := 0
+	for i, r := range str {
+		if r != utf8.RuneError {
+			continue
+		}
+		if _, width := utf8.DecodeRuneInString(str[i:]); width != 1 {
+			continue
+		}
+		repaired.WriteString(str[start:i])
+		repaired.WriteByte('?')
+		start = i + 1
 	}
-	return str[:l]
+	repaired.WriteString(str[start:])
+	if truncated {
+		repaired.WriteString("...")
+	}
+	return repaired.String()
 }
 
 // UTF8PrefixLen returns the longest complete UTF-8 prefix within a byte budget.
