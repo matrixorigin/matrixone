@@ -8383,7 +8383,7 @@ func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 	needles := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[int64](result)
 	uniformBinary, perRow := stringDomainMode(ivecs[0])
-	caseInsensitive := ivecs[0].GetType().Charset == types.CharsetUTF8
+	caseInsensitive := types.IsCaseInsensitiveCollation(ivecs[0].GetType().Charset)
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
 			if err = rs.Append(0, true); err != nil {

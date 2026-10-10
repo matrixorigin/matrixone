@@ -225,7 +225,34 @@ const (
 	// CharsetUTF8 is the explicit utf8mb4_general_ci text identity. It must not
 	// use zero: old catalog rows have zero in this formerly dummy field.
 	CharsetUTF8 uint8 = 3
+	// CharsetUTF8MB4UnicodeCI and CharsetUTF8MB3UnicodeCI carry the native
+	// MySQL UCA 4.0.0 identities. They are intentionally distinct from the
+	// legacy general-ci identity: utf8mb4_unicode_ci accepts supplementary
+	// characters while utf8_unicode_ci retains the utf8mb3 repertoire limit.
+	CharsetUTF8MB4UnicodeCI uint8 = uint8(collation.UTF8MB4UnicodeCIIdentity)
+	CharsetUTF8MB3UnicodeCI uint8 = uint8(collation.UTF8UnicodeCIIdentity)
 )
+
+// IsCaseInsensitiveCollation reports the text identities whose comparison
+// domain folds case. The UCA identities are not aliases of general_ci; this
+// helper only describes the case-insensitive property used by string helpers.
+func IsCaseInsensitiveCollation(charset uint8) bool {
+	return charset == CharsetUTF8 || charset == CharsetUTF8MB4UnicodeCI ||
+		charset == CharsetUTF8MB3UnicodeCI
+}
+
+// IsUnicodeCollation reports the collations backed by the pinned UCA 4.0.0
+// comparison-key implementation.
+func IsUnicodeCollation(charset uint8) bool {
+	return charset == CharsetUTF8MB4UnicodeCI || charset == CharsetUTF8MB3UnicodeCI
+}
+
+// IsTextCollation is the inverse of the opaque binary identity for MySQL text
+// values. CharsetLegacy remains a valid historical text identity.
+func IsTextCollation(charset uint8) bool {
+	return charset == CharsetLegacy || charset == CharsetUTF8MB4Bin ||
+		charset == CharsetUTF8 || IsUnicodeCollation(charset)
+}
 
 // MergeStringCharset derives one collation identity for a value composed from
 // multiple MySQL strings. Binary bytes must never be reinterpreted as UTF-8;
@@ -244,11 +271,41 @@ func MergeStringCharset(parameters []Type, fallback uint8) uint8 {
 			if result != CharsetBinary {
 				result = CharsetUTF8MB4Bin
 			}
+		case CharsetUTF8MB4UnicodeCI:
+			if result != CharsetBinary && result != CharsetUTF8MB4Bin {
+				result = CharsetUTF8MB4UnicodeCI
+			}
+		case CharsetUTF8MB3UnicodeCI:
+			if result != CharsetBinary && result != CharsetUTF8MB4Bin &&
+				result != CharsetUTF8MB4UnicodeCI {
+				result = CharsetUTF8MB3UnicodeCI
+			}
 		case CharsetLegacy:
 			if result == CharsetUTF8 {
 				result = CharsetLegacy
 			}
 		}
+	}
+	return result
+}
+
+// MergeStringCollationMetadata derives a common string type's collation
+// identity and revision together. Native Unicode identities are versioned;
+// rebuilding a type with only Charset would silently create a revision-zero
+// plan type that the executor cannot resolve.
+func MergeStringCollationMetadata(result Type, parameters []Type) Type {
+	result.Charset = MergeStringCharset(parameters, result.Charset)
+	result.CollationVersion = CollationVersionLegacy
+	for _, parameter := range parameters {
+		if parameter.Charset == result.Charset && parameter.CollationVersion != CollationVersionLegacy {
+			result.CollationVersion = parameter.CollationVersion
+			break
+		}
+	}
+	// Native identities currently use V1. A native source decoded from a
+	// legacy zero-valued plan still implies the current executable revision.
+	if result.CollationVersion == CollationVersionLegacy && IsUnicodeCollation(result.Charset) {
+		result.CollationVersion = CollationVersionV1
 	}
 	return result
 }
@@ -636,6 +693,9 @@ func NewWithCharset(oid T, width, scale int32, charset uint8) Type {
 	typ := New(oid, width, scale)
 	if charset != CharsetLegacy || oid == T_char || oid == T_varchar || oid == T_text {
 		typ.Charset = charset
+	}
+	if IsUnicodeCollation(typ.Charset) {
+		typ.CollationVersion = CollationVersionV1
 	}
 	return typ
 }

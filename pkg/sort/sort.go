@@ -426,7 +426,27 @@ func sortByVector(
 			data []types.Varlena
 			area []byte
 		}{data: data, area: area}
-		if !desc {
+		if sqlOrder && types.IsUnicodeCollation(vec.GetType().Charset) {
+			// Native Unicode collations must use the same resolved comparison
+			// domain as scalar predicates and top/merge comparison. The legacy
+			// byte comparator remains the fast path for all other string types.
+			typ := *vec.GetType()
+			if !desc {
+				genericSort(col, os, func(v struct {
+					data []types.Varlena
+					area []byte
+				}, i, j int64) bool {
+					return types.CompareStringValues(typ, v.data[i].GetByteSlice(v.area), v.data[j].GetByteSlice(v.area)) < 0
+				})
+			} else {
+				genericSort(col, os, func(v struct {
+					data []types.Varlena
+					area []byte
+				}, i, j int64) bool {
+					return types.CompareStringValues(typ, v.data[i].GetByteSlice(v.area), v.data[j].GetByteSlice(v.area)) > 0
+				})
+			}
+		} else if !desc {
 			genericSort(col, os, varlenaLess)
 		} else {
 			genericSort(col, os, varlenaGreater)
@@ -561,6 +581,73 @@ func SortByVectors(
 	nullsLast []bool,
 ) {
 	SortByVectorsWithScratch(os, vectors, desc, nullsLast, nil)
+}
+
+// SortByVectorsWithTypes is the SQL-order variant of SortByVectors with the
+// semantic type of each expression supplied by the plan. A materialized
+// vector may retain only its physical string OID after a storage/spill round
+// trip; using the plan type keeps native Unicode collations active in that
+// case without mutating the owned vector metadata.
+func SortByVectorsWithTypes(
+	os []int64,
+	vectors []*vector.Vector,
+	desc []bool,
+	nullsLast []bool,
+	semanticTypes []types.Type,
+) {
+	SortByVectorsWithTypesAndScratch(os, vectors, desc, nullsLast, semanticTypes, nil)
+}
+
+// SortByVectorsWithTypesAndScratch is the allocation-aware counterpart of
+// SortByVectorsWithTypes.
+func SortByVectorsWithTypesAndScratch(
+	os []int64,
+	vectors []*vector.Vector,
+	desc []bool,
+	nullsLast []bool,
+	semanticTypes []types.Type,
+	scratch *ByVectorsScratch,
+) {
+	if len(semanticTypes) != 0 && len(semanticTypes) != len(vectors) {
+		panic("sort: mismatched multi-column semantic types")
+	}
+	if len(semanticTypes) == 0 {
+		SortByVectorsWithScratch(os, vectors, desc, nullsLast, scratch)
+		return
+	}
+	views := make([]*vector.Vector, len(vectors))
+	for i, vec := range vectors {
+		views[i] = vectorWithSemanticType(vec, semanticTypes[i])
+	}
+	SortByVectorsWithScratch(os, views, desc, nullsLast, scratch)
+}
+
+// vectorWithSemanticType creates a read-only metadata view. Sorting and
+// partitioning only inspect the vector, so the shallow view does not acquire
+// ownership and cannot affect the source vector's allocation or payload.
+func vectorWithSemanticType(vec *vector.Vector, typ types.Type) *vector.Vector {
+	if vec == nil || *vec.GetType() == typ {
+		return vec
+	}
+	// The semantic type is only allowed to decorate a vector when it has the
+	// same physical OID.  In particular, replacing an int8 vector's metadata
+	// with an int64 plan type would make the fixed-width sort path reinterpret
+	// its backing bytes and can panic.  String vectors are the one case where
+	// the plan carries comparison semantics (charset/collation) that may be
+	// absent after materialization, so retain that overlay for a matching OID.
+	physical := vec.GetType().Oid
+	if physical != typ.Oid {
+		return vec
+	}
+	switch physical {
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_datalink:
+		view := *vec
+		view.SetType(typ)
+		return &view
+	default:
+		return vec
+	}
 }
 
 // SortByVectorsWithScratch sorts row selectors like SortByVectors and reuses

@@ -738,8 +738,7 @@ func GroupConcatReturnType(args []types.Type) types.Type {
 		}
 	}
 	result := types.T_text.ToType()
-	result.Charset = types.MergeStringCharset(args, result.Charset)
-	return result
+	return types.MergeStringCollationMetadata(result, args)
 }
 
 func groupConcatResultIsBinary(result types.Type) bool {

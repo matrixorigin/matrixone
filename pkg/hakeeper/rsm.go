@@ -1297,35 +1297,33 @@ func (s *stateMachine) resetCommandDeliveryBarrier() {
 }
 
 func (s *stateMachine) handleGetIDCmd(cmd []byte) sm.Result {
-	allocIDCmd := parseAllocateIDCmd(cmd)
-	// Empty key means it is a shared ID.
-	if len(allocIDCmd.Key) == 0 {
-		s.state.NextID++
-		v := s.state.NextID
-		s.state.NextID += allocIDCmd.Batch - 1
-		return sm.Result{Value: v}
-	}
-
-	if allocIDCmd.RequestID != "" {
-		requestKey := bootstrapAllocationRequestKey(allocIDCmd.Key, allocIDCmd.RequestID)
+	request := parseAllocateIDCmd(cmd)
+	// Successful idempotent reservations remain replayable after exhaustion.
+	if request.Key != "" && request.RequestID != "" {
+		requestKey := bootstrapAllocationRequestKey(request.Key, request.RequestID)
 		if id, ok := s.state.NextIDByKey[requestKey]; ok {
 			return sm.Result{Value: id}
 		}
-
-		v := s.assignIDByKey(allocIDCmd.Key)
-		s.state.NextIDByKey[allocIDCmd.Key] += allocIDCmd.Batch - 1
-		s.state.NextIDByKey[requestKey] = v
-		return sm.Result{Value: v}
 	}
-
-	_, ok := s.state.NextIDByKey[allocIDCmd.Key]
-	if !ok {
-		s.state.NextIDByKey[allocIDCmd.Key] = 0
+	current := s.state.NextID
+	if request.Key != "" {
+		current = s.state.NextIDByKey[request.Key]
 	}
-	s.state.NextIDByKey[allocIDCmd.Key]++
-	v := s.state.NextIDByKey[allocIDCmd.Key]
-	s.state.NextIDByKey[allocIDCmd.Key] += allocIDCmd.Batch - 1
-	return sm.Result{Value: v}
+	// Value zero is the existing failed-allocation sentinel. Reject the entire
+	// reservation before mutation so a retry cannot wrap and reuse old IDs.
+	if request.Batch == 0 || request.Batch > math.MaxUint64-current {
+		return sm.Result{}
+	}
+	first := current + 1
+	if request.Key == "" {
+		s.state.NextID = current + request.Batch
+	} else {
+		s.state.NextIDByKey[request.Key] = current + request.Batch
+		if request.RequestID != "" {
+			s.state.NextIDByKey[bootstrapAllocationRequestKey(request.Key, request.RequestID)] = first
+		}
+	}
+	return sm.Result{Value: first}
 }
 
 func (s *stateMachine) handleSetStateCmd(cmd []byte) sm.Result {

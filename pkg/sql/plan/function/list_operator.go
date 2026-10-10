@@ -64,6 +64,22 @@ func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Typ
 	}
 	castLeft.Charset = charset
 	castRight.Charset = charset
+	// A string cast changes only the physical representation.  Keep the
+	// revision of the selected native Unicode collation on both operands;
+	// otherwise a derived expression such as LOWER(col) is rebuilt with
+	// revision zero and the executor cannot resolve its comparison key.
+	version := uint8(types.CollationVersionLegacy)
+	if types.IsUnicodeCollation(charset) {
+		version = uint8(types.CollationVersionV1)
+		for _, operand := range []types.Type{left, right} {
+			if operand.Charset == charset && operand.CollationVersion != 0 {
+				version = operand.CollationVersion
+				break
+			}
+		}
+	}
+	castLeft.CollationVersion = version
+	castRight.CollationVersion = version
 	// CHAR values may carry PAD_CHAR_TO_FULL_LENGTH representation padding.
 	// Compare them in the VARCHAR domain so the implicit cast removes that
 	// padding before scalar comparisons and hash-key construction.

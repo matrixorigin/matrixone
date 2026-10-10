@@ -30,6 +30,13 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
+// compareTextBytes centralizes the executable text order used by scalar
+// comparison operators. Legacy identities retain their historical byte/PAD
+// behavior; native Unicode collations use the pinned UCA400 key backend.
+func compareTextBytes(typ types.Type, left, right []byte) int {
+	return types.CompareStringValues(typ, left, right)
+}
+
 // comparePreparedJSON applies the SQL category carried by a binary-protocol
 // parameter. The adapter represents that parameter as ByteJSON only so the
 // prepared plan has a stable physical type; comparison still follows the same
@@ -1255,12 +1262,12 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 		}, selectList)
 	case types.T_char:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Equal(bytes.TrimRight(a, " "), bytes.TrimRight(b, " "))
+			return compareTextBytes(*paramType, a, b) == 0
 		}, selectList)
 	case types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink,
 		types.T_geometry, types.T_geometry32:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Equal(a, b)
+			return compareTextBytes(*paramType, a, b) == 0
 		}, selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(v1, v2 []byte) bool {
@@ -1434,15 +1441,15 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		}, selectList)
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Equal(bytes.TrimRight(a, " "), bytes.TrimRight(b, " "))
+			return compareTextBytes(*paramType, a, b) == 0
 		}, selectList)
 	case types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink,
 		types.T_geometry, types.T_geometry32:
-		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil && (selectList == nil) {
+		if !types.IsUnicodeCollation(paramType.Charset) && parameters[0].GetArea() == nil && parameters[1].GetArea() == nil && (selectList == nil) {
 			return compareVarlenaEqual(parameters, rs, proc, length, selectList)
 		}
-		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(v1, v2 string) bool {
-			return v1 == v2
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			return compareTextBytes(*paramType, v1, v2) == 0
 		}, selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
@@ -1857,15 +1864,15 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}, selectList)
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(bytes.TrimRight(a, " "), bytes.TrimRight(b, " ")) > 0
+			return compareTextBytes(*paramType, a, b) > 0
 		}, selectList)
 	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(a, b) > 0
+			return compareTextBytes(*paramType, a, b) > 0
 		}, selectList)
 	case types.T_binary, types.T_varbinary:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(a, b) > 0
+			return compareTextBytes(*paramType, a, b) > 0
 		}, selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
@@ -2029,15 +2036,15 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 		}, selectList)
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(bytes.TrimRight(a, " "), bytes.TrimRight(b, " ")) >= 0
+			return compareTextBytes(*paramType, a, b) >= 0
 		}, selectList)
 	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(a, b) >= 0
+			return compareTextBytes(*paramType, a, b) >= 0
 		}, selectList)
 	case types.T_binary, types.T_varbinary:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(a, b) >= 0
+			return compareTextBytes(*paramType, a, b) >= 0
 		}, selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
@@ -2207,15 +2214,15 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		}, selectList)
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return !bytes.Equal(bytes.TrimRight(a, " "), bytes.TrimRight(b, " "))
+			return compareTextBytes(*paramType, a, b) != 0
 		}, selectList)
 	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
-		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(a, b string) bool {
-			return a != b
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
+			return compareTextBytes(*paramType, a, b) != 0
 		}, selectList)
 	case types.T_binary, types.T_varbinary:
-		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(a, b string) bool {
-			return a != b
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
+			return compareTextBytes(*paramType, a, b) != 0
 		}, selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
@@ -2379,15 +2386,15 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		}, selectList)
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(bytes.TrimRight(a, " "), bytes.TrimRight(b, " ")) < 0
+			return compareTextBytes(*paramType, a, b) < 0
 		}, selectList)
 	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(a, b) < 0
+			return compareTextBytes(*paramType, a, b) < 0
 		}, selectList)
 	case types.T_binary, types.T_varbinary:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(a, b) < 0
+			return compareTextBytes(*paramType, a, b) < 0
 		}, selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
@@ -2551,15 +2558,15 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}, selectList)
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(bytes.TrimRight(a, " "), bytes.TrimRight(b, " ")) <= 0
+			return compareTextBytes(*paramType, a, b) <= 0
 		}, selectList)
 	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(a, b) <= 0
+			return compareTextBytes(*paramType, a, b) <= 0
 		}, selectList)
 	case types.T_binary, types.T_varbinary:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
-			return bytes.Compare(a, b) <= 0
+			return compareTextBytes(*paramType, a, b) <= 0
 		}, selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {

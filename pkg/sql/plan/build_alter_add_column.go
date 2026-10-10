@@ -285,6 +285,9 @@ func checkTypeCapSize(ctx context.Context, ty *plan.Type, name string) error {
 }
 
 func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName string) error {
+	if err := rejectNativeUnicodePrimaryKey(ctx, colType, columnName); err != nil {
+		return err
+	}
 	if colType.GetId() == int32(types.T_blob) {
 		return moerr.NewNotSupported(ctx, "blob type in primary key")
 	}
@@ -313,6 +316,9 @@ func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName 
 }
 
 func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName string) error {
+	if err := rejectNativeUnicodeUniqueKey(ctx, colType, columnName); err != nil {
+		return err
+	}
 	if colType.GetId() == int32(types.T_blob) {
 		return moerr.NewNotSupported(ctx, "blob type in primary key")
 	}

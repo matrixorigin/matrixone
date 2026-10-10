@@ -143,10 +143,14 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 }
 
 // cellsEqual reports whether two non-null cells are equal: by decoded value for vecf8/vecf4
-// cells (decoded), as = compares them, and by bytes otherwise.
-func cellsEqual(decoded bool, v, w []byte) bool {
+// cells (decoded), by collation for a unicode charset, and by bytes otherwise. decoded and
+// unicode are mutually exclusive (a block-scaled vector is not a unicode string).
+func cellsEqual(typ types.Type, decoded, unicode bool, v, w []byte) bool {
 	if decoded {
 		return types.CompareBlockScaledFromBytes(v, w, false) == 0
+	}
+	if unicode {
+		return types.CompareStringValues(typ, v, w) == 0
 	}
 	return bytes.Equal(v, w)
 }
@@ -165,6 +169,8 @@ func bytesPartitionBy(sels []int64, diffs []bool, partitions []int64, vec *vecto
 	if !vec.IsConst() {
 		var n bool
 		var v []byte
+		typ := *vec.GetType()
+		unicode := types.IsUnicodeCollation(typ.Charset)
 
 		vs, area := vector.MustVarlenaRawData(vec)
 		nsp := vec.GetNulls()
@@ -175,7 +181,7 @@ func bytesPartitionBy(sels []int64, diffs []bool, partitions []int64, vec *vecto
 				if n != isNull {
 					diffs[i] = true
 				} else if !isNull && i > 0 {
-					diffs[i] = diffs[i] || !cellsEqual(decoded, v, w)
+					diffs[i] = diffs[i] || !cellsEqual(typ, decoded, unicode, v, w)
 				}
 				// else: both NULL → equal, preserve diffs[i]
 				n = isNull
@@ -185,7 +191,7 @@ func bytesPartitionBy(sels []int64, diffs []bool, partitions []int64, vec *vecto
 			for i, sel := range sels {
 				w := vs[sel].GetByteSlice(area)
 				if i > 0 {
-					diffs[i] = diffs[i] || !cellsEqual(decoded, v, w)
+					diffs[i] = diffs[i] || !cellsEqual(typ, decoded, unicode, v, w)
 				}
 				v = w
 			}

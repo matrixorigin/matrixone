@@ -17,8 +17,12 @@ package embed
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"fmt"
+	"net"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	productionmysql "github.com/matrixorigin/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -674,4 +679,316 @@ func TestCDCTargetGuardRejectsOptimisticModeBeforeTargetCreate(t *testing.T) {
 	require.NoError(t, activeTx.Rollback())
 	_, err = db.ExecContext(ctx, "DROP TABLE cdc_optimistic_probe.renamed")
 	require.NoError(t, err)
+}
+
+// cdcFaultConnector keeps the production driver and real target session. Faults
+// occur at SQL execution, after a successful connection/ping, and are scoped to
+// this test's target SQL. Forward optional interfaces so ReuseQueryBuf and the
+// driver's cancellation/session semantics remain intact.
+type cdcFaultConnector struct {
+	driver.Connector
+	sqlFault    func(context.Context, driver.Conn, string, []driver.NamedValue) error
+	beforeBegin func(context.Context) error
+}
+
+func (c *cdcFaultConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	conn, err := c.Connector.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &cdcFaultConn{Conn: conn, owner: c}, nil
+}
+
+type cdcFaultConn struct {
+	driver.Conn
+	owner *cdcFaultConnector
+}
+
+func (c *cdcFaultConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	if err := c.owner.beforeBegin(ctx); err != nil {
+		return nil, err
+	}
+	return c.Conn.(driver.ConnBeginTx).BeginTx(ctx, opts)
+}
+func (c *cdcFaultConn) PrepareContext(ctx context.Context, q string) (driver.Stmt, error) {
+	return c.Conn.(driver.ConnPrepareContext).PrepareContext(ctx, q)
+}
+func (c *cdcFaultConn) Ping(ctx context.Context) error { return c.Conn.(driver.Pinger).Ping(ctx) }
+func (c *cdcFaultConn) ResetSession(ctx context.Context) error {
+	return c.Conn.(driver.SessionResetter).ResetSession(ctx)
+}
+func (c *cdcFaultConn) IsValid() bool { return c.Conn.(driver.Validator).IsValid() }
+func (c *cdcFaultConn) CheckNamedValue(v *driver.NamedValue) error {
+	return c.Conn.(driver.NamedValueChecker).CheckNamedValue(v)
+}
+func (c *cdcFaultConn) ExecContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Result, error) {
+	actual := q
+	for _, arg := range args {
+		if arg.Name == productionmysql.ReuseQueryBuf {
+			actual = string(arg.Value.([]byte)[5:])
+		}
+	}
+	if err := c.owner.sqlFault(ctx, c.Conn, actual, args); err != nil {
+		return nil, err
+	}
+	return c.Conn.(driver.ExecerContext).ExecContext(ctx, q, args)
+}
+func (c *cdcFaultConn) QueryContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
+	if err := c.owner.sqlFault(ctx, c.Conn, q, args); err != nil {
+		return nil, err
+	}
+	return c.Conn.(driver.QueryerContext).QueryContext(ctx, q, args)
+}
+
+func TestCDCTargetSetupTransientDiagnosticOnMO(t *testing.T) {
+	originalOpen := cdc.OpenDbConn
+	restoreCollect := func() {}
+	releaseRecovery := func() {}
+	// Register before Run so its failure-quarantine cleanup closes the cluster
+	// before restoring globals used by CDC workers.
+	t.Cleanup(func() {
+		releaseRecovery()
+		closeErr := CloseSingleCNBaseClusterTests()
+		cdc.OpenDbConn = originalOpen
+		restoreCollect()
+		cdc.ResetCDCWatermarkUpdaterForTest()
+		require.NoError(t, closeErr)
+	})
+	RunSingleCNBaseClusterTests(t, func(cluster Cluster) {
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		cdc.ResetTableDetectorForTest(cn.ServiceID())
+		cdc.ResetCDCWatermarkUpdaterForTest()
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		root, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer root.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+		defer cancel()
+		_, err = root.ExecContext(ctx, "CREATE ACCOUNT cdc_retry_probe ADMIN_NAME 'admin' IDENTIFIED BY '111'")
+		require.NoError(t, err)
+		cleanupSQL := func(db *sql.DB, q string) {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			if _, cleanupErr := db.ExecContext(cleanupCtx, q); cleanupErr != nil {
+				t.Errorf("cleanup %s: %v", q, cleanupErr)
+			}
+		}
+		defer cleanupSQL(root, "DROP ACCOUNT IF EXISTS cdc_retry_probe")
+		account, err := sql.Open("mysql", fmt.Sprintf("cdc_retry_probe#admin:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer account.Close()
+		for _, q := range []string{"CREATE DATABASE cdc_retry_src", "CREATE TABLE cdc_retry_src.t (id INT PRIMARY KEY)", "INSERT INTO cdc_retry_src.t VALUES (1)", "CREATE PITR cdc_retry_pitr FOR DATABASE cdc_retry_src RANGE 2 'h'"} {
+			_, err = account.ExecContext(ctx, q)
+			require.NoError(t, err)
+		}
+		defer cleanupSQL(account, "DROP PITR cdc_retry_pitr")
+		catalogSQL := "SELECT w.err_msg, w.watermark FROM mo_catalog.mo_cdc_watermark AS w JOIN mo_catalog.mo_cdc_task AS t ON t.account_id=w.account_id AND t.task_id=w.task_id WHERE t.task_name=? AND w.db_name='cdc_retry_src' AND w.table_name='t'"
+		readProgress := func(task string) (string, string, error) {
+			var diagnostic, watermark string
+			err := root.QueryRowContext(ctx, catalogSQL, task).Scan(&diagnostic, &watermark)
+			return diagnostic, watermark, err
+		}
+		readRows := func() (rows []int, err error) {
+			rs, err := account.QueryContext(ctx, "SELECT id FROM cdc_retry_dst.t ORDER BY id")
+			if err != nil {
+				return nil, err
+			}
+			defer rs.Close()
+			for rs.Next() {
+				var id int
+				if err = rs.Scan(&id); err != nil {
+					return nil, err
+				}
+				rows = append(rows, id)
+			}
+			return rows, rs.Err()
+		}
+		var mu sync.Mutex
+		setupCode := uint16(2013)
+		injectDML := false
+		aborted := false
+		checkpoint := ""
+		var injectionErr error
+		var collectedFrom, collectedTo, failedFrom, failedTo types.TS
+		var replayFrom []types.TS
+		faulted, recovery, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		var recoveryOnce, releaseOnce sync.Once
+		releaseRecovery = func() { releaseOnce.Do(func() { close(release) }) }
+		defer releaseRecovery()
+		// This phase has one task/table reader. Its collection hook runs before
+		// target execution, so the failing INSERT belongs to the latest range.
+		restoreCollect = cdc.SetCDCCollectBoundaryHookForTest(func(from, to types.TS) {
+			mu.Lock()
+			defer mu.Unlock()
+			collectedFrom, collectedTo = from, to
+			if aborted && len(replayFrom) == 0 {
+				replayFrom = append(replayFrom, from)
+			}
+		})
+		fault := func(callCtx context.Context, conn driver.Conn, q string, args []driver.NamedValue) error {
+			mu.Lock()
+			if strings.HasPrefix(q, "SELECT COUNT(*) FROM information_schema.tables") && len(args) > 0 {
+				db, _ := args[0].Value.(string)
+				if db == "cdc_retry_bad" {
+					mu.Unlock()
+					return &productionmysql.MySQLError{Number: 1064, Message: "controlled target SQL syntax"}
+				}
+				if db == "cdc_retry_dst" && setupCode != 0 {
+					code := setupCode
+					mu.Unlock()
+					return &productionmysql.MySQLError{Number: code, Message: "controlled target SQL loss"}
+				}
+			}
+			shouldAbort := injectDML && !aborted && strings.Contains(q, "INSERT INTO `cdc_retry_dst`.`t`") && strings.Contains(q, "VALUES (2)")
+			if !shouldAbort {
+				mu.Unlock()
+				return nil
+			}
+			failedFrom, failedTo = collectedFrom, collectedTo
+			aborted = true
+			mu.Unlock()
+			_, wm, readErr := readProgress("cdc_retry_task")
+			_, rollbackErr := conn.(driver.ExecerContext).ExecContext(callCtx, "ROLLBACK", nil)
+			mu.Lock()
+			checkpoint = wm
+			injectionErr = errors.Join(readErr, rollbackErr)
+			mu.Unlock()
+			close(faulted)
+			return &productionmysql.MySQLError{Number: 1213, Message: "controlled whole transaction rollback"}
+		}
+		beforeBegin := func(callCtx context.Context) error {
+			mu.Lock()
+			block := aborted
+			mu.Unlock()
+			if !block {
+				return nil
+			}
+			recoveryOnce.Do(func() { close(recovery) })
+			select {
+			case <-release:
+				return nil
+			case <-callCtx.Done():
+				return callCtx.Err()
+			}
+		}
+		cdc.OpenDbConn = func(callCtx context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
+			cfg := productionmysql.NewConfig()
+			cfg.User = user
+			cfg.Passwd = password
+			cfg.Net = "tcp"
+			cfg.Addr = net.JoinHostPort(ip, strconv.Itoa(port))
+			cfg.MultiStatements = true
+			duration, parseErr := time.ParseDuration(timeout)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			cfg.Timeout = duration
+			cfg.ReadTimeout = duration
+			cfg.WriteTimeout = duration
+			connector, openErr := productionmysql.NewConnector(cfg)
+			if openErr != nil {
+				return nil, openErr
+			}
+			db := sql.OpenDB(&cdcFaultConnector{Connector: connector, sqlFault: fault, beforeBegin: beforeBegin})
+			db.SetMaxOpenConns(1)
+			db.SetMaxIdleConns(1)
+			if pingErr := db.PingContext(callCtx); pingErr != nil {
+				_ = db.Close()
+				return nil, pingErr
+			}
+			return db, nil
+		}
+		uri := fmt.Sprintf("mysql://cdc_retry_probe#admin:111@127.0.0.1:%d", port)
+		create := func(task, target string) {
+			_, createErr := account.ExecContext(ctx, fmt.Sprintf("CREATE CDC %s '%s' 'matrixone' '%s' 'cdc_retry_src:%s' {'Level'='database'}", task, uri, uri, target))
+			require.NoError(t, createErr)
+		}
+		create("cdc_retry_task", "cdc_retry_dst")
+		defer func() { releaseRecovery(); cleanupSQL(account, "DROP CDC TASK cdc_retry_task") }()
+		if !t.Run("transient setup SQL and recovery", func(t *testing.T) {
+			require.Eventually(t, func() bool {
+				diagnostic, _, readErr := readProgress("cdc_retry_task")
+				return readErr == nil && strings.HasPrefix(diagnostic, "R:") && strings.Contains(diagnostic, "controlled target SQL loss")
+			}, 60*time.Second, 100*time.Millisecond)
+			mu.Lock()
+			setupCode = 0
+			mu.Unlock()
+			require.Eventually(t, func() bool { rows, readErr := readRows(); return readErr == nil && reflect.DeepEqual(rows, []int{1}) }, 60*time.Second, 100*time.Millisecond)
+			require.Eventually(t, func() bool {
+				_, wm, readErr := readProgress("cdc_retry_task")
+				return readErr == nil && wm != "" && wm != "0-0"
+			}, 30*time.Second, 100*time.Millisecond)
+		}) {
+			return
+		}
+		if !t.Run("whole transaction rollback retains checkpoint and replays", func(t *testing.T) {
+			mu.Lock()
+			injectDML = true
+			mu.Unlock()
+			_, updateErr := account.ExecContext(ctx, "UPDATE cdc_retry_src.t SET id=2 WHERE id=1")
+			require.NoError(t, updateErr)
+			require.Eventually(t, func() bool {
+				select {
+				case <-faulted:
+					return true
+				default:
+					return false
+				}
+			}, 30*time.Second, 100*time.Millisecond)
+			// A missing recovery signal is not the only failure oracle: the old code
+			// commits B in autocommit, leaving {1,2} and advancing the checkpoint.
+			require.Eventually(t, func() bool {
+				select {
+				case <-recovery:
+					return true
+				default:
+				}
+				rows, readErr := readRows()
+				return readErr == nil && reflect.DeepEqual(rows, []int{1, 2})
+			}, 30*time.Second, 100*time.Millisecond)
+			mu.Lock()
+			wm, probeErr := checkpoint, injectionErr
+			from, to := failedFrom, failedTo
+			observed := append([]types.TS(nil), replayFrom...)
+			mu.Unlock()
+			require.NoError(t, probeErr)
+			require.NotEmpty(t, wm)
+			require.False(t, from.IsEmpty(), "failed range must have been collected")
+			require.True(t, from.LT(&to), "failed range must be nonempty")
+			require.NotEmpty(t, observed, "recovery must recollect before beginning its target transaction")
+			require.Equal(t, from, observed[0], "first recovery must recollect the failed range")
+			rows, readErr := readRows()
+			require.NoError(t, readErr)
+			require.Equal(t, []int{1}, rows)
+			_, current, readErr := readProgress("cdc_retry_task")
+			require.NoError(t, readErr)
+			require.NotEmpty(t, current)
+			// Earlier successful rounds may still flush while recovery is blocked.
+			// Durable progress can reach the failed range's start, but not enter it.
+			atFault, whileBlocked := types.StringToTS(wm), types.StringToTS(current)
+			require.True(t, atFault.LE(&whileBlocked), "durable progress must not regress")
+			require.True(t, whileBlocked.LE(&from), "failed attempt must not advance durable progress")
+			releaseRecovery()
+			require.Eventually(t, func() bool { rows, readErr := readRows(); return readErr == nil && reflect.DeepEqual(rows, []int{2}) }, 60*time.Second, 100*time.Millisecond)
+			require.Eventually(t, func() bool {
+				_, current, readErr := readProgress("cdc_retry_task")
+				if readErr != nil || current == "" {
+					return false
+				}
+				progress := types.StringToTS(current)
+				return progress.GE(&to)
+			}, 30*time.Second, 100*time.Millisecond)
+		}) {
+			return
+		}
+		t.Run("permanent setup SQL", func(t *testing.T) {
+			create("cdc_retry_bad_task", "cdc_retry_bad")
+			defer cleanupSQL(account, "DROP CDC TASK cdc_retry_bad_task")
+			require.Eventually(t, func() bool {
+				diagnostic, _, readErr := readProgress("cdc_retry_bad_task")
+				return readErr == nil && strings.HasPrefix(diagnostic, "N:") && strings.Contains(diagnostic, "controlled target SQL syntax")
+			}, 60*time.Second, 100*time.Millisecond)
+		})
+	})
 }

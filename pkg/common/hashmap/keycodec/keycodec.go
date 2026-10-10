@@ -126,6 +126,12 @@ func ExactRuntimeFilterEncodingForPair(probeType, payloadType types.Type) ExactR
 	if probeType.Oid != payloadType.Oid {
 		return ExactRuntimeFilterUnsupported
 	}
+	// Raw runtime-filter payloads have no collation-key envelope. Native UCA
+	// text must use the ordinary comparison path until the runtime-filter wire
+	// contract carries the text identity and transformed key domain.
+	if types.IsUnicodeCollation(probeType.Charset) || types.IsUnicodeCollation(payloadType.Charset) {
+		return ExactRuntimeFilterUnsupported
+	}
 	switch probeType.Oid {
 	case types.T_float32:
 		if probeType.Scale <= 0 && payloadType.Scale <= 0 {
@@ -253,6 +259,9 @@ func AppendCanonicalChar(dst, value []byte) []byte {
 // buffer; keeping the size calculation beside the codec prevents canonical
 // JSON/vector keys from being copied into a buffer sized for their raw form.
 func CanonicalValueSize(typ types.Type, value []byte) int {
+	if types.IsUnicodeCollation(typ.Charset) && typ.Oid.IsMySQLString() {
+		return len(types.CollationKeyOrOriginal(typ.Charset, value))
+	}
 	switch typ.Oid {
 	case types.T_char:
 		return len(CanonicalCharValue(value))
@@ -274,6 +283,9 @@ func CanonicalValueSize(typ types.Type, value []byte) int {
 // argument must still keep the original payload, because canonical encodings
 // are not necessarily valid values for result reconstruction.
 func AppendCanonicalValue(dst []byte, typ types.Type, value []byte) []byte {
+	if types.IsUnicodeCollation(typ.Charset) && typ.Oid.IsMySQLString() {
+		return append(dst, types.CollationKeyOrOriginal(typ.Charset, value)...)
+	}
 	switch typ.Oid {
 	case types.T_char:
 		return AppendCanonicalChar(dst, value)
@@ -308,6 +320,9 @@ func AppendCanonicalValue(dst []byte, typ types.Type, value []byte) []byte {
 // use this on duplicate candidates, where allocating two data-sized temporary
 // slices would bypass the aggregate allocation account.
 func CanonicalValuesEqual(typ types.Type, left, right []byte) bool {
+	if types.IsUnicodeCollation(typ.Charset) && typ.Oid.IsMySQLString() {
+		return types.CompareStringValues(typ, left, right) == 0
+	}
 	switch typ.Oid {
 	case types.T_char:
 		return bytes.Equal(CanonicalCharValue(left), CanonicalCharValue(right))
@@ -614,6 +629,13 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 			computeGroupingXXHash(vec, hashValues)
 			continue
 		}
+		if types.IsUnicodeCollation(vec.GetType().Charset) && vec.GetType().Oid.IsMySQLString() {
+			charset := vec.GetType().Charset
+			computeCanonicalVarlenaXXHash(vec, hashValues, func(dst, value []byte) []byte {
+				return append(dst, types.CollationKeyOrOriginal(charset, value)...)
+			})
+			continue
+		}
 		switch vec.GetType().Oid {
 		case types.T_float32:
 			computeFloat32XXHash(vec, hashValues)
@@ -770,6 +792,10 @@ func computeGroupingXXHash(vec *vector.Vector, hashValues []uint64) {
 func CanonicalBytesAt(vec *vector.Vector, row int, scratch []byte) (canonical, reusable []byte) {
 	if vec.IsConst() {
 		row = 0
+	}
+	if types.IsUnicodeCollation(vec.GetType().Charset) && vec.GetType().Oid.IsMySQLString() {
+		key := types.CollationKeyOrOriginal(vec.GetType().Charset, vec.GetRawBytesAt(row))
+		return key, key
 	}
 	switch vec.GetType().Oid {
 	case types.T_float32:

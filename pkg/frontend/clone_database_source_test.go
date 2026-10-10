@@ -17,18 +17,90 @@ package frontend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/stretchr/testify/require"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+func TestCollectCloneDatabaseSourceReusesFKDefinitions(t *testing.T) {
+	for _, ts := range []int64{0, 42} {
+		t.Run(fmt.Sprint(ts), func(t *testing.T) {
+			const database = "source_db"
+			ctx := defines.AttachAccountId(t.Context(), 7)
+			ses := newFeatureLimitTestSession(t)
+			ses.txnCompileCtx = &TxnCompilerContext{}
+			ses.txnCompileCtx.SetQueryingSubscription(&plan.SubscriptionMeta{DbName: database, AccountId: 7})
+			accounts := &cloneDatabaseAccountResolution{opAccountId: 7, toAccountId: 7}
+			spec := ""
+			if ts != 0 {
+				accounts.snapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: ts}}
+				spec = fmt.Sprintf(" {MO_TS = %d}", ts)
+			}
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result["SELECT 1 FROM mo_catalog.mo_database"+spec+" WHERE datname = 'source_db' AND account_id = 7 LIMIT 1"] = newMrsForCheckDatabase([][]interface{}{{1}})
+			listSQL := buildTableInfoListSQL(database, "", ts, 7)
+			bh.sql2result[listSQL] = newMrsForRestoreStringRows([]string{"name", "type", "kind", "view"}, [][]interface{}{
+				{"child", "BASE TABLE", catalog.SystemOrdinaryRel, ""},
+				{"parent", "BASE TABLE", catalog.SystemOrdinaryRel, ""},
+			})
+			for table, ddl := range map[string]string{
+				"parent": "create table source_db.parent (id int primary key)",
+				"child":  "create table source_db.child (id int primary key, parent_id int, foreign key (parent_id) references source_db.parent(id))",
+			} {
+				bh.sql2result["show create table `source_db`.`"+table+"`"+spec] = newMrsForRestoreStringRows([]string{"table", "sql"}, [][]interface{}{{table, ddl}})
+				bh.sql2result[buildTableInfoListSQL(database, table, ts, 7)] = newMrsForRestoreStringRows([]string{"name", "type", "kind", "view"}, [][]interface{}{{table, "BASE TABLE", catalog.SystemOrdinaryRel, ""}})
+			}
+			bh.sql2result["select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"+spec+" where db_name = 'source_db'"] = newMrsForRestoreStringRows([]string{"db", "table", "ref_db", "ref_table"}, nil)
+			stmt := &tree.CloneDatabase{SrcDatabase: database, DstDatabase: "target_db"}
+			source, err := collectCloneDatabaseSource(ctx, ses, bh, stmt, accounts)
+			require.NoError(t, err)
+			require.Equal(t, []string{genKey(database, "parent"), genKey(database, "child")}, source.sortedFkTbls)
+			for _, info := range source.srcTblInfos {
+				require.Same(t, info, source.fkTableMap[genKey(database, info.tblName)])
+			}
+			require.Len(t, bh.executedSQLs, 5)
+			require.Len(t, source.fkTableMap, 2)
+			for _, account := range bh.executionAccountIDs {
+				require.Equal(t, uint32(7), account)
+			}
+
+			t.Run("fresh collection does not reuse the admitted predecessor", func(t *testing.T) {
+				next, err := collectCloneDatabaseSource(ctx, ses, bh, stmt, accounts)
+				require.NoError(t, err)
+				require.Len(t, bh.executedSQLs, 10)
+				require.NotSame(t, source.srcTblInfos[0], next.srcTblInfos[0])
+				require.Same(t, next.srcTblInfos[0], next.fkTableMap[genKey(database, "child")])
+			})
+			t.Run("no foreign keys", func(t *testing.T) {
+				bh.sql2result["show create table `source_db`.`child`"+spec] = newMrsForRestoreStringRows([]string{"table", "sql"}, [][]interface{}{{"child", "create table source_db.child (id int primary key)"}})
+				next, err := collectCloneDatabaseSource(ctx, ses, bh, stmt, accounts)
+				require.NoError(t, err)
+				require.Len(t, bh.executedSQLs, 15)
+				require.Len(t, next.srcTblInfos, 2)
+				require.Empty(t, next.sortedFkTbls)
+				require.Empty(t, next.fkTableMap)
+			})
+			t.Run("schema lookup failure is preserved", func(t *testing.T) {
+				want := moerr.NewInternalErrorNoCtx("schema lookup failed")
+				bh.sql2err["show create table `source_db`.`child`"+spec] = want
+				_, err := collectCloneDatabaseSource(ctx, ses, bh, stmt, accounts)
+				require.ErrorIs(t, err, want)
+			})
+		})
+	}
+}
 
 type accountRecordingBackgroundExec struct {
 	*backgroundExecTest

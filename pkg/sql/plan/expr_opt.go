@@ -2671,6 +2671,16 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		Parts = util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 		numParts = len(Parts)
 	}
+	// The serialized composite-key shortcut is byte-oriented.  It is not a
+	// valid replacement for predicates over native Unicode collations, whose
+	// equality domain is defined by the UCA key rather than the source bytes.
+	// Keep the original component predicates so the normal collation-aware
+	// expression path remains responsible for filtering rows.  Treat missing
+	// metadata as unsafe as well; this path must never optimize on an unknown
+	// key definition.
+	if tableDefHasNativeUnicodeKeyPart(tableDef, Parts) {
+		return filters
+	}
 
 	for i, expr := range filters {
 		if expr == nil {
@@ -3268,6 +3278,22 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 	}
 
 	return newFilterList
+}
+
+func tableDefHasNativeUnicodeKeyPart(tableDef *plan.TableDef, parts []string) bool {
+	if tableDef == nil || len(parts) == 0 {
+		return true
+	}
+	for _, part := range parts {
+		idx, ok := tableDef.Name2ColIndex[part]
+		if !ok || idx < 0 || int(idx) >= len(tableDef.Cols) || tableDef.Cols[idx] == nil {
+			return true
+		}
+		if types.IsUnicodeCollation(uint8(tableDef.Cols[idx].Typ.GetCharset())) {
+			return true
+		}
+	}
+	return false
 }
 
 func flattenLogicalExpressions(expr *plan.Expr, opName string, args *[]*plan.Expr) {

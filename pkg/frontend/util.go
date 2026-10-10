@@ -2041,7 +2041,7 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 		return err
 	}
 	if typ.Charset != 255 {
-		if err := collation.RequireLegacy(uint32(typ.Charset), uint32(typ.CollationVersion), 0); err != nil {
+		if err := collation.ValidateMetadata(uint32(typ.Charset), uint32(typ.CollationVersion)); err != nil {
 			return err
 		}
 	}
@@ -2061,7 +2061,10 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	// Keep zero-value protocol defaults. Explicit collation metadata comes
 	// from the same capability owner as admission; 255 is a numeric CAST marker.
 	if typ.Charset != types.CharsetLegacy && typ.Charset != 255 {
-		d, _ := collation.EffectiveDefinition(uint32(typ.Charset), uint32(typ.CollationVersion))
+		d, err := collation.EffectiveDefinition(uint32(typ.Charset), uint32(typ.CollationVersion))
+		if err != nil {
+			return err
+		}
 		col.SetCharset(d.ProtocolID)
 	}
 	if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
@@ -2171,6 +2174,10 @@ func mysqlTextMaxBytesPerCharacter(charset uint8) uint32 {
 	switch charset {
 	case types.CharsetUTF8, types.CharsetUTF8MB4Bin:
 		return utf8mb4MaxBytesPerCharacter
+	case types.CharsetUTF8MB4UnicodeCI:
+		return utf8mb4MaxBytesPerCharacter
+	case types.CharsetUTF8MB3UnicodeCI:
+		return 3
 	case types.CharsetBinary:
 		return 1
 	default:
