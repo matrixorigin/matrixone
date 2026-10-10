@@ -1,0 +1,350 @@
+drop database if exists vector_ivf_equi_join;
+create database vector_ivf_equi_join;
+use vector_ivf_equi_join;
+set @saved_experimental_ivf_index = @@experimental_ivf_index;
+set experimental_ivf_index = 1;
+set @probe_limit = 1;
+create table chunks (
+id varchar(32) primary key,
+v vecf32(2) not null,
+document_id varchar(32),
+category varchar(32)
+);
+insert into chunks values
+('c0', '[0,0]', 'u', 'x'),
+('c1', '[0.01,0]', 'u', 'x'),
+('c2', '[0.1,0]', 'd1', 'x'),
+('c3', '[0.2,0]', 'd2', 'z'),
+('c4', '[0.3,0]', 'd1', 'y'),
+('c5', '[0.6,0]', 'd3', 'outside'),
+('c6', '[0.15,0]', null, 'null'),
+('c7', '[0.4,0]', 'd4', 'new');
+create index chunks_ivf using ivfflat on chunks(v) lists = 1 op_type 'vector_l2_ops';
+create table documents (row_id int primary key, document_id varchar(32), label varchar(32));
+insert into documents values (1,'d1','x'),(2,'d1','y'),(3,'d2','z'),(4,'d3','outside'),(5,null,'null');
+create table unique_documents (document_id varchar(32) primary key, label varchar(32));
+insert into unique_documents values ('d1','x'),('d2','z'),('d3','outside');
+explain select a.id from chunks a join documents b on a.document_id=b.document_id
+order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(chunks.v, ) INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (b.document_id = chunks.document_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_ivf_equi_join.documents  𝄀
+                    Runtime Filter Probe: b.document_id  𝄀
+              ->  Sort  𝄀
+                    Sort Key: #[0,3] ASC  𝄀
+                    Limit: 3  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER  𝄀
+                          Join Cond: (chunks.id = #[1,0])  𝄀
+                          Runtime Filter Build: #[-1,0]  𝄀
+                          ->  Table Scan on vector_ivf_equi_join.chunks  𝄀
+                                Runtime Filter Probe: chunks.id  𝄀
+                          ->  Join  𝄀
+                                Join Type: SEMI  𝄀
+                                Join Cond: (#[0,0] = chunks.id)  𝄀
+                                Runtime Filter Build: #[14,0]  𝄀
+                                ->  Vector Index Scan on chunks_ivf [l2_distance]  𝄀
+                                      Runtime Filter Probe: #[12,0]  𝄀
+                                      Vector Index: chunks_ivf, Metric: l2_distance, Candidate Limit: 3, NProbe: 5  𝄀
+                                ->  Join  𝄀
+                                      Join Type: SEMI  𝄀
+                                      Join Cond: (chunks.document_id = documents.document_id)  𝄀
+                                      Runtime Filter Build: #[-1,0]  𝄀
+                                      ->  Table Scan on vector_ivf_equi_join.chunks  𝄀
+                                            Runtime Filter Probe: chunks.document_id  𝄀
+                                      ->  Table Scan on vector_ivf_equi_join.documents
+explain select a.id from chunks a join documents b on a.document_id=b.document_id
+order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=pre';
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(chunks.v, ) INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (b.document_id = chunks.document_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_ivf_equi_join.documents  𝄀
+                    Runtime Filter Probe: b.document_id  𝄀
+              ->  Sort  𝄀
+                    Sort Key: #[0,3] ASC  𝄀
+                    Limit: 3  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER  𝄀
+                          Join Cond: (chunks.id = #[1,0])  𝄀
+                          Runtime Filter Build: #[-1,0]  𝄀
+                          ->  Table Scan on vector_ivf_equi_join.chunks  𝄀
+                                Runtime Filter Probe: chunks.id  𝄀
+                          ->  Join  𝄀
+                                Join Type: SEMI  𝄀
+                                Join Cond: (#[0,0] = chunks.id)  𝄀
+                                Runtime Filter Build: #[14,0]  𝄀
+                                ->  Vector Index Scan on chunks_ivf [l2_distance]  𝄀
+                                      Runtime Filter Probe: #[12,0]  𝄀
+                                      Vector Index: chunks_ivf, Metric: l2_distance, Candidate Limit: 3, NProbe: 5  𝄀
+                                ->  Join  𝄀
+                                      Join Type: SEMI  𝄀
+                                      Join Cond: (chunks.document_id = documents.document_id)  𝄀
+                                      Runtime Filter Build: #[-1,0]  𝄀
+                                      ->  Table Scan on vector_ivf_equi_join.chunks  𝄀
+                                            Runtime Filter Probe: chunks.document_id  𝄀
+                                      ->  Table Scan on vector_ivf_equi_join.documents
+explain select a.id from chunks a join documents b on a.document_id=b.document_id
+order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+-- @regex("Vector Index Scan", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(a.v, ) INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (a.document_id = b.document_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_ivf_equi_join.chunks  𝄀
+                    Runtime Filter Probe: a.document_id  𝄀
+              ->  Table Scan on vector_ivf_equi_join.documents
+select a.id from chunks a join documents b on a.document_id=b.document_id
+order by l2_distance(a.v,'[0,0]') limit 3;
+➤ id[12,32,0]  𝄀
+c2  𝄀
+c2  𝄀
+c3
+select a.id from chunks a join documents b on a.document_id=b.document_id
+order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=pre';
+➤ id[12,32,0]  𝄀
+c2  𝄀
+c2  𝄀
+c3
+select a.id from chunks a join documents b on a.document_id=b.document_id
+order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+➤ id[12,32,0]  𝄀
+c2  𝄀
+c2  𝄀
+c3
+select a.id from chunks a where a.document_id in (select document_id from documents)
+order by l2_distance(a.v,'[0,0]') limit 3;
+➤ id[12,32,0]  𝄀
+c2  𝄀
+c3  𝄀
+c4
+select a.id from chunks a join unique_documents b on a.document_id=b.document_id
+order by l2_distance(a.v,'[0,0]') limit 3;
+➤ id[12,32,0]  𝄀
+c2  𝄀
+c3  𝄀
+c4
+select a.id,b.label from chunks a join documents b on a.document_id=b.document_id
+order by l2_distance(a.v,'[0,0]') limit 3;
+➤ id[12,32,0]  ¦  label[12,32,0]  𝄀
+c2  ¦  x  𝄀
+c2  ¦  y  𝄀
+c3  ¦  z
+select a.id,b.label,l2_distance(a.v,'[0,0]') as distance from chunks a
+join documents b on a.document_id=b.document_id order by distance limit 3;
+➤ id[12,32,0]  ¦  label[12,32,0]  ¦  distance[8,53,31]  𝄀
+c2  ¦  x  ¦  0.10000000149011612  𝄀
+c2  ¦  y  ¦  0.10000000149011612  𝄀
+c3  ¦  z  ¦  0.20000000298023224
+select a.id,b.label from chunks a join documents b on a.document_id=b.document_id
+where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+➤ id[12,32,0]  ¦  label[12,32,0]  𝄀
+c2  ¦  x  𝄀
+c4  ¦  x
+select a.id from documents b join chunks a on b.document_id=a.document_id
+order by l2_distance(a.v,'[0,0]') limit 3;
+➤ id[12,32,0]  𝄀
+c2  𝄀
+c2  𝄀
+c3
+select a.id,b.label from chunks a join documents b
+on a.document_id=b.document_id and a.category=b.label
+order by l2_distance(a.v,'[0,0]') limit 3;
+➤ id[12,32,0]  ¦  label[12,32,0]  𝄀
+c2  ¦  x  𝄀
+c3  ¦  z  𝄀
+c4  ¦  y
+select a.id from chunks a join documents b on a.document_id=b.document_id
+where l2_distance(a.v,'[0,0]')<=0.15 order by l2_distance(a.v,'[0,0]') limit 10;
+➤ id[12,32,0]  𝄀
+c2  𝄀
+c2
+select a.id from chunks a join documents b on a.document_id=b.document_id
+where l2_distance(a.v,'[0,0]')<=0.5 order by l2_distance(a.v,'[0,0]') limit 10;
+➤ id[12,32,0]  𝄀
+c2  𝄀
+c2  𝄀
+c3  𝄀
+c4  𝄀
+c4
+select a.id from chunks a join documents b on a.document_id=b.document_id
+where l2_distance(a.v,'[0,0]')<=0.5 order by l2_distance(a.v,'[0,0]') limit 3 offset 1;
+➤ id[12,32,0]  𝄀
+c2  𝄀
+c3  𝄀
+c4
+select a.id from chunks a join documents b on a.document_id=b.document_id
+where l2_distance(a.v,'[0,0]')<=0.5 order by l2_distance(a.v,'[0,0]') limit 3 offset 1
+by rank with option 'mode=force';
+➤ id[12,32,0]  𝄀
+c2  𝄀
+c3  𝄀
+c4
+select a.id from chunks a join documents b on a.document_id=b.document_id
+order by l2_distance(a.v,'[0,0]') limit 2 offset 20;
+➤ id[12,32,0]
+select a.id from chunks a join documents b on a.document_id=b.document_id
+order by l2_distance(a.v,'[0,0]') limit 0;
+➤ id[12,32,0]
+select a.id from chunks a join documents b on a.document_id=b.document_id
+where b.label='absent' order by l2_distance(a.v,'[0,0]') limit 3;
+➤ id[12,32,0]
+prepare p from 'select a.id from chunks a join documents b on a.document_id=b.document_id
+order by l2_distance(a.v,"[0,0]") limit ?';
+set @k = 0;
+execute p using @k;
+➤ id[12,32,0]
+set @k = 3;
+execute p using @k;
+➤ id[12,32,0]  𝄀
+c2  𝄀
+c2  𝄀
+c3
+update documents set document_id='u' where document_id='d1';
+execute p using @k;
+➤ id[12,32,0]  𝄀
+c0  𝄀
+c0  𝄀
+c1
+update documents set document_id='d1' where document_id='u';
+execute p using @k;
+➤ id[12,32,0]  𝄀
+c2  𝄀
+c2  𝄀
+c3
+set @k = 0;
+execute p using @k;
+➤ id[12,32,0]
+deallocate prepare p;
+prepare null_vector from 'select count(*) from (select a.id from chunks a join documents b
+on a.document_id=b.document_id order by l2_distance(a.v,?) limit 3) q';
+set @query_vector = null;
+execute null_vector using @query_vector;
+➤ count(*)[-5,64,0]  𝄀
+3
+set @query_vector = '[0,0]';
+execute null_vector using @query_vector;
+➤ count(*)[-5,64,0]  𝄀
+3
+deallocate prepare null_vector;
+create table nullable_chunks (id varchar(32) primary key, v vecf32(2), document_id varchar(32));
+insert into nullable_chunks values ('n0',null,'d1'),('n1','[0.1,0]','d1');
+create index nullable_ivf using ivfflat on nullable_chunks(v) lists=1 op_type 'vector_l2_ops';
+explain select a.id from nullable_chunks a join documents b on a.document_id=b.document_id
+order by l2_distance(a.v,'[0,0]') limit 2;
+-- @regex("Vector Index Scan", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(a.v, ) INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (b.document_id = a.document_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_ivf_equi_join.documents  𝄀
+                    Runtime Filter Probe: b.document_id  𝄀
+              ->  Table Scan on vector_ivf_equi_join.nullable_chunks
+select a.id from nullable_chunks a join documents b on a.document_id=b.document_id
+order by l2_distance(a.v,'[0,0]') limit 2;
+➤ id[12,32,0]  𝄀
+n0  𝄀
+n0
+select a.id from nullable_chunks a join documents b on a.document_id=b.document_id
+order by l2_distance(a.v,'[0,0]') limit 2 by rank with option 'mode=force';
+➤ id[12,32,0]  𝄀
+n0  𝄀
+n0
+explain select a.id from nullable_chunks a join documents b on a.document_id=b.document_id
+where a.v is not null order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(nullable_chunks.v, ) INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (b.document_id = nullable_chunks.document_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_ivf_equi_join.documents  𝄀
+                    Runtime Filter Probe: b.document_id  𝄀
+              ->  Sort  𝄀
+                    Sort Key: #[0,0] ASC  𝄀
+                    Limit: 3  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER  𝄀
+                          Join Cond: (#[0,0] = nullable_chunks.id)  𝄀
+                          ->  Join  𝄀
+                                Join Type: SEMI  𝄀
+                                Join Cond: (#[0,0] = nullable_chunks.id)  𝄀
+                                Runtime Filter Build: #[14,0]  𝄀
+                                ->  Vector Index Scan on nullable_ivf [l2_distance]  𝄀
+                                      Runtime Filter Probe: #[12,0]  𝄀
+                                      Vector Index: nullable_ivf, Metric: l2_distance, Candidate Limit: 3, NProbe: 5  𝄀
+                                ->  Join  𝄀
+                                      Join Type: RIGHT SEMI  𝄀
+                                      Join Cond: (documents.document_id = nullable_chunks.document_id)  𝄀
+                                      Runtime Filter Build: #[-1,0]  𝄀
+                                      ->  Table Scan on vector_ivf_equi_join.documents [ForceOneCN]  𝄀
+                                            Runtime Filter Probe: documents.document_id  𝄀
+                                      ->  Table Scan on vector_ivf_equi_join.nullable_chunks [ForceOneCN]  𝄀
+                          ->  Table Scan on vector_ivf_equi_join.nullable_chunks
+select a.id from nullable_chunks a join documents b on a.document_id=b.document_id
+where a.v is not null order by l2_distance(a.v,'[0,0]') limit 3;
+➤ id[12,32,0]  𝄀
+n1  𝄀
+n1
+create table empty_documents (document_id varchar(32));
+select a.id from chunks a join empty_documents b on a.document_id=b.document_id
+order by l2_distance(a.v,'[0,0]') limit 3;
+➤ id[12,32,0]
+explain select a.id from chunks a left join documents b on a.document_id=b.document_id
+order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("Vector Index Scan", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(a.v, ) INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: RIGHT  𝄀
+              Join Cond: (b.document_id = a.document_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_ivf_equi_join.documents [ForceOneCN]  𝄀
+                    Runtime Filter Probe: b.document_id  𝄀
+              ->  Table Scan on vector_ivf_equi_join.chunks [ForceOneCN]
+explain select a.id from chunks a join documents b on a.document_id<b.document_id
+order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("Vector Index Scan", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(a.v, ) INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (a.document_id < b.document_id)  𝄀
+              ->  Table Scan on vector_ivf_equi_join.documents  𝄀
+              ->  Table Scan on vector_ivf_equi_join.chunks
+drop database vector_ivf_equi_join;
+set experimental_ivf_index = @saved_experimental_ivf_index;

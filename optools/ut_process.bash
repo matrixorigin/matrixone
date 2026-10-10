@@ -32,7 +32,14 @@ function ut_process_group_alive(){
     if [[ -z "${pid}" ]] || ! [[ "${pid}" =~ ^[1-9][0-9]*$ ]]; then
         return 1
     fi
-    kill -0 -- "-${pid}" 2>/dev/null || kill -0 "${pid}" 2>/dev/null
+    if ! kill -0 -- "-${pid}" 2>/dev/null && ! kill -0 "${pid}" 2>/dev/null; then
+        return 1
+    fi
+    # Orphaned zombies may wait for the runner's init to reap them. They no
+    # longer execute or retain descriptors/leases and must not block a wave.
+    local states
+    states=$(ps -eo pid=,pgid=,stat=) || return 0
+    awk -v owner="${pid}" '($1 == owner || $2 == owner) && $3 !~ /^Z/ { live=1 } END { exit !live }' <<< "${states}"
 }
 
 function wait_for_ut_process_group(){
@@ -48,23 +55,49 @@ function wait_for_ut_process_group(){
         logger "ERR" "UT cancellation: force stopping process group ${pid}"
         terminate_ut_process_group "${pid}" KILL
     fi
+    for (( tick=0; tick<20; tick++ )); do
+        ut_process_group_alive "${pid}" || return 0
+        sleep 0.05
+    done
+    logger "ERR" "UT cancellation: process group ${pid} did not stop after KILL"
+    return 1
 }
 
 function terminate_ut_process_groups(){
     local grace_ticks=$1
     shift
-    local pid
+    local pid tick live
 
     # Send TERM to every owner before waiting. This gives independent groups a
-    # common start time; a TERM-ignoring group is then force-killed within its
-    # own bounded grace period instead of blocking another group from seeing
-    # the signal.
+    # common deadline. Two tests and their watchdogs must not consume four
+    # separate grace periods while the parent is waiting for this helper.
     for pid in "$@"; do
         [[ "${pid}" =~ ^[1-9][0-9]*$ ]] && terminate_ut_process_group "${pid}" TERM
     done
-    for pid in "$@"; do
-        [[ "${pid}" =~ ^[1-9][0-9]*$ ]] && wait_for_ut_process_group "${pid}" "${grace_ticks}"
+    for (( tick=0; tick<grace_ticks; tick++ )); do
+        live=0
+        for pid in "$@"; do
+            ut_process_group_alive "${pid}" && live=1
+        done
+        (( live != 0 )) || return 0
+        sleep 0.25
     done
+    for pid in "$@"; do
+        if ut_process_group_alive "${pid}"; then
+            logger "ERR" "UT cancellation: force stopping process group ${pid}"
+            terminate_ut_process_group "${pid}" KILL
+        fi
+    done
+    for (( tick=0; tick<20; tick++ )); do
+        live=0
+        for pid in "$@"; do
+            ut_process_group_alive "${pid}" && live=1
+        done
+        (( live != 0 )) || return 0
+        sleep 0.05
+    done
+    logger "ERR" "UT cancellation: owned process groups did not stop after KILL"
+    return 1
 }
 
 function remove_ut_report_file(){

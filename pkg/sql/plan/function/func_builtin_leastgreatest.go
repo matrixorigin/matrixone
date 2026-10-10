@@ -158,6 +158,19 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 		return leastGreatestResolution{resultType: nonNull[0], overloadID: leastGreatestNormalOverload}, true
 	}
 
+	for _, input := range nonNull {
+		if input.Oid == types.T_uuid {
+			if target, _, ok := textStringCommonType(inputs); ok {
+				return leastGreatestResolution{
+					resultType: target,
+					castTypes:  leastGreatestCastTypes(inputs, target),
+					overloadID: leastGreatestNormalOverload,
+				}, true
+			}
+			break
+		}
+	}
+
 	if hasUnsupportedLeastGreatestMixedType(nonNull) {
 		return leastGreatestResolution{}, false
 	}

@@ -14,7 +14,12 @@
 
 package embed
 
-import "time"
+import (
+	"os"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/testutil/clusteradmission"
+)
 
 const (
 	// Test clusters run under the race detector and may lose several seconds to
@@ -65,11 +70,17 @@ func WithTesting() Option {
 
 // WithConcurrentTestClusters is only for a test whose assertion requires two
 // complete embedded clusters to remain live together. Ordinary tests must use
-// the default exclusive admission so an accidental second cluster fails fast.
+// the default local exclusion so an accidental second cluster fails fast, even
+// when the scheduler enables bounded cross-process admission.
 func WithConcurrentTestClusters() Option {
 	return func(c *cluster) {
 		c.options.allowConcurrentTestClusters = true
 	}
+}
+
+func concurrentTestClusterProcessesEnabled() bool {
+	value := os.Getenv(clusteradmission.ProcessPoolSizeEnv)
+	return value != "" && value != "0" && value != "1"
 }
 
 // WithHAKeeperHeartbeatTimeout overrides the CN and TN HAKeeper heartbeat RPC

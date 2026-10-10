@@ -202,7 +202,7 @@ select hex(greatest(cast('a' as blob), cast('b' as varbinary))) as greatest_blob
 select hex(greatest(cast('a' as binary), cast('b' as varbinary))) as greatest_binary_varbinary;
 
 -- Existing executor-supported Oids remain valid only for same-Oid calls;
--- every corresponding mixed call is rejected before a normal executor runs.
+-- mixed calls are rejected except UUID with character text, which uses the shared text domain.
 drop table if exists greatest_least_supported_oid;
 create table greatest_least_supported_oid (id int primary key, v32 vecf32(3), v64 vecf64(3));
 insert into greatest_least_supported_oid values (1, '[1,2,3]', '[1,2,3]');
