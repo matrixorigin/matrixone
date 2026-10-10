@@ -16,8 +16,11 @@ package issues
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -96,7 +99,46 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 		}
 		check(true)
 		check(true)
-		// A data write must not invalidate authorization catalog contents.
+		// A data write must not change authorization catalog contents. The
+		// conservative version also includes physical generations/watermarks:
+		// background catalog replay can change it without changing these rows.
+		catalogContents := func() map[string][sha256.Size]byte {
+			t.Helper()
+			contents := make(map[string][sha256.Size]byte)
+			for _, query := range []string{
+				"select * from mo_catalog.mo_database where datname='app'",
+				"select * from mo_catalog.mo_tables where reldatabase='app'",
+				"select * from mo_catalog.mo_user", "select * from mo_catalog.mo_role",
+				"select * from mo_catalog.mo_user_grant", "select * from mo_catalog.mo_role_grant",
+				"select * from mo_catalog.mo_role_privs",
+			} {
+				rows, err := owner.QueryContext(ctx, query)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, rows.Close()) })
+				columns, err := rows.Columns()
+				require.NoError(t, err)
+				var encodedRows []string
+				for rows.Next() {
+					values := make([]any, len(columns))
+					pointers := make([]any, len(columns))
+					for i := range values {
+						pointers[i] = &values[i]
+					}
+					require.NoError(t, rows.Scan(pointers...))
+					encoded, err := json.Marshal(values)
+					require.NoError(t, err)
+					encodedRows = append(encodedRows, string(encoded))
+				}
+				require.NoError(t, rows.Err())
+				require.NoError(t, rows.Close())
+				sort.Strings(encodedRows)
+				encoded, err := json.Marshal(encodedRows)
+				require.NoError(t, err)
+				// Compare all values without printing credential catalog contents.
+				contents[query] = sha256.Sum256(encoded)
+			}
+			return contents
+		}
 		cn, err := c.GetCNService(1)
 		require.NoError(t, err)
 		eng := cn.RawService().(cnservice.Service).GetEngine().(*disttae.Engine)
@@ -105,18 +147,22 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 		version, _, err := eng.GetPrivilegeCacheVersion(ctx, account, timestamp.Timestamp{})
 		require.NoError(t, err)
 		require.True(t, version != (disttae.PrivilegeCacheVersion{}))
+		beforeDataWrite := catalogContents()
 		mustExec(t, ctx, owner, "insert into app.t values (2)")
-		current, _, err := eng.GetPrivilegeCacheVersion(ctx, account, timestamp.Timestamp{})
-		require.NoError(t, err)
-		require.True(t, version == current)
+		var dataRows int
+		require.NoError(t, owner.QueryRowContext(ctx, "select count(*) from app.t").Scan(&dataRows))
+		require.Equal(t, 2, dataRows)
+		require.Equal(t, beforeDataWrite, catalogContents(), "ordinary DML must preserve authorization contents")
+		check(true)
 		canceled, stop := context.WithCancel(ctx)
 		stop()
-		current, _, err = eng.GetPrivilegeCacheVersion(canceled, account, timestamp.Timestamp{})
+		current, _, err := eng.GetPrivilegeCacheVersion(canceled, account, timestamp.Timestamp{})
 		require.ErrorIs(t, err, context.Canceled)
 		require.True(t, current == (disttae.PrivilegeCacheVersion{}))
 		allReadersExec("begin")
 		check(true)
 		mustExec(t, ctx, owner, "revoke select on table app.t from reader")
+		require.NotEqual(t, beforeDataWrite, catalogContents(), "the contents oracle must observe a real grant change")
 		check(false)
 		allReadersExec("rollback")
 		mustExec(t, ctx, owner, "grant select on table app.t to reader")

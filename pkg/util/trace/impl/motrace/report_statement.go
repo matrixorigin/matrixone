@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -846,6 +847,7 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 			s.Error = err
 			s.Status = StatementStatusFailed
 		}
+		s.finalizeStatementDiagnostics(ctx, err)
 		if !s.reported || s.exported { // cooperate with s.mux
 			s.exported = false
 			s.Report(ctx)
@@ -858,13 +860,17 @@ var sqlConnector = []byte("...")
 // RecordStatementSql mainly to fill into StatementInfo.Statement.
 func (s *StatementInfo) RecordStatementSql(truncatedSql string, rawSql string) {
 	if s.IsMoLogger() && s.StatementType == "Load" && len(rawSql) > 128 {
-		s.Statement = append(s.Statement, rawSql[:40]...)
+		s.Statement = append(s.Statement, util.Abbreviate(rawSql[:util.UTF8PrefixLen(rawSql, 40)], -1)...)
 		s.Statement = append(s.Statement, sqlConnector...)
-		s.Statement = append(s.Statement, rawSql[len(rawSql)-70:]...)
+		tail := len(rawSql) - 70
+		if start := util.UTF8PrefixLen(rawSql, tail); start < tail {
+			_, width := utf8.DecodeRuneInString(rawSql[start:])
+			tail = start + width
+		}
+		s.Statement = append(s.Statement, util.Abbreviate(rawSql[tail:], -1)...)
 	} else {
-		bytes := util.UnsafeStringToBytes(truncatedSql)
-		length := min(cap(s.Statement), len(bytes))
-		s.Statement = append(s.Statement, bytes[:length]...)
+		length := util.UTF8PrefixLen(truncatedSql, cap(s.Statement))
+		s.Statement = append(s.Statement, truncatedSql[:length]...)
 	}
 }
 

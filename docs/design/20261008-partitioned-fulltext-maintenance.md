@@ -1,11 +1,11 @@
 # Partitioned classic FULLTEXT maintenance contract
 
-Revision: R4 actual-main108 integration, 2026-10-09. Issue #28311 / PR #28477.
+Revision: R5 actual-main109 integration, 2026-10-11. Issue #28311 / PR #28477.
 
 Status: **proposal, approval required**. This document describes the local
 maintenance merge candidate integrating actual main
-`d2a0055ebe1a0b2423368e046c1812c18f6face8` into PR head
-`a0d273ad3c3cfc80b327255ed6c40dbd3301d365`.
+`64b715a8234e272794185e2acc98ad58a8346c65` into PR head
+`17ca698fb31a7f1500a7516f05d63550fa45834b`.
 It is not an approval record. The earlier ODKU-only contract does not authorize
 the UPDATE, REPLACE, partition routing, or wire changes described here.
 
@@ -135,13 +135,14 @@ existing persisted block and catalog formats, not a new posting format.
 
 ## Cumulative compatibility
 
-Integrated main owns MORPC 101-108, including vector-cache control at 102,
+Integrated main owns MORPC 101-109, including vector-cache control at 102,
 functional-index metadata/generated-key maintenance at 107 (#29472), and
-isolated user-variable NULL regexp history in connection migration at 108. The
+isolated user-variable NULL regexp history in connection migration at 108,
+and native Unicode collation metadata at 109. The
 functional-index creation and 4.0.13 tenant-upgrade floors stay at 107; they
 must not be renumbered or treated as FULLTEXT-route support. This candidate
-uses **proposed 109** for route-preserving PRE_INSERT and partition-index
-MULTI_UPDATE after integrating actual main's 107 and 108 implementations.
+uses **proposed 110** for route-preserving PRE_INSERT and partition-index
+MULTI_UPDATE after integrating main64b715a8234e272794185e2acc98ad58a8346c65.
 It is neither an exclusive reservation nor an approved final landing number.
 Integration must recheck landing main and competing open protocol owners,
 and refresh maintainer ordering before publication/acceptance. Unmerged
@@ -153,7 +154,7 @@ plan PreInsertCtx.preserve_input=15, pipeline PreInsert.preserve_input=19.
 Main's existing fields and protocol meanings are retained. The existing
 MultiUpdate wire operator is used; decoding restores its partition wrapper.
 Sender conversion and recursive remote-scope validation must reject routed
-payloads below the new capability. Actual predecessor 108 and historical
+payloads below the new capability. Actual predecessor 109 and historical
 102-107 are negative controls, while ordinary payloads retain their prior
 admission. Correct mixed-version refusal is required; silently dropping route
 metadata is not a compatibility strategy. The sender checks both route fields
@@ -236,7 +237,7 @@ both cardinalities. No measurement or reviewer acceptance is asserted here.
 1. Explicit review of this versioned scope, field ownership, cumulative
    capability, and resource trade-offs by the blocking design reviewers.
 2. Execute focused planner/operator/codec tests on this candidate and exact
-   base, including actual-main 108 refusal / proposed-109 acceptance,
+   base, including actual-main 109 refusal / proposed-110 acceptance,
    unchanged ordinary admission, partitioned key moves, and
    non-partitioned/vector rejection.
 3. Execute the canonical partition FULLTEXT BVT plus unchanged ordinary
@@ -329,7 +330,7 @@ a capacity risk until its memory envelope is accepted.
 | Open decision | Owner / decision point | Status |
 | --- | --- | --- |
 | R3 ownership/placement/supported scope | Blocking design reviewers, before implementation approval | Approval required |
-| Final cumulative route capability and ordering | Integrator and protocol owners, against landing main and competing open owners | Proposed 109 against fixed d2a only; maintainer ordering pending |
+| Final cumulative route capability and ordering | Integrator and protocol owners, against landing main and competing open owners | Proposed110 against main64b715; maintainer ordering pending |
 | Multi-CN WriteS3 failure/cancel/visibility/reuse | Allocated deployment validation owner, before acceptance | NOT_RUN |
 | Payload/copy/writer budget and comparative cost | Design reviewers and validation owner, before rollout | Unmeasured / unaccepted |
 
@@ -354,7 +355,7 @@ fixture roots. Configured incremental lint and both source/base diff checks
 passed. Its full owning-package, race, canonical BVT and deployment
 validation remain NOT_RUN; the earlier independent resource failures remain
 unresolved. These results do not promote earlier green evidence or pending CI
-to whole-feature acceptance. The new d2a/109 merge has not yet been built or
+to whole-feature acceptance. At R4, the d2a/109 merge had not yet been built or
 executed; its focused, owning-package, canonical BVT and deployment validation
 remain NOT_RUN.
 
@@ -362,3 +363,16 @@ Explicit design acceptance, maintainer ordering/final capability allocation,
 actual multi-CN/S3 transaction/cleanup acceptance, and measured cost items
 remain NOT_RUN or unaccepted. No previous-head execution receipt is promoted
 to this candidate.
+
+R5 merge64b715 / candidate110 passed normal CGo wire, planner, operator and
+compile-package tests, configured incremental lint, and the production build.
+The six canonical functional-index, partition, RETURNING and FULLTEXT cases
+passed twice (882 report checks total), with catalog teardown and a graceful
+service exit without forced kill. These results cover this maintenance delta,
+not whole-feature deployment or design acceptance.
+
+The separate 160-invocation component-cost run completed on pre-integration
+head17ca698f/tree976d4d0. Its measured grouping/fanout costs are nonzero;
+neither those measurements nor local-disk WriteS3 resource oracles are
+silently promoted to this integrated candidate, whole-statement performance,
+receiving-CN fault injection, or maintainer cost acceptance.

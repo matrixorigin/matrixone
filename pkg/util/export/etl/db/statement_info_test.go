@@ -34,7 +34,7 @@ import (
 
 func TestStatementInfoDiagnosticCapacity(t *testing.T) {
 	for _, input := range []string{
-		"", "\xff", strings.Repeat("a", StatementInfoTextLimit-1), strings.Repeat("a", StatementInfoTextLimit), strings.Repeat("a", StatementInfoTextLimit+1),
+		"", "�", strings.Repeat("a", StatementInfoTextLimit-1), strings.Repeat("a", StatementInfoTextLimit), strings.Repeat("a", StatementInfoTextLimit+1),
 		strings.Repeat("é", StatementInfoTextLimit), strings.Repeat("你", StatementInfoTextLimit), strings.Repeat("🙂", StatementInfoTextLimit),
 		strings.Repeat("a", StatementInfoTextLimit) + "...[truncated]", strings.Repeat("a\xff", StatementInfoTextLimit),
 	} {
@@ -49,6 +49,18 @@ func TestStatementInfoDiagnosticCapacity(t *testing.T) {
 		}
 		require.Equal(t, got, CapStatementInfoText(got, StatementInfoTextLimit))
 	}
+	for _, tc := range []struct{ raw, want string }{
+		{"\xff", "?"}, {"a\xffb", "a?b"}, {"\xe4\xbd", "??"}, {"你😀�\xff", "你😀�?"},
+		{"\x00\t\n\r\x7f", "\x00\t\n\r\x7f"},
+		{strings.Repeat("a", StatementInfoTextLimit-1) + "\xff", strings.Repeat("a", StatementInfoTextLimit-1) + "?"},
+		{"\xff" + strings.Repeat("a", StatementInfoTextLimit), "?" + strings.Repeat("a", StatementInfoTextLimit-len(StatementInfoTruncationMarker)-1) + StatementInfoTruncationMarker},
+	} {
+		got := CapStatementInfoText(tc.raw, StatementInfoTextLimit)
+		require.Equal(t, tc.want, got)
+		require.True(t, utf8.ValidString(got))
+		require.Equal(t, got, CapStatementInfoText(got, StatementInfoTextLimit))
+	}
+
 	normal := strings.Repeat("select 1", 1024)
 	var retained string
 	require.Zero(t, testing.AllocsPerRun(100, func() { retained = CapStatementInfoText(normal, StatementInfoTextLimit) }))
@@ -76,7 +88,7 @@ func TestBulkInsertStatementInfoHistoricalDiagnostics(t *testing.T) {
 	oversized := []string{`{"plan":"` + strings.Repeat("p", StatementInfoTextLimit) + `"}`, "untouched", strings.Repeat("🙂", 20000), strings.Repeat("x", StatementInfoTextLimit+1)}
 	for _, database := range []string{"system", "other"} {
 		t.Run(database, func(t *testing.T) {
-			records := [][]string{append([]string(nil), normal...), append([]string(nil), oversized...)}
+			records := [][]string{append([]string(nil), normal...), append([]string(nil), oversized...), {`{"plan":"valid"}`, "untouched\xff", "error \xff\xe4\xbd", "statement 你\xff"}}
 			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherFunc(func(_, query string) error {
 				prefix := "LOAD DATA INLINE FORMAT='csv', DATA='"
 				suffix := fmt.Sprintf("' INTO TABLE %s.statement_info FIELDS TERMINATED BY ','", database)
@@ -91,7 +103,10 @@ func TestBulkInsertStatementInfoHistoricalDiagnostics(t *testing.T) {
 				}
 				require.Equal(t, normal, decoded[0])
 				require.Equal(t, "untouched", decoded[1][1])
+				require.Equal(t, "untouched\xff", decoded[2][1])
 				if database == "system" {
+					require.Equal(t, "error ???", decoded[2][2])
+					require.Equal(t, "statement 你?", decoded[2][3])
 					for _, idx := range []int{2, 3} {
 						require.LessOrEqual(t, len(decoded[1][idx]), StatementInfoTextLimit)
 						require.True(t, utf8.ValidString(decoded[1][idx]))
@@ -103,12 +118,14 @@ func TestBulkInsertStatementInfoHistoricalDiagnostics(t *testing.T) {
 					require.Equal(t, float64(len(oversized[0])), plan["original_bytes"])
 				} else {
 					require.Equal(t, oversized, decoded[1])
+					require.Equal(t, "error \xff\xe4\xbd", decoded[2][2])
+					require.Equal(t, "statement 你\xff", decoded[2][3])
 				}
 				return nil
 			})))
 			require.NoError(t, err)
 			defer db.Close()
-			mock.ExpectExec("load").WillReturnResult(sqlmock.NewResult(0, 2))
+			mock.ExpectExec("load").WillReturnResult(sqlmock.NewResult(0, 3))
 			require.NoError(t, bulkInsert(context.Background(), db, records, &table.Table{Database: database, Table: "statement_info", Columns: columns}))
 			require.NoError(t, mock.ExpectationsWereMet())
 		})

@@ -72,7 +72,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.DecimalLiteralSemantics, defines.MORPCVersion89,
 			"exact DECIMAL256 literal semantics require a versioned remote destination",
 			"remote destination does not support exact DECIMAL256 literal semantics (MORPC protocol version %d)"},
-		{pipelineRequiresPartitionFulltextRoute(p), defines.MORPCVersion109,
+		{pipelineRequiresPartitionFulltextRoute(p), defines.MORPCVersion110,
 			"partitioned FULLTEXT routing requires a versioned remote destination",
 			"remote destination does not support partitioned FULLTEXT routing (MORPC protocol version %d)"},
 	}

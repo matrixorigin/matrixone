@@ -241,6 +241,9 @@ func genViewTableDef(
 	var preOptimizeViewRequiredProtocol int64
 	validate := func(query *Query) error {
 		for _, node := range query.Nodes {
+			if node != nil && node.NodeType == plan.Node_FUNCTION_SCAN && node.TableDef.GetTblFunc().GetName() == "json_table" {
+				return moerr.NewNotSupported(ctx.GetContext(), "JSON_TABLE views require the view compatibility gate")
+			}
 			if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
 				continue
 			}
@@ -3351,12 +3354,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	var isGeneratedCol []bool
 	for _, item := range stmt.Defs {
 		if def, ok := item.(*tree.ColumnTableDef); ok {
-			cType, err := getTypeFromAst(ctx.GetContext(), def.Type)
+			cType, err := getColumnTypeFromAst(ctx.GetContext(), def, tableCharset, replay)
 			if err != nil {
-				return err
-			}
-			cType.Charset = uint32(types.CharsetType(types.T(cType.Id)))
-			if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &cType, tableCharset, def.Attributes); err != nil {
 				return err
 			}
 			isGen := false
@@ -3382,12 +3381,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
-			colType, err := getTypeFromAst(ctx.GetContext(), def.Type)
+			colType, err := getColumnTypeFromAst(ctx.GetContext(), def, tableCharset, replay)
 			if err != nil {
-				return err
-			}
-			colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
-			if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableCharset, def.Attributes); err != nil {
 				return err
 			}
 			firstLegacyTimestamp := types.T(colType.Id) == types.T_timestamp && !legacyTimestampFirstSeen
