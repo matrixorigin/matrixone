@@ -14,13 +14,15 @@
 
 package util
 
+import "unicode/utf8"
+
 // Abbreviate truncates a string from the beginning to the specified length.
 // Parameters:
 //   - str: the input string
 //   - length: the maximum length to truncate to
 //     -1: return the complete string
 //     0: return empty string
-//     >0: return the first 'length' characters, appending "..." if truncated
+//     >0: return a complete UTF-8 prefix of at most 'length' bytes, appending "..." if truncated
 func Abbreviate(str string, length int) string {
 	if length == 0 || length < -1 {
 		return ""
@@ -32,7 +34,30 @@ func Abbreviate(str string, length int) string {
 
 	l := min(len(str), length)
 	if l != len(str) {
-		return str[:l] + "..."
+		return str[:UTF8PrefixLen(str, l)] + "..."
 	}
 	return str[:l]
+}
+
+// UTF8PrefixLen returns the longest complete UTF-8 prefix within a byte budget.
+// It inspects only the cut boundary; malformed input is not repaired.
+func UTF8PrefixLen(s string, budget int) int {
+	if budget <= 0 {
+		return 0
+	}
+	if budget >= len(s) {
+		return len(s)
+	}
+	if utf8.RuneStart(s[budget]) {
+		return budget
+	}
+	start := budget
+	for start > 0 && budget-start < utf8.UTFMax-1 && !utf8.RuneStart(s[start]) {
+		start--
+	}
+	_, width := utf8.DecodeRuneInString(s[start:])
+	if width > 1 && start+width > budget {
+		return start
+	}
+	return budget
 }

@@ -16,6 +16,7 @@ package util
 
 import (
 	"testing"
+	"unicode/utf8"
 
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -50,4 +51,47 @@ func TestSubStringFromBegin(t *testing.T) {
 		convey.So(result[:1024], convey.ShouldEqual, longStr[:1024])
 		convey.So(result[1024:], convey.ShouldEqual, "...")
 	})
+}
+
+func TestUTF8PrefixLen(t *testing.T) {
+	for _, text := range []string{"", "abcdef", "a¢你😀z", "你你你", "a😀😀", "�x"} {
+		for budget := 0; budget <= len(text)+1; budget++ {
+			want := 0
+			for offset, r := range text {
+				end := offset + utf8.RuneLen(r)
+				if end > budget {
+					break
+				}
+				want = end
+			}
+			got := UTF8PrefixLen(text, budget)
+			if got != want {
+				t.Fatalf("%q budget %d: got %d want %d", text, budget, got, want)
+			}
+			if !utf8.ValidString(text[:got]) {
+				t.Fatalf("invalid prefix: %q", text[:got])
+			}
+			abbreviated := Abbreviate(text, budget)
+			expected := text[:want]
+			if budget > 0 && budget < len(text) {
+				expected += "..."
+			}
+			if abbreviated != expected {
+				t.Fatalf("abbreviation %q budget %d: got %q want %q", text, budget, abbreviated, expected)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		text         string
+		budget, want int
+	}{
+		{"abc", -1, 0}, {"\xffx", 1, 1}, {"a\x80\x80z", 2, 2}, {"\xf0\x80\x80\x80z", 2, 2},
+	} {
+		if got := UTF8PrefixLen(tc.text, tc.budget); got != tc.want {
+			t.Errorf("malformed/sentinel %q: got %d want %d", tc.text, got, tc.want)
+		}
+	}
+	if n := testing.AllocsPerRun(100, func() { _ = Abbreviate("a你😀", 100); _ = UTF8PrefixLen("a你😀", 3) }); n != 0 {
+		t.Fatalf("boundary/unchanged path allocated: %v", n)
+	}
 }

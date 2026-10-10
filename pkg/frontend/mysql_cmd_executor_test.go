@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
@@ -11758,5 +11759,79 @@ func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
 				require.True(t, ses.isCached(input.getHash()))
 			}
 		})
+	}
+}
+
+func TestRecordStatementUTF8(t *testing.T) {
+	ctx := context.Background()
+	oldPu := getPuIfPresent("")
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	setPu("", config.NewParameterUnit(sv, nil, nil, nil))
+	defer setPu("", oldPu)
+	provider := motrace.GetTracerProvider()
+	enabled := provider.IsEnable()
+	provider.SetEnable(true)
+	defer provider.SetEnable(enabled)
+	// Keep the real producer and row serializer; only asynchronous delivery is stubbed.
+	sink := gostub.Stub(&motrace.ReportStatement, func(context.Context, *motrace.StatementInfo) error { return nil })
+	defer sink.Reset()
+	for _, tc := range []struct{ name, text, want string }{
+		{"Chinese", strings.Repeat("你", 400), strings.Repeat("你", 341) + "..."},
+		{"emoji", "a" + strings.Repeat("😀", 300), "a" + strings.Repeat("😀", 255) + "..."},
+		{"ASCII", strings.Repeat("x", 1100), strings.Repeat("x", 1024) + "..."},
+	} {
+		for _, path := range []string{"environment", "ordinary AST", "prepared"} {
+			t.Run(tc.name+"/"+path, func(t *testing.T) {
+				ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+				defer ses.Close()
+				env := tc.text
+				var cw ComputationWrapper
+				want := tc.want
+				if path != "environment" {
+					ctrl := gomock.NewController(t)
+					mock := mock_frontend.NewMockComputationWrapper(ctrl)
+					mock.EXPECT().GetUUID().Return(make([]byte, 16))
+					if path == "prepared" {
+						const name = "utf8_query"
+						require.NoError(t, ses.SetPrepareStmt(ctx, name, &PrepareStmt{Name: name, Sql: tc.text}))
+						mock.EXPECT().GetAst().Return(&tree.Execute{Name: name})
+						mock.EXPECT().BinaryExecute().Return(true, name)
+						env = "execute utf8_query"
+						expanded := env + " // " + tc.text
+						cut := 0
+						for offset, r := range expanded {
+							if end := offset + utf8.RuneLen(r); end <= 1024 {
+								cut = end
+							} else {
+								break
+							}
+						}
+						want = expanded[:cut] + "..."
+					} else {
+						mock.EXPECT().GetAst().Return(&tree.Select{})
+						mock.EXPECT().BinaryExecute().Return(false, "")
+					}
+					cw = mock
+				}
+				statementCtx, err := RecordStatement(ctx, ses, nil, cw, time.Now(), env, constant.ExternSql, true)
+				require.NoError(t, err)
+				stmt := ses.tStmt
+				require.NotNil(t, stmt)
+				defer func() { stmt.EndStatement(statementCtx, nil, 1, 0, 0); stmt.Free(); ses.SetTStmt(nil) }()
+				require.Equal(t, want, ses.GetSqlOfStmt())
+				require.Equal(t, want, string(stmt.Statement))
+				require.True(t, utf8.Valid(stmt.Statement))
+				stmt.EndStatement(statementCtx, nil, 1, 0, 0)
+				row := motrace.SingleStatementTable.GetRow(ctx)
+				defer row.Free()
+				stmt.FillRow(ctx, row)
+				for i, col := range motrace.SingleStatementTable.Columns {
+					if col.Name == "statement" {
+						require.Equal(t, want, row.ToStrings()[i])
+					}
+				}
+			})
+		}
 	}
 }
