@@ -697,7 +697,7 @@ func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
 			result.Width = typ.Width
 		}
 	}
-	result.Charset = types.MergeStringCharset(source, result.Charset)
+	result = types.MergeStringCollationMetadata(result, source)
 	return result, true
 }
 
@@ -8726,7 +8726,7 @@ func (builder *QueryBuilder) bindWhere(
 	var domainFilters, remaining []*plan.Expr
 	hasDependent := false
 	for _, cond := range whereList {
-		hasDependent = hasDependent || builder.hasLocalCTEConsumer(cond)
+		hasDependent = hasDependent || builder.hasParameterizedLocalCTEConsumer(cond)
 	}
 	if hasDependent {
 		for _, cond := range whereList {

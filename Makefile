@@ -608,6 +608,13 @@ UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
 # one race binary is built. The runner keeps one cluster owner and one shared
 # package deadline; set to 1 for an unchanged serial baseline.
 UT_ISSUES_BATCHES ?= 4
+# Keep serial execution as the baseline. Set to 2 to opt into a bounded process
+# pool with four issues batches; each admitted process owns a complete cluster.
+# Default adoption requires matched final-wave timing and resource evidence.
+UT_ISSUES_BATCH_PARALLEL ?= 1
+# Set to 2 to opt into bounded prebuilt embedded-package overlap. The admission
+# gate keeps ordinary exclusive lifecycles out of the pool.
+UT_EMBEDDED_PACKAGE_PARALLEL ?= 1
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1
@@ -619,7 +626,7 @@ UT_OVERLAP_LIGHT_PARALLEL ?= 2
 # Parent cancellation waits long enough for helper-owned child process groups
 # to receive TERM and bounded KILL cleanup in sequence.
 UT_HELPER_TERM_GRACE_TICKS ?= 60
-export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_ISSUES_BATCHES UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
+export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_ISSUES_BATCHES UT_ISSUES_BATCH_PARALLEL UT_EMBEDDED_PACKAGE_PARALLEL UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays

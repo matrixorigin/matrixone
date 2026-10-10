@@ -3328,6 +3328,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		return err
 	}
 	createTable.TableDef.DefaultCharset = tableCharset
+	if types.IsUnicodeCollation(uint8(tableCharset)) {
+		createTable.TableDef.CollationVersion = uint32(types.CollationVersionV1)
+	} else {
+		createTable.TableDef.CollationVersion = uint32(types.CollationVersionLegacy)
+	}
 
 	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
@@ -3432,6 +3437,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				case *tree.AttributeGeneratedAlways:
 					isGenerated = true
 				case *tree.AttributePrimaryKey, *tree.AttributeKey:
+					if err := rejectNativeUnicodePrimaryKey(ctx.GetContext(), colType, colNameOrigin); err != nil {
+						return err
+					}
 					if colType.GetId() == int32(types.T_blob) {
 						return moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
 					}
@@ -3466,6 +3474,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
+					if err := rejectNativeUnicodeUniqueKey(ctx.GetContext(), colType, colNameOrigin); err != nil {
+						return err
+					}
 					if isSetPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in unique index", colNameOrigin))
 
@@ -4002,6 +4013,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 			// Reject VIRTUAL generated columns in PRIMARY KEY
 			col := colMap[primaryKey]
+			if err := rejectNativeUnicodePrimaryKey(ctx.GetContext(), col.Typ, col.OriginName); err != nil {
+				return err
+			}
 			if col.GeneratedCol != nil && !col.GeneratedCol.IsStored {
 				return moerr.NewNotSupported(ctx.GetContext(),
 					fmt.Sprintf("defining a virtual generated column '%s' as primary key", col.OriginName))
@@ -6685,6 +6699,15 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						// but later actions in this statement must already observe it.
 						currentTableDef.RefChildTbls = append(currentTableDef.RefChildTbls, 0)
 					}
+					// Self-references cannot bind the parent key until the final
+					// table definition is assembled, but the catalog row must still
+					// be written for INPLACE ALTER just as it is for CREATE/COPY.
+					fkData.UpdateSql = getSqlForAddFkWithCatalogLayout(
+						databaseName,
+						currentTableDef.Name,
+						fkData,
+						fkData.catalogLayout,
+					)
 				} else {
 					// get table def of parent table
 					_, parentTableDef, err := ctx.Resolve(

@@ -814,7 +814,8 @@ func (cwft *TxnComputationWrapper) completeCompileExecution(
 }
 
 func (cwft *TxnComputationWrapper) syncCompileExecution(runningCompile Compile) {
-	// Sync the latest plan generation after Run (it may have changed on retry).
+	// Sync the latest plan generation before publishing metadata or after Run
+	// (it may have changed on retry).
 	cwft.plan = runningCompile.GetPlan()
 	cwft.planSnapshotTS, cwft.hasPlanSnapshotTS = runningCompile.PlanSnapshotTS()
 }

@@ -1,6 +1,8 @@
 FROM matrixorigin/golang:1.27.0-ubuntu22.04-matrixone-native-1 AS build-base
 
 ENV GOWORK=off
+# The native image may lag go.mod's required patch release.
+ENV GOTOOLCHAIN=auto
 
 WORKDIR /go/src/github.com/matrixorigin/matrixone
 

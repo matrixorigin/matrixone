@@ -75,9 +75,11 @@ mock_curl() {
 	fi
 	count=$((count + 1))
 	printf '%s\n' "$count" > "$MO_DOWNLOAD_MOCK_STATE/count"
-	if [ "$MO_DOWNLOAD_MOCK_MODE" = timeout-primary-only ] && \
-		[ "$request_url" = "$MO_DOWNLOAD_MOCK_PRIMARY_URL" ]; then
-		exit 28
+	if [ "$request_url" = "${MO_DOWNLOAD_MOCK_PRIMARY_URL:-}" ]; then
+		case "$MO_DOWNLOAD_MOCK_MODE" in
+			timeout-primary-only) exit 28 ;;
+			http-primary-only) exit 22 ;;
+		esac
 	fi
 
 	case "$MO_DOWNLOAD_MOCK_MODE:$count" in
@@ -86,6 +88,9 @@ mock_curl() {
 			;;
 		tls-timeout-once:1 | always-timeout:*)
 			exit 28
+			;;
+		always-http-fail:*)
+			exit 22
 			;;
 		always-corrupt:*)
 			printf 'corrupt response\n' > "$output"
@@ -414,6 +419,98 @@ assert_requested_url https://fallback.example.invalid/dependency
 cmp "$MO_DOWNLOAD_MOCK_STATE/original" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "fallback timeout replaced existing destination"
 assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
 unset status
+
+# HTTP 504 is curl exit 22. Cover both retry engines without a real network,
+# including unchanged destination/cleanup on every terminal failure.
+for engine in native legacy; do
+	if [ "$engine" = native ]; then
+		MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS=1
+		primary_calls=1
+	else
+		MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS=0
+		primary_calls=$MO_DOWNLOAD_ATTEMPTS
+	fi
+	export MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS
+
+	new_case "$engine-fallback-after-http-failure"
+	MO_DOWNLOAD_MOCK_MODE=http-primary-only
+	export MO_DOWNLOAD_MOCK_MODE
+	MO_DOWNLOAD_FALLBACK_URL=$fallback_url "$download_script" "$primary_url" "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"
+	assert_count $((primary_calls + 1))
+	assert_requested_url "$fallback_url"
+	cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "HTTP fallback installed wrong content"
+	assert_publicly_readable "$MO_DOWNLOAD_MOCK_STATE/result"
+	assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+	new_case "$engine-http-failure-without-fallback"
+	if "$download_script" "$primary_url" "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+		fail "HTTP failure without fallback unexpectedly succeeded"
+	fi
+	assert_count "$primary_calls"
+	assert_requested_url "$primary_url"
+	[ ! -e "$MO_DOWNLOAD_MOCK_STATE/result" ] || fail "HTTP failure installed a destination"
+	assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+	new_case "$engine-http-fallback-checksum-mismatch"
+	printf 'previous invalid dependency\n' > "$MO_DOWNLOAD_MOCK_STATE/result"
+	cp "$MO_DOWNLOAD_MOCK_STATE/result" "$MO_DOWNLOAD_MOCK_STATE/original"
+	printf 'corrupt fallback response\n' > "$MO_DOWNLOAD_MOCK_STATE/bad-response"
+	if MO_DOWNLOAD_MOCK_FIXTURE="$MO_DOWNLOAD_MOCK_STATE/bad-response" MO_DOWNLOAD_FALLBACK_URL=$fallback_url \
+		"$download_script" "$primary_url" "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+		fail "HTTP fallback bypassed checksum validation"
+	fi
+	assert_count $((primary_calls + 1))
+	assert_requested_url "$fallback_url"
+	cmp "$MO_DOWNLOAD_MOCK_STATE/original" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "corrupt HTTP fallback replaced destination"
+	assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+	new_case "$engine-http-fallback-byte-limit"
+	if MO_DOWNLOAD_MAX_BYTES=8 MO_DOWNLOAD_FALLBACK_URL=$fallback_url \
+		"$download_script" "$primary_url" "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+		fail "HTTP fallback bypassed byte limit"
+	fi
+	assert_count $((primary_calls + 1))
+	assert_requested_url "$fallback_url"
+	[ ! -e "$MO_DOWNLOAD_MOCK_STATE/result" ] || fail "oversized HTTP fallback installed destination"
+	assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+	new_case "$engine-no-fallback-after-other-transport-failure"
+	MO_DOWNLOAD_MOCK_MODE=always-fail
+	export MO_DOWNLOAD_MOCK_MODE
+	if MO_DOWNLOAD_FALLBACK_URL=$fallback_url "$download_script" "$primary_url" "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+		fail "persistent transport failure unexpectedly succeeded"
+	fi
+	assert_count "$primary_calls"
+	assert_requested_url "$primary_url"
+	[ ! -e "$MO_DOWNLOAD_MOCK_STATE/result" ] || fail "transport failure installed destination"
+	assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+	new_case "$engine-http-fallback-exhausted"
+	MO_DOWNLOAD_MOCK_MODE=always-http-fail
+	export MO_DOWNLOAD_MOCK_MODE
+	printf 'previous invalid dependency\n' > "$MO_DOWNLOAD_MOCK_STATE/result"
+	cp "$MO_DOWNLOAD_MOCK_STATE/result" "$MO_DOWNLOAD_MOCK_STATE/original"
+	if MO_DOWNLOAD_FALLBACK_URL=$fallback_url "$download_script" "$primary_url" "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+		fail "persistent HTTP failure unexpectedly succeeded"
+	fi
+	assert_count $((primary_calls * 2))
+	assert_requested_url "$fallback_url"
+	cmp "$MO_DOWNLOAD_MOCK_STATE/original" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "HTTP failure replaced destination"
+	assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+	new_case "$engine-no-fallback-after-corrupt-primary"
+	MO_DOWNLOAD_MOCK_MODE=always-corrupt
+	export MO_DOWNLOAD_MOCK_MODE
+	if MO_DOWNLOAD_FALLBACK_URL=$fallback_url "$download_script" "$primary_url" "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+		fail "corrupt primary unexpectedly succeeded"
+	fi
+	assert_count 1
+	assert_requested_url "$primary_url"
+	[ ! -e "$MO_DOWNLOAD_MOCK_STATE/result" ] || fail "corrupt primary installed destination"
+	assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+done
+MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS=1
+export MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS
 
 new_case byte-limit
 MO_DOWNLOAD_MOCK_MODE=success
