@@ -33,13 +33,16 @@ historical 1057-second full serial wave included an arrowload failure.
 The latest successful single-runner trace (2026-10-09) measured issue batches
 at 303.2, 143.6, 220.8 and 335.3 seconds, or 1002.9 seconds serialized.
 The Linux default now admits two issue processes and uses round-robin root
-partitioning in that mode; the serial override remains contiguous. A schedule
-replay of those measured durations gives a 638-second ordered pool wave before
-any CPU or startup overhead, so the expected critical-path reduction is about
-six minutes for this trace. This is a bounded estimate, not a claim that CI
-will realize it; the first matched Linux run must record wall time, CPU
-throttling, peak memory and OOM/max events before any further parallelism is
-considered.
+partitioning in that mode; the serial override remains contiguous. Replaying
+the 159 top-level issue roots from that trace through the actual partition and
+two-process refill rules gives round-robin group totals of 290.7, 212.7, 310.1
+and 183.8 seconds, with a 522.8-second pool makespan. The same roots in the
+contiguous layout produce a 635.7-second pool makespan. Against the 997.3
+seconds of serialized root time, the round-robin estimate removes about 474.5
+seconds (7.9 minutes) before process startup, CPU contention and cluster
+admission overhead. This is a schedule estimate, not a CI result; the first
+matched Linux run must record wall time, CPU throttling, peak memory and OOM/max
+events before any further parallelism is considered.
 
 This change does not merge embedded packages into one fixture or remove the
 multi-CN package. Embedded package `TestMain` and lifecycle hooks are
