@@ -17,6 +17,8 @@ package plan
 import (
 	"context"
 	"fmt"
+	"math"
+	"strings"
 	"testing"
 	"unsafe"
 

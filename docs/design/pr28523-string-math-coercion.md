@@ -212,7 +212,7 @@ function-wide zonemap optimization is included.
 | HEX/BIT row provenance | CASE/IF/COALESCE tests for mixed, uniform, marked-plus-NULL, text, ordinary BINARY, explicit casts, and nested/implicit casts; selected-row/vector/batch lifecycle tests |
 | Wire lifecycle | Batch v1/v2/v3 round trips, malformed/truncated rejection, legacy sender, stale/reused vector reset, and remote trailer tests |
 | Mixed-version admission | v108 local fallback plus destination and receiver rejection; v109 placement/send/receive acceptance; upstream JSON/YearBit v101 controls; default/MySQL/native modes; legacy-session rejection |
-| SessionInfo wire allocation | Unrelated varints at fields 22/23 are not interpreted as numeric mode/marker; fields 24/25 round trip the explicit mode and sender marker; forwarding preserves a zero legacy marker |
+| SessionInfo wire allocation | Unknown varints at fields 23/26 are not interpreted as numeric mode/marker; field 22 remains `lc_time_names`; fields 24/25 round trip the explicit mode and sender marker; forwarding preserves a zero legacy marker |
 | Prepared-plan reuse | Type changes, error-to-success, NULL-to-success, and restoration of the cached base plan |
 | Numeric correctness and pruning | Integer/DECIMAL/FLOAT source controls; zonemap endpoint traps must not prune matching rows |
 | Resource/performance | Allocation-failure atomicity, vector reset/cleanup/accounting, focused race checks where shared-state risk applies, and plan/bitmap performance tests |
