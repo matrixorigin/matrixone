@@ -142,6 +142,11 @@ func (builder *QueryBuilder) applyRewriteMetadataVisibility(
 				return nodeID, err
 			}
 			parts = append(parts, allowedExpr)
+		} else {
+			// Unsupported projections and empty intersections are fail-closed:
+			// keep the target table out of the result instead of allowing every
+			// column through when the allow-list is empty.
+			parts = append(parts, makePlan2BoolConstExprWithType(false))
 		}
 		predicate, err := combineRewriteMetadataExprs(builder.GetContext(), "or", parts)
 		if err != nil {

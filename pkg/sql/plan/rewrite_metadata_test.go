@@ -40,6 +40,32 @@ func TestRewriteVisibleColumns(t *testing.T) {
 			supported: true,
 		},
 		{
+			name:      "qualified projection",
+			sql:       "select db.controlled.id, controlled.amount from db.controlled",
+			expected:  map[string]struct{}{"id": {}, "amount": {}},
+			supported: true,
+		},
+		{
+			name:      "matching alias",
+			sql:       "select id as id, amount from db.controlled",
+			expected:  map[string]struct{}{"id": {}, "amount": {}},
+			supported: true,
+		},
+		{
+			name: "renamed alias fails closed",
+			sql:  "select id as identifier from db.controlled",
+		},
+		{
+			name:      "implicit database",
+			sql:       "select id from controlled",
+			expected:  map[string]struct{}{"id": {}},
+			supported: true,
+		},
+		{
+			name: "different database fails closed",
+			sql:  "select id from other.controlled",
+		},
+		{
 			name:      "star",
 			sql:       "select * from db.controlled where tenant = 1",
 			all:       true,
@@ -81,17 +107,7 @@ func TestRewriteVisibleColumnsChainIntersects(t *testing.T) {
 }
 
 func TestApplyRewriteMetadataVisibilityFailClosed(t *testing.T) {
-	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
-	builder := NewQueryBuilder(planpb.Query_SELECT, compiler, true, false)
-	ctx := NewBindContext(builder, nil)
-	ctx.projectTag = 7
-	ctx.headings = []string{"TABLE_SCHEMA", "TABLE_NAME", "COLUMN_NAME"}
-	textType := planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)}
-	ctx.results = []*planpb.Expr{
-		{Typ: textType},
-		{Typ: textType},
-		{Typ: textType},
-	}
+	builder, ctx := newRewriteMetadataTestContext(t)
 	ctx.remapOption = &tree.RewriteOption{Rewrites: map[string][]*tree.Rewrite{
 		"db.controlled": {{DbName: "db", TableName: "controlled", Stmt: parseRewriteSelect(t, "select id + 1 from db.controlled")}},
 	}}
@@ -102,6 +118,112 @@ func TestApplyRewriteMetadataVisibilityFailClosed(t *testing.T) {
 	require.Equal(t, planpb.Node_FILTER, builder.qry.Nodes[filtered].NodeType)
 	require.Len(t, builder.qry.Nodes[filtered].FilterList, 1)
 	require.True(t, builder.qry.Nodes[filtered].NotCacheable)
+	require.True(t, rewriteMetadataExprHasFalseLiteral(builder.qry.Nodes[filtered].FilterList[0]))
+}
+
+func TestApplyRewriteMetadataVisibilityAllowsProjectionAndIntersects(t *testing.T) {
+	builder, ctx := newRewriteMetadataTestContext(t)
+	ctx.remapOption = &tree.RewriteOption{Rewrites: map[string][]*tree.Rewrite{
+		"db.controlled": {
+			{DbName: "db", TableName: "controlled", Stmt: parseRewriteSelect(t, "select id, tenant, amount from db.controlled")},
+			{DbName: "db", TableName: "controlled", Stmt: parseRewriteSelect(t, "select id, amount from db.controlled")},
+		},
+	}}
+	child := builder.appendNode(&planpb.Node{NodeType: planpb.Node_VALUE_SCAN}, ctx)
+	filtered, err := builder.applyRewriteMetadataVisibility(child, ctx, "INFORMATION_SCHEMA", "COLUMNS")
+	require.NoError(t, err)
+	expr := builder.qry.Nodes[filtered].FilterList[0]
+	require.False(t, rewriteMetadataExprHasFalseLiteral(expr), expr.String())
+	require.True(t, rewriteMetadataExprHasStringLiteral(expr, "id"))
+	require.True(t, rewriteMetadataExprHasStringLiteral(expr, "amount"))
+	require.False(t, rewriteMetadataExprHasStringLiteral(expr, "tenant"))
+}
+
+func TestApplyRewriteMetadataVisibilityEmptyIntersectionIsDenyAll(t *testing.T) {
+	builder, ctx := newRewriteMetadataTestContext(t)
+	ctx.remapOption = &tree.RewriteOption{Rewrites: map[string][]*tree.Rewrite{
+		"db.controlled": {
+			{DbName: "db", TableName: "controlled", Stmt: parseRewriteSelect(t, "select id from db.controlled")},
+			{DbName: "db", TableName: "controlled", Stmt: parseRewriteSelect(t, "select amount from db.controlled")},
+		},
+	}}
+	child := builder.appendNode(&planpb.Node{NodeType: planpb.Node_VALUE_SCAN}, ctx)
+	filtered, err := builder.applyRewriteMetadataVisibility(child, ctx, INFORMATION_SCHEMA, informationSchemaColumnsTable)
+	require.NoError(t, err)
+	require.True(t, rewriteMetadataExprHasFalseLiteral(builder.qry.Nodes[filtered].FilterList[0]))
+}
+
+func TestRewriteMetadataHelpers(t *testing.T) {
+	rewrite := &tree.Rewrite{DbName: "db", TableName: "table"}
+	require.Equal(t, "db", func() string { db, _ := rewriteTargetName("key", rewrite); return db }())
+	db, table := rewriteTargetName("db.table", &tree.Rewrite{})
+	require.Equal(t, "db", db)
+	require.Equal(t, "table", table)
+	db, table = rewriteTargetName("invalid", nil)
+	require.Empty(t, db)
+	require.Empty(t, table)
+	require.True(t, isSystemMetadataDatabase("MO_CATALOG"))
+	require.False(t, isSystemMetadataDatabase("application"))
+	require.Empty(t, intersectRewriteColumnNames(nil, map[string]struct{}{"id": {}}))
+	require.Empty(t, intersectRewriteColumnNames(map[string]struct{}{"id": {}}, nil))
+
+	ctx := &BindContext{projects: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_int32)}}}}
+	require.Equal(t, int32(types.T_int32), rewriteMetadataOutputType(ctx, 0).Id)
+	require.Equal(t, makePlan2StringConstExprWithType("").Typ.Id, rewriteMetadataOutputType(&BindContext{}, 0).Id)
+	combined, err := combineRewriteMetadataExprs(context.Background(), "or", nil)
+	require.NoError(t, err)
+	require.Nil(t, combined)
+	combined, err = combineRewriteMetadataExprs(context.Background(), "or", []*planpb.Expr{makePlan2BoolConstExprWithType(true)})
+	require.NoError(t, err)
+	require.True(t, combined.GetLit().GetBval())
+}
+
+func newRewriteMetadataTestContext(t *testing.T) (*QueryBuilder, *BindContext) {
+	t.Helper()
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	builder := NewQueryBuilder(planpb.Query_SELECT, compiler, true, false)
+	ctx := NewBindContext(builder, nil)
+	ctx.projectTag = 7
+	ctx.headings = []string{"TABLE_SCHEMA", "TABLE_NAME", "COLUMN_NAME"}
+	textType := planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)}
+	ctx.results = []*planpb.Expr{{Typ: textType}, {Typ: textType}, {Typ: textType}}
+	return builder, ctx
+}
+
+func rewriteMetadataExprHasFalseLiteral(expr *planpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if literal := expr.GetLit(); literal != nil && !literal.Isnull {
+		if value, ok := literal.Value.(*planpb.Literal_Bval); ok && !value.Bval {
+			return true
+		}
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if rewriteMetadataExprHasFalseLiteral(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func rewriteMetadataExprHasStringLiteral(expr *planpb.Expr, want string) bool {
+	if expr == nil {
+		return false
+	}
+	if literal := expr.GetLit(); literal != nil && literal.GetSval() == want {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if rewriteMetadataExprHasStringLiteral(arg, want) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func parseRewriteSelect(t *testing.T, sql string) *tree.Select {
