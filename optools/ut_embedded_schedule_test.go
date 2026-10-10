@@ -860,13 +860,28 @@ func TestEmbeddedPrebuiltFailureKeepsReportJSONOnly(t *testing.T) {
 		t.Run("parallel="+parallel, func(t *testing.T) {
 			script := embeddedSetup + `
 function logger() { printf '%s\n' "$*"; }
-	# Keep both active-package group-alive probes false, then force the real
-	# watchdog cleanup wait through its bounded force-stop branch. The diagnostic
-	# must remain in UT_STDERR; a missing redirection contaminates UT_REPORT.
-force_group_probe_count=0
+	# Keep the active test process groups false, then force only the first
+	# watchdog cleanup wait through its bounded force-stop branch. The
+	# diagnostic must remain in UT_STDERR; a missing redirection contaminates
+	# UT_REPORT.
+first_group_pid=""
+watchdog_group_pid=""
+watchdog_probe_count=0
 function ut_process_group_alive() {
- force_group_probe_count=$((force_group_probe_count + 1))
-	 if (( force_group_probe_count >= 3 && force_group_probe_count <= 23 )); then return 0; fi
+ local pid=$1
+ if [[ -z "$first_group_pid" ]]; then
+  first_group_pid=$pid
+  return 1
+ fi
+ if [[ "$pid" == "$first_group_pid" ]]; then return 1; fi
+ if [[ -z "$watchdog_group_pid" ]]; then
+  watchdog_group_pid=$pid
+ fi
+ if [[ "$pid" == "$watchdog_group_pid" ]]; then
+  watchdog_probe_count=$((watchdog_probe_count + 1))
+  if (( watchdog_probe_count <= 21 )); then return 0; fi
+  return 1
+ fi
  return 1
 }
 start_embedded_prebuild "$scope" 1
