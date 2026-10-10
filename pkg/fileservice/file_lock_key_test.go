@@ -65,3 +65,13 @@ func TestFileLockKeyObjectAliases(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, first, other)
 }
+
+func TestFileLockKeyHDFSAliases(t *testing.T) {
+	fs := &S3FS{name: "one", rawStorage: &HDFS{rootPath: "/root"}, keyPrefix: "new"}
+	alias := &S3FS{name: "two", rawStorage: &HDFS{rootPath: "/root/new"}}
+	first, err := FileLockKey(SubPath(fs, "dump"), "manifest.json")
+	require.NoError(t, err)
+	second, err := FileLockKey(SubPath(alias, "dump"), "manifest.json")
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+}
