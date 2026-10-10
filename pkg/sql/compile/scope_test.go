@@ -3405,6 +3405,24 @@ func TestRequiredVectorDomainRejectsMalformedPayload(t *testing.T) {
 	}
 }
 
+func TestRequiredVectorDomainAcceptsNormalizedCharMembership(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	keys := vector.NewVec(types.T_varchar.ToType())
+	defer keys.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(keys, []byte("c1      "), false, proc.Mp()))
+	data, err := keys.MarshalBinary()
+	require.NoError(t, err)
+	spec := &plan.RuntimeFilterSpec{
+		Expr: plan2.GetColExpr(plan.Type{Id: int32(types.T_char), Width: 8}, 1, 0),
+	}
+	err = validateRequiredVectorMembership(spec, message.RuntimeFilterMessage{
+		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
+		Card: 1,
+		Data: data,
+	})
+	require.NoError(t, err)
+}
+
 func TestWaitForRuntimeFiltersRejectsCanceledRequiredFilter(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	board := message.NewMessageBoard()

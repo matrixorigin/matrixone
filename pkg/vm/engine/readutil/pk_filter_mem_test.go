@@ -64,6 +64,50 @@ func TestNewMemPKFilter_WithBF(t *testing.T) {
 	require.Equal(t, int16(1), filter.BFSeqNum)
 }
 
+func TestIvfEntriesMembershipUsesOriginPrimaryKey(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:      "__mo_index_ivf_entries",
+		TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+		Name2ColIndex: map[string]int32{
+			"version": 0, "centroid": 1,
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk:    2,
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry: 3,
+			catalog.CPrimaryKeyColName:                    4,
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"version", "centroid", catalog.SystemSI_IVFFLAT_TblCol_Entries_pk},
+			PkeyColName: catalog.CPrimaryKeyColName,
+		},
+		Cols: []*plan.ColDef{
+			{Name: "version", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "centroid", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_entry, Seqnum: 3, Typ: plan.Type{Id: int32(types.T_array_float32)}},
+			{Name: catalog.CPrimaryKeyColName, Seqnum: 4, Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+	}
+	packerPool := fileservice.NewPool(1, func() *types.Packer { return types.NewPacker() }, func(p *types.Packer) { p.Reset() }, func(p *types.Packer) { p.Close() })
+	member := bloomfilter.NewCBloomFilterWithProbability(8, 0.01)
+	defer member.Free()
+	filter, err := NewMemPKFilter(tableDef, types.MaxTs().ToTimestamp(), packerPool, BasePKFilter{}, engine.FilterHint{BF: member})
+	require.NoError(t, err)
+	require.Equal(t, int16(2), filter.BFSeqNum, "membership probes the source origin PK")
+
+	mixin := withFilterMixin{tableDef: tableDef}
+	mixin.filterState.hasBF = true
+	mixin.tryUpdateColumns([]string{"version", "centroid", catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, catalog.SystemSI_IVFFLAT_TblCol_Entries_entry, catalog.CPrimaryKeyColName})
+	require.Equal(t, []uint16{4, 2}, mixin.filterState.seqnums)
+
+	// Physical copies may expose only the hidden composite key in Pkey.Names;
+	// the source-key binding must still be retained.
+	copied := *tableDef
+	copied.Pkey = &plan.PrimaryKeyDef{Names: []string{catalog.CPrimaryKeyColName}, PkeyColName: catalog.CPrimaryKeyColName}
+	copiedMixin := withFilterMixin{tableDef: &copied}
+	copiedMixin.filterState.hasBF = true
+	copiedMixin.tryUpdateColumns([]string{"version", "centroid", catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, catalog.SystemSI_IVFFLAT_TblCol_Entries_entry, catalog.CPrimaryKeyColName})
+	require.Equal(t, []uint16{4, 2}, copiedMixin.filterState.seqnums)
+}
+
 func TestNewMemPKFilter_WithBF_FulltextTable(t *testing.T) {
 	tableDef := &plan.TableDef{
 		Name:      "__mo_index_secondary_fulltext",
