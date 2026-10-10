@@ -2,9 +2,9 @@
 
 Design revision: `pr29760-design-v4` with `pr29795-opt-in-v1` and bounded
 embedded-wave amendment (2026-10-09).
-Tracking: [#29562](https://github.com/matrixorigin/matrixone/issues/29562),
-[#29752](https://github.com/matrixorigin/matrixone/issues/29752).
-Implementation: [#29760](https://github.com/matrixorigin/matrixone/pull/29760).
+Tracking: [#29562](https://github.com/matrixorigin/matrixone/issues/29562).
+Baseline implementation: [#29760](https://github.com/matrixorigin/matrixone/pull/29760).
+Current bounded embedded-wave implementation: [#29807](https://github.com/matrixorigin/matrixone/pull/29807).
 
 The correction and single-lock cleanup amendment were approved for implementation
 by `gpt-6.1-sol`, reasoning `xhigh`, in design session
