@@ -30,7 +30,7 @@ insert into t values
 (20, '[0.29,0.29,0.29]', 0, 'near-20'),
 (999, '[10,10,10]', 1, 'hit');
 create index idx using ivfflat on t(vec)
-lists=5 op_type 'vector_l2_ops' include(category, payload);
+lists=2 op_type 'vector_l2_ops' include(category, payload);
 set experimental_ivf_index = 1;
 set probe_limit = 1;
 explain analyze verbose select id, category, payload
