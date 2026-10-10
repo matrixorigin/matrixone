@@ -114,6 +114,7 @@ func TestIssue29723MediumIntSemantics(t *testing.T) {
 
 		prepared, err := db.PrepareContext(ctx, "INSERT INTO "+table+" (m) VALUES (?)")
 		require.NoError(t, err)
+		defer func() { require.NoError(t, prepared.Close()) }()
 		_, err = prepared.ExecContext(ctx, int64(8388607))
 		require.NoError(t, err, "prepared statement must accept MEDIUMINT maximum")
 		_, err = prepared.ExecContext(ctx, int64(8388608))
@@ -179,10 +180,12 @@ ORDER BY ordinal_position`, strings.ToLower(dbName))
 
 		resultRows, err := db.QueryContext(ctx, "SELECT m, mu FROM "+table+" LIMIT 1")
 		require.NoError(t, err)
+		defer func() { require.NoError(t, resultRows.Close()) }()
 		columnTypes, err := resultRows.ColumnTypes()
 		require.NoError(t, err)
 		require.Equal(t, "MEDIUMINT", columnTypes[0].DatabaseTypeName())
 		require.Equal(t, "UNSIGNED MEDIUMINT", columnTypes[1].DatabaseTypeName())
+		require.NoError(t, resultRows.Err())
 		require.NoError(t, resultRows.Close())
 
 		// The persisted catalog uses the existing int32/uint32 OIDs plus width
