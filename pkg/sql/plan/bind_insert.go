@@ -2822,14 +2822,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				if update == nil || !astExprContainsSubquery(update.Expr) {
 					continue
 				}
-				expr, bindErr := binder.BindExpr(update.Expr, 0, true)
-				if bindErr != nil {
-					if moerr.IsMoErrCode(bindErr, moerr.ErrUnsupportedDML) && strings.Contains(bindErr.Error(), odkuTargetCorrelatedSubqueryCause) {
-						return 0, bindErr
-					}
-					continue
-				}
-				if err := builder.validateOndupCorrelatedSubqueries([]*plan.Expr{expr}, targetCorrelationTag, selectTag); err != nil {
+				if err := binder.validateSubqueryAdmission(update.Expr); err != nil {
 					return 0, err
 				}
 			}

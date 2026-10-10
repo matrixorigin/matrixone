@@ -602,3 +602,21 @@ select a from t_odku_scope_alias_no_key order by a;
 drop table t_odku_scope_alias_key;
 drop table t_odku_scope_alias_no_key;
 drop table t_odku_scope_local;
+
+-- #28160: whole RHS admission precedes an unrelated earlier binding failure.
+create table t_odku_rhs_no_key(a int,b varchar(30));
+insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select t_odku_rhs_no_key.b));
+insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat((select t_odku_rhs_no_key.b),missing_column);
+insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=ifnull(1,2,(select t_odku_rhs_no_key.b));
+insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select 'local'),(select t_odku_rhs_no_key.b));
+prepare odku_whole_rhs from insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select t_odku_rhs_no_key.b));
+prepare odku_whole_rhs from insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select concat(t_odku_rhs_no_key.b,?)));
+select a from t_odku_rhs_no_key;
+insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select 'local'));
+select a from t_odku_rhs_no_key;
+create table t_odku_rhs_key(a int primary key,b varchar(30));
+insert into t_odku_rhs_key values(1,'seed');
+insert into t_odku_rhs_key values(1,'x') on duplicate key update b=concat(missing_column,(select t_odku_rhs_key.b));
+select cast(b='seed' as int) as whole_rhs_unchanged from t_odku_rhs_key;
+drop table t_odku_rhs_key;
+drop table t_odku_rhs_no_key;

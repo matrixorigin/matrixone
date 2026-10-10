@@ -822,3 +822,32 @@ select a from t_odku_scope_alias_no_key order by a;
 drop table t_odku_scope_alias_key;
 drop table t_odku_scope_alias_no_key;
 drop table t_odku_scope_local;
+
+create table t_odku_rhs_no_key(a int,b varchar(30));
+insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select t_odku_rhs_no_key.b));
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
+insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat((select t_odku_rhs_no_key.b),missing_column);
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
+insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=ifnull(1,2,(select t_odku_rhs_no_key.b));
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
+insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select 'local'),(select t_odku_rhs_no_key.b));
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
+prepare odku_whole_rhs from insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select t_odku_rhs_no_key.b));
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
+prepare odku_whole_rhs from insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select concat(t_odku_rhs_no_key.b,?)));
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
+select a from t_odku_rhs_no_key;
+➤ a[4,32,0]  𝄀
+insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select 'local'));
+select a from t_odku_rhs_no_key;
+➤ a[4,32,0]  𝄀
+1
+create table t_odku_rhs_key(a int primary key,b varchar(30));
+insert into t_odku_rhs_key values(1,'seed');
+insert into t_odku_rhs_key values(1,'x') on duplicate key update b=concat(missing_column,(select t_odku_rhs_key.b));
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
+select cast(b='seed' as int) as whole_rhs_unchanged from t_odku_rhs_key;
+➤ whole_rhs_unchanged[4,32,0]  𝄀
+1
+drop table t_odku_rhs_key;
+drop table t_odku_rhs_no_key;

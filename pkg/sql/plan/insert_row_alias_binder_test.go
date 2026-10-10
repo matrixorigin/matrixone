@@ -812,3 +812,31 @@ func TestOdkuAdmissionRestoresSharedCTEAST(t *testing.T) {
 	require.True(t, ref.hasNestedRef)
 	require.True(t, ref.hasNestedUse)
 }
+
+func TestLegacyOndupWholeRHSAdmission(t *testing.T) {
+	for _, table := range []string{"dept", "fake_pk_no_unique_gen"} {
+		column, insert := "loc", "(deptno,dname,loc) values(1,'Sales','NY')"
+		if table == "fake_pk_no_unique_gen" {
+			column, insert = "a", "(a) values(1)"
+		}
+		outer := "(select " + table + "." + column + ")"
+		for _, rhs := range []string{
+			"concat(missing_column," + outer + ")", "concat(" + outer + ",missing_column)",
+			"ifnull(1,2," + outer + ")", "cast(" + outer + " as char(256))",
+			"row_number() over(order by " + outer + ")",
+			"concat(missing_column,(select 'local')," + outer + ")",
+			"concat(missing_column," + outer + ",(select 'local'))",
+		} {
+			for _, prefix := range []string{"", "prepare whole_rhs from "} {
+				_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+					prefix+"insert into constraint_test."+table+insert+" on duplicate key update "+column+"="+rhs)
+				require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause, table, rhs)
+			}
+		}
+	}
+	for _, rhs := range []string{"concat(missing_column,(select 1))", "concat(missing_column,(select deptno from constraint_test.dept limit 1))", "row_number() over(order by (select 1))"} {
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"insert into constraint_test.fake_pk_no_unique_gen(a) values(1) on duplicate key update a="+rhs)
+		require.NoError(t, err, rhs)
+	}
+}

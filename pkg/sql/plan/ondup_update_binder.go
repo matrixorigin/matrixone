@@ -254,6 +254,7 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 		}
 
 		if funcRef.ColName() == "values" {
+
 			if len(funcExpr.Exprs) != 1 {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "column '%s' does not exist", funcExpr.Exprs)
 			}
@@ -291,6 +292,9 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 }
 
 func (b *OndupUpdateBinder) BindAssignmentExpr(astExpr tree.Expr, target Type) (*plan.Expr, error) {
+	if err := b.validateSubqueryAdmission(astExpr); err != nil {
+		return nil, err
+	}
 	if !useNumericAssignmentContext(target, b.builder.isInsertIgnore) {
 		return b.BindExpr(astExpr, 0, true)
 	}
@@ -428,8 +432,10 @@ type odkuAdmissionState struct {
 	hasOuterReference bool
 }
 
-func (b *OndupUpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	if b.builder != nil && b.builder.odkuAdmission == nil && b.ctx != nil {
+// validateSubqueryAdmission classifies the complete legacy assignment before
+// ordinary binding can stop on an unrelated earlier operand or type error.
+func (b *OndupUpdateBinder) validateSubqueryAdmission(astExpr tree.Expr) error {
+	if b.rowAlias == nil && b.builder != nil && b.builder.odkuAdmission == nil && b.ctx != nil && astExprContainsSubquery(astExpr) {
 		hasOuterReference := func() bool {
 			probe := NewQueryBuilder(plan.Query_SELECT, b.builder.compCtx, b.builder.isPrepareStatement, true)
 			probe.nextBindTag = b.builder.nextBindTag
@@ -443,13 +449,17 @@ func (b *OndupUpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*
 				b.lowerCaseTableNames, b.rowAlias)
 			binder.SetTargetCorrelationTag(b.targetCorrelationTag)
 			probeCtx.binder = binder
-			_, _ = binder.baseBindSubquery(cloneTreeExpr(astExpr).(*tree.Subquery), isRoot)
+			_, _ = binder.BindExpr(cloneTreeExpr(astExpr), 0, true)
 			return probe.odkuAdmission.hasOuterReference
 		}()
 		if hasOuterReference {
-			return nil, moerr.NewUnsupportedDML(b.GetContext(), odkuTargetCorrelatedSubqueryCause)
+			return moerr.NewUnsupportedDML(b.GetContext(), odkuTargetCorrelatedSubqueryCause)
 		}
 	}
+	return nil
+}
+
+func (b *OndupUpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	return b.baseBindSubquery(astExpr, isRoot)
 }
 

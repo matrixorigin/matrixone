@@ -68,18 +68,11 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		// an invalid expression; its placeholder plan is always discarded.
 		defer func() {
 			if err != nil {
-				// Arity/type prechecks may fail before visiting their operands.
-				// Resolve those operands independently in the same clause binder.
+				// Preconditions may fail before an operand or window expression.
+				// Reuse syntax traversal, but let the canonical binder own every
+				// child scope; never walk through an unconstructed query block.
 				switch failed := astExpr.(type) {
-				case *tree.FuncExpr:
-					for _, operand := range failed.Exprs {
-						_, _ = b.impl.BindExpr(operand, depth, false)
-					}
-				case *tree.CastExpr:
-					_, _ = b.impl.BindExpr(failed.Expr, depth, false)
-				case *tree.ComparisonExpr:
-					_, _ = b.impl.BindExpr(failed.Left, depth, false)
-					_, _ = b.impl.BindExpr(failed.Right, depth, false)
+				case *tree.Subquery:
 				case *tree.FullTextMatchExpr:
 					_, _ = b.impl.BindExpr(failed.Pattern, depth, false)
 					for _, key := range failed.KeyParts {
@@ -87,6 +80,16 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 							_, _ = b.impl.BindColRef(key.ColName, depth, false)
 						}
 					}
+				default:
+					root := true
+					walkGroupingSetOrderByExpr(astExpr, func(operand tree.Expr) bool {
+						if root {
+							root = false
+							return true
+						}
+						_, _ = b.impl.BindExpr(operand, depth, false)
+						return false
+					})
 				}
 				expr, err = makePlan2NullConstExprWithType(), nil
 			}
