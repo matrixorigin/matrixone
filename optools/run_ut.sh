@@ -56,6 +56,8 @@ UT_SHARD=${UT_SHARD:-"all"}
 # the complete-scope go test before any prebuilt binary is executed.
 UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"1"}
 UT_ISSUES_BATCHES=${UT_ISSUES_BATCHES:-"1"}
+UT_ISSUES_BATCH_PARALLEL=${UT_ISSUES_BATCH_PARALLEL:-"1"}
+UT_EMBEDDED_PACKAGE_PARALLEL=${UT_EMBEDDED_PACKAGE_PARALLEL:-"1"}
 # Nine race binaries currently occupy several GiB. Preserve enough workspace
 # headroom for Go's build cache, reports, and the running issues fixture.
 UT_PREBUILD_MIN_FREE_KB=${UT_PREBUILD_MIN_FREE_KB:-"6291456"}
@@ -2138,6 +2140,7 @@ function run_prebuilt_race_commands(){
 function run_prebuilt_embedded_tests(){
     local package_scope=$1 report_base=$2 hard_timeout_seconds=$3
     local package package_dir package_import package_index=0
+    local package_parallel=${UT_EMBEDDED_PACKAGE_PARALLEL}
     local -a race_packages=() race_dirs=() race_binaries=() race_patterns=() race_deadlines=()
     while IFS= read -r package; do
         [[ -n "${package}" ]] || continue
@@ -2153,8 +2156,15 @@ function run_prebuilt_embedded_tests(){
         race_patterns[package_index]='.*'
         package_index=$((package_index + 1))
     done <<< "${package_scope}"
-    run_prebuilt_race_commands embedded "${PREBUILT_RACE_REPORT:-${report_base}-execution}" \
-        1 "${hard_timeout_seconds}"
+    if (( 10#${package_parallel} > 1 )); then
+        logger "INF" "Run embedded packages with bounded parallelism ${package_parallel}" >&2
+        MO_TEST_CLUSTER_ADMISSION_POOL_SIZE="${package_parallel}" \
+            run_prebuilt_race_commands embedded "${PREBUILT_RACE_REPORT:-${report_base}-execution}" \
+                "${package_parallel}" "${hard_timeout_seconds}"
+    else
+        run_prebuilt_race_commands embedded "${PREBUILT_RACE_REPORT:-${report_base}-execution}" \
+            1 "${hard_timeout_seconds}"
+    fi
 }
 
 function run_race_inventory_with_deadline(){
@@ -2288,7 +2298,16 @@ function run_issues_race_batches(){
         race_patterns+=("${shard_patterns[index]}")
         race_deadlines+=("${deadline}")
     done
-    run_prebuilt_race_commands serial "${PREBUILT_RACE_REPORT}" 1 "$((10#${UT_TIMEOUT} * 60 + 120))"
+    # The process pool is enabled only for this exact prebuilt batch wave.
+    # Ordinary packages keep the exclusive cluster admission contract.
+    if (( 10#${UT_ISSUES_BATCH_PARALLEL} > 1 )); then
+        logger "INF" "Run ${batches} issues batches with bounded parallelism ${UT_ISSUES_BATCH_PARALLEL}" >&2
+        MO_TEST_CLUSTER_ADMISSION_POOL_SIZE="${UT_ISSUES_BATCH_PARALLEL}" \
+            run_prebuilt_race_commands serial "${PREBUILT_RACE_REPORT}" \
+                "${UT_ISSUES_BATCH_PARALLEL}" "$((10#${UT_TIMEOUT} * 60 + 120))"
+    else
+        run_prebuilt_race_commands serial "${PREBUILT_RACE_REPORT}" 1 "$((10#${UT_TIMEOUT} * 60 + 120))"
+    fi
 }
 
 function run_embedded_tests(){
@@ -2376,6 +2395,7 @@ function run_tests(){
     echo "#  LINK PARALLEL:   $UT_LINK_PARALLEL"
     echo "#  UT SHARD:        $UT_SHARD"
     echo "#  EMBEDDED PREBUILD: $UT_PREBUILD_EMBEDDED"
+    echo "#  EMBEDDED PACKAGE PARALLEL: $UT_EMBEDDED_PACKAGE_PARALLEL"
     echo "#  PLAN OVERLAP:    $UT_OVERLAP_PLAN"
     echo "#  LIGHT OVERLAP:   $UT_OVERLAP_LIGHT (parallel $UT_OVERLAP_LIGHT_PARALLEL)"
     echo "#  HELPER TERM GRACE: $UT_HELPER_TERM_GRACE_TICKS ticks"
@@ -2445,6 +2465,19 @@ function run_tests(){
     if ! [[ "${UT_TIMEOUT}" =~ ^[1-9][0-9]*$ ]] ||
         [[ "${UT_ISSUES_BATCHES}" != 1 && "${UT_ISSUES_BATCHES}" != 4 ]]; then
         logger "ERR" "race batching requires UT_ISSUES_BATCHES=1|4"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    if [[ "${UT_ISSUES_BATCH_PARALLEL}" != 1 && "${UT_ISSUES_BATCH_PARALLEL}" != 2 ]] ||
+        [[ "${UT_ISSUES_BATCHES}" == 1 && "${UT_ISSUES_BATCH_PARALLEL}" != 1 ]]; then
+        logger "ERR" "UT_ISSUES_BATCH_PARALLEL must be 1..2 and no greater than UT_ISSUES_BATCHES (1 requires parallel=1), got '${UT_ISSUES_BATCH_PARALLEL}'"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    if [[ "${UT_EMBEDDED_PACKAGE_PARALLEL}" != 1 && "${UT_EMBEDDED_PACKAGE_PARALLEL}" != 2 ]]; then
+        logger "ERR" "UT_EMBEDDED_PACKAGE_PARALLEL must be 1..2, got '${UT_EMBEDDED_PACKAGE_PARALLEL}'"
         UT_TEST_STATUS=1
         mark_ut_stage "routing" "validate shard and package partition" finish 1
         return 0
@@ -2770,11 +2803,12 @@ function run_tests(){
 
         # Cluster admission serializes service lifecycles, not whole test
         # processes: a waiting race binary still retains memory, and linking or
-        # non-cluster work can contend with the admitted cluster. Serialize the
-        # complete package commands as well so HAKeeper and transactions do not
-        # compete with another embedded package's work on constrained runners.
+        # non-cluster work can contend with the admitted cluster. The prebuilt
+        # path uses its bounded process pool; the authoritative fallback stays
+        # as one complete command so HAKeeper and transactions do not compete
+        # on constrained runners.
         if should_run_ut_stage embedded; then
-            logger "INF" "Run embedded-cluster race-test packages with package parallelism 1 and serialized cluster lifecycle admission"
+            logger "INF" "Run embedded-cluster race-test packages with bounded package parallelism ${UT_EMBEDDED_PACKAGE_PARALLEL}"
             run_embedded_tests "${cluster_test_scope}"
             cluster_status=$?
             if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi

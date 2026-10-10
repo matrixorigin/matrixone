@@ -15,6 +15,7 @@
 package optools
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -104,7 +105,7 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "-c", script)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root, "UT_LINK_PARALLEL=0")
+	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root, "UT_LINK_PARALLEL=0", "GOFLAGS=", "UT_ISSUES_BATCH_PARALLEL=1", "UT_EMBEDDED_PACKAGE_PARALLEL=1")
 	cmd.Env = append(cmd.Env, variables...)
 	out, err, diagnostic := runScheduleHarnessCommand(ctx, cmd, root)
 	if diagnostic != "" {
@@ -114,6 +115,94 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 		t.Fatalf("runner harness timed out: %v\n%s\n%s", err, out, diagnostic)
 	}
 	return out, err
+}
+
+func TestMakeUTProcessPoolConfiguration(t *testing.T) {
+	// CI uses a detached, untagged shallow checkout. Reproduce its real Git
+	// diagnostics without cloning a repository or changing this worktree.
+	gitDir := filepath.Join(t.TempDir(), "git")
+	gitEnv := append(os.Environ(), "GIT_DIR="+gitDir,
+		"GIT_AUTHOR_NAME=UT", "GIT_AUTHOR_EMAIL=ut@example.invalid",
+		"GIT_COMMITTER_NAME=UT", "GIT_COMMITTER_EMAIL=ut@example.invalid")
+	git := func(input string, args ...string) string {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Env = gitEnv
+		cmd.Stdin = strings.NewReader(input)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("Git fixture %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("", "init", "--bare", "--quiet", gitDir)
+	tree := git("", "mktree")
+	commit := git("UT fixture\n", "commit-tree", tree)
+	for _, name := range []string{"HEAD", "shallow"} {
+		if err := os.WriteFile(filepath.Join(gitDir, name), []byte(commit+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name, want      string
+		args            []string
+		accepted        bool
+		validationError string
+	}{
+		{name: "serial-default", want: "4 1 1", accepted: true},
+		{name: "single-batch-rollback", args: []string{"UT_ISSUES_BATCHES=1"}, want: "1 1 1", accepted: true},
+		{name: "pool-opt-in", args: []string{"UT_ISSUES_BATCH_PARALLEL=2", "UT_EMBEDDED_PACKAGE_PARALLEL=2"}, want: "4 2 2", accepted: true},
+		{name: "invalid-single-batch-pool", args: []string{"UT_ISSUES_BATCHES=1", "UT_ISSUES_BATCH_PARALLEL=2"}, want: "1 2 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
+		{name: "issues-parallel-overflow", args: []string{"UT_ISSUES_BATCH_PARALLEL=18446744073709551618"}, want: "4 18446744073709551618 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
+		{name: "embedded-parallel-overflow", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=18446744073709551618"}, want: "4 1 18446744073709551618", validationError: "UT_EMBEDDED_PACKAGE_PARALLEL must be"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"--no-print-directory", "-s", "-f", "Makefile", "-f", "-", "print-ut-pool-config", "UNAME_S=linux"}, tc.args...)
+			cmd := exec.CommandContext(t.Context(), "make", args...)
+			cmd.Dir = ".."
+			cmd.Stdin = strings.NewReader(".PHONY: print-ut-pool-config\nprint-ut-pool-config:\n\t@printf '%s %s %s\\n' \"$$UT_ISSUES_BATCHES\" \"$$UT_ISSUES_BATCH_PARALLEL\" \"$$UT_EMBEDDED_PACKAGE_PARALLEL\"\n")
+			// Test Make's defaults, not the enclosing UT's scheduling overrides.
+			for _, value := range os.Environ() {
+				key, _, _ := strings.Cut(value, "=")
+				switch key {
+				case "UT_ISSUES_BATCHES", "UT_ISSUES_BATCH_PARALLEL", "UT_EMBEDDED_PACKAGE_PARALLEL", "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "GIT_DIR", "GIT_WORK_TREE":
+					continue
+				}
+				cmd.Env = append(cmd.Env, value)
+			}
+			cmd.Env = append(cmd.Env, "GIT_DIR="+gitDir)
+			var diagnostics bytes.Buffer
+			cmd.Stderr = &diagnostics
+			out, err := cmd.Output()
+			if err != nil || strings.TrimSpace(string(out)) != tc.want {
+				t.Fatalf("Make config: want %q, got %q: %v\nstderr: %s", tc.want, out, err, &diagnostics)
+			}
+			if diagnostics.Len() == 0 {
+				t.Fatal("detached untagged checkout did not produce its expected version diagnostic")
+			}
+			values := strings.Fields(string(out))
+			script := `source ./run_ut.sh UT
+function logger() { printf '%s\n' "$*" >> "$CASE_DIR/validation-log"; }
+# Stop at the existing post-validation boundary, before cache/native work.
+function mark_ut_stage() {
+ if [[ "$1" == prepare && "$3" == start ]]; then
+  [[ "$EXPECT_ACCEPTED" == true ]] || exit 90
+  exit 0
+ fi
+}
+run_tests
+[[ "$EXPECT_ACCEPTED" == false && "$UT_TEST_STATUS" == 1 ]] || exit 91
+grep -Fq "$EXPECT_VALIDATION_ERROR" "$CASE_DIR/validation-log" || exit 92
+`
+			out, err = scheduleHarness(t, script,
+				"UT_ISSUES_BATCHES="+values[0], "UT_ISSUES_BATCH_PARALLEL="+values[1],
+				"UT_EMBEDDED_PACKAGE_PARALLEL="+values[2], "EXPECT_ACCEPTED="+strconv.FormatBool(tc.accepted),
+				"EXPECT_VALIDATION_ERROR="+tc.validationError)
+			if err != nil {
+				t.Fatalf("runner config: %v\n%s", err, out)
+			}
+		})
+	}
 }
 
 func TestResolveCgroupMemoryBoundary(t *testing.T) {

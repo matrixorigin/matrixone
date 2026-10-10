@@ -15,6 +15,8 @@
 package optools
 
 import (
+	"encoding/json"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -53,6 +55,18 @@ if [[ "$1" == tool && "$2" == test2json ]]; then
  leaf=${package##*/}
  [[ "$PWD" -ef "$CASE_DIR/package-$leaf" ]] || exit 107
  mkdir "$CASE_DIR/executed-$leaf" || exit 108
+ if [[ "$MODE" == pool ]]; then
+  [[ "$MO_TEST_CLUSTER_ADMISSION_POOL_SIZE" == 2 ]] || exit 109
+  touch "$CASE_DIR/active-$leaf"
+  printf 'pool=%s package=%s\n' "$MO_TEST_CLUSTER_ADMISSION_POOL_SIZE" "$package" >> "$CASE_DIR/pool-events"
+  printf '%s %s\n' "$leaf" "$$" >&8
+  case "$leaf" in
+   a) read -r _ <&10 ;;
+   b) read -r _ <&11 ;;
+   c) read -r _ <&12 ;;
+  esac
+  rm -f "$CASE_DIR/active-$leaf"
+ fi
  if [[ "$MODE" == execute-cancel && "$leaf" == a ]]; then
   trap 'touch "$CASE_DIR/stopped-execute-a"; exit 143' TERM
   printf '%s\n' "$$" > "$CASE_DIR/pid-execute-a"
@@ -75,9 +89,12 @@ if [[ "$1" == tool && "$2" == test2json ]]; then
   trap '' TERM
   while :; do read -r -t 0.01 _ <&9 || true; done
  fi
+ if [[ "$MODE" == test-failure && "$leaf" == b ]]; then
+  printf '{"Action":"fail","Package":"%s"}\n' "$package"
+  exit 7
+ fi
  printf '{"Action":"pass","Package":"%s"}\n' "$package"
- [[ "$MODE" != test-failure || "$leaf" != b ]]
- exit
+ exit 0
 fi
 [[ "$1" == test ]] || exit 81
 [[ " $* " == *' -race '* && " $* " == *' -short '* && " $* " == *' -tags matrixone_test '* && " $* " == *' -timeout 17m '* && " $* " == *' -mod=readonly '* && " $* " == *' -vet=off '* ]] || exit 82
@@ -210,6 +227,85 @@ fi
 			}
 		})
 	}
+}
+
+func TestEmbeddedPrebuiltExecutionUsesBoundedProcessPool(t *testing.T) {
+	script := embeddedSetup + `
+start_embedded_prebuild "$scope" 1
+artifact_dir=$CLUSTER_PREBUILD_DIR
+mkfifo "$CASE_DIR/pool-release-a" "$CASE_DIR/pool-release-b" "$CASE_DIR/pool-release-c"
+exec 10<>"$CASE_DIR/pool-release-a"
+exec 11<>"$CASE_DIR/pool-release-b"
+exec 12<>"$CASE_DIR/pool-release-c"
+release_pool_children() {
+ printf 'release\n' >&10
+ printf 'release\n' >&11
+ printf 'release\n' >&12
+}
+pool_driver_pid=""
+cleanup_pool_driver() {
+ release_pool_children
+ if [[ -n "$pool_driver_pid" ]]; then
+  kill -TERM "$pool_driver_pid" 2>/dev/null || true
+  wait "$pool_driver_pid" 2>/dev/null || true
+ fi
+}
+trap cleanup_pool_driver EXIT
+(
+ trap release_pool_children EXIT
+ trap 'exit 143' TERM INT
+ read -r -t 3 first first_pid <&8 || exit 100
+ read -r -t 3 second second_pid <&8 || exit 101
+ [[ "$first $second" == 'a b' || "$first $second" == 'b a' ]] || exit 102
+ [[ "$first_pid" != "$second_pid" ]] || exit 103
+ kill -0 "$first_pid" && kill -0 "$second_pid" || exit 104
+ [[ -e "$CASE_DIR/active-a" && -e "$CASE_DIR/active-b" && ! -e "$CASE_DIR/executed-c" ]] || exit 105
+ printf 'release\n' >&10
+ read -r -t 3 third third_pid <&8 || exit 106
+ [[ "$third" == c && "$third_pid" != "$first_pid" && "$third_pid" != "$second_pid" ]] || exit 107
+ kill -0 "$third_pid" || exit 108
+ [[ ! -e "$CASE_DIR/active-a" && -e "$CASE_DIR/active-b" && -e "$CASE_DIR/active-c" ]] || exit 109
+) &
+pool_driver_pid=$!
+status=0
+UT_EMBEDDED_PACKAGE_PARALLEL=2 run_embedded_tests "$scope" || status=$?
+driver_status=0
+wait "$pool_driver_pid" || driver_status=$?
+pool_driver_pid=""
+[[ "$status" == 0 && "$driver_status" == 0 ]] || exit 90
+[[ "$(grep -c '^pool=2 ' "$CASE_DIR/pool-events")" == 3 ]] || exit 91
+# Indexed execution checkpoints exclude the outer command and compile events.
+awk '
+$5 == "stage=embedded" && $6 ~ /^label=example\/[abc]$/ && /detail=package_index=[0-2] .*prebuilt=true/ {
+ package=substr($6,7)
+ if ($4 == "event=start") {
+  if (started[package]++) bad=1
+  starts++; active++
+  if (active > peak) peak=active
+  start_at[package]=NR
+ } else if ($4 == "event=finish") {
+  if (!started[package] || finished[package]++ || $7 != "status=0") bad=1
+  if (!finishes && starts != 2) bad=1
+  finishes++; active--
+  finish_at[package]=NR
+ }
+ if (active < 0 || active > 2) bad=1
+}
+END {
+ if (bad || starts != 3 || finishes != 3 || active != 0 || peak != 2 ||
+     !(finish_at["example/a"] < start_at["example/c"] && start_at["example/c"] < finish_at["example/b"])) exit 1
+}' "$UT_CHECKPOINT" || { cat "$UT_CHECKPOINT" >&2; exit 92; }
+[[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID" ]] || exit 93
+[[ ! -d "$artifact_dir" ]] || exit 94
+for leaf in a b c; do [[ ! -e "$CASE_DIR/active-$leaf" ]] || exit 95; done
+cat "$UT_REPORT"
+`
+	out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, nil,
+		"MODE=pool", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=")
+	if err != nil {
+		t.Fatalf("embedded bounded process pool: %v\n%s", err, out)
+	}
+	assertScheduleJSONReport(t, out, map[string]string{"example/a": "pass", "example/b": "pass", "example/c": "pass"})
 }
 
 func TestEmbeddedPrebuildCancellation(t *testing.T) {
@@ -415,11 +511,29 @@ grep -q 'UT runner hard timeout' "$UT_REPORT" || exit 92
 }
 
 func TestEmbeddedPrebuiltOuterCancellationKillsResistantGroup(t *testing.T) {
-	script := embeddedSetup + `
+	for _, parallel := range []string{"1", "2"} {
+		for _, drain := range []string{"complete", "failed"} {
+			t.Run("parallel="+parallel+"/drain="+drain, func(t *testing.T) {
+				script := embeddedSetup + `
+if [[ "$DRAIN" == failed ]]; then
+ original_stop=$(declare -f terminate_ut_process_groups)
+ eval "${original_stop/terminate_ut_process_groups/real_terminate_ut_process_groups}"
+ function terminate_ut_process_groups() {
+  real_terminate_ut_process_groups "$@" || return $?
+  # Stop the fixture safely, then model a descendant whose drainage cannot be proven.
+  return 125
+ }
+fi
 cleanup_check() {
  status=$?
- ! kill -0 -- "-$(<"$CASE_DIR/pgid-execute-resistant-a")" 2>/dev/null || status=90
- [[ ! -d "$artifact_dir" ]] || status=91
+ if [[ "$DRAIN" == failed ]]; then
+  ! kill -0 "$(<"$CASE_DIR/pid-execute-a")" 2>/dev/null || status=90
+  [[ "$status" == 125 ]] || status=93
+  [[ -d "$artifact_dir" && -f "$PREBUILT_RACE_REPORT.00" ]] || status=94
+ else
+  ! kill -0 -- "-$(<"$CASE_DIR/pgid-execute-resistant-a")" 2>/dev/null || status=90
+  [[ ! -d "$artifact_dir" ]] || status=91
+ fi
  [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID" ]] || status=92
  printf 'RESISTANT_CANCELLED %s\n' "$status"
  exit "$status"
@@ -430,27 +544,116 @@ artifact_dir=$CLUSTER_PREBUILD_DIR
 (read -r _ <&8; kill -TERM $$) &
 run_embedded_tests "$scope" 2
 `
-	out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, nil,
-		"MODE=execute-cancel-resistant", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=")
-	exit, ok := err.(*exec.ExitError)
-	if !ok || exit.ExitCode() != 143 || !strings.Contains(string(out), "RESISTANT_CANCELLED 143") {
-		t.Fatalf("embedded resistant outer cancellation: %v\n%s", err, out)
+				mode := "execute-cancel-resistant"
+				if drain == "failed" {
+					mode = "execute-cancel"
+				}
+				out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, nil,
+					"MODE="+mode, "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=",
+					"UT_EMBEDDED_PACKAGE_PARALLEL="+parallel, "DRAIN="+drain)
+				want := 143
+				if drain == "failed" {
+					want = 125
+				}
+				exit, ok := err.(*exec.ExitError)
+				if !ok || exit.ExitCode() != want || !strings.Contains(string(out), fmt.Sprintf("RESISTANT_CANCELLED %d", want)) {
+					t.Fatalf("embedded resistant outer cancellation: %v\n%s", err, out)
+				}
+			})
+		}
 	}
 }
 
 func TestEmbeddedPrebuiltFailureKeepsReportJSONOnly(t *testing.T) {
-	script := embeddedSetup + `
+	for _, parallel := range []string{"1", "2"} {
+		t.Run("parallel="+parallel, func(t *testing.T) {
+			script := embeddedSetup + `
 function logger() { printf '%s\n' "$*"; }
 start_embedded_prebuild "$scope" 1
 status=0
-run_embedded_tests "$scope" 2 || status=$?
+run_embedded_tests "$scope" 2 > "$CASE_DIR/outer-log" || status=$?
 [[ "$status" != 0 ]] || exit 90
-awk 'substr($0, 1, 1) != "{" { exit 1 }' "$UT_REPORT" || exit 91
+cat "$UT_REPORT"
+
 grep -q 'prebuilt embedded package example/b failed' "$UT_STDERR" || exit 92
 `
-	out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, nil,
-		"MODE=test-failure", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=")
-	if err != nil {
-		t.Fatalf("embedded failure JSON report: %v\n%s", err, out)
+			out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, nil,
+				"MODE=test-failure", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=", "UT_EMBEDDED_PACKAGE_PARALLEL="+parallel)
+			if err != nil {
+				t.Fatalf("embedded failure JSON report: %v\n%s", err, out)
+			}
+			assertScheduleJSONReport(t, out, map[string]string{"example/a": "pass", "example/b": "fail", "example/c": "pass"})
+		})
+	}
+}
+
+// Parse the actual runner output, rather than accepting a line that merely
+// starts with a brace. Every fixture package must retain its terminal event.
+func assertScheduleJSONReport(t *testing.T, report []byte, expected map[string]string) {
+	t.Helper()
+	if err := checkScheduleJSONReport(report, expected); err != nil {
+		t.Fatalf("%v: %s", err, report)
+	}
+}
+
+func checkScheduleJSONReport(report []byte, expected map[string]string) error {
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(strings.TrimSpace(string(report)), "\n") {
+		var event struct {
+			Action  string
+			Package string
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			return fmt.Errorf("invalid report JSON: %w", err)
+		}
+		want, ok := expected[event.Package]
+		if event.Package == "" || event.Action == "" || !ok || want != event.Action || seen[event.Package] {
+			return fmt.Errorf("unexpected terminal event: %s", line)
+		}
+		seen[event.Package] = true
+	}
+	if len(seen) != len(expected) {
+		return fmt.Errorf("want %d report events, got %d", len(expected), len(seen))
+	}
+	return nil
+}
+
+func TestScheduleJSONReportValidation(t *testing.T) {
+	expected := map[string]string{"example/a": "pass", "example/b": "fail"}
+	const pass = `{"Package":"example/a","Action":"pass"}`
+	const fail = `{"Package":"example/b","Action":"fail"}`
+	for _, tc := range []struct {
+		name, report string
+		valid        bool
+	}{
+		{"complete", pass + "\n" + fail, true},
+		{"reordered-with-metadata", `{"Package":"example/b","Action":"fail","Elapsed":1}` + "\n" + pass, true},
+		{"empty-object", "{}\n" + fail, false},
+		{"foreign-without-action", `{"Package":"foreign/package"}` + "\n" + fail, false},
+		{"missing-package", `{"Action":"pass"}` + "\n" + fail, false},
+		{"empty-package", `{"Package":"","Action":"pass"}` + "\n" + fail, false},
+		{"null-package", `{"Package":null,"Action":"pass"}` + "\n" + fail, false},
+		{"missing-action", `{"Package":"example/a"}` + "\n" + fail, false},
+		{"empty-action", `{"Package":"example/a","Action":""}` + "\n" + fail, false},
+		{"null-action", `{"Package":"example/a","Action":null}` + "\n" + fail, false},
+		{"unknown-package", `{"Package":"foreign/package","Action":"pass"}` + "\n" + fail, false},
+		{"duplicate", pass + "\n" + pass, false},
+		{"wrong-action", `{"Package":"example/a","Action":"fail"}` + "\n" + fail, false},
+		{"malformed", "{\n" + fail, false},
+		{"trailing-json", pass + "{}\n" + fail, false},
+		{"wrong-package-type", `{"Package":42,"Action":"pass"}` + "\n" + fail, false},
+		{"wrong-action-type", `{"Package":"example/a","Action":true}` + "\n" + fail, false},
+		{"missing-event", pass, false},
+		{"empty-report", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkScheduleJSONReport([]byte(tc.report), expected)
+			if tc.valid && err != nil {
+				t.Fatalf("valid terminal report rejected: %v", err)
+			}
+			if !tc.valid && err == nil {
+				t.Fatal("invalid terminal report accepted")
+			}
+		})
 	}
 }

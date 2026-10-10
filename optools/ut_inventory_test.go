@@ -374,6 +374,86 @@ run_issues_race_batches example/issues "$CASE_DIR/issues-exhausted.test" 4 || st
 	}
 }
 
+func TestIssuesBatchesUseBoundedProcessPool(t *testing.T) {
+	script := `source ./run_ut.sh UT
+PREBUILT_RACE_REPORT="$CASE_DIR/issues-report"
+function logger() { printf '%s\n' "$*"; }
+UT_ISSUES_BATCH_PARALLEL=2
+printf 'package fixture\n' > "$CASE_DIR/TestFile.go"
+mock_binary="$CASE_DIR/issues.test"
+status=0
+run_ut_command serial issues run_issues_race_batches example/issues "$mock_binary" 2 || status=$?
+consume_race_report PREBUILT_RACE_REPORT
+cat "$UT_REPORT"
+[[ "$status" == 0 ]] || exit 90
+for name in one two; do
+ [[ "$(<"$CASE_DIR/pool-$name")" == 2 ]] || exit 91
+ [[ -e "$CASE_DIR/start-$name" ]] || exit 92
+done
+`
+	mock := `#!/bin/bash
+case "$1" in
+env)
+ printf '\n'
+ ;;
+list)
+ printf '%s\t%s\nTestFile.go\n' "$CASE_DIR" example/issues
+ ;;
+test)
+ if [[ " $* " == *' -c '* ]]; then
+  output=''
+  while (( $# > 0 )); do
+   if [[ "$1" == -o ]]; then output=$2; break; fi
+   shift
+  done
+  [[ -n "$output" ]] || exit 4
+  cat > "$output" <<'EOF'
+#!/bin/bash
+if [[ "$*" == *-test.list=* ]]; then
+ printf 'TestOne\nTestTwo\n'
+ exit 0
+fi
+if [[ "$*" == *TestOne* ]]; then
+ name=one
+else
+ name=two
+fi
+printf '%s\n' "${MO_TEST_CLUSTER_ADMISSION_POOL_SIZE:-unset}" > "$CASE_DIR/pool-$name"
+touch "$CASE_DIR/start-$name"
+for _ in $(seq 1 100); do
+ if [[ -e "$CASE_DIR/start-one" && -e "$CASE_DIR/start-two" ]]; then
+ printf '{"Action":"pass","Package":"example/issues"}\n'
+ exit 0
+fi
+ sleep 0.01
+done
+exit 7
+EOF
+  chmod +x "$output"
+ fi
+ ;;
+tool)
+ [[ "$2" == test2json ]] || exit 5
+ exec "$6" "${@:7}"
+ ;;
+*)
+ exit 6
+ ;;
+esac
+`
+	out, err := scheduleHarnessWithMock(t, script, mock)
+	if err != nil {
+		t.Fatalf("issues batches did not run two admitted processes: %v\n%s", err, out)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want two batch events: %s", out)
+	}
+	for _, line := range lines {
+		assertScheduleJSONReport(t, []byte(line), map[string]string{"example/issues": "pass"})
+	}
+}
+
 func TestRaceInventoryPreservesRunnableRootsAndStress(t *testing.T) {
 	root := t.TempDir()
 	writeScopeFixture(t, root, "go.mod", "module inventoryfixture\n\ngo 1.27.0\n")
