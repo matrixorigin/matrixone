@@ -1178,6 +1178,10 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 					identity = 1
 				case types.CharsetUTF8:
 					identity = 3
+				case types.CharsetUTF8MB3UnicodeCI:
+					identity = 4
+				case types.CharsetUTF8MB4UnicodeCI:
+					identity = 5
 				}
 				if err := rs.Append(identity, false); err != nil {
 					return err
@@ -3304,6 +3308,14 @@ func builtInHashPartition(parameters []*vector.Vector, result vector.FunctionRes
 // input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
 // result vec is [serial(1, 2, 3), serial(1, 2, 3), null]
 func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return op.builtInSerial(parameters, result, proc, length, selectList, false)
+}
+
+func (op *opSerial) BuiltInPhysicalSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return op.builtInSerial(parameters, result, proc, length, selectList, true)
+}
+
+func (op *opSerial) builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, physicalKey bool) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	var err error
 
@@ -3319,7 +3331,7 @@ func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.Fun
 	if len(op.funcs) == 0 {
 		op.funcs = make([]func(v *vector.Vector, idx int, ps *types.Packer), len(parameters))
 		for i, p := range parameters {
-			op.funcs[i], err = getPackFun(p)
+			op.funcs[i], err = getPackFunWithPhysical(p, physicalKey)
 			if err != nil {
 				return err
 			}
@@ -3357,6 +3369,14 @@ func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.Fun
 }
 
 func (op *opSerial) BuiltInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return op.builtInSerialFull(parameters, result, proc, length, selectList, false)
+}
+
+func (op *opSerial) BuiltInPhysicalSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return op.builtInSerialFull(parameters, result, proc, length, selectList, true)
+}
+
+func (op *opSerial) builtInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, physicalKey bool) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	var err error
@@ -3364,7 +3384,7 @@ func (op *opSerial) BuiltInSerialFull(parameters []*vector.Vector, result vector
 		op.funcs = make([]func(v *vector.Vector, idx int, ps *types.Packer), len(parameters))
 		for i, p := range parameters {
 			if !p.IsConstNull() {
-				op.funcs[i], err = getPackFun(p)
+				op.funcs[i], err = getPackFunWithPhysical(p, physicalKey)
 				if err != nil {
 					return err
 				}
@@ -3389,6 +3409,10 @@ func (op *opSerial) BuiltInSerialFull(parameters []*vector.Vector, result vector
 }
 
 func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Packer), error) {
+	return getPackFunWithPhysical(v, false)
+}
+
+func getPackFunWithPhysical(v *vector.Vector, physicalKey bool) (func(v *vector.Vector, idx int, ps *types.Packer), error) {
 	switch v.GetType().Oid {
 	case types.T_bool:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
@@ -3507,6 +3531,9 @@ func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Pac
 		types.T_datalink:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := v.GetBytesAt(idx)
+			if physicalKey && types.IsUnicodeCollation(v.GetType().Charset) {
+				val = types.CollationKeyOrOriginal(v.GetType().Charset, val)
+			}
 			ps.EncodeStringType(val)
 		}, nil
 	}
@@ -3514,10 +3541,59 @@ func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Pac
 	return nil, moerr.NewInternalErrorNoCtxf("not supported type %s", v.GetType().String())
 }
 
-// SerialHelper is unified function used in builtInSerial and BuiltInSerialFull
-// To use it inside builtInSerial, pass the bitMap pointer and set isFull false
-// To use it inside BuiltInSerialFull, pass the bitMap as nil and set isFull to true
+// BuiltInPhysicalCollationKey materializes the one-part key used by a
+// secondary index. Unlike generic SERIAL this is intentionally an opaque
+// comparison-key value; callers must not expose it as the source string.
+func BuiltInPhysicalCollationKey(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	if len(parameters) != 1 {
+		return moerr.NewInvalidInputNoCtx("physical_collation_key expects one argument")
+	}
+	from := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	typ := *parameters[0].GetType()
+	for i := 0; i < length; i++ {
+		if functionRowSkipped(selectList, uint64(i)) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := from.GetStrValue(uint64(i))
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if types.IsUnicodeCollation(typ.Charset) {
+			value = types.CollationKeyOrOriginal(typ.Charset, value)
+		}
+		if err := rs.AppendBytes(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SerialHelper encodes original values for the generic SERIAL/SERIAL_FULL
+// contract.  Generic serialization is intentionally lossless: transformed
+// comparison keys belong only to the physical index-key boundary.
+//
+// To use it inside builtInSerial, pass the bitMap pointer and set isFull false.
+// To use it inside BuiltInSerialFull, pass the bitMap as nil and set isFull to
+// true.
 func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull bool) {
+	serialHelper(v, bitMap, ps, isFull, false)
+}
+
+// PhysicalSerialHelper is the schema-aware serializer used by secondary
+// index producers.  It keeps the generic SERIAL value contract separate from
+// the opaque UCA comparison-key domain used for native Unicode index parts.
+func PhysicalSerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull bool) {
+	serialHelper(v, bitMap, ps, isFull, true)
+}
+
+func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull, physicalKey bool) {
 
 	if !isFull && bitMap == nil {
 		// if you are using it inside the builtInSerial then, you should pass bitMap
@@ -3954,15 +4030,22 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					}
 					continue
 				}
-				ps[i].EncodeStringType(value)
+				ps[i].EncodeStringType(serialStringValue(*v.GetType(), value, physicalKey))
 			}
 		} else {
 			vs := vector.ExpandBytesCol(v)
 			for i := range vs {
-				ps[i].EncodeStringType(vs[i])
+				ps[i].EncodeStringType(serialStringValue(*v.GetType(), vs[i], physicalKey))
 			}
 		}
 	}
+}
+
+func serialStringValue(typ types.Type, value []byte, physicalKey bool) []byte {
+	if physicalKey && types.IsUnicodeCollation(typ.Charset) {
+		return types.CollationKeyOrOriginal(typ.Charset, value)
+	}
+	return value
 }
 
 // builtInSerialExtract is used to extract a tupleElement from the serial vector.

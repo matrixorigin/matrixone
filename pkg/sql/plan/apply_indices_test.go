@@ -78,6 +78,45 @@ func TestIndexOnlyScanGuard_RandomRangesScenario(t *testing.T) {
 	assert.True(t, oomRejectNew, "new guard should also reject non-selective scan (selectivity >= 0.3)")
 }
 
+func TestIndexUsesUnicodeCollationDisablesCovering(t *testing.T) {
+	table := &planpb.TableDef{
+		Name2ColIndex: map[string]int32{"s": 0, "n": 1},
+		Cols: []*planpb.ColDef{
+			{Name: "s", Typ: planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)}},
+			{Name: "n", Typ: planpb.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	require.True(t, indexUsesUnicodeCollation(&IndexDef{Parts: []string{"s", "n"}}, table))
+	require.False(t, indexUsesUnicodeCollation(&IndexDef{Parts: []string{"n"}}, table))
+	require.False(t, indexUsesUnicodeCollation(&IndexDef{Parts: []string{"missing"}}, table))
+	require.False(t, indexUsesUnicodeCollation(nil, table))
+}
+
+func TestUnicodeHintedCoveringFallsBackToBaseRows(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+	tag := builder.genNewBindTag()
+	node := &planpb.Node{
+		BindingTags: []int32{tag},
+		TableDef: &planpb.TableDef{
+			Name2ColIndex: map[string]int32{"s": 0, "n": 1},
+			Cols: []*planpb.ColDef{
+				{Name: "s", Typ: planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)}},
+				{Name: "n", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			},
+		},
+	}
+	idx := &IndexDef{
+		IndexName:      "idx_unicode",
+		IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+		IndexTableName: "__mo_idx_unicode",
+		Parts:          []string{"s", "n"},
+		TableExist:     true,
+	}
+	id, err := builder.tryHintedCoveringIndexScan(idx, node, map[[2]int32]int{{tag, 0}: 1, {tag, 1}: 1}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, int32(-1), id)
+}
+
 func TestCheckIndexFilterRejectsSignedZeroFloatColumns(t *testing.T) {
 	floatTypes := []types.T{types.T_float32, types.T_float64}
 	for _, typ := range floatTypes {
@@ -306,6 +345,33 @@ func TestApplyExtraFiltersOnIndexUsesPhysicalKeyEncoding(t *testing.T) {
 		mapped := indexNode.FilterList[0].GetF().Args[0]
 		require.Equal(t, "serial_extract", wrappedSerialFuncName(t, mapped))
 		require.Equal(t, int32(0), mapped.GetF().Args[0].GetCol().ColPos)
+	})
+
+	t.Run("Unicode serialized part stays on the base scan", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+		baseTag := builder.genNewBindTag()
+		indexTag := builder.genNewBindTag()
+		filter := makeStringEqFilterExpr(baseTag, 1, "Alpha")
+		filter.GetF().Args[0].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+		filter.GetF().Args[1].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+		node := &planpb.Node{
+			TableDef: &planpb.TableDef{
+				Cols: []*planpb.ColDef{
+					{Name: "id", Typ: intType},
+					{Name: "a", Typ: planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)}},
+				},
+				Name2ColIndex: map[string]int32{"id": 0, "a": 1},
+				Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			BindingTags: []int32{baseTag},
+			FilterList:  []*planpb.Expr{filter},
+		}
+		idxDef := &planpb.IndexDef{Parts: []string{"a", catalog.CreateAlias("id")}}
+		indexNode := makeIndexNode(indexTag, varcharType, intType)
+
+		builder.applyExtraFiltersOnIndex(idxDef, node, indexNode, nil)
+
+		require.Empty(t, indexNode.FilterList)
 	})
 
 	t.Run("all serialized residuals", func(t *testing.T) {
@@ -4594,6 +4660,25 @@ func TestForceIndexPreservesCoveringShapeOverCheaperBackfill(t *testing.T) {
 	require.Equal(t, planpb.Node_TABLE_SCAN, result.NodeType)
 	require.True(t, result.IndexScanInfo.IsIndexScan)
 	require.Equal(t, idxDef.IndexName, result.IndexScanInfo.IndexName)
+}
+
+func TestUnicodeIndexDoesNotUseIndexOnlyScan(t *testing.T) {
+	filter := makeStringEqFilterExpr(0, 2, "Alpha")
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", "event_id"},
+		[]*planpb.Expr{filter},
+		&planpb.Stats{TableCnt: 1_000, Outcnt: 100, Selectivity: 0.1, Cost: 1_000},
+		map[int32]int{2: 1}, false,
+	)
+	node := builder.qry.Nodes[scanID]
+	node.TableDef.Cols[2].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+	node.TableDef.Indexes = []*planpb.IndexDef{idxDef}
+	node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+
+	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+	_, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
+	require.False(t, ok, "Unicode index keys are not recoverable original values")
 }
 
 func TestSmallTablePreservesCoveringShapeOverCheaperBackfill(t *testing.T) {
