@@ -273,7 +273,7 @@ func (c *Compile) admitDropLifecycleRCWithDomain(tables []*plan.DropTable, datab
 	if err != nil {
 		return nil, false, err
 	}
-	if err = c.admitLifecycleRC(names, needsExclusiveGate, false); err != nil {
+	if err = c.admitLifecycleRC(names, needsExclusiveGate); err != nil {
 		return nil, false, err
 	}
 	_, after, err := c.loadDropLifecycleDomain(tables, database)
@@ -294,7 +294,7 @@ func (c *Compile) admitDropLifecycleRCWithDomain(tables []*plan.DropTable, datab
 			return nil, false, err
 		}
 		if participates {
-			if err := c.admitLifecycleRC(nil, true, false); err != nil {
+			if err := c.admitLifecycleRC(nil, true); err != nil {
 				return nil, false, err
 			}
 			return nil, false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()

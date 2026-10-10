@@ -38,13 +38,13 @@ type lifecycleDatabaseName struct {
 // admitBroadTableLifecycleRC enters the broad gate before COPY ALTER or
 // TRUNCATE takes table locks. Re-resolve after the applied frontier: the
 // relation read before admission cannot establish its current identity.
-func (c *Compile) admitBroadTableLifecycleRC(database, table string, expectedID uint64, fastFailFresh bool) (engine.Database, engine.Relation, error) {
+func (c *Compile) admitBroadTableLifecycleRC(database, table string, expectedID uint64) (engine.Database, engine.Relation, error) {
 	ctx := c.proc.Ctx
 	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err = c.admitLifecycleRC([]lifecycleDatabaseName{{accountID: accountID, name: database, mode: lock.LockMode_Shared}}, true, fastFailFresh); err != nil {
+	if err = c.admitLifecycleRC([]lifecycleDatabaseName{{accountID: accountID, name: database, mode: lock.LockMode_Shared}}, true); err != nil {
 		return nil, nil, err
 	}
 	db, err := c.e.Database(ctx, database, c.proc.GetTxnOperator())
@@ -70,7 +70,7 @@ func (c *Compile) admitBroadTableLifecycleRC(database, table string, expectedID 
 // admitLifecycleRC takes the stable registry identity, the SNAPSHOT key, and
 // complete database-name domain before the caller reads mutable catalog facts.
 // All locks remain owned by the caller's transaction until its terminal path.
-func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnapshotGate, fastFailFresh bool) error {
+func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnapshotGate bool) error {
 	ctx := c.proc.Ctx
 	txnOp := c.proc.GetTxnOperator()
 	if txnOp == nil || !txnOp.Txn().IsPessimistic() || !txnOp.Txn().IsRCIsolation() {
@@ -117,10 +117,9 @@ func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnaps
 	if exclusiveSnapshotGate {
 		gateMode = lock.LockMode_Exclusive
 		// An existing holder can create an upgrade wait cycle with its
-		// retained database/component keys. Public TRUNCATE also promises a
-		// prompt conflict. Fresh owners of other operations can wait for
-		// readers instead of failing ordinary concurrent DDL or DML.
-		if txnOp.HasLockTable(registry.GetTableID(systemCtx)) || fastFailFresh {
+		// retained database/component keys. Fresh owners can wait for readers
+		// instead of failing ordinary concurrent DDL or DML.
+		if txnOp.HasLockTable(registry.GetTableID(systemCtx)) {
 			waitPolicy = []lock.WaitPolicy{lock.WaitPolicy_FastFail}
 		}
 	}

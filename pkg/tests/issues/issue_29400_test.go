@@ -143,22 +143,178 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 		require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+solo+".v").Scan(&rows))
 		require.Zero(t, rows)
 
-		// Public TRUNCATE starts a fresh transaction, but still must fail
-		// promptly if another transaction holds the shared lifecycle gate.
-		execSQLRequire(t, ctx, db0, "create table "+solo+".w (i int)")
-		holder, err := db0.BeginTx(ctx, nil)
-		require.NoError(t, err)
-		defer holder.Rollback()
-		_, err = holder.ExecContext(ctx, "drop table "+solo+".w")
-		require.NoError(t, err)
-		truncateCtx, truncateCancel := context.WithTimeout(ctx, 10*time.Second)
-		defer truncateCancel()
-		_, err = db1.ExecContext(truncateCtx, "truncate table "+solo+".v")
-		require.ErrorAs(t, err, &mysqlErr)
-		require.Equal(t, moerr.ErrLockConflict, mysqlErr.Number)
-		require.NoError(t, holder.Commit())
-		_, err = db1.ExecContext(ctx, "truncate table "+solo+".v")
-		require.NoError(t, err, "TRUNCATE should succeed after the competing gate owner commits")
+		// Each public TRUNCATE commits its preceding transaction before G.
+		// Observe the actual G waiter rather than using sleep as a phase trigger.
+		var registryID uint64
+		require.NoError(t, db0.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_feature_registry'").Scan(&registryID))
+		for index, terminal := range []string{"commit", "rollback", "cancel", "timeout"} {
+			t.Run("fresh_truncate/"+terminal, func(t *testing.T) {
+				execSQLRequire(t, ctx, db0, "drop table if exists "+solo+".w")
+				execSQLRequire(t, ctx, db0, "create table "+solo+".w (i int)")
+				execSQLRequire(t, ctx, db0, "truncate table "+solo+".v")
+				execSQLRequire(t, ctx, db0, "insert into "+solo+".v values (1)")
+				var oldID uint64
+				require.NoError(t, db0.QueryRowContext(ctx,
+					"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='v'", solo).Scan(&oldID))
+				conn, err := db1.Conn(ctx)
+				require.NoError(t, err)
+				defer conn.Close()
+				truncateCtx, truncateCancel := context.WithTimeout(ctx, 15*time.Second)
+				defer truncateCancel()
+				if terminal == "timeout" {
+					_, err = conn.ExecContext(ctx, "set session lock_wait_timeout=1")
+					require.NoError(t, err)
+					defer func() { _, _ = conn.ExecContext(ctx, "set session lock_wait_timeout=120") }()
+				}
+				_, err = conn.ExecContext(ctx, "begin")
+				require.NoError(t, err)
+				defer func() {
+					cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancelCleanup()
+					_, _ = conn.ExecContext(cleanupCtx, "rollback")
+				}()
+				_, err = conn.ExecContext(ctx, "insert into "+witness+".marker values (?)", index+1)
+				require.NoError(t, err)
+				holder, err := db0.BeginTx(ctx, nil)
+				require.NoError(t, err)
+				var done chan error
+				finished := false
+				defer func() {
+					truncateCancel()
+					_ = holder.Rollback()
+					if done != nil && !finished {
+						select {
+						case <-done:
+						case <-ctx.Done():
+							t.Error("TRUNCATE did not terminate during cleanup")
+						}
+					}
+				}()
+				_, err = holder.ExecContext(ctx, "drop table "+solo+".w")
+				require.NoError(t, err)
+				queued := make(chan struct{}, 1)
+				restoreGateHook := lockservice.SetWaiterEnqueuedHookForTest(func(tableID uint64, _ []byte, _ [][]byte) {
+					if tableID == registryID {
+						select {
+						case queued <- struct{}{}:
+						default:
+						}
+					}
+				})
+				defer restoreGateHook()
+				done = make(chan error, 1)
+				go func() {
+					_, err := conn.ExecContext(truncateCtx, "truncate table "+solo+".v")
+					done <- err
+				}()
+				select {
+				case <-queued:
+				case earlyErr := <-done:
+					finished = true
+					t.Fatalf("fresh TRUNCATE did not wait for G: %v", earlyErr)
+				case <-truncateCtx.Done():
+					t.Fatal("TRUNCATE never entered the lifecycle wait")
+				}
+				var markerRows int
+				require.NoError(t, db0.QueryRowContext(ctx,
+					"select count(*) from "+witness+".marker where i=?", index+1).Scan(&markerRows))
+				require.Equal(t, 1, markerRows, "the preceding transaction must commit before admission")
+				switch terminal {
+				case "commit":
+					require.NoError(t, holder.Commit())
+				case "rollback":
+					require.NoError(t, holder.Rollback())
+				case "cancel":
+					truncateCancel()
+				}
+				result := <-done
+				finished = true
+				var newID uint64
+				require.NoError(t, db0.QueryRowContext(ctx,
+					"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='v'", solo).Scan(&newID))
+				require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+solo+".v").Scan(&rows))
+				if terminal == "cancel" || terminal == "timeout" {
+					require.Error(t, result)
+					if terminal == "timeout" {
+						require.ErrorAs(t, result, &mysqlErr)
+						require.Equal(t, uint16(moerr.ER_LOCK_WAIT_TIMEOUT), mysqlErr.Number)
+					}
+					require.Equal(t, oldID, newID, "failed admission must not replace the target")
+					require.Equal(t, 1, rows)
+					require.NoError(t, holder.Rollback())
+					_, err = db1.ExecContext(ctx, "truncate table "+solo+".v")
+					require.NoError(t, err, "cancelled/timed-out waiter must not prevent subsequent progress")
+				} else {
+					require.NoError(t, result)
+					require.NotEqual(t, oldID, newID)
+					require.Zero(t, rows)
+				}
+			})
+		}
+
+		t.Run("same_table_dml", func(t *testing.T) {
+			execSQLRequire(t, ctx, db0, "create table "+solo+".same (i int primary key)")
+			execSQLRequire(t, ctx, db0, "insert into "+solo+".same values (1)")
+			var oldID, oldLogicalID uint64
+			require.NoError(t, db0.QueryRowContext(ctx,
+				"select rel_id, rel_logical_id from mo_catalog.mo_tables where reldatabase=? and relname='same'", solo).Scan(&oldID, &oldLogicalID))
+			holder, err := db0.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			defer holder.Rollback()
+			_, err = holder.ExecContext(ctx, "update "+solo+".same set i=2 where i=1")
+			require.NoError(t, err)
+			// DML can retain catalog T, so TRUNCATE may wait there before
+			// reaching its physical table lock.
+			queued := make(chan struct{}, 1)
+			restoreTableHook := lockservice.SetWaiterEnqueuedHookForTest(func(tableID uint64, _ []byte, _ [][]byte) {
+				if tableID == oldID || tableID == catalog.MO_TABLES_ID {
+					select {
+					case queued <- struct{}{}:
+					default:
+					}
+				}
+			})
+			defer restoreTableHook()
+			truncateCtx, truncateCancel := context.WithTimeout(ctx, 15*time.Second)
+			defer truncateCancel()
+			done := make(chan error, 1)
+			finished := false
+			defer func() {
+				truncateCancel()
+				_ = holder.Rollback()
+				if !finished {
+					select {
+					case <-done:
+					case <-ctx.Done():
+						t.Error("same-table TRUNCATE did not terminate during cleanup")
+					}
+				}
+			}()
+			go func() {
+				_, err := db1.ExecContext(truncateCtx, "truncate table "+solo+".same")
+				done <- err
+			}()
+			select {
+			case <-queued:
+			case err := <-done:
+				finished = true
+				t.Fatalf("TRUNCATE did not wait for same-table DML: %v", err)
+			case <-truncateCtx.Done():
+				t.Fatal("TRUNCATE never entered the same-table wait")
+			}
+			require.NoError(t, holder.Rollback())
+			result := <-done
+			finished = true
+			require.NoError(t, result)
+			var newID, newLogicalID uint64
+			require.NoError(t, db0.QueryRowContext(ctx,
+				"select rel_id, rel_logical_id from mo_catalog.mo_tables where reldatabase=? and relname='same'", solo).Scan(&newID, &newLogicalID))
+			require.NotEqual(t, oldID, newID)
+			require.Equal(t, oldLogicalID, newLogicalID)
+			require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+solo+".same").Scan(&rows))
+			require.Zero(t, rows)
+		})
 
 		// A DML statement can retain T without having crossed G. Either G mode
 		// would form a wait cycle if A's next lifecycle statement queued behind
