@@ -16,6 +16,8 @@ package logtail
 
 import (
 	"context"
+	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -29,6 +31,47 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type scriptedCKPDataReader struct {
+	reads  int
+	failAt int
+}
+
+func (r *scriptedCKPDataReader) Read(context.Context, *batch.Batch, *mpool.MPool) (bool, error) {
+	if r.reads == r.failAt {
+		return false, errors.New("checkpoint reader failure")
+	}
+	r.reads++
+	return true, nil
+}
+
+func (*scriptedCKPDataReader) Reset(context.Context) {}
+
+func TestSnapshotMetaPropagatesCheckpointReaderErrors(t *testing.T) {
+	for _, failAt := range []int{0, 1, 2, 3} {
+		t.Run("fail-at-"+strconv.Itoa(failAt), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			reader := &CKPReader{
+				mp:            mp,
+				ckpDataReader: &scriptedCKPDataReader{failAt: failAt},
+			}
+			meta := NewSnapshotMeta()
+			if failAt >= 2 {
+				meta.snapshotTableIDs[1] = struct{}{}
+			}
+			err := meta.Update(
+				context.Background(),
+				nil,
+				reader,
+				types.TS{},
+				types.TS{},
+				"test",
+			)
+			require.Error(t, err)
+		})
+	}
+}
 
 // TestSnapshotInfo tests the basic functionality of SnapshotInfo
 func TestSnapshotInfo(t *testing.T) {

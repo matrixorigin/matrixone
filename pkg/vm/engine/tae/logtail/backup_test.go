@@ -16,12 +16,16 @@ package logtail
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -30,6 +34,79 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/require"
 )
+
+type failingReadFileService struct {
+	fileservice.FileService
+	failPath string
+}
+
+type persistThenErrorBackupFileService struct {
+	fileservice.FileService
+	persisted string
+	writes    int
+	failOn    int
+}
+
+func (fs *persistThenErrorBackupFileService) Write(
+	ctx context.Context,
+	vector fileservice.IOVector,
+) error {
+	if err := fs.FileService.Write(ctx, vector); err != nil {
+		return err
+	}
+	fs.writes++
+	fs.persisted = vector.FilePath
+	if fs.failOn > 0 && fs.writes != fs.failOn {
+		return nil
+	}
+	return errors.New("injected post-persist write failure")
+}
+
+func TestBackupDataSinkerCleanupAfterWriteError(t *testing.T) {
+	ctx := context.Background()
+	baseFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	fs := &persistThenErrorBackupFileService{FileService: baseFS}
+	mp := mpool.MustNewZero()
+	sinker := ckputil.NewDataSinker(
+		mp, fs, ioutil.WithMemorySizeThreshold(1))
+	defer func() {
+		require.NoError(t, sinker.Close())
+		mpool.DeleteMPool(mp)
+	}()
+
+	data := ckputil.NewObjectListBatch()
+	defer data.Clean(mp)
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objectio.MockObjectName()))
+	require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+	require.NoError(t, vector.AppendFixed(data.Vecs[0], uint32(0), false, mp))
+	require.NoError(t, vector.AppendFixed(data.Vecs[1], uint64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(data.Vecs[2], uint64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(data.Vecs[3], ckputil.ObjectType_Data, false, mp))
+	require.NoError(t, vector.AppendBytes(data.Vecs[4], stats[:], false, mp))
+	require.NoError(t, vector.AppendFixed(data.Vecs[5], types.TS{}, false, mp))
+	require.NoError(t, vector.AppendFixed(data.Vecs[6], types.TS{}, false, mp))
+	require.NoError(t, vector.AppendBytes(data.Vecs[7], nil, true, mp))
+	data.SetRowCount(1)
+
+	require.ErrorContains(t, sinker.Write(ctx, data), "injected post-persist write failure")
+	require.NotEmpty(t, fs.persisted)
+	_, err = baseFS.StatFile(ctx, fs.persisted)
+	require.NoError(t, err)
+
+	require.NoError(t, deletePersistedCheckpointObjects(ctx, sinker))
+	_, err = baseFS.StatFile(ctx, fs.persisted)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), err)
+}
+
+func (fs *failingReadFileService) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	if vector.FilePath == fs.failPath {
+		return errors.New("checkpoint data read failure")
+	}
+	return fs.FileService.Read(ctx, vector)
+}
 
 func TestCanonicalizeBackupTombstone(t *testing.T) {
 	for _, test := range []struct {
@@ -326,6 +403,66 @@ func TestRewriteCheckpointCanonicalizesBackupTombstone(t *testing.T) {
 		CheckpointCurrentVersion,
 	)
 	require.NoError(t, err)
+	failingLastReader := &CKPReader{
+		mp:            common.CheckpointAllocator,
+		ckpDataReader: &scriptedCKPDataReader{failAt: 0},
+	}
+	_, _, _, err = ReWriteCheckpointAndBlockFromKey(
+		ctx,
+		"backup-test",
+		srcFS,
+		dstFS,
+		checkpointLocation,
+		failingLastReader,
+		CheckpointCurrentVersion,
+		backupTS,
+	)
+	require.ErrorContains(t, err, "checkpoint reader failure")
+	failingSourceFS := &failingReadFileService{
+		FileService: srcFS,
+		failPath:    lastReader.GetLocations()[0].Name().UnsafeString(),
+	}
+	_, _, _, err = ReWriteCheckpointAndBlockFromKey(
+		ctx,
+		"backup-test",
+		failingSourceFS,
+		dstFS,
+		checkpointLocation,
+		lastReader,
+		CheckpointCurrentVersion,
+		backupTS,
+	)
+	require.ErrorContains(t, err, "checkpoint data read failure")
+	failingDstBase, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	failingDstFS := &persistThenErrorBackupFileService{FileService: failingDstBase, failOn: 2}
+	_, _, _, err = ReWriteCheckpointAndBlockFromKey(
+		ctx,
+		"backup-test",
+		srcFS,
+		failingDstFS,
+		checkpointLocation,
+		lastReader,
+		CheckpointCurrentVersion,
+		backupTS,
+	)
+	require.ErrorContains(t, err, "injected post-persist write failure")
+	require.NotEmpty(t, failingDstFS.persisted)
+	_, statErr := failingDstBase.StatFile(ctx, failingDstFS.persisted)
+	require.True(t, moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound), statErr)
+	softDeletes := make(map[string]bool)
+	baseTS := types.TS{}
+	_, _, err = LoadCheckpointEntriesFromKey(
+		ctx,
+		"backup-test",
+		failingSourceFS,
+		checkpointLocation,
+		CheckpointCurrentVersion,
+		&softDeletes,
+		&baseTS,
+	)
+	require.ErrorContains(t, err, "checkpoint data read failure")
 	rewrittenLocation, _, _, err := ReWriteCheckpointAndBlockFromKey(
 		ctx,
 		"backup-test",

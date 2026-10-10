@@ -16,9 +16,12 @@ package gc
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -29,9 +32,54 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/require"
 )
+
+type failingCKPDataReader struct{}
+
+func (*failingCKPDataReader) Read(context.Context, *batch.Batch, *mpool.MPool) (bool, error) {
+	return false, errors.New("checkpoint reader failure")
+}
+
+func (*failingCKPDataReader) Reset(context.Context) {}
+
+func injectFailingCKPDataReader(reader *logtail.CKPReader) {
+	field := reflect.ValueOf(reader).Elem().FieldByName("ckpDataReader")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(
+		reflect.ValueOf(&failingCKPDataReader{}),
+	)
+}
+
+func TestGCWindowScanCheckpointsPropagatesReaderError(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	window := NewGCWindow(mp, nil, WithWindowDir(t.TempDir()))
+	buffer := containers.NewOneSchemaBatchBuffer(16*mpool.MB, ObjectTableAttrs, ObjectTableTypes, false)
+	defer buffer.Close(mp)
+	entry := checkpoint.NewCheckpointEntry(
+		"",
+		types.BuildTS(1, 0),
+		types.BuildTS(2, 0),
+		checkpoint.ET_Incremental,
+	)
+
+	_, err := window.ScanCheckpoints(
+		context.Background(),
+		[]*checkpoint.CheckpointEntry{entry},
+		func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPReader, error) {
+			reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, objectio.Location{}, mp, nil)
+			injectFailingCKPDataReader(reader)
+			return reader, nil
+		},
+		nil,
+		nil,
+		buffer,
+	)
+	require.ErrorContains(t, err, "checkpoint reader failure")
+}
 
 // Constants for test module
 const (
