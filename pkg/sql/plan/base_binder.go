@@ -8778,9 +8778,11 @@ func refineKnownStringResultType(returnType *types.Type, width uint64, binary bo
 	}
 	if width <= uint64(types.MaxVarcharLen) {
 		charset := returnType.Charset
-		*returnType = types.T_varchar.ToType()
-		returnType.Width = int32(width)
-		returnType.Charset = charset
+		version := returnType.CollationVersion
+		*returnType = types.NewWithCharset(types.T_varchar, int32(width), 0, charset)
+		if version != types.CollationVersionLegacy {
+			returnType.CollationVersion = version
+		}
 	}
 }
 
@@ -9315,7 +9317,8 @@ func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, value
 // CharsetLegacy is only the zero-value marker on pre-collation plans, not a
 // promise that the client session uses utf8mb3. Keep the advertised utf8mb4
 // bound for that legacy identity as well. New text expressions carry
-// CharsetUTF8/CharsetUTF8MB4Bin and use the same utf8mb4 bound.
+// CharsetUTF8/CharsetUTF8MB4Bin and use the same utf8mb4 bound; native
+// utf8_unicode_ci retains its three-byte utf8mb3 repertoire.
 func adjustControlFlowBinaryMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
 	hasBinary := false
 	hasCharacter := false
@@ -9379,6 +9382,10 @@ func controlFlowMaxBytesPerCharacter(charset uint8) int32 {
 		// Both explicit text identities are utf8mb4 in MatrixOne. This is the
 		// effective charset of newly bound literals and view expressions, so a
 		// two-character literal has an eight-byte VARBINARY capacity.
+		return int32(utf8.UTFMax)
+	case types.CharsetUTF8MB3UnicodeCI:
+		return 3
+	case types.CharsetUTF8MB4UnicodeCI:
 		return int32(utf8.UTFMax)
 	default:
 		// Unknown identities can come from a plan produced by a newer node. Keep

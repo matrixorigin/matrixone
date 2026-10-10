@@ -1985,6 +1985,67 @@ func TestSerialAndSerialFullEncodeNonNullRowsIdentically(t *testing.T) {
 	}
 }
 
+func TestSerialFullUnicodeKeepsOriginalValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	unicodeType := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	input := newVectorByType(proc.Mp(), unicodeType, []string{"b"}, nil)
+	defer input.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	op := newOpSerial()
+	defer op.Close()
+	require.NoError(t, op.BuiltInSerialFull([]*vector.Vector{input}, result, proc, 1, nil))
+
+	tuple, err := types.Unpack(result.GetResultVector().GetBytesAt(0))
+	require.NoError(t, err)
+	require.Len(t, tuple, 1)
+	require.Equal(t, []byte("b"), tuple[0])
+}
+
+func TestSerialUnicodeKeepsOriginalValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	unicodeType := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	input := newVectorByType(proc.Mp(), unicodeType, []string{"b"}, nil)
+	defer input.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	op := newOpSerial()
+	defer op.Close()
+	require.NoError(t, op.BuiltInSerial([]*vector.Vector{input}, result, proc, 1, nil))
+
+	tuple, err := types.Unpack(result.GetResultVector().GetBytesAt(0))
+	require.NoError(t, err)
+	require.Len(t, tuple, 1)
+	require.Equal(t, []byte("b"), tuple[0])
+}
+
+func TestPhysicalSerialUsesUnicodeComparisonKeys(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	unicodeType := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	input := newVectorByType(proc.Mp(), unicodeType, []string{"b"}, nil)
+	defer input.Free(proc.Mp())
+
+	physicalResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer physicalResult.Free()
+	require.NoError(t, physicalResult.PreExtendAndReset(1))
+	op := newOpSerial()
+	defer op.Close()
+	require.NoError(t, op.BuiltInPhysicalSerial([]*vector.Vector{input}, physicalResult, proc, 1, nil))
+	tuple, err := types.Unpack(physicalResult.GetResultVector().GetBytesAt(0))
+	require.NoError(t, err)
+	require.Equal(t, []byte(types.CollationKeyOrOriginal(unicodeType.Charset, []byte("b"))), tuple[0])
+
+	keyResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer keyResult.Free()
+	require.NoError(t, keyResult.PreExtendAndReset(1))
+	require.NoError(t, BuiltInPhysicalCollationKey([]*vector.Vector{input}, keyResult, proc, 1, nil))
+	require.Equal(t, types.CollationKeyOrOriginal(unicodeType.Charset, []byte("b")), keyResult.GetResultVector().GetBytesAt(0))
+}
+
 func Test_BuiltIn_SerialFull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
