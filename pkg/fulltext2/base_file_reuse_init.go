@@ -46,6 +46,11 @@ var experimentalOwnerState struct {
 var experimentalOwnerHookOnce sync.Once
 var experimentalOwnerHookInstallCount uint32
 
+// Close phase barriers are nil in production. Tests hold exact lifecycle
+// windows without delaying unrelated services or changing ownership selection.
+var experimentalOwnerCurrentBarrier func(*experimentalOwnerEntry)
+var experimentalOwnerFinalizeBarrier func(*experimentalOwnerEntry)
+
 var (
 	errExperimentalOwnerServiceMismatch = errors.New("fulltext2 experimental owner service mismatch")
 	errExperimentalOwnerShutdown        = errors.New("fulltext2 experimental owner is shutting down")
@@ -120,19 +125,7 @@ func experimentalOwnerLifecycleHook(shutdown bool) {
 	}
 	experimentalOwnerState.Unlock()
 	for service, entry := range owners {
-		var err error
-		if entry.owner != nil {
-			err = closeExperimentalOwnerEntry(service, entry)
-		}
-		experimentalOwnerState.Lock()
-		if current := experimentalOwnerState.owners[service]; current == entry {
-			current.closed = true
-			current.shutdownInProgress = false
-			if err == nil {
-				delete(experimentalOwnerState.owners, service)
-			}
-		}
-		experimentalOwnerState.Unlock()
+		_ = closeExperimentalOwnerEntry(service, entry)
 	}
 	experimentalOwnerState.Lock()
 	experimentalOwnerState.shutdownInProgress = false
@@ -224,21 +217,11 @@ func CloseBaseFileReuseOwner(token *BaseFileReuseOwnerToken) error {
 	entry.shutdownInProgress = true
 	experimentalOwnerState.Unlock()
 
-	err := closeExperimentalOwnerEntry(token.service, entry)
-	experimentalOwnerState.Lock()
-	if current := experimentalOwnerState.owners[token.service]; current == entry && current.token == token {
-		current.closed = true
-		if err == nil {
-			delete(experimentalOwnerState.owners, token.service)
-		}
-	}
-	entry.shutdownInProgress = false
-	experimentalOwnerState.Unlock()
-	return err
+	return closeExperimentalOwnerEntry(token.service, entry)
 }
 
 func closeExperimentalOwnerEntry(service string, entry *experimentalOwnerEntry) error {
-	if entry == nil || entry.owner == nil {
+	if entry == nil {
 		return nil
 	}
 	entry.closeMu.Lock()
@@ -251,12 +234,34 @@ func closeExperimentalOwnerEntry(service string, entry *experimentalOwnerEntry) 
 		// the cache of the new service instance that reused the same UUID.
 		return nil
 	}
-	entry.owner.beginClose()
-	// Drain the actual VectorIndexCache entries before closing the owner.  The
-	// cache owns the Search wrappers; the owner only owns files and must not
-	// wait forever for an idle wrapper that remains resident there.
-	veccache.Cache.DestroyByService(service)
-	return entry.owner.close()
+	if experimentalOwnerCurrentBarrier != nil {
+		experimentalOwnerCurrentBarrier(entry)
+	}
+	var err error
+	if entry.owner != nil {
+		entry.owner.beginClose()
+		// Drain the actual VectorIndexCache entries before closing the owner.
+		// The cache owns Search wrappers; the owner only owns files.
+		veccache.Cache.DestroyByService(service)
+		err = entry.owner.close()
+	}
+	if experimentalOwnerFinalizeBarrier != nil {
+		experimentalOwnerFinalizeBarrier(entry)
+	}
+	// Keep entry.closeMu through registry retirement. Otherwise a queued old
+	// closer can pass the current-entry check before this deletion, then scan
+	// service-only cache entries after Start publishes a replacement owner.
+	// Never hold the registry lock through cache, owner or OS cleanup waits.
+	experimentalOwnerState.Lock()
+	if experimentalOwnerState.owners[service] == entry {
+		entry.closed = true
+		entry.shutdownInProgress = false
+		if err == nil {
+			delete(experimentalOwnerState.owners, service)
+		}
+	}
+	experimentalOwnerState.Unlock()
+	return err
 }
 
 func experimentalOwnerForSQL(service string) experimentalOwnerSelection {

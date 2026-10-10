@@ -46,6 +46,11 @@ rejects/cancels owner operations, drains only its service's cache entries with
 expected-entry identity, then closes the pool. The retryable owner cleanup is
 outside CN closeOnce and preserves the CN fail-stop/local-completion contract.
 Old generation tokens and delayed entry closers cannot drain a new instance.
+Each entry's close mutex spans current-entry validation, service drain, owner
+cleanup and matching registry retirement. Pending cleanup retains the closed
+entry before releasing that mutex; queued closers revalidate only after retirement.
+The registry mutex never spans cache or resource waits. Process-wide pre-cancellation
+remains independent of these close mutexes.
 
 Successful owner cleanup removes the registry entry. Pending entries remain owned
 and charged until a later close succeeds. SQL factory never initializes an owner,
