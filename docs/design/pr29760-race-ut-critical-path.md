@@ -33,8 +33,8 @@ historical 1057-second full serial wave included an arrowload failure.
 
 The latest successful single-runner trace (2026-10-09) measured issue batches
 at 303.2, 143.6, 220.8 and 335.3 seconds, or 1002.9 seconds serialized.
-The Linux default now admits two issue processes and uses round-robin root
-partitioning in that mode; the serial override remains contiguous. Replaying
+The explicit two-process option uses round-robin root partitioning; the serial
+default remains contiguous. Replaying
 the 159 top-level issue roots from that trace through the actual partition and
 two-process refill rules gives round-robin group totals of 290.7, 212.7, 310.1
 and 183.8 seconds, with a 522.8-second pool makespan. The same roots in the
@@ -90,17 +90,15 @@ about 78 seconds in the same trace and is not the critical path.
 | Choice | Decision |
 |---|---|
 | Serial batching only | Lowest complexity; retains the established batching benefit. |
-| Serial default with optional bounded pool | Retained as the explicit rollback for constrained runners. |
-| Linux default with bounded two-process pool | Current candidate for issues and embedded waves; resource acceptance remains open. Existing admission/report ownership is reused and the serial override remains available. |
+| Serial default with optional bounded pool | Selected until matched full-wave CPU/memory evidence passes the adoption gate. |
+| Linux default with bounded two-process pool | Deferred: resource acceptance has not passed. Explicit opt-in retains the bounded scheduler for experiments. |
 
-For the four-batch Makefile/CI run, `UT_ISSUES_BATCH_PARALLEL` and
-`UT_EMBEDDED_PACKAGE_PARALLEL` default to two on Linux and one on other
-platforms; direct one-batch runner use remains serial unless a pool is
-explicitly selected. Each accepts an explicit value of two; the issues pool
-requires four batches. `UT_ISSUES_BATCHES=1` retains the single-process
-rollback and also keeps the embedded package wave serial. Invalid combinations
-fail before preparation. Reducing the issues pool to one also reduces the
-embedded default to one unless it is explicitly overridden. Preparation failure
+For Makefile/CI and direct runner use, `UT_ISSUES_BATCH_PARALLEL` and
+`UT_EMBEDDED_PACKAGE_PARALLEL` both default to one on every platform.
+Two-process execution requires an explicit opt-in for each wave; one wave's
+choice does not implicitly enable the other. The issues pool requires four
+batches. `UT_ISSUES_BATCHES=1` retains single-process issues execution.
+Invalid and explicitly empty values fail before preparation. Preparation failure
 falls back before execution; runtime failure never reruns completed roots. Pool
 mode uses round-robin roots to avoid a contiguous long-tail batch; serial mode
 retains the historical contiguous partition.

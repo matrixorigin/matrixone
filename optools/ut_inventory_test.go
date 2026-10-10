@@ -259,7 +259,7 @@ cleanup() {
  exit "$status"
 }
 trap cleanup EXIT
-(if [[ "$HELPER_STATUS" == 137 ]]; then kill -KILL "$BASHPID"; else exit 125; fi) &
+(if [[ "$HELPER_STATUS" == 137 ]]; then fixture_self_pid fixture_pid; kill -KILL "$fixture_pid"; else exit 125; fi) &
 CURRENT_UT_PID=$!
 CURRENT_UT_LABEL='batched issues'
 if [[ "$PHASE" == active ]]; then
@@ -302,36 +302,45 @@ fi
 }
 
 func TestKilledOrdinaryUTOwnerPreservesExitStatus(t *testing.T) {
-	for _, owner := range []string{"current", "light"} {
-		t.Run(owner, func(t *testing.T) {
-			script := `source ./run_ut.sh UT
+	for _, pidMode := range []string{"native", "fallback"} {
+		for _, owner := range []string{"current", "light"} {
+			t.Run(pidMode+"/"+owner, func(t *testing.T) {
+				script := `if [[ "$PID_MODE" == fallback ]]; then unset BASHPID; fi
+source ./run_ut.sh UT
 function logger() { :; }
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" CGO_CFLAGS="${CGO_CFLAGS:-}" CGO_LDFLAGS="${CGO_LDFLAGS:-}"
 status=0
 if [[ "$OWNER" == current ]]; then
  start_ut_command serial ordinary go test example/ordinary
+ owner_pid=$CURRENT_UT_PID
  finish_ut_command || status=$?
  [[ -z "$CURRENT_UT_PID" && "$CURRENT_UT_DRAIN_FAILED" == 0 ]] || exit 90
 else
  start_light_race example/light 1
+ owner_pid=$LIGHT_RACE_JOB_PID
  finish_light_race || status=$?
  [[ -z "$LIGHT_RACE_JOB_PID" && "$LIGHT_RACE_DRAIN_FAILED" == 0 ]] || exit 91
 fi
+[[ "$(<"$CASE_DIR/killed-helper.pid")" == "$owner_pid" ]] || exit 99
 [[ "$status" == 137 ]] || exit 92
 ! ut_drain_failed || exit 93
 start_ut_command serial later true || exit 94
 finish_ut_command || exit 95
 `
-			mock := `#!/bin/bash
+				mock := `#!/bin/bash
+if [[ "$PID_MODE" == fallback ]]; then unset BASHPID; fi
 if [[ "$1" == version ]]; then exit 0; fi
 [[ "$1" == test ]] || exit 96
-kill -KILL "$BASHPID"
+fixture_self_pid fixture_pid
+printf '%s\n' "$fixture_pid" > "$CASE_DIR/killed-helper.pid"
+kill -KILL "$fixture_pid"
 `
-			out, err := scheduleHarnessWithMock(t, script, mock, "OWNER="+owner)
-			if err != nil {
-				t.Fatalf("ordinary killed owner changed its status contract: %v\n%s", err, out)
-			}
-		})
+				out, err := scheduleHarnessWithMock(t, script, mock, "OWNER="+owner, "PID_MODE="+pidMode)
+				if err != nil {
+					t.Fatalf("ordinary killed owner changed its status contract: %v\n%s", err, out)
+				}
+			})
+		}
 	}
 }
 
@@ -568,13 +577,17 @@ printf '%s\n' "${shard_patterns[@]}"`, "bash", inventory).CombinedOutput()
 }
 
 func TestKilledIndependentHelperRetainsEvidence(t *testing.T) {
-	for _, owner := range []string{"engine", "plan", "prebuild"} {
-		t.Run(owner, func(t *testing.T) {
-			script := `source ./run_ut.sh UT
+	for _, pidMode := range []string{"native", "fallback"} {
+		for _, owner := range []string{"engine", "plan", "prebuild"} {
+			t.Run(pidMode+"/"+owner, func(t *testing.T) {
+				script := `if [[ "$PID_MODE" == fallback ]]; then unset BASHPID; fi
+source ./run_ut.sh UT
 function logger() { :; }
 function killed_helper() {
  printf 'diagnostic\n' > "$CASE_DIR/evidence"
- kill -KILL "$BASHPID"
+ fixture_self_pid fixture_pid
+ printf '%s\n' "$fixture_pid" > "$CASE_DIR/killed-helper.pid"
+ kill -KILL "$fixture_pid"
 }
 function run_engine_race_shards() { killed_helper; }
 function run_plan_race_shards() { killed_helper; }
@@ -583,12 +596,14 @@ status=0
 case "$OWNER" in
  engine)
   start_engine_race example/engine 1
+  owner_pid=$ENGINE_RACE_JOB_PID
   join_ut_owner ENGINE_RACE_JOB_PID ENGINE_RACE_DRAIN_FAILED || status=$?
   [[ -z "$ENGINE_RACE_JOB_PID" && "$ENGINE_RACE_DRAIN_FAILED" == 1 ]] || exit 90
   consume_engine_race_report; [[ "$?" == 125 ]] || exit 91
   ;;
  plan)
   start_plan_race example/plan
+  owner_pid=$PLAN_RACE_JOB_PID
   join_ut_owner PLAN_RACE_JOB_PID PLAN_RACE_DRAIN_FAILED || status=$?
   [[ -z "$PLAN_RACE_JOB_PID" && "$PLAN_RACE_DRAIN_FAILED" == 1 ]] || exit 92
   consume_plan_race_report; [[ "$?" == 125 ]] || exit 93
@@ -596,19 +611,22 @@ case "$OWNER" in
  prebuild)
   UT_PREBUILD_MIN_FREE_KB=1
   start_embedded_prebuild example/embedded 1
+  owner_pid=$CLUSTER_PREBUILD_JOB_PID
   finish_embedded_prebuild || status=$?
   [[ -z "$CLUSTER_PREBUILD_JOB_PID" && "$CLUSTER_PREBUILD_DRAIN_FAILED" == 1 ]] || exit 94
   cleanup_embedded_prebuild; [[ "$?" == 125 && -d "$CLUSTER_PREBUILD_DIR" ]] || exit 95
   ;;
 esac
+[[ "$(<"$CASE_DIR/killed-helper.pid")" == "$owner_pid" ]] || exit 99
 [[ "$status" == 125 && -f "$CASE_DIR/evidence" ]] || exit 96
 start_ut_command serial forbidden touch "$CASE_DIR/admitted"; [[ "$?" == 125 ]] || exit 97
 [[ ! -e "$CASE_DIR/admitted" ]] || exit 98
 `
-			out, err := scheduleHarnessWithMock(t, script, scheduleHarnessMock(), "OWNER="+owner)
-			if err != nil {
-				t.Fatalf("killed helper lost ownership evidence: %v\n%s", err, out)
-			}
-		})
+				out, err := scheduleHarnessWithMock(t, script, scheduleHarnessMock(), "OWNER="+owner, "PID_MODE="+pidMode)
+				if err != nil {
+					t.Fatalf("killed helper lost ownership evidence: %v\n%s", err, out)
+				}
+			})
+		}
 	}
 }

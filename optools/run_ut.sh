@@ -56,21 +56,12 @@ UT_SHARD=${UT_SHARD:-"all"}
 # the complete-scope go test before any prebuilt binary is executed.
 UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"1"}
 UT_ISSUES_BATCHES=${UT_ISSUES_BATCHES:-"1"}
+# Pool adoption requires matched full-wave resource evidence; stay opt-in.
 if [[ -z "${UT_ISSUES_BATCH_PARALLEL+x}" ]]; then
-    if [[ "${UT_ISSUES_BATCHES}" == 4 ]] && [[ "$(uname -s)" == Linux ]]; then
-        UT_ISSUES_BATCH_PARALLEL="2"
-    else
-        UT_ISSUES_BATCH_PARALLEL="1"
-    fi
+    UT_ISSUES_BATCH_PARALLEL="1"
 fi
 if [[ -z "${UT_EMBEDDED_PACKAGE_PARALLEL+x}" ]]; then
-    if [[ "${UT_ISSUES_BATCHES}" == 4 ]] &&
-        [[ "${UT_ISSUES_BATCH_PARALLEL}" == 2 ]] &&
-        [[ "$(uname -s)" == Linux ]]; then
-        UT_EMBEDDED_PACKAGE_PARALLEL="2"
-    else
-        UT_EMBEDDED_PACKAGE_PARALLEL="1"
-    fi
+    UT_EMBEDDED_PACKAGE_PARALLEL="1"
 fi
 # Nine race binaries currently occupy several GiB. Preserve enough workspace
 # headroom for Go's build cache, reports, and the running issues fixture.

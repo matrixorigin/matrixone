@@ -70,8 +70,17 @@ func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...str
 	return scheduleHarnessWithMockTransform(t, script, mock, nil, variables...)
 }
 
+// Assign in the caller: a command-substitution wrapper would identify its
+// subshell instead. The exec fallback also works with system Bash 3.2.
+const scheduleFixturePID = `function fixture_self_pid() {
+ printf -v "$1" '%s' "${BASHPID:-$(exec /bin/sh -c 'printf "%s" "$PPID"')}"
+}
+`
+
 func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transform func(string) string, variables ...string) ([]byte, error) {
 	t.Helper()
+	script = scheduleFixturePID + script
+	mock = strings.Replace(mock, "#!/bin/bash\n", "#!/bin/bash\n"+scheduleFixturePID, 1)
 	root := t.TempDir()
 	dir := filepath.Join(root, "optools")
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -149,13 +158,16 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 		accepted        bool
 		validationError string
 	}{
-		{name: "linux-pool-default", want: "4 2 2", accepted: true},
+		{name: "serial-default", want: "4 1 1", accepted: true},
+		{name: "darwin-default", args: []string{"UNAME_S=darwin"}, want: "4 1 1", accepted: true},
+		{name: "issues-only-opt-in", args: []string{"UT_ISSUES_BATCH_PARALLEL=2"}, want: "4 2 1", accepted: true},
+		{name: "embedded-only-opt-in", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=2"}, want: "4 1 2", accepted: true},
 		{name: "issues-serial-embedded-rollback", args: []string{"UT_ISSUES_BATCH_PARALLEL=1"}, want: "4 1 1", accepted: true},
 		{name: "single-batch-rollback", args: []string{"UT_ISSUES_BATCHES=1"}, want: "1 1 1", accepted: true},
 		{name: "pool-opt-in", args: []string{"UT_ISSUES_BATCH_PARALLEL=2", "UT_EMBEDDED_PACKAGE_PARALLEL=2"}, want: "4 2 2", accepted: true},
 		{name: "invalid-single-batch-pool", args: []string{"UT_ISSUES_BATCHES=1", "UT_ISSUES_BATCH_PARALLEL=2"}, want: "1 2 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
 		{name: "issues-parallel-overflow", args: []string{"UT_ISSUES_BATCH_PARALLEL=18446744073709551618"}, want: "4 18446744073709551618 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
-		{name: "embedded-parallel-overflow", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=18446744073709551618"}, want: "4 2 18446744073709551618", validationError: "UT_EMBEDDED_PACKAGE_PARALLEL must be"},
+		{name: "embedded-parallel-overflow", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=18446744073709551618"}, want: "4 1 18446744073709551618", validationError: "UT_EMBEDDED_PACKAGE_PARALLEL must be"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			args := append([]string{"--no-print-directory", "-s", "-f", "Makefile", "-f", "-", "print-ut-pool-config", "UNAME_S=linux"}, tc.args...)
@@ -204,6 +216,20 @@ grep -Fq "$EXPECT_VALIDATION_ERROR" "$CASE_DIR/validation-log" || exit 92
 			}
 		})
 	}
+	for _, batches := range []string{"1", "4"} {
+		t.Run("direct-unset-defaults/batches="+batches, func(t *testing.T) {
+			script := `unset UT_ISSUES_BATCH_PARALLEL UT_EMBEDDED_PACKAGE_PARALLEL
+UT_ISSUES_BATCHES="$BATCHES"
+source ./run_ut.sh UT
+[[ "$UT_ISSUES_BATCH_PARALLEL $UT_EMBEDDED_PACKAGE_PARALLEL" == "1 1" ]]
+`
+			out, err := scheduleHarness(t, script, "BATCHES="+batches)
+			if err != nil {
+				t.Fatalf("direct runner defaults: %v\n%s", err, out)
+			}
+		})
+	}
+
 }
 
 func TestResolveCgroupMemoryBoundary(t *testing.T) {
