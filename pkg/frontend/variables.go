@@ -4654,6 +4654,8 @@ func inferUserDefinedVarType(value interface{}) planpb.Type {
 		return planpb.Type{Id: int32(types.T_array_float16), Width: int32(len(v))}
 	case []int8:
 		return planpb.Type{Id: int32(types.T_array_int8), Width: int32(len(v))}
+	case types.BlockScaledValue:
+		return planpb.Type{Id: int32(v.Oid), Width: int32(types.BlockScaledDim(v.Cell))}
 	case nil:
 		oid = types.T_any
 	default:
@@ -4668,7 +4670,7 @@ func prepareParamKindFromType(oid types.T) vector.PrepareParamKind {
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_year:
 		return vector.PrepareParamInteger
-	case types.T_float32, types.T_float64:
+	case types.T_float32, types.T_float64, types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 		return vector.PrepareParamFloat
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return vector.PrepareParamDecimal

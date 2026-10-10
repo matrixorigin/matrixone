@@ -1076,6 +1076,34 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		}
 	}
 	from := parameters[0]
+	// Low-precision float types (bf16/float16/float8/float4) bridge through float32.
+	// Route them ahead of the integer/decimal fast-paths below so a low-precision
+	// source or target is never misdispatched into a specialization that lacks it.
+	if isLowPrecFloat(toType.Oid) {
+		if fromType.Oid == types.T_any {
+			return scalarNullToOthers(proc.Ctx, *toType, result, length, selectList)
+		}
+		return castToLowPrecFloat(parameters, *toType, result, proc, length, selectList)
+	}
+	if isLowPrecFloat(fromType.Oid) {
+		// widen to float32 and cast it as a float32 value, so every float32 rule of this
+		// cast mode (explicit, assignment, decimal) applies
+		tmp := vector.NewVec(types.T_float32.ToType())
+		defer tmp.Free(proc.Mp())
+		if err := materializeLowPrecAsFloat32(proc.Ctx, from, tmp, length, proc.Mp()); err != nil {
+			return err
+		}
+		return newCast([]*vector.Vector{tmp, parameters[1]}, result, proc, length, selectList, mode, allowTrailingSpaceTrim)
+	}
+	// vecf8/vecf4 cells are block-scaled, not typed element arrays; route them before
+	// the generic array paths, which decode fixed-size elements. A NULL literal (T_any)
+	// still reaches scalarNullToOthers below.
+	if toType.Oid.IsBlockScaledArray() && fromType.Oid != types.T_any {
+		return castToBlockScaled(proc, from, *toType, result, length, selectList)
+	}
+	if fromType.Oid.IsBlockScaledArray() {
+		return blockScaledToOthers(proc, from, *toType, result, length, selectList)
+	}
 	if mode.isAssignment() && toType.Oid.IsInteger() {
 		switch fromType.Oid {
 		case types.T_float32:
@@ -1346,8 +1374,17 @@ func scalarNullToOthers(ctx context.Context,
 		return appendNulls[uint64](result, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_json,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry:
 		return appendNulls[types.Varlena](result, length, selectList)
+	case types.T_bf16:
+		return appendNulls[types.BF16](result, length, selectList)
+	case types.T_float16:
+		return appendNulls[types.Float16](result, length, selectList)
+	case types.T_float8:
+		return appendNulls[types.Float8](result, length, selectList)
+	case types.T_float4:
+		return appendNulls[types.Float4](result, length, selectList)
 	case types.T_float32:
 		return appendNulls[float32](result, length, selectList)
 	case types.T_float64:
@@ -2764,8 +2801,8 @@ func strTypeToOthers(proc *process.Process,
 	}
 	if fromType.Oid == types.T_blob {
 		// For handling BLOB to ARRAY implicit casting.
-		// This is used for VECTOR FAST/BINARY IO.
-		// SQL: insert into t2 values(2, decode("7e98b23e9e10383b2f41133f", "hex"));
+		// This is used for VECTOR FAST/BINARY IO: the BLOB holds little-endian elements.
+		// SQL: insert into t2 values(2, cast(unhex("7e98b23e9e10383b2f41133f") as blob));
 		switch toType.Oid {
 		case types.T_array_float32:
 			rs := vector.MustFunctionResult[types.Varlena](result)
@@ -9766,6 +9803,13 @@ func arrayToArray[I types.ArrayElement, O types.ArrayElement](
 			// This replaces moarray.Cast[I,O], which only handled float pairs.
 			_v := types.BytesToArray[I](v)
 			f32 := types.ToFloat32Array[I](_v)
+			if f64, ok := any(_v).([]float64); ok && to.GetType().Oid != types.T_array_float32 {
+				// a narrower target rounds once from the float64 value
+				f32 = make([]float32, len(f64))
+				for k, x := range f64 {
+					f32[k] = types.Float32RoundToOdd(x)
+				}
+			}
 			out := types.FromFloat32Array[O](f32)
 			// A finite source can narrow to +/-Inf (e.g. VECF64 1e300 -> VECF32, or a VECF32 that
 			// overflows VECF16/VECBF16). Reject it here so the narrowing CAST enforces the same

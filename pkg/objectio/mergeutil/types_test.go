@@ -593,3 +593,61 @@ func TestSortColumnsByIndexWithBuf(t *testing.T) {
 		require.Equal(t, []int32{3, 2, 0, 1}, vector.MustFixedColNoTypeCheck[int32](payloadVector))
 	})
 }
+
+// TestMergeSortBatchesLowPrecisionSortKey merges batches sorted by a bf16, float16, float8 or
+// float4 key, as a cluster key of a table created before such keys were rejected: the rows
+// come out in float32 order with their payloads.
+func TestMergeSortBatchesLowPrecisionSortKey(t *testing.T) {
+	runs := [][]float32{{-6, 0, 2, 4}, {-1, 0.5, 3}}
+	for _, oid := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+		mp := mpool.MustNewZero()
+		typs := []types.Type{oid.ToType(), types.T_int32.ToType()}
+		batches := make([]*batch.Batch, 0, len(runs))
+		var want []float32
+		for _, run := range runs {
+			bat := batch.NewWithSchema(false, []string{"k", "payload"}, typs)
+			for _, x := range run {
+				var err error
+				switch oid {
+				case types.T_bf16:
+					err = vector.AppendFixed(bat.Vecs[0], types.BF16FromFloat32(x), false, mp)
+				case types.T_float16:
+					err = vector.AppendFixed(bat.Vecs[0], types.Float16FromFloat32(x), false, mp)
+				case types.T_float8:
+					err = vector.AppendFixed(bat.Vecs[0], types.Float8FromFloat32(x), false, mp)
+				case types.T_float4:
+					err = vector.AppendFixed(bat.Vecs[0], types.Float4FromFloat32(x), false, mp)
+				}
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32(x*10), false, mp))
+				want = append(want, x)
+			}
+			bat.SetRowCount(len(run))
+			batches = append(batches, bat)
+		}
+		slices.Sort(want)
+		var got []float32
+		var gotPayloads []int32
+		buffer, err := MergeSortBatches(batches, 0, batch.NewWithSchema(false, []string{"k", "payload"}, typs), func(out *batch.Batch) (*batch.Batch, error) {
+			payloads := vector.MustFixedColNoTypeCheck[int32](out.Vecs[1])
+			for i := 0; i < out.RowCount(); i++ {
+				f, ok := vector.GetLowPrecisionFloatAt(out.Vecs[0], i)
+				require.True(t, ok)
+				got = append(got, f)
+				gotPayloads = append(gotPayloads, payloads[i])
+			}
+			out.Clean(mp)
+			return batch.NewWithSchema(false, []string{"k", "payload"}, typs), nil
+		}, mp, nil)
+		require.NoError(t, err, oid.String())
+		require.Equal(t, want, got, oid.String())
+		for i, x := range want {
+			require.Equal(t, int32(x*10), gotPayloads[i], oid.String())
+		}
+		buffer.Clean(mp)
+		for _, bat := range batches {
+			bat.Clean(mp)
+		}
+		require.Zero(t, mp.CurrNB(), oid.String())
+	}
+}

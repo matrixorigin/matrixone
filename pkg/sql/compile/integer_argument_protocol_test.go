@@ -252,3 +252,46 @@ func TestIntegerArgumentProtocolPlacementAndSend(t *testing.T) {
 	c.proc.Ctx = ctx
 	require.ErrorIs(t, validateRemoteExpressionDestination(c.proc, &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}, planpb.RemoteExpressionFeatures{IntegerParameterCoercion: true}), context.Canceled)
 }
+
+func TestLowPrecisionFloatIntegerArgumentProtocol(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	for _, source := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+		t.Run(source.String(), func(t *testing.T) {
+			expr := integerProtocolExpr(function.IntegerArgumentCastOverload)
+			expr.GetF().Args[0].Typ.Id = int32(source)
+			p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
+			features, err := planpb.RequiredRemoteExpressionFeatures(p)
+			require.NoError(t, err)
+			require.True(t, features.LowPrecisionFloatIntegerArguments)
+			require.True(t, features.Any())
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion106)
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 109")
+			table := &planpb.TableDef{Cols: []*planpb.ColDef{{Default: &planpb.Default{Expr: expr}}}}
+			required, err := plan2.RequiredPersistedExpressionProtocolVersion(table)
+			require.NoError(t, err)
+			require.Equal(t, defines.MORPCVersion109, required)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
+			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+
+			op := projection.NewArgument()
+			defer op.Release()
+			op.ProjectList = []*planpb.Expr{expr}
+			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+			client.version = defines.MORPCVersion106
+			_, err = encodeRemoteScope(scope, c.proc)
+			require.ErrorContains(t, err, "remote destination")
+			client.version = defines.MORPCVersion109
+			_, err = encodeRemoteScope(scope, c.proc)
+			require.NoError(t, err)
+		})
+	}
+
+	// A float64 source keeps the v85 contract.
+	expr := integerProtocolExpr(function.IntegerArgumentCastOverload)
+	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+	require.NoError(t, err)
+	require.False(t, features.LowPrecisionFloatIntegerArguments)
+	require.True(t, features.IntegerParameterCoercion)
+}

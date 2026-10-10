@@ -59,7 +59,7 @@ LDFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -Wextra -fPIC -fopenmp"
 HEADERS := $(wildcard *.h *.hpp)
 
 # Source files
-C_SRCS := brute_force_c.cpp ivf_flat_c.cpp ivf_pq_c.cpp cagra_c.cpp kmeans_c.cpp adhoc_c.cpp distance_c.cpp
+C_SRCS := brute_force_c.cpp ivf_flat_c.cpp ivf_pq_c.cpp cagra_c.cpp kmeans_c.cpp adhoc_c.cpp distance_c.cpp blockscaled_matmul_c.cpp
 CPP_SRCS := helper.cpp host_meminfo.cpp
 TEST_SRCS := test/main_test.cu test/brute_force_test.cu test/ivf_flat_test.cu test/ivf_pq_test.cu test/cagra_test.cu test/kmeans_test.cu test/quantize_test.cu test/distance_test.cu test/adhoc_test.cu test/batching_test.cu test/snmg_test.cu test/verify_half_conversion.cu test/filter_test.cu test/device_memory_test.cu test/host_meminfo_test.cu test/host_memory_test.cu test/rows_fitting_test.cu
 
@@ -77,7 +77,7 @@ all: libmocuvs.so
 # deadlock. Building them here is what catches an API break at build time --
 # bench_upload_cost silently rotted through the cuVS 26.08 migration precisely
 # because no target compiled it, and only turned up when built by hand.
-test: test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter \
+test: test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter test_blockscaled_matmul \
       bench_hostview bench_wiki88 bench_upload_cost
 
 release: all
@@ -134,6 +134,10 @@ test_kmeans: obj/test/test_kmeans.o $(OBJS)
 	@echo "Linking $@"
 	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
 
+test_blockscaled_matmul: obj/test/blockscaled_matmul_test.o $(OBJS)
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
 # Standalone reproducer for the uint8 quantization recall collapse
 # (f32->uint8 and f16->uint8). Has its own main(); runs in isolation
 # rather than as part of the full test_cuvs_worker suite.
@@ -184,5 +188,5 @@ bench_upload_cost: obj/test/bench_upload_cost.o
 
 clean:
 	@echo "Cleaning up..."
-	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter bench_hostview bench_wiki88 bench_upload_cost
+	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_blockscaled_matmul test_dynb test_ivfpq_filter bench_hostview bench_wiki88 bench_upload_cost
 	rm -rf obj

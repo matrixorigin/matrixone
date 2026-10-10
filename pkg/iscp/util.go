@@ -124,6 +124,8 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 		row[i] = vector.GetFixedAtWithTypeCheck[uint64](vec, rowIndex)
 	case types.T_float32:
 		row[i] = vector.GetFixedAtWithTypeCheck[float32](vec, rowIndex)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		row[i], _ = vector.GetLowPrecisionFloatAt(vec, rowIndex)
 	case types.T_float64:
 		row[i] = vector.GetFixedAtWithTypeCheck[float64](vec, rowIndex)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
@@ -142,6 +144,8 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 		row[i] = vector.GetArrayAt[types.Float16](vec, rowIndex)
 	case types.T_array_bf16:
 		row[i] = vector.GetArrayAt[types.BF16](vec, rowIndex)
+	case types.T_array_float8, types.T_array_float4:
+		row[i] = copyBytes(vec.GetBytesAt(rowIndex))
 	case types.T_array_int8:
 		row[i] = vector.GetArrayAt[int8](vec, rowIndex)
 	case types.T_array_uint8:
@@ -279,7 +283,7 @@ func convertColIntoSql(
 	case types.T_uint64:
 		value := data.(uint64)
 		sqlBuff = appendUint64(sqlBuff, value)
-	case types.T_float32:
+	case types.T_float32, types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 		value := data.(float32)
 		sqlBuff = appendFloat64(sqlBuff, float64(value), 32)
 	case types.T_float64:
@@ -322,6 +326,14 @@ func convertColIntoSql(
 	case types.T_array_bf16:
 		value := data.([]types.BF16)
 		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
+	case types.T_array_float8, types.T_array_float4:
+		// the exact text: replaying it stores the same cell, where the decoded values would
+		// be quantized again (a vecf4 global scale follows the decoded maximum)
+		text, err := types.BlockScaledToJSON(data.([]byte))
+		if err != nil {
+			return nil, err
+		}
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", text, typ.DescString()))
 	case types.T_array_int8:
 		value := data.([]int8)
 		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))

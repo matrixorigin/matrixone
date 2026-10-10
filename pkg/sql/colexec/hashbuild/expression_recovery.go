@@ -294,6 +294,9 @@ func expressionTypePeak(typ plan.Type, rows uint64) (uint64, error) {
 		elementWidth := int64(oid.ToType().GetArrayElementSize())
 		width *= elementWidth
 		hardMax = int64(types.MaxArrayDimension) * elementWidth
+	} else if f, ok := oid.BlockScaledFormat(); ok {
+		width = int64(types.BlockScaledCellSize(f, int(width)))
+		hardMax = int64(types.BlockScaledCellSize(f, types.MaxArrayDimension))
 	} else {
 		switch oid {
 		case types.T_blob, types.T_text, types.T_json, types.T_datalink,

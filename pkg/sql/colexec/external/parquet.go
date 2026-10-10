@@ -477,7 +477,8 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			switch targetType {
 			case types.T_array_float32, types.T_array_float64,
 				types.T_array_bf16, types.T_array_float16,
-				types.T_array_int8, types.T_array_uint8:
+				types.T_array_int8, types.T_array_uint8,
+				types.T_array_float8, types.T_array_float4:
 				_, fn = h.getNestedListMapper(col, def.Typ)
 				if fn != nil && def.NotNull {
 					fn.dstNull = false
@@ -700,6 +701,31 @@ func configureParquetListMapper[T types.ArrayElement](
 	}
 }
 
+// configureParquetBlockScaledListMapper maps a FLOAT/DOUBLE list to vecf8/vecf4,
+// quantizing each row with the block-scaled codec.
+func configureParquetBlockScaledListMapper(
+	mp *columnMapper,
+	width int,
+	f types.BlockScaledFormat,
+	convert func(context.Context, parquet.Value) (float32, error),
+) {
+	encode := func(row []float32) ([]byte, error) { return types.AppendBlockScaled(nil, f, row) }
+	mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+		return processParquetListToArrayEnc(proc.Ctx, mp, page, proc, vec, width,
+			func(v parquet.Value) (float32, error) { return convert(proc.Ctx, v) }, encode)
+	}
+	mp.listValuesMapper = func(
+		mp *columnMapper,
+		values []parquet.Value,
+		numRows int,
+		proc *process.Process,
+		vec *vector.Vector,
+	) error {
+		return processParquetListValuesToArrayEnc(proc.Ctx, mp, values, numRows, proc, vec, width,
+			func(v parquet.Value) (float32, error) { return convert(proc.Ctx, v) }, encode)
+	}
+}
+
 func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*parquet.Column, *columnMapper) {
 	leaf, ok := parquetListElementLeaf(sc)
 	if !ok {
@@ -773,6 +799,21 @@ func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*p
 		case parquet.Double:
 			configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (float64, error) {
 				return v.Double(), nil
+			})
+		default:
+			return nil, nil
+		}
+	case types.T_array_float8, types.T_array_float4:
+		// vecf8/vecf4 load from FLOAT or DOUBLE lists, quantized per row.
+		f, _ := types.T(dt.Id).BlockScaledFormat()
+		switch leaf.Type().Kind() {
+		case parquet.Float:
+			configureParquetBlockScaledListMapper(mp, width, f, func(_ context.Context, v parquet.Value) (float32, error) {
+				return v.Float(), nil
+			})
+		case parquet.Double:
+			configureParquetBlockScaledListMapper(mp, width, f, func(ctx context.Context, v parquet.Value) (float32, error) {
+				return parquetFloat64ToFloat32(ctx, v.Double())
 			})
 		default:
 			return nil, nil
@@ -1346,6 +1387,20 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, float32(0), func(v parquet.Value) (float32, error) {
 				return parquetValueToFloat32(proc.Ctx, st, v)
 			})
+		}
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		if !isParquetFloatConvertibleSource(st) {
+			break
+		}
+		switch oid := types.T(dt.Id); oid {
+		case types.T_bf16:
+			mp.mapper = parquetLowPrecFloatMapper(st, oid, types.BF16FromFloat32)
+		case types.T_float16:
+			mp.mapper = parquetLowPrecFloatMapper(st, oid, types.Float16FromFloat32)
+		case types.T_float8:
+			mp.mapper = parquetLowPrecFloatMapper(st, oid, types.Float8FromFloat32)
+		case types.T_float4:
+			mp.mapper = parquetLowPrecFloatMapper(st, oid, types.Float4FromFloat32)
 		}
 	case types.T_float64:
 		if st.Kind() == parquet.Boolean {
@@ -2198,6 +2253,25 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processStringToArray[float64](proc.Ctx, mp, page, proc, vec, width)
 		}
+	case types.T_array_float8, types.T_array_float4:
+		if !isPlainStringLikeType(st) {
+			break
+		}
+		width := int(dt.Width)
+		if width <= 0 {
+			width = types.MaxArrayDimension
+		}
+		f, _ := types.T(dt.Id).BlockScaledFormat()
+		encode := func(row []float32) ([]byte, error) { return types.AppendBlockScaled(nil, f, row) }
+		exact := func(text string) ([]byte, error) { return types.BlockScaledFromJSON(f, text) }
+		var binary func([]byte) ([]byte, error)
+		if st.LogicalType() == nil {
+			// a column without a logical type is binary: the stored cell or float32 elements
+			binary = func(b []byte) ([]byte, error) { return types.BlockScaledFromBinary(f, width, b) }
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToArrayEnc[float32](proc.Ctx, mp, page, proc, vec, width, encode, exact, binary)
+		}
 	case types.T_array_bf16:
 		if !isPlainStringLikeType(st) {
 			break
@@ -2689,6 +2763,23 @@ func processStringToArray[T types.ArrayElement](
 	vec *vector.Vector,
 	width int,
 ) error {
+	return processStringToArrayEnc[T](ctx, mp, page, proc, vec, width, nil, nil, nil)
+}
+
+// processStringToArrayEnc is processStringToArray with an optional row encoder; nil
+// stores the row as a typed element array. exact builds a row given as the vecblock JSON
+// text; binary, when set, builds every row from its bytes instead of text.
+func processStringToArrayEnc[T types.ArrayElement](
+	ctx context.Context,
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+	width int,
+	encode func([]T) ([]byte, error),
+	exact func(string) ([]byte, error),
+	binary func([]byte) ([]byte, error),
+) error {
 	numRows, err := parquetPageCount(ctx, "NumRows()", page.NumRows())
 	if err != nil {
 		return err
@@ -2760,12 +2851,45 @@ func processStringToArray[T types.ArrayElement](
 			data = loader.loadAt(idx)
 		}
 
+		if binary != nil {
+			cell, err := binary(data)
+			if err != nil {
+				return rollback(wrapParseError(ctx, i, err))
+			}
+			if err := vector.AppendBytes(vec, cell, false, proc.Mp()); err != nil {
+				return rollback(err)
+			}
+			continue
+		}
+		if text := util.UnsafeBytesToString(data); exact != nil && types.IsBlockScaledJSON(text) {
+			cell, err := exact(text)
+			if err != nil {
+				return rollback(wrapParseError(ctx, i, err))
+			}
+			if dim := types.BlockScaledDim(cell); width != types.MaxArrayDimension && dim != width {
+				return rollback(moerr.NewArrayDefMismatchNoCtx(width, dim))
+			}
+			if err := vector.AppendBytes(vec, cell, false, proc.Mp()); err != nil {
+				return rollback(err)
+			}
+			continue
+		}
 		val, parseErr := parseStringArrayValue[T](data)
 		if parseErr != nil {
 			return rollback(wrapParseError(ctx, i, parseErr))
 		}
 		if width != types.MaxArrayDimension && len(val) != width {
 			return rollback(moerr.NewArrayDefMismatchNoCtx(width, len(val)))
+		}
+		if encode != nil {
+			cell, err := encode(val)
+			if err != nil {
+				return rollback(err)
+			}
+			if err := vector.AppendBytes(vec, cell, false, proc.Mp()); err != nil {
+				return rollback(err)
+			}
+			continue
 		}
 		if err := vector.AppendArray[T](vec, val, false, proc.Mp()); err != nil {
 			return rollback(err)
@@ -2864,6 +2988,21 @@ func processParquetListToArray[T types.ArrayElement](
 	width int,
 	convert func(parquet.Value) (T, error),
 ) error {
+	return processParquetListToArrayEnc(ctx, mp, page, proc, vec, width, convert, nil)
+}
+
+// processParquetListToArrayEnc is processParquetListToArray with an optional row
+// encoder; nil stores the row as a typed element array.
+func processParquetListToArrayEnc[T types.ArrayElement](
+	ctx context.Context,
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+	width int,
+	convert func(parquet.Value) (T, error),
+	encode func([]T) ([]byte, error),
+) error {
 	if err := validateParquetDictionaryPage(ctx, page, nil); err != nil {
 		return err
 	}
@@ -2875,7 +3014,7 @@ func processParquetListToArray[T types.ArrayElement](
 	if err != nil {
 		return err
 	}
-	return processParquetListValuesToArray(ctx, mp, values, numRows, proc, vec, width, convert)
+	return processParquetListValuesToArrayEnc(ctx, mp, values, numRows, proc, vec, width, convert, encode)
 }
 
 func processParquetListValuesToArray[T types.ArrayElement](
@@ -2887,6 +3026,22 @@ func processParquetListValuesToArray[T types.ArrayElement](
 	vec *vector.Vector,
 	width int,
 	convert func(parquet.Value) (T, error),
+) error {
+	return processParquetListValuesToArrayEnc(ctx, mp, values, numRows, proc, vec, width, convert, nil)
+}
+
+// processParquetListValuesToArrayEnc is processParquetListValuesToArray with an
+// optional row encoder; nil stores the row as a typed element array.
+func processParquetListValuesToArrayEnc[T types.ArrayElement](
+	ctx context.Context,
+	mp *columnMapper,
+	values []parquet.Value,
+	numRows int,
+	proc *process.Process,
+	vec *vector.Vector,
+	width int,
+	convert func(parquet.Value) (T, error),
+	encode func([]T) ([]byte, error),
 ) error {
 	if numRows == 0 {
 		return nil
@@ -2923,6 +3078,13 @@ func processParquetListValuesToArray[T types.ArrayElement](
 			return moerr.NewArrayDefMismatchNoCtx(width, len(row))
 		}
 		rowCount++
+		if encode != nil {
+			cell, err := encode(row)
+			if err != nil {
+				return err
+			}
+			return vector.AppendBytes(vec, cell, false, proc.Mp())
+		}
 		return vector.AppendArray[T](vec, row, false, proc.Mp())
 	}
 
@@ -3236,6 +3398,25 @@ func isParquetIntegerSource(st parquet.Type, includeBoolean bool) bool {
 func isPlainOrSignedIntegerLogical(st parquet.Type) bool {
 	lt := st.LogicalType()
 	return lt == nil || (lt.Integer != nil && lt.Integer.IsSigned)
+}
+
+// parquetLowPrecFloatMapper loads a numeric parquet column into a bf16, float16, float8 or
+// float4 column, rounding each value once, with the range and finiteness checks of a SQL cast.
+func parquetLowPrecFloatMapper[T types.LowPrecFloat](st parquet.Type, oid types.T, ctor func(float32) T) func(*columnMapper, parquet.Page, *process.Process, *vector.Vector) error {
+	return func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+		var zero T
+		return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, zero, func(v parquet.Value) (T, error) {
+			f64, err := parquetValueToFloat64(proc.Ctx, st, v)
+			if err != nil {
+				return zero, err
+			}
+			f := types.Float32RoundToOdd(f64)
+			if err := types.RejectNarrowFloatInput(f, oid, f64, f64); err != nil {
+				return zero, err
+			}
+			return types.CanonicalLowPrecFloat(ctor(f)), nil
+		})
+	}
 }
 
 func isParquetFloatConvertibleSource(st parquet.Type) bool {

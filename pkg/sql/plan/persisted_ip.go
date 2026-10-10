@@ -135,6 +135,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.JSONInputContracts || features.YearBitCast {
 		requiredVersion = defines.MORPCVersion101
 	}
+	if features.LowPrecisionFloatIntegerArguments {
+		requiredVersion = defines.MORPCVersion109
+	}
 	return requiredVersion, nil
 }
 

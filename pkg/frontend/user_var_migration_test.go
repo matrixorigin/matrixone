@@ -344,6 +344,8 @@ func TestDecodeUserDefinedVarValueRejectsMalformedRepresentations(t *testing.T) 
 		types.T_array_float16,
 		types.T_array_int8,
 		types.T_array_uint8,
+		types.T_array_float8,
+		types.T_array_float4,
 	} {
 		_, err := decodeUserDefinedVarValue(context.Background(), &plan.Expr{
 			Typ:  plan.Type{Id: int32(typ), Width: 1},

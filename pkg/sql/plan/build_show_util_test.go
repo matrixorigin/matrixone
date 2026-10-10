@@ -1155,6 +1155,8 @@ func TestFormatColTypeVector(t *testing.T) {
 	require.Equal(t, "VECF16(3)", FormatColType(plan.Type{Id: int32(types.T_array_float16), Width: 3}))
 	require.Equal(t, "VECINT8(3)", FormatColType(plan.Type{Id: int32(types.T_array_int8), Width: 3}))
 	require.Equal(t, "VECUINT8(3)", FormatColType(plan.Type{Id: int32(types.T_array_uint8), Width: 3}))
+	require.Equal(t, "VECF8(3)", FormatColType(plan.Type{Id: int32(types.T_array_float8), Width: 3}))
+	require.Equal(t, "VECF4(1024)", FormatColType(plan.Type{Id: int32(types.T_array_float4), Width: 1024}))
 }
 
 // TestShowCreateExternalWriteFilePattern ensures SHOW CREATE TABLE formatting

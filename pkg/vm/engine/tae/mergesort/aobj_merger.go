@@ -112,6 +112,30 @@ func MergeAObj(
 				cols:        make([][]float64, size),
 			}
 			merger = newAObjMerger(vpool, batches, sort.GenericLess[float64], sortKeyPos, df, toLayout)
+		case types.T_bf16:
+			df := &fixedDataFetcher[types.BF16]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.BF16],
+				cols:        make([][]types.BF16, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.LowPrecisionLess[types.BF16], sortKeyPos, df, toLayout)
+		case types.T_float16:
+			df := &fixedDataFetcher[types.Float16]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Float16],
+				cols:        make([][]types.Float16, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.LowPrecisionLess[types.Float16], sortKeyPos, df, toLayout)
+		case types.T_float8:
+			df := &fixedDataFetcher[types.Float8]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Float8],
+				cols:        make([][]types.Float8, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.LowPrecisionLess[types.Float8], sortKeyPos, df, toLayout)
+		case types.T_float4:
+			df := &fixedDataFetcher[types.Float4]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Float4],
+				cols:        make([][]types.Float4, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.LowPrecisionLess[types.Float4], sortKeyPos, df, toLayout)
 		case types.T_uint8:
 			df := &fixedDataFetcher[uint8]{
 				mustColFunc: vector.MustFixedColNoTypeCheck[uint8],

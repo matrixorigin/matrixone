@@ -160,7 +160,7 @@ func (zm ZM) IsString() bool {
 }
 
 func (zm ZM) IsArray() bool {
-	return zm.GetType().IsArrayRelate()
+	return zm.GetType().IsArray()
 }
 
 func (zm ZM) Valid() bool {
@@ -226,7 +226,8 @@ func (zm ZM) decodeSum() any {
 		return types.DecodeInt64(zm.GetSumBuf())
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		return types.DecodeUint64(zm.GetSumBuf())
-	case types.T_float32, types.T_float64:
+	case types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 		return types.DecodeFloat64(zm.GetSumBuf())
 	case types.T_decimal64:
 		return types.DecodeDecimal64(zm.GetSumBuf())
@@ -396,6 +397,15 @@ func (zm ZM) hasNaNBound() bool {
 	case types.T_float64:
 		return math.IsNaN(types.DecodeFloat64(zm.GetMinBuf())) ||
 			math.IsNaN(types.DecodeFloat64(zm.GetMaxBuf()))
+	case types.T_bf16:
+		return math.IsNaN(float64(types.DecodeFixed[types.BF16](zm.GetMinBuf()).ToFloat32())) ||
+			math.IsNaN(float64(types.DecodeFixed[types.BF16](zm.GetMaxBuf()).ToFloat32()))
+	case types.T_float16:
+		return math.IsNaN(float64(types.DecodeFixed[types.Float16](zm.GetMinBuf()).ToFloat32())) ||
+			math.IsNaN(float64(types.DecodeFixed[types.Float16](zm.GetMaxBuf()).ToFloat32()))
+	case types.T_float8:
+		return math.IsNaN(float64(types.DecodeFixed[types.Float8](zm.GetMinBuf()).ToFloat32())) ||
+			math.IsNaN(float64(types.DecodeFixed[types.Float8](zm.GetMaxBuf()).ToFloat32()))
 	default:
 		return false
 	}
@@ -437,6 +447,14 @@ func (zm ZM) getValue(buf []byte) any {
 		return types.DecodeFixed[float32](buf)
 	case types.T_float64:
 		return types.DecodeFixed[float64](buf)
+	case types.T_bf16:
+		return types.DecodeFixed[types.BF16](buf)
+	case types.T_float16:
+		return types.DecodeFixed[types.Float16](buf)
+	case types.T_float8:
+		return types.DecodeFixed[types.Float8](buf)
+	case types.T_float4:
+		return types.DecodeFixed[types.Float4](buf)
 	case types.T_date:
 		return types.DecodeFixed[types.Date](buf)
 	case types.T_time:
@@ -484,6 +502,9 @@ func (zm ZM) getValue(buf []byte) any {
 		return types.BytesToArray[int8](buf)
 	case types.T_array_uint8:
 		return types.BytesToArray[uint8](buf)
+	case types.T_array_float8, types.T_array_float4:
+		// Block-scaled cells have no typed element slice; the value is the cell.
+		return buf
 	}
 	panic(fmt.Sprintf("unsupported type: %v", zm.GetType()))
 }
@@ -795,6 +816,29 @@ func (zm ZM) PrefixIn(vec *vector.Vector) bool {
 	return false
 }
 
+// anyInLowPrecFloat is AnyIn for a low-precision float column: whether a value of the sorted
+// vector lies within the zonemap's bounds, compared as float32 values.
+func anyInLowPrecFloat[T types.LowPrecFloat](zm ZM, vec *vector.Vector) bool {
+	lower, upper := subVecInLowPrecFloat[T](zm, vec)
+	return lower < upper
+}
+
+// subVecInLowPrecFloat is the SubVecIn bound search for a low-precision float column
+// (bf16/float16/float8/float4). The column is sorted by float value (InplaceSort widens
+// via ToFloat32), so bounds are searched on the widened float value, not the raw bits.
+func subVecInLowPrecFloat[T types.LowPrecFloat](zm ZM, vec *vector.Vector) (int, int) {
+	col := vector.MustFixedColNoTypeCheck[T](vec)
+	minVal := types.DecodeFixed[T](zm.GetMinBuf()).ToFloat32()
+	maxVal := types.DecodeFixed[T](zm.GetMaxBuf()).ToFloat32()
+	lowerBound := sort.Search(len(col), func(i int) bool {
+		return cmp.Compare(minVal, col[i].ToFloat32()) <= 0
+	})
+	upperBound := sort.Search(len(col), func(i int) bool {
+		return cmp.Compare(maxVal, col[i].ToFloat32()) < 0
+	})
+	return lowerBound, upperBound
+}
+
 // anyIn has been called, so there must be a subvector in this zonemap
 // return lower bound and upper bound
 func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
@@ -931,6 +975,15 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return cmp.Compare(maxVal, col[i]) < 0
 		})
 		return lowerBound, upperBound
+
+	case types.T_bf16:
+		return subVecInLowPrecFloat[types.BF16](zm, vec)
+	case types.T_float16:
+		return subVecInLowPrecFloat[types.Float16](zm, vec)
+	case types.T_float8:
+		return subVecInLowPrecFloat[types.Float8](zm, vec)
+	case types.T_float4:
+		return subVecInLowPrecFloat[types.Float4](zm, vec)
 
 	case types.T_float64:
 		col := vector.MustFixedColNoTypeCheck[float64](vec)
@@ -1236,6 +1289,15 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 
 		return lowerBound < len(col) &&
 			cmp.Compare(maxVal, col[lowerBound]) >= 0
+
+	case types.T_bf16:
+		return anyInLowPrecFloat[types.BF16](zm, vec)
+	case types.T_float16:
+		return anyInLowPrecFloat[types.Float16](zm, vec)
+	case types.T_float8:
+		return anyInLowPrecFloat[types.Float8](zm, vec)
+	case types.T_float4:
+		return anyInLowPrecFloat[types.Float4](zm, vec)
 
 	case types.T_date:
 		col := vector.MustFixedColNoTypeCheck[types.Date](vec)

@@ -3177,3 +3177,27 @@ func TestParseCSVRowOrder(t *testing.T) {
 	_, err = ParseCSVRowOrder("unknown")
 	require.Error(t, err)
 }
+
+func TestWriteSQLLoadCSVFieldFromVec_VecBlockExactText(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, f := range []types.BlockScaledFormat{types.BlockScaledMXFP8, types.BlockScaledNVFP4} {
+		oid := types.T_array_float8
+		if f == types.BlockScaledNVFP4 {
+			oid = types.T_array_float4
+		}
+		cell, err := types.StringToBlockScaled(f, "[0.44547153, 1.7, -3.1, 0.02, 5.5]")
+		require.NoError(t, err)
+		vec := vector.NewVec(types.New(oid, 5, 0))
+		require.NoError(t, vector.AppendBytes(vec, cell, false, mp))
+
+		var buf bytes.Buffer
+		require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *vec.GetType(), []*vector.Vector{vec}, 0, 0))
+		out := buf.String()
+		require.True(t, strings.HasPrefix(out, `"`) && strings.HasSuffix(out, `"`), out)
+		text := strings.ReplaceAll(out[1:len(out)-1], `""`, `"`)
+		got, err := types.StringToBlockScaled(f, text)
+		require.NoError(t, err)
+		require.Equal(t, cell, got)
+		vec.Free(mp)
+	}
+}

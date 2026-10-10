@@ -2565,6 +2565,10 @@ func unwrapConstLiteral(expr *plan.Expr) (*plan.Literal, plan.Type, bool) {
 		if fn == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
 			return nil, plan.Type{}, false
 		}
+		// a cast to bf16/float16/float8/float4 rounds; the source literal is not its value
+		if types.T(expr.Typ.Id).IsLowPrecisionFloat() {
+			return nil, plan.Type{}, false
+		}
 		expr = fn.Args[0]
 	}
 }
@@ -2579,6 +2583,18 @@ func buildColumnDomainExpr(ctx context.Context, colExpr *plan.Expr, values []*pl
 			DeepCopyExpr(colExpr),
 			stripped[0],
 		})
+	}
+	if types.T(colExpr.Typ.Id).IsLowPrecisionFloat() {
+		// bf16/float16/float8/float4: a disjunction of equalities
+		eqs := make([]*plan.Expr, len(stripped))
+		for i, v := range stripped {
+			eq, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{DeepCopyExpr(colExpr), v})
+			if err != nil {
+				return nil, err
+			}
+			eqs[i] = eq
+		}
+		return combinePlanDisjunction(ctx, eqs)
 	}
 	listExpr := &plan.Expr{
 		Typ: colExpr.Typ,

@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -794,6 +795,14 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 		return vector.MustFixedColNoTypeCheck[uint64](vec)[0], nil
 	case types.T_float32:
 		return vector.MustFixedColNoTypeCheck[float32](vec)[0], nil
+	case types.T_bf16:
+		return vector.MustFixedColNoTypeCheck[types.BF16](vec)[0].ToFloat32(), nil
+	case types.T_float16:
+		return vector.MustFixedColNoTypeCheck[types.Float16](vec)[0].ToFloat32(), nil
+	case types.T_float8:
+		return vector.MustFixedColNoTypeCheck[types.Float8](vec)[0].ToFloat32(), nil
+	case types.T_float4:
+		return vector.MustFixedColNoTypeCheck[types.Float4](vec)[0].ToFloat32(), nil
 	case types.T_float64:
 		return vector.MustFixedColNoTypeCheck[float64](vec)[0], nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
@@ -802,6 +811,8 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 		return vector.GetArrayAt[float32](vec, 0), nil
 	case types.T_array_float64:
 		return vector.GetArrayAt[float64](vec, 0), nil
+	case types.T_array_float8, types.T_array_float4:
+		return types.BlockScaledValue{Oid: vec.GetType().Oid, Cell: bytes.Clone(vec.GetBytesAt(0))}, nil
 	case types.T_array_bf16:
 		return vector.GetArrayAt[types.BF16](vec, 0), nil
 	case types.T_array_float16:
@@ -2142,8 +2153,9 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	}
 	// MySQL uses 0x1f (DECIMAL_NOT_SPECIFIED) for FLOAT and DOUBLE
 	// without an explicit display scale. Clients use this metadata when
-	// converting binary floating-point results to text.
-	if (typ.Oid == types.T_float32 || typ.Oid == types.T_float64) &&
+	// converting binary floating-point results to text. bf16, float16,
+	// float8 and float4 are sent as FLOAT.
+	if (typ.Oid == types.T_float32 || typ.Oid == types.T_float64 || typ.Oid.IsLowPrecisionFloat()) &&
 		(typ.Scale < 0 || typ.Width == 0 && typ.Scale == 0) {
 		col.SetDecimal(mysqlDecimalNotSpecified)
 		return

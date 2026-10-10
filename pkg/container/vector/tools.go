@@ -354,6 +354,14 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 		return appendBytesToFixSized[float32](vec)
 	case types.T_float64:
 		return appendBytesToFixSized[float64](vec)
+	case types.T_bf16:
+		return appendBytesToFixSized[types.BF16](vec)
+	case types.T_float16:
+		return appendBytesToFixSized[types.Float16](vec)
+	case types.T_float8:
+		return appendBytesToFixSized[types.Float8](vec)
+	case types.T_float4:
+		return appendBytesToFixSized[types.Float4](vec)
 	case types.T_date:
 		return appendBytesToFixSized[types.Date](vec)
 	case types.T_datetime:

@@ -74,6 +74,22 @@ func genericPartition[T types.FixedSizeT](sels []int64, diffs []bool, partitions
 	return partitions
 }
 
+// lowPrecisionIdentity compares bf16, float16, float8 and float4 values as float32 values
+// for GROUP BY and PARTITION BY peers: 0 when equal (so -0 equals +0 and NaN equals
+// nothing), 1 otherwise.
+func lowPrecisionIdentity[T interface{ ToFloat32() float32 }](x, y T) int {
+	if x.ToFloat32() == y.ToFloat32() {
+		return 0
+	}
+	return 1
+}
+
+// lowPrecisionOrder compares bf16, float16, float8 and float4 values with the float32
+// ORDER BY relation.
+func lowPrecisionOrder[T interface{ ToFloat32() float32 }](x, y T) int {
+	return types.Float32OrderAscCompare(x.ToFloat32(), y.ToFloat32())
+}
+
 func floatOrderPartition[T types.FixedSizeT](
 	sels []int64,
 	diffs []bool,
@@ -123,6 +139,24 @@ func floatOrderPartition[T types.FixedSizeT](
 }
 
 func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector) []int64 {
+	return bytesPartitionBy(sels, diffs, partitions, vec, false)
+}
+
+// cellsEqual reports whether two non-null cells are equal: by decoded value for vecf8/vecf4
+// cells (decoded), by collation for a unicode charset, and by bytes otherwise. decoded and
+// unicode are mutually exclusive (a block-scaled vector is not a unicode string).
+func cellsEqual(typ types.Type, decoded, unicode bool, v, w []byte) bool {
+	if decoded {
+		return types.CompareBlockScaledFromBytes(v, w, false) == 0
+	}
+	if unicode {
+		return types.CompareStringValues(typ, v, w) == 0
+	}
+	return bytes.Equal(v, w)
+}
+
+// bytesPartitionBy partitions varlena cells, comparing them with cellsEqual(decoded).
+func bytesPartitionBy(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector, decoded bool) []int64 {
 	partitions = partitions[:0]
 	if len(sels) == 0 {
 		return partitions
@@ -130,7 +164,8 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 	diffs[0] = true
 	diffs = diffs[:len(sels)]
 
-	// See genericPartition: diffs is accumulated; never overwrite to false.
+	// See genericPartition: diffs is accumulated; never overwrite to false. Row 0 is always
+	// a boundary, so it is never compared.
 	if !vec.IsConst() {
 		var n bool
 		var v []byte
@@ -145,12 +180,8 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 				isNull := nulls.Contains(nsp, uint64(sel))
 				if n != isNull {
 					diffs[i] = true
-				} else if !isNull {
-					if unicode {
-						diffs[i] = diffs[i] || types.CompareStringValues(typ, v, w) != 0
-					} else {
-						diffs[i] = diffs[i] || !(bytes.Equal(v, w))
-					}
+				} else if !isNull && i > 0 {
+					diffs[i] = diffs[i] || !cellsEqual(typ, decoded, unicode, v, w)
 				}
 				// else: both NULL → equal, preserve diffs[i]
 				n = isNull
@@ -159,10 +190,8 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 		} else {
 			for i, sel := range sels {
 				w := vs[sel].GetByteSlice(area)
-				if unicode {
-					diffs[i] = diffs[i] || types.CompareStringValues(typ, v, w) != 0
-				} else {
-					diffs[i] = diffs[i] || !(bytes.Equal(v, w))
+				if i > 0 {
+					diffs[i] = diffs[i] || !cellsEqual(typ, decoded, unicode, v, w)
 				}
 				v = w
 			}
@@ -233,6 +262,14 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		return genericPartition[types.Rowid](sels, diffs, partitions, vec)
 	case types.T_Blockid:
 		return genericPartition[types.Blockid](sels, diffs, partitions, vec)
+	case types.T_bf16:
+		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionIdentity[types.BF16])
+	case types.T_float16:
+		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionIdentity[types.Float16])
+	case types.T_float8:
+		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionIdentity[types.Float8])
+	case types.T_float4:
+		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionIdentity[types.Float4])
 	case types.T_char, types.T_varchar, types.T_json, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64,
@@ -242,6 +279,9 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		//Used by ORDER_BY SQL clause.
 		//Byte partition logic doesn't use byte.Compare or Str.
 		//Hence, we can use bytesPartition here.
+	case types.T_array_float8, types.T_array_float4:
+		// vecf8/vecf4 cells are equal when their decoded values are
+		return bytesPartitionBy(sels, diffs, partitions, vec, true)
 	default:
 		panic(moerr.NewNotSupportedNoCtx(vec.GetType().Oid.String()))
 	}
@@ -258,6 +298,14 @@ func PartitionForOrder(sels []int64, diffs []bool, partitions []int64, vec *vect
 		return floatOrderPartition(sels, diffs, partitions, vec, types.Float64OrderAscCompare)
 	case types.T_json:
 		return jsonOrderPartition(sels, diffs, partitions, vec)
+	case types.T_bf16:
+		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionOrder[types.BF16])
+	case types.T_float16:
+		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionOrder[types.Float16])
+	case types.T_float8:
+		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionOrder[types.Float8])
+	case types.T_float4:
+		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionOrder[types.Float4])
 	default:
 		return Partition(sels, diffs, partitions, vec)
 	}

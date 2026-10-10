@@ -135,3 +135,36 @@ func TestCompareNarrowVectorTypes(t *testing.T) {
 		types.ArrayToBytes[uint8]([]uint8{1, 100}),
 		types.T_array_uint8)
 }
+
+// TestCompareLowPrecFloat covers Compare (encoded bytes) and CompareGeneric (any) for
+// the scalar low-precision float types, ordering by float VALUE not raw bits: a negative
+// value's raw uint bits exceed a positive's, so a bit-wise compare would reverse them (#20567).
+func TestCompareLowPrecFloat(t *testing.T) {
+	type row struct {
+		oid  types.T
+		neg  any
+		pos  any
+		negB []byte
+		posB []byte
+	}
+	bf := func(f float32) types.BF16 { return types.BF16FromFloat32(f) }
+	h := func(f float32) types.Float16 { return types.Float16FromFloat32(f) }
+	f8 := func(f float32) types.Float8 { return types.Float8FromFloat32(f) }
+	f4 := func(f float32) types.Float4 { return types.Float4FromFloat32(f) }
+
+	rows := []row{
+		{types.T_bf16, bf(-2.0), bf(1.0), types.EncodeFixed(bf(-2.0)), types.EncodeFixed(bf(1.0))},
+		{types.T_float16, h(-2.0), h(1.0), types.EncodeFixed(h(-2.0)), types.EncodeFixed(h(1.0))},
+		{types.T_float8, f8(-2.0), f8(1.0), types.EncodeFixed(f8(-2.0)), types.EncodeFixed(f8(1.0))},
+		{types.T_float4, f4(-2.0), f4(1.0), types.EncodeFixed(f4(-2.0)), types.EncodeFixed(f4(1.0))},
+	}
+	for _, r := range rows {
+		// Compare on encoded bytes: neg < pos, pos > neg, equal == 0.
+		assert.Negative(t, Compare(r.negB, r.posB, r.oid, 0, 0), "Compare neg<pos %s", r.oid)
+		assert.Positive(t, Compare(r.posB, r.negB, r.oid, 0, 0), "Compare pos>neg %s", r.oid)
+		assert.Zero(t, Compare(r.negB, r.negB, r.oid, 0, 0), "Compare eq %s", r.oid)
+		// CompareGeneric on any values.
+		assert.Negative(t, CompareGeneric(r.neg, r.pos, r.oid), "CompareGeneric neg<pos %s", r.oid)
+		assert.Positive(t, CompareGeneric(r.pos, r.neg, r.oid), "CompareGeneric pos>neg %s", r.oid)
+	}
+}

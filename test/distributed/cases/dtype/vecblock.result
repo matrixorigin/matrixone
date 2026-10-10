@@ -1,0 +1,612 @@
+drop database if exists vecblock_db;
+create database vecblock_db;
+use vecblock_db;
+create table t (id int primary key, a vecf8(4), b vecf4(4), c vecf32(4));
+show create table t;
+➤ Table[12,1,0]  ¦  Create Table[12,150,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `id` int NOT NULL,
+  `a` vecf8(4) DEFAULT NULL,
+  `b` vecf4(4) DEFAULT NULL,
+  `c` vecf32(4) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+desc t;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+a  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+insert into t values (1, '[1,-3,0,6]', '[1,-3,0,6]', '[1,-3,0,6]');
+insert into t values (2, '[0.5,0.25,-0.75,1]', '[0.5,0.25,-0.75,1]', '[2,1,-1,0.5]');
+insert into t values (3, null, null, null);
+insert into t (id, a, b) values (4, '[3000,-12,0.001,1000000]', '[3000,-12,0.001,1000000]');
+select mo_ctl('dn', 'flush', 'vecblock_db.t');
+➤ mo_ctl(dn, flush, vecblock_db.t)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select * from t order by id;
+➤ id[4,32,0]  ¦  a[12,4,0]  ¦  b[12,4,0]  ¦  c[12,4,0]  𝄀
+1  ¦  [1, -3, 0, 6]  ¦  [1, -3, 0, 6]  ¦  [1, -3, 0, 6]  𝄀
+2  ¦  [0.5, 0.25, -0.75, 1]  ¦  [0.5, 0.25, -0.6666667, 1]  ¦  [2, 1, -1, 0.5]  𝄀
+3  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  [3072, -16, 0, 983040]  ¦  [0, 0, 0, 999999.94]  ¦  null
+select cast('[1,2,3]' as vecf8(3)), cast('[1,2,3]' as vecf4(3));
+➤ cast([1,2,3] as vecf8(3))[12,3,0]  ¦  cast([1,2,3] as vecf4(3))[12,3,0]  𝄀
+[1, 2, 3]  ¦  [1, 2, 3]
+select id, cast(a as vecf32(4)), cast(b as vecf32(4)) from t order by id;
+➤ id[4,32,0]  ¦  cast(a as vecf32(4))[12,4,0]  ¦  cast(b as vecf32(4))[12,4,0]  𝄀
+1  ¦  [1, -3, 0, 6]  ¦  [1, -3, 0, 6]  𝄀
+2  ¦  [0.5, 0.25, -0.75, 1]  ¦  [0.5, 0.25, -0.6666667, 1]  𝄀
+3  ¦  null  ¦  null  𝄀
+4  ¦  [3072, -16, 0, 983040]  ¦  [0, 0, 0, 999999.94]
+select id, cast(c as vecf8(4)), cast(c as vecf4(4)) from t order by id;
+➤ id[4,32,0]  ¦  cast(c as vecf8(4))[12,4,0]  ¦  cast(c as vecf4(4))[12,4,0]  𝄀
+1  ¦  [1, -3, 0, 6]  ¦  [1, -3, 0, 6]  𝄀
+2  ¦  [2, 1, -1, 0.5]  ¦  [2, 1, -1, 0.5]  𝄀
+3  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null
+select cast(a as vecf4(4)), cast(b as vecf8(4)) from t where id = 1;
+➤ cast(a as vecf4(4))[12,4,0]  ¦  cast(b as vecf8(4))[12,4,0]  𝄀
+[1, -3, 0, 6]  ¦  [1, -3, 0, 6]
+insert into t values (5, '[1,2,3]', '[1,2,3,4]', '[1,2,3,4]');
+invalid input: expected vector dimension 4 != actual dimension 3.
+insert into t values (5, '[1,2,3,4]', '[1,2,3]', '[1,2,3,4]');
+invalid input: expected vector dimension 4 != actual dimension 3.
+select cast('[1,2,3]' as vecf8(4));
+invalid input: expected vector dimension 4 != actual dimension 3.
+insert into t (id, a) values (5, '[1,2,3,nan]');
+internal error: vector element cannot be NaN or Inf: NaN
+insert into t (id, b) values (5, '[1,2,3,inf]');
+internal error: vector element cannot be NaN or Inf: +Inf
+select cast('[3.4028235e38]' as vecf8(1));
+invalid input: vecf8 element 0 value 3.4028235e+38 is out of range: it decodes to an infinite value
+select cast('[-3.4028235e38, 1]' as vecf8(2));
+invalid input: vecf8 element 0 value -3.4028235e+38 is out of range: it decodes to an infinite value
+select cast('[3.4028235e38]' as vecf4(1));
+➤ cast([3.4028235e38] as vecf4(1))[12,1,0]  𝄀
+[340282350000000000000000000000000000000]
+select a + a, a * 2, b - c, a / 2, a + b from t where id = 1;
+➤ a + a[12,4,0]  ¦  a * 2[12,4,0]  ¦  b - c[12,4,0]  ¦  a / 2[12,4,0]  ¦  a + b[12,4,0]  𝄀
+[2, -6, 0, 12]  ¦  [2, -6, 0, 12]  ¦  [0, 0, 0, 0]  ¦  [0.5, -1.5, 0, 3]  ¦  [2, -6, 0, 12]
+select id, inner_product(c, c), inner_product(a, c), inner_product(b, c), inner_product(a, b), inner_product(a, '[1,1,1,1]') from t order by id;
+➤ id[4,32,0]  ¦  inner_product(c, c)[8,53,31]  ¦  inner_product(a, c)[8,53,31]  ¦  inner_product(b, c)[8,53,31]  ¦  inner_product(a, b)[8,53,31]  ¦  inner_product(a, [1,1,1,1])[8,53,31]  𝄀
+1  ¦  -46.0  ¦  -46.0  ¦  -46.0  ¦  -46.0  ¦  -4.0  𝄀
+2  ¦  -6.25  ¦  -2.5  ¦  -2.4166667461395264  ¦  -1.8125  ¦  -1.0  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  -9.83039934464E11  ¦  -986096.0
+select id, l2_distance(c, c), l2_distance(a, c), l2_distance(b, c), l2_distance(a, b), l2_distance(a, '[1,1,1,1]') from t order by id;
+➤ id[4,32,0]  ¦  l2_distance(c, c)[8,53,31]  ¦  l2_distance(a, c)[8,53,31]  ¦  l2_distance(b, c)[8,53,31]  ¦  l2_distance(a, b)[8,53,31]  ¦  l2_distance(a, [1,1,1,1])[8,53,31]  𝄀
+1  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  6.480740547180176  𝄀
+2  ¦  0.0  ¦  1.7677669525146484  ¦  1.7814631462097168  ¦  0.08333331346511841  ¦  1.9685019254684448  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  17235.919921875  ¦  983043.8125
+select id, l2_distance_sq(a, c), l2_distance_sq(b, '[1,1,1,1]'), l2_distance_sq(c, b) from t order by id;
+➤ id[4,32,0]  ¦  l2_distance_sq(a, c)[8,53,31]  ¦  l2_distance_sq(b, [1,1,1,1])[8,53,31]  ¦  l2_distance_sq(c, b)[8,53,31]  𝄀
+1  ¦  0.0  ¦  42.0  ¦  0.0  𝄀
+2  ¦  3.125  ¦  3.5902778440051613  ¦  3.173611097865635  𝄀
+3  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  9.999978750041289E11  ¦  null
+select id, l1_distance(a, c), l1_distance(b, c), l1_distance(a, b), l1_distance('[1,1,1,1]', b) from t order by id;
+➤ id[4,32,0]  ¦  l1_distance(a, c)[8,53,31]  ¦  l1_distance(b, c)[8,53,31]  ¦  l1_distance(a, b)[8,53,31]  ¦  l1_distance([1,1,1,1], b)[8,53,31]  𝄀
+1  ¦  0.0  ¦  0.0  ¦  0.0  ¦  10.0  𝄀
+2  ¦  3.0  ¦  3.0833332538604736  ¦  0.08333331346511841  ¦  2.9166667461395264  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  20047.9375  ¦  1000001.9375
+select id, cosine_distance(a, c), cosine_distance(b, c), cosine_distance(a, b), cosine_distance(a, a) from t order by id;
+➤ id[4,32,0]  ¦  cosine_distance(a, c)[8,53,31]  ¦  cosine_distance(b, c)[8,53,31]  ¦  cosine_distance(a, b)[8,53,31]  ¦  cosine_distance(a, a)[8,53,31]  𝄀
+1  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  𝄀
+2  ¦  0.2697032690048218  ¦  0.27071425318717957  ¦  0.0013843567576259375  ¦  0.0  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  4.882909252046375E-6  ¦  0.0
+select id, cosine_similarity(a, c), cosine_similarity(c, b), cosine_similarity(a, '[1,1,1,1]') from t order by id;
+➤ id[4,32,0]  ¦  cosine_similarity(a, c)[8,53,31]  ¦  cosine_similarity(c, b)[8,53,31]  ¦  cosine_similarity(a, [1,1,1,1])[8,53,31]  𝄀
+1  ¦  1.0  ¦  1.0  ¦  0.2948839068412781  𝄀
+2  ¦  0.7302967309951782  ¦  0.7292857766151428  ¦  0.3651483654975891  𝄀
+3  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  0.5015519261360168
+select id, vector_dims(a), vector_dims(b), normalize_l2(a), normalize_l2(b) from t order by id;
+➤ id[4,32,0]  ¦  vector_dims(a)[-5,64,0]  ¦  vector_dims(b)[-5,64,0]  ¦  normalize_l2(a)[12,4,0]  ¦  normalize_l2(b)[12,4,0]  𝄀
+1  ¦  4  ¦  4  ¦  [0.140625, -0.4375, 0, 0.875]  ¦  [0.14744195, -0.44232586, 0, 0.8846517]  𝄀
+2  ¦  4  ¦  4  ¦  [0.375, 0.1875, -0.5625, 0.75]  ¦  [0.37721676, 0.18860838, -0.5029557, 0.7544335]  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  4  ¦  4  ¦  [0.0031738281, -0.000015258789, 0, 1]  ¦  [0, 0, 0, 1]
+select id from t where l2_distance(a, '[1,-3,0,6]') < 1 order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from t order by l2_distance(b, '[1,1,1,1]'), id limit 2;
+➤ id[4,32,0]  𝄀
+3  𝄀
+2
+select l2_distance(a, '[1,2,3]') from t where id = 1;
+invalid input: vector ops between different dimensions (4, 3) is not permitted.
+select cosine_similarity(a, '[0,0,0,0]') from t where id = 1;
+internal error: cosine similarity: one of the vector is zero
+select cosine_distance(a, '[0,0,0,0]') from t where id = 1;
+➤ cosine_distance(a, [0,0,0,0])[8,53,31]  𝄀
+1.0
+select inner_product(cast('[3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38]' as vecf8(32)), cast('[3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38]' as vecf8(32)));
+➤ inner_product(cast([3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38] as vecf8(32)), cast([3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38] as vecf8(32)))[8,53,31]  𝄀
+-0.0
+select cosine_distance(cast('[3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38]' as vecf4(32)), cast('[3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38]' as vecf4(32)));
+➤ cosine_distance(cast([3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38] as vecf4(32)), cast([3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38] as vecf4(32)))[8,53,31]  𝄀
+1.0
+select l2_distance(cast('[3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38]' as vecf8(32)), cast('[3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38]' as vecf8(32)));
+internal error: l2 distance: vector magnitude is too large, the result overflows the element domain
+select id from t order by a, id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+2  𝄀
+1  𝄀
+4
+select id from t order by b desc, id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+4  𝄀
+3
+select id from t order by c, id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+1  𝄀
+2
+select a, count(*) from t group by a order by a;
+➤ a[12,4,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  1  𝄀
+[0.5, 0.25, -0.75, 1]  ¦  1  𝄀
+[1, -3, 0, 6]  ¦  1  𝄀
+[3072, -16, 0, 983040]  ¦  1
+select count(distinct b) from t;
+➤ count(distinct b)[-5,64,0]  𝄀
+3
+select id, rank() over (partition by a order by id) from t order by id;
+➤ id[4,32,0]  ¦  rank() over (partition by a order by id)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  1
+select count(a), count(b) from t;
+➤ count(a)[-5,64,0]  ¦  count(b)[-5,64,0]  𝄀
+3  ¦  3
+select group_concat(a order by id separator ';') from t;
+➤ group_concat(a order by id separator ;)[-1,16383,0]  𝄀
+[1, -3, 0, 6];[0.5, 0.25, -0.75, 1];[3072, -16, 0, 983040]
+select any_value(b) from t where id = 1;
+➤ any_value(b)[12,4,0]  𝄀
+[1, -3, 0, 6]
+update t set a = '[4,3,2,1]', b = '[4,3,2,1]' where id = 2;
+select a, b from t where id = 2;
+➤ a[12,4,0]  ¦  b[12,4,0]  𝄀
+[4, 3, 2, 1]  ¦  [4, 2.6666667, 2, 1]
+alter table t add column d vecf4(4) not null;
+select id, d from t order by id;
+➤ id[4,32,0]  ¦  d[12,4,0]  𝄀
+1  ¦  [0, 0, 0, 0]  𝄀
+2  ¦  [0, 0, 0, 0]  𝄀
+3  ¦  [0, 0, 0, 0]  𝄀
+4  ¦  [0, 0, 0, 0]
+prepare s from 'select id from t where inner_product(a, ?) < 0 order by id';
+set @q = '[1,1,1,1]';
+execute s using @q;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+4
+deallocate prepare s;
+prepare s2 from 'select id, cosine_distance(b, ?) from t where l2_distance(b, ?) < 5 order by id';
+execute s2 using @q, @q;
+➤ id[4,32,0]  ¦  cosine_distance(t.b, ?)[8,53,31]  𝄀
+2  ¦  0.08839280903339386
+deallocate prepare s2;
+select id, summation(a), l1_norm(b), l2_norm(a) from t where id in (1, 2) order by id;
+➤ id[4,32,0]  ¦  summation(a)[8,53,31]  ¦  l1_norm(b)[8,53,31]  ¦  l2_norm(a)[8,53,31]  𝄀
+1  ¦  4.0  ¦  10.0  ¦  6.782329983125268  𝄀
+2  ¦  10.0  ¦  9.666666746139526  ¦  5.477225575051661
+select id, abs(a), sqrt(abs(b)) from t where id = 1;
+➤ id[4,32,0]  ¦  abs(a)[12,4,0]  ¦  sqrt(abs(b))[12,4,0]  𝄀
+1  ¦  [1, 3, 0, 6]  ¦  [1, 1.7320508075688772, 0, 2.449489742783178]
+select id, coalesce(a, '[0,0,0,0]'), greatest(a, b), case when id = 1 then a else b end from t where id in (1, 3) order by id;
+➤ id[4,32,0]  ¦  coalesce(a, [0,0,0,0])[12,4,0]  ¦  greatest(a, b)[12,4,0]  ¦  case when id = 1 then a else b end[12,4,0]  𝄀
+1  ¦  [1, -3, 0, 6]  ¦  [1, -3, 0, 6]  ¦  [1, -3, 0, 6]  𝄀
+3  ¦  [0, 0, 0, 0]  ¦  null  ¦  null
+select json_object('a', a), json_array(b) from t where id = 1;
+➤ json_object(a, a)[-1,2147483647,0]  ¦  json_array(b)[-1,2147483647,0]  𝄀
+{"a": [1, -3, 0, 6]}  ¦  [[1, -3, 0, 6]]
+select id from t where a = '[3000,-12,0.001,1000000]';
+➤ id[4,32,0]  𝄀
+4
+select id from t where b = '[3000,-12,0.001,1000000]';
+➤ id[4,32,0]  𝄀
+4
+select id from t where a = '[3072,-16,0,983040]';
+➤ id[4,32,0]  𝄀
+4
+select id from t where a < '[1,1,1,1]' order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from t where b >= '[1,-3,0,6]' order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from t where a in ('[1,-3,0,6]', '[4,3,2,1]') order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from t where a = a order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+4
+select id from t where b between '[0,0,0,0]' and '[2,2,2,2]' order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+4
+select hex(a) from t;
+invalid argument function hex, bad value [VECF8]
+select sum(a) from t;
+invalid argument aggregate function sum, bad value [VECF8]
+select avg(b) from t;
+invalid argument aggregate function avg, bad value [VECF4]
+create index idx on t(a);
+not supported: VECTOR column 'a' cannot be in index
+create unique index uidx on t(b);
+not supported: VECTOR column 'b' cannot be in index
+create table t2 (a vecf8(4) primary key);
+not supported: VECTOR column 'a' cannot be in primary key
+create table t3 (id int primary key, v vecf4(65536));
+Data truncation: data out of range: data type vecf4,  typeLen is over the MaxVectorLen : 65535
+create table dimchk (x vecf8(4), y vecf4(4));
+insert into dimchk values ('[1,2,3,4]', '[1,2,3,4]');
+select count(*) from dimchk where x = '[1,2,3]';
+invalid input: expected vector dimension 4 != actual dimension 3.
+select count(*) from dimchk where y in ('[1,2,3,4,5]');
+invalid input: expected vector dimension 4 != actual dimension 5.
+select count(*) from dimchk where x = '[1,2,3,4]';
+➤ count(*)[-5,64,0]  𝄀
+1
+create table mu1 (id int primary key, e vecf8(4), f vecf4(4));
+insert into mu1 values (1, '[1,2,3,4]', '[1,2,3,4]');
+create table mu2 (k int, e vecf8(4), f vecf4(4));
+insert into mu2 values (1, '[4,3,2,1]', '[6,4,2,1]');
+update mu1 join mu2 on mu1.id = mu2.k set mu1.e = mu2.e, mu1.f = mu2.f;
+select * from mu1;
+➤ id[4,32,0]  ¦  e[12,4,0]  ¦  f[12,4,0]  𝄀
+1  ¦  [4, 3, 2, 1]  ¦  [6, 4, 2, 1]
+select if(id > 0, e, null), coalesce(null, f), case when id > 0 then e end from mu1;
+➤ if(id > 0, e, null)[12,4,0]  ¦  coalesce(null, f)[12,4,0]  ¦  case when id > 0 then e end[12,4,0]  𝄀
+[4, 3, 2, 1]  ¦  [6, 4, 2, 1]  ¦  [4, 3, 2, 1]
+create table va (id int primary key, v vecf8(4), u vecf4(3));
+insert into va values (1, '[1,2,3,4]', '[1,2,3]');
+data branch create table vb from va;
+data branch create table vc from va;
+update vb set v = '[4,3,2,1]', u = '[3,2,1]' where id = 1;
+data branch merge vb into vc;
+select * from vc;
+➤ id[4,32,0]  ¦  v[12,4,0]  ¦  u[12,3,0]  𝄀
+1  ¦  [4, 3, 2, 1]  ¦  [3, 2, 1]
+create table sel (a int, s varchar(20));
+insert into sel values (1, '[1,2]'), (0, '[1,2,3]'), (2, 'invalid');
+select a, case when a = 1 then cast(s as vecf4(2)) end, case when a = 1 then cast(s as vecf8(2)) end from sel order by a;
+➤ a[4,32,0]  ¦  case when a = 1 then cast(s as vecf4(2)) end[12,2,0]  ¦  case when a = 1 then cast(s as vecf8(2)) end[12,2,0]  𝄀
+0  ¦  null  ¦  null  𝄀
+1  ¦  [1, 2]  ¦  [1, 2]  𝄀
+2  ¦  null  ¦  null
+create table bin (id int, b vecf4(2), e vecf8(2), a vecf32(2));
+insert into bin values (1, cast(unhex('0000803F00000040') as blob), cast(unhex('0000803F00000040') as blob), cast(unhex('0000803F00000040') as blob));
+insert into bin (id, b) values (2, cast(unhex('0000803F000000') as blob));
+invalid input: 7-byte value is neither a vecf4(2) cell (14 bytes) nor 2 float32 elements (8 bytes)
+insert into bin (id, e) values (3, cast(unhex('0000803F') as blob));
+invalid input: 4-byte value is neither a vecf8(2) cell (15 bytes) nor 2 float32 elements (8 bytes)
+select * from bin order by id;
+➤ id[4,32,0]  ¦  b[12,2,0]  ¦  e[12,2,0]  ¦  a[12,2,0]  𝄀
+1  ¦  [1, 2]  ¦  [1, 2]  ¦  [1, 2]
+create table hexin (id int primary key, a vecf32(2), h vecbf16(2), e vecf8(2), b vecf4(2));
+insert into hexin values (1, cast(X'0000803F00000040' as blob), cast(X'803F0040' as blob), cast(X'0000803F00000040' as blob), cast(X'0000803F00000040' as blob));
+insert into hexin (id, a, b) values (2, cast(X'00004040000080C0' as blob), cast(X'00004040000080C0' as blob)), (3, cast(X'0000003F0000A040' as blob), cast(X'0000003F0000A040' as blob));
+replace into hexin (id, e) values (3, cast(X'0000803F00000040' as blob));
+select * from hexin order by id;
+➤ id[4,32,0]  ¦  a[12,2,0]  ¦  h[12,2,0]  ¦  e[12,2,0]  ¦  b[12,2,0]  𝄀
+1  ¦  [1, 2]  ¦  [1, 2]  ¦  [1, 2]  ¦  [1, 2]  𝄀
+2  ¦  [3, -4]  ¦  null  ¦  null  ¦  [2.6666667, -4]  𝄀
+3  ¦  null  ¦  null  ¦  [1, 2]  ¦  null
+create table hexkeep (id int, c varchar(10), d decimal(5,2));
+insert into hexkeep values (1, cast(X'3132' as signed), cast(1.005 as double));
+select * from hexkeep;
+➤ id[4,32,0]  ¦  c[12,10,0]  ¦  d[3,5,2]  𝄀
+1  ¦  12  ¦  1.01
+create table eqk (id int, v4 vecf4(1), v8 vecf8(1));
+insert into eqk values (1, '[1.2031566]', '[447]'), (2, '[1.2031565]', '[449]');
+select v8 = (select v8 from eqk where id = 1), v4 = (select v4 from eqk where id = 1) from eqk where id = 2;
+➤ v8 = (select v8 from eqk where id = 1)[-7,1,0]  ¦  v4 = (select v4 from eqk where id = 1)[-7,1,0]  𝄀
+1  ¦  1
+select v8, count(*) from eqk group by v8;
+➤ v8[12,1,0]  ¦  count(*)[-5,64,0]  𝄀
+[448]  ¦  2
+select count(*) from (select v4 from eqk group by v4) x;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(distinct v4), count(distinct v8), approx_count_distinct(v8) from eqk;
+➤ count(distinct v4)[-5,64,0]  ¦  count(distinct v8)[-5,64,0]  ¦  approx_count_distinct(v8)[-5,64,0]  𝄀
+1  ¦  1  ¦  1
+select count(*) from eqk a join eqk b on a.v8 = b.v8;
+➤ count(*)[-5,64,0]  𝄀
+4
+select count(*) from eqk a join eqk b on a.v4 = b.v4;
+➤ count(*)[-5,64,0]  𝄀
+4
+select count(*) from (select v8 from eqk where id = 1 union select v8 from eqk where id = 2) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from eqk where v8 in (select v8 from eqk where id = 2);
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from (select sample(v8, 1 rows) from eqk) s;
+➤ count(*)[-5,64,0]  𝄀
+1
+create table exact (id int primary key, v vecf4(17), e vecf8(3));
+insert into exact values (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[447,1,-2]');
+select vecblock_json(v), vecblock_json(e) from exact;
+➤ vecblock_json(v)[-1,16383,0]  ¦  vecblock_json(e)[-1,16383,0]  𝄀
+{"g":0.0032607568,"s":[448,320],"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6]}  ¦  {"g":1,"s":[1],"v":[448,1,-2]}
+insert into exact select 2, vecblock_json(v), vecblock_json(e) from exact where id = 1;
+insert into exact values (3, '[8.764914, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6.2606535]', '[448, 1, -2]');
+select id, v, vecblock_json(v) = (select vecblock_json(v) from exact where id = 1) same_cell from exact order by id;
+➤ id[4,32,0]  ¦  v[12,17,0]  ¦  same_cell[-7,1,0]  𝄀
+1  ¦  [8.764914, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6.2606535]  ¦  1  𝄀
+2  ¦  [8.764914, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6.2606535]  ¦  1  𝄀
+3  ¦  [8.764914, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6.8867183]  ¦  0
+select vecblock_json(cast(null as vecf8(2)));
+➤ vecblock_json(cast(null as vecf8(2)))[-1,16383,0]  𝄀
+null
+select cast('{"g":1,"s":[1],"v":[1,2]}' as vecf4(3));
+invalid input: expected vector dimension 3 != actual dimension 2.
+select cast('{"g":1,"s":[3],"v":[1]}' as vecf8(1));
+invalid input: vecf8 exact text: scale 0 (3) is not a power of two in [2^-127, 2^127]
+select cast('{"g":1,"s":[1],"v":[2.5]}' as vecf4(1));
+invalid input: vecf4 exact text: value 0 (2.5) is not an E2M1 value
+select cast('{"s":[1],"v":[1]}' as vecf8(1));
+invalid input: vecf8 exact text: "g" is required
+select cast('{"g":1,"s":[1],"v":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]}' as vecf4(17));
+invalid input: vecf4 exact text: "s" has 1 scales, want 2 for 17 values
+create table peer (id int, v vecf8(1));
+insert into peer values (2, '{"g":1,"s":[1],"v":[1]}'), (1, '{"g":1,"s":[2],"v":[0.5]}'), (0, '{"g":1,"s":[1],"v":[1]}'), (3, '[2]');
+select id from peer order by v, id;
+➤ id[4,32,0]  𝄀
+0  𝄀
+1  𝄀
+2  𝄀
+3
+select id, rank() over (order by v) r, count(*) over (partition by v) c from peer order by id;
+➤ id[4,32,0]  ¦  r[-5,64,0]  ¦  c[-5,64,0]  𝄀
+0  ¦  1  ¦  3  𝄀
+1  ¦  1  ¦  3  𝄀
+2  ¦  1  ¦  3  𝄀
+3  ¦  4  ¦  1
+create table uv (id int, v vecf4(17), e vecf8(2));
+insert into uv values (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[447, -1.5]');
+set @v = (select v from uv where id = 1);
+set @e = (select e from uv where id = 1);
+select @v, @e;
+➤ @v[12,17,0]  ¦  @e[12,2,0]  𝄀
+[8.764914, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6.2606535]  ¦  [448, -1.5]
+insert into uv values (2, @v, @e);
+select a.id, b.id, vecblock_json(a.v) = vecblock_json(b.v), vecblock_json(a.e) = vecblock_json(b.e) from uv a, uv b where a.id = 1 and b.id = 2;
+➤ id[4,32,0]  ¦  id[4,32,0]  ¦  vecblock_json(a.v) = vecblock_json(b.v)[-7,1,0]  ¦  vecblock_json(a.e) = vecblock_json(b.e)[-7,1,0]  𝄀
+1  ¦  2  ¦  1  ¦  1
+select count(*) from uv where v = @v and e = @e;
+➤ count(*)[-5,64,0]  𝄀
+2
+create table vbin (id int, v vecf4(17), e vecf8(2));
+insert into vbin values (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[447, -1.5]');
+select hex(vecblock_binary(v)), hex(vecblock_binary(e)), length(vecblock_binary(v)), length(vecblock_binary(e)) from vbin;
+➤ hex(vecblock_binary(v))[-1,16383,0]  ¦  hex(vecblock_binary(e))[-1,16383,0]  ¦  length(vecblock_binary(v))[-5,64,0]  ¦  length(vecblock_binary(e))[-5,64,0]  𝄀
+01020000110000006CB2553B7E7A070000000000000007  ¦  01010000020000000000803F7F7EBC  ¦  23  ¦  15
+insert into vbin select 2, cast(vecblock_binary(v) as vecf4(17)), cast(vecblock_binary(e) as vecf8(2)) from vbin where id = 1;
+insert into vbin values (3, cast(unhex('01020000110000006CB2553B7E7A070000000000000007') as blob), cast(unhex('01010000020000000000803F7F7EBC') as blob));
+select id, vecblock_json(v), vecblock_json(e) from vbin order by id;
+➤ id[4,32,0]  ¦  vecblock_json(v)[-1,16383,0]  ¦  vecblock_json(e)[-1,16383,0]  𝄀
+1  ¦  {"g":0.0032607568,"s":[448,320],"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6]}  ¦  {"g":1,"s":[1],"v":[448,-1.5]}  𝄀
+2  ¦  {"g":0.0032607568,"s":[448,320],"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6]}  ¦  {"g":1,"s":[1],"v":[448,-1.5]}  𝄀
+3  ¦  {"g":0.0032607568,"s":[448,320],"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6]}  ¦  {"g":1,"s":[1],"v":[448,-1.5]}
+select count(distinct vecblock_binary(v)), count(distinct vecblock_binary(e)) from vbin;
+➤ count(distinct vecblock_binary(v))[-5,64,0]  ¦  count(distinct vecblock_binary(e))[-5,64,0]  𝄀
+1  ¦  1
+select vecblock_binary(cast(vecblock_binary(e) as vecf8)) = vecblock_binary(e) from vbin where id = 1;
+➤ vecblock_binary(cast(vecblock_binary(e) as vecf8)) = vecblock_binary(e)[-7,1,0]  𝄀
+1
+select vecblock_json(cast(vecblock_binary(cast('[1,2,3,4,5]' as vecf4(5))) as vecf8));
+invalid input: vecf4 cell is not a vecf8 cell
+select cast(cast(unhex('02010000020000000000803F7F7EBC') as blob) as vecf8(2));
+invalid input: unsupported block-scaled vector version 2
+select cast(cast(unhex('01020000020000000000803F7F7EBC') as blob) as vecf8(2));
+invalid input: vecf4(2) cell is 15 bytes, want 14
+select cast(cast(unhex('01010000020000000000803F7F7EBC') as blob) as vecf8(3));
+invalid input: 15-byte value is neither a vecf8(3) cell (16 bytes) nor 3 float32 elements (12 bytes)
+select vecblock_binary(cast('[1,2]' as vecf32(2)));
+invalid argument function vecblock_binary, bad value [VECF32]
+create table pq (id int, v4_bin vecf4(17), v8_bin vecf8(33), v4_f32 vecf4(17), v4_json vecf4(17), v8_text vecf8(33), v4_list vecf4(17), v8_list vecf8(33));
+load data infile {'filepath'='$resources/parquet/vecblock.parquet', 'format'='parquet'} into table pq;
+select id, v4_bin, v8_bin from pq order by id;
+➤ id[4,32,0]  ¦  v4_bin[12,17,0]  ¦  v8_bin[12,33,0]  𝄀
+1  ¦  [8.764914, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6.2606535]  ¦  [-6, -5.5, -5, -5, -4.5, -4, -3.75, -3.25, -3, -2.5, -2.25, -1.875, -1.5, -1.125, -0.75, -0.375, 0, 0.375, 0.75, 1.125, 1.5, 1.875, 2.25, 2.5, 3, 3.25, 3.75, 4, 4.5, 5, 5, 5.5, 6]  𝄀
+2  ¦  [0, -1.0416666, 1.0416666, -2.0833333, 3.125, -4.1666665, 6.25, 0, 0, 0, 2.0833333, 6.25, -8.333333, 12.5, 0, 0, 100]  ¦  [-12, -11, -10, -10, -9, -8, -7.5, -6.5, -6, -5, -4.5, -3.75, -3, -2.25, -1.5, -0.75, 0, 0.75, 1.5, 2.25, 3, 3.75, 4.5, 5, 6, 6.5, 7.5, 8, 9, 10, 10, 11, 12]  𝄀
+3  ¦  null  ¦  null
+select id, vecblock_binary(v4_bin) = vecblock_binary(v4_f32), vecblock_binary(v4_bin) = vecblock_binary(v4_json), vecblock_binary(v8_bin) = vecblock_binary(v8_text) from pq order by id;
+➤ id[4,32,0]  ¦  vecblock_binary(v4_bin) = vecblock_binary(v4_f32)[-7,1,0]  ¦  vecblock_binary(v4_bin) = vecblock_binary(v4_json)[-7,1,0]  ¦  vecblock_binary(v8_bin) = vecblock_binary(v8_text)[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1  ¦  1  𝄀
+3  ¦  null  ¦  null  ¦  null
+select id, vecblock_binary(v4_list) = vecblock_binary(v4_bin), vecblock_binary(v8_list) = vecblock_binary(v8_bin), v4_list is null, v8_list is null from pq order by id;
+➤ id[4,32,0]  ¦  vecblock_binary(v4_list) = vecblock_binary(v4_bin)[-7,1,0]  ¦  vecblock_binary(v8_list) = vecblock_binary(v8_bin)[-7,1,0]  ¦  v4_list is null[-7,1,0]  ¦  v8_list is null[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  1  ¦  0  ¦  0  𝄀
+3  ¦  null  ¦  null  ¦  0  ¦  0
+select count(*) from pq where v4_bin = cast('[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]' as vecf4(17));
+➤ count(*)[-5,64,0]  𝄀
+1
+create external table pqx (id int, v4_bin vecf4(17), v8_bin vecf8(33), v4_f32 vecf4(17), v4_json vecf4(17), v8_text vecf8(33), v4_list vecf4(17), v8_list vecf8(33)) infile{'filepath'='$resources/parquet/vecblock.parquet', 'format'='parquet'};
+select count(*) from pqx x join pq p on x.id = p.id where vecblock_binary(x.v4_bin) = vecblock_binary(p.v4_bin) and vecblock_binary(x.v8_bin) = vecblock_binary(p.v8_bin);
+➤ count(*)[-5,64,0]  𝄀
+2
+create table pqbad (id int, v4_bin vecf4(16), v8_bin vecf8(33), v4_f32 vecf4(17), v4_json vecf4(17), v8_text vecf8(33), v4_list vecf4(17), v8_list vecf8(33));
+load data infile {'filepath'='$resources/parquet/vecblock.parquet', 'format'='parquet'} into table pqbad;
+invalid input: 23-byte value is neither a vecf4(16) cell (21 bytes) nor 16 float32 elements (64 bytes)
+create table expt (id int, v vecf4(17), e vecf8(2));
+insert into expt values (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[447, -1.5]'), (2, null, '[0.001, 3]');
+select * from expt order by id into outfile '$resources/into_outfile/vecblock.csv';
+select load_file(cast('file://$resources/into_outfile/vecblock.csv' as datalink)) as csv_content;
+➤ csv_content[-1,16383,0]  𝄀
+id,v,e
+1,"{""g"":0.0032607568,""s"":[448,320],""v"":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6]}","{""g"":1,""s"":[1],""v"":[448,-1.5]}"
+2,\N,"{""g"":1,""s"":[0.0078125],""v"":[0.125,384]}"
+
+select * from expt order by id into outfile '$resources/into_outfile/vecblock.jsonl';
+select load_file(cast('file://$resources/into_outfile/vecblock.jsonl' as datalink)) as jsonl_content;
+➤ jsonl_content[-1,16383,0]  𝄀
+{"e":{"g":1,"s":[1],"v":[448,-1.5]},"id":1,"v":{"g":0.0032607568,"s":[448,320],"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6]}}
+{"e":{"g":1,"s":[0.0078125],"v":[0.125,384]},"id":2,"v":null}
+
+create table expt_csv like expt;
+load data infile '$resources/into_outfile/vecblock.csv' into table expt_csv fields terminated by ',' enclosed by '"' ignore 1 lines;
+create table expt_jsonl like expt;
+load data infile {'filepath'='$resources/into_outfile/vecblock.jsonl', 'format'='jsonline', 'jsondata'='object'} into table expt_jsonl;
+select x.id, vecblock_json(x.v) <=> vecblock_json(c.v), vecblock_json(x.e) = vecblock_json(c.e), vecblock_json(x.v) <=> vecblock_json(j.v), vecblock_json(x.e) = vecblock_json(j.e) from expt x join expt_csv c on x.id = c.id join expt_jsonl j on x.id = j.id order by x.id;
+➤ id[4,32,0]  ¦  vecblock_json(x.v) <=> vecblock_json(c.v)[-7,1,0]  ¦  vecblock_json(x.e) = vecblock_json(c.e)[-7,1,0]  ¦  vecblock_json(x.v) <=> vecblock_json(j.v)[-7,1,0]  ¦  vecblock_json(x.e) = vecblock_json(j.e)[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1  ¦  1  ¦  1
+select id, v, e from expt_jsonl order by id;
+➤ id[4,32,0]  ¦  v[12,17,0]  ¦  e[12,2,0]  𝄀
+1  ¦  [8.764914, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6.2606535]  ¦  [448, -1.5]  𝄀
+2  ¦  null  ¦  [0.0009765625, 3]
+create table cb8 (id int, v vecf8(4)) cluster by (v);
+not supported: VECF8 column 'v' cannot be a cluster by key
+create table cb4 (id int, v vecf4(4)) cluster by (id, v);
+not supported: VECF4 column 'v' cannot be a cluster by key
+create table pk8 (id int, v vecf8(4)) partition by key(v) partitions 2;
+not supported: VECF8 column 'v' cannot be a partition key
+create table pk4 (id int, v vecf4(4)) partition by key(id, v) partitions 2;
+not supported: VECF4 column 'v' cannot be a partition key
+select json_row(cast('[1,-2,0.5]' as vecf8(3)), cast('[1,-2,0.5]' as vecf4(3)), cast(null as vecf8(3)));
+➤ json_row(cast([1,-2,0.5] as vecf8(3)), cast([1,-2,0.5] as vecf4(3)), cast(null as vecf8(3)))[12,65535,0]  𝄀
+[[1,-2,0.5],[1,-2,0.5],null]
+create table cl (id int, v vecf8(2));
+insert into cl values (1, '[1,2]'), (2, '[1,2]'), (3, '[3,4]');
+select a.id, (select b.id from cl b where b.v = a.v order by b.id desc limit 1) m from cl a order by a.id;
+➤ id[4,32,0]  ¦  m[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  2  𝄀
+3  ¦  3
+drop table cl;
+set experimental_ivf_index = 1;
+create table iv (id int primary key, v vecf32(3));
+insert into iv values (1, '[1,2,3]'), (2, '[1.3,2.7,3.1]'), (3, '[4,5,6]'), (4, '[0,0,1]');
+create index ix using ivfflat on iv(v) lists = 1 op_type 'vector_l2_ops';
+select id, l2_distance(v, cast('[1.3,2.7,3.1]' as vecf8(3))) dq8 from iv order by l2_distance(v, '[1.3,2.7,3.1]') limit 3;
+➤ id[4,32,0]  ¦  dq8[8,53,31]  𝄀
+2  ¦  0.12247437238693237  𝄀
+1  ¦  0.7905694246292114  𝄀
+4  ¦  3.6228442192077637
+drop table iv;
+set experimental_ivf_index = 0;
+select percentile_disc(0.5) within group (order by a) from t;
+invalid argument aggregate function percentile_disc, bad value [VECF8 DECIMAL64]
+select percentile_disc(0.5) within group (order by c) from t;
+invalid argument aggregate function percentile_disc, bad value [VECF32 DECIMAL64]
+create table sub1 (id int primary key, v vecf4(1));
+create table q1 (q vecf32(1));
+insert into q1 values ('[1e30]');
+insert into sub1 values (1, '[1.4e-45]'), (2, '[-1.4e-45]'), (3, '[0]'), (4, '[1.5]');
+create table sub16 (id int primary key, v vecf4(16));
+create table q16 (q vecf32(16));
+insert into q16 values ('[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]');
+insert into sub16 values (1, '[1.4e-45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (2, '[-1.4e-45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (3, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.4e-45]'), (4, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1.4e-45]'), (5, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (6, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.5]');
+create table sub17 (id int primary key, v vecf4(17));
+create table q17 (q vecf32(17));
+insert into q17 values ('[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]');
+insert into sub17 values (1, '[1.4e-45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (2, '[-1.4e-45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (3, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.4e-45]'), (4, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1.4e-45]'), (5, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (6, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.5]');
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(1)), q) as same, inner_product(v, q) < 0 as neg from sub1, q1 order by id;
+➤ id[4,32,0]  ¦  same[-7,1,0]  ¦  neg[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  1  ¦  0  𝄀
+4  ¦  1  ¦  1
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(16)), q) as same, inner_product(v, q) < 0 as neg from sub16, q16 order by id;
+➤ id[4,32,0]  ¦  same[-7,1,0]  ¦  neg[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  1  ¦  1  𝄀
+4  ¦  1  ¦  0  𝄀
+5  ¦  1  ¦  0  𝄀
+6  ¦  1  ¦  1
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(17)), q) as same, inner_product(v, q) < 0 as neg from sub17, q17 order by id;
+➤ id[4,32,0]  ¦  same[-7,1,0]  ¦  neg[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  1  ¦  1  𝄀
+4  ¦  1  ¦  0  𝄀
+5  ¦  1  ¦  0  𝄀
+6  ¦  1  ¦  1
+select mo_ctl('dn', 'flush', 'vecblock_db.sub1');
+➤ mo_ctl(dn, flush, vecblock_db.sub1)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'flush', 'vecblock_db.sub16');
+➤ mo_ctl(dn, flush, vecblock_db.sub16)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'flush', 'vecblock_db.sub17');
+➤ mo_ctl(dn, flush, vecblock_db.sub17)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(1)), q) as same, inner_product(v, q) < 0 as neg from sub1, q1 order by id;
+➤ id[4,32,0]  ¦  same[-7,1,0]  ¦  neg[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  1  ¦  0  𝄀
+4  ¦  1  ¦  1
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(16)), q) as same, inner_product(v, q) < 0 as neg from sub16, q16 order by id;
+➤ id[4,32,0]  ¦  same[-7,1,0]  ¦  neg[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  1  ¦  1  𝄀
+4  ¦  1  ¦  0  𝄀
+5  ¦  1  ¦  0  𝄀
+6  ¦  1  ¦  1
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(17)), q) as same, inner_product(v, q) < 0 as neg from sub17, q17 order by id;
+➤ id[4,32,0]  ¦  same[-7,1,0]  ¦  neg[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  1  ¦  1  𝄀
+4  ¦  1  ¦  0  𝄀
+5  ¦  1  ¦  0  𝄀
+6  ¦  1  ¦  1
+drop database vecblock_db;

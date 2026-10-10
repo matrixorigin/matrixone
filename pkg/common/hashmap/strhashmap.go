@@ -350,7 +350,7 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		if itr.mp.groupingAware || itr.mp.hasNull {
 			switch vec.GetType().Oid {
 			case types.T_json, types.T_array_float32, types.T_array_float64,
-				types.T_array_bf16, types.T_array_float16:
+				types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 				fillCanonicalGroupingAwareVarlena(itr, vec, count, start)
 			default:
 				fillGroupingAwareStr(itr, vec, count, start)
@@ -369,7 +369,7 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		} else {
 			switch vec.GetType().Oid {
 			case types.T_json, types.T_array_float32, types.T_array_float64,
-				types.T_array_bf16, types.T_array_float16:
+				types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 				fillCanonicalStringGroupStr(itr, vec, count, start)
 			default:
 				fillStringGroupStr(itr, vec, count, start, len(vecs))
@@ -400,6 +400,8 @@ func appendVarlenaHashKey(dst []byte, typ types.Type, value []byte) []byte {
 		return keycodec.AppendCanonicalVecF64(dst, value)
 	case types.T_array_bf16, types.T_array_float16:
 		return keycodec.AppendCanonicalVecF16(dst, value)
+	case types.T_array_float8, types.T_array_float4:
+		return keycodec.AppendCanonicalVecBlock(dst, value)
 	default:
 		return append(dst, value...)
 	}

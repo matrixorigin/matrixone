@@ -179,6 +179,18 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 			}
 			return plan.Type{Id: int32(types.T_int64), Width: n.InternalType.Width, Scale: -1}, nil
 		case defines.MYSQL_TYPE_FLOAT:
+			// The scalar low-precision float types (#20567) reuse MYSQL_TYPE_FLOAT on the wire and
+			// are disambiguated by FamilyString; they carry no width/scale.
+			switch strings.ToLower(n.InternalType.FamilyString) {
+			case "bf16":
+				return plan.Type{Id: int32(types.T_bf16), Width: 0, Scale: -1}, nil
+			case "float16":
+				return plan.Type{Id: int32(types.T_float16), Width: 0, Scale: -1}, nil
+			case "float8":
+				return plan.Type{Id: int32(types.T_float8), Width: 0, Scale: -1}, nil
+			case "float4":
+				return plan.Type{Id: int32(types.T_float4), Width: 0, Scale: -1}, nil
+			}
 			return plan.Type{Id: int32(types.T_float32), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_DOUBLE:
 			return plan.Type{Id: int32(types.T_float64), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
@@ -222,7 +234,7 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
 				if fstr == "char" || fstr == "binary" {
 					width = 1
-				} else if fstr == types.ArrayFloat32SQLName || fstr == types.ArrayFloat64SQLName || fstr == types.ArrayBF16SQLName || fstr == types.ArrayFloat16SQLName || fstr == types.ArrayInt8SQLName || fstr == types.ArrayUint8SQLName {
+				} else if _, isVec := types.ArrayTypeBySQLName(fstr); isVec {
 					width = types.MaxArrayDimension
 				} else {
 					width = types.MaxVarcharLen
@@ -233,7 +245,7 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 				return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if (fstr == "varchar" || fstr == "varbinary") && width > types.MaxVarcharLen {
 				return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
-			} else if fstr == types.ArrayFloat32SQLName || fstr == types.ArrayFloat64SQLName || fstr == types.ArrayBF16SQLName || fstr == types.ArrayFloat16SQLName || fstr == types.ArrayInt8SQLName || fstr == types.ArrayUint8SQLName {
+			} else if _, isVec := types.ArrayTypeBySQLName(fstr); isVec {
 				if width > types.MaxArrayDimension {
 					return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxVectorLen : %v", types.MaxArrayDimension)
 				}
@@ -248,18 +260,9 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 				return plan.Type{Id: int32(types.T_binary), Width: width}, nil
 			case "varchar":
 				return plan.Type{Id: int32(types.T_varchar), Width: width}, nil
-			case types.ArrayFloat32SQLName:
-				return plan.Type{Id: int32(types.T_array_float32), Width: width}, nil
-			case types.ArrayFloat64SQLName:
-				return plan.Type{Id: int32(types.T_array_float64), Width: width}, nil
-			case types.ArrayBF16SQLName:
-				return plan.Type{Id: int32(types.T_array_bf16), Width: width}, nil
-			case types.ArrayFloat16SQLName:
-				return plan.Type{Id: int32(types.T_array_float16), Width: width}, nil
-			case types.ArrayInt8SQLName:
-				return plan.Type{Id: int32(types.T_array_int8), Width: width}, nil
-			case types.ArrayUint8SQLName:
-				return plan.Type{Id: int32(types.T_array_uint8), Width: width}, nil
+			}
+			if vecType, isVec := types.ArrayTypeBySQLName(fstr); isVec {
+				return plan.Type{Id: int32(vecType), Width: width}, nil
 			}
 			// varbinary
 			return plan.Type{Id: int32(types.T_varbinary), Width: width}, nil
@@ -2212,7 +2215,7 @@ func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr,
 		return expr, nil
 	}
 	f := expr.GetF()
-	if types.T(expr.Typ.Id).IsArrayRelate() && needsSameTypeAssignmentCast(expr.Typ) {
+	if types.T(expr.Typ.Id).IsArray() && needsSameTypeAssignmentCast(expr.Typ) {
 		// 旧目录中的生成列表达式可能没有赋值 CAST；执行新 DML 时补齐，
 		// 已有的根 CAST 则继续复用，避免重复复制每个向量。
 		if f != nil && f.Func != nil && f.Func.ObjName == "cast" {

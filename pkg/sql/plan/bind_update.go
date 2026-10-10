@@ -169,6 +169,16 @@ func (builder *QueryBuilder) makeUpdateChangedRowsPredicate(
 				return nil, err
 			}
 		}
+		if t := types.T(oldExpr.Typ.Id); t.IsBlockScaledArray() {
+			// vecf8/vecf4 have no equality; compare the dequantized values as vecf32
+			f32 := plan.Type{Id: int32(types.T_array_float32), Width: oldExpr.Typ.Width}
+			if oldExpr, err = appendCastBeforeExpr(builder.GetContext(), oldExpr, f32); err != nil {
+				return nil, err
+			}
+			if newExpr, err = appendCastBeforeExpr(builder.GetContext(), newExpr, f32); err != nil {
+				return nil, err
+			}
+		}
 		equal, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*plan.Expr{oldExpr, newExpr})
 		if err != nil {
 			return nil, err

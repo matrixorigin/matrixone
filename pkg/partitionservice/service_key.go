@@ -16,8 +16,10 @@ package partitionservice
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -32,6 +34,16 @@ func (s *Service) getMetadataByKeyType(
 
 	if len(method.ColumnList) == 0 {
 		return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("none-column is not supported in KEY partition")
+	}
+	// KEY partitioning hashes the stored bytes; vecf8/vecf4 cells equal by decoded value can
+	// differ in bytes
+	for _, name := range method.ColumnList {
+		for _, col := range def.Cols {
+			if t := types.T(col.Typ.Id); t.IsBlockScaledArray() && strings.EqualFold(col.Name, name.ColName()) {
+				return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtxf(
+					"%s column '%s' cannot be a partition key", t, name.ColNameOrigin())
+			}
+		}
 	}
 
 	ctx := tree.NewFmtCtx(

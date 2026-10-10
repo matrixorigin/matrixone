@@ -1491,6 +1491,91 @@ func TestSingletonProjectedPeerAdmission(t *testing.T) {
 	}
 }
 
+func TestPreparedLowPrecisionFloatMarkerNarrowing(t *testing.T) {
+	decimalSource := types.New(types.T_decimal64, 1, 1)
+	type param struct {
+		value   any
+		binding types.Type
+	}
+	sqlDecimal := param{"0.3", decimalSource}
+	for _, tc := range []struct {
+		name      string
+		predicate string
+		params    []param
+		binary    bool
+		narrowed  int
+	}{
+		{"equal sql decimal", "f = ?", []param{sqlDecimal}, false, 1},
+		{"in sql decimal", "f in (?, 9)", []param{sqlDecimal}, false, 1},
+		{"not in sql decimal", "f not in (?, 9)", []param{sqlDecimal}, false, 1},
+		{"less equal sql decimal", "f <= ?", []param{sqlDecimal}, false, 1},
+		{"between sql decimal", "f between ? and ?", []param{sqlDecimal, {"2", decimalSource}}, false, 2},
+		{"equal sql integer", "f = ?", []param{{int64(257), types.T_int64.ToType()}}, false, 1},
+		{"in sql decimal and integer", "f in (?, ?)", []param{sqlDecimal, {int64(6), types.T_int64.ToType()}}, false, 2},
+		{"in binary double", "f in (?, 9)", []param{{"0.3", types.T_float64.ToType()}}, true, 1},
+		{"in binary text", "f in (?, 9)", []param{{"0.3", types.T_varchar.ToType()}}, true, 1},
+		{"equal hex float text", "f = ?", []param{{"0x1p0", types.T_varchar.ToType()}}, true, 0},
+		{"equal out of range", "f = ?", []param{{"1e300", types.T_float64.ToType()}}, true, 0},
+		{"in out of range", "f in (?, 9)", []param{{"1e300", types.T_float64.ToType()}}, true, 0},
+		{"in one sql value out of range", "f in (?, ?)", []param{sqlDecimal, {"1e39", types.T_float64.ToType()}}, false, 1},
+		{"not in one sql value out of range", "f not in (?, ?)", []param{sqlDecimal, {"1e39", types.T_float64.ToType()}}, false, 1},
+		// in range by the value CAST rounds the marker to (to odd, from the exact source)
+		{"float4 above max binary double", "h <= ?", []param{{"6.0000001", types.T_float64.ToType()}}, true, 0},
+		{"float4 below min binary double", "h >= ?", []param{{"-6.0000001", types.T_float64.ToType()}}, true, 0},
+		{"float4 above max binary text", "h <= ?", []param{{"6.0000001", types.T_varchar.ToType()}}, true, 0},
+		{"float4 above max beyond float64 binary text", "h <= ?", []param{{"6.0000000000000000000000001", types.T_varchar.ToType()}}, true, 0},
+		{"float4 max binary double", "h <= ?", []param{{"6", types.T_float64.ToType()}}, true, 1},
+		{"float4 min binary text", "h >= ?", []param{{"-6", types.T_varchar.ToType()}}, true, 1},
+		{"float8 above max binary double", "g <= ?", []param{{"448.000001", types.T_float64.ToType()}}, true, 0},
+		{"float8 below min binary text", "g >= ?", []param{{"-448.000001", types.T_varchar.ToType()}}, true, 0},
+		{"float8 max binary double", "g <= ?", []param{{"448", types.T_float64.ToType()}}, true, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			proc := mock.ctxt.GetProcess()
+			params := vector.NewVec(types.T_text.ToType())
+			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+			bindings := make([]PreparedSourceBinding, len(tc.params))
+			values := make([]any, len(tc.params))
+			for i, p := range tc.params {
+				require.NoError(t, vector.AppendBytes(params, []byte(fmt.Sprint(p.value)), false, proc.Mp()))
+				bindings[i] = PreparedSourceBinding{Position: int32(i), Type: p.binding}
+				value := ParamValue{Value: p.value, IsBinaryProtocol: tc.binary}
+				if !tc.binary {
+					value.EnableNumericPrefix = true
+					value.SourceType, value.HasSourceType = p.binding, true
+				}
+				values[i] = value
+			}
+			proc.SetPrepareParams(params)
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+				"select id from vecblock_t where "+tc.predicate, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+			require.NoError(t, err)
+			narrowed, filters := 0, 0
+			for _, node := range bound.Plan.GetQuery().Nodes {
+				for _, filter := range node.FilterList {
+					filters++
+					require.NoError(t, planpb.VisitExprTree(filter, func(expr *Expr) error {
+						if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" &&
+							types.T(expr.Typ.Id).IsLowPrecisionFloat() && function.ContainsParameter(fn.Args[0]) {
+							narrowed++
+						}
+						return nil
+					}))
+				}
+			}
+			require.Positive(t, filters)
+			require.Equal(t, tc.narrowed, narrowed, bound.Plan.String())
+			if tc.narrowed > 0 {
+				require.True(t, bound.ValueDependent, "a narrowed marker must not enter the type-only cache")
+			}
+		})
+	}
+}
+
 func TestPreparedWideIntegerComparisonKeepsColumn(t *testing.T) {
 	for _, predicate := range []string{"val in (?,?)", "val not in (?,?)", "val=?", "?<=val", "val between ? and ?", "val between ? and ? or val between ? and ?"} {
 		for _, value := range []int64{math.MinInt32, math.MaxInt32, math.MinInt32 - 1, math.MaxInt32 + 1} {

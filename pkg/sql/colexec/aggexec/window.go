@@ -1253,6 +1253,14 @@ func appendValueToVector(result *vector.Vector, data []byte, typ types.Type, mp 
 		return vector.AppendFixed(result, types.DecodeFixed[uint64](data), false, mp)
 	case types.T_float32:
 		return vector.AppendFixed(result, types.DecodeFixed[float32](data), false, mp)
+	case types.T_bf16:
+		return vector.AppendFixed(result, types.DecodeFixed[types.BF16](data), false, mp)
+	case types.T_float16:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Float16](data), false, mp)
+	case types.T_float8:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Float8](data), false, mp)
+	case types.T_float4:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Float4](data), false, mp)
 	case types.T_float64:
 		return vector.AppendFixed(result, types.DecodeFixed[float64](data), false, mp)
 	case types.T_decimal64:

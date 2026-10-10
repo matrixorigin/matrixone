@@ -60,4 +60,5 @@ const (
 	AggIdOfMaxByNonNull        int64 = 560 << 32
 	AggIdOfPercentileCont      int64 = 567 << 32
 	AggIdOfPercentileDisc      int64 = 568 << 32
+	AggIdOfVectorMatmul        int64 = 591 << 32
 )

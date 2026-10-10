@@ -922,7 +922,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		expr.vec, err = util.GenVectorByVarValueWithAllocation(
 			proc, expr.typ, val, expr.allocation,
 		)
-	} else if !expr.typ.IsVarlen() || expr.typ.Oid == types.T_json || expr.typ.Oid.IsArrayRelate() {
+	} else if !expr.typ.IsVarlen() || expr.typ.Oid == types.T_json || expr.typ.Oid.IsArray() {
 		// Fixed-width user-variable values (including DECIMAL), JSON values, and
 		// array/vector values need typed reconstruction on every evaluation.
 		// Reusing the generic varlena update path would either reinterpret a
@@ -2169,6 +2169,11 @@ func generateConstExpressionExecutor(
 				vec, err = newExpressionConstArray(typ, types.BytesToArray[int8]([]byte(val.VecVal)), 1, proc.Mp(), selection)
 			case types.T_array_uint8:
 				vec, err = newExpressionConstArray(typ, types.BytesToArray[uint8]([]byte(val.VecVal)), 1, proc.Mp(), selection)
+			case types.T_array_float8, types.T_array_float4:
+				// a vecf8/vecf4 constant is its stored cell
+				vec, err = newExpressionConstBytes(typ, []byte(val.VecVal), 1, proc.Mp(), selection)
+			default:
+				return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("vector constant of type %s", typ))
 			}
 		default:
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))
@@ -2696,7 +2701,8 @@ func foldedScalarBytes(expr *plan.Expr) ([]byte, bool) {
 	case types.T_bool, types.T_bit, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64, types.T_date, types.T_time, types.T_datetime,
-		types.T_timestamp, types.T_decimal64, types.T_decimal128:
+		types.T_timestamp, types.T_decimal64, types.T_decimal128,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 	default:
 		return nil, false
 	}
@@ -2716,6 +2722,23 @@ func foldedScalarBytes(expr *plan.Expr) ([]byte, bool) {
 	case types.T_float64:
 		v := types.DecodeFloat64(fold.Data)
 		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return nil, false
+		}
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		var v float32
+		switch oid {
+		case types.T_bf16:
+			v = types.DecodeFixed[types.BF16](fold.Data).ToFloat32()
+		case types.T_float16:
+			v = types.DecodeFixed[types.Float16](fold.Data).ToFloat32()
+		case types.T_float8:
+			v = types.DecodeFixed[types.Float8](fold.Data).ToFloat32()
+		case types.T_float4:
+			v = types.DecodeFixed[types.Float4](fold.Data).ToFloat32()
+		default:
+			return nil, false
+		}
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
 			return nil, false
 		}
 	case types.T_timestamp, types.T_time, types.T_datetime:

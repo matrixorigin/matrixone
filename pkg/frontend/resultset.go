@@ -479,6 +479,8 @@ func (mrs *MysqlResultSet) GetString(ctx context.Context, rindex, cindex uint64)
 		return types.ArrayToString[types.Float16](v), nil
 	case []int8:
 		return types.ArrayToString[int8](v), nil
+	case types.BlockScaledValue:
+		return types.BlockScaledToString(v.Cell)
 	case int:
 		return strconv.FormatInt(int64(v), 10), nil
 	case uint:

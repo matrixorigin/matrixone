@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -279,9 +280,21 @@ func TestRequiredIVFProtocolCoversEveryPartitionAndNestedFragment(t *testing.T) 
 }
 
 func TestRequiredIVFWorkersFallbackAsWholeQuery(t *testing.T) {
-	for _, mode := range []string{"supported", "old", "unknown", "canceled"} {
+	for _, mode := range []string{"supported", "old", "unknown", "canceled", "device"} {
 		t.Run(mode, func(t *testing.T) {
 			c, client := vectorPlacementCompile(t, engine.Nodes{{Id: "a", Addr: "a:6001"}, {Id: "b", Addr: "b:6001"}})
+			// gpu_mode decides the centroid route: off routes on the CPU in every build,
+			// on routes to the device in a GPU build.
+			gpuMode := int8(0)
+			if mode == "device" {
+				gpuMode = 1
+			}
+			c.proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+				if name == "gpu_mode" {
+					return gpuMode, nil
+				}
+				return nil, nil
+			})
 			moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion103)
 			client.version = defines.MORPCVersion103
 			typ := plan.Type{Id: int32(types.T_int64)}
@@ -325,6 +338,10 @@ func TestRequiredIVFWorkersFallbackAsWholeQuery(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+			if mode == "device" && !brute_force.DispatchesToDevice[float32](true) {
+				// CPU build: gpu_mode on still routes on the CPU
+				mode = "supported"
+			}
 			if mode == "supported" {
 				require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 				require.Len(t, c.cnList, 2)

@@ -1008,6 +1008,23 @@ func coalesceJSONResult(overloads []overload, inputs []types.Type) (checkResult,
 }
 
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
+	if target, ok := sameLowPrecisionFloatType(inputs); ok {
+		for i, over := range overloads {
+			if over.args[0] != target.Oid {
+				continue
+			}
+			castTypes := make([]types.Type, len(inputs))
+			aligned := true
+			for j, input := range inputs {
+				castTypes[j] = target
+				aligned = aligned && input.Oid == target.Oid
+			}
+			if aligned {
+				return newCheckResultWithSuccess(i)
+			}
+			return newCheckResultWithCast(i, castTypes)
+		}
+	}
 	if target, hasVector, ok := conditionalVectorType(inputs); hasVector {
 		if !ok {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -6800,6 +6817,9 @@ func formatNumericValueAt(v *vector.Vector, row uint64) (value string, exact, is
 		return strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](v, idx), 10), true, false, nil
 	case types.T_float32:
 		return strconv.FormatFloat(float64(vector.GetFixedAtNoTypeCheck[float32](v, idx)), 'g', -1, 64), false, false, nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		f, _ := vector.GetLowPrecisionFloatAt(v, idx)
+		return strconv.FormatFloat(float64(f), 'g', -1, 64), false, false, nil
 	case types.T_float64:
 		return strconv.FormatFloat(vector.GetFixedAtNoTypeCheck[float64](v, idx), 'g', -1, 64), false, false, nil
 	case types.T_decimal64:

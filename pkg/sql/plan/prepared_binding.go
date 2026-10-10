@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -449,11 +450,38 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		}
 	}
 	args = append([]*Expr(nil), args...)
+	// an IN list on a bf16/float16/float8/float4 operand expands to one comparison per item,
+	// each binding its own marker; the list keeps the narrowed items
+	lowPrecisionList := false
 	for i, source := range args {
 		if source == nil {
 			continue
 		}
 		if source.GetP() == nil {
+			if list := source.GetList(); list != nil && i == 1 && args[0] != nil &&
+				(name == "in" || name == "not_in") {
+				lowPrecisionList = types.T(args[0].Typ.Id).IsLowPrecisionFloat()
+				var items []*Expr
+				for j, item := range list.List {
+					converted, narrowed, err := narrowPreparedLowPrecisionOperand(ctx, state, item, args[0].Typ)
+					if err != nil {
+						return nil, err
+					}
+					if !narrowed {
+						continue
+					}
+					if items == nil {
+						items = append([]*Expr(nil), list.List...)
+					}
+					items[j] = converted
+				}
+				if items != nil {
+					copied := *source
+					copied.Expr = &plan.Expr_List{List: &plan.ExprList{List: items}}
+					args[i] = &copied
+					continue
+				}
+			}
 			if len(args) == 1 && types.T(source.Typ.Id).IsMySQLString() &&
 				(name == "sum" || name == "avg" || name == "abs" || name == "sign" || name == "sleep") {
 				// The source may be a projected marker, scalar subquery, or
@@ -526,6 +554,16 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 				if castErr != nil {
 					return nil, castErr
 				}
+				args[i] = converted
+				continue
+			}
+		}
+		if len(args) == 2 && isPreparedNumericComparisonContext(name) && args[1-i] != nil {
+			converted, narrowed, castErr := narrowPreparedLowPrecisionOperand(ctx, state, source, args[1-i].Typ)
+			if castErr != nil {
+				return nil, castErr
+			}
+			if narrowed {
 				args[i] = converted
 				continue
 			}
@@ -700,6 +738,9 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			}
 		}
 	}
+	if lowPrecisionList {
+		return args, nil
+	}
 	positions := make(map[int]types.StringConversionKind)
 	prefixArgs := make([]bool, len(args))
 	prefixKinds := make([]types.StringConversionKind, len(args))
@@ -767,6 +808,130 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 	bound, _, err := preparedNumericPrefixArgs(ctx, name, args, witnesses,
 		prefixArgs, prefixKinds, prefixListArgs, prefixListKinds, fixed)
 	return bound, err
+}
+
+// narrowPreparedLowPrecisionOperand casts a marker compared with a
+// bf16/float16/float8/float4 operand to that operand's type, as a literal is,
+// when this execution's value is inside the type's finite range. Reading the
+// value keeps the plan out of the type-only cache. Other values keep the wider
+// comparison.
+func narrowPreparedLowPrecisionOperand(ctx context.Context, state *preparedSourceBindingState,
+	source *Expr, peer plan.Type) (*Expr, bool, error) {
+	peerOid := types.T(peer.Id)
+	if source == nil || source.GetP() == nil || !peerOid.IsLowPrecisionFloat() {
+		return nil, false, nil
+	}
+	binding, ok := state.bindingForPosition(source.GetP().Pos)
+	if !ok || !(binding.Type.IsNumeric() || binding.Type.Oid.IsMySQLString()) {
+		return nil, false, nil
+	}
+	value, ok := preparedLowPrecisionValue(ctx, source)
+	if !ok || types.RejectNonFiniteNarrowFloat(value, peerOid) != nil {
+		return nil, false, nil
+	}
+	converted, err := makePlan2CastExpr(ctx, source, peer)
+	return converted, err == nil, err
+}
+
+var preparedDecimalNumeral = regexp.MustCompile(`^\s*[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?\s*$`)
+
+// lowPrecisionTextFloat32 is decimal numeral text rounded to float32 as CAST to
+// bf16/float16/float8/float4 rounds it: to odd, from the text's exact value.
+func lowPrecisionTextFloat32(text string) (float32, bool) {
+	if !preparedDecimalNumeral.MatchString(text) {
+		return 0, false
+	}
+	f, _, err := types.Float32RoundToOddString(text)
+	return f, err == nil
+}
+
+// lowPrecisionLiteralFloat32 is a numeric or decimal-numeral text literal rounded to
+// float32 as CAST to bf16/float16/float8/float4 rounds it: to odd, from the exact value of
+// a decimal or text literal.
+func lowPrecisionLiteralFloat32(expr *Expr) (float32, bool) {
+	// a decimal literal binds as CAST('<digits>' AS DECIMAL(w, s))
+	if fn := expr.GetF(); fn != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 {
+		lit := fn.Args[0].GetLit()
+		sval, isStr := lit.GetValue().(*plan.Literal_Sval)
+		if lit == nil || lit.Isnull || !isStr {
+			return 0, false
+		}
+		switch t := expr.Typ; types.T(t.Id) {
+		case types.T_decimal64, types.T_decimal128:
+			d, err := types.ParseDecimal128(sval.Sval, t.Width, t.Scale)
+			if err != nil {
+				return 0, false
+			}
+			return lowPrecisionTextFloat32(d.Format(t.Scale))
+		}
+		return 0, false
+	}
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull {
+		return 0, false
+	}
+	switch v := lit.Value.(type) {
+	case *plan.Literal_Dval:
+		return types.Float32RoundToOdd(v.Dval), true
+	case *plan.Literal_Fval:
+		return v.Fval, true
+	case *plan.Literal_I8Val:
+		return types.Float32RoundToOddInt(int64(v.I8Val)), true
+	case *plan.Literal_I16Val:
+		return types.Float32RoundToOddInt(int64(v.I16Val)), true
+	case *plan.Literal_I32Val:
+		return types.Float32RoundToOddInt(int64(v.I32Val)), true
+	case *plan.Literal_I64Val:
+		return types.Float32RoundToOddInt(v.I64Val), true
+	case *plan.Literal_U8Val:
+		return types.Float32RoundToOddUint(uint64(v.U8Val)), true
+	case *plan.Literal_U16Val:
+		return types.Float32RoundToOddUint(uint64(v.U16Val)), true
+	case *plan.Literal_U32Val:
+		return types.Float32RoundToOddUint(uint64(v.U32Val)), true
+	case *plan.Literal_U64Val:
+		return types.Float32RoundToOddUint(v.U64Val), true
+	case *plan.Literal_Decimal64Val:
+		return lowPrecisionTextFloat32(types.Decimal64(v.Decimal64Val.A).Format(expr.Typ.Scale))
+	case *plan.Literal_Decimal128Val:
+		d := types.Decimal128{B0_63: uint64(v.Decimal128Val.A), B64_127: uint64(v.Decimal128Val.B)}
+		return lowPrecisionTextFloat32(d.Format(expr.Typ.Scale))
+	case *plan.Literal_Sval:
+		return lowPrecisionTextFloat32(v.Sval)
+	}
+	return 0, false
+}
+
+// preparedLowPrecisionValue is this execution's value of a marker -- a float, a signed or
+// unsigned integer, or text holding a decimal numeral -- rounded to float32 as CAST to
+// bf16/float16/float8/float4 rounds it.
+func preparedLowPrecisionValue(ctx context.Context, expr *Expr) (float32, bool) {
+	raw, present := preparedConfigurationValue(ctx, expr)
+	if !present {
+		return 0, false
+	}
+	switch value := raw.(type) {
+	case float64:
+		return types.Float32RoundToOdd(value), true
+	case float32:
+		return value, true
+	case int64:
+		return types.Float32RoundToOddInt(value), true
+	case int32:
+		return types.Float32RoundToOddInt(int64(value)), true
+	case int:
+		return types.Float32RoundToOddInt(int64(value)), true
+	case uint64:
+		return types.Float32RoundToOddUint(value), true
+	case uint32:
+		return types.Float32RoundToOddUint(uint64(value)), true
+	case string:
+		return lowPrecisionTextFloat32(value)
+	case []byte:
+		return lowPrecisionTextFloat32(string(value))
+	default:
+		return 0, false
+	}
 }
 
 func (state *preparedSourceBindingState) bindingForPosition(position int32) (PreparedSourceBinding, bool) {

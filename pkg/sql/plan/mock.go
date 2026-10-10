@@ -1451,6 +1451,21 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 		autoIncrs: []string{"seq"},
 	}
 
+	// vecf8/vecf4 and bf16 columns.
+	constraintTestSchema["vecblock_t"] = &Schema{
+		tblId: 88970,
+		cols: []col{
+			{"id", types.T_int32, false, 32, 0},
+			{"a", types.T_array_float8, true, 4, 0},
+			{"b", types.T_array_float4, true, 4, 0},
+			{"f", types.T_bf16, true, 16, 0},
+			{"g", types.T_float8, true, 8, 0},
+			{"h", types.T_float4, true, 8, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
+
 	constraintTestSchema["docs_ft"] = &Schema{
 		tblId: 88950,
 		cols: []col{

@@ -88,6 +88,13 @@ const (
 	T_text     T = 71
 	T_datalink T = 72
 
+	// scalar low-precision floats (#20567). Stored as fixed-width uint16/uint8;
+	// arithmetic runs on the float32 bridge (see float16.go/float8.go/float4.go).
+	T_bf16    T = 73 // SQL bf16    (bfloat16, 2 bytes)
+	T_float16 T = 74 // SQL float16 (IEEE binary16, 2 bytes)
+	T_float8  T = 75 // SQL float8  (FP8 e4m3, 1 byte)
+	T_float4  T = 76 // SQL float4  (FP4 e2m1, 1 byte)
+
 	// Transaction TS
 	T_TS       T = 100
 	T_Rowid    T = 101
@@ -104,6 +111,8 @@ const (
 	T_array_float16 T = 227 // In SQL , it is vecf16  (IEEE fp16/half)
 	T_array_int8    T = 228 // In SQL , it is vecint8  (int8)
 	T_array_uint8   T = 229 // In SQL , it is vecuint8 (uint8)
+	T_array_float8  T = 230 // In SQL , it is vecf8 (MXFP8 block-scaled, see vecblock.go)
+	T_array_float4  T = 231 // In SQL , it is vecf4 (NVFP4 block-scaled, see vecblock.go)
 
 	//note: max value of uint8 is 255
 )
@@ -119,7 +128,33 @@ const (
 	ArrayFloat16SQLName = "vecf16"
 	ArrayInt8SQLName    = "vecint8"
 	ArrayUint8SQLName   = "vecuint8"
+	ArrayFloat8SQLName  = "vecf8"
+	ArrayFloat4SQLName  = "vecf4"
 )
+
+// ArrayTypeBySQLName returns the T_array_* type for a lowercase SQL type name
+// (e.g. "vecf8" -> T_array_float8).
+func ArrayTypeBySQLName(name string) (T, bool) {
+	switch name {
+	case ArrayFloat32SQLName:
+		return T_array_float32, true
+	case ArrayFloat64SQLName:
+		return T_array_float64, true
+	case ArrayBF16SQLName:
+		return T_array_bf16, true
+	case ArrayFloat16SQLName:
+		return T_array_float16, true
+	case ArrayInt8SQLName:
+		return T_array_int8, true
+	case ArrayUint8SQLName:
+		return T_array_uint8, true
+	case ArrayFloat8SQLName:
+		return T_array_float8, true
+	case ArrayFloat4SQLName:
+		return T_array_float4, true
+	}
+	return 0, false
+}
 
 // ArraySQLName returns the lowercase SQL type name for an array element type
 // (e.g. T_array_float32 -> "vecf32"), or "" if t is not an array/vector type.
@@ -137,6 +172,10 @@ func (t T) ArraySQLName() string {
 		return ArrayInt8SQLName
 	case T_array_uint8:
 		return ArrayUint8SQLName
+	case T_array_float8:
+		return ArrayFloat8SQLName
+	case T_array_float4:
+		return ArrayFloat4SQLName
 	}
 	return ""
 }
@@ -546,6 +585,28 @@ type FixedSizeTExceptStrType interface {
 	bool | OrderedT | Decimal | TS | Rowid | Uuid | Blockid
 }
 
+// LowPrecFloat is the set of scalar low-precision float types (bf16/float16/float8/
+// float4): fixed-size values that widen losslessly to float32. It combines the
+// fixed-size storage bound (so DecodeFixed / column accessors work) with the
+// ToFloat32 method (so ordering / compare / sum / min-max / cast helpers compute by
+// float VALUE, not raw bits). The union + method together admit exactly the four
+// types. It is the single constraint for the generic helpers these types share
+// instead of an inline `interface{ ToFloat32() float32 }` repeated per site.
+type LowPrecFloat interface {
+	FixedSizeTExceptStrType
+	ToFloat32() float32
+}
+
+// CanonicalLowPrecFloat stores a zero of either sign as +0 (code 0 in every format), so
+// equal bf16/float16/float8/float4 values have equal bits for hashing and equality.
+func CanonicalLowPrecFloat[T LowPrecFloat](v T) T {
+	if v.ToFloat32() == 0 {
+		var zero T
+		return zero
+	}
+	return v
+}
+
 type Number interface {
 	Ints | UInts | Floats | Decimal
 }
@@ -595,6 +656,10 @@ var Types = map[string]T{
 	"text":       T_text,
 	"datalink":   T_datalink,
 	"blob":       T_blob,
+	"bf16":       T_bf16,
+	"float16":    T_float16,
+	"float8":     T_float8,
+	"float4":     T_float4,
 	"uuid":       T_uuid,
 
 	"transaction timestamp": T_TS,
@@ -607,6 +672,8 @@ var Types = map[string]T{
 	"array float16": T_array_float16,
 	"array int8":    T_array_int8,
 	"array uint8":   T_array_uint8,
+	"array float8":  T_array_float8,
+	"array float4":  T_array_float4,
 }
 
 func New(oid T, width, scale int32) Type {
@@ -710,7 +777,7 @@ func (t Type) IsIntOrUint() bool {
 
 func (t Type) IsFloat() bool {
 	switch t.Oid {
-	case T_float32, T_float64:
+	case T_float32, T_float64, T_bf16, T_float16, T_float8, T_float4:
 		return true
 	default:
 		return false
@@ -776,10 +843,24 @@ func (t Type) DescString() string {
 		return fmt.Sprintf("VECINT8(%d)", t.Width)
 	case T_array_uint8:
 		return fmt.Sprintf("VECUINT8(%d)", t.Width)
+	case T_array_float8:
+		return fmt.Sprintf("VECF8(%d)", t.Width)
+	case T_array_float4:
+		return fmt.Sprintf("VECF4(%d)", t.Width)
 	}
 	return t.Oid.String()
 }
 
+// ArrayCellBytes returns the cell byte length of a T_array_* type of dimension Width.
+func (t Type) ArrayCellBytes() int {
+	if f, ok := t.Oid.BlockScaledFormat(); ok {
+		return BlockScaledCellSize(f, int(t.Width))
+	}
+	return int(t.Width) * t.GetArrayElementSize()
+}
+
+// GetArrayElementSize returns the element byte size of an IsArrayRelate type; it
+// panics for any other type, including vecf8/vecf4.
 func (t Type) GetArrayElementSize() int {
 	switch t.Oid {
 	case T_array_float32:
@@ -848,6 +929,10 @@ func (t T) ToType() Type {
 		typ.Size = 4
 	case T_float64:
 		typ.Size = 8
+	case T_bf16, T_float16:
+		typ.Size = 2
+	case T_float8, T_float4:
+		typ.Size = 1
 	case T_decimal64:
 		typ.Size = 8
 		typ.Width = 18
@@ -873,7 +958,8 @@ func (t T) ToType() Type {
 	case T_varchar:
 		typ.Size = VarlenaSize
 		typ.Width = MaxVarcharLen
-	case T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8:
+	case T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8,
+		T_array_float8, T_array_float4:
 		typ.Size = VarlenaSize
 		typ.Width = MaxArrayDimension
 	case T_binary:
@@ -928,6 +1014,14 @@ func (t T) String() string {
 		return "FLOAT"
 	case T_float64:
 		return "DOUBLE"
+	case T_bf16:
+		return "BF16"
+	case T_float16:
+		return "FLOAT16"
+	case T_float8:
+		return "FLOAT8"
+	case T_float4:
+		return "FLOAT4"
 	case T_date:
 		return "DATE"
 	case T_datetime:
@@ -990,6 +1084,10 @@ func (t T) String() string {
 		return "VECINT8"
 	case T_array_uint8:
 		return "VECUINT8"
+	case T_array_float8:
+		return "VECF8"
+	case T_array_float4:
+		return "VECF4"
 	case T_enum:
 		return "ENUM"
 	}
@@ -1023,6 +1121,14 @@ func (t T) OidString() string {
 		return "T_float64"
 	case T_float32:
 		return "T_float32"
+	case T_bf16:
+		return "T_bf16"
+	case T_float16:
+		return "T_float16"
+	case T_float8:
+		return "T_float8"
+	case T_float4:
+		return "T_float4"
 	case T_uint8:
 		return "T_uint8"
 	case T_uint16:
@@ -1083,6 +1189,10 @@ func (t T) OidString() string {
 		return "T_array_int8"
 	case T_array_uint8:
 		return "T_array_uint8"
+	case T_array_float8:
+		return "T_array_float8"
+	case T_array_float4:
+		return "T_array_float4"
 	}
 	return "unknown_type"
 }
@@ -1094,9 +1204,9 @@ func (t T) TypeLen() int {
 		return 0
 	case T_bit:
 		return 8
-	case T_int8, T_bool:
+	case T_int8, T_bool, T_float8, T_float4:
 		return 1
-	case T_int16:
+	case T_int16, T_bf16, T_float16:
 		return 2
 	case T_int32, T_date:
 		return 4
@@ -1116,7 +1226,7 @@ func (t T) TypeLen() int {
 		return 4
 	case T_float64:
 		return 8
-	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
+	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_array_float8, T_array_float4, T_datalink, T_geometry, T_geometry32:
 		return VarlenaSize
 	case T_decimal64:
 		return 8
@@ -1147,9 +1257,9 @@ func (t T) FixedLength() int {
 		return 0
 	case T_bit:
 		return 8
-	case T_int8, T_uint8, T_bool:
+	case T_int8, T_uint8, T_bool, T_float8, T_float4:
 		return 1
-	case T_int16, T_uint16:
+	case T_int16, T_uint16, T_bf16, T_float16:
 		return 2
 	case T_year:
 		return 2
@@ -1171,7 +1281,7 @@ func (t T) FixedLength() int {
 		return RowidSize
 	case T_Blockid:
 		return BlockidSize
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_array_float8, T_array_float4, T_datalink, T_geometry, T_geometry32:
 		return -24
 	case T_enum:
 		return 2
@@ -1222,10 +1332,15 @@ func (t T) IsInteger() bool {
 
 // IsFloat return true if the types.T is floating Point Types
 func (t T) IsFloat() bool {
-	if t == T_float32 || t == T_float64 {
+	if t == T_float32 || t == T_float64 || t == T_bf16 || t == T_float16 || t == T_float8 || t == T_float4 {
 		return true
 	}
 	return false
+}
+
+// IsLowPrecisionFloat reports the scalar bf16, float16, float8 and float4 types.
+func (t T) IsLowPrecisionFloat() bool {
+	return t == T_bf16 || t == T_float16 || t == T_float8 || t == T_float4
 }
 
 // IsEnum return true if the types.T is Enum type
@@ -1251,12 +1366,35 @@ func (t T) IsDateRelate() bool {
 	return false
 }
 
+// IsArrayRelate reports the fixed-element vector types, whose cell is Width
+// elements of GetArrayElementSize bytes. It excludes vecf8/vecf4.
 func (t T) IsArrayRelate() bool {
 	if t == T_array_float32 || t == T_array_float64 ||
 		t == T_array_bf16 || t == T_array_float16 || t == T_array_int8 || t == T_array_uint8 {
 		return true
 	}
 	return false
+}
+
+// IsBlockScaledArray reports vecf8/vecf4, whose cell is a vecblock.go cell.
+func (t T) IsBlockScaledArray() bool {
+	return t == T_array_float8 || t == T_array_float4
+}
+
+// IsArray reports every T_array_* type: IsArrayRelate or IsBlockScaledArray.
+func (t T) IsArray() bool {
+	return t.IsArrayRelate() || t.IsBlockScaledArray()
+}
+
+// BlockScaledFormat returns the cell format of vecf8/vecf4.
+func (t T) BlockScaledFormat() (BlockScaledFormat, bool) {
+	switch t {
+	case T_array_float8:
+		return BlockScaledMXFP8, true
+	case T_array_float4:
+		return BlockScaledNVFP4, true
+	}
+	return 0, false
 }
 
 func (t T) IsDatalink() bool {

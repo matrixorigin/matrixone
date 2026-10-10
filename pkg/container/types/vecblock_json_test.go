@@ -1,0 +1,152 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package types
+
+import (
+	"math/rand"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+// TestBlockScaledJSONIdentity checks that the exact text rebuilds the same cell bytes, for
+// cells of many magnitudes and dimensions, and that the decoded-value text does not: it is
+// quantized again and can store other values.
+func TestBlockScaledJSONIdentity(t *testing.T) {
+	r := rand.New(rand.NewSource(29554))
+	dims := []int{1, 15, 16, 17, 31, 32, 33, 70}
+	scales := []float64{1e-30, 1e-3, 1, 1e3, 1e30}
+	vectors := make([][]float32, 0, len(dims)*len(scales)+2)
+	for _, dim := range dims {
+		for _, scale := range scales {
+			v := make([]float32, dim)
+			for i := range v {
+				v[i] = float32(r.NormFloat64() * scale)
+			}
+			vectors = append(vectors, v)
+		}
+	}
+	vectors = append(vectors, make([]float32, 40)) // all zero
+	review := make([]float32, 17)                  // only elements 0 and 16 nonzero
+	review[0], review[16] = 8.7649145, 5.7432985
+	vectors = append(vectors, review)
+	for _, f := range []BlockScaledFormat{BlockScaledMXFP8, BlockScaledNVFP4} {
+		for i, v := range vectors {
+			cell, err := AppendBlockScaled(nil, f, v)
+			require.NoError(t, err)
+			text, err := BlockScaledToJSON(cell)
+			require.NoError(t, err)
+			require.True(t, IsBlockScaledJSON(text))
+			back, err := BlockScaledFromJSON(f, text)
+			require.NoError(t, err, "%s vector %d: %s", f, i, text)
+			require.Equal(t, cell, back, "%s vector %d: %s", f, i, text)
+			again, err := StringToBlockScaled(f, " \n"+text)
+			require.NoError(t, err)
+			require.Equal(t, cell, again)
+		}
+	}
+	// the decoded-value text is quantized again: vecf4's global scale follows the decoded
+	// maximum, and element 16 moves from 6.2606535 to 6.8867183
+	cell, err := AppendBlockScaled(nil, BlockScaledNVFP4, review)
+	require.NoError(t, err)
+	decoded, err := BlockScaledToString(cell)
+	require.NoError(t, err)
+	requantized, err := StringToBlockScaled(BlockScaledNVFP4, decoded)
+	require.NoError(t, err)
+	v1, _ := BlockScaledToFloat32(cell)
+	v2, _ := BlockScaledToFloat32(requantized)
+	require.NotEqual(t, v1[16], v2[16])
+	text, err := BlockScaledToJSON(cell)
+	require.NoError(t, err)
+	exact, err := StringToBlockScaled(BlockScaledNVFP4, text)
+	require.NoError(t, err)
+	require.Equal(t, cell, exact)
+}
+
+func TestBlockScaledJSONForm(t *testing.T) {
+	cell, err := AppendBlockScaled(nil, BlockScaledNVFP4, []float32{1, -3, 0, 6, 0.5})
+	require.NoError(t, err)
+	text, err := BlockScaledToJSON(cell)
+	require.NoError(t, err)
+	// the global scale is amax / (6 * 448); the block scale 448 and the codes decode to the input
+	require.Equal(t, `{"g":0.002232143,"s":[448],"v":[1,-3,0,6,0.5]}`, text)
+	cell, err = AppendBlockScaled(nil, BlockScaledMXFP8, []float32{1, 2})
+	require.NoError(t, err)
+	text, err = BlockScaledToJSON(cell)
+	require.NoError(t, err)
+	require.Equal(t, `{"g":1,"s":[0.0078125],"v":[128,256]}`, text)
+}
+
+func TestBlockScaledJSONRejects(t *testing.T) {
+	ones := func(n int) string {
+		return "[" + strings.TrimSuffix(strings.Repeat("1,", n), ",") + "]"
+	}
+	for _, tc := range []struct {
+		f    BlockScaledFormat
+		text string
+	}{
+		{BlockScaledNVFP4, `{"s":[1],"v":[1]}`},                    // no global
+		{BlockScaledMXFP8, `{"s":[1],"v":[1]}`},                    // no global
+		{BlockScaledMXFP8, `{"g":2,"s":[1],"v":[1]}`},              // vecf8 global is 1
+		{BlockScaledMXFP8, `{"g":1,"s":[],"v":[]}`},                // no value
+		{BlockScaledMXFP8, `{"g":1,"v":[1]}`},                      // no scale
+		{BlockScaledMXFP8, `{"g":1,"s":[1,1],"v":[1]}`},            // a scale per block: 1
+		{BlockScaledMXFP8, `{"g":1,"s":[1],"v":` + ones(33) + `}`}, // 33 values need 2 scales
+		{BlockScaledNVFP4, `{"g":1,"s":[1],"v":` + ones(17) + `}`}, // 17 values need 2 scales
+		{BlockScaledMXFP8, `{"g":1,"s":[3],"v":[1]}`},              // scale not a power of two
+		{BlockScaledNVFP4, `{"g":1,"s":[-1],"v":[1]}`},             // negative scale
+		{BlockScaledNVFP4, `{"g":1,"s":[1],"v":[2.5]}`},            // not an E2M1 value
+		{BlockScaledMXFP8, `{"g":1,"s":[1],"v":[1.0625]}`},         // not an E4M3 value
+		{BlockScaledMXFP8, `{"g":1,"s":[1],"v":[1],"x":1}`},        // unknown key
+		{BlockScaledMXFP8, `{"b":[{"s":1,"v":[1]}]}`},              // the former per-block form
+		{BlockScaledMXFP8, `{"g":1,"s":[1],"v":[1]} x`},            // trailing text
+		{BlockScaledMXFP8, `{"g":1,"s":[1],"v":["1"]}`},            // not a number
+		{BlockScaledMXFP8, `{"g":1,"s":["1"],"v":[1]}`},            // not a number
+		{BlockScaledNVFP4, `{"g":1e38,"s":[448],"v":[6]}`},         // decodes to infinity
+		{BlockScaledNVFP4, `{"g":1e39,"s":[1],"v":[1]}`},           // not a finite float32
+		{BlockScaledMXFP8, `{"g":1,"s":[1],"v":[[1]]}`},            // nested values
+	} {
+		_, err := BlockScaledFromJSON(tc.f, tc.text)
+		require.Error(t, err, "%s %s", tc.f, tc.text)
+	}
+	// -0 is stored as code 0
+	a, err := BlockScaledFromJSON(BlockScaledMXFP8, `{"g":1,"s":[1],"v":[-0,2]}`)
+	require.NoError(t, err)
+	b, err := BlockScaledFromJSON(BlockScaledMXFP8, `{"g":1,"s":[1],"v":[0,2]}`)
+	require.NoError(t, err)
+	require.Equal(t, a, b)
+	// 33 values in two blocks, the last of one value
+	_, err = BlockScaledFromJSON(BlockScaledMXFP8, `{"g":1,"s":[1,2],"v":`+ones(33)+`}`)
+	require.NoError(t, err)
+}
+
+// TestBlockScaledFromBinaryOtherFormat checks that an unsized binary value holding a cell of
+// the other format is an error, not float32 elements.
+func TestBlockScaledFromBinaryOtherFormat(t *testing.T) {
+	cell4, err := AppendBlockScaled(nil, BlockScaledNVFP4, []float32{1, 2, 3, 4, 5})
+	require.NoError(t, err)
+	require.Zero(t, len(cell4)%4)
+	_, err = BlockScaledFromBinary(BlockScaledMXFP8, MaxArrayDimension, cell4)
+	require.ErrorContains(t, err, "is not a")
+	got, err := BlockScaledFromBinary(BlockScaledNVFP4, MaxArrayDimension, cell4)
+	require.NoError(t, err)
+	require.Equal(t, cell4, got)
+	// the exact text of a user variable value casts back to the cell
+	text := BlockScaledValue{Oid: T_array_float4, Cell: cell4}.String()
+	back, err := BlockScaledFromJSON(BlockScaledNVFP4, text)
+	require.NoError(t, err)
+	require.Equal(t, cell4, back)
+}

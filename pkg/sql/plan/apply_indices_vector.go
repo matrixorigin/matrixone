@@ -1455,10 +1455,18 @@ func vecFloatKey(e *plan.Expr, elemType types.T) (string, bool) {
 		// peeling it would parse the inner literal at the wrong type and equate two DIFFERENT vectors,
 		// silently rewriting the SELECT distance to a score computed for the other one. Stop and yield
 		// no key (fail-safe: no rewrite) rather than guess at the conversion.
-		if vecElemByteSize(types.T(f.Args[0].Typ.GetId())) != 0 {
+		if in := types.T(f.Args[0].Typ.GetId()); vecElemByteSize(in) != 0 || in.IsBlockScaledArray() {
+			return "", false
+		}
+		// The text must be cast to elemType itself: cast('[...]' as vecf8(n)) quantizes the text
+		// into a different vector than the elemType parse of the same text.
+		if t := types.T(e.Typ.GetId()); t.IsArray() && t != elemType {
 			return "", false
 		}
 		e = f.Args[0]
+	}
+	if t := types.T(e.Typ.GetId()); t.IsArray() && t != elemType {
+		return "", false
 	}
 	lit := e.GetLit()
 	if lit == nil {

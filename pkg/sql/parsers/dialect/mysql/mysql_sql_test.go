@@ -5051,12 +5051,31 @@ var (
 			output: "create table t1 (a vecbf16(3), b vecf16(3), c vecint8(3))",
 		},
 		{
+			// #20567: scalar low-precision float types (no length option).
+			input:  "create table t1(a bf16, b float16, c float8, d float4)",
+			output: "create table t1 (a bf16, b float16, c float8, d float4)",
+		},
+		{
 			input:  "create table t1(a vecbf16(128), b vecf16(65535), c vecint8(1))",
 			output: "create table t1 (a vecbf16(128), b vecf16(65535), c vecint8(1))",
 		},
 		{
 			input:  "create table t1(a vecuint8(3))",
 			output: "create table t1 (a vecuint8(3))",
+		},
+		{
+			// #20567: block-scaled vecf8 (MXFP8) / vecf4 (NVFP4).
+			input:  "create table t1(a vecf8(3), b vecf4(1024), c vecf8(65535), d vecf4(1))",
+			output: "create table t1 (a vecf8(3), b vecf4(1024), c vecf8(65535), d vecf4(1))",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecf8(3)), cast(v as vecf4(3)) from t1",
+			output: "select cast([1,2,3] as vecf8(3)), cast(v as vecf4(3)) from t1",
+		},
+		{
+			// vecf8/vecf4 are non-reserved keywords.
+			input:  "create table vecf8 (vecf4 int)",
+			output: "create table vecf8 (vecf4 int)",
 		},
 		{
 			input:  "create table t1(a vecuint8(128), b vecuint8(65535), c vecuint8(1))",

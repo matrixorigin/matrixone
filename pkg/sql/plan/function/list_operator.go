@@ -1350,6 +1350,48 @@ var supportedOperators = []FuncNew{
 					return newOpOperatorFixedIn[uint64]().operatorIn
 				},
 			},
+			// bf16/float16/float8/float4: stored values are canonical (one zero, no NaN), so
+			// equality of the codes is equality of the values
+			{
+				overloadId: 103,
+				args:       []types.T{types.T_bf16, types.T_bf16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.BF16]().operatorIn
+				},
+			},
+			{
+				overloadId: 104,
+				args:       []types.T{types.T_float16, types.T_float16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float16]().operatorIn
+				},
+			},
+			{
+				overloadId: 105,
+				args:       []types.T{types.T_float8, types.T_float8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float8]().operatorIn
+				},
+			},
+			{
+				overloadId: 106,
+				args:       []types.T{types.T_float4, types.T_float4},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float4]().operatorIn
+				},
+			},
 		},
 	},
 
@@ -1912,6 +1954,48 @@ var supportedOperators = []FuncNew{
 					return newOpOperatorFixedIn[uint64]().operatorNotIn
 				},
 			},
+			// bf16/float16/float8/float4: stored values are canonical (one zero, no NaN), so
+			// equality of the codes is equality of the values
+			{
+				overloadId: 103,
+				args:       []types.T{types.T_bf16, types.T_bf16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.BF16]().operatorNotIn
+				},
+			},
+			{
+				overloadId: 104,
+				args:       []types.T{types.T_float16, types.T_float16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float16]().operatorNotIn
+				},
+			},
+			{
+				overloadId: 105,
+				args:       []types.T{types.T_float8, types.T_float8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float8]().operatorNotIn
+				},
+			},
+			{
+				overloadId: 106,
+				args:       []types.T{types.T_float4, types.T_float4},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float4]().operatorNotIn
+				},
+			},
 		},
 	},
 
@@ -2355,7 +2439,7 @@ var supportedOperators = []FuncNew{
 		functionId: UNARY_PLUS,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     UNARY_ARITHMETIC_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		checkFn:    unaryPlusMatch,
 
 		Overloads: []overload{
 			{
@@ -3053,6 +3137,62 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return coalesceBinaryStringReturnType(types.T_varbinary, parameters)
 				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
+			{
+				overloadId: 32,
+				args:       []types.T{types.T_bf16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bf16.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.BF16]
+				},
+			},
+			{
+				overloadId: 33,
+				args:       []types.T{types.T_float16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float16.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Float16]
+				},
+			},
+			{
+				overloadId: 34,
+				args:       []types.T{types.T_float8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Float8]
+				},
+			},
+			{
+				overloadId: 35,
+				args:       []types.T{types.T_float4},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float4.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Float4]
+				},
+			},
+			{
+				overloadId: 36,
+				args:       []types.T{types.T_array_float8},
+				retType:    coalesceVectorReturnType,
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
+			{
+				overloadId: 37,
+				args:       []types.T{types.T_array_float4},
+				retType:    coalesceVectorReturnType,
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
 				},

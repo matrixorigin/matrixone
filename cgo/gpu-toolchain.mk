@@ -41,7 +41,7 @@ MO_GPU_CUDA_LIBRARY_DIRS := $(MO_GPU_CUDA_ROOT)/lib
 MO_GPU_CUDA_STUB_DIRS := $(MO_GPU_CUDA_ROOT)/lib/stubs
 MO_GPU_RAPIDS_INCLUDE_DIRS := $(MO_GPU_PREFIX)/include
 MO_GPU_CFLAGS := -I$(MO_GPU_CUDA_INCLUDE_DIRS) -I$(MO_GPU_RAPIDS_INCLUDE_DIRS)
-MO_GPU_LDFLAGS := -L$(MO_GPU_CUDA_STUB_DIRS) -lcuda -L$(MO_GPU_CUDA_LIBRARY_DIRS) -lcudart -L$(MO_GPU_PREFIX)/lib -lcuvs -lcuvs_c -lstdc++
+MO_GPU_LDFLAGS := -L$(MO_GPU_CUDA_STUB_DIRS) -lcuda -L$(MO_GPU_CUDA_LIBRARY_DIRS) -lcudart -lcublasLt -L$(MO_GPU_PREFIX)/lib -lcuvs -lcuvs_c -lstdc++
 MO_GPU_RUNTIME_PATH := $(MO_GPU_CUDA_LIBRARY_DIRS):$(MO_GPU_PREFIX)/lib
 MO_GPU_REQUIRED := $(PIXI_PROJECT_ROOT)/pixi.lock $(MO_GPU_PREFIX)/conda-meta $(MO_GPU_CC) $(MO_GPU_CXX) $(MO_GPU_NVCC) $(MO_GPU_CUDA_INCLUDE_DIRS)/cuda.h $(MO_GPU_CUDA_LIBRARY_DIRS)/libcudart.so $(MO_GPU_CUDA_STUB_DIRS)/libcuda.so $(MO_GPU_RAPIDS_INCLUDE_DIRS)/cuvs/core/c_api.h $(MO_GPU_PREFIX)/lib/libcuvs.so $(MO_GPU_PREFIX)/lib/libcuvs_c.so $(MO_GPU_PREFIX)/lib/librmm.so
 ifneq ($(words $(wildcard $(MO_GPU_REQUIRED))),$(words $(MO_GPU_REQUIRED)))

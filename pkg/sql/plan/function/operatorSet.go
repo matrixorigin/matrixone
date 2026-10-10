@@ -318,7 +318,7 @@ func coalesceBinaryStringResult(overloads []overload, inputs []types.Type) (chec
 // selected vector type.
 func caseVectorCommonType(source []types.Type) (retType types.Type, hasVector, valid bool) {
 	for i := range source {
-		if source[i].Oid.IsArrayRelate() {
+		if source[i].Oid.IsArray() {
 			retType = source[i]
 			hasVector = true
 			break
@@ -332,7 +332,7 @@ func caseVectorCommonType(source []types.Type) (retType types.Type, hasVector, v
 		if source[i].Oid == types.T_any {
 			continue
 		}
-		if !source[i].Oid.IsArrayRelate() ||
+		if !source[i].Oid.IsArray() ||
 			source[i].Oid != retType.Oid || source[i].Width != retType.Width {
 			return types.Type{}, true, false
 		}
@@ -413,6 +413,25 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			shouldCast := needCast
 			for i := range inputs {
 				if inputs[i].Oid != finalTypes[i].Oid || inputs[i].Scale != finalTypes[i].Scale {
+					shouldCast = true
+				}
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+
+		if lowPrecType, ok := sameLowPrecisionFloatType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			shouldCast := needCast
+			for i := range finalTypes {
+				if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+					finalTypes[i] = types.T_bool.ToType()
+				} else {
+					finalTypes[i] = lowPrecType
+				}
+				if inputs[i].Oid != finalTypes[i].Oid {
 					shouldCast = true
 				}
 			}
@@ -579,6 +598,14 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return generalCaseFn[float32](parameters, result, proc, length, selectList)
 	case types.T_float64:
 		return generalCaseFn[float64](parameters, result, proc, length, selectList)
+	case types.T_bf16:
+		return generalCaseFn[types.BF16](parameters, result, proc, length, selectList)
+	case types.T_float16:
+		return generalCaseFn[types.Float16](parameters, result, proc, length, selectList)
+	case types.T_float8:
+		return generalCaseFn[types.Float8](parameters, result, proc, length, selectList)
+	case types.T_float4:
+		return generalCaseFn[types.Float4](parameters, result, proc, length, selectList)
 	case types.T_date:
 		return generalCaseFn[types.Date](parameters, result, proc, length, selectList)
 	case types.T_time:
@@ -603,7 +630,8 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		types.T_blob, types.T_text, types.T_datalink, types.T_json,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16,
-		types.T_array_int8, types.T_array_uint8:
+		types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		return strCaseFn(parameters, result, proc, length, selectList)
 	}
 	panic("unreached code")
@@ -781,6 +809,12 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 			}
 			return newCheckResultWithSuccess(0)
 		}
+		if lowPrecType, ok := sameLowPrecisionFloatType(source); ok {
+			if needCast || source[0].Oid != lowPrecType.Oid || source[1].Oid != lowPrecType.Oid {
+				return newCheckResultWithCast(0, []types.Type{conditionType, lowPrecType, lowPrecType})
+			}
+			return newCheckResultWithSuccess(0)
+		}
 		if retType, hasVector, ok := conditionalVectorType(source); hasVector {
 			if !ok {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -906,6 +940,14 @@ func IffConditionTruthyAt(vec *vector.Vector, row uint64, mode SQLCompatibilityM
 		return vector.GetFixedAtNoTypeCheck[float32](vec, int(row)) != 0, nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](vec, int(row)) != 0, nil
+	case types.T_bf16:
+		return vector.GetFixedAtNoTypeCheck[types.BF16](vec, int(row)).ToFloat32() != 0, nil
+	case types.T_float16:
+		return vector.GetFixedAtNoTypeCheck[types.Float16](vec, int(row)).ToFloat32() != 0, nil
+	case types.T_float8:
+		return vector.GetFixedAtNoTypeCheck[types.Float8](vec, int(row)).ToFloat32() != 0, nil
+	case types.T_float4:
+		return vector.GetFixedAtNoTypeCheck[types.Float4](vec, int(row)).ToFloat32() != 0, nil
 	case types.T_decimal64:
 		return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, int(row)) != 0, nil
 	case types.T_decimal128:
@@ -948,6 +990,14 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return generalIffFn[float32](parameters, result, proc, length, selectList)
 	case types.T_float64:
 		return generalIffFn[float64](parameters, result, proc, length, selectList)
+	case types.T_bf16:
+		return generalIffFn[types.BF16](parameters, result, proc, length, selectList)
+	case types.T_float16:
+		return generalIffFn[types.Float16](parameters, result, proc, length, selectList)
+	case types.T_float8:
+		return generalIffFn[types.Float8](parameters, result, proc, length, selectList)
+	case types.T_float4:
+		return generalIffFn[types.Float4](parameters, result, proc, length, selectList)
 	case types.T_uuid:
 		return generalIffFn[types.Uuid](parameters, result, proc, length, selectList)
 	case types.T_bool:
@@ -971,7 +1021,8 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_blob, types.T_text, types.T_datalink, types.T_json,
 		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		return strIffFn(parameters, result, proc, length, selectList)
 	}
 	panic("unreached code")
@@ -1063,6 +1114,21 @@ func unaryMinusMatch(overloads []overload, inputs []types.Type) checkResult {
 			// use the historical BIGINT overload after an explicit widening cast,
 			// so old workers execute the same physical argument/result contract.
 			return newCheckResultWithCast(3, []types.Type{types.T_int64.ToType()})
+		case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+			// The low-precision floats widen losslessly to float32 (overload 4).
+			return newCheckResultWithCast(4, []types.Type{types.T_float32.ToType()})
+		}
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
+// unaryPlusMatch widens a low-precision float operand to float32 (overload 8); every
+// other type keeps its existing unary-plus overload.
+func unaryPlusMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 {
+		switch inputs[0].Oid {
+		case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+			return newCheckResultWithCast(8, []types.Type{types.T_float32.ToType()})
 		}
 	}
 	return fixedTypeMatch(overloads, inputs)
