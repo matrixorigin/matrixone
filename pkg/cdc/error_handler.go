@@ -22,7 +22,6 @@ import (
 	"strings"
 	"time"
 
-	gomysql "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cdc/retry"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -44,11 +43,10 @@ func ClassifyRetryableError(err error) (retryable, classified bool) {
 	}
 	var code uint16
 	var native *moerr.Error
-	var wire *gomysql.MySQLError
 	if errors.As(err, &native) {
 		code = native.ErrorCode()
-	} else if errors.As(err, &wire) {
-		code = wire.Number
+	} else {
+		code, _ = retry.MySQLErrorCode(err)
 	}
 	// MO preserves these internal codes over the MySQL protocol. Keep one
 	// decision for both transports, including local client shutdown.
