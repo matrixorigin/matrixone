@@ -493,6 +493,11 @@ type QueryBuilder struct {
 	// Negative AuxIds identify memoized expression sources across every bind
 	// context that can contribute expressions to this query.
 	nextVolatileExprMemoID int32
+	// nextRoutineCallID gives every typed routine expression a plan-local
+	// callsite identity. It is deliberately separate from the SQL body
+	// substitution counter: lowering must not make a callsite depend on the
+	// number of generated parameter markers.
+	nextRoutineCallID uint64
 
 	isPrepareStatement     bool
 	mysqlCompatible        bool
@@ -610,13 +615,14 @@ type QueryBuilder struct {
 	// returningFilterPos identifies an optional semantic eligibility selector in
 	// the materialized row image. It filters only the RETURNING reader; mutation
 	// readers continue to consume implicit FK action rows.
-	returningFilterPos int32
-	returningRequested bool
-	returningTableDef  *plan.TableDef
-	returningObjRef    *plan.ObjectRef
-	returningTableName string
-	returningAlias     string
-	returningColPos    map[string]int32
+	returningFilterPos         int32
+	returningRequested         bool
+	bindingReturningProjection bool
+	returningTableDef          *plan.TableDef
+	returningObjRef            *plan.ObjectRef
+	returningTableName         string
+	returningAlias             string
+	returningColPos            map[string]int32
 	// updateParentActionStack bounds recursive ON UPDATE actions by the active
 	// physical-table path. Acyclic multi-layer cascades recurse normally; a
 	// cycle is rejected before any mutation step is appended.

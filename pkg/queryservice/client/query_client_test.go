@@ -34,6 +34,10 @@ func TestMongoDBClientRetireRequiresProtocolVersion5(t *testing.T) {
 	assert.Equal(t, defines.MORPCVersion5, methodVersions[query.CmdMethod_MongoDBClientRetire])
 }
 
+func TestGetPythonUdfStatusRequiresProtocolVersion110(t *testing.T) {
+	assert.Equal(t, defines.MORPCVersion110, methodVersions[query.CmdMethod_GetPythonUdfStatus])
+}
+
 // The name says 54 because that is the contract: the protocol RefreshSessionAuth shipped with.
 func TestRefreshSessionAuthRequiresProtocolVersion54(t *testing.T) {
 	// A method's entry in methodVersions records the protocol it SHIPPED with, not whatever is

@@ -20,7 +20,7 @@ Phase 0 — Protobuf / gRPC contract
 
 New file `proto/datastream/v1/datastream.proto` (proto3, **not** gogoproto —
 this proto is shared with Java, so use standard `protoc-gen-go` +
-`protoc-gen-go-grpc`, same toolchain as `pkg/udf/udf.proto`, which is the
+`protoc-gen-go-grpc`, using the repository's current protobuf toolchain, which is the
 existing real-gRPC precedent in the repo; the main `proto/*.proto` files are
 gogo-generated and Java-hostile).
 

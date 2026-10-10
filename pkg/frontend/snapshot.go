@@ -124,6 +124,7 @@ var (
 		"mo_role_privs":                 systemCatalogRestoreRebuild,
 		"mo_role_rule":                  systemCatalogRestoreCopy,
 		"mo_user_defined_function":      systemCatalogRestoreCopy,
+		"mo_function_revisions":         systemCatalogRestoreCopy,
 		"mo_stored_procedure":           systemCatalogRestoreCopy,
 		"mo_mysql_compatibility_mode":   systemCatalogRestoreSkip,
 		"mo_stages":                     systemCatalogRestoreCopy,
@@ -1707,8 +1708,9 @@ func restoreSystemDatabase(
 		}
 
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
-		// Sequences use their CREATE definition; table schemas belong to CLONE.
-		if isSequence(tblInfo) {
+		// Sequences need their definition; routine catalogs need the source
+		// schema to preserve revision metadata. Other schemas belong to CLONE.
+		if isSequence(tblInfo) || isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) || isCurrentFunctionRevisionCatalog(tblInfo) {
 			tblInfo.createSql, err = getCreateTableSql(ctx, bh, tempSnap, dbName, tblInfo.tblName)
 			if err != nil {
 				return err
@@ -2094,7 +2096,20 @@ func recreateTable(
 			sourceSnapshot = fmt.Sprintf(" {SNAPSHOT = %s}", escapeSQLString(snapshotName))
 		}
 		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
-			ctx, bh, sourceSnapshot, curAccountID, toAccountId,
+			ctx, bh, sourceSnapshot, curAccountID, toAccountId, tblInfo.createSql,
+		)
+	}
+	if isCurrentFunctionRevisionCatalog(tblInfo) {
+		curAccountID, accountErr := defines.GetAccountId(ctx)
+		if accountErr != nil {
+			return accountErr
+		}
+		sourceSnapshot := fmt.Sprintf(" {MO_TS = %d}", snapshotTs)
+		if curAccountID != toAccountId {
+			sourceSnapshot = fmt.Sprintf(" {SNAPSHOT = %s}", escapeSQLString(snapshotName))
+		}
+		return restoreFunctionRevisionCatalogWithCurrentSchema(
+			ctx, bh, sourceSnapshot, curAccountID, toAccountId, tblInfo.createSql,
 		)
 	}
 	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)

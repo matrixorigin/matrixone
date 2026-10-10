@@ -31,7 +31,7 @@ fields terminated by ',';
 create function issue_27103_live_src.f_control() returns int language sql as
 'select count(*) from issue_27103_live_src.control_t';
 create function issue_27103_live_src.py_add(x int) returns int language python as
-'return x + 1' handler 'py_add';
+'def py_add(ctx, x): return x + 1' handler 'py_add';
 create function issue_27103_live_src.f_external() returns int language sql as
 'select count(*) from issue_27103_live_src.ext_t';
 create function issue_27103_live_src.f_transitive() returns int language sql as
@@ -84,7 +84,7 @@ fields terminated by ',';
 create function issue_27103_snapshot_src.f_control() returns int language sql as
 'select count(*) from issue_27103_snapshot_src.control_t';
 create function issue_27103_snapshot_src.py_add(x int) returns int language python as
-'return x + 1' handler 'py_add';
+'def py_add(ctx, x): return x + 1' handler 'py_add';
 create function issue_27103_snapshot_src.f_external() returns int language sql as
 'select count(*) from issue_27103_snapshot_src.ext_t';
 create function issue_27103_snapshot_src.f_transitive() returns int language sql as

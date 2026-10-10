@@ -805,7 +805,7 @@ func Test_initFunction(t *testing.T) {
 					FamilyString: "INT",
 					Width:        24,
 					Locale:       &locale,
-					Oid:          uint32(defines.MYSQL_TYPE_INT24),
+					Oid:          uint32(defines.MYSQL_TYPE_LONG),
 				},
 			}),
 			Body:     "",
@@ -10157,6 +10157,30 @@ func Test_doDropFunctionIfExistsWithDifferentOverload(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDeleteUserDefinedFunctionRevisionsIfPresent(t *testing.T) {
+	ctx := context.Background()
+	functionID := int64(91)
+	deleteSQL := fmt.Sprintf(deleteUserDefinedFunctionRevisionsFormat, functionID)
+
+	t.Run("missing revision table is compatible with legacy SQL UDF drop", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2err[deleteSQL] = moerr.NewNoSuchTableNoCtx("mo_catalog", "mo_function_revisions")
+
+		require.NoError(t, deleteUserDefinedFunctionRevisionsIfPresent(ctx, bh, functionID))
+		require.Equal(t, []string{deleteSQL}, bh.executedSQLs)
+	})
+
+	t.Run("unexpected cleanup failure is not hidden", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := errors.New("revision cleanup failed")
+		bh.sql2err[deleteSQL] = wantErr
+
+		require.ErrorIs(t, deleteUserDefinedFunctionRevisionsIfPresent(ctx, bh, functionID), wantErr)
+	})
 }
 
 func Test_doDropRole(t *testing.T) {

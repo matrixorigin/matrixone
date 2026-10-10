@@ -453,6 +453,29 @@ func newExpressionExecutorWithAllocation(
 		return executor, nil
 
 	case *plan.Expr_F:
+		if routineCall := t.F.GetRoutineCall(); routineCall != nil {
+			parameters := make([]ExpressionExecutor, len(t.F.Args))
+			for i := range parameters {
+				child, childErr := newExpressionExecutorWithAllocation(proc, t.F.Args[i], selection, buildCtx)
+				if childErr != nil {
+					for j := 0; j < i; j++ {
+						parameters[j].Free()
+					}
+					return nil, childErr
+				}
+				parameters[i] = child
+			}
+			external, externalErr := newExternalRoutineEval(proc, routineCall, parameters, selection)
+			if externalErr != nil {
+				for _, parameter := range parameters {
+					if parameter != nil {
+						parameter.Free()
+					}
+				}
+				return nil, externalErr
+			}
+			return external, nil
+		}
 		overloadID := t.F.GetFunc().GetObj()
 		overload, err := function.GetFunctionById(proc.Ctx, overloadID)
 		if err != nil {
@@ -1588,7 +1611,7 @@ func isRowAlignedExpressionExecutor(executor ExpressionExecutor) bool {
 			executor = source.state.executor
 		case *memoRootExpressionExecutor:
 			executor = source.executor
-		case *ColumnExpressionExecutor:
+		case *ColumnExpressionExecutor, *ExternalRoutineEval:
 			return true
 		case *FunctionExpressionExecutor:
 			return !source.folded.canFold
@@ -1617,8 +1640,9 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	}
 	for i, parameter := range expr.parameterResults {
 		// Constants, folded vectors, and list/vector literals are not row-aligned.
-		// They must be passed through unchanged; only column and non-folded
-		// function results map one-to-one to the input batch rows.
+		// They must be passed through unchanged. ExternalRoutineEval is included
+		// in the row-aligned set because it owns selection compaction and scatters
+		// its result back to the caller's row domain before returning.
 		rowAligned := isRowAlignedExpressionExecutor(expr.parameterExecutor[i])
 		if rowAligned && !parameter.IsConst() {
 			selected := expr.selectedParameterVectors[i]

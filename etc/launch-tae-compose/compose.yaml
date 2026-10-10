@@ -28,6 +28,22 @@ x-mo-common: &mo-common
       - NET_ADMIN
     tty: true
 
+x-python-udf-worker: &python-udf-worker
+    image: matrixorigin/mo-python-udf-worker:latest
+    # The image is built by python-udf-worker-image in this Compose project.
+    # Do not race that local build with an unauthenticated registry pull.
+    pull_policy: never
+    restart: on-failure
+    profiles:
+      - launch
+      - launch-multi-cn
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 1s
+
 
 services:
   cn-0:
@@ -40,7 +56,10 @@ services:
       - launch
       - launch-multi-cn
     depends_on:
-      - tn
+      tn:
+        condition: service_started
+      python-udf-worker-cn0:
+        condition: service_healthy
     ports:
       - "6002"
       - "12345:12345"
@@ -59,7 +78,10 @@ services:
     <<: *mo-common
     entrypoint: ["/bin/bash","-c","set -euo pipefail; exec /mo-service -debug-http :12345 -cfg /config/cn-1.toml > >(tee -a /log/cn-1.log) 2>&1"]
     depends_on:
-      - tn
+      tn:
+        condition: service_started
+      python-udf-worker-cn1:
+        condition: service_healthy
     ports:
       - "6002"
       - "22345:12345"
@@ -145,6 +167,43 @@ services:
       monet:
         aliases:
           - "logservice"
+
+  # Build the worker image once. The two CN-scoped worker services below use
+  # the resulting image and keep their process and failure domains separate.
+  python-udf-worker-image:
+    container_name: python-udf-worker-image
+    build:
+      context: ../../pkg/udf/python/worker
+      dockerfile: Dockerfile
+    image: matrixorigin/mo-python-udf-worker:latest
+    pull_policy: build
+    command: ["true"]
+    restart: "no"
+    profiles:
+      - launch
+      - launch-multi-cn
+
+  python-udf-worker-cn0:
+    <<: *python-udf-worker
+    container_name: python-udf-worker-cn0
+    depends_on:
+      python-udf-worker-image:
+        condition: service_completed_successfully
+    networks:
+      monet:
+        aliases:
+          - "python-udf-worker-cn0"
+
+  python-udf-worker-cn1:
+    <<: *python-udf-worker
+    container_name: python-udf-worker-cn1
+    depends_on:
+      python-udf-worker-image:
+        condition: service_completed_successfully
+    networks:
+      monet:
+        aliases:
+          - "python-udf-worker-cn1"
 
   # ---------------------------------------------------------------------
   # jstfu: the datastream external table gRPC server (xtool/jstfu), needed

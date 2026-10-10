@@ -176,7 +176,7 @@ func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose
 		}
 		return true
 	case *plan.Expr_F:
-		if e.F == nil || e.F.Func == nil {
+		if e.F == nil || e.F.Func == nil || e.F.RoutineCall != nil {
 			return false
 		}
 		fid, _ := DecodeOverloadID(e.F.Func.GetObj())

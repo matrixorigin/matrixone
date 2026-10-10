@@ -1,0 +1,1038 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package protocol contains the transport-independent contracts shared by the
+// Python UDF gateway and its callers.  It deliberately does not know about
+// gRPC, Arrow, or a particular scheduler implementation.
+package protocol
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"sync"
+	"time"
+	"unicode/utf8"
+
+	"github.com/matrixorigin/matrixone/pkg/udf/udferr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+)
+
+const (
+	// Version identifies the control envelope understood by this runtime.  It is
+	// a wire compatibility field, not a language or package name.
+	Version = 1
+
+	// MaxControlBytes is a trust-boundary ceiling.  A runtime may negotiate a
+	// smaller limit, but a caller must never silently raise it.
+	MaxControlBytes = 1 << 20
+
+	// MaxFenceComponentBytes bounds the identity retained by active and
+	// terminal ledgers. The wire envelope is larger than a single component,
+	// but allowing an unbounded statement/group/invocation string would make
+	// every bounded entry claim an unbounded memory claim.
+	MaxFenceComponentBytes = 256
+	// Control JSON is intentionally shallow.  The byte bound alone is not a
+	// stack bound because duplicate-key validation walks nested arrays/objects
+	// before encoding/json can decode the envelope.
+	MaxJSONNesting = 64
+)
+
+var (
+	ErrProtocol        = udferr.New("python udf protocol violation")
+	ErrSequence        = udferr.New("python udf sequence violation")
+	ErrGroupClosed     = udferr.New("python udf execution group is closed")
+	ErrDuplicate       = udferr.New("python udf identity is already present")
+	ErrLedgerFull      = udferr.New("python udf terminal ledger is full")
+	ErrUnknownIdentity = udferr.New("python udf identity is unknown")
+)
+
+// FencingTuple is carried by every invocation control and data-plane
+// application message.  IDs are never reused while their fence/tombstone is
+// retained.  The tuple is a deduplication fence, not an authentication token.
+type FencingTuple struct {
+	AccountID    uint64 `json:"account_id"`
+	StatementID  string `json:"statement_id"`
+	GroupID      string `json:"group_id"`
+	GroupEpoch   uint64 `json:"group_epoch"`
+	InvocationID string `json:"invocation_id"`
+	LeaseEpoch   uint64 `json:"lease_epoch"`
+}
+
+func (t FencingTuple) Validate() error {
+	// Account zero is the reserved system account in MatrixOne and is a valid
+	// execution identity.  The remaining fields are generation fences and must
+	// never be zero or empty.
+	if t.StatementID == "" || t.GroupID == "" ||
+		t.GroupEpoch == 0 || t.InvocationID == "" || t.LeaseEpoch == 0 {
+		return errutil.WrapfCauseFirst(ErrProtocol, "incomplete fencing tuple")
+	}
+	if !utf8.ValidString(t.StatementID) || !utf8.ValidString(t.GroupID) || !utf8.ValidString(t.InvocationID) {
+		return errutil.WrapfCauseFirst(ErrProtocol, "fencing tuple contains invalid UTF-8")
+	}
+	if len(t.StatementID) > MaxFenceComponentBytes || len(t.GroupID) > MaxFenceComponentBytes || len(t.InvocationID) > MaxFenceComponentBytes {
+		return errutil.WrapfCauseFirst(ErrProtocol, "fencing tuple component is too large")
+	}
+	return nil
+}
+
+// Control is the small, canonical application envelope carried in Flight
+// app_metadata.  Payload is a versioned descriptor or error body owned by the
+// message kind; it is bounded before JSON decoding.
+type Control struct {
+	Version            int             `json:"version"`
+	Kind               string          `json:"kind"`
+	Tuple              FencingTuple    `json:"tuple"`
+	Sequence           uint64          `json:"sequence,omitempty"`
+	LastSequence       uint64          `json:"last_sequence,omitempty"`
+	AckSequence        uint64          `json:"ack_sequence,omitempty"`
+	ReleasedBytes      int64           `json:"released_bytes,omitempty"`
+	ReleasedBatches    uint64          `json:"released_batches,omitempty"`
+	LastResultSequence uint64          `json:"last_result_sequence,omitempty"`
+	FinishID           string          `json:"finish_id,omitempty"`
+	Status             string          `json:"status,omitempty"`
+	Reason             string          `json:"reason,omitempty"`
+	Payload            json.RawMessage `json:"payload,omitempty"`
+}
+
+type controlFieldRule struct {
+	allowed  map[string]struct{}
+	required map[string]struct{}
+}
+
+var controlFieldRules = map[string]controlFieldRule{
+	"OpenInvocation":     {allowed: map[string]struct{}{"payload": {}}, required: map[string]struct{}{"payload": {}}},
+	"InputBatch":         {allowed: map[string]struct{}{"sequence": {}}, required: map[string]struct{}{"sequence": {}}},
+	"EndInput":           {allowed: map[string]struct{}{"last_sequence": {}}, required: map[string]struct{}{"last_sequence": {}}},
+	"ResultSchema":       {allowed: map[string]struct{}{}},
+	"InputConsumed":      {allowed: map[string]struct{}{"sequence": {}, "released_bytes": {}, "released_batches": {}}, required: map[string]struct{}{"sequence": {}, "released_bytes": {}, "released_batches": {}}},
+	"ResultBatch":        {allowed: map[string]struct{}{"sequence": {}}, required: map[string]struct{}{"sequence": {}}},
+	"Finish":             {allowed: map[string]struct{}{"last_sequence": {}, "last_result_sequence": {}, "finish_id": {}, "status": {}}, required: map[string]struct{}{"last_sequence": {}, "last_result_sequence": {}, "finish_id": {}, "status": {}}},
+	"AcknowledgeResults": {allowed: map[string]struct{}{"ack_sequence": {}}, required: map[string]struct{}{"ack_sequence": {}}},
+	"AcknowledgeFinish":  {allowed: map[string]struct{}{"finish_id": {}}, required: map[string]struct{}{"finish_id": {}}},
+	"Ack":                {allowed: map[string]struct{}{"ack_sequence": {}, "finish_id": {}, "status": {}}, required: map[string]struct{}{"status": {}}},
+	"Error":              {allowed: map[string]struct{}{"status": {}, "reason": {}}, required: map[string]struct{}{"status": {}, "reason": {}}},
+}
+
+var controlBaseFields = map[string]struct{}{
+	"version": {}, "kind": {}, "tuple": {},
+}
+
+func validateControlFields(control Control, wire map[string]json.RawMessage) error {
+	rule, ok := controlFieldRules[control.Kind]
+	if !ok {
+		return errutil.WrapfCauseFirst(ErrProtocol, "unsupported control kind %q", control.Kind)
+	}
+	if wire != nil {
+		for field := range wire {
+			if _, base := controlBaseFields[field]; base {
+				continue
+			}
+			if _, allowed := rule.allowed[field]; !allowed {
+				return errutil.WrapfCauseFirst(ErrProtocol, "field %q is not valid for control kind %q", field, control.Kind)
+			}
+		}
+		for field := range rule.required {
+			if _, present := wire[field]; !present {
+				return errutil.WrapfCauseFirst(ErrProtocol, "control kind %q is missing field %q", control.Kind, field)
+			}
+		}
+	}
+	if control.Sequence != 0 {
+		if _, allowed := rule.allowed["sequence"]; !allowed {
+			return errutil.WrapfCauseFirst(ErrProtocol, "field %q is not valid for control kind %q", "sequence", control.Kind)
+		}
+	}
+	if control.LastSequence != 0 {
+		if _, allowed := rule.allowed["last_sequence"]; !allowed {
+			return errutil.WrapfCauseFirst(ErrProtocol, "field %q is not valid for control kind %q", "last_sequence", control.Kind)
+		}
+	}
+	if control.AckSequence != 0 {
+		if _, allowed := rule.allowed["ack_sequence"]; !allowed {
+			return errutil.WrapfCauseFirst(ErrProtocol, "field %q is not valid for control kind %q", "ack_sequence", control.Kind)
+		}
+	}
+	if control.ReleasedBytes != 0 {
+		if _, allowed := rule.allowed["released_bytes"]; !allowed {
+			return errutil.WrapfCauseFirst(ErrProtocol, "field %q is not valid for control kind %q", "released_bytes", control.Kind)
+		}
+	}
+	if control.ReleasedBatches != 0 {
+		if _, allowed := rule.allowed["released_batches"]; !allowed {
+			return errutil.WrapfCauseFirst(ErrProtocol, "field %q is not valid for control kind %q", "released_batches", control.Kind)
+		}
+	}
+	if control.LastResultSequence != 0 {
+		if _, allowed := rule.allowed["last_result_sequence"]; !allowed {
+			return errutil.WrapfCauseFirst(ErrProtocol, "field %q is not valid for control kind %q", "last_result_sequence", control.Kind)
+		}
+	}
+	if control.FinishID != "" {
+		if _, allowed := rule.allowed["finish_id"]; !allowed {
+			return errutil.WrapfCauseFirst(ErrProtocol, "field %q is not valid for control kind %q", "finish_id", control.Kind)
+		}
+	}
+	if control.Status != "" {
+		if _, allowed := rule.allowed["status"]; !allowed {
+			return errutil.WrapfCauseFirst(ErrProtocol, "field %q is not valid for control kind %q", "status", control.Kind)
+		}
+	}
+	if control.Reason != "" {
+		if _, allowed := rule.allowed["reason"]; !allowed {
+			return errutil.WrapfCauseFirst(ErrProtocol, "field %q is not valid for control kind %q", "reason", control.Kind)
+		}
+	}
+	if len(control.Payload) != 0 {
+		if _, allowed := rule.allowed["payload"]; !allowed {
+			return errutil.WrapfCauseFirst(ErrProtocol, "field %q is not valid for control kind %q", "payload", control.Kind)
+		}
+	}
+	switch control.Kind {
+	case "OpenInvocation":
+		if len(control.Payload) == 0 && wire == nil {
+			return errutil.WrapfCauseFirst(ErrProtocol, "control kind %q is missing field %q", control.Kind, "payload")
+		}
+		if len(control.Payload) != 0 {
+			var payload map[string]json.RawMessage
+			if err := json.Unmarshal(control.Payload, &payload); err != nil || payload == nil {
+				return errutil.WrapfCauseFirst(ErrProtocol, "control kind %q payload must be a JSON object", control.Kind)
+			}
+			if err := rejectDuplicateJSONKeys(control.Payload); err != nil {
+				return errutil.WrapfCauseFirst(ErrProtocol, "invalid control payload: %v", err)
+			}
+		}
+	case "InputBatch", "ResultBatch":
+		if control.Sequence == 0 {
+			return errutil.WrapfCauseFirst(ErrProtocol, "control kind %q requires a positive sequence", control.Kind)
+		}
+	case "InputConsumed":
+		if control.Sequence == 0 || control.ReleasedBytes <= 0 || control.ReleasedBatches == 0 {
+			return errutil.WrapfCauseFirst(ErrProtocol, "control kind %q requires sequence and positive released bytes/batches", control.Kind)
+		}
+	case "AcknowledgeResults":
+		if control.AckSequence == 0 {
+			return errutil.WrapfCauseFirst(ErrProtocol, "control kind %q requires a positive ack_sequence", control.Kind)
+		}
+	case "Finish":
+		if control.FinishID == "" || control.Status == "" {
+			return errutil.WrapfCauseFirst(ErrProtocol, "control kind %q requires finish_id and status", control.Kind)
+		}
+	case "AcknowledgeFinish":
+		if control.FinishID == "" {
+			return errutil.WrapfCauseFirst(ErrProtocol, "control kind %q requires finish_id", control.Kind)
+		}
+	case "Ack":
+		if control.Status == "" || ((control.AckSequence == 0) == (control.FinishID == "")) {
+			return errutil.WrapfCauseFirst(ErrProtocol, "Ack requires status and exactly one acknowledgement identity")
+		}
+	case "Error":
+		if control.Status == "" || control.Reason == "" {
+			return errutil.WrapfCauseFirst(ErrProtocol, "control kind %q requires status and reason", control.Kind)
+		}
+	}
+	return nil
+}
+
+// MarshalJSON keeps closing controls self-describing when their final
+// sequence is zero.  The zero value is meaningful for an empty input stream;
+// omitting it would make EndInput(0) indistinguishable from a malformed
+// control at the Python boundary.  Other controls retain the compact
+// omission used for fields they do not own.
+func (c Control) MarshalJSON() ([]byte, error) {
+	type wireControl struct {
+		Version            int             `json:"version"`
+		Kind               string          `json:"kind"`
+		Tuple              FencingTuple    `json:"tuple"`
+		Sequence           uint64          `json:"sequence,omitempty"`
+		LastSequence       *uint64         `json:"last_sequence,omitempty"`
+		AckSequence        uint64          `json:"ack_sequence,omitempty"`
+		ReleasedBytes      *int64          `json:"released_bytes,omitempty"`
+		ReleasedBatches    *uint64         `json:"released_batches,omitempty"`
+		LastResultSequence *uint64         `json:"last_result_sequence,omitempty"`
+		FinishID           string          `json:"finish_id,omitempty"`
+		Status             string          `json:"status,omitempty"`
+		Reason             string          `json:"reason,omitempty"`
+		Payload            json.RawMessage `json:"payload,omitempty"`
+	}
+	wire := wireControl{
+		Version: c.Version, Kind: c.Kind, Tuple: c.Tuple,
+		Sequence: c.Sequence, AckSequence: c.AckSequence,
+		FinishID: c.FinishID, Status: c.Status, Reason: c.Reason,
+		Payload: c.Payload,
+	}
+	if c.Kind == "EndInput" || c.Kind == "Finish" || c.LastSequence != 0 {
+		lastSequence := c.LastSequence
+		wire.LastSequence = &lastSequence
+	}
+	if c.Kind == "Finish" {
+		lastResultSequence := c.LastResultSequence
+		wire.LastResultSequence = &lastResultSequence
+	}
+	if c.Kind == "InputConsumed" {
+		releasedBytes := c.ReleasedBytes
+		releasedBatches := c.ReleasedBatches
+		wire.ReleasedBytes = &releasedBytes
+		wire.ReleasedBatches = &releasedBatches
+	}
+	return json.Marshal(wire)
+}
+
+// MarshalControl produces the byte representation used in the Flight
+// application metadata field.  Struct-field order is intentional: the same
+// bytes are used when a descriptor fingerprint is calculated.
+func MarshalControl(control Control) ([]byte, error) {
+	if control.Version == 0 {
+		control.Version = Version
+	}
+	if control.Version != Version || control.Kind == "" {
+		return nil, errutil.WrapfCauseFirst(ErrProtocol, "unsupported control version or empty kind")
+	}
+	if err := control.Tuple.Validate(); err != nil {
+		return nil, err
+	}
+	if err := validateControlFields(control, nil); err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(control)
+	if err != nil {
+		return nil, errutil.WrapfCauseFirst(ErrProtocol, "encode control: %v", err)
+	}
+	if len(encoded) > MaxControlBytes {
+		return nil, errutil.WrapfCauseFirst(ErrProtocol, "control is %d bytes, limit is %d", len(encoded), MaxControlBytes)
+	}
+	return encoded, nil
+}
+
+func UnmarshalControl(data []byte) (Control, error) {
+	if len(data) == 0 || len(data) > MaxControlBytes {
+		return Control{}, errutil.WrapfCauseFirst(ErrProtocol, "control size %d is outside the allowed range", len(data))
+	}
+	// encoding/json replaces invalid UTF-8 in JSON strings with U+FFFD.  A
+	// fencing tuple is an identity, so accepting that replacement would make a
+	// malformed wire tuple refer to a different invocation than the sender
+	// intended.  Reject the bytes before any JSON decoder can normalize them.
+	if !utf8.Valid(data) {
+		return Control{}, errutil.WrapfCauseFirst(ErrProtocol, "control contains invalid UTF-8")
+	}
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return Control{}, errutil.WrapfCauseFirst(ErrProtocol, "%v", err)
+	}
+	var control Control
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&control); err != nil {
+		return Control{}, errutil.WrapfCauseFirst(ErrProtocol, "decode control: %v", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return Control{}, errutil.WrapfCauseFirst(ErrProtocol, "control contains trailing JSON")
+		}
+		return Control{}, errutil.WrapfCauseFirst(ErrProtocol, "decode trailing control data: %v", err)
+	}
+	if control.Version != Version || control.Kind == "" {
+		return Control{}, errutil.WrapfCauseFirst(ErrProtocol, "unsupported control version %d", control.Version)
+	}
+	if err := control.Tuple.Validate(); err != nil {
+		return Control{}, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return Control{}, errutil.WrapfCauseFirst(ErrProtocol, "control must be an object: %v", err)
+	}
+	if err := validateControlFields(control, fields); err != nil {
+		return Control{}, err
+	}
+	return control, nil
+}
+
+func rejectDuplicateJSONKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := walkJSONValue(decoder); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return udferr.New("control contains trailing JSON")
+		}
+		return udferr.Newf("decode trailing control data: %v", err)
+	}
+	return nil
+}
+
+func walkJSONValue(decoder *json.Decoder) error {
+	return walkJSONValueAtDepth(decoder, 0)
+}
+
+func walkJSONValueAtDepth(decoder *json.Decoder, depth int) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return udferr.Newf("decode control JSON: %v", err)
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	if depth >= MaxJSONNesting {
+		return udferr.Newf("control JSON nesting exceeds %d levels", MaxJSONNesting)
+	}
+	switch delim {
+	case '{':
+		seen := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return udferr.Newf("decode control object key: %v", err)
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return udferr.New("control object key is not a string")
+			}
+			if _, exists := seen[key]; exists {
+				return udferr.Newf("duplicate control JSON field %q", key)
+			}
+			seen[key] = struct{}{}
+			if err := walkJSONValueAtDepth(decoder, depth+1); err != nil {
+				return err
+			}
+		}
+		_, err = decoder.Token()
+		return err
+	case '[':
+		for decoder.More() {
+			if err := walkJSONValueAtDepth(decoder, depth+1); err != nil {
+				return err
+			}
+		}
+		_, err = decoder.Token()
+		return err
+	default:
+		return udferr.Newf("unexpected control JSON delimiter %q", delim)
+	}
+}
+
+// Sequence validates the independent input and result directions of one
+// invocation.  EndInput is a normal half-close; it does not make results
+// terminal until all results have been acknowledged.
+type Sequence struct {
+	mu          sync.Mutex
+	nextInput   uint64
+	lastInput   uint64
+	inputEnded  bool
+	nextResult  uint64
+	lastResult  uint64
+	ackedResult uint64
+}
+
+func (s *Sequence) AcceptInput(sequence uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inputEnded {
+		return errutil.WrapfCauseFirst(ErrSequence, "input arrived after EndInput")
+	}
+	if sequence != s.nextInput+1 {
+		return errutil.WrapfCauseFirst(ErrSequence, "input sequence %d, expected %d", sequence, s.nextInput+1)
+	}
+	s.nextInput = sequence
+	s.lastInput = sequence
+	return nil
+}
+
+func (s *Sequence) EndInput(lastSequence uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inputEnded {
+		if s.lastInput == lastSequence {
+			return nil
+		}
+		return errutil.WrapfCauseFirst(ErrSequence, "EndInput changed from %d to %d", s.lastInput, lastSequence)
+	}
+	if lastSequence != s.lastInput {
+		return errutil.WrapfCauseFirst(ErrSequence, "EndInput last sequence %d, observed %d", lastSequence, s.lastInput)
+	}
+	s.inputEnded = true
+	return nil
+}
+
+func (s *Sequence) AcceptResult(sequence uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sequence != s.nextResult+1 || sequence > s.lastInput {
+		return errutil.WrapfCauseFirst(ErrSequence, "result sequence %d, expected %d and at most input %d", sequence, s.nextResult+1, s.lastInput)
+	}
+	s.nextResult = sequence
+	s.lastResult = sequence
+	return nil
+}
+
+func (s *Sequence) AcknowledgeResults(sequence uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sequence == 0 || sequence < s.ackedResult || sequence > s.lastResult {
+		return errutil.WrapfCauseFirst(ErrSequence, "result ACK %d outside [%d,%d]", sequence, s.ackedResult, s.lastResult)
+	}
+	s.ackedResult = sequence
+	return nil
+}
+
+func (s *Sequence) ReadyToFinish() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inputEnded && s.lastResult == s.lastInput && s.ackedResult == s.lastResult
+}
+
+func (s *Sequence) State() (lastInput, lastResult, acked uint64, inputEnded bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastInput, s.lastResult, s.ackedResult, s.inputEnded
+}
+
+// OutputSnapshot is the only representation that may cross the trusted
+// validation/publication boundary.  Freeze copies the worker-owned bytes
+// before validation.  The snapshot's backing is private, so later worker
+// writes cannot change the bytes validated or published by the caller.
+type OutputSnapshot struct {
+	backing []byte
+	digest  [sha256.Size]byte
+}
+
+func FreezeOutput(source []byte, maxBytes int64) (*OutputSnapshot, error) {
+	if maxBytes <= 0 || int64(len(source)) > maxBytes {
+		return nil, errutil.WrapfCauseFirst(ErrProtocol, "output snapshot size %d exceeds limit %d", len(source), maxBytes)
+	}
+	backing := make([]byte, len(source))
+	copy(backing, source)
+	return &OutputSnapshot{backing: backing, digest: sha256.Sum256(backing)}, nil
+}
+
+func (s *OutputSnapshot) Len() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.backing)
+}
+
+func (s *OutputSnapshot) Digest() string {
+	if s == nil {
+		return ""
+	}
+	return hex.EncodeToString(s.digest[:])
+}
+
+func (s *OutputSnapshot) Validate(expectedLength int, expectedDigest string) error {
+	if s == nil || s.backing == nil {
+		return errutil.WrapfCauseFirst(ErrProtocol, "missing output snapshot")
+	}
+	if expectedLength >= 0 && len(s.backing) != expectedLength {
+		return errutil.WrapfCauseFirst(ErrProtocol, "output snapshot length %d, expected %d", len(s.backing), expectedLength)
+	}
+	currentDigest := sha256.Sum256(s.backing)
+	if currentDigest != s.digest {
+		return errutil.WrapfCauseFirst(ErrProtocol, "output snapshot backing changed")
+	}
+	if expectedDigest != "" && !equalFoldHex(expectedDigest, hex.EncodeToString(currentDigest[:])) {
+		return errutil.WrapfCauseFirst(ErrProtocol, "output snapshot digest changed")
+	}
+	return nil
+}
+
+// Bytes returns a private copy for an API that cannot consume an immutable
+// view.  Validation and publication in a trusted consumer should operate on
+// the same snapshot object, rather than refetching the worker buffer.
+func (s *OutputSnapshot) Bytes() []byte {
+	if s == nil {
+		return nil
+	}
+	return append([]byte(nil), s.backing...)
+}
+
+// TrustedBytes exposes the private frozen backing to a validator/consumer
+// that is part of the same trusted boundary.  The caller must treat the
+// returned slice as read-only.  It exists so validation and decoding can use
+// exactly the bytes that were frozen, rather than refetching worker memory or
+// making a second mutable copy between the two steps.
+func (s *OutputSnapshot) TrustedBytes() []byte {
+	if s == nil {
+		return nil
+	}
+	return s.backing
+}
+
+func equalFoldHex(left, right string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		l, r := left[i], right[i]
+		if l >= 'A' && l <= 'F' {
+			l += 'a' - 'A'
+		}
+		if r >= 'A' && r <= 'F' {
+			r += 'a' - 'A'
+		}
+		if l != r {
+			return false
+		}
+	}
+	return true
+}
+
+type GroupState string
+
+const (
+	GroupReserved GroupState = "RESERVED"
+	GroupOpen     GroupState = "OPEN"
+	GroupDraining GroupState = "DRAINING"
+	GroupReleased GroupState = "RELEASED"
+)
+
+// CloseReason is deliberately a string so the scheduler can add a reason in
+// a newer minor protocol without changing the lifetime rules.
+type CloseReason string
+
+const (
+	ReasonInputEOF         CloseReason = "INPUT_EOF"
+	ReasonEmptyInput       CloseReason = "EMPTY_INPUT"
+	ReasonAllNull          CloseReason = "ALL_NULL"
+	ReasonNoSelectedRows   CloseReason = "NO_SELECTED_ROWS"
+	ReasonPartialOpenError CloseReason = "PARTIAL_OPEN_FAILURE"
+	ReasonFailure          CloseReason = "FAILURE"
+	ReasonCancel           CloseReason = "CANCEL"
+	ReasonIdle             CloseReason = "IDLE"
+)
+
+// ExecutionGroup is a one-shot admission cohort.  Member terminal cleanup
+// only removes that member.  The release callback belongs to the group owner
+// and runs after close, all members terminal, and all in-flight opens finish.
+type ExecutionGroup struct {
+	mu          sync.Mutex
+	id          string
+	epoch       uint64
+	maxMembers  int
+	registered  int
+	inFlight    int
+	members     map[string]bool
+	pending     map[string]struct{}
+	terminal    map[string]bool
+	closing     bool
+	releaseBusy bool
+	releaseDone chan struct{}
+	releaseErr  error
+	released    bool
+	release     func() error
+	reason      CloseReason
+}
+
+func NewExecutionGroup(id string, epoch uint64, maxMembers int, release func() error) (*ExecutionGroup, error) {
+	if id == "" || epoch == 0 || maxMembers <= 0 || release == nil {
+		return nil, errutil.WrapfCauseFirst(ErrProtocol, "invalid execution group")
+	}
+	return &ExecutionGroup{
+		id: id, epoch: epoch, maxMembers: maxMembers,
+		members: make(map[string]bool), pending: make(map[string]struct{}),
+		terminal: make(map[string]bool), release: release,
+	}, nil
+}
+
+// BeginOpen reserves one cumulative member-registration slot.  The returned
+// token must be committed or aborted exactly once by the Open owner.
+func (g *ExecutionGroup) BeginOpen(memberID string) (*OpenToken, error) {
+	if memberID == "" {
+		return nil, errutil.WrapfCauseFirst(ErrProtocol, "empty member id")
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closing || g.released {
+		return nil, ErrGroupClosed
+	}
+	if g.members[memberID] || g.terminal[memberID] {
+		return nil, ErrDuplicate
+	}
+	if _, exists := g.pending[memberID]; exists {
+		return nil, ErrDuplicate
+	}
+	if g.registered+g.inFlight >= g.maxMembers {
+		return nil, errutil.WrapfCauseFirst(ErrLedgerFull, "member limit %d reached", g.maxMembers)
+	}
+	g.pending[memberID] = struct{}{}
+	g.inFlight++
+	return &OpenToken{group: g, memberID: memberID}, nil
+}
+
+type OpenToken struct {
+	group    *ExecutionGroup
+	memberID string
+	mu       sync.Mutex
+	state    openTokenState
+}
+
+type openTokenState uint8
+
+const (
+	openTokenPending openTokenState = iota
+	openTokenCommitted
+	openTokenAborted
+)
+
+func (t *OpenToken) Commit() error {
+	if t == nil || t.group == nil {
+		return ErrUnknownIdentity
+	}
+	if err := t.begin(openTokenCommitted); err != nil {
+		return err
+	}
+	g := t.group
+	g.mu.Lock()
+	delete(g.pending, t.memberID)
+	g.inFlight--
+	if g.closing || g.released {
+		release := g.shouldReleaseLocked()
+		g.mu.Unlock()
+		if release {
+			return errors.Join(ErrGroupClosed, g.releaseIfReady())
+		}
+		return ErrGroupClosed
+	}
+	g.members[t.memberID] = true
+	g.registered++
+	g.mu.Unlock()
+	return nil
+}
+
+func (t *OpenToken) Abort() error {
+	if t == nil || t.group == nil {
+		return ErrUnknownIdentity
+	}
+	if err := t.begin(openTokenAborted); err != nil {
+		return err
+	}
+	g := t.group
+	g.mu.Lock()
+	delete(g.pending, t.memberID)
+	g.inFlight--
+	release := g.shouldReleaseLocked()
+	g.mu.Unlock()
+	if release {
+		return g.releaseIfReady()
+	}
+	return nil
+}
+
+func (t *OpenToken) begin(state openTokenState) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.state != openTokenPending {
+		return errutil.WrapfCauseFirst(ErrProtocol, "open token was already finalized")
+	}
+	t.state = state
+	return nil
+}
+
+func (g *ExecutionGroup) Close(reason CloseReason) error {
+	if reason == "" {
+		return errutil.WrapfCauseFirst(ErrProtocol, "close reason is empty")
+	}
+	g.mu.Lock()
+	if g.closing && g.reason != reason {
+		g.mu.Unlock()
+		return errutil.WrapfCauseFirst(ErrProtocol, "close reason changed from %q to %q", g.reason, reason)
+	}
+	if g.released {
+		g.mu.Unlock()
+		return nil
+	}
+	if !g.closing {
+		g.closing = true
+		g.reason = reason
+	}
+	release := g.shouldReleaseLocked()
+	g.mu.Unlock()
+	if release {
+		return g.releaseIfReady()
+	}
+	return nil
+}
+
+func (g *ExecutionGroup) MemberTerminal(memberID string) error {
+	g.mu.Lock()
+	if g.terminal[memberID] {
+		g.mu.Unlock()
+		return nil
+	}
+	if !g.members[memberID] {
+		g.mu.Unlock()
+		return ErrUnknownIdentity
+	}
+	delete(g.members, memberID)
+	g.terminal[memberID] = true
+	release := g.shouldReleaseLocked()
+	g.mu.Unlock()
+	if release {
+		return g.releaseIfReady()
+	}
+	return nil
+}
+
+func (g *ExecutionGroup) shouldReleaseLocked() bool {
+	return g.closing && len(g.members) == 0 && g.inFlight == 0 && !g.released
+}
+
+func (g *ExecutionGroup) releaseIfReady() error {
+	g.mu.Lock()
+	if !g.shouldReleaseLocked() {
+		g.mu.Unlock()
+		return nil
+	}
+	if g.releaseBusy {
+		done := g.releaseDone
+		g.mu.Unlock()
+		<-done
+		g.mu.Lock()
+		err := g.releaseErr
+		released := g.released
+		g.mu.Unlock()
+		if released {
+			return nil
+		}
+		return err
+	}
+	g.releaseBusy = true
+	g.releaseDone = make(chan struct{})
+	done := g.releaseDone
+	g.mu.Unlock()
+	err := func() (err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = errutil.WrapfCauseFirst(ErrProtocol, "group release panicked: %v", recovered)
+			}
+		}()
+		return g.release()
+	}()
+	g.mu.Lock()
+	g.releaseBusy = false
+	g.releaseErr = err
+	if err == nil {
+		g.released = true
+	}
+	close(done)
+	g.mu.Unlock()
+	return err
+}
+
+func (g *ExecutionGroup) State() GroupState {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.released {
+		return GroupReleased
+	}
+	if g.closing {
+		return GroupDraining
+	}
+	if g.registered > 0 {
+		return GroupOpen
+	}
+	return GroupReserved
+}
+
+func (g *ExecutionGroup) Reason() CloseReason {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.reason
+}
+
+func (g *ExecutionGroup) Counts() (registered, active, inFlight int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.registered, len(g.members), g.inFlight
+}
+
+// ID and Epoch identify the ownership fence used by the group owner. They are
+// immutable for the lifetime of an ExecutionGroup.
+func (g *ExecutionGroup) ID() string {
+	if g == nil {
+		return ""
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.id
+}
+
+func (g *ExecutionGroup) Epoch() uint64 {
+	if g == nil {
+		return 0
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.epoch
+}
+
+type ledgerEntry struct {
+	key        string
+	groupID    string
+	groupEpoch uint64
+	bytes      int64
+	expiresAt  time.Time
+	tombstone  bool
+}
+
+// TerminalLedger is an admission-reserved bounded deduplication ledger.  A
+// terminal entry is retained until expiry; it is never deleted merely to make
+// room for a new invocation.
+type TerminalLedger struct {
+	mu         sync.Mutex
+	maxEntries int
+	maxBytes   int64
+	entries    map[string]ledgerEntry
+	reservedN  int
+	reservedB  int64
+}
+
+type LedgerCredit struct {
+	ledger     *TerminalLedger
+	groupID    string
+	groupEpoch uint64
+	remainingN int
+	remainingB int64
+	closed     bool
+}
+
+func NewTerminalLedger(maxEntries int, maxBytes int64) (*TerminalLedger, error) {
+	if maxEntries <= 0 || maxBytes <= 0 {
+		return nil, errutil.WrapfCauseFirst(ErrProtocol, "invalid terminal ledger limit")
+	}
+	return &TerminalLedger{maxEntries: maxEntries, maxBytes: maxBytes, entries: make(map[string]ledgerEntry)}, nil
+}
+
+func (l *TerminalLedger) Reserve(groupID string, groupEpoch uint64, entries int, bytes int64) (*LedgerCredit, error) {
+	if groupID == "" || groupEpoch == 0 || entries <= 0 || bytes <= 0 {
+		return nil, errutil.WrapfCauseFirst(ErrProtocol, "invalid terminal ledger reservation")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.reservedN > l.maxEntries-entries || l.reservedB > l.maxBytes-bytes {
+		return nil, ErrLedgerFull
+	}
+	l.reservedN += entries
+	l.reservedB += bytes
+	return &LedgerCredit{ledger: l, groupID: groupID, groupEpoch: groupEpoch, remainingN: entries, remainingB: bytes}, nil
+}
+
+func (c *LedgerCredit) Add(key string, bytes int64, expiry time.Time) error {
+	if c == nil || c.ledger == nil || key == "" || bytes <= 0 || expiry.IsZero() {
+		return errutil.WrapfCauseFirst(ErrProtocol, "invalid terminal ledger entry")
+	}
+	c.ledger.mu.Lock()
+	defer c.ledger.mu.Unlock()
+	if c.closed || c.remainingN == 0 || c.remainingB < bytes {
+		return ErrLedgerFull
+	}
+	if _, exists := c.ledger.entries[key]; exists {
+		return ErrDuplicate
+	}
+	c.ledger.entries[key] = ledgerEntry{key: key, groupID: c.groupID, groupEpoch: c.groupEpoch, bytes: bytes, expiresAt: expiry}
+	c.remainingN--
+	c.remainingB -= bytes
+	return nil
+}
+
+func (c *LedgerCredit) ReleaseUnused() {
+	if c == nil || c.ledger == nil {
+		return
+	}
+	c.ledger.mu.Lock()
+	defer c.ledger.mu.Unlock()
+	if c.closed {
+		return
+	}
+	c.ledger.reservedN -= c.remainingN
+	c.ledger.reservedB -= c.remainingB
+	c.remainingN = 0
+	c.remainingB = 0
+	c.closed = true
+}
+
+func (l *TerminalLedger) Complete(key string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry, ok := l.entries[key]
+	if !ok {
+		return ErrUnknownIdentity
+	}
+	if entry.tombstone {
+		return nil
+	}
+	entry.tombstone = true
+	l.entries[key] = entry
+	return nil
+}
+
+// EpochFence is supplied by the Scheduler/group owner. It must return true
+// only after the owner has durably or monotonically closed the corresponding
+// group epoch so that an old grant cannot be issued again. A wall clock TTL is
+// deliberately insufficient proof and a nil fence therefore reclaims nothing.
+// The callback must not call back into the ledger.
+type EpochFence func(groupID string, groupEpoch uint64) bool
+
+func (l *TerminalLedger) Expire(now time.Time, fence EpochFence) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	removed := 0
+	for key, entry := range l.entries {
+		// Active entries represent work that may still produce a result.  Their
+		// admission credit belongs to the running execution and can only be
+		// released by an explicit termination/recovery path.  Expiry is solely
+		// for completed deduplication tombstones.
+		if !entry.tombstone {
+			continue
+		}
+		if !now.Before(entry.expiresAt) && fence != nil && fence(entry.groupID, entry.groupEpoch) {
+			delete(l.entries, key)
+			l.reservedN--
+			l.reservedB -= entry.bytes
+			removed++
+		}
+	}
+	return removed
+}
+
+// Abandon removes an active execution after its owner has confirmed
+// cancellation, crash recovery, or another terminal failure.  It is separate
+// from Expire so a clock cannot reclaim a live invocation's deduplication
+// entry.
+func (l *TerminalLedger) Abandon(key string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry, ok := l.entries[key]
+	if !ok {
+		return ErrUnknownIdentity
+	}
+	if entry.tombstone {
+		return ErrProtocol
+	}
+	delete(l.entries, key)
+	l.reservedN--
+	l.reservedB -= entry.bytes
+	return nil
+}
+
+func (l *TerminalLedger) Counts() (entries int, bytes int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.entries), l.reservedB
+}

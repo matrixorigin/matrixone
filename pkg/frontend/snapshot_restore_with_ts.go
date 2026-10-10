@@ -579,6 +579,17 @@ func recreateTableFromTS(
 			fmt.Sprintf(" {MO_TS = %d}", snapshotTs),
 			restoreAccount,
 			toAccountId,
+			tblInfo.createSql,
+		)
+	}
+	if isCurrentFunctionRevisionCatalog(tblInfo) {
+		return restoreFunctionRevisionCatalogWithCurrentSchema(
+			ctx,
+			bh,
+			fmt.Sprintf(" {MO_TS = %d}", snapshotTs),
+			restoreAccount,
+			toAccountId,
+			tblInfo.createSql,
 		)
 	}
 	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
@@ -650,8 +661,9 @@ func restoreSystemDatabaseFromTS(
 		}
 
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore system table: %v.%v", restoreAccount, snapshotTs, moCatalog, tblInfo.tblName))
-		// Sequences use their CREATE definition; table schemas belong to CLONE.
-		if isSequence(tblInfo) {
+		// Sequences need their definition; routine catalogs need the source
+		// schema to preserve revision metadata. Other schemas belong to CLONE.
+		if isSequence(tblInfo) || isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) || isCurrentFunctionRevisionCatalog(tblInfo) {
 			tblInfo.createSql, err = getCreateTableSqlFromTS(ctx, bh, dbName, tblInfo.tblName, snapshotTs, restoreAccount, toAccountId)
 			if err != nil {
 				return err

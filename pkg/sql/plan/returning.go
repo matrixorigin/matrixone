@@ -329,6 +329,9 @@ func (builder *QueryBuilder) appendReturningProjection(exprs tree.SelectExprs, b
 	if len(exprs) == 0 {
 		return nil
 	}
+	previousReturningBinding := builder.bindingReturningProjection
+	builder.bindingReturningProjection = true
+	defer func() { builder.bindingReturningProjection = previousReturningBinding }()
 	if builder.returningSourceStep < 0 || builder.returningTableDef == nil {
 		return moerr.NewInternalError(builder.GetContext(), "DML RETURNING row image was not materialized")
 	}

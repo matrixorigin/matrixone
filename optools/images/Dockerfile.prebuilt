@@ -13,6 +13,13 @@ ARG RUNTIME_IMAGE=matrixorigin/ubuntu:22.04
 
 FROM ${RUNTIME_IMAGE}
 
+# Python UDF admission compares the system IANA database with the worker.
+# Keep every runtime assembly path aligned with optools/images/Dockerfile
+# and pkg/udf/python/worker/Dockerfile, including shared-build artifacts.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --chmod=0755 mo-service /mo-service
 COPY etc /etc
 COPY lib/*.so /usr/local/lib/
