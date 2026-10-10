@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -197,5 +198,111 @@ func TestIntegerAssignmentContracts(t *testing.T) {
 				})
 			}
 		})
+	})
+}
+
+func TestMediumIntAssignmentBounds(t *testing.T) {
+	newProc := func(sqlMode string) *process.Process {
+		proc := newMemoryFunctionTestProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			if name == "sql_mode" {
+				return sqlMode, nil
+			}
+			return nil, moerr.NewInternalError(proc.Ctx, "unexpected variable "+name)
+		})
+		return proc
+	}
+
+	for _, tc := range []struct {
+		name   string
+		source types.Type
+		values any
+		target types.Type
+		want   any
+		fail   bool
+	}{
+		{
+			name:   "signed inclusive boundaries",
+			source: types.T_int32.ToType(), values: []int32{-1 << 23, (1 << 23) - 1},
+			target: types.New(types.T_int32, 24, -1), want: []int32{-1 << 23, (1 << 23) - 1},
+		},
+		{
+			name:   "signed upper overflow",
+			source: types.T_int32.ToType(), values: []int32{1 << 23},
+			target: types.New(types.T_int32, 24, -1), want: []int32{0}, fail: true,
+		},
+		{
+			name:   "signed lower overflow",
+			source: types.T_int32.ToType(), values: []int32{-(1 << 23) - 1},
+			target: types.New(types.T_int32, 24, -1), want: []int32{0}, fail: true,
+		},
+		{
+			name:   "unsigned inclusive boundaries",
+			source: types.T_uint32.ToType(), values: []uint32{0, (1 << 24) - 1},
+			target: types.New(types.T_uint32, 24, -1), want: []uint32{0, (1 << 24) - 1},
+		},
+		{
+			name:   "unsigned upper overflow",
+			source: types.T_uint32.ToType(), values: []uint32{1 << 24},
+			target: types.New(types.T_uint32, 24, -1), want: []uint32{0}, fail: true,
+		},
+		{
+			name:   "same medium type still checks legacy value",
+			source: types.New(types.T_int32, 24, -1), values: []int32{1 << 23},
+			target: types.New(types.T_int32, 24, -1), want: []int32{0}, fail: true,
+		},
+		{
+			name:   "widening legacy medium value to int preserves stored value",
+			source: types.New(types.T_int32, 24, -1), values: []int32{1 << 23},
+			target: types.T_int32.ToType(), want: []int32{1 << 23},
+		},
+		{
+			name:   "rounded float overflow",
+			source: types.T_float64.ToType(), values: []float64{8388607.6},
+			target: types.New(types.T_int32, 24, -1), want: []int32{0}, fail: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newProc("STRICT_TRANS_TABLES")
+			t.Cleanup(func() {
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(tc.source, tc.values, nil),
+				NewFunctionTestInput(tc.target, tc.want, nil),
+			}
+			testCase := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(tc.target, tc.fail, tc.want, nil), NewAssignCast)
+			ok, info := testCase.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+
+	t.Run("non-strict clips representable overflow", func(t *testing.T) {
+		proc := newProc("")
+		t.Cleanup(func() {
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+		for _, tc := range []struct {
+			source types.Type
+			values any
+			target types.Type
+			want   any
+		}{
+			{types.T_int32.ToType(), []int32{1 << 23}, types.New(types.T_int32, 24, -1), []int32{(1 << 23) - 1}},
+			{types.T_int32.ToType(), []int32{-(1 << 23) - 1}, types.New(types.T_int32, 24, -1), []int32{-1 << 23}},
+			{types.T_uint32.ToType(), []uint32{1 << 24}, types.New(types.T_uint32, 24, -1), []uint32{(1 << 24) - 1}},
+		} {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(tc.source, tc.values, nil),
+				NewFunctionTestInput(tc.target, tc.want, nil),
+			}
+			testCase := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(tc.target, false, tc.want, nil), NewAssignCast)
+			ok, info := testCase.RunAndFree()
+			require.True(t, ok, info)
+		}
 	})
 }

@@ -6187,7 +6187,7 @@ func (c *Compile) appendAlterAutoIncrementReqs(
 		}
 		if err := incrservice.ValidateAutoColumnOffset(
 			c.proc.Ctx,
-			types.T(targetCol.Typ.Id),
+			types.MustTypeFromPlan(targetCol.Typ),
 			offset,
 		); err != nil {
 			return err

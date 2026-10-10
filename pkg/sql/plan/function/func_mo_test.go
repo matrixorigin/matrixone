@@ -286,7 +286,7 @@ func TestCastGeometryToSubtypeRejectTooManyPoints(t *testing.T) {
 
 func TestCastJsonToArray(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	jsonTexts := []string{`["red","blue",null]`, `[[1,2],[3,null]]`, `[127]`}
+	jsonTexts := []string{`["red","blue",null]`, `[[1,2],[3,null]]`, `[127]`, `[-8388608,8388607]`, `[0,16777215]`}
 	encoded := makeJSONEncodedFromText(t, jsonTexts, nil)
 
 	testCases := []tcTemp{
@@ -313,6 +313,22 @@ func TestCastJsonToArray(t *testing.T) {
 				NewFunctionTestInput(types.T_json.ToType(), encoded[2:3], []bool{false}),
 			},
 			expect: NewFunctionTestResult(types.T_json.ToType(), false, encoded[2:3], []bool{false}),
+		},
+		{
+			info: "signed mediumint array accepts inclusive boundaries",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"array(mediumint)"}, []bool{false}),
+				NewFunctionTestInput(types.T_json.ToType(), encoded[3:4], []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_json.ToType(), false, encoded[3:4], []bool{false}),
+		},
+		{
+			info: "unsigned mediumint array accepts inclusive boundaries",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"array(mediumint unsigned)"}, []bool{false}),
+				NewFunctionTestInput(types.T_json.ToType(), encoded[4:5], []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_json.ToType(), false, encoded[4:5], []bool{false}),
 		},
 	}
 
@@ -348,6 +364,10 @@ func TestCastJsonToArrayRejectsIncompatibleElement(t *testing.T) {
 		jsonText  string
 	}{
 		{name: "string in int array", arrayType: "array(int)", jsonText: `["1"]`},
+		{name: "signed mediumint upper overflow", arrayType: "array(mediumint)", jsonText: `[8388608]`},
+		{name: "signed mediumint lower overflow", arrayType: "array(mediumint)", jsonText: `[-8388609]`},
+		{name: "unsigned mediumint overflow", arrayType: "array(mediumint unsigned)", jsonText: `[16777216]`},
+		{name: "unsigned mediumint negative", arrayType: "array(mediumint unsigned)", jsonText: `[-1]`},
 		{name: "number in varchar array", arrayType: "array(varchar(20))", jsonText: `[1]`},
 		{name: "varchar width", arrayType: "array(varchar(3))", jsonText: `["toolong"]`},
 		{name: "varbinary byte width", arrayType: "array(varbinary(3))", jsonText: "[\"\u00e9\u00e9\"]"},

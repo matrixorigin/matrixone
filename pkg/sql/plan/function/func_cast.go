@@ -1062,6 +1062,87 @@ func NewExplicitCast(parameters []*vector.Vector, result vector.FunctionResultWr
 }
 
 func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, mode castMode, allowTrailingSpaceTrim bool) error {
+	err := newCastWithoutMediumIntBounds(parameters, result, proc, length, selectList, mode, allowTrailingSpaceTrim)
+	if err != nil || len(parameters) < 2 || !parameters[1].GetType().IsMediumInt() {
+		return err
+	}
+	return enforceMediumIntAssignmentBounds(
+		proc, *parameters[1].GetType(), result.GetResultVector(), length, selectList, mode)
+}
+
+func enforceMediumIntAssignmentBounds(
+	proc *process.Process,
+	targetType types.Type,
+	result *vector.Vector,
+	length int,
+	selectList *FunctionSelectList,
+	mode castMode,
+) error {
+	min, max, ok := targetType.MediumIntBounds()
+	if !ok {
+		return nil
+	}
+	ctx := context.Background()
+	if proc != nil && proc.Ctx != nil {
+		ctx = proc.Ctx
+	}
+	strict := !mode.isAssignment() || mode.strictStringWidth() ||
+		(mode == castModeAssignment && isStrictSqlMode(proc))
+
+	if targetType.Oid == types.T_int32 {
+		values := vector.MustFixedColWithTypeCheck[int32](result)
+		for row := 0; row < length; row++ {
+			if result.IsNull(uint64(row)) ||
+				(selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(uint64(row))) {
+				continue
+			}
+			value := int64(values[row])
+			if value >= min && value <= max {
+				continue
+			}
+			if strict {
+				return moerr.NewOutOfRangef(ctx, "mediumint", "value '%d'", value)
+			}
+			if value < min {
+				values[row] = int32(min)
+			} else {
+				values[row] = int32(max)
+			}
+			appendMediumIntRangeWarning(proc, row)
+		}
+		return nil
+	}
+
+	values := vector.MustFixedColWithTypeCheck[uint32](result)
+	for row := 0; row < length; row++ {
+		if result.IsNull(uint64(row)) ||
+			(selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(uint64(row))) {
+			continue
+		}
+		value := uint64(values[row])
+		if value <= uint64(max) {
+			continue
+		}
+		if strict {
+			return moerr.NewOutOfRangef(ctx, "mediumint unsigned", "value '%d'", value)
+		}
+		values[row] = uint32(max)
+		appendMediumIntRangeWarning(proc, row)
+	}
+	return nil
+}
+
+func appendMediumIntRangeWarning(proc *process.Process, row int) {
+	if proc == nil {
+		return
+	}
+	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+		appender.AppendWarningDiagnostic(moerr.ER_WARN_DATA_OUT_OF_RANGE,
+			fmt.Sprintf("Out of range value for column 'mediumint' at row %d", row+1))
+	}
+}
+
+func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, mode castMode, allowTrailingSpaceTrim bool) error {
 	var err error
 	execProc := proc
 	// Cast Parameter1 as Type Parameter2

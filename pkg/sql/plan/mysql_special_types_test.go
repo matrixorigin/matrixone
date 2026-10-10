@@ -125,6 +125,46 @@ func TestMySQLSpecialOrderTypeReversibility(t *testing.T) {
 	require.Error(t, newNonReversibleMySQLSpecialOrderError(context.Background()))
 }
 
+func TestFuncCastForTypedArrayMediumIntKeepsBoundsValidation(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name      string
+		typeName  string
+		sourceTyp plan.Type
+		wantCast  bool
+	}{
+		{
+			name:      "JSON source to MEDIUMINT array",
+			typeName:  "array(mediumint)",
+			sourceTyp: plan.Type{Id: int32(types.T_json)},
+			wantCast:  true,
+		},
+		{
+			name:      "same MEDIUMINT array type still validates legacy values",
+			typeName:  "array(mediumint unsigned)",
+			sourceTyp: plan.Type{Id: int32(types.T_json), Enumvalues: "array(mediumint unsigned)"},
+			wantCast:  true,
+		},
+		{
+			name:      "same ordinary INT array keeps existing elision",
+			typeName:  "array(int)",
+			sourceTyp: plan.Type{Id: int32(types.T_json), Enumvalues: "array(int)"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := plan.Type{Id: int32(types.T_json), Enumvalues: tc.typeName}
+			source := &plan.Expr{Typ: tc.sourceTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			got, err := funcCastForTypedArrayType(ctx, source, target)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantCast, got.GetF() != nil)
+			if tc.wantCast {
+				require.Equal(t, moJsonCastToArrayFun, got.GetF().GetFunc().GetObjName())
+				require.Equal(t, tc.typeName, got.Typ.GetEnumvalues())
+			}
+		})
+	}
+}
+
 func TestFindInSetSetBindingUsesStoredBitmap(t *testing.T) {
 	ctx := context.Background()
 	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "z,a,m"}

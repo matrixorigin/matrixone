@@ -1100,6 +1100,13 @@ func TestFormatColTypeGeometrySubtype(t *testing.T) {
 	}))
 }
 
+func TestFormatColTypeMediumInt(t *testing.T) {
+	require.Equal(t, "MEDIUMINT", FormatColType(plan.Type{Id: int32(types.T_int32), Width: 24}))
+	require.Equal(t, "MEDIUMINT UNSIGNED", FormatColType(plan.Type{Id: int32(types.T_uint32), Width: 24}))
+	// The parser's display width for INT(24) is not the MEDIUMINT bit width.
+	require.Equal(t, "INT", FormatColType(plan.Type{Id: int32(types.T_int32), Width: 32}))
+}
+
 func TestFormatColTypeTinyText(t *testing.T) {
 	for _, tc := range []struct {
 		width int32

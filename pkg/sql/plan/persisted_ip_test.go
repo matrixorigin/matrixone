@@ -94,6 +94,42 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 	require.ErrorContains(t, err, "temporal result vector")
 }
 
+func TestPersistedMediumIntRequirementCombinesWithJSONInput(t *testing.T) {
+	mediumIntCast := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_int32), Width: 24},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, 0), ObjName: "cast_assign"},
+			Args: []*planpb.Expr{
+				{Typ: planpb.Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+				{Typ: planpb.Type{Id: int32(types.T_int32), Width: 24}, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}},
+			},
+		}},
+	}
+	jsonConcat := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CONCAT, 0)},
+			Args: []*planpb.Expr{{
+				Typ:  planpb.Type{Id: int32(types.T_json)},
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}},
+			}},
+		}},
+	}
+	for _, exprs := range [][]*planpb.Expr{{mediumIntCast, jsonConcat}, {jsonConcat, mediumIntCast}} {
+		owner := &planpb.TableDef{Cols: []*planpb.ColDef{
+			{Default: &planpb.Default{Expr: exprs[0]}},
+			{Default: &planpb.Default{Expr: exprs[1]}},
+		}}
+		features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+		require.NoError(t, err)
+		require.True(t, features.MediumIntAssignmentBounds)
+		require.True(t, features.JSONInputContracts)
+		version, err := RequiredPersistedExpressionProtocolVersion(owner)
+		require.NoError(t, err)
+		require.Equal(t, int64(defines.MORPCVersion109), version)
+	}
+}
+
 func TestPersistedDecimalDivisionRequiresV97(t *testing.T) {
 	division := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal128), Width: 16, Scale: 6},
 		Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{

@@ -1910,6 +1910,27 @@ func Test_setMysqlColumnTypeMetadataDecimalLength(t *testing.T) {
 	}
 }
 
+func Test_setMysqlColumnTypeMetadataMediumIntLength(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    types.Type
+		signed bool
+		length uint32
+	}{
+		{name: "signed", typ: types.New(types.T_int32, 24, -1), signed: true, length: 9},
+		{name: "unsigned", typ: types.New(types.T_uint32, 24, -1), signed: false, length: 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			col.SetSigned(tc.signed)
+			setMysqlColumnTypeMetadata(col, tc.typ)
+
+			require.Equal(t, tc.length, col.Length())
+			require.Zero(t, col.Decimal())
+		})
+	}
+}
+
 func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -2212,6 +2233,25 @@ func TestMysqlBlobMetadataPreservesKnownAndUnknownBounds(t *testing.T) {
 			require.Equal(t, uint16(charsetBinary), col.Charset())
 			require.Equal(t, tc.length, col.Length())
 			require.Equal(t, uint16(defines.BLOB_FLAG|defines.BINARY_FLAG), col.Flag())
+		})
+	}
+}
+
+func TestMysqlMediumIntProtocolMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		sign bool
+	}{
+		{name: "signed", typ: types.New(types.T_int32, 24, -1), sign: true},
+		{name: "unsigned", typ: types.New(types.T_uint32, 24, -1), sign: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			require.NoError(t, setMysqlColumnTypeInfo(context.Background(), tc.typ, col))
+			require.Equal(t, defines.MYSQL_TYPE_INT24, col.ColumnType())
+			require.Equal(t, tc.sign, col.IsSigned())
+			require.Zero(t, col.Decimal())
 		})
 	}
 }

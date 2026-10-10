@@ -2747,6 +2747,15 @@ func buildCreateTable(
 	if err = buildTableDefs(stmt, ctx, createTable, asSelectCols); err != nil {
 		return nil, err
 	}
+	// The catalog stores MEDIUMINT using the existing 32-bit OIDs plus Width=24.
+	// Old CNs can deserialize that metadata but do not enforce the narrower write
+	// domain, so only author the schema after the cluster protocol fence opens.
+	for _, col := range createTable.TableDef.Cols {
+		if err = requireMediumIntProtocolForAuthoring(
+			ctx.GetContext(), ctx.GetProcess(), col.Typ); err != nil {
+			return nil, err
+		}
+	}
 
 	// set option
 	seenAutoIDCache := false

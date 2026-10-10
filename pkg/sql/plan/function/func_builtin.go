@@ -503,6 +503,9 @@ const (
 // what SHOW CREATE TABLE produces via plan.FormatColType.
 
 func mysqlVisibleStringFamilyName(typ *types.Type) string {
+	if typ.IsMediumInt() {
+		return "MEDIUMINT"
+	}
 	switch typ.Oid {
 	case types.T_text:
 		switch typ.Width {
@@ -651,6 +654,11 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 					ret = "BLOB"
 				default:
 					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
+				}
+			} else if typ.IsMediumInt() {
+				ret = "MEDIUMINT"
+				if typ.Oid == types.T_uint32 {
+					ret += " UNSIGNED"
 				}
 			} else if typ.IsIntOrUint() && typ.Width == 0 {
 				// Width is the physical type width for stored integer columns, but
