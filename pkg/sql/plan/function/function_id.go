@@ -860,7 +860,9 @@ const (
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 587
+	UUID_SHORT = 587
+
+	FUNCTION_END_NUMBER = 588
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1198,6 +1200,7 @@ var functionIdRegister = map[string]int32{
 	"sql_tvf_disconnect":             SQL_TVF_DISCONNECT,
 	"last_kafka_message_id":          LAST_KAFKA_MESSAGE_ID,
 	"uuid_v7":                        UUID,
+	"uuid_short":                     UUID_SHORT,
 	"uuid_v1":                        UUID_V1,
 	"uuid_v4":                        UUID_V4,
 	"uuid_v6":                        UUID_V6,

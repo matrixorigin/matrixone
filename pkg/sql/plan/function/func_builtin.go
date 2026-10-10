@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -2242,6 +2243,45 @@ func generateUUIDs(result vector.FunctionResultWrapper, proc *process.Process, l
 
 func builtInUUID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return generateUUIDs(result, proc, length, uuid.NewV7)
+}
+
+// All accounts and CNs share one durable namespace, separate from internal IDs.
+const uuidShortAllocationKey = "__mo_sql_uuid_short"
+
+// Reserve one normal block of IDs to amortize SQL allocation refills.
+const uuidShortAllocationBatchSize uint64 = objectio.BlockMaxRows
+
+func builtInUUIDShort(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	var ctx context.Context
+	for i := 0; i < length; i++ {
+		if selectList.IgnoreAllRow() || (!selectList.ShouldEvalAllRow() && selectList.Contains(uint64(i))) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		client := proc.GetHaKeeper()
+		if client == nil {
+			return moerr.NewInternalError(proc.Ctx, "UUID_SHORT requires HAKeeper")
+		}
+		if ctx == nil {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(proc.Ctx, 30*time.Second)
+			defer cancel()
+		}
+		id, err := client.AllocateIDByKeyWithBatch(ctx, uuidShortAllocationKey, uuidShortAllocationBatchSize)
+		if err != nil {
+			return err
+		}
+		if id == 0 {
+			return moerr.NewInternalError(proc.Ctx, "UUID_SHORT received an invalid allocation")
+		}
+		if err = rs.Append(id, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // seconds from the UUID Gregorian epoch (1582-10-15) to the unix epoch
