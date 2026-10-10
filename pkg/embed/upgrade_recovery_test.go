@@ -49,13 +49,15 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
 	for _, tc := range []struct {
-		name   string
-		final  bootstrap.VersionHandle
-		manual bool
+		name       string
+		final      bootstrap.VersionHandle
+		manual     bool
+		stepsReady bool
 	}{
 		{name: "4.0.12", final: v4_0_12.Handler},
 		{name: "4.0.13", final: v4_0_13.Handler},
 		{name: "manual-4.0.13", final: v4_0_13.Handler, manual: true},
+		{name: "manual-ready-steps-4.0.13", final: v4_0_13.Handler, manual: true, stepsReady: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			final := tc.final
@@ -146,6 +148,35 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 			}
 			require.NoError(t, c.Close())
 
+			manualSQL := "upgrade account 'recovery_tenant' with retry 1"
+			if tc.stepsReady {
+				manualSQL = "upgrade account 'recovery_tenant'" // Exercise the default single attempt.
+				// Resume only the tenant consumers of the existing route. The
+				// cluster timer is deliberately outside the test's lifetime; no
+				// catalog state is seeded and no timing race chooses this window.
+				setRecoveryCNHandles(c, append(retainedHandles, retainedHandler), true,
+					bootstrap.WithCheckUpgradeDuration(time.Hour))
+				require.NoError(t, c.Start())
+				func() {
+					db := recoverySQLClientWithUser(t, cn, recoveryAdminUser)
+					defer db.Close()
+					require.EventuallyWithT(t, func(collect *assert.CollectT) {
+						var unfinished int
+						err := db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_upgrade where final_version = ? and final_version_offset = ? and state != ?",
+							retained.Version, retained.VersionOffset, versions.StateReady).Scan(&unfinished)
+						require.NoError(collect, err)
+						require.Zero(collect, unfinished)
+					}, time.Minute, 100*time.Millisecond)
+				}()
+				retained, steps = readRecoveryCatalog(t, ctx, cn, retainedHandler.Metadata())
+				require.Equal(t, versions.StateCreated, retained.State)
+				for _, step := range steps {
+					require.Equal(t, versions.StateReady, step.State)
+					require.Equal(t, step.TotalTenant, step.ReadyTenant)
+				}
+				require.NoError(t, c.Close())
+			}
+
 			handles := []bootstrap.VersionHandle{v4_0_10.Handler, v4_0_11.Handler, v4_0_12.Handler}
 			if final.Metadata().Version != v4_0_12.Handler.Metadata().Version {
 				handles = append(handles, final)
@@ -160,7 +191,12 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 					var newerTargets int
 					require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_version where version = ?", final.Metadata().Version).Scan(&newerTargets))
 					require.Zero(t, newerTargets, "automatic upgrade must remain disabled")
-					_, err := db.ExecContext(ctx, "upgrade account 'recovery_tenant' with retry 1")
+					if tc.stepsReady {
+						var tenantVersion string
+						require.NoError(t, db.QueryRowContext(ctx, "select create_version from mo_catalog.mo_account where account_name = 'recovery_tenant'").Scan(&tenantVersion))
+						require.Equal(t, retained.Version, tenantVersion)
+					}
+					_, err := db.ExecContext(ctx, manualSQL)
 					require.ErrorContains(t, err, "Please try again later", "do not accept a single-tenant retry with no consumer for the retained tasks")
 				}()
 			}
@@ -196,7 +232,7 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 				func() {
 					db := recoverySQLClientWithUser(t, cn, recoveryAdminUser)
 					defer db.Close()
-					_, err := db.ExecContext(ctx, "upgrade account 'recovery_tenant' with retry 1")
+					_, err := db.ExecContext(ctx, manualSQL)
 					require.NoError(t, err)
 				}()
 			}
@@ -236,22 +272,25 @@ func (h *interruptedUpgradeHandler) interrupt() error {
 	return errors.New("test interruption before retained upgrade DDL")
 }
 
-func recoveryCNOptions(handles []bootstrap.VersionHandle) []cnservice.Option {
-	return []cnservice.Option{cnservice.WithBootstrapOptions(
-		bootstrap.WithUpgradeHandles(handles),
-		bootstrap.WithCheckUpgradeDuration(100*time.Millisecond),
-		bootstrap.WithCheckUpgradeTenantDuration(100*time.Millisecond),
-		bootstrap.WithCheckUpgradeTenantWorkers(1),
-		bootstrap.WithUpgradeTenantBatch(1),
-	)}
+func recoveryCNOptions(handles []bootstrap.VersionHandle, extra ...bootstrap.Option) []cnservice.Option {
+	return []cnservice.Option{
+		cnservice.WithBootstrapOptions(
+			bootstrap.WithUpgradeHandles(handles),
+			bootstrap.WithCheckUpgradeDuration(100*time.Millisecond),
+			bootstrap.WithCheckUpgradeTenantDuration(100*time.Millisecond),
+			bootstrap.WithCheckUpgradeTenantWorkers(1),
+			bootstrap.WithUpgradeTenantBatch(1),
+		),
+		cnservice.WithBootstrapOptions(extra...),
+	}
 }
 
-func setRecoveryCNHandles(c Cluster, handles []bootstrap.VersionHandle, automatic bool) {
+func setRecoveryCNHandles(c Cluster, handles []bootstrap.VersionHandle, automatic bool, extra ...bootstrap.Option) {
 	c.ForeachServices(func(svc ServiceOperator) bool {
 		if svc.ServiceType() == metadata.ServiceType_CN {
 			op := svc.(*operator)
 			op.Lock()
-			op.testingCNOptions = recoveryCNOptions(handles)
+			op.testingCNOptions = recoveryCNOptions(handles, extra...)
 			op.Unlock()
 			svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.AutomaticUpgrade = automatic })
 		}

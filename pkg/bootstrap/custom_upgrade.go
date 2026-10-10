@@ -273,13 +273,13 @@ func (s *service) UpgradePreCheck(ctx context.Context) error {
 	return moerr.NewInternalError(ctx, "There is an untrigged upgrade tasks in the system, execution started, Please try again later")
 }
 
-// Check for unfinished routes belonging to a different (version, offset).
-// Created steps also need recovery: the cluster worker may not have published
-// their tenant tasks yet, and a single-tenant request does not start consumers.
+// The version record owns target completion. Tenant workers can commit every
+// step as Ready before the cluster worker marks the target Ready, so steps alone
+// cannot decide whether a single-tenant request still needs recovery workers.
 func checkUpgradePerVersionUnready(txn executor.TxnExecutor, final versions.Version) (bool, error) {
-	sql := fmt.Sprintf("select id, from_version, to_version, final_version, final_version_offset from %s.%s "+
-		"where state != %d and (final_version != '%s' or final_version_offset != %d)",
-		catalog.MO_CATALOG, catalog.MOUpgradeTable, versions.StateReady, final.Version, final.VersionOffset)
+	sql := fmt.Sprintf("select 1 from %s.%s "+
+		"where state != %d and (version != '%s' or version_offset != %d) limit 1",
+		catalog.MO_CATALOG, catalog.MOVersionTable, versions.StateReady, final.Version, final.VersionOffset)
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return false, err
