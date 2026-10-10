@@ -314,7 +314,7 @@ func TestLegacyOndupNestedBareLocalColumnDoesNotCountAsTarget(t *testing.T) {
 func TestOndupUpdateBinderIgnoresLocalAliasMatchingTarget(t *testing.T) {
 	stmt, err := parsers.ParseOne(
 		context.Background(), dialect.MYSQL,
-		"insert into t values (2, 5, 0) as n on duplicate key update b = (select t.y from s as t where t.x = (select 1))",
+		"insert into t values (2, 5, 0) as n on duplicate key update b = (select t.b from s as t where t.x = (select 1))",
 		1,
 	)
 	require.NoError(t, err)
@@ -331,7 +331,7 @@ func TestOndupUpdateBinderIgnoresLocalAliasMatchingTarget(t *testing.T) {
 
 	stmt, err = parsers.ParseOne(
 		context.Background(), dialect.MYSQL,
-		"insert into t values (2, 5, 0) as n on duplicate key update b = (select db.t.y from s as t where t.x = (select 1))",
+		"insert into t values (2, 5, 0) as n on duplicate key update b = (select db.t.b from s as t where t.x = (select 1))",
 		1,
 	)
 	require.NoError(t, err)
@@ -783,5 +783,40 @@ func TestInsertRowAliasValuesExcludesHiddenIdentity(t *testing.T) {
 	require.Error(t, err)
 	legacyBinder := NewOndupUpdateBinder(context.Background(), nil, nil, 11, 7, tableDef, "db", "t", 1)
 	_, err = legacyBinder.BindExpr(expr, 0, true)
+	require.NoError(t, err)
+}
+
+func TestLegacyOndupCorrelationSurvivesInvalidSibling(t *testing.T) {
+	for _, table := range []string{"dept", "fake_pk_no_unique_gen"} {
+		column := "loc"
+		insert := "(deptno,dname,loc) values(1,'Sales','NY')"
+		if table == "fake_pk_no_unique_gen" {
+			column = "a"
+			insert = "(a) values(1)"
+		}
+		for _, args := range []string{table + "." + column + ",missing_column", "missing_column," + table + "." + column, column + ",missing_column", "missing_column," + column} {
+			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+				"insert into constraint_test."+table+insert+" on duplicate key update "+column+"=(select concat("+args+"))")
+			require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause, table, args)
+		}
+	}
+}
+
+func TestLegacyOndupDatabaseQualifiedLocalScope(t *testing.T) {
+	for _, reference := range []string{"dept.loc", "constraint_test.dept.loc"} {
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc=(select concat("+reference+",(select 'x')) from constraint_test.dept limit 1)")
+		require.NoError(t, err)
+	}
+	for _, from := range []string{"", " from constraint_test.emp as dept limit 1"} {
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc=(select concat(constraint_test.dept.loc,(select 'x'))"+from+")")
+		require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+	}
+}
+
+func TestLegacyOndupInvalidQualifiedTargetColumnStillDiscards(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.fake_pk_no_unique_gen(a) values(1) on duplicate key update a=(select fake_pk_no_unique_gen.missing_column)")
 	require.NoError(t, err)
 }

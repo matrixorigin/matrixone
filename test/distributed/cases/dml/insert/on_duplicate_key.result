@@ -744,3 +744,36 @@ select a, b from odku_legacy_v1_nokey order by a;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  2
 drop table odku_legacy_v1_nokey;
+
+create table t_odku_scope_no_key(a int, b varchar(30));
+insert into t_odku_scope_no_key values(1,'x') on duplicate key update b=(select concat(t_odku_scope_no_key.b,missing_column));
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
+insert into t_odku_scope_no_key values(1,'x') on duplicate key update b=(select concat(missing_column,t_odku_scope_no_key.b));
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
+prepare odku_scope_stmt from insert into t_odku_scope_no_key values(1,'x') on duplicate key update b=(select concat(t_odku_scope_no_key.b,missing_column));
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
+prepare odku_scope_stmt from insert into t_odku_scope_no_key values(1,'x') on duplicate key update b=(select concat(missing_column,t_odku_scope_no_key.b,?));
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
+insert into t_odku_scope_no_key values(1,'x') on duplicate key update b=(select concat(missing_column,b));
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
+select a from t_odku_scope_no_key;
+➤ a[4,32,0]  𝄀
+insert into t_odku_scope_no_key values(1,'x') on duplicate key update b=(select concat(missing_column,'x'));
+select a from t_odku_scope_no_key;
+➤ a[4,32,0]  𝄀
+1
+create table t_odku_scope_key(a int primary key, b varchar(30));
+insert into t_odku_scope_key values(1,'seed');
+insert into t_odku_scope_key values(1,'x') on duplicate key update b=(select concat(missing_column,t_odku_scope_key.b));
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
+insert into t_odku_scope_key values(1,'x') on duplicate key update b=(select concat(on_duplicate_key.t_odku_scope_key.b,(select 'z')) from on_duplicate_key.t_odku_scope_key limit 1);
+select a,cast(b='seedz' as int) as ok from t_odku_scope_key;
+➤ a[4,32,0]  ¦  ok[4,32,0]  𝄀
+1  ¦  1
+insert into t_odku_scope_no_key values(2,'y') on duplicate key update b=(select concat(on_duplicate_key.t_odku_scope_no_key.b,(select 'z')) from on_duplicate_key.t_odku_scope_no_key limit 1);
+select a from t_odku_scope_no_key order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2
+drop table t_odku_scope_key;
+drop table t_odku_scope_no_key;

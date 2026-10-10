@@ -420,14 +420,16 @@ func (b *OndupUpdateBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr,
 }
 
 func (b *OndupUpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	_, targetNested := b.astSubqueryTargetCorrelation(astExpr)
+	hasTarget, _ := b.astSubqueryTargetCorrelation(astExpr)
 	_, candidateNested := b.astSubqueryCandidateCorrelation(astExpr)
 	hasNestedAst := astSubqueryContainsNestedSubquery(astExpr)
-	if targetNested || candidateNested {
+	if hasTarget || candidateNested {
 		return nil, moerr.NewUnsupportedDML(b.GetContext(), odkuTargetCorrelatedSubqueryCause)
 	}
 
-	// Bare ODKU columns cannot be classified reliably from the AST: an
+	// Certain outer target references are rejected before binding so an invalid
+	// sibling cannot erase their correlation. Bare columns with a local FROM
+	// cannot be classified reliably from the AST: an
 	// identically named column in a local FROM scope must shadow the outer target
 	// or row alias. Bind the subquery first, while its nested Expr_Sub nodes still
 	// retain their provenance, then reject a target or candidate correlation that
@@ -525,8 +527,14 @@ func (b *OndupUpdateBinder) astSubqueryTargetCorrelation(astExpr *tree.Subquery)
 	targetTableName := tree.NewCStr(b.targetTableName, b.lowerCaseTableNames).Compare()
 	targetDBName := tree.NewCStr(b.targetDBName, b.lowerCaseTableNames).Compare()
 	return b.astSubqueryCorrelation(astExpr, func(node *tree.UnresolvedName, local bool) bool {
-		if local || node.TblName() == "" {
+		if local {
 			return false
+		}
+		if _, ok := lookupInsertTableColumn(b.tableDef, node.ColName(), b.lowerCaseTableNames); !ok {
+			return false
+		}
+		if node.TblName() == "" {
+			return true // No local FROM can own this known target column.
 		}
 		qualifier := tree.NewCStr(node.TblName(), b.lowerCaseTableNames).Compare()
 		return qualifier == targetTableName &&
@@ -612,9 +620,17 @@ func (b *OndupUpdateBinder) astSubqueryCorrelation(
 					localScopes = localScopes[:len(localScopes)-1]
 					return
 				case *tree.UnresolvedName:
-					if len(frames) > 0 && node.TblName() != "" {
+					if len(frames) > 0 {
 						qualifier := tree.NewCStr(node.TblName(), b.lowerCaseTableNames).Compare()
-						local := node.DbName() == "" && isLocalQualifier(qualifier)
+						if node.DbName() != "" {
+							qualifier = tree.NewCStr(node.DbName(), b.lowerCaseTableNames).Compare() + "." + qualifier
+						}
+						local := isLocalQualifier(qualifier)
+						if node.TblName() == "" {
+							// The empty scope key records any local FROM, even
+							// when its columns cannot be classified from the AST.
+							local = isLocalQualifier("")
+						}
 						if match(node, local) {
 							frames[len(frames)-1].hasCorrelation = true
 							hasCorrelation = true
@@ -674,9 +690,25 @@ func (b *OndupUpdateBinder) astSelectLocalQualifiers(stmt tree.SelectStatement) 
 func (b *OndupUpdateBinder) collectAstTableQualifiers(expr tree.TableExpr, names map[string]struct{}) {
 	switch tableExpr := expr.(type) {
 	case *tree.TableName:
-		names[tree.NewCStr(string(tableExpr.ObjectName), b.lowerCaseTableNames).Compare()] = struct{}{}
+		name := tree.NewCStr(string(tableExpr.ObjectName), b.lowerCaseTableNames).Compare()
+		if name == "" { // Parser's synthetic FROM for SELECT without a table.
+			return
+		}
+		names[""] = struct{}{}
+		names[name] = struct{}{}
+		db := string(tableExpr.SchemaName)
+		if db == "" {
+			db = b.targetDBName
+			if b.builder != nil {
+				db = b.builder.compCtx.DefaultDatabase()
+			}
+		}
+		if db != "" {
+			names[tree.NewCStr(db, b.lowerCaseTableNames).Compare()+"."+name] = struct{}{}
+		}
 	case *tree.AliasedTableExpr:
 		if tableExpr.As.Alias != "" {
+			names[""] = struct{}{}
 			names[tree.NewCStr(string(tableExpr.As.Alias), b.lowerCaseTableNames).Compare()] = struct{}{}
 			return
 		}
@@ -689,6 +721,10 @@ func (b *OndupUpdateBinder) collectAstTableQualifiers(expr tree.TableExpr, names
 	case *tree.ApplyTableExpr:
 		b.collectAstTableQualifiers(tableExpr.Left, names)
 		b.collectAstTableQualifiers(tableExpr.Right, names)
+	default:
+		if expr != nil {
+			names[""] = struct{}{}
+		}
 	}
 }
 
