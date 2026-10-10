@@ -195,8 +195,9 @@ func TestIntegerArgumentPreparedRuntimeCandidates(t *testing.T) {
 		{`select period_add(?,?)`, []int32{0, 1}},
 		{`select period_diff(?,?)`, []int32{0, 1}},
 		// Math precision retains ordinary strict INT64 casts, so these markers
-		// must not enter private integer-prefix source discovery. Their runtime
-		// source and CAST0 contract is covered by TestPreparedMathStringValueAndPrecisionRoles.
+		// must not enter private integer-prefix source discovery. Runtime source
+		// provenance is covered by TestPreparedExecutionPlanMathPrecisionUsesSourceProvenance,
+		// and the retained CEIL precision contract by TestPreparedCeilPrecisionScalarRuntime.
 		{`select ceil(1.25,?)`, nil},
 		{`select ceiling(1.25,?)`, nil},
 		{`select floor(1.25,?)`, nil},
