@@ -50,6 +50,7 @@ func (s *siriusExecutionStub) CleanupAfterRun(ctx context.Context, err error) er
 func TestSiriusFlightBackendPreservesPreparationOwnership(t *testing.T) {
 	require.Nil(t, NewSiriusFlightBackend(nil))
 	backend := NewSiriusFlightBackend(&sidecarflight.Runtime{})
+	require.Zero(t, backend.Capabilities(), "Flight cannot advertise embedded exact-decimal support")
 	// Invalid preparation fails before any connection is required. Its release
 	// callback still runs exactly once. Malformed requests remain terminal even
 	// after successful cleanup, just as in the concrete Flight API.

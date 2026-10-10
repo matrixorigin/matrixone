@@ -6702,6 +6702,15 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						// but later actions in this statement must already observe it.
 						currentTableDef.RefChildTbls = append(currentTableDef.RefChildTbls, 0)
 					}
+					// Self-references cannot bind the parent key until the final
+					// table definition is assembled, but the catalog row must still
+					// be written for INPLACE ALTER just as it is for CREATE/COPY.
+					fkData.UpdateSql = getSqlForAddFkWithCatalogLayout(
+						databaseName,
+						currentTableDef.Name,
+						fkData,
+						fkData.catalogLayout,
+					)
 				} else {
 					// get table def of parent table
 					_, parentTableDef, err := ctx.Resolve(
