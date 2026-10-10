@@ -30,6 +30,9 @@ func TestUnicodeCollationComparisonKeys(t *testing.T) {
 	require.Equal(t, 0, CompareStringValues(mb4, []byte("é"), []byte("e")))
 	require.Equal(t, 0, CompareStringValues(mb4, []byte("ß"), []byte("ss")))
 	require.Less(t, CompareStringValues(mb4, []byte("a"), []byte("b")), 0)
+	legacyChar := NewWithCharset(T_char, 4, 0, CharsetUTF8MB4Bin)
+	require.Equal(t, 0, CompareStringValues(legacyChar, []byte("a "), []byte("a")))
+	require.NotEqual(t, 0, CompareStringOrderValues(legacyChar, []byte("a "), []byte("a")))
 
 	key, err := CollationKey(CharsetUTF8MB3UnicodeCI, nil, []byte("😀"))
 	require.ErrorIs(t, err, collation.ErrRepertoire)

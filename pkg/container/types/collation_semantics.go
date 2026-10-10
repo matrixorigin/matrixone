@@ -118,3 +118,15 @@ func CompareStringValues(typ Type, left, right []byte) int {
 		CollationKeyOrOriginal(typ.Charset, right),
 	)
 }
+
+// CompareStringOrderValues is the comparator used by SQL ORDER BY consumers.
+// Native Unicode identities use the same UCA key relation as scalar equality.
+// Legacy CHAR keeps the historical raw-byte order so TopN/merge ordering stays
+// aligned with full sort and peer partitioning; physical/storage callers keep
+// their existing raw-byte contract as well.
+func CompareStringOrderValues(typ Type, left, right []byte) int {
+	if !IsUnicodeCollation(typ.Charset) {
+		return bytes.Compare(left, right)
+	}
+	return CompareStringValues(typ, left, right)
+}

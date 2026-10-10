@@ -48,7 +48,7 @@ func (c *strCompare) Compare(veci, vecj int, vi, vj int64) int {
 	// vectors can be materialized through a storage or spill path that only
 	// preserves the physical string OID, so deriving collation from the vector
 	// would silently fall back to byte order.
-	cmp = types.CompareStringValues(c.typ, x, y)
+	cmp = types.CompareStringOrderValues(c.typ, x, y)
 	if c.desc {
 		return -cmp
 	}
