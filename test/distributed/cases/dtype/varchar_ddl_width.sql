@@ -5,6 +5,8 @@ use varchar_ddl_width;
 
 create table rejected (c bool, v varchar(65535));
 create table rejected (v varchar(16384));
+create table rejected (v varchar(65536));
+create table rejected (v varchar(65536)) as select 'value' as v;
 show tables like 'rejected';
 
 create table boundary (v varchar(16383));
@@ -18,6 +20,8 @@ create table binary_column (v varchar(65535) character set binary);
 show create table binary_column;
 create table binary_table (v varchar(65535)) character set binary;
 show create table binary_table;
+create table rejected (v varchar(65536) character set binary);
+create table rejected (v varchar(65536)) character set binary;
 
 -- Keep MO's omitted-length syntax, but publish a legal text-column default.
 create table implicit_width (v varchar);
@@ -29,12 +33,20 @@ insert into alter_width values ('before');
 alter table alter_width add column extra varchar(16384);
 alter table alter_width modify column v varchar(16384);
 alter table alter_width change column v renamed varchar(16384);
+alter table alter_width add column extra varchar(65536);
+alter table alter_width modify column v varchar(65536);
+alter table alter_width change column v renamed varchar(65536);
+alter table alter_width modify column v varchar(65536), add column flag bool;
 show create table alter_width;
 select * from alter_width;
 alter table alter_width modify column v varchar(16383);
 show create table alter_width;
 alter table alter_width modify column v varchar(16384), add column flag bool;
 show create table alter_width;
+
+-- General CAST and native VARBINARY retain their existing capacity errors.
+select cast('value' as varchar(65536));
+create table rejected (v varbinary(65536));
 
 -- Expression widths and unmodified existing schemas are not DDL declarations.
 create table inferred as select cast('old' as varchar(65535)) as v;

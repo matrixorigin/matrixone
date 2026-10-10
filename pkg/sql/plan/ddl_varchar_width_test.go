@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,10 +35,16 @@ func TestDDLVarcharWidthCreate(t *testing.T) {
 		wantWidth int32
 		wantOID   types.T
 		wantError bool
+		wantMax   int32
 	}{
 		{name: "reported table", sql: "create table t(c bool, v varchar(65535))", wantError: true},
 		{name: "boundary", sql: "create table t(v varchar(16383))", wantWidth: 16383, wantOID: types.T_varchar},
 		{name: "above boundary", sql: "create table t(v varchar(16384))", wantError: true},
+		{name: "above general capacity", sql: "create table t(v varchar(65536))", wantError: true},
+		{name: "above binary column capacity", sql: "create table t(v varchar(65536) character set binary)", wantError: true, wantMax: 65535},
+		{name: "above binary table capacity", sql: "create table t(v varchar(65536)) charset binary", wantError: true, wantMax: 65535},
+		{name: "text overrides oversized binary table", sql: "create table t(v varchar(65536) character set utf8mb4) charset binary", wantError: true},
+		{name: "oversized explicit CTAS", sql: "create table t(v varchar(65536)) as select 'a' as v", wantError: true},
 		{name: "table charset", sql: "create table t(v varchar(16384)) charset utf8mb4", wantError: true},
 		{name: "table binary collation", sql: "create table t(v varchar(16384)) collate utf8mb4_bin", wantError: true},
 		{name: "column charset", sql: "create table t(v varchar(16384) character set utf8mb4)", wantError: true},
@@ -61,7 +68,11 @@ func TestDDLVarcharWidthCreate(t *testing.T) {
 				require.ErrorAs(t, err, &typed)
 				require.Equal(t, moerr.ER_TOO_BIG_FIELDLENGTH, typed.MySQLCode())
 				require.Equal(t, "42000", typed.SqlState())
-				require.Contains(t, typed.Error(), "'v' (max = 16383)")
+				maxWidth := tc.wantMax
+				if maxWidth == 0 {
+					maxWidth = 16383
+				}
+				require.Contains(t, typed.Error(), fmt.Sprintf("'v' (max = %d)", maxWidth))
 				return
 			}
 			require.NoError(t, err)
@@ -79,6 +90,10 @@ func TestDDLVarcharWidthAlter(t *testing.T) {
 		"alter table t1 modify column b varchar(16384)",
 		"alter table t1 change column b v varchar(16384)",
 		"alter table t1 modify column b varchar(16384), add column v int",
+		"alter table t1 add column v varchar(65536)",
+		"alter table t1 modify column b varchar(65536)",
+		"alter table t1 change column b v varchar(65536)",
+		"alter table t1 modify column b varchar(65536), add column v int",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
@@ -90,6 +105,7 @@ func TestDDLVarcharWidthAlter(t *testing.T) {
 			var typed *moerr.Error
 			require.ErrorAs(t, err, &typed)
 			require.Equal(t, moerr.ER_TOO_BIG_FIELDLENGTH, typed.MySQLCode())
+			require.Equal(t, "42000", typed.SqlState())
 		})
 	}
 }
@@ -150,6 +166,7 @@ func TestDDLVarcharWidthReplayAdmission(t *testing.T) {
 	}{
 		{name: "unchanged", column: "v varchar(65535)"},
 		{name: "changed width", column: "v varchar(65534)", wantError: true},
+		{name: "changed width above capacity", column: "v varchar(65536)", wantError: true},
 		{name: "new column", column: "extra varchar(65535)", wantError: true},
 		{name: "changed charset", column: "v varchar(65535) collate utf8mb4_bin", wantError: true},
 	} {
@@ -168,6 +185,26 @@ func TestDDLVarcharWidthReplayAdmission(t *testing.T) {
 	}
 }
 
+func TestDDLVarcharWidthAdmissionDoesNotMutateAST(t *testing.T) {
+	stmt, err := mysql.ParseOne(t.Context(), "create table t(v varchar(65536))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+	astType := col.Type.(*tree.T)
+
+	_, err = getColumnTypeFromAst(t.Context(), col, uint32(types.CharsetUTF8), nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTooBigFieldLength), err)
+	require.Equal(t, int32(65536), astType.InternalType.DisplayWith)
+
+	// Neither general expression parsing nor trusted catalog DDL gains capacity.
+	_, err = getTypeFromAst(t.Context(), col.Type)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+	internal := context.WithValue(t.Context(), defines.InternalExecutorKey{}, true)
+	_, err = getColumnTypeFromAst(internal, col, uint32(types.CharsetUTF8), nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+	require.Equal(t, int32(65536), astType.InternalType.DisplayWith)
+}
+
 func TestDDLVarcharWidthDoesNotRestrictExpressions(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	built, err := buildSingleStmt(mock, t, "create table t as select cast('a' as varchar(65535)) as v")
@@ -176,4 +213,17 @@ func TestDDLVarcharWidthDoesNotRestrictExpressions(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), col.Typ.Id)
 	require.Equal(t, int32(types.MaxVarcharLen), col.Typ.Width)
 	require.Equal(t, uint32(types.CharsetUTF8), col.Typ.Charset)
+
+	for _, sql := range []string{
+		"select cast('a' as varchar(65536))",
+		"create table binary_t(v varbinary(65536))",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
+			var typed *moerr.Error
+			require.ErrorAs(t, err, &typed)
+			require.Equal(t, uint16(1690), typed.MySQLCode())
+			require.Equal(t, "22003", typed.SqlState())
+		})
+	}
 }

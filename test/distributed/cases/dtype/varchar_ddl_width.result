@@ -5,6 +5,10 @@ create table rejected (c bool, v varchar(65535));
 Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead
 create table rejected (v varchar(16384));
 Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead
+create table rejected (v varchar(65536));
+Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead
+create table rejected (v varchar(65536)) as select 'value' as v;
+Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead
 show tables like 'rejected';
 ➤ Tables_in_varchar_ddl_width[12,5000,0]
 create table boundary (v varchar(16383));
@@ -31,6 +35,10 @@ show create table binary_table;
 binary_table  ¦  CREATE TABLE `binary_table` (
   `v` varbinary(65535) DEFAULT NULL
 ) CHARACTER SET=binary
+create table rejected (v varchar(65536) character set binary);
+Column length too big for column 'v' (max = 65535); use BLOB or TEXT instead
+create table rejected (v varchar(65536)) character set binary;
+Column length too big for column 'v' (max = 65535); use BLOB or TEXT instead
 create table implicit_width (v varchar);
 show create table implicit_width;
 ➤ Table[12,14,0]  ¦  Create Table[12,67,0]  𝄀
@@ -45,6 +53,14 @@ alter table alter_width modify column v varchar(16384);
 Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead
 alter table alter_width change column v renamed varchar(16384);
 Column length too big for column 'renamed' (max = 16383); use BLOB or TEXT instead
+alter table alter_width add column extra varchar(65536);
+Column length too big for column 'extra' (max = 16383); use BLOB or TEXT instead
+alter table alter_width modify column v varchar(65536);
+Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead
+alter table alter_width change column v renamed varchar(65536);
+Column length too big for column 'renamed' (max = 16383); use BLOB or TEXT instead
+alter table alter_width modify column v varchar(65536), add column flag bool;
+Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead
 show create table alter_width;
 ➤ Table[12,11,0]  ¦  Create Table[12,61,0]  𝄀
 alter_width  ¦  CREATE TABLE `alter_width` (
@@ -66,6 +82,10 @@ show create table alter_width;
 alter_width  ¦  CREATE TABLE `alter_width` (
   `v` varchar(16383) DEFAULT NULL
 )
+select cast('value' as varchar(65536));
+Data truncation: data out of range: data type varchar,  typeLen is over the MaxVarcharLen: 65535
+create table rejected (v varbinary(65536));
+Data truncation: data out of range: data type varbinary,  typeLen is over the MaxVarcharLen: 65535
 create table inferred as select cast('old' as varchar(65535)) as v;
 create table copied like inferred;
 alter table inferred add column extra int;

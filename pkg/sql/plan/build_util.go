@@ -161,35 +161,60 @@ func getColumnTypeFromAst(
 	tableCharset uint32,
 	replay *persistedDDLReplay,
 ) (plan.Type, error) {
-	typ, err := getTypeFromAst(ctx, column.Type)
+	astType, isVarchar := column.Type.(*tree.T)
+	isVarchar = isVarchar && strings.EqualFold(astType.InternalType.FamilyString, "varchar")
+	internal := defines.IsInternalExecutor(ctx)
+	parseType := column.Type
+	if isVarchar && !internal && astType.InternalType.DisplayWith > types.MaxVarcharLen {
+		// Resolve all other type properties through the common parser, but leave
+		// DDL VARCHAR capacity errors to the final charset-aware admission rule.
+		// Copy the AST so CAST/expression consumers and reconstruction are untouched.
+		bounded := *astType
+		bounded.InternalType.DisplayWith = types.MaxVarcharLen
+		parseType = &bounded
+	}
+	typ, err := getTypeFromAst(ctx, parseType)
 	if err != nil {
 		return plan.Type{}, err
+	}
+	if isVarchar && astType.InternalType.DisplayWith > types.MaxVarcharLen {
+		typ.Width = astType.InternalType.DisplayWith
 	}
 	if err = applyDefaultAndColumnAttributesToType(ctx, &typ, tableCharset, column.Attributes); err != nil {
 		return plan.Type{}, err
 	}
-	if types.T(typ.Id) != types.T_varchar || defines.IsInternalExecutor(ctx) {
+	if internal {
 		// Trusted internal DDL includes bootstrap and versioned catalog upgrades.
 		// Preserve those schemas and their historical omitted-length defaults.
 		return typ, nil
 	}
-	charset := typ.Charset
-	if charset == uint32(types.CharsetLegacy) {
-		// Legacy catalogs lack a charset identity, but text is still UTF-8.
-		charset = uint32(types.CharsetUTF8)
+	maxWidth := int32(types.MaxVarcharLen)
+	switch types.T(typ.Id) {
+	case types.T_varchar:
+		charset := typ.Charset
+		if charset == uint32(types.CharsetLegacy) {
+			// Legacy catalogs lack a charset identity, but text is still UTF-8.
+			charset = uint32(types.CharsetUTF8)
+		}
+		definition, err := collation.EffectiveDefinition(charset, typ.CollationVersion)
+		if err != nil {
+			return plan.Type{}, err
+		}
+		maxWidth /= definition.Charset.MaxBytes()
+	case types.T_varbinary:
+		if !isVarchar {
+			return typ, nil
+		}
+	default:
+		return typ, nil
 	}
-	definition, err := collation.EffectiveDefinition(charset, typ.CollationVersion)
-	if err != nil {
-		return plan.Type{}, err
-	}
-	maxWidth := types.MaxVarcharLen / definition.Charset.MaxBytes()
 	if astType, ok := column.Type.(*tree.T); ok && astType.InternalType.DisplayWith == -1 {
 		// Preserve MO's omitted-length syntax without publishing an oversized
 		// default column. This must happen after binary charset conversion.
 		typ.Width = maxWidth
 	}
 	if typ.Width > maxWidth {
-		if replay != nil {
+		if replay != nil && typ.Width <= types.MaxVarcharLen {
 			if preserved := replay.columns[strings.ToLower(column.Name.ColName())]; preserved != nil {
 				old := preserved.columnType
 				// Internal LIKE/COPY reconstruction may retain a pre-existing
