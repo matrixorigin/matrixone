@@ -84,14 +84,14 @@ Against upstream `9df2c4006142a0593f9bb4c40019ee1a8cd2cde7`, the current repair 
 
 ## r5 rebase maintenance addendum (2026-10-09)
 
-Official main `72d4a49db7d750520e1a1654cb6091fc7169882b` has allocated
-MORPC 108 to the user-variable NULL regexp migration contract while retaining
-catalog 4.0.13. This proposal uses the next MORPC 109 and a separate catalog 4.0.14
-repair (minimum direct source 4.0.13), preserving the upstream handler unchanged.
-The nine idempotent shared-function entries are replayed only by the new handler;
-already-upgraded 4.0.13 tenants remain eligible. Sender, receiver, prepared reuse,
-physical execution and status RPC admission move together; protocol 108 is the
-immediate predecessor rejection case. This is a mechanical compatibility
+Official main `8cc9167cb0a04479cd4c2f083aece5130f8c1946` has allocated
+MORPC 109 to the native Unicode COLUMNS migration in catalog 4.0.14. This
+proposal uses the next MORPC 110 and preserves that upstream migration alongside
+the Python revision repair (minimum direct source 4.0.13). The nine idempotent
+shared-function entries remain replayed by the combined handler; already-upgraded
+4.0.13 tenants remain eligible. Sender, receiver, prepared reuse, physical
+execution and status RPC admission move together; protocol 109 is the immediate
+predecessor rejection case. This is a mechanical compatibility
 correction within the existing test/development scope. Independent Architecture
 and SQL/Planner approval remains pending; no approval is inferred from this
 addendum or validation.
