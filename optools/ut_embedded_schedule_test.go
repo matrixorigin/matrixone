@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -856,6 +857,9 @@ printf 'REVIEW signal=%s status=%s flag=%s retained=%s live_groups=%s later=%s\n
 }
 
 func TestEmbeddedPrebuiltFailureKeepsReportJSONOnly(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("prebuilt watchdog force-stop fixture relies on Linux process-group semantics")
+	}
 	for _, parallel := range []string{"1", "2"} {
 		t.Run("parallel="+parallel, func(t *testing.T) {
 			script := embeddedSetup + `
@@ -867,8 +871,16 @@ function logger() { printf '%s\n' "$*"; }
 first_group_pid=""
 watchdog_group_pid=""
 watchdog_probe_count=0
+execution_started=0
 function ut_process_group_alive() {
  local pid=$1
+ if [[ ! -e "$CASE_DIR/execution-start" ]]; then return 1; fi
+ if (( execution_started == 0 )); then
+  first_group_pid=""
+  watchdog_group_pid=""
+  watchdog_probe_count=0
+  execution_started=1
+ fi
  if [[ -z "$first_group_pid" ]]; then
   first_group_pid=$pid
   return 1
@@ -886,6 +898,7 @@ function ut_process_group_alive() {
 }
 start_embedded_prebuild "$scope" 1
 status=0
+touch "$CASE_DIR/execution-start"
 run_embedded_tests "$scope" 2 > "$CASE_DIR/outer-log" || status=$?
 [[ "$status" != 0 ]] || exit 90
 cat "$UT_REPORT"
