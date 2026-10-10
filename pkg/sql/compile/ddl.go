@@ -2580,6 +2580,11 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 					ctxWithSession = attachInternalExecutorCompilerContext(ctxWithSession, compilerContext)
 				}
 			}
+			// The frontend has already parsed and remapped the policy on the
+			// outer CTAS source. Carry that typed policy into the generated
+			// INSERT instead of reparsing redacted diagnostic SQL.
+			ctxWithSession = attachInternalExecutorRewriteOption(
+				ctxWithSession, c.ctasRewriteOption())
 			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
 			// Internal executor skips auth by default unless this flag is present.
 			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(ctxWithSession)
@@ -2600,6 +2605,14 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 	}
 
 	return nil
+}
+
+func (c *Compile) ctasRewriteOption() *tree.RewriteOption {
+	createTable, ok := c.stmt.(*tree.CreateTable)
+	if !ok || createTable.AsSource == nil {
+		return nil
+	}
+	return createTable.AsSource.RewriteOption
 }
 
 func physicalTemporaryTableName(proc *process.Process, dbName, alias string) string {

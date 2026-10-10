@@ -135,6 +135,21 @@ func TestApplyRemapDbKeepsRewriteKeysAndBodiesAligned(t *testing.T) {
 		require.Contains(t, body, "dst_db.t")
 	})
 
+	t.Run("ctas source rewrite follows remap", func(t *testing.T) {
+		sql := `/*+ {"rewrites":{"src_db.t":"select id from src_db.t where tenant = 1"},"remapdb":{"src_db":"dst_db"}} */ create table dst_db.u as select id from src_db.t`
+		stmts := parseWithRewriteHints(t, sql)
+		ctas := stmts[0].(*tree.CreateTable)
+		require.NotNil(t, ctas.AsSource)
+		require.NoError(t, applyRemapDb(ctx, stmts, map[string]string{"src_db": "dst_db"}, 1))
+		require.NotContains(t, ctas.AsSource.RewriteOption.Rewrites, "src_db.t")
+		chain, ok := ctas.AsSource.RewriteOption.Rewrites["dst_db.t"]
+		require.True(t, ok)
+		require.Len(t, chain, 1)
+		body := tree.StringWithOpts(chain[0].Stmt, dialect.MYSQL, tree.WithSingleQuoteString())
+		require.Contains(t, body, "dst_db.t")
+		require.Contains(t, body, "tenant = 1")
+	})
+
 	t.Run("empty rewrite map is a no-op", func(t *testing.T) {
 		require.NoError(t, remapRewriteOption(nil, remapDbContext{}))
 		require.NoError(t, remapRewriteOption(&tree.RewriteOption{}, remapDbContext{}))

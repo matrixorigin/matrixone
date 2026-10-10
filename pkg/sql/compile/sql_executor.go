@@ -428,6 +428,11 @@ func (exec *txnExecutor) Exec(
 	if err != nil {
 		return executor.Result{}, err
 	}
+	if rewriteOption := getInternalExecutorRewriteOption(exec.ctx); rewriteOption != nil {
+		// CTAS carries the effective policy as typed AST state from the outer
+		// statement. Never recover execution semantics from redacted originSQL.
+		attachRewriteOptionToStatement(stmts[0], rewriteOption)
+	}
 
 	// TODO(volgariver6): we got a duplicate code logic in `func (cwft *TxnComputationWrapper) Compile`,
 	// maybe we should fix it.
