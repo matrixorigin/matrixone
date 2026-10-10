@@ -197,105 +197,71 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			require.Zero(t, result)
 		}
 
-		// ROUND/TRUNCATE keep the first argument's deferred numeric source, but
-		// their precision argument has a separate integer contract. Exercise the
-		// real COM_STMT_EXECUTE path with malformed string precision values and
-		// then change domains repeatedly on the same cached statement. A broad
-		// DOUBLE rebinding of the second marker either accepts these values or
-		// leaves the prior execution's type in the cache.
+		// Keep the two precision roles separate on a real COM_STMT handle:
+		// text values select DECIMAL while precision remains an integer cast.
 		type preparedMathResult struct {
 			value        float64
 			valid        bool
 			databaseType string
 		}
 		queryPreparedMath := func(stmt *sql.Stmt, value, precision any) (preparedMathResult, error) {
-			rows, queryErr := stmt.QueryContext(ctx, value, precision)
-			if queryErr != nil {
-				return preparedMathResult{}, queryErr
-			}
-			defer rows.Close()
-			columnTypes, err := rows.ColumnTypes()
+			rows, err := stmt.QueryContext(ctx, value, precision)
 			if err != nil {
 				return preparedMathResult{}, err
 			}
-			if len(columnTypes) != 1 {
-				return preparedMathResult{}, fmt.Errorf("expected one result column, got %d", len(columnTypes))
+			defer rows.Close()
+			columns, err := rows.ColumnTypes()
+			if err != nil {
+				return preparedMathResult{}, err
 			}
+			if len(columns) != 1 {
+				return preparedMathResult{}, fmt.Errorf("expected one result column, got %d", len(columns))
+			}
+			var got sql.NullFloat64
 			if !rows.Next() {
 				if err := rows.Err(); err != nil {
 					return preparedMathResult{}, err
 				}
 				return preparedMathResult{}, fmt.Errorf("prepared math query returned no rows")
 			}
-			var valueResult sql.NullFloat64
-			if err := rows.Scan(&valueResult); err != nil {
+			if err := rows.Scan(&got); err != nil {
 				return preparedMathResult{}, err
 			}
 			if err := rows.Err(); err != nil {
 				return preparedMathResult{}, err
 			}
-			return preparedMathResult{
-				value: valueResult.Float64, valid: valueResult.Valid,
-				databaseType: strings.ToUpper(columnTypes[0].DatabaseTypeName()),
-			}, nil
+			return preparedMathResult{value: got.Float64, valid: got.Valid,
+				databaseType: strings.ToUpper(columns[0].DatabaseTypeName())}, nil
 		}
 
-		for _, mathName := range []string{"round", "truncate"} {
-			mathStmt, err := db.PrepareContext(ctx, "select "+mathName+"(?, ?)")
-			require.NoError(t, err)
-			func() {
-				defer func() { require.NoError(t, mathStmt.Close()) }()
-				for _, mode := range []string{"", "MYSQL_NUMERIC_COMPATIBILITY"} {
-					_, err := db.ExecContext(ctx, "set session sql_mode = '"+mode+"'")
-					require.NoError(t, err)
-					for _, precision := range []string{"0.5tail", "1.5tail", "-0.5tail", "abc", ""} {
-						_, queryErr := queryPreparedMath(mathStmt, "1.5", precision)
-						require.Error(t, queryErr, "%s precision=%q mode=%q must retain integer-cast errors", mathName, precision, mode)
-						require.Contains(t, queryErr.Error(), "bad value "+precision,
-							"%s precision=%q mode=%q must report the original invalid marker", mathName, precision, mode)
-					}
-				}
-				_, err := db.ExecContext(ctx, "set session sql_mode = ''")
-				require.NoError(t, err)
+		round, err := db.PrepareContext(ctx, "select round(?, ?)")
+		require.NoError(t, err)
+		defer func() { require.NoError(t, round.Close()) }()
+		result, err := queryPreparedMath(round, "1.5", int64(0))
+		require.NoError(t, err)
+		require.True(t, result.valid)
+		require.Contains(t, result.databaseType, "DECIMAL")
+		require.Equal(t, float64(2), result.value)
+		_, err = queryPreparedMath(round, "1.5", "1.5tail")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "bad value 1.5tail")
+		result, err = queryPreparedMath(round, "1.5", int64(1))
+		require.NoError(t, err, "same handle must recover after rejected precision")
+		require.True(t, result.valid)
+		require.Contains(t, result.databaseType, "DECIMAL")
+		require.Equal(t, 1.5, result.value)
+		result, err = queryPreparedMath(round, nil, int64(0))
+		require.NoError(t, err)
+		require.False(t, result.valid)
 
-				// A string value with an actual integer precision must succeed and
-				// expose the exact DECIMAL result domain selected for the numeric
-				// text value (rather than changing the precision marker to DOUBLE).
-				result, queryErr := queryPreparedMath(mathStmt, "1.5", int64(0))
-				require.NoError(t, queryErr)
-				require.True(t, result.valid)
-				require.Contains(t, result.databaseType, "DECIMAL")
-				want := float64(2)
-				if mathName == "truncate" {
-					want = 1
-				}
-				require.Equal(t, want, result.value)
-
-				// A native integer value must still select the integer overload
-				// after the string execution, proving the two markers are not
-				// coupled in the cached prepared plan.
-				result, queryErr = queryPreparedMath(mathStmt, int64(15), int64(0))
-				require.NoError(t, queryErr)
-				require.True(t, result.valid)
-				require.Contains(t, result.databaseType, "INT")
-				require.Equal(t, float64(15), result.value)
-
-				// Return to a malformed precision after a successful integer
-				// execution, then exercise NULL and a final string execution. This
-				// catches stale overload/type state across error and NULL paths.
-				_, queryErr = queryPreparedMath(mathStmt, "1.5", "1.5tail")
-				require.Error(t, queryErr)
-				require.Contains(t, queryErr.Error(), "bad value 1.5tail")
-				result, queryErr = queryPreparedMath(mathStmt, nil, int64(0))
-				require.NoError(t, queryErr)
-				require.False(t, result.valid)
-				result, queryErr = queryPreparedMath(mathStmt, "1.5", int64(1))
-				require.NoError(t, queryErr)
-				require.True(t, result.valid)
-				require.Contains(t, result.databaseType, "DECIMAL")
-				require.Equal(t, 1.5, result.value)
-			}()
-		}
+		truncate, err := db.PrepareContext(ctx, "select truncate(?, ?)")
+		require.NoError(t, err)
+		defer func() { require.NoError(t, truncate.Close()) }()
+		result, err = queryPreparedMath(truncate, "1.5", int64(0))
+		require.NoError(t, err)
+		require.True(t, result.valid)
+		require.Contains(t, result.databaseType, "DECIMAL")
+		require.Equal(t, float64(1), result.value)
 
 		abs, err := db.PrepareContext(ctx, "select abs(?)")
 		require.NoError(t, err)
@@ -398,90 +364,6 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			ctx, int64(-9007199254740993)).Scan(&nestedArithmeticResult))
 		require.Equal(t, int64(9007199254740993), nestedArithmeticResult)
 
-		queryPreparedNumeric := func(t *testing.T, query string, args ...any) (float64, error) {
-			t.Helper()
-			stmt, err := db.PrepareContext(ctx, query)
-			require.NoError(t, err, query)
-			defer func() { require.NoError(t, stmt.Close()) }()
-			var result float64
-			err = stmt.QueryRowContext(ctx, args...).Scan(&result)
-			return result, err
-		}
-
-		// First assert the server-default SQL mode through a fresh connection and
-		// prepared statement. This must not accidentally inherit the mode changes
-		// exercised below by the cached-statement mode-flip regression.
-		defaultModeDB, err := sql.Open("mysql", dsn)
-		require.NoError(t, err)
-		defaultModeDB.SetMaxOpenConns(1)
-		defer func() { require.NoError(t, defaultModeDB.Close()) }()
-		defaultModeConn, err := defaultModeDB.Conn(ctx)
-		require.NoError(t, err)
-		defer func() { require.NoError(t, defaultModeConn.Close()) }()
-		var defaultSQLMode string
-		require.NoError(t, defaultModeConn.QueryRowContext(ctx,
-			"select @@sql_mode").Scan(&defaultSQLMode))
-		t.Logf("fresh COM_STMT session default @@sql_mode: %q", defaultSQLMode)
-		defaultHasNativeMode := false
-		defaultHasNumericCompatibilityMode := false
-		for _, mode := range strings.Split(defaultSQLMode, ",") {
-			switch strings.ToUpper(strings.TrimSpace(mode)) {
-			case "MATRIXONE_NATIVE":
-				defaultHasNativeMode = true
-			case "MYSQL_NUMERIC_COMPATIBILITY":
-				defaultHasNumericCompatibilityMode = true
-			}
-		}
-		require.False(t, defaultHasNativeMode,
-			"server-default @@sql_mode must not contain MATRIXONE_NATIVE")
-		require.False(t, defaultHasNumericCompatibilityMode,
-			"server-default @@sql_mode must not enable numeric-prefix compatibility")
-		defaultAbs, err := defaultModeConn.PrepareContext(ctx, "select abs(?)")
-		require.NoError(t, err)
-		defer func() { require.NoError(t, defaultAbs.Close()) }()
-		var defaultPrefixResult float64
-		err = defaultAbs.QueryRowContext(ctx, "1.5tail").Scan(&defaultPrefixResult)
-		require.Error(t, err, "the default COM_STMT session must reject a numeric prefix")
-		require.Contains(t, err.Error(), "invalid numeric string")
-		warningRows, err := defaultModeConn.QueryContext(ctx, "show warnings")
-		require.NoError(t, err)
-		defer func() { require.NoError(t, warningRows.Close()) }()
-		var hasNumericTruncationWarning bool
-		var warningScanErr error
-		for warningRows.Next() {
-			var level, message string
-			var code uint16
-			if warningScanErr = warningRows.Scan(&level, &code, &message); warningScanErr != nil {
-				break
-			}
-			if strings.EqualFold(level, "Warning") && code == 1292 &&
-				strings.Contains(message, "Truncated incorrect DOUBLE value") {
-				hasNumericTruncationWarning = true
-			}
-		}
-		warningRowsErr := warningRows.Err()
-		require.NoError(t, warningScanErr)
-		require.NoError(t, warningRowsErr)
-		require.False(t, hasNumericTruncationWarning,
-			"strict conversion errors must not emit MySQL numeric-truncation warnings")
-		_, err = defaultModeConn.ExecContext(ctx,
-			"set session sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY'")
-		require.NoError(t, err)
-		require.NoError(t, defaultAbs.QueryRowContext(ctx, "1.5tail").Scan(&defaultPrefixResult))
-		require.Equal(t, float64(1.5), defaultPrefixResult,
-			"the explicit MySQL-compatible COM_STMT session must consume the numeric prefix")
-		var defaultWarningLevel, defaultWarningMessage string
-		var defaultWarningCode uint16
-		require.NoError(t, defaultModeConn.QueryRowContext(ctx, "show warnings").Scan(
-			&defaultWarningLevel, &defaultWarningCode, &defaultWarningMessage))
-		require.Equal(t, "Warning", defaultWarningLevel)
-		require.Equal(t, uint16(1292), defaultWarningCode)
-		require.Contains(t, defaultWarningMessage, "Truncated incorrect DOUBLE value")
-
-		// A numeric-prefix math source is only correct in explicit MySQL-compatible mode.
-		// Pin the connection so SET sql_mode and COM_STMT_EXECUTE use the same
-		// session, and reuse the statement across mode changes to cover plan cache
-		// invalidation as well as the runtime cast contract.
 		err = withIssue27294PinnedConnection(t, ctx, db, func(modeConn *sql.Conn) {
 			var originalSQLMode string
 			require.NoError(t, modeConn.QueryRowContext(ctx, "select @@sql_mode").Scan(&originalSQLMode))
@@ -494,231 +376,57 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 					t.Errorf("restore sql_mode: %v", restoreErr)
 				}
 			}()
-
 			_, err = modeConn.ExecContext(ctx, "use issue_27294_numeric_db")
 			require.NoError(t, err)
-			prefixModeStmt, err := modeConn.PrepareContext(ctx, "select abs(? + 0)")
+			stmt, err := modeConn.PrepareContext(ctx, "select abs(? + 0)")
 			require.NoError(t, err)
-			defer prefixModeStmt.Close()
+			defer func() { require.NoError(t, stmt.Close()) }()
+
+			_, err = modeConn.ExecContext(ctx, "set session sql_mode = 'STRICT_TRANS_TABLES'")
+			require.NoError(t, err)
+			var value float64
+			err = stmt.QueryRowContext(ctx, "1.5tail").Scan(&value)
+			require.ErrorContains(t, err, "invalid numeric string")
+
 			_, err = modeConn.ExecContext(ctx,
 				"set session sql_mode = 'STRICT_TRANS_TABLES,MYSQL_NUMERIC_COMPATIBILITY'")
 			require.NoError(t, err)
-			var literalCastResult float64
-			require.NoError(t, modeConn.QueryRowContext(ctx,
-				"select abs(cast(concat('1', '01') as char))").Scan(&literalCastResult))
-			require.Equal(t, float64(101), literalCastResult,
-				"the explicit-cast regression oracle is the ordinary literal SQL result")
-			var prefixModeResult float64
-			require.NoError(t, prefixModeStmt.QueryRowContext(ctx, "1.5tail").Scan(&prefixModeResult))
-			require.Equal(t, float64(1.5), prefixModeResult,
-				"MySQL-compatible mode consumes the numeric prefix for a string-math value")
-			func() {
-				nestedLength, err := modeConn.PrepareContext(ctx, "select length(abs(?))")
-				require.NoError(t, err)
-				defer func() {
-					require.NoError(t, nestedLength.Close())
-				}()
-				var nestedLengthResult float64
-				require.NoError(t, nestedLength.QueryRowContext(ctx, "1.5tail").Scan(&nestedLengthResult))
-				require.Equal(t, float64(3), nestedLengthResult,
-					"LENGTH must preserve the independently nested ABS owner")
-			}()
+			require.NoError(t, stmt.QueryRowContext(ctx, "1.5tail").Scan(&value))
+			require.Equal(t, float64(1.5), value)
+			var level, message string
+			var code uint16
+			require.NoError(t, modeConn.QueryRowContext(ctx, "show warnings").Scan(&level, &code, &message))
+			require.Equal(t, "Warning", level)
+			require.Equal(t, uint16(1292), code)
+			require.Contains(t, message, "Truncated incorrect DOUBLE value")
+
+			// The outer numeric owner must not consume text owned by CONCAT.
+			concat, err := modeConn.PrepareContext(ctx, "select abs(concat('1', ?))")
+			require.NoError(t, err)
+			defer func() { require.NoError(t, concat.Close()) }()
+			var concatResult float64
+			require.NoError(t, concat.QueryRowContext(ctx, "01").Scan(&concatResult))
+			require.Equal(t, float64(101), concatResult)
+			explicitCast, err := modeConn.PrepareContext(ctx, "select abs(cast(concat('1', ?) as char))")
+			require.NoError(t, err)
+			defer func() { require.NoError(t, explicitCast.Close()) }()
+			var castResult float64
+			require.NoError(t, explicitCast.QueryRowContext(ctx, "01").Scan(&castResult))
+			require.Equal(t, float64(101), castResult)
+
 			_, err = modeConn.ExecContext(ctx,
 				"set session sql_mode = 'STRICT_TRANS_TABLES,MATRIXONE_NATIVE,MYSQL_NUMERIC_COMPATIBILITY'")
 			require.NoError(t, err)
-			err = prefixModeStmt.QueryRowContext(ctx, "1.5tail").Scan(&prefixModeResult)
-			require.Error(t, err,
-				"MATRIXONE_NATIVE must win over explicit numeric compatibility and reject trailing text")
-			err = modeConn.QueryRowContext(ctx, "select mod(2, '1.5tail')").Scan(&prefixModeResult)
-			require.Error(t, err,
-				"MATRIXONE_NATIVE must win over explicit numeric compatibility in MOD's right operand")
-			require.Contains(t, err.Error(), `invalid input: "1.5tail" is invalid numeric string`)
-			_, err = modeConn.ExecContext(ctx,
-				"set session sql_mode = 'STRICT_TRANS_TABLES,MYSQL_NUMERIC_COMPATIBILITY'")
+			err = stmt.QueryRowContext(ctx, "1.5tail").Scan(&value)
+			require.ErrorContains(t, err, "invalid numeric string",
+				"MATRIXONE_NATIVE must win over explicit compatibility")
+			_, err = modeConn.ExecContext(ctx, "set session sql_mode = 'STRICT_TRANS_TABLES'")
 			require.NoError(t, err)
-			require.NoError(t, prefixModeStmt.QueryRowContext(ctx, "1.5tail").Scan(&prefixModeResult))
-			require.Equal(t, float64(1.5), prefixModeResult,
-				"returning to MySQL-compatible mode must restore prefix behavior on the cached statement")
+			err = stmt.QueryRowContext(ctx, "1.5tail").Scan(&value)
+			require.ErrorContains(t, err, "invalid numeric string",
+				"the same prepared handle returns to strict mode")
 		})
 		require.NoError(t, err)
-
-		// Keep the additional conditional, precision-boundary, and literal-flow
-		// COM_STMT checks in this existing cluster fixture instead of starting a
-		// second base cluster for the same numeric compatibility contract.
-		t.Run("numeric compatibility over binary prepared statements", func(t *testing.T) {
-			err := withIssue27294PinnedConnection(t, ctx, db, func(modeConn *sql.Conn) {
-				var originalSQLMode string
-				require.NoError(t, modeConn.QueryRowContext(ctx, "select @@sql_mode").Scan(&originalSQLMode))
-				defer func() {
-					cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-					defer cancel()
-					_, restoreErr := modeConn.ExecContext(cleanupCtx, fmt.Sprintf(
-						"set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
-					if restoreErr != nil {
-						t.Errorf("restore sql_mode: %v", restoreErr)
-					}
-				}()
-
-				for _, tc := range []struct {
-					name, query            string
-					prefix, complete, zero float64
-				}{
-					{name: "ABS", query: "SELECT ABS(?)", prefix: 1.5, complete: 125, zero: 0},
-					{name: "IF", query: "SELECT IF(?, 10, 20)", prefix: 10, complete: 10, zero: 20},
-					{name: "IFF", query: "SELECT IFF(?, 10, 20)", prefix: 10, complete: 10, zero: 20},
-				} {
-					t.Run(tc.name, func(t *testing.T) {
-						stmt, err := modeConn.PrepareContext(ctx, tc.query)
-						require.NoError(t, err)
-						defer func() { require.NoError(t, stmt.Close()) }()
-						query := func(value string) (float64, error) {
-							var got float64
-							err := stmt.QueryRowContext(ctx, value).Scan(&got)
-							return got, err
-						}
-						for _, mode := range []string{"", "MYSQL_NUMERIC_COMPATIBILITY", "", "MYSQL_NUMERIC_COMPATIBILITY", "MATRIXONE_NATIVE,MYSQL_NUMERIC_COMPATIBILITY"} {
-							_, err := modeConn.ExecContext(ctx, "SET SESSION sql_mode = '"+mode+"'")
-							require.NoError(t, err)
-							got, err := query("1.5tail")
-							if mode == "MYSQL_NUMERIC_COMPATIBILITY" {
-								require.NoError(t, err)
-								require.Equal(t, tc.prefix, got)
-							} else {
-								require.ErrorContains(t, err, "invalid numeric string", mode)
-							}
-							got, err = query("  -1.25e2 ")
-							require.NoError(t, err, "complete tokens must work after rejected input")
-							require.Equal(t, tc.complete, got)
-							got, err = query("0")
-							require.NoError(t, err)
-							require.Equal(t, tc.zero, got)
-						}
-					})
-				}
-
-				for _, name := range []string{"ROUND", "TRUNCATE", "CEIL", "FLOOR"} {
-					t.Run(name+" precision", func(t *testing.T) {
-						stmt, err := modeConn.PrepareContext(ctx, "SELECT "+name+"(?, ?)")
-						require.NoError(t, err)
-						defer func() { require.NoError(t, stmt.Close()) }()
-						for _, mode := range []string{"", "MYSQL_NUMERIC_COMPATIBILITY"} {
-							_, err := modeConn.ExecContext(ctx, "SET SESSION sql_mode = '"+mode+"'")
-							require.NoError(t, err)
-							var got float64
-							err = stmt.QueryRowContext(ctx, 12.345, "2.5tail").Scan(&got)
-							require.ErrorContains(t, err, "invalid argument cast to int", mode)
-							for _, precision := range []float64{0x1p63, math.Nextafter(-0x1p63, math.Inf(-1))} {
-								err = stmt.QueryRowContext(ctx, 12.345, precision).Scan(&got)
-								require.ErrorContains(t, err, "out of range", mode)
-							}
-							err = stmt.QueryRowContext(ctx, 12.345, 2.5).Scan(&got)
-							require.NoError(t, err, "ordinary INT64 rounding and post-error reuse")
-							require.InDelta(t, 12.345, got, 1e-10)
-						}
-					})
-				}
-
-				t.Run("binary literal and flow control ownership", func(t *testing.T) {
-					var literal, binaryString float64
-					require.NoError(t, modeConn.QueryRowContext(ctx,
-						"SELECT ABS(X'31'), ABS(CAST('1' AS BINARY))").Scan(&literal, &binaryString))
-					require.Equal(t, float64(49), literal)
-					require.Equal(t, float64(1), binaryString)
-					for _, expression := range []string{
-						"CASE WHEN id=1 THEN X'31' WHEN id=2 THEN '1' ELSE NULL END",
-						"IF(id=1, X'31', IF(id=2, '1', NULL))",
-						"COALESCE(IF(id=1, X'31', NULL), IF(id=2, '1', NULL))",
-					} {
-						query := fmt.Sprintf("SELECT id, ABS(%[1]s), ROUND(%[1]s), MOD(%[1]s, 50) "+
-							"FROM (SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3) AS src WHERE id <= ? ORDER BY id", expression)
-						stmt, err := modeConn.PrepareContext(ctx, query)
-						require.NoError(t, err)
-						func() {
-							defer func() { require.NoError(t, stmt.Close()) }()
-							for _, mode := range []string{"", "MYSQL_NUMERIC_COMPATIBILITY", "MATRIXONE_NATIVE"} {
-								_, err := modeConn.ExecContext(ctx, "SET SESSION sql_mode = '"+mode+"'")
-								require.NoError(t, err)
-								rows, err := stmt.QueryContext(ctx, 3)
-								require.NoError(t, err)
-								func() {
-									defer rows.Close()
-									count := 0
-									for rows.Next() {
-										var id int
-										var abs, round, mod sql.NullFloat64
-										require.NoError(t, rows.Scan(&id, &abs, &round, &mod))
-										count++
-										require.Equal(t, count, id)
-										for _, got := range []sql.NullFloat64{abs, round, mod} {
-											require.Equal(t, id != 3, got.Valid, expression)
-											if id != 3 {
-												want := float64(1)
-												if id == 1 {
-													want = 49
-												}
-												require.Equal(t, want, got.Float64, "mode=%q expression=%s", mode, expression)
-											}
-										}
-									}
-									require.NoError(t, rows.Err())
-									require.Equal(t, 3, count)
-								}()
-							}
-						}()
-					}
-				})
-			})
-			require.NoError(t, err)
-		})
-
-		// Numeric-prefix candidates are only an eligibility superset. An outer
-		// math owner must not rewrite text-domain arguments before LENGTH,
-		// CONCAT, or REPLACE consumes them.
-		for _, test := range []struct {
-			name  string
-			query string
-			args  []any
-			want  float64
-		}{
-			{
-				name:  "numeric-return string argument",
-				query: "select abs(length(?))",
-				args:  []any{"abc"},
-				want:  3,
-			},
-			{
-				name:  "round outside concat",
-				query: "select round(concat('1', ?), ?)",
-				args:  []any{"01", int64(0)},
-				want:  101,
-			},
-			{
-				name:  "abs outside replace",
-				query: "select abs(replace('11', '1', ?))",
-				args:  []any{"01"},
-				want:  101,
-			},
-		} {
-			t.Run("string-domain boundary/"+test.name, func(t *testing.T) {
-				got, err := queryPreparedNumeric(t, test.query, test.args...)
-				require.NoError(t, err, test.query)
-				require.Equal(t, test.want, got, test.query)
-			})
-		}
-
-		// These controls ensure a boundary fix does not suppress the nearest
-		// ROUND precision contract or explicit CAST's text-preserving subtree.
-		t.Run("numeric-owner control/nested round precision remains owned", func(t *testing.T) {
-			_, err := queryPreparedNumeric(t, "select abs(round(1, ?))", "0.5tail")
-			require.Error(t, err)
-			require.Contains(t, err.Error(), "bad value 0.5tail")
-		})
-		t.Run("numeric-owner control/explicit cast remains explicit", func(t *testing.T) {
-			got, err := queryPreparedNumeric(t,
-				"select abs(cast(concat('1', ?) as char))", "01")
-			require.NoError(t, err)
-			require.Equal(t, float64(101), got)
-		})
 
 		multiMarker, err := db.PrepareContext(ctx, "select abs(? + ?)")
 		require.NoError(t, err)

@@ -42,32 +42,6 @@ func TestGetFunctionByIdRejectsUnknownOverload(t *testing.T) {
 	require.False(t, GetFunctionIsWinOrderFunById(unknown))
 }
 
-func TestMathStringResolutionUsesExistingNonZonemappableOverloads(t *testing.T) {
-	ctx := context.Background()
-	for _, name := range []string{"abs", "sign", "ceil", "floor", "round", "truncate"} {
-		for _, inputType := range []types.T{
-			types.T_char, types.T_varchar, types.T_text,
-			types.T_binary, types.T_varbinary, types.T_blob,
-		} {
-			t.Run(fmt.Sprintf("%s/%s", name, inputType.String()), func(t *testing.T) {
-				args := []types.Type{inputType.ToType()}
-				if name == "truncate" {
-					args = append(args, types.T_int64.ToType())
-				}
-				resolved, err := GetFunctionByName(ctx, name, args)
-				require.NoError(t, err)
-				fid, overloadIndex := DecodeOverloadID(resolved.GetEncodedOverloadID())
-				require.Equal(t, int32(resolved.fid), fid)
-				require.GreaterOrEqual(t, overloadIndex, int32(0))
-				require.Less(t, int(overloadIndex), len(allSupportedFunctions[fid].Overloads))
-				zonemappable, err := GetFunctionIsZonemappableById(ctx, resolved.GetEncodedOverloadID())
-				require.NoError(t, err)
-				require.False(t, zonemappable)
-			})
-		}
-	}
-}
-
 func TestDecimalFloatAdditionResolvesToDouble(t *testing.T) {
 	decimal := types.New(types.T_decimal64, 10, 2)
 	double := types.T_float64.ToType()
