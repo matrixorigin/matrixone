@@ -621,11 +621,25 @@ func TestFiltersContainIndexedDistanceExpr_ResidualShapes(t *testing.T) {
 			Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: name}, Args: args}},
 		}
 	}
+	indexedCol := func(relPos, colPos int32) *plan.Expr {
+		return &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_array_float32)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: relPos, ColPos: colPos, Name: "vec"}},
+		}
+	}
+	distanceWithArg := func(arg *plan.Expr) *plan.Expr {
+		return function("l2_distance", arg, vecLitArg)
+	}
 	distance := makeDistFnFilter("=", "l2_distance", scanTag, partPos, vecVal, f32Lit(0)).GetF().Args[0]
 	between := function("between", distance, f32Lit(489.5), f32Lit(501.5))
 	reversed := function(">", f32Lit(489.5), distance)
 	nestedNot := function("not", between)
 	nestedOr := function("or", reversed, makeDistFnFilter("<", "l2_distance", scanTag, partPos, vecVal, f32Lit(501.5)))
+	castColumn := function("cast", indexedCol(scanTag, partPos))
+	normalizedCastColumn := function("normalize_l2", castColumn)
+	wrappedDistance := function("<", distanceWithArg(castColumn), f32Lit(34))
+	normalizedDistance := function(">", distanceWithArg(normalizedCastColumn), f32Lit(32))
+	wrongWrappedColumn := function("<", distanceWithArg(function("cast", indexedCol(scanTag+1, partPos))), f32Lit(34))
 
 	for _, tc := range []struct {
 		name string
@@ -638,9 +652,12 @@ func TestFiltersContainIndexedDistanceExpr_ResidualShapes(t *testing.T) {
 		{name: "different vector", expr: makeDistFnFilter("<", "l2_distance", scanTag, partPos, differentVecVal, f32Lit(1))},
 		{name: "different metric", expr: makeDistFnFilter("<", "cosine_distance", scanTag, partPos, vecVal, f32Lit(1))},
 		{name: "different column", expr: makeDistFnFilter("<", "l2_distance", scanTag, partPos+1, vecVal, f32Lit(1))},
+		{name: "cast column dependency", expr: wrappedDistance},
+		{name: "nested normalized column dependency", expr: normalizedDistance},
+		{name: "wrapped different column", expr: wrongWrappedColumn},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.name != "different column", match(tc.expr))
+			require.Equal(t, tc.name != "different column" && tc.name != "wrapped different column", match(tc.expr))
 		})
 	}
 

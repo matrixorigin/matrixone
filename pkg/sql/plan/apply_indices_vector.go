@@ -1131,6 +1131,33 @@ func exprContainsIndexedDistanceExpr(
 	return false
 }
 
+func exprDependsOnIndexedColumn(
+	expr *plan.Expr,
+	scanTag, partPos int32,
+) bool {
+	if expr == nil {
+		return false
+	}
+	if col := expr.GetCol(); col != nil {
+		return col.RelPos == scanTag && col.ColPos == partPos
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if exprDependsOnIndexedColumn(arg, scanTag, partPos) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if exprDependsOnIndexedColumn(item, scanTag, partPos) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func indexedDistanceExprMatches(
 	fn *plan.Function,
 	scanTag, partPos int32,
@@ -1142,8 +1169,7 @@ func indexedDistanceExprMatches(
 		return false
 	}
 	for _, arg := range fn.Args {
-		col := arg.GetCol()
-		if col != nil && col.RelPos == scanTag && col.ColPos == partPos {
+		if exprDependsOnIndexedColumn(arg, scanTag, partPos) {
 			return true
 		}
 	}
