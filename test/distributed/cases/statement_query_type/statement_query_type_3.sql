@@ -84,7 +84,7 @@ create database statement_query_type;
 -- Wait for the exact accounting rows instead of assuming that the statement
 -- collector always publishes them within 15 seconds.
 -- @wait_expect(1, 60)
-select count(distinct statement_type) = 4 and count(*) = count(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) and min(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) = 1 and max(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) = 1 and max(cast(json_unquote(json_extract(stats, '$[11]')) as bigint) & 8) = 0 as ddl_accounting_ok from system.statement_info where account = 'bvt_query_type' and status = 'Success' and aggr_count = 0 and statement_type in ('Create Index','Create Table','Drop Database','Drop Table') and cast(json_unquote(json_extract(stats, '$[0]')) as bigint) = 6;
+select count(distinct statement_type) = 4 and count(*) = count(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) and min(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) = 1 and max(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) = 1 and max(cast(json_unquote(json_extract(stats, '$[11]')) as bigint) & 8) = 0 as ddl_accounting_ok from system.statement_info where account_id = (select account_id from mo_catalog.mo_account where account_name = 'bvt_query_type') and status = 'Success' and aggr_count = 0 and statement_type in ('Create Index','Create Table','Drop Database','Drop Table') and cast(json_unquote(json_extract(stats, '$[0]')) as bigint) = 6;
 
 -- cleanup
 drop account if exists bvt_query_type;
