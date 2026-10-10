@@ -145,7 +145,8 @@ const (
 	MORPCVersion107    int64 = 107 // functional-index metadata and generated-key maintenance
 	MORPCVersion108    int64 = 108 // isolated user-variable NULL regexp history in connection migration
 	MORPCVersion109    int64 = 109 // native Unicode collation identities in persisted information_schema.COLUMNS metadata
-	MORPCLatestVersion       = MORPCVersion109
+	MORPCVersion110    int64 = 110 // parser-derived information_schema.VIEWS definitions
+	MORPCLatestVersion       = MORPCVersion110
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

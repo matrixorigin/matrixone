@@ -8928,7 +8928,7 @@ func supportsRemoteViewDefinitionFunction(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion107
+	return ok && protocolVersion >= defines.MORPCVersion109
 }
 
 func supportsRemoteParquetWholeFileFanout(service string) bool {

@@ -759,7 +759,7 @@ func TestInitInformationSchemaSysTablesForProtocol_UsesProtocolAwareViews(t *tes
 		require.Contains(t, catalog, sysview.InformationSchemaViewsLegacyDDL)
 		require.NotContains(t, joined, "mo_view_definition(")
 	}
-	current := sysview.InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion107)
+	current := sysview.InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion109)
 	require.Contains(t, current, sysview.InformationSchemaViewsDDL)
 	require.NotContains(t, current, sysview.InformationSchemaViewsLegacyDDL)
 }
@@ -823,7 +823,7 @@ func TestCreateTablesInformationSchemaPreservesKnownProtocolFallback(t *testing.
 			err := createTablesInInformationSchemaOfGeneralTenant(
 				context.Background(), bh, test.service, nil)
 			require.NoError(t, err)
-			// Protocols below v107 also use the predecessor VIEWS definition; the
+			// Protocols below v109 also use the predecessor VIEWS definition; the
 			// historical role-visibility
 			// wrapper, so compare the VIEWS-specific contract rather than the
 			// whole SQL string.
@@ -906,14 +906,14 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(
 		moruntime.PersistedExpressionProtocolAuthoringFloor)
 	cluster := &tenantInitializationProtocolCluster{cns: []metadata.CNService{
-		{ServiceID: "cn-v107", QueryAddress: "cn-v107-query", PipelineServiceAddress: "cn-v107-pipeline"},
+		{ServiceID: "cn-v109", QueryAddress: "cn-v109-query", PipelineServiceAddress: "cn-v109-pipeline"},
 		{ServiceID: "cn-v106", QueryAddress: "cn-v106-query", PipelineServiceAddress: "cn-v106-pipeline"},
 	}}
 	t.Cleanup(func() {
 		if hadProtocol {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion107)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
 		}
 		if hadAuthoringFloor {
 			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
@@ -930,7 +930,7 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 	queryClient := newMockQueryClient()
 	proc.Base.QueryClient = queryClient
 	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion107)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
 
 	setProtocolResponse := func(address string, version int64) {
 		queryClient.cnResponses[address] = &querypb.Response{
@@ -949,45 +949,45 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 		{
 			name: "mixed versions use legacy VIEWS",
 			responses: map[string]int64{
-				"cn-v107-query": defines.MORPCVersion107,
+				"cn-v109-query": defines.MORPCVersion109,
 				"cn-v106-query": defines.MORPCVersion106,
 			},
 			authoringFloor: defines.MORPCVersion106,
 			wantLegacy:     true,
 		},
 		{
-			name: "all CNs at v107 use current DDL",
+			name: "all CNs at v109 use current DDL",
 			responses: map[string]int64{
-				"cn-v107-query": defines.MORPCVersion107,
-				"cn-v106-query": defines.MORPCVersion107,
+				"cn-v109-query": defines.MORPCVersion109,
+				"cn-v106-query": defines.MORPCVersion109,
 			},
-			authoringFloor: defines.MORPCVersion107,
+			authoringFloor: defines.MORPCVersion109,
 			wantLatest:     true,
 		},
 		{
 			name: "unknown CN capability uses legacy VIEWS",
 			responses: map[string]int64{
-				"cn-v107-query": defines.MORPCVersion107,
+				"cn-v109-query": defines.MORPCVersion109,
 			},
-			authoringFloor: defines.MORPCVersion107,
+			authoringFloor: defines.MORPCVersion109,
 			wantLegacy:     true,
 		},
 		{
 			name: "RPC failure uses legacy VIEWS",
 			responses: map[string]int64{
-				"cn-v107-query": defines.MORPCVersion107,
+				"cn-v109-query": defines.MORPCVersion109,
 			},
 			sendErrors: map[string]error{
-				"cn-v107-query": context.Canceled,
+				"cn-v109-query": context.Canceled,
 			},
-			authoringFloor: defines.MORPCVersion107,
+			authoringFloor: defines.MORPCVersion109,
 			wantLegacy:     true,
 		},
 		{
 			name: "local authoring admission pending uses legacy VIEWS",
 			responses: map[string]int64{
-				"cn-v107-query": defines.MORPCVersion107,
-				"cn-v106-query": defines.MORPCVersion107,
+				"cn-v109-query": defines.MORPCVersion109,
+				"cn-v106-query": defines.MORPCVersion109,
 			},
 			authoringFloor: defines.MORPCVersion106,
 			wantLegacy:     true,
@@ -1015,7 +1015,7 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 					return nil
 				}).AnyTimes()
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion107)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
 			rt.SetGlobalVariables(
 				moruntime.PersistedExpressionProtocolAuthoringFloor,
 				int64(test.authoringFloor))
@@ -1107,13 +1107,13 @@ func TestCreateTablesInformationSchemaUsesCallerContext(t *testing.T) {
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	oldCluster, hadCluster := rt.GetGlobalVariables(moruntime.ClusterService)
 	cluster := &tenantInitializationProtocolCluster{cns: []metadata.CNService{
-		{ServiceID: "cn-v107", QueryAddress: "cn-v107-query", PipelineServiceAddress: "cn-v107-pipeline"},
+		{ServiceID: "cn-v109", QueryAddress: "cn-v109-query", PipelineServiceAddress: "cn-v109-pipeline"},
 	}}
 	t.Cleanup(func() {
 		if hadProtocol {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion107)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
 		}
 		if hadCluster {
 			rt.SetGlobalVariables(moruntime.ClusterService, oldCluster)
@@ -1123,12 +1123,12 @@ func TestCreateTablesInformationSchemaUsesCallerContext(t *testing.T) {
 	})
 
 	queryClient := newMockQueryClient()
-	queryClient.cnResponses["cn-v107-query"] = &querypb.Response{
-		GetProtocolVersion: &querypb.GetProtocolVersionResponse{Version: defines.MORPCVersion107},
+	queryClient.cnResponses["cn-v109-query"] = &querypb.Response{
+		GetProtocolVersion: &querypb.GetProtocolVersionResponse{Version: defines.MORPCVersion109},
 	}
 	proc.Base.QueryClient = queryClient
 	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion107)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

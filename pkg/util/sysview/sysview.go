@@ -139,7 +139,7 @@ func InitSchema(ctx context.Context, txn executor.TxnExecutor) error {
 }
 
 // informationSchemaInitProtocol selects the catalog definition that this CN
-// is allowed to author during system bootstrap. A CN may advertise v107 before
+// is allowed to author during system bootstrap. A CN may advertise v109 before
 // its local catalog admission fence has completed; in that window the current
 // VIEWS definition would be rejected by persisted-expression admission. Keep
 // the VIEWS-specific predecessor while retaining the newer independent system
@@ -158,10 +158,10 @@ func informationSchemaInitProtocol(txn executor.TxnExecutor) int64 {
 			protocol = current
 		}
 	}
-	if protocol >= defines.MORPCVersion107 {
+	if protocol >= defines.MORPCVersion109 {
 		if value, present := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor); present {
 			floor, valid := value.(int64)
-			if !valid || floor < defines.MORPCVersion107 {
+			if !valid || floor < defines.MORPCVersion109 {
 				return defines.MORPCVersion106
 			}
 		}
