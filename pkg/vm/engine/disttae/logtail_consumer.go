@@ -137,6 +137,9 @@ type PushClient struct {
 
 	// Record the subscription status of a tables.
 	subscribed subscribedTable
+	// Preserve replay capacity without holding the subscription state lock over I/O.
+	// Initialized under subscribed.rw and retained across transport reconnects.
+	checkpointReplay chan struct{}
 
 	// timestampWaiter is used to notify the latest commit timestamp
 	timestampWaiter client.TimestampWaiter
@@ -1594,7 +1597,7 @@ func (s *subscribedTable) setTablePendingUpdate(dbId, tblId uint64, to timestamp
 	}
 	s.rw.RLock()
 	ent, exist := s.m[tblId]
-	if exist && ent.dbID == dbId && ent.state == Subscribed {
+	if exist && ent.dbID == dbId && (ent.state == Subscribed || ent.state == SubRspReceived) {
 		ts := to
 		ent.pendingTo.Store(&ts)
 	}
@@ -1647,35 +1650,70 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 ) (SubscribeState, error) {
 
 	c.subscribed.rw.Lock()
-	defer c.subscribed.rw.Unlock()
-	ent, exist := c.subscribed.m[tableID]
-	if exist && (ent.state == SubRspReceived || ent.state == Subscribed) {
-		_, err := c.eng.LazyLoadLatestCkp(ctx, accId, tableID, tableName, dbID, dbName)
-		if err != nil {
+	if c.checkpointReplay == nil {
+		c.checkpointReplay = make(chan struct{}, 1)
+	}
+	gate := c.checkpointReplay
+	c.subscribed.rw.Unlock()
+	select {
+	case gate <- struct{}{}:
+		defer func() { <-gate }()
+	case <-ctx.Done():
+		return InvalidSubState, ctx.Err()
+	}
+
+	for {
+		if err := ctx.Err(); err != nil {
 			return InvalidSubState, err
 		}
-		//update state and timestamp
-		ent.state = Subscribed
-		ent.lastTs.Store(time.Now().UnixNano())
-		return Subscribed, nil
+		c.subscribed.rw.Lock()
+		ent, exist := c.subscribed.m[tableID]
+		if exist && ent.dbID != dbID {
+			c.subscribed.rw.Unlock()
+			return InvalidSubState, moerr.NewInternalErrorf(ctx, "subscription database mismatch for table %d", tableID)
+		}
+		if exist && (ent.state == SubRspReceived || ent.state == Subscribed) {
+			// Pin the partition under the subscription generation, before I/O.
+			part := c.eng.GetOrCreateLatestPart(ctx, accId, dbID, tableID)
+			c.subscribed.rw.Unlock()
+			err := c.eng.consumeLatestCkp(ctx, part, tableID, tableName, dbID, dbName)
+			if ctx.Err() != nil {
+				return InvalidSubState, ctx.Err()
+			}
+			c.subscribed.rw.Lock()
+			current := c.subscribed.m[tableID]
+			if current != ent || ent.dbID != dbID || (ent.state != SubRspReceived && ent.state != Subscribed) {
+				c.subscribed.rw.Unlock()
+				continue
+			}
+			if err != nil {
+				c.subscribed.rw.Unlock()
+				return InvalidSubState, err
+			}
+			ent.state = Subscribed
+			ent.lastTs.Store(time.Now().UnixNano())
+			c.subscribed.rw.Unlock()
+			return Subscribed, nil
+		}
+		// If cleared during replay, use the existing subscribe-start transition.
+		if !exist {
+			if !c.subscriber.ready() {
+				c.subscribed.rw.Unlock()
+				return Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
+			}
+			c.subscribed.m[tableID] = &subEntry{dbID: dbID, state: Subscribing}
+			if err := c.subscribeTable(ctx, api.TableID{DbId: dbID, TbId: tableID}); err != nil {
+				delete(c.subscribed.m, tableID)
+				c.subscribed.rw.Unlock()
+				return Unsubscribed, err
+			}
+			c.subscribed.rw.Unlock()
+			return Subscribing, nil
+		}
+		state := ent.state
+		c.subscribed.rw.Unlock()
+		return state, nil
 	}
-	//if unsubscribed, need to subscribe table.
-	if !exist {
-		if !c.subscriber.ready() {
-			return Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
-		}
-		c.subscribed.m[tableID] = &subEntry{
-			dbID:  dbID,
-			state: Subscribing,
-		}
-		if err := c.subscribeTable(ctx, api.TableID{DbId: dbID, TbId: tableID}); err != nil {
-			//restore the table status.
-			delete(c.subscribed.m, tableID)
-			return Unsubscribed, err
-		}
-		return Subscribing, nil
-	}
-	return ent.state, nil
 }
 
 func (c *PushClient) waitUntilSubscribingChanged(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {

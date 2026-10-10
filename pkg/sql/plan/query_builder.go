@@ -8706,7 +8706,7 @@ func (builder *QueryBuilder) bindWhere(
 	var domainFilters, remaining []*plan.Expr
 	hasDependent := false
 	for _, cond := range whereList {
-		hasDependent = hasDependent || builder.hasLocalCTEConsumer(cond)
+		hasDependent = hasDependent || builder.hasParameterizedLocalCTEConsumer(cond)
 	}
 	if hasDependent {
 		for _, cond := range whereList {
