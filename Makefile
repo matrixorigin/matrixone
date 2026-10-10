@@ -599,21 +599,18 @@ UT_HARD_TIMEOUT ?= 120m
 # Emit one bounded progress heartbeat per interval while UT is running.
 UT_HEARTBEAT_INTERVAL ?= 60
 # Build embedded race binaries with one compiler while the exclusive issues
-# fixture runs, then execute those exact binaries serially. Build or admission
-# failures fall back before any prebuilt binary executes.
+# fixture runs, then execute those exact binaries through the bounded embedded
+# pool. High-footprint packages remain exclusive; build or admission failures
+# fall back before any prebuilt binary executes.
 UT_PREBUILD_EMBEDDED ?= 1
 UT_PREBUILD_MIN_FREE_KB ?= 6291456
 UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
-# Split the exclusive issues package into four contiguous root batches after
-# one race binary is built. The runner keeps one cluster owner and one shared
-# package deadline; set to 1 for an unchanged serial baseline.
+# Split issues roots into four batches under one shared package deadline.
+# Pools remain opt-in until matched full-wave CPU and memory evidence passes.
+# Each admitted process owns a complete cluster. Serial mode keeps contiguous
+# batches; explicit two-process mode uses round-robin roots.
 UT_ISSUES_BATCHES ?= 4
-# Keep serial execution as the baseline. Set to 2 to opt into a bounded process
-# pool with four issues batches; each admitted process owns a complete cluster.
-# Default adoption requires matched final-wave timing and resource evidence.
 UT_ISSUES_BATCH_PARALLEL ?= 1
-# Set to 2 to opt into bounded prebuilt embedded-package overlap. The admission
-# gate keeps ordinary exclusive lifecycles out of the pool.
 UT_EMBEDDED_PACKAGE_PARALLEL ?= 1
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.

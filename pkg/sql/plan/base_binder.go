@@ -6734,6 +6734,18 @@ func bindFuncExprImplByPlanExpr(
 		(!containsVolatileFunction(args[0]) || args[0].AuxId < 0) {
 		return bindBetweenAsComparisons(ctx, args)
 	}
+	// HEX/BIT literals have a VARCHAR-shaped type but an exact unsigned numeric
+	// domain. Preserve their provenance before either prepared consumers or the
+	// type-only SUM/AVG fallback converts strings to DOUBLE. Ordinary binary
+	// strings retain their string-prefix semantics.
+	if isPreparedNumericAggregate(name, len(args)) && isBinaryNumericLiteral(args[0]) {
+		unsigned := types.T_uint64.ToType()
+		arg, err := appendCastBeforeExpr(ctx, args[0], makePlan2Type(&unsigned))
+		if err != nil {
+			return nil, err
+		}
+		args = []*Expr{arg}
+	}
 	args, err = bindPreparedConsumerArguments(ctx, name, args)
 	if err != nil {
 		return nil, err
@@ -11024,8 +11036,8 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 	if !hasSpecialArg {
 		return args
 	}
-	// SUM/AVG have a numeric operand contract even though their VARCHAR
-	// overload is deliberately rejected. Resolve storage before that lookup.
+	// SUM/AVG must aggregate ENUM ordinals and SET bitmaps, not their display
+	// labels. Resolve storage before the generic string-numeric conversion.
 	if (name == "sum" || name == "avg") && len(args) == 1 {
 		return rawArgs
 	}

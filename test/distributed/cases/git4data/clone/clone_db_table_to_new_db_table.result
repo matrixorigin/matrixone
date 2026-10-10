@@ -215,7 +215,7 @@ create database db05 clone db04 {snapshot = 'sp04'};
 use db05;
 show create table src;
 Table    Create Table
-src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(16383) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 select * from src;
 id    body    title
 0    color is red    t1

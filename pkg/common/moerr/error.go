@@ -229,6 +229,7 @@ const (
 	// field-duplicate code introduced on main.
 	ErrWrongNumberOfColumnsInSelect uint16 = 20478
 	ErrTooLongIdent                 uint16 = 20479
+	ErrTooBigFieldLength            uint16 = 20480
 
 	// Group 5: rpc errors
 	//
@@ -586,6 +587,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTableMustHaveAVisibleColumn:              {ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN, []string{MySQLDefaultSqlState}, "A table must have at least one visible column."},
 	ErrMaxPreparedStmtCountReached:              {ER_MAX_PREPARED_STMT_COUNT_REACHED, []string{"42000"}, "Can't create more than max_prepared_stmt_count statements (current value: %d)"},
 	ErrFieldSpecifiedTwice:                      {ER_FIELD_SPECIFIED_TWICE, []string{"42000"}, "Column '%-.192s' specified twice"},
+	ErrTooBigFieldLength:                        {ER_TOO_BIG_FIELDLENGTH, []string{"42000"}, "Column length too big for column '%s' (max = %d); use BLOB or TEXT instead"},
 	ErrWrongNumberOfColumnsInSelect:             {ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, []string{"21000"}, "The used SELECT statements have a different number of columns"},
 	ErrTooLongIdent:                             {ER_TOO_LONG_IDENT, []string{"42000", "S1009"}, "Identifier name '%-.100s' is too long"},
 
@@ -1981,6 +1983,10 @@ func NewErrTooManyKeys(ctx context.Context, k any) *Error {
 
 func NewErrTooManyKeyParts(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrTooManyKeyParts, k)
+}
+
+func NewTooBigFieldLength(ctx context.Context, column string, maxLength int32) *Error {
+	return newError(ctx, ErrTooBigFieldLength, column, maxLength)
 }
 
 func NewErrWrongColumnName(ctx context.Context, k any) *Error {

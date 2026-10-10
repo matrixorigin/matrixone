@@ -82,6 +82,10 @@ func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 		defer anal.mu.Unlock()
 		if !isPrepare {
 			anal.phyPlan = nil
+		} else if anal.phyPlan != nil {
+			// Prepared topology is reusable; the previous request summary is not.
+			// An early Run failure may bypass the normal summary refresh.
+			anal.phyPlan.Resource = nil
 		}
 
 		anal.remotePhyPlans = nil
