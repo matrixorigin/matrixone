@@ -568,8 +568,11 @@ func TestInformationSchemaDefaultCollationsMatchCanonicalDefinitions(t *testing.
 		assert.Contains(t, InformationSchemaCharacterSetsData,
 			fmt.Sprintf("('%s','%s'", charset, defaultCollation))
 	}
-	assert.Contains(t, InformationSchemaSchemataDDL,
+	assert.Contains(t, InformationSchemaSchemataLegacyDDL,
 		"'"+DefaultCollationForCharset("utf8mb4")+"' AS DEFAULT_COLLATION_NAME")
+	assert.Contains(t, InformationSchemaSchemataDDL, databaseDefaultsMetadataSQL(false))
+	assert.Contains(t, databaseDefaultsMetadataSQL(false),
+		"dd.collation_id = 3 and dd.collation_revision = 0 then '"+DefaultCollationForCharset("utf8mb4")+"'")
 	assert.Contains(t, InformationSchemaTablesDDL,
 		"'"+DefaultCollationForCharset("utf8mb4")+"' AS TABLE_COLLATION")
 	assert.Contains(t, InformationSchemaViewsDDL,

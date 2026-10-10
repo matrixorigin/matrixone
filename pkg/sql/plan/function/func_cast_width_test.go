@@ -80,7 +80,7 @@ func TestCastStringWidthContracts(t *testing.T) {
 					if tc.source == types.T_json {
 						return jsonToStr(proc, context.Background(), from, to, length, nil, tc.strict, tc.allowTrim, tc.allowTrim, false, tc.allowTrim)
 					}
-					return strToStr(context.Background(), proc, from, to, length, target, tc.strict, tc.allowTrim, tc.allowTrim, castModeNormal)
+					return strToStr(context.Background(), proc, from, to, length, target, tc.strict, tc.allowTrim, tc.allowTrim, castModeNormal, nil)
 				})
 			t.Cleanup(func() {
 				fc.Free()

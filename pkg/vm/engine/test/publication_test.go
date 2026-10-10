@@ -346,6 +346,8 @@ func TestExecuteIteration1(t *testing.T) {
 	// These tables are needed when creating tables in the destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
 	require.NoError(t, err)
@@ -888,6 +890,8 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 	// These tables are needed when creating tables in the destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
 	require.NoError(t, err)
@@ -1186,6 +1190,8 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	// These tables are needed when creating tables in the source account
 	err := exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, srcCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
 	require.NoError(t, err)
@@ -1204,6 +1210,8 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	// Create system tables for system account
 	// These tables are needed for system account operations
 	err = exec_sql(disttaeEngine, systemCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, systemCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -1231,6 +1239,8 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	// Create system tables for destination account
 	// These tables are needed when creating tables in the destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -1800,6 +1810,8 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 	// Create system tables for destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
 	require.NoError(t, err)
@@ -2125,6 +2137,8 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 
 	// Create system tables for destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -2665,6 +2679,8 @@ func TestCCPRCreateDelete(t *testing.T) {
 	// These tables are needed when creating tables in the destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
 	require.NoError(t, err)
@@ -3058,6 +3074,8 @@ func TestCCPRAlterTable(t *testing.T) {
 	// Create system tables for destination account
 	// These tables are needed when creating tables in the destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -3501,6 +3519,8 @@ func TestCCPRErrorHandling1(t *testing.T) {
 
 	// Create system tables for destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -4018,6 +4038,8 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 	// Create system tables for destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
 	require.NoError(t, err)
@@ -4417,6 +4439,8 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 	// Create system tables for destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
 	require.NoError(t, err)
@@ -4789,6 +4813,8 @@ func TestCCPRErrorHandling2(t *testing.T) {
 	// Create system tables for destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
 	require.NoError(t, err)
@@ -5150,6 +5176,8 @@ func TestExecuteIterationWithStaleRead(t *testing.T) {
 
 	// Create system tables for destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
@@ -5584,6 +5612,8 @@ func TestCCPRSyncProtectionRetry(t *testing.T) {
 
 	// Create system tables for destination account
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)

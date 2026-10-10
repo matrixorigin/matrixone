@@ -1403,7 +1403,7 @@ func forceCastExpr2WithProcess(
 		return funcCastForTypedArrayType(ctx, expr, targetType.Typ)
 	}
 	t1 := makeTypeByPlan2Expr(expr)
-	if t1.Eq(t2) && !needsSameTypeAssignmentCast(targetType.Typ) {
+	if t1.Eq(t2) && !needsSameTypeAssignmentCast(targetType.Typ) && !alterCopyBinaryAssignment(ctx, targetType.Typ) {
 		return expr, nil
 	}
 
@@ -1411,7 +1411,7 @@ func forceCastExpr2WithProcess(
 	// SQL-mode-sensitive assignments use the protocol-gated runtime assignment
 	// cast. Other temporal assignments retain cast_strict behavior, while the
 	// remaining conversions continue to use the generic cast.
-	funcName := assignmentCastFunctionNameForSource(expr, targetType.Typ, isIgnore, proc)
+	funcName := assignmentCastFunctionNameForSource(ctx, expr, targetType.Typ, isIgnore, proc)
 	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
@@ -1488,10 +1488,24 @@ func forceAssignmentCastExprWithProcess(
 	proc *process.Process,
 ) (*Expr, error) {
 	return forceAssignmentCastExprWithName(ctx, expr, targetType,
-		assignmentCastFunctionNameForSource(expr, targetType, isIgnore, proc))
+		assignmentCastFunctionNameForSource(ctx, expr, targetType, isIgnore, proc))
 }
 
-func assignmentCastFunctionNameForSource(expr *Expr, targetType Type, isIgnore bool, proc *process.Process) string {
+// The existing private COPY scope owns the target write. Check final binary
+// values at that assignment boundary, including recomputed generated columns;
+// ordinary DML and explicit CAST retain their released selection policy.
+func alterCopyBinaryAssignment(ctx context.Context, target Type) bool {
+	if target.Id != int32(types.T_binary) && target.Id != int32(types.T_varbinary) {
+		return false
+	}
+	option, ok := ctx.Value(defines.AlterCopyOpt{}).(*plan.AlterCopyOpt)
+	return ok && option != nil && option.TargetTableName != ""
+}
+
+func assignmentCastFunctionNameForSource(ctx context.Context, expr *Expr, targetType Type, isIgnore bool, proc *process.Process) string {
+	if alterCopyBinaryAssignment(ctx, targetType) {
+		return "cast_strict"
+	}
 	name := assignmentCastFunctionName(targetType, isIgnore, proc)
 	if types.T(targetType.Id).IsInteger() &&
 		(types.T(expr.Typ.Id).IsFloat() ||
@@ -1884,7 +1898,7 @@ func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, fun
 }
 
 func forceAssignmentCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
-	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, true, false)
+	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, true, alterCopyBinaryAssignment(ctx, targetType))
 }
 
 func forceCastExprWithNameAndAssignment(

@@ -3557,7 +3557,7 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false, false, false, castModeNormal)
+			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false, false, false, castModeNormal, nil)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -3638,7 +3638,7 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 			defer to.Free()
 			require.NoError(t, to.PreExtendAndReset(1))
 
-			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict, false, false, castModeNormal)
+			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict, false, false, castModeNormal, nil)
 			if tt.wantErr {
 				require.Error(t, err)
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
@@ -3676,7 +3676,7 @@ func TestStrToStrNormalizesOnlyPhysicalEqualityCasts(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(test.toType, mp).(*vector.FunctionResult[types.Varlena])
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(1))
-			require.NoError(t, strToStr(context.Background(), nil, from, result, 1, test.toType, false, false, false, test.mode))
+			require.NoError(t, strToStr(context.Background(), nil, from, result, 1, test.toType, false, false, false, test.mode, nil))
 
 			got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
 			require.False(t, null)
@@ -3812,7 +3812,7 @@ func Test_CastVarcharToGeometryRejectTooManyPoints(t *testing.T) {
 	err := to.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false, false, false, castModeNormal)
+	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false, false, false, castModeNormal, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "max_points_in_geometry=3")
 }

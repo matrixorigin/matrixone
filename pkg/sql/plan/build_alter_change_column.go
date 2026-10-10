@@ -363,7 +363,9 @@ func checkIndexedColumnTypeChange(ctx context.Context, tableDef *plan.TableDef, 
 				}
 
 				if indexInfo.Unique {
-					return checkUniqueKeyPartType(ctx, newCol.Typ, newCol.OriginName)
+					if err := checkUniqueKeyPartType(ctx, newCol.Typ, newCol.OriginName); err != nil {
+						return err
+					}
 				}
 				if isGeometryPlanType(&newCol.Typ) {
 					return moerr.NewNotSupported(ctx, fmt.Sprintf("GEOMETRY column '%s' cannot be in index", newCol.OriginName))

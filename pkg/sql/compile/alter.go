@@ -839,6 +839,8 @@ func alterCopyPkColumnValueUnchanged(oldCol, newCol *plan.ColDef) bool {
 		oldTyp.GetAutoIncr() == newTyp.GetAutoIncr() &&
 		oldTyp.GetWidth() == newTyp.GetWidth() &&
 		oldTyp.GetScale() == newTyp.GetScale() &&
+		oldTyp.GetCharset() == newTyp.GetCharset() &&
+		oldTyp.GetCollationVersion() == newTyp.GetCollationVersion() &&
 		oldTyp.GetTable() == newTyp.GetTable() &&
 		oldTyp.GetEnumvalues() == newTyp.GetEnumvalues()
 }

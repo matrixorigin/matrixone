@@ -10,10 +10,10 @@ create snapshot sp01 for account acc01;
 insert into clu01 values(2,3);
 restore account acc01{snapshot="sp01"};
 select * from clu01;
-col1    col2
-1    2
+➤ col1[4,32,0]  ¦  col2[3,38,0]  𝄀
+1  ¦  2
 select count(*) from clu01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 drop table clu01;
 drop database test;
@@ -30,66 +30,66 @@ insert into rs01 values (4, 10, null);
 insert into rs01 values (1, -321.321, null);
 insert into rs01 values (2, -1, null);
 select count(*) from rs01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 6
 drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 select count(*) from rs01 {snapshot = 'sp01'};
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 6
 insert into rs01 values (2, -1, null);
 insert into rs01 values (1, -321.321, null);
 select * from rs01;
-col1    col2    col3
-1    null    database
-2    38291    database
-3    null    database management acc01tem
-4    10    null
-1    -321    null
-2    -1    null
-2    -1    null
-1    -321    null
+➤ col1[4,32,0]  ¦  col2[3,6,0]  ¦  col3[12,30,0]  𝄀
+1  ¦  null  ¦  database  𝄀
+2  ¦  38291  ¦  database  𝄀
+3  ¦  null  ¦  database management acc01tem  𝄀
+4  ¦  10  ¦  null  𝄀
+1  ¦  -321  ¦  null  𝄀
+2  ¦  -1  ¦  null  𝄀
+2  ¦  -1  ¦  null  𝄀
+1  ¦  -321  ¦  null
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
-dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-309067    test01    def    create database test01    2    2    2025-07-18 22:50:32    260    
+➤ dat_id[-5,64,0]  ¦  datname[12,5000,0]  ¦  dat_catalog_name[12,5000,0]  ¦  dat_createsql[12,5000,0]  ¦  owner[4,32,0]  ¦  creator[4,32,0]  ¦  created_time[93,19,0]  ¦  account_id[4,32,0]  ¦  dat_type[12,32,0]  𝄀
+274474  ¦  test01  ¦  def  ¦  create database test01  ¦  2  ¦  2  ¦  2026-10-11 02:17:28  ¦  4
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
-attname
-col1
-col2
+➤ attname[12,256,0]  𝄀
+__mo_fake_pk_col  𝄀
+__mo_rowid  𝄀
+col1  𝄀
+col2  𝄀
 col3
-__mo_fake_pk_col
-__mo_rowid
 restore account acc01{snapshot="sp01"};
 select count(*) from rs01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 6
 select * from rs01;
-col1    col2    col3
-1    null    database
-2    38291    database
-3    null    database management acc01tem
-4    10    null
-1    -321    null
-2    -1    null
+➤ col1[4,32,0]  ¦  col2[3,6,0]  ¦  col3[12,30,0]  𝄀
+1  ¦  null  ¦  database  𝄀
+2  ¦  38291  ¦  database  𝄀
+3  ¦  null  ¦  database management acc01tem  𝄀
+4  ¦  10  ¦  null  𝄀
+1  ¦  -321  ¦  null  𝄀
+2  ¦  -1  ¦  null
 select count(*) from rs01 {snapshot = 'sp01'};
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 6
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test01';
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
-dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-309067    test01    def    create database test01    2    2    2025-07-18 22:50:32    260    
+➤ dat_id[-5,64,0]  ¦  datname[12,5000,0]  ¦  dat_catalog_name[12,5000,0]  ¦  dat_createsql[12,5000,0]  ¦  owner[4,32,0]  ¦  creator[4,32,0]  ¦  created_time[93,19,0]  ¦  account_id[4,32,0]  ¦  dat_type[12,32,0]  𝄀
+274474  ¦  test01  ¦  def  ¦  create database test01  ¦  2  ¦  2  ¦  2026-10-11 02:17:28  ¦  4
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
-attname
-col1
-col2
+➤ attname[12,256,0]  𝄀
+__mo_fake_pk_col  𝄀
+__mo_rowid  𝄀
+col1  𝄀
+col2  𝄀
 col3
-__mo_fake_pk_col
-__mo_rowid
 drop snapshot sp01;
 drop database test01;
 drop database if exists test02;
@@ -105,14 +105,14 @@ insert into rs02 values (2, null);
 insert into rs02 values (3, null);
 insert into rs02 values (4, '2023-11-27 01:02:03');
 select * from rs02;
-col1    col2
-1    2020-10-13 10:10:10
-2    null
-1    2021-10-10 00:00:00
-2    2023-01-01 12:12:12
-2    null
-3    null
-4    2023-11-27 01:02:03
+➤ col1[4,32,0]  ¦  col2[93,19,0]  𝄀
+1  ¦  2020-10-13 10:10:10  𝄀
+2  ¦  null  𝄀
+1  ¦  2021-10-10 00:00:00  𝄀
+2  ¦  2023-01-01 12:12:12  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  2023-11-27 01:02:03
 drop table if exists rs03;
 create table rs03 (col1 int, col2 float, col3 decimal(38,0), col4 enum('1','2','3','4'));
 insert into rs03 values (1, 12.21, 32324.32131, 1);
@@ -123,52 +123,52 @@ insert into rs03 values (1, 43425.4325, -7483.432, 2);
 drop snapshot if exists sp02;
 create snapshot sp02 for account acc01;
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp02'} where reldatabase = 'test02';
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'test02';
-dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-309086    test02    def    create database test02    2    2    2025-07-18 22:50:33    260    
+➤ dat_id[-5,64,0]  ¦  datname[12,5000,0]  ¦  dat_catalog_name[12,5000,0]  ¦  dat_createsql[12,5000,0]  ¦  owner[4,32,0]  ¦  creator[4,32,0]  ¦  created_time[93,19,0]  ¦  account_id[4,32,0]  ¦  dat_type[12,32,0]  𝄀
+274509  ¦  test02  ¦  def  ¦  create database test02  ¦  2  ¦  2  ¦  2026-10-11 02:17:28  ¦  4
 select attname from mo_catalog.mo_columns{snapshot = 'sp02'} where att_database = 'test02';
-attname
-col1
-col2
-__mo_fake_pk_col
-__mo_rowid
-col1
-col2
-col3
+➤ attname[12,256,0]  𝄀
+__mo_fake_pk_col  𝄀
+__mo_rowid  𝄀
+col1  𝄀
+col2  𝄀
+__mo_fake_pk_col  𝄀
+__mo_rowid  𝄀
+col1  𝄀
+col2  𝄀
+col3  𝄀
 col4
-__mo_fake_pk_col
-__mo_rowid
 use test02;
 insert into rs02 select * from rs02;
 select count(*) from rs02;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 14
 select count(*) from rs02{snapshot = 'sp02'};
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 7
 delete from rs03 where col1 = 1;
 select count(*) from rs03;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 select count(*) from rs03{snapshot = 'sp02'};
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 5
 restore account acc01{snapshot="sp02"};
 show databases;
-Database
-information_schema
-mo_catalog
-mysql
-system
-system_metrics
+➤ Database[12,5000,0]  𝄀
+information_schema  𝄀
+mo_catalog  𝄀
+mysql  𝄀
+system  𝄀
+system_metrics  𝄀
 test02
 select count(*) from rs02;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 7
 select count(*) from rs03;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 5
 use test02;
 drop table rs02;
@@ -216,101 +216,133 @@ insert into aff01 values (7900,'JAMES','CLERK',7698,'1981-12-03',950,NULL,30);
 insert into aff01 values (7902,'FORD','ANALYST',7566,'1981-12-03',3000,NULL,20);
 insert into aff01 values (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 select count(*) from pri01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 4
 select count(*) from aff01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 14
 show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `deptno` int unsigned NOT NULL COMMENT '部门编号',\n  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
+➤ Table[12,5,0]  ¦  Create Table[12,214,0]  𝄀
+pri01  ¦  CREATE TABLE `pri01` (
+  `deptno` int unsigned NOT NULL COMMENT '部门编号',
+  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',
+  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',
+  PRIMARY KEY (`deptno`)
+) COMMENT='部门表'
 show create table aff01;
-Table    Create Table
-aff01    CREATE TABLE `aff01` (\n  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,5,0]  ¦  Create Table[12,582,0]  𝄀
+aff01  ¦  CREATE TABLE `aff01` (
+  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',
+  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',
+  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',
+  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',
+  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',
+  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',
+  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',
+  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',
+  PRIMARY KEY (`empno`),
+  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT
+)
 drop snapshot if exists sp04;
 create snapshot sp04 for account acc01;
 show snapshots where snapshot_name = 'sp04';
-snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-sp04    2025-07-19 05:50:33.822784    account    acc01        
+➤ SNAPSHOT_NAME[12,64,0]  ¦  TIMESTAMP[12,65535,0]  ¦  SNAPSHOT_LEVEL[12,65535,0]  ¦  ACCOUNT_NAME[12,300,0]  ¦  DATABASE_NAME[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  𝄀
+sp04  ¦  2026-10-10 18:17:29.190845999  ¦  account  ¦  acc01
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp04'} where reldatabase = 'test03';
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 select * from mo_catalog.mo_database{snapshot = 'sp04'} where datname = 'test03';
-dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-309106    test03    def    create database test03    2    2    2025-07-18 22:50:33    260    
+➤ dat_id[-5,64,0]  ¦  datname[12,5000,0]  ¦  dat_catalog_name[12,5000,0]  ¦  dat_createsql[12,5000,0]  ¦  owner[4,32,0]  ¦  creator[4,32,0]  ¦  created_time[93,19,0]  ¦  account_id[4,32,0]  ¦  dat_type[12,32,0]  𝄀
+274546  ¦  test03  ¦  def  ¦  create database test03  ¦  2  ¦  2  ¦  2026-10-11 02:17:29  ¦  4
 select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
-attname
-empno
-ename
-job
-mgr
-hiredate
-sal
-comm
-deptno
-__mo_rowid
-deptno
-dname
+➤ attname[12,256,0]  𝄀
+__mo_rowid  𝄀
+comm  𝄀
+deptno  𝄀
+empno  𝄀
+ename  𝄀
+hiredate  𝄀
+job  𝄀
+mgr  𝄀
+sal  𝄀
+__mo_rowid  𝄀
+deptno  𝄀
+dname  𝄀
 loc
-__mo_rowid
 select * from aff01{snapshot = 'sp04'};
-empno    ename    job    mgr    hiredate    sal    comm    deptno
-7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
-7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
-7521    WARD    SALESMAN    7698    1981-02-22    1250.00    500.00    30
-7566    JONES    MANAGER    7839    1981-04-02    2975.00    null    20
-7654    MARTIN    SALESMAN    7698    1981-09-28    1250.00    1400.00    30
-7698    BLAKE    MANAGER    7839    1981-05-01    2850.00    null    30
-7782    CLARK    MANAGER    7839    1981-06-09    2450.00    null    10
-7788    SCOTT    ANALYST    7566    0087-07-13    3000.00    null    20
-7839    KING    PRESIDENT    null    1981-11-17    5000.00    null    10
-7844    TURNER    SALESMAN    7698    1981-09-08    1500.00    0.00    30
-7876    ADAMS    CLERK    7788    0087-07-13    1100.00    null    20
-7900    JAMES    CLERK    7698    1981-12-03    950.00    null    30
-7902    FORD    ANALYST    7566    1981-12-03    3000.00    null    20
-7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
+➤ empno[4,32,0]  ¦  ename[12,15,0]  ¦  job[12,10,0]  ¦  mgr[4,32,0]  ¦  hiredate[91,10,0]  ¦  sal[3,7,2]  ¦  comm[3,7,2]  ¦  deptno[4,32,0]  𝄀
+7369  ¦  SMITH  ¦  CLERK  ¦  7902  ¦  1980-12-17  ¦  800.00  ¦  null  ¦  20  𝄀
+7499  ¦  ALLEN  ¦  SALESMAN  ¦  7698  ¦  1981-02-20  ¦  1600.00  ¦  300.00  ¦  30  𝄀
+7521  ¦  WARD  ¦  SALESMAN  ¦  7698  ¦  1981-02-22  ¦  1250.00  ¦  500.00  ¦  30  𝄀
+7566  ¦  JONES  ¦  MANAGER  ¦  7839  ¦  1981-04-02  ¦  2975.00  ¦  null  ¦  20  𝄀
+7654  ¦  MARTIN  ¦  SALESMAN  ¦  7698  ¦  1981-09-28  ¦  1250.00  ¦  1400.00  ¦  30  𝄀
+7698  ¦  BLAKE  ¦  MANAGER  ¦  7839  ¦  1981-05-01  ¦  2850.00  ¦  null  ¦  30  𝄀
+7782  ¦  CLARK  ¦  MANAGER  ¦  7839  ¦  1981-06-09  ¦  2450.00  ¦  null  ¦  10  𝄀
+7788  ¦  SCOTT  ¦  ANALYST  ¦  7566  ¦  0087-07-13  ¦  3000.00  ¦  null  ¦  20  𝄀
+7839  ¦  KING  ¦  PRESIDENT  ¦  null  ¦  1981-11-17  ¦  5000.00  ¦  null  ¦  10  𝄀
+7844  ¦  TURNER  ¦  SALESMAN  ¦  7698  ¦  1981-09-08  ¦  1500.00  ¦  0.00  ¦  30  𝄀
+7876  ¦  ADAMS  ¦  CLERK  ¦  7788  ¦  0087-07-13  ¦  1100.00  ¦  null  ¦  20  𝄀
+7900  ¦  JAMES  ¦  CLERK  ¦  7698  ¦  1981-12-03  ¦  950.00  ¦  null  ¦  30  𝄀
+7902  ¦  FORD  ¦  ANALYST  ¦  7566  ¦  1981-12-03  ¦  3000.00  ¦  null  ¦  20  𝄀
+7934  ¦  MILLER  ¦  CLERK  ¦  7782  ¦  1982-01-23  ¦  1300.00  ¦  null  ¦  10
 select * from pri01{snapshot = 'sp04'};
-deptno    dname    loc
-10    ACCOUNTING    NEW YORK
-20    RESEARCH    DALLAS
-30    SALES    CHICAGO
-40    OPERATIONS    BOSTON
+➤ deptno[4,32,0]  ¦  dname[12,15,0]  ¦  loc[12,50,0]  𝄀
+10  ¦  ACCOUNTING  ¦  NEW YORK  𝄀
+20  ¦  RESEARCH  ¦  DALLAS  𝄀
+30  ¦  SALES  ¦  CHICAGO  𝄀
+40  ¦  OPERATIONS  ¦  BOSTON
 drop database test03;
 select * from test03.aff01{snapshot = 'sp04'};
-empno    ename    job    mgr    hiredate    sal    comm    deptno
-7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
-7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
-7521    WARD    SALESMAN    7698    1981-02-22    1250.00    500.00    30
-7566    JONES    MANAGER    7839    1981-04-02    2975.00    null    20
-7654    MARTIN    SALESMAN    7698    1981-09-28    1250.00    1400.00    30
-7698    BLAKE    MANAGER    7839    1981-05-01    2850.00    null    30
-7782    CLARK    MANAGER    7839    1981-06-09    2450.00    null    10
-7788    SCOTT    ANALYST    7566    0087-07-13    3000.00    null    20
-7839    KING    PRESIDENT    null    1981-11-17    5000.00    null    10
-7844    TURNER    SALESMAN    7698    1981-09-08    1500.00    0.00    30
-7876    ADAMS    CLERK    7788    0087-07-13    1100.00    null    20
-7900    JAMES    CLERK    7698    1981-12-03    950.00    null    30
-7902    FORD    ANALYST    7566    1981-12-03    3000.00    null    20
-7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
+➤ empno[4,32,0]  ¦  ename[12,15,0]  ¦  job[12,10,0]  ¦  mgr[4,32,0]  ¦  hiredate[91,10,0]  ¦  sal[3,7,2]  ¦  comm[3,7,2]  ¦  deptno[4,32,0]  𝄀
+7369  ¦  SMITH  ¦  CLERK  ¦  7902  ¦  1980-12-17  ¦  800.00  ¦  null  ¦  20  𝄀
+7499  ¦  ALLEN  ¦  SALESMAN  ¦  7698  ¦  1981-02-20  ¦  1600.00  ¦  300.00  ¦  30  𝄀
+7521  ¦  WARD  ¦  SALESMAN  ¦  7698  ¦  1981-02-22  ¦  1250.00  ¦  500.00  ¦  30  𝄀
+7566  ¦  JONES  ¦  MANAGER  ¦  7839  ¦  1981-04-02  ¦  2975.00  ¦  null  ¦  20  𝄀
+7654  ¦  MARTIN  ¦  SALESMAN  ¦  7698  ¦  1981-09-28  ¦  1250.00  ¦  1400.00  ¦  30  𝄀
+7698  ¦  BLAKE  ¦  MANAGER  ¦  7839  ¦  1981-05-01  ¦  2850.00  ¦  null  ¦  30  𝄀
+7782  ¦  CLARK  ¦  MANAGER  ¦  7839  ¦  1981-06-09  ¦  2450.00  ¦  null  ¦  10  𝄀
+7788  ¦  SCOTT  ¦  ANALYST  ¦  7566  ¦  0087-07-13  ¦  3000.00  ¦  null  ¦  20  𝄀
+7839  ¦  KING  ¦  PRESIDENT  ¦  null  ¦  1981-11-17  ¦  5000.00  ¦  null  ¦  10  𝄀
+7844  ¦  TURNER  ¦  SALESMAN  ¦  7698  ¦  1981-09-08  ¦  1500.00  ¦  0.00  ¦  30  𝄀
+7876  ¦  ADAMS  ¦  CLERK  ¦  7788  ¦  0087-07-13  ¦  1100.00  ¦  null  ¦  20  𝄀
+7900  ¦  JAMES  ¦  CLERK  ¦  7698  ¦  1981-12-03  ¦  950.00  ¦  null  ¦  30  𝄀
+7902  ¦  FORD  ¦  ANALYST  ¦  7566  ¦  1981-12-03  ¦  3000.00  ¦  null  ¦  20  𝄀
+7934  ¦  MILLER  ¦  CLERK  ¦  7782  ¦  1982-01-23  ¦  1300.00  ¦  null  ¦  10
 select * from test03.pri01{snapshot = 'sp04'};
-deptno    dname    loc
-10    ACCOUNTING    NEW YORK
-20    RESEARCH    DALLAS
-30    SALES    CHICAGO
-40    OPERATIONS    BOSTON
+➤ deptno[4,32,0]  ¦  dname[12,15,0]  ¦  loc[12,50,0]  𝄀
+10  ¦  ACCOUNTING  ¦  NEW YORK  𝄀
+20  ¦  RESEARCH  ¦  DALLAS  𝄀
+30  ¦  SALES  ¦  CHICAGO  𝄀
+40  ¦  OPERATIONS  ¦  BOSTON
 select count(*) from test03.aff01{snapshot = 'sp04'};
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 14
 restore account acc01{snapshot="sp04"};
 use test03;
 show create table aff01;
-Table    Create Table
-aff01    CREATE TABLE `aff01` (\n  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,5,0]  ¦  Create Table[12,582,0]  𝄀
+aff01  ¦  CREATE TABLE `aff01` (
+  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',
+  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',
+  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',
+  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',
+  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',
+  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',
+  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',
+  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',
+  PRIMARY KEY (`empno`),
+  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT
+)
 show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `deptno` int unsigned NOT NULL COMMENT '部门编号',\n  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
+➤ Table[12,5,0]  ¦  Create Table[12,214,0]  𝄀
+pri01  ¦  CREATE TABLE `pri01` (
+  `deptno` int unsigned NOT NULL COMMENT '部门编号',
+  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',
+  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',
+  PRIMARY KEY (`deptno`)
+) COMMENT='部门表'
 select count(*) from aff01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 14
 drop database test03;
 drop snapshot sp04;
@@ -325,13 +357,13 @@ create table t2(cool1 int primary key , col2 decimal(38,0));
 insert into t2 select * from t1;
 create table t3 like t2;
 select count(*) from t1;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 select count(*) from t2;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 select count(*) from t3;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 drop database if exists test02;
 create database test02;
@@ -345,13 +377,13 @@ insert into t2 select * from t1;
 create table t3 like t2;
 insert into t3 select * from t2;
 select count(*) from t1;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 select count(*) from t2;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 select count(*) from t3;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 drop database if exists test03;
 create database test03;
@@ -367,84 +399,95 @@ insert into t3 select * from t2;
 insert into t3 select * from t2;
 Duplicate entry '1' for key 'cool1'
 select count(*) from t1;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 select count(*) from t2;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 select count(*) from t3;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 drop snapshot if exists snap01;
 create snapshot snap01 for account acc01;
 select count(*) from test01.t1 {snapshot = 'snap01'};
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 select count(*) from test02.t2 {snapshot = 'snap01'};
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 select count(*) from test03.t3 {snapshot = 'snap01'};
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 drop database test01;
 drop database test02;
 show databases;
-Database
-information_schema
-mo_catalog
-mysql
-system
-system_metrics
+➤ Database[12,5000,0]  𝄀
+information_schema  𝄀
+mo_catalog  𝄀
+mysql  𝄀
+system  𝄀
+system_metrics  𝄀
 test03
 select * from test01.t1;
 Unknown database test01
 select count(*) from test03.t3;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 restore account acc01{snapshot="snap01"};
 show databases;
-Database
-information_schema
-mo_catalog
-mysql
-system
-system_metrics
-test01
-test02
+➤ Database[12,5000,0]  𝄀
+information_schema  𝄀
+mo_catalog  𝄀
+mysql  𝄀
+system  𝄀
+system_metrics  𝄀
+test01  𝄀
+test02  𝄀
 test03
 select count(*) from test01.t1;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 select * from test01.t1;
-col1    col2
-1    2
-2    3
-3    4
+➤ col1[4,32,0]  ¦  col2[3,38,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  3  𝄀
+3  ¦  4
 select count(*) from test02.t2;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 select * from test02.t2;
-col1    col2
-1    2
-2    3
-3    4
+➤ col1[4,32,0]  ¦  col2[3,38,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  3  𝄀
+3  ¦  4
 select count(*) from test03.t3;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 select * from test03.t3;
-cool1    col2
-1    2
-2    3
-3    4
+➤ cool1[4,32,0]  ¦  col2[3,38,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  3  𝄀
+3  ¦  4
 show create table test01.t1;
-Table    Create Table
-t1    CREATE TABLE `t1` (\n  `col1` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
+➤ Table[12,2,0]  ¦  Create Table[12,84,0]  𝄀
+t1  ¦  CREATE TABLE `t1` (
+  `col1` int DEFAULT NULL,
+  `col2` decimal(38,0) DEFAULT NULL
+)
 show create table test02.t2;
-Table    Create Table
-t2    CREATE TABLE `t2` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,2,0]  ¦  Create Table[12,104,0]  𝄀
+t2  ¦  CREATE TABLE `t2` (
+  `col1` int NOT NULL,
+  `col2` decimal(38,0) DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 show create table test03.t2;
-Table    Create Table
-t2    CREATE TABLE `t2` (\n  `cool1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`cool1`)\n)
+➤ Table[12,2,0]  ¦  Create Table[12,106,0]  𝄀
+t2  ¦  CREATE TABLE `t2` (
+  `cool1` int NOT NULL,
+  `col2` decimal(38,0) DEFAULT NULL,
+  PRIMARY KEY (`cool1`)
+)
 drop database test01;
 drop database test02;
 drop database test03;
@@ -454,11 +497,11 @@ create snapshot sp05 for account acc01;
 create database db01;
 restore account acc01{snapshot="sp05"};
 show databases;
-Database
-information_schema
-mo_catalog
-mysql
-system
+➤ Database[12,5000,0]  𝄀
+information_schema  𝄀
+mo_catalog  𝄀
+mysql  𝄀
+system  𝄀
 system_metrics
 drop snapshot sp05;
 drop database if exists db01;
@@ -478,32 +521,32 @@ insert into table02 values(134, 'database');
 drop snapshot if exists sp08;
 create snapshot sp08 for account acc01;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2025-07-19 05:50:34.848103    account    acc01        
-sp07    2025-07-19 05:50:34.821081    account    acc01        
+➤ SNAPSHOT_NAME[12,64,0]  ¦  TIMESTAMP[12,65535,0]  ¦  SNAPSHOT_LEVEL[12,65535,0]  ¦  ACCOUNT_NAME[12,300,0]  ¦  DATABASE_NAME[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  𝄀
+sp08  ¦  2026-10-10 18:17:30.832704999  ¦  account  ¦  acc01  ¦    ¦    𝄀
+sp07  ¦  2026-10-10 18:17:30.802757999  ¦  account  ¦  acc01
 restore account acc01{snapshot="sp08"};
 select * from table02;
-col1    col2
-133    database
-134    database
+➤ col1[4,32,0]  ¦  col2[12,20,0]  𝄀
+133  ¦  database  𝄀
+134  ¦  database
 select * from db01.table01;
 SQL parser error: table "table01" does not exist
 select count(*) from table02;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 restore account acc01{snapshot="sp07"};
 select * from table01;
-col1    col2    col3    col4    col5    col6
-1    2    a    23eiojf    r23v324r23rer    3923.324
-2    3    b    32r32r    database    1111111.0
+➤ col1[4,32,0]  ¦  col2[3,38,0]  ¦  col3[1,1,0]  ¦  col4[12,20,0]  ¦  col5[-1,16383,0]  ¦  col6[8,53,31]  𝄀
+1  ¦  2  ¦  a  ¦  23eiojf  ¦  r23v324r23rer  ¦  3923.324  𝄀
+2  ¦  3  ¦  b  ¦  32r32r  ¦  database  ¦  1111111.0
 select * from table02;
-col1    col2
-133    database
+➤ col1[4,32,0]  ¦  col2[12,20,0]  𝄀
+133  ¦  database
 select count(*) from table01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 select count(*) from table02;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 drop snapshot sp07;
 drop snapshot sp08;
@@ -525,22 +568,22 @@ insert into table02 values(134, 'database');
 drop snapshot if exists sp10;
 create snapshot sp10 for account acc01;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp10    2025-07-19 05:50:35.204953    account    acc01        
-sp09    2025-07-19 05:50:35.184931    account    acc01        
+➤ SNAPSHOT_NAME[12,64,0]  ¦  TIMESTAMP[12,65535,0]  ¦  SNAPSHOT_LEVEL[12,65535,0]  ¦  ACCOUNT_NAME[12,300,0]  ¦  DATABASE_NAME[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  𝄀
+sp10  ¦  2026-10-10 18:17:32.598825999  ¦  account  ¦  acc01  ¦    ¦    𝄀
+sp09  ¦  2026-10-10 18:17:32.570783999  ¦  account  ¦  acc01
 restore account acc01{snapshot="sp09"};
 select * from table02;
-col1    col2
-133    database
+➤ col1[4,32,0]  ¦  col2[12,20,0]  𝄀
+133  ¦  database
 select * from db02.table01;
-col1    col2    col3    col4    col5    col6
-1    2    a    23eiojf    r23v324r23rer    3923.324
-2    3    b    32r32r    database    1111111.0
+➤ col1[4,32,0]  ¦  col2[3,38,0]  ¦  col3[1,1,0]  ¦  col4[12,20,0]  ¦  col5[-1,16383,0]  ¦  col6[8,53,31]  𝄀
+1  ¦  2  ¦  a  ¦  23eiojf  ¦  r23v324r23rer  ¦  3923.324  𝄀
+2  ¦  3  ¦  b  ¦  32r32r  ¦  database  ¦  1111111.0
 select count(*) from table02;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 select count(*) from table01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 restore account acc01{snapshot="sp10"};
 select * from db02.table01;
@@ -548,11 +591,11 @@ SQL parser error: table "table01" does not exist
 select count(*) from table01;
 SQL parser error: table "table01" does not exist
 select * from db02.table02;
-col1    col2
-133    database
-134    database
+➤ col1[4,32,0]  ¦  col2[12,20,0]  𝄀
+133  ¦  database  𝄀
+134  ¦  database
 select count(*) from table02;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 drop snapshot sp09;
 drop snapshot sp10;
@@ -569,53 +612,71 @@ create  table tm1(a INT not null, b INT, c INT);
 create  table ti2(a INT primary key AUTO_INCREMENT, b INT, c INT);
 create  table tm2(a INT primary key AUTO_INCREMENT, b INT, c INT);
 show create table ti1;
-Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,89,0]  𝄀
+ti1  ¦  CREATE TABLE `ti1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+)
 show create table tm1;
-Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,89,0]  𝄀
+tm1  ¦  CREATE TABLE `tm1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+)
 show create table ti2;
-Table    Create Table
-ti2    CREATE TABLE `ti2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+➤ Table[12,3,0]  ¦  Create Table[12,125,0]  𝄀
+ti2  ¦  CREATE TABLE `ti2` (
+  `a` int NOT NULL AUTO_INCREMENT,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  PRIMARY KEY (`a`)
+)
 show create table tm2;
-Table    Create Table
-tm2    CREATE TABLE `tm2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+➤ Table[12,3,0]  ¦  Create Table[12,125,0]  𝄀
+tm2  ¦  CREATE TABLE `tm2` (
+  `a` int NOT NULL AUTO_INCREMENT,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  PRIMARY KEY (`a`)
+)
 drop snapshot if exists sp11;
 create snapshot sp11 for account acc01;
 insert into ti1 values (1,1,1), (2,2,2);
 insert into ti2 values (1,1,1), (2,2,2);
 select * from ti1;
-a    b    c
-1    1    1
-2    2    2
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2
 select * from tm1;
-a    b    c
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]
 select * from ti2;
-a    b    c
-1    1    1
-2    2    2
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2
 select * from tm2;
-a    b    c
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]
 drop snapshot if exists sp12;
 create snapshot sp12 for account acc01;
 insert into tm1 values (1,1,1), (2,2,2);
 insert into tm2 values (1,1,1), (2,2,2);
 select * from ti1 {snapshot = 'sp12'};
-a    b    c
-1    1    1
-2    2    2
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2
 select * from tm1;
-a    b    c
-1    1    1
-2    2    2
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2
 select * from ti2 {snapshot = 'sp12'};
-a    b    c
-1    1    1
-2    2    2
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2
 select * from tm2;
-a    b    c
-1    1    1
-2    2    2
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2
 drop snapshot if exists sp13;
 create snapshot sp13 for account acc01;
 alter table ti1 add constraint fi1 foreign key (b) references ti2(a);
@@ -623,17 +684,35 @@ alter table tm1 add constraint fm1 foreign key (b) references tm2(a);
 drop snapshot if exists sp14;
 create snapshot sp14 for account acc01;
 show create table ti1 {snapshot = 'sp14'};
-Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,3,0]  ¦  Create Table[12,215,0]  𝄀
+ti1  ¦  CREATE TABLE `ti1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) COLLATE=utf8mb4_general_ci
 show create table tm1 {snapshot = 'sp13'};
-Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
+tm1  ¦  CREATE TABLE `tm1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 show create table ti1 {snapshot = 'sp14'};
-Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,3,0]  ¦  Create Table[12,215,0]  𝄀
+ti1  ¦  CREATE TABLE `ti1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) COLLATE=utf8mb4_general_ci
 show create table tm1 {snapshot = 'sp13'};
-Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
+tm1  ¦  CREATE TABLE `tm1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 alter table ti1 drop foreign key fi1;
 alter table tm1 drop foreign key fm1;
 truncate ti1;
@@ -641,102 +720,158 @@ truncate tm1;
 drop snapshot if exists sp15;
 create snapshot sp15 for account acc01;
 show create table ti1 {snapshot = 'sp14'};
-Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,3,0]  ¦  Create Table[12,215,0]  𝄀
+ti1  ¦  CREATE TABLE `ti1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) COLLATE=utf8mb4_general_ci
 show create table tm1 {snapshot = 'sp15'};
-Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
+tm1  ¦  CREATE TABLE `tm1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 show create table ti1 {snapshot = 'sp14'};
-Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,3,0]  ¦  Create Table[12,215,0]  𝄀
+ti1  ¦  CREATE TABLE `ti1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) COLLATE=utf8mb4_general_ci
 show create table tm1 {snapshot = 'sp15'};
-Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
+tm1  ¦  CREATE TABLE `tm1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 select count(*) from ti1;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 select count(*) from tm1;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 select count(*) from ti2;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 select count(*) from tm2;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 restore account acc01{snapshot="sp11"};
 show databases;
-Database
-db03
-information_schema
-mo_catalog
-mysql
-system
+➤ Database[12,5000,0]  𝄀
+db03  𝄀
+information_schema  𝄀
+mo_catalog  𝄀
+mysql  𝄀
+system  𝄀
 system_metrics
 select * from db03.ti1;
-a    b    c
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]
 select * from db03.tm1;
-a    b    c
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]
 select * from db03.ti2;
-a    b    c
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]
 select * from db03.tm2;
-a    b    c
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]
 show create table db03.ti1;
-Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,89,0]  𝄀
+ti1  ¦  CREATE TABLE `ti1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+)
 show create table db03.tm1;
-Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,89,0]  𝄀
+tm1  ¦  CREATE TABLE `tm1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+)
 show create table db03.ti2;
-Table    Create Table
-ti2    CREATE TABLE `ti2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+➤ Table[12,3,0]  ¦  Create Table[12,125,0]  𝄀
+ti2  ¦  CREATE TABLE `ti2` (
+  `a` int NOT NULL AUTO_INCREMENT,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  PRIMARY KEY (`a`)
+)
 show create table db03.tm2;
-Table    Create Table
-tm2    CREATE TABLE `tm2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+➤ Table[12,3,0]  ¦  Create Table[12,125,0]  𝄀
+tm2  ¦  CREATE TABLE `tm2` (
+  `a` int NOT NULL AUTO_INCREMENT,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  PRIMARY KEY (`a`)
+)
 restore account acc01{snapshot="sp14"};
 show databases;
-Database
-db03
-information_schema
-mo_catalog
-mysql
-system
+➤ Database[12,5000,0]  𝄀
+db03  𝄀
+information_schema  𝄀
+mo_catalog  𝄀
+mysql  𝄀
+system  𝄀
 system_metrics
 select * from db03.ti1;
-a    b    c
-1    1    1
-2    2    2
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2
 select * from db03.tm1;
-a    b    c
-1    1    1
-2    2    2
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2
 select * from db03.ti2;
-a    b    c
-1    1    1
-2    2    2
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2
 select * from db03.tm2;
-a    b    c
-1    1    1
-2    2    2
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2
 show create table db03.ti1;
-Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,3,0]  ¦  Create Table[12,188,0]  𝄀
+ti1  ¦  CREATE TABLE `ti1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
+)
 show create table db03.tm1;
-Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fm1` FOREIGN KEY (`b`) REFERENCES `tm2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,3,0]  ¦  Create Table[12,188,0]  𝄀
+tm1  ¦  CREATE TABLE `tm1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  CONSTRAINT `fm1` FOREIGN KEY (`b`) REFERENCES `tm2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
+)
 show create table db03.ti2;
-Table    Create Table
-ti2    CREATE TABLE `ti2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+➤ Table[12,3,0]  ¦  Create Table[12,125,0]  𝄀
+ti2  ¦  CREATE TABLE `ti2` (
+  `a` int NOT NULL AUTO_INCREMENT,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  PRIMARY KEY (`a`)
+)
 show create table db03.tm2;
-Table    Create Table
-tm2    CREATE TABLE `tm2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+➤ Table[12,3,0]  ¦  Create Table[12,125,0]  𝄀
+tm2  ¦  CREATE TABLE `tm2` (
+  `a` int NOT NULL AUTO_INCREMENT,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  PRIMARY KEY (`a`)
+)
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp15    2025-07-19 05:50:35.645291    account    acc01        
-sp14    2025-07-19 05:50:35.603084    account    acc01        
-sp13    2025-07-19 05:50:35.572037    account    acc01        
-sp12    2025-07-19 05:50:35.55302    account    acc01        
-sp11    2025-07-19 05:50:35.526333    account    acc01        
+➤ SNAPSHOT_NAME[12,64,0]  ¦  TIMESTAMP[12,65535,0]  ¦  SNAPSHOT_LEVEL[12,65535,0]  ¦  ACCOUNT_NAME[12,300,0]  ¦  DATABASE_NAME[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  𝄀
+sp15  ¦  2026-10-10 18:17:33.504801999  ¦  account  ¦  acc01  ¦    ¦    𝄀
+sp14  ¦  2026-10-10 18:17:33.436868999  ¦  account  ¦  acc01  ¦    ¦    𝄀
+sp13  ¦  2026-10-10 18:17:33.390809999  ¦  account  ¦  acc01  ¦    ¦    𝄀
+sp12  ¦  2026-10-10 18:17:33.364967999  ¦  account  ¦  acc01  ¦    ¦    𝄀
+sp11  ¦  2026-10-10 18:17:33.332841999  ¦  account  ¦  acc01
 drop database db03;
 drop snapshot sp15;
 drop snapshot sp14;
@@ -765,19 +900,19 @@ insert into table01 values (2);
 insert into table01 values (3);
 insert into table01 values (4);
 select * from db04.table01;
-col1
-1
+➤ col1[4,32,0]  𝄀
+1  𝄀
 2
 select * from db05.table01;
-col1
-1
-2
+➤ col1[4,32,0]  𝄀
+1  𝄀
+2  𝄀
 3
 select * from db06.table01;
-col1
-1
-2
-3
+➤ col1[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
 4
 drop snapshot if exists sp13;
 create snapshot sp13 for account acc01;
@@ -785,42 +920,42 @@ insert into db04.table01 values (200);
 insert into db05.table01 values (400);
 restore database db04{snapshot="sp13"};
 show databases;
-Database
-db04
-db05
-db06
-information_schema
-mo_catalog
-mysql
-system
+➤ Database[12,5000,0]  𝄀
+db04  𝄀
+db05  𝄀
+db06  𝄀
+information_schema  𝄀
+mo_catalog  𝄀
+mysql  𝄀
+system  𝄀
 system_metrics
 use db04;
 select count(*) from db04.table01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 select * from db04.table01;
-col1
-1
+➤ col1[4,32,0]  𝄀
+1  𝄀
 2
 use db05;
 select count(*) from db05.table01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 4
 select * from db05.table01;
-col1
-1
-2
-3
+➤ col1[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
 400
 use db06;
 select count(*) from db06.table01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 4
 select * from db06.table01;
-col1
-1
-2
-3
+➤ col1[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
 4
 drop snapshot sp13;
 drop database db04;
@@ -843,76 +978,104 @@ create table index01(col1 int,key key1(col1));
 insert into index01 values (1);
 insert into index01 values (2);
 show create table db07.table02;
-Table    Create Table
-table02    CREATE TABLE `table02` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
+➤ Table[12,7,0]  ¦  Create Table[12,123,0]  𝄀
+table02  ¦  CREATE TABLE `table02` (
+  `col1` int DEFAULT NULL,
+  `col2` enum('a','b','c') DEFAULT NULL,
+  UNIQUE KEY `col1` (`col1`)
+)
 drop snapshot if exists sp14;
 create snapshot sp14 for account acc01;
 use db07;
 drop table table01;
 alter table table02 add column newC int first;
 show create table table02;
-Table    Create Table
-table02    CREATE TABLE `table02` (\n  `newC` int DEFAULT NULL,\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
+➤ Table[12,7,0]  ¦  Create Table[12,150,0]  𝄀
+table02  ¦  CREATE TABLE `table02` (
+  `newC` int DEFAULT NULL,
+  `col1` int DEFAULT NULL,
+  `col2` enum('a','b','c') DEFAULT NULL,
+  UNIQUE KEY `col1` (`col1`)
+)
 show create table table02 {snapshot = 'sp14'};
-Table    Create Table
-table02    CREATE TABLE `table02` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
+➤ Table[12,7,0]  ¦  Create Table[12,150,0]  𝄀
+table02  ¦  CREATE TABLE `table02` (
+  `col1` int DEFAULT NULL,
+  `col2` enum('a','b','c') DEFAULT NULL,
+  UNIQUE KEY `col1` (`col1`)
+) COLLATE=utf8mb4_general_ci
 drop database db08;
 restore database db07{snapshot="sp14"};
 restore database db08{snapshot="sp14"};
 show databases;
-Database
-db07
-db08
-information_schema
-mo_catalog
-mysql
-system
+➤ Database[12,5000,0]  𝄀
+db07  𝄀
+db08  𝄀
+information_schema  𝄀
+mo_catalog  𝄀
+mysql  𝄀
+system  𝄀
 system_metrics
 use db07;
 show tables;
-Tables_in_db07
-table01
+➤ Tables_in_db07[12,5000,0]  𝄀
+table01  𝄀
 table02
 show create table table01 {snapshot = 'sp14'};
-Table    Create Table
-table01    CREATE TABLE `table01` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
+➤ Table[12,7,0]  ¦  Create Table[12,120,0]  𝄀
+table01  ¦  CREATE TABLE `table01` (
+  `col1` int DEFAULT NULL,
+  `col2` enum('a','b','c') DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 show create table table01;
-Table    Create Table
-table01    CREATE TABLE `table01` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
+➤ Table[12,7,0]  ¦  Create Table[12,93,0]  𝄀
+table01  ¦  CREATE TABLE `table01` (
+  `col1` int DEFAULT NULL,
+  `col2` enum('a','b','c') DEFAULT NULL
+)
 select * from table01;
-col1    col2
-1    a
-2    b
+➤ col1[4,32,0]  ¦  col2[12,65535,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b
 drop snapshot if exists sp15;
 create snapshot sp15 for account acc01;
 restore database db07{snapshot="sp15"};
 restore database db08{snapshot="sp15"};
 use db08;
 show tables;
-Tables_in_db08
+➤ Tables_in_db08[12,5000,0]  𝄀
 index01
 select * from index01;
-col1
-1
+➤ col1[4,32,0]  𝄀
+1  𝄀
 2
 show create table index01;
-Table    Create Table
-index01    CREATE TABLE `index01` (\n  `col1` int DEFAULT NULL,\n  KEY `key1` (`col1`)\n)
+➤ Table[12,7,0]  ¦  Create Table[12,75,0]  𝄀
+index01  ¦  CREATE TABLE `index01` (
+  `col1` int DEFAULT NULL,
+  KEY `key1` (`col1`)
+)
 use db07;
 show tables;
-Tables_in_db07
-table01
+➤ Tables_in_db07[12,5000,0]  𝄀
+table01  𝄀
 table02
 show create table table01 {snapshot = 'sp14'};
-Table    Create Table
-table01    CREATE TABLE `table01` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
+➤ Table[12,7,0]  ¦  Create Table[12,120,0]  𝄀
+table01  ¦  CREATE TABLE `table01` (
+  `col1` int DEFAULT NULL,
+  `col2` enum('a','b','c') DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 show create table table01;
-Table    Create Table
-table01    CREATE TABLE `table01` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
+➤ Table[12,7,0]  ¦  Create Table[12,93,0]  𝄀
+table01  ¦  CREATE TABLE `table01` (
+  `col1` int DEFAULT NULL,
+  `col2` enum('a','b','c') DEFAULT NULL
+)
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp15    2025-07-19 05:50:37.006279    account    acc01        
-sp14    2025-07-19 05:50:36.275329    account    acc01        
+➤ SNAPSHOT_NAME[12,64,0]  ¦  TIMESTAMP[12,65535,0]  ¦  SNAPSHOT_LEVEL[12,65535,0]  ¦  ACCOUNT_NAME[12,300,0]  ¦  DATABASE_NAME[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  𝄀
+sp15  ¦  2026-10-10 18:17:34.944721999  ¦  account  ¦  acc01  ¦    ¦    𝄀
+sp14  ¦  2026-10-10 18:17:34.722784999  ¦  account  ¦  acc01
 drop snapshot sp14;
 drop snapshot sp15;
 drop database db07;
@@ -943,7 +1106,7 @@ insert into index01 values(1, '1980-12-17','Abby', 21);
 insert into index01 values(2, '1981-02-20','Bob', 22);
 insert into index01 values(3, '1981-02-20','Bob', 22);
 select count(*) from index01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 drop table if exists index02;
 create table index02(col1 char, col2 int, col3 binary);
@@ -951,16 +1114,12 @@ insert into index02 values('a', 33, 1);
 insert into index02 values('c', 231, 0);
 alter table index02 add key pk(col1) comment 'primary key';
 select count(*) from index02;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 drop database if exists db10;
-
 create database db10;
-
 use db10;
-
 drop table if exists index03;
-
 create table index03 (
 emp_no      int             not null,
 birth_date  date            not null,
@@ -975,69 +1134,64 @@ partition p02 values less than (200001),
 partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
-
 insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
-
 drop snapshot if exists sp16;
-
 create snapshot sp16 for account acc01;
-
 use db09;
-
 delete from index02 where col1 = 'a';
-
 select * from index02;
-col1    col2    col3
-c    231    0
+➤ col1[1,1,0]  ¦  col2[4,32,0]  ¦  col3[-2,1,0]  𝄀
+c  ¦  231  ¦  0
 update index01 set col1 = 1000 where col1 = 1;
-
 select * from index01;
-col1    col2    col3    col4
-2    1981-02-20    Bob    22
-3    1981-02-20    Bob    22
-1000    1980-12-17    Abby    21
+➤ col1[4,32,0]  ¦  col2[91,10,0]  ¦  col3[12,16,0]  ¦  col4[4,32,0]  𝄀
+2  ¦  1981-02-20  ¦  Bob  ¦  22  𝄀
+3  ¦  1981-02-20  ¦  Bob  ¦  22  𝄀
+1000  ¦  1980-12-17  ¦  Abby  ¦  21
 use db10;
-
 truncate index03;
-
 select * from index03;
-emp_no    birth_date    first_name    last_name    gender    hire_date
+➤ emp_no[4,32,0]  ¦  birth_date[91,10,0]  ¦  first_name[12,14,0]  ¦  last_name[12,16,0]  ¦  gender[12,5,0]  ¦  hire_date[91,10,0]
 restore table db09.index01{snapshot="sp16"};
-
 restore table db10.index03{snapshot="sp16"};
-
 use db09;
-
 select * from index02;
-col1    col2    col3
-c    231    0
+➤ col1[1,1,0]  ¦  col2[4,32,0]  ¦  col3[-2,1,0]  𝄀
+c  ¦  231  ¦  0
 select * from index01;
-col1    col2    col3    col4
-1    1980-12-17    Abby    21
-2    1981-02-20    Bob    22
-3    1981-02-20    Bob    22
+➤ col1[4,32,0]  ¦  col2[91,10,0]  ¦  col3[12,16,0]  ¦  col4[4,32,0]  𝄀
+1  ¦  1980-12-17  ¦  Abby  ¦  21  𝄀
+2  ¦  1981-02-20  ¦  Bob  ¦  22  𝄀
+3  ¦  1981-02-20  ¦  Bob  ¦  22
 show create table index01;
-Table    Create Table
-index01    CREATE TABLE `index01` (\n  `col1` int NOT NULL,\n  `col2` date NOT NULL,\n  `col3` varchar(16) NOT NULL,\n  `col4` int unsigned NOT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,7,0]  ¦  Create Table[12,159,0]  𝄀
+index01  ¦  CREATE TABLE `index01` (
+  `col1` int NOT NULL,
+  `col2` date NOT NULL,
+  `col3` varchar(16) NOT NULL,
+  `col4` int unsigned NOT NULL,
+  PRIMARY KEY (`col1`)
+)
 show create table index02;
-Table    Create Table
-index02    CREATE TABLE `index02` (\n  `col1` char(1) DEFAULT NULL,\n  `col2` int DEFAULT NULL,\n  `col3` binary(1) DEFAULT NULL,\n  KEY `pk` (`col1`) COMMENT 'primary key'\n)
+➤ Table[12,7,0]  ¦  Create Table[12,159,0]  𝄀
+index02  ¦  CREATE TABLE `index02` (
+  `col1` char(1) DEFAULT NULL,
+  `col2` int DEFAULT NULL,
+  `col3` binary(1) DEFAULT NULL,
+  KEY `pk` (`col1`) COMMENT 'primary key'
+)
 use db10;
-
 select * from index03;
-emp_no    birth_date    first_name    last_name    gender    hire_date
-9001    1980-12-17    SMITH    CLERK    F    2008-12-17
-9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
+➤ emp_no[4,32,0]  ¦  birth_date[91,10,0]  ¦  first_name[12,14,0]  ¦  last_name[12,16,0]  ¦  gender[12,5,0]  ¦  hire_date[91,10,0]  𝄀
+9001  ¦  1980-12-17  ¦  SMITH  ¦  CLERK  ¦  F  ¦  2008-12-17  𝄀
+9002  ¦  1981-02-20  ¦  ALLEN  ¦  SALESMAN  ¦  F  ¦  2008-02-20
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp16    2025-07-17 19:13:44.359963    account    acc01        
+➤ SNAPSHOT_NAME[12,64,0]  ¦  TIMESTAMP[12,65535,0]  ¦  SNAPSHOT_LEVEL[12,65535,0]  ¦  ACCOUNT_NAME[12,300,0]  ¦  DATABASE_NAME[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  𝄀
+sp16  ¦  2026-10-10 18:17:35.378795999  ¦  account  ¦  acc01
 drop database db09;
-
 drop database db10;
-
 drop snapshot sp16;
-
 drop database if exists db11;
 create database db11;
 use db11;
@@ -1046,9 +1200,9 @@ create table pri01 (col1 int, col2 decimal(38,0));
 insert into pri01 (col1, col2) values (1,2378.328839842);
 insert into pri01 values (234, -3923.2342342);
 select * from pri01;
-col1    col2
-1    2378
-234    -3923
+➤ col1[4,32,0]  ¦  col2[3,38,0]  𝄀
+1  ¦  2378  𝄀
+234  ¦  -3923
 drop snapshot if exists sp17;
 create snapshot sp17 for account acc01;
 alter table pri01 add constraint primary key(col1);
@@ -1058,64 +1212,75 @@ drop snapshot if exists sp18;
 create snapshot sp18 for account acc01;
 restore table db11.pri01{snapshot="sp18"};
 show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,5,0]  ¦  Create Table[12,107,0]  𝄀
+pri01  ¦  CREATE TABLE `pri01` (
+  `col1` int NOT NULL,
+  `col2` decimal(38,0) DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 select * from pri01;
-col1    col2
-1    2378
-234    -3923
-23423    32432543
-234222    -3923
+➤ col1[4,32,0]  ¦  col2[3,38,0]  𝄀
+1  ¦  2378  𝄀
+234  ¦  -3923  𝄀
+23423  ¦  32432543  𝄀
+234222  ¦  -3923
 select count(*) from pri01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 4
 restore table db11.pri01{snapshot="sp17"};
 show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
+➤ Table[12,5,0]  ¦  Create Table[12,87,0]  𝄀
+pri01  ¦  CREATE TABLE `pri01` (
+  `col1` int DEFAULT NULL,
+  `col2` decimal(38,0) DEFAULT NULL
+)
 select * from pri01;
-col1    col2
-1    2378
-234    -3923
+➤ col1[4,32,0]  ¦  col2[3,38,0]  𝄀
+1  ¦  2378  𝄀
+234  ¦  -3923
 select count(*) from pri01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 restore table db11.pri01{snapshot="sp18"};
 show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,5,0]  ¦  Create Table[12,107,0]  𝄀
+pri01  ¦  CREATE TABLE `pri01` (
+  `col1` int NOT NULL,
+  `col2` decimal(38,0) DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 select * from pri01;
-col1    col2
-1    2378
-234    -3923
-23423    32432543
-234222    -3923
+➤ col1[4,32,0]  ¦  col2[3,38,0]  𝄀
+1  ¦  2378  𝄀
+234  ¦  -3923  𝄀
+23423  ¦  32432543  𝄀
+234222  ¦  -3923
 select count(*) from pri01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 4
 insert into pri01 values(23420, 32432543.3242);
 select * from pri01;
-col1    col2
-23420    32432543
-1    2378
-234    -3923
-23423    32432543
-234222    -3923
+➤ col1[4,32,0]  ¦  col2[3,38,0]  𝄀
+23420  ¦  32432543  𝄀
+1  ¦  2378  𝄀
+234  ¦  -3923  𝄀
+23423  ¦  32432543  𝄀
+234222  ¦  -3923
 show columns from pri01;
-Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col2    DECIMAL(38,0)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col1  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+col2  ¦  DECIMAL(38,0)  ¦  YES  ¦    ¦  null
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp18'} where reldatabase = 'db11';
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 select * from mo_catalog.mo_database{snapshot = 'sp18'} where datname = 'db11';
-dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-309342    db11    def    create database db11    2    2    2025-07-18 22:50:37    260    
+➤ dat_id[-5,64,0]  ¦  datname[12,5000,0]  ¦  dat_catalog_name[12,5000,0]  ¦  dat_createsql[12,5000,0]  ¦  owner[4,32,0]  ¦  creator[4,32,0]  ¦  created_time[93,19,0]  ¦  account_id[4,32,0]  ¦  dat_type[12,32,0]  𝄀
+274950  ¦  db11  ¦  def  ¦  create database db11  ¦  2  ¦  2  ¦  2026-10-11 02:17:35  ¦  4
 select attname from mo_catalog.mo_columns{snapshot = 'sp18'} where att_database = 'db11';
-attname
-col1
+➤ attname[12,256,0]  𝄀
+__mo_rowid  𝄀
+col1  𝄀
 col2
-__mo_rowid
 drop database db11;
 drop snapshot sp18;
 drop snapshot sp17;
@@ -1137,15 +1302,15 @@ restore table db12.table02{snapshot="sp19"};
 restore table db12.table03{snapshot="sp19"};
 restore table db12.table04{snapshot="sp19"};
 select * from table01;
-col
+➤ col[4,32,0]
 select * from table02;
-col
+➤ col[1,1,0]
 select * from table03;
-col
+➤ col[1,1,0]
 select * from table04;
-col
+➤ col[-2,1,0]
 drop database db12;
 drop snapshot sp19;
 drop account acc01;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+➤ SNAPSHOT_NAME[12,64,0]  ¦  TIMESTAMP[12,65535,0]  ¦  SNAPSHOT_LEVEL[12,65535,0]  ¦  ACCOUNT_NAME[12,300,0]  ¦  DATABASE_NAME[12,5000,0]  ¦  TABLE_NAME[12,5000,0]

@@ -14792,6 +14792,21 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// Protocol 110 metadata consumer for the persistent table-default pair.
+	{
+		functionId: INTERNAL_TABLE_COLLATION,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0,
+			volatile:   true,
+			args:       []types.T{types.T_varchar},
+			retType:    func([]types.Type) types.Type { return types.New(types.T_varchar, 64, 0) },
+			newOp:      func() executeLogicOfOverload { return builtInInternalTableCollation },
+		}},
+	},
+
 	// function `internal_column_character_set`
 	{
 		functionId: INTERNAL_COLUMN_CHARACTER_SET,

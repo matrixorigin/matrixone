@@ -6212,7 +6212,7 @@ func Test_buildTableDefs(t *testing.T) {
 		SubscriptionOption: nil,
 	}
 
-	ctx := &MockCompilerContext{}
+	ctx := NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext()
 
 	createTable := &plan.CreateTable{
 		Database: "db",
@@ -6759,7 +6759,11 @@ func TestCreateForeignKeyUsesLegacyCatalogBeforeTenantUpgrade(t *testing.T) {
 	var internalQueries []string
 	setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
 		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-			internalQueries = append(internalQueries, sql)
+			if strings.Contains(sql, catalog.MOForeignKeys) {
+				internalQueries = append(internalQueries, sql)
+			} else {
+				require.Contains(t, sql, catalog.MODatabaseDefaults)
+			}
 			return executor.Result{}, nil
 		}),
 	)

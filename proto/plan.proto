@@ -1917,11 +1917,13 @@ message CreateDatabase {
   string database = 2;
   SubscriptionOption subscription_option = 3;
   string sql = 4;
+  DatabaseDefaults defaults = 5;
 }
 
 message AlterDatabase {
   bool if_exists = 1;
   string database = 2;
+  DatabaseDefaults defaults = 3;
 }
 
 message DropDatabase {
@@ -1990,6 +1992,7 @@ message CreateTable {
 
   reserved 14;
   string RawSQL = 15;
+  DatabaseDefaults database_defaults = 16;
 }
 
 message AlterTableDrop {
@@ -2430,4 +2433,15 @@ message ViewStep {
   string view_name = 2;
   Snapshot snapshot = 3;
   string subscription_name = 4;
+}
+
+// A zero version represents a legacy database without a persisted default.
+// Names are derived display values; identity/revision own the effective domain.
+message DatabaseDefaults {
+  uint64 database_id = 1;
+  string character_set = 2;
+  string collation = 3;
+  uint64 version = 4;
+  uint32 collation_id = 5;
+  uint32 collation_revision = 6;
 }

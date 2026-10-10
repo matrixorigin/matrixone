@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 const MO_CATALOG_DB_NAME = "mo_catalog"
@@ -77,6 +78,34 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 		// get data from schema
 		//sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
 		sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database %s md WHERE md.datname = '%s' and account_id=%d", MO_CATALOG_DB_NAME, snapshotSpec, stmt.Name, accountId)
+		return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
+	}
+
+	if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) && !DatabaseDefaultsSystemDatabase(name) {
+		accountID, err := ctx.GetAccountId()
+		if err != nil {
+			return nil, err
+		}
+		if snapshot != nil && snapshot.Tenant != nil {
+			accountID = snapshot.Tenant.TenantID
+		}
+		defaults, err := GetDatabaseDefaults(ctx, name, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		if defaults == nil || defaults.Version == 0 {
+			fallback, err := databaseServerCollation(ctx)
+			if err != nil {
+				return nil, err
+			}
+			defaults, err = NormalizeDatabaseDefaults(ctx.GetContext(), nil, fallback)
+			if err != nil {
+				return nil, err
+			}
+		}
+		createSQL := "CREATE DATABASE " + sqlquote.Ident(name) + " CHARACTER SET " + defaults.CharacterSet + " COLLATE " + defaults.Collation
+		sql := fmt.Sprintf("SELECT md.datname AS `Database`, %s AS `Create Database` FROM mo_catalog.mo_database %s md WHERE md.account_id = %d AND md.datname = %s",
+			sqlquote.String(createSQL), snapshotSpec, accountID, sqlquote.String(name))
 		return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 	}
 
@@ -720,6 +749,9 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		}
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	}
+	if stmt.Full && DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) {
+		sql = strings.Replace(sql, "null `Collation`", sysview.ColumnCollationSQL("col.atttyp")+" `Collation`", 1)
+	}
 
 	var viewDependencies []*ObjectRef
 	var viewMetadataDependsOnUdf bool
@@ -817,6 +849,9 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 				and relname != '%s'
 				and (%s)`
 	sql = fmt.Sprintf(sql, autoIncrExpr, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, accountClause)
+	if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) {
+		sql = strings.Replace(sql, "'utf8mb4_bin' as 'Collation'", "internal_table_collation(extra_info) as 'Collation'", 1)
+	}
 
 	// Do not show views in sub-db
 	if sub != nil {

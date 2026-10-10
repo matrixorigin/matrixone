@@ -1,0 +1,232 @@
+drop database if exists charset_defaults_contract;
+create database charset_defaults_contract collate utf8mb4_bin;
+use charset_defaults_contract;
+create table defaults_target(v varchar(8), c char(8), t tinytext, raw varbinary(8), n int, index iv(v));
+insert into defaults_target values ('a','b','c','d',1),('B','C','D','e',2);
+alter table defaults_target add column before_default varchar(8), default collate utf8mb4_general_ci;
+alter table defaults_target default collate utf8mb4_bin, add column after_default varchar(8);
+select column_name,character_set_name,collation_name from information_schema.columns
+where table_schema='charset_defaults_contract' and table_name='defaults_target' order by ordinal_position;
+➤ column_name[12,256,0]  ¦  character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
+v  ¦  utf8mb4  ¦  utf8mb4_bin  𝄀
+c  ¦  utf8mb4  ¦  utf8mb4_bin  𝄀
+t  ¦  utf8mb4  ¦  utf8mb4_bin  𝄀
+raw  ¦  binary  ¦  binary  𝄀
+n  ¦  null  ¦  null  𝄀
+before_default  ¦  utf8mb4  ¦  utf8mb4_general_ci  𝄀
+after_default  ¦  utf8mb4  ¦  utf8mb4_bin
+select table_collation from information_schema.tables where table_schema='charset_defaults_contract' and table_name='defaults_target';
+➤ table_collation[12,64,0]  𝄀
+utf8mb4_bin
+select v,c,t,hex(raw),n from defaults_target order by n;
+➤ v[12,8,0]  ¦  c[1,8,0]  ¦  t[12,63,0]  ¦  hex(raw)[12,16,0]  ¦  n[4,32,0]  𝄀
+a  ¦  b  ¦  c  ¦  64  ¦  1  𝄀
+B  ¦  C  ¦  D  ¦  65  ¦  2
+alter table defaults_target default collate utf8mb4_general_ci, drop index iv;
+select count(*) from information_schema.statistics where table_schema='charset_defaults_contract' and table_name='defaults_target' and index_name='iv';
+➤ count(*)[-5,64,0]  𝄀
+0
+alter table defaults_target add index iv(v), default collate utf8mb4_bin;
+select count(*) from defaults_target force index(iv) where v='a';
+➤ count(*)[-5,64,0]  𝄀
+1
+alter database charset_defaults_contract collate utf8mb4_unicode_ci;
+create table native_defaults(v varchar(8), g varchar(8) generated always as (lower(v)) stored, raw varbinary(8), n int);
+insert into native_defaults(v,raw,n) values ('ß','x',1),('ss','y',2);
+select @@character_set_database,@@collation_database;
+➤ @@character_set_database[-1,16383,0]  ¦  @@collation_database[-1,16383,0]  𝄀
+utf8mb4  ¦  utf8mb4_unicode_ci
+show create database charset_defaults_contract;
+➤ Database[12,5000,0]  ¦  Create Database[12,92,0]  𝄀
+charset_defaults_contract  ¦  CREATE DATABASE `charset_defaults_contract` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+show create table native_defaults;
+➤ Table[12,15,0]  ¦  Create Table[12,260,0]  𝄀
+native_defaults  ¦  CREATE TABLE `native_defaults` (
+  `v` varchar(8) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `g` varchar(8) COLLATE utf8mb4_unicode_ci GENERATED ALWAYS AS (lower(v)) STORED,
+  `raw` varbinary(8) DEFAULT NULL,
+  `n` int DEFAULT NULL
+) COLLATE=utf8mb4_unicode_ci
+show full columns from native_defaults;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+v  ¦  VARCHAR(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+g  ¦  VARCHAR(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references  ¦    𝄀
+raw  ¦  VARBINARY(8)  ¦  binary  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+n  ¦  INT(32)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references
+select column_name,character_set_name,collation_name from information_schema.columns
+where table_schema='charset_defaults_contract' and table_name='native_defaults' order by ordinal_position;
+➤ column_name[12,256,0]  ¦  character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
+v  ¦  utf8mb4  ¦  utf8mb4_unicode_ci  𝄀
+g  ¦  utf8mb4  ¦  utf8mb4_unicode_ci  𝄀
+raw  ¦  binary  ¦  binary  𝄀
+n  ¦  null  ¦  null
+select table_collation from information_schema.tables where table_schema='charset_defaults_contract' and table_name='native_defaults';
+➤ table_collation[12,64,0]  𝄀
+utf8mb4_unicode_ci
+select count(*) from native_defaults where v='ss';
+➤ count(*)[-5,64,0]  𝄀
+2
+create temporary table native_temporary(v varchar(8));
+show create table native_temporary;
+➤ Table[12,16,0]  ¦  Create Table[12,129,0]  𝄀
+native_temporary  ¦  CREATE TEMPORARY TABLE `native_temporary` (
+  `v` varchar(8) COLLATE utf8mb4_unicode_ci DEFAULT NULL
+) COLLATE=utf8mb4_unicode_ci
+drop table native_temporary;
+create table native_like like native_defaults;
+create table native_ctas as select v from native_defaults;
+select table_name,column_name,collation_name from information_schema.columns
+where table_schema='charset_defaults_contract' and table_name in ('native_like','native_ctas') and column_name='v' order by table_name;
+➤ table_name[12,256,0]  ¦  column_name[12,256,0]  ¦  collation_name[12,18,0]  𝄀
+native_ctas  ¦  v  ¦  utf8mb4_unicode_ci  𝄀
+native_like  ¦  v  ¦  utf8mb4_unicode_ci
+create table converted(id int primary key, v varchar(8), index iv(v)) collate=utf8mb4_bin;
+insert into converted values (1,'ß'),(2,'ss');
+alter table converted convert to character set utf8mb4 collate utf8mb4_unicode_ci;
+select count(*) from converted force index(iv) where v='ss';
+➤ count(*)[-5,64,0]  𝄀
+2
+show create table converted;
+➤ Table[12,9,0]  ¦  Create Table[12,173,0]  𝄀
+converted  ¦  CREATE TABLE `converted` (
+  `id` int NOT NULL,
+  `v` varchar(8) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `iv` (`v`)
+) COLLATE=utf8mb4_unicode_ci
+show full columns from converted;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  null  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+v  ¦  VARCHAR(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  select,insert,update,references
+alter table converted default collate=utf8mb4_bin, add column added varchar(8), convert to character set utf8mb4 collate utf8mb4_unicode_ci;
+select column_name,collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='converted' order by ordinal_position;
+➤ column_name[12,256,0]  ¦  collation_name[12,18,0]  𝄀
+id  ¦  null  𝄀
+v  ¦  utf8mb4_unicode_ci  𝄀
+added  ¦  utf8mb4_unicode_ci
+select table_collation from information_schema.tables where table_schema='charset_defaults_contract' and table_name='converted';
+➤ table_collation[12,64,0]  𝄀
+utf8mb4_bin
+select count(*) from converted force index(iv) where v='ss';
+➤ count(*)[-5,64,0]  𝄀
+2
+create table unique_conversion(v varchar(8) unique) collate=utf8mb4_bin;
+insert into unique_conversion values ('ß'),('ss');
+alter table unique_conversion convert to character set utf8mb4 collate utf8mb4_unicode_ci;
+not supported: native Unicode collation column 'v' cannot be in unique index until collation-aware unique-index deduplication is supported
+select count(*),min(v),max(v) from unique_conversion;
+➤ count(*)[-5,64,0]  ¦  min(v)[12,8,0]  ¦  max(v)[12,8,0]  𝄀
+2  ¦  ss  ¦  ß
+select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='unique_conversion' and column_name='v';
+➤ collation_name[12,18,0]  𝄀
+utf8mb4_bin
+alter table converted convert to character set latin1;
+invalid input: unsupported character set 'latin1'
+alter table converted convert to character set gbk;
+invalid input: unsupported character set 'gbk'
+create table repertoire_conversion(v varchar(8)) collate=utf8mb4_bin;
+insert into repertoire_conversion values ('😀');
+alter table repertoire_conversion convert to character set utf8 collate utf8_unicode_ci;
+invalid input: supplementary character in utf8mb3 collation key
+select count(*),hex(min(v)) from repertoire_conversion;
+➤ count(*)[-5,64,0]  ¦  hex(min(v))[12,64,0]  𝄀
+1  ¦  F09F9880
+select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='repertoire_conversion' and column_name='v';
+➤ collation_name[12,18,0]  𝄀
+utf8mb4_bin
+create table binary_conversion(v varchar(1),c char(1),t tinytext) collate=utf8mb4_bin;
+insert into binary_conversion values ('😀','😀','😀');
+alter table binary_conversion convert to character set binary;
+internal error: Can't cast column from VARCHAR type to VARBINARY type because of one or more values in that column. Src length 4 is larger than Dest length 1
+select hex(v),hex(c),hex(t) from binary_conversion;
+➤ hex(v)[12,8,0]  ¦  hex(c)[12,8,0]  ¦  hex(t)[12,510,0]  𝄀
+F09F9880  ¦  F09F9880  ¦  F09F9880
+show create table binary_conversion;
+➤ Table[12,17,0]  ¦  Create Table[12,203,0]  𝄀
+binary_conversion  ¦  CREATE TABLE `binary_conversion` (
+  `v` varchar(1) COLLATE utf8mb4_bin DEFAULT NULL,
+  `c` char(1) COLLATE utf8mb4_bin DEFAULT NULL,
+  `t` tinytext COLLATE utf8mb4_bin DEFAULT NULL
+) COLLATE=utf8mb4_bin
+alter table binary_conversion modify v varchar(8), modify c char(8);
+alter table binary_conversion convert to character set binary;
+select hex(v),hex(c),hex(t) from binary_conversion;
+➤ hex(v)[12,16,0]  ¦  hex(c)[12,16,0]  ¦  hex(t)[12,510,0]  𝄀
+F09F9880  ¦  F09F988000000000  ¦  F09F9880
+show create table binary_conversion;
+➤ Table[12,17,0]  ¦  Create Table[12,148,0]  𝄀
+binary_conversion  ¦  CREATE TABLE `binary_conversion` (
+  `v` varbinary(8) DEFAULT NULL,
+  `c` binary(8) DEFAULT NULL,
+  `t` tinyblob DEFAULT NULL
+) CHARACTER SET=binary
+create table binary_generated(v varchar(4),g varchar(3) generated always as (concat(v,'x')) stored) collate=utf8mb4_bin;
+insert into binary_generated(v) values ('🧪');
+alter table binary_generated convert to character set binary;
+internal error: Can't cast column from VARBINARY type to VARBINARY type because of one or more values in that column. Src length 5 is larger than Dest length 3
+select hex(v),hex(g) from binary_generated;
+➤ hex(v)[12,32,0]  ¦  hex(g)[12,24,0]  𝄀
+F09FA7AA  ¦  F09FA7AA78
+show create table binary_generated;
+➤ Table[12,16,0]  ¦  Create Table[12,187,0]  𝄀
+binary_generated  ¦  CREATE TABLE `binary_generated` (
+  `v` varchar(4) COLLATE utf8mb4_bin DEFAULT NULL,
+  `g` varchar(3) COLLATE utf8mb4_bin GENERATED ALWAYS AS (concat(v, 'x')) STORED
+) COLLATE=utf8mb4_bin
+alter table binary_generated modify g varchar(8) generated always as (concat(v,'x')) stored;
+alter table binary_generated convert to character set binary;
+select hex(v),hex(g) from binary_generated;
+➤ hex(v)[12,8,0]  ¦  hex(g)[12,16,0]  𝄀
+F09FA7AA  ¦  F09FA7AA78
+show create table binary_generated;
+➤ Table[12,16,0]  ¦  Create Table[12,152,0]  𝄀
+binary_generated  ¦  CREATE TABLE `binary_generated` (
+  `v` varbinary(4) DEFAULT NULL,
+  `g` varbinary(8) GENERATED ALWAYS AS (concat(v, 'x')) STORED
+) CHARACTER SET=binary
+create table explicit_binary(v varchar(4),g binary(2) generated always as (cast(v as binary(2))) stored) collate=utf8mb4_bin;
+insert into explicit_binary(v) values ('🧪');
+alter table explicit_binary convert to character set binary;
+select hex(v),hex(g) from explicit_binary;
+➤ hex(v)[12,8,0]  ¦  hex(g)[12,4,0]  𝄀
+F09FA7AA  ¦  F09F
+show create table explicit_binary;
+➤ Table[12,15,0]  ¦  Create Table[12,154,0]  𝄀
+explicit_binary  ¦  CREATE TABLE `explicit_binary` (
+  `v` varbinary(4) DEFAULT NULL,
+  `g` binary(2) GENERATED ALWAYS AS (cast(v as binary(2))) STORED
+) CHARACTER SET=binary
+create table source_like(v varchar(8)) collate=utf8mb4_bin;
+create table target_like like source_like;
+alter table target_like default collate=utf8mb4_general_ci;
+alter table source_like add column added varchar(8);
+alter table target_like add column added varchar(8);
+select table_name,column_name,collation_name from information_schema.columns
+where table_schema='charset_defaults_contract' and table_name in ('source_like','target_like') order by table_name,ordinal_position;
+➤ table_name[12,256,0]  ¦  column_name[12,256,0]  ¦  collation_name[12,18,0]  𝄀
+source_like  ¦  v  ¦  utf8mb4_bin  𝄀
+source_like  ¦  added  ¦  utf8mb4_bin  𝄀
+target_like  ¦  v  ¦  utf8mb4_bin  𝄀
+target_like  ¦  added  ¦  utf8mb4_general_ci
+select table_name from information_schema.tables where table_schema='charset_defaults_contract' and table_name like '%_copy_%' order by table_name;
+➤ table_name[12,5000,0]
+create temporary table temporary_default(v varchar(8)) collate utf8mb4_unicode_ci;
+insert into temporary_default values ('ß'),('ss');
+alter table temporary_default add column added varchar(8) default 'ß';
+select count(*) from temporary_default where added='ss';
+➤ count(*)[-5,64,0]  𝄀
+2
+alter table temporary_default default collate utf8mb4_bin;
+select count(*) from temporary_default where v='ss';
+➤ count(*)[-5,64,0]  𝄀
+2
+alter table temporary_default add column future varchar(8) default 'ß';
+select count(*) from temporary_default where future='ss';
+➤ count(*)[-5,64,0]  𝄀
+0
+alter table temporary_default modify added varchar(8);
+select count(*) from temporary_default where added='ss';
+➤ count(*)[-5,64,0]  𝄀
+0
+drop temporary table temporary_default;
+drop database charset_defaults_contract;

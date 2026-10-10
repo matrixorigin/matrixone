@@ -52,7 +52,7 @@ var (
 		InformationSchemaCharacterSetsDDL,
 		InformationSchemaCharacterSetsData,
 		InformationSchemaTriggersDDL,
-		InformationSchemaTablesDDL,
+		InformationSchemaTablesV110DDL,
 		InformationSchemaPartitionsDDL,
 		InformationSchemaViewsDDL,
 		InformationSchemaStatisticsDDL,
@@ -76,7 +76,7 @@ var (
 )
 
 func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
-	if protocol >= defines.MORPCVersion109 {
+	if protocol >= defines.MORPCVersion110 {
 		return InitInformationSchemaSysTables
 	}
 
@@ -85,12 +85,20 @@ func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
 	sqls := make([]string, 0, len(InitInformationSchemaSysTables))
 	for _, sql := range InitInformationSchemaSysTables {
 		switch sql {
-		case InformationSchemaTablesDDL:
+		case InformationSchemaSchemataDDL:
+			if protocol < defines.MORPCVersion110 {
+				sql = InformationSchemaSchemataLegacyDDL
+			}
+		case InformationSchemaTablesV110DDL:
 			if protocol < defines.MORPCVersion46 {
 				sql = InformationSchemaTablesV41DDL
+			} else {
+				sql = InformationSchemaTablesDDL
 			}
 		case InformationSchemaColumnsDDL:
-			if protocol >= defines.MORPCVersion100 {
+			if protocol >= defines.MORPCVersion109 {
+				// Native column metadata was published independently by v4.0.14.
+			} else if protocol >= defines.MORPCVersion100 {
 				sql = InformationSchemaColumnsV100DDL()
 			} else if protocol >= defines.MORPCVersion58 {
 				sql = InformationSchemaColumnsV58DDL()
