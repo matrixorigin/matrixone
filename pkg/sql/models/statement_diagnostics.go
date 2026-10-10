@@ -391,7 +391,7 @@ func (d *StatementDiagnostics) WriteJSON(out *bytes.Buffer) error {
 		}
 	}
 	if len(h)+len(envelope)+1 > DiagnosticsHeaderBudget {
-		return fmt.Errorf("statement diagnostic scalar header exceeds %d bytes", DiagnosticsHeaderBudget)
+		return moerr.NewInternalErrorNoCtxf("statement diagnostic scalar header exceeds %d bytes", DiagnosticsHeaderBudget)
 	}
 	out.Reset()
 	out.WriteString(envelope)

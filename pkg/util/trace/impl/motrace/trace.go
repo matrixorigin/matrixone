@@ -58,7 +58,7 @@ var inited uint32
 
 func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opts ...TracerProviderOption) (error, bool) {
 	if SV.StatementDiagnosticsFormat != "" && SV.StatementDiagnosticsFormat != "compact-v1" && SV.StatementDiagnosticsFormat != "legacy" {
-		return fmt.Errorf("invalid statement-diagnostics-format %q", SV.StatementDiagnosticsFormat), false
+		return moerr.NewInternalErrorNoCtxf("invalid statement-diagnostics-format %q", SV.StatementDiagnosticsFormat), false
 	}
 	format := SV.StatementDiagnosticsFormat
 	if format == "" {
