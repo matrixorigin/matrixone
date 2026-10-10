@@ -97,6 +97,11 @@ func (c *viewDependencyCaptureContext) enterNestedView() error {
 }
 
 func (c *viewDependencyCaptureContext) chargeViewColumns(count int) error {
+	if state, _ := c.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil {
+		if err := state.charge(0, count); err != nil {
+			return err
+		}
+	}
 	if !c.metadataBudget {
 		return nil
 	}
