@@ -298,6 +298,9 @@ const (
 	internalJSONComparisonFunctionID int32 = 577
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
+	planInt32TypeID                  int32 = 22
+	mediumIntCastFunctionID          int32 = 21
+	castJSONToArrayFunctionID        int32 = 513
 	binFunctionID                    int32 = 270
 	convFunctionID                   int32 = 367
 	asciiFunctionID                  int32 = 52
@@ -374,6 +377,8 @@ const (
 // execution contracts.
 // JSONScalarLiteralContracts requires MORPC v104 because older executors
 // decode JSON-typed Sval literals as VARCHAR rather than encoded JSON.
+// MediumIntAssignmentBounds requires MORPC v109 because older executors treat
+// the shared INT32 storage type as a full-width INT rather than a 24-bit value.
 type RemoteExpressionFeatures struct {
 	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
@@ -405,6 +410,7 @@ type RemoteExpressionFeatures struct {
 	NormalizedIntervalUnits       bool
 	LegacyIntervalUnits           bool
 	WeekSessionDefault            bool
+	MediumIntAssignmentBounds     bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -432,7 +438,33 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.InvalidTemporalResultContract ||
 		features.NormalizedIntervalUnits ||
 		features.LegacyIntervalUnits ||
-		features.WeekSessionDefault
+		features.WeekSessionDefault ||
+		features.MediumIntAssignmentBounds
+}
+
+func isPlanMediumIntType(typ Type) bool {
+	return typ.Width == 24 && (typ.Id == planInt32TypeID || typ.Id == planUint32TypeID)
+}
+
+func hasMediumIntTypeName(typeName string) bool {
+	normalized := strings.ToLower(strings.NewReplacer("(", " ", ")", " ", ",", " ").Replace(typeName))
+	for _, token := range strings.Fields(normalized) {
+		if token == "mediumint" || token == "int3" {
+			return true
+		}
+	}
+	return false
+}
+
+func isMediumIntArrayCast(current *Expr, fn *Function) bool {
+	if current != nil && hasMediumIntTypeName(current.Typ.Enumvalues) {
+		return true
+	}
+	if fn == nil || len(fn.Args) == 0 || fn.Args[0] == nil || fn.Args[0].GetLit() == nil {
+		return false
+	}
+	literal, ok := fn.Args[0].GetLit().Value.(*Literal_Sval)
+	return ok && hasMediumIntTypeName(literal.Sval)
 }
 
 func hasPrivateIntegerPrecisionCast(expr *Expr) bool {
@@ -867,6 +899,12 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				if id == mediumIntCastFunctionID && isPlanMediumIntType(current.Typ) {
+					features.MediumIntAssignmentBounds = true
+				}
+				if id == castJSONToArrayFunctionID && isMediumIntArrayCast(current, fn) {
+					features.MediumIntAssignmentBounds = true
+				}
 				if id == 21 && current.Typ.Id == 11 && len(fn.Args) > 0 &&
 					fn.Args[0] != nil && fn.Args[0].Typ.Id == 55 { // CAST YEAR -> BIT
 					features.YearBitCast = true

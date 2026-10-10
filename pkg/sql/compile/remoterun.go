@@ -2257,6 +2257,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
 	}
+	if features.MediumIntAssignmentBounds && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion109) {
+		return moerr.NewNotSupportedNoCtx("MEDIUMINT assignment bounds require MORPC protocol version 109")
+	}
 	if features.SpecialIntegerConsumers && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
 		return moerr.NewNotSupportedNoCtx("special integer consumers require MORPC protocol version 98")
 	}

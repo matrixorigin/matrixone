@@ -1399,6 +1399,9 @@ func forceCastExpr2WithProcess(
 	if targetType.Typ.Id == 0 {
 		return expr, nil
 	}
+	if err := requireMediumIntProtocolForAuthoring(ctx, proc, targetType.Typ); err != nil {
+		return nil, err
+	}
 	var err error
 	var rewritten bool
 	expr, rewritten, err = rewriteMySQLSpecialTypeDisplayCast(ctx, expr, targetType.Typ)
@@ -1504,7 +1507,7 @@ func forceAssignmentCastExprWithProcess(
 }
 
 func requireMediumIntProtocolForAuthoring(ctx context.Context, proc *process.Process, targetType Type) error {
-	if proc == nil || !isMediumIntPlanType(targetType) {
+	if proc == nil || (!isMediumIntPlanType(targetType) && !typedArrayTypeHasMediumInt(&targetType)) {
 		return nil
 	}
 	return RequirePersistedProtocolVersionForAuthoring(ctx, proc, defines.MORPCVersion109)
@@ -1539,6 +1542,11 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 	targetType Type,
 	isIgnore bool,
 ) (*Expr, error) {
+	if err := requireMediumIntProtocolForAuthoring(
+		builder.GetContext(), builder.compCtx.GetProcess(), targetType,
+	); err != nil {
+		return nil, err
+	}
 	var err error
 	var rewritten bool
 	expr, rewritten, err = builder.rewriteProjectedMySQLSpecialTypeDisplayCast(expr, sourceExpr, targetType)

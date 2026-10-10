@@ -432,6 +432,19 @@ func arrayPlanTypeString(typ *plan.Type) string {
 	return ""
 }
 
+func typedArrayTypeHasMediumInt(typ *plan.Type) bool {
+	if !isTypedArrayPlanType(typ) {
+		return false
+	}
+	normalized := strings.ToLower(strings.NewReplacer("(", " ", ")", " ", ",", " ").Replace(arrayPlanTypeString(typ)))
+	for _, token := range strings.Fields(normalized) {
+		if token == "mediumint" || token == "int3" {
+			return true
+		}
+	}
+	return false
+}
+
 func validateTypedArrayElementType(ctx context.Context, elem *tree.T) error {
 	if elem == nil {
 		return moerr.NewInternalError(ctx, "array type missing element type")
@@ -1187,19 +1200,27 @@ func funcCastForTypedArrayType(ctx context.Context, expr *Expr, targetType Type)
 		return expr, nil
 	}
 	targetType.NotNullable = expr.Typ.NotNullable
-	if types.T(expr.Typ.Id) == types.T_any || isNullLiteralExpr(expr) {
+	mediumIntArray := typedArrayTypeHasMediumInt(&targetType)
+	if isNullLiteralExpr(expr) || (types.T(expr.Typ.Id) == types.T_any && !mediumIntArray) {
 		expr.Typ = targetType
 		return expr, nil
 	}
-	if isTypedArrayPlanType(&expr.Typ) && expr.Typ.GetEnumvalues() == targetType.GetEnumvalues() {
+	if isTypedArrayPlanType(&expr.Typ) && expr.Typ.GetEnumvalues() == targetType.GetEnumvalues() && !mediumIntArray {
 		expr.Typ = targetType
 		return expr, nil
 	}
 
 	jsonType := plan.Type{Id: int32(types.T_json), NotNullable: expr.Typ.NotNullable}
-	jsonExpr, err := forceCastExpr(ctx, expr, jsonType)
-	if err != nil {
-		return nil, err
+	var jsonExpr *Expr
+	if types.T(expr.Typ.Id) == types.T_json || types.T(expr.Typ.Id) == types.T_any {
+		jsonExpr = DeepCopyExpr(expr)
+		jsonExpr.Typ = jsonType
+	} else {
+		var err error
+		jsonExpr, err = forceCastExpr(ctx, expr, jsonType)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	args := make([]*Expr, 2)

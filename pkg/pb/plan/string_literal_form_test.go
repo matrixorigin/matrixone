@@ -985,3 +985,43 @@ func TestTemporalConversionProtocolSourceMatrix(t *testing.T) {
 		})
 	}
 }
+
+func TestRequiredRemoteExpressionFeaturesMediumIntAssignmentBounds(t *testing.T) {
+	cast := func(target Type) *Expr {
+		return &Expr{Typ: target, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(mediumIntCastFunctionID) << 32, ObjName: "cast_assign"},
+			Args: []*Expr{
+				{Typ: Type{Id: planInt32TypeID}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}},
+				{Typ: target, Expr: &Expr_T{T: &TargetType{}}},
+			},
+		}}}
+	}
+	arrayCast := func(typeName string) *Expr {
+		return &Expr{Typ: Type{Id: planJSONTypeID, Enumvalues: typeName}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(castJSONToArrayFunctionID) << 32, ObjName: "cast_json_to_array"},
+			Args: []*Expr{
+				{Typ: Type{Id: planVarcharTypeID}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: typeName}}}},
+				{Typ: Type{Id: planJSONTypeID}, Expr: &Expr_Col{Col: &ColRef{ColPos: 1}}},
+			},
+		}}}
+	}
+	for _, tc := range []struct {
+		name string
+		expr *Expr
+		want bool
+	}{
+		{name: "signed MEDIUMINT cast", expr: cast(Type{Id: planInt32TypeID, Width: 24}), want: true},
+		{name: "unsigned MEDIUMINT cast", expr: cast(Type{Id: planUint32TypeID, Width: 24}), want: true},
+		{name: "ordinary INT display width 24", expr: cast(Type{Id: planInt32TypeID, Width: 32})},
+		{name: "signed typed array", expr: arrayCast("array(mediumint)"), want: true},
+		{name: "unsigned nested typed array", expr: arrayCast("array(array(mediumint unsigned))"), want: true},
+		{name: "ordinary INT typed array", expr: arrayCast("array(int)")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(tc.expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.MediumIntAssignmentBounds)
+			require.Equal(t, tc.want, features.Any())
+		})
+	}
+}
