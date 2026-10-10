@@ -681,6 +681,10 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
+	return cwft.recordExecPlan(ctx, phyPlan, nil)
+}
+
+func (cwft *TxnComputationWrapper) recordExecPlan(ctx context.Context, phyPlan *models.PhyPlan, runErr error) error {
 	if stm := cwft.ses.GetStmtInfo(); stm != nil {
 		waitActiveCost := time.Duration(0)
 		if handler := cwft.ses.GetTxnHandler(); handler.InActiveTxn() {
@@ -693,7 +697,7 @@ func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *
 			WithWaitActiveCost(waitActiveCost),
 			withSchedulingTraceRecorder(&cwft.schedulingTrace),
 		}
-		handler := NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, opts...)
+		handler := newJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, runErr, opts...)
 		if handler.persistSchedulingTrace {
 			stm.DisableAgg()
 		}

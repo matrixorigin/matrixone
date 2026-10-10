@@ -74,7 +74,8 @@ type tracerProviderConfig struct {
 
 	exportInterval time.Duration //  WithExportInterval
 	// longQueryTime unit ns
-	longQueryTime int64 //  WithLongQueryTime
+	longQueryTime               int64 //  WithLongQueryTime
+	compactStatementDiagnostics bool  // immutable after provider initialization
 	// skipRunningStmt
 	skipRunningStmt bool // set by WithSkipRunningStmt
 
@@ -171,6 +172,15 @@ func WithExportInterval(secs int) tracerProviderOption {
 	return tracerProviderOption(func(cfg *tracerProviderConfig) {
 		cfg.exportInterval = time.Second * time.Duration(secs)
 	})
+}
+
+func WithStatementDiagnosticsFormat(format string) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) { cfg.compactStatementDiagnostics = format == "compact-v1" }
+}
+
+// UseCompactStatementDiagnostics follows the immutable provider configuration.
+var UseCompactStatementDiagnostics = func() bool {
+	return GetTracerProvider().compactStatementDiagnostics
 }
 
 func WithLongQueryTime(secs float64) tracerProviderOption {

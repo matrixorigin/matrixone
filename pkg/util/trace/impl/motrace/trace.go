@@ -57,7 +57,15 @@ func init() {
 var inited uint32
 
 func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opts ...TracerProviderOption) (error, bool) {
+	if SV.StatementDiagnosticsFormat != "" && SV.StatementDiagnosticsFormat != "compact-v1" && SV.StatementDiagnosticsFormat != "legacy" {
+		return fmt.Errorf("invalid statement-diagnostics-format %q", SV.StatementDiagnosticsFormat), false
+	}
+	format := SV.StatementDiagnosticsFormat
+	if format == "" {
+		format = "compact-v1"
+	}
 	opts = append(opts,
+		WithStatementDiagnosticsFormat(format),
 		withMOVersion(SV.MoVersion),
 		EnableTracer(!SV.DisableTrace),
 		WithExportInterval(SV.TraceExportInterval),

@@ -5797,8 +5797,12 @@ func executeStmt(ses *Session,
 				txnCw.completeCompileExecution(c, err)
 			}
 
-			// Serialize the execution plan as json
-			_ = execCtx.cw.RecordExecPlan(execCtx.reqCtx, phyPlan)
+			// Capture detached diagnostics before the current generation is released.
+			if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+				_ = txnCw.recordExecPlan(execCtx.reqCtx, phyPlan, err)
+			} else {
+				_ = execCtx.cw.RecordExecPlan(execCtx.reqCtx, phyPlan)
+			}
 			c.Release()
 		}
 	}()
@@ -7195,7 +7199,11 @@ type jsonPlanHandler struct {
 }
 
 func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *jsonPlanHandler {
-	h := NewMarshalPlanHandler(ctx, stmt, plan, phyPlan, opts...)
+	return newJsonPlanHandler(ctx, stmt, ses, plan, phyPlan, nil, opts...)
+}
+
+func newJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, phyPlan *models.PhyPlan, runErr error, opts ...marshalPlanOptions) *jsonPlanHandler {
+	h := newMarshalPlanHandler(ctx, stmt, plan, phyPlan, runErr, opts...)
 	statsBytes, stats := h.Stats(ctx, ses)
 	var staticJSON []byte
 	if h.marshalPlan == nil && (h.schedulingTrace == nil || !h.schedulingTrace.PersistStandalone()) {
@@ -7220,6 +7228,10 @@ func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses Fe
 }
 
 func newSchedulingTracePlanHandler(ctx context.Context, trace schedule.Trace) *jsonPlanHandler {
+	if motrace.UseCompactStatementDiagnostics() {
+		d := &models.StatementDiagnostics{Version: models.DiagnosticsVersion, Level: 1, CapturedLevel: 1, Reasons: 1 << 9, Outcome: "failed", Scheduling: projectDiagnosticScheduling(&trace), Detail: models.DiagnosticDetail{Capture: "compile_failed"}}
+		return &jsonPlanHandler{statsBytes: statistic.DefaultStatsArray, persistSchedulingTrace: true, marshalHandler: &marshalPlanHandler{marshalPlan: &models.ExplainData{StatementDiagnostics: d}}}
+	}
 	trace = trace.Clone()
 	h := &marshalPlanHandler{
 		marshalPlanConfig: marshalPlanConfig{
@@ -7325,13 +7337,17 @@ func NewMarshalPlanHandlerCompositeSubStmt(ctx context.Context, p *plan.Plan, op
 // SetResourceSummary injects an already sealed summary into a materialized
 // explain plan. It intentionally does not touch the live resource root.
 func (h *marshalPlanHandler) SetResourceSummary(summary resource.StatementResourceSummary) {
-	if h == nil || h.marshalPlan == nil {
+	if h == nil || h.marshalPlan == nil || h.marshalPlan.StatementDiagnostics != nil {
 		return
 	}
 	h.marshalPlan.PhyPlan.Resource = &summary
 }
 
 func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *marshalPlanHandler {
+	return newMarshalPlanHandler(ctx, stmt, plan, phyPlan, nil, opts...)
+}
+
+func newMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan, phyPlan *models.PhyPlan, runErr error, opts ...marshalPlanOptions) *marshalPlanHandler {
 	// TODO: need mem improvement
 	uuid := uuid.UUID(stmt.StatementID)
 	stmt.MarkResponseAt()
@@ -7348,6 +7364,16 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 	needFullPlan := h.query != nil && h.needMarshalPlan()
 	h.resolveSchedulingTrace(needFullPlan)
 
+	// A short ordinary query with no resource preview cannot admit diagnostics.
+	// Keep the existing placeholder path out of the projection/policy calls.
+	if h.query != nil && !needFullPlan && runErr == nil && !h.persistSchedulingTrace && (phyPlan == nil || phyPlan.Resource == nil) {
+		return h
+	}
+	if motrace.UseCompactStatementDiagnostics() {
+		h.isInternalSubStmt = stmt.IsMoLogger()
+		h.captureStatementDiagnostics(ctx, phyPlan, runErr)
+		return h
+	}
 	if needFullPlan {
 		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
 		h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
@@ -7407,7 +7433,10 @@ func getMarshalPlanBufferPool() *bytes.Buffer {
 }
 
 func releaseMarshalPlanBufferPool(b *bytes.Buffer) {
-	marshalPlanBufferPool.Put(b)
+	// A legacy full plan must not inflate the buffers retained by compact rows.
+	if b.Cap() <= 64<<10 {
+		marshalPlanBufferPool.Put(b)
+	}
 }
 
 // allocBufferIfNeeded should call just right before needed.
@@ -7420,6 +7449,14 @@ func (h *marshalPlanHandler) allocBufferIfNeeded() {
 
 func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 	var err error
+	if h.marshalPlan != nil && h.marshalPlan.StatementDiagnostics != nil {
+		h.allocBufferIfNeeded()
+		if err = h.marshalPlan.StatementDiagnostics.WriteJSON(h.buffer); err != nil {
+			h.buffer.Reset()
+			return buildErrorJsonPlan(h.buffer, h.uuid, moerr.ErrInternal, err.Error())
+		}
+		return h.buffer.Next(h.buffer.Len())
+	}
 	if h.marshalPlan != nil {
 		sanitizeNonFiniteFloatValues(h.marshalPlan)
 		h.allocBufferIfNeeded()
