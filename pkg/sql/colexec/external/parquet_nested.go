@@ -687,7 +687,7 @@ func appendLeafValue(
 		return vector.AppendFixed(vec, value, false, proc.Mp())
 	case types.T_char, types.T_varchar, types.T_text, types.T_blob,
 		types.T_binary, types.T_varbinary:
-		return vector.AppendBytes(vec, v.ByteArray(), false, proc.Mp())
+		return appendParquetVarlenValue(proc.Ctx, vec, v.ByteArray(), false, proc, types.MustTypeFromPlan(def.Typ))
 	default:
 		return moerr.NewNYIf(proc.Ctx, "row mode convert to %s", targetType.String())
 	}
