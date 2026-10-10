@@ -1548,7 +1548,9 @@ func typedArrayElementCompatible(spec typedArrayElementSpec, elem bytejson.ByteJ
 		return jsonIntegerFits(elem, -128, 127, spec.unsigned, 255)
 	case "smallint":
 		return jsonIntegerFits(elem, -32768, 32767, spec.unsigned, 65535)
-	case "mediumint", "int":
+	case "mediumint":
+		return jsonIntegerFits(elem, -1<<23, 1<<23-1, spec.unsigned, 1<<24-1)
+	case "int":
 		return jsonIntegerFits(elem, -2147483648, 2147483647, spec.unsigned, 4294967295)
 	case "bigint":
 		return jsonIntegerFits(elem, -1<<63, 1<<63-1, spec.unsigned, ^uint64(0))

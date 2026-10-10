@@ -209,7 +209,7 @@ func handleObjectList(
 			// Convert batch column type to MySQL type
 			if i < len(resultBatch.Vecs) {
 				typ := resultBatch.Vecs[i].GetType()
-				err := convertEngineTypeToMysqlType(ctx, typ.Oid, col)
+				err := convertEngineColumnTypeToMysqlType(ctx, *typ, col)
 				if err != nil {
 					return err
 				}
@@ -593,7 +593,7 @@ func handleInternalObjectList(ses FeSession, execCtx *ExecCtx, ic *InternalCmdOb
 			}
 			if i < len(resultBatch.Vecs) {
 				typ := resultBatch.Vecs[i].GetType()
-				err := convertEngineTypeToMysqlType(ctx, typ.Oid, col)
+				err := convertEngineColumnTypeToMysqlType(ctx, *typ, col)
 				if err != nil {
 					return err
 				}

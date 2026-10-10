@@ -1302,6 +1302,9 @@ var ForceCastExpr = forceCastExpr
 var ForceAssignmentCastExpr = forceAssignmentCastExpr
 
 func useAssignmentStrictCast(targetType Type) bool {
+	if isMediumIntPlanType(targetType) {
+		return true
+	}
 	switch targetType.Id {
 	case int32(types.T_char), int32(types.T_varchar), int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp), int32(types.T_year):
 		return true
@@ -1321,8 +1324,13 @@ func useSqlModeStringAssignmentCast(targetType Type) bool {
 
 func useSqlModeAssignmentCast(targetType Type) bool {
 	return useSqlModeStringAssignmentCast(targetType) ||
+		isMediumIntPlanType(targetType) ||
 		targetType.Id == int32(types.T_year) ||
 		targetType.Id == int32(types.T_time)
+}
+
+func isMediumIntPlanType(targetType Type) bool {
+	return (targetType.Id == int32(types.T_int32) || targetType.Id == int32(types.T_uint32)) && targetType.Width == 24
 }
 
 // useIgnoreConversionAssignmentCast identifies conversions whose lexical
@@ -1361,7 +1369,8 @@ func assignmentCastProtocolSupported(proc *process.Process) bool {
 // 固定维度向量的实际载荷长度也可能不符合其声明宽度。
 // 这些类型都不能仅根据元数据相等省略赋值检查。
 func needsSameTypeAssignmentCast(targetType Type) bool {
-	return targetType.Id == int32(types.T_blob) ||
+	return isMediumIntPlanType(targetType) ||
+		targetType.Id == int32(types.T_blob) ||
 		targetType.Id == int32(types.T_text) ||
 		targetType.Id == int32(types.T_time) ||
 		(types.T(targetType.Id).IsArrayRelate() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
@@ -1487,8 +1496,18 @@ func forceAssignmentCastExprWithProcess(
 	isIgnore bool,
 	proc *process.Process,
 ) (*Expr, error) {
+	if err := requireMediumIntProtocolForAuthoring(ctx, proc, targetType); err != nil {
+		return nil, err
+	}
 	return forceAssignmentCastExprWithName(ctx, expr, targetType,
 		assignmentCastFunctionNameForSource(expr, targetType, isIgnore, proc))
+}
+
+func requireMediumIntProtocolForAuthoring(ctx context.Context, proc *process.Process, targetType Type) error {
+	if proc == nil || !isMediumIntPlanType(targetType) {
+		return nil
+	}
+	return RequirePersistedProtocolVersionForAuthoring(ctx, proc, defines.MORPCVersion109)
 }
 
 func assignmentCastFunctionNameForSource(expr *Expr, targetType Type, isIgnore bool, proc *process.Process) string {
@@ -1948,6 +1967,17 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 	if isIgnore && numVal.ValType == tree.P_char && useIgnoreConversionAssignmentCast(makePlan2Type(colType)) {
 		expr := MakePlan2StringConstExprWithType(numVal.String())
 		return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), true, proc)
+	}
+	// MEDIUMINT's 24-bit domain is narrower than its int32/uint32 storage.
+	// Keep the literal's original source type so assignment checking cannot be
+	// bypassed by the VALUES fast path.
+	if colType.IsMediumInt() {
+		binder := NewDefaultBinder(proc.Ctx, nil, nil, plan.Type{}, nil)
+		source, err := binder.BindExpr(numVal, 0, true)
+		if err != nil {
+			return nil, err
+		}
+		return forceAssignmentCastExprWithProcess(proc.Ctx, source, makePlan2Type(colType), isIgnore, proc)
 	}
 	// Integer assignment must consume the literal's source type, not parse its
 	// spelling as an integer or truncate it in the VALUES fast path.
