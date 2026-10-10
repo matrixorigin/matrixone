@@ -557,7 +557,7 @@ cleanup() {
     status=$?
     if [[ -s "$ENGINE_CHILD_PID_FILE" ]]; then
         child_pid=$(<"$ENGINE_CHILD_PID_FILE")
-        if kill -0 "$child_pid" 2>/dev/null || kill -0 -- -"$child_pid" 2>/dev/null; then
+        if ut_process_group_alive "$child_pid"; then
             kill -KILL -- -"$child_pid" 2>/dev/null || kill -KILL "$child_pid" 2>/dev/null || true
             status=90
         fi
