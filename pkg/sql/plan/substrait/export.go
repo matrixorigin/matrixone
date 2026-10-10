@@ -1226,8 +1226,43 @@ func (e *exporter) extractExpr(result *planpb.Expr, call *planpb.Function, input
 	}
 	if e.embeddedMO {
 		// The generic importer lowers extract to date_part, which has no
-		// Sirius GPU expression. These DATE fields have direct equivalents.
-		return e.scalar(unit, &result.Typ, value), nil
+		// Sirius GPU expression. Ordinary components also interpret MO's zero
+		// DATE sentinel as calendar 0000-12-31 after native input conversion.
+		// Guard that exact sentinel in the typed plan, preserving NULL behavior
+		// and the complete MO domain without changing published reader bytes.
+		zeroDate, err := e.literal(&planpb.Literal{Value: &planpb.Literal_Dateval{Dateval: int32(types.ZeroDate)}}, &planpb.Type{Id: int32(types.T_date), NotNullable: true})
+		if err != nil {
+			return nil, err
+		}
+		zero, err := e.literal(&planpb.Literal{Value: &planpb.Literal_I64Val{}}, &planpb.Type{Id: int32(types.T_int64), NotNullable: true})
+		if err != nil {
+			return nil, err
+		}
+		conditionType := &planpb.Type{Id: int32(types.T_bool), NotNullable: call.Args[1].Typ.NotNullable}
+		condition := e.scalar("equal", conditionType, value, zeroDate)
+		output, err := e.substraitType(&result.Typ)
+		if err != nil {
+			return nil, err
+		}
+		// The pinned component function physically returns INT16 but advertises
+		// BIGINT. A same-type cast is removed by binding; use the proven INT32
+		// component domain before BIGINT so CASE receives equal physical types.
+		componentType := result.Typ
+		componentType.Id = int32(types.T_int32)
+		component, err := e.substraitType(&componentType)
+		if err != nil {
+			return nil, err
+		}
+		part := &spb.Expression{RexType: &spb.Expression_Cast_{Cast: &spb.Expression_Cast{
+			Type: component, Input: e.scalar(unit, &result.Typ, value), FailureBehavior: spb.Expression_Cast_FAILURE_BEHAVIOR_THROW_EXCEPTION,
+		}}}
+		part = &spb.Expression{RexType: &spb.Expression_Cast_{Cast: &spb.Expression_Cast{
+			Type: output, Input: part, FailureBehavior: spb.Expression_Cast_FAILURE_BEHAVIOR_THROW_EXCEPTION,
+		}}}
+		return &spb.Expression{RexType: &spb.Expression_IfThen_{IfThen: &spb.Expression_IfThen{
+			Ifs:  []*spb.Expression_IfThen_IfClause{{If: condition, Then: zero}},
+			Else: part,
+		}}}, nil
 	}
 	output, err := e.substraitType(&result.Typ)
 	if err != nil {

@@ -21,9 +21,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	planbuilder "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 	spb "github.com/substrait-io/substrait-protobuf/go/substraitpb"
 	"google.golang.org/protobuf/proto"
@@ -138,5 +141,40 @@ func TestExportExtractSemanticBoundary(t *testing.T) {
 				require.True(t, IsNotEligible(embeddedErr), "%v", embeddedErr)
 			}
 		})
+	}
+}
+
+func TestEmbeddedDATEExtractGuardsZeroDate(t *testing.T) {
+	for _, unit := range []string{"year", "month", "day"} {
+		for _, required := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%t", unit, required), func(t *testing.T) {
+				args := []*planpb.Expr{
+					{Typ: planpb.Type{Id: int32(types.T_varchar), NotNullable: true}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: unit}}}},
+					{Typ: planpb.Type{Id: int32(types.T_date), NotNullable: required}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+				}
+				bound, err := function.GetFunctionByName(t.Context(), "extract", []types.Type{types.T_varchar.ToType(), types.T_date.ToType()})
+				require.NoError(t, err)
+				result := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64), NotNullable: function.DeduceNotNullable(bound.GetEncodedOverloadID(), args)}}
+				call := &planpb.Function{Func: &planpb.ObjectRef{ObjName: "extract", Obj: bound.GetEncodedOverloadID()}, Args: args}
+				e := exporter{embeddedMO: true, profile: NewEmbeddedExportProfile(31)}
+				wire, err := e.extractExpr(result, call, []int{1})
+				require.NoError(t, err)
+				guard := wire.GetIfThen()
+				require.NotNil(t, guard)
+				require.Len(t, guard.Ifs, 1)
+				equality := guard.Ifs[0].If.GetScalarFunction()
+				require.Equal(t, e.functions["equal"], equality.FunctionReference)
+				require.Equal(t, types.ZeroDate.DaysSinceUnixEpoch(), equality.Arguments[1].GetValue().GetLiteral().GetDate())
+				require.Equal(t, int64(0), guard.Ifs[0].Then.GetLiteral().GetI64())
+				require.NotNil(t, guard.Else.GetCast().Type.GetI64())
+				component := guard.Else.GetCast().Input.GetCast()
+				require.NotNil(t, component.Type.GetI32())
+				require.Equal(t, e.functions[unit], component.Input.GetScalarFunction().FunctionReference)
+				flight := exporter{}
+				legacy, err := flight.extractExpr(result, call, []int{1})
+				require.NoError(t, err)
+				require.NotNil(t, legacy.GetScalarFunction(), "Flight keeps the existing extract encoding")
+			})
+		}
 	}
 }

@@ -13,11 +13,11 @@ Native B, Sirius #27, merged as
 
 Current delivery gate: C pins merged
 [Sirius #29](https://github.com/matrixorigin/sirius/pull/29) at
-`908ffc75a58b3be496b2172795e416326416e7ec`. C remains draft pending the
-merged kernel prerequisite [#29775](https://github.com/matrixorigin/matrixone/pull/29775)
-and final release/public/owning-package validation and required CI. Joint
-development validation passes all 22 native preparations and the complete
-public numeric fixture.
+`908ffc75a58b3be496b2172795e416326416e7ec`. Kernel prerequisite
+[#29775](https://github.com/matrixorigin/matrixone/pull/29775) is merged.
+C is ready for review; passing required CI and review approval gate merging.
+Local integration covers all 22 native preparations and the complete public
+numeric fixture. D implementation follows merged C.
 
 ## Decision and invariant
 
@@ -70,6 +70,19 @@ whose MO-bound SUM returns Decimal128 is declined; changing that result to
 Decimal256 would violate descriptor identity. Scan-owned filters remain MO
 reader work in both validation and emission, rather than being validated as
 Flight expressions and then omitted from the embedded wire plan.
+
+Embedded ordinary integer add/subtract/multiply remain ineligible: the pinned
+consumer uses unchecked cuDF arithmetic for those operations. An inherited
+registry label does not prove MO overflow equivalence. Checked exact-decimal
+arithmetic, integral predicates and aggregates retain their existing domains.
+
+Exact CASE retains MO's complete bound result descriptor through the existing
+checked annotation, including a nullable condition with required value arms.
+Typed DATE extraction guards MO's `ZeroDate` sentinel before year/month/day,
+returning zero for that sentinel and preserving normal/NULL dates. The pinned
+component function's physical INT16 result is normalized through the proven
+INT32 component domain to the declared BIGINT before conditional selection.
+No published reader bytes, native ABI, Flight encoding or SQL text changes.
 
 All decimal-bearing parts of one exact closure use the extension. Standard
 Flight emission stays on its existing type/function contract. Declaration

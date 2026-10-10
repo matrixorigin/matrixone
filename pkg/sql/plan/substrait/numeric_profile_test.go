@@ -326,3 +326,53 @@ func TestExactDivisionRetainsBoundStatementResult(t *testing.T) {
 		require.Equal(t, int64(out.Scale), user.TypeParameters[2].GetInteger())
 	}
 }
+
+func TestEmbeddedIntegerArithmeticDeclinesUncheckedConsumer(t *testing.T) {
+	for _, tc := range []struct{ mo, wire string }{{"+", "add"}, {"-", "subtract"}, {"*", "multiply"}} {
+		t.Run(tc.wire, func(t *testing.T) {
+			bound, err := function.GetFunctionByName(t.Context(), tc.mo, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+			require.NoError(t, err)
+			args := []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_int64)}}, {Typ: planpb.Type{Id: int32(types.T_int64)}}}
+			ret := bound.GetReturnType()
+			out := planpb.Type{Id: int32(ret.Oid), Width: ret.Width, Scale: ret.Scale, NotNullable: function.DeduceNotNullable(bound.GetEncodedOverloadID(), args)}
+			ref := &planpb.ObjectRef{ObjName: tc.mo, Obj: bound.GetEncodedOverloadID()}
+			for _, capabilities := range []uint64{11, 31} {
+				e := exporter{embeddedMO: true, profile: NewEmbeddedExportProfile(capabilities)}
+				ok, err := e.hasSemanticCapability(semanticScalar, tc.wire, ref, args, &out)
+				require.NoError(t, err)
+				require.False(t, ok, "embedded cuDF integer arithmetic does not preserve MO overflow")
+			}
+			flight := exporter{}
+			ok, err := flight.hasSemanticCapability(semanticScalar, tc.wire, ref, args, &out)
+			require.NoError(t, err)
+			require.True(t, ok, "retain the separate Flight admission contract")
+		})
+	}
+}
+
+func TestExactCASEPreservesBoundNullableConditionDescriptor(t *testing.T) {
+	for _, required := range []bool{false, true} {
+		t.Run(fmt.Sprint(required), func(t *testing.T) {
+			decimal := types.New(types.T_decimal64, 15, 2)
+			bound, err := function.GetFunctionByName(t.Context(), "case", []types.Type{types.T_bool.ToType(), decimal, decimal})
+			require.NoError(t, err)
+			args := []*planpb.Expr{
+				{Typ: planpb.Type{Id: int32(types.T_bool), NotNullable: required}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+				{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 15, Scale: 2, NotNullable: true}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+				{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 15, Scale: 2, NotNullable: true}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}}},
+			}
+			result := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 15, Scale: 2, NotNullable: function.DeduceNotNullable(bound.GetEncodedOverloadID(), args)}}
+			require.Equal(t, required, result.Typ.NotNullable)
+			e := exporter{embeddedMO: true, profile: NewEmbeddedExportProfile(31)}
+			wire, err := e.exactScalarExpr(result, &planpb.Function{Func: &planpb.ObjectRef{ObjName: "case", Obj: bound.GetEncodedOverloadID()}, Args: args}, []int{3})
+			require.NoError(t, err)
+			annotation := wire.GetScalarFunction()
+			require.NotNil(t, annotation, "IfThen cannot carry MO's bound descriptor")
+			require.Equal(t, e.functions["mo_decimal_cast"], annotation.FunctionReference)
+			declared := annotation.OutputType.GetUserDefined()
+			require.Equal(t, []int64{64, 15, 2}, []int64{declared.TypeParameters[0].GetInteger(), declared.TypeParameters[1].GetInteger(), declared.TypeParameters[2].GetInteger()})
+			require.Equal(t, required, declared.Nullability == spb.Type_NULLABILITY_REQUIRED)
+			require.NotNil(t, annotation.Arguments[0].GetValue().GetIfThen())
+		})
+	}
+}

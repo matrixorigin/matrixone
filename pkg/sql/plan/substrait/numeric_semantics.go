@@ -81,6 +81,13 @@ func exactScalarName(id int32) string {
 }
 
 func (e *exporter) hasSemanticCapability(kind semanticCapabilityKind, name string, ref *planpb.ObjectRef, args []*planpb.Expr, out *planpb.Type) (bool, error) {
+	if e.embeddedMO && kind == semanticScalar && !decimalSignature(args, out) &&
+		(name == "add" || name == "subtract" || name == "multiply") {
+		// The embedded engine's ordinary integer operators use cuDF arithmetic
+		// without MO's checked overflow. The legacy registry label is not proof
+		// that this consumer preserves errors; decline before starting readers.
+		return false, nil
+	}
 	if e.profile.exactDecimalV1 && (decimalSignature(args, out) || name == "coalesce") {
 		return e.hasExactSemanticCapability(kind, name, ref, args, out)
 	}
@@ -263,7 +270,13 @@ func (e *exporter) exactScalarExpr(result *planpb.Expr, call *planpb.Function, i
 		return nil, notEligiblef(EligibilityExpression, "exact %s overload %d has no declared Sirius semantic equivalence (result %d,%d,%d,required=%t)", name, call.Func.Obj, result.Typ.Id, result.Typ.Width, result.Typ.Scale, result.Typ.NotNullable)
 	}
 	if id == function.CASE {
-		return e.caseExpr(result, call, inputs)
+		branch, err := e.caseExpr(result, call, inputs)
+		if err != nil {
+			return nil, err
+		}
+		// IfThen carries no declared output type. Native inference from only
+		// the value arms loses MO's nullable-condition result annotation.
+		return e.scalar("mo_decimal_cast", &result.Typ, branch), nil
 	}
 	arguments := call.Args
 	if id == function.CAST {

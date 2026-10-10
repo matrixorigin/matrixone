@@ -111,10 +111,53 @@ func TestEmbeddedSiriusPublicMOReader(t *testing.T) {
 			})
 		}
 	})
+	t.Run("CASE bound nullable condition with required arms", func(t *testing.T) {
+		execSQLRequire(t, ctx, db, "create table case_required (id int not null primary key, a decimal(15,2) not null, b decimal(15,2) not null)")
+		execSQLRequire(t, ctx, db, "insert into case_required values (1,1.25,2.50),(2,0,2.50)")
+		statement := "select id,case when a/a>0 then a else b end as chosen from case_required order by id"
+		names, values := readSiriusPublicRows(t, ctx, db, statement)
+		gpuNames, gpuValues := readSiriusPublicRows(t, ctx, db, "/*+ SIDECAR GPU */ "+statement)
+		require.Equal(t, names, gpuNames)
+		require.Equal(t, values, gpuValues)
+		require.Contains(t, gpuNames[1], "nullable=true/true")
+		require.Contains(t, gpuNames[1], "decimal=15,2/true")
+		require.Equal(t, [][]sql.NullString{{{String: "1", Valid: true}, {String: "1.25", Valid: true}}, {{String: "2", Valid: true}, {String: "2.50", Valid: true}}}, gpuValues)
+	})
 	t.Run("DATE extraction values and metadata", func(t *testing.T) {
+		var original string
+		require.NoError(t, db.QueryRowContext(ctx, "select @@session.sql_mode").Scan(&original))
+		t.Cleanup(func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+			defer stop()
+			execSQLRequire(t, cleanup, db, "set session sql_mode='"+strings.ReplaceAll(original, "'", "''")+"'")
+		})
+		execSQLRequire(t, ctx, db, "set session sql_mode=''")
 		execSQLRequire(t, ctx, db, "create table date_input (id int not null primary key, v date)")
-		execSQLRequire(t, ctx, db, "insert into date_input values (1,'0001-01-01'),(2,'2000-02-29'),(3,'9999-12-31'),(4,NULL)")
+		execSQLRequire(t, ctx, db, "insert into date_input values (1,'0001-01-01'),(2,'2000-02-29'),(3,'9999-12-31'),(4,NULL),(5,'0000-00-00')")
 		compare("select id,extract(year from v),extract(month from v),extract(day from v) from date_input order by id")
+		names, values := readSiriusPublicRows(t, ctx, db, "/*+ SIDECAR GPU */ select extract(year from v),extract(month from v),extract(day from v) from date_input where id=5")
+		require.Len(t, names, 3)
+		require.Equal(t, [][]sql.NullString{{{String: "0", Valid: true}, {String: "0", Valid: true}, {String: "0", Valid: true}}}, values)
+	})
+	t.Run("unchecked integer arithmetic declines before execution", func(t *testing.T) {
+		for _, statement := range []string{
+			"select max(c),count(*)+9223372036854775807 from d",
+			"select max(c),-9223372036854775807-count(*) from d",
+			"select max(c),count(*)*9223372036854775807 from d",
+		} {
+			t.Run(statement, func(t *testing.T) {
+				var control, declined *mysql.MySQLError
+				require.ErrorAs(t, readSiriusPublicError(t, ctx, db, statement), &control)
+				require.Equal(t, uint16(1690), control.Number)
+				require.Equal(t, "22003", string(control.SQLState[:]))
+				require.ErrorAs(t, readSiriusPublicError(t, ctx, db, "/*+ SIDECAR GPU */ "+statement), &declined)
+				require.Equal(t, uint16(1105), declined.Number)
+				require.Contains(t, declined.Message, "not eligible")
+			})
+		}
+		// The same runtime still accepts integral aggregates and checked decimal
+		// arithmetic after declining the unsupported ordinary integer operators.
+		compare("select max(c),count(*) from d")
 	})
 	t.Run("numeric errors and healthy reuse", func(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create table numeric_errors (id int not null primary key, v decimal(38,0), c decimal(65,0))")
