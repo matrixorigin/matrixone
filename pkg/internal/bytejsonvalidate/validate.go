@@ -150,23 +150,33 @@ func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth 
 			continue
 		}
 		childOffset := uint64(binary.LittleEndian.Uint32(entry[valTypeSize:]))
+		if childType >= typeInt64 && childType <= typeFloat64 {
+			// Fixed-width scalars need neither a tail view nor container
+			// dispatch. Read each descriptor only after the previous callback;
+			// the exact payload view retains its original borrowed capacity.
+			if childOffset < payloadStart || childOffset > documentSize-numberSize {
+				return false
+			}
+			if storedWork != nil {
+				if childOffset < previousRangeEnd {
+					return false
+				}
+				previousRangeEnd = childOffset + numberSize
+				if !charge(storedWork, 1) {
+					return false
+				}
+			}
+			if !charge(remaining, numberSize) || !validScalar(childType, data[childOffset:childOffset+numberSize]) {
+				return false
+			}
+			continue
+		}
 		if childOffset < payloadStart || childOffset >= documentSize {
 			return false
 		}
-		childData := data[childOffset:]
-		if childType >= typeInt64 && childType <= typeFloat64 {
-			// Keep common fixed-width framing here; scalar semantics still
-			// run through the caller's predicate below, including rejection.
-			if len(childData) < numberSize {
-				return false
-			}
-			childData = childData[:numberSize]
-		} else {
-			var ok bool
-			childData, ok = childValue(childType, childData)
-			if !ok {
-				return false
-			}
+		childData, ok := childValue(childType, data[childOffset:])
+		if !ok {
+			return false
 		}
 		if storedWork != nil {
 			if childOffset < previousRangeEnd {

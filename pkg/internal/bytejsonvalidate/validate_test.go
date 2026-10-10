@@ -180,6 +180,110 @@ func TestContainerMutableValueTable(t *testing.T) {
 	}
 }
 
+func TestContainerNumericMutableDescriptors(t *testing.T) {
+	for _, stored := range []bool{false, true} {
+		for _, change := range []string{"type", "unknown", "truncated", "overlap", "nonfinite", "header"} {
+			t.Run(fmt.Sprintf("stored=%v/%s", stored, change), func(t *testing.T) {
+				data := testScalarArray([]byte{typeInt64, typeInt64}, [][]byte{make([]byte, numberSize), make([]byte, numberSize)})
+				second := headerSize + valEntrySize
+				payload := headerSize + 2*valEntrySize
+				visits := 0
+				predicate := func(tp byte, scalar []byte) bool {
+					visits++
+					if visits == 1 {
+						switch change {
+						case "type":
+							data[second] = typeUint64
+						case "unknown":
+							data[second] = 0xfd
+						case "truncated":
+							binary.LittleEndian.PutUint32(data[second+1:], uint32(len(data)-numberSize+1))
+						case "overlap":
+							binary.LittleEndian.PutUint32(data[second+1:], uint32(payload))
+						case "nonfinite":
+							data[second] = typeFloat64
+							binary.LittleEndian.PutUint64(data[payload+numberSize:], math.Float64bits(math.Inf(1)))
+						case "header":
+							binary.LittleEndian.PutUint32(data, 0)
+							binary.LittleEndian.PutUint32(data[docSizeOff:], 0)
+						}
+					} else if visits != 2 {
+						t.Fatal("extra callback")
+					} else if change == "type" && tp != typeUint64 || change == "nonfinite" && tp != typeFloat64 {
+						t.Fatalf("stale descriptor: type=%x", tp)
+					}
+					return benchmarkScalar(tp, scalar)
+				}
+				valid, depthExceeded := false, false
+				if stored {
+					valid, depthExceeded = StoredContainer(typeArray, data, predicate, 5)
+				} else {
+					valid = Container(typeArray, data, predicate)
+				}
+				wantValid := change == "type" || change == "header" || change == "overlap" && !stored
+				wantVisits := 2
+				if change == "unknown" || change == "truncated" || change == "overlap" && stored {
+					wantVisits = 1
+				}
+				if valid != wantValid || depthExceeded || visits != wantVisits {
+					t.Fatalf("valid=%v depth=%v visits=%d want=%v/%d", valid, depthExceeded, visits, wantValid, wantVisits)
+				}
+			})
+		}
+	}
+}
+
+func TestContainerNumericReentrantMutation(t *testing.T) {
+	for _, stored := range []bool{false, true} {
+		for _, reject := range []bool{false, true} {
+			t.Run(fmt.Sprintf("stored=%v/reject=%v", stored, reject), func(t *testing.T) {
+				data := testScalarArray([]byte{typeInt64, typeInt64}, [][]byte{make([]byte, numberSize), make([]byte, numberSize)})
+				validate := func(predicate func(byte, []byte) bool) bool {
+					if stored {
+						valid, depth := StoredContainer(typeArray, data, predicate, 5)
+						if depth {
+							t.Fatal("unexpected depth result")
+						}
+						return valid
+					}
+					return Container(typeArray, data, predicate)
+				}
+				outer, inner := 0, 0
+				valid := validate(func(tp byte, scalar []byte) bool {
+					outer++
+					if outer == 1 {
+						nested := validate(func(tp byte, scalar []byte) bool {
+							inner++
+							if inner == 1 {
+								data[headerSize+valEntrySize] = typeUint64
+								if reject {
+									data[headerSize+valEntrySize] = 0xfd
+								}
+							} else if tp != typeUint64 {
+								t.Fatalf("stale inner descriptor: %x", tp)
+							}
+							return benchmarkScalar(tp, scalar)
+						})
+						if nested == reject {
+							t.Fatalf("nested valid=%v reject=%v", nested, reject)
+						}
+					} else if tp != typeUint64 {
+						t.Fatalf("stale outer descriptor: %x", tp)
+					}
+					return benchmarkScalar(tp, scalar)
+				})
+				wantVisits := 2
+				if reject {
+					wantVisits = 1
+				}
+				if valid == reject || outer != wantVisits || inner != wantVisits {
+					t.Fatalf("valid=%v outer=%d inner=%d want=%d", valid, outer, inner, wantVisits)
+				}
+			})
+		}
+	}
+}
+
 func TestContainerScalarBounds(t *testing.T) {
 	for _, tp := range []byte{typeInt64, typeUint64, typeFloat64, typeString, typeDecimal, typeDate, typeTime, typeDatetime, typeBlob, typeOpaque, typeBit, typeArray, typeObject, 0xfd} {
 		t.Run(fmt.Sprintf("type=%x", tp), func(t *testing.T) {
