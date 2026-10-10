@@ -221,11 +221,11 @@ func DiagnosticOutcome(err error) string {
 	if err == nil {
 		return "success"
 	}
-	if errors.Is(err, context.Canceled) || diagnosticMOErrorCode(err, moerr.ErrQueryInterrupted) {
-		return "cancelled"
-	}
 	if errors.Is(err, context.DeadlineExceeded) || diagnosticMOErrorCode(err, moerr.ErrQueryTimeout) {
 		return "timeout"
+	}
+	if errors.Is(err, context.Canceled) || diagnosticMOErrorCode(err, moerr.ErrQueryInterrupted) {
+		return "cancelled"
 	}
 	return "failed"
 }
@@ -249,6 +249,11 @@ func diagnosticMOErrorCode(err error, code uint16) bool {
 }
 
 func (d *StatementDiagnostics) SetSummary(s resource.StatementResourceSummary, wall, wait time.Duration, waitKnown bool) {
+	waitKnown = waitKnown && wait >= 0
+	if !waitKnown {
+		wait = 0
+	}
+	wall = max(0, wall)
 	elapsed := wall - wait
 	if elapsed < 0 {
 		elapsed = 0

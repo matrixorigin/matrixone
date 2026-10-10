@@ -61,11 +61,7 @@ func TestStatementDiagnosticLevel(t *testing.T) {
 			require.Equal(t, tc.reason, reasons)
 		})
 	}
-	for _, err := range []error{context.Canceled, fmt.Errorf("wrapped: %w", context.DeadlineExceeded), fmt.Errorf("other")} {
-		require.NotEqual(t, "success", DiagnosticOutcome(err))
-	}
-	require.Equal(t, "cancelled", DiagnosticOutcome(context.Canceled))
-	require.Equal(t, "timeout", DiagnosticOutcome(fmt.Errorf("wrapped: %w", context.DeadlineExceeded)))
+
 }
 
 func TestStatementDiagnosticBudgets(t *testing.T) {
@@ -116,17 +112,71 @@ func TestBoundDiagnosticString(t *testing.T) {
 	}
 }
 
-func TestDiagnosticOutcomeWrappedMOErrors(t *testing.T) {
+func TestDiagnosticOutcome(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
+		name string
 		err  error
 		want string
 	}{
-		{fmt.Errorf("wrapped: %w", moerr.NewQueryInterrupted(ctx)), "cancelled"},
-		{errors.Join(moerr.NewInternalErrorNoCtx("secondary"), fmt.Errorf("wrapped: %w", moerr.NewQueryTimeout(ctx))), "timeout"},
-		{moerr.NewInternalErrorNoCtx("context canceled"), "failed"},
+		{"success", nil, "success"},
+		{"cancelled", context.Canceled, "cancelled"},
+		{"deadline", fmt.Errorf("wrapped: %w", context.DeadlineExceeded), "timeout"},
+		{"interrupted", fmt.Errorf("wrapped: %w", moerr.NewQueryInterrupted(ctx)), "cancelled"},
+		{"query timeout", errors.Join(moerr.NewInternalErrorNoCtx("secondary"), fmt.Errorf("wrapped: %w", moerr.NewQueryTimeout(ctx))), "timeout"},
+		{"converted deadline", moerr.ConvertGoError(ctx, context.DeadlineExceeded), "timeout"},
+		{"message only", moerr.NewInternalErrorNoCtx("context canceled"), "failed"},
 	} {
-		require.Equal(t, tc.want, DiagnosticOutcome(tc.err))
+		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, DiagnosticOutcome(tc.err)) })
+	}
+	for _, cancelled := range []error{context.Canceled, moerr.NewQueryInterrupted(ctx)} {
+		for _, timeout := range []error{context.DeadlineExceeded, moerr.NewQueryTimeout(ctx)} {
+			for _, err := range []error{errors.Join(cancelled, timeout), errors.Join(timeout, cancelled)} {
+				require.Equal(t, "timeout", DiagnosticOutcome(err))
+				require.Equal(t, "timeout", DiagnosticOutcome(fmt.Errorf("wrapped: %w", err)))
+			}
+		}
+	}
+}
+
+func TestStatementDiagnosticWaitActive(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		wall, wait time.Duration
+		known      bool
+		elapsed    time.Duration
+		wantKnown  bool
+	}{
+		{"measured zero", 5 * time.Second, 0, true, 5 * time.Second, true},
+		{"measured wait", 5 * time.Second, 2 * time.Second, true, 3 * time.Second, true},
+		{"wait exceeds wall", 5 * time.Second, 6 * time.Second, true, 0, true},
+		{"unknown positive", 5 * time.Second, 2 * time.Second, false, 5 * time.Second, false},
+		{"unknown sentinel", 5 * time.Second, -1, false, 5 * time.Second, false},
+		{"invalid measured wait", 5 * time.Second, -1, true, 5 * time.Second, false},
+		{"negative wall", time.Duration(math.MinInt64), time.Duration(math.MaxInt64), true, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &StatementDiagnostics{Version: DiagnosticsVersion, Level: 1, Outcome: "success"}
+			d.SetSummary(resource.StatementResourceSummary{}, tc.wall, tc.wait, tc.known)
+			var b bytes.Buffer
+			require.NoError(t, d.WriteJSON(&b))
+			var payload ExplainData
+			require.NoError(t, json.Unmarshal(b.Bytes(), &payload))
+			summary := payload.StatementDiagnostics.Summary
+			require.Equal(t, uint64(tc.elapsed), summary.ElapsedNS)
+			require.Equal(t, tc.wantKnown, summary.WaitActiveKnown)
+			if tc.wantKnown {
+				require.Equal(t, uint64(tc.wait), summary.WaitActiveNS)
+			} else {
+				require.Zero(t, summary.WaitActiveNS)
+				require.NotContains(t, b.String(), `"wait_active_ns"`)
+			}
+			if tc.wall < 0 {
+				require.Zero(t, summary.WallNS)
+			} else {
+				require.Equal(t, uint64(tc.wall), summary.WallNS)
+			}
+		})
 	}
 }
 

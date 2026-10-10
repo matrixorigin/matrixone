@@ -36,13 +36,15 @@ func TestTerminalDiagnosticsEarlyErrorAndAggregation(t *testing.T) {
 	reports := 0
 	defer gostub.Stub(&ReportStatement, func(context.Context, *StatementInfo) error { reports++; return nil }).Reset()
 	for _, tc := range []struct {
-		name   string
-		err    error
-		delta  resource.Delta
-		retain bool
-	}{{name: "ordinary"}, {name: "parse cancellation", err: context.Canceled, retain: true}, {name: "terminal IO", delta: resource.Delta{Usage: resource.Usage{S3ReadBytes: 1 << 30}}, retain: true}} {
+		name    string
+		outcome string
+		err     error
+		delta   resource.Delta
+		retain  bool
+	}{{name: "ordinary"}, {name: "parse cancellation", err: context.Canceled, outcome: "cancelled", retain: true}, {name: "joined deadline", err: errors.Join(context.Canceled, context.DeadlineExceeded), outcome: "timeout", retain: true}, {name: "terminal IO", delta: resource.Delta{Usage: resource.Usage{S3ReadBytes: 1 << 30}}, outcome: "success", retain: true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &StatementInfo{ResponseAt: time.Now(), Duration: time.Millisecond, StatementType: "Select", SqlSourceType: "external_sql"}
+			t.Cleanup(s.FreeExecPlan)
 			root := resource.NewRoot(resource.ConnExternal)
 			root.AddLocal(tc.delta)
 			s.SetResourceRoot(root)
@@ -54,7 +56,7 @@ func TestTerminalDiagnosticsEarlyErrorAndAggregation(t *testing.T) {
 				require.NoError(t, json.Unmarshal(s.ExecPlan2Json(context.Background()), &payload))
 				d := payload.StatementDiagnostics
 				require.NotNil(t, d)
-				require.Equal(t, models.DiagnosticOutcome(tc.err), d.Outcome)
+				require.Equal(t, tc.outcome, d.Outcome)
 				require.Equal(t, tc.delta.Usage.S3ReadBytes, d.Summary.S3ReadBytes)
 				require.False(t, d.Summary.WaitActiveKnown)
 				require.Zero(t, d.CapturedLevel)
@@ -64,10 +66,9 @@ func TestTerminalDiagnosticsEarlyErrorAndAggregation(t *testing.T) {
 			before := reports
 			s.EndStatement(context.Background(), tc.err, 1, 10, 1)
 			require.Equal(t, before, reports)
-			s.FreeExecPlan()
 		})
 	}
-	require.Equal(t, 3, reports)
+	require.Equal(t, 4, reports)
 }
 
 // Exercise the production aggregation and export path, rather than only its predicate.

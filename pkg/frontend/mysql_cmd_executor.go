@@ -7227,10 +7227,10 @@ func newJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses Fe
 	}
 }
 
-func newSchedulingTracePlanHandler(ctx context.Context, trace schedule.Trace) *jsonPlanHandler {
+func newSchedulingTracePlanHandler(ctx context.Context, trace schedule.Trace, waitActiveCost time.Duration) *jsonPlanHandler {
 	if motrace.UseCompactStatementDiagnostics() {
 		d := &models.StatementDiagnostics{Version: models.DiagnosticsVersion, Level: 1, CapturedLevel: 1, Reasons: 1 << 9, Outcome: "failed", Scheduling: projectDiagnosticScheduling(&trace), Detail: models.DiagnosticDetail{Capture: "compile_failed"}}
-		return &jsonPlanHandler{statsBytes: statistic.DefaultStatsArray, persistSchedulingTrace: true, marshalHandler: &marshalPlanHandler{marshalPlan: &models.ExplainData{StatementDiagnostics: d}}}
+		return &jsonPlanHandler{statsBytes: statistic.DefaultStatsArray, persistSchedulingTrace: true, marshalHandler: &marshalPlanHandler{marshalPlan: &models.ExplainData{StatementDiagnostics: d}, marshalPlanConfig: marshalPlanConfig{waitActiveCost: waitActiveCost}}}
 	}
 	trace = trace.Clone()
 	h := &marshalPlanHandler{
@@ -7275,6 +7275,7 @@ func (h *jsonPlanHandler) Free() {
 }
 
 type marshalPlanConfig struct {
+	// Negative means the transaction admission measurement is unavailable.
 	waitActiveCost          time.Duration
 	schedulingTrace         *schedule.Trace
 	schedulingTraceRecorder *schedule.TraceRecorder
@@ -7352,8 +7353,9 @@ func newMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 	uuid := uuid.UUID(stmt.StatementID)
 	stmt.MarkResponseAt()
 	h := &marshalPlanHandler{
-		stmt: stmt,
-		uuid: uuid,
+		stmt:              stmt,
+		uuid:              uuid,
+		marshalPlanConfig: marshalPlanConfig{waitActiveCost: -1},
 	}
 	for _, opt := range opts {
 		opt(&h.marshalPlanConfig)
@@ -7375,7 +7377,7 @@ func newMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 	}
 	if needFullPlan {
 		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
-		h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
+		h.marshalPlan.NewPlanStats.SetWaitActiveCost(max(0, h.waitActiveCost))
 		if phyPlan != nil {
 			h.marshalPlan.PhyPlan = *phyPlan.CloneForExport()
 		}
@@ -7404,7 +7406,7 @@ func (h *marshalPlanHandler) resolveSchedulingTrace(includeNormalLocal bool) {
 // check longQueryTime, need after StatementInfo.MarkResponseAt
 // MoLogger NOT record ExecPlan
 func (h *marshalPlanHandler) needMarshalPlan() bool {
-	return (h.stmt.Duration-h.waitActiveCost) > motrace.GetLongQueryTime() &&
+	return (max(0, h.stmt.Duration)-max(0, h.waitActiveCost)) > motrace.GetLongQueryTime() &&
 		!h.stmt.IsMoLogger()
 }
 
@@ -7560,7 +7562,7 @@ func sanitizeNonFiniteFloatValue(v reflect.Value, seen map[uintptr]struct{}) {
 var sqlQueryIgnoreExecPlan = []byte(`{}`)
 var sqlQueryNoRecordExecPlan = []byte(`{"code":200,"message":"sql query no record execution plan"}`)
 
-func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByte statistic.StatsArray, stats motrace.Statistic) {
+func (h *marshalPlanHandler) Stats(ctx context.Context, _ FeSession) (statsByte statistic.StatsArray, stats motrace.Statistic) {
 	statsByte.Reset()
 	if h.query != nil {
 		options := &explain.MarshalPlanOptions
@@ -7599,9 +7601,6 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 		statsInfo.PlanStage.BuildPlanStatsIOConsumption -
 		(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 	if totalTime < 0 {
-		if !h.isInternalSubStmt && ses != nil && h.stmt != nil {
-			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s", uuid.UUID(h.stmt.StatementID).String(), h.stmt.StatementType)
-		}
 		v2.GetTraceNegativeCUCounter("cpu").Inc()
 	} else {
 		statsByte.WithTimeConsumed(float64(totalTime))

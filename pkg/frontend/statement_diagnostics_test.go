@@ -17,14 +17,20 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
@@ -142,18 +148,19 @@ func BenchmarkCompactStatementDiagnostics(b *testing.B) {
 	for _, tc := range []struct {
 		name     string
 		duration time.Duration
-	}{{"L0", 0}, {"L1", 2 * time.Second}, {"L2", 5 * time.Second}, {"L3", 17 * time.Second}} {
+		preview  bool
+	}{{"L0/no_preview", 0, false}, {"L0/executed_preview", 0, true}, {"L1", 2 * time.Second, true}, {"L2", 5 * time.Second, true}, {"L3", 17 * time.Second, true}} {
 		b.Run(tc.name, func(b *testing.B) {
 			q, phy := compactDiagnosticFixture()
-			if tc.name != "L0" {
-				phy.Resource = &resource.StatementResourceSummary{}
+			if tc.preview {
+				phy.Resource = &resource.StatementResourceSummary{StatementWallNS: uint64(tc.duration), AttemptCount: 1}
 			}
 			s := &motrace.StatementInfo{ResponseAt: time.Now(), Duration: tc.duration}
 			ctx := context.Background()
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				h := NewJsonPlanHandler(ctx, s, nil, q, phy)
+				h := NewJsonPlanHandler(ctx, s, nil, q, phy, WithWaitActiveCost(0))
 				h.Marshal(ctx)
 				h.Free()
 			}
@@ -242,4 +249,102 @@ func TestCompactDiagnosticLoggerExclusionPreservesTopLevelStats(t *testing.T) {
 	require.Zero(t, stats.GetTimeConsumed(), "logger must not run discarded composite resource projection")
 	require.Equal(t, int64(10), scan.RowsRead)
 	require.Equal(t, "{}", string(h.Marshal(context.Background())))
+}
+
+func TestCompactDiagnosticCompileErrorWait(t *testing.T) {
+	defer gostub.Stub(&motrace.UseCompactStatementDiagnostics, func() bool { return true }).Reset()
+	for _, tc := range []struct {
+		name          string
+		handler, txn  bool
+		wait, elapsed time.Duration
+		known         bool
+		level         int
+	}{
+		{"measured zero", true, true, 0, 17 * time.Second, true, 3},
+		{"measured wait", true, true, 16 * time.Second, time.Second, true, 2},
+		{"wait exceeds wall", true, true, 20 * time.Second, 0, true, 2},
+		{"invalid measurement", true, true, -1, 17 * time.Second, false, 3},
+		{"nil handler", false, false, 0, 17 * time.Second, false, 3},
+		{"no transaction", true, false, 0, 17 * time.Second, false, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			stmt := &motrace.StatementInfo{}
+			t.Cleanup(stmt.FreeExecPlan)
+			ses := &Session{}
+			ses.SetTStmt(stmt)
+			if tc.handler {
+				ses.txnHandler = &TxnHandler{}
+			}
+			if tc.txn {
+				txn := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+				txn.EXPECT().GetWaitActiveCost().Return(tc.wait).Times(1)
+				ses.txnHandler.txnOp, ses.txnHandler.txnCtx = txn, ctx
+			}
+			cwft := &TxnComputationWrapper{ses: ses}
+			attempt := cwft.schedulingTrace.StartAttempt()
+			cwft.schedulingTrace.RecordFailure(attempt, "candidate-discovery", schedule.Worker{})
+			cwft.recordSchedulingTraceOnCompileError(ctx)
+			require.NotNil(t, stmt.ExecPlan)
+			require.True(t, stmt.ResponseAt.IsZero(), "capture must not mark response before terminal completion")
+			// Only the copied scalar may survive transaction cleanup.
+			ses.txnHandler = nil
+			h := stmt.ExecPlan.(*jsonPlanHandler)
+			require.True(t, h.SetStatementDiagnostics(ctx, resource.StatementResourceSummary{StatementWallNS: uint64(17 * time.Second)}, context.Canceled))
+			d := decodeCompactDiagnostic(t, h)
+			require.Equal(t, "cancelled", d.Outcome)
+			require.Equal(t, tc.level, d.Level)
+			require.Equal(t, tc.known, d.Summary.WaitActiveKnown)
+			require.Equal(t, uint64(tc.elapsed), d.Summary.ElapsedNS)
+			require.Equal(t, 1, d.Scheduling.FailureCount)
+			if tc.known {
+				require.Equal(t, uint64(tc.wait), d.Summary.WaitActiveNS)
+			} else {
+				require.NotContains(t, string(h.Marshal(ctx)), `"wait_active_ns"`)
+			}
+		})
+	}
+}
+
+func TestCompactDiagnosticUnknownWaitAdmission(t *testing.T) {
+	defer gostub.Stub(&motrace.UseCompactStatementDiagnostics, func() bool { return true }).Reset()
+	threshold := motrace.GetLongQueryTime()
+	for _, tc := range []struct {
+		name string
+		wall time.Duration
+		opts []marshalPlanOptions
+	}{
+		{"unsupplied wait at boundary", threshold, nil},
+		{"unknown wait at boundary", threshold, []marshalPlanOptions{WithWaitActiveCost(-1)}},
+		{"wait exceeds wall", threshold, []marshalPlanOptions{WithWaitActiveCost(threshold + time.Second)}},
+		{"negative wall", time.Duration(math.MinInt64), []marshalPlanOptions{WithWaitActiveCost(time.Duration(math.MaxInt64))}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q, phy := compactDiagnosticFixture()
+			phy.Resource = &resource.StatementResourceSummary{}
+			h := NewJsonPlanHandler(context.Background(), &motrace.StatementInfo{ResponseAt: time.Now(), Duration: tc.wall}, nil, q, phy, tc.opts...)
+			t.Cleanup(h.Free)
+			require.Equal(t, "{}", string(h.Marshal(context.Background())))
+		})
+	}
+}
+
+func TestCompactDiagnosticUnknownWaitTerminalRefresh(t *testing.T) {
+	defer gostub.Stub(&motrace.UseCompactStatementDiagnostics, func() bool { return true }).Reset()
+	ctx := context.Background()
+	stmt := &motrace.StatementInfo{}
+	t.Cleanup(stmt.FreeExecPlan)
+	ses := &Session{}
+	ses.SetTStmt(stmt)
+	cwft := &TxnComputationWrapper{ses: ses}
+	require.NoError(t, cwft.RecordCompoundStmt(ctx, statistic.DefaultStatsArray))
+	h := stmt.ExecPlan.(*jsonPlanHandler)
+	for _, wall := range []time.Duration{5 * time.Second, time.Second} {
+		require.True(t, h.SetStatementDiagnostics(ctx, resource.StatementResourceSummary{StatementWallNS: uint64(wall)}, errors.Join(context.Canceled, context.DeadlineExceeded)))
+		d := decodeCompactDiagnostic(t, h) // Marshal between updates also challenges cache invalidation.
+		require.Equal(t, "timeout", d.Outcome)
+		require.False(t, d.Summary.WaitActiveKnown)
+		require.Equal(t, uint64(wall), d.Summary.ElapsedNS)
+		require.NotContains(t, string(h.Marshal(ctx)), `"wait_active_ns"`)
+	}
 }

@@ -1,4 +1,5 @@
 # Issue #23386: bounded statement diagnostics
+- Status: in progress
 Revision 3, 2026-10-10. Owner: observability/frontend maintainers.
 Tracking: [issue #23386](https://github.com/matrixorigin/matrixone/issues/23386); source baseline `888e1ea4469b6c2bf7a23c31f3376654cb8a30cc`. The implementing PR links this RFC.
 Revision 2 specifies the minimal schema: optional scheduling worker/failure arrays can be omitted; bounded candidate comparisons deduplicate physical stats; reserve 2048 bytes for final header and encode rows individually.

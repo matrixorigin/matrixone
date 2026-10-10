@@ -31,7 +31,7 @@ func (h *marshalPlanHandler) captureStatementDiagnostics(ctx context.Context, ph
 	if phy != nil {
 		preview = phy.Resource
 	}
-	elapsed := h.stmt.Duration - h.waitActiveCost
+	elapsed := max(0, h.stmt.Duration) - max(0, h.waitActiveCost)
 	if elapsed < 0 {
 		elapsed = 0
 	}
@@ -86,13 +86,12 @@ func (h *jsonPlanHandler) SetStatementDiagnostics(ctx context.Context, summary r
 	if h.marshalHandler != nil && h.marshalHandler.isInternalSubStmt {
 		return false
 	}
-	var wait time.Duration
-	known := false
+	wait := time.Duration(-1)
 	if h.marshalHandler != nil {
 		wait = h.marshalHandler.waitActiveCost
-		known = wait >= 0
 	}
-	elapsed := time.Duration(summary.StatementWallNS) - wait
+	known := wait >= 0
+	elapsed := max(0, time.Duration(summary.StatementWallNS)) - max(0, wait)
 	if elapsed < 0 {
 		elapsed = 0
 	}
@@ -107,7 +106,7 @@ func (h *jsonPlanHandler) SetStatementDiagnostics(ctx context.Context, summary r
 	if d == nil {
 		d = &models.StatementDiagnostics{Version: models.DiagnosticsVersion, Detail: models.DiagnosticDetail{Capture: "not_selected_before_release"}}
 		if h.marshalHandler == nil {
-			h.marshalHandler = &marshalPlanHandler{}
+			h.marshalHandler = &marshalPlanHandler{marshalPlanConfig: marshalPlanConfig{waitActiveCost: -1}}
 		}
 		h.marshalHandler.marshalPlan = &models.ExplainData{StatementDiagnostics: d}
 	}
