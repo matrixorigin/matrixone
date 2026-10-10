@@ -53,17 +53,18 @@ type MockCompilerContext struct {
 	ctx context.Context
 
 	// Add function fields for test overrides
-	GetAccountNameFunc      func() string
-	GetAccountIdFunc        func() (uint32, error)
-	DatabaseExistsFunc      func(string, *Snapshot) bool
-	GetDatabaseIdFunc       func(string, *Snapshot) (uint64, error)
-	ResolveAccountIdsFunc   func([]string) ([]uint32, error)
-	ResolveFunc             func(string, string, *Snapshot) (*ObjectRef, *TableDef)
-	ResolveVariableFunc     func(string, bool, bool) (interface{}, error)
-	ResolveVariableTypeFunc func(string, bool, bool) (Type, error)
-	GetProcessFunc          func() *process.Process
-	proc                    *process.Process
-	internalSQLExecutor     executor.SQLExecutor
+	GetAccountNameFunc                    func() string
+	GetAccountIdFunc                      func() (uint32, error)
+	DatabaseExistsFunc                    func(string, *Snapshot) bool
+	GetDatabaseIdFunc                     func(string, *Snapshot) (uint64, error)
+	ResolveAccountIdsFunc                 func([]string) ([]uint32, error)
+	ResolveFunc                           func(string, string, *Snapshot) (*ObjectRef, *TableDef)
+	ResolveVariableFunc                   func(string, bool, bool) (interface{}, error)
+	ResolveVariableTypeFunc               func(string, bool, bool) (Type, error)
+	ResolveVariableRegexpStringResultFunc func(string) (bool, error)
+	GetProcessFunc                        func() *process.Process
+	proc                                  *process.Process
+	internalSQLExecutor                   executor.SQLExecutor
 }
 
 func (m *MockCompilerContext) GetLowerCaseTableNames() int64 {
@@ -164,6 +165,13 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	}
 
 	return nil, moerr.NewInternalErrorf(m.ctx, "var not found: %s", varName)
+}
+
+func (m *MockCompilerContext) ResolveVariableRegexpStringResult(varName string) (bool, error) {
+	if m.ResolveVariableRegexpStringResultFunc != nil {
+		return m.ResolveVariableRegexpStringResultFunc(varName)
+	}
+	return false, nil
 }
 
 func (m *MockCompilerContext) ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (Type, error) {

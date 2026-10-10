@@ -275,7 +275,7 @@ func (c *Compile) SetPlanGenerationReused(reused bool) {
 // frontend or another streaming consumer.
 func (c *Compile) FreezeResultMetadata() {
 	if c != nil {
-		c.resultMetadataFrozen = true
+		c.resultMetadataFrozen.Store(true)
 	}
 }
 
@@ -312,7 +312,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.clearLoadUniqueIndexPromotion()
 	c.executionGeneration = 0
 	c.retryTimes = 0
-	c.resultMetadataFrozen = false
+	c.resultMetadataFrozen.Store(false)
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
 
 	if c.lockMeta != nil {
@@ -523,7 +523,7 @@ func (c *Compile) clear() {
 	c.planGenerationReused = false
 	c.stringShuffleHashAlgorithm = process.StringShuffleHashLegacy
 	c.stringShuffleHashAlgorithmFrozen = false
-	c.resultMetadataFrozen = false
+	c.resultMetadataFrozen.Store(false)
 	c.planGenerationRebuilt = false
 	c.sequenceState = sequenceStatementState{}
 

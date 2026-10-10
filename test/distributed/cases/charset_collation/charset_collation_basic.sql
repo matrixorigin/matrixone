@@ -145,6 +145,22 @@ CREATE TABLE t_utf8mb4_unicode_ci (
     name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
+-- Native Unicode collation must be used consistently by predicates, grouping,
+-- ORDER BY, and window peer/partition evaluation.
+INSERT INTO t_utf8mb4_unicode_ci VALUES
+(1, 'Z'), (2, 'a'), (3, 'A'), (4, 'b');
+SELECT id FROM t_utf8mb4_unicode_ci WHERE name = 'a' ORDER BY id;
+SELECT id FROM t_utf8mb4_unicode_ci WHERE name IN ('a') ORDER BY id;
+SELECT id FROM t_utf8mb4_unicode_ci WHERE name NOT IN ('a') ORDER BY id;
+SELECT id, DENSE_RANK() OVER (ORDER BY name) AS r
+FROM t_utf8mb4_unicode_ci ORDER BY id;
+SELECT id, COUNT(*) OVER (PARTITION BY name) AS c
+FROM t_utf8mb4_unicode_ci ORDER BY id;
+SELECT COUNT(*) AS group_count
+FROM (SELECT name FROM t_utf8mb4_unicode_ci GROUP BY name) AS grouped;
+SELECT name FROM t_utf8mb4_unicode_ci ORDER BY name, id;
+SELECT name FROM t_utf8mb4_unicode_ci ORDER BY name, id LIMIT 2;
+
 -- @case
 -- @desc: Test column level charset and collation
 -- @label:bvt

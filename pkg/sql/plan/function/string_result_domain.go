@@ -156,6 +156,13 @@ func formattedScalarStringType(typ types.Type) types.Type {
 	return result
 }
 
+// StringResultByteBound exposes the planner's declared/formatted byte bound.
+// known distinguishes an exact zero-width result from an unbounded declaration.
+func StringResultByteBound(typ types.Type) (bytes uint64, known bool) {
+	bound := formattedStringByteBound(typ)
+	return bound.bytes, !bound.unknown
+}
+
 func binaryStringResultType(bound stringResultBound) types.Type {
 	if bound.unknown || bound.bytes > uint64(types.MaxVarBinaryLen) {
 		return types.T_blob.ToType()
@@ -380,9 +387,7 @@ func aesEncryptReturnType(parameters []types.Type) types.Type {
 
 func textStringResultType(bound stringResultBound, charset uint8) types.Type {
 	if bound.unknown || bound.bytes > uint64(types.MaxVarcharLen) {
-		result := types.T_text.ToType()
-		result.Charset = charset
-		return result
+		return types.NewWithCharset(types.T_text, 0, 0, charset)
 	}
 	result := types.NewWithCharset(types.T_varchar, int32(bound.bytes), 0, charset)
 	return result

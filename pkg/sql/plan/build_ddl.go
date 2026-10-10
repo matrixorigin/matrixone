@@ -3331,6 +3331,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		return err
 	}
 	createTable.TableDef.DefaultCharset = tableCharset
+	if types.IsUnicodeCollation(uint8(tableCharset)) {
+		createTable.TableDef.CollationVersion = uint32(types.CollationVersionV1)
+	} else {
+		createTable.TableDef.CollationVersion = uint32(types.CollationVersionLegacy)
+	}
 
 	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
@@ -3435,6 +3440,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				case *tree.AttributeGeneratedAlways:
 					isGenerated = true
 				case *tree.AttributePrimaryKey, *tree.AttributeKey:
+					if err := rejectNativeUnicodePrimaryKey(ctx.GetContext(), colType, colNameOrigin); err != nil {
+						return err
+					}
 					if colType.GetId() == int32(types.T_blob) {
 						return moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
 					}
@@ -3469,6 +3477,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
+					if err := rejectNativeUnicodeUniqueKey(ctx.GetContext(), colType, colNameOrigin); err != nil {
+						return err
+					}
 					if isSetPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in unique index", colNameOrigin))
 
@@ -3669,6 +3680,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				pksMap[name] = true
 			}
 		case *tree.Index:
+			if hasFunctionalKey(def.KeyParts) {
+				if stmt.Temporary || stmt.IsClusterTable || stmt.IsAsSelect || stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
+					return moerr.NewNotSupported(ctx.GetContext(), "functional indexes require ordinary persistent tables")
+				}
+				secondaryIndexInfos = append(secondaryIndexInfos, def)
+				continue
+			}
 			err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
 			if err != nil {
 				return err
@@ -3998,6 +4016,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 			// Reject VIRTUAL generated columns in PRIMARY KEY
 			col := colMap[primaryKey]
+			if err := rejectNativeUnicodePrimaryKey(ctx.GetContext(), col.Typ, col.OriginName); err != nil {
+				return err
+			}
 			if col.GeneratedCol != nil && !col.GeneratedCol.IsStored {
 				return moerr.NewNotSupported(ctx.GetContext(),
 					fmt.Sprintf("defining a virtual generated column '%s' as primary key", col.OriginName))
@@ -4121,6 +4142,16 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	// check Constraint Name (include index/ unique)
+	for i, index := range secondaryIndexInfos {
+		lowered, lowerErr := lowerFunctionalIndex(ctx, createTable.TableDef, index)
+		if lowerErr != nil {
+			return lowerErr
+		}
+		secondaryIndexInfos[i] = lowered
+	}
+	for _, col := range createTable.TableDef.Cols {
+		colMap[col.Name] = col
+	}
 	err = checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
 	if err != nil {
 		return err
@@ -5896,6 +5927,16 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 
 // In MySQL, the CREATE INDEX syntax can only create one index instance at a time
 func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error) {
+	if hasFunctionalKey(stmt.KeyParts) {
+		if stmt.IndexCat != tree.INDEX_CATEGORY_NONE {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "unique or special functional indexes")
+		}
+		index := &tree.Index{Name: string(stmt.Name), KeyParts: stmt.KeyParts, IndexOption: stmt.IndexOption}
+		if stmt.IndexOption != nil {
+			index.KeyType = stmt.IndexOption.IType
+		}
+		return buildAlterTable(&tree.AlterTable{Table: stmt.Table, Options: tree.AlterTableOptions{&tree.AlterOptionAdd{Def: index}}}, ctx)
+	}
 	if err := validateIdentifier(ctx.GetContext(), string(stmt.Name)); err != nil {
 		return nil, err
 	}
@@ -6186,6 +6227,15 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	// check index
 	requestedIndexName := string(stmt.Name)
 	resolvedIndexName, found := resolveIndexName(tableDef.Indexes, requestedIndexName)
+	if found {
+		for _, index := range tableDef.Indexes {
+			if IndexNamesEqual(index.IndexName, resolvedIndexName) && functionalIndexColumn(tableDef, index) != nil {
+				return buildAlterTable(&tree.AlterTable{Table: stmt.TableName, Options: tree.AlterTableOptions{
+					&tree.AlterOptionDrop{Typ: tree.AlterTableDropIndex, Name: tree.Identifier(resolvedIndexName)},
+				}}, ctx)
+			}
+		}
+	}
 	dropIndex.IndexName = resolvedIndexName
 
 	if !found {

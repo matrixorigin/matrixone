@@ -8094,7 +8094,8 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	// EmptyByFlag includes borrowed Arrow validity. Avoid row lookup only
 	// when the source has no NULL/grouping bits; retain the full append path.
 	sourceGrouping := !w.gsp.EmptyByFlag() && nulls.Contains(&w.gsp, uint64(sel))
-	sourceNull := w.IsConstNull() ||
+	// Scalar NULL inspection is only needed for constant source vectors.
+	sourceNull := (w.IsConst() && w.IsConstNull()) ||
 		(!w.IsConst() && !w.nsp.EmptyByFlag() && nulls.Contains(&w.nsp, uint64(sel)))
 	// Uniform ordinary metadata needs neither per-row lookup nor sidecar
 	// admission. Include both vectors: an ordinary source can still append to
@@ -9627,6 +9628,9 @@ func AppendBytesWithWriter(vec *Vector, size int, mp *mpool.MPool, writer func([
 		value.SetOffsetLen(uint32(offset), uint32(size))
 	}
 	if err = validateJSONPayload(vec.typ, value.GetByteSlice(vec.area)); err != nil {
+		return err
+	}
+	if err = types.ValidateCollationValue(vec.typ, value.GetByteSlice(vec.area)); err != nil {
 		return err
 	}
 	return appendOneOwnedVarlena(vec, value, mp)
@@ -12216,6 +12220,9 @@ func buildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejso
 // BuildVarlenaFromVarlena requires v2/area to belong to an admitted source
 // vector of the same type. The source bytes must stay immutable during copy.
 func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m *mpool.MPool) error {
+	if err := types.ValidateCollationValue(vec.typ, v2.GetByteSlice(*area)); err != nil {
+		return err
+	}
 	if (*v2)[0] <= types.VarlenaInlineSize {
 		BuildVarlenaInline(v1, v2)
 		return nil
@@ -12226,6 +12233,9 @@ func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m
 }
 
 func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpool.MPool) error {
+	if err := types.ValidateCollationValue(vec.typ, *bs); err != nil {
+		return err
+	}
 	if err := validateJSONPayload(vec.typ, *bs); err != nil {
 		return err
 	}

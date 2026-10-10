@@ -285,6 +285,9 @@ func checkTypeCapSize(ctx context.Context, ty *plan.Type, name string) error {
 }
 
 func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName string) error {
+	if err := rejectNativeUnicodePrimaryKey(ctx, colType, columnName); err != nil {
+		return err
+	}
 	if colType.GetId() == int32(types.T_blob) {
 		return moerr.NewNotSupported(ctx, "blob type in primary key")
 	}
@@ -310,6 +313,9 @@ func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName 
 }
 
 func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName string) error {
+	if err := rejectNativeUnicodeUniqueKey(ctx, colType, columnName); err != nil {
+		return err
+	}
 	if colType.GetId() == int32(types.T_blob) {
 		return moerr.NewNotSupported(ctx, "blob type in primary key")
 	}
@@ -469,11 +475,38 @@ func checkVisibleColumnCnt(ctx context.Context, tblInfo *TableDef, addCount, dro
 }
 
 func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *TableDef) error {
+	if err := validateFunctionalTable(ctx, tbInfo); err != nil {
+		return err
+	}
 	for i := 0; i < len(tbInfo.Indexes); i++ {
 		indexInfo := tbInfo.Indexes[i]
+		// Capture owners before deleting key parts: the ordinal is part of
+		// their identity, and successive renames can overlap old names.
+		var functionalOwners map[string]*ColDef
+		for ordinal, part := range indexInfo.Parts {
+			if col := functionalIndexPartColumn(tbInfo, indexInfo, ordinal); col != nil {
+				if functionalOwners == nil {
+					functionalOwners = make(map[string]*ColDef)
+				}
+				functionalOwners[part] = col
+			}
+		}
 		indexInfo.Parts = RemoveIf[string](indexInfo.Parts, func(t string) bool {
 			return catalog.ResolveAlias(t) == colName
 		})
+		for ordinal, part := range indexInfo.Parts {
+			if col := functionalOwners[part]; col != nil {
+				name := functionalColumnName(indexInfo.IndexName, ordinal)
+				if name != part {
+					if pos, ok := tbInfo.Name2ColIndex[part]; ok {
+						delete(tbInfo.Name2ColIndex, part)
+						tbInfo.Name2ColIndex[name] = pos
+					}
+					col.Name, col.OriginName = name, name
+					indexInfo.Parts[ordinal] = name
+				}
+			}
+		}
 
 		if indexInfo.Unique {
 			// handle unique index
@@ -531,7 +564,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 			}
 		}
 	}
-	return nil
+	return validateFunctionalTable(ctx, tbInfo)
 }
 
 func handleDropColumnWithPrimaryKey(ctx context.Context, colName string, tbInfo *TableDef) error {

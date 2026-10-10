@@ -15,6 +15,8 @@
 package hakeeper
 
 import (
+	"math"
+
 	"bytes"
 	"sort"
 	"testing"
@@ -2564,6 +2566,60 @@ func TestCheckerStateConfigurationSnapshotsAreIndependent(t *testing.T) {
 	}
 }
 
+func TestSchedulingStateProjectionPreservesAuthority(t *testing.T) {
+	rsm := NewStateMachine(DefaultHAKeeperShardID, 1).(*stateMachine)
+	config := &pb.ConfigData{Content: map[string]*pb.ConfigItem{
+		"display":                     {CurrentValue: "full"},
+		pb.WALRecoveryStatusConfigKey: {CurrentValue: "coordinator-pending", XXX_unrecognized: []byte{8, 1}},
+	}}
+	rsm.state.CNState.Stores["cn"] = pb.CNStoreInfo{Tick: 7, ConfigData: config}
+	rsm.state.TNState.Stores["tn"] = pb.TNStoreInfo{Tick: 8, ConfigData: config}
+	rsm.state.ProxyState.Stores["proxy"] = pb.ProxyStore{Tick: 9, ConfigData: config}
+	rsm.state.LogState.Stores["log"] = pb.LogStoreInfo{Tick: 10, ConfigData: config}
+	rsm.state.LogState.Stores["missing"] = pb.LogStoreInfo{}
+	rsm.state.LogServiceRecoveryPending = true
+	rsm.state.LogServiceRecoveryPrepared = true
+	rsm.state.IDWatermarkRestoreGeneration = 17
+	lookup := func(query *StateQuery) *pb.CheckerState {
+		t.Helper()
+		value, err := rsm.Lookup(query)
+		require.NoError(t, err)
+		return value.(*pb.CheckerState)
+	}
+	full := lookup(&StateQuery{})
+	projected := lookup(&StateQuery{Scheduling: true})
+	require.Nil(t, projected.CNState.Stores["cn"].ConfigData)
+	require.Nil(t, projected.TNState.Stores["tn"].ConfigData)
+	require.Nil(t, projected.ProxyState.Stores["proxy"].ConfigData)
+	require.Nil(t, projected.LogState.Stores["missing"].ConfigData)
+	status := projected.LogState.Stores["log"].ConfigData
+	require.Len(t, status.Content, 1)
+	require.Equal(t, config.Content[pb.WALRecoveryStatusConfigKey], status.Content[pb.WALRecoveryStatusConfigKey])
+	// Restore only omitted display data to compare every other field, including
+	// recovery generations and future additions to the checker snapshot.
+	for id, info := range projected.CNState.Stores {
+		info.ConfigData = full.CNState.Stores[id].ConfigData
+		projected.CNState.Stores[id] = info
+	}
+	for id, info := range projected.TNState.Stores {
+		info.ConfigData = full.TNState.Stores[id].ConfigData
+		projected.TNState.Stores[id] = info
+	}
+	for id, info := range projected.ProxyState.Stores {
+		info.ConfigData = full.ProxyState.Stores[id].ConfigData
+		projected.ProxyState.Stores[id] = info
+	}
+	for id, info := range projected.LogState.Stores {
+		info.ConfigData = full.LogState.Stores[id].ConfigData
+		projected.LogState.Stores[id] = info
+	}
+	require.Equal(t, full, projected)
+	status.Content[pb.WALRecoveryStatusConfigKey].CurrentValue = "complete"
+	status.Content[pb.WALRecoveryStatusConfigKey].XXX_unrecognized[1] = 2
+	require.Equal(t, full, lookup(&StateQuery{}))
+	require.Equal(t, full, lookup(nil))
+}
+
 func TestHeartbeatCheckHintTracksAcceptedReadiness(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	logHB := pb.LogStoreHeartbeat{UUID: "log", Replicas: []pb.LogReplicaInfo{{LogShardInfo: pb.LogShardInfo{ShardID: 0}}}}
@@ -2700,4 +2756,52 @@ func TestCNHeartbeatReobservesAdmissionBarrier(t *testing.T) {
 	require.True(t, rsm.state.ViewMetadataAdmissionCNReady["cn"])
 	require.Equal(t, before, rsm.state.CNState.Stores["cn"], "only the barrier observation changed")
 	apply(0)
+}
+
+func TestAllocateIDReservationBoundary(t *testing.T) {
+	for _, key := range []string{"", "__mo_sql_uuid_short"} {
+		t.Run(key, func(t *testing.T) {
+			s := NewStateMachine(0, 1).(*stateMachine)
+			s.state.State = pb.HAKeeperRunning
+			set := func(v uint64) {
+				if key == "" {
+					s.state.NextID = v
+				} else {
+					s.state.NextIDByKey[key] = v
+				}
+			}
+			get := func() uint64 {
+				if key == "" {
+					return s.state.NextID
+				}
+				return s.state.NextIDByKey[key]
+			}
+			set(math.MaxUint64 - 2)
+			for _, batch := range []uint64{0, 3, math.MaxUint64} {
+				r, err := s.Update(sm.Entry{Cmd: GetAllocateIDCmd(pb.CNAllocateID{Key: key, Batch: batch})})
+				require.NoError(t, err)
+				require.Zero(t, r.Value)
+				require.Equal(t, uint64(math.MaxUint64-2), get())
+			}
+			request := pb.CNAllocateID{Key: key, Batch: 2}
+			if key != "" {
+				request.RequestID = "terminal"
+			}
+			r, err := s.Update(sm.Entry{Cmd: GetAllocateIDCmd(request)})
+			require.NoError(t, err)
+			require.Equal(t, uint64(math.MaxUint64-1), r.Value)
+			buf := bytes.NewBuffer(nil)
+			require.NoError(t, s.SaveSnapshot(buf, nil, nil))
+			restored := NewStateMachine(0, 2).(*stateMachine)
+			require.NoError(t, restored.RecoverFromSnapshot(buf, nil, nil))
+			r, err = restored.Update(sm.Entry{Cmd: GetAllocateIDCmd(pb.CNAllocateID{Key: key, Batch: 1})})
+			require.NoError(t, err)
+			require.Zero(t, r.Value)
+			if key != "" {
+				r, err = restored.Update(sm.Entry{Cmd: GetAllocateIDCmd(request)})
+				require.NoError(t, err)
+				require.Equal(t, uint64(math.MaxUint64-1), r.Value)
+			}
+		})
+	}
 }

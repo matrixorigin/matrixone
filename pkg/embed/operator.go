@@ -304,6 +304,16 @@ func (op *operator) startTNServiceLocked(
 	if err := op.waitClusterConditionLocked(op.waitHAKeeperRunningLocked); err != nil {
 		return err
 	}
+	return op.startTNServiceAfterReadyLocked(fs)
+}
+
+// startTNServiceAfterReadyLocked is the construction handoff after the
+// HAKeeper readiness gate. Keeping the constructor path separate lets tests
+// exercise the production owner publication and rollback boundary without
+// manufacturing a second constructor flow.
+func (op *operator) startTNServiceAfterReadyLocked(
+	fs fileservice.FileService,
+) error {
 	op.cfg.initMetaCache()
 	c := op.cfg.getTNServiceConfig()
 	//notify the tn service it is in the standalone cluster
@@ -314,6 +324,7 @@ func (op *operator) startTNServiceLocked(
 		op.reset.rt,
 		fs,
 		op.reset.shutdownC,
+		func(owner tnservice.Service) { op.reset.svc = owner },
 		tnservice.WithConfigData(commonConfigKVMap),
 	)
 	if err != nil {
@@ -342,6 +353,7 @@ func (op *operator) startCNServiceLocked(
 		context.Background(),
 		fs,
 		op.reset.gossipNode,
+		func(owner cnservice.Service) { op.reset.svc = owner },
 		cnservice.WithLogger(op.reset.logger),
 		cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 		cnservice.WithConfigData(commonConfigKVMap),

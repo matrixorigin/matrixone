@@ -67,7 +67,7 @@ func ChangeColumn(
 
 	// If renaming the column, check if any generated column depends on it
 	if newColName != oldColName {
-		if err := checkColumnWithGeneratedDependency(ctx, tableDef, oldColName); err != nil {
+		if err := renameFunctionalColumnDependencies(ctx, tableDef, oldColName, newColNameOrigin); err != nil {
 			return false, err
 		}
 		if err := checkColumnWithDefaultDependency(ctx, tableDef, oldColName); err != nil {
@@ -336,7 +336,10 @@ func buildColumnAndConstraint(
 }
 
 func checkIndexedColumnTypeChange(ctx context.Context, tableDef *plan.TableDef, oldCol, newCol *ColDef) error {
-	if oldCol == nil || newCol == nil || oldCol.Name == "" || oldCol.Typ.Id == newCol.Typ.Id {
+	if oldCol == nil || newCol == nil || oldCol.Name == "" ||
+		(oldCol.Typ.Id == newCol.Typ.Id &&
+			oldCol.Typ.Charset == newCol.Typ.Charset &&
+			oldCol.Typ.CollationVersion == newCol.Typ.CollationVersion) {
 		return nil
 	}
 
