@@ -75,7 +75,7 @@ func executionRemoteExpressionProtocolVersion(proc *process.Process, features pl
 func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	required := max(requiredExpressionContractProtocolVersion(features), temporalExpressionProtocolVersion(features))
 	if features.PythonRoutineContract {
-		required = max(required, defines.MORPCVersion109)
+		required = max(required, defines.MORPCVersion110)
 	}
 	if features.IntegerArithmeticDomains {
 		required = max(required, defines.MORPCVersion71)
