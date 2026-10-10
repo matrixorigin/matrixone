@@ -72,6 +72,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.DecimalLiteralSemantics, defines.MORPCVersion89,
 			"exact DECIMAL256 literal semantics require a versioned remote destination",
 			"remote destination does not support exact DECIMAL256 literal semantics (MORPC protocol version %d)"},
+		{pipelineRequiresPartitionFulltextRoute(p), defines.MORPCVersion110,
+			"partitioned FULLTEXT routing requires a versioned remote destination",
+			"remote destination does not support partitioned FULLTEXT routing (MORPC protocol version %d)"},
 	}
 	var parent context.Context
 	var observed int64
@@ -115,4 +118,31 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		}
 	}
 	return nil
+}
+
+// Lowered children can carry routing metadata without an expression marker.
+// Check the whole wire tree before a send: an older receiver ignores unknown
+// protobuf fields and cannot enforce the new receiver-side admission check.
+func pipelineRequiresPartitionFulltextRoute(p *pipeline.Pipeline) bool {
+	if p == nil {
+		return false
+	}
+	for _, instruction := range p.InstructionList {
+		if preInsert := instruction.GetPreInsert(); preInsert != nil && preInsert.PreserveInput {
+			return true
+		}
+		if update := instruction.GetMultiUpdate(); update != nil {
+			for _, target := range update.UpdateCtxList {
+				if target != nil && target.PartitionIndexCtx != nil {
+					return true
+				}
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if pipelineRequiresPartitionFulltextRoute(child) {
+			return true
+		}
+	}
+	return false
 }

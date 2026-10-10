@@ -170,6 +170,8 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkPartition(p)
 	case *PartitionDef:
 		return true, v.walkPartitionDef(p)
+	case *PartitionIndexCtx:
+		return true, v.walkPartitionIndexCtx(p)
 	case *Plan:
 		return true, v.walkPlan(p)
 	case *Plan_Dcl:
@@ -1183,6 +1185,15 @@ func (v *legacyCollationVisitor) walkPartitionDef(p *PartitionDef) error {
 	}
 	return nil
 }
+func (v *legacyCollationVisitor) walkPartitionIndexCtx(p *PartitionIndexCtx) error {
+	if p == nil {
+		return nil
+	}
+	if err := v.walkTableDef(p.ParentTable); err != nil {
+		return err
+	}
+	return nil
+}
 func (v *legacyCollationVisitor) walkPlan(p *Plan) error {
 	if p == nil {
 		return nil
@@ -1474,6 +1485,9 @@ func (v *legacyCollationVisitor) walkUpdateCtx(p *UpdateCtx) error {
 		return nil
 	}
 	if err := v.walkTableDef(p.TableDef); err != nil {
+		return err
+	}
+	if err := v.walkPartitionIndexCtx(p.PartitionIndexCtx); err != nil {
 		return err
 	}
 	return nil

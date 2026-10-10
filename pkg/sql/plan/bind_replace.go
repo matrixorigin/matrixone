@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -460,6 +461,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	objRef := dmlCtx.objRefs[0]
 	tableDef := dmlCtx.tableDefs[0]
 	pkName := tableDef.Pkey.PkeyColName
+	partitionedFulltext := features.IsPartitioned(tableDef.FeatureFlag) &&
+		tableDef.Partition != nil && len(tableDef.Partition.PartitionDefs) > 0
+	if partitionedFulltext {
+		partitionedFulltext = false
+		for _, idxDef := range irregularIndexes {
+			if catalog.IsFullTextIndexAlgo(idxDef.IndexAlgo) {
+				partitionedFulltext = true
+				break
+			}
+		}
+	}
 
 	isFakePK := pkName == catalog.FakePrimaryKeyColName
 
@@ -684,6 +696,22 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			// REPLACE conflict joins. Preserve every base column so FKs that
 			// reference any UNIQUE key can reuse the delete action planner.
 			for _, col := range tableDef.Cols {
+				if pos, ok := oldColName2Idx[tableDef.Name+"."+col.Name]; ok {
+					appendOldCol(pos)
+				}
+			}
+		}
+		if partitionedFulltext {
+			partitionCols := make(map[string]struct{})
+			for _, partitionDef := range tableDef.Partition.PartitionDefs {
+				if partitionDef != nil {
+					collectPartitionExprColumnNames(partitionDef.Def, tableDef, partitionCols)
+				}
+			}
+			for _, col := range tableDef.Cols {
+				if _, ok := partitionCols[col.Name]; !ok {
+					continue
+				}
 				if pos, ok := oldColName2Idx[tableDef.Name+"."+col.Name]; ok {
 					appendOldCol(pos)
 				}
@@ -973,6 +1001,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	// unique key, so the deleted row's PK can differ from the inserted row's PK.
 	var replaceOldPkPos int32
 	var replaceOldPkTyp plan.Type
+	var replaceOldRoutePos int32 = -1
 	var replaceOldParentPos []int32
 	oldParentColFinalPos := make(map[string]int32)
 
@@ -1068,11 +1097,56 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				},
 			},
 		})
+		if partitionedFulltext {
+			oldRouteColumns := make(map[string][2]int32, len(tableDef.Cols))
+			for _, col := range tableDef.Cols {
+				if pos, ok := oldColName2Idx[tableDef.Name+"."+col.Name]; ok {
+					oldRouteColumns[col.Name] = pos
+				}
+			}
+			routeExpr, routeErr := buildPartitionRouteExprFromColumns(
+				builder.GetContext(), tableDef, oldRouteColumns)
+			if routeErr != nil {
+				return 0, routeErr
+			}
+			replaceOldRoutePos = int32(len(finalProjList))
+			finalProjList = append(finalProjList, routeExpr)
+		}
 		oldParentColFinalPos[tableDef.Pkey.PkeyColName] = replaceOldPkPos
+		var partitionCols []plan.ColRef
+		if partitionedFulltext {
+			keyName := getPartitionColName(tableDef.Partition.PartitionDefs[0].Def)
+			oldPos, ok := oldColName2Idx[tableDef.Name+"."+keyName]
+			if !ok {
+				return 0, moerr.NewInternalError(builder.GetContext(), "cannot locate old partition key for FULLTEXT REPLACE")
+			}
+			keyPos := tableDef.Name2ColIndex[keyName]
+			oldKey := &plan.Expr{Typ: tableDef.Cols[keyPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: oldPos[0], ColPos: oldPos[1]}}}
+			newKey := DeepCopyExpr(finalProjList[keyPos])
+			isNew, routeErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(finalProjList[deleteCols[0].ColPos])})
+			if routeErr != nil {
+				return 0, routeErr
+			}
+			deleteKey, routeErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{isNew, DeepCopyExpr(newKey), DeepCopyExpr(oldKey)})
+			if routeErr != nil {
+				return 0, routeErr
+			}
+			isDeleteOnly, routeErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(finalProjList[newPkIdx])})
+			if routeErr != nil {
+				return 0, routeErr
+			}
+			insertKey, routeErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{isDeleteOnly, oldKey, newKey})
+			if routeErr != nil {
+				return 0, routeErr
+			}
+			partitionCols = []plan.ColRef{{RelPos: finalProjTag, ColPos: int32(len(finalProjList))}, {RelPos: finalProjTag, ColPos: int32(len(finalProjList) + 1)}}
+			finalProjList = append(finalProjList, deleteKey, insertKey)
+		}
 		updateCtxList = append(updateCtxList, &plan.UpdateCtx{
 			ObjRef:                objRef,
 			TableDef:              tableDef,
 			InsertCols:            insertCols,
+			PartitionCols:         partitionCols,
 			DeleteCols:            deleteCols,
 			SkipInsertOnNullPk:    true,
 			InsertPkColIdx:        insertPkColIdx,
@@ -1234,7 +1308,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	// maintenance (drop the old entries, keyed by the old PK) all read it.
 	if len(irregularIndexes) > 0 && replaceOldPkPos >= 0 {
 		lastNodeID, err = builder.appendOnDupIrregularMaintSource(
-			bindCtx, lastNodeID, finalProjTag, replaceOldPkPos, replaceOldPkTyp,
+			bindCtx, lastNodeID, finalProjTag, replaceOldPkPos, replaceOldRoutePos, replaceOldPkTyp,
 			-1, -1, -1,
 			irregularIndexes, nil, -1, nil, tableDef, objRef)
 		if err != nil {

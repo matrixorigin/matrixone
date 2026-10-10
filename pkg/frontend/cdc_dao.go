@@ -81,7 +81,7 @@ func NewCDCDao(
 
 func (t *CDCDao) MustGetTaskService() taskservice.TaskService {
 	if t.ts == nil && t.ses != nil {
-		t.ts = getPu(t.ses.GetService()).TaskService
+		t.ts = getPu(t.ses.GetService()).GetTaskService()
 	}
 	if t.ts == nil {
 		panic("taskService is nil")
@@ -131,7 +131,7 @@ func (t *CDCDao) CreateTask(
 
 	// Get TaskService - handle nil case gracefully instead of panicking
 	if t.ts == nil && t.ses != nil {
-		t.ts = getPu(t.ses.GetService()).TaskService
+		t.ts = getPu(t.ses.GetService()).GetTaskService()
 	}
 	if t.ts == nil {
 		return moerr.NewInternalError(ctx, "TaskService is not available. CDC task creation requires TaskService to be initialized.")

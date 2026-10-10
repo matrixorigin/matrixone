@@ -16,6 +16,7 @@ package multi_update
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -23,8 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -81,6 +84,53 @@ func TestClonePartitionTargetContextsSuppressesPhysicalAffectedRows(t *testing.T
 	require.False(t, ordinary[0].SuppressPhysicalAffectedRows)
 	require.EqualValues(t, 1, physicalInsertAffectedRows(ordinary[0], 1),
 		"single-target partition updates still count physical inserts")
+}
+
+func TestBuildPartitionUpdateTargetsIndexOnlyContext(t *testing.T) {
+	ctx := &MultiUpdateCtx{
+		ObjRef:   &plan.ObjectRef{Obj: 901},
+		TableDef: &plan.TableDef{TblId: 902, FeatureFlag: features.IndexTable},
+		PartitionIndexCtx: &plan.PartitionIndexCtx{
+			ParentRef:    &plan.ObjectRef{Obj: 77},
+			ParentTable:  &plan.TableDef{TblId: 77, FeatureFlag: features.Partitioned},
+			PartitionCol: plan.ColRef{ColPos: 3},
+		},
+	}
+	targets := buildPartitionUpdateTargets([]*MultiUpdateCtx{ctx})
+	require.Len(t, targets, 1)
+	require.True(t, targets[0].indexOnly)
+	require.Equal(t, uint64(77), targets[0].tableID)
+	require.Len(t, targets[0].contexts, 1)
+	require.Equal(t, int32(3), targets[0].contexts[0].PartitionIndexCtx.PartitionCol.ColPos)
+	require.NotSame(t, ctx, targets[0].contexts[0])
+}
+
+func TestPartitionMultiUpdateIgnoresIndexOnlyAffectedRows(t *testing.T) {
+	op := &PartitionMultiUpdate{
+		raw:         &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{{IgnoreAffectedRows: true}}},
+		rawContexts: []*MultiUpdateCtx{{IgnoreAffectedRows: true}},
+	}
+	op.doAddAffectedRows(7)
+	require.Zero(t, op.GetAffectedRows())
+
+	op.raw.MultiUpdateCtx = []*MultiUpdateCtx{{}}
+	op.doAddAffectedRows(3)
+	require.EqualValues(t, 3, op.GetAffectedRows())
+}
+
+func TestPartitionRouteOrdinalAcceptsFixedIntegerRoutes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := testutil.NewInt32Vector(3, types.T_int32.ToType(), proc.Mp(), false, nil, []int32{0, 1, -1})
+	defer vec.Free(proc.Mp())
+	for row, want := range []int{0, 1, -1} {
+		got, ok := partitionRouteOrdinal(vec, row)
+		require.True(t, ok)
+		require.Equal(t, want, got)
+	}
+	str := testutil.NewStringVector(1, types.T_varchar.ToType(), proc.Mp(), false, nil, []string{"0"})
+	defer str.Free(proc.Mp())
+	_, ok := partitionRouteOrdinal(str, 0)
+	require.False(t, ok)
 }
 
 func TestClonePartitionContextsConsumeODKUMetadataOnce(t *testing.T) {
@@ -259,10 +309,12 @@ func TestResetMultiUpdateCtxsClassifiesTemporaryIndexTables(t *testing.T) {
 		catalog.UniqueIndexTableNamePrefix + "0198fa2b-7cc8-7ed1-b7ae-a3d9c29e75fd"
 	secondaryName := "__mo_tmp_018f1f767b9d7f35b2d99b8d7774bde8_db_" +
 		catalog.SecondaryIndexTableNamePrefix + "0198fa2b-7cc8-7ed1-b7ae-a3d9c29e75fd"
+	fulltextName := catalog.FullTextIndexTableNamePrefix + "0198fa2b-7cc8-7ed1-b7ae-a3d9c29e75fd"
 	op := &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{
 		{TableDef: &plan.TableDef{Name: "main_table"}},
 		{TableDef: &plan.TableDef{Name: uniqueName}},
 		{TableDef: &plan.TableDef{Name: secondaryName}},
+		{TableDef: &plan.TableDef{Name: fulltextName, TableType: catalog.FullTextIndex_TblType}},
 	}}
 
 	op.resetMultiUpdateCtxs()
@@ -270,6 +322,8 @@ func TestResetMultiUpdateCtxsClassifiesTemporaryIndexTables(t *testing.T) {
 	require.Equal(t, UpdateMainTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[0]).tableType)
 	require.Equal(t, UpdateUniqueIndexTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[1]).tableType)
 	require.Equal(t, UpdateSecondaryIndexTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[2]).tableType)
+	require.Equal(t, UpdateSecondaryIndexTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[3]).tableType)
+	require.True(t, isSecondaryIndexTableName(fulltextName))
 }
 
 func TestPartitionMultiUpdateString(t *testing.T) {
@@ -319,13 +373,13 @@ func TestBuildPartitionUpdateTargetsKeepsPhysicalTargetsIndependent(t *testing.T
 }
 
 func TestPartitionWriterIDsSeparateAliasesOfSamePhysicalTable(t *testing.T) {
-	first := &partitionUpdateTarget{writerIDs: make(map[uint64]uint64)}
-	second := &partitionUpdateTarget{writerIDs: make(map[uint64]uint64)}
+	first := &partitionUpdateTarget{writerIDs: make(map[partitionWriterKey]uint64)}
+	second := &partitionUpdateTarget{writerIDs: make(map[partitionWriterKey]uint64)}
 	op := &PartitionMultiUpdate{}
 
-	firstID := op.writerID(first, 100)
-	require.Equal(t, firstID, op.writerID(first, 100))
-	require.NotEqual(t, firstID, op.writerID(second, 100))
+	firstID := op.writerID(first, 100, actionUpdate)
+	require.Equal(t, firstID, op.writerID(first, 100, actionUpdate))
+	require.NotEqual(t, firstID, op.writerID(second, 100, actionUpdate))
 }
 
 func TestNewPartitionMultiUpdateFrom(t *testing.T) {
@@ -357,7 +411,7 @@ func TestPartitionMultiUpdateSetRejectZeroTemporalUpdatesWriters(t *testing.T) {
 
 func TestPartitionMultiUpdateResetReleasesWriters(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	target := &partitionUpdateTarget{writerIDs: map[uint64]uint64{10: 1}}
+	target := &partitionUpdateTarget{writerIDs: map[partitionWriterKey]uint64{{physicalTableID: 10, action: actionUpdate}: 1}}
 	op := &PartitionMultiUpdate{
 		raw:          &MultiUpdate{},
 		targets:      []*partitionUpdateTarget{target},
@@ -599,4 +653,49 @@ func TestMultiUpdateCtxClonePartitionCols(t *testing.T) {
 	require.NotSame(t, original.TableDef, cloned.TableDef)
 	cloned.ObjRef.ObjName = "modified"
 	require.Equal(t, "t1", original.ObjRef.ObjName, "original ObjRef should be unchanged")
+}
+
+func TestPartitionUpdatePrunesAbsoluteColumnAfterRowID(t *testing.T) {
+	for _, rowIDFirst := range []bool{false, true} {
+		t.Run(fmt.Sprint(rowIDFirst), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			input := batch.NewWithSize(3)
+			defer input.Clean(proc.Mp())
+			input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			if rowIDFirst {
+				input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+			}
+			input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+			input.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+			for _, key := range []int32{1, 2, 1} {
+				if rowIDFirst {
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Rowid{}, false, proc.Mp()))
+				} else {
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(99), false, proc.Mp()))
+				}
+				require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(99), false, proc.Mp()))
+				require.NoError(t, vector.AppendFixed(input.Vecs[2], key, false, proc.Mp()))
+			}
+			input.SetRowCount(3)
+			meta := partition.PartitionMetadata{}
+			for _, key := range []int32{1, 2} {
+				col := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+				value := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: key}}}}
+				expr, err := sqlplan.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{col, value})
+				require.NoError(t, err)
+				withRowID := sqlplan.DeepCopyExpr(expr)
+				withRowID.GetF().Args[0].GetCol().ColPos = 1
+				meta.Partitions = append(meta.Partitions, partition.Partition{PartitionID: uint64(key), Expr: expr, ExprWithRowID: withRowID})
+			}
+			require.NotPanics(t, func() {
+				result, err := prunePartitionUpdate(proc, input, meta, 2)
+				require.NoError(t, err)
+				defer result.Close()
+				counts := map[uint64]int{}
+				result.Iter(func(p partition.Partition, b *batch.Batch) bool { counts[p.PartitionID] = b.RowCount(); return true })
+				require.Equal(t, map[uint64]int{1: 2, 2: 1}, counts)
+			})
+		})
+	}
 }

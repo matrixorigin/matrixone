@@ -30,6 +30,7 @@ import (
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -491,6 +492,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				}
 			}
 			return 0, err
+		}
+		// RETURNING retains its narrower synchronous-index contract even when
+		// partitioned FULLTEXT UPDATE can rebuild the hidden rows after a PK move.
+		if stmt.HasReturning() && primaryKeyUpdated(tableDef, dmlCtx.updateCol2Expr[i]) {
+			for _, idxDef := range inlineIrregularIndexes[i] {
+				if catalog.IsFullTextIndexAlgo(idxDef.IndexAlgo) {
+					return 0, returningNotSupported(builder, "primary-key UPDATE on synchronous full-text/vector index")
+				}
+			}
 		}
 		if unsupportedIrregularRoute {
 			return 0, newRejectedUpdatePlannerRouteError(
@@ -1281,6 +1291,24 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 		}
 		aliasIdxNeedConstraintCheck[i] = append([]bool(nil), idxNeedUpdate[i]...)
+		partitionUpdated, err := partitionColumnsUpdated(tableDef, assignedColsByTarget[i])
+		if err != nil {
+			return 0, err
+		}
+		if features.IsPartitioned(tableDef.FeatureFlag) && partitionUpdated {
+			for _, idx := range inlineIrregularIndexes[i] {
+				if catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+					// Key values did not necessarily change, but their physical
+					// indexes must move with the parent. Keep constraint eligibility
+					// separate from this storage-maintenance requirement.
+					for j := range idxNeedUpdate[i] {
+						updatePkOrUk = true // prepare the regular-index row image and scans
+						idxNeedUpdate[i][j] = true
+					}
+					break
+				}
+			}
+		}
 	}
 	coalesceRepeatedPhysicalTargetRegularIndexes(dmlCtx, idxNeedUpdate)
 
@@ -1997,6 +2025,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	physicalTargetActiveFinalPos := make([]int32, len(dmlCtx.aliases))
 	targetUpdateCtxIdx := make([]int32, len(dmlCtx.aliases))
 	targetOldPkFinalPos := make([]int32, len(dmlCtx.aliases))
+	oldPartitionColFinalPos := make([]map[string]int32, len(dmlCtx.aliases))
 	physicalTargetOwner := make([]int, len(dmlCtx.aliases))
 	for i := range physicalTargetOwner {
 		physicalTargetOwner[i] = -1
@@ -2085,6 +2114,47 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					},
 				},
 			})
+		}
+		if features.IsPartitioned(tableDef.FeatureFlag) && tableDef.Partition != nil &&
+			len(tableDef.Partition.PartitionDefs) > 0 {
+			hasFulltext := false
+			for _, indexdef := range inlineIrregularIndexes[i] {
+				if catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+					hasFulltext = true
+					break
+				}
+			}
+			if hasFulltext {
+				partitionCols := make(map[string]struct{})
+				for _, partitionDef := range tableDef.Partition.PartitionDefs {
+					if partitionDef != nil {
+						collectPartitionExprColumnNames(partitionDef.Def, tableDef, partitionCols)
+					}
+				}
+				positions := make(map[string]int32, len(partitionCols))
+				for _, col := range tableDef.Cols {
+					if _, ok := partitionCols[col.Name]; !ok {
+						continue
+					}
+					pos := finalColName2Idx[alias+"."+col.Name]
+					if _, updated := newColName2Idx[alias+"."+col.Name]; updated {
+						oldPos, ok := oldColName2Idx[alias+"."+col.Name]
+						if !ok || oldPos < 0 || int(oldPos) >= len(selectNode.ProjectList) {
+							return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind update err, can not find old partition column %s", col.Name)
+						}
+						pos = int32(len(finalProjList))
+						finalProjList = append(finalProjList, &plan.Expr{
+							Typ: selectNode.ProjectList[oldPos].Typ,
+							Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: selectNodeTag,
+								ColPos: oldPos,
+							}},
+						})
+					}
+					positions[col.Name] = pos
+				}
+				oldPartitionColFinalPos[i] = positions
+			}
 		}
 		targetOldPkFinalPos[i] = oldPkPos
 		if isMultiTargetUpdate {
@@ -2483,6 +2553,27 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		localProjTag := builder.genNewBindTag()
 		localProjList, deletePkPos := buildIrregularUpdateTargetProjection(
 			alias, tableDef, finalProjTag, finalProjList, finalColName2Idx, targetOldPkFinalPos[i])
+		deleteRoutePos := int32(-1)
+		if features.IsPartitioned(tableDef.FeatureFlag) && tableDef.Partition != nil &&
+			len(tableDef.Partition.PartitionDefs) > 0 {
+			for _, indexdef := range indexes {
+				if !catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+					continue
+				}
+				oldRouteColumns := make(map[string][2]int32, len(oldPartitionColFinalPos[i]))
+				for name, pos := range oldPartitionColFinalPos[i] {
+					oldRouteColumns[name] = [2]int32{finalProjTag, pos}
+				}
+				routeExpr, routeErr := buildPartitionRouteExprFromColumns(
+					builder.GetContext(), tableDef, oldRouteColumns)
+				if routeErr != nil {
+					return 0, routeErr
+				}
+				deleteRoutePos = int32(len(localProjList))
+				localProjList = append(localProjList, routeExpr)
+				break
+			}
+		}
 		rowNumberPos := int32(-1)
 		activePos := int32(-1)
 		if isMultiTargetUpdate {
@@ -2517,6 +2608,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			localProjID,
 			localProjTag,
 			deletePkPos,
+			deleteRoutePos,
 			localProjList[deletePkPos].Typ,
 			rowNumberPos,
 			activePos,
@@ -2538,6 +2630,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				deleteStep:              builder.irregularMaintDeleteStep,
 				deletePkPos:             builder.irregularMaintDeletePkPos,
 				deletePkTyp:             builder.irregularMaintDeletePkTyp,
+				deleteRoutePos:          builder.irregularMaintDeleteRoutePos,
 				indexes:                 builder.irregularMaintIndexes,
 				insertOnlySourceStep:    builder.irregularMaintInsertOnlySourceStep,
 				insertOnlyIndexes:       builder.irregularMaintInsertOnlyIndexes,
@@ -4631,6 +4724,43 @@ func irregularIndexAffectedByUpdate(
 	return irregularIndexAffectedByUpdatedColumnNames(tableDef, idxDef, updatedCols)
 }
 
+// partitionColumnsUpdated reports whether the final row can route to a
+// different physical partition. The partition expression is the authoritative
+// dependency set; using only the first column or assuming a fixed column
+// position misses composite and expression-based partitioning.
+func partitionColumnsUpdated(tableDef *plan.TableDef, updated map[string]struct{}) (bool, error) {
+	if tableDef == nil || tableDef.Partition == nil || len(tableDef.Partition.PartitionDefs) == 0 || len(updated) == 0 {
+		return false, nil
+	}
+	// Classification happens before automatic assignments are materialized.
+	// Seed those sources before the shared generated-column dependency closure.
+	seed := make(map[string]struct{}, len(updated))
+	for name := range updated {
+		seed[name] = struct{}{}
+	}
+	for _, col := range tableDef.Cols {
+		if col.OnUpdate != nil {
+			seed[col.Name] = struct{}{}
+		}
+	}
+	possiblyChanged, err := collectGeneratedColumnDependents(context.Background(), tableDef, seed)
+	if err != nil {
+		return false, err
+	}
+	partitionCols := make(map[string]struct{})
+	for _, partitionDef := range tableDef.Partition.PartitionDefs {
+		if partitionDef != nil {
+			collectPartitionExprColumnNames(partitionDef.Def, tableDef, partitionCols)
+		}
+	}
+	for colName := range partitionCols {
+		if columnPossiblyChanged(tableDef, possiblyChanged, colName) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // irregularIndexAffectedByUpdatedColumnNames is the shared dependency check for
 // UPDATE and ON DUPLICATE KEY UPDATE. The latter has already bound its values to
 // plan expressions, so it cannot reuse the tree.Expr map accepted by the former.
@@ -4701,9 +4831,10 @@ func irregularIndexAffectedByUpdatedColumnNames(
 // The bool return reports an affected irregular algorithm that has not migrated
 // to either mechanism. MASTER indexes delete
 // by the old source PK and rebuild from the final row image, so changing the
-// base-table PK is handled by the same maintenance pipeline. Plugin-backed
-// synchronous full-text/vector indexes retain their existing PK-update
-// restriction until their complete hidden-table groups support that contract.
+// base-table PK is handled by the same maintenance pipeline. Partitioned
+// classic FULLTEXT uses that old/new-row path for partition and document-key
+// changes; non-partitioned FULLTEXT and other synchronous plugin indexes
+// retain the target branch's primary-key restriction.
 func classifyIrregularIndexesForUpdate(
 	ctx context.Context,
 	tableDef *plan.TableDef,
@@ -4714,6 +4845,14 @@ func classifyIrregularIndexesForUpdate(
 	}
 
 	pkUpdated := primaryKeyUpdated(tableDef, updateCols)
+	updatedCols := make(map[string]struct{}, len(updateCols))
+	for colName := range updateCols {
+		updatedCols[colName] = struct{}{}
+	}
+	partitionUpdated, err := partitionColumnsUpdated(tableDef, updatedCols)
+	if err != nil {
+		return nil, false, err
+	}
 	affectedSyncGroups := make(map[string]bool)
 	for _, idxDef := range tableDef.Indexes {
 		if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
@@ -4722,6 +4861,9 @@ func classifyIrregularIndexesForUpdate(
 		affected, err := irregularIndexAffectedByUpdate(tableDef, idxDef, updateCols)
 		if err != nil {
 			return nil, false, err
+		}
+		if catalog.IsFullTextIndexAlgo(idxDef.IndexAlgo) && (partitionUpdated || pkUpdated) {
+			affected = true
 		}
 
 		p, ok := indexplugin.Get(idxDef.IndexAlgo)
@@ -4748,7 +4890,7 @@ func classifyIrregularIndexesForUpdate(
 		if async {
 			continue
 		}
-		if pkUpdated {
+		if pkUpdated && (!catalog.IsFullTextIndexAlgo(idxDef.IndexAlgo) || !features.IsPartitioned(tableDef.FeatureFlag)) {
 			return nil, false, newUpdatePlannerRouteError(
 				updatePlannerRejected,
 				updateRouteReasonIrregularIndex,

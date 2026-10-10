@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,6 +36,49 @@ import (
 )
 
 type sqlTaskContextKey struct{}
+
+func TestGetSQLTaskServiceConcurrentPublication(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses, ts, _ := newSQLTaskHandlerTestSession(t, ctrl)
+	defer ses.Close()
+	pu := getPu(ses.GetService())
+	pu.SetTaskService(nil)
+	got, err := getSQLTaskService(context.Background(), ses)
+	require.ErrorContains(t, err, "task service not ready yet")
+	require.Nil(t, got)
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 1000; i++ {
+			pu.SetTaskService(ts)
+			pu.SetTaskService(nil)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 1000; i++ {
+			got, err := getSQLTaskService(context.Background(), ses)
+			if err != nil {
+				if got != nil {
+					t.Error("unpublished task service must not be returned with an error")
+				}
+			} else if got != ts {
+				t.Error("reader must observe the published task service")
+			}
+		}
+	}()
+	close(start)
+	wg.Wait()
+	pu.SetTaskService(ts)
+	got, err = getSQLTaskService(context.Background(), ses)
+	require.NoError(t, err)
+	require.Equal(t, ts, got)
+}
 
 func TestHandleSQLTaskCreateAlterDrop(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -560,7 +604,7 @@ func newSQLTaskHandlerTestSession(t *testing.T, ctrl *gomock.Controller) (*Sessi
 	t.Cleanup(func() {
 		require.NoError(t, ts.Close())
 	})
-	getPu(ses.GetService()).TaskService = ts
+	getPu(ses.GetService()).SetTaskService(ts)
 	return ses, ts, store
 }
 

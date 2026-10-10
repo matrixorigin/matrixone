@@ -782,6 +782,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			proc, t.HasAutoCol, t.TrackAutoIncrementGenerated); err != nil {
 			return ctxId, nil, err
 		}
+		if err := validateRemotePartitionFulltextRouteProtocol(proc, t.PreserveInput); err != nil {
+			return ctxId, nil, err
+		}
 		if err := validateRemoteTargetAwareUpdateProtocol(proc, t.HasTargetSelector); err != nil {
 			return ctxId, nil, err
 		}
@@ -791,6 +794,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			HasAutoCol:                   t.HasAutoCol,
 			IsOldUpdate:                  t.IsOldUpdate,
 			IsNewUpdate:                  t.IsNewUpdate,
+			PreserveInput:                t.PreserveInput,
 			Attrs:                        t.Attrs,
 			EstimatedRowCount:            int64(t.EstimatedRowCount),
 			CompPkeyExpr:                 t.CompPkeyExpr,
@@ -1219,11 +1223,25 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				FulltextIndexRef:       t.TableFunction.FulltextIndexRef,
 			}
 		}
-	case *multi_update.MultiUpdate:
+	case *multi_update.MultiUpdate, *multi_update.PartitionMultiUpdate:
+		var updateOp *multi_update.MultiUpdate
+		switch typed := op.(type) {
+		case *multi_update.MultiUpdate:
+			updateOp = typed
+		case *multi_update.PartitionMultiUpdate:
+			updateOp = typed.RawMultiUpdate()
+			if updateOp == nil {
+				return ctxId, nil, moerr.NewInternalErrorNoCtx("partition multi-update has no raw payload")
+			}
+			// The wire format is intentionally the existing MultiUpdate
+			// payload. The receiver reconstructs the partition wrapper from
+			// the target metadata instead of needing a new protocol operator.
+			in.Op = int32(vm.MultiUpdate)
+		}
 		targetAware := false
 		changedRows := false
 		affectedRowsSelectors := false
-		for _, muCtx := range t.MultiUpdateCtx {
+		for _, muCtx := range updateOp.MultiUpdateCtx {
 			if muCtx.DedupByTargetRowID || muCtx.TargetUpdateCtxIdx != 0 {
 				targetAware = true
 			}
@@ -1241,8 +1259,11 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		if err := validateRemoteAffectedRowsSelectorsProtocol(proc, affectedRowsSelectors); err != nil {
 			return ctxId, nil, err
 		}
-		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
-		for i, muCtx := range t.MultiUpdateCtx {
+		updateCtxList := make([]*plan.UpdateCtx, len(updateOp.MultiUpdateCtx))
+		for i, muCtx := range updateOp.MultiUpdateCtx {
+			if err := validateRemotePartitionFulltextRouteProtocol(proc, muCtx.PartitionIndexCtx != nil); err != nil {
+				return ctxId, nil, err
+			}
 			if err := validateRemoteODKUAffectedRowsProtocol(proc,
 				muCtx.AffectedRowsWeightCol != nil || muCtx.PhysicalChangedRowsCol != nil); err != nil {
 				return ctxId, nil, err
@@ -1250,10 +1271,11 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			updateCtxList[i] = &plan.UpdateCtx{
 				ObjRef:                muCtx.ObjRef,
 				TableDef:              muCtx.TableDef,
+				PartitionIndexCtx:     muCtx.PartitionIndexCtx,
 				SkipInsertOnNullPk:    muCtx.SkipInsertOnNullPk,
 				InsertPkColIdx:        int32(muCtx.InsertPkColIdx),
 				IgnoreAffectedRows:    muCtx.IgnoreAffectedRows,
-				CountDeleteAffectRows: t.CountDeleteAffectRows,
+				CountDeleteAffectRows: updateOp.CountDeleteAffectRows,
 				DedupByTargetRowId:    muCtx.DedupByTargetRowID,
 				TargetUpdateCtxIdx:    int32(muCtx.TargetUpdateCtxIdx),
 				AffectedRowsCols:      make([]plan.ColRef, len(muCtx.AffectedRowsCols)),
@@ -1287,10 +1309,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			}
 		}
 		in.MultiUpdate = &pipeline.MultiUpdate{
-			AffectedRows:       t.GetAffectedRows(),
-			Action:             uint32(t.Action),
+			AffectedRows:       updateOp.GetAffectedRows(),
+			Action:             uint32(updateOp.Action),
 			UpdateCtxList:      updateCtxList,
-			RejectZeroTemporal: t.RejectZeroTemporal,
+			RejectZeroTemporal: updateOp.RejectZeroTemporal,
 		}
 	case *postdml.PostDml:
 		in.PostDml = &pipeline.PostDml{
@@ -1388,6 +1410,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.HasAutoCol = t.GetHasAutoCol()
 		arg.IsOldUpdate = t.GetIsOldUpdate()
 		arg.IsNewUpdate = t.GetIsNewUpdate()
+		arg.PreserveInput = t.GetPreserveInput()
 		arg.EstimatedRowCount = int64(t.GetEstimatedRowCount())
 		arg.CompPkeyExpr = t.CompPkeyExpr
 		arg.ClusterByExpr = t.ClusterByExpr
@@ -1892,6 +1915,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
 				ObjRef:             muCtx.ObjRef,
 				TableDef:           muCtx.TableDef,
+				PartitionIndexCtx:  muCtx.PartitionIndexCtx,
 				SkipInsertOnNullPk: muCtx.SkipInsertOnNullPk,
 				InsertPkColIdx:     int(muCtx.InsertPkColIdx),
 				IgnoreAffectedRows: muCtx.IgnoreAffectedRows,
@@ -1932,7 +1956,15 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			}
 		}
 
-		op = arg
+		var remoteProc *process.Process
+		if ctx != nil && ctx.scope != nil {
+			remoteProc = ctx.scope.Proc
+		}
+		var err error
+		op, err = wrapPartitionMultiUpdate(arg, t.UpdateCtxList, remoteProc)
+		if err != nil {
+			return nil, err
+		}
 
 	case vm.PostDml:
 		t := opr.GetPostDml()
@@ -2173,6 +2205,21 @@ func validateRemoteStatementLastInsertIDProtocol(
 		return nil
 	}
 	return validateRemoteAutoIncrementSessionOptionsProtocol(proc, trackAutoIncrementGenerated || hasNonDefaultAutoIncrementSessionOptions(proc))
+}
+
+func validateRemotePartitionFulltextRouteProtocol(
+	proc *process.Process,
+	required bool,
+) error {
+	if !required {
+		return nil
+	}
+	if proc == nil || !supportsRemotePartitionFulltextRoute(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"partitioned FULLTEXT routing requires MORPC protocol version 110",
+		)
+	}
+	return nil
 }
 
 func hasNonDefaultAutoIncrementSessionOptions(proc *process.Process) bool {
@@ -2485,9 +2532,21 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 		return nil
 	}
 	for _, instruction := range p.InstructionList {
+		if update := instruction.GetMultiUpdate(); update != nil {
+			for _, target := range update.UpdateCtxList {
+				if target != nil {
+					if err := validateRemotePartitionFulltextRouteProtocol(proc, target.PartitionIndexCtx != nil); err != nil {
+						return err
+					}
+				}
+			}
+		}
 		if preInsert := instruction.GetPreInsert(); preInsert != nil {
 			if err := validateRemoteStatementLastInsertIDProtocol(
 				proc, preInsert.HasAutoCol, preInsert.TrackAutoIncrementGenerated); err != nil {
+				return err
+			}
+			if err := validateRemotePartitionFulltextRouteProtocol(proc, preInsert.PreserveInput); err != nil {
 				return err
 			}
 		}
