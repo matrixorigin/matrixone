@@ -16,7 +16,6 @@ package plan
 
 import (
 	"context"
-	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -394,6 +393,9 @@ func (b *OndupUpdateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32
 }
 
 func (b *OndupUpdateBinder) makeColRef(targetIdx, colPos int, depth int32, name string, relPos int32) *plan.Expr {
+	if depth > 0 && b.builder != nil && b.builder.odkuAdmission != nil {
+		b.builder.odkuAdmission.hasOuterReference = true
+	}
 	expr := &plan.Expr{Typ: b.tableDef.Cols[targetIdx].Typ}
 	if depth == 0 {
 		expr.Expr = &plan.Expr_Col{Col: &plan.ColRef{
@@ -419,313 +421,36 @@ func (b *OndupUpdateBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr,
 	return nil, moerr.NewInvalidInputf(b.GetContext(), "cannot bind window functions '%s'", funcName)
 }
 
-func (b *OndupUpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	hasTarget, _ := b.astSubqueryTargetCorrelation(astExpr)
-	_, candidateNested := b.astSubqueryCandidateCorrelation(astExpr)
-	hasNestedAst := astSubqueryContainsNestedSubquery(astExpr)
-	if hasTarget || candidateNested {
-		return nil, moerr.NewUnsupportedDML(b.GetContext(), odkuTargetCorrelatedSubqueryCause)
-	}
+// odkuAdmissionState belongs exclusively to a validation-only builder. A
+// resolved outer reference survives a later sibling error independently of
+// whether the complete subquery expression can be built.
+type odkuAdmissionState struct {
+	hasOuterReference bool
+}
 
-	// Certain outer target references are rejected before binding so an invalid
-	// sibling cannot erase their correlation. Bare columns with a local FROM
-	// cannot be classified reliably from the AST: an
-	// identically named column in a local FROM scope must shadow the outer target
-	// or row alias. Bind the subquery first, while its nested Expr_Sub nodes still
-	// retain their provenance, then reject a target or candidate correlation that
-	// occurs across a nested subquery boundary. Flattening happens later in the
-	// INSERT builder and would erase that distinction.
-	expr, err := b.baseBindSubquery(astExpr, isRoot)
-	if err != nil {
-		return nil, err
-	}
-	if b.builder != nil && b.selectTag != 0 {
-		hasTarget, hasCandidate, hasNested :=
-			b.builder.analyzeOdkuCorrelatedSubquery(expr, b.targetCorrelationTag, b.selectTag)
-		if (hasTarget || hasCandidate) && (hasNested || hasNestedAst) {
+func (b *OndupUpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
+	if b.builder != nil && b.builder.odkuAdmission == nil && b.ctx != nil {
+		hasOuterReference := func() bool {
+			probe := NewQueryBuilder(plan.Query_SELECT, b.builder.compCtx, b.builder.isPrepareStatement, true)
+			probe.nextBindTag = b.builder.nextBindTag
+			probe.odkuAdmission = &odkuAdmissionState{}
+			probeCtx := cloneBindContextForWindowValidation(b.ctx)
+			probeCtx.odkuAdmission = probe.odkuAdmission
+			restoreCTEs := snapshotWindowValidationCTEState(probeCtx, true)
+			defer restoreCTEs()
+			binder := NewOndupUpdateBinder(b.GetContext(), probe, probeCtx,
+				b.scanTag, b.selectTag, b.tableDef, b.targetDBName, b.targetTableName,
+				b.lowerCaseTableNames, b.rowAlias)
+			binder.SetTargetCorrelationTag(b.targetCorrelationTag)
+			probeCtx.binder = binder
+			_, _ = binder.baseBindSubquery(cloneTreeExpr(astExpr).(*tree.Subquery), isRoot)
+			return probe.odkuAdmission.hasOuterReference
+		}()
+		if hasOuterReference {
 			return nil, moerr.NewUnsupportedDML(b.GetContext(), odkuTargetCorrelatedSubqueryCause)
 		}
 	}
-	return expr, nil
-}
-
-// astSubqueryContainsNestedSubquery preserves the nesting information that is
-// lost when bindSelect flattens a scalar subquery into its input plan. The
-// plan-level walk remains the authority for whether an identifier resolved to
-// an INSERT row alias; this helper only supplies the structural fact that a
-// child subquery existed.
-func astSubqueryContainsNestedSubquery(astExpr *tree.Subquery) bool {
-	if astExpr == nil {
-		return false
-	}
-
-	active := make(map[uintptr]struct{})
-	hasNested := false
-	var walk func(reflect.Value)
-	walk = func(value reflect.Value) {
-		if hasNested || !value.IsValid() {
-			return
-		}
-		if value.Kind() == reflect.Interface {
-			if value.IsNil() {
-				return
-			}
-			walk(value.Elem())
-			return
-		}
-		if value.Kind() == reflect.Pointer {
-			if value.IsNil() {
-				return
-			}
-			if value.CanInterface() {
-				if node, ok := value.Interface().(*tree.Subquery); ok {
-					if node != astExpr {
-						hasNested = true
-						return
-					}
-				}
-			}
-			pointer := value.Pointer()
-			if _, ok := active[pointer]; ok {
-				return
-			}
-			active[pointer] = struct{}{}
-			defer delete(active, pointer)
-			walk(value.Elem())
-			return
-		}
-
-		switch value.Kind() {
-		case reflect.Struct:
-			valueType := value.Type()
-			for i := 0; i < value.NumField(); i++ {
-				if valueType.Field(i).PkgPath == "" {
-					walk(value.Field(i))
-				}
-			}
-		case reflect.Slice, reflect.Array:
-			for i := 0; i < value.Len(); i++ {
-				walk(value.Index(i))
-			}
-		}
-	}
-
-	walk(reflect.ValueOf(astExpr))
-	return hasNested
-}
-
-// astSubqueryTargetCorrelation checks the parser tree before the subquery is
-// bound and flattened. Once an inner scalar subquery is flattened into the
-// outer input plan, the plan-level walk cannot distinguish that unsafe shape
-// from an ordinary scalar expression. It deliberately ignores local aliases
-// that shadow the ODKU target table; ordinary local subquery tables and sibling
-// scalar subqueries remain valid.
-func (b *OndupUpdateBinder) astSubqueryTargetCorrelation(astExpr *tree.Subquery) (hasTarget, hasNested bool) {
-	if b == nil || astExpr == nil {
-		return false, false
-	}
-	targetTableName := tree.NewCStr(b.targetTableName, b.lowerCaseTableNames).Compare()
-	targetDBName := tree.NewCStr(b.targetDBName, b.lowerCaseTableNames).Compare()
-	return b.astSubqueryCorrelation(astExpr, func(node *tree.UnresolvedName, local bool) bool {
-		if local {
-			return false
-		}
-		if _, ok := lookupInsertTableColumn(b.tableDef, node.ColName(), b.lowerCaseTableNames); !ok {
-			return false
-		}
-		if node.TblName() == "" {
-			return true // No local FROM can own this known target column.
-		}
-		qualifier := tree.NewCStr(node.TblName(), b.lowerCaseTableNames).Compare()
-		return qualifier == targetTableName &&
-			(node.DbName() == "" ||
-				tree.NewCStr(node.DbName(), b.lowerCaseTableNames).Compare() == targetDBName)
-	})
-}
-
-// astSubqueryCandidateCorrelation performs the same pre-binding safety check
-// for INSERT row aliases. A nested candidate-correlated subquery has an input
-// plan that is materialized before duplicate-key arbitration, so the outer
-// target-match guard cannot make it safe. Local FROM aliases still shadow the
-// row alias and must not be classified as candidate references.
-func (b *OndupUpdateBinder) astSubqueryCandidateCorrelation(astExpr *tree.Subquery) (hasCandidate, hasNested bool) {
-	if b == nil || b.rowAlias == nil {
-		return false, false
-	}
-	candidateName := b.rowAlias.name
-	return b.astSubqueryCorrelation(astExpr, func(node *tree.UnresolvedName, local bool) bool {
-		return !local && node.DbName() == "" && node.TblName() != "" &&
-			tree.NewCStr(node.TblName(), b.lowerCaseTableNames).Compare() == candidateName
-	})
-}
-
-func (b *OndupUpdateBinder) astSubqueryCorrelation(
-	astExpr *tree.Subquery,
-	match func(*tree.UnresolvedName, bool) bool,
-) (hasCorrelation, hasNested bool) {
-	if b == nil || astExpr == nil || match == nil {
-		return false, false
-	}
-
-	funcExprType := reflect.TypeOf(tree.FuncExpr{})
-	type subqueryFrame struct {
-		hasCorrelation bool
-		hasChild       bool
-	}
-
-	frames := make([]subqueryFrame, 0, 2)
-	localScopes := make([]map[string]struct{}, 0, 2)
-	isLocalQualifier := func(name string) bool {
-		for i := len(localScopes) - 1; i >= 0; i-- {
-			if _, ok := localScopes[i][name]; ok {
-				return true
-			}
-		}
-		return false
-	}
-	active := make(map[uintptr]struct{})
-	var walk func(reflect.Value)
-	walk = func(value reflect.Value) {
-		if !value.IsValid() {
-			return
-		}
-		if value.Kind() == reflect.Interface {
-			if value.IsNil() {
-				return
-			}
-			walk(value.Elem())
-			return
-		}
-		if value.Kind() == reflect.Pointer {
-			if value.IsNil() {
-				return
-			}
-			pointer := value.Pointer()
-			if _, ok := active[pointer]; ok {
-				return
-			}
-			active[pointer] = struct{}{}
-			defer delete(active, pointer)
-
-			if value.CanInterface() {
-				switch node := value.Interface().(type) {
-				case *tree.Select:
-					localScopes = append(localScopes, b.astSelectLocalQualifiers(node.Select))
-					walk(value.Elem())
-					localScopes = localScopes[:len(localScopes)-1]
-					return
-				case *tree.SelectClause:
-					localScopes = append(localScopes, b.astSelectLocalQualifiers(node))
-					walk(value.Elem())
-					localScopes = localScopes[:len(localScopes)-1]
-					return
-				case *tree.UnresolvedName:
-					if len(frames) > 0 {
-						qualifier := tree.NewCStr(node.TblName(), b.lowerCaseTableNames).Compare()
-						if node.DbName() != "" {
-							qualifier = tree.NewCStr(node.DbName(), b.lowerCaseTableNames).Compare() + "." + qualifier
-						}
-						local := isLocalQualifier(qualifier)
-						if node.TblName() == "" {
-							// The empty scope key records any local FROM, even
-							// when its columns cannot be classified from the AST.
-							local = isLocalQualifier("")
-						}
-						if match(node, local) {
-							frames[len(frames)-1].hasCorrelation = true
-							hasCorrelation = true
-						}
-					}
-					return
-				case *tree.Subquery:
-					if len(frames) > 0 {
-						frames[len(frames)-1].hasChild = true
-					}
-					frames = append(frames, subqueryFrame{})
-					walk(value.Elem())
-					frame := frames[len(frames)-1]
-					frames = frames[:len(frames)-1]
-					if frame.hasCorrelation && (frame.hasChild || len(frames) > 0) {
-						hasNested = true
-					}
-					return
-				}
-			}
-			walk(value.Elem())
-			return
-		}
-
-		switch value.Kind() {
-		case reflect.Struct:
-			valueType := value.Type()
-			for i := 0; i < value.NumField(); i++ {
-				if valueType == funcExprType && valueType.Field(i).Name == "Func" {
-					continue
-				}
-				if valueType.Field(i).PkgPath == "" {
-					walk(value.Field(i))
-				}
-			}
-		case reflect.Slice, reflect.Array:
-			for i := 0; i < value.Len(); i++ {
-				walk(value.Index(i))
-			}
-		}
-	}
-
-	walk(reflect.ValueOf(astExpr))
-	return hasCorrelation, hasNested
-}
-
-func (b *OndupUpdateBinder) astSelectLocalQualifiers(stmt tree.SelectStatement) map[string]struct{} {
-	names := make(map[string]struct{})
-	if selectClause, ok := stmt.(*tree.SelectClause); ok && selectClause.From != nil {
-		for _, tableExpr := range selectClause.From.Tables {
-			b.collectAstTableQualifiers(tableExpr, names)
-		}
-	}
-	return names
-}
-
-func (b *OndupUpdateBinder) collectAstTableQualifiers(expr tree.TableExpr, names map[string]struct{}) {
-	switch tableExpr := expr.(type) {
-	case *tree.TableName:
-		name := tree.NewCStr(string(tableExpr.ObjectName), b.lowerCaseTableNames).Compare()
-		if name == "" { // Parser's synthetic FROM for SELECT without a table.
-			return
-		}
-		names[""] = struct{}{}
-		names[name] = struct{}{}
-		db := string(tableExpr.SchemaName)
-		if db == "" {
-			db = b.targetDBName
-			if b.builder != nil {
-				db = b.builder.compCtx.DefaultDatabase()
-			}
-		}
-		if db != "" {
-			names[tree.NewCStr(db, b.lowerCaseTableNames).Compare()+"."+name] = struct{}{}
-		}
-	case *tree.AliasedTableExpr:
-		if tableExpr.As.Alias != "" {
-			names[""] = struct{}{}
-			names[tree.NewCStr(string(tableExpr.As.Alias), b.lowerCaseTableNames).Compare()] = struct{}{}
-			return
-		}
-		b.collectAstTableQualifiers(tableExpr.Expr, names)
-	case *tree.ParenTableExpr:
-		b.collectAstTableQualifiers(tableExpr.Expr, names)
-	case *tree.JoinTableExpr:
-		b.collectAstTableQualifiers(tableExpr.Left, names)
-		b.collectAstTableQualifiers(tableExpr.Right, names)
-	case *tree.ApplyTableExpr:
-		b.collectAstTableQualifiers(tableExpr.Left, names)
-		b.collectAstTableQualifiers(tableExpr.Right, names)
-	default:
-		if expr != nil {
-			names[""] = struct{}{}
-		}
-	}
+	return b.baseBindSubquery(astExpr, isRoot)
 }
 
 func (b *OndupUpdateBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {

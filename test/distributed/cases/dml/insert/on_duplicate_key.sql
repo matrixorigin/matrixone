@@ -574,3 +574,31 @@ insert into t_odku_scope_no_key values(2,'y') on duplicate key update b=(select 
 select a from t_odku_scope_no_key order by a;
 drop table t_odku_scope_key;
 drop table t_odku_scope_no_key;
+
+-- #28160: canonical clause aliases and local-FROM partial failure.
+create table t_odku_scope_local(c int);
+insert into t_odku_scope_local values(7);
+create table t_odku_scope_alias_key(a int primary key,b varchar(30));
+insert into t_odku_scope_alias_key values(1,'seed');
+insert into t_odku_scope_alias_key values(1,'x') on duplicate key update b=(select 'local' as b order by b);
+select cast(b='local' as int) as local_alias from t_odku_scope_alias_key;
+insert into t_odku_scope_alias_key values(1,'x') on duplicate key update b=(select 'local' as b having b='local');
+select cast(b='local' as int) as local_alias from t_odku_scope_alias_key;
+insert into t_odku_scope_alias_key values(1,'x') on duplicate key update b=(select 'local' as b group by b);
+select cast(b='local' as int) as local_alias from t_odku_scope_alias_key;
+insert into t_odku_scope_alias_key values(1,'x') on duplicate key update b=(with q as (select 'cte' as b) select b from q);
+select cast(b='cte' as int) as local_cte from t_odku_scope_alias_key;
+insert into t_odku_scope_alias_key values(1,'x') on duplicate key update b=(select b as b order by b);
+insert into t_odku_scope_alias_key values(1,'x') on duplicate key update b=(select 'local' as b where b='cte' order by b);
+create table t_odku_scope_alias_no_key(a int,b varchar(30));
+insert into t_odku_scope_alias_no_key values(1,'x') on duplicate key update b=(select concat(missing_column,b) from t_odku_scope_local limit 1);
+prepare odku_scope_stmt from insert into t_odku_scope_alias_no_key values(1,'x') on duplicate key update b=(select concat(missing_column,b,?) from t_odku_scope_local limit 1);
+insert into t_odku_scope_alias_no_key values(1,'x') on duplicate key update b=(select concat(b,missing_column) from t_odku_scope_local limit 1);
+prepare odku_scope_stmt from insert into t_odku_scope_alias_no_key values(1,'x') on duplicate key update b=(select concat(b,missing_column,?) from t_odku_scope_local limit 1);
+select a from t_odku_scope_alias_no_key;
+insert into t_odku_scope_alias_no_key values(1,'x') on duplicate key update b=(select 'local' as b having b='local');
+insert into t_odku_scope_alias_no_key values(2,'y') on duplicate key update b=(select concat(missing_column,'local') from t_odku_scope_local limit 1);
+select a from t_odku_scope_alias_no_key order by a;
+drop table t_odku_scope_alias_key;
+drop table t_odku_scope_alias_no_key;
+drop table t_odku_scope_local;

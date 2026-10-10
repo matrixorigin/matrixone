@@ -55,6 +55,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	}
 
 	if builder != nil {
+		bc.odkuAdmission = builder.odkuAdmission
 		bc.lower = builder.compCtx.GetLowerCaseTableNames()
 		if parent == nil && builder.GetContext().Value(viewSchemaContextKey{}) != nil {
 			bc.defaultDatabase = builder.compCtx.DefaultDatabase()
@@ -642,8 +643,14 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 	}
 }
 
-func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandAliasMode) (tree.Expr, error) {
-	var err error
+func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandAliasMode) (qualified tree.Expr, err error) {
+	if bc.odkuAdmission != nil {
+		defer func() {
+			if err != nil {
+				qualified, err = tree.NewNumVal("", "", false, tree.P_null), nil
+			}
+		}()
+	}
 
 	switch exprImpl := astExpr.(type) {
 	case *tree.ParenExpr:

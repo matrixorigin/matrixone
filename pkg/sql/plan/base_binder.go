@@ -63,6 +63,35 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		return nil, bindErr
 	}
 	defer leaveBinding()
+	if b.builder != nil && b.builder.odkuAdmission != nil {
+		// This builder only resolves ODKU admission. Keep visiting siblings after
+		// an invalid expression; its placeholder plan is always discarded.
+		defer func() {
+			if err != nil {
+				// Arity/type prechecks may fail before visiting their operands.
+				// Resolve those operands independently in the same clause binder.
+				switch failed := astExpr.(type) {
+				case *tree.FuncExpr:
+					for _, operand := range failed.Exprs {
+						_, _ = b.impl.BindExpr(operand, depth, false)
+					}
+				case *tree.CastExpr:
+					_, _ = b.impl.BindExpr(failed.Expr, depth, false)
+				case *tree.ComparisonExpr:
+					_, _ = b.impl.BindExpr(failed.Left, depth, false)
+					_, _ = b.impl.BindExpr(failed.Right, depth, false)
+				case *tree.FullTextMatchExpr:
+					_, _ = b.impl.BindExpr(failed.Pattern, depth, false)
+					for _, key := range failed.KeyParts {
+						if key.ColName != nil {
+							_, _ = b.impl.BindColRef(key.ColName, depth, false)
+						}
+					}
+				}
+				expr, err = makePlan2NullConstExprWithType(), nil
+			}
+		}()
+	}
 	if b.numericParamType != nil && !b.isNumericContextNode(astExpr, depth) {
 		paramType := b.numericParamType
 		b.numericParamType = nil
@@ -662,7 +691,18 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		}
 	} else {
 		binding := b.resolveTableBinding(b.ctx, db, table)
-		if binding != nil {
+		ok := binding != nil
+		if ok && db != "" && b.builder != nil && b.builder.odkuAdmission != nil {
+			// A database-qualified real table cannot be impersonated by a
+			// different local table's alias. Use resolved scan identity.
+			ok = binding.nodeId >= 0 && int(binding.nodeId) < len(b.builder.qry.Nodes)
+			if ok {
+				node := b.builder.qry.Nodes[binding.nodeId]
+				ok = binding.db == db && node.TableDef != nil &&
+					tree.NewCStr(node.TableDef.Name, b.ctx.lower).Compare() == table
+			}
+		}
+		if ok {
 			colPos = binding.FindColumn(col)
 			if colPos == AmbiguousName {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)

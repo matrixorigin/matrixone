@@ -226,49 +226,6 @@ func TestInsertRowAliasNestedCorrelationIsRejected(t *testing.T) {
 	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
 }
 
-func TestOndupUpdateBinderDetectsNestedTargetCorrelationBeforeBinding(t *testing.T) {
-	stmt, err := parsers.ParseOne(
-		context.Background(), dialect.MYSQL,
-		"insert into t values (2, 5, 0) as n on duplicate key update b = (select (select q.y from q) from s where s.x = coalesce(t.id, 0))",
-		1,
-	)
-	require.NoError(t, err)
-	insert := stmt.(*tree.Insert)
-	astSubquery, ok := scalarSubqueryExpr(insert.OnDuplicateUpdate[0].Expr)
-	require.True(t, ok)
-
-	binder := NewOndupUpdateBinder(
-		context.Background(), nil, nil, 0, 0, testInsertAliasTable(), "db", "t", 1,
-	)
-	hasTarget, hasNested := binder.astSubqueryTargetCorrelation(astSubquery)
-	require.True(t, hasTarget)
-	require.True(t, hasNested)
-}
-
-func TestOndupUpdateBinderDetectsNestedCandidateCorrelationBeforeBinding(t *testing.T) {
-	stmt, err := parsers.ParseOne(
-		context.Background(), dialect.MYSQL,
-		"insert into t values (2, 5, 0) as n on duplicate key update b = (select (select q.y from q) from s where s.x = n.id)",
-		1,
-	)
-	require.NoError(t, err)
-	insert := stmt.(*tree.Insert)
-	astSubquery, ok := scalarSubqueryExpr(insert.OnDuplicateUpdate[0].Expr)
-	require.True(t, ok)
-
-	rowAlias, err := validateInsertRowAlias(
-		context.Background(), &tree.AliasClause{Alias: "n"},
-		[]string{"id", "a", "b"}, testInsertAliasTable(), "db", "t", 1,
-	)
-	require.NoError(t, err)
-	binder := NewOndupUpdateBinder(
-		context.Background(), nil, nil, 0, 0, testInsertAliasTable(), "db", "t", 1, rowAlias,
-	)
-	hasCandidate, hasNested := binder.astSubqueryCandidateCorrelation(astSubquery)
-	require.True(t, hasCandidate)
-	require.True(t, hasNested)
-}
-
 func TestInsertRowAliasNestedBareCandidateCorrelationIsRejected(t *testing.T) {
 	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY'), (1, 'Marketing', 'LA') as n(k, incoming_a, incoming_b) "+
@@ -309,38 +266,6 @@ func TestLegacyOndupNestedBareLocalColumnDoesNotCountAsTarget(t *testing.T) {
 			"from constraint_test.self_ref as s where s.parent_id = id)")
 	require.NoError(t, err)
 	require.NotNil(t, logicPlan)
-}
-
-func TestOndupUpdateBinderIgnoresLocalAliasMatchingTarget(t *testing.T) {
-	stmt, err := parsers.ParseOne(
-		context.Background(), dialect.MYSQL,
-		"insert into t values (2, 5, 0) as n on duplicate key update b = (select t.b from s as t where t.x = (select 1))",
-		1,
-	)
-	require.NoError(t, err)
-	insert := stmt.(*tree.Insert)
-	astSubquery, ok := scalarSubqueryExpr(insert.OnDuplicateUpdate[0].Expr)
-	require.True(t, ok)
-
-	binder := NewOndupUpdateBinder(
-		context.Background(), nil, nil, 0, 0, testInsertAliasTable(), "db", "t", 1,
-	)
-	hasTarget, hasNested := binder.astSubqueryTargetCorrelation(astSubquery)
-	require.False(t, hasTarget)
-	require.False(t, hasNested)
-
-	stmt, err = parsers.ParseOne(
-		context.Background(), dialect.MYSQL,
-		"insert into t values (2, 5, 0) as n on duplicate key update b = (select db.t.b from s as t where t.x = (select 1))",
-		1,
-	)
-	require.NoError(t, err)
-	insert = stmt.(*tree.Insert)
-	astSubquery, ok = scalarSubqueryExpr(insert.OnDuplicateUpdate[0].Expr)
-	require.True(t, ok)
-	hasTarget, hasNested = binder.astSubqueryTargetCorrelation(astSubquery)
-	require.True(t, hasTarget)
-	require.True(t, hasNested)
 }
 
 func TestInsertRowAliasGeneratedDefaultNoKeyFallbackBuilds(t *testing.T) {
@@ -819,4 +744,71 @@ func TestLegacyOndupInvalidQualifiedTargetColumnStillDiscards(t *testing.T) {
 	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.fake_pk_no_unique_gen(a) values(1) on duplicate key update a=(select fake_pk_no_unique_gen.missing_column)")
 	require.NoError(t, err)
+}
+
+func TestLegacyOndupCanonicalAdmissionScope(t *testing.T) {
+	for _, clause := range []string{"order by", "having", "group by"} {
+		for _, alias := range []string{"loc", "local_loc"} {
+			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+				"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc=(select 'local' as "+alias+" "+clause+" "+alias+")")
+			require.NoError(t, err, clause, alias)
+		}
+	}
+	for _, rhs := range []string{
+		"(select concat(missing_column,loc) from constraint_test.emp limit 1)",
+		"(select concat(loc,missing_column) from constraint_test.emp limit 1)",
+		"(select ifnull(missing_column,loc,1) from constraint_test.emp limit 1)",
+		"(select (missing_column,loc)=(1,2,3) from constraint_test.emp limit 1)",
+		"(select match(missing_column,dept.loc) against(missing_pattern) from constraint_test.emp limit 1)",
+		"(select concat(empno,dept.loc) from constraint_test.emp e join constraint_test.emp e2 on e.empno=e2.empno limit 1)",
+		"(select loc as loc order by loc)",
+		"(select 'local' as loc where loc='NY' order by loc)",
+		"(select (select dept.loc) from constraint_test.emp limit 1)",
+	} {
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc="+rhs)
+		require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause, rhs)
+	}
+}
+
+func TestLegacyOndupAdmissionCTEOwnership(t *testing.T) {
+	for _, rhs := range []string{
+		"(with q as (select 'local' as loc) select loc from q)",
+		"(select loc from (select 'local' as loc) q)",
+	} {
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc="+rhs)
+		require.NoError(t, err, rhs)
+	}
+	for _, rhs := range []string{
+		"(with q as (select dept.loc as x) select x from q)",
+		"(with q as (select concat(missing_column,dept.loc) as x) select x from q)",
+	} {
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc="+rhs)
+		require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause, rhs)
+	}
+	// Recovery in the discarded admission plan must not make the real CTE valid.
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc=(with q as (select missing_column as x) select x from q)")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), odkuTargetCorrelatedSubqueryCause)
+}
+
+func TestOdkuAdmissionRestoresSharedCTEAST(t *testing.T) {
+	original := &tree.CTE{}
+	ref := &CTERef{ast: original, hasNestedRef: true, hasNestedUse: true,
+		occurrences: []cteOccurrence{{rootID: 99}}}
+	ctx := NewBindContext(nil, nil)
+	ctx.cteByName = map[string]*CTERef{"q": ref}
+	restore := snapshotWindowValidationCTEState(ctx, true)
+	require.NotSame(t, original, ref.ast)
+	require.Empty(t, ref.occurrences)
+	ref.ast.Name = &tree.AliasClause{Alias: "probe_only"}
+	restore()
+	require.Same(t, original, ref.ast)
+	require.Nil(t, original.Name)
+	require.Equal(t, int32(99), ref.occurrences[0].rootID)
+	require.True(t, ref.hasNestedRef)
+	require.True(t, ref.hasNestedUse)
 }
