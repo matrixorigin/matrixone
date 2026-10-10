@@ -158,11 +158,13 @@ func TestCompactDiagnosticGenerationAnalysis(t *testing.T) {
 		err      error
 		outcome  string
 		missing  string
+		level    int
 	}{
-		{time.Millisecond, context.Canceled, "cancelled", "execution_failed_before_analysis"},
-		{17 * time.Second, context.Canceled, "cancelled", "execution_failed_before_analysis"},
-		{5 * time.Second, nil, "success", "analysis_unavailable"},
-		{17 * time.Second, nil, "success", "analysis_unavailable"},
+		{time.Millisecond, context.Canceled, "cancelled", "execution_failed_before_analysis", 2},
+		{17 * time.Second, context.Canceled, "cancelled", "execution_failed_before_analysis", 3},
+		{2 * time.Second, nil, "success", "analysis_unavailable", 1},
+		{5 * time.Second, nil, "success", "analysis_unavailable", 2},
+		{17 * time.Second, nil, "success", "analysis_unavailable", 3},
 	} {
 		for _, state := range []string{"nil_plan", "retained_topology", "analyzed", "analyzed_zero"} {
 			t.Run(tc.outcome+"/"+tc.duration.String()+"/"+state, func(t *testing.T) {
@@ -185,11 +187,13 @@ func TestCompactDiagnosticGenerationAnalysis(t *testing.T) {
 				require.True(t, h.SetStatementDiagnostics(context.Background(), resource.StatementResourceSummary{StatementWallNS: uint64(tc.duration), AttemptCount: 1}, tc.err))
 				d := decodeCompactDiagnostic(t, h)
 				require.Equal(t, tc.outcome, d.Outcome)
-				require.GreaterOrEqual(t, d.CapturedLevel, 2)
+				require.Equal(t, tc.level, d.CapturedLevel)
 				require.Equal(t, len(q.GetQuery().Nodes), d.Detail.LogicalTotal)
 				require.Equal(t, len(q.GetQuery().Nodes)-len(d.Logical), d.Detail.LogicalOmitted)
 				if analyzed {
 					require.Equal(t, "complete", d.Detail.Capture)
+				}
+				if analyzed && tc.level >= 2 {
 					require.NotEmpty(t, d.Logical)
 					require.True(t, d.Logical[0].AnalyzeAvailable)
 					if state == "analyzed_zero" {
@@ -200,10 +204,16 @@ func TestCompactDiagnosticGenerationAnalysis(t *testing.T) {
 						require.NotEmpty(t, d.Physical)
 					}
 				} else {
-					require.Equal(t, tc.missing, d.Detail.Capture)
+					if !analyzed {
+						require.Equal(t, tc.missing, d.Detail.Capture)
+						require.Contains(t, models.RenderStatementDiagnostics(d, models.VerboseOption), tc.missing)
+					}
 					require.Empty(t, d.Logical)
 					require.Empty(t, d.Physical)
-					require.Contains(t, models.RenderStatementDiagnostics(d, models.VerboseOption), tc.missing)
+				}
+				if tc.level == 1 {
+					require.Contains(t, models.RenderStatementDiagnostics(d, models.NormalOption), "logical-omitted=2")
+					require.LessOrEqual(t, len(h.Marshal(context.Background())), models.DiagnosticsHeaderBudget)
 				}
 			})
 		}

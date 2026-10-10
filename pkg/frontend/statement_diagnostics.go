@@ -40,6 +40,9 @@ func (h *marshalPlanHandler) captureStatementDiagnostics(ctx context.Context, ph
 	}
 	d.SetPhases(statistic.StatsInfoFromContext(ctx))
 	d.Scheduling = projectDiagnosticScheduling(h.schedulingTrace)
+	if h.query != nil {
+		d.Detail.LogicalTotal = len(h.query.Nodes)
+	}
 	// Capture precedes release, including successful frontend completion without
 	// Run. Initialized counters and reused topology do not prove current analysis;
 	// only a current preview permits publishing execution observations.
@@ -51,10 +54,8 @@ func (h *marshalPlanHandler) captureStatementDiagnostics(ctx context.Context, ph
 		if runErr != nil {
 			d.Detail.Capture = "execution_failed_before_analysis"
 		}
-		d.Detail.LogicalTotal = len(h.query.Nodes)
 	} else if level >= 2 {
 		d.Logical = projectDiagnosticLogical(h.query, level)
-		d.Detail.LogicalTotal = len(h.query.Nodes)
 	}
 	if level >= 3 && !analysisUnavailable {
 		if phy == nil {
