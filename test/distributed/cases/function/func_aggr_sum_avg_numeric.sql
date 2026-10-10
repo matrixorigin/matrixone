@@ -34,6 +34,36 @@ SELECT SUM(b) = SUM(CAST(b AS DOUBLE)) AS binary_sum_matches,
        AVG(vb) = AVG(CAST(vb AS DOUBLE)) AS varbinary_avg_matches
 FROM string_domains;
 
+-- HEX/BIT literals retain their exact unsigned domain across the DOUBLE precision boundary.
+SELECT CAST(SUM(x'1fffffffffffff') AS DECIMAL(38,0)), CAST(AVG(x'1fffffffffffff') AS DECIMAL(38,0)),
+       CAST(SUM(x'20000000000000') AS DECIMAL(38,0)), CAST(AVG(x'20000000000000') AS DECIMAL(38,0)),
+       CAST(SUM(x'20000000000001') AS DECIMAL(38,0)), CAST(AVG(x'20000000000001') AS DECIMAL(38,0));
+SELECT CAST(SUM(b'100000000000000000000000000000000000000000000000000001') AS DECIMAL(38,0)),
+       CAST(AVG(b'100000000000000000000000000000000000000000000000000001') AS DECIMAL(38,0));
+SELECT CAST(SUM(x'ffffffffffffffff') AS DECIMAL(38,0)), CAST(AVG(x'ffffffffffffffff') AS DECIMAL(38,0));
+SELECT SUM(CAST(x'20000000000001' AS UNSIGNED)), CAST(AVG(CAST(x'20000000000001' AS UNSIGNED)) AS DECIMAL(38,0));
+SELECT SUM(CAST('12' AS BINARY)), AVG(CAST('12' AS BINARY)), SUM(_binary '12'), AVG(_binary '12');
+SELECT CAST(SUM(x'20000000000001') AS DECIMAL(38,0)), CAST(AVG(x'20000000000001') AS DECIMAL(38,0))
+FROM numeric_strings WHERE id <= 2;
+SELECT CAST(SUM(DISTINCT x'20000000000001') AS DECIMAL(38,0)),
+       CAST(AVG(DISTINCT x'20000000000001') AS DECIMAL(38,0)) FROM numeric_strings WHERE id <= 2;
+SELECT id, CAST(SUM(x'20000000000001') OVER (ORDER BY id ROWS UNBOUNDED PRECEDING) AS DECIMAL(38,0)),
+       CAST(AVG(x'20000000000001') OVER (ORDER BY id ROWS UNBOUNDED PRECEDING) AS DECIMAL(38,0))
+FROM numeric_strings WHERE id <= 2 ORDER BY id;
+CREATE VIEW literal_totals AS SELECT SUM(x'20000000000001') AS total, AVG(x'20000000000001') AS mean
+FROM numeric_strings WHERE id <= 2;
+CREATE TABLE materialized_literal_totals AS SELECT * FROM literal_totals;
+SELECT CAST(total AS DECIMAL(38,0)), CAST(mean AS DECIMAL(38,0)) FROM materialized_literal_totals;
+PREPARE literal_aggregate FROM "SELECT CAST(SUM(x'20000000000001') AS DECIMAL(38,0)), CAST(AVG(x'20000000000001') AS DECIMAL(38,0)) FROM numeric_strings WHERE id <= ?";
+SET @sum_avg_literal_rows = 1;
+EXECUTE literal_aggregate USING @sum_avg_literal_rows;
+SET @sum_avg_literal_rows = 2;
+EXECUTE literal_aggregate USING @sum_avg_literal_rows;
+DEALLOCATE PREPARE literal_aggregate;
+-- Out-of-range numeric literals use the existing unsigned CAST rejection.
+SELECT SUM(x'010000000000000000');
+SELECT AVG(x'010000000000000000');
+
 -- Cached PREPARE retains the column's string domain across EXECUTEs.
 PREPARE string_aggregate FROM 'SELECT SUM(s), AVG(s) FROM numeric_strings WHERE g = ?';
 SET @sum_avg_group = 1;
