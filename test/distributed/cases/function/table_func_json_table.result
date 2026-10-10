@@ -1,0 +1,169 @@
+drop database if exists json_table_core;
+drop stage if exists json_table_core_stage;
+create database json_table_core;
+use json_table_core;
+set @json_table_saved_mode=@@sql_mode;
+set sql_mode='';
+select jt.n from json_table('[1,2]', '$[*]' columns(n int path '$')) jt order by jt.n;
+➤ n[4,32,0]  𝄀
+1  𝄀
+2
+select jt.o,jt.n,jt.present from json_table(cast('[{"n":7},{}]' as json), '$[*]' columns(o for ordinality,n int path '$.n' default '9' on empty,present int exists path '$.n')) jt order by jt.o;
+➤ o[4,32,0]  ¦  n[4,32,0]  ¦  present[4,32,0]  𝄀
+1  ¦  7  ¦  1  𝄀
+2  ¦  9  ¦  0
+select jt.n from json_table('[]', '$[*]' columns(n int path '$')) jt;
+➤ n[4,32,0]
+select jt.n from json_table(null, '$[*]' columns(n int path '$')) jt;
+➤ n[4,32,0]
+create table jt_sources(id int,doc text);
+insert into jt_sources values(1,'[1,2]'),(2,'[2,3]'),(3,'[]'),(4,null);
+select t.id,jt.n from jt_sources t,json_table(t.doc, '$[*]' columns(n int path '$')) jt order by t.id,jt.n;
+➤ id[4,32,0]  ¦  n[4,32,0]  𝄀
+1  ¦  1  𝄀
+1  ¦  2  𝄀
+2  ¦  2  𝄀
+2  ¦  3
+select t.id,jt.n from jt_sources t join json_table(t.doc, '$[*]' columns(n int path '$')) jt on t.id=jt.n order by t.id,jt.n;
+➤ id[4,32,0]  ¦  n[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2
+select count(*) as rejected_rows from jt_sources t join json_table(t.doc, '$[*]' columns(n int path '$')) jt on jt.n<0;
+➤ rejected_rows[-5,64,0]  𝄀
+0
+select id from jt_sources t join json_table(t.doc, '$[*]' columns(id int path '$')) jt using(id) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from jt_sources t natural join json_table(t.doc, '$[*]' columns(id int path '$')) jt order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select t.id,jt.n from jt_sources t left join json_table(t.doc, '$[*]' columns(n int path '$')) jt on true;
+not supported: correlated JSON_TABLE requires INNER or CROSS JOIN
+select jt.n from json_table('[]', '$[*]' columns(n int path '$' null on error null on empty)) jt;
+not supported: JSON_TABLE reversed policies require parse-time diagnostics
+create view jt_unsupported_view as select * from json_table('[1]', '$[*]' columns(n int path '$')) jt;
+not supported: JSON_TABLE views require the view compatibility gate
+select jt.n from json_table('[{}]', '$[*]' columns(n int path '$.n' default '7' on empty)) jt;
+➤ n[4,32,0]  𝄀
+7
+select jt.n from json_table('["bad"]', '$[*]' columns(n int path '$' default '8' on error)) jt;
+➤ n[4,32,0]  𝄀
+8
+select jt.n from json_table('["bad"]', '$[*]' columns(n int path '$' null on error)) jt;
+➤ n[4,32,0]  𝄀
+null
+select jt.n from json_table('[]', '$[*]' columns(n int path '$' default '"bad"' on empty)) jt;
+invalid input: invalid JSON_TABLE DEFAULT for column 'n'
+select jt.n from json_table('[]', '$[*]' columns(n tinyint path '$' default '300' on error)) jt;
+invalid input: invalid JSON_TABLE DEFAULT for column 'n'
+select jt.n from json_table('[]', '$[*]' columns(n int path '$' default '{}' on error)) jt;
+invalid input: invalid JSON_TABLE DEFAULT for column 'n'
+select jt.n from json_table('[]', '$[*]' columns(n int path '$' default 'invalid' on empty)) jt;
+invalid input: json text invalid
+select jt.n from json_table('invalid', '$[*]' columns(n int path '$')) jt;
+invalid input: json text invalid
+select jt.n from json_table('["bad"]', '$[*]' columns(n int path '$' error on error)) jt;
+invalid input: cannot convert JSON value "bad" to INT
+select jt.n from json_table('[4]', '$[*]' columns(n int path '$')) jt;
+➤ n[4,32,0]  𝄀
+4
+select jt.a,jt.b from json_table('{"a":[],"b":[10,20]}', '$' columns(nested path '$.a[*]' columns(a int path '$' default '7' on empty),nested path '$.b[*]' columns(b int path '$'))) jt order by jt.b;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+null  ¦  10  𝄀
+null  ¦  20
+select jt.a,jt.b from json_table('{"a":[],"b":[]}', '$' columns(nested path '$.a[*]' columns(a int path '$' default '7' on empty),nested path '$.b[*]' columns(b int path '$'))) jt;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+null  ¦  null
+prepare jt_stmt from 'select jt.n from json_table(?, ''$[*]'' columns(n int path ''$'')) jt order by jt.n';
+set @jt_doc='[5,6]';
+execute jt_stmt using @jt_doc;
+➤ n[4,32,0]  𝄀
+5  𝄀
+6
+set @jt_doc='[7]';
+execute jt_stmt using @jt_doc;
+➤ n[4,32,0]  𝄀
+7
+deallocate prepare jt_stmt;
+select jt.v from json_table('[1.25,2.75]', '$[*]' columns(v decimal(3,1) path '$')) jt limit 1;
+➤ v[3,3,1]  𝄀
+1.3
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1265  ¦  Data truncated for column 'v' at row 1
+select jt.v from json_table('[1.25,2.75]', '$[*]' columns(v decimal(3,1) path '$')) jt;
+➤ v[3,3,1]  𝄀
+1.3  𝄀
+2.8
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+select jt.v from json_table('["ab"]', '$[*]' columns(v varchar(1) path '$' null on error)) jt;
+not supported: JSON_TABLE lossy character conversion requires the scalar compatibility gate
+select jt.v from json_table('[1.25]', '$[*]' columns(v int path '$' null on error)) jt;
+not supported: JSON_TABLE fractional integer conversion requires the scalar compatibility gate
+select jt.v from json_table('[]', '$[*]' columns(v int path '$' default '1.25' on empty)) jt;
+not supported: JSON_TABLE fractional integer conversion requires the scalar compatibility gate
+set @jt_saved_max_error_count=@@max_error_count;
+set max_error_count=0;
+select count(*) as rows_seen,min(jt.v) as minimum,max(jt.v) as maximum from json_table(concat('[',repeat('1.25,',8192),'1.25]'), '$[*]' columns(v decimal(3,1) path '$')) jt;
+➤ rows_seen[-5,64,0]  ¦  minimum[3,3,1]  ¦  maximum[3,3,1]  𝄀
+8193  ¦  1.3  ¦  1.3
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+set max_error_count=@jt_saved_max_error_count;
+select sum(jt.v) from json_table(concat('[',repeat('1.25,',8192),'{}]'), '$[*]' columns(v decimal(3,1) path '$' error on error)) jt;
+invalid input: cannot convert JSON value "object or array" to DECIMAL(3,1)
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  20301  ¦  invalid input: cannot convert JSON value "object or array" to DECIMAL(3,1)
+select a.v,b.v from json_table('[1.25]', '$[*]' columns(v decimal(3,1) path '$')) a,json_table('[2.75]', '$[*]' columns(v decimal(3,1) path '$')) b;
+➤ v[3,3,1]  ¦  v[3,3,1]  𝄀
+1.3  ¦  2.8
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+select hex(jt.v) as encoded from json_table('{}', '$' columns(v varchar(20) path '$.missing' default '"a\\\\b''c"' on empty)) jt;
+➤ encoded[12,160,0]  𝄀
+615C622763
+select jt.n from json_table(json_object('a\\b''c',7), '$."a\\\\b''c"' columns(n int path '$')) jt;
+➤ n[4,32,0]  𝄀
+7
+set sql_mode='NO_BACKSLASH_ESCAPES,ANSI_QUOTES';
+select hex(jt.v) as encoded from json_table('{}', '$' columns(v varchar(20) path '$.missing' default '"a\\b''c"' on empty)) jt;
+➤ encoded[12,160,0]  𝄀
+615C622763
+select jt.n from json_table(json_object('a\b''c',7), '$."a\\b''c"' columns(n int path '$')) jt;
+➤ n[4,32,0]  𝄀
+7
+set sql_mode='';
+create stage json_table_core_stage url='file://$resources/json_table/';
+select jt.n from json_table(cast('stage://json_table_core_stage/input.json' as datalink), '$[*]' columns(n int path '$')) jt order by jt.n;
+➤ n[4,32,0]  𝄀
+1  𝄀
+2
+create table jt_links(id int,doc datalink);
+insert into jt_links values(1,cast('stage://json_table_core_stage/input.json' as datalink));
+select t.id,jt.n from jt_links t,json_table(t.doc, '$[*]' columns(n int path '$')) jt order by t.id,jt.n;
+➤ id[4,32,0]  ¦  n[4,32,0]  𝄀
+1  ¦  1  𝄀
+1  ¦  2
+select jt.n from json_table(cast('stage://json_table_core_stage/missing.json' as datalink), '$[*]' columns(n int path '$' null on error)) jt;
+file missing.json is not found
+select jt.n from json_table('[8]', '$[*]' columns(n int path '$')) jt;
+➤ n[4,32,0]  𝄀
+8
+set sql_mode=@json_table_saved_mode;
+drop stage json_table_core_stage;
+drop database json_table_core;
