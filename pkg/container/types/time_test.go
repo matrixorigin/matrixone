@@ -853,3 +853,31 @@ func TestTime_ToDecimal_ScaleGreaterThan6(t *testing.T) {
 		})
 	}
 }
+
+func TestParseTimeWithoutDate(t *testing.T) {
+	for _, input := range []string{"2024-01-02 12:34:56", " 2024-01-02 00:00:00.000000 ", "0000-00-00 00:00:00"} {
+		_, err := ParseTimeWithoutDate(input, 6)
+		require.Error(t, err, input)
+	}
+	// The ordinary parser intentionally retains its datetime-to-time cast.
+	ordinary, err := ParseTime("2024-01-02 12:34:56", 6)
+	require.NoError(t, err)
+	require.Equal(t, "12:34:56.000000", ordinary.String2(6))
+	for _, tc := range []struct{ input, want string }{
+		{"12:34:56.123456", "12:34:56.123456"},
+		{" -12:34:56 ", "-12:34:56.000000"},
+		{"2 03:04:05", "51:04:05.000000"},
+		{"-2 03:04:05", "-51:04:05.000000"},
+		{"123456", "12:34:56.000000"},
+		{"00:00:00", "00:00:00.000000"},
+		{"2562047787:59:59.999999", "2562047787:59:59.999999"},
+	} {
+		got, err := ParseTimeWithoutDate(tc.input, 6)
+		require.NoError(t, err, tc.input)
+		require.Equal(t, tc.want, got.String2(6))
+	}
+	for _, input := range []string{"2024-01-02T12:34:56", "12:60:00", "2562047788:00:00", "not-a-time"} {
+		_, err := ParseTimeWithoutDate(input, 6)
+		require.Error(t, err, input)
+	}
+}

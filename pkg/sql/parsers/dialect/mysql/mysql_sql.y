@@ -184,6 +184,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     lengthScaleOpt tree.LengthScaleOpt
     tuple *tree.Tuple
     funcType tree.FuncType
+    jsonValueReturning *tree.JsonValueReturning
+    jsonValueResponse tree.JsonValueResponse
+    jsonValueSpec *tree.JsonValueSpec
 
     columnAttribute tree.ColumnAttribute
     columnAttributes []tree.ColumnAttribute
@@ -786,6 +789,12 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <tableNames> table_name_list alter_publication_table_opt
 %type <columnTableDef> column_def
 %type <columnType> mo_cast_type mysql_cast_type
+%type <columnType> json_value_return_type
+%type <jsonValueReturning> json_value_returning_opt
+%type <jsonValueResponse> json_value_response json_value_on_empty json_value_on_error
+%type <jsonValueSpec> json_value_responses_opt
+%type <str> json_value_charset_opt
+%type <expr> json_value_default_literal
 %type <columnType> column_type char_type spatial_type time_type numeric_type decimal_type int_type as_datatype_opt
 %type <str> integer_opt spatial_type_name
 %type <columnAttribute> column_attribute_elem keys
@@ -1049,6 +1058,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> RESPECT
 %left <str> MEMBER
 %token <str> AUTO_ID_CACHE
+// JSON_VALUE shares EMPTY/ERROR clause keywords with JSON_TABLE.
+%token <str> JSON_VALUE
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -14185,6 +14196,103 @@ get_format_type:
 |   DATETIME
 |   TIMESTAMP
 
+json_value_returning_opt:
+    {
+        $$ = nil
+    }
+|   RETURNING json_value_return_type json_value_charset_opt
+    {
+        $$ = &tree.JsonValueReturning{Type: $2, Charset: $3}
+    }
+
+json_value_return_type:
+    mysql_cast_type
+    {
+        $$ = $1
+    }
+
+json_value_charset_opt:
+    {
+        $$ = ""
+    }
+|   charset_keyword charset_name
+    {
+        $$ = $2
+    }
+
+json_value_responses_opt:
+    {
+        $$ = &tree.JsonValueSpec{}
+    }
+|   json_value_on_empty
+    {
+        $$ = &tree.JsonValueSpec{OnEmpty: $1}
+    }
+|   json_value_on_error
+    {
+        $$ = &tree.JsonValueSpec{OnError: $1}
+    }
+|   json_value_on_empty json_value_on_error
+    {
+        $$ = &tree.JsonValueSpec{OnEmpty: $1, OnError: $2}
+    }
+
+json_value_on_empty:
+    json_value_response ON JSON_TABLE_EMPTY
+    {
+        $$ = $1
+    }
+
+json_value_on_error:
+    json_value_response ON JSON_TABLE_ERROR
+    {
+        $$ = $1
+    }
+
+json_value_response:
+    NULL
+    {
+        $$ = tree.JsonValueResponse{Mode: tree.JsonValueNullResponse}
+    }
+|   JSON_TABLE_ERROR
+    {
+        $$ = tree.JsonValueResponse{Mode: tree.JsonValueErrorResponse}
+    }
+|   DEFAULT json_value_default_literal
+    {
+        $$ = tree.JsonValueResponse{Mode: tree.JsonValueDefaultResponse, Default: $2}
+    }
+
+json_value_default_literal:
+    literal
+    {
+        if nv, ok := $1.(*tree.NumVal); ok && nv.ValType == tree.P_null {
+            yylex.Error("JSON_VALUE DEFAULT cannot be NULL")
+            goto ret1
+        }
+        if _, ok := $1.(*tree.NumVal); !ok {
+            yylex.Error("JSON_VALUE DEFAULT must be a literal")
+            goto ret1
+        }
+        $$ = $1
+    }
+|   '+' literal
+    {
+        if nv, ok := $2.(*tree.NumVal); !ok || nv.ValType == tree.P_null {
+            yylex.Error("JSON_VALUE DEFAULT must be a signed literal")
+            goto ret1
+        }
+        $$ = tree.NewUnaryExpr(tree.UNARY_PLUS, $2)
+    }
+|   '-' literal
+    {
+        if nv, ok := $2.(*tree.NumVal); !ok || nv.ValType == tree.P_null {
+            yylex.Error("JSON_VALUE DEFAULT must be a signed literal")
+            goto ret1
+        }
+        $$ = tree.NewUnaryExpr(tree.UNARY_MINUS, $2)
+    }
+
 function_call_nonkeyword:
     CURTIME datetime_scale
     {
@@ -14246,7 +14354,22 @@ function_call_nonkeyword:
         }
 	}
 function_call_keyword:
-    name_confict '(' expression_list_opt ')'
+    JSON_VALUE '(' expression ',' expression json_value_returning_opt json_value_responses_opt ')'
+    {
+        name := tree.NewUnresolvedColName($1)
+        spec := $7
+        if spec == nil {
+            spec = &tree.JsonValueSpec{}
+        }
+        spec.Returning = $6
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
+            JsonValue: spec,
+        }
+    }
+|   name_confict '(' expression_list_opt ')'
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
@@ -14484,6 +14607,7 @@ name_confict:
 |   IF
 |   FORMAT
 |   JSON_TABLE_EMPTY
+|   JSON_TABLE_ERROR
 |   LEFT
 |   MICROSECOND
 |   MINUTE
@@ -16251,6 +16375,7 @@ non_reserved_keyword:
 |   ISOLATION
 |   ITOPK_SIZE
 |   JSON
+|   JSON_VALUE
 |   VECF32
 |   VECF64
 |   VECBF16

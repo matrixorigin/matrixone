@@ -44,6 +44,18 @@ type expressionVersionClient struct {
 	onSend          func()
 }
 
+func TestJSONValueProtocolFloorComposesWithLandedContracts(t *testing.T) {
+	features := planpb.RemoteExpressionFeatures{
+		JSONValueContract:          true,
+		JSONInputContracts:         true,
+		JSONScalarLiteralContracts: true,
+	}
+	require.Equal(t, defines.MORPCVersion110, requiredExpressionContractProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion110, remoteExpressionProtocolVersion(features))
+	features.JSONValueContract = false
+	require.Equal(t, defines.MORPCVersion104, requiredExpressionContractProtocolVersion(features))
+}
+
 func (c *expressionVersionClient) NewRequest(m query.CmdMethod) *query.Request {
 	return &query.Request{CmdMethod: m}
 }

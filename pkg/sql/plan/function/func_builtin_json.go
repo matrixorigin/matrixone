@@ -3448,9 +3448,10 @@ func bestEffortSchemaLocation(err gojsonschema.ResultError) string {
 	return "#/" + keyword
 }
 
-// JSON_VALUE(json_doc, path) → VARCHAR
-// Equivalent to JSON_UNQUOTE(JSON_EXTRACT(json_doc, path)).
-func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+// jsonValueLegacy evaluates the two-argument form retained in persisted plans
+// created before RETURNING/ON EMPTY/ON ERROR were lowered to the internal
+// seven-argument overload.
+func jsonValueLegacy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
@@ -3487,7 +3488,7 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if isStr {
 			bj, err = types.ParseSliceToByteJson(jsonBytes)
 		} else {
-			bj = types.DecodeJson(jsonBytes)
+			bj, err = decodeJSONValueStoredAdmitted(jsonBytes)
 		}
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid JSON document")
@@ -3516,6 +3517,10 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if err != nil {
 			return err
 		}
+		// Keep the legacy two-argument executor's historical unbounded text
+		// result. The clause-bearing seven-argument overload owns the new
+		// VARCHAR(512) default; applying it here changes existing persisted
+		// plans and bare-call results.
 		rs.AppendMustBytesValue([]byte(s))
 	}
 	return nil

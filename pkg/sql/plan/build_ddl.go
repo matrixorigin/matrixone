@@ -317,6 +317,8 @@ func genViewTableDef(
 	if preOptimizeViewRequiredProtocol > viewRequiredProtocol {
 		viewRequiredProtocol = preOptimizeViewRequiredProtocol
 	}
+	// Admit the complete requirement once, using the caller's read/write phase.
+	// A read check here would mask the authoring gate's CN/floor diagnostic.
 	if viewRequiredProtocol > 0 {
 		if forAuthoring {
 			err = RequirePersistedProtocolVersionForAuthoring(

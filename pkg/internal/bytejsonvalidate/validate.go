@@ -15,8 +15,10 @@
 package bytejsonvalidate
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"unicode/utf8"
 )
 
 const (
@@ -81,11 +83,27 @@ func DecimalJSONPayload(data []byte) bool {
 // twice, while rejecting alias expansion before it exceeds linear input work.
 func Container(tp byte, data []byte, validScalar func(byte, []byte) bool) bool {
 	remaining := uint64(len(data))
-	return container(tp, data, validScalar, 1, &remaining)
+	return container(tp, data, validScalar, 1, &remaining, nil, nil)
 }
 
-func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth int, remaining *uint64) bool {
-	if depth > maxContainerDepth || tp != typeArray && tp != typeObject || len(data) < headerSize {
+// StoredContainer adds canonical key/range checks to the same bounded walk.
+// The scalar callback must include stored scalar semantics. workLimit also
+// preserves the stored validator's node/entry budget, independently of the
+// serialized-byte budget. No child list or width-dependent frame is retained.
+func StoredContainer(tp byte, data []byte, validScalar func(byte, []byte) bool, workLimit uint64) (valid, depthExceeded bool) {
+	remaining := uint64(len(data))
+	valid = container(tp, data, validScalar, 1, &remaining, &workLimit, &depthExceeded)
+	return
+}
+
+func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth int, remaining, storedWork *uint64, depthExceeded *bool) bool {
+	if depth > maxContainerDepth {
+		if depthExceeded != nil {
+			*depthExceeded = true
+		}
+		return false
+	}
+	if tp != typeArray && tp != typeObject || len(data) < headerSize {
 		return false
 	}
 	count := uint64(binary.LittleEndian.Uint32(data))
@@ -95,6 +113,9 @@ func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth 
 		tableEntrySize += uint64(keyEntrySize)
 		keyTableSize = count * uint64(keyEntrySize)
 	}
+	if count > (^uint64(0)-uint64(headerSize))/tableEntrySize {
+		return false
+	}
 	minimumSize := uint64(headerSize) + count*tableEntrySize
 	documentSize := uint64(binary.LittleEndian.Uint32(data[docSizeOff:]))
 	if minimumSize > documentSize || documentSize != uint64(len(data)) {
@@ -103,10 +124,15 @@ func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth 
 	if !charge(remaining, minimumSize) {
 		return false
 	}
+	if storedWork != nil && !charge(storedWork, 1+count) {
+		return false
+	}
 
 	valueTableStart := uint64(headerSize) + keyTableSize
 	payloadStart := valueTableStart + count*uint64(valEntrySize)
+	previousRangeEnd := payloadStart
 	if tp == typeObject {
+		var previousKey []byte
 		for i := uint64(0); i < count; i++ {
 			entryOffset := uint64(headerSize) + i*uint64(keyEntrySize)
 			keyOffset := uint64(binary.LittleEndian.Uint32(data[entryOffset:]))
@@ -117,19 +143,52 @@ func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth 
 			if !charge(remaining, keyLength) {
 				return false
 			}
+			if storedWork != nil {
+				key := data[keyOffset : keyOffset+keyLength]
+				if keyOffset < previousRangeEnd || !utf8.Valid(key) ||
+					i > 0 && bytes.Compare(previousKey, key) >= 0 {
+					return false
+				}
+				previousKey = key
+				previousRangeEnd = keyOffset + keyLength
+			}
 		}
 	}
 
-	for i := uint64(0); i < count; i++ {
-		entryOffset := valueTableStart + i*uint64(valEntrySize)
-		childType := data[entryOffset]
+	// The checked table has exactly count entries. Keep its views borrowed so
+	// callbacks still observe the original backing bytes.
+	valueTable := data[valueTableStart:payloadStart]
+	for entryOffset := 0; entryOffset < len(valueTable); entryOffset += valEntrySize {
+		entry := valueTable[entryOffset : entryOffset+valEntrySize]
+		childType := entry[0]
 		if childType == typeLiteral {
-			if !validScalar(childType, data[entryOffset+valTypeSize:entryOffset+valTypeSize+1]) {
+			if !validScalar(childType, entry[valTypeSize:valTypeSize+1]) {
 				return false
 			}
 			continue
 		}
-		childOffset := uint64(binary.LittleEndian.Uint32(data[entryOffset+valTypeSize:]))
+		childOffset := uint64(binary.LittleEndian.Uint32(entry[valTypeSize:]))
+		if childType >= typeInt64 && childType <= typeFloat64 {
+			// Fixed-width scalars need neither a tail view nor container
+			// dispatch. Read each descriptor only after the previous callback;
+			// the exact payload view retains its original borrowed capacity.
+			if childOffset < payloadStart || childOffset > documentSize-numberSize {
+				return false
+			}
+			if storedWork != nil {
+				if childOffset < previousRangeEnd {
+					return false
+				}
+				previousRangeEnd = childOffset + numberSize
+				if !charge(storedWork, 1) {
+					return false
+				}
+			}
+			if !charge(remaining, numberSize) || !validScalar(childType, data[childOffset:childOffset+numberSize]) {
+				return false
+			}
+			continue
+		}
 		if childOffset < payloadStart || childOffset >= documentSize {
 			return false
 		}
@@ -137,12 +196,23 @@ func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth 
 		if !ok {
 			return false
 		}
-		if childType == typeArray || childType == typeObject {
-			if !container(childType, childData, validScalar, depth+1, remaining) {
+		if storedWork != nil {
+			if childOffset < previousRangeEnd {
 				return false
 			}
-		} else if !charge(remaining, uint64(len(childData))) || !validScalar(childType, childData) {
-			return false
+			previousRangeEnd = childOffset + uint64(len(childData))
+		}
+		if childType == typeArray || childType == typeObject {
+			if !container(childType, childData, validScalar, depth+1, remaining, storedWork, depthExceeded) {
+				return false
+			}
+		} else {
+			if storedWork != nil && !charge(storedWork, 1) {
+				return false
+			}
+			if !charge(remaining, uint64(len(childData))) || !validScalar(childType, childData) {
+				return false
+			}
 		}
 	}
 	return true

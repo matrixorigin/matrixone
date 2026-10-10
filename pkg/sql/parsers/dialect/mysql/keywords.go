@@ -303,6 +303,7 @@ func init() {
 		"json":                       JSON,
 		"json_arrayagg":              JSON_ARRAYAGG,
 		"json_objectagg":             JSON_OBJECTAGG,
+		"json_value":                 JSON_VALUE,
 		"jsontype":                   JSONTYPE,
 		"uuid":                       UUID,
 		"key":                        KEY,
