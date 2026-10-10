@@ -130,6 +130,12 @@ func TestNew_MyErrorCode(t *testing.T) {
 	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
 	require.Equal(t, "Cannot convert string 'A\\xffB' from binary to utf8mb4", err.Error())
 
+	err = NewTooBigFieldLength(context.TODO(), "v", 16383)
+	require.Equal(t, ErrTooBigFieldLength, err.ErrorCode())
+	require.Equal(t, ER_TOO_BIG_FIELDLENGTH, err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t, "Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead", err.Error())
+
 	err = NewPreparedParamOutOfRange(context.TODO(), "unsigned integer", "EXECUTE")
 	require.Equal(t, ErrPreparedParamOutOfRange, err.ErrorCode())
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())

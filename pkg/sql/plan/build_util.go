@@ -153,6 +153,61 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 	return ret, nil
 }
 
+// getColumnTypeFromAst resolves a DDL declaration before applying its charset's
+// byte budget. Expression and CAST types deliberately keep their wider domain.
+func getColumnTypeFromAst(
+	ctx context.Context,
+	column *tree.ColumnTableDef,
+	tableCharset uint32,
+	replay *persistedDDLReplay,
+) (plan.Type, error) {
+	typ, err := getTypeFromAst(ctx, column.Type)
+	if err != nil {
+		return plan.Type{}, err
+	}
+	if err = applyDefaultAndColumnAttributesToType(ctx, &typ, tableCharset, column.Attributes); err != nil {
+		return plan.Type{}, err
+	}
+	if types.T(typ.Id) != types.T_varchar || defines.IsInternalExecutor(ctx) {
+		// Trusted internal DDL includes bootstrap and versioned catalog upgrades.
+		// Preserve those schemas and their historical omitted-length defaults.
+		return typ, nil
+	}
+	charset := typ.Charset
+	if charset == uint32(types.CharsetLegacy) {
+		// Legacy catalogs lack a charset identity, but text is still UTF-8.
+		charset = uint32(types.CharsetUTF8)
+	}
+	definition, err := collation.EffectiveDefinition(charset, typ.CollationVersion)
+	if err != nil {
+		return plan.Type{}, err
+	}
+	maxWidth := types.MaxVarcharLen / definition.Charset.MaxBytes()
+	if astType, ok := column.Type.(*tree.T); ok && astType.InternalType.DisplayWith == -1 {
+		// Preserve MO's omitted-length syntax without publishing an oversized
+		// default column. This must happen after binary charset conversion.
+		typ.Width = maxWidth
+	}
+	if typ.Width > maxWidth {
+		if replay != nil {
+			if preserved := replay.columns[strings.ToLower(column.Name.ColName())]; preserved != nil {
+				old := preserved.columnType
+				// Internal LIKE/COPY reconstruction may retain a pre-existing
+				// oversized column, never a new or changed declaration. LIKE
+				// renders legacy bytewise text as explicit utf8mb4_bin.
+				if old.Id == typ.Id && old.Width == typ.Width &&
+					old.CollationVersion == typ.CollationVersion &&
+					(old.Charset == typ.Charset || old.Charset == uint32(types.CharsetLegacy) &&
+						typ.Charset == uint32(types.CharsetUTF8MB4Bin)) {
+					return typ, nil
+				}
+			}
+		}
+		return plan.Type{}, moerr.NewTooBigFieldLength(ctx, column.Name.ColNameOrigin(), maxWidth)
+	}
+	return typ, nil
+}
+
 func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeReference) (plan.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
 		switch defines.MysqlType(n.InternalType.Oid) {
