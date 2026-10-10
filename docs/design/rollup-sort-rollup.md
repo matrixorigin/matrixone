@@ -219,12 +219,15 @@ aggregate state, and recreating the single-group executor. The runtime performs
 this lifecycle for every completed prefix even when input order is already
 proven, so ordered high-NDV input must pay `F(G,L) * G * A` rather than being
 modeled as boundary checks alone. For the three-or-more-level shapes, the
-current calibration uses `F(G,L) = 2 + 6 * min(1, (G - 10000) / 15000)` for
+current calibration uses `F(G,L) = 2 + 14 * min(1, (G - 10000) / 15000)` for
 `G > 10000`, and `F = 2` below that boundary. Two-level rollups retain the
 baseline because their selective-filter path has no deep-prefix fan-out. This
 keeps 5,000/10,000 late-prefix values on SORT while 25,000 and 50,000 values
-stay on shared HASH. The coefficient is calibrated with COUNT and AVG,
-together with the all-unique and multi-level shapes below.
+stay on shared HASH. The ceiling of 16 is intentionally conservative for
+asymmetric derived-order statistics: a bounded prefix estimate can otherwise
+understate the number of completed groups while the executor still pays the
+flush/free/recreate lifecycle for each one. The coefficient is calibrated with
+COUNT and AVG, together with the all-unique and multi-level shapes below.
 For each prefix, `K_i` is its key-width factor and `A` is the aggregate update
 factor derived from the selected aggregate functions:
 
