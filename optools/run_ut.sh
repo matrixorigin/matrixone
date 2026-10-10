@@ -229,9 +229,33 @@ function current_ut_command_is_prebuilt_helper(){
         -n "${PREBUILT_RACE_REPORT}" ]]
 }
 
+# Completion belongs to the existing helper owner, independently of report shards.
+function prepare_ut_helper_completion(){
+    local path="${G_WKSP}/${G_TS}-owner-complete.$1"
+    if ! : > "${path}"; then
+        printf -v "$2" '%s' 1
+        return 125
+    fi
+}
+
+function publish_ut_helper_completion(){
+    [[ -n "${UT_HELPER_COMPLETION:-}" ]] || return 0
+    (( $1 != 125 )) || return 125
+    printf '%s\n' "$1" > "${UT_HELPER_COMPLETION}" || return 125
+}
+
+function invoke_ut_helper(){
+    local UT_HELPER_COMPLETION="${G_WKSP}/${G_TS}-owner-complete.$1"
+    local helper_status=0
+    shift
+    "$@" || helper_status=$?
+    publish_ut_helper_completion "${helper_status}" || return 125
+    return "${helper_status}"
+}
+
 function handle_ut_join_term(){
     trap '' TERM
-    if (( $1 == 125 || $2 == 125 || ($4 && ($1 == 137 || $2 == 137)) )); then
+    if (( $1 == 125 || $2 == 125 )); then
         printf -v "$3" '%s' 1
     fi
     handle_ut_termination
@@ -254,10 +278,19 @@ function join_ut_owner(){
         esac
         if (( UT_TERMINATING == 0 )); then
             saved_join_term_trap=$(trap -p TERM)
-            trap 'handle_ut_join_term "$?" "$join_status" "$failed_flag_name" "$requires_drain_ack"' TERM
+            trap 'handle_ut_join_term "$?" "$join_status" "$failed_flag_name"' TERM
         fi
         wait "${!pid_name}" || join_status=$?
-        if (( requires_drain_ack && join_status == 137 )); then join_status=125; fi
+        if (( requires_drain_ack )); then
+            # Preparation and ordinary fallback children share this helper's
+            # group. Reaping its shell must not release those descendants.
+            wait_for_ut_process_group "${!pid_name}" 20 || join_status=125
+            local completion_path="${G_WKSP}/${G_TS}-owner-complete.${pid_name}"
+            if [[ ! -f "${completion_path}" ]] ||
+                [[ "$(<"${completion_path}")" != "${join_status}" ]]; then
+                join_status=125
+            fi
+        fi
         if (( join_status == 125 )); then printf -v "${failed_flag_name}" '%s' 1; fi
         printf -v "${pid_name}" '%s' ''
         if (( UT_TERMINATING == 0 )); then restore_ut_term_trap "${saved_join_term_trap}"; fi
@@ -282,10 +315,17 @@ function start_ut_command(){
     CURRENT_UT_COMMAND_STAGE=${stage}
     CURRENT_UT_COMMAND_LABEL=${label}
     mark_ut_stage "${stage}" "${label}" start "" "${*}"
+    if current_ut_command_is_prebuilt_helper; then
+        prepare_ut_helper_completion CURRENT_UT_PID CURRENT_UT_DRAIN_FAILED || return 125
+    fi
     saved_term_trap=$(trap -p TERM)
     trap 'term_pending=1' TERM
     set -m
-    "$@" >> "${UT_REPORT}" 2>> "${UT_STDERR}" &
+    if current_ut_command_is_prebuilt_helper; then
+        invoke_ut_helper CURRENT_UT_PID "$@" >> "${UT_REPORT}" 2>> "${UT_STDERR}" &
+    else
+        "$@" >> "${UT_REPORT}" 2>> "${UT_STDERR}" &
+    fi
     CURRENT_UT_PID=$!
     set +m
     restore_ut_term_trap "${saved_term_trap}"
@@ -462,10 +502,11 @@ function start_plan_race(){
     local term_pending=0
     PLAN_RACE_TEST_BINARY="${G_WKSP}/${G_TS}-plan-race.test"
     PLAN_RACE_REPORT="${G_WKSP}/${G_TS}-plan-race-report.out"
+    prepare_ut_helper_completion PLAN_RACE_JOB_PID PLAN_RACE_DRAIN_FAILED || return 125
     saved_term_trap=$(trap -p TERM)
     trap 'term_pending=1' TERM
     set -m
-    run_plan_race_shards "${package}" &
+    invoke_ut_helper PLAN_RACE_JOB_PID run_plan_race_shards "${package}" &
     PLAN_RACE_JOB_PID=$!
     set +m
     restore_ut_term_trap "${saved_term_trap}"
@@ -1128,7 +1169,7 @@ function consume_engine_race_report(){
 }
 
 function consume_plan_race_report(){
-    consume_race_report PLAN_RACE_REPORT
+    consume_race_report PLAN_RACE_REPORT PLAN_RACE_TEST_BINARY
 }
 
 function start_engine_race(){
@@ -1140,13 +1181,14 @@ function start_engine_race(){
 
     local saved_term_trap
     local term_pending=0
+    prepare_ut_helper_completion ENGINE_RACE_JOB_PID ENGINE_RACE_DRAIN_FAILED || return 125
     saved_term_trap=$(trap -p TERM)
     # The helper can publish its process only after Bash has assigned `$!`.
     # Defer TERM across that handoff so cancellation always sees and terminates
     # the exact engine process group before consuming its report.
     trap 'term_pending=1' TERM
     set -m
-    run_engine_race_shards "$1" "$2" &
+    invoke_ut_helper ENGINE_RACE_JOB_PID run_engine_race_shards "$1" "$2" &
     ENGINE_RACE_JOB_PID=$!
     set +m
     restore_ut_term_trap "${saved_term_trap}"
@@ -1387,6 +1429,7 @@ function run_engine_race_shards(){
     }
     function cancel_engine_shards(){
         drain_engine_shards || exit 125
+        publish_ut_helper_completion 143 || exit 125
         exit 143
     }
     trap cancel_engine_shards TERM
@@ -1402,6 +1445,7 @@ function run_engine_race_shards(){
     fi
     wait "${child_pids[0]}"
     metadata_status=$?
+    wait_for_ut_process_group "${child_pids[0]}" 20 || { trap '' TERM; exit 125; }
     child_pids=(0)
     if (( metadata_status != 0 )) ||
         ! IFS=$'\t' read -r engine_package_dir engine_package_import < "${metadata_file}"; then
@@ -1434,6 +1478,7 @@ function run_engine_race_shards(){
     fi
     wait "${child_pids[0]}"
     build_status=$?
+    wait_for_ut_process_group "${child_pids[0]}" 20 || { trap '' TERM; exit 125; }
     child_pids=(0)
     if (( build_status != 0 )); then
         logger "ERR" "Failed to build race test binary for ${engine_package}"
@@ -1454,6 +1499,7 @@ function run_engine_race_shards(){
     fi
     wait "${child_pids[0]}"
     list_status=$?
+    wait_for_ut_process_group "${child_pids[0]}" 20 || { trap '' TERM; exit 125; }
     child_pids=(0)
     if (( list_status != 0 )); then
         logger "ERR" "Failed to list tests for ${engine_package}"
@@ -1489,9 +1535,7 @@ function run_engine_race_shards(){
         restore_ut_term_trap "${previous_term_trap}"
         return 1
     fi
-    rm -f "${ENGINE_RACE_TEST_BINARY}" "${ENGINE_RACE_REPORT}".[0-9]*
     restore_ut_term_trap "${previous_term_trap}"
-    ENGINE_RACE_TEST_BINARY=""
     checkpoint_ut_event "finish" "engine" "${engine_package}" "${shard_status}"
     return "${shard_status}"
 }
@@ -1560,7 +1604,7 @@ function run_plan_race_shards(){
         terminate_ut_process_groups "${plan_term_grace_ticks}" "${plan_child_pid}" \
             ${shard_pids[@]+"${shard_pids[@]}"} || exit 125
         wait 2>/dev/null || true
-        rm -f "${plan_test_binary}"
+        publish_ut_helper_completion 143 || exit 125
         exit 143
     }
     trap cancel_plan_shards TERM
@@ -1587,6 +1631,7 @@ function run_plan_race_shards(){
     if (( term_pending != 0 )); then cancel_plan_shards; fi
     wait "${plan_child_pid}"
     metadata_status=$?
+    wait_for_ut_process_group "${plan_child_pid}" 20 || { trap '' TERM; exit 125; }
     plan_child_pid=""
     if (( metadata_status != 0 )) ||
         ! IFS=$'\t' read -r plan_package_dir plan_package_import < "${metadata_file}"; then
@@ -1619,12 +1664,11 @@ function run_plan_race_shards(){
     if (( term_pending != 0 )); then cancel_plan_shards; fi
     wait "${plan_child_pid}"
     build_status=$?
+    wait_for_ut_process_group "${plan_child_pid}" 20 || { trap '' TERM; exit 125; }
     plan_child_pid=""
     if (( build_status != 0 )); then
         logger "ERR" "Failed to build race test binary for ${plan_package}"
         tail -n 200 "${build_log}"
-        rm -f "${plan_test_binary}"
-        PLAN_RACE_TEST_BINARY=""
         checkpoint_ut_event "finish" "plan" "${plan_package}" "${build_status}" "phase=build"
         restore_ut_term_trap "${previous_term_trap}"
         return "${build_status}"
@@ -1647,12 +1691,11 @@ function run_plan_race_shards(){
     if (( term_pending != 0 )); then cancel_plan_shards; fi
     wait "${plan_child_pid}"
     list_status=$?
+    wait_for_ut_process_group "${plan_child_pid}" 20 || { trap '' TERM; exit 125; }
     plan_child_pid=""
     if (( list_status != 0 )); then
         logger "ERR" "Failed to list tests for ${plan_package}"
         tail -n 200 "${test_list}"
-        rm -f "${plan_test_binary}"
-        PLAN_RACE_TEST_BINARY=""
         checkpoint_ut_event "finish" "plan" "${plan_package}" "${list_status}" "phase=list"
         restore_ut_term_trap "${previous_term_trap}"
         return "${list_status}"
@@ -1660,8 +1703,6 @@ function run_plan_race_shards(){
 
     if ! partition_race_test_inventory "${test_list}" "${PLAN_RACE_SHARDS}" roundrobin; then
         logger "ERR" "Invalid or empty test inventory for ${plan_package}"
-        rm -f "${plan_test_binary}"
-        PLAN_RACE_TEST_BINARY=""
         checkpoint_ut_event "finish" "plan" "${plan_package}" "2" "phase=discover"
         restore_ut_term_trap "${previous_term_trap}"
         return 2
@@ -1726,6 +1767,7 @@ function run_plan_race_shards(){
             fi
             wait "${pid}"
             shard_exit_status=$?
+            wait_for_ut_process_group "${pid}" 20 || { trap '' TERM; exit 125; }
             shard_pids[shard]=""
             active_count=$(( active_count - 1 ))
             scheduler_progress=1
@@ -1749,8 +1791,6 @@ function run_plan_race_shards(){
     rm -f "${report_staging}"
     if ! : > "${report_staging}"; then
         logger "ERR" "failed to create plan race report staging file"
-        rm -f "${plan_test_binary}"
-        PLAN_RACE_TEST_BINARY=""
         restore_ut_term_trap "${previous_term_trap}"
         return 1
     fi
@@ -1761,8 +1801,6 @@ function run_plan_race_shards(){
         if ! cat "${shard_reports[shard]}" >> "${report_staging}"; then
             logger "ERR" "failed to assemble plan race shard ${shard} report"
             rm -f "${report_staging}"
-            rm -f "${plan_test_binary}"
-            PLAN_RACE_TEST_BINARY=""
             restore_ut_term_trap "${previous_term_trap}"
             return 1
         fi
@@ -1770,8 +1808,6 @@ function run_plan_race_shards(){
     if ! mv -f "${report_staging}" "${PLAN_RACE_REPORT}"; then
         logger "ERR" "failed to publish plan race report"
         rm -f "${report_staging}"
-        rm -f "${plan_test_binary}"
-        PLAN_RACE_TEST_BINARY=""
         restore_ut_term_trap "${previous_term_trap}"
         return 1
     fi
@@ -1779,15 +1815,10 @@ function run_plan_race_shards(){
         logger "ERR" "failed to publish plan race report readiness marker"
         # Keep the complete base report and shard reports for append_ut_report
         # to recover if marker publication is interrupted.
-        rm -f "${plan_test_binary}"
-        PLAN_RACE_TEST_BINARY=""
         restore_ut_term_trap "${previous_term_trap}"
         return 1
     fi
-    rm -f "${PLAN_RACE_REPORT}".[0-9]*
 
-    rm -f "${plan_test_binary}"
-    PLAN_RACE_TEST_BINARY=""
     restore_ut_term_trap "${previous_term_trap}"
     checkpoint_ut_event "finish" "plan" "${plan_package}" "${shard_status}"
     return "${shard_status}"
@@ -1841,6 +1872,7 @@ function run_embedded_prebuild(){
         trap '' TERM
         terminate_ut_process_groups 20 "${child_pids[@]}" || exit 125
         wait 2>/dev/null || true
+        publish_ut_helper_completion 143 || exit 125
         exit 143
     }
     trap cancel_embedded_wave TERM
@@ -1890,6 +1922,7 @@ function run_embedded_prebuild(){
             if kill -0 "${child_pids[package_index]}" 2>/dev/null; then continue; fi
             child_status=0
             wait "${child_pids[package_index]}" || child_status=$?
+            wait_for_ut_process_group "${child_pids[package_index]}" 20 || { trap '' TERM; exit 125; }
             child_pids[package_index]=0
             (( child_status == 0 )) || wave_status=1
             active_count=$((active_count - 1))
@@ -1935,10 +1968,11 @@ function start_embedded_prebuild(){
         "" "parallel=${package_parallel} compile_only=true"
     local saved_term_trap
     local term_pending=0
+    prepare_ut_helper_completion CLUSTER_PREBUILD_JOB_PID CLUSTER_PREBUILD_DRAIN_FAILED || return 125
     saved_term_trap=$(trap -p TERM)
     trap 'term_pending=1' TERM
     set -m
-    run_embedded_prebuild "${package_scope}" "${package_parallel}" "${CLUSTER_PREBUILD_REPORT}" &
+    invoke_ut_helper CLUSTER_PREBUILD_JOB_PID run_embedded_prebuild "${package_scope}" "${package_parallel}" "${CLUSTER_PREBUILD_REPORT}" &
     CLUSTER_PREBUILD_JOB_PID=$!
     set +m
     restore_ut_term_trap "${saved_term_trap}"
@@ -2054,6 +2088,7 @@ function run_prebuilt_race_commands(){
         stop_prebuilt_race_commands
         # Parent consumes the joined per-command JSON through append_ut_report.
         # No partial merge or success marker can hide interrupted commands.
+        publish_ut_helper_completion 143 || exit 125
         exit 143
     }
     trap cancel_prebuilt_race_commands TERM

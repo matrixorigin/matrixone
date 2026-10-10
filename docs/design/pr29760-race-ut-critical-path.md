@@ -193,9 +193,19 @@ Report writers retain ownership until stopped. The existing transactional report
 consumer chooses a complete ready report or recoverable shard files and appends
 one representation. Pending TERM is held across ownership transfer; a failed
 append retains its source. The correction adds no second report store or process
-scheduler. Earlier compiler/helper cancellation paths remain under their existing
-outer ownership contract; this is not a claim that every preexisting helper has
-been redesigned. No lock files are unlinked while an owner can still hold them.
+scheduler. Prebuilt CURRENT, engine, plan and prebuild helpers publish one
+completion status per existing owner after normal return or fully drained
+cancellation. The parent resets that acknowledgment before admission and checks
+it against the reaped status and drains the helper group before releasing
+ownership, including preparation/fallback descendants. Missing or inconsistent
+completion is terminal 125, even when an abrupt exit numerically matches an
+ordinary test failure. Compiler/discovery/shard groups must drain before their
+PID slots are cleared; final engine/plan artifact deletion belongs to the existing
+parent report consumer. Ordinary CURRENT and LIGHT exit contracts are unchanged.
+An uncatchably dead helper cannot clean its independent groups; this gate retains
+evidence and forbids later admission but does not claim immediate reclamation
+without a child-group handoff. ARM cancellation timeout diagnosis remains open.
+No lock files are unlinked while an owner can still hold them.
 
 ## Cluster and fixture lifecycle
 

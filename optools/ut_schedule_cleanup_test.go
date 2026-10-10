@@ -614,6 +614,7 @@ function exit() {
  builtin exit "$@"
 }
 function wait_for_ut_process_group() {
+ ut_process_group_alive "$1" || return 0
  touch "$CASE_DIR/drain-checked"
  function wait() { touch "$CASE_DIR/forbidden-join"; builtin wait "$@"; }
  return 1
@@ -658,11 +659,11 @@ exit "$status"
 CHILD
 function run_engine_race_shards() {
  export PROBE_REPORT="$ENGINE_RACE_REPORT" PROBE_BINARY="$ENGINE_RACE_TEST_BINARY"
- exec bash "$CASE_DIR/helper.sh"
+ bash "$CASE_DIR/helper.sh"
 }
 function run_embedded_prebuild() {
  export PROBE_REPORT="$CLUSTER_PREBUILD_REPORT" PROBE_BINARY=""
- exec bash "$CASE_DIR/helper.sh"
+ bash "$CASE_DIR/helper.sh"
 }
 function cleanup_check() {
  local status=$? pid

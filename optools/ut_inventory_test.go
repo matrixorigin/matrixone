@@ -266,8 +266,7 @@ if [[ "$PHASE" == active ]]; then
  handle_ut_termination
 elif [[ "$PHASE" == raw-status ]]; then
  builtin wait "$CURRENT_UT_PID" || true
- CURRENT_UT_PID=""
- handle_ut_join_term "$HELPER_STATUS" 0 CURRENT_UT_DRAIN_FAILED 1
+ handle_ut_join_term "$HELPER_STATUS" 0 CURRENT_UT_DRAIN_FAILED
 else
  finish_ut_command; [[ "$?" == 125 && -z "$CURRENT_UT_PID" ]] || exit 96
  start_ut_command serial retry true; [[ "$?" == 125 ]] || exit 97
@@ -628,5 +627,103 @@ start_ut_command serial forbidden touch "$CASE_DIR/admitted"; [[ "$?" == 125 ]] 
 				}
 			})
 		}
+	}
+}
+
+// Exercise the common owner gate through real helper admission, including
+// normal stage failure, stale evidence and failed completion publication.
+func TestHelperCompletionAdmissionAndJoin(t *testing.T) {
+	for _, mode := range []string{"failure", "missing", "mismatch", "malformed", "stale", "init-failure"} {
+		t.Run(mode, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+function logger() { :; }
+completion="$G_WKSP/$G_TS-owner-complete.ENGINE_RACE_JOB_PID"
+ENGINE_RACE_REPORT="$G_WKSP/$G_TS-engine-race-report.out"
+ENGINE_RACE_TEST_BINARY="$G_WKSP/$G_TS-engine-race.test"
+function run_engine_race_shards() {
+ touch "$CASE_DIR/admitted"
+ printf 'engine\n' > "$ENGINE_RACE_REPORT"
+ : > "$ENGINE_RACE_TEST_BINARY"
+ if [[ "$MODE" == stale ]]; then exit 1; fi
+ return 1
+}
+if [[ "$MODE" == stale ]]; then printf '1\n' > "$completion"; fi
+if [[ "$MODE" == init-failure ]]; then mkdir "$completion"; fi
+if [[ "$MODE" != failure && "$MODE" != stale && "$MODE" != init-failure ]]; then
+ function publish_ut_helper_completion() {
+  case "$MODE" in
+   missing) rm -f "$UT_HELPER_COMPLETION" ;;
+   mismatch) printf '0\n' > "$UT_HELPER_COMPLETION" ;;
+   malformed) printf '1\nextra\n' > "$UT_HELPER_COMPLETION" ;;
+  esac
+ }
+fi
+status=0
+start_engine_race example/engine 1 || status=$?
+if [[ "$status" == 0 ]]; then join_ut_owner ENGINE_RACE_JOB_PID ENGINE_RACE_DRAIN_FAILED || status=$?; fi
+if [[ "$MODE" == failure ]]; then
+ [[ "$status" == 1 && "$ENGINE_RACE_DRAIN_FAILED" == 0 ]] || exit 90
+ consume_engine_race_report || exit 91
+ [[ ! -e "$G_WKSP/$G_TS-engine-race.test" && ! -e "$G_WKSP/$G_TS-engine-race-report.out" ]] || exit 91
+ start_ut_command serial after-failure true && finish_ut_command || exit 91
+else
+ [[ "$status" == 125 && "$ENGINE_RACE_DRAIN_FAILED" == 1 ]] || exit 92
+ start_ut_command serial forbidden touch "$CASE_DIR/forbidden"; [[ "$?" == 125 && ! -e "$CASE_DIR/forbidden" ]] || exit 93
+fi
+if [[ "$MODE" == init-failure ]]; then
+ [[ ! -e "$CASE_DIR/admitted" ]] || exit 94
+else
+ if [[ "$MODE" != failure ]]; then
+  consume_engine_race_report; [[ "$?" == 125 && -f "$ENGINE_RACE_REPORT" && -f "$ENGINE_RACE_TEST_BINARY" ]] || exit 94
+ fi
+fi
+[[ -z "$ENGINE_RACE_JOB_PID" ]] || exit 95
+`
+			out, err := scheduleHarnessWithMock(t, script, scheduleHarnessMock(), "MODE="+mode)
+			if err != nil {
+				t.Fatalf("helper completion contract: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestIssuesFallbackCompletionDrainsOwnedGroup(t *testing.T) {
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+function fixture_cleanup() {
+ if [[ -f "$CASE_DIR/fallback-owner" ]]; then
+  read -r child_pid group_pid < "$CASE_DIR/fallback-owner"
+  kill -TERM "$child_pid" 2>/dev/null || true
+  wait_for_ut_process_group "$group_pid" 4 || true
+ fi
+}
+trap fixture_cleanup EXIT
+PREBUILT_RACE_REPORT="$CASE_DIR/issues-report"
+PREBUILT_RACE_TEST_BINARY="$CASE_DIR/issues.test"
+UT_TIMEOUT=17
+: > "$PREBUILT_RACE_TEST_BINARY-metadata"
+status=0
+run_ut_command serial issues run_issues_race_batches example/issues "$PREBUILT_RACE_TEST_BINARY" 2 || status=$?
+read -r child_pid group_pid < "$CASE_DIR/fallback-owner"
+live=no; if ut_process_group_alive "$group_pid"; then live=yes; fi
+printf 'ISSUES_FALLBACK status=%s live=%s flag=%s\n' "$status" "$live" "$CURRENT_UT_DRAIN_FAILED"
+[[ "$live" == no && "$status" == 0 && "$CURRENT_UT_DRAIN_FAILED" == 0 ]] || exit 90
+`
+	mock := `#!/bin/bash
+case "$1" in
+ version) exit 0 ;;
+ env) exit 1 ;;
+ test)
+  sleep 30 &
+  child_pid=$!
+  group_pid=$(ps -o pgid= -p "$child_pid" | tr -d ' ')
+  printf '%s %s\n' "$child_pid" "$group_pid" > "$CASE_DIR/fallback-owner"
+  exit 0 ;;
+ *) exit 91 ;;
+esac
+`
+	out, err := scheduleHarnessWithMock(t, script, mock)
+	if err != nil {
+		t.Fatalf("completion accepted live fallback group: %v\n%s", err, out)
 	}
 }

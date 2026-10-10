@@ -632,6 +632,7 @@ function ut_test_execution_spawned() {`, 1)
 						t.Fatal("missing prebuilt execution owner")
 					}
 					prefix := text[:boundary]
+					prefix = strings.Replace(prefix, "    done\n    stop_ut_heartbeat\n", "    done\n    fixture_self_pid fixture_pid\n    printf 'ROOT_NOTIFIED shell=%s\\n' \"$fixture_pid\" >&16\n    stop_ut_heartbeat\n", 1)
 					text = text[boundary:]
 					text = strings.ReplaceAll(text, "trap 'term_pending=1' TERM", "trap 'term_pending=1; fixture_self_pid fixture_pid; printf \"DEFERRED shell=%s\\n\" \"$fixture_pid\" >&16' TERM")
 					text = strings.ReplaceAll(text, `            restore_ut_term_trap "${execution_term_trap}"`, `            restore_ut_term_trap "${execution_term_trap}"
@@ -641,7 +642,13 @@ function ut_test_execution_spawned() {`, 1)
             fixture_self_pid fixture_pid
             printf 'TEST_PUBLISHED shell=%s test=%s\n' "$fixture_pid" "${test_pids[index]}" >&16`, 1)
 					text = strings.Replace(text, "    function cancel_prebuilt_race_commands(){\n", "    function cancel_prebuilt_race_commands(){\n        fixture_self_pid fixture_pid\n        printf 'CANCEL shell=%s test=%s watchdog=%s\\n' \"$fixture_pid\" \"${test_pids[*]}\" \"${watchdog_pids[*]}\" >&16\n", 1)
-					text = strings.Replace(text, "        wait 2>/dev/null || true\n", "        fixture_self_pid fixture_pid\n        printf 'DRAINED shell=%s\\n' \"$fixture_pid\" >&16\n        wait 2>/dev/null || true\n        printf 'JOINED shell=%s\\n' \"$fixture_pid\" >&16\n", 1)
+					text = strings.Replace(text, `        if ! terminate_ut_process_groups 20 ${child_pids[@]+"${child_pids[@]}"} >&2; then exit 125; fi`, `        local sweep_status=0
+        fixture_self_pid fixture_pid
+        printf 'SWEEP_START shell=%s owners=%s\n' "$fixture_pid" "${child_pids[*]}" >&16
+        terminate_ut_process_groups 20 ${child_pids[@]+"${child_pids[@]}"} >&2 || sweep_status=$?
+        printf 'SWEEP_RESULT shell=%s status=%s\n' "$fixture_pid" "$sweep_status" >&16
+        (( sweep_status == 0 )) || exit 125`, 1)
+					text = strings.Replace(text, "        wait 2>/dev/null || true\n", "        fixture_self_pid fixture_pid\n        printf 'DRAINED shell=%s\\n' \"$fixture_pid\" >&16\n        jobs -l >&16\n        wait 2>/dev/null || true\n        printf 'JOINED shell=%s\\n' \"$fixture_pid\" >&16\n", 1)
 					hook := ""
 					if phase == "watchdog-publication" {
 						hook = "        ut_test_execution_spawned \"$!\"\n"
@@ -656,14 +663,14 @@ function ut_test_execution_spawned() {`, 1)
 				t.Fatalf("embedded execution cancellation %s: %v\n%s", phase, err, out)
 			}
 			if phase == "cleanup" {
-				for _, event := range []string{"ROOT_CANCEL ", "ROOT_RELEASE ", "OBSERVER_ACK ", "OBSERVER_RELEASE ", "CANCEL ", "DRAINED ", "JOINED ", "MOCK_TERM ", "MOCK_STOPPED "} {
+				for _, event := range []string{"ROOT_CANCEL ", "ROOT_RELEASE ", "OBSERVER_ACK ", "OBSERVER_RELEASE ", "ROOT_NOTIFIED ", "CANCEL ", "SWEEP_START ", "SWEEP_RESULT ", "DRAINED ", "JOINED ", "MOCK_TERM ", "MOCK_STOPPED "} {
 					if !strings.Contains(string(out), event) {
 						t.Fatalf("missing cleanup trace %s: %s", event, out)
 					}
 				}
 			}
 			if phase == "watchdog-publication" {
-				for _, event := range []string{"BASH ", "HOOK ", "PUBLISHED ", "CANCEL ", "DRAINED ", "JOINED ", "MOCK_TERM ", "MOCK_STOPPED "} {
+				for _, event := range []string{"BASH ", "HOOK ", "PUBLISHED ", "ROOT_NOTIFIED ", "CANCEL ", "SWEEP_START ", "SWEEP_RESULT ", "DRAINED ", "JOINED ", "MOCK_TERM ", "MOCK_STOPPED "} {
 					if !strings.Contains(string(out), event) {
 						t.Fatalf("missing signal trace %s: %s", event, out)
 					}
@@ -783,46 +790,67 @@ run_embedded_tests "$scope" 2
 }
 
 func TestEmbeddedPrebuiltKilledHelperKeepsOwnershipEvidence(t *testing.T) {
-	for _, parallel := range []string{"1", "2"} {
-		t.Run("parallel="+parallel, func(t *testing.T) {
+	for _, signal := range []string{"KILL", "KILL-parallel2", "PIPE", "HUP", "EXIT", "UNSET", "SUCCESS", "FAILURE"} {
+		t.Run(signal, func(t *testing.T) {
+			parallel := "1"
+			if strings.HasSuffix(signal, "-parallel2") {
+				parallel = "2"
+			}
 			script := embeddedSetup + `
+function review_cleanup() {
+ local pid
+ if [[ -f "$CASE_DIR/review-groups" ]]; then
+  while read -r pid; do terminate_ut_process_group "$pid" TERM; done < "$CASE_DIR/review-groups"
+  while read -r pid; do wait_for_ut_process_group "$pid" 4; done < "$CASE_DIR/review-groups"
+ fi
+}
+trap review_cleanup EXIT
 start_embedded_prebuild "$scope" 1
 artifact_dir=$CLUSTER_PREBUILD_DIR
 artifact_report=$CLUSTER_PREBUILD_REPORT
 status=0
 run_embedded_tests "$scope" 2 || status=$?
-printf 'KILLED_HELPER status=%s artifact_directory=%s\n' "$status" "$([[ -d "$artifact_dir" ]] && printf retained || printf removed)"
-[[ "$status" == 125 ]] || exit 90
-[[ -d "$artifact_dir" && -f "$PREBUILT_RACE_REPORT.00" ]] || exit 91
-[[ -x "$artifact_report.package.0.test" && -f "$artifact_report.package.0.meta" ]] || exit 95
-[[ -f "$CASE_DIR/helper-kill-reached" ]] || exit 96
-while read -r pid; do ! ut_process_group_alive "$pid" || exit 97; done < "$CASE_DIR/helper-groups"
-[[ "$CURRENT_UT_DRAIN_FAILED" == 1 ]] || exit 92
-[[ ! -d "$CASE_DIR/executed-b" && ! -d "$CASE_DIR/executed-c" ]] || exit 93
-! kill -0 "$(<"$CASE_DIR/pid-execute-a")" 2>/dev/null || exit 94
+[[ -f "$CASE_DIR/fault-reached" && -f "$CASE_DIR/review-groups" ]] || exit 95
+[[ "$(<"$CASE_DIR/fault-reached")" == "$REVIEW_SIGNAL" ]] || exit 96
+[[ -f "$PREBUILT_RACE_REPORT.00" && -x "$artifact_report.package.0.test" && -f "$artifact_report.package.0.meta" ]] || exit 97
+[[ ! -d "$CASE_DIR/executed-b" && ! -d "$CASE_DIR/executed-c" ]] || exit 98
+retained=no; [[ ! -d "$artifact_dir" ]] || retained=yes
+live=0
+while read -r pid; do if ut_process_group_alive "$pid"; then live=$((live+1)); fi; done < "$CASE_DIR/review-groups"
+later=0
+start_ut_command serial later true || later=$?
+if [[ "$later" == 0 ]]; then finish_ut_command || later=$?; fi
+printf 'REVIEW signal=%s status=%s flag=%s retained=%s live_groups=%s later=%s\n' "$REVIEW_SIGNAL" "$status" "$CURRENT_UT_DRAIN_FAILED" "$retained" "$live" "$later"
+[[ "$status" == 125 && "$CURRENT_UT_DRAIN_FAILED" == 1 && "$retained" == yes && "$later" == 125 ]] || exit 90
 `
 			transform := func(text string) string {
 				const anchor = "            child_pids[index*2+1]=${watchdog_pids[index]}\n"
 				if strings.Count(text, anchor) != 1 {
-					t.Fatal("missing watchdog ownership publication")
+					t.Fatal("missing watchdog publication")
 				}
 				return strings.Replace(text, anchor, anchor+`            if (( index == 0 )); then
                 read -r -t 5 _ <&8 || exit 95
-                # Keep the fixture safe; the parent still cannot infer this
-                # descendant cleanup after losing the helper's acknowledgement.
-                printf '%s\n' "${test_pids[index]}" "${watchdog_pids[index]}" > "$CASE_DIR/helper-groups"
-                stop_prebuilt_race_commands
-                : > "$CASE_DIR/helper-kill-reached"
+                ut_process_group_alive "${test_pids[index]}" || exit 96
+                ut_process_group_alive "${watchdog_pids[index]}" || exit 97
+                printf '%s\n' "${test_pids[index]}" "${watchdog_pids[index]}" > "$CASE_DIR/review-groups"
+                printf '%s\n' "$REVIEW_SIGNAL" > "$CASE_DIR/fault-reached"
                 fixture_self_pid fixture_pid
-                kill -KILL "$fixture_pid"
+                case "$REVIEW_SIGNAL" in
+                    EXIT) exit 2 ;;
+                    SUCCESS) exit 0 ;;
+                    FAILURE) exit 1 ;;
+                    UNSET) printf '%s\n' "$REVIEW_UNBOUND_VALUE" ;;
+                    *) kill -"$REVIEW_SIGNAL" "$fixture_pid" ;;
+                esac
             fi
 `, 1)
 			}
 			out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, transform,
-				"MODE=execute-cancel", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=", "UT_EMBEDDED_PACKAGE_PARALLEL="+parallel)
+				"MODE=execute-cancel", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=", "UT_EMBEDDED_PACKAGE_PARALLEL="+parallel, "REVIEW_SIGNAL="+strings.TrimSuffix(signal, "-parallel2"))
 			if err != nil {
-				t.Fatalf("killed helper lost ownership evidence: %v\n%s", err, out)
+				t.Fatalf("abrupt helper exit discarded ownership: %v\n%s", err, out)
 			}
+			t.Logf("%s", out)
 		})
 	}
 }
@@ -918,5 +946,43 @@ func TestScheduleJSONReportValidation(t *testing.T) {
 				t.Fatal("invalid terminal report accepted")
 			}
 		})
+	}
+}
+
+func TestEmbeddedPrebuildReapsCompilerDescendants(t *testing.T) {
+	script := embeddedSetup + `
+function review_cleanup() {
+ if [[ -f "$CASE_DIR/compiler-pids" ]]; then
+  read -r compiler_pid descendant_pid < "$CASE_DIR/compiler-pids"
+  terminate_ut_process_group "$compiler_pid" TERM
+  wait_for_ut_process_group "$compiler_pid" 4
+ fi
+}
+trap review_cleanup EXIT
+start_embedded_prebuild example/a 1
+artifact_dir=$CLUSTER_PREBUILD_DIR
+status=0
+finish_embedded_prebuild || status=$?
+read -r compiler_pid descendant_pid < "$CASE_DIR/compiler-pids"
+live=no; if ut_process_group_alive "$compiler_pid"; then live=yes; fi
+cleanup_embedded_prebuild
+retained=no; [[ ! -d "$artifact_dir" ]] || retained=yes
+later=0
+start_ut_command serial later true || later=$?
+if [[ "$later" == 0 ]]; then finish_ut_command || later=$?; fi
+printf 'PREBUILD_CHILD status=%s flag=%s retained=%s live=%s later=%s\n' "$status" "$CLUSTER_PREBUILD_DRAIN_FAILED" "$retained" "$live" "$later"
+[[ "$status" == 1 && "$CLUSTER_PREBUILD_DRAIN_FAILED" == 0 && "$live" == no && "$retained" == no && "$later" == 0 ]] || exit 90
+`
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+[[ "$1" == test && " $* " == *' -c '* ]] || exit 91
+sleep 30 &
+descendant_pid=$!
+printf '%s %s\n' "$$" "$descendant_pid" > "$CASE_DIR/compiler-pids"
+kill -KILL $$
+`
+	out, err := scheduleHarnessWithMock(t, script, mock, "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=")
+	if err != nil {
+		t.Fatalf("prebuild normal return is not drainage proof: %v\n%s", err, out)
 	}
 }

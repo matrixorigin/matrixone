@@ -498,7 +498,7 @@ mkfifo "$CASE_DIR/engine-ready" "$CASE_DIR/engine-hold"
 exec 8<>"$CASE_DIR/engine-hold"
 exec 9<>"$CASE_DIR/engine-ready"
 function run_engine_race_shards() {
-	trap 'if grep -q "^engine$" "$UT_REPORT"; then touch "$CASE_DIR/report-consumed-early"; fi; touch "$CASE_DIR/engine-stopped"; exit 143' TERM
+	trap 'if grep -q "^engine$" "$UT_REPORT"; then touch "$CASE_DIR/report-consumed-early"; fi; touch "$CASE_DIR/engine-stopped"; publish_ut_helper_completion 143; exit 143' TERM
 	printf 'engine\n' > "$ENGINE_RACE_REPORT"
 	touch "$CASE_DIR/engine-started"
 	printf 'ready\n' >&9
@@ -520,11 +520,11 @@ trap cleanup EXIT
 start_engine_race example/engine 2
 `
 	transform := func(text string) string {
-		const anchor = "    run_engine_race_shards \"$1\" \"$2\" &\n    ENGINE_RACE_JOB_PID=$!\n"
+		const anchor = "    invoke_ut_helper ENGINE_RACE_JOB_PID run_engine_race_shards \"$1\" \"$2\" &\n    ENGINE_RACE_JOB_PID=$!\n"
 		if got := strings.Count(text, anchor); got != 1 {
 			t.Fatalf("engine launch anchor count = %d, want 1", got)
 		}
-		return strings.Replace(text, anchor, "    run_engine_race_shards \"$1\" \"$2\" &\n    ut_test_after_engine_spawn \"$!\"\n    ENGINE_RACE_JOB_PID=$!\n", 1)
+		return strings.Replace(text, anchor, "    invoke_ut_helper ENGINE_RACE_JOB_PID run_engine_race_shards \"$1\" \"$2\" &\n    ut_test_after_engine_spawn \"$!\"\n    ENGINE_RACE_JOB_PID=$!\n", 1)
 	}
 	script = "function ut_test_after_engine_spawn() {\n printf '%s\\n' \"$1\" > \"$CASE_DIR/engine-pid\"\n IFS= read -r -t 10 _ <&9 || exit 94\n kill -TERM \"$$\"\n}\n" + script
 	out, err := scheduleHarnessWithMockTransform(t, script, `#!/bin/bash
@@ -749,7 +749,7 @@ status=$?
 touch "$CASE_DIR/helper-returned"
 exit "$status"
 CHILD
-function run_engine_race_shards() { exec bash "$CASE_DIR/helper.sh"; }
+function run_engine_race_shards() { bash "$CASE_DIR/helper.sh"; }
 function cleanup_check() {
  local status=$? pid
  if [[ -f "$CASE_DIR/owned-pids" ]]; then
@@ -843,7 +843,7 @@ start_ut_command heavy 'heavy writer' bash -c '
  while :; do sleep 0.01; done
 '
 function run_plan_race_shards() {
- trap 'printf "plan-stopped\n" >> "$PLAN_RACE_REPORT"; exit 143' TERM
+ trap 'printf "plan-stopped\n" >> "$PLAN_RACE_REPORT"; publish_ut_helper_completion 143; exit 143' TERM
  printf 'plan-start\n' > "$PLAN_RACE_REPORT"
  touch "$CASE_DIR/plan-ready"
  while :; do sleep 0.01; done
