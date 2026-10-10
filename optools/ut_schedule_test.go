@@ -836,20 +836,24 @@ trap handle_ut_termination TERM
 trap 'printf "\nCANCEL_REPORT\n"; cat "$UT_REPORT"' EXIT
 ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
 printf 'engine\n' > "$ENGINE_RACE_REPORT"
+mkfifo "$CASE_DIR/writer-ready" "$CASE_DIR/writer-wait"
+exec 8<>"$CASE_DIR/writer-wait" 9<>"$CASE_DIR/writer-ready"
 start_ut_command heavy 'heavy writer' bash -c '
  trap '\''printf "heavy-stopped\n"; exit 143'\'' TERM
  printf "heavy-start\n"
- touch "$CASE_DIR/heavy-ready"
- while :; do sleep 0.01; done
+ printf "heavy\n" >&9
+ IFS= read -r _ <&8
 '
 function run_plan_race_shards() {
- trap 'printf "plan-stopped\n" >> "$PLAN_RACE_REPORT"; publish_ut_helper_completion 143; exit 143' TERM
+ trap 'printf "plan-stopped\n" >> "$PLAN_RACE_REPORT"; publish_ut_helper_completion 143 || exit 125; exit 143' TERM
  printf 'plan-start\n' > "$PLAN_RACE_REPORT"
- touch "$CASE_DIR/plan-ready"
- while :; do sleep 0.01; done
+ printf 'plan\n' >&9
+ IFS= read -r _ <&8
 }
 start_plan_race example/plan
-while [[ ! -e "$CASE_DIR/heavy-ready" || ! -e "$CASE_DIR/plan-ready" ]]; do sleep 0.01; done
+IFS= read -r -t 10 first <&9 || exit 91
+IFS= read -r -t 10 second <&9 || exit 92
+[[ "$first:$second" == heavy:plan || "$first:$second" == plan:heavy ]] || exit 93
 kill -TERM "$$"
 `
 	out, err := scheduleHarness(t, script)
