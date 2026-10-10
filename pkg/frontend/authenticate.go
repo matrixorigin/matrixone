@@ -10890,12 +10890,14 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 
 	start1 := time.Now()
 
-	// create tables for the tenant
+	// Only these binary-owned catalog declarations use internal DDL admission;
+	// do not pass the marker to the tenant's subsequent data or user statements.
+	internalDDL := context.WithValue(newTenantCtx, defines.InternalExecutorKey{}, true)
 	for _, sql := range createSqls {
 		if isSysOnlyDb(sql) {
 			continue
 		}
-		if err = bh.Exec(newTenantCtx, sql); err != nil {
+		if err = bh.Exec(internalDDL, sql); err != nil {
 			return err
 		}
 	}
