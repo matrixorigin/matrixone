@@ -343,7 +343,7 @@ func normalizeSQLTaskTimezone(timezone string) string {
 }
 
 func getSQLTaskService(ctx context.Context, ses *Session) (taskservice.TaskService, error) {
-	ts := getPu(ses.GetService()).TaskService
+	ts := getPu(ses.GetService()).GetTaskService()
 	if ts == nil {
 		return nil, moerr.NewInternalError(ctx, "task service not ready yet, please try again later.")
 	}

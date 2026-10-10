@@ -121,6 +121,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.SpatialDistanceSemantics && requiredVersion < defines.MORPCVersion90 {
 		requiredVersion = defines.MORPCVersion90
 	}
+	if features.CRC32JSONTextBytes && requiredVersion < defines.MORPCVersion110 {
+		requiredVersion = defines.MORPCVersion110
+	}
 	if features.DecimalDivisionSemantics && requiredVersion < defines.MORPCVersion97 {
 		requiredVersion = defines.MORPCVersion97
 	}
@@ -133,7 +136,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = defines.MORPCVersion98
 	}
 	if features.JSONInputContracts || features.YearBitCast {
-		requiredVersion = defines.MORPCVersion101
+		requiredVersion = max(requiredVersion, defines.MORPCVersion101)
 	}
 	return requiredVersion, nil
 }

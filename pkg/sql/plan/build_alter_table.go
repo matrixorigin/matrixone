@@ -479,6 +479,23 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
 	}
 
+	// CHECK expressions retain the original catalog coordinates throughout the
+	// schema clauses. Validate them only against the final source-to-target
+	// replay, never against a reordered intermediate column slice. The same
+	// replay will preserve their bound identity in the internal CREATE.
+	var checkReplay *persistedDDLReplay
+	for _, check := range copyTableDef.Checks {
+		if !containsLegacyCRC32(check.GetCheck()) {
+			continue
+		}
+		if checkReplay == nil {
+			checkReplay = ddlReplayForTable(WithPersistedDDLReplay(ctx, tableDef, copyTableDef), copyTableDef.Name)
+		}
+		if checkReplay == nil || checkReplay.checks[strings.ToLower(check.Name)] == nil {
+			return nil, moerr.NewNotSupported(ctx, "changing a legacy CRC32 JSON check constraint requires an explicit table rebuild")
+		}
+	}
+
 	// Generated values are recomputed from the original table rows under the
 	// final schema. Rebuild indexes on every generated dependent, not just the
 	// directly modified column; otherwise COPY could clone stale index entries.

@@ -3536,7 +3536,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if preserved != nil && preserved.generated != nil {
 					generatedCol = proto.Clone(preserved.generated).(*plan.GeneratedCol)
 				} else {
-					generatedCol, err = buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, allColDefs, ctx.GetProcess())
+					generatedCol, err = buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, allColDefs, ctx.GetProcess(), crc32CopyColumn(ctx.GetContext(), colName))
 				}
 				if err != nil {
 					return err
@@ -3598,7 +3598,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 							}
 							defaultDef = &copy
 						}
-						defaultValue, err = buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), defaultDef, colType, ctx.GetProcess(), allColDefs)
+						defaultValue, err = buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), defaultDef, colType, ctx.GetProcess(), allColDefs, crc32CopyColumn(ctx.GetContext(), colName))
 					}
 				}
 				if err != nil {
@@ -3611,7 +3611,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if preserved != nil && preserved.onUpdate != nil {
 					onUpdateExpr = proto.Clone(preserved.onUpdate).(*plan.OnUpdate)
 				} else {
-					explicitOnUpdate, updateErr := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess())
+					explicitOnUpdate, updateErr := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess(), crc32CopyColumn(ctx.GetContext(), colName))
 					if updateErr != nil {
 						return updateErr
 					}
@@ -4323,12 +4323,17 @@ func appendCheckDef(
 	if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
 		return err
 	}
+	checkName := name
+	if checkName == "" {
+		checkName = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
+	}
 	if replay := ddlReplayForTable(ctx.GetContext(), tableDef.Name); replay != nil {
-		checkName := name
-		if checkName == "" {
-			checkName = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
-		}
 		if preserved := replay.checks[strings.ToLower(checkName)]; preserved != nil {
+			if containsLegacyCRC32(preserved.Check) {
+				if err := RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), preserved.Check); err != nil {
+					return err
+				}
+			}
 			for _, check := range tableDef.Checks {
 				if strings.EqualFold(check.Name, checkName) {
 					return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate check constraint name '%s'", checkName)
@@ -4340,6 +4345,16 @@ func appendCheckDef(
 			}
 			tableDef.Checks = append(tableDef.Checks, copy)
 			return nil
+		}
+	}
+	if source, _ := ctx.GetContext().Value(defines.CRC32CopyExpressionsKey{}).(*plan.TableDef); source != nil {
+		for _, check := range source.Checks {
+			if strings.EqualFold(check.Name, checkName) && containsLegacyCRC32(check.Check) {
+				// Raw catalog coordinates belong to the old schema. Only replay
+				// can preserve them after a reorder and verify input compatibility.
+				// Neither copying them nor rebinding display SQL is a safe fallback.
+				return moerr.NewNotSupported(ctx.GetContext(), "changing a legacy CRC32 JSON check constraint requires an explicit table rebuild")
+			}
 		}
 	}
 	colNames := make([]string, 0, len(tableDef.Cols))

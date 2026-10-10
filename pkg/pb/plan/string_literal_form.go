@@ -365,6 +365,9 @@ const (
 // SpatialDistanceSemantics requires MORPC v90 because geodetic
 // ST_FRECHETDISTANCE/ST_HAUSDORFFDISTANCE change the meaning of existing
 // overloads and the distance family adds length-unit overloads.
+// CRC32JSONTextBytes requires candidate MORPC v110 for the new CRC32 JSON-text execution
+// identity. Legacy catalog and wire expressions retain binary JSON hashing
+// under overload zero.
 // PreparedPrecisionScalar requires MORPC v95 because older executors lose
 // scalar identity when CEIL/FLOOR precision passes through private CAST 5/6.
 // DecimalDivisionSemantics requires MORPC v97 for new plans because older
@@ -396,6 +399,7 @@ type RemoteExpressionFeatures struct {
 	ExpressionResultMetadataContracts bool
 	DecimalLiteralSemantics           bool
 	SpatialDistanceSemantics          bool
+	CRC32JSONTextBytes                bool
 	PreparedPrecisionScalar           bool
 	DecimalDivisionSemantics          bool
 	// SpecialIntegerConsumers requires v98 independently of private CASTs.
@@ -425,6 +429,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.ExpressionResultMetadataContracts ||
 		features.DecimalLiteralSemantics ||
 		features.SpatialDistanceSemantics ||
+		features.CRC32JSONTextBytes ||
 		features.PreparedPrecisionScalar ||
 		features.SpecialIntegerConsumers ||
 		features.DecimalDivisionSemantics ||
@@ -1027,6 +1032,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.StringNumericResultContracts && isStringNumericResultContract(current) {
 				features.StringNumericResultContracts = true
 			}
+			if !features.CRC32JSONTextBytes && isCRC32JSONTextBytes(current) {
+				features.CRC32JSONTextBytes = true
+			}
 			if !features.BoundedConditionalStringDomains && isBoundedConditionalStringDomain(fn) {
 				features.BoundedConditionalStringDomains = true
 			}
@@ -1062,6 +1070,30 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 		})
 	})
 	return
+}
+
+// CRC32 execution identities are shared with the function registry. Catalog and
+// wire expressions retain the identity selected by their original binder.
+const (
+	CRC32LegacyOverload   = 0
+	CRC32JSONTextOverload = 1
+)
+
+// isCRC32JSONTextBytes also protects unresolved prepared arguments: the wire
+// identity, not a parameter's current type, determines receiver capability.
+func isCRC32JSONTextBytes(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && int32(fn.Func.Obj>>32) == crc32FunctionID && int32(fn.Func.Obj) == CRC32JSONTextOverload
+}
+
+// RequiresMORPCVersion110CRC32JSONTextBytes reports whether an owner contains
+// the normalized-JSON-text CRC32 contract introduced by the CRC32 JSON fix.
+func RequiresMORPCVersion110CRC32JSONTextBytes(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.CRC32JSONTextBytes, err
 }
 
 // isASCIIInt32Result identifies the new physical result contract of ASCII.

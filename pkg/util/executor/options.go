@@ -631,3 +631,11 @@ func (opts StatementOption) WithDisableLock() StatementOption {
 func (opts StatementOption) DisableLock() bool {
 	return opts.disableLock
 }
+
+// WithCRC32CopyExpressions preserves bound expressions during internal ALTER COPY.
+// The caller owns the immutable schema for the duration of this statement.
+func (opts StatementOption) WithCRC32CopyExpressions(def *plan.TableDef) StatementOption {
+	opts.crc32CopyExpressions = def
+	return opts
+}
+func (opts StatementOption) CRC32CopyExpressions() *plan.TableDef { return opts.crc32CopyExpressions }

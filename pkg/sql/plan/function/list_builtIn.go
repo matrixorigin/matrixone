@@ -8847,11 +8847,12 @@ var supportedMathBuiltIns = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		// Format non-string scalars as SQL strings, but preserve every
 		// historical varlen input (including JSON and vectors) and its domain.
+		// New JSON bindings select a separate text-hashing execution identity.
 		checkFn: crc32TypeMatch,
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				overloadId: CRC32LegacyOverload,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
@@ -8859,6 +8860,12 @@ var supportedMathBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return newCrc32ExecContext().builtInCrc32
 				},
+			},
+			{
+				overloadId: CRC32JSONTextOverload,
+				args:       []types.T{types.T_json},
+				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return newCrc32JSONTextExecContext().builtInCrc32 },
 			},
 		},
 	},

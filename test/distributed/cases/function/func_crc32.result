@@ -90,11 +90,171 @@ create table t1 (a json,b int);
 insert into t1 values ('{"t1":"a"}',1);
 insert into t1 values ('{"t1":"b"}',2);
 insert into t1 values ('{"t1":"c"}',3);
+insert into t1 values ('[1,true,"x"]',4);
+insert into t1 values ('1',5);
+insert into t1 values ('"x"',6);
+insert into t1 values ('true',7);
+insert into t1 values ('false',8);
+insert into t1 values ('null',9);
+insert into t1 values (NULL,10);
 select crc32(a),b from t1;
 crc32(a)    b
-3719146973    1
-1151663207    2
-866372849    3
+4012824821    1
+3983042220    2
+3970567323    3
+3071756745    4
+2212294583    5
+4128176518    6
+4261170317    7
+734881840    8
+634125391    9
+null    10
+drop table t1;
+drop table if exists crc32_json_api;
+create table crc32_json_api(id int primary key, doc json);
+insert into crc32_json_api values (1, '{"b":2,"a":1}'), (2, '[1,true,"x"]');
+prepare crc32_json_stmt from 'select crc32(doc) from crc32_json_api where id = ?';
+set @crc32_json_id = 1;
+execute crc32_json_stmt using @crc32_json_id;
+crc32(doc)
+733321759
+set @crc32_json_id = 2;
+execute crc32_json_stmt using @crc32_json_id;
+crc32(doc)
+3071756745
+deallocate prepare crc32_json_stmt;
+create view crc32_json_view as select id, crc32(doc) as checksum from crc32_json_api;
+select id, checksum from crc32_json_view order by id;
+id    checksum
+1    733321759
+2    3071756745
+create table crc32_json_ctas as select id, crc32(doc) as checksum from crc32_json_api;
+select id, checksum from crc32_json_ctas order by id;
+id    checksum
+1    733321759
+2    3071756745
+drop view crc32_json_view;
+drop table crc32_json_ctas;
+drop table crc32_json_api;
+
+drop table if exists crc32_generated;
+create table crc32_generated(id int primary key, j json, c bigint unsigned generated always as (crc32(j)) stored, key idx_c(c));
+insert into crc32_generated(id,j) values (1,'{"t1":"a"}');
+insert into crc32_generated(id,j) select 2,j from crc32_generated where id=1;
+update crc32_generated set j='{"t1":"b"}' where id=2;
+replace into crc32_generated(id,j) values (1,'{"t1":"c"}');
+insert into crc32_generated(id,j) values (2,'{"t1":"a"}') on duplicate key update j=values(j);
+select id,c,c=crc32(j) as consistent from crc32_generated order by id;
+id    c    consistent
+1    3970567323    1
+2    4012824821    1
+prepare crc32_generated_stmt from 'select c,crc32(j) from crc32_generated where id=?';
+set @crc32_generated_id=2;
+execute crc32_generated_stmt using @crc32_generated_id;
+c    crc32(j)
+4012824821    4012824821
+deallocate prepare crc32_generated_stmt;
+alter table crc32_generated add column note int;
+select id,c,c=crc32(j) as consistent from crc32_generated order by id;
+id    c    consistent
+1    3970567323    1
+2    4012824821    1
+create unique index uk_c on crc32_generated(c);
+insert ignore into crc32_generated(id,j) values (3,'{"t1":"a"}');
+select count(*) as row_count from crc32_generated;
+row_count
+2
+drop table crc32_generated;
+
+drop table if exists crc32_generated_convert;
+create table crc32_generated_convert(id int primary key, j json, c bigint unsigned generated always as (crc32(j)) stored, key idx_c(c));
+insert into crc32_generated_convert(id,j) values (1,'1');
+alter table crc32_generated_convert modify column j bigint;
+insert into crc32_generated_convert(id,j) values (2,1);
+select id,c,c=crc32(j) as consistent from crc32_generated_convert order by id;
+id    c    consistent
+1    2212294583    1
+2    2212294583    1
+select id from crc32_generated_convert where c=2212294583 order by id;
+id
+1
+2
+drop table crc32_generated_convert;
+
+drop table if exists crc32_check_copy;
+create table crc32_check_copy(id int primary key,j json,x json,constraint ck_crc32 check(crc32(j)=2212294583));
+insert into crc32_check_copy values(1,'1','2');
+alter table crc32_check_copy modify column j json after x;
+insert into crc32_check_copy(id,j,x) values(2,'1','2');
+insert into crc32_check_copy(id,j,x) values(3,'2','1');
+constraint violation: Check constraint 'ck_crc32' is violated
+update crc32_check_copy set j='2',x='1' where id=1;
+constraint violation: Check constraint 'ck_crc32' is violated
+select id from crc32_check_copy order by id;
+id
+1
+2
+create table crc32_check_like like crc32_check_copy;
+insert into crc32_check_like(id,j,x) values(4,'1','2');
+insert into crc32_check_like(id,j,x) values(5,'2','1');
+constraint violation: Check constraint 'ck_crc32' is violated
+select id from crc32_check_like order by id;
+id
+4
+alter table crc32_check_copy modify column j bigint;
+insert into crc32_check_copy(id,j,x) values(6,1,'2');
+insert into crc32_check_copy(id,j,x) values(7,2,'1');
+constraint violation: Check constraint 'ck_crc32' is violated
+select id from crc32_check_copy order by id;
+id
+1
+2
+6
+drop table crc32_check_like;
+drop table crc32_check_copy;
+
+drop table if exists crc32_check_clauses;
+drop table if exists crc32_check_reverse;
+create table crc32_check_clauses(id int primary key,j json,x int,constraint ck_crc32_clauses check(crc32(j)=2212294583));
+insert into crc32_check_clauses values(1,'1',2);
+alter table crc32_check_clauses modify column j json after x,modify column x int;
+insert into crc32_check_clauses(id,j,x) values(2,'1',3);
+insert into crc32_check_clauses(id,j,x) values(3,'2',1);
+constraint violation: Check constraint 'ck_crc32_clauses' is violated
+update crc32_check_clauses set x=4 where id=1;
+update crc32_check_clauses set j='2' where id=1;
+constraint violation: Check constraint 'ck_crc32_clauses' is violated
+select id,x from crc32_check_clauses order by id;
+id    x
+1    4
+2    3
+create table crc32_check_reverse(id int primary key,j json,x int,constraint ck_crc32_clauses check(crc32(j)=2212294583));
+insert into crc32_check_reverse values(1,'1',2);
+alter table crc32_check_reverse modify column x int,modify column j json after x;
+insert into crc32_check_reverse(id,j,x) values(2,'1',3);
+insert into crc32_check_reverse(id,j,x) values(3,'2',1);
+constraint violation: Check constraint 'ck_crc32_clauses' is violated
+update crc32_check_reverse set x=4 where id=1;
+update crc32_check_reverse set j='2' where id=1;
+constraint violation: Check constraint 'ck_crc32_clauses' is violated
+select id,x from crc32_check_reverse order by id;
+id    x
+1    4
+2    3
+drop table crc32_check_reverse;
+drop table crc32_check_clauses;
+
+drop table if exists crc32_binary;
+create table crc32_binary(id int, b varbinary(2));
+insert into crc32_binary values (1,X'00FF'),(2,X'00'),(3,X'FF'),(4,X''),(5,NULL);
+select id,crc32(b) from crc32_binary order by id;
+id    crc32(b)
+1    1826356594
+2    3523407757
+3    4278190080
+4    0
+5    null
+drop table crc32_binary;
 drop table if exists test_table;
 create table test_table (
 id int auto_increment primary key,
@@ -201,4 +361,19 @@ crc32(jobTitle)
 2622443617
 376497099
 drop table job;
+select count(*) as cdc_upgrade_prerequisite_columns from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_cdc_watermark' and attname in ('source_table_id', 'owner_generation', 'pending_source_table_id', 'target_identity');
+cdc_upgrade_prerequisite_columns
+4
+create table crc32_gen_attributes(j json, g bigint unsigned generated always as (crc32(j)) stored);
+insert into crc32_gen_attributes(j) values ('{"t1":"a"}');
+alter table crc32_gen_attributes modify column g bigint unsigned generated always as (crc32(j)) stored default 0;
+invalid input: generated column 'g' cannot have a default value
+alter table crc32_gen_attributes change column g g bigint unsigned generated always as (crc32(j)) stored on update current_timestamp;
+invalid input: generated column 'g' cannot have ON UPDATE
+alter table crc32_gen_attributes modify column g bigint unsigned generated always as (crc32(j)) stored auto_increment;
+invalid input: generated column 'g' cannot have AUTO_INCREMENT
+select g from crc32_gen_attributes;
+g
+4012824821
+drop table crc32_gen_attributes;
 drop database test;

@@ -4297,6 +4297,12 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		// target session.
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
+	// Old sources cannot export their bound CRC32 identity. Check the entire
+	// SQL payload before USE, variable installation, temporary-table cloning,
+	// or PREPARE (and before the deferred counter restoration is installed).
+	if err := checkCRC32PrepareMigration(ctx, ses, req); err != nil {
+		return err
+	}
 	parameters := getPu(ses.GetService()).SV
 	// USE and PREPARE are replayed as internal statements and update ROW_COUNT().
 	// Restore the source session values after all replay work has finished.

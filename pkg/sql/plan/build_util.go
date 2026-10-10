@@ -860,7 +860,16 @@ func buildDefaultExprWithColumns(
 	typ plan.Type,
 	proc *process.Process,
 	columns []*ColDef,
+	sources ...*ColDef,
 ) (*plan.Default, error) {
+	if source := crc32SourceColumn(proc.Ctx, col.Name.ColName(), sources); source != nil && preserveCRC32Default(source.Default) {
+		value := *source.Default
+		value.Expr = DeepCopyExpr(value.Expr)
+		if err := RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, value.Expr); err != nil {
+			return nil, err
+		}
+		return &value, nil
+	}
 	nullAbility := true
 	var expr tree.Expr = nil
 	for _, attr := range col.Attributes {
@@ -960,7 +969,11 @@ func buildDefaultExprWithColumns(
 		}
 	}
 
-	if lit := newExpr.GetLit(); lit != nil && exprContainsHexOverload(defaultExpr, 0) {
+	crc32Text, err := plan.RequiresMORPCVersion110CRC32JSONTextBytes(defaultExpr)
+	if err != nil {
+		return nil, err
+	}
+	if lit := newExpr.GetLit(); lit != nil && (exprContainsHexOverload(defaultExpr, 0) || crc32Text) {
 		// Preserve resolved types rather than reparsing display SQL after upgrade.
 		lit.Src = DeepCopyExpr(defaultExpr)
 	}
@@ -991,7 +1004,15 @@ func requireExpressionDefaultProtocol(proc *process.Process) error {
 		"column-reference defaults require all CNs to support protocol version 60")
 }
 
-func buildOnUpdate(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.OnUpdate, error) {
+func buildOnUpdate(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, proc *process.Process, sources ...*ColDef) (*plan.OnUpdate, error) {
+	if source := crc32SourceColumn(proc.Ctx, col.Name.ColName(), sources); source != nil && source.OnUpdate != nil && containsLegacyCRC32(source.OnUpdate.Expr) {
+		value := *source.OnUpdate
+		value.Expr = DeepCopyExpr(value.Expr)
+		if err := RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, value.Expr); err != nil {
+			return nil, err
+		}
+		return &value, nil
+	}
 	var expr tree.Expr = nil
 
 	for _, attr := range col.Attributes {
@@ -1054,7 +1075,46 @@ func getColumnNullAbility(col *tree.ColumnTableDef) bool {
 	return true
 }
 
-func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, existingCols []*ColDef, proc *process.Process) (*plan.GeneratedCol, error) {
+// Identity preservation must not bypass the existing generated-column
+// attribute contract or silently discard an illegal DEFAULT/ON UPDATE clause.
+func validateGeneratedColumnAttributes(bindCtx context.Context, col *tree.ColumnTableDef) error {
+	colNameOrigin := col.Name.ColNameOrigin()
+	// Validate: generated column cannot have DEFAULT
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeDefault); ok {
+			return moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have a default value", colNameOrigin)
+		}
+	}
+	// Validate: generated column cannot have ON UPDATE
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeOnUpdate); ok {
+			return moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have ON UPDATE", colNameOrigin)
+		}
+	}
+	// Validate: generated column cannot have AUTO_INCREMENT
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
+			return moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have AUTO_INCREMENT", colNameOrigin)
+		}
+	}
+	return nil
+}
+
+func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, existingCols []*ColDef, proc *process.Process, sources ...*ColDef) (*plan.GeneratedCol, error) {
+	if source := crc32SourceColumn(proc.Ctx, col.Name.ColName(), sources); source != nil && source.GeneratedCol != nil && containsLegacyCRC32(source.GeneratedCol.Expr) {
+		if err := validateGeneratedColumnAttributes(bindCtx, col); err != nil {
+			return nil, err
+		}
+		if err := validateLegacyCRC32GeneratedInputs(bindCtx, source.GeneratedCol.Expr, existingCols); err != nil {
+			return nil, err
+		}
+		value := *source.GeneratedCol
+		value.Expr = DeepCopyExpr(value.Expr)
+		if err := RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, value.Expr); err != nil {
+			return nil, err
+		}
+		return &value, nil
+	}
 	var genAttr *tree.AttributeGeneratedAlways
 	for _, attr := range col.Attributes {
 		if ga, ok := attr.(*tree.AttributeGeneratedAlways); ok {
@@ -1068,23 +1128,8 @@ func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ p
 
 	colNameOrigin := col.Name.ColNameOrigin()
 
-	// Validate: generated column cannot have DEFAULT
-	for _, attr := range col.Attributes {
-		if _, ok := attr.(*tree.AttributeDefault); ok {
-			return nil, moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have a default value", colNameOrigin)
-		}
-	}
-	// Validate: generated column cannot have ON UPDATE
-	for _, attr := range col.Attributes {
-		if _, ok := attr.(*tree.AttributeOnUpdate); ok {
-			return nil, moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have ON UPDATE", colNameOrigin)
-		}
-	}
-	// Validate: generated column cannot have AUTO_INCREMENT
-	for _, attr := range col.Attributes {
-		if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
-			return nil, moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have AUTO_INCREMENT", colNameOrigin)
-		}
+	if err := validateGeneratedColumnAttributes(bindCtx, col); err != nil {
+		return nil, err
 	}
 
 	// Collect column names and types from existing (non-generated or already-defined generated) columns
