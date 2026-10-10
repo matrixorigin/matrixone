@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1902,9 +1903,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				vec.RollbackAppend(checkpoint, numRows)
 				return err
 			}
+			targetType := types.MustTypeFromPlan(dt)
 			for i := 0; i < numRows; i++ {
 				if nc.isNull(i) {
-					err := vector.AppendBytes(vec, nil, true, proc.Mp())
+					err := appendParquetVarlenValue(proc.Ctx, vec, nil, true, proc, targetType)
 					if err != nil {
 						return rollback(err)
 					}
@@ -1913,7 +1915,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 
 				if dict == nil {
 					data := loader.loadNext()
-					err := vector.AppendBytes(vec, data, false, proc.Mp())
+					err := appendParquetVarlenValue(proc.Ctx, vec, data, false, proc, targetType)
 					if err != nil {
 						return rollback(err)
 					}
@@ -1932,7 +1934,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				}
 
 				data := loader.loadAt(idx)
-				err = vector.AppendBytes(vec, data, false, proc.Mp())
+				err = appendParquetVarlenValue(proc.Ctx, vec, data, false, proc, targetType)
 				if err == nil {
 					va := vector.GetFixedAtNoTypeCheck[types.Varlena](vec, vec.Length()-1)
 					cache[idx] = &va
@@ -3098,11 +3100,56 @@ func processParquetValuesToBytes(
 		if err != nil {
 			return rollback(wrapParseError(ctx, i, err))
 		}
-		if err := vector.AppendBytes(vec, val, false, proc.Mp()); err != nil {
+		if err := appendParquetVarlenValue(ctx, vec, val, false, proc, *vec.GetType()); err != nil {
 			return rollback(err)
 		}
 	}
 	return nil
+}
+
+// appendParquetVarlenValue applies the target column's string semantics at the
+// Parquet boundary. Parquet readers produce target-typed vectors directly, so
+// the assignment cast that normally enforces widths and BINARY padding is not
+// involved.
+func appendParquetVarlenValue(
+	ctx context.Context,
+	vec *vector.Vector,
+	value []byte,
+	isNull bool,
+	proc *process.Process,
+	typ types.Type,
+) error {
+	if isNull {
+		return vector.AppendBytes(vec, nil, true, proc.Mp())
+	}
+
+	width := int(typ.Width)
+	switch typ.Oid {
+	case types.T_char, types.T_varchar:
+		if width > 0 {
+			if !utf8.Valid(value) {
+				return moerr.NewInvalidInputf(ctx, "invalid UTF-8 value for %s", typ.Oid.String())
+			}
+			runeCount := utf8.RuneCount(value)
+			if runeCount > width {
+				return moerr.NewInternalErrorf(ctx, "Src length %d is larger than Dest length %d", runeCount, width)
+			}
+		}
+	case types.T_binary, types.T_varbinary:
+		if width > 0 {
+			if len(value) > width {
+				return moerr.NewInternalErrorf(ctx, "Src length %d is larger than Dest length %d", len(value), width)
+			}
+			if typ.Oid == types.T_binary && len(value) < width {
+				return vector.AppendBytesWithWriter(vec, width, proc.Mp(), func(dst []byte) error {
+					copy(dst, value)
+					clear(dst[len(value):])
+					return nil
+				})
+			}
+		}
+	}
+	return vector.AppendBytes(vec, value, false, proc.Mp())
 }
 
 func processParquetValuesToJson(
@@ -3762,7 +3809,7 @@ func parquetValueToFloat32(ctx context.Context, st parquet.Type, v parquet.Value
 }
 
 func parquetFloat64ToFloat32(ctx context.Context, val float64) (float32, error) {
-	if val > math.MaxFloat32 || val < -math.MaxFloat32 {
+	if !math.IsNaN(val) && !math.IsInf(val, 0) && (val > math.MaxFloat32 || val < -math.MaxFloat32) {
 		return 0, moerr.NewInvalidInputf(ctx, "parquet value %v overflows FLOAT", val)
 	}
 	return float32(val), nil

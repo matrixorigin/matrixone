@@ -2098,6 +2098,149 @@ func TestParquetFloat32Overflow(t *testing.T) {
 			require.Equal(t, float32(value), converted)
 		}
 	})
+
+	t.Run("accepts infinities and NaN", func(t *testing.T) {
+		for _, value := range []float64{math.Inf(1), math.Inf(-1), math.NaN()} {
+			converted, err := parquetFloat64ToFloat32(context.Background(), value)
+			require.NoError(t, err)
+			if math.IsNaN(value) {
+				require.True(t, math.IsNaN(float64(converted)))
+			} else {
+				require.True(t, math.IsInf(float64(converted), int(math.Copysign(1, value))))
+			}
+		}
+	})
+}
+
+func TestParquetFloat32InfinityMapping(t *testing.T) {
+	proc := testutil.NewProc(t)
+	for _, tc := range []struct {
+		name       string
+		value      float64
+		dictionary bool
+		sign       int
+	}{
+		{name: "plain positive", value: math.Inf(1), sign: 1},
+		{name: "plain negative", value: math.Inf(-1), sign: -1},
+		{name: "dictionary positive", value: math.Inf(1), dictionary: true, sign: 1},
+		{name: "dictionary negative", value: math.Inf(-1), dictionary: true, sign: -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var f *parquet.File
+			var page parquet.Page
+			if tc.dictionary {
+				f, page = writeDictAndGetPage(t, parquet.Encoded(parquet.Leaf(parquet.DoubleType), &parquet.RLEDictionary), []parquet.Value{parquet.DoubleValue(tc.value)})
+			} else {
+				f, page = writeColumnAndGetPage(t, parquet.Leaf(parquet.DoubleType), []parquet.Row{{parquet.DoubleValue(tc.value).Level(0, 0, 0)}})
+			}
+			vec := vector.NewVec(types.T_float32.ToType())
+			t.Cleanup(func() { vec.Free(proc.Mp()) })
+			var h ParquetHandler
+			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_float32), NotNullable: true})
+			require.NotNil(t, mp)
+			require.NoError(t, mp.mapping(page, proc, vec))
+			got := vector.MustFixedColWithTypeCheck[float32](vec)
+			require.Len(t, got, 1)
+			require.True(t, math.IsInf(float64(got[0]), tc.sign))
+		})
+	}
+}
+
+func TestParquetBoundedVarlenMapping(t *testing.T) {
+	proc := testutil.NewProc(t)
+	for _, dictionary := range []bool{false, true} {
+		for _, tc := range []struct {
+			name   string
+			target types.T
+			want   []byte
+		}{
+			{name: "binary", target: types.T_binary, want: []byte{'a', 'b', 0, 0}},
+			{name: "varbinary", target: types.T_varbinary, want: []byte{'a', 'b'}},
+			{name: "char", target: types.T_char, want: []byte{'a', 'b'}},
+			{name: "varchar", target: types.T_varchar, want: []byte{'a', 'b'}},
+		} {
+			t.Run(fmt.Sprintf("%s/dictionary=%t", tc.name, dictionary), func(t *testing.T) {
+				var f *parquet.File
+				var page parquet.Page
+				values := []parquet.Value{parquet.ByteArrayValue([]byte("ab"))}
+				if dictionary {
+					f, page = writeDictAndGetPage(t, parquet.Encoded(parquet.Leaf(parquet.String().Type()), &parquet.RLEDictionary), values)
+					require.NotNil(t, page.Dictionary())
+				} else {
+					f, page = writeColumnAndGetPage(t, parquet.Leaf(parquet.String().Type()), []parquet.Row{{values[0].Level(0, 0, 0)}})
+				}
+				vec := vector.NewVec(types.New(tc.target, 4, 0))
+				t.Cleanup(func() { vec.Free(proc.Mp()) })
+				var h ParquetHandler
+				mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(tc.target), Width: 4, NotNullable: true})
+				require.NotNil(t, mp)
+				require.NoError(t, mp.mapping(page, proc, vec))
+				require.Equal(t, tc.want, vec.GetBytesAt(0))
+			})
+		}
+	}
+
+	for _, dictionary := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rejects over-width/dictionary=%t", dictionary), func(t *testing.T) {
+			values := []parquet.Value{parquet.ByteArrayValue([]byte("ok")), parquet.ByteArrayValue([]byte("toolong"))}
+			var f *parquet.File
+			var page parquet.Page
+			if dictionary {
+				f, page = writeDictAndGetPage(t, parquet.Encoded(parquet.Leaf(parquet.String().Type()), &parquet.RLEDictionary), values)
+			} else {
+				f, page = writeColumnAndGetPage(t, parquet.Leaf(parquet.String().Type()), []parquet.Row{{values[0].Level(0, 0, 0)}, {values[1].Level(0, 0, 0)}})
+			}
+			vec := vector.NewVec(types.New(types.T_varchar, 4, 0))
+			t.Cleanup(func() { vec.Free(proc.Mp()) })
+			var h ParquetHandler
+			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_varchar), Width: 4, NotNullable: true})
+			require.NotNil(t, mp)
+			require.ErrorContains(t, mp.mapping(page, proc, vec), "Dest length 4")
+			require.Zero(t, vec.Length(), "page append must roll back after width failure")
+		})
+	}
+
+	t.Run("row mode uses the same semantics", func(t *testing.T) {
+		f, _ := writeColumnAndGetPage(t, parquet.Leaf(parquet.ByteArrayType), []parquet.Row{{parquet.ByteArrayValue([]byte("ab")).Level(0, 0, 0)}})
+		col := f.Root().Column("c")
+		for _, tc := range []struct {
+			target types.T
+			want   []byte
+		}{
+			{target: types.T_binary, want: []byte{'a', 'b', 0, 0}},
+			{target: types.T_varbinary, want: []byte{'a', 'b'}},
+		} {
+			vec := vector.NewVec(types.New(tc.target, 4, 0))
+			def := &plan.ColDef{Typ: plan.Type{Id: int32(tc.target), Width: 4}}
+			require.NoError(t, appendLeafValue(parquet.ByteArrayValue([]byte("ab")), col, vec, def, proc))
+			require.Equal(t, tc.want, vec.GetBytesAt(0))
+			vec.Free(proc.Mp())
+		}
+	})
+
+	t.Run("text width counts UTF-8 runes", func(t *testing.T) {
+		f, page := writeColumnAndGetPage(t, parquet.Leaf(parquet.String().Type()), []parquet.Row{{parquet.ByteArrayValue([]byte("你好")).Level(0, 0, 0)}})
+		vec := vector.NewVec(types.New(types.T_varchar, 2, 0))
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_varchar), Width: 2, NotNullable: true})
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []byte("你好"), vec.GetBytesAt(0))
+	})
+
+	t.Run("nullable and unbounded values keep their semantics", func(t *testing.T) {
+		f, page := writeColumnAndGetPage(t, parquet.Optional(parquet.Leaf(parquet.String().Type())), []parquet.Row{
+			{parquet.NullValue().Level(0, 0, 0)},
+			{parquet.ByteArrayValue([]byte("a very long value")).Level(0, 1, 0)},
+		})
+		vec := vector.NewVec(types.New(types.T_blob, 0, 0))
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_blob), NotNullable: false})
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []uint64{0}, vec.GetNulls().ToArray())
+		require.Equal(t, []byte("a very long value"), vec.GetBytesAt(1))
+	})
 }
 
 func TestParquetCrossTypeHelperCoverage(t *testing.T) {
