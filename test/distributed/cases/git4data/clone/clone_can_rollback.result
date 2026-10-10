@@ -1,76 +1,76 @@
 select enable_fault_injection();
-enable_fault_injection()
+➤ enable_fault_injection()[-7,1,0]  𝄀
 1
 drop database if exists test;
 drop database if exists srcdb;
 create database srcdb;
 create table srcdb.t1(a int);
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'srcdb.t1');
-add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, srcdb.t1)
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, srcdb.t1)[-7,1,0]  𝄀
 1
 insert into srcdb.t1 select * from generate_series(200000)g;
 select disable_fault_injection();
-disable_fault_injection()
+➤ disable_fault_injection()[-7,1,0]  𝄀
 1
 begin;
 create database test clone srcdb;
 show create database test;
-➤ Database[12,5000,0]  ¦  Create Database[12,117,0]  𝄀
+➤ Database[12,5000,0]  ¦  Create Database[12,71,0]  𝄀
 test  ¦  CREATE DATABASE `test` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 commit;
 show create database test;
-➤ Database[12,5000,0]  ¦  Create Database[12,117,0]  𝄀
+➤ Database[12,5000,0]  ¦  Create Database[12,71,0]  𝄀
 test  ¦  CREATE DATABASE `test` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 drop database test;
 begin;
 create database test clone srcdb;
 show create database test;
-➤ Database[12,5000,0]  ¦  Create Database[12,117,0]  𝄀
+➤ Database[12,5000,0]  ¦  Create Database[12,71,0]  𝄀
 test  ¦  CREATE DATABASE `test` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 rollback;
 show create database test;
 Unknown database test
 select enable_fault_injection();
-enable_fault_injection()
+➤ enable_fault_injection()[-7,1,0]  𝄀
 1
 select add_fault_point('fj/cn/clone_fails',':::','echo',40,'test.t1');
-add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, test.t1)
+➤ add_fault_point(fj/cn/clone_fails, :::, echo, 40, test.t1)[-7,1,0]  𝄀
 1
 create database test clone srcdb;
 internal error: injected table clone error
 show create database test;
 Unknown database test
 select disable_fault_injection();
-disable_fault_injection()
+➤ disable_fault_injection()[-7,1,0]  𝄀
 1
 create database test;
 begin;
 create table test.t1 clone srcdb.t1;
 commit;
 show tables from test;
-Tables_in_test
+➤ Tables_in_test[12,5000,0]  𝄀
 t1
 drop table test.t1;
 begin;
 create table test.t1 clone srcdb.t1;
 rollback;
 show tables from test;
-Tables_in_test
+➤ Tables_in_test[12,5000,0]
 select enable_fault_injection();
-enable_fault_injection()
+➤ enable_fault_injection()[-7,1,0]  𝄀
 1
 select add_fault_point('fj/cn/clone_fails',':::','echo',40,'test.t1');
-add_fault_point(fj/cn/clone_fails, :::, echo, 40, test.t1)
+➤ add_fault_point(fj/cn/clone_fails, :::, echo, 40, test.t1)[-7,1,0]  𝄀
 1
 create table test.t1 clone srcdb.t1;
 internal error: injected table clone error
 select disable_fault_injection();
-disable_fault_injection()
+➤ disable_fault_injection()[-7,1,0]  𝄀
 1
 show tables from test;
-Tables_in_test
+➤ Tables_in_test[12,5000,0]
 select count(*) from srcdb.t1 where a mod 100 = 0;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2000
 begin;
 create table test.txn_src(a int primary key, b int);
@@ -79,16 +79,16 @@ create table test.txn_clone clone test.txn_src;
 data branch create table test.txn_b1 from test.txn_src;
 data branch create table test.txn_b2 from test.txn_b1;
 select count(*) from test.txn_clone;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 select count(*) from test.txn_b2;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 commit;
 insert into test.txn_b2 values (3, 30);
 drop table test.txn_b1;
 data branch diff test.txn_b2 against test.txn_src output count;
-COUNT(*)
+➤ COUNT(*)[-5,0,0]  𝄀
 1
 drop database test;
 drop database srcdb;

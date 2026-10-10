@@ -426,6 +426,31 @@ func TestRollbackWithNoWrite(t *testing.T) {
 	})
 }
 
+func TestRollbackReadOnlyCleansIndeterminateLockOwnership(t *testing.T) {
+	for _, unlockErr := range []error{nil, errors.New("indeterminate lock cleanup failed")} {
+		t.Run(fmt.Sprint(unlockErr), func(t *testing.T) {
+			runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+				workspace := &trackingWorkspace{readonly: true}
+				lockService := &trackingUnlockLockService{unlockErr: unlockErr}
+				tc.AddWorkspace(workspace)
+				tc.lockService = lockService
+				tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+				require.Empty(t, tc.mu.lockTables)
+
+				err := tc.Rollback(ctx)
+				require.ErrorIs(t, err, unlockErr)
+				require.Equal(t, 1, workspace.rollbackCount)
+				require.Equal(t, 1, lockService.unlockCount)
+				require.Empty(t, ts.getLastRequests())
+				require.True(t, tc.mu.closed)
+				// Repeated terminal calls must not release the witness twice.
+				require.True(t, moerr.IsMoErrCode(tc.Rollback(ctx), moerr.ErrTxnClosed))
+				require.Equal(t, 1, lockService.unlockCount)
+			})
+		})
+	}
+}
+
 func TestRollbackReadOnly(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		err := tc.Rollback(ctx)

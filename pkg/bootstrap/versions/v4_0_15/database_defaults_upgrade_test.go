@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v4_0_14
+package v4_0_15
 
 import (
 	"errors"
@@ -35,9 +35,9 @@ import (
 
 func TestDatabaseDefaultsUpgrade(t *testing.T) {
 	metadata := Handler.Metadata()
-	require.Equal(t, "4.0.14", metadata.Version)
-	require.Equal(t, "4.0.13", metadata.MinUpgradeVersion)
-	require.Equal(t, defines.MORPCVersion109, metadata.RequiredProtocolVersion)
+	require.Equal(t, "4.0.15", metadata.Version)
+	require.Equal(t, "4.0.14", metadata.MinUpgradeVersion)
+	require.Equal(t, defines.MORPCVersion110, metadata.RequiredProtocolVersion)
 	require.Equal(t, versions.Yes, metadata.UpgradeTenant)
 	require.Equal(t, uint32(4), metadata.VersionOffset)
 	injected := errors.New("catalog unavailable")
@@ -65,7 +65,7 @@ func TestDatabaseDefaultsUpgrade(t *testing.T) {
 				var writes []string
 				tableExists := false
 				viewDefinition := sysview.InformationSchemaSchemataLegacyDDL
-				columnsDefinition := sysview.InformationSchemaColumnsDDL
+				columnsDefinition := sysview.InformationSchemaColumnsV100DDL()
 				tablesDefinition := sysview.InformationSchemaTablesDDL
 				txnExec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
 					switch {
@@ -93,9 +93,9 @@ func TestDatabaseDefaultsUpgrade(t *testing.T) {
 						return strResult(viewDefinition), nil
 					case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
 						if tc.oldProtocol {
-							return strResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:109,cn-b:108"}`), nil
+							return strResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:110,cn-b:109"}`), nil
 						}
-						return strResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:109,cn-b:109"}`), nil
+						return strResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:110,cn-b:110"}`), nil
 					case sql == catalog.MoDatabaseDefaultsDDL:
 						if tc.fail == "create" {
 							return executor.Result{}, injected
@@ -109,10 +109,10 @@ func TestDatabaseDefaultsUpgrade(t *testing.T) {
 						require.True(t, tableExists)
 						viewDefinition = sql
 						writes = append(writes, sql)
-					case sql == sysview.InformationSchemaColumnsV109DDL:
+					case sql == sysview.InformationSchemaColumnsDDL:
 						columnsDefinition = sql
 						writes = append(writes, sql)
-					case sql == sysview.InformationSchemaTablesV109DDL:
+					case sql == sysview.InformationSchemaTablesV110DDL:
 						tablesDefinition = sql
 						writes = append(writes, sql)
 					default:
@@ -125,13 +125,13 @@ func TestDatabaseDefaultsUpgrade(t *testing.T) {
 				require.Error(t, Handler.HandleCreateFrameworkDeps(txnExec))
 				err := Handler.HandleTenantUpgrade(t.Context(), 7, txnExec)
 				if tc.oldProtocol {
-					require.ErrorContains(t, err, "version 108")
+					require.ErrorContains(t, err, "version 109")
 					require.Empty(t, writes)
 				} else if tc.fail != "" {
 					require.ErrorIs(t, err, injected)
 				} else {
 					require.NoError(t, err)
-					require.Equal(t, []string{catalog.MoDatabaseDefaultsDDL, tenantUpgEntries[1].PreSql, sysview.InformationSchemaSchemataDDL, tenantUpgEntries[2].PreSql, sysview.InformationSchemaColumnsV109DDL, tenantUpgEntries[3].PreSql, sysview.InformationSchemaTablesV109DDL}, writes)
+					require.Equal(t, []string{catalog.MoDatabaseDefaultsDDL, tenantUpgEntries[1].PreSql, sysview.InformationSchemaSchemataDDL, tenantUpgEntries[2].PreSql, sysview.InformationSchemaColumnsDDL, tenantUpgEntries[3].PreSql, sysview.InformationSchemaTablesV110DDL}, writes)
 					writes = nil
 					require.NoError(t, Handler.HandleTenantUpgrade(t.Context(), 7, txnExec))
 					require.Empty(t, writes)

@@ -136,7 +136,7 @@ func TestDecodeDatabaseDefaults(t *testing.T) {
 }
 
 func TestDatabaseDefaultsPublicDDLPlans(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion109)
+	databaseDefaultsProtocol(t, defines.MORPCVersion110)
 	for _, tc := range []struct{ sql, db, collation string }{
 		{"alter database target character set utf8mb4 collate utf8mb4_bin", "target", "utf8mb4_bin"},
 		{"alter schema collate utf8mb4_bin", "tpch", "utf8mb4_bin"},
@@ -176,19 +176,19 @@ func TestDatabaseDefaultsPublicDDLPlans(t *testing.T) {
 		require.Error(t, err)
 	}
 	t.Run("old cluster rejects", func(t *testing.T) {
-		databaseDefaultsProtocol(t, defines.MORPCVersion108)
+		databaseDefaultsProtocol(t, defines.MORPCVersion109)
 		for _, sql := range []string{"alter database target collate utf8mb4_bin", "create database target collate utf8mb4_bin"} {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 			stmt.Free()
-			require.ErrorContains(t, err, "protocol version 109")
+			require.ErrorContains(t, err, "protocol version 110")
 		}
 	})
 }
 
 func TestCreateTableInheritsDatabaseDefaults(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion109)
+	databaseDefaultsProtocol(t, defines.MORPCVersion110)
 	for _, tc := range []struct {
 		sql                                string
 		want, inherited, revision          uint32
@@ -262,7 +262,7 @@ func TestCreateTableInheritsDatabaseDefaults(t *testing.T) {
 }
 
 func TestDatabaseDefaultsPreserveReplayedTableCollation(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion109)
+	databaseDefaultsProtocol(t, defines.MORPCVersion110)
 	for _, replay := range []bool{false, true} {
 		t.Run(map[bool]string{false: "show after alter database", true: "like into different database"}[replay], func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))

@@ -118,6 +118,20 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 			require.Equal(t, 0, count(t, "select count(*) from information_schema.columns where table_schema='"+schema+"' and table_name='table_default' and column_name='rejected'"))
 		})
 
+		t.Run("temporary declarations use the session table default", func(t *testing.T) {
+			exec(t, first, "create temporary table temporary_default(v varchar(8)) collate utf8mb4_unicode_ci")
+			defer exec(t, first, "drop temporary table temporary_default")
+			exec(t, first, "insert into temporary_default values ('ß'),('ss')")
+			exec(t, first, "alter table temporary_default add column added varchar(8) default 'ß'")
+			require.Equal(t, 2, count(t, "select count(*) from temporary_default where added='ss'"))
+			exec(t, first, "alter table temporary_default default collate utf8mb4_bin")
+			require.Equal(t, 2, count(t, "select count(*) from temporary_default where v='ss'"))
+			exec(t, first, "alter table temporary_default add column future varchar(8) default 'ß'")
+			require.Equal(t, 0, count(t, "select count(*) from temporary_default where future='ss'"))
+			exec(t, first, "alter table temporary_default modify added varchar(8)")
+			require.Equal(t, 0, count(t, "select count(*) from temporary_default where added='ss'"))
+		})
+
 		t.Run("default replacement owns final index definition", func(t *testing.T) {
 			exec(t, first, "create table default_indexes(v varchar(8), index iv(v)) collate=utf8mb4_bin")
 			exec(t, first, "insert into default_indexes values ('a'),('B')")
@@ -191,6 +205,13 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 			var value string
 			require.NoError(t, first.QueryRowContext(ctx, "select hex(v) from binary_conversion").Scan(&value))
 			require.Equal(t, "F09F9880", value)
+		})
+
+		t.Run("binary COPY preserves an explicit cast inside a generated expression", func(t *testing.T) {
+			exec(t, first, "create table explicit_binary(v varchar(4),g binary(2) generated always as (cast(v as binary(2))) stored) collate=utf8mb4_bin")
+			exec(t, first, "insert into explicit_binary(v) values ('🧪')")
+			exec(t, first, "alter table explicit_binary convert to character set binary")
+			require.Equal(t, 1, count(t, "select count(*) from explicit_binary where hex(v)='F09FA7AA' and hex(g)='F09F'"))
 		})
 
 		t.Run("binary conversion validates generated target values", func(t *testing.T) {

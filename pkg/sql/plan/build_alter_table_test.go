@@ -131,7 +131,7 @@ func newAutoIncrementAlterOptimizer(t testing.TB) *MockOptimizer {
 }
 
 func TestAlterTableCharsetAdmission(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion109)
+	databaseDefaultsProtocol(t, defines.MORPCVersion110)
 	for _, tc := range []struct {
 		option string
 		err    string
@@ -1017,8 +1017,17 @@ func TestAlterTableInplaceUsesOrderedSelfForeignKeyDependencies(t *testing.T) {
 		return mock
 	}
 
+	logicPlan, err := buildSingleStmt(newMock(false, false), t,
+		`ALTER TABLE t1 ADD CONSTRAINT fk_new FOREIGN KEY (b) REFERENCES t1(a)`)
+	require.NoError(t, err)
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Equal(t, plan.AlterTable_INPLACE, alter.AlgorithmType)
+	require.Len(t, alter.UpdateFkSqls, 1,
+		"INPLACE self-references must persist their catalog row")
+	require.Contains(t, alter.UpdateFkSqls[0], "'fk_new'")
+
 	failedMock := newMock(true, false)
-	_, err := buildSingleStmt(failedMock, t, `ALTER TABLE t1
+	_, err = buildSingleStmt(failedMock, t, `ALTER TABLE t1
 		ADD CONSTRAINT fk_new FOREIGN KEY (a) REFERENCES t1(b),
 		DROP INDEX idx_b`)
 	require.Error(t, err)
@@ -1026,7 +1035,7 @@ func TestAlterTableInplaceUsesOrderedSelfForeignKeyDependencies(t *testing.T) {
 	require.Empty(t, failedMock.ctxt.tables["t1"].Fkeys)
 	require.Equal(t, "idx_b", failedMock.ctxt.tables["t1"].Indexes[0].IndexName)
 
-	logicPlan, err := buildSingleStmt(newMock(true, true), t, `ALTER TABLE t1
+	logicPlan, err = buildSingleStmt(newMock(true, true), t, `ALTER TABLE t1
 		DROP FOREIGN KEY fk_old,
 		DROP INDEX idx_b`)
 	require.NoError(t, err)
@@ -1051,6 +1060,33 @@ func TestAlterTableInplaceUsesOrderedSelfForeignKeyDependencies(t *testing.T) {
 		DROP INDEX idx_b,
 		ADD CONSTRAINT fk_new FOREIGN KEY (a) REFERENCES t1(b)`)
 	require.ErrorContains(t, err, "failed to add the foreign key constraint")
+}
+
+func TestAlterTableInplaceSelfForeignKeyPersistsCompositeCatalogRows(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	tableDef := mock.ctxt.tables["t1"]
+	intType := tableDef.Cols[0].Typ
+	tableDef.Cols[1].Typ = intType
+	tableDef.Cols = append(tableDef.Cols,
+		&ColDef{ColId: 2, Name: "c", Typ: intType},
+		&ColDef{ColId: 3, Name: "d", Typ: intType},
+	)
+	tableDef.Pkey = &plan.PrimaryKeyDef{Names: []string{"a", "b"}}
+
+	logicPlan, err := buildSingleStmt(mock, t, `ALTER TABLE t1
+		ADD CONSTRAINT fk_composite FOREIGN KEY (c, d) REFERENCES t1(a, b)`)
+	require.NoError(t, err)
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Equal(t, plan.AlterTable_INPLACE, alter.AlgorithmType)
+	require.Len(t, alter.UpdateFkSqls, 1)
+	insert := alter.UpdateFkSqls[0]
+	require.Contains(t, insert, "'fk_composite'")
+	require.Contains(t, insert, "'b'")
+	require.Contains(t, insert, "'c'")
+	require.Contains(t, insert, "'d'")
+	require.Contains(t, insert, "'a'")
+	require.Equal(t, 2, strings.Count(insert, "'fk_composite'"),
+		"one catalog row is written for each composite FK column")
 }
 
 func TestAlterTableInplaceUsesEvolvingIndexesForEngineConflicts(t *testing.T) {

@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_14"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_15"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -31,7 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestV4014UpgradeDatabaseDefaults(t *testing.T) {
+func TestV4015UpgradeDatabaseDefaults(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
@@ -55,7 +55,7 @@ func TestV4014UpgradeDatabaseDefaults(t *testing.T) {
 		internal := testutils.GetSQLExecutor(cn)
 		upgrade := func(ctx context.Context, id uint32) error {
 			return internal.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
-				return v4_0_14.Handler.HandleTenantUpgrade(ctx, int32(id), tx)
+				return v4_0_15.Handler.HandleTenantUpgrade(ctx, int32(id), tx)
 				// Match bootstrap's system-owned upgrade transaction. Individual
 				// entries scope tenant DDL themselves; mo_ctl is system-only.
 			}, executor.Options{}.WithAccountID(catalog.System_Account).WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied())

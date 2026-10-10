@@ -18,8 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -98,11 +96,7 @@ func applyAlterTableCharsetDefault(ctx CompilerContext, table *plan.TableDef, op
 // only the Type tag. COPY owns row validation, index rebuild, publication and
 // failure cleanup. The parsed replay schema and its added attributes stay local.
 func convertAlterTableCharacterColumns(ctx CompilerContext, alter *plan.AlterTable, state *AlterTableContext, conversion *plan.DatabaseDefaults) error {
-	sql, _, err := constructCreateTableSQL(ctx, alter.CopyTableDef, nil, true, nil, true, nil)
-	if err != nil {
-		return err
-	}
-	parsed, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, ctx.GetLowerCaseTableNames())
+	_, parsed, err := constructCreateTableSQL(ctx, alter.CopyTableDef, nil, true, nil, true, nil)
 	if err != nil {
 		return err
 	}

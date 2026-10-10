@@ -1,6 +1,3 @@
--- check result at the end of bvt.
--- check result of statement_query_type/aggr_error_stmt.sql
-
--- Tips: cnt +1000, sum + 1000 both make sure result format is current.
--- @ignore:2,3,4
-select error, count(1) < sum(IF(aggr_count=0, 1, aggr_count)) check_result, count(1) cnt, sum(IF(aggr_count=0, 1, aggr_count)) sum from system.statement_info where account="bvt_aggr_error_stmt" and sql_source_type="cloud_nonuser_sql" group by error;
+-- Check all producer errors, including records with missing or invalid diagnostics.
+-- Positive-level compact diagnostics must survive export without aggregation.
+select error, count(*) cnt, sum(IF(aggr_count=0, 1, aggr_count)) total, sum(IF(status='Failed' and aggr_count=0, 1, 0)) retained, sum(IF(json_extract(exec_plan, '$.statement_diagnostics.version')=1 and json_extract(exec_plan, '$.statement_diagnostics.level')>=2 and json_extract(exec_plan, '$.statement_diagnostics.outcome')='failed' and (cast(json_extract(exec_plan, '$.statement_diagnostics.reasons') as unsigned) & 64)=64 and length(exec_plan)<=IF(json_extract(exec_plan, '$.statement_diagnostics.level')=2, 8192, 49152), 1, 0)) diagnostics, sum(IF(mo_explain_phy(exec_plan, 'normal') like 'Statement diagnostics L%: failed;%', 1, 0)) readable from system.statement_info where account='bvt_aggr_error_stmt' and sql_source_type='cloud_nonuser_sql' group by error order by error;

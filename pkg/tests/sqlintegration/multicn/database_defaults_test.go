@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -57,6 +59,32 @@ func TestDatabaseDefaultsTwoCNPreparedFreshness(t *testing.T) {
 		_, err := conn.ExecContext(ctx, statement)
 		require.NoError(t, err, statement)
 	}
+	// 使用公开 RPC 控制路径模拟混合升级期的协商协议下限；尚未提升
+	// 下限时两个 CN 都必须拒绝 C03 写入，普通历史 DDL 仍可执行。
+	func() {
+		firstCN, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		secondCN, err := cluster.GetCNService(1)
+		require.NoError(t, err)
+		targets := firstCN.ServiceID() + "," + secondCN.ServiceID()
+		// SQL ready 不等于周期刷新的服务清单已收录第二个 CN。先通过
+		// 清单所有者取得当前拓扑，再使用不重试的公开版本控制 RPC。
+		clusterservice.GetMOCluster(firstCN.ServiceID()).ForceRefresh(true)
+		setProtocol := func(version int) {
+			exec(writer, fmt.Sprintf("select mo_ctl('cn','setprotocolversion','%s:%d')", targets, version))
+		}
+		setProtocol(109)
+		defer setProtocol(110)
+		for _, conn := range []*sql.Conn{writer, reader} {
+			_, err := conn.ExecContext(ctx, "create database rejected_rollout collate utf8mb4_bin")
+			require.ErrorContains(t, err, "protocol version 110")
+		}
+		exec(writer, "create database legacy_rollout")
+		defer exec(writer, "drop database legacy_rollout")
+		exec(writer, "create table legacy_rollout.t(v varchar(8))")
+		_, err = reader.ExecContext(ctx, "alter table legacy_rollout.t convert to character set binary")
+		require.ErrorContains(t, err, "protocol version 110")
+	}()
 	exec(writer, "create database defaults_two_cn collate utf8mb4_bin")
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
@@ -158,6 +186,51 @@ func TestDatabaseDefaultsTwoCNPreparedFreshness(t *testing.T) {
 		"select default_collation_name from information_schema.schemata where schema_name='defaults_two_cn'").Scan(&finalDefault))
 	require.Contains(t, []string{"utf8mb4_bin", "utf8mb4_general_ci"}, finalDefault)
 	checkColumn(writer, "after_writers", finalDefault)
+
+	// 已持有数据库锁是精确阶段边界；观察真实 waiter 后取消，不靠 sleep
+	// 猜测 SQL 是否阻塞。取消后锁必须撤离且代际/默认值不发生变化。
+	func() {
+		waiter := open(1)
+		var waiterID uint64
+		require.NoError(t, waiter.QueryRowContext(ctx, "select connection_id()").Scan(&waiterID))
+		exec(writer, "begin")
+		defer exec(writer, "rollback")
+		exec(writer, "alter database defaults_two_cn collate utf8mb4_unicode_ci")
+		waitCtx, stopWait := context.WithCancel(ctx)
+		defer stopWait()
+		finished := make(chan error, 1)
+		go func() {
+			_, err := waiter.ExecContext(waitCtx, "alter database defaults_two_cn collate utf8mb4_bin")
+			finished <- err
+		}()
+		waiters := func() int {
+			var count int
+			err := reader.QueryRowContext(ctx, fmt.Sprintf("select count(*) from mo_locks() l where l.table_id='%d' and l.lock_wait<>''", catalog.MO_DATABASE_ID)).Scan(&count)
+			if err != nil {
+				t.Logf("lock observation: %v", err)
+				return -1
+			}
+			return count
+		}
+		require.Eventually(t, func() bool { return waiters() > 0 }, 10*time.Second, 20*time.Millisecond)
+		// KILL QUERY 取消服务器持有的 statement context。仅关闭客户端 TCP
+		// 不构成服务器已观察取消的阶段证明（响应前服务器未必在读连接）。
+		exec(reader, fmt.Sprintf("kill query %d", waiterID))
+		select {
+		case err := <-finished:
+			require.Error(t, err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		require.Eventually(t, func() bool { return waiters() == 0 }, 10*time.Second, 20*time.Millisecond)
+	}()
+	var unchanged uint64
+	require.NoError(t, reader.QueryRowContext(ctx, versionSQL).Scan(&unchanged))
+	require.Equal(t, after, unchanged)
+	var unchangedDefault string
+	require.NoError(t, reader.QueryRowContext(ctx, "select default_collation_name from information_schema.schemata where schema_name='defaults_two_cn'").Scan(&unchangedDefault))
+	require.Equal(t, finalDefault, unchangedDefault)
+	exec(reader, "alter database defaults_two_cn collate utf8mb4_unicode_ci")
 
 	// 同名替换改变数据库 identity；旧 prepared 计划不得沿用旧对象/默认值。
 	exec(reader, "prepare recreated_default from create table defaults_two_cn.after_recreate (v varchar(8))")

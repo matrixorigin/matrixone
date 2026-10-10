@@ -188,6 +188,14 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 					_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+database)
 					_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+unrelated)
 				}()
+				var progressConn *sql.Conn
+				if scenario.name == "shared_gate" {
+					conn, err := db0.Conn(ctx)
+					require.NoError(t, err)
+					defer conn.Close()
+					require.NoError(t, conn.PingContext(ctx))
+					progressConn = conn
+				}
 				owner, err := db0.BeginTx(ctx, nil)
 				require.NoError(t, err)
 				defer owner.Rollback()
@@ -227,16 +235,28 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				case <-time.After(15 * time.Second):
 					t.Fatal("competing lifecycle owner did not wait for the prior UPDATE lock")
 				}
-				select {
-				case earlyErr := <-otherDone:
-					t.Fatalf("competing lifecycle owner finished before the reciprocal wait: %v", earlyErr)
-				default:
+				requireOtherWaiting := func() {
+					t.Helper()
+					require.NoError(t, otherCtx.Err(), "competing lifecycle owner must remain live")
+					select {
+					case earlyErr := <-otherDone:
+						otherFinished = true
+						t.Fatalf("competing lifecycle owner finished before the reciprocal wait: %v", earlyErr)
+					default:
+					}
 				}
+				requireOtherWaiting()
 				if scenario.name == "shared_gate" {
-					fastCtx, cancelFast := context.WithTimeout(ctx, 2*time.Second)
-					defer cancelFast()
-					_, err = db0.ExecContext(fastCtx, "drop table "+unrelated+".u")
+					// Prove independent progress while B still waits for A's T,
+					// not a two-second SQL/commit latency on the test runner.
+					_, err = progressConn.ExecContext(ctx, "drop table "+unrelated+".u")
 					require.NoError(t, err, "unrelated DROP must progress while target DROP waits for T")
+					select {
+					case earlyErr := <-otherDone:
+						otherFinished = true
+						t.Fatalf("competing lifecycle owner finished before unrelated DROP proved progress: %v", earlyErr)
+					default:
+					}
 				}
 				nextCtx, cancelNext := context.WithTimeout(ctx, 10*time.Second)
 				defer cancelNext()

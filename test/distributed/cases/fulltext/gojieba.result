@@ -203,11 +203,11 @@ Project
 desc src;
 Field    Type    Null    Key    Default    Extra    Comment
 id    BIGINT(64)    NO    PRI    null        
-body    VARCHAR(65535)    YES    MUL    null        
+body    VARCHAR(16383)    YES    MUL    null        
 title    TEXT    YES        null        
 show create table src;
 Table    Create Table
-src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`body`,`title`) WITH PARSER gojieba,\n FULLTEXT `ftidx2`(`body`) WITH PARSER gojieba\n)
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(16383) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`body`,`title`) WITH PARSER gojieba,\n FULLTEXT `ftidx2`(`body`) WITH PARSER gojieba\n)
 drop table src;
 create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2));
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
@@ -233,7 +233,7 @@ id1    id2    body    title
 id4    4    light brown    t5
 show create table src2;
 Table    Create Table
-src2    CREATE TABLE `src2` (\n  `id1` varchar(65535) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT `ftidx2`(`body`,`title`) WITH PARSER gojieba\n)
+src2    CREATE TABLE `src2` (\n  `id1` varchar(16383) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT `ftidx2`(`body`,`title`) WITH PARSER gojieba\n)
 drop table src2;
 create table src (id bigint primary key, body varchar, title text, FULLTEXT(title, body) WITH PARSER gojieba);
 insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
@@ -340,7 +340,7 @@ count(*)
 0
 show create table src;
 Table    Create Table
-src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`title`,`body`) WITH PARSER gojieba\n)
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(16383) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`title`,`body`) WITH PARSER gojieba\n)
 drop table src;
 create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2), FULLTEXT(body, title) WITH PARSER gojieba);
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
@@ -354,7 +354,7 @@ id2    2    blue    t3    0.09061906
 id3    3    blue red    t4    0.09061906
 show create table src2;
 Table    Create Table
-src2    CREATE TABLE `src2` (\n  `id1` varchar(65535) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT (`body`,`title`) WITH PARSER gojieba\n)
+src2    CREATE TABLE `src2` (\n  `id1` varchar(16383) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT (`body`,`title`) WITH PARSER gojieba\n)
 drop table src2;
 drop table if exists t1;
 create table t1(a int primary key, b varchar(200));

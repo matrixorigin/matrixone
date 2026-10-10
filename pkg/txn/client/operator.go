@@ -1928,12 +1928,9 @@ func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.Se
 }
 
 func (tc *txnOperator) unlock(ctx context.Context) error {
-	if tc.reset.workspace != nil &&
-		tc.reset.workspace.Readonly() &&
-		len(tc.mu.lockTables) == 0 {
-		return nil
-	}
-
+	// A failed first Lock RPC can leave indeterminate remote ownership while
+	// the workspace is still read-only and no acknowledged table is recorded.
+	// Only lockservice owns that cleanup witness; always ask it to unlock by ID.
 	if tc.reset.commitNeedsResolution {
 		resolver, ok := tc.lockService.(lockservice.UnknownCommitResolver)
 		if !ok {
@@ -1983,8 +1980,10 @@ func (tc *txnOperator) unlock(ctx context.Context) error {
 		v2.TxnCNCommitResponseDurationHistogram.Observe(float64(time.Since(tc.reset.commitAt).Seconds()))
 	}
 
-	// rc mode need to see the committed value, so wait logtail applied
-	if tc.mu.txn.IsRCIsolation() &&
+	// RC waits only for a real commit. Read-only/aborted transactions have no
+	// commit timestamp; waiting for "now" here can deadlock catalog replay on
+	// the logtail initialization that this same transaction must finish.
+	if !tc.mu.txn.CommitTS.IsEmpty() && tc.mu.txn.IsRCIsolation() &&
 		tc.timestampWaiter != nil {
 		start := time.Now()
 		_, err := tc.timestampWaiter.GetTimestamp(ctx, tc.mu.txn.CommitTS)

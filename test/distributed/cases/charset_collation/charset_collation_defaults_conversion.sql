@@ -82,6 +82,13 @@ alter table binary_generated convert to character set binary;
 select hex(v),hex(g) from binary_generated;
 show create table binary_generated;
 
+-- COPY checks the destination assignment without removing the user's CAST.
+create table explicit_binary(v varchar(4),g binary(2) generated always as (cast(v as binary(2))) stored) collate=utf8mb4_bin;
+insert into explicit_binary(v) values ('🧪');
+alter table explicit_binary convert to character set binary;
+select hex(v),hex(g) from explicit_binary;
+show create table explicit_binary;
+
 -- Replay and inheritance never mutate the originating declaration.
 create table source_like(v varchar(8)) collate=utf8mb4_bin;
 create table target_like like source_like;
@@ -91,4 +98,16 @@ alter table target_like add column added varchar(8);
 select table_name,column_name,collation_name from information_schema.columns
 where table_schema='charset_defaults_contract' and table_name in ('source_like','target_like') order by table_name,ordinal_position;
 select table_name from information_schema.tables where table_schema='charset_defaults_contract' and table_name like '%_copy_%' order by table_name;
+-- Session-owned temporary declarations follow the table default as well.
+create temporary table temporary_default(v varchar(8)) collate utf8mb4_unicode_ci;
+insert into temporary_default values ('ß'),('ss');
+alter table temporary_default add column added varchar(8) default 'ß';
+select count(*) from temporary_default where added='ss';
+alter table temporary_default default collate utf8mb4_bin;
+select count(*) from temporary_default where v='ss';
+alter table temporary_default add column future varchar(8) default 'ß';
+select count(*) from temporary_default where future='ss';
+alter table temporary_default modify added varchar(8);
+select count(*) from temporary_default where added='ss';
+drop temporary table temporary_default;
 drop database charset_defaults_contract;

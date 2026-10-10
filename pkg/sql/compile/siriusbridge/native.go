@@ -50,7 +50,11 @@ func status(code C.sirius_status, e *C.sirius_error) error {
 	if code == C.SIRIUS_NOT_NEEDED {
 		return errNotNeeded
 	}
-	return &nativeError{uint32(code), C.GoStringN(&e.message[0], C.int(boundedMessage(e)))}
+	message := C.GoStringN(&e.message[0], C.int(boundedMessage(e)))
+	if err := nativeNumericError(uint32(code), message); err != nil {
+		return err
+	}
+	return &nativeError{uint32(code), message}
 }
 func boundedMessage(e *C.sirius_error) int {
 	for i := range e.message {
@@ -92,7 +96,8 @@ func New(config Config) (*Runtime, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	if C.sirius_abi_version() != 1 || C.sirius_capabilities()&11 != 11 {
+	capabilities := uint64(C.sirius_capabilities())
+	if C.sirius_abi_version() != 1 || capabilities&11 != 11 {
 		return nil, moerr.NewBadConfigNoCtx("Sirius SDK lacks ABI v1 MO input/native result capability")
 	}
 	path := C.CString(config.ConfigPath)
@@ -105,6 +110,7 @@ func New(config Config) (*Runtime, error) {
 		return nil, err
 	}
 	runtime := newRuntime(d)
+	runtime.capabilities = capabilities
 	runtime.cleanupTimeout = config.cleanupBudget()
 	if config.MaxWaiting != 0 {
 		runtime.maxQueries = 1 + int(config.MaxWaiting)

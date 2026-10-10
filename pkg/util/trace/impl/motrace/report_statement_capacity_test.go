@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/stretchr/testify/require"
 	"strings"
@@ -77,6 +78,44 @@ func TestStatementInfoCapacityAndPlanOwnership(t *testing.T) {
 		require.Equal(t, 1, plan.frees)
 		require.Nil(t, s.jsonByte)
 		row.Free()
+	}
+}
+
+func TestStatementInfoMalformedErrorDiagnostics(t *testing.T) {
+	provider := GetTracerProvider()
+	old := provider.disableSqlWriter
+	t.Cleanup(func() { provider.disableSqlWriter = old })
+	for _, disable := range []bool{false, true} {
+		provider.disableSqlWriter = disable
+		for _, tc := range []struct{ raw, want string }{
+			{"ordinary error 你😀�", "ordinary error 你😀�"},
+			{"error \xff\xe4\xbd", "error ???"},
+			{strings.Repeat("你", 21845) + "\xff", strings.Repeat("你", (db_holder.StatementInfoTextLimit-len(db_holder.StatementInfoTruncationMarker))/3) + db_holder.StatementInfoTruncationMarker},
+		} {
+			func() {
+				original := errors.New(tc.raw)
+				s := NewStatementInfo()
+				s.Statement = append(s.Statement, "select 1"...)
+				s.Error = original
+				s.Status = StatementStatusFailed
+				s.end = true
+				s.statsArray.Init()
+				row := SingleStatementTable.GetRow(context.Background())
+				defer row.Free()
+				defer func() { s.FillRow(context.Background(), row); s.Free() }()
+				key := s.Key(time.Second)
+				s.FillRow(context.Background(), row)
+				values := statementCapacityValues(row.ToStrings())
+				require.Equal(t, tc.want, values["error"])
+				require.True(t, utf8.ValidString(values["error"]))
+				require.Equal(t, "Failed", values["status"])
+				require.Equal(t, "select 1", values["statement"])
+				require.Equal(t, fmt.Sprintf("%d", moerr.ErrInfo), values["err_code"])
+				require.Same(t, original, s.Error)
+				require.Equal(t, tc.raw, s.Error.Error())
+				require.Equal(t, key, s.Key(time.Second))
+			}()
+		}
 	}
 }
 

@@ -124,6 +124,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     tableOptions []tree.TableOption
     tableExprs tree.TableExprs
     tableExpr tree.TableExpr
+    jsonTableColumn *tree.JSONTableColumn
+    jsonTableColumns []*tree.JSONTableColumn
+    jsonTableResponse *tree.JSONTableResponse
     rowFormatType tree.RowFormatType
     matchType tree.MatchType
     fullTextSearchType tree.FullTextSearchType
@@ -373,6 +376,11 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 }
 
 %token LEX_ERROR
+%token <str> JSON_TABLE JSON_TABLE_PATH JSON_TABLE_NESTED JSON_TABLE_ORDINALITY JSON_TABLE_EMPTY JSON_TABLE_ERROR
+%type <jsonTableColumn> json_table_column json_table_policies
+%type <jsonTableColumns> json_table_columns
+%type <jsonTableResponse> json_table_response json_table_on_empty json_table_on_error
+%type <str> json_table_path_opt
 %nonassoc EMPTY
 %left <str> UNION EXCEPT INTERSECT MINUS
 %nonassoc LOWER_THAN_ORDER
@@ -8212,6 +8220,15 @@ table_subquery:
     }
 
 table_function:
+    JSON_TABLE '(' expression ',' STRING COLUMNS '(' json_table_columns ')' ')'
+    {
+        name := tree.NewUnresolvedName(tree.NewCStr("json_table", 1))
+        $$ = &tree.TableFunction{
+            Func: &tree.FuncExpr{Func: tree.FuncName2ResolvableFunctionReference(name), FuncName: tree.NewCStr("json_table", 1), Exprs: tree.Exprs{$3}, Type: tree.FUNC_TYPE_TABLE},
+            JSONTable: &tree.JSONTable{Path: $5, Columns: $8},
+        }
+    }
+|
     ident '(' expression_list_opt ')'
     {
         name := tree.NewUnresolvedName($1)
@@ -8224,6 +8241,52 @@ table_function:
                 },
         }
     }
+
+json_table_columns:
+    json_table_column
+    { $$ = []*tree.JSONTableColumn{$1} }
+|   json_table_columns ',' json_table_column
+    { $$ = append($1, $3) }
+
+json_table_column:
+    ident FOR JSON_TABLE_ORDINALITY
+    { $$ = &tree.JSONTableColumn{Name: $1.Origin(), Kind: "ordinality"} }
+|   ident column_type JSON_TABLE_PATH STRING json_table_policies
+    { $$ = $5; $$.Name = $1.Origin(); $$.Kind = "path"; $$.Type = $2; $$.Path = $4 }
+|   ident column_type EXISTS JSON_TABLE_PATH STRING
+    { $$ = &tree.JSONTableColumn{Name: $1.Origin(), Kind: "exists", Type: $2, Path: $5} }
+|   JSON_TABLE_NESTED json_table_path_opt STRING COLUMNS '(' json_table_columns ')'
+    { $$ = &tree.JSONTableColumn{Kind: "nested", Path: $3, Children: $6} }
+
+json_table_path_opt:
+    { $$ = "" }
+|   JSON_TABLE_PATH
+    { $$ = $1 }
+
+json_table_response:
+    NULL
+    { $$ = &tree.JSONTableResponse{Action: "null"} }
+|   JSON_TABLE_ERROR
+    { $$ = &tree.JSONTableResponse{Action: "error"} }
+|   DEFAULT STRING
+    { $$ = &tree.JSONTableResponse{Action: "default", Default: $2} }
+
+json_table_policies:
+    { $$ = &tree.JSONTableColumn{} }
+|   json_table_response ON JSON_TABLE_EMPTY json_table_on_error
+    { $$ = &tree.JSONTableColumn{OnEmpty: $1, OnError: $4} }
+|   json_table_response ON JSON_TABLE_ERROR json_table_on_empty
+    { $$ = &tree.JSONTableColumn{OnEmpty: $4, OnError: $1, ReversePolicies: $4 != nil} }
+
+json_table_on_empty:
+    { $$ = nil }
+|   json_table_response ON JSON_TABLE_EMPTY
+    { $$ = $1 }
+
+json_table_on_error:
+    { $$ = nil }
+|   json_table_response ON JSON_TABLE_ERROR
+    { $$ = $1 }
 
 aliased_table_name:
     table_name as_opt_id index_hint_list_opt
@@ -14462,6 +14525,7 @@ name_confict:
 |   HOUR
 |   IF
 |   FORMAT
+|   JSON_TABLE_EMPTY
 |   LEFT
 |   MICROSECOND
 |   MINUTE
@@ -16112,6 +16176,11 @@ equal_opt:
 
 non_reserved_keyword:
     ACCOUNT
+|   JSON_TABLE_PATH
+|   JSON_TABLE_NESTED
+|   JSON_TABLE_ORDINALITY
+|   JSON_TABLE_EMPTY
+|   JSON_TABLE_ERROR
 |   ACCOUNTS
 |   AGAINST
 |   ALWAYS

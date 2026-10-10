@@ -52,7 +52,7 @@ show full columns from native_defaults;
 v  ¦  VARCHAR(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 g  ¦  VARCHAR(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references  ¦    𝄀
 raw  ¦  VARBINARY(8)  ¦  binary  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-n  ¦  INT(32)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
+n  ¦  INT(32)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references
 select column_name,character_set_name,collation_name from information_schema.columns
 where table_schema='charset_defaults_contract' and table_name='native_defaults' order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
@@ -97,7 +97,7 @@ converted  ¦  CREATE TABLE `converted` (
 show full columns from converted;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  INT(32)  ¦  null  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-v  ¦  VARCHAR(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  select,insert,update,references  ¦  
+v  ¦  VARCHAR(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  select,insert,update,references
 alter table converted default collate=utf8mb4_bin, add column added varchar(8), convert to character set utf8mb4 collate utf8mb4_unicode_ci;
 select column_name,collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='converted' order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  collation_name[12,18,0]  𝄀
@@ -184,6 +184,18 @@ binary_generated  ¦  CREATE TABLE `binary_generated` (
   `v` varbinary(4) DEFAULT NULL,
   `g` varbinary(8) GENERATED ALWAYS AS (concat(v, 'x')) STORED
 ) CHARACTER SET=binary
+create table explicit_binary(v varchar(4),g binary(2) generated always as (cast(v as binary(2))) stored) collate=utf8mb4_bin;
+insert into explicit_binary(v) values ('🧪');
+alter table explicit_binary convert to character set binary;
+select hex(v),hex(g) from explicit_binary;
+➤ hex(v)[12,8,0]  ¦  hex(g)[12,4,0]  𝄀
+F09FA7AA  ¦  F09F
+show create table explicit_binary;
+➤ Table[12,15,0]  ¦  Create Table[12,154,0]  𝄀
+explicit_binary  ¦  CREATE TABLE `explicit_binary` (
+  `v` varbinary(4) DEFAULT NULL,
+  `g` binary(2) GENERATED ALWAYS AS (cast(v as binary(2))) STORED
+) CHARACTER SET=binary
 create table source_like(v varchar(8)) collate=utf8mb4_bin;
 create table target_like like source_like;
 alter table target_like default collate=utf8mb4_general_ci;
@@ -198,4 +210,23 @@ target_like  ¦  v  ¦  utf8mb4_bin  𝄀
 target_like  ¦  added  ¦  utf8mb4_general_ci
 select table_name from information_schema.tables where table_schema='charset_defaults_contract' and table_name like '%_copy_%' order by table_name;
 ➤ table_name[12,5000,0]
+create temporary table temporary_default(v varchar(8)) collate utf8mb4_unicode_ci;
+insert into temporary_default values ('ß'),('ss');
+alter table temporary_default add column added varchar(8) default 'ß';
+select count(*) from temporary_default where added='ss';
+➤ count(*)[-5,64,0]  𝄀
+2
+alter table temporary_default default collate utf8mb4_bin;
+select count(*) from temporary_default where v='ss';
+➤ count(*)[-5,64,0]  𝄀
+2
+alter table temporary_default add column future varchar(8) default 'ß';
+select count(*) from temporary_default where future='ss';
+➤ count(*)[-5,64,0]  𝄀
+0
+alter table temporary_default modify added varchar(8);
+select count(*) from temporary_default where added='ss';
+➤ count(*)[-5,64,0]  𝄀
+0
+drop temporary table temporary_default;
 drop database charset_defaults_contract;

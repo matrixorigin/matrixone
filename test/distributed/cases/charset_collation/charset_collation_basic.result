@@ -273,7 +273,7 @@ name_default  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 name_utf8  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 name_utf8mb4  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 name_utf8mb4_bin  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-name_utf8mb4_general  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦  
+name_utf8mb4_general  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null
 CREATE TABLE t_insert_test (
 id INT PRIMARY KEY,
 data VARCHAR(200)

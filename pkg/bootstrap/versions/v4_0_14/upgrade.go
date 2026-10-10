@@ -27,8 +27,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// Database defaults have their own tenant migration after 4.0.13. An older
-// worker must not treat the new catalog and SCHEMATA view as already upgraded.
 var Handler = &versionHandle{
 	metadata: versions.Version{
 		Version:                 "4.0.14",

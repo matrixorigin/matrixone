@@ -1190,6 +1190,8 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	// These tables are needed when creating tables in the source account
 	err := exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, srcCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
+	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
 	require.NoError(t, err)
@@ -1208,6 +1210,8 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	// Create system tables for system account
 	// These tables are needed for system account operations
 	err = exec_sql(disttaeEngine, systemCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtxWithTimeout, catalog.MoDatabaseDefaultsDDL)
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, systemCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)

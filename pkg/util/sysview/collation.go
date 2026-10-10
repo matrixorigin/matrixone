@@ -105,23 +105,11 @@ func databaseDefaultsMetadataSQL(charset bool) string {
 			if charset {
 				name = effective.Charset.Name()
 			}
-			fmt.Fprintf(&sql, " when dd.collation_id = %d and dd.collation_revision = %d then '%s'", identity, revision, name)
+			fmt.Fprintf(&sql, " when dd.version > 0 and dd.collation_id = %d and dd.collation_revision = %d then '%s'", identity, revision, name)
 		}
 	}
 	sql.WriteString(" else NULL end")
 	return sql.String()
-}
-
-// The SQL internal_column_character_set classifier uses presentation codes
-// 4/5 for the already-admitted native domains. Names/capacity still come from
-// the shared semantic owner; this projection does not admit a new domain.
-func informationSchemaNativeColumnsDDL() string {
-	return strings.NewReplacer(
-		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8mb4' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4' else NULL end)",
-		columnDomainMetadataSQL("mc.atttyp", true),
-		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_general_ci' WHEN 1 then 'utf8mb4_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4_general_ci' else NULL end)",
-		ColumnCollationSQL("mc.atttyp"),
-	).Replace(InformationSchemaColumnsDDL)
 }
 
 // ColumnCollationSQL shares the effective-domain projection between COLUMNS
