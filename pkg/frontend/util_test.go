@@ -17,6 +17,7 @@ package frontend
 import (
 	"container/list"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
@@ -1276,6 +1278,48 @@ func Test_makeExecuteSql(t *testing.T) {
 			}
 		})
 	}
+	for _, tc := range []struct{ name, value, want string }{
+		{"binary", "\xff\xfe", "x'fffe'"},
+		{"partial two", "\xc2", "x'c2'"},
+		{"partial three", "\xe4\xbd", "x'e4bd'"},
+		{"partial four", "\xf0\x9f\x98", "x'f09f98'"},
+		{"invalid last", "你😀\xff", "x'e4bda0f09f9880ff'"},
+		{"NUL", "a\x00b", "x'610062'"},
+		{"control", "\x01\x1b\x7f", "x'011b7f'"},
+		{"text", "你😀�", "你😀�"},
+		{"whitespace and punctuation", "'\\\t\n\r", "'\\\t\n\r"},
+		{"numeric", "-123.5", "-123.5"},
+		{"empty", "", ""},
+		{"text NULL", "NULL", "NULL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params := vector.NewVec(types.T_text.ToType())
+			prepared := &PrepareStmt{Name: "binary_diagnostic", Sql: "select ?, ?, ?", params: params}
+			t.Cleanup(func() { prepared.params = nil; params.Free(mp) })
+			for _, value := range []string{tc.value, "", "42"} {
+				require.NoError(t, vector.AppendBytes(params, []byte(value), false, mp))
+			}
+			params.GetNulls().Add(1)
+			require.NoError(t, ses1.SetPrepareStmt(ctx, prepared.Name, prepared))
+			got := makeExecuteSql(ctx, ses1, &tree.Select{}, true, prepared.Name)
+			require.Equal(t, "select ?, ?, ? ; "+tc.want+" ; NULL ; 42", got)
+			require.True(t, utf8.ValidString(got))
+			require.Equal(t, tc.value, params.GetStringAt(0))
+			require.True(t, params.GetNulls().Contains(1))
+			require.Equal(t, "42", params.GetStringAt(2))
+			if strings.HasPrefix(tc.want, "x'") {
+				decoded, err := hex.DecodeString(tc.want[2 : len(tc.want)-1])
+				require.NoError(t, err)
+				require.Equal(t, []byte(tc.value), decoded)
+			} else {
+				var retained string
+				allocs := testing.AllocsPerRun(10, func() { retained = formatExecuteParamForDiagnostics(tc.value) })
+				require.Equal(t, tc.value, retained)
+				require.Zero(t, allocs)
+			}
+		})
+	}
+
 }
 
 func Test_getVariableValue(t *testing.T) {

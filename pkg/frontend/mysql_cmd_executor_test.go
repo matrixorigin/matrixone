@@ -11776,12 +11776,23 @@ func TestRecordStatementUTF8(t *testing.T) {
 	// Keep the real producer and row serializer; only asynchronous delivery is stubbed.
 	sink := gostub.Stub(&motrace.ReportStatement, func(context.Context, *motrace.StatementInfo) error { return nil })
 	defer sink.Reset()
-	for _, tc := range []struct{ name, text, want string }{
-		{"Chinese", strings.Repeat("你", 400), strings.Repeat("你", 341) + "..."},
-		{"emoji", "a" + strings.Repeat("😀", 300), "a" + strings.Repeat("😀", 255) + "..."},
-		{"ASCII", strings.Repeat("x", 1100), strings.Repeat("x", 1024) + "..."},
+	for _, tc := range []struct {
+		name, text, want string
+		params           []string
+		nullIndex        int
+	}{
+		{"Chinese", strings.Repeat("你", 400), strings.Repeat("你", 341) + "...", nil, -1},
+		{"emoji", "a" + strings.Repeat("😀", 300), "a" + strings.Repeat("😀", 255) + "...", nil, -1},
+		{"ASCII", strings.Repeat("x", 1100), strings.Repeat("x", 1024) + "...", nil, -1},
+		{"binary parameter", "select ?", "x'fffe'", []string{"\xff\xfe"}, -1},
+		{"mixed parameters", "select ?, ?, ?, ?", "你😀 ; NULL ;  ; 42", []string{"你😀", "", "", "42"}, 1},
+		{"long Unicode parameter", "select ?", strings.Repeat("你😀", 300), []string{strings.Repeat("你😀", 300)}, -1},
+		{"long binary parameter", "select ?", "x'" + strings.Repeat("ff", 2048) + "'", []string{strings.Repeat("\xff", 2048)}, -1},
 	} {
 		for _, path := range []string{"environment", "ordinary AST", "prepared"} {
+			if tc.params != nil && path != "prepared" {
+				continue
+			}
 			t.Run(tc.name+"/"+path, func(t *testing.T) {
 				ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
 				defer ses.Close()
@@ -11794,11 +11805,24 @@ func TestRecordStatementUTF8(t *testing.T) {
 					mock.EXPECT().GetUUID().Return(make([]byte, 16))
 					if path == "prepared" {
 						const name = "utf8_query"
-						require.NoError(t, ses.SetPrepareStmt(ctx, name, &PrepareStmt{Name: name, Sql: tc.text}))
-						mock.EXPECT().GetAst().Return(&tree.Execute{Name: name})
+						prepared := &PrepareStmt{Name: name, Sql: tc.text}
+						if tc.params != nil {
+							proc := testutil.NewProc(t)
+							prepared.proc = proc
+							prepared.params = vector.NewVec(types.T_text.ToType())
+							defer prepared.Close()
+							for i, value := range tc.params {
+								require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), i == tc.nullIndex, proc.Mp()))
+							}
+						}
+						require.NoError(t, ses.SetPrepareStmt(ctx, name, prepared))
+						mock.EXPECT().GetAst().Return(&tree.Select{})
 						mock.EXPECT().BinaryExecute().Return(true, name)
 						env = "execute utf8_query"
 						expanded := env + " // " + tc.text
+						if tc.params != nil {
+							expanded += " ; " + tc.want
+						}
 						cut := 0
 						for offset, r := range expanded {
 							if end := offset + utf8.RuneLen(r); end <= 1024 {
@@ -11807,7 +11831,10 @@ func TestRecordStatementUTF8(t *testing.T) {
 								break
 							}
 						}
-						want = expanded[:cut] + "..."
+						want = expanded
+						if len(expanded) > 1024 {
+							want = expanded[:cut] + "..."
+						}
 					} else {
 						mock.EXPECT().GetAst().Return(&tree.Select{})
 						mock.EXPECT().BinaryExecute().Return(false, "")
@@ -11829,6 +11856,14 @@ func TestRecordStatementUTF8(t *testing.T) {
 				require.Equal(t, want, ses.GetSqlOfStmt())
 				require.Equal(t, want, string(stmt.Statement))
 				require.True(t, utf8.Valid(stmt.Statement))
+				if tc.params != nil {
+					prepared, err := ses.GetPrepareStmt(ctx, "utf8_query")
+					require.NoError(t, err)
+					for i, value := range tc.params {
+						require.Equal(t, value, prepared.params.GetStringAt(i))
+						require.Equal(t, i == tc.nullIndex, prepared.params.GetNulls().Contains(uint64(i)))
+					}
+				}
 				stmt.EndStatement(statementCtx, nil, 1, 0, 0)
 				stmt.FillRow(ctx, row)
 				for i, col := range motrace.SingleStatementTable.Columns {

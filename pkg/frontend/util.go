@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -28,6 +29,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/BurntSushi/toml"
@@ -1492,13 +1494,31 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement, binE
 				if isNull {
 					paramValues[i] = "NULL"
 				} else {
-					paramValues[i] = vs[i].UnsafeGetString(prepareStmt.params.GetArea())
+					paramValues[i] = formatExecuteParamForDiagnostics(vs[i].UnsafeGetString(prepareStmt.params.GetArea()))
 				}
 			}
 			bb.WriteString(strings.Join(paramValues, " ; "))
 		}
 	}
 	return bb.String()
+}
+
+// formatExecuteParamForDiagnostics preserves text and renders arbitrary binary
+// bytes with the existing lossless SQL hex formatter. Execution bindings are untouched.
+func formatExecuteParamForDiagnostics(value string) string {
+	for offset, r := range value {
+		binary := (r < 0x20 && r != '\t' && r != '\n' && r != '\r') || r == 0x7f
+		if r == utf8.RuneError {
+			_, width := utf8.DecodeRuneInString(value[offset:])
+			binary = width == 1
+		}
+		if binary {
+			var buf bytes.Buffer
+			writeSQLHexLiteral(&buf, commonutil.UnsafeStringToBytes(value))
+			return buf.String()
+		}
+	}
+	return value
 }
 
 func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batch.Batch, *plan.ResultColDef, error) {
