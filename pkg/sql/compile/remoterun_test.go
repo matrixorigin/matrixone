@@ -1709,9 +1709,9 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		{
 			name:                "JSON_VALUE seven-argument plan",
 			expressions:         []*planpb.Expr{jsonValueContract()},
-			incompatibleVersion: defines.MORPCVersion108,
-			compatibleVersion:   defines.MORPCVersion109,
-			errorContains:       "seven-argument JSON_VALUE plans require MORPC protocol version 109",
+			incompatibleVersion: defines.MORPCVersion109,
+			compatibleVersion:   defines.MORPCVersion110,
+			errorContains:       "seven-argument JSON_VALUE plans require MORPC protocol version 110",
 		},
 		{
 			name:                "numeric prefix and JSON comparison",

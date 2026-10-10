@@ -2334,9 +2334,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 		)
 	}
 	if features.JSONValueContract &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion109) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion110) {
 		return moerr.NewNotSupportedNoCtx(
-			"seven-argument JSON_VALUE plans require MORPC protocol version 109",
+			"seven-argument JSON_VALUE plans require MORPC protocol version 110",
 		)
 	}
 	if (features.JSONInputContracts || features.YearBitCast) &&
