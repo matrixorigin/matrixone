@@ -148,17 +148,32 @@ source ./run_ut.sh UT
 		t.Fatalf("embedded prebuild default-on control: %v\n%s", err, out)
 	}
 
-	for _, mode := range []string{"success", "reclaim", "build-failure", "no-binary", "metadata-failure", "low-disk", "off", "test-failure"} {
+	for _, mode := range []string{"success", "reclaim", "build-failure", "no-binary", "metadata-failure", "low-disk", "off", "test-failure", "execution-undrained"} {
 		t.Run(mode, func(t *testing.T) {
 			script := embeddedSetup + `
 if [[ "$MODE" == low-disk ]]; then
  # Force the production disk guard independently of the host filesystem.
  function df() { printf 'Filesystem 1024-blocks Used Available Capacity Mounted\nmock 1 1 0 100%% /\n'; }
 fi
+if [[ "$MODE" == execution-undrained ]]; then
+ # Replace only the child boundary: exercise the real command join and consumer.
+ function run_prebuilt_embedded_tests() {
+  printf 'retained\n' > "$PREBUILT_RACE_REPORT.00"
+  return 125
+ }
+fi
 if [[ "$MODE" != off ]]; then start_embedded_prebuild "$scope" 2; fi
 artifact_dir=$CLUSTER_PREBUILD_DIR
 status=0
 run_embedded_tests "$scope" || status=$?
+if [[ "$MODE" == execution-undrained ]]; then
+ [[ "$status" == 125 && -z "$CURRENT_UT_PID$CLUSTER_PREBUILD_JOB_PID" ]] || exit 110
+ [[ -d "$artifact_dir" && -f "$PREBUILT_RACE_REPORT.00" && ! -d "$CASE_DIR/authoritative" ]] || exit 111
+ run_embedded_tests "$scope"; [[ "$?" == 125 ]] || exit 112
+ trap 'status=$?; [[ -d "$artifact_dir" && -f "$PREBUILT_RACE_REPORT.00" && ! -d "$CASE_DIR/authoritative" ]] || status=113; exit "$status"' EXIT
+ kill -TERM "$$"
+ exit 114
+fi
 if (( status != 0 )); then printf 'authoritative status=%s\n' "$status"; cat "$UT_REPORT" "$UT_STDERR"; fi
 if [[ "$MODE" == test-failure ]]; then
  [[ "$status" != 0 ]] || exit 90
@@ -202,7 +217,12 @@ fi
 [[ -z "$artifact_dir" || ! -d "$artifact_dir" ]] || exit 96
 `
 			out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, nil, "MODE="+mode, "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=")
-			if err != nil {
+			if mode == "execution-undrained" {
+				exit, ok := err.(*exec.ExitError)
+				if !ok || exit.ExitCode() != 125 {
+					t.Fatalf("undrained embedded execution: %v\n%s", err, out)
+				}
+			} else if err != nil {
 				t.Fatalf("embedded %s: %v\n%s", mode, err, out)
 			}
 		})
@@ -376,7 +396,7 @@ while [[ ! -e "$CASE_DIR/issues-active" ]]; do sleep 0.01; done
 run_embedded_tests "$scope"
 `
 	joinCancelTransform := func(text string) string {
-		const anchor = `    wait "${CLUSTER_PREBUILD_JOB_PID}" || prebuild_status=$?
+		const anchor = `    join_ut_owner CLUSTER_PREBUILD_JOB_PID CLUSTER_PREBUILD_DRAIN_FAILED || prebuild_status=$?
 `
 		if strings.Count(text, anchor) != 1 {
 			t.Fatalf("missing unique embedded prebuild join wait")
@@ -391,7 +411,7 @@ run_embedded_tests "$scope"
 }
 
 func TestEmbeddedPrebuiltExecutionCancellation(t *testing.T) {
-	for _, phase := range []string{"running", "active-publication", "watchdog-publication"} {
+	for _, phase := range []string{"running", "active-publication", "watchdog-publication", "cleanup"} {
 		t.Run(phase, func(t *testing.T) {
 			script := embeddedSetup + `
 cleanup_check() {
@@ -409,6 +429,16 @@ function ut_test_execution_spawned() {
  kill -TERM $$
 }
 trap cleanup_check EXIT
+if [[ "$PHASE" == cleanup ]]; then
+ mkfifo "$CASE_DIR/cleanup-ready" "$CASE_DIR/cleanup-release"
+ exec 11<>"$CASE_DIR/cleanup-ready" 12<>"$CASE_DIR/cleanup-release"
+ eval "$(declare -f checkpoint_ut_event | sed '1s/checkpoint_ut_event/original_checkpoint_ut_event/')"
+ function checkpoint_ut_event() {
+  if [[ "$1" == cancel ]]; then printf 'ready\n' >&11; read -r _ <&12; fi
+  original_checkpoint_ut_event "$@"
+ }
+ (read -r _ <&8; kill -TERM $$; read -r _ <&11; kill -TERM $$; printf 'release\n' >&12) &
+fi
 start_embedded_prebuild "$scope" 1
 artifact_dir=$CLUSTER_PREBUILD_DIR
 if [[ "$PHASE" == running ]]; then (read -r _ <&8; kill -TERM $$) & fi

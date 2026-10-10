@@ -120,6 +120,13 @@ CURRENT_UT_COMMAND_LABEL=""
 CURRENT_UT_STAGE="initializing"
 CURRENT_UT_LABEL="startup"
 UT_TERMINATING=0
+# Reaping a helper is not proof that its independently owned descendants drained.
+# These facts are monotonic for this runner invocation, separate from live PIDs.
+CURRENT_UT_DRAIN_FAILED=0
+LIGHT_RACE_DRAIN_FAILED=0
+ENGINE_RACE_DRAIN_FAILED=0
+PLAN_RACE_DRAIN_FAILED=0
+CLUSTER_PREBUILD_DRAIN_FAILED=0
 UT_HEARTBEAT_INTERVAL=${UT_HEARTBEAT_INTERVAL:-"60"}
 UT_HEARTBEAT_PID=""
 UT_HEARTBEAT_STATE="${G_WKSP}/${G_TS}-active-ut-state.json"
@@ -204,10 +211,41 @@ function mark_ut_stage(){
     checkpoint_ut_event "${event}" "${stage}" "${label}" "${status}" "${detail}"
 }
 
-# The parent retains the foreground command's PID even while joining another
-# helper. Only this command writes UT_REPORT; helper reports are consumed after
-# finish_ut_command has reaped it.
+function ut_drain_failed(){
+    (( CURRENT_UT_DRAIN_FAILED || LIGHT_RACE_DRAIN_FAILED ||
+        ENGINE_RACE_DRAIN_FAILED || PLAN_RACE_DRAIN_FAILED || CLUSTER_PREBUILD_DRAIN_FAILED ))
+}
+
+function handle_ut_join_term(){
+    trap '' TERM
+    if (( $1 == 125 || $2 == 125 )); then printf -v "$3" '%s' 1; fi
+    handle_ut_termination
+}
+
+# Publish the result before releasing PID ownership. TERM during an active wait
+# delegates immediately to bounded cancellation; it must not wait for that child
+# to finish naturally. The trap also carries a just-returned wait status that
+# Bash has not assigned yet, or an already captured status before PID release.
+function join_ut_owner(){
+    local pid_name=$1 failed_flag_name=$2 join_status=0 saved_join_term_trap
+    if [[ -n "${!pid_name}" ]]; then
+        if (( UT_TERMINATING == 0 )); then
+            saved_join_term_trap=$(trap -p TERM)
+            trap 'handle_ut_join_term "$?" "$join_status" "$failed_flag_name"' TERM
+        fi
+        wait "${!pid_name}" || join_status=$?
+        if (( join_status == 125 )); then printf -v "${failed_flag_name}" '%s' 1; fi
+        printf -v "${pid_name}" '%s' ''
+        if (( UT_TERMINATING == 0 )); then restore_ut_term_trap "${saved_join_term_trap}"; fi
+    fi
+    if (( ${!failed_flag_name} != 0 )); then return 125; fi
+    return "${join_status}"
+}
+
+# The foreground PID remains owned until join, even while joining a helper.
+# Only this command writes UT_REPORT; reports merge after it has been reaped.
 function start_ut_command(){
+    ut_drain_failed && return 125
     if (( $# < 3 )) || [[ -n "${CURRENT_UT_PID}" ]]; then
         logger "ERR" "start_ut_command requires stage, label, command and no active writer"
         return 2
@@ -235,8 +273,7 @@ function start_ut_command(){
 
 function finish_ut_command(){
     local status=0
-    wait "${CURRENT_UT_PID}" || status=$?
-    CURRENT_UT_PID=""
+    join_ut_owner CURRENT_UT_PID CURRENT_UT_DRAIN_FAILED || status=$?
     mark_ut_stage "${CURRENT_UT_COMMAND_STAGE}" "${CURRENT_UT_COMMAND_LABEL}" finish "${status}"
     return "${status}"
 }
@@ -292,6 +329,7 @@ function prepare_light_link_gate(){
 }
 
 function cleanup_light_link_gate(){
+    (( LIGHT_RACE_DRAIN_FAILED == 0 && CURRENT_UT_DRAIN_FAILED == 0 )) || return 125
     # Only after the light process group is drained: never unlink a live lease.
     if [[ -n "${UT_LINK_DIR}" ]]; then
         local slot
@@ -305,6 +343,7 @@ function cleanup_light_link_gate(){
 }
 
 function start_light_race(){
+    ut_drain_failed && return 125
     if (( $# != 2 )); then
         logger "ERR" "start_light_race requires package scope and parallelism"
         return 2
@@ -342,6 +381,7 @@ function start_light_race(){
 }
 
 function consume_light_race_report(){
+    (( LIGHT_RACE_DRAIN_FAILED == 0 && CURRENT_UT_DRAIN_FAILED == 0 )) || return 125
     if [[ -z "${LIGHT_RACE_REPORT}" ]]; then
         return 0
     fi
@@ -376,10 +416,11 @@ function finish_light_race(){
     local status=0
     local report_status=0
     if [[ -z "${LIGHT_RACE_JOB_PID}" ]]; then
+        (( LIGHT_RACE_DRAIN_FAILED == 0 )) || return 125
         return 0
     fi
-    wait "${LIGHT_RACE_JOB_PID}" || status=$?
-    LIGHT_RACE_JOB_PID=""
+    join_ut_owner LIGHT_RACE_JOB_PID LIGHT_RACE_DRAIN_FAILED || status=$?
+    if (( status == 125 )); then return 125; fi
     checkpoint_ut_event "finish" "light" "light race-test packages" "${status}"
     consume_light_race_report
     report_status=$?
@@ -391,6 +432,7 @@ function finish_light_race(){
 }
 
 function start_plan_race(){
+    ut_drain_failed && return 125
     local package=$1
     local saved_term_trap
     local term_pending=0
@@ -1006,6 +1048,12 @@ function report_cgroup_memory_usage(){
 
 function consume_race_report(){
     local report_variable=$1
+    (( CURRENT_UT_DRAIN_FAILED == 0 )) || return 125
+    case "${report_variable}" in
+        ENGINE_RACE_REPORT) (( ENGINE_RACE_DRAIN_FAILED == 0 )) || return 125 ;;
+        PLAN_RACE_REPORT) (( PLAN_RACE_DRAIN_FAILED == 0 )) || return 125 ;;
+        PREBUILT_RACE_REPORT) (( CLUSTER_PREBUILD_DRAIN_FAILED == 0 )) || return 125 ;;
+    esac
     local report=${!report_variable}
     local binary_variable=${2:-} binary=""
     if [[ -n "${binary_variable}" ]]; then binary=${!binary_variable}; fi
@@ -1057,6 +1105,7 @@ function consume_plan_race_report(){
 }
 
 function start_engine_race(){
+    ut_drain_failed && return 125
     if (( $# != 2 )) || [[ -n "${ENGINE_RACE_JOB_PID}" ]]; then
         logger "ERR" "start_engine_race requires package, shard count and no active helper"
         return 2
@@ -1080,7 +1129,8 @@ function start_engine_race(){
 }
 
 function handle_ut_termination(){
-    trap - TERM
+    # A second TERM must not replace the owner while it drains independent groups.
+    trap '' TERM
     if (( UT_TERMINATING != 0 )); then
         exit 143
     fi
@@ -1089,9 +1139,7 @@ function handle_ut_termination(){
         "current_pid=${CURRENT_UT_PID} light_pid=${LIGHT_RACE_JOB_PID} engine_pid=${ENGINE_RACE_JOB_PID} plan_pid=${PLAN_RACE_JOB_PID} prebuild_pid=${CLUSTER_PREBUILD_JOB_PID}"
 
     local pid
-    local termination_status=143 child_status=0
-    local current_drained=1 light_drained=1 engine_drained=1
-    local plan_drained=1 prebuild_drained=1
+    local termination_status=${1:-143} child_status=0
     # Notify every group before waiting, so the concurrent plan/helper cleanup
     # gets the same grace window as the foreground writer.
     for pid in "${CURRENT_UT_PID}" "${LIGHT_RACE_JOB_PID}" "${ENGINE_RACE_JOB_PID}" "${PLAN_RACE_JOB_PID}" "${CLUSTER_PREBUILD_JOB_PID}"; do
@@ -1117,40 +1165,38 @@ function handle_ut_termination(){
             # Do not wait unboundedly for a group that failed the drain check.
             # Its report, binary, and (for prebuilt execution) compile
             # directory remain owned by that live descendant for diagnostics.
-            current_drained=0
+            CURRENT_UT_DRAIN_FAILED=1
             termination_status=125
             logger "ERR" "UT cancellation: preserving current command artifacts because child ${CURRENT_UT_PID} did not drain"
         else
             child_status=0
-            wait "${CURRENT_UT_PID}" 2>/dev/null || child_status=$?
+            join_ut_owner CURRENT_UT_PID CURRENT_UT_DRAIN_FAILED 2>/dev/null || child_status=$?
             if (( child_status == 125 )); then
                 # A helper can exit after reporting that one of its owned
                 # descendants could not drain. Its own process group is gone,
                 # but the helper's status is still an ownership failure.
-                current_drained=0
+                CURRENT_UT_DRAIN_FAILED=1
                 termination_status=125
-                logger "ERR" "UT cancellation: preserving current command artifacts because child ${CURRENT_UT_PID} reported an undrained descendant"
+                logger "ERR" "UT cancellation: preserving current command artifacts because the command reported an undrained descendant"
             fi
         fi
-        CURRENT_UT_PID=""
     fi
     if [[ -n "${LIGHT_RACE_JOB_PID}" ]]; then
         if ! wait_for_ut_process_group "${LIGHT_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"; then
-            light_drained=0
+            LIGHT_RACE_DRAIN_FAILED=1
             termination_status=125
             logger "ERR" "UT cancellation: preserving light race artifacts because child ${LIGHT_RACE_JOB_PID} did not drain"
         else
             child_status=0
-            wait "${LIGHT_RACE_JOB_PID}" 2>/dev/null || child_status=$?
+            join_ut_owner LIGHT_RACE_JOB_PID LIGHT_RACE_DRAIN_FAILED 2>/dev/null || child_status=$?
             if (( child_status == 125 )); then
-                light_drained=0
+                LIGHT_RACE_DRAIN_FAILED=1
                 termination_status=125
                 logger "ERR" "UT cancellation: preserving light race artifacts because helper reported an undrained descendant"
             fi
-            LIGHT_RACE_JOB_PID=""
         fi
     fi
-    if (( light_drained != 0 )); then
+    if (( LIGHT_RACE_DRAIN_FAILED == 0 )); then
         consume_light_race_report
         cleanup_light_link_gate
     else
@@ -1158,81 +1204,79 @@ function handle_ut_termination(){
     fi
     if [[ -n "${ENGINE_RACE_JOB_PID}" ]]; then
         if ! wait_for_ut_process_group "${ENGINE_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"; then
-            engine_drained=0
+            ENGINE_RACE_DRAIN_FAILED=1
             termination_status=125
             logger "ERR" "UT cancellation: preserving engine race artifacts because child ${ENGINE_RACE_JOB_PID} did not drain"
         else
             child_status=0
-            wait "${ENGINE_RACE_JOB_PID}" 2>/dev/null || child_status=$?
+            join_ut_owner ENGINE_RACE_JOB_PID ENGINE_RACE_DRAIN_FAILED 2>/dev/null || child_status=$?
             if (( child_status == 125 )); then
-                engine_drained=0
+                ENGINE_RACE_DRAIN_FAILED=1
                 termination_status=125
                 logger "ERR" "UT cancellation: preserving engine race artifacts because helper reported an undrained descendant"
             fi
-            ENGINE_RACE_JOB_PID=""
         fi
     fi
     if [[ -n "${PLAN_RACE_JOB_PID}" ]]; then
         if ! wait_for_ut_process_group "${PLAN_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"; then
-            plan_drained=0
+            PLAN_RACE_DRAIN_FAILED=1
             termination_status=125
             logger "ERR" "UT cancellation: preserving plan race artifacts because child ${PLAN_RACE_JOB_PID} did not drain"
         else
             child_status=0
-            wait "${PLAN_RACE_JOB_PID}" 2>/dev/null || child_status=$?
+            join_ut_owner PLAN_RACE_JOB_PID PLAN_RACE_DRAIN_FAILED 2>/dev/null || child_status=$?
             if (( child_status == 125 )); then
-                plan_drained=0
+                PLAN_RACE_DRAIN_FAILED=1
                 termination_status=125
                 logger "ERR" "UT cancellation: preserving plan race artifacts because helper reported an undrained descendant"
             fi
-            PLAN_RACE_JOB_PID=""
         fi
     fi
-    if (( plan_drained != 0 )); then
+    if (( PLAN_RACE_DRAIN_FAILED == 0 )); then
         consume_plan_race_report
     else
         logger "ERR" "UT cancellation: preserving plan race report while an owner is undrained"
     fi
     if [[ -n "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
         if ! wait_for_ut_process_group "${CLUSTER_PREBUILD_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"; then
-            prebuild_drained=0
+            CLUSTER_PREBUILD_DRAIN_FAILED=1
             termination_status=125
             logger "ERR" "UT cancellation: preserving embedded prebuild artifacts because child ${CLUSTER_PREBUILD_JOB_PID} did not drain"
         else
             child_status=0
-            wait "${CLUSTER_PREBUILD_JOB_PID}" 2>/dev/null || child_status=$?
+            join_ut_owner CLUSTER_PREBUILD_JOB_PID CLUSTER_PREBUILD_DRAIN_FAILED 2>/dev/null || child_status=$?
             if (( child_status == 125 )); then
-                prebuild_drained=0
+                CLUSTER_PREBUILD_DRAIN_FAILED=1
                 termination_status=125
                 logger "ERR" "UT cancellation: preserving embedded prebuild artifacts because helper reported an undrained descendant"
             fi
-            CLUSTER_PREBUILD_JOB_PID=""
         fi
     fi
-    if (( prebuild_drained != 0 && current_drained != 0 )) && [[ -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
+    if (( CLUSTER_PREBUILD_DRAIN_FAILED == 0 && CURRENT_UT_DRAIN_FAILED == 0 )) && [[ -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
         cleanup_embedded_prebuild
     elif [[ -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
         logger "ERR" "UT cancellation: preserving embedded prebuild directory while an owner is undrained"
     fi
-    if (( current_drained != 0 && prebuild_drained != 0 )); then
+    if (( CURRENT_UT_DRAIN_FAILED == 0 && CLUSTER_PREBUILD_DRAIN_FAILED == 0 )); then
         consume_race_report PREBUILT_RACE_REPORT PREBUILT_RACE_TEST_BINARY
     else
         logger "ERR" "UT cancellation: preserving prebuilt race report and binary while an owner is undrained"
     fi
-    if (( engine_drained != 0 )); then
+    if (( ENGINE_RACE_DRAIN_FAILED == 0 )); then
         consume_engine_race_report
     else
         logger "ERR" "UT cancellation: preserving engine race report and binary while an owner is undrained"
     fi
-    if (( engine_drained != 0 )) && [[ -n "${ENGINE_RACE_TEST_BINARY}" ]]; then
+    if (( ENGINE_RACE_DRAIN_FAILED == 0 )) && [[ -n "${ENGINE_RACE_TEST_BINARY}" ]]; then
         rm -f "${ENGINE_RACE_TEST_BINARY}"
         ENGINE_RACE_TEST_BINARY=""
     fi
-    if (( plan_drained != 0 )) && [[ -n "${PLAN_RACE_TEST_BINARY}" ]]; then
+    if (( PLAN_RACE_DRAIN_FAILED == 0 )) && [[ -n "${PLAN_RACE_TEST_BINARY}" ]]; then
         rm -f "${PLAN_RACE_TEST_BINARY}"
         PLAN_RACE_TEST_BINARY=""
     fi
-    logger "ERR" "UT runner received SIGTERM at stage=${CURRENT_UT_STAGE} label=${CURRENT_UT_LABEL}; reporting work without terminal Go test events"
+    if ut_drain_failed; then termination_status=125; fi
+    logger "ERR" "UT runner terminating with status ${termination_status} at stage=${CURRENT_UT_STAGE} label=${CURRENT_UT_LABEL}; reporting work without terminal Go test events"
     logger "ERR" "UT checkpoint: ${UT_CHECKPOINT}"
     logger "ERR" "UT stderr: ${UT_STDERR}"
     tail -n 40 "${UT_CHECKPOINT}" | sed 's/^/[ut_checkpoint] /' | tee -a "${LOG}"
@@ -1288,8 +1332,7 @@ function run_engine_race_shards(){
         set +m
         restore_ut_term_trap "${saved_term_trap}"
         if (( term_pending != 0 )); then
-            terminate_ut_process_groups 20 "${child_pids[@]}"
-            wait 2>/dev/null || true
+            drain_engine_shards || exit 125
             return 143
         fi
         return 0
@@ -1311,7 +1354,17 @@ function run_engine_race_shards(){
 
     checkpoint_ut_event "start" "engine" "${engine_package}" "" "shards=${engine_race_shards}"
     previous_term_trap=$(trap -p TERM)
-    trap 'terminate_ut_process_groups 20 "${child_pids[@]}"; wait 2>/dev/null || true; rm -f "${metadata_file}"; exit 143' TERM
+    function drain_engine_shards(){
+        trap '' TERM
+        terminate_ut_process_groups 20 "${child_pids[@]}" || return 125
+        wait 2>/dev/null || true
+        rm -f "${metadata_file}"
+    }
+    function cancel_engine_shards(){
+        drain_engine_shards || exit 125
+        exit 143
+    }
+    trap cancel_engine_shards TERM
     start_engine_child 0 go list ${GO_MODULE_MODE} \
         -f '{{.Dir}}{{"\t"}}{{.ImportPath}}' "${engine_package}" \
         > "${metadata_file}" 2>&1
@@ -1475,10 +1528,20 @@ function run_plan_race_shards(){
     # process-group cleanup local to this helper so a cancelled parent cannot
     # strand the test binary after the helper's shell exits.
     previous_term_trap=$(trap -p TERM)
-    # A TERM can arrive while the helper is transitioning from one child
-    # group to the next. Bound each cleanup pass so two independent groups
-    # finish before the parent helper's 15-second cancellation window.
-    trap 'if [[ -n "${plan_child_pid:-}" ]]; then terminate_ut_process_groups "${plan_term_grace_ticks:-20}" "${plan_child_pid}"; fi; if [[ -n "${shard_pids+x}" ]] && (( ${#shard_pids[@]} > 0 )); then terminate_ut_process_groups "${plan_term_grace_ticks:-20}" "${shard_pids[@]}"; fi; if [[ -n "${shard_pids+x}" ]]; then for pid in "${shard_pids[@]}"; do [[ -n "${pid}" ]] && wait "${pid}" 2>/dev/null || true; done; fi; wait 2>/dev/null || true; if [[ -n "${plan_test_binary:-}" ]]; then rm -f "${plan_test_binary}"; fi; exit 143' TERM
+    # Drain scalar and shard groups together under one common deadline before
+    # joining children or removing their artifacts.
+    function cancel_plan_shards(){
+        trap '' TERM
+        terminate_ut_process_groups "${plan_term_grace_ticks}" "${plan_child_pid}" \
+            ${shard_pids[@]+"${shard_pids[@]}"} || exit 125
+        wait 2>/dev/null || true
+        rm -f "${plan_test_binary}"
+        exit 143
+    }
+    trap cancel_plan_shards TERM
+    local plan_term_trap
+    local term_pending=0
+    plan_term_trap=$(trap -p TERM)
     if [[ -z "${PLAN_RACE_REPORT}" ]]; then
         PLAN_RACE_REPORT="${G_WKSP}/${G_TS}-plan-race-report.out"
     fi
@@ -1487,12 +1550,16 @@ function run_plan_race_shards(){
     # Resolve both metadata fields through one cancellable child. Keeping the
     # PID in plan_child_pid makes TERM ownership identical to build and shard
     # execution.
+    term_pending=0
+    trap 'term_pending=1' TERM
     set -m
     go list ${GO_MODULE_MODE} \
         -f '{{.Dir}}{{"\t"}}{{.ImportPath}}' "${plan_package}" \
         > "${metadata_file}" 2>&1 &
     plan_child_pid=$!
     set +m
+    restore_ut_term_trap "${plan_term_trap}"
+    if (( term_pending != 0 )); then cancel_plan_shards; fi
     wait "${plan_child_pid}"
     metadata_status=$?
     plan_child_pid=""
@@ -1513,6 +1580,8 @@ function run_plan_race_shards(){
     # runs in a fresh process, preserving race-detector and package-global
     # isolation without repeating the same link action for every shard.
     PLAN_RACE_TEST_BINARY="${plan_test_binary}"
+    term_pending=0
+    trap 'term_pending=1' TERM
     set -m
     LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
         CGO_CFLAGS="${CGO_CFLAGS}" \
@@ -1521,6 +1590,8 @@ function run_plan_race_shards(){
         -p 1 -c -o "${plan_test_binary}" "${plan_package}" > "${build_log}" 2>&1 &
     plan_child_pid=$!
     set +m
+    restore_ut_term_trap "${plan_term_trap}"
+    if (( term_pending != 0 )); then cancel_plan_shards; fi
     wait "${plan_child_pid}"
     build_status=$?
     plan_child_pid=""
@@ -1536,6 +1607,8 @@ function run_plan_race_shards(){
 
     # Test binaries normally execute with the package source directory as cwd.
     # Preserve that contract for both discovery and shard execution.
+    term_pending=0
+    trap 'term_pending=1' TERM
     set -m
     (
         cd "${plan_package_dir}" || exit 2
@@ -1545,6 +1618,8 @@ function run_plan_race_shards(){
     ) > "${test_list}" 2>&1 &
     plan_child_pid=$!
     set +m
+    restore_ut_term_trap "${plan_term_trap}"
+    if (( term_pending != 0 )); then cancel_plan_shards; fi
     wait "${plan_child_pid}"
     list_status=$?
     plan_child_pid=""
@@ -1590,6 +1665,8 @@ function run_plan_race_shards(){
             fi
             logger "INF" "Run ${plan_package} race shard $(( shard + 1 ))/${PLAN_RACE_SHARDS} (${shard_counts[shard]} tests)"
             mark_ut_stage "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" start "" "tests=${shard_counts[shard]}"
+            term_pending=0
+            trap 'term_pending=1' TERM
             (
                 cd "${plan_package_dir}" || exit 2
                 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
@@ -1600,6 +1677,8 @@ function run_plan_race_shards(){
                     -test.run="${shard_patterns[shard]}"
             ) > "${shard_reports[shard]}" 2>> "${UT_STDERR}" &
             shard_pids[shard]=$!
+            restore_ut_term_trap "${plan_term_trap}"
+            if (( term_pending != 0 )); then cancel_plan_shards; fi
             active_count=$(( active_count + 1 ))
             checkpoint_ut_event "pid-start" "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" "" "child_pid=${shard_pids[shard]} tests=${shard_counts[shard]}"
         done
@@ -1735,7 +1814,7 @@ function run_embedded_prebuild(){
     previous_term_trap=$(trap -p TERM)
     function cancel_embedded_wave(){
         trap '' TERM
-        terminate_ut_process_groups 20 "${child_pids[@]}"
+        terminate_ut_process_groups 20 "${child_pids[@]}" || exit 125
         wait 2>/dev/null || true
         exit 143
     }
@@ -1748,7 +1827,10 @@ function run_embedded_prebuild(){
             output_path="${report_base}.package.${package_index}.test"
             package_report="${report_base}.build.${package_index}"
             if ! : > "${package_report}"; then
-                terminate_ut_process_groups 20 "${child_pids[@]}"
+                trap '' TERM
+                if ! terminate_ut_process_groups 20 "${child_pids[@]}"; then
+                    exit 125
+                fi
                 wait 2>/dev/null || true
                 restore_ut_term_trap "${previous_term_trap}"
                 return 1
@@ -1797,6 +1879,7 @@ function run_embedded_prebuild(){
 }
 
 function start_embedded_prebuild(){
+    ut_drain_failed && return 125
     local package_scope=$1
     local package_parallel=$2
 
@@ -1842,12 +1925,12 @@ function start_embedded_prebuild(){
 function finish_embedded_prebuild(){
     local prebuild_status=0
     if [[ -z "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
+        (( CLUSTER_PREBUILD_DRAIN_FAILED == 0 )) || return 125
         return 0
     fi
     checkpoint_ut_event "join-start" "embedded-prebuild" "compile embedded-cluster packages" "" \
         "child_pid=${CLUSTER_PREBUILD_JOB_PID} compile_only=true"
-    wait "${CLUSTER_PREBUILD_JOB_PID}" || prebuild_status=$?
-    CLUSTER_PREBUILD_JOB_PID=""
+    join_ut_owner CLUSTER_PREBUILD_JOB_PID CLUSTER_PREBUILD_DRAIN_FAILED || prebuild_status=$?
     checkpoint_ut_event "join-finish" "embedded-prebuild" "compile embedded-cluster packages" "${prebuild_status}" \
         "compile_only=true"
     mark_ut_stage "embedded-prebuild" "compile embedded-cluster packages" finish "${prebuild_status}"
@@ -1855,6 +1938,7 @@ function finish_embedded_prebuild(){
 }
 
 function cleanup_embedded_prebuild(){
+    (( CLUSTER_PREBUILD_DRAIN_FAILED == 0 && CURRENT_UT_DRAIN_FAILED == 0 )) || return 125
     # Call only after the build helper and all its child groups are reaped.
     # Keep build diagnostics outside the disposable artifact directory.
     local package_report
@@ -1884,33 +1968,6 @@ function cleanup_embedded_prebuild(){
 # caller may discard artifacts only after every companion owner has been
 # reaped; otherwise a compiler or light test can outlive the runner and keep a
 # cluster port, report, or link lease alive.
-function stop_race_companions(){
-    local status=0 pid
-    if [[ -n "${LIGHT_RACE_JOB_PID}" ]]; then
-        pid=${LIGHT_RACE_JOB_PID}
-        terminate_ut_process_group "${pid}" TERM
-        if ! wait_for_ut_process_group "${pid}" "${UT_HELPER_TERM_GRACE_TICKS}"; then
-            status=125
-        else
-            wait "${pid}" 2>/dev/null || true
-            LIGHT_RACE_JOB_PID=""
-            consume_light_race_report || status=125
-            cleanup_light_link_gate || status=125
-        fi
-    fi
-    if [[ -n "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
-        pid=${CLUSTER_PREBUILD_JOB_PID}
-        terminate_ut_process_group "${pid}" TERM
-        if ! wait_for_ut_process_group "${pid}" "${UT_HELPER_TERM_GRACE_TICKS}"; then
-            status=125
-        else
-            finish_embedded_prebuild || true
-            cleanup_embedded_prebuild || status=125
-        fi
-    fi
-    return "${status}"
-}
-
 # Callers prepare race_packages, race_dirs, race_binaries, race_patterns and
 # race_deadlines in their local scope. A nonzero deadline is shared by all
 # batches of that package; zero retains the ordinary per-package timeout.
@@ -1922,16 +1979,23 @@ function run_prebuilt_race_commands(){
     local -a reports=() expired=()
     previous_term_trap=$(trap -p TERM)
     function stop_prebuilt_race_commands(){
+        local expired_file
+        # Failed ownership is terminal: keep TERM ignored until the parent
+        # receives 125, rather than restoring a trap that can replace it.
         trap '' TERM
-        if ! terminate_ut_process_groups 20 ${child_pids[@]+"${child_pids[@]}"} >&2; then return 125; fi
+        if ! terminate_ut_process_groups 20 ${child_pids[@]+"${child_pids[@]}"} >&2; then exit 125; fi
         wait 2>/dev/null || true
+        # Watchdogs are now joined: a published failure remains authoritative
+        # after a later successful sweep or another error.
+        for expired_file in ${expired[@]+"${expired[@]}"}; do
+            if [[ -e "${expired_file}.drain" ]]; then exit 125; fi
+        done
     }
     function cancel_prebuilt_race_commands(){
-        local cancel_status=143
-        stop_prebuilt_race_commands || cancel_status=125
+        stop_prebuilt_race_commands
         # Parent consumes the joined per-command JSON through append_ut_report.
         # No partial merge or success marker can hide interrupted commands.
-        exit "${cancel_status}"
+        exit 143
     }
     trap cancel_prebuilt_race_commands TERM
     execution_term_trap=$(trap -p TERM)
@@ -1971,10 +2035,9 @@ function run_prebuilt_race_commands(){
                 break
             fi
             if ! exec 7>"${reports[index]}"; then
-                child_status=1
-                stop_prebuilt_race_commands || child_status=125
+                stop_prebuilt_race_commands
                 restore_ut_term_trap "${previous_term_trap}"
-                return "${child_status}"
+                return 1
             fi
             checkpoint_ut_event start "${stage}" "${race_packages[index]}" "" \
                 "package_index=${index} prebuilt=true parallel=${parallel}"
@@ -2021,10 +2084,7 @@ function run_prebuilt_race_commands(){
         for (( index=0; index<next; index++ )); do
             [[ "${test_pids[index]:-0}" != 0 ]] || continue
             if [[ -e "${expired[index]}.drain" ]]; then
-                stop_prebuilt_race_commands || child_status=125
-                restore_ut_term_trap "${previous_term_trap}"
-                rm -f "${expired[index]}.drain"
-                return 125
+                stop_prebuilt_race_commands
             fi
             # Poll all owned groups, including the one-process path. A direct
             # wait can block forever while a descendant retains the pipe; the
@@ -2036,20 +2096,21 @@ function run_prebuilt_race_commands(){
             child_status=0
             wait "${test_pids[index]}" || child_status=$?
             if ! wait_for_ut_process_group "${test_pids[index]}" 20 >&2; then
-                child_status=1
-                stop_prebuilt_race_commands || child_status=125
+                stop_prebuilt_race_commands
                 restore_ut_term_trap "${previous_term_trap}"
-                return "${child_status}"
+                return 1
             fi
             child_pids[index*2]=0
             terminate_ut_process_group "${watchdog_pids[index]}" TERM
             if ! wait_for_ut_process_group "${watchdog_pids[index]}" 20 >&2; then
-                child_status=1
-                stop_prebuilt_race_commands || child_status=125
+                stop_prebuilt_race_commands
                 restore_ut_term_trap "${previous_term_trap}"
-                return "${child_status}"
+                return 1
             fi
             wait "${watchdog_pids[index]}" 2>/dev/null || true
+            # The watchdog can publish after the early poll check. Join it
+            # before deciding whether this command completed normally.
+            if [[ -e "${expired[index]}.drain" ]]; then stop_prebuilt_race_commands; fi
             child_pids[index*2+1]=0
             if [[ -e "${expired[index]}" ]]; then
                 child_status=1
@@ -2119,9 +2180,9 @@ function run_race_inventory_with_deadline(){
         local abort_status=$1
         terminate_ut_process_group "${pid}" TERM
         if ! wait_for_ut_process_group "${pid}" 20 >&2; then
+            trap '' TERM
             logger "ERR" "race inventory process group ${pid} did not drain; retaining ${inventory}"
-            restore_ut_term_trap "${previous_term_trap}"
-            return 125
+            exit 125
         fi
         wait "${pid}" 2>/dev/null || true
         restore_ut_term_trap "${previous_term_trap}"
@@ -2250,6 +2311,7 @@ function run_issues_race_batches(){
 }
 
 function run_embedded_tests(){
+    ut_drain_failed && return 125
     local package_scope=$1
     local prebuild_status=1
     local test_status=0
@@ -2261,6 +2323,7 @@ function run_embedded_tests(){
     if [[ -n "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
         finish_embedded_prebuild
         prebuild_status=$?
+        if (( prebuild_status == 125 )); then return 125; fi
     fi
     if (( prebuild_status == 0 )) && [[ -n "${report_base}" ]]; then
         local package=""
@@ -2318,6 +2381,7 @@ function run_embedded_tests(){
 }
 
 function run_tests(){
+    if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
     cd $BUILD_WKSP
     horiz_rule
     echo "#  BUILD WORKSPACE: $BUILD_WKSP"
@@ -2660,6 +2724,7 @@ function run_tests(){
                 logger "INF" "Run HNSW race-test package with exclusive runner CPU before light/issues overlap"
                 run_ut_command "hnsw" "HNSW race-test package" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${hnsw_package}"
                 hnsw_status=$?
+                if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
             fi
             logger "INF" "Start light race-test packages in background with parallelism ${light_parallel}; overlap only with exclusive issues"
             if start_light_race "${light_test_scope}" "${light_parallel}"; then
@@ -2671,6 +2736,7 @@ function run_tests(){
                 logger "ERR" "failed to start overlapping light race-test helper; retrying in foreground"
                 run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${LIGHT_TOOL_FLAGS[@]+"${LIGHT_TOOL_FLAGS[@]}"} -short -v -json -tags "${TAGS}" -p ${light_stage_parallel} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
                 light_status=$?
+                if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
                 overlap_light=0
             fi
         else
@@ -2678,12 +2744,14 @@ function run_tests(){
                 logger "INF" "Run light race-test packages with parallelism ${light_stage_parallel} (requested ${UT_LIGHT_PARALLEL}, global ${UT_PARALLEL})"
                 run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${LIGHT_TOOL_FLAGS[@]+"${LIGHT_TOOL_FLAGS[@]}"} -short -v -json -tags "${TAGS}" -p ${light_stage_parallel} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
                 light_status=$?
+                if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
             fi
 
             if should_run_ut_stage hnsw; then
                 logger "INF" "Run HNSW race-test package with exclusive runner CPU"
                 run_ut_command "hnsw" "HNSW race-test package" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${hnsw_package}"
                 hnsw_status=$?
+                if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
             fi
         fi
 
@@ -2711,18 +2779,12 @@ function run_tests(){
                     run_ut_command serial "batched exclusive race-test package ${package}" \
                         run_issues_race_batches "${package}" "${PREBUILT_RACE_TEST_BINARY}" "${UT_ISSUES_BATCHES}"
                     package_status=$?
-                    if (( package_status == 125 )); then
-                        if ! stop_race_companions; then
-                            logger "ERR" "issues infrastructure failure left a companion owner undrained; retaining diagnostics"
-                            exit 125
-                        fi
-                        UT_TEST_STATUS=1
-                        return 0
-                    fi
+                    if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
                     consume_race_report PREBUILT_RACE_REPORT PREBUILT_RACE_TEST_BINARY || package_status=1
                 else
                     run_ut_command "serial" "exclusive race-test package ${package}" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${package}"
                     package_status=$?
+                    if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
                 fi
                 if (( package_status != 0 )); then
                     serial_status=1
@@ -2734,6 +2796,7 @@ function run_tests(){
         if (( light_started == 1 )); then
             finish_light_race
             light_status=$?
+            if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
             report_cgroup_memory_usage "Light/issues overlap"
         fi
         cleanup_light_link_gate
@@ -2748,7 +2811,7 @@ function run_tests(){
             logger "INF" "Run embedded-cluster race-test packages with bounded package parallelism ${UT_EMBEDDED_PACKAGE_PARALLEL}"
             run_embedded_tests "${cluster_test_scope}"
             cluster_status=$?
-            if (( cluster_status == 125 )); then UT_TEST_STATUS=1; return 0; fi
+            if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
         fi
 
         if should_run_ut_stage heavy && (( shard_engine == 1 )); then
@@ -2771,10 +2834,9 @@ function run_tests(){
             # engine still releases the runner: all stages run and its status
             # remains authoritative.
             start_engine_race "${engine_package}" "${engine_race_parallel}"
-            wait "${ENGINE_RACE_JOB_PID}"
+            join_ut_owner ENGINE_RACE_JOB_PID ENGINE_RACE_DRAIN_FAILED
             engine_status=$?
-            ENGINE_RACE_JOB_PID=""
-            if (( engine_status == 125 )); then UT_TEST_STATUS=1; return 0; fi
+            if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
             consume_engine_race_report
             report_status=$?
             if (( report_status != 0 )); then
@@ -2803,20 +2865,15 @@ function run_tests(){
             start_ut_command "heavy" "resource-heavy race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${resource_heavy_parallel} -timeout "${UT_TIMEOUT}m" -race $resource_heavy_test_scope
             finish_ut_command
             resource_heavy_status=$?
+            if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
             report_cgroup_memory_usage "Resource-heavy UT"
         fi
 
         if should_run_ut_stage plan; then
-            if [[ -n "${PLAN_RACE_JOB_PID}" ]]; then
-                wait "${PLAN_RACE_JOB_PID}"
-                plan_status=$?
-                PLAN_RACE_JOB_PID=""
-            else
-                start_plan_race "${plan_package}"
-                wait "${PLAN_RACE_JOB_PID}"
-                plan_status=$?
-                PLAN_RACE_JOB_PID=""
-            fi
+            if [[ -z "${PLAN_RACE_JOB_PID}" ]]; then start_plan_race "${plan_package}"; fi
+            join_ut_owner PLAN_RACE_JOB_PID PLAN_RACE_DRAIN_FAILED
+            plan_status=$?
+            if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
             consume_plan_race_report
             report_status=$?
             if (( report_status != 0 )); then
@@ -2933,6 +2990,7 @@ elif [[ 'UT' == $TEST_TYPE ]]; then
     horiz_rule
     start_ut_heartbeat
     run_tests
+    if ut_drain_failed; then handle_ut_termination 125; fi
     stop_ut_heartbeat
 
     horiz_rule
