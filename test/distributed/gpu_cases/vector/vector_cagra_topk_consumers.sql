@@ -7,7 +7,7 @@
 -- ORDER BY (#25967) or a relational JOIN (#25974). Both used to disable the rewrite
 -- and silently fall back to a full scan with an exact sort -- correct results, but
 -- the index unused and nothing in the result set to show it. Every EXPLAIN below
--- asserts cagra_search is present, and every query is checked against t_ref, the
+-- asserts the cagra index search scan is present, and every query is checked against t_ref, the
 -- same rows with no index, so a plan that reaches the index but returns the wrong
 -- rows still fails.
 --
@@ -39,12 +39,12 @@ insert into meta values (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e'),(6,'f');
 
 -- ---------------- control: no consumer ---------------------------------------
 -- @separator:table
--- @regex("Table Function on cagra_search", true)
+-- @regex("Vector Index Scan on", true)
 explain select id, l2_distance(v,'[1,1,1,1]') as d from t_cagra order by l2_distance(v,'[1,1,1,1]') limit 3;
 
 -- ---------------- #25967: outer ORDER BY -------------------------------------
 -- @separator:table
--- @regex("Table Function on cagra_search", true)
+-- @regex("Vector Index Scan on", true)
 explain with knn as (
     select id, l2_distance(v,'[1,1,1,1]') as d from t_cagra
     order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -76,7 +76,7 @@ with knn as (
 
 -- ---------------- #25974: JOIN consumer --------------------------------------
 -- @separator:table
--- @regex("Table Function on cagra_search", true)
+-- @regex("Vector Index Scan on", true)
 explain with knn as (
     select id, l2_distance(v,'[1,1,1,1]') as d from t_cagra
     order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -93,7 +93,7 @@ with knn as (
 ) select k.id, k.d, m.name from knn k left join meta m on k.id = m.id order by k.d;
 
 -- @separator:table
--- @regex("Table Function on cagra_search", true)
+-- @regex("Vector Index Scan on", true)
 explain with knn as (
     select id, l2_distance(v,'[1,1,1,1]') as d from t_cagra
     order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -121,7 +121,7 @@ select count(*) as n from (
 
 -- ---------------- both consumers at once -------------------------------------
 -- @separator:table
--- @regex("Table Function on cagra_search", true)
+-- @regex("Vector Index Scan on", true)
 explain with knn as (
     select id, l2_distance(v,'[1,1,1,1]') as d from t_cagra
     order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -139,7 +139,7 @@ with knn as (
 -- -- panicking the CN with "interface conversion: interface {} is int64, not float64".
 -- Pre-existing on main and reachable from plain SQL, so keep a case on it.
 -- @separator:table
--- @regex("Table Function on cagra_search", true)
+-- @regex("Vector Index Scan on", true)
 explain select l2_distance(v,'[1,1,1,1]') as d from t_cagra order by l2_distance(v,'[1,1,1,1]') limit 3;
 
 select l2_distance(v,'[1,1,1,1]') as d from t_cagra order by l2_distance(v,'[1,1,1,1]') limit 3;

@@ -71,7 +71,7 @@ func TestSearchApplyPreservesInputPlacement(t *testing.T) {
 		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 4},
 		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 4},
 	}
-	for _, name := range []string{"fulltext2_search", "hnsw_search", "ivf_search", "generate_series"} {
+	for _, name := range []string{"unnest", "generate_series"} {
 		t.Run(name, func(t *testing.T) {
 			c := newCompileForShuffleJoinTest(t, nodes)
 			inputs := []*Scope{
@@ -97,7 +97,7 @@ func TestTableFunctionWriterPlacement(t *testing.T) {
 		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 4},
 		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 4},
 	}
-	for _, name := range []string{"fulltext2_create", "hnsw_create", "fulltext2_search"} {
+	for _, name := range []string{"fulltext2_create", "hnsw_create", "unnest"} {
 		for _, withInput := range []bool{false, true} {
 			inputName := "/standalone"
 			if withInput {
@@ -116,7 +116,7 @@ func TestTableFunctionWriterPlacement(t *testing.T) {
 				require.Len(t, result, 1)
 				_, ok := result[0].RootOp.(*table_function.TableFunction)
 				require.True(t, ok)
-				if withInput && name == "fulltext2_search" {
+				if withInput && name == "unnest" {
 					require.Equal(t, inputs, result, "search retains the remote input")
 					return
 				}

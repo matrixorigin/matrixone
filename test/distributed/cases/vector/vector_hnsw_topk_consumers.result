@@ -12,40 +12,40 @@ insert into t_ref select id, v, tag from t_hnsw;
 create table meta(id bigint primary key, name varchar(20));
 insert into meta values (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e'),(6,'f');
 explain select id, l2_distance(v,'[1,1,1,1]') as d from t_hnsw order by l2_distance(v,'[1,1,1,1]') limit 3;
--- @regex("Table Function on hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (t_hnsw.id = mo_hnsw_alias_0.pkid)  𝄀
+              Join Cond: (t_hnsw.id = #[1,0])  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on hnsw_topk_consumers.t_hnsw  𝄀
                     Runtime Filter Probe: t_hnsw.id  𝄀
-              ->  Table Function on hnsw_search  𝄀
-                    Limit: 3
+              ->  Vector Index Scan on i_hnsw [l2_distance]  𝄀
+                    Vector Index: i_hnsw, Metric: l2_distance, Candidate Limit: 3
 explain with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_hnsw
 order by l2_distance(v,'[1,1,1,1]') limit 3
 ) select id, d from knn order by d;
--- @regex("Table Function on hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         ->  Sort  𝄀
-              Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+              Sort Key: #[0,1] INTERNAL  𝄀
               Limit: 3  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
-                    Join Cond: (t_hnsw.id = mo_hnsw_alias_0.pkid)  𝄀
+                    Join Cond: (t_hnsw.id = #[1,0])  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on hnsw_topk_consumers.t_hnsw  𝄀
                           Runtime Filter Probe: t_hnsw.id  𝄀
-                    ->  Table Function on hnsw_search  𝄀
-                          Limit: 3
+                    ->  Vector Index Scan on i_hnsw [l2_distance]  𝄀
+                          Vector Index: i_hnsw, Metric: l2_distance, Candidate Limit: 3
 with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_hnsw
 order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -82,7 +82,7 @@ explain with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_hnsw
 order by l2_distance(v,'[1,1,1,1]') limit 3
 ) select k.id, m.name from knn k left join meta m on k.id = m.id;
--- @regex("Table Function on hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
@@ -92,16 +92,16 @@ Project  𝄀
         ->  Table Scan on hnsw_topk_consumers.meta [ForceOneCN]  𝄀
               Runtime Filter Probe: m.id  𝄀
         ->  Sort  𝄀
-              Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+              Sort Key: #[0,1] INTERNAL  𝄀
               Limit: 3  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
-                    Join Cond: (t_hnsw.id = mo_hnsw_alias_0.pkid)  𝄀
+                    Join Cond: (t_hnsw.id = #[1,0])  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on hnsw_topk_consumers.t_hnsw [ForceOneCN]  𝄀
                           Runtime Filter Probe: t_hnsw.id  𝄀
-                    ->  Table Function on hnsw_search  𝄀
-                          Limit: 3
+                    ->  Vector Index Scan on i_hnsw [l2_distance]  𝄀
+                          Vector Index: i_hnsw, Metric: l2_distance, Candidate Limit: 3
 with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_hnsw
 order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -122,7 +122,7 @@ explain with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_hnsw
 order by l2_distance(v,'[1,1,1,1]') limit 3
 ) select k.id, m.name from knn k inner join meta m on k.id = m.id;
--- @regex("Table Function on hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
@@ -132,16 +132,16 @@ Project  𝄀
         ->  Table Scan on hnsw_topk_consumers.meta  𝄀
               Runtime Filter Probe: m.id  𝄀
         ->  Sort  𝄀
-              Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+              Sort Key: #[0,1] INTERNAL  𝄀
               Limit: 3  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
-                    Join Cond: (t_hnsw.id = mo_hnsw_alias_0.pkid)  𝄀
+                    Join Cond: (t_hnsw.id = #[1,0])  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on hnsw_topk_consumers.t_hnsw  𝄀
                           Runtime Filter Probe: t_hnsw.id  𝄀
-                    ->  Table Function on hnsw_search  𝄀
-                          Limit: 3
+                    ->  Vector Index Scan on i_hnsw [l2_distance]  𝄀
+                          Vector Index: i_hnsw, Metric: l2_distance, Candidate Limit: 3
 with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_hnsw
 order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -166,11 +166,11 @@ explain with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_hnsw
 order by l2_distance(v,'[1,1,1,1]') limit 3
 ) select k.id, m.name from knn k left join meta m on k.id = m.id order by k.d desc;
--- @regex("Table Function on hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_hnsw_alias_0.score DESC  𝄀
+        Sort Key: #[0,2] DESC  𝄀
         ->  Join  𝄀
               Join Type: RIGHT  𝄀
               Join Cond: (m.id = t_hnsw.id)  𝄀
@@ -178,16 +178,16 @@ Project  𝄀
               ->  Table Scan on hnsw_topk_consumers.meta [ForceOneCN]  𝄀
                     Runtime Filter Probe: m.id  𝄀
               ->  Sort  𝄀
-                    Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+                    Sort Key: #[0,1] INTERNAL  𝄀
                     Limit: 3  𝄀
                     ->  Join  𝄀
                           Join Type: INNER  𝄀
-                          Join Cond: (t_hnsw.id = mo_hnsw_alias_0.pkid)  𝄀
+                          Join Cond: (t_hnsw.id = #[1,0])  𝄀
                           Runtime Filter Build: #[-1,0]  𝄀
                           ->  Table Scan on hnsw_topk_consumers.t_hnsw [ForceOneCN]  𝄀
                                 Runtime Filter Probe: t_hnsw.id  𝄀
-                          ->  Table Function on hnsw_search  𝄀
-                                Limit: 3
+                          ->  Vector Index Scan on i_hnsw [l2_distance]  𝄀
+                                Vector Index: i_hnsw, Metric: l2_distance, Candidate Limit: 3
 with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_hnsw
 order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -208,7 +208,7 @@ explain with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from h_guard
 where tag = 1 order by l2_distance(v,'[1,1,1,1]') limit 3
 ) select k.id, m.name from knn k join meta m on k.id = m.id;
--- @regex("Table Function on hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
@@ -218,17 +218,17 @@ Project  𝄀
         ->  Table Scan on hnsw_topk_consumers.meta  𝄀
               Runtime Filter Probe: m.id  𝄀
         ->  Sort  𝄀
-              Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+              Sort Key: #[0,1] INTERNAL  𝄀
               Limit: 3  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
-                    Join Cond: (h_guard.id = mo_hnsw_alias_0.pkid)  𝄀
+                    Join Cond: (h_guard.id = #[1,0])  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on hnsw_topk_consumers.h_guard  𝄀
                           Filter Cond: (h_guard.tag = 1)  𝄀
                           Runtime Filter Probe: h_guard.id  𝄀
-                    ->  Table Function on hnsw_search  𝄀
-                          Limit: 15
+                    ->  Vector Index Scan on hg_vec [l2_distance]  𝄀
+                          Vector Index: hg_vec, Metric: l2_distance, Candidate Limit: 3
 with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from h_guard
 where tag = 1 order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -247,20 +247,20 @@ where tag = 1 order by l2_distance(v,'[1,1,1,1]') limit 3
 3  ¦  8.0  ¦  c
 set experimental_hnsw_index = 0;
 explain select l2_distance(v,'[1,1,1,1]') as d from t_hnsw order by l2_distance(v,'[1,1,1,1]') limit 3;
--- @regex("Table Function on hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,0] INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (t_hnsw.id = mo_hnsw_alias_0.pkid)  𝄀
+              Join Cond: (t_hnsw.id = #[1,0])  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on hnsw_topk_consumers.t_hnsw  𝄀
                     Runtime Filter Probe: t_hnsw.id  𝄀
-              ->  Table Function on hnsw_search  𝄀
-                    Limit: 3
+              ->  Vector Index Scan on i_hnsw [l2_distance]  𝄀
+                    Vector Index: i_hnsw, Metric: l2_distance, Candidate Limit: 3
 select l2_distance(v,'[1,1,1,1]') as d from t_hnsw order by l2_distance(v,'[1,1,1,1]') limit 3;
 ➤ d[8,9,0]  𝄀
 0.0  𝄀

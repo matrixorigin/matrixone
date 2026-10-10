@@ -156,7 +156,7 @@ func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
 			match:        "select id from docs where match(body) against('bbbbbbbbbbbbbbbbbbbbbbbbbb') order by id",
 			want:         "1\n3",
 			wantAfterDML: "2\n3\n4",
-			search:       "fulltext2_search",
+			search:       "Fulltext Index Scan",
 			metaType:     catalog.FullText2Index_TblType_Metadata,
 			mutations: []string{
 				"update docs set body='bbbbbbbbbbbbbbbbbbbbbbbbbb' where id=2",
@@ -172,7 +172,7 @@ func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
 			match:        "select id from vectors order by l2_distance(v,'[0,0]') limit 3 by rank with option 'mode=post'",
 			want:         "1\n2\n3",
 			wantAfterDML: "4\n3\n1",
-			search:       "hnsw_search",
+			search:       "Vector Index Scan",
 			metaType:     catalog.Hnsw_TblType_Metadata,
 			mutations: []string{
 				"update vectors set v='[9,0]' where id=1",

@@ -1791,7 +1791,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		}
 
-	case plan.Node_VECTOR_INDEX_SCAN:
+	case plan.Node_INDEX_SEARCH_SCAN:
 		// The index plugin computes this leaf's access-path cardinality and cost
 		// before join ordering. Recalculation must not replace it with child or
 		// synthetic-table statistics.
@@ -1830,10 +1830,6 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			applyScanPaginationToStats(node.Stats, node.Limit, node.Offset, builder)
 		} else {
 			applyLimitToStats(node.Stats, node.Limit, builder)
-		}
-	} else if node.NodeType == plan.Node_FUNCTION_SCAN && node.IndexReaderParam != nil {
-		if node.IndexReaderParam.Limit != nil {
-			applyLimitToStats(node.Stats, node.IndexReaderParam.Limit, builder)
 		}
 	}
 }
@@ -3301,8 +3297,8 @@ func setNodeDOP(p *plan.Plan, rootID int32, dop int32) {
 		setNodeDOP(p, node.Children[1], dop)
 	}
 	if node.Stats != nil {
-		if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-			dop = min(dop, vectorScanDOP(dop, node.VectorIndexScan, p.IsPrepare))
+		if node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+			dop = min(dop, vectorScanDOP(dop, node.IndexSearchScan, p.IsPrepare))
 		}
 		node.Stats.Dop = dop
 	}
@@ -3314,11 +3310,11 @@ func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
 	for i := range node.Children {
 		CalcNodeDOP(p, node.Children[i], ncpu, lencn)
 	}
-	if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+	if node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
 		if node.Stats == nil {
 			node.Stats = DefaultStats()
 		}
-		node.Stats.Dop = vectorScanDOP(ncpu, node.VectorIndexScan, p.IsPrepare)
+		node.Stats.Dop = vectorScanDOP(ncpu, node.IndexSearchScan, p.IsPrepare)
 		return
 	}
 
@@ -3431,7 +3427,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 				hasForceOneCN = true
 			}
 		}
-		if node.NodeType == plan.Node_VECTOR_INDEX_SCAN && !distributedPRE {
+		if node.NodeType == plan.Node_INDEX_SEARCH_SCAN && !distributedPRE && IndexSearchScanPartitioned(node.IndexSearchScan) {
 			for _, spec := range node.RuntimeFilterProbeList {
 				if spec != nil && spec.MustApply && spec.UseMembershipFilter {
 					hasForceOneCN = true
@@ -3493,7 +3489,9 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 				ret = ExecTypeAP_ONECN
 			}
 		}
-		if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+		// A partitioned index search runs on every CN of an AP plan; any other
+		// search plans like the table function it replaced.
+		if node.NodeType == plan.Node_INDEX_SEARCH_SCAN && IndexSearchScanPartitioned(node.IndexSearchScan) {
 			execType := ExecTypeAP_MULTICN
 			if (stats.GetForceOneCN() && !(distributedPRE && int32(id) == vectorID)) || !canUseMultiCN {
 				execType = ExecTypeAP_ONECN

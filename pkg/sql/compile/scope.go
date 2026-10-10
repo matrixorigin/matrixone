@@ -338,8 +338,8 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 		return nil
 	}
 
-	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		return c.compileVectorIndexScanDataSource(s)
+	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		return c.compileIndexSearchScanDataSource(s)
 	}
 	return c.compileTableScanDataSource(s)
 }
@@ -1900,11 +1900,8 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	if err != nil {
 		return
 	}
-	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		if emptyScan {
-			return emptyScanReaders(s.NodeInfo.Mcpu), nil
-		}
-		return s.buildVectorIndexReaders(runtimeFilterList)
+	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		return s.buildVectorIndexReaders(runtimeFilterList, emptyScan)
 	}
 	for i := range s.DataSource.FilterList {
 		if plan2.IsFalseExpr(s.DataSource.FilterList[i]) {
@@ -2114,9 +2111,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	return
 }
 
-func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) ([]engine.Reader, error) {
+// buildVectorIndexReaders builds the readers of an index search scan; dropped
+// means a runtime filter proved the scan empty.
+func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter, dropped bool) ([]engine.Reader, error) {
 	node := s.DataSource.node
-	spec := node.GetVectorIndexScan()
+	spec := node.GetIndexSearchScan()
 	if spec == nil || spec.GetIndex() == nil {
 		return nil, moerr.NewInvalidInputNoCtx("vector index scan is missing index metadata")
 	}
@@ -2146,7 +2145,13 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 	if err != nil {
 		return nil, err
 	}
-	if !hasQuery {
+	req.MembershipFilterPassed = !hasMembership && hasMembershipFilterSpec(s.DataSource.RuntimeFilterSpecs)
+	if dropped || !hasQuery {
+		if hooks, ok := searcher.Search().(searchplugin.EmptyScanHooks); ok {
+			if err := hooks.EmptyScan(s.Proc, spec, req); err != nil {
+				return nil, err
+			}
+		}
 		return emptyScanReaders(s.NodeInfo.Mcpu), nil
 	}
 	if factory, ok := searcher.Search().(searchplugin.ParallelHooks); ok && req.MembershipFilterRequired {
@@ -2172,6 +2177,16 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 		return nil, err
 	}
 	return []engine.Reader{reader}, nil
+}
+
+// hasMembershipFilterSpec reports whether specs plan a membership runtime filter.
+func hasMembershipFilterSpec(specs []*plan.RuntimeFilterSpec) bool {
+	for _, spec := range specs {
+		if spec != nil && spec.UseMembershipFilter {
+			return true
+		}
+	}
+	return false
 }
 
 func emptyScanReaders(count int) []engine.Reader {

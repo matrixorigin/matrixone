@@ -25,11 +25,9 @@ import (
 
 func TestFullTextRoutineVariablePatternReachesBothIndexScans(t *testing.T) {
 	for _, fulltext2 := range []bool{false, true} {
-		name := fulltext_index_scan_func_name
-		patternPos := 2
+		name := "fulltext"
 		if fulltext2 {
-			name = fulltext2_search_func_name
-			patternPos = 1
+			name = "fulltext2"
 		}
 		t.Run(name, func(t *testing.T) {
 			builder, scanID, projID := buildWrappedMatchGuardPlan(t, true)
@@ -54,8 +52,8 @@ func TestFullTextRoutineVariablePatternReachesBothIndexScans(t *testing.T) {
 			require.NoError(t, err)
 			scans := collectFullTextFunctionScans(builder, newID)
 			require.Len(t, scans, 1)
-			require.Equal(t, name, scans[0].TableDef.TblFunc.Name)
-			require.Equal(t, "q", scans[0].TblFuncExprList[patternPos].GetV().Name)
+			require.Equal(t, fulltext2, isFulltext2SearchScan(scans[0]))
+			require.Equal(t, "q", fulltextScanPattern(scans[0]).GetV().Name)
 		})
 	}
 }
@@ -183,6 +181,6 @@ func TestFullTextSQLCalcFoundRowsKeepsOnlyTopLevelLimit(t *testing.T) {
 
 	functions := collectFullTextFunctionScans(builder, projNode.Children[0])
 	require.Len(t, functions, 1)
-	require.Nil(t, functions[0].Limit,
+	require.Nil(t, fulltextScanLimit(functions[0]),
 		"the full-text TVF must also receive an unbounded candidate stream")
 }

@@ -633,13 +633,13 @@ const (
 	FullText2Index_TblCol_Metadata_Nrow      = "nrow"
 	FullText2Index_TblCol_Metadata_Build_Ts  = "build_ts"
 
-	// fulltext2_search TVF RESERVED output-column names. Unlike FullTextIndex_TabCol_Id
+	// fulltext2 index search scan RESERVED output-column names. Unlike FullTextIndex_TabCol_Id
 	// ("doc_id", a PHYSICAL classic-index column), these are plan-level output ALIASES of
-	// the fulltext2_search TVF (its storage is segments, not a doc_id column). The covered
+	// the fulltext2 search scan (its storage is segments, not a doc_id column). The covered
 	// fast path emits INCLUDE columns as sibling outputs and the runtime classifies the
 	// output batch BY NAME, so the pk/relevance outputs must use names no user INCLUDE
 	// column can equal — hence the reserved "__mo_ft_" prefix. Referenced by the coldef
-	// builders (tablefunc.go, apply_indices_fulltext2.go) and the classifier (fulltext2_search.go).
+	// builder (apply_indices_fulltext2.go) and the classifier (fulltext2/plugin/search).
 	FullText2Search_OutCol_DocId = "__mo_ft_doc_id"
 	FullText2Search_OutCol_Score = "__mo_ft_score"
 

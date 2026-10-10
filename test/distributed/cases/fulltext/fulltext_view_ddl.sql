@@ -111,7 +111,7 @@ select id, rn from v_window_plain order by id;
 
 -- the index is genuinely used, not a full scan
 -- @separator:table
--- @regex("Table Function on fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from v_good_filter;
 
 -- ---------------- a filter on the projected score, above the view ---------------
@@ -124,7 +124,7 @@ explain select id from v_good_filter;
 -- MATCH returns a FLOAT relevance score in MatrixOne (DESC on such a view reports FLOAT),
 -- as in MySQL, so comparing it is meaningful rather than a bool coercion.
 -- @separator:table
--- @regex("Table Function on fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from v_good_score where score > 0;
 
 select id from v_good_score where score > 0 order by id;

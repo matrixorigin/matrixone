@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -49,8 +50,9 @@ import (
 // index scan. It owns one execution generation and its direct relation scanner.
 type planReader struct {
 	proc        *process.Process
-	spec        *plan.VectorIndexScan
+	spec        *plan.IndexSearchScan
 	req         searchplugin.Request
+	opts        ivfflatplan.ScanOptions
 	scanner     *relationScanner
 	closed      bool
 	generation  *planSearchGeneration
@@ -71,7 +73,7 @@ type planReader struct {
 var _ engine.Reader = (*planReader)(nil)
 var _ engine.ExplainDiagnosticReader = (*planReader)(nil)
 
-func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req searchplugin.Request) (engine.Reader, error) {
+func NewPlanReader(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (engine.Reader, error) {
 	if proc == nil || proc.GetTxnOperator() == nil || proc.GetSessionInfo() == nil || proc.GetSessionInfo().StorageEngine == nil {
 		return nil, moerr.NewInvalidStateNoCtx("ivfflat vector scan requires a process, transaction, and storage engine")
 	}
@@ -84,10 +86,15 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 	if req.CandidateBudget < req.ResultLimit {
 		return nil, moerr.NewInvalidInputNoCtx("ivfflat candidate budget is smaller than the result limit")
 	}
+	opts, err := ivfflatplan.DecodeScanOptions(spec.AlgoOptions)
+	if err != nil {
+		return nil, err
+	}
 	r := &planReader{
 		proc:                     proc,
 		spec:                     spec,
 		req:                      req,
+		opts:                     opts,
 		recordExplainDiagnostics: req.CollectExplainDiagnostics,
 	}
 	if req.CollectExplainDiagnostics {
@@ -326,8 +333,8 @@ func (r *planReader) prepareSearch(prepareOnly bool) error {
 		MetadataTable:      metaTable,
 		IndexTable:         centroidTable,
 		EntriesTable:       entriesTable,
-		ThreadsSearch:      r.spec.ThreadsSearch,
-		Nprobe:             uint(max(uint32(1), r.spec.InitialProbeCount)),
+		ThreadsSearch:      r.opts.ThreadsSearch,
+		Nprobe:             uint(max(uint32(1), r.opts.InitialProbeCount)),
 		PKeyType:           r.spec.SourceTableDef.Cols[pkPos].Typ.Id,
 		PKey:               pkName,
 		KeyPart:            partName,
@@ -419,28 +426,28 @@ func (r *planReader) queryFloat64() ([]float64, error) {
 	if types.T(r.req.QueryType.Id) != types.T_array_float64 {
 		return nil, moerr.NewInvalidInputNoCtx("f64 IVF centroids require a VECF64 query")
 	}
-	return types.BytesToArray[float64](r.req.QueryVector), nil
+	return types.BytesToArray[float64](r.req.QueryPayload), nil
 }
 
 func (r *planReader) queryFloat32() ([]float32, error) {
 	switch types.T(r.req.QueryType.Id) {
 	case types.T_array_float32:
-		return types.BytesToArray[float32](r.req.QueryVector), nil
+		return types.BytesToArray[float32](r.req.QueryPayload), nil
 	case types.T_array_float64:
-		values := types.BytesToArray[float64](r.req.QueryVector)
+		values := types.BytesToArray[float64](r.req.QueryPayload)
 		out := make([]float32, len(values))
 		for i, value := range values {
 			out[i] = float32(value)
 		}
 		return out, nil
 	case types.T_array_bf16:
-		return types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](r.req.QueryVector)), nil
+		return types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](r.req.QueryPayload)), nil
 	case types.T_array_float16:
-		return types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](r.req.QueryVector)), nil
+		return types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](r.req.QueryPayload)), nil
 	case types.T_array_int8:
-		return types.Int8ToFloat32Slice(types.BytesToArray[int8](r.req.QueryVector)), nil
+		return types.Int8ToFloat32Slice(types.BytesToArray[int8](r.req.QueryPayload)), nil
 	case types.T_array_uint8:
-		return types.Uint8ToFloat32Slice(types.BytesToArray[uint8](r.req.QueryVector)), nil
+		return types.Uint8ToFloat32Slice(types.BytesToArray[uint8](r.req.QueryPayload)), nil
 	default:
 		return nil, moerr.NewInvalidInputNoCtxf("unsupported IVF query type %s", types.T(r.req.QueryType.Id))
 	}
@@ -470,7 +477,7 @@ func searchPlanReader[T types.RealNumbers](
 	if prepareOnly {
 		cursor := new(vectorindex.IvfSearchCursor)
 		_, _, err := cache.Cache.Search(sqlproc, key, algo, query, vectorindex.RuntimeConfig{
-			Probe: uint(max(uint32(1), r.spec.InitialProbeCount)), SearchCursor: cursor, IvfPrepareRouteOnly: true,
+			Probe: uint(max(uint32(1), r.opts.InitialProbeCount)), SearchCursor: cursor, IvfPrepareRouteOnly: true,
 		})
 		if err == nil {
 			r.generation.route = append([]int64(nil), cursor.RankedCentroidIDs...)
@@ -478,7 +485,11 @@ func searchPlanReader[T types.RealNumbers](
 		return err
 	}
 
-	multiRound := r.req.HasFirstRound || r.spec.BucketExpandStep > 0
+	firstRound, hasFirstRound, err := ivfflatplan.FirstRoundLimit(r.req)
+	if err != nil {
+		return err
+	}
+	multiRound := hasFirstRound || r.opts.BucketExpandStep > 0
 	var cursor *vectorindex.IvfSearchCursor
 	if multiRound {
 		cursor = &vectorindex.IvfSearchCursor{}
@@ -493,11 +504,11 @@ func searchPlanReader[T types.RealNumbers](
 		return nil
 	}
 	firstRoundLimit := uint(0)
-	if r.req.HasFirstRound {
-		if r.req.FirstRoundLimit > uint64(^uint(0)>>1) {
+	if hasFirstRound {
+		if firstRound > uint64(^uint(0)>>1) {
 			return moerr.NewInvalidInputNoCtx("IVF first-round limit is not a platform uint")
 		}
-		firstRoundLimit = uint(r.req.FirstRoundLimit)
+		firstRoundLimit = uint(firstRound)
 	}
 	r.includeData = make(map[string][]any, len(r.spec.IncludedColumns))
 	r.includeNulls = make(map[string][]bool, len(r.spec.IncludedColumns))
@@ -510,14 +521,14 @@ func searchPlanReader[T types.RealNumbers](
 		includeResult := &vectorindex.IvfIncludeResult{}
 		rt := vectorindex.RuntimeConfig{
 			Limit:                   limit,
-			Probe:                   uint(max(uint32(1), r.spec.InitialProbeCount)),
+			Probe:                   uint(max(uint32(1), r.opts.InitialProbeCount)),
 			OrigFuncName:            r.spec.DistanceFunction,
 			RuntimeFilterData:       r.req.MembershipFilter,
 			RequestedIncludeColumns: r.spec.IncludedColumns,
 			PushdownFilters:         r.req.PreFilters,
 			IncludeResult:           includeResult,
 			SearchRoundLimit:        firstRoundLimit,
-			BucketExpandStep:        uint(r.spec.BucketExpandStep),
+			BucketExpandStep:        uint(r.opts.BucketExpandStep),
 			SearchCursor:            cursor,
 			IvfRoutePrepared:        r.generation != nil && !multiRound,
 		}

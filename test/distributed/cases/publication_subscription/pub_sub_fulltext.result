@@ -34,7 +34,7 @@ select count(*) from mo_catalog.mo_indexes where algo = 'fulltext';
 ➤ count(*)[-5,64,0]  𝄀
 0
 select * from fulltext_index_scan('{}', '`pub-ft-db`.`secret_table`', '`pub-ft-db`.`secret_table`', 'hello', 0);
-SQL parser error: No tables used
+not supported: table function 'fulltext_index_scan' not supported
 prepare subscriber_match_stmt from 'select id from subscriber_table_alias.`articles-quoted` where match(body) against(\'hello\') order by id';
 begin;
 execute subscriber_match_stmt;

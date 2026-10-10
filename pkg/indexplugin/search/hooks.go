@@ -41,12 +41,17 @@ type ScanIdentity struct {
 // The plan specification passed beside it is immutable catalog/index metadata;
 // readers must not evaluate or mutate its dynamic expressions.
 type Request struct {
-	QueryVector      []byte
-	QueryType        plan.Type
-	ResultLimit      uint64
-	CandidateBudget  uint64
-	FirstRoundLimit  uint64
-	HasFirstRound    bool
+	QueryPayload []byte
+	QueryType    plan.Type
+	// QueryIsNull means the query payload evaluated to NULL.
+	QueryIsNull bool
+	// ResultLimit is the folded IndexSearchScan.CandidateLimit; 0 when the
+	// scan carries no candidate limit.
+	ResultLimit     uint64
+	CandidateBudget uint64
+	// AlgoValues are the evaluated IndexSearchScan.AlgoExprs, by name, for this
+	// search. Only the index algorithm that declared them interprets them.
+	AlgoValues       []AlgoValue
 	PreFilters       []*plan.Expr
 	DistanceRange    *plan.DistRange
 	MembershipFilter []byte
@@ -56,6 +61,9 @@ type Request struct {
 	// MembershipFilterRequired means candidate limiting is only semantically
 	// valid after this exact membership predicate has been applied.
 	MembershipFilterRequired bool
+	// MembershipFilterPassed means a membership runtime filter was planned but
+	// its producer returned PASS, so no membership predicate is applied.
+	MembershipFilterPassed bool
 	// CollectExplainDiagnostics is enabled only for standalone scalar scans.
 	// Correlated APPLY executes one reader per provider row and must not retain
 	// per-round diagnostics with unbounded outer-row cardinality.
@@ -63,16 +71,55 @@ type Request struct {
 	Identity                  ScanIdentity
 }
 
+// AlgoValue is one evaluated row-dependent algorithm expression.
+type AlgoValue struct {
+	Name  string
+	Value *plan.Literal
+}
+
+// AlgoValue returns the evaluated algorithm expression named name.
+func (r Request) AlgoValue(name string) (*plan.Literal, bool) {
+	for _, v := range r.AlgoValues {
+		if v.Name == name {
+			return v.Value, true
+		}
+	}
+	return nil, false
+}
+
 // Hooks builds the reader for one vector-index scan execution generation.
 // The returned reader owns all per-search child readers and must release them
 // from Close on success, error, cancellation, and prepared-plan reuse.
 type Hooks interface {
-	NewReader(proc *process.Process, spec *plan.VectorIndexScan, req Request) (engine.Reader, error)
+	NewReader(proc *process.Process, spec *plan.IndexSearchScan, req Request) (engine.Reader, error)
 }
 
 // ParallelHooks optionally partitions one coordinator-local search into disjoint
 // readers. The returned slice must match parallelism, including empty shards.
 // Consumers without local parallelism, including APPLY, can keep Hooks.NewReader.
 type ParallelHooks interface {
-	NewReaders(proc *process.Process, spec *plan.VectorIndexScan, req Request, parallelism int) ([]engine.Reader, error)
+	// CanParallelize reports whether spec can be split into partitioned readers.
+	CanParallelize(spec *plan.IndexSearchScan) (bool, error)
+	NewReaders(proc *process.Process, spec *plan.IndexSearchScan, req Request, parallelism int) ([]engine.Reader, error)
+}
+
+// EmptyScanHooks optionally checks a scan that returns no rows without
+// searching: its query payload is NULL (req.QueryIsNull) or a runtime filter
+// dropped it. It runs instead of NewReader; the scan stays empty unless it
+// errors.
+type EmptyScanHooks interface {
+	EmptyScan(proc *process.Process, spec *plan.IndexSearchScan, req Request) error
+}
+
+// ExplainHooks optionally describes the algorithm settings of a scan for
+// EXPLAIN, as "Name: value" fragments in display order.
+type ExplainHooks interface {
+	ExplainSettings(spec *plan.IndexSearchScan) ([]string, error)
+}
+
+// CandidateBudgetHooks optionally sizes the candidate budget of a scan whose
+// results are post-filtered (IndexSearchScan.PostFilterOverFetch). Without it
+// the budget is overfetch.FilteredPostModeLimit(resultLimit).
+type CandidateBudgetHooks interface {
+	PostFilterCandidateBudget(resultLimit uint64) uint64
 }

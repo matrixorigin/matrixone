@@ -20,7 +20,7 @@ select id from articles
 where match(title, content) against('+database' in boolean mode)
 )
 order by id;
--- @regex("Table Function on fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -39,7 +39,8 @@ Project  𝄀
                           Runtime Filter Build: #[-1,0]  𝄀
                           ->  Table Scan on ft_match_subquery.articles  𝄀
                                 Runtime Filter Probe: articles.id  𝄀
-                          ->  Table Function on fulltext_index_scan
+                          ->  Fulltext Index Scan on ft_articles  𝄀
+                                Fulltext Index: ft_articles
 select id from articles
 where id in (
 select id from articles

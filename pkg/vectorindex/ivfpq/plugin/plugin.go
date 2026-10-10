@@ -110,11 +110,13 @@ import (
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 
 	ivfpqcompile "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/compile"
 	ivfpqidxcron "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/idxcron"
 	ivfpqplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/plan"
 	ivfpqruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
+	ivfpqsearch "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/search"
 )
 
 // Plugin is the IVF-PQ AlgoPlugin. One instance is registered at init().
@@ -127,6 +129,7 @@ type Plugin struct {
 	compileHooks compileplugin.Hooks
 	planHooks    planplugin.Hooks
 	idxcronHooks idxcronplugin.Hooks
+	searchHooks  searchplugin.Hooks
 }
 
 func New() *Plugin {
@@ -135,6 +138,7 @@ func New() *Plugin {
 		compileHooks: ivfpqcompile.Hooks{},
 		planHooks:    ivfpqplan.Hooks{},
 		idxcronHooks: ivfpqidxcron.Hooks{},
+		searchHooks:  ivfpqsearch.Hooks{},
 	}
 }
 
@@ -146,11 +150,13 @@ func (p *Plugin) Catalog() catalogplugin.Hooks { return p.catalogHooks }
 func (p *Plugin) Compile() compileplugin.Hooks { return p.compileHooks }
 func (p *Plugin) Plan() planplugin.Hooks       { return p.planHooks }
 func (p *Plugin) Idxcron() idxcronplugin.Hooks { return p.idxcronHooks }
+func (p *Plugin) Search() searchplugin.Hooks   { return p.searchHooks }
 
 // Compile-time enforcement that *Plugin satisfies plugin.AlgoPlugin. If a
 // new method is added to AlgoPlugin and this plugin hasn't been updated,
 // this line stops the build.
 var _ plugin.AlgoPlugin = (*Plugin)(nil)
+var _ plugin.SearchPlugin = (*Plugin)(nil)
 
 // init registers IVF-PQ with the global plugin registry. The SQL layer's
 // dispatch sites (pkg/sql/compile/ddl.go, pkg/sql/plan/apply_indices.go,

@@ -328,7 +328,7 @@ inline int64_t map_neighbor_id(int64_t raw, int64_t offset,
 // externally-visible buffer shape stays (num_queries × limit). map_neighbor_id
 // above already passes -1 through (raw < 0 → -1). Sentinel values match the
 // existing convention (helper.h cpu_topk_merge_sharded pads with (-1, FLT_MAX);
-// apply_pq_post_filter_locked uses FLT_MAX).
+// apply_host_post_filter_locked uses FLT_MAX).
 // =============================================================================
 
 
@@ -989,6 +989,64 @@ public:
 
         if (out_user_mask) *out_user_mask = std::move(bundle.mask);
         return bs;
+    }
+
+    // cuVS bitset_filter quirk: when fewer rows pass (user_filter AND NOT
+    // deleted) than `limit`, brute force, IVF-Flat and IVF-PQ fill the
+    // remaining result slots with filter-excluded or deleted rows instead of
+    // sentinels. The post-filter below re-tests each raw result position
+    // against the host mask and replaces a failing slot with (-1, FLT_MAX).
+    // It runs on raw (pre-map_neighbor_id) positions in [0, shard_sz).
+
+    // Replaces every raw position not set in host_mask with (-1, FLT_MAX).
+    // Reads no index state, so it needs no lock.
+    template <typename ResultT>
+    static void apply_host_mask_post_filter(ResultT& search_res,
+                                            uint64_t shard_sz,
+                                            const std::vector<uint32_t>& host_mask) {
+        const float kDistSentinel = std::numeric_limits<float>::max();
+        for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+            const int64_t raw = search_res.neighbors[i];
+            if (raw < 0) continue;
+            const uint64_t p = static_cast<uint64_t>(raw);
+            if (p >= shard_sz || p / 32 >= host_mask.size()
+                || !((host_mask[p / 32] >> (p % 32)) & 1U)) {
+                search_res.neighbors[i] = -1;
+                search_res.distances[i] = kDistSentinel;
+            }
+        }
+    }
+
+    // Post-filter for rows [start_row, start_row + shard_sz). user_host_mask
+    // is the uploaded (user_filter AND NOT deleted) mask, or empty on the
+    // deletes-only path, where each returned row is looked up in deleted_bitset_.
+    // Caller must hold mutex_ as shared_lock: reads deleted_bitset_ and
+    // deleted_count_.
+    template <typename ResultT>
+    void apply_host_post_filter_locked(ResultT& search_res,
+                                       uint64_t start_row,
+                                       uint64_t shard_sz,
+                                       const std::vector<uint32_t>& user_host_mask) const {
+        if (!user_host_mask.empty()) {
+            apply_host_mask_post_filter(search_res, shard_sz, user_host_mask);
+            return;
+        }
+        if (this->deleted_count_ == 0) return;
+        // deleted_bitset_ has a set bit for a live row; rows past its end are live.
+        const float kDistSentinel = std::numeric_limits<float>::max();
+        const uint64_t del_words  = this->deleted_bitset_.size();
+        for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+            const int64_t raw = search_res.neighbors[i];
+            if (raw < 0) continue;
+            const uint64_t p   = static_cast<uint64_t>(raw);
+            const uint64_t row = start_row + p;
+            if (p >= shard_sz
+                || (row / 32 < del_words
+                    && !((this->deleted_bitset_[row / 32] >> (row % 32)) & 1U))) {
+                search_res.neighbors[i] = -1;
+                search_res.distances[i] = kDistSentinel;
+            }
+        }
     }
 
     // Off-worker mask-building helpers shared by the filtered-search entry

@@ -83,7 +83,7 @@ func scalarVectorPlanHasIndex(q *plan.Query) bool {
 		}
 		seen[id] = true
 		node := q.Nodes[id]
-		if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+		if node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
 			return true
 		}
 		for _, child := range node.Children {
@@ -256,19 +256,23 @@ func TestScalarVectorQueryHnswPreparedProvider(t *testing.T) {
 			cols := GetResultColumnsFromPlan(candidate)
 			require.Len(t, cols, 1)
 			require.Equal(t, int32(types.T_int64), cols[0].Typ.Id)
-			found := false
+			found, applied := false, false
 			for _, node := range candidate.GetQuery().Nodes {
-				if node.NodeType != plan.Node_FUNCTION_SCAN {
+				if node.NodeType == plan.Node_APPLY && node.ApplyType == plan.Node_CROSSAPPLY {
+					applied = true
+				}
+				if node.NodeType != plan.Node_INDEX_SEARCH_SCAN {
 					continue
 				}
 				found = true
-				require.Len(t, node.Children, 1)
+				require.Empty(t, node.Children, "the provider row reaches the search through CROSS APPLY")
 				for _, expr := range node.ProjectList {
 					require.Equal(t, node.TableDef.Cols[expr.GetCol().ColPos].Typ, expr.Typ,
-						"a function scan projects its own result schema, not its query-vector input")
+						"an index search scan projects its own result schema, not its query-vector input")
 				}
 			}
 			require.True(t, found)
+			require.True(t, applied)
 		}
 	}
 }

@@ -32,7 +32,7 @@ select match(body) against('hello') as score, count(*) as c from docs where matc
 0.049216866  ¦  2  𝄀
 0.09843373  ¦  1
 explain select max(match(body) against('hello')) from docs where match(body) against('hello');
--- @regex("fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Aggregate  𝄀
@@ -43,5 +43,6 @@ Project  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on ft_agg_match.docs  𝄀
                     Runtime Filter Probe: docs.id  𝄀
-              ->  Table Function on fulltext_index_scan
+              ->  Fulltext Index Scan on ft_body  𝄀
+                    Fulltext Index: ft_body
 drop database ft_agg_match;

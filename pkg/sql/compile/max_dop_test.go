@@ -542,17 +542,13 @@ func TestGenerateNodesKeepsSmallNonIvfScanOnCurrentCN(t *testing.T) {
 	}}, nodes)
 }
 
-func TestCompileVectorIndexScanUsesAllQueryCNs(t *testing.T) {
-	c := NewMockCompile(t)
-	c.addr = "cn-local:6001"
-	c.execType = plan2.ExecTypeAP_MULTICN
-	c.anal = &AnalyzeModule{isFirst: true}
-	c.cnList = engine.Nodes{
+func TestCompileIndexSearchScanUsesAllQueryCNs(t *testing.T) {
+	c, _ := vectorPlacementCompile(t, engine.Nodes{
 		{Id: "cn1", Addr: "cn-local:6001", Mcpu: 4},
 		{Id: "cn2", Addr: "cn-remote:6001", Mcpu: 8},
-	}
+	})
 	node := &plan.Node{
-		NodeType: plan.Node_VECTOR_INDEX_SCAN,
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
 		ObjRef:   &plan.ObjectRef{SchemaName: "db", ObjName: "t"},
 		TableDef: &plan.TableDef{
 			Name: "t",
@@ -566,7 +562,8 @@ func TestCompileVectorIndexScanUsesAllQueryCNs(t *testing.T) {
 			TS:     &timestamp.Timestamp{PhysicalTime: 123},
 			Tenant: &plan.SnapshotTenant{TenantID: 7},
 		},
-		VectorIndexScan: &plan.VectorIndexScan{
+		IndexSearchScan: &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexAlgo: "ivfflat"},
 			ScanSnapshot: &plan.Snapshot{
 				TS:     &timestamp.Timestamp{PhysicalTime: 123},
 				Tenant: &plan.SnapshotTenant{TenantID: 7},
@@ -574,7 +571,7 @@ func TestCompileVectorIndexScanUsesAllQueryCNs(t *testing.T) {
 		},
 	}
 
-	scopes, err := c.compileVectorIndexScan(node)
+	scopes, err := c.compileIndexSearchScan(node)
 	require.NoError(t, err)
 	require.Len(t, scopes, 2)
 	for i, scope := range scopes {
@@ -582,12 +579,12 @@ func TestCompileVectorIndexScanUsesAllQueryCNs(t *testing.T) {
 		require.Equal(t, int32(i), scope.NodeInfo.CNIDX)
 		require.Equal(t, 1, scope.NodeInfo.Mcpu)
 		require.Equal(t, node.ScanSnapshot, scope.DataSource.node.ScanSnapshot)
-		require.Equal(t, node.VectorIndexScan.ScanSnapshot, scope.DataSource.node.VectorIndexScan.ScanSnapshot)
+		require.Equal(t, node.IndexSearchScan.ScanSnapshot, scope.DataSource.node.IndexSearchScan.ScanSnapshot)
 		require.NotSame(t, node.ScanSnapshot, scope.DataSource.node.ScanSnapshot)
 	}
 
 	node.Stats.ForceOneCN = true
-	scopes, err = c.compileVectorIndexScan(node)
+	scopes, err = c.compileIndexSearchScan(node)
 	require.NoError(t, err)
 	require.Len(t, scopes, 1)
 	require.Equal(t, "cn-local:6001", scopes[0].NodeInfo.Addr)
@@ -600,10 +597,10 @@ func TestCompileRequiredVectorScanGatesLocalDOP(t *testing.T) {
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.anal = &AnalyzeModule{isFirst: true}
 	c.cnList = engine.Nodes{{Id: "cn1", Addr: c.addr, Mcpu: 4}, {Id: "cn2", Addr: "remote:6001", Mcpu: 8}}
-	node := &plan.Node{NodeType: plan.Node_VECTOR_INDEX_SCAN,
+	node := &plan.Node{NodeType: plan.Node_INDEX_SEARCH_SCAN,
 		TableDef: &plan.TableDef{}, Stats: &plan.Stats{Dop: 8},
 		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{{UseMembershipFilter: true, MustApply: true}},
-		VectorIndexScan:        &plan.VectorIndexScan{ScanWork: &plan.VectorIndexScanWork{Rows: 100, Blocks: 8, VectorBytesPerRow: 3072}},
+		IndexSearchScan:        &plan.IndexSearchScan{ScanWork: &plan.IndexSearchScanWork{Rows: 100, Blocks: 8, VectorBytesPerRow: 3072}},
 	}
 	for _, tc := range []struct {
 		hints string
@@ -613,7 +610,7 @@ func TestCompileRequiredVectorScanGatesLocalDOP(t *testing.T) {
 			require.Equal(t, "optimizer_hints", name)
 			return tc.hints, nil
 		})
-		scopes, err := c.compileVectorIndexScan(node)
+		scopes, err := c.compileIndexSearchScan(node)
 		require.NoError(t, err)
 		require.Len(t, scopes, 1, "required domains stay local even without ForceOneCN")
 		require.Equal(t, c.addr, scopes[0].NodeInfo.Addr)
@@ -624,45 +621,45 @@ func TestCompileRequiredVectorScanGatesLocalDOP(t *testing.T) {
 	}
 	c.proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return "vectorLocalDOP=1", nil })
 	node.Stats.Dop = 2
-	dop, err := c.vectorIndexScanParallelism(node, 4)
+	dop, err := c.indexSearchScanParallelism(node, 4)
 	require.NoError(t, err)
 	require.Equal(t, 2, dop, "keep max_dop already applied during query planning")
 	c.ncpu = 1
-	dop, err = c.vectorIndexScanParallelism(node, 4)
+	dop, err = c.indexSearchScanParallelism(node, 4)
 	require.NoError(t, err)
 	require.Equal(t, 1, dop)
-	node.VectorIndexScan.ScanWork = nil
+	node.IndexSearchScan.ScanWork = nil
 	c.ncpu = 8
-	dop, err = c.vectorIndexScanParallelism(node, 4)
+	dop, err = c.indexSearchScanParallelism(node, 4)
 	require.NoError(t, err)
 	require.Equal(t, 1, dop, "enabling the gate without replanning cannot invent scan work")
 }
 
-func TestNormalizeVectorIndexScanSnapshot(t *testing.T) {
+func TestNormalizeIndexSearchScanSnapshot(t *testing.T) {
 	nestedSnapshot := &plan.Snapshot{
 		TS:     &timestamp.Timestamp{PhysicalTime: 10},
 		Tenant: &plan.SnapshotTenant{TenantID: 11},
 	}
 	node := &plan.Node{
-		VectorIndexScan: &plan.VectorIndexScan{ScanSnapshot: nestedSnapshot},
+		IndexSearchScan: &plan.IndexSearchScan{ScanSnapshot: nestedSnapshot},
 	}
 
-	normalizeVectorIndexScanSnapshot(node)
+	normalizeIndexSearchScanSnapshot(node)
 	require.Equal(t, nestedSnapshot, node.ScanSnapshot)
-	require.Equal(t, nestedSnapshot, node.VectorIndexScan.ScanSnapshot)
+	require.Equal(t, nestedSnapshot, node.IndexSearchScan.ScanSnapshot)
 	require.NotSame(t, nestedSnapshot, node.ScanSnapshot)
-	require.NotSame(t, nestedSnapshot, node.VectorIndexScan.ScanSnapshot)
+	require.NotSame(t, nestedSnapshot, node.IndexSearchScan.ScanSnapshot)
 
 	topLevelSnapshot := &plan.Snapshot{
 		TS:     &timestamp.Timestamp{PhysicalTime: 20},
 		Tenant: &plan.SnapshotTenant{TenantID: 22},
 	}
 	node.ScanSnapshot = topLevelSnapshot
-	normalizeVectorIndexScanSnapshot(node)
+	normalizeIndexSearchScanSnapshot(node)
 	require.Equal(t, topLevelSnapshot, node.ScanSnapshot)
-	require.Equal(t, topLevelSnapshot, node.VectorIndexScan.ScanSnapshot)
+	require.Equal(t, topLevelSnapshot, node.IndexSearchScan.ScanSnapshot)
 	require.NotSame(t, topLevelSnapshot, node.ScanSnapshot)
-	require.NotSame(t, topLevelSnapshot, node.VectorIndexScan.ScanSnapshot)
+	require.NotSame(t, topLevelSnapshot, node.IndexSearchScan.ScanSnapshot)
 }
 
 func TestUpdateScopeTxnOffsetRefreshesApplyOperators(t *testing.T) {
@@ -941,4 +938,21 @@ func newStubEngineForGenerateNodes(dbName, tblName string) *stubEngine {
 	db.rels[tblName] = newStubRelation(tblName)
 	e.dbs[dbName] = db
 	return e
+}
+
+func TestCompileUnpartitionedIndexSearchScanRunsInOneLocalScope(t *testing.T) {
+	c, client := vectorPlacementCompile(t, engine.Nodes{
+		{Id: "cn1", Addr: "cn-local:6001", Mcpu: 4},
+		{Id: "cn2", Addr: "cn-remote:6001", Mcpu: 8},
+	})
+	node := vectorPlacementNode()
+	node.IndexSearchScan.Index.IndexAlgo = "hnsw"
+	scopes, err := c.compileIndexSearchScan(node)
+	require.NoError(t, err)
+	t.Cleanup(func() { ReleaseScopes(scopes) })
+	require.Len(t, scopes, 1)
+	require.Equal(t, "cn-local:6001", scopes[0].NodeInfo.Addr)
+	require.Equal(t, int32(1), scopes[0].NodeInfo.CNCNT)
+	require.Equal(t, 1, scopes[0].NodeInfo.Mcpu)
+	require.Zero(t, client.calls, "a local search needs no worker capability probe")
 }

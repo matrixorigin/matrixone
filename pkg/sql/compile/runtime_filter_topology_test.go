@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -401,8 +402,8 @@ func BenchmarkValidateLocalRuntimeFilterTopologyNoFilter(b *testing.B) {
 
 func TestRequiredIVFTopologyBroadcastAndRemoteFragment(t *testing.T) {
 	c, client := vectorPlacementCompile(t, engine.Nodes{{Id: "a", Addr: "a:6001"}, {Id: "b", Addr: "b:6001"}})
-	moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion103)
-	client.version = defines.MORPCVersion103
+	moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, vectorscan.IndexSearchScanProtocolVersion)
+	client.version = vectorscan.IndexSearchScanProtocolVersion
 	c.proc.Base.TxnOperator = fakeTxnOperator{}
 	c.proc.Base.SessionInfo.TimeZone = time.UTC
 	c.proc.Ctx = defines.AttachAccountId(context.Background(), 0)
@@ -414,7 +415,8 @@ func TestRequiredIVFTopologyBroadcastAndRemoteFragment(t *testing.T) {
 		cn.Mcpu, cn.CNCNT, cn.CNIDX = 1, 2, int32(i)
 		consumer := makeRuntimeFilterConsumerScope(tag, cn)
 		consumer.Proc = c.proc.NewNoContextChildProc(0)
-		consumer.DataSource.node.NodeType = plan.Node_VECTOR_INDEX_SCAN
+		consumer.DataSource.node.NodeType = plan.Node_INDEX_SEARCH_SCAN
+		consumer.DataSource.node.IndexSearchScan = &plan.IndexSearchScan{AlgoOptions: []byte(`{}`)}
 		consumer.DataSource.node.RuntimeFilterProbeList[0].MustApply = true
 		consumer.DataSource.node.RuntimeFilterProbeList[0].UseMembershipFilter = true
 		consumer.RootOp = table_scan.NewArgument()
@@ -471,7 +473,7 @@ func TestRequiredIVFTopologyBroadcastAndRemoteFragment(t *testing.T) {
 	var required int64
 	data, err := encodeRemoteScopeWithVectorProtocol(roots[1], c.proc, &required)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion103, required)
+	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, required)
 	decoded, err := decodeScope(data, c.proc, true, nil)
 	require.NoError(t, err)
 	t.Cleanup(decoded.release)

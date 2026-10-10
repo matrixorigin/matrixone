@@ -126,7 +126,7 @@ func (builder *QueryBuilder) detectEquiVectorJoinGuard(proj *plan.Node) []int32 
 		rankOption: DeepCopyRankOption(vc.rankOption), providerNodeID: -1, hasMembership: true,
 	}
 	for _, index := range indexes {
-		if !vectorIndexSupportsContext(probe, index.IndexAlgo) {
+		if !builder.vectorIndexSupportsContext(probe, index.IndexAlgo) {
 			continue
 		}
 		plugin, ok := indexplugin.Get(index.IndexAlgo)

@@ -521,7 +521,7 @@ type QueryBuilder struct {
 	jsonProbeFtNodes map[int32]bool
 
 	// jsonProbeTail records, per base-scan node id, that a mandatory json_extract probe against an
-	// async index must SELF-COMPLETE: the fulltext2_search operator binds the generation it actually
+	// async index must SELF-COMPLETE: the fulltext2 search reader binds the generation it actually
 	// searched at runtime and unions a table_changes tail up to the read snapshot, so no UNION arm is
 	// built in the plan. The value is the reconstructed tail SQL, shown in EXPLAIN (Verbose) via the
 	// node's Stats.Sql -- so the internally-run tail is visible, not a black box. Set by

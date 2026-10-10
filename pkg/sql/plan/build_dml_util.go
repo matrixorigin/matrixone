@@ -31,6 +31,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	ftplan "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/plan"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -7168,7 +7169,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		})
 	}
 
-	ftcols := DeepCopyColDefList(tokenizeColDefs)
+	ftcols := DeepCopyColDefList(ftplan.TokenizeColDefs)
 	ftcols[0].Typ = tableDef.Cols[pkPos].Typ
 
 	tablefunc := &plan.Node{
@@ -7177,7 +7178,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		TableDef: &plan.TableDef{
 			TableType: "func_table",
 			TblFunc: &plan.TableFunction{
-				Name:  fulltext_index_tokenize_func_name,
+				Name:  ftplan.TokenizeFuncName,
 				Param: []byte(indexdef.IndexAlgoParams),
 			},
 			Cols: ftcols,

@@ -72,14 +72,14 @@ where table_id = @leaf_id and drop_at is null
 -- These assertions prove the fixed special-index paths, not a base-table
 -- fallback. The independent distance expression remains the exact oracle.
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from leaf_t
 where match(body) against('+branch' in boolean mode) order by id;
 select id from leaf_t
 where match(body) against('+branch' in boolean mode) order by id;
 
 -- @separator:table
--- @regex("Table Function on hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 explain select id from leaf_t
 order by l2_distance(v, '[0,0,0]') limit 2;
 select id from leaf_t

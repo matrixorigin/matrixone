@@ -22,6 +22,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 )
@@ -38,7 +40,7 @@ func VectorLocalDOPEnabled(hints string) bool {
 	return value == 1
 }
 
-func (builder *QueryBuilder) estimateIvfScanWork(source *plan.ObjectRef, snapshot *plan.Snapshot, entriesName string, lists, probes int64) (*plan.VectorIndexScanWork, error) {
+func (builder *QueryBuilder) estimateIvfScanWork(source *plan.ObjectRef, snapshot *plan.Snapshot, entriesName string, lists, probes int64) (*plan.IndexSearchScanWork, error) {
 	if err := builder.GetContext().Err(); err != nil {
 		return nil, err
 	}
@@ -66,7 +68,7 @@ func scanWorkLookupError(err error) error {
 	return nil
 }
 
-func ivfScanWorkFromStats(table *plan.TableDef, stats *statsinfo.StatsInfo, lists, probes int64) *plan.VectorIndexScanWork {
+func ivfScanWorkFromStats(table *plan.TableDef, stats *statsinfo.StatsInfo, lists, probes int64) *plan.IndexSearchScanWork {
 	if table == nil || stats == nil || lists <= 0 || !positiveScanWork(stats.TableCnt) || stats.BlockNumber <= 0 ||
 		stats.AccurateObjectNumber < 0 || stats.ApproxObjectNumber < 0 {
 		return nil
@@ -94,7 +96,7 @@ func ivfScanWorkFromStats(table *plan.TableDef, stats *statsinfo.StatsInfo, list
 	if !positiveScanWork(rows) {
 		return nil
 	}
-	return &plan.VectorIndexScanWork{
+	return &plan.IndexSearchScanWork{
 		Rows:              rows,
 		Blocks:            int32(math.Min(math.MaxInt32, math.Max(1, math.Ceil(float64(stats.BlockNumber)*fraction)))),
 		VectorBytesPerRow: vectorBytes,
@@ -106,9 +108,9 @@ func positiveScanWork(value float64) bool {
 	return value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
-func vectorScanDOP(ncpu int32, spec *plan.VectorIndexScan, isPrepare bool) int32 {
+func vectorScanDOP(ncpu int32, spec *plan.IndexSearchScan, isPrepare bool) int32 {
 	work := spec.GetScanWork()
-	if work == nil || spec.FirstRoundLimit != nil || spec.BucketExpandStep > 0 ||
+	if work == nil || !indexSearchScanCanParallelize(spec) ||
 		!positiveScanWork(work.Rows) || !positiveScanWork(work.VectorBytesPerRow) || work.Blocks <= 0 || work.Objects < 0 {
 		return 1
 	}
@@ -118,4 +120,39 @@ func vectorScanDOP(ncpu int32, spec *plan.VectorIndexScan, isPrepare bool) int32
 		dop = min(dop, work.Objects)
 	}
 	return max(1, dop)
+}
+
+// indexSearchScanCanParallelize reports whether the search plugin of spec can
+// split it into partitioned readers.
+func indexSearchScanCanParallelize(spec *plan.IndexSearchScan) bool {
+	parallel, ok := indexSearchParallelHooks(spec)
+	if !ok {
+		return false
+	}
+	can, err := parallel.CanParallelize(spec)
+	return err == nil && can
+}
+
+// IndexSearchScanPartitioned reports whether the index algorithm of spec reads
+// its index in object partitions, so its scan can run on several CNs and in
+// several local readers. Other algorithms search their whole index once.
+func IndexSearchScanPartitioned(spec *plan.IndexSearchScan) bool {
+	_, ok := indexSearchParallelHooks(spec)
+	return ok
+}
+
+func indexSearchParallelHooks(spec *plan.IndexSearchScan) (searchplugin.ParallelHooks, bool) {
+	if spec == nil || spec.Index == nil {
+		return nil, false
+	}
+	p, ok := indexplugin.Get(spec.Index.IndexAlgo)
+	if !ok {
+		return nil, false
+	}
+	searcher, ok := p.(indexplugin.SearchPlugin)
+	if !ok {
+		return nil, false
+	}
+	parallel, ok := searcher.Search().(searchplugin.ParallelHooks)
+	return parallel, ok
 }

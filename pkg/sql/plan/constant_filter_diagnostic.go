@@ -193,8 +193,8 @@ func preparedPlanDiagnosticCandidates(p *plan.Plan, includeMaterialized bool) []
 		add(node.OnList)
 		add(node.FilterList)
 		add(node.BlockFilterList)
-		if node.VectorIndexScan != nil {
-			add(node.VectorIndexScan.PreFilters)
+		if node.IndexSearchScan != nil {
+			add(node.IndexSearchScan.PreFilters)
 		}
 	}
 	return candidates

@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	ft2plan "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/plan"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -371,8 +372,8 @@ func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
 		if !ok {
 			continue
 		}
-		// Mixed-version fence. The json probe emits a fulltext2_search TVF whose TableConfig carries
-		// probe_tail/source/bar/predicate for self-completion. That TVF can be serialized into a remote
+		// Mixed-version fence. The json probe emits a fulltext2 search scan whose TableConfig carries
+		// probe_tail/source/bar/predicate for self-completion. That scan can be serialized into a remote
 		// scope (broadcast-join build side) and executed on any selected worker; a CN that predates this
 		// contract decodes the config into an older TableConfig, silently drops those fields, and runs
 		// only a stale bulk probe -- which then loses rows the tail would have supplied at the mandatory
@@ -524,7 +525,7 @@ func jsonLiteralToSQL(lit *plan.Literal) (string, bool) {
 	return "", false
 }
 
-// jsonProbeTailSQL reconstructs, for display, what the fulltext2_search operator runs to self-complete
+// jsonProbeTailSQL reconstructs, for display, what the fulltext2 search reader runs to self-complete
 // an async json probe. The operator picks ONE of three at execution, against the generation it ACTUALLY
 // searched, so no single SQL is literally "the" query -- this renders the representative BEHIND tail
 // (table_changes inserts after the searched generation up to the read, filtered by whereSQL, projected
@@ -564,9 +565,9 @@ func (builder *QueryBuilder) jsonProbeTailSQL(scanNode *plan.Node, whereSQL stri
 // guard. The probe and its tail see only COMMITTED rows, so a plan built in a clean txn and reused
 // in a txn that has since written uncommitted rows to the source would DROP them (the base scan sees
 // them, the probe does not, and the INNER JOIN discards them). Rebuilding re-runs that guard (and
-// re-checks that the index is built). A user MATCH also builds a fulltext2_search node but is
-// search-semantics (freshness-tolerant); the JSONProbeMode argument distinguishes the injected probe
-// and is required.
+// re-checks that the index is built). A user MATCH also builds a fulltext2 index search scan but is
+// search-semantics (freshness-tolerant); the JSONProbeMode scan option distinguishes the injected
+// probe and is required.
 func PreparedPlanDependsOnIndexCoverage(p *Plan) bool {
 	if p == nil {
 		return false
@@ -576,18 +577,13 @@ func PreparedPlanDependsOnIndexCoverage(p *Plan) bool {
 		return false
 	}
 	for _, node := range query.GetNodes() {
-		if node == nil || node.TableDef == nil || node.TableDef.TblFunc == nil ||
-			node.TableDef.TblFunc.Name != fulltext2_search_func_name {
+		spec := node.GetIndexSearchScan()
+		if node.GetNodeType() != plan.Node_INDEX_SEARCH_SCAN ||
+			!catalog.IsFullText2IndexAlgo(spec.GetIndex().GetIndexAlgo()) {
 			continue
 		}
-		args := node.GetTblFuncExprList()
-		if len(args) < 3 {
-			continue
-		}
-		if lit := args[2].GetLit(); lit != nil {
-			if v, ok := lit.Value.(*plan.Literal_I64Val); ok && v.I64Val == fulltext2.JSONProbeMode {
-				return true
-			}
+		if opts, err := ft2plan.DecodeScanOptions(spec.GetAlgoOptions()); err == nil && opts.Mode == fulltext2.JSONProbeMode {
+			return true
 		}
 	}
 	return false
@@ -603,8 +599,8 @@ const (
 	// jsonProbeCovered: a synchronous index, OR an async index that is CAUGHT UP for the read --
 	// emit a mandatory probe with NO tail (the index already reflects every row the read sees).
 	jsonProbeCovered
-	// jsonProbePartial: an async index that is BEHIND -- emit a mandatory probe the fulltext2_search
-	// operator SELF-COMPLETES, binding the generation it searched at runtime and unioning a
+	// jsonProbePartial: an async index that is BEHIND -- emit a mandatory probe the fulltext2 search
+	// reader SELF-COMPLETES, binding the generation it searched at runtime and unioning a
 	// table_changes tail up to the read snapshot. Covers both current and {snapshot=...} reads.
 	jsonProbePartial
 )
@@ -830,7 +826,7 @@ func (builder *QueryBuilder) dedupFulltextDocIDs(ctx *BindContext, ftNodeID int3
 	if builder.jsonProbeFtNodes == nil {
 		builder.jsonProbeFtNodes = make(map[int32]bool)
 	}
-	// Record the immediate child, the fulltext2_search SCAN (the id the score-sort/runtime-filter
+	// Record the immediate child, the fulltext2 search SCAN (the id the score-sort/runtime-filter
 	// passes hold in ret_filter_node_ids). A self-completing async probe emits its table_changes tail
 	// INSIDE that same scan node (no separate UNION arm), so the child is always the scan.
 	builder.jsonProbeFtNodes[ftNodeID] = true

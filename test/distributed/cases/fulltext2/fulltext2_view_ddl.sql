@@ -85,7 +85,7 @@ select id from v_good_score order by id;
 -- served by fulltext2_search, NOT the classic fulltext_index_scan -- asserting the wrong one
 -- here is what first proved this file covers ground the classic case cannot.
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from v_good_filter;
 
 -- A MATCH that appears ONLY inside the window's OVER spec, with no WHERE clause to seed an index
@@ -116,7 +116,7 @@ select id, rn from v_window_part order by id;
 -- MATCH returns a FLOAT relevance score in MatrixOne (DESC on such a view reports FLOAT),
 -- as in MySQL, so comparing it is meaningful rather than a bool coercion.
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from v_good_score where score > 0;
 
 select id from v_good_score where score > 0 order by id;

@@ -1247,7 +1247,7 @@ func (builder *QueryBuilder) peelAndRewriteDistFnFilters(
 // distance is the sortIdx entry in childNode.ProjectList; this walker covers the other combinations.
 //
 // A candidate distance (right column + origFuncName metric) is rewritten only when it is against the
-// SAME query vector as vecLitArg — see sameQueryVector. This is a real value comparison: a distance
+// SAME query vector as vecLitArg — see sameQueryPayload. This is a real value comparison: a distance
 // on the same column but a DIFFERENT vector must NOT become this index's score (that would silently
 // report the wrong distance).
 func replaceDistFnExprsWithScoreCol(
@@ -1276,7 +1276,7 @@ func replaceDistFnInExpr(
 		return expr
 	}
 	if isVectorDistanceExpr(expr, scanBindingTag, partPos) && expr.GetF().Func.ObjName == origFuncName &&
-		sameQueryVector(expr.GetF(), scanBindingTag, partPos, vecLitArg) {
+		sameQueryPayload(expr.GetF(), scanBindingTag, partPos, vecLitArg) {
 		return &plan.Expr{
 			Typ: scoreColType,
 			Expr: &plan.Expr_Col{
@@ -1299,7 +1299,7 @@ func replaceDistFnInExpr(
 	return expr
 }
 
-// sameQueryVector reports whether the distance function fn (already known to reference the base scan's
+// sameQueryPayload reports whether the distance function fn (already known to reference the base scan's
 // vector column and use the index's metric) is computed against the SAME query vector as vecLitArg —
 // the vector the index/ORDER BY search key uses. The query vector is the arg that is NOT the base-scan
 // column. A distance on a DIFFERENT vector must NOT be rewritten to this index's score (it would
@@ -1308,7 +1308,7 @@ func replaceDistFnInExpr(
 // possibly-unfolded SELECT-side cast('[...]') resolve to the same canonical byte encoding, so format
 // differences don't matter while distinct vectors never collide. A non-constant (param) query vector
 // yields no key and is left alone (fail-safe).
-func sameQueryVector(fn *plan.Function, scanBindingTag, partPos int32, vecLitArg *plan.Expr) bool {
+func sameQueryPayload(fn *plan.Function, scanBindingTag, partPos int32, vecLitArg *plan.Expr) bool {
 	if fn == nil || len(fn.Args) != 2 || vecLitArg == nil {
 		return false
 	}

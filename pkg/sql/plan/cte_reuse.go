@@ -280,14 +280,8 @@ func (builder *QueryBuilder) cteProducerEvaluationIsTotal(
 			}
 		}
 	}
-	if node.VectorIndexScan != nil {
-		for _, expr := range append([]*planpb.Expr{
-			node.VectorIndexScan.QueryVector,
-			node.VectorIndexScan.CandidateLimit,
-			node.VectorIndexScan.FirstRoundLimit,
-			distRangeLowerBound(node.VectorIndexScan.DistanceRange),
-			distRangeUpperBound(node.VectorIndexScan.DistanceRange),
-		}, node.VectorIndexScan.PreFilters...) {
+	if node.IndexSearchScan != nil {
+		for _, expr := range IndexSearchScanExprs(node.IndexSearchScan) {
 			if expr != nil && !builder.cteExprIsTotal(rootID, expr, ctx, make(map[[2]int32]bool)) {
 				return false
 			}
@@ -646,13 +640,10 @@ func countCTEConsumerNodeColRefs(node *planpb.Node, colRefCnt map[[2]int32]int) 
 			}
 		}
 	}
-	if node.VectorIndexScan != nil {
-		increaseCTERefCnt(node.VectorIndexScan.QueryVector, colRefCnt)
-		increaseCTERefCnt(node.VectorIndexScan.CandidateLimit, colRefCnt)
-		increaseCTERefCnt(node.VectorIndexScan.FirstRoundLimit, colRefCnt)
-		increaseCTERefCnt(distRangeLowerBound(node.VectorIndexScan.DistanceRange), colRefCnt)
-		increaseCTERefCnt(distRangeUpperBound(node.VectorIndexScan.DistanceRange), colRefCnt)
-		increaseRefCntForExprList(node.VectorIndexScan.PreFilters, 1, colRefCnt)
+	if node.IndexSearchScan != nil {
+		for _, expr := range IndexSearchScanExprs(node.IndexSearchScan) {
+			increaseCTERefCnt(expr, colRefCnt)
+		}
 	}
 	if node.DedupJoinCtx != nil {
 		increaseRefCntForExprList(node.DedupJoinCtx.UpdateColExprList, 1, colRefCnt)
@@ -914,6 +905,18 @@ func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[in
 	return builder.subtreeIsDeterministic(nodeID, seen, true)
 }
 
+// IndexSearchScanExprs returns every expression of scan; nil entries are kept.
+func IndexSearchScanExprs(scan *planpb.IndexSearchScan) []*planpb.Expr {
+	if scan == nil {
+		return nil
+	}
+	exprs := make([]*planpb.Expr, 0, 4+len(scan.AlgoExprs)+len(scan.PreFilters))
+	exprs = append(exprs, scan.QueryPayload, scan.CandidateLimit,
+		distRangeLowerBound(scan.DistanceRange), distRangeUpperBound(scan.DistanceRange))
+	exprs = append(exprs, scan.AlgoExprs...)
+	return append(exprs, scan.PreFilters...)
+}
+
 func distRangeLowerBound(distRange *planpb.DistRange) *planpb.Expr {
 	if distRange == nil {
 		return nil
@@ -1028,14 +1031,8 @@ func (builder *QueryBuilder) subtreeIsDeterministic(nodeID int32, seen map[int32
 			}
 		}
 	}
-	if node.VectorIndexScan != nil {
-		for _, expr := range append([]*planpb.Expr{
-			node.VectorIndexScan.QueryVector,
-			node.VectorIndexScan.CandidateLimit,
-			node.VectorIndexScan.FirstRoundLimit,
-			distRangeLowerBound(node.VectorIndexScan.DistanceRange),
-			distRangeUpperBound(node.VectorIndexScan.DistanceRange),
-		}, node.VectorIndexScan.PreFilters...) {
+	if node.IndexSearchScan != nil {
+		for _, expr := range IndexSearchScanExprs(node.IndexSearchScan) {
 			if expr != nil && !exprCanRemoveProject(expr) {
 				return false
 			}

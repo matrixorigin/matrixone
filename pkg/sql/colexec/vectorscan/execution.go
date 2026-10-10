@@ -21,57 +21,62 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // Execution owns one correlated APPLY execution generation. Its specification is
 // a private copy with statement-level expressions bound; its executors retain
-// the row-dependent query and limit expressions until Close.
+// the row-dependent query, limit and algorithm expressions until Close.
 type Execution struct {
-	spec          *plan.VectorIndexScan
-	executors     []colexec.ExpressionExecutor
-	queryVec      *vector.Vector
-	limitVec      *vector.Vector
-	firstRoundVec *vector.Vector
+	spec      *plan.IndexSearchScan
+	executors []colexec.ExpressionExecutor
+	queryVec  *vector.Vector
+	limitVec  *vector.Vector
+	// algoVecs[i] is the evaluated spec.AlgoExprs[i] of the current batch.
+	algoVecs []*vector.Vector
 }
 
 // PrepareScalar returns an execution-local specification whose dynamic
 // expressions are folded. The caller may serialize or otherwise mutate this
 // returned copy; template is never modified.
-func PrepareScalar(template *plan.VectorIndexScan, proc *process.Process) (*plan.VectorIndexScan, error) {
+func PrepareScalar(template *plan.IndexSearchScan, proc *process.Process) (*plan.IndexSearchScan, error) {
 	spec, err := newGenerationSpec(template, proc)
 	if err != nil {
 		return nil, err
 	}
-	if err = foldExpr(&spec.QueryVector, proc); err != nil {
+	if err = foldScalarExpr(&spec.QueryPayload, proc); err != nil {
 		return nil, err
 	}
-	if err = foldExpr(&spec.CandidateLimit, proc); err != nil {
+	if err = foldScalarExpr(&spec.CandidateLimit, proc); err != nil {
 		return nil, err
 	}
-	if err = foldExpr(&spec.FirstRoundLimit, proc); err != nil {
-		return nil, err
+	for i := range spec.AlgoExprs {
+		if err = foldScalarExpr(&spec.AlgoExprs[i], proc); err != nil {
+			return nil, err
+		}
 	}
 	return spec, nil
 }
 
 // PrepareCorrelatedExecution creates a sealed execution generation. Partial executor
 // construction is cleaned by the colexec constructor before returning error.
-func PrepareCorrelatedExecution(template *plan.VectorIndexScan, proc *process.Process) (*Execution, error) {
+func PrepareCorrelatedExecution(template *plan.IndexSearchScan, proc *process.Process) (*Execution, error) {
 	spec, err := newGenerationSpec(template, proc)
 	if err != nil {
 		return nil, err
 	}
-	exprs := []*plan.Expr{spec.QueryVector, spec.CandidateLimit}
-	if spec.FirstRoundLimit != nil {
-		exprs = append(exprs, spec.FirstRoundLimit)
+	if spec.CandidateLimit == nil {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "correlated index search scan has no candidate limit")
 	}
+	exprs := append([]*plan.Expr{spec.QueryPayload, spec.CandidateLimit}, spec.AlgoExprs...)
 	executors, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, exprs)
 	if err != nil {
 		return nil, err
@@ -79,11 +84,14 @@ func PrepareCorrelatedExecution(template *plan.VectorIndexScan, proc *process.Pr
 	return &Execution{spec: spec, executors: executors}, nil
 }
 
-func newGenerationSpec(template *plan.VectorIndexScan, proc *process.Process) (*plan.VectorIndexScan, error) {
-	if template == nil || template.Index == nil || template.QueryVector == nil || template.CandidateLimit == nil {
+func newGenerationSpec(template *plan.IndexSearchScan, proc *process.Process) (*plan.IndexSearchScan, error) {
+	if template == nil || template.Index == nil || template.QueryPayload == nil {
 		return nil, moerr.NewInvalidInput(proc.Ctx, "vector index scan has incomplete metadata")
 	}
-	spec := plan2.DeepCopyVectorIndexScan(template)
+	if len(template.AlgoExprs) != len(template.AlgoExprNames) {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "vector index scan algorithm expressions are not all named")
+	}
+	spec := plan2.DeepCopyIndexSearchScan(template)
 	for i := range spec.PreFilters {
 		if err := foldExpr(&spec.PreFilters[i], proc); err != nil {
 			return nil, err
@@ -112,6 +120,36 @@ func foldExpr(expr **plan.Expr, proc *process.Process) error {
 	return nil
 }
 
+// foldScalarExpr folds a statement-level scalar expression to a literal. An
+// expression ConstantFold leaves unfolded, such as a bare parameter or variable
+// reference, is evaluated once.
+func foldScalarExpr(expr **plan.Expr, proc *process.Process) error {
+	if err := foldExpr(expr, proc); err != nil {
+		return err
+	}
+	if *expr == nil || (*expr).GetLit() != nil {
+		return nil
+	}
+	executor, err := colexec.NewExpressionExecutor(proc, *expr)
+	if err != nil {
+		return err
+	}
+	defer executor.Free()
+	vec, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	if err != nil {
+		return err
+	}
+	if vec == nil || vec.Length() == 0 {
+		return nil
+	}
+	lit := rule.GetConstantValue(vec, true, 0)
+	if lit == nil {
+		return nil
+	}
+	*expr = &plan.Expr{Typ: (*expr).Typ, Expr: &plan.Expr_Lit{Lit: lit}}
+	return nil
+}
+
 // EvalBatch evaluates all row-dependent expressions once for a provider batch.
 // Returned vectors remain owned by the executors and are valid until the next
 // EvalBatch or Close.
@@ -128,11 +166,15 @@ func (b *Execution) EvalBatch(in *batch.Batch, proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	b.firstRoundVec = nil
-	if len(b.executors) > 2 {
-		b.firstRoundVec, err = b.executors[2].Eval(proc, []*batch.Batch{in}, nil)
+	b.algoVecs = b.algoVecs[:0]
+	for _, executor := range b.executors[2:] {
+		vec, err := executor.Eval(proc, []*batch.Batch{in}, nil)
+		if err != nil {
+			return err
+		}
+		b.algoVecs = append(b.algoVecs, vec)
 	}
-	return err
+	return nil
 }
 
 // RequestAt materializes one row of a correlated provider into an owned
@@ -155,25 +197,32 @@ func (b *Execution) RequestAt(row int, identity searchplugin.ScanIdentity) (req 
 	req = requestForValues(
 		b.spec,
 		append([]byte(nil), b.queryVec.GetBytesAt(row)...),
-		b.spec.QueryVector.Typ,
+		b.spec.QueryPayload.Typ,
 		resultLimit,
 		identity,
 	)
-	if b.firstRoundVec != nil {
-		if row >= b.firstRoundVec.Length() || b.firstRoundVec.IsNull(uint64(row)) ||
-			types.T(b.firstRoundVec.GetType().Oid) != types.T_uint64 {
+	for i, vec := range b.algoVecs {
+		if row >= vec.Length() {
 			return searchplugin.Request{}, false,
-				moerr.NewInvalidInputNoCtx("vector index first-round limit did not evaluate to uint64")
+				moerr.NewInvalidInputNoCtx("vector index algorithm expression provider row is out of range")
 		}
-		req.FirstRoundLimit = vector.GetFixedAtNoTypeCheck[uint64](b.firstRoundVec, row)
-		req.HasFirstRound = true
+		at := uint64(row)
+		if vec.IsConst() {
+			at = 0
+		}
+		lit := rule.GetConstantValue(vec, true, at)
+		if lit == nil {
+			return searchplugin.Request{}, false, moerr.NewInvalidInputNoCtxf(
+				"vector index algorithm expression %s did not evaluate to a constant", b.spec.AlgoExprNames[i])
+		}
+		req.AlgoValues = append(req.AlgoValues, searchplugin.AlgoValue{Name: b.spec.AlgoExprNames[i], Value: lit})
 	}
 	return req, true, nil
 }
 
 // Spec returns the immutable-for-this-generation metadata and bound static
 // expressions supplied to every reader created by this execution.
-func (b *Execution) Spec() *plan.VectorIndexScan {
+func (b *Execution) Spec() *plan.IndexSearchScan {
 	if b == nil {
 		return nil
 	}
@@ -189,14 +238,14 @@ func (b *Execution) Close() {
 		executor.Free()
 	}
 	b.executors = nil
-	b.queryVec, b.limitVec, b.firstRoundVec = nil, nil, nil
+	b.queryVec, b.limitVec, b.algoVecs = nil, nil, nil
 	b.spec = nil
 }
 
 // Identity resolves the physical relation owner once, using the same
 // publisher-over-snapshot precedence as ordinary table scans.
 func Identity(
-	spec *plan.VectorIndexScan,
+	spec *plan.IndexSearchScan,
 	currentSnapshot timestamp.Timestamp,
 	txnOffset int,
 	partitionCount int32,
@@ -232,59 +281,68 @@ func Identity(
 }
 
 // RequestFromScalar extracts an already folded scalar specification. ok=false
-// represents a NULL query vector and therefore an empty reader.
+// represents a NULL query payload; req is still filled, with QueryIsNull set.
+// A nil CandidateLimit is a ResultLimit of 0.
 func RequestFromScalar(
-	spec *plan.VectorIndexScan,
+	spec *plan.IndexSearchScan,
 	identity searchplugin.ScanIdentity,
 	membership []byte,
 	hasMembership bool,
 	membershipRequired bool,
 ) (req searchplugin.Request, ok bool, err error) {
-	if spec == nil || spec.QueryVector == nil {
+	if spec == nil || spec.QueryPayload == nil {
 		return req, false, moerr.NewInvalidInputNoCtx("vector index scan has incomplete bound expressions")
 	}
-	queryLit := spec.QueryVector.GetLit()
+	queryLit := spec.QueryPayload.GetLit()
 	if queryLit == nil {
 		return req, false, moerr.NewInvalidInputNoCtx("vector index query vector did not fold at execution")
 	}
-	if queryLit.Isnull {
-		return req, false, nil
+	var limit uint64
+	if spec.CandidateLimit != nil {
+		limitLit := spec.CandidateLimit.GetLit()
+		if limitLit == nil || limitLit.Isnull {
+			return req, false, moerr.NewInvalidInputNoCtx("vector index result limit did not fold at execution")
+		}
+		limitVal, isU64 := limitLit.Value.(*plan.Literal_U64Val)
+		if !isU64 {
+			return req, false, moerr.NewInvalidInputNoCtx("vector index result limit is not uint64")
+		}
+		limit = limitVal.U64Val
 	}
-	if spec.CandidateLimit == nil {
-		return req, false, moerr.NewInvalidInputNoCtx("vector index result limit did not fold at execution")
+	var payload []byte
+	if !queryLit.Isnull {
+		switch v := queryLit.Value.(type) {
+		case *plan.Literal_VecVal:
+			payload = []byte(v.VecVal)
+		case *plan.Literal_Sval:
+			payload = []byte(v.Sval)
+		default:
+			return req, false, moerr.NewInvalidInputNoCtx("index search query payload is neither a vector nor a string")
+		}
 	}
-	limitLit := spec.CandidateLimit.GetLit()
-	if limitLit == nil || limitLit.Isnull {
-		return req, false, moerr.NewInvalidInputNoCtx("vector index result limit did not fold at execution")
-	}
-	limit, ok := limitLit.Value.(*plan.Literal_U64Val)
-	if !ok {
-		return req, false, moerr.NewInvalidInputNoCtx("vector index result limit is not uint64")
-	}
-	req = requestForValues(spec, []byte(queryLit.GetVecVal()), spec.QueryVector.Typ, limit.U64Val, identity)
+	req = requestForValues(spec, payload, spec.QueryPayload.Typ, limit, identity)
+	req.QueryIsNull = queryLit.Isnull
 	req.CollectExplainDiagnostics = true
 	req.MembershipFilter = append([]byte(nil), membership...)
 	req.HasMembershipFilter = hasMembership
 	req.MembershipFilterRequired = membershipRequired
-	if spec.FirstRoundLimit != nil {
-		lit := spec.FirstRoundLimit.GetLit()
-		if lit == nil || lit.Isnull {
-			return searchplugin.Request{}, false,
-				moerr.NewInvalidInputNoCtx("vector index first-round limit did not fold at execution")
-		}
-		value, valueOK := lit.Value.(*plan.Literal_U64Val)
-		if !valueOK {
-			return searchplugin.Request{}, false,
-				moerr.NewInvalidInputNoCtx("vector index first-round limit is not uint64")
-		}
-		req.FirstRoundLimit = value.U64Val
-		req.HasFirstRound = true
+	if len(spec.AlgoExprs) != len(spec.AlgoExprNames) {
+		return searchplugin.Request{}, false,
+			moerr.NewInvalidInputNoCtx("vector index scan algorithm expressions are not all named")
 	}
-	return req, true, nil
+	for i, expr := range spec.AlgoExprs {
+		lit := expr.GetLit()
+		if lit == nil {
+			return searchplugin.Request{}, false, moerr.NewInvalidInputNoCtxf(
+				"vector index algorithm expression %s did not fold at execution", spec.AlgoExprNames[i])
+		}
+		req.AlgoValues = append(req.AlgoValues, searchplugin.AlgoValue{Name: spec.AlgoExprNames[i], Value: lit})
+	}
+	return req, !queryLit.Isnull, nil
 }
 
 func requestForValues(
-	spec *plan.VectorIndexScan,
+	spec *plan.IndexSearchScan,
 	query []byte,
 	queryType plan.Type,
 	resultLimit uint64,
@@ -292,10 +350,10 @@ func requestForValues(
 ) searchplugin.Request {
 	candidateBudget := resultLimit
 	if spec.PostFilterOverFetch {
-		candidateBudget = overfetch.FilteredPostModeLimit(resultLimit)
+		candidateBudget = postFilterCandidateBudget(spec, resultLimit)
 	}
 	return searchplugin.Request{
-		QueryVector:     query,
+		QueryPayload:    query,
 		QueryType:       queryType,
 		ResultLimit:     resultLimit,
 		CandidateBudget: candidateBudget,
@@ -303,4 +361,17 @@ func requestForValues(
 		DistanceRange:   spec.DistanceRange,
 		Identity:        identity,
 	}
+}
+
+// postFilterCandidateBudget returns the candidate budget the search plugin of
+// spec sizes for a post-filtered result of resultLimit rows.
+func postFilterCandidateBudget(spec *plan.IndexSearchScan, resultLimit uint64) uint64 {
+	if p, ok := indexplugin.Get(spec.GetIndex().GetIndexAlgo()); ok {
+		if searcher, ok := p.(indexplugin.SearchPlugin); ok {
+			if budget, ok := searcher.Search().(searchplugin.CandidateBudgetHooks); ok {
+				return budget.PostFilterCandidateBudget(resultLimit)
+			}
+		}
+	}
+	return overfetch.FilteredPostModeLimit(resultLimit)
 }

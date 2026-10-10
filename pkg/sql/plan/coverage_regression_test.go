@@ -59,8 +59,8 @@ func TestApplyIndicesForSortUsingIvfflat_PostModeOffsetCompensationUsesCompensat
 	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
-	require.Equal(t, uint64(3), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
-	require.True(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
+	require.Equal(t, uint64(3), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.True(t, tableFuncNode.IndexSearchScan.GetPostFilterOverFetch())
 }
 
 func TestApplyIndicesForSortUsingIvfflat_DistancePredicateOwnership(t *testing.T) {
@@ -122,10 +122,10 @@ func TestApplyIndicesForSortUsingIvfflat_DistancePredicateOwnership(t *testing.T
 
 			tableFuncNode := findIvfTableFunctionNode(builder, vecCtx.projNode.Children[0])
 			require.NotNil(t, tableFuncNode)
-			require.Equal(t, uint64(3), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+			require.Equal(t, uint64(3), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 			if tc.lossy {
-				require.Nil(t, tableFuncNode.VectorIndexScan.GetDistanceRange())
-				require.True(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
+				require.Nil(t, tableFuncNode.IndexSearchScan.GetDistanceRange())
+				require.True(t, tableFuncNode.IndexSearchScan.GetPostFilterOverFetch())
 				require.Equal(t, original, scanNode.FilterList)
 				if tc.mode != "post" {
 					var membership *planpb.Node
@@ -149,8 +149,8 @@ func TestApplyIndicesForSortUsingIvfflat_DistancePredicateOwnership(t *testing.T
 					require.Nil(t, membership.Offset)
 				}
 			} else {
-				require.NotNil(t, tableFuncNode.VectorIndexScan.GetDistanceRange().GetUpperBound())
-				require.False(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
+				require.NotNil(t, tableFuncNode.IndexSearchScan.GetDistanceRange().GetUpperBound())
+				require.False(t, tableFuncNode.IndexSearchScan.GetPostFilterOverFetch())
 				require.Empty(t, scanNode.FilterList)
 			}
 		})
