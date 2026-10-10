@@ -31,13 +31,45 @@ select count(*) from t;
 
 create index idx using cagra on t(b) op_type 'vector_l2_ops' ASYNC;
 
+-- Capture the committed tail generation after CREATE and before the
+-- second 10k load. The readiness gate must observe its advancement.
+set @stbl = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'idx' and algo = 'cagra' and algo_table_type = 'cagra_index'
+      and table_id in (
+          select rel_id from mo_catalog.mo_tables
+          where reldatabase = database() and relname = 't'
+      )
+    limit 1
+);
+set @capture_tail_sql = concat(
+    'select coalesce(max(chunk_id), -1) into @tail_baseline from `',
+    database(), '`.`', @stbl,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_tail from @capture_tail_sql;
+execute capture_tail;
+deallocate prepare capture_tail;
+
 -- Phase 2: 10k more real rows arrive after CREATE — CDC writes them to the
 -- tag=1 overflow on top of the InitSQL-built tag=0 graph.
 load data infile {'filepath'='$resources/vector/sift128_base_10k_2.csv.gz', 'compression'='gzip'} into table t fields terminated by ':' parallel 'true';
 select count(*) from t;
 
--- One wait for the InitSQL build + the full CDC catch-up of both files.
-select sleep(30);
+
+-- Wait only on the committed CDC tail. The tail row and watermark are
+-- written in one transaction, so this storage-only poll never executes
+-- a vector search while cache invalidation is still in flight.
+set @wait_tail_sql = concat(
+    'select coalesce(max(chunk_id), -1) > @tail_baseline as cdc_tail_ready from `',
+    database(), '`.`', @stbl,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_tail from @wait_tail_sql;
+-- @wait_expect(1, 120)
+execute wait_tail;
+deallocate prepare wait_tail;
+
 
 -- Queries 1-2: members of the first file → main-index (tag=0) exact hits.
 select a from t order by l2_distance(b, "[14, 2, 0, 0, 0, 2, 42, 55, 9, 1, 0, 0, 18, 100, 77, 32, 89, 1, 0, 0, 19, 85, 15, 68, 52, 4, 0, 0, 0, 0, 2, 28, 34, 13, 5, 12, 49, 40, 39, 37, 24, 2, 0, 0, 34, 83, 88, 28, 119, 20, 0, 0, 41, 39, 13, 62, 119, 16, 2, 0, 0, 0, 10, 42, 9, 46, 82, 79, 64, 19, 2, 5, 10, 35, 26, 53, 84, 32, 34, 9, 119, 119, 21, 3, 3, 11, 17, 14, 119, 25, 8, 5, 0, 0, 11, 22, 23, 17, 42, 49, 17, 12, 5, 5, 12, 78, 119, 90, 27, 0, 4, 2, 48, 92, 112, 85, 15, 0, 2, 7, 50, 36, 15, 11, 1, 0, 0, 7]") ASC LIMIT 1;
