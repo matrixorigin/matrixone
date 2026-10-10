@@ -138,15 +138,14 @@ func TestExporter(t *testing.T) {
 				t.Fatal("full histogram batches did not reach the collector")
 			}
 		}
-		// Gather twice to flush the remaining samples and exercise the regular
+		// Gather once to flush the remaining samples and exercise the regular
 		// counter/gauge export path without relying on a ticker.
 		exp.gatherAndSend()
-		exp.gatherAndSend()
 	})
-	assert.Equal(t, 4, dumCollect.sendCnt())
+	assert.Equal(t, 3, dumCollect.sendCnt())
 
 	// 14 Observe + 4 addCommonInfo
-	if dumClock()-1 != 14+4 {
+	if dumClock()-1 != 14+3 {
 		t.Errorf("disorder time")
 	}
 

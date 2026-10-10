@@ -228,6 +228,29 @@ func setCurrentRestoreObject(
 	return sql
 }
 
+func TestMaterializedViewRestoreClassification(t *testing.T) {
+	sql := buildTableInfoListSQL("db", "mv", 42, 7)
+	require.NotContains(t, sql, "create materialized view")
+
+	mv := &tableInfo{
+		typ:     materializedView,
+		tblName: "mv",
+		viewDef: `{"Stmt":"create materialized view mv as select 1"}`,
+	}
+	createSQL, ok := materializedViewCreateSQL(mv)
+	require.True(t, ok)
+	require.Equal(t, "create materialized view mv as select 1", createSQL)
+	require.True(t, isViewLike(mv))
+	require.True(t, isMaterializedViewState(&tableInfo{tblName: "__mo_mv_state_mv"}))
+	require.False(t, isMaterializedViewState(&tableInfo{tblName: "mv"}))
+	require.Equal(t, "drop materialized view if exists `mv`", dropRestoreViewIfExistsSQL(mv))
+
+	ordinary := &tableInfo{typ: view, tblName: "v", viewDef: `{"Stmt":"create view v as select 'create materialized view x'"}`}
+	_, ok = materializedViewCreateSQL(ordinary)
+	require.False(t, ok)
+	require.Equal(t, "drop view if exists `v`", dropRestoreViewIfExistsSQL(ordinary))
+}
+
 func TestRestoreSequenceState(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), uint32(10))
 	const createSQL = "create sequence `dst-db`.`seq` as BIGINT increment by 3 minvalue 1 maxvalue 100 start with 7 no cycle"

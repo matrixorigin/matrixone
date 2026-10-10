@@ -1595,7 +1595,10 @@ func restoreToDatabaseOrTableWithPitr(
 		}
 
 		// skip view
-		if tblInfo.typ == view {
+		if isMaterializedViewState(tblInfo) {
+			continue
+		}
+		if isViewLike(tblInfo) {
 			viewMap[key] = tblInfo
 			continue
 		}
@@ -1741,6 +1744,9 @@ func getTableInfoWithPitr(
 						return getStringColsList(queryCtx, bh, sql, colIndices...)
 					},
 				)
+			}
+			if sql, ok := materializedViewCreateSQL(tblInfo); ok {
+				return sql, nil
 			}
 			return getCreateTableSqlWithTs(ctx, bh, ts, tblInfo.dbName, tblInfo.tblName)
 		},
@@ -2003,7 +2009,7 @@ func restoreViewsWithPitr(
 				continue
 			}
 
-			if err = bh.Exec(ctx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, dropRestoreViewIfExistsSQL(tblInfo)); err != nil {
 				return err
 			}
 

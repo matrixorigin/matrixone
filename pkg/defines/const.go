@@ -144,7 +144,8 @@ const (
 	MORPCVersion106    int64 = 106 // CDC durable target identity and generation-aware task admission
 	MORPCVersion107    int64 = 107 // functional-index metadata and generated-key maintenance
 	MORPCVersion108    int64 = 108 // isolated user-variable NULL regexp history in connection migration
-	MORPCLatestVersion       = MORPCVersion108
+	MORPCVersion109    int64 = 109 // materialized-view ISCP capability and durable envelope
+	MORPCLatestVersion       = MORPCVersion109
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

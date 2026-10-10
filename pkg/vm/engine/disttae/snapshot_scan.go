@@ -120,7 +120,10 @@ func ScanSnapshotWithCurrentRanges(
 		return err
 	}
 	currentTS := types.TimestampToTS(tbl.db.op.SnapshotTS())
-	tombstones, err := collectSnapshotScanTombstones(pState, currentTS)
+	// In-memory tombstones become an unconditional row mask. Collect only
+	// tombstones visible at the requested snapshot; later deletes must not
+	// erase historical rows while reconstructing an incremental delete.
+	tombstones, err := collectSnapshotScanTombstones(pState, snapshotTS)
 	if err != nil {
 		return err
 	}

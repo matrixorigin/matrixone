@@ -28,6 +28,7 @@ import (
 	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -889,15 +890,14 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 				Name:       name,
 				OriginName: attr.Attr.Name,
 				Typ: plan.Type{
-					Id:               int32(attr.Attr.Type.Oid),
-					Width:            attr.Attr.Type.Width,
-					Scale:            attr.Attr.Type.Scale,
-					AutoIncr:         attr.Attr.AutoIncrement,
-					Table:            tblItem.Name,
-					NotNullable:      attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-					Enumvalues:       attr.Attr.EnumVlaues,
-					Charset:          uint32(attr.Attr.Type.Charset),
-					CollationVersion: uint32(attr.Attr.Type.CollationVersion),
+					Id:          int32(attr.Attr.Type.Oid),
+					Width:       attr.Attr.Type.Width,
+					Scale:       attr.Attr.Type.Scale,
+					AutoIncr:    attr.Attr.AutoIncrement,
+					Table:       tblItem.Name,
+					NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+					Enumvalues:  attr.Attr.EnumVlaues,
+					Charset:     uint32(attr.Attr.Type.Charset),
 				},
 				Primary:      attr.Attr.Primary,
 				Default:      attr.Attr.Default,
@@ -1025,7 +1025,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 
 	// IsTemporary is session state, not a projection of the durable marker.
 	// The compiler sets it only after resolving a session's temporary alias.
-	return &plan.TableDef{
+	result := &plan.TableDef{
 		TblId:            tblItem.Id,
 		Name:             tblItem.Name,
 		DbName:           tblItem.DatabaseName,
@@ -1052,5 +1052,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		KeyFormat:        tblItem.ExtraInfo.GetKeyFormat(),
 		Checks:           tblItem.ExtraInfo.GetChecks(),
 		LogicalId:        tblItem.LogicalId,
-	}, tableDef
+	}
+	mvdefinition.PlannerKind(result)
+	return result, tableDef
 }

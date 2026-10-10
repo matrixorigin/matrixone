@@ -517,6 +517,9 @@ func validateTableDumpSchema(def *plan.TableDef) error {
 	if def.IsTemporary {
 		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with temporary tables")
 	}
+	if sqlplan.IsMaterializedViewTableDef(def) || sqlplan.IsMaterializedViewStateTableDef(def) {
+		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with materialized view target or state relations")
+	}
 	switch def.TableType {
 	case catalog.SystemExternalRel, catalog.SystemSourceRel:
 		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with external or source tables")
