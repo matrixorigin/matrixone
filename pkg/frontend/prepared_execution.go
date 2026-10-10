@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -84,19 +85,36 @@ func preparedExecutionBindings(ctx context.Context, values []any, protocolTypes 
 // inspect spelling mark their plan value-dependent instead of extending this
 // key with value hashes or parser-specific categories.
 func preparedExecutionBindingKey(bindings []plan2.PreparedSourceBinding, values []any) string {
+	// Keep the existing framed identity without allocating formatting arguments.
 	var key strings.Builder
+	var number [20]byte
+	writeInt := func(value int64, separator byte) {
+		key.Write(strconv.AppendInt(number[:0], value, 10))
+		key.WriteByte(separator)
+	}
+	writeBool := func(value bool, separator byte) {
+		key.WriteString(strconv.FormatBool(value))
+		key.WriteByte(separator)
+	}
 	writeType := func(typ types.Type) {
-		fmt.Fprintf(&key, "%d:%d:%d:%d;", typ.Oid, typ.Charset, typ.Width, typ.Scale)
+		writeInt(int64(typ.Oid), ':')
+		writeInt(int64(typ.Charset), ':')
+		writeInt(int64(typ.Width), ':')
+		writeInt(int64(typ.Scale), ';')
 	}
 	for i, binding := range bindings {
-		fmt.Fprintf(&key, "%d;", binding.Position)
+		writeInt(int64(binding.Position), ';')
 		writeType(binding.Type)
 		writeType(binding.NumericType)
 		writeType(binding.BitCountType)
 		if param, ok := values[i].(plan2.ParamValue); ok {
-			fmt.Fprintf(&key, "%d:%t:%t:%t:%d:%t:%t;", param.PrepareParamKind,
-				param.IsBinaryProtocol, param.IsBin, param.IsBinaryString,
-				param.RuntimeStringDomain, param.EnableNumericPrefix, param.Value == nil)
+			writeInt(int64(param.PrepareParamKind), ':')
+			writeBool(param.IsBinaryProtocol, ':')
+			writeBool(param.IsBin, ':')
+			writeBool(param.IsBinaryString, ':')
+			writeInt(int64(param.RuntimeStringDomain), ':')
+			writeBool(param.EnableNumericPrefix, ':')
+			writeBool(param.Value == nil, ';')
 		}
 	}
 	return key.String()

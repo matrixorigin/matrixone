@@ -274,4 +274,28 @@ set experimental_ivf_index = 0;
 -- percentile_disc sorts with unaccounted scratch: no vector type, as for vecf32
 select percentile_disc(0.5) within group (order by a) from t;
 select percentile_disc(0.5) within group (order by c) from t;
+-- a cell decodes as At in the full-unit kernels and the tail: a 1.4e-45 element times a 1e30
+-- query is one representable term, equal to the product of the decoded vecf32
+create table sub1 (id int primary key, v vecf4(1));
+create table q1 (q vecf32(1));
+insert into q1 values ('[1e30]');
+insert into sub1 values (1, '[1.4e-45]'), (2, '[-1.4e-45]'), (3, '[0]'), (4, '[1.5]');
+create table sub16 (id int primary key, v vecf4(16));
+create table q16 (q vecf32(16));
+insert into q16 values ('[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]');
+insert into sub16 values (1, '[1.4e-45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (2, '[-1.4e-45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (3, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.4e-45]'), (4, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1.4e-45]'), (5, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (6, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.5]');
+create table sub17 (id int primary key, v vecf4(17));
+create table q17 (q vecf32(17));
+insert into q17 values ('[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]');
+insert into sub17 values (1, '[1.4e-45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (2, '[-1.4e-45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (3, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.4e-45]'), (4, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1.4e-45]'), (5, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (6, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.5]');
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(1)), q) as same, inner_product(v, q) < 0 as neg from sub1, q1 order by id;
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(16)), q) as same, inner_product(v, q) < 0 as neg from sub16, q16 order by id;
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(17)), q) as same, inner_product(v, q) < 0 as neg from sub17, q17 order by id;
+select mo_ctl('dn', 'flush', 'vecblock_db.sub1');
+select mo_ctl('dn', 'flush', 'vecblock_db.sub16');
+select mo_ctl('dn', 'flush', 'vecblock_db.sub17');
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(1)), q) as same, inner_product(v, q) < 0 as neg from sub1, q1 order by id;
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(16)), q) as same, inner_product(v, q) < 0 as neg from sub16, q16 order by id;
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(17)), q) as same, inner_product(v, q) < 0 as neg from sub17, q17 order by id;
+
 drop database vecblock_db;

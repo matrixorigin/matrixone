@@ -519,4 +519,93 @@ select percentile_disc(0.5) within group (order by a) from t;
 invalid argument aggregate function percentile_disc, bad value [VECF8 DECIMAL64]
 select percentile_disc(0.5) within group (order by c) from t;
 invalid argument aggregate function percentile_disc, bad value [VECF32 DECIMAL64]
+create table sub1 (id int primary key, v vecf4(1));
+create table q1 (q vecf32(1));
+insert into q1 values ('[1e30]');
+insert into sub1 values (1, '[1.4e-45]'), (2, '[-1.4e-45]'), (3, '[0]'), (4, '[1.5]');
+create table sub16 (id int primary key, v vecf4(16));
+create table q16 (q vecf32(16));
+insert into q16 values ('[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]');
+insert into sub16 values (1, '[1.4e-45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (2, '[-1.4e-45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (3, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.4e-45]'), (4, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1.4e-45]'), (5, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (6, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.5]');
+create table sub17 (id int primary key, v vecf4(17));
+create table q17 (q vecf32(17));
+insert into q17 values ('[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]');
+insert into sub17 values (1, '[1.4e-45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (2, '[-1.4e-45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (3, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.4e-45]'), (4, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1.4e-45]'), (5, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (6, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.5]');
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(1)), q) as same, inner_product(v, q) < 0 as neg from sub1, q1 order by id;
+➤ id[4,32,0]  ¦  same[-7,1,0]  ¦  neg[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  1  ¦  0  𝄀
+4  ¦  1  ¦  1
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(16)), q) as same, inner_product(v, q) < 0 as neg from sub16, q16 order by id;
+➤ id[4,32,0]  ¦  same[-7,1,0]  ¦  neg[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  1  ¦  1  𝄀
+4  ¦  1  ¦  0  𝄀
+5  ¦  1  ¦  0  𝄀
+6  ¦  1  ¦  1
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(17)), q) as same, inner_product(v, q) < 0 as neg from sub17, q17 order by id;
+➤ id[4,32,0]  ¦  same[-7,1,0]  ¦  neg[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  1  ¦  1  𝄀
+4  ¦  1  ¦  0  𝄀
+5  ¦  1  ¦  0  𝄀
+6  ¦  1  ¦  1
+select mo_ctl('dn', 'flush', 'vecblock_db.sub1');
+➤ mo_ctl(dn, flush, vecblock_db.sub1)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'flush', 'vecblock_db.sub16');
+➤ mo_ctl(dn, flush, vecblock_db.sub16)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'flush', 'vecblock_db.sub17');
+➤ mo_ctl(dn, flush, vecblock_db.sub17)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(1)), q) as same, inner_product(v, q) < 0 as neg from sub1, q1 order by id;
+➤ id[4,32,0]  ¦  same[-7,1,0]  ¦  neg[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  1  ¦  0  𝄀
+4  ¦  1  ¦  1
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(16)), q) as same, inner_product(v, q) < 0 as neg from sub16, q16 order by id;
+➤ id[4,32,0]  ¦  same[-7,1,0]  ¦  neg[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  1  ¦  1  𝄀
+4  ¦  1  ¦  0  𝄀
+5  ¦  1  ¦  0  𝄀
+6  ¦  1  ¦  1
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(17)), q) as same, inner_product(v, q) < 0 as neg from sub17, q17 order by id;
+➤ id[4,32,0]  ¦  same[-7,1,0]  ¦  neg[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  1  ¦  1  𝄀
+4  ¦  1  ¦  0  𝄀
+5  ¦  1  ¦  0  𝄀
+6  ¦  1  ¦  1
 drop database vecblock_db;

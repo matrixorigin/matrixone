@@ -84,7 +84,9 @@ reference produce for the same input:
   zero/nonzero classification, and the vector's direction — is a property of the cell, agreed on the
   CPU and the tensor cores within tolerance and not an artifact of which executor runs (self cosine
   distance is 1 for the zero vector, ~0 for a nonzero one). This is a decode-value rule at the type
-  owner, not a per-query fallback. The agreement domain is every
+  owner, not a per-query fallback. Every CPU consumer applies it: `At`, `Dequantize`, and the generated
+  full-unit metric kernels, which decode a vecf4 unit whose `global × blockScale` is below the float32
+  normal range through `At` (`TestVecBlockMetricsUseAtDecode`; BVT `dtype/vecblock`). The agreement domain is every
   value representable as a float32 — which is every encoder-produced cell, since the encoder's inputs
   and outputs are float32 (nonzero magnitudes are ≥ 2^-149). A hand-built cell whose fully-scaled
   value is **below** float32 range (e.g. 2^-159) correctly rounds to 0 on the CPU (it returns one

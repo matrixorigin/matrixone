@@ -103,6 +103,7 @@ func NewDataSync(
 		withTruncateInterval(truncateInterval),
 	)
 	if err := ss.stopper.RunNamedTask("data-syncer", ss.start); err != nil {
+		_ = ss.Close()
 		return nil, err
 	}
 	return ss, nil
