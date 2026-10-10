@@ -482,6 +482,9 @@ func applyTextCharsetToPlanType(typ *plan.Type, charset uint32) {
 	switch types.T(typ.Id) {
 	case types.T_char, types.T_varchar, types.T_text:
 		typ.Charset = charset
+		if types.IsUnicodeCollation(uint8(charset)) {
+			typ.CollationVersion = uint32(types.CollationVersionV1)
+		}
 	}
 }
 
@@ -512,6 +515,13 @@ func charsetForName(name string) (uint32, bool) {
 }
 
 func collationForName(name string) (uint32, bool) {
+	// Native Unicode collations are executable only through their versioned
+	// identity. Resolve them directly instead of the legacy SQL admission path,
+	// which intentionally maps compatible spellings such as utf8mb4_0900_ai_ci
+	// to general_ci.
+	if definition, ok := collation.Lookup(name); ok && definition.Semantics == collation.UCA400 {
+		return uint32(definition.Identity), true
+	}
 	identity, ok := collation.ResolveDDLCollation(name)
 	return uint32(identity), ok
 }
@@ -523,10 +533,7 @@ func unsupportedCollationError(ctx context.Context, name string) error {
 	// keeping the rejected spelling would falsely promise MySQL UCA semantics.
 	var replacement string
 	switch strings.ToLower(name) {
-	case "utf8_unicode_ci", "utf8mb3_unicode_ci":
-		replacement = "utf8_general_ci"
-	case "utf8mb4_unicode_ci",
-		"utf8mb4_de_pb_0900_ai_ci", "utf8mb4_is_0900_ai_ci", "utf8mb4_lv_0900_ai_ci":
+	case "utf8mb4_de_pb_0900_ai_ci", "utf8mb4_is_0900_ai_ci", "utf8mb4_lv_0900_ai_ci":
 		replacement = "utf8mb4_general_ci"
 	case "utf8mb4_0900_bin":
 		replacement = "utf8mb4_bin"
@@ -544,11 +551,26 @@ func applyTableDefaultCharsetToPlanType(typ *plan.Type, charset uint32) {
 }
 
 func charsetAndCollationCompatible(charset, collation string) bool {
-	charset = canonicalCharsetName(charset)
+	rawCharset := strings.ToLower(charset)
 	collation = strings.ToLower(collation)
-	if charset == "binary" || collation == "binary" {
-		return charset == collation
+	if rawCharset == "binary" || collation == "binary" {
+		return rawCharset == collation
 	}
+	// The native UCA 4.0.0 identities retain MySQL's distinct utf8mb3 and
+	// utf8mb4 repertoire contracts. Do not let the compatibility canonicalizer
+	// collapse them into one general_ci family.
+	if separator := strings.IndexByte(collation, '_'); separator > 0 {
+		collationCharset := collation[:separator]
+		if strings.HasSuffix(collation, "_unicode_ci") {
+			switch collationCharset {
+			case "utf8", "utf8mb3":
+				return rawCharset == "utf8" || rawCharset == "utf8mb3"
+			case "utf8mb4":
+				return rawCharset == "utf8mb4"
+			}
+		}
+	}
+	charset = canonicalCharsetName(rawCharset)
 	if separator := strings.IndexByte(collation, '_'); separator > 0 {
 		return canonicalCharsetName(collation[:separator]) == charset
 	}
