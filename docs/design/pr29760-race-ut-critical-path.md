@@ -135,12 +135,13 @@ and cover cross-process slots, exclusive competition, cancellation and reuse.
 Run affected normal/race packages and incremental static checks; reuse unchanged
 embed lifecycle evidence. No new cluster fixture or SQL BVT is needed.
 
-The extra slot locks and retry work apply only to the bounded issues pool; other
-test lifecycles keep the existing exclusive admission path. Existing subset
-measurements motivate testing the two-process candidate. Matched complete
+The extra slot locks and retry work apply to either explicitly enabled process
+pool; other test lifecycles keep the existing exclusive admission path. Existing
+subset measurements motivate testing the two-process candidate. Matched complete
 waves must record elapsed time, CPU throttling, peak memory, and OOM/max events,
 and establish the combined resource benefit. If evidence violates the runner budget,
-`UT_ISSUES_BATCH_PARALLEL=1` is the immediate serial rollback.
+`UT_ISSUES_BATCH_PARALLEL=1 UT_EMBEDDED_PACKAGE_PARALLEL=1` is the immediate
+serial rollback.
 
 ## Original PR29760 design (v4)
 
