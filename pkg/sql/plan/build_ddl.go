@@ -2141,7 +2141,7 @@ func IsMaterializedViewTableDef(def *plan.TableDef) bool {
 	// Ordinary tables carry CREATE SQL too. Only raw View relations are
 	// legacy candidates for SQL classification; ordinary prepared reads must
 	// not reparse their DDL on every execution.
-	if def.TableType != catalog.SystemViewRel {
+	if def.TableType != catalog.SystemViewRel && def.TableType != "" {
 		return false
 	}
 	return isExactMaterializedViewCreateSQL(def.Createsql) ||
