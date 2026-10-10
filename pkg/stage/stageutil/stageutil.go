@@ -43,6 +43,10 @@ import (
 // because StageLoadCatalog serves repeat lookups from proc's stage cache it spins with no SQL and
 // no I/O — the CN request hangs rather than failing (#26890).
 func ExpandSubStage(s stage.StageDef, proc *process.Process) (stage.StageDef, error) {
+	if err := ensureStageEnabled(s); err != nil {
+		return stage.StageDef{}, err
+	}
+
 	// Stage names already expanded on this chain, in order, for both the cycle test and the error
 	// message. The walk is bounded by the number of distinct stages: every hop consumes one name.
 	visited := make(map[string]struct{})
@@ -72,6 +76,13 @@ func ExpandSubStage(s stage.StageDef, proc *process.Process) (stage.StageDef, er
 	}
 
 	return s, nil
+}
+
+func ensureStageEnabled(s stage.StageDef) error {
+	if strings.EqualFold(strings.TrimSpace(s.Status), "disabled") {
+		return moerr.NewBadConfigf(context.TODO(), "stage %s is disabled", s.Name)
+	}
+	return nil
 }
 
 func runSql(proc *process.Process, sql string) (executor.Result, error) {
@@ -104,6 +115,9 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s stage.StageDef
 	cache := proc.GetStageCache()
 	s, ok := cache.Get(stagename)
 	if ok {
+		if err = ensureStageEnabled(s); err != nil {
+			return stage.StageDef{}, err
+		}
 		return s, nil
 	}
 
@@ -148,6 +162,10 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s stage.StageDef
 
 	if reslist == nil {
 		return stage.StageDef{}, moerr.NewBadConfigf(context.TODO(), "Stage %s not found", stagename)
+	}
+
+	if err = ensureStageEnabled(reslist[0]); err != nil {
+		return stage.StageDef{}, err
 	}
 
 	cache.Set(stagename, reslist[0])
