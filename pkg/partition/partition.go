@@ -134,6 +134,8 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 	if !vec.IsConst() {
 		var n bool
 		var v []byte
+		typ := *vec.GetType()
+		unicode := types.IsUnicodeCollation(typ.Charset)
 
 		vs, area := vector.MustVarlenaRawData(vec)
 		nsp := vec.GetNulls()
@@ -144,7 +146,11 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 				if n != isNull {
 					diffs[i] = true
 				} else if !isNull {
-					diffs[i] = diffs[i] || !(bytes.Equal(v, w))
+					if unicode {
+						diffs[i] = diffs[i] || types.CompareStringValues(typ, v, w) != 0
+					} else {
+						diffs[i] = diffs[i] || !(bytes.Equal(v, w))
+					}
 				}
 				// else: both NULL → equal, preserve diffs[i]
 				n = isNull
@@ -153,7 +159,11 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 		} else {
 			for i, sel := range sels {
 				w := vs[sel].GetByteSlice(area)
-				diffs[i] = diffs[i] || !(bytes.Equal(v, w))
+				if unicode {
+					diffs[i] = diffs[i] || types.CompareStringValues(typ, v, w) != 0
+				} else {
+					diffs[i] = diffs[i] || !(bytes.Equal(v, w))
+				}
 				v = w
 			}
 		}

@@ -129,6 +129,18 @@ func TestCompare(t *testing.T) {
 	}
 }
 
+func TestNewOrderUsesPlanUnicodeTypeWhenVectorMetadataIsPhysical(t *testing.T) {
+	mp := mpool.MustNewZero()
+	physical := vector.NewVec(types.T_varchar.ToType())
+	defer physical.Free(mp)
+	require.NoError(t, vector.AppendStringList(physical, []string{"A", "a"}, nil, mp))
+	semantic := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	c := NewOrder(semantic, false, false)
+	c.Set(0, physical)
+	c.Set(1, physical)
+	require.Equal(t, 0, c.Compare(0, 1, 0, 1))
+}
+
 func TestNewOrderJSONUsesSQLComparison(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_json.ToType())

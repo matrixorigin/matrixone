@@ -86,11 +86,24 @@ func StatementInfoNew(i table.Item, ctx context.Context) table.Item {
 		stmt.AggrCount = 0
 		// fixme: StmtBuilder maybe not best choose
 		stmt.StmtBuilder.Reset()
-		stmt.StmtBuilder.Write(s.Statement)
+		appendStatementText(&stmt.StmtBuilder, util.UnsafeBytesToString(s.Statement))
 
 		return stmt
 	}
 	return nil
+}
+
+// Retain only the raw prefix needed by FillRow; the aggregate header guarantees
+// that a saturated body is marked as truncated without another state flag.
+func appendStatementText(builder *strings.Builder, text string) {
+	remaining := db_holder.StatementInfoTextLimit - builder.Len()
+	if remaining <= 0 {
+		return
+	}
+	if len(text) > remaining {
+		text = text[:remaining]
+	}
+	builder.WriteString(text)
 }
 
 func StatementInfoUpdate(ctx context.Context, existing, new table.Item) {
@@ -118,8 +131,8 @@ func StatementInfoUpdate(ctx context.Context, existing, new table.Item) {
 	}
 	// update the stats
 	if GetTracerProvider().enableStmtMerge {
-		e.StmtBuilder.WriteString(";\n")
-		e.StmtBuilder.Write(n.Statement)
+		appendStatementText(&e.StmtBuilder, ";\n")
+		appendStatementText(&e.StmtBuilder, util.UnsafeBytesToString(n.Statement))
 	}
 	e.AggrCount += 1
 	e.Duration += n.Duration
@@ -492,20 +505,25 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(hostCol, table.StringField(s.Host))
 	row.SetColumnVal(dbCol, table.StringField(s.Database))
 	if s.AggrCount > 1 {
+		count := strconv.FormatInt(s.AggrCount, 10)
+		headerLen := len("/* ") + len(count) + len(" queries */ \n")
+		bodyBudget := db_holder.StatementInfoTextLimit - headerLen
 		if GetTracerProvider().enableStmtMerge {
-			Statement := "/* " + strconv.FormatInt(s.AggrCount, 10) + " queries */ \n" + s.StmtBuilder.String()
-			s.StmtBuilder.Reset()
-			row.SetColumnVal(stmtCol, table.StringField(Statement))
+			body := db_holder.CapStatementInfoText(s.StmtBuilder.String(), bodyBudget)
+			statement := "/* " + count + " queries */ \n" + body
+			row.SetColumnVal(stmtCol, table.StringField(statement))
 		} else {
+			body := db_holder.CapStatementInfoText(util.UnsafeBytesToString(s.Statement), bodyBudget)
 			s.StmtBuilder.Reset()
-			s.StmtBuilder.Grow(len(s.Statement) + 32)
-			s.StmtBuilder.WriteString("/* " + strconv.FormatInt(s.AggrCount, 10) + " queries */ \n")
-			s.StmtBuilder.Write(s.Statement)
+			s.StmtBuilder.Grow(len(body) + headerLen)
+			s.StmtBuilder.WriteString("/* " + count + " queries */ \n")
+			s.StmtBuilder.WriteString(body)
 			row.SetColumnVal(stmtCol, table.StringField(s.StmtBuilder.String()))
 			s.StmtBuilder.Reset()
 		}
 	} else {
-		row.SetColumnVal(stmtCol, table.StringField(util.UnsafeBytesToString(s.Statement)))
+		statement := db_holder.CapStatementInfoText(util.UnsafeBytesToString(s.Statement), db_holder.StatementInfoTextLimit)
+		row.SetColumnVal(stmtCol, table.StringField(statement))
 	}
 	row.SetColumnVal(stmtTagCol, table.StringField(s.StatementTag))
 	row.SetColumnVal(sqlTypeCol, table.StringField(s.SqlSourceType))
@@ -523,7 +541,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 			errCode = moError.ErrorCode()
 		}
 		row.SetColumnVal(errCodeCol, table.StringField(fmt.Sprintf("%d", errCode)))
-		row.SetColumnVal(errorCol, table.StringField(fmt.Sprintf("%s", s.Error)))
+		row.SetColumnVal(errorCol, table.StringField(db_holder.CapStatementInfoText(fmt.Sprintf("%s", s.Error), db_holder.StatementInfoTextLimit)))
 	}
 	execPlan := s.ExecPlan2Json(ctx)
 	if s.AggrCount > 0 && s.statsArray.GetVersion() < statistic.StatsArrayVersion6 {
@@ -605,18 +623,15 @@ var noExecPlan = []byte(`{}`)
 // ExecPlan2Json return ExecPlan Serialized json-str //
 // please used in s.mux.Lock()
 func (s *StatementInfo) ExecPlan2Json(ctx context.Context) []byte {
-	if s.jsonByte != nil {
-		goto endL
-	} else if s.ExecPlan == nil {
-		return noExecPlan
-	} else {
+	if s.jsonByte == nil {
+		if s.ExecPlan == nil {
+			return noExecPlan
+		}
 		s.jsonByte = s.ExecPlan.Marshal(ctx)
-		//if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
-		//	// get nil ExecPlan json-str
-		//	jsonByte, _, _ = s.SerializeExecPlan(ctx, nil, uuid.UUID(s.StatementID))
-		//}
 	}
-endL:
+	if len(s.jsonByte) > db_holder.StatementInfoTextLimit {
+		s.jsonByte = db_holder.StatementInfoPlanSummary(len(s.jsonByte))
+	}
 	return s.jsonByte
 }
 
