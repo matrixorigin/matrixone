@@ -31,15 +31,17 @@ type CreateView struct {
 	ColNames    IdentifierList
 	AsSource    *Select
 	IfNotExists bool
+	CheckOption string
 }
 
-func NewCreateView(replace bool, name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool) *CreateView {
+func NewCreateView(replace bool, name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool, checkOption string) *CreateView {
 	c := reuse.Alloc[CreateView](nil)
 	c.Replace = replace
 	c.Name = name
 	c.ColNames = colNames
 	c.AsSource = asSource
 	c.IfNotExists = ifNotExists
+	c.CheckOption = checkOption
 	return c
 }
 
@@ -68,6 +70,11 @@ func (node *CreateView) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(" as ")
 	node.AsSource.Format(ctx)
+	if node.CheckOption != "" && node.CheckOption != "NONE" {
+		ctx.WriteString(" with ")
+		ctx.WriteString(node.CheckOption)
+		ctx.WriteString(" check option")
+	}
 }
 
 func (node *CreateView) reset() {
@@ -84,3 +91,40 @@ func (node CreateView) TypeName() string { return "tree.CreateView" }
 
 func (node *CreateView) GetStatementType() string { return "Create View" }
 func (node *CreateView) GetQueryType() string     { return QueryTypeDDL }
+
+// WithViewColumnNames returns an AST copy that exposes the explicit column
+// names from CREATE/ALTER VIEW through a derived-table column list. The
+// original SELECT remains the inner query, so aliases referenced by ORDER BY,
+// HAVING, or other clauses keep their original scope and meaning. The outer
+// projection is explicit rather than a wildcard so a previously expanded
+// SELECT remains frozen. The wrapper also covers UNION output and does not
+// mutate any of the input AST nodes.
+func WithViewColumnNames(stmt *Select, colNames IdentifierList) *Select {
+	if stmt == nil || len(colNames) == 0 {
+		return stmt
+	}
+	inner := NewSubquery(stmt, false)
+	derived := NewAliasedTableExpr(
+		NewParenTableExpr(inner),
+		"__mo_view_definition",
+		colNames,
+	)
+	exprs := make(SelectExprs, len(colNames))
+	for i, colName := range colNames {
+		exprs[i] = SelectExpr{
+			Expr: NewUnresolvedName(
+				NewCStr("__mo_view_definition", 0),
+				NewCStr(string(colName), 0),
+			),
+			As: NewCStr(string(colName), 0),
+		}
+	}
+	return NewSelect(
+		&SelectClause{
+			Exprs: exprs,
+			From:  NewFrom(TableExprs{derived}),
+		},
+		nil,
+		nil,
+	)
+}

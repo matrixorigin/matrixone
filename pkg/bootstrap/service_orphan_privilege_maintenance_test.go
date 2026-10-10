@@ -510,6 +510,8 @@ func TestTenantUpgradePassRunsMaintenanceOnlyAfterFinalVersion(t *testing.T) {
 				nil,
 				executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 					switch {
+					case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+						return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:73"}`), nil
 					case strings.Contains(sql, "from mo_upgrade") && strings.Contains(sql, "where state = 1"):
 						return executor.Result{}, nil
 					case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
@@ -540,6 +542,8 @@ func TestAsyncUpgradeTenantTaskKeepsSingleMaintenanceOwner(t *testing.T) {
 		nil,
 		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 			switch {
+			case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+				return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:73"}`), nil
 			case strings.Contains(sql, "from mo_upgrade") && strings.Contains(sql, "where state = 1"):
 				return executor.Result{}, nil
 			case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):

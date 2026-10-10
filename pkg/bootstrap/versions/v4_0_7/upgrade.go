@@ -45,17 +45,16 @@ func init() {
 			UpgradeCluster:    versions.Yes,
 			UpgradeTenant:     versions.Yes,
 			VersionOffset:     uint32(len(tenantUpgEntries) + len(clusterUpgEntries)),
-			// The tenant migration WIDENS every existing index metadata table. A CN that
-			// predates these columns writes four positional values, which no longer matches a
-			// widened table -- so the widening must not begin while such a CN can still serve
-			// the tenant. This holds the tenant snapshot until every service reports the
-			// protocol that carries the new writer.
+			// The tenant migration publishes the v110 VIEWS definition as well as widening
+			// existing index metadata tables. Gate the whole handler before tenant
+			// enumeration: a final-version tenant created while the local coordinator or
+			// any CN is still below v110 would retain the predecessor VIEWS definition and
+			// never be revisited by this upgrade.
 			//
-			// It is only half the guarantee: the migration is asynchronous per tenant, so a
-			// new CN still meets not-yet-widened tables. That direction is handled on the
-			// write side, which names its columns and omits the provenance ones until the
-			// table has them (sqlexec.HasProvenanceColumns).
-			RequiredProtocolVersion: defines.MORPCVersion61,
+			// The entry-level guards remain in place for retries and for callers that invoke
+			// an entry directly. The write side still names columns and omits provenance
+			// values until each table has them (sqlexec.HasProvenanceColumns).
+			RequiredProtocolVersion: defines.MORPCVersion110,
 		},
 	}
 }
@@ -75,6 +74,13 @@ func (v *versionHandle) Prepare(ctx context.Context, txn executor.TxnExecutor, f
 
 func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
 	for _, upgEntry := range tenantUpgEntries {
+		if upgEntry.TableName == "VIEWS" &&
+			!InformationSchemaViewsAuthoringProtocolReady(txn) {
+			// The tenant version can advance while the durable VIEWS row remains
+			// on the predecessor definition. The bootstrap maintenance pass will
+			// retry this row after the local catalog admission fence is published.
+			continue
+		}
 		start := time.Now()
 		if err := upgEntry.Upgrade(txn, uint32(tenantID)); err != nil {
 			getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error",

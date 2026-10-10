@@ -25,7 +25,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func TestInformationSchemaMetadataViewsHideTemporaryTables(t *testing.T) {
@@ -117,7 +119,7 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 	assert.NotContains(t, InformationSchemaReferentialConstraintsDDL, "fk.table_id = fk_tbl.rel_id")
 	assert.Contains(t, InformationSchemaCheckConstraintsDDL, "JOIN __mo_visible_tables check_tbl")
 	assert.Contains(t, InformationSchemaViewsDDL, "JOIN __mo_visible_tables visible_tbl")
-	assert.Contains(t, InformationSchemaViewsDDL, "cast('NONE' as varchar(9)) AS `CHECK_OPTION`")
+	assert.Contains(t, InformationSchemaViewsDDL, "coalesce(mo_view_check_option(tbl.viewdef), 'NONE')")
 	assert.Contains(t, InformationSchemaPartitionsDDL, "FROM `__mo_visible_tables` `tbl`")
 	assert.Contains(t, InformationSchemaSchemataDDL, "FROM __mo_visible_databases")
 	assert.Contains(t, InformationSchemaSchemataDDL, "cast(NULL as char(0)) AS SQL_PATH")
@@ -295,17 +297,23 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		assertInformationSchemaInitSQLParses(t, ddl)
 	}
 	assert.Contains(t, latest, InformationSchemaColumnsV58DDL())
+	assert.Contains(t, latest, InformationSchemaViewsLegacyDDL)
+	assert.NotContains(t, strings.Join(latest, "\n"), "mo_view_definition(")
 	assert.NotContains(t, strings.Join(latest, "\n"), "mo_subscription_view_columns")
 	assert.Contains(t, strings.Join(latest, "\n"), "WHEN 3 then 'utf8mb4'")
 	for _, protocol := range []int64{defines.MORPCVersion58 + 1, defines.MORPCVersion94, defines.MORPCVersion95, defines.MORPCVersion96, defines.MORPCVersion97, defines.MORPCVersion98, defines.MORPCVersion99} {
 		assert.Contains(t, InitInformationSchemaSysTablesForProtocol(protocol), InformationSchemaColumnsV58DDL())
-		assert.NotContains(t, strings.Join(InitInformationSchemaSysTablesForProtocol(protocol), "\n"),
-			"mo_subscription_view_columns")
+		assert.NotContains(t, strings.Join(InitInformationSchemaSysTablesForProtocol(protocol), "\n"), "mo_subscription_view_columns")
+		assert.Contains(t, InitInformationSchemaSysTablesForProtocol(protocol), InformationSchemaViewsLegacyDDL)
 	}
 	assert.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion100), InformationSchemaColumnsV100DDL())
 	assert.NotContains(t, strings.Join(InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion100), "\n"),
 		InformationSchemaColumnsDDL)
 	assert.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion109), InformationSchemaColumnsDDL)
+	current := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion110)
+	assert.Equal(t, InitInformationSchemaSysTables, current)
+	assert.Contains(t, current, InformationSchemaColumnsDDL)
+	assert.Contains(t, strings.Join(current, "\n"), "mo_view_definition(")
 }
 
 func assertInformationSchemaInitSQLParses(t *testing.T, sql string) {
@@ -558,6 +566,33 @@ func TestInformationSchemaCharacterSetsData(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, ddlIndex, 0)
 	assert.Equal(t, ddlIndex+1, dataIndex)
+}
+
+func TestInformationSchemaViewsMetadata(t *testing.T) {
+	// VIEWS must not execute a second SQL-level regexp grammar for catalog rows.
+	assert.Contains(t, InformationSchemaViewsDDL, "mo_view_definition(tbl.viewdef)")
+	assert.Contains(t, InformationSchemaViewsDDL, "mo_view_check_option(tbl.viewdef)")
+	assert.Contains(t, InformationSchemaViewsDDL, "coalesce(mo_view_check_option(tbl.viewdef), 'NONE')")
+	assert.Contains(t, InformationSchemaViewsLegacyDDL,
+		"cast('NONE' as varchar(9)) AS `CHECK_OPTION`")
+	// Installing the upgrade view must not hide a real pre-upgrade viewdef that
+	// lacks the frozen field. The internal parser compatibility function supplies
+	// its SELECT definition without depending on lifecycle activation.
+	assert.NotContains(t, InformationSchemaViewsDDL, "json_extract_string(tbl.viewdef, '$.definition')")
+	assert.NotContains(t, InformationSchemaViewsDDL, "json_extract_string(tbl.viewdef, '$.check_option')")
+	assert.NotContains(t, InformationSchemaViewsDDL, "regexp_substr")
+	assert.NotContains(t, InformationSchemaViewsDDL, "tbl.rel_createsql AS `VIEW_DEFINITION`")
+	statements, err := mysql.Parse(context.Background(), InformationSchemaViewsDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		persisted := tree.StringWithOpts(statement, dialect.MYSQL, tree.WithSingleQuoteString(), tree.WithQuoteIdentifier())
+		roundTripped, err := mysql.Parse(context.Background(), persisted, 1)
+		assert.NoError(t, err, persisted)
+		for _, roundTrippedStatement := range roundTripped {
+			roundTrippedStatement.Free()
+		}
+		statement.Free()
+	}
 }
 
 func TestInformationSchemaDefaultCollationsMatchCanonicalDefinitions(t *testing.T) {
