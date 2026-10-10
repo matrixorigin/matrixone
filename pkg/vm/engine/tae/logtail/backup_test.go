@@ -19,6 +19,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,6 +38,61 @@ import (
 type failingReadFileService struct {
 	fileservice.FileService
 	failPath string
+}
+
+type persistThenErrorBackupFileService struct {
+	fileservice.FileService
+	persisted string
+}
+
+func (fs *persistThenErrorBackupFileService) Write(
+	ctx context.Context,
+	vector fileservice.IOVector,
+) error {
+	if err := fs.FileService.Write(ctx, vector); err != nil {
+		return err
+	}
+	fs.persisted = vector.FilePath
+	return errors.New("injected post-persist write failure")
+}
+
+func TestBackupDataSinkerCleanupAfterWriteError(t *testing.T) {
+	ctx := context.Background()
+	baseFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	fs := &persistThenErrorBackupFileService{FileService: baseFS}
+	mp := mpool.MustNewZero()
+	sinker := ckputil.NewDataSinker(
+		mp, fs, ioutil.WithMemorySizeThreshold(1))
+	defer func() {
+		require.NoError(t, sinker.Close())
+		mpool.DeleteMPool(mp)
+	}()
+
+	data := ckputil.NewObjectListBatch()
+	defer data.Clean(mp)
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objectio.MockObjectName()))
+	require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+	require.NoError(t, vector.AppendFixed(data.Vecs[0], uint32(0), false, mp))
+	require.NoError(t, vector.AppendFixed(data.Vecs[1], uint64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(data.Vecs[2], uint64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(data.Vecs[3], ckputil.ObjectType_Data, false, mp))
+	require.NoError(t, vector.AppendBytes(data.Vecs[4], stats[:], false, mp))
+	require.NoError(t, vector.AppendFixed(data.Vecs[5], types.TS{}, false, mp))
+	require.NoError(t, vector.AppendFixed(data.Vecs[6], types.TS{}, false, mp))
+	require.NoError(t, vector.AppendBytes(data.Vecs[7], nil, true, mp))
+	data.SetRowCount(1)
+
+	require.ErrorContains(t, sinker.Write(ctx, data), "injected post-persist write failure")
+	require.NotEmpty(t, fs.persisted)
+	_, err = baseFS.StatFile(ctx, fs.persisted)
+	require.NoError(t, err)
+
+	require.NoError(t, deletePersistedCheckpointObjects(ctx, sinker))
+	_, err = baseFS.StatFile(ctx, fs.persisted)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), err)
 }
 
 func (fs *failingReadFileService) Read(ctx context.Context, vector *fileservice.IOVector) error {

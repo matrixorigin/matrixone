@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 
@@ -673,12 +674,11 @@ func ReWriteCheckpointAndBlockFromKey(
 	loc objectio.Location,
 	lastCkpData *CKPReader,
 	version uint32, ts types.TS,
-) (objectio.Location, objectio.Location, []string, error) {
+) (location, checkpointLocation objectio.Location, files []string, err error) {
 	logutil.Info("[Start]", common.OperationField("ReWrite Checkpoint"),
 		common.OperandField(loc.String()),
 		common.OperandField(ts.ToString()))
 	phaseNumber := 0
-	var err error
 	defer func() {
 		if err != nil {
 			logutil.Error("[DoneWithErr]", common.OperationField("ReWrite Checkpoint"),
@@ -725,8 +725,6 @@ func ReWriteCheckpointAndBlockFromKey(
 
 	phaseNumber = 2
 	// Analyze checkpoint to get the object file
-	var files []string
-
 	initData := func(
 		od *map[string]*objData,
 		objectType int8,
@@ -995,6 +993,15 @@ func ReWriteCheckpointAndBlockFromKey(
 
 	dataSinker := ckputil.NewDataSinker(
 		common.CheckpointAllocator, dstFs, ioutil.WithMemorySizeThreshold(DefaultCheckpointSize))
+	transferred := false
+	defer func() {
+		var cleanupErr error
+		if !transferred {
+			cleanupErr = deletePersistedCheckpointObjects(ctx, dataSinker)
+		}
+		closeErr := dataSinker.Close()
+		err = errors.Join(err, cleanupErr, closeErr)
+	}()
 	encoder := types.NewPacker()
 	defer encoder.Close()
 	if len(insertObjBatch) > 0 {
@@ -1119,5 +1126,6 @@ func ReWriteCheckpointAndBlockFromKey(
 		common.AnyField("new object", checkpointFiles))
 	files = append(files, checkpointFiles...)
 	files = append(files, location.Name().String())
+	transferred = true
 	return location, location, files, nil
 }
