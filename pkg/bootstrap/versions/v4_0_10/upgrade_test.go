@@ -71,11 +71,11 @@ func TestColumnsUpgradeAdmission(t *testing.T) {
 		{name: "legacy lowercase", definition: sysview.InformationSchemaColumnsV58DDL(), lowercase: true,
 			protocol: `{"result":"cn0:100,cn1:100"}`, wantProtocol: true,
 			wantDDL: []string{entry.PreSql, entry.UpgSql}},
-		{name: "marker is not exact readiness", definition: sysview.InformationSchemaColumnsDDL + " ",
+		{name: "marker is not exact readiness", definition: sysview.InformationSchemaColumnsV100DDL() + " ",
 			protocol: `{"result":"cn0:100,cn1:100"}`, wantProtocol: true,
 			wantDDL: []string{entry.PreSql, entry.UpgSql}},
-		{name: "canonical uppercase", definition: sysview.InformationSchemaColumnsDDL},
-		{name: "canonical lowercase", definition: sysview.InformationSchemaColumnsDDL, lowercase: true},
+		{name: "canonical uppercase", definition: sysview.InformationSchemaColumnsV100DDL()},
+		{name: "canonical lowercase", definition: sysview.InformationSchemaColumnsV100DDL(), lowercase: true},
 		{name: "drop failure", protocol: `{"result":"cn0:100,cn1:100"}`, failSQL: entry.PreSql,
 			wantProtocol: true, wantErr: true, wantDDL: []string{entry.PreSql}},
 		{name: "create failure", protocol: `{"result":"cn0:100,cn1:100"}`, failSQL: entry.UpgSql,
@@ -149,7 +149,7 @@ func TestColumnsUpgradeLifecycle(t *testing.T) {
 			mp := mpool.MustNewZero()
 			r := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
 			r.NewBatchWithRowCount(1)
-			require.NoError(t, executor.AppendStringRows(r, 0, []string{sysview.InformationSchemaColumnsDDL}))
+			require.NoError(t, executor.AppendStringRows(r, 0, []string{sysview.InformationSchemaColumnsV100DDL()}))
 			return r.GetResult(), nil
 		}, operator)
 		require.NoError(t, Handler.Prepare(ctx, txn, true))

@@ -81,7 +81,7 @@ select min(i<>0), max(i<>0), count(i<>0) from t;
 select bit_and(i<>0) from t;
 select bit_or(i<>0) from t;
 
--- only the BOOL argument is coerced; other rejected types stay rejected
+-- BOOL mode controls predicate coercion; character numeric conversion is independent.
 select sum(i) from t;
 select sum(cast(i as char)) from t;
 

@@ -1,0 +1,188 @@
+DROP DATABASE IF EXISTS sum_avg_numeric;
+CREATE DATABASE sum_avg_numeric;
+USE sum_avg_numeric;
+SET @sum_avg_saved_mode = @@sql_mode;
+SET @sum_avg_saved_dop = @@max_dop;
+SET @sum_avg_saved_hints = @@optimizer_hints;
+CREATE TABLE numeric_strings (id INT PRIMARY KEY, g INT, s VARCHAR(32));
+INSERT INTO numeric_strings VALUES
+(1, 1, '1'), (2, 1, '2.5'), (3, 1, ' 3 '), (4, 1, '-4e0'),
+(5, 1, '1.0'), (6, 2, '12x'), (7, 2, ''), (8, 2, 'abc'), (9, 3, NULL);
+SELECT SUM(s), AVG(s) FROM numeric_strings WHERE id <= 4;
+➤ SUM(s)[8,53,31]  ¦  AVG(s)[8,53,31]  𝄀
+2.5  ¦  0.625
+SELECT SUM(s), AVG(s) FROM numeric_strings;
+➤ SUM(s)[8,53,31]  ¦  AVG(s)[8,53,31]  𝄀
+15.5  ¦  1.9375
+SELECT SUM(CAST(s AS DOUBLE)), AVG(CAST(s AS DOUBLE)) FROM numeric_strings;
+➤ SUM(cast(s as double))[8,53,31]  ¦  AVG(cast(s as double))[8,53,31]  𝄀
+15.5  ¦  1.9375
+SELECT SUM(s), AVG(s) FROM numeric_strings WHERE id < 0;
+➤ SUM(s)[8,53,31]  ¦  AVG(s)[8,53,31]  𝄀
+null  ¦  null
+SELECT SUM(s), AVG(s) FROM numeric_strings WHERE g = 3;
+➤ SUM(s)[8,53,31]  ¦  AVG(s)[8,53,31]  𝄀
+null  ¦  null
+SELECT SUM(DISTINCT s), CAST(AVG(DISTINCT s) AS DECIMAL(16,6)) FROM numeric_strings;
+➤ SUM(distinct s)[8,53,31]  ¦  cast(AVG(distinct s) as decimal(16, 6))[3,16,6]  𝄀
+14.5  ¦  2.416667
+SELECT g, SUM(s), AVG(s) FROM numeric_strings GROUP BY g ORDER BY g;
+➤ g[4,32,0]  ¦  SUM(s)[8,53,31]  ¦  AVG(s)[8,53,31]  𝄀
+1  ¦  3.5  ¦  0.7  𝄀
+2  ¦  12.0  ¦  4.0  𝄀
+3  ¦  null  ¦  null
+SELECT id,
+SUM(s) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_sum,
+CAST(AVG(s) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS DECIMAL(12,4)) AS running_avg
+FROM numeric_strings WHERE id <= 4 ORDER BY id;
+➤ id[4,32,0]  ¦  running_sum[8,53,31]  ¦  running_avg[3,12,4]  𝄀
+1  ¦  1.0  ¦  1.0000  𝄀
+2  ¦  3.5  ¦  1.7500  𝄀
+3  ¦  6.5  ¦  2.1667  𝄀
+4  ¦  2.5  ¦  0.6250
+CREATE TABLE string_domains (c CHAR(8), t TEXT, b BINARY(1), vb VARBINARY(1), bl BLOB);
+INSERT INTO string_domains VALUES ('1', '1', x'01', x'01', '1'), ('2.5', '2.5', x'02', x'02', '2.5');
+SELECT SUM(c), AVG(c), SUM(t), AVG(t), SUM(bl), AVG(bl) FROM string_domains;
+➤ SUM(c)[8,53,31]  ¦  AVG(c)[8,53,31]  ¦  SUM(t)[8,53,31]  ¦  AVG(t)[8,53,31]  ¦  SUM(bl)[8,53,31]  ¦  AVG(bl)[8,53,31]  𝄀
+3.5  ¦  1.75  ¦  3.5  ¦  1.75  ¦  3.5  ¦  1.75
+SELECT SUM(b) = SUM(CAST(b AS DOUBLE)) AS binary_sum_matches,
+AVG(b) = AVG(CAST(b AS DOUBLE)) AS binary_avg_matches,
+SUM(vb) = SUM(CAST(vb AS DOUBLE)) AS varbinary_sum_matches,
+AVG(vb) = AVG(CAST(vb AS DOUBLE)) AS varbinary_avg_matches
+FROM string_domains;
+➤ binary_sum_matches[-7,1,0]  ¦  binary_avg_matches[-7,1,0]  ¦  varbinary_sum_matches[-7,1,0]  ¦  varbinary_avg_matches[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+SELECT CAST(SUM(x'1fffffffffffff') AS DECIMAL(38,0)), CAST(AVG(x'1fffffffffffff') AS DECIMAL(38,0)),
+CAST(SUM(x'20000000000000') AS DECIMAL(38,0)), CAST(AVG(x'20000000000000') AS DECIMAL(38,0)),
+CAST(SUM(x'20000000000001') AS DECIMAL(38,0)), CAST(AVG(x'20000000000001') AS DECIMAL(38,0));
+➤ cast(SUM(0x1fffffffffffff) as decimal(38))[3,38,0]  ¦  cast(AVG(0x1fffffffffffff) as decimal(38))[3,38,0]  ¦  cast(SUM(0x20000000000000) as decimal(38))[3,38,0]  ¦  cast(AVG(0x20000000000000) as decimal(38))[3,38,0]  ¦  cast(SUM(0x20000000000001) as decimal(38))[3,38,0]  ¦  cast(AVG(0x20000000000001) as decimal(38))[3,38,0]  𝄀
+9007199254740991  ¦  9007199254740991  ¦  9007199254740992  ¦  9007199254740992  ¦  9007199254740993  ¦  9007199254740993
+SELECT CAST(SUM(b'100000000000000000000000000000000000000000000000000001') AS DECIMAL(38,0)),
+CAST(AVG(b'100000000000000000000000000000000000000000000000000001') AS DECIMAL(38,0));
+➤ cast(SUM(0b100000000000000000000000000000000000000000000000000001) as decimal(38))[3,38,0]  ¦  cast(AVG(0b100000000000000000000000000000000000000000000000000001) as decimal(38))[3,38,0]  𝄀
+9007199254740993  ¦  9007199254740993
+SELECT CAST(SUM(x'ffffffffffffffff') AS DECIMAL(38,0)), CAST(AVG(x'ffffffffffffffff') AS DECIMAL(38,0));
+➤ cast(SUM(0xffffffffffffffff) as decimal(38))[3,38,0]  ¦  cast(AVG(0xffffffffffffffff) as decimal(38))[3,38,0]  𝄀
+18446744073709551615  ¦  18446744073709551615
+SELECT SUM(CAST(x'20000000000001' AS UNSIGNED)), CAST(AVG(CAST(x'20000000000001' AS UNSIGNED)) AS DECIMAL(38,0));
+➤ SUM(cast(0x20000000000001 as unsigned))[3,38,0]  ¦  cast(AVG(cast(0x20000000000001 as unsigned)) as decimal(38))[3,38,0]  𝄀
+9007199254740993  ¦  9007199254740993
+SELECT SUM(CAST('12' AS BINARY)), AVG(CAST('12' AS BINARY)), SUM(_binary '12'), AVG(_binary '12');
+➤ SUM(cast(12 as binary))[8,53,31]  ¦  AVG(cast(12 as binary))[8,53,31]  ¦  SUM(12)[8,53,31]  ¦  AVG(12)[8,53,31]  𝄀
+12.0  ¦  12.0  ¦  12.0  ¦  12.0
+SELECT CAST(SUM(x'20000000000001') AS DECIMAL(38,0)), CAST(AVG(x'20000000000001') AS DECIMAL(38,0))
+FROM numeric_strings WHERE id <= 2;
+➤ cast(SUM(0x20000000000001) as decimal(38))[3,38,0]  ¦  cast(AVG(0x20000000000001) as decimal(38))[3,38,0]  𝄀
+18014398509481986  ¦  9007199254740993
+SELECT CAST(SUM(DISTINCT x'20000000000001') AS DECIMAL(38,0)),
+CAST(AVG(DISTINCT x'20000000000001') AS DECIMAL(38,0)) FROM numeric_strings WHERE id <= 2;
+➤ cast(SUM(distinct 0x20000000000001) as decimal(38))[3,38,0]  ¦  cast(AVG(distinct 0x20000000000001) as decimal(38))[3,38,0]  𝄀
+9007199254740993  ¦  9007199254740993
+SELECT id, CAST(SUM(x'20000000000001') OVER (ORDER BY id ROWS UNBOUNDED PRECEDING) AS DECIMAL(38,0)),
+CAST(AVG(x'20000000000001') OVER (ORDER BY id ROWS UNBOUNDED PRECEDING) AS DECIMAL(38,0))
+FROM numeric_strings WHERE id <= 2 ORDER BY id;
+➤ id[4,32,0]  ¦  cast(SUM(0x20000000000001) over (order by id rows unbounded preceding) as decimal(38))[3,38,0]  ¦  cast(AVG(0x20000000000001) over (order by id rows unbounded preceding) as decimal(38))[3,38,0]  𝄀
+1  ¦  9007199254740993  ¦  9007199254740993  𝄀
+2  ¦  18014398509481986  ¦  9007199254740993
+CREATE VIEW literal_totals AS SELECT SUM(x'20000000000001') AS total, AVG(x'20000000000001') AS mean
+FROM numeric_strings WHERE id <= 2;
+CREATE TABLE materialized_literal_totals AS SELECT * FROM literal_totals;
+SELECT CAST(total AS DECIMAL(38,0)), CAST(mean AS DECIMAL(38,0)) FROM materialized_literal_totals;
+➤ cast(total as decimal(38))[3,38,0]  ¦  cast(mean as decimal(38))[3,38,0]  𝄀
+18014398509481986  ¦  9007199254740993
+PREPARE literal_aggregate FROM "SELECT CAST(SUM(x'20000000000001') AS DECIMAL(38,0)), CAST(AVG(x'20000000000001') AS DECIMAL(38,0)) FROM numeric_strings WHERE id <= ?";
+SET @sum_avg_literal_rows = 1;
+EXECUTE literal_aggregate USING @sum_avg_literal_rows;
+➤ cast(SUM(0x20000000000001) as decimal(38))[3,38,0]  ¦  cast(AVG(0x20000000000001) as decimal(38))[3,38,0]  𝄀
+9007199254740993  ¦  9007199254740993
+SET @sum_avg_literal_rows = 2;
+EXECUTE literal_aggregate USING @sum_avg_literal_rows;
+➤ cast(SUM(0x20000000000001) as decimal(38))[3,38,0]  ¦  cast(AVG(0x20000000000001) as decimal(38))[3,38,0]  𝄀
+18014398509481986  ¦  9007199254740993
+DEALLOCATE PREPARE literal_aggregate;
+SELECT SUM(x'010000000000000000');
+Data truncation: data out of range: data type uint64, value '010000000000000000'
+SELECT AVG(x'010000000000000000');
+Data truncation: data out of range: data type uint64, value '010000000000000000'
+PREPARE string_aggregate FROM 'SELECT SUM(s), AVG(s) FROM numeric_strings WHERE g = ?';
+SET @sum_avg_group = 1;
+EXECUTE string_aggregate USING @sum_avg_group;
+➤ SUM(numeric_strings.s)[8,53,31]  ¦  AVG(numeric_strings.s)[8,53,31]  𝄀
+3.5  ¦  0.7
+SET @sum_avg_group = 2;
+EXECUTE string_aggregate USING @sum_avg_group;
+➤ SUM(numeric_strings.s)[8,53,31]  ¦  AVG(numeric_strings.s)[8,53,31]  𝄀
+12.0  ¦  4.0
+SET @sum_avg_group = 3;
+EXECUTE string_aggregate USING @sum_avg_group;
+➤ SUM(numeric_strings.s)[8,53,31]  ¦  AVG(numeric_strings.s)[8,53,31]  𝄀
+null  ¦  null
+DEALLOCATE PREPARE string_aggregate;
+PREPARE string_marker FROM 'SELECT SUM(CAST(? AS CHAR)), AVG(CAST(? AS CHAR))';
+SET @sum_avg_value = 1;
+EXECUTE string_marker USING @sum_avg_value, @sum_avg_value;
+➤ SUM(cast(? as varchar))[8,53,31]  ¦  AVG(cast(? as varchar))[8,53,31]  𝄀
+1.0  ¦  1.0
+SET @sum_avg_value = 2.5;
+EXECUTE string_marker USING @sum_avg_value, @sum_avg_value;
+➤ SUM(cast(? as varchar))[8,53,31]  ¦  AVG(cast(? as varchar))[8,53,31]  𝄀
+2.5  ¦  2.5
+SET @sum_avg_value = '12x';
+EXECUTE string_marker USING @sum_avg_value, @sum_avg_value;
+➤ SUM(cast(? as varchar))[8,53,31]  ¦  AVG(cast(? as varchar))[8,53,31]  𝄀
+12.0  ¦  12.0
+SET @sum_avg_value = NULL;
+EXECUTE string_marker USING @sum_avg_value, @sum_avg_value;
+➤ SUM(cast(? as varchar))[8,53,31]  ¦  AVG(cast(? as varchar))[8,53,31]  𝄀
+null  ¦  null
+DEALLOCATE PREPARE string_marker;
+CREATE VIEW string_totals AS SELECT g, SUM(s) AS total, AVG(s) AS mean FROM numeric_strings GROUP BY g;
+SELECT * FROM string_totals ORDER BY g;
+➤ g[4,32,0]  ¦  total[8,53,31]  ¦  mean[8,53,31]  𝄀
+1  ¦  3.5  ¦  0.7  𝄀
+2  ¦  12.0  ¦  4.0  𝄀
+3  ¦  null  ¦  null
+CREATE TABLE materialized_totals AS SELECT * FROM string_totals;
+SELECT * FROM materialized_totals ORDER BY g;
+➤ g[4,32,0]  ¦  total[8,53,31]  ¦  mean[8,53,31]  𝄀
+1  ¦  3.5  ¦  0.7  𝄀
+2  ¦  12.0  ¦  4.0  𝄀
+3  ¦  null  ¦  null
+SELECT column_name, data_type FROM information_schema.columns
+WHERE table_schema = 'sum_avg_numeric' AND table_name = 'materialized_totals'
+ORDER BY ordinal_position;
+➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  𝄀
+g  ¦  int  𝄀
+total  ¦  double  𝄀
+mean  ¦  double
+SET @@optimizer_hints = 'execType=2';
+SET @@max_dop = 1;
+SELECT g, SUM(s), AVG(s) FROM numeric_strings GROUP BY g ORDER BY g;
+➤ g[4,32,0]  ¦  SUM(s)[8,53,31]  ¦  AVG(s)[8,53,31]  𝄀
+1  ¦  3.5  ¦  0.7  𝄀
+2  ¦  12.0  ¦  4.0  𝄀
+3  ¦  null  ¦  null
+SET @@max_dop = 2;
+SELECT g, SUM(s), AVG(s) FROM numeric_strings GROUP BY g ORDER BY g;
+➤ g[4,32,0]  ¦  SUM(s)[8,53,31]  ¦  AVG(s)[8,53,31]  𝄀
+1  ¦  3.5  ¦  0.7  𝄀
+2  ¦  12.0  ¦  4.0  𝄀
+3  ¦  null  ¦  null
+SELECT SUM(DISTINCT s), CAST(AVG(DISTINCT s) AS DECIMAL(16,6)) FROM numeric_strings;
+➤ SUM(distinct s)[8,53,31]  ¦  cast(AVG(distinct s) as decimal(16, 6))[3,16,6]  𝄀
+14.5  ¦  2.416667
+SET @@max_dop = @sum_avg_saved_dop;
+SET @@optimizer_hints = @sum_avg_saved_hints;
+SET @@sql_mode = CONCAT_WS(',', @sum_avg_saved_mode, 'MATRIXONE_NATIVE');
+SELECT SUM(s), AVG(s) FROM numeric_strings WHERE id <= 4;
+➤ SUM(s)[8,53,31]  ¦  AVG(s)[8,53,31]  𝄀
+2.5  ¦  0.625
+SELECT SUM(s) FROM numeric_strings WHERE id = 6;
+invalid input: "12x" is invalid numeric string
+SELECT AVG(s) FROM numeric_strings WHERE id = 6;
+invalid input: "12x" is invalid numeric string
+SET @@sql_mode = @sum_avg_saved_mode;
+SELECT SUM(s), AVG(s) FROM numeric_strings WHERE id = 6;
+➤ SUM(s)[8,53,31]  ¦  AVG(s)[8,53,31]  𝄀
+12.0  ¦  12.0
+DROP DATABASE sum_avg_numeric;

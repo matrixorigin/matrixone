@@ -8157,7 +8157,7 @@ func TestSchedulingTracePlanHandlerMarshalsLazilyOnce(t *testing.T) {
 	recorder := new(schedule.TraceRecorder)
 	attempt := recorder.StartAttempt()
 	recorder.RecordFailure(attempt, "candidate-discovery", schedule.Worker{})
-	h := newSchedulingTracePlanHandler(context.Background(), recorder.Snapshot())
+	h := newSchedulingTracePlanHandler(context.Background(), recorder.Snapshot(), -1)
 	defer h.Free()
 	require.Nil(t, h.jsonBytes)
 	require.Nil(t, h.buffer)

@@ -46,7 +46,8 @@ CREATE TABLE t1 (d1 datetime);
 INSERT INTO t1(d1) VALUES ('2007-07-19 08:30:00'), (NULL),
 ('2007-07-19 08:34:00'), (NULL), ('2007-07-19 08:36:00');
 SELECT sum(date(d1)) FROM t1;
-invalid argument aggregate function sum, bad value [DATE]
+➤ sum(date(d1))[3,60,0]  𝄀
+60212157
 drop table t1;
 select date("1997-12-31 23:59:59.000001");
 ➤ date(1997-12-31 23:59:59.000001)[91,64,0]  𝄀
