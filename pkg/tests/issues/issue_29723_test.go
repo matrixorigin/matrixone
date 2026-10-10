@@ -49,7 +49,11 @@ func TestIssue29723MediumIntSemantics(t *testing.T) {
 
 		dbName := testutils.GetDatabaseName(t)
 		execSQLRequire(t, ctx, db, "CREATE DATABASE `"+dbName+"`")
-		defer func() { execSQLMaybe(t, ctx, db, "DROP DATABASE IF EXISTS `"+dbName+"`") }()
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			execSQLMaybe(t, cleanupCtx, db, "DROP DATABASE IF EXISTS `"+dbName+"`")
+		}()
 		table := "`" + dbName + "`.types_x"
 		execSQLRequire(t, ctx, db, "CREATE TABLE "+table+" (m MEDIUMINT, mu MEDIUMINT UNSIGNED, m3 INT3, m3u INT3 UNSIGNED, display_int INT(24))")
 
@@ -193,6 +197,12 @@ ORDER BY ordinal_position`, strings.ToLower(dbName))
 		require.NoError(t, db.Close())
 		require.NoError(t, cluster.Close())
 		require.NoError(t, cluster.Start())
+		// The original SQL deadline includes cluster.Close/Start. Restart can
+		// take longer than that deadline under coverage instrumentation, so use
+		// a fresh bounded context for reconnect and persisted-catalog checks.
+		cancel()
+		postRestartCtx, postRestartCancel := context.WithTimeout(t.Context(), 3*time.Minute)
+		defer postRestartCancel()
 		cn, err = cluster.GetCNService(0)
 		require.NoError(t, err)
 		port = cn.GetServiceConfig().CN.Frontend.Port
@@ -200,14 +210,14 @@ ORDER BY ordinal_position`, strings.ToLower(dbName))
 		require.NoError(t, err)
 		db.SetMaxOpenConns(1)
 		db.SetMaxIdleConns(1)
-		require.NoError(t, db.PingContext(ctx))
+		require.NoError(t, db.PingContext(postRestartCtx))
 		var persistedMax int64
-		require.NoError(t, db.QueryRowContext(ctx, "SELECT max(m) FROM "+table).Scan(&persistedMax))
+		require.NoError(t, db.QueryRowContext(postRestartCtx, "SELECT max(m) FROM "+table).Scan(&persistedMax))
 		require.Equal(t, int64(8388607), persistedMax)
 		var persistedCreate string
-		require.NoError(t, db.QueryRowContext(ctx, "SHOW CREATE TABLE "+table).Scan(&tableName, &persistedCreate))
+		require.NoError(t, db.QueryRowContext(postRestartCtx, "SHOW CREATE TABLE "+table).Scan(&tableName, &persistedCreate))
 		require.Contains(t, strings.ToLower(persistedCreate), "`m` mediumint")
-		_, err = db.ExecContext(ctx, "INSERT INTO "+table+" (m) VALUES (8388608)")
+		_, err = db.ExecContext(postRestartCtx, "INSERT INTO "+table+" (m) VALUES (8388608)")
 		require.Error(t, err, "restarted catalog must retain MEDIUMINT assignment semantics")
 	})
 }
