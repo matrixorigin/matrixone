@@ -629,6 +629,102 @@ func TestPreparedSourceTransportDiagnosticOwnership(t *testing.T) {
 	}
 }
 
+func TestPreparedFieldSQLMarkerComparisonDomain(t *testing.T) {
+	marker := &Expr{Typ: makeSimplePlan2Type(types.T_text), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	for _, test := range []struct {
+		name     string
+		param    ParamValue
+		wantText bool
+	}{
+		{"binary source", ParamValue{HasSourceType: true, SourceType: types.T_varbinary.ToType()}, true},
+		{"blob source", ParamValue{HasSourceType: true, SourceType: types.T_blob.ToType()}, true},
+		{"runtime binary", ParamValue{RuntimeStringDomain: types.RuntimeStringBinary}, true},
+		{"binary flag", ParamValue{IsBinaryString: true}, true},
+		{"hex flag", ParamValue{IsBin: true}, true},
+		{"text source", ParamValue{HasSourceType: true, SourceType: types.T_varchar.ToType()}, false},
+		{"protocol control", ParamValue{IsBinaryProtocol: true, IsBinaryString: true}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rule := &ResetParamRefRule{paramValues: []any{test.param}}
+			target, ok := rule.preparedSQLExecuteTextFunctionParamType("field", marker)
+			require.Equal(t, test.wantText, ok)
+			if ok {
+				require.Equal(t, types.StringDomainText, types.StaticStringDomain(target))
+				cast, err := preparedSQLExecuteTextConsumerCast(context.Background(), DeepCopyExpr(marker), target)
+				require.NoError(t, err)
+				require.Equal(t, uint32(types.CharsetUTF8), cast.Typ.Charset)
+			}
+		})
+	}
+
+	// Explicit binary casts own their comparison domain, even for the same marker.
+	binary := types.T_varbinary.ToType()
+	explicit, err := makePlan2CastExpr(context.Background(), DeepCopyExpr(marker), makePlan2Type(&binary))
+	require.NoError(t, err)
+	explicit.GetF().SyntaxExplicitCast = true
+	rule := &ResetParamRefRule{paramValues: []any{ParamValue{IsBinaryString: true}}}
+	_, ok := rule.preparedSQLExecuteTextFunctionParamType("field", explicit)
+	require.False(t, ok)
+	require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(makeTypeByPlan2Expr(explicit)))
+
+	// A provisional cast can wrap the whole value expression, not just a marker.
+	fixed := &Expr{Typ: makeSimplePlan2Type(types.T_text), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+		Value: &planpb.Literal_Sval{Sval: "A"}, LiteralForm: planpb.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+	}}}
+	fixedInputs := make([]*Expr, 1, 4)
+	fixedInputs[0] = fixed
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+		cast := DeepCopyExpr(explicit)
+		cast.Typ = makeSimplePlan2Type(oid)
+		cast.GetF().Args[0] = DeepCopyExpr(fixed)
+		cast.GetF().Args[0].GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_TEXT
+		cast.GetF().Args[1].Typ = makeSimplePlan2Type(oid)
+		fixedInputs = append(fixedInputs, cast)
+	}
+	lookup := func(int) (any, types.Type, bool) {
+		return ParamValue{Value: "A", SourceType: binary, HasSourceType: true}, binary, true
+	}
+	for _, input := range fixedInputs {
+		coalesced, err := BindFuncExprImplByPlanExpr(context.Background(), "coalesce", []*Expr{DeepCopyExpr(marker), input})
+		require.NoError(t, err)
+		provisional := DeepCopyExpr(explicit)
+		provisional.Typ = makeSimplePlan2Type(types.T_text)
+		provisional.GetF().Args[0] = coalesced
+		provisional.GetF().Args[1].Typ = makeSimplePlan2Type(types.T_text)
+		provisional.GetF().Func.Obj = function.EncodeOverloadID(function.CAST, 0)
+		provisional.GetF().SyntaxExplicitCast = false
+		before := provisional.String()
+		target, owned, err := preparedFieldOperandComparisonType(context.Background(), provisional, lookup)
+		require.NoError(t, err)
+		require.True(t, owned)
+		require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(target), input.String())
+		require.Equal(t, before, provisional.String(), "private type probe must not mutate the cached expression")
+	}
+
+	numericMarker := DeepCopyExpr(marker)
+	numericMarker.GetP().Pos = 1
+	numericTuple, err := BindFuncExprImplByPlanExpr(context.Background(), "coalesce", []*Expr{DeepCopyExpr(marker), numericMarker})
+	require.NoError(t, err)
+	mixedLookup := func(pos int) (any, types.Type, bool) {
+		source := types.T_text.ToType()
+		if pos == 1 {
+			source = types.T_decimal64.ToType()
+		}
+		return ParamValue{Value: nil, SourceType: source, HasSourceType: true}, source, true
+	}
+	_, owned, err := preparedFieldOperandComparisonType(context.Background(), numericTuple, mixedLookup)
+	require.NoError(t, err)
+	require.False(t, owned, "typed NULL numeric tuples retain the existing comparison domain")
+
+	missing := func(int) (any, types.Type, bool) { return nil, types.Type{}, false }
+	_, comparisonContext, err := preparedFieldOperandComparisonType(context.Background(), marker, missing)
+	require.Error(t, err)
+	require.False(t, comparisonContext)
+	_, comparisonContext, err = preparedFieldOperandComparisonType(context.Background(), nil, missing)
+	require.NoError(t, err)
+	require.False(t, comparisonContext)
+}
+
 func TestPreparedSourceBindingPreservesComparisonContracts(t *testing.T) {
 	for _, tc := range []struct {
 		column, source types.T

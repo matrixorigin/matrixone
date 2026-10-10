@@ -4191,6 +4191,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	isIfNull := name == "ifnull"
+	isNullIf := name == "nullif"
+	var nullIfValueSyntax, nullIfPeerSyntax tree.Expr
 
 	// rewrite some ast Exprs before binding
 	switch name {
@@ -4199,6 +4201,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		if len(astArgs) != 2 {
 			return nil, moerr.NewInvalidArg(b.GetContext(), "nullif need two args", len(astArgs))
 		}
+		nullIfValueSyntax = unwrapParenExpr(astArgs[0])
+		nullIfPeerSyntax = unwrapParenExpr(astArgs[1])
 		elseExpr := astArgs[0]
 		thenExpr := tree.NewNumVal("", "", false, tree.P_null)
 		whenExpr := tree.NewComparisonExpr(tree.EQUAL, astArgs[0], astArgs[1])
@@ -4733,6 +4737,56 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 					return nil, err
 				}
 				ensurePreparedNumericMetadata(e).IfnullCommonValue = true
+			}
+			if isNullIf && len(args) == 3 && types.T(e.Typ.Id).IsMySQLString() &&
+				(b.builder.isPrepareStatement || preparedSourceBindings(b.GetContext()) != nil) {
+				comparison := args[0].GetF()
+				if comparison != nil && comparison.Func != nil && comparison.Func.ObjName == "=" && len(comparison.Args) == 2 {
+					peer := comparison.Args[1]
+					// Comparison casts are not SQL source boundaries. Recover the
+					// original peer without rebinding its AST (which would duplicate
+					// nested NULLIF work and scalar-subquery query nodes).
+					_, explicitPeer := nullIfPeerSyntax.(*tree.CastExpr)
+					for !explicitPeer {
+						cast := peer.GetF()
+						if cast == nil || cast.Func == nil || cast.Func.ObjName != "cast" || cast.SyntaxExplicitCast || len(cast.Args) == 0 {
+							break
+						}
+						peer = cast.Args[0]
+					}
+					b.markPreparedStringDomainSubquerySource(peer, make(map[[2]int32]struct{}))
+					peerWitness := preparedNullifDomainWitness(peer)
+					if castSyntax, ok := nullIfPeerSyntax.(*tree.CastExpr); ok {
+						declared, typeErr := getTypeFromAst(b.GetContext(), castSyntax.Type)
+						if typeErr != nil {
+							return nil, typeErr
+						}
+						// Authored casts own the domain even if comparison binding or
+						// constant folding has normalized their executable wrapper.
+						peerWitness = preparedNullifDomainWitness(&Expr{
+							Typ: declared, Expr: &plan.Expr_Lit{Lit: &plan.Literal{StringSource: 1}},
+						})
+					}
+					// Record NULLIF's return-domain ownership before CASE lowering
+					// erases its identity. This compact witness is metadata only;
+					// CASE, including its separate equality conversions, is executable.
+					// Return lineage is independent of comparison lineage. A scalar
+					// result otherwise becomes an opaque ColRef after flattening.
+					b.markPreparedStringDomainSubquerySource(args[2], make(map[[2]int32]struct{}))
+					valueWitness := preparedNullifDomainWitness(args[2])
+					if _, unresolved := nullIfValueSyntax.(*tree.ParamExpr); unresolved {
+						// Only an unresolved PARAM_ITEM takes its type from the peer.
+						// Value-producing functions own their return domain independently
+						// of the equality's conversion (SUBSTRING, selectors, nested NULLIF).
+						valueWitness = &Expr{
+							Typ: e.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+								Func: &plan.ObjectRef{ObjName: "coalesce"},
+								Args: []*Expr{valueWitness, peerWitness},
+							}},
+						}
+					}
+					ensurePreparedNumericMetadata(e).StringDomainSource = valueWitness
+				}
 			}
 			b.markPreparedResultCastsProvisional(
 				b.GetContext(), name, astArgs, preparedPeerSources, e, preparedNumericProvenance)
@@ -5884,6 +5938,9 @@ func preparedRegexpStringDomainCheckModes(
 
 func (b *baseBinder) markPreparedStringDomainSubquerySources(name string, args []*Expr) {
 	stringOperands := preparedRegexpCompatibilityStringOperandCount(name, len(args))
+	if name == "field" {
+		stringOperands = len(args)
+	}
 	for i := 0; i < stringOperands; i++ {
 		b.markPreparedStringDomainSubquerySource(args[i], make(map[[2]int32]struct{}))
 	}
@@ -5915,7 +5972,8 @@ func (b *baseBinder) annotateStringDomainSource(
 			return
 		}
 		var source *Expr
-		if b.ctx != nil && (col.RelPos == b.ctx.groupTag || col.RelPos == b.ctx.aggregateTag || col.RelPos == b.ctx.windowTag) {
+		if b.ctx != nil && (col.RelPos == b.ctx.groupTag ||
+			col.RelPos == b.ctx.aggregateTag || col.RelPos == b.ctx.windowTag) {
 			source = b.pendingColumnSource(col)
 		} else {
 			nodeID, ok := b.builder.tag2NodeID[col.RelPos]
@@ -5926,6 +5984,25 @@ func (b *baseBinder) annotateStringDomainSource(
 			if node == nil || col.ColPos < 0 {
 				return
 			}
+			// Windows in one query block share an output tag. The tag map
+			// points at the last WINDOW, not necessarily this column's owner.
+			for hops := 0; hops < len(b.builder.qry.Nodes) &&
+				(node.NodeType == plan.Node_WINDOW || node.NodeType == plan.Node_PARTITION); hops++ {
+				if node.NodeType == plan.Node_WINDOW && node.WindowIdx == col.ColPos && len(node.WinSpecList) > 0 {
+					source = node.WinSpecList[0].GetW().GetWindowFunc()
+					break
+				}
+				if len(node.Children) != 1 || node.Children[0] < 0 || int(node.Children[0]) >= len(b.builder.qry.Nodes) {
+					return
+				}
+				node = b.builder.qry.Nodes[node.Children[0]]
+				if node == nil {
+					return
+				}
+			}
+			if source == nil && (node.NodeType == plan.Node_WINDOW || node.NodeType == plan.Node_PARTITION) {
+				return // malformed or cyclic lineage is not a parameter source
+			}
 			outputs := node.ProjectList
 			if node.NodeType == plan.Node_AGG && len(node.BindingTags) > 0 {
 				if col.RelPos == node.BindingTags[0] {
@@ -5934,9 +6011,7 @@ func (b *baseBinder) annotateStringDomainSource(
 					outputs = node.AggList
 				}
 			}
-			if node.NodeType == plan.Node_WINDOW && node.WindowIdx == col.ColPos && len(node.WinSpecList) > 0 {
-				source = node.WinSpecList[0].GetW().GetWindowFunc()
-			} else {
+			if source == nil {
 				if int(col.ColPos) >= len(outputs) {
 					return
 				}
@@ -5965,10 +6040,12 @@ func (b *baseBinder) annotateStringDomainSource(
 			memo[key] = nil
 			return
 		}
-		// Numeric and other non-string projections cannot carry a runtime string
-		// domain. Skip them before walking their lineage; this keeps ordinary
-		// derived arithmetic out of the provenance path entirely.
-		if possibleStringDomainsForExpr(source) == 0 {
+		// A non-string value normally cannot carry a runtime string domain.
+		// All-NULL CASE can nevertheless have a numeric common type without
+		// losing its resolution contract. Follow aliases to its first owner;
+		// still stop at ordinary arithmetic and explicit type boundaries.
+		caseWitness := preparedFieldBoundCaseContractWitness(source)
+		if source.GetCol() == nil && possibleStringDomainsForExpr(source) == 0 && caseWitness == nil {
 			memo[key] = nil
 			return
 		}
@@ -5981,7 +6058,11 @@ func (b *baseBinder) annotateStringDomainSource(
 			return
 		}
 		domains := possibleStringDomainsForExpr(source)
-		if domains != 0 {
+		caseWitness = preparedFieldBoundCaseContractWitness(source)
+		if caseWitness != nil {
+			memo[key] = caseWitness
+			ensurePreparedNumericMetadata(expr).StringDomainSource = DeepCopyExpr(caseWitness)
+		} else if domains != 0 {
 			// Keep only the domain summary, not a recursively copied expression
 			// graph. Derived projections can be chained or referenced repeatedly;
 			// copying their full annotated source at every boundary makes plan
@@ -6050,7 +6131,7 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 		return false
 	}
 	if expr.GetP() != nil || expr.GetV() != nil ||
-		(expr.GetF() == nil && expr.GetPreparedNumeric().GetStringDomainSource() != nil) {
+		preparedStringDomainDependencyWitness(expr) != nil {
 		return true
 	}
 	if fn := expr.GetF(); fn != nil {
@@ -6058,7 +6139,15 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 		for _, arg := range fn.Args {
 			dynamic = b.markPreparedStringDomainSubquerySource(arg, visited) || dynamic
 		}
-		return dynamic && preparedFunctionStringDomainDependsOnRuntimeParam(expr)
+		if fn.Func != nil && len(fn.Args) > 0 {
+			switch strings.ToLower(fn.Func.ObjName) {
+			case "max", "min", "any_value":
+				// These aggregates return their value operand's domain, not an
+				// independent numeric result like COUNT/SUM.
+				return preparedFieldBoundCaseContractWitness(expr) != nil || dynamic && possibleStringDomainsForExpr(fn.Args[0]) != 0
+			}
+		}
+		return preparedFieldBoundCaseContractWitness(expr) != nil || dynamic && (preparedFunctionStringDomainDependsOnRuntimeParam(expr) || preparedFieldOnlyMarkerAndNull(expr))
 	}
 	if list := expr.GetList(); list != nil {
 		dynamic := false
@@ -6076,15 +6165,24 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 			return false
 		}
 		node := b.builder.qry.Nodes[nodeID]
-		if node == nil || col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
+		if node == nil || col.ColPos < 0 {
 			return false
 		}
-		key := [2]int32{nodeID, col.ColPos}
+		outputs := node.ProjectList
+		if node.NodeType == plan.Node_AGG && len(node.BindingTags) > 1 && col.RelPos == node.BindingTags[1] {
+			outputs = node.AggList
+		}
+		if int(col.ColPos) >= len(outputs) {
+			return false
+		}
+		// An AGG node owns both group and aggregate output tags. The same
+		// column ordinal in those two lists is not the same source identity.
+		key := [2]int32{col.RelPos, col.ColPos}
 		if _, seen := visited[key]; seen {
 			return false
 		}
 		visited[key] = struct{}{}
-		source := node.ProjectList[col.ColPos]
+		source := outputs[col.ColPos]
 		if !b.markPreparedStringDomainSubquerySource(source, visited) {
 			return false
 		}
@@ -6140,9 +6238,93 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 // erase the function's implicit numeric/date-to-string conversion boundary.
 // Every expression returned here is metadata only; it is never executed as a
 // query expression.
+func preparedNullifDomainWitness(source *Expr) *Expr {
+	domains := possibleStringDomainsForExpr(source)
+	if lit := source.GetLit(); lit != nil && lit.StringSource != 0 {
+		// Folded SQL casts own their declared type. The input's literal form
+		// and NULL value cannot erase an explicit BINARY/text boundary.
+		domains = possibleStringDomainsForType(makeTypeByPlan2Expr(source))
+	}
+	if witness := stringDomainSourceWitness(source, domains); witness != nil {
+		return witness
+	}
+	// Preserve an actual untyped NULL, not an invented NULL selector. A typed
+	// non-string peer needs only its type; this atom is never executed.
+	if source.Typ.Id == int32(types.T_any) && source.GetLit().GetIsnull() {
+		return makePlan2NullConstExprWithType()
+	}
+	return &Expr{Typ: source.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_I64Val{I64Val: 0},
+	}}}
+}
+
 func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
-	if source == nil || domains == 0 {
+	if source == nil {
 		return nil
+	}
+	if witness := preparedFieldBoundCaseContractWitness(source); witness != nil {
+		return witness
+	}
+	if domains == 0 {
+		return nil
+	}
+	if provenance := preparedStringDomainDependencyWitness(source); provenance != nil {
+		return stringDomainSourceWitness(provenance, domains)
+	}
+	if fn := source.GetF(); fn != nil && fn.Func != nil && len(fn.Args) > 0 {
+		switch strings.ToLower(fn.Func.ObjName) {
+		case "max", "min", "any_value":
+			return stringDomainSourceWitness(fn.Args[0], domains)
+		}
+	}
+	if preparedFieldOnlyMarkerAndNull(source) {
+		if fn := source.GetF(); fn != nil && fn.Func != nil && len(fn.Args) > 0 {
+			switch strings.ToLower(fn.Func.ObjName) {
+			case "cast", "max", "min", "any_value":
+				// These boundaries preserve the selector's value-domain contract,
+				// including CASE's unresolved predicate; don't summarize it away.
+				return stringDomainSourceWitness(fn.Args[0], domains)
+			}
+		}
+		// Preserve NULL-selector semantics without copying a projection graph.
+		// The compact marker set plus one NULL is sufficient for this contract;
+		// an invented TEXT leaf would change FIELD's comparison domain.
+		collector := stringDomainWitnessCollector{seen: make(map[string]struct{})}
+		preparedFieldMarkerNullValues(source, &collector)
+		args := append(collector.args, makePlan2NullConstExprWithType())
+		witness := &Expr{Typ: source.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "coalesce"}, Args: args,
+		}}}
+		if controlSource := preparedFieldNullCaseCondition(source); controlSource != nil {
+			// CASE's unresolved predicate defers its NULL-only result domain to
+			// bound value markers. Preserve that contract, not the predicate AST.
+			controls := stringDomainWitnessCollector{seen: make(map[string]struct{})}
+			visited := make(map[*Expr]struct{})
+			var collectControl func(*Expr) error
+			collectControl = func(value *Expr) error {
+				if _, seen := visited[value]; seen {
+					return nil
+				}
+				visited[value] = struct{}{}
+				controls.addMarker(value)
+				if provenance := value.GetPreparedNumeric().GetStringDomainSource(); provenance != nil {
+					return plan.VisitExprTree(provenance, collectControl)
+				}
+				return nil
+			}
+			_ = plan.VisitExprTree(controlSource, collectControl)
+			if len(controls.args) == 0 {
+				return witness
+			}
+			// The predicate's marker presence is the type contract. One marker
+			// is enough; its expression/value never participates in the result.
+			condition := controls.args[0]
+			witness = &Expr{Typ: source.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "case"},
+				Args: []*Expr{condition, makePlan2NullConstExprWithType(), witness},
+			}}}
+		}
+		return witness
 	}
 	if _, marker := preparedParamPosition(source); marker {
 		// A scalar or derived projection of one marker keeps PARAM_ITEM
@@ -6210,6 +6392,7 @@ func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
 	witness := makePlan2StringConstExprWithType("")
 	witness.Typ = stringDomainWitnessType(source, domains)
 	lit := witness.GetLit()
+	lit.StringSource = uint32(types.StringSourceExpression)
 	switch domains {
 	case possibleStringDomainText:
 		lit.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
@@ -6382,8 +6565,8 @@ func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]str
 		return
 	}
 	visited[expr] = struct{}{}
-	if metadata := expr.GetPreparedNumeric(); expr.GetF() == nil && metadata != nil && metadata.StringDomainSource != nil {
-		c.collect(metadata.StringDomainSource, visited)
+	if source := preparedStringDomainDependencyWitness(expr); source != nil {
+		c.collect(source, visited)
 		return
 	}
 	if expr.GetP() != nil || expr.GetV() != nil {
@@ -6515,13 +6698,26 @@ func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]str
 	c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
 }
 
+// Ordinary function metadata owns a local declaration, not its dependency
+// tree. Lowered NULLIF/CASE and implicit resolved-domain casts retain their
+// separate binder-owned return witnesses.
+func preparedStringDomainDependencyWitness(expr *Expr) *Expr {
+	if expr == nil {
+		return nil
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func != nil && (fn.Func.ObjName == "case" ||
+		fn.Func.ObjName == "cast" && !isExplicitPreparedCast(expr)) {
+		return expr.GetPreparedNumeric().GetStringDomainSource()
+	}
+	return nil
+}
+
 func preparedExprStringDomainDependsOnRuntime(expr *plan.Expr) bool {
 	if expr == nil || isExplicitPreparedCast(expr) {
 		return false
 	}
-	// Real functions keep runtime dependencies in Args; their metadata is
-	// only a local declaration, not another dependency tree.
-	if source := expr.GetPreparedNumeric().GetStringDomainSource(); expr.GetF() == nil && source != nil {
+	if source := preparedStringDomainDependencyWitness(expr); source != nil {
 		return preparedExprStringDomainDependsOnRuntime(source)
 	}
 	return expr.GetP() != nil || expr.GetV() != nil ||
@@ -6552,7 +6748,7 @@ func preparedFunctionStringDomainDependsOnRuntimeParam(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
-	if source := expr.GetPreparedNumeric().GetStringDomainSource(); expr.GetF() == nil && source != nil {
+	if source := preparedStringDomainDependencyWitness(expr); source != nil {
 		return preparedExprStringDomainDependsOnRuntime(source)
 	}
 	fn := expr.GetF()
@@ -8514,8 +8710,8 @@ func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
 		return domains
 	}
 
-	if metadata := expr.GetPreparedNumeric(); expr.GetF() == nil && metadata != nil && metadata.StringDomainSource != nil {
-		sourceDomains := possibleStringDomainsForExpr(metadata.StringDomainSource)
+	if source := preparedStringDomainDependencyWitness(expr); source != nil {
+		sourceDomains := possibleStringDomainsForExpr(source)
 		if sourceDomains != 0 {
 			return sourceDomains
 		}
@@ -8585,6 +8781,12 @@ func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
 		}
 	case "coalesce", "ifnull", "greatest", "least":
 		selected = fn.Args
+	case "max", "min", "any_value":
+		// Aggregate common return types do not erase fixed domain
+		// contributors in the returned operand (also used by windows).
+		if len(fn.Args) > 0 {
+			selected = fn.Args[:1]
+		}
 	}
 	if len(selected) > 0 {
 		domains := uint8(0)

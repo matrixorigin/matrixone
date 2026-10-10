@@ -34,6 +34,54 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMigrateConnectionFromRejectsResolvedFieldCaseDomain(t *testing.T) {
+	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(t, 1, "select field(case when ? then null else ? end,?)")
+	t.Cleanup(ses.Close)
+	execCtx.input.isBinaryProtExecute = false
+	cw.binaryPrepare = false
+	require.NoError(t, ses.SetUserDefinedVar("condition", int64(0), ""))
+	typ := plan.Type{Id: int32(types.T_varbinary), Charset: uint32(types.CharsetBinary)}
+	require.NoError(t, ses.setUserDefinedVarWithType("subject", "A", "", false, typ))
+	require.NoError(t, ses.setUserDefinedVarWithType("candidate", "a", "", false, typ))
+	args := []*plan.Expr{
+		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "condition"}}},
+		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "subject"}}},
+		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "candidate"}}},
+	}
+	evaluate := func() {
+		_, runtime, stmt, _, owned, err := initExecuteStmtParam(execCtx, ses, cw, &plan.Execute{Name: prepared.Name, Args: args}, "")
+		require.NoError(t, err)
+		if owned && stmt != nil {
+			defer stmt.Free()
+		}
+		q := runtime.GetQuery()
+		executor, err := colexec.NewExpressionExecutor(cw.proc, q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0])
+		require.NoError(t, err)
+		defer executor.Free()
+		out, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), vector.GetFixedAtWithTypeCheck[int64](out, 0))
+	}
+	evaluate()
+	require.Len(t, prepared.fieldCaseDomains, 1)
+	require.NoError(t, ses.SetUserDefinedVar("subject", "A", ""))
+	require.NoError(t, ses.SetUserDefinedVar("candidate", "a", ""))
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	resp := &query.MigrateConnFromResponse{}
+	err := rt.migrateConnectionFrom(resp)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer), "resolved CASE state is not on the migration wire")
+	require.Empty(t, resp.PrepareStmts)
+	require.Len(t, prepared.fieldCaseDomains, 1)
+	require.True(t, rt.mc.tryBeginRequest(), "rejection must leave the source usable")
+	func() {
+		defer rt.mc.endRequest()
+		evaluate()
+	}()
+	ses.RemoveAllPrepareStmts()
+	require.NoError(t, rt.migrateConnectionFrom(&query.MigrateConnFromResponse{}))
+}
+
 func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 	ses, scratch, cw, execCtx := newPreparedExecuteEnv(t, 125)
 	t.Cleanup(ses.Close)

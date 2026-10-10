@@ -454,6 +454,18 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			continue
 		}
 		if source.GetP() == nil {
+			if name == "field" {
+				target, comparisonContext, err := preparedFieldOperandComparisonType(ctx, source, state.stringDomainParamLookup)
+				if err != nil {
+					return nil, err
+				}
+				if comparisonContext {
+					args[i], err = appendExplicitCastBeforeExpr(ctx, source, makePlan2Type(&target))
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
 			if len(args) == 1 && types.T(source.Typ.Id).IsMySQLString() &&
 				(name == "sum" || name == "avg" || name == "abs" || name == "sign" || name == "sleep") {
 				// The source may be a projected marker, scalar subquery, or
