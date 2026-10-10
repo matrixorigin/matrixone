@@ -2391,6 +2391,7 @@ func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
 
 	for _, stmt := range []tree.Statement{
 		&tree.AlterTable{},
+		&tree.DumpTable{},
 		&tree.RenameTable{},
 		&tree.CloneTable{},
 		&tree.CloneDatabase{},

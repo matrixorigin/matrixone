@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
@@ -67,6 +68,9 @@ const (
 	// The high synthetic table ID follows the existing user-level-lock
 	// namespace and serializes installs until the owning transaction ends.
 	tableDumpObjectInstallLockTableID uint64 = (1 << 62) + 1
+	// Each row in this synthetic table protects one physical destination.
+	// Transactions retain exact row locks, never widening to a global lock.
+	tableDumpPublicationLockTableID uint64 = (1 << 62) + 2
 )
 
 type tableDumpManifest struct {
@@ -1236,7 +1240,58 @@ func dumpTableRelationObjects(
 	return result, written, nil
 }
 
+var lockRowsForTableDumpPublication = lockop.LockRowsForAdmissionWithContext
+
+func lockTableDumpPublication(ctx context.Context, ses *Session, dumpFS fileservice.FileService) error {
+	proc := ses.GetProc()
+	if proc == nil || proc.GetTxnOperator() == nil {
+		return moerr.NewInternalErrorNoCtx("DUMP TABLE requires an active transaction process")
+	}
+	if !proc.GetTxnOperator().Txn().IsPessimistic() {
+		return moerr.NewNotSupportedNoCtx("DUMP TABLE in optimistic transactions")
+	}
+	key, err := fileservice.FileLockKey(dumpFS, tableDumpManifestName)
+	if err != nil {
+		return err
+	}
+	// Bound lock memory independently of URI length. Hash collisions can only
+	// serialize unrelated destinations, never admit two owners of one path.
+	digest := sha256.Sum256([]byte(key))
+	keys := batch.NewWithSize(1)
+	keys.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	defer keys.Clean(proc.Mp())
+	if err = vector.AppendBytes(keys.Vecs[0], digest[:], false, proc.Mp()); err != nil {
+		return err
+	}
+	_, err = lockRowsForTableDumpPublication(ctx, ses.GetTxnHandler().GetStorage(), proc,
+		tableDumpPublicationLockTableID, keys, 0, types.T_varchar.ToType(), lock.LockMode_Exclusive, 0)
+	return err
+}
+
+func checkTableDumpDestinationAvailable(ctx context.Context, dumpFS fileservice.FileService) error {
+	for _, name := range []string{tableDumpManifestName, tableDumpReadyName} {
+		if _, err := dumpFS.StatFile(ctx, name); err == nil {
+			return moerr.NewFileAlreadyExistsNoCtx(name)
+		} else if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return err
+		}
+	}
+	return nil
+}
+
 func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) error {
+	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)
+	if err != nil {
+		return err
+	}
+	defer closeDumpFS()
+	if err = lockTableDumpPublication(ctx, ses, dumpFS); err != nil {
+		return err
+	}
+	if err = checkTableDumpDestinationAvailable(ctx, dumpFS); err != nil {
+		return err
+	}
+
 	dbName, tableName, rel, err := getTableForDump(ctx, ses, stmt.Table)
 	if err != nil {
 		return err
@@ -1278,20 +1333,15 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 			}
 		}
 	}
-	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)
-	if err != nil {
-		return err
-	}
-	defer closeDumpFS()
 	sourceFS, err := GetObjectFSProvider(ses)
 	if err != nil {
 		return err
 	}
 
-	// A stage path can be targeted concurrently by multiple CNs, and object
-	// stores do not give this workflow an exclusive create token. Do not delete
-	// copied fixture objects on failure: that could remove files published by a
-	// concurrent successful DUMP. Failed fixtures are reclaimed with the stage
+	// The publication lock is held through object copying and marker creation,
+	// preventing another CN from changing this destination before DUMP returns.
+	// Do not delete copied fixture objects on failure: that could remove files
+	// used by another DUMP. Failed fixtures are reclaimed with the stage
 	// fixture lifecycle.
 	objectCount := 0
 	for _, ref := range refs {

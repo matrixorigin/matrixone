@@ -46,6 +46,7 @@ type S3FS struct {
 	storage    ObjectStorage
 	rawStorage ObjectStorage
 	keyPrefix  string
+	bucket     string
 
 	memCache    *MemCache
 	diskCache   *DiskCache
@@ -80,6 +81,7 @@ func NewS3FS(
 	fs := &S3FS{
 		name:            args.Name,
 		keyPrefix:       args.KeyPrefix,
+		bucket:          args.Bucket,
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
 		ioMerger:        NewIOMerger(),
