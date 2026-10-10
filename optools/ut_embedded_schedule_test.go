@@ -40,6 +40,7 @@ const embeddedGoMock = `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
 if [[ "$1" == list ]]; then
  package=${!#}; leaf=${package##*/}
+ [[ "$leaf" != embed ]] || leaf=a
  [[ "$MODE" != metadata-failure || "$leaf" != b ]] || exit 7
  mkdir -p "$CASE_DIR/package-$leaf"
  printf '%s\t%s\n' "$CASE_DIR/package-$leaf" "$package"
@@ -53,6 +54,7 @@ if [[ "$1" == tool && "$2" == test2json ]]; then
  done
  [[ -n "$package" ]] || exit 106
  leaf=${package##*/}
+ [[ "$leaf" != embed ]] || leaf=a
  [[ "$PWD" -ef "$CASE_DIR/package-$leaf" ]] || exit 107
  mkdir "$CASE_DIR/executed-$leaf" || exit 108
  if [[ "$MODE" == pool ]]; then
@@ -101,6 +103,7 @@ fi
 if [[ " $* " == *' -c '* ]]; then
  [[ " $* " == *' -ldflags=-w '* ]] || exit 89
  package=${!#}; leaf=${package##*/}
+ [[ "$leaf" != embed ]] || leaf=a
  [[ " $* " == *' -p 1 '* ]] || exit 83
  mkdir "$CASE_DIR/compiled-$leaf" || exit 84
  while [[ "$1" != -o ]]; do shift; done
@@ -308,6 +311,139 @@ cat "$UT_REPORT"
 	assertScheduleJSONReport(t, out, map[string]string{"example/a": "pass", "example/b": "pass", "example/c": "pass"})
 }
 
+// Exercise preparation and consumption as well as admission. Compilation
+// indices intentionally differ from execution indices after pkg/embed moves.
+func TestEmbeddedPrebuiltAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name, parallel, mode string
+	}{
+		{"serial", "1", "success"},
+		{"pool", "2", "success"},
+		{"heavy-failure", "2", "heavy-failure"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := embeddedSetup + `
+scope=$'github.com/matrixorigin/matrixone/pkg/bootstrap\ngithub.com/matrixorigin/matrixone/pkg/embed\ngithub.com/matrixorigin/matrixone/pkg/tests/arrowload\ngithub.com/matrixorigin/matrixone/pkg/tests/sqlintegration\ngithub.com/matrixorigin/matrixone/pkg/tests/dml'
+mkfifo "$CASE_DIR/release-heavy" "$CASE_DIR/release-light"
+exec 10<>"$CASE_DIR/release-heavy" 11<>"$CASE_DIR/release-light"
+release_children() { printf 'release\nrelease\nrelease\n' >&10; printf 'release\nrelease\n' >&11; }
+driver_pid=""
+cleanup_driver() {
+ release_children
+ if [[ -n "$driver_pid" ]]; then kill -TERM "$driver_pid" 2>/dev/null || true; wait "$driver_pid" 2>/dev/null || true; fi
+}
+trap cleanup_driver EXIT
+start_embedded_prebuild "$scope" 1
+artifact_dir=$CLUSTER_PREBUILD_DIR
+(
+ trap release_children EXIT
+ trap 'exit 143' TERM INT
+ for heavy in embed bootstrap; do
+  read -r -t 5 leaf pid <&8 || exit 100
+  [[ "$leaf" == "$heavy" ]] || exit 101
+  kill -0 "$pid" || exit 102
+  printf 'release\n' >&10
+ done
+ if [[ "$UT_EMBEDDED_PACKAGE_PARALLEL" == 2 ]]; then
+  read -r -t 5 first first_pid <&8 || exit 103
+  read -r -t 5 second second_pid <&8 || exit 104
+  [[ "$first $second" == 'arrowload dml' || "$first $second" == 'dml arrowload' ]] || exit 105
+  [[ "$first_pid" != "$second_pid" ]] || exit 106
+  kill -0 "$first_pid" && kill -0 "$second_pid" || exit 107
+  printf 'release\nrelease\n' >&11
+  read -r -t 5 leaf pid <&8 || exit 108
+  [[ "$leaf" == sqlintegration ]] || exit 109
+  printf 'release\n' >&10
+ else
+  for next in arrowload sqlintegration dml; do
+   read -r -t 5 leaf pid <&8 || exit 110
+   [[ "$leaf" == "$next" ]] || exit 111
+   if [[ "$leaf" == sqlintegration ]]; then printf 'release\n' >&10; else printf 'release\n' >&11; fi
+  done
+ fi
+) &
+driver_pid=$!
+status=0
+run_embedded_tests "$scope" || status=$?
+driver_status=0
+wait "$driver_pid" || driver_status=$?
+driver_pid=""
+[[ "$driver_status" == 0 ]] || exit "$driver_status"
+if [[ "$MODE" == heavy-failure ]]; then [[ "$status" != 0 ]] || exit 112; else [[ "$status" == 0 ]] || exit 113; fi
+[[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID" && ! -d "$artifact_dir" ]] || exit 114
+# Reconstruction proves every exclusion interval, not a sampled absence.
+awk -v limit="$UT_EMBEDDED_PACKAGE_PARALLEL" '
+$5 == "stage=embedded" && /detail=package_index=[0-4] .*prebuilt=true/ {
+ package=substr($6,7); heavy=(package !~ /\/(arrowload|dml)$/)
+ if ($4 == "event=start") {
+  if (started[package]++ || (heavy && active) || heavy_active) bad=1
+  active++; if (active>peak) peak=active
+  if (heavy) heavy_active++
+ } else if ($4 == "event=finish") {
+  if (!started[package] || finished[package]++) bad=1
+  active--; if (heavy) heavy_active--
+ }
+ if (active<0 || active>limit) bad=1
+}
+END { if (bad || length(started)!=5 || length(finished)!=5 || active || heavy_active || peak!=limit) exit 1 }
+' "$UT_CHECKPOINT" || { cat "$UT_CHECKPOINT" >&2; exit 115; }
+cat "$UT_REPORT"
+`
+			mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$1" == list ]]; then
+ package=${!#}; leaf=${package##*/}
+ mkdir -p "$CASE_DIR/package-$leaf"
+ printf '%s\t%s\n' "$CASE_DIR/package-$leaf" "$package"
+ exit 0
+fi
+if [[ "$1" == test ]]; then
+ package=${!#}; leaf=${package##*/}
+ [[ " $* " == *' -c '* ]] || exit 120
+ while [[ "$1" != -o ]]; do shift; done
+ output=$2
+ printf '%s\n' "$output" > "$CASE_DIR/binary-$leaf"
+ printf '#!/bin/sh\nprintf "%%s\\n" "%s"\n' "$package" > "$output"
+ chmod +x "$output"
+ exit 0
+fi
+if [[ "$1" == tool && "$2" == test2json ]]; then
+ package=$5; binary=$6; leaf=${package##*/}
+ [[ "$PWD" -ef "$CASE_DIR/package-$leaf" ]] || exit 121
+ [[ "$binary" == "$(<"$CASE_DIR/binary-$leaf")" && "$("$binary")" == "$package" ]] || exit 122
+ [[ " $* " == *' -test.run=.* '* || "${!#}" == '-test.run=.*' ]] || exit 123
+ mkdir "$CASE_DIR/executed-$leaf" || exit 124
+ printf '%s %s\n' "$leaf" "$$" >&8
+ case "$leaf" in arrowload|dml) read -r _ <&11 ;; *) read -r _ <&10 ;; esac
+ if [[ "$MODE" == heavy-failure && "$leaf" == embed ]]; then
+  printf '{"Action":"fail","Package":"%s"}\n' "$package"
+  exit 7
+ fi
+ printf '{"Action":"pass","Package":"%s"}\n' "$package"
+ exit 0
+fi
+exit 125
+`
+			out, err := scheduleHarnessWithMock(t, script, mock,
+				"MODE="+tc.mode, "UT_EMBEDDED_PACKAGE_PARALLEL="+tc.parallel)
+			if err != nil {
+				t.Fatalf("prebuilt entry admission %s: %v\n%s", tc.name, err, out)
+			}
+			expected := map[string]string{
+				"github.com/matrixorigin/matrixone/pkg/bootstrap":            "pass",
+				"github.com/matrixorigin/matrixone/pkg/embed":                "pass",
+				"github.com/matrixorigin/matrixone/pkg/tests/arrowload":      "pass",
+				"github.com/matrixorigin/matrixone/pkg/tests/sqlintegration": "pass",
+				"github.com/matrixorigin/matrixone/pkg/tests/dml":            "pass",
+			}
+			if tc.mode == "heavy-failure" {
+				expected["github.com/matrixorigin/matrixone/pkg/embed"] = "fail"
+			}
+			assertScheduleJSONReport(t, out, expected)
+		})
+	}
+}
+
 func TestEmbeddedPrebuildCancellation(t *testing.T) {
 	for _, phase := range []string{"build", "launch"} {
 		t.Run(phase, func(t *testing.T) {
@@ -414,6 +550,7 @@ func TestEmbeddedPrebuiltExecutionCancellation(t *testing.T) {
 	for _, phase := range []string{"running", "active-publication", "watchdog-publication", "cleanup"} {
 		t.Run(phase, func(t *testing.T) {
 			script := embeddedSetup + `
+scope=$'example/b\ngithub.com/matrixorigin/matrixone/pkg/embed\nexample/c'
 cleanup_check() {
  status=$?
  [[ -f "$CASE_DIR/stopped-execute-a" ]] || status=90
