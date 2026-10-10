@@ -205,22 +205,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if cw != nil {
 		ses.ast = statement
 		binExec, prepareName := cw.BinaryExecute()
-		execSql := makeExecuteSql(ctx, ses, statement, binExec, prepareName)
-		if len(execSql) != 0 {
-			bb := strings.Builder{}
-			bb.WriteString(envStmt)
-			bb.WriteString(" // ")
-			bb.WriteString(execSql)
-			text = commonutil.Abbreviate(bb.String(), int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
-		} else {
-			// ignore envStmt == ""
-			// case: exec `set @t = 2;` will trigger an internal query with the same session.
-			// If you need real sql, can try:
-			//	+ fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-			//	+ cw.GetAst().Format(fmtCtx)
-			//  + envStmt = fmtCtx.String()
-			text = commonutil.Abbreviate(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
-		}
+		text = makeExecuteSql(ctx, ses, statement, binExec, prepareName, envStmt,
+			int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	} else {
 		u, _ := util.FastUuid()
 		stmID = uuid.UUID(u)
