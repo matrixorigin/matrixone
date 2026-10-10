@@ -42,6 +42,12 @@ func TestUnicodeCollationComparisonKeys(t *testing.T) {
 	key, err = CollationKey(CharsetUTF8MB4UnicodeCI, nil, []byte("😀"))
 	require.NoError(t, err)
 	require.NotEmpty(t, key)
+	physical, err := PhysicalCollationKey(mb4, []byte("😀"))
+	require.NoError(t, err)
+	require.Equal(t, byte(0), physical[0])
+	require.Equal(t, key, physical[1:])
+	_, err = PhysicalCollationKey(NewWithCharset(T_varchar, 64, 0, CharsetUTF8MB3UnicodeCI), []byte("😀"))
+	require.ErrorIs(t, err, collation.ErrRepertoire)
 
 	invalid := []byte{0x5a, 0xff}
 	invalidKey := CollationKeyOrOriginal(CharsetUTF8MB3UnicodeCI, invalid)

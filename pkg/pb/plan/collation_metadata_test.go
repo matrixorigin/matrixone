@@ -88,3 +88,19 @@ func TestCollationMetadataUnknownValuesFailClosed(t *testing.T) {
 	require.Error(t, restored.Unmarshal(wire))
 	require.Error(t, RequireLegacyCollations(index))
 }
+
+func TestTableAndIndexKeyFormatsMustMatch(t *testing.T) {
+	table := &TableDef{
+		DefaultCharset:   4,
+		CollationVersion: 1,
+		KeyFormat:        1,
+		Indexes:          []*IndexDef{{IndexName: "idx", KeyFormat: 1}},
+	}
+	require.NoError(t, table.ValidateCollation())
+
+	table.Indexes[0].KeyFormat = 0
+	require.ErrorContains(t, table.ValidateCollation(), "does not match table format")
+
+	table.Indexes[0].KeyFormat = 2
+	require.Error(t, table.ValidateCollation())
+}

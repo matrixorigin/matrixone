@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -2044,6 +2045,24 @@ func TestPhysicalSerialUsesUnicodeComparisonKeys(t *testing.T) {
 	require.NoError(t, keyResult.PreExtendAndReset(1))
 	require.NoError(t, BuiltInPhysicalCollationKey([]*vector.Vector{input}, keyResult, proc, 1, nil))
 	require.Equal(t, types.CollationKeyOrOriginal(unicodeType.Charset, []byte("b")), keyResult.GetResultVector().GetBytesAt(0))
+}
+
+func TestPhysicalSerialRejectsOutOfRepertoireValues(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	// Build the bytes under the legacy identity, then change only the vector
+	// metadata. This models a malformed/unvalidated boundary without bypassing
+	// the normal vector admission checks in test setup.
+	input := newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"😀"}, nil)
+	defer input.Free(proc.Mp())
+	input.GetType().Charset = types.CharsetUTF8MB3UnicodeCI
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	op := newOpSerial()
+	defer op.Close()
+	err := op.BuiltInPhysicalSerialFull([]*vector.Vector{input}, result, proc, 1, nil)
+	require.ErrorIs(t, err, collation.ErrRepertoire)
 }
 
 func Test_BuiltIn_SerialFull(t *testing.T) {

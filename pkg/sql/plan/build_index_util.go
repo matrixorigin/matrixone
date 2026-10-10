@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
@@ -167,11 +168,29 @@ func checkIndexKeypartSupportability(context context.Context, keyParts []*tree.K
 }
 
 func indexTableKeyTypeForSinglePart(col *ColDef, keyPart *tree.KeyPart) Type {
+	return indexTableKeyTypeForSinglePartWithFormat(col, keyPart, collation.KeyFormatLegacy)
+}
+
+// indexTableKeyTypeForSinglePartWithFormat describes the physical payload of
+// a hidden one-part index column.  Legacy indexes retain the source type and
+// bytes.  A future versioned collation format stores opaque comparison keys,
+// so its hidden column must be a binary varlena column; otherwise storage and
+// hash consumers could apply the source collation a second time.  Admission of
+// that format is deliberately handled elsewhere and remains fail-closed.
+func indexTableKeyTypeForSinglePartWithFormat(col *ColDef, keyPart *tree.KeyPart, keyFormat uint32) Type {
 	if col == nil {
 		return Type{}
 	}
+	if keyFormat == collation.KeyFormatV1 &&
+		types.IsUnicodeCollation(uint8(col.Typ.Charset)) && types.T(col.Typ.Id).IsMySQLString() {
+		return Type{
+			Id:      int32(types.T_varbinary),
+			Width:   types.MaxVarBinaryLen,
+			Charset: uint32(types.CharsetBinary),
+		}
+	}
 	if keyPart != nil && keyPart.Length > 0 {
-		if prefixType, ok := indexTableKeyTypeForPrefix(col.Typ); ok {
+		if prefixType, ok := indexTableKeyTypeForPrefixWithFormat(col.Typ, keyFormat); ok {
 			return prefixType
 		}
 	}
@@ -194,9 +213,48 @@ func indexTableKeyTypeForSinglePart(col *ColDef, keyPart *tree.KeyPart) Type {
 	}
 }
 
+// indexTablePrimaryKeyTypeWithFormat preserves the historical primary-key
+// hidden-column projection. It intentionally does not copy auto-increment or
+// enum metadata; the regular secondary-index path has always used this
+// narrower schema than the unique-index path.
+func indexTablePrimaryKeyTypeWithFormat(col *ColDef, keyFormat uint32) Type {
+	if col == nil {
+		return Type{}
+	}
+	if keyFormat == collation.KeyFormatV1 &&
+		types.IsUnicodeCollation(uint8(col.Typ.Charset)) && types.T(col.Typ.Id).IsMySQLString() {
+		return Type{
+			Id:      int32(types.T_varbinary),
+			Width:   types.MaxVarBinaryLen,
+			Charset: uint32(types.CharsetBinary),
+		}
+	}
+	return Type{
+		Id:                       col.Typ.Id,
+		Width:                    col.Typ.Width,
+		Scale:                    col.Typ.Scale,
+		Charset:                  col.Typ.Charset,
+		CollationVersion:         col.Typ.CollationVersion,
+		CollationCoercibility:    col.Typ.CollationCoercibility,
+		CollationCoercibilitySet: col.Typ.CollationCoercibilitySet,
+		CollationMergeConflict:   col.Typ.CollationMergeConflict,
+	}
+}
+
 func indexTableKeyTypeForPrefix(colType Type) (Type, bool) {
+	return indexTableKeyTypeForPrefixWithFormat(colType, collation.KeyFormatLegacy)
+}
+
+func indexTableKeyTypeForPrefixWithFormat(colType Type, keyFormat uint32) (Type, bool) {
 	switch colType.Id {
 	case int32(types.T_text):
+		if keyFormat == collation.KeyFormatV1 && types.IsUnicodeCollation(uint8(colType.Charset)) {
+			return Type{
+				Id:      int32(types.T_varbinary),
+				Width:   types.MaxVarBinaryLen,
+				Charset: uint32(types.CharsetBinary),
+			}, true
+		}
 		return Type{
 			Id:                       int32(types.T_varchar),
 			Width:                    types.MaxVarcharLen,
