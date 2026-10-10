@@ -138,7 +138,9 @@ func TestHistoricalViewColumnsSQL(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				if tc.wantAdapt {
-					require.Equal(t, sysview.InformationSchemaColumnsDDL, got)
+					expected, ok := sysview.AdaptLegacyInformationSchemaColumnsDDL(definition)
+					require.True(t, ok)
+					require.Equal(t, expected, got)
 				} else {
 					require.Equal(t, definition, got)
 				}
