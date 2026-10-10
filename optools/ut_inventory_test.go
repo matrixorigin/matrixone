@@ -228,9 +228,10 @@ handle_ut_termination
 }
 
 func TestOuterCancellationKeepsReportForFailedDrainHelper(t *testing.T) {
-	for _, phase := range []string{"active", "captured", "released", "joined", "raw-status"} {
-		t.Run(phase, func(t *testing.T) {
-			script := `source ./run_ut.sh UT
+	for _, helperStatus := range []string{"125", "137"} {
+		for _, phase := range []string{"active", "captured", "flagged", "released", "joined", "raw-status"} {
+			t.Run("status="+helperStatus+"/"+phase, func(t *testing.T) {
+				script := `source ./run_ut.sh UT
 function logger() { :; }
 function checkpoint_ut_event() { :; }
 function stop_ut_heartbeat() { :; }
@@ -258,7 +259,7 @@ cleanup() {
  exit "$status"
 }
 trap cleanup EXIT
-(exit 125) &
+(if [[ "$HELPER_STATUS" == 137 ]]; then kill -KILL "$BASHPID"; else exit 125; fi) &
 CURRENT_UT_PID=$!
 CURRENT_UT_LABEL='batched issues'
 if [[ "$PHASE" == active ]]; then
@@ -266,7 +267,7 @@ if [[ "$PHASE" == active ]]; then
 elif [[ "$PHASE" == raw-status ]]; then
  builtin wait "$CURRENT_UT_PID" || true
  CURRENT_UT_PID=""
- handle_ut_join_term 125 0 CURRENT_UT_DRAIN_FAILED
+ handle_ut_join_term "$HELPER_STATUS" 0 CURRENT_UT_DRAIN_FAILED 1
 else
  finish_ut_command; [[ "$?" == 125 && -z "$CURRENT_UT_PID" ]] || exit 96
  start_ut_command serial retry true; [[ "$?" == 125 ]] || exit 97
@@ -274,23 +275,61 @@ else
  kill -TERM "$$"
 fi
 `
-			transform := func(text string) string {
-				anchor := "        wait \"${!pid_name}\" || join_status=$?\n"
-				if phase == "released" {
-					anchor = "        printf -v \"${pid_name}\" '%s' ''\n"
-				}
-				if phase == "captured" || phase == "released" {
-					if strings.Count(text, anchor) != 1 {
-						t.Fatal("missing unique owner join boundary")
+				transform := func(text string) string {
+					anchor := "        wait \"${!pid_name}\" || join_status=$?\n"
+					if phase == "flagged" {
+						anchor = "        if (( join_status == 125 )); then printf -v \"${failed_flag_name}\" '%s' 1; fi\n"
 					}
-					return strings.Replace(text, anchor, anchor+"        kill -TERM \"$$\"\n", 1)
+					if phase == "released" {
+						anchor = "        printf -v \"${pid_name}\" '%s' ''\n"
+					}
+					if phase == "captured" || phase == "flagged" || phase == "released" {
+						if strings.Count(text, anchor) != 1 {
+							t.Fatal("missing unique owner join boundary")
+						}
+						return strings.Replace(text, anchor, anchor+"        kill -TERM \"$$\"\n", 1)
+					}
+					return text
 				}
-				return text
-			}
-			out, err := scheduleHarnessWithMockTransform(t, script, scheduleHarnessMock(), transform, "PHASE="+phase)
-			exit, ok := err.(*exec.ExitError)
-			if !ok || exit.ExitCode() != 125 {
-				t.Fatalf("failed-drain helper must retain report ownership: %v\n%s", err, out)
+				out, err := scheduleHarnessWithMockTransform(t, script, scheduleHarnessMock(), transform, "PHASE="+phase, "HELPER_STATUS="+helperStatus)
+				exit, ok := err.(*exec.ExitError)
+				if !ok || exit.ExitCode() != 125 {
+					t.Fatalf("failed-drain helper must retain report ownership: %v\n%s", err, out)
+				}
+			})
+		}
+	}
+}
+
+func TestKilledOrdinaryUTOwnerPreservesExitStatus(t *testing.T) {
+	for _, owner := range []string{"current", "light"} {
+		t.Run(owner, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+function logger() { :; }
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" CGO_CFLAGS="${CGO_CFLAGS:-}" CGO_LDFLAGS="${CGO_LDFLAGS:-}"
+status=0
+if [[ "$OWNER" == current ]]; then
+ start_ut_command serial ordinary go test example/ordinary
+ finish_ut_command || status=$?
+ [[ -z "$CURRENT_UT_PID" && "$CURRENT_UT_DRAIN_FAILED" == 0 ]] || exit 90
+else
+ start_light_race example/light 1
+ finish_light_race || status=$?
+ [[ -z "$LIGHT_RACE_JOB_PID" && "$LIGHT_RACE_DRAIN_FAILED" == 0 ]] || exit 91
+fi
+[[ "$status" == 137 ]] || exit 92
+! ut_drain_failed || exit 93
+start_ut_command serial later true || exit 94
+finish_ut_command || exit 95
+`
+			mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+[[ "$1" == test ]] || exit 96
+kill -KILL "$BASHPID"
+`
+			out, err := scheduleHarnessWithMock(t, script, mock, "OWNER="+owner)
+			if err != nil {
+				t.Fatalf("ordinary killed owner changed its status contract: %v\n%s", err, out)
 			}
 		})
 	}
@@ -525,5 +564,51 @@ printf '%s\n' "${shard_patterns[@]}"`, "bash", inventory).CombinedOutput()
 	want := map[string]int{"one": 1, "round": 20, "seed:a": 1, "seed:b": 1, "seed:c": 1, "example": 1}
 	if !reflect.DeepEqual(control, want) || !reflect.DeepEqual(batched, control) {
 		t.Fatalf("runtime coverage/stress changed: control=%v batched=%v want=%v", control, batched, want)
+	}
+}
+
+func TestKilledIndependentHelperRetainsEvidence(t *testing.T) {
+	for _, owner := range []string{"engine", "plan", "prebuild"} {
+		t.Run(owner, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+function logger() { :; }
+function killed_helper() {
+ printf 'diagnostic\n' > "$CASE_DIR/evidence"
+ kill -KILL "$BASHPID"
+}
+function run_engine_race_shards() { killed_helper; }
+function run_plan_race_shards() { killed_helper; }
+function run_embedded_prebuild() { killed_helper; }
+status=0
+case "$OWNER" in
+ engine)
+  start_engine_race example/engine 1
+  join_ut_owner ENGINE_RACE_JOB_PID ENGINE_RACE_DRAIN_FAILED || status=$?
+  [[ -z "$ENGINE_RACE_JOB_PID" && "$ENGINE_RACE_DRAIN_FAILED" == 1 ]] || exit 90
+  consume_engine_race_report; [[ "$?" == 125 ]] || exit 91
+  ;;
+ plan)
+  start_plan_race example/plan
+  join_ut_owner PLAN_RACE_JOB_PID PLAN_RACE_DRAIN_FAILED || status=$?
+  [[ -z "$PLAN_RACE_JOB_PID" && "$PLAN_RACE_DRAIN_FAILED" == 1 ]] || exit 92
+  consume_plan_race_report; [[ "$?" == 125 ]] || exit 93
+  ;;
+ prebuild)
+  UT_PREBUILD_MIN_FREE_KB=1
+  start_embedded_prebuild example/embedded 1
+  finish_embedded_prebuild || status=$?
+  [[ -z "$CLUSTER_PREBUILD_JOB_PID" && "$CLUSTER_PREBUILD_DRAIN_FAILED" == 1 ]] || exit 94
+  cleanup_embedded_prebuild; [[ "$?" == 125 && -d "$CLUSTER_PREBUILD_DIR" ]] || exit 95
+  ;;
+esac
+[[ "$status" == 125 && -f "$CASE_DIR/evidence" ]] || exit 96
+start_ut_command serial forbidden touch "$CASE_DIR/admitted"; [[ "$?" == 125 ]] || exit 97
+[[ ! -e "$CASE_DIR/admitted" ]] || exit 98
+`
+			out, err := scheduleHarnessWithMock(t, script, scheduleHarnessMock(), "OWNER="+owner)
+			if err != nil {
+				t.Fatalf("killed helper lost ownership evidence: %v\n%s", err, out)
+			}
+		})
 	}
 }

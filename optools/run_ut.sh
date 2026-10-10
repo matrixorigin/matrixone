@@ -230,9 +230,19 @@ function ut_drain_failed(){
         ENGINE_RACE_DRAIN_FAILED || PLAN_RACE_DRAIN_FAILED || CLUSTER_PREBUILD_DRAIN_FAILED ))
 }
 
+# Prebuilt execution has separately admitted test/watchdog groups. Their
+# helper's exit alone cannot acknowledge that those groups have drained.
+function current_ut_command_is_prebuilt_helper(){
+    [[ ( "${CURRENT_UT_COMMAND_STAGE}" == embedded &&
+        "${CURRENT_UT_COMMAND_LABEL}" == "prebuilt embedded-cluster race-test packages" ) ||
+        -n "${PREBUILT_RACE_REPORT}" ]]
+}
+
 function handle_ut_join_term(){
     trap '' TERM
-    if (( $1 == 125 || $2 == 125 )); then printf -v "$3" '%s' 1; fi
+    if (( $1 == 125 || $2 == 125 || ($4 && ($1 == 137 || $2 == 137)) )); then
+        printf -v "$3" '%s' 1
+    fi
     handle_ut_termination
 }
 
@@ -241,13 +251,22 @@ function handle_ut_join_term(){
 # to finish naturally. The trap also carries a just-returned wait status that
 # Bash has not assigned yet, or an already captured status before PID release.
 function join_ut_owner(){
-    local pid_name=$1 failed_flag_name=$2 join_status=0 saved_join_term_trap
+    local pid_name=$1 failed_flag_name=$2 join_status=0 saved_join_term_trap requires_drain_ack=0
     if [[ -n "${!pid_name}" ]]; then
+        case "${pid_name}" in
+            CURRENT_UT_PID)
+                if current_ut_command_is_prebuilt_helper; then requires_drain_ack=1; fi
+                ;;
+            ENGINE_RACE_JOB_PID|PLAN_RACE_JOB_PID|CLUSTER_PREBUILD_JOB_PID)
+                requires_drain_ack=1
+                ;;
+        esac
         if (( UT_TERMINATING == 0 )); then
             saved_join_term_trap=$(trap -p TERM)
-            trap 'handle_ut_join_term "$?" "$join_status" "$failed_flag_name"' TERM
+            trap 'handle_ut_join_term "$?" "$join_status" "$failed_flag_name" "$requires_drain_ack"' TERM
         fi
         wait "${!pid_name}" || join_status=$?
+        if (( requires_drain_ack && join_status == 137 )); then join_status=125; fi
         if (( join_status == 125 )); then printf -v "${failed_flag_name}" '%s' 1; fi
         printf -v "${pid_name}" '%s' ''
         if (( UT_TERMINATING == 0 )); then restore_ut_term_trap "${saved_join_term_trap}"; fi
@@ -1173,9 +1192,7 @@ function handle_ut_termination(){
         # watchdog group. Its handler gives the active group five seconds to
         # stop before KILL, so the parent must not kill the helper on the same
         # deadline and orphan that independently admitted group.
-        if [[ ( "${CURRENT_UT_COMMAND_STAGE}" == embedded &&
-            "${CURRENT_UT_COMMAND_LABEL}" == "prebuilt embedded-cluster race-test packages" ) ||
-            -n "${PREBUILT_RACE_REPORT}" ]]; then
+        if current_ut_command_is_prebuilt_helper; then
             current_grace_ticks=${UT_HELPER_TERM_GRACE_TICKS}
         fi
         if ! wait_for_ut_process_group "${CURRENT_UT_PID}" "${current_grace_ticks}"; then
@@ -1189,12 +1206,12 @@ function handle_ut_termination(){
             child_status=0
             join_ut_owner CURRENT_UT_PID CURRENT_UT_DRAIN_FAILED 2>/dev/null || child_status=$?
             if (( child_status == 125 )); then
-                # A helper can exit after reporting that one of its owned
-                # descendants could not drain. Its own process group is gone,
-                # but the helper's status is still an ownership failure.
+                # The join publishes an ownership failure before releasing
+                # the PID, including helpers killed before acknowledging their
+                # independently admitted groups.
                 CURRENT_UT_DRAIN_FAILED=1
                 termination_status=125
-                logger "ERR" "UT cancellation: preserving current command artifacts because the command reported an undrained descendant"
+                logger "ERR" "UT cancellation: preserving current command artifacts because the command did not establish descendant drainage"
             fi
         fi
     fi

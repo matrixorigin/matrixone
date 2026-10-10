@@ -52,14 +52,34 @@ high-footprint packages (`pkg/tests/issues/isolated`,
 `pkg/tests/sqlintegration`, and `pkg/tests/sqlintegration/multicn`) also run
 alone, so no second process is admitted while one is active. Replaying those
 durations through that admission policy gives a 1537.6-second makespan, or
-about 168.1 seconds (2.8 minutes) of estimated saving. The high-footprint set
-comes from the same 16 GiB cgroup trace: its sampled peaks were approximately
-15.0 GiB for `pkg/embed`, 14.2 GiB for `isolated`, and 13.7 GiB for
-`sqlintegration`, so co-resident light-package memory is not guessed. Newly
-discovered embedded owners are conservatively classified as high footprint
-until a matched trace classifies them; this can leave one slot unused but
-cannot silently widen the memory high-water mark. These figures are schedule
-estimates, not a CI result.
+about 168.1 seconds (2.8 minutes) of estimated saving. These figures are
+schedule estimates, not a CI result.
+
+The classification currently uses whole-cgroup samples. At the largest sampled
+current usage for `pkg/embed`, `isolated`, and `sqlintegration`, respectively,
+the cgroup contained 13.96, 13.22, and 12.80 GiB. File cache accounted for 9.19,
+9.43, and 9.61 GiB of those samples; anonymous memory accounted for 4.03, 2.99,
+and 2.35 GiB. These totals measure runner pressure, not individual package
+footprint, and do not establish which package combinations require exclusion.
+The current classification remains a conservative restriction while matched
+complete-wave measurements determine which exclusions are necessary.
+
+Current local issues measurements use the same race binary and complete scope,
+with sequential arms in separate 8-CPU/16-GiB cgroups and swap disabled:
+
+| Four issues batches | Elapsed seconds | CPU seconds | Peak GiB |
+|---|---:|---:|---:|
+| Contiguous, serial | 420.05 | 581.89 | 2.16 |
+| Round-robin, two processes | 258.21 | 758.03 | 3.74 |
+
+Both arms passed all 159 roots with equivalent 1424 terminal test results and
+no OOM or memory-limit events. The pool saves 161.84 seconds but uses 30.27%
+more CPU time and 73.02% more peak memory in this wave. This establishes a wall
+time benefit and a resource tradeoff, rather than completion of the combined
+issues/embedded optimization. Complete-wave results must justify the runtime
+budget and exclusion policy before resource acceptance is closed. CPU totals
+are summed across the sequential waves; their overall peak is the largest
+wave peak. Memory occupancy over time is reported separately from peak memory.
 
 This change does not merge embedded packages into one fixture or remove the
 multi-CN package. Embedded package `TestMain` and lifecycle hooks are
@@ -71,7 +91,7 @@ about 78 seconds in the same trace and is not the critical path.
 |---|---|
 | Serial batching only | Lowest complexity; retains the established batching benefit. |
 | Serial default with optional bounded pool | Retained as the explicit rollback for constrained runners. |
-| Linux default with bounded two-process pool | Selected for issues and embedded waves; existing admission/report ownership is reused and the serial override remains available. |
+| Linux default with bounded two-process pool | Current candidate for issues and embedded waves; resource acceptance remains open. Existing admission/report ownership is reused and the serial override remains available. |
 
 For the four-batch Makefile/CI run, `UT_ISSUES_BATCH_PARALLEL` and
 `UT_EMBEDDED_PACKAGE_PARALLEL` default to two on Linux and one on other
@@ -119,9 +139,9 @@ embed lifecycle evidence. No new cluster fixture or SQL BVT is needed.
 
 The extra slot locks and retry work apply only to the bounded issues pool; other
 test lifecycles keep the existing exclusive admission path. Existing subset
-measurements motivate the two-process Linux default, not an unbounded resource
-budget. The first matched Linux run must record elapsed time, CPU throttling,
-peak memory, and OOM/max events. If that evidence violates the runner budget,
+measurements motivate testing the two-process candidate. Matched complete
+waves must record elapsed time, CPU throttling, peak memory, and OOM/max events,
+and establish the combined resource benefit. If evidence violates the runner budget,
 `UT_ISSUES_BATCH_PARALLEL=1` is the immediate serial rollback.
 
 ## Original PR29760 design (v4)

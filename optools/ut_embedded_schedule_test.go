@@ -649,21 +649,23 @@ grep -q 'UT runner hard timeout' "$UT_REPORT" || exit 92
 
 func TestEmbeddedPrebuiltOuterCancellationKillsResistantGroup(t *testing.T) {
 	for _, parallel := range []string{"1", "2"} {
-		for _, drain := range []string{"complete", "failed"} {
+		for _, drain := range []string{"complete", "failed", "helper-killed"} {
 			t.Run("parallel="+parallel+"/drain="+drain, func(t *testing.T) {
 				script := embeddedSetup + `
-if [[ "$DRAIN" == failed ]]; then
+if [[ "$DRAIN" != complete ]]; then
  original_stop=$(declare -f terminate_ut_process_groups)
  eval "${original_stop/terminate_ut_process_groups/real_terminate_ut_process_groups}"
  function terminate_ut_process_groups() {
   real_terminate_ut_process_groups "$@" || return $?
-  # Stop the fixture safely, then model a descendant whose drainage cannot be proven.
+  # Drain the fixture before modeling loss of its ownership acknowledgement.
+  # A killed helper cannot prove independently admitted groups were stopped.
+  if [[ "$DRAIN" == helper-killed ]]; then kill -KILL "$BASHPID"; fi
   return 125
  }
 fi
 cleanup_check() {
  status=$?
- if [[ "$DRAIN" == failed ]]; then
+ if [[ "$DRAIN" != complete ]]; then
   ! kill -0 "$(<"$CASE_DIR/pid-execute-a")" 2>/dev/null || status=90
   [[ "$status" == 125 ]] || status=93
   [[ -d "$artifact_dir" && -f "$PREBUILT_RACE_REPORT.00" ]] || status=94
@@ -682,14 +684,14 @@ artifact_dir=$CLUSTER_PREBUILD_DIR
 run_embedded_tests "$scope" 2
 `
 				mode := "execute-cancel-resistant"
-				if drain == "failed" {
+				if drain != "complete" {
 					mode = "execute-cancel"
 				}
 				out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, nil,
 					"MODE="+mode, "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=",
 					"UT_EMBEDDED_PACKAGE_PARALLEL="+parallel, "DRAIN="+drain)
 				want := 143
-				if drain == "failed" {
+				if drain != "complete" {
 					want = 125
 				}
 				exit, ok := err.(*exec.ExitError)
@@ -698,6 +700,50 @@ run_embedded_tests "$scope" 2
 				}
 			})
 		}
+	}
+}
+
+func TestEmbeddedPrebuiltKilledHelperKeepsOwnershipEvidence(t *testing.T) {
+	for _, parallel := range []string{"1", "2"} {
+		t.Run("parallel="+parallel, func(t *testing.T) {
+			script := embeddedSetup + `
+start_embedded_prebuild "$scope" 1
+artifact_dir=$CLUSTER_PREBUILD_DIR
+artifact_report=$CLUSTER_PREBUILD_REPORT
+status=0
+run_embedded_tests "$scope" 2 || status=$?
+printf 'KILLED_HELPER status=%s artifact_directory=%s\n' "$status" "$([[ -d "$artifact_dir" ]] && printf retained || printf removed)"
+[[ "$status" == 125 ]] || exit 90
+[[ -d "$artifact_dir" && -f "$PREBUILT_RACE_REPORT.00" ]] || exit 91
+[[ -x "$artifact_report.package.0.test" && -f "$artifact_report.package.0.meta" ]] || exit 95
+[[ -f "$CASE_DIR/helper-kill-reached" ]] || exit 96
+while read -r pid; do ! ut_process_group_alive "$pid" || exit 97; done < "$CASE_DIR/helper-groups"
+[[ "$CURRENT_UT_DRAIN_FAILED" == 1 ]] || exit 92
+[[ ! -d "$CASE_DIR/executed-b" && ! -d "$CASE_DIR/executed-c" ]] || exit 93
+! kill -0 "$(<"$CASE_DIR/pid-execute-a")" 2>/dev/null || exit 94
+`
+			transform := func(text string) string {
+				const anchor = "            child_pids[index*2+1]=${watchdog_pids[index]}\n"
+				if strings.Count(text, anchor) != 1 {
+					t.Fatal("missing watchdog ownership publication")
+				}
+				return strings.Replace(text, anchor, anchor+`            if (( index == 0 )); then
+                read -r -t 5 _ <&8 || exit 95
+                # Keep the fixture safe; the parent still cannot infer this
+                # descendant cleanup after losing the helper's acknowledgement.
+                printf '%s\n' "${test_pids[index]}" "${watchdog_pids[index]}" > "$CASE_DIR/helper-groups"
+                stop_prebuilt_race_commands
+                : > "$CASE_DIR/helper-kill-reached"
+                kill -KILL "$BASHPID"
+            fi
+`, 1)
+			}
+			out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, transform,
+				"MODE=execute-cancel", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=", "UT_EMBEDDED_PACKAGE_PARALLEL="+parallel)
+			if err != nil {
+				t.Fatalf("killed helper lost ownership evidence: %v\n%s", err, out)
+			}
+		})
 	}
 }
 
