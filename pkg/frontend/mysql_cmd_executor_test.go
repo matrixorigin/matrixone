@@ -11694,13 +11694,6 @@ func TestPreparedGroupConcatFloorCapturedWithoutPhysicalCompile(t *testing.T) {
 	})
 }
 
-type statsAdmissionStopResponse struct {
-	Responser
-	err error
-}
-
-func (r *statsAdmissionStopResponse) RespPreMeta(*ExecCtx, any) error { return r.err }
-
 func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
 	for _, tc := range []struct {
 		name, sql string
@@ -11722,8 +11715,6 @@ func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
 			ses.SetDatabaseName("tpch")
 			ses.GetTxnCompileCtx().SetDatabase("tpch")
 			defer ses.GetTxnCompileCtx().Close()
-			stop := fmt.Errorf("stop after compile before result execution")
-			ec.resper = &statsAdmissionStopResponse{Responser: ses.GetResponser(), err: stop}
 			_, table, err := base.Resolve("tpch", "nation", nil)
 			require.NoError(t, err)
 			installStatsAdmissionStorage(t, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
@@ -11752,8 +11743,12 @@ func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
 			require.True(t, cw.planGenerationReused)
 			ec.cw, ec.cws, ec.stmt = cw, cws, cw.GetAst()
 			ctx.stats.TableCnt = tc.rows
-			err = dispatchStmt(ses, statistic.NewStatsArray(), ec)
-			require.ErrorIs(t, err, stop)
+			// Validate the real admission phase before Compile. The storage mock
+			// cannot execute a pipeline, and metadata is published only during Run.
+			require.NoError(t, checkCachedStatementPlan(ses, ec))
+			compiled, err := cw.Compile(ec, ses.GetOutputCallback(ec))
+			require.NoError(t, err)
+			defer compiled.(*compile.Compile).Release()
 			if tc.rebuild {
 				require.NotSame(t, cached, cw.Plan())
 				require.False(t, cw.planGenerationReused)

@@ -1229,7 +1229,7 @@ func (c *Compile) validateRetryResultMetadata(
 		// result never reaches the row callback that also checks arity.
 		return moerr.NewWrongNumberOfColumnsInSelect(ctx)
 	}
-	if !c.resultMetadataFrozen || sameResultMetadata(c.pn, rebuilt) {
+	if !c.resultMetadataFrozen.Load() || sameResultMetadata(c.pn, rebuilt) {
 		return nil
 	}
 	// Returning the definition-change error from buildRetryCompile is terminal

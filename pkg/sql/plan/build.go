@@ -1064,7 +1064,7 @@ func findResultColumnSourceAtNode(
 	}
 
 	if node.NodeType == plan.Node_JOIN {
-		return findResultColumnSourceAtJoin(query, node, ref, visited)
+		return findResultColumnSourceAtJoin(query, node, ref, visited, preferLocal)
 	}
 
 	if !isResultColumnTransparentNode(node.NodeType) || len(node.Children) == 0 {
@@ -1083,9 +1083,14 @@ func findResultColumnSourceAtNode(
 	var found *resultColumnSource
 	for _, childID := range node.Children {
 		childPreferLocal := false
-		if node.NodeType == plan.Node_PROJECT && childID >= 0 && int(childID) < len(query.Nodes) {
+		if childID >= 0 && int(childID) < len(query.Nodes) {
 			child := query.Nodes[childID]
-			childPreferLocal = child != nil && isResultColumnTransparentNode(child.NodeType) && child.NodeType != plan.Node_PROJECT
+			// 透明节点的列引用指向 JOIN 输出槽位，不是 JOIN 两侧的
+			// 源列位置；左右两侧重排后这两种编号可能碰撞。
+			if child != nil {
+				childPreferLocal = isResultColumnTransparentNode(child.NodeType) ||
+					(child.NodeType == plan.Node_JOIN && len(child.BindingTags) == 0)
+			}
 		}
 		candidate := findResultColumnSourceAtNode(query, childID, projectedRef, cloneVisitedResultColumnNodes(visited), childPreferLocal)
 		if candidate == nil {
@@ -1106,6 +1111,7 @@ func findResultColumnSourceAtJoin(
 	node *plan.Node,
 	ref *plan.ColRef,
 	visited map[int32]bool,
+	preferLocal bool,
 ) *resultColumnSource {
 	if query == nil || node == nil || ref == nil || len(node.Children) == 0 {
 		return nil
@@ -1113,7 +1119,11 @@ func findResultColumnSourceAtJoin(
 
 	projectedRef := ref
 	childIdx := -1
-	if projected := resultColumnProjectionByIdentity(node, ref); projected != nil {
+	projected := resultColumnProjectionByIdentity(node, ref)
+	if preferLocal && ref.RelPos == 0 && ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
+		projected = node.ProjectList[ref.ColPos]
+	}
+	if projected != nil {
 		if col := projected.GetCol(); col != nil {
 			projectedRef = col
 			// JOIN ProjectList entries use RelPos 0/1 to identify the
@@ -1248,18 +1258,12 @@ func resultColumnProjectionAtNode(node *plan.Node, ref *plan.ColRef, preferLocal
 	if node == nil || ref == nil {
 		return nil
 	}
-	if preferLocal &&
-		node.NodeType != plan.Node_PROJECT &&
-		isResultColumnTransparentNode(node.NodeType) &&
+	if preferLocal && ref.RelPos == 0 && isResultColumnTransparentNode(node.NodeType) &&
 		ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
-		// Transparent nodes expose a local output list to their parent. The
-		// expressions in that list retain child source positions, which can
-		// collide with another local output position after pruning. Resolve the
-		// local slot first for these nodes; PROJECT nodes are handled below by
-		// source identity because their expressions define the result order.
-		if expr := node.ProjectList[ref.ColPos]; expr != nil && expr.GetCol() != nil {
-			return expr
-		}
+		// 从父节点传入的是这个节点的输出槽位；节点自己的投影表达式
+		// 才使用子节点位置。包括中间 PROJECT，且计算列不能再按位置
+		// 回退匹配到碰巧同号的真实表列。
+		return node.ProjectList[ref.ColPos]
 	}
 	return resultColumnProjectionByIdentity(node, ref)
 }

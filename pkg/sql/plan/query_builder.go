@@ -8699,7 +8699,7 @@ func (builder *QueryBuilder) bindWhere(
 	var domainFilters, remaining []*plan.Expr
 	hasDependent := false
 	for _, cond := range whereList {
-		hasDependent = hasDependent || builder.hasLocalCTEConsumer(cond)
+		hasDependent = hasDependent || builder.hasParameterizedLocalCTEConsumer(cond)
 	}
 	if hasDependent {
 		for _, cond := range whereList {
@@ -11853,6 +11853,10 @@ func (builder *QueryBuilder) bindView(
 		return 0, nil
 	}
 	viewCtx := NewBindContext(builder, nil)
+	// View expansion has its own name-resolution scope, but it must retain the
+	// outer query's row-rewrite policy so base-table access rules still apply
+	// when the table is reached through an ordinary view.
+	viewCtx.remapOption = ctx.remapOption
 	viewCtx.restoreViewMySQLSpecialTypes = true
 	viewCtx.snapshot = snapshot
 
@@ -12486,9 +12490,19 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				// Do not bind here to avoid double-binding. Instead, set the
 				// subquery context name so the outer AliasedTableExpr binds once.
 				if int(nodeID) < len(builder.ctxByNode) && builder.ctxByNode[nodeID] != nil {
-					lower := builder.compCtx.GetLowerCaseTableNames()
-					builder.ctxByNode[nodeID].cteName =
-						tree.NewCStr(schema, lower).Compare() + "." + tree.NewCStr(table, lower).Compare()
+					// A persisted view keeps the name-resolution mode from when it
+					// was created. The caller's mode is still used above for rewrite
+					// policy lookup, but must not change the qualifier used by the
+					// view's stored SQL.
+					lower := ctx.lower
+					replacementName := tree.NewCStr(schema, lower).Compare() + "." + tree.NewCStr(table, lower).Compare()
+					if len(ctx.viewPath) > 0 {
+						// Persisted view stars are expanded with the base table name
+						// (for example, `sales`.`id`). Keep that qualifier resolvable
+						// after the table is replaced by this derived rewrite.
+						replacementName = tree.NewCStr(table, lower).Compare()
+					}
+					builder.ctxByNode[nodeID].cteName = replacementName
 				}
 				ctx.remapOption = m
 				return
