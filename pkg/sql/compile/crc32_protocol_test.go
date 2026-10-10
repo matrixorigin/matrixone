@@ -53,8 +53,9 @@ func TestCRC32JSONDestinationProtocolValidation(t *testing.T) {
 	}
 
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}}
-	// Functional-index v107 and migration-regexp v108 do not implement CRC32 overload 1.
-	for _, version := range []int64{defines.MORPCVersion100, defines.MORPCVersion101, defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108} {
+	// Functional-index v107, migration-regexp v108 and Unicode metadata v109
+	// do not implement CRC32 overload 1.
+	for _, version := range []int64{defines.MORPCVersion100, defines.MORPCVersion101, defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
@@ -69,7 +70,7 @@ func TestCRC32JSONDestinationProtocolValidation(t *testing.T) {
 		require.Equal(t, 1, client.calls-calls)
 	}
 
-	client.version = defines.MORPCVersion109
+	client.version = defines.MORPCVersion110
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
@@ -80,7 +81,7 @@ func TestCRC32JSONDestinationProtocolValidation(t *testing.T) {
 	require.NotEmpty(t, data)
 	require.Equal(t, 1, client.calls-calls, "CRC32 and its UINT64 result share the send probe")
 	// A downgrade after successful planning must fail at the send boundary.
-	client.version = defines.MORPCVersion108
+	client.version = defines.MORPCVersion109
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 	// The old identity remains dispatchable to an actual old peer.
@@ -114,12 +115,12 @@ func TestCRC32JSONPlacementLocalFloor(t *testing.T) {
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	for _, kind := range []plan2.ExecType{plan2.ExecTypeTP, plan2.ExecTypeAP_ONECN, plan2.ExecTypeAP_MULTICN} {
 		c.execType = kind
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion108)
-		require.ErrorContains(t, c.constrainRemoteExpressionWorkers(qry), "protocol version 109")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
+		require.ErrorContains(t, c.constrainRemoteExpressionWorkers(qry), "protocol version 110")
 		require.Equal(t, kind, c.execType)
 	}
 	require.Zero(t, client.calls)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
 	c.execType = plan2.ExecTypeAP_ONECN
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Zero(t, client.calls)

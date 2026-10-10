@@ -60,7 +60,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts || features.ExpressionResultMetadataContracts || features.JSONInputContracts || features.YearBitCast || features.JSONScalarLiteralContracts, requiredExpressionContractProtocolVersion(features),
 			"versioned expression semantics require a remote destination",
 			"remote destination does not support versioned expression semantics (MORPC version %d)"},
-		{features.CRC32JSONTextBytes, defines.MORPCVersion109,
+		{features.CRC32JSONTextBytes, defines.MORPCVersion110,
 			"CRC32 JSON text-byte semantics require a versioned remote destination",
 			"remote destination does not support CRC32 JSON text-byte semantics (MORPC version %d)"},
 		{features.StringNumericResultContracts, defines.MORPCVersion80,

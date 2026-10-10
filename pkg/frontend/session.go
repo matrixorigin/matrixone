@@ -2639,6 +2639,11 @@ func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perf
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
+		if execCtx != nil && execCtx.resultMetadata != nil && bat != nil && bat.RowCount() > 0 {
+			if err := execCtx.resultMetadata.publish(); err != nil {
+				return err
+			}
+		}
 		if execCtx != nil && execCtx.input != nil && execCtx.input.isCursorExecute {
 			if err := capturePreparedCursorBatch(ses, execCtx, bat); err != nil {
 				return err

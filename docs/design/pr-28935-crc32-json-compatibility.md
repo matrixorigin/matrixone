@@ -10,7 +10,7 @@ PR data.
 | Identity | Binding and execution |
 | --- | --- |
 | CRC32 overload 0 | Existing catalog/wire expressions hash binary JSON; ordinary non-JSON calls retain their original bytes and scalar casts. |
-| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires candidate MORPC v109. |
+| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires candidate MORPC v110. |
 
 The result stays UINT64; the executor also retains the historic UINT32 wrapper.
 A stored legacy generated value can intentionally differ from a freshly bound
@@ -20,7 +20,7 @@ INSERT, UPDATE, REPLACE, ODKU, prepared rebinding and index maintenance.
 ## Boundaries
 
 Placement checks workers and falls back to one CN. Sending rechecks the actual
-worker at candidate v109; receiving checks the new identity. Old coordinators send identity
+worker at candidate v110; receiving checks the new identity. Old coordinators send identity
 0, which new workers still implement. Unknown capabilities fail closed.
 
 Catalog read and authoring use the existing separate durable admission floors.
@@ -39,19 +39,20 @@ is not a lossless way to preserve a legacy generated expression's algorithm.
 
 ## Upgrade and rollback
 
-Supported sources include main through v108 and supported released versions, not
+Supported sources include main through v109 and supported released versions, not
 earlier unmerged experiment binaries that changed overload 0 in place. Such data
 cannot be distinguished by identity and must not be admitted as a supported
 upgrade source. The current maintenance candidate integrates main
-`d2a0055ebe1a0b2423368e046c1812c18f6face8`, preserving all contracts through v108,
+`a059450c2bedf761dcb585b9e51600b383875568`, preserving all contracts through v109,
 including v101's JSON source domains, v107's functional-index contracts and
-v108's isolated user-variable NULL regexp history during migration. CRC32 uses
-candidate v109. This number is not claimed unique among other unmerged maintenance
+v108's isolated user-variable NULL regexp history during migration and v109's
+native Unicode collation metadata. CRC32 uses candidate v110. This number is
+not claimed unique among other unmerged maintenance
 candidates. Before landing, reallocate it against the actual cumulative main and
 rerun the predecessor/admission tests; a higher number cannot advertise missing
 predecessor capabilities. Cross-PR allocation coordination remains open.
 
-Publishing new persisted expressions requires the durable candidate v109 authoring barrier.
+Publishing new persisted expressions requires the durable candidate v110 authoring barrier.
 Once the durable floor is raised, old CNs must stay excluded, including after
 restart. A failed activation does not imply the floor can be lowered. Rollback
 must respect the existing admission mechanism; this change adds no floor reset.
@@ -86,7 +87,26 @@ Real two-binary rolling upgrade, persistent old-table DML after restart and
 post-floor downgrade rejection remain separate environment acceptance tests;
 mock version values and same-version CI do not prove them.
 
-## Current main integration candidate on 2026-10-09
+## Current main integration candidate on 2026-10-10
+
+The normal merge integrates actual main `a059450c2bedf761dcb585b9e51600b383875568`,
+including Unicode collation metadata and its bootstrap/read/authoring v109
+contract. CRC32's independent identity is provisionally assigned v110 across
+placement, send, receive, persisted read and durable authoring. Tests below are
+updated to reject v109 and accept v110, including a destination downgrade after
+planning. The v110 maintenance candidate has completed Linux/amd64 Go1.27.1
+normal CGo validation: 97 root tests and 374 named pass events across protocol,
+compile, planner, Unicode metadata controls, frontend migration and real binary
+PREPARE consumers, with no failed or skipped selection. Its production binary
+completed two normal canonical `function/func_crc32.sql` comparison runs (169
+assertions each), verified teardown between runs and graceful service shutdown.
+These are current-binary correctness results, not mixed-CN or release acceptance.
+The historical results below retain their original revisions/floors; they are
+not relabelled as v110 acceptance. Actual main landing order still determines
+final allocation; no unmerged JSON_VALUE/opaque-aggregate capability is
+advertised by this candidate.
+
+### Historical integration and validation on 2026-10-09
 
 The normal merge preserves the actual v107 functional-index and v108 migration
 capabilities rather than merely advertising a higher version. CRC32 placement,

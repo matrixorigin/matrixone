@@ -205,22 +205,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if cw != nil {
 		ses.ast = statement
 		binExec, prepareName := cw.BinaryExecute()
-		execSql := makeExecuteSql(ctx, ses, statement, binExec, prepareName)
-		if len(execSql) != 0 {
-			bb := strings.Builder{}
-			bb.WriteString(envStmt)
-			bb.WriteString(" // ")
-			bb.WriteString(execSql)
-			text = commonutil.Abbreviate(bb.String(), int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
-		} else {
-			// ignore envStmt == ""
-			// case: exec `set @t = 2;` will trigger an internal query with the same session.
-			// If you need real sql, can try:
-			//	+ fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-			//	+ cw.GetAst().Format(fmtCtx)
-			//  + envStmt = fmtCtx.String()
-			text = commonutil.Abbreviate(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
-		}
+		text = makeExecuteSql(ctx, ses, statement, binExec, prepareName, envStmt,
+			int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	} else {
 		u, _ := util.FastUuid()
 		stmID = uuid.UUID(u)
@@ -5668,11 +5654,10 @@ func rebuildStaleCachedStatements(ses FeSession, execCtx *ExecCtx) (err error) {
 	return nil
 }
 
-func dispatchStmt(ses FeSession,
-	statsArr *statistic.StatsArray,
-	execCtx *ExecCtx) (err error) {
-	ses.EnterFPrint(FPDispatchStmt)
-	defer ses.ExitFPrint(FPDispatchStmt)
+// checkCachedStatementPlan admits or replaces a cached generation before
+// physical compilation. Keeping this phase separate from Run lets compile-only
+// consumers validate the same generation boundary without publishing results.
+func checkCachedStatementPlan(ses FeSession, execCtx *ExecCtx) error {
 	ses.GetTxnCompileCtx().tcw = execCtx.cw
 	//5. check plan within txn
 	if !execCtx.input.isBinaryProtExecute && execCtx.cw.Plan() != nil {
@@ -5687,10 +5672,21 @@ func dispatchStmt(ses FeSession,
 			}
 		}
 		if flag {
-			if err = rebuildStaleCachedStatements(ses, execCtx); err != nil {
+			if err := rebuildStaleCachedStatements(ses, execCtx); err != nil {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func dispatchStmt(ses FeSession,
+	statsArr *statistic.StatsArray,
+	execCtx *ExecCtx) (err error) {
+	ses.EnterFPrint(FPDispatchStmt)
+	defer ses.ExitFPrint(FPDispatchStmt)
+	if err = checkCachedStatementPlan(ses, execCtx); err != nil {
+		return err
 	}
 
 	//6. execute stmt within txn

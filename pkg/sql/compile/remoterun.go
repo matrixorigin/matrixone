@@ -2353,9 +2353,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 		)
 	}
 	if features.CRC32JSONTextBytes &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion109) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion110) {
 		return moerr.NewNotSupportedNoCtx(
-			"CRC32 JSON text-byte semantics require MORPC protocol version 109",
+			"CRC32 JSON text-byte semantics require MORPC protocol version 110",
 		)
 	}
 	return nil

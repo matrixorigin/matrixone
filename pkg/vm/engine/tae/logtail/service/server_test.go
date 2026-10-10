@@ -263,13 +263,10 @@ func TestReadBarrierDoesNotRegressNewerSessionProgress(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			barrierFrontier := timestamp.Timestamp{PhysicalTime: tc.barrier}
 			newerFrontier := timestamp.Timestamp{PhysicalTime: 40}
-			logtailer := &controlledLogtailer{
-				now: barrierFrontier,
-				barrierFn: func(context.Context) (timestamp.Timestamp, error) {
-					return barrierFrontier, nil
-				},
-			}
-			server := newUnitLogtailServer(t, logtailer)
+			// The single publisher owns incremental, subscription and barrier
+			// admission. Drive that owner synchronously: a transport write can
+			// finish before Publish commits its frontier.
+			server := newUnitLogtailServerWithStart(t, &controlledLogtailer{}, false)
 			transport := newCaptureSession()
 			stream := newCaptureStream(transport)
 			session, err := server.getSession(stream)
@@ -288,9 +285,10 @@ func TestReadBarrierDoesNotRegressNewerSessionProgress(t *testing.T) {
 
 			// Establish incremental progress before a newer subscription, as a session
 			// can filter later updates before receiving another table's snapshot.
-			from := timestamp.Timestamp{PhysicalTime: 10}
 			initial := timestamp.Timestamp{PhysicalTime: 20}
-			require.NoError(t, logtailer.notify(from, initial, nil, mockLogtail(table, initial)))
+			server.publishEvent(t.Context(), event{
+				to: initial, logtails: []logtail.TableLogtail{mockLogtail(table, initial)},
+			})
 			update := receiveCapturedLogtailResponse(t, transport).GetUpdateResponse()
 			require.NotNil(t, update)
 			require.Equal(t, initial, *update.To)
@@ -308,17 +306,17 @@ func TestReadBarrierDoesNotRegressNewerSessionProgress(t *testing.T) {
 				require.NotNil(t, subscribe)
 				require.Equal(t, newerFrontier, *subscribe.Logtail.Ts)
 			} else {
-				require.NoError(t, logtailer.notify(
-					initial, newerFrontier, nil, mockLogtail(table, newerFrontier),
-				))
+				server.publishEvent(t.Context(), event{
+					to: newerFrontier, logtails: []logtail.TableLogtail{mockLogtail(table, newerFrontier)},
+				})
 				update := receiveCapturedLogtailResponse(t, transport).GetUpdateResponse()
 				require.NotNil(t, update)
 				require.Equal(t, newerFrontier, *update.To)
 			}
 
-			require.NoError(t, server.onReadBarrier(
-				t.Context(), stream, &logtail.ReadBarrierRequest{BarrierId: 9},
-			))
+			server.sendReadBarrier(t.Context(), readBarrierEvent{
+				timeout: time.Second, barrierID: 9, timestamp: barrierFrontier, session: session,
+			})
 			if newerFrontier.Less(barrierFrontier) {
 				progress := receiveCapturedLogtailResponse(t, transport).GetUpdateResponse()
 				require.NotNil(t, progress)

@@ -144,8 +144,9 @@ const (
 	MORPCVersion106    int64 = 106 // CDC durable target identity and generation-aware task admission
 	MORPCVersion107    int64 = 107 // functional-index metadata and generated-key maintenance
 	MORPCVersion108    int64 = 108 // isolated user-variable NULL regexp history in connection migration
-	MORPCVersion109    int64 = 109 // CRC32 normalized JSON text-byte execution identity
-	MORPCLatestVersion       = MORPCVersion109
+	MORPCVersion109    int64 = 109 // native Unicode collation identities in persisted information_schema.COLUMNS metadata
+	MORPCVersion110    int64 = 110 // CRC32 normalized JSON text-byte execution identity
+	MORPCLatestVersion       = MORPCVersion110
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

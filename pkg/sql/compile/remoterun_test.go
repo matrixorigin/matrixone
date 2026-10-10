@@ -1572,27 +1572,27 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion93)
 		err = validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
-		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 109")
+		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 110")
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 		client.version = defines.MORPCVersion93
 		_, err = encodeRemoteScope(scope, c.proc)
 		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics")
 
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion108)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline), "protocol version 109")
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline), "protocol version 110")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
-		client.version = defines.MORPCVersion109
-		cRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
+		client.version = defines.MORPCVersion110
+		cRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
 		encoded, err := encodeRemoteScope(scope, c.proc)
 		require.NoError(t, err)
 		decoded, err := decodeScope(encoded, c.proc, true, nil)
 		require.NoError(t, err)
 		decoded.release()
 
-		cRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion108)
+		cRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
 		decoded, err = decodeScope(encoded, c.proc, true, nil)
-		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 109")
+		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 110")
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 		require.Nil(t, decoded)
 	})

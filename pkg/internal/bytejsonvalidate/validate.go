@@ -14,7 +14,10 @@
 
 package bytejsonvalidate
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"encoding/json"
+)
 
 const (
 	typeObject   byte = 0x01
@@ -52,6 +55,23 @@ func UvarintPayload(data []byte) ([]byte, bool) {
 		return nil, false
 	}
 	return data[prefixLength:], true
+}
+
+// DecimalJSONPayload validates one complete JSON number in the exact,
+// uvarint-prefixed decimal representation. The scan is linear in input bytes;
+// even an enormous exponent never allocates an unbounded numeric intermediate.
+func DecimalJSONPayload(data []byte) bool {
+	payload, ok := UvarintPayload(data)
+	if !ok || len(payload) == 0 ||
+		(payload[0] != '-' && (payload[0] < '0' || payload[0] > '9')) {
+		return false
+	}
+	for _, ch := range payload {
+		if ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' {
+			return false
+		}
+	}
+	return json.Valid(payload)
 }
 
 // Container validates the bounds and every descendant of one binary JSON
