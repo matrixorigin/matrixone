@@ -26,14 +26,21 @@ func TestStatementDiagnosticsSQL(t *testing.T) {
 	require.NoError(t, embed.CloseBaseClusterTests())
 	oldEnable := motrace.GetTracerProvider().IsEnable()
 	originalReport := motrace.ReportStatement
-	failedRecord := make(chan []byte, 1)
+	records := make(chan []byte, 8)
 	hooks := gostub.Stub(&motrace.UseCompactStatementDiagnostics, func() bool { return true })
 	hooks.Stub(&motrace.ReportStatement, func(ctx context.Context, s *motrace.StatementInfo) error {
 		text := string(s.Statement)
-		if (strings.Contains(text, "missing_issue23386_probe") || strings.Contains(text, "issue23386_duplicate.t")) && s.Status == motrace.StatementStatusFailed {
+		analysisProbe := strings.Contains(text, "issue23386_analysis_probe")
+		if analysisProbe && s.Status == motrace.StatementStatusRunning {
+			// Control only admission through the synchronous existing report seam.
+			// SQL, prepared execution and analysis publication remain real.
+			s.ResponseAt, s.Duration = time.Now(), 5*time.Second
+		}
+		if analysisProbe && s.Status == motrace.StatementStatusSuccess ||
+			(strings.Contains(text, "missing_issue23386_probe") || strings.Contains(text, "issue23386_duplicate.t")) && s.Status == motrace.StatementStatusFailed {
 			raw := append([]byte(nil), s.ExecPlan2Json(ctx)...)
 			select {
-			case failedRecord <- raw:
+			case records <- raw:
 			default:
 			}
 		}
@@ -48,12 +55,80 @@ func TestStatementDiagnosticsSQL(t *testing.T) {
 		db := openRetestSQLDB(t, c)
 		defer db.Close()
 		motrace.GetTracerProvider().SetEnable(true)
+		readRecord := func(t *testing.T, skipPreparation bool) ([]byte, *models.StatementDiagnostics) {
+			t.Helper()
+			for {
+				var raw []byte
+				// Wire results may precede EndStatement; wait for terminal publication.
+				select {
+				case raw = <-records:
+				case <-ctx.Done():
+					t.Fatal("terminal diagnostic not published: ", ctx.Err())
+				}
+				var plan models.ExplainData
+				require.NoError(t, json.Unmarshal(raw, &plan))
+				d := plan.StatementDiagnostics
+				require.NotNil(t, d)
+				if skipPreparation && d.Detail.LogicalTotal == 0 {
+					continue
+				}
+				require.NotNil(t, d.Summary)
+				require.LessOrEqual(t, len(raw), models.DiagnosticsL3Budget)
+				return raw, d
+			}
+		}
+		checkReader := func(t *testing.T, raw []byte, outcome, capture string) {
+			t.Helper()
+			for _, mode := range []string{"normal", "verbose", "analyze"} {
+				var rendered string
+				require.NoError(t, db.QueryRowContext(ctx, "select mo_explain_phy(?,?)", string(raw), mode).Scan(&rendered))
+				require.Contains(t, rendered, "Statement diagnostics L")
+				require.Contains(t, rendered, outcome)
+				if capture != "" {
+					require.Contains(t, rendered, "detail="+capture)
+				}
+				if capture == "analysis_unavailable" {
+					require.NotContains(t, rendered, "node[")
+					require.NotContains(t, rendered, "instance[")
+				}
+			}
+		}
+		checkPrepared := func(t *testing.T, analyzed bool) {
+			t.Helper()
+			raw, d := readRecord(t, true)
+			require.Equal(t, "success", d.Outcome)
+			require.Equal(t, 2, d.CapturedLevel)
+			capture := "analysis_unavailable"
+			if analyzed {
+				capture = "complete"
+				require.Equal(t, uint64(1), d.Summary.Attempts)
+				require.NotEmpty(t, d.Logical)
+				for _, n := range d.Logical {
+					require.True(t, n.AnalyzeAvailable)
+				}
+			} else {
+				require.Zero(t, d.Summary.Attempts)
+				require.Empty(t, d.Logical)
+				require.Empty(t, d.Physical)
+				require.Equal(t, d.Detail.LogicalTotal, d.Detail.LogicalOmitted)
+			}
+			require.Equal(t, capture, d.Detail.Capture)
+			checkReader(t, raw, "success", capture)
+		}
 		var v int
 		require.NoError(t, db.QueryRowContext(ctx, "select 7 as issue23386_probe").Scan(&v))
 		require.Equal(t, 7, v)
 		_, err := db.ExecContext(ctx, "create database issue23386_duplicate")
 		require.NoError(t, err)
-		defer db.ExecContext(context.Background(), "drop database issue23386_duplicate")
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			_, err := db.ExecContext(cleanupCtx, "drop database issue23386_duplicate")
+			require.NoError(t, err)
+			var remaining int
+			require.NoError(t, db.QueryRowContext(cleanupCtx, "select count(*) from mo_catalog.mo_database where datname='issue23386_duplicate'").Scan(&remaining))
+			require.Zero(t, remaining)
+		}()
 		for _, sql := range []string{"create table issue23386_duplicate.t(id int primary key)", "insert into issue23386_duplicate.t values(1)"} {
 			_, err = db.ExecContext(ctx, sql)
 			require.NoError(t, err)
@@ -71,37 +146,17 @@ func TestStatementDiagnosticsSQL(t *testing.T) {
 					require.ErrorAs(t, err, &wireErr)
 					require.Equal(t, uint16(1062), wireErr.Number)
 				}
-				var raw []byte
-				// The wire ERR packet can reach the client before EndStatement runs.
-				// Synchronize with the terminal producer, rather than assume timing.
-				select {
-				case raw = <-failedRecord:
-				case <-ctx.Done():
-					t.Fatal("terminal diagnostic not published: ", ctx.Err())
-				}
-				require.NotEmpty(t, raw, "failed wire SQL must reach terminal diagnostics")
-				var plan models.ExplainData
-				require.NoError(t, json.Unmarshal(raw, &plan))
-				d := plan.StatementDiagnostics
-				require.NotNil(t, d)
+				raw, d := readRecord(t, false)
 				require.Equal(t, "failed", d.Outcome)
 				require.GreaterOrEqual(t, d.Level, 2)
-				require.NotNil(t, d.Summary)
-				require.LessOrEqual(t, len(raw), models.DiagnosticsL3Budget)
+				capture := ""
 				if strings.HasPrefix(sql, "insert") {
+					capture = "execution_failed_before_analysis"
 					require.Equal(t, "execution_failed_before_analysis", d.Detail.Capture)
 					require.Empty(t, d.Logical)
 					require.Empty(t, d.Physical)
 				}
-				for _, mode := range []string{"normal", "verbose", "analyze"} {
-					var rendered string
-					require.NoError(t, db.QueryRowContext(ctx, "select mo_explain_phy(?,?)", string(raw), mode).Scan(&rendered))
-					require.Contains(t, rendered, "Statement diagnostics L")
-					require.Contains(t, rendered, "failed")
-					if strings.HasPrefix(sql, "insert") {
-						require.Contains(t, rendered, "execution_failed_before_analysis")
-					}
-				}
+				checkReader(t, raw, "failed", capture)
 			})
 		}
 		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from issue23386_duplicate.t").Scan(&v))
@@ -122,12 +177,45 @@ func TestStatementDiagnosticsSQL(t *testing.T) {
 		require.Contains(t, rendered, "Scope")
 		require.NotContains(t, rendered, "Statement diagnostics")
 		// Exercise the real prepared/reset boundary and check execution results.
-		prepared, err := db.PrepareContext(ctx, "select ? as issue23386_probe")
+		prepared, err := db.PrepareContext(ctx, "select ? as issue23386_analysis_probe")
 		require.NoError(t, err)
 		defer prepared.Close()
-		for _, want := range []int{11, 12} {
+		for _, want := range []int{7, 12} {
 			require.NoError(t, prepared.QueryRowContext(ctx, want).Scan(&v))
 			require.Equal(t, want, v)
+			checkPrepared(t, true)
+		}
+		require.NoError(t, prepared.Close())
+		for _, tc := range []struct {
+			name, sql string
+			empty     bool
+		}{
+			{"prepared_zero_rows", "select ? as issue23386_analysis_probe where false", true},
+			{"prepared_explain", "explain select ? as issue23386_analysis_probe", false},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				stmt, err := db.PrepareContext(ctx, tc.sql)
+				require.NoError(t, err)
+				defer stmt.Close()
+				rows, err := stmt.QueryContext(ctx, 7)
+				require.NoError(t, err)
+				defer rows.Close()
+				if tc.empty {
+					require.False(t, rows.Next(), "zero-row SQL must remain empty")
+				} else {
+					var lines []string
+					for rows.Next() {
+						var line string
+						require.NoError(t, rows.Scan(&line))
+						lines = append(lines, line)
+					}
+					require.Contains(t, strings.Join(lines, "\n"), "Project")
+				}
+				require.NoError(t, rows.Err())
+				require.NoError(t, rows.Close())
+				checkPrepared(t, tc.empty)
+				require.NoError(t, stmt.Close())
+			})
 		}
 	})
 }

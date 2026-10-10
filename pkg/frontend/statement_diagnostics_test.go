@@ -40,6 +40,7 @@ func decodeCompactDiagnostic(t *testing.T, h *jsonPlanHandler) *models.Statement
 func TestCompactDiagnosticSnapshotAndTerminalRefresh(t *testing.T) {
 	defer gostub.Stub(&motrace.UseCompactStatementDiagnostics, func() bool { return true }).Reset()
 	q, phy := compactDiagnosticFixture()
+	phy.Resource = &resource.StatementResourceSummary{}
 	stmt := &motrace.StatementInfo{ResponseAt: time.Now(), Duration: 17 * time.Second}
 	h := newJsonPlanHandler(context.Background(), stmt, nil, q, phy, nil)
 	defer h.Free()
@@ -134,6 +135,9 @@ func BenchmarkCompactStatementDiagnostics(b *testing.B) {
 	}{{"L0", 0}, {"L1", 2 * time.Second}, {"L2", 5 * time.Second}, {"L3", 17 * time.Second}} {
 		b.Run(tc.name, func(b *testing.B) {
 			q, phy := compactDiagnosticFixture()
+			if tc.name != "L0" {
+				phy.Resource = &resource.StatementResourceSummary{}
+			}
 			s := &motrace.StatementInfo{ResponseAt: time.Now(), Duration: tc.duration}
 			ctx := context.Background()
 			b.ReportAllocs()
@@ -147,37 +151,59 @@ func BenchmarkCompactStatementDiagnostics(b *testing.B) {
 	}
 }
 
-func TestCompactDiagnosticFailedGenerationAnalysis(t *testing.T) {
+func TestCompactDiagnosticGenerationAnalysis(t *testing.T) {
 	defer gostub.Stub(&motrace.UseCompactStatementDiagnostics, func() bool { return true }).Reset()
-	for _, duration := range []time.Duration{time.Millisecond, 17 * time.Second} {
-		for _, state := range []string{"nil_plan", "retained_topology", "analyzed"} {
-			t.Run(duration.String()+"/"+state, func(t *testing.T) {
+	for _, tc := range []struct {
+		duration time.Duration
+		err      error
+		outcome  string
+		missing  string
+	}{
+		{time.Millisecond, context.Canceled, "cancelled", "execution_failed_before_analysis"},
+		{17 * time.Second, context.Canceled, "cancelled", "execution_failed_before_analysis"},
+		{5 * time.Second, nil, "success", "analysis_unavailable"},
+		{17 * time.Second, nil, "success", "analysis_unavailable"},
+	} {
+		for _, state := range []string{"nil_plan", "retained_topology", "analyzed", "analyzed_zero"} {
+			t.Run(tc.outcome+"/"+tc.duration.String()+"/"+state, func(t *testing.T) {
 				q, phy := compactDiagnosticFixture()
+				analyzed := strings.HasPrefix(state, "analyzed")
 				if state == "nil_plan" {
 					phy = nil
-				} else if state == "analyzed" {
+				} else if analyzed {
 					phy.Resource = &resource.StatementResourceSummary{}
 				}
-				h := newJsonPlanHandler(context.Background(), &motrace.StatementInfo{ResponseAt: time.Now(), Duration: duration}, nil, q, phy, context.Canceled)
+				if state == "analyzed_zero" {
+					for _, n := range q.GetQuery().Nodes {
+						n.AnalyzeInfo = &plan.AnalyzeInfo{}
+					}
+					phy.LocalScope = nil
+				}
+				h := newJsonPlanHandler(context.Background(), &motrace.StatementInfo{ResponseAt: time.Now(), Duration: tc.duration}, nil, q, phy, tc.err)
 				defer h.Free()
 				// Terminal accounting must not turn missing analysis into availability.
-				require.True(t, h.SetStatementDiagnostics(context.Background(), resource.StatementResourceSummary{StatementWallNS: uint64(duration), AttemptCount: 1}, context.Canceled))
+				require.True(t, h.SetStatementDiagnostics(context.Background(), resource.StatementResourceSummary{StatementWallNS: uint64(tc.duration), AttemptCount: 1}, tc.err))
 				d := decodeCompactDiagnostic(t, h)
-				require.Equal(t, "cancelled", d.Outcome)
+				require.Equal(t, tc.outcome, d.Outcome)
 				require.GreaterOrEqual(t, d.CapturedLevel, 2)
 				require.Equal(t, len(q.GetQuery().Nodes), d.Detail.LogicalTotal)
-				if state == "analyzed" {
+				require.Equal(t, len(q.GetQuery().Nodes)-len(d.Logical), d.Detail.LogicalOmitted)
+				if analyzed {
 					require.Equal(t, "complete", d.Detail.Capture)
 					require.NotEmpty(t, d.Logical)
 					require.True(t, d.Logical[0].AnalyzeAvailable)
-					if d.Level == 3 {
+					if state == "analyzed_zero" {
+						require.Zero(t, d.Logical[0].ElapsedNS)
+						require.Zero(t, d.Logical[0].OutputRows)
+					}
+					if d.Level == 3 && state != "analyzed_zero" {
 						require.NotEmpty(t, d.Physical)
 					}
 				} else {
-					require.Equal(t, "execution_failed_before_analysis", d.Detail.Capture)
+					require.Equal(t, tc.missing, d.Detail.Capture)
 					require.Empty(t, d.Logical)
 					require.Empty(t, d.Physical)
-					require.Contains(t, models.RenderStatementDiagnostics(d, models.VerboseOption), "execution_failed_before_analysis")
+					require.Contains(t, models.RenderStatementDiagnostics(d, models.VerboseOption), tc.missing)
 				}
 			})
 		}
