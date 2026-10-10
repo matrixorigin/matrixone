@@ -40,17 +40,22 @@ func (h *marshalPlanHandler) captureStatementDiagnostics(ctx context.Context, ph
 	}
 	d.SetPhases(statistic.StatsInfoFromContext(ctx))
 	d.Scheduling = projectDiagnosticScheduling(h.schedulingTrace)
+	// Capture follows Run: a failed query without a current preview has not
+	// published analysis. Initialized logical counters and reused topology are
+	// not evidence that this execution was analyzed.
+	analysisUnavailable := h.query != nil && runErr != nil && preview == nil
 	if h.query == nil {
 		d.Detail.Capture = "no_query"
+	} else if analysisUnavailable {
+		d.Detail.Capture = "execution_failed_before_analysis"
+		d.Detail.LogicalTotal = len(h.query.Nodes)
 	} else if level >= 2 {
 		d.Logical = projectDiagnosticLogical(h.query, level)
 		d.Detail.LogicalTotal = len(h.query.Nodes)
 	}
-	if level >= 3 {
+	if level >= 3 && !analysisUnavailable {
 		if phy == nil {
 			d.Detail.Capture = "no_physical_plan"
-		} else if runErr != nil && phy.Resource == nil {
-			d.Detail.Capture = "execution_failed_before_analysis"
 		} else {
 			d.Physical, d.Detail.PhysicalVisited, d.Detail.PhysicalTruncated = projectDiagnosticPhysical(phy)
 			if d.Detail.PhysicalTruncated {

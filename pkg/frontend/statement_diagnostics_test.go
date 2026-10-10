@@ -115,6 +115,7 @@ func TestCompactDiagnosticHugeIdentifiersAndErrorCapture(t *testing.T) {
 	defer gostub.Stub(&motrace.UseCompactStatementDiagnostics, func() bool { return true }).Reset()
 	q, phy := compactDiagnosticFixture()
 	q.GetQuery().Nodes[1].ObjRef.ObjName = strings.Repeat("\x00界", 100000)
+	phy.Resource = &resource.StatementResourceSummary{}
 	stmt := &motrace.StatementInfo{ResponseAt: time.Now(), Duration: time.Millisecond}
 	h := newJsonPlanHandler(context.Background(), stmt, nil, q, phy, context.DeadlineExceeded)
 	defer h.Free()
@@ -146,15 +147,53 @@ func BenchmarkCompactStatementDiagnostics(b *testing.B) {
 	}
 }
 
-func TestCompactDiagnosticFailedUnanalyzedGenerationOmitsPhysical(t *testing.T) {
+func TestCompactDiagnosticFailedGenerationAnalysis(t *testing.T) {
+	defer gostub.Stub(&motrace.UseCompactStatementDiagnostics, func() bool { return true }).Reset()
+	for _, duration := range []time.Duration{time.Millisecond, 17 * time.Second} {
+		for _, state := range []string{"nil_plan", "retained_topology", "analyzed"} {
+			t.Run(duration.String()+"/"+state, func(t *testing.T) {
+				q, phy := compactDiagnosticFixture()
+				if state == "nil_plan" {
+					phy = nil
+				} else if state == "analyzed" {
+					phy.Resource = &resource.StatementResourceSummary{}
+				}
+				h := newJsonPlanHandler(context.Background(), &motrace.StatementInfo{ResponseAt: time.Now(), Duration: duration}, nil, q, phy, context.Canceled)
+				defer h.Free()
+				// Terminal accounting must not turn missing analysis into availability.
+				require.True(t, h.SetStatementDiagnostics(context.Background(), resource.StatementResourceSummary{StatementWallNS: uint64(duration), AttemptCount: 1}, context.Canceled))
+				d := decodeCompactDiagnostic(t, h)
+				require.Equal(t, "cancelled", d.Outcome)
+				require.GreaterOrEqual(t, d.CapturedLevel, 2)
+				require.Equal(t, len(q.GetQuery().Nodes), d.Detail.LogicalTotal)
+				if state == "analyzed" {
+					require.Equal(t, "complete", d.Detail.Capture)
+					require.NotEmpty(t, d.Logical)
+					require.True(t, d.Logical[0].AnalyzeAvailable)
+					if d.Level == 3 {
+						require.NotEmpty(t, d.Physical)
+					}
+				} else {
+					require.Equal(t, "execution_failed_before_analysis", d.Detail.Capture)
+					require.Empty(t, d.Logical)
+					require.Empty(t, d.Physical)
+					require.Contains(t, models.RenderStatementDiagnostics(d, models.VerboseOption), "execution_failed_before_analysis")
+				}
+			})
+		}
+	}
+}
+
+func TestCompactDiagnosticLoggerExclusionPreservesTopLevelStats(t *testing.T) {
 	defer gostub.Stub(&motrace.UseCompactStatementDiagnostics, func() bool { return true }).Reset()
 	q, phy := compactDiagnosticFixture()
-	// Topology survives prepared reset; no current Resource proves analysis ran.
-	phy.Resource = nil
-	h := newJsonPlanHandler(context.Background(), &motrace.StatementInfo{ResponseAt: time.Now(), Duration: 17 * time.Second}, nil, q, phy, context.Canceled)
+	phy.Resource = &resource.StatementResourceSummary{}
+	stmt := &motrace.StatementInfo{Account: "sys", User: "mo_logger", ResponseAt: time.Now()}
+	require.True(t, stmt.IsMoLogger())
+	h := NewJsonPlanHandler(context.Background(), stmt, nil, q, phy)
 	defer h.Free()
-	d := decodeCompactDiagnostic(t, h)
-	require.Equal(t, 3, d.Level)
-	require.Empty(t, d.Physical)
-	require.Equal(t, "execution_failed_before_analysis", d.Detail.Capture)
+	stats, scan := h.Stats(context.Background())
+	require.Zero(t, stats.GetTimeConsumed(), "logger must not run discarded composite resource projection")
+	require.Equal(t, int64(10), scan.RowsRead)
+	require.Equal(t, "{}", string(h.Marshal(context.Background())))
 }

@@ -7370,7 +7370,6 @@ func newMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 		return h
 	}
 	if motrace.UseCompactStatementDiagnostics() {
-		h.isInternalSubStmt = stmt.IsMoLogger()
 		h.captureStatementDiagnostics(ctx, phyPlan, runErr)
 		return h
 	}

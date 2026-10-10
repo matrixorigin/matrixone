@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -29,7 +30,7 @@ func TestStatementDiagnosticsSQL(t *testing.T) {
 	hooks := gostub.Stub(&motrace.UseCompactStatementDiagnostics, func() bool { return true })
 	hooks.Stub(&motrace.ReportStatement, func(ctx context.Context, s *motrace.StatementInfo) error {
 		text := string(s.Statement)
-		if strings.Contains(text, "missing_issue23386_probe") && s.Status == motrace.StatementStatusFailed {
+		if (strings.Contains(text, "missing_issue23386_probe") || strings.Contains(text, "issue23386_duplicate.t")) && s.Status == motrace.StatementStatusFailed {
 			raw := append([]byte(nil), s.ExecPlan2Json(ctx)...)
 			select {
 			case failedRecord <- raw:
@@ -50,31 +51,61 @@ func TestStatementDiagnosticsSQL(t *testing.T) {
 		var v int
 		require.NoError(t, db.QueryRowContext(ctx, "select 7 as issue23386_probe").Scan(&v))
 		require.Equal(t, 7, v)
-		_, err := db.ExecContext(ctx, "select * from missing_issue23386_probe")
-		require.Error(t, err)
-		var raw []byte
-		// The wire ERR packet can reach the client before EndStatement runs.
-		// Synchronize with the terminal producer, rather than assume timing.
-		select {
-		case raw = <-failedRecord:
-		case <-ctx.Done():
-			t.Fatal("terminal diagnostic not published: ", ctx.Err())
+		_, err := db.ExecContext(ctx, "create database issue23386_duplicate")
+		require.NoError(t, err)
+		defer db.ExecContext(context.Background(), "drop database issue23386_duplicate")
+		for _, sql := range []string{"create table issue23386_duplicate.t(id int primary key)", "insert into issue23386_duplicate.t values(1)"} {
+			_, err = db.ExecContext(ctx, sql)
+			require.NoError(t, err)
 		}
-		require.NotEmpty(t, raw, "failed wire SQL must reach terminal diagnostics")
-		var plan models.ExplainData
-		require.NoError(t, json.Unmarshal(raw, &plan))
-		d := plan.StatementDiagnostics
-		require.NotNil(t, d)
-		require.Equal(t, "failed", d.Outcome)
-		require.GreaterOrEqual(t, d.Level, 2)
-		require.NotNil(t, d.Summary)
-		require.LessOrEqual(t, len(raw), models.DiagnosticsL3Budget)
-		for _, mode := range []string{"normal", "verbose", "analyze"} {
-			var rendered string
-			require.NoError(t, db.QueryRowContext(ctx, "select mo_explain_phy(?,?)", string(raw), mode).Scan(&rendered))
-			require.Contains(t, rendered, "Statement diagnostics L")
-			require.Contains(t, rendered, "failed")
+		for _, tc := range []struct{ name, sql string }{
+			{"compile_failure", "select * from missing_issue23386_probe"},
+			{"run_failure", "insert into issue23386_duplicate.t values(1)"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				sql := tc.sql
+				_, err := db.ExecContext(ctx, sql)
+				require.Error(t, err)
+				if strings.HasPrefix(sql, "insert") {
+					var wireErr *mysql.MySQLError
+					require.ErrorAs(t, err, &wireErr)
+					require.Equal(t, uint16(1062), wireErr.Number)
+				}
+				var raw []byte
+				// The wire ERR packet can reach the client before EndStatement runs.
+				// Synchronize with the terminal producer, rather than assume timing.
+				select {
+				case raw = <-failedRecord:
+				case <-ctx.Done():
+					t.Fatal("terminal diagnostic not published: ", ctx.Err())
+				}
+				require.NotEmpty(t, raw, "failed wire SQL must reach terminal diagnostics")
+				var plan models.ExplainData
+				require.NoError(t, json.Unmarshal(raw, &plan))
+				d := plan.StatementDiagnostics
+				require.NotNil(t, d)
+				require.Equal(t, "failed", d.Outcome)
+				require.GreaterOrEqual(t, d.Level, 2)
+				require.NotNil(t, d.Summary)
+				require.LessOrEqual(t, len(raw), models.DiagnosticsL3Budget)
+				if strings.HasPrefix(sql, "insert") {
+					require.Equal(t, "execution_failed_before_analysis", d.Detail.Capture)
+					require.Empty(t, d.Logical)
+					require.Empty(t, d.Physical)
+				}
+				for _, mode := range []string{"normal", "verbose", "analyze"} {
+					var rendered string
+					require.NoError(t, db.QueryRowContext(ctx, "select mo_explain_phy(?,?)", string(raw), mode).Scan(&rendered))
+					require.Contains(t, rendered, "Statement diagnostics L")
+					require.Contains(t, rendered, "failed")
+					if strings.HasPrefix(sql, "insert") {
+						require.Contains(t, rendered, "execution_failed_before_analysis")
+					}
+				}
+			})
 		}
+		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from issue23386_duplicate.t").Scan(&v))
+		require.Equal(t, 1, v, "failed insert must leave the original row intact")
 		// Live EXPLAIN PHY remains the full physical presentation contract.
 		explained, err := db.QueryContext(ctx, "explain phyplan select 7")
 		require.NoError(t, err)
