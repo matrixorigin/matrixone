@@ -109,7 +109,9 @@ func restoreUserDefinedFunctionCatalogWithCurrentSchema(
 	if err := bh.Exec(targetCtx, dropTableIfExistsSQL(moCatalog, "mo_user_defined_function")); err != nil {
 		return err
 	}
-	if err := bh.Exec(targetCtx, MoCatalogMoUserDefinedFunctionDDL); err != nil {
+	// The running binary owns this catalog schema, including historical widths.
+	internalDDL := context.WithValue(targetCtx, defines.InternalExecutorKey{}, true)
+	if err := bh.Exec(internalDDL, MoCatalogMoUserDefinedFunctionDDL); err != nil {
 		return err
 	}
 
