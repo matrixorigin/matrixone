@@ -21,6 +21,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -81,6 +82,74 @@ func TestGenInsertIndexTableSql_UsesPrefixExpression(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, "insert into  `test`.`__mo_index_unique_test` select (substring(`order`, 1, 5)), `id` from `test`.`orders` where (substring(`order`, 1, 5)) is not null;", sql)
+}
+
+func TestGenInsertIndexTableSqlUsesVersionedPhysicalKeys(t *testing.T) {
+	originTableDef := &planpb.TableDef{
+		Name: "orders",
+		Cols: []*planpb.ColDef{{
+			Name: "name",
+			Typ:  planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)},
+		}},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
+	}
+
+	t.Run("single-part unique", func(t *testing.T) {
+		indexDef := &planpb.IndexDef{
+			IndexTableName: "__mo_index_unique_v1",
+			Parts:          []string{"name"},
+			Unique:         true,
+			KeyFormat:      collation.KeyFormatV1,
+		}
+		sql, err := genInsertIndexTableSql(originTableDef, indexDef, "test", true)
+		require.NoError(t, err)
+		require.Contains(t, sql, "physical_collation_key(`name`)")
+	})
+
+	t.Run("composite unique", func(t *testing.T) {
+		indexDef := &planpb.IndexDef{
+			IndexTableName: "__mo_index_unique_v1",
+			Parts:          []string{"name", catalog.CreateAlias("id")},
+			Unique:         true,
+			KeyFormat:      collation.KeyFormatV1,
+		}
+		sql, err := genInsertIndexTableSql(originTableDef, indexDef, "test", true)
+		require.NoError(t, err)
+		require.Contains(t, sql, "physical_serial(`name`,`id`)")
+	})
+
+	t.Run("composite secondary", func(t *testing.T) {
+		indexDef := &planpb.IndexDef{
+			IndexTableName: "__mo_index_secondary_v1",
+			Parts:          []string{"name", catalog.CreateAlias("id")},
+			KeyFormat:      collation.KeyFormatV1,
+		}
+		sql, err := genInsertIndexTableSql(originTableDef, indexDef, "test", false)
+		require.NoError(t, err)
+		require.Contains(t, sql, "physical_serial_full(`name`,`id`)")
+	})
+}
+
+func TestGenInsertIndexTableSqlWithoutPrimaryKeyKeepsSerialContract(t *testing.T) {
+	originTableDef := &planpb.TableDef{
+		Name: "orders",
+		Pkey: &planpb.PrimaryKeyDef{},
+	}
+	indexDef := &planpb.IndexDef{
+		IndexTableName: "__mo_index_secondary_no_pk",
+		Parts:          []string{"name", "region"},
+	}
+	sql, err := genInsertIndexTableSql(originTableDef, indexDef, "test", false)
+	require.NoError(t, err)
+	require.Equal(t, "insert into  `test`.`__mo_index_secondary_no_pk` select serial(`name`,`region`) from `test`.`orders` where serial(`name`,`region`) is not null;", sql)
+
+	indexDef.KeyFormat = collation.KeyFormatV1
+	sql, err = genInsertIndexTableSql(originTableDef, indexDef, "test", false)
+	require.NoError(t, err)
+	require.Equal(t, "insert into  `test`.`__mo_index_secondary_no_pk` select physical_serial(`name`,`region`) from `test`.`orders` where physical_serial(`name`,`region`) is not null;", sql)
 }
 
 func TestGenInsertIndexTableSql_SpatialIndexUsesRawGeometryColumn(t *testing.T) {

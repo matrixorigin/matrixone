@@ -3318,6 +3318,11 @@ func (op *opSerial) BuiltInPhysicalSerial(parameters []*vector.Vector, result ve
 func (op *opSerial) builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, physicalKey bool) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	var err error
+	if physicalKey {
+		if err = validatePhysicalSerialValues(parameters, length); err != nil {
+			return err
+		}
+	}
 
 	bitMap := new(nulls.Nulls)
 	for _, v := range parameters {
@@ -3380,6 +3385,11 @@ func (op *opSerial) builtInSerialFull(parameters []*vector.Vector, result vector
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	var err error
+	if physicalKey {
+		if err = validatePhysicalSerialValues(parameters, length); err != nil {
+			return err
+		}
+	}
 	if len(op.funcs) == 0 {
 		op.funcs = make([]func(v *vector.Vector, idx int, ps *types.Packer), len(parameters))
 		for i, p := range parameters {
@@ -3403,6 +3413,28 @@ func (op *opSerial) builtInSerialFull(parameters []*vector.Vector, result vector
 		}
 		if err = rs.AppendBytes(op.packer.GetBuf(), false); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// validatePhysicalSerialValues is the abortable admission boundary for the
+// SQL physical_serial and physical_serial_full functions. Their pack closures
+// intentionally share the legacy no-error serializer, so validate every
+// native Unicode value before any output row is published. This keeps invalid
+// UTF-8 and out-of-repertoire values from becoming a second raw-byte identity.
+func validatePhysicalSerialValues(parameters []*vector.Vector, length int) error {
+	for _, v := range parameters {
+		if v == nil || !types.IsUnicodeCollation(v.GetType().Charset) || !v.GetType().Oid.IsMySQLString() {
+			continue
+		}
+		for i := 0; i < length; i++ {
+			if v.IsNull(uint64(i)) {
+				continue
+			}
+			if err := types.ValidateCollationValue(*v.GetType(), v.GetBytesAt(i)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -3565,8 +3597,10 @@ func BuiltInPhysicalCollationKey(parameters []*vector.Vector, result vector.Func
 			}
 			continue
 		}
-		if types.IsUnicodeCollation(typ.Charset) {
-			value = types.CollationKeyOrOriginal(typ.Charset, value)
+		var err error
+		value, err = types.PhysicalCollationKey(typ, value)
+		if err != nil {
+			return err
 		}
 		if err := rs.AppendBytes(value, false); err != nil {
 			return err
@@ -3591,6 +3625,29 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 // the opaque UCA comparison-key domain used for native Unicode index parts.
 func PhysicalSerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull bool) {
 	serialHelper(v, bitMap, ps, isFull, true)
+}
+
+// PhysicalSerialHelperChecked validates native Unicode values before building
+// an index key.  The historical helper has no error return because it is also
+// used by generic planner-only paths; index producers that can abort a batch
+// should use this wrapper so malformed/repertoire-invalid bytes cannot become
+// a tagged raw fallback in a persisted key.
+func PhysicalSerialHelperChecked(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull bool) error {
+	if v == nil || !types.IsUnicodeCollation(v.GetType().Charset) || !v.GetType().Oid.IsMySQLString() {
+		PhysicalSerialHelper(v, bitMap, ps, isFull)
+		return nil
+	}
+	values, area := vector.MustVarlenaRawData(v)
+	for i := range values {
+		if v.IsNull(uint64(i)) {
+			continue
+		}
+		if err := types.ValidateCollationValue(*v.GetType(), values[i].GetByteSlice(area)); err != nil {
+			return err
+		}
+	}
+	PhysicalSerialHelper(v, bitMap, ps, isFull)
+	return nil
 }
 
 func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull, physicalKey bool) {

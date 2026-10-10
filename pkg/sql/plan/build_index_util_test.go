@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -152,6 +153,46 @@ func TestIndexTableKeyTypeForSinglePart(t *testing.T) {
 		got := indexTableKeyTypeForSinglePart(col, keyPartWithLength("s", 0))
 		require.Equal(t, int32(types.T_uint64), got.Id)
 		require.Equal(t, "a,b,c", got.Enumvalues)
+	})
+
+	t.Run("versioned unicode key uses opaque binary payload", func(t *testing.T) {
+		col := &ColDef{Typ: Type{
+			Id:      int32(types.T_varchar),
+			Width:   64,
+			Charset: uint32(types.CharsetUTF8MB4UnicodeCI),
+		}}
+		got := indexTableKeyTypeForSinglePartWithFormat(col, keyPartWithLength("u", 0), collation.KeyFormatV1)
+		require.Equal(t, int32(types.T_varbinary), got.Id)
+		require.Equal(t, int32(types.MaxVarBinaryLen), got.Width)
+		require.Equal(t, uint32(types.CharsetBinary), got.Charset)
+
+		legacy := indexTableKeyTypeForSinglePartWithFormat(col, keyPartWithLength("u", 0), collation.KeyFormatLegacy)
+		require.Equal(t, int32(types.T_varchar), legacy.Id)
+		require.Equal(t, uint32(types.CharsetUTF8MB4UnicodeCI), legacy.Charset)
+	})
+
+	t.Run("versioned unicode text prefix uses opaque binary payload", func(t *testing.T) {
+		col := Type{Id: int32(types.T_text), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)}
+		got, ok := indexTableKeyTypeForPrefixWithFormat(col, collation.KeyFormatV1)
+		require.True(t, ok)
+		require.Equal(t, int32(types.T_varbinary), got.Id)
+		require.Equal(t, uint32(types.CharsetBinary), got.Charset)
+	})
+
+	t.Run("versioned unicode primary payload uses opaque binary type", func(t *testing.T) {
+		col := &ColDef{Typ: Type{
+			Id:      int32(types.T_varchar),
+			Width:   64,
+			Charset: uint32(types.CharsetUTF8MB4UnicodeCI),
+		}}
+		got := indexTablePrimaryKeyTypeWithFormat(col, collation.KeyFormatV1)
+		require.Equal(t, int32(types.T_varbinary), got.Id)
+		require.Equal(t, int32(types.MaxVarBinaryLen), got.Width)
+		require.Equal(t, uint32(types.CharsetBinary), got.Charset)
+
+		legacy := indexTablePrimaryKeyTypeWithFormat(col, collation.KeyFormatLegacy)
+		require.Equal(t, int32(types.T_varchar), legacy.Id)
+		require.Equal(t, uint32(types.CharsetUTF8MB4UnicodeCI), legacy.Charset)
 	})
 }
 

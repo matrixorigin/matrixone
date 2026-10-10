@@ -197,6 +197,10 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 				p.Close()
 			}
 		}()
+		// Master-index selection is gated by !indexUsesUnicodeCollation in
+		// applyIndicesForFilters. Versioned Unicode physical keys therefore do
+		// not enter this legacy prefix payload path; regular/unique index paths
+		// use the checked physical serializers instead.
 		function.PhysicalSerialHelper(arg0AsColNameVec, nil, ps, true)
 		function.PhysicalSerialHelper(arg1AsColValuesVec, nil, ps, true)
 		arg1ForPrefixInVec := vector.NewVec(nameVecType)
