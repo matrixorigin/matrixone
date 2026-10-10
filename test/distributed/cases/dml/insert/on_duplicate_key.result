@@ -577,3 +577,110 @@ deallocate prepare s_odku_gate_reuse;
 drop table t_odku_subquery_gate;
 drop table t_odku_subquery_nokey;
 drop table t_odku_subquery_source;
+drop table if exists t_odku_default_alias;
+create table t_odku_default_alias (id int primary key default 1, b int default 7);
+insert into t_odku_default_alias values (1, 99);
+insert into t_odku_default_alias values () as n(k, v) on duplicate key update b = n.v;
+select id, b from t_odku_default_alias order by id;
+➤ id[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  7
+insert into t_odku_default_alias values () as n(k) on duplicate key update b = n.k;
+invalid input: INSERT row alias column list has 1 entries, but the INSERT has 2 columns
+select id, b from t_odku_default_alias order by id;
+➤ id[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  7
+insert into t_odku_default_alias values () as n(k, k) on duplicate key update b = n.k;
+Duplicate column name 'k'
+insert into t_odku_default_alias (missing, b) values (1, 7) as n(k, v) on duplicate key update b = n.v;
+Unknown column 'missing' in 't_odku_default_alias'
+insert into t_odku_default_alias values () as n(k, v) on duplicate key update b = n.missing;
+invalid input: column 'missing' does not exist
+select id, b from t_odku_default_alias order by id;
+➤ id[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  7
+drop table t_odku_default_alias;
+drop table if exists t_odku_default_generated;
+create table t_odku_default_generated (id int primary key default 1, a int default 7, g int generated always as (a + 1) stored);
+insert into t_odku_default_generated (id, a) values (1, 99);
+insert into t_odku_default_generated values () as n(k, x, y) on duplicate key update a = n.y;
+select id, a, g from t_odku_default_generated order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  𝄀
+1  ¦  8  ¦  9
+insert into t_odku_default_generated (id, a, g) values (1, 9, default) as n(k, x, y) on duplicate key update a = n.x, g = default;
+select id, a, g from t_odku_default_generated order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  𝄀
+1  ¦  9  ¦  10
+insert into t_odku_default_generated (id, a, g) values (1, 9, 100) as n(k, x, y) on duplicate key update a = n.x;
+invalid input: the value specified for generated column 'g' in table 't_odku_default_generated' is not allowed
+select id, a, g from t_odku_default_generated order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  𝄀
+1  ¦  9  ¦  10
+drop table t_odku_default_generated;
+drop table if exists t_odku_hidden_alias;
+create table t_odku_hidden_alias (a int default 7, g int generated always as (a + 1) stored);
+insert into t_odku_hidden_alias values () as n(x, y) on duplicate key update a = n.y;
+select a, g from t_odku_hidden_alias order by a;
+➤ a[4,32,0]  ¦  g[4,32,0]  𝄀
+7  ¦  8
+insert into t_odku_hidden_alias (__mo_fake_pk_col, a) values (1, 9) as n(k, x) on duplicate key update a = n.x;
+Unknown column '__mo_fake_pk_col' in 't_odku_hidden_alias'
+select a, g from t_odku_hidden_alias order by a;
+➤ a[4,32,0]  ¦  g[4,32,0]  𝄀
+7  ¦  8
+insert into t_odku_hidden_alias values () as n(x, y) on duplicate key update __mo_fake_pk_col = n.x;
+invalid input: column '__mo_fake_pk_col' does not exist
+insert into t_odku_hidden_alias values () as n(x, y) on duplicate key update a = t_odku_hidden_alias.__mo_fake_pk_col;
+invalid input: column '__mo_fake_pk_col' does not exist
+select a, g from t_odku_hidden_alias order by a;
+➤ a[4,32,0]  ¦  g[4,32,0]  𝄀
+7  ¦  8
+drop table t_odku_hidden_alias;
+set @r8_old_group_concat = @@group_concat_max_len;
+set group_concat_max_len = 1048576;
+create table t_odku_action_batches (id int primary key, v int not null);
+insert into t_odku_action_batches values (1, 10);
+set @r8_fault_enabled = enable_fault_injection();
+set @r8_added = add_fault_point('fj/sql/main_table_write/on_duplicate_key/t_odku_action_batches', ':::', 'echo', 0, '');
+set @r8_added = add_fault_point('row_alias_batch_count', ':::', 'getcount', 0, 'fj/sql/main_table_write/on_duplicate_key/t_odku_action_batches');
+insert into t_odku_action_batches values (1, NULL), (2, 12) as n(id, v) on duplicate key update v = n.v;
+constraint violation: Column 'v' cannot be null
+select trigger_fault_point('row_alias_batch_count') = 0 as no_action_on_first_batch_error;
+➤ no_action_on_first_batch_error[-7,1,0]  𝄀
+1
+set @r8_bad_sql = (select concat('insert into t_odku_action_batches values ', group_concat(concat('(', result, ',', if(result = 8193, 'NULL', cast(result + 10 as varchar)), ')') order by result separator ','), ' as n(id,v) on duplicate key update v=n.v') from generate_series(1, 8193) g);
+prepare row_alias_batch from @r8_bad_sql;
+start transaction;
+insert into t_odku_action_batches values (90000, 90);
+set @r8_removed = remove_fault_point('fj/sql/main_table_write/on_duplicate_key/t_odku_action_batches');
+set @r8_added = add_fault_point('fj/sql/main_table_write/on_duplicate_key/t_odku_action_batches', ':::', 'echo', 0, '');
+execute row_alias_batch;
+constraint violation: Column 'v' cannot be null
+select trigger_fault_point('row_alias_batch_count') = 1 as first_batch_action_completed;
+➤ first_batch_action_completed[-7,1,0]  𝄀
+1
+select count(*) = 2 and sum(v) = 100 as failed_statement_rows_rolled_back from t_odku_action_batches;
+➤ failed_statement_rows_rolled_back[-7,1,0]  𝄀
+1
+rollback;
+select count(*) = 1 and sum(v) = 10 as transaction_marker_rolled_back from t_odku_action_batches;
+➤ transaction_marker_rolled_back[-7,1,0]  𝄀
+1
+deallocate prepare row_alias_batch;
+set @r8_good_sql = replace(@r8_bad_sql, ',NULL)', ',8203)');
+prepare row_alias_batch from @r8_good_sql;
+set @r8_removed = remove_fault_point('fj/sql/main_table_write/on_duplicate_key/t_odku_action_batches');
+set @r8_added = add_fault_point('fj/sql/main_table_write/on_duplicate_key/t_odku_action_batches', ':::', 'echo', 0, '');
+execute row_alias_batch;
+select trigger_fault_point('row_alias_batch_count') = 2 as two_real_write_batches;
+➤ two_real_write_batches[-7,1,0]  𝄀
+1
+select count(*) = 8193 and sum(v) = 33648651 as reused_statement_data from t_odku_action_batches;
+➤ reused_statement_data[-7,1,0]  𝄀
+1
+deallocate prepare row_alias_batch;
+set @r8_removed = remove_fault_point('fj/sql/main_table_write/on_duplicate_key/t_odku_action_batches');
+set @r8_removed = remove_fault_point('row_alias_batch_count');
+set @r8_fault_disabled = disable_fault_injection();
+drop table t_odku_action_batches;
+set group_concat_max_len = @r8_old_group_concat;
+1681460d43 (test(sql): prove row alias rollback after an earlier write batch)

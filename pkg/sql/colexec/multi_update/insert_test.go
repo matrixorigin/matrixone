@@ -22,10 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -334,4 +336,40 @@ func prepareTestInsertMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool) []
 	}
 
 	return updateCtxs
+}
+
+func TestMainTableWriteObservationScopeAndReset(t *testing.T) {
+	require.True(t, fault.Enable())
+	t.Cleanup(func() { fault.Disable() })
+	ctx := context.Background()
+	point := "fj/sql/main_table_write/observer_db/observer_table"
+	require.NoError(t, fault.AddFaultPoint(ctx, point, ":::", "echo", 0, "", false))
+	require.NoError(t, fault.AddFaultPoint(ctx, "observer_count", ":::", "getcount", 0, point, false))
+	proc := testutil.NewProcess(t)
+	observeMainTableWrite(proc, &MultiUpdateCtx{ObjRef: &planpb.ObjectRef{SchemaName: "other_db", ObjName: "observer_table"}})
+	count, _, ok := fault.TriggerFault("observer_count")
+	require.True(t, ok)
+	require.Zero(t, count)
+	observeMainTableWrite(proc, &MultiUpdateCtx{ObjRef: &planpb.ObjectRef{SchemaName: "observer_db", ObjName: "observer_table"}})
+	count, _, _ = fault.TriggerFault("observer_count")
+	require.Equal(t, int64(1), count)
+	_, err := fault.RemoveFaultPoint(ctx, point)
+	require.NoError(t, err)
+	require.NoError(t, fault.AddFaultPoint(ctx, point, ":::", "echo", 0, "", false))
+	count, _, _ = fault.TriggerFault("observer_count")
+	require.Zero(t, count)
+	// A deliberately blocking observation must respect statement cancellation.
+	_, err = fault.RemoveFaultPoint(ctx, point)
+	require.NoError(t, err)
+	require.NoError(t, fault.AddFaultPoint(ctx, point, ":::", "wait", 0, "", false))
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	proc.Ctx = cancelled
+	observeMainTableWrite(proc, &MultiUpdateCtx{ObjRef: &planpb.ObjectRef{SchemaName: "observer_db", ObjName: "observer_table"}})
+	require.NoError(t, fault.AddFaultPoint(ctx, "observer_waiters", ":::", "getwaiters", 0, point, false))
+	waiters, _, ok := fault.TriggerFault("observer_waiters")
+	require.True(t, ok)
+	require.Zero(t, waiters, "cancelled statements must not retain an observation waiter")
+	require.True(t, fault.Disable())
+	observeMainTableWrite(proc, &MultiUpdateCtx{})
 }
