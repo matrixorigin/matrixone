@@ -717,7 +717,7 @@ func requiresPessimisticObjectLifecycleTxn(
 		// check in TxnHandler.Create rejects an active non-pessimistic txn.
 		return !st.Temporary && ses != nil && ses.GetTxnHandler().InActiveTxn()
 	case *tree.TruncateTable, *tree.CreatePitr, *tree.DropPitr, *tree.AlterPitr,
-		*tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
+		*tree.AlterDatabase, *tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
 		*tree.AlterSequence, *tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase,
 		*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick:
 		return true

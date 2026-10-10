@@ -1809,6 +1809,9 @@ func (ses *feSessionImpl) GetSessionSysVars() *SystemVariables {
 
 func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	name = strings.ToLower(name)
+	if value, handled, err := databaseDefaultSystemVariable(ses, name); handled {
+		return value, err
+	}
 	if _, ok := gSysVarsDefs[name]; !ok {
 		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
 	}

@@ -120,23 +120,23 @@ DROP TABLE charset_metadata_repro;
 DROP DATABASE IF EXISTS charset_test_utf8;
 CREATE DATABASE charset_test_utf8 CHARACTER SET utf8;
 SHOW CREATE DATABASE charset_test_utf8;
-➤ Database[12,17,0]  ¦  Create Database[12,35,0]  𝄀
-charset_test_utf8  ¦  CREATE DATABASE `charset_test_utf8`
+➤ Database[12,5000,0]  ¦  Create Database[12,84,0]  𝄀
+charset_test_utf8  ¦  CREATE DATABASE `charset_test_utf8` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 DROP DATABASE IF EXISTS charset_test_utf8mb4;
 CREATE DATABASE charset_test_utf8mb4 CHARACTER SET utf8mb4;
 SHOW CREATE DATABASE charset_test_utf8mb4;
-➤ Database[12,20,0]  ¦  Create Database[12,38,0]  𝄀
-charset_test_utf8mb4  ¦  CREATE DATABASE `charset_test_utf8mb4`
+➤ Database[12,5000,0]  ¦  Create Database[12,87,0]  𝄀
+charset_test_utf8mb4  ¦  CREATE DATABASE `charset_test_utf8mb4` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 DROP DATABASE IF EXISTS charset_test_utf8mb4_bin;
 CREATE DATABASE charset_test_utf8mb4_bin CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 SHOW CREATE DATABASE charset_test_utf8mb4_bin;
-➤ Database[12,24,0]  ¦  Create Database[12,42,0]  𝄀
-charset_test_utf8mb4_bin  ¦  CREATE DATABASE `charset_test_utf8mb4_bin`
+➤ Database[12,5000,0]  ¦  Create Database[12,84,0]  𝄀
+charset_test_utf8mb4_bin  ¦  CREATE DATABASE `charset_test_utf8mb4_bin` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
 DROP DATABASE IF EXISTS charset_test_utf8mb4_general;
 CREATE DATABASE charset_test_utf8mb4_general CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 SHOW CREATE DATABASE charset_test_utf8mb4_general;
-➤ Database[12,28,0]  ¦  Create Database[12,46,0]  𝄀
-charset_test_utf8mb4_general  ¦  CREATE DATABASE `charset_test_utf8mb4_general`
+➤ Database[12,5000,0]  ¦  Create Database[12,95,0]  𝄀
+charset_test_utf8mb4_general  ¦  CREATE DATABASE `charset_test_utf8mb4_general` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 USE charset_test;
 CREATE TABLE t_default (
 id INT PRIMARY KEY,
@@ -238,13 +238,13 @@ FROM (SELECT name FROM t_utf8mb4_unicode_ci GROUP BY name) AS grouped;
 ➤ group_count[-5,64,0]  𝄀
 3
 SELECT name FROM t_utf8mb4_unicode_ci ORDER BY name, id;
-➤ name[12,400,0]  𝄀
+➤ name[12,100,0]  𝄀
 a  𝄀
 A  𝄀
 b  𝄀
 Z
 SELECT name FROM t_utf8mb4_unicode_ci ORDER BY name, id LIMIT 2;
-➤ name[12,400,0]  𝄀
+➤ name[12,100,0]  𝄀
 a  𝄀
 A
 CREATE TABLE t_column_charset (
@@ -635,30 +635,29 @@ t_alter  ¦  CREATE TABLE `t_alter` (
   PRIMARY KEY (`id`)
 )
 ALTER TABLE t_alter COLLATE utf8mb4_bin;
-invalid input: unsupported alter option in inplace mode: Collate = utf8mb4_bin
 SHOW CREATE TABLE t_alter;
-➤ Table[12,7,0]  ¦  Create Table[12,104,0]  𝄀
+➤ Table[12,7,0]  ¦  Create Table[12,151,0]  𝄀
 t_alter  ¦  CREATE TABLE `t_alter` (
   `id` int NOT NULL,
-  `name` varchar(100) DEFAULT NULL,
+  `name` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL,
   PRIMARY KEY (`id`)
-)
+) COLLATE=utf8mb4_bin
 ALTER TABLE t_alter MODIFY COLUMN name VARCHAR(100) CHARACTER SET utf8mb4;
 SHOW CREATE TABLE t_alter;
-➤ Table[12,7,0]  ¦  Create Table[12,104,0]  𝄀
+➤ Table[12,7,0]  ¦  Create Table[12,151,0]  𝄀
 t_alter  ¦  CREATE TABLE `t_alter` (
   `id` int NOT NULL,
-  `name` varchar(100) DEFAULT NULL,
+  `name` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL,
   PRIMARY KEY (`id`)
-)
+) COLLATE=utf8mb4_bin
 ALTER TABLE t_alter MODIFY COLUMN name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 SHOW CREATE TABLE t_alter;
-➤ Table[12,7,0]  ¦  Create Table[12,124,0]  𝄀
+➤ Table[12,7,0]  ¦  Create Table[12,144,0]  𝄀
 t_alter  ¦  CREATE TABLE `t_alter` (
   `id` int NOT NULL,
   `name` varchar(100) COLLATE utf8mb4_bin DEFAULT NULL,
   PRIMARY KEY (`id`)
-)
+) COLLATE=utf8mb4_bin
 CREATE TABLE t_index_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100),

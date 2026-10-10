@@ -13,8 +13,8 @@ create database statement_query_type;
 /* cloud_user */ create table test_table(col1 int,col2 varchar);
 /* cloud_user */ create view test_view as select * from test_table;
 /* cloud_user */ show create database test_db;
-Database    Create Database
-test_db    CREATE DATABASE `test_db`
+➤ Database[12,5000,0]  ¦  Create Database[12,120,0]  𝄀
+test_db  ¦  CREATE DATABASE `test_db` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 /* cloud_user */ show create table test_table;
 Table    Create Table
 test_table    CREATE TABLE `test_table` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(65535) DEFAULT NULL\n)

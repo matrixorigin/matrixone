@@ -3323,9 +3323,21 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		enforced   bool
 	}
 	pendingChecks := make([]pendingCheckDef, 0)
-	tableCharset, err := tableDefaultCharset(ctx, stmt.Options)
+	defaults, err := tableDatabaseDefaults(ctx, createTable.Database, stmt.Options)
 	if err != nil {
 		return err
+	}
+	createTable.DatabaseDefaults = defaults
+	var tableCharset uint32
+	if defaults != nil && defaults.Version != 0 {
+		// Inheritance carries the resolved identity and must not consult an
+		// unrelated (possibly unsupported) server default first.
+		tableCharset = defaults.CollationId
+	} else {
+		tableCharset, err = tableDefaultCharset(ctx, stmt.Options)
+		if err != nil {
+			return err
+		}
 	}
 	createTable.TableDef.DefaultCharset = tableCharset
 	if types.IsUnicodeCollation(uint8(tableCharset)) {
@@ -5873,6 +5885,20 @@ func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan,
 		}
 	}
 	createDB.Sql = stmt.Sql
+	if !DatabaseDefaultsSystemDatabase(createDB.Database) && createDB.SubscriptionOption == nil {
+		if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) {
+			fallback, err := databaseServerCollation(ctx)
+			if err != nil {
+				return nil, err
+			}
+			createDB.Defaults, err = NormalizeDatabaseDefaults(ctx.GetContext(), stmt.CreateOptions, fallback)
+			if err != nil {
+				return nil, err
+			}
+		} else if len(stmt.CreateOptions) > 0 {
+			return nil, RequireDatabaseDefaults(ctx.GetContext(), ctx.GetProcess().GetService())
+		}
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -6549,6 +6575,14 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	// list drives pre-DDL locking. currentTableDef is the planner-owned evolving
 	// schema used by every subsequent existence and semantic check.
 	currentTableDef := DeepCopyTableDef(tableDef, true)
+	if err := applyAlterTableCharsetDefault(ctx, currentTableDef, stmt.Options); err != nil {
+		return nil, err
+	}
+	if currentTableDef.DefaultCharset != tableDef.DefaultCharset || currentTableDef.CollationVersion != tableDef.CollationVersion {
+		// Default/schema replacement and index actions must share the same
+		// evolving definition; otherwise replacement resurrects dropped indexes.
+		alterTable.CopyTableDef = currentTableDef
+	}
 	currentIndexNames := make(map[string]bool, len(currentTableDef.Indexes))
 	for _, indexDef := range currentTableDef.Indexes {
 		currentIndexNames[indexNameKey(indexDef.IndexName)] = true
@@ -7046,7 +7080,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			// lock already validated by resolveAndValidateLock
 			alterTable.Actions[i] = nil
 
-		case *tree.AlterOptionAlterCheck, *tree.TableOptionCharset:
+		case *tree.TableOptionCharset:
+			if opt.Convert {
+				return nil, moerr.NewNotSupported(ctx.GetContext(), "character set conversion requires ALGORITHM=COPY")
+			}
+			continue
+		case *tree.AlterOptionAlterCheck, *tree.TableOptionCollate:
 			continue
 
 		case *tree.AlterTableModifyColumnClause:
@@ -7061,7 +7100,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			if alterTable.CopyTableDef == nil {
-				alterTable.CopyTableDef = DeepCopyTableDef(tableDef, true)
+				alterTable.CopyTableDef = currentTableDef
 			}
 
 			// update new column info to copy_table_def
@@ -7088,7 +7127,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			if alterTable.CopyTableDef == nil {
-				alterTable.CopyTableDef = DeepCopyTableDef(tableDef, true)
+				alterTable.CopyTableDef = currentTableDef
 			}
 
 			_, err := updateNewColumnInTableDef(
@@ -7107,7 +7146,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			if alterTable.CopyTableDef == nil {
-				alterTable.CopyTableDef = DeepCopyTableDef(tableDef, true)
+				alterTable.CopyTableDef = currentTableDef
 			}
 
 			col := FindColumn(

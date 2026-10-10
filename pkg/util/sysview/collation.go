@@ -86,6 +86,106 @@ func InformationSchemaCharacterSetsCheckSQL() string {
 	return "SELECT 1 WHERE " + strings.Join(clauses, " AND ")
 }
 
+// databaseDefaultsMetadataSQL projects admitted effective identities, not SQL
+// aliases. Unknown/corrupt metadata returns NULL rather than a server fallback.
+func databaseDefaultsMetadataSQL(charset bool) string {
+	var sql strings.Builder
+	sql.WriteString("case")
+	for _, definition := range collation.Definitions() {
+		for revision := uint32(0); revision <= uint32(collation.RevisionV1); revision++ {
+			identity := uint32(definition.Identity)
+			if err := collation.RequireLegacy(identity, revision, collation.KeyFormatLegacy); err != nil {
+				continue
+			}
+			effective, err := collation.EffectiveDefinition(identity, revision)
+			if err != nil {
+				continue
+			}
+			name := effective.Name
+			if charset {
+				name = effective.Charset.Name()
+			}
+			fmt.Fprintf(&sql, " when dd.collation_id = %d and dd.collation_revision = %d then '%s'", identity, revision, name)
+		}
+	}
+	sql.WriteString(" else NULL end")
+	return sql.String()
+}
+
+// The SQL internal_column_character_set classifier uses presentation codes
+// 4/5 for the already-admitted native domains. Names/capacity still come from
+// the shared semantic owner; this projection does not admit a new domain.
+func informationSchemaNativeColumnsDDL() string {
+	return strings.NewReplacer(
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8mb4' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4' else NULL end)",
+		columnDomainMetadataSQL("mc.atttyp", true),
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_general_ci' WHEN 1 then 'utf8mb4_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4_general_ci' else NULL end)",
+		ColumnCollationSQL("mc.atttyp"),
+	).Replace(InformationSchemaColumnsDDL)
+}
+
+// ColumnCollationSQL shares the effective-domain projection between COLUMNS
+// and SHOW FULL COLUMNS. The expression is a planner-owned encoded type.
+func ColumnCollationSQL(encodedType string) string {
+	return columnDomainMetadataSQL(encodedType, false)
+}
+
+func columnDomainMetadataSQL(encodedType string, charset bool) string {
+	var sql strings.Builder
+	fmt.Fprintf(&sql, "(case internal_column_character_set(%s)", encodedType)
+	// These are classifier presentation codes, not persisted identities.
+	for code, identity := range []collation.Identity{collation.UTF8MB4GeneralCIIdentity, collation.UTF8MB4BinIdentity,
+		collation.BinaryIdentity, collation.UTF8MB4GeneralCIIdentity, collation.UTF8UnicodeCIIdentity, collation.UTF8MB4UnicodeCIIdentity} {
+		revision := uint32(collation.RevisionLegacy)
+		if code >= 4 {
+			revision = uint32(collation.RevisionV1)
+		}
+		if err := collation.RequireLegacy(uint32(identity), revision, collation.KeyFormatLegacy); err != nil {
+			continue
+		}
+		definition, err := collation.EffectiveDefinition(uint32(identity), revision)
+		if err != nil {
+			continue
+		}
+		if code == 0 {
+			// This classifier code is absent historical column metadata, not
+			// the persisted modern default. Keep its released spelling.
+			definition, _ = collation.Lookup("utf8_general_ci")
+		}
+		name := definition.Name
+		if charset {
+			name = definition.Charset.Name()
+		}
+		fmt.Fprintf(&sql, " WHEN %d then '%s'", code, name)
+	}
+	sql.WriteString(" else NULL end)")
+	return sql.String()
+}
+
+// Legacy databases have no persisted pair. Project the effective server
+// domain, including compatibility aliases, instead of advertising the spelling.
+func databaseServerMetadataSQL(charset bool) string {
+	var sql strings.Builder
+	sql.WriteString("case lower(@@session.collation_server)")
+	for _, definition := range collation.Advertised() {
+		identity, revision := uint32(definition.LegacyIdentity), uint32(0)
+		if definition.Semantics == collation.UCA400 {
+			identity, revision = uint32(definition.Identity), uint32(collation.RevisionV1)
+		}
+		effective, err := collation.EffectiveDefinition(identity, revision)
+		if err != nil {
+			continue
+		}
+		name := effective.Name
+		if charset {
+			name = effective.Charset.Name()
+		}
+		fmt.Fprintf(&sql, " when '%s' then '%s'", definition.Name, name)
+	}
+	sql.WriteString(" else NULL end")
+	return sql.String()
+}
+
 // Report the admitted encoding's capacity, not the strict native domain's.
 // utf8/utf8mb3 are four-byte UTF-8 compatibility spellings in current SQL.
 func characterSetMaxBytes(charset string) int32 {

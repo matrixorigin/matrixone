@@ -870,7 +870,8 @@ const (
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	UUID_SHORT = 587
 
-	FUNCTION_END_NUMBER = 591
+	INTERNAL_TABLE_COLLATION = 591
+	FUNCTION_END_NUMBER      = 592
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1315,6 +1316,7 @@ var functionIdRegister = map[string]int32{
 	"internal_numeric_scale":         INTERNAL_NUMERIC_SCALE,
 	"internal_datetime_scale":        INTERNAL_DATETIME_SCALE,
 	"internal_column_character_set":  INTERNAL_COLUMN_CHARACTER_SET,
+	"internal_table_collation":       INTERNAL_TABLE_COLLATION,
 	"internal_auto_increment":        INTERNAL_AUTO_INCREMENT,
 	"nextval":                        NEXTVAL,
 	"setval":                         SETVAL,

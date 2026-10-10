@@ -70,7 +70,9 @@ func TestCollectCloneDatabaseSourceReusesFKDefinitions(t *testing.T) {
 			for _, info := range source.srcTblInfos {
 				require.Same(t, info, source.fkTableMap[genKey(database, info.tblName)])
 			}
-			require.Len(t, bh.executedSQLs, 5)
+			// One extra snapshot/account-local read establishes database defaults
+			// before collecting and sorting the source table definitions.
+			require.Len(t, bh.executedSQLs, 6)
 			require.Len(t, source.fkTableMap, 2)
 			for _, account := range bh.executionAccountIDs {
 				require.Equal(t, uint32(7), account)
@@ -79,7 +81,7 @@ func TestCollectCloneDatabaseSourceReusesFKDefinitions(t *testing.T) {
 			t.Run("fresh collection does not reuse the admitted predecessor", func(t *testing.T) {
 				next, err := collectCloneDatabaseSource(ctx, ses, bh, stmt, accounts)
 				require.NoError(t, err)
-				require.Len(t, bh.executedSQLs, 10)
+				require.Len(t, bh.executedSQLs, 12)
 				require.NotSame(t, source.srcTblInfos[0], next.srcTblInfos[0])
 				require.Same(t, next.srcTblInfos[0], next.fkTableMap[genKey(database, "child")])
 			})
@@ -87,7 +89,7 @@ func TestCollectCloneDatabaseSourceReusesFKDefinitions(t *testing.T) {
 				bh.sql2result["show create table `source_db`.`child`"+spec] = newMrsForRestoreStringRows([]string{"table", "sql"}, [][]interface{}{{"child", "create table source_db.child (id int primary key)"}})
 				next, err := collectCloneDatabaseSource(ctx, ses, bh, stmt, accounts)
 				require.NoError(t, err)
-				require.Len(t, bh.executedSQLs, 15)
+				require.Len(t, bh.executedSQLs, 18)
 				require.Len(t, next.srcTblInfos, 2)
 				require.Empty(t, next.sortedFkTbls)
 				require.Empty(t, next.fkTableMap)

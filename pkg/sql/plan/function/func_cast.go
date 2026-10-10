@@ -2861,7 +2861,7 @@ func strTypeToOthers(proc *process.Process,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_geometry, types.T_geometry32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(ctx, proc, source, rs, length, toType,
-			strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong, mode)
+			strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong, mode, selectList)
 	case types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToDatalink(proc, source, rs, length, selectList)
@@ -9245,7 +9245,7 @@ func strToStr(
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type,
 	strictStringWidth bool, allowTrailingSpaceTrim bool, reportDataTooLong bool,
-	mode castMode) error {
+	mode castMode, selectList *FunctionSelectList) error {
 	totype := to.GetType()
 	destLen := int(totype.Width)
 	trimComparisonKey := mode == castModeComparison &&
@@ -9265,7 +9265,7 @@ func strToStr(
 	if toType.Oid == types.T_binary && toType.Scale == -1 {
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
-			if err := explicitCastToBinary(toType, v, null, to); err != nil {
+			if err := explicitCastToBinary(toType, v, null || functionRowSkipped(selectList, i), to); err != nil {
 				return err
 			}
 		}
@@ -9278,7 +9278,7 @@ func strToStr(
 		fromGeom := srcOid == types.T_geometry || srcOid == types.T_geometry32
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
-			if null {
+			if null || functionRowSkipped(selectList, i) {
 				if err := to.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -9321,7 +9321,7 @@ func strToStr(
 		(destLen != 0 || totype.Oid == types.T_char || totype.Oid == types.T_varchar || enforceByteWidth) {
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
-			if null {
+			if null || functionRowSkipped(selectList, i) {
 				if err := to.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -9408,7 +9408,7 @@ func strToStr(
 	} else {
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
-			if null {
+			if null || functionRowSkipped(selectList, i) {
 				if err := to.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -10474,6 +10474,8 @@ func stringFamilyByteWidth(typ types.Type) (int, bool) {
 		return 0, false
 	}
 	switch typ.Oid {
+	case types.T_binary, types.T_varbinary:
+		return int(typ.Width), true
 	case types.T_text:
 		if typ.Width == 0 {
 			return types.MaxStringSize, true

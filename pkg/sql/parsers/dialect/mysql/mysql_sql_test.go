@@ -4916,7 +4916,7 @@ var (
 			output: "alter table t1 charset = a collate = b",
 		}, {
 			input:  "alter table t1 CONVERT TO CHARACTER SET a COLLATE b",
-			output: "alter table t1 charset = a collate = b",
+			output: "alter table t1 convert to character set a collate = b",
 		}, {
 			input:  "alter table t1 DISABLE KEYS",
 			output: "alter table t1 charset = DISABLE",
@@ -6822,6 +6822,26 @@ func TestNonGeometrySRIDSyntaxRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, ast)
 			require.Equal(t, test.output, tree.String(ast, dialect.MYSQL))
+		})
+	}
+}
+
+func TestAlterDatabaseCollationSyntax(t *testing.T) {
+	for _, sql := range []string{
+		"alter database d character set utf8mb4 collate utf8mb4_bin",
+		"alter schema d default collate = utf8mb4_bin default character set = utf8mb4",
+		"alter database collate utf8mb4_bin",
+		"alter database d character set utf8mb4",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			formatted := tree.String(stmt, dialect.MYSQL)
+			require.Contains(t, formatted, "alter database")
+			reparsed, err := ParseOne(t.Context(), formatted, 1)
+			require.NoError(t, err)
+			reparsed.Free()
 		})
 	}
 }

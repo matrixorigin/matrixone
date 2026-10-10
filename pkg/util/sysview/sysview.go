@@ -44,7 +44,7 @@ var (
 	}
 	InitInformationSchemaSysTables = []string{
 		InformationSchemaKeyColumnUsageDDL,
-		InformationSchemaColumnsDDL,
+		InformationSchemaColumnsV109DDL,
 		InformationSchemaProfilingDDL,
 		InformationSchemaProcesslistDDL,
 		InformationSchemaUserPrivilegesDDL,
@@ -52,7 +52,7 @@ var (
 		InformationSchemaCharacterSetsDDL,
 		InformationSchemaCharacterSetsData,
 		InformationSchemaTriggersDDL,
-		InformationSchemaTablesDDL,
+		InformationSchemaTablesV109DDL,
 		InformationSchemaPartitionsDDL,
 		InformationSchemaViewsDDL,
 		InformationSchemaStatisticsDDL,
@@ -76,7 +76,7 @@ var (
 )
 
 func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
-	if protocol >= defines.MORPCVersion100 {
+	if protocol >= defines.MORPCVersion109 {
 		return InitInformationSchemaSysTables
 	}
 
@@ -85,12 +85,20 @@ func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
 	sqls := make([]string, 0, len(InitInformationSchemaSysTables))
 	for _, sql := range InitInformationSchemaSysTables {
 		switch sql {
-		case InformationSchemaTablesDDL:
+		case InformationSchemaSchemataDDL:
+			if protocol < defines.MORPCVersion109 {
+				sql = InformationSchemaSchemataLegacyDDL
+			}
+		case InformationSchemaTablesV109DDL:
 			if protocol < defines.MORPCVersion46 {
 				sql = InformationSchemaTablesV41DDL
+			} else {
+				sql = InformationSchemaTablesDDL
 			}
-		case InformationSchemaColumnsDDL:
-			if protocol >= defines.MORPCVersion58 {
+		case InformationSchemaColumnsV109DDL:
+			if protocol >= defines.MORPCVersion100 {
+				sql = InformationSchemaColumnsDDL
+			} else if protocol >= defines.MORPCVersion58 {
 				sql = InformationSchemaColumnsV58DDL()
 			} else if protocol >= defines.MORPCVersion46 {
 				sql = InformationSchemaColumnsV46DDL

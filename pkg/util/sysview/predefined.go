@@ -504,6 +504,9 @@ var (
 		" WHEN 3 then 'utf8'", "", " WHEN 3 then 'utf8_bin'", "",
 	).Replace(InformationSchemaColumnsV46DDL)
 	InformationSchemaColumnsDDL = informationSchemaCurrentColumnsDDL()
+	// Freeze v100's definition; native domains are projected by the v109
+	// tenant upgrade instead of changing an already-published upgrade entry.
+	InformationSchemaColumnsV109DDL = informationSchemaNativeColumnsDDL()
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +
@@ -539,7 +542,7 @@ var (
 		"IS_GRANTABLE varchar(3) NOT NULL DEFAULT ''" +
 		")"
 
-	InformationSchemaSchemataDDL = "CREATE VIEW information_schema.SCHEMATA AS " +
+	InformationSchemaSchemataLegacyDDL = "CREATE VIEW information_schema.SCHEMATA AS " +
 		informationSchemaMetadataVisibilityCTE() + "SELECT " +
 		"'def' AS CATALOG_NAME," +
 		"datname AS SCHEMA_NAME," +
@@ -548,6 +551,16 @@ var (
 		"cast(NULL as char(0)) AS SQL_PATH," +
 		"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
 		"FROM __mo_visible_databases"
+
+	InformationSchemaSchemataDDL = "CREATE VIEW information_schema.SCHEMATA AS " +
+		informationSchemaMetadataVisibilityCTE() + "SELECT " +
+		"'def' AS CATALOG_NAME, db.datname AS SCHEMA_NAME," +
+		"case when dd.version is null then " + databaseServerMetadataSQL(true) + " else " + databaseDefaultsMetadataSQL(true) + " end AS DEFAULT_CHARACTER_SET_NAME," +
+		"case when dd.version is null then " + databaseServerMetadataSQL(false) + " else " + databaseDefaultsMetadataSQL(false) + " end AS DEFAULT_COLLATION_NAME," +
+		"cast(NULL as char(0)) AS SQL_PATH," +
+		"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
+		"FROM __mo_visible_databases db LEFT JOIN mo_catalog.mo_database_defaults dd " +
+		"ON dd.account_id = db.account_id AND dd.database_id = db.dat_id"
 
 	InformationSchemaCharacterSetsDDL = "CREATE TABLE information_schema.CHARACTER_SETS (" +
 		"CHARACTER_SET_NAME varchar(64)," +
@@ -613,7 +626,10 @@ var (
 		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and %s and tbl.relname != '%s' and tbl.relkind != '%s'",
 		catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate("tbl"), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
 
-	InformationSchemaTablesDDL = informationSchemaSubscriptionTablesDDL()
+	InformationSchemaTablesDDL     = informationSchemaSubscriptionTablesDDL()
+	InformationSchemaTablesV109DDL = strings.ReplaceAll(InformationSchemaTablesDDL,
+		"'"+DefaultCollationForCharset("utf8mb4")+"' AS TABLE_COLLATION,",
+		"internal_table_collation(tbl.extra_info) AS TABLE_COLLATION,")
 
 	InformationSchemaPartitionsDDL = "CREATE VIEW information_schema.`PARTITIONS` AS " +
 		informationSchemaMetadataVisibilityCTE() + "SELECT " +

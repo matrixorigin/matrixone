@@ -688,8 +688,29 @@ select count(*) from pt_table{snapshot = 'sp07'};
 count(*)
 11
 show create table pt_table{snapshot = 'sp07'};
-Table    Create Table
-pt_table    CREATE TABLE `pt_table` (\n  `col1` tinyint DEFAULT NULL,\n  `col2` smallint DEFAULT NULL,\n  `col3` int DEFAULT NULL,\n  `clo4` bigint DEFAULT NULL,\n  `col5` tinyint unsigned DEFAULT NULL,\n  `col6` smallint unsigned DEFAULT NULL,\n  `col7` int unsigned DEFAULT NULL,\n  `col8` bigint unsigned DEFAULT NULL,\n  `col9` float DEFAULT NULL,\n  `col10` double DEFAULT NULL,\n  `col11` varchar(255) DEFAULT NULL,\n  `col12` date DEFAULT NULL,\n  `col13` datetime DEFAULT NULL,\n  `col14` timestamp NULL DEFAULT NULL,\n  `col15` bool DEFAULT NULL,\n  `col16` decimal(5,2) DEFAULT NULL,\n  `col17` text DEFAULT NULL,\n  `col18` varchar(255) DEFAULT NULL,\n  `col19` varchar(255) DEFAULT NULL,\n  `col20` text DEFAULT NULL\n) partition by key algorithm = 2 (`col13`) partitions 10
+➤ Table[12,8,0]  ¦  Create Table[12,780,0]  𝄀
+pt_table  ¦  CREATE TABLE `pt_table` (
+  `col1` tinyint DEFAULT NULL,
+  `col2` smallint DEFAULT NULL,
+  `col3` int DEFAULT NULL,
+  `clo4` bigint DEFAULT NULL,
+  `col5` tinyint unsigned DEFAULT NULL,
+  `col6` smallint unsigned DEFAULT NULL,
+  `col7` int unsigned DEFAULT NULL,
+  `col8` bigint unsigned DEFAULT NULL,
+  `col9` float DEFAULT NULL,
+  `col10` double DEFAULT NULL,
+  `col11` varchar(255) DEFAULT NULL,
+  `col12` date DEFAULT NULL,
+  `col13` datetime DEFAULT NULL,
+  `col14` timestamp NULL DEFAULT NULL,
+  `col15` bool DEFAULT NULL,
+  `col16` decimal(5,2) DEFAULT NULL,
+  `col17` text DEFAULT NULL,
+  `col18` varchar(255) DEFAULT NULL,
+  `col19` varchar(255) DEFAULT NULL,
+  `col20` text DEFAULT NULL
+) COLLATE=utf8mb4_general_ci partition by key algorithm = 2 (`col13`) partitions 10
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp07'} where reldatabase = 'test03';
 count(*)
 11

@@ -15,18 +15,18 @@ disable_fault_injection()
 begin;
 create database test clone srcdb;
 show create database test;
-Database    Create Database
-test    CREATE DATABASE `test`
+➤ Database[12,5000,0]  ¦  Create Database[12,117,0]  𝄀
+test  ¦  CREATE DATABASE `test` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 commit;
 show create database test;
-Database    Create Database
-test    CREATE DATABASE `test`
+➤ Database[12,5000,0]  ¦  Create Database[12,117,0]  𝄀
+test  ¦  CREATE DATABASE `test` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 drop database test;
 begin;
 create database test clone srcdb;
 show create database test;
-Database    Create Database
-test    CREATE DATABASE `test`
+➤ Database[12,5000,0]  ¦  Create Database[12,117,0]  𝄀
+test  ¦  CREATE DATABASE `test` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 rollback;
 show create database test;
 Unknown database test

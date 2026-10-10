@@ -1963,6 +1963,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	oldAutoIncrOffset := tbl.extraInfo.AutoIncrOffset
 	oldAutoIncrEpoch := tbl.extraInfo.AutoIncrEpoch
 	oldChecks := api.CloneExtra(&api.SchemaExtra{Checks: tbl.extraInfo.Checks}).Checks
+	oldDefaultCharset := tbl.extraInfo.DefaultCharset
+	oldCollationVersion := tbl.extraInfo.CollationVersion
 	// The fact that the tableDef brought by alter requests can appended to the tail of original defs presupposes:
 	// 1. late arriving tableDef will overwrite the existing tableDef
 	// 2. any TableDef about columns, like AttritebuteDef, PrimaryKeyDef, or CluterbyDef do not change, ensuring genColumnsFromDefs works well
@@ -1982,7 +1984,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			case api.AlterKind_RenameTable:
 				tbl.tableName = oldTableName
 			case api.AlterKind_ReplaceDef:
-				// Rollback for ReplaceDef is handled by restoring defs
+				tbl.extraInfo.DefaultCharset = oldDefaultCharset
+				tbl.extraInfo.CollationVersion = oldCollationVersion
 			case api.AlterKind_RenameColumn:
 				// RenameColumn takes effect in form of ReplaceDef
 				tbl.extraInfo.Checks = oldChecks
@@ -2053,7 +2056,15 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	if hasReplaceDef {
 		// When ReplaceDef exists, replace the entire table definition
 		replaceDef := replaceDefReq.GetReplaceDef()
-		baseDefs, _, _ = engine.PlanDefsToExeDefs(replaceDef.Def)
+		var replacementExtra *api.SchemaExtra
+		baseDefs, replacementExtra, err = engine.PlanDefsToExeDefs(replaceDef.Def)
+		if err != nil {
+			return err
+		}
+		// Catalog regeneration uses extraInfo independently of the property
+		// factory in baseDefs. Publish the validated pair through both owners.
+		tbl.extraInfo.DefaultCharset = replacementExtra.DefaultCharset
+		tbl.extraInfo.CollationVersion = replacementExtra.CollationVersion
 		baseDefs = append(baseDefs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)
 	} else {
 		baseDefs = append([]engine.TableDef{}, tbl.defs...)

@@ -49,8 +49,8 @@ func TestIntegerAssignmentSourceCastSelection(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, want, bound2.GetF().Func.ObjName)
 		}
-		require.Equal(t, "cast", assignmentCastFunctionNameForSource(makePlan2Int64ConstExprWithType(7), dst, false, proc))
-		require.Equal(t, "cast", assignmentCastFunctionNameForSource(makePlan2StringConstExprWithType("2.5"), dst, false, proc))
+		require.Equal(t, "cast", assignmentCastFunctionNameForSource(proc.Ctx, makePlan2Int64ConstExprWithType(7), dst, false, proc))
+		require.Equal(t, "cast", assignmentCastFunctionNameForSource(proc.Ctx, makePlan2StringConstExprWithType("2.5"), dst, false, proc))
 	}
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion5)
 	assignment, err := forceAssignmentCastExprWithProcess(t.Context(), param, dst, false, proc)
