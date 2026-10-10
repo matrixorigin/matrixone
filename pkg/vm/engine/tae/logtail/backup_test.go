@@ -43,6 +43,8 @@ type failingReadFileService struct {
 type persistThenErrorBackupFileService struct {
 	fileservice.FileService
 	persisted string
+	writes    int
+	failOn    int
 }
 
 func (fs *persistThenErrorBackupFileService) Write(
@@ -52,7 +54,11 @@ func (fs *persistThenErrorBackupFileService) Write(
 	if err := fs.FileService.Write(ctx, vector); err != nil {
 		return err
 	}
+	fs.writes++
 	fs.persisted = vector.FilePath
+	if fs.failOn > 0 && fs.writes != fs.failOn {
+		return nil
+	}
 	return errors.New("injected post-persist write failure")
 }
 
@@ -427,6 +433,24 @@ func TestRewriteCheckpointCanonicalizesBackupTombstone(t *testing.T) {
 		backupTS,
 	)
 	require.ErrorContains(t, err, "checkpoint data read failure")
+	failingDstBase, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	failingDstFS := &persistThenErrorBackupFileService{FileService: failingDstBase, failOn: 2}
+	_, _, _, err = ReWriteCheckpointAndBlockFromKey(
+		ctx,
+		"backup-test",
+		srcFS,
+		failingDstFS,
+		checkpointLocation,
+		lastReader,
+		CheckpointCurrentVersion,
+		backupTS,
+	)
+	require.ErrorContains(t, err, "injected post-persist write failure")
+	require.NotEmpty(t, failingDstFS.persisted)
+	_, statErr := failingDstBase.StatFile(ctx, failingDstFS.persisted)
+	require.True(t, moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound), statErr)
 	softDeletes := make(map[string]bool)
 	baseTS := types.TS{}
 	_, _, err = LoadCheckpointEntriesFromKey(
