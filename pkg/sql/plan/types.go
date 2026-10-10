@@ -335,6 +335,12 @@ type UserVariableTypeResolver interface {
 	ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (Type, error)
 }
 
+// UserVariableRegexpCastResolver provides assignment result-category history
+// exclusively for binary CAST declaration compatibility, not execution types.
+type UserVariableRegexpCastResolver interface {
+	ResolveVariableRegexpStringResult(varName string) (bool, error)
+}
+
 // UserVariableStringDomainResolver exposes the assigned value's domain override
 // at binding time. A variable expression captures that domain in its VarRef,
 // independently of its static Type. It does not rewrite the session value or
@@ -637,6 +643,10 @@ type QueryBuilder struct {
 	// populated lazily so unused CTE bodies retain their existing lazy-binding
 	// semantics.
 	cteRefs []*CTERef
+
+	// localCTERoots identifies CTE boundaries before executable-column remapping.
+	// Correlated producers must be parameterized before their consumers flatten.
+	localCTERoots map[int32]bool
 }
 
 type irregularUpdateMaintenance struct {
@@ -967,6 +977,9 @@ type BindContext struct {
 	timeByAst              map[string]int32
 	whereFilters           []*plan.Expr
 	flattenedVolatileExprs map[int32]*plan.Expr
+	// Pagination is bound before SELECT expressions are flattened, but its
+	// plan node is attached afterwards. Replay must not evaluate a skipped row.
+	outerPaginationPending bool
 	// gapFillWhereFilters preserves the complete bound WHERE tree before
 	// subqueries are flattened into joins. Bounded GAPFILL inference must see
 	// every timestamp predicate, including IN/ANY/ALL subquery operands.

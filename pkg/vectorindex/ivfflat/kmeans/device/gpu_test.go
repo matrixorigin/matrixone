@@ -69,7 +69,7 @@ func TestIVFAndBruteForce(t *testing.T) {
 
 	ctx := context.Background()
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	dimension := uint(128)
 	ncpu := uint(1)

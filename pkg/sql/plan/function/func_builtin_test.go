@@ -1569,7 +1569,7 @@ func TestPadRejectsAccountedAllocationBeforeBuildingResult(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			mp, err := mpool.NewMPool("pad-allocation-rejection", 1<<20, mpool.NoFixed)
 			require.NoError(t, err)
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			tc := NewFunctionTestCase(proc, []FunctionTestInput{
 				NewFunctionTestConstInput(types.T_text.ToType(), []string{"x"}, nil),
 				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{300000}, nil),
@@ -1685,7 +1685,7 @@ func TestExpandingFunctionsRejectMPoolBeforeBuildingResult(t *testing.T) {
 
 	mp, err := mpool.NewMPool("expanding-allocation-rejection", 1<<20, mpool.NoFixed)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	tc := NewFunctionTestCase(proc, []FunctionTestInput{
 		NewFunctionTestConstInput(types.T_blob.ToType(), []string{strings.Repeat("a", 2000)}, nil),
 		NewFunctionTestConstInput(types.T_blob.ToType(), []string{"a"}, nil),
@@ -2189,6 +2189,65 @@ func TestSerialExtract(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSerialExtract)
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestSerialExtractBinaryReturnType(t *testing.T) {
+	legacy := types.New(types.T_binary, 255, -1)
+	legacy.Charset = types.CharsetLegacy
+	versioned := types.New(types.T_binary, 255, -1)
+	versioned.CollationVersion = types.CollationVersionV1
+	for _, target := range []types.Type{
+		types.New(types.T_binary, 1, -1),
+		types.New(types.T_binary, 255, -1),
+		types.New(types.T_binary, 255, 0),
+		types.New(types.T_varbinary, 255, 0),
+		types.New(types.T_decimal128, 16, 6),
+		legacy,
+		versioned,
+	} {
+		inputs := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), target}
+		fn, err := GetFunctionByName(t.Context(), "serial_extract", inputs)
+		require.NoError(t, err)
+		want := target
+		if want.Oid == types.T_binary && want.Scale == -1 {
+			want.Scale = 0
+		}
+		require.Equal(t, want, fn.GetReturnType())
+		require.Equal(t, target, inputs[2])
+	}
+}
+
+func TestSerialExtractBinaryBytes(t *testing.T) {
+	values := []string{"", "AB", "AB\x00", "\x00\xff\x00\\'", strings.Repeat("Z", 255), ""}
+	nulls := []bool{false, false, false, false, false, true}
+	packed := make([]string, len(values))
+	packer := types.NewPacker()
+	defer packer.Close()
+	for i, value := range values {
+		packer.Reset()
+		if nulls[i] {
+			packer.EncodeNull()
+		} else {
+			packer.EncodeStringType([]byte(value))
+		}
+		packed[i] = string(packer.Bytes())
+	}
+	proc := testutil.NewProcess(t)
+	target := types.New(types.T_binary, 255, -1)
+	resultType := types.New(types.T_binary, 255, 0)
+	for _, constantIndex := range []bool{false, true} {
+		index := NewFunctionTestInput(types.T_int64.ToType(), make([]int64, len(values)), nil)
+		if constantIndex {
+			index = NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, nil)
+		}
+		fc := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), packed, nil),
+			index,
+			NewFunctionTestConstInput(target, []string{""}, nil),
+		}, NewFunctionTestResult(resultType, false, values, nulls), builtInSerialExtract)
+		ok, info := fc.RunAndFree()
+		require.True(t, ok, info)
 	}
 }
 
@@ -3737,8 +3796,8 @@ func TestBuiltInUUIDSwapFlagIntegerTypes(t *testing.T) {
 					NewFunctionTestInput(tc.typ, tc.values, []bool{false, false, true}),
 				},
 				expect: NewFunctionTestResult(types.T_varbinary.ToType(), false,
-					[]string{bin, swapped, ""},
-					[]bool{false, false, true}),
+					[]string{bin, swapped, bin},
+					[]bool{false, false, false}),
 			}
 			tcc := NewFunctionTestCase(proc, ftc.inputs, ftc.expect, builtInUUIDToBin)
 			succeed, info := tcc.RunAndFree()
@@ -3749,12 +3808,12 @@ func TestBuiltInUUIDSwapFlagIntegerTypes(t *testing.T) {
 			ftc := tcTemp{
 				info: "bin_to_uuid with " + tc.name + " swap flag",
 				inputs: []FunctionTestInput{
-					NewFunctionTestInput(types.T_varbinary.ToType(), []string{bin, swapped, swapped}, []bool{false, false, false}),
+					NewFunctionTestInput(types.T_varbinary.ToType(), []string{bin, swapped, bin}, []bool{false, false, false}),
 					NewFunctionTestInput(tc.typ, tc.values, []bool{false, false, true}),
 				},
 				expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-					[]string{u, u, ""},
-					[]bool{false, false, true}),
+					[]string{u, u, u},
+					[]bool{false, false, false}),
 			}
 			tcc := NewFunctionTestCase(proc, ftc.inputs, ftc.expect, builtInBinToUUID)
 			succeed, info := tcc.RunAndFree()
@@ -3798,8 +3857,8 @@ func TestBuiltInUUIDSwapFlagBoolCoercion(t *testing.T) {
 					NewFunctionTestInput(tc.typ, tc.values, []bool{false, false, false, true}),
 				},
 				expect: NewFunctionTestResult(types.T_varbinary.ToType(), false,
-					[]string{bin, swapped, swapped, ""},
-					[]bool{false, false, false, true}),
+					[]string{bin, swapped, swapped, bin},
+					[]bool{false, false, false, false}),
 			}
 			tcc := NewFunctionTestCase(proc, ftc.inputs, ftc.expect, builtInUUIDToBin)
 			succeed, info := tcc.RunAndFree()
@@ -3810,12 +3869,12 @@ func TestBuiltInUUIDSwapFlagBoolCoercion(t *testing.T) {
 			ftc := tcTemp{
 				info: "bin_to_uuid with " + tc.name + " bool-coerced swap flag",
 				inputs: []FunctionTestInput{
-					NewFunctionTestInput(types.T_varbinary.ToType(), []string{bin, swapped, swapped, swapped}, []bool{false, false, false, false}),
+					NewFunctionTestInput(types.T_varbinary.ToType(), []string{bin, swapped, swapped, bin}, []bool{false, false, false, false}),
 					NewFunctionTestInput(tc.typ, tc.values, []bool{false, false, false, true}),
 				},
 				expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-					[]string{u, u, u, ""},
-					[]bool{false, false, false, true}),
+					[]string{u, u, u, u},
+					[]bool{false, false, false, false}),
 			}
 			tcc := NewFunctionTestCase(proc, ftc.inputs, ftc.expect, builtInBinToUUID)
 			succeed, info := tcc.RunAndFree()
@@ -3824,7 +3883,7 @@ func TestBuiltInUUIDSwapFlagBoolCoercion(t *testing.T) {
 	}
 }
 
-func TestBuiltInUUIDSwapFlagStringStrictCoercion(t *testing.T) {
+func TestBuiltInUUIDSwapFlagStringCoercion(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	u := "6ccd780c-baba-1026-9564-5b8c656024db"
 	bin := string([]byte{
@@ -3893,41 +3952,30 @@ func TestBuiltInUUIDSwapFlagStringStrictCoercion(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name  string
 		value string
+		swap  bool
 	}{
-		{name: "prefix numeric string", value: "1abc"},
-		{name: "prefix positive numeric string", value: "2xyz"},
-		{name: "non numeric string", value: "abc"},
-		{name: "empty string", value: ""},
-		{name: "prefix decimal string", value: "0.4x"},
+		{"1abc", true}, {"2xyz", true}, {"abc", false}, {"", false},
+		{"0.4x", true}, {"0tail", false}, {" -2e1tail", true},
+		{"1e999", true}, {"1e-999", false}, {"0x10", false},
+		{"0b1", false}, {"NaN", false}, {"Inf", false},
 	} {
-		t.Run(tc.name+"/uuid_to_bin", func(t *testing.T) {
-			ftc := tcTemp{
-				info: "uuid_to_bin rejects " + tc.name + " swap flag",
-				inputs: []FunctionTestInput{
-					NewFunctionTestInput(types.T_varchar.ToType(), []string{u}, []bool{false}),
-					NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.value}, []bool{false}),
-				},
-				expect: NewFunctionTestResult(types.T_varbinary.ToType(), true, []string{""}, []bool{true}),
+		t.Run(tc.value, func(t *testing.T) {
+			wantBin := bin
+			if tc.swap {
+				wantBin = swapped
 			}
-			tcc := NewFunctionTestCase(proc, ftc.inputs, ftc.expect, builtInUUIDToBin)
-			succeed, info := tcc.RunAndFree()
-			require.True(t, succeed, ftc.info, info)
-		})
-
-		t.Run(tc.name+"/bin_to_uuid", func(t *testing.T) {
-			ftc := tcTemp{
-				info: "bin_to_uuid rejects " + tc.name + " swap flag",
-				inputs: []FunctionTestInput{
-					NewFunctionTestInput(types.T_varbinary.ToType(), []string{swapped}, []bool{false}),
-					NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.value}, []bool{false}),
-				},
-				expect: NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, []bool{true}),
-			}
-			tcc := NewFunctionTestCase(proc, ftc.inputs, ftc.expect, builtInBinToUUID)
-			succeed, info := tcc.RunAndFree()
-			require.True(t, succeed, ftc.info, info)
+			flags := NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.value}, nil)
+			toBin := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{u}, nil), flags,
+			}, NewFunctionTestResult(types.T_varbinary.ToType(), false, []string{wantBin}, nil), builtInUUIDToBin)
+			succeed, info := toBin.RunAndFree()
+			require.True(t, succeed, info)
+			fromBin := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varbinary.ToType(), []string{wantBin}, nil), flags,
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{u}, nil), builtInBinToUUID)
+			succeed, info = fromBin.RunAndFree()
+			require.True(t, succeed, info)
 		})
 	}
 }

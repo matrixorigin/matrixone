@@ -1101,6 +1101,31 @@ func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
 		"select regexp_substr(_binary'abc123', '[0-9]+')",
 		"select regexp_replace(_binary'abc123', _binary'[0-9]+', 'X')",
 		"select regexp_replace('abc123', '[0-9]+', _binary'X')",
+		"select cast(null as binary) regexp 'a'",
+		"select 'a' not regexp cast(null as binary(3))",
+		"select regexp_like(cast(null as binary), 'a')",
+		"select regexp_instr('abc', cast(null as binary))",
+		"select regexp_substr(cast(null as binary), 'a')",
+		"select regexp_replace('abc', 'a', cast(null as binary))",
+		"select cast('abc' as binary) regexp 'a'",
+		"select 'abc' regexp cast('a' as binary(1))",
+		"select regexp_like(cast('abc' as binary(3)), 'a')",
+		"select regexp_instr('abc', cast('b' as binary))",
+		"select regexp_substr(cast('abc' as binary), 'a')",
+		"select regexp_replace(cast('abc' as binary), 'a', 'X')",
+		"select regexp_like(cast(@v as binary(3)), 'a')",
+		"select regexp_like(cast(@int_var as binary), 'a')",
+		"select regexp_like(cast(@unset_var as binary), 'a')",
+		"select regexp_like(cast(@v as binary(0)), 'a')",
+		"select regexp_like((select cast('a' as binary)), 'a')",
+		"select regexp_like(v, 'a') from (select cast('a' as binary) v) s",
+		"select regexp_like((select cast(null as binary)), 'a')",
+		"select regexp_like(v, 'a') from (select cast(null as binary) v) s",
+		"select regexp_like(v, 'a') from (select cast(@v as binary(3)) v) s",
+		"select regexp_like(v, 'a') from (select v from (select cast('a' as binary) v) s) t",
+		"select regexp_instr('abc', (select cast('a' as binary)))",
+		"select regexp_instr(regexp_substr((select 'a'), 'a'), _binary'a')",
+		"select regexp_replace('abc', 'a', (select cast(null as binary)))",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			statements, err := mysql.Parse(ctx, sql, 1)
@@ -1118,14 +1143,114 @@ func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
 		"select _binary'abc' regexp _binary'a'",
 		"select regexp_like(null, 'a')",
 		"select regexp_instr(123, _binary'2')",
-		"select cast(null as binary) regexp 'a'",
+		"select cast(null as binary) regexp _binary'a'",
+		"select cast('abc' as binary(3)) regexp _binary'a'",
+		"select regexp_substr(_binary'abc', cast('a' as binary))",
+		"select regexp_replace(cast('abc' as binary), _binary'a', _binary'X')",
+		"select regexp_like(cast(@v as binary), 'a')",
+		"select regexp_like((select cast(@v as binary)), 'a')",
+		"select regexp_like(v, 'a') from (select cast(@v as binary) v) s",
+		"select regexp_like(v, 'a') from (select v from (select cast(@v as binary) v) s) t",
+		"select regexp_like((select cast('a' as binary)), _binary'a')",
+		"select regexp_like(v, _binary'a') from (select cast('a' as binary) v) s",
 	} {
 		t.Run("accepted_"+sql, func(t *testing.T) {
 			statements, err := mysql.Parse(ctx, sql, 1)
 			require.NoError(t, err)
-			_, err = buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(newPlanTestProcess(t)), statements[0])
+			compiler := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
+			compiler.ResolveVariableTypeFunc = func(name string, _, _ bool) (plan2.Type, error) {
+				if name == "v" {
+					return plan2.Type{Id: int32(types.T_text)}, nil
+				}
+				return plan2.Type{}, nil
+			}
+			_, err = buildPlan(ctx, nil, compiler, statements[0])
 			require.NoError(t, err)
 		})
+	}
+}
+
+func TestBuildPlanRegexpUserVariableNullHistory(t *testing.T) {
+	ctx := defines.AttachAccount(context.Background(), sysAccountID, rootID, moAdminRoleID)
+	for _, tc := range []struct {
+		name     string
+		assigned bool
+		previous any
+		wantErr  bool
+	}{
+		{"unassigned", false, nil, true},
+		{"first NULL assignment", true, nil, false},
+		{"string then NULL", true, "abc", false},
+		{"numeric then NULL", true, int64(123), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+			if tc.previous != nil {
+				require.NoError(t, ses.SetUserDefinedVar("history", tc.previous, ""))
+			}
+			if tc.assigned {
+				require.NoError(t, ses.SetUserDefinedVar("history", nil, ""))
+			}
+			resolver := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: ctx, ses: ses}}
+			compiler := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
+			compiler.ResolveVariableTypeFunc = resolver.ResolveVariableType
+			compiler.ResolveVariableRegexpStringResultFunc = resolver.ResolveVariableRegexpStringResult
+			for migration := 0; migration < 2; migration++ {
+				if migration != 0 {
+					snapshot, err := ses.snapshotUserDefinedVars(ctx)
+					require.NoError(t, err)
+					restored, err := decodeUserDefinedVars(ctx, snapshot, false)
+					require.NoError(t, err)
+					ses.installUserDefinedVars(restored)
+				}
+				for _, sql := range []string{
+					"select regexp_like(cast(@history as binary), 'a')",
+					"select regexp_like(cast((select @history) as binary), 'a')",
+					"select regexp_like(cast(v as binary), 'a') from (select @history v) s",
+					"select regexp_like(cast(v as binary), 'a') from (select v from (select @history v) s) t",
+				} {
+					for _, prepare := range []bool{false, true} {
+						statements, err := mysql.Parse(ctx, sql, 1)
+						require.NoError(t, err)
+						var stmt tree.Statement = statements[0]
+						if prepare {
+							stmt = tree.NewPrepareString(tree.Identifier("history_cast"), sql)
+						}
+						_, err = buildPlan(ctx, nil, compiler, stmt)
+						if prepare {
+							stmt.Free()
+						}
+						statements[0].Free()
+						if tc.wantErr {
+							require.True(t, moerr.IsMoErrCode(err, moerr.ErrCharacterSetMismatch), err, sql)
+						} else {
+							require.NoError(t, err, sql)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestUserVariableNullTypeDoesNotLeakHistoryToExecuteParams(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 106)
+	defer prepareStmt.Close()
+	for _, previous := range []any{int64(1), "abc", nil} {
+		if previous != nil {
+			require.NoError(t, ses.SetUserDefinedVar("parameter", previous, ""))
+		}
+		require.NoError(t, ses.SetUserDefinedVar("parameter", nil, ""))
+		func() {
+			params, values, _, _, _, _, err := buildExecuteUserParamsWithMemberOfPositions(cw.proc,
+				[]*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "parameter"}}}}, nil, nil)
+			require.NoError(t, err)
+			defer params.Free(cw.proc.Mp())
+			value := values[0].(plan2.ParamValue)
+			require.Nil(t, value.Value)
+			require.False(t, value.HasSourceType, "literal NULL has no current conversion type, regardless of history")
+			require.Equal(t, vector.PrepareParamNone, value.PrepareParamKind)
+		}()
 	}
 }
 
@@ -1148,6 +1273,13 @@ func TestBuildPlanRegexpDefersOnlyRuntimeStringDomains(t *testing.T) {
 	}
 
 	for _, sql := range []string{
+		"select regexp_instr(cast(? as binary), 'a')",
+		"select regexp_like((select cast('a' as binary)), 'a')",
+		"select regexp_like((select cast(null as binary)), 'a')",
+		"select regexp_like((select cast(? as binary)), 'a')",
+		"select regexp_like(v, 'a') from (select cast(? as binary) v) s",
+		"select regexp_instr('abc', cast(? as binary(1)))",
+		"select regexp_replace('abc', 'a', cast(? as binary))",
 		"select regexp_instr(cast(? as char), cast(_binary'中' as varbinary(3)), 2)",
 		"select regexp_instr(hex(?), cast(_binary'中' as varbinary(3)), 2)",
 		"select regexp_instr(concat(hex(?), ''), cast(_binary'中' as varbinary(3)), 2)",
@@ -1269,9 +1401,10 @@ func TestPreparedRegexpTypedNullRetainsStaticDomainAtExecuteRebind(t *testing.T)
 			value: plan2.ParamValue{Value: "a", IsBinaryProtocol: true},
 		},
 		{
-			name:  "binary null with text direct marker",
-			query: "select regexp_instr(cast(NULL as binary), ?)",
-			value: plan2.ParamValue{Value: "a", IsBinaryProtocol: true},
+			name:    "binary null with text direct marker",
+			query:   "select regexp_instr(cast(NULL as binary), ?)",
+			value:   plan2.ParamValue{Value: "a", IsBinaryProtocol: true},
+			wantErr: true,
 		},
 		{
 			name:  "binary null with binary direct marker",
@@ -1435,10 +1568,11 @@ func TestInitExecuteStmtParamDirectResultSpecializationUsesBoundedCache(t *testi
 
 	var metadataTypes []plan.Type
 	writer := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
-	writer.makeColumnDefDataFunc = func(_ context.Context, columns []*plan.ColDef) ([][]byte, error) {
+	protocol := &MysqlProtocolImpl{io: gIO}
+	writer.makeColumnDefDataFunc = func(ctx context.Context, columns []*plan.ColDef) ([][]byte, error) {
 		require.Len(t, columns, 1)
 		metadataTypes = append(metadataTypes, columns[0].Typ)
-		return [][]byte{[]byte(fmt.Sprintf("%d:%d:%d", columns[0].Typ.Id, columns[0].Typ.Width, columns[0].Typ.Scale))}, nil
+		return protocol.MakeColumnDefData(ctx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
 	}
 
 	install := func(value string, mysqlType defines.MysqlType, isNull bool) {
@@ -1473,6 +1607,12 @@ func TestInitExecuteStmtParamDirectResultSpecializationUsesBoundedCache(t *testi
 	require.NoError(t, err)
 	require.Same(t, runtimeCompile, retComp)
 	require.Same(t, runtimePlan, reusedPlan)
+	require.Len(t, metadataTypes, 1, "an admitted generation must reuse its result metadata")
+	require.Equal(t, prepareStmt.runtimeColDefData, execCtx.prepareColDef)
+	freshColumns := getPreparedResultColumnsForWithGroupConcatMaxLen(prepareStmt.PrepareStmt, reusedPlan, false, prepareStmt.groupConcatMaxLenFloor)
+	freshMetadata, metadataErr := protocol.MakeColumnDefData(execCtx.reqCtx, freshColumns, directIntegerResultLengths(prepareStmt.PrepareStmt, freshColumns)...)
+	require.NoError(t, metadataErr)
+	require.Equal(t, freshMetadata, execCtx.prepareColDef, "cached payload must match the uncached protocol builder")
 
 	executor, err := colexec.NewExpressionExecutor(cw.proc, resultExpr(reusedPlan))
 	require.NoError(t, err)
@@ -1486,6 +1626,20 @@ func TestInitExecuteStmtParamDirectResultSpecializationUsesBoundedCache(t *testi
 		"cached direct-result plan must read the current parameter value")
 
 	decimalText := "-12345678901234567890.123456789"
+	install(decimalText, defines.MYSQL_TYPE_NEWDECIMAL, false)
+	metadataFactory := writer.makeColumnDefDataFunc
+	writer.makeColumnDefDataFunc = func(context.Context, []*plan.ColDef) ([][]byte, error) {
+		return nil, assert.AnError
+	}
+	oldMetadata := prepareStmt.runtimeColDefData
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.ErrorIs(t, err, assert.AnError)
+	require.Same(t, runtimePlan, prepareStmt.runtimePlan)
+	require.Same(t, runtimeCompile, prepareStmt.runtimeCompile)
+	require.Equal(t, oldMetadata, prepareStmt.runtimeColDefData)
+	require.Nil(t, cw.runtimeCacheColDefData)
+	cw.discardRuntimeCacheCandidate()
+	writer.makeColumnDefDataFunc = metadataFactory
 	install(decimalText, defines.MYSQL_TYPE_NEWDECIMAL, false)
 	retComp, decimalPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
@@ -2906,6 +3060,7 @@ func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *tes
 	require.Nil(t, retComp)
 	require.NotSame(t, manualPlan, firstPlan)
 	require.Empty(t, prepareStmt.runtimeSpecializationKey)
+	require.Nil(t, prepareStmt.runtimeColDefData)
 	require.Nil(t, prepareStmt.runtimePlan)
 	require.Same(t, firstPlan, cw.runtimeCachePlan)
 	require.NotNil(t, cw.paramVals)
@@ -3824,6 +3979,9 @@ func BenchmarkPreparedNarrowingCacheAdmission(b *testing.B) {
 		name, sql string
 		mysqlType defines.MysqlType
 	}{
+		{"point_select_LONG", "select n_name from nation where n_nationkey=?", defines.MYSQL_TYPE_LONG},
+		{"point_select_LONGLONG", "select n_name from nation where n_nationkey=?", defines.MYSQL_TYPE_LONGLONG},
+		{"direct_result", "select ?", defines.MYSQL_TYPE_LONG},
 		{"same_width", "update nation set n_regionkey=1 where n_nationkey=?", defines.MYSQL_TYPE_LONG},
 		{"guarded_narrowing", "update nation set n_regionkey=1 where n_nationkey=?", defines.MYSQL_TYPE_LONGLONG},
 		{"IN_same_width", "select n_name from nation where n_nationkey in (?,?)", defines.MYSQL_TYPE_LONG},
@@ -3838,6 +3996,13 @@ func BenchmarkPreparedNarrowingCacheAdmission(b *testing.B) {
 				cw.proc.SetPrepareParams(nil)
 				prepared.Close()
 			})
+			if strings.HasPrefix(tc.name, "point_select") {
+				writer := ses.GetResponser().MysqlRrWr().(*testMysqlWriter)
+				protocol := &MysqlProtocolImpl{io: gIO}
+				writer.makeColumnDefDataFunc = func(ctx context.Context, cols []*plan.ColDef) ([][]byte, error) {
+					return protocol.MakeColumnDefData(ctx, cols)
+				}
+			}
 			prepared.params = vector.NewVec(types.T_text.ToType())
 			for range strings.Count(tc.sql, "?") {
 				require.NoError(b, vector.AppendBytes(prepared.params, []byte("7"), false, cw.proc.Mp()))
@@ -4163,6 +4328,46 @@ func TestCOMStmtCharRuntimeCacheReusesTextSourceAcrossSignedness(t *testing.T) {
 	}
 }
 
+func TestPreparedExecutionBindingKeyPreservesIdentity(t *testing.T) {
+	bindings := []plan2.PreparedSourceBinding{
+		{Position: 0, Type: types.T_int32.ToType(), NumericType: types.New(types.T_decimal128, 38, 9)},
+		{Position: 12, Type: types.New(types.T_varchar, 123, -1), BitCountType: types.T_uint64.ToType()},
+	}
+	bindings[1].Type.Charset = 255
+	for flags := range 32 {
+		param := plan2.ParamValue{
+			Value: "17", PrepareParamKind: vector.PrepareParamInteger,
+			IsBinaryProtocol: flags&1 != 0, IsBin: flags&2 != 0,
+			IsBinaryString: flags&4 != 0, EnableNumericPrefix: flags&8 != 0,
+			RuntimeStringDomain: types.RuntimeStringDomain(flags % 3),
+		}
+		if flags&16 != 0 {
+			param.Value = nil
+		}
+		values := []any{param, "ordinary value"}
+		// The legacy framing is a compatibility oracle independent of the new encoder.
+		var expected strings.Builder
+		for i, binding := range bindings {
+			fmt.Fprintf(&expected, "%d;", binding.Position)
+			for _, typ := range []types.Type{binding.Type, binding.NumericType, binding.BitCountType} {
+				fmt.Fprintf(&expected, "%d:%d:%d:%d;", typ.Oid, typ.Charset, typ.Width, typ.Scale)
+			}
+			if p, ok := values[i].(plan2.ParamValue); ok {
+				fmt.Fprintf(&expected, "%d:%t:%t:%t:%d:%t:%t;", p.PrepareParamKind,
+					p.IsBinaryProtocol, p.IsBin, p.IsBinaryString, p.RuntimeStringDomain,
+					p.EnableNumericPrefix, p.Value == nil)
+			}
+		}
+		key := preparedExecutionBindingKey(bindings, values)
+		require.Equal(t, expected.String(), key)
+		if param.Value != nil {
+			param.Value = "18"
+			values[0] = param
+			require.Equal(t, key, preparedExecutionBindingKey(bindings, values), "values do not identify a generation")
+		}
+	}
+}
+
 func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testing.T) {
 	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 208, "select ?")
 	defer prepareStmt.Close()
@@ -4171,9 +4376,10 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 	oldCompile := compile.NewCompile(
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	oldMetadata := [][]byte{[]byte("old column payload")}
 	oldDiagnostics := []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}}
-	prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics)
-	require.Nil(t, prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics),
+	prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, oldMetadata)
+	require.Nil(t, prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, oldMetadata),
 		"reinstalling the live compile must not retire it")
 
 	for _, compileErr := range []error{assert.AnError, context.Canceled} {
@@ -4181,11 +4387,14 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 		cw.runtimeCacheTarget = prepareStmt
 		cw.runtimeCacheKey = "failed"
 		cw.runtimeCachePlan = failedPlan
+		cw.runtimeCacheColDefData = [][]byte{[]byte("unpublished payload")}
 		require.False(t, cw.completeRuntimeCacheCandidate(nil, compileErr))
 		require.Equal(t, "old", prepareStmt.runtimeSpecializationKey)
 		require.Same(t, oldPlan, prepareStmt.runtimePlan)
 		require.Same(t, oldCompile, prepareStmt.runtimeCompile)
 		require.Same(t, oldDiagnostics[0], prepareStmt.runtimeDiagnosticCandidates[0])
+		require.Equal(t, oldMetadata, prepareStmt.runtimeColDefData)
+		require.Nil(t, cw.runtimeCacheColDefData)
 		require.Nil(t, cw.runtimeCacheTarget)
 		require.Nil(t, cw.runtimeCachePlan)
 
@@ -4200,10 +4409,14 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 	cw.runtimeCacheTarget = prepareStmt
 	cw.runtimeCacheKey = "new"
 	cw.runtimeCachePlan = newPlan
+	newMetadata := [][]byte{[]byte("new column payload")}
+	cw.runtimeCacheColDefData = newMetadata
 	require.True(t, cw.completeRuntimeCacheCandidate(newCompile, nil))
 	require.Equal(t, "new", prepareStmt.runtimeSpecializationKey)
 	require.Same(t, newPlan, prepareStmt.runtimePlan)
 	require.Same(t, newCompile, prepareStmt.runtimeCompile)
+	require.Equal(t, newMetadata, prepareStmt.runtimeColDefData)
+	require.Nil(t, cw.runtimeCacheColDefData)
 	require.Nil(t, cw.runtimeCacheTarget)
 	require.Nil(t, cw.runtimeCachePlan)
 	require.Same(t, newMessageBoard, cw.proc.GetMessageBoard(),
@@ -6179,7 +6392,7 @@ func TestInitExecuteStmtParamBinaryConstructorMemberOf(t *testing.T) {
 }
 
 func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
-	for _, constructor := range []string{"json_array(?)", "json_object('k', ?)", "json_set('{}', '$.k', ?)", "json_insert('{}', '$.k', ?)", "json_replace('{\"k\":0}', '$.k', ?)", "json_array_append('[]', '$', ?)"} {
+	for _, constructor := range []string{"json_array(?)", "json_object('k', ?)", "json_set('{}', '$.k', ?)", "json_insert('{}', '$.k', ?)", "json_replace('{\"k\":0}', '$.k', ?)", "json_array_append('[]', '$', ?)", "json_array_insert('[0]', '$[0]', ?)"} {
 		t.Run(constructor, func(t *testing.T) {
 			for _, version := range []int64{defines.MORPCVersion51, defines.MORPCVersion52} {
 				t.Run(fmt.Sprint(version), func(t *testing.T) {
@@ -6224,6 +6437,7 @@ func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
 								prepared.clearBinaryParamState(cw.proc)
 								continue
 							}
+							require.False(t, result.IsNull(0))
 							want := "[\"base64:type252:YWI=\"]"
 							if input.value == "cd" {
 								want = "[\"base64:type252:Y2Q=\"]"
@@ -6231,7 +6445,11 @@ func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
 							if input.null {
 								want = "[null]"
 							}
-							if constructor != "json_array(?)" && constructor != "json_array_append('[]', '$', ?)" {
+							if constructor == "json_array_insert('[0]', '$[0]', ?)" {
+								want = want[:len(want)-1] + ", 0]"
+							}
+							if constructor != "json_array(?)" && constructor != "json_array_append('[]', '$', ?)" &&
+								constructor != "json_array_insert('[0]', '$[0]', ?)" {
 								want = "{\"k\": " + want[1:len(want)-1] + "}"
 							}
 							require.Equal(t, want, types.DecodeJson(result.GetBytesAt(0)).String())

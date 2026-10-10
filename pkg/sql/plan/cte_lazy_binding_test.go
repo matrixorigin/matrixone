@@ -463,6 +463,14 @@ func TestCTEMultiReferenceReusesExpensiveProducer(t *testing.T) {
 			} else if len(node.GroupBy) == 0 && containsSinkScan(nodeID) {
 				scalarAggConsumers++
 			}
+		case planpb.Node_FILTER:
+			require.False(t, node.FilterIsBarrier,
+				"an independent CTE must not block join predicate pushdown")
+		case planpb.Node_JOIN:
+			if node.JoinType == planpb.Node_INNER {
+				require.NotEmpty(t, node.OnList,
+					"the supplier equality must not become a Cartesian product")
+			}
 		case planpb.Node_SINK:
 			sinks++
 			require.Equal(t, materialized.CTESinkOption, node.ExtraOptions)

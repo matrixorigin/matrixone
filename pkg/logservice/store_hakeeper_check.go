@@ -257,7 +257,9 @@ func (l *store) getCheckerStateFromLeader() (*pb.CheckerState, uint64) {
 		l.taskScheduler.StopScheduleSQLTask()
 		return nil, term
 	}
-	state, err := l.getCheckerState()
+	ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseGetCheckerState)
+	defer cancel()
+	state, err := l.readCheckerState(ctx, &hakeeper.StateQuery{Scheduling: true})
 	if err != nil {
 		// TODO: check whether this is temp error
 		l.runtime.Logger().Error("failed to get checker state", zap.Error(err))

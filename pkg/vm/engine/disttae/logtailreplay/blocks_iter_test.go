@@ -341,12 +341,22 @@ func TestPartitionState_TransferObjectWindowBoundaries(t *testing.T) {
 	require.Equal(t, wantInserted, insertedNames)
 	require.Equal(t, wantDeleted, deletedNames)
 
+	// A retained in-memory RowID can have moved into the intermediate object
+	// before rollback. Persisted source selection and PK checks stay unchanged.
+	deletedNames, insertedNames = state.GetChangedObjsBetweenForTombstoneTransfer(start, end)
+	require.Equal(t, wantInserted, insertedNames)
+	wantDeleted[shortName("transient-in-window")] = struct{}{}
+	require.Equal(t, wantDeleted, deletedNames)
+
 	// A zero-width snapshot interval contains no transitions: objects at the
 	// boundary already belong to the observed snapshot state.
 	insertedStats, deletedStats = state.CollectObjectsBetween(start, start)
 	require.Empty(t, insertedStats)
 	require.Empty(t, deletedStats)
 	deletedNames, insertedNames = state.GetChangedObjsBetween(start, start)
+	require.Empty(t, insertedNames)
+	require.Empty(t, deletedNames)
+	deletedNames, insertedNames = state.GetChangedObjsBetweenForTombstoneTransfer(start, start)
 	require.Empty(t, insertedNames)
 	require.Empty(t, deletedNames)
 }

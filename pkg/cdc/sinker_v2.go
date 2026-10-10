@@ -63,6 +63,10 @@ type mysqlSinker2 struct {
 	// Core components
 	executor *Executor
 	builder  *CDCStatementBuilder
+	// Serialize consumer commands with producer-side ownership release and
+	// lifecycle cleanup. An error can become visible before a command finishes
+	// unwinding, so observing Error() is not an executor completion barrier.
+	executorMu sync.Mutex
 
 	// Task identification
 	accountId uint64
@@ -805,6 +809,9 @@ func (s *mysqlSinker2) Run(ctx context.Context, ar *ActiveRoutine) {
 
 // processCommand processes a single command
 func (s *mysqlSinker2) processCommand(ctx context.Context, cmd *Command) {
+	s.executorMu.Lock()
+	defer s.executorMu.Unlock()
+
 	// Check error state - skip processing if error exists
 	if err := s.Error(); err != nil {
 		logutil.Debug("cdc.mysql_sinker2.command_skipped_due_to_error",
@@ -1423,6 +1430,8 @@ func (s *mysqlSinker2) SendDummy() {
 // has synchronously completed COMMIT and the producer has accepted the related
 // watermark. The next BEGIN reacquires and revalidates the same target lock.
 func (s *mysqlSinker2) releaseTargetOwnership() error {
+	s.executorMu.Lock()
+	defer s.executorMu.Unlock()
 	return s.executor.ReleaseTargetLock()
 }
 
@@ -1439,7 +1448,7 @@ func (s *mysqlSinker2) Error() error {
 
 // SetError sets the error state
 //
-// Converts non-moerr.Error to moerr.Error for consistency
+// Preserves classified backend/control causes; normalizes unknown errors.
 func (s *mysqlSinker2) SetError(err error) {
 	if err == nil {
 		s.err.Store(nil)
@@ -1450,15 +1459,17 @@ func (s *mysqlSinker2) SetError(err error) {
 }
 
 func normalizeMysqlSinkerError(err error) error {
-	// Preserve typed owner-fence wrappers: stream lifecycle and retry policy
-	// depend on their identity, and converting them to a plain moerr would turn
-	// supersession into shared table failure metadata.
-	if _, ok := err.(*moerr.Error); !ok &&
-		!IsOwnerFenceLostError(err) && !IsRetryableOwnerFenceError(err) &&
-		!IsRetryableTargetLockError(err) && !IsRetryableConnectionError(err) {
-		err = moerr.ConvertGoError(context.Background(), err)
+	if err == nil {
+		return nil
 	}
-	return err
+	if _, ok := err.(*moerr.Error); ok {
+		return err
+	}
+	// Stream recovery and control handling depend on the original typed cause.
+	if _, classified := ClassifyRetryableError(err); classified {
+		return err
+	}
+	return moerr.ConvertGoError(context.Background(), err)
 }
 
 func (s *mysqlSinker2) setErrorIfNil(err error) {
@@ -1483,6 +1494,9 @@ func (s *mysqlSinker2) ClearError() {
 // 2. Clear error state
 // 3. Reset transaction state to IDLE
 func (s *mysqlSinker2) Reset() {
+	s.executorMu.Lock()
+	defer s.executorMu.Unlock()
+
 	// If there's an active transaction, roll it back
 	if s.txnState.Load() == v2TxnStateActive {
 		if err := s.executor.RollbackTx(context.Background()); err != nil {
@@ -1522,7 +1536,9 @@ func (s *mysqlSinker2) Close() {
 		// Wait for consumer goroutine to exit
 		s.wg.Wait()
 
-		// Close executor (rolls back any active transaction)
+		// Close executor (rolls back any active transaction). The consumer is
+		// stopped, but a producer may still be releasing target ownership.
+		s.executorMu.Lock()
 		if s.executor != nil {
 			if err := s.executor.Close(); err != nil {
 				logutil.Error("cdc.mysql_sinker2.close_executor_failed",
@@ -1530,6 +1546,7 @@ func (s *mysqlSinker2) Close() {
 					zap.Error(err))
 			}
 		}
+		s.executorMu.Unlock()
 
 		logutil.Info("cdc.mysql_sinker2.closed",
 			zap.String("table", s.dbTblInfo.String()))

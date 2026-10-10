@@ -32,7 +32,7 @@ import (
 // refused with the same 20105 a literal in that range raises.
 func TestCheckFulltextZeroRelevanceGuard(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 
 	boolVec := func(v bool) *vector.Vector {
 		vec := vector.NewVec(types.T_bool.ToType())
@@ -100,7 +100,7 @@ func TestCheckFulltextZeroRelevanceGuard(t *testing.T) {
 // rejects it, so a guard evaluated after either one never runs.
 func TestZeroRelevanceGuardPrecedesNullPatternPaths(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 
 	nullPattern := func() *vector.Vector {
 		vec := vector.NewVec(types.T_varchar.ToType())
