@@ -17,12 +17,15 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -35,6 +38,75 @@ import (
 )
 
 type sqlTaskContextKey struct{}
+
+func TestGetSQLTaskServiceConcurrentPublication(t *testing.T) {
+	// Reuse the SQL-task handler's memory service fixture without starting a
+	// scheduler or registering a session under the package's shared service ID.
+	service := uuid.NewString()
+	InitServerLevelVars(service)
+	t.Cleanup(func() { serverVarsMap.Delete(service) })
+	pu := &config.ParameterUnit{}
+	setPu(service, pu)
+	ses := &Session{feSessionImpl: feSessionImpl{service: service}}
+	first := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
+	t.Cleanup(func() { require.NoError(t, first.Close()) })
+	second := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
+	t.Cleanup(func() { require.NoError(t, second.Close()) })
+
+	checkSnapshot := func(t *testing.T, ts taskservice.TaskService, err error) {
+		t.Helper()
+		if ts == nil {
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+			require.ErrorContains(t, err, "task service not ready yet, please try again later.")
+		} else {
+			require.NoError(t, err)
+		}
+	}
+	for _, tc := range []struct {
+		name          string
+		before, after taskservice.TaskService
+	}{
+		{name: "publish", after: first},
+		{name: "withdraw", before: first},
+		{name: "replace", before: first, after: second},
+		{name: "republish", before: second, after: first},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pu.SetTaskService(tc.before)
+			ts, err := getSQLTaskService(context.Background(), ses)
+			checkSnapshot(t, ts, err)
+			require.True(t, ts == tc.before)
+
+			var ready, done sync.WaitGroup
+			ready.Add(2)
+			done.Add(2)
+			start := make(chan struct{})
+			go func() {
+				defer done.Done()
+				ready.Done()
+				<-start
+				pu.SetTaskService(tc.after)
+			}()
+			go func() {
+				defer done.Done()
+				ready.Done()
+				<-start
+				ts, err = getSQLTaskService(context.Background(), ses)
+			}()
+			ready.Wait()
+			// Neither competitor completes before the other's admission. There
+			// is no ordering edge between publication and snapshot except the
+			// ParameterUnit lock: a direct field read is racy in either order.
+			close(start)
+			done.Wait()
+			checkSnapshot(t, ts, err)
+			require.True(t, ts == tc.before || ts == tc.after)
+			ts, err = getSQLTaskService(context.Background(), ses)
+			checkSnapshot(t, ts, err)
+			require.True(t, ts == tc.after)
+		})
+	}
+}
 
 func TestHandleSQLTaskCreateAlterDrop(t *testing.T) {
 	ctrl := gomock.NewController(t)
