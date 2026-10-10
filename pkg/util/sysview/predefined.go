@@ -307,6 +307,17 @@ func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
 	return canonicalColumnsViewName(definition) == InformationSchemaColumnsDDL
 }
 
+// IsInformationSchemaColumnsMigrationDDL reports whether a persisted COLUMNS
+// definition has the on-demand View-column migration needed by historical
+// snapshot binding. The protocol-100 definition intentionally keeps the
+// historical selector projection, while the protocol-109 definition adds the
+// native Unicode selectors; both definitions are safe migration gates.
+func IsInformationSchemaColumnsMigrationDDL(definition string) bool {
+	definition = canonicalColumnsViewName(definition)
+	return definition == InformationSchemaColumnsV100DDL() ||
+		definition == InformationSchemaColumnsDDL
+}
+
 func canonicalColumnsViewName(definition string) string {
 	// Older upgrades used the lowercase spelling of this identifier. Do not
 	// case-fold literals or accept arbitrary lookalike system-view SQL.

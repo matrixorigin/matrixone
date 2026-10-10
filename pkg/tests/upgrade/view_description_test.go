@@ -780,15 +780,23 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		require.Equal(t, "binary", publisherTable[3].charset)
 
 		testViewColumnsUpgradeRollback(t, ctx, sqlExecutor, tenantID)
+		checkHistoricalColumnsWidth := func() {
+			t.Helper()
+			var historicalWidth int
+			require.NoError(t, subscriber.QueryRowContext(ctx,
+				"select character_maximum_length from information_schema.columns {snapshot='view_description_legacy_columns'} "+
+					"where table_schema='subscribed' and table_name='v' and column_name='x'").Scan(&historicalWidth))
+			require.Equal(t, 7, historicalWidth, "an old system template must not resurrect creation-time View columns")
+		}
+		// V100 has the on-demand View-column migration but still uses the
+		// historical selector projection. Verify a cross-tenant snapshot is
+		// adapted before the native V109 refresh is applied.
+		checkHistoricalColumnsWidth()
 		testNativeViewColumnsUpgradeRollback(t, ctx, sqlExecutor, tenantID)
 		require.Equal(t, publisherTable, readCharsets(subscriber, "subscribed", "charset_src"))
 		require.Equal(t, publisherView, readCharsets(subscriber, "subscribed", "charset_v"))
 		require.Equal(t, legacySubscriptionView, readCharsets(subscriber, "subscribed", "charset_v"))
-		var historicalWidth int
-		require.NoError(t, subscriber.QueryRowContext(ctx,
-			"select character_maximum_length from information_schema.columns {snapshot='view_description_legacy_columns'} "+
-				"where table_schema='subscribed' and table_name='v' and column_name='x'").Scan(&historicalWidth))
-		require.Equal(t, 7, historicalWidth, "an old system template must not resurrect creation-time View columns")
+		checkHistoricalColumnsWidth()
 
 		// The snapshot belongs to the subscriber, but the View's source database
 		// belongs to the publisher. Database existence and relation binding must

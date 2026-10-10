@@ -70,4 +70,9 @@ func TestAdaptLegacyInformationSchemaColumnsDDL(t *testing.T) {
 	require.True(t, IsCurrentInformationSchemaColumnsDDL(strings.Replace(InformationSchemaColumnsDDL,
 		"information_schema.COLUMNS", "information_schema.columns", 1)))
 	require.False(t, IsCurrentInformationSchemaColumnsDDL(InformationSchemaColumnsV58DDL()))
+	require.True(t, IsInformationSchemaColumnsMigrationDDL(InformationSchemaColumnsV100DDL()))
+	require.True(t, IsInformationSchemaColumnsMigrationDDL(strings.Replace(InformationSchemaColumnsV100DDL(),
+		"information_schema.COLUMNS", "information_schema.columns", 1)))
+	require.True(t, IsInformationSchemaColumnsMigrationDDL(InformationSchemaColumnsDDL))
+	require.False(t, IsInformationSchemaColumnsMigrationDDL(InformationSchemaColumnsV58DDL()))
 }
