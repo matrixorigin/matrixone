@@ -2400,6 +2400,13 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if features.PythonRoutineContract && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion130) {
 		return moerr.NewNotSupportedNoCtx("Python routine execution requires MORPC protocol version 130")
 	}
+	if features.PythonRoutineContract && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion130) {
+		return moerr.NewNotSupportedNoCtx("Python routine execution requires MORPC protocol version 130")
+=======
+	if features.PythonRoutineContract && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion110) {
+		return moerr.NewNotSupportedNoCtx("Python routine execution requires MORPC protocol version 110")
+>>>>>>> 889317ca7d (fix(udf): allocate MORPC 110 after upstream rebase)
+	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")
 	}
