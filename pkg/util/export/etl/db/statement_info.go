@@ -16,9 +16,9 @@ package db_holder
 
 import (
 	"strconv"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
@@ -27,14 +27,14 @@ import (
 const StatementInfoTextLimit = types.MaxStringSize
 const StatementInfoTruncationMarker = "...[truncated]"
 
-// CapStatementInfoText preserves ordinary diagnostics without copying or scanning.
-// Callers reserve enough budget for the marker. Only oversized diagnostics are
-// repaired to valid UTF-8, including an incomplete rune at the retained boundary.
+// CapStatementInfoText renders valid UTF-8 diagnostics within the storage budget.
+// Valid retained text is not copied. Callers reserve enough budget for the marker.
 func CapStatementInfoText(s string, budget int) string {
 	if len(s) <= budget {
-		return s
+		return commonutil.Abbreviate(s, -1)
 	}
-	return strings.ToValidUTF8(s[:budget-len(StatementInfoTruncationMarker)], "") + StatementInfoTruncationMarker
+	prefix := s[:commonutil.UTF8PrefixLen(s, budget-len(StatementInfoTruncationMarker))]
+	return commonutil.Abbreviate(prefix, -1) + StatementInfoTruncationMarker
 }
 
 // StatementInfoPlanSummary replaces an oversized plan with valid JSON rather
