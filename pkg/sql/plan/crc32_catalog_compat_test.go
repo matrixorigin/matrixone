@@ -100,6 +100,16 @@ func TestCRC32LegacyCheckCopyClauseOrder(t *testing.T) {
 		{"move_then_modify_other", "modify column j json after x, modify column x int", false},
 		{"modify_other_then_move", "modify column x int, modify column j json after x", false},
 		{"move_then_convert_input", "modify column j json after x, modify column j bigint", true},
+		// Reordering x moves j from position 1 to 2 in both clause orders.
+		// Each pair has the same final schema and varies only clause order.
+		{"move_then_modify_bigint", "modify column x int after id, modify column j bigint", true},
+		{"modify_bigint_then_move", "modify column j bigint, modify column x int after id", true},
+		{"move_then_modify_varchar", "modify column x int after id, modify column j varchar(32)", true},
+		{"modify_varchar_then_move", "modify column j varchar(32), modify column x int after id", true},
+		{"move_then_change_bigint", "modify column x int after id, change column j j bigint", true},
+		{"change_bigint_then_move", "change column j j bigint, modify column x int after id", true},
+		{"move_then_change_varchar", "modify column x int after id, change column j j varchar(32)", true},
+		{"change_varchar_then_move", "change column j j varchar(32), modify column x int after id", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
@@ -117,6 +127,10 @@ func TestCRC32LegacyCheckCopyClauseOrder(t *testing.T) {
 			check, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), ">", []*Expr{legacy, MakePlan2Uint64ConstExprWithType(0)})
 			require.NoError(t, err)
 			base.Checks = []*planpb.CheckDef{{Name: "ck", Check: check, OriginSql: "crc32(j) > 0"}}
+			require.Empty(t, base.Indexes, "no index may mask CHECK admission")
+			for _, col := range base.Cols {
+				require.Nil(t, col.GeneratedCol, "no generated expression may mask CHECK admission")
+			}
 			original := proto.Clone(base).(*planpb.TableDef)
 			mock.ctxt.tables[base.Name] = base
 			mock.ctxt.objects[base.Name] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: base.Name}
@@ -125,7 +139,20 @@ func TestCRC32LegacyCheckCopyClauseOrder(t *testing.T) {
 			require.True(t, proto.Equal(original, base), "ALTER must not mutate source catalog metadata")
 			if tc.reject {
 				require.ErrorContains(t, err, "changing a legacy CRC32 JSON check constraint requires an explicit table rebuild")
-				require.Nil(t, built)
+				require.Nil(t, built, "unsafe input conversion must fail before COPY execution")
+				crc := base.Checks[0].Check.GetF().Args[0].GetF()
+				require.Equal(t, function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload), crc.Func.Obj)
+				require.Equal(t, int32(types.T_json), crc.Args[0].Typ.Id)
+				require.Equal(t, int32(1), crc.Args[0].GetCol().ColPos)
+				// The identical ALTER without CHECK must plan successfully:
+				// rejection is caused by CHECK, not another conversion guard.
+				control := proto.Clone(original).(*planpb.TableDef)
+				control.Checks = nil
+				mock.ctxt.tables[base.Name] = control
+				allowed, controlErr := runOneStmt(mock, t, "alter table tpch.crc32_check_order "+tc.clauses)
+				require.NoError(t, controlErr)
+				require.Equal(t, planpb.AlterTable_COPY, allowed.GetDdl().GetAlterTable().AlgorithmType)
+				require.True(t, proto.Equal(original, base), "control must not mutate CHECK source")
 				return
 			}
 			require.NoError(t, err)
