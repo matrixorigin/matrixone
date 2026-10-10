@@ -1148,6 +1148,7 @@ type lowerCaseTableNamesCompilerContext struct {
 
 func (c *lowerCaseTableNamesCompilerContext) GetLowerCaseTableNames() int64 {
 	return c.lowerCaseTableNames
+}
 
 func TestBindViewRejectsFutureProtocolBeforePreparedBinding(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
