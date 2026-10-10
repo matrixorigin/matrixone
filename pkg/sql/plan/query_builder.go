@@ -12044,6 +12044,10 @@ func (builder *QueryBuilder) bindView(
 			viewCtx.setHeading(i, string(colName), headingProvenance{})
 		}
 	}
+	nodeID, err = builder.applyRewriteMetadataVisibility(nodeID, viewCtx, schema, table)
+	if err != nil {
+		return
+	}
 	// Expanding a view removes the view catalog object from the executable
 	// scan nodes. Preserve that object's identity so every plan consumer,
 	// including the ordinary COM_QUERY cache, can validate the complete
