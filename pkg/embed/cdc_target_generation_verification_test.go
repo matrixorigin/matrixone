@@ -53,6 +53,16 @@ func TestCDCSourceGenerationGuardAcrossCN(t *testing.T) {
 
 func runCDCGenerationContracts(t *testing.T, cnCount int, passiveName string, passive func(*testing.T, Cluster), activeName string, active func(*testing.T, Cluster)) {
 	t.Helper()
+	runCDCGenerationContract(t, cnCount, func(cluster Cluster) {
+		if !t.Run(passiveName, func(t *testing.T) { passive(t, cluster) }) {
+			return
+		}
+		t.Run(activeName, func(t *testing.T) { active(t, cluster) })
+	})
+}
+
+func runCDCGenerationContract(t *testing.T, cnCount int, fn func(Cluster)) {
+	t.Helper()
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
 	state := &singleCNClusterState
@@ -68,10 +78,12 @@ func runCDCGenerationContracts(t *testing.T, cnCount int, passiveName string, pa
 	state.Run(t, func() (Cluster, error) {
 		return startBasicCluster(cnCount, basicClusterSetupTracer(t, cnCount), adjustCDCGenerationContractService)
 	}, func(cluster Cluster) {
-		if !t.Run(passiveName, func(t *testing.T) { passive(t, cluster) }) {
-			return
+		for i := 0; i < cnCount; i++ {
+			cn, err := cluster.GetCNService(i)
+			require.NoError(t, err)
+			require.Equal(t, time.Second, cn.GetServiceConfig().CN.TaskRunner.FetchInterval.Duration)
 		}
-		t.Run(activeName, func(t *testing.T) { active(t, cluster) })
+		fn(cluster)
 	})
 }
 
@@ -277,9 +289,75 @@ func execSQL(ctx context.Context, db *sql.DB, query string) error {
 	return err
 }
 
+// Drive discovery at a scenario boundary instead of waiting for the 15s
+// detector ticker. Taskservice still owns registration and lifecycle changes;
+// the scan, matching and callback are the real implementations.
+func waitCDCTaskRegistered(t *testing.T, ctx context.Context, root *sql.DB, cnID, task, terminalState string) bool {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	var queryErr error
+	for {
+		require.NoError(t, ctx.Err(), "CDC task %s was not registered; last catalog query: %v", task, queryErr)
+		var id, state string
+		queryErr = root.QueryRowContext(ctx, "SELECT task_id, state FROM mo_catalog.mo_cdc_task WHERE task_name = ?", task).Scan(&id, &state)
+		if queryErr == nil {
+			if terminalState != "" && state == terminalState {
+				return false
+			}
+			if cdc.GetTableDetector(cnID).IsTaskRegistered(id) {
+				return true
+			}
+		}
+		select {
+		case <-ctx.Done():
+		case <-ticker.C:
+		}
+	}
+}
+
+func scanCDCTaskTables(t *testing.T, ctx context.Context, root *sql.DB, cnID, task, terminalState string) {
+	t.Helper()
+	if !waitCDCTaskRegistered(t, ctx, root, cnID, task, terminalState) {
+		return
+	}
+	started := time.Now()
+	err := cdc.RunTableDetectorScanForTest(cnID)
+	// The periodic scan may unregister a permanently failed task between our
+	// readiness read and manual scan. Its catalog transition can commit later.
+	// Only a caller's expected terminal state permits that completed phase;
+	// all scenario-specific diagnostics and data assertions still follow.
+	if err != nil && terminalState != "" && !waitCDCTaskRegistered(t, ctx, root, cnID, task, terminalState) {
+		return
+	}
+	require.NoError(t, err)
+	t.Logf("MO_UT_SETUP fixture=cdc phase=table-scan task=%s duration=%s", task, time.Since(started))
+}
+
+// Admission and first-ACK hooks block the detector callback itself. Let the
+// scenario observe/release its barrier; join this scan before restoring hooks
+// or cleaning up SQL, including when an assertion aborts the scenario.
+func startCDCTaskScan(t *testing.T, ctx context.Context, root *sql.DB, cnID, task string, release func()) func() {
+	t.Helper()
+	waitCDCTaskRegistered(t, ctx, root, cnID, task, "")
+	done := make(chan struct{})
+	var err error
+	go func() {
+		err = cdc.RunTableDetectorScanForTest(cnID)
+		close(done)
+	}()
+	return func() {
+		t.Helper()
+		release()
+		<-done
+		require.NoError(t, err)
+	}
+}
+
 func TestCDCEndTsWildcardLateTableOnMO(t *testing.T) {
-	defer func() { require.NoError(t, CloseSingleCNBaseClusterTests()) }()
-	RunSingleCNBaseClusterTests(t, func(cluster Cluster) {
+	runCDCGenerationContract(t, 1, func(cluster Cluster) {
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
 		// Earlier CDC suites may have bound the process-local detector to a
@@ -345,6 +423,8 @@ func TestCDCEndTsWildcardLateTableOnMO(t *testing.T) {
 				t.Errorf("drop CDC EndTs task: %v", cleanupErr)
 			}
 		}()
+		joinScan := startCDCTaskScan(t, ctx, root, cn.ServiceID(), "cdc_end_task", releaseAdmission)
+		defer joinScan()
 		select {
 		case <-entered:
 		case <-time.After(30 * time.Second):
@@ -360,6 +440,8 @@ func TestCDCEndTsWildcardLateTableOnMO(t *testing.T) {
 		_, err = account.ExecContext(ctx, "CREATE TABLE cdc_end_src.late (id INT PRIMARY KEY)")
 		require.NoError(t, err)
 		releaseAdmission()
+		joinScan()
+		scanCDCTaskTables(t, ctx, root, cn.ServiceID(), "cdc_end_task", "")
 		require.Eventually(t, func() bool {
 			var id int
 			return account.QueryRowContext(ctx, "SELECT id FROM cdc_end_dst.early").Scan(&id) == nil && id == 1
@@ -442,6 +524,7 @@ func testCDCGenerationReplacementOnMO(t *testing.T, cluster Cluster) {
 	_, err = account.ExecContext(ctx, fmt.Sprintf("CREATE CDC cdc_generation_task '%s' 'matrixone' '%s' 'cdc_generation_src:cdc_generation_dst' {'Level'='database'}", uri, uri))
 	require.NoError(t, err)
 	createdTask = true
+	scanCDCTaskTables(t, ctx, root, cn.ServiceID(), "cdc_generation_task", "")
 	readRows := func(target string) []int {
 		rows, readErr := account.QueryContext(ctx, "SELECT id FROM "+target+".t ORDER BY id")
 		if readErr != nil {
@@ -507,12 +590,16 @@ func testCDCGenerationReplacementOnMO(t *testing.T, cluster Cluster) {
 	require.NoError(t, err)
 	_, err = account.ExecContext(ctx, "RESUME CDC TASK cdc_generation_task")
 	require.NoError(t, err)
+	scanCDCTaskTables(t, ctx, root, cn.ServiceID(), "cdc_generation_task", cdc.CDCState_Failed)
 	require.Eventually(t, func() bool {
 		var state string
 		return root.QueryRowContext(ctx,
 			"SELECT state FROM mo_catalog.mo_cdc_task WHERE task_name = 'cdc_generation_task'").Scan(&state) == nil &&
 			state == cdc.CDCState_Failed
 	}, 90*time.Second, 250*time.Millisecond)
+	// A periodic scan can finish before the phase driver observes registration.
+	// Exercise that already-completed case against the real failed task.
+	scanCDCTaskTables(t, ctx, root, cn.ServiceID(), "cdc_generation_task", cdc.CDCState_Failed)
 	var taskError string
 	require.NoError(t, root.QueryRowContext(ctx,
 		"SELECT err_msg FROM mo_catalog.mo_cdc_task WHERE task_name = 'cdc_generation_task'").Scan(&taskError))
@@ -552,6 +639,7 @@ func testCDCGenerationReplacementOnMO(t *testing.T, cluster Cluster) {
 			t.Errorf("drop target replacement CDC task: %v", cleanupErr)
 		}
 	}()
+	scanCDCTaskTables(t, ctx, root, cn.ServiceID(), "cdc_generation_target_task", "")
 	require.Eventually(t, func() bool { return reflect.DeepEqual(readRows("cdc_generation_dst2"), []int{3, 4}) }, 90*time.Second, 250*time.Millisecond)
 	_, err = account.ExecContext(ctx, "PAUSE CDC TASK cdc_generation_target_task")
 	require.NoError(t, err)
@@ -577,6 +665,7 @@ func testCDCGenerationReplacementOnMO(t *testing.T, cluster Cluster) {
 	require.NoError(t, err)
 	_, err = account.ExecContext(ctx, "RESUME CDC TASK cdc_generation_target_task")
 	require.NoError(t, err)
+	scanCDCTaskTables(t, ctx, root, cn.ServiceID(), "cdc_generation_target_task", cdc.CDCState_Failed)
 	require.Eventually(t, func() bool {
 		var state string
 		return root.QueryRowContext(ctx,
@@ -648,6 +737,8 @@ func testCDCFirstAckHoldsSourceGenerationAcrossCN(t *testing.T, cluster Cluster)
 	_, err = first.ExecContext(ctx, fmt.Sprintf(
 		"CREATE CDC cdc_ack_task '%s' 'matrixone' '%s' 'cdc_ack_src:cdc_ack_dst' {'Level'='database'}", uri, uri))
 	require.NoError(t, err)
+	joinScan := startCDCTaskScan(t, ctx, root, cn0.ServiceID(), "cdc_ack_task", releaseAck)
+	defer joinScan()
 	select {
 	case <-entered:
 	case <-time.After(60 * time.Second):
@@ -663,6 +754,7 @@ func testCDCFirstAckHoldsSourceGenerationAcrossCN(t *testing.T, cluster Cluster)
 	require.ErrorAs(t, err, &sqlErr)
 	require.Equal(t, uint16(1205), sqlErr.Number)
 	releaseAck()
+	joinScan()
 	require.Eventually(t, func() bool {
 		var id int
 		return first.QueryRowContext(ctx, "SELECT id FROM cdc_ack_dst.t").Scan(&id) == nil && id == 1
@@ -808,7 +900,7 @@ func TestCDCTargetSetupTransientDiagnosticOnMO(t *testing.T) {
 		cdc.ResetCDCWatermarkUpdaterForTest()
 		require.NoError(t, closeErr)
 	})
-	RunSingleCNBaseClusterTests(t, func(cluster Cluster) {
+	runCDCGenerationContract(t, 1, func(cluster Cluster) {
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
 		cdc.ResetTableDetectorForTest(cn.ServiceID())
@@ -960,6 +1052,7 @@ func TestCDCTargetSetupTransientDiagnosticOnMO(t *testing.T) {
 		}
 		create("cdc_retry_task", "cdc_retry_dst")
 		defer func() { releaseRecovery(); cleanupSQL(account, "DROP CDC TASK cdc_retry_task") }()
+		scanCDCTaskTables(t, ctx, root, cn.ServiceID(), "cdc_retry_task", "")
 		if !t.Run("transient setup SQL and recovery", func(t *testing.T) {
 			require.Eventually(t, func() bool {
 				diagnostic, _, readErr := readProgress("cdc_retry_task")
@@ -968,6 +1061,7 @@ func TestCDCTargetSetupTransientDiagnosticOnMO(t *testing.T) {
 			mu.Lock()
 			setupCode = 0
 			mu.Unlock()
+			scanCDCTaskTables(t, ctx, root, cn.ServiceID(), "cdc_retry_task", "")
 			require.Eventually(t, func() bool { rows, readErr := readRows(); return readErr == nil && reflect.DeepEqual(rows, []int{1}) }, 60*time.Second, 100*time.Millisecond)
 			require.Eventually(t, func() bool {
 				_, wm, readErr := readProgress("cdc_retry_task")
@@ -1039,6 +1133,7 @@ func TestCDCTargetSetupTransientDiagnosticOnMO(t *testing.T) {
 		t.Run("permanent setup SQL", func(t *testing.T) {
 			create("cdc_retry_bad_task", "cdc_retry_bad")
 			defer cleanupSQL(account, "DROP CDC TASK cdc_retry_bad_task")
+			scanCDCTaskTables(t, ctx, root, cn.ServiceID(), "cdc_retry_bad_task", cdc.CDCState_Failed)
 			require.Eventually(t, func() bool {
 				diagnostic, _, readErr := readProgress("cdc_retry_bad_task")
 				return readErr == nil && strings.HasPrefix(diagnostic, "N:") && strings.Contains(diagnostic, "controlled target SQL syntax")
