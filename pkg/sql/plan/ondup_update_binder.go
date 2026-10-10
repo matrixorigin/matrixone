@@ -271,7 +271,7 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 
 			colName := col.ColName()
 			idx, ok := lookupInsertTableColumn(b.tableDef, colName, b.lowerCaseTableNames)
-			if !ok {
+			if !ok || (b.rowAlias != nil && b.tableDef.Cols[idx].Hidden) {
 				return nil, moerr.NewBadFieldErrorf(b.GetContext(), "invalid input: column '%s' does not exist", col.ColNameOrigin())
 			}
 

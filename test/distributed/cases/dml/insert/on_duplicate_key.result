@@ -683,4 +683,64 @@ set @r8_removed = remove_fault_point('row_alias_batch_count');
 set @r8_fault_disabled = disable_fault_injection();
 drop table t_odku_action_batches;
 set group_concat_max_len = @r8_old_group_concat;
-1681460d43 (test(sql): prove row alias rollback after an earlier write batch)
+drop table if exists t_odku_correlated_nokey;
+create table t_odku_correlated_nokey (a int);
+insert into t_odku_correlated_nokey values (1) on duplicate key update a = (select t_odku_correlated_nokey.a);
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
+prepare s_odku_correlated_plain from insert into t_odku_correlated_nokey values (2) on duplicate key update a = (select t_odku_correlated_nokey.a);
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
+prepare s_odku_correlated_param from insert into t_odku_correlated_nokey values (3) on duplicate key update a = (select t_odku_correlated_nokey.a + ?);
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
+select count(*) = 0 as no_correlated_insert from t_odku_correlated_nokey;
+➤ no_correlated_insert[-7,1,0]  𝄀
+1
+insert into t_odku_correlated_nokey values (4) on duplicate key update a = (select 7);
+insert into t_odku_correlated_nokey values (5) on duplicate key update a = (select missing from nonexistent);
+insert into t_odku_correlated_nokey values (6) on duplicate key update a = (select t_odku_correlated_nokey.a from t_odku_correlated_nokey as t_odku_correlated_nokey limit 1);
+select count(*) = 3 and sum(a) = 15 as unreachable_legacy_preserved from t_odku_correlated_nokey;
+➤ unreachable_legacy_preserved[-7,1,0]  𝄀
+1
+drop table t_odku_correlated_nokey;
+create table t_odku_priority (id int primary key, a int, g int generated always as (a + 1) stored);
+insert into t_odku_priority (id, a, g) values (1) as n(k, x, y) on duplicate key update g = 1;
+Column count doesn't match value count at row 1
+select count(*) = 0 as invalid_tuple_unchanged from t_odku_priority;
+➤ invalid_tuple_unchanged[-7,1,0]  𝄀
+1
+drop table t_odku_priority;
+create table t_odku_values_hidden_nokey (a int);
+insert into t_odku_values_hidden_nokey values (1) as n on duplicate key update a = values(__mo_fake_pk_col);
+invalid input: column '__mo_fake_pk_col' does not exist
+select count(*) = 0 as hidden_nokey_not_inserted from t_odku_values_hidden_nokey;
+➤ hidden_nokey_not_inserted[-7,1,0]  𝄀
+1
+drop table t_odku_values_hidden_nokey;
+create table t_odku_values_hidden_keyed (id int, u int, a varchar(128), primary key (id, u));
+insert into t_odku_values_hidden_keyed values (1, 2, 'seed');
+insert into t_odku_values_hidden_keyed values (1, 2, 'incoming') as n on duplicate key update a = values(__mo_cpkey_col);
+invalid input: column '__mo_cpkey_col' does not exist
+select a = 'seed' as hidden_keyed_unchanged from t_odku_values_hidden_keyed;
+➤ hidden_keyed_unchanged[-7,1,0]  𝄀
+1
+insert into t_odku_values_hidden_keyed values (1, 2, 'incoming') on duplicate key update a = values(__mo_cpkey_col);
+select hex(a) = '3A15013A1502' as legacy_values_preserved from t_odku_values_hidden_keyed;
+➤ legacy_values_preserved[-7,1,0]  𝄀
+1
+drop table t_odku_values_hidden_keyed;
+create table odku_legacy_v1 (id int primary key, u int unique, v int not null);
+insert into odku_legacy_v1 values (1, 10, 100), (2, 20, 200);
+insert into odku_legacy_v1 values (1, 11, 101) on duplicate key update v = v + 1;
+insert into odku_legacy_v1 values (1, 12, 102) on duplicate key update v = values(v);
+insert into odku_legacy_v1 values (1, 13, 103) on duplicate key update v = (select 13);
+insert into odku_legacy_v1 values (1, 14, 104) on duplicate key update v = if(exists (select 1), values(v), v);
+select id, u, v from odku_legacy_v1 order by id;
+➤ id[4,32,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  ¦  104  𝄀
+2  ¦  20  ¦  200
+drop table odku_legacy_v1;
+create table odku_legacy_v1_nokey (a int, b int);
+insert into odku_legacy_v1_nokey values (1, 2) on duplicate key update b = b + 1;
+select a, b from odku_legacy_v1_nokey order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  2
+drop table odku_legacy_v1_nokey;

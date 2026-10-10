@@ -711,3 +711,77 @@ func TestInsertRowAliasDirectRHSAndLegacyNoKeySubqueryRemainSupported(t *testing
 		require.NotNil(t, p, sql)
 	}
 }
+
+func TestInsertRowAliasExcludesHiddenTargetIdentities(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	tableDef.Cols = append(tableDef.Cols, &planpb.ColDef{Name: catalog.FakePrimaryKeyColName, Hidden: true})
+	tableDef.Name2ColIndex[catalog.FakePrimaryKeyColName] = 3
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
+	columns, err := builder.getInsertColsForRowAlias(nil, tableDef)
+	require.NoError(t, err)
+	require.Equal(t, []string{"id", "a", "b"}, columns)
+	_, err = builder.getInsertColsForRowAlias(tree.IdentifierList{catalog.FakePrimaryKeyColName}, tableDef)
+	require.Error(t, err, "an explicit INSERT list must not introduce a hidden alias identity")
+	_, err = validateInsertRowAlias(context.Background(), &tree.AliasClause{Alias: "n"}, []string{catalog.FakePrimaryKeyColName}, tableDef, "db", "t", 1)
+	require.Error(t, err, "alias validation must reject a hidden target independently of list construction")
+	binding, err := validateInsertRowAlias(context.Background(), &tree.AliasClause{Alias: "n", Cols: tree.IdentifierList{"x"}}, []string{"a"}, tableDef, "db", "t", 1)
+	require.NoError(t, err)
+	binder := NewOndupUpdateBinder(context.Background(), nil, nil, 11, 7, tableDef, "db", "t", 1, binding)
+	for _, name := range []*tree.UnresolvedName{testInsertAliasName("n", catalog.FakePrimaryKeyColName), testInsertAliasName("t", catalog.FakePrimaryKeyColName), testInsertAliasName(catalog.FakePrimaryKeyColName)} {
+		_, err := binder.BindColRef(name, 0, true)
+		require.Error(t, err, "a row-alias RHS cannot read hidden target identities")
+	}
+	err = validateOndupUpdateTargets(context.Background(), tree.UpdateExprs{&tree.UpdateExpr{Names: []*tree.UnresolvedName{testInsertAliasName(catalog.FakePrimaryKeyColName)}, Expr: tree.NewNumVal(int64(1), "1", false, tree.P_int64)}}, tableDef, "db", "t", 1)
+	require.Error(t, err, "a row-alias UPDATE target cannot write hidden identities")
+}
+
+func TestInsertRowAliasAllDefaultExcludesGeneratedSourceSlots(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.fake_pk_no_unique_gen values () as n(x,y) on duplicate key update a=n.y")
+	require.NoError(t, err)
+	sawSource := false
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_VALUE_SCAN && node.RowsetData != nil {
+			sawSource = true
+			require.Len(t, node.RowsetData.Cols, 1, "generated g must be materialized after the writable a source")
+		}
+	}
+	require.True(t, sawSource, "the actual fallback plan must contain its value scan")
+}
+
+func TestLegacyOndupNoKeyCorrelatedAdmission(t *testing.T) {
+	for _, rhs := range []string{"(select fake_pk_t.b)", "(select b)", "(select (select fake_pk_t.b))"} {
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"insert into constraint_test.fake_pk_t(a,b) values(1,'x') on duplicate key update b="+rhs)
+		require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause, rhs)
+	}
+	for _, rhs := range []string{"(select 'safe')", "(select fake_pk_t.b from constraint_test.fake_pk_t as fake_pk_t limit 1)"} {
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"insert into constraint_test.fake_pk_t(a,b) values(1,'x') on duplicate key update b="+rhs)
+		require.NoError(t, err, rhs)
+	}
+}
+
+func TestInsertRowAliasTupleWidthBeforeGeneratedUpdate(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.fake_pk_no_unique_gen(a,g) values(1) as n(x,y) on duplicate key update g=1")
+	require.ErrorContains(t, err, "Column count doesn't match value count")
+}
+
+func TestInsertRowAliasValuesExcludesHiddenIdentity(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	tableDef.Cols = append(tableDef.Cols, &planpb.ColDef{Name: catalog.FakePrimaryKeyColName, Hidden: true})
+	tableDef.Name2ColIndex[catalog.FakePrimaryKeyColName] = 3
+	rowAlias, err := validateInsertRowAlias(context.Background(), &tree.AliasClause{Alias: "n"}, []string{"id", "a", "b"}, tableDef, "db", "t", 1)
+	require.NoError(t, err)
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"insert into t values(1,2,3) as n on duplicate key update a=values(__mo_fake_pk_col)", 1)
+	require.NoError(t, err)
+	expr := stmt.(*tree.Insert).OnDuplicateUpdate[0].Expr
+	aliasBinder := NewOndupUpdateBinder(context.Background(), nil, nil, 11, 7, tableDef, "db", "t", 1, rowAlias)
+	_, err = aliasBinder.BindExpr(expr, 0, true)
+	require.Error(t, err)
+	legacyBinder := NewOndupUpdateBinder(context.Background(), nil, nil, 11, 7, tableDef, "db", "t", 1)
+	_, err = legacyBinder.BindExpr(expr, 0, true)
+	require.NoError(t, err)
+}

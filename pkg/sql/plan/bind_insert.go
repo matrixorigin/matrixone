@@ -158,6 +158,18 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		if aliasErr != nil {
 			return 0, aliasErr
 		}
+		// Check the original visible tuple before generated-column rewriting or
+		// UPDATE assignment legality. Only an implicit VALUES() tuple uses the
+		// all-default exception; its alias mapping still has full visible width.
+		if len(values.Rows) > 0 {
+			width := len(insertColumns)
+			if stmt.Columns == nil && values.Rows[0] == nil {
+				width = 0
+			}
+			if aliasErr = validateImplicitInsertValuesArity(builder.GetContext(), values.Rows, width); aliasErr != nil {
+				return 0, aliasErr
+			}
+		}
 		if aliasErr = validateOndupUpdateTargets(
 			builder.GetContext(), stmt.OnDuplicateUpdate, tableDef,
 			targetDB, targetTable, builder.compCtx.GetLowerCaseTableNames(),
@@ -2791,6 +2803,33 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 						colDef.Name, tableDef.Name)
 				}
 				if _, err := binder.BindAssignmentExpr(astUpdateExpr.Expr, colDef.Typ); err != nil {
+					return 0, err
+				}
+			}
+		}
+		if rowAlias == nil {
+			// Classify correlations before the fallback discards this unreachable
+			// arm. Keep unrelated binding failures on that legacy arm unchanged;
+			// only the deliberately rejected correlations change admission.
+			binder := NewOndupUpdateBinder(builder.GetContext(), builder, bindCtx,
+				scanTag, selectTag, tableDef, dmlCtx.targetDBName, dmlCtx.targetTableName,
+				builder.compCtx.GetLowerCaseTableNames())
+			binder.SetTargetCorrelationTag(targetCorrelationTag)
+			previousBinder := bindCtx.binder
+			bindCtx.binder = binder
+			defer func() { bindCtx.binder = previousBinder }()
+			for _, update := range astUpdateExprs {
+				if update == nil || !astExprContainsSubquery(update.Expr) {
+					continue
+				}
+				expr, bindErr := binder.BindExpr(update.Expr, 0, true)
+				if bindErr != nil {
+					if moerr.IsMoErrCode(bindErr, moerr.ErrUnsupportedDML) && strings.Contains(bindErr.Error(), odkuTargetCorrelatedSubqueryCause) {
+						return 0, bindErr
+					}
+					continue
+				}
+				if err := builder.validateOndupCorrelatedSubqueries([]*plan.Expr{expr}, targetCorrelationTag, selectTag); err != nil {
 					return 0, err
 				}
 			}
