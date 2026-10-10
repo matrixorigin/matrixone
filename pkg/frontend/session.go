@@ -2467,6 +2467,18 @@ func (ses *Session) invalidateCachedPlans(prepared bool) {
 	}
 }
 
+// markPreparedPlansForRollupAlgorithmChange marks prepared plan generations
+// stale without closing their handles. The session variable is read while
+// building the physical rollup plan, so EXECUTE must rebuild the plan after
+// the value changes.
+func (ses *Session) markPreparedPlansForRollupAlgorithmChange() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for _, stmt := range ses.prepareStmts {
+		stmt.needsRebuild = true
+	}
+}
+
 // releasePlanCache is an internal method. The caller MUST hold ses.mu
 // (currently only called from Session.Close which holds the lock).
 func (ses *Session) releasePlanCache() {
