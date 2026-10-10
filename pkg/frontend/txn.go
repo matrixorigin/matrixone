@@ -741,9 +741,9 @@ func requiresPessimisticObjectLifecycleTxn(
 	}
 }
 
-// requiresPessimisticLifecycleModeTxn identifies lifecycle and publication
-// statements that need transaction-owned locks. They must use pessimistic
-// mode so their barriers are physical locks, but forcing RC would change
+// requiresPessimisticLifecycleModeTxn identifies lifecycle statements whose
+// fixed caller snapshot is part of their semantics. They must use pessimistic
+// mode so lifecycle barriers are physical locks, but forcing RC would change
 // existing SI behavior.
 func requiresPessimisticLifecycleModeTxn(
 	ses FeSession,
@@ -753,8 +753,7 @@ func requiresPessimisticLifecycleModeTxn(
 	switch st := stmt.(type) {
 	case *tree.AlterTable:
 		return st.Table == nil || !isSessionTemporaryTable(ses, st.Table, defaultDatabase)
-	case *tree.DumpTable,
-		*tree.RenameTable,
+	case *tree.RenameTable,
 		*tree.CloneTable, *tree.CloneDatabase,
 		*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase:
 		return true

@@ -446,7 +446,7 @@ func (a *MinioSDK) Write(
 		}
 	}
 
-	if sizeHint != nil && *sizeHint < smallObjectThreshold {
+	if sizeHint != nil && (*sizeHint < smallObjectThreshold || exclusiveWrite(ctx)) {
 		data, err := io.ReadAll(r)
 		if err != nil {
 			return err
@@ -640,16 +640,24 @@ func (a *MinioSDK) putObject(
 	if sizeHint != nil {
 		size = *sizeHint
 	}
+	opts := minio.PutObjectOptions{}
+	if exclusiveWrite(ctx) {
+		opts.DisableMultipart = true
+		opts.SetMatchETagExcept("*")
+	}
 	info, err := a.client.PutObject(
 		ctx,
 		a.bucket,
 		key,
 		r,
 		size,
-		minio.PutObjectOptions{},
+		opts,
 	)
 	if err == nil {
 		recordS3AcceptedBytes(ctx, info.Size, a.perfCounterSets...)
+	}
+	if exclusiveWrite(ctx) && minio.ToErrorResponse(err).StatusCode == 412 {
+		err = moerr.NewFileAlreadyExistsNoCtx(key)
 	}
 	return info, err
 }

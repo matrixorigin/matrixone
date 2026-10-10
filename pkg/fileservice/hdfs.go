@@ -345,14 +345,31 @@ func (h *HDFS) Write(ctx context.Context, key string, r io.Reader, sizeHint *int
 		counter.FileService.S3.Put.Add(1)
 	}, h.perfCounterSets...)
 
-	tempFile, tempFilePath, err := h.createTemp(ctx)
+	var tempFile *hdfs.FileWriter
+	var tempFilePath string
+	if exclusiveWrite(ctx) {
+		tempFilePath = h.keyToPath(key)
+		if err = h.client.MkdirAll(path.Dir(tempFilePath), 0755); err != nil {
+			return err
+		}
+		// Create uses CREATE without OVERWRITE. Keep a failed partial claim:
+		// removing it would make delayed writes and retry ownership ambiguous.
+		tempFile, err = h.client.Create(tempFilePath)
+		if os.IsExist(err) {
+			return moerr.NewFileAlreadyExistsNoCtx(key)
+		}
+	} else {
+		tempFile, tempFilePath, err = h.createTemp(ctx)
+	}
 	if err != nil {
 		return err
 	}
 	defer func() {
 		if err != nil {
 			_ = tempFile.Close()
-			_ = h.client.Remove(tempFilePath)
+			if !exclusiveWrite(ctx) {
+				_ = h.client.Remove(tempFilePath)
+			}
 		}
 	}()
 
@@ -374,6 +391,10 @@ func (h *HDFS) Write(ctx context.Context, key string, r io.Reader, sizeHint *int
 	}, maxRetryAttemps, IsRetryableError)
 	if err != nil {
 		return err
+	}
+
+	if exclusiveWrite(ctx) {
+		return nil
 	}
 
 	filePath := h.keyToPath(key)

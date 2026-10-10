@@ -42,11 +42,10 @@ func exactMutationRows(ctx context.Context) bool {
 	return ctx.Value(exactMutationRowsKey{}) == true
 }
 
-// LockRowsForAdmissionWithContext locks exactly the supplied non-null
-// keys in an existing pessimistic transaction. It records the lock binding
+// LockRowsForAdmissionWithContext locks exactly the supplied non-null catalog
+// keys in an existing pessimistic RC transaction. It records the lock binding
 // but does not validate a data plan or advance the snapshot. The caller must
-// revalidate the protected resource before effects. Catalog callers must also
-// install an applied frontier and revalidate catalog identity.
+// install an applied frontier and revalidate catalog identity before effects.
 // The returned timestamp can include lock-table creation time and is not a TN
 // read barrier. Capacity exhaustion fails instead of widening to a table lock.
 // The optional wait policy applies only to this request, allowing a retained

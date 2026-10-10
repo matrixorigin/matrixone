@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
@@ -70,9 +69,6 @@ const (
 	// The high synthetic table ID follows the existing user-level-lock
 	// namespace and serializes installs until the owning transaction ends.
 	tableDumpObjectInstallLockTableID uint64 = (1 << 62) + 1
-	// Each row in this synthetic table protects one physical destination.
-	// Transactions retain exact row locks, never widening to a global lock.
-	tableDumpPublicationLockTableID uint64 = (1 << 62) + 2
 )
 
 type tableDumpManifest struct {
@@ -835,7 +831,7 @@ func writeTableDumpJSON(ctx context.Context, fs fileservice.FileService, name st
 			"table dump manifest exceeds %d bytes", tableDumpMaxManifest,
 		)
 	}
-	return fs.Write(ctx, fileservice.IOVector{
+	return fileservice.WriteExclusive(ctx, fs, fileservice.IOVector{
 		FilePath: name,
 		Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(data)), ReaderForWrite: bytes.NewReader(data)}},
 	})
@@ -1250,58 +1246,22 @@ func dumpTableRelationObjects(
 	return result, written, nil
 }
 
-var lockRowsForTableDumpPublication = lockop.LockRowsForAdmissionWithContext
-
-func lockTableDumpPublication(ctx context.Context, ses *Session, dumpFS fileservice.FileService) error {
-	proc := ses.GetProc()
-	if proc == nil || proc.GetTxnOperator() == nil {
-		return moerr.NewInternalErrorNoCtx("DUMP TABLE requires an active transaction process")
-	}
-	if !proc.GetTxnOperator().Txn().IsPessimistic() {
-		return moerr.NewNotSupportedNoCtx("DUMP TABLE in optimistic transactions")
-	}
-	key, err := fileservice.FileLockKey(dumpFS, tableDumpManifestName)
-	if err != nil {
-		return err
-	}
-	// Bound lock memory independently of URI length. Hash collisions can only
-	// serialize unrelated destinations, never admit two owners of one path.
-	digest := sha256.Sum256([]byte(key))
-	keys := batch.NewWithSize(1)
-	keys.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	defer keys.Clean(proc.Mp())
-	if err = vector.AppendBytes(keys.Vecs[0], digest[:], false, proc.Mp()); err != nil {
-		return err
-	}
-	_, err = lockRowsForTableDumpPublication(ctx, ses.GetTxnHandler().GetStorage(), proc,
-		tableDumpPublicationLockTableID, keys, 0, types.T_varchar.ToType(), lock.LockMode_Exclusive, 0)
-	return err
-}
-
-func checkTableDumpDestinationAvailable(ctx context.Context, dumpFS fileservice.FileService) error {
-	for _, name := range []string{tableDumpManifestName, tableDumpReadyName} {
-		if _, err := dumpFS.StatFile(ctx, name); err == nil {
-			return moerr.NewFileAlreadyExistsNoCtx(name)
-		} else if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return err
-		}
-	}
-	return nil
-}
-
 func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) error {
 	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)
 	if err != nil {
 		return err
 	}
 	defer closeDumpFS()
-	if err = lockTableDumpPublication(ctx, ses, dumpFS); err != nil {
+	if err = fileservice.CheckExclusiveWrite(dumpFS); err != nil {
 		return err
 	}
-	if err = checkTableDumpDestinationAvailable(ctx, dumpFS); err != nil {
-		return err
+	for _, name := range []string{tableDumpManifestName, tableDumpReadyName} {
+		if _, err = dumpFS.StatFile(ctx, name); err == nil {
+			return moerr.NewFileAlreadyExistsNoCtx(name)
+		} else if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return err
+		}
 	}
-
 	dbName, tableName, rel, err := getTableForDump(ctx, ses, stmt.Table)
 	if err != nil {
 		return err
@@ -1348,10 +1308,10 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 		return err
 	}
 
-	// The publication lock is held through object copying and marker creation,
-	// preventing another CN from changing this destination before DUMP returns.
-	// Do not delete copied fixture objects on failure: that could remove files
-	// used by another DUMP. Failed fixtures are reclaimed with the stage
+	// Multiple CNs may copy immutable source objects before one exclusively
+	// creates the manifest. Object copies have no publication ownership. Do not delete
+	// copied fixture objects on failure: that could remove files published by a
+	// concurrent successful DUMP. Failed fixtures are reclaimed with the stage
 	// fixture lifecycle.
 	objectCount := 0
 	for _, ref := range refs {
@@ -1378,7 +1338,7 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 		return err
 	}
 	if !stmt.MetadataOnly {
-		if err = dumpFS.Write(ctx, fileservice.IOVector{FilePath: tableDumpReadyName, Entries: []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("1")}}}); err != nil {
+		if err = fileservice.WriteExclusive(ctx, dumpFS, fileservice.IOVector{FilePath: tableDumpReadyName, Entries: []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("1")}}}); err != nil {
 			return err
 		}
 	}

@@ -46,7 +46,6 @@ type S3FS struct {
 	storage    ObjectStorage
 	rawStorage ObjectStorage
 	keyPrefix  string
-	bucket     string
 
 	memCache    *MemCache
 	diskCache   *DiskCache
@@ -110,7 +109,6 @@ func NewS3FS(
 	fs := &S3FS{
 		name:            args.Name,
 		keyPrefix:       args.KeyPrefix,
-		bucket:          args.Bucket,
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
 		ioMerger:        NewIOMerger(),
@@ -561,7 +559,10 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
 	}
 	key := s.pathToKey(path.File)
 	existsStart := time.Now()
-	exists, err := s.storage.Exists(ctx, key)
+	exists := false
+	if !exclusiveWrite(ctx) {
+		exists, err = s.storage.Exists(ctx, key)
+	}
 	metric.FSWriteDurationExists.Observe(time.Since(existsStart).Seconds())
 	if err != nil {
 		return err
@@ -638,7 +639,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	}
 
 	if pmw, ok := s.storage.(ParallelMultipartWriter); ok && pmw.SupportsParallelMultipart() &&
-		enableParallel {
+		enableParallel && !exclusiveWrite(ctx) {
 		opt := &ParallelMultipartOption{
 			PartSize:    defaultParallelMultipartPartSize,
 			Concurrency: runtime.NumCPU(),
