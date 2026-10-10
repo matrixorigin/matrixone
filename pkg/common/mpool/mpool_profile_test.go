@@ -215,11 +215,14 @@ func TestPointerMetadataRejectsDuplicateAcrossKinds(t *testing.T) {
 		mp := &MPool{
 			noLock: true,
 			ptrs:   make(map[unsafe.Pointer]memHdr),
+			onHeap: new(onHeapOwnership),
 		}
 		require.NoError(t, mp.recordPtrHdr(ptr, hdr))
 		require.Error(t, mp.recordAccountedPtrMetadata(ptr, hdr, lease))
 
-		delete(mp.ptrs, ptr)
+		var removedLease allocationLease
+		_, removed := mp.removePtrMetadata(ptr, &removedLease)
+		require.True(t, removed)
 		require.NoError(t, mp.recordAccountedPtrMetadata(ptr, hdr, lease))
 		require.Error(t, mp.recordAccountedPtrMetadata(ptr, hdr, lease))
 		require.Error(t, mp.recordPtrHdr(ptr, hdr))
@@ -238,14 +241,15 @@ func TestPointerMetadataRejectsDuplicateAcrossKinds(t *testing.T) {
 			shard.mu.Unlock()
 		}()
 
-		require.NoError(t, gRecordPtr(ptr, hdr))
+		mp := &MPool{onHeap: new(onHeapOwnership)}
+		require.NoError(t, mp.recordPtrHdr(ptr, hdr))
 		require.Error(t, gRecordAccountedPtrMetadata(ptr, hdr, lease))
-		shard.mu.Lock()
-		delete(shard.m, ptr)
-		shard.mu.Unlock()
+		var removedLease allocationLease
+		_, removed := mp.removePtrMetadata(ptr, &removedLease)
+		require.True(t, removed)
 		require.NoError(t, gRecordAccountedPtrMetadata(ptr, hdr, lease))
 		require.Error(t, gRecordAccountedPtrMetadata(ptr, hdr, lease))
-		require.Error(t, gRecordPtr(ptr, hdr))
+		require.Error(t, mp.recordPtrHdr(ptr, hdr))
 	})
 }
 

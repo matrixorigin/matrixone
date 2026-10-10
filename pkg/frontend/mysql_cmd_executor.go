@@ -5668,11 +5668,10 @@ func rebuildStaleCachedStatements(ses FeSession, execCtx *ExecCtx) (err error) {
 	return nil
 }
 
-func dispatchStmt(ses FeSession,
-	statsArr *statistic.StatsArray,
-	execCtx *ExecCtx) (err error) {
-	ses.EnterFPrint(FPDispatchStmt)
-	defer ses.ExitFPrint(FPDispatchStmt)
+// checkCachedStatementPlan admits or replaces a cached generation before
+// physical compilation. Keeping this phase separate from Run lets compile-only
+// consumers validate the same generation boundary without publishing results.
+func checkCachedStatementPlan(ses FeSession, execCtx *ExecCtx) error {
 	ses.GetTxnCompileCtx().tcw = execCtx.cw
 	//5. check plan within txn
 	if !execCtx.input.isBinaryProtExecute && execCtx.cw.Plan() != nil {
@@ -5687,10 +5686,21 @@ func dispatchStmt(ses FeSession,
 			}
 		}
 		if flag {
-			if err = rebuildStaleCachedStatements(ses, execCtx); err != nil {
+			if err := rebuildStaleCachedStatements(ses, execCtx); err != nil {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func dispatchStmt(ses FeSession,
+	statsArr *statistic.StatsArray,
+	execCtx *ExecCtx) (err error) {
+	ses.EnterFPrint(FPDispatchStmt)
+	defer ses.ExitFPrint(FPDispatchStmt)
+	if err = checkCachedStatementPlan(ses, execCtx); err != nil {
+		return err
 	}
 
 	//6. execute stmt within txn
