@@ -63,7 +63,11 @@ func FileLockKey(fs FileService, filePath string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return "object\x00" + f.bucket + "\x00" + f.pathToKey(p.File), nil
+		key := f.pathToKey(p.File)
+		if hdfs, ok := f.rawStorage.(*HDFS); ok {
+			return "hdfs\x00" + hdfs.keyToPath(key), nil
+		}
+		return "object\x00" + f.bucket + "\x00" + key, nil
 	default:
 		return "", moerr.NewNotSupportedNoCtxf("file lock key for %T", fs)
 	}
