@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
@@ -67,9 +68,8 @@ const (
 	// The high synthetic table ID follows the existing user-level-lock
 	// namespace and serializes installs until the owning transaction ends.
 	tableDumpObjectInstallLockTableID uint64 = (1 << 62) + 1
-	// Stage-backed fileservices do not provide an exclusive create token for
-	// publishing a table dump. Serialize DUMP publication across CNs with a
-	// separate synthetic table lock until the owning transaction ends.
+	// Each row in this synthetic table protects one physical destination.
+	// Transactions retain exact row locks, never widening to a global lock.
 	tableDumpPublicationLockTableID uint64 = (1 << 62) + 2
 )
 
@@ -1240,7 +1240,9 @@ func dumpTableRelationObjects(
 	return result, written, nil
 }
 
-func lockTableDumpPublication(ctx context.Context, ses *Session) error {
+var lockRowsForTableDumpPublication = lockop.LockRowsForAdmissionWithContext
+
+func lockTableDumpPublication(ctx context.Context, ses *Session, dumpFS fileservice.FileService) error {
 	proc := ses.GetProc()
 	if proc == nil || proc.GetTxnOperator() == nil {
 		return moerr.NewInternalErrorNoCtx("DUMP TABLE requires an active transaction process")
@@ -1248,20 +1250,21 @@ func lockTableDumpPublication(ctx context.Context, ses *Session) error {
 	if !proc.GetTxnOperator().Txn().IsPessimistic() {
 		return moerr.NewNotSupportedNoCtx("DUMP TABLE in optimistic transactions")
 	}
-	err := lockTableForTableDump(
-		ctx,
-		ses.GetTxnHandler().GetStorage(),
-		proc,
-		tableDumpPublicationLockTableID,
-		types.T_varchar.ToType(),
-		false,
-	)
-	// The lock is acquired before reading source metadata or copying objects.
-	// An RC snapshot refresh has no stale input to replay; the lock remains
-	// owned by this transaction. Definition changes and other errors still fail.
-	if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
-		return nil
+	key, err := fileservice.FileLockKey(dumpFS, tableDumpManifestName)
+	if err != nil {
+		return err
 	}
+	// Bound lock memory independently of URI length. Hash collisions can only
+	// serialize unrelated destinations, never admit two owners of one path.
+	digest := sha256.Sum256([]byte(key))
+	keys := batch.NewWithSize(1)
+	keys.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	defer keys.Clean(proc.Mp())
+	if err = vector.AppendBytes(keys.Vecs[0], digest[:], false, proc.Mp()); err != nil {
+		return err
+	}
+	_, err = lockRowsForTableDumpPublication(ctx, ses.GetTxnHandler().GetStorage(), proc,
+		tableDumpPublicationLockTableID, keys, 0, types.T_varchar.ToType(), lock.LockMode_Exclusive, 0)
 	return err
 }
 
@@ -1282,7 +1285,7 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 		return err
 	}
 	defer closeDumpFS()
-	if err = lockTableDumpPublication(ctx, ses); err != nil {
+	if err = lockTableDumpPublication(ctx, ses, dumpFS); err != nil {
 		return err
 	}
 	if err = checkTableDumpDestinationAvailable(ctx, dumpFS); err != nil {

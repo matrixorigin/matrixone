@@ -43,7 +43,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -128,14 +130,27 @@ func TestTableDumpLocksUseRequestContext(t *testing.T) {
 		require.NoError(t, ctx.Err())
 		require.Equal(t, "request", ctx.Value(tableDumpRequestContextKey{}))
 		locked = append(locked, lockCall{tableID: tableID, changeDef: changeDef})
-		if tableID == tableDumpPublicationLockTableID {
-			return moerr.NewTxnNeedRetry(ctx)
-		}
 		return nil
 	})
 	defer stub.Reset()
 
-	err := lockTableDumpPublication(requestCtx, ses)
+	fs, err := openLocalTableDump(t.TempDir())
+	require.NoError(t, err)
+	defer fs.Close(requestCtx)
+	pubStub := gostub.Stub(&lockRowsForTableDumpPublication, func(ctx context.Context,
+		_ engine.Engine, _ *process.Process, tableID uint64, keys *batch.Batch, idx int32,
+		_ types.Type, mode lock.LockMode, group uint32, _ ...lock.WaitPolicy,
+	) (timestamp.Timestamp, error) {
+		require.NoError(t, ctx.Err())
+		require.Equal(t, "request", ctx.Value(tableDumpRequestContextKey{}))
+		require.Equal(t, lock.LockMode_Exclusive, mode)
+		require.Equal(t, uint32(0), group)
+		require.Len(t, keys.Vecs[idx].GetBytesAt(0), sha256.Size)
+		locked = append(locked, lockCall{tableID: tableID})
+		return timestamp.Timestamp{}, nil
+	})
+	defer pubStub.Reset()
+	err = lockTableDumpPublication(requestCtx, ses, fs)
 	require.NoError(t, err)
 	err = lockTableDumpLoadTargets(requestCtx, ses, []tableDumpRelationRef{{relation: rel}}, true)
 	require.NoError(t, err)
@@ -150,19 +165,18 @@ func stubTableDumpPublicationLock(t *testing.T, ses *Session, txnOp *mock_fronte
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic}).AnyTimes()
 	ses.proc.Base.TxnOperator = txnOp
 	ses.txnHandler.txnOp = txnOp
-	stub := gostub.Stub(&lockTableForTableDump, func(
-		ctx context.Context,
-		_ engine.Engine,
-		_ *process.Process,
-		tableID uint64,
-		primaryKeyType types.Type,
-		changeDef bool,
-	) error {
+	stub := gostub.Stub(&lockRowsForTableDumpPublication, func(
+		ctx context.Context, _ engine.Engine, _ *process.Process, tableID uint64,
+		keys *batch.Batch, idx int32, primaryKeyType types.Type, mode lock.LockMode,
+		group uint32, _ ...lock.WaitPolicy,
+	) (timestamp.Timestamp, error) {
 		require.NoError(t, ctx.Err())
 		require.Equal(t, tableDumpPublicationLockTableID, tableID)
 		require.Equal(t, types.T_varchar.ToType(), primaryKeyType)
-		require.False(t, changeDef)
-		return nil
+		require.Equal(t, lock.LockMode_Exclusive, mode)
+		require.Equal(t, uint32(0), group)
+		require.Len(t, keys.Vecs[idx].GetBytesAt(0), sha256.Size)
+		return timestamp.Timestamp{}, nil
 	})
 	t.Cleanup(stub.Reset)
 }
@@ -175,7 +189,7 @@ func TestLockTableDumpPublicationRejectsOptimisticTransaction(t *testing.T) {
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Optimistic})
 	ses.proc.Base.TxnOperator = txnOp
 
-	err := lockTableDumpPublication(context.Background(), ses)
+	err := lockTableDumpPublication(context.Background(), ses, nil)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 }
 
@@ -187,10 +201,11 @@ func TestHandleDumpTablePropagatesPublicationLockError(t *testing.T) {
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic}).AnyTimes()
 	ses.proc.Base.TxnOperator = txnOp
 	wantErr := errors.New("publication lock failed")
-	stub := gostub.Stub(&lockTableForTableDump, func(
-		context.Context, engine.Engine, *process.Process, uint64, types.Type, bool,
-	) error {
-		return wantErr
+	stub := gostub.Stub(&lockRowsForTableDumpPublication, func(
+		context.Context, engine.Engine, *process.Process, uint64, *batch.Batch,
+		int32, types.Type, lock.LockMode, uint32, ...lock.WaitPolicy,
+	) (timestamp.Timestamp, error) {
+		return timestamp.Timestamp{}, wantErr
 	})
 	t.Cleanup(stub.Reset)
 

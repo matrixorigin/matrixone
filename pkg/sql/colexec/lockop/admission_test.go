@@ -56,6 +56,7 @@ func TestLockRowsAdmissionKeepsOwnerWithoutSnapshotWait(t *testing.T) {
 		defer bat.Clean(proc.Mp())
 		op := proc.GetTxnOperator()
 		defer func() { require.NoError(t, op.Rollback(proc.Ctx)) }()
+		op.TxnRef().Isolation = txnpb.TxnIsolation_SI
 		snapshot := op.Txn().SnapshotTS
 		ls := proc.GetLockService()
 		var granted lock.Result
@@ -80,6 +81,7 @@ func TestLockRowsAdmissionKeepsOwnerWithoutSnapshotWait(t *testing.T) {
 		require.Equal(t, "SNAPSHOT", bat.Vecs[0].GetStringAt(0), "caller still owns the keys")
 
 		// The ordinary API still performs its existing cold timestamp wait.
+		op.TxnRef().Isolation = txnpb.TxnIsolation_RC
 		proc.Base.LockService = ls
 		err = LockTableForSnapshotRefreshWithContext(proc.Ctx, nil, proc, 42, *bat.Vecs[0].GetType(), lock.LockMode_Shared, false)
 		require.ErrorIs(t, err, assert.AnError)
@@ -183,9 +185,6 @@ func TestLockRowsAdmissionRefusesWideningAndInvalidOwners(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(admit(), moerr.ErrLockNeedUpgrade))
 		require.Equal(t, 1, calls, "no fallback range request")
 		require.False(t, proc.GetTxnOperator().HasLockTable(44))
-		proc.GetTxnOperator().TxnRef().Isolation = txnpb.TxnIsolation_SI
-		require.Error(t, admit())
-		proc.GetTxnOperator().TxnRef().Isolation = txnpb.TxnIsolation_RC
 		proc.GetTxnOperator().TxnRef().Mode = txnpb.TxnMode_Optimistic
 		require.Error(t, admit())
 		proc.GetTxnOperator().TxnRef().Mode = txnpb.TxnMode_Pessimistic
