@@ -2848,6 +2848,80 @@ func stubAlterCopySourceLocks(t *testing.T, err error) {
 	t.Cleanup(stubs.Reset)
 }
 
+func TestLockAlterCopySourceRetryContracts(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	for _, tc := range []struct {
+		name          string
+		optimistic    bool
+		tableErr      error
+		relationErr   error
+		wantLockCalls []string
+	}{
+		{
+			name:       "optimistic transaction does not take source locks",
+			optimistic: true,
+		},
+		{
+			name:          "catalog table retry is reported as definition change",
+			tableErr:      moerr.NewTxnNeedRetryNoCtx(),
+			wantLockCalls: []string{"database", "table", "relation"},
+		},
+		{
+			name:          "physical table retry is reported as definition change",
+			relationErr:   moerr.NewTxnNeedRetryNoCtx(),
+			wantLockCalls: []string{"database", "table", "relation"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := &alterCopyLateOwnerExecutor{t: t}
+			c := newAlterCopyPrecheckCompile(t, ctrl, exec)
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			txnMode := txn.TxnMode_Pessimistic
+			if tc.optimistic {
+				txnMode = txn.TxnMode_Optimistic
+			}
+			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
+				Mode:      txnMode,
+				Isolation: txn.TxnIsolation_SI,
+			}).AnyTimes()
+			c.proc.Base.TxnOperator = txnOperator
+
+			var lockCalls []string
+			stubs := gostub.New()
+			stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error {
+				lockCalls = append(lockCalls, "database")
+				return nil
+			})
+			stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error {
+				lockCalls = append(lockCalls, "table")
+				return tc.tableErr
+			})
+			stubs.Stub(&lockTable,
+				func(context.Context, engine.Engine, *process.Process, engine.Relation, string, bool) error {
+					lockCalls = append(lockCalls, "relation")
+					return tc.relationErr
+				},
+			)
+			t.Cleanup(stubs.Reset)
+
+			qry := &plan2.AlterTable{TableDef: &plan.TableDef{Name: "dept"}}
+			err := c.lockAlterCopySource(
+				mock_frontend.NewMockDatabase(ctrl), "test", "dept",
+				mock_frontend.NewMockRelation(ctrl), qry,
+			)
+
+			if tc.optimistic {
+				require.NoError(t, err)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+			}
+			require.Equal(t, tc.wantLockCalls, lockCalls)
+		})
+	}
+}
+
 type alterCopyLateOwnerExecutor struct {
 	t                *testing.T
 	mp               *mpool.MPool
