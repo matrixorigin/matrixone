@@ -37,7 +37,9 @@ type CollationDefinition struct {
 }
 
 // SupportedCollationDefinitions is a presentation of the common capability
-// owner, not a second registry. Native-but-disabled domains are not advertised.
+// owner, not a second registry. Every native domain that is executable is
+// advertised with its own protocol identity; legacy aliases use their effective
+// admitted semantics.
 var SupportedCollationDefinitions = func() []CollationDefinition {
 	advertised := collation.Advertised()
 	result := make([]CollationDefinition, 0, len(advertised))

@@ -43,6 +43,15 @@ func TestJSONValueClausesParseAndFormat(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, tree.String(view, dialect.MYSQL),
 		"json_value(doc, $)")
+
+	// Both functions use the same EMPTY/ERROR keywords in one statement.
+	combined, err := ParseOne(context.Background(),
+		"select json_value(j.doc, '$.n' returning signed null on empty error on error) from json_table('[{}]', '$[*]' columns(doc json path '$' null on empty error on error)) as j", 1)
+	require.NoError(t, err)
+	combinedSQL := tree.String(combined, dialect.MYSQL)
+	_, err = ParseOne(context.Background(), combinedSQL, 1)
+	require.NoError(t, err)
+	require.Contains(t, combinedSQL, "null on empty error on error")
 }
 
 func TestJSONValueReturningTypesParse(t *testing.T) {
