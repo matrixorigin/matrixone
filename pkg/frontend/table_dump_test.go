@@ -128,6 +128,9 @@ func TestTableDumpLocksUseRequestContext(t *testing.T) {
 		require.NoError(t, ctx.Err())
 		require.Equal(t, "request", ctx.Value(tableDumpRequestContextKey{}))
 		locked = append(locked, lockCall{tableID: tableID, changeDef: changeDef})
+		if tableID == tableDumpPublicationLockTableID {
+			return moerr.NewTxnNeedRetry(ctx)
+		}
 		return nil
 	})
 	defer stub.Reset()

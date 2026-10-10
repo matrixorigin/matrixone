@@ -1248,7 +1248,7 @@ func lockTableDumpPublication(ctx context.Context, ses *Session) error {
 	if !proc.GetTxnOperator().Txn().IsPessimistic() {
 		return moerr.NewNotSupportedNoCtx("DUMP TABLE in optimistic transactions")
 	}
-	return lockTableForTableDump(
+	err := lockTableForTableDump(
 		ctx,
 		ses.GetTxnHandler().GetStorage(),
 		proc,
@@ -1256,6 +1256,13 @@ func lockTableDumpPublication(ctx context.Context, ses *Session) error {
 		types.T_varchar.ToType(),
 		false,
 	)
+	// The lock is acquired before reading source metadata or copying objects.
+	// An RC snapshot refresh has no stale input to replay; the lock remains
+	// owned by this transaction. Definition changes and other errors still fail.
+	if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+		return nil
+	}
+	return err
 }
 
 func checkTableDumpDestinationAvailable(ctx context.Context, dumpFS fileservice.FileService) error {
