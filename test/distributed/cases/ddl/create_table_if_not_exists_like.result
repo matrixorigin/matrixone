@@ -18,8 +18,8 @@ foo  𝄀
 foo_shadow
 desc foo_shadow;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-name  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+name  ¦  varchar(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select count(*) from foo_shadow;
 ➤ count(*)[-5,64,0]  𝄀
 0
