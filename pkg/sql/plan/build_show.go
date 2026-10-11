@@ -702,7 +702,6 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	showColumnsCollation := "case internal_column_character_set(col.atttyp) " +
 		"WHEN 0 then 'utf8_general_ci' " +
 		"WHEN 1 then 'utf8mb4_bin' " +
-		"WHEN 2 then 'binary' " +
 		"WHEN 3 then 'utf8mb4_general_ci' " +
 		"WHEN 4 then 'utf8_unicode_ci' " +
 		"WHEN 5 then 'utf8mb4_unicode_ci' " +

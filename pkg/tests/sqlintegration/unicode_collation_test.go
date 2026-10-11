@@ -75,7 +75,7 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 			require.True(t, collation.Valid, "collation_name must be exposed for %s.%s", table, column)
 			return charset.String, collation.String
 		}
-		queryShowColumnCollation := func(table, column string) string {
+		queryShowColumnCollation := func(table, column string) sql.NullString {
 			t.Helper()
 			rows, err := db.QueryContext(ctx, "show full columns from `"+table+"`")
 			require.NoError(t, err)
@@ -114,12 +114,16 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 				require.NoError(t, rows.Scan(dest...))
 				if asString(values[fieldIndex]) == column {
 					require.NoError(t, rows.Err())
-					return asString(values[collationIndex])
+					value := sql.NullString{String: asString(values[collationIndex])}
+					if values[collationIndex] != nil {
+						value.Valid = true
+					}
+					return value
 				}
 			}
 			require.NoError(t, rows.Err())
 			t.Fatalf("column %s.%s was not returned by SHOW FULL COLUMNS", table, column)
-			return ""
+			return sql.NullString{}
 		}
 
 		exec("drop database if exists " + schema)
@@ -151,7 +155,9 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 		charset, collation := queryColumnCollation("words", "s")
 		require.Equal(t, "utf8mb4", charset)
 		require.Equal(t, "utf8mb4_unicode_ci", collation)
-		require.Equal(t, "utf8mb4_unicode_ci", queryShowColumnCollation("words", "s"))
+		showCollation := queryShowColumnCollation("words", "s")
+		require.True(t, showCollation.Valid)
+		require.Equal(t, "utf8mb4_unicode_ci", showCollation.String)
 		require.Equal(t, 2, queryCount("select count(*) from words where lower(s)='a'"))
 		// Conditional and ordered string expressions must carry the native
 		// Unicode revision through their rebuilt result type. Include mixed-width
@@ -191,11 +197,22 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 		require.Equal(t, "62", original)
 		require.Equal(t, original, serialized)
 
+		exec("create table show_full_columns_controls (b binary(4), v varbinary(4), bl blob, n int, txt varchar(20) collate utf8mb4_bin)")
+		require.False(t, queryShowColumnCollation("show_full_columns_controls", "b").Valid)
+		require.False(t, queryShowColumnCollation("show_full_columns_controls", "v").Valid)
+		require.False(t, queryShowColumnCollation("show_full_columns_controls", "bl").Valid)
+		require.False(t, queryShowColumnCollation("show_full_columns_controls", "n").Valid)
+		showCollation = queryShowColumnCollation("show_full_columns_controls", "txt")
+		require.True(t, showCollation.Valid)
+		require.Equal(t, "utf8mb4_bin", showCollation.String)
+
 		exec("create table utf8mb3_write (s varchar(64) character set utf8mb3 collate utf8_unicode_ci)")
 		charset, collation = queryColumnCollation("utf8mb3_write", "s")
 		require.Equal(t, "utf8", charset)
 		require.Equal(t, "utf8_unicode_ci", collation)
-		require.Equal(t, "utf8_unicode_ci", queryShowColumnCollation("utf8mb3_write", "s"))
+		showCollation = queryShowColumnCollation("utf8mb3_write", "s")
+		require.True(t, showCollation.Valid)
+		require.Equal(t, "utf8_unicode_ci", showCollation.String)
 		_, err = db.ExecContext(ctx, "insert into utf8mb3_write values ('😀')")
 		require.Error(t, err)
 		_, err = db.ExecContext(ctx, "insert into utf8mb3_write values (unhex('30fbc130ffff20'))")
