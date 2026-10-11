@@ -1760,6 +1760,21 @@ func TestParseDecimal128RoundsOnceWhenDownscaling(t *testing.T) {
 		{"-1.235", 10, 2, "-1.24"},
 		{"1.2349999999999999999999999999999999999999", 10, 2, "1.23"},
 		{"12.5e-1", 10, 1, "1.3"},
+		// exponent spellings of the same values must round once as well
+		{"0." + zeros + "145e0", 38, 37, "0." + zeros + "1"},
+		{"-0." + zeros + "145e0", 38, 37, "-0." + zeros + "1"},
+		{"0." + zeros + "149E+0", 38, 37, "0." + zeros + "1"},
+		{"-0." + zeros + "149E+0", 38, 37, "-0." + zeros + "1"},
+		{"0." + zeros + "144e0", 38, 37, "0." + zeros + "1"},
+		{"0." + zeros + "150e0", 38, 37, "0." + zeros + "2"},
+		{"0." + zeros + "0145e1", 38, 37, "0." + zeros + "1"},
+		{"145e-39", 38, 37, "0." + zeros + "1"},
+		{"-14.9e-38", 38, 37, "-0." + zeros + "1"},
+		// an exponent after more than 38 digits is still applied
+		{"0." + zeros + "145e1", 38, 37, "0." + zeros[1:] + "15"},
+		{"0." + zeros + "145e1", 38, 38, "0." + zeros[1:] + "145"},
+		{"0.1234" + strings.Repeat("9", 40), 10, 3, "0.123"},
+		{"0.1234" + strings.Repeat("9", 40) + "e1", 10, 2, "1.23"},
 	} {
 		got, err := ParseDecimal128(tc.input, tc.width, tc.scale)
 		require.NoError(t, err, tc.input)

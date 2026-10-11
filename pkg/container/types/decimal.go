@@ -21,7 +21,6 @@ import (
 	"math/big"
 	"math/bits"
 	"strconv"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -2210,8 +2209,18 @@ func ParseDecimal64FromByte(x string, width, scale int32) (y Decimal64, err erro
 }
 
 func Parse128(x string) (y Decimal128, scale int32, err error) {
+	y, scale, _, err = parse128(x, false)
+	return
+}
+
+// parse128 is the Decimal128 text parser. Once 38 digits are kept, Parse128
+// rounds at that limit. With exactTail (used by ParseDecimal128, which rounds
+// again to the column scale) leading zeros are not counted as digits, nothing
+// is rounded here and the first dropped digit is returned in next, so the
+// caller rounds exactly once to its final scale.
+func parse128(x string, exactTail bool) (y Decimal128, scale int32, next byte, err error) {
 	if x == "" {
-		return Decimal128{0, 0}, 0, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal128")
+		return Decimal128{0, 0}, 0, 0, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal128")
 	}
 	var z Decimal128
 	width := 0
@@ -2286,11 +2295,14 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 			err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal128.", x)
 			return
 		} else {
-			if scale == -1 && x[i] == '0' && y.B0_63 == 0 && y.B64_127 == 0 {
-				// Leading zeros of the integer part are not significant digits;
-				// counting them would push the last fractional digit of a
-				// DECIMAL(38,38) literal such as 0.000...01 past the 38-digit limit.
+			if (scale == -1 || exactTail) && x[i] == '0' && y.B0_63 == 0 && y.B64_127 == 0 {
+				// Leading zeros are not significant digits; counting them would
+				// push the last fractional digit of a DECIMAL(38,38) literal such
+				// as 0.000...01 past the 38-digit limit.
 				flag = true
+				if scale != -1 {
+					scale++
+				}
 				i++
 				continue
 			}
@@ -2299,12 +2311,20 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 					err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128.", x)
 					return
 				}
-				if x[i] >= '5' {
+				if exactTail {
+					next = x[i] - '0'
+				} else if x[i] >= '5' {
 					y, err = y.Add128(Decimal128{1, 0})
 					if y1, _ := y.Mod128(Decimal128{10, 0}); y1.B0_63 == 0 {
 						scale--
 						y, _ = y.Scale(-1)
 					}
+				}
+				// Skip the remaining dropped digits but keep a trailing exponent.
+				for i++; i < len(x) && x[i] >= '0' && x[i] <= '9'; i++ {
+				}
+				if i < len(x) && (x[i] == 'e' || x[i] == 'E') {
+					continue
 				}
 				break
 			}
@@ -2486,31 +2506,6 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 	return
 }
 
-// trimDecimalFractionForScale drops plain fractional digits beyond scale+1.
-// Half-up rounding to scale only depends on the first discarded digit, and
-// keeping more digits could let Parse128 round at its 38-digit limit and
-// ParseDecimal128 round again to the column scale (e.g. ...145 -> 15 -> 2).
-// Inputs with exponents, hex or other non-digit tails are left unchanged.
-func trimDecimalFractionForScale(x string, scale int32) string {
-	if scale < 0 {
-		return x
-	}
-	dot := strings.IndexByte(x, '.')
-	if dot < 0 {
-		return x
-	}
-	keep := dot + 1 + int(scale) + 1
-	if keep >= len(x) {
-		return x
-	}
-	for i := dot + 1; i < len(x); i++ {
-		if x[i] < '0' || x[i] > '9' {
-			return x
-		}
-	}
-	return x[:keep]
-}
-
 func ParseDecimal128(x string, width, scale int32) (y Decimal128, err error) {
 	if x == "" {
 		return Decimal128{0, 0}, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal128")
@@ -2519,13 +2514,28 @@ func ParseDecimal128(x string, width, scale int32) (y Decimal128, err error) {
 		width = 38
 	}
 	n := int32(0)
-	y, n, err = Parse128(trimDecimalFractionForScale(x, scale))
+	next := byte(0)
+	y, n, next, err = parse128(x, true)
 	if err != nil {
 		err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128(%d,%d).", x, width, scale)
 		return
 	}
+	// Round once to the final scale: when n > scale the deciding digit is
+	// still in y, otherwise it is the first digit parse128 dropped.
 	if n > scale {
 		y, _ = y.Scale(scale - n)
+	} else if n == scale {
+		if next >= 5 {
+			if y.Sign() {
+				y, err = y.Sub128(Decimal128{1, 0})
+			} else {
+				y, err = y.Add128(Decimal128{1, 0})
+			}
+			if err != nil {
+				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128(%d,%d).", x, width, scale)
+				return
+			}
+		}
 	} else {
 		y, err = y.Scale(scale - n)
 		if err != nil {
