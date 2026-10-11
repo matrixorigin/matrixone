@@ -872,7 +872,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 
 	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{
 		Alias: tree.Identifier(fmt.Sprintf("mo_ivf_alias_%d", tableFuncNodeID)),
-	}, ctx)
+	}, ctx, "")
 	if err != nil {
 		return 0, err
 	}

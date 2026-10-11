@@ -329,7 +329,7 @@ func (builder *QueryBuilder) appendMultiInsertSelectors(
 	// context carries exactly that, and the source's columns stay reachable
 	// only through the alias added below.
 	condCtx := newCTEDeclarationContext(builder, bindCtx)
-	if err := builder.addBinding(srcID, tree.AliasClause{Alias: multiInsertSourceAlias}, condCtx); err != nil {
+	if err := builder.addBinding(srcID, tree.AliasClause{Alias: multiInsertSourceAlias}, condCtx, ""); err != nil {
 		return out, err
 	}
 	if len(condCtx.bindings) != 1 {
@@ -966,7 +966,7 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 		builder.positionalSinkScans = make(map[int32]struct{})
 	}
 	builder.positionalSinkScans[scanID] = struct{}{}
-	if err := builder.addBinding(scanID, tree.AliasClause{Alias: multiInsertSourceAlias}, bCtx); err != nil {
+	if err := builder.addBinding(scanID, tree.AliasClause{Alias: multiInsertSourceAlias}, bCtx, ""); err != nil {
 		return 0, err
 	}
 	// addBinding registers a SINK_SCAN only under its table name; expose its
