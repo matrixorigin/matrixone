@@ -54,6 +54,9 @@ func FormatSQLColumnType(t Type) (string, bool) {
 		if t.Width > 0 {
 			return fmt.Sprintf("%s(%d)", name, t.Width), true
 		}
+	case T_bf16, T_float16, T_float8, T_float4:
+		// the low-precision floats take no (M,D) precision
+		return name, true
 	case T_float32, T_float64:
 		if t.Width > 0 && t.Scale != -1 {
 			return fmt.Sprintf("%s(%d,%d)", name, t.Width, t.Scale), true

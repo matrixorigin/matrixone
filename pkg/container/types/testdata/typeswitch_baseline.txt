@@ -34,7 +34,6 @@ pkg/frontend/data_branch_hashdiff.go	lcaProbeJoinCastType	float	1
 pkg/frontend/data_branch_helpers.go	dataBranchFloatPKIdentityAt	float	1
 pkg/frontend/data_branch_helpers.go	extractDataBranchSQLRowValue	vector	1
 pkg/frontend/data_branch_pick.go	appendNumericStringToVec	float	1
-pkg/frontend/data_branch_pick.go	extractPKVal	float	1
 pkg/frontend/data_branch_pick.go	formatPickKeyVectorValueAsString	float	1
 pkg/frontend/data_branch_pick.go	isNumericType	float	1
 pkg/frontend/data_branch_pick.go	numericGap	float	1
@@ -140,7 +139,6 @@ pkg/sql/plan/base_binder.go	resetDateFunctionArgs	float	3
 pkg/sql/plan/build_constraint_util.go	MakeInsertValueConstExpr	float	1
 pkg/sql/plan/build_constraint_util.go	MakeInsertValueConstExpr	vector	1
 pkg/sql/plan/build_ddl.go	ctasViewTypeDefaultOrigin	float	1
-pkg/sql/plan/build_show_util.go	FormatColType	float	1
 pkg/sql/plan/cte_reuse.go	cteAggregateIsTotal	float	1
 pkg/sql/plan/expr_opt.go	numericComparisonWitness	float	1
 pkg/sql/plan/flatten_subquery.go	correlatedPaginationPartitionTypeSupported	float	1
@@ -172,16 +170,10 @@ pkg/sql/plan/function/func_binary.go	PeriodDiff	float	2
 pkg/sql/plan/function/func_binary.go	SecToTime	float	1
 pkg/sql/plan/function/func_binary.go	getCount	float	1
 pkg/sql/plan/function/func_binary.go	makeExportSetBitsGetter	float	1
-pkg/sql/plan/function/func_builtin.go	SerialHelper	float	1
-pkg/sql/plan/function/func_builtin.go	SerialHelper	vector	1
 pkg/sql/plan/function/func_builtin.go	ToIntervalMicrosecond	float	1
 pkg/sql/plan/function/func_builtin.go	builtInSerialExtract	float	1
-pkg/sql/plan/function/func_builtin.go	builtInSerialExtract	vector	1
-pkg/sql/plan/function/func_builtin.go	getPackFun	float	1
-pkg/sql/plan/function/func_builtin.go	getPackFun	vector	1
 pkg/sql/plan/function/func_builtin.go	internalNumericPrecision	float	1
 pkg/sql/plan/function/func_builtin.go	internalNumericScale	float	1
-pkg/sql/plan/function/func_builtin.go	makeBoolParamGetter	float	1
 pkg/sql/plan/function/func_builtin_json.go	preparedTextToJSONValueWithType	float	1
 pkg/sql/plan/function/func_builtin_leastgreatest.go	greatestFn	float	1
 pkg/sql/plan/function/func_builtin_leastgreatest.go	greatestFn	vector	1

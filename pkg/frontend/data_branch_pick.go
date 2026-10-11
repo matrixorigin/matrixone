@@ -405,6 +405,7 @@ func extractPKAsString(
 
 // extractPKVal extracts the Go value from a vector at the given row index.
 func extractPKVal(vec *vector.Vector, rowIdx int) any {
+	// typeswitch:partial vecf8/vecf4 cannot be primary key columns (rejected at DDL)
 	switch vec.GetType().Oid {
 	case types.T_json:
 		return types.DecodeJson(vec.GetBytesAt(rowIdx))

@@ -236,6 +236,7 @@ func (pw *ParquetWriter) vectorValueToParquet(vec *vector.Vector, colIdx, rowIdx
 
 // vectorValueToParquet converts a vector value to a parquet-compatible Go value
 func vectorValueToParquet(vec *vector.Vector, i int, timeZone *time.Location) (any, error) {
+	// typeswitch:partial parquet export writes vecf32/vecf64; other vector types fail as unsupported
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		return vector.GetFixedAtNoTypeCheck[bool](vec, i), nil

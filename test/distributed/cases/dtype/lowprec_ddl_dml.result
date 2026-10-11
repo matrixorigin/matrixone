@@ -25,10 +25,10 @@ t  ¦  CREATE TABLE `t` (
 desc t;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-b  ¦  BF16(0)  ¦  YES  ¦    ¦  1.5  ¦    ¦  bf16 col  𝄀
-h  ¦  FLOAT16(0)  ¦  NO  ¦    ¦  (-2)  ¦    ¦    𝄀
-e  ¦  FLOAT8(0)  ¦  YES  ¦    ¦  448  ¦    ¦    𝄀
-f  ¦  FLOAT4(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  bf16  ¦  YES  ¦    ¦  1.5  ¦    ¦  bf16 col  𝄀
+h  ¦  float16  ¦  NO  ¦    ¦  (-2)  ¦    ¦    𝄀
+e  ¦  float8  ¦  YES  ¦    ¦  448  ¦    ¦    𝄀
+f  ¦  float4  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 v  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦  vecf8 col  𝄀
 w  ¦  VECF4(4)  ¦  NO  ¦    ¦  null  ¦    ¦  
 insert into t (id, w) values (1, '[1,2,3,4]');
