@@ -1,8 +1,8 @@
 # #28998：C03 验证与交付记录
 
-## 当前状态（5f94c8f本地验收闭环，最新上游增量重验中）
+## 当前状态（本地适用验收与审查已闭环）
 
-以下原始验收记录对应历史交付 `1511bb6b9499bb354418d34d1e863bfd7a27703f`，不代表当前维护或远端 CI 已通过。实际 run `38076256462` 的 UT/BVT 失败与上游冲突已触发继续修复；最新维护输入冻结为 `5f94c8f88a469e0e5053668bfca89770481a9595`，纯上游合并 checkpoint 为 `bb6d76360811a51a34566a9922a39118ffe975e8`。最新普通 owner、真实消费者、race、覆盖率与静态/生成已闭环；54 个完整公开脚本两轮普通比较均通过。提交前main又推进到 `f09d4788fd4d1aa30aae0e2f49d014589e7566c0`，只有unique duplicate precheck的2文件增量，正在独立merge/相关重验，不无条件推广前一范围证据；交付尚未推送。不将 Darwin/embed 本地结果声明为 Linux CI green。
+以下原始验收记录对应历史交付 `1511bb6b9499bb354418d34d1e863bfd7a27703f`，不代表远端 CI 已通过。实际 run `38076256462` 的可复现UT/BVT失败及上游冲突已修复；维护提交为 `7a462de0f3c53ce3fcff88c1ae4f7e3198467850`。前三次pure merge冻结 `5f94c8f88a469e0e5053668bfca89770481a9595` / checkpoint `bb6d76360811a51a34566a9922a39118ffe975e8`，该范围完整owner/消费者/race/54完整public两轮/覆盖/static/正常生成均通过。最新冻结上游为 `f09d4788fd4d1aa30aae0e2f49d014589e7566c0`，独立第四次pure merge为 `a660a0fd7b353c50dbf65ce270795a4e4ec72401`：完成相关增量重验与明确资格复用，不将旧证据无条件换标签。当前严格覆盖率84.73%，没有未解决的本地审查/执行阻塞；实际提交与PR head以交付后核验为准。Darwin/embed成功不等于Linux CI green。
 
 ## 原交付范围与基线
 
@@ -50,7 +50,7 @@
 - **Q3增长**：默认metadata按数据库identity归属，DROP删除对应行；无新worker/cache/无界扫描。COPY容量校验在最终赋值而非新增预扫描；使用已有有界预算。
 - 反向消费者核对：DDL replay、LIKE/CTAS、SHOW、session变量、clone/snapshot/PITR、account恢复、升级、protobuf clone、表SchemaExtra和索引dedup证明。
 
-## 验证终态
+## 原交付验证终态（历史）
 
 - 完整普通测试覆盖17个不同owning packages：bootstrap、v2_0_0/v4_0_6/v4_0_14/v4_0_15、catalog、defines、frontend、compile、mysql parser、tree、plan、function、sysview、disttae、txn/client、engine/test。最初15包成功证据仅复用相关语义未变部分；取消修复后的5个终结/消费者包重新全部通过；engine/test完整重跑161.077s通过。
 - 双CN扩展测试普通r6通过，9.07s；包含混合floor、竞争写入、prepared identity及服务器锁等待取消。
@@ -99,14 +99,20 @@
 - 最新10个exact race分别独立测量成功JSON T、B=30s、N=clamp(floor(B/T),1,100)，同一进程单独stress。T/N：事务清理两项0.00/100；table-dump 2.23/13、legacy1.99/15、CTAS0.01/100、scope wrapper0.00/100；双CN14.07/2；admission1.14/26；INTERSECT11.78/2、等待清理2.00/15。零显示值按JSON输出精度上界，不伪造正数或使用包/墙钟时间。随后txn/client、frontend、compile、disttae、plan、multicn六个完整race owner各一次，均非空PASS/exit0。
 - 全交付严格差分非生成可执行token行覆盖率相对冻结5f94c8f为 **616/727=84.73%**，辅助changed-block为759/839=90.46%。只使用最新23 owner、6 consumer及补充admission的30份成功atomic profiles，缺映射计未覆盖；不再依赖跨文件适用性未确定的历史候选profile。
 - 21个实际changed/new Go owning packages的vet exit0；CI匹配golangci-lint2.14.0对冻结base的增量检查exit0/0 issues；86个非生成Go匹配gofmt无差异。当前grammar正常再生成parser完全相同；`make generate-pb` exit0，实际`${GOPATH}/bin/protoc`为3.21.1（保留PATH36.2警告），plan.pb.go精确复现SHA256 `45e0e5b3538dce6e1fb2f39af674a38fd4c9da94b8383fb7f2d9752973920be8`。20份无schema改动的生成噪声恢复本轮owned预像，没有手改生成字节。
-- 已用无截断小页重新完整复核新3031行上游diff、1140行protobuf代码差异、37份result的2041行规范化语义与1136行header差异；不依赖历史截断页的完整审查声明。descriptor已全部解压比较，仅增加DatabaseDefaults及CreateDatabase#5/AlterDatabase#3/CreateTable#16；其它字段、reserved14/RawSQL15、枚举及options相同。未宣称2221行机械hex由人工逐字审读。正常生成、schema/codec/consumer证据与人工语义审查共同拥有生成物合同。
+- 3031行第三批上游按source1172/test1588/public271完整分区，实际全部以无截断页可见读取；1140行protobuf代码也已实际全部可见，核对getter/register/marshal/size/unmarshal/unknown及生成临时变量变名。37份result采用完备机械分区：15份原交付SQL/result与1511bb6b逐字节相同，22份批准的46 edits+7等价格式修正已精确replay，全部包含在54普通比较中；2041语义/1136 header是只读辅助，不虚称其每页人工逐字读取。descriptor全部解压比较，仅增加DatabaseDefaults及CreateDatabase#5/AlterDatabase#3/CreateTable#16；其它字段、reserved14/RawSQL15、枚举及options相同。2221行压缩hex不宣称人工逐字审读。正常生成、完整schema/codec/consumer、批准hunk及真实比较共同拥有合同。
 - 结果规范化工具只读不写oracle；历史ID/时间变化由原SQL的0/6/7等ignore列拥有，原tester RSSet保持相同行数并按既有sort/sortkey比较，原SQL/document metacmp覆盖优先于global nometa。字段值、catalog owner/accountadmin、CONVERT后bin、失败后源域、ddl_accounting_ok=1、原wait_expect(1,60)、成功/错误预期不变；原40闭包24 ignore加新增完整result_count的2个原ignore，最新54范围共26，未新增ignore。
 - public范围扩大为54个完整脚本，保留40闭包、原15脚本缺口及上游3个Parquet/load/export真实路径；108份镜像SQL/result与当前源逐字节一致。最新wrapper-native二进制同实例两轮普通比较均exit0：每轮 **10679 total / 10653 success / 26原ignore / 0 FAILED / 0 ABNORAML**，54条逐脚本选择完整相同，两份errors为空，Java分别289s/328s，完整driver718.64s；原1200s外层/20min预算不变。下一轮初始化前四库残留均0，owned launcher/service/Java PID已退出、teardown通过；原20M PK两轮各265/265。原accounting1真实export证明保留。
 - 服务日志检查没有panic/fatal error/data race/资源拒绝/120000ms异常签名；保留9821条ERROR及类别/样本，包含引导期、原SQL负例、关闭context取消，以及既有incrservice代际失效错误构造日志。正常测试通过不等于零ERROR日志，不将其直接称为实际无限重试。最后88静态/生成输入及108 BVT输入hash仍一致。
 
-## f09d4788增量资格（相关重验待完成）
+## f09d4788增量资格（已通过）
 
-提交前live main前进到精确 `f09d4788fd4d1aa30aae0e2f49d014589e7566c0`。2文件168行全部可见审查：KeyFormatV1的unique duplicate precheck按backfill physical key分组，legacy/null/source诊断保持原oracle；无shared-state、锁、取消、native/schema/协议改动，C03仍fence V1/native PRIMARY/UNIQUE。先保留上述已验证repair checkpoint，再独立merge并执行完整compile/精确precheck UT及相关public、最新base覆盖率/static核对；只有闭包输入及合同不变的证据可复用，暂不声明最终交付已完成。
+- 2文件168行全部可见审查：KeyFormatV1 unique precheck按backfill physical key分组，保留source诊断且符合ONLY_FULL_GROUP_BY；合法非空legacy Parts的NULL过滤与SQL逐字保持旧oracle。第一caller仍由原DDL事务、Result.Close、pre-pipeline目标锁及context恢复拥有。Build/compile/remoterun的RequireLegacy fence未变，C03仍拒绝V1及native PRIMARY/UNIQUE；支持的legacy/C03路径不新增scan/worker/lock/retry。
+- 完整compile owner重新wrapper-native构建并count1/600s通过：3093 PASS事件、9.504s、独立atomic profile；precheck exact非空，8 PASS事件、0.001s、terminal0。21个变更拥有包重新vet/lint，exit0/0 issues；当前90个静态输入及88个非生成Go匹配gofmt。首次私有zsh包数组错误exit1完整保留，正确数组/CGo配置的r2结果不抹除失败。
+- 对相关公共缺口重新执行9个完整脚本：三个charset、database_defaults、CREATE INDEX、ADD UNIQUE、COPY ADD INDEX、原20M PK以及原flush闭包。普通比较同实例两轮各 **1239/1239 / 0 FAILED / 0 IGNORED / 0 ABNORAML**，每轮9条完整选择/非空total，两份errors为空；Java15s/21s，完整driver73.99s。原PK两轮各265/265（10.092s/10.881s），原SQL/20M/120000ms/预算未改，下一轮初始化前四库残留0，teardown与owned进程终态已检查。
+- 第一次私有include误传绝对路径换行列表而不是原tester逗号basename，得到0 TOTAL但CLI exit0；该轮明确排除、完整ZERO_SELECTION证据保留。只修正私有选择，并增加TOTAL>0断言；正确9脚本比较不是genrs或空选择通过。验资器曾将带rg行号的PASS错按裸行匹配，保留失败；正确行号-aware机械检查关闭该工具错误，不重跑已经成功的SQL。
+- 两个upstream文件均等于f09d4788对象；其他生产文件、schema/parser/PB、native、模块、public SQL/result不变。仅unique SQL局部pure helper改变且合法legacy SQL等价，相关owner与新9公共路径重验完成。其余22 owners、消费者、admission、10 exact+6 core owner race可复用已证明不变的状态/并发/资源/协议闭包；54范围的证据仍标注5f94c8f，不假称全部在f09d4788重新执行。
+- 相对最新f09d4788重算全交付：**616/727=84.73%**严格token行，759/839=90.46%辅助。只合并29份资格复用的成功profile+当前完整compile成功profile，排除旧compile及所有失败/候选/0 TOTAL轮。该新纯helper不在C03差分分母，其他生产映射无漂移；缺映射仍计未覆盖。生成输入/消费者未变，正常再生成及完整descriptor/codec证据明确复用，不冒充第四次再次protoc。
+- 最终审查没有未解决本地finding；保留全部失败、日志级ERROR及原controls。基线80份精确证据已归档并逐member SHA256校验，重建二进制hash/无open handles证明保留；仅独立临时baseline在交付核验后经gwt-remove移除。
 
 关键本地证据（不提交）：`CLAUDE_CI_FINAL_OWNERS_VALIDATE.exit`、`CLAUDE_CI_FINAL_E2E_VALIDATE.exit`、`CLAUDE_CI_FRESH_SUCCESS_PROFILE_MANIFEST.json`、`CLAUDE_CI_FRESH_DIFF_COVERAGE.log`、`CLAUDE_CI_FINAL_RACE_SUCCESS_MANIFEST.json`、`CLAUDE_CI_FINAL_STATIC_GENERATE.exit`、`CLAUDE_CI_LATEST_PB_REPRODUCE_CHECK.log`、`CLAUDE_CI_FINAL_PROTO_DESCRIPTOR_CHECK.log`、`CLAUDE_CI_REVIEW_LEDGER.md`及最新BVT逐轮report/error。
 
