@@ -53,6 +53,10 @@ type operator struct {
 	state       state
 	testing     bool
 
+	// Test-owned bootstrap handlers allow a real CN restart to cross an
+	// interrupted upgrade target without rewriting persisted upgrade records.
+	testingCNOptions []cnservice.Option
+
 	reset struct {
 		svc        service
 		shutdownC  chan struct{}
@@ -348,15 +352,21 @@ func (op *operator) startCNServiceLocked(
 	}
 	op.cfg.initMetaCache()
 	commonConfigKVMap, _ := dumpCommonConfig(op.cfg)
+	options := []cnservice.Option{
+		cnservice.WithLogger(op.reset.logger),
+		cnservice.WithMessageHandle(compile.CnServerMessageHandler),
+		cnservice.WithConfigData(commonConfigKVMap),
+	}
+	if op.testing {
+		options = append(options, op.testingCNOptions...)
+	}
 	s, err := cnservice.NewService(
 		&c,
 		context.Background(),
 		fs,
 		op.reset.gossipNode,
 		func(owner cnservice.Service) { op.reset.svc = owner },
-		cnservice.WithLogger(op.reset.logger),
-		cnservice.WithMessageHandle(compile.CnServerMessageHandler),
-		cnservice.WithConfigData(commonConfigKVMap),
+		options...,
 	)
 	if err != nil {
 		return err

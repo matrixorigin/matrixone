@@ -142,6 +142,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 	tblArg.ctr.retSchema = retSchema
 
 	switch tblArg.FuncName {
+	case "json_table":
+		tblArg.ctr.state, err = jsonTablePrepare(proc, tblArg)
 	case "unnest":
 		tblArg.ctr.state, err = unnestPrepare(proc, tblArg)
 	case "generate_series":

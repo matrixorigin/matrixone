@@ -243,6 +243,9 @@ func textStringCommonType(source []types.Type) (types.Type, bool, bool) {
 		case types.T_text:
 			hasString = true
 			hasText = true
+		case types.T_uuid:
+			// A real text branch selects text; UUID/NULL-only stays native.
+			aligned = false
 		case types.T_any:
 			aligned = false
 		case types.T_char, types.T_varchar:

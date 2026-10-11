@@ -58,6 +58,11 @@ var kAlwaysFalseExpr = &plan.Expr{
 }
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
+	leaveBinding, bindErr := enterViewSchemaBinding(b.GetContext())
+	if bindErr != nil {
+		return nil, bindErr
+	}
+	defer leaveBinding()
 	if b.numericParamType != nil && !b.isNumericContextNode(astExpr, depth) {
 		paramType := b.numericParamType
 		b.numericParamType = nil
@@ -6980,6 +6985,18 @@ func bindFuncExprImplByPlanExpr(
 		(!containsVolatileFunction(args[0]) || args[0].AuxId < 0) {
 		return bindBetweenAsComparisons(ctx, args)
 	}
+	// HEX/BIT literals have a VARCHAR-shaped type but an exact unsigned numeric
+	// domain. Preserve their provenance before either prepared consumers or the
+	// type-only SUM/AVG fallback converts strings to DOUBLE. Ordinary binary
+	// strings retain their string-prefix semantics.
+	if isPreparedNumericAggregate(name, len(args)) && isBinaryNumericLiteral(args[0]) {
+		unsigned := types.T_uint64.ToType()
+		arg, err := appendCastBeforeExpr(ctx, args[0], makePlan2Type(&unsigned))
+		if err != nil {
+			return nil, err
+		}
+		args = []*Expr{arg}
+	}
 	args, err = bindPreparedConsumerArguments(ctx, name, args)
 	if err != nil {
 		return nil, err
@@ -9039,9 +9056,11 @@ func refineKnownStringResultType(returnType *types.Type, width uint64, binary bo
 	}
 	if width <= uint64(types.MaxVarcharLen) {
 		charset := returnType.Charset
-		*returnType = types.T_varchar.ToType()
-		returnType.Width = int32(width)
-		returnType.Charset = charset
+		version := returnType.CollationVersion
+		*returnType = types.NewWithCharset(types.T_varchar, int32(width), 0, charset)
+		if version != types.CollationVersionLegacy {
+			returnType.CollationVersion = version
+		}
 	}
 }
 
@@ -9576,7 +9595,8 @@ func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, value
 // CharsetLegacy is only the zero-value marker on pre-collation plans, not a
 // promise that the client session uses utf8mb3. Keep the advertised utf8mb4
 // bound for that legacy identity as well. New text expressions carry
-// CharsetUTF8/CharsetUTF8MB4Bin and use the same utf8mb4 bound.
+// CharsetUTF8/CharsetUTF8MB4Bin and use the same utf8mb4 bound; native
+// utf8_unicode_ci retains its three-byte utf8mb3 repertoire.
 func adjustControlFlowBinaryMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
 	hasBinary := false
 	hasCharacter := false
@@ -9640,6 +9660,10 @@ func controlFlowMaxBytesPerCharacter(charset uint8) int32 {
 		// Both explicit text identities are utf8mb4 in MatrixOne. This is the
 		// effective charset of newly bound literals and view expressions, so a
 		// two-character literal has an eight-byte VARBINARY capacity.
+		return int32(utf8.UTFMax)
+	case types.CharsetUTF8MB3UnicodeCI:
+		return 3
+	case types.CharsetUTF8MB4UnicodeCI:
 		return int32(utf8.UTFMax)
 	default:
 		// Unknown identities can come from a plan produced by a newer node. Keep
@@ -11278,8 +11302,8 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 	if !hasSpecialArg {
 		return args
 	}
-	// SUM/AVG have a numeric operand contract even though their VARCHAR
-	// overload is deliberately rejected. Resolve storage before that lookup.
+	// SUM/AVG must aggregate ENUM ordinals and SET bitmaps, not their display
+	// labels. Resolve storage before the generic string-numeric conversion.
 	if (name == "sum" || name == "avg") && len(args) == 1 {
 		return rawArgs
 	}

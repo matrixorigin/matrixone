@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	mysql "github.com/matrixorigin/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,6 +41,14 @@ func TestCDCTargetGuardSQLRetryClassification(t *testing.T) {
 		{"success", nil, false},
 		{"bad connection", driver.ErrBadConn, true},
 		{"lost MySQL connection", &gomysql.MySQLError{Number: 2013}, true},
+		{"production driver lost connection", &mysql.MySQLError{Number: 2013}, true},
+		{"production driver communication timeout", &mysql.MySQLError{Number: 1159}, true},
+		{"production driver MO RPC timeout", &mysql.MySQLError{Number: moerr.ErrRPCTimeout}, true},
+		{"wrapped production driver timeout", fmt.Errorf("target: %w", &mysql.MySQLError{Number: 1161}), true},
+		{"production driver syntax error", &mysql.MySQLError{Number: 1064}, false},
+		{"production driver permission denied", &mysql.MySQLError{Number: 1142}, false},
+		{"release timeout with discarded connection", errors.Join(context.DeadlineExceeded, sql.ErrConnDone), true},
+		{"cancelled release timeout", errors.Join(context.Canceled, context.DeadlineExceeded), false},
 		{"MO RC definition changed over SQL wire", &gomysql.MySQLError{Number: moerr.ErrTxnNeedRetryWithDefChanged}, true},
 		{"missing SELECT privilege", &gomysql.MySQLError{Number: 1142}, false},
 		{"cancelled", context.Canceled, false},
@@ -71,7 +80,7 @@ func TestCDCBackendTransportEquivalence(t *testing.T) {
 	} {
 		t.Run(fmt.Sprint(cause.ErrorCode()), func(t *testing.T) {
 			want := cause.ErrorCode() != moerr.ErrClientClosed && cause.ErrorCode() != moerr.ErrStreamClosed
-			for _, err := range []error{cause, &gomysql.MySQLError{Number: cause.ErrorCode()}} {
+			for _, err := range []error{cause, &gomysql.MySQLError{Number: cause.ErrorCode()}, &mysql.MySQLError{Number: cause.ErrorCode()}} {
 				err = fmt.Errorf("backend: %w", err)
 				retryable, classified := ClassifyRetryableError(err)
 				require.True(t, classified)
@@ -80,8 +89,11 @@ func TestCDCBackendTransportEquivalence(t *testing.T) {
 			}
 		})
 	}
+	retryable, classified := ClassifyRetryableError(sql.ErrConnDone)
+	require.False(t, retryable)
+	require.False(t, classified)
 	unknown := &gomysql.MySQLError{Number: 999, Message: "legacy runtime timeout"}
-	retryable, classified := ClassifyRetryableError(unknown)
+	retryable, classified = ClassifyRetryableError(unknown)
 	require.False(t, retryable)
 	require.False(t, classified)
 	require.True(t, (&TableChangeStream{}).determineRetryable(unknown))

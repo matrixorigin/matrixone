@@ -55,7 +55,11 @@ func TestCollationIdentityAndCompatibility(t *testing.T) {
 			identity, ok := ResolveSQL(tc.name)
 			require.Equal(t, tc.admitted != 0, ok)
 			require.Equal(t, tc.admitted, identity)
-			require.Error(t, RequireLegacy(uint32(d.Identity), 1, 0))
+			if d.Semantics == UCA400 {
+				require.NoError(t, RequireLegacy(uint32(d.Identity), 1, 0))
+			} else {
+				require.Error(t, RequireLegacy(uint32(d.Identity), 1, 0))
+			}
 		})
 	}
 	for _, name := range []string{"utf8", "utf8mb3", "UTF8MB4"} {
@@ -154,14 +158,24 @@ func TestCollationMetadataClosedDomain(t *testing.T) {
 
 func TestAdvertisedCollationsUseEffectiveSemantics(t *testing.T) {
 	rows := Advertised()
-	require.Len(t, rows, 6)
+	require.Len(t, rows, 8)
 	for _, row := range rows {
-		id, ok := ResolveSQL(row.Name)
-		require.True(t, ok)
-		effective, err := EffectiveDefinition(uint32(id), 0)
+		revision := uint8(RevisionLegacy)
+		id := row.Identity
+		if row.LegacyIdentity == LegacyIdentity {
+			revision = RevisionV1
+		} else {
+			id = row.LegacyIdentity
+		}
+		effective, err := EffectiveDefinition(uint32(id), uint32(revision))
 		require.NoError(t, err)
 		require.Equal(t, effective.Semantics, row.Semantics)
 		require.Equal(t, effective.PadSpace, row.PadSpace)
+		if row.LegacyIdentity != LegacyIdentity {
+			admitted, ok := ResolveSQL(row.Name)
+			require.True(t, ok)
+			require.Equal(t, row.LegacyIdentity, admitted)
+		}
 		if row.Name == "utf8mb4_0900_ai_ci" {
 			native, _ := Lookup(row.Name)
 			require.False(t, native.PadSpace)

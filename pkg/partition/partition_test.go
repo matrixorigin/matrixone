@@ -174,6 +174,17 @@ func TestPartitionForOrderTreatsNaNPayloadsAsPeers(t *testing.T) {
 	require.Equal(t, []int64{0, 2}, PartitionForOrder(sels, orderDiffs, nil, vec))
 }
 
+func TestPartitionForOrderUnicodeCollationPeers(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI))
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendStringList(vec, []string{"Z", "a", "A", "b"}, nil, mp))
+
+	sels := []int64{1, 2, 3, 0}
+	diffs := make([]bool, len(sels))
+	require.Equal(t, []int64{0, 2, 3}, PartitionForOrder(sels, diffs, nil, vec))
+}
+
 func TestPartitionForOrderJSONNumericPeers(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_json.ToType())

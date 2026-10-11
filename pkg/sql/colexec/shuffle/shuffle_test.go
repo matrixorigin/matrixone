@@ -922,6 +922,40 @@ func TestAppendStringHashSelsCompleteKeysAndNulls(t *testing.T) {
 	}
 }
 
+func TestAppendStringHashSelsUsesUnicodeComparisonDomain(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	vec := vector.NewVec(typ)
+	defer func() {
+		vec.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+	require.NoError(t, vector.AppendStringList(vec, []string{"A", "a"}, nil, mp))
+	col, area := vector.MustVarlenaRawData(vec)
+
+	for _, stable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stable=%t", stable), func(t *testing.T) {
+			arg := &Shuffle{}
+			arg.ctr.stableStringHash = stable
+			sels := make([][]int32, 8)
+			appendStringHashSels(arg, sels, vec, col, area, uint64(len(sels)), false)
+			seenBucket := -1
+			for bucket, rows := range sels {
+				if len(rows) == 0 {
+					continue
+				}
+				if seenBucket >= 0 {
+					t.Fatalf("equivalent keys routed to buckets %d and %d", seenBucket, bucket)
+				}
+				seenBucket = bucket
+				require.Len(t, rows, 2)
+				require.Equal(t, []int32{0, 1}, rows)
+			}
+			require.GreaterOrEqual(t, seenBucket, 0)
+		})
+	}
+}
+
 func BenchmarkAppendStringHashSelsByKeyLength(b *testing.B) {
 	for _, keyLength := range []int{8, 32, 64, 1024, 64 << 10, 1 << 20} {
 		rows := min(256, max(1, (4<<20)/keyLength))

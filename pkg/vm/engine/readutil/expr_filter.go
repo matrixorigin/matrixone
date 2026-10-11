@@ -17,6 +17,7 @@ package readutil
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -853,6 +854,15 @@ func compileFilterExpr(
 ) {
 	canCompile = true
 	if expr == nil {
+		return
+	}
+	// Zone maps persist the original byte order. A native Unicode collation
+	// compares UCA weights instead, so applying a raw byte zone-map bound can
+	// discard a matching block before the residual SQL comparator runs. Keep
+	// this optional pruning path disabled for expressions that read a Unicode
+	// string column until the persisted zone-map domain is versioned as well.
+	if exprUsesUnicodeCollationColumn(expr, tableDef) {
+		canCompile = false
 		return
 	}
 	switch exprImpl := expr.Expr.(type) {
@@ -1776,4 +1786,47 @@ func compileFilterExpr(
 		canCompile = false
 	}
 	return
+}
+
+func exprUsesUnicodeCollationColumn(expr *plan.Expr, tableDef *plan.TableDef) bool {
+	if expr == nil || tableDef == nil {
+		return false
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if impl.Col == nil {
+			return false
+		}
+		name := impl.Col.Name
+		if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
+			name = name[dot+1:]
+		}
+		pos, ok := tableDef.Name2ColIndex[name]
+		if !ok && impl.Col.ColPos >= 0 && int(impl.Col.ColPos) < len(tableDef.Cols) {
+			pos, ok = impl.Col.ColPos, true
+		}
+		if !ok || pos < 0 || int(pos) >= len(tableDef.Cols) || tableDef.Cols[pos] == nil {
+			return false
+		}
+		return types.IsUnicodeCollation(uint8(tableDef.Cols[pos].Typ.Charset))
+	case *plan.Expr_F:
+		if impl.F == nil {
+			return false
+		}
+		for _, arg := range impl.F.Args {
+			if exprUsesUnicodeCollationColumn(arg, tableDef) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		if impl.List == nil {
+			return false
+		}
+		for _, item := range impl.List.List {
+			if exprUsesUnicodeCollationColumn(item, tableDef) {
+				return true
+			}
+		}
+	}
+	return false
 }

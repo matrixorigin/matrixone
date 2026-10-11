@@ -1448,7 +1448,7 @@ func (s *mysqlSinker2) Error() error {
 
 // SetError sets the error state
 //
-// Converts non-moerr.Error to moerr.Error for consistency
+// Preserves classified backend/control causes; normalizes unknown errors.
 func (s *mysqlSinker2) SetError(err error) {
 	if err == nil {
 		s.err.Store(nil)
@@ -1459,15 +1459,17 @@ func (s *mysqlSinker2) SetError(err error) {
 }
 
 func normalizeMysqlSinkerError(err error) error {
-	// Preserve typed owner-fence wrappers: stream lifecycle and retry policy
-	// depend on their identity, and converting them to a plain moerr would turn
-	// supersession into shared table failure metadata.
-	if _, ok := err.(*moerr.Error); !ok &&
-		!IsOwnerFenceLostError(err) && !IsRetryableOwnerFenceError(err) &&
-		!IsRetryableTargetLockError(err) && !IsRetryableConnectionError(err) {
-		err = moerr.ConvertGoError(context.Background(), err)
+	if err == nil {
+		return nil
 	}
-	return err
+	if _, ok := err.(*moerr.Error); ok {
+		return err
+	}
+	// Stream recovery and control handling depend on the original typed cause.
+	if _, classified := ClassifyRetryableError(err); classified {
+		return err
+	}
+	return moerr.ConvertGoError(context.Background(), err)
 }
 
 func (s *mysqlSinker2) setErrorIfNil(err error) {

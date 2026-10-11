@@ -275,7 +275,7 @@ func (c *Compile) SetPlanGenerationReused(reused bool) {
 // frontend or another streaming consumer.
 func (c *Compile) FreezeResultMetadata() {
 	if c != nil {
-		c.resultMetadataFrozen = true
+		c.resultMetadataFrozen.Store(true)
 	}
 }
 
@@ -312,7 +312,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.clearLoadUniqueIndexPromotion()
 	c.executionGeneration = 0
 	c.retryTimes = 0
-	c.resultMetadataFrozen = false
+	c.resultMetadataFrozen.Store(false)
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
 
 	if c.lockMeta != nil {
@@ -523,7 +523,7 @@ func (c *Compile) clear() {
 	c.planGenerationReused = false
 	c.stringShuffleHashAlgorithm = process.StringShuffleHashLegacy
 	c.stringShuffleHashAlgorithmFrozen = false
-	c.resultMetadataFrozen = false
+	c.resultMetadataFrozen.Store(false)
 	c.planGenerationRebuilt = false
 	c.sequenceState = sequenceStatementState{}
 
@@ -5303,7 +5303,9 @@ func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, 
 			return c.compileSingleTableFunction(node)
 		}
 	}
-	if planplugin.TableFuncRequiresCoordinator(node.TableDef.TblFunc.Name) {
+	if name := node.TableDef.GetTblFunc().GetName(); name == "json_table" || planplugin.TableFuncRequiresCoordinator(name) {
+		// G2 has no distributed keyed-once warning transport. Execute this
+		// consumer once on the coordinator; input scans may remain remote.
 		ss = []*Scope{c.newMergeScope(ss)}
 	}
 	for i := range ss {
@@ -7475,10 +7477,11 @@ func hasMultiScopeGroup(groups [][]*Scope) bool {
 
 func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	name := right.GetTableDef().GetTblFunc().GetName()
-	if name == "mo_view_columns" || planplugin.TableFuncRequiresCoordinator(name) {
+	if name == "mo_view_columns" || name == "json_table" || planplugin.TableFuncRequiresCoordinator(name) {
 		// Session-bound functions and index writers must use the origin process:
 		// a remote mirror workspace cannot publish writes in its transaction.
 		// Gather inputs here without changing the source scans' placement.
+		// JSON_TABLE stays local until its keyed-once warning transport exists.
 		rs = []*Scope{c.newMergeScope(rs)}
 	}
 

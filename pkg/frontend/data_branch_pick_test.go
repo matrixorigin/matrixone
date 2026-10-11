@@ -1573,6 +1573,77 @@ func TestExtractPKValYear(t *testing.T) {
 	require.Equal(t, pkVal, extractPKVal(vec, 0))
 }
 
+func TestExtractPKValArrayTypes(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	tests := []struct {
+		name   string
+		typ    types.Type
+		append func(*vector.Vector) error
+		want   any
+	}{
+		{
+			name: "float32",
+			typ:  types.New(types.T_array_float32, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []float32{1, 2}, false, mp)
+			},
+			want: []float32{1, 2},
+		},
+		{
+			name: "float64",
+			typ:  types.New(types.T_array_float64, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []float64{1, 2}, false, mp)
+			},
+			want: []float64{1, 2},
+		},
+		{
+			name: "bf16",
+			typ:  types.New(types.T_array_bf16, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []types.BF16{1, 2}, false, mp)
+			},
+			want: []types.BF16{1, 2},
+		},
+		{
+			name: "float16",
+			typ:  types.New(types.T_array_float16, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []types.Float16{1, 2}, false, mp)
+			},
+			want: []types.Float16{1, 2},
+		},
+		{
+			name: "int8",
+			typ:  types.New(types.T_array_int8, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []int8{1, 2}, false, mp)
+			},
+			want: []int8{1, 2},
+		},
+		{
+			name: "uint8",
+			typ:  types.New(types.T_array_uint8, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []uint8{1, 2}, false, mp)
+			},
+			want: []uint8{1, 2},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vec := vector.NewVec(tt.typ)
+			t.Cleanup(func() { vec.Free(mp) })
+			require.NoError(t, tt.append(vec))
+			require.Equal(t, tt.want, extractPKVal(vec, 0))
+		})
+	}
+}
+
 func TestMaterializeSubqueryUnified_AuthFailureShortCircuits(t *testing.T) {
 	ses := newValidateSession(t)
 	stmtNode, err := parsers.ParseOne(

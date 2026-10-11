@@ -230,6 +230,16 @@ func TestCheckIndexColumnSupportability(t *testing.T) {
 		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_enum, "a", "b"), keyPart, "unique"))
 	})
 
+	t.Run("native unicode is rejected only for unique indexes", func(t *testing.T) {
+		typ := plan.Type{
+			Id:      int32(types.T_varchar),
+			Charset: uint32(types.CharsetUTF8MB4UnicodeCI),
+		}
+		unicodeCol := &ColDef{Name: "c", Typ: typ}
+		require.Error(t, checkIndexColumnSupportability(ctx, unicodeCol, keyPart, "unique"))
+		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_varchar), keyPart, "unique"))
+	})
+
 	t.Run("set rejected in primary and unique", func(t *testing.T) {
 		require.Error(t, checkIndexColumnSupportability(ctx, colOf(types.T_uint64, "a", "b"), keyPart, "primary"))
 		require.Error(t, checkIndexColumnSupportability(ctx, colOf(types.T_uint64, "a", "b"), keyPart, "unique"))

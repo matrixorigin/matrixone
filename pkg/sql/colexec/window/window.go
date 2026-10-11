@@ -2327,16 +2327,30 @@ func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (
 			if err != nil {
 				return err
 			}
+			// The plan expression owns the SQL comparison domain. Storage and
+			// spill materialization may preserve the string payload while
+			// dropping collation metadata; restore the semantic type on the
+			// window-owned copy before sorting or forming peer partitions.
+			var semanticType types.Type
+			if j < len(ctr.orderVecs[i].Typ) {
+				semanticType = ctr.orderVecs[i].Typ[j]
+			}
 
 			if ctr.orderVecs[i].Vec[j] != nil {
 				ctr.orderVecs[i].Vec[j].CleanOnlyData()
 				if err = ctr.orderVecs[i].Vec[j].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
 					return err
 				}
+				if semanticType.Oid != types.T_any {
+					ctr.orderVecs[i].Vec[j].SetType(semanticType)
+				}
 			} else {
 				ctr.orderVecs[i].Vec[j], err = vec.Dup(proc.Mp())
 				if err != nil {
 					return err
+				}
+				if semanticType.Oid != types.T_any {
+					ctr.orderVecs[i].Vec[j].SetType(semanticType)
 				}
 			}
 		}

@@ -173,7 +173,13 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 
 	case "in":
 		// Since this master index specifically for varchar, we assume the `IN` to contain only varchar values.
-		inVecType := types.T_varchar.ToType()
+		colType := types.MustTypeFromPlan(colDefs[args[0].GetCol().GetColPos()].Typ)
+		// The serialized value keeps the source column's collation identity, but
+		// the sequence-name component is an ordinary raw varchar. Mixing those
+		// domains would transform the component name as if it were user text.
+		inVecType := colType
+		inVecType.Oid = types.T_varchar
+		nameVecType := types.T_varchar.ToType()
 
 		// a. varchar vector ("value1", "value2", "value3")
 		arg1AsColValuesVec := vector.NewVec(inVecType)
@@ -182,7 +188,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 
 		// b. const vector "0"
 		mp := mpool.MustNewZero()
-		arg0AsColNameVec, _ := vector.NewConstBytes(inVecType, []byte(getColSeqFromColDef(colDefs[args[0].GetCol().GetColPos()])), inExprListLen, mp)
+		arg0AsColNameVec, _ := vector.NewConstBytes(nameVecType, []byte(getColSeqFromColDef(colDefs[args[0].GetCol().GetColPos()])), inExprListLen, mp)
 
 		// c. (serial_full("0","value1"), serial_full("0","value2"), serial_full("0","value3"))
 		ps := types.NewPackerArray(inExprListLen)
@@ -191,9 +197,9 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 				p.Close()
 			}
 		}()
-		function.SerialHelper(arg0AsColNameVec, nil, ps, true)
-		function.SerialHelper(arg1AsColValuesVec, nil, ps, true)
-		arg1ForPrefixInVec := vector.NewVec(inVecType)
+		function.PhysicalSerialHelper(arg0AsColNameVec, nil, ps, true)
+		function.PhysicalSerialHelper(arg1AsColValuesVec, nil, ps, true)
+		arg1ForPrefixInVec := vector.NewVec(nameVecType)
 		for i := 0; i < inExprListLen; i++ {
 			_ = vector.AppendBytes(arg1ForPrefixInVec, ps[i].Bytes(), false, mp)
 		}

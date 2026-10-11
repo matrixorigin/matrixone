@@ -184,7 +184,10 @@ employeenumber    lastname    firstname    extension    email    officecode    r
 1401    Castillo    Pamela    x2759    pcastillo@classicmodelcars.com    4    1102    Sales Rep
 1611    Fixter    Andy    x101    afixter@classicmodelcars.com    6    1088    Sales Rep
 select avg(officeCode) from employees where jobTitle like 'Sales%' group by jobTitle;
-invalid argument aggregate function avg, bad value [VARCHAR]
+➤ avg(officeCode)[8,53,31]  𝄀
+6.0  𝄀
+1.0  𝄀
+3.6666666666666665
 select officeCode,sum(cast(officeCode as unsigned)) from employees group by officeCode;
 officeCode    sum(cast(officeCode as unsigned))
 1    6

@@ -36,6 +36,7 @@ type persistedDDLReplay struct {
 }
 
 type replayedColumnExpressions struct {
+	columnType  planpb.Type
 	defaultExpr *planpb.Default
 	onUpdate    *planpb.OnUpdate
 	generated   *planpb.GeneratedCol
@@ -161,7 +162,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		if newCol == nil {
 			continue
 		}
-		entry := &replayedColumnExpressions{}
+		entry := &replayedColumnExpressions{columnType: oldCol.Typ}
 		if oldCol.Default != nil && newCol.Default != nil {
 			expr := copyExpr(oldCol.Default.Expr, rawPositions)
 			unchangedAbsentDefault := oldCol.Default.Expr == nil && newCol.Default.Expr == nil &&

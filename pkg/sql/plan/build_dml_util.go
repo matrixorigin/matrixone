@@ -4534,6 +4534,17 @@ func appendDeleteIndexTablePlan(
 		return -1, err
 	}
 	partsLength := len(indexdef.Parts)
+	usePhysicalKey := false
+	for _, part := range indexdef.Parts {
+		partType, ok := typMap[catalog.ResolveAlias(part)]
+		if ok {
+			typ := types.MustTypeFromPlan(partType)
+			if types.IsUnicodeCollation(typ.Charset) && typ.Oid.IsMySQLString() {
+				usePhysicalKey = true
+				break
+			}
+		}
+	}
 	if partsLength == 1 {
 		originIndexColumnName := catalog.ResolveAlias(indexdef.Parts[0])
 		leftExpr, err = builder.makeIndexPartExpr(
@@ -4545,6 +4556,13 @@ func appendDeleteIndexTablePlan(
 		)
 		if err != nil {
 			return -1, err
+		}
+		partType := types.MustTypeFromPlan(typMap[originIndexColumnName])
+		if usePhysicalKey && types.IsUnicodeCollation(partType.Charset) && partType.Oid.IsMySQLString() {
+			leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "physical_collation_key", []*Expr{leftExpr})
+			if err != nil {
+				return -1, err
+			}
 		}
 	} else {
 		args := make([]*Expr, partsLength)
@@ -4565,12 +4583,20 @@ func appendDeleteIndexTablePlan(
 			// use for UK
 			// 0: serial(part1, part2) <----
 			// 1: serial(pk1, pk2)
-			leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+			serialName := "serial"
+			if usePhysicalKey {
+				serialName = "physical_serial"
+			}
+			leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialName, args)
 		} else {
 			// only used for regular secondary index's 0'th column
 			// 0: serial_full(part1, part2, serial(pk1, pk2)) <----
 			// 1: serial(pk1, pk2)
-			leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+			serialName := "serial_full"
+			if usePhysicalKey {
+				serialName = "physical_serial_full"
+			}
+			leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialName, args)
 		}
 		if err != nil {
 			return -1, err

@@ -481,7 +481,7 @@ id
 6
 show create table src;
 Table    Create Table
-src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT2 `ftidx`(`body`,`title`) WITH PARSER ngram\n)
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(16383) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT2 `ftidx`(`body`,`title`) WITH PARSER ngram\n)
 select id1, id2 from src2 where match(body, title) against('red') order by id1;
 id1    id2
 id0    0
@@ -489,7 +489,7 @@ id3    3
 id4    4
 show create table src2;
 Table    Create Table
-src2    CREATE TABLE `src2` (\n  `id1` varchar(65535) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT2 `ftidx`(`body`,`title`) WITH PARSER ngram\n)
+src2    CREATE TABLE `src2` (\n  `id1` varchar(16383) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT2 `ftidx`(`body`,`title`) WITH PARSER ngram\n)
 set @capture_src_tail_sql = concat(
 'select coalesce(max(chunk_id), -1) into @src_tail_before_mutation from `', database(), '`.`', @src_ft2_index,
 '` where index_id = ''cdc_tail'' and tag = 1'

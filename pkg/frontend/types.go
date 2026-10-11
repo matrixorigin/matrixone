@@ -1196,6 +1196,7 @@ type ExecCtx struct {
 	results           []ExecResult
 	prepareColDef     [][]byte
 	cursorResultSaver StagedBinaryWriter
+	resultMetadata    *deferredResultMetadata
 	returning         *returningState
 	selectInto        *selectIntoUserVariables
 	isIssue3482       bool
@@ -1213,6 +1214,7 @@ type ExecCtx struct {
 }
 
 func (execCtx *ExecCtx) beginStatementGeneration(input *UserInput) {
+	execCtx.resultMetadata = nil
 	execCtx.effectiveTxnDefaultDatabase = ""
 	execCtx.effectiveTxnStatement = nil
 	execCtx.implicitCommitBefore = false
@@ -1299,6 +1301,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.resper = nil
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
+	execCtx.resultMetadata = nil
 	execCtx.selectInto = nil
 	execCtx.rewriteEnabled = false
 }

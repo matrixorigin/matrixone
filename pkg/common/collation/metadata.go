@@ -245,14 +245,21 @@ func ValidateKeyFormat(format uint32) error {
 	return nil
 }
 
-// RequireLegacy is a production fence, not a feature switch. C11 owns future
-// cluster activation; knowing a backend or protocol ID cannot enable a domain.
+// RequireLegacy is the production metadata fence. Legacy identities keep their
+// revision-zero contract, while the executable UCA400 identities are admitted
+// only with their explicit revision and the legacy physical key format. Other
+// versioned identities remain closed until their complete storage/upgrade
+// contract is implemented.
 func RequireLegacy(identity, revision, format uint32) error {
 	if err := ValidateMetadata(identity, revision); err != nil {
 		return err
 	}
 	if err := ValidateKeyFormat(format); err != nil {
 		return err
+	}
+	if (identity == uint32(UTF8UnicodeCIIdentity) || identity == uint32(UTF8MB4UnicodeCIIdentity)) &&
+		revision == uint32(RevisionV1) && format == uint32(KeyFormatLegacy) {
+		return nil
 	}
 	if identity > uint32(UTF8MB4GeneralCIIdentity) || revision != 0 || format != 0 {
 		return moerr.NewNotSupportedNoCtx("versioned collations and key formats are disabled until SQL, storage and upgrade gates pass")
@@ -263,9 +270,16 @@ func RequireLegacy(identity, revision, format uint32) error {
 // Advertised returns compatibility spellings with EFFECTIVE padding/semantics.
 // Charset and ProtocolID describe the spelling, not the admitted runtime type.
 func Advertised() []Definition {
-	result := make([]Definition, 0, 6)
+	result := make([]Definition, 0, 8)
 	for _, d := range definitions {
 		if d.LegacyIdentity == LegacyIdentity {
+			// Native UCA400 definitions are now backed by the executable
+			// comparison/key implementation. They are advertised with their
+			// own identity and revision rather than being silently mapped to a
+			// legacy general-ci definition.
+			if d.Semantics == UCA400 {
+				result = append(result, d)
+			}
 			continue
 		}
 		effective, _ := EffectiveDefinition(uint32(d.LegacyIdentity), 0)

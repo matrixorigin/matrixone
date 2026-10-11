@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -382,6 +383,11 @@ func saveQueryResult2(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.
 		} else {
 			if err := saveBatch(newCtx, ses, bat); err != nil {
 				return err
+			}
+			// This inert test point fails a producer only after its batch has
+			// been persisted, before SELECT can publish completion metadata.
+			if _, _, injected := fault.TriggerFaultWithContext(execCtx.reqCtx, "saved-result-after-batch"); injected {
+				return moerr.NewInternalError(execCtx.reqCtx, "injected saved-result batch failure")
 			}
 		}
 	}

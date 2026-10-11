@@ -888,6 +888,10 @@ func appendTextCharsetForShowCreate(buf *bytes.Buffer, typ plan.Type, tableChars
 		}
 	case uint32(types.CharsetUTF8MB4Bin):
 		buf.WriteString(" COLLATE utf8mb4_bin")
+	case uint32(types.CharsetUTF8MB3UnicodeCI):
+		buf.WriteString(" COLLATE utf8_unicode_ci")
+	case uint32(types.CharsetUTF8MB4UnicodeCI):
+		buf.WriteString(" COLLATE utf8mb4_unicode_ci")
 	case uint32(types.CharsetBinary):
 		// Packed binary values can deliberately use a VARCHAR container. COLLATE
 		// binary is the lossless MO spelling for that representation; CHARACTER
@@ -946,6 +950,10 @@ func tableCharsetForShowCreate(ctx CompilerContext, charset uint32) string {
 		return " COLLATE=utf8mb4_general_ci"
 	case uint32(types.CharsetUTF8MB4Bin):
 		return " COLLATE=utf8mb4_bin"
+	case uint32(types.CharsetUTF8MB3UnicodeCI):
+		return " COLLATE=utf8_unicode_ci"
+	case uint32(types.CharsetUTF8MB4UnicodeCI):
+		return " COLLATE=utf8mb4_unicode_ci"
 	case uint32(types.CharsetBinary):
 		return " CHARACTER SET=binary"
 	default:
