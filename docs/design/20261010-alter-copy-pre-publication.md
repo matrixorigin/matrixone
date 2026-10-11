@@ -66,14 +66,14 @@ These post-physical source races return `ErrTxnWriteConflict`, not `ErrTxnNeedRe
 
 ### Source-change detection
 
-For a relation that existed before the current transaction, publication calls `SourceCommitTS(ctx, copyTS)`. This is an existing authoritative lower-bound capability, not a CDC handle:
+For a relation that existed before the current transaction, publication first asks the relation whether it has transaction-local workspace writes. If it does, ALTER treats the source as unchanged: those writes were visible to the physical copy, are owned by the same transaction, and cannot be another owner's post-copy mutation. Otherwise publication calls `SourceCommitTS(ctx, copyTS)`. This is an existing authoritative lower-bound capability, not a CDC handle:
 
-- transaction-local source writes fail closed;
+- transaction-local source writes are excluded from ALTER's committed-change comparison;
 - each partition member supplies its source commit frontier and fails closed on unavailable state;
 - a combined relation aggregates member maxima and short-circuits as soon as one member exceeds the copy timestamp;
 - a result greater than the copy timestamp means the copy is stale.
 
-Transaction-local relations are detected through `RelationCreatedInCurrentTxn` and skip the committed-source probe because their whole life is owned by this transaction.
+Transaction-local relations are detected through `RelationCreatedInCurrentTxn` and skip the committed-source probe because their whole life is owned by this transaction. Existing relations with uncommitted workspace writes are detected through `RelationHasTransactionLocalWrites`. `SourceCommitTS` itself continues to fail closed for local writes so its async-index callers do not mistake transaction-visible state for a committed coverage frontier.
 
 ## Lock and retry model
 
@@ -87,7 +87,7 @@ Transaction-local relations are detected through `RelationCreatedInCurrentTxn` a
 
 The serialized source probe costs `O(P)` `SourceCommitTS` calls for a partitioned source, where `P` is the number of visible members. A member’s worst case is source-state dependent:
 
-- one workspace scan under the transaction mutex, fail-closed on a local write;
+- one workspace scan under the transaction mutex; ALTER short-circuits on a local write, while the frontier method itself fails closed for async-index callers;
 - one in-memory replay-row scan, `R` entries;
 - one object-index iteration, `O` visible objects;
 - appendable objects may read commit-ts and abort columns for each visible block;
@@ -112,7 +112,7 @@ This is an internal lifecycle refinement, not a persistence or wire-protocol cha
 
 - Deterministic barrier tests prove independent physical work starts while the global gate is held elsewhere.
 - Unit tests prove the temporary CREATE options disable nested locking.
-- Unit tests prove unchanged, changed, provider-failure, and current-transaction source behavior.
+- Unit tests prove unchanged, changed, provider-failure, current-transaction, and transaction-local-write source behavior.
 - Unit tests prove partitioned frontiers return the exact maximum, short-circuit, and fail closed for missing member providers.
 - Unit tests prove post-physical replacement, definition, and data races return a terminal write conflict and are not classified as RC statement retries.
 - A 500-session one-row workload proves independent ALTERs complete without lock-wait or connection-loss failures.

@@ -2475,6 +2475,11 @@ type alterCopyCreatedInCurrentTxnRelation struct {
 	sourceCommitTSCalled bool
 }
 
+type alterCopyTransactionLocalWritesRelation struct {
+	engine.Relation
+	sourceCommitTSCalled bool
+}
+
 func (rel *alterCopyCreatedInCurrentTxnRelation) SourceCommitTS(
 	context.Context, types.TS,
 ) (types.TS, error) {
@@ -2484,6 +2489,19 @@ func (rel *alterCopyCreatedInCurrentTxnRelation) SourceCommitTS(
 
 func (rel *alterCopyCreatedInCurrentTxnRelation) CreatedInCurrentTxn(
 	_ context.Context,
+) (bool, error) {
+	return true, nil
+}
+
+func (rel *alterCopyTransactionLocalWritesRelation) SourceCommitTS(
+	context.Context, types.TS,
+) (types.TS, error) {
+	rel.sourceCommitTSCalled = true
+	return types.TS{}, errors.New("transaction-local relation has no committed source timestamp")
+}
+
+func (rel *alterCopyTransactionLocalWritesRelation) HasTransactionLocalWrites(
+	context.Context,
 ) (bool, error) {
 	return true, nil
 }
@@ -3329,6 +3347,17 @@ func TestAlterCopySkipsSourceChangesForRelationCreatedInCurrentTxn(t *testing.T)
 	proc := testutil.NewProcess(t)
 	compile := &Compile{proc: proc}
 	rel := &alterCopyCreatedInCurrentTxnRelation{}
+
+	changed, err := compile.alterCopySourceChangedSinceCopy(rel, 123456789)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.False(t, rel.sourceCommitTSCalled)
+}
+
+func TestAlterCopySkipsSourceChangesForTransactionLocalWrites(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	compile := &Compile{proc: proc}
+	rel := &alterCopyTransactionLocalWritesRelation{}
 
 	changed, err := compile.alterCopySourceChangedSinceCopy(rel, 123456789)
 	require.NoError(t, err)
