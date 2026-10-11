@@ -187,17 +187,17 @@ special_single_empty  ¦  CREATE TABLE `special_single_empty` (
 )
 show columns from special_single_empty;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-e  ¦  ENUM('')  ¦  YES  ¦    ¦    ¦    ¦    𝄀
-s  ¦  SET('')  ¦  YES  ¦    ¦    ¦    ¦    𝄀
-u  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+e  ¦  enum('')  ¦  YES  ¦    ¦    ¦    ¦    𝄀
+s  ¦  set('')  ¦  YES  ¦    ¦    ¦    ¦    𝄀
+u  ¦  bigint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦  
 select column_name,data_type,column_type from information_schema.columns
 where table_schema=database() and table_name='special_single_empty' order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  ¦  column_type[12,65535,0]  𝄀
-id  ¦  int  ¦  INT(32)  𝄀
-e  ¦  enum  ¦  ENUM('')  𝄀
-s  ¦  set  ¦  SET('')  𝄀
-u  ¦  bigint  ¦  BIGINT UNSIGNED(64)
+id  ¦  int  ¦  int  𝄀
+e  ¦  enum  ¦  enum('')  𝄀
+s  ¦  set  ¦  set('')  𝄀
+u  ¦  bigint  ¦  bigint unsigned
 create view special_single_empty_view as select id,e,s,u from special_single_empty;
 select id,e+0 as ordinal,s+0 as bitmap from special_single_empty_view order by id;
 ➤ id[4,32,0]  ¦  ordinal[-5,64,0]  ¦  bitmap[-5,64,0]  𝄀

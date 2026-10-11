@@ -4264,7 +4264,7 @@ func TestEmptyDomainVisibleMetadata(t *testing.T) {
 		domain, want string
 		wantNull     bool
 	}{
-		{types.T_enum, "", "ENUM('')", false}, {types.T_uint64, ",", "SET('')", false}, {types.T_uint64, "", "", true},
+		{types.T_enum, "", "enum('')", false}, {types.T_uint64, ",", "set('')", false}, {types.T_uint64, "", "", true},
 	} {
 		encoded, err := types.Encode(&types.Type{Oid: tc.oid})
 		require.NoError(t, err)
