@@ -139,7 +139,8 @@ func (op *operator) Close() error {
 	if op.state == stopped &&
 		op.reset.svc == nil &&
 		op.reset.stopper == nil &&
-		op.reset.fs == nil {
+		op.reset.fs == nil &&
+		op.reset.rt == nil {
 		return nil
 	}
 
@@ -162,6 +163,10 @@ func (op *operator) Close() error {
 	if op.reset.fs != nil {
 		op.reset.fs.Close(context.Background())
 		op.reset.fs = nil
+	}
+	if op.reset.rt != nil {
+		runtime.CompareAndDeleteServiceBasedRuntime(op.sid, op.reset.rt)
+		op.reset.rt = nil
 	}
 	op.reset.shutdownC = nil
 	op.state = stopped
@@ -186,7 +191,8 @@ func (op *operator) needsCleanup() bool {
 func (op *operator) needsCleanupLocked() bool {
 	return op.reset.svc != nil ||
 		op.reset.stopper != nil ||
-		op.reset.fs != nil
+		op.reset.fs != nil ||
+		op.reset.rt != nil
 }
 
 func (op *operator) Start() error {

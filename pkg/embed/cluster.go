@@ -536,7 +536,7 @@ func (c *cluster) createServiceOperators(from int) error {
 			})
 		}
 		if c.options.testing {
-			adjustTestingClusterStartup(s)
+			adjustTestingClusterTiming(s)
 			s.Adjust(applyTestingHAKeeperBackendReadTimeout)
 		}
 
