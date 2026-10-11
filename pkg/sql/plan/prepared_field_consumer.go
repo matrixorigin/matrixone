@@ -98,12 +98,40 @@ func (owner *preparedFieldDomainBinder) bind(expr *Expr, ast *tree.FuncExpr) err
 	if !ok {
 		return nil
 	} // private probes/cloned ASTs never own published facts
+	var authoredCase bool
+	if len(ast.Exprs) > 0 {
+		operand := ast.Exprs[0]
+		for {
+			paren, ok := operand.(*tree.ParenExpr)
+			if !ok {
+				break
+			}
+			operand = paren.Expr
+		}
+		_, authoredCase = operand.(*tree.CaseExpr)
+	}
 	projected := len(ast.Exprs) > 0 && preparedFieldProjectedReturnAST(ast.Exprs[0]) &&
 		expr.GetF() != nil && len(expr.GetF().Args) > 0 && preparedFieldProjectedMarkerValue(expr.GetF().Args[0])
-	if err := owner.bindCase(expr, id, projected); err != nil {
+	if resolved, found := owner.pending[id]; found && resolved.IsNumeric() {
+		if authoredCase {
+			if fn := expr.GetF(); fn != nil && len(fn.Args) > 0 {
+				cast := fn.Args[0].GetF()
+				if cast != nil && cast.Func != nil && cast.Func.ObjName == "cast" && isExplicitPreparedCast(fn.Args[0]) && len(cast.Args) == 2 {
+					if selected := cast.Args[0].GetF(); selected != nil && selected.Func != nil && selected.Func.ObjName == "case" {
+						// The original operand is CASE, so this outer CAST is
+						// FIELD's private comparison probe, not SQL authorship.
+						// Restore the resolved return owner before that probe can
+						// replace a numeric lifetime with this binding's charset.
+						fn.Args[0] = cast.Args[0]
+					}
+				}
+			}
+		}
+	}
+	if err := owner.bindCase(expr, id, projected, authoredCase); err != nil {
 		return err
 	}
-	if len(ast.Exprs) > 0 && preparedFieldDeclaredBinaryReturnAST(ast.Exprs[0]) {
+	if len(ast.Exprs) > 0 && (preparedFieldDeclaredBinaryReturnAST(ast.Exprs[0]) || preparedFieldProjectedReturnAST(ast.Exprs[0])) {
 		return owner.bindComparison(expr, -id)
 	}
 	return nil
@@ -146,6 +174,14 @@ func preparedFieldProjectedReturnAST(expr tree.Expr) bool {
 	switch e := expr.(type) {
 	case *tree.UnresolvedName:
 		return true
+	case *tree.Subquery:
+		result := preparedFieldScalarResultAST(e.Select)
+		if _, marker := result.(*tree.ParamExpr); marker {
+			return true
+		}
+		return preparedFieldProjectedReturnAST(result)
+	case *tree.ParamExpr:
+		return false
 	case *tree.ParenExpr:
 		return preparedFieldProjectedReturnAST(e.Expr)
 	case *tree.CaseExpr:
@@ -180,8 +216,24 @@ func preparedFieldProjectedReturnAST(expr tree.Expr) bool {
 // different owners. Retain the latter only here, never on COALESCE's return or
 // a marker shared with another consumer. Text-first resolution remains native
 // until an actual numeric binding reparses FIELD, then stays numeric for strings.
+func preparedFieldScalarResultAST(statement tree.SelectStatement) tree.Expr {
+	switch s := statement.(type) {
+	case *tree.ParenSelect:
+		return preparedFieldScalarResultAST(s.Select)
+	case *tree.Select:
+		if clause, ok := s.Select.(*tree.SelectClause); ok && len(clause.Exprs) == 1 {
+			return clause.Exprs[0].Expr
+		}
+	}
+	return nil
+}
+
 func preparedFieldDeclaredBinaryReturnAST(expr tree.Expr) bool {
 	switch e := expr.(type) {
+	case *tree.NumVal:
+		return e.ValType == tree.P_ScoreBinary || e.ValType == tree.P_ScoreBinaryHexnum
+	case *tree.Subquery:
+		return preparedFieldDeclaredBinaryReturnAST(preparedFieldScalarResultAST(e.Select))
 	case *tree.CastExpr:
 		typ, ok := e.Type.(*tree.T)
 		return ok && (strings.EqualFold(typ.InternalType.FamilyString, "binary") || strings.EqualFold(typ.InternalType.FamilyString, "varbinary"))
@@ -200,6 +252,9 @@ func preparedFieldDeclaredBinaryReturnAST(expr tree.Expr) bool {
 			return false
 		}
 		name := strings.ToLower(ref.ColName())
+		if name == "nullif" {
+			return len(e.Exprs) > 0 && preparedFieldDeclaredBinaryReturnAST(e.Exprs[0])
+		}
 		if name != "coalesce" && name != "ifnull" && name != "max" && name != "min" && name != "any_value" && name != "if" && name != "iff" {
 			return false
 		}
@@ -221,15 +276,20 @@ func (owner *preparedFieldDomainBinder) bindComparison(expr *Expr, key int32) er
 		return nil
 	}
 	resolved, found := owner.pending[key]
-	numeric := true
+	numeric, numericSource := true, false
 	for _, arg := range fn.Args {
-		if !makeTypeByPlan2Expr(arg).IsNumeric() {
-			numeric = false
-			break
+		numeric = numeric && makeTypeByPlan2Expr(arg).IsNumeric()
+		source := arg
+		for isPreparedCaseComparisonCast(source) {
+			source = source.GetF().Args[0]
 		}
+		numericSource = numericSource || makeTypeByPlan2Expr(source).IsNumeric()
 	}
 	if !found {
-		if !numeric {
+		// ANY/NULL can select numeric probes without a numeric value source.
+		// Do not replace a projected CASE's NULL-first BLOB lifetime with
+		// numeric comparison solely because of those private probes.
+		if !numeric || !numericSource {
 			return nil // no handle fact is needed for ordinary native comparison
 		}
 		resolved = types.T_float64.ToType()
@@ -286,6 +346,9 @@ func preparedFieldFixedBinaryReturn(expr *Expr) bool {
 	}
 	if isExplicitPreparedCast(expr) {
 		return types.StaticStringDomain(makeTypeByPlan2Expr(expr)) == types.StringDomainBinary
+	}
+	if _, marker := preparedParamPosition(expr); marker {
+		return false
 	}
 	if lit := expr.GetLit(); lit != nil {
 		if lit.Src != nil {

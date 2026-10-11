@@ -46,7 +46,7 @@ func bindPreparedFieldCaseDomains(ctx context.Context, p *Plan, domains map[int3
 		return planpb.VisitExprTree(root, func(expr *Expr) error {
 			if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "field" {
 				ordinal++
-				return owner.bindCase(expr, ordinal, false)
+				return owner.bindCase(expr, ordinal, false, false)
 			}
 			return nil
 		})
@@ -60,7 +60,7 @@ func bindPreparedFieldCaseDomains(ctx context.Context, p *Plan, domains map[int3
 // bindCase runs at FIELD's first binding owner in production. The plan-only
 // entry points above are retained for callers specializing a single owned plan;
 // handle generations use lexical AST identities, never remapped plan ordinals.
-func (owner *preparedFieldDomainBinder) bindCase(expr *Expr, key int32, projectedValue bool) error {
+func (owner *preparedFieldDomainBinder) bindCase(expr *Expr, key int32, projectedValue, authoredCase bool) error {
 	ctx, domains := owner.ctx, owner.initial
 	bindings, values := owner.bindings, owner.values
 	nullAdmissionOnly := owner.binary
@@ -80,7 +80,7 @@ func (owner *preparedFieldDomainBinder) bindCase(expr *Expr, key int32, projecte
 	for isPreparedCaseComparisonCast(subject) {
 		subject = subject.GetF().Args[0]
 	}
-	if subject == nil || isExplicitPreparedCast(subject) || !preparedFieldNullCaseHasDynamicCondition(subject) {
+	if subject == nil || isExplicitPreparedCast(subject) {
 		return nil
 	}
 	collector := stringDomainWitnessCollector{seen: make(map[string]struct{})}
@@ -95,6 +95,10 @@ func (owner *preparedFieldDomainBinder) bindCase(expr *Expr, key int32, projecte
 		return nil
 	}
 	current := makeTypeByPlan2Expr(subject)
+	dynamicCondition := preparedFieldNullCaseHasDynamicCondition(subject)
+	if !dynamicCondition && (!authoredCase || !current.IsNumeric() && !(found && target.IsNumeric())) {
+		return nil // fixed predicates do not admit a NULL-first string default
+	}
 	// String-origin changes are assignable to an already resolved type.
 	// A numeric binding can instead reprepare a string CASE or widen an
 	// existing numeric CASE (integer -> decimal -> floating point).
@@ -115,7 +119,7 @@ func (owner *preparedFieldDomainBinder) bindCase(expr *Expr, key int32, projecte
 			nullFirst = false
 		}
 	}
-	if nullAdmissionOnly && !found && !nullFirst {
+	if nullAdmissionOnly && !found && !nullFirst && dynamicCondition {
 		for _, marker := range collector.args {
 			pos := int(marker.GetP().Pos)
 			if pos < 0 || pos >= len(values) {

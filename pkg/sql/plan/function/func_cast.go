@@ -9317,8 +9317,9 @@ func strToStr(
 
 	byteWidth, hasByteWidth := stringFamilyByteWidth(toType)
 	enforceByteWidth := mode.isAssignment() && hasByteWidth
-	unboundedCharacterEnvelope := destLen < 0 && (totype.Oid == types.T_char || totype.Oid == types.T_varchar)
-	if !unboundedCharacterEnvelope && (totype.Oid != types.T_text || isTinyTextType(totype) || enforceByteWidth) &&
+	unboundedStringEnvelope := destLen < 0 && (totype.Oid == types.T_char || totype.Oid == types.T_varchar ||
+		totype.Oid == types.T_binary || totype.Oid == types.T_varbinary)
+	if !unboundedStringEnvelope && (totype.Oid != types.T_text || isTinyTextType(totype) || enforceByteWidth) &&
 		(destLen != 0 || totype.Oid == types.T_char || totype.Oid == types.T_varchar || enforceByteWidth) {
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)

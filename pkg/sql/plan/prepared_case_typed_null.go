@@ -118,6 +118,14 @@ func preparedCaseTypedNullHasUnboundedMarker(args []*Expr) bool {
 			continue
 		}
 		source := preparedCommonValueSource(arg)
+		// A negative-width VARCHAR target is the internal declaration envelope,
+		// not an authored SQL value extent. Its private charset-owning CAST
+		// still contains the unresolved value marker for finite presentation.
+		if cast := arg.GetF(); cast != nil && cast.Func != nil && cast.Func.ObjName == "cast" &&
+			len(cast.Args) == 2 && arg.Typ.Id == int32(types.T_varchar) && arg.Typ.Width < 0 && cast.Args[0].GetP() != nil {
+			marker = true
+			continue
+		}
 		hasMarker, _, other := preparedFieldMarkerNullValues(arg)
 		if hasMarker && !other && arg.Typ.Id == int32(types.T_varchar) {
 			marker = true
@@ -227,7 +235,10 @@ func bindPreparedCaseTypedNullArguments(ctx context.Context, args []*Expr) ([]*E
 		}
 		target.Width = -1
 		for index, marker := range markers {
-			converted, err := makePlan2CastExpr(ctx, marker, makePlan2Type(&target))
+			// This conversion owns the authored NULL declaration's charset.
+			// An implicit CAST is transparent to CASE's selected-value runtime
+			// domain propagation and would reintroduce a binary marker domain.
+			converted, err := appendExplicitCastBeforeExpr(ctx, marker, makePlan2Type(&target))
 			if err != nil {
 				return nil, err
 			}

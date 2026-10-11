@@ -994,6 +994,19 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		returnExpr.GetSub().Typ = plan.SubqueryRef_EXISTS
 	} else if rowSize == 1 {
 		returnExpr.Typ = subCtx.results[0].Typ
+		if preparedBindingState(b.GetContext()) != nil {
+			if marker, ok := preparedFieldScalarResultAST(astExpr.Select).(*tree.ParamExpr); ok {
+				// SELECT ? owns a default text declaration even when its
+				// physical NULL column cannot retain an ANY ParamRef. Keep
+				// that scalar boundary's marker, not an enclosing CASE's
+				// selected value or predicate, as its finite source witness.
+				source, err := bindPreparedSource(b.GetContext(), marker.Offset)
+				if err != nil {
+					return nil, err
+				}
+				ensurePreparedNumericMetadata(returnExpr).StringDomainSource = source
+			}
+		}
 	}
 
 	return returnExpr, nil

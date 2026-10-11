@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -38,6 +40,25 @@ func specialIntegerResultString(result *vector.Vector, row int) string {
 		return vector.GetFixedAtWithTypeCheck[types.Date](result, row).String()
 	}
 	return result.GetStringAt(row)
+}
+
+func TestFormatNullFoldedPlanProtocol(t *testing.T) {
+	for _, precision := range []string{"null", "cast(null as signed)", "cast(null as char)"} {
+		t.Run(precision, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select format(1,"+precision+"),format(1,9223372036854775807)", 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			proc := newPlanTestProcess(t)
+			mock := NewMockOptimizer(false, proc)
+			built, err := BuildPlan(&mock.ctxt, stmt, false)
+			require.NoError(t, err)
+			for _, node := range built.GetQuery().Nodes {
+				rule.NewConstantFold(false).Apply(node, built.GetQuery(), proc)
+			}
+			_, err = planpb.RequiredRemoteExpressionFeatures(built)
+			require.NoError(t, err, "constant-folded NULL declaration is proof, not an untyped executable precision operand")
+		})
+	}
 }
 
 func TestSpecialIntegerArgumentEvaluation(t *testing.T) {
@@ -106,6 +127,8 @@ func TestSpecialIntegerArgumentEvaluation(t *testing.T) {
 							return
 						}
 					}
+					_, protocolErr := planpb.RequiredRemoteExpressionFeatures(expr)
+					require.NoError(t, protocolErr, "folded provenance must retain a valid physical consumer signature")
 					result, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
 					if free != nil {
 						defer free()

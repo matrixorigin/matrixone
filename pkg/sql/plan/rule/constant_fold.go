@@ -344,6 +344,22 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		existRealTimeFunc := false
 		for i, expr := range fn.Args {
 			if ac, cok := expr.Expr.(*plan.Expr_Lit); cok && ac.Lit.Src != nil {
+				// Integer consumers own a physical parameter signature. A folded
+				// NULL declaration is proof, not an untyped runtime replacement
+				// for that parameter. Other consumers retain their native replay
+				// rules, including NULL-only CASE resolution through projections.
+				target, integerOperand := function.IntegerArgumentTarget(fn.Func.ObjName, i)
+				if ac.Lit.Isnull && integerOperand && expr.Typ.Id == int32(target) {
+					source := ac.Lit.Src
+					if source.GetLit().GetIsnull() {
+						continue
+					}
+					if cast := source.GetF(); cast != nil && cast.Func != nil &&
+						cast.Func.ObjName == "cast" && cast.SyntaxExplicitCast && len(cast.Args) == 2 &&
+						cast.Args[0].GetLit().GetIsnull() {
+						continue
+					}
+				}
 				if _, pok := ac.Lit.Src.Expr.(*plan.Expr_V); !pok {
 					fn.Args[i] = ac.Lit.Src
 					existRealTimeFunc = true
