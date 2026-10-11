@@ -152,7 +152,7 @@ func TestIssue277xxDDLConsistency(t *testing.T) {
 				"insert into `"+database+"`.`child` values (6, 9, 'allowed', 0)")
 		})
 
-		t.Run("27725 concurrent alter retries a stale physical index generation", func(t *testing.T) {
+		t.Run("27725 concurrent alter terminal conflict supports external retry", func(t *testing.T) {
 			const database = "issue_27725_concurrent_alter"
 			resetIssue277xxDatabase(t, ctx, db0, database)
 			defer execSQLMaybe(t, ctx, db0, "drop database if exists `"+database+"`")
@@ -183,7 +183,23 @@ func TestIssue277xxDDLConsistency(t *testing.T) {
 				close(start)
 				wg.Wait()
 				for i, alterErr := range errs {
-					require.NoErrorf(t, alterErr, "concurrent ALTER %d exposed a stale index generation", i)
+					if alterErr == nil {
+						continue
+					}
+					var mysqlErr *mysql.MySQLError
+					require.ErrorAsf(t, alterErr, &mysqlErr,
+						"concurrent ALTER %d must expose the terminal post-copy conflict", i)
+					require.Equalf(t, uint16(20601), mysqlErr.Number,
+						"concurrent ALTER %d must not expose a stale index generation", i)
+					require.Containsf(t, mysqlErr.Message,
+						"ALTER COPY source changed after physical preparation: source admission changed",
+						"concurrent ALTER %d must identify the post-copy source race", i)
+				}
+
+				for i, alterErr := range errs {
+					if alterErr != nil {
+						execSQLRequire(t, ctx, dbs[i], statements[i])
+					}
 				}
 			}
 
