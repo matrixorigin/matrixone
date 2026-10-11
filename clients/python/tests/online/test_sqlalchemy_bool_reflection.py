@@ -139,39 +139,69 @@ def test_boolean_metadata_reflection(mysql_engine, connection_params):
 
 
 @pytest.mark.online
-def test_enum_set_show_create_replay(mysql_engine, connection_params):
-    # SQLAlchemy 2.0.44 does not unescape backslashes in reflected enum domains.
-    # Verify the server's replay contract directly, without that client parser.
+@pytest.mark.parametrize(
+    'sql_mode,member_sql',
+    [
+        pytest.param('', ["'UP'", "'O''Brien'", r"'Back\\slash'", r"'Back\\''quote'"], id='default'),
+        pytest.param(
+            'NO_BACKSLASH_ESCAPES',
+            ["'UP'", "'O''Brien'", r"'Back\slash'", r"'Back\''quote'"],
+            id='no_backslash_escapes',
+        ),
+    ],
+)
+def test_enum_set_show_create_replay(mysql_engine, connection_params, sql_mode, member_sql):
+    # Verify server replay directly: SQLAlchemy does not decode reflected
+    # backslashes in ENUM domains, and MO does not advertise the NBE bind flag.
     engine = mysql_engine
     database = connection_params[4]
     source = 'enum_replay_' + uuid.uuid4().hex
     clone = source + '_clone'
     members = ['UP', "O'Brien", r'Back\slash', r"Back\'quote"]
-    try:
-        with engine.begin() as conn:
-            conn.exec_driver_sql(
-                f'CREATE TABLE `{source}` (id INT PRIMARY KEY, '
-                r"e ENUM('UP','O''Brien','Back\\slash','Back\\''quote'), "
-                r"s SET('UP','O''Brien','Back\\slash','Back\\''quote'))"
-            )
-            ddl = conn.exec_driver_sql(f'SHOW CREATE TABLE `{source}`').one()[1]
-            conn.exec_driver_sql(ddl.replace(f'CREATE TABLE `{source}`', f'CREATE TABLE `{clone}`', 1))
-            for name in (source, clone):
-                domains = conn.exec_driver_sql(
-                    'SELECT attname,attr_enum FROM mo_catalog.mo_columns '
-                    'WHERE att_database=%s AND att_relname=%s AND attname IN (%s,%s) ORDER BY attname',
-                    (database, name, 'e', 's'),
-                ).all()
-                assert domains == [('e', ','.join(members)), ('s', ','.join(members))]
-                for index, member in enumerate(members):
-                    conn.exec_driver_sql(f'INSERT INTO `{name}` VALUES (%s,%s,%s)', (index, member, member))
-                assert conn.exec_driver_sql(f'SELECT e,s FROM `{name}` ORDER BY id').all() == [
-                    (member, member) for member in members
-                ]
-    finally:
-        with engine.begin() as conn:
-            for name in (clone, source):
-                conn.exec_driver_sql(f'DROP TABLE IF EXISTS `{name}`')
+    with engine.connect() as conn:
+        original_mode = conn.exec_driver_sql('SELECT @@SESSION.sql_mode').scalar_one()
+        conn.commit()
+        try:
+            with conn.begin():
+                conn.exec_driver_sql('SET SESSION sql_mode=%s', (sql_mode,))
+                domain = ','.join(member_sql)
+                conn.exec_driver_sql(f'CREATE TABLE `{source}` (id INT PRIMARY KEY, e ENUM({domain}), s SET({domain}))')
+                ddl = conn.exec_driver_sql(f'SHOW CREATE TABLE `{source}`').one()[1]
+                conn.exec_driver_sql(ddl.replace(f'CREATE TABLE `{source}`', f'CREATE TABLE `{clone}`', 1))
+                for name in (source, clone):
+                    domains = conn.exec_driver_sql(
+                        'SELECT attname,attr_enum FROM mo_catalog.mo_columns '
+                        'WHERE att_database=%s AND att_relname=%s AND attname IN (%s,%s) ORDER BY attname',
+                        (database, name, 'e', 's'),
+                    ).all()
+                    assert domains == [('e', ','.join(members)), ('s', ','.join(members))]
+                    for index, (member, literal) in enumerate(zip(members, member_sql)):
+                        if sql_mode:
+                            conn.exec_driver_sql(f'INSERT INTO `{name}` VALUES ({index},{literal},{literal})')
+                        else:
+                            # Retain the existing default-mode parameter-binding oracle.
+                            conn.exec_driver_sql(f'INSERT INTO `{name}` VALUES (%s,%s,%s)', (index, member, member))
+                    assert conn.exec_driver_sql(f'SELECT e,s FROM `{name}` ORDER BY id').all() == [
+                        (member, member) for member in members
+                    ]
+        finally:
+            conn.rollback()
+            try:
+                with conn.begin():
+                    for name in (clone, source):
+                        conn.exec_driver_sql(f'DROP TABLE IF EXISTS `{name}`')
+            finally:
+                conn.exec_driver_sql('SET SESSION sql_mode=%s', (original_mode,))
+                assert conn.exec_driver_sql('SELECT @@SESSION.sql_mode').scalar_one() == original_mode
+                conn.commit()
+            with conn.begin():
+                assert (
+                    conn.exec_driver_sql(
+                        'SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_NAME IN (%s,%s)',
+                        (database, source, clone),
+                    ).scalar_one()
+                    == 0
+                )
 
 
 @pytest.mark.online

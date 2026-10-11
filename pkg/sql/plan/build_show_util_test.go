@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -1766,42 +1767,63 @@ func TestFormatColTypeBoolean(t *testing.T) {
 	}
 }
 
-func TestConstructCreateTableSQLBooleanRoundTrip(t *testing.T) {
-	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
-	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, `create table bool_roundtrip (
-		id int primary key, flag bool default null,
-		enabled boolean not null default true, disabled bool default false,
-		n int unsigned, amount decimal(10,2), integer_flag tinyint(1),
-        empty_enum enum(''), enum_flag enum('UP','Down','O''Brien','Back\\slash','Back\\''quote'), set_flag set('UP','Down','O''Brien','Back\\slash','Back\\''quote'))`, 1)
-	require.NoError(t, err)
-	defer stmt.Free()
-	p, err := BuildPlan(ctx, stmt, false)
-	require.NoError(t, err)
-	original := p.GetDdl().GetCreateTable().GetTableDef()
-	for _, compilerCtx := range []CompilerContext{ctx, nil} {
-		sql, _, err := ConstructCreateTableSQL(compilerCtx, original, nil, false, nil)
-		require.NoError(t, err)
-		require.Contains(t, sql, "`flag` boolean DEFAULT NULL")
-		require.Contains(t, sql, "`empty_enum` enum('')")
-		parsed, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
-		require.NoError(t, err)
-		func() {
-			defer parsed.Free()
-			replayed, err := BuildPlan(ctx, parsed, false)
+func TestConstructCreateTableSQLScalarRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, members string
+	}{
+		{"default", "", `'UP','Down','O''Brien','Back\\slash','Back\\''quote'`},
+		{"no_backslash_escapes", "NO_BACKSLASH_ESCAPES", `'UP','Down','O''Brien','Back\slash','Back\''quote'`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+			ctx.SetSqlModeOverride(tc.mode)
+			stmt, err := mysql.ParseOneWithSQLMode(t.Context(), fmt.Sprintf(`create table scalar_roundtrip (
+				id int primary key, flag bool default null,
+				enabled boolean not null default true, disabled bool default false,
+				n int unsigned, amount decimal(10,2), integer_flag tinyint(1),
+				empty_enum enum(''), enum_flag enum(%s), set_flag set(%s))`, tc.members, tc.members), 1, tc.mode)
 			require.NoError(t, err)
-			cols := replayed.GetDdl().GetCreateTable().GetTableDef().Cols
-			for _, name := range []string{"flag", "enabled", "disabled", "n", "amount", "integer_flag", "empty_enum", "enum_flag", "set_flag"} {
-				before, after := FindColumn(original.Cols, name), FindColumn(cols, name)
-				require.NotNil(t, after, name)
-				require.Equal(t, before.Typ, after.Typ, name)
-				require.Equal(t, before.Default.NullAbility, after.Default.NullAbility, name)
-				if types.T(before.Typ.Id) == types.T_bool {
-					require.Equal(t, before.Default.Expr, after.Default.Expr, name)
+			t.Cleanup(stmt.Free)
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			original := p.GetDdl().GetCreateTable().GetTableDef()
+			for _, name := range []string{"enum_flag", "set_flag"} {
+				require.Equal(t, `UP,Down,O'Brien,Back\slash,Back\'quote`, FindColumn(original.Cols, name).Typ.Enumvalues)
+			}
+			for _, compilerCtx := range []CompilerContext{ctx, nil} {
+				replayMode := tc.mode
+				if compilerCtx == nil {
+					// Background consumers deliberately emit default-mode SQL.
+					replayMode = ""
 				}
+				sql, rewritten, err := ConstructCreateTableSQL(compilerCtx, original, nil, false, nil)
+				require.NoError(t, err)
+				if rewritten != nil {
+					t.Cleanup(rewritten.Free)
+				}
+				require.Contains(t, sql, "`flag` boolean DEFAULT NULL")
+				require.Contains(t, sql, "`empty_enum` enum('')")
+				parsed, err := mysql.ParseOneWithSQLMode(t.Context(), sql, 1, replayMode)
+				require.NoError(t, err)
+				func() {
+					defer parsed.Free()
+					replayed, err := BuildPlan(ctx, parsed, false)
+					require.NoError(t, err)
+					cols := replayed.GetDdl().GetCreateTable().GetTableDef().Cols
+					for _, name := range []string{"flag", "enabled", "disabled", "n", "amount", "integer_flag", "empty_enum", "enum_flag", "set_flag"} {
+						before, after := FindColumn(original.Cols, name), FindColumn(cols, name)
+						require.NotNil(t, after, name)
+						require.Equal(t, before.Typ, after.Typ, name)
+						require.Equal(t, before.Default.NullAbility, after.Default.NullAbility, name)
+						if types.T(before.Typ.Id) == types.T_bool {
+							require.Equal(t, before.Default.Expr, after.Default.Expr, name)
+						}
+					}
+					for _, name := range []string{"flag", "enabled", "disabled"} {
+						require.Equal(t, int32(types.T_bool), FindColumn(cols, name).Typ.Id)
+					}
+				}()
 			}
-			for _, name := range []string{"flag", "enabled", "disabled"} {
-				require.Equal(t, int32(types.T_bool), FindColumn(cols, name).Typ.Id)
-			}
-		}()
+		})
 	}
 }

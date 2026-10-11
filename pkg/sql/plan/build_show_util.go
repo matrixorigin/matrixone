@@ -181,7 +181,7 @@ func constructCreateTableSQL(
 			buf.WriteString(",\n")
 		}
 
-		typeStr := FormatColType(col.Typ)
+		typeStr := formatColTypeForSQLMode(col.Typ, sqlMode)
 		if strings.HasPrefix(typeStr, "ENUM") || strings.HasPrefix(typeStr, "SET") {
 			prefix := strings.IndexByte(typeStr, '(')
 			typeStr = strings.ToLower(typeStr[:prefix]) + typeStr[prefix:]
@@ -1232,6 +1232,10 @@ func skipBlockComment(s string, start int) int {
 
 // FormatColType Get the formatted description of the column type.
 func FormatColType(colType plan.Type) string {
+	return formatColTypeForSQLMode(colType, "")
+}
+
+func formatColTypeForSQLMode(colType plan.Type, sqlMode string) string {
 	if arrayType := arrayPlanTypeString(&colType); arrayType != "" {
 		return strings.ToUpper(arrayType[:len("array")]) + arrayType[len("array"):]
 	}
@@ -1242,7 +1246,7 @@ func FormatColType(colType plan.Type) string {
 		}
 		elements := strings.Split(colType.GetEnumvalues(), ",")
 		for i := range elements {
-			elements[i] = formatStrLit(elements[i])
+			elements[i] = formatStrLitForSQLMode(elements[i], sqlMode)
 		}
 		return name + "(" + strings.Join(elements, ",") + ")"
 	}
