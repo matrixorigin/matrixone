@@ -41,38 +41,38 @@ SELECT `stat_ts`, sum(`stu`) as value FROM(SELECT concat(DATE_FORMAT(date_add(`s
 ➤ stat_ts[12,65535,0]  ¦  value[3,38,3]
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='information_schema' and att_relname='engines' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 ➤ name[12,256,0]  ¦  data_type[12,65535,0]  ¦  maximum[12,65535,0]  ¦  minimum[12,65535,0]  𝄀
-ENGINE  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-SUPPORT  ¦  VARCHAR(8)  ¦  null  ¦  null  𝄀
-COMMENT  ¦  VARCHAR(160)  ¦  null  ¦  null  𝄀
-TRANSACTIONS  ¦  VARCHAR(3)  ¦  null  ¦  null  𝄀
-XA  ¦  VARCHAR(3)  ¦  null  ¦  null  𝄀
-SAVEPOINTS  ¦  VARCHAR(3)  ¦  null  ¦  null
+ENGINE  ¦  varchar(64)  ¦  null  ¦  null  𝄀
+SUPPORT  ¦  varchar(8)  ¦  null  ¦  null  𝄀
+COMMENT  ¦  varchar(160)  ¦  null  ¦  null  𝄀
+TRANSACTIONS  ¦  varchar(3)  ¦  null  ¦  null  𝄀
+XA  ¦  varchar(3)  ¦  null  ¦  null  𝄀
+SAVEPOINTS  ¦  varchar(3)  ¦  null  ¦  null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='information_schema' and att_relname='key_column_usage' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 ➤ name[12,256,0]  ¦  data_type[12,65535,0]  ¦  maximum[12,65535,0]  ¦  minimum[12,65535,0]  𝄀
-constraint_catalog  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-constraint_schema  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-constraint_name  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-table_catalog  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-table_schema  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-table_name  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-column_name  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-ordinal_position  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
-position_in_unique_constraint  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
-referenced_table_schema  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-referenced_table_name  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-referenced_column_name  ¦  VARCHAR(64)  ¦  null  ¦  null
+constraint_catalog  ¦  varchar(64)  ¦  null  ¦  null  𝄀
+constraint_schema  ¦  varchar(64)  ¦  null  ¦  null  𝄀
+constraint_name  ¦  varchar(64)  ¦  null  ¦  null  𝄀
+table_catalog  ¦  varchar(64)  ¦  null  ¦  null  𝄀
+table_schema  ¦  varchar(64)  ¦  null  ¦  null  𝄀
+table_name  ¦  varchar(64)  ¦  null  ¦  null  𝄀
+column_name  ¦  varchar(64)  ¦  null  ¦  null  𝄀
+ordinal_position  ¦  int unsigned  ¦  null  ¦  null  𝄀
+position_in_unique_constraint  ¦  int unsigned  ¦  null  ¦  null  𝄀
+referenced_table_schema  ¦  varchar(64)  ¦  null  ¦  null  𝄀
+referenced_table_name  ¦  varchar(64)  ¦  null  ¦  null  𝄀
+referenced_column_name  ¦  varchar(64)  ¦  null  ¦  null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='information_schema' and att_relname='keywords' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 ➤ name[12,256,0]  ¦  data_type[12,65535,0]  ¦  maximum[12,65535,0]  ¦  minimum[12,65535,0]  𝄀
-WORD  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-RESERVED  ¦  INT UNSIGNED(32)  ¦  null  ¦  null
+WORD  ¦  varchar(64)  ¦  null  ¦  null  𝄀
+RESERVED  ¦  int unsigned  ¦  null  ¦  null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='information_schema' and att_relname='parameters' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 ➤ name[12,256,0]  ¦  data_type[12,65535,0]  ¦  maximum[12,65535,0]  ¦  minimum[12,65535,0]  𝄀
-SPECIFIC_CATALOG  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-SPECIFIC_SCHEMA  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-SPECIFIC_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-ORDINAL_POSITION  ¦  BIGINT UNSIGNED(64)  ¦  null  ¦  null  𝄀
-PARAMETER_MODE  ¦  VARCHAR(5)  ¦  null  ¦  null  𝄀
-PARAMETER_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
+SPECIFIC_CATALOG  ¦  varchar(64)  ¦  null  ¦  null  𝄀
+SPECIFIC_SCHEMA  ¦  varchar(64)  ¦  null  ¦  null  𝄀
+SPECIFIC_NAME  ¦  varchar(64)  ¦  null  ¦  null  𝄀
+ORDINAL_POSITION  ¦  bigint unsigned  ¦  null  ¦  null  𝄀
+PARAMETER_MODE  ¦  varchar(5)  ¦  null  ¦  null  𝄀
+PARAMETER_NAME  ¦  varchar(64)  ¦  null  ¦  null  𝄀
 DATA_TYPE  ¦  LONGTEXT  ¦  null  ¦  null  𝄀
 CHARACTER_MAXIMUM_LENGTH  ¦  BIGINT(64)  ¦  null  ¦  null  𝄀
 CHARACTER_OCTET_LENGTH  ¦  BIGINT(64)  ¦  null  ¦  null  𝄀
@@ -91,121 +91,121 @@ SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_t
 ➤ name[12,256,0]  ¦  data_type[12,65535,0]  ¦  maximum[12,65535,0]  ¦  minimum[12,65535,0]
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mysql' and att_relname='columns_priv' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 ➤ name[12,256,0]  ¦  data_type[12,65535,0]  ¦  maximum[12,65535,0]  ¦  minimum[12,65535,0]  𝄀
-Host  ¦  CHAR(255)  ¦  null  ¦  null  𝄀
-Db  ¦  CHAR(64)  ¦  null  ¦  null  𝄀
-User  ¦  CHAR(32)  ¦  null  ¦  null  𝄀
-Table_name  ¦  CHAR(64)  ¦  null  ¦  null  𝄀
-Column_name  ¦  CHAR(64)  ¦  null  ¦  null  𝄀
-Timestamp  ¦  TIMESTAMP(0)  ¦  null  ¦  null  𝄀
-Column_priv  ¦  VARCHAR(10)  ¦  null  ¦  null
+Host  ¦  char(255)  ¦  null  ¦  null  𝄀
+Db  ¦  char(64)  ¦  null  ¦  null  𝄀
+User  ¦  char(32)  ¦  null  ¦  null  𝄀
+Table_name  ¦  char(64)  ¦  null  ¦  null  𝄀
+Column_name  ¦  char(64)  ¦  null  ¦  null  𝄀
+Timestamp  ¦  timestamp  ¦  null  ¦  null  𝄀
+Column_priv  ¦  varchar(10)  ¦  null  ¦  null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mysql' and att_relname='db' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 ➤ name[12,256,0]  ¦  data_type[12,65535,0]  ¦  maximum[12,65535,0]  ¦  minimum[12,65535,0]  𝄀
-Host  ¦  CHAR(255)  ¦  null  ¦  null  𝄀
-Db  ¦  CHAR(64)  ¦  null  ¦  null  𝄀
-User  ¦  CHAR(32)  ¦  null  ¦  null  𝄀
-Select_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Insert_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Update_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Delete_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Create_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Drop_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Grant_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-References_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Index_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Alter_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Create_tmp_table_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Lock_tables_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Create_view_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Show_view_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Create_routine_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Alter_routine_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Execute_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Event_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Trigger_priv  ¦  VARCHAR(10)  ¦  null  ¦  null
+Host  ¦  char(255)  ¦  null  ¦  null  𝄀
+Db  ¦  char(64)  ¦  null  ¦  null  𝄀
+User  ¦  char(32)  ¦  null  ¦  null  𝄀
+Select_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Insert_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Update_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Delete_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Create_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Drop_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Grant_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+References_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Index_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Alter_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Create_tmp_table_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Lock_tables_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Create_view_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Show_view_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Create_routine_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Alter_routine_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Execute_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Event_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Trigger_priv  ¦  varchar(10)  ¦  null  ¦  null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mysql' and att_relname='procs_priv' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 ➤ name[12,256,0]  ¦  data_type[12,65535,0]  ¦  maximum[12,65535,0]  ¦  minimum[12,65535,0]  𝄀
-Host  ¦  CHAR(255)  ¦  null  ¦  null  𝄀
-Db  ¦  CHAR(64)  ¦  null  ¦  null  𝄀
-User  ¦  CHAR(32)  ¦  null  ¦  null  𝄀
-Routine_name  ¦  CHAR(64)  ¦  null  ¦  null  𝄀
-Routine_type  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Grantor  ¦  VARCHAR(288)  ¦  null  ¦  null  𝄀
-Proc_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Timestamp  ¦  TIMESTAMP(0)  ¦  null  ¦  null
+Host  ¦  char(255)  ¦  null  ¦  null  𝄀
+Db  ¦  char(64)  ¦  null  ¦  null  𝄀
+User  ¦  char(32)  ¦  null  ¦  null  𝄀
+Routine_name  ¦  char(64)  ¦  null  ¦  null  𝄀
+Routine_type  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Grantor  ¦  varchar(288)  ¦  null  ¦  null  𝄀
+Proc_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Timestamp  ¦  timestamp  ¦  null  ¦  null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mysql' and att_relname='tables_priv' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 ➤ name[12,256,0]  ¦  data_type[12,65535,0]  ¦  maximum[12,65535,0]  ¦  minimum[12,65535,0]  𝄀
-Host  ¦  CHAR(255)  ¦  null  ¦  null  𝄀
-Db  ¦  CHAR(64)  ¦  null  ¦  null  𝄀
-User  ¦  CHAR(32)  ¦  null  ¦  null  𝄀
-Table_name  ¦  CHAR(64)  ¦  null  ¦  null  𝄀
-Grantor  ¦  VARCHAR(288)  ¦  null  ¦  null  𝄀
-Timestamp  ¦  TIMESTAMP(0)  ¦  null  ¦  null  𝄀
-Table_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Column_priv  ¦  VARCHAR(10)  ¦  null  ¦  null
+Host  ¦  char(255)  ¦  null  ¦  null  𝄀
+Db  ¦  char(64)  ¦  null  ¦  null  𝄀
+User  ¦  char(32)  ¦  null  ¦  null  𝄀
+Table_name  ¦  char(64)  ¦  null  ¦  null  𝄀
+Grantor  ¦  varchar(288)  ¦  null  ¦  null  𝄀
+Timestamp  ¦  timestamp  ¦  null  ¦  null  𝄀
+Table_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Column_priv  ¦  varchar(10)  ¦  null  ¦  null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mysql' and att_relname='user' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 ➤ name[12,256,0]  ¦  data_type[12,65535,0]  ¦  maximum[12,65535,0]  ¦  minimum[12,65535,0]  𝄀
-Host  ¦  CHAR(255)  ¦  null  ¦  null  𝄀
-User  ¦  CHAR(32)  ¦  null  ¦  null  𝄀
-Select_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Insert_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Update_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Delete_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Create_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Drop_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Reload_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Shutdown_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Process_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-File_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Grant_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-References_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Index_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Alter_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Show_db_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Super_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Create_tmp_table_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Lock_tables_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Execute_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Repl_slave_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Repl_client_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Create_view_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Show_view_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Create_routine_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Alter_routine_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Create_user_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Event_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Trigger_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Create_tablespace_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-ssl_type  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-ssl_cipher  ¦  BLOB  ¦  null  ¦  null  𝄀
-x509_issuer  ¦  BLOB  ¦  null  ¦  null  𝄀
-x509_subject  ¦  BLOB  ¦  null  ¦  null  𝄀
-max_questions  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
-max_updates  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
-max_connections  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
-max_user_connections  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
-plugin  ¦  CHAR(64)  ¦  null  ¦  null  𝄀
-authentication_string  ¦  TEXT  ¦  null  ¦  null  𝄀
-password_expired  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-password_last_changed  ¦  TIMESTAMP(0)  ¦  null  ¦  null  𝄀
-password_lifetime  ¦  SMALLINT UNSIGNED(16)  ¦  null  ¦  null  𝄀
-account_locked  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Create_role_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Drop_role_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-Password_reuse_history  ¦  SMALLINT UNSIGNED(16)  ¦  null  ¦  null  𝄀
-Password_reuse_time  ¦  SMALLINT UNSIGNED(16)  ¦  null  ¦  null  𝄀
-Password_require_current  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-User_attributes  ¦  JSON(0)  ¦  null  ¦  null
+Host  ¦  char(255)  ¦  null  ¦  null  𝄀
+User  ¦  char(32)  ¦  null  ¦  null  𝄀
+Select_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Insert_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Update_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Delete_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Create_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Drop_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Reload_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Shutdown_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Process_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+File_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Grant_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+References_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Index_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Alter_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Show_db_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Super_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Create_tmp_table_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Lock_tables_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Execute_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Repl_slave_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Repl_client_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Create_view_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Show_view_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Create_routine_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Alter_routine_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Create_user_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Event_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Trigger_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Create_tablespace_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+ssl_type  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+ssl_cipher  ¦  blob  ¦  null  ¦  null  𝄀
+x509_issuer  ¦  blob  ¦  null  ¦  null  𝄀
+x509_subject  ¦  blob  ¦  null  ¦  null  𝄀
+max_questions  ¦  int unsigned  ¦  null  ¦  null  𝄀
+max_updates  ¦  int unsigned  ¦  null  ¦  null  𝄀
+max_connections  ¦  int unsigned  ¦  null  ¦  null  𝄀
+max_user_connections  ¦  int unsigned  ¦  null  ¦  null  𝄀
+plugin  ¦  char(64)  ¦  null  ¦  null  𝄀
+authentication_string  ¦  text  ¦  null  ¦  null  𝄀
+password_expired  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+password_last_changed  ¦  timestamp  ¦  null  ¦  null  𝄀
+password_lifetime  ¦  smallint unsigned  ¦  null  ¦  null  𝄀
+account_locked  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Create_role_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Drop_role_priv  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+Password_reuse_history  ¦  smallint unsigned  ¦  null  ¦  null  𝄀
+Password_reuse_time  ¦  smallint unsigned  ¦  null  ¦  null  𝄀
+Password_require_current  ¦  varchar(10)  ¦  null  ¦  null  𝄀
+User_attributes  ¦  json  ¦  null  ¦  null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='system_metrics' and att_relname='metric' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 ➤ name[12,256,0]  ¦  data_type[12,65535,0]  ¦  maximum[12,65535,0]  ¦  minimum[12,65535,0]  𝄀
-metric_name  ¦  VARCHAR(1024)  ¦  null  ¦  null  𝄀
-collecttime  ¦  DATETIME(6)  ¦  null  ¦  null  𝄀
-value  ¦  DOUBLE(0)  ¦  null  ¦  null  𝄀
-node  ¦  VARCHAR(1024)  ¦  null  ¦  null  𝄀
-role  ¦  VARCHAR(1024)  ¦  null  ¦  null  𝄀
-account  ¦  VARCHAR(1024)  ¦  null  ¦  null  𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
-type  ¦  VARCHAR(1024)  ¦  null  ¦  null  𝄀
-__mo_cbkey_011collecttime010account_id011metric_name  ¦  VARCHAR(65535)  ¦  null  ¦  null
+metric_name  ¦  varchar(1024)  ¦  null  ¦  null  𝄀
+collecttime  ¦  datetime(6)  ¦  null  ¦  null  𝄀
+value  ¦  double  ¦  null  ¦  null  𝄀
+node  ¦  varchar(1024)  ¦  null  ¦  null  𝄀
+role  ¦  varchar(1024)  ¦  null  ¦  null  𝄀
+account  ¦  varchar(1024)  ¦  null  ¦  null  𝄀
+account_id  ¦  int unsigned  ¦  null  ¦  null  𝄀
+type  ¦  varchar(1024)  ¦  null  ¦  null  𝄀
+__mo_cbkey_011collecttime010account_id011metric_name  ¦  varchar(65535)  ¦  null  ¦  null
 SELECT concat(DATE_FORMAT(date_add(`request_at`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`request_at`,Interval 1 MINUTE)) / 1) as int),2,0),':00') AS stat_ts, AVG(duration) AS value, `query_type` AS type FROM `system`.`statement_info` WHERE request_at >= '2023-07-28 04:20:43' AND request_at <= '2023-07-28 04:50:43' AND `query_type` in ('DQL','DDL','DML','DCL','TCL','Other') GROUP BY `query_type`, concat(DATE_FORMAT(date_add(`request_at`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`request_at`,Interval 1 MINUTE)) / 1) as int),2,0),':00') ORDER BY concat(DATE_FORMAT(date_add(`request_at`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`request_at`,Interval 1 MINUTE)) / 1) as int),2,0),':00')LIMIT 100;
 ➤ stat_ts[12,65535,0]  ¦  value[3,38,4]  ¦  type[12,1024,0]
 SELECT count(*) FROM (select `statement`,system.statement_info.statement_id,IF(`status`='Running', TIMESTAMPDIFF(MICROSECOND,`request_at`,now())*1000, `duration`) AS `duration`,`status`,`query_type`,`request_at`,system.statement_info.response_at,`user`,`database`,`transaction_id`,`session_id`,`rows_read`,`bytes_scan`,`result_count` from system.statement_info left join mo_catalog.statement_mo ON system.statement_info.statement_id = mo_catalog.statement_mo.statement_id where 1=1 AND `request_at` >= '2023-07-28 04:09:33' AND system.statement_info.statement_id LIKE '%cd%' AND system.statement_info.account = 'c3daefe4_2197_4192_a10e_d0acc5d9da30' AND `user` IN ('ab') AND `session_id` LIKE '%ef%' AND `duration` > 1000000000 AND `statement` LIKE '%show%' ESCAPE '\\\\' )t;

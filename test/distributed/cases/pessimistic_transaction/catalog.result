@@ -1,148 +1,148 @@
 use mo_catalog;
 desc mo_locks;
 Field    Type    Null    Key    Default    Extra    Comment
-cn_id    VARCHAR(65535)    YES        null        
-txn_id    VARCHAR(65535)    YES        null        
-table_id    VARCHAR(65535)    YES        null        
-lock_key    VARCHAR(65535)    YES        null        
-lock_content    VARCHAR(65535)    YES        null        
-lock_mode    VARCHAR(65535)    YES        null        
-lock_status    VARCHAR(65535)    YES        null        
-lock_wait    VARCHAR(65535)    YES        null        
+cn_id    varchar(65535)    YES        null        
+txn_id    varchar(65535)    YES        null        
+table_id    varchar(65535)    YES        null        
+lock_key    varchar(65535)    YES        null        
+lock_content    varchar(65535)    YES        null        
+lock_mode    varchar(65535)    YES        null        
+lock_status    varchar(65535)    YES        null        
+lock_wait    varchar(65535)    YES        null        
 desc mo_cache;
 Field    Type    Null    Key    Default    Extra    Comment
-node_type    VARCHAR(65535)    YES        null        
-node_id    VARCHAR(65535)    YES        null        
-type    VARCHAR(65535)    YES        null        
-used    BIGINT UNSIGNED    YES        null        
-free    BIGINT UNSIGNED    YES        null        
-hit_ratio    FLOAT(0)    YES        null        
+node_type    varchar(65535)    YES        null        
+node_id    varchar(65535)    YES        null        
+type    varchar(65535)    YES        null        
+used    bigint unsigned    YES        null        
+free    bigint unsigned    YES        null        
+hit_ratio    float    YES        null        
 desc mo_transactions;
 Field    Type    Null    Key    Default    Extra    Comment
-cn_id    VARCHAR(65535)    YES        null        
-txn_id    VARCHAR(65535)    YES        null        
-create_ts    VARCHAR(65535)    YES        null        
-snapshot_ts    VARCHAR(65535)    YES        null        
-prepared_ts    VARCHAR(65535)    YES        null        
-commit_ts    VARCHAR(65535)    YES        null        
-txn_mode    VARCHAR(65535)    YES        null        
-isolation    VARCHAR(65535)    YES        null        
-user_txn    VARCHAR(65535)    YES        null        
-txn_status    VARCHAR(65535)    YES        null        
-table_id    VARCHAR(65535)    YES        null        
-lock_key    VARCHAR(65535)    YES        null        
-lock_content    VARCHAR(65535)    YES        null        
-lock_mode    VARCHAR(65535)    YES        null        
+cn_id    varchar(65535)    YES        null        
+txn_id    varchar(65535)    YES        null        
+create_ts    varchar(65535)    YES        null        
+snapshot_ts    varchar(65535)    YES        null        
+prepared_ts    varchar(65535)    YES        null        
+commit_ts    varchar(65535)    YES        null        
+txn_mode    varchar(65535)    YES        null        
+isolation    varchar(65535)    YES        null        
+user_txn    varchar(65535)    YES        null        
+txn_status    varchar(65535)    YES        null        
+table_id    varchar(65535)    YES        null        
+lock_key    varchar(65535)    YES        null        
+lock_content    varchar(65535)    YES        null        
+lock_mode    varchar(65535)    YES        null        
 desc mo_variables;
 Field    Type    Null    Key    Default    Extra    Comment
-configuration_id    INT(32)    NO        null        
-account_id    INT(32)    YES        null        
-account_name    VARCHAR(300)    YES        null        
-dat_name    VARCHAR(5000)    YES        null        
-variable_name    VARCHAR(300)    YES        null        
-variable_value    VARCHAR(5000)    YES        null        
+configuration_id    int    NO        null        
+account_id    int    YES        null        
+account_name    varchar(300)    YES        null        
+dat_name    varchar(5000)    YES        null        
+variable_name    varchar(300)    YES        null        
+variable_value    varchar(5000)    YES        null        
 system_variables    boolean    YES        null
 desc mo_configurations;
 Field    Type    Null    Key    Default    Extra    Comment
-node_type    VARCHAR(65535)    YES        null        
-node_id    VARCHAR(65535)    YES        null        
-name    VARCHAR(65535)    YES        null        
-current_value    VARCHAR(65535)    YES        null        
-default_value    VARCHAR(65535)    YES        null        
-internal    VARCHAR(65535)    YES        null        
+node_type    varchar(65535)    YES        null        
+node_id    varchar(65535)    YES        null        
+name    varchar(65535)    YES        null        
+current_value    varchar(65535)    YES        null        
+default_value    varchar(65535)    YES        null        
+internal    varchar(65535)    YES        null        
 desc mo_sessions;
 Field    Type    Null    Key    Default    Extra    Comment
-node_id    VARCHAR(65535)    YES        null        
-conn_id    INT UNSIGNED    YES        null        
-session_id    VARCHAR(65535)    YES        null        
-account    VARCHAR(65535)    YES        null        
-user    VARCHAR(65535)    YES        null        
-host    VARCHAR(65535)    YES        null        
-db    VARCHAR(65535)    YES        null        
-session_start    VARCHAR(65535)    YES        null        
-command    VARCHAR(65535)    YES        null        
-info    VARCHAR(65535)    YES        null        
-txn_id    VARCHAR(65535)    YES        null        
-statement_id    VARCHAR(65535)    YES        null        
-statement_type    VARCHAR(65535)    YES        null        
-query_type    VARCHAR(65535)    YES        null        
-sql_source_type    VARCHAR(65535)    YES        null        
-query_start    VARCHAR(65535)    YES        null        
-client_host    VARCHAR(65535)    YES        null        
-role    VARCHAR(65535)    YES        null        
-proxy_host    VARCHAR(65535)    YES        null        
+node_id    varchar(65535)    YES        null        
+conn_id    int unsigned    YES        null        
+session_id    varchar(65535)    YES        null        
+account    varchar(65535)    YES        null        
+user    varchar(65535)    YES        null        
+host    varchar(65535)    YES        null        
+db    varchar(65535)    YES        null        
+session_start    varchar(65535)    YES        null        
+command    varchar(65535)    YES        null        
+info    varchar(65535)    YES        null        
+txn_id    varchar(65535)    YES        null        
+statement_id    varchar(65535)    YES        null        
+statement_type    varchar(65535)    YES        null        
+query_type    varchar(65535)    YES        null        
+sql_source_type    varchar(65535)    YES        null        
+query_start    varchar(65535)    YES        null        
+client_host    varchar(65535)    YES        null        
+role    varchar(65535)    YES        null        
+proxy_host    varchar(65535)    YES        null        
 create account acc100 admin_name='root' identified by '123456';
 use mo_catalog;
 desc mo_locks;
 Field    Type    Null    Key    Default    Extra    Comment
-cn_id    VARCHAR(65535)    YES        null        
-txn_id    VARCHAR(65535)    YES        null        
-table_id    VARCHAR(65535)    YES        null        
-lock_key    VARCHAR(65535)    YES        null        
-lock_content    VARCHAR(65535)    YES        null        
-lock_mode    VARCHAR(65535)    YES        null        
-lock_status    VARCHAR(65535)    YES        null        
-lock_wait    VARCHAR(65535)    YES        null        
+cn_id    varchar(65535)    YES        null        
+txn_id    varchar(65535)    YES        null        
+table_id    varchar(65535)    YES        null        
+lock_key    varchar(65535)    YES        null        
+lock_content    varchar(65535)    YES        null        
+lock_mode    varchar(65535)    YES        null        
+lock_status    varchar(65535)    YES        null        
+lock_wait    varchar(65535)    YES        null        
 desc mo_cache;
 Field    Type    Null    Key    Default    Extra    Comment
-node_type    VARCHAR(65535)    YES        null        
-node_id    VARCHAR(65535)    YES        null        
-type    VARCHAR(65535)    YES        null        
-used    BIGINT UNSIGNED    YES        null        
-free    BIGINT UNSIGNED    YES        null        
-hit_ratio    FLOAT(0)    YES        null        
+node_type    varchar(65535)    YES        null        
+node_id    varchar(65535)    YES        null        
+type    varchar(65535)    YES        null        
+used    bigint unsigned    YES        null        
+free    bigint unsigned    YES        null        
+hit_ratio    float    YES        null        
 desc mo_transactions;
 Field    Type    Null    Key    Default    Extra    Comment
-cn_id    VARCHAR(65535)    YES        null        
-txn_id    VARCHAR(65535)    YES        null        
-create_ts    VARCHAR(65535)    YES        null        
-snapshot_ts    VARCHAR(65535)    YES        null        
-prepared_ts    VARCHAR(65535)    YES        null        
-commit_ts    VARCHAR(65535)    YES        null        
-txn_mode    VARCHAR(65535)    YES        null        
-isolation    VARCHAR(65535)    YES        null        
-user_txn    VARCHAR(65535)    YES        null        
-txn_status    VARCHAR(65535)    YES        null        
-table_id    VARCHAR(65535)    YES        null        
-lock_key    VARCHAR(65535)    YES        null        
-lock_content    VARCHAR(65535)    YES        null        
-lock_mode    VARCHAR(65535)    YES        null        
+cn_id    varchar(65535)    YES        null        
+txn_id    varchar(65535)    YES        null        
+create_ts    varchar(65535)    YES        null        
+snapshot_ts    varchar(65535)    YES        null        
+prepared_ts    varchar(65535)    YES        null        
+commit_ts    varchar(65535)    YES        null        
+txn_mode    varchar(65535)    YES        null        
+isolation    varchar(65535)    YES        null        
+user_txn    varchar(65535)    YES        null        
+txn_status    varchar(65535)    YES        null        
+table_id    varchar(65535)    YES        null        
+lock_key    varchar(65535)    YES        null        
+lock_content    varchar(65535)    YES        null        
+lock_mode    varchar(65535)    YES        null        
 desc mo_variables;
 Field    Type    Null    Key    Default    Extra    Comment
-configuration_id    INT(32)    NO        null    auto_increment    
-account_id    INT(32)    YES        null        
-account_name    VARCHAR(300)    YES        null        
-dat_name    VARCHAR(5000)    YES        null        
-variable_name    VARCHAR(300)    YES        null        
-variable_value    VARCHAR(5000)    YES        null        
+configuration_id    int    NO        null    auto_increment    
+account_id    int    YES        null        
+account_name    varchar(300)    YES        null        
+dat_name    varchar(5000)    YES        null        
+variable_name    varchar(300)    YES        null        
+variable_value    varchar(5000)    YES        null        
 system_variables    boolean    YES        null
 desc mo_configurations;
 Field    Type    Null    Key    Default    Extra    Comment
-node_type    VARCHAR(65535)    YES        null        
-node_id    VARCHAR(65535)    YES        null        
-name    VARCHAR(65535)    YES        null        
-current_value    VARCHAR(65535)    YES        null        
-default_value    VARCHAR(65535)    YES        null        
-internal    VARCHAR(65535)    YES        null        
+node_type    varchar(65535)    YES        null        
+node_id    varchar(65535)    YES        null        
+name    varchar(65535)    YES        null        
+current_value    varchar(65535)    YES        null        
+default_value    varchar(65535)    YES        null        
+internal    varchar(65535)    YES        null        
 desc mo_sessions;
 Field    Type    Null    Key    Default    Extra    Comment
-node_id    VARCHAR(65535)    YES        null        
-conn_id    INT UNSIGNED    YES        null        
-session_id    VARCHAR(65535)    YES        null        
-account    VARCHAR(65535)    YES        null        
-user    VARCHAR(65535)    YES        null        
-host    VARCHAR(65535)    YES        null        
-db    VARCHAR(65535)    YES        null        
-session_start    VARCHAR(65535)    YES        null        
-command    VARCHAR(65535)    YES        null        
-info    VARCHAR(65535)    YES        null        
-txn_id    VARCHAR(65535)    YES        null        
-statement_id    VARCHAR(65535)    YES        null        
-statement_type    VARCHAR(65535)    YES        null        
-query_type    VARCHAR(65535)    YES        null        
-sql_source_type    VARCHAR(65535)    YES        null        
-query_start    VARCHAR(65535)    YES        null        
-client_host    VARCHAR(65535)    YES        null        
-role    VARCHAR(65535)    YES        null        
-proxy_host    VARCHAR(65535)    YES        null        
+node_id    varchar(65535)    YES        null        
+conn_id    int unsigned    YES        null        
+session_id    varchar(65535)    YES        null        
+account    varchar(65535)    YES        null        
+user    varchar(65535)    YES        null        
+host    varchar(65535)    YES        null        
+db    varchar(65535)    YES        null        
+session_start    varchar(65535)    YES        null        
+command    varchar(65535)    YES        null        
+info    varchar(65535)    YES        null        
+txn_id    varchar(65535)    YES        null        
+statement_id    varchar(65535)    YES        null        
+statement_type    varchar(65535)    YES        null        
+query_type    varchar(65535)    YES        null        
+sql_source_type    varchar(65535)    YES        null        
+query_start    varchar(65535)    YES        null        
+client_host    varchar(65535)    YES        null        
+role    varchar(65535)    YES        null        
+proxy_host    varchar(65535)    YES        null        
 drop account acc100;
