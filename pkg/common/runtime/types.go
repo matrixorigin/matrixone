@@ -28,6 +28,8 @@ const (
 	LockService = "lock-service"
 	// InternalSQLExecutor attr name for internal sql executor
 	InternalSQLExecutor = "internal-sql-executor"
+	// CDCTableDetector belongs to the CN generation that owns its SQL executor.
+	CDCTableDetector = "cdc-table-detector"
 	// AutoIncrementService attr name for AutoIncrementService
 	AutoIncrementService = "auto-increment-service"
 	// StatusServer is the global server of status of cluster.

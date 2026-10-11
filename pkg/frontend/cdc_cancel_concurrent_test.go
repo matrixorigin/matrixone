@@ -361,3 +361,28 @@ func TestCancelMultipleReaders(t *testing.T) {
 
 	t.Logf("Cancel duration: %v (waited for %d readers)", cancelDuration, numReaders)
 }
+
+func TestCDCDetectorShutdownCancelsCallbackAndPinsCleanup(t *testing.T) {
+	old := createMockTableDetector()
+	next := createMockTableDetector()
+	defer old.Close()
+	defer next.Close()
+	stubs := gostub.Stub(&cdc.GetTableDetector, func(string) *cdc.TableDetector { return next })
+	defer stubs.Reset()
+	exec := &CDCTaskExecutor{tableDetector: old, spec: &task.CreateCdcDetails{TaskId: "owned"}}
+	exec.callbackMu.Lock()
+	ctx := exec.callbackContextLocked()
+	exec.callbackMu.Unlock()
+	// Existing mock detectors do not start scanner workers.
+	old.Callbacks["owned"] = func(map[uint32]cdc.TblMap) error { return nil }
+	next.Callbacks["owned"] = func(map[uint32]cdc.TblMap) error { return nil }
+	old.Stop()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("CN shutdown did not cancel callback")
+	}
+	exec.unregisterTableDetector()
+	require.False(t, old.IsTaskRegistered("owned"))
+	require.True(t, next.IsTaskRegistered("owned"), "old cleanup must not unregister the replacement CN")
+}

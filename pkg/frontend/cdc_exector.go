@@ -297,6 +297,7 @@ type CDCTaskExecutor struct {
 	stateMachine *ExecutorStateMachine
 	holdCh       chan int
 
+	tableDetector                 *cdc.TableDetector // Protected by callbackMu; exact owning CN generation.
 	callbackMu                    sync.RWMutex
 	callbackCount                 int
 	callbackDone                  chan struct{}
@@ -435,7 +436,12 @@ func (exec *CDCTaskExecutor) cancelLifecycleContext() {
 // only this generation context is canceled when replacing callbacks.
 func (exec *CDCTaskExecutor) callbackContextLocked() context.Context {
 	if exec.callbackCtx == nil {
-		exec.callbackCtx, exec.callbackCancel = context.WithCancel(exec.replacementStartContext())
+		ctx, cancel := context.WithCancel(exec.replacementStartContext())
+		exec.callbackCtx, exec.callbackCancel = ctx, cancel
+		if exec.tableDetector != nil {
+			stop := context.AfterFunc(exec.tableDetector.Context(), cancel)
+			exec.callbackCancel = func() { stop(); cancel() }
+		}
 	}
 	return exec.callbackCtx
 }
@@ -1080,6 +1086,10 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	restartGeneration := attempt.generation
 	restartAdmission := taskservice.IsRestartAdmission(rootCtx)
 	detector := cdc.GetTableDetector(cnUUID)
+	exec.callbackMu.Lock()
+	exec.tableDetector = detector
+	exec.rotateCallbackContextLocked()
+	exec.callbackMu.Unlock()
 	var (
 		registered      bool
 		enteredStarting = exec.stateMachine.State() == StateStarting
@@ -1606,7 +1616,7 @@ func (exec *CDCTaskExecutor) Restart() error {
 		// durable RestartRequested owner retries into an in-memory state from
 		// which TransitionRestart is impossible.
 		exec.callbackGeneration.Add(1)
-		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
+		exec.unregisterTableDetector()
 		exec.closeActiveRoutineCancel()
 		// Register completion ownership before returning. Do not add the normal
 		// ten-second synchronous reader wait to an already expired four-second
@@ -1627,7 +1637,7 @@ func (exec *CDCTaskExecutor) Restart() error {
 	// shared fields themselves.
 	if oldAttempt := exec.activeStart(); oldAttempt != nil {
 		oldAttempt.cancel()
-		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
+		exec.unregisterTableDetector()
 		exec.closeActiveRoutineCancel()
 		select {
 		case <-exec.holdCh:
@@ -1652,7 +1662,7 @@ func (exec *CDCTaskExecutor) Restart() error {
 		// Some callers created the old run before start-attempt ownership was
 		// introduced. Preserve its cleanup contract while the rollout has both
 		// forms in flight.
-		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
+		exec.unregisterTableDetector()
 		exec.closeActiveRoutineCancel()
 		select {
 		case <-exec.holdCh:
@@ -1821,7 +1831,7 @@ func (exec *CDCTaskExecutor) Pause() error {
 	)
 
 	if needsProducerDrain {
-		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
+		exec.unregisterTableDetector()
 		exec.closeActiveRoutinePause()
 		if _, timedOut := waitForCDCCompletion(callbackDone, 30*time.Second); timedOut {
 			return moerr.NewInternalErrorNoCtx("CDC pause timed out waiting for table detector callbacks")
@@ -1994,7 +2004,7 @@ func (exec *CDCTaskExecutor) cancel(deleteWatermarks bool) (err error) {
 	// Terminal cancellation owns every local producer regardless of the state
 	// from which it was entered. Pausing, Restarting, and Failed can all retain
 	// an old reader or startup attempt, so state is not evidence of quiescence.
-	cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
+	exec.unregisterTableDetector()
 	exec.closeActiveRoutineCancel()
 	readersStopped, readersDone := exec.stopAllReaders()
 	// Let lifecycle tests hold the runner-selected cleanup after local work has
@@ -3250,7 +3260,7 @@ func (exec *CDCTaskExecutor) failTaskForPermanentTableError(ctx context.Context,
 		)
 	}
 
-	cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
+	exec.unregisterTableDetector()
 	exec.closeActiveRoutineCancel()
 	// Keep the completion owner even when a permanent table error leaves a
 	// reader unwinding past the bounded wait.  A later DROP may observe
@@ -3652,6 +3662,9 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		initSnapshotSplitTxn = true
 	}
 
+	exec.callbackMu.RLock()
+	detector := exec.tableDetector
+	exec.callbackMu.RUnlock()
 	reader := cdc.NewTableChangeStream(
 		exec.cnTxnClient,
 		exec.cnEngine,
@@ -3675,6 +3688,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		cdc.WithEpochBoundedSnapshot(true),
 		cdc.WithRecoverySnapshot(admission.recovery, admission.recoveryStart),
 		cdc.WithOwnerFence(ownerFence),
+		cdc.WithTableDetector(detector),
 	)
 
 	// step 4. start goroutines (sinker first, then reader)
@@ -3811,4 +3825,15 @@ func (exec *CDCTaskExecutor) retrieveCdcTask(ctx context.Context) error {
 	exec.explicitStart = !exec.startTs.IsEmpty() &&
 		(!exec.noFull || protocol != cdc.CDCInitialSnapshotProtocolNoFullHLC)
 	return nil
+}
+
+// Delayed cleanup must address its captured generation, not a replacement
+// runtime or detector published under the same CN ID.
+func (exec *CDCTaskExecutor) unregisterTableDetector() {
+	exec.callbackMu.RLock()
+	d := exec.tableDetector
+	exec.callbackMu.RUnlock()
+	if d != nil {
+		d.UnRegister(exec.spec.TaskId)
+	}
 }

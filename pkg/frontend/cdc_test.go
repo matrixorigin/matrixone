@@ -5044,6 +5044,7 @@ func TestCdcTask_RestartRunningTaskUnregistersOldDetector(t *testing.T) {
 
 	started := make(chan struct{}, 1)
 	cdcTask := &CDCTaskExecutor{
+		tableDetector: detector,
 		spec: &task.CreateCdcDetails{
 			TaskId:   "task-1",
 			TaskName: "task-name",
