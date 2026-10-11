@@ -71,7 +71,7 @@ func TestRetryScheduleCronTask(t *testing.T) {
 		cronTasks, err := s.QueryCronTask(ctx)
 		require.NoError(t, err)
 		require.Len(t, cronTasks, 1)
-		job, err := newCronJob(cronTasks[0], s)
+		job, err := newCronJob(ctx, cronTasks[0], s)
 		require.NoError(t, err)
 
 		job.doRunWithRetryBackoff(0)
@@ -100,7 +100,7 @@ func TestRetryScheduleCronTaskAllFailed(t *testing.T) {
 		cronTasks, err := s.QueryCronTask(ctx)
 		require.NoError(t, err)
 		require.Len(t, cronTasks, 1)
-		job, err := newCronJob(cronTasks[0], s)
+		job, err := newCronJob(ctx, cronTasks[0], s)
 		require.NoError(t, err)
 
 		// Exercise one trigger synchronously so another scheduler tick cannot
@@ -186,6 +186,7 @@ func TestScheduleCronTaskLimitConcurrency(t *testing.T) {
 		job := s.crons.jobs[cronTasks[0].ID]
 		require.NotNil(t, job)
 		s.crons.stopForTest(t)
+		require.NoError(t, job.ctx.Err(), "concurrency must be checked with a live fixture context")
 		job.Run()
 
 		tasks, err := store.QueryAsyncTask(ctx, WithTaskParentTaskIDCond(EQ, "t1"))
@@ -232,6 +233,7 @@ func TestReplaceCronTask(t *testing.T) {
 		jobInCron := s.crons.jobs[cronTasks[0].ID]
 		require.NotNil(t, jobInCron)
 		s.crons.stopForTest(t)
+		require.NoError(t, jobInCron.ctx.Err())
 		jobInCron.doRunWithRetryBackoff(0)
 
 		taskInStore := store.cronTasks[jobInCron.task.ID]
