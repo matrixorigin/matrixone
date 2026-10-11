@@ -24,10 +24,189 @@ import (
 	"time"
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	queryclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIssue29148PreparedOwnerPolicyLifecycle(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
+		defer cancel()
+		sourceCN, err := c.GetCNService(0)
+		require.NoError(t, err)
+		targetCN, err := c.GetCNService(1)
+		require.NoError(t, err)
+		require.NotEqual(t, sourceCN.ServiceID(), targetCN.ServiceID())
+
+		for _, tc := range []struct {
+			name    string
+			migrate bool
+		}{
+			{name: "string"},
+			{name: "variable"},
+			{name: "typed"},
+			{name: "sql_migration", migrate: true},
+			{name: "procedure_migration", migrate: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				dbName := "issue29148_owner_" + tc.name
+				roleName, userName := dbName+"_role", dbName+"_user"
+				adminDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", sourceCN.GetServiceConfig().CN.Frontend.Port))
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, adminDB.Close()) })
+				t.Cleanup(func() {
+					cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+					defer stop()
+					execSQLMaybe(t, cleanup, adminDB, "drop user if exists "+userName)
+					execSQLMaybe(t, cleanup, adminDB, "drop role if exists "+roleName)
+					execSQLMaybe(t, cleanup, adminDB, "drop database if exists "+dbName)
+				})
+				execSQLRequire(t, ctx, adminDB, "create database "+dbName)
+				execSQLRequire(t, ctx, adminDB, "create table "+dbName+".t(id int, tenant int)")
+				execSQLRequire(t, ctx, adminDB, "insert into "+dbName+".t values (1,1),(2,2)")
+				execSQLRequire(t, ctx, adminDB, "create role "+roleName)
+				execSQLRequire(t, ctx, adminDB, "grant connect on account * to "+roleName)
+				execSQLRequire(t, ctx, adminDB, "grant select on table "+dbName+".t to "+roleName)
+				// CALL currently uses the database CREATE VIEW privilege contract.
+				execSQLRequire(t, ctx, adminDB, "grant create view on database "+dbName+" to "+roleName)
+				execSQLRequire(t, ctx, adminDB, "create user "+userName+" identified by '123456' default role "+roleName)
+
+				innerSQL := "select id from " + dbName + ".t order by id"
+				body := "prepare owner_handle from ''" + innerSQL + "'';"
+				switch tc.name {
+				case "variable":
+					body = "set @owner_sql = ''" + innerSQL + "''; prepare owner_handle from @owner_sql;"
+				case "typed":
+					body = "prepare owner_handle from " + innerSQL + ";"
+				}
+				execSQLRequire(t, ctx, adminDB, "create procedure "+dbName+".make_handle() 'begin "+body+" end'")
+				openUser := func(cn embed.ServiceOperator) *sql.Conn {
+					t.Helper()
+					db, err := sql.Open("mysql", fmt.Sprintf("%s:123456@tcp(127.0.0.1:%d)/%s", userName, cn.GetServiceConfig().CN.Frontend.Port, dbName))
+					require.NoError(t, err)
+					t.Cleanup(func() { require.NoError(t, db.Close()) })
+					conn, err := db.Conn(ctx)
+					require.NoError(t, err)
+					t.Cleanup(func() { require.NoError(t, conn.Close()) })
+					_, err = conn.ExecContext(ctx, "set enable_remap_hint = 0")
+					require.NoError(t, err)
+					return conn
+				}
+				conn := openUser(sourceCN)
+				prepare := "call " + dbName + ".make_handle()"
+				if tc.name == "sql_migration" {
+					prepare = "prepare owner_handle from '" + innerSQL + "'"
+				}
+				_, err = conn.ExecContext(ctx, prepare)
+				require.NoError(t, err)
+				assertRows := func(statement string, want []int) {
+					t.Helper()
+					rows, err := conn.QueryContext(ctx, statement)
+					require.NoError(t, err, statement)
+					defer rows.Close()
+					var got []int
+					for rows.Next() {
+						var id int
+						require.NoError(t, rows.Scan(&id))
+						got = append(got, id)
+					}
+					require.NoError(t, rows.Err())
+					require.NoError(t, rows.Close())
+					require.Equal(t, want, got, statement)
+				}
+				assertRows("execute owner_handle", []int{1, 2})
+
+				if tc.migrate {
+					target := openUser(targetCN)
+					migrateIssue29148PreparedConnection(t, ctx, sourceCN, targetCN, conn, target)
+					conn = target
+					// No PREPARE on the target: this handle must have come from RPC replay.
+					assertRows("execute owner_handle", []int{1, 2})
+				}
+				_, err = conn.ExecContext(ctx, "set role issue29148_missing_owner_role")
+				require.Error(t, err)
+				assertRows("execute owner_handle", []int{1, 2})
+				execSQLRequire(t, ctx, adminDB, "alter role "+roleName+" add rule \"select id from "+dbName+".t where tenant = 1\" on table "+dbName+".t")
+				_, err = conn.ExecContext(ctx, "set role issue29148_missing_owner_role")
+				require.Error(t, err)
+				assertRows(innerSQL, []int{1})
+				_, err = conn.ExecContext(ctx, "execute owner_handle")
+				requireNeedReprepare(t, err)
+				_, err = conn.ExecContext(ctx, "deallocate prepare owner_handle")
+				require.NoError(t, err)
+				_, err = conn.ExecContext(ctx, prepare)
+				require.NoError(t, err)
+				assertRows("execute owner_handle", []int{1})
+				_, err = conn.ExecContext(ctx, "deallocate prepare owner_handle")
+				require.NoError(t, err)
+			})
+		}
+	})
+}
+
+func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sourceCN, targetCN embed.ServiceOperator, source, target *sql.Conn) {
+	t.Helper()
+	var sourceID, targetID uint32
+	require.NoError(t, source.QueryRowContext(ctx, "select connection_id()").Scan(&sourceID))
+	require.NoError(t, target.QueryRowContext(ctx, "select connection_id()").Scan(&targetID))
+	inventory, err := clusterservice.GetMOClusterWithContext(ctx, sourceCN.ServiceID())
+	require.NoError(t, err)
+	refresher, ok := inventory.(clusterservice.AuthoritativeRefresher)
+	require.True(t, ok)
+	require.NoError(t, refresher.Refresh(ctx))
+	address := func(cn embed.ServiceOperator) string {
+		t.Helper()
+		var value string
+		// Migration is an internal control-plane RPC. Both frontend connections
+		// are already authenticated; use the live listener inventory directly.
+		require.NoError(t, clusterservice.GetCNServiceRawWithContext(ctx, inventory,
+			clusterservice.NewServiceIDSelector(cn.ServiceID()), func(service metadata.CNService) bool {
+				value = service.QueryAddress
+				return false
+			}))
+		require.NotEmpty(t, value)
+		return value
+	}
+	sourceAddress, targetAddress := address(sourceCN), address(targetCN)
+	require.NotEqual(t, sourceAddress, targetAddress)
+	client, err := queryclient.NewQueryClient(sourceCN.ServiceID(), sourceCN.GetServiceConfig().CN.RPC)
+	require.NoError(t, err)
+	defer client.Close()
+	request := client.NewRequest(query.CmdMethod_MigrateConnFrom)
+	request.MigrateConnFromRequest = &query.MigrateConnFromRequest{
+		ConnID: sourceID, TempTableMigrationSupported: true, LastInsertIDMigrationSupported: true,
+	}
+	response, err := client.SendMessage(ctx, sourceAddress, request)
+	require.NoError(t, err, "export must accept a procedure-created empty-policy handle")
+	defer client.Release(response)
+	snapshot := response.MigrateConnFromResponse
+	require.NotNil(t, snapshot)
+	require.Len(t, snapshot.PrepareStmts, 1)
+	require.Equal(t, "owner_handle", snapshot.PrepareStmts[0].Name)
+	require.True(t, snapshot.PreparedStmtLongDataChecked)
+	require.True(t, snapshot.PreparedStmtCursorsChecked)
+	request = client.NewRequest(query.CmdMethod_MigrateConnTo)
+	request.MigrateConnToRequest = &query.MigrateConnToRequest{
+		ConnID: targetID, DB: snapshot.DB, PrepareStmts: snapshot.PrepareStmts,
+		LastAffectedRows: snapshot.LastAffectedRows, LastInsertID: snapshot.LastInsertID,
+		LastInsertIDExported: snapshot.LastInsertIDExported, FoundRows: snapshot.FoundRows,
+		UserDefinedVars: snapshot.UserDefinedVars, UserDefinedVarsExported: snapshot.UserDefinedVarsExported,
+		UserDefinedVarsReplayable: snapshot.UserDefinedVarsReplayable,
+		SystemVariables:           snapshot.SystemVariables, SystemVariablesExported: snapshot.SystemVariablesExported,
+		SystemVariablesReplayable: snapshot.SystemVariablesReplayable, TempTables: snapshot.TempTables,
+	}
+	response, err = client.SendMessage(ctx, targetAddress, request)
+	require.NoError(t, err)
+	defer client.Release(response)
+	require.NotNil(t, response.MigrateConnToResponse)
+	require.True(t, response.MigrateConnToResponse.Success)
+	t.Logf("prepared handle migrated from CN %s connection %d to CN %s connection %d", sourceCN.ServiceID(), sourceID, targetCN.ServiceID(), targetID)
+}
 
 func TestIssue29148PreparedRowRuleProtocolLifecycle(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(c embed.Cluster) {

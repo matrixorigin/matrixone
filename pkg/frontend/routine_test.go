@@ -943,8 +943,11 @@ func TestMigrateConnectionFromRejectsInvalidatedRewritePreparedStmt(t *testing.T
 	ses := newTestSession(t, ctrl)
 	ses.rewriteEnabled.Store(true)
 	prepared := &PrepareStmt{
-		Name: GetPrepareStmtName(41),
-		Sql:  "select 1",
+		Name:                    GetPrepareStmtName(41),
+		Sql:                     "select 1",
+		rewritePolicyCaptured:   true,
+		rewritePolicyEnabled:    true,
+		rewritePolicyGeneration: ses.rewritePolicyGeneration,
 	}
 	require.NoError(t, ses.SetPrepareStmt(context.Background(), prepared.Name, prepared))
 	ses.SetLastStmtID(41)

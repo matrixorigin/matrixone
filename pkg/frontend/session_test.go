@@ -909,6 +909,8 @@ func TestSession_Migrate(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(0)] = newMrsForInheritedRoleIdOfRoleId(nil)
+		bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{0})] = newMrsForRewriteRules(nil)
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
@@ -952,6 +954,7 @@ func TestSession_Migrate(t *testing.T) {
 			DB:                      exported.DB,
 			LastInsertIDExported:    true,
 			SetVarStmts:             []string{"set sql_mode = @mode"},
+			PrepareStmts:            []*query.PrepareStmt{{Name: "pending_isolation_prepare", SQL: "select ?"}},
 			LastAffectedRows:        exported.LastAffectedRows,
 			UserDefinedVars:         exported.UserDefinedVars,
 			UserDefinedVarsExported: exported.UserDefinedVarsExported,
@@ -978,6 +981,9 @@ func TestSession_Migrate(t *testing.T) {
 		nextIsolation, hasNextIsolation := target.GetTxnHandler().nextTxnIsolationSnapshot()
 		require.True(t, hasNextIsolation)
 		require.Equal(t, txn.TxnIsolation_RC, nextIsolation)
+		prepared, err := target.GetPrepareStmt(context.Background(), "pending_isolation_prepare")
+		require.NoError(t, err)
+		require.Equal(t, "select ?", prepared.Sql)
 		require.Equal(t, "d1", target.GetDatabaseName())
 		require.Equal(t, int64(7), target.GetLastAffectedRows())
 

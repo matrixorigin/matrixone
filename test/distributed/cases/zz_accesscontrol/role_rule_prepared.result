@@ -6,10 +6,38 @@ create database issue29148_rule_db;
 create table issue29148_rule_db.t(id int, amount int, tenant int);
 insert into issue29148_rule_db.t values (1,100,1),(2,200,2);
 create role issue29148_rule_role;
-alter role issue29148_rule_role add rule "select id, amount from issue29148_rule_db.t where tenant = 1" on table issue29148_rule_db.t;
 create user issue29148_rule_user identified by '123456' default role issue29148_rule_role;
 grant connect on account * to issue29148_rule_role;
 grant select on table issue29148_rule_db.t to issue29148_rule_role;
+grant create view on database issue29148_rule_db to issue29148_rule_role;
+create procedure issue29148_rule_db.make_handle() 'begin prepare issue29148_call from ''select id, amount from issue29148_rule_db.t order by id''; end';
+use issue29148_rule_db;
+set enable_remap_hint = 0;
+call issue29148_rule_db.make_handle();
+execute issue29148_call;
+➤ id[4,32,0]  ¦  amount[4,32,0]  𝄀
+1  ¦  100  𝄀
+2  ¦  200
+set role issue29148_missing_role;
+internal error: there is no role issue29148_missing_role
+execute issue29148_call;
+➤ id[4,32,0]  ¦  amount[4,32,0]  𝄀
+1  ¦  100  𝄀
+2  ¦  200
+alter role issue29148_rule_role add rule "select id, amount from issue29148_rule_db.t where tenant = 1" on table issue29148_rule_db.t;
+set role issue29148_missing_role;
+internal error: there is no role issue29148_missing_role
+select id, amount from issue29148_rule_db.t order by id;
+➤ id[4,32,0]  ¦  amount[4,32,0]  𝄀
+1  ¦  100
+execute issue29148_call;
+Prepared statement needs to be re-prepared
+deallocate prepare issue29148_call;
+call issue29148_rule_db.make_handle();
+execute issue29148_call;
+➤ id[4,32,0]  ¦  amount[4,32,0]  𝄀
+1  ¦  100
+deallocate prepare issue29148_call;
 set enable_remap_hint = 1;
 set enable_privilege_cache = off;
 prepare issue29148_stale from 'select id, amount from issue29148_rule_db.t order by id';

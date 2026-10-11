@@ -4782,12 +4782,16 @@ func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) er
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
 		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 		ses := NewSession(ctx, "", proto, nil)
 		ses.respr = &MysqlResp{mysqlRrWr: proto}
 		ses.mrs = &MysqlResultSet{}
+		// This fixture has no role catalog. Model its known empty role policy
+		// while still exercising capture at the PREPARE producer boundary.
+		ses.ruleCache = make(map[string]string)
 		ses.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, proc: testutil.NewProc(t), ses: ses}
 
 		convey.So(handleFun(ses), convey.ShouldBeNil)
@@ -5090,6 +5094,7 @@ func TestHandlePrepareStmtStoresRemapPolicy(t *testing.T) {
 	require.NoError(t, err)
 	ctrl := gomock.NewController(t)
 	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.input = &UserInput{rewritePolicy: &rewritePolicySnapshot{captured: true}}
 	execCtx.remapDb = map[string]string{"src": "prepared_db"}
 
 	runTestHandle("handlePrepareStmt stores remap", t, func(ses *Session) error {
@@ -7135,7 +7140,8 @@ func TestCreatePrepareStmtRestoresCurrentExecCtx(t *testing.T) {
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
 	staleExecCtx := &ExecCtx{reqCtx: context.Background()}
-	currentExecCtx := &ExecCtx{reqCtx: context.Background(), ses: ses, proc: testutil.NewProc(t)}
+	currentExecCtx := &ExecCtx{reqCtx: context.Background(), ses: ses, proc: testutil.NewProc(t),
+		input: &UserInput{rewritePolicy: &rewritePolicySnapshot{captured: true}}}
 	ses.GetTxnCompileCtx().SetExecCtx(staleExecCtx)
 
 	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
@@ -7158,6 +7164,111 @@ func TestCreatePrepareStmtRestoresCurrentExecCtx(t *testing.T) {
 		tree.NewPrepareStmt("s", &tree.Select{}), &tree.Select{})
 	require.Error(t, err)
 	require.True(t, checked)
+}
+
+func TestPreparedOwnerPolicyBeforePlanning(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	oldBuild := buildPlanWithAuthorization
+	defer func() { buildPlanWithAuthorization = oldBuild }()
+	stop := moerr.NewInternalError(ctx, "stop at planning boundary")
+	for _, producer := range []string{"typed", "string", "variable"} {
+		t.Run(producer, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			ses.ruleCache = map[string]string{"owner.t": "select id from owner.t where tenant = 1"}
+			ses.rewritePolicyGeneration = 7
+			input := &UserInput{sql: "procedure body"}
+			execCtx := &ExecCtx{reqCtx: ctx, ses: ses, input: input, remapDb: map[string]string{"saved": "db"}}
+			planned := false
+			buildPlanWithAuthorization = func(_ context.Context, _ FeSession, _ plan.CompilerContext, stmt tree.Statement) (*plan.Plan, error) {
+				planned = true
+				policy := execCtx.input.rewritePolicy
+				require.True(t, policy.captured)
+				require.Equal(t, uint64(7), policy.generation)
+				require.False(t, policy.sessionEnabled)
+				selected := stmt.(*tree.PrepareStmt).Stmt.(*tree.Select)
+				require.NotNil(t, selected.RewriteOption)
+				layers := selected.RewriteOption.Rewrites["owner.t"]
+				require.Len(t, layers, 1)
+				require.Contains(t, tree.String(layers[0].Stmt, dialect.MYSQL), "where tenant = 1")
+				return nil, stop
+			}
+			var err error
+			switch producer {
+			case "typed":
+				outer, parseErr := parsers.ParseOne(ctx, dialect.MYSQL, "prepare p from select id from owner.t", 1)
+				require.NoError(t, parseErr)
+				defer outer.Free()
+				_, err = doPrepareStmtInSession(execCtx, ses, ses, outer.(*tree.PrepareStmt), "prepare p from select id from owner.t", nil)
+			case "string":
+				_, err = doPrepareStringInSession(ses, ses, execCtx, &tree.PrepareString{Name: "p", Sql: "select id from owner.t"})
+			case "variable":
+				require.NoError(t, ses.SetUserDefinedVar("sql", "select id from owner.t", ""))
+				_, err = doPrepareVarInSession(ses, ses, execCtx, &tree.PrepareVar{Name: "p", Var: "sql"})
+			}
+			require.ErrorIs(t, err, stop)
+			require.True(t, planned)
+			require.Empty(t, ses.prepareStmts)
+			require.Same(t, input, execCtx.input)
+			require.Nil(t, input.rewritePolicy)
+			require.False(t, execCtx.rewriteEnabled)
+			require.Equal(t, map[string]string{"saved": "db"}, execCtx.remapDb)
+		})
+	}
+
+	t.Run("captured request keeps frozen policy", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		ses.ruleCache = map[string]string{"owner.t": "select id from owner.t where tenant = 2"}
+		policy := &rewritePolicySnapshot{captured: true, enabled: true, generation: 3}
+		input := &UserInput{rewritePolicy: policy}
+		execCtx := &ExecCtx{reqCtx: ctx, input: input, rewriteEnabled: true,
+			sqlOfStmt: `/*+ {"rewrites":{"owner.t":"select id from owner.t where tenant = 1"}} */ prepare p from 'select id from owner.t'`}
+		buildPlanWithAuthorization = func(_ context.Context, _ FeSession, _ plan.CompilerContext, stmt tree.Statement) (*plan.Plan, error) {
+			require.Same(t, input, execCtx.input)
+			require.Same(t, policy, execCtx.input.rewritePolicy)
+			layers := stmt.(*tree.PrepareStmt).Stmt.(*tree.Select).RewriteOption.Rewrites["owner.t"]
+			require.Len(t, layers, 1, "do not add the current role as a second policy layer")
+			require.Contains(t, tree.String(layers[0].Stmt, dialect.MYSQL), "where tenant = 1")
+			return nil, stop
+		}
+		_, err := doPrepareStringInSession(ses, ses, execCtx, &tree.PrepareString{Name: "p", Sql: "select id from owner.t"})
+		require.ErrorIs(t, err, stop)
+	})
+
+	t.Run("capture failure prevents planning and registration", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		bh := &backgroundExecTest{}
+		bh.init()
+		failure := moerr.NewInternalError(ctx, "role catalog unavailable")
+		bh.sql2err[getSqlForInheritedRoleIDsForRuleCache(0)] = failure
+		stub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer stub.Reset()
+		buildPlanWithAuthorization = func(context.Context, FeSession, plan.CompilerContext, tree.Statement) (*plan.Plan, error) {
+			t.Fatal("planning must not run after capture fails")
+			return nil, nil
+		}
+		execCtx := &ExecCtx{reqCtx: ctx}
+		_, err := doPrepareStringInSession(ses, ses, execCtx, &tree.PrepareString{Name: "p", Sql: "select 1"})
+		require.ErrorIs(t, err, failure)
+		require.Empty(t, ses.prepareStmts)
+		require.Nil(t, execCtx.input)
+	})
+
+	t.Run("unproven materialized input is rejected", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		execCtx := &ExecCtx{reqCtx: ctx, input: &UserInput{rewritePolicyMaterialized: true}}
+		_, err := doPrepareStringInSession(ses, ses, execCtx, &tree.PrepareString{Name: "p", Sql: "select 1"})
+		require.ErrorContains(t, err, "without a captured owner policy")
+		require.Empty(t, ses.prepareStmts)
+	})
+
+	t.Run("common constructor requires proof", func(t *testing.T) {
+		_, err := createPrepareStmtInSession(&ExecCtx{reqCtx: ctx}, nil, nil, "", nil, nil)
+		require.ErrorContains(t, err, "requires a captured owner policy before planning")
+	})
 }
 
 type preparedViewCompilerContext struct {
@@ -7283,6 +7394,7 @@ func TestPrepareStringCreateViewUsesRewrittenInnerRootSQL(t *testing.T) {
 		execCtx.resper = ses.respr
 		execCtx.rewriteEnabled = true
 		execCtx.sqlOfStmt = outerSQL
+		execCtx.input = &UserInput{rewritePolicy: &rewritePolicySnapshot{captured: true, enabled: true, sessionEnabled: true}}
 		ses.SetSql(outerSQL)
 		stmt := tree.NewPrepareString("inline_view", innerSQL)
 		defer stmt.Free()
