@@ -392,12 +392,26 @@ func TestAllocatorLegacyZeroTokenStillExecutesAndReleases(t *testing.T) {
 		require.NoError(t, err)
 		defer raw.Rollback(context.Background())
 		op := &zeroTokenAllocatorBorrow{TxnOperator: raw}
-		a := newValueAllocator("", &borrowedAllocatorStore{IncrValueStore: NewMemStore(), run: func(context.Context) error { return nil }}).(*allocator)
+		var storeCalls atomic.Int64
+		a := newValueAllocator("", &borrowedAllocatorStore{IncrValueStore: NewMemStore(), run: func(context.Context) error {
+			storeCalls.Add(1)
+			return nil
+		}}).(*allocator)
 		defer a.close()
-		result := make(chan error, 1)
-		require.NoError(t, a.asyncAllocate(ctx, 42, "id", 2, op, func(uint64, uint64, timestamp.Timestamp, error) { result <- nil }))
+		type allocationResult struct {
+			from, to uint64
+			err      error
+		}
+		result := make(chan allocationResult, 1)
+		require.NoError(t, a.asyncAllocate(ctx, 42, "id", 2, op, func(from, to uint64, _ timestamp.Timestamp, err error) {
+			result <- allocationResult{from: from, to: to, err: err}
+		}))
 		a.close()
-		require.NoError(t, <-result)
+		allocated := <-result
+		require.NoError(t, allocated.err)
+		require.Equal(t, uint64(1), allocated.from)
+		require.Equal(t, uint64(3), allocated.to)
+		require.Equal(t, int64(1), storeCalls.Load())
 		require.Equal(t, 1, op.enters)
 		require.Equal(t, 1, op.exits)
 		require.Zero(t, op.token)
