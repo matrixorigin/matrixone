@@ -36,11 +36,22 @@ type sourceCommitTSStub struct {
 	calls *int
 }
 
+type localWritesStub struct {
+	engine.Relation
+	has   bool
+	calls *int
+}
+
 func (rel *sourceCommitTSStub) SourceCommitTS(
 	context.Context, types.TS,
 ) (types.TS, error) {
 	*rel.calls++
 	return rel.ts, rel.err
+}
+
+func (rel *localWritesStub) HasTransactionLocalWrites(context.Context) (bool, error) {
+	*rel.calls++
+	return rel.has, nil
 }
 
 // failClosedTxnTable builds a txnTable whose workspace holds an uncommitted write
@@ -63,6 +74,12 @@ func failClosedTxnTable(t *testing.T) *txnTable {
 func TestSourceCommitTSFailsClosedOnLocalWrite(t *testing.T) {
 	_, err := failClosedTxnTable(t).SourceCommitTS(context.Background(), types.TS{})
 	require.Error(t, err)
+}
+
+func TestTxnTableHasTransactionLocalWrites(t *testing.T) {
+	has, err := failClosedTxnTable(t).HasTransactionLocalWrites(context.Background())
+	require.NoError(t, err)
+	require.True(t, has)
 }
 
 // newViewPathTxnTable builds a txnTable whose getPartitionState takes the
@@ -123,6 +140,21 @@ func TestCombinedTxnTableSourceCommitTSReturnsMax(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.BuildTS(30, 0), sourceTS)
 	require.Equal(t, 3, calls)
+}
+
+func TestCombinedTxnTableHasTransactionLocalWritesShortCircuits(t *testing.T) {
+	calls := 0
+	table := &combinedTxnTable{tablesFunc: func() ([]engine.Relation, error) {
+		return []engine.Relation{
+			&localWritesStub{has: true, calls: &calls},
+			&localWritesStub{has: false, calls: &calls},
+		}, nil
+	}}
+
+	has, err := table.HasTransactionLocalWrites(context.Background())
+	require.NoError(t, err)
+	require.True(t, has)
+	require.Equal(t, 1, calls)
 }
 
 func TestCombinedTxnTableSourceCommitTSShortCircuits(t *testing.T) {

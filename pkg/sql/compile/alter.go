@@ -1274,6 +1274,15 @@ func (c *Compile) alterCopySourceChangedSinceCopy(
 			return false, nil
 		}
 	}
+	if localWriter, ok := rel.(engine.RelationHasTransactionLocalWrites); ok {
+		hasLocalWrites, err := localWriter.HasTransactionLocalWrites(ctx)
+		if err != nil {
+			return false, err
+		}
+		if hasLocalWrites {
+			return false, nil
+		}
+	}
 	provider, ok := rel.(engine.SourceCommitTSProvider)
 	if !ok {
 		return false, moerr.NewInternalError(
