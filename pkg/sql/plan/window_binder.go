@@ -218,6 +218,8 @@ func findNestedWindowFuncName(expr tree.Expr) (string, bool) {
 		return findNestedWindowFuncName(e.Expr)
 	case *tree.CastExpr:
 		return findNestedWindowFuncName(e.Expr)
+	case *tree.CollateExpr:
+		return findNestedWindowFuncName(e.Expr)
 	case *tree.BitCastExpr:
 		return findNestedWindowFuncName(e.Expr)
 	case *tree.Tuple:
@@ -1174,6 +1176,8 @@ func hasWindowFrameParam(expr tree.Expr) bool {
 	case *tree.ParenExpr:
 		return hasWindowFrameParam(expr.Expr)
 	case *tree.CastExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.CollateExpr:
 		return hasWindowFrameParam(expr.Expr)
 	case *tree.BitCastExpr:
 		return hasWindowFrameParam(expr.Expr)

@@ -1463,7 +1463,7 @@ func leastFn(parameters []*vector.Vector,
 			length,
 			selectList,
 			func(v1, v2 []byte) bool {
-				return bytes.Compare(v1, v2) < 0
+				return compareTextBytes(paramType, v1, v2) < 0
 			})
 
 	case types.T_binary, types.T_varbinary:
@@ -1840,7 +1840,7 @@ func greatestFn(parameters []*vector.Vector,
 			length,
 			selectList,
 			func(v1, v2 []byte) bool {
-				return bytes.Compare(v1, v2) > 0
+				return compareTextBytes(paramType, v1, v2) > 0
 			})
 
 	case types.T_binary, types.T_varbinary:

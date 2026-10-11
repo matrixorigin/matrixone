@@ -78,6 +78,8 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindNumVal(numVal, b.defaultValueBindType())
 	case *tree.ParenExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, isRoot)
+	case *tree.CollateExpr:
+		expr, err = b.bindCollateExpr(exprImpl, depth)
 
 	case *tree.OrExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("or", []tree.Expr{exprImpl.Left, exprImpl.Right}, depth)
@@ -6739,6 +6741,10 @@ func bindFuncExprImplByPlanExpr(
 		(!containsVolatileFunction(args[0]) || args[0].AuxId < 0) {
 		return bindBetweenAsComparisons(ctx, args)
 	}
+	args, err = normalizeExpressionCollations(ctx, name, args)
+	if err != nil {
+		return nil, err
+	}
 	// HEX/BIT literals have a VARCHAR-shaped type but an exact unsigned numeric
 	// domain. Preserve their provenance before either prepared consumers or the
 	// type-only SUM/AVG fallback converts strings to DOUBLE. Ordinary binary
@@ -8154,6 +8160,9 @@ func bindFuncExprImplByPlanExpr(
 	// return new expr
 	Typ := makePlan2Type(&returnType)
 	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
+	if err := setExpressionCollation(ctx, name, args, &Typ); err != nil {
+		return nil, err
+	}
 	if returnType.Oid == types.T_varchar || returnType.Oid == types.T_text {
 		for _, idx := range padSpaceValueArgumentIndexes(name, len(args)) {
 			if hasPadSpaceStringProvenance(args[idx]) {

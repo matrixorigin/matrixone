@@ -1,0 +1,145 @@
+DROP DATABASE IF EXISTS collation_expression_test;
+CREATE DATABASE collation_expression_test;
+USE collation_expression_test;
+SELECT 'Á' COLLATE utf8mb4_unicode_ci = 'a',
+'a' = 'Á' COLLATE utf8mb4_unicode_ci,
+'a ' COLLATE utf8mb4_unicode_ci = 'a',
+_binary'a ' = _binary'a';
+➤ (Á) collate utf8mb4_unicode_ci = a[-7,1,0]  ¦  a = (Á) collate utf8mb4_unicode_ci[-7,1,0]  ¦  (a ) collate utf8mb4_unicode_ci = a[-7,1,0]  ¦  a  = a[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  0
+SELECT 'Á' COLLATE utf8mb4_unicode_ci IN ('a', 'z'),
+'Á' COLLATE utf8mb4_unicode_ci BETWEEN 'a' AND 'b';
+➤ (Á) collate utf8mb4_unicode_ci in (a, z)[-7,1,0]  ¦  (Á) collate utf8mb4_unicode_ci between a and b[-7,1,0]  𝄀
+1  ¦  1
+SELECT LEAST('a' COLLATE utf8mb4_unicode_ci, 'B'),
+GREATEST('a' COLLATE utf8mb4_unicode_ci, 'B'),
+CONCAT('a' COLLATE utf8mb4_unicode_ci, 'B');
+➤ LEAST((a) collate utf8mb4_unicode_ci, B)[12,1,0]  ¦  GREATEST((a) collate utf8mb4_unicode_ci, B)[12,1,0]  ¦  CONCAT((a) collate utf8mb4_unicode_ci, B)[12,2,0]  𝄀
+a  ¦  B  ¦  aB
+SELECT COALESCE(NULL, 'Á' COLLATE utf8mb4_unicode_ci) = 'a';
+➤ COALESCE(null, (Á) collate utf8mb4_unicode_ci) = a[-7,1,0]  𝄀
+1
+SELECT 'a' COLLATE utf8mb4_bin = 'a' COLLATE utf8mb4_bin;
+➤ (a) collate utf8mb4_bin = (a) collate utf8mb4_bin[-7,1,0]  𝄀
+1
+SELECT CASE WHEN TRUE THEN 'Á' COLLATE utf8mb4_unicode_ci
+ELSE CAST('bad' AS SIGNED) END = 'a';
+➤ case when true then (Á) collate utf8mb4_unicode_ci else cast(bad as signed) end = a[-7,1,0]  𝄀
+1
+SELECT 'a' COLLATE utf8mb4_bin = 'a' COLLATE utf8mb4_general_ci;
+Illegal mix of collations (utf8mb4_bin,EXPLICIT) and (utf8mb4_general_ci,EXPLICIT) for operation '='
+SELECT CONCAT('a' COLLATE utf8mb4_bin, 'b' COLLATE utf8mb4_general_ci);
+Illegal mix of collations (utf8mb4_bin,EXPLICIT) and (utf8mb4_general_ci,EXPLICIT) for operation 'concat'
+SELECT CASE WHEN TRUE THEN 'a' COLLATE utf8mb4_bin
+ELSE 'b' COLLATE utf8mb4_general_ci END;
+Illegal mix of collations (utf8mb4_bin,EXPLICIT) and (utf8mb4_general_ci,EXPLICIT) for operation 'case'
+SELECT COALESCE('a' COLLATE utf8mb4_bin, 'b' COLLATE utf8mb4_general_ci);
+Illegal mix of collations (utf8mb4_bin,EXPLICIT) and (utf8mb4_general_ci,EXPLICIT) for operation 'coalesce'
+SELECT LEAST('a' COLLATE utf8mb4_bin, 'b' COLLATE utf8mb4_general_ci);
+Illegal mix of collations (utf8mb4_bin,EXPLICIT) and (utf8mb4_general_ci,EXPLICIT) for operation 'least'
+SELECT 'a' COLLATE utf8mb4_bin UNION ALL SELECT 'b' COLLATE utf8mb4_general_ci;
+Illegal mix of collations (utf8mb4_bin,EXPLICIT) and (utf8mb4_general_ci,EXPLICIT) for operation 'union'
+SELECT 'a' COLLATE nonexistent_ci;
+Unknown collation: 'nonexistent_ci'
+SELECT _binary'a' COLLATE utf8mb4_unicode_ci;
+COLLATION 'utf8mb4_unicode_ci' is not valid for CHARACTER SET 'binary'
+SELECT 1 COLLATE utf8mb4_unicode_ci;
+➤ (1) collate utf8mb4_unicode_ci[12,65535,0]  𝄀
+1
+SELECT NULL COLLATE utf8mb4_unicode_ci;
+COLLATION 'utf8mb4_unicode_ci' is not valid for CHARACTER SET 'binary'
+CREATE TABLE source_values (id INT PRIMARY KEY, v VARCHAR(20), KEY k_v(v));
+INSERT INTO source_values VALUES (1, 'Á'), (2, 'a '), (3, 'z');
+SELECT id, v FROM source_values WHERE v COLLATE utf8mb4_unicode_ci = 'a' ORDER BY id;
+➤ id[4,32,0]  ¦  v[12,20,0]  𝄀
+1  ¦  Á  𝄀
+2  ¦  a 
+SELECT id, v FROM source_values WHERE 'a' = v COLLATE utf8mb4_unicode_ci ORDER BY id;
+➤ id[4,32,0]  ¦  v[12,20,0]  𝄀
+1  ¦  Á  𝄀
+2  ¦  a 
+SELECT id, v FROM source_values WHERE v COLLATE utf8mb4_unicode_ci IN ('a', 'z') ORDER BY id;
+➤ id[4,32,0]  ¦  v[12,20,0]  𝄀
+1  ¦  Á  𝄀
+2  ¦  a   𝄀
+3  ¦  z
+SELECT id, v COLLATE utf8mb4_unicode_ci AS original_v FROM source_values ORDER BY id;
+➤ id[4,32,0]  ¦  original_v[12,20,0]  𝄀
+1  ¦  Á  𝄀
+2  ¦  a   𝄀
+3  ¦  z
+SELECT id, v FROM source_values WHERE v = 'a' ORDER BY id;
+➤ id[4,32,0]  ¦  v[12,20,0]
+CREATE VIEW expression_view AS SELECT id, v COLLATE utf8mb4_unicode_ci AS v FROM source_values;
+SELECT id, v FROM expression_view WHERE v = 'a' ORDER BY id;
+➤ id[4,32,0]  ¦  v[12,20,0]  𝄀
+1  ¦  Á  𝄀
+2  ¦  a 
+CREATE TABLE expression_copy AS SELECT id, v COLLATE utf8mb4_unicode_ci AS v FROM source_values;
+SELECT id, v FROM expression_copy WHERE v = 'a' ORDER BY id;
+➤ id[4,32,0]  ¦  v[12,20,0]  𝄀
+1  ¦  Á  𝄀
+2  ¦  a 
+SELECT id, v FROM expression_copy WHERE v = 'Á' COLLATE utf8mb4_bin ORDER BY id;
+➤ id[4,32,0]  ¦  v[12,20,0]  𝄀
+1  ¦  Á
+SELECT v FROM (SELECT 'Á' COLLATE utf8mb4_unicode_ci AS v UNION ALL SELECT 'a ') AS u WHERE v = 'a' ORDER BY HEX(v);
+➤ v[12,2,0]  𝄀
+a   𝄀
+Á
+SELECT v FROM (VALUES ROW('Á' COLLATE utf8mb4_unicode_ci), ROW('a ')) AS d(v) WHERE v = 'a' ORDER BY HEX(v);
+➤ v[12,2,0]  𝄀
+a   𝄀
+Á
+DROP INDEX k_v ON source_values;
+SELECT id, v FROM source_values WHERE v COLLATE utf8mb4_unicode_ci = 'a' ORDER BY id;
+➤ id[4,32,0]  ¦  v[12,20,0]  𝄀
+1  ¦  Á  𝄀
+2  ¦  a 
+PREPARE expression_stmt FROM 'SELECT ? COLLATE utf8mb4_unicode_ci = ?';
+SET @left = 'Á', @right = 'a';
+EXECUTE expression_stmt USING @left, @right;
+➤ (?) collate utf8mb4_unicode_ci = ?[-7,1,0]  𝄀
+1
+SET @left = NULL;
+EXECUTE expression_stmt USING @left, @right;
+➤ (?) collate utf8mb4_unicode_ci = ?[-7,1,0]  𝄀
+null
+SET @left = 'z';
+EXECUTE expression_stmt USING @left, @right;
+➤ (?) collate utf8mb4_unicode_ci = ?[-7,1,0]  𝄀
+0
+SET @left = 'a ';
+EXECUTE expression_stmt USING @left, @right;
+➤ (?) collate utf8mb4_unicode_ci = ?[-7,1,0]  𝄀
+1
+SET @left = _binary'Á';
+EXECUTE expression_stmt USING @left, @right;
+➤ (?) collate utf8mb4_unicode_ci = ?[-7,1,0]  𝄀
+1
+DEALLOCATE PREPARE expression_stmt;
+PREPARE expression_union FROM 'SELECT v FROM (SELECT ? COLLATE utf8mb4_unicode_ci AS v UNION ALL SELECT ?) u WHERE v=''a'' ORDER BY HEX(v)';
+SET @left = 'Á', @right = 'a ';
+EXECUTE expression_union USING @left, @right;
+➤ v[12,65535,0]  𝄀
+a   𝄀
+Á
+SET @right = _binary'a ';
+EXECUTE expression_union USING @left, @right;
+➤ v[12,65535,0]  𝄀
+a   𝄀
+Á
+DEALLOCATE PREPARE expression_union;
+PREPARE expression_values FROM 'SELECT v FROM (VALUES ROW(? COLLATE utf8mb4_unicode_ci), ROW(?)) d(v) WHERE v=''a'' ORDER BY HEX(v)';
+SET @right = 'a ';
+EXECUTE expression_values USING @left, @right;
+➤ v[12,65535,0]  𝄀
+a   𝄀
+Á
+SET @right = _binary'a ';
+EXECUTE expression_values USING @left, @right;
+➤ v[12,65535,0]  𝄀
+a   𝄀
+Á
+DEALLOCATE PREPARE expression_values;
+DROP DATABASE collation_expression_test;

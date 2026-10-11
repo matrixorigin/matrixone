@@ -243,6 +243,32 @@ func TestLeastGreatestPromoteVarcharMetadataWhenWidthsDiffer(t *testing.T) {
 	}
 }
 
+func TestLeastGreatestNativeCollationPreservesValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+	typ.CollationVersion = 1
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(typ, []string{"a", "Á", "a "}, []bool{false, false, false}),
+		NewFunctionTestInput(typ, []string{"B", "a", "a"}, []bool{false, false, false}),
+	}
+	for _, tc := range []struct {
+		name string
+		fn   func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+		want []string
+	}{
+		{"least", leastFn, []string{"a", "Á", "a "}},
+		{"greatest", greatestFn, []string{"B", "Á", "a "}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := NewFunctionTestResult(typ, false, tc.want, []bool{false, false, false})
+			fc := NewFunctionTestCase(proc, inputs, result, tc.fn)
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func initGreatestTestCase() []tcTemp {
 	return []tcTemp{
 		// Test int8

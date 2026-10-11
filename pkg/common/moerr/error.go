@@ -144,7 +144,10 @@ const (
 	ErrInvalidBitwiseOperandsSize uint16 = 20336
 	// ErrCannotConvertString preserves MySQL's binary-to-text conversion error
 	// when a character function receives invalid UTF-8 bytes.
-	ErrCannotConvertString uint16 = 20337
+	ErrCannotConvertString      uint16 = 20337
+	ErrIllegalMixOfCollations   uint16 = 20338
+	ErrUnknownCollation         uint16 = 20339
+	ErrCollationCharsetMismatch uint16 = 20340
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -505,6 +508,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrInvalidBitwiseAggregateOperandsSize: {ER_INVALID_BITWISE_AGGREGATE_OPERANDS_SIZE, []string{MySQLDefaultSqlState}, "Aggregate bitwise functions cannot accept arguments longer than 511 bytes; consider using the SUBSTRING() function"},
 	ErrInvalidBitwiseOperandsSize:          {ER_INVALID_BITWISE_OPERANDS_SIZE, []string{MySQLDefaultSqlState}, "Binary operands of bitwise operators must be of equal length"},
 	ErrCannotConvertString:                 {ER_CANNOT_CONVERT_STRING, []string{MySQLDefaultSqlState}, "Cannot convert string '%.64s' from %s to %s"},
+	ErrIllegalMixOfCollations:              {ER_CANT_AGGREGATE_2COLLATIONS, []string{MySQLDefaultSqlState}, "Illegal mix of collations (%s,%s) and (%s,%s) for operation '%s'"},
+	ErrUnknownCollation:                    {ER_UNKNOWN_COLLATION, []string{MySQLDefaultSqlState}, "Unknown collation: '%s'"},
+	ErrCollationCharsetMismatch:            {ER_COLLATION_CHARSET_MISMATCH, []string{"42000"}, "COLLATION '%s' is not valid for CHARACTER SET '%s'"},
 	ErrWrongParamCountToNativeFct:          {ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT, []string{"42000"}, "Incorrect parameter count in the call to native function '%-.192s'"},
 	ErrAESInvalidIV:                        {ER_AES_INVALID_IV, []string{"HY000"}, "The initialization vector supplied to %s is too short. Must be at least %d bytes long"},
 	ErrUserLockWrongName:                   {ER_USER_LOCK_WRONG_NAME, []string{"42000"}, "Incorrect user-level lock name '%-.192s'."},
@@ -1173,6 +1179,18 @@ func NewInvalidInputf(ctx context.Context, format string, args ...any) *Error {
 
 func NewInvalidInput(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrInvalidInput, msg)
+}
+
+func NewIllegalMixOfCollations(ctx context.Context, left, leftRank, right, rightRank, operation string) *Error {
+	return newError(ctx, ErrIllegalMixOfCollations, left, leftRank, right, rightRank, operation)
+}
+
+func NewUnknownCollation(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrUnknownCollation, name)
+}
+
+func NewCollationCharsetMismatch(ctx context.Context, name, charset string) *Error {
+	return newError(ctx, ErrCollationCharsetMismatch, name, charset)
 }
 
 // NewFtMatchingKeyNotFound reports a MATCH() AGAINST() that no FULLTEXT index can serve.

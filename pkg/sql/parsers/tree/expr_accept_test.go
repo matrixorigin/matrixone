@@ -71,6 +71,26 @@ type renameExprVisitor struct {
 	visitedNumValues *int
 }
 
+func TestCollateExprAcceptVisitsOperand(t *testing.T) {
+	expr := &CollateExpr{Expr: NewUnresolvedColName("old_col"), Collation: "utf8mb4_unicode_ci"}
+	visited, ok := expr.Accept(renameExprVisitor{oldName: "old_col", newName: "new_col"})
+	require.True(t, ok)
+	require.Same(t, expr, visited)
+	require.Equal(t, "new_col", expr.Expr.(*UnresolvedName).ColName())
+	require.Equal(t, "utf8mb4_unicode_ci", expr.Collation)
+}
+
+func TestCollateExprFormatPreservesOperandGrouping(t *testing.T) {
+	for _, operand := range []Expr{
+		NewUnresolvedColName("v"),
+		&ParenExpr{Expr: NewUnresolvedColName("v")},
+	} {
+		ctx := NewFmtCtx(0)
+		(&CollateExpr{Expr: operand, Collation: "utf8mb4_unicode_ci"}).Format(ctx)
+		require.Equal(t, "(v) collate utf8mb4_unicode_ci", ctx.String())
+	}
+}
+
 func (v renameExprVisitor) Enter(expr Expr) (Expr, bool) {
 	if _, ok := expr.(*NumVal); ok && v.visitedNumValues != nil {
 		*v.visitedNumValues++
