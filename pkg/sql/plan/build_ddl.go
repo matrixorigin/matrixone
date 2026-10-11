@@ -4697,6 +4697,16 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		if err != nil {
 			return err
 		}
+		for _, def := range idxDefs {
+			if def != nil {
+				def.KeyFormat = createTable.TableDef.KeyFormat
+			}
+		}
+		for _, def := range tblDefs {
+			if def != nil {
+				def.KeyFormat = createTable.TableDef.KeyFormat
+			}
+		}
 		// Capture the plugin's build-time session vars (BuildSessionVars) into each
 		// index def's algo_params.session_vars — mirroring CreateIndexDef's vector
 		// path — so background builds (idxcron reindex, ISCP async, clone/restore)
@@ -4781,8 +4791,10 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			return err
 		}
 		tableDef := &TableDef{
-			Name: indexTableName,
+			Name:      indexTableName,
+			KeyFormat: createTable.TableDef.KeyFormat,
 		}
+		indexDef.KeyFormat = createTable.TableDef.KeyFormat
 		indexParts := make([]string, 0)
 
 		for _, keyPart := range indexInfo.KeyParts {
@@ -4806,7 +4818,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
-				Typ:  indexTableKeyTypeForSinglePart(colMap[colName], keyPart),
+				Typ:  indexTableKeyTypeForSinglePartWithFormat(colMap[colName], keyPart, tableDef.KeyFormat),
 				Default: &plan.Default{
 					NullAbility:  false,
 					Expr:         nil,
@@ -4944,9 +4956,9 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		var tableDef []*TableDef
 		switch indexInfo.KeyType {
 		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID, tree.INDEX_TYPE_RTREE:
-			indexDef, tableDef, err = buildRegularSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
+			indexDef, tableDef, err = buildRegularSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName, createTable.TableDef.KeyFormat)
 		case tree.INDEX_TYPE_MASTER:
-			indexDef, tableDef, err = buildMasterSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
+			indexDef, tableDef, err = buildMasterSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName, createTable.TableDef.KeyFormat)
 		default:
 			// Vector-index algorithms live in pkg/vectorindex/<algo>/plugin/plan
 			// (BuildSecondaryIndexDefs). Any KeyType registered with the
@@ -4960,6 +4972,16 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 
 		if err != nil {
 			return err
+		}
+		for _, def := range indexDef {
+			if def != nil {
+				def.KeyFormat = createTable.TableDef.KeyFormat
+			}
+		}
+		for _, def := range tableDef {
+			if def != nil {
+				def.KeyFormat = createTable.TableDef.KeyFormat
+			}
 		}
 		setIndexDefsVisibility(indexDef, indexInfo.IndexOption)
 		createTable.IndexTables = append(createTable.IndexTables, tableDef...)
@@ -5008,7 +5030,7 @@ func checkSpatialIndexColumnSupport(ctx CompilerContext, indexInfo *tree.Index, 
 //	primary key __mo_index_idx_col,
 //
 // )
-func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string, keyFormat uint32) ([]*plan.IndexDef, []*TableDef, error) {
 	// 1. indexDef init
 	indexDef := &plan.IndexDef{}
 	indexDef.Unique = false
@@ -5019,8 +5041,10 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 		return nil, nil, err
 	}
 	tableDef := &TableDef{
-		Name: indexTableName,
+		Name:      indexTableName,
+		KeyFormat: keyFormat,
 	}
+	indexDef.KeyFormat = keyFormat
 
 	nameCount := make(map[string]int)
 	// Note: Index Parts will store the ColName, as Parts is used to populate mo_index_table.
@@ -5151,7 +5175,7 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 //	primary key __mo_index_idx_col,
 //
 // )
-func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string, keyFormat uint32) ([]*plan.IndexDef, []*TableDef, error) {
 
 	// 1. indexDef init
 	indexDef := &plan.IndexDef{}
@@ -5164,8 +5188,10 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		return nil, nil, err
 	}
 	tableDef := &TableDef{
-		Name: indexTableName,
+		Name:      indexTableName,
+		KeyFormat: keyFormat,
 	}
+	indexDef.KeyFormat = keyFormat
 
 	nameCount := make(map[string]int)
 	indexParts := make([]string, 0)
@@ -5201,17 +5227,11 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		colDef := &ColDef{
 			Name: keyName,
 			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				// don't copy auto increment
-				Id:                       colMap[pkeyName].Typ.Id,
-				Width:                    colMap[pkeyName].Typ.Width,
-				Scale:                    colMap[pkeyName].Typ.Scale,
-				Charset:                  colMap[pkeyName].Typ.Charset,
-				CollationVersion:         colMap[pkeyName].Typ.CollationVersion,
-				CollationCoercibility:    colMap[pkeyName].Typ.CollationCoercibility,
-				CollationCoercibilitySet: colMap[pkeyName].Typ.CollationCoercibilitySet,
-				CollationMergeConflict:   colMap[pkeyName].Typ.CollationMergeConflict,
-			},
+			// Keep legacy primary-key payloads unchanged. A versioned
+			// Unicode key is opaque binary, just like the unique-index
+			// hidden table above; otherwise a storage consumer can apply the
+			// source collation a second time.
+			Typ: indexTablePrimaryKeyTypeWithFormat(colMap[pkeyName], keyFormat),
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,

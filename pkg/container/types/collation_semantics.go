@@ -53,6 +53,26 @@ func CollationKey(charset uint8, scratch, value []byte) ([]byte, error) {
 	return domain.Key(scratch, value)
 }
 
+// PhysicalCollationKey returns the tagged key used by a versioned physical
+// index boundary.  Unlike CollationKeyOrOriginal, it never turns an invalid
+// or out-of-repertoire value into a tagged raw-value fallback.  Physical key
+// producers, probes and locks must either use the same canonical bytes or
+// fail before publishing a row; a fallback would create two identities for
+// one relation key format.
+func PhysicalCollationKey(typ Type, value []byte) ([]byte, error) {
+	if !IsUnicodeCollation(typ.Charset) || !isUnicodeStringType(typ.Oid) {
+		return value, nil
+	}
+	key, err := CollationKey(typ.Charset, nil, value)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, 1+len(key))
+	out[0] = validCollationKeyTag
+	copy(out[1:], key)
+	return out, nil
+}
+
 // CollationKeyOrOriginal returns the canonical equality/hash/physical-key
 // representation for a native Unicode collation. The leading domain marker
 // keeps a malformed or repertoire-invalid raw fallback disjoint from valid UCA
@@ -76,17 +96,21 @@ func CollationKeyOrOriginal(charset uint8, value []byte) []byte {
 }
 
 // ValidateCollationValue checks the admission contract for a typed native
-// Unicode string. Unlike CollationKeyOrOriginal, which deliberately retains a
-// tagged fallback for comparison-only callers, typed values must not carry
-// malformed UTF-8 or a value outside the charset repertoire. Rejecting those
-// bytes at the typed write boundary prevents a binary payload from aliasing a
-// valid UCA key after a later vector loses its collation metadata.
+// Unicode string without materializing a comparison key. Unlike
+// CollationKeyOrOriginal, which deliberately retains a tagged fallback for
+// comparison-only callers, typed values must not carry malformed UTF-8 or a
+// value outside the charset repertoire. Rejecting those bytes at the typed
+// write boundary prevents a binary payload from aliasing a valid UCA key after
+// a later vector loses its collation metadata.
 func ValidateCollationValue(typ Type, value []byte) error {
 	if !IsUnicodeCollation(typ.Charset) || !isUnicodeStringType(typ.Oid) {
 		return nil
 	}
-	_, err := CollationKey(typ.Charset, nil, value)
-	return err
+	domain, ok := CollationDomainForCharset(typ.Charset)
+	if !ok {
+		return nil
+	}
+	return domain.ValidateValue(value)
 }
 
 func isUnicodeStringType(oid T) bool {
