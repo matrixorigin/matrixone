@@ -620,3 +620,22 @@ insert into t_odku_rhs_key values(1,'x') on duplicate key update b=concat(missin
 select cast(b='seed' as int) as whole_rhs_unchanged from t_odku_rhs_key;
 drop table t_odku_rhs_key;
 drop table t_odku_rhs_no_key;
+
+-- #28160: discarded no-key alias arms still validate scalar assignment types.
+create table t_odku_assignment_no_key(a varchar(20));
+insert into t_odku_assignment_no_key values('x') as n on duplicate key update a=(n.a,n.a);
+prepare odku_tuple_assignment from insert into t_odku_assignment_no_key values(?) as n on duplicate key update a=(n.a,?);
+select cast(count(*) as int) as alias_assignment_rows from t_odku_assignment_no_key;
+create table t_odku_assignment_key(id int primary key,a varchar(20));
+insert into t_odku_assignment_key values(1,'x') as n on duplicate key update a=(n.a,n.a);
+select cast(count(*) as int) as alias_assignment_rows from t_odku_assignment_key;
+prepare odku_scalar_assignment from insert into t_odku_assignment_no_key values(?) as n on duplicate key update a=coalesce(n.a,?);
+set @alias_assignment_in='y';
+set @alias_assignment_rhs='unused';
+execute odku_scalar_assignment using @alias_assignment_in,@alias_assignment_rhs;
+deallocate prepare odku_scalar_assignment;
+insert into t_odku_assignment_no_key values('z') as n on duplicate key update a=null;
+insert into t_odku_assignment_no_key values('d') as n on duplicate key update a=default;
+select cast(count(*) as int) as alias_assignment_rows from t_odku_assignment_no_key;
+drop table t_odku_assignment_no_key;
+drop table t_odku_assignment_key;

@@ -637,6 +637,33 @@ func TestInsertRowAliasDirectRHSAndLegacyNoKeySubqueryRemainSupported(t *testing
 	}
 }
 
+func TestInsertRowAliasAssignmentTypesBeforeNoKeyFallback(t *testing.T) {
+	for _, target := range []struct {
+		insert string
+		column string
+	}{
+		{"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') as n", "loc"},
+		{"insert into constraint_test.fake_pk_no_unique_gen(a,g) values(1,default) as n", "a"},
+	} {
+		for _, rhs := range []string{"(n." + target.column + ",n." + target.column + ")", "(n." + target.column + ",?)"} {
+			for _, prefix := range []string{"", "prepare invalid_assignment from "} {
+				if prefix == "" && rhs == "(n."+target.column+",?)" {
+					continue
+				}
+				sql := prefix + target.insert + " on duplicate key update " + target.column + "=" + rhs
+				_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), sql)
+				require.Contains(t, err.Error(), "TUPLE", sql)
+			}
+		}
+		for _, rhs := range []string{"n." + target.column, "null", "default", "?"} {
+			sql := "prepare valid_assignment from " + target.insert + " on duplicate key update " + target.column + "=" + rhs
+			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+			require.NoError(t, err, sql)
+		}
+	}
+}
+
 func TestInsertRowAliasExcludesHiddenTargetIdentities(t *testing.T) {
 	tableDef := testInsertAliasTable()
 	tableDef.Cols = append(tableDef.Cols, &planpb.ColDef{Name: catalog.FakePrimaryKeyColName, Hidden: true})

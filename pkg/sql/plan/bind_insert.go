@@ -2802,7 +2802,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 						"the value specified for generated column '%s' in table '%s' is not allowed",
 						colDef.Name, tableDef.Name)
 				}
-				if _, err := binder.BindAssignmentExpr(astUpdateExpr.Expr, colDef.Typ); err != nil {
+				updateExpr, err := binder.BindAssignmentExpr(astUpdateExpr.Expr, colDef.Typ)
+				if err != nil {
+					return 0, err
+				}
+				// Validate scalar assignment before discarding the unreachable arm.
+				// This builds the same conversion as keyed ODKU without evaluating it.
+				if _, err := builder.forceAssignmentCastExpr(updateExpr, colDef.Typ, builder.isInsertIgnore); err != nil {
 					return 0, err
 				}
 			}
