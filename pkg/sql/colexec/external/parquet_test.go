@@ -2039,10 +2039,12 @@ func TestParquetFloat32Overflow(t *testing.T) {
 	assertOverflow := func(t *testing.T, f *parquet.File, page parquet.Page) {
 		t.Helper()
 		vec := vector.NewVec(types.T_float32.ToType())
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_float32), NotNullable: true})
 		require.NotNil(t, mp)
 		require.ErrorContains(t, mp.mapping(page, proc, vec), "overflows FLOAT")
+		require.Zero(t, vec.Length())
 	}
 
 	for _, tc := range []struct {
@@ -2148,6 +2150,100 @@ func TestParquetFloat32InfinityMapping(t *testing.T) {
 
 func TestParquetBoundedVarlenMapping(t *testing.T) {
 	proc := testutil.NewProc(t)
+	t.Run("nested text width", func(t *testing.T) {
+		file := writeParquetFixture(t, parquet.Optional(parquet.Group{"v": parquet.Leaf(parquet.Int32Type)}), []parquet.Row{
+			{parquet.NullValue().Level(0, 0, 0)},
+			{parquet.Int32Value(123).Level(0, 1, 0)},
+		})
+		reader := file.RowGroups()[0].Rows()
+		t.Cleanup(func() { require.NoError(t, reader.Close()) })
+		rows := make([]parquet.Row, 2)
+		n, err := reader.ReadRows(rows)
+		require.True(t, err == nil || errors.Is(err, io.EOF))
+		require.Equal(t, 2, n)
+		for _, tc := range []struct {
+			name   string
+			target types.T
+			width  int32
+		}{
+			{"char rejects", types.T_char, 4},
+			{"varchar rejects", types.T_varchar, 4},
+			{"char exact width", types.T_char, 10},
+			{"varchar exact width", types.T_varchar, 10},
+			{"varchar wider", types.T_varchar, 32},
+			{"text", types.T_text, 0},
+			{"json", types.T_json, 0},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				dt := plan.Type{Id: int32(tc.target), Width: tc.width}
+				param := &ExternalParam{ExParamConst: ExParamConst{Cols: []*plan.ColDef{{Typ: dt}}}}
+				col := file.Root().Column("c")
+				h := &ParquetHandler{cols: []*parquet.Column{col}}
+				h.mappers = []*columnMapper{h.getNestedMapper(col, dt)}
+				bat := vectorBatch([]types.Type{types.New(tc.target, tc.width, 0)})
+				t.Cleanup(func() { bat.Clean(proc.Mp()) })
+				require.NoError(t, h.processRow(rows[0], bat, param, proc))
+				require.True(t, bat.Vecs[0].IsNull(0))
+				err := h.processRow(rows[1], bat, param, proc)
+				if tc.width == 4 {
+					require.ErrorContains(t, err, "Src length 10 is larger than Dest length 4")
+					require.Equal(t, 1, bat.Vecs[0].Length(), "reject before appending an invalid value")
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, 2, bat.Vecs[0].Length())
+				got := bat.Vecs[0].GetStringAt(1)
+				if tc.target == types.T_json {
+					got = types.DecodeJson(bat.Vecs[0].GetBytesAt(1)).String()
+				}
+				require.Equal(t, `{"v": 123}`, got)
+			})
+		}
+	})
+
+	t.Run("hybrid nested width failure rolls back chunk", func(t *testing.T) {
+		var buf bytes.Buffer
+		func() {
+			w := parquet.NewWriter(&buf, parquet.NewSchema("x", parquet.Group{
+				"c":  parquet.Group{"v": parquet.Leaf(parquet.Int32Type)},
+				"id": parquet.Leaf(parquet.Int32Type),
+			}))
+			defer func() { require.NoError(t, w.Close()) }()
+			_, err := w.WriteRows([]parquet.Row{
+				{parquet.Int32Value(0).Level(0, 0, 0), parquet.Int32Value(1).Level(0, 0, 1)},
+				{parquet.Int32Value(123).Level(0, 0, 0), parquet.Int32Value(2).Level(0, 0, 1)},
+			})
+			require.NoError(t, err)
+		}()
+		param := &ExternalParam{
+			ExParamConst: ExParamConst{
+				Ctx:      context.Background(),
+				Attrs:    []plan.ExternAttr{{ColName: "c", ColIndex: 0}, {ColName: "id", ColIndex: 1}},
+				Cols:     []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_varchar), Width: 8}}, {Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE, Format: tree.PARQUET, Data: buf.String()}},
+				FileSize: []int64{int64(buf.Len())},
+			},
+			ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+		}
+		reader := NewParquetReader(param, proc)
+		t.Cleanup(func() { require.NoError(t, reader.Close()) })
+		empty, err := reader.Open(param, proc)
+		require.NoError(t, err)
+		require.False(t, empty)
+		bat := vectorBatch([]types.Type{types.New(types.T_varchar, 8, 0), types.T_int32.ToType()})
+		t.Cleanup(func() { bat.Clean(proc.Mp()) })
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("seed"), false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32(-1), false, proc.Mp()))
+		bat.SetRowCount(1)
+		_, err = reader.ReadBatch(context.Background(), bat, proc, nil)
+		require.ErrorContains(t, err, "Src length 10 is larger than Dest length 8")
+		require.Len(t, reader.h.nestedColIndices, 1)
+		require.Len(t, reader.h.dataColIndices, 1)
+		require.Equal(t, 1, bat.Vecs[0].Length())
+		require.Equal(t, "seed", bat.Vecs[0].GetStringAt(0))
+		require.Equal(t, []int32{-1}, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[1]))
+	})
+
 	for _, dictionary := range []bool{false, true} {
 		for _, tc := range []struct {
 			name   string

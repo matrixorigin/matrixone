@@ -69,6 +69,22 @@ create table t7(id int, name varchar(100), scores json, address json, metadata j
 load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table t7;
 select * from t7;
 
+-- Nested text follows CHAR/VARCHAR widths before entering target-typed vectors.
+create table pq_nested_char(id int, address char(4));
+load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table pq_nested_char;
+select count(*) from pq_nested_char;
+alter table pq_nested_char modify address char(64);
+load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table pq_nested_char;
+select id, hex(address) as address_hex from pq_nested_char order by id;
+drop table pq_nested_char;
+create table pq_nested_varchar(id int, address varchar(4));
+load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table pq_nested_varchar;
+select count(*) from pq_nested_varchar;
+alter table pq_nested_varchar modify address varchar(64);
+load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table pq_nested_varchar;
+select id, hex(address) as address_hex from pq_nested_varchar order by id;
+drop table pq_nested_varchar;
+
 -- nullable columns
 drop table if exists pq_nullable_test;
 CREATE TABLE pq_nullable_test (

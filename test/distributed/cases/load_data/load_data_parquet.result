@@ -124,6 +124,34 @@ select * from t7;
 1  ¦  Alice  ¦  [85, 90, 78]  ¦  {"city": "Beijing", "zip": "100000"}  ¦  {"key1": "value1", "key2": "value2"}  𝄀
 2  ¦  Bob  ¦  [92, 88]  ¦  {"city": "Shanghai", "zip": "200000"}  ¦  {"a": "b"}  𝄀
 3  ¦  Charlie  ¦  [76, 85, 90, 95]  ¦  {"city": "Guangzhou", "zip": "510000"}  ¦  {"m": "n", "x": "y", "z": "w"}
+create table pq_nested_char(id int, address char(4));
+load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table pq_nested_char;
+internal error: Src length 36 is larger than Dest length 4
+select count(*) from pq_nested_char;
+➤ count(*)[-5,64,0]  𝄀
+0
+alter table pq_nested_char modify address char(64);
+load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table pq_nested_char;
+select id, hex(address) as address_hex from pq_nested_char order by id;
+➤ id[4,32,0]  ¦  address_hex[12,-1,0]  𝄀
+1  ¦  7B2263697479223A20224265696A696E67222C20227A6970223A2022313030303030227D  𝄀
+2  ¦  7B2263697479223A20225368616E67686169222C20227A6970223A2022323030303030227D  𝄀
+3  ¦  7B2263697479223A20224775616E677A686F75222C20227A6970223A2022353130303030227D
+drop table pq_nested_char;
+create table pq_nested_varchar(id int, address varchar(4));
+load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table pq_nested_varchar;
+internal error: Src length 36 is larger than Dest length 4
+select count(*) from pq_nested_varchar;
+➤ count(*)[-5,64,0]  𝄀
+0
+alter table pq_nested_varchar modify address varchar(64);
+load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table pq_nested_varchar;
+select id, hex(address) as address_hex from pq_nested_varchar order by id;
+➤ id[4,32,0]  ¦  address_hex[12,-1,0]  𝄀
+1  ¦  7B2263697479223A20224265696A696E67222C20227A6970223A2022313030303030227D  𝄀
+2  ¦  7B2263697479223A20225368616E67686169222C20227A6970223A2022323030303030227D  𝄀
+3  ¦  7B2263697479223A20224775616E677A686F75222C20227A6970223A2022353130303030227D
+drop table pq_nested_varchar;
 drop table if exists pq_nullable_test;
 CREATE TABLE pq_nullable_test (
 id BIGINT NOT NULL,
