@@ -124,3 +124,49 @@ func TestParse256LeadingZerosDoNotConsumePrecision(t *testing.T) {
 	require.Equal(t, int32(76), scale)
 	require.Equal(t, in, got.Format(scale))
 }
+
+// The deciding digit can be the first digit parse256 dropped at the 76-digit
+// limit, exactly at the column scale; it is applied once, away from zero.
+func TestParseDecimal256RoundsDroppedDigitAtColumnScale(t *testing.T) {
+	intPart, frac := strings.Repeat("1", 66), strings.Repeat("2", 10)
+	for _, tc := range []struct{ in, want string }{
+		{intPart + "." + frac + "5", intPart + "." + strings.Repeat("2", 9) + "3"},
+		{"-" + intPart + "." + frac + "5", "-" + intPart + "." + strings.Repeat("2", 9) + "3"},
+		{intPart + "." + frac + "49", intPart + "." + frac},
+		{"-" + intPart + "." + frac + "4", "-" + intPart + "." + frac},
+	} {
+		got, err := ParseDecimal256(tc.in, 76, 10)
+		require.NoError(t, err, tc.in)
+		require.Equal(t, tc.want, got.Format(10), tc.in)
+		require.Equal(t, exactDecimalRound(t, tc.in, 10), got.Format(10), tc.in)
+	}
+}
+
+// Parse256 keeps its own contract: round once at the 76-digit limit, and a
+// trailing exponent after the dropped digits is still applied.
+func TestParse256RoundsAtDigitLimit(t *testing.T) {
+	for _, tc := range []struct {
+		in    string
+		want  string
+		scale int32
+	}{
+		{"1." + strings.Repeat("2", 75) + "5", "1." + strings.Repeat("2", 74) + "3", 75},
+		{"1." + strings.Repeat("2", 75) + "4", "1." + strings.Repeat("2", 75), 75},
+		{"1." + strings.Repeat("9", 75) + "9", "2." + strings.Repeat("0", 74), 74},
+	} {
+		got, scale, err := Parse256(tc.in)
+		require.NoError(t, err, tc.in)
+		require.Equal(t, tc.scale, scale, tc.in)
+		require.Equal(t, tc.want, got.Format(scale), tc.in)
+	}
+	got, scale, err := Parse256("1." + strings.Repeat("2", 75) + "5e1")
+	require.NoError(t, err)
+	require.Equal(t, "12."+strings.Repeat("2", 73)+"3", got.Format(scale))
+
+	_, _, err = Parse256("")
+	require.Error(t, err)
+	_, err = ParseDecimal256("", 10, 2)
+	require.Error(t, err)
+	_, _, err = Parse256(strings.Repeat("1", 77))
+	require.Error(t, err)
+}
