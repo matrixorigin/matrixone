@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -146,6 +147,7 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 			proc.Ctx = defines.AttachAccountId(proc.Ctx, 0)
 			op := mock_frontend.NewMockTxnOperator(ctrl)
 			proc.Base.TxnOperator = op
+			proc.SetIncrStatementDisabled(true)
 			now := timestamp.Timestamp{PhysicalTime: 10}
 			frontier := timestamp.Timestamp{PhysicalTime: 20}
 			op.EXPECT().Txn().DoAndReturn(func() txn.TxnMeta {
@@ -172,6 +174,7 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 			}}
 			advances := 0
 			workspace := mock_frontend.NewMockWorkspace(ctrl)
+			workspace.EXPECT().WriteOffset().Return(uint64(7)).AnyTimes()
 			workspace.EXPECT().AdvanceSnapshot(gomock.Any(), frontier).DoAndReturn(func(context.Context, timestamp.Timestamp) error { advances++; now = frontier; return nil }).AnyTimes()
 			op.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 			barrier := &testCreateIndexLogtailBarrier{Engine: eng, acquire: func(context.Context) (timestamp.Timestamp, error) { return frontier, nil }}
@@ -193,7 +196,9 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 			}
 			builds := 0
 			rebuilt := original
-			c := &Compile{proc: proc, e: barrier, buildPlanFunc: func(ctx context.Context) (*plan.Plan, error) {
+			c := NewCompile("test", "db", "create table db.t", "", "", barrier, proc, source, false, nil, time.Now())
+			defer c.Release()
+			c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
 				builds++
 				require.Equal(t, frontier, now, "rebuild follows workspace frontier")
 				if mode == "ctas_refresh" {
@@ -205,13 +210,15 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 					rebuilt = &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{DdlType: plan.DataDefinition_CREATE_TABLE, Definition: &plan.DataDefinition_CreateTable{CreateTable: &plan.CreateTable{Database: "db", TableDef: &plan.TableDef{Name: "different"}}}}}}
 				}
 				return rebuilt, nil
-			}}
+			})
 			if mode == "canceled" {
 				ctx, cancel := context.WithCancel(proc.Ctx)
 				cancel()
 				proc.Ctx = ctx
+				proc.ReplaceTopCtx(ctx)
 			}
-			got, err := c.prepareCreateNamePlan(original)
+			err := c.Compile(proc.Ctx, original, nil)
+			got := c.GetPlan()
 			switch mode {
 			case "canceled":
 				require.ErrorIs(t, err, context.Canceled)

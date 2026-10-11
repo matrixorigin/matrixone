@@ -704,5 +704,77 @@ func TestBorrowedCreateAdmissionPreservesCallerWrites(t *testing.T) {
 			require.NoError(t, err)
 		}
 
+		// MERGE creates several staging tables through frontend shared
+		// background execution. Its children must preserve earlier caller work.
+		for _, query := range []string{
+			"create table " + database + ".branch_base(id int primary key, value int unique)",
+			"insert into " + database + ".branch_base values(1,10),(2,20)",
+			"data branch create table " + database + ".branch_src from " + database + ".branch_base",
+			"data branch create table " + database + ".branch_dst from " + database + ".branch_base",
+			"delete from " + database + ".branch_src where id=1",
+			"update " + database + ".branch_src set value=200 where id=2",
+			"insert into " + database + ".branch_src values(3,30)",
+		} {
+			_, err = db.ExecContext(ctx, query)
+			require.NoError(t, err, query)
+		}
+		// A unique-key conflict fails application after staging and deletion.
+		// With statement rollback configured, retain the preceding statement.
+		_, err = db.ExecContext(ctx, "insert into "+database+".branch_dst values(4,30)")
+		require.NoError(t, err)
+		failedTxn, err := db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		defer failedTxn.Rollback()
+		_, err = failedTxn.ExecContext(ctx, "set mo_rollback_txn_on_error=0")
+		require.NoError(t, err)
+		_, err = failedTxn.ExecContext(ctx, "insert into "+database+".existing values(9,'2023-11-12 10:00:01')")
+		require.NoError(t, err)
+		_, err = failedTxn.ExecContext(ctx, "data branch merge "+database+".branch_src into "+database+".branch_dst when conflict accept")
+		require.ErrorContains(t, err, "Duplicate entry")
+		var retained, unchanged, residue int
+		require.NoError(t, failedTxn.QueryRowContext(ctx, "select count(*) from "+database+".existing where id=9").Scan(&retained))
+		require.Equal(t, 1, retained)
+		require.NoError(t, failedTxn.QueryRowContext(ctx, "select sum(value) from "+database+".branch_dst").Scan(&unchanged))
+		require.Equal(t, 60, unchanged)
+		require.NoError(t, failedTxn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase=? and relname like '__mo_diff_%'", database).Scan(&residue))
+		require.Zero(t, residue)
+		require.NoError(t, failedTxn.Commit())
+		var afterCommit int
+		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+database+".existing where id=9").Scan(&afterCommit))
+		require.Equal(t, 1, afterCommit)
+		_, err = db.ExecContext(ctx, "delete from "+database+".branch_dst where id=4")
+		require.NoError(t, err)
+
+		for _, commit := range []bool{false, true} {
+			tx, err := db.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			_, err = tx.ExecContext(ctx, "insert into "+database+".existing values(8,'2023-11-12 10:00:01')")
+			require.NoError(t, err)
+			_, err = tx.ExecContext(ctx, "data branch merge "+database+".branch_src into "+database+".branch_dst when conflict accept")
+			require.NoError(t, err)
+			var prior, merged int
+			require.NoError(t, tx.QueryRowContext(ctx, "select count(*) from "+database+".existing where id=8").Scan(&prior))
+			require.Equal(t, 1, prior)
+			require.NoError(t, tx.QueryRowContext(ctx, "select sum(value) from "+database+".branch_dst").Scan(&merged))
+			require.Equal(t, 230, merged)
+			if commit {
+				require.NoError(t, tx.Commit())
+			} else {
+				require.NoError(t, tx.Rollback())
+			}
+			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+database+".existing where id=8").Scan(&prior))
+			require.NoError(t, db.QueryRowContext(ctx, "select sum(value) from "+database+".branch_dst").Scan(&merged))
+			if commit {
+				require.Equal(t, 1, prior)
+				require.Equal(t, 230, merged)
+			} else {
+				require.Zero(t, prior)
+				require.Equal(t, 30, merged)
+			}
+			var stages int
+			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase=? and relname like '__mo_diff_%'", database).Scan(&stages))
+			require.Zero(t, stages)
+		}
+
 	})
 }

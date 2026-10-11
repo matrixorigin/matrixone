@@ -851,7 +851,7 @@ func (c *Compile) preferPrimaryScopeResult(current, candidate scopeRunResult) sc
 }
 
 func (c *Compile) canRetry(err error) bool {
-	if c.disableRetry {
+	if c.disableRetry || c.proc.IncrStatementDisabled() {
 		return false
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode) {

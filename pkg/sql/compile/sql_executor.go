@@ -608,7 +608,6 @@ func (exec *txnExecutor) Exec(
 	c.disableDropAutoIncrement = statementOption.DisableDropIncrStatement()
 	c.skipDataBranchReclaim = statementOption.SkipDataBranchReclaim()
 	c.keepAutoIncrement = statementOption.KeepAutoIncrement()
-	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.ignorePublish = statementOption.IgnorePublish()
 	c.ignoreCheckExperimental = statementOption.IgnoreCheckExperimental()
 	c.disableLock = statementOption.DisableLock()
@@ -645,14 +644,6 @@ func (exec *txnExecutor) Exec(
 		}
 	}
 
-	// Borrowed CREATE may refresh its plan before effects, but must never roll
-	// back or increment the caller's statement to do so.
-	if c.disableRetry {
-		pn, err = c.prepareCreateNamePlan(pn)
-		if err != nil {
-			return executor.Result{}, err
-		}
-	}
 	var batches []*batch.Batch
 	err = c.Compile(
 		exec.ctx,
