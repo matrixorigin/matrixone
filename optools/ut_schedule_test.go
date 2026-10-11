@@ -73,7 +73,11 @@ func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...str
 // Assign in the caller: a command-substitution wrapper would identify its
 // subshell instead. The exec fallback also works with system Bash 3.2.
 const scheduleFixturePID = `function fixture_self_pid() {
- printf -v "$1" '%s' "${BASHPID:-$(exec /bin/sh -c 'printf "%s" "$PPID"')}"
+ if [[ -n "${BASHPID:-}" ]]; then
+  printf -v "$1" '%s' "$BASHPID"
+ else
+  printf -v "$1" '%s' "$(exec /bin/sh -c 'printf "%s" "$PPID"')"
+ fi
 }
 `
 
@@ -1508,5 +1512,64 @@ fi
 				t.Fatalf("default prebuild dispatch: %v\n%s", err, out)
 			}
 		})
+	}
+}
+
+// One outstanding TERM at a time tests parser reentry without a signal flood.
+// The main PID comes from Go; the subshell PID comes from its parent's $!.
+func TestFixturePIDDuringAcknowledgedTERM(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	script := scheduleFixturePID + `
+set -e
+scratch=$1
+fixture_self_pid main
+printf 'MAIN %s\n' "$main"
+mkfifo "$scratch/child" "$scratch/ack"
+exec 8<>"$scratch/child" 7<>"$scratch/ack"
+(fixture_self_pid child; printf '%s\n' "$child" >&8) &
+child_pid=$!
+read -r observed <&8
+wait "$child_pid"
+printf 'CHILD %s %s\n' "$observed" "$child_pid"
+handled=0
+trap 'fixture_self_pid trap_pid; [[ "$trap_pid" == "$main" ]] || exit 97; handled=$((handled+1)); printf "ack\n" >&7' TERM
+(
+ for ((j=0; j<200; j++)); do
+  kill -TERM "$main"
+  read -r acknowledgment <&7
+  [[ "$acknowledgment" == ack ]] || exit 98
+ done
+ touch "$scratch/done"
+) &
+sender=$!
+trap 'kill "$sender" 2>/dev/null || :; wait "$sender" 2>/dev/null || :' EXIT
+while [[ ! -f "$scratch/done" ]]; do
+ # Reenter BASHPID expansion in modern Bash. The legacy fallback spawns
+ # a child, whose output can be interrupted by TERM; its PID is checked
+ # at startup, in the subshell, and by each TERM handler instead.
+ if [[ -n "${BASHPID:-}" ]]; then
+  fixture_self_pid observed
+  [[ "$observed" == "$main" ]] || exit 99
+ fi
+done
+wait "$sender"
+printf 'TERMS %s\n' "$handled"
+`
+	root := t.TempDir()
+	cmd := exec.CommandContext(ctx, "bash", "-c", script, "fixture-pid", root)
+	cmd.Env = append(os.Environ(), "CASE_DIR="+root)
+	out, err, diagnostic := runScheduleHarnessCommand(ctx, cmd, root)
+	if err != nil {
+		t.Fatalf("PID helper signal execution: %v\n%s\n%s", err, out, diagnostic)
+	}
+	mainPID := strconv.Itoa(cmd.Process.Pid)
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 3 || lines[0] != "MAIN "+mainPID || lines[2] != "TERMS 200" {
+		t.Fatalf("unexpected PID/TERM result: %s", out)
+	}
+	child := strings.Fields(lines[1])
+	if len(child) != 3 || child[0] != "CHILD" || child[1] != child[2] || child[1] == mainPID {
+		t.Fatalf("subshell did not identify its actual process: %s", out)
 	}
 }

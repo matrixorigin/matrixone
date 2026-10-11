@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -535,4 +536,87 @@ func recoveryVersionResult(t *testing.T, v versions.Version) executor.Result {
 	require.NoError(t, executor.AppendFixedRows(res, 1, []uint32{v.VersionOffset}))
 	require.NoError(t, executor.AppendFixedRows(res, 2, []int32{v.State}))
 	return res.GetResult()
+}
+
+func TestUpgradeRetryOwnerCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		owner := stopper.NewStopper(t.Name())
+		t.Cleanup(owner.Stop)
+		entered := make(chan struct{})
+		var result error
+		calls := 0
+		require.NoError(t, owner.RunTask(func(ctx context.Context) {
+			result = retryRun(ctx, runtime.DefaultRuntime().Logger(), "owner", func(context.Context) error {
+				calls++
+				close(entered)
+				return errors.New("transient upgrade failure")
+			})
+		}))
+		<-entered
+		synctest.Wait()
+		stoppedAt := time.Now()
+		owner.Stop()
+		require.ErrorIs(t, result, context.Canceled)
+		require.Equal(t, stoppedAt, time.Now(), "closing the owner must not wait for backoff")
+		require.Equal(t, 1, calls)
+	})
+}
+
+func TestUpgradeRetryCancellationContracts(t *testing.T) {
+	t.Run("already canceled", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			calls := 0
+			err := retryRun(ctx, runtime.DefaultRuntime().Logger(), "canceled", func(context.Context) error {
+				calls++
+				return errors.New("must not start")
+			})
+			require.ErrorIs(t, err, context.Canceled)
+			require.Zero(t, calls)
+		})
+	})
+	t.Run("deadline during backoff", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+			defer cancel()
+			start := time.Now()
+			calls := 0
+			err := retryRun(ctx, runtime.DefaultRuntime().Logger(), "deadline", func(context.Context) error {
+				calls++
+				return errors.New("transient upgrade failure")
+			})
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.Equal(t, 500*time.Millisecond, time.Since(start))
+			require.Equal(t, 1, calls)
+		})
+	})
+	t.Run("success concurrent with cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		calls := 0
+		err := retryRun(ctx, runtime.DefaultRuntime().Logger(), "committed", func(context.Context) error {
+			calls++
+			cancel()
+			return nil
+		})
+		require.NoError(t, err, "a successful attempt must keep its result")
+		require.Equal(t, 1, calls)
+	})
+}
+
+func TestUpgradeRetryBackoff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		var attempts []time.Duration
+		err := retryRun(t.Context(), runtime.DefaultRuntime().Logger(), "backoff", func(context.Context) error {
+			attempts = append(attempts, time.Since(start))
+			if len(attempts) < 7 {
+				return errors.New("transient upgrade failure")
+			}
+			return nil
+		})
+		require.NoError(t, err)
+		require.Equal(t, []time.Duration{0, time.Second, 3 * time.Second, 7 * time.Second, 15 * time.Second, 25 * time.Second, 35 * time.Second}, attempts)
+	})
 }
