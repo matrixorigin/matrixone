@@ -247,8 +247,13 @@ func TestBasicClusterUsesShortStartupRetryIntervals(t *testing.T) {
 			assert.Equal(t, 500*time.Millisecond, cfg.LogService.HAKeeperBootstrapRetryInterval.Duration)
 		case metadata.ServiceType_TN:
 			assert.Equal(t, 100*time.Millisecond, cfg.HAKeeperRunningRetryInterval.Duration)
+			assert.Equal(t, 5*time.Second, cfg.getTNServiceConfig().LockService.KeepBindTimeout.Duration)
 		case metadata.ServiceType_CN:
 			assert.Equal(t, 100*time.Millisecond, cfg.TNShardReadyRetryInterval.Duration)
+			assert.Equal(t, 100*time.Millisecond, cfg.CN.LockService.KeepBindDuration.Duration)
+			// Retention keeps its zero-valued production defaults until service validation.
+			assert.Zero(t, cfg.CN.LockService.KeepRemoteLockDuration.Duration)
+			assert.Zero(t, cfg.CN.LockService.RemoteLockTimeout.Duration)
 			assert.True(t, cfg.CN.AutoIncrement.EnableAutoIDCache)
 		}
 		return true

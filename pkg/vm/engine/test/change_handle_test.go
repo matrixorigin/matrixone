@@ -4374,7 +4374,7 @@ func TestCancelIteration1(t *testing.T) {
 			types.TS,
 			[]*iscp.JobStatus,
 			[]uint64,
-		) (jobSpec []*iscp.JobSpec, prevStatus []*iscp.JobStatus, err error) {
+		) (jobSpec []*iscp.JobSpec, prevStatus []*iscp.JobStatus, committedWatermark []types.TS, err error) {
 			cancelCh <- struct{}{}
 			<-cancelCh
 			return []*iscp.JobSpec{
@@ -4391,7 +4391,7 @@ func TestCancelIteration1(t *testing.T) {
 				{
 					Stage: iscp.JobStage_Running,
 				},
-			}, nil
+			}, []types.TS{{}}, nil
 		},
 	)
 	defer stub.Reset()
@@ -4482,7 +4482,7 @@ func TestCancelIteration2(t *testing.T) {
 			types.TS,
 			[]*iscp.JobStatus,
 			[]uint64,
-		) (jobSpec []*iscp.JobSpec, prevStatus []*iscp.JobStatus, err error) {
+		) (jobSpec []*iscp.JobSpec, prevStatus []*iscp.JobStatus, committedWatermark []types.TS, err error) {
 			return []*iscp.JobSpec{
 				{
 					ConsumerInfo: iscp.ConsumerInfo{
@@ -4497,7 +4497,7 @@ func TestCancelIteration2(t *testing.T) {
 				{
 					Stage: iscp.JobStage_Running,
 				},
-			}, nil
+			}, []types.TS{{}}, nil
 		},
 	)
 	defer stub.Reset()

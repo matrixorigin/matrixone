@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -77,6 +78,16 @@ func TestCheckFileExistCsvGlobListsEveryMatch(t *testing.T) {
 	require.Equal(t, "etl:/glob/part-*.csv", name)
 	require.Equal(t, "etl:/glob/part-*.csv", param.Filepath)
 	require.Equal(t, int64(len("1,a\n")+len("2,bb\n3,ccc\n")), param.FileSize)
+}
+
+func TestCheckFileExistRevalidatesRetainedS3Stage(t *testing.T) {
+	compCtx, proc, _ := newLoadGlobTestCtx(t)
+	proc.GetStageCache().Set("retained_stage", stage.StageDef{Name: "retained_stage", Status: "disabled"})
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		ScanType: tree.S3, Filepath: "bound/input.csv", StageFilepath: "stage://retained_stage/input.csv",
+	}, ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "bound"}}}
+	_, err := checkFileExist(param, compCtx)
+	require.ErrorContains(t, err, "stage retained_stage is disabled")
 }
 
 func TestCheckFileExistGlobMatchingOneFileCollapsesToThatFile(t *testing.T) {

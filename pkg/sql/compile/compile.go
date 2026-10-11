@@ -99,6 +99,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -2569,6 +2570,14 @@ func (c *Compile) getExternParam(proc *process.Process, externScan *plan.ExternS
 	param.ExternType = externScan.Type
 	param.FileService = c.proc.Base.FileService
 	param.Ctx = c.proc.Ctx
+
+	if externScan.Type == int32(plan.ExternType_LOAD) && param.StageFilepath != "" {
+		// Keep the prepared plan's bound source and derived file metadata, but
+		// authorize its original stage dependency against this execution's catalog.
+		if _, err := stageutil.UrlToStageDef(param.StageFilepath, proc); err != nil {
+			return nil, err
+		}
+	}
 
 	if externScan.Type == int32(plan.ExternType_EXTERNAL_TB) || externScan.Type == int32(plan.ExternType_RESULT_SCAN) {
 		switch param.ScanType {
