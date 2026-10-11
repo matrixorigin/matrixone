@@ -167,10 +167,6 @@ func checkIndexKeypartSupportability(context context.Context, keyParts []*tree.K
 	return nil
 }
 
-func indexTableKeyTypeForSinglePart(col *ColDef, keyPart *tree.KeyPart) Type {
-	return indexTableKeyTypeForSinglePartWithFormat(col, keyPart, collation.KeyFormatLegacy)
-}
-
 // indexTableKeyTypeForSinglePartWithFormat describes the physical payload of
 // a hidden one-part index column.  Legacy indexes retain the source type and
 // bytes.  A future versioned collation format stores opaque comparison keys,

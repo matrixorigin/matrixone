@@ -99,33 +99,33 @@ func TestIndexTableKeyTypeForPrefix(t *testing.T) {
 
 func TestIndexTableKeyTypeForSinglePart(t *testing.T) {
 	t.Run("nil column returns empty type", func(t *testing.T) {
-		require.Equal(t, Type{}, indexTableKeyTypeForSinglePart(nil, keyPartWithLength("t", 10)))
+		require.Equal(t, Type{}, indexTableKeyTypeForSinglePartWithFormat(nil, keyPartWithLength("t", 10), collation.KeyFormatLegacy))
 	})
 
 	t.Run("text prefix maps to varchar", func(t *testing.T) {
 		col := &ColDef{Typ: Type{Id: int32(types.T_text), Width: int32(types.MaxVarcharLen)}}
-		got := indexTableKeyTypeForSinglePart(col, keyPartWithLength("t", 10))
+		got := indexTableKeyTypeForSinglePartWithFormat(col, keyPartWithLength("t", 10), collation.KeyFormatLegacy)
 		require.Equal(t, int32(types.T_varchar), got.Id)
 		require.Equal(t, int32(types.MaxVarcharLen), got.Width)
 	})
 
 	t.Run("blob prefix maps to varbinary", func(t *testing.T) {
 		col := &ColDef{Typ: Type{Id: int32(types.T_blob), Width: int32(types.MaxVarBinaryLen)}}
-		got := indexTableKeyTypeForSinglePart(col, keyPartWithLength("b", 10))
+		got := indexTableKeyTypeForSinglePartWithFormat(col, keyPartWithLength("b", 10), collation.KeyFormatLegacy)
 		require.Equal(t, int32(types.T_varbinary), got.Id)
 		require.Equal(t, int32(types.MaxVarBinaryLen), got.Width)
 	})
 
 	t.Run("non prefixable column keeps original type even with length", func(t *testing.T) {
 		col := &ColDef{Typ: Type{Id: int32(types.T_varchar), Width: 50, Scale: 0}}
-		got := indexTableKeyTypeForSinglePart(col, keyPartWithLength("v", 10))
+		got := indexTableKeyTypeForSinglePartWithFormat(col, keyPartWithLength("v", 10), collation.KeyFormatLegacy)
 		require.Equal(t, int32(types.T_varchar), got.Id)
 		require.Equal(t, int32(50), got.Width)
 	})
 
 	t.Run("no length keeps original type", func(t *testing.T) {
 		col := &ColDef{Typ: Type{Id: int32(types.T_text), Width: 100, Scale: 2}}
-		got := indexTableKeyTypeForSinglePart(col, keyPartWithLength("t", 0))
+		got := indexTableKeyTypeForSinglePartWithFormat(col, keyPartWithLength("t", 0), collation.KeyFormatLegacy)
 		require.Equal(t, int32(types.T_text), got.Id)
 		require.Equal(t, int32(100), got.Width)
 		require.Equal(t, int32(2), got.Scale)
@@ -133,14 +133,14 @@ func TestIndexTableKeyTypeForSinglePart(t *testing.T) {
 
 	t.Run("nil key part keeps original type", func(t *testing.T) {
 		col := &ColDef{Typ: Type{Id: int32(types.T_text), Width: 100}}
-		got := indexTableKeyTypeForSinglePart(col, nil)
+		got := indexTableKeyTypeForSinglePartWithFormat(col, nil, collation.KeyFormatLegacy)
 		require.Equal(t, int32(types.T_text), got.Id)
 		require.Equal(t, int32(100), got.Width)
 	})
 
 	t.Run("enum preserves enumvalues", func(t *testing.T) {
 		col := &ColDef{Typ: Type{Id: int32(types.T_enum), Enumvalues: "new,paid,shipped"}}
-		got := indexTableKeyTypeForSinglePart(col, keyPartWithLength("e", 0))
+		got := indexTableKeyTypeForSinglePartWithFormat(col, keyPartWithLength("e", 0), collation.KeyFormatLegacy)
 		require.Equal(t, int32(types.T_enum), got.Id)
 		require.Equal(t, "new,paid,shipped", got.Enumvalues)
 	})
@@ -150,7 +150,7 @@ func TestIndexTableKeyTypeForSinglePart(t *testing.T) {
 	// This test only guards against accidental regressions in the helper itself.
 	t.Run("set preserves enumvalues (defensive, unreachable path)", func(t *testing.T) {
 		col := &ColDef{Typ: Type{Id: int32(types.T_uint64), Enumvalues: "a,b,c"}}
-		got := indexTableKeyTypeForSinglePart(col, keyPartWithLength("s", 0))
+		got := indexTableKeyTypeForSinglePartWithFormat(col, keyPartWithLength("s", 0), collation.KeyFormatLegacy)
 		require.Equal(t, int32(types.T_uint64), got.Id)
 		require.Equal(t, "a,b,c", got.Enumvalues)
 	})

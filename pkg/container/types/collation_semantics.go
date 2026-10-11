@@ -96,17 +96,21 @@ func CollationKeyOrOriginal(charset uint8, value []byte) []byte {
 }
 
 // ValidateCollationValue checks the admission contract for a typed native
-// Unicode string. Unlike CollationKeyOrOriginal, which deliberately retains a
-// tagged fallback for comparison-only callers, typed values must not carry
-// malformed UTF-8 or a value outside the charset repertoire. Rejecting those
-// bytes at the typed write boundary prevents a binary payload from aliasing a
-// valid UCA key after a later vector loses its collation metadata.
+// Unicode string without materializing a comparison key. Unlike
+// CollationKeyOrOriginal, which deliberately retains a tagged fallback for
+// comparison-only callers, typed values must not carry malformed UTF-8 or a
+// value outside the charset repertoire. Rejecting those bytes at the typed
+// write boundary prevents a binary payload from aliasing a valid UCA key after
+// a later vector loses its collation metadata.
 func ValidateCollationValue(typ Type, value []byte) error {
 	if !IsUnicodeCollation(typ.Charset) || !isUnicodeStringType(typ.Oid) {
 		return nil
 	}
-	_, err := CollationKey(typ.Charset, nil, value)
-	return err
+	domain, ok := CollationDomainForCharset(typ.Charset)
+	if !ok {
+		return nil
+	}
+	return domain.ValidateValue(value)
 }
 
 func isUnicodeStringType(oid T) bool {
