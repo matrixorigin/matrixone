@@ -103,11 +103,9 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 		return nil, err
 	}
 
-	nProbe := int64(20)
-	if nProbeIf, err2 := builder.compCtx.ResolveVariable("probe_limit", true, false); err2 != nil {
-		return nil, err2
-	} else if nProbeIf != nil {
-		nProbe = nProbeIf.(int64)
+	nProbe, err := builder.resolveInt64Variable("probe_limit", 20)
+	if err != nil {
+		return nil, err
 	}
 
 	gpuMultiSim, err := builder.resolveInt64Variable("gpu_multi_simulation", 0)
