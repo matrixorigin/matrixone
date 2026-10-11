@@ -75,3 +75,13 @@ Matched public SQL runs with 5,000 actual tables measured baseline DROP at 101.8
 No mixed-version upgrade protocol is required. No existing-data validation is added to declarations authored with foreign_key_checks=0.
 
 Online MERGE/PICK owns stage initialization, batch production/application, and cleanup synchronously. LCA SQL and retry-capable apply SQL cannot overlap in their shared transaction; online shard delivery uses one execution lane, while hash construction and read-only DIFF retain parallelism. This removes retry-triggered sibling cancellation without adding SQL locks or result spooling. Design amendment: `gpt-6.1-sol/xhigh`, session `01a12a33-9b70-7733-a833-0c569d079da9`.
+
+## CI boundary correction
+
+CTAS keeps private source AST copies so privilege binding and admission retries cannot mutate the user statement. Fresh statement/PREPARE binding owns deprecation warnings; privilege-only binding and internal compile retries use the existing internal warning origin and restore the compiler context on return. The existing statement-local call-site set still distinguishes separate calls, including identical expressions.
+
+Manual SQL task execution retains the executor/storage completion owner. After the executor returns, the frontend uses its existing cluster commit-timestamp synchronization once before returning either success or the original execution error. Synchronization uses the same detached execution context as task completion, with existing per-RPC deadlines; body timeout and client cancellation cannot cancel that context. Admission/completion errors keep their existing result semantics. Synchronization remains best effort when a metadata writer cannot be reached; no polling layer or task state is added.
+
+Design amendment: `gpt-6.1-sol/xhigh`, session `01a12a9f-73e7-7541-9066-b9d2cec454f2`. Validate CTAS warning counts and AST isolation, task completion-before-fence ordering and error preservation, and immediate terminal-state reads in the existing public task regression.
+
+The embedded-prebuild join cancellation fixture uses the production helper grace instead of a one-second override below the runner's supported minimum. Its existing FIFO fixture pauses after descendants drain and before completion acknowledgment; the parent releases it after five actual grace ticks. Forced-KILL/missing-acknowledgment behavior remains with its existing preservation tests. Design amendment: `gpt-6.1-sol/xhigh`, session `01a12abd-ec65-7d93-bb2c-c9af5229ddba`.
