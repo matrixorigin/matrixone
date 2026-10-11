@@ -29,7 +29,8 @@ and retains safe summaries. Leave version-1 historical records/tests readable;
 an explicitly versioned v2 input selects the new contract. Extending the legacy
 TAE route would violate the approved MO-reader scope. Keeping rows in memory
 would violate result-size bounds. Splitting runner and acceptance PRs was offered
-and rejected by the user; D stays draft until the whole closure passes.
+and rejected by the user. D stays draft while implementation or required local
+evidence is incomplete; final acceptance also requires CI and reviewer approval.
 
 ## Routes, data and schedule
 
@@ -184,11 +185,12 @@ only at stream-profile changes, retaining committed immutable datasets.
 Defaults: 6 GiB GPU, 16 GiB native host, existing 64 MiB windows, one active plus
 sixteen waiting queries, one-hour query and three-hour profiling deadlines.
 
-Readiness requires all exact/public/cleanup/resource/sanitizer/performance gates,
+Merge readiness requires all exact/public/cleanup/resource/sanitizer/performance gates,
 matched Native A/B/current baselines and required CI/reviewer approval. The
 known cuDF pinned-pool and CUB reports require matched controls and steady
-allocation evidence. D stays draft until all local and external gates pass.
-E/F and Docker work remain excluded.
+allocation evidence. Complete implementation and local evidence permit marking
+D ready for review. Required CI and reviewer approval gate final acceptance and
+merge. E/F and Docker work remain excluded.
 
 ## Implementation and execution
 
@@ -308,5 +310,5 @@ allocation profiles have zero unexplained warmed growth, all ten matched numeric
 ratios pass 1.1, and the lifecycle and raw sanitizer control proofs satisfy the
 combined local validator. The GPU route was slower overall than native MO on the
 recorded hardware. Capture identities and the original contexts of qualified
-native proofs remain intact. Required CI and reviewer approval still gate D
-readiness and final acceptance.
+native proofs remain intact. Required CI and reviewer approval still gate final
+acceptance and merge; reviewer approval follows the ready-for-review handoff.

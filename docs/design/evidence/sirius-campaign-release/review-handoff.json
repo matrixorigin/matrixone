@@ -1,0 +1,86 @@
+{
+  "authoritative_base_revision": "6af999e7b812ced6ef226665a09f9956fe58db9b",
+  "base_changes": [
+    {
+      "pr": 29875,
+      "scope": "CN generation-owned CDC teardown, transaction metadata shutdown guard and remote pipeline causal-error/message-board ownership"
+    },
+    {
+      "pr": 29833,
+      "scope": "disabled-stage authorization and statement-local stage-cache reset"
+    }
+  ],
+  "capture_revision": "9814347c1ce38ec12f51412ef3176ede1501574d",
+  "completed_prior_head_ci": {
+    "changed_code_coverage_percent": 77.92,
+    "coverage_job_url": "https://github.com/matrixorigin/matrixone/actions/runs/38155516748/job/114528413280",
+    "coverage_log_sha256": "308c63aabbb51bbae29bede94a53c750fade3339a750569a50fc7c7ed5550023",
+    "covered_changed_lines": 247,
+    "required_job_url": "https://github.com/matrixorigin/matrixone/actions/runs/38155516748/job/114533195981",
+    "required_status": "SUCCESS",
+    "revision": "b9b434d1da392ea5a090a4aaabc15003b03ace28",
+    "threshold_percent": 75.0,
+    "total_changed_lines": 317
+  },
+  "final_acceptance_complete": false,
+  "handoff": "Implementation and all local evidence are complete; reviewer approval follows ready-for-review. The new delivery head must pass required CI before merge, and reviewer approval is still required.",
+  "reuse_basis": [
+    "Merged stage LOAD/EXPORT authorization does not alter canonical TAE Q1-Q22 expressions or native typed binding. Campaign data is already provisioned and immutable; statement stage-cache reset carries no campaign entries.",
+    "Native source/ABI/SDK, exact lowering, destructive-read clone, bridge, schema descriptors and all collector/acceptance sources are byte-identical. Native lifecycle, sanitizer and matched numeric operands/binaries remain as originally recorded.",
+    "CN CDC workers remain lazy until a CDC task registers; the campaign registers no CDC task. New generation-owned shutdown, transaction gate and remote message/error ownership are validated by the affected consumer normal/race suites.",
+    "Original timing, RSS, Go heap and allocation measurements remain observations at the capture revision. No new delivery revision, timestamp, PID or binary hash replaces a capture identity."
+  ],
+  "scope": "review-handoff-source-qualification",
+  "unchanged_sirius_and_collector_scopes": [
+    "cmd/mo-sirius-campaign",
+    "optools/sirius_campaign.py",
+    "optools/sirius_resource.py",
+    "optools/sirius_acceptance.py",
+    "optools/sirius_campaign_v2.py",
+    "optools/sirius_profile_exit.gdb",
+    "optools/sirius_dataset.py",
+    "pkg/frontend/campaign_schema_evidence.go",
+    "pkg/frontend/mysql_protocol.go",
+    "pkg/sql/compile/siriusbridge",
+    "pkg/sql/compile/sirius_embedded_read.go",
+    "pkg/sql/compile/sirius_read.go",
+    "pkg/sql/compile/sirius_batch.go",
+    "pkg/sql/compile/sirius_backend.go",
+    "pkg/sql/compile/sirius_runtime.go",
+    "pkg/sql/plan/substrait",
+    "third_party/sirius"
+  ],
+  "validation": [
+    {
+      "exit_status": 0,
+      "log_sha256": "e528871f7f83d19abbb4ea1e56b458dcda73174a36ca97207c70bcab3a4287ac",
+      "mode": "normal",
+      "terminal_results": [
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/frontend\t19.715s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/sql/compile\t8.710s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/sql/plan\t7.339s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/sql/plan/substrait\t0.101s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/cnservice\t8.257s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/txn/client\t8.950s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/vm/message\t0.038s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/common/runtime\t0.003s"
+      ],
+      "validation_revision": "d8a4b9e55250b1de9926ff132354c94086e7abfa"
+    },
+    {
+      "exit_status": 0,
+      "log_sha256": "cab112a230dcb547c17bd1bf467bd632eaadb42a4e9615c9185666f3145a024e",
+      "mode": "race",
+      "terminal_results": [
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/frontend\t31.288s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/sql/compile\t10.371s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/cnservice\t9.426s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/txn/client\t10.211s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/vm/message\t1.142s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/common/runtime\t1.010s"
+      ],
+      "validation_revision": "d8a4b9e55250b1de9926ff132354c94086e7abfa"
+    }
+  ],
+  "validation_revision": "d8a4b9e55250b1de9926ff132354c94086e7abfa"
+}

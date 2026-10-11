@@ -88,6 +88,16 @@ MySQL result packets, compiler readers, native bridge and campaign collectors ar
 unchanged. The capture is reused with that explicit source scope; its original
 revision and binary hashes are preserved.
 
+`review-handoff.json` records passing required CI at delivery head `b9b434d1da`
+(77.92% changed-code coverage, 247/317 lines, above 75%) and the later normal
+main merge of #29875/#29833. Eight affected normal suites and six race suites
+cover CN/runtime/transaction/message-board ownership, compiler/frontend
+interactions and stage authorization. Sirius, exact lowering, bridge, schema
+evidence and collector sources remain byte-identical. Original timing, RSS,
+Go heap and allocation measurements retain their capture revision and values.
+The complete implementation can enter review; the new delivery head's required
+CI and reviewer approval still gate final acceptance and merge.
+
 ## Reproduce the artifact acceptance check
 
 From the repository root, run:
