@@ -1439,6 +1439,26 @@ func Test_BuiltIn_MoShowVisibleBinArrayMetadata(t *testing.T) {
 	require.True(t, succeed, tc.info, info)
 }
 
+func Test_BuiltIn_MoShowVisibleBinEnumAndSetPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		oid  types.T
+		want string
+	}{
+		{types.T_enum, `enum('UP','Down word','O''Brien','Back\\slash','Back\\''quote')`},
+		{types.T_uint64, `set('UP','Down word','O''Brien','Back\\slash','Back\\''quote')`},
+	} {
+		encoded, err := types.Encode(&types.Type{Oid: tc.oid})
+		require.NoError(t, err)
+		testCase := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{string(encoded)}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`UP,Down word,O'Brien,Back\slash,Back\'quote`}, nil),
+		}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), builtInMoShowVisibleBinEnum)
+		succeed, info := testCase.RunAndFree()
+		require.True(t, succeed, info)
+	}
+}
+
 func Test_BuiltIn_MoShowVisibleBinGeometryWithLen(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	typeBytes, err := types.Encode(&types.Type{Oid: types.T_geometry})
@@ -1464,18 +1484,23 @@ func Test_BuiltIn_MoShowVisibleBinIntegerMetadata(t *testing.T) {
 		typ  types.Type
 		want string
 	}{
-		{name: "tinyint", typ: types.New(types.T_int8, 0, 0), want: "TINYINT"},
-		{name: "tinyint unsigned", typ: types.New(types.T_uint8, 0, 0), want: "TINYINT UNSIGNED"},
-		{name: "smallint", typ: types.New(types.T_int16, 0, 0), want: "SMALLINT"},
-		{name: "smallint unsigned", typ: types.New(types.T_uint16, 0, 0), want: "SMALLINT UNSIGNED"},
-		{name: "int", typ: types.New(types.T_int32, 0, 0), want: "INT"},
-		{name: "int unsigned", typ: types.New(types.T_uint32, 0, 0), want: "INT UNSIGNED"},
-		{name: "bigint", typ: types.New(types.T_int64, 0, 0), want: "BIGINT"},
-		{name: "bigint unsigned", typ: types.New(types.T_uint64, 0, 0), want: "BIGINT UNSIGNED"},
-		{name: "int with physical width", typ: types.New(types.T_int32, 32, 0), want: "INT(32)"},
-		{name: "bit keeps width zero", typ: types.New(types.T_bit, 0, 0), want: "BIT(0)"},
-		{name: "decimal keeps precision", typ: types.New(types.T_decimal64, 10, 2), want: "DECIMAL(10,2)"},
-		{name: "varchar keeps length", typ: types.New(types.T_varchar, 20, 0), want: "VARCHAR(20)"},
+		{name: "tinyint", typ: types.New(types.T_int8, 0, 0), want: "tinyint"},
+		{name: "tinyint unsigned", typ: types.New(types.T_uint8, 0, 0), want: "tinyint unsigned"},
+		{name: "smallint", typ: types.New(types.T_int16, 0, 0), want: "smallint"},
+		{name: "smallint unsigned", typ: types.New(types.T_uint16, 0, 0), want: "smallint unsigned"},
+		{name: "int", typ: types.New(types.T_int32, 0, 0), want: "int"},
+		{name: "int unsigned", typ: types.New(types.T_uint32, 0, 0), want: "int unsigned"},
+		{name: "bigint", typ: types.New(types.T_int64, 0, 0), want: "bigint"},
+		{name: "bigint unsigned", typ: types.New(types.T_uint64, 0, 0), want: "bigint unsigned"},
+		{name: "int with physical width", typ: types.New(types.T_int32, 32, 0), want: "int"},
+		{name: "uint physical width", typ: types.New(types.T_uint64, 64, 0), want: "bigint unsigned"},
+		{name: "date", typ: types.New(types.T_date, 0, 0), want: "date"},
+		{name: "json", typ: types.New(types.T_json, 0, 0), want: "json"},
+		{name: "float precision and scale", typ: types.New(types.T_float32, 5, 2), want: "float(5,2)"},
+		{name: "datetime precision", typ: types.New(types.T_datetime, 3, 3), want: "datetime(3)"},
+		{name: "bit keeps width zero", typ: types.New(types.T_bit, 0, 0), want: "bit(0)"},
+		{name: "decimal keeps precision", typ: types.New(types.T_decimal64, 10, 2), want: "decimal(10,2)"},
+		{name: "varchar keeps length", typ: types.New(types.T_varchar, 20, 0), want: "varchar(20)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			typeBytes, err := types.Encode(&tc.typ)
@@ -1502,11 +1527,11 @@ func Test_BuiltIn_MoShowVisibleBinTextFamilyWithLen(t *testing.T) {
 		typ  types.Type
 		want string
 	}{
-		{name: "legacy text", typ: types.New(types.T_text, 0, 0), want: "TEXT"},
-		{name: "text", typ: types.New(types.T_text, types.MaxStringSize, 0), want: "TEXT"},
-		{name: "tinytext", typ: types.New(types.T_text, types.MaxTinyTextLen, 0), want: "TINYTEXT"},
-		{name: "mediumtext", typ: types.New(types.T_text, types.MaxMediumTextLen, 0), want: "MEDIUMTEXT"},
-		{name: "longtext", typ: types.New(types.T_text, types.MaxLongTextLen, 0), want: "LONGTEXT"},
+		{name: "legacy text", typ: types.New(types.T_text, 0, 0), want: "text"},
+		{name: "text", typ: types.New(types.T_text, types.MaxStringSize, 0), want: "text"},
+		{name: "tinytext", typ: types.New(types.T_text, types.MaxTinyTextLen, 0), want: "tinytext"},
+		{name: "mediumtext", typ: types.New(types.T_text, types.MaxMediumTextLen, 0), want: "mediumtext"},
+		{name: "longtext", typ: types.New(types.T_text, types.MaxLongTextLen, 0), want: "longtext"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			typeBytes, err := types.Encode(&tc.typ)
@@ -1533,10 +1558,10 @@ func Test_BuiltIn_MoShowVisibleBinBlobFamilyWithLen(t *testing.T) {
 		typ  types.Type
 		want string
 	}{
-		{name: "tinyblob", typ: types.New(types.T_blob, types.MaxTinyTextLen, 0), want: "TINYBLOB"},
-		{name: "blob", typ: types.New(types.T_blob, types.MaxStringSize, 0), want: "BLOB"},
-		{name: "mediumblob", typ: types.New(types.T_blob, types.MaxMediumTextLen, 0), want: "MEDIUMBLOB"},
-		{name: "longblob", typ: types.New(types.T_blob, types.MaxLongTextLen, 0), want: "LONGBLOB"},
+		{name: "tinyblob", typ: types.New(types.T_blob, types.MaxTinyTextLen, 0), want: "tinyblob"},
+		{name: "blob", typ: types.New(types.T_blob, types.MaxStringSize, 0), want: "blob"},
+		{name: "mediumblob", typ: types.New(types.T_blob, types.MaxMediumTextLen, 0), want: "mediumblob"},
+		{name: "longblob", typ: types.New(types.T_blob, types.MaxLongTextLen, 0), want: "longblob"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			typeBytes, err := types.Encode(&tc.typ)
@@ -4170,6 +4195,63 @@ func TestBuiltInUUIDSwapFlagStringCoercion(t *testing.T) {
 			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{u}, nil), builtInBinToUUID)
 			succeed, info = fromBin.RunAndFree()
 			require.True(t, succeed, info)
+		})
+	}
+}
+
+func Test_BuiltIn_MoShowVisibleBinBooleanMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	encoded := make([]string, 0, 7)
+	for _, typ := range []types.Type{
+		types.New(types.T_bool, 0, 0), types.New(types.T_bool, 64, 3), types.New(types.T_bool, -1, 0),
+		types.New(types.T_int32, 32, 0), types.New(types.T_decimal64, 10, 2), types.T_enum.ToType(),
+	} {
+		data, err := types.Encode(&typ)
+		require.NoError(t, err)
+		encoded = append(encoded, string(data))
+	}
+	encoded = append(encoded, "", "")
+	for _, tc := range []struct {
+		mode uint8
+		want []string
+	}{
+		{typNormal, []string{"BOOL", "BOOL", "BOOL", "INT", "DECIMAL", "ENUM", "", ""}},
+		{typWithLen, []string{"boolean", "boolean", "boolean", "int", "decimal(10,2)", "enum('')", "", ""}},
+	} {
+		t.Run(fmt.Sprint(tc.mode), func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), encoded, []bool{false, false, false, false, false, false, true, false}),
+				NewFunctionTestInput(types.T_uint8.ToType(), []uint8{tc.mode}, nil),
+			}
+			want := NewFunctionTestResult(types.T_varchar.ToType(), false, tc.want, []bool{false, false, false, false, false, false, true, true})
+			testCase := NewFunctionTestCase(proc, inputs, want, builtInMoShowVisibleBin)
+			succeed, info := testCase.RunAndFree()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func Test_BuiltIn_MoShowVisibleBinInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	encoded, err := types.Encode(&types.Type{Oid: types.T_int32})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		input string
+		mode  uint8
+		want  string
+	}{
+		{"x", typWithLen, "short type encoding"},
+		{string(encoded), 255, "the second argument must be in [0, 6]"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.input}, nil),
+				NewFunctionTestInput(types.T_uint8.ToType(), []uint8{tc.mode}, nil),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), builtInMoShowVisibleBin)
+			t.Cleanup(testCase.Free)
+			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+			require.ErrorContains(t, testCase.fn(testCase.parameters, testCase.result, proc, testCase.fnLength, nil), tc.want)
+			require.Zero(t, testCase.result.GetResultVector().Length())
 		})
 	}
 }

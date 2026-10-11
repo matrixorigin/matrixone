@@ -674,14 +674,14 @@ func cdcTargetColumnTypeMatches(source plan.Type, target, sinkType string, numer
 	got := normalizeCDCTargetColumnType(target)
 	if sinkType == CDCSinkType_MO && source.Width > 0 &&
 		(types.T(source.Id) == types.T_float32 || types.T(source.Id) == types.T_float64) {
-		// MO's COLUMN_TYPE prints FLOAT(M) and DOUBLE(M) without D. The
+		// Legacy MO COLUMN_TYPE prints FLOAT(M) and DOUBLE(M) without D. The
 		// independent NUMERIC_SCALE field distinguishes omitted D from an
 		// explicit scale, including D=0.
 		name := "float"
 		if types.T(source.Id) == types.T_float64 {
 			name = "double"
 		}
-		if got != fmt.Sprintf("%s(%d)", name, source.Width) {
+		if got != want && got != fmt.Sprintf("%s(%d)", name, source.Width) {
 			return false
 		}
 		return source.Scale < 0 && !numericScale.Valid ||

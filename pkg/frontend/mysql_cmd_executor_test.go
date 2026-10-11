@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,10 +69,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -197,6 +201,71 @@ func TestDoComQueryStopsAfterStatementError(t *testing.T) {
 
 	err = doComQuery(ses, execCtx, &UserInput{sql: query})
 	require.ErrorContains(t, err, "first statement failed")
+}
+
+func TestDoComQueryStageCatalogErrorOverridesStaleCache(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	ses, _ := newAnalyzeHandlerTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetTenantInfo(nil)
+	ses.SetCmd(COM_QUERY)
+	ctx, recordStubs := mockRecordStatement(ctx)
+	defer recordStubs.Reset()
+
+	const query = "select 1"
+	stmts, err := parsers.Parse(ctx, dialect.MYSQL, query, 1)
+	require.NoError(t, err)
+	stageURL := &url.URL{Scheme: "file", Path: "/stale"}
+	catalogErr := moerr.NewBadConfigf(ctx, "stage statement_stage is disabled")
+	lookups := 0
+	catalogExec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		require.Contains(t, sql, "stage_name = 'statement_stage'")
+		lookups++
+		return executor.Result{}, catalogErr
+	})
+	rt := runtime.ServiceRuntime(ses.GetService())
+	oldExec, hadOldExec := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+	rt.SetGlobalVariables(runtime.InternalSQLExecutor, catalogExec)
+	defer func() {
+		if hadOldExec {
+			rt.SetGlobalVariables(runtime.InternalSQLExecutor, oldExec)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(runtime.InternalSQLExecutor, catalogExec)
+		}
+	}()
+
+	cw := mock_frontend.NewMockComputationWrapper(ctrl)
+	cw.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
+	cw.EXPECT().Plan().Return(nil).AnyTimes()
+	cw.EXPECT().Compile(gomock.Any(), gomock.Any()).DoAndReturn(func(*ExecCtx, func(*batch.Batch, *perfcounter.CounterSet) error) (interface{}, error) {
+		_, err := stageutil.UrlToStageDef("stage://statement_stage/file.txt", ses.GetProc())
+		return nil, err
+	}).Times(2)
+	cw.EXPECT().Free().Times(2)
+	wrapperStubs := gostub.Stub(&GetComputationWrapper, func(
+		*ExecCtx, string, string, engine.Engine, *process.Process, *Session,
+	) ([]ComputationWrapper, error) {
+		return []ComputationWrapper{cw}, nil
+	})
+	defer wrapperStubs.Reset()
+
+	// A stale entry must not bypass the catalog, including after the previous
+	// statement failed. Use the real resolver rather than checking map contents.
+	txnOp := ses.txnHandler.txnOp
+	for range 2 {
+		// Restore the fixture's transaction for the next autocommit request.
+		ses.txnHandler.txnOp = txnOp
+		ses.txnHandler.txnCtx = ctx
+		ses.GetProc().GetStageCache().Set("statement_stage", stage.StageDef{
+			Name: "statement_stage", Url: stageURL, Status: "enabled",
+		})
+		execCtx := newTestExecCtx(ctx, ctrl)
+		execCtx.ses = ses
+		err = doComQuery(ses, execCtx, &UserInput{sql: query})
+		require.ErrorIs(t, err, catalogErr)
+	}
+	require.Equal(t, 2, lookups)
 }
 
 func TestExecuteStmtDoesNotCreateLoadLocalPipeBeforeCompileSucceeds(t *testing.T) {

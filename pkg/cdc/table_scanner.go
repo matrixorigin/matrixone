@@ -111,17 +111,7 @@ func WithTableDetectorCleanupWarnThreshold(d time.Duration) TableDetectorOption 
 	}
 }
 
-var (
-	detector *TableDetector
-	once     sync.Once
-)
-
 var cdcScanTableInjected = objectio.CDCScanTableInjected
-
-var getSqlExecutor = func(cnUUID string) executor.SQLExecutor {
-	v, _ := runtime.ServiceRuntime(cnUUID).GetGlobalVariables(runtime.InternalSQLExecutor)
-	return v.(executor.SQLExecutor)
-}
 
 func newTableDetector(exec executor.SQLExecutor, opts ...TableDetectorOption) *TableDetector {
 	options := applyTableDetectorOptions(opts...)
@@ -139,60 +129,54 @@ func newTableDetector(exec executor.SQLExecutor, opts ...TableDetectorOption) *T
 		cleanupPeriod:        options.CleanupPeriod,
 		cleanupWarn:          options.CleanupWarnThreshold,
 		nowFn:                time.Now,
+		scanInterval:         defaultTableScanInterval,
 	}
 	td.scanTableFn = td.scanTable
 	return td
 }
 
-var GetTableDetector = func(cnUUID string) *TableDetector {
-	once.Do(func() {
-		detector = &TableDetector{
-			Mp:                   make(map[uint32]TblMap),
-			Callbacks:            make(map[string]TableCallback),
-			exec:                 getSqlExecutor(cnUUID),
-			CallBackAccountId:    make(map[string]uint32),
-			SubscribedAccountIds: make(map[uint32][]string),
-			CallBackDbName:       make(map[string][]string),
-			SubscribedDbNames:    make(map[string][]string),
-			CallBackTableName:    make(map[string][]string),
-			SubscribedTableNames: make(map[string][]string),
-			cdcStateManager:      NewCDCStateManager(),
-			cleanupPeriod:        DefaultWatermarkCleanupPeriod,
-			cleanupWarn:          DefaultCleanupWarnThreshold,
-			nowFn:                time.Now,
-		}
-		detector.scanTableFn = detector.scanTable
-	})
-
-	// Defensive: Ensure scanTableFn is always set (for testing scenarios)
-	// In production, this should already be set by once.Do above
-	// In tests with mocks, this prevents nil pointer dereference
-	if detector != nil && detector.scanTableFn == nil {
-		detector.scanTableFn = detector.scanTable
-	}
-
-	return detector
+// InitTableDetector publishes discovery in the existing service runtime. It
+// starts no workers until a task registers, and its CN owns shutdown.
+func InitTableDetector(rt runtime.Runtime, exec executor.SQLExecutor) *TableDetector {
+	d := newTableDetector(exec)
+	rt.SetGlobalVariables(runtime.CDCTableDetector, d)
+	return d
 }
 
-// ResetTableDetectorForTest replaces the process-local detector after an
-// embedded CN has been stopped and recreated. Production has one detector per
-// CN process; SQL integration tests start several CN lifecycles in one Go
-// process, so retaining the old SQL executor would make scans query a closed
-// runtime.
-// An optional interval scopes faster periodic discovery to a private fixture.
-// Call only with the previous fixture stopped and before registering callbacks.
+func TableDetectorFromRuntime(rt runtime.Runtime) *TableDetector {
+	if rt == nil {
+		return nil
+	}
+	v, _ := rt.GetGlobalVariables(runtime.CDCTableDetector)
+	d, _ := v.(*TableDetector)
+	return d
+}
+
+var GetTableDetector = func(cnUUID string) *TableDetector {
+	d := TableDetectorFromRuntime(runtime.ServiceRuntime(cnUUID))
+	if d == nil {
+		panic(moerr.NewInvalidStateNoCtx("CDC detector is not initialized for CN " + cnUUID))
+	}
+	return d
+}
+
+// ResetTableDetectorForTest scopes a private scan cadence to the selected CN.
+// Production restart constructs a new detector through the CN owner.
 func ResetTableDetectorForTest(cnUUID string, scanInterval ...time.Duration) {
-	if detector != nil {
-		detector.Close()
+	rt := runtime.ServiceRuntime(cnUUID)
+	if d := TableDetectorFromRuntime(rt); d != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), tableDetectorCloseTimeout)
+		err := d.CloseAndWait(ctx)
+		cancel()
+		if err != nil {
+			panic(err)
+		}
 	}
-	replacement := newTableDetector(getSqlExecutor(cnUUID))
-	replacement.scanInterval = defaultTableScanInterval
+	v, _ := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+	d := InitTableDetector(rt, v.(executor.SQLExecutor))
 	if len(scanInterval) > 0 && scanInterval[0] > 0 {
-		replacement.scanInterval = scanInterval[0]
+		d.scanInterval = scanInterval[0]
 	}
-	// Reset also works before the first Get; once must not overwrite it.
-	once.Do(func() {})
-	detector = replacement
 }
 
 // TblMap key is dbName.tableName, e.g. db1.t1
@@ -345,7 +329,7 @@ type TableDetector struct {
 	// tablename -> [taska, taskb ...]
 	SubscribedTableNames map[string][]string
 
-	scanTableFn  func() error
+	scanTableFn  func(context.Context) error
 	scanInterval time.Duration // Immutable after construction/test reset.
 
 	// to make sure there is at most only one handleNewTables running, so the truncate info will not be lost
@@ -358,12 +342,18 @@ type TableDetector struct {
 	nowFn           func() time.Time
 
 	loopRunning atomic.Bool
-	loopSeq     atomic.Uint64
-	currentLoop uint64
+	ctx         context.Context
+	drained     chan struct{}
+	active      int
+	closed      bool
 }
 
 func (s *TableDetector) RegisterIfAbsent(id string, accountId uint32, dbs []string, tables []string, cb TableCallback) bool {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return false
+	}
 	if _, exists := s.Callbacks[id]; exists {
 		s.mu.Unlock()
 		return false
@@ -462,48 +452,54 @@ func (s *TableDetector) UnRegister(id string) {
 	)
 }
 
-func (s *TableDetector) startScanLoop() {
-	if s.loopRunning.Load() {
-		return
+func (s *TableDetector) initLifetimeLocked() {
+	if s.ctx == nil {
+		s.ctx, s.cancel = context.WithCancel(defines.AttachAccountId(context.Background(), catalog.System_Account))
+		s.drained = make(chan struct{})
 	}
-
-	ctx, newCancel := context.WithCancel(
-		defines.AttachAccountId(
-			context.Background(),
-			catalog.System_Account,
-		),
-	)
-
-	if !s.loopRunning.CompareAndSwap(false, true) {
-		newCancel()
-		return
-	}
-
-	loopID := s.loopSeq.Add(1)
-	var previous context.CancelFunc
-	s.mu.Lock()
-	previous = s.cancel
-	s.cancel = newCancel
-	s.currentLoop = loopID
-	s.mu.Unlock()
-
-	if previous != nil {
-		previous()
-	}
-
-	go s.runScanLoop(ctx, newCancel, loopID)
 }
 
-func (s *TableDetector) runScanLoop(ctx context.Context, cancel context.CancelFunc, loopID uint64) {
-	defer func() {
-		s.mu.Lock()
-		if s.currentLoop == loopID {
-			s.cancel = nil
-		}
-		s.mu.Unlock()
-		s.loopRunning.Store(false)
+func (s *TableDetector) Context() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLifetimeLocked()
+	return s.ctx
+}
+
+func (s *TableDetector) beginWork() (context.Context, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, false
+	}
+	s.initLifetimeLocked()
+	s.active++
+	return s.ctx, true
+}
+
+func (s *TableDetector) endWork() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.active--
+	if s.closed && s.active == 0 {
+		close(s.drained)
+	}
+}
+
+func (s *TableDetector) startScanLoop() {
+	ctx, ok := s.beginWork()
+	if !ok {
+		return
+	}
+	if !s.loopRunning.CompareAndSwap(false, true) {
+		s.endWork()
+		return
+	}
+	go func() {
+		defer s.endWork()
+		defer s.loopRunning.Store(false)
+		s.scanTableLoop(ctx)
 	}()
-	s.scanTableLoop(ctx)
 }
 
 func (s *TableDetector) scanTableLoop(ctx context.Context) {
@@ -574,7 +570,7 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 				continue
 			}
 
-			go s.processCallback(ctx, lastMp)
+			s.startCallback(ctx, lastMp)
 		case <-printStateTicker.C:
 			s.cdcStateManager.PrintActiveRunners(DefaultSlowThreshold)
 		case <-cleanupTicker.C:
@@ -584,13 +580,16 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 }
 
 func (s *TableDetector) scanAndProcess(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
 	// Defensive: ensure scanTableFn is set (for testing scenarios)
 	if s.scanTableFn == nil {
 		logutil.Warn("cdc.table_detector.scan_skipped", zap.String("reason", "scanTableFn is nil"))
 		return
 	}
 
-	if err := s.scanTableFn(); err != nil {
+	if err := s.scanTableFn(ctx); err != nil {
 		logutil.Error("cdc.table_detector.scan_error", zap.Error(err))
 		return
 	}
@@ -600,7 +599,7 @@ func (s *TableDetector) scanAndProcess(ctx context.Context) {
 	mp := s.lastMp
 	s.mu.Unlock()
 
-	go s.processCallback(ctx, mp)
+	s.startCallback(ctx, mp)
 }
 
 // RunTableDetectorScanForTest performs one real catalog scan and callback
@@ -609,7 +608,12 @@ func (s *TableDetector) scanAndProcess(ctx context.Context) {
 // pipeline callback remain the production implementations.
 func RunTableDetectorScanForTest(cnUUID string) error {
 	detector := GetTableDetector(cnUUID)
-	if err := detector.scanTable(); err != nil {
+	ctx, ok := detector.beginWork()
+	if !ok {
+		return moerr.NewClientClosedNoCtx()
+	}
+	defer detector.endWork()
+	if err := detector.scanTable(ctx); err != nil {
 		return err
 	}
 	detector.mu.Lock()
@@ -623,17 +627,39 @@ func RunTableDetectorScanForTest(cnUUID string) error {
 			callbackCount, subscriptionCount,
 		)
 	}
-	detector.processCallback(context.Background(), tables)
-	return nil
+	detector.processCallback(ctx, tables)
+	return ctx.Err()
+}
+
+// Claim callback work before launching it, using the existing serialization
+// flag. Retry ticks cannot accumulate callbacks and Close can join every owner.
+func (s *TableDetector) admitCallback() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.handling {
+		return false
+	}
+	s.initLifetimeLocked()
+	s.active++
+	s.handling = true
+	return true
+}
+
+func (s *TableDetector) startCallback(ctx context.Context, tables map[uint32]TblMap) {
+	if s.admitCallback() {
+		go s.processAdmittedCallback(ctx, tables)
+	}
 }
 
 func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]TblMap) {
-	s.mu.Lock()
-	if s.handling {
-		s.mu.Unlock()
-		return
+	if s.admitCallback() {
+		s.processAdmittedCallback(ctx, tables)
 	}
-	s.handling = true
+}
+
+func (s *TableDetector) processAdmittedCallback(ctx context.Context, tables map[uint32]TblMap) {
+	defer s.endWork()
+	s.mu.Lock()
 	type subscriber struct {
 		callback TableCallback
 		account  uint32
@@ -678,6 +704,9 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 	}()
 
 	for _, subscriber := range callbacks {
+		if ctx.Err() != nil || s.Context().Err() != nil {
+			return
+		}
 		view := map[uint32]TblMap{
 			subscriber.account: cloneTableSnapshot(tablesSnapshot[subscriber.account]),
 		}
@@ -761,19 +790,49 @@ func (s *TableDetector) now() time.Time {
 	return time.Now()
 }
 
-func (s *TableDetector) Close() {
+const tableDetectorCloseTimeout = 30 * time.Second
+
+// Stop seals discovery before its task owner cancels and drains runner work.
+func (s *TableDetector) Stop() {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.initLifetimeLocked()
+	s.closed = true
 	cancel := s.cancel
 	s.cancel = nil
+	if s.active == 0 {
+		close(s.drained)
+	}
+	cancel()
 	s.mu.Unlock()
+}
 
-	if cancel != nil {
-		cancel()
+func (s *TableDetector) CloseAndWait(ctx context.Context) error {
+	s.Stop()
+	s.mu.Lock()
+	done := s.drained
+	s.mu.Unlock()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
-func (s *TableDetector) scanTable() error {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseTableDetectorScan)
+func (s *TableDetector) Close() {
+	ctx, cancel := context.WithTimeout(context.Background(), tableDetectorCloseTimeout)
+	defer cancel()
+	if err := s.CloseAndWait(ctx); err != nil {
+		logutil.Error("cdc.table_detector.close_incomplete", zap.Error(err))
+	}
+}
+
+func (s *TableDetector) scanTable(parent context.Context) error {
+	ctx, cancel := context.WithTimeoutCause(parent, 10*time.Second, moerr.CauseTableDetectorScan)
 	defer cancel()
 	var (
 		accountIds string
