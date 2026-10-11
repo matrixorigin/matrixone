@@ -1151,6 +1151,20 @@ func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 	return false
 }
 
+// isValidEmptyEnumOrSet reports whether "" is a valid value for the column:
+// always for SET (stored as uint64 with member values), and for ENUM only
+// when the empty string is a declared member.
+func isValidEmptyEnumOrSet(id types.T, enumValues string) bool {
+	switch {
+	case id == types.T_uint64 && len(enumValues) > 0:
+		return true
+	case id == types.T_enum:
+		_, err := types.ParseEnum(enumValues, "")
+		return err == nil
+	}
+	return false
+}
+
 func shouldLoadEmptyNumericAsZero(param *ExternalParam, id types.T) bool {
 	if param == nil || param.Extern == nil ||
 		param.Extern.ExternType != int32(plan.ExternType_LOAD) ||
@@ -1589,7 +1603,9 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	if emptyNumericField {
 		field.Val = "0"
 		isNullOrEmpty = false
-	} else if trimSpace && len(field.Val) == 0 && !isNullOrEmpty {
+	} else if trimSpace && len(field.Val) == 0 && !isNullOrEmpty && !isValidEmptyEnumOrSet(id, col.Typ.Enumvalues) {
+		// A declared empty ENUM member ('') and the empty SET are valid values
+		// distinct from SQL NULL, so only explicit NULL markers become NULL.
 		isNullOrEmpty = true
 	}
 	if isNullOrEmpty {
