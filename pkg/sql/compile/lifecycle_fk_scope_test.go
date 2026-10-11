@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -298,4 +299,63 @@ func TestCreateForeignKeyAdmissionPrecedesEffects(t *testing.T) {
 		scope := &Scope{Plan: &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{Definition: &plan.DataDefinition_CreateTable{CreateTable: q}}}}}
 		require.ErrorIs(t, scope.CreateTable(&Compile{proc: proc, e: eng}), stop)
 	}
+}
+
+func TestReplacementForeignKeyReceiptScopeAndFrontier(t *testing.T) {
+	for _, mode := range []txn.TxnMode{txn.TxnMode_Pessimistic, txn.TxnMode_Optimistic} {
+		for _, isolation := range []txn.TxnIsolation{txn.TxnIsolation_RC, txn.TxnIsolation_SI} {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+			_, proc.Base.TxnOperator = newTestTxnClientAndOpWithModeIsolation(ctrl, mode, isolation)
+			c := &Compile{proc: proc}
+			target := plan2.FkReferKey{Db: "db", Tbl: "t"}
+			catalog := &replacementForeignKeyCatalog{target: target}
+			admission := dropLifecycleAdmission{createNames: map[plan2.FkReferKey]struct{}{target: {}}, foreignKeyCatalog: catalog}
+			var nested context.Context
+			require.NoError(t, c.withDropLifecycle(admission, func() error {
+				nested = proc.Ctx
+				got, err := c.replacementForeignKeyCatalog("db", "t")
+				require.NoError(t, err)
+				require.Same(t, catalog, got)
+				_, err = c.replacementForeignKeyCatalog("db", "other")
+				require.Error(t, err)
+				q := &plan.CreateTable{Database: "db", TableDef: &plan.TableDef{Name: "t"}}
+				// No engine/barrier is installed: RC must borrow the pre-DROP frontier.
+				require.NoError(t, c.admitCreateNames(q, "db"))
+				if mode == txn.TxnMode_Pessimistic && isolation == txn.TxnIsolation_RC {
+					require.True(t, c.createNamePinsAdmitted)
+				}
+				proc.Ctx = defines.AttachAccountId(proc.Ctx, 8)
+				_, err = c.replacementForeignKeyCatalog("db", "t")
+				require.Error(t, err)
+				proc.Ctx = nested
+				owner := proc.Base.TxnOperator
+				_, other := newTestTxnClientAndOpWithPessimistic(ctrl)
+				proc.Base.TxnOperator = other
+				_, err = c.replacementForeignKeyCatalog("db", "t")
+				require.Error(t, err)
+				proc.Base.TxnOperator = owner
+				return nil
+			}))
+			proc.Ctx = nested
+			_, err := c.replacementForeignKeyCatalog("db", "t")
+			require.Error(t, err, "receipt expires after outer replacement")
+		}
+	}
+}
+
+func TestCreateNameAdmissionExtractsCloneRetryDomain(t *testing.T) {
+	create := &plan.CreateTable{Database: "db", TableDef: &plan.TableDef{Name: "t"}, UnresolvedFkParents: []*plan.ObjectRef{{DbName: "db", ObjName: "p"}}}
+	ordinary := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{Definition: &plan.DataDefinition_CreateTable{CreateTable: create}}}}
+	clone := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{Definition: &plan.DataDefinition_CloneTable{CloneTable: &plan.CloneTable{CreateTable: ordinary}}}}}
+	require.Same(t, create, createTableForNameAdmission(clone))
+	require.True(t, sameCreateNameDomain(createTableForNameAdmission(ordinary), createTableForNameAdmission(clone)))
+	rebuilt := plan2.DeepCopyCreateTable(create)
+	rebuilt.UnresolvedFkParents = nil
+	rebuilt.FkDbs = []string{"db"}
+	rebuilt.FkTables = []string{"p"}
+	require.True(t, sameCreateNameDomain(create, rebuilt), "absent parent becoming materialized preserves the pinned name domain")
+	rebuilt.FkTables = []string{"other"}
+	require.False(t, sameCreateNameDomain(create, rebuilt), "retry cannot expand admission")
 }

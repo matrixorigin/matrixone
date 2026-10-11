@@ -44,7 +44,7 @@ func (s lifecycleAdmissionLockService) Lock(_ context.Context, table uint64, _ [
 	return s.lockFn(table, opts)
 }
 
-func TestLifecycleAdmissionWaitPolicyFollowsRegistryOwnership(t *testing.T) {
+func TestLifecycleAdmissionWaitPolicyFollowsRetainedOwnership(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		exclusive bool
@@ -54,25 +54,29 @@ func TestLifecycleAdmissionWaitPolicyFollowsRegistryOwnership(t *testing.T) {
 		{"fresh_exclusive", true, false, lock.WaitPolicy_Wait},
 		{"retained_exclusive", true, true, lock.WaitPolicy_FastFail},
 		{"shared", false, false, lock.WaitPolicy_Wait},
+		{"retained_shared", false, true, lock.WaitPolicy_FastFail},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProcess(t)
 			proc.Ctx = defines.AttachAccountId(proc.Ctx, catalog.System_Account)
-			proc.Base.TxnClient, proc.Base.TxnOperator = newTestTxnClientAndOpWithModeIsolation(
-				ctrl, txn.TxnMode_Pessimistic, txn.TxnIsolation_RC)
+			proc.Base.TxnOperator = mock_frontend.NewMockTxnOperator(ctrl)
 			op := proc.Base.TxnOperator
 			// Use the real admission/lockop path, stopping at G before the
 			// applied-frontier work. C must still be acquired first.
 			mockOp := op.(*mock_frontend.MockTxnOperator)
+			mockOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC}).AnyTimes()
+			mockOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 			mockOp.EXPECT().CreateTS().Return(timestamp.Timestamp{}).AnyTimes()
 			mockOp.EXPECT().AddWaitLock(gomock.Any(), gomock.Any(), gomock.Any()).Return(uint64(1)).AnyTimes()
 			mockOp.EXPECT().RemoveWaitLock(uint64(1)).Times(2)
 			mockOp.EXPECT().AddLockTable(gomock.Any()).Return(nil).Times(1)
 			const registryID uint64 = 99
-			if tc.exclusive {
-				mockOp.EXPECT().HasLockTable(registryID).Return(tc.retained)
+			var retained []lock.LockTable
+			if tc.retained {
+				retained = []lock.LockTable{{Table: 123, Valid: true}}
 			}
+			mockOp.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{LockTables: retained}, nil)
 			eng := newStubEngine()
 			eng.dbs[catalog.MO_CATALOG].rels[catalog.MO_TABLES].tableID = catalog.MO_TABLES_ID
 			registry := newStubRelation(catalog.MO_FEATURE_REGISTRY)

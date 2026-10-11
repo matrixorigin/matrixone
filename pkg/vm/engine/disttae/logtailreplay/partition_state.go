@@ -408,8 +408,10 @@ func (p *PartitionState) handleDataObjectEntry(
 		p.lastFlushTimestamp = commitTS
 	}
 
-	if objEntry.Size() == 0 || (objEntry.GetAppendable() && objEntry.DeleteTime.IsEmpty()) {
-		// CN doesn't consume the create event of appendable object
+	// Checkpoint creation records can carry durable appendable stats from a
+	// later flush. Persisted rows retain commit/abort visibility; live creation
+	// events are filtered by separate handlers.
+	if objEntry.Size() == 0 {
 		return
 	}
 
@@ -531,7 +533,7 @@ func (p *PartitionState) handleTombstoneObjectEntry(
 	if commitTS.GT(&p.lastFlushTimestamp) {
 		p.lastFlushTimestamp = commitTS
 	}
-	if objEntry.Size() == 0 || (objEntry.GetAppendable() && objEntry.DeleteTime.IsEmpty()) {
+	if objEntry.Size() == 0 {
 		return
 	}
 

@@ -224,6 +224,12 @@ type RunSQLAdmissionOperator interface {
 	TryEnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error)
 }
 
+// DeferredTxnRollback seals a doomed operator immediately and uses its existing
+// SQL-drain owner for cleanup. Nested execution must not wait on its own token.
+type DeferredTxnRollback interface {
+	RollbackAfterRunningSQL(error)
+}
+
 // AutoIncrEpochFenceCommitter is an additive transaction capability used by
 // epoch-aware workspaces to require the V7-only terminal commit method.
 type AutoIncrEpochFenceCommitter interface {

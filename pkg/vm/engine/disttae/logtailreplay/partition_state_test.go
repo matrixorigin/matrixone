@@ -2933,3 +2933,38 @@ func TestCountRows_VisibleAppendableDataObjects(t *testing.T) {
 		require.Error(t, err, "CountRows must return error when CollectDataStats fails")
 	})
 }
+
+func TestCheckpointDurableAppendableObjectReplay(t *testing.T) {
+	for _, tombstone := range []bool{false, true} {
+		t.Run(map[bool]string{false: "data", true: "tombstone"}[tombstone], func(t *testing.T) {
+			state := NewPartitionState("", false, 42, false)
+			objectID := objectio.NewObjectid()
+			stats := objectio.NewObjectStatsWithObjectID(&objectID, true, false, false)
+			require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+			require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+			entry := objectio.ObjectEntry{ObjectStats: *stats, CreateTime: types.BuildTS(1, 0)}
+			index := state.dataObjectsNameIndex
+			if tombstone {
+				index = state.tombstoneObjectsNameIndex
+			}
+			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, entry, tombstone))
+			require.Equal(t, 0, index.Len(), "zero-sized creation has no durable rows")
+			require.NoError(t, objectio.SetObjectStatsSize(&entry.ObjectStats, 1000))
+			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, entry, tombstone))
+			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, entry, tombstone))
+			require.Equal(t, 1, index.Len(), "checkpoint duplicate cannot duplicate an object")
+			loaded, ok := index.Get(entry)
+			require.True(t, ok)
+			require.True(t, loaded.Visible(types.BuildTS(2, 0)))
+			deleted := entry
+			deleted.DeleteTime = types.BuildTS(3, 0)
+			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, deleted, tombstone))
+			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, entry, tombstone))
+			loaded, ok = index.Get(entry)
+			require.True(t, ok)
+			require.Equal(t, deleted.DeleteTime, loaded.DeleteTime, "lazy checkpoint cannot resurrect a deleted object")
+			require.True(t, loaded.Visible(types.BuildTS(2, 0)))
+			require.False(t, loaded.Visible(types.BuildTS(4, 0)))
+		})
+	}
+}
