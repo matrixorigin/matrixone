@@ -8146,6 +8146,12 @@ func bindFuncExprImplByPlanExpr(
 
 	// return new expr
 	Typ := makePlan2Type(&returnType)
+	if name == "serial_extract" && returnType.Oid == types.T_enum {
+		// The runtime type omits ENUM members. Preserve the declared result
+		// domain so assignment restores the stored ordinal without converting
+		// it through a different (or empty) domain.
+		Typ.Enumvalues = args[2].Typ.Enumvalues
+	}
 	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
 	if returnType.Oid == types.T_varchar || returnType.Oid == types.T_text {
 		for _, idx := range padSpaceValueArgumentIndexes(name, len(args)) {

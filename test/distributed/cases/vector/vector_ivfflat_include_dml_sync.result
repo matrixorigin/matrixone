@@ -13,12 +13,13 @@ lists=1 op_type "vector_l2_ops" async;
 create table vector_ivfflat_async_enum(
 id enum('cold','hot','warm') primary key,
 status enum('warm','cold','hot'),
-embedding vecf32(2)
+embedding vecf32(2),
+stored enum('','2','1')
 );
 insert into vector_ivfflat_async_enum values
-('cold', 'hot', '[0,0]'), (2, 2, '[1,0]');
+('cold', 'hot', '[0,0]', null), (2, 2, '[1,0]', null);
 create index idx_ivf_async_enum using ivfflat on vector_ivfflat_async_enum(embedding)
-lists=1 op_type 'vector_l2_ops' include(status) async;
+lists=1 op_type 'vector_l2_ops' include(status, stored) async;
 drop table if exists vector_ivfflat_include_phase3;
 create table vector_ivfflat_include_phase3(
 id int primary key,
@@ -258,6 +259,52 @@ from vector_ivfflat_async_enum order by id;
 hot  ¦  2  ¦  cold  ¦  2  𝄀
 warm  ¦  3  ¦  NULL  ¦  NULL
 deallocate prepare enum_async;
+insert ignore into vector_ivfflat_async_enum values
+('invalid', 'invalid', '[2,0]', 'invalid');
+insert into vector_ivfflat_async_enum values ('cold', 'warm', '[3,0]', '');
+update vector_ivfflat_async_enum set stored = '2' where id = 'hot';
+select id+0 as pk_ordinal, status+0 as status_ordinal,
+stored as label, stored+0 as stored_ordinal
+from vector_ivfflat_async_enum order by id;
+➤ pk_ordinal[-5,64,0]  ¦  status_ordinal[-5,64,0]  ¦  label[12,65535,0]  ¦  stored_ordinal[-5,64,0]  𝄀
+0  ¦  0  ¦    ¦  0  𝄀
+1  ¦  1  ¦    ¦  1  𝄀
+2  ¦  2  ¦  2  ¦  2  𝄀
+3  ¦  NULL  ¦  NULL  ¦  NULL
+set @enum_stored_q = concat(
+'select __mo_index_pri_col+0 as pk_ordinal, __mo_index_include_status+0 as status_ordinal, ',
+'__mo_index_include_stored as label, __mo_index_include_stored+0 as stored_ordinal ',
+'from `', database(), '`.`', @enum_async_entries, '` ',
+'where __mo_index_centroid_fk_version = (select cast(__mo_index_val as bigint) ',
+'from `', database(), '`.`', @enum_async_metadata, '` where __mo_index_key = ''version'') ',
+'order by __mo_index_pri_col'
+);
+prepare enum_stored from @enum_stored_q;
+execute enum_stored;
+➤ pk_ordinal[-5,64,0]  ¦  status_ordinal[-5,64,0]  ¦  label[12,65535,0]  ¦  stored_ordinal[-5,64,0]  𝄀
+0  ¦  0  ¦    ¦  0  𝄀
+1  ¦  1  ¦    ¦  1  𝄀
+2  ¦  2  ¦  2  ¦  2  𝄀
+3  ¦  NULL  ¦  NULL  ¦  NULL
+select cast(0 as enum('','2','1'));
+Data truncation: data out of range: data type enum, value 0
+insert into vector_ivfflat_async_enum values ('invalid', 'warm', '[4,0]', '');
+internal error: convert to MySQL enum failed: item invalid is not in enum [cold hot warm]
+delete from vector_ivfflat_async_enum where id+0 = 0;
+update vector_ivfflat_async_enum set stored = '1' where id = 'cold';
+execute enum_stored;
+➤ pk_ordinal[-5,64,0]  ¦  status_ordinal[-5,64,0]  ¦  label[12,65535,0]  ¦  stored_ordinal[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  3  𝄀
+2  ¦  2  ¦  2  ¦  2  𝄀
+3  ¦  NULL  ¦  NULL  ¦  NULL
+select id+0 as pk_ordinal, status+0 as status_ordinal,
+stored as label, stored+0 as stored_ordinal
+from vector_ivfflat_async_enum order by id;
+➤ pk_ordinal[-5,64,0]  ¦  status_ordinal[-5,64,0]  ¦  label[12,65535,0]  ¦  stored_ordinal[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  3  𝄀
+2  ¦  2  ¦  2  ¦  2  𝄀
+3  ¦  NULL  ¦  NULL  ¦  NULL
+deallocate prepare enum_stored;
 drop table vector_ivfflat_async_enum;
 set @async_entries = (
 select index_table_name

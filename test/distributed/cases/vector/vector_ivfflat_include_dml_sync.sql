@@ -20,12 +20,13 @@ lists=1 op_type "vector_l2_ops" async;
 create table vector_ivfflat_async_enum(
     id enum('cold','hot','warm') primary key,
     status enum('warm','cold','hot'),
-    embedding vecf32(2)
+    embedding vecf32(2),
+    stored enum('','2','1')
 );
 insert into vector_ivfflat_async_enum values
-    ('cold', 'hot', '[0,0]'), (2, 2, '[1,0]');
+    ('cold', 'hot', '[0,0]', null), (2, 2, '[1,0]', null);
 create index idx_ivf_async_enum using ivfflat on vector_ivfflat_async_enum(embedding)
-lists=1 op_type 'vector_l2_ops' include(status) async;
+lists=1 op_type 'vector_l2_ops' include(status, stored) async;
 
 drop table if exists vector_ivfflat_include_phase3;
 create table vector_ivfflat_include_phase3(
@@ -238,6 +239,42 @@ execute enum_async;
 select id, id+0 as pk_ordinal, status, status+0 as status_ordinal
 from vector_ivfflat_async_enum order by id;
 deallocate prepare enum_async;
+
+-- Replay committed error ordinal 0 in both the ENUM PK and INCLUDE columns.
+-- It must remain distinct from the declared empty member (ordinal 1), the
+-- numeric label '2' (ordinal 2), and NULL. Insert only after the initial build
+-- has converged, so this exercises actual background CDC maintenance.
+insert ignore into vector_ivfflat_async_enum values
+    ('invalid', 'invalid', '[2,0]', 'invalid');
+insert into vector_ivfflat_async_enum values ('cold', 'warm', '[3,0]', '');
+update vector_ivfflat_async_enum set stored = '2' where id = 'hot';
+select id+0 as pk_ordinal, status+0 as status_ordinal,
+    stored as label, stored+0 as stored_ordinal
+from vector_ivfflat_async_enum order by id;
+set @enum_stored_q = concat(
+    'select __mo_index_pri_col+0 as pk_ordinal, __mo_index_include_status+0 as status_ordinal, ',
+    '__mo_index_include_stored as label, __mo_index_include_stored+0 as stored_ordinal ',
+    'from `', database(), '`.`', @enum_async_entries, '` ',
+    'where __mo_index_centroid_fk_version = (select cast(__mo_index_val as bigint) ',
+    'from `', database(), '`.`', @enum_async_metadata, '` where __mo_index_key = ''version'') ',
+    'order by __mo_index_pri_col'
+);
+prepare enum_stored from @enum_stored_q;
+-- @wait_expect(2, 60)
+execute enum_stored;
+
+-- Strict user conversion still rejects invalid input. A subsequent update
+-- and deletion of the zero PK prove replay continues past the committed 0.
+select cast(0 as enum('','2','1'));
+insert into vector_ivfflat_async_enum values ('invalid', 'warm', '[4,0]', '');
+delete from vector_ivfflat_async_enum where id+0 = 0;
+update vector_ivfflat_async_enum set stored = '1' where id = 'cold';
+-- @wait_expect(2, 60)
+execute enum_stored;
+select id+0 as pk_ordinal, status+0 as status_ordinal,
+    stored as label, stored+0 as stored_ordinal
+from vector_ivfflat_async_enum order by id;
+deallocate prepare enum_stored;
 drop table vector_ivfflat_async_enum;
 
 -- Async IVF maintenance is CDC-only. Updating the source PK must replace the
