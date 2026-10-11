@@ -3823,14 +3823,14 @@ func newShuffleJoinTestNode(dop int32) *plan.Node {
 	leftCol := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_int64)},
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{
-			RelPos: 1,
+			RelPos: 0,
 			ColPos: 0,
 		}},
 	}
 	rightCol := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_int64)},
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{
-			RelPos: 2,
+			RelPos: 1,
 			ColPos: 0,
 		}},
 	}
@@ -3850,6 +3850,7 @@ func newShuffleJoinTestNode(dop int32) *plan.Node {
 		OnList: []*plan.Expr{{
 			Typ: plan.Type{Id: int32(types.T_bool)},
 			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.EQUAL, 0), ObjName: "="},
 				Args: []*plan.Expr{leftCol, rightCol},
 			}},
 		}},
