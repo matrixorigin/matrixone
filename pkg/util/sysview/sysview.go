@@ -172,7 +172,8 @@ func informationSchemaInitProtocol(txn executor.TxnExecutor) int64 {
 		if value, present := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor); present {
 			floor, valid := value.(int64)
 			if !valid || floor < defines.MORPCVersion110 {
-				return defines.MORPCVersion106
+				// Only VIEWS is deferred; retain main's independent v109 COLUMNS contract.
+				return defines.MORPCVersion109
 			}
 		}
 	}

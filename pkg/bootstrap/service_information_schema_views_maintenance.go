@@ -89,8 +89,7 @@ func (s *service) maintainInformationSchemaViews(ctx context.Context) error {
 
 		candidateCursor := nextInformationSchemaViewsMaintenanceCursor(accountIDs[len(accountIDs)-1])
 		for _, accountID := range accountIDs {
-			exists, viewDefinition, err := versions.CheckViewDefinition(
-				txn, uint32(accountID), sysview.InformationDBConst, "VIEWS")
+			exists, viewDefinition, err := v4_0_7.CheckInformationSchemaViewsDefinition(txn, uint32(accountID))
 			if err != nil {
 				if informationSchemaViewsAccountGone(accountID, err) {
 					// DROP ACCOUNT removes the account-local mo_user and

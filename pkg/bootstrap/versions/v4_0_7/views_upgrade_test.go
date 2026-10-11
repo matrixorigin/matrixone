@@ -14,6 +14,7 @@
 package v4_0_7
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -24,6 +25,68 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/stretchr/testify/require"
 )
+
+func TestViewsUpgradeRecognizesCatalogNameCase(t *testing.T) {
+	for _, accountID := range []uint32{0, 42} {
+		for _, tc := range []struct {
+			name       string
+			definition string
+			current    bool
+		}{
+			{name: "VIEWS", definition: sysview.InformationSchemaViewsDDL, current: true},
+			{name: "views", definition: sysview.InformationSchemaViewsDDL, current: true},
+			{name: "views", definition: sysview.InformationSchemaViewsLegacyDDL},
+			{name: "views"},
+		} {
+			t.Run(fmt.Sprintf("account-%d/%s/current-%t/missing-%t", accountID, tc.name, tc.current, tc.definition == ""), func(t *testing.T) {
+				oldCheck := versions.CheckViewDefinition
+				versions.CheckViewDefinition = func(_ executor.TxnExecutor, id uint32, schema, name string) (bool, string, error) {
+					require.Equal(t, accountID, id)
+					require.Equal(t, sysview.InformationDBConst, schema)
+					if name == tc.name && tc.definition != "" {
+						return true, tc.definition, nil
+					}
+					return false, "", nil
+				}
+				t.Cleanup(func() { versions.CheckViewDefinition = oldCheck })
+				var executed []string
+				txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+					executed = append(executed, sql)
+					return executor.Result{}, nil
+				})
+				require.NoError(t, UpgradeInformationSchemaViewsAfterProtocolCheck(txn, accountID))
+				if tc.current {
+					require.Empty(t, executed, "the committed definition is the durable no-op marker")
+				} else {
+					require.Equal(t, []string{tenantUpgEntries[0].PreSql, sysview.InformationSchemaViewsDDL}, executed)
+				}
+			})
+		}
+	}
+}
+
+func TestViewsDefinitionProbePropagatesCatalogErrors(t *testing.T) {
+	for _, failName := range []string{"VIEWS", "views"} {
+		t.Run(failName, func(t *testing.T) {
+			catalogErr := errors.New("catalog unavailable")
+			oldCheck := versions.CheckViewDefinition
+			versions.CheckViewDefinition = func(_ executor.TxnExecutor, _ uint32, _, name string) (bool, string, error) {
+				if name == failName {
+					return false, "", catalogErr
+				}
+				return false, "", nil
+			}
+			t.Cleanup(func() { versions.CheckViewDefinition = oldCheck })
+			var executed []string
+			txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+				executed = append(executed, sql)
+				return executor.Result{}, nil
+			})
+			require.ErrorIs(t, UpgradeInformationSchemaViewsAfterProtocolCheck(txn, 0), catalogErr)
+			require.Empty(t, executed, "a failed catalog lookup must not stage DROP or CREATE")
+		})
+	}
+}
 
 func TestViewsUpgradeIsScheduledForCompletedV406Tenants(t *testing.T) {
 	require.Equal(t, "4.0.7", Handler.Metadata().Version)

@@ -43,6 +43,23 @@ func UpgradeInformationSchemaViewsAfterProtocolCheck(
 	return tenantUpgEntries[0].UpgradeAfterProtocolCheck(txn, accountID)
 }
 
+// CheckInformationSchemaViewsDefinition recognizes the two catalog names
+// emitted by the system DDL: VIEWS with case preservation, and views with the
+// default lower_case_table_names setting. Catalog string predicates are case
+// sensitive; missing the folded name would make every maintenance pass repeat
+// DROP/CREATE even after the current definition was successfully installed.
+func CheckInformationSchemaViewsDefinition(
+	txn executor.TxnExecutor,
+	accountID uint32,
+) (bool, string, error) {
+	exists, definition, err := versions.CheckViewDefinition(
+		txn, accountID, sysview.InformationDBConst, "VIEWS")
+	if err != nil || exists {
+		return exists, definition, err
+	}
+	return versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "views")
+}
+
 // InformationSchemaViewsAuthoringProtocolReady reports the local write-side
 // admission fence. The common protocol check only proves that every CN can
 // decode v110; the VIEWS DDL also persists function IDs that must not be
@@ -77,8 +94,7 @@ func upgradeInformationSchemaViews() versions.UpgradeEntry {
 		UpgSql:                  sysview.InformationSchemaViewsDDL,
 		RequiredProtocolVersion: defines.MORPCVersion110,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			exists, viewDef, err := versions.CheckViewDefinition(
-				txn, accountID, sysview.InformationDBConst, "VIEWS")
+			exists, viewDef, err := CheckInformationSchemaViewsDefinition(txn, accountID)
 			if err != nil {
 				return false, err
 			}

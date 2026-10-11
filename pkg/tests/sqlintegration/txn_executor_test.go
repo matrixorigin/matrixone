@@ -21,11 +21,48 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
+
+func TestInformationSchemaViewsUpgradeIsIdempotent(t *testing.T) {
+	// Reuse the SQL fixture: one real catalog view, two upgrade transactions,
+	// and no timer or polling are needed to prove the durable repair marker.
+	runSQLIntegration(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		exec := testutils.GetSQLExecutor(cn)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		upgrade := func() {
+			t.Helper()
+			require.NoError(t, exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+				return v4_0_7.UpgradeInformationSchemaViewsAfterProtocolCheck(txn, 0)
+			}, executor.Options{}.WithWaitCommittedLogApplied()))
+		}
+		viewID := func() uint64 {
+			t.Helper()
+			res, err := exec.Exec(ctx, "select rel_id from mo_catalog.mo_tables where account_id=0 and reldatabase='information_schema' and lower(relname)='views' and relkind='v'", executor.Options{})
+			require.NoError(t, err)
+			defer res.Close()
+			var ids []uint64
+			res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+				ids = append(ids, executor.GetFixedRows[uint64](cols[0])...)
+				return true
+			})
+			require.Len(t, ids, 1)
+			return ids[0]
+		}
+		upgrade()
+		installedID := viewID()
+		upgrade()
+		require.Equal(t, installedID, viewID(), "an installed VIEWS definition must not be dropped and recreated")
+	})
+}
 
 func Test_TxnExecutorExec(t *testing.T) {
 	// Reuse the single-CN fixture used by TestPreparedParams; this case only reads the catalog.

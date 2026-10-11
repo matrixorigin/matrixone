@@ -11107,9 +11107,13 @@ func createTablesInInformationSchemaOfGeneralTenantWithProtocol(
 	// with new tenant
 	// TODO: when we have the auto_increment column, we need new strategy.
 
-	// COLUMNS keeps its independent v100 contract even when VIEWS falls back.
+	// COLUMNS keeps its independent protocol contract even when VIEWS falls back.
 	if protocolVersion >= defines.MORPCVersion100 {
-		if err := requireCommonViewColumnsProtocol(ctx, bh); err != nil {
+		requiredProtocol := defines.MORPCVersion100
+		if protocolVersion >= defines.MORPCVersion109 {
+			requiredProtocol = defines.MORPCVersion109
+		}
+		if err := requireCommonViewColumnsProtocol(ctx, bh, requiredProtocol); err != nil {
 			return err
 		}
 	}
@@ -11142,11 +11146,12 @@ func protocolVersionForTenantInitializationWithContext(
 	proc *process.Process,
 ) (int64, error) {
 	// Account creation must remain available while the cluster is rolling out
-	// the parser-derived VIEWS functions. The v106 predecessor VIEWS definition is safe
-	// on every CN and the final-version account row is revisited by bootstrap
-	// maintenance once the capability becomes available.
+	// the parser-derived VIEWS functions. The v109 predecessor preserves the
+	// independent native COLUMNS contract while deferring the new VIEWS definition.
+	// Bootstrap maintenance revisits the final-version account row once the
+	// VIEWS capability becomes available.
 	legacyVersion := defines.MORPCMinVersion
-	predecessorViewsVersion := defines.MORPCVersion106
+	predecessorViewsVersion := defines.MORPCVersion109
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
 		return legacyVersion, nil
@@ -11161,7 +11166,7 @@ func protocolVersionForTenantInitializationWithContext(
 	}
 	if version < defines.MORPCVersion110 {
 		// Preserve every pre-existing protocol-specific information_schema
-		// contract. Only the new VIEWS function needs the v106 predecessor
+		// contract. Only the new VIEWS function needs the v109 predecessor
 		// fallback; promoting an older known protocol would also install newer
 		// TABLES/COLUMNS and role-closure definitions.
 		return version, nil
@@ -11199,7 +11204,7 @@ func protocolVersionForTenantInitializationWithContext(
 	return version, nil
 }
 
-func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec) error {
+func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec, requiredProtocol int64) error {
 	bh.ClearExecResultSet()
 	// This fixed cluster probe is system-authored; subsequent tenant DDL keeps its original identity.
 	probeCtx := defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
@@ -11211,13 +11216,13 @@ func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec) er
 		return err
 	}
 	if len(results) == 0 || results[0].GetRowCount() == 0 {
-		return versions.CheckProtocolVersionResponse("", defines.MORPCVersion100)
+		return versions.CheckProtocolVersionResponse("", requiredProtocol)
 	}
 	encoded, err := results[0].GetString(ctx, 0, 0)
 	if err != nil {
 		return err
 	}
-	return versions.CheckProtocolVersionResponse(encoded, defines.MORPCVersion100)
+	return versions.CheckProtocolVersionResponse(encoded, requiredProtocol)
 }
 
 // createSubscription insert records into mo_subs of To-All-Publications

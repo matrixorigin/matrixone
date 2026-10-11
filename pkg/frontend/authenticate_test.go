@@ -669,7 +669,8 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol100Peers(t *testing.T) 
 					require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, executed)
 				} else {
 					require.NoError(t, err)
-					require.Contains(t, executed, sysview.InformationSchemaColumnsDDL)
+					require.Contains(t, executed, sysview.InformationSchemaColumnsV100DDL())
+					require.NotContains(t, executed, sysview.InformationSchemaColumnsDDL)
 				}
 			})
 		}
@@ -1007,7 +1008,7 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 			defer ctrl.Finish()
 			var executed []string
 			bh := mock_frontend.NewMockBackgroundExec(ctrl)
-			bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:107,cn-b:107"}`}})}).AnyTimes()
+			bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:110,cn-b:110"}`}})}).AnyTimes()
 			bh.EXPECT().ClearExecResultSet().AnyTimes()
 			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
 				func(_ context.Context, sql string) error {
@@ -1022,6 +1023,8 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 			err := createTablesInInformationSchemaOfGeneralTenant(
 				context.Background(), bh, service, proc)
 			require.NoError(t, err)
+			require.Contains(t, executed, sysview.InformationSchemaColumnsDDL)
+			require.NotContains(t, executed, sysview.InformationSchemaColumnsV100DDL())
 			if test.wantLatest {
 				require.Contains(t, executed, sysview.InformationSchemaViewsDDL)
 				require.NotContains(t, executed, sysview.InformationSchemaViewsLegacyDDL)
@@ -1069,12 +1072,17 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol110Peers(t *testing.T) 
 
 	for _, tc := range []struct {
 		name, response string
+		peerVersion    int64
 		wantError      bool
+		wantLegacy     bool
 	}{
-		{name: "one peer is still on protocol 109", response: `{"result":"cn-a:110,cn-b:109"}`, wantError: true},
-		{name: "all peers support native view", response: `{"result":"cn-a:110,cn-b:110"}`},
+		{name: "one peer cannot decode native COLUMNS", response: `{"result":"cn-a:110,cn-b:108"}`, peerVersion: defines.MORPCVersion108, wantError: true},
+		{name: "v109 peer preserves COLUMNS and legacy VIEWS", response: `{"result":"cn-a:110,cn-b:109"}`, peerVersion: defines.MORPCVersion109, wantLegacy: true},
+		{name: "all peers support native view", response: `{"result":"cn-a:110,cn-b:110"}`, peerVersion: defines.MORPCVersion110},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			queryClient.cnResponses["cn-v110-a-query"].GetProtocolVersion.Version = defines.MORPCVersion110
+			queryClient.cnResponses["cn-v110-b-query"].GetProtocolVersion.Version = tc.peerVersion
 			ctrl := gomock.NewController(t)
 			bh := mock_frontend.NewMockBackgroundExec(ctrl)
 			var executed []string
@@ -1087,11 +1095,18 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol110Peers(t *testing.T) 
 
 			err := createTablesInInformationSchemaOfGeneralTenant(t.Context(), bh, service, proc)
 			if tc.wantError {
-				require.ErrorContains(t, err, "protocol version 110")
+				require.ErrorContains(t, err, "protocol version 109")
 				require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, executed)
 			} else {
 				require.NoError(t, err)
 				require.Contains(t, executed, sysview.InformationSchemaColumnsDDL)
+				if tc.wantLegacy {
+					require.Contains(t, executed, sysview.InformationSchemaViewsLegacyDDL)
+					require.NotContains(t, executed, sysview.InformationSchemaViewsDDL)
+				} else {
+					require.Contains(t, executed, sysview.InformationSchemaViewsDDL)
+					require.NotContains(t, executed, sysview.InformationSchemaViewsLegacyDDL)
+				}
 			}
 		})
 	}
@@ -1134,7 +1149,7 @@ func TestCreateTablesInformationSchemaUsesCallerContext(t *testing.T) {
 	defer ctrl.Finish()
 	var executed []string
 	bh := mock_frontend.NewMockBackgroundExec(ctrl)
-	bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:107,cn-b:107"}`}})}).AnyTimes()
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:109,cn-b:109"}`}})}).AnyTimes()
 	bh.EXPECT().ClearExecResultSet().AnyTimes()
 	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, sql string) error {
