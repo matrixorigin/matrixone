@@ -41,5 +41,32 @@ alter stage remove_stage_files_stage set enable = true;
 remove files from stage 'stage://remove_stage_files_stage/remove_stage_files/protected.txt';
 select load_file(cast('stage://remove_stage_files_stage/remove_stage_files/protected.txt' as datalink));
 file protected.txt is not found
+select save_file(cast('stage://remove_stage_files_stage/remove_stage_files/input.csv' as datalink), '1');
+➤ save_file(cast(stage://remove_stage_files_stage/remove_stage_files/input.csv as datalink), 1)[-5,64,0]  𝄀
+1
+drop table if exists remove_stage_files_load;
+create table remove_stage_files_load(id int);
+load data infile 'stage://remove_stage_files_stage/remove_stage_files/input.csv' into table remove_stage_files_load;
+prepare stage_load from 'load data infile ''stage://remove_stage_files_stage/remove_stage_files/input.csv'' into table remove_stage_files_load';
+execute stage_load;
+select count(*) as rows_loaded from remove_stage_files_load;
+➤ rows_loaded[-5,64,0]  𝄀
+2
+alter stage remove_stage_files_stage set enable = false;
+load data infile 'stage://remove_stage_files_stage/remove_stage_files/input.csv' into table remove_stage_files_load;
+invalid configuration: stage remove_stage_files_stage is disabled
+execute stage_load;
+invalid configuration: stage remove_stage_files_stage is disabled
+select count(*) as rows_loaded from remove_stage_files_load;
+➤ rows_loaded[-5,64,0]  𝄀
+2
+alter stage remove_stage_files_stage set enable = true;
+execute stage_load;
+select count(*) as rows_loaded from remove_stage_files_load;
+➤ rows_loaded[-5,64,0]  𝄀
+3
+deallocate prepare stage_load;
+drop table remove_stage_files_load;
+remove files from stage 'stage://remove_stage_files_stage/remove_stage_files/input.csv';
 remove files from stage if exists 'stage://remove_stage_files_stage/remove_stage_files/remove_keep.log';
 drop stage remove_stage_files_stage;

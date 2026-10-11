@@ -47,6 +47,30 @@ alter stage remove_stage_files_stage set enable = true;
 remove files from stage 'stage://remove_stage_files_stage/remove_stage_files/protected.txt';
 select load_file(cast('stage://remove_stage_files_stage/remove_stage_files/protected.txt' as datalink));
 
+-- A prepared LOAD keeps its bound path, but the original stage must still be
+-- enabled at execution time. Reuse the same stage and two-session fixture.
+select save_file(cast('stage://remove_stage_files_stage/remove_stage_files/input.csv' as datalink), '1');
+drop table if exists remove_stage_files_load;
+create table remove_stage_files_load(id int);
+load data infile 'stage://remove_stage_files_stage/remove_stage_files/input.csv' into table remove_stage_files_load;
+prepare stage_load from 'load data infile ''stage://remove_stage_files_stage/remove_stage_files/input.csv'' into table remove_stage_files_load';
+execute stage_load;
+select count(*) as rows_loaded from remove_stage_files_load;
+-- @session:id=1{
+alter stage remove_stage_files_stage set enable = false;
+-- @session}
+load data infile 'stage://remove_stage_files_stage/remove_stage_files/input.csv' into table remove_stage_files_load;
+execute stage_load;
+select count(*) as rows_loaded from remove_stage_files_load;
+-- @session:id=1{
+alter stage remove_stage_files_stage set enable = true;
+-- @session}
+execute stage_load;
+select count(*) as rows_loaded from remove_stage_files_load;
+deallocate prepare stage_load;
+drop table remove_stage_files_load;
+remove files from stage 'stage://remove_stage_files_stage/remove_stage_files/input.csv';
+
 -- cleanup created file
 remove files from stage if exists 'stage://remove_stage_files_stage/remove_stage_files/remove_keep.log';
 
