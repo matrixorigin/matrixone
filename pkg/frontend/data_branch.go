@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -552,6 +553,15 @@ func getLineageOwnerMutationExecutor(
 	}
 	if featureLimited {
 		err = admitFeatureLimitedLineageOwnerMutation(ctx, ses, bh)
+	} else if op := backgroundExecTxnOperator(bh); op != nil && op.Txn().IsPessimistic() && op.Txn().IsRCIsolation() {
+		// Private writers acquire C then G/X without a shared-to-exclusive upgrade.
+		var admission *lifecycleRCAdmission
+		admission, err = beginLifecycleRCAdmission(ctx, ses, bh, lock.LockMode_Exclusive)
+		if err == nil {
+			admission.proc.Free()
+			// Keep the existing lineage publication write after acquiring identity.
+			err = lockDataBranchLineageOwnerLifecycle(ctx, bh)
+		}
 	} else {
 		err = lockDataBranchLineageOwnerLifecycle(ctx, bh)
 	}
@@ -819,9 +829,6 @@ func dataBranchDeleteTable(
 	}
 
 	defer finishDataBranchComponent(execCtx.reqCtx, deferred, &err)
-	if err = admission.finish(execCtx.reqCtx, ses, bh); err != nil {
-		return err
-	}
 	var (
 		dbName  string
 		tblName string
@@ -835,6 +842,17 @@ func dataBranchDeleteTable(
 
 	if accId, err = defines.GetAccountId(execCtx.reqCtx); err != nil {
 		return
+	}
+
+	keys, err := cloneCatalogLockBatch(admission.proc, accId, dbName)
+	if err != nil {
+		return err
+	}
+	if err = admission.lockKey(catalog.MO_DATABASE, execCtx.reqCtx, keys, lock.LockMode_Shared, accId); err != nil {
+		return err
+	}
+	if err = admission.finish(execCtx.reqCtx, ses, bh); err != nil {
+		return err
 	}
 
 	if tblID, err = validateDataBranchDeleteTableTarget(execCtx.reqCtx, ses, bh, dbName, tblName); err != nil {
@@ -883,9 +901,6 @@ func dataBranchDeleteDatabase(
 	}
 
 	defer finishDataBranchComponent(execCtx.reqCtx, deferred, &err)
-	if err = admission.finish(execCtx.reqCtx, ses, bh); err != nil {
-		return err
-	}
 	var (
 		dbName   = stmt.DatabaseName
 		accId    uint32
@@ -894,6 +909,17 @@ func dataBranchDeleteDatabase(
 
 	if accId, err = defines.GetAccountId(execCtx.reqCtx); err != nil {
 		return
+	}
+
+	keys, err := cloneCatalogLockBatch(admission.proc, accId, dbName.String())
+	if err != nil {
+		return err
+	}
+	if err = admission.lockKey(catalog.MO_DATABASE, execCtx.reqCtx, keys, lock.LockMode_Exclusive, accId); err != nil {
+		return err
+	}
+	if err = admission.finish(execCtx.reqCtx, ses, bh); err != nil {
+		return err
 	}
 
 	db, err := ses.proc.GetSessionInfo().StorageEngine.Database(execCtx.reqCtx, dbName.String(), backgroundExecTxnOperator(bh))

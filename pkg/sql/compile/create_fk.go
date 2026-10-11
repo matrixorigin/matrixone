@@ -210,9 +210,12 @@ func (c *Compile) replacementForeignKeyCatalog(database, table string) (*replace
 		return nil, err
 	}
 	preserved := receipt.admission.foreignKeyCatalog
-	if receipt.closed || receipt.owner != c.proc.GetTxnOperator() || receipt.admission.accountID != actor ||
-		preserved.target != (plan2.FkReferKey{Db: database, Tbl: table}) {
+	if receipt.closed || receipt.owner != c.proc.GetTxnOperator() || receipt.admission.accountID != actor {
 		return nil, moerr.NewInternalError(c.proc.Ctx, "invalid replacement foreign-key catalog owner")
+	}
+	// Physical descendants borrow lifecycle admission, not their root's FK payload.
+	if preserved.target != (plan2.FkReferKey{Db: database, Tbl: table}) {
+		return nil, nil
 	}
 	return preserved, nil
 }

@@ -1,4 +1,4 @@
-# Forward foreign-key execution validation (v4)
+# Forward foreign-key execution validation (v5)
 
 Design gate: gpt-6.1-sol / xhigh, session `01a128b6-fab3-72f2-bc51-80981947b8d2`, reviewed production base `4022729da24d71b082c22b52aaed3faba2b77ea5`. Approved for implementation; runtime acceptance remains required.
 
@@ -23,6 +23,20 @@ For positive incoming repair, pin the candidate child names T S, obtain an appli
 Standalone DROP INDEX lacks target-name and physical-definition ownership. Correct that existing DDL responsibility: fresh transactions wait for the provisional physical definition first, acquire D/T nonwaiting, refresh via the shared index-DDL snapshot helper, verify current physical identity, then read/replace the complete constraint. Retained transactions acquire the physical definition nonwaiting. This avoids a metadata-owner/DML-owner wait cycle and removes the need for a CN/TN constraint CAS protocol.
 
 Internal TRUNCATE/COPY pins FK participants before its outer frontier and first effects, and certifies inner CREATE with the existing lifecycle receipt. It does not advance visibility after outer DROP. Borrowed execution shares the existing deferred whole-transaction rollback owner; fatal errors seal the operator even if callbacks catch them. One shared classification handles wrapped/joined errors.
+
+## CI boundary corrections
+
+The correction design is gpt-6.1-sol / xhigh session `01a12985-fd30-7230-b012-abb8dea28082`, with the checkpoint amendment recorded separately. Runtime evidence is reported in the PR validation section.
+
+Borrowed internal CREATE pins its names before physical compilation. If binding/frontier validation requires a refresh, the existing planner rebuilds once within the same admitted name domain, preserving caller writes and statement ownership. Arbitrary later execution failures still return to the caller; child execution never invokes the outer retry transition. Planner and execution both exclude foreign-key-banned catalog databases.
+
+Partition replacement includes actual descendant names from the existing partition metadata and naming owner. Descendants borrow the lifecycle frontier but receive no root FK catalog payload. Actor, transaction and lifetime validation remains mandatory; payload preservation applies only to its exact root target.
+
+The existing transaction creation journal certifies unpublished scalar replacement and cleanup only when both physical and original logical generations were created in that transaction. Statement rollback revokes this proof. Scalar shape and FK/lineage/history exclusions still apply, and D/T ownership remains required. Certified private DELETE/TRUNCATE/DROP avoids late global lifecycle acquisition; replacements of published logical generations retain normal admission. No name-prefix exemption or additional journal is introduced.
+
+DATA BRANCH DELETE locks its target D before refreshing and validating membership. Private lineage writers acquire C then G/X directly, rather than taking G/S and upgrading after other writers have joined. The original lineage publication write remains in the same transaction. NEXTVAL and other fatal nested failures retain their original typed error when terminal cleanup also fails; secondary rollback errors are logged separately.
+
+Checkpoint consumers already exclusively own `HandleObjectEntry`; live events use the separate object-list handlers. Tests now exercise those real entry points rather than treating a checkpoint callback as a live event. No additional replay API is needed.
 
 ## Performance and failure ownership
 

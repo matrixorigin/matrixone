@@ -318,8 +318,13 @@ func TestReplacementForeignKeyReceiptScopeAndFrontier(t *testing.T) {
 				got, err := c.replacementForeignKeyCatalog("db", "t")
 				require.NoError(t, err)
 				require.Same(t, catalog, got)
-				_, err = c.replacementForeignKeyCatalog("db", "other")
-				require.Error(t, err)
+				got, err = c.replacementForeignKeyCatalog("db", "other")
+				require.NoError(t, err)
+				require.Nil(t, got, "a different target cannot inherit the root FK payload")
+				if mode == txn.TxnMode_Pessimistic && isolation == txn.TxnIsolation_RC {
+					_, err = c.pinCreateNames(&plan.CreateTable{Database: "db", TableDef: &plan.TableDef{Name: "other"}}, "db")
+					require.ErrorContains(t, err, "CREATE exceeds admitted replacement names")
+				}
 				q := &plan.CreateTable{Database: "db", TableDef: &plan.TableDef{Name: "t"}}
 				// No engine/barrier is installed: RC must borrow the pre-DROP frontier.
 				require.NoError(t, c.admitCreateNames(q, "db"))

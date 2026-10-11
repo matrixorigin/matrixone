@@ -390,6 +390,12 @@ type TerminalTableDeletionView interface {
 	IsTableDeletedAtTxnClose(physicalTableID uint64) bool
 }
 
+// TableCreationView exposes the workspace's rollback-aware creation journal.
+// A physical ID remains unpublished only while its creation belongs to this owner.
+type TableCreationView interface {
+	IsTableCreatedInTxn(tableID uint64) bool
+}
+
 // TxnOverview txn overview include meta and status
 type TxnOverview struct {
 	// CreateAt create at

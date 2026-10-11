@@ -17,13 +17,18 @@ package issues
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -570,5 +575,108 @@ func TestCreateNameAdmissionCloneAndSIFixedSnapshotControl(t *testing.T) {
 			_, err = conn.ExecContext(ctx, q)
 			require.NoError(t, err, q)
 		}
+	})
+}
+
+// Physical partition tables borrow the root replacement frontier, but never
+// inherit its foreign-key catalog payload.
+func TestPartitionReplacementLifecycle(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", issue27487DSN(cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		const database = "partition_replacement_lifecycle"
+		execSQLRequire(t, ctx, db, "create database "+database)
+		defer func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 20*time.Second)
+			defer stop()
+			_, _ = db.ExecContext(cleanup, "drop database if exists "+database)
+		}()
+		value, ok := runtime.ServiceRuntime(cn.ServiceID()).GetGlobalVariables(runtime.InternalSQLExecutor)
+		require.True(t, ok)
+		exec := value.(executor.SQLExecutor)
+		for _, partition := range []struct{ name, clause string }{
+			{"by_key", "partition by key(id) partitions 2"},
+			{"by_hash", "partition by hash(id) partitions 2"},
+			{"by_range", "partition by range(id) (partition p0 values less than (2), partition p1 values less than (MAXVALUE))"},
+		} {
+			table := database + "." + partition.name
+			execSQLRequire(t, ctx, db, "create table "+table+"(id int primary key, v int) "+partition.clause)
+			execSQLRequire(t, ctx, db, "insert into "+table+" values(1,10),(2,20)")
+			abort := errors.New("rollback partition replacement")
+			err = exec.ExecTxn(defines.AttachAccountId(ctx, 0), func(tx executor.TxnExecutor) error {
+				result, err := exec.Exec(defines.AttachAccountId(ctx, 0), "truncate table "+table,
+					executor.Options{}.WithAccountID(0).WithTxn(tx.Txn()).WithDisableIncrStatement())
+				if err != nil {
+					return err
+				}
+				result.Close()
+				return abort
+			}, executor.Options{}.WithAccountID(0))
+			require.ErrorIs(t, err, abort)
+			var count int
+			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+table).Scan(&count))
+			require.Equal(t, 2, count, "owning transaction rollback restores root and physical partitions")
+			for _, clear := range []string{"truncate table ", "delete from "} {
+				execSQLRequire(t, ctx, db, clear+table)
+				require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+table).Scan(&count))
+				require.Zero(t, count)
+				execSQLRequire(t, ctx, db, "insert into "+table+" values(1,10),(2,20)")
+				require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+table+" where v=20").Scan(&count))
+				require.Equal(t, 1, count, "replacement remains writable with primary-key enforcement")
+			}
+		}
+	})
+}
+
+func TestBorrowedCreateAdmissionPreservesCallerWrites(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		ctx = defines.AttachAccountId(ctx, 0)
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		value, ok := runtime.ServiceRuntime(cn.ServiceID()).GetGlobalVariables(runtime.InternalSQLExecutor)
+		require.True(t, ok)
+		exec := value.(executor.SQLExecutor)
+		const database = "borrowed_create_admission"
+		result, err := exec.Exec(ctx, "create database "+database, executor.Options{}.WithAccountID(0))
+		require.NoError(t, err)
+		result.Close()
+		defer func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 20*time.Second)
+			defer stop()
+			res, _ := exec.Exec(cleanup, "drop database if exists "+database, executor.Options{}.WithAccountID(0))
+			res.Close()
+		}()
+		result, err = exec.Exec(ctx, "create table "+database+".existing(id int primary key)", executor.Options{}.WithAccountID(0))
+		require.NoError(t, err)
+		result.Close()
+		require.NoError(t, exec.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
+			res, err := tx.Exec("insert into "+database+".existing values(7)", executor.StatementOption{})
+			if err != nil {
+				return err
+			}
+			res.Close()
+			res, err = exec.Exec(ctx, "create table "+database+".new_table(id int primary key)", executor.Options{}.WithAccountID(0).WithTxn(tx.Txn()).WithDisableIncrStatement())
+			if err != nil {
+				return err
+			}
+			res.Close()
+			return nil
+		}, executor.Options{}.WithAccountID(0)))
+		result, err = exec.Exec(ctx, "select id from "+database+".existing", executor.Options{}.WithAccountID(0))
+		require.NoError(t, err)
+		defer result.Close()
+		var rows []int32
+		result.ReadRows(func(_ int, cols []*vector.Vector) bool {
+			rows = append(rows, executor.GetFixedRows[int32](cols[0])...)
+			return true
+		})
+		require.Equal(t, []int32{7}, rows, "CREATE admission cannot roll back its caller's statement")
 	})
 }

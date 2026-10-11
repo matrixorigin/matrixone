@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/assert"
@@ -2950,6 +2951,29 @@ func TestCheckpointDurableAppendableObjectReplay(t *testing.T) {
 			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, entry, tombstone))
 			require.Equal(t, 0, index.Len(), "zero-sized creation has no durable rows")
 			require.NoError(t, objectio.SetObjectStatsSize(&entry.ObjectStats, 1000))
+			mp := mpool.MustNewZero()
+			live := batch.NewWithSize(10)
+			defer live.Clean(mp)
+			var err error
+			for i := range live.Vecs {
+				live.Vecs[i], err = vector.NewConstFixed(types.T_TS.ToType(), entry.CreateTime, 1, mp)
+				require.NoError(t, err)
+			}
+			live.Vecs[2].Free(mp)
+			live.Vecs[2], err = vector.NewConstBytes(types.T_binary.ToType(), entry.ObjectStats.Marshal(), 1, mp)
+			require.NoError(t, err)
+			live.Vecs[6].Free(mp)
+			live.Vecs[6], err = vector.NewConstFixed(types.T_TS.ToType(), types.TS{}, 1, mp)
+			require.NoError(t, err)
+			live.SetRowCount(1)
+			liveProto, err := batch.BatchToProtoBatch(live)
+			require.NoError(t, err)
+			if tombstone {
+				state.HandleTombstoneObjectList(t.Context(), &api.Entry{Bat: liveProto}, nil, mp)
+			} else {
+				state.HandleDataObjectList(t.Context(), &api.Entry{Bat: liveProto}, nil, mp)
+			}
+			require.Zero(t, index.Len(), "live creation is filtered even when stats are nonzero")
 			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, entry, tombstone))
 			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, entry, tombstone))
 			require.Equal(t, 1, index.Len(), "checkpoint duplicate cannot duplicate an object")

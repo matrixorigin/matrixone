@@ -4004,7 +4004,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	var scalarAdmission *dropLifecycleAdmission
-	if !isTemp && c.isLifecycleRC() && !truncate.GetIsDelete() {
+	if !isTemp && c.isLifecycleRC() && (!truncate.GetIsDelete() || c.transactionLocalReplacement(rel)) {
 		var admittedDB engine.Database
 		var admittedRel engine.Relation
 		admittedDB, admittedRel, scalarAdmission, err = c.admitScalarReplacementRC(db, relationName, rel)
@@ -4473,7 +4473,37 @@ func (c *Compile) finishTemporaryDropRetry() {
 	c.temporaryDropRetryActive = false
 }
 
-func (s *Scope) DropTable(c *Compile) (retErr error) {
+func (s *Scope) DropTable(c *Compile) error {
+	// Unpublished scalar cleanup uses the same proof as local replacement.
+	// Protected, multi-target and already-certified DROP retain their owners.
+	if _, borrowed := c.proc.Ctx.Value(dropLifecycleKey{}).(*dropLifecycleReceipt); !borrowed && c.isLifecycleRC() {
+		q := s.Plan.GetDdl().GetDropTable()
+		tables := q.GetTables()
+		if len(tables) == 0 {
+			tables = []*plan.DropTable{q}
+		}
+		if len(tables) == 1 && tables[0] != nil && tables[0].TableId != 0 && !tables[0].GetTableDef().GetIsTemporary() &&
+			c.transactionLocalTableIDs(tables[0].TableId, plan2.SnapshotTableID(tables[0].GetTableDef())) {
+			target := tables[0]
+			db, err := c.e.Database(c.proc.Ctx, target.Database, c.proc.GetTxnOperator())
+			if err == nil {
+				rel, err := db.Relation(c.proc.Ctx, target.Table, nil)
+				if err == nil && rel.GetTableID(c.proc.Ctx) == target.TableId && c.transactionLocalReplacement(rel) {
+					_, _, admission, err := c.admitScalarReplacementRC(target.Database, target.Table, rel)
+					if err != nil {
+						return err
+					}
+					if admission != nil {
+						return c.withDropLifecycle(*admission, func() error { return s.dropTable(c) })
+					}
+				}
+			}
+		}
+	}
+	return s.dropTable(c)
+}
+
+func (s *Scope) dropTable(c *Compile) (retErr error) {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}

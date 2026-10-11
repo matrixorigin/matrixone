@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
@@ -554,33 +555,45 @@ func (c *Compile) lockCatalogName(rel engine.Relation, actor uint32, names []str
 }
 
 func (c *Compile) admitCreateNames(q *plan.CreateTable, database string) error {
-	if c.disableLock || q.Temporary || !c.isLifecycleRC() || c.createNamePinsAdmitted {
-		return nil
+	rebuild, err := c.pinCreateNames(q, database)
+	if err != nil {
+		return err
+	}
+	if rebuild {
+		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
+	return nil
+}
+
+// pinCreateNames reports a pre-effect plan refresh separately from execution retry.
+func (c *Compile) pinCreateNames(q *plan.CreateTable, database string) (bool, error) {
+	if c.disableLock || q.Temporary || plan2.IsFkBannedDatabase(database) || !c.isLifecycleRC() || c.createNamePinsAdmitted {
+		return false, nil
 	}
 	// Internal replacement must borrow its outer frontier, never advance after DROP.
 	if receipt, ok := c.proc.Ctx.Value(dropLifecycleKey{}).(*dropLifecycleReceipt); ok {
 		actor, err := defines.GetAccountId(c.proc.Ctx)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if receipt.closed || receipt.owner != c.proc.GetTxnOperator() || actor != receipt.admission.accountID {
-			return moerr.NewInternalError(c.proc.Ctx, "invalid CREATE lifecycle owner")
+			return false, moerr.NewInternalError(c.proc.Ctx, "invalid CREATE lifecycle owner")
 		}
 		for name := range createNameDomain(q, database) {
 			if _, ok := receipt.admission.createNames[name]; !ok {
-				return moerr.NewInternalError(c.proc.Ctx, "CREATE exceeds admitted replacement names")
+				return false, moerr.NewInternalError(c.proc.Ctx, "CREATE exceeds admitted replacement names")
 			}
 		}
 		c.createNamePinsAdmitted = true
-		return nil
+		return false, nil
 	}
 	actor, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	snapshot, err := c.proc.GetTxnOperator().Snapshot()
 	if err != nil {
-		return err
+		return false, err
 	}
 	policy := lock.WaitPolicy_Wait
 	if len(snapshot.LockTables) > 0 || createTablePublishesForeignKeys(q) {
@@ -594,16 +607,16 @@ func (c *Compile) admitCreateNames(q *plan.CreateTable, database string) error {
 	databases := slices.Sorted(maps.Keys(dbNames))
 	dbRel, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
 	if err != nil {
-		return err
+		return false, err
 	}
 	for _, dbName := range databases {
 		if _, err = c.lockCatalogName(dbRel, actor, []string{dbName}, lock.LockMode_Shared, policy); err != nil {
-			return err
+			return false, err
 		}
 	}
 	tableRel, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
 	if err != nil {
-		return err
+		return false, err
 	}
 	names := slices.Collect(maps.Keys(domain))
 	slices.SortFunc(names, func(a, b plan2.FkReferKey) int {
@@ -629,19 +642,63 @@ func (c *Compile) admitCreateNames(q *plan.CreateTable, database string) error {
 	for _, name := range names {
 		result, err := c.lockCatalogName(tableRel, actor, []string{name.Db, name.Tbl}, lock.LockMode_Exclusive, policy)
 		if err != nil {
-			return err
+			return false, err
 		}
 		refresh = refresh || !sameCreateNameBinding(q.FkNameBinding, result.LockedOn) || result.Timestamp.IsEmpty() || !result.Timestamp.Less(planSnapshot)
 	}
 	if refresh {
 		if err = c.advanceLifecycleAdmissionSnapshot(); err != nil {
-			return err
+			return false, err
 		}
 		c.createNamePinsAdmitted = true
-		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		return true, nil
 	}
 	c.createNamePinsAdmitted = true
-	return nil
+	return false, nil
+}
+
+// prepareCreateNamePlan uses the existing planner before a borrowed statement
+// acquires execution resources. Later execution retries still belong to its caller.
+func (c *Compile) prepareCreateNamePlan(p *plan.Plan) (*plan.Plan, error) {
+	q := createTableForNameAdmission(p)
+	if q == nil || q.Temporary || c.disableLock || !c.isLifecycleRC() {
+		return p, nil
+	}
+	database := q.Database
+	if database == "" {
+		database = c.db
+	}
+	if plan2.IsFkBannedDatabase(database) {
+		return p, nil
+	}
+	c.capturePlanSnapshot()
+	if createTablePublishesForeignKeys(q) {
+		if err := c.admitForeignKeyCreate(); err != nil {
+			return nil, err
+		}
+	}
+	rebuild, err := c.pinCreateNames(q, database)
+	if err != nil {
+		return nil, err
+	}
+	if !rebuild {
+		return p, nil
+	}
+	rebuilt, err := c.buildPlanFunc(c.proc.Ctx)
+	if err != nil {
+		return nil, err
+	}
+	next := createTableForNameAdmission(rebuilt)
+	if !sameCreateNameDomain(q, next) {
+		return nil, moerr.NewLockConflict(c.proc.Ctx)
+	}
+	if createTablePublishesForeignKeys(next) {
+		if err := c.admitForeignKeyCreate(); err != nil {
+			return nil, err
+		}
+	}
+	c.capturePlanSnapshot()
+	return rebuilt, nil
 }
 
 // Pin replacement endpoints before any DROP/COPY effects. G excludes FK
@@ -653,6 +710,16 @@ func (c *Compile) admitReplacementNames(database, source, target string, rel eng
 		return nil, err
 	}
 	def := rel.CopyTableDef(c.proc.Ctx)
+	if def.Partition != nil {
+		metadata, err := c.proc.GetPartitionService().GetPartitionMetadata(c.proc.Ctx, rel.GetTableID(c.proc.Ctx), c.proc.GetTxnOperator())
+		if err != nil {
+			return nil, err
+		}
+		for _, partition := range metadata.Partitions {
+			domain[plan2.FkReferKey{Db: database, Tbl: partition.PartitionTableName}] = struct{}{}
+			domain[plan2.FkReferKey{Db: database, Tbl: partitionservice.GetPartitionTableName(target, partition.Name)}] = struct{}{}
+		}
+	}
 	ids := append([]uint64(nil), def.RefChildTbls...)
 	for _, fk := range def.Fkeys {
 		ids = append(ids, fk.ForeignTbl)
