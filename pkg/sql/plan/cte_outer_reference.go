@@ -46,16 +46,20 @@ type localCTEDomain struct {
 	scans                  map[int32][]*plan.Expr
 }
 
-// Limit demand-domain preparation to local CTE consumers; ordinary subqueries
-// must retain their existing predicate pushdown and index selection paths.
-func (builder *QueryBuilder) hasLocalCTEConsumer(expr *plan.Expr) bool {
+// Only CTEs that need an outer parameter domain require demand barriers.
+// Independent CTEs and predicate-only correlations retain ordinary pushdown.
+func (builder *QueryBuilder) hasParameterizedLocalCTEConsumer(expr *plan.Expr) bool {
 	if len(builder.localCTERoots) == 0 {
 		return false
 	}
 	var contains func(int32) bool
 	contains = func(id int32) bool {
 		if builder.localCTERoots[id] {
-			return true
+			d := &localCTEDomain{builder: builder, nodes: make(map[int32]bool)}
+			d.collect(id)
+			if d.needsDomain(id) {
+				return true
+			}
 		}
 		for _, child := range builder.qry.Nodes[id].Children {
 			if contains(child) {
@@ -86,16 +90,7 @@ func (builder *QueryBuilder) parameterizeLocalCTEs(
 			d := &localCTEDomain{builder: builder, outerID: outerID, ctx: ctx, subType: subType, guarded: guarded,
 				params: make(map[[2]int32]int), nodes: make(map[int32]bool), scans: make(map[int32][]*plan.Expr)}
 			d.collect(id)
-			needsDomain := false
-			for nodeID := range d.nodes {
-				n := builder.qry.Nodes[nodeID]
-				for _, e := range localCTENodeExprs(n) {
-					if hasCorrCol(e) && (n.NodeType == plan.Node_PROJECT || n.NodeType == plan.Node_VALUE_SCAN || len(n.SourceStep) > 0 || len(builder.qry.Nodes[id].SourceStep) > 0) {
-						needsDomain = true
-					}
-				}
-			}
-			if needsDomain {
+			if d.needsDomain(id) {
 				// These consumers require their own per-identity rewrite. Letting
 				// the generic predicate pull-up cross them merges outer rows or
 				// leaves hidden columns out of the set-operation schema.
@@ -440,6 +435,24 @@ func (d *localCTEDomain) admitVariableDemand(root int32) error {
 		return d.unsupported("variable demand has no seed evaluation barrier")
 	}
 	return nil
+}
+
+// Keep barrier admission and parameterization on the same dependency proof,
+// including recursive producers whose parameters live behind SourceStep edges.
+func (d *localCTEDomain) needsDomain(root int32) bool {
+	for id := range d.nodes {
+		n := d.builder.qry.Nodes[id]
+		if n.NodeType != plan.Node_PROJECT && n.NodeType != plan.Node_VALUE_SCAN &&
+			len(n.SourceStep) == 0 && len(d.builder.qry.Nodes[root].SourceStep) == 0 {
+			continue
+		}
+		for _, expr := range localCTENodeExprs(n) {
+			if hasCorrCol(expr) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (d *localCTEDomain) collect(id int32) {

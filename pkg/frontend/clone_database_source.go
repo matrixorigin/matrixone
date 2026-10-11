@@ -603,7 +603,14 @@ func collectCloneDatabaseSource(
 	}
 	mergeFkDeps(fkDeps, schemaFkDeps)
 	sortedFkTbls, hasFkCycle := cloneFkTableOrder(fkDeps)
-	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, snapshot, srcDBName, "", sortedFkTbls, nil)
+	// FK ordering selects from this collection's logical objects. Re-querying
+	// each dependency duplicates enumeration and SHOW CREATE work, and can
+	// replace the definitions used to derive the dependency order.
+	var fkSource *partialRestoreSource
+	if len(sortedFkTbls) != 0 {
+		fkSource = newPartialRestoreSource(srcTblInfos)
+	}
+	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, snapshot, srcDBName, "", sortedFkTbls, fkSource)
 	if err != nil {
 		return source, err
 	}

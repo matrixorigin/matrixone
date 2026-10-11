@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -28,6 +29,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	mysql "github.com/matrixorigin/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,6 +43,14 @@ func TestCDCTargetGuardSQLRetryClassification(t *testing.T) {
 		{"success", nil, false},
 		{"bad connection", driver.ErrBadConn, true},
 		{"lost MySQL connection", &gomysql.MySQLError{Number: 2013}, true},
+		{"production driver lost connection", &mysql.MySQLError{Number: 2013}, true},
+		{"production driver communication timeout", &mysql.MySQLError{Number: 1159}, true},
+		{"production driver MO RPC timeout", &mysql.MySQLError{Number: moerr.ErrRPCTimeout}, true},
+		{"wrapped production driver timeout", fmt.Errorf("target: %w", &mysql.MySQLError{Number: 1161}), true},
+		{"production driver syntax error", &mysql.MySQLError{Number: 1064}, false},
+		{"production driver permission denied", &mysql.MySQLError{Number: 1142}, false},
+		{"release timeout with discarded connection", errors.Join(context.DeadlineExceeded, sql.ErrConnDone), true},
+		{"cancelled release timeout", errors.Join(context.Canceled, context.DeadlineExceeded), false},
 		{"MO RC definition changed over SQL wire", &gomysql.MySQLError{Number: moerr.ErrTxnNeedRetryWithDefChanged}, true},
 		{"missing SELECT privilege", &gomysql.MySQLError{Number: 1142}, false},
 		{"cancelled", context.Canceled, false},
@@ -71,7 +82,7 @@ func TestCDCBackendTransportEquivalence(t *testing.T) {
 	} {
 		t.Run(fmt.Sprint(cause.ErrorCode()), func(t *testing.T) {
 			want := cause.ErrorCode() != moerr.ErrClientClosed && cause.ErrorCode() != moerr.ErrStreamClosed
-			for _, err := range []error{cause, &gomysql.MySQLError{Number: cause.ErrorCode()}} {
+			for _, err := range []error{cause, &gomysql.MySQLError{Number: cause.ErrorCode()}, &mysql.MySQLError{Number: cause.ErrorCode()}} {
 				err = fmt.Errorf("backend: %w", err)
 				retryable, classified := ClassifyRetryableError(err)
 				require.True(t, classified)
@@ -80,8 +91,11 @@ func TestCDCBackendTransportEquivalence(t *testing.T) {
 			}
 		})
 	}
+	retryable, classified := ClassifyRetryableError(sql.ErrConnDone)
+	require.False(t, retryable)
+	require.False(t, classified)
 	unknown := &gomysql.MySQLError{Number: 999, Message: "legacy runtime timeout"}
-	retryable, classified := ClassifyRetryableError(unknown)
+	retryable, classified = ClassifyRetryableError(unknown)
 	require.False(t, retryable)
 	require.False(t, classified)
 	require.True(t, (&TableChangeStream{}).determineRetryable(unknown))
@@ -582,6 +596,8 @@ func TestNormalizeCDCTargetColumnTypeFromMOAndMySQL(t *testing.T) {
 		{"DATETIME", "DATETIME(0)"},
 		{"TIMESTAMP", "TIMESTAMP(0)"},
 		{"BOOL", "BOOL(0)"},
+		{"BOOLEAN", "BOOL"},
+		{"BOOLEAN", "BOOL(0)"},
 		{"JSON", "JSON(0)"},
 	} {
 		require.Equal(t, normalizeCDCTargetColumnType(tc.source), normalizeCDCTargetColumnType(tc.target), tc)
@@ -591,6 +607,40 @@ func TestNormalizeCDCTargetColumnTypeFromMOAndMySQL(t *testing.T) {
 	require.NotEqual(t, normalizeCDCTargetColumnType("ENUM('a b')"), normalizeCDCTargetColumnType("ENUM('ab')"))
 	require.NotEqual(t, normalizeCDCTargetColumnType("ENUM('integer')"), normalizeCDCTargetColumnType("ENUM('int')"))
 	require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_int8)}, "BOOL(0)", CDCSinkType_MO, sql.NullInt64{}))
+	for _, target := range []string{"BOOLEAN", "BOOL", "BOOL(0)"} {
+		require.True(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, target, CDCSinkType_MO, sql.NullInt64{}))
+		require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_int8)}, target, CDCSinkType_MO, sql.NullInt64{}))
+	}
+	for _, source := range []plan.Type{
+		{Id: int32(types.T_float32), Width: 5, Scale: 2},
+		{Id: int32(types.T_float64), Width: 5, Scale: 0},
+		{Id: int32(types.T_float32), Width: 5, Scale: -1},
+	} {
+		scale := sql.NullInt64{Int64: int64(source.Scale), Valid: source.Scale >= 0}
+		canonical := plan2.FormatColType(source)
+		name := "float"
+		if types.T(source.Id) == types.T_float64 {
+			name = "double"
+		}
+		for _, target := range []string{canonical, fmt.Sprintf("%s(5)", name)} {
+			require.True(t, cdcTargetColumnTypeMatches(source, target, CDCSinkType_MO, scale))
+			require.False(t, cdcTargetColumnTypeMatches(source, target, CDCSinkType_MO, sql.NullInt64{Int64: 3, Valid: true}))
+		}
+		require.False(t, cdcTargetColumnTypeMatches(source, fmt.Sprintf("%s(6,2)", name), CDCSinkType_MO, scale))
+	}
+
+	for _, tc := range []struct {
+		source plan.Type
+		target string
+	}{
+		{plan.Type{Id: int32(types.T_enum), Enumvalues: `UP,O'Brien,Back\slash`}, `enum('UP','O''Brien','Back\\slash')`},
+		{plan.Type{Id: int32(types.T_uint64), Enumvalues: `UP,O'Brien,Back\slash`}, `set('UP','O''Brien','Back\\slash')`},
+	} {
+		require.True(t, cdcTargetColumnTypeMatches(tc.source, tc.target, CDCSinkType_MO, sql.NullInt64{}))
+		require.False(t, cdcTargetColumnTypeMatches(tc.source, strings.Replace(tc.target, "'UP'", "'up'", 1), CDCSinkType_MO, sql.NullInt64{}))
+		require.False(t, cdcTargetColumnTypeMatches(tc.source, strings.Replace(tc.target, "Back", "back", 1), CDCSinkType_MO, sql.NullInt64{}))
+	}
+
 	require.True(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MySQL, sql.NullInt64{}))
 	require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MO, sql.NullInt64{}))
 }

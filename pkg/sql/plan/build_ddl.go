@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -223,15 +224,24 @@ func validateViewDefinitionPlugins(ctx CompilerContext, query *plan.Query) error
 	return nil
 }
 
-func genViewTableDef(
+// viewColumnInference is the common output of View authoring and description.
+// It owns its columns; definition publication is deliberately a separate step.
+type viewColumnInference struct {
+	columns             []*plan.ColDef
+	provenance          []OutputColumnProvenance
+	dependencies        []ViewDependency
+	requiredProtocol    int64
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
+}
+
+func inferViewColumns(
 	ctx CompilerContext,
 	stmt *tree.Select,
 	colNames tree.IdentifierList,
 	viewDatabase string,
 	viewName string,
 	forAuthoring bool,
-) (*plan.TableDef, error) {
-	var tableDef plan.TableDef
+) (*viewColumnInference, error) {
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
 	dependencyCapture.metadataBudget = !forAuthoring
 	ctx = dependencyCapture
@@ -241,6 +251,9 @@ func genViewTableDef(
 	var preOptimizeViewRequiredProtocol int64
 	validate := func(query *Query) error {
 		for _, node := range query.Nodes {
+			if node != nil && node.NodeType == plan.Node_FUNCTION_SCAN && node.TableDef.GetTblFunc().GetName() == "json_table" {
+				return moerr.NewNotSupported(ctx.GetContext(), "JSON_TABLE views require the view compatibility gate")
+			}
 			if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
 				continue
 			}
@@ -338,6 +351,11 @@ func genViewTableDef(
 			originName = string(colNames[idx])
 			name = originName
 		}
+		if forAuthoring {
+			if err := validateIdentifier(ctx.GetContext(), name); err != nil {
+				return nil, err
+			}
+		}
 		typ := &expr.Typ
 		if idx < len(outputColumnProvenance) {
 			if sourceType := mysqlSpecialTypeFromProvenance(outputColumnProvenance[idx]); sourceType != nil {
@@ -361,7 +379,28 @@ func genViewTableDef(
 			Default:    defaultDef,
 		}
 	}
-	tableDef.Cols = cols
+	return &viewColumnInference{
+		columns:             cols,
+		provenance:          outputColumnProvenance,
+		dependencies:        dependencyCapture.dependencies(),
+		requiredProtocol:    viewRequiredProtocol,
+		expandedSelectLists: expandedSelectLists,
+	}, nil
+}
+
+func genViewTableDef(
+	ctx CompilerContext,
+	stmt *tree.Select,
+	colNames tree.IdentifierList,
+	viewDatabase string,
+	viewName string,
+	forAuthoring bool,
+) (*plan.TableDef, error) {
+	inferred, err := inferViewColumns(ctx, stmt, colNames, viewDatabase, viewName, forAuthoring)
+	if err != nil {
+		return nil, err
+	}
+	tableDef := plan.TableDef{Cols: inferred.columns}
 
 	// Check alter and change the viewsql.
 	rootSQL := ctx.GetRootSql()
@@ -377,15 +416,15 @@ func genViewTableDef(
 		}
 	}
 	persistedCreateSQL := rootSQL
-	if stableViewSQL, rewritten := stableViewSQLWithExpandedStars(ctx, stmt, viewSql, expandedSelectLists); rewritten {
+	if stableViewSQL, rewritten := stableViewSQLWithExpandedStars(ctx, stmt, viewSql, inferred.expandedSelectLists); rewritten {
 		viewSql = stableViewSQL
 		persistedCreateSQL = stableViewSQL
 	}
 
 	lowerCaseTableNames := ctx.GetLowerCaseTableNames()
 	var persistedRequiredProtocol *int64
-	if viewRequiredProtocol > 0 {
-		persistedRequiredProtocol = &viewRequiredProtocol
+	if inferred.requiredProtocol > 0 {
+		persistedRequiredProtocol = &inferred.requiredProtocol
 	}
 	viewData, err := json.Marshal(ViewData{
 		Stmt:                    viewSql,
@@ -393,7 +432,7 @@ func genViewTableDef(
 		SQLMode:                 parserSQLModeFromContext(ctx),
 		SecurityType:            getViewSecurityTypeFromContext(ctx),
 		LowerCaseTableNames:     &lowerCaseTableNames,
-		Dependencies:            dependencyCapture.dependencies(),
+		Dependencies:            inferred.dependencies,
 		RequiredProtocolVersion: persistedRequiredProtocol,
 	})
 	if err != nil {
@@ -1570,6 +1609,9 @@ func genAsSelectCols(
 			}
 		}
 
+		if err := validateIdentifier(ctx.GetContext(), bindCtx.headings[i]); err != nil {
+			return nil, nil, err
+		}
 		cols[i] = &plan.ColDef{
 			Name: normalizeCTASColumnName(
 				bindCtx.headings[i], bindCtx.headingProvenanceFor(i)),
@@ -2291,6 +2333,10 @@ func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, e
 }
 
 func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan, error) {
+	// Sequences historically support names beyond the table identifier length limit.
+	if err := validateIdentifierEncoding(ctx.GetContext(), string(stmt.Name.ObjectName)); err != nil {
+		return nil, err
+	}
 	createSequence := &plan.CreateSequence{
 		IfNotExists: stmt.IfNotExists,
 		TableDef: &TableDef{
@@ -3050,7 +3096,7 @@ func buildCreateTable(
 			BindingTags: []int32{builder.genNewBindTag()},
 		}, bindContext)
 
-		err = builder.addBinding(nodeID, tree.AliasClause{}, bindContext)
+		err = builder.addBinding(nodeID, tree.AliasClause{}, bindContext, createTable.Database)
 		if err != nil {
 			return nil, err
 		}
@@ -3090,7 +3136,17 @@ func buildCreateTable(
 	}, nil
 }
 
+func validateIdentifierEncoding(ctx context.Context, name string) error {
+	if !utf8.ValidString(name) {
+		return moerr.NewInvalidInputf(ctx, "identifier %q is not valid UTF-8", name)
+	}
+	return nil
+}
+
 func validateIdentifier(ctx context.Context, name string) error {
+	if err := validateIdentifierEncoding(ctx, name); err != nil {
+		return err
+	}
 	if getNumOfCharacters(name) <= MaxIdentifierLength {
 		return nil
 	}
@@ -3106,7 +3162,8 @@ func validateCreateTableIdentifier(ctx CompilerContext, name string) error {
 
 	// Internal DDL and session-scoped temporary tables can materialize generated
 	// physical names with UUID prefixes or suffixes.
-	if defines.IsInternalExecutor(ctx.GetContext()) || isGeneratedSessionTempTableName(ctx, name) {
+	if moerr.IsMoErrCode(err, moerr.ErrTooLongIdent) &&
+		(defines.IsInternalExecutor(ctx.GetContext()) || isGeneratedSessionTempTableName(ctx, name)) {
 		return nil
 	}
 
@@ -3328,6 +3385,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		return err
 	}
 	createTable.TableDef.DefaultCharset = tableCharset
+	if types.IsUnicodeCollation(uint8(tableCharset)) {
+		createTable.TableDef.CollationVersion = uint32(types.CollationVersionV1)
+	} else {
+		createTable.TableDef.CollationVersion = uint32(types.CollationVersionLegacy)
+	}
 
 	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
@@ -3346,12 +3408,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	var isGeneratedCol []bool
 	for _, item := range stmt.Defs {
 		if def, ok := item.(*tree.ColumnTableDef); ok {
-			cType, err := getTypeFromAst(ctx.GetContext(), def.Type)
+			cType, err := getColumnTypeFromAst(ctx.GetContext(), def, tableCharset, replay)
 			if err != nil {
-				return err
-			}
-			cType.Charset = uint32(types.CharsetType(types.T(cType.Id)))
-			if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &cType, tableCharset, def.Attributes); err != nil {
 				return err
 			}
 			isGen := false
@@ -3377,12 +3435,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
-			colType, err := getTypeFromAst(ctx.GetContext(), def.Type)
+			colType, err := getColumnTypeFromAst(ctx.GetContext(), def, tableCharset, replay)
 			if err != nil {
-				return err
-			}
-			colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
-			if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableCharset, def.Attributes); err != nil {
 				return err
 			}
 			firstLegacyTimestamp := types.T(colType.Id) == types.T_timestamp && !legacyTimestampFirstSeen
@@ -3432,6 +3486,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				case *tree.AttributeGeneratedAlways:
 					isGenerated = true
 				case *tree.AttributePrimaryKey, *tree.AttributeKey:
+					if err := rejectNativeUnicodePrimaryKey(ctx.GetContext(), colType, colNameOrigin); err != nil {
+						return err
+					}
 					if colType.GetId() == int32(types.T_blob) {
 						return moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
 					}
@@ -3466,6 +3523,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
+					if err := rejectNativeUnicodeUniqueKey(ctx.GetContext(), colType, colNameOrigin); err != nil {
+						return err
+					}
 					if isSetPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in unique index", colNameOrigin))
 
@@ -4002,6 +4062,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 			// Reject VIRTUAL generated columns in PRIMARY KEY
 			col := colMap[primaryKey]
+			if err := rejectNativeUnicodePrimaryKey(ctx.GetContext(), col.Typ, col.OriginName); err != nil {
+				return err
+			}
 			if col.GeneratedCol != nil && !col.GeneratedCol.IsStored {
 				return moerr.NewNotSupported(ctx.GetContext(),
 					fmt.Sprintf("defining a virtual generated column '%s' as primary key", col.OriginName))
@@ -4634,6 +4697,16 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		if err != nil {
 			return err
 		}
+		for _, def := range idxDefs {
+			if def != nil {
+				def.KeyFormat = createTable.TableDef.KeyFormat
+			}
+		}
+		for _, def := range tblDefs {
+			if def != nil {
+				def.KeyFormat = createTable.TableDef.KeyFormat
+			}
+		}
 		// Capture the plugin's build-time session vars (BuildSessionVars) into each
 		// index def's algo_params.session_vars — mirroring CreateIndexDef's vector
 		// path — so background builds (idxcron reindex, ISCP async, clone/restore)
@@ -4718,8 +4791,10 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			return err
 		}
 		tableDef := &TableDef{
-			Name: indexTableName,
+			Name:      indexTableName,
+			KeyFormat: createTable.TableDef.KeyFormat,
 		}
+		indexDef.KeyFormat = createTable.TableDef.KeyFormat
 		indexParts := make([]string, 0)
 
 		for _, keyPart := range indexInfo.KeyParts {
@@ -4743,7 +4818,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
-				Typ:  indexTableKeyTypeForSinglePart(colMap[colName], keyPart),
+				Typ:  indexTableKeyTypeForSinglePartWithFormat(colMap[colName], keyPart, tableDef.KeyFormat),
 				Default: &plan.Default{
 					NullAbility:  false,
 					Expr:         nil,
@@ -4881,9 +4956,9 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		var tableDef []*TableDef
 		switch indexInfo.KeyType {
 		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID, tree.INDEX_TYPE_RTREE:
-			indexDef, tableDef, err = buildRegularSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
+			indexDef, tableDef, err = buildRegularSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName, createTable.TableDef.KeyFormat)
 		case tree.INDEX_TYPE_MASTER:
-			indexDef, tableDef, err = buildMasterSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
+			indexDef, tableDef, err = buildMasterSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName, createTable.TableDef.KeyFormat)
 		default:
 			// Vector-index algorithms live in pkg/vectorindex/<algo>/plugin/plan
 			// (BuildSecondaryIndexDefs). Any KeyType registered with the
@@ -4897,6 +4972,16 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 
 		if err != nil {
 			return err
+		}
+		for _, def := range indexDef {
+			if def != nil {
+				def.KeyFormat = createTable.TableDef.KeyFormat
+			}
+		}
+		for _, def := range tableDef {
+			if def != nil {
+				def.KeyFormat = createTable.TableDef.KeyFormat
+			}
 		}
 		setIndexDefsVisibility(indexDef, indexInfo.IndexOption)
 		createTable.IndexTables = append(createTable.IndexTables, tableDef...)
@@ -4945,7 +5030,7 @@ func checkSpatialIndexColumnSupport(ctx CompilerContext, indexInfo *tree.Index, 
 //	primary key __mo_index_idx_col,
 //
 // )
-func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string, keyFormat uint32) ([]*plan.IndexDef, []*TableDef, error) {
 	// 1. indexDef init
 	indexDef := &plan.IndexDef{}
 	indexDef.Unique = false
@@ -4956,8 +5041,10 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 		return nil, nil, err
 	}
 	tableDef := &TableDef{
-		Name: indexTableName,
+		Name:      indexTableName,
+		KeyFormat: keyFormat,
 	}
+	indexDef.KeyFormat = keyFormat
 
 	nameCount := make(map[string]int)
 	// Note: Index Parts will store the ColName, as Parts is used to populate mo_index_table.
@@ -5088,7 +5175,7 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 //	primary key __mo_index_idx_col,
 //
 // )
-func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string, keyFormat uint32) ([]*plan.IndexDef, []*TableDef, error) {
 
 	// 1. indexDef init
 	indexDef := &plan.IndexDef{}
@@ -5101,8 +5188,10 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		return nil, nil, err
 	}
 	tableDef := &TableDef{
-		Name: indexTableName,
+		Name:      indexTableName,
+		KeyFormat: keyFormat,
 	}
+	indexDef.KeyFormat = keyFormat
 
 	nameCount := make(map[string]int)
 	indexParts := make([]string, 0)
@@ -5138,17 +5227,11 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		colDef := &ColDef{
 			Name: keyName,
 			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				// don't copy auto increment
-				Id:                       colMap[pkeyName].Typ.Id,
-				Width:                    colMap[pkeyName].Typ.Width,
-				Scale:                    colMap[pkeyName].Typ.Scale,
-				Charset:                  colMap[pkeyName].Typ.Charset,
-				CollationVersion:         colMap[pkeyName].Typ.CollationVersion,
-				CollationCoercibility:    colMap[pkeyName].Typ.CollationCoercibility,
-				CollationCoercibilitySet: colMap[pkeyName].Typ.CollationCoercibilitySet,
-				CollationMergeConflict:   colMap[pkeyName].Typ.CollationMergeConflict,
-			},
+			// Keep legacy primary-key payloads unchanged. A versioned
+			// Unicode key is opaque binary, just like the unique-index
+			// hidden table above; otherwise a storage consumer can apply the
+			// source collation a second time.
+			Typ: indexTablePrimaryKeyTypeWithFormat(colMap[pkeyName], keyFormat),
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,
@@ -6685,6 +6768,15 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						// but later actions in this statement must already observe it.
 						currentTableDef.RefChildTbls = append(currentTableDef.RefChildTbls, 0)
 					}
+					// Self-references cannot bind the parent key until the final
+					// table definition is assembled, but the catalog row must still
+					// be written for INPLACE ALTER just as it is for CREATE/COPY.
+					fkData.UpdateSql = getSqlForAddFkWithCatalogLayout(
+						databaseName,
+						currentTableDef.Name,
+						fkData,
+						fkData.catalogLayout,
+					)
 				} else {
 					// get table def of parent table
 					_, parentTableDef, err := ctx.Resolve(
@@ -7880,7 +7972,7 @@ func constructAddedPartitionDefs(
 			TableDef:    tableDef,
 			BindingTags: []int32{partBuilder.genNewBindTag()},
 		}, partBindCtx)
-		if err := partBuilder.addBinding(nodeID, tree.AliasClause{}, partBindCtx); err != nil {
+		if err := partBuilder.addBinding(nodeID, tree.AliasClause{}, partBindCtx, tableDef.DbName); err != nil {
 			return nil, err
 		}
 		partitionBinder := NewPartitionBinder(partBuilder, partBindCtx)

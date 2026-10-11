@@ -117,3 +117,27 @@ SELECT TIMEDIFF('15:30:45', '2000-01-01 15:30:45') AS mixed_format;
 This document clarifies the following situations:
 1. Cases where MO provides more user-friendly behavior than MySQL's strict interpretation
 2. Edge cases requiring explicit documentation
+
+
+## UUID generation and native values (Issues #28380, #28382)
+
+`UUID()` and `UUID_V7()` return native 16-byte UUIDv7 values, rendered as 36
+characters by SQL clients. MySQL's `UUID()` returns a version 1 character
+string. MatrixOne retains its native type and v7 ordering contract. Use
+`UUID_V1()` for version 1, or `CAST(UUID_V1() AS CHAR)` for both version 1 and
+character expression semantics.
+
+Plain UUID CTAS results remain UUID columns. Native comparisons validate text
+operands as UUIDs; `UUID() IN ('fallback')` therefore errors. Explicitly cast
+with `CAST(UUID() AS CHAR)` when arbitrary text comparison is intended.
+Mixed UUID/CHAR/VARCHAR/TEXT value expressions select a character result that
+can hold the entire UUID. UUID/NULL-only expressions retain the native type.
+
+`UUID_TO_BIN` and `BIN_TO_UUID` treat a NULL swap flag as zero; strings use
+MySQL decimal-prefix numeric coercion. The swap permutation applies to every
+UUID version. Use matching encode/decode flags and default/zero for v7.
+NULL UUID/binary input stays NULL; invalid non-NULL input remains an error.
+
+`UUID_SHORT()` is not implemented. A distributed uniqueness contract requires
+an explicit decision about cluster identity, restarts and clones. A local
+counter or a truncated UUID would not provide that guarantee.

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -29,10 +30,154 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
+
+func TestCheckUpgradePerVersionUnready(t *testing.T) {
+	for _, found := range []bool{false, true} {
+		t.Run(fmt.Sprint(found), func(t *testing.T) {
+			mp := mpool.MustNewZeroNoFixed()
+			defer mpool.DeleteMPool(mp)
+			res := executor.NewMemResult([]types.Type{types.T_uint64.ToType()}, mp)
+			defer func() { res.GetResult().Close() }()
+			if found {
+				res.NewBatchWithRowCount(1)
+				require.NoError(t, executor.AppendFixedRows(res, 0, []uint64{10}))
+			}
+			// On success the reader must already have released its result;
+			// deferred fixture cleanup also covers failing assertions.
+			txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				require.Equal(t, "select 1 from mo_catalog.mo_version where state != 2 and (version != '4.0.13' or version_offset != 1) limit 1", sql)
+				return res.GetResult(), nil
+			}, &testTxnOperator{})
+			unready, err := checkUpgradePerVersionUnready(txn, versions.Version{Version: "4.0.13", VersionOffset: 1})
+			require.NoError(t, err)
+			require.Equal(t, found, unready)
+			require.Zero(t, mp.CurrNB(), "the pre-check owns and closes its query result")
+		})
+	}
+}
+
+func TestUpgradePreCheckStartsRecoveryAfterCommit(t *testing.T) {
+	for _, mode := range []string{"pending", "created", "steps ready", "no old task", "query failure", "commit failure", "stopped", "canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				runtime.RunTest("", func(runtime.Runtime) {
+					var validated, clusterWorker, tenantWorker atomic.Bool
+					state, total, ready := int32(versions.StateUpgradingTenant), int32(1), int32(0)
+					if mode == "created" {
+						state, total = versions.StateCreated, 0
+					} else if mode == "steps ready" {
+						state, ready = versions.StateReady, total
+					}
+					e := &precheckCommitExecutor{}
+					e.SQLExecutor = executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+						sql = strings.Join(strings.Fields(sql), " ")
+						switch {
+						case strings.Contains(sql, "FROM mo_catalog.mo_tables tbl"):
+							return ownRecoveryResult(t, buildExistsResult()), nil
+						case strings.Contains(sql, "from mo_catalog.mo_version"), strings.Contains(sql, "from mo_catalog.mo_upgrade"):
+							if mode == "query failure" {
+								return executor.Result{}, errRecoveryTest
+							}
+							if mode == "no old task" || (mode == "steps ready" && strings.Contains(sql, "mo_upgrade")) {
+								// A step-based pre-check sees nothing in the restart
+								// window, but the target is still durably Created.
+								return executor.Result{}, nil
+							}
+							return recoveryVersionResult(t, versions.Version{Version: "4.0.12", VersionOffset: 1}), nil
+						case strings.HasPrefix(sql, "select version, version_offset, state"):
+							require.True(t, e.committed.Load(), "validation must not nest inside the pre-check transaction")
+							validated.Store(true)
+							return recoveryVersionResult(t, versions.Version{Version: "4.0.12", VersionOffset: 1}), nil
+						case strings.Contains(sql, "from mo_upgrade where state = 1"):
+							require.True(t, e.committed.Load())
+							require.True(t, validated.Load(), "tenant workers must not bypass recovery admission")
+							tenantWorker.Store(true)
+							return executor.Result{}, nil
+						case strings.HasPrefix(sql, "select state from mo_version"):
+							clusterWorker.Store(true)
+							return executor.Result{}, errRecoveryTest // Leave progress to the real SQL regression.
+						case strings.Contains(sql, "from mo_upgrade"):
+							return ownRecoveryResult(t, buildUpgradeVersionResult(10, state, "4.0.11", "4.0.12", 1, 0, versions.No, versions.Yes, total, ready)), nil
+						default:
+							return executor.Result{}, fmt.Errorf("must not schedule a single-tenant retry: %s", sql)
+						}
+					}, &testTxnOperator{})
+					if mode == "commit failure" {
+						e.commitErr = errRecoveryTest
+					}
+					b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, e,
+						func(s *service) {
+							s.handles = []VersionHandle{
+								newTestVersionHandler("4.0.12", "4.0.11", versions.No, versions.Yes, 1),
+								newTestVersionHandler("4.0.13", "4.0.12", versions.No, versions.Yes, 1),
+							}
+							s.upgrade.checkUpgradeDuration = time.Second
+							s.upgrade.checkUpgradeTenantDuration = time.Second
+							s.upgrade.upgradeTenantTasks = 1
+						})
+					defer b.Close()
+					ctx, cancel := context.WithCancel(t.Context())
+					defer cancel()
+					if mode == "stopped" {
+						require.NoError(t, b.Close())
+					} else if mode == "canceled" {
+						cancel()
+					}
+					var err error
+					if mode == "no old task" {
+						err = b.UpgradePreCheck(ctx)
+						require.NoError(t, err)
+					} else {
+						_, err = b.UpgradeTenant(ctx, "tenant", 1, false)
+						switch mode {
+						case "pending", "created", "steps ready":
+							require.ErrorContains(t, err, "Please try again later")
+						case "query failure", "commit failure":
+							require.ErrorIs(t, err, errRecoveryTest)
+						case "stopped":
+							require.ErrorIs(t, err, stopper.ErrUnavailable)
+						case "canceled":
+							require.ErrorIs(t, err, context.Canceled)
+						}
+					}
+					synctest.Wait()
+					time.Sleep(time.Second) // Advance the production timers in virtual time.
+					synctest.Wait()
+					started := mode == "pending" || mode == "created" || mode == "steps ready"
+					require.Equal(t, started, clusterWorker.Load())
+					require.Equal(t, started, tenantWorker.Load())
+					require.Equal(t, started || mode == "stopped", validated.Load())
+					require.NoError(t, b.Close()) // Must cancel both workers even with the retained route pending.
+				})
+			})
+		})
+	}
+}
+
+type precheckCommitExecutor struct {
+	executor.SQLExecutor
+	committed atomic.Bool
+	commitErr error
+}
+
+func (e *precheckCommitExecutor) ExecTxn(ctx context.Context, fn func(executor.TxnExecutor) error, opts executor.Options) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := e.SQLExecutor.ExecTxn(ctx, fn, opts); err != nil {
+		return err
+	}
+	if e.commitErr != nil {
+		return e.commitErr
+	}
+	e.committed.Store(true)
+	return nil
+}
 
 func Test_UpgradeOneTenant(t *testing.T) {
 	runtime.RunTest("", func(rt runtime.Runtime) {
@@ -91,7 +236,7 @@ func TestUpgradeTenantRetry(t *testing.T) {
 							return buildLatestVersionResult(currentVersion, offset, versions.StateReady), nil
 						case strings.Contains(sql, "FROM mo_catalog.mo_tables tbl"):
 							return buildExistsResult(), nil
-						case strings.Contains(sql, "from mo_catalog.mo_upgrade") || strings.Contains(sql, "from mo_upgrade"):
+						case strings.Contains(sql, "from mo_catalog.mo_version") || strings.Contains(sql, "from mo_upgrade"):
 							return executor.Result{}, nil
 						default:
 							return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)

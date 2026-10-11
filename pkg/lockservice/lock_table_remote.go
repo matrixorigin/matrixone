@@ -492,8 +492,14 @@ func (l *remoteLockTable) unlockWithContext(
 }
 
 func retryRemoteUnlockError(err error) bool {
+	// A connection can break without timing out. This does not establish that
+	// the owner rejected unlock: refresh its binding before retrying or declaring
+	// old-generation cleanup complete. Keep deterministic owner errors terminal.
 	return retryRemoteLockError(err) ||
+		errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ECONNRESET) ||
 		errors.Is(err, morpc.ErrBackendCreateTimeout) ||
+		moerr.IsMoErrCode(err, moerr.ErrConnectionReset) ||
 		moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendClosed)

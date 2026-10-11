@@ -27,13 +27,13 @@ var tenantUpgEntries = []versions.UpgradeEntry{upgradeInformationSchemaColumns()
 
 func upgradeInformationSchemaColumns() versions.UpgradeEntry {
 	return versions.UpgradeEntry{Schema: sysview.InformationDBConst, TableName: "COLUMNS", UpgType: versions.MODIFY_VIEW,
-		UpgSql: sysview.InformationSchemaColumnsDDL, RequiredProtocolVersion: defines.MORPCVersion100,
+		UpgSql: sysview.InformationSchemaColumnsV100DDL(), RequiredProtocolVersion: defines.MORPCVersion100,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			exists, definition, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "COLUMNS")
 			if err == nil && !exists {
 				exists, definition, err = versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "columns")
 			}
-			return exists && definition == sysview.InformationSchemaColumnsDDL, err
+			return exists && definition == sysview.InformationSchemaColumnsV100DDL(), err
 		},
 		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.COLUMNS;", sysview.InformationDBConst)}
 }

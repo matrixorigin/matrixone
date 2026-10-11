@@ -780,3 +780,37 @@ func TestPrepareHnswIndexContext_DifferentDistanceFunctions(t *testing.T) {
 		})
 	}
 }
+
+// Stored procedures and Starlark mo.sql plan through a background session that
+// returns nil for vector-search variables it does not carry; the planner must
+// fall back to the default instead of panicking on .(int64) (issue #29147).
+func TestResolveInt64VariableNilFallsBackToDefault(t *testing.T) {
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	var value any
+	var resolveErr error
+	mockCtx := &customMockCompilerContext{
+		MockCompilerContext: baseMockCtx,
+		resolveVarFunc: func(string, bool, bool) (interface{}, error) {
+			return value, resolveErr
+		},
+	}
+	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
+
+	value = nil
+	got, err := builder.resolveInt64Variable("hnsw_threads_search", 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), got)
+
+	value = int64(4)
+	got, err = builder.resolveInt64Variable("ivf_threads_search", 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(4), got)
+
+	value = "4"
+	require.NotPanics(t, func() { _, err = builder.resolveInt64Variable("hnsw_threads_search", 0) })
+	require.Error(t, err)
+
+	value, resolveErr = nil, moerr.NewInternalError(context.Background(), "test error")
+	_, err = builder.resolveInt64Variable("hnsw_threads_search", 0)
+	require.Error(t, err)
+}

@@ -46,4 +46,11 @@ Tables_in_rename_transaction
 final_name
 markers
 set autocommit=1;
+create table `old\`(id int);
+insert into `old\` values(7);
+rename table `old\` to `new\`;
+select id from `new\`;
+id
+7
+drop table `new\`;
 drop database rename_transaction;

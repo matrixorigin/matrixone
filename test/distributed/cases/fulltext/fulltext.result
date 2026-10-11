@@ -239,20 +239,13 @@ Project  𝄀
               ->  Fulltext Index Scan on ftidx  𝄀
                     Fulltext Index: ftidx
 desc src;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-body  ¦  VARCHAR(65535)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
-title  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦  
+Field    Type    Null    Key    Default    Extra    Comment
+id    bigint    NO    PRI    null        
+body    varchar(16383)    YES    MUL    null        
+title    text    YES        null        
 show create table src;
-➤ Table[12,3,0]  ¦  Create Table[12,197,0]  𝄀
-src  ¦  CREATE TABLE `src` (
-  `id` bigint NOT NULL,
-  `body` varchar(65535) DEFAULT NULL,
-  `title` text DEFAULT NULL,
-  PRIMARY KEY (`id`),
- FULLTEXT `ftidx`(`body`,`title`),
- FULLTEXT `ftidx2`(`body`)
-)
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(16383) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`body`,`title`),\n FULLTEXT `ftidx2`(`body`)\n)
 drop table src;
 create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2));
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
@@ -301,10 +294,10 @@ select * from src where match(json1, json2) against('中文學習教材' in natu
 ➤ id[-5,64,0]  ¦  json1[-1,2147483647,0]  ¦  json2[-1,2147483647,0]  𝄀
 1  ¦  {"a": 2, "b": "中文學習教材"}  ¦  ["apple", "orange", "banana", "指引"]
 desc src;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-json1  ¦  JSON(0)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
-json2  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+Field    Type    Null    Key    Default    Extra    Comment
+id    bigint    NO    PRI    null        
+json1    json    YES    MUL    null        
+json2    json    YES        null        
 show create table src;
 ➤ Table[12,3,0]  ¦  Create Table[12,224,0]  𝄀
 src  ¦  CREATE TABLE `src` (
@@ -336,20 +329,13 @@ select * from src where match(json1, json2) against('中文學習教材' in natu
 ➤ id[-5,64,0]  ¦  json1[-1,16383,0]  ¦  json2[12,65535,0]  𝄀
 1  ¦  {"a":2, "b":"中文學習教材"}  ¦  ["apple", "orange", "banana", "指引"]
 desc src;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-json1  ¦  TEXT  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
-json2  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+Field    Type    Null    Key    Default    Extra    Comment
+id    bigint    NO    PRI    null        
+json1    text    YES    MUL    null        
+json2    varchar(16383)    YES        null        
 show create table src;
-➤ Table[12,3,0]  ¦  Create Table[12,234,0]  𝄀
-src  ¦  CREATE TABLE `src` (
-  `id` bigint NOT NULL,
-  `json1` text DEFAULT NULL,
-  `json2` varchar(65535) DEFAULT NULL,
-  PRIMARY KEY (`id`),
- FULLTEXT `ftidx`(`json1`) WITH PARSER json,
- FULLTEXT `ftidx2`(`json1`,`json2`) WITH PARSER json
-)
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` text DEFAULT NULL,\n  `json2` varchar(16383) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`json1`) WITH PARSER json,\n FULLTEXT `ftidx2`(`json1`,`json2`) WITH PARSER json\n)
 drop table src;
 create table src (id bigint primary key, body varchar, title text, FULLTEXT(title, body));
 insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
@@ -459,19 +445,13 @@ select count(*) from src;
 ➤ count(*)[-5,64,0]  𝄀
 0
 desc src;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-body  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-title  ¦  TEXT  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  
+Field    Type    Null    Key    Default    Extra    Comment
+id    bigint    NO    PRI    null        
+body    varchar(16383)    YES        null        
+title    text    YES    MUL    null        
 show create table src;
-➤ Table[12,3,0]  ¦  Create Table[12,162,0]  𝄀
-src  ¦  CREATE TABLE `src` (
-  `id` bigint NOT NULL,
-  `body` varchar(65535) DEFAULT NULL,
-  `title` text DEFAULT NULL,
-  PRIMARY KEY (`id`),
- FULLTEXT (`title`,`body`)
-)
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(16383) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`title`,`body`)\n)
 drop table src;
 create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2), FULLTEXT(body, title));
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
@@ -484,21 +464,14 @@ select src2.*, match(body, title) against('blue') from src2;
 id2  ¦  2  ¦  blue  ¦  t3  ¦  0.09061906  𝄀
 id3  ¦  3  ¦  blue red  ¦  t4  ¦  0.09061906
 desc src2;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id1  ¦  VARCHAR(65535)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-id2  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-body  ¦  CHAR(128)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
-title  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦  
+Field    Type    Null    Key    Default    Extra    Comment
+id1    varchar(16383)    NO    PRI    null        
+id2    bigint    NO    PRI    null        
+body    char(128)    YES    MUL    null        
+title    text    YES        null        
 show create table src2;
-➤ Table[12,4,0]  ¦  Create Table[12,199,0]  𝄀
-src2  ¦  CREATE TABLE `src2` (
-  `id1` varchar(65535) NOT NULL,
-  `id2` bigint NOT NULL,
-  `body` char(128) DEFAULT NULL,
-  `title` text DEFAULT NULL,
-  PRIMARY KEY (`id1`,`id2`),
- FULLTEXT (`body`,`title`)
-)
+Table    Create Table
+src2    CREATE TABLE `src2` (\n  `id1` varchar(16383) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT (`body`,`title`)\n)
 drop table src2;
 create table src (id bigint primary key, json1 json, json2 json, FULLTEXT(json1) with parser json);
 insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
@@ -520,10 +493,10 @@ select * from src where match(json1, json2) against('中文學習教材' in natu
 1  ¦  {"a": 2, "b": "中文學習教材"}  ¦  ["apple", "orange", "banana", "指引"]
 update src set json1='{"c":"update json"}' where id=0;
 desc src;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-json1  ¦  JSON(0)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
-json2  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+Field    Type    Null    Key    Default    Extra    Comment
+id    bigint    NO    PRI    null        
+json1    json    YES    MUL    null        
+json2    json    YES        null        
 show create table src;
 ➤ Table[12,3,0]  ¦  Create Table[12,217,0]  𝄀
 src  ¦  CREATE TABLE `src` (
@@ -558,20 +531,13 @@ select * from src where match(json1, json2) against('"update json"' in boolean m
 ➤ id[-5,64,0]  ¦  json1[-1,16383,0]  ¦  json2[12,65535,0]  𝄀
 0  ¦  {"c":"update json"}  ¦  {"d": "happy birthday", "f":"winter"}
 desc src;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-json1  ¦  TEXT  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
-json2  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+Field    Type    Null    Key    Default    Extra    Comment
+id    bigint    NO    PRI    null        
+json1    text    YES    MUL    null        
+json2    varchar(16383)    YES        null        
 show create table src;
-➤ Table[12,3,0]  ¦  Create Table[12,227,0]  𝄀
-src  ¦  CREATE TABLE `src` (
-  `id` bigint NOT NULL,
-  `json1` text DEFAULT NULL,
-  `json2` varchar(65535) DEFAULT NULL,
-  PRIMARY KEY (`id`),
- FULLTEXT (`json1`) WITH PARSER json,
- FULLTEXT `ftidx2`(`json1`,`json2`) WITH PARSER json
-)
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` text DEFAULT NULL,\n  `json2` varchar(16383) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`json1`) WITH PARSER json,\n FULLTEXT `ftidx2`(`json1`,`json2`) WITH PARSER json\n)
 drop table src;
 drop table if exists t1;
 create table t1(a int primary key, b varchar(200));

@@ -226,8 +226,18 @@ func (s *methodBasedServer[REQ, RESP]) Handle(
 func (s *methodBasedServer[REQ, RESP]) onMessage(
 	ctx context.Context,
 	request RPCMessage,
+	sequence uint64,
+	cs ClientSession,
+) error {
+	return s.onMessageWithSubmit(ctx, request, sequence, cs, ants.Submit)
+}
+
+func (s *methodBasedServer[REQ, RESP]) onMessageWithSubmit(
+	ctx context.Context,
+	request RPCMessage,
 	_ uint64,
 	cs ClientSession,
+	submit func(func()) error,
 ) error {
 	req, ok := request.Message.(REQ)
 	if !ok {
@@ -278,7 +288,7 @@ func (s *methodBasedServer[REQ, RESP]) onMessage(
 			}
 			s.handleRequest(ctx, req, cancelRequest, resp, handlerCtx, cs)
 		}
-		if err := ants.Submit(run); err != nil {
+		if err := submit(run); err != nil {
 			// The request is already admitted. Run it on the current callback
 			// when the shared pool rejects submission so its request/response
 			// ownership is still completed before Close can return.

@@ -84,12 +84,19 @@ func (s *service) BootstrapUpgrade(ctx context.Context) error {
 // time, but it doesn't matter, we use select for update to make it so that only one CN can
 // create the upgrade step.
 func (s *service) doCheckUpgrade(ctx context.Context) error {
+	return s.checkUpgrade(ctx, false)
+}
+
+// recheck is used only after a worker commits completion of a retained target.
+// Another CN may already have created (or completed) our route in the meantime.
+func (s *service) checkUpgrade(ctx context.Context, recheck bool) error {
+	completed := false
 	opts := executor.Options{}.
 		WithDatabase(catalog.MO_CATALOG).
 		WithMinCommittedTS(s.now()).
 		WithWaitCommittedLogApplied().
 		WithTimeZone(time.Local)
-	return s.exec.ExecTxn(
+	err := s.exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
 			final := s.getFinalVersionHandle().Metadata()
@@ -153,6 +160,14 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 				zap.String("txn-id", hex.EncodeToString(txn.Txn().Txn().ID)),
 				zap.Duration("lock_duration", time.Since(startTime)))
 
+			if recheck {
+				state, exists, err := versions.GetVersionState(final.Version, final.VersionOffset, txn, false)
+				if err != nil || exists {
+					completed = err == nil && exists && state == versions.StateReady
+					return err
+				}
+			}
+
 			v, err := versions.GetLatestVersion(txn)
 			if err != nil {
 				s.logger.Error("failed to get latest version",
@@ -166,9 +181,13 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 				zap.String("final", final.Version),
 				zap.Uint32("final versionOffset", final.VersionOffset))
 
-			// cluster is upgrading to v1, only v1's cn can start up.
+			// Retain an unfinished historical route. Do not create a second route
+			// until its cluster and tenant stages have all committed completion.
 			if !v.IsReady() {
 				if v.Version != final.Version {
+					if s.canResumeUpgrade(v) {
+						return s.checkUpgradeRecovery(v, txn)
+					}
 					s.logger.Fatal(fmt.Sprintf("cannot upgrade to version %s, because version %s is in upgrading",
 						final.Version,
 						v.Version))
@@ -197,9 +216,7 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 				}
 
 				state, ok, err := versions.GetVersionState(final.Version, final.VersionOffset, txn, false)
-				if err == nil && ok && state == versions.StateReady {
-					s.upgrade.finalVersionCompleted.Store(true)
-				}
+				completed = err == nil && ok && state == versions.StateReady
 				if err != nil {
 					s.logger.Error("failed to get final version state",
 						zap.String("final", final.Version),
@@ -277,17 +294,70 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			return addUpgradesToFinalVersion()
 		},
 		opts)
+	if err == nil && completed {
+		s.upgrade.finalVersionCompleted.Store(true)
+	}
+	return err
 }
 
-// asyncUpgradeTask is a task that executes the upgrade logic step by step
-// according to the created upgrade steps
-func (s *service) asyncUpgradeTask(ctx context.Context) {
-	fn := func() (bool, error) {
+// A semantic version with an unchanged handler offset can be resumed by a newer
+// CN. Offset-only recovery remains unsupported: an old worker cannot distinguish
+// different handler generations for the same ToVersion.
+func (s *service) canResumeUpgrade(target versions.Version) bool {
+	if versions.Compare(target.Version, s.getFinalVersionHandle().Metadata().Version) >= 0 {
+		return false
+	}
+	for _, h := range s.handles {
+		if h.Metadata().Version == target.Version {
+			return h.Metadata().VersionOffset == target.VersionOffset
+		}
+	}
+	return false
+}
+
+func (s *service) checkUpgradeRecovery(target versions.Version, txn executor.TxnExecutor) error {
+	upgrades, err := versions.GetUpgradeVersions(target.Version, target.VersionOffset, txn, false, false)
+	if err != nil {
+		return err
+	}
+	if len(upgrades) == 0 || upgrades[len(upgrades)-1].ToVersion != target.Version {
+		return moerr.NewInvalidStateNoCtxf("cannot resume incomplete upgrade route to %s", target.Version)
+	}
+	for i, u := range upgrades {
+		if u.UpgradeOrder != int32(i) ||
+			(i > 0 && u.FromVersion != upgrades[i-1].ToVersion) ||
+			versions.Compare(u.FromVersion, u.ToVersion) > 0 ||
+			versions.Compare(u.ToVersion, target.Version) > 0 ||
+			(u.State != versions.StateCreated && u.State != versions.StateUpgradingTenant && u.State != versions.StateReady) {
+			return moerr.NewInvalidStateNoCtxf("cannot resume invalid upgrade step %s", u.String())
+		}
+		supported := false
+		for _, h := range s.handles {
+			v := h.Metadata()
+			if v.Version == u.ToVersion {
+				supported = v.CanDirectUpgrade(u.FromVersion) &&
+					v.UpgradeCluster == u.UpgradeCluster && v.UpgradeTenant == u.UpgradeTenant
+				break
+			}
+		}
+		if !supported {
+			return moerr.NewInvalidStateNoCtxf("cannot resume unsupported upgrade step %s", u.String())
+		}
+	}
+	return nil
+}
+
+// Each pass chooses its target from committed catalog state, so a restart or a
+// competing CN can take over without a process-local recovery generation.
+func (s *service) newUpgradePass(ctx context.Context) func() (bool, error) {
+	return func() (bool, error) {
 		ctx, cancel := context.WithTimeoutCause(ctx, time.Hour*24, moerr.CauseAsyncUpgradeTask)
 		defer cancel()
 
 		var err error
 		var completed bool
+		final := s.getFinalVersionHandle().Metadata()
+		target := final
 		opts := executor.Options{}.
 			WithDatabase(catalog.MO_CATALOG).
 			WithMinCommittedTS(s.now()).
@@ -296,13 +366,45 @@ func (s *service) asyncUpgradeTask(ctx context.Context) {
 		err = s.exec.ExecTxn(
 			ctx,
 			func(txn executor.TxnExecutor) error {
-				completed, err = s.performUpgrade(ctx, txn)
+				_, exists, err := versions.GetVersionState(final.Version, final.VersionOffset, txn, false)
+				if err != nil {
+					return err
+				}
+				if !exists {
+					target, err = versions.GetLatestVersion(txn)
+					if err != nil {
+						return err
+					}
+					if target.Version == "" || versions.Compare(target.Version, final.Version) >= 0 ||
+						(!target.IsReady() && !s.canResumeUpgrade(target)) {
+						return moerr.NewInvalidStateNoCtxf("cannot resume upgrade target %s offset %d", target.Version, target.VersionOffset)
+					}
+					if !target.IsReady() {
+						if err := s.checkUpgradeRecovery(target, txn); err != nil {
+							return err
+						}
+					}
+				}
+				completed, err = s.performUpgrade(ctx, target, txn)
 				return err
 			},
 			opts)
-		return completed, moerr.AttachCause(ctx, err)
+		if err != nil {
+			return false, moerr.AttachCause(ctx, err)
+		}
+		if completed && target.Version != final.Version {
+			// Release the old target's row/step locks before taking the version
+			// table lock to create our route. Never wait for tenants under locks.
+			return false, s.checkUpgrade(ctx, true)
+		}
+		return completed, nil
 	}
+}
 
+// asyncUpgradeTask is a task that executes the upgrade logic step by step
+// according to the created upgrade steps
+func (s *service) asyncUpgradeTask(ctx context.Context) {
+	fn := s.newUpgradePass(ctx)
 	timer := time.NewTimer(s.upgrade.checkUpgradeDuration)
 	defer timer.Stop()
 
@@ -332,8 +434,8 @@ func (s *service) asyncUpgradeTask(ctx context.Context) {
 
 func (s *service) performUpgrade(
 	ctx context.Context,
+	final versions.Version,
 	txn executor.TxnExecutor) (bool, error) {
-	final := s.getFinalVersionHandle().Metadata()
 
 	// make sure only one cn can execute upgrade logic
 	state, ok, err := versions.GetVersionState(final.Version, final.VersionOffset, txn, true)
@@ -440,7 +542,7 @@ func (s *service) doUpgrade(
 
 	s.logger.Info("execute upgrade prepare",
 		zap.String("upgrade", upgrade.String()))
-	if err := h.Prepare(ctx, txn, h.Metadata().Version == s.getFinalVersionHandle().Metadata().Version); err != nil {
+	if err := h.Prepare(ctx, txn, h.Metadata().Version == upgrade.FinalVersion); err != nil {
 		return 0, err
 	}
 	s.logger.Info("execute upgrade prepare completed",

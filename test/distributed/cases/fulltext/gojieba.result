@@ -203,20 +203,13 @@ Project  𝄀
               ->  Fulltext Index Scan on ftidx  𝄀
                     Fulltext Index: ftidx
 desc src;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-body  ¦  VARCHAR(65535)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
-title  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦  
+Field    Type    Null    Key    Default    Extra    Comment
+id    bigint    NO    PRI    null        
+body    varchar(16383)    YES    MUL    null        
+title    text    YES        null        
 show create table src;
-➤ Table[12,3,0]  ¦  Create Table[12,237,0]  𝄀
-src  ¦  CREATE TABLE `src` (
-  `id` bigint NOT NULL,
-  `body` varchar(65535) DEFAULT NULL,
-  `title` text DEFAULT NULL,
-  PRIMARY KEY (`id`),
- FULLTEXT `ftidx`(`body`,`title`) WITH PARSER gojieba,
- FULLTEXT `ftidx2`(`body`) WITH PARSER gojieba
-)
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(16383) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`body`,`title`) WITH PARSER gojieba,\n FULLTEXT `ftidx2`(`body`) WITH PARSER gojieba\n)
 drop table src;
 create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2));
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
@@ -241,15 +234,8 @@ select * from src2 where match(body, title) against('t5');
 ➤ id1[12,65535,0]  ¦  id2[-5,64,0]  ¦  body[1,128,0]  ¦  title[-1,16383,0]  𝄀
 id4  ¦  4  ¦  light brown  ¦  t5
 show create table src2;
-➤ Table[12,4,0]  ¦  Create Table[12,227,0]  𝄀
-src2  ¦  CREATE TABLE `src2` (
-  `id1` varchar(65535) NOT NULL,
-  `id2` bigint NOT NULL,
-  `body` char(128) DEFAULT NULL,
-  `title` text DEFAULT NULL,
-  PRIMARY KEY (`id1`,`id2`),
- FULLTEXT `ftidx2`(`body`,`title`) WITH PARSER gojieba
-)
+Table    Create Table
+src2    CREATE TABLE `src2` (\n  `id1` varchar(16383) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT `ftidx2`(`body`,`title`) WITH PARSER gojieba\n)
 drop table src2;
 create table src (id bigint primary key, body varchar, title text, FULLTEXT(title, body) WITH PARSER gojieba);
 insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
@@ -356,14 +342,8 @@ select count(*) from src;
 ➤ count(*)[-5,64,0]  𝄀
 0
 show create table src;
-➤ Table[12,3,0]  ¦  Create Table[12,182,0]  𝄀
-src  ¦  CREATE TABLE `src` (
-  `id` bigint NOT NULL,
-  `body` varchar(65535) DEFAULT NULL,
-  `title` text DEFAULT NULL,
-  PRIMARY KEY (`id`),
- FULLTEXT (`title`,`body`) WITH PARSER gojieba
-)
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(16383) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`title`,`body`) WITH PARSER gojieba\n)
 drop table src;
 create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2), FULLTEXT(body, title) WITH PARSER gojieba);
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
@@ -376,15 +356,8 @@ select src2.*, match(body, title) against('blue') from src2;
 id2  ¦  2  ¦  blue  ¦  t3  ¦  0.09061906  𝄀
 id3  ¦  3  ¦  blue red  ¦  t4  ¦  0.09061906
 show create table src2;
-➤ Table[12,4,0]  ¦  Create Table[12,219,0]  𝄀
-src2  ¦  CREATE TABLE `src2` (
-  `id1` varchar(65535) NOT NULL,
-  `id2` bigint NOT NULL,
-  `body` char(128) DEFAULT NULL,
-  `title` text DEFAULT NULL,
-  PRIMARY KEY (`id1`,`id2`),
- FULLTEXT (`body`,`title`) WITH PARSER gojieba
-)
+Table    Create Table
+src2    CREATE TABLE `src2` (\n  `id1` varchar(16383) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT (`body`,`title`) WITH PARSER gojieba\n)
 drop table src2;
 drop table if exists t1;
 create table t1(a int primary key, b varchar(200));

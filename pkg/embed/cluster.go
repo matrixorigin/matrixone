@@ -91,6 +91,7 @@ type cluster struct {
 		preStart                    func(ServiceOperator)
 		testing                     bool
 		allowConcurrentTestClusters bool
+		testAdmissionContext        context.Context
 		heartbeatTimeout            time.Duration
 		storeTimeout                time.Duration
 	}
@@ -174,12 +175,21 @@ func (c *cluster) Start() (err error) {
 				"embedded test cluster cleanup is incomplete",
 			)
 		}
+		// The scheduler selects process admission at the lifecycle owner, covering
+		// both StartTestCluster and direct NewCluster(WithTesting()) callers.
 		mode := clusteradmission.Exclusive
+		if concurrentTestClusterProcessesEnabled() {
+			mode |= clusteradmission.AllowConcurrentProcesses
+		}
 		if c.options.allowConcurrentTestClusters {
-			mode = clusteradmission.AllowConcurrent
+			mode |= clusteradmission.AllowConcurrent
 		}
 		admissionStarted := time.Now()
-		admission, acquireErr := clusteradmission.Acquire(context.Background(), mode)
+		admissionCtx := c.options.testAdmissionContext
+		if admissionCtx == nil {
+			admissionCtx = context.Background()
+		}
+		admission, acquireErr := clusteradmission.Acquire(admissionCtx, mode)
 		if acquireErr != nil {
 			c.logTestSetup("admission-acquire", time.Since(admissionStarted), acquireErr)
 			return acquireErr

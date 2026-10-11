@@ -31,6 +31,57 @@ select id from t where l2_distance(v,'[1,1,1]') <= 1.7320508 order by l2_distanc
 select id from t where l2_distance(v,'[1,1,1]') <= 1.73205077 order by l2_distance(v,'[1,1,1]') limit 4;
 ➤ id[4,32,0]  𝄀
 1
+select id from t where l2_distance(v,'[1,1,1]') between 13 and 14 order by l2_distance(v,'[1,1,1]') limit 1 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+3
+select id from t where l2_distance(v,'[1,1,1]') between 13 and 14 order by l2_distance(v,'[1,1,1]') limit 1 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+3
+select id from t where l2_distance(v,'[1,1,1]') between 13 and 14 order by l2_distance(v,'[1,1,1]') limit 1 by rank with option 'mode=post';
+➤ id[4,32,0]  𝄀
+3
+select id from t where l2_distance(v,'[1,1,1]') between 13 and 14 order by l2_distance(v,'[1,1,1]') limit 1 by rank with option 'mode=auto';
+➤ id[4,32,0]  𝄀
+3
+prepare between_stmt from 'select id from t where l2_distance(v,''[1,1,1]'') between ? and ? order by l2_distance(v,''[1,1,1]'') limit 1 by rank with option ''mode=pre''';
+set @between_lo=13;
+set @between_hi=14;
+execute between_stmt using @between_lo,@between_hi;
+➤ id[4,32,0]  𝄀
+3
+deallocate prepare between_stmt;
+create table wrapped_t(id int primary key, v vecf64(3));
+insert into wrapped_t
+select result, cast(concat('[', result, ',', result, ',', result, ']') as vecf64(3))
+from generate_series(1, 20) g;
+create index wrapped_idx using ivfflat on wrapped_t(v) lists=1 op_type 'vector_l2_ops';
+set @wrapped_entries = (select distinct i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase=database() and t.relname='wrapped_t' and i.name='wrapped_idx' and i.algo_table_type='entries');
+select mo_ctl('dn','flush',concat(database(),'.',@wrapped_entries));
+-- @ignore:0
+➤ mo_ctl('dn', 'flush', concat(database(), '.', @wrapped_entries))[12,-1,0]  𝄀
+{}
+set @wrapped_stats = concat('select table_cnt, accurate_object_number > 0 as persisted from table_stats("',database(),'.',@wrapped_entries,'","refresh","full") g');
+prepare wrapped_entry_stats from @wrapped_stats;
+execute wrapped_entry_stats;
+➤ table_cnt[8,53,31]  ¦  persisted[-7,1,0]  𝄀
+20.0  ¦  1
+deallocate prepare wrapped_entry_stats;
+select id from wrapped_t where l2_distance(cast(v as vecf32(3)),'[1,1,1]') between 32 and 34 order by l2_distance(v,'[1,1,1]') limit 1 by rank with option 'mode=post';
+➤ id[4,32,0]  𝄀
+20
+select id from wrapped_t where l2_distance(v,'[1,1,1]') between 32 and 34 order by l2_distance(v,'[1,1,1]') limit 1 by rank with option 'mode=post';
+➤ id[4,32,0]  𝄀
+20
+select id from wrapped_t where l2_distance(cast(v as vecf32(3)),'[1,1,1]') between 32 and 34 order by l2_distance(v,'[1,1,1]') limit 1 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+20
+prepare wrapped_between from 'select id from wrapped_t where l2_distance(cast(v as vecf32(3)),''[1,1,1]'') between ? and ? order by l2_distance(v,''[1,1,1]'') limit 1 by rank with option ''mode=post''';
+set @wrapped_lo=32;
+set @wrapped_hi=34;
+execute wrapped_between using @wrapped_lo,@wrapped_hi;
+➤ id[4,32,0]  𝄀
+20
+deallocate prepare wrapped_between;
 create table u(id int primary key, v vecf32(3), lim double);
 insert into u values (1,'[1,1,1]',5),(2,'[2,2,2]',5),(3,'[9,9,9]',0.5),(4,'[10,10,10]',100);
 create index uidx using ivfflat on u(v) lists=1 op_type 'vector_l2_ops';

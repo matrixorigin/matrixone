@@ -55,7 +55,11 @@ func TestCollationIdentityAndCompatibility(t *testing.T) {
 			identity, ok := ResolveSQL(tc.name)
 			require.Equal(t, tc.admitted != 0, ok)
 			require.Equal(t, tc.admitted, identity)
-			require.Error(t, RequireLegacy(uint32(d.Identity), 1, 0))
+			if d.Semantics == UCA400 {
+				require.NoError(t, RequireLegacy(uint32(d.Identity), 1, 0))
+			} else {
+				require.Error(t, RequireLegacy(uint32(d.Identity), 1, 0))
+			}
 		})
 	}
 	for _, name := range []string{"utf8", "utf8mb3", "UTF8MB4"} {
@@ -134,6 +138,17 @@ func TestCollationMetadataClosedDomain(t *testing.T) {
 		require.Error(t, RequireLegacy(id, 0, 256))
 	}
 	require.NoError(t, ValidateKeyFormat(1))
+	for _, format := range []uint32{KeyFormatLegacy, KeyFormatV1} {
+		require.NoError(t, ValidateKeyFormatPair(format, format))
+	}
+	require.ErrorContains(t,
+		ValidateKeyFormatPair(KeyFormatLegacy, KeyFormatV1),
+		"does not match table format")
+	require.ErrorContains(t,
+		ValidateKeyFormatPair(KeyFormatV1, KeyFormatLegacy),
+		"does not match table format")
+	require.Error(t, ValidateKeyFormatPair(KeyFormatV1+1, KeyFormatLegacy))
+	require.Error(t, ValidateKeyFormatPair(KeyFormatLegacy, KeyFormatV1+1))
 	for c, expected := range map[Charset]int32{CharsetUnspecified: 0, CharsetBinary: 1, CharsetASCII: 1, CharsetUTF8MB3: 3, CharsetUTF8MB4: 4, CharsetGBK: 2} {
 		require.Equal(t, expected, c.MaxBytes())
 		if c == CharsetUnspecified {
@@ -154,14 +169,24 @@ func TestCollationMetadataClosedDomain(t *testing.T) {
 
 func TestAdvertisedCollationsUseEffectiveSemantics(t *testing.T) {
 	rows := Advertised()
-	require.Len(t, rows, 6)
+	require.Len(t, rows, 8)
 	for _, row := range rows {
-		id, ok := ResolveSQL(row.Name)
-		require.True(t, ok)
-		effective, err := EffectiveDefinition(uint32(id), 0)
+		revision := uint8(RevisionLegacy)
+		id := row.Identity
+		if row.LegacyIdentity == LegacyIdentity {
+			revision = RevisionV1
+		} else {
+			id = row.LegacyIdentity
+		}
+		effective, err := EffectiveDefinition(uint32(id), uint32(revision))
 		require.NoError(t, err)
 		require.Equal(t, effective.Semantics, row.Semantics)
 		require.Equal(t, effective.PadSpace, row.PadSpace)
+		if row.LegacyIdentity != LegacyIdentity {
+			admitted, ok := ResolveSQL(row.Name)
+			require.True(t, ok)
+			require.Equal(t, row.LegacyIdentity, admitted)
+		}
 		if row.Name == "utf8mb4_0900_ai_ci" {
 			native, _ := Lookup(row.Name)
 			require.False(t, native.PadSpace)

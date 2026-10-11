@@ -171,6 +171,44 @@ func TestSortByVectors(t *testing.T) {
 	require.Equal(t, []int64{2, 0, 1, 3, 4, 5}, selectors)
 }
 
+func TestSortByVectorsUnicodeCollationUsesSecondaryKey(t *testing.T) {
+	mp := mpool.MustNewZero()
+	first := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI))
+	second := vector.NewVec(types.T_int64.ToType())
+	defer first.Free(mp)
+	defer second.Free(mp)
+
+	require.NoError(t, vector.AppendStringList(first, []string{"Z", "a", "A", "b"}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(second, []int64{1, 2, 3, 4}, nil, mp))
+
+	selectors := []int64{0, 1, 2, 3}
+	SortByVectors(selectors, []*vector.Vector{first, second}, []bool{false, false}, []bool{false, false})
+	require.Equal(t, []int64{1, 2, 3, 0}, selectors)
+}
+
+func TestSortByVectorsUsesSemanticUnicodeTypeWhenVectorMetadataIsPhysical(t *testing.T) {
+	mp := mpool.MustNewZero()
+	physical := vector.NewVec(types.T_varchar.ToType())
+	second := vector.NewVec(types.T_int64.ToType())
+	defer physical.Free(mp)
+	defer second.Free(mp)
+
+	require.NoError(t, vector.AppendStringList(physical, []string{"Z", "a", "A", "b"}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(second, []int64{1, 2, 3, 4}, nil, mp))
+	semantic := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	selectors := []int64{0, 1, 2, 3}
+	SortByVectorsWithTypes(
+		selectors,
+		[]*vector.Vector{physical, second},
+		[]bool{false, false},
+		[]bool{false, false},
+		[]types.Type{semantic, types.T_int64.ToType()},
+	)
+	require.Equal(t, []int64{1, 2, 3, 0}, selectors)
+	// The metadata view must not mutate the physical vector.
+	require.Equal(t, types.CharsetUTF8, physical.GetType().Charset)
+}
+
 func TestSortByVectorsSortsNonNullPartitionWhenVectorHasNullElsewhere(t *testing.T) {
 	mp := mpool.MustNewZero()
 	first := vector.NewVec(types.T_bool.ToType())

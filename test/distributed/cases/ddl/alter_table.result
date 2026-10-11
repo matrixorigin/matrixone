@@ -334,65 +334,65 @@ t5  ¦  CREATE TABLE `t5` (
   `m` date DEFAULT NULL,
   `n` datetime DEFAULT NULL,
   `o` timestamp NULL DEFAULT NULL,
-  `p` bool DEFAULT NULL,
+  `p` boolean DEFAULT NULL,
   `q` decimal(5,2) DEFAULT NULL,
   `r` text DEFAULT NULL
 ) COMMENT='comment_3'
 show columns from t5;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  TINYINT(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  SMALLINT(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-d  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-e  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-f  ¦  TINYINT UNSIGNED(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-g  ¦  SMALLINT UNSIGNED(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-h  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-i  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-j  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-k  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-l  ¦  VARCHAR(255)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-m  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-n  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-o  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-p  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-q  ¦  DECIMAL(5,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-r  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  tinyint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  smallint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+e  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+f  ¦  tinyint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+g  ¦  smallint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+h  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+i  ¦  bigint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+j  ¦  float  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+k  ¦  double  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+l  ¦  varchar(255)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+m  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+n  ¦  datetime  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+o  ¦  timestamp  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+p  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+q  ¦  decimal(5,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+r  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦  
 alter table t5 drop column b, drop column c, drop column d, drop column e, drop column f, drop column g, drop column h;
 show columns from t5;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-i  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-j  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-k  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-l  ¦  VARCHAR(255)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-m  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-n  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-o  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-p  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-q  ¦  DECIMAL(5,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-r  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+i  ¦  bigint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+j  ¦  float  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+k  ¦  double  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+l  ¦  varchar(255)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+m  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+n  ¦  datetime  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+o  ¦  timestamp  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+p  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+q  ¦  decimal(5,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+r  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦  
 alter table t5 drop column i, drop column j, drop column k, drop column l, drop column m, drop column n, drop column o;
 show columns from t5;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-p  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-q  ¦  DECIMAL(5,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-r  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+p  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+q  ¦  decimal(5,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+r  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦  
 alter table t5 drop column p, drop column q, drop column r;
 show columns from t5;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 alter table t5 drop column a;
 A table must have at least 1 column
 alter table t5 add column b int first, add column c int after b, add column d int first, add column f int after b;
 show columns from t5;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-d  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-f  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+d  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+f  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop table t5;
 create table t5(a int primary key, b int, c int unique key);
 alter table t5 drop column a;

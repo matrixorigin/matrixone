@@ -169,16 +169,16 @@ bin_var VARBINARY(255),
 bin_blob BLOB,
 bin_empty VARBINARY(10)
 ) infile{"filepath"='$resources/parquet/binary_mapping_test.parquet', "format"='parquet'};
-select hex(bin_fixed) as fixed_hex, hex(bin_var) as var_hex from ext_binary;
+select hex(bin_fixed) as fixed_hex, hex(bin_var) as var_hex from ext_binary order by hex(bin_fixed);
 ➤ fixed_hex[12,-1,0]  ¦  var_hex[12,-1,0]  𝄀
-3132333435  ¦  68656C6C6F20776F726C64  𝄀
-4142434445  ¦  6D61747269786F6E65  𝄀
-464748494A  ¦  70617271756574
-select length(bin_fixed) from ext_binary;
-➤ length(bin_fixed)[-5,64,0]  𝄀
-5  𝄀
-5  𝄀
-5
+31323334350000000000  ¦  68656C6C6F20776F726C64  𝄀
+41424344450000000000  ¦  6D61747269786F6E65  𝄀
+464748494A0000000000  ¦  70617271756574
+select length(bin_fixed) as fixed_len, length(bin_var) as var_len from ext_binary order by hex(bin_fixed);
+➤ fixed_len[-5,64,0]  ¦  var_len[-5,64,0]  𝄀
+10  ¦  11  𝄀
+10  ¦  9  𝄀
+10  ¦  7
 drop table if exists ext_empty;
 create external table ext_empty (
 id bigint,

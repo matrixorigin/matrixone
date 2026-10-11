@@ -26,6 +26,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -182,7 +183,8 @@ func TestBroadDropLifecycleReceiptIsSynchronous(t *testing.T) {
 	original := c.proc.Ctx
 	eng.EXPECT().Database(gomock.Any(), "db", c.proc.GetTxnOperator()).Return(nil, stop).Times(1)
 	q := &plan.DropTable{Database: "db", Table: "t", TableId: 1, TableDef: &plan.TableDef{TblId: 1}}
-	err := c.withBroadDropLifecycle(func() error {
+	err := c.withDropLifecycle(dropLifecycleAdmission{}, func() error {
+		require.NoError(t, c.admitForeignKeyCreate(), "broad nested CREATE must not re-enter admission")
 		admitted, err := c.borrowedDropLifecycle()
 		require.NoError(t, err)
 		require.True(t, admitted)
@@ -197,11 +199,11 @@ func TestBroadDropLifecycleReceiptIsSynchronous(t *testing.T) {
 	require.Error(t, err, "a retained child context expires at the outer callback boundary")
 	c.proc.Ctx = original
 	require.PanicsWithValue(t, "injected", func() {
-		_ = c.withBroadDropLifecycle(func() error { panic("injected") })
+		_ = c.withDropLifecycle(dropLifecycleAdmission{}, func() error { panic("injected") })
 	})
 	require.Same(t, original, c.proc.Ctx)
 	_, other := newTestTxnClientAndOpWithPessimistic(ctrl)
-	err = c.withBroadDropLifecycle(func() error {
+	err = c.withDropLifecycle(dropLifecycleAdmission{}, func() error {
 		owner := c.proc.Base.TxnOperator
 		c.proc.Base.TxnOperator = other
 		defer func() { c.proc.Base.TxnOperator = owner }()
@@ -228,4 +230,72 @@ func TestDropLifecycleKeepsLegacySIAdmission(t *testing.T) {
 	}}}}
 	require.ErrorIs(t, s.DropDatabase(c), stop)
 	require.Equal(t, 2, calls)
+}
+
+func TestScalarDropLifecycleReceipt(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+	_, proc.Base.TxnOperator = newTestTxnClientAndOpWithPessimistic(ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "db", proc.GetTxnOperator()).Return(db, nil).AnyTimes()
+	db.EXPECT().Relation(gomock.Any(), "t", nil).Return(rel, nil).AnyTimes()
+	rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(11)).AnyTimes()
+	rel.EXPECT().GetDBID(gomock.Any()).Return(uint64(9)).AnyTimes()
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{TblId: 11, LogicalId: 77}).AnyTimes()
+	c := &Compile{proc: proc, e: eng}
+	admission := dropLifecycleAdmission{rootID: 11, accountID: 7, root: dropLifecycleIdentity{database: "db", table: "t", databaseID: 9, logicalID: 77}}
+	original := proc.Ctx
+	q := &plan.DropTable{Database: "db", Table: "t", TableId: 11, TableDef: &plan.TableDef{TblId: 11, LogicalId: 77}}
+	var nested context.Context
+	require.NoError(t, c.withDropLifecycle(admission, func() error {
+		nested = proc.Ctx
+		valid, err := c.borrowedDropLifecycle(q)
+		require.NoError(t, err)
+		require.True(t, valid)
+		for _, invalid := range []*plan.DropTable{
+			nil,
+			{Database: "other", Table: "t", TableId: 11, TableDef: q.TableDef},
+			{Database: "db", Table: "other", TableId: 11, TableDef: q.TableDef},
+			{Database: "db", Table: "t", TableId: 12, TableDef: q.TableDef},
+			{Database: "db", Table: "t", TableId: 11, TableDef: &plan.TableDef{TblId: 11, LogicalId: 78}},
+		} {
+			_, err := c.borrowedDropLifecycle(invalid)
+			require.Error(t, err)
+		}
+		_, err = c.borrowedDropLifecycle()
+		require.Error(t, err)
+		proc.Ctx = defines.AttachAccountId(proc.Ctx, 8)
+		_, err = c.borrowedDropLifecycle(q)
+		require.Error(t, err)
+		return nil
+	}))
+	require.Same(t, original, proc.Ctx)
+	proc.Ctx = nested
+	_, err := c.borrowedDropLifecycle(q)
+	require.Error(t, err)
+	proc.Ctx = original
+	require.PanicsWithValue(t, "injected", func() { _ = c.withDropLifecycle(admission, func() error { panic("injected") }) })
+	require.Same(t, original, proc.Ctx)
+}
+
+func TestCreateForeignKeyAdmissionPrecedesEffects(t *testing.T) {
+	for _, q := range []*plan.CreateTable{
+		{TableDef: &plan.TableDef{Name: "t", Fkeys: []*plan.ForeignKeyDef{{ForeignTbl: 11}}}},
+		{TableDef: &plan.TableDef{Name: "t"}, FkDbs: []string{"parent"}, FkTables: []string{"p"}},
+		{TableDef: &plan.TableDef{Name: "t"}, UpdateFkSqls: []string{"forward publication"}},
+		{TableDef: &plan.TableDef{Name: "t"}, FksReferToMe: []*plan.ForeignKeyInfo{{Db: "child", Table: "c"}}},
+	} {
+		ctrl := gomock.NewController(t)
+		proc := testutil.NewProcess(t)
+		proc.Ctx = context.WithValue(defines.AttachAccountId(proc.Ctx, 7), defines.IgnoreForeignKey{}, true)
+		proc.Base.TxnClient, proc.Base.TxnOperator = newTestTxnClientAndOpWithModeIsolation(ctrl, txn.TxnMode_Pessimistic, txn.TxnIsolation_RC)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		stop := errors.New("admission before CREATE effects")
+		eng.EXPECT().Database(gomock.Any(), "mo_catalog", proc.GetTxnOperator()).Return(nil, stop)
+		scope := &Scope{Plan: &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{Definition: &plan.DataDefinition_CreateTable{CreateTable: q}}}}}
+		require.ErrorIs(t, scope.CreateTable(&Compile{proc: proc, e: eng}), stop)
+	}
 }

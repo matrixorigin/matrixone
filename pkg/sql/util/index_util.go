@@ -537,12 +537,12 @@ func serialWithCompacted(
 					if nulls.Contains(vNull, uint64(i)) {
 						nulls.Add(bitMap, uint64(i))
 					} else {
-						ps[i].EncodeStringType(vs[i].GetByteSlice(area))
+						ps[i].EncodeStringType(types.CollationKeyOrOriginal(v.GetType().Charset, vs[i].GetByteSlice(area)))
 					}
 				}
 			} else {
 				for i := range vs {
-					ps[i].EncodeStringType(vs[i].GetByteSlice(area))
+					ps[i].EncodeStringType(types.CollationKeyOrOriginal(v.GetType().Charset, vs[i].GetByteSlice(area)))
 				}
 			}
 		}
@@ -596,7 +596,9 @@ func serialWithoutCompacted(
 			}
 			continue
 		}
-		function.SerialHelper(v, nil, ps, true)
+		if err := function.PhysicalSerialHelperChecked(v, nil, ps, true); err != nil {
+			return nil, err
+		}
 	}
 
 	for i := 0; i < rowCount; i++ {
@@ -614,6 +616,27 @@ func compactSingleIndexCol(
 	proc *process.Process,
 ) (*nulls.Nulls, error) {
 	var err error
+	if types.IsUnicodeCollation(v.GetType().Charset) && v.GetType().Oid.IsMySQLString() {
+		// A one-part UNIQUE/secondary index has no serial_full expression to
+		// pass through. Materialize its persisted key in the same tagged UCA
+		// domain as the composite serializer instead of copying original bytes.
+		// Physical key construction is strict: a malformed value must abort the
+		// index batch instead of becoming a second, raw-byte identity.
+		values, area := vector.MustVarlenaRawData(v)
+		compact := make([][]byte, 0, len(values))
+		for i := range values {
+			if nulls.Contains(v.GetNulls(), uint64(i)) {
+				continue
+			}
+			key, keyErr := types.PhysicalCollationKey(*v.GetType(), values[i].GetByteSlice(area))
+			if keyErr != nil {
+				return nil, keyErr
+			}
+			compact = append(compact, key)
+		}
+		err = vector.AppendBytesList(vec, compact, nil, proc.Mp())
+		return v.GetNulls(), err
+	}
 
 	hasNull := v.HasNull()
 	if !hasNull {
@@ -1099,7 +1122,9 @@ func XXHashVectors(vs []*vector.Vector,
 			}
 			continue
 		}
-		function.SerialHelper(v, nil, packers.ps, true)
+		if err := function.PhysicalSerialHelperChecked(v, nil, packers.ps, true); err != nil {
+			return nil, 0, err
+		}
 	}
 
 	for i := 0; i < rowCount; i++ {

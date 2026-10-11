@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 
@@ -6822,6 +6823,46 @@ func TestNonGeometrySRIDSyntaxRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, ast)
 			require.Equal(t, test.output, tree.String(ast, dialect.MYSQL))
+		})
+	}
+}
+
+func TestLexerErrorUTF8Excerpt(t *testing.T) {
+	for _, tc := range []struct{ name, raw, want string }{
+		{"empty", "", ""}, {"ASCII", "FROM bad", "FROM bad"},
+		{"ASCII exact", strings.Repeat("a", 1024), strings.Repeat("a", 1024)},
+		{"ASCII overflow", strings.Repeat("a", 1025), strings.Repeat("a", 1024)},
+		{"two byte cut", strings.Repeat("a", 1023) + "¢", strings.Repeat("a", 1023)},
+		{"two byte aligned", strings.Repeat("a", 1022) + "¢z", strings.Repeat("a", 1022) + "¢"},
+		{"three byte cut", strings.Repeat("a", 1023) + "你", strings.Repeat("a", 1023)},
+		{"three byte aligned", strings.Repeat("a", 1021) + "你z", strings.Repeat("a", 1021) + "你"},
+		{"four byte cut", strings.Repeat("a", 1022) + "😀", strings.Repeat("a", 1022)},
+		{"four byte aligned", strings.Repeat("a", 1020) + "😀z", strings.Repeat("a", 1020) + "😀"},
+		{"malformed", "FROM \xff\xe4\xbd", "FROM ???"},
+		{"literal replacement", "FROM �", "FROM �"},
+		{"discarded malformed", strings.Repeat("a", 1024) + "\xff", strings.Repeat("a", 1024)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scanner := &Scanner{buf: "prefix" + tc.raw, PrePos: 6, Line: 3, Col: 7}
+			lexer := &Lexer{scanner: scanner}
+			lexer.Error("syntax error")
+			err, ok := scanner.LastError.(PositionedErr)
+			require.True(t, ok)
+			require.Equal(t, tc.want, err.Near)
+			require.True(t, utf8.ValidString(err.Error()))
+			require.LessOrEqual(t, len(err.Near), 1024)
+			require.Equal(t, 3, err.Line)
+			require.Equal(t, 7, err.Col)
+			require.Equal(t, "prefix"+tc.raw, scanner.buf)
+			require.Equal(t, 6, scanner.PrePos)
+			if len(tc.raw) <= 1024 {
+				require.Empty(t, err.LenStr)
+			} else {
+				require.NotEmpty(t, err.LenStr)
+			}
+			if tc.name == "ASCII" {
+				require.Equal(t, `You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 4 column 7 near "FROM bad";`, err.Error())
+			}
 		})
 	}
 }

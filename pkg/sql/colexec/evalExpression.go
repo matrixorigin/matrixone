@@ -480,6 +480,10 @@ func newExpressionExecutorWithAllocation(
 			executor.Free()
 			return nil, err
 		}
+		executor.parameterTypes = make([]types.Type, len(t.F.Args))
+		for i, arg := range t.F.Args {
+			executor.parameterTypes[i] = types.MustTypeFromPlan(arg.Typ)
+		}
 
 		deferDiagnostic := buildCtx.joinBuildDiagnosticOwner != nil &&
 			function.IsStatementConstantInput(planExpr) &&
@@ -626,6 +630,11 @@ type FunctionExpressionExecutor struct {
 	// runtime, so reusable result vectors must start each evaluation from this
 	// stable type before the function applies the current runtime metadata.
 	resultType types.Type
+	// parameterTypes retain the plan's semantic argument domains. Materialized
+	// column vectors can carry only their physical OID after scan/materialization,
+	// so Unicode string consumers need this metadata restored at the function
+	// boundary.
+	parameterTypes []types.Type
 	functionInformationForEval
 	folded      functionFolding
 	selectList1 []bool
@@ -1653,7 +1662,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		return nil, err
 	}
 	if err := expr.evalFn(
-		expr.selectedParameterResults, expr.selectedResult, proc, selectedCount, nil); err != nil {
+		expr.semanticParameterVectors(expr.selectedParameterResults), expr.selectedResult, proc, selectedCount, nil); err != nil {
 		return nil, err
 	}
 	if expr.isImplicitCast() && len(expr.selectedParameterResults) > 0 {
@@ -1812,7 +1821,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	}
 
 	if err = expr.evalFn(
-		expr.parameterResults, expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
+		expr.semanticParameterVectors(expr.parameterResults), expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
 		return nil, err
 	}
 	// Partial selections returned through evalSelectedRows above.
@@ -1834,6 +1843,44 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	}
 
 	return expr.resultVector.GetResultVector(), nil
+}
+
+// semanticParameterVectors creates short-lived read-only metadata views for
+// native Unicode string arguments. Column vectors are shared with their input
+// batch and may retain only a physical OID after scan/materialization; using
+// the plan domain here keeps equality, IN and other string kernels on the same
+// collation without mutating the batch or reinterpreting fixed-width storage.
+func (expr *FunctionExpressionExecutor) semanticParameterVectors(parameters []*vector.Vector) []*vector.Vector {
+	if len(expr.parameterTypes) == 0 || len(expr.parameterTypes) != len(parameters) {
+		return parameters
+	}
+	var views []*vector.Vector
+	for i, vec := range parameters {
+		if vec == nil {
+			continue
+		}
+		typ := expr.parameterTypes[i]
+		if !types.IsUnicodeCollation(typ.Charset) || vec.GetType().Oid != typ.Oid {
+			continue
+		}
+		switch typ.Oid {
+		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
+			if *vec.GetType() == typ {
+				continue
+			}
+			if views == nil {
+				views = make([]*vector.Vector, len(parameters))
+				copy(views, parameters)
+			}
+			view := *vec
+			view.SetType(typ)
+			views[i] = &view
+		}
+	}
+	if views == nil {
+		return parameters
+	}
+	return views
 }
 
 func (expr *FunctionExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {

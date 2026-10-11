@@ -1770,6 +1770,54 @@ func TestConditionalTextFamilyMarkersStayBounded(t *testing.T) {
 	require.Zero(t, caseReturnType([]types.Type{types.T_bool.ToType(), types.T_text.ToType(), medium}).Width)
 }
 
+func TestConditionalStringCollationRevisionPreserved(t *testing.T) {
+	native := types.NewWithCharset(
+		types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI,
+	)
+	// This is the ordinary general-ci literal/branch that is merged with the
+	// native column by the conditional type resolver. Its narrower width also
+	// exercises the result-type widening path.
+	general := types.New(types.T_varchar, 1, 0)
+	wantCharset := types.CharsetUTF8MB4UnicodeCI
+	wantVersion := uint8(types.CollationVersionV1)
+
+	for _, tc := range []struct {
+		name   string
+		result types.Type
+	}{
+		{
+			name:   "common conditional",
+			result: commonConditionalStringType(types.T_varchar.ToType(), []types.Type{native, general}),
+		},
+		{
+			name: "case",
+			result: caseReturnType([]types.Type{
+				types.T_bool.ToType(), native, general,
+			}),
+		},
+		{
+			name:   "if",
+			result: iffReturnType([]types.Type{types.T_bool.ToType(), native, general}),
+		},
+		{
+			name:   "coalesce",
+			result: coalesceStringReturnType(types.T_varchar, []types.Type{native, general}),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, wantCharset, tc.result.Charset)
+			require.Equal(t, wantVersion, tc.result.CollationVersion)
+		})
+	}
+
+	// An untyped NULL branch must not erase the native identity either.
+	withNull := commonConditionalStringType(
+		types.T_varchar.ToType(), []types.Type{native, types.T_any.ToType()},
+	)
+	require.Equal(t, wantCharset, withNull.Charset)
+	require.Equal(t, wantVersion, withNull.CollationVersion)
+}
+
 func Test_CoalesceCheck_MixedStringNumeric(t *testing.T) {
 	overloads := []overload{
 		{args: []types.T{types.T_varchar}},

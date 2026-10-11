@@ -15,6 +15,8 @@
 package hakeeper
 
 import (
+	"math"
+
 	"bytes"
 	"sort"
 	"testing"
@@ -27,13 +29,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
-
-func TestAssignID(t *testing.T) {
-	tsm := NewStateMachine(0, 1).(*stateMachine)
-	assert.Equal(t, uint64(0), tsm.state.NextID)
-	assert.Equal(t, uint64(1), tsm.assignID())
-	assert.Equal(t, uint64(1), tsm.state.NextID)
-}
 
 func TestHAKeeperStateMachineCanBeCreated(t *testing.T) {
 	defer func() {
@@ -220,7 +215,9 @@ func TestGetIDCmd(t *testing.T) {
 	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
 	assert.Equal(t, sm.Result{Value: 101}, result)
-	assert.Equal(t, uint64(201), tsm1.assignID())
+	result, err = tsm1.Update(sm.Entry{Cmd: GetAllocateIDCmd(pb.CNAllocateID{Batch: 1})})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 201}, result)
 
 	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
@@ -260,7 +257,9 @@ func TestAllocateIDByKeyCmd(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, sm.Result{Value: 101}, result)
 
-	assert.Equal(t, uint64(201), tsm1.assignIDByKey("k1"))
+	result, err = tsm1.Update(sm.Entry{Cmd: GetAllocateIDCmd(pb.CNAllocateID{Key: "k1", Batch: 1})})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 201}, result)
 
 	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
@@ -276,7 +275,9 @@ func TestAllocateIDByKeyCmd(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, sm.Result{Value: 51}, result)
 
-	assert.Equal(t, uint64(101), tsm1.assignIDByKey("k2"))
+	result, err = tsm1.Update(sm.Entry{Cmd: GetAllocateIDCmd(pb.CNAllocateID{Key: "k2", Batch: 1})})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 101}, result)
 }
 
 func TestAllocateIDByKeyWithRequestIDIsIdempotentAcrossSnapshot(t *testing.T) {
@@ -2754,4 +2755,52 @@ func TestCNHeartbeatReobservesAdmissionBarrier(t *testing.T) {
 	require.True(t, rsm.state.ViewMetadataAdmissionCNReady["cn"])
 	require.Equal(t, before, rsm.state.CNState.Stores["cn"], "only the barrier observation changed")
 	apply(0)
+}
+
+func TestAllocateIDReservationBoundary(t *testing.T) {
+	for _, key := range []string{"", "__mo_sql_uuid_short"} {
+		t.Run(key, func(t *testing.T) {
+			s := NewStateMachine(0, 1).(*stateMachine)
+			s.state.State = pb.HAKeeperRunning
+			set := func(v uint64) {
+				if key == "" {
+					s.state.NextID = v
+				} else {
+					s.state.NextIDByKey[key] = v
+				}
+			}
+			get := func() uint64 {
+				if key == "" {
+					return s.state.NextID
+				}
+				return s.state.NextIDByKey[key]
+			}
+			set(math.MaxUint64 - 2)
+			for _, batch := range []uint64{0, 3, math.MaxUint64} {
+				r, err := s.Update(sm.Entry{Cmd: GetAllocateIDCmd(pb.CNAllocateID{Key: key, Batch: batch})})
+				require.NoError(t, err)
+				require.Zero(t, r.Value)
+				require.Equal(t, uint64(math.MaxUint64-2), get())
+			}
+			request := pb.CNAllocateID{Key: key, Batch: 2}
+			if key != "" {
+				request.RequestID = "terminal"
+			}
+			r, err := s.Update(sm.Entry{Cmd: GetAllocateIDCmd(request)})
+			require.NoError(t, err)
+			require.Equal(t, uint64(math.MaxUint64-1), r.Value)
+			buf := bytes.NewBuffer(nil)
+			require.NoError(t, s.SaveSnapshot(buf, nil, nil))
+			restored := NewStateMachine(0, 2).(*stateMachine)
+			require.NoError(t, restored.RecoverFromSnapshot(buf, nil, nil))
+			r, err = restored.Update(sm.Entry{Cmd: GetAllocateIDCmd(pb.CNAllocateID{Key: key, Batch: 1})})
+			require.NoError(t, err)
+			require.Zero(t, r.Value)
+			if key != "" {
+				r, err = restored.Update(sm.Entry{Cmd: GetAllocateIDCmd(request)})
+				require.NoError(t, err)
+				require.Equal(t, uint64(math.MaxUint64-1), r.Value)
+			}
+		})
+	}
 }

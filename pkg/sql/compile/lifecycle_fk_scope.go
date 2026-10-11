@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -32,6 +33,7 @@ import (
 type dropLifecycleIdentity struct {
 	database, table   string
 	databaseID        uint64
+	logicalID         uint64
 	parents, children []uint64
 }
 
@@ -53,31 +55,82 @@ func sortedFKIDs(ids []uint64) []uint64 {
 	return slices.Sorted(maps.Keys(fkIDSet(ids)))
 }
 
-// Only TRUNCATE's synchronous nested DROP may borrow its already-held broad
-// gate. The receipt cannot outlive the callback or authorize another owner.
-type broadDropLifecycleKey struct{}
-type broadDropLifecycle struct {
-	owner  client.TxnOperator
-	closed bool
+// A root ID authorizes only the certified scalar DROP. Zero retains the broad
+// capability, passed only by callers that have successfully acquired G X.
+type dropLifecycleAdmission struct {
+	rootID    uint64
+	accountID uint32
+	root      dropLifecycleIdentity
 }
 
-func (c *Compile) withBroadDropLifecycle(run func() error) error {
+type dropLifecycleKey struct{}
+type dropLifecycleReceipt struct {
+	owner     client.TxnOperator
+	admission dropLifecycleAdmission
+	closed    bool
+}
+
+func (c *Compile) withDropLifecycle(admission dropLifecycleAdmission, run func() error) error {
 	old := c.proc.Ctx
-	receipt := &broadDropLifecycle{owner: c.proc.GetTxnOperator()}
-	c.proc.Ctx = context.WithValue(old, broadDropLifecycleKey{}, receipt)
+	receipt := &dropLifecycleReceipt{owner: c.proc.GetTxnOperator(), admission: admission}
+	c.proc.Ctx = context.WithValue(old, dropLifecycleKey{}, receipt)
 	defer func() { receipt.closed = true; c.proc.Ctx = old }()
 	return run()
 }
 
-func (c *Compile) borrowedDropLifecycle() (bool, error) {
-	r, ok := c.proc.Ctx.Value(broadDropLifecycleKey{}).(*broadDropLifecycle)
+func (c *Compile) borrowedDropLifecycle(targets ...*plan.DropTable) (bool, error) {
+	r, ok := c.proc.Ctx.Value(dropLifecycleKey{}).(*dropLifecycleReceipt)
 	if !ok {
 		return false, nil
 	}
 	if r.closed || r.owner == nil || r.owner != c.proc.GetTxnOperator() {
 		return false, moerr.NewInternalError(c.proc.Ctx, "expired DROP lifecycle owner")
 	}
+	if r.admission.rootID == 0 {
+		return true, nil
+	}
+	a := r.admission
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return false, err
+	}
+	if accountID != a.accountID || len(targets) != 1 || targets[0] == nil {
+		return false, moerr.NewInternalError(c.proc.Ctx, "invalid scalar DROP lifecycle target")
+	}
+	q := targets[0]
+	if q.Database != a.root.database || q.Table != a.root.table || q.TableId != a.rootID ||
+		q.TableDef == nil || plan2.SnapshotTableID(q.TableDef) != a.root.logicalID {
+		return false, moerr.NewInternalError(c.proc.Ctx, "scalar DROP exceeds its admitted root")
+	}
+	db, err := c.e.Database(c.proc.Ctx, q.Database, r.owner)
+	if err != nil {
+		return false, err
+	}
+	rel, err := db.Relation(c.proc.Ctx, q.Table, nil)
+	if err != nil {
+		return false, err
+	}
+	if rel.GetTableID(c.proc.Ctx) != a.rootID || rel.GetDBID(c.proc.Ctx) != a.root.databaseID ||
+		plan2.SnapshotTableID(rel.GetTableDef(c.proc.Ctx)) != a.root.logicalID {
+		return false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	}
 	return true, nil
+}
+
+func (c *Compile) scalarDropLifecycle() bool {
+	r, ok := c.proc.Ctx.Value(dropLifecycleKey{}).(*dropLifecycleReceipt)
+	return ok && r.admission.rootID != 0
+}
+
+func (c *Compile) borrowedBroadLifecycle() (bool, error) {
+	r, ok := c.proc.Ctx.Value(dropLifecycleKey{}).(*dropLifecycleReceipt)
+	if !ok {
+		return false, nil
+	}
+	if r.admission.rootID != 0 {
+		return false, nil
+	}
+	return c.borrowedDropLifecycle()
 }
 
 func (c *Compile) isLifecycleRC() bool {
@@ -273,7 +326,7 @@ func (c *Compile) admitDropLifecycleRCWithDomain(tables []*plan.DropTable, datab
 	if err != nil {
 		return nil, false, err
 	}
-	if err = c.admitLifecycleRC(names, needsExclusiveGate, false); err != nil {
+	if err = c.admitLifecycleRC(names, needsExclusiveGate); err != nil {
 		return nil, false, err
 	}
 	_, after, err := c.loadDropLifecycleDomain(tables, database)
@@ -294,7 +347,7 @@ func (c *Compile) admitDropLifecycleRCWithDomain(tables []*plan.DropTable, datab
 			return nil, false, err
 		}
 		if participates {
-			if err := c.admitLifecycleRC(nil, true, false); err != nil {
+			if err := c.admitLifecycleRC(nil, true); err != nil {
 				return nil, false, err
 			}
 			return nil, false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
@@ -337,4 +390,75 @@ func dropLifecycleBranchRoots(domain map[uint64]dropLifecycleIdentity, tables []
 	}
 	slices.Sort(ids)
 	return slices.Compact(ids)
+}
+
+func createTablePublishesForeignKeys(q *plan.CreateTable) bool {
+	return len(q.GetUpdateFkSqls()) != 0 || len(q.GetTableDef().GetFkeys()) != 0 ||
+		len(q.GetFkDbs()) != 0 || len(q.GetFkTables()) != 0 || len(q.GetFksReferToMe()) != 0
+}
+
+func (c *Compile) admitForeignKeyCreate() error {
+	borrowed, err := c.borrowedBroadLifecycle()
+	if err != nil || borrowed {
+		return err
+	}
+	op := c.proc.GetTxnOperator()
+	if op == nil || !op.Txn().IsPessimistic() {
+		return nil
+	}
+	if c.isLifecycleRC() {
+		return c.admitLifecycleRC(nil, true)
+	}
+	return c.lockDataBranchLineageOwnerLifecyclePessimistic()
+}
+
+func (c *Compile) validateForeignKeyParentGeneration(database, table string, expectedID uint64) error {
+	db, err := c.e.Database(c.proc.Ctx, database, c.proc.GetTxnOperator())
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			if expectedID == 0 {
+				return nil
+			}
+			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+		return err
+	}
+	parent, err := db.Relation(c.proc.Ctx, table, nil)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			if expectedID == 0 {
+				return nil
+			}
+			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+		return err
+	}
+	if expectedID == 0 || parent.GetTableID(c.proc.Ctx) != expectedID {
+		return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	}
+	return nil
+}
+
+func (c *Compile) validateCreateForeignKeyParents(q *plan.CreateTable, database string) error {
+	if q.GetTemporary() {
+		return nil
+	}
+	names, databases := q.GetFkTables(), q.GetFkDbs()
+	fkeys := q.GetTableDef().GetFkeys()
+	if len(names) != len(databases) || len(names) != len(fkeys) {
+		return moerr.NewInternalError(c.proc.Ctx, "inconsistent CREATE foreign-key parents")
+	}
+	for i, name := range names {
+		if databases[i] == database && name == q.GetTableDef().GetName() {
+			continue
+		}
+		if fkeys[i] == nil {
+			return moerr.NewInternalError(c.proc.Ctx, "missing CREATE foreign-key parent")
+		}
+		if err := c.validateForeignKeyParentGeneration(databases[i], name, fkeys[i].ForeignTbl); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

@@ -488,7 +488,7 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		}).AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
 		msr := newMrsForCheckTenant([][]interface{}{{1, "test"}})
-		protocolResult := newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:100"}`}})
+		protocolResult := newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:109"}`}})
 		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
 			if protocolQuery {
 				return []interface{}{protocolResult}
@@ -667,7 +667,7 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol100Peers(t *testing.T) 
 					require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, executed)
 				} else {
 					require.NoError(t, err)
-					require.Contains(t, executed, sysview.InformationSchemaColumnsDDL)
+					require.Contains(t, executed, sysview.InformationSchemaColumnsV100DDL())
 				}
 			})
 		}
@@ -686,6 +686,49 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol100Peers(t *testing.T) 
 				require.Contains(t, executed, sysview.InformationSchemaColumnsV58DDL())
 				require.NotContains(t, executed, sysview.InformationSchemaColumnsDDL)
 				require.NotContains(t, executed, "SELECT mo_ctl('cn', 'GetProtocolVersion', '')")
+			})
+		}
+	})
+}
+
+func TestCreateTenantInformationSchemaWaitsForAllProtocol109Peers(t *testing.T) {
+	moruntime.RunTest("", func(rt moruntime.Runtime) {
+		previous, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
+		defer func() {
+			if exists {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+			} else {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		for _, tc := range []struct {
+			name, response string
+			wantError      bool
+		}{
+			{name: "one peer is still on protocol 108", response: `{"result":"cn-a:109,cn-b:108"}`, wantError: true},
+			{name: "all peers support native view", response: `{"result":"cn-a:109,cn-b:109"}`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				ctrl := gomock.NewController(t)
+				bh := mock_frontend.NewMockBackgroundExec(ctrl)
+				var executed []string
+				bh.EXPECT().ClearExecResultSet().AnyTimes()
+				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+					executed = append(executed, sql)
+					return nil
+				}).AnyTimes()
+				bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant([][]interface{}{{tc.response}})}).AnyTimes()
+
+				err := createTablesInInformationSchemaOfGeneralTenant(t.Context(), bh, "")
+				if tc.wantError {
+					require.ErrorContains(t, err, "protocol version 109")
+					require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, executed)
+				} else {
+					require.NoError(t, err)
+					require.Contains(t, executed, sysview.InformationSchemaColumnsDDL)
+				}
 			})
 		}
 	})
