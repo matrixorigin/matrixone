@@ -186,8 +186,9 @@ sixteen waiting queries, one-hour query and three-hour profiling deadlines.
 
 Readiness requires all exact/public/cleanup/resource/sanitizer/performance gates,
 matched Native A/B/current baselines and required CI/reviewer approval. The
-known cuDF pinned-pool and CUB reports remain to be reconciled. D stays draft
-until that proof is terminal. E/F and Docker work remain excluded.
+known cuDF pinned-pool and CUB reports require matched controls and steady
+allocation evidence. D stays draft until all local and external gates pass.
+E/F and Docker work remain excluded.
 
 ## Implementation and execution
 
@@ -296,3 +297,16 @@ Acceptance crosslinks allocation baselines to the actual measured/probe snapshot
 and checks unique, ordered CUDA spans. Matched sanitizer classifications retain
 raw exit status 99 and the exact candidate/control error and leak counts; extra
 findings or duplicate controls fail acceptance.
+
+## Release validation record
+
+The complete release evidence is in
+[sirius-campaign-release](evidence/sirius-campaign-release/README.md). At MO
+`9814347c1c`, merged Sirius `955b6881` and the guarded release SDK, all 744
+unprofiled timing executions and all 264 resource executions passed. All six
+allocation profiles have zero unexplained warmed growth, all ten matched numeric
+ratios pass 1.1, and the lifecycle and raw sanitizer control proofs satisfy the
+combined local validator. The GPU route was slower overall than native MO on the
+recorded hardware. Capture identities and the original contexts of qualified
+native proofs remain intact. Required CI and reviewer approval still gate D
+readiness and final acceptance.

@@ -1,0 +1,1051 @@
+{
+  "allocation_counts": {
+    "device": 1238741,
+    "pinned": 21
+  },
+  "end_ns": 1791732386492363622,
+  "final_bytes": {
+    "device": 101696,
+    "pinned": 41386248
+  },
+  "logical_pool_scope": "query-window",
+  "peak_bytes": {
+    "device": 6442450944,
+    "pinned": 578350871
+  },
+  "physical_baseline_scope": "idle-cn-process",
+  "pid": 1071438,
+  "pool_baseline_reconciled": true,
+  "post_cleanup_bytes": {
+    "device": 101696,
+    "pinned": 578257160
+  },
+  "provenance": {
+    "config": {
+      "active_queries": 1,
+      "cleanup_timeout_seconds": 30,
+      "gpu_memory_bytes": 6442450944,
+      "input_window_bytes": 67108864,
+      "native_host_memory_bytes": 17179869184,
+      "query_timeout_seconds": 3600,
+      "resource_timeout_seconds": 10800,
+      "result_window_bytes": 67108864,
+      "session": {
+        "campaign_evidence": true,
+        "div_precision_increment": 4,
+        "time_zone": "+00:00"
+      },
+      "waiting_queries": 16
+    },
+    "controller_sha256": "8219e0ad3981c0bdd0808445950a7b55c52dbb0b520759457fb2ae41193854a9",
+    "datasets": {
+      "SF1": "3eef164c446a7b727f54606c218cf07ab02905bf4447aced6c1cb2913422443d",
+      "SF10": "dbb2d16b2e71066c916e4ab5ca0123352339d0e361c1ce3a079732a57f8241a3"
+    },
+    "hardware": {
+      "cpu_count": 32,
+      "cpu_model": "AMD Ryzen 9 7950X3D 16-Core Processor",
+      "gpu_name": "NVIDIA GeForce RTX 3070",
+      "gpu_total_bytes": 8589934592,
+      "gpu_uuid": "GPU-c7bc695d-c2c2-09e7-cdd4-2c077746baf8",
+      "host_total_bytes": 66516393984
+    },
+    "matrixone_revision": "9814347c1ce38ec12f51412ef3176ede1501574d",
+    "query_sha256": {
+      "Q1": "1bc3612d672284d21c22af78284fc53421732de05db6420f5adacba9e1bf2c9c",
+      "Q10": "fabb30f02e1303ff2e1b0ea406d1e23f944d38370cdc7ae165d88cc9af6be4e4",
+      "Q11": "15313049541bd40f415c5610eda7786340fc27cfc86ad648d4082a98c4d8c1a8",
+      "Q12": "079873c999306ce7e8ef30bf672c458a9111ada49d8684c2862f78285d43a747",
+      "Q13": "1278e3c1130e5a6e4c48bb5c28c43fc9d684d9c39d15efe7260de4c6d8702721",
+      "Q14": "a619f876e8efa2d5c8b5702de063bbd8a86485467d0b5e9a1389e1738e9e2a1c",
+      "Q15": "e589c63746e1eeca84a33a292004e0fddf42c00e44d7fde916a97f9bd905a51d",
+      "Q16": "eb85f8dae89bb5aadd75139d45fea8b6382e1daefd658860b0aba92f4de27683",
+      "Q17": "9ebb848550ce72fd6f2c622b60b321b5ddaacf89877506759eaad3ba63afd763",
+      "Q18": "86befd6c5d7d6f03fffca49b7693f950dc918d29fb2d227c0d860abbe6175ee3",
+      "Q19": "86d2a6c127cdc9f77d5e4a61b48c521f438fd98b29a0b8365fec780394b1bcda",
+      "Q2": "b5fd460f30fdb8ffdcaf7685bcd0c5b0e58cd5561f3be2139eff30d56436e499",
+      "Q20": "bb0813d636477e844fdd491fa003d7cc775905eb7e56ffe76b6da9ceb359f9f3",
+      "Q21": "bc9b57a03d3deee0870431f5c5a4af892ee0b4edb5402e3b1065b12649a66084",
+      "Q22": "1c3eac80444b493855fe9ffe1f81ff87b404c39470656b94461afad88a6bcf99",
+      "Q3": "62f35b95faae9660b8dc9ff402c57feebfee0abc19e789b450eabd1deea782f9",
+      "Q4": "7a4e4b6f8869fcee1cfe19301124dac8cf8420129f1f9a6b84932111950bc356",
+      "Q5": "520f93f5606923fc044f273125b47ade1b66c653f57efc876cd00674546e5a19",
+      "Q6": "c3d945a2ed3c1718154276f6fe2e869a2523f51b338c6f0a6bc6a432fee0bcf1",
+      "Q7": "28bfadf4879cdbfa4a59fa2c09264ba2d1ad9080f41cc761eb549205538cd4fe",
+      "Q8": "c51808e434880f96ff443bed75a648b353ad41642578fee838ac3a87040439c0",
+      "Q9": "9de26a1583c5bf2a1f0633b4bd8ed6cdfc402cb55a4d18756b0c4fe1715a0fec"
+    },
+    "runner_binary_sha256": "026d6e1bffbcfc7431b8fb57244b5a774215f18e8b23fecbbdff5dd075333c65",
+    "sdk_build_mode": "release",
+    "sdk_sha256": "29bca11a537abf00d481581a423023591dbabda9b0fdd73d06c4a697e8ce01ce",
+    "service_binary_sha256": "ef04a7a3574b7f08db0d9c951c7efd30c4f85166f2ed8ebf57ff46b9b387ba7f",
+    "sirius_revision": "955b6881afa6e92d0995f43e3fe9c383d86981c0",
+    "toolchain": {
+      "cuda": "Build cuda_13.3.r13.3/compiler.38244171_0",
+      "cxx": "14.4.0",
+      "driver": "615.78.08",
+      "gdb": "GNU gdb (GDB) 18.1",
+      "go": "go1.27.1-X:simd",
+      "nsight": "NVIDIA Nsight Systems version 2026.3.2.476-263238834031v0",
+      "pixi_lock_sha256": "ed808ec91232d916b49e11abb14aba0dcdd82fa13d908342bc970ce584ce4fef"
+    }
+  },
+  "runs": [
+    {
+      "after_bytes": {
+        "device": 6812,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 0,
+        "pinned": 0
+      },
+      "end_ns": 1791732361308459819,
+      "peak_bytes": {
+        "device": 6442450944,
+        "pinned": 578350871
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b92212e779e86fe6b46331cf4f5",
+      "scope": "runner-lifetime",
+      "sequence": 1003000,
+      "start_ns": 1791732357126914831,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 7269,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 6812,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732361735114338,
+      "peak_bytes": {
+        "device": 40661882,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b9229c770f6b4635b65a843cf53",
+      "scope": "runner-lifetime",
+      "sequence": 1003003,
+      "start_ns": 1791732361664483062,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 7269,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 7269,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732361894800530,
+      "peak_bytes": {
+        "device": 158732481,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b922a1f77c49d5269105bf55251",
+      "scope": "runner-lifetime",
+      "sequence": 1003004,
+      "start_ns": 1791732361751136933,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 99351,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 7269,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732362153717644,
+      "peak_bytes": {
+        "device": 93940901,
+        "pinned": 578277271
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b922b357e079dea434fcd92935b",
+      "scope": "runner-lifetime",
+      "sequence": 1003007,
+      "start_ns": 1791732362028234408,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 99351,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 99351,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732362326152777,
+      "peak_bytes": {
+        "device": 322096230,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b922bb377e196bb1cb560d2f05c",
+      "scope": "runner-lifetime",
+      "sequence": 1003008,
+      "start_ns": 1791732362155233550,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 99428,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 99351,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732362624098865,
+      "peak_bytes": {
+        "device": 210248,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b922cc37646aedc231b285e696e",
+      "scope": "runner-lifetime",
+      "sequence": 1003011,
+      "start_ns": 1791732362426868507,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 100160,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 99428,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732362796793508,
+      "peak_bytes": {
+        "device": 121739184,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b922d8a7d73b978b0d0c6bf106a",
+      "scope": "runner-lifetime",
+      "sequence": 1003012,
+      "start_ns": 1791732362624985794,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 100761,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 100160,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732363168963634,
+      "peak_bytes": {
+        "device": 357346616,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b922eda710cb2f8bf4170133703",
+      "scope": "runner-lifetime",
+      "sequence": 1003015,
+      "start_ns": 1791732362962287546,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 100761,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 100761,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732363351319154,
+      "peak_bytes": {
+        "device": 486577191,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b922fab7e91a2cdd43384fcb4d1",
+      "scope": "runner-lifetime",
+      "sequence": 1003016,
+      "start_ns": 1791732363169769832,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 100761,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 100761,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732363766494115,
+      "peak_bytes": {
+        "device": 121302247,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b92315f7293a2e671ffbaabb015",
+      "scope": "runner-lifetime",
+      "sequence": 1003019,
+      "start_ns": 1791732363606716025,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 100842,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 100761,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732363841511961,
+      "peak_bytes": {
+        "device": 53515529,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b9232047df78e643b205d6296e8",
+      "scope": "runner-lifetime",
+      "sequence": 1003020,
+      "start_ns": 1791732363770478397,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 100996,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 100842,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732364394964067,
+      "peak_bytes": {
+        "device": 62190393,
+        "pinned": 578334231
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b9233b57cb798e4b91e9b4bbc2a",
+      "scope": "runner-lifetime",
+      "sequence": 1003023,
+      "start_ns": 1791732364205565193,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101091,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 100996,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732364523992864,
+      "peak_bytes": {
+        "device": 56334392,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b9234757a7dab1bfa6c48d6cda3",
+      "scope": "runner-lifetime",
+      "sequence": 1003024,
+      "start_ns": 1791732364395967945,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101091,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101091,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732364794561061,
+      "peak_bytes": {
+        "device": 16389507,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b92358b7a358626501ace7dcbe7",
+      "scope": "runner-lifetime",
+      "sequence": 1003027,
+      "start_ns": 1791732364676227021,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101091,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101091,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732365930838655,
+      "peak_bytes": {
+        "device": 26220503,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b9236047b2690f2b482d50dcc9e",
+      "scope": "runner-lifetime",
+      "sequence": 1003028,
+      "start_ns": 1791732364795193269,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101091,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101091,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732366142862278,
+      "peak_bytes": {
+        "device": 27902092,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b923b017122a8fb11352c6bf556",
+      "scope": "runner-lifetime",
+      "sequence": 1003031,
+      "start_ns": 1791732366074176520,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101091,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101091,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732368669466039,
+      "peak_bytes": {
+        "device": 344465039,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b92447a7f078224feabee2e4d26",
+      "scope": "runner-lifetime",
+      "sequence": 1003032,
+      "start_ns": 1791732368496121972,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101091,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101091,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732369590773813,
+      "peak_bytes": {
+        "device": 318032244,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b9245f872cdb4e1f374a22a86ba",
+      "scope": "runner-lifetime",
+      "sequence": 1003035,
+      "start_ns": 1791732368880015614,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101091,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101091,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732369819130718,
+      "peak_bytes": {
+        "device": 15340390,
+        "pinned": 578336535
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b9248c0768ba2bb4b4c8e5de355",
+      "scope": "runner-lifetime",
+      "sequence": 1003036,
+      "start_ns": 1791732369593349147,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101091,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101091,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732370430336684,
+      "peak_bytes": {
+        "device": 138069658,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b924a6d766fa3a70e3dd0663cd2",
+      "scope": "runner-lifetime",
+      "sequence": 1003039,
+      "start_ns": 1791732370021824449,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101618,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101091,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732370738842741,
+      "peak_bytes": {
+        "device": 236674206,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b924c1f7541b71aa6776d230037",
+      "scope": "runner-lifetime",
+      "sequence": 1003040,
+      "start_ns": 1791732370454427441,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101618,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732371009718871,
+      "peak_bytes": {
+        "device": 31094691,
+        "pinned": 578257160
+      },
+      "phase": "resource-warmup",
+      "query_id": "01a12b924e1b7d9fa7b1442a964490be",
+      "scope": "runner-lifetime",
+      "sequence": 1003043,
+      "start_ns": 1791732370961439478,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732372543829245,
+      "peak_bytes": {
+        "device": 18704385,
+        "pinned": 578341271
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b924e4c7cf9b8cd9c0747515068",
+      "scope": "runner-lifetime",
+      "sequence": 89,
+      "start_ns": 1791732371011629996,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732373035133683,
+      "peak_bytes": {
+        "device": 40685418,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b9255f87e9ab44a87f96c9b895f",
+      "scope": "runner-lifetime",
+      "sequence": 92,
+      "start_ns": 1791732372976842102,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732373176358278,
+      "peak_bytes": {
+        "device": 158816204,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b9256447e8484fea22d4c278b29",
+      "scope": "runner-lifetime",
+      "sequence": 93,
+      "start_ns": 1791732373050298809,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732373411120266,
+      "peak_bytes": {
+        "device": 93943397,
+        "pinned": 578276119
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b92574f73fbb495e81a48e53130",
+      "scope": "runner-lifetime",
+      "sequence": 96,
+      "start_ns": 1791732373318997690,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732373554189507,
+      "peak_bytes": {
+        "device": 322088711,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b9257ae7dccbc5fa10c0799e3a9",
+      "scope": "runner-lifetime",
+      "sequence": 97,
+      "start_ns": 1791732373412787492,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732373845898547,
+      "peak_bytes": {
+        "device": 211756,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b92589e71ba96438088b31ebfe0",
+      "scope": "runner-lifetime",
+      "sequence": 100,
+      "start_ns": 1791732373653637606,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732373995743234,
+      "peak_bytes": {
+        "device": 121730092,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b925961706e8dda0955edbf6df3",
+      "scope": "runner-lifetime",
+      "sequence": 101,
+      "start_ns": 1791732373846587946,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732374290287947,
+      "peak_bytes": {
+        "device": 366300800,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b925a7279569109e65a92b775cc",
+      "scope": "runner-lifetime",
+      "sequence": 104,
+      "start_ns": 1791732374122628131,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732374483057207,
+      "peak_bytes": {
+        "device": 497016290,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b925b1c79868a9b215f37798549",
+      "scope": "runner-lifetime",
+      "sequence": 105,
+      "start_ns": 1791732374291336385,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732374918396227,
+      "peak_bytes": {
+        "device": 99083131,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b925ce579238afbb31f681bd63f",
+      "scope": "runner-lifetime",
+      "sequence": 108,
+      "start_ns": 1791732374749204664,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732374994414497,
+      "peak_bytes": {
+        "device": 48746964,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b925d9476438de82b7a5abe25d3",
+      "scope": "runner-lifetime",
+      "sequence": 109,
+      "start_ns": 1791732374922577717,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732375503204551,
+      "peak_bytes": {
+        "device": 62197019,
+        "pinned": 578335383
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b925f377d629832de032e6de9a6",
+      "scope": "runner-lifetime",
+      "sequence": 112,
+      "start_ns": 1791732375343340058,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732375612331507,
+      "peak_bytes": {
+        "device": 56334997,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b925fd97d4b872e0d1f4ab5ab61",
+      "scope": "runner-lifetime",
+      "sequence": 113,
+      "start_ns": 1791732375504255488,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732375904120855,
+      "peak_bytes": {
+        "device": 16390112,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b9260ee7d938eb07e5f8906a807",
+      "scope": "runner-lifetime",
+      "sequence": 116,
+      "start_ns": 1791732375781321920,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732377202704490,
+      "peak_bytes": {
+        "device": 26129388,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b926169729eb85b31d44c153b4a",
+      "scope": "runner-lifetime",
+      "sequence": 117,
+      "start_ns": 1791732375904948253,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732377417265759,
+      "peak_bytes": {
+        "device": 27902697,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b92670c710a98f6a2e5e3312857",
+      "scope": "runner-lifetime",
+      "sequence": 120,
+      "start_ns": 1791732377348162704,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732379835415962,
+      "peak_bytes": {
+        "device": 296463064,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b9270197c279c72fcb26e000e74",
+      "scope": "runner-lifetime",
+      "sequence": 121,
+      "start_ns": 1791732379664308806,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732380776237714,
+      "peak_bytes": {
+        "device": 285392925,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b92718b72aebc94dc697241eb96",
+      "scope": "runner-lifetime",
+      "sequence": 124,
+      "start_ns": 1791732380035017213,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732381062632699,
+      "peak_bytes": {
+        "device": 15354683,
+        "pinned": 578341271
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b92747372ddbd116a07d36108ef",
+      "scope": "runner-lifetime",
+      "sequence": 125,
+      "start_ns": 1791732380778611389,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732381635032599,
+      "peak_bytes": {
+        "device": 119965592,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b9276467dd6bdda44a4eb84ef25",
+      "scope": "runner-lifetime",
+      "sequence": 128,
+      "start_ns": 1791732381247263333,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732381958117540,
+      "peak_bytes": {
+        "device": 236636859,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b9277e37782b72a58f9bc9f77b9",
+      "scope": "runner-lifetime",
+      "sequence": 129,
+      "start_ns": 1791732381658893555,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732382239767714,
+      "peak_bytes": {
+        "device": 31094769,
+        "pinned": 578257160
+      },
+      "phase": "resource-validation",
+      "query_id": "01a12b9279fb7af082a1388de712e3bd",
+      "scope": "runner-lifetime",
+      "sequence": 132,
+      "start_ns": 1791732382194764606,
+      "time_domain": "unix-epoch-ns"
+    },
+    {
+      "after_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "before_bytes": {
+        "device": 101696,
+        "pinned": 578257160
+      },
+      "end_ns": 1791732383905732809,
+      "peak_bytes": {
+        "device": 20071029,
+        "pinned": 578343191
+      },
+      "phase": "cleanup-probe",
+      "query_id": "01a12b927a2977bbafd55fab11fd7288",
+      "scope": "runner-lifetime",
+      "sequence": 2003000,
+      "start_ns": 1791732382241734160,
+      "time_domain": "unix-epoch-ns"
+    }
+  ],
+  "scale_factor": 1,
+  "scope": "cn-process-lifetime",
+  "source": "nsight-cupti-memory-events",
+  "start_ns": 1791732359298006215,
+  "streams": 2,
+  "unexplained_growth_bytes": 0,
+  "units": "bytes",
+  "warmed_baseline_bytes": {
+    "device": 101696,
+    "pinned": 578257160
+  }
+}

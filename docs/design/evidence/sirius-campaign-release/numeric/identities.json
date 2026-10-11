@@ -1,0 +1,17 @@
+{
+  "native-a": {
+    "source_revision": "c440013c89f1a54a6e5d934aabd0f9d3ef15ed3c",
+    "binary_sha256": "93430003049c557b0eeff36b6a8f8e0232260ed6ad349d62b2e2a217f73b53ca",
+    "harness_sha256": "1118a390aa16926120113f8d992940a15e96464117c75923f6f43e40e4acc768"
+  },
+  "native-b": {
+    "source_revision": "5ea60cd31955d0dced2adcbcd3df0772207b79ef",
+    "binary_sha256": "3ad33ee16f7da1f2c38d2f29d1eb07cb4a3edcfbcbd60ea6b750383776c94e0e",
+    "harness_sha256": "b445407723741aa68fcb726a594715661f6eaadc5a68560a12d26ab5bfedb812"
+  },
+  "candidate": {
+    "source_revision": "955b6881afa6e92d0995f43e3fe9c383d86981c0",
+    "binary_sha256": "f4ca0e4b9b6a2fde60abdaea501e68fe3b67bffe013e48c9a535fba34de50e81",
+    "harness_sha256": "b445407723741aa68fcb726a594715661f6eaadc5a68560a12d26ab5bfedb812"
+  }
+}
