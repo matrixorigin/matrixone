@@ -1,204 +1,214 @@
-# 前向外键在执行边界的完整校验
+# 前向外键执行校验：正确性、等待范围与性能约束
 
-状态：设计 v1，待实施；已依据源码完成自审，尚未通过修复后的运行验证。
+状态：设计 v2，替代 v1；源码级候选方案，尚未实施或通过性能验收。v1 的“所有普通 CREATE 增加 G S”方案撤回。下面的锁冲突策略及目录查询成本尚须通过第 8 节门禁，不能把本文当作已经证明无退化的实施批准。
 
 所属 issue：[#29852](https://github.com/matrixorigin/matrixone/issues/29852)。
-基线：`4022729da24d71b082c22b52aaed3faba2b77ea5`，已包含 #29837。
-本设计的并发正确性目标是生产悲观 RC；兼容性检查包括现有 SI、乐观事务、内部 DDL 和停机升级。没有混合版本运行要求。
+基线：`4022729da24d71b082c22b52aaed3faba2b77ea5`，包含已合并的 #29837。
+目标为生产悲观 RC；覆盖内部 DDL、现有 SI/乐观调用者及停机升级，不设计混合版本协议。
 
-设计门槛：虽然由 bug 触发，方案涉及 planner/执行器边界、瞬态计划字段及 CREATE 锁契约，按并发与协议复杂度触发设计先行。本文完成的是方案，不是实施交付批准。
+## 1. 硬约束与范围
 
-## 1. 问题和明确的目标
+已确认的故障：父表 CREATE 的计划保存旧 child 的前向 FK；执行前另一个事务 DROP child 并同名重建无 FK 的 child；执行器按名字找到了新对象，把旧 FK 写进去。main 和原 PR 都有相同调度的复现。修复契约是：**写入使用的 FK 声明、子表身份、列绑定必须来自同一有效对象代际，且验证到写入之间受相关锁保护。**
 
-已确认的失败是：父表 CREATE 计划保存了旧子表的前向 FK；执行前，另一事务删除并同名重建了不带 FK 的子表；父表 CREATE 按名字找到新子表，把旧 FK 写进去。最终 `mo_foreign_keys` 无对应记录，SHOW CREATE 和 INSERT 却按该 FK 工作。此前 main 与 PR 的相同调度均复现。
+本轮增加三项同等重要的交付条件：
 
-修复必须满足：**只有当前事务在锁保护下确认仍然有效的 FK 声明和物理对象，才能参与本次元数据写入。** 名字相同、曾在计划中出现、获取了全局锁，都不单独构成有效性证明。
+1. 普通 SELECT/DML 不增加工作；普通无 FK CREATE 不加入全局生命周期锁队列；scalar TRUNCATE 不重复准入、扫描或推进快照。
+2. 不新增由局部热点向无关数据库/租户传播的锁等待，不排队升级持有中的锁，不引入无限重试。必须同时验证成功提交吞吐、尾延迟和失败率，不能把等待改成报错后宣称性能改善。
+3. 大库 DROP DATABASE 保持已有整库处理路径，本修复不增加逐表 FK 校验、逐表全局准入、逐表读屏障或逐表重新规划。表数、索引数、FK 边数增长时，检查增量成本及混合负载影响。
 
-目标包括三个不可分割的反例：
+“无死锁”在本次变更的可证明范围内，指新增锁请求不产生等待环，不依赖超时/死锁检测器补救本方案引入的锁序反转。任意用户多语句事务本来就可能构造行锁环；不能把有限测试或语句内排序当作整个数据库永不死锁的证明。
 
-1. 子表被同名替换，旧绑定不能落到新对象。
-2. 子表 ID 没变，但 FK 被删除、重建或改了列/动作，旧计划不能继续写。
-3. 计划中的引用集合为空，执行前出现新引用；或者缺失的父表在子表执行前已创建，不能永久漏绑定。
+修复还需挑战同 ID 的 FK 变化、incoming 空→非空、计划中缺失的父表先被创建。后几项目前是契约反例，不能描述成全部已经复现的生产故障。不新增历史数据追溯验证、自动元数据修复或通用 DDL 调度框架。
 
-第 1 项有运行证据；第 2、3 项是从契约推导的必测反例，不在没有运行证据时描述为新的已复现故障。
+## 2. 已有职责与源码约束
 
-保持既有 SQL 语义：`foreign_key_checks=0` 仍允许前向声明；本修复不新增对历史存量行的追溯校验，不自动修复已经损坏的元数据，也不引入 FK 注册表或新的重试框架。
-
-## 2. 已有职责归属
-
-| 职责 | 当前所有者 | 本次使用方式 |
-|---|---|---|
-| 读取前向声明、列顺序、动作来源、选择父键 | `plan/build_dml_util.go:getFkReferredToWithCatalogLayout`；`plan/build_ddl.go:buildFkDataOfForwardRefer` / `checkFkColsAreValid` | 保留为唯一语义实现，抽取必要的可复用绑定函数 |
-| CREATE 生命周期准入 | `compile/lifecycle_fk_scope.go:admitForeignKeyCreate`；`lifecycle_admission.go:admitLifecycleRC` | 扩展现有准入边界，覆盖空集合的有效性 |
-| 数据库、表名及表定义互斥 | `lockMoDatabase`、`lockMoTable`、`lockTable` | 在元数据写入前锁定完整参与对象 |
-| DROP/CREATE、约束和反向引用更新 | `Scope.createTable`、`AddFkeyToRelation`、`AddChildTblIdToParentTable` | 使用已校验对象继续现有执行路径 |
-| 内部替换的锁借用 | `dropLifecycleReceipt` / `withDropLifecycle` | 扩展同一短生命周期凭据的 CREATE 校验，不增加第二套凭据状态机 |
-| 语句回退、重建计划、事务终止 | `prepareRetryTransition`、`buildRetryCompile`、事务/workspace | 返回既有错误类别，不在 FK 函数内循环重试 |
-
-源码中的两个限制直接影响方案：
-
-- 并非所有原地 ALTER 都持有 G；ADD FK 会锁父表名，DROP FK/改列/改名也会使用子表元数据锁。不能用 G X 替代参与表锁。
-- `mo_foreign_keys` 的 ID 列在现有插入路径中可以是 0；不能直接拿它们当可靠物理身份。现有按被引用名称查询也不等价于有专用索引的点查。
-
-## 3. 选择与取舍
-
-| 方案 | 判断 |
+| 职责 | 所有者及处理原则 |
 |---|---|
-| 只给旧子表加一次 ID 检查 | 不足：不能发现同 ID 的声明变化，也不能发现新增参与者 |
-| 所有 CREATE 一律 G X，随后重新规划全部 SQL | 不选：扩大全局串行化，重复整个规划流程，且仍需处理原地 ALTER 的表锁 |
-| 执行器临时重写失效的 FK，继续旧计划 | 不选：容易让 catalog UPDATE SQL、约束、列 ID 使用不同代计划，并复制 planner 语义 |
-| 在现有准入/表锁边界验证完整绑定；变化时重建整个计划 | 采用：保持一个绑定规则、一个执行器和一个重试所有者 |
+| catalog 布局、列序、动作来源 | `plan/build_dml_util.go:getFkReferredToWithCatalogLayout`，继续共用，不复制 SQL/解码 |
+| FK 类型、列和父键绑定 | `buildFkDataOfForwardRefer` / `checkFkColsAreValid`，抽取必要纯函数供执行校验复用 |
+| 元数据和物理定义互斥 | `lockMoDatabase` / `lockMoTable` / `lockTable`，复用相同键编码和锁服务 |
+| 全局生命周期准入 | `admitForeignKeyCreate` / `admitLifecycleRC`，不扩大到无 FK 的 CREATE |
+| 事务回退和重建 | `prepareRetryTransition` / `buildRetryCompile` 及 frontend 事务所有者，不在 FK helper 内循环重试 |
+| 内部替换的准入复用 | 现有 `dropLifecycleReceipt`，不新建另一个凭据/状态机 |
+| 整库删除 | `DropDatabase` / `dropDatabaseRelations`，继续复用 resolved relations 和已准入的内部 DROP |
 
-这里有真实成本：没有 FK 的普通永久 CREATE 也需要证明“当前没有待修复引用”。采用现有 G S 和目标表名锁保护这个负向检查；有 FK 发布的 CREATE 保留 G X。新增共享持有者可能增加独占等待，因此需要测量，但不能为规避测量而省略正确性检查。
+代码已经提供可复用的同步点：ALTER ADD FK 会锁父表名，包括父表不存在的情形。CREATE 自身的目标表名也已有锁。前向声明应补齐这个契约，而不是让所有 CREATE 都进入 G。
 
-## 4. 最小计划数据补全
+三个不能忽略的限制：
 
-只补现有计划无法表达的事实，不复制完整子表定义或增加 schema epoch。
+- 原地 ALTER 不统一持有 G，因此 G X 不能替代 child 表名和定义锁。
+- `mo_foreign_keys` 写入的 ID 字段可能为 0；物理身份取自实际关系，不能把 catalog 的零 ID 当身份验证。
+- incoming 查询虽按父名称过滤，但现有主键不是父名称前缀；最坏可能扫描租户 FK 总量 M，不能称作常数点查。
 
-1. `ForeignKeyInfo` 增加 `child_table_id`（建议新字段号 6），由现有 planner 解析到的子表物理 ID 填写。填充已有 `cols` 字段，使子列名/顺序与 `def.Cols` 的 ID 一起成为可检查输入。数据库和表名继续使用现有字段。
-2. `CreateTable` 增加 `unresolved_fk_parents`（建议 `repeated ObjectRef`，新字段号 16；14 已 reserved，15 为 RawSQL）。它仅表达 CREATE 自身指向尚不存在父表的依赖；Obj=0 是明确的“不存在”预期。去重后按已有规范保存数据库/表名。
-3. 正常已解析的出向 FK 继续使用 `FkDbs/FkTables/Fkeys`；自引用保留现有 sentinel 处理。不要把未解析 FK 塞进 materialized Fkeys，也不要从 `UpdateFkSqls` 反解析依赖。
-4. 新字段由真实 planner 路径生成。LIKE/CLONE、PREPARE、内部 CREATE、proto 深拷贝和往返序列化都要覆盖。前向条目的物理 ID 缺失应成为明确内部契约错误，不增加“旧计划按名字猜测”的兼容分支。
+## 3. 选择与明确否决
 
-计划数据是单次执行输入；不写入 catalog，不跨重启保存。停机升级后重新生成计划，不需要数据迁移。已有 catalog 的 legacy/extended 布局适配仍由原读取函数负责，不因本修复删除仍在使用的布局支持。
+采用：**保留既有计划语义，在执行写入前，利用目标表名保护引用发布，验证当前完整绑定。变化交还既有事务/重试所有者。**
 
-## 5. 生产悲观 RC 的执行协议
+否决以下做法：
 
-记 C 为生命周期 registry 物理身份锁，G 为现有生命周期行，D 为数据库名锁，T 为表名元数据锁。
+- 普通 CREATE 新增 G S 或统一 G X：扩大与无关 DROP、TRUNCATE、快照操作的联系。
+- 持有 G 后无限等待新引入的 child/parent 锁：把局部争用传播给全局。
+- 全部锁一律 FastFail：既有正常等待会变成大量失败，不满足性能目标。
+- 用超时变长、重试次数增加、失败请求不计入统计掩盖退化。
+- 为本修复增加 FK 缓存、schema epoch、持久注册表或专用索引迁移。
+- 仅核对 ID，或仅遍历计划里已有的 FK：漏掉同 ID 语义改变以及新引用。
 
-### 5.1 在任何 CREATE 写入前建立校验域
+将 incoming 绑定完全从 planner 移到 executor 可以避免两次扫描，但会影响 PREPARE/EXPLAIN 的报错时机、计划消费者及内部 CREATE。它目前只是性能门禁失败时要评估的替代方向，不预先引入第二条执行路径，也不声称已经设计完成。
 
-1. 对 FK 可用数据库中的永久 CREATE，按计划选择 G：有出向/前向发布用 X，否则用 S。使用现有 `C → G → D` 准入及 applied frontier；临时表、FK 禁用的系统库沿用各自已有路径。
-2. D 域包含目标数据库及计划中涉及的数据库，排序去重。T 域包含目标表名、已解析及缺失的父表名、前向子表名，按 `(account, db, table)` 排序去重。缺失对象仍锁名字，不能省略。
-3. 对会修改现有约束的每个前向子表，解析关系并核对计划物理 ID；使用现有表定义变更锁语义取得物理表锁，保留 `changeDef=true`。同一子表多个 FK 只取得一次锁。这样同时排斥原地 DDL，并给使用旧定义的 DML 提供正确的变更通知。
-4. 所有可能等待的相关锁取得后，执行既有 TN applied-frontier 屏障，再重新解析关系。不可把锁返回的时间戳当作 TN 读屏障。最终检查不能使用 frontend 中早先缓存的 TableDef。
-5. 此阶段不得执行 `dbSource.Create`、`UpdateFkSqls`、约束更新、反向引用更新或 index-table ID 分配。目标已存在时维持现有 `IF NOT EXISTS` 的无副作用语义；不得为了忽略的定义去修改现有表的 FK。
+## 4. 最小计划与执行数据
 
-### 5.2 一次完整检查
+- `ForeignKeyInfo` 增加 `child_table_id`（拟用字段 6），并填充已有 `cols`。用于核对子表代际、列名/顺序以及已解析列 ID；不复制完整 TableDef。
+- `CreateTable` 增加 `unresolved_fk_parents`（拟用 repeated ObjectRef 字段 16；14 reserved，15 RawSQL），表达出向 FK 对尚不存在父表的依赖。已有 materialized `FkDbs/FkTables/Fkeys` 不变；不要解析 `UpdateFkSqls` 来猜依赖。
+- 执行校验产物为本次调用内的计划条目与已验证 `engine.Relation`，不修改缓存/共享计划，不跨事务存活。
+- LIKE/CLONE、PREPARE、proto/deepcopy、内部 CREATE 均须完整传递。停机升级后重新生成计划；不为缺失身份加按名字猜测的兼容回退。
 
-在同一个事务/workspace、当前 actor 上读取目标的完整 incoming FK 集合。即使计划集合为空也执行；排除自引用的规则复用已有查询。
+父表新 ID/列 ID 仍在现有实际 CREATE 后填充。前向执行循环改用已验证关系，删除写入阶段重新按名字挑选 child 的旧路径。
 
-比较内容为：子表数据库/表名、约束名、按 `constraint_id` 排列的子列与父列、动作和动作来源，以及按照已有选键规则生成的绑定。约束之间的 map 遍历顺序不属于语义；复合列顺序属于语义，不能排序抹掉。
+## 5. 生产悲观 RC 协议
 
-先比较参与者和声明集合；发现新增、删除或变化即返回重规划，不继续解析未被当前锁域覆盖的新子表。只有集合匹配时，才对已锁成员做列绑定验证。
+C/G 为现有生命周期身份/全局锁；D 为数据库名锁；T 为表名锁。锁都由原事务拥有。
 
-对每个计划子表核对物理 ID，并使用锁后的实时列定义复用 planner 的类型/列/父键校验。采用共享的绑定函数生成可比较结果；不要在 compile 中另写一套 FK 类型或选键规则。使用关系的当前定义，不能仅依赖全表 version：同事务对象可能 version=0，而无关列变化也不应产生永久重试。
+### 5.1 先锁域，后验证，再写入
 
-在同一边界执行：
+1. 计划确定会发布 FK 的 CREATE 保留既有 G X 准入。无 FK 计划不获取 C/G，使用已有目标 D/T 锁。
+2. CREATE 发布出向 FK 时，补齐全部父表名锁，包含尚不存在的父表名；并验证存在/不存在预期。这样 CREATE 与已有 ALTER ADD FK 都在同一个父名称上序列化。对象不存在也不能省略名称锁。跨库依赖使用对应 actor 的 D 键。
+3. incoming 非空时，在写入前取得每个不同 child 的名称锁与物理定义锁；保持 `changeDef=true` 的定义变更通知。锁域去重、同类键排序，但排序只是降低冲突，不是跨语句死锁证明。
+4. 新增的依赖锁不得在持有 G 后形成阻塞队列。候选策略是对这些新增请求使用请求级 FastFail，冲突走事务终止；不更改 process 的共享等待策略。现有 metadata admission API 有请求级策略；物理定义锁入口需要小幅透传该参数，不能另写锁实现或丢失定义通知。
+5. 所有相关锁取得后，在任何 CREATE 写入前使用既有 TN applied-frontier 屏障，重新解析实际关系。锁授予时间戳不能当作 TN 屏障，早先 frontend 缓存不能当作实时定义。
+6. 对目标完整 incoming 集合做一次执行校验，包括计划为空的情况。先对比参与者/声明，再对已有锁域中的关系验证身份、列和父键。新出现且未锁的参与者不能直接加入执行列表。
 
-- 现有出向父表验证和定义变更处理；
-- `unresolved_fk_parents` 的预期不存在验证，复用 `validateForeignKeyParentGeneration(..., expectedID=0)`；父表已出现则重建计划，使此次 CREATE 改走正常已解析 FK 绑定；
-- 完整 incoming 集合比较，包括消失、新增和空→非空。
+校验必须早于 `dbSource.Create`、catalog SQL、约束更新及索引表 ID 分配。`IF NOT EXISTS` 保持已有的无副作用行为。
 
-任何关系/集合变化均在写入前返回 `ErrTxnNeedRetryWithDefChanged`。当前快照下仍有效但与 SQL 不兼容的 FK，重新规划后返回既有语义错误。目录读取失败、取消、权限问题不能被当成空集合。
+### 5.2 负向证明
 
-若负向检查发现新引用，重新规划下一代，再按正向路径获取 G X；沿用 retained-owner 的非等待升级规则，冲突走既有事务失败路径。禁止持有较低层锁排队升级 G，也禁止添加内部无限重试。
+当目标 T X 已取得，所有新增 FK 声明的 CREATE/ALTER ADD FK 都必须先取得同一个 T。最终 TN 读屏障后查询为空，才能证明本次创建期间没有外部待绑定 FK。
 
-### 5.3 为什么检查之后不会再失效
+删除/更改已有声明仍要受对应 child 的锁保护。RENAME、COPY ALTER、restore/内部写入等其他 catalog producer 必须逐一核对：若可能把原来不属于该父名称的声明移入集合，也必须受同一父名称边界约束，不能仅凭两个公开入口推定闭环。源码已确认的 producer 分类如下，实施前仍要把各内部调用者映射到这些入口：
 
-| 并发动作 | 排斥/检测边界 |
+| producer | 对同步边界的要求 |
 |---|---|
-| 新 CREATE 子表发布 FK | 其 G X 与目标 CREATE 的 G S/X 冲突；取得锁后还须检查原“父表缺失”预期 |
-| ALTER ADD FK 到该父表 | 既有 ADD FK 对父表名的 T X，与目标 CREATE 的 T X 冲突 |
-| 已知子表 DROP/同名重建、COPY ALTER | G 与相关 D/T；物理身份再次核对 |
-| 已知子表原地 DROP FK、改名、改列 | 子表 T 和物理表定义锁，不能只依赖 G |
-| 父表名被别的 CREATE/RENAME 占用 | 目标 T；沿用定义变更重试及表已存在语义 |
-| 同事务先前未提交的 DDL | 同一 workspace 读己之写，不能开启旁路事务或 historical snapshot |
+| CREATE / ALTER ADD FK | CREATE 补缺失父名称依赖；ALTER 已有父名称锁，复用该语义 |
+| RENAME TABLE | `getSqlForRenameTable` 同时改 child 名和 refer_table_name；现有 ALTER 锁旧/新名称。父名称改写必须被这两个名称锁覆盖 |
+| COPY ALTER | `GetSqlForTransferAlterCopyFk` 只转移 child 名，明确不改父名称；外层 source/replacement 锁域必须覆盖转移，内层不得自行重试 |
+| RENAME/CHANGE COLUMN | 改列名不新增父目标，但会改变已有绑定；通过 child/parent 定义锁和最终语义校验保护 |
+| DROP TABLE/DATABASE | 删除声明不凭空产生 incoming；已有成员的删除/同名替换由 child 锁和最终集合检查保护，不向整库删除追加新扫描 |
+| restore / clone 等内部 DDL | 必须复用上述生产入口与外层事务；snapshot 的 system catalog restore 列表跳过 mo_foreign_keys，不能据此推定所有恢复入口已经审完 |
 
-空 incoming 集合下，删除或改名一个不引用该目标的子表不能凭空产生引用；能新增引用的 CREATE/ADD FK 已分别被 G 或目标 T 覆盖。
 
-### 5.4 执行与提交
+若原无 FK 计划在最终检查中发现 incoming 非空，它已经持有低层 D/T：**不能直接返回普通重规划错误，随后排队请求 G X。** 候选处理为写前返回既有 `ErrLockConflict`，让事务所有者完整回退，再由调用方重试。必须在真实 frontend 和 internal executor 验证终止所有权；不能假定函数返回就释放事务锁。源码对此已有明确区分：frontend 的 whole-txn 错误集合包含 `ErrLockConflict`；`sql_executor.go:txnExecutor.rollback` 在 `ExistsTxn()==true` 时只返回错误，并不会回滚借来的事务。因此内部路径必须把错误送达真正的外层所有者，禁止吞错/改成普通语句失败后继续；验证必须覆盖这个分支。
 
-校验返回仅本次调用存活的绑定列表：计划条目与已锁定、已核对的 `engine.Relation`。继续现有 CREATE、catalog 更新、子表约束更新及父表反向引用路径。
+这会增加特定 CREATE 竞态下的可见冲突，是明确的行为成本。若现实并发负载下频繁发生，则方案不能通过验收，应调整准入/绑定边界；不能靠自动无限重试掩盖。
 
-删除现有 forward-repair 循环在写入之后再次“按名字随便取一个子表”的逻辑，消费已校验的关系。不要只在旧逻辑旁边增加检查，然后仍让旧逻辑选择执行对象。
+### 5.3 完整绑定和重试
 
-父表物理 ID/列 ID 仍在实际创建之后由现有逻辑填充。不要修改共享/缓存计划中的 FK 定义。多个 FK 对同一 child 的锁/解析去重；约束写入是否合并为一次，以复用现有约束合并函数为前提，不引入通用批处理层。
+比较子表库名/表名/物理 ID、约束名、按 constraint_id 排列的子列和父列、动作及其来源、原有选键规则产生的绑定。集合遍历顺序无关，复合列顺序有关。
 
-真正的外部可见点仍是事务提交。父表、catalog 行、子约束、反向边必须共同提交或共同回退。不能把“已经校验”变成提前发布标记。
+对已锁 child 使用实时定义，复用唯一的 planner 绑定规则；不能只比较 version，也不能自行实现第二套类型规则。新声明与 SQL 本身不兼容时返回原语义错误；读取失败/取消不能被当作空集合。
 
-## 6. 内部 DROP/CREATE 和重试所有权
+在锁域及全局准入仍适用、且尚无写入时，绑定代际变化可使用 `ErrTxnNeedRetryWithDefChanged`。需要扩大锁层级、写后刷新或内部替换已经有副作用时，必须由拥有外层事务的路径终止，不能局部重试。
 
-这是设计的必要部分：不能让新的 CREATE 准入在外层 DROP 已执行后无条件推进快照。
+本协议不增加新的阻塞依赖边，但 FastFail 对进展的代价必须单独测量；不能据此声称永不饥饿。既有 G 准入或既有 DDL 锁链是否本身有问题，与新增边区分取证。
 
-- **scalar TRUNCATE**：其外层已经证明 FK-free，并持有 G S 和目标表名/物理锁。内部 CREATE 复用同一个现有 receipt 的明确 CREATE 校验：actor、TxnOperator、数据库/表名和 FK-free 计划必须匹配；旧物理 ID 用于标明来源，不要求已删除的旧关系仍存在。CREATE 期间凭据只在同步回调中有效，退出立即失效。避免重复全局准入和负向目录扫描。
-- **broad TRUNCATE / COPY ALTER**：外层在第一笔替换写入前，使用同一参与对象收集/加锁函数，把可能在内层修复的子表域锁全。沿用现有 receipt 传递这次执行的已锁对象域，内部 CREATE 按外层 workspace 检查实际关系。锁域和语义验证共用函数，不维护第二份 catalog。
-- 内层不可自行扩大凭据授权范围，不可凭 `IgnoreForeignKey`、`disableLock` 或一个布尔值跳过验证。若发现外层未覆盖的对象，或必须刷新快照才可继续，按锁准入失败返回既有 `ErrLockConflict`，让事务所有者回退；不得仅重试 CREATE 并留下外层 DROP。当前 frontend 的 `errCodeRollbackWholeTxn` 明确包含该错误，而普通内部错误或 `ErrTxnWWConflict` 不能仅凭名称推定具有相同回滚效果。
-- 普通顶层 CREATE 的代际不匹配发生在写入前，可以使用现有 RC 语句重建。写入后的注入失败走已有语句/事务回滚。不得把所有错误都转换成可重试错误。
+### 5.4 必须手工推演的等待图
 
-receipt 只保存这次调用必要的对象域，不增加持久状态、后台 worker 或跨事务缓存。旧的 DROP 校验继续有效；CREATE 的验证不能错误调用“旧关系还存在”的 DROP 前置条件。
-
-## 7. Unhappy path、资源和兼容
-
-| 路径 | 结果要求 |
+| 调度 | 候选协议的处理与验收点 |
 |---|---|
-| 等待 G、T 或子表物理锁时取消/超时 | 返回对应终止错误，无新 FK/父表提交；在拥有事务的正确边界完成回滚 |
-| 查询、分配或写入中途失败 | 关闭结果/释放临时向量；锁由事务终止释放；无局部提交 |
-| 多子表修复中第二次更新失败 | 所有子表、父表及 catalog 更新一起回退；下一次正常执行可成功 |
-| 计划条目缺少身份、列数组不一致、重复同名定义 | 明确内部契约错误；不能 panic、静默丢条目或无限重试 |
-| 真实子表消失/换代、FK 集合改变 | 写前重建计划；重建仍遇到持久目录不一致时返回真实错误 |
-| 多语句事务先前已经有写入 | 保留 prior workspace；不能用独立事务重新读元数据或回退错误的语句边界 |
-| 重启/崩溃 | 沿用事务原子提交恢复；无新恢复记录或后台修复任务 |
+| A 持 G，B 持 child T；A 修复 child，B 随后请求 G | A 的新增 child 请求不等待；必须验证 A 事务及时释放 G，B 能推进 |
+| ALTER 持 child T 请求 parent T；CREATE 已持 parent T 请求 child T | 新增反向请求不排队，不能靠死锁检测解环 |
+| 无 FK CREATE 持 parent T，最终发现引用；另一个事务持 G 请求该 T | 前者不能带 T 排队升级 G，按完整事务失败处理 |
+| 显式事务前一条 SQL 已持其他表的锁 | 不以本语句排序证明安全；检查实际保留锁和终止后的释放 |
+| 正常 DML 长时间持 child 数据锁 | 检查 FK CREATE 的失败成本及无关库 DROP 的进展，不能只测快速失败耗时 |
+| 持续读/写与有限 FK 发布竞争 | 检查完成率与等待/失败分布，不以有限实验宣称无限流量下公平 |
 
-内存与锁数量按相关子表数 U、FK 数 F、引用列数 C 线性增长；排序 O(U log U)。结果流读取并按请求归还；沿用已有锁容量上限，不能为了容量把名称域升级成整张目录表锁。
+原子可见点仍是事务提交：父表、FK catalog、子约束和父反向边一起提交或回退，无提前发布标志。
 
-SI/乐观事务保留其快照与提交冲突语义，不调用 RC 的快照推进 helper；新增计划数据及纯校验需可兼容这些调用者。本设计不声称修复这些模式下所有并发 FK 异常。若实现必须改变它们的隔离协议，需单独扩展设计。
+## 6. 内部替换与大库 DROP
 
-租户隔离：FK catalog 和子表读取始终属于请求 actor；仅既有全局 G/C 锁使用 SYS 身份。禁止使用 SYS 查询结果替代 tenant 的 FK 集合。临时表同名遮蔽不能把持久 FK 绑定到 session 临时关系。名称规范化复用已有解析规则，不自行全部转小写。
+### 内部 CREATE
 
-交付采用停机切换，不加用户开关。诊断复用既有错误、锁等待和重试统计，不添加按表名维度的无限基数指标。新版本阻止再次错误绑定；已经受影响的数据需依据 catalog、SHOW CREATE 和实际约束单独核对，不能据此自动删除约束。回退程序版本不会转换 catalog，但会重新暴露旧竞态，应记录这一限制。
+scalar TRUNCATE 复用原 FK-free 证明和目标锁。通过现有 receipt 做 actor/TxnOperator/名称/操作匹配，内部 CREATE 不新增准入、目录扫描或快照推进。旧物理 ID 只表示来源，不能要求已 DROP 的旧关系仍存在。
 
-## 8. 成本和三项附加观察
+broad TRUNCATE/COPY ALTER 的新增 FK 依赖准备必须在外层第一笔写入前完成，使用同一校验函数及 receipt；内层不另开快照、不扩域、不单独重试 CREATE。凭据仅在同步调用内有效，退出失效。若复用需要维护第二份独立状态机，应返回设计评审。
 
-### 8.1 性能预算
+### DROP DATABASE 的专门约束
 
-- 普通 SELECT/DML 不增加准入、目录查询或每行工作。
-- 无 FK 的普通永久 CREATE：新增负向保护及一次 incoming 集合读取；必须实测额外 C/G 准入、frontier 与查询的实际开销。
-- 有 FK 的 CREATE：复用 G X，增加最终集合验证和每个不同子表的必要定义锁。查询按父目标批量读取，禁止每个 FK 单独查询 catalog。
-- scalar TRUNCATE 内部 CREATE：借用外层证明，要求不重复新增整套 FK 扫描/快照推进。
-- 不能将 `where refer_db_name/table_name=...` 直接写成 O(1) 点查：现有 catalog 主键没有以这两个字段开头。最坏扫描成本可能随租户 FK 总量 M 增长；本修复先测量，不顺手加索引/缓存/新存储。
+现有 `DropDatabase` 先取得整库生命周期域，收集 `resolvedRelations`，再由 `dropDatabaseRelations(..., lifecycleAdmitted=true)` 调用已准入的内部 DROP，并统一处理后续 catalog/branch 清理。保留这个职责划分。
 
-对照分别回答两个问题：`dd38098853` 与已合并 #29837 基线比较原 TRUNCATE 优化；`4022729da2` 与本修复比较新增校验成本。使用同机、相同构建/拓扑/数据，记录中位和尾延迟、查询数/读行量、锁等待、重试和分配。覆盖无争用 CREATE/TRUNCATE、目标 convoy、不同相关 FK 数与无关 FK catalog 规模。报告绝对耗时和差值，未测前不承诺更快。
+本修复不能：
 
-### 8.2 锁公平性
+- 将数据库删除展开成 N 次完整公开 DROP/CREATE 准入；
+- 对每张表再运行一次 incoming 目录扫描或强制 TN 屏障；
+- 每删一张表重扫剩余表、整个 FK 图或租户 catalog；
+- 把所有 FK 连通分量无限展开成整库/跨库锁域；
+- 为方便大批量锁把精确名称锁升级为整张系统目录表锁。
 
-保留现有 `WriterFair=false` 和 retained promotion 规则。使用专门的有限竞争实验观察共享流量下独占进展/等待分布，并与基线对照；一轮有限测试通过不能证明任意无限流量下绝不饥饿。没有证据时不修改全局公平策略。若新 CREATE 共享锁导致可重复的进展退化，回到准入方案评审，不能靠放大 timeout 掩盖。
+不声称现有 DROP DATABASE 本身只有一次扫描或整体必然 O(N)：它已有 FK 清理、索引/branch 和对象删除成本。本次要求是**不引入新的按表重复的工作，不改变已有增长趋势**；原有瓶颈依据 profile 单独归因。
 
-### 8.3 #29837 的覆盖缺口
+还要测间接影响：其他数据库正在等待 child 的 CREATE 不能因为本修复新增的全局锁持有而拖住大库 DROP。即使 DROP 文件零改动，也不等于已经证明无退化。
 
-同一 fixture 增加目标表锁等待时的 cancel/deadline 分支，验证终止、原 ID/数据及后续可用性；增加 PITR 已保护时的 broad fallback，并验证恢复行为。它们独立标记为生命周期覆盖补充，不冒充 #29852 已确认的故障，也不据此扩大 FK 修复的业务语义。若暴露旧基线问题，先做相同基线比较再归因。
+中途取消/出错时，验证整个数据库删除回退、锁释放、原表可用、之后能重试；不能只检查返回了错误。
 
-## 9. 最小但有区分力的验证计划
+## 7. 成本、兼容与清理
 
-复用 `pkg/tests/issues/issue_29400_test.go` 的 authenticated 2-CN fixture，以命名 subtest 隔离场景；不因新 issue 另启动一套 cluster。planner/compile 各在现有测试文件扩展对应契约。
+令 U 为相关不同子表数，F 为相关 FK 数，C 为引用列数，M 为租户 FK catalog 总量，N 为被删库表数。
 
-| 契约 | 最便宜的证据和关键断言 |
+| 路径 | 增量预算 |
 |---|---|
-| 计划携带有效身份/缺失依赖 | planner UT：真实 forward producer、Cols 顺序、非零 child ID、pending parent；proto/deepcopy 往返 |
-| 比较不受遍历顺序影响、保留复合列顺序 | 纯函数 UT：重排集合相等，列序/动作/参与者变化不等；malformed 输入明确错误 |
-| 原始 bug | 2-CN 实际 SQL：旧 child→无 FK 同名新 child；两条 CREATE 成功后，新 child 无 FK、catalog 无旧行、INSERT 成功 |
-| ID 检查不是唯一证据 | 同 ID 删除/重建 FK，或修改相关列；旧计划不得写入，合法新定义由重规划执行 |
-| 负向证明和反向缺失依赖 | 计划 empty→新增 child；另一个调度为 child 计划 parent absent→parent 先提交；最终均正确绑定且非法 INSERT 被拒绝 |
-| 非等价正常控制 | 无并发正常 forward FK；同名新 child 声明了合法的新 FK；跨库、两个 FK/复合列保序 |
-| 检查后的排斥 | 在最终检查后暂停，竞争 DROP/ALTER 按相关锁等待；释放后只能出现合法串行结果 |
-| 写入失败原子性 | 父 CREATE 后/首个 child 约束更新后注入错误，检查无局部父表、FK 或反向边；随后重试成功 |
-| 锁等待终止 | observable waiter 后 cancel/deadline；显式事务按协议回滚后无锁残留、无 metadata 变化 |
-| 真实消费者 | PREPARE/EXECUTE、同事务先建 child 再建 parent、LIKE/CLONE 和 scalar/broad TRUNCATE 内部 CREATE |
-| 隔离及相容性 | 两租户同名对象、临时同名遮蔽；SI/乐观正常语义；legacy/extended catalog 读取 |
+| 普通 SELECT/DML | 无新增查询、锁、每行校验 |
+| 普通无 FK CREATE | 无新增 G；一次最终 incoming 校验及必要读屏障，成本必须测量 |
+| FK CREATE | 相关 D/T/定义锁去重，最多按 U 处理；目录按父目标读取，不能逐 FK 扫描 |
+| scalar TRUNCATE 内部 CREATE | 不新增重复准入/扫描/屏障 |
+| DROP DATABASE | 不调用新增 CREATE 校验；不新增随 N 增长的准入/扫描/屏障 |
 
-同步用已有 lock-wait observer/执行器注入 seam；必要的计划后 barrier 只承担调度，不能替代生产判断。测试只用一至两个区分结果的行；要求观察 SQL、物理身份、catalog、约束执行和 rollback，而非仅验证新 helper 的返回值。
+验证集合的内存按 U/F/C 增长；名称排序 O(U log U)，实际目录查询最坏仍可能 O(M)。锁等待阶段的查询、RPC、持锁时间都计入成本，不能只数函数调用次数。
 
-已有诊断 red 可复用为复现材料，但不算新基线/修复的通过证据。实现后先跑区分性 red→green，再跑变更拥有包 normal/race、所选公开 SQL、相关 BVT 和增量 SCA。并发重复次数按已有有限预算计算。禁止用覆盖率数字替代行为验证。
+当前方案保留 planner incoming 读取，因此通常新增一次执行读取。**这里尚未证明满足 CREATE 性能预算**；不通过时必须调整查询/绑定归属，不能凭“DDL 低频”豁免，也不能未经收益分析先加缓存/索引。
 
-## 10. 实施顺序和设计自审
+SI/乐观事务不调用 RC 快照推进；已有语义仍需控制测试。停机升级不做持久格式迁移。旧/新 FK catalog 布局继续由现有适配器处理。请求 actor/事务贯穿读取、验证和写入；全局锁的 SYS 身份不能泄漏到租户 catalog 查询。临时同名表不能成为持久 FK 的绑定对象。
 
-1. 补齐计划身份、缺失父依赖及共享绑定/比较函数；明确 malformed 输入行为。
-2. 在现有 CREATE 准入边界锁定并验证完整域，复用现有 retry；把 forward 执行循环切换到已校验关系，删除晚期按名字重新选择对象。
-3. 同时完成内部 scalar/broad 借用、外层写前锁域收集和终止规则，不能将这一项留给“后续兼容”。
-4. 加入核心反例与原子性测试，完成性能对照；再处理第 8.3 节独立生命周期测试补充。
+必须同步清理：晚期按名字选择 child 的旧执行路径、重复取同一 child 的锁/定义、失去调用者的 helper。保留真正有消费者的兼容布局，不借本修复做全库整理。
 
-生产改动预期局限于 plan/compile 和相应 protobuf 生成文件。没有新增 catalog、服务接口、worker、缓存或用户配置。若实现开始修改 txn/lockservice 协议、需要新持久字段，或为了绕过冲突引入第二套 retry，应暂停并重新评审设计。
+## 8. 验证与通过条件
 
-自审已逐项挑战：ID-only、G-only、只检查计划中已有成员、遗漏缺失父依赖、在 DROP 后推进快照、逐 FK 查询、跨租户读以及复合列乱序，均在上述协议中有明确处理。
+### 正确性和终止
 
-设计结论：采用现有锁保护下的完整绑定校验与计划重建。新增共享 CREATE 准入和 child 定义锁是明确维护/运行成本，必须以真实对照验证；尚未实施，不宣称性能或修复验证已通过。设计审查是本轮源码自审，没有启动 subagent 或声称新增独立模型评审。
+复用现有 authenticated 2-CN fixture；用 observable waiter 或已有注入 seam 控制顺序，不靠 sleep 猜调度。
+
+最小反例组：旧 child 同名替换；同 ID 声明/列变化；incoming 空→非空；missing parent 先创建；跨库/同事务先 child 后 parent；复合列/多 FK；PREPARE 和 scalar/broad 内部 CREATE。注入父创建后及首个 child 更新后失败，验证全部元数据原子回退。覆盖锁等待取消/超时、临时表遮蔽和租户隔离。
+
+每个错误路径都验证拥有事务的终止、锁释放和下一次成功；仅 helper 返回指定 error 不充分。既有诊断 red 不是候选实现通过证据。
+
+### 性能和大库 DROP
+
+与上述 main 基线使用同机、同构建参数、同数据/拓扑做交替 A/B 测量；先 A/A 测噪声。初始化和重建数据库不算进 DROP 计时，但取消/回滚成本单独报告。
+
+| 维度 | 有区分力的负载 |
+|---|---|
+| 库大小 | 100、1,000、10,000 表，资源允许再扩；用实际物理对象数记录隐藏索引表 |
+| 库形态 | 无 FK；库内 FK 链/星形；合法跨库引用；有/无历史、branch、PITR 的实际支持组合 |
+| 删除中并发 | 同库有锁长事务；其他库/租户 SELECT/DML、CREATE、TRUNCATE；child 热点与 FK 发布 |
+| CREATE 成本 | 无 FK 快路径、不同相关 U/F、固定 U/F 增大无关 M、持续而有限的并发写 |
+| 终止 | 等待时 cancel/deadline、删除中途失败、失败后重新执行 |
+
+报告成功提交吞吐、p50/p95/p99、错误率及错误类别、每个成功操作的尝试数、锁等待、RPC/查询数、读行量、CPU 和峰值内存。尾延迟的样本不足时报告样本数及原始值，不制造精确 p99。
+
+交付门禁：
+
+1. 无新增等待环/无关库级联阻塞；重复观察到的未完成请求必须解释和修复。
+2. 普通 DML/独立 scalar TRUNCATE/大库 DROP 无可重复的性能退化；不能以降低成功率换吞吐或延迟。
+3. 大库 DROP 的新增逐表准入、FK 扫描及屏障次数为零；N 扩大时增量不能形成 N×M 或 N² 趋势。
+4. CREATE 的新增查询和冲突必须有明确预算证据；相关热点下失败率/完成率显著恶化即拒绝方案，而不是调大 timeout。
+5. 统计波动通过 A/A 和重复对照解释；任何稳定退化都需回到设计，不能预设一个允许豁免的百分比。
+
+这些是待执行门禁，不是已完成测试。普通 owning-package normal/race、公开 SQL/BVT、增量 SCA 在实现后按变更闭包执行；文档修改不重复运行生产测试。
+
+## 9. 实施前的剩余决策
+
+当前 v2 解决了 v1 明确不合理的全局锁扩面，但以下事项必须先闭合：
+
+1. 完整 catalog producer 清单，证明目标名称边界覆盖所有能新增 incoming 的路径。
+2. FastFail 冲突在 frontend/internal executor 的实际事务终止与进展；验证它没有把 convoy 转成失败风暴。已有锁等待路径与新增路径分开归因。
+3. 一次额外目录扫描和读屏障的成本；若无法通过 CREATE 预算，优先重新安排现有绑定工作，不增加持久状态。
+4. 内部替换外层锁域及 receipt 复用能否保持小改动、没有新增逐表 DROP 成本。
+
+结论：当前可采用的方向是目标名称同步、写前完整校验和既有事务所有权；不能直接实施 v1 的全局共享准入。v2 是带硬门禁的候选设计，不宣称已经满足“零死锁、零退化”。本轮为源码自审，没有启动 subagent，没有生产代码变更或新增运行测试结果。
