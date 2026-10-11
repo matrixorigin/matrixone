@@ -16,6 +16,10 @@ package plan
 
 import (
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -72,6 +76,64 @@ func TestRewriteVisibleColumns(t *testing.T) {
 			supported: true,
 		},
 		{
+			name: "historical star fails closed",
+			sql:  "select * from db.controlled {snapshot='s'}",
+		},
+		{
+			name: "historical projection fails closed",
+			sql:  "select id from db.controlled {timestamp='2026-01-01 00:00:00'}",
+		},
+		{
+			name:      "source alias",
+			sql:       "select a.id from db.controlled as a",
+			expected:  map[string]struct{}{"id": {}},
+			supported: true,
+		},
+		{
+			name:      "source alias star",
+			sql:       "select a.* from db.controlled as a",
+			all:       true,
+			supported: true,
+		},
+		{
+			name:      "qualified star",
+			sql:       "select controlled.* from db.controlled",
+			all:       true,
+			supported: true,
+		},
+		{
+			name: "invalid column qualifier",
+			sql:  "select absent.secret from db.controlled",
+		},
+		{
+			name: "invalid database qualifier",
+			sql:  "select other.controlled.secret from db.controlled",
+		},
+		{
+			name: "original qualifier hidden by alias",
+			sql:  "select controlled.secret from db.controlled as a",
+		},
+		{
+			name: "invalid star qualifier",
+			sql:  "select absent.* from db.controlled",
+		},
+		{
+			name: "star followed by invalid column",
+			sql:  "select *, absent.secret from db.controlled",
+		},
+		{
+			name: "star followed by invalid star",
+			sql:  "select *, absent.* from db.controlled",
+		},
+		{
+			name: "star followed by computed expression",
+			sql:  "select *, id+1 from db.controlled",
+		},
+		{
+			name: "grouped star fails closed",
+			sql:  "select * from db.controlled group by id",
+		},
+		{
 			name: "computed expression fails closed",
 			sql:  "select id + 1 from db.controlled",
 		},
@@ -88,7 +150,7 @@ func TestRewriteVisibleColumns(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			stmt := parseRewriteSelect(t, test.sql)
-			names, all, supported := rewriteVisibleColumns(stmt, "db", "controlled")
+			names, all, supported := rewriteVisibleColumns(stmt, "db", "controlled", 1)
 			require.Equal(t, test.expected, names)
 			require.Equal(t, test.all, all)
 			require.Equal(t, test.supported, supported)
@@ -99,8 +161,8 @@ func TestRewriteVisibleColumns(t *testing.T) {
 func TestRewriteVisibleColumnsChainIntersects(t *testing.T) {
 	inner := parseRewriteSelect(t, "select id, tenant, amount from db.controlled")
 	outer := parseRewriteSelect(t, "select id, amount from db.controlled")
-	left, leftAll, leftOK := rewriteVisibleColumns(inner, "db", "controlled")
-	right, rightAll, rightOK := rewriteVisibleColumns(outer, "db", "controlled")
+	left, leftAll, leftOK := rewriteVisibleColumns(inner, "db", "controlled", 1)
+	right, rightAll, rightOK := rewriteVisibleColumns(outer, "db", "controlled", 1)
 	require.True(t, leftOK && rightOK)
 	require.False(t, leftAll || rightAll)
 	require.Equal(t, map[string]struct{}{"id": {}, "amount": {}}, intersectRewriteColumnNames(left, right))
@@ -118,7 +180,7 @@ func TestApplyRewriteMetadataVisibilityFailClosed(t *testing.T) {
 	require.Equal(t, planpb.Node_FILTER, builder.qry.Nodes[filtered].NodeType)
 	require.Len(t, builder.qry.Nodes[filtered].FilterList, 1)
 	require.True(t, builder.qry.Nodes[filtered].NotCacheable)
-	require.True(t, rewriteMetadataExprHasFalseLiteral(builder.qry.Nodes[filtered].FilterList[0]))
+	require.False(t, evalRewriteMetadataPredicate(t, builder, builder.qry.Nodes[filtered].FilterList[0], "db", "controlled", "id"))
 }
 
 func TestApplyRewriteMetadataVisibilityAllowsProjectionAndIntersects(t *testing.T) {
@@ -133,10 +195,11 @@ func TestApplyRewriteMetadataVisibilityAllowsProjectionAndIntersects(t *testing.
 	filtered, err := builder.applyRewriteMetadataVisibility(child, ctx, "INFORMATION_SCHEMA", "COLUMNS")
 	require.NoError(t, err)
 	expr := builder.qry.Nodes[filtered].FilterList[0]
-	require.False(t, rewriteMetadataExprHasFalseLiteral(expr), expr.String())
-	require.True(t, rewriteMetadataExprHasStringLiteral(expr, "id"))
-	require.True(t, rewriteMetadataExprHasStringLiteral(expr, "amount"))
-	require.False(t, rewriteMetadataExprHasStringLiteral(expr, "tenant"))
+	require.True(t, evalRewriteMetadataPredicate(t, builder, expr, "db", "controlled", "id"))
+	require.True(t, evalRewriteMetadataPredicate(t, builder, expr, "db", "controlled", "amount"))
+	require.False(t, evalRewriteMetadataPredicate(t, builder, expr, "db", "controlled", "tenant"))
+	require.False(t, evalRewriteMetadataPredicate(t, builder, expr, "db", "controlled", "secret"))
+	require.True(t, evalRewriteMetadataPredicate(t, builder, expr, "db", "other", "secret"))
 }
 
 func TestApplyRewriteMetadataVisibilityEmptyIntersectionIsDenyAll(t *testing.T) {
@@ -150,7 +213,7 @@ func TestApplyRewriteMetadataVisibilityEmptyIntersectionIsDenyAll(t *testing.T) 
 	child := builder.appendNode(&planpb.Node{NodeType: planpb.Node_VALUE_SCAN}, ctx)
 	filtered, err := builder.applyRewriteMetadataVisibility(child, ctx, INFORMATION_SCHEMA, informationSchemaColumnsTable)
 	require.NoError(t, err)
-	require.True(t, rewriteMetadataExprHasFalseLiteral(builder.qry.Nodes[filtered].FilterList[0]))
+	require.False(t, evalRewriteMetadataPredicate(t, builder, builder.qry.Nodes[filtered].FilterList[0], "db", "controlled", "id"))
 }
 
 func TestRewriteMetadataHelpers(t *testing.T) {
@@ -162,8 +225,8 @@ func TestRewriteMetadataHelpers(t *testing.T) {
 	db, table = rewriteTargetName("invalid", nil)
 	require.Empty(t, db)
 	require.Empty(t, table)
-	require.True(t, isSystemMetadataDatabase("MO_CATALOG"))
-	require.False(t, isSystemMetadataDatabase("application"))
+	require.True(t, isSystemDatabase("MO_CATALOG"))
+	require.False(t, isSystemDatabase("application"))
 	require.Empty(t, intersectRewriteColumnNames(nil, map[string]struct{}{"id": {}}))
 	require.Empty(t, intersectRewriteColumnNames(map[string]struct{}{"id": {}}, nil))
 
@@ -190,40 +253,65 @@ func newRewriteMetadataTestContext(t *testing.T) (*QueryBuilder, *BindContext) {
 	return builder, ctx
 }
 
-func rewriteMetadataExprHasFalseLiteral(expr *planpb.Expr) bool {
-	if expr == nil {
-		return false
-	}
-	if literal := expr.GetLit(); literal != nil && !literal.Isnull {
-		if value, ok := literal.Value.(*planpb.Literal_Bval); ok && !value.Bval {
-			return true
+// Execute the bound predicate through the production expression evaluator.
+// Substitute only input catalog cells, keeping every comparison/function intact.
+func evalRewriteMetadataPredicate(t *testing.T, builder *QueryBuilder, expr *planpb.Expr, schema, table, column string) bool {
+	t.Helper()
+	input := []string{schema, table, column}
+	bound := DeepCopyExpr(expr)
+	var replace func(*planpb.Expr)
+	replace = func(e *planpb.Expr) {
+		if col := e.GetCol(); col != nil {
+			*e = *makePlan2StringConstExprWithType(input[col.ColPos])
+			return
 		}
-	}
-	if fn := expr.GetF(); fn != nil {
-		for _, arg := range fn.Args {
-			if rewriteMetadataExprHasFalseLiteral(arg) {
-				return true
+		if f := e.GetF(); f != nil {
+			for _, arg := range f.Args {
+				replace(arg)
 			}
 		}
 	}
-	return false
+	replace(bound)
+	proc := builder.compCtx.GetProcess()
+	executor, err := colexec.NewExpressionExecutor(proc, bound)
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	require.False(t, result.IsNull(0))
+	return vector.GetFixedAtWithTypeCheck[bool](result, 0)
 }
 
-func rewriteMetadataExprHasStringLiteral(expr *planpb.Expr, want string) bool {
-	if expr == nil {
-		return false
+type rewriteMetadataModeCompiler struct {
+	*MockCompilerContext
+	mode int64
+}
+
+func (c *rewriteMetadataModeCompiler) GetLowerCaseTableNames() int64 { return c.mode }
+
+func TestRewriteMetadataIdentifierIdentity(t *testing.T) {
+	for _, mode := range []int64{0, 1, 2} {
+		t.Run(fmt.Sprintf("mode%d", mode), func(t *testing.T) {
+			compiler := &rewriteMetadataModeCompiler{NewMockCompilerContext(false, newPlanTestProcess(t)), mode}
+			builder := NewQueryBuilder(planpb.Query_SELECT, compiler, true, false)
+			_, ctx := newRewriteMetadataTestContext(t)
+			ctx.lower = 1 // Stored view mode must not override the caller mode.
+			sql := "select id from DbCase.Controlled"
+			stmts, err := mysql.Parse(context.Background(), sql, mode)
+			require.NoError(t, err)
+			ctx.remapOption = &tree.RewriteOption{Rewrites: map[string][]*tree.Rewrite{
+				"DbCase.Controlled": {{DbName: "DbCase", TableName: "Controlled", Stmt: stmts[0]}},
+			}}
+			child := builder.appendNode(&planpb.Node{NodeType: planpb.Node_VALUE_SCAN}, ctx)
+			filtered, err := builder.applyRewriteMetadataVisibility(child, ctx, INFORMATION_SCHEMA, informationSchemaColumnsTable)
+			require.NoError(t, err)
+			expr := builder.qry.Nodes[filtered].FilterList[0]
+			require.True(t, evalRewriteMetadataPredicate(t, builder, expr, "DbCase", "Controlled", "id"))
+			require.False(t, evalRewriteMetadataPredicate(t, builder, expr, "DbCase", "Controlled", "secret"))
+			require.Equal(t, mode == 0, evalRewriteMetadataPredicate(t, builder, expr, "dbcase", "controlled", "secret"))
+			require.True(t, evalRewriteMetadataPredicate(t, builder, expr, "DbCase", "Unrelated", "secret"))
+		})
 	}
-	if literal := expr.GetLit(); literal != nil && literal.GetSval() == want {
-		return true
-	}
-	if fn := expr.GetF(); fn != nil {
-		for _, arg := range fn.Args {
-			if rewriteMetadataExprHasStringLiteral(arg, want) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func parseRewriteSelect(t *testing.T, sql string) *tree.Select {
