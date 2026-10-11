@@ -514,7 +514,7 @@ func TestIndexUpdateTaskInfoSaveStatusError(t *testing.T) {
 	tableid := uint64(1)
 	dbname := "test"
 	tablename := "test_orig_tbl"
-	indexname := "ivf_idx"
+	indexname := "ivf'\\idx"
 
 	info := &IndexUpdateTaskInfo{
 		DbName:       dbname,
@@ -529,17 +529,20 @@ func TestIndexUpdateTaskInfoSaveStatusError(t *testing.T) {
 
 	info.Action = "action'\\quoted"
 	for _, tc := range []struct {
-		name    string
-		updated bool
-		err     error
-		status  string
-		message string
+		name      string
+		indexName string
+		updated   bool
+		err       error
+		status    string
+		message   string
 	}{
-		{"error", false, moerr.NewInternalErrorNoCtx("can't read C:\\index\nnext"), Status_Error, ""},
-		{"skipped", false, nil, Status_Skipped, "not ready'\\yet"},
-		{"updated", true, nil, Status_Ok, "reindex success"},
+		{"error", indexname, false, moerr.NewInternalErrorNoCtx("can't read C:\\index\nnext"), Status_Error, ""},
+		{"skipped", indexname, false, nil, Status_Skipped, "not ready'\\yet"},
+		{"updated", indexname, true, nil, Status_Ok, "reindex success"},
+		{"empty index name", "", false, nil, Status_Skipped, "invalid index name"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			info.IndexName = tc.indexName
 			stub := gostub.Stub(&runSaveStatusSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 				stmt, err := mysql.ParseOne(context.Background(), sql, 0)
 				require.NoError(t, err, sql)
@@ -554,8 +557,38 @@ func TestIndexUpdateTaskInfoSaveStatusError(t *testing.T) {
 				}
 				require.Equal(t, tc.status, status.Status)
 				require.Equal(t, message, status.Msg)
-				action := update.Where.Expr.(*tree.AndExpr).Right.(*tree.ComparisonExpr).Right.(*tree.NumVal)
-				require.Equal(t, info.Action, action.String())
+				predicates := make(map[string]string)
+				for expr := update.Where.Expr; ; {
+					condition := expr
+					if and, ok := expr.(*tree.AndExpr); ok {
+						condition = and.Right
+						expr = and.Left
+					} else {
+						expr = nil
+					}
+					comparison := condition.(*tree.ComparisonExpr)
+					require.Equal(t, tree.EQUAL, comparison.Op)
+					predicates[comparison.Left.(*tree.UnresolvedName).ColName()] = comparison.Right.(*tree.NumVal).String()
+					if expr == nil {
+						break
+					}
+				}
+				require.Equal(t, map[string]string{
+					"table_id": fmt.Sprint(info.TableId), "account_id": fmt.Sprint(info.AccountId),
+					"action": info.Action, "index_name": info.IndexName,
+				}, predicates)
+				if tc.updated {
+					require.Len(t, update.Exprs, 2)
+					require.Len(t, update.Exprs[0].Names, 1)
+					require.Equal(t, "last_update_at", update.Exprs[0].Names[0].ColName())
+					now := update.Exprs[0].Expr.(*tree.FuncExpr)
+					require.Equal(t, "now", now.Func.FunctionReference.(*tree.UnresolvedName).ColName())
+					require.Empty(t, now.Exprs)
+				} else {
+					require.Len(t, update.Exprs, 1, "error/skipped must preserve last_update_at")
+				}
+				require.Len(t, update.Exprs[len(update.Exprs)-1].Names, 1)
+				require.Equal(t, "status", update.Exprs[len(update.Exprs)-1].Names[0].ColName())
 				return executor.Result{}, nil
 			})
 			defer stub.Reset()
