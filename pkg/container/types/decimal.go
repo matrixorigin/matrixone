@@ -21,6 +21,7 @@ import (
 	"math/big"
 	"math/bits"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -2485,6 +2486,31 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 	return
 }
 
+// trimDecimalFractionForScale drops plain fractional digits beyond scale+1.
+// Half-up rounding to scale only depends on the first discarded digit, and
+// keeping more digits could let Parse128 round at its 38-digit limit and
+// ParseDecimal128 round again to the column scale (e.g. ...145 -> 15 -> 2).
+// Inputs with exponents, hex or other non-digit tails are left unchanged.
+func trimDecimalFractionForScale(x string, scale int32) string {
+	if scale < 0 {
+		return x
+	}
+	dot := strings.IndexByte(x, '.')
+	if dot < 0 {
+		return x
+	}
+	keep := dot + 1 + int(scale) + 1
+	if keep >= len(x) {
+		return x
+	}
+	for i := dot + 1; i < len(x); i++ {
+		if x[i] < '0' || x[i] > '9' {
+			return x
+		}
+	}
+	return x[:keep]
+}
+
 func ParseDecimal128(x string, width, scale int32) (y Decimal128, err error) {
 	if x == "" {
 		return Decimal128{0, 0}, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal128")
@@ -2493,7 +2519,7 @@ func ParseDecimal128(x string, width, scale int32) (y Decimal128, err error) {
 		width = 38
 	}
 	n := int32(0)
-	y, n, err = Parse128(x)
+	y, n, err = Parse128(trimDecimalFractionForScale(x, scale))
 	if err != nil {
 		err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128(%d,%d).", x, width, scale)
 		return

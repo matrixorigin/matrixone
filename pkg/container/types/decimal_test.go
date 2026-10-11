@@ -1737,3 +1737,32 @@ func TestParseDecimal128LeadingZeroDoesNotConsumePrecision(t *testing.T) {
 		t.Fatal("1.0 must stay out of range for DECIMAL(38,38)")
 	}
 }
+
+// Discarded fractional digits must be rounded once to the column scale,
+// not first at the 38-digit parser limit and again at the scale.
+func TestParseDecimal128RoundsOnceWhenDownscaling(t *testing.T) {
+	zeros := strings.Repeat("0", 36)
+	for _, tc := range []struct {
+		input string
+		width int32
+		scale int32
+		want  string
+	}{
+		{"0." + zeros + "145", 38, 37, "0." + zeros + "1"},
+		{"-0." + zeros + "145", 38, 37, "-0." + zeros + "1"},
+		{"0." + zeros + "149", 38, 37, "0." + zeros + "1"},
+		{"-0." + zeros + "149", 38, 37, "-0." + zeros + "1"},
+		{"0." + zeros + "144", 38, 37, "0." + zeros + "1"},
+		{"0." + zeros + "150", 38, 37, "0." + zeros + "2"},
+		{"0." + zeros + "15", 38, 37, "0." + zeros + "2"},
+		{"1.2345", 10, 2, "1.23"},
+		{"1.235", 10, 2, "1.24"},
+		{"-1.235", 10, 2, "-1.24"},
+		{"1.2349999999999999999999999999999999999999", 10, 2, "1.23"},
+		{"12.5e-1", 10, 1, "1.3"},
+	} {
+		got, err := ParseDecimal128(tc.input, tc.width, tc.scale)
+		require.NoError(t, err, tc.input)
+		require.Equal(t, tc.want, got.Format(tc.scale), tc.input)
+	}
+}
