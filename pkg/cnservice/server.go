@@ -576,6 +576,7 @@ func (s *service) closeService() error {
 			s.stopTableDetector,
 			s.stopTask,
 			s.closeTableDetector,
+			s.closeCDCWatermarkUpdater,
 			s.closePipelineAdmission,
 			func() error {
 				if s.server == nil {
@@ -1312,6 +1313,7 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 	)
 	s.rt.SetGlobalVariables(runtime.InternalSQLExecutor, s.sqlExecutor)
 	cdc.InitTableDetector(s.rt, s.sqlExecutor)
+	cdc.InitCDCWatermarkUpdater(s.rt, frontend.NewInternalExecutor(s.cfg.UUID))
 	s.initMongoDBRuntime()
 }
 
@@ -1617,6 +1619,18 @@ func (s *service) closeTableDetector() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		return d.CloseAndWait(ctx)
+	}
+	return nil
+}
+
+func (s *service) closeCDCWatermarkUpdater() error {
+	if u := cdc.CDCWatermarkUpdaterFromRuntime(s.rt); u != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := u.CloseAndWait(ctx); err != nil {
+			return err
+		}
+		s.rt.CompareAndDeleteGlobalVariables(runtime.CDCWatermarkUpdater, u)
 	}
 	return nil
 }

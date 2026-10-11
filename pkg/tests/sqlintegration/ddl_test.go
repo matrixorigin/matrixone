@@ -31,6 +31,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -819,15 +820,16 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 			persistedAfterRestart, found, err := readWatermark()
 			require.NoError(t, err)
 			require.True(t, found, "replacement reader must observe the durable watermark")
-			require.Equal(t, checkpointBeforeRestart, persistedAfterRestart,
-				"replacement reader must start from the persisted pre-restart checkpoint")
+			require.True(t, persistedAfterRestart.GE(&checkpointBeforeRestart),
+				"final durable checkpoint must not regress from the pre-close sample")
+			require.True(t, persistedAfterRestart.GE(&boundary), "final checkpoint must include row2")
 			mustExec(dbName, "insert into "+tableName+" values (3, 'after_restart')")
 			captureReplacementBoundary.Store(true)
 			releaseSecond()
 			require.NoError(t, <-secondScanDone)
 			select {
 			case actualStart := <-replacementBoundary:
-				require.Equal(t, checkpointBeforeRestart, actualStart,
+				require.Equal(t, persistedAfterRestart, actualStart,
 					"replacement reader must collect from the durable checkpoint")
 			case <-ctx.Done():
 				t.Fatal("replacement reader did not reach CollectChanges")
@@ -852,13 +854,11 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 	// This scenario adds CNs to the shared fixture. Give each run a fresh
 	// generation, including the updater's internal executor bound to CN A.
 	require.NoError(t, embed.CloseSingleCNBaseClusterTests())
-	cdc.ResetCDCWatermarkUpdaterForTest()
 	t.Cleanup(func() {
 		if err := embed.CloseSingleCNBaseClusterTests(); err != nil {
 			t.Errorf("close CDC takeover fixture: %v", err)
 			return
 		}
-		cdc.ResetCDCWatermarkUpdaterForTest()
 	})
 	runSQLIntegration(t,
 		func(c embed.Cluster) {
@@ -1033,7 +1033,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 				t.Helper()
 				flushCtx, flushCancel := context.WithTimeout(ctx, 30*time.Second)
 				defer flushCancel()
-				require.NoError(t, cdc.GetCDCWatermarkUpdater(cnID, nil).ForceFlush(flushCtx))
+				require.NoError(t, cdc.CDCWatermarkUpdaterFromRuntime(runtime.ServiceRuntime(cnID)).ForceFlush(flushCtx))
 			}
 			waitWatermarkVisible := func(reader executor.SQLExecutor, expected types.TS, generation uint64, cn string) {
 				t.Helper()

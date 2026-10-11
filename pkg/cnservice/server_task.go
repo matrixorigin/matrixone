@@ -345,6 +345,7 @@ func (s *service) registerExecutorsLocked() {
 		task.TaskCode_MetricStorageUsage,
 		mometric.GetMetricStorageUsageExecutor(s.cfg.UUID, ieFactory))
 	cdcExecutor := frontend.CDCTaskExecutorFactory(
+		s.rt,
 		s.logger,
 		ieFactory,
 		s.task.runner.Attach,

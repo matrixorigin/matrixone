@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -173,6 +174,7 @@ func init() {
 }
 
 func CDCTaskExecutorFactory(
+	rt runtime.Runtime,
 	logger *zap.Logger,
 	sqlExecutorFactory func() ie.InternalExecutor,
 	attachToTask func(context.Context, uint64, taskservice.ActiveRoutine) error,
@@ -208,6 +210,7 @@ func CDCTaskExecutorFactory(
 		}
 
 		exec := NewCDCTaskExecutor(
+			rt,
 			logger,
 			sqlExecutorFactory(),
 			details.CreateCdc,
@@ -702,6 +705,7 @@ func (exec *CDCTaskExecutor) restartFields(fields ...zap.Field) []zap.Field {
 }
 
 func NewCDCTaskExecutor(
+	rt runtime.Runtime,
 	logger *zap.Logger,
 	ie ie.InternalExecutor,
 	spec *task.CreateCdcDetails,
@@ -712,14 +716,16 @@ func NewCDCTaskExecutor(
 	cdcMp *mpool.MPool,
 ) *CDCTaskExecutor {
 	task := &CDCTaskExecutor{
-		logger:      logger,
-		ie:          ie,
-		spec:        spec,
-		cnUUID:      cnUUID,
-		fileService: fileService,
-		cnTxnClient: cnTxnClient,
-		cnEngine:    cnEngine,
-		mp:          cdcMp,
+		tableDetector:    cdc.TableDetectorFromRuntime(rt),
+		watermarkUpdater: cdc.CDCWatermarkUpdaterFromRuntime(rt),
+		logger:           logger,
+		ie:               ie,
+		spec:             spec,
+		cnUUID:           cnUUID,
+		fileService:      fileService,
+		cnTxnClient:      cnTxnClient,
+		cnEngine:         cnEngine,
+		mp:               cdcMp,
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
@@ -1085,9 +1091,17 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	accountId := uint32(exec.spec.Accounts[0].GetId())
 	restartGeneration := attempt.generation
 	restartAdmission := taskservice.IsRestartAdmission(rootCtx)
-	detector := cdc.GetTableDetector(cnUUID)
+	detector := exec.tableDetector
+	if detector == nil || exec.watermarkUpdater == nil {
+		return moerr.NewInternalErrorNoCtx("CDC runtime is not initialized")
+	}
+	if err = detector.Context().Err(); err != nil {
+		return err
+	}
+	if err = exec.watermarkUpdater.Start(rootCtx); err != nil {
+		return err
+	}
 	exec.callbackMu.Lock()
-	exec.tableDetector = detector
 	exec.rotateCallbackContextLocked()
 	exec.callbackMu.Unlock()
 	var (
@@ -1223,9 +1237,6 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	} else {
 		exec.runningReaders = &sync.Map{}
 	}
-
-	// start watermarkUpdater
-	exec.watermarkUpdater = cdc.GetCDCWatermarkUpdater(exec.cnUUID, exec.ie)
 
 	// register to table scanner
 	callbackGeneration := restartGeneration
