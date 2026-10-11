@@ -4668,6 +4668,36 @@ func TestBuildCreateTableIdentifierLength(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
 }
 
+func TestBuildCreateSequenceIdentifier(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		identifier string
+	}{
+		{"ASCII 63", strings.Repeat("a", MaxIdentifierLength-1)},
+		{"ASCII 64", strings.Repeat("a", MaxIdentifierLength)},
+		{"ASCII 65", strings.Repeat("a", MaxIdentifierLength+1)},
+		{"Unicode 64", strings.Repeat("表", MaxIdentifierLength)},
+		{"Unicode 65", strings.Repeat("表", MaxIdentifierLength+1)},
+		{"long legacy name", strings.Repeat("s", 189)},
+		{"literal replacement character", "seq_�"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+				fmt.Sprintf("create sequence `%s` start 30", tc.identifier))
+			require.NoError(t, err)
+			require.Equal(t, tc.identifier, p.GetDdl().GetCreateSequence().GetTableDef().GetName())
+		})
+	}
+	for _, name := range []string{"seq_\xe3g", "\x80", "\xe3\x81", "\xc0\xaf", "\xed\xa0\x80", "\xff", strings.Repeat("s", 189) + "\xe3g"} {
+		t.Run(fmt.Sprintf("malformed %q", name), func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+				fmt.Sprintf("create sequence `%s`", name))
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+			require.Nil(t, p)
+		})
+	}
+}
+
 func TestBuildCatalogIdentifierLength(t *testing.T) {
 	validName := "表" + strings.Repeat("a", MaxIdentifierLength-1)
 	invalidName := "表" + strings.Repeat("b", MaxIdentifierLength)
@@ -4681,7 +4711,6 @@ func TestBuildCatalogIdentifierLength(t *testing.T) {
 				return fmt.Sprintf("create database `%s`", name)
 			},
 		},
-		{name: "sequence", sql: func(name string) string { return fmt.Sprintf("create sequence `%s`", name) }},
 		{name: "CTAS column", sql: func(name string) string { return fmt.Sprintf("create table t as select 1 as `%s`", name) }},
 		{
 			name: "view",

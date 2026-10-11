@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +52,9 @@ func TestCatalogIdentifierEncoding(t *testing.T) {
 			"create table identifier_encoding.`t_\xe3g`(id int)",
 			"create table identifier_encoding.ctas as select 1 as `t_\xe3g`",
 			"create view identifier_encoding.v as select 1 as `t_\xe3g`",
+			"create sequence identifier_encoding.seq_\xe3g",
+			"create sequence identifier_encoding.`seq_\xe3g`",
+			"create sequence identifier_encoding.`" + strings.Repeat("s", 189) + "\xe3g`",
 		} {
 			_, err = db.ExecContext(ctx, statement)
 			require.ErrorContains(t, err, "not valid UTF-8", "%q", statement)

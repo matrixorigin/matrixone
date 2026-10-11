@@ -2333,7 +2333,8 @@ func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, e
 }
 
 func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan, error) {
-	if err := validateIdentifier(ctx.GetContext(), string(stmt.Name.ObjectName)); err != nil {
+	// Sequences historically support names beyond the table identifier length limit.
+	if err := validateIdentifierEncoding(ctx.GetContext(), string(stmt.Name.ObjectName)); err != nil {
 		return nil, err
 	}
 	createSequence := &plan.CreateSequence{
@@ -3135,9 +3136,16 @@ func buildCreateTable(
 	}, nil
 }
 
-func validateIdentifier(ctx context.Context, name string) error {
+func validateIdentifierEncoding(ctx context.Context, name string) error {
 	if !utf8.ValidString(name) {
 		return moerr.NewInvalidInputf(ctx, "identifier %q is not valid UTF-8", name)
+	}
+	return nil
+}
+
+func validateIdentifier(ctx context.Context, name string) error {
+	if err := validateIdentifierEncoding(ctx, name); err != nil {
+		return err
 	}
 	if getNumOfCharacters(name) <= MaxIdentifierLength {
 		return nil
