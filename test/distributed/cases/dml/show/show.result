@@ -26,13 +26,13 @@ name  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦
 show full columns from t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  INT(32)  ¦  null  ¦  NO  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-str  ¦  CHAR(10)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-name  ¦  VARCHAR(10)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
+str  ¦  CHAR(10)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+name  ¦  VARCHAR(10)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references
 show full columns from t1 like '%';
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  INT(32)  ¦  null  ¦  NO  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-str  ¦  CHAR(10)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-name  ¦  VARCHAR(10)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
+str  ¦  CHAR(10)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+name  ¦  VARCHAR(10)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references
 show full columns from t1 where Field ='id';
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  INT(32)  ¦  null  ¦  NO  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
@@ -60,8 +60,8 @@ create table db11111111111.t2(col1 int auto_increment) comment 't2';
 insert into db11111111111.t2 values (10);
 show table status from db11111111111;
 ➤ Name[12,-1,0]  ¦  Engine[12,-1,0]  ¦  Row_format[12,-1,0]  ¦  Rows[-5,64,0]  ¦  Avg_row_length[-5,64,0]  ¦  Data_length[-5,64,0]  ¦  Max_data_length[-5,64,0]  ¦  Index_length[-5,64,0]  ¦  Data_free[12,-1,0]  ¦  Auto_increment[-5,64,0]  ¦  Create_time[93,64,0]  ¦  Update_time[12,-1,0]  ¦  Check_time[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Checksum[12,-1,0]  ¦  Create_options[1,0,0]  ¦  Comment[12,-1,0]  ¦  Role_id[4,32,0]  ¦  Role_name[12,-1,0]  𝄀
-t1  ¦  Tae  ¦  Dynamic  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  NULL  ¦  1  ¦  2026-02-09 18:51:19  ¦  NULL  ¦  NULL  ¦  utf8mb4_bin  ¦  NULL  ¦    ¦    ¦  0  ¦  moadmin  𝄀
-t2  ¦  Tae  ¦  Dynamic  ¦  1  ¦  48  ¦  48  ¦  0  ¦  0  ¦  NULL  ¦  11  ¦  2026-02-09 18:51:19  ¦  NULL  ¦  NULL  ¦  utf8mb4_bin  ¦  NULL  ¦    ¦  t2  ¦  0  ¦  moadmin
+t1  ¦  Tae  ¦  Dynamic  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  NULL  ¦  1  ¦  2026-02-09 18:51:19  ¦  NULL  ¦  NULL  ¦  utf8mb4_general_ci  ¦  NULL  ¦    ¦    ¦  0  ¦  moadmin  𝄀
+t2  ¦  Tae  ¦  Dynamic  ¦  1  ¦  48  ¦  48  ¦  0  ¦  0  ¦  NULL  ¦  11  ¦  2026-02-09 18:51:19  ¦  NULL  ¦  NULL  ¦  utf8mb4_general_ci  ¦  NULL  ¦    ¦  t2  ¦  0  ¦  moadmin
 drop database db11111111111;
 show variables where value = 'MatrixOne';
 ➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
@@ -269,6 +269,7 @@ mo_columns  𝄀
 mo_configurations  𝄀
 mo_data_key  𝄀
 mo_database  𝄀
+mo_database_defaults  𝄀
 mo_feature_limit  𝄀
 mo_feature_registry  𝄀
 mo_foreign_keys  𝄀
@@ -318,7 +319,7 @@ mo_view_dependencies  𝄀
 mo_view_refresh
 show table_number from mo_catalog;
 ➤ Number of tables in mo_catalog[-5,64,0]  𝄀
-59
+61
 show column_number from mo_database;
 ➤ Number of columns in mo_database[-5,64,0]  𝄀
 9

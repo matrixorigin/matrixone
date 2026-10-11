@@ -2,19 +2,19 @@ DROP DATABASE IF EXISTS TEST01;
 CREATE DATABASE TEST01;
 show CREATE DATABASE test01;
 Database    Create Database
-test01    CREATE DATABASE `test01`
+test01    CREATE DATABASE `test01` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 DROP DATABASE test01;
 DROP DATABASE IF EXISTS test02;
 CREATE DATABASE test02;
 show CREATE DATABASE TEST02;
 Database    Create Database
-test02    CREATE DATABASE `test02`
+test02    CREATE DATABASE `test02` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 DROP DATABASE test02;
 DROP DATABASE IF EXISTS mysql_TEST;
 CREATE DATABASE mysql_TEST;
 show CREATE DATABASE mysql_TEST;
 Database    Create Database
-mysql_test    CREATE DATABASE `mysql_test`
+mysql_test    CREATE DATABASE `mysql_test` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 DROP DATABASE mysql_TEST;
 DROP DATABASE IF EXISTS test03;
 DROP TABLE IF EXISTS t1;
@@ -375,19 +375,19 @@ DROP DATABASE IF EXISTS `TEST01`;
 CREATE DATABASE `TEST01`;
 show CREATE DATABASE `test01`;
 Database    Create Database
-test01    CREATE DATABASE `test01`
+test01    CREATE DATABASE `test01` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 DROP DATABASE `test01`;
 DROP DATABASE IF EXISTS `test02`;
 CREATE DATABASE `test02`;
 show CREATE DATABASE `TEST02`;
 Database    Create Database
-test02    CREATE DATABASE `test02`
+test02    CREATE DATABASE `test02` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 DROP DATABASE `test02`;
 DROP DATABASE IF EXISTS `mysql_TEST`;
 CREATE DATABASE `mysql_TEST`;
 show CREATE DATABASE `mysql_TEST`;
 Database    Create Database
-mysql_test    CREATE DATABASE `mysql_test`
+mysql_test    CREATE DATABASE `mysql_test` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 DROP DATABASE `mysql_TEST`;
 DROP DATABASE IF EXISTS `test05`;
 CREATE DATABASE `test05`;

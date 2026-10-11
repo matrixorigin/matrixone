@@ -809,6 +809,7 @@ mo_catalog  ¦  mo_cache  ¦  v  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_columns  ¦  r  ¦  -  𝄀
 mo_catalog  ¦  mo_configurations  ¦  v  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_database  ¦  r  ¦  -  𝄀
+mo_catalog  ¦  mo_database_defaults  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_foreign_keys  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_iceberg_catalogs  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_iceberg_maintenance_jobs  ¦  r  ¦  accountadmin  𝄀

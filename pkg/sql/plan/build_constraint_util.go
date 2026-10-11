@@ -1540,6 +1540,14 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 	if err != nil || rewritten {
 		return expr, err
 	}
+	if alterCopyBinaryAssignment(builder.GetContext(), targetType) && sourceExpr.GetCol() != nil &&
+		makeTypeByPlan2Expr(sourceExpr).Eq(makeTypeByPlan2Type(targetType)) {
+		// A direct, same-domain source column carries its stored value unchanged.
+		// Key/index-only COPY must not reinterpret historical binary payloads.
+		// New expressions/type changes and recomputed generated columns still
+		// pass through their strict destination-assignment owners.
+		return expr, nil
+	}
 	if types.T(targetType.Id).IsInteger() && preparedExprContainsParam(sourceExpr) &&
 		makeTypeByPlan2Expr(expr).Eq(makeTypeByPlan2Type(targetType)) {
 		return forceCastExprWithNameAndAssignment(

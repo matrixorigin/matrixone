@@ -168,6 +168,7 @@ mo_cache
 mo_columns
 mo_configurations
 mo_database
+mo_database_defaults
 mo_foreign_keys
 mo_iceberg_catalogs
 mo_iceberg_maintenance_jobs

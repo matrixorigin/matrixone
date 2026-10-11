@@ -154,7 +154,7 @@ show full columns from t11;
 a  ¦  INT(32)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 b  ¦  INT(32)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 c  ¦  INT(32)  ¦  null  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references  ¦    𝄀
-d  ¦  VARCHAR(100)  ¦  null  ¦  YES  ¦    ¦  null  ¦  VIRTUAL GENERATED  ¦  select,insert,update,references  ¦  
+d  ¦  VARCHAR(100)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦  VIRTUAL GENERATED  ¦  select,insert,update,references
 select column_name, extra, generation_expression from information_schema.columns where table_schema = 'test_generated_col' and table_name = 't11' and column_name in ('a','b','c','d') order by ordinal_position;
 ➤ column_name[12,-1,0]  ¦  extra[12,-1,0]  ¦  generation_expression[12,-1,0]  𝄀
 a  ¦    ¦    𝄀

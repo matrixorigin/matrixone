@@ -645,6 +645,11 @@ func constructCreateTableSQL(
 			charsetContext = nil
 		} else if charsetContext != nil && displayTableCharset == uint32(types.CharsetUTF8) {
 			database := schemaName
+			if sourceSubscription != nil {
+				// The compiler owns the subscriber, not the publisher database.
+				// Omission is safe only under the subscriber's replay default.
+				database = sourceSubscription.SubName
+			}
 			if database == "" {
 				database = ctx.DefaultDatabase()
 			}

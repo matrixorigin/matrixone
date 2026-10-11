@@ -86,7 +86,7 @@ c2    VARCHAR(20)    YES        null
 show full columns from r_test;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
 c1    INT(32)    null    YES    UNI    null        select,insert,update,references    
-c2    VARCHAR(20)    null    YES        null        select,insert,update,references    
+c2    VARCHAR(20)    utf8mb4_general_ci    YES        null        select,insert,update,references
 show variables where value = 'MatrixOne';
 Variable_name    Value
 version_comment    MatrixOne
@@ -263,7 +263,7 @@ c2    VARCHAR(20)    YES        null
 show full columns from r_test;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
 c1    INT(32)    null    YES    UNI    null        select,insert,update,references    
-c2    VARCHAR(20)    null    YES        null        select,insert,update,references    
+c2    VARCHAR(20)    utf8mb4_general_ci    YES        null        select,insert,update,references
 show variables where value = 'MatrixOne';
 Variable_name    Value
 version_comment    MatrixOne

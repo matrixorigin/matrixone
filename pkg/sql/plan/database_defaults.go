@@ -213,6 +213,9 @@ func GetDatabaseDefaults(ctx CompilerContext, name string, snapshot *Snapshot) (
 	}
 	id, err := ctx.GetDatabaseId(name, snapshot)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return nil, moerr.NewBadDB(ctx.GetContext(), name)
+		}
 		return nil, err
 	}
 	accountID, err := ctx.GetAccountId()

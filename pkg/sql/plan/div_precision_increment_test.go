@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -39,6 +40,15 @@ import (
 type divPrecisionCompilerContext struct {
 	CompilerContext
 	increment int64
+}
+
+func (c divPrecisionCompilerContext) getInternalSQLExecutor(proc *process.Process) (executor.SQLExecutor, bool) {
+	if provider, ok := c.CompilerContext.(interface {
+		getInternalSQLExecutor(*process.Process) (executor.SQLExecutor, bool)
+	}); ok {
+		return provider.getInternalSQLExecutor(proc)
+	}
+	return nil, false
 }
 
 func (c divPrecisionCompilerContext) ResolveVariable(name string, system, global bool) (any, error) {
