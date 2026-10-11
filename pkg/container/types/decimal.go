@@ -2285,6 +2285,14 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 			err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal128.", x)
 			return
 		} else {
+			if scale == -1 && x[i] == '0' && y.B0_63 == 0 && y.B64_127 == 0 {
+				// Leading zeros of the integer part are not significant digits;
+				// counting them would push the last fractional digit of a
+				// DECIMAL(38,38) literal such as 0.000...01 past the 38-digit limit.
+				flag = true
+				i++
+				continue
+			}
 			if width == 38 {
 				if scale == -1 {
 					err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128.", x)
