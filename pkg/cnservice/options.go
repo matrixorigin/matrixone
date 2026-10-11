@@ -55,7 +55,9 @@ func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 // WithBootstrapOptions setup bootstrap options
 func WithBootstrapOptions(options ...bootstrap.Option) Option {
 	return func(s *service) {
-		s.options.bootstrapOptions = options
+		// Constructor-supplied configuration must not discard caller-supplied
+		// version handlers and scheduling options.
+		s.options.bootstrapOptions = append(s.options.bootstrapOptions, options...)
 	}
 }
 

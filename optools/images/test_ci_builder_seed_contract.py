@@ -8,6 +8,7 @@ The consumer's payload validation and measured Linux canary live in CI.
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -54,10 +55,39 @@ class SeedContractTests(unittest.TestCase):
         self.assertEqual(len(matches), 1)
         return matches[0]
 
+    def assert_module_toolchain(self, lines, recipe):
+        assignments = [item for line in lines if line.startswith("ENV ")
+                       for item in line[4:].split()]
+        self.assertIn("GOWORK=off", assignments)
+        selections = [item for item in assignments if item.startswith("GOTOOLCHAIN=")]
+        self.assertEqual(len(selections), 1)
+        selection = selections[0]
+        environment = next(i for i, line in enumerate(lines)
+                           if line.startswith("ENV ") and selection in line[4:].split())
+        if selection == "GOTOOLCHAIN=auto":
+            first_run = next((i for i, line in enumerate(lines) if line.startswith("RUN ")),
+                             len(lines))
+            self.assertLess(environment, first_run)
+        else:
+            self.assertEqual(selection, "GOTOOLCHAIN=local")
+            version = re.search(r"^go ([0-9.]+)$",
+                                (HERE.parents[1] / "go.mod").read_text(), re.M).group(1)
+            self.assertIn(f"FROM golang:{version}-bookworm AS go-toolchain", recipe.splitlines())
+            install = "COPY --from=go-toolchain /usr/local/go /usr/local/go"
+            self.assertIn(install, lines)
+            installed = lines.index(install)
+            self.assertGreater(installed, 0)
+            self.assertEqual(lines[installed - 1], "RUN rm -rf /usr/local/go")
+            self.assertLess(installed, environment)
+            first_go = next((i for i, line in enumerate(lines)
+                             if line.startswith("RUN ") and re.search(r"\bgo\s", line)), len(lines))
+            self.assertLess(environment, first_go)
+
     def test_module_build_stages_allow_required_toolchain_selection(self):
         # Published native images can lag go.mod's minimum patch release and
-        # inherit GOTOOLCHAIN=local. Each actual build stage must override it;
-        # changing an unrelated cache/runtime stage would not repair CI.
+        # inherit GOTOOLCHAIN=local. Each actual build stage must either select
+        # automatically or install the exact module toolchain before Go runs.
+        # Changing an unrelated cache/runtime stage would not repair CI.
         recipes = {
             "Dockerfile": ["build-base"],
             "Dockerfile.ci": ["native", "builder"],
@@ -76,16 +106,27 @@ class SeedContractTests(unittest.TestCase):
                         stages[stage].append(line)
                 for stage in required:
                     lines = stages[stage]
-                    self.assertIn("ENV GOWORK=off", lines)
-                    self.assertEqual([line for line in lines if line.startswith("ENV GOTOOLCHAIN=")],
-                                     ["ENV GOTOOLCHAIN=auto"])
-                    first_run = next((i for i, line in enumerate(lines) if line.startswith("RUN ")),
-                                     len(lines))
-                    self.assertLess(lines.index("ENV GOTOOLCHAIN=auto"), first_run)
+                    self.assert_module_toolchain(lines, (HERE / filename).read_text())
                 if filename == "Dockerfile":
                     recipe = (HERE / filename).read_text()
                     self.assertIn("FROM build-base AS native", recipe)
                     self.assertIn("FROM build-base AS builder", recipe)
+
+    def test_local_toolchain_requires_replacement_version_and_order(self):
+        version = re.search(r"^go ([0-9.]+)$",
+                            (HERE.parents[1] / "go.mod").read_text(), re.M).group(1)
+        recipe = f"FROM golang:{version}-bookworm AS go-toolchain"
+        install = "COPY --from=go-toolchain /usr/local/go /usr/local/go"
+        valid = ["RUN rm -rf /usr/local/go", install,
+                 "ENV GOWORK=off GOTOOLCHAIN=local", "RUN go mod download"]
+        self.assert_module_toolchain(valid, recipe)
+        for name, lines, source in (
+                ("missing replacement", valid[2:], recipe),
+                ("merged old GOROOT", valid[1:], recipe),
+                ("wrong module version", valid, "FROM golang:1.0.0-bookworm AS go-toolchain"),
+                ("Go before install", ["RUN go mod download"] + valid, recipe)):
+            with self.subTest(rejection=name), self.assertRaises(AssertionError):
+                self.assert_module_toolchain(lines, source)
 
     def test_stage_order_and_final_export_layout(self):
         warm, final = [], []

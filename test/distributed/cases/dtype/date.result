@@ -80,7 +80,10 @@ select min(big),max(big),max(big)-1 from t1;
 ➤ min(big)[91,64,0]  ¦  max(big)[91,64,0]  ¦  max(big) - 1[-5,64,0]  𝄀
 2000-01-01  ¦  2002-01-01  ¦  20020100
 select min(big),avg(big),count(big)+1 from t1 group by big order by 1 asc, 2 asc;
-invalid argument aggregate function avg, bad value [DATE]
+➤ min(big)[91,10,0]  ¦  avg(big)[3,42,4]  ¦  count(big) + 1[-5,64,0]  𝄀
+2000-01-01  ¦  20000101.0000  ¦  2  𝄀
+2001-01-01  ¦  20010101.0000  ¦  2  𝄀
+2002-01-01  ¦  20020101.0000  ¦  2
 drop table t1;
 create table t1 (id date not null default '2022-01-31', a int, primary key (a));
 insert into t1(a) values (1);

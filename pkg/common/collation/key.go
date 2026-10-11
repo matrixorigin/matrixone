@@ -136,6 +136,32 @@ func (d Domain) Key(scratch, value []byte) ([]byte, error) {
 	return append(out, 0x22), nil
 }
 
+// ValidateValue checks whether value can be encoded in this collation domain
+// without materializing its comparison key. Raw preserves arbitrary bytes,
+// while every transformed domain applies the same size/UTF-8/repertoire checks
+// as Key. Physical-key callers use this as an abortable admission check
+// immediately before encoding; keeping validation separate avoids constructing
+// and discarding the same UCA key twice.
+func (d Domain) ValidateValue(value []byte) error {
+	if d == Raw {
+		return nil
+	}
+	if _, err := d.KeySizeUpperBound(len(value)); err != nil {
+		return err
+	}
+	if !utf8.Valid(value) {
+		return ErrUTF8
+	}
+	if d == UTF8MB3UnicodeCI {
+		for _, r := range string(value) {
+			if r > 0xffff {
+				return ErrRepertoire
+			}
+		}
+	}
+	return nil
+}
+
 func (d Domain) next(value []byte) (uint32, int) {
 	if d == UTF8MB4GeneralCI {
 		return NextGeneralCIWeight(value)

@@ -1,9 +1,10 @@
 # Race UT critical path: bounded execution at existing owners
 
-Design revision: `pr29760-design-v4` with `pr29795-opt-in-v1` amendment (2026-10-09).
-Tracking: [#29562](https://github.com/matrixorigin/matrixone/issues/29562),
-[#29752](https://github.com/matrixorigin/matrixone/issues/29752).
-Implementation: [#29760](https://github.com/matrixorigin/matrixone/pull/29760).
+Design revision: `pr29760-design-v4` with `pr29795-opt-in-v1` and bounded
+embedded-wave amendment (2026-10-09).
+Tracking: [#29562](https://github.com/matrixorigin/matrixone/issues/29562).
+Baseline implementation: [#29760](https://github.com/matrixorigin/matrixone/pull/29760).
+Current bounded embedded-wave implementation: [#29807](https://github.com/matrixorigin/matrixone/pull/29807).
 
 The correction and single-lock cleanup amendment were approved for implementation
 by `gpt-6.1-sol`, reasoning `xhigh`, in design session
@@ -23,26 +24,84 @@ against source `0094ef382a04a50773948cd8b5ab585b3e3ce53d` and base
 validation are separate gates.
 
 This amendment supersedes only v4's removal of optional two-process execution
-and exclusive-only process admission below. The serial default, inventory,
-deadline, report, cleanup, CDC, HAKeeper and engine-fixture contracts remain.
-Four serial issues batches measured 515.1 -> 407.8 seconds in PR29760; that
-benefit does not belong to the new pool. A historical embedded prototype subset
-(embed and sqlintegration) measured 545.5 -> 372.3 seconds with two processes.
-The historical 1057-second full serial wave included an arrowload failure.
-Neither record establishes successful, matched full-wave savings on this branch;
-no full-job savings estimate is an acceptance claim.
+and exclusive-only process admission below. The inventory, deadline, report,
+cleanup, CDC, HAKeeper and engine-fixture contracts remain. Four serial issues
+batches measured 515.1 -> 407.8 seconds in PR29760; that benefit does not
+belong to the new pool. A historical embedded prototype subset (embed and
+sqlintegration) measured 545.5 -> 372.3 seconds with two processes. The
+historical 1057-second full serial wave included an arrowload failure.
+
+The latest successful single-runner trace (2026-10-09) measured issue batches
+at 303.2, 143.6, 220.8 and 335.3 seconds, or 1002.9 seconds serialized.
+The explicit two-process option uses round-robin root partitioning; the serial
+default remains contiguous. Replaying
+the 159 top-level issue roots from that trace through the actual partition and
+two-process refill rules gives round-robin group totals of 290.7, 212.7, 310.1
+and 183.8 seconds, with a 522.8-second pool makespan. The same roots in the
+contiguous layout produce a 635.7-second pool makespan. Against the 997.3
+seconds of serialized root time, the round-robin estimate removes about 474.5
+seconds (7.9 minutes) before process startup, CPU contention and cluster
+admission overhead. This is a schedule estimate, not a CI result; the first
+matched Linux run must record wall time, CPU throttling, peak memory and OOM/max
+events before any further parallelism is considered.
+
+The same trace recorded 1705.7 seconds for the embedded package wave when run
+serially. The Linux embedded pool keeps `pkg/embed` as the first, exclusive
+package, then admits at most two ordinary package processes. The known
+high-footprint packages (`pkg/tests/issues/isolated`,
+`pkg/tests/sqlintegration`, and `pkg/tests/sqlintegration/multicn`) also run
+alone, so no second process is admitted while one is active. Replaying those
+durations through that admission policy gives a 1537.6-second makespan, or
+about 168.1 seconds (2.8 minutes) of estimated saving. These figures are
+schedule estimates, not a CI result.
+
+The classification currently uses whole-cgroup samples. At the largest sampled
+current usage for `pkg/embed`, `isolated`, and `sqlintegration`, respectively,
+the cgroup contained 13.96, 13.22, and 12.80 GiB. File cache accounted for 9.19,
+9.43, and 9.61 GiB of those samples; anonymous memory accounted for 4.03, 2.99,
+and 2.35 GiB. These totals measure runner pressure, not individual package
+footprint, and do not establish which package combinations require exclusion.
+The current classification remains a conservative restriction while matched
+complete-wave measurements determine which exclusions are necessary.
+
+Current local issues measurements use the same race binary and complete scope,
+with sequential arms in separate 8-CPU/16-GiB cgroups and swap disabled:
+
+| Four issues batches | Elapsed seconds | CPU seconds | Peak GiB |
+|---|---:|---:|---:|
+| Contiguous, serial | 420.05 | 581.89 | 2.16 |
+| Round-robin, two processes | 258.21 | 758.03 | 3.74 |
+
+Both arms passed all 159 roots with equivalent 1424 terminal test results and
+no OOM or memory-limit events. The pool saves 161.84 seconds but uses 30.27%
+more CPU time and 73.02% more peak memory in this wave. This establishes a wall
+time benefit and a resource tradeoff, rather than completion of the combined
+issues/embedded optimization. Complete-wave results must justify the runtime
+budget and exclusion policy before resource acceptance is closed. CPU totals
+are summed across the sequential waves; their overall peak is the largest
+wave peak. Memory occupancy over time is reported separately from peak memory.
+
+This change does not merge embedded packages into one fixture or remove the
+multi-CN package. Embedded package `TestMain` and lifecycle hooks are
+process-scoped, while the multi-CN cases prove routing, metadata, index, and
+cancellation contracts that a single-CN fixture cannot cover; that package was
+about 78 seconds in the same trace and is not the critical path.
 
 | Choice | Decision |
 |---|---|
 | Serial batching only | Lowest complexity; retains the established batching benefit. |
-| Serial default with optional bounded pool | Selected; permits controlled overlap using the existing dispatcher and admission owner. |
-| Two-process default | Deferred until matched successful final-wave timing and CPU/memory evidence justify adoption. |
+| Serial default with optional bounded pool | Selected until matched full-wave CPU/memory evidence passes the adoption gate. |
+| Linux default with bounded two-process pool | Deferred: resource acceptance has not passed. Explicit opt-in retains the bounded scheduler for experiments. |
 
-Make defaults `UT_ISSUES_BATCH_PARALLEL` and `UT_EMBEDDED_PACKAGE_PARALLEL` to
-one on every platform. Each accepts an explicit value of two; the issues pool
-requires four batches. `UT_ISSUES_BATCHES=1` retains the single-process rollback.
-Invalid combinations fail before preparation. Preparation failure falls back
-before execution; runtime failure never reruns completed roots.
+For Makefile/CI and direct runner use, `UT_ISSUES_BATCH_PARALLEL` and
+`UT_EMBEDDED_PACKAGE_PARALLEL` both default to one on every platform.
+Two-process execution requires an explicit opt-in for each wave; one wave's
+choice does not implicitly enable the other. The issues pool requires four
+batches. `UT_ISSUES_BATCHES=1` retains single-process issues execution.
+Invalid and explicitly empty values fail before preparation. Preparation failure
+falls back before execution; runtime failure never reruns completed roots. Pool
+mode uses round-robin roots to avoid a contiguous long-tail batch; serial mode
+retains the historical contiguous partition.
 
 The existing dispatcher owns children, watchdogs and reports for both wave
 types. It admits at most the configured number of commands, reaps completed
@@ -76,11 +135,13 @@ and cover cross-process slots, exclusive competition, cancellation and reuse.
 Run affected normal/race packages and incremental static checks; reuse unchanged
 embed lifecycle evidence. No new cluster fixture or SQL BVT is needed.
 
-The extra slot locks and retry work apply only to opted-in test startup. Existing
-subset measurements motivate experimentation, not a default resource budget.
-Default adoption requires matched successful serial/pool waves with elapsed,
-CPU and peak memory results on the intended runner. This requirement does not
-block optional execution with the deterministic correctness evidence above.
+The extra slot locks and retry work apply to either explicitly enabled process
+pool; other test lifecycles keep the existing exclusive admission path. Existing
+subset measurements motivate testing the two-process candidate. Matched complete
+waves must record elapsed time, CPU throttling, peak memory, and OOM/max events,
+and establish the combined resource benefit. If evidence violates the runner budget,
+`UT_ISSUES_BATCH_PARALLEL=1 UT_EMBEDDED_PACKAGE_PARALLEL=1` is the immediate
+serial rollback.
 
 ## Original PR29760 design (v4)
 
@@ -133,9 +194,19 @@ Report writers retain ownership until stopped. The existing transactional report
 consumer chooses a complete ready report or recoverable shard files and appends
 one representation. Pending TERM is held across ownership transfer; a failed
 append retains its source. The correction adds no second report store or process
-scheduler. Earlier compiler/helper cancellation paths remain under their existing
-outer ownership contract; this is not a claim that every preexisting helper has
-been redesigned. No lock files are unlinked while an owner can still hold them.
+scheduler. Prebuilt CURRENT, engine, plan and prebuild helpers publish one
+completion status per existing owner after normal return or fully drained
+cancellation. The parent resets that acknowledgment before admission and checks
+it against the reaped status and drains the helper group before releasing
+ownership, including preparation/fallback descendants. Missing or inconsistent
+completion is terminal 125, even when an abrupt exit numerically matches an
+ordinary test failure. Compiler/discovery/shard groups must drain before their
+PID slots are cleared; final engine/plan artifact deletion belongs to the existing
+parent report consumer. Ordinary CURRENT and LIGHT exit contracts are unchanged.
+An uncatchably dead helper cannot clean its independent groups; this gate retains
+evidence and forbids later admission but does not claim immediate reclamation
+without a child-group handoff. ARM cancellation timeout diagnosis remains open.
+No lock files are unlinked while an owner can still hold them.
 
 ## Cluster and fixture lifecycle
 

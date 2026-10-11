@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1629,6 +1630,149 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		require.ErrorIs(t, err, wantErr)
 	})
 
+	t.Run("temporal primary key probe preserves fractional precision", func(t *testing.T) {
+		ses.timeZone = time.UTC
+		tests := []struct {
+			name    string
+			typ     types.Type
+			literal string
+			cast    string
+			value   any
+		}{
+			{
+				name:    "datetime(6)",
+				typ:     types.New(types.T_datetime, 0, 6),
+				literal: "2024-01-01 00:00:00.000001",
+				cast:    "DATETIME(6)",
+			},
+			{
+				name:    "timestamp(6)",
+				typ:     types.New(types.T_timestamp, 0, 6),
+				literal: "2024-01-01 00:00:00.000001",
+				cast:    "TIMESTAMP(6)",
+			},
+			{
+				name:    "time(6)",
+				typ:     types.New(types.T_time, 0, 6),
+				literal: "00:00:00.000001",
+				cast:    "TIME(6)",
+			},
+		}
+		for i := range tests {
+			tc := &tests[i]
+			var err error
+			switch tc.typ.Oid {
+			case types.T_datetime:
+				tc.value, err = types.ParseDatetime(tc.literal, tc.typ.Scale)
+			case types.T_timestamp:
+				tc.value, err = types.ParseTimestamp(ses.timeZone, tc.literal, tc.typ.Scale)
+			case types.T_time:
+				tc.value, err = types.ParseTime(tc.literal, tc.typ.Scale)
+			}
+			require.NoError(t, err)
+		}
+
+		runProbe := func(t *testing.T, tc struct {
+			name    string
+			typ     types.Type
+			literal string
+			cast    string
+			value   any
+		}, composite bool) {
+			t.Helper()
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			tblStuff := newTestBranchTableStuff(ctrl)
+			tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+			tblStuff.def.colTypes[0] = tc.typ
+			if composite {
+				tblStuff.def.pkKind = compositeKind
+				tblStuff.def.pkColIdxes = []int{0, 1}
+				tblStuff.def.colTypes = []types.Type{
+					tc.typ,
+					types.T_int64.ToType(),
+					types.T_varchar.ToType(),
+				}
+			}
+
+			targetDef := tblStuff.tarRel.GetTableDef(context.Background())
+			targetDef.Cols[0].Typ = plan.Type{Id: int32(tc.typ.Oid), Scale: tc.typ.Scale}
+			lcaDef := newTestBranchTableDef("lca_tbl", "name")
+			lcaDef.Cols[0].Typ = targetDef.Cols[0].Typ
+			if composite {
+				targetDef.Cols[1].Typ = plan.Type{Id: int32(types.T_int64)}
+				lcaDef.Cols[1].Typ = targetDef.Cols[1].Typ
+			}
+			tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().
+				GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+			tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().
+				GetTableID(gomock.Any()).Return(uint64(82)).AnyTimes()
+
+			wantErr := moerr.NewInternalErrorNoCtx("stop after sql capture")
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+				expectedCast := tc.cast
+				if composite {
+					require.Contains(t, sql, "values row(0,'"+tc.literal+"', 7)")
+					require.Contains(t, sql,
+						"lca.`id` = cast(pks.`__mo_data_branch_pk_0` as "+expectedCast+")")
+					require.Contains(t, sql,
+						"lca.`name` = cast(pks.`__mo_data_branch_pk_1` as BIGINT)")
+				} else {
+					require.Contains(t, sql, "values row(0,'"+tc.literal+"')")
+					require.Contains(t, sql,
+						"lca.`id` = cast(pks.`__mo_data_branch_pk_0` as "+expectedCast+")")
+				}
+				return wantErr
+			}).Times(1)
+
+			tBat := batch.NewWithSize(1)
+			if composite {
+				tBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+				packer := types.NewPacker()
+				defer packer.Close()
+				switch value := tc.value.(type) {
+				case types.Datetime:
+					packer.EncodeDatetime(value)
+				case types.Timestamp:
+					packer.EncodeTimestamp(value)
+				case types.Time:
+					packer.EncodeTime(value)
+				}
+				packer.EncodeInt64(7)
+				require.NoError(t, vector.AppendBytes(tBat.Vecs[0], packer.GetBuf(), false, ses.proc.Mp()))
+			} else {
+				tBat.Vecs[0] = vector.NewVec(tc.typ)
+				switch value := tc.value.(type) {
+				case types.Datetime:
+					require.NoError(t, vector.AppendFixed(tBat.Vecs[0], value, false, ses.proc.Mp()))
+				case types.Timestamp:
+					require.NoError(t, vector.AppendFixed(tBat.Vecs[0], value, false, ses.proc.Mp()))
+				case types.Time:
+					require.NoError(t, vector.AppendFixed(tBat.Vecs[0], value, false, ses.proc.Mp()))
+				}
+			}
+			tBat.SetRowCount(1)
+			defer tBat.Clean(ses.proc.Mp())
+
+			_, err := handleDelsOnLCA(
+				context.Background(), ses, bh, tBat, tblStuff,
+				types.BuildTS(10, 0).ToTimestamp(),
+			)
+			require.ErrorIs(t, err, wantErr)
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				runProbe(t, tc, false)
+			})
+		}
+		t.Run("datetime(6) first column of composite primary key", func(t *testing.T) {
+			runProbe(t, tests[0], true)
+		})
+	})
+
 	t.Run("internal aliases do not collide with user primary key", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -2768,8 +2912,32 @@ func TestLCAProbeJoinCastType(t *testing.T) {
 		{name: "varbinary", typ: types.T_varbinary.ToType(), want: "VARBINARY", ok: true},
 		{name: "decimal64", typ: types.New(types.T_decimal64, 12, 2), want: types.New(types.T_decimal64, 12, 2).DescString(), ok: true},
 		{name: "decimal256", typ: types.New(types.T_decimal256, 39, 4), want: types.New(types.T_decimal256, 39, 4).DescString(), ok: true},
-		{name: "timestamp", typ: types.New(types.T_timestamp, 0, 6), want: types.New(types.T_timestamp, 0, 6).String(), ok: true},
+		{name: "date", typ: types.T_date.ToType(), want: "DATE", ok: true},
+		{name: "year", typ: types.T_year.ToType(), want: "YEAR", ok: true},
 		{name: "unsupported", typ: types.T_bool.ToType(), want: "", ok: false},
+	}
+	for _, tc := range []struct {
+		oid  types.T
+		name string
+	}{
+		{oid: types.T_datetime, name: "DATETIME"},
+		{oid: types.T_time, name: "TIME"},
+		{oid: types.T_timestamp, name: "TIMESTAMP"},
+	} {
+		for scale := int32(0); scale <= 6; scale++ {
+			typ := types.New(tc.oid, 0, scale)
+			tests = append(tests, struct {
+				name string
+				typ  types.Type
+				want string
+				ok   bool
+			}{
+				name: fmt.Sprintf("%s(%d)", tc.name, scale),
+				typ:  typ,
+				want: fmt.Sprintf("%s(%d)", tc.name, scale),
+				ok:   true,
+			})
+		}
 	}
 
 	for _, tt := range tests {

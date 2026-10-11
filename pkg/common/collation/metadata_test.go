@@ -138,6 +138,17 @@ func TestCollationMetadataClosedDomain(t *testing.T) {
 		require.Error(t, RequireLegacy(id, 0, 256))
 	}
 	require.NoError(t, ValidateKeyFormat(1))
+	for _, format := range []uint32{KeyFormatLegacy, KeyFormatV1} {
+		require.NoError(t, ValidateKeyFormatPair(format, format))
+	}
+	require.ErrorContains(t,
+		ValidateKeyFormatPair(KeyFormatLegacy, KeyFormatV1),
+		"does not match table format")
+	require.ErrorContains(t,
+		ValidateKeyFormatPair(KeyFormatV1, KeyFormatLegacy),
+		"does not match table format")
+	require.Error(t, ValidateKeyFormatPair(KeyFormatV1+1, KeyFormatLegacy))
+	require.Error(t, ValidateKeyFormatPair(KeyFormatLegacy, KeyFormatV1+1))
 	for c, expected := range map[Charset]int32{CharsetUnspecified: 0, CharsetBinary: 1, CharsetASCII: 1, CharsetUTF8MB3: 3, CharsetUTF8MB4: 4, CharsetGBK: 2} {
 		require.Equal(t, expected, c.MaxBytes())
 		if c == CharsetUnspecified {

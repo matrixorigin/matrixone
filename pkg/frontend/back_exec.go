@@ -431,6 +431,9 @@ func doComQueryInBack(
 	proc.SetAffectedRows(backSes.lastAffectedRows)
 	bindBackExecSession(proc, backSes, execCtx.reqCtx)
 	proc.SetStmtProfile(&backSes.stmtProfile)
+	if catalogRead, _ := execCtx.reqCtx.Value(viewSchemaCatalogReadKey{}).(bool); catalogRead {
+		proc.SetIncrStatementDisabled(true)
+	}
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
 	if process.HasSystemCTELimits(execCtx.reqCtx) {
 		proc.SetResolveVariableFunc(process.SystemCTEResolver(backSes.txnCompileCtx.ResolveVariable))

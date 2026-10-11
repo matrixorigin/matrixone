@@ -117,41 +117,68 @@ func TestApplyIndicesForSortUsingIvfflat_DistancePredicateOwnership(t *testing.T
 				scanNode.FilterList = append(scanNode.FilterList, makeIvfIncludeModeIsNotNullFilter(scanNode, 1))
 			}
 			original := DeepCopyExprList(scanNode.FilterList)
-			_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
+			root, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
 			require.NoError(t, err)
+			if tc.lossy {
+				// Quantized scores may order candidates, but they cannot prove an
+				// exact SQL distance predicate safe after candidate truncation.
+				// The planner must therefore keep the exact scan for every mode.
+				require.Equal(t, scanNodeID, root)
+				require.Equal(t, original, scanNode.FilterList)
+				require.Nil(t, findIvfTableFunctionNode(builder, scanNodeID))
+				for _, node := range builder.qry.Nodes {
+					if node != nil {
+						require.NotEqual(t, planpb.Node_ADAPTIVE_TOP, node.NodeType)
+					}
+				}
+				return
+			}
 
 			tableFuncNode := findIvfTableFunctionNode(builder, vecCtx.projNode.Children[0])
 			require.NotNil(t, tableFuncNode)
 			require.Equal(t, uint64(3), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
-			if tc.lossy {
-				require.Nil(t, tableFuncNode.VectorIndexScan.GetDistanceRange())
-				require.True(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
-				require.Equal(t, original, scanNode.FilterList)
-				if tc.mode != "post" {
-					var membership *planpb.Node
-					for _, node := range builder.qry.Nodes {
-						if node.NodeType == planpb.Node_TABLE_SCAN && node != scanNode && node.TableDef.Name == scanNode.TableDef.Name {
-							require.Nil(t, membership, "one copied membership scan")
-							membership = node
-						}
-					}
-					require.NotNil(t, membership)
-					require.NotEqual(t, scanNode.BindingTags[0], membership.BindingTags[0])
-					expected := DeepCopyExprList(original)
-					if !tc.async {
-						expected = expected[:1]
-					}
-					for _, expr := range expected {
-						replaceColRefTag(expr, scanNode.BindingTags[0], membership.BindingTags[0])
-					}
-					require.Equal(t, expected, membership.FilterList)
-					require.Nil(t, membership.Limit)
-					require.Nil(t, membership.Offset)
+			require.NotNil(t, tableFuncNode.VectorIndexScan.GetDistanceRange().GetUpperBound())
+			require.False(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
+			require.Empty(t, scanNode.FilterList)
+		})
+	}
+}
+
+func TestApplyIndicesForSortUsingIvfflat_FallsBackOnResidualDistancePredicate(t *testing.T) {
+	for _, mode := range []string{"pre", "post", "include", "auto"} {
+		t.Run(mode, func(t *testing.T) {
+			builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+			vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, mode, 0, 2)
+			setIvfIncludeModeTestPagination(vecCtx, 2, 0)
+			distance := &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(types.T_float64)},
+				Expr: &planpb.Expr_F{F: vecCtx.distFnExpr},
+			}
+			scanNode.FilterList = []*planpb.Expr{{
+				Typ: planpb.Type{Id: int32(types.T_bool)},
+				Expr: &planpb.Expr_F{F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "between"},
+					Args: []*planpb.Expr{distance, MakePlan2Float64ConstExprWithType(489.5), MakePlan2Float64ConstExprWithType(501.5)},
+				}},
+			}}
+			original := DeepCopyExprList(scanNode.FilterList)
+
+			root, err := builder.applyIndicesForSortUsingIvfflat(
+				scanNodeID, vecCtx, multiTableIndex, nil, nil,
+			)
+			require.NoError(t, err)
+			require.Equal(t, scanNodeID, root)
+			require.Equal(t, original, scanNode.FilterList)
+			require.Nil(t, findIvfTableFunctionNode(builder, scanNodeID))
+			for _, node := range builder.qry.Nodes {
+				if node != nil {
+					require.NotEqual(t, planpb.Node_ADAPTIVE_TOP, node.NodeType)
 				}
+			}
+			if mode == "auto" {
+				require.Equal(t, "force", vecCtx.rankOption.Mode)
 			} else {
-				require.NotNil(t, tableFuncNode.VectorIndexScan.GetDistanceRange().GetUpperBound())
-				require.False(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
-				require.Empty(t, scanNode.FilterList)
+				require.Equal(t, mode, vecCtx.rankOption.Mode)
 			}
 		})
 	}

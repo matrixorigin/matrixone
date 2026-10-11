@@ -519,11 +519,17 @@ const (
 func startBasicCluster(
 	cnCount int,
 	trace func(phase string, duration time.Duration, err error),
+	adjust func(ServiceOperator),
 ) (Cluster, error) {
 	started := time.Now()
 	c, err := StartTestCluster(
 		WithCNCount(cnCount),
-		WithPreStart(adjustBasicClusterService),
+		WithPreStart(func(service ServiceOperator) {
+			adjustBasicClusterService(service)
+			if adjust != nil {
+				adjust(service)
+			}
+		}),
 	)
 	if trace != nil {
 		trace("cluster-start", time.Since(started), err)
@@ -671,7 +677,7 @@ func RunBaseClusterTests(
 ) {
 	t.Helper()
 	basicClusterState.Run(t, func() (Cluster, error) {
-		return startBasicCluster(basicClusterCNCount, basicClusterSetupTracer(t, basicClusterCNCount))
+		return startBasicCluster(basicClusterCNCount, basicClusterSetupTracer(t, basicClusterCNCount), nil)
 	}, func(c Cluster) {
 		fn(c)
 	})
@@ -694,7 +700,7 @@ func RunSingleCNBaseClusterTests(
 ) {
 	t.Helper()
 	singleCNClusterState.Run(t, func() (Cluster, error) {
-		return startBasicCluster(1, basicClusterSetupTracer(t, 1))
+		return startBasicCluster(1, basicClusterSetupTracer(t, 1), nil)
 	}, func(c Cluster) {
 		fn(c)
 	})

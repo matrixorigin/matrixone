@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1342,6 +1343,17 @@ func Test_buildParquetNode(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("lossless unsigned and timestamp physical types", func(t *testing.T) {
+		unsigned := buildParquetNode(defines.MYSQL_TYPE_LONGLONG, uint16(defines.UNSIGNED_FLAG))
+		require.Equal(t, parquet.ByteArray, unsigned.Type().Kind())
+		bit := buildParquetNode(defines.MYSQL_TYPE_BIT, 0)
+		require.Equal(t, parquet.ByteArray, bit.Type().Kind())
+		timestamp := buildParquetNode(defines.MYSQL_TYPE_TIMESTAMP, 0)
+		require.Equal(t, parquet.Int64, timestamp.Type().Kind())
+		require.NotNil(t, timestamp.Type().LogicalType().Timestamp)
+		require.True(t, timestamp.Type().LogicalType().Timestamp.IsAdjustedToUTC)
+	})
 }
 
 func Test_vectorValueToParquet(t *testing.T) {
@@ -1411,12 +1423,19 @@ func Test_vectorValueToParquet(t *testing.T) {
 			convey.So(val, convey.ShouldEqual, int32(100000))
 		})
 
-		// Test uint64 type (converted to int64 for parquet)
+		// Test uint64 type (encoded as decimal text for parquet)
 		convey.Convey("uint64 type", func() {
-			vec := testutil.NewVector(1, types.T_uint64.ToType(), mp, false, []uint64{1234567890})
+			vec := testutil.NewVector(1, types.T_uint64.ToType(), mp, false, []uint64{^uint64(0)})
 			val, err := vectorValueToParquet(vec, 0, nil)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(val, convey.ShouldEqual, int64(1234567890))
+			convey.So(val, convey.ShouldEqual, "18446744073709551615")
+		})
+
+		convey.Convey("bit type", func() {
+			vec := testutil.NewVector(1, types.T_bit.ToType(), mp, false, []uint64{63})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, "63")
 		})
 
 		// Test float32 type
@@ -1449,6 +1468,34 @@ func Test_vectorValueToParquet(t *testing.T) {
 			val, err := vectorValueToParquet(vec, 0, nil)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(val, convey.ShouldEqual, "2023-12-25")
+		})
+
+		convey.Convey("timestamp type uses UTC epoch micros", func() {
+			vec := vector.NewVec(types.T_timestamp.ToType())
+			convey.So(vector.AppendFixed(vec, types.UnixMicroToTimestamp(1234567), false, mp), convey.ShouldBeNil)
+			val, err := vectorValueToParquet(vec, 0, time.FixedZone("UTC+8", 8*60*60))
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int64(1234567))
+		})
+
+		convey.Convey("year type uses canonical string", func() {
+			vec := vector.NewVec(types.T_year.ToType())
+			convey.So(vector.AppendFixed(vec, types.MoYear(2024), false, mp), convey.ShouldBeNil)
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, "2024")
+		})
+
+		convey.Convey("vector types use their string representation", func() {
+			vec32 := testutil.NewVector(1, types.New(types.T_array_float32, 2, 0), mp, false, [][]float32{{1.25, 2.5}})
+			val, err := vectorValueToParquet(vec32, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, "[1.25, 2.5]")
+
+			vec64 := testutil.NewVector(1, types.New(types.T_array_float64, 2, 0), mp, false, [][]float64{{1.25, 2.5}})
+			val, err = vectorValueToParquet(vec64, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, "[1.25, 2.5]")
 		})
 	})
 }
@@ -1487,6 +1534,19 @@ func Test_NewParquetWriter(t *testing.T) {
 			convey.So(pw.columnNames[0], convey.ShouldEqual, "id")
 			convey.So(pw.columnNames[1], convey.ShouldEqual, "name")
 		})
+
+		convey.Convey("duplicate names are rejected before schema creation", func() {
+			mrs := &MysqlResultSet{}
+			for _, name := range []string{"value", "VALUE"} {
+				col := new(MysqlColumn)
+				col.SetName(name)
+				col.SetColumnType(defines.MYSQL_TYPE_LONG)
+				mrs.AddColumn(col)
+			}
+			_, err := NewParquetWriter(context.Background(), mrs)
+			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err.Error(), convey.ShouldContainSubstring, "duplicate column name")
+		})
 	})
 }
 
@@ -1507,6 +1567,9 @@ func Test_ParquetWriter_Close(t *testing.T) {
 		convey.So(len(data), convey.ShouldBeGreaterThan, 0)
 		// Parquet files start with "PAR1" magic bytes
 		convey.So(string(data[:4]), convey.ShouldEqual, "PAR1")
+		file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(file.NumRows(), convey.ShouldEqual, int64(0))
 	})
 }
 
@@ -1678,6 +1741,166 @@ func Test_ParquetWriter_Size(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(len(data), convey.ShouldBeGreaterThan, 0)
 	})
+}
+
+func Test_ParquetWriter_FlushPublishesBufferedSize(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	mrs := &MysqlResultSet{}
+	col := new(MysqlColumn)
+	col.SetName("id")
+	col.SetColumnType(defines.MYSQL_TYPE_LONG)
+	mrs.AddColumn(col)
+
+	pw, err := NewParquetWriter(ctx, mrs)
+	require.NoError(t, err)
+	vec := testutil.NewVector(1, types.T_int32.ToType(), mp, false, []int32{1})
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+	require.NoError(t, pw.WriteBatch(bat, mp, time.UTC))
+	require.Zero(t, pw.Size())
+	require.NoError(t, pw.Flush())
+	require.Greater(t, pw.Size(), 0)
+	_, err = pw.Close()
+	require.NoError(t, err)
+	bat.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestParquetWriterYearColumnNormalizesDateVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	mrs := &MysqlResultSet{}
+	col := new(MysqlColumn)
+	col.SetName("year_val")
+	col.SetColumnType(defines.MYSQL_TYPE_YEAR)
+	mrs.AddColumn(col)
+
+	pw, err := NewParquetWriter(context.Background(), mrs)
+	require.NoError(t, err)
+	vec := vector.NewVec(types.T_date.ToType())
+	require.NoError(t, vector.AppendFixed(vec, types.DateFromCalendar(2024, 1, 1), false, mp))
+	defer vec.Free(mp)
+
+	value, err := pw.vectorValueToParquet(vec, 0, 0, time.UTC)
+	require.NoError(t, err)
+	require.Equal(t, "2024", value)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestExportParquetLargeSplitPreservesRows(t *testing.T) {
+	// Cross parquet-go's file row-group limit through the real export entry.
+	// SPLITSIZE must not turn each row into its own row group.
+	for _, rowCount := range []int{32767, 32768} {
+		t.Run(strconv.Itoa(rowCount), func(t *testing.T) {
+			var baseline []byte
+			for _, splitSize := range []uint64{0, 1 << 30} {
+				mp := mpool.MustNewZero()
+				mrs := &MysqlResultSet{}
+				col := new(MysqlColumn)
+				col.SetName("id")
+				col.SetColumnType(defines.MYSQL_TYPE_LONG)
+				mrs.AddColumn(col)
+				dir := t.TempDir()
+				ec := &ExportConfig{ctx: context.Background(), mrs: mrs, userConfig: &tree.ExportParam{
+					FilePath: filepath.Join(dir, "out_%d.parquet"), ExportFormat: "parquet", SplitSize: splitSize,
+				}}
+				execCtx := &ExecCtx{reqCtx: ec.ctx, ses: &backSession{feSessionImpl: feSessionImpl{pool: mp}}}
+				for start := 0; start < rowCount; start += 8192 {
+					end := min(start+8192, rowCount)
+					values := make([]int32, end-start)
+					for i := range values {
+						values[i] = int32(start + i)
+					}
+					bat := batch.NewWithSize(1)
+					bat.Vecs[0] = testutil.NewVector(len(values), types.T_int32.ToType(), mp, false, values)
+					bat.SetRowCount(len(values))
+					func() {
+						defer bat.Clean(mp)
+						require.NoError(t, ec.Write(execCtx, nil, bat))
+					}()
+				}
+				require.NoError(t, finalizeParquetExport(ec))
+				require.Zero(t, mp.CurrNB())
+				require.Equal(t, uint64(rowCount), ec.Rows)
+				files, err := filepath.Glob(filepath.Join(dir, "*.parquet"))
+				require.NoError(t, err)
+				require.Len(t, files, 1)
+				data, err := os.ReadFile(files[0])
+				require.NoError(t, err)
+				file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+				require.NoError(t, err)
+				require.Equal(t, int64(rowCount), file.NumRows())
+				require.Len(t, file.RowGroups(), 1)
+				rows, err := parquet.Read[struct {
+					ID int32 `parquet:"id,optional"`
+				}](bytes.NewReader(data), int64(len(data)))
+				require.NoError(t, err)
+				require.Len(t, rows, rowCount)
+				for i, row := range rows {
+					require.Equal(t, int32(i), row.ID)
+				}
+				if splitSize == 0 {
+					baseline = data
+				} else {
+					// The large target needs no intermediate row-group flushes:
+					// its storage overhead must match the unsplit export.
+					require.Equal(t, len(baseline), len(data))
+					t.Logf("rows=%d row_groups=%d bytes=%d unsplit_bytes=%d", rowCount, len(file.RowGroups()), len(data), len(baseline))
+				}
+			}
+		})
+	}
+}
+
+func TestExportParquetSplitSingleBatchPreservesRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	mrs := &MysqlResultSet{}
+	col := new(MysqlColumn)
+	col.SetName("payload")
+	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col)
+	values := make([]string, 32)
+	for i := range values {
+		values[i] = strings.Repeat("x", 512) + strconv.Itoa(i)
+	}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.NewVector(len(values), types.T_varchar.ToType(), mp, false, values)
+	bat.SetRowCount(len(values))
+	t.Cleanup(func() {
+		bat.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	dir := t.TempDir()
+	ec := &ExportConfig{ctx: context.Background(), mrs: mrs, userConfig: &tree.ExportParam{
+		FilePath: filepath.Join(dir, "out_%d.parquet"), ExportFormat: "parquet", SplitSize: 8 << 10,
+	}}
+	execCtx := &ExecCtx{reqCtx: ec.ctx, ses: &backSession{feSessionImpl: feSessionImpl{pool: mp}}}
+	require.NoError(t, ec.Write(execCtx, nil, bat))
+	require.NoError(t, finalizeParquetExport(ec))
+	require.Equal(t, uint64(len(values)), ec.Rows)
+	files, err := filepath.Glob(filepath.Join(dir, "*.parquet"))
+	require.NoError(t, err)
+	require.Greater(t, len(files), 1)
+	var got []string
+	for _, name := range files {
+		data, err := os.ReadFile(name)
+		require.NoError(t, err)
+		rows, err := parquet.Read[struct {
+			Payload string `parquet:"payload,optional"`
+		}](bytes.NewReader(data), int64(len(data)))
+		require.NoError(t, err)
+		require.NotEmpty(t, rows) // No trailing empty split file.
+		for _, row := range rows {
+			got = append(got, row.Payload)
+		}
+	}
+	require.ElementsMatch(t, values, got)
+}
+
+func Test_finalizeParquetExportAfterSplitDoesNotCreateTrailingFile(t *testing.T) {
+	ep := &ExportConfig{Rows: 1}
+	require.NoError(t, finalizeParquetExport(ep))
 }
 
 func Test_shouldSplitParquetFile(t *testing.T) {

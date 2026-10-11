@@ -285,6 +285,33 @@ truncate table export_verify;
 load data infile 'stage://export_test_stage/test_csv_no_header.csv' into table export_verify fields terminated by ',';
 select * from export_verify order by id;
 
+-- Test 7.4: FLOAT infinities and NULL retain bits through MO Parquet export/load.
+create table export_float_source(id int primary key, v float);
+create table export_float_verify(id int primary key, v float);
+create table export_float_widen(id int primary key, v double);
+insert into export_float_source values (1, bit_cast(unhex('0000807f') as float)), (2, bit_cast(unhex('000080ff') as float)), (3, null), (4, 1.5);
+select id, hex(serial(v)) as value_bits, v is null as value_null from export_float_source order by id;
+remove files from stage if exists 'stage://export_test_stage/float_roundtrip.parquet';
+select id, v from export_float_source order by id into outfile 'stage://export_test_stage/float_roundtrip.parquet' format 'parquet';
+load data infile {'filepath'='stage://export_test_stage/float_roundtrip.parquet', 'format'='parquet'} into table export_float_verify;
+select id, hex(serial(v)) as value_bits, v is null as value_null from export_float_verify order by id;
+load data infile {'filepath'='stage://export_test_stage/float_roundtrip.parquet', 'format'='parquet'} into table export_float_widen;
+select id, hex(serial(v)) as value_bits, v is null as value_null from export_float_widen order by id;
+
+-- Test 7.5: Finite DOUBLE overflow rejects the FLOAT load without inserting rows.
+truncate table export_float_widen;
+insert into export_float_widen values (1, 1e100);
+remove files from stage if exists 'stage://export_test_stage/float_overflow.parquet';
+select id, v from export_float_widen into outfile 'stage://export_test_stage/float_overflow.parquet' format 'parquet';
+truncate table export_float_verify;
+load data infile {'filepath'='stage://export_test_stage/float_overflow.parquet', 'format'='parquet'} into table export_float_verify;
+select count(*) from export_float_verify;
+remove files from stage if exists 'stage://export_test_stage/float_roundtrip.parquet';
+remove files from stage if exists 'stage://export_test_stage/float_overflow.parquet';
+drop table export_float_source;
+drop table export_float_verify;
+drop table export_float_widen;
+
 -- ============================================================================
 -- PART 8: Abnormal/Invalid Cases - FORMAT errors
 -- ============================================================================

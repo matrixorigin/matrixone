@@ -124,6 +124,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     tableOptions []tree.TableOption
     tableExprs tree.TableExprs
     tableExpr tree.TableExpr
+    jsonTableColumn *tree.JSONTableColumn
+    jsonTableColumns []*tree.JSONTableColumn
+    jsonTableResponse *tree.JSONTableResponse
     rowFormatType tree.RowFormatType
     matchType tree.MatchType
     fullTextSearchType tree.FullTextSearchType
@@ -373,6 +376,11 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 }
 
 %token LEX_ERROR
+%token <str> JSON_TABLE JSON_TABLE_PATH JSON_TABLE_NESTED JSON_TABLE_ORDINALITY JSON_TABLE_EMPTY JSON_TABLE_ERROR
+%type <jsonTableColumn> json_table_column json_table_policies
+%type <jsonTableColumns> json_table_columns
+%type <jsonTableResponse> json_table_response json_table_on_empty json_table_on_error
+%type <str> json_table_path_opt
 %nonassoc EMPTY
 %left <str> UNION EXCEPT INTERSECT MINUS
 %nonassoc LOWER_THAN_ORDER
@@ -1530,7 +1538,9 @@ create_pitr_stmt:
 pitr_value:
     INTEGRAL
     {
-        $$ = $1.(int64)
+        value, ok := signedIntegral(yylex, $1)
+        if !ok { goto ret1 }
+        $$ = value
     }
    
 
@@ -2214,11 +2224,15 @@ ignore_lines:
     }
 |   IGNORE INTEGRAL LINES
     {
-        $$ = $2.(int64)
+        value, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        $$ = value
     }
 |   IGNORE INTEGRAL ROWS
     {
-        $$ = $2.(int64)
+        value, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        $$ = value
     }
 
 load_lines:
@@ -3591,11 +3605,11 @@ explain_stmt:
     }
 |   explain_sym FOR CONNECTION INTEGRAL
     {
-        $$ = tree.NewExplainFor("", uint64($4.(int64)))
+        $$ = tree.NewExplainFor("", integralToUint64($4))
     }
 |   explain_sym FORMAT '=' STRING FOR CONNECTION INTEGRAL
     {
-        $$ = tree.NewExplainFor($4, uint64($7.(int64)))
+        $$ = tree.NewExplainFor($4, integralToUint64($7))
     }
 |   explain_plan_stmt
     {
@@ -3842,7 +3856,9 @@ for_query_opt:
     }
 |   FOR QUERY INTEGRAL
     {
-        $$ = $3.(int64)
+        value, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
+        $$ = value
     }
 
 upgrade_stmt:
@@ -3876,7 +3892,8 @@ opt_retry:
     }
 |   WITH RETRY INTEGRAL
     {
-    	res := $3.(int64)
+	res, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
     	if res <= 0 {
             yylex.Error("retry value can not less than 0")
             $$ = -1
@@ -4802,7 +4819,8 @@ pwd_or_lck:
     }
 |   pwd_expire INTERVAL INTEGRAL DAY
     {
-        var Value = $3.(int64)
+        Value, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
         $$ = tree.NewUserMiscOptionPasswordExpireInterval(
             Value,
         )
@@ -4821,7 +4839,8 @@ pwd_or_lck:
     }
 |   PASSWORD HISTORY INTEGRAL
     {
-        var Value = $3.(int64)
+        Value, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
         $$ = tree.NewUserMiscOptionPasswordHistoryCount(
             Value,
         )
@@ -4832,7 +4851,8 @@ pwd_or_lck:
     }
 |   PASSWORD REUSE INTERVAL INTEGRAL DAY
     {
-        var Value = $4.(int64)
+        Value, ok := signedIntegral(yylex, $4)
+        if !ok { goto ret1 }
         $$ = tree.NewUserMiscOptionPasswordReuseIntervalCount(
             Value,
         )
@@ -4851,14 +4871,16 @@ pwd_or_lck:
     }
 |   FAILED_LOGIN_ATTEMPTS INTEGRAL
     {
-        var Value = $2.(int64)
+        Value, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
         $$ = tree.NewUserMiscOptionFailedLoginAttempts(
             Value,
         )
     }
 |   PASSWORD_LOCK_TIME INTEGRAL
     {
-        var Value = $2.(int64)
+        Value, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
         $$ = tree.NewUserMiscOptionPasswordLockTimeCount(
             Value,
         )
@@ -6760,7 +6782,9 @@ max_file_size_opt:
     }
 |   MAX_FILE_SIZE INTEGRAL
     {
-        $$ = $2.(int64)
+        value, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        $$ = value
     }
 
 force_quote_opt:
@@ -8171,6 +8195,15 @@ table_subquery:
     }
 
 table_function:
+    JSON_TABLE '(' expression ',' STRING COLUMNS '(' json_table_columns ')' ')'
+    {
+        name := tree.NewUnresolvedName(tree.NewCStr("json_table", 1))
+        $$ = &tree.TableFunction{
+            Func: &tree.FuncExpr{Func: tree.FuncName2ResolvableFunctionReference(name), FuncName: tree.NewCStr("json_table", 1), Exprs: tree.Exprs{$3}, Type: tree.FUNC_TYPE_TABLE},
+            JSONTable: &tree.JSONTable{Path: $5, Columns: $8},
+        }
+    }
+|
     ident '(' expression_list_opt ')'
     {
         name := tree.NewUnresolvedName($1)
@@ -8183,6 +8216,52 @@ table_function:
                 },
         }
     }
+
+json_table_columns:
+    json_table_column
+    { $$ = []*tree.JSONTableColumn{$1} }
+|   json_table_columns ',' json_table_column
+    { $$ = append($1, $3) }
+
+json_table_column:
+    ident FOR JSON_TABLE_ORDINALITY
+    { $$ = &tree.JSONTableColumn{Name: $1.Origin(), Kind: "ordinality"} }
+|   ident column_type JSON_TABLE_PATH STRING json_table_policies
+    { $$ = $5; $$.Name = $1.Origin(); $$.Kind = "path"; $$.Type = $2; $$.Path = $4 }
+|   ident column_type EXISTS JSON_TABLE_PATH STRING
+    { $$ = &tree.JSONTableColumn{Name: $1.Origin(), Kind: "exists", Type: $2, Path: $5} }
+|   JSON_TABLE_NESTED json_table_path_opt STRING COLUMNS '(' json_table_columns ')'
+    { $$ = &tree.JSONTableColumn{Kind: "nested", Path: $3, Children: $6} }
+
+json_table_path_opt:
+    { $$ = "" }
+|   JSON_TABLE_PATH
+    { $$ = $1 }
+
+json_table_response:
+    NULL
+    { $$ = &tree.JSONTableResponse{Action: "null"} }
+|   JSON_TABLE_ERROR
+    { $$ = &tree.JSONTableResponse{Action: "error"} }
+|   DEFAULT STRING
+    { $$ = &tree.JSONTableResponse{Action: "default", Default: $2} }
+
+json_table_policies:
+    { $$ = &tree.JSONTableColumn{} }
+|   json_table_response ON JSON_TABLE_EMPTY json_table_on_error
+    { $$ = &tree.JSONTableColumn{OnEmpty: $1, OnError: $4} }
+|   json_table_response ON JSON_TABLE_ERROR json_table_on_empty
+    { $$ = &tree.JSONTableColumn{OnEmpty: $4, OnError: $1, ReversePolicies: $4 != nil} }
+
+json_table_on_empty:
+    { $$ = nil }
+|   json_table_response ON JSON_TABLE_EMPTY
+    { $$ = $1 }
+
+json_table_on_error:
+    { $$ = nil }
+|   json_table_response ON JSON_TABLE_ERROR
+    { $$ = $1 }
 
 aliased_table_name:
     table_name as_opt_id index_hint_list_opt
@@ -9721,12 +9800,13 @@ index_option:
     KEY_BLOCK_SIZE equal_opt INTEGRAL
     {
         io := tree.NewIndexOption()
-        io.KeyBlockSize = uint64($3.(int64))
+        io.KeyBlockSize = integralToUint64($3)
         $$ = io
     }
 |   LISTS equal_opt INTEGRAL
     {
-    	val:= int64($3.(int64))
+	val, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
     	if val <= 0 {
     		yylex.Error("LISTS should be greater than 0")
     		return 1
@@ -9768,7 +9848,8 @@ index_option:
     }
 |   M equal_opt INTEGRAL
     {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("M should be greater than 0")
 		return 1
@@ -9779,7 +9860,8 @@ index_option:
     }
 |   EF_CONSTRUCTION equal_opt INTEGRAL
     {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("EF_CONSTRUCTION should be greater than 0")
 		return 1
@@ -9790,7 +9872,8 @@ index_option:
      }
 |   EF_SEARCH equal_opt INTEGRAL
     {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("EF_SEARCH should be greater than 0")
 		return 1
@@ -9801,7 +9884,8 @@ index_option:
      }
 |   INTERMEDIATE_GRAPH_DEGREE equal_opt INTEGRAL
     {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("INTERMEDIATE_GRAPH_DEGREE should be greater than 0")
 		return 1
@@ -9812,7 +9896,8 @@ index_option:
      }
 |   GRAPH_DEGREE equal_opt INTEGRAL
     {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("GRAPH_DEGREE should be greater than 0")
 		return 1
@@ -9823,7 +9908,8 @@ index_option:
      }
 |   ITOPK_SIZE equal_opt INTEGRAL
     {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
         if val <= 0 {
                 yylex.Error("GRAPH_DEGREE should be greater than 0")
                 return 1
@@ -9852,7 +9938,8 @@ index_option:
     }
 |   BITS_PER_CODE equal_opt INTEGRAL
     {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("M should be greater than 0")
 		return 1
@@ -9863,7 +9950,8 @@ index_option:
     }
 |   KMEANS_TRAIN_PERCENT equal_opt INTEGRAL
     {
-	val := int64($3.(int64))
+	val, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("KMEANS_TRAIN_PERCENT should be greater than 0")
 		return 1
@@ -9874,7 +9962,8 @@ index_option:
     }
 |   QUANTIZER_TRAIN_LIMIT equal_opt INTEGRAL
     {
-	val := int64($3.(int64))
+	val, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("QUANTIZER_TRAIN_LIMIT should be greater than 0")
 		return 1
@@ -9885,7 +9974,8 @@ index_option:
     }
 |   KMEANS_MAX_ITERATION equal_opt INTEGRAL
     {
-	val := int64($3.(int64))
+	val, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("KMEANS_MAX_ITERATION should be greater than 0")
 		return 1
@@ -9896,7 +9986,8 @@ index_option:
     }
 |   MAX_INDEX_CAPACITY equal_opt INTEGRAL
     {
-	val := int64($3.(int64))
+	val, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("MAX_INDEX_CAPACITY should be greater than 0")
 		return 1
@@ -9907,7 +9998,8 @@ index_option:
     }
 |   MAX_POSTINGS_CAPACITY equal_opt INTEGRAL
     {
-	val := int64($3.(int64))
+	val, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("MAX_POSTINGS_CAPACITY should be greater than 0")
 		return 1
@@ -9962,7 +10054,8 @@ index_option:
      }
 |    DAY equal_opt INTEGRAL
      {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val < 0 {
 		yylex.Error("DAY should be greater than or equal to 0")
 		return 1
@@ -9973,7 +10066,8 @@ index_option:
      }
 |    HOUR equal_opt INTEGRAL
      {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val < 0 || val > 23 {
 		yylex.Error("HOUR should be between 0 and 23")
 		return 1
@@ -9984,7 +10078,8 @@ index_option:
      }
 |    SECOND equal_opt INTEGRAL
      {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val < 0 {
 		yylex.Error("SECOND should be greater than or equal to 0")
 		return 1
@@ -11179,7 +11274,8 @@ sub_partition_num_opt:
     }
 |   SUBPARTITIONS INTEGRAL
     {
-        res := $2.(int64)
+        res, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
         if res == 0 {
             yylex.Error("partitions can not be 0")
             goto ret1
@@ -11193,7 +11289,8 @@ partition_num_opt:
     }
 |   PARTITIONS INTEGRAL
     {
-        res := $2.(int64)
+        res, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
         if res == 0 {
             yylex.Error("partitions can not be 0")
             goto ret1
@@ -11272,7 +11369,9 @@ algorithm_opt:
     }
 |   ALGORITHM '=' INTEGRAL
     {
-        $$ = $3.(int64)
+        value, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
+        $$ = value
     }
 
 linear_opt:
@@ -11535,7 +11634,7 @@ table_option_list:
 table_option:
     AUTOEXTEND_SIZE equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionAUTOEXTEND_SIZE(uint64($3.(int64)))
+        $$ = tree.NewTableOptionAUTOEXTEND_SIZE(integralToUint64($3))
     }
 |   AUTO_INCREMENT equal_opt INTEGRAL
     {
@@ -11547,7 +11646,7 @@ table_option:
     }
 |   AVG_ROW_LENGTH equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionAvgRowLength(uint64($3.(int64)))
+        $$ = tree.NewTableOptionAvgRowLength(integralToUint64($3))
     }
 |   default_opt charset_keyword equal_opt charset_name
     {
@@ -11559,7 +11658,7 @@ table_option:
     }
 |   CHECKSUM equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionChecksum(uint64($3.(int64)))
+        $$ = tree.NewTableOptionChecksum(integralToUint64($3))
     }
 |   COMMENT_KEYWORD equal_opt STRING
     {
@@ -11584,7 +11683,7 @@ table_option:
     }
 |   DELAY_KEY_WRITE equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionDelayKeyWrite(uint64($3.(int64)))
+        $$ = tree.NewTableOptionDelayKeyWrite(integralToUint64($3))
     }
 |   ENCRYPTION equal_opt STRING
     {
@@ -11604,20 +11703,22 @@ table_option:
     }
 |   KEY_BLOCK_SIZE equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionKeyBlockSize(uint64($3.(int64)))
+        $$ = tree.NewTableOptionKeyBlockSize(integralToUint64($3))
     }
 |   MAX_ROWS equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionMaxRows(uint64($3.(int64)))
+        $$ = tree.NewTableOptionMaxRows(integralToUint64($3))
     }
 |   MIN_ROWS equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionMinRows(uint64($3.(int64)))
+        $$ = tree.NewTableOptionMinRows(integralToUint64($3))
     }
 |   PACK_KEYS equal_opt INTEGRAL
     {
         t := tree.NewTableOptionPackKeys()
-        t.Value = $3.(int64)
+        value, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
+        t.Value = value
         $$ = t
     }
 |   PACK_KEYS equal_opt DEFAULT
@@ -11645,7 +11746,7 @@ table_option:
 |   STATS_AUTO_RECALC equal_opt INTEGRAL
     {
         t := tree.NewTableOptionStatsAutoRecalc()
-        t.Value = uint64($3.(int64))
+        t.Value = integralToUint64($3)
         $$ = t
     }
 |   STATS_AUTO_RECALC equal_opt DEFAULT
@@ -11657,7 +11758,7 @@ table_option:
 |   STATS_PERSISTENT equal_opt INTEGRAL
     {
         t := tree.NewTableOptionStatsPersistent()
-        t.Value = uint64($3.(int64))
+        t.Value = integralToUint64($3)
         $$ = t
     }
 |   STATS_PERSISTENT equal_opt DEFAULT
@@ -11669,7 +11770,7 @@ table_option:
 |   STATS_SAMPLE_PAGES equal_opt INTEGRAL
     {
         t := tree.NewTableOptionStatsSamplePages()
-        t.Value = uint64($3.(int64))
+        t.Value = integralToUint64($3)
         $$ = t
     }
 |   STATS_SAMPLE_PAGES equal_opt DEFAULT
@@ -12613,7 +12714,9 @@ field_length_opt:
     }
 |   '(' INTEGRAL ')'
     {
-        $$ = $2.(int64)
+        value, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        $$ = value
     }
 
 storage_media:
@@ -13054,7 +13157,9 @@ function_call_window:
 sample_function_expr:
     SAMPLE '(' '*' ',' INTEGRAL ROWS ')'
     {
-	v := int($5.(int64))
+	value, ok := signedIntegral(yylex, $5)
+	if !ok { goto ret1 }
+	v := int(value)
 	val, err := tree.NewSampleRowsFuncExpression(v, true, nil, "block")
 	if err != nil {
 	    yylex.Error(err.Error())
@@ -13064,7 +13169,9 @@ sample_function_expr:
     }
 |   SAMPLE '(' '*' ',' INTEGRAL ROWS ',' STRING ')'
         {
-    	v := int($5.(int64))
+	value, ok := signedIntegral(yylex, $5)
+	if !ok { goto ret1 }
+	v := int(value)
     	val, err := tree.NewSampleRowsFuncExpression(v, true, nil, $8)
     	if err != nil {
     	    yylex.Error(err.Error())
@@ -13074,7 +13181,9 @@ sample_function_expr:
         }
 |   SAMPLE '(' '*' ',' INTEGRAL PERCENT ')'
     {
-	val, err := tree.NewSamplePercentFuncExpression1($5.(int64), true, nil)
+	value, ok := signedIntegral(yylex, $5)
+	if !ok { goto ret1 }
+	val, err := tree.NewSamplePercentFuncExpression1(value, true, nil)
 	if err != nil {
 	    yylex.Error(err.Error())
 	    goto ret1
@@ -13093,7 +13202,9 @@ sample_function_expr:
 |
     SAMPLE '(' expression_list ',' INTEGRAL ROWS ')'
     {
-    	v := int($5.(int64))
+	value, ok := signedIntegral(yylex, $5)
+	if !ok { goto ret1 }
+	v := int(value)
     	val, err := tree.NewSampleRowsFuncExpression(v, false, $3, "block")
     	if err != nil {
     	    yylex.Error(err.Error())
@@ -13103,7 +13214,9 @@ sample_function_expr:
     }
 |   SAMPLE '(' expression_list ',' INTEGRAL ROWS ',' STRING ')'
     {
-	v := int($5.(int64))
+	value, ok := signedIntegral(yylex, $5)
+	if !ok { goto ret1 }
+	v := int(value)
 	val, err := tree.NewSampleRowsFuncExpression(v, false, $3, $8)
 	if err != nil {
 	    yylex.Error(err.Error())
@@ -13113,7 +13226,9 @@ sample_function_expr:
     }
 |   SAMPLE '(' expression_list ',' INTEGRAL PERCENT ')'
     {
-        val, err := tree.NewSamplePercentFuncExpression1($5.(int64), false, $3)
+        value, ok := signedIntegral(yylex, $5)
+        if !ok { goto ret1 }
+        val, err := tree.NewSamplePercentFuncExpression1(value, false, $3)
         if err != nil {
             yylex.Error(err.Error())
             goto ret1
@@ -14421,6 +14536,7 @@ name_confict:
 |   HOUR
 |   IF
 |   FORMAT
+|   JSON_TABLE_EMPTY
 |   LEFT
 |   MICROSECOND
 |   MINUTE
@@ -15855,7 +15971,9 @@ timestamp_option_opt:
         }
 |    '(' INTEGRAL ')'
     {
-        $$ = int32($2.(int64))
+        value, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        $$ = int32(value)
     }
 
 length_option_opt:
@@ -15864,13 +15982,17 @@ length_option_opt:
     }
 |    '(' INTEGRAL ')'
     {
-        $$ = int32($2.(int64))
+        value, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        $$ = int32(value)
     }
 
 length:
    '(' INTEGRAL ')'
     {
-        $$ = tree.GetDisplayWith(int32($2.(int64)))
+        value, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        $$ = tree.GetDisplayWith(int32(value))
     }
 
 float_length_opt:
@@ -15883,16 +16005,22 @@ float_length_opt:
     }
 |   '(' INTEGRAL ')'
     {
+        value, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
+            DisplayWith: tree.GetDisplayWith(int32(value)),
             Scale: tree.NotDefineDec,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
     {
+        width, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        scale, ok := signedIntegral(yylex, $4)
+        if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
-            Scale: int32($4.(int64)),
+            DisplayWith: tree.GetDisplayWith(int32(width)),
+            Scale: int32(scale),
         }
     }
 
@@ -15906,16 +16034,22 @@ decimal_length_opt:
     }
 |   '(' INTEGRAL ')'
     {
+        value, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
+            DisplayWith: tree.GetDisplayWith(int32(value)),
             Scale: 0,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
     {
+        width, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        scale, ok := signedIntegral(yylex, $4)
+        if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
-            Scale: int32($4.(int64)),
+            DisplayWith: tree.GetDisplayWith(int32(width)),
+            Scale: int32(scale),
         }
     }
 
@@ -16149,6 +16283,11 @@ equal_opt:
 
 non_reserved_keyword:
     ACCOUNT
+|   JSON_TABLE_PATH
+|   JSON_TABLE_NESTED
+|   JSON_TABLE_ORDINALITY
+|   JSON_TABLE_EMPTY
+|   JSON_TABLE_ERROR
 |   ACCOUNTS
 |   AGAINST
 |   ALWAYS

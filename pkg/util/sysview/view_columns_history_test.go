@@ -31,6 +31,7 @@ func TestAdaptLegacyInformationSchemaColumnsDDL(t *testing.T) {
 		{"V46", InformationSchemaColumnsV46DDL, true},
 		{"V46 upgrade", InformationSchemaColumnsV46UpgradeDDL, true},
 		{"V58", InformationSchemaColumnsV58DDL(), true},
+		{"V100", InformationSchemaColumnsV100DDL(), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			adapted, ok := AdaptLegacyInformationSchemaColumnsDDL(tc.definition)
@@ -50,7 +51,16 @@ func TestAdaptLegacyInformationSchemaColumnsDDL(t *testing.T) {
 	}
 	adapted, ok := AdaptLegacyInformationSchemaColumnsDDL(InformationSchemaColumnsV58DDL())
 	require.True(t, ok)
-	require.Equal(t, InformationSchemaColumnsDDL, adapted)
+	// The current view knows native Unicode selector identities, while a
+	// persisted V58 definition must retain its historical projection.
+	require.NotEqual(t, InformationSchemaColumnsDDL, adapted)
+	require.NotContains(t, adapted, "WHEN 4 then")
+	require.NotContains(t, adapted, "WHEN 5 then")
+	adapted, ok = AdaptLegacyInformationSchemaColumnsDDL(InformationSchemaColumnsV100DDL())
+	require.True(t, ok)
+	require.Equal(t, InformationSchemaColumnsV100DDL(), adapted)
+	require.NotContains(t, adapted, "WHEN 4 then")
+	require.NotContains(t, adapted, "WHEN 5 then")
 	for _, unknown := range []string{"", "CREATE VIEW information_schema.COLUMNS AS SELECT 1", InformationSchemaColumnsDDL} {
 		adapted, ok := AdaptLegacyInformationSchemaColumnsDDL(unknown)
 		require.False(t, ok)
@@ -60,4 +70,9 @@ func TestAdaptLegacyInformationSchemaColumnsDDL(t *testing.T) {
 	require.True(t, IsCurrentInformationSchemaColumnsDDL(strings.Replace(InformationSchemaColumnsDDL,
 		"information_schema.COLUMNS", "information_schema.columns", 1)))
 	require.False(t, IsCurrentInformationSchemaColumnsDDL(InformationSchemaColumnsV58DDL()))
+	require.True(t, IsInformationSchemaColumnsMigrationDDL(InformationSchemaColumnsV100DDL()))
+	require.True(t, IsInformationSchemaColumnsMigrationDDL(strings.Replace(InformationSchemaColumnsV100DDL(),
+		"information_schema.COLUMNS", "information_schema.columns", 1)))
+	require.True(t, IsInformationSchemaColumnsMigrationDDL(InformationSchemaColumnsDDL))
+	require.False(t, IsInformationSchemaColumnsMigrationDDL(InformationSchemaColumnsV58DDL()))
 }

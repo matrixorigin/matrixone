@@ -64,6 +64,17 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 			require.NoError(t, db.QueryRowContext(ctx, statement).Scan(&value), statement)
 			return value
 		}
+		queryColumnCollation := func(table, column string) (string, string) {
+			t.Helper()
+			var charset, collation sql.NullString
+			require.NoError(t, db.QueryRowContext(ctx,
+				"select character_set_name, collation_name from information_schema.columns "+
+					"where table_schema=? and table_name=? and column_name=?",
+				schema, table, column).Scan(&charset, &collation))
+			require.True(t, charset.Valid, "character_set_name must be exposed for %s.%s", table, column)
+			require.True(t, collation.Valid, "collation_name must be exposed for %s.%s", table, column)
+			return charset.String, collation.String
+		}
 
 		exec("drop database if exists " + schema)
 		exec("create database " + schema)
@@ -91,6 +102,9 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 
 		exec("create table words (id int primary key, s varchar(64) collate utf8mb4_unicode_ci)")
 		exec("insert into words values (1,'Z'),(2,'a'),(3,'A'),(4,'b')")
+		charset, collation := queryColumnCollation("words", "s")
+		require.Equal(t, "utf8mb4", charset)
+		require.Equal(t, "utf8mb4_unicode_ci", collation)
 		require.Equal(t, 2, queryCount("select count(*) from words where lower(s)='a'"))
 		// Conditional and ordered string expressions must carry the native
 		// Unicode revision through their rebuilt result type. Include mixed-width
@@ -131,6 +145,9 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 		require.Equal(t, original, serialized)
 
 		exec("create table utf8mb3_write (s varchar(64) character set utf8mb3 collate utf8_unicode_ci)")
+		charset, collation = queryColumnCollation("utf8mb3_write", "s")
+		require.Equal(t, "utf8", charset)
+		require.Equal(t, "utf8_unicode_ci", collation)
 		_, err = db.ExecContext(ctx, "insert into utf8mb3_write values ('😀')")
 		require.Error(t, err)
 		_, err = db.ExecContext(ctx, "insert into utf8mb3_write values (unhex('30fbc130ffff20'))")

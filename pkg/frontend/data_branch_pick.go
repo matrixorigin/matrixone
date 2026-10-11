@@ -406,6 +406,8 @@ func extractPKAsString(
 // extractPKVal extracts the Go value from a vector at the given row index.
 func extractPKVal(vec *vector.Vector, rowIdx int) any {
 	switch vec.GetType().Oid {
+	case types.T_json:
+		return types.DecodeJson(vec.GetBytesAt(rowIdx))
 	case types.T_datetime, types.T_timestamp, types.T_year, types.T_decimal64,
 		types.T_decimal128, types.T_decimal256, types.T_time:
 		return types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
@@ -439,6 +441,18 @@ func extractPKVal(vec *vector.Vector, rowIdx int) any {
 		return vector.GetFixedAtNoTypeCheck[types.Uuid](vec, rowIdx)
 	case types.T_enum:
 		return vector.GetFixedAtNoTypeCheck[types.Enum](vec, rowIdx)
+	case types.T_array_float32:
+		return vector.GetArrayAt[float32](vec, rowIdx)
+	case types.T_array_float64:
+		return vector.GetArrayAt[float64](vec, rowIdx)
+	case types.T_array_bf16:
+		return vector.GetArrayAt[types.BF16](vec, rowIdx)
+	case types.T_array_float16:
+		return vector.GetArrayAt[types.Float16](vec, rowIdx)
+	case types.T_array_int8:
+		return vector.GetArrayAt[int8](vec, rowIdx)
+	case types.T_array_uint8:
+		return vector.GetArrayAt[uint8](vec, rowIdx)
 	default:
 		return vec.GetBytesAt(rowIdx)
 	}

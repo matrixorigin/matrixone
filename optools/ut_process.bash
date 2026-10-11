@@ -37,9 +37,15 @@ function ut_process_group_alive(){
     fi
     # Orphaned zombies may wait for the runner's init to reap them. They no
     # longer execute or retain descriptors/leases and must not block a wave.
-    local states
-    states=$(ps -eo pid=,pgid=,stat=) || return 0
-    awk -v owner="${pid}" '($1 == owner || $2 == owner) && $3 !~ /^Z/ { live=1 } END { exit !live }' <<< "${states}"
+    # Keep the snapshot in a foreground pipeline: group TERM can interrupt
+    # its processes without a nested command-substitution wait in the owner.
+    ps -eo pid=,pgid=,stat= |
+        awk -v owner="${pid}" '($1 == owner || $2 == owner) && $3 !~ /^Z/ { live=1 } END { exit !live }'
+    local -a probe_status=("${PIPESTATUS[@]}")
+    # A signal trap on Bash 3.2 can replace PIPESTATUS with one entry.
+    # An interrupted or failed snapshot cannot establish that the owner drained.
+    (( ${#probe_status[@]} == 2 && probe_status[0] == 0 && probe_status[1] <= 1 )) || return 0
+    return "${probe_status[1]}"
 }
 
 function wait_for_ut_process_group(){

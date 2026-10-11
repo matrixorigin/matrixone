@@ -121,8 +121,8 @@ type IndexUpdateStatus struct {
 
 func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bool, reason string, err error) error {
 
-	statussqlfmt := "UPDATE mo_catalog.mo_index_update SET status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s'"
-	updatesqlfmt := "UPDATE mo_catalog.mo_index_update SET last_update_at = now(), status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s'"
+	statussqlfmt := "UPDATE mo_catalog.mo_index_update SET status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s' AND index_name = '%s'"
+	updatesqlfmt := "UPDATE mo_catalog.mo_index_update SET last_update_at = now(), status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s' AND index_name = '%s'"
 
 	// skip update status if index is NOT updated
 	status := IndexUpdateStatus{Time: time.Now()}
@@ -150,7 +150,7 @@ func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bo
 
 	// update status
 	sql := fmt.Sprintf(sqlfmt,
-		string(bytes), t.TableId, t.AccountId, t.Action)
+		sqlquote.EscapeString(string(bytes)), t.TableId, t.AccountId, sqlquote.EscapeString(t.Action), sqlquote.EscapeString(t.IndexName))
 	res, err2 := runSaveStatusSql(sqlproc, sql)
 	if err2 != nil {
 		return err2

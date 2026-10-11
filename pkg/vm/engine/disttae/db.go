@@ -687,6 +687,9 @@ func parseSnapshotCheckpointEntries(
 			"", start, end, checkpoint.EntryType(entry.EntryType),
 		)
 		checkpointEntry.SetLocation(entry.Location1, entry.Location2)
+		if entry.Version != 0 {
+			checkpointEntry.SetVersion(entry.Version)
+		}
 		checkpointEntries = append(checkpointEntries, checkpointEntry)
 		if start.LT(&minTS) {
 			minTS = start

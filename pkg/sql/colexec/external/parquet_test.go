@@ -2039,10 +2039,12 @@ func TestParquetFloat32Overflow(t *testing.T) {
 	assertOverflow := func(t *testing.T, f *parquet.File, page parquet.Page) {
 		t.Helper()
 		vec := vector.NewVec(types.T_float32.ToType())
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_float32), NotNullable: true})
 		require.NotNil(t, mp)
 		require.ErrorContains(t, mp.mapping(page, proc, vec), "overflows FLOAT")
+		require.Zero(t, vec.Length())
 	}
 
 	for _, tc := range []struct {
@@ -2097,6 +2099,243 @@ func TestParquetFloat32Overflow(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, float32(value), converted)
 		}
+	})
+
+	t.Run("accepts infinities and NaN", func(t *testing.T) {
+		for _, value := range []float64{math.Inf(1), math.Inf(-1), math.NaN()} {
+			converted, err := parquetFloat64ToFloat32(context.Background(), value)
+			require.NoError(t, err)
+			if math.IsNaN(value) {
+				require.True(t, math.IsNaN(float64(converted)))
+			} else {
+				require.True(t, math.IsInf(float64(converted), int(math.Copysign(1, value))))
+			}
+		}
+	})
+}
+
+func TestParquetFloat32InfinityMapping(t *testing.T) {
+	proc := testutil.NewProc(t)
+	for _, tc := range []struct {
+		name       string
+		value      float64
+		dictionary bool
+		sign       int
+	}{
+		{name: "plain positive", value: math.Inf(1), sign: 1},
+		{name: "plain negative", value: math.Inf(-1), sign: -1},
+		{name: "dictionary positive", value: math.Inf(1), dictionary: true, sign: 1},
+		{name: "dictionary negative", value: math.Inf(-1), dictionary: true, sign: -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var f *parquet.File
+			var page parquet.Page
+			if tc.dictionary {
+				f, page = writeDictAndGetPage(t, parquet.Encoded(parquet.Leaf(parquet.DoubleType), &parquet.RLEDictionary), []parquet.Value{parquet.DoubleValue(tc.value)})
+			} else {
+				f, page = writeColumnAndGetPage(t, parquet.Leaf(parquet.DoubleType), []parquet.Row{{parquet.DoubleValue(tc.value).Level(0, 0, 0)}})
+			}
+			vec := vector.NewVec(types.T_float32.ToType())
+			t.Cleanup(func() { vec.Free(proc.Mp()) })
+			var h ParquetHandler
+			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_float32), NotNullable: true})
+			require.NotNil(t, mp)
+			require.NoError(t, mp.mapping(page, proc, vec))
+			got := vector.MustFixedColWithTypeCheck[float32](vec)
+			require.Len(t, got, 1)
+			require.True(t, math.IsInf(float64(got[0]), tc.sign))
+		})
+	}
+}
+
+func TestParquetBoundedVarlenMapping(t *testing.T) {
+	proc := testutil.NewProc(t)
+	t.Run("nested text width", func(t *testing.T) {
+		file := writeParquetFixture(t, parquet.Optional(parquet.Group{"v": parquet.Leaf(parquet.Int32Type)}), []parquet.Row{
+			{parquet.NullValue().Level(0, 0, 0)},
+			{parquet.Int32Value(123).Level(0, 1, 0)},
+		})
+		reader := file.RowGroups()[0].Rows()
+		t.Cleanup(func() { require.NoError(t, reader.Close()) })
+		rows := make([]parquet.Row, 2)
+		n, err := reader.ReadRows(rows)
+		require.True(t, err == nil || errors.Is(err, io.EOF))
+		require.Equal(t, 2, n)
+		for _, tc := range []struct {
+			name   string
+			target types.T
+			width  int32
+		}{
+			{"char rejects", types.T_char, 4},
+			{"varchar rejects", types.T_varchar, 4},
+			{"char exact width", types.T_char, 10},
+			{"varchar exact width", types.T_varchar, 10},
+			{"varchar wider", types.T_varchar, 32},
+			{"text", types.T_text, 0},
+			{"json", types.T_json, 0},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				dt := plan.Type{Id: int32(tc.target), Width: tc.width}
+				param := &ExternalParam{ExParamConst: ExParamConst{Cols: []*plan.ColDef{{Typ: dt}}}}
+				col := file.Root().Column("c")
+				h := &ParquetHandler{cols: []*parquet.Column{col}}
+				h.mappers = []*columnMapper{h.getNestedMapper(col, dt)}
+				bat := vectorBatch([]types.Type{types.New(tc.target, tc.width, 0)})
+				t.Cleanup(func() { bat.Clean(proc.Mp()) })
+				require.NoError(t, h.processRow(rows[0], bat, param, proc))
+				require.True(t, bat.Vecs[0].IsNull(0))
+				err := h.processRow(rows[1], bat, param, proc)
+				if tc.width == 4 {
+					require.ErrorContains(t, err, "Src length 10 is larger than Dest length 4")
+					require.Equal(t, 1, bat.Vecs[0].Length(), "reject before appending an invalid value")
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, 2, bat.Vecs[0].Length())
+				got := bat.Vecs[0].GetStringAt(1)
+				if tc.target == types.T_json {
+					got = types.DecodeJson(bat.Vecs[0].GetBytesAt(1)).String()
+				}
+				require.Equal(t, `{"v": 123}`, got)
+			})
+		}
+	})
+
+	t.Run("hybrid nested width failure rolls back chunk", func(t *testing.T) {
+		var buf bytes.Buffer
+		func() {
+			w := parquet.NewWriter(&buf, parquet.NewSchema("x", parquet.Group{
+				"c":  parquet.Group{"v": parquet.Leaf(parquet.Int32Type)},
+				"id": parquet.Leaf(parquet.Int32Type),
+			}))
+			defer func() { require.NoError(t, w.Close()) }()
+			_, err := w.WriteRows([]parquet.Row{
+				{parquet.Int32Value(0).Level(0, 0, 0), parquet.Int32Value(1).Level(0, 0, 1)},
+				{parquet.Int32Value(123).Level(0, 0, 0), parquet.Int32Value(2).Level(0, 0, 1)},
+			})
+			require.NoError(t, err)
+		}()
+		param := &ExternalParam{
+			ExParamConst: ExParamConst{
+				Ctx:      context.Background(),
+				Attrs:    []plan.ExternAttr{{ColName: "c", ColIndex: 0}, {ColName: "id", ColIndex: 1}},
+				Cols:     []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_varchar), Width: 8}}, {Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE, Format: tree.PARQUET, Data: buf.String()}},
+				FileSize: []int64{int64(buf.Len())},
+			},
+			ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+		}
+		reader := NewParquetReader(param, proc)
+		t.Cleanup(func() { require.NoError(t, reader.Close()) })
+		empty, err := reader.Open(param, proc)
+		require.NoError(t, err)
+		require.False(t, empty)
+		bat := vectorBatch([]types.Type{types.New(types.T_varchar, 8, 0), types.T_int32.ToType()})
+		t.Cleanup(func() { bat.Clean(proc.Mp()) })
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("seed"), false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32(-1), false, proc.Mp()))
+		bat.SetRowCount(1)
+		_, err = reader.ReadBatch(context.Background(), bat, proc, nil)
+		require.ErrorContains(t, err, "Src length 10 is larger than Dest length 8")
+		require.Len(t, reader.h.nestedColIndices, 1)
+		require.Len(t, reader.h.dataColIndices, 1)
+		require.Equal(t, 1, bat.Vecs[0].Length())
+		require.Equal(t, "seed", bat.Vecs[0].GetStringAt(0))
+		require.Equal(t, []int32{-1}, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[1]))
+	})
+
+	for _, dictionary := range []bool{false, true} {
+		for _, tc := range []struct {
+			name   string
+			target types.T
+			want   []byte
+		}{
+			{name: "binary", target: types.T_binary, want: []byte{'a', 'b', 0, 0}},
+			{name: "varbinary", target: types.T_varbinary, want: []byte{'a', 'b'}},
+			{name: "char", target: types.T_char, want: []byte{'a', 'b'}},
+			{name: "varchar", target: types.T_varchar, want: []byte{'a', 'b'}},
+		} {
+			t.Run(fmt.Sprintf("%s/dictionary=%t", tc.name, dictionary), func(t *testing.T) {
+				var f *parquet.File
+				var page parquet.Page
+				values := []parquet.Value{parquet.ByteArrayValue([]byte("ab"))}
+				if dictionary {
+					f, page = writeDictAndGetPage(t, parquet.Encoded(parquet.Leaf(parquet.String().Type()), &parquet.RLEDictionary), values)
+					require.NotNil(t, page.Dictionary())
+				} else {
+					f, page = writeColumnAndGetPage(t, parquet.Leaf(parquet.String().Type()), []parquet.Row{{values[0].Level(0, 0, 0)}})
+				}
+				vec := vector.NewVec(types.New(tc.target, 4, 0))
+				t.Cleanup(func() { vec.Free(proc.Mp()) })
+				var h ParquetHandler
+				mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(tc.target), Width: 4, NotNullable: true})
+				require.NotNil(t, mp)
+				require.NoError(t, mp.mapping(page, proc, vec))
+				require.Equal(t, tc.want, vec.GetBytesAt(0))
+			})
+		}
+	}
+
+	for _, dictionary := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rejects over-width/dictionary=%t", dictionary), func(t *testing.T) {
+			values := []parquet.Value{parquet.ByteArrayValue([]byte("ok")), parquet.ByteArrayValue([]byte("toolong"))}
+			var f *parquet.File
+			var page parquet.Page
+			if dictionary {
+				f, page = writeDictAndGetPage(t, parquet.Encoded(parquet.Leaf(parquet.String().Type()), &parquet.RLEDictionary), values)
+			} else {
+				f, page = writeColumnAndGetPage(t, parquet.Leaf(parquet.String().Type()), []parquet.Row{{values[0].Level(0, 0, 0)}, {values[1].Level(0, 0, 0)}})
+			}
+			vec := vector.NewVec(types.New(types.T_varchar, 4, 0))
+			t.Cleanup(func() { vec.Free(proc.Mp()) })
+			var h ParquetHandler
+			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_varchar), Width: 4, NotNullable: true})
+			require.NotNil(t, mp)
+			require.ErrorContains(t, mp.mapping(page, proc, vec), "Dest length 4")
+			require.Zero(t, vec.Length(), "page append must roll back after width failure")
+		})
+	}
+
+	t.Run("row mode uses the same semantics", func(t *testing.T) {
+		f, _ := writeColumnAndGetPage(t, parquet.Leaf(parquet.ByteArrayType), []parquet.Row{{parquet.ByteArrayValue([]byte("ab")).Level(0, 0, 0)}})
+		col := f.Root().Column("c")
+		for _, tc := range []struct {
+			target types.T
+			want   []byte
+		}{
+			{target: types.T_binary, want: []byte{'a', 'b', 0, 0}},
+			{target: types.T_varbinary, want: []byte{'a', 'b'}},
+		} {
+			vec := vector.NewVec(types.New(tc.target, 4, 0))
+			def := &plan.ColDef{Typ: plan.Type{Id: int32(tc.target), Width: 4}}
+			require.NoError(t, appendLeafValue(parquet.ByteArrayValue([]byte("ab")), col, vec, def, proc))
+			require.Equal(t, tc.want, vec.GetBytesAt(0))
+			vec.Free(proc.Mp())
+		}
+	})
+
+	t.Run("text width counts UTF-8 runes", func(t *testing.T) {
+		f, page := writeColumnAndGetPage(t, parquet.Leaf(parquet.String().Type()), []parquet.Row{{parquet.ByteArrayValue([]byte("你好")).Level(0, 0, 0)}})
+		vec := vector.NewVec(types.New(types.T_varchar, 2, 0))
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_varchar), Width: 2, NotNullable: true})
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []byte("你好"), vec.GetBytesAt(0))
+	})
+
+	t.Run("nullable and unbounded values keep their semantics", func(t *testing.T) {
+		f, page := writeColumnAndGetPage(t, parquet.Optional(parquet.Leaf(parquet.String().Type())), []parquet.Row{
+			{parquet.NullValue().Level(0, 0, 0)},
+			{parquet.ByteArrayValue([]byte("a very long value")).Level(0, 1, 0)},
+		})
+		vec := vector.NewVec(types.New(types.T_blob, 0, 0))
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_blob), NotNullable: false})
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []uint64{0}, vec.GetNulls().ToArray())
+		require.Equal(t, []byte("a very long value"), vec.GetBytesAt(1))
 	})
 }
 
@@ -2251,6 +2490,83 @@ func TestParquetTimestampMillisOverflowInFastPath(t *testing.T) {
 			err := mp.mapping(page, proc, vec)
 			require.ErrorContains(t, err, "overflows microseconds")
 			require.Zero(t, vec.Length())
+		})
+	}
+}
+
+func TestParquetStringSetAndYearMappings(t *testing.T) {
+	proc := testutil.NewProc(t)
+	t.Cleanup(func() {
+		bytes, objects := proc.Mp().OnHeapOutstanding()
+		require.Equal(t, [3]int64{}, [3]int64{proc.Mp().CurrNB(), bytes, objects})
+	})
+
+	fSet, pageSet := writeDictAndGetPage(t, parquet.String(), []parquet.Value{
+		parquet.ByteArrayValue([]byte("a,b")),
+		parquet.ByteArrayValue([]byte("b")),
+	})
+	var h ParquetHandler
+	setMapper := h.getMapper(fSet.Root().Column("c"), plan.Type{
+		Id:          int32(types.T_uint64),
+		Enumvalues:  "a,b,c",
+		NotNullable: true,
+	})
+	require.NotNil(t, setMapper)
+	setVec := vector.NewVec(types.T_uint64.ToType())
+	t.Cleanup(func() { setVec.Free(proc.Mp()) })
+	require.NoError(t, setMapper.mapping(pageSet, proc, setVec))
+	require.Equal(t, []uint64{3, 2}, vector.MustFixedColWithTypeCheck[uint64](setVec))
+
+	fYear, pageYear := writeDictAndGetPage(t, parquet.String(), []parquet.Value{
+		parquet.ByteArrayValue([]byte("2024")),
+		parquet.ByteArrayValue([]byte("0000")),
+	})
+	yearMapper := h.getMapper(fYear.Root().Column("c"), plan.Type{
+		Id:          int32(types.T_year),
+		NotNullable: true,
+	})
+	require.NotNil(t, yearMapper)
+	yearVec := vector.NewVec(types.T_year.ToType())
+	t.Cleanup(func() { yearVec.Free(proc.Mp()) })
+	require.NoError(t, yearMapper.mapping(pageYear, proc, yearVec))
+	require.Equal(t, []types.MoYear{2024, 0}, vector.MustFixedColWithTypeCheck[types.MoYear](yearVec))
+}
+
+func TestParquetStringSetPreservesWhitespace(t *testing.T) {
+	for _, dictionary := range []bool{false, true} {
+		t.Run(fmt.Sprint(dictionary), func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			t.Cleanup(func() {
+				bytes, objects := proc.Mp().OnHeapOutstanding()
+				require.Equal(t, [3]int64{}, [3]int64{proc.Mp().CurrNB(), bytes, objects})
+			})
+			node := parquet.Optional(parquet.String())
+			if dictionary {
+				node = parquet.Optional(parquet.Encoded(parquet.String(), &parquet.RLEDictionary))
+			}
+			rows := make([]parquet.Row, 0, 5)
+			for _, text := range []string{" a", "a", " a,a", ""} {
+				rows = append(rows, parquet.Row{parquet.ByteArrayValue([]byte(text)).Level(0, 1, 0)})
+			}
+			rows = append(rows, parquet.Row{parquet.NullValue().Level(0, 0, 0)})
+			f, page := writeColumnAndGetPage(t, node, rows)
+			var h ParquetHandler
+			mapper := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), Enumvalues: " a,a"})
+			require.NotNil(t, mapper)
+			vec := vector.NewVec(types.T_uint64.ToType())
+			t.Cleanup(func() { vec.Free(proc.Mp()) })
+			require.NoError(t, mapper.mapping(page, proc, vec))
+			require.Equal(t, []uint64{1, 2, 3, 0, 0}, vector.MustFixedColWithTypeCheck[uint64](vec))
+			require.Equal(t, 1, vec.GetNulls().Count())
+			require.True(t, vec.GetNulls().Contains(4))
+
+			// Numeric string conversions retain their existing whitespace policy.
+			f, page = writeColumnAndGetPage(t, node, []parquet.Row{{parquet.ByteArrayValue([]byte(" 42 ")).Level(0, 1, 0)}})
+			mapper = h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint64)})
+			require.NotNil(t, mapper)
+			vec.Reset(types.T_uint64.ToType())
+			require.NoError(t, mapper.mapping(page, proc, vec))
+			require.Equal(t, []uint64{42}, vector.MustFixedColWithTypeCheck[uint64](vec))
 		})
 	}
 }

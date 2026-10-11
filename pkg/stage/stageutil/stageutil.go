@@ -104,7 +104,7 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s stage.StageDef
 	cache := proc.GetStageCache()
 	s, ok := cache.Get(stagename)
 	if ok {
-		return s, nil
+		return cloneStageDef(s), nil
 	}
 
 	getAllStagesSql := fmt.Sprintf("select stage_id, stage_name, url, stage_credentials, stage_status from `%s`.`%s` WHERE stage_name = '%s';", "mo_catalog", "mo_stages", stagename)
@@ -150,8 +150,20 @@ func StageLoadCatalog(proc *process.Process, stagename string) (s stage.StageDef
 		return stage.StageDef{}, moerr.NewBadConfigf(context.TODO(), "Stage %s not found", stagename)
 	}
 
-	cache.Set(stagename, reslist[0])
-	return reslist[0], nil
+	// StageDef contains a pointer to url.URL. Keep the cached definition private
+	// from URL path joins performed during stage resolution and export filename
+	// expansion. A cached URL is shared by value copies of StageDef otherwise.
+	cached := cloneStageDef(reslist[0])
+	cache.Set(stagename, cached)
+	return cloneStageDef(cached), nil
+}
+
+func cloneStageDef(s stage.StageDef) stage.StageDef {
+	if s.Url != nil {
+		u := *s.Url
+		s.Url = &u
+	}
+	return s
 }
 
 func UrlToPath(furl string, proc *process.Process) (path string, query string, err error) {

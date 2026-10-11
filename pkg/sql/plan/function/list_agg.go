@@ -815,11 +815,6 @@ func typeInList(typ types.T, supported []types.T) bool {
 	return false
 }
 
-// mysqlNumericAggTypeCheck implements MySQL's numeric coercion for variance
-// and standard-deviation aggregates. JSON operands resolve to DOUBLE; SQL
-// binding supplies the aggregate warning conversion. Unlike SUM, these
-// aggregates also accept
-// string and temporal expressions and evaluate their numeric representation.
 // BIT's storage domain is unsigned, but its legacy aggregate state is not
 // widened. Bind through the existing UINT64 aggregate instead of changing the
 // interpretation of old BIT partial states or treating BIT width as precision.
@@ -839,6 +834,10 @@ func sumAvgTypeCheck(inputs []types.Type) checkResult {
 	if len(inputs) == 1 && isLowPrecFloat(inputs[0].Oid) {
 		return newCheckResultWithCast(0, []types.Type{types.T_float32.ToType()})
 	}
+	if len(inputs) == 1 && (inputs[0].Oid.IsMySQLString() || inputs[0].Oid.IsDateRelate()) {
+		return mysqlNumericAggTypeCheck(inputs)
+	}
+	// Preserve the existing numeric domains and bare NULL's UINT8 binding.
 	return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
 }
 
@@ -852,6 +851,9 @@ func minMaxTypeCheck(inputs []types.Type) checkResult {
 	return fixedUnaryAggTypeCheck(inputs, MinMaxSupportedTypes)
 }
 
+// mysqlNumericAggTypeCheck supplies the shared string and temporal numeric
+// domains for SUM/AVG and variance/standard-deviation aggregates. JSON resolves
+// to DOUBLE; SQL binding supplies its aggregate warning conversion.
 func mysqlNumericAggTypeCheck(inputs []types.Type) checkResult {
 	if len(inputs) != 1 {
 		return newCheckResultWithFailure(failedAggParametersWrong)
