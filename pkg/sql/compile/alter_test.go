@@ -226,7 +226,7 @@ func TestAlterTableHasLatestHistoricalBranchSourceUsesFreshUnlockedProbe(t *test
 	spyExec := &alterCopyInsertSpyExecutor{results: make(map[string]executor.Result)}
 	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
 	snapshotSQL := alterDataBranchHistoricalSnapshotSourceProbeSQL(
-		"", database, table, oldTableID, false,
+		"", database, table, oldTableID, false, 0,
 	)
 	spyExec.results[snapshotSQL] = newAlterCopyFixedResult(
 		t, c.proc.Mp(), types.T_int32.ToType(), []int32{1},
@@ -2574,8 +2574,8 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 		alterDataBranchParticipationSQL(1),
 		alterDataBranchHistoricalSnapshotSourceSQL("", "test", "dept", 1),
 		alterDataBranchHistoricalPitrSourceSQL("", "test", "dept", 1),
-		alterDataBranchHistoricalSnapshotSourceProbeSQL("", "test", "dept", 1, false),
-		alterDataBranchHistoricalPitrSourceProbeSQL("", "test", "dept", 1, false),
+		alterDataBranchHistoricalSnapshotSourceProbeSQL("", "test", "dept", 1, false, 0),
+		alterDataBranchHistoricalPitrSourceProbeSQL("", "test", "dept", 1, false, 0),
 		alterTable.CreateTmpTableSql,
 		alterCopyTestPkNullCheckSQL,
 		alterCopyTestPkDuplicateCheckSQL,
