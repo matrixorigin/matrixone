@@ -142,7 +142,7 @@ func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpochStateForProgressOwn
 	if fence == nil {
 		return InitialSnapshotEpochState{}, moerr.NewInternalError(ctx, "CDC snapshot epoch requires an owner fence")
 	}
-	if err := fence.Check(ctx); err != nil {
+	if err := u.checkOwnerFence(ctx, fence); err != nil {
 		return InitialSnapshotEpochState{}, err
 	}
 	return u.getOrCreateInitialSnapshotEpochState(
@@ -217,7 +217,7 @@ func (u *CDCWatermarkUpdater) getOrCreateInitialSnapshotEpochState(
 	if fence != nil {
 		insertSQL = CDCSQLBuilder.InsertSnapshotEpochOwnedSQL(key, sourceTableID, candidate, fence.GenerationToken())
 	}
-	if err := u.ie.Exec(
+	if err := u.execSQL(
 		persistCtx,
 		insertSQL,
 		ie.SessionOverrideOptions{},
@@ -267,12 +267,12 @@ func (u *CDCWatermarkUpdater) highestOtherInitialSnapshotGeneration(
 	readCtx, cancel := context.WithTimeoutCause(ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkRead)
 	defer cancel()
 	readCtx = defines.AttachAccountId(readCtx, catalog.System_Account)
-	res := u.ie.Query(
+	res, queryErr := u.querySQL(
 		readCtx,
 		CDCSQLBuilder.GetHighestOtherSnapshotGenerationSQL(key, sourceTableID),
 		ie.SessionOverrideOptions{},
 	)
-	if err := res.Error(); err != nil {
+	if err := queryErr; err != nil {
 		return 0, false, classifySnapshotEpochBackendError(err)
 	}
 	if res.RowCount() == 0 {
@@ -309,7 +309,7 @@ func (u *CDCWatermarkUpdater) DeleteInitialSnapshotGenerationsBefore(
 		ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkUpdate)
 	defer cancel()
 	deleteCtx = defines.AttachAccountId(deleteCtx, catalog.System_Account)
-	if err := u.ie.Exec(
+	if err := u.execSQL(
 		deleteCtx,
 		CDCSQLBuilder.DeleteSnapshotEpochGenerationsBeforeSQL(key, sourceTableID),
 		ie.SessionOverrideOptions{},
@@ -328,12 +328,12 @@ func (u *CDCWatermarkUpdater) readInitialSnapshotEpoch(
 		ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkRead)
 	defer cancel()
 	readCtx = defines.AttachAccountId(readCtx, catalog.System_Account)
-	res := u.ie.Query(
+	res, queryErr := u.querySQL(
 		readCtx,
 		CDCSQLBuilder.GetSnapshotEpochSQL(key, sourceTableID),
 		ie.SessionOverrideOptions{},
 	)
-	if err := res.Error(); err != nil {
+	if err := queryErr; err != nil {
 		return types.TS{}, false, classifySnapshotEpochBackendError(err)
 	}
 	if res.RowCount() == 0 {
