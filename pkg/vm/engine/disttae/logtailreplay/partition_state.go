@@ -567,42 +567,44 @@ func (p *PartitionState) handleTombstoneObjectEntry(
 		return
 	}
 
-	truncatePoint := objEntry.DeleteTime
+	// Durable checkpoint creations register the object but have no GC cutoff.
+	if !objEntry.DeleteTime.IsEmpty() {
+		truncatePoint := objEntry.DeleteTime
 
-	var deletedRow *RowEntry
-	var tbIter = p.inMemTombstoneRowIdIndex.Copy().Iter()
-	defer tbIter.Release()
+		var deletedRow *RowEntry
+		var tbIter = p.inMemTombstoneRowIdIndex.Copy().Iter()
+		defer tbIter.Release()
 
-	for ok := tbIter.Seek(&PrimaryIndexEntry{
-		Bytes: objEntry.ObjectName().ObjectId()[:],
-		Time:  types.MaxTs(),
-	}); ok; ok = tbIter.Next() {
-		if truncatePoint.LT(&tbIter.Item().Time) {
-			continue
-		}
+		for ok := tbIter.Seek(&PrimaryIndexEntry{
+			Bytes: objEntry.ObjectName().ObjectId()[:],
+			Time:  types.MaxTs(),
+		}); ok; ok = tbIter.Next() {
+			current := types.Objectid(tbIter.Item().Bytes)
+			if !objEntry.ObjectName().ObjectId().EQ(&current) {
+				break
+			}
+			if truncatePoint.LT(&tbIter.Item().Time) {
+				continue
+			}
 
-		current := types.Objectid(tbIter.Item().Bytes)
-		if !objEntry.ObjectName().ObjectId().EQ(&current) {
-			break
-		}
+			if deletedRow, exist = p.rows.Get(&RowEntry{
+				ID:      tbIter.Item().RowEntryID,
+				BlockID: tbIter.Item().BlockID,
+				RowID:   tbIter.Item().RowID,
+				Time:    tbIter.Item().Time,
+			}); !exist {
+				continue
+			}
 
-		if deletedRow, exist = p.rows.Get(&RowEntry{
-			ID:      tbIter.Item().RowEntryID,
-			BlockID: tbIter.Item().BlockID,
-			RowID:   tbIter.Item().RowID,
-			Time:    tbIter.Item().Time,
-		}); !exist {
-			continue
-		}
-
-		p.rows.Delete(deletedRow)
-		p.inMemTombstoneRowIdIndex.Delete(tbIter.Item())
-		if len(deletedRow.PrimaryIndexBytes) > 0 {
-			p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
-				Bytes:      deletedRow.PrimaryIndexBytes,
-				RowEntryID: deletedRow.ID,
-				Time:       deletedRow.Time,
-			})
+			p.rows.Delete(deletedRow)
+			p.inMemTombstoneRowIdIndex.Delete(tbIter.Item())
+			if len(deletedRow.PrimaryIndexBytes) > 0 {
+				p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
+					Bytes:      deletedRow.PrimaryIndexBytes,
+					RowEntryID: deletedRow.ID,
+					Time:       deletedRow.Time,
+				})
+			}
 		}
 	}
 
@@ -864,13 +866,12 @@ func (p *PartitionState) HandleTombstoneObjectList(
 			Bytes: objEntry.ObjectName().ObjectId()[:],
 			Time:  types.MaxTs(),
 		}); ok; ok = tbIter.Next() {
-			if truncatePoint.LT(&tbIter.Item().Time) {
-				continue
-			}
-
 			current := types.Objectid(tbIter.Item().Bytes)
 			if !objEntry.ObjectName().ObjectId().EQ(&current) {
 				break
+			}
+			if truncatePoint.LT(&tbIter.Item().Time) {
+				continue
 			}
 
 			if deletedRow, exist = p.rows.Get(&RowEntry{
