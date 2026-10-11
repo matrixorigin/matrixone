@@ -16,7 +16,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -25,7 +24,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"math/big"
 	"os"
@@ -279,72 +277,8 @@ func run(ctx context.Context, cfg configuration, spec runSpec) (out output, err 
 	if err != nil {
 		return out, err
 	}
-	defer rows.Close()
-	columns, err := rows.ColumnTypes()
+	out.Result, out.FirstRow, err = drainResult(rows, file, spec.SpoolBudget, started)
 	if err != nil {
-		return out, err
-	}
-	if len(columns) == 0 || len(columns) > 1024 {
-		return out, errors.New("invalid public column count")
-	}
-	schema := make([]publicColumn, len(columns))
-	raw := make([]sql.RawBytes, len(columns))
-	arguments := make([]any, len(columns))
-	for index, column := range columns {
-		entry := publicColumn{Name: column.Name(), SQLType: column.DatabaseTypeName()}
-		entry.Nullable, entry.NullableKnown = column.Nullable()
-		entry.Precision, entry.Scale, entry.DecimalKnown = column.DecimalSize()
-		schema[index] = entry
-		arguments[index] = &raw[index]
-	}
-	hasher := sha256.New()
-	writer := bufio.NewWriterSize(io.MultiWriter(file, hasher), 64<<10)
-	var rowCount uint64
-	var byteCount int64
-	for rows.Next() {
-		if out.FirstRow == nil {
-			first := time.Since(started).Seconds()
-			out.FirstRow = &first
-		}
-		if err = rows.Scan(arguments...); err != nil {
-			return out, err
-		}
-		values := make([]cell, len(columns))
-		for index := range raw {
-			values[index], err = encodeCell(schema[index], raw[index])
-			if err != nil {
-				return out, err
-			}
-		}
-		encoded, marshalErr := json.Marshal(values)
-		if marshalErr != nil {
-			return out, marshalErr
-		}
-		if len(encoded) > maxRowBytes || int64(len(encoded)+1) > spec.SpoolBudget-byteCount {
-			return out, errors.New("row or spool quota exceeded")
-		}
-		if _, err = writer.Write(encoded); err != nil {
-			return out, err
-		}
-		if err = writer.WriteByte('\n'); err != nil {
-			return out, err
-		}
-		rowCount++
-		byteCount += int64(len(encoded) + 1)
-	}
-	if err = rows.Err(); err != nil {
-		return out, err
-	}
-	if rows.NextResultSet() {
-		return out, errors.New("unexpected additional result set")
-	}
-	if err = rows.Err(); err != nil {
-		return out, err
-	}
-	if err = rows.Close(); err != nil {
-		return out, err
-	}
-	if err = writer.Flush(); err != nil {
 		return out, err
 	}
 	if err = file.Close(); err != nil {
@@ -355,7 +289,7 @@ func run(ctx context.Context, cfg configuration, spec runSpec) (out output, err 
 		return out, err
 	}
 	out.SchemaVersion, out.Sequence, out.Route = 2, spec.Sequence, spec.Route
-	out.Result = resultDescriptor{Schema: schema, Rows: rowCount, Spool: name, Bytes: byteCount, SHA256: hex.EncodeToString(hasher.Sum(nil))}
+	out.Result.Spool = name
 	return out, nil
 }
 

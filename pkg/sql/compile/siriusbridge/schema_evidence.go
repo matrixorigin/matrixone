@@ -32,7 +32,7 @@ type ColumnEvidence struct {
 }
 
 // SchemaEvidence shares the existing embedded digest with the independently
-// executed native-MO result owner. It performs no native work or allocation.
+// executed native-MO result owner. It makes no native calls.
 func SchemaEvidence(columns []Column) ([]ColumnEvidence, string, error) {
 	if len(columns) == 0 || len(columns) > maxColumns {
 		return nil, "", moerr.NewInvalidInputNoCtx("campaign schema column bound exceeded")

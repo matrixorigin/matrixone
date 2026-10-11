@@ -185,3 +185,80 @@ Readiness requires all exact/public/cleanup/resource/sanitizer/performance gates
 matched Native A/B/current baselines and required CI/reviewer approval. The
 known cuDF pinned-pool and CUB reports remain to be reconciled. D stays draft
 until that proof is terminal. E/F and Docker work remain excluded.
+
+## Implementation and execution
+
+Version 2 requires Python 3.11 or newer and the public Go consumer at
+`cmd/mo-sirius-campaign`. `optools/sirius_campaign.py serve` creates separate
+LOG/TN/CN roles in a private workspace for loading. Preserve that workspace's
+configuration and durable data across subsequent runs. Provision each scale
+with `optools/sirius_dataset.py` and the runner's `load` command. The load report
+checks each source CSV and compares the loaded table's typed row multiset with
+the generator; a matching row count alone is insufficient.
+
+Use `sirius_campaign.py freeze` with the source root, packaged service, runner,
+dataset directory and both load reports to capture actual source/binary/SDK,
+hardware and toolchain identities. Credentials remain in private `runner.json`.
+`run` consumes that frozen provenance and an empty output directory; add
+`--resource` for the separate allocation campaign. Run serially, without
+concurrent builds, GPU tests or dataset writes. The controller owns service
+shutdown and deletes invocation-owned row spools and raw trace/log workspaces.
+Its retained artifacts include safe run records, CSV repetitions, Markdown
+timing tables and resource summaries.
+
+Each resource configuration runs an excluded complete warmup suite and a final
+Q1 cleanup probe. Existing native tagged pool snapshots remain distinct from
+Nsight physical allocation/free events and PID sampling. Native pool peak tags
+are lifetime high-water marks; they are never presented as query-only peaks.
+Nsight exports normalize timestamps to the Unix epoch before matching bounded
+runner intervals. Allocation tracing must start with CN and report complete
+CUDA collection. Native MO GPU/pinned query measurements remain N/A.
+
+The owned CN admits one GPU query at a time. MO's public UUID and the native
+engine's independently minted UUID are distinct; complete, consecutive native
+window accounting attributes existing pool tags by admission order. QueryEnd
+is logged before the embedded engine/plan destruction. Preserve that snapshot;
+when it retains GPU bytes, require the actual successor window's idle begin to
+show zero allocated/reserved bytes after public drain/close. Never relabel the
+earlier snapshot as zero or accept an unidentified successor.
+
+Nsight launches through a private PID/start-generation record written before
+exec. The controller also owns an outer subreaper, so it joins escaped runner
+descendants if the inner worker dies. It publishes full campaign artifacts only
+after all owned roles and descendants quiesce. Exception diagnostics include
+only a fixed stage, sequence and repository source line, with no error body.
+Allocation capture disables optional all-API and device-event tracing. Private
+profile workspaces have a separate 48 GiB cap, including profiler intermediates;
+each exported SQLite trace is bounded to 16 GiB and parsed with an 8 MiB cache.
+The first SF1 capture contained 2.55 million memory events and a 717 MiB SQLite
+export; the separate trace bounds allow the required tenfold scale. Go's direct
+`exit_group` skips native atexit finalizers and leaves Nsight's CUDA trace
+incomplete. Allocation profiling runs the unchanged packaged service under the
+bounded GDB exit wrapper in `optools/sirius_profile_exit.gdb`. It validates the
+linux/amd64 runtime exit instruction sequence, preserves nonzero exits, and
+invokes libc exit after successful Go shutdown so native finalizers flush CUDA.
+This is profiling-only; the 744 timing executions remain uninstrumented. The
+wrapper participates in the frozen collector hash. Nsight discards environment
+snapshots. The physical scope covers CN startup through process destruction.
+Reject CUDA/CUPTI completeness warnings for that PID or global scope;
+unrelated traced child processes cannot invalidate PID-scoped measurements.
+The result/comparison scratch quota remains 4 GiB. Unprovisioned Flight profiles
+are declared N/A before execution.
+
+The 64 MiB native input windows apply to each binding; aggregate input credit
+across several bindings can exceed 64 MiB. Bindings are limited to sixteen.
+Shared CTE execution revealed that the native importer inlines reference
+relations while MO input queues are destructive. The compiler now gives each
+inlined occurrence an independent reader on the same statement snapshot,
+without changing canonical SQL or Flight's shared-step behavior. Expansion has
+node, depth and reader bounds and preserves the caller's plan. Sirius #30 also
+preserves retained VARCHAR identity casts and rejects reused/unreachable MO
+inputs before native work starts. The release pin remains merged code; unmerged
+development validation is explicitly labeled and cannot satisfy final acceptance.
+
+`optools/sirius_acceptance.py` combines complete timing/resource records with
+actual lifecycle, sanitizer and matched numeric baseline evidence. Missing,
+partial, changed or misattributed evidence fails closed. Passing local gates
+sets `local_acceptance_complete`; required CI and reviewer approval still gate
+final acceptance. The current implementation does not infer those decisions
+from a local test or an incomplete run.
