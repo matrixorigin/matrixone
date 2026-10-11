@@ -8,8 +8,8 @@ select * from em_csv;
 internal error: the input value 'notanint' is not int32 type for column 0
 desc em_csv;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-s  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+s  ¦  varchar(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
 show create table em_csv;
 ➤ Table[12,6,0]  ¦  Create Table[12,249,0]  𝄀
 em_csv  ¦  CREATE EXTERNAL TABLE `em_csv` (

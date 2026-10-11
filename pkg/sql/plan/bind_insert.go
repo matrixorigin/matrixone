@@ -4742,7 +4742,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		return 0, nil, nil, -1, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
 	}
 
-	if err = builder.addBinding(lastNodeID, tree.AliasClause{Alias: derivedTableName}, bindCtx); err != nil {
+	if err = builder.addBinding(lastNodeID, tree.AliasClause{Alias: derivedTableName}, bindCtx, ""); err != nil {
 		return 0, nil, nil, -1, err
 	}
 
@@ -5740,7 +5740,7 @@ func (builder *QueryBuilder) buildValueScan(
 		Uuid:        nodeId[:],
 	}
 	nodeID := builder.appendNode(scanNode, bindCtx)
-	if err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, bindCtx); err != nil {
+	if err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, bindCtx, ""); err != nil {
 		return 0, nil, err
 	}
 
