@@ -1164,7 +1164,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 								return err
 							}
 						}
-						deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, oTableDef.TblId, indexdef.IndexName)
+						deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, oTableDef.TblId, sqlquote.String(indexdef.IndexName))
 						if err = c.runSqlWithOptions(
 							deleteSql, executor.StatementOption{}.WithDisableLog(),
 						); err != nil {
@@ -3555,7 +3555,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 	}
 
 	// 4. delete index object from mo_catalog.mo_indexes
-	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.proc.Ctx), qry.IndexName)
+	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.proc.Ctx), sqlquote.String(qry.IndexName))
 	err = c.runSqlWithOptions(
 		deleteSql, executor.StatementOption{}.WithDisableLog(),
 	)

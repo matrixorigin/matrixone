@@ -184,7 +184,7 @@ var (
 	deleteMoIndexesWithTableIdFormat             = `delete from mo_catalog.mo_indexes where table_id = %v;`
 	deleteMoRolePrivsWithObjectIdFormat          = `delete from mo_catalog.mo_role_privs where obj_id = %d;`
 	deleteMoRolePrivsWithDatabaseIdFormat        = `delete from mo_catalog.mo_role_privs where obj_id = %d or obj_id in (select rel_logical_id from mo_catalog.mo_tables where account_id = %d and reldatabase_id = %d);`
-	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
+	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = %s;`
 	updateMoIndexesVisibleFormat                 = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
 	updateMoIndexesAlgoParams                    = `update mo_catalog.mo_indexes set algo_params = '%s' where table_id = %v and name = '%s';`
 	updateMoMergeSettings                        = `update mo_catalog.mo_merge_settings set tid = %v where account_id = %v and tid = %v;`
