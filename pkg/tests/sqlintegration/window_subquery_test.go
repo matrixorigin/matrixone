@@ -71,6 +71,28 @@ func TestWindowScalarSubqueryInputs(t *testing.T) {
 			require.NoError(t, rows.Err(), s)
 			return got
 		}
+		t.Run("scalar_assignment_contract", func(t *testing.T) {
+			exec("set @scalar_arity_control=42")
+			for _, s := range []string{
+				"set @scalar_arity_control=(select 1,2)",
+				"set @scalar_arity_control=(select id,v from src where id=99)",
+				"set @scalar_arity_control=(select id,v from src where id=2)",
+				"set @scalar_arity_control=(select id,v from src)",
+			} {
+				_, e := db.ExecContext(ctx, s)
+				require.ErrorContains(t, e, "subquery should return 1 column", s)
+				require.Equal(t, []string{"42"}, query(t, "select @scalar_arity_control"))
+			}
+			exec("set @scalar_arity_control=(select v from src where id=99)")
+			require.Equal(t, []string{"1"}, query(t, "select @scalar_arity_control is null"))
+			exec("set @scalar_arity_control=(select v from src where id=2)")
+			require.Equal(t, []string{"30"}, query(t, "select @scalar_arity_control"))
+			_, e := db.ExecContext(ctx, "set @scalar_arity_control=(select v from src)")
+			require.ErrorContains(t, e, "Subquery returns more than 1 row")
+			require.Equal(t, []string{"30"}, query(t, "select @scalar_arity_control"))
+			require.Equal(t, []string{"1:1:1"}, query(t,
+				"select (1,2)=(select 1,2),(2,30)=(select id,v from src where id=2),exists(select id,v from src)"))
+		})
 		// Compare partition membership and complete row-number sets, not arbitrary tie winners.
 		for _, key := range []string{"(select null)", "(select 1)", "coalesce((select 1),0)", "(select max(v) from src)", "null", "cast(null as int)", "1", "id"} {
 			t.Run("constant_peers/"+key, func(t *testing.T) {

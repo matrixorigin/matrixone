@@ -1947,15 +1947,30 @@ func TestWindowScalarInputsAreLowered(t *testing.T) {
 	}
 }
 
-func TestWindowScalarInputsRejectMultipleColumns(t *testing.T) {
+func TestScalarInputsRejectMultipleColumns(t *testing.T) {
 	for _, sql := range []string{
+		"select (select 1,2)",
+		"select (select n_nationkey,n_regionkey from nation limit 1)",
 		"select row_number() over(order by (select 1,2)) from nation",
 		"select row_number() over(partition by (select 1,2)) from nation",
+		"select row_number() over(order by (select n_nationkey,n_regionkey from nation limit 1)) from nation",
 	} {
 		ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 		stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		_, err = BuildPlan(ctx, stmts[0], false)
 		require.ErrorContains(t, err, "subquery should return 1 column")
+	}
+	// Multi-column row comparisons and EXISTS do not consume a scalar value.
+	for _, sql := range []string{
+		"select (1,2)=(select 1,2)",
+		"select (1,2)=(select n_nationkey,n_regionkey from nation limit 1)",
+		"select exists(select n_nationkey,n_regionkey from nation)",
+	} {
+		ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+		stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		_, err = BuildPlan(ctx, stmts[0], false)
+		require.NoError(t, err, sql)
 	}
 }
