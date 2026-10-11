@@ -72,8 +72,6 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 				t.Setenv("mo_admin_user", recoveryAdminUser)
 				t.Setenv("mo_admin_password", "111")
 			}
-			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
-			defer cancel()
 			started := time.Now()
 			c, err := NewCluster(WithTesting(), WithCNCount(cnCount), WithPreStart(func(svc ServiceOperator) {
 				adjustBasicClusterService(svc)
@@ -90,6 +88,10 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.NoError(t, c.Start())
+			// Admission and initial startup have their own lifecycle; the SQL
+			// recovery budget starts once the fixture is available.
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+			defer cancel()
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
 			func() {
