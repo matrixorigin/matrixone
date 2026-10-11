@@ -18,7 +18,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/monlp/llm"
 	"github.com/stretchr/testify/require"
+	"go.starlark.net/starlark"
 )
 
 // Non-string @llm_* session variables must produce an error, not a Go
@@ -67,4 +69,36 @@ func TestStarlarkLLMGetVarValidatesSessionVariableType(t *testing.T) {
 		_, err = si.llmConnect("", "", "", "")
 	})
 	require.Error(t, err)
+}
+
+func TestStarlarkLLMFailedConnectionCanBeRetried(t *testing.T) {
+	for _, explicit := range []bool{true, false} {
+		t.Run(map[bool]string{true: "explicit reconnect", false: "implicit chat"}[explicit], func(t *testing.T) {
+			ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+			si := &starlarkInterpreter{interp: &Interpreter{ctx: context.Background(), ses: ses}}
+			require.NoError(t, ses.SetUserDefinedVar("llm_model", nil, "set @llm_model = NULL"))
+			if explicit {
+				client, err := llm.NewLLMClient("", "", "echo", "")
+				require.NoError(t, err)
+				si.llm = client
+				ret, err := si.moLlmConnect(nil, nil, starlark.Tuple{starlark.String(""), starlark.String(""), starlark.String(""), starlark.String("")}, nil)
+				require.NoError(t, err)
+				require.Contains(t, ret.(*starlark.List).Index(1).String(), "invalid model")
+				require.True(t, si.llm == nil)
+			}
+			prompt := starlark.Tuple{starlark.String(`[{"role":"user","content":"ok"}]`)}
+			for i := 0; i < 2; i++ {
+				ret, err := si.moLlmChat(nil, nil, prompt, nil)
+				require.NoError(t, err)
+				require.Equal(t, starlark.None, ret.(*starlark.List).Index(0))
+				require.Contains(t, ret.(*starlark.List).Index(1).String(), "invalid model")
+				require.True(t, si.llm == nil)
+			}
+			require.NoError(t, ses.SetUserDefinedVar("llm_model", "echo", "set @llm_model = 'echo'"))
+			ret, err := si.moLlmChat(nil, nil, prompt, nil)
+			require.NoError(t, err)
+			require.Equal(t, starlark.String("ok"), ret.(*starlark.List).Index(0))
+			require.Equal(t, starlark.None, ret.(*starlark.List).Index(1))
+		})
+	}
 }

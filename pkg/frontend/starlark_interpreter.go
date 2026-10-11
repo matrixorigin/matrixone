@@ -452,7 +452,6 @@ func (si *starlarkInterpreter) llmConnect(server, addr, model, options string) (
 
 func (si *starlarkInterpreter) moLlmConnect(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	si.beginCall()
-	var err error
 	var server, addr, model, options string
 	var ret = []starlark.Value{starlark.None, starlark.None}
 	if err := starlark.UnpackPositionalArgs("llm_connect", args, kwargs, 3, &server, &addr, &model, &options); err != nil {
@@ -460,17 +459,18 @@ func (si *starlarkInterpreter) moLlmConnect(thread *starlark.Thread, b *starlark
 		return starlark.NewList(ret), nil
 	}
 
-	si.llm, err = si.llmConnect(server, addr, model, options)
+	client, err := si.llmConnect(server, addr, model, options)
 	if err != nil {
+		si.llm = nil
 		ret[1] = si.failed(err)
 		return starlark.NewList(ret), nil
 	}
+	si.llm = client
 	return starlark.NewList(ret), nil
 }
 
 func (si *starlarkInterpreter) moLlmChat(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	si.beginCall()
-	var err error
 	var prompt string
 	var ret = []starlark.Value{starlark.None, starlark.None}
 	if err := starlark.UnpackPositionalArgs("llm_chat", args, kwargs, 1, &prompt); err != nil {
@@ -479,11 +479,12 @@ func (si *starlarkInterpreter) moLlmChat(thread *starlark.Thread, b *starlark.Bu
 	}
 
 	if si.llm == nil {
-		si.llm, err = si.llmConnect("", "", "", "")
+		client, err := si.llmConnect("", "", "", "")
 		if err != nil {
 			ret[1] = si.failed(err)
 			return starlark.NewList(ret), nil
 		}
+		si.llm = client
 	}
 
 	reply, err := si.llm.Chat(si.interp.ctx, prompt)
