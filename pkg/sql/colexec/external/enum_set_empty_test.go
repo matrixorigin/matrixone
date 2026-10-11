@@ -15,6 +15,7 @@
 package external
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,60 +28,102 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func enumSetLoadParam(typ plan.Type, mode string) *ExternalParam {
+	param := decimal256ExternalParam(tree.CSV, "", typ)
+	param.Extern.ExternType = int32(plan.ExternType_LOAD)
+	switch mode {
+	case "parallel":
+		param.ParallelLoad = true
+	case "local-nonstrict":
+		param.Extern.Local = true
+		param.StrictSqlMode = false
+	}
+	return param
+}
+
 // An empty ENUM member and an empty SET are valid values that must not be
 // loaded as NULL (issue #29840); explicit NULL markers still load as NULL.
+// SET is stored as uint64 but must not be zero-filled or numeric-prefixed, and
+// a declared whitespace ENUM member must not be trimmed into another member.
 func TestGetColDataKeepsEmptyEnumAndSetDistinctFromNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	for _, tc := range []struct {
-		name   string
-		typ    plan.Type
-		vecTyp types.Type
-		want   func(*vector.Vector) any
-		empty  any
-	}{
-		{
-			name:   "enum",
-			typ:    plan.Type{Id: int32(types.T_enum), Enumvalues: "red,中文,"},
-			vecTyp: types.T_enum.ToType(),
-			want:   func(v *vector.Vector) any { return vector.MustFixedColWithTypeCheck[types.Enum](v)[0] },
-			empty:  types.Enum(3),
-		},
-		{
-			name:   "set",
-			typ:    plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,中文"},
-			vecTyp: types.T_uint64.ToType(),
-			want:   func(v *vector.Vector) any { return vector.MustFixedColWithTypeCheck[uint64](v)[0] },
-			empty:  uint64(0),
-		},
-	} {
-		for _, format := range []string{tree.CSV, tree.JSONLINE} {
-			t.Run(tc.name+"/"+format, func(t *testing.T) {
-				param := decimal256ExternalParam(format, tree.OBJECT, tc.typ)
-				for _, field := range []csvparser.Field{{Val: ""}, {Val: " "}} {
-					bat := batch.NewWithSize(1)
-					bat.Vecs[0] = vector.NewVec(tc.vecTyp)
-					require.NoError(t, getColData(bat, []csvparser.Field{field}, 0, param, proc.Mp(), param.Attrs[0], proc))
-					require.False(t, bat.Vecs[0].GetNulls().Contains(0), "empty value %q loaded as NULL", field.Val)
-					require.Equal(t, tc.empty, tc.want(bat.Vecs[0]))
-					bat.Clean(proc.Mp())
-				}
-
+	enumTyp := plan.Type{Id: int32(types.T_enum), Enumvalues: " ,red,"}
+	setTyp := plan.Type{Id: int32(types.T_uint64), Enumvalues: "0,a"}
+	for _, mode := range []string{"strict", "parallel", "local-nonstrict"} {
+		for _, tc := range []struct {
+			typ  plan.Type
+			val  string
+			want any // Enum / uint64, or the raw text under parallel load
+		}{
+			{enumTyp, " ", types.Enum(1)},
+			{enumTyp, "", types.Enum(3)},
+			{enumTyp, " red ", types.Enum(2)},
+			{setTyp, "", uint64(0)},
+			{setTyp, " ", uint64(0)},
+			{setTyp, "a", uint64(2)},
+			{setTyp, "0", uint64(1)},
+		} {
+			param := enumSetLoadParam(tc.typ, mode)
+			vecTyp := types.T(tc.typ.Id).ToType()
+			if mode == "parallel" {
+				vecTyp = types.T_varchar.ToType()
+			}
+			for _, field := range []csvparser.Field{{Val: tc.val}, {IsNull: true}} {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(tc.vecTyp)
-				require.NoError(t, getColData(bat, []csvparser.Field{{IsNull: true}}, 0, param, proc.Mp(), param.Attrs[0], proc))
-				require.True(t, bat.Vecs[0].GetNulls().Contains(0))
+				bat.Vecs[0] = vector.NewVec(vecTyp)
+				require.NoError(t, getColData(bat, []csvparser.Field{field}, 0, param, proc.Mp(), param.Attrs[0], proc))
+				vec := bat.Vecs[0]
+				name := mode + "/" + tc.typ.Enumvalues + "/" + tc.val
+				if field.IsNull {
+					require.True(t, vec.GetNulls().Contains(0), name)
+				} else {
+					require.False(t, vec.GetNulls().Contains(0), name)
+					switch {
+					case mode == "parallel":
+						// the text is cast by the type parser later; it must
+						// reach it unchanged except for non-member trimming
+						got := vec.GetStringAt(0)
+						_, isSet := tc.want.(uint64)
+						if isSet {
+							require.Equal(t, strings.TrimSpace(tc.val), got, name)
+						} else if tc.val == " red " {
+							require.Equal(t, "red", got, name)
+						} else {
+							require.Equal(t, tc.val, got, name)
+						}
+					case tc.typ.Id == int32(types.T_enum):
+						require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[types.Enum](vec)[0], name)
+					default:
+						require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[uint64](vec)[0], name)
+					}
+				}
 				bat.Clean(proc.Mp())
-			})
+			}
 		}
 	}
 
 	// ENUM without a declared '' member keeps the previous behavior (NULL).
-	param := decimal256ExternalParam(tree.CSV, "", plan.Type{Id: int32(types.T_enum), Enumvalues: "red,blue"})
+	param := enumSetLoadParam(plan.Type{Id: int32(types.T_enum), Enumvalues: "red,blue"}, "strict")
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_enum.ToType())
 	defer bat.Clean(proc.Mp())
 	require.NoError(t, getColData(bat, []csvparser.Field{{Val: ""}}, 0, param, proc.Mp(), param.Attrs[0], proc))
 	require.True(t, bat.Vecs[0].GetNulls().Contains(0))
+}
+
+func TestIsEnumMember(t *testing.T) {
+	for _, tc := range []struct {
+		def, name string
+		want      bool
+	}{
+		{" ,red,", " ", true}, {" ,red,", "", true}, {" ,red,", "RED", true},
+		{"red,blue", "", false}, {"red,blue", "blue", true}, {"red,blue", " red", false},
+		{"", "", false}, {",", "", true},
+	} {
+		require.Equal(t, tc.want, isEnumMember(tc.def, tc.name), "%q in %q", tc.name, tc.def)
+	}
+	// the empty-to-NULL decision runs per row and must not allocate
+	require.Zero(t, testing.AllocsPerRun(100, func() { isEnumMember("red,green,blue", "") }))
 }

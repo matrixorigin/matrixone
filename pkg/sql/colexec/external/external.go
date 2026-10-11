@@ -1151,18 +1151,23 @@ func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 	return false
 }
 
-// isValidEmptyEnumOrSet reports whether "" is a valid value for the column:
-// always for SET (stored as uint64 with member values), and for ENUM only
-// when the empty string is a declared member.
-func isValidEmptyEnumOrSet(id types.T, enumValues string) bool {
-	switch {
-	case id == types.T_uint64 && len(enumValues) > 0:
-		return true
-	case id == types.T_enum:
-		_, err := types.ParseEnum(enumValues, "")
-		return err == nil
+// isEnumMember reports, without allocating, whether name is a declared member
+// of the ENUM definition, using the same comma split and case folding as
+// types.ParseEnum.
+func isEnumMember(enumValues, name string) bool {
+	if len(enumValues) == 0 {
+		return false
 	}
-	return false
+	for {
+		i := strings.IndexByte(enumValues, ',')
+		if i < 0 {
+			return strings.EqualFold(enumValues, name)
+		}
+		if strings.EqualFold(enumValues[:i], name) {
+			return true
+		}
+		enumValues = enumValues[i+1:]
+	}
 }
 
 func shouldLoadEmptyNumericAsZero(param *ExternalParam, id types.T) bool {
@@ -1577,6 +1582,10 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	}
 	field := getFieldFromLine(line, colName, colId, param, fieldIdx)
 	id := types.T(col.Typ.Id)
+	// SET is stored as uint64 but is a logical string type: it must not get
+	// the numeric empty-to-zero fill or numeric-prefix rewriting ("0" may be a
+	// member name).
+	isSet := id == types.T_uint64 && len(col.Typ.Enumvalues) > 0
 	loadDataNonStrictAdjustments := shouldApplyLoadDataNonStrictAdjustments(param)
 	trimSpace := false
 	// T_bit carries raw bytes (parsed byte-by-byte, not as text), so whitespace
@@ -1584,7 +1593,9 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	// otherwise even be converted to NULL below).
 	if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 		id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
-		id != types.T_bit {
+		id != types.T_bit &&
+		// A declared ENUM member is kept as written (e.g. ' ' or '').
+		!(id == types.T_enum && isEnumMember(col.Typ.Enumvalues, field.Val)) {
 		field.Val = strings.TrimSpace(field.Val)
 		trimSpace = true
 	}
@@ -1599,12 +1610,13 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	}
 	mappedNull := getNullFlag(param.Extern.NullMap, colName, field.Val)
 	isNullOrEmpty := field.IsNull || mappedNull
-	emptyNumericField := len(field.Val) == 0 && !field.IsNull && !mappedNull && shouldLoadEmptyNumericAsZero(param, id)
+	emptyNumericField := len(field.Val) == 0 && !field.IsNull && !mappedNull && !isSet && shouldLoadEmptyNumericAsZero(param, id)
 	if emptyNumericField {
 		field.Val = "0"
 		isNullOrEmpty = false
-	} else if trimSpace && len(field.Val) == 0 && !isNullOrEmpty && !isValidEmptyEnumOrSet(id, col.Typ.Enumvalues) {
-		// A declared empty ENUM member ('') and the empty SET are valid values
+	} else if trimSpace && len(field.Val) == 0 && !isNullOrEmpty && !isSet &&
+		!(id == types.T_enum && isEnumMember(col.Typ.Enumvalues, "")) {
+		// The empty SET and a declared empty ENUM member ('') are valid values
 		// distinct from SQL NULL, so only explicit NULL markers become NULL.
 		isNullOrEmpty = true
 	}
@@ -1615,7 +1627,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	var temporalValue loadDataTemporalValue
 	if loadDataNonStrictAdjustments {
 		switch {
-		case isLoadNumericAdjustedValueType(id):
+		case isLoadNumericAdjustedValueType(id) && !isSet:
 			if !field.HasStringQuote {
 				field.Val = loadDataNonStrictNumericPrefix(field.Val)
 			}
