@@ -596,7 +596,9 @@ func serialWithoutCompacted(
 			}
 			continue
 		}
-		function.PhysicalSerialHelper(v, nil, ps, true)
+		if err := function.PhysicalSerialHelperChecked(v, nil, ps, true); err != nil {
+			return nil, err
+		}
 	}
 
 	for i := 0; i < rowCount; i++ {
@@ -618,14 +620,19 @@ func compactSingleIndexCol(
 		// A one-part UNIQUE/secondary index has no serial_full expression to
 		// pass through. Materialize its persisted key in the same tagged UCA
 		// domain as the composite serializer instead of copying original bytes.
+		// Physical key construction is strict: a malformed value must abort the
+		// index batch instead of becoming a second, raw-byte identity.
 		values, area := vector.MustVarlenaRawData(v)
 		compact := make([][]byte, 0, len(values))
 		for i := range values {
 			if nulls.Contains(v.GetNulls(), uint64(i)) {
 				continue
 			}
-			compact = append(compact,
-				types.CollationKeyOrOriginal(v.GetType().Charset, values[i].GetByteSlice(area)))
+			key, keyErr := types.PhysicalCollationKey(*v.GetType(), values[i].GetByteSlice(area))
+			if keyErr != nil {
+				return nil, keyErr
+			}
+			compact = append(compact, key)
 		}
 		err = vector.AppendBytesList(vec, compact, nil, proc.Mp())
 		return v.GetNulls(), err
@@ -1115,7 +1122,9 @@ func XXHashVectors(vs []*vector.Vector,
 			}
 			continue
 		}
-		function.PhysicalSerialHelper(v, nil, packers.ps, true)
+		if err := function.PhysicalSerialHelperChecked(v, nil, packers.ps, true); err != nil {
+			return nil, 0, err
+		}
 	}
 
 	for i := 0; i < rowCount; i++ {

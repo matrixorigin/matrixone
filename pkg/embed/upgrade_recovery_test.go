@@ -40,6 +40,54 @@ import (
 
 const recoveryAdminUser = "upgrade_recovery_admin"
 
+// Recovery has one five-minute workload budget across all cluster generations.
+// Startup, including runner admission, does not consume that budget. Call only
+// after the preceding generation has been closed and its SQL calls have returned.
+func newRecoveryClusterStarter(
+	parent context.Context,
+	startCluster func() error,
+	now func() time.Time,
+) (start func() (context.Context, error), cleanup func()) {
+	deadline := now().Add(5 * time.Minute)
+	var current context.Context
+	var cancel context.CancelFunc
+	cleanup = func() {
+		if cancel != nil {
+			cancel()
+		}
+	}
+	start = func() (context.Context, error) {
+		if err := parent.Err(); err != nil {
+			return nil, err
+		}
+		if current != nil {
+			if err := current.Err(); err != nil {
+				return nil, err
+			}
+		}
+		if !now().Before(deadline) {
+			return nil, context.DeadlineExceeded
+		}
+		cleanup()
+		current = nil
+		begin := now()
+		if err := startCluster(); err != nil {
+			return nil, err
+		}
+		deadline = deadline.Add(now().Sub(begin))
+		if err := parent.Err(); err != nil {
+			return nil, err
+		}
+		current, cancel = context.WithDeadline(parent, deadline)
+		if err := current.Err(); err != nil {
+			cleanup()
+			return nil, err
+		}
+		return current, nil
+	}
+	return start, cleanup
+}
+
 // The catalog and CN generations are destructive test inputs, so this fixture
 // cannot share the package's reusable SQL cluster. Three CNs compete for the
 // same real transactions; only one user tenant and one sentinel row are needed.
@@ -72,8 +120,14 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 				t.Setenv("mo_admin_user", recoveryAdminUser)
 				t.Setenv("mo_admin_password", "111")
 			}
+			setupCtx := t.Context()
+			if deadline, ok := t.Deadline(); ok {
+				var cancel context.CancelFunc
+				setupCtx, cancel = context.WithDeadline(setupCtx, deadline)
+				defer cancel()
+			}
 			started := time.Now()
-			c, err := NewCluster(WithTesting(), WithCNCount(cnCount), WithPreStart(func(svc ServiceOperator) {
+			c, err := NewCluster(WithTesting(), WithTestAdmissionContext(setupCtx), WithCNCount(cnCount), WithPreStart(func(svc ServiceOperator) {
 				adjustBasicClusterService(svc)
 				if svc.ServiceType() == metadata.ServiceType_CN {
 					svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.AutomaticUpgrade = true })
@@ -87,11 +141,10 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 				})
 			}
 			require.NoError(t, err)
-			require.NoError(t, c.Start())
-			// Admission and initial startup have their own lifecycle; the SQL
-			// recovery budget starts once the fixture is available.
-			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
-			defer cancel()
+			start, finish := newRecoveryClusterStarter(setupCtx, c.Start, time.Now)
+			defer finish()
+			ctx, err := start()
+			require.NoError(t, err)
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
 			func() {
@@ -126,7 +179,8 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 				retainedHandles = append(retainedHandles, v4_0_11.Handler)
 			}
 			setRecoveryCNHandles(c, append(retainedHandles, interrupted), true)
-			require.NoError(t, c.Start())
+			ctx, err = start()
+			require.NoError(t, err)
 			select {
 			case <-interrupted.entered:
 			case <-ctx.Done():
@@ -158,7 +212,8 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 				// catalog state is seeded and no timing race chooses this window.
 				setRecoveryCNHandles(c, append(retainedHandles, retainedHandler), true,
 					bootstrap.WithCheckUpgradeDuration(time.Hour))
-				require.NoError(t, c.Start())
+				ctx, err = start()
+				require.NoError(t, err)
 				func() {
 					db := recoverySQLClientWithUser(t, cn, recoveryAdminUser)
 					defer db.Close()
@@ -185,7 +240,8 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 			}
 			setRecoveryCNHandles(c, handles, !tc.manual)
 			// No version/task records are manually rewritten for recovery.
-			require.NoError(t, c.Start())
+			ctx, err = start()
+			require.NoError(t, err)
 			if tc.manual {
 				func() {
 					db := recoverySQLClientWithUser(t, cn, recoveryAdminUser)
@@ -239,11 +295,110 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 				}()
 			}
 			require.NoError(t, c.Close())
-			require.NoError(t, c.Start())
+			ctx, err = start()
+			require.NoError(t, err)
 			checkRecovered()
 			t.Logf("%d-CN interrupted upgrade and restart (manual=%t): %s", cnCount, tc.manual, time.Since(started))
 		})
 	}
+}
+
+func TestRecoveryClusterStartupBudget(t *testing.T) {
+	t.Run("aggregate workload across restarts", func(t *testing.T) {
+		base := time.Now().Add(time.Hour)
+		now := base
+		starts := 0
+		start, cleanup := newRecoveryClusterStarter(t.Context(), func() error {
+			starts++
+			now = now.Add(10 * time.Minute)
+			return nil
+		}, func() time.Time { return now })
+		defer cleanup()
+		first, err := start()
+		require.NoError(t, err)
+		deadline, ok := first.Deadline()
+		require.True(t, ok)
+		require.Equal(t, base.Add(15*time.Minute), deadline)
+
+		now = now.Add(time.Minute) // One minute of actual workload consumes budget.
+		second, err := start()
+		require.NoError(t, err)
+		require.ErrorIs(t, first.Err(), context.Canceled)
+		deadline, ok = second.Deadline()
+		require.True(t, ok)
+		require.Equal(t, base.Add(25*time.Minute), deadline)
+		require.Equal(t, 4*time.Minute, deadline.Sub(now))
+
+		now = deadline.Add(time.Minute)
+		ctx, err := start()
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Nil(t, ctx)
+		require.Equal(t, 2, starts, "exhausted workload must not start another generation")
+		cleanup()
+		cleanup()
+		require.ErrorIs(t, second.Err(), context.Canceled)
+	})
+
+	for _, phase := range []string{"before startup", "during startup", "after startup"} {
+		t.Run("parent canceled "+phase, func(t *testing.T) {
+			parent, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			starts := 0
+			start, cleanup := newRecoveryClusterStarter(parent, func() error {
+				starts++
+				if phase == "during startup" {
+					cancel()
+				}
+				return nil
+			}, time.Now)
+			defer cleanup()
+			if phase == "before startup" {
+				cancel()
+			}
+			ctx, err := start()
+			if phase == "after startup" {
+				require.NoError(t, err)
+				cancel()
+				require.ErrorIs(t, ctx.Err(), context.Canceled)
+				ctx, err = start()
+			}
+			require.ErrorIs(t, err, context.Canceled)
+			require.Nil(t, ctx)
+			expectedStarts := 1
+			if phase == "before startup" {
+				expectedStarts = 0
+			}
+			require.Equal(t, expectedStarts, starts)
+		})
+	}
+
+	t.Run("startup error", func(t *testing.T) {
+		failure := errors.New("startup failed")
+		start, cleanup := newRecoveryClusterStarter(t.Context(), func() error { return failure }, time.Now)
+		defer cleanup()
+		ctx, err := start()
+		require.ErrorIs(t, err, failure)
+		require.Nil(t, ctx)
+	})
+
+	t.Run("parent deadline and workload cancellation", func(t *testing.T) {
+		deadline := time.Now().Add(time.Minute)
+		parent, cancel := context.WithDeadline(t.Context(), deadline)
+		defer cancel()
+		starts := 0
+		start, cleanup := newRecoveryClusterStarter(parent, func() error { starts++; return nil }, time.Now)
+		defer cleanup()
+		ctx, err := start()
+		require.NoError(t, err)
+		actual, ok := ctx.Deadline()
+		require.True(t, ok)
+		require.Equal(t, deadline, actual, "workload budget cannot extend the parent deadline")
+		cleanup()
+		ctx, err = start()
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, ctx)
+		require.Equal(t, 1, starts)
+	})
 }
 
 type interruptedUpgradeHandler struct {
