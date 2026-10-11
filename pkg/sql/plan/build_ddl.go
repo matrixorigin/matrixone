@@ -3096,7 +3096,7 @@ func buildCreateTable(
 			BindingTags: []int32{builder.genNewBindTag()},
 		}, bindContext)
 
-		err = builder.addBinding(nodeID, tree.AliasClause{}, bindContext)
+		err = builder.addBinding(nodeID, tree.AliasClause{}, bindContext, createTable.Database)
 		if err != nil {
 			return nil, err
 		}
@@ -7972,7 +7972,7 @@ func constructAddedPartitionDefs(
 			TableDef:    tableDef,
 			BindingTags: []int32{partBuilder.genNewBindTag()},
 		}, partBindCtx)
-		if err := partBuilder.addBinding(nodeID, tree.AliasClause{}, partBindCtx); err != nil {
+		if err := partBuilder.addBinding(nodeID, tree.AliasClause{}, partBindCtx, tableDef.DbName); err != nil {
 			return nil, err
 		}
 		partitionBinder := NewPartitionBinder(partBuilder, partBindCtx)

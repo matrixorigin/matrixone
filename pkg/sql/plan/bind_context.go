@@ -1013,8 +1013,8 @@ func (bc *BindContext) havingProjectedColumnExpr(ref *tree.UnresolvedName) (tree
 // (or vice versa); both references must resolve to the same binding and column.
 func sameHavingColumnReference(ctx *BindContext, left, right *tree.UnresolvedName) bool {
 	if ctx != nil {
-		leftBinding, leftPos, leftOK := resolveHavingColumnIdentity(ctx, left)
-		rightBinding, rightPos, rightOK := resolveHavingColumnIdentity(ctx, right)
+		leftBinding, leftPos, leftOK := resolveColumnIdentity(ctx, left)
+		rightBinding, rightPos, rightOK := resolveColumnIdentity(ctx, right)
 		if leftOK && rightOK {
 			return leftBinding.tag == rightBinding.tag && leftPos == rightPos
 		}
@@ -1052,7 +1052,7 @@ func (ctx *BindContext) resolveTableBinding(db, table string) *Binding {
 	return nil
 }
 
-func resolveHavingColumnIdentity(ctx *BindContext, ref *tree.UnresolvedName) (*Binding, int32, bool) {
+func resolveColumnIdentity(ctx *BindContext, ref *tree.UnresolvedName) (*Binding, int32, bool) {
 	if ctx == nil || ref == nil || ref.Star || ref.NumParts == 0 {
 		return nil, 0, false
 	}

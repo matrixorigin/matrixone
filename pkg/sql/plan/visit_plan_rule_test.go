@@ -1111,7 +1111,7 @@ func TestBindViewPropagatesOuterRewriteOption(t *testing.T) {
 				nil,
 			)
 			require.NoError(t, err)
-			require.NoError(t, builder.addBinding(viewNodeID, tree.AliasClause{}, bindCtx))
+			require.NoError(t, builder.addBinding(viewNodeID, tree.AliasClause{}, bindCtx, ""))
 
 			filtered := false
 			for _, node := range builder.qry.Nodes {
@@ -1121,6 +1121,18 @@ func TestBindViewPropagatesOuterRewriteOption(t *testing.T) {
 				}
 			}
 			require.True(t, filtered, "view expansion must apply the outer row rewrite option to the base table")
+
+			invalidStmts, err := mysql.Parse(context.Background(), "select missing from db.sales", 1)
+			require.NoError(t, err)
+			failedCtx := NewBindContext(builder, nil)
+			rewrite := &tree.RewriteOption{Rewrites: map[string][]*tree.Rewrite{
+				"db.sales": {{TableName: "sales", DbName: "db", Stmt: invalidStmts[0].(*tree.Select)}},
+			}}
+			failedCtx.remapOption = rewrite
+			_, _, err = builder.buildTable(rewriteSelect.Select.(*tree.SelectClause).From.Tables[0], failedCtx, nil)
+			require.Error(t, err)
+			require.Same(t, rewrite, failedCtx.remapOption, "failed rewrite must restore the caller's options")
+
 		})
 	}
 

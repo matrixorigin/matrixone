@@ -58,6 +58,10 @@ func TestQualifiedColumnCorrelationScope(t *testing.T) {
 			local, err := binder.BindColRef(name("stage"), 0, false)
 			require.NoError(t, err)
 			require.Equal(t, int32(22), local.GetCol().RelPos)
+			_, _, matched := resolveColumnIdentity(inner, name("main"))
+			require.False(t, matched, "GROUP/HAVING identity must not capture another database")
+			require.NotEqual(t, canonicalGroupByAstKey(inner, name("main")), canonicalGroupByAstKey(inner, name("stage")))
+			require.Equal(t, canonicalGroupByAstKey(inner, name("stage")), canonicalGroupByAstKey(inner, tree.NewUnresolvedName(tree.NewCStr("records", 1), tree.NewCStr("id", 1))))
 			require.False(t, sameHavingColumnReference(inner, name("main"), name("stage")))
 			require.False(t, sameHavingColumnReference(inner, name("main"), tree.NewUnresolvedName(tree.NewCStr("records", 1), tree.NewCStr("id", 1))))
 			shadow, err := binder.BindColRef(tree.NewUnresolvedName(tree.NewCStr("records", 1), tree.NewCStr("id", 1)), 0, false)
@@ -100,6 +104,21 @@ func TestQualifiedTableBindingNamespaces(t *testing.T) {
 }
 
 func TestQualifiedTableBindingRemapAndErrors(t *testing.T) {
+	// Ordinary view contexts can carry an empty saved default database. The
+	// existing rewrite fallback must expose the effective session namespace
+	// even when this table has no matching rewrite rule.
+	opt := NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, defaultDatabase := range []string{"tpch", ""} {
+		builder := NewQueryBuilder(pb.Query_SELECT, opt.CurrentContext(), false, false)
+		ctx := NewBindContext(builder, nil)
+		ctx.defaultDatabase = defaultDatabase
+		ctx.remapOption = &tree.RewriteOption{}
+		_, _, err := builder.buildTable(&tree.AliasedTableExpr{Expr: &tree.TableName{ObjectName: "nation"}}, ctx, nil)
+		require.NoError(t, err)
+		_, err = NewWhereBinder(builder, ctx).BindColRef(tree.NewUnresolvedName(tree.NewCStr("tpch", 1), tree.NewCStr("nation", 1), tree.NewCStr("n_nationkey", 1)), 0, false)
+		require.NoError(t, err)
+	}
+
 	builder, ctx := genBuilderAndCtx(t)
 	binding := ctx.bindingByTable["bind_select"]
 	ctx.remapOption = &tree.RewriteOption{}

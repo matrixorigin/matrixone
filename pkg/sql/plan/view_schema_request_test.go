@@ -782,7 +782,7 @@ func TestViewSchemaRequestSubscriptionPublisherIsNotCreationDatabase(t *testing.
 				for _, disabled := range []bool{false, true} {
 					t.Run(fmt.Sprintf("nested=%t/creation=%q/shadow=%t/memoOff=%t", nested, creationDatabase, shadow, disabled), func(t *testing.T) {
 						f := newViewSchemaTestFixture(t)
-						published := f.addDefinition(t, "source_v", "create view pub.source_v as select n_name as label from pub.nation")
+						published := f.addDefinition(t, "source_v", "create view pub.source_v as select pub.nation.n_name as label from pub.nation")
 						published.DbName, published.DbId = "pub", 8
 						var data ViewData
 						require.NoError(t, json.Unmarshal([]byte(published.ViewSql.View), &data))

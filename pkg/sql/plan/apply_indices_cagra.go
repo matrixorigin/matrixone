@@ -226,7 +226,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 	}
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 
-	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier("mo_cagra_alias_0")}, ctx)
+	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier("mo_cagra_alias_0")}, ctx, "")
 	if err != nil {
 		return 0, err
 	}
