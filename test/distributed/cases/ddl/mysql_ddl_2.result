@@ -238,7 +238,7 @@ col11    VARCHAR(255)    YES        null
 col12    DATE(0)    YES        null        
 col13    DATETIME(0)    YES        null        
 col14    TIMESTAMP(0)    YES        null        
-col15    BOOL(0)    YES        null        
+col15    boolean    YES        null
 col16    DECIMAL(16,6)    YES        null        
 col17    TEXT    YES        null        
 col18    JSON(0)    YES        null        

@@ -1758,3 +1758,48 @@ func textMinForShowCreateTest(t *testing.T, typ plan.Type) string {
 	defer results[0].Free(mp)
 	return string(results[0].GetBytesAt(0))
 }
+
+func TestFormatColTypeBoolean(t *testing.T) {
+	require.Equal(t, "BOOL", types.T_bool.String())
+	for _, width := range []int32{0, 1, 64, -1} {
+		require.Equal(t, "BOOLEAN", FormatColType(plan.Type{Id: int32(types.T_bool), Width: width, Scale: 3}))
+	}
+}
+
+func TestConstructCreateTableSQLBooleanRoundTrip(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, `create table bool_roundtrip (
+		id int primary key, flag bool default null,
+		enabled boolean not null default true, disabled bool default false,
+		n int unsigned, amount decimal(10,2), integer_flag tinyint(1))`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	original := p.GetDdl().GetCreateTable().GetTableDef()
+	for _, compilerCtx := range []CompilerContext{ctx, nil} {
+		sql, _, err := ConstructCreateTableSQL(compilerCtx, original, nil, false, nil)
+		require.NoError(t, err)
+		require.Contains(t, sql, "`flag` boolean DEFAULT NULL")
+		parsed, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		func() {
+			defer parsed.Free()
+			replayed, err := BuildPlan(ctx, parsed, false)
+			require.NoError(t, err)
+			cols := replayed.GetDdl().GetCreateTable().GetTableDef().Cols
+			for _, name := range []string{"flag", "enabled", "disabled", "n", "amount", "integer_flag"} {
+				before, after := FindColumn(original.Cols, name), FindColumn(cols, name)
+				require.NotNil(t, after, name)
+				require.Equal(t, before.Typ, after.Typ, name)
+				require.Equal(t, before.Default.NullAbility, after.Default.NullAbility, name)
+				if types.T(before.Typ.Id) == types.T_bool {
+					require.Equal(t, before.Default.Expr, after.Default.Expr, name)
+				}
+			}
+			for _, name := range []string{"flag", "enabled", "disabled"} {
+				require.Equal(t, int32(types.T_bool), FindColumn(cols, name).Typ.Id)
+			}
+		}()
+	}
+}

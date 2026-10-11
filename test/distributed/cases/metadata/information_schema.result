@@ -147,7 +147,7 @@ c_tiny_unsigned    tinyint    TINYINT UNSIGNED(8)
 c_small_unsigned    smallint    SMALLINT UNSIGNED(16)
 c_int_unsigned    int    INT UNSIGNED(32)
 c_big_unsigned    bigint    BIGINT UNSIGNED(64)
-c_bool    tinyint    BOOL(0)
+c_bool    tinyint    boolean
 create table information_schema_data_type_case.composite_pk_probe (
 a int not null,
 b int not null,

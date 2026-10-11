@@ -1234,6 +1234,10 @@ func FormatColType(colType plan.Type) string {
 	if arrayType := arrayPlanTypeString(&colType); arrayType != "" {
 		return strings.ToUpper(arrayType[:len("array")]) + arrayType[len("array"):]
 	}
+	if types.T(colType.Id) == types.T_bool {
+		// BOOLEAN is recognized by MySQL client reflection and recreates T_bool.
+		return "BOOLEAN"
+	}
 
 	typ := types.T(colType.Id).ToType()
 

@@ -594,6 +594,8 @@ func TestNormalizeCDCTargetColumnTypeFromMOAndMySQL(t *testing.T) {
 		{"DATETIME", "DATETIME(0)"},
 		{"TIMESTAMP", "TIMESTAMP(0)"},
 		{"BOOL", "BOOL(0)"},
+		{"BOOLEAN", "BOOL"},
+		{"BOOLEAN", "BOOL(0)"},
 		{"JSON", "JSON(0)"},
 	} {
 		require.Equal(t, normalizeCDCTargetColumnType(tc.source), normalizeCDCTargetColumnType(tc.target), tc)
@@ -603,6 +605,10 @@ func TestNormalizeCDCTargetColumnTypeFromMOAndMySQL(t *testing.T) {
 	require.NotEqual(t, normalizeCDCTargetColumnType("ENUM('a b')"), normalizeCDCTargetColumnType("ENUM('ab')"))
 	require.NotEqual(t, normalizeCDCTargetColumnType("ENUM('integer')"), normalizeCDCTargetColumnType("ENUM('int')"))
 	require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_int8)}, "BOOL(0)", CDCSinkType_MO, sql.NullInt64{}))
+	for _, target := range []string{"BOOLEAN", "BOOL", "BOOL(0)"} {
+		require.True(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, target, CDCSinkType_MO, sql.NullInt64{}))
+		require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_int8)}, target, CDCSinkType_MO, sql.NullInt64{}))
+	}
 	require.True(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MySQL, sql.NullInt64{}))
 	require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MO, sql.NullInt64{}))
 }

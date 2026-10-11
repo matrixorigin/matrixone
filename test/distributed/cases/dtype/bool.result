@@ -156,9 +156,73 @@ update t1 set a=false where b is null;
 delete from t1 where a=false;
 select * from t1;
 a	b
-1	0	
+1	0
 1	1
 delete from t1 where b=true;
 select * from t1;
 a	b
 1	0
+drop view if exists bool_metadata_view;
+drop table if exists bool_metadata;
+create table bool_metadata(id int primary key, flag bool default null, enabled boolean not null default true, disabled bool default false);
+insert into bool_metadata(id,flag) values (1,true),(2,false),(3,null);
+show create table bool_metadata;
+➤ Table[12,13,0]  ¦  Create Table[12,184,0]  𝄀
+bool_metadata  ¦  CREATE TABLE `bool_metadata` (
+  `id` int NOT NULL,
+  `flag` boolean DEFAULT NULL,
+  `enabled` boolean NOT NULL DEFAULT true,
+  `disabled` boolean DEFAULT false,
+  PRIMARY KEY (`id`)
+)
+show columns from bool_metadata;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+flag  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+enabled  ¦  boolean  ¦  NO  ¦    ¦  true  ¦    ¦    𝄀
+disabled  ¦  boolean  ¦  YES  ¦    ¦  false  ¦    ¦
+show full columns from bool_metadata;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  null  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+flag  ¦  boolean  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+enabled  ¦  boolean  ¦  null  ¦  NO  ¦    ¦  true  ¦    ¦  select,insert,update,references  ¦    𝄀
+disabled  ¦  boolean  ¦  null  ¦  YES  ¦    ¦  false  ¦    ¦  select,insert,update,references  ¦
+create view bool_metadata_view as select flag from bool_metadata;
+describe bool_metadata_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+flag  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦
+select COLUMN_NAME,DATA_TYPE,COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT from information_schema.COLUMNS where TABLE_SCHEMA=database() and TABLE_NAME='bool_metadata' order by ORDINAL_POSITION;
+➤ COLUMN_NAME[12,256,0]  ¦  DATA_TYPE[12,65535,0]  ¦  COLUMN_TYPE[12,65535,0]  ¦  IS_NULLABLE[12,3,0]  ¦  COLUMN_DEFAULT[12,65535,0]  𝄀
+id  ¦  int  ¦  INT(32)  ¦  NO  ¦  null  𝄀
+flag  ¦  tinyint  ¦  boolean  ¦  YES  ¦  null  𝄀
+enabled  ¦  tinyint  ¦  boolean  ¦  NO  ¦  true  𝄀
+disabled  ¦  tinyint  ¦  boolean  ¦  YES  ¦  false
+select attname,mo_show_visible_bin(atttyp,2) as native_type from mo_catalog.mo_columns where att_database=database() and att_relname='bool_metadata' and att_is_hidden=0 order by attnum;
+➤ attname[12,256,0]  ¦  native_type[12,65535,0]  𝄀
+id  ¦  INT  𝄀
+flag  ¦  BOOL  𝄀
+enabled  ¦  BOOL  𝄀
+disabled  ¦  BOOL
+select * from bool_metadata order by id;
+➤ id[4,32,0]  ¦  flag[-7,1,0]  ¦  enabled[-7,1,0]  ¦  disabled[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  0  𝄀
+2  ¦  0  ¦  1  ¦  0  𝄀
+3  ¦  null  ¦  1  ¦  0
+insert into bool_metadata(id,enabled) values (4,null);
+constraint violation: Column 'enabled' cannot be null
+select count(*) from bool_metadata;
+➤ count(*)[-5,64,0]  𝄀
+3
+create table bool_width_alias(flag bool(1));
+create table boolean_width_alias(flag boolean(1));
+select TABLE_NAME,COLUMN_TYPE from information_schema.COLUMNS where TABLE_SCHEMA=database() and TABLE_NAME in ('bool_width_alias','boolean_width_alias') order by TABLE_NAME;
+➤ TABLE_NAME[12,256,0]  ¦  COLUMN_TYPE[12,65535,0]  𝄀
+bool_width_alias  ¦  boolean  𝄀
+boolean_width_alias  ¦  boolean
+drop table bool_width_alias;
+drop table boolean_width_alias;
+drop view bool_metadata_view;
+drop table bool_metadata;
+select count(*) from information_schema.TABLES where TABLE_SCHEMA=database() and TABLE_NAME in ('bool_metadata','bool_metadata_view','bool_width_alias','boolean_width_alias');
+➤ count(*)[-5,64,0]  𝄀
+0

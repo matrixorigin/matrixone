@@ -617,6 +617,11 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
+			if typ.Oid == types.T_bool {
+				// MySQL client view reflection requires lowercase boolean, without a display width.
+				// Keep typNormal's BOOL for existing catalog/upgrade consumers.
+				return functionUtil.QuickStrToBytes("boolean"), nil
+			}
 
 			ts := typ.String()
 			ret := ""

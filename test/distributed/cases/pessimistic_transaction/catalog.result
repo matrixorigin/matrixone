@@ -41,7 +41,7 @@ account_name    VARCHAR(300)    YES        null
 dat_name    VARCHAR(5000)    YES        null        
 variable_name    VARCHAR(300)    YES        null        
 variable_value    VARCHAR(5000)    YES        null        
-system_variables    BOOL(0)    YES        null        
+system_variables    boolean    YES        null
 desc mo_configurations;
 Field    Type    Null    Key    Default    Extra    Comment
 node_type    VARCHAR(65535)    YES        null        
@@ -115,7 +115,7 @@ account_name    VARCHAR(300)    YES        null
 dat_name    VARCHAR(5000)    YES        null        
 variable_name    VARCHAR(300)    YES        null        
 variable_value    VARCHAR(5000)    YES        null        
-system_variables    BOOL(0)    YES        null        
+system_variables    boolean    YES        null
 desc mo_configurations;
 Field    Type    Null    Key    Default    Extra    Comment
 node_type    VARCHAR(65535)    YES        null        

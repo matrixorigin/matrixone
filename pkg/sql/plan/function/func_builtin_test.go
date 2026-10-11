@@ -4173,3 +4173,35 @@ func TestBuiltInUUIDSwapFlagStringCoercion(t *testing.T) {
 		})
 	}
 }
+
+func Test_BuiltIn_MoShowVisibleBinBooleanMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	var encoded []string
+	for _, typ := range []types.Type{
+		types.New(types.T_bool, 0, 0), types.New(types.T_bool, 64, 3), types.New(types.T_bool, -1, 0),
+		types.New(types.T_int32, 32, 0), types.New(types.T_decimal64, 10, 2),
+	} {
+		data, err := types.Encode(&typ)
+		require.NoError(t, err)
+		encoded = append(encoded, string(data))
+	}
+	encoded = append(encoded, "", "")
+	for _, tc := range []struct {
+		mode uint8
+		want []string
+	}{
+		{typNormal, []string{"BOOL", "BOOL", "BOOL", "INT", "DECIMAL", "", ""}},
+		{typWithLen, []string{"boolean", "boolean", "boolean", "INT(32)", "DECIMAL(10,2)", "", ""}},
+	} {
+		t.Run(fmt.Sprint(tc.mode), func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), encoded, []bool{false, false, false, false, false, true, false}),
+				NewFunctionTestInput(types.T_uint8.ToType(), []uint8{tc.mode}, nil),
+			}
+			want := NewFunctionTestResult(types.T_varchar.ToType(), false, tc.want, []bool{false, false, false, false, false, true, true})
+			testCase := NewFunctionTestCase(proc, inputs, want, builtInMoShowVisibleBin)
+			succeed, info := testCase.RunAndFree()
+			require.True(t, succeed, info)
+		})
+	}
+}

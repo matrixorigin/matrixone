@@ -2000,7 +2000,7 @@ show create table president;
 president  ¦  CREATE TABLE `president` (
   `name` varchar(100) NOT NULL,
   `nth` int NOT NULL,
-  `impeached` bool DEFAULT NULL
+  `impeached` boolean DEFAULT NULL
 )
 ALTER TABLE president MODIFY impeached INTEGER;
 show create table president;

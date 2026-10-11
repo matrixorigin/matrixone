@@ -54,3 +54,27 @@ delete from t1 where a=false;
 select * from t1;
 delete from t1 where b=true;
 select * from t1;
+
+#Boolean schema metadata must remain parseable and preserve native bool.
+drop view if exists bool_metadata_view;
+drop table if exists bool_metadata;
+create table bool_metadata(id int primary key, flag bool default null, enabled boolean not null default true, disabled bool default false);
+insert into bool_metadata(id,flag) values (1,true),(2,false),(3,null);
+show create table bool_metadata;
+show columns from bool_metadata;
+show full columns from bool_metadata;
+create view bool_metadata_view as select flag from bool_metadata;
+describe bool_metadata_view;
+select COLUMN_NAME,DATA_TYPE,COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT from information_schema.COLUMNS where TABLE_SCHEMA=database() and TABLE_NAME='bool_metadata' order by ORDINAL_POSITION;
+select attname,mo_show_visible_bin(atttyp,2) as native_type from mo_catalog.mo_columns where att_database=database() and att_relname='bool_metadata' and att_is_hidden=0 order by attnum;
+select * from bool_metadata order by id;
+insert into bool_metadata(id,enabled) values (4,null);
+select count(*) from bool_metadata;
+create table bool_width_alias(flag bool(1));
+create table boolean_width_alias(flag boolean(1));
+select TABLE_NAME,COLUMN_TYPE from information_schema.COLUMNS where TABLE_SCHEMA=database() and TABLE_NAME in ('bool_width_alias','boolean_width_alias') order by TABLE_NAME;
+drop table bool_width_alias;
+drop table boolean_width_alias;
+drop view bool_metadata_view;
+drop table bool_metadata;
+select count(*) from information_schema.TABLES where TABLE_SCHEMA=database() and TABLE_NAME in ('bool_metadata','bool_metadata_view','bool_width_alias','boolean_width_alias');
