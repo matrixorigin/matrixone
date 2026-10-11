@@ -54,6 +54,9 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 
 	if builder != nil {
 		bc.lower = builder.compCtx.GetLowerCaseTableNames()
+		if parent == nil && builder.GetContext().Value(viewSchemaContextKey{}) != nil {
+			bc.defaultDatabase = builder.compCtx.DefaultDatabase()
+		}
 		if parent == nil && builder.persistedViewTarget != "" {
 			requiredProtocol := int64(0)
 			bc.persistedExpressionProtocolRequirement = &requiredProtocol

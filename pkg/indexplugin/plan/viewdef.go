@@ -82,6 +82,14 @@ func PlanCallsAnyFunc(query *plan.Query, names ...string) bool {
 					checkExpr(order.Expr)
 				}
 			}
+			if w.Frame != nil {
+				if w.Frame.Start != nil {
+					checkExpr(w.Frame.Start.Val)
+				}
+				if w.Frame.End != nil {
+					checkExpr(w.Frame.End.Val)
+				}
+			}
 			return
 		}
 		// A subquery reference nests in two directions at once: Child is an expression, and
@@ -129,8 +137,23 @@ func PlanCallsAnyFunc(query *plan.Query, names ...string) bool {
 		checkExprs(node.TblFuncExprList)
 		checkExprs(node.FillVal)
 		checkExprs(node.OnUpdateExprs)
+		checkExprs(node.PhysicalEqualityKeyList)
+		for _, filter := range node.RuntimeFilterProbeList {
+			if filter != nil {
+				checkExpr(filter.Expr)
+				checkExpr(filter.BuildExpr)
+			}
+		}
+		for _, filter := range node.RuntimeFilterBuildList {
+			if filter != nil {
+				checkExpr(filter.Expr)
+				checkExpr(filter.BuildExpr)
+			}
+		}
 		checkExpr(node.Limit)
 		checkExpr(node.Offset)
+		checkExpr(node.GapFillStart)
+		checkExpr(node.GapFillEnd)
 		checkExpr(node.Interval)
 		checkExpr(node.Sliding)
 		checkExpr(node.Timestamp)
@@ -139,6 +162,51 @@ func PlanCallsAnyFunc(query *plan.Query, names ...string) bool {
 			if order != nil {
 				checkExpr(order.Expr)
 			}
+		}
+		if node.IndexReaderParam != nil {
+			for _, order := range node.IndexReaderParam.OrderBy {
+				if order != nil {
+					checkExpr(order.Expr)
+				}
+			}
+			checkExpr(node.IndexReaderParam.Limit)
+			if node.IndexReaderParam.DistRange != nil {
+				checkExpr(node.IndexReaderParam.DistRange.LowerBound)
+				checkExpr(node.IndexReaderParam.DistRange.UpperBound)
+			}
+		}
+		if node.VectorIndexScan != nil {
+			checkExpr(node.VectorIndexScan.QueryVector)
+			checkExpr(node.VectorIndexScan.CandidateLimit)
+			checkExprs(node.VectorIndexScan.PreFilters)
+			checkExpr(node.VectorIndexScan.FirstRoundLimit)
+			if node.VectorIndexScan.DistanceRange != nil {
+				checkExpr(node.VectorIndexScan.DistanceRange.LowerBound)
+				checkExpr(node.VectorIndexScan.DistanceRange.UpperBound)
+			}
+		}
+		if node.RowsetData != nil {
+			for _, column := range node.RowsetData.Cols {
+				if column != nil {
+					for _, entry := range column.Data {
+						if entry != nil {
+							checkExpr(entry.Expr)
+						}
+					}
+				}
+			}
+		}
+		for _, target := range node.LockTargets {
+			if target != nil {
+				checkExpr(target.LockRows)
+			}
+		}
+		if node.PreInsertCtx != nil {
+			checkExpr(node.PreInsertCtx.CompPkeyExpr)
+			checkExpr(node.PreInsertCtx.ClusterByExpr)
+		}
+		if node.DedupJoinCtx != nil {
+			checkExprs(node.DedupJoinCtx.UpdateColExprList)
 		}
 		for _, child := range node.Children {
 			walk(child)
