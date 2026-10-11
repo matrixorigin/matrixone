@@ -1,3 +1,5 @@
+set @saved_sql_mode = @@sql_mode;
+set sql_mode = 'STRICT_TRANS_TABLES';
 drop table if exists issue_29840_ins;
 drop table if exists issue_29840_csv;
 drop table if exists issue_29840_csv_par;
@@ -37,7 +39,7 @@ select id, concat('[',e,']') e, e+0 e_idx, e is null e_null, concat('[',s,']') s
 set sql_mode = '';
 create table issue_29840_csv_local like issue_29840_ins;
 load data local infile '$resources/load_data/issue_29840_enum_set.csv' into table issue_29840_csv_local fields terminated by ',' optionally enclosed by '"';
-set sql_mode = default;
+set sql_mode = 'STRICT_TRANS_TABLES';
 select id, concat('[',e,']') e, e+0 e_idx, e is null e_null, concat('[',s,']') s, s+0 s_bits, s is null s_null from issue_29840_csv_local order by id;
 ➤ id[4,32,0]  ¦  e[-1,16383,0]  ¦  e_idx[-5,64,0]  ¦  e_null[-7,1,0]  ¦  s[-1,16383,0]  ¦  s_bits[-5,64,0]  ¦  s_null[-7,1,0]  𝄀
 1  ¦  []  ¦  3  ¦  0  ¦  []  ¦  0  ¦  0  𝄀
@@ -77,9 +79,20 @@ csv_local  ¦  0  𝄀
 csv_par  ¦  0  𝄀
 jl  ¦  0  𝄀
 jl_par  ¦  0
+truncate table issue_29840_csv;
+load data infile '$resources/load_data/issue_29840_enum_set.csv' into table issue_29840_csv fields terminated by ',' optionally enclosed by '"' set e=NULLIF(e,''), s=NULLIF(s,'');
+select id, e+0 e_idx, e is null e_null, s+0 s_bits, s is null s_null from issue_29840_csv order by id;
+➤ id[4,32,0]  ¦  e_idx[-5,64,0]  ¦  e_null[-7,1,0]  ¦  s_bits[-5,64,0]  ¦  s_null[-7,1,0]  𝄀
+1  ¦  null  ¦  1  ¦  null  ¦  1  𝄀
+2  ¦  1  ¦  0  ¦  null  ¦  1  𝄀
+3  ¦  2  ¦  0  ¦  2  ¦  0  𝄀
+4  ¦  null  ¦  1  ¦  null  ¦  1  𝄀
+5  ¦  null  ¦  1  ¦  1  ¦  0  𝄀
+6  ¦  2  ¦  0  ¦  3  ¦  0
 drop table issue_29840_ins;
 drop table issue_29840_csv;
 drop table issue_29840_csv_par;
 drop table issue_29840_csv_local;
 drop table issue_29840_jl;
 drop table issue_29840_jl_par;
+set sql_mode = @saved_sql_mode;
