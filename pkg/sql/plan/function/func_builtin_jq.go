@@ -545,6 +545,11 @@ func (op *opBuiltInJsonRow) grow(length int) {
 func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.FunctionResultWrapper,
 	proc *process.Process, length int, selectList *FunctionSelectList) error {
 	op.grow(length)
+	defer func() {
+		for i := range op.enc[:length] {
+			op.enc[i].done()
+		}
+	}()
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ulen := uint64(length)
 
@@ -637,11 +642,14 @@ func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.Funct
 	for j := 0; j < length; j++ {
 		op.enc[j].w.WriteByte(']')
 		if selectList.Contains(uint64(j)) {
-			rs.AppendBytes(nil, true)
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
 		} else {
-			rs.AppendBytes(op.enc[j].bytes(), false)
+			if err := rs.AppendBytes(op.enc[j].bytes(), false); err != nil {
+				return err
+			}
 		}
-		op.enc[j].done()
 	}
 	return nil
 }

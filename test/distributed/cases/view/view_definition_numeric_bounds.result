@@ -1,0 +1,32 @@
+DROP DATABASE IF EXISTS view_definition_numeric_bounds;
+CREATE DATABASE view_definition_numeric_bounds;
+USE view_definition_numeric_bounds;
+CREATE TABLE source_table (id INT);
+CREATE VIEW valid_view AS SELECT CAST(id AS CHAR(20)) AS label FROM source_table;
+DESC valid_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+label  ¦  CHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
+CREATE VIEW invalid_width AS SELECT CAST(1 AS CHAR(18446744073709551615));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. value is out of range int64 at line 1 column 72 near "));";
+CREATE VIEW invalid_sample AS SELECT SAMPLE(*, 18446744073709551615 ROWS) FROM source_table;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. value is out of range int64 at line 1 column 73 near ") FROM source_table;";
+CREATE TABLE invalid_decimal (a DECIMAL(18446744073709551615, 2));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. value is out of range int64 at line 1 column 64 near "));";
+CREATE TABLE invalid_timestamp (a TIMESTAMP(18446744073709551615));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. value is out of range int64 at line 1 column 65 near "));";
+CREATE TABLE invalid_float (a FLOAT(18446744073709551615, 2));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. value is out of range int64 at line 1 column 60 near "));";
+CREATE VIEW invalid_result AS SELECT * FROM result_scan() AS missing_query;
+invalid argument result_scan, bad value missing query id
+SELECT 18446744073709551615 AS unsigned_max;
+➤ unsigned_max[-5,64,0]  𝄀
+18446744073709551615
+INSERT INTO source_table VALUES (12);
+SELECT * FROM valid_view;
+➤ label[1,20,0]  𝄀
+12
+SHOW TABLES;
+➤ Tables_in_view_definition_numeric_bounds[12,5000,0]  𝄀
+source_table  𝄀
+valid_view
+DROP DATABASE view_definition_numeric_bounds;
