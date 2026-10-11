@@ -33,7 +33,7 @@ import (
 // writeObjectWithCommitTS writes an in-memory object carrying a commit_ts column
 // with the given per-row values and returns its entry plus the file service that
 // holds it, so the commit-ts scan paths can be exercised against real data.
-func writeObjectWithCommitTS(t *testing.T, mp *mpool.MPool, tsValues []types.TS) (objectio.ObjectEntry, fileservice.FileService) {
+func writeObjectWithCommitTS(t testing.TB, mp *mpool.MPool, tsValues []types.TS) (objectio.ObjectEntry, fileservice.FileService) {
 	t.Helper()
 	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
@@ -51,6 +51,7 @@ func writeObjectWithCommitTS(t *testing.T, mp *mpool.MPool, tsValues []types.TS)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[2], ts, false, mp))
 	}
 	bat.SetRowCount(len(tsValues))
+	defer bat.Clean(mp)
 	_, err = writer.WriteBatch(bat)
 	require.NoError(t, err)
 	blocks, _, err := writer.Sync(context.Background())
@@ -67,6 +68,35 @@ func TestMaxCommitTSFromZonemapReadsMax(t *testing.T) {
 	got, err := maxCommitTSFromZonemap(context.Background(), fs, obj)
 	require.NoError(t, err)
 	require.Equal(t, types.BuildTS(20, 0), got)
+}
+
+func BenchmarkSourceCommitTSAtUnchanged250KObject(b *testing.B) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	tsValues := make([]types.TS, 250000)
+	for i := range tsValues {
+		tsValues[i] = types.BuildTS(10, 0)
+	}
+	obj, fs := writeObjectWithCommitTS(b, mp, tsValues)
+	objectio.SetObjectStatsAppendable(&obj.ObjectStats, false)
+	state := NewPartitionState("", false, 42, false)
+	state.UpdateDuration(types.BuildTS(5, 0), types.MaxTs())
+	state.dataObjectsNameIndex.Set(obj)
+	want := types.BuildTS(10, 0)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		info, err := state.SourceCommitTSAt(
+			context.Background(), types.BuildTS(100, 0), fs, mp, types.BuildTS(20, 0),
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if info.Max() != want {
+			b.Fatalf("source timestamp changed: got %v, want %v", info.Max(), want)
+		}
+	}
 }
 
 func TestMaxCommitTSInAppendableObjectReadsMax(t *testing.T) {
