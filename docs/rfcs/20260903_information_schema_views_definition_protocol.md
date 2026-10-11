@@ -154,6 +154,18 @@ joins remain the authorization boundary; the functions do not broaden the
 selected row set. A mixed-version request fails before dispatch with a stable
 NotSupported error rather than returning wrong metadata.
 
+The sender detects both VIEWS function identities in its existing
+`RequiredRemoteExpressionFeatures` walk. That feature feeds the shared placement,
+local/receiver, and destination gates; it does not add another pipeline traversal.
+The owner walker skips scalar containers, including `MembershipFilter`,
+`LiteralVec.Data`, and `FoldVal.Data`. Ordinary pipelines therefore add only a
+constant-time feature check and no destination RPC. A pipeline with VIEWS
+functions shares one destination observation with its other expression floors,
+including decimal division, but obtains fresh evidence on each send. An unknown
+capability or a destination rolled back to v109 still rejects the send. Probe
+timeout, cancellation, and response cleanup retain their existing owners; there
+is no capability cache across sends.
+
 ## Validation
 
 Focused parser/function tests cover current and legacy definitions, quoted and
@@ -194,6 +206,55 @@ by the periodic owner before the same pass is considered complete, and
 orphan-privilege cleanup is skipped on every failed VIEWS pass rather than used
 to hide that failure. Once VIEWS succeeds, the same pass proceeds to orphan
 cleanup.
+
+### Sender check performance
+
+`BenchmarkViewMetadataSenderProtocol` uses actual protobuf pipeline owners and
+measures the existing shared feature analysis plus local and destination gates.
+Fixture allocation and protobuf marshaling are outside the timed loop. It covers
+ordinary membership-filter, literal-vector, and folded-value byte payloads with
+0, 1 MiB, and 4 MiB of data. This isolates compatibility-check work; it is not a
+SQL throughput or complete `RemoteRun` benchmark.
+
+Measured on 2026-10-11 with Go 1.27.1, Darwin/arm64, Apple M4, the repository CGo
+test wrapper, and the same native artifacts. Each version had one separate
+warm-up invocation followed by three measured rounds (`-benchtime=200ms`);
+warm-up results are excluded below. The pre-fix measurement at
+`7b5db1bce8822469caecd301f9f4b5e57a000874` times the removed
+`validateRemoteViewDefinitionDestinationProtocol(nil, p)` with
+`p = &pipeline.Pipeline{DataSource: &pipeline.Source{MembershipFilter: payload}}`.
+The post-fix measurement includes the shared analysis as well as its sender gates,
+so it conservatively includes work that the sender already performed before this
+fix. Median membership-filter results across the three measured rounds:
+
+| Payload | Pre-fix duplicate VIEWS walks | Shared analysis and sender gates |
+| --- | --- | --- |
+| 0 bytes | 1.047 microseconds/op | 0.238 microseconds/op |
+| 1 MiB | 6.231 milliseconds/op | 0.301 microseconds/op |
+| 4 MiB | 24.962 milliseconds/op | 0.251 microseconds/op |
+
+All post-fix payload variants report 0 B/op and 0 allocs/op; literal-vector and
+folded-value medians are 0.333–0.539 microseconds/op across these sizes. The
+byte-length-dependent traversal is removed. Reproduce the post-fix protocol with
+separate warm-up and measured invocations:
+
+```sh
+.agents/skills/mo-dev/scripts/mo-cgo-test -run '^$' \
+  -bench '^BenchmarkViewMetadataSenderProtocol$' -benchtime=200ms -count=1 \
+  -timeout=120s ./pkg/sql/compile
+.agents/skills/mo-dev/scripts/mo-cgo-test -run '^$' \
+  -bench '^BenchmarkViewMetadataSenderProtocol$' -benchtime=200ms -count=3 \
+  -timeout=120s ./pkg/sql/compile
+```
+
+Sender regressions assert no probe for ordinary scalar payloads, both registry
+identities alone and alongside a decimal-division floor, one released response
+per send, unknown-capability rejection, and renewed rejection after a successful
+v110 send followed by destination rollback. Placement tests additionally verify
+fallback with a v109 worker and remote placement with all-v110 workers. Existing
+prepare/receive predecessor tests and the complete plan, compile, and planner
+package tests pass. The metadata result/catalog contract and BVT inputs remain
+unchanged by this compatibility-check optimization.
 
 ## Unresolved questions
 

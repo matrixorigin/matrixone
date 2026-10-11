@@ -122,6 +122,9 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	if features.CalendarIntervalNormalization {
 		required = max(required, defines.MORPCVersion115)
 	}
+	if features.ViewMetadataFunctions {
+		required = max(required, defines.MORPCVersion111)
+	}
 	return required
 }
 
