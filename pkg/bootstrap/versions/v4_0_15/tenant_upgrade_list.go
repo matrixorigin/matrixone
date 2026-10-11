@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,68 +14,8 @@
 
 package v4_0_15
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
-)
+import "github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 
-var tenantUpgEntries = []versions.UpgradeEntry{
-	{
-		Schema:                  catalog.MO_CATALOG,
-		TableName:               catalog.MODatabaseDefaults,
-		UpgType:                 versions.CREATE_NEW_TABLE,
-		UpgSql:                  catalog.MoDatabaseDefaultsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion118,
-		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			return versions.CheckTableDefinition(txn, accountID, catalog.MO_CATALOG, catalog.MODatabaseDefaults)
-		},
-	},
-	{
-		Schema:                  sysview.InformationDBConst,
-		TableName:               "SCHEMATA",
-		UpgType:                 versions.MODIFY_VIEW,
-		UpgSql:                  sysview.InformationSchemaSchemataDDL,
-		PreSql:                  "DROP VIEW IF EXISTS information_schema.SCHEMATA;",
-		RequiredProtocolVersion: defines.MORPCVersion118,
-		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			exists, definition, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "SCHEMATA")
-			if err == nil && !exists {
-				exists, definition, err = versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "schemata")
-			}
-			return exists && definition == sysview.InformationSchemaSchemataDDL, err
-		},
-	},
-	{
-		Schema:                  sysview.InformationDBConst,
-		TableName:               "COLUMNS",
-		UpgType:                 versions.MODIFY_VIEW,
-		UpgSql:                  sysview.InformationSchemaColumnsDDL,
-		PreSql:                  "DROP VIEW IF EXISTS information_schema.COLUMNS;",
-		RequiredProtocolVersion: defines.MORPCVersion118,
-		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			exists, definition, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "COLUMNS")
-			if err == nil && !exists {
-				exists, definition, err = versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "columns")
-			}
-			return exists && definition == sysview.InformationSchemaColumnsDDL, err
-		},
-	},
-	{
-		Schema:                  sysview.InformationDBConst,
-		TableName:               "TABLES",
-		UpgType:                 versions.MODIFY_VIEW,
-		UpgSql:                  sysview.InformationSchemaTablesV118DDL,
-		PreSql:                  "DROP VIEW IF EXISTS information_schema.TABLES;",
-		RequiredProtocolVersion: defines.MORPCVersion118,
-		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			exists, definition, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "TABLES")
-			if err == nil && !exists {
-				exists, definition, err = versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "tables")
-			}
-			return exists && definition == sysview.InformationSchemaTablesV118DDL, err
-		},
-	},
-}
+// This repair is newer than every published upstream tenant version, so an
+// already-upgraded tenant is scheduled even if it lacks the revision catalog.
+var tenantUpgEntries = v4_0_7.PythonRevisionUpgradeEntries()

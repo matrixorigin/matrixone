@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -925,49 +924,34 @@ printf 'REVIEW signal=%s status=%s flag=%s retained=%s live_groups=%s later=%s\n
 }
 
 func TestEmbeddedPrebuiltFailureKeepsReportJSONOnly(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("prebuilt watchdog force-stop fixture relies on Linux process-group semantics")
-	}
 	t.Parallel()
 	for _, parallel := range []string{"1", "2"} {
 		t.Run("parallel="+parallel, func(t *testing.T) {
 			script := embeddedSetup + `
 function logger() { printf '%s\n' "$*"; }
-	# Keep the active test process groups false, then force only the first
-	# watchdog cleanup wait through its bounded force-stop branch. The
-	# diagnostic must remain in UT_STDERR; a missing redirection contaminates
-	# UT_REPORT.
-first_group_pid=""
-watchdog_group_pid=""
-watchdog_probe_count=0
-execution_started=0
+# Inject one live probe only at the explicitly selected watchdog cleanup.
+# Prebuild children, test processes and parent joins keep their real probes.
+# A zero grace period reaches force-stop without a wall-clock phase trigger.
+eval "$(declare -f ut_process_group_alive | sed '1s/ut_process_group_alive/original_ut_process_group_alive/')"
 function ut_process_group_alive() {
- local pid=$1
- if [[ ! -e "$CASE_DIR/execution-start" ]]; then return 1; fi
- if (( execution_started == 0 )); then
-  first_group_pid=""
-  watchdog_group_pid=""
-  watchdog_probe_count=0
-  execution_started=1
+ if [[ "$1" == "${forced_watchdog_pid:-}" ]] && (( forced_watchdog_probes == 0 )); then
+  forced_watchdog_probes=1
+  return 0
  fi
- if [[ -z "$first_group_pid" ]]; then
-  first_group_pid=$pid
-  return 1
+ original_ut_process_group_alive "$@"
+}
+force_stop_injected=0
+function wait_for_fixture_watchdog() {
+ if (( force_stop_injected != 0 )); then
+  wait_for_ut_process_group "$@"
+  return $?
  fi
- if [[ "$pid" == "$first_group_pid" ]]; then return 1; fi
- if [[ -z "$watchdog_group_pid" ]]; then
-  watchdog_group_pid=$pid
- fi
- if [[ "$pid" == "$watchdog_group_pid" ]]; then
-  watchdog_probe_count=$((watchdog_probe_count + 1))
-  if (( watchdog_probe_count <= 21 )); then return 0; fi
-  return 1
- fi
- return 1
+ force_stop_injected=1
+ local forced_watchdog_pid=$1 forced_watchdog_probes=0
+ wait_for_ut_process_group "$1" 0
 }
 start_embedded_prebuild "$scope" 1
 status=0
-touch "$CASE_DIR/execution-start"
 run_embedded_tests "$scope" 2 > "$CASE_DIR/outer-log" || status=$?
 [[ "$status" != 0 ]] || exit 90
 cat "$UT_REPORT"
@@ -975,7 +959,16 @@ cat "$UT_REPORT"
 grep -q 'prebuilt embedded package example/b failed' "$UT_STDERR" || exit 92
 grep -q 'UT cancellation: force stopping process group' "$UT_STDERR" || exit 93
 `
-			out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, nil,
+			transform := func(text string) string {
+				const anchor = `wait_for_ut_process_group "${watchdog_pids[index]}" 20`
+				if strings.Count(text, anchor) != 1 {
+					t.Fatal("missing unique watchdog cleanup wait")
+				}
+				// Preserve the call's redirection: removing it must contaminate
+				// the real JSON report and fail the independent parser oracle.
+				return strings.Replace(text, anchor, `wait_for_fixture_watchdog "${watchdog_pids[index]}" 20`, 1)
+			}
+			out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, transform,
 				"MODE=test-failure", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=", "UT_EMBEDDED_PACKAGE_PARALLEL="+parallel)
 			if err != nil {
 				t.Fatalf("embedded failure JSON report: %v\n%s", err, out)
