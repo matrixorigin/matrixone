@@ -314,7 +314,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, err
 				}
 				if result.Batch == nil {
-					if ctr.bat != nil {
+					if ctr.bat != nil && !ctr.bat.IsEmpty() {
 						ctr.status = eval
 					} else {
 						ctr.status = done

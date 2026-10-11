@@ -2391,6 +2391,50 @@ func TestNtileBucketCountRejectsNull(t *testing.T) {
 	require.ErrorContains(t, err, "ntile bucket count cannot be NULL")
 }
 
+func TestWindowReuseWithEmptyInput(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{Expr: &plan.Expr_W{W: &plan.WindowSpec{
+			Name: "row_number", WindowFunc: newFunExpr("row_number"),
+		}}}},
+		Aggs: []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+	}
+	child := colexec.NewMockOperator()
+	arg.AppendChild(child)
+	t.Cleanup(func() {
+		arg.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	for _, values := range [][]int32{nil, {1, 2, 3}, nil, {4, 5}} {
+		arg.Reset(proc, false, nil)
+		child.Free(proc, false, nil)
+		if len(values) != 0 {
+			child.WithBatchs([]*batch.Batch{makeInt32Batch(proc.Mp(), values)})
+		} else {
+			child.WithBatchs([]*batch.Batch{batch.EmptyBatch})
+		}
+		require.NoError(t, arg.Prepare(proc))
+		var got []uint64
+		for {
+			result, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			if result.Batch == nil {
+				require.Equal(t, vm.ExecStop, result.Status)
+				break
+			}
+			require.Positive(t, result.Batch.RowCount())
+			got = append(got, vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[1])...)
+		}
+		var want []uint64
+		for i := range values {
+			want = append(want, uint64(i+1))
+		}
+		require.Equal(t, want, got)
+	}
+}
+
 func TestWindowResetBeforeAllChunksReleasesState(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rows := colexec.DefaultBatchSize * 2
