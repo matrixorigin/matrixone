@@ -48,10 +48,16 @@ PROFILE_FINALIZE_SECONDS = 10800
 def profile_workspace_bytes(root):
     size = files = 0
     for path in root.rglob("*"):
-        if not path.is_file():
+        try:
+            info = path.stat()
+        except FileNotFoundError:
+            # The comparator owns and retires temporary runs concurrently.
+            # A removed file retains no bytes; other stat failures stay fatal.
+            continue
+        if not stat.S_ISREG(info.st_mode):
             continue
         files += 1
-        size += path.stat().st_size
+        size += info.st_size
         if files > 65536 or size > PROFILE_WORKSPACE_BYTES:
             raise v2.CampaignError("profile/log workspace quota exceeded")
     return size

@@ -82,6 +82,30 @@ class ControllerTest(unittest.TestCase):
                 with self.assertRaisesRegex(v2.CampaignError, "quota"):
                     controller.profile_workspace_bytes(root)
 
+    def test_workspace_scan_tolerates_retired_files_and_keeps_other_failures_fatal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            retired = root / "compare-retired.ndjson"
+            retained = root / "retained"
+            retired.write_bytes(b"old")
+            retained.write_bytes(b"12345")
+            original = Path.stat
+
+            def retire(path, *args, **kwargs):
+                if path == retired:
+                    retired.unlink(missing_ok=True)
+                    raise FileNotFoundError()
+                return original(path, *args, **kwargs)
+
+            with patch.object(Path, "stat", autospec=True, side_effect=retire):
+                self.assertEqual(5, controller.profile_workspace_bytes(root))
+            with patch.object(controller, "PROFILE_WORKSPACE_BYTES", 4):
+                with self.assertRaisesRegex(v2.CampaignError, "quota"):
+                    controller.profile_workspace_bytes(root)
+            with patch.object(Path, "stat", side_effect=PermissionError()):
+                with self.assertRaises(PermissionError):
+                    controller.profile_workspace_bytes(root)
+
     def test_profile_workspace_quota_counts_all_retained_phases(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
