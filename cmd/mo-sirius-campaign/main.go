@@ -272,12 +272,14 @@ func run(ctx context.Context, cfg configuration, spec runSpec) (out output, err 
 	if spec.Route == "embedded-mo" {
 		statement = "/*+ SIDECAR GPU */ " + statement
 	}
+	queryCtx, cancelQuery := context.WithCancel(ctx)
+	defer cancelQuery()
 	started := time.Now()
-	rows, err := connection.QueryContext(ctx, statement)
+	rows, err := connection.QueryContext(queryCtx, statement)
 	if err != nil {
 		return out, err
 	}
-	out.Result, out.FirstRow, err = drainResult(rows, file, spec.SpoolBudget, started)
+	out.Result, out.FirstRow, err = drainResult(rows, file, spec.SpoolBudget, started, cancelQuery)
 	if err != nil {
 		return out, err
 	}

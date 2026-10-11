@@ -176,6 +176,7 @@ def validate(
         or len(allocations) != 6
     ):
         raise campaign.CampaignError("allocation profile coverage incomplete")
+    physical_query_ids = set()
     for allocation in allocations:
         _record_identity(identity, allocation.get("provenance", {}))
         if (
@@ -209,6 +210,32 @@ def validate(
             and row["streams"] == allocation["streams"]
         }
         measured = [span for span in spans if span["phase"] == "resource-validation"]
+        if [span.get("phase") for span in spans] != (
+            ["resource-warmup"] * 22 + ["resource-validation"] * 22 + ["cleanup-probe"]
+        ):
+            raise campaign.CampaignError("allocation span phase order differs")
+        previous_end = -1
+        span_identities = set()
+        for span in spans:
+            query = campaign.query_uuid(span.get("query_id"))
+            start, end = span.get("start_ns"), span.get("end_ns")
+            if (
+                query in span_identities
+                or query in physical_query_ids
+                or span.get("phase") != "resource-validation"
+                and query in by_query
+                or type(start) is not int
+                or type(end) is not int
+                or not previous_end <= start < end
+                or span.get("time_domain") != "unix-epoch-ns"
+                or span.get("scope") != "runner-lifetime"
+            ):
+                raise campaign.CampaignError(
+                    "allocation span identity or interval differs"
+                )
+            span_identities.add(query)
+            physical_query_ids.add(query)
+            previous_end = end
         if {span.get("sequence") for span in measured} != set(matched) or any(
             span.get("query_id") != matched[span["sequence"]]["query_id"]
             or any(
@@ -224,6 +251,12 @@ def validate(
         before, after = allocation.get("warmed_baseline_bytes", {}), allocation.get(
             "post_cleanup_bytes", {}
         )
+        if before != measured[0].get("before_bytes") or after != spans[-1].get(
+            "before_bytes"
+        ):
+            raise campaign.CampaignError(
+                "allocation baseline snapshot differs from trace"
+            )
         if (
             set(before) != {"pinned", "device"}
             or set(after) != set(before)
@@ -259,7 +292,8 @@ def validate(
     ):
         raise campaign.CampaignError("fatal quarantine process closure unproved")
     if (
-        sanitizer.get("exit_status") != 0
+        type(sanitizer.get("raw_exit_status")) is not int
+        or sanitizer.get("raw_exit_status") not in (0, 99)
         or sanitizer.get("unexplained_errors") != 0
         or sanitizer.get("unexplained_leaks") != 0
         or sanitizer.get("cudf_pinned_pool_reconciled") is not True
@@ -267,6 +301,108 @@ def validate(
         or not campaign.legacy._is_sha256(sanitizer.get("evidence_sha256"))
     ):
         raise campaign.CampaignError("sanitizer/pinned-pool/CUB acceptance unresolved")
+    hashes = sanitizer.get("raw_evidence_sha256", {})
+    raw_runs = sanitizer.get("runs", [])
+    if (
+        not isinstance(hashes, dict)
+        or len(hashes) not in (2, 4)
+        or any(
+            not isinstance(name, str)
+            or not 0 < len(name) <= 128
+            or Path(name).name != name
+            for name in hashes
+        )
+        or any(not campaign.legacy._is_sha256(value) for value in hashes.values())
+        or len(set(hashes.values())) != len(hashes)
+        or not isinstance(raw_runs, list)
+        or len(raw_runs) != len(hashes)
+        or any(
+            not isinstance(run, dict) or not isinstance(run.get("id"), str)
+            for run in raw_runs
+        )
+        or {run.get("id") for run in raw_runs} != set(hashes)
+    ):
+        raise campaign.CampaignError("raw sanitizer evidence is missing or duplicated")
+    if sanitizer["raw_exit_status"] == 0:
+        if any(
+            any(
+                type(run.get(key)) is not int or run[key] != 0
+                for key in ("exit_status", "raw_error_count", "raw_leak_bytes")
+            )
+            for run in raw_runs
+        ):
+            raise campaign.CampaignError(
+                "raw sanitizer findings contradict zero status"
+            )
+    else:
+        reconciliations = sanitizer.get("reconciliations", [])
+        if (
+            not isinstance(reconciliations, list)
+            or len(reconciliations) != 2
+            or any(
+                not isinstance(item, dict) or not isinstance(item.get("id"), str)
+                for item in reconciliations
+            )
+        ):
+            raise campaign.CampaignError(
+                "matched sanitizer controls are missing or duplicated"
+            )
+        reconciled = {item.get("id"): item for item in reconciliations}
+        if len(reconciliations) != 2 or set(reconciled) != {
+            "cudf-default-pinned-pool",
+            "cub-empty-kernel-registration",
+        }:
+            raise campaign.CampaignError(
+                "nonzero sanitizer outcome lacks matched controls"
+            )
+        pinned = reconciled["cudf-default-pinned-pool"]
+        cub = reconciled["cub-empty-kernel-registration"]
+        if (
+            pinned.get("candidate_bytes") != 41386248
+            or pinned.get("control_bytes") != pinned["candidate_bytes"]
+            or pinned.get("candidate_allocations") != 1
+            or pinned.get("control_allocations") != 1
+            or pinned.get("initialization_without_gpu_work") is not True
+            or pinned.get("owner") != "process-global-cudf-default-pinned-resource"
+            or pinned.get("query_credit_retained_bytes") != 0
+            or pinned.get("steady_profile_growth_bytes") != [0] * 6
+            or cub.get("candidate_errors") != 1
+            or cub.get("control_errors") != cub["candidate_errors"]
+            or cub.get("control_revision") != "c440013c89f1a54a6e5d934aabd0f9d3ef15ed3c"
+            or cub.get("symbol") != "_ZN3cub6detail11EmptyKernelIvEEvv"
+            or cub.get("source_unchanged_from_control") is not True
+            or not campaign.legacy._is_sha256(cub.get("source_sha256"))
+            or not campaign.legacy._is_sha256(cub.get("no_op_header_sha256"))
+            or any(
+                not campaign.legacy._is_sha256(item.get(key))
+                for item in (pinned, cub)
+                for key in ("candidate_evidence_sha256", "control_evidence_sha256")
+            )
+        ):
+            raise campaign.CampaignError(
+                "matched sanitizer baseline reconciliation failed"
+            )
+        classified = {
+            item[key]: (1, 41386248 if item is pinned else 0)
+            for item in (pinned, cub)
+            for key in ("candidate_evidence_sha256", "control_evidence_sha256")
+        }
+        if (
+            len(classified) != 4
+            or set(classified) != set(hashes.values())
+            or any(
+                type(run.get("exit_status")) is not int
+                or run["exit_status"] != 99
+                or type(run.get("raw_error_count")) is not int
+                or type(run.get("raw_leak_bytes")) is not int
+                or (run["raw_error_count"], run["raw_leak_bytes"])
+                != classified[hashes[run["id"]]]
+                for run in raw_runs
+            )
+        ):
+            raise campaign.CampaignError(
+                "raw sanitizer findings differ from matched controls"
+            )
     baseline_cases = baselines.get("cases", [])
     if {case.get("id") for case in baseline_cases} != set(BASELINE_CASES) or len(
         baseline_cases

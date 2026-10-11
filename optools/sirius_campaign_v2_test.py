@@ -109,6 +109,11 @@ def output(root, name, values, *, oid=23, nullable=False):
 
 
 class CampaignV2Test(unittest.TestCase):
+    def test_nil_query_identity_cannot_identify_executed_work(self):
+        with self.assertRaises(campaign.CampaignError):
+            campaign.query_uuid("00000000-0000-0000-0000-000000000000")
+        self.assertEqual("a" * 32, campaign.query_uuid("a" * 32))
+
     def test_flight_preflight_rejects_secrets_duplicates_and_unverified_tae(self):
         proof = {
             "matrixone_revision": "a" * 40,

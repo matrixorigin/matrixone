@@ -150,8 +150,9 @@ cutover and Flight retirement remain E/F under a separate recovery-readiness
 design; a nil/unready lease manager is never proof of no old consumers.
 
 Design review: PASS for the approved contract and ownership model. Remaining
-execution gates are C merge, provisioned immutable datasets/valid baselines and
-terminal acceptance evidence, not permission to infer success. Implementation
+execution gates are the merged native prerequisite and terminal release acceptance
+evidence. C is merged; immutable SF1/SF10 inputs and matched numeric baselines
+are now provisioned and verified. Implementation
 deviations require this document and affected decisions to be reviewed again.
 
 ## Revision 3 implementation decisions
@@ -176,7 +177,8 @@ comparison uses 32 MiB working memory and 4 GiB total comparison scratch.
 V1 dispatch, routes, artifacts and tests retain their meaning.
 
 The controller owns persistent separate LOG/TN/CN roles. The worker and services
-are siblings; only the worker enters exclusive subreaping. CN restarts occur
+are siblings. Both the worker and controller enter exclusive subreaping; the
+outer controller joins descendants orphaned by a failed worker. CN restarts occur
 only at stream-profile changes, retaining committed immutable datasets.
 Defaults: 6 GiB GPU, 16 GiB native host, existing 64 MiB windows, one active plus
 sixteen waiting queries, one-hour query and three-hour profiling deadlines.
@@ -206,6 +208,15 @@ shutdown and deletes invocation-owned row spools and raw trace/log workspaces.
 Its retained artifacts include safe run records, CSV repetitions, Markdown
 timing tables and resource summaries.
 
+For diagnosis after an interrupted resource run, `--resource --resource-phases
+5 6` runs only SF10 streams 4 and 2, with their original schedule identities.
+Phases 1..6 are SF1 streams 1/4/2 followed by SF10 streams 1/4/2. This mode
+publishes `resource-diagnostic.json` with `partial: true`, `complete: false` and
+`diagnostic-runs.jsonl`, after joined cleanup. It never writes a complete campaign
+summary or timing verdict, even when all six phases are selected. Preserve each
+capture's actual provenance; diagnostic or mixed-source captures cannot replace
+the uniform complete release campaign.
+
 Each resource configuration runs an excluded complete warmup suite and a final
 Q1 cleanup probe. Existing native tagged pool snapshots remain distinct from
 Nsight physical allocation/free events and PID sampling. Native pool peak tags
@@ -230,6 +241,19 @@ only a fixed stage, sequence and repository source line, with no error body.
 Allocation capture disables optional all-API and device-event tracing. Private
 profile workspaces have a separate 48 GiB cap, including profiler intermediates;
 each exported SQLite trace is bounded to 16 GiB and parsed with an 8 MiB cache.
+The live allocation map holds at most 65,536 generations in memory, then spills
+exact acquisition/free matching to a private SQLite ledger with an 8 MiB cache
+and a strict 4 GiB page quota. Duplicate generations and unmatched frees remain errors.
+SQLite's event ordering also uses temporary sorting files; see its
+[sorting implementation](https://github.com/sqlite/sqlite/blob/master/src/vdbesort.c).
+The exclusive parser disables memory mapping and worker threads, uses private
+temporary storage, limits address space to 1 GiB and each sorting file to 8 GiB,
+and restores the environment, limits and signal handler after success or failure.
+Reserve the two sorting files and the ledger against the invocation's 48 GiB
+quota. Retain safe per-phase query envelopes before deleting each joined raw
+phase workspace so completed traces cannot accumulate across configurations.
+Report generation and export have the bounded three-hour profiling deadline;
+SF10 intermediates and conversion take longer than the small SF1 preflight.
 The first SF1 capture contained 2.55 million memory events and a 717 MiB SQLite
 export; the separate trace bounds allow the required tenfold scale. Go's direct
 `exit_group` skips native atexit finalizers and leaves Nsight's CUDA trace
@@ -262,3 +286,12 @@ partial, changed or misattributed evidence fails closed. Passing local gates
 sets `local_acceptance_complete`; required CI and reviewer approval still gate
 final acceptance. The current implementation does not infer those decisions
 from a local test or an incomplete run.
+
+Early consumer failures cancel the SQL query before closing unread rows, so the
+MySQL driver's close cannot keep draining a blocked producer until the query
+deadline. Cancellation affects only that query's child context; the retained
+failure still includes its original value/writer/quota and observed close errors.
+Acceptance crosslinks allocation baselines to the actual measured/probe snapshots
+and checks unique, ordered CUDA spans. Matched sanitizer classifications retain
+raw exit status 99 and the exact candidate/control error and leak counts; extra
+findings or duplicate controls fail acceptance.

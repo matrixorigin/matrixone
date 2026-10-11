@@ -30,12 +30,69 @@ from sirius_campaign_v2_test import provenance, output
 
 
 class ControllerTest(unittest.TestCase):
+    def test_resource_diagnostics_preserve_full_schedule_and_cannot_accept(self):
+        from sirius_acceptance_test import evidence
+
+        data = evidence()
+        manifest = data[2]
+        rows = data[3][176:]
+        original = copy.deepcopy(manifest)
+        report = controller.resource_diagnostic_summary(manifest, rows, [6, 5])
+        self.assertEqual([5, 6], report["resource_phases"])
+        self.assertEqual(88, report["validated"])
+        self.assertTrue(report["partial"])
+        self.assertFalse(report["complete"])
+        self.assertEqual(original, manifest)
+        with self.assertRaises(v2.CampaignError):
+            v2.summarize(manifest, rows)
+        for mutation in (
+            lambda values: values.pop(),
+            lambda values: values[0].update(sequence=1),
+            lambda values: values[1].update(query_id=values[0]["query_id"]),
+        ):
+            changed = copy.deepcopy(rows)
+            mutation(changed)
+            with self.assertRaises(v2.CampaignError):
+                controller.resource_diagnostic_summary(manifest, changed, [5, 6])
+        report = controller.resource_diagnostic_summary(
+            manifest, data[3], [1, 2, 3, 4, 5, 6]
+        )
+        self.assertFalse(report["complete"])
+
+    def test_resource_phase_selection_rejects_invalid_or_timing_requests(self):
+        self.assertEqual((), controller.resource_phase_selection(False, None))
+        self.assertEqual((5, 6), controller.resource_phase_selection(True, [6, 5]))
+        for resource, phases in (
+            (False, [1]),
+            (True, []),
+            (True, [1, 1]),
+            (True, [0]),
+            (True, [7]),
+            (True, [True]),
+        ):
+            with self.assertRaises(v2.CampaignError):
+                controller.resource_phase_selection(resource, phases)
+
     def test_profile_workspace_quota_is_checked_after_export_too(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "trace.sqlite").write_bytes(b"12345")
             self.assertEqual(5, controller.profile_workspace_bytes(root))
             with patch.object(controller, "PROFILE_WORKSPACE_BYTES", 4):
+                with self.assertRaisesRegex(v2.CampaignError, "quota"):
+                    controller.profile_workspace_bytes(root)
+
+    def test_profile_workspace_quota_counts_all_retained_phases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for number in (5, 6):
+                phase = root / f"phase-{number}"
+                phase.mkdir()
+                (phase / "trace.sqlite").write_bytes(b"123")
+            with patch.object(controller, "PROFILE_WORKSPACE_BYTES", 4):
+                self.assertEqual(
+                    3, controller.profile_workspace_bytes(root / "phase-5")
+                )
                 with self.assertRaisesRegex(v2.CampaignError, "quota"):
                     controller.profile_workspace_bytes(root)
 
@@ -341,7 +398,7 @@ print(json.dumps({'joined':True}))
                 resource.allocation_summary(path, 999)
             db.close()
 
-    def test_resource_tracker_fails_closed_at_live_allocation_bound(self):
+    def test_resource_tracker_spills_at_live_memory_bound(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "trace.sqlite"
             db = sqlite3.connect(path)
@@ -356,8 +413,73 @@ print(json.dumps({'joined':True}))
             db.commit()
             db.close()
             with patch.object(resource, "MAX_LIVE_ALLOCATIONS", 1):
-                with self.assertRaisesRegex(v2.CampaignError, "memory bound"):
-                    resource.allocation_summary(path, 123)
+                result = resource.allocation_summary(path, 123)
+            self.assertEqual({"pinned": 64, "device": 128}, result["peak_bytes"])
+            self.assertEqual([], list(Path(directory).glob("sirius-ledger-*")))
+
+    def test_spilled_allocation_generations_and_quota_keep_cleanup_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = resource.AllocationLedger(Path(directory))
+            try:
+                with patch.object(resource, "MAX_LIVE_ALLOCATIONS", 1):
+                    ledger.add((None, 10, "pinned"), 64)
+                    ledger.add((1, 20, "device"), 128)
+                self.assertIsNotNone(ledger.database)
+                self.assertEqual({}, ledger.memory)
+                with self.assertRaisesRegex(v2.CampaignError, "reused"):
+                    ledger.add((1, 20, "device"), 1)
+                self.assertEqual(128, ledger.release((1, 20, "device")))
+                with self.assertRaisesRegex(v2.CampaignError, "matching acquisition"):
+                    ledger.release((1, 20, "device"))
+                ledger.operations = 4095
+                with patch.object(resource, "MAX_LEDGER_BYTES", 1):
+                    with self.assertRaisesRegex(v2.CampaignError, "quota"):
+                        ledger.add((1, 30, "device"), 1)
+            finally:
+                ledger.close()
+            self.assertEqual([], list(Path(directory).glob("sirius-ledger-*")))
+
+    def test_spilled_ledger_cannot_grow_past_sqlite_page_quota(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = resource.AllocationLedger(Path(directory))
+            try:
+                with patch.object(resource, "MAX_LIVE_ALLOCATIONS", 1), patch.object(
+                    resource, "MAX_LEDGER_BYTES", 8192
+                ):
+                    with self.assertRaisesRegex(v2.CampaignError, "quota"):
+                        for address in range(10000):
+                            ledger.add((1, address, "device"), 64)
+                    self.assertLessEqual(
+                        (Path(ledger.directory.name) / "live.sqlite").stat().st_size,
+                        8192,
+                    )
+                    self.assertLess(ledger.operations, 4096)
+            finally:
+                ledger.close()
+            self.assertEqual([], list(Path(directory).glob("sirius-ledger-*")))
+
+    def test_sqlite_sort_file_limit_cleans_scope_and_restores_os_limits(self):
+        limits = {
+            kind: resource.posix_resource.getrlimit(kind)
+            for kind in (
+                resource.posix_resource.RLIMIT_FSIZE,
+                resource.posix_resource.RLIMIT_AS,
+            )
+        }
+        old_directory = resource.os.environ.get("SQLITE_TMPDIR")
+        old_signal = resource.signal.getsignal(resource.signal.SIGXFSZ)
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(resource, "MAX_SORT_FILE_BYTES", 8192):
+                with resource.bounded_sqlite_sort(Path(directory)) as scratch:
+                    path = scratch / "sort-pma"
+                    with self.assertRaises(OSError):
+                        path.write_bytes(b"x" * 8193)
+                    self.assertLessEqual(path.stat().st_size, 8192)
+            self.assertEqual([], list(Path(directory).iterdir()))
+        self.assertEqual(old_directory, resource.os.environ.get("SQLITE_TMPDIR"))
+        self.assertEqual(old_signal, resource.signal.getsignal(resource.signal.SIGXFSZ))
+        for kind, old in limits.items():
+            self.assertEqual(old, resource.posix_resource.getrlimit(kind))
 
     def test_nvml_zero_before_context_is_an_observation(self):
         nvml = controller.NVML.__new__(controller.NVML)

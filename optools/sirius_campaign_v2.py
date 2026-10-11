@@ -82,7 +82,11 @@ def query_uuid(value):
     if not isinstance(value, str):
         raise CampaignError("missing query identity")
     value = value.replace("-", "").lower()
-    if len(value) != 32 or any(char not in "0123456789abcdef" for char in value):
+    if (
+        len(value) != 32
+        or value == "0" * 32
+        or any(char not in "0123456789abcdef" for char in value)
+    ):
         raise CampaignError("invalid query identity")
     return value
 

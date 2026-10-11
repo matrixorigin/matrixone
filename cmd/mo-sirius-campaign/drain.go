@@ -26,8 +26,15 @@ import (
 )
 
 // drainResult owns every result-set path, including late errors and failed writes.
-func drainResult(rows *sql.Rows, destination io.Writer, budget int64, started time.Time) (result resultDescriptor, firstRow *float64, err error) {
-	defer func() { err = errors.Join(err, rows.Close()) }()
+func drainResult(rows *sql.Rows, destination io.Writer, budget int64, started time.Time, cancelQuery func()) (result resultDescriptor, firstRow *float64, err error) {
+	defer func() {
+		if err != nil {
+			// mysql Rows.Close drains unread packets. Cancel first so a failed
+			// consumer can interrupt a producer blocked by result backpressure.
+			cancelQuery()
+		}
+		err = errors.Join(err, rows.Close())
+	}()
 	columns, err := rows.ColumnTypes()
 	if err != nil {
 		return result, firstRow, err

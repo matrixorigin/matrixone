@@ -957,8 +957,61 @@ def run_worker(config_path):
         scratch.close()
 
 
+def resource_phase_selection(resource, phases):
+    if phases is None:
+        return ()
+    if (
+        not resource
+        or not phases
+        or len(phases) > 6
+        or any(type(phase) is not int or not 1 <= phase <= 6 for phase in phases)
+        or len(set(phases)) != len(phases)
+    ):
+        raise v2.CampaignError("diagnostic phases require unique resource phases 1..6")
+    return tuple(sorted(phases))
+
+
+def resource_diagnostic_summary(campaign, records, selected):
+    """Validate selected cells without creating a full-campaign verdict."""
+    selected = resource_phase_selection(campaign["resource_campaign"], selected)
+    expected = [
+        spec
+        for number, (_, specs) in enumerate(
+            itertools.groupby(
+                campaign["schedule"],
+                lambda spec: (spec["scale_factor"], spec["streams"]),
+            ),
+            1,
+        )
+        for spec in specs
+        if number in selected
+    ]
+    if len(records) != len(expected):
+        raise v2.CampaignError("diagnostic requires all selected query records")
+    identities = set()
+    for spec, record in zip(expected, records):
+        v2.validate_record(spec, record)
+        identity = v2.query_uuid(record["query_id"])
+        if identity in identities:
+            raise v2.CampaignError("diagnostic contains duplicate query identity")
+        identities.add(identity)
+    return {
+        "schema_version": 2,
+        "diagnostic": True,
+        "partial": True,
+        "complete": False,
+        "resource_phases": list(selected),
+        "validated": len(records),
+        "schedule_sha256": hashlib.sha256(v2.canonical(expected)).hexdigest(),
+        "provenance": campaign["provenance"],
+    }
+
+
 def run_complete(arguments, *, provenance=None):
     """Only the controller can assemble the immutable complete verdict."""
+    selected = resource_phase_selection(
+        arguments.resource, getattr(arguments, "resource_phases", None)
+    )
     workspace = arguments.workspace.resolve()
     output = arguments.output.resolve()
     if output.exists() and any(output.iterdir()):
@@ -1039,6 +1092,8 @@ def run_complete(arguments, *, provenance=None):
             ),
             1,
         ):
+            if selected and phase_number not in selected:
+                continue
             if cn is not None:
                 cn.close()
                 services.remove(cn)
@@ -1197,7 +1252,7 @@ def run_complete(arguments, *, provenance=None):
                     # Bound all private trace/log material independently of row scratch.
                     profile_workspace_peak = max(
                         profile_workspace_peak,
-                        profile_workspace_bytes(phase_workspace),
+                        profile_workspace_bytes(run_workspace),
                     )
                     if profile_workspace_peak > PROFILE_WORKSPACE_BYTES:
                         raise v2.CampaignError("profile/log workspace quota exceeded")
@@ -1255,7 +1310,7 @@ def run_complete(arguments, *, provenance=None):
                 services.remove(cn)
                 cn = None
                 profile_workspace_peak = max(
-                    profile_workspace_peak, profile_workspace_bytes(phase_workspace)
+                    profile_workspace_peak, profile_workspace_bytes(run_workspace)
                 )
                 exported = phase_workspace / "resource.sqlite"
                 subprocess.run(
@@ -1273,11 +1328,21 @@ def run_complete(arguments, *, provenance=None):
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-                from sirius_resource import allocation_summary
+                from sirius_resource import (
+                    allocation_summary,
+                    MAX_LEDGER_BYTES,
+                    MAX_SORT_FILE_BYTES,
+                )
 
                 profile_workspace_peak = max(
-                    profile_workspace_peak, profile_workspace_bytes(phase_workspace)
+                    profile_workspace_peak, profile_workspace_bytes(run_workspace)
                 )
+                if profile_workspace_bytes(run_workspace) > (
+                    PROFILE_WORKSPACE_BYTES - MAX_LEDGER_BYTES - 2 * MAX_SORT_FILE_BYTES
+                ):
+                    raise v2.CampaignError(
+                        "profile workspace lacks allocation ledger capacity"
+                    )
 
                 all_runs = (
                     envelope["excluded_warmups"]
@@ -1332,8 +1397,18 @@ def run_complete(arguments, *, provenance=None):
                         "cleanup_probes": envelope["cleanup_probes"],
                     },
                 )
+                private_json(
+                    output / f"query-records-phase-{phase_number}.json", envelope
+                )
+                # Worker, CN, profiler, export and ledger owners have joined.
+                # Safe evidence survives; old raw phases cannot accumulate.
+                shutil.rmtree(phase_workspace)
         stage = "summary"
-        summary = v2.summarize(campaign, records)
+        summary = (
+            resource_diagnostic_summary(campaign, records, selected)
+            if selected
+            else v2.summarize(campaign, records)
+        )
     except BaseException as error:
         diagnostic = {
             "schema_version": 2,
@@ -1370,10 +1445,13 @@ def run_complete(arguments, *, provenance=None):
             raise
         shutil.rmtree(run_workspace)
     # Full evidence is publishable only after all owned processes quiesce.
-    private_json(output / "campaign.json", campaign)
-    private_json(output / "summary.json", summary)
-    write_timing_tables(output, campaign, records, summary)
-    path = output / "runs.jsonl"
+    if selected:
+        private_json(output / "resource-diagnostic.json", summary)
+    else:
+        private_json(output / "campaign.json", campaign)
+        private_json(output / "summary.json", summary)
+        write_timing_tables(output, campaign, records, summary)
+    path = output / ("diagnostic-runs.jsonl" if selected else "runs.jsonl")
     descriptor = os.open(
         path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
     )
@@ -1571,6 +1649,13 @@ def main(argv=None):
     run.add_argument("--provenance", type=Path, required=True)
     run.add_argument("--output", type=Path, required=True)
     run.add_argument("--resource", action="store_true")
+    run.add_argument(
+        "--resource-phases",
+        type=int,
+        choices=range(1, 7),
+        nargs="+",
+        help="diagnostic only: selected resource phases; never publishes acceptance",
+    )
     run.add_argument("--port-base", type=int, default=36001)
     freeze = sub.add_parser("freeze")
     freeze.add_argument("--source-root", type=Path, required=True)

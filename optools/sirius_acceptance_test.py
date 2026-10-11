@@ -101,6 +101,7 @@ def evidence():
                     "phase": row["phase"],
                     "sequence": row["sequence"],
                     "query_id": row["query_id"],
+                    "before_bytes": {"pinned": 1, "device": 1},
                 }
                 for row in resource_rows
                 if row["scale_factor"] == scale
@@ -119,9 +120,32 @@ def evidence():
                     "pool_baseline_reconciled": True,
                     "warmed_baseline_bytes": {"pinned": 1, "device": 1},
                     "post_cleanup_bytes": {"pinned": 1, "device": 1},
-                    "runs": measured
-                    + [{"phase": "resource-warmup"} for _ in range(22)]
-                    + [{"phase": "cleanup-probe"}],
+                    "runs": [
+                        {
+                            "phase": "resource-warmup",
+                            "query_id": f"{100000 + len(allocations) * 1000 + index:032x}",
+                            "sequence": 1000000 + len(allocations) * 1000 + index,
+                            "time_domain": "unix-epoch-ns",
+                            "scope": "runner-lifetime",
+                            "start_ns": measured[0]["start_ns"] - 50 + 2 * index,
+                            "end_ns": measured[0]["start_ns"] - 49 + 2 * index,
+                            "before_bytes": {"pinned": 1, "device": 1},
+                        }
+                        for index in range(22)
+                    ]
+                    + measured
+                    + [
+                        {
+                            "phase": "cleanup-probe",
+                            "query_id": f"{200000 + len(allocations) * 1000:032x}",
+                            "sequence": 2000000 + len(allocations) * 1000,
+                            "time_domain": "unix-epoch-ns",
+                            "scope": "runner-lifetime",
+                            "start_ns": measured[-1]["end_ns"] + 1,
+                            "end_ns": measured[-1]["end_ns"] + 2,
+                            "before_bytes": {"pinned": 1, "device": 1},
+                        }
+                    ],
                 }
             )
     lifecycle = {
@@ -149,12 +173,17 @@ def evidence():
     )
     sanitizer = {
         "provenance": identity,
-        "exit_status": 0,
+        "raw_exit_status": 0,
         "unexplained_errors": 0,
         "unexplained_leaks": 0,
         "cudf_pinned_pool_reconciled": True,
         "cub_diagnostic_reconciled": True,
         "evidence_sha256": "d" * 64,
+        "raw_evidence_sha256": {"gpu.log": "1" * 64, "abi.log": "2" * 64},
+        "runs": [
+            {"id": name, "exit_status": 0, "raw_error_count": 0, "raw_leak_bytes": 0}
+            for name in ("gpu.log", "abi.log")
+        ],
     }
     baselines = {"provenance": identity, "cases": []}
     for case, kind in acceptance.BASELINE_CASES.items():
@@ -191,6 +220,90 @@ def evidence():
 
 
 class AcceptanceTest(unittest.TestCase):
+    def test_matched_sanitizer_controls_preserve_raw_nonzero_status(self):
+        inputs = evidence()
+        report = inputs[6]
+        report.update(
+            raw_exit_status=99,
+            raw_evidence_sha256={
+                "pinned.log": "a" * 64,
+                "pinned-control.log": "b" * 64,
+                "cub.log": "e" * 64,
+                "cub-control.log": "f" * 64,
+            },
+            runs=[
+                {
+                    "id": name,
+                    "exit_status": 99,
+                    "raw_error_count": 1,
+                    "raw_leak_bytes": 41386248 if name.startswith("pinned") else 0,
+                }
+                for name in (
+                    "pinned.log",
+                    "pinned-control.log",
+                    "cub.log",
+                    "cub-control.log",
+                )
+            ],
+            reconciliations=[
+                {
+                    "id": "cudf-default-pinned-pool",
+                    "candidate_bytes": 41386248,
+                    "control_bytes": 41386248,
+                    "candidate_allocations": 1,
+                    "control_allocations": 1,
+                    "initialization_without_gpu_work": True,
+                    "owner": "process-global-cudf-default-pinned-resource",
+                    "query_credit_retained_bytes": 0,
+                    "steady_profile_growth_bytes": [0] * 6,
+                    "candidate_evidence_sha256": "a" * 64,
+                    "control_evidence_sha256": "b" * 64,
+                },
+                {
+                    "id": "cub-empty-kernel-registration",
+                    "candidate_errors": 1,
+                    "control_errors": 1,
+                    "control_revision": "c440013c89f1a54a6e5d934aabd0f9d3ef15ed3c",
+                    "symbol": "_ZN3cub6detail11EmptyKernelIvEEvv",
+                    "source_unchanged_from_control": True,
+                    "source_sha256": "c" * 64,
+                    "no_op_header_sha256": "d" * 64,
+                    "candidate_evidence_sha256": "e" * 64,
+                    "control_evidence_sha256": "f" * 64,
+                },
+            ],
+        )
+        acceptance.validate(*inputs)
+        self.assertEqual(99, report["raw_exit_status"])
+        original = copy.deepcopy(report)
+        for mutation in (
+            lambda r: r["reconciliations"][0].update(candidate_bytes=41386249),
+            lambda r: r["reconciliations"][0].update(owner="query-owned-leak"),
+            lambda r: r["runs"][0].update(raw_leak_bytes=41386249),
+            lambda r: r["runs"][2].update(raw_error_count=2),
+            lambda r: r["runs"][2].update(exit_status=0),
+            lambda r: r["runs"].pop(),
+            lambda r: r["reconciliations"].append(
+                copy.deepcopy(r["reconciliations"][0])
+            ),
+        ):
+            inputs[6] = copy.deepcopy(original)
+            mutation(inputs[6])
+            with self.assertRaises(campaign.CampaignError):
+                acceptance.validate(*inputs)
+
+    def test_allocation_baselines_require_actual_ordered_trace_snapshots(self):
+        for mutation in (
+            lambda a: a["warmed_baseline_bytes"].update(pinned=2),
+            lambda a: a["post_cleanup_bytes"].update(pinned=0),
+            lambda a: a["runs"][-1].update(query_id=a["runs"][0]["query_id"]),
+            lambda a: a["runs"][0].update(end_ns=a["runs"][1]["end_ns"]),
+        ):
+            inputs = evidence()
+            mutation(inputs[4][0])
+            with self.assertRaises(campaign.CampaignError):
+                acceptance.validate(*inputs)
+
     def test_post_close_pool_proof_requires_the_actual_successor_begin(self):
         inputs = evidence()
         rows = [row for row in inputs[1] if row["backend"] == "embedded"]
