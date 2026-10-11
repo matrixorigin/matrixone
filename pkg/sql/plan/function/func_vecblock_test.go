@@ -358,8 +358,9 @@ func TestVectorMatmulResolution(t *testing.T) {
 	}
 }
 
-// TestVecBlockDistanceOverflow checks float32 overflow: inner product is an error, cosine
-// recomputes in float64 (the vectors are orthogonal).
+// TestVecBlockDistanceOverflow checks float32 lane overflow: the distances are recomputed in
+// float64, so x . y (products that cancel) is exactly 0 and cosine finds the vectors
+// orthogonal; x . x is beyond the float32 range, an error.
 func TestVecBlockDistanceOverflow(t *testing.T) {
 	const m = 3e38
 	x, y := make([]float32, 32), make([]float32, 32)
@@ -373,8 +374,11 @@ func TestVecBlockDistanceOverflow(t *testing.T) {
 	for _, oid := range vecBlockOids {
 		a := vecBlockCellVector(t, proc, oid, 32, [][]float32{x}, nil)
 		b := vecBlockCellVector(t, proc, oid, 32, [][]float32{y}, nil)
-		_, err := runVecBlockFn(t, proc, InnerProductVecBlock, types.T_float64.ToType(), a, b)
-		require.Error(t, err, "inner_product %s", oid)
+		res, err := runVecBlockFn(t, proc, InnerProductVecBlock, types.T_float64.ToType(), a, b)
+		require.NoError(t, err, "inner_product %s", oid)
+		require.Zero(t, vector.MustFixedColNoTypeCheck[float64](res)[0], "inner_product %s", oid)
+		_, err = runVecBlockFn(t, proc, InnerProductVecBlock, types.T_float64.ToType(), a, a)
+		require.Error(t, err, "inner_product %s of x with itself", oid)
 		for _, d := range []struct {
 			name string
 			op   executeLogicOfOverload
