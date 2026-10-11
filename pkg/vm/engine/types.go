@@ -1222,6 +1222,14 @@ type SourceCommitTSProvider interface {
 	SourceCommitTS(ctx context.Context, mustExceed types.TS) (types.TS, error)
 }
 
+// SourceCommitTSAfterCopyProvider returns committed source mutations while
+// excluding writes made by the current transaction. ALTER COPY has already
+// copied transaction-visible writes; it still must detect commits by other
+// transactions after the copy timestamp.
+type SourceCommitTSAfterCopyProvider interface {
+	SourceCommitTSAfterCopy(ctx context.Context, mustExceed types.TS) (types.TS, error)
+}
+
 // NewRelationHandle returns an exclusively owned handle when the engine
 // supports one. Engines with immutable or already-exclusive relations may
 // return the relation itself by not implementing RelationHandleFactory.

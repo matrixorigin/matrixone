@@ -2500,6 +2500,13 @@ func (rel *alterCopyTransactionLocalWritesRelation) SourceCommitTS(
 	return types.TS{}, errors.New("transaction-local relation has no committed source timestamp")
 }
 
+func (rel *alterCopyTransactionLocalWritesRelation) SourceCommitTSAfterCopy(
+	_ context.Context, mustExceed types.TS,
+) (types.TS, error) {
+	rel.sourceCommitTSCalled = true
+	return mustExceed.Next(), nil
+}
+
 func (rel *alterCopyTransactionLocalWritesRelation) HasTransactionLocalWrites(
 	context.Context,
 ) (bool, error) {
@@ -2512,6 +2519,12 @@ type alterCopySourceCommitTSRelation struct {
 }
 
 func (rel *alterCopySourceCommitTSRelation) SourceCommitTS(
+	ctx context.Context, mustExceed types.TS,
+) (types.TS, error) {
+	return rel.sourceCommitTS(ctx, mustExceed)
+}
+
+func (rel *alterCopySourceCommitTSRelation) SourceCommitTSAfterCopy(
 	ctx context.Context, mustExceed types.TS,
 ) (types.TS, error) {
 	return rel.sourceCommitTS(ctx, mustExceed)
@@ -3314,6 +3327,24 @@ func TestAlterCopyRejectsSourceDataChangeAfterCopy(t *testing.T) {
 	require.Empty(t, exec.snapshotSQL)
 }
 
+func TestAlterCopyRejectsPostCopySourceLockRetry(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	exec := &alterCopyLateOwnerExecutor{t: t}
+	stubAlterCopySourceLocks(t, moerr.NewTxnNeedRetryWithDefChangedNoCtx())
+	scope, compile := newAlterCopyGateConcurrencyFixture(
+		t, ctrl, exec, "post-copy-source-lock-retry", 123456789,
+	)
+	exec.mp = compile.proc.Mp()
+
+	err := scope.AlterTableCopy(compile)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
+	require.True(t, exec.physicalStarted)
+	require.Empty(t, exec.metadataSQL)
+	require.Empty(t, exec.snapshotSQL)
+}
+
 func TestCloneUnaffectedIndexesRetriesWhenSourceIndexDisappears(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -3354,15 +3385,15 @@ func TestAlterCopySkipsSourceChangesForRelationCreatedInCurrentTxn(t *testing.T)
 	require.False(t, rel.sourceCommitTSCalled)
 }
 
-func TestAlterCopySkipsSourceChangesForTransactionLocalWrites(t *testing.T) {
+func TestAlterCopyChecksCommittedChangesDespiteTransactionLocalWrites(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	compile := &Compile{proc: proc}
 	rel := &alterCopyTransactionLocalWritesRelation{}
 
 	changed, err := compile.alterCopySourceChangedSinceCopy(rel, 123456789)
 	require.NoError(t, err)
-	require.False(t, changed)
-	require.False(t, rel.sourceCommitTSCalled)
+	require.True(t, changed)
+	require.True(t, rel.sourceCommitTSCalled)
 }
 
 func TestAlterCopyCreateOptionsDisablesNestedCreateLock(t *testing.T) {
@@ -3434,6 +3465,27 @@ func TestAlterCopyPostPublicationConflictIsNotStatementRetryable(t *testing.T) {
 	compile := &Compile{proc: proc}
 
 	err := compile.alterCopyPostPublicationConflict("source data changed")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
+	require.False(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+	require.False(t, compile.isRetryErr(err))
+	require.False(t, compile.canRetry(err))
+}
+
+func TestAlterCopyPostPublicationRetryConflictIsNotStatementRetryable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	proc := testutil.NewProcess(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
+		Mode:      txn.TxnMode_Pessimistic,
+		Isolation: txn.TxnIsolation_RC,
+	}).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+	compile := &Compile{proc: proc}
+
+	err := compile.alterCopyPostPublicationRetryConflict(
+		moerr.NewTxnNeedRetryWithDefChangedNoCtx(),
+	)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 	require.False(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
 	require.False(t, compile.isRetryErr(err))

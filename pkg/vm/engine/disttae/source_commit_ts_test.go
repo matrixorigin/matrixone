@@ -42,6 +42,13 @@ type localWritesStub struct {
 	calls *int
 }
 
+type sourceCommitTSAfterCopyStub struct {
+	engine.Relation
+	ts    types.TS
+	err   error
+	calls *int
+}
+
 func (rel *sourceCommitTSStub) SourceCommitTS(
 	context.Context, types.TS,
 ) (types.TS, error) {
@@ -52,6 +59,13 @@ func (rel *sourceCommitTSStub) SourceCommitTS(
 func (rel *localWritesStub) HasTransactionLocalWrites(context.Context) (bool, error) {
 	*rel.calls++
 	return rel.has, nil
+}
+
+func (rel *sourceCommitTSAfterCopyStub) SourceCommitTSAfterCopy(
+	context.Context, types.TS,
+) (types.TS, error) {
+	*rel.calls++
+	return rel.ts, rel.err
 }
 
 // failClosedTxnTable builds a txnTable whose workspace holds an uncommitted write
@@ -80,6 +94,24 @@ func TestTxnTableHasTransactionLocalWrites(t *testing.T) {
 	has, err := failClosedTxnTable(t).HasTransactionLocalWrites(context.Background())
 	require.NoError(t, err)
 	require.True(t, has)
+}
+
+func TestSourceCommitTSAfterCopyIncludesCommittedStateDespiteLocalWrites(t *testing.T) {
+	tbl, proc := newViewPathTxnTable(t)
+	tbl.proc.Store(proc)
+	bat := batch.NewWithSize(1)
+	bat.SetRowCount(1)
+	tbl.getTxn().writes = []Entry{{tableId: 42, bat: bat}}
+
+	_, err := tbl.SourceCommitTS(context.Background(), types.BuildTS(20, 0))
+	require.ErrorContains(t, err, "transaction-local writes")
+
+	sourceTS, err := tbl.SourceCommitTSAfterCopy(
+		context.Background(), types.BuildTS(20, 0),
+	)
+	require.NoError(t, err)
+	mustExceed := types.BuildTS(20, 0)
+	require.True(t, sourceTS.GT(&mustExceed))
 }
 
 // newViewPathTxnTable builds a txnTable whose getPartitionState takes the
@@ -140,6 +172,23 @@ func TestCombinedTxnTableSourceCommitTSReturnsMax(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.BuildTS(30, 0), sourceTS)
 	require.Equal(t, 3, calls)
+}
+
+func TestCombinedTxnTableSourceCommitTSAfterCopyChecksEveryMember(t *testing.T) {
+	calls := 0
+	table := &combinedTxnTable{tablesFunc: func() ([]engine.Relation, error) {
+		return []engine.Relation{
+			&sourceCommitTSAfterCopyStub{ts: types.BuildTS(10, 0), calls: &calls},
+			&sourceCommitTSAfterCopyStub{ts: types.BuildTS(40, 0), calls: &calls},
+		}, nil
+	}}
+
+	sourceTS, err := table.SourceCommitTSAfterCopy(
+		context.Background(), types.BuildTS(20, 0),
+	)
+	require.NoError(t, err)
+	require.Equal(t, types.BuildTS(40, 0), sourceTS)
+	require.Equal(t, 2, calls)
 }
 
 func TestCombinedTxnTableHasTransactionLocalWritesShortCircuits(t *testing.T) {

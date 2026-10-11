@@ -125,6 +125,7 @@ type SourceCommitTS struct {
 	Appendable types.TS // hidden commit_ts values read from appendable objects
 	CNCreated  types.TS // commit time of a CN-created, non-appendable object
 	TNObject   types.TS // max user commit_ts read from a TN non-appendable object's commit_ts zonemap
+	Tombstone  types.TS // commit time of a persisted delete object
 }
 
 // Max returns the conservative source commit timestamp.
@@ -142,14 +143,19 @@ func (s SourceCommitTS) Max() types.TS {
 	if s.TNObject.GT(&ret) {
 		ret = s.TNObject
 	}
+	if s.Tombstone.GT(&ret) {
+		ret = s.Tombstone
+	}
 	return ret
 }
 
 // SourceCommitTSAt returns the partition-state retention boundary and source
 // commit timestamp candidates for a snapshot. Appendable objects are scanned on
 // disk because their ObjectEntry DeleteTime is a lifecycle timestamp and cannot
-// be used as a source DML timestamp. Any I/O uncertainty is returned to the
-// caller, which must fail closed before using an asynchronous index.
+// be used as a source DML timestamp. Persisted tombstone objects contribute
+// their CreateTime, which is the user DELETE commit. Any I/O uncertainty is
+// returned to the caller, which must fail closed before using an asynchronous
+// index.
 //
 // mustExceed short-circuits: the only consumer compares Max() against an index
 // build_ts, so once the terms gathered so far already exceed mustExceed the exact
@@ -231,6 +237,23 @@ func (p *PartitionState) SourceCommitTSAt(
 		}
 		if ts.GT(&ret.TNObject) {
 			ret.TNObject = ts
+		}
+	}
+	if exceeded() {
+		return ret, nil
+	}
+	tombstoneIter, err := p.NewObjectsIter(snapshot, true, true)
+	if err != nil {
+		return SourceCommitTS{}, err
+	}
+	defer tombstoneIter.Close()
+	for tombstoneIter.Next() {
+		if exceeded() {
+			return ret, nil
+		}
+		obj := tombstoneIter.Entry()
+		if obj.CreateTime.GT(&ret.Tombstone) {
+			ret.Tombstone = obj.CreateTime
 		}
 	}
 	return ret, nil
