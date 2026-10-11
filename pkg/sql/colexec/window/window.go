@@ -2384,6 +2384,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		}
 	}
 
+	hasOrderValues := false
 	sortSize := int64(bat.Size())
 	for i := range ctr.aggVecs {
 		for _, vec := range ctr.aggVecs[i].Vec {
@@ -2394,15 +2395,17 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	}
 	for i := range ctr.orderVecs {
 		for _, vec := range ctr.orderVecs[i].Vec {
-			if vec != nil {
+			if vec != nil && !vec.IsConst() {
+				hasOrderValues = true
 				sortSize += int64(vec.Size())
 			}
 		}
 	}
 
 	externalSorted := false
-	if bat.RowCount() > 1 && sortSize > colexec.ResolveSpillThreshold(ap.SpillThreshold) {
+	if hasOrderValues && bat.RowCount() > 1 && sortSize > colexec.ResolveSpillThreshold(ap.SpillThreshold) {
 		var (
+			sortSpecs    []*plan.OrderBySpec
 			orderCols    []*vector.Vector
 			orderRefs    [][2]int
 			extraAggVecs []*vector.Vector
@@ -2415,6 +2418,12 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 			if len(ctr.orderVecs[i].Vec) != 1 || ctr.orderVecs[i].Vec[0] == nil {
 				return false, moerr.NewInternalErrorNoCtx("window order vector is missing")
 			}
+			// Constant keys cannot change row order. Keep their private copies
+			// out of batch cloning and spilling, which materialize carry columns.
+			if ctr.orderVecs[i].Vec[0].IsConst() {
+				continue
+			}
+			sortSpecs = append(sortSpecs, ap.Fs[i])
 			orderCols = append(orderCols, ctr.orderVecs[i].Vec[0])
 			orderRefs = append(orderRefs, [2]int{i, 0})
 		}
@@ -2456,7 +2465,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		sorted, sortedOrderVecs, sortedAggVecs, err := mergeorder.SortBatchWithPrecomputedOrderAndRelease(
 			proc,
 			bat,
-			ap.Fs,
+			sortSpecs,
 			ap.SpillThreshold,
 			ap.OpAnalyzer,
 			orderCols,

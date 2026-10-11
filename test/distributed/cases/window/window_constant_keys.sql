@@ -41,6 +41,26 @@ from t where id=2;
 select id,row_number() over(partition by id order by null) as rn
 from t where id<0;
 
+-- Optimizer-selected Partition TopN preserves ROW_NUMBER and RANK ties.
+select id,rn from (select id,row_number() over(partition by id order by null) as rn from t) s
+where rn<=1 order by id;
+select id,rk from (select id,rank() over(partition by id order by null) as rk from t) s
+where rk<=1 order by id;
+select id,v,rn from (select id,v,row_number() over(partition by id order by null,v) as rn from t) s
+where rn<=1 order by id;
+
+-- Force the physical external-sort path without increasing the fixture.
+set @old_window_sort_spill_mem=@@sort_spill_mem;
+set sort_spill_mem=1;
+select id,row_number() over(partition by id order by null) as rn_spill
+from t order by id,rn_spill;
+select id,v,rank() over(partition by null,id order by null,v) as rk_spill,
+dense_rank() over(partition by null,id order by v,null) as dr_spill
+from t order by id,v;
+select dense_rank() over(partition by null order by null) as dr_constant_spill
+from t;
+set sort_spill_mem=@old_window_sort_spill_mem;
+
 -- Ordinary nullable ordering columns still use their concrete type semantics.
 update t set v=null where id=2;
 select id,row_number() over(partition by id order by v) as rn
