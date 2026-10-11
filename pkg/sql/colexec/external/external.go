@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1170,20 +1171,23 @@ func isEnumMember(enumValues, name string) bool {
 	}
 }
 
-// isPaddedSetInput reports whether val has outer whitespace and is already
-// valid input for the SET definition, as native INSERT parses it. Trimming such
-// a value could select a different member (' a' vs 'a'); padded non-member
-// input keeps being trimmed. Unpadded values return early without parsing.
+// isPaddedSetInput reports whether val has outer whitespace, as
+// strings.TrimSpace (unicode.IsSpace) would remove it, and is already valid
+// input for the SET definition, as native INSERT parses it. Trimming such a
+// value could select a different member (' a' or '\u00a0a' vs 'a'); padded
+// non-member input keeps being trimmed. Padded input can only be member names
+// (a numeric bitmap never has whitespace), so the non-throwing name match of
+// the SET parser decides. Unpadded values return early without parsing.
 func isPaddedSetInput(setValues, val string) bool {
-	if len(val) == 0 || (!isASCIISpace(val[0]) && !isASCIISpace(val[len(val)-1])) {
+	if len(val) == 0 {
 		return false
 	}
-	_, err := types.ParseSet(setValues, val)
-	return err == nil
-}
-
-func isASCIISpace(c byte) bool {
-	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
+	first, _ := utf8.DecodeRuneInString(val)
+	last, _ := utf8.DecodeLastRuneInString(val)
+	if !unicode.IsSpace(first) && !unicode.IsSpace(last) {
+		return false
+	}
+	return types.MatchSetName(setValues, val)
 }
 
 func shouldLoadEmptyNumericAsZero(param *ExternalParam, id types.T) bool {
