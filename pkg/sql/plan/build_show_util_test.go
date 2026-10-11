@@ -1771,7 +1771,8 @@ func TestConstructCreateTableSQLBooleanRoundTrip(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, `create table bool_roundtrip (
 		id int primary key, flag bool default null,
 		enabled boolean not null default true, disabled bool default false,
-		n int unsigned, amount decimal(10,2), integer_flag tinyint(1))`, 1)
+		n int unsigned, amount decimal(10,2), integer_flag tinyint(1),
+        enum_flag enum('UP','Down'), set_flag set('UP','Down'))`, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
 	p, err := BuildPlan(ctx, stmt, false)
@@ -1788,7 +1789,7 @@ func TestConstructCreateTableSQLBooleanRoundTrip(t *testing.T) {
 			replayed, err := BuildPlan(ctx, parsed, false)
 			require.NoError(t, err)
 			cols := replayed.GetDdl().GetCreateTable().GetTableDef().Cols
-			for _, name := range []string{"flag", "enabled", "disabled", "n", "amount", "integer_flag"} {
+			for _, name := range []string{"flag", "enabled", "disabled", "n", "amount", "integer_flag", "enum_flag", "set_flag"} {
 				before, after := FindColumn(original.Cols, name), FindColumn(cols, name)
 				require.NotNil(t, after, name)
 				require.Equal(t, before.Typ, after.Typ, name)

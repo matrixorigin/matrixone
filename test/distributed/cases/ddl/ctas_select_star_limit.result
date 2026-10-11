@@ -6,8 +6,8 @@ insert into src values (1, 'x');
 create table dst_empty as select * from src limit 0;
 desc dst_empty;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  VARCHAR(8)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦
 select * from dst_empty;
 ➤ a[4,32,0]  ¦  b[12,-1,0]
 create table dst_rows as select * from src;
@@ -19,13 +19,13 @@ insert into src_key values (1, 'k');
 create table dst_key_empty as select * from src_key limit 0;
 desc dst_key_empty;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-v  ¦  VARCHAR(8)  ¦  YES  ¦    ¦  null  ¦    ¦  
+id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+v  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦
 create table dst_explicit as select a, b from src limit 0;
 desc dst_explicit;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  VARCHAR(8)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦
 create table dst_missing as select * from missing_src limit 0;
 no such table ctas_select_star_limit.missing_src
 show tables like 'dst_missing';

@@ -110,24 +110,24 @@ select * from aff01;
 7499  ¦  ALLEN  ¦  SALESMAN  ¦  7698  ¦  1981-02-20  ¦  1600.00  ¦  300.00  ¦  30
 desc test_sp01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col2  ¦  DECIMAL(6,0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col3  ¦  VARCHAR(30)  ¦  YES  ¦    ¦  null  ¦    ¦  
+col1  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col2  ¦  decimal(6,0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col3  ¦  varchar(30)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc aff01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-empno  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦  雇员编号  𝄀
-ename  ¦  VARCHAR(15)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员姓名  𝄀
-job  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员职位  𝄀
-mgr  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员对应的领导的编号  𝄀
-hiredate  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员的雇佣日期  𝄀
-sal  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员的基本工资  𝄀
-comm  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  奖金  𝄀
-deptno  ¦  INT UNSIGNED(32)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  所在部门
+empno  ¦  int unsigned  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦  雇员编号  𝄀
+ename  ¦  varchar(15)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员姓名  𝄀
+job  ¦  varchar(10)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员职位  𝄀
+mgr  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦  雇员对应的领导的编号  𝄀
+hiredate  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦  雇员的雇佣日期  𝄀
+sal  ¦  decimal(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员的基本工资  𝄀
+comm  ¦  decimal(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  奖金  𝄀
+deptno  ¦  int unsigned  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  所在部门
 desc pri01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-deptno  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  部门编号  𝄀
-dname  ¦  VARCHAR(15)  ¦  YES  ¦    ¦  null  ¦    ¦  部门名称  𝄀
-loc  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  null  ¦    ¦  部门所在位置
+deptno  ¦  int unsigned  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  部门编号  𝄀
+dname  ¦  varchar(15)  ¦  YES  ¦    ¦  null  ¦    ¦  部门名称  𝄀
+loc  ¦  varchar(50)  ¦  YES  ¦    ¦  null  ¦    ¦  部门所在位置
 drop database sp_test;
 drop snapshot spsp01;
 show snapshots;
@@ -339,15 +339,15 @@ select * from pri01;
 2  ¦  37829901k3d  ¦  2  ¦  2
 desc aff01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  INT(32)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
-col2  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col3  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
+col1  ¦  int  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+col2  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col3  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦
 desc pri01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-col2  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col3  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col4  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+col1  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+col2  ¦  varchar(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col3  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col4  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦
 drop database db06;
 drop snapshot spsp06;
 drop database if exists db07;

@@ -182,8 +182,9 @@ func constructCreateTableSQL(
 		}
 
 		typeStr := FormatColType(col.Typ)
-		if strings.HasPrefix(typeStr, "ENUM") {
-			typeStr = strings.ToLower(typeStr[:4]) + typeStr[4:]
+		if strings.HasPrefix(typeStr, "ENUM") || strings.HasPrefix(typeStr, "SET") {
+			prefix := strings.IndexByte(typeStr, '(')
+			typeStr = strings.ToLower(typeStr[:prefix]) + typeStr[prefix:]
 		} else {
 			typeStr = strings.ToLower(typeStr)
 		}
@@ -1234,94 +1235,40 @@ func FormatColType(colType plan.Type) string {
 	if arrayType := arrayPlanTypeString(&colType); arrayType != "" {
 		return strings.ToUpper(arrayType[:len("array")]) + arrayType[len("array"):]
 	}
-	if types.T(colType.Id) == types.T_bool {
-		// BOOLEAN is recognized by MySQL client reflection and recreates T_bool.
-		return "BOOLEAN"
-	}
-
-	typ := types.T(colType.Id).ToType()
-
-	ts := typ.String()
-	if typ.Oid == types.T_text {
-		switch colType.Width {
-		case types.MaxTinyTextLen:
-			ts = "TINYTEXT"
-		case types.MaxMediumTextLen:
-			ts = "MEDIUMTEXT"
-		case types.MaxLongTextLen:
-			ts = "LONGTEXT"
-		}
-	} else if typ.Oid == types.T_blob {
-		switch {
-		case colType.Width == 0:
-			// Legacy catalog BLOBs used width zero to mean unbounded. Emit the
-			// widest SQL family so recreation and dump/restore cannot narrow them.
-			ts = "LONGBLOB"
-		case colType.Width > 0 && colType.Width <= types.MaxTinyTextLen:
-			ts = "TINYBLOB"
-		case colType.Width > types.MaxStringSize && colType.Width <= types.MaxMediumTextLen:
-			ts = "MEDIUMBLOB"
-		case colType.Width > types.MaxMediumTextLen:
-			ts = "LONGBLOB"
-		}
-	}
-	// after decimal fix, remove this
-	if typ.Oid.IsDecimal() {
-		ts = "DECIMAL"
-	}
-	if isSetPlanType(&colType) {
-		ts = "SET"
-	}
-	if subtype := geometrySubtypeName(&colType); subtype != "" {
-		ts = subtype
-		// A GEOMETRY32 subtype column renders with the "32" suffix (e.g.
-		// POINT32) so SHOW CREATE round-trips the float32 family.
-		if types.T(colType.Id) == types.T_geometry32 {
-			ts += "32"
-		}
-	}
-	if srid, ok := geometrySRIDValue(&colType); ok {
-		ts = fmt.Sprintf("%s SRID %d", ts, srid)
-	}
-
-	suffix := ""
-	switch types.T(colType.Id) {
-	case types.T_enum:
-		fallthrough
-	case types.T_uint64:
-		if !isEnumOrSetPlanType(&colType) {
-			break
+	if isEnumOrSetPlanType(&colType) {
+		name := "ENUM"
+		if isSetPlanType(&colType) {
+			name = "SET"
 		}
 		elements := strings.Split(colType.GetEnumvalues(), ",")
-		// format enum as ENUM ('e1', 'e2')
-		elems := make([]string, 0, len(elements))
-		for _, e := range elements {
-			e = EscapeFormat(e)
-			elems = append(elems, e)
+		for i := range elements {
+			elements[i] = EscapeFormat(elements[i])
 		}
-		suffix = fmt.Sprintf("('%s')", strings.Join(elems, "','"))
-
-	case types.T_timestamp, types.T_datetime, types.T_time:
-		if colType.Width > 0 {
-			suffix = fmt.Sprintf("(%d)", colType.Width)
-		}
-
-	case types.T_float64, types.T_float32:
-		if colType.Width > 0 && colType.Scale != -1 {
-			suffix = fmt.Sprintf("(%d,%d)", colType.Width, colType.Scale)
-		}
-
-	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
-		suffix = fmt.Sprintf("(%d,%d)", colType.Width, colType.Scale)
-
-	case types.T_bit, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
-		suffix = fmt.Sprintf("(%d)", colType.Width)
-
-	case types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
-		suffix = fmt.Sprintf("(%d)", colType.Width)
-
+		return fmt.Sprintf("%s('%s')", name, strings.Join(elements, "','"))
 	}
-	return ts + suffix
+	if types.T(colType.Id) == types.T_geometry || types.T(colType.Id) == types.T_geometry32 {
+		name := types.T(colType.Id).String()
+		if subtype := geometrySubtypeName(&colType); subtype != "" {
+			name = subtype
+			if types.T(colType.Id) == types.T_geometry32 {
+				name += "32"
+			}
+		}
+		if srid, ok := geometrySRIDValue(&colType); ok {
+			name = fmt.Sprintf("%s SRID %d", name, srid)
+		}
+		return name
+	}
+	typ := types.T(colType.Id).ToType()
+	typ.Width, typ.Scale = colType.Width, colType.Scale
+	if formatted, ok := types.FormatSQLColumnType(typ); ok {
+		return formatted
+	}
+	switch typ.Oid {
+	case types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		return fmt.Sprintf("%s(%d)", typ.String(), typ.Width)
+	}
+	return typ.String()
 }
 
 // formatStrInSingleQuotes returns the contents of a default-mode SQL string

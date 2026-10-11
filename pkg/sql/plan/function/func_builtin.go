@@ -617,53 +617,13 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			if typ.Oid == types.T_bool {
-				// MySQL client view reflection requires lowercase boolean, without a display width.
-				// Keep typNormal's BOOL for existing catalog/upgrade consumers.
-				return functionUtil.QuickStrToBytes("boolean"), nil
-			}
-
-			ts := typ.String()
-			ret := ""
-			// after decimal fix, remove this
-			if typ.Oid.IsDecimal() {
-				ts = "DECIMAL"
-				ret = fmt.Sprintf("%s(%d,%d)", ts, typ.Width, typ.Scale)
+			var ret string
+			if formatted, ok := types.FormatSQLColumnType(*typ); ok {
+				ret = strings.ToLower(formatted)
 			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
 				ret = geometryShowColumnType(typ)
-			} else if typ.Oid == types.T_text {
-				switch typ.Width {
-				case types.MaxTinyTextLen:
-					ret = "TINYTEXT"
-				case types.MaxMediumTextLen:
-					ret = "MEDIUMTEXT"
-				case types.MaxLongTextLen:
-					ret = "LONGTEXT"
-				case 0, types.MaxStringSize:
-					ret = "TEXT"
-				default:
-					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
-				}
-			} else if typ.Oid == types.T_blob {
-				switch typ.Width {
-				case types.MaxTinyTextLen:
-					ret = "TINYBLOB"
-				case types.MaxMediumTextLen:
-					ret = "MEDIUMBLOB"
-				case types.MaxLongTextLen:
-					ret = "LONGBLOB"
-				case types.MaxStringSize:
-					ret = "BLOB"
-				default:
-					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
-				}
-			} else if typ.IsIntOrUint() && typ.Width == 0 {
-				// Width is the physical type width for stored integer columns, but
-				// expression-only integer types may leave it unset. Do not expose
-				// that internal zero as a MySQL display width.
-				ret = ts
 			} else {
-				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
+				ret = fmt.Sprintf("%s(%d)", typ.String(), typ.Width)
 			}
 
 			return functionUtil.QuickStrToBytes(ret), nil
@@ -764,11 +724,11 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 		if err != nil {
 			return nil, err
 		}
-		typeName := "ENUM"
+		typeName := "enum"
 		if typ.Oid == types.T_json && strings.HasPrefix(strings.ToLower(strings.TrimSpace(enumStr)), "array(") {
 			return functionUtil.QuickStrToBytes(enumStr), nil
 		} else if typ.Oid == types.T_uint64 {
-			typeName = "SET"
+			typeName = "set"
 		} else if typ.Oid == types.T_geometry {
 			subtype := ""
 			sridDefined := false

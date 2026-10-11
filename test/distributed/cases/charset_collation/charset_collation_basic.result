@@ -268,12 +268,12 @@ t_column_charset  ¦  CREATE TABLE `t_column_charset` (
 )
 DESC t_column_charset;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-name_default  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-name_utf8  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-name_utf8mb4  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-name_utf8mb4_bin  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-name_utf8mb4_general  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦  
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+name_default  ¦  varchar(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+name_utf8  ¦  varchar(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+name_utf8mb4  ¦  varchar(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+name_utf8mb4_bin  ¦  varchar(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+name_utf8mb4_general  ¦  varchar(100)  ¦  YES  ¦    ¦  null  ¦    ¦
 CREATE TABLE t_insert_test (
 id INT PRIMARY KEY,
 data VARCHAR(200)

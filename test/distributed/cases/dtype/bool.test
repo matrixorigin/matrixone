@@ -63,7 +63,7 @@ insert into bool_metadata(id,flag) values (1,true),(2,false),(3,null);
 show create table bool_metadata;
 show columns from bool_metadata;
 show full columns from bool_metadata;
-create view bool_metadata_view as select flag from bool_metadata;
+create view bool_metadata_view as select id, flag, cast(id as bigint unsigned) as n, cast(id as decimal(10,2)) as amount, cast('2026-01-02' as date) as day from bool_metadata;
 describe bool_metadata_view;
 select COLUMN_NAME,DATA_TYPE,COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT from information_schema.COLUMNS where TABLE_SCHEMA=database() and TABLE_NAME='bool_metadata' order by ORDINAL_POSITION;
 select attname,mo_show_visible_bin(atttyp,2) as native_type from mo_catalog.mo_columns where att_database=database() and att_relname='bool_metadata' and att_is_hidden=0 order by attnum;

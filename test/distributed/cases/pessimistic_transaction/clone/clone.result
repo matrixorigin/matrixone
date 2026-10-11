@@ -105,7 +105,7 @@ create table enum01 (col1 enum('red','blue','green'));
 insert into enum01 values ('red'),('blue'),('green');
 desc enum01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  ENUM('red','blue','green')  ¦  YES  ¦    ¦  null  ¦    ¦  
+col1  ¦  enum('red','blue','green')  ¦  YES  ¦    ¦  null  ¦    ¦
 select * from enum01;
 ➤ col1[12,-1,0]  𝄀
 red  𝄀
@@ -285,7 +285,7 @@ select count(*) from vector_test;
 6
 desc vector_test;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 vector  ¦  VECF32(3)  ¦  YES  ¦    ¦  null  ¦    ¦  
 use test03_new;
 select * from vector_index_01;
@@ -313,7 +313,7 @@ blue  𝄀
 green
 desc enum01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  ENUM('red','blue','green')  ¦  YES  ¦    ¦  null  ¦    ¦  
+col1  ¦  enum('red','blue','green')  ¦  YES  ¦    ¦  null  ¦    ¦
 use test01;
 drop table src;
 use test02;
@@ -356,7 +356,7 @@ select count(*) from vector_test;
 6
 desc vector_test;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 vector  ¦  VECF32(3)  ¦  YES  ¦    ¦  null  ¦    ¦  
 use test03_new;
 select * from vector_index_01;
@@ -546,20 +546,20 @@ t2  ¦  CREATE TABLE `t2` (
 )
 desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-token  ¦  VARCHAR(100)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-count  ¦  INT(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-qty  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-phone  ¦  CHAR(1)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-times  ¦  DATETIME(0)  ¦  NO  ¦    ¦  2000-01-01 00:00:00  ¦    ¦  
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+token  ¦  varchar(100)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
+count  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+qty  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+phone  ¦  char(1)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
+times  ¦  datetime  ¦  NO  ¦    ¦  2000-01-01 00:00:00  ¦    ¦
 desc t2;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-category  ¦  INT(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-county  ¦  INT(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-state  ¦  INT(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-phones  ¦  INT(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-nophones  ¦  INT(32)  ¦  NO  ¦    ¦  0  ¦    ¦  
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+category  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+county  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+state  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+phones  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+nophones  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦
 use test06;
 show tables;
 ➤ Tables_in_test06[12,-1,0]  𝄀
@@ -707,20 +707,20 @@ t2  ¦  CREATE TABLE `t2` (
 )
 desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-token  ¦  VARCHAR(100)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-count  ¦  INT(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-qty  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-phone  ¦  CHAR(1)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-times  ¦  DATETIME(0)  ¦  NO  ¦    ¦  2000-01-01 00:00:00  ¦    ¦  
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+token  ¦  varchar(100)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
+count  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+qty  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+phone  ¦  char(1)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
+times  ¦  datetime  ¦  NO  ¦    ¦  2000-01-01 00:00:00  ¦    ¦
 desc t2;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-category  ¦  INT(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-county  ¦  INT(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-state  ¦  INT(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-phones  ¦  INT(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-nophones  ¦  INT(32)  ¦  NO  ¦    ¦  0  ¦    ¦  
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+category  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+county  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+state  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+phones  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+nophones  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦
 use test06_new;
 use test07_new;
 select * from t1;
@@ -740,7 +740,7 @@ select * from vtab64;
 4  ¦  [0.9260021, 0.26637346, 0.06567037]  ¦  [0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764]
 desc vtab32;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 vecf32_3  ¦  VECF32(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 vecf32_5  ¦  VECF32(5)  ¦  YES  ¦    ¦  null  ¦    ¦  
 show create table vtab64;
@@ -777,9 +777,9 @@ create table t2(a int not null, b varchar(20), c char(20));
 create view v2 as select * from t2;
 desc v2;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  CHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  varchar(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  char(20)  ¦  YES  ¦    ¦  null  ¦    ¦
 drop snapshot if exists sp09;
 create snapshot sp09 for account;
 drop database if exists test10;
@@ -910,9 +910,9 @@ select * from employees;
 1076  ¦  Firrelli  ¦  Jeff  ¦  x9273  ¦  jfirrelli@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Marketing
 desc src;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-json1  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-json2  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+id  ¦  bigint  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+json1  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+json2  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦
 select count(*) from vector_index_07;
 ➤ count(*)[-5,64,0]  𝄀
 5
@@ -988,9 +988,9 @@ select * from employees;
 1076  ¦  Firrelli  ¦  Jeff  ¦  x9273  ¦  jfirrelli@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Marketing
 desc src;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-json1  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-json2  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+id  ¦  bigint  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+json1  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+json2  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦
 select count(*) from vector_index_07;
 ➤ count(*)[-5,64,0]  𝄀
 5
@@ -1065,9 +1065,9 @@ select * from employees;
 1076  ¦  Firrelli  ¦  Jeff  ¦  x9273  ¦  jfirrelli@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Marketing
 desc src;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-json1  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-json2  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+id  ¦  bigint  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+json1  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+json2  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦
 select count(*) from vector_index_07;
 ➤ count(*)[-5,64,0]  𝄀
 5

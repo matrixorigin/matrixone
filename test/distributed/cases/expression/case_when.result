@@ -365,7 +365,7 @@ drop view if exists v_coalesce_meta;
 create view v_coalesce_meta as select coalesce(cast(null as decimal(23,2)), 7.01970 * cast(-58140.00 as decimal(23,2))) as c;
 desc v_coalesce_meta;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-c  ¦  DECIMAL(38,7)  ¦  NO  ¦    ¦  null  ¦    ¦  
+c  ¦  decimal(38,7)  ¦  NO  ¦    ¦  null  ¦    ¦
 drop view v_coalesce_meta;
 drop view if exists v_flow_metadata_safe;
 create view v_flow_metadata_safe as
@@ -379,27 +379,27 @@ coalesce(null, '8', 9) as coalesce_str_num,
 greatest(cast('2024-01-02' as date), cast('2023-12-31' as date)) as greatest_date;
 desc v_flow_metadata_safe;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-if_str_num  ¦  VARCHAR(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-if_unsigned_signed  ¦  DECIMAL(21,0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-case_date_dt  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-case_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-ifnull_decimal  ¦  DECIMAL(2,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-nullif_mixed  ¦  VARCHAR(2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-coalesce_str_num  ¦  VARCHAR(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-greatest_date  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+if_str_num  ¦  varchar(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+if_unsigned_signed  ¦  decimal(21,0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+case_date_dt  ¦  datetime  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_binary_char  ¦  varbinary(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_decimal  ¦  decimal(2,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+nullif_mixed  ¦  varchar(2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_str_num  ¦  varchar(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+greatest_date  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦
 select column_name, column_type, is_nullable, character_maximum_length, numeric_precision, numeric_scale
 from information_schema.columns
 where table_schema = database() and table_name = 'v_flow_metadata_safe'
 order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  ¦  character_maximum_length[-5,64,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  𝄀
-if_str_num  ¦  VARCHAR(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
-if_unsigned_signed  ¦  DECIMAL(21,0)  ¦  NO  ¦  null  ¦  21  ¦  0  𝄀
-case_date_dt  ¦  DATETIME(0)  ¦  YES  ¦  null  ¦  null  ¦  null  𝄀
-case_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦  8  ¦  null  ¦  null  𝄀
-ifnull_decimal  ¦  DECIMAL(2,1)  ¦  NO  ¦  null  ¦  2  ¦  1  𝄀
-nullif_mixed  ¦  VARCHAR(2)  ¦  YES  ¦  2  ¦  null  ¦  null  𝄀
-coalesce_str_num  ¦  VARCHAR(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
-greatest_date  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null
+if_str_num  ¦  varchar(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
+if_unsigned_signed  ¦  decimal(21,0)  ¦  NO  ¦  null  ¦  21  ¦  0  𝄀
+case_date_dt  ¦  datetime  ¦  YES  ¦  null  ¦  null  ¦  null  𝄀
+case_binary_char  ¦  varbinary(8)  ¦  NO  ¦  8  ¦  null  ¦  null  𝄀
+ifnull_decimal  ¦  decimal(2,1)  ¦  NO  ¦  null  ¦  2  ¦  1  𝄀
+nullif_mixed  ¦  varchar(2)  ¦  YES  ¦  2  ¦  null  ¦  null  𝄀
+coalesce_str_num  ¦  varchar(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
+greatest_date  ¦  date  ¦  YES  ¦  null  ¦  null  ¦  null
 select * from v_flow_metadata_safe;
 ➤ if_str_num[12,2,0]  ¦  if_unsigned_signed[3,21,0]  ¦  case_date_dt[93,64,0]  ¦  case_binary_char[-3,8,0]  ¦  ifnull_decimal[3,2,1]  ¦  nullif_mixed[12,2,0]  ¦  coalesce_str_num[12,2,0]  ¦  greatest_date[91,64,0]  𝄀
 2  ¦  1  ¦  2024-01-01 00:00:00  ¦  a  ¦  9.5  ¦  null  ¦  8  ¦  2024-01-02
@@ -409,7 +409,7 @@ create view v_case_temporal_else as
 select case when 0 then cast('2024-01-02 03:04:05' as datetime) else cast('2024-01-01' as date) end as case_date_dt_else;
 desc v_case_temporal_else;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-case_date_dt_else  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+case_date_dt_else  ¦  datetime  ¦  YES  ¦    ¦  null  ¦    ¦
 select * from v_case_temporal_else;
 ➤ case_date_dt_else[93,64,0]  𝄀
 2024-01-01 00:00:00
@@ -419,7 +419,7 @@ create view v_if_binary_char as
 select if(1, _binary 'a', 'bc') as if_binary_char;
 desc v_if_binary_char;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-if_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦  
+if_binary_char  ¦  varbinary(8)  ¦  NO  ¦    ¦  null  ¦    ¦
 select hex(if_binary_char) as if_binary_char_hex from v_if_binary_char;
 ➤ if_binary_char_hex[12,65535,0]  𝄀
 61
@@ -449,29 +449,29 @@ greatest(d_notnull, cast('2023-12-31' as date)) as greatest_notnull_col
 from t_flow_metadata;
 desc v_flow_metadata_columns;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-ifnull_null_first  ¦  DECIMAL(2,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-ifnull_nullable_col  ¦  DECIMAL(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-ifnull_notnull_col  ¦  DECIMAL(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-coalesce_null_first  ¦  VARCHAR(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-coalesce_nullable_col  ¦  BIGINT  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-coalesce_notnull_col  ¦  BIGINT  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-greatest_const  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-greatest_nullable_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-greatest_notnull_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+ifnull_null_first  ¦  decimal(2,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_nullable_col  ¦  decimal(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_notnull_col  ¦  decimal(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_null_first  ¦  varchar(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_nullable_col  ¦  bigint  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_notnull_col  ¦  bigint  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+greatest_const  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_nullable_col  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_notnull_col  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦
 select column_name, column_type, is_nullable, character_maximum_length, numeric_precision, numeric_scale
 from information_schema.columns
 where table_schema = database() and table_name = 'v_flow_metadata_columns'
 order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  ¦  character_maximum_length[-5,64,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  𝄀
-ifnull_null_first  ¦  DECIMAL(2,1)  ¦  NO  ¦  null  ¦  2  ¦  1  𝄀
-ifnull_nullable_col  ¦  DECIMAL(11,1)  ¦  NO  ¦  null  ¦  11  ¦  1  𝄀
-ifnull_notnull_col  ¦  DECIMAL(11,1)  ¦  NO  ¦  null  ¦  11  ¦  1  𝄀
-coalesce_null_first  ¦  VARCHAR(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
-coalesce_nullable_col  ¦  BIGINT  ¦  NO  ¦  null  ¦  19  ¦  0  𝄀
-coalesce_notnull_col  ¦  BIGINT  ¦  NO  ¦  null  ¦  19  ¦  0  𝄀
-greatest_const  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null  𝄀
-greatest_nullable_col  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null  𝄀
-greatest_notnull_col  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null
+ifnull_null_first  ¦  decimal(2,1)  ¦  NO  ¦  null  ¦  2  ¦  1  𝄀
+ifnull_nullable_col  ¦  decimal(11,1)  ¦  NO  ¦  null  ¦  11  ¦  1  𝄀
+ifnull_notnull_col  ¦  decimal(11,1)  ¦  NO  ¦  null  ¦  11  ¦  1  𝄀
+coalesce_null_first  ¦  varchar(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
+coalesce_nullable_col  ¦  bigint  ¦  NO  ¦  null  ¦  19  ¦  0  𝄀
+coalesce_notnull_col  ¦  bigint  ¦  NO  ¦  null  ¦  19  ¦  0  𝄀
+greatest_const  ¦  date  ¦  YES  ¦  null  ¦  null  ¦  null  𝄀
+greatest_nullable_col  ¦  date  ¦  YES  ¦  null  ¦  null  ¦  null  𝄀
+greatest_notnull_col  ¦  date  ¦  YES  ¦  null  ¦  null  ¦  null
 select * from v_flow_metadata_columns order by ifnull_notnull_col;
 ➤ ifnull_null_first[3,2,1]  ¦  ifnull_nullable_col[3,11,1]  ¦  ifnull_notnull_col[3,11,1]  ¦  coalesce_null_first[12,2,0]  ¦  coalesce_nullable_col[-5,64,0]  ¦  coalesce_notnull_col[-5,64,0]  ¦  greatest_const[91,64,0]  ¦  greatest_nullable_col[91,64,0]  ¦  greatest_notnull_col[91,64,0]  𝄀
 9.5  ¦  9.5  ¦  7.0  ¦  8  ¦  9  ¦  7  ¦  2024-01-02  ¦  null  ¦  2024-01-02  𝄀
@@ -508,7 +508,7 @@ create view v_case_binary_utf8 as
 select case when 1 then _binary 'a' else '中文' end as case_binary_utf8;
 desc v_case_binary_utf8;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-case_binary_utf8  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦  
+case_binary_utf8  ¦  varbinary(8)  ¦  NO  ¦    ¦  null  ¦    ¦
 select hex(case when 0 then _binary 'a' else '中文' end) as case_utf8_hex;
 ➤ case_utf8_hex[12,65535,0]  𝄀
 E4B8ADE69687
@@ -523,12 +523,12 @@ case when 1 then cast('a' as varbinary(4)) else null end as var_trailing_null,
 case when 0 then cast('a' as varbinary(4)) when 1 then null else cast('b' as varbinary(4)) end as var_middle_null;
 desc v_case_binary_null;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-fixed_leading_null  ¦  BINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-fixed_trailing_null  ¦  BINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-fixed_middle_null  ¦  BINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-var_leading_null  ¦  VARBINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-var_trailing_null  ¦  VARBINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-var_middle_null  ¦  VARBINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+fixed_leading_null  ¦  binary(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+fixed_trailing_null  ¦  binary(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+fixed_middle_null  ¦  binary(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+var_leading_null  ¦  varbinary(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+var_trailing_null  ¦  varbinary(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+var_middle_null  ¦  varbinary(4)  ¦  YES  ¦    ¦  null  ¦    ¦
 drop view v_case_binary_null;
 drop table t_flow_metadata;
 drop table if exists t_conditional_literal_temporal;
@@ -550,20 +550,20 @@ coalesce(ts, '2024-01-01') as ts_coalesce
 from t_conditional_literal_temporal;
 desc v_conditional_literal_temporal;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-d_case_literal  ¦  DECIMAL(8,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-dte_coalesce  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-dt_coalesce  ¦  VARCHAR(19)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-ts_coalesce  ¦  VARCHAR(26)  ¦  NO  ¦    ¦  null  ¦    ¦  
+d_case_literal  ¦  decimal(8,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+dte_coalesce  ¦  varchar(10)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+dt_coalesce  ¦  varchar(19)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ts_coalesce  ¦  varchar(26)  ¦  NO  ¦    ¦  null  ¦    ¦
 drop view if exists v_conditional_literal_temporal_nested;
 create view v_conditional_literal_temporal_nested as
 select d_case_literal, dte_coalesce, dt_coalesce, ts_coalesce
 from v_conditional_literal_temporal;
 desc v_conditional_literal_temporal_nested;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-d_case_literal  ¦  DECIMAL(8,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-dte_coalesce  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-dt_coalesce  ¦  VARCHAR(19)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-ts_coalesce  ¦  VARCHAR(26)  ¦  NO  ¦    ¦  null  ¦    ¦  
+d_case_literal  ¦  decimal(8,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+dte_coalesce  ¦  varchar(10)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+dt_coalesce  ¦  varchar(19)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ts_coalesce  ¦  varchar(26)  ¦  NO  ¦    ¦  null  ¦    ¦
 drop view v_conditional_literal_temporal_nested;
 drop view v_conditional_literal_temporal;
 drop table t_conditional_literal_temporal;
@@ -584,10 +584,10 @@ if(false, 'x', cast(d as double)) as double_result
 from t_conditional_unknown_width;
 desc v_conditional_unknown_width;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-text_result  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-blob_result  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-float_result  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-double_result  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+text_result  ¦  varchar(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+blob_result  ¦  varchar(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+float_result  ¦  varchar(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+double_result  ¦  varchar(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
 select length(if(true, s, 3)) as text_length,
 hex(if(true, b, 3)) as blob_hex,
 if(false, 'x', f) <> 'x' as float_value_preserved,
@@ -624,8 +624,8 @@ coalesce(s, i, tm) as coalesce_time
 from t_conditional_time_varchar;
 desc v_conditional_time_varchar;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-case_time  ¦  VARCHAR(24)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-coalesce_time  ¦  VARCHAR(24)  ¦  YES  ¦    ¦  null  ¦    ¦  
+case_time  ¦  varchar(24)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_time  ¦  varchar(24)  ¦  YES  ¦    ¦  null  ¦    ¦
 select * from v_conditional_time_varchar;
 ➤ case_time[12,24,0]  ¦  coalesce_time[12,24,0]  𝄀
 12:34:56.123456  ¦  12:34:56.123456
@@ -644,12 +644,12 @@ from information_schema.columns
 where table_schema = database() and table_name = 'v_conditional_typed_null'
 order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  𝄀
-coalesce_typed_null  ¦  VARCHAR(10)  𝄀
-case_typed_null  ¦  VARCHAR(10)  𝄀
-if_typed_null  ¦  VARCHAR(10)  𝄀
-coalesce_plain_null  ¦  VARCHAR(2)  𝄀
-case_plain_null  ¦  VARCHAR(2)  𝄀
-if_plain_null  ¦  BIGINT
+coalesce_typed_null  ¦  varchar(10)  𝄀
+case_typed_null  ¦  varchar(10)  𝄀
+if_typed_null  ¦  varchar(10)  𝄀
+coalesce_plain_null  ¦  varchar(2)  𝄀
+case_plain_null  ¦  varchar(2)  𝄀
+if_plain_null  ¦  bigint
 drop view v_conditional_typed_null;
 select case when null then 'a' else 'b' end as literal_null_condition;
 ➤ literal_null_condition[12,1,0]  𝄀

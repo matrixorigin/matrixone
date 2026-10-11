@@ -23,10 +23,10 @@ select * from orders where __mo_query = 'select id, name, amount, created from s
 2  ¦  bob  ¦  null  ¦  2026-01-02 11:00:00
 desc orders;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-name  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-amount  ¦  DECIMAL(12,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-created  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+id  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+amount  ¦  decimal(12,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+created  ¦  datetime  ¦  YES  ¦    ¦  null  ¦    ¦
 select id, name from orders
 where __mo_query = 'select id, name, amount, created from src'
 and amount > 80 order by id;

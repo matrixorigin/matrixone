@@ -2,12 +2,12 @@ drop table if exists t1;
 create table t1 (a year not null, primary key(a));
 desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  YEAR(4)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
+a  ¦  year  ¦  NO  ¦  PRI  ¦  null  ¦    ¦
 drop table t1;
 create table t1 (a year(4) not null);
 desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  YEAR(4)  ¦  NO  ¦    ¦  null  ¦    ¦  
+a  ¦  year  ¦  NO  ¦    ¦  null  ¦    ¦
 drop table t1;
 drop table if exists t_year;
 create table t_year (id int, y year);
@@ -592,8 +592,8 @@ create table t_year_alter (id int);
 alter table t_year_alter add column y year;
 desc t_year_alter;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-y  ¦  YEAR(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+y  ¦  year  ¦  YES  ¦    ¦  null  ¦    ¦
 insert into t_year_alter values (1, 2024);
 select * from t_year_alter;
 ➤ id[4,32,0]  ¦  y[91,2147483647,0]  𝄀
@@ -601,8 +601,8 @@ select * from t_year_alter;
 alter table t_year_alter modify column y year not null default 2000;
 desc t_year_alter;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-y  ¦  YEAR(4)  ¦  NO  ¦    ¦  2000  ¦    ¦  
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+y  ¦  year  ¦  NO  ¦    ¦  2000  ¦    ¦
 drop table t_year_alter;
 drop table if exists t_year_src;
 create table t_year_src (y year);
@@ -611,7 +611,7 @@ drop table if exists t_year_copy;
 create table t_year_copy as select * from t_year_src;
 desc t_year_copy;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-y  ¦  YEAR(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+y  ¦  year  ¦  YES  ¦    ¦  null  ¦    ¦
 select * from t_year_copy order by y;
 ➤ y[91,2147483647,0]  𝄀
 2020-01-01  𝄀

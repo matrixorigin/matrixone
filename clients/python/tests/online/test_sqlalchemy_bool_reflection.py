@@ -35,13 +35,16 @@ def test_boolean_metadata_reflection(connection_params):
             conn.exec_driver_sql(
                 f'CREATE TABLE `{source}` (id INT PRIMARY KEY, flag BOOL DEFAULT NULL, '
                 'enabled BOOLEAN NOT NULL DEFAULT TRUE, disabled BOOL DEFAULT FALSE, '
-                'empty_flag BOOLEAN DEFAULT NULL, n INT UNSIGNED, amount DECIMAL(10,2), integer_flag TINYINT(1))'
+                'empty_flag BOOLEAN DEFAULT NULL, n BIGINT UNSIGNED, amount DECIMAL(10,2), integer_flag TINYINT(1))'
             )
             conn.exec_driver_sql(
                 f'INSERT INTO `{source}` (id,flag,n,amount,integer_flag) '
-                'VALUES (1,TRUE,7,1.25,2),(2,FALSE,8,2.50,0),(3,NULL,9,3.75,NULL)'
+                'VALUES (1,TRUE,18446744073709551615,1.25,2),(2,FALSE,8,2.50,0),(3,NULL,9,3.75,NULL)'
             )
-            conn.exec_driver_sql(f'CREATE VIEW `{view}` AS SELECT flag FROM `{source}`')
+            conn.exec_driver_sql(
+                f"CREATE VIEW `{view}` AS SELECT *, CAST('2026-01-02' AS DATE) AS day, "
+                f"CAST('Up' AS VARCHAR(20)) AS label FROM `{source}`"
+            )
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always', sa.exc.SAWarning)
@@ -51,6 +54,16 @@ def test_boolean_metadata_reflection(connection_params):
         for name in ('flag', 'enabled', 'disabled', 'empty_flag'):
             assert isinstance(table.c[name].type, sa.Boolean)
         assert isinstance(reflected_view.c.flag.type, sa.Boolean)
+        assert isinstance(reflected_view.c.id.type, sa.Integer)
+        assert isinstance(reflected_view.c.integer_flag.type, sa.Integer)
+        assert reflected_view.c.n.type.unsigned
+        assert (reflected_view.c.amount.type.precision, reflected_view.c.amount.type.scale) == (10, 2)
+        assert isinstance(reflected_view.c.day.type, sa.Date)
+        assert reflected_view.c.label.type.length == 20
+        assert not any(isinstance(column.type, sa.types.NullType) for column in reflected_view.columns)
+        sa.schema.CreateTable(reflected_view.to_metadata(sa.MetaData(), name=view + '_clone')).compile(
+            dialect=engine.dialect
+        )
         assert table.c.flag.nullable and not table.c.enabled.nullable
         assert table.c.n.type.unsigned
         assert (table.c.amount.type.precision, table.c.amount.type.scale) == (10, 2)
@@ -65,7 +78,7 @@ def test_boolean_metadata_reflection(connection_params):
             conn.execute(
                 clone.insert(),
                 [
-                    {'id': 1, 'flag': True, 'n': 7, 'amount': Decimal('1.25'), 'integer_flag': 2},
+                    {'id': 1, 'flag': True, 'n': 18446744073709551615, 'amount': Decimal('1.25'), 'integer_flag': 2},
                     {'id': 2, 'flag': False, 'n': 8, 'amount': Decimal('2.50'), 'integer_flag': 0},
                     {'id': 3, 'flag': None, 'n': 9, 'amount': Decimal('3.75'), 'integer_flag': None},
                 ],
@@ -73,7 +86,7 @@ def test_boolean_metadata_reflection(connection_params):
             for current in (table, clone):
                 rows = conn.execute(sa.select(current).order_by(current.c.id)).all()
                 assert rows == [
-                    (1, True, True, False, None, 7, Decimal('1.25'), 2),
+                    (1, True, True, False, None, 18446744073709551615, Decimal('1.25'), 2),
                     (2, False, True, False, None, 8, Decimal('2.50'), 0),
                     (3, None, True, False, None, 9, Decimal('3.75'), None),
                 ]

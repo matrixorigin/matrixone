@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	mysql "github.com/matrixorigin/mysql"
 	"github.com/stretchr/testify/require"
 )
@@ -609,6 +610,24 @@ func TestNormalizeCDCTargetColumnTypeFromMOAndMySQL(t *testing.T) {
 		require.True(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, target, CDCSinkType_MO, sql.NullInt64{}))
 		require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_int8)}, target, CDCSinkType_MO, sql.NullInt64{}))
 	}
+	for _, source := range []plan.Type{
+		{Id: int32(types.T_float32), Width: 5, Scale: 2},
+		{Id: int32(types.T_float64), Width: 5, Scale: 0},
+		{Id: int32(types.T_float32), Width: 5, Scale: -1},
+	} {
+		scale := sql.NullInt64{Int64: int64(source.Scale), Valid: source.Scale >= 0}
+		canonical := plan2.FormatColType(source)
+		name := "float"
+		if types.T(source.Id) == types.T_float64 {
+			name = "double"
+		}
+		for _, target := range []string{canonical, fmt.Sprintf("%s(5)", name)} {
+			require.True(t, cdcTargetColumnTypeMatches(source, target, CDCSinkType_MO, scale))
+			require.False(t, cdcTargetColumnTypeMatches(source, target, CDCSinkType_MO, sql.NullInt64{Int64: 3, Valid: true}))
+		}
+		require.False(t, cdcTargetColumnTypeMatches(source, fmt.Sprintf("%s(6,2)", name), CDCSinkType_MO, scale))
+	}
+
 	require.True(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MySQL, sql.NullInt64{}))
 	require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MO, sql.NullInt64{}))
 }

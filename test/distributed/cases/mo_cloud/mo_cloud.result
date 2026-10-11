@@ -485,82 +485,82 @@ select count(*) from mo_catalog.mo_tables where reldatabase = 'mo_mo' and relnam
 0
 DESC `information_schema`.`character_sets` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-CHARACTER_SET_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-DEFAULT_COLLATE_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-DESCRIPTION  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-MAXLEN  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+CHARACTER_SET_NAME  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+DEFAULT_COLLATE_NAME  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+DESCRIPTION  ¦  varchar(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+MAXLEN  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦
 DESC `information_schema`.`engines` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-ENGINE  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-SUPPORT  ¦  VARCHAR(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-COMMENT  ¦  VARCHAR(160)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-TRANSACTIONS  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-XA  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-SAVEPOINTS  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦  
+ENGINE  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+SUPPORT  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+COMMENT  ¦  varchar(160)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+TRANSACTIONS  ¦  varchar(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+XA  ¦  varchar(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+SAVEPOINTS  ¦  varchar(3)  ¦  YES  ¦    ¦  null  ¦    ¦
 DESC `information_schema`.`key_column_usage` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-constraint_catalog  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-constraint_schema  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-constraint_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-table_catalog  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-table_schema  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-table_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-column_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-position_in_unique_constraint  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-referenced_table_schema  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-referenced_table_name  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-referenced_column_name  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+constraint_catalog  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+constraint_schema  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+constraint_name  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+table_catalog  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+table_schema  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+table_name  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+column_name  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ordinal_position  ¦  int unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+position_in_unique_constraint  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_table_schema  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_table_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_column_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦
 DESC `information_schema`.`keywords` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-WORD  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-RESERVED  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+WORD  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+RESERVED  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦
 DESC `information_schema`.`parameters` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-SPECIFIC_CATALOG  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-SPECIFIC_SCHEMA  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-SPECIFIC_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-ORDINAL_POSITION  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-PARAMETER_MODE  ¦  VARCHAR(5)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-PARAMETER_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-DATA_TYPE  ¦  LONGTEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-CHARACTER_MAXIMUM_LENGTH  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-CHARACTER_OCTET_LENGTH  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-NUMERIC_PRECISION  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-NUMERIC_SCALE  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-DATETIME_PRECISION  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-CHARACTER_SET_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-COLLATION_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-DTD_IDENTIFIER  ¦  MEDIUMTEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-ROUTINE_TYPE  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+SPECIFIC_CATALOG  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+SPECIFIC_SCHEMA  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+SPECIFIC_NAME  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ORDINAL_POSITION  ¦  bigint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+PARAMETER_MODE  ¦  varchar(5)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+PARAMETER_NAME  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+DATA_TYPE  ¦  longtext  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+CHARACTER_MAXIMUM_LENGTH  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+CHARACTER_OCTET_LENGTH  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+NUMERIC_PRECISION  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+NUMERIC_SCALE  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+DATETIME_PRECISION  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+CHARACTER_SET_NAME  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+COLLATION_NAME  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+DTD_IDENTIFIER  ¦  mediumtext  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ROUTINE_TYPE  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦
 DESC `mo_catalog`.`mo_columns` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-att_uniq_name  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-att_database_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_database  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-att_relname_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_relname  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-attname  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-atttyp  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attnum  ¦  INT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_length  ¦  INT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attnotnull  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-atthasdef  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_default  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attisdropped  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_constraint_type  ¦  CHAR(1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_unsigned  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_auto_increment  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_comment  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_hidden  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_has_update  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_update  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_is_clusterby  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_seqnum  ¦  SMALLINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_has_generated  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦  
+att_uniq_name  ¦  varchar(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_id  ¦  int unsigned  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+att_database_id  ¦  bigint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_database  ¦  varchar(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+att_relname_id  ¦  bigint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_relname  ¦  varchar(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+attname  ¦  varchar(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+atttyp  ¦  varchar(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attnum  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_length  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attnotnull  ¦  tinyint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+atthasdef  ¦  tinyint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_default  ¦  varchar(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attisdropped  ¦  tinyint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_constraint_type  ¦  char(1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_unsigned  ¦  tinyint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_auto_increment  ¦  tinyint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_comment  ¦  varchar(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_hidden  ¦  tinyint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_has_update  ¦  tinyint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_update  ¦  varchar(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_is_clusterby  ¦  tinyint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_seqnum  ¦  smallint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_enum  ¦  varchar(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_has_generated  ¦  tinyint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_generated  ¦  varchar(2048)  ¦  YES  ¦    ¦  null  ¦    ¦
 DESC `mo_sample_data_tpch_sf10`.`region` ;
 Unknown database mo_sample_data_tpch_sf10
 DESC `mo_sample_data_tpch_sf1`.`customer` ;
@@ -575,153 +575,153 @@ DESC `mo_sample_data_tpch_sf1`.`supplier` ;
 Unknown database mo_sample_data_tpch_sf1
 DESC `mysql`.`columns_priv` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-Host  ¦  CHAR(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Db  ¦  CHAR(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-User  ¦  CHAR(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Table_name  ¦  CHAR(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Column_name  ¦  CHAR(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Timestamp  ¦  TIMESTAMP(0)  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦    𝄀
-Column_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦    ¦    ¦  
+Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+Table_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+Column_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦    𝄀
+Column_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦
 DESC `mysql`.`db` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-Host  ¦  CHAR(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Db  ¦  CHAR(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-User  ¦  CHAR(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Select_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Insert_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Update_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Delete_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Create_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Drop_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Grant_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-References_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Index_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Alter_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Create_tmp_table_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Lock_tables_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Create_view_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Show_view_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Create_routine_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Alter_routine_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Execute_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Event_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Trigger_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦  
+Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+Select_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Insert_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Update_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Delete_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Create_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Drop_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Grant_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+References_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Index_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Alter_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Create_tmp_table_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Lock_tables_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Create_view_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Show_view_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Create_routine_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Alter_routine_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Execute_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Event_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Trigger_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦
 DESC `mysql`.`procs_priv` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-Host  ¦  CHAR(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Db  ¦  CHAR(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-User  ¦  CHAR(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Routine_name  ¦  CHAR(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Routine_type  ¦  VARCHAR(10)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-Grantor  ¦  VARCHAR(288)  ¦  NO  ¦  MUL  ¦    ¦    ¦    𝄀
-Proc_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-Timestamp  ¦  TIMESTAMP(0)  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦  
+Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+Routine_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+Routine_type  ¦  varchar(10)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+Grantor  ¦  varchar(288)  ¦  NO  ¦  MUL  ¦    ¦    ¦    𝄀
+Proc_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦
 DESC `mysql`.`tables_priv` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-Host  ¦  CHAR(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Db  ¦  CHAR(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-User  ¦  CHAR(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Table_name  ¦  CHAR(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Grantor  ¦  VARCHAR(288)  ¦  NO  ¦  MUL  ¦    ¦    ¦    𝄀
-Timestamp  ¦  TIMESTAMP(0)  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦    𝄀
-Table_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-Column_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦    ¦    ¦  
+Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+Table_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+Grantor  ¦  varchar(288)  ¦  NO  ¦  MUL  ¦    ¦    ¦    𝄀
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦    𝄀
+Table_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
+Column_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦
 DESC `mysql`.`user` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-Host  ¦  CHAR(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-User  ¦  CHAR(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Select_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Insert_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Update_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Delete_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Create_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Drop_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Reload_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Shutdown_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Process_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-File_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Grant_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-References_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Index_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Alter_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Show_db_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Super_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Create_tmp_table_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Lock_tables_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Execute_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Repl_slave_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Repl_client_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Create_view_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Show_view_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Create_routine_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Alter_routine_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Create_user_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Event_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Trigger_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Create_tablespace_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-ssl_type  ¦  VARCHAR(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-ssl_cipher  ¦  BLOB  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-x509_issuer  ¦  BLOB  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-x509_subject  ¦  BLOB  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-max_questions  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-max_updates  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-max_connections  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-max_user_connections  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-plugin  ¦  CHAR(64)  ¦  NO  ¦    ¦  caching_sha2_password  ¦    ¦    𝄀
-authentication_string  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-password_expired  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-password_last_changed  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-password_lifetime  ¦  SMALLINT UNSIGNED(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_locked  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Create_role_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Drop_role_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Password_reuse_history  ¦  SMALLINT UNSIGNED(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-Password_reuse_time  ¦  SMALLINT UNSIGNED(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-Password_require_current  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-User_attributes  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
+Select_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Insert_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Update_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Delete_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Create_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Drop_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Reload_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Shutdown_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Process_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+File_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Grant_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+References_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Index_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Alter_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Show_db_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Super_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Create_tmp_table_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Lock_tables_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Execute_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Repl_slave_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Repl_client_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Create_view_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Show_view_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Create_routine_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Alter_routine_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Create_user_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Event_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Trigger_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Create_tablespace_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+ssl_type  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
+ssl_cipher  ¦  blob  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+x509_issuer  ¦  blob  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+x509_subject  ¦  blob  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+max_questions  ¦  int unsigned  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+max_updates  ¦  int unsigned  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+max_connections  ¦  int unsigned  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+max_user_connections  ¦  int unsigned  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+plugin  ¦  char(64)  ¦  NO  ¦    ¦  caching_sha2_password  ¦    ¦    𝄀
+authentication_string  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+password_expired  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+password_last_changed  ¦  timestamp  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+password_lifetime  ¦  smallint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_locked  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Create_role_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Drop_role_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
+Password_reuse_history  ¦  smallint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+Password_reuse_time  ¦  smallint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+Password_require_current  ¦  varchar(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+User_attributes  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦
 DESC `system_metrics`.`metric` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-metric_name  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦  metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...  𝄀
-collecttime  ¦  DATETIME(6)  ¦  NO  ¦    ¦  null  ¦    ¦  metric data collect time  𝄀
-value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  0.0  ¦    ¦  metric value  𝄀
-node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦  mo node uuid  𝄀
-role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦  mo node role, like: CN, DN, LOG  𝄀
-account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦  account name  𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦  account id  𝄀
-type  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  null  ¦    ¦  sql type, like: insert, select, ...
+metric_name  ¦  varchar(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦  metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...  𝄀
+collecttime  ¦  datetime(6)  ¦  NO  ¦    ¦  null  ¦    ¦  metric data collect time  𝄀
+value  ¦  double  ¦  YES  ¦    ¦  0.0  ¦    ¦  metric value  𝄀
+node  ¦  varchar(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦  mo node uuid  𝄀
+role  ¦  varchar(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦  mo node role, like: CN, DN, LOG  𝄀
+account  ¦  varchar(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦  account name  𝄀
+account_id  ¦  int unsigned  ¦  YES  ¦    ¦  0  ¦    ¦  account id  𝄀
+type  ¦  varchar(1024)  ¦  NO  ¦    ¦  null  ¦    ¦  sql type, like: insert, select, ...
 DESC `system_metrics`.`server_connections` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-collecttime  ¦  DATETIME(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
-node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
-role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
-account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦  
+collecttime  ¦  datetime(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+value  ¦  double  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
+node  ¦  varchar(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
+role  ¦  varchar(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
+account  ¦  varchar(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
+account_id  ¦  int unsigned  ¦  YES  ¦    ¦  0  ¦    ¦
 DESC `system_metrics`.`server_storage_usage` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-collecttime  ¦  DATETIME(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
-node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
-role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
-account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦  
+collecttime  ¦  datetime(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+value  ¦  double  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
+node  ¦  varchar(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
+role  ¦  varchar(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
+account  ¦  varchar(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
+account_id  ¦  int unsigned  ¦  YES  ¦    ¦  0  ¦    ¦
 DESC `system_metrics`.`sql_statement_errors` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-collecttime  ¦  DATETIME(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
-node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
-role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
-account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦    𝄀
-type  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  null  ¦    ¦  
+collecttime  ¦  datetime(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+value  ¦  double  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
+node  ¦  varchar(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
+role  ¦  varchar(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
+account  ¦  varchar(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
+account_id  ¦  int unsigned  ¦  YES  ¦    ¦  0  ¦    ¦    𝄀
+type  ¦  varchar(1024)  ¦  NO  ¦    ¦  null  ¦    ¦
 DESC `system_metrics`.`sql_transaction_total` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-collecttime  ¦  DATETIME(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
-node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
-role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
-account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦  
+collecttime  ¦  datetime(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+value  ¦  double  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
+node  ¦  varchar(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
+role  ¦  varchar(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
+account  ¦  varchar(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
+account_id  ¦  int unsigned  ¦  YES  ¦    ¦  0  ¦    ¦
 INSERT INTO `mo_catalog`.`statement_mo` (`statement_id`,`account`,`response_at`,`stu`,`account_id`) VALUES ('057247c5-2d0c-11ee-9e81-96ce077ba0f3','91731e77_49ea_4a8a_b1c7_d5512c7ae96e','2023-07-28 06:00:20','0.0003963262009632',2);
 no such table mo_catalog.statement_mo
 INSERT INTO `mo_mo`.`statement_time` (`cluster`,`last_time`) VALUES ('ab','2023-07-28 04:50:00');
