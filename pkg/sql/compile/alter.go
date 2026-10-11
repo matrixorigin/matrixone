@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -86,6 +87,11 @@ type alterDataBranchLineagePlan struct {
 	preserveHistoricalSource bool
 	cloneTS                  int64
 	fixedCopyTS              bool
+}
+
+type alterDataBranchLineageInspection struct {
+	participates bool
+	plan         alterDataBranchLineagePlan
 }
 
 func alterCopySQLAtLineageSnapshot(sql string, plan alterDataBranchLineagePlan) string {
@@ -227,17 +233,20 @@ func (c *Compile) alterTableParticipatesInDataBranch(oldTableID uint64) (bool, e
 func (c *Compile) alterTableHasHistoricalBranchSource(
 	oldTableID uint64,
 	databaseName, tableName string,
+	lockHistoricalSource bool,
 ) (bool, error) {
 	return alterDataBranchHistoricalSourceExists(
 		func(sql string) (executor.Result, error) {
 			return c.runSqlWithResult(sql, int32(catalog.System_Account))
 		},
 		[]string{
-			alterDataBranchHistoricalSnapshotSourceSQL(
+			alterDataBranchHistoricalSnapshotSourceProbeSQL(
 				c.proc.GetSessionInfo().Account, databaseName, tableName, oldTableID,
+				lockHistoricalSource, 0,
 			),
-			alterDataBranchHistoricalPitrSourceSQL(
+			alterDataBranchHistoricalPitrSourceProbeSQL(
 				c.proc.GetSessionInfo().Account, databaseName, tableName, oldTableID,
+				lockHistoricalSource, 0,
 			),
 		},
 	)
@@ -300,26 +309,47 @@ func (c *Compile) lockDataBranchLineageOwnerLifecyclePessimistic() error {
 	)
 }
 
-func (c *Compile) prepareAlterDataBranchLineage(
+func (c *Compile) inspectAlterDataBranchLineage(
 	oldTableID uint64,
 	databaseName, tableName string,
 	statement string,
-) (alterDataBranchLineagePlan, error) {
+	lockHistoricalSource bool,
+) (alterDataBranchLineageInspection, error) {
 	participates, err := c.alterTableParticipatesInDataBranch(oldTableID)
 	if err != nil {
-		return alterDataBranchLineagePlan{}, err
+		return alterDataBranchLineageInspection{}, err
 	}
+	lineagePlan, err := c.inspectAlterDataBranchLineageState(
+		participates, oldTableID, databaseName, tableName, statement, lockHistoricalSource,
+	)
+	if err != nil {
+		return alterDataBranchLineageInspection{}, err
+	}
+	return alterDataBranchLineageInspection{
+		participates: participates,
+		plan:         lineagePlan,
+	}, nil
+}
+
+func (c *Compile) inspectAlterDataBranchLineageState(
+	participates bool,
+	oldTableID uint64,
+	databaseName, tableName string,
+	statement string,
+	lockHistoricalSource bool,
+) (alterDataBranchLineagePlan, error) {
 	hasLiveLineage := false
+	var err error
 	if participates {
 		// ALTER-only rows preserve physical history for a snapshot or PITR but
 		// are not logical data branches. Inspect the complete connected
 		// component so an ALTER generation neither triggers a false transaction
 		// restriction nor hides a live logical sibling behind an ancestor.
-		ownershipDAG, dagErr := c.loadAlterDataBranchDAG(false)
+		dag, dagErr := c.loadAlterDataBranchDAG(false)
 		if dagErr != nil {
 			return alterDataBranchLineagePlan{}, dagErr
 		}
-		if ownershipDAG.ComponentHasLiveLogicalBranch(oldTableID) {
+		if dag.ComponentHasLiveLogicalBranch(oldTableID) {
 			op := c.proc.GetTxnOperator()
 			opts := op.TxnOptions()
 			// TRUNCATE commits the transaction that preceded the statement and
@@ -342,19 +372,12 @@ func (c *Compile) prepareAlterDataBranchLineage(
 				return alterDataBranchLineagePlan{}, err
 			}
 		}
-		if err = c.compactExpiredAlterDataBranchLineage(time.Time{}); err != nil {
-			return alterDataBranchLineagePlan{}, err
-		}
-		dag, dagErr := c.loadAlterDataBranchDAG(false)
-		if dagErr != nil {
-			return alterDataBranchLineagePlan{}, dagErr
-		}
 		hasLiveLineage = dag.SubtreeHasLiveNode(oldTableID)
 	}
 	preserveHistoricalSource := false
 	if !hasLiveLineage {
 		if preserveHistoricalSource, err = c.alterTableHasHistoricalBranchSource(
-			oldTableID, databaseName, tableName,
+			oldTableID, databaseName, tableName, lockHistoricalSource,
 		); err != nil {
 			return alterDataBranchLineagePlan{}, err
 		}
@@ -367,6 +390,64 @@ func (c *Compile) prepareAlterDataBranchLineage(
 		enabled:                  true,
 		preserveHistoricalSource: preserveHistoricalSource,
 	}, nil
+}
+
+func (c *Compile) prepareAlterDataBranchLineage(
+	oldTableID uint64,
+	databaseName, tableName string,
+	statement string,
+) (alterDataBranchLineagePlan, error) {
+	inspection, err := c.inspectAlterDataBranchLineage(
+		oldTableID, databaseName, tableName, statement, true,
+	)
+	if err != nil || !inspection.participates {
+		return inspection.plan, err
+	}
+	if err = c.compactExpiredAlterDataBranchLineage(time.Time{}); err != nil {
+		return alterDataBranchLineagePlan{}, err
+	}
+	lineagePlan, err := c.inspectAlterDataBranchLineageState(
+		true, oldTableID, databaseName, tableName, statement, true,
+	)
+	return lineagePlan, err
+}
+
+func (c *Compile) completeAlterDataBranchLineagePlan(
+	lineagePlan alterDataBranchLineagePlan,
+	oldTableID uint64,
+	databaseName, tableName string,
+) (alterDataBranchLineagePlan, error) {
+	if lineagePlan.enabled {
+		return lineagePlan, nil
+	}
+	hasLatestHistory, err := c.alterTableHasLatestHistoricalBranchSource(
+		oldTableID, databaseName, tableName,
+	)
+	if err != nil {
+		return alterDataBranchLineagePlan{}, err
+	}
+	if hasLatestHistory {
+		lineagePlan.enabled = true
+		lineagePlan.preserveHistoricalSource = true
+	}
+	return lineagePlan, nil
+}
+
+func validateAlterDataBranchLineageColumnReplacement(
+	qry *plan.AlterTable,
+	lineagePlan alterDataBranchLineagePlan,
+) error {
+	if !lineagePlan.enabled {
+		return nil
+	}
+	columnName, replaced := alterCopySameStatementColumnReplacement(qry)
+	if replaced {
+		return moerr.NewNotSupportedNoCtxf(
+			"ALTER on a data-branch lineage cannot drop and add column '%s' in the same statement",
+			columnName,
+		)
+	}
+	return nil
 }
 
 func validateAlterDataBranchLineageTxn(statement string, byBegin, autocommit, _ bool) error {
@@ -1102,6 +1183,134 @@ func alterCopyCreateOptions(qry *plan.AlterTable) executor.StatementOption {
 	return opts.WithKeepRelKind(qry.GetTableDef().GetTableType())
 }
 
+func (c *Compile) lockAlterCopySource(
+	dbSource engine.Database,
+	dbName, tblName string,
+	originRel engine.Relation,
+	qry *plan.AlterTable,
+) error {
+	if !c.proc.GetTxnOperator().Txn().IsPessimistic() {
+		return nil
+	}
+
+	var retryErr error
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+			!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+			return err
+		}
+		retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
+	if err := lockTable(c.proc.Ctx, c.e, c.proc, originRel, dbName, true); err != nil {
+		if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+			!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+			c.proc.Error(c.proc.Ctx, "lock origin table for alter table",
+				zap.String("databaseName", dbName),
+				zap.String("origin tableName", qry.GetTableDef().Name),
+				zap.Error(err))
+			return err
+		}
+		retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
+	if qry.TableDef.Indexes != nil {
+		for _, indexdef := range qry.TableDef.Indexes {
+			if !indexdef.TableExist {
+				continue
+			}
+			err := lockIndexTableForAlter(
+				c.proc.Ctx,
+				dbSource,
+				c.e,
+				c.proc,
+				tblName,
+				qry.TableDef.TblId,
+				indexdef,
+				retryErr != nil,
+			)
+			if err != nil {
+				if !moerr.IsMoErrCode(err, moerr.ErrParseError) &&
+					!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+					!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+					c.proc.Error(c.proc.Ctx, "lock index table for alter table",
+						zap.String("databaseName", dbName),
+						zap.String("origin tableName", qry.GetTableDef().Name),
+						zap.String("index name", indexdef.IndexName),
+						zap.String("index tableName", indexdef.IndexTableName),
+						zap.Error(err))
+					return err
+				}
+				retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+			}
+		}
+	}
+	return retryErr
+}
+
+func (c *Compile) alterCopySourceChangedSinceCopy(
+	rel engine.Relation,
+	copyTS int64,
+) (bool, error) {
+	from := types.BuildTS(copyTS, 0)
+	if from.IsEmpty() {
+		from = from.Next()
+	}
+	mp := c.proc.GetMPool()
+	ctx := c.proc.Ctx
+	if ctx == nil {
+		ctx = c.proc.GetTopContext()
+		if ctx == nil {
+			ctx = context.Background()
+		}
+	}
+	if creator, ok := rel.(engine.RelationCreatedInCurrentTxn); ok {
+		created, err := creator.CreatedInCurrentTxn(ctx)
+		if err != nil {
+			return false, err
+		}
+		if created {
+			return false, nil
+		}
+	}
+	handle, err := rel.CollectChanges(
+		ctx, from, types.MaxTs(), false, mp,
+	)
+	if err != nil {
+		return false, err
+	}
+
+	changed := false
+	for {
+		data, tombstone, _, err := handle.Next(ctx, mp)
+		if err != nil {
+			if closeErr := handle.Close(); closeErr != nil {
+				return false, closeErr
+			}
+			return false, err
+		}
+		if data == nil && tombstone == nil {
+			break
+		}
+		if data != nil {
+			changed = changed || data.RowCount() > 0
+			data.Clean(mp)
+		}
+		if tombstone != nil {
+			changed = changed || tombstone.RowCount() > 0
+			tombstone.Clean(mp)
+		}
+		if changed {
+			break
+		}
+	}
+	if err := handle.Close(); err != nil {
+		return false, err
+	}
+	return changed, nil
+}
+
 func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 	cleanup := newAlterAutoIncrementResetCleanup(c)
 	defer cleanup.finish(&err)
@@ -1153,163 +1362,77 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	}
 
 	oldId := originRel.GetTableID(c.proc.Ctx)
+	sourceDefVersion := originRel.GetTableDef(c.proc.Ctx).GetVersion()
 	lineagePlan := alterDataBranchLineagePlan{}
-	lineageSnapshotAdvanced := false
+	initialSnapshotAdvanced := false
 	lineageCloneTS := int64(0)
 	lineageTxnOp := c.proc.GetTxnOperator()
-	if lineageTxnOp.Txn().IsPessimistic() {
-		var retryErr error
-		if !isTemp {
-			if c.isLifecycleRC() {
-				if dbSource, originRel, err = c.admitBroadTableLifecycleRC(dbName, tblName, oldId); err != nil {
-					return err
-				}
-				if plannedID := qry.TableDef.GetTblId(); plannedID != 0 && plannedID != oldId {
-					return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
-				}
-			} else {
-				// SI keeps the existing broad lifecycle and fixed snapshot.
-				if err = c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
-					return err
-				}
-			}
+	lineageOriginalSnapshot := timestamp.Timestamp{}
+	lineageRestoreSnapshot := false
+	defer func() {
+		if lineageRestoreSnapshot {
+			lineageTxnOp.SetSnapshotTS(lineageOriginalSnapshot)
 		}
-		// 0. lock origin database metadata in catalog
-		if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+	}()
+	if isTemp && lineageTxnOp.Txn().IsPessimistic() {
+		if err = c.lockAlterCopySource(dbSource, dbName, tblName, originRel, qry); err != nil {
 			return err
 		}
-
-		// 1. lock origin table metadata in catalog
-		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return err
-			}
-			// The changes recorded in the data dictionary table imply a change in the structure of the corresponding entity table,
-			// therefore it is necessary to rebuild the logical plan and redirect err to ErrTxnNeedRetryWithDefChanged
-			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
+	if !isTemp && shouldAdvanceAlterDataBranchLineageSnapshot(
+		lineageTxnOp.Txn().IsPessimistic(), lineageTxnOp.Txn().IsRCIsolation(),
+	) {
+		lineageOriginalSnapshot = lineageTxnOp.SnapshotTS()
+		lineageRestoreSnapshot = true
+		if lineageCloneTS, err = c.advanceAlterDataBranchLineageSnapshot(); err != nil {
+			return err
 		}
-
-		// 2. lock origin table
-		if err = lockTable(c.proc.Ctx, c.e, c.proc, originRel, dbName, true); err != nil {
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				c.proc.Error(c.proc.Ctx, "lock origin table for alter table",
-					zap.String("databaseName", dbName),
-					zap.String("origin tableName", qry.GetTableDef().Name),
-					zap.Error(err))
-				return err
-			}
-			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		initialSnapshotAdvanced = true
+	} else if isTemp && shouldAdvanceAlterDataBranchLineageSnapshot(
+		lineageTxnOp.Txn().IsPessimistic(), lineageTxnOp.Txn().IsRCIsolation(),
+	) {
+		lineageOriginalSnapshot = lineageTxnOp.SnapshotTS()
+		lineageRestoreSnapshot = true
+		if lineageCloneTS, err = c.advanceAlterDataBranchLineageSnapshot(); err != nil {
+			return err
 		}
-
-		if qry.TableDef.Indexes != nil {
-			for _, indexdef := range qry.TableDef.Indexes {
-				if indexdef.TableExist {
-					err = lockIndexTableForAlter(
-						c.proc.Ctx,
-						dbSource,
-						c.e,
-						c.proc,
-						tblName,
-						qry.TableDef.TblId,
-						indexdef,
-						retryErr != nil,
-					)
-					if err != nil {
-						if !moerr.IsMoErrCode(err, moerr.ErrParseError) &&
-							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
-							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-							c.proc.Error(c.proc.Ctx, "lock index table for alter table",
-								zap.String("databaseName", dbName),
-								zap.String("origin tableName", qry.GetTableDef().Name),
-								zap.String("index name", indexdef.IndexName),
-								zap.String("index tableName", indexdef.IndexTableName),
-								zap.Error(err))
-							return err
-						}
-						retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
-					}
-				}
-			}
-		}
-
-		if retryErr != nil {
-			return retryErr
-		}
-		if !isTemp && shouldAdvanceAlterDataBranchLineageSnapshot(
-			lineageTxnOp.Txn().IsPessimistic(), lineageTxnOp.Txn().IsRCIsolation(),
-		) {
-			// The source metadata lock excludes new current-source branch clones.
-			// Under RC, advance the statement snapshot while holding it so a branch
-			// that committed just before lock acquisition is visible to the lineage
-			// probe below, even when lock acquisition itself did not wait.
-			if lineageCloneTS, err = c.advanceAlterDataBranchLineageSnapshot(); err != nil {
-				return err
-			}
-			lineageSnapshotAdvanced = true
-		}
+		initialSnapshotAdvanced = true
 	}
 	if !isTemp {
-		// The stable row exists even when no owner does. Snapshot and PITR creation
-		// cross the same write barrier before choosing their timestamp and retain
-		// the write through owner publication. Pessimistic transactions wait; an
-		// optimistic write-write loser retries the whole statement.
-		if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
-			return err
+		inspection, inspectErr := c.inspectAlterDataBranchLineage(
+			oldId, dbName, tblName, "ALTER", false,
+		)
+		if inspectErr != nil {
+			return inspectErr
 		}
-		lineagePlan, err = c.prepareAlterDataBranchLineage(oldId, dbName, tblName, "ALTER")
-		if err != nil {
+		lineagePlan = inspection.plan
+		if lineagePlan, err = c.completeAlterDataBranchLineagePlan(
+			lineagePlan, oldId, dbName, tblName,
+		); err != nil {
 			return err
-		}
-		if !lineagePlan.enabled {
-			var hasLatestHistory bool
-			if hasLatestHistory, err = c.alterTableHasLatestHistoricalBranchSource(
-				oldId, dbName, tblName,
-			); err != nil {
-				return err
-			}
-			if hasLatestHistory {
-				lineagePlan.enabled = true
-				lineagePlan.preserveHistoricalSource = true
-			}
 		}
 	}
 
-	if lineagePlan.enabled {
-		if columnName, replaced := alterCopySameStatementColumnReplacement(qry); replaced {
-			return moerr.NewNotSupportedNoCtxf(
-				"ALTER on a data-branch lineage cannot drop and add column '%s' in the same statement",
-				columnName,
-			)
-		}
+	if err = validateAlterDataBranchLineageColumnReplacement(qry, lineagePlan); err != nil {
+		return err
 	}
-	if lineagePlan.enabled {
-		if lineageSnapshotAdvanced {
-			lineagePlan.cloneTS = lineageCloneTS
-			// A snapshot hint cannot see this transaction's workspace: it would
-			// lose earlier DML and cannot resolve a generation created by earlier
-			// DDL. The current operator already has the lock-held advanced snapshot
-			// and overlays that workspace, so explicit transactions copy from it.
-			lineageTxnOpts := lineageTxnOp.TxnOptions()
-			txnHasWorkspaceHistory := isExplicitAlterTxn(
-				lineageTxnOpts.GetByBegin(),
-				lineageTxnOpts.GetAutocommit(),
-			) || c.getHaveDDL()
-			lineagePlan.fixedCopyTS = shouldUseFixedAlterCopySnapshot(
-				lineageSnapshotAdvanced,
-				txnHasWorkspaceHistory,
-			)
-		} else {
-			// Optimistic mode has no row-lock snapshot barrier. Its statement
-			// snapshot is nevertheless the exact source view copied by ALTER, so
-			// record that same boundary without adding a MO_TS override.
-			lineagePlan.cloneTS = c.proc.GetTxnOperator().SnapshotTS().PhysicalTime
-		}
+	if initialSnapshotAdvanced {
+		lineagePlan.cloneTS = lineageCloneTS
+	} else {
+		lineagePlan.cloneTS = c.proc.GetTxnOperator().SnapshotTS().PhysicalTime
 	}
-	if lineageSnapshotAdvanced {
-		// Re-resolve after the lock-held snapshot barrier so ordinary ALTER and
-		// lineage ALTER both copy from the exact catalog view just validated.
+	if lineagePlan.enabled && initialSnapshotAdvanced {
+		lineageTxnOpts := lineageTxnOp.TxnOptions()
+		txnHasWorkspaceHistory := isExplicitAlterTxn(
+			lineageTxnOpts.GetByBegin(),
+			lineageTxnOpts.GetAutocommit(),
+		) || c.getHaveDDL()
+		lineagePlan.fixedCopyTS = shouldUseFixedAlterCopySnapshot(
+			initialSnapshotAdvanced,
+			txnHasWorkspaceHistory,
+		)
+	}
+	if initialSnapshotAdvanced {
 		originRel, err = dbSource.Relation(c.proc.Ctx, tblName, nil)
 		if err != nil {
 			return err
@@ -1462,6 +1585,94 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		c, dbName, qry.Options.SkipIndexesCopy, qry.AffectedCols, newRel, qry.TableDef, nil,
 	); err != nil {
 		return err
+	}
+
+	if !isTemp {
+		var publicationRel engine.Relation
+		if c.isLifecycleRC() {
+			dbSource, publicationRel, err = c.admitBroadTableLifecycleRC(dbName, tblName, oldId)
+			if err != nil {
+				return err
+			}
+			if plannedID := qry.TableDef.GetTblId(); plannedID != 0 && plannedID != oldId {
+				return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+			}
+		} else if lineageTxnOp.Txn().IsPessimistic() {
+			if err = c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
+				return err
+			}
+			publicationRel = originRel
+		} else {
+			publicationRel = originRel
+		}
+		if err = c.lockAlterCopySource(
+			dbSource, dbName, tblName, publicationRel, qry,
+		); err != nil {
+			return err
+		}
+		if shouldAdvanceAlterDataBranchLineageSnapshot(
+			lineageTxnOp.Txn().IsPessimistic(), lineageTxnOp.Txn().IsRCIsolation(),
+		) {
+			// The source metadata lock excludes new current-source branch clones.
+			// Advance after lock acquisition so the postgate lineage probe sees a
+			// branch that committed just before the lock was granted.
+			if _, err = c.advanceAlterDataBranchLineageSnapshot(); err != nil {
+				return err
+			}
+		}
+		originRel, err = dbSource.Relation(c.proc.Ctx, tblName, nil)
+		if err != nil {
+			return err
+		}
+		if originRel.GetTableID(c.proc.Ctx) != oldId {
+			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
+		if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
+			return err
+		}
+		if originRel.GetTableDef(c.proc.Ctx).GetVersion() != sourceDefVersion {
+			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
+		sourceChanged, sourceChangedErr := c.alterCopySourceChangedSinceCopy(
+			originRel, lineagePlan.cloneTS,
+		)
+		if sourceChangedErr != nil {
+			return sourceChangedErr
+		}
+		if sourceChanged {
+			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
+		sourceForeignKeys, sourceRefChildTbls, err = snapshotAlterCopyForeignKeyState(
+			c.proc.Ctx, originRel,
+		)
+		if err != nil {
+			return err
+		}
+		if !plan2.IsFkBannedDatabase(dbName) {
+			if err = checkAlterCopyForeignKeyColumns(
+				c, qry, originRel.CopyTableDef(c.proc.Ctx), sourceForeignKeys,
+				sourceRefChildTbls, oldId, dbName, tblName,
+			); err != nil {
+				return err
+			}
+		}
+		publicationPlan, publicationErr := c.prepareAlterDataBranchLineage(
+			oldId, dbName, tblName, "ALTER",
+		)
+		if publicationErr != nil {
+			return publicationErr
+		}
+		if publicationPlan, err = c.completeAlterDataBranchLineagePlan(
+			publicationPlan, oldId, dbName, tblName,
+		); err != nil {
+			return err
+		}
+		publicationPlan.cloneTS = lineagePlan.cloneTS
+		publicationPlan.fixedCopyTS = lineagePlan.fixedCopyTS
+		lineagePlan = publicationPlan
+		if err = validateAlterDataBranchLineageColumnReplacement(qry, lineagePlan); err != nil {
+			return err
+		}
 	}
 
 	newId := newRel.GetTableID(c.proc.Ctx)
@@ -2973,6 +3184,9 @@ func cloneUnaffectedIndexes(
 			oriIdxObjRef, oriIdxTblDef, err = cctx.Resolve(dbName, oriIdxTblName.IndexTableName, cloneSnapshot)
 			if err != nil {
 				return err
+			}
+			if oriIdxObjRef == nil || oriIdxTblDef == nil {
+				return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 			}
 
 			clonePlan := plan.CloneTable{

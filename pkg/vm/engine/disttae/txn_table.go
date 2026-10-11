@@ -1919,6 +1919,10 @@ func (tbl *txnTable) isCreatedInTxn(_ context.Context) (bool, error) {
 
 }
 
+func (tbl *txnTable) CreatedInCurrentTxn(ctx context.Context) (bool, error) {
+	return tbl.isCreatedInTxn(ctx)
+}
+
 func validateAutoIncrEpochAdvance(current uint32, resets uint64) error {
 	if uint64(current)+resets > math.MaxUint32 {
 		return moerr.NewInternalErrorNoCtx("AUTO_INCREMENT epoch exhausted")
