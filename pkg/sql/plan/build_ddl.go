@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -349,6 +350,11 @@ func inferViewColumns(
 		if len(colNames) > 0 {
 			originName = string(colNames[idx])
 			name = originName
+		}
+		if forAuthoring {
+			if err := validateIdentifier(ctx.GetContext(), name); err != nil {
+				return nil, err
+			}
 		}
 		typ := &expr.Typ
 		if idx < len(outputColumnProvenance) {
@@ -1603,6 +1609,9 @@ func genAsSelectCols(
 			}
 		}
 
+		if err := validateIdentifier(ctx.GetContext(), bindCtx.headings[i]); err != nil {
+			return nil, nil, err
+		}
 		cols[i] = &plan.ColDef{
 			Name: normalizeCTASColumnName(
 				bindCtx.headings[i], bindCtx.headingProvenanceFor(i)),
@@ -2324,6 +2333,10 @@ func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, e
 }
 
 func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan, error) {
+	// Sequences historically support names beyond the table identifier length limit.
+	if err := validateIdentifierEncoding(ctx.GetContext(), string(stmt.Name.ObjectName)); err != nil {
+		return nil, err
+	}
 	createSequence := &plan.CreateSequence{
 		IfNotExists: stmt.IfNotExists,
 		TableDef: &TableDef{
@@ -3123,7 +3136,17 @@ func buildCreateTable(
 	}, nil
 }
 
+func validateIdentifierEncoding(ctx context.Context, name string) error {
+	if !utf8.ValidString(name) {
+		return moerr.NewInvalidInputf(ctx, "identifier %q is not valid UTF-8", name)
+	}
+	return nil
+}
+
 func validateIdentifier(ctx context.Context, name string) error {
+	if err := validateIdentifierEncoding(ctx, name); err != nil {
+		return err
+	}
 	if getNumOfCharacters(name) <= MaxIdentifierLength {
 		return nil
 	}
@@ -3139,7 +3162,8 @@ func validateCreateTableIdentifier(ctx CompilerContext, name string) error {
 
 	// Internal DDL and session-scoped temporary tables can materialize generated
 	// physical names with UUID prefixes or suffixes.
-	if defines.IsInternalExecutor(ctx.GetContext()) || isGeneratedSessionTempTableName(ctx, name) {
+	if moerr.IsMoErrCode(err, moerr.ErrTooLongIdent) &&
+		(defines.IsInternalExecutor(ctx.GetContext()) || isGeneratedSessionTempTableName(ctx, name)) {
 		return nil
 	}
 

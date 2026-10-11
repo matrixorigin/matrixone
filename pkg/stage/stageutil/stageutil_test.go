@@ -160,6 +160,33 @@ func TestStageChainNoFalseCycle(t *testing.T) {
 	require.Equal(t, "file:///tmp/one/one/a.csv", s.Url.String())
 }
 
+func TestUrlToStageDefForExportDoesNotMutateCachedURL(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	dir := t.TempDir()
+	u, err := url.Parse("file://" + dir)
+	require.NoError(t, err)
+	proc.GetStageCache().Set("exportstage", stage.StageDef{Id: 1, Name: "exportstage", Url: u})
+
+	expectedFirst := path.Join(dir, "first_%03d.parquet")
+	expectedSecond := path.Join(dir, "second_%03d.parquet")
+	first, err := UrlToStageDefForExport("stage://exportstage/first_%03d.parquet", proc)
+	require.NoError(t, err)
+	firstSnapshot := first.Url.String()
+	require.Equal(t, expectedFirst, first.Url.Path)
+	cached, ok := proc.GetStageCache().Get("exportstage")
+	require.True(t, ok)
+	require.Equal(t, dir, cached.Url.Path)
+
+	second, err := UrlToStageDefForExport("stage://exportstage/second_%03d.parquet", proc)
+	require.NoError(t, err)
+	require.Equal(t, expectedSecond, second.Url.Path)
+	require.Equal(t, expectedFirst, first.Url.Path)
+	require.Equal(t, firstSnapshot, first.Url.String())
+	cached, ok = proc.GetStageCache().Get("exportstage")
+	require.True(t, ok)
+	require.Equal(t, dir, cached.Url.Path)
+}
+
 func Test_runSql(t *testing.T) {
 	rt := moruntime.DefaultRuntime()
 	moruntime.SetupServiceBasedRuntime("", rt)

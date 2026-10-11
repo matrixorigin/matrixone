@@ -1693,3 +1693,125 @@ func BenchmarkDecimal256UnsignedDivision(b *testing.B) {
 		})
 	}
 }
+
+// Leading zeros of the integer part must not count toward the 38-digit
+// Decimal128 limit (issue #29841).
+func TestParseDecimal128LeadingZeroDoesNotConsumePrecision(t *testing.T) {
+	tiny := "0." + strings.Repeat("0", 37) + "1"
+	nines := "0." + strings.Repeat("9", 38)
+	for _, tc := range []struct {
+		input, want string
+	}{
+		{tiny, "0." + strings.Repeat("0", 37) + "1"},
+		{"." + strings.Repeat("0", 37) + "1", "0." + strings.Repeat("0", 37) + "1"},
+		{"000" + tiny, "0." + strings.Repeat("0", 37) + "1"},
+		{nines, nines},
+		{"-" + nines, "-" + nines},
+		{"-0." + strings.Repeat("0", 37) + "1", "-0." + strings.Repeat("0", 37) + "1"},
+		{"0", "0." + strings.Repeat("0", 38)},
+	} {
+		got, err := ParseDecimal128(tc.input, 38, 38)
+		if err != nil {
+			t.Fatalf("ParseDecimal128(%q, 38, 38) error: %v", tc.input, err)
+		}
+		if s := got.Format(38); s != tc.want {
+			t.Fatalf("ParseDecimal128(%q, 38, 38) = %s, want %s", tc.input, s, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		input string
+		width int32
+		scale int32
+		want  string
+	}{
+		{"00123.45", 10, 2, "123.45"},
+		{"0x1A", 10, 0, "26"},
+		{"007", 5, 0, "7"},
+	} {
+		got, err := ParseDecimal128(tc.input, tc.width, tc.scale)
+		if err != nil || got.Format(tc.scale) != tc.want {
+			t.Fatalf("ParseDecimal128(%q) = %s, %v; want %s", tc.input, got.Format(tc.scale), err, tc.want)
+		}
+	}
+	if _, err := ParseDecimal128("1."+strings.Repeat("0", 38), 38, 38); err == nil {
+		t.Fatal("1.0 must stay out of range for DECIMAL(38,38)")
+	}
+}
+
+// Discarded fractional digits must be rounded once to the column scale,
+// not first at the 38-digit parser limit and again at the scale.
+func TestParseDecimal128RoundsOnceWhenDownscaling(t *testing.T) {
+	zeros := strings.Repeat("0", 36)
+	ones := strings.Repeat("1", 38)
+	for _, tc := range []struct {
+		input string
+		width int32
+		scale int32
+		want  string
+	}{
+		// These inputs retain 38 significant digits before reaching the tail.
+		{"0." + ones + "4", 38, 38, "0." + ones},
+		{"0." + ones + "5", 38, 38, "0." + ones[:37] + "2"},
+		{"-0." + ones + "5", 38, 38, "-0." + ones[:37] + "2"},
+		{"0." + ones + "054e0", 38, 38, "0." + ones},
+		{"0." + ones[:37] + "45", 38, 37, "0." + ones[:37]},
+		{"-0." + ones[:37] + "45", 38, 37, "-0." + ones[:37]},
+		{"0." + strings.Repeat("9", 38) + "5", 38, 37, "1." + strings.Repeat("0", 37)},
+		{"0." + ones + "4e-1", 38, 38, "0.0" + ones[:37]},
+		{"0." + ones + "4 e-1", 38, 38, "0.0" + ones[:37]},
+		{"-0." + ones + "4+e-1", 38, 38, "-0.0" + ones[:37]},
+		{"0." + zeros + "145", 38, 37, "0." + zeros + "1"},
+		{"-0." + zeros + "145", 38, 37, "-0." + zeros + "1"},
+		{"0." + zeros + "149", 38, 37, "0." + zeros + "1"},
+		{"-0." + zeros + "149", 38, 37, "-0." + zeros + "1"},
+		{"0." + zeros + "144", 38, 37, "0." + zeros + "1"},
+		{"0." + zeros + "150", 38, 37, "0." + zeros + "2"},
+		{"0." + zeros + "15", 38, 37, "0." + zeros + "2"},
+		{"1.2345", 10, 2, "1.23"},
+		{"1.235", 10, 2, "1.24"},
+		{"-1.235", 10, 2, "-1.24"},
+		{"1.2349999999999999999999999999999999999999", 10, 2, "1.23"},
+		{"12.5e-1", 10, 1, "1.3"},
+		// exponent spellings of the same values must round once as well
+		{"0." + zeros + "145e0", 38, 37, "0." + zeros + "1"},
+		{"-0." + zeros + "145e0", 38, 37, "-0." + zeros + "1"},
+		{"0." + zeros + "149E+0", 38, 37, "0." + zeros + "1"},
+		{"-0." + zeros + "149E+0", 38, 37, "-0." + zeros + "1"},
+		{"0." + zeros + "144e0", 38, 37, "0." + zeros + "1"},
+		{"0." + zeros + "150e0", 38, 37, "0." + zeros + "2"},
+		{"0." + zeros + "0145e1", 38, 37, "0." + zeros + "1"},
+		{"145e-39", 38, 37, "0." + zeros + "1"},
+		{"-14.9e-38", 38, 37, "-0." + zeros + "1"},
+		// an exponent after more than 38 digits is still applied
+		{"0." + zeros + "145e1", 38, 37, "0." + zeros[1:] + "15"},
+		{"0." + zeros + "145e1", 38, 38, "0." + zeros[1:] + "145"},
+		{"0.1234" + strings.Repeat("9", 40), 10, 3, "0.123"},
+		{"0.1234" + strings.Repeat("9", 40) + "e1", 10, 2, "1.23"},
+	} {
+		got, err := ParseDecimal128(tc.input, tc.width, tc.scale)
+		require.NoError(t, err, tc.input)
+		require.Equal(t, tc.want, got.Format(tc.scale), tc.input)
+	}
+}
+
+func TestParseDecimal128PostRoundingRange(t *testing.T) {
+	max := strings.Repeat("9", 38)
+	for _, sign := range []string{"", "-"} {
+		got, err := ParseDecimal128(sign+max+".4", 38, 0)
+		require.NoError(t, err)
+		require.Equal(t, sign+max, got.Format(0))
+		got, err = ParseDecimal128(sign+"0."+max+"4", 38, 38)
+		require.NoError(t, err)
+		require.Equal(t, sign+"0."+max, got.Format(38))
+		for _, tail := range []string{"5", "7"} {
+			_, err = ParseDecimal128(sign+max+"."+tail, 38, 0)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			_, err = ParseDecimal128(sign+"0."+max+tail, 38, 38)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		}
+	}
+	for _, suffix := range []string{"4 e-", "4z"} {
+		_, err := ParseDecimal128("0."+strings.Repeat("1", 38)+suffix, 38, 38)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	}
+}

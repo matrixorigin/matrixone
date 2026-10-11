@@ -1,0 +1,25 @@
+set @saved_sql_mode = @@sql_mode;
+set sql_mode = 'STRICT_TRANS_TABLES';
+drop table if exists issue_29842_t;
+create table issue_29842_t(id int primary key, v json);
+load data infile {'filepath'='$resources/load_data/issue_29842_jsonline_unfinished_tail.jl','format'='jsonline','jsondata'='object'} into table issue_29842_t;
+invalid input: incomplete json record
+select count(*) from issue_29842_t;
+➤ count(*)[-5,64,0]  𝄀
+0
+load data infile {'filepath'='$resources/load_data/issue_29842_jsonline_unfinished_tail_nl.jl','format'='jsonline','jsondata'='object'} into table issue_29842_t;
+invalid input: incomplete json record
+select count(*) from issue_29842_t;
+➤ count(*)[-5,64,0]  𝄀
+0
+load data infile {'filepath'='$resources/load_data/issue_29842_jsonline_complete.jl','format'='jsonline','jsondata'='object'} into table issue_29842_t;
+select id, v from issue_29842_t order by id;
+➤ id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
+1  ¦  {"a": 1}  𝄀
+2  ¦  {"a": 2}
+insert into issue_29842_t values (3, '{"a":3}');
+select count(*) from issue_29842_t;
+➤ count(*)[-5,64,0]  𝄀
+3
+drop table issue_29842_t;
+set sql_mode = @saved_sql_mode;
