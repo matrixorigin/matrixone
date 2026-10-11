@@ -1693,3 +1693,47 @@ func BenchmarkDecimal256UnsignedDivision(b *testing.B) {
 		})
 	}
 }
+
+// Leading zeros of the integer part must not count toward the 38-digit
+// Decimal128 limit (issue #29841).
+func TestParseDecimal128LeadingZeroDoesNotConsumePrecision(t *testing.T) {
+	tiny := "0." + strings.Repeat("0", 37) + "1"
+	nines := "0." + strings.Repeat("9", 38)
+	for _, tc := range []struct {
+		input, want string
+	}{
+		{tiny, "0." + strings.Repeat("0", 37) + "1"},
+		{"." + strings.Repeat("0", 37) + "1", "0." + strings.Repeat("0", 37) + "1"},
+		{"000" + tiny, "0." + strings.Repeat("0", 37) + "1"},
+		{nines, nines},
+		{"-" + nines, "-" + nines},
+		{"-0." + strings.Repeat("0", 37) + "1", "-0." + strings.Repeat("0", 37) + "1"},
+		{"0", "0." + strings.Repeat("0", 38)},
+	} {
+		got, err := ParseDecimal128(tc.input, 38, 38)
+		if err != nil {
+			t.Fatalf("ParseDecimal128(%q, 38, 38) error: %v", tc.input, err)
+		}
+		if s := got.Format(38); s != tc.want {
+			t.Fatalf("ParseDecimal128(%q, 38, 38) = %s, want %s", tc.input, s, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		input string
+		width int32
+		scale int32
+		want  string
+	}{
+		{"00123.45", 10, 2, "123.45"},
+		{"0x1A", 10, 0, "26"},
+		{"007", 5, 0, "7"},
+	} {
+		got, err := ParseDecimal128(tc.input, tc.width, tc.scale)
+		if err != nil || got.Format(tc.scale) != tc.want {
+			t.Fatalf("ParseDecimal128(%q) = %s, %v; want %s", tc.input, got.Format(tc.scale), err, tc.want)
+		}
+	}
+	if _, err := ParseDecimal128("1."+strings.Repeat("0", 38), 38, 38); err == nil {
+		t.Fatal("1.0 must stay out of range for DECIMAL(38,38)")
+	}
+}
