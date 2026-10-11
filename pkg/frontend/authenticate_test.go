@@ -490,7 +490,8 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		}).AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
 		msr := newMrsForCheckTenant([][]interface{}{{1, "test"}})
-		protocolResult := newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:100"}`}})
+		// This success-path fixture represents a cluster at the current protocol.
+		protocolResult := newMrsForCheckTenant([][]interface{}{{fmt.Sprintf(`{"result":"cn-a:%d"}`, defines.MORPCLatestVersion)}})
 		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
 			if protocolQuery {
 				return []interface{}{protocolResult}
