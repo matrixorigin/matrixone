@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -68,7 +69,7 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	sql := fmt.Sprintf(catalog.MoTablesInDBQueryFormat, aid, db.databaseName)
+	sql := fmt.Sprintf(catalog.MoTablesInDBQueryFormat, aid, sqlquote.String(db.databaseName))
 
 	res, err := execReadSql(ctx, db.op, sql, true)
 	if err != nil {
@@ -236,7 +237,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	colPKs = getColPks(accountId, db.databaseName, name, toDelTbl.tableDef.Cols, packer)
 
 	// 1.1 table rowid
-	sql := fmt.Sprintf(catalog.MoTablesRowidQueryFormat, accountId, db.databaseName, name)
+	sql := fmt.Sprintf(catalog.MoTablesRowidQueryFormat, accountId, sqlquote.String(db.databaseName), sqlquote.String(name))
 
 	rmFault := func() {}
 
@@ -271,7 +272,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	rowid = vector.GetFixedAtNoTypeCheck[types.Rowid](res.Batches[0].Vecs[0], 0)
 
 	// 1.2 table column rowids
-	res, err = execReadSql(ctx, db.op, fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, db.databaseName, name, id), true)
+	res, err = execReadSql(ctx, db.op, fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, accountId, sqlquote.String(db.databaseName), sqlquote.String(name), id), true)
 	if err != nil {
 		return nil, err
 	}
@@ -629,7 +630,7 @@ func (db *txnDatabase) loadTableFromStorage(
 	)
 	// query table
 	{
-		tblSql := fmt.Sprintf(catalog.MoTablesAllQueryFormat, accountID, db.databaseName, name)
+		tblSql := fmt.Sprintf(catalog.MoTablesAllQueryFormat, accountID, sqlquote.String(db.databaseName), sqlquote.String(name))
 		var res executor.Result
 		res, err = execReadSql(ctx, db.op, tblSql, true)
 		if err != nil {
@@ -656,7 +657,7 @@ func (db *txnDatabase) loadTableFromStorage(
 
 	{
 		// fresh columns
-		colSql := fmt.Sprintf(catalog.MoColumnsAllQueryFormat, accountID, db.databaseName, name, tblid)
+		colSql := fmt.Sprintf(catalog.MoColumnsAllQueryFormat, accountID, sqlquote.String(db.databaseName), sqlquote.String(name), tblid)
 		var res executor.Result
 		res, err = execReadSql(ctx, db.op, colSql, true)
 		if err != nil {

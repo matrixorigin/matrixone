@@ -61,4 +61,46 @@ set @v = 100;
 call sp_ins2_sum(@v); 
 select @v;
 
+-- Background procedure sessions must preserve vector Top-K results (#29147).
+set @saved_hnsw = @@experimental_hnsw_index;
+set @saved_ivf = @@experimental_ivf_index;
+set experimental_hnsw_index = 1;
+set experimental_ivf_index = 1;
+create table vec_hnsw(id bigint primary key, v vecf32(4));
+insert into vec_hnsw values (1,'[0,0,0,0]'),(2,'[1,1,1,1]'),(3,'[5,5,5,5]'),(4,'[2,2,2,2]');
+create index idx_hnsw using hnsw on vec_hnsw(v) op_type 'vector_l2_ops' m=4 ef_construction=16 ef_search=16;
+-- @separator:table
+-- @regex("Table Function on hnsw_search", true)
+explain select id from vec_hnsw order by l2_distance(v,'[0.9,0.9,0.9,0.9]') limit 2;
+select id from vec_hnsw order by l2_distance(v,'[0.9,0.9,0.9,0.9]') limit 2;
+create procedure p_hnsw() 'begin select id from vec_hnsw order by l2_distance(v,''[0.9,0.9,0.9,0.9]'') limit 2; end';
+call p_hnsw();
+create procedure sl_hnsw(out ids varchar, out error_text varchar) language 'starlark'
+$$
+rows, err = mo.sql("select id from vec_hnsw order by l2_distance(v,'[0.9,0.9,0.9,0.9]') limit 2")
+out_ids = "{},{}".format(rows[0][0], rows[1][0]) if err == None else ""
+out_error_text = "" if err == None else str(err)
+$$;
+call sl_hnsw(@ids, @error_text);
+select @ids, @error_text;
+create table vec_ivfflat(id bigint primary key, v vecf32(4));
+insert into vec_ivfflat values (1,'[0,0,0,0]'),(2,'[1,1,1,1]'),(3,'[5,5,5,5]'),(4,'[2,2,2,2]');
+create index idx_ivfflat using ivfflat on vec_ivfflat(v) lists=1 op_type 'vector_l2_ops';
+-- @separator:table
+-- @regex("Vector Index Scan", true)
+explain select id from vec_ivfflat order by l2_distance(v,'[0.9,0.9,0.9,0.9]') limit 2;
+select id from vec_ivfflat order by l2_distance(v,'[0.9,0.9,0.9,0.9]') limit 2;
+create procedure p_ivfflat() 'begin select id from vec_ivfflat order by l2_distance(v,''[0.9,0.9,0.9,0.9]'') limit 2; end';
+call p_ivfflat();
+create procedure sl_ivfflat(out ids varchar, out error_text varchar) language 'starlark'
+$$
+rows, err = mo.sql("select id from vec_ivfflat order by l2_distance(v,'[0.9,0.9,0.9,0.9]') limit 2")
+out_ids = "{},{}".format(rows[0][0], rows[1][0]) if err == None else ""
+out_error_text = "" if err == None else str(err)
+$$;
+call sl_ivfflat(@ids, @error_text);
+select @ids, @error_text;
+set experimental_hnsw_index = @saved_hnsw;
+set experimental_ivf_index = @saved_ivf;
+
 drop database if exists procedure_test;

@@ -245,6 +245,27 @@ func ValidateKeyFormat(format uint32) error {
 	return nil
 }
 
+// ValidateKeyFormatPair validates the physical-key contract shared by a base
+// relation and one of its index relations.  A key producer and its probe must
+// agree on the format; treating a missing index format as legacy while the
+// base relation carries a versioned format would make the two sides generate
+// different bytes.  The admission policy remains owned by RequireLegacy; this
+// helper only validates the metadata relationship.
+func ValidateKeyFormatPair(tableFormat, indexFormat uint32) error {
+	if err := ValidateKeyFormat(tableFormat); err != nil {
+		return err
+	}
+	if err := ValidateKeyFormat(indexFormat); err != nil {
+		return err
+	}
+	if tableFormat != indexFormat {
+		return moerr.NewInvalidInputNoCtxf(
+			"index collation key format %d does not match table format %d",
+			indexFormat, tableFormat)
+	}
+	return nil
+}
+
 // RequireLegacy is the production metadata fence. Legacy identities keep their
 // revision-zero contract, while the executable UCA400 identities are admitted
 // only with their explicit revision and the legacy physical key format. Other

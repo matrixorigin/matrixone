@@ -168,8 +168,8 @@ create external table ext_binary (
     bin_blob BLOB,
     bin_empty VARBINARY(10)
 ) infile{"filepath"='$resources/parquet/binary_mapping_test.parquet', "format"='parquet'};
-select hex(bin_fixed) as fixed_hex, hex(bin_var) as var_hex from ext_binary;
-select length(bin_fixed) from ext_binary;
+select hex(bin_fixed) as fixed_hex, hex(bin_var) as var_hex from ext_binary order by hex(bin_fixed);
+select length(bin_fixed) as fixed_len, length(bin_var) as var_len from ext_binary order by hex(bin_fixed);
 
 -- ============================================================================
 -- 7. Empty File
