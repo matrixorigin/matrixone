@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r5-2026-10-09`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r6-2026-10-11`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -95,3 +95,19 @@ predecessor rejection case. This is a mechanical compatibility
 correction within the existing test/development scope. Independent Architecture
 and SQL/Planner approval remains pending; no approval is inferred from this
 addendum or validation.
+
+## r6 maintenance addendum (2026-10-11)
+
+Against official main `4022729da24d71b082c22b52aaed3faba2b77ea5`,
+MORPC remains 109, so this proposal retains capability 110 and immediate
+predecessor 109. The r5 combined 4.0.14 handler above is superseded: a tenant
+already at the official final 4.0.14 would not be scheduled by that version.
+The r6 proposal preserves the upstream 4.0.14 handler exactly and registers
+Python repair 4.0.15 with minimum direct source 4.0.14. It replays only the nine
+idempotent shared-function entries, gates catalog access at protocol 110, and
+covers real first-login repair from 4.0.12, 4.0.13 and 4.0.14. Revision-table
+snapshot/PITR restore also uses the same trusted catalog DDL context as the
+head-table restore; ordinary user DDL does not acquire that context.
+This maintenance stays within the authorized test/development scope.
+Independent Architecture and SQL/Planner approval remains pending; this
+addendum records implementation changes and does not grant approval.
