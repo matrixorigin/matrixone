@@ -38,7 +38,7 @@ For a non-temporary relation, all transaction modes use the same ordering: physi
 - other pessimistic modes use the pessimistic lineage-owner gate;
 - optimistic transactions perform no prepublication source locks and still validate the resolved source before publication.
 
-Autocommit owns transaction cleanup after a terminal conflict. An explicit transaction remains failed and must be rolled back by its user; the ALTER statement never silently retries it.
+`ErrTxnWriteConflict` is transaction-fatal in the frontend rollback policy. Autocommit and explicit transactions therefore roll back through the frontend transaction owner; the ALTER statement never silently retries the conflict.
 
 ### Pre-publication phase
 
@@ -62,34 +62,36 @@ The transaction acquires mode-specific lifecycle admission, locks the source rel
 - stale or late lineage participation;
 - same-statement lineage column replacement.
 
-These post-physical source races return `ErrTxnWriteConflict`, not `ErrTxnNeedRetryWithDefChanged`. They are terminal for the transaction, so the RC statement-retry transition cannot retain the global gate and repeat physical preparation. Lock contention and errors that occur before speculative effects remain under their existing retry semantics.
+These post-physical source races return `ErrTxnWriteConflict`, not `ErrTxnNeedRetryWithDefChanged`. Post-copy lifecycle admission, source-lock refresh, and final validation errors that would otherwise request an RC statement retry are converted to the same terminal conflict. They are terminal for the transaction, so the RC statement-retry transition cannot retain the global gate and repeat physical preparation. Lock contention and errors that occur before speculative effects remain under their existing retry semantics.
 
 ### Source-change detection
 
-For a relation that existed before the current transaction, publication first asks the relation whether it has transaction-local workspace writes. If it does, ALTER treats the source as unchanged: those writes were visible to the physical copy, are owned by the same transaction, and cannot be another owner's post-copy mutation. Otherwise publication calls `SourceCommitTS(ctx, copyTS)`. This is an existing authoritative lower-bound capability, not a CDC handle:
+For a relation that existed before the current transaction, publication calls `SourceCommitTSAfterCopy(ctx, copyTS)`. This uses the existing authoritative lower-bound frontier while deliberately excluding only the current transaction's workspace writes; local writes to one row or partition never imply that another transaction did not change another row or partition after the copy:
 
-- transaction-local source writes are excluded from ALTER's committed-change comparison;
+- current-transaction workspace writes were visible to the copy and are excluded from ALTER's committed-change comparison;
 - each partition member supplies its source commit frontier and fails closed on unavailable state;
 - a combined relation aggregates member maxima and short-circuits as soon as one member exceeds the copy timestamp;
+- in-memory rows, visible data objects, and visible persisted tombstone objects all contribute their user-data commit timestamps;
 - a result greater than the copy timestamp means the copy is stale.
 
-Transaction-local relations are detected through `RelationCreatedInCurrentTxn` and skip the committed-source probe because their whole life is owned by this transaction. Existing relations with uncommitted workspace writes are detected through `RelationHasTransactionLocalWrites`. `SourceCommitTS` itself continues to fail closed for local writes so its async-index callers do not mistake transaction-visible state for a committed coverage frontier.
+Transaction-local relations are detected through `RelationCreatedInCurrentTxn` and skip the committed-source probe because their whole life is owned by this transaction. The original `SourceCommitTS` capability continues to fail closed for local writes so its async-index callers do not mistake transaction-visible state for a committed coverage frontier; ALTER's after-copy capability shares the partition-state reader but bypasses only that local-write failure.
 
 ## Lock and retry model
 
 - Pre-publication holds no source database lock, source catalog lock, source physical-table lock, temporary-target catalog lock, or global lineage gate.
 - Publication order remains mode-specific lifecycle admission, source locks, then final lineage publication. It preserves existing `G -> D` ownership for genuinely conflicting owners.
 - The speculative CREATE no longer owns `D S`, so it cannot participate in the prior `ALTER(D S) waits for G X` versus `DROP DATABASE(G S) waits for D X` reciprocal wait.
-- Nested errors, cancellation, or a terminal conflict return through the existing transaction cleanup owner: autocommit rolls back; explicit transactions fail and wait for user rollback.
+- Nested errors, cancellation, or a terminal conflict return through the existing frontend transaction cleanup owner. A terminal write conflict rolls back the whole transaction in both autocommit and explicit-transaction mode.
 - A terminal post-physical conflict is deliberately not statement-retryable, preventing a second physical copy under retained locks.
 
 ## Resource and performance model
 
 The serialized source probe costs `O(P)` `SourceCommitTS` calls for a partitioned source, where `P` is the number of visible members. A member’s worst case is source-state dependent:
 
-- one workspace scan under the transaction mutex; ALTER short-circuits on a local write, while the frontier method itself fails closed for async-index callers;
+- no workspace scan is needed to exclude writes owned by the copying transaction; the original frontier method still fails closed for async-index callers;
 - one in-memory replay-row scan, `R` entries;
-- one object-index iteration, `O` visible objects;
+- one data-object index iteration, `O` visible data objects;
+- one tombstone-object index iteration, `T` visible persisted tombstone objects;
 - appendable objects may read commit-ts and abort columns for each visible block;
 - non-appendable objects may read per-block commit-ts zonemaps.
 
@@ -112,9 +114,11 @@ This is an internal lifecycle refinement, not a persistence or wire-protocol cha
 
 - Deterministic barrier tests prove independent physical work starts while the global gate is held elsewhere.
 - Unit tests prove the temporary CREATE options disable nested locking.
-- Unit tests prove unchanged, changed, provider-failure, current-transaction, and transaction-local-write source behavior.
-- Unit tests prove partitioned frontiers return the exact maximum, short-circuit, and fail closed for missing member providers.
-- Unit tests prove post-physical replacement, definition, and data races return a terminal write conflict and are not classified as RC statement retries.
+- Unit tests prove unchanged, changed, provider-failure, current-transaction, and committed-change-despite-local-write source behavior.
+- Unit tests prove partitioned frontiers return the exact maximum, short-circuit, check every member after copy, and fail closed for missing member providers.
+- Unit tests prove in-memory and persisted tombstone delete frontiers both detect a post-copy source change.
+- Unit tests prove post-physical replacement, definition, data, admission-retry, and source-lock-retry races return a terminal write conflict and are not classified as RC statement retries.
+- Frontend tests prove `ErrTxnWriteConflict` is classified as a whole-transaction rollback error.
 - A 500-session one-row workload proves independent ALTERs complete without lock-wait or connection-loss failures.
 - `BenchmarkSourceCommitTSAtUnchanged250KObject` measures the unchanged 250,000-row object frontier at `44075 ns/op`, `1125 B/op`, and `4 allocs/op`.
 

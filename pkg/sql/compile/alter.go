@@ -1274,22 +1274,13 @@ func (c *Compile) alterCopySourceChangedSinceCopy(
 			return false, nil
 		}
 	}
-	if localWriter, ok := rel.(engine.RelationHasTransactionLocalWrites); ok {
-		hasLocalWrites, err := localWriter.HasTransactionLocalWrites(ctx)
-		if err != nil {
-			return false, err
-		}
-		if hasLocalWrites {
-			return false, nil
-		}
-	}
-	provider, ok := rel.(engine.SourceCommitTSProvider)
+	provider, ok := rel.(engine.SourceCommitTSAfterCopyProvider)
 	if !ok {
 		return false, moerr.NewInternalError(
 			ctx, "ALTER COPY source does not support source commit timestamp validation",
 		)
 	}
-	sourceCommitTS, err := provider.SourceCommitTS(ctx, mustExceed)
+	sourceCommitTS, err := provider.SourceCommitTSAfterCopy(ctx, mustExceed)
 	if err != nil {
 		return false, err
 	}
@@ -1300,6 +1291,14 @@ func (c *Compile) alterCopyPostPublicationConflict(reason string) error {
 	return moerr.NewTxnWriteConflict(
 		c.proc.Ctx, "ALTER COPY source changed after physical preparation: "+reason,
 	)
+}
+
+func (c *Compile) alterCopyPostPublicationRetryConflict(err error) error {
+	if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+		return c.alterCopyPostPublicationConflict("source admission changed")
+	}
+	return err
 }
 
 func (s *Scope) AlterTableCopy(c *Compile) (err error) {
@@ -1612,7 +1611,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		if c.isLifecycleRC() {
 			dbSource, publicationRel, err = c.admitBroadTableLifecycleRC(dbName, tblName, oldId)
 			if err != nil {
-				return err
+				return c.alterCopyPostPublicationRetryConflict(err)
 			}
 			if plannedID := qry.TableDef.GetTblId(); plannedID != 0 && plannedID != oldId {
 				return c.alterCopyPostPublicationConflict("planned relation id changed")
@@ -1628,7 +1627,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		if err = c.lockAlterCopySource(
 			dbSource, dbName, tblName, publicationRel, qry,
 		); err != nil {
-			return err
+			return c.alterCopyPostPublicationRetryConflict(err)
 		}
 		if shouldAdvanceAlterDataBranchLineageSnapshot(
 			lineageTxnOp.Txn().IsPessimistic(), lineageTxnOp.Txn().IsRCIsolation(),
@@ -1637,18 +1636,18 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			// Advance after lock acquisition so the postgate lineage probe sees a
 			// branch that committed just before the lock was granted.
 			if _, err = c.advanceAlterDataBranchLineageSnapshot(); err != nil {
-				return err
+				return c.alterCopyPostPublicationRetryConflict(err)
 			}
 		}
 		originRel, err = dbSource.Relation(c.proc.Ctx, tblName, nil)
 		if err != nil {
-			return err
+			return c.alterCopyPostPublicationRetryConflict(err)
 		}
 		if originRel.GetTableID(c.proc.Ctx) != oldId {
 			return c.alterCopyPostPublicationConflict("source relation was replaced")
 		}
 		if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
-			return err
+			return c.alterCopyPostPublicationRetryConflict(err)
 		}
 		if originRel.GetTableDef(c.proc.Ctx).GetVersion() != sourceDefVersion {
 			return c.alterCopyPostPublicationConflict("source definition changed")
@@ -1657,7 +1656,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			originRel, lineagePlan.cloneTS,
 		)
 		if sourceChangedErr != nil {
-			return sourceChangedErr
+			return c.alterCopyPostPublicationRetryConflict(sourceChangedErr)
 		}
 		if sourceChanged {
 			return c.alterCopyPostPublicationConflict("source data changed")

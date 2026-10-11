@@ -34,6 +34,18 @@ func (tbl *txnTable) SourceCommitTS(ctx context.Context, mustExceed types.TS) (t
 	if tbl.hasTransactionLocalWrites() {
 		return types.TS{}, moerr.NewInternalErrorNoCtx("source commit ts is unavailable with transaction-local writes")
 	}
+	return tbl.sourceCommitTSFromPartitionState(ctx, mustExceed)
+}
+
+func (tbl *txnTable) SourceCommitTSAfterCopy(
+	ctx context.Context, mustExceed types.TS,
+) (types.TS, error) {
+	return tbl.sourceCommitTSFromPartitionState(ctx, mustExceed)
+}
+
+func (tbl *txnTable) sourceCommitTSFromPartitionState(
+	ctx context.Context, mustExceed types.TS,
+) (types.TS, error) {
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return types.TS{}, err
@@ -78,6 +90,15 @@ func (tbl *txnTableDelegate) SourceCommitTS(ctx context.Context, mustExceed type
 	return tbl.origin.SourceCommitTS(ctx, mustExceed)
 }
 
+func (tbl *txnTableDelegate) SourceCommitTSAfterCopy(
+	ctx context.Context, mustExceed types.TS,
+) (types.TS, error) {
+	if tbl.combined.is {
+		return tbl.combined.tbl.SourceCommitTSAfterCopy(ctx, mustExceed)
+	}
+	return tbl.origin.SourceCommitTSAfterCopy(ctx, mustExceed)
+}
+
 func (tbl *txnTableDelegate) HasTransactionLocalWrites(ctx context.Context) (bool, error) {
 	if tbl.combined.is {
 		return tbl.combined.tbl.HasTransactionLocalWrites(ctx)
@@ -86,6 +107,18 @@ func (tbl *txnTableDelegate) HasTransactionLocalWrites(ctx context.Context) (boo
 }
 
 func (t *combinedTxnTable) SourceCommitTS(ctx context.Context, mustExceed types.TS) (types.TS, error) {
+	return t.sourceCommitTS(ctx, mustExceed, false)
+}
+
+func (t *combinedTxnTable) SourceCommitTSAfterCopy(
+	ctx context.Context, mustExceed types.TS,
+) (types.TS, error) {
+	return t.sourceCommitTS(ctx, mustExceed, true)
+}
+
+func (t *combinedTxnTable) sourceCommitTS(
+	ctx context.Context, mustExceed types.TS, excludeTransactionLocalWrites bool,
+) (types.TS, error) {
 	if t.tablesFunc == nil {
 		return types.TS{}, moerr.NewInternalErrorNoCtx("source commit ts has no partitioned members")
 	}
@@ -95,13 +128,25 @@ func (t *combinedTxnTable) SourceCommitTS(ctx context.Context, mustExceed types.
 	}
 	maxTS := types.TS{}
 	for _, relation := range relations {
-		provider, ok := relation.(engine.SourceCommitTSProvider)
-		if !ok {
-			return types.TS{}, moerr.NewInternalErrorNoCtx(
-				"source commit ts is unavailable for a partition member",
-			)
+		var sourceTS types.TS
+		var err error
+		if excludeTransactionLocalWrites {
+			afterCopy, ok := relation.(engine.SourceCommitTSAfterCopyProvider)
+			if !ok {
+				return types.TS{}, moerr.NewInternalErrorNoCtx(
+					"source commit ts after copy is unavailable for a partition member",
+				)
+			}
+			sourceTS, err = afterCopy.SourceCommitTSAfterCopy(ctx, mustExceed)
+		} else {
+			provider, ok := relation.(engine.SourceCommitTSProvider)
+			if !ok {
+				return types.TS{}, moerr.NewInternalErrorNoCtx(
+					"source commit ts is unavailable for a partition member",
+				)
+			}
+			sourceTS, err = provider.SourceCommitTS(ctx, mustExceed)
 		}
-		sourceTS, err := provider.SourceCommitTS(ctx, mustExceed)
 		if err != nil {
 			return types.TS{}, err
 		}

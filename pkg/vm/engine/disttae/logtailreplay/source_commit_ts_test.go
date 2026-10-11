@@ -154,8 +154,9 @@ func TestSourceCommitTSMaxPicksTNObject(t *testing.T) {
 		Appendable: types.BuildTS(20, 0),
 		CNCreated:  types.BuildTS(30, 0),
 		TNObject:   types.BuildTS(40, 0),
+		Tombstone:  types.BuildTS(50, 0),
 	}
-	require.Equal(t, types.BuildTS(40, 0), info.Max())
+	require.Equal(t, types.BuildTS(50, 0), info.Max())
 }
 
 func TestSourceCommitTSMaxEmptyIsZero(t *testing.T) {
@@ -196,6 +197,41 @@ func TestSourceCommitTSAtCNCreated(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.BuildTS(60, 0), info.CNCreated)
 	require.Equal(t, types.BuildTS(60, 0), info.Max())
+}
+
+func TestSourceCommitTSAtIncludesPersistedTombstone(t *testing.T) {
+	state := NewPartitionState("", false, 42, false)
+	state.UpdateDuration(types.BuildTS(1, 0), types.MaxTs())
+
+	dataID := objectio.NewObjectid()
+	dataStats := objectio.NewObjectStatsWithObjectID(&dataID, false, false, true)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(dataStats, 1))
+	dataObject := objectio.ObjectEntry{
+		ObjectStats: *dataStats,
+		CreateTime:  types.BuildTS(60, 0),
+	}
+	require.NoError(t, state.HandleObjectEntry(
+		context.Background(), nil, dataObject, false,
+	))
+
+	tombstoneID := objectio.NewObjectid()
+	tombstoneStats := objectio.NewObjectStatsWithObjectID(&tombstoneID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(tombstoneStats, 1))
+	require.NoError(t, objectio.SetObjectStatsSize(tombstoneStats, 1))
+	tombstoneObject := objectio.ObjectEntry{
+		ObjectStats: *tombstoneStats,
+		CreateTime:  types.BuildTS(150, 0),
+	}
+	require.NoError(t, state.HandleObjectEntry(
+		context.Background(), nil, tombstoneObject, true,
+	))
+
+	info, err := state.SourceCommitTSAt(
+		context.Background(), types.BuildTS(200, 0), nil, nil, types.BuildTS(100, 0),
+	)
+	require.NoError(t, err)
+	require.Equal(t, types.BuildTS(150, 0), info.Tombstone)
+	require.Equal(t, types.BuildTS(150, 0), info.Max())
 }
 
 // A retention boundary floors the bound even when no object/row survives locally.
