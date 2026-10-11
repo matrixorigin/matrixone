@@ -99,6 +99,29 @@ func TestClusterAdmissionAtStart(t *testing.T) {
 		require.Nil(t, c.testAdmission)
 	})
 	for _, pool := range []string{"1", "2"} {
+		t.Run("canceled-admission/pool="+pool, func(t *testing.T) {
+			t.Setenv(clusteradmission.ProcessPoolSizeEnv, pool)
+			c, starts := newFixture(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			WithTestAdmissionContext(ctx)(c)
+			require.ErrorIs(t, c.Start(), context.Canceled)
+			require.Zero(t, *starts)
+			require.Equal(t, stopped, c.state)
+			require.Nil(t, c.testAdmission)
+			require.NoError(t, c.Close())
+			require.Nil(t, c.portLease)
+			require.True(t, c.CloseComplete())
+
+			// A failed admission must leave the cluster and manager reusable.
+			WithTestAdmissionContext(t.Context())(c)
+			require.NoError(t, c.Start())
+			require.Equal(t, 1, *starts)
+			require.NoError(t, c.Close())
+			require.Nil(t, c.testAdmission)
+			require.Nil(t, c.portLease)
+			require.True(t, c.CloseComplete())
+		})
 		for _, allow := range []bool{false, true} {
 			t.Run(fmt.Sprintf("pool=%s/local=%v", pool, allow), func(t *testing.T) {
 				t.Setenv(clusteradmission.ProcessPoolSizeEnv, pool)

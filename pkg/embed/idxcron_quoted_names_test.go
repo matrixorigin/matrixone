@@ -161,13 +161,19 @@ func TestIdxcronQuotedTableRename(t *testing.T) {
 			var gotDB, gotTable, gotIndex, gotAction, gotPath string
 			require.NoError(t, conn.QueryRowContext(ctx, "select db_name, table_name, index_name, action, json_extract_string(metadata, '$.cfg.path') from mo_catalog.mo_index_update where account_id=0 and table_id=?", tableID).Scan(&gotDB, &gotTable, &gotIndex, &gotAction, &gotPath))
 			require.Equal(t, []string{dbName, tableName, indexName, action, "C:\\index's"}, []string{gotDB, gotTable, gotIndex, gotAction, gotPath})
+			siblingName := "sibling'\\name"
+			register(catalogCtx, dbName, siblingName, action)
 			factory := idxcron.IndexUpdateTaskExecutorFactory(service, svc.GetEngine(), svc.GetTxnClient(), nil)
 			require.NoError(t, factory(catalogCtx, nil))
-			var status, message string
-			require.NoError(t, conn.QueryRowContext(ctx, "select json_extract_string(status, '$.status'), json_extract_string(status, '$.msg') from mo_catalog.mo_index_update where account_id=0 and table_id=?", tableID).Scan(&status, &message))
-			require.Equal(t, idxcron.Status_Error, status)
-			require.Contains(t, message, "no plugin registered for action")
-			require.Contains(t, message, fmt.Sprintf("%q", action), "status error must preserve the quoted action")
+			for _, name := range []string{indexName, siblingName} {
+				var status, message string
+				require.NoError(t, conn.QueryRowContext(ctx, "select json_extract_string(status, '$.status'), json_extract_string(status, '$.msg') from mo_catalog.mo_index_update where account_id=0 and table_id=? and index_name=?", tableID, name).Scan(&status, &message))
+				require.Equal(t, idxcron.Status_Error, status)
+				require.Contains(t, message, "no plugin registered for action")
+				require.Contains(t, message, fmt.Sprintf("%q", action), "status error must preserve the quoted action")
+				require.Contains(t, message, name, "each sibling must retain its own task error")
+			}
+			require.NoError(t, idxcron.UnregisterUpdate(catalogCtx, service, nil, tableID, siblingName, action))
 			count := func(account int, want int) {
 				var got int
 				require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_index_update where table_id=? and account_id=?", tableID, account).Scan(&got))
