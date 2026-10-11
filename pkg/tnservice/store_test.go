@@ -56,10 +56,12 @@ type storeQueryClient struct {
 type storeQueryService struct {
 	queryservice.QueryService
 	closeCalls int
+	start      func() error
 }
 
 type storeTxnServer struct {
 	rpc.TxnServer
+	start         func() error
 	beforeQuiesce func()
 	beforeDrain   func()
 	beforeClose   func()
@@ -123,6 +125,20 @@ func TestStoreDrainSharesContextWithLocalHandlers(t *testing.T) {
 	require.ErrorIs(t, err, rpc.ErrTxnDrainTimeout)
 	_, accepted := s.acquireLocalHandler()
 	require.False(t, accepted)
+}
+
+func (s *storeTxnServer) Start() error {
+	if s.start != nil {
+		return s.start()
+	}
+	return s.TxnServer.Start()
+}
+
+func (s *storeQueryService) Start() error {
+	if s.start != nil {
+		return s.start()
+	}
+	return s.QueryService.Start()
 }
 
 func (s *storeTxnServer) Quiesce() error {
@@ -234,6 +250,104 @@ func TestStartWithReplicas(t *testing.T) {
 	runTNStoreTestWithFileServiceFactory(t, func(s *store) {
 
 	}, factory)
+}
+
+func TestStoreStartFailureDoesNotPublishHeartbeat(t *testing.T) {
+	expected := errors.New("injected startup failure")
+	for _, queryFailure := range []bool{false, true} {
+		name := "transaction server"
+		if queryFailure {
+			name = "query server"
+		}
+		t.Run(name, func(t *testing.T) {
+			client := newTestHAKeeperClient()
+			s := &store{hakeeperClient: client, heartbeatWakeup: make(chan struct{}, 1)}
+			// Replica completion may precede server startup. A pending token must
+			// not create a heartbeat owner when either endpoint fails to start.
+			s.notifyHeartbeat()
+			s.server = &storeTxnServer{start: func() error {
+				if queryFailure {
+					return nil
+				}
+				return expected
+			}}
+			s.queryService = &storeQueryService{start: func() error { return expected }}
+			require.ErrorIs(t, s.Start(), expected)
+			require.Zero(t, client.getCount())
+		})
+	}
+}
+
+func TestStoreHeartbeatPublishesAsyncReplicaReadiness(t *testing.T) {
+	heartbeats := make(chan logservicepb.TNStoreHeartbeat, 2)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	runTNStoreTestBeforeStart(t, func(s *store) {
+		s.cfg.HAKeeper.HeatbeatInterval.Duration = time.Hour
+		s.cfg.HAKeeper.HeatbeatTimeout.Duration = time.Minute
+		client := s.hakeeperClient.(*testHAKeeperClient)
+		client.onHeartbeat = func(ctx context.Context, hb logservicepb.TNStoreHeartbeat) error {
+			call := calls.Add(1)
+			select {
+			case heartbeats <- hb:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			if call == 1 {
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			<-ctx.Done()
+			return ctx.Err()
+		}
+	}, func(s *store) {
+		select {
+		case hb := <-heartbeats:
+			require.Empty(t, hb.Shards)
+		case <-time.After(10 * time.Second):
+			t.Fatal("successful startup waited for the hourly heartbeat tick")
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		first := newTestTNShard(101, 201, 301)
+		require.NoError(t, s.StartTNReplica(first))
+		require.NoError(t, s.getReplica(first.ShardID).waitStarted(ctx))
+		// The actual async owner must publish success, not just close startedC.
+		select {
+		case <-s.heartbeatWakeup:
+		case <-ctx.Done():
+			t.Fatal("async replica completion did not notify heartbeat")
+		}
+		require.NoError(t, s.StartTNReplica(first))
+		require.Empty(t, s.heartbeatWakeup, "a duplicate attempt must not notify")
+		second := newTestTNShard(102, 202, 302)
+		require.NoError(t, s.StartTNReplica(second))
+		require.NoError(t, s.getReplica(second.ShardID).waitStarted(ctx))
+		close(release)
+		select {
+		case hb := <-heartbeats:
+			require.ElementsMatch(t, []logservicepb.TNShardInfo{
+				{ShardID: first.ShardID, ReplicaID: first.ReplicaID},
+				{ShardID: second.ShardID, ReplicaID: second.ReplicaID},
+			}, hb.Shards)
+		case <-ctx.Done():
+			t.Fatal("ready shards waited for the hourly heartbeat tick")
+		}
+		// The second RPC remains blocked until the real owner is canceled by Close.
+		closed := make(chan error, 1)
+		go func() { closed <- s.Close() }()
+		select {
+		case err := <-closed:
+			require.NoError(t, err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("Close did not cancel and join the heartbeat owner")
+		}
+		require.Equal(t, int32(2), calls.Load())
+	})
 }
 
 func TestStartReplica(t *testing.T) {
@@ -475,6 +589,17 @@ func TestHeartbeatOnlyReportsStartedReplicas(t *testing.T) {
 		require.Equal(t, []logservicepb.TNShardInfo{{
 			ShardID: 1, ReplicaID: 2,
 		}}, s.getTNShardInfo())
+		r.cancelStart(false)
+		require.Empty(t, s.getTNShardInfo(), "a canceled replica must not be advertised")
+		failed := newReplica(newTestTNShard(2, 3, 4), s.rt)
+		startErr := errors.New("injected storage start failure")
+		failedService := service.NewTxnService(s.cfg.UUID, failed.shard,
+			&startErrorStorage{startErr: startErr}, sender, time.Hour, nil)
+		s.replicas.Store(failed.shard.ShardID, failed)
+		require.ErrorIs(t, failed.start(failedService), startErr)
+		require.Empty(t, s.getTNShardInfo(), "a failed start must not be advertised")
+		s.replicas.Delete(failed.shard.ShardID)
+		require.ErrorIs(t, failed.close(false), startErr)
 	})
 }
 
@@ -715,7 +840,9 @@ func newTestTNShard(shardID, replicaID, logShardID uint64) metadata.TNShard {
 }
 
 type testHAKeeperClient struct {
-	mu struct {
+	// Installed before Start; heartbeat is the only reader.
+	onHeartbeat func(context.Context, logservicepb.TNStoreHeartbeat) error
+	mu          struct {
 		sync.RWMutex
 		commandBatch logservicepb.CommandBatch
 	}
@@ -745,6 +872,11 @@ func (thc *testHAKeeperClient) Close() error {
 
 func (thc *testHAKeeperClient) SendTNHeartbeat(ctx context.Context, hb logservicepb.TNStoreHeartbeat) (logservicepb.CommandBatch, error) {
 	atomic.AddUint64(&thc.atomic.count, 1)
+	if thc.onHeartbeat != nil {
+		if err := thc.onHeartbeat(ctx, hb); err != nil {
+			return logservicepb.CommandBatch{}, err
+		}
+	}
 	thc.mu.RLock()
 	defer thc.mu.RUnlock()
 	return thc.mu.commandBatch, nil

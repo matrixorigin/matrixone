@@ -197,7 +197,7 @@ func TestSQLTaskCronJobEdges(t *testing.T) {
 		require.NoError(t, ts.Close())
 	}()
 
-	_, err := newSQLTaskCronJob(SQLTask{CronExpr: "bad cron"}, ts)
+	_, err := newSQLTaskCronJob(t.Context(), SQLTask{CronExpr: "bad cron"}, ts)
 	require.Error(t, err)
 
 	oldTask := newTestSQLTask("task-old", 1)
@@ -206,7 +206,7 @@ func TestSQLTaskCronJobEdges(t *testing.T) {
 	newTask.Timezone = "Asia/Shanghai"
 	require.True(t, sqlTaskNeedsRefresh(oldTask, newTask))
 
-	job := &sqlTaskCronJob{s: ts, task: SQLTask{TaskID: 999}}
+	job := &sqlTaskCronJob{ctx: t.Context(), s: ts, task: SQLTask{TaskID: 999}}
 	job.Run()
 
 	sqlTask := newTestSQLTask("task-disabled", 1)
