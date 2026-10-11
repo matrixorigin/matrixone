@@ -433,6 +433,9 @@ func appendFloat64(buf []byte, value float64, bitSize int) []byte {
 	return buf
 }
 
+// CollectChanges reads one ISCP iteration's change range for index maintenance.
+// The caller's ctx carries the read policy: collectChangesCtxForJobs decides
+// whether this range may keep the trailing DELETE of an insert-then-delete key.
 var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
 	return rel.CollectChanges(ctx, fromTs, toTs, false, mp)
 }
