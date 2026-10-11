@@ -480,6 +480,7 @@ func TestViewSchemaRequestSharedProjectionMemoMatchesCacheOff(t *testing.T) {
 		name, middleName, middleSQL, firstSQL, secondSQL string
 		catalogName                                      string
 	}{
+		{"database qualified projection", "middle_v", "select tpch.leaf_v.k, tpch.leaf_v.label from tpch.leaf_v", "select tpch.middle_v.k, tpch.middle_v.label from tpch.middle_v", "select tpch.middle_v.k, tpch.middle_v.label from tpch.middle_v", ""},
 		{"explicit projection", "middle_v", "select k, label from leaf_v", "select k, label from middle_v", "select k, label from middle_v", ""},
 		{"renamed projection", "middle_v", "select leaf_v.k as key_value, leaf_v.label from leaf_v", "select key_value, label from middle_v", "select middle_v.key_value, middle_v.label from middle_v", ""},
 		{"reference name differs from catalog", "mixed", "select k, label from leaf_v", "select k, label from mixed", "select mixed.k as key_value, mixed.label as Label from mixed", "Mixed"},
