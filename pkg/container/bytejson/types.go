@@ -452,7 +452,7 @@ func isValidByteJsonStringEncoding(data []byte) bool {
 }
 
 func isValidByteJsonContainer(value ByteJson) bool {
-	return bytejsonvalidate.Container(value.Type, value.Data, validByteJsonScalar)
+	return bytejsonvalidate.ContainerWithNumericEncoding(value.Type, value.Data, validByteJsonScalar)
 }
 
 // Container traversal has already sliced each child to its exact encoding.

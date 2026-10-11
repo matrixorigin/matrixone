@@ -22,6 +22,56 @@ import (
 	"testing"
 )
 
+func TestContainerNumericEncoding(t *testing.T) {
+	nested := testScalarArray([]byte{typeInt64, typeUint64, typeFloat64}, [][]byte{make([]byte, 8), make([]byte, 8), make([]byte, 8)})
+	data := testScalarArray([]byte{typeLiteral, typeInt64, typeArray, typeString}, [][]byte{{1}, make([]byte, 8), nested, {1, 'x'}})
+	for i := range data {
+		for _, value := range []byte{0, 1, 2, typeInt64, typeUint64, typeFloat64, 0xfd, 0xff} {
+			d := append([]byte(nil), data...)
+			d[i] = value
+			want := Container(typeArray, d, benchmarkScalar)
+			if got := ContainerWithNumericEncoding(typeArray, d, benchmarkScalar); got != want {
+				t.Fatalf("byte%d=%x got%v want%v", i, value, got, want)
+			}
+		}
+	}
+	for _, floating := range []float64{0, math.Copysign(0, -1), math.SmallestNonzeroFloat64, -math.SmallestNonzeroFloat64, math.MaxFloat64, -math.MaxFloat64, math.Inf(1), math.Inf(-1), math.NaN()} {
+		payload := make([]byte, 8)
+		binary.LittleEndian.PutUint64(payload, math.Float64bits(floating))
+		d := testScalarArray([]byte{typeFloat64}, [][]byte{payload})
+		want := !math.IsInf(floating, 0) && !math.IsNaN(floating)
+		if got := ContainerWithNumericEncoding(typeArray, d, benchmarkScalar); got != want {
+			t.Fatalf("float%v got%v want%v", floating, got, want)
+		}
+	}
+	// The original generic API still calls and honors the integer predicate.
+	integer := testScalarArray([]byte{typeInt64}, [][]byte{make([]byte, 8)})
+	visits := 0
+	if Container(typeArray, integer, func(byte, []byte) bool { visits++; return false }) || visits != 1 {
+		t.Fatal("generic integer callback changed")
+	}
+	if !ContainerWithNumericEncoding(typeArray, integer, func(byte, []byte) bool { t.Fatal("integer callback"); return false }) {
+		t.Fatal("valid integer rejected")
+	}
+	// A nonnumeric callback can corrupt a later descriptor. No prefetch or copy.
+	d := testScalarArray([]byte{typeString, typeInt64}, [][]byte{{1, 'x'}, make([]byte, 8)})
+	visits = 0
+	if ContainerWithNumericEncoding(typeArray, d, func(tp byte, p []byte) bool { visits++; d[13] = 0xfd; return benchmarkScalar(tp, p) }) || visits != 1 {
+		t.Fatal("later descriptor corruption bypassed")
+	}
+	// The specialized path retains the serialized-byte and nesting bounds.
+	if ContainerWithNumericEncoding(typeArray, testWrapArray(integer, 512, true), benchmarkScalar) {
+		t.Fatal("alias expansion accepted")
+	}
+	deep := integer
+	for i := 0; i < maxContainerDepth; i++ {
+		deep = testWrapArray(deep, 1, false)
+	}
+	if ContainerWithNumericEncoding(typeArray, deep, benchmarkScalar) {
+		t.Fatal("depth bound bypassed")
+	}
+}
+
 func testLiteralArray() []byte {
 	data := make([]byte, 18)
 	binary.LittleEndian.PutUint32(data, 2)
@@ -359,7 +409,7 @@ func TestContainerNumericPredicatesAndBudgets(t *testing.T) {
 					storedWork = &work
 				}
 				visits := 0
-				valid := container(typeArray, data, func(byte, []byte) bool { visits++; return true }, 1, &remaining, storedWork, nil)
+				valid := container(typeArray, data, func(byte, []byte) bool { visits++; return true }, 1, &remaining, storedWork, nil, false)
 				wantVisits := 2
 				wantRemaining := uint64(0)
 				if short {

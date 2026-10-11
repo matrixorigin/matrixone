@@ -83,7 +83,17 @@ func DecimalJSONPayload(data []byte) bool {
 // twice, while rejecting alias expansion before it exceeds linear input work.
 func Container(tp byte, data []byte, validScalar func(byte, []byte) bool) bool {
 	remaining := uint64(len(data))
-	return container(tp, data, validScalar, 1, &remaining, nil, nil)
+	return container(tp, data, validScalar, 1, &remaining, nil, nil, false)
+}
+
+// ContainerWithNumericEncoding validates the same complete bounded document as
+// Container, but handles fixed-width numbers directly: every int64/uint64 bit
+// pattern is valid and float64 must be finite. validScalar is called for all
+// other scalar domains. Callers with different numeric semantics must use
+// Container; this does not assert immutability or skip any descendant bounds.
+func ContainerWithNumericEncoding(tp byte, data []byte, validScalar func(byte, []byte) bool) bool {
+	remaining := uint64(len(data))
+	return container(tp, data, validScalar, 1, &remaining, nil, nil, true)
 }
 
 // StoredContainer adds canonical key/range checks to the same bounded walk.
@@ -92,11 +102,11 @@ func Container(tp byte, data []byte, validScalar func(byte, []byte) bool) bool {
 // serialized-byte budget. No child list or width-dependent frame is retained.
 func StoredContainer(tp byte, data []byte, validScalar func(byte, []byte) bool, workLimit uint64) (valid, depthExceeded bool) {
 	remaining := uint64(len(data))
-	valid = container(tp, data, validScalar, 1, &remaining, &workLimit, &depthExceeded)
+	valid = container(tp, data, validScalar, 1, &remaining, &workLimit, &depthExceeded, false)
 	return
 }
 
-func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth int, remaining, storedWork *uint64, depthExceeded *bool) bool {
+func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth int, remaining, storedWork *uint64, depthExceeded *bool, numericEncoding bool) bool {
 	if depth > maxContainerDepth {
 		if depthExceeded != nil {
 			*depthExceeded = true
@@ -184,7 +194,15 @@ func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth 
 					return false
 				}
 			}
-			if !charge(remaining, numberSize) || !validScalar(childType, data[childOffset:childOffset+numberSize]) {
+			if !charge(remaining, numberSize) {
+				return false
+			}
+			if numericEncoding {
+				// All exponent bits set identify exactly infinities and NaNs.
+				if childType == typeFloat64 && binary.LittleEndian.Uint64(data[childOffset:childOffset+numberSize])&0x7ff0000000000000 == 0x7ff0000000000000 {
+					return false
+				}
+			} else if !validScalar(childType, data[childOffset:childOffset+numberSize]) {
 				return false
 			}
 			continue
@@ -203,7 +221,7 @@ func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth 
 			previousRangeEnd = childOffset + uint64(len(childData))
 		}
 		if childType == typeArray || childType == typeObject {
-			if !container(childType, childData, validScalar, depth+1, remaining, storedWork, depthExceeded) {
+			if !container(childType, childData, validScalar, depth+1, remaining, storedWork, depthExceeded, numericEncoding) {
 				return false
 			}
 		} else {
