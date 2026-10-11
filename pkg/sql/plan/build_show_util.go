@@ -1242,9 +1242,9 @@ func FormatColType(colType plan.Type) string {
 		}
 		elements := strings.Split(colType.GetEnumvalues(), ",")
 		for i := range elements {
-			elements[i] = EscapeFormat(elements[i])
+			elements[i] = formatStrLit(elements[i])
 		}
-		return fmt.Sprintf("%s('%s')", name, strings.Join(elements, "','"))
+		return name + "(" + strings.Join(elements, ",") + ")"
 	}
 	if types.T(colType.Id) == types.T_geometry || types.T(colType.Id) == types.T_geometry32 {
 		name := types.T(colType.Id).String()

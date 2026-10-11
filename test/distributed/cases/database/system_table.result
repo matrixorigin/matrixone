@@ -66,7 +66,7 @@ Create_routine_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 Alter_routine_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 Execute_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 Event_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
-Trigger_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦
+Trigger_priv  ¦  varchar(10)  ¦  NO  ¦    ¦  N  ¦    ¦  
 show columns from `procs_priv`;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
@@ -76,7 +76,7 @@ Routine_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Routine_type  ¦  varchar(10)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 Grantor  ¦  varchar(288)  ¦  NO  ¦  MUL  ¦    ¦    ¦    𝄀
 Proc_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦  
 show columns from `columns_priv`;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
@@ -85,7 +85,7 @@ User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Table_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Column_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦    𝄀
-Column_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦
+Column_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦  
 show columns from `tables_priv`;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
@@ -95,7 +95,7 @@ Table_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Grantor  ¦  varchar(288)  ¦  NO  ¦  MUL  ¦    ¦    ¦    𝄀
 Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦    𝄀
 Table_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-Column_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦
+Column_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦  
 use information_schema;
 show tables;
 ➤ Tables_in_information_schema[12,5000,0]  𝄀
@@ -138,7 +138,7 @@ ordinal_position  ¦  int unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 position_in_unique_constraint  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 referenced_table_schema  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 referenced_table_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-referenced_column_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦
+referenced_column_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
 show columns from `COLUMNS`;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 table_catalog  ¦  varchar(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
@@ -162,7 +162,7 @@ extra  ¦  varchar(24)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 privileges  ¦  varchar(31)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_comment  ¦  varchar(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 generation_expression  ¦  varchar(500)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-srs_id  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦
+srs_id  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦  
 show columns from `PROFILING`;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 QUERY_ID  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
@@ -182,13 +182,13 @@ PAGE_FAULTS_MINOR  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 SWAPS  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 SOURCE_FUNCTION  ¦  varchar(30)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 SOURCE_FILE  ¦  varchar(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-SOURCE_LINE  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦
+SOURCE_LINE  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 show columns from `USER_PRIVILEGES`;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 GRANTEE  ¦  varchar(292)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
 TABLE_CATALOG  ¦  varchar(512)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
 PRIVILEGE_TYPE  ¦  varchar(64)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-IS_GRANTABLE  ¦  varchar(3)  ¦  NO  ¦    ¦    ¦    ¦
+IS_GRANTABLE  ¦  varchar(3)  ¦  NO  ¦    ¦    ¦    ¦  
 show columns from `SCHEMATA`;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 catalog_name  ¦  varchar(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
@@ -196,13 +196,13 @@ schema_name  ¦  varchar(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 default_character_set_name  ¦  varchar(7)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 default_collation_name  ¦  varchar(18)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 sql_path  ¦  char(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-default_encryption  ¦  varchar(3)  ¦  NO  ¦    ¦  null  ¦    ¦
+default_encryption  ¦  varchar(3)  ¦  NO  ¦    ¦  null  ¦    ¦  
 show columns from `CHARACTER_SETS`;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 CHARACTER_SET_NAME  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 DEFAULT_COLLATE_NAME  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 DESCRIPTION  ¦  varchar(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-MAXLEN  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦
+MAXLEN  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦  
 show columns from `TRIGGERS`;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 TRIGGER_CATALOG  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -226,7 +226,7 @@ SQL_MODE  ¦  varchar(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 DEFINER  ¦  varchar(288)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 CHARACTER_SET_CLIENT  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 COLLATION_CONNECTION  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-DATABASE_COLLATION  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦
+DATABASE_COLLATION  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
 show columns from `TABLES`;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 table_catalog  ¦  varchar(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
@@ -249,7 +249,7 @@ check_time  ¦  timestamp  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_collation  ¦  varchar(18)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 checksum  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 create_options  ¦  varchar(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-table_comment  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦
+table_comment  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦  
 show columns from `PARTITIONS`;
 [unknown result because it is related to issue#16438]
 use mo_catalog;
@@ -259,7 +259,7 @@ account_id  ¦  bigint unsigned  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 key_id  ¦  uuid  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 encrypted_key  ¦  varchar(128)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 create_time  ¦  timestamp  ¦  NO  ¦    ¦  current_timestamp()  ¦    ¦    𝄀
-update_time  ¦  timestamp  ¦  NO  ¦    ¦  current_timestamp()  ¦    ¦
+update_time  ¦  timestamp  ¦  NO  ¦    ¦  current_timestamp()  ¦    ¦  
 drop database if exists test;
 create database test;
 use test;
@@ -268,6 +268,6 @@ create table t2(b int, a int);
 desc t2;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop table t2;
 drop database test;

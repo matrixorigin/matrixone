@@ -380,7 +380,7 @@ select * from t1;
 ➤ a[4,32,0]
 show columns from t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  int  ¦  YES  ¦    ¦  null  ¦  auto_increment  ¦
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦  auto_increment  ¦  
 drop table if exists t1;
 create table if not exists t1(a bigint auto_increment);
 select * from t1;

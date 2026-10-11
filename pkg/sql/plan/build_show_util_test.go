@@ -1772,7 +1772,7 @@ func TestConstructCreateTableSQLBooleanRoundTrip(t *testing.T) {
 		id int primary key, flag bool default null,
 		enabled boolean not null default true, disabled bool default false,
 		n int unsigned, amount decimal(10,2), integer_flag tinyint(1),
-        enum_flag enum('UP','Down'), set_flag set('UP','Down'))`, 1)
+        enum_flag enum('UP','Down','O''Brien','Back\\slash','Back\\''quote'), set_flag set('UP','Down','O''Brien','Back\\slash','Back\\''quote'))`, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
 	p, err := BuildPlan(ctx, stmt, false)

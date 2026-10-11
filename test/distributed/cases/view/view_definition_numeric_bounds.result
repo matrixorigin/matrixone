@@ -5,7 +5,7 @@ CREATE TABLE source_table (id INT);
 CREATE VIEW valid_view AS SELECT CAST(id AS CHAR(20)) AS label FROM source_table;
 DESC valid_view;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-label  ¦  char(20)  ¦  YES  ¦    ¦  null  ¦    ¦
+label  ¦  char(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
 CREATE VIEW invalid_width AS SELECT CAST(1 AS CHAR(18446744073709551615));
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. value is out of range int64 at line 1 column 72 near "));";
 CREATE VIEW invalid_sample AS SELECT SAMPLE(*, 18446744073709551615 ROWS) FROM source_table;

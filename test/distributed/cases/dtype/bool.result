@@ -180,17 +180,21 @@ show columns from bool_metadata;
 id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 flag  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 enabled  ¦  boolean  ¦  NO  ¦    ¦  true  ¦    ¦    𝄀
-disabled  ¦  boolean  ¦  YES  ¦    ¦  false  ¦    ¦
+disabled  ¦  boolean  ¦  YES  ¦    ¦  false  ¦    ¦  
 show full columns from bool_metadata;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  int  ¦  null  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 flag  ¦  boolean  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 enabled  ¦  boolean  ¦  null  ¦  NO  ¦    ¦  true  ¦    ¦  select,insert,update,references  ¦    𝄀
-disabled  ¦  boolean  ¦  null  ¦  YES  ¦    ¦  false  ¦    ¦  select,insert,update,references  ¦
-create view bool_metadata_view as select flag from bool_metadata;
+disabled  ¦  boolean  ¦  null  ¦  YES  ¦    ¦  false  ¦    ¦  select,insert,update,references  ¦  
+create view bool_metadata_view as select id, flag, cast(id as bigint unsigned) as n, cast(id as decimal(10,2)) as amount, cast('2026-01-02' as date) as day from bool_metadata;
 describe bool_metadata_view;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-flag  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦
+id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+flag  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+n  ¦  bigint unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+amount  ¦  decimal(10,2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+day  ¦  date  ¦  NO  ¦    ¦  null  ¦    ¦  
 select COLUMN_NAME,DATA_TYPE,COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT from information_schema.COLUMNS where TABLE_SCHEMA=database() and TABLE_NAME='bool_metadata' order by ORDINAL_POSITION;
 ➤ COLUMN_NAME[12,256,0]  ¦  DATA_TYPE[12,65535,0]  ¦  COLUMN_TYPE[12,65535,0]  ¦  IS_NULLABLE[12,3,0]  ¦  COLUMN_DEFAULT[12,65535,0]  𝄀
 id  ¦  int  ¦  int  ¦  NO  ¦  null  𝄀

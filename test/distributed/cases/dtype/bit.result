@@ -9,7 +9,7 @@ t1  ¦  CREATE TABLE `t1` (
 desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  bit(10)  ¦  YES  ¦    ¦  null  ¦    ¦
+b  ¦  bit(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values (0, false);
 insert into t1 values (1, true);
 insert into t1 values (2, 0x2);

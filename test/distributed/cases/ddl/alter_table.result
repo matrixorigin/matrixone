@@ -357,7 +357,7 @@ n  ¦  datetime  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 o  ¦  timestamp  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 p  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 q  ¦  decimal(5,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-r  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦
+r  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦  
 alter table t5 drop column b, drop column c, drop column d, drop column e, drop column f, drop column g, drop column h;
 show columns from t5;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -371,18 +371,18 @@ n  ¦  datetime  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 o  ¦  timestamp  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 p  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 q  ¦  decimal(5,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-r  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦
+r  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦  
 alter table t5 drop column i, drop column j, drop column k, drop column l, drop column m, drop column n, drop column o;
 show columns from t5;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 p  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 q  ¦  decimal(5,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-r  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦
+r  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦  
 alter table t5 drop column p, drop column q, drop column r;
 show columns from t5;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 alter table t5 drop column a;
 A table must have at least 1 column
 alter table t5 add column b int first, add column c int after b, add column d int first, add column f int after b;
@@ -392,7 +392,7 @@ d  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 f  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 c  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop table t5;
 create table t5(a int primary key, b int, c int unique key);
 alter table t5 drop column a;

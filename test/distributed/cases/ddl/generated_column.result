@@ -13,7 +13,7 @@ desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦
+c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
 insert into t1(a, b) values (1, 2);
 insert into t1(a, b) values (10, 20), (100, 200);
 select * from t1 order by a;
@@ -148,13 +148,13 @@ desc t11;
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦    𝄀
-d  ¦  varchar(100)  ¦  YES  ¦    ¦  null  ¦  VIRTUAL GENERATED  ¦
+d  ¦  varchar(100)  ¦  YES  ¦    ¦  null  ¦  VIRTUAL GENERATED  ¦  
 show full columns from t11;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  int  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 b  ¦  int  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 c  ¦  int  ¦  null  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references  ¦    𝄀
-d  ¦  varchar(100)  ¦  null  ¦  YES  ¦    ¦  null  ¦  VIRTUAL GENERATED  ¦  select,insert,update,references  ¦
+d  ¦  varchar(100)  ¦  null  ¦  YES  ¦    ¦  null  ¦  VIRTUAL GENERATED  ¦  select,insert,update,references  ¦  
 select column_name, extra, generation_expression from information_schema.columns where table_schema = 'test_generated_col' and table_name = 't11' and column_name in ('a','b','c','d') order by ordinal_position;
 ➤ column_name[12,-1,0]  ¦  extra[12,-1,0]  ¦  generation_expression[12,-1,0]  𝄀
 a  ¦    ¦    𝄀
@@ -171,7 +171,7 @@ desc t12;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦
+c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
 create table t13 (a int, b int);
 insert into t13 values (1,2),(3,4);
 alter table t13 add column c int generated always as (a + b) stored;
@@ -179,7 +179,7 @@ desc t13;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦
+c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
 select * from t13 order by a;
 ➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
 1  ¦  2  ¦  3  𝄀
@@ -221,13 +221,13 @@ desc t17;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦
+c  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 create table t18 (a int, b int, c int not null generated always as (a + b) stored);
 desc t18;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  int  ¦  NO  ¦    ¦  null  ¦  STORED GENERATED  ¦
+c  ¦  int  ¦  NO  ¦    ¦  null  ¦  STORED GENERATED  ¦  
 insert into t18 (a, b) values (1, 2);
 select * from t18;
 ➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
@@ -243,7 +243,7 @@ desc t20;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c2  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦
+c2  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
 create table t21 (a int, b int, c int generated always as (a + b) stored);
 alter table t21 change column a a2 int;
 invalid input: Cannot modify column 'a': generated column 'c' depends on it
@@ -252,7 +252,7 @@ desc t21;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦
+c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
 create table t22 (a int, b int generated always as (a + 1) stored);
 alter table t22 change column a a int generated always as (b + 1) stored;
 invalid input: generated column 'a' has a circular dependency
@@ -265,7 +265,7 @@ desc t23;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦    𝄀
-b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦
+b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 create table t24_fail (a int, c int generated always as (d + 1) stored, d int generated always as (a + 1) stored);
 invalid input: generated column 'c' cannot refer to generated column 'd' defined later
 create table t24_self_fail (a int generated always as (a + 1) stored);

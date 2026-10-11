@@ -112,7 +112,7 @@ desc test_sp01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 col1  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col2  ¦  decimal(6,0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col3  ¦  varchar(30)  ¦  YES  ¦    ¦  null  ¦    ¦
+col3  ¦  varchar(30)  ¦  YES  ¦    ¦  null  ¦    ¦  
 desc aff01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 empno  ¦  int unsigned  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦  雇员编号  𝄀
@@ -341,13 +341,13 @@ desc aff01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 col1  ¦  int  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
 col2  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col3  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦
+col3  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
 desc pri01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 col1  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 col2  ¦  varchar(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col3  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col4  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦
+col4  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop database db06;
 drop snapshot spsp06;
 drop database if exists db07;

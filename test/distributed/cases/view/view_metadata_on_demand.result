@@ -17,7 +17,7 @@ id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 code  ¦  varchar(60)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 qty  ¦  bigint  ¦  NO  ¦    ¦  9  ¦    ¦    𝄀
 price  ¦  decimal(20,5)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-total  ¦  decimal(39,5)  ¦  YES  ¦    ¦  null  ¦    ¦
+total  ¦  decimal(39,5)  ¦  YES  ¦    ¦  null  ¦    ¦  
 SELECT column_name, data_type, character_maximum_length, numeric_precision, numeric_scale,
 is_nullable, column_default
 FROM information_schema.columns
@@ -35,7 +35,7 @@ DESC copied;
 id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 code  ¦  varchar(60)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 qty  ¦  bigint  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-price  ¦  decimal(20,5)  ¦  YES  ¦    ¦  null  ¦    ¦
+price  ¦  decimal(20,5)  ¦  YES  ¦    ¦  null  ¦    ¦  
 CREATE VIEW nested_v AS SELECT code, qty, price FROM v;
 CREATE TABLE empty_copy AS SELECT * FROM nested_v LIMIT 0;
 SELECT column_name, column_type, is_nullable FROM information_schema.columns
@@ -65,7 +65,7 @@ id  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 code  ¦  varchar(90)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 qty  ¦  bigint  ¦  NO  ¦    ¦  11  ¦    ¦    𝄀
 price  ¦  decimal(24,6)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-total  ¦  decimal(43,6)  ¦  YES  ¦    ¦  null  ¦    ¦
+total  ¦  decimal(43,6)  ¦  YES  ¦    ¦  null  ¦    ¦  
 SELECT column_name, column_type, column_default
 FROM information_schema.columns
 WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'v'
@@ -80,14 +80,14 @@ CREATE TABLE metadata_target (code VARCHAR(5));
 PREPARE show_target FROM 'SHOW COLUMNS FROM view_metadata_on_demand.metadata_target';
 EXECUTE show_target;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-code  ¦  varchar(5)  ¦  YES  ¦    ¦  null  ¦    ¦
+code  ¦  varchar(5)  ¦  YES  ¦    ¦  null  ¦    ¦  
 DROP TABLE view_metadata_on_demand.metadata_target;
 CREATE VIEW view_metadata_on_demand.metadata_target AS
 SELECT code FROM view_metadata_on_demand.src;
 ALTER TABLE view_metadata_on_demand.src MODIFY COLUMN code VARCHAR(120);
 EXECUTE show_target;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-code  ¦  varchar(120)  ¦  YES  ¦    ¦  null  ¦    ¦
+code  ¦  varchar(120)  ¦  YES  ¦    ¦  null  ¦    ¦  
 SELECT column_name, column_type FROM information_schema.columns
 WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'metadata_target';
 ➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  𝄀
@@ -96,7 +96,7 @@ DROP VIEW view_metadata_on_demand.metadata_target;
 CREATE TABLE view_metadata_on_demand.metadata_target (code BIGINT);
 EXECUTE show_target;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-code  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦
+code  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦  
 DEALLOCATE PREPARE show_target;
 DROP SNAPSHOT IF EXISTS view_metadata_restore;
 CREATE SNAPSHOT view_metadata_restore FOR ACCOUNT;
@@ -113,7 +113,7 @@ id  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 code  ¦  varchar(180)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 qty  ¦  bigint  ¦  NO  ¦    ¦  11  ¦    ¦    𝄀
 price  ¦  decimal(24,6)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-total  ¦  decimal(43,6)  ¦  YES  ¦    ¦  null  ¦    ¦
+total  ¦  decimal(43,6)  ¦  YES  ¦    ¦  null  ¦    ¦  
 RESTORE TABLE view_metadata_on_demand.src {snapshot='view_metadata_restore'};
 EXECUTE restored_view;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -121,7 +121,7 @@ id  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 code  ¦  varchar(120)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 qty  ¦  bigint  ¦  NO  ¦    ¦  11  ¦    ¦    𝄀
 price  ¦  decimal(24,6)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-total  ¦  decimal(43,6)  ¦  YES  ¦    ¦  null  ¦    ¦
+total  ¦  decimal(43,6)  ¦  YES  ¦    ¦  null  ¦    ¦  
 SELECT column_name, column_type FROM information_schema.columns
 WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'v'
 ORDER BY ordinal_position;
@@ -135,7 +135,7 @@ DEALLOCATE PREPARE restored_view;
 CREATE TABLE restored_copy AS SELECT code FROM v;
 DESC restored_copy;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-code  ¦  varchar(120)  ¦  YES  ¦    ¦  null  ¦    ¦
+code  ¦  varchar(120)  ¦  YES  ¦    ¦  null  ¦    ¦  
 DROP SNAPSHOT view_metadata_restore;
 CREATE TABLE json_src (j JSON);
 CREATE VIEW values_v AS SELECT j FROM json_src;

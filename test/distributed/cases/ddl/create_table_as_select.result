@@ -4,7 +4,7 @@ create table t1(a int default 123, b char(5));
 desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  123  ¦    ¦    𝄀
-b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦
+b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦  
 INSERT INTO t1 values (1, '1');
 INSERT INTO t1 values (2, '2');
 INSERT INTO t1 values (0x7fffffff, 'max');
@@ -18,7 +18,7 @@ desc t2;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 c  ¦  float  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-a  ¦  int  ¦  YES  ¦    ¦  123  ¦    ¦
+a  ¦  int  ¦  YES  ¦    ¦  123  ¦    ¦  
 select * from t2;
 ➤ c[7,24,0]  ¦  b[1,5,0]  ¦  a[4,32,0]  𝄀
 null  ¦  1  ¦  1  𝄀
@@ -29,13 +29,13 @@ desc t2;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 c  ¦  float  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-a  ¦  int  ¦  YES  ¦    ¦  123  ¦    ¦
+a  ¦  int  ¦  YES  ¦    ¦  123  ¦    ¦  
 CREATE table t3 (a bigint unsigned not null auto_increment primary key, c float) as select a, b from t1;
 desc t3;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 c  ¦  float  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 a  ¦  bigint unsigned  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
-b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦
+b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t3;
 ➤ c[7,24,0]  ¦  a[-5,64,0]  ¦  b[1,5,0]  𝄀
 null  ¦  1  ¦  1  𝄀
@@ -47,7 +47,7 @@ CREATE table t5 (a char(10)) as select * from t1;
 desc t5;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  char(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦
+b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t5;
 ➤ a[1,10,0]  ¦  b[1,5,0]  𝄀
 1  ¦  1  𝄀
@@ -65,7 +65,7 @@ Duplicate entry '1' for key 'a'
 CREATE table t6 as select max(a) from t1;
 desc t6;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-max(a)  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦
+max(a)  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t6;
 ➤ max(a)[4,32,0]  𝄀
 2147483647
@@ -73,7 +73,7 @@ CREATE table t7 as select * from (select * from t1) as t;
 desc t7;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦
+b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t7;
 ➤ a[4,32,0]  ¦  b[1,5,0]  𝄀
 1  ¦  1  𝄀
@@ -84,7 +84,7 @@ CREATE table t8 as select a as alias_a, 1 from t1;
 desc t8;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 alias_a  ¦  int  ¦  YES  ¦    ¦  123  ¦    ¦    𝄀
-1  ¦  bigint  ¦  NO  ¦    ¦  null  ¦    ¦
+1  ¦  bigint  ¦  NO  ¦    ¦  null  ¦    ¦  
 select * from t8;
 ➤ alias_a[4,32,0]  ¦  1[-5,64,0]  𝄀
 1  ¦  1  𝄀
@@ -95,7 +95,7 @@ CREATE table t9 (index (a)) as select * from t1;
 desc t9;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  int  ¦  YES  ¦  MUL  ¦  123  ¦    ¦    𝄀
-b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦
+b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t9;
 ➤ a[4,32,0]  ¦  b[1,5,0]  𝄀
 1  ¦  1  𝄀
@@ -115,7 +115,7 @@ create table table01(a int default 123, b char(5));
 desc table01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  123  ¦    ¦    𝄀
-b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦
+b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into table01 values (1, '1');
 insert into table01 values (2, '2');
 insert into table01 values (0x7fffffff, 'max');
@@ -130,7 +130,7 @@ desc table02;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 c  ¦  float  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-a  ¦  int  ¦  YES  ¦    ¦  123  ¦    ¦
+a  ¦  int  ¦  YES  ¦    ¦  123  ¦    ¦  
 select * from table02;
 ➤ c[7,24,0]  ¦  b[1,5,0]  ¦  a[4,32,0]  𝄀
 null  ¦  1  ¦  1  𝄀
@@ -142,7 +142,7 @@ desc table02;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 d  ¦  float  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-a  ¦  int  ¦  YES  ¦    ¦  123  ¦    ¦
+a  ¦  int  ¦  YES  ¦    ¦  123  ¦    ¦  
 select * from table02;
 ➤ d[7,24,0]  ¦  b[1,5,0]  ¦  a[4,32,0]  𝄀
 null  ¦  1  ¦  1  𝄀
@@ -195,7 +195,7 @@ col2  ¦  char(1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col4  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col6  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col8  ¦  float  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col9  ¦  double  ¦  YES  ¦    ¦  null  ¦    ¦
+col9  ¦  double  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from table06;
 ➤ col10[12,3,0]  ¦  col2[1,1,0]  ¦  col4[12,0,0]  ¦  col6[-5,64,0]  ¦  col8[7,24,0]  ¦  col9[8,54,0]  𝄀
 null  ¦  a  ¦  cover all data types  ¦  372743927942  ¦  -1489.123  ¦  7.2392342E7  𝄀
@@ -210,7 +210,7 @@ create table t1(a int default 123, b char(5));
 desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  123  ¦    ¦    𝄀
-b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦
+b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦  
 INSERT INTO t1 values (1, '1');
 INSERT INTO t1 values (2, '2');
 INSERT INTO t1 values (0x7fffffff, 'max');
@@ -224,7 +224,7 @@ desc t2;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 c  ¦  float  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  char(5)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-a  ¦  int  ¦  YES  ¦    ¦  123  ¦    ¦
+a  ¦  int  ¦  YES  ¦    ¦  123  ¦    ¦  
 select * from t2;
 ➤ c[7,24,0]  ¦  b[1,5,0]  ¦  a[4,32,0]  𝄀
 null  ¦  1  ¦  1  𝄀
@@ -449,7 +449,7 @@ desc table02;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 col1  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 col2  ¦  char(1)  ¦  YES  ¦    ¦  c  ¦    ¦    𝄀
-col3  ¦  decimal(10,0)  ¦  NO  ¦    ¦  null  ¦    ¦
+col3  ¦  decimal(10,0)  ¦  NO  ¦    ¦  null  ¦    ¦  
 select * from table02;
 ➤ col1[4,32,0]  ¦  col2[1,1,0]  ¦  col3[3,10,0]  𝄀
 1  ¦  a  ¦  3728  𝄀
@@ -755,7 +755,7 @@ time02  ¦  CREATE TABLE `time02` (
 )
 desc time02;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-date_format(col2, '%W %M %Y')  ¦  varchar(134)  ¦  YES  ¦    ¦  null  ¦    ¦
+date_format(col2, '%W %M %Y')  ¦  varchar(134)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from time02;
 ➤ date_format(col2, '%w %m %y')[12,-1,0]  𝄀
 Saturday November 2023  𝄀
@@ -771,7 +771,7 @@ desc time_format_bounds;
 zero_weeks  ¦  varchar(29)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 full_hour  ¦  varchar(11)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 full_time  ¦  varchar(17)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-signed_minute  ¦  varchar(3)  ¦  YES  ¦    ¦  null  ¦    ¦
+signed_minute  ¦  varchar(3)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from time_format_bounds;
 ➤ zero_weeks[12,29,0]  ¦  full_hour[12,11,0]  ¦  full_time[12,17,0]  ¦  signed_minute[12,3,0]  𝄀
 613566757|613566757|613566757  ¦  -838  ¦  -838:59:59  ¦  -59
@@ -1070,7 +1070,7 @@ col6  ¦  enum('apple','banana','orange')  ¦  YES  ¦    ¦  null  ¦    ¦    
 col7  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col8  ¦  timestamp  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col9  ¦  blob  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col10  ¦  char(1)  ¦  YES  ¦    ¦  null  ¦    ¦
+col10  ¦  char(1)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from table02;
 ➤ id[4,32,0]  ¦  col1[12,-1,0]  ¦  col2[4,32,0]  ¦  col3[3,10,2]  ¦  newcolumn[-5,64,0]  ¦  col5[-7,1,0]  ¦  col6[12,-1,0]  ¦  col7[12,0,0]  ¦  col8[93,64,0]  ¦  col9[12,0,0]  ¦  col10[1,1,0]  𝄀
 2  ¦  Value3  ¦  789  ¦  12.34  ¦  null  ¦  1  ¦  orange  ¦  Yet another text  ¦  1979-01-01 01:01:01  ¦  Even more binary data  ¦  E  𝄀
@@ -1297,7 +1297,7 @@ test02  ¦  CREATE TABLE `test02` (
 )
 desc test02;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦
+col1  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
 insert into test02 values (2);
 Duplicate entry '2' for key 'col1'
 drop table if exists test03;
@@ -1310,7 +1310,7 @@ test03  ¦  CREATE TABLE `test03` (
 )
 desc test03;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col2  ¦  decimal(10,0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦
+col2  ¦  decimal(10,0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦  
 insert into test03 values (372.324);
 Duplicate entry '372' for key '(.*)'
 drop table if exists test04;
@@ -1382,7 +1382,7 @@ prepare01  ¦  CREATE TABLE `prepare01` (
 show columns from prepare01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 col1  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-col2  ¦  char(1)  ¦  YES  ¦    ¦  null  ¦    ¦
+col2  ¦  char(1)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop table if exists prepare02;
 prepare s1 from 'create table prepare02 as select * from prepare01';
 execute s1;
@@ -1764,7 +1764,7 @@ drop table if exists ctas_non_ascii_alias;
 create table ctas_non_ascii_alias as select col1 as `中文别名` from alias01;
 desc ctas_non_ascii_alias;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-中文别名  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦
+中文别名  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 select `中文别名` from ctas_non_ascii_alias order by `中文别名`;
 ➤ 中文别名[4,32,0]  𝄀
 1  𝄀
@@ -1830,7 +1830,7 @@ create table ctas_interval_identifier_dst as
 select `interval(x,day)` from ctas_interval_identifier_src;
 desc ctas_interval_identifier_dst;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-interval(x,day)  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦
+interval(x,day)  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 select `interval(x,day)` from ctas_interval_identifier_dst order by `interval(x,day)`;
 ➤ interval(x,day)[4,32,0]  𝄀
 1  𝄀

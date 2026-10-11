@@ -1445,14 +1445,14 @@ func Test_BuiltIn_MoShowVisibleBinEnumAndSetPayload(t *testing.T) {
 		oid  types.T
 		want string
 	}{
-		{types.T_enum, "enum('UP','Down word')"},
-		{types.T_uint64, "set('UP','Down word')"},
+		{types.T_enum, `enum('UP','Down word','O''Brien','Back\\slash','Back\\''quote')`},
+		{types.T_uint64, `set('UP','Down word','O''Brien','Back\\slash','Back\\''quote')`},
 	} {
 		encoded, err := types.Encode(&types.Type{Oid: tc.oid})
 		require.NoError(t, err)
 		testCase := NewFunctionTestCase(proc, []FunctionTestInput{
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{string(encoded)}, nil),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"UP,Down word"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`UP,Down word,O'Brien,Back\slash,Back\'quote`}, nil),
 		}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), builtInMoShowVisibleBinEnum)
 		succeed, info := testCase.RunAndFree()
 		require.True(t, succeed, info)
@@ -4227,6 +4227,31 @@ func Test_BuiltIn_MoShowVisibleBinBooleanMetadata(t *testing.T) {
 			testCase := NewFunctionTestCase(proc, inputs, want, builtInMoShowVisibleBin)
 			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
+		})
+	}
+}
+
+func Test_BuiltIn_MoShowVisibleBinInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	encoded, err := types.Encode(&types.Type{Oid: types.T_int32})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		input string
+		mode  uint8
+		want  string
+	}{
+		{"x", typWithLen, "short type encoding"},
+		{string(encoded), 255, "the second argument must be in [0, 6]"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.input}, nil),
+				NewFunctionTestInput(types.T_uint8.ToType(), []uint8{tc.mode}, nil),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), builtInMoShowVisibleBin)
+			t.Cleanup(testCase.Free)
+			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+			require.ErrorContains(t, testCase.fn(testCase.parameters, testCase.result, proc, testCase.fnLength, nil), tc.want)
+			require.Zero(t, testCase.result.GetResultVector().Length())
 		})
 	}
 }

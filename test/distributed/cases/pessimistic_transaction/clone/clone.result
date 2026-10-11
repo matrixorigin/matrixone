@@ -105,7 +105,7 @@ create table enum01 (col1 enum('red','blue','green'));
 insert into enum01 values ('red'),('blue'),('green');
 desc enum01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  enum('red','blue','green')  ¦  YES  ¦    ¦  null  ¦    ¦
+col1  ¦  enum('red','blue','green')  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from enum01;
 ➤ col1[12,-1,0]  𝄀
 red  𝄀
@@ -313,7 +313,7 @@ blue  𝄀
 green
 desc enum01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  enum('red','blue','green')  ¦  YES  ¦    ¦  null  ¦    ¦
+col1  ¦  enum('red','blue','green')  ¦  YES  ¦    ¦  null  ¦    ¦  
 use test01;
 drop table src;
 use test02;
@@ -551,7 +551,7 @@ token  ¦  varchar(100)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
 count  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 qty  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 phone  ¦  char(1)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-times  ¦  datetime  ¦  NO  ¦    ¦  2000-01-01 00:00:00  ¦    ¦
+times  ¦  datetime  ¦  NO  ¦    ¦  2000-01-01 00:00:00  ¦    ¦  
 desc t2;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -559,7 +559,7 @@ category  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 county  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 state  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 phones  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-nophones  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦
+nophones  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦  
 use test06;
 show tables;
 ➤ Tables_in_test06[12,-1,0]  𝄀
@@ -712,7 +712,7 @@ token  ¦  varchar(100)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
 count  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 qty  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 phone  ¦  char(1)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-times  ¦  datetime  ¦  NO  ¦    ¦  2000-01-01 00:00:00  ¦    ¦
+times  ¦  datetime  ¦  NO  ¦    ¦  2000-01-01 00:00:00  ¦    ¦  
 desc t2;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -720,7 +720,7 @@ category  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 county  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 state  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 phones  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
-nophones  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦
+nophones  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦  
 use test06_new;
 use test07_new;
 select * from t1;
@@ -779,7 +779,7 @@ desc v2;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  varchar(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  char(20)  ¦  YES  ¦    ¦  null  ¦    ¦
+c  ¦  char(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop snapshot if exists sp09;
 create snapshot sp09 for account;
 drop database if exists test10;
@@ -912,7 +912,7 @@ desc src;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  bigint  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 json1  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-json2  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦
+json2  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦  
 select count(*) from vector_index_07;
 ➤ count(*)[-5,64,0]  𝄀
 5
@@ -990,7 +990,7 @@ desc src;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  bigint  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 json1  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-json2  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦
+json2  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦  
 select count(*) from vector_index_07;
 ➤ count(*)[-5,64,0]  𝄀
 5
@@ -1067,7 +1067,7 @@ desc src;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  bigint  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 json1  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-json2  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦
+json2  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦  
 select count(*) from vector_index_07;
 ➤ count(*)[-5,64,0]  𝄀
 5

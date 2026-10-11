@@ -13,7 +13,7 @@ set01  ¦  CREATE TABLE `set01` (
 desc set01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-colors  ¦  set('red','green','blue')  ¦  YES  ¦    ¦  null  ¦    ¦
+colors  ¦  set('red','green','blue')  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name, column_name, data_type, column_type, is_nullable
 from information_schema.columns
 where table_name = 'set01' and column_name not like '__mo%'

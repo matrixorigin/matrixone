@@ -22,12 +22,22 @@ import pytest
 import sqlalchemy as sa
 
 
-@pytest.mark.online
-def test_boolean_metadata_reflection(connection_params):
+@pytest.fixture
+def mysql_engine(connection_params):
     host, port, user, password, database = connection_params
     engine = sa.create_engine(
         sa.URL.create('mysql+pymysql', username=user, password=password, host=host, port=port, database=database)
     )
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.online
+def test_boolean_metadata_reflection(mysql_engine, connection_params):
+    engine = mysql_engine
+    database = connection_params[4]
     suffix = uuid.uuid4().hex
     source, view, clone_name = [f'bool_reflection_{kind}_{suffix}' for kind in ('source', 'view', 'clone')]
     try:
@@ -35,7 +45,10 @@ def test_boolean_metadata_reflection(connection_params):
             conn.exec_driver_sql(
                 f'CREATE TABLE `{source}` (id INT PRIMARY KEY, flag BOOL DEFAULT NULL, '
                 'enabled BOOLEAN NOT NULL DEFAULT TRUE, disabled BOOL DEFAULT FALSE, '
-                'empty_flag BOOLEAN DEFAULT NULL, n BIGINT UNSIGNED, amount DECIMAL(10,2), integer_flag TINYINT(1))'
+                "empty_flag BOOLEAN DEFAULT NULL, n BIGINT UNSIGNED, amount DECIMAL(10,2), "
+                "integer_flag TINYINT(1), "
+                "literal_flag ENUM('UP','O''Brien','Down word'), "
+                "literal_set SET('UP','O''Brien','Down word'))"
             )
             conn.exec_driver_sql(
                 f'INSERT INTO `{source}` (id,flag,n,amount,integer_flag) '
@@ -57,6 +70,11 @@ def test_boolean_metadata_reflection(connection_params):
         assert isinstance(reflected_view.c.id.type, sa.Integer)
         assert isinstance(reflected_view.c.integer_flag.type, sa.Integer)
         assert reflected_view.c.n.type.unsigned
+        members = ['UP', "O'Brien", 'Down word']
+        assert table.c.literal_flag.type.enums == members
+        assert reflected_view.c.literal_flag.type.enums == members
+        assert table.c.literal_set.type.values == tuple(members)
+        assert reflected_view.c.literal_set.type.values == tuple(members)
         assert (reflected_view.c.amount.type.precision, reflected_view.c.amount.type.scale) == (10, 2)
         assert isinstance(reflected_view.c.day.type, sa.Date)
         assert reflected_view.c.label.type.length == 20
@@ -86,9 +104,9 @@ def test_boolean_metadata_reflection(connection_params):
             for current in (table, clone):
                 rows = conn.execute(sa.select(current).order_by(current.c.id)).all()
                 assert rows == [
-                    (1, True, True, False, None, 18446744073709551615, Decimal('1.25'), 2),
-                    (2, False, True, False, None, 8, Decimal('2.50'), 0),
-                    (3, None, True, False, None, 9, Decimal('3.75'), None),
+                    (1, True, True, False, None, 18446744073709551615, Decimal('1.25'), 2, None, None),
+                    (2, False, True, False, None, 8, Decimal('2.50'), 0, None, None),
+                    (3, None, True, False, None, 9, Decimal('3.75'), None, None, None),
                 ]
                 assert rows[0].flag is True and rows[1].flag is False and rows[2].flag is None
                 metadata = conn.exec_driver_sql(
@@ -104,16 +122,53 @@ def test_boolean_metadata_reflection(connection_params):
                 ).one()
                 assert native_type[0] == 'BOOL'
 
+        reflected_clone = sa.Table(clone_name, sa.MetaData(), autoload_with=engine)
+        assert reflected_clone.c.literal_flag.type.enums == members
+        assert reflected_clone.c.literal_set.type.values == tuple(members)
+
         with pytest.raises(sa.exc.DBAPIError):
             with engine.begin() as conn:
                 conn.execute(clone.insert(), {'id': 4, 'enabled': None})
         with engine.connect() as conn:
             assert conn.execute(sa.select(sa.func.count()).select_from(clone)).scalar_one() == 3
     finally:
-        try:
-            with engine.begin() as conn:
-                conn.exec_driver_sql(f'DROP VIEW IF EXISTS `{view}`')
-                for name in (clone_name, source):
-                    conn.exec_driver_sql(f'DROP TABLE IF EXISTS `{name}`')
-        finally:
-            engine.dispose()
+        with engine.begin() as conn:
+            conn.exec_driver_sql(f'DROP VIEW IF EXISTS `{view}`')
+            for name in (clone_name, source):
+                conn.exec_driver_sql(f'DROP TABLE IF EXISTS `{name}`')
+
+
+@pytest.mark.online
+def test_enum_set_show_create_replay(mysql_engine, connection_params):
+    # SQLAlchemy 2.0.44 does not unescape backslashes in reflected enum domains.
+    # Verify the server's replay contract directly, without that client parser.
+    engine = mysql_engine
+    database = connection_params[4]
+    source = 'enum_replay_' + uuid.uuid4().hex
+    clone = source + '_clone'
+    members = ['UP', "O'Brien", r'Back\slash', r"Back\'quote"]
+    try:
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                f'CREATE TABLE `{source}` (id INT PRIMARY KEY, '
+                r"e ENUM('UP','O''Brien','Back\\slash','Back\\''quote'), "
+                r"s SET('UP','O''Brien','Back\\slash','Back\\''quote'))"
+            )
+            ddl = conn.exec_driver_sql(f'SHOW CREATE TABLE `{source}`').one()[1]
+            conn.exec_driver_sql(ddl.replace(f'CREATE TABLE `{source}`', f'CREATE TABLE `{clone}`', 1))
+            for name in (source, clone):
+                domains = conn.exec_driver_sql(
+                    'SELECT attname,attr_enum FROM mo_catalog.mo_columns '
+                    'WHERE att_database=%s AND att_relname=%s AND attname IN (%s,%s) ORDER BY attname',
+                    (database, name, 'e', 's'),
+                ).all()
+                assert domains == [('e', ','.join(members)), ('s', ','.join(members))]
+                for index, member in enumerate(members):
+                    conn.exec_driver_sql(f'INSERT INTO `{name}` VALUES (%s,%s,%s)', (index, member, member))
+                assert conn.exec_driver_sql(f'SELECT e,s FROM `{name}` ORDER BY id').all() == [
+                    (member, member) for member in members
+                ]
+    finally:
+        with engine.begin() as conn:
+            for name in (clone, source):
+                conn.exec_driver_sql(f'DROP TABLE IF EXISTS `{name}`')
