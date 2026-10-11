@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -100,6 +101,8 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			fmt.Fprintf(buf, "%s", types.Datetime(val.Datetimeval).String2(expr.Typ.Scale))
 		case *plan.Literal_Timeval:
 			fmt.Fprintf(buf, "%s", types.Time(val.Timeval).String2(expr.Typ.Scale))
+		case *plan.Literal_Timestampval:
+			fmt.Fprintf(buf, "%s", types.Timestamp(val.Timestampval).String2(time.UTC, expr.Typ.Scale))
 		case *plan.Literal_Sval:
 			if expr.Typ.Id == int32(types.T_geometry) || expr.Typ.Id == int32(types.T_geometry32) {
 				// A geometry literal carries raw WKB bytes that are not
@@ -107,10 +110,13 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 				// stable rather than emitting binary into the plan text.
 				buf.WriteString("'" + geometryLiteralText(expr.Typ.Id, val.Sval) + "'")
 			} else if exprImpl.Lit.IsSerialized {
-				// Tuple-encoded serial values have no meaningful text form. Keep
-				// their bytes out of diagnostic output even when they happen to be
-				// valid and printable UTF-8.
-				buf.WriteString("'<opaque>'")
+				// Text diagnostics redact tuple-encoded values. SQL JSON instead
+				// preserves their bytes and type without interpreting tuple contents.
+				if options != nil && options.CompleteLiteralVectors {
+					fmt.Fprintf(buf, "serialized(type=%d,width=%d,scale=%d,value=0x%X)", expr.Typ.Id, expr.Typ.Width, expr.Typ.Scale, []byte(val.Sval))
+				} else {
+					buf.WriteString("'<opaque>'")
+				}
 			} else if exprImpl.Lit.IsBin || !isPrintableUTF8(val.Sval) {
 				// SQL hex/bit literals and arbitrary non-text bytes remain useful
 				// when rendered canonically, without leaking invalid UTF-8 or
@@ -128,6 +134,13 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 		case *plan.Literal_Decimal128Val:
 			fmt.Fprintf(buf, "%s",
 				types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}.Format(expr.Typ.GetScale()))
+		case *plan.Literal_VecVal:
+			if exprImpl.Lit.IsSerialized || val.VecVal == "" {
+				return moerr.NewInvalidInput(ctx, "vector literal cannot be serialized for EXPLAIN FORMAT=JSON")
+			}
+			buf.WriteString(printableVectorText(val.VecVal))
+		default:
+			return moerr.NewInvalidInputf(ctx, "unsupported literal value %T", val)
 		}
 
 	case *plan.Expr_F:
@@ -200,7 +213,11 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			}
 		}
 	case *plan.Expr_Vec:
-		buf.WriteString(literalVecText(exprImpl.Vec))
+		value, err := literalVecText(ctx, exprImpl.Vec, options != nil && options.CompleteLiteralVectors)
+		if err != nil {
+			return err
+		}
+		buf.WriteString(value)
 	case *plan.Expr_T:
 		tt := types.T(expr.Typ.Id)
 		if tt == types.T_decimal64 || tt == types.T_decimal128 {
@@ -226,39 +243,162 @@ func printableVectorText(value string) string {
 	return fmt.Sprintf("0x%X", []byte(value))
 }
 
-func literalVecText(literalVec *plan.LiteralVec) (text string) {
+func literalVecText(ctx context.Context, literalVec *plan.LiteralVec, complete bool) (text string, err error) {
+	invalid := func() (string, error) {
+		if complete {
+			return "", moerr.NewInvalidInput(ctx, "literal vector cannot be serialized for EXPLAIN FORMAT=JSON")
+		}
+		return "<invalid-vector>", nil
+	}
 	if literalVec == nil {
-		return "<invalid-vector>"
+		return invalid()
 	}
-	if literalVec.IsSerialized {
-		// A LiteralVec cannot represent per-element diagnostic provenance.
-		// If any element is tuple-encoded, redact the container as a whole.
-		return "[<opaque>]"
+	if literalVec.IsSerialized && !complete {
+		return "[<opaque>]", nil
 	}
-
-	// UnmarshalBinary is no-copy and vector formatting trusts encoded varlen
-	// metadata. Keep malformed internal plans from escaping this diagnostic
-	// boundary as a panic.
+	// Decoding is no-copy. Formatting never mutates the encoded source, and
+	// malformed internal vectors must not escape the diagnostic boundary.
 	defer func() {
 		if recover() != nil {
-			text = "<invalid-vector>"
+			text, err = invalid()
 		}
 	}()
 	vec := vector.NewVec(types.T_any.ToType())
 	defer vec.Free(nil)
 	if err := vec.UnmarshalBinary(literalVec.Data); err != nil {
+		return invalid()
+	}
+	originalLen := vec.Length()
+	if !complete {
+		if originalLen > 16 {
+			vec.SetLength(16)
+		}
+		text = printableVectorText(vec.String())
+		if originalLen > 16 {
+			text += fmt.Sprintf("... %v values", originalLen)
+		}
+		return text, nil
+	}
+	if literalVec.IsSerialized {
+		typ := vec.GetType()
+		if typ == nil {
+			return invalid()
+		}
+		switch typ.Oid {
+		case types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_binary, types.T_varbinary:
+		default:
+			return invalid()
+		}
+		values := make([]string, 0, originalLen)
+		for i := 0; i < originalLen; i++ {
+			if vec.IsNull(uint64(i)) {
+				values = append(values, "NULL")
+			} else {
+				values = append(values, fmt.Sprintf("0x%X", []byte(vec.GetStringAt(i))))
+			}
+		}
+		return fmt.Sprintf("serialized_vec(type=%d,width=%d,scale=%d,values=[%s])", typ.Oid, typ.Width, typ.Scale, strings.Join(values, ",")), nil
+	}
+	values := make([]string, 0, originalLen)
+	for i := 0; i < originalLen; i++ {
+		values = append(values, literalVecElementText(vec, i))
+	}
+	if originalLen == 1 {
+		return values[0], nil
+	}
+	return "[" + strings.Join(values, ", ") + "]", nil
+}
+
+// literalVecElementText renders one element with the type and scale carried by
+// the vector wire payload. Vector.String is a display helper, not a lossless
+// plan format: it drops decimal scale, uses a timestamp display default, and
+// leaves varlen element boundaries implicit. EXPLAIN must keep distinct plan
+// values distinguishable, including NULLs and values beyond the truncation
+// boundary.
+func literalVecElementText(vec *vector.Vector, index int) string {
+	if vec.IsNull(uint64(index)) {
+		return "NULL"
+	}
+	typ := vec.GetType()
+	if typ == nil {
 		return "<invalid-vector>"
 	}
-
-	originalLen := vec.Length()
-	if originalLen > 16 {
-		vec.SetLength(16)
+	switch typ.Oid {
+	case types.T_bool:
+		return strconv.FormatBool(vector.GetFixedAtWithTypeCheck[bool](vec, index))
+	case types.T_bit:
+		return strconv.FormatUint(vector.GetFixedAtWithTypeCheck[uint64](vec, index), 10)
+	case types.T_int8:
+		return strconv.FormatInt(int64(vector.GetFixedAtWithTypeCheck[int8](vec, index)), 10)
+	case types.T_int16:
+		return strconv.FormatInt(int64(vector.GetFixedAtWithTypeCheck[int16](vec, index)), 10)
+	case types.T_int32:
+		return strconv.FormatInt(int64(vector.GetFixedAtWithTypeCheck[int32](vec, index)), 10)
+	case types.T_int64:
+		return strconv.FormatInt(vector.GetFixedAtWithTypeCheck[int64](vec, index), 10)
+	case types.T_uint8:
+		return strconv.FormatUint(uint64(vector.GetFixedAtWithTypeCheck[uint8](vec, index)), 10)
+	case types.T_uint16:
+		return strconv.FormatUint(uint64(vector.GetFixedAtWithTypeCheck[uint16](vec, index)), 10)
+	case types.T_uint32:
+		return strconv.FormatUint(uint64(vector.GetFixedAtWithTypeCheck[uint32](vec, index)), 10)
+	case types.T_uint64:
+		return strconv.FormatUint(vector.GetFixedAtWithTypeCheck[uint64](vec, index), 10)
+	case types.T_float32:
+		return strconv.FormatFloat(float64(vector.GetFixedAtWithTypeCheck[float32](vec, index)), 'g', -1, 32)
+	case types.T_float64:
+		return strconv.FormatFloat(vector.GetFixedAtWithTypeCheck[float64](vec, index), 'g', -1, 64)
+	case types.T_date:
+		return vector.GetFixedAtWithTypeCheck[types.Date](vec, index).String()
+	case types.T_datetime:
+		return vector.GetFixedAtWithTypeCheck[types.Datetime](vec, index).String2(typ.Scale)
+	case types.T_time:
+		return vector.GetFixedAtWithTypeCheck[types.Time](vec, index).String2(typ.Scale)
+	case types.T_timestamp:
+		return vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, index).String2(time.UTC, typ.Scale)
+	case types.T_decimal64:
+		return vector.GetFixedAtWithTypeCheck[types.Decimal64](vec, index).Format(typ.Scale)
+	case types.T_decimal128:
+		return vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, index).Format(typ.Scale)
+	case types.T_decimal256:
+		return vector.GetFixedAtWithTypeCheck[types.Decimal256](vec, index).Format(typ.Scale)
+	case types.T_enum:
+		return vector.GetFixedAtWithTypeCheck[types.Enum](vec, index).String()
+	case types.T_year:
+		return vector.GetFixedAtWithTypeCheck[types.MoYear](vec, index).String()
+	case types.T_uuid:
+		return vector.GetFixedAtWithTypeCheck[types.Uuid](vec, index).String()
+	case types.T_TS:
+		return vector.GetFixedAtWithTypeCheck[types.TS](vec, index).String()
+	case types.T_Rowid:
+		return vector.GetFixedAtWithTypeCheck[types.Rowid](vec, index).String()
+	case types.T_Blockid:
+		blockID := vector.GetFixedAtWithTypeCheck[types.Blockid](vec, index)
+		return blockID.String()
+	case types.T_char, types.T_varchar, types.T_json, types.T_text, types.T_blob, types.T_datalink,
+		types.T_geometry, types.T_geometry32:
+		value := vec.GetStringAt(index)
+		if isPrintableUTF8(value) {
+			return strconv.Quote(value)
+		}
+		return fmt.Sprintf("0x%X", []byte(value))
+	case types.T_binary, types.T_varbinary:
+		return fmt.Sprintf("0x%X", []byte(vec.GetStringAt(index)))
+	case types.T_array_float32:
+		return fmt.Sprintf("%v", vector.GetArrayAt[float32](vec, index))
+	case types.T_array_float64:
+		return fmt.Sprintf("%v", vector.GetArrayAt[float64](vec, index))
+	case types.T_array_bf16:
+		return fmt.Sprintf("%v", vector.GetArrayAt[types.BF16](vec, index))
+	case types.T_array_float16:
+		return fmt.Sprintf("%v", vector.GetArrayAt[types.Float16](vec, index))
+	case types.T_array_int8:
+		return fmt.Sprintf("%v", vector.GetArrayAt[int8](vec, index))
+	case types.T_array_uint8:
+		return fmt.Sprintf("%v", vector.GetArrayAt[uint8](vec, index))
+	default:
+		return printableVectorText(fmt.Sprint(vec.String()))
 	}
-	text = printableVectorText(vec.String())
-	if originalLen > 16 {
-		text += fmt.Sprintf("... %v values", originalLen)
-	}
-	return text
 }
 
 // geometryLiteralText renders a geometry literal's WKB payload as WKT so
@@ -318,7 +458,10 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 			return explainOrderedPercentile(ctx, funcExpr, options, buf)
 		}
 		buf.WriteString(funcExpr.Func.GetObjName() + "(")
-		if needSpecialHandling(funcExpr) {
+		if uint64(funcExpr.Func.Obj)&function.Distinct != 0 {
+			buf.WriteString("DISTINCT ")
+		}
+		if needSpecialHandling(funcExpr) && (options == nil || !options.CompleteLiteralVectors) {
 			//contains invisible character, need special handling
 			err = describeExpr(ctx, funcExpr.Args[0], options, buf)
 			if err != nil {
@@ -370,7 +513,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 			return err
 		}
 		buf.WriteString(" " + funcExpr.Func.GetObjName() + " ")
-		if !needSpecialHandling(funcExpr) {
+		if !needSpecialHandling(funcExpr) || (options != nil && options.CompleteLiteralVectors) {
 			err = describeExpr(ctx, funcExpr.Args[1], options, buf)
 			if err != nil {
 				return err
@@ -466,7 +609,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 			return err
 		}
 		buf.WriteString(" " + funcExpr.Func.GetObjName() + " (")
-		if !needSpecialHandling(funcExpr) {
+		if !needSpecialHandling(funcExpr) || (options != nil && options.CompleteLiteralVectors) {
 			err = describeExpr(ctx, funcExpr.Args[1], options, buf)
 			if err != nil {
 				return err

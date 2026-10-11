@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -31,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	planpkg "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCompositeSecondaryIndexRangeBoundsArePrintable(t *testing.T) {
@@ -200,6 +203,140 @@ func TestLiteralVecExplainNeverWritesRawNonTextBytes(t *testing.T) {
 	}
 }
 
+func TestJSONExplainPreservesTimestampPrecisionAndCompleteLiteralVector(t *testing.T) {
+	ts, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.123456", 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	timestamp := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Timestampval{Timestampval: int64(ts)},
+		}},
+	}
+	var timestampBuf bytes.Buffer
+	if err := describeExpr(t.Context(), timestamp, &ExplainOptions{Format: EXPLAIN_FORMAT_JSON}, &timestampBuf); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := timestampBuf.String(), "2024-01-02 03:04:05.123456"; got != want {
+		t.Fatalf("timestamp precision was not preserved: got %q, want %q", got, want)
+	}
+
+	mp := mpool.MustNew(t.Name())
+	vec := vector.NewVec(types.T_int32.ToType())
+	for i := 1; i <= 17; i++ {
+		if err := vector.AppendFixed[int32](vec, int32(i), false, mp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := vec.MarshalBinary()
+	vec.Free(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vectorExpr := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_int32)},
+		Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Len: 17, Data: data}},
+	}
+	var vectorBuf bytes.Buffer
+	if err := describeExpr(t.Context(), vectorExpr, &ExplainOptions{
+		Format:                 EXPLAIN_FORMAT_TEXT,
+		CompleteLiteralVectors: true,
+	}, &vectorBuf); err != nil {
+		t.Fatal(err)
+	}
+	if got := vectorBuf.String(); !strings.Contains(got, "16") || !strings.Contains(got, "17") {
+		t.Fatalf("complete JSON vector lost its 17th value: %q", got)
+	}
+	var textBuf bytes.Buffer
+	if err := describeExpr(t.Context(), vectorExpr, NewExplainDefaultOptions(), &textBuf); err != nil {
+		t.Fatal(err)
+	}
+	if got := textBuf.String(); !strings.Contains(got, "... 17 values") {
+		t.Fatalf("text EXPLAIN vector truncation changed: %q", got)
+	}
+}
+
+func TestLiteralVecExplainPreservesTypedScaleBoundariesAndNulls(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	datetimeType := types.T_datetime.ToTypeWithScale(6)
+	datetimeVec := vector.NewVec(datetimeType)
+	dt, err := types.ParseDatetime("2024-01-02 03:04:05.123456", 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = vector.AppendFixed[types.Datetime](datetimeVec, dt, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err = vector.AppendFixed[types.Datetime](datetimeVec, 0, true, mp); err != nil {
+		t.Fatal(err)
+	}
+	datetimeData, err := datetimeVec.MarshalBinary()
+	datetimeVec.Free(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decimalType := types.T_decimal64.ToTypeWithScale(2)
+	decimalVec := vector.NewVec(decimalType)
+	first, err := types.ParseDecimal64("1.20", decimalType.Width, decimalType.Scale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := types.ParseDecimal64("12.00", decimalType.Width, decimalType.Scale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = vector.AppendFixed[types.Decimal64](decimalVec, first, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err = vector.AppendFixed[types.Decimal64](decimalVec, second, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	decimalData, err := decimalVec.MarshalBinary()
+	decimalVec.Free(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, test := range map[string]struct {
+		typ  planpb.Type
+		data []byte
+		want string
+	}{
+		"datetime": {
+			typ:  planpb.Type{Id: int32(types.T_datetime), Scale: 6},
+			data: datetimeData,
+			want: "[2024-01-02 03:04:05.123456, NULL]",
+		},
+		"decimal": {
+			typ:  planpb.Type{Id: int32(types.T_decimal64), Scale: 2},
+			data: decimalData,
+			want: "[1.20, 12.00]",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			expr := &planpb.Expr{
+				Typ: test.typ,
+				Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{
+					Len:  int32(strings.Count(test.want, ",") + 1),
+					Data: test.data,
+				}},
+			}
+			var buf bytes.Buffer
+			if err := describeExpr(t.Context(), expr, &ExplainOptions{
+				Format:                 EXPLAIN_FORMAT_JSON,
+				CompleteLiteralVectors: true,
+			}, &buf); err != nil {
+				t.Fatal(err)
+			}
+			if got := buf.String(); got != test.want {
+				t.Fatalf("typed literal vector rendering changed: got %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestPublicSerializedINListExplainIsOpaqueAndPrintable(t *testing.T) {
 	planText := explainSQLForSerializedTest(
 		t,
@@ -337,4 +474,78 @@ func mustDecodeHex(t *testing.T, encoded string) []byte {
 		t.Fatal(err)
 	}
 	return decoded
+}
+
+func TestJSONSerializedVectorValuesAndErrors(t *testing.T) {
+	for _, count := range []int{1, 18} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			mp := mpool.MustNew(t.Name())
+			vec := vector.NewVec(types.T_varchar.ToType())
+			defer vec.Free(mp)
+			for i := 0; i < count; i++ {
+				value := []byte{byte(i), 0xff}
+				if i == 0 {
+					value = []byte{}
+				}
+				require.NoError(t, vector.AppendBytes(vec, value, i == 1, mp))
+			}
+			data, err := vec.MarshalBinary()
+			require.NoError(t, err)
+			before := bytes.Clone(data)
+			expr := &planpb.Expr{Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Len: int32(count), Data: data, IsSerialized: true}}}
+			got, err := sqlJSONExpr(t.Context(), expr, &ExplainOptions{CompleteLiteralVectors: true})
+			require.NoError(t, err)
+			require.Contains(t, got, fmt.Sprintf("serialized_vec(type=%d,width=65535,scale=0,values=[0x", types.T_varchar))
+			if count > 16 {
+				require.Contains(t, got, ",NULL,")
+				require.Contains(t, got, "0x11FF]")
+			}
+			var buf bytes.Buffer
+			require.NoError(t, describeExpr(t.Context(), expr, NewExplainDefaultOptions(), &buf))
+			require.Equal(t, "[<opaque>]", buf.String())
+			require.Equal(t, before, data, "rendering must not mutate encoded input")
+			if count > 16 {
+				require.NoError(t, vector.SetBytesAt(vec, 17, []byte{0x12, 0xff}, mp))
+				changed, err := vec.MarshalBinary()
+				require.NoError(t, err)
+				expr.GetVec().Data = changed
+				other, err := sqlJSONExpr(t.Context(), expr, &ExplainOptions{CompleteLiteralVectors: true})
+				require.NoError(t, err)
+				require.NotEqual(t, got, other)
+				require.Contains(t, other, "0x12FF]")
+			}
+		})
+	}
+	for _, literal := range []*planpb.LiteralVec{nil, {Data: []byte{1, 2, 3}}} {
+		expr := &planpb.Expr{Expr: &planpb.Expr_Vec{Vec: literal}}
+		_, err := sqlJSONExpr(t.Context(), expr, &ExplainOptions{CompleteLiteralVectors: true})
+		require.Error(t, err)
+		var buf bytes.Buffer
+		require.NoError(t, describeExpr(t.Context(), expr, NewExplainDefaultOptions(), &buf))
+		require.Equal(t, "<invalid-vector>", buf.String())
+	}
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(nil)
+	data, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	_, err = sqlJSONExpr(t.Context(), &planpb.Expr{Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Data: data, IsSerialized: true}}}, &ExplainOptions{CompleteLiteralVectors: true})
+	require.Error(t, err)
+}
+
+func TestJSONSerializedScalarAndHiddenArguments(t *testing.T) {
+	for _, name := range []string{"prefix_eq", "="} {
+		registered, err := function.GetFunctionByName(t.Context(), name, []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()})
+		require.NoError(t, err)
+		literal := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{IsSerialized: true, Value: &planpb.Literal_Sval{Sval: string([]byte{0, 0xff})}}}}
+		expr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: name},
+			Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: catalog.PrefixPriColName + "key"}}}, literal},
+		}}}
+		got, err := sqlJSONExpr(t.Context(), expr, &ExplainOptions{CompleteLiteralVectors: true})
+		require.NoError(t, err)
+		require.Contains(t, got, fmt.Sprintf("serialized(type=%d,width=0,scale=0,value=0x00FF)", types.T_varchar))
+		var buf bytes.Buffer
+		require.NoError(t, describeExpr(t.Context(), expr, NewExplainDefaultOptions(), &buf))
+		require.NotContains(t, buf.String(), "00FF")
+	}
 }
