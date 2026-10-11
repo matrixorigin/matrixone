@@ -38,7 +38,17 @@ type ParquetWriter struct {
 	schema      *parquet.Schema
 	columnNames []string
 	columnTypes []defines.MysqlType
+
+	bufferedBytes uint64 // Plain value bytes plus definition levels, before encoding.
+	bufferedRows  int
+	rowGroups     int
 }
+
+// Bound a row group independently of SPLITSIZE, including narrow/all-NULL rows.
+const (
+	maxParquetRowGroupBytes = 64 << 20
+	maxParquetRowGroupRows  = 1 << 20
+)
 
 // NewParquetWriter creates a new ParquetWriter
 func NewParquetWriter(ctx context.Context, mrs *MysqlResultSet) (*ParquetWriter, error) {
@@ -149,42 +159,67 @@ func (pw *ParquetWriter) WriteBatch(bat *batch.Batch, mp *mpool.MPool, timeZone 
 }
 
 func (pw *ParquetWriter) writeBatchRange(bat *batch.Batch, start, end int, timeZone *time.Location) error {
+	_, err := pw.writeBatchChunk(bat, start, end, 0, timeZone)
+	return err
+}
+
+// writeBatchChunk stops at a bounded row-group budget when maxBufferedBytes is
+// nonzero. The estimate controls buffering only; split decisions use the actual
+// serialized size after Flush. A single row is indivisible.
+func (pw *ParquetWriter) writeBatchChunk(bat *batch.Batch, start, end int, maxBufferedBytes uint64, timeZone *time.Location) (int, error) {
 	if bat == nil || start >= end {
-		return nil
+		return start, nil
 	}
-
-	rows := make([]any, end-start)
-	for i := range rows {
-		row := make(map[string]any)
-		rows[i] = row
-	}
-
 	if len(bat.Vecs) != len(pw.columnNames) {
-		return moerr.NewInternalErrorf(pw.ctx, "parquet batch has %d vectors for %d columns", len(bat.Vecs), len(pw.columnNames))
+		return start, moerr.NewInternalErrorf(pw.ctx, "parquet batch has %d vectors for %d columns", len(bat.Vecs), len(pw.columnNames))
 	}
-
-	// Convert each column
 	for colIdx, vec := range bat.Vecs {
 		if vec == nil {
-			return moerr.NewInternalErrorf(pw.ctx, "parquet batch vector %d is nil", colIdx)
+			return start, moerr.NewInternalErrorf(pw.ctx, "parquet batch vector %d is nil", colIdx)
 		}
-		colName := pw.columnNames[colIdx]
-		for rowIdx := start; rowIdx < end; rowIdx++ {
-			row := rows[rowIdx-start].(map[string]any)
+	}
+
+	rows := make([]any, 0, end-start)
+	var valueBytes uint64
+	for rowIdx := start; rowIdx < end; rowIdx++ {
+		row := make(map[string]any, len(pw.columnNames))
+		for colIdx, vec := range bat.Vecs {
+			colName := pw.columnNames[colIdx]
+			valueBytes++ // Optional field's definition level, also for NULL.
 			if nulls := vec.GetNulls(); nulls != nil && nulls.Contains(uint64(rowIdx)) {
 				row[colName] = nil
 				continue
 			}
 			val, err := pw.vectorValueToParquet(vec, colIdx, rowIdx, timeZone)
 			if err != nil {
-				return err
+				return start, err
 			}
 			row[colName] = val
+			switch v := val.(type) {
+			case bool:
+				valueBytes++
+			case int32, float32:
+				valueBytes += 4
+			case int64, float64:
+				valueBytes += 8
+			case string:
+				valueBytes += uint64(4 + len(v))
+			case []byte:
+				valueBytes += uint64(4 + len(v))
+			}
+		}
+		rows = append(rows, row)
+		if maxBufferedBytes > 0 && (pw.bufferedBytes+valueBytes >= maxBufferedBytes || pw.bufferedRows+len(rows) >= maxParquetRowGroupRows) {
+			break
 		}
 	}
 
-	_, err := pw.writer.Write(rows)
-	return err
+	n, err := pw.writer.Write(rows)
+	if err == nil {
+		pw.bufferedBytes += valueBytes
+		pw.bufferedRows += n
+	}
+	return start + n, err
 }
 
 // vectorValueToParquet preserves the MySQL column domain when the execution
@@ -292,13 +327,24 @@ func (pw *ParquetWriter) Close() ([]byte, error) {
 // Flush makes buffered row-group data visible in the output buffer. It is
 // used by split-size accounting before the writer is closed for a file.
 func (pw *ParquetWriter) Flush() error {
-	return pw.writer.Flush()
+	if err := pw.writer.Flush(); err != nil {
+		return err
+	}
+	if pw.bufferedRows > 0 {
+		pw.rowGroups++
+	}
+	pw.bufferedRows = 0
+	pw.bufferedBytes = 0
+	return nil
 }
 
 // Reset resets the writer for a new file
 func (pw *ParquetWriter) Reset() {
 	pw.buf.Reset()
 	pw.writer.Reset(pw.buf)
+	pw.bufferedBytes = 0
+	pw.bufferedRows = 0
+	pw.rowGroups = 0
 }
 
 // Size returns the current buffer size in bytes

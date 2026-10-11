@@ -1248,7 +1248,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
 			enumValues := dt.Enumvalues
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+				return processStringToFixedWithTrim(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (uint64, error) {
 						text := util.UnsafeBytesToString(data)
 						if enumValues != "" {
@@ -1260,6 +1260,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						return strconv.ParseUint(text, 10, 64)
 					},
 					uint64(0),
+					enumValues == "", // SET member names preserve lexical whitespace.
 				)
 			}
 			break
@@ -2524,6 +2525,22 @@ func processStringToFixed[T any](
 	parseFunc func(data []byte) (T, error),
 	zeroVal T,
 ) error {
+	return processStringToFixedWithTrim(ctx, mp, page, proc, vec, parseFunc, zeroVal, true)
+}
+
+// SET display strings require the original bytes; numeric/date conversions
+// retain their existing trimming policy. Both use the same validated loader
+// and rollback path.
+func processStringToFixedWithTrim[T any](
+	ctx context.Context,
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+	parseFunc func(data []byte) (T, error),
+	zeroVal T,
+	trimSpace bool,
+) error {
 	numRows, err := parquetPageCount(ctx, "NumRows()", page.NumRows())
 	if err != nil {
 		return err
@@ -2608,8 +2625,9 @@ func processStringToFixed[T any](
 			data = loader.loadAt(idx)
 		}
 
-		// Use bytes.TrimSpace to avoid string allocation
-		data = bytes.TrimSpace(data)
+		if trimSpace {
+			data = bytes.TrimSpace(data)
+		}
 
 		// Parse and write
 		val, parseErr := parseFunc(data)

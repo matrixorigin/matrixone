@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/parquet-go/parquet-go"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
@@ -1119,10 +1120,10 @@ func (ec *ExportConfig) writeParquet(execCtx *ExecCtx, bat *batch.Batch) error {
 		return nil
 	}
 
-	// A result batch can itself be much larger than SPLITSIZE. Write one row at
-	// a time while splitting is enabled so a single executor batch cannot bypass
-	// the file boundary. A row remains indivisible and may exceed the target.
-	for row := 0; row < bat.RowCount(); row++ {
+	// Accumulate bounded row groups across executor batches. Flush ends a row
+	// group, so flushing every row causes large metadata overhead and exhausts
+	// parquet-go's per-file row-group limit long before SPLITSIZE is reached.
+	for row := 0; row < bat.RowCount(); {
 		if ec.parquetWriter == nil {
 			var err error
 			ec.parquetWriter, err = NewParquetWriter(execCtx.reqCtx, ec.mrs)
@@ -1130,14 +1131,23 @@ func (ec *ExportConfig) writeParquet(execCtx *ExecCtx, bat *batch.Batch) error {
 				return err
 			}
 		}
-		if err := ec.parquetWriter.writeBatchRange(bat, row, row+1, timeZone); err != nil {
+		writer := ec.parquetWriter
+		groupBudget := min(uint64(maxParquetRowGroupBytes), splitSize-uint64(writer.Size()))
+		next, err := writer.writeBatchChunk(bat, row, bat.RowCount(), groupBudget, timeZone)
+		if err != nil {
 			return err
 		}
-		ec.Rows++
-		if err := ec.parquetWriter.Flush(); err != nil {
+		ec.Rows += uint64(next - row)
+		row = next
+		if writer.bufferedBytes < groupBudget && writer.bufferedRows < maxParquetRowGroupRows {
+			continue
+		}
+		if err := writer.Flush(); err != nil {
 			return err
 		}
-		if shouldSplitParquetFile(uint64(ec.parquetWriter.Size()), splitSize) {
+		// A row group (and the final footer) can exceed the target. Rotate at
+		// parquet-go's format limit too, even for highly compressible/NULL data.
+		if shouldSplitParquetFile(uint64(writer.Size()), splitSize) || writer.rowGroups == parquet.MaxRowGroups {
 			if err := ec.flushParquetFile(); err != nil {
 				return err
 			}

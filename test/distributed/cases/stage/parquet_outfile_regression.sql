@@ -60,6 +60,14 @@ load data infile {'filepath'='stage://parquet_outfile_stage/typed.parquet', 'for
 select id, cast(bits as unsigned), tags, vector_dims(v32), vector_dims(v64), year_val, unix_timestamp(ts) from typed_copy;
 set time_zone = @parquet_old_time_zone;
 
+-- SET member whitespace is lexical data, including combinations, empty and NULL.
+create table lexical_set_src (id int, tags set(' a', 'a'));
+insert into lexical_set_src values (1, ' a'), (2, 'a'), (3, ' a,a'), (4, ''), (5, NULL);
+select * from lexical_set_src order by id into outfile 'stage://parquet_outfile_stage/lexical_set.parquet' format 'parquet';
+create table lexical_set_copy (id int, tags set(' a', 'a'));
+load data infile {'filepath'='stage://parquet_outfile_stage/lexical_set.parquet', 'format'='parquet'} into table lexical_set_copy;
+select id, cast(tags as unsigned) as bitmap from lexical_set_copy order by id;
+
 -- Duplicate aliases must fail instead of silently dropping a Parquet column.
 select id as duplicate_name, id as duplicate_name from split_src
 into outfile 'stage://parquet_outfile_stage/duplicate.parquet' format 'parquet';
@@ -71,5 +79,7 @@ drop table empty_copy;
 drop table empty_src;
 drop table typed_copy;
 drop table typed_src;
+drop table lexical_set_copy;
+drop table lexical_set_src;
 drop stage parquet_outfile_stage;
 drop database parquet_outfile_regression;

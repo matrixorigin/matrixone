@@ -2532,6 +2532,45 @@ func TestParquetStringSetAndYearMappings(t *testing.T) {
 	require.Equal(t, []types.MoYear{2024, 0}, vector.MustFixedColWithTypeCheck[types.MoYear](yearVec))
 }
 
+func TestParquetStringSetPreservesWhitespace(t *testing.T) {
+	for _, dictionary := range []bool{false, true} {
+		t.Run(fmt.Sprint(dictionary), func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			t.Cleanup(func() {
+				bytes, objects := proc.Mp().OnHeapOutstanding()
+				require.Equal(t, [3]int64{}, [3]int64{proc.Mp().CurrNB(), bytes, objects})
+			})
+			node := parquet.Optional(parquet.String())
+			if dictionary {
+				node = parquet.Optional(parquet.Encoded(parquet.String(), &parquet.RLEDictionary))
+			}
+			rows := make([]parquet.Row, 0, 5)
+			for _, text := range []string{" a", "a", " a,a", ""} {
+				rows = append(rows, parquet.Row{parquet.ByteArrayValue([]byte(text)).Level(0, 1, 0)})
+			}
+			rows = append(rows, parquet.Row{parquet.NullValue().Level(0, 0, 0)})
+			f, page := writeColumnAndGetPage(t, node, rows)
+			var h ParquetHandler
+			mapper := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), Enumvalues: " a,a"})
+			require.NotNil(t, mapper)
+			vec := vector.NewVec(types.T_uint64.ToType())
+			t.Cleanup(func() { vec.Free(proc.Mp()) })
+			require.NoError(t, mapper.mapping(page, proc, vec))
+			require.Equal(t, []uint64{1, 2, 3, 0, 0}, vector.MustFixedColWithTypeCheck[uint64](vec))
+			require.Equal(t, 1, vec.GetNulls().Count())
+			require.True(t, vec.GetNulls().Contains(4))
+
+			// Numeric string conversions retain their existing whitespace policy.
+			f, page = writeColumnAndGetPage(t, node, []parquet.Row{{parquet.ByteArrayValue([]byte(" 42 ")).Level(0, 1, 0)}})
+			mapper = h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint64)})
+			require.NotNil(t, mapper)
+			vec.Reset(types.T_uint64.ToType())
+			require.NoError(t, mapper.mapping(page, proc, vec))
+			require.Equal(t, []uint64{42}, vector.MustFixedColWithTypeCheck[uint64](vec))
+		})
+	}
+}
+
 // fakeFS is a minimal ETL-compatible FileService for testing fsReaderAt.
 type fakeFS struct {
 	b           []byte

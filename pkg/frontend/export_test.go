@@ -1788,62 +1788,114 @@ func TestParquetWriterYearColumnNormalizesDateVector(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestParquetWriterSplitSingleBatchPreservesRows(t *testing.T) {
+func TestExportParquetLargeSplitPreservesRows(t *testing.T) {
+	// Cross parquet-go's file row-group limit through the real export entry.
+	// SPLITSIZE must not turn each row into its own row group.
+	for _, rowCount := range []int{32767, 32768} {
+		t.Run(strconv.Itoa(rowCount), func(t *testing.T) {
+			var baseline []byte
+			for _, splitSize := range []uint64{0, 1 << 30} {
+				mp := mpool.MustNewZero()
+				mrs := &MysqlResultSet{}
+				col := new(MysqlColumn)
+				col.SetName("id")
+				col.SetColumnType(defines.MYSQL_TYPE_LONG)
+				mrs.AddColumn(col)
+				dir := t.TempDir()
+				ec := &ExportConfig{ctx: context.Background(), mrs: mrs, userConfig: &tree.ExportParam{
+					FilePath: filepath.Join(dir, "out_%d.parquet"), ExportFormat: "parquet", SplitSize: splitSize,
+				}}
+				execCtx := &ExecCtx{reqCtx: ec.ctx, ses: &backSession{feSessionImpl: feSessionImpl{pool: mp}}}
+				for start := 0; start < rowCount; start += 8192 {
+					end := min(start+8192, rowCount)
+					values := make([]int32, end-start)
+					for i := range values {
+						values[i] = int32(start + i)
+					}
+					bat := batch.NewWithSize(1)
+					bat.Vecs[0] = testutil.NewVector(len(values), types.T_int32.ToType(), mp, false, values)
+					bat.SetRowCount(len(values))
+					func() {
+						defer bat.Clean(mp)
+						require.NoError(t, ec.Write(execCtx, nil, bat))
+					}()
+				}
+				require.NoError(t, finalizeParquetExport(ec))
+				require.Zero(t, mp.CurrNB())
+				require.Equal(t, uint64(rowCount), ec.Rows)
+				files, err := filepath.Glob(filepath.Join(dir, "*.parquet"))
+				require.NoError(t, err)
+				require.Len(t, files, 1)
+				data, err := os.ReadFile(files[0])
+				require.NoError(t, err)
+				file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+				require.NoError(t, err)
+				require.Equal(t, int64(rowCount), file.NumRows())
+				require.Len(t, file.RowGroups(), 1)
+				rows, err := parquet.Read[struct {
+					ID int32 `parquet:"id,optional"`
+				}](bytes.NewReader(data), int64(len(data)))
+				require.NoError(t, err)
+				require.Len(t, rows, rowCount)
+				for i, row := range rows {
+					require.Equal(t, int32(i), row.ID)
+				}
+				if splitSize == 0 {
+					baseline = data
+				} else {
+					// The large target needs no intermediate row-group flushes:
+					// its storage overhead must match the unsplit export.
+					require.Equal(t, len(baseline), len(data))
+					t.Logf("rows=%d row_groups=%d bytes=%d unsplit_bytes=%d", rowCount, len(file.RowGroups()), len(data), len(baseline))
+				}
+			}
+		})
+	}
+}
+
+func TestExportParquetSplitSingleBatchPreservesRows(t *testing.T) {
 	mp := mpool.MustNewZero()
 	mrs := &MysqlResultSet{}
 	col := new(MysqlColumn)
 	col.SetName("payload")
 	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	mrs.AddColumn(col)
-
 	values := make([]string, 32)
 	for i := range values {
 		values[i] = strings.Repeat("x", 512) + strconv.Itoa(i)
 	}
-	vec := testutil.NewVector(len(values), types.T_varchar.ToType(), mp, false, values)
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vec
+	bat.Vecs[0] = testutil.NewVector(len(values), types.T_varchar.ToType(), mp, false, values)
 	bat.SetRowCount(len(values))
-	defer bat.Clean(mp)
-
-	const splitSize = uint64(1500)
-	var files [][]byte
-	writer, err := NewParquetWriter(context.Background(), mrs)
+	t.Cleanup(func() {
+		bat.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	dir := t.TempDir()
+	ec := &ExportConfig{ctx: context.Background(), mrs: mrs, userConfig: &tree.ExportParam{
+		FilePath: filepath.Join(dir, "out_%d.parquet"), ExportFormat: "parquet", SplitSize: 8 << 10,
+	}}
+	execCtx := &ExecCtx{reqCtx: ec.ctx, ses: &backSession{feSessionImpl: feSessionImpl{pool: mp}}}
+	require.NoError(t, ec.Write(execCtx, nil, bat))
+	require.NoError(t, finalizeParquetExport(ec))
+	require.Equal(t, uint64(len(values)), ec.Rows)
+	files, err := filepath.Glob(filepath.Join(dir, "*.parquet"))
 	require.NoError(t, err)
-	for row := 0; row < bat.RowCount(); row++ {
-		require.NoError(t, writer.writeBatchRange(bat, row, row+1, time.UTC))
-		require.NoError(t, writer.Flush())
-		if shouldSplitParquetFile(uint64(writer.Size()), splitSize) {
-			data, closeErr := writer.Close()
-			require.NoError(t, closeErr)
-			files = append(files, data)
-			writer, err = NewParquetWriter(context.Background(), mrs)
-			require.NoError(t, err)
+	require.Greater(t, len(files), 1)
+	var got []string
+	for _, name := range files {
+		data, err := os.ReadFile(name)
+		require.NoError(t, err)
+		rows, err := parquet.Read[struct {
+			Payload string `parquet:"payload,optional"`
+		}](bytes.NewReader(data), int64(len(data)))
+		require.NoError(t, err)
+		require.NotEmpty(t, rows) // No trailing empty split file.
+		for _, row := range rows {
+			got = append(got, row.Payload)
 		}
 	}
-	data, err := writer.Close()
-	require.NoError(t, err)
-	files = append(files, data)
-	require.Greater(t, len(files), 1)
-
-	totalRows := 0
-	for _, data := range files {
-		file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
-		require.NoError(t, err)
-		require.Greater(t, file.NumRows(), int64(0))
-		reader := parquet.NewGenericReader[struct {
-			Payload string `parquet:"payload,optional"`
-		}](bytes.NewReader(data))
-		rows := make([]struct {
-			Payload string `parquet:"payload,optional"`
-		}, file.NumRows())
-		n, readErr := reader.Read(rows)
-		require.ErrorIs(t, readErr, io.EOF)
-		totalRows += n
-		require.NoError(t, reader.Close())
-	}
-	require.Equal(t, len(values), totalRows)
-	require.Zero(t, mp.CurrNB())
+	require.ElementsMatch(t, values, got)
 }
 
 func Test_finalizeParquetExportAfterSplitDoesNotCreateTrailingFile(t *testing.T) {
