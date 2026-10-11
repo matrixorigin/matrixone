@@ -16,6 +16,8 @@ package idxcron
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -32,6 +34,7 @@ import (
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -511,7 +514,7 @@ func TestIndexUpdateTaskInfoSaveStatusError(t *testing.T) {
 	tableid := uint64(1)
 	dbname := "test"
 	tablename := "test_orig_tbl"
-	indexname := "ivf_idx"
+	indexname := "ivf'\\idx"
 
 	info := &IndexUpdateTaskInfo{
 		DbName:       dbname,
@@ -524,16 +527,73 @@ func TestIndexUpdateTaskInfoSaveStatusError(t *testing.T) {
 		LastUpdateAt: nil,
 	}
 
-	{
-		// runSavestatusSql
-		stub5 := gostub.Stub(&runSaveStatusSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-			return executor.Result{}, nil
+	info.Action = "action'\\quoted"
+	for _, tc := range []struct {
+		name      string
+		indexName string
+		updated   bool
+		err       error
+		status    string
+		message   string
+	}{
+		{"error", indexname, false, moerr.NewInternalErrorNoCtx("can't read C:\\index\nnext"), Status_Error, ""},
+		{"skipped", indexname, false, nil, Status_Skipped, "not ready'\\yet"},
+		{"updated", indexname, true, nil, Status_Ok, "reindex success"},
+		{"empty index name", "", false, nil, Status_Skipped, "invalid index name"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			info.IndexName = tc.indexName
+			stub := gostub.Stub(&runSaveStatusSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				stmt, err := mysql.ParseOne(context.Background(), sql, 0)
+				require.NoError(t, err, sql)
+				defer stmt.Free()
+				update := stmt.(*tree.Update)
+				var status IndexUpdateStatus
+				literal := update.Exprs[len(update.Exprs)-1].Expr.(*tree.NumVal).String()
+				require.NoError(t, json.Unmarshal([]byte(literal), &status))
+				message := tc.message
+				if tc.err != nil {
+					message = tc.err.Error()
+				}
+				require.Equal(t, tc.status, status.Status)
+				require.Equal(t, message, status.Msg)
+				predicates := make(map[string]string)
+				for expr := update.Where.Expr; ; {
+					condition := expr
+					if and, ok := expr.(*tree.AndExpr); ok {
+						condition = and.Right
+						expr = and.Left
+					} else {
+						expr = nil
+					}
+					comparison := condition.(*tree.ComparisonExpr)
+					require.Equal(t, tree.EQUAL, comparison.Op)
+					predicates[comparison.Left.(*tree.UnresolvedName).ColName()] = comparison.Right.(*tree.NumVal).String()
+					if expr == nil {
+						break
+					}
+				}
+				require.Equal(t, map[string]string{
+					"table_id": fmt.Sprint(info.TableId), "account_id": fmt.Sprint(info.AccountId),
+					"action": info.Action, "index_name": info.IndexName,
+				}, predicates)
+				if tc.updated {
+					require.Len(t, update.Exprs, 2)
+					require.Len(t, update.Exprs[0].Names, 1)
+					require.Equal(t, "last_update_at", update.Exprs[0].Names[0].ColName())
+					now := update.Exprs[0].Expr.(*tree.FuncExpr)
+					require.Equal(t, "now", now.Func.FunctionReference.(*tree.UnresolvedName).ColName())
+					require.Empty(t, now.Exprs)
+				} else {
+					require.Len(t, update.Exprs, 1, "error/skipped must preserve last_update_at")
+				}
+				require.Len(t, update.Exprs[len(update.Exprs)-1].Names, 1)
+				require.Equal(t, "status", update.Exprs[len(update.Exprs)-1].Names[0].ColName())
+				return executor.Result{}, nil
+			})
+			defer stub.Reset()
+			require.NoError(t, info.saveStatus(nil, tc.updated, tc.message, tc.err))
 		})
-		defer stub5.Reset()
-
-		err := info.saveStatus(nil, true, "reason", moerr.NewInternalErrorNoCtx("fake error"))
-		require.NoError(t, err)
-
 	}
 
 	{
@@ -616,4 +676,45 @@ func TestCmdSqlError(t *testing.T) {
 		require.Error(t, err)
 	}
 
+}
+
+func TestUnregisterUpdateByDbNameCompatibility(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), 7)
+	mp := mpool.MustNewZero()
+	for _, count := range []int64{-1, 0, 1} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			calls := 0
+			stub := gostub.Stub(&runCmdSql, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				calls++
+				if calls == 1 {
+					if count < 0 {
+						return executor.Result{}, nil
+					}
+					bat := batch.NewWithSize(1)
+					bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+					require.NoError(t, vector.AppendFixed(bat.Vecs[0], count, false, mp))
+					bat.SetRowCount(1)
+					return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
+				}
+				require.Zero(t, mp.CurrNB(), "count result must close before DELETE")
+				stmt, err := mysql.ParseOne(ctx, sql, 0)
+				require.NoError(t, err)
+				defer stmt.Free()
+				where := stmt.(*tree.Delete).Where.Expr.(*tree.AndExpr)
+				account, ok := where.Left.(*tree.ComparisonExpr).Right.(*tree.NumVal).Uint64()
+				require.True(t, ok)
+				require.Equal(t, uint64(7), account)
+				require.Equal(t, "db'\\name", where.Right.(*tree.ComparisonExpr).Right.(*tree.NumVal).String())
+				return executor.Result{}, nil
+			})
+			defer stub.Reset()
+			require.NoError(t, UnregisterUpdateByDbName(ctx, "cn", nil, "db'\\name"))
+			want := 1
+			if count > 0 {
+				want = 2
+			}
+			require.Equal(t, want, calls)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
 }

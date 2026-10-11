@@ -51,6 +51,73 @@ func TestGetTableScanner(t *testing.T) {
 	assert.NotNil(t, GetTableDetector("cnUUID"))
 }
 
+// Reset is serialized with embedded fixture lifetimes, including first use.
+func TestTableDetectorResetScanInterval(t *testing.T) {
+	previous := detector
+	detector = nil
+	once = sync.Once{}
+	stub := gostub.Stub(&getSqlExecutor, func(string) executor.SQLExecutor {
+		return &mock_executor.MockSQLExecutor{}
+	})
+	defer stub.Reset()
+	defer func() {
+		if detector != nil {
+			detector.Close()
+		}
+		detector = previous
+		once = sync.Once{}
+		if previous != nil {
+			once.Do(func() {})
+		}
+	}()
+
+	ResetTableDetectorForTest("private", time.Second)
+	first := detector
+	require.Same(t, first, GetTableDetector("private"), "first Get must preserve the reset instance")
+	require.Equal(t, time.Second, first.scanInterval)
+	for _, interval := range []time.Duration{0, -time.Second} {
+		ResetTableDetectorForTest("private", interval)
+		require.Equal(t, defaultTableScanInterval, GetTableDetector("private").scanInterval)
+	}
+	ResetTableDetectorForTest("next")
+	require.Equal(t, defaultTableScanInterval, GetTableDetector("next").scanInterval, "private cadence must not leak to the next fixture")
+}
+
+func TestTableDetectorPrivatePeriodicScan(t *testing.T) {
+	stub := gostub.Stub(&cdcScanTableInjected, func() (string, bool) { return "", false })
+	defer stub.Reset()
+	td := newTableDetector(&mock_executor.MockSQLExecutor{})
+	td.scanInterval = 10 * time.Millisecond
+	td.scanTableFn = func() error {
+		td.mu.Lock()
+		td.Mp = map[uint32]TblMap{1: {"db.tbl": {SourceDbName: "db", SourceTblName: "tbl"}}}
+		td.mu.Unlock()
+		return nil
+	}
+	defer func() {
+		td.Close()
+		waitUntil(t, func() bool {
+			td.mu.Lock()
+			defer td.mu.Unlock()
+			return !td.loopRunning.Load() && !td.handling
+		}, time.Second, "private detector did not stop")
+	}()
+	observed := make(chan map[uint32]TblMap, 1)
+	require.True(t, td.RegisterIfAbsent("periodic", 1, []string{"db"}, []string{"tbl"}, func(tables map[uint32]TblMap) error {
+		select {
+		case observed <- tables:
+		default:
+		}
+		return nil
+	}))
+	select {
+	case tables := <-observed:
+		require.Equal(t, "tbl", tables[1]["db.tbl"].SourceTblName)
+	case <-time.After(time.Second):
+		t.Fatal("periodic scan did not deliver the registered table without a manual scan")
+	}
+}
+
 func TestApplyTableDetectorOptions(t *testing.T) {
 	opts := applyTableDetectorOptions(
 		WithTableDetectorSlowThreshold(time.Millisecond),
