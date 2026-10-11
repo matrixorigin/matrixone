@@ -20,7 +20,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 func isPlanMySQLStringType(id int32) bool {
@@ -375,12 +374,8 @@ const (
 // execution contracts.
 // JSONScalarLiteralContracts requires MORPC v104 because older executors
 // decode JSON-typed Sval literals as VARCHAR rather than encoded JSON.
-// LowPrecisionFloatIntegerArguments requires LowPrecisionFloatIntegerArgumentsProtocolVersion
-// because older executors reject bf16/float16/float8/float4 sources of private CAST 5..8.
-// LowPrecisionFloatIntegerArgumentsProtocolVersion is the first MORPC protocol version whose
-// executors accept bf16/float16/float8/float4 sources of private CAST 5..8.
-const LowPrecisionFloatIntegerArgumentsProtocolVersion = defines.MORPCVersion110
-
+// LowPrecisionFloatIntegerArguments requires MORPC v110 because older executors reject
+// bf16/float16/float8/float4 sources of private CAST 5..8.
 type RemoteExpressionFeatures struct {
 	LowPrecisionFloatIntegerArguments bool
 	JSONScalarLiteralContracts        bool

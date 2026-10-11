@@ -13,7 +13,7 @@ t  ¦  CREATE TABLE `t` (
 )
 desc t;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 a  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  VECF4(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 c  ¦  VECF32(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
