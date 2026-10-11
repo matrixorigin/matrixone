@@ -20,5 +20,26 @@ keep
 remove files from stage if exists 'stage://remove_stage_files_stage/remove_stage_files/no_match_*.txt';
 remove files from stage 'stage://remove_stage_files_stage/remove_stage_files/no_match_*.txt';
 file stage://remove_stage_files_stage/remove_stage_files/no_match_*.txt is not found
+select save_file(cast('stage://remove_stage_files_stage/remove_stage_files/warm.txt' as datalink), 'warm');
+➤ save_file(cast(stage://remove_stage_files_stage/remove_stage_files/warm.txt as datalink), warm)[-5,64,0]  𝄀
+4
+select save_file(cast('stage://remove_stage_files_stage/remove_stage_files/protected.txt' as datalink), 'protected');
+➤ save_file(cast(stage://remove_stage_files_stage/remove_stage_files/protected.txt as datalink), protected)[-5,64,0]  𝄀
+9
+remove files from stage 'stage://remove_stage_files_stage/remove_stage_files/warm.txt';
+alter stage remove_stage_files_stage set enable = false;
+remove files from stage 'stage://remove_stage_files_stage/remove_stage_files/protected.txt';
+invalid configuration: stage remove_stage_files_stage is disabled
+remove files from stage if exists 'stage://remove_stage_files_stage/remove_stage_files/protected.txt';
+invalid configuration: stage remove_stage_files_stage is disabled
+select load_file(cast('file://$resources/into_outfile/remove_stage_files/warm.txt' as datalink));
+file warm.txt is not found
+select load_file(cast('file://$resources/into_outfile/remove_stage_files/protected.txt' as datalink));
+➤ load_file(cast(file://$resources/into_outfile/remove_stage_files/protected.txt as datalink))[12,0,0]  𝄀
+protected
+alter stage remove_stage_files_stage set enable = true;
+remove files from stage 'stage://remove_stage_files_stage/remove_stage_files/protected.txt';
+select load_file(cast('stage://remove_stage_files_stage/remove_stage_files/protected.txt' as datalink));
+file protected.txt is not found
 remove files from stage if exists 'stage://remove_stage_files_stage/remove_stage_files/remove_keep.log';
 drop stage remove_stage_files_stage;

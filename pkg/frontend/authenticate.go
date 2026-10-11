@@ -4036,9 +4036,6 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 			}
 		}
 	}
-	if ses.proc != nil {
-		ses.proc.GetStageCache().Clear()
-	}
 	return err
 }
 
