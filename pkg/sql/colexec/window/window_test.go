@@ -2427,11 +2427,10 @@ func TestWindowReuseWithEmptyInput(t *testing.T) {
 			require.Positive(t, result.Batch.RowCount())
 			got = append(got, vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[1])...)
 		}
-		var want []uint64
-		for i := range values {
-			want = append(want, uint64(i+1))
+		require.Len(t, got, len(values))
+		for i, rank := range got {
+			require.Equal(t, uint64(i+1), rank)
 		}
-		require.Equal(t, want, got)
 	}
 }
 
