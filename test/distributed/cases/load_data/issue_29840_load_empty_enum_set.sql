@@ -2,6 +2,8 @@
 -- not NULL. LOAD must read back exactly what native INSERT stores, in every
 -- applicable LOAD mode; explicit NULL still loads as NULL.
 -- SET('0','a') makes a zero-filled empty SET visible as member '0'.
+set @saved_sql_mode = @@sql_mode;
+set sql_mode = 'STRICT_TRANS_TABLES';
 drop table if exists issue_29840_ins;
 drop table if exists issue_29840_csv;
 drop table if exists issue_29840_csv_par;
@@ -20,7 +22,7 @@ select id, concat('[',e,']') e, e+0 e_idx, e is null e_null, concat('[',s,']') s
 set sql_mode = '';
 create table issue_29840_csv_local like issue_29840_ins;
 load data local infile '$resources/load_data/issue_29840_enum_set.csv' into table issue_29840_csv_local fields terminated by ',' optionally enclosed by '"';
-set sql_mode = default;
+set sql_mode = 'STRICT_TRANS_TABLES';
 select id, concat('[',e,']') e, e+0 e_idx, e is null e_null, concat('[',s,']') s, s+0 s_bits, s is null s_null from issue_29840_csv_local order by id;
 create table issue_29840_jl like issue_29840_ins;
 load data infile {'filepath'='$resources/load_data/issue_29840_enum_set.jl','format'='jsonline','jsondata'='object'} into table issue_29840_jl;
@@ -34,9 +36,14 @@ union all select 'csv_par', count(*) from issue_29840_ins i join issue_29840_csv
 union all select 'csv_local', count(*) from issue_29840_ins i join issue_29840_csv_local x using(id) where not (i.e+0 <=> x.e+0 and i.s+0 <=> x.s+0)
 union all select 'jl', count(*) from issue_29840_ins i join issue_29840_jl x using(id) where not (i.e+0 <=> x.e+0 and i.s+0 <=> x.s+0)
 union all select 'jl_par', count(*) from issue_29840_ins i join issue_29840_jl_par x using(id) where not (i.e+0 <=> x.e+0 and i.s+0 <=> x.s+0)) d order by t;
+-- Explicit NULLIF mappings override otherwise-valid empty ENUM/SET values.
+truncate table issue_29840_csv;
+load data infile '$resources/load_data/issue_29840_enum_set.csv' into table issue_29840_csv fields terminated by ',' optionally enclosed by '"' set e=NULLIF(e,''), s=NULLIF(s,'');
+select id, e+0 e_idx, e is null e_null, s+0 s_bits, s is null s_null from issue_29840_csv order by id;
 drop table issue_29840_ins;
 drop table issue_29840_csv;
 drop table issue_29840_csv_par;
 drop table issue_29840_csv_local;
 drop table issue_29840_jl;
 drop table issue_29840_jl_par;
+set sql_mode = @saved_sql_mode;

@@ -47,7 +47,6 @@ func enumSetLoadParam(typ plan.Type, mode string) *ExternalParam {
 // a declared whitespace ENUM member must not be trimmed into another member.
 func TestGetColDataKeepsEmptyEnumAndSetDistinctFromNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	defer proc.Free()
 
 	enumTyp := plan.Type{Id: int32(types.T_enum), Enumvalues: " ,red,"}
 	setTyp := plan.Type{Id: int32(types.T_uint64), Enumvalues: "0,a"}
@@ -70,36 +69,46 @@ func TestGetColDataKeepsEmptyEnumAndSetDistinctFromNull(t *testing.T) {
 			if mode == "parallel" {
 				vecTyp = types.T_varchar.ToType()
 			}
-			for _, field := range []csvparser.Field{{Val: tc.val}, {IsNull: true}} {
-				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(vecTyp)
-				require.NoError(t, getColData(bat, []csvparser.Field{field}, 0, param, proc.Mp(), param.Attrs[0], proc))
-				vec := bat.Vecs[0]
-				name := mode + "/" + tc.typ.Enumvalues + "/" + tc.val
-				if field.IsNull {
-					require.True(t, vec.GetNulls().Contains(0), name)
-				} else {
-					require.False(t, vec.GetNulls().Contains(0), name)
-					switch {
-					case mode == "parallel":
-						// the text is cast by the type parser later; it must
-						// reach it unchanged except for non-member trimming
-						got := vec.GetStringAt(0)
-						_, isSet := tc.want.(uint64)
-						if isSet {
-							require.Equal(t, strings.TrimSpace(tc.val), got, name)
-						} else if tc.val == " red " {
-							require.Equal(t, "red", got, name)
-						} else {
-							require.Equal(t, tc.val, got, name)
-						}
-					case tc.typ.Id == int32(types.T_enum):
-						require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[types.Enum](vec)[0], name)
-					default:
-						require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[uint64](vec)[0], name)
+			for _, input := range []struct {
+				field  csvparser.Field
+				mapped bool
+			}{{field: csvparser.Field{Val: tc.val}}, {field: csvparser.Field{IsNull: true}}, {field: csvparser.Field{Val: tc.val}, mapped: true}} {
+				func() {
+					field := input.field
+					param.Extern.NullMap = nil
+					if input.mapped {
+						param.Extern.NullMap = map[string][]string{param.Attrs[0].ColName: {tc.val, strings.TrimSpace(tc.val)}}
 					}
-				}
-				bat.Clean(proc.Mp())
+					bat := batch.NewWithSize(1)
+					bat.Vecs[0] = vector.NewVec(vecTyp)
+					defer bat.Clean(proc.Mp())
+					require.NoError(t, getColData(bat, []csvparser.Field{field}, 0, param, proc.Mp(), param.Attrs[0], proc))
+					vec := bat.Vecs[0]
+					name := mode + "/" + tc.typ.Enumvalues + "/" + tc.val
+					if field.IsNull || input.mapped {
+						require.True(t, vec.GetNulls().Contains(0), name)
+					} else {
+						require.False(t, vec.GetNulls().Contains(0), name)
+						switch {
+						case mode == "parallel":
+							// the text is cast by the type parser later; it must
+							// reach it unchanged except for non-member trimming
+							got := vec.GetStringAt(0)
+							_, isSet := tc.want.(uint64)
+							if isSet {
+								require.Equal(t, strings.TrimSpace(tc.val), got, name)
+							} else if tc.val == " red " {
+								require.Equal(t, "red", got, name)
+							} else {
+								require.Equal(t, tc.val, got, name)
+							}
+						case tc.typ.Id == int32(types.T_enum):
+							require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[types.Enum](vec)[0], name)
+						default:
+							require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[uint64](vec)[0], name)
+						}
+					}
+				}()
 			}
 		}
 	}
