@@ -98,7 +98,7 @@ explain format=json select min(v) from fill_values interval(ts, 5, second) fill(
 drop table fill_values;
 
 -- Serialized IN predicates retain bytes even when runtime provenance keeps scalar lists.
-create table serial_values(v varchar(65535));
+create table serial_values(v varchar(64));
 insert into serial_values values (serial(cast(99999 as decimal(38,0))));
 -- @regex("(?s)serialized.*0x458000000000000000000000000001869F",true)
 explain format=json select v from serial_values where v in (serial(cast(99999 as decimal(38,0))),serial(cast(100000 as decimal(38,0))));

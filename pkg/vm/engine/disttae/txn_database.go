@@ -182,6 +182,8 @@ func (db *txnDatabase) RelationExists(ctx context.Context, name string, proc any
 }
 
 func (db *txnDatabase) Delete(ctx context.Context, name string) error {
+	db.getTxn().beginCatalogMutation()
+	defer db.getTxn().endCatalogMutation()
 	_, err := db.deleteTable(ctx, name, false, false)
 	return err
 }
@@ -363,6 +365,8 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 }
 
 func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {
+	db.getTxn().beginCatalogMutation()
+	defer db.getTxn().endCatalogMutation()
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
 	}
@@ -435,6 +439,7 @@ func (db *txnDatabase) createWithID(
 		tbl.db = db
 		tbl.tableName = name
 		tbl.tableId = tableId
+		tbl.logicalId = logicalId
 		tbl.accountId = accountId
 		tbl.extraInfo = extra
 		if tbl.extraInfo == nil {
@@ -519,7 +524,6 @@ func (db *txnDatabase) createWithID(
 	var packer *types.Packer
 	put := db.getEng().packerPool.Get(&packer)
 	defer put.Put()
-	tbl.logicalId = logicalId
 	var compositePk []byte // Declared here to be accessible in both block 3 and block 5
 	{                      // 3. Write create table batch, update tbl.rowiod
 

@@ -5698,6 +5698,11 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+	leaveBinding, bindErr := enterViewSchemaBinding(builder.GetContext())
+	if bindErr != nil {
+		return 0, bindErr
+	}
+	defer leaveBinding()
 	ctx.queryBlockOwner = ctx
 	if ctx.bindingRecurStmt() && ctx.cteState.recursiveRefQueryBlock == nil {
 		ctx.cteState.recursiveRefQueryBlock = ctx
@@ -11848,6 +11853,16 @@ func (builder *QueryBuilder) bindView(
 	schema, table string,
 	metadataSubscription *SubscriptionMetadata,
 ) (nodeID int32, err error) {
+	if state, _ := builder.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil {
+		leave, enterErr := state.enter(obj, tableDef, snapshot)
+		if enterErr != nil {
+			return 0, enterErr
+		}
+		defer leave()
+	}
+
+	var memoFrame *viewSchemaMemoFrame
+
 	viewDefString := tableDef.ViewSql.View
 	if viewDefString == "" {
 		return 0, nil
@@ -11901,6 +11916,10 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return 0, err
 	}
+	if builder.GetContext().Value(viewSchemaContextKey{}) != nil && len(originStmts) != 1 {
+		return 0, moerr.NewParseError(builder.GetContext(), "persisted View must contain one statement")
+	}
+
 	viewStmt, ok := originStmts[0].(*tree.CreateView)
 
 	// No createview stmt, check alterview stmt.
@@ -11913,6 +11932,28 @@ func (builder *QueryBuilder) bindView(
 		viewStmt.Name = alterstmt.Name
 		viewStmt.ColNames = alterstmt.ColNames
 		viewStmt.AsSource = alterstmt.AsSource
+	}
+
+	if state, _ := builder.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil {
+		if err = rejectViewSchemaUnstableStar(state.request, viewStmt.AsSource); err != nil {
+			return 0, err
+		}
+		previousLower := state.lower
+		state.lower = viewLowerCaseTableNames
+		defer func() { state.lower = previousLower }()
+		memoFrame = state.beginMemo(obj, tableDef, snapshot, viewLowerCaseTableNames)
+		if viewData.RequiredProtocolVersion != nil {
+			memoFrame.requiredProtocol = *viewData.RequiredProtocolVersion
+			state.observeProtocol(*viewData.RequiredProtocolVersion)
+		}
+		state.memoEligible = state.memoEligible && transparentViewProjection(viewStmt.AsSource) && obj.PubInfo == nil && builder.compCtx.GetQueryingSubscription() == nil && metadataSubscription == nil
+		if cached, hit, loadErr := memoFrame.load(builder, viewCtx, obj, tableDef, snapshot, table); loadErr != nil {
+			return 0, loadErr
+		} else if hit {
+			return cached, nil
+		}
+		state.memoFrames = append(state.memoFrames, memoFrame)
+		defer func() { memoFrame.finish(viewCtx, err) }()
 	}
 
 	isSubscriptionStatistics := isSubscriptionStatisticsView(schema, table, metadataSubscription)
@@ -11932,14 +11973,21 @@ func (builder *QueryBuilder) bindView(
 
 	defaultDatabase := viewData.DefaultDatabase
 	if obj.PubInfo != nil {
-		defaultDatabase = obj.SubscriptionName
 		subscription := builder.compCtx.GetQueryingSubscription()
-		if subscription == nil || subscription.AccountId != obj.PubInfo.TenantId {
-			subscription = &SubscriptionMeta{
-				AccountId: obj.PubInfo.TenantId,
-				DbName:    viewData.DefaultDatabase,
-				SubName:   obj.SubscriptionName,
-				Tables:    pubsub.TableAll,
+		if builder.GetContext().Value(viewSchemaContextKey{}) != nil {
+			subscription, defaultDatabase, err = viewSchemaSubscriptionContext(builder.GetContext(), obj, subscription, defaultDatabase)
+			if err != nil {
+				return 0, err
+			}
+		} else {
+			defaultDatabase = obj.SubscriptionName
+			if subscription == nil || subscription.AccountId != obj.PubInfo.TenantId {
+				subscription = &SubscriptionMeta{
+					AccountId: obj.PubInfo.TenantId,
+					DbName:    viewData.DefaultDatabase,
+					SubName:   obj.SubscriptionName,
+					Tables:    pubsub.TableAll,
+				}
 			}
 		}
 		previousSubscription := builder.compCtx.GetQueryingSubscription()
@@ -12348,6 +12396,11 @@ func transparentDerivedCorrelationTargetsNearestAncestor(ctx *BindContext, corr 
 }
 
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, tableInput *tableFunctionInput) (nodeID int32, err error) {
+	leaveBinding, bindErr := enterViewSchemaBinding(builder.GetContext())
+	if bindErr != nil {
+		return 0, bindErr
+	}
+	defer leaveBinding()
 	switch tbl := stmt.(type) {
 	case *tree.Select:
 		subCtx := NewBindContext(builder, ctx)
@@ -12443,6 +12496,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				break
 			}
 			schema = ctx.defaultDatabase
+		}
+
+		// A persisted no-USE View has a known empty default database. Do not
+		// resolve its unqualified sources in the enclosing View/caller's
+		// database. Qualified sources and CTEs have already selected a scope.
+		if schema == "" && builder.GetContext().Value(viewSchemaContextKey{}) != nil {
+			return 0, moerr.NewNoDB(builder.GetContext())
 		}
 
 		if ctx.remapOption != nil {
@@ -13886,7 +13946,7 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 	}
 
 	var tenant *SnapshotTenant
-	if bgSnapshot := builder.compCtx.GetSnapshot(); IsSnapshotValid(bgSnapshot) {
+	if bgSnapshot := builder.compCtx.GetSnapshot(); IsSnapshotValid(bgSnapshot) && bgSnapshot.Tenant != nil {
 		tenant = &SnapshotTenant{
 			TenantName: bgSnapshot.Tenant.TenantName,
 			TenantID:   bgSnapshot.Tenant.TenantID,
@@ -13955,6 +14015,10 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 				return
 			}
 			if bgSnapshot := builder.compCtx.GetSnapshot(); builder.isRestoreByTs {
+				if bgSnapshot == nil || bgSnapshot.Tenant == nil {
+					err = moerr.NewInvalidInput(builder.GetContext(), "restore timestamp requires a tenant snapshot")
+					return
+				}
 				tenant = &SnapshotTenant{
 					TenantName: bgSnapshot.Tenant.TenantName,
 					TenantID:   bgSnapshot.Tenant.TenantID,

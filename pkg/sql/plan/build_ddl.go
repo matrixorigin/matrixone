@@ -223,15 +223,24 @@ func validateViewDefinitionPlugins(ctx CompilerContext, query *plan.Query) error
 	return nil
 }
 
-func genViewTableDef(
+// viewColumnInference is the common output of View authoring and description.
+// It owns its columns; definition publication is deliberately a separate step.
+type viewColumnInference struct {
+	columns             []*plan.ColDef
+	provenance          []OutputColumnProvenance
+	dependencies        []ViewDependency
+	requiredProtocol    int64
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
+}
+
+func inferViewColumns(
 	ctx CompilerContext,
 	stmt *tree.Select,
 	colNames tree.IdentifierList,
 	viewDatabase string,
 	viewName string,
 	forAuthoring bool,
-) (*plan.TableDef, error) {
-	var tableDef plan.TableDef
+) (*viewColumnInference, error) {
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
 	dependencyCapture.metadataBudget = !forAuthoring
 	ctx = dependencyCapture
@@ -364,7 +373,28 @@ func genViewTableDef(
 			Default:    defaultDef,
 		}
 	}
-	tableDef.Cols = cols
+	return &viewColumnInference{
+		columns:             cols,
+		provenance:          outputColumnProvenance,
+		dependencies:        dependencyCapture.dependencies(),
+		requiredProtocol:    viewRequiredProtocol,
+		expandedSelectLists: expandedSelectLists,
+	}, nil
+}
+
+func genViewTableDef(
+	ctx CompilerContext,
+	stmt *tree.Select,
+	colNames tree.IdentifierList,
+	viewDatabase string,
+	viewName string,
+	forAuthoring bool,
+) (*plan.TableDef, error) {
+	inferred, err := inferViewColumns(ctx, stmt, colNames, viewDatabase, viewName, forAuthoring)
+	if err != nil {
+		return nil, err
+	}
+	tableDef := plan.TableDef{Cols: inferred.columns}
 
 	// Check alter and change the viewsql.
 	rootSQL := ctx.GetRootSql()
@@ -380,15 +410,15 @@ func genViewTableDef(
 		}
 	}
 	persistedCreateSQL := rootSQL
-	if stableViewSQL, rewritten := stableViewSQLWithExpandedStars(ctx, stmt, viewSql, expandedSelectLists); rewritten {
+	if stableViewSQL, rewritten := stableViewSQLWithExpandedStars(ctx, stmt, viewSql, inferred.expandedSelectLists); rewritten {
 		viewSql = stableViewSQL
 		persistedCreateSQL = stableViewSQL
 	}
 
 	lowerCaseTableNames := ctx.GetLowerCaseTableNames()
 	var persistedRequiredProtocol *int64
-	if viewRequiredProtocol > 0 {
-		persistedRequiredProtocol = &viewRequiredProtocol
+	if inferred.requiredProtocol > 0 {
+		persistedRequiredProtocol = &inferred.requiredProtocol
 	}
 	viewData, err := json.Marshal(ViewData{
 		Stmt:                    viewSql,
@@ -396,7 +426,7 @@ func genViewTableDef(
 		SQLMode:                 parserSQLModeFromContext(ctx),
 		SecurityType:            getViewSecurityTypeFromContext(ctx),
 		LowerCaseTableNames:     &lowerCaseTableNames,
-		Dependencies:            dependencyCapture.dependencies(),
+		Dependencies:            inferred.dependencies,
 		RequiredProtocolVersion: persistedRequiredProtocol,
 	})
 	if err != nil {
@@ -3354,12 +3384,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	var isGeneratedCol []bool
 	for _, item := range stmt.Defs {
 		if def, ok := item.(*tree.ColumnTableDef); ok {
-			cType, err := getTypeFromAst(ctx.GetContext(), def.Type)
+			cType, err := getColumnTypeFromAst(ctx.GetContext(), def, tableCharset, replay)
 			if err != nil {
-				return err
-			}
-			cType.Charset = uint32(types.CharsetType(types.T(cType.Id)))
-			if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &cType, tableCharset, def.Attributes); err != nil {
 				return err
 			}
 			isGen := false
@@ -3385,12 +3411,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
-			colType, err := getTypeFromAst(ctx.GetContext(), def.Type)
+			colType, err := getColumnTypeFromAst(ctx.GetContext(), def, tableCharset, replay)
 			if err != nil {
-				return err
-			}
-			colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
-			if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableCharset, def.Attributes); err != nil {
 				return err
 			}
 			firstLegacyTimestamp := types.T(colType.Id) == types.T_timestamp && !legacyTimestampFirstSeen

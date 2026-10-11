@@ -104,7 +104,8 @@ select sum(i) from t;
 sum(i)
 3
 select sum(cast(i as char)) from t;
-invalid argument aggregate function sum, bad value [VARCHAR]
+➤ sum(cast(i as varchar))[8,53,31]  𝄀
+3.0
 select sum(i<>0) from t;
 sum(i != 0)
 2

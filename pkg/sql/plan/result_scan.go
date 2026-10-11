@@ -28,6 +28,9 @@ import (
 )
 
 func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
+	if len(tbl.Func.Exprs) == 0 {
+		return 0, moerr.NewInvalidArg(builder.GetContext(), "result_scan", "missing query id")
+	}
 	var err error
 	val, err := builder.compCtx.ResolveVariable("save_query_result", true, false)
 	if err == nil {
