@@ -92,6 +92,7 @@ func TestWindowScalarSubqueryInputs(t *testing.T) {
 			{"count empty input", "select id,v,sum((select count(*) from src s where s.id=99)) over(partition by id) from src order by id,v", []string{"1:10:0", "1:20:0", "2:30:0"}},
 			{"empty scalar", "select id,v,rank() over(partition by id order by (select v from src where id=99)) from src order by id,v", []string{"1:10:1", "1:20:1", "2:30:1"}},
 			{"multiple windows and range peers", "select id,v,rank() over(partition by id order by (select 1)),dense_rank() over(partition by id order by null),sum(v) over(partition by id order by (select null)) from src order by id,v", []string{"1:10:1:1:30", "1:20:1:1:30", "2:30:1:1:30"}},
+			{"multiple table-backed producers", "select id,v,rd,total from (select id,v,row_number() over(partition by id order by (select max(s.v) from src s where s.v=src.v) desc) rd,sum((select s.v from src s where s.v=src.v)) over(partition by id) total from src) w where rd=1 order by id", []string{"1:20:1:30", "2:30:1:30"}},
 			{"rows frame", "select id,v,sum(v) over(partition by id order by (select src.v) rows between 1 preceding and current row) from src order by id,v", []string{"1:10:10", "1:20:30", "2:30:30"}},
 			{"secondary null preserves keys", "select id,v,rank() over(order by id,null) from src order by id,v", []string{"1:10:1", "1:20:1", "2:30:3"}},
 			{"null partition", "select id,v,row_number() over(partition by null order by v) from src order by v", []string{"1:10:1", "1:20:2", "2:30:3"}},
@@ -122,13 +123,14 @@ func TestWindowScalarSubqueryInputs(t *testing.T) {
 			})
 		}
 		// Prepared reuse keeps the producer's values per execution, not per plan.
-		stmt, err := db.PrepareContext(ctx, "select count(*) from (select row_number() over(order by (select 1)) rn from src where id>?) w")
+		stmt, err := db.PrepareContext(ctx, "select count(*),coalesce(sum(rn),0) from (select row_number() over(order by (select 1)) rn from src where id>?) w")
 		require.NoError(t, err)
 		defer stmt.Close()
-		for _, tc := range []struct{ min, want int }{{0, 3}, {1, 1}, {2, 0}, {0, 3}} {
-			var n int
-			require.NoError(t, stmt.QueryRowContext(ctx, tc.min).Scan(&n))
-			require.Equal(t, tc.want, n)
+		for _, tc := range []struct{ min, count, sum int }{{0, 3, 6}, {1, 1, 1}, {2, 0, 0}, {0, 3, 6}} {
+			var n, sum int
+			require.NoError(t, stmt.QueryRowContext(ctx, tc.min).Scan(&n, &sum))
+			require.Equal(t, tc.count, n)
+			require.Equal(t, tc.sum, sum)
 		}
 		// One row beyond the standard input batch boundary; no volume workload.
 		exec("create table batches(id int)")
