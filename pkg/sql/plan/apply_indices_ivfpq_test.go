@@ -631,3 +631,40 @@ func TestApplyIndicesForSortUsingIvfpq_Success_WithFiltersOverFetch(t *testing.T
 	_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti, nil)
 	require.NoError(t, err)
 }
+
+// Stored procedures / Starlark mo.sql plan through a background session that
+// returns nil for variables it does not carry; IVFPQ and CAGRA must fall back
+// to defaults instead of panicking on .(int64) (follow-up of #29147).
+func TestPrepareIvfpqAndCagraIndexContext_NilVariablesUseDefaults(t *testing.T) {
+	mock := &customMockCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
+		resolveVarFunc: func(string, bool, bool) (interface{}, error) {
+			return nil, nil
+		},
+	}
+	b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
+
+	var err error
+	var pq *ivfpqIndexContext
+	algo := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": "100", "m": "8"}`
+	require.NotPanics(t, func() {
+		pq, err = b.prepareIvfpqIndexContext(vectorProviderVecCtx(vectorProviderScanNode()), ivfpqMTI(algo))
+	})
+	require.NoError(t, err)
+	require.NotNil(t, pq)
+	assert.Equal(t, int64(0), pq.nThread)
+	assert.Equal(t, int64(0), pq.batchWindow)
+	assert.Equal(t, int64(0), pq.gpuMultiSim)
+	assert.Equal(t, int64(20), pq.nProbe)
+
+	var cg *cagraIndexContext
+	algo = `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "m": 32}`
+	require.NotPanics(t, func() {
+		cg, err = b.prepareCagraIndexContext(vectorProviderVecCtx(vectorProviderScanNode()), cagraMTI(algo))
+	})
+	require.NoError(t, err)
+	require.NotNil(t, cg)
+	assert.Equal(t, int64(0), cg.nThread)
+	assert.Equal(t, int64(0), cg.batchWindow)
+	assert.Equal(t, int64(0), cg.gpuMultiSim)
+}
