@@ -172,3 +172,45 @@ def test_enum_set_show_create_replay(mysql_engine, connection_params):
         with engine.begin() as conn:
             for name in (clone, source):
                 conn.exec_driver_sql(f'DROP TABLE IF EXISTS `{name}`')
+
+
+@pytest.mark.online
+def test_empty_enum_metadata_replay(mysql_engine, connection_params):
+    engine = mysql_engine
+    database = connection_params[4]
+    source = 'empty_enum_' + uuid.uuid4().hex
+    clone, view = source + '_clone', source + '_view'
+    try:
+        with engine.begin() as conn:
+            conn.exec_driver_sql(f"CREATE TABLE `{source}` (id INT PRIMARY KEY, e ENUM(''))")
+            conn.exec_driver_sql(f'CREATE VIEW `{view}` AS SELECT * FROM `{source}`')
+            ddl = conn.exec_driver_sql(f'SHOW CREATE TABLE `{source}`').one()[1]
+            assert "`e` enum('')" in ddl
+            conn.exec_driver_sql(ddl.replace(f'CREATE TABLE `{source}`', f'CREATE TABLE `{clone}`', 1))
+            for name in (source, clone, view):
+                for statement in ('SHOW COLUMNS FROM', 'SHOW FULL COLUMNS FROM', 'DESCRIBE'):
+                    columns = conn.exec_driver_sql(f'{statement} `{name}`').all()
+                    assert next(row[1] for row in columns if row[0] == 'e') == "enum('')"
+                metadata = conn.exec_driver_sql(
+                    'SELECT COLUMN_TYPE FROM information_schema.COLUMNS '
+                    "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s AND COLUMN_NAME='e'",
+                    (database, name),
+                ).scalar_one()
+                assert metadata == "enum('')"
+                native = conn.exec_driver_sql(
+                    'SELECT mo_show_visible_bin(atttyp,2),attr_enum FROM mo_catalog.mo_columns '
+                    "WHERE att_database=%s AND att_relname=%s AND attname='e'",
+                    (database, name),
+                ).one()
+                assert native == ('ENUM', '')
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always', sa.exc.SAWarning)
+            for name in (source, clone, view):
+                table = sa.Table(name, sa.MetaData(), autoload_with=engine)
+                assert table.c.e.type.enums == ['']
+        assert not [str(w.message) for w in caught if issubclass(w.category, sa.exc.SAWarning)]
+    finally:
+        with engine.begin() as conn:
+            conn.exec_driver_sql(f'DROP VIEW IF EXISTS `{view}`')
+            for name in (clone, source):
+                conn.exec_driver_sql(f'DROP TABLE IF EXISTS `{name}`')

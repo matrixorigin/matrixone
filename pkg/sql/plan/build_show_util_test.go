@@ -1772,7 +1772,7 @@ func TestConstructCreateTableSQLBooleanRoundTrip(t *testing.T) {
 		id int primary key, flag bool default null,
 		enabled boolean not null default true, disabled bool default false,
 		n int unsigned, amount decimal(10,2), integer_flag tinyint(1),
-        enum_flag enum('UP','Down','O''Brien','Back\\slash','Back\\''quote'), set_flag set('UP','Down','O''Brien','Back\\slash','Back\\''quote'))`, 1)
+        empty_enum enum(''), enum_flag enum('UP','Down','O''Brien','Back\\slash','Back\\''quote'), set_flag set('UP','Down','O''Brien','Back\\slash','Back\\''quote'))`, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
 	p, err := BuildPlan(ctx, stmt, false)
@@ -1782,6 +1782,7 @@ func TestConstructCreateTableSQLBooleanRoundTrip(t *testing.T) {
 		sql, _, err := ConstructCreateTableSQL(compilerCtx, original, nil, false, nil)
 		require.NoError(t, err)
 		require.Contains(t, sql, "`flag` boolean DEFAULT NULL")
+		require.Contains(t, sql, "`empty_enum` enum('')")
 		parsed, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		func() {
@@ -1789,7 +1790,7 @@ func TestConstructCreateTableSQLBooleanRoundTrip(t *testing.T) {
 			replayed, err := BuildPlan(ctx, parsed, false)
 			require.NoError(t, err)
 			cols := replayed.GetDdl().GetCreateTable().GetTableDef().Cols
-			for _, name := range []string{"flag", "enabled", "disabled", "n", "amount", "integer_flag", "enum_flag", "set_flag"} {
+			for _, name := range []string{"flag", "enabled", "disabled", "n", "amount", "integer_flag", "empty_enum", "enum_flag", "set_flag"} {
 				before, after := FindColumn(original.Cols, name), FindColumn(cols, name)
 				require.NotNil(t, after, name)
 				require.Equal(t, before.Typ, after.Typ, name)

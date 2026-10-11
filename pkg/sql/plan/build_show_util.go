@@ -1235,7 +1235,7 @@ func FormatColType(colType plan.Type) string {
 	if arrayType := arrayPlanTypeString(&colType); arrayType != "" {
 		return strings.ToUpper(arrayType[:len("array")]) + arrayType[len("array"):]
 	}
-	if isEnumOrSetPlanType(&colType) {
+	if types.T(colType.Id) == types.T_enum || isSetPlanType(&colType) {
 		name := "ENUM"
 		if isSetPlanType(&colType) {
 			name = "SET"

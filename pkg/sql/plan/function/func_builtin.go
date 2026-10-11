@@ -619,7 +619,11 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 				return nil, err
 			}
 			var ret string
-			if formatted, ok := types.FormatSQLColumnType(*typ); ok {
+			// Public metadata queries use this path for ENUM with an empty
+			// attr_enum, which represents the single empty-string member.
+			if typ.Oid == types.T_enum {
+				ret = "enum('')"
+			} else if formatted, ok := types.FormatSQLColumnType(*typ); ok {
 				ret = strings.ToLower(formatted)
 			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
 				ret = geometryShowColumnType(typ)
