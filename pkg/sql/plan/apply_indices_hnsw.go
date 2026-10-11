@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -113,7 +114,7 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 	pkPos := vecCtx.scanNode.TableDef.Name2ColIndex[vecCtx.scanNode.TableDef.Pkey.PkeyColName]
 	pkType := vecCtx.scanNode.TableDef.Cols[pkPos].Typ
 
-	nThread, err := builder.compCtx.ResolveVariable("hnsw_threads_search", true, false)
+	nThread, err := builder.resolveInt64Variable("hnsw_threads_search", 0)
 	if err != nil {
 		return nil, err
 	}
@@ -128,8 +129,28 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 		pkPos:        pkPos,
 		pkType:       pkType,
 		params:       idxDef.IndexAlgoParams,
-		nThread:      nThread.(int64),
+		nThread:      nThread,
 	}, nil
+}
+
+// resolveInt64Variable reads an int64 system variable. Some execution
+// contexts (stored procedures, Starlark mo.sql) resolve variables through a
+// background session that can return nil for a variable it does not carry,
+// so a nil value falls back to the variable's default instead of panicking
+// on a type assertion.
+func (builder *QueryBuilder) resolveInt64Variable(name string, def int64) (int64, error) {
+	value, err := builder.compCtx.ResolveVariable(name, true, false)
+	if err != nil {
+		return 0, err
+	}
+	if value == nil {
+		return def, nil
+	}
+	v, ok := value.(int64)
+	if !ok {
+		return 0, moerr.NewInternalErrorNoCtxf("ResolveVariable: %s is not int64 but %T", name, value)
+	}
+	return v, nil
 }
 
 func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
