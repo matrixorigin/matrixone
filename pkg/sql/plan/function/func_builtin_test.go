@@ -4176,7 +4176,7 @@ func TestBuiltInUUIDSwapFlagStringCoercion(t *testing.T) {
 
 func Test_BuiltIn_MoShowVisibleBinBooleanMetadata(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	var encoded []string
+	encoded := make([]string, 0, 7)
 	for _, typ := range []types.Type{
 		types.New(types.T_bool, 0, 0), types.New(types.T_bool, 64, 3), types.New(types.T_bool, -1, 0),
 		types.New(types.T_int32, 32, 0), types.New(types.T_decimal64, 10, 2),
