@@ -66,8 +66,8 @@ func TestPreparedFieldCaseRelationalNullFirst(t *testing.T) {
 				require.NoError(t, err)
 				domains, _, err = BindPreparedFieldCaseDomains(ctx, bound.Plan, domains, bindings, values)
 				require.NoError(t, err)
-				require.Contains(t, domains, int32(tc.subject), "relational return must retain CASE resolution ownership")
-				require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(domains[int32(tc.subject)]))
+				require.Contains(t, domains, int32(1), "relational return retains its FIELD owner, independently of the subject marker ordinal")
+				require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(domains[1]))
 				filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx, bound.Plan, values)
 				require.NoError(t, err)
 				if source != types.T_any {

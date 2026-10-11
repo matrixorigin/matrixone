@@ -2796,7 +2796,11 @@ func preparedExecutionExprType(
 		// NULL. Only a bare, untyped NULL literal is domainless; treating a
 		// REGEXP_SUBSTR/REPLACE result as domainless would hide a mismatch in
 		// an enclosing regexp call.
-		return resolved.GetReturnType(), true, false, nil
+		resultType := resolved.GetReturnType()
+		if functionName == "case" && preparedCaseTypedNullHasUnboundedMarker(exprImpl.F.Args) && resultType.Oid.IsMySQLString() {
+			resultType.Width = -1
+		}
+		return resultType, true, false, nil
 	default:
 		return preparedType, false, false, nil
 	}
@@ -3806,6 +3810,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 		}
 
+		// The original negative-width VARCHAR is the first binder's marker /
+		// typed-NULL contract. Literal replacement must not turn it into a
+		// 65535-character common cast, even after marker Src has been folded.
+		if functionName == "case" && originalTyp.Id == int32(types.T_varchar) && originalTyp.Width < 0 &&
+			preparedCaseHasStringNullDeclaration(originalArgs) {
+			for index, arg := range boundArgs {
+				if numericFunctionArgKeepsContext("case", index, len(boundArgs)) {
+					boundArgs[index] = preparedCaseUnboundedResultArgument(arg)
+				}
+			}
+			needResetFunction = true
+		}
+
 		// reset function
 		if needResetFunction {
 			restorePreparedIntegerArithmeticOperands(functionName, boundArgs)
@@ -3831,6 +3848,15 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				return nil, err
 			}
 			preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
+			if functionName == "case" && originalTyp.Id == int32(types.T_varchar) && originalTyp.Width < 0 &&
+				preparedCaseHasStringNullDeclaration(originalArgs) {
+				rewritten.Typ.Width = -1
+				for index, arg := range rewritten.GetF().Args {
+					if numericFunctionArgKeepsContext("case", index, len(boundArgs)) {
+						rewritten.GetF().Args[index] = preparedCaseUnboundedResultArgument(arg)
+					}
+				}
+			}
 			if restored, restoredChanged, restoreErr := rule.restorePreparedTemporalNullEnvelope(
 				functionName, originalTyp, originalArgs, rewritten,
 			); restoreErr != nil {
@@ -5207,7 +5233,8 @@ func preparedFieldOperandComparisonType(ctx context.Context, expr *Expr, lookup 
 		typ.Charset = types.CharsetBinary
 		typ.CollationVersion = types.CollationVersionLegacy
 	}
-	if err == nil && preparedFieldOnlyMarkerAndNull(probe) {
+	nativeNullSelector := err == nil && preparedFieldOnlyMarkerAndNull(probe)
+	if nativeNullSelector {
 		typ.Charset = types.CharsetBinary
 		if preparedFieldNullCaseHasDynamicCondition(probe) {
 			// Dynamic CASE owns its resolved value domain. FIELD must not
@@ -5224,7 +5251,10 @@ func preparedFieldOperandComparisonType(ctx context.Context, expr *Expr, lookup 
 	} else {
 		typ.Oid, typ.Width = types.T_text, -1
 	}
-	return typ, err == nil && (hasSQLStringMarker || hasFixedBinary) && types.StaticStringDomain(typ) != types.StringDomainNone, err
+	// A declared/computed predicate leaves this NULL-only selector's native
+	// binary default intact in COM as well as SQL. It is not a handle domain
+	// admission and does not infer any return domain from the condition.
+	return typ, err == nil && (hasSQLStringMarker || hasFixedBinary || nativeNullSelector) && types.StaticStringDomain(typ) != types.StringDomainNone, err
 }
 
 // preparedFieldOnlyMarkerAndNull recognizes selectors whose only value
@@ -5260,7 +5290,7 @@ func preparedFieldNullCaseCondition(expr *Expr) *Expr {
 	}
 	for i, arg := range fn.Args {
 		if name == "case" && !numericFunctionArgKeepsContext(name, i, len(fn.Args)) {
-			if preparedExprContainsParam(arg) {
+			if preparedFieldCaseConditionMarker(arg) != nil {
 				return arg
 			}
 			continue
@@ -5271,6 +5301,39 @@ func preparedFieldNullCaseCondition(expr *Expr) *Expr {
 		if condition := preparedFieldNullCaseCondition(arg); condition != nil {
 			return condition
 		}
+	}
+	return nil
+}
+
+// A transparent marker predicate remains unresolved; computed predicates and
+// SQL-authored numeric CASTs have already declared their own domain. Ignore
+// only the binder's boolean coercion and implicit transport casts. Predicate
+// markers are control evidence, never returned-value contributors.
+func preparedFieldCaseConditionMarker(expr *Expr) *Expr {
+	visited := make(map[*Expr]struct{})
+	for expr != nil {
+		if _, seen := visited[expr]; seen {
+			return nil
+		}
+		visited[expr] = struct{}{}
+		if expr.GetP() != nil || expr.GetV() != nil {
+			collector := stringDomainWitnessCollector{seen: make(map[string]struct{})}
+			collector.addMarker(expr)
+			if len(collector.args) != 0 {
+				return collector.args[0]
+			}
+			return nil
+		}
+		if expr.GetCol() != nil || expr.GetSub() != nil {
+			expr = expr.GetPreparedNumeric().GetStringDomainSource()
+			continue
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 ||
+			isExplicitPreparedCast(expr) && expr.Typ.Id != int32(types.T_bool) {
+			return nil
+		}
+		expr = fn.Args[0]
 	}
 	return nil
 }
@@ -5289,8 +5352,10 @@ func preparedFieldMarkerNullValues(expr *Expr, collectors ...*stringDomainWitnes
 		return true, false, false
 	}
 	if lit := expr.GetLit(); lit != nil {
-		untypedNull := lit.Isnull && lit.StringSource == 0 &&
-			(expr.Typ.Id == int32(types.T_any) || lit.Src != nil)
+		if lit.Isnull && lit.Src != nil {
+			return preparedFieldMarkerNullValues(lit.Src, collectors...)
+		}
+		untypedNull := lit.Isnull && lit.StringSource == 0 && expr.Typ.Id == int32(types.T_any)
 		return false, untypedNull, !untypedNull
 	}
 	fn := expr.GetF()

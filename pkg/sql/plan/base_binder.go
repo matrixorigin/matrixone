@@ -995,6 +995,12 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 }
 
 func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32, isRoot bool) (*Expr, error) {
+	if state := preparedBindingState(b.GetContext()); state != nil && state.fieldConsumers != nil {
+		owner := state.fieldConsumers
+		previous := owner.activeCase
+		owner.activeCase = owner.caseIDs[astExpr]
+		defer func() { owner.activeCase = previous }()
+	}
 	args := make([]tree.Expr, 0, len(astExpr.Whens)+1)
 	caseExist := astExpr.Expr != nil
 
@@ -3301,6 +3307,11 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	}
 
 	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	if err == nil && strings.EqualFold(funcName, "field") {
+		if state := preparedBindingState(b.GetContext()); state != nil && state.fieldConsumers != nil {
+			err = state.fieldConsumers.bind(expr, astExpr)
+		}
+	}
 	if err == nil && strings.EqualFold(funcName, "json_merge") {
 		appendJSONMergeWarning(b.GetContext(), astExpr)
 	}
@@ -4174,6 +4185,17 @@ func (b *baseBinder) coerceJSONNumericAggregateArg(
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	var nativeCaseOwner *preparedFieldDomainBinder
+	var nativeCaseID int32
+	if state := preparedBindingState(b.GetContext()); state != nil && state.fieldConsumers != nil {
+		nativeCaseOwner = state.fieldConsumers
+		previous := nativeCaseOwner.activeCase
+		if name == "case" {
+			nativeCaseID = previous
+		}
+		nativeCaseOwner.activeCase = 0
+		defer func() { nativeCaseOwner.activeCase = previous }()
+	}
 	previousFieldContext := b.preparedFieldArgumentContext
 	b.preparedFieldArgumentContext = previousFieldContext || name == "field"
 	defer func() { b.preparedFieldArgumentContext = previousFieldContext }()
@@ -4690,6 +4712,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 
+	if nativeCaseOwner != nil {
+		nativeCaseOwner.activeCase = nativeCaseID
+	}
 	if b.builder != nil {
 		var e *plan.Expr
 		var err error
@@ -5932,6 +5957,31 @@ func preparedRegexpStringDomainCheckModes(
 }
 
 func (b *baseBinder) markPreparedStringDomainSubquerySources(name string, args []*Expr) {
+	if name == "case" {
+		for index, arg := range args {
+			if numericFunctionArgKeepsContext(name, index, len(args)) {
+				continue
+			}
+			// Only transparent projected markers carry unresolved condition
+			// evidence. Computed outputs and SQL CASTs own their declared domain;
+			// direct markers resolve normally when EXECUTE substitutes them.
+			_ = plan.VisitExprTree(arg, func(value *Expr) error {
+				if value.GetCol() != nil || value.GetSub() != nil {
+					pos, transparent := b.preparedProjectedParamPosition(value)
+					if sub := value.GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR && b.builder != nil {
+						pos, transparent = preparedProjectedOutputParamPosition(
+							b.builder.qry, sub.NodeId, 0, make(map[preparedSetOperationNullKey]bool), false)
+					}
+					if transparent && pos >= 0 {
+						ensurePreparedNumericMetadata(value).StringDomainSource = &Expr{
+							Typ: value.Typ, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}},
+						}
+					}
+				}
+				return nil
+			})
+		}
+	}
 	stringOperands := preparedRegexpCompatibilityStringOperandCount(name, len(args))
 	if name == "field" {
 		stringOperands = len(args)
@@ -8255,6 +8305,15 @@ func bindFuncExprImplByPlanExpr(
 		// to match the value type (1st arg).
 		if len(args) >= 3 && !argsType[2].Eq(argsType[0]) {
 			argsCastType = []types.Type{argsType[0], argsType[1], argsType[0]}
+		}
+	}
+
+	if name == "case" && preparedCaseTypedNullHasUnboundedMarker(args) && returnType.Oid.IsMySQLString() {
+		returnType.Width = -1
+		for index := range argsCastType {
+			if numericFunctionArgKeepsContext("case", index, argsLength) && argsCastType[index].Oid.IsMySQLString() {
+				argsCastType[index].Width = -1
+			}
 		}
 	}
 

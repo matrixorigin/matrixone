@@ -638,6 +638,15 @@ func TestPreparedFieldTextCaseReuse(t *testing.T) {
 		}, initial)
 		require.NoError(t, err)
 		template := bound.Plan
+		// A source-bound plan is not a handle's completed domain resolution.
+		// Record the first execution through the same owner API as SQL EXECUTE;
+		// retaining original NULL provenance must not stand in for this fact.
+		domains, _, err := BindPreparedFieldCaseDomains(context.Background(), template, nil, []PreparedSourceBinding{
+			{Position: 0, Type: types.T_int64.ToType()},
+			{Position: 1, Type: types.T_varchar.ToType()}, {Position: 2, Type: types.T_varchar.ToType()},
+		}, initial)
+		require.NoError(t, err)
+		require.Equal(t, types.StringDomainText, types.StaticStringDomain(domains[1]))
 		before := template.String()
 		for _, source := range []types.T{types.T_varchar, types.T_varbinary, types.T_varchar} {
 			for _, condition := range []int64{0, 1, 0} {
@@ -658,7 +667,8 @@ func TestPreparedFieldTextCaseReuse(t *testing.T) {
 					// The cached PREPARE has already resolved the value domain to
 					// text. Rebinding a binary-origin value must not change that domain.
 					want := int64(1 - condition)
-					require.Equal(t, want, vector.GetFixedAtWithTypeCheck[int64](out, 0))
+					require.Equal(t, want, vector.GetFixedAtWithTypeCheck[int64](out, 0),
+						"operand=%s source=%v condition=%d expr=%s", operand, source, condition, findPlanFunctionExpr(filled, "field"))
 					mock := NewMockOptimizer(false, newPlanTestProcess(t))
 					mock.ctxt.SetContext(withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{
 						{Position: 0, Type: types.T_int64.ToType()}, {Position: 1, Type: source.ToType()}, {Position: 2, Type: source.ToType()},

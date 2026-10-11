@@ -402,11 +402,12 @@ type PrepareStmt struct {
 	// belongs to the current prepared-plan generation. A zero entry means that
 	// the corresponding BIT_COUNT marker has not observed a numeric value.
 	bitCountNumericParamTypes []types.Type
-	// FIELD's NULL-only dynamic CASE keeps its resolved domain across
-	// assignable sources; numeric re-resolution advances the cache revision.
-	// Keys are returned-value marker occurrences, not plan node IDs.
-	// Fixed-size types only; no retained plan/value graph. COM_STMT admits
-	// only the untyped-NULL-first contract; other protocol rules stay unchanged.
+	// FIELD's original AST consumer owns resolution across executions.
+	// Positive lexical FIELD ordinals own CASE return facts; negative ones
+	// own fixed-binary FIELD comparison facts. CASE ordinals follow FIELDs
+	// and own typed-NULL numeric defaults. At most two facts per FIELD plus
+	// one per CASE; no retained AST/plan/value graph. Re-resolution advances the
+	// cache revision, and successful binding alone publishes the snapshot.
 	fieldCaseDomains  map[int32]types.Type
 	fieldCaseRevision uint64
 	// conversionParamPositions identifies BIN/CONV value markers once per

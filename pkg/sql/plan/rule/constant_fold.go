@@ -445,7 +445,35 @@ func ProvisionalPreparedExactPeerSource(expr *plan.Expr) (*plan.Expr, bool) {
 // selected-value provenance when the cast itself is materialized as a literal.
 // Explicit CAST uses a nonzero overload and remains a semantic boundary.
 func PreserveFoldedLiteralStringDomain(expr *plan.Expr, literal *plan.Literal) {
-	if expr == nil || literal == nil || literal.Isnull {
+	if expr == nil || literal == nil {
+		return
+	}
+	if literal.Isnull {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 {
+			return
+		}
+		_, overload := function.DecodeOverloadID(fn.Func.Obj)
+		if fn.SyntaxExplicitCast || overload == 1 {
+			// NULL still owns the SQL-authored target type after folding.
+			// Keep a constant-size declaration witness, not the input graph.
+			literal.Src = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+				Func:               &plan.ObjectRef{Obj: fn.Func.Obj, ObjName: "cast"},
+				SyntaxExplicitCast: true,
+				Args: []*plan.Expr{
+					{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+					{Typ: expr.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+				},
+			}}}
+		} else if source := fn.Args[0]; source != nil && source.GetLit().GetIsnull() {
+			if source.GetLit().Src != nil {
+				literal.Src = source.GetLit().Src
+			} else {
+				literal.Src = &plan.Expr{Typ: source.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+					Isnull: true, StringSource: source.GetLit().StringSource,
+				}}}
+			}
+		}
 		return
 	}
 	if _, ok := literal.Value.(*plan.Literal_Sval); !ok {

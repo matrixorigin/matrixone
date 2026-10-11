@@ -44,6 +44,27 @@ type FmtCtx struct {
 	sawDateTimeFormat             bool
 	stringLiteralPositions        *[]StringLiteralPosition
 	parameterCount                *int
+	functionExprs                 *[]*FuncExpr
+	caseExprs                     *[]*CaseExpr
+}
+
+// FunctionExprs follows the formatter's complete, lexical AST traversal.
+// The returned pointers are binding-local identities, not wire/plan metadata.
+func FunctionExprs(node NodeFormatter) []*FuncExpr {
+	var functions []*FuncExpr
+	ctx := NewFmtCtx(dialect.MYSQL)
+	ctx.functionExprs = &functions
+	node.Format(ctx)
+	return functions
+}
+
+// CaseExprs returns original CASE owners in the same lexical traversal.
+func CaseExprs(node NodeFormatter) []*CaseExpr {
+	var cases []*CaseExpr
+	ctx := NewFmtCtx(dialect.MYSQL)
+	ctx.caseExprs = &cases
+	node.Format(ctx)
+	return cases
 }
 
 // ParameterCount returns the parser's original parameter slot count. Use the

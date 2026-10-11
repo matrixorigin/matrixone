@@ -198,6 +198,8 @@ func TestPreparedSQLFieldCaseDomainLifetime(t *testing.T) {
 				{types.T_int64, int64(42), int64(42), true},
 				{types.T_varchar, "A", "a", true}, {types.T_varbinary, "A", "a", true},
 				{types.T_varchar, "01", "1", true},
+				{types.T_varbinary, "01", "1", true},
+				{types.T_varchar, "01", "1", true},
 				{types.T_float64, 1.5, 1.5, true}, {types.T_varchar, "1.5x", "1.5", true},
 				{types.T_int64, int64(42), int64(42), true}, {types.T_varchar, "1.5x", "1.5", true},
 			} {

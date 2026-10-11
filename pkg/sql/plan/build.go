@@ -902,6 +902,10 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 				Typ:  expr.Typ,
 			}
 
+			if typ, ok := PreparedCaseTypedNullPresentationType(expr); ok {
+				columns[idx].Typ = typ
+			}
+
 			if exprCol, ok := expr.Expr.(*plan.Expr_Col); ok {
 				if col := exprCol.Col; col != nil {
 					columns[idx].TblName = col.TblName

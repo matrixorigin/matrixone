@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -173,7 +174,13 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 	if cwft.preparedStmt != nil && strings.IndexByte(cwft.preparedStmt.Sql, '@') >= 0 {
 		preparedPlan = cwft.preparedStmt.PreparePlan.GetDcl().GetPrepare().Plan
 	}
+	var fieldDomains map[int32]types.Type
+	if cwft.preparedStmt != nil {
+		fieldDomains = maps.Clone(cwft.preparedStmt.fieldCaseDomains)
+	}
 	return &preparedExecutionRetry{
+		fieldDomains:       fieldDomains,
+		binaryExecute:      cwft.preparedBinaryExecute,
 		paramVals:          append([]any(nil), cwft.paramVals...),
 		bindings:           append([]plan2.PreparedSourceBinding(nil), cwft.paramBindings...),
 		preparedPlan:       preparedPlan,

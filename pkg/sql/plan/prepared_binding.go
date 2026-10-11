@@ -92,6 +92,7 @@ type preparedSourceBindingState struct {
 	selectStatement      bool
 	diagnosticCandidates []*Expr
 	diagnosticFree       bool
+	fieldConsumers       *preparedFieldDomainBinder
 }
 
 func withPreparedSourceBindings(ctx context.Context, bindings []PreparedSourceBinding, values ...[]any) context.Context {
@@ -437,6 +438,13 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		return args, nil
 	}
 	name = strings.ToLower(name)
+	if name == "case" {
+		var err error
+		args, err = bindPreparedCaseTypedNullArguments(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if name == "between" {
 		converted, admitted, err := bindPreparedIntegerBetween(ctx, args)
 		if err != nil {
@@ -803,6 +811,7 @@ func preparedCharSourceCast(ctx context.Context, source *Expr, value string) (*E
 // PreparedExecutionPlan carries the immutable logical plan and the original
 // predicate candidates that must be proved again for every cache hit.
 type PreparedExecutionPlan struct {
+	FieldDomains         map[int32]types.Type
 	Plan                 *Plan
 	DiagnosticCandidates []*Expr
 	DiagnosticFree       bool
@@ -838,6 +847,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 	}
 	planning := withPreparedSourceBindings(previous, bindings, values)
 	preparedBindingState(planning).selectStatement = preparedUnderlyingSelect(stmt)
+	preparedBindingState(planning).initFieldConsumers(planning, stmt)
 	ctx.SetContext(planning)
 	defer ctx.SetContext(previous)
 	query, err := NewPrepareOptimizer(ctx).Optimize(stmt, false)
@@ -850,7 +860,12 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 		return nil, err
 	}
 	state := preparedBindingState(planning)
-	return &PreparedExecutionPlan{Plan: p, DiagnosticCandidates: state.diagnosticCandidates,
+	var domains map[int32]types.Type
+	if state.fieldConsumers != nil {
+		domains = state.fieldConsumers.pending
+		state.valueDependent = state.valueDependent || state.fieldConsumers.valueDependent
+	}
+	return &PreparedExecutionPlan{Plan: p, FieldDomains: domains, DiagnosticCandidates: state.diagnosticCandidates,
 		DiagnosticFree: state.diagnosticFree, ValueDependent: state.valueDependent}, nil
 }
 

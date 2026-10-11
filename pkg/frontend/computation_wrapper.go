@@ -105,7 +105,8 @@ type TxnComputationWrapper struct {
 	// preparedStmt is the cache owner selected for this EXECUTE. It lets Run
 	// invalidate a stale prepared physical topology discovered by an internal
 	// definition-change retry.
-	preparedStmt *PrepareStmt
+	preparedStmt          *PrepareStmt
+	preparedBinaryExecute bool
 
 	schedulingTrace schedule.TraceRecorder
 
@@ -253,6 +254,7 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.prepareName = ""
 	cwft.binaryPrepare = false
 	cwft.preparedStmt = nil
+	cwft.preparedBinaryExecute = false
 	cwft.remapDb = nil
 	cwft.schedulingSQL = ""
 	cwft.preparedSchedulingSQLMode = ""
@@ -1520,6 +1522,7 @@ func initExecuteStmtParamWithResolverInSession(
 
 	numParams := len(preparePlan.ParamTypes)
 	binaryExecute := execCtx.input != nil && execCtx.input.isBinaryProtExecute
+	cwft.preparedBinaryExecute = binaryExecute
 	sourceBindingQuery := executionPlan.GetQuery() != nil && numParams > 0
 	// Recreate the cached compile only when a plan dependency changed or an
 	// execution-time retry proved that its physical topology was stale.
@@ -1775,6 +1778,7 @@ func initExecuteStmtParamWithResolverInSession(
 				if strings.IndexByte(originSQL, '@') >= 0 {
 					planningCtx = plan2.WithPreparedUserVariableBindings(reqCtx, preparePlan.Plan)
 				}
+				planningCtx = plan2.WithPreparedFieldConsumers(planningCtx, prepareStmt.fieldCaseDomains, binaryExecute)
 				bound, buildErr = buildPreparedBoundQuery(planningCtx, executionSes, planningContext, prepareStmt.PrepareStmt, cwft.paramBindings, cwft.paramVals)
 				return buildErr
 			})
@@ -1783,19 +1787,10 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 			executionPlan = bound.Plan
 			{
-				var caseValueDependent bool
-				if binaryExecute {
-					pendingFieldCaseDomains, caseValueDependent, err = plan2.BindPreparedFieldNullFirstCaseDomains(reqCtx, executionPlan, prepareStmt.fieldCaseDomains, cwft.paramBindings, cwft.paramVals)
-				} else {
-					pendingFieldCaseDomains, caseValueDependent, err = plan2.BindPreparedFieldCaseDomains(reqCtx, executionPlan, prepareStmt.fieldCaseDomains, cwft.paramBindings, cwft.paramVals)
-				}
-				bound.ValueDependent = bound.ValueDependent || caseValueDependent
-				if err != nil {
-					return nil, nil, nil, originSQL, false, err
-				}
+				pendingFieldCaseDomains = bound.FieldDomains
 				if len(pendingFieldCaseDomains) > 0 {
-					// Consumer-local CASE conversions were added after binding's
-					// original proof. Retain that proof and also check the new plan.
+					// Consumer-local conversions run at the original AST owner.
+					// Retain binding's proof and also check the final lowered plan.
 					candidates := plan2.PreparedPlanDiagnosticCandidates(executionPlan)
 					safe, probeErr := plan2.ProbePreparedDiagnosticCandidates(cwft.proc, candidates)
 					if probeErr != nil {
@@ -1967,6 +1962,8 @@ type preparedExecutionRetry struct {
 	paramVals          []any
 	preparedPlan       *plan2.Plan
 	diagnosticFreeJoin bool
+	fieldDomains       map[int32]types.Type
+	binaryExecute      bool
 }
 
 func newPreparedExecutionRetry(paramVals []any) *preparedExecutionRetry {
@@ -2907,6 +2904,7 @@ func buildPlanForCompileRetry(
 	}
 	if preparedRetry != nil && preparedRetry.bindings != nil && !forcePrepare {
 		ctx = plan2.WithPreparedUserVariableBindings(ctx, preparedRetry.preparedPlan)
+		ctx = plan2.WithPreparedFieldConsumers(ctx, preparedRetry.fieldDomains, preparedRetry.binaryExecute)
 		bound, err := buildPreparedBoundQuery(ctx, ses, compilerContext, stmt, preparedRetry.bindings, preparedRetry.paramVals)
 		if err != nil {
 			return nil, err

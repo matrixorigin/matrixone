@@ -981,6 +981,9 @@ type FuncExpr struct {
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
+	if ctx.functionExprs != nil {
+		*ctx.functionExprs = append(*ctx.functionExprs, node)
+	}
 	funcName := ""
 	if node.FuncName != nil {
 		funcName = node.FuncName.Origin()
@@ -1636,6 +1639,9 @@ type CaseExpr struct {
 }
 
 func (node *CaseExpr) Format(ctx *FmtCtx) {
+	if ctx.caseExprs != nil {
+		*ctx.caseExprs = append(*ctx.caseExprs, node)
+	}
 	ctx.WriteString("case")
 	if node.Expr != nil {
 		ctx.WriteByte(' ')
