@@ -1,0 +1,112 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package embed
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"testing"
+	"time"
+
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/stretchr/testify/require"
+)
+
+// Exercise admission and legacy cleanup through the public MySQL protocol.
+func TestCatalogIdentifierEncoding(t *testing.T) {
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+		defer cancel()
+		const database = "identifier_encoding"
+		_, err = db.ExecContext(ctx, "create database "+database)
+		require.NoError(t, err)
+		defer func() {
+			_, cleanupErr := db.ExecContext(ctx, "drop database if exists "+database)
+			require.NoError(t, cleanupErr)
+		}()
+		for _, statement := range []string{
+			"create table identifier_encoding.t_\xe3g(id int)",
+			"create table identifier_encoding.`t_\xe3g`(id int)",
+			"create table identifier_encoding.ctas as select 1 as `t_\xe3g`",
+			"create view identifier_encoding.v as select 1 as `t_\xe3g`",
+		} {
+			_, err = db.ExecContext(ctx, statement)
+			require.ErrorContains(t, err, "not valid UTF-8", "%q", statement)
+		}
+		var count int
+		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='identifier_encoding'").Scan(&count))
+		require.Zero(t, count)
+		// Binary parameters and string data are not identifier validation targets.
+		var raw []byte
+		require.NoError(t, db.QueryRowContext(ctx, "select ?", []byte("t_\xe3g")).Scan(&raw))
+		require.Equal(t, []byte("t_\xe3g"), raw)
+		for _, name := range []string{"表", "t_xe3g", "t_�g", "quote'\\tail"} {
+			_, err = db.ExecContext(ctx, "create table "+database+"."+sqlquote.Ident(name)+"(id int)")
+			require.NoError(t, err)
+		}
+		// Use the existing typed engine interface to emulate a catalog written by an
+		// older CN, bypassing only the new authoring validation.
+		svc := cn.RawService().(cnservice.Service)
+		legacyCtx := defines.AttachAccountId(ctx, 0)
+		seedLegacyTable := func() error {
+			return svc.GetSQLExecutor().ExecTxn(legacyCtx, func(txn executor.TxnExecutor) error {
+				database, err := svc.GetEngine().Database(legacyCtx, database, txn.Txn())
+				if err != nil {
+					return err
+				}
+				rel, err := database.Relation(legacyCtx, "表", nil)
+				if err != nil {
+					return err
+				}
+				defs, err := rel.TableDefs(legacyCtx)
+				if err != nil {
+					return err
+				}
+				return database.Create(legacyCtx, "t_\xe3g", defs)
+			}, executor.Options{}.WithWaitCommittedLogApplied())
+		}
+		require.NoError(t, seedLegacyTable())
+		var hexName string
+		require.NoError(t, db.QueryRowContext(ctx, "select hex(relname) from mo_catalog.mo_tables where reldatabase='identifier_encoding' and hex(relname)='745FE367'").Scan(&hexName))
+		require.Equal(t, "745FE367", hexName)
+		// The legacy name must resolve to its own row, not t_xe3g or U+FFFD.
+		_, err = db.ExecContext(ctx, "drop table identifier_encoding.`t_\xe3g`")
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='identifier_encoding'").Scan(&count))
+		require.Equal(t, 4, count)
+		require.NoError(t, seedLegacyTable())
+		_, err = db.ExecContext(ctx, "drop database identifier_encoding")
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='identifier_encoding'").Scan(&count))
+		require.Zero(t, count)
+		legacyDatabase := "db_\xe3g"
+		err = svc.GetSQLExecutor().ExecTxn(legacyCtx, func(txn executor.TxnExecutor) error {
+			return svc.GetEngine().Create(legacyCtx, legacyDatabase, txn.Txn())
+		}, executor.Options{}.WithWaitCommittedLogApplied())
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, "drop database "+sqlquote.Ident(legacyDatabase))
+		require.NoError(t, err)
+	})
+}
