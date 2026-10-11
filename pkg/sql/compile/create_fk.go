@@ -92,6 +92,10 @@ func (c *Compile) bindCreateForwardForeignKeys(q *plan.CreateTable, database str
 			return nil, nil, moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
 	}
+	preserved, err := c.replacementForeignKeyCatalog(database, q.TableDef.Name)
+	if err != nil {
+		return nil, nil, err
+	}
 	children := make([]forwardForeignKeyChild, 0, len(declarations))
 	var backfills []string
 	for _, key := range keys {
@@ -117,6 +121,14 @@ func (c *Compile) bindCreateForwardForeignKeys(q *plan.CreateTable, database str
 			binding, err := plan2.BindForwardForeignKey(c.proc.Ctx, name, constraints[name], current, q.TableDef)
 			if err != nil {
 				return nil, nil, err
+			}
+			if preserved != nil {
+				selected := constraints[name][0].ReferencedIndexName
+				if selected != "" && !plan2.ForeignKeyReferencedIndexMatches(q.TableDef, binding.Def.ForeignCols, selected) {
+					return nil, nil, moerr.NewInternalError(c.proc.Ctx, "replacement no longer has the incoming foreign key's selected referenced key")
+				}
+				// Preserve legacy empty bindings conservatively as well as named keys.
+				binding.Def.ReferencedIndexName = selected
 			}
 			child.bindings = append(child.bindings, binding)
 			if extended && constraints[name][0].ReferencedIndexName != binding.Def.ReferencedIndexName {

@@ -461,6 +461,32 @@ func TestTruncatePreservesMaterializedForeignKeyIdentity(t *testing.T) {
 		} {
 			execSQLRequire(t, ctx, db, q)
 		}
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		_, err = conn.ExecContext(ctx, "set foreign_key_checks=0")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "truncate table "+database+".parent")
+		require.Error(t, err, "referenced parents cannot be truncated even with checks disabled")
+		var parentBefore, parentAfter uint64
+		require.NoError(t, conn.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='parent'", database).Scan(&parentBefore))
+		for _, q := range []string{"begin", "delete from " + database + ".parent", "rollback"} {
+			_, err = conn.ExecContext(ctx, q)
+			require.NoError(t, err, q)
+		}
+		require.NoError(t, conn.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='parent'", database).Scan(&parentAfter))
+		require.Equal(t, parentBefore, parentAfter, "transactional DELETE rollback restores the parent generation")
+		var parentRows int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+database+".parent where id=1 and v=7").Scan(&parentRows))
+		require.Equal(t, 1, parentRows, "transactional DELETE rollback restores parent rows")
+		_, err = conn.ExecContext(ctx, "delete from "+database+".parent")
+		require.NoError(t, err)
+		require.NoError(t, conn.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='parent'", database).Scan(&parentAfter))
+		require.NotEqual(t, parentBefore, parentAfter, "whole-table DELETE exercises its internal truncate optimization")
+		_, err = conn.ExecContext(ctx, "set foreign_key_checks=1")
+		require.NoError(t, err)
+		require.NoError(t, conn.Close())
+		execSQLRequire(t, ctx, db, "insert into "+database+".parent values(1,7)")
 		var selected string
 		require.NoError(t, db.QueryRowContext(ctx, "select referenced_index_name from mo_catalog.mo_foreign_keys where db_name=? and table_name='child' and constraint_name='fk_selected'", database).Scan(&selected))
 		require.Equal(t, "z", selected, "recreation must preserve the declared selected key")
@@ -473,6 +499,26 @@ func TestTruncatePreservesMaterializedForeignKeyIdentity(t *testing.T) {
 		execSQLRequire(t, ctx, db, "insert into "+database+".child values(1,7)")
 		_, err = db.ExecContext(ctx, "insert into "+database+".child values(2,7)")
 		require.Error(t, err, "unrelated uniqueness must survive")
+		// Explicit DROP/CREATE owns a new schema generation and uses normal key selection.
+		conn, err = db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		for _, q := range []string{
+			"set foreign_key_checks=0",
+			"drop table " + database + ".parent",
+			"create table " + database + ".parent(id int primary key,v int,unique key z(v),unique key a(v))",
+			"set foreign_key_checks=1",
+		} {
+			_, err = conn.ExecContext(ctx, q)
+			require.NoError(t, err, q)
+		}
+		require.NoError(t, conn.QueryRowContext(ctx, "select referenced_index_name from mo_catalog.mo_foreign_keys where db_name=? and table_name='child' and constraint_name='fk_selected'", database).Scan(&selected))
+		require.Equal(t, "a", selected, "ordinary new-parent binding keeps its default selection policy")
+		_, err = conn.ExecContext(ctx, "drop index z on "+database+".parent")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "drop index a on "+database+".parent")
+		require.Error(t, err)
+		require.NoError(t, conn.Close())
 		for _, q := range []string{
 			"create table " + database + ".self(id int primary key,pid int,constraint fk_self foreign key(pid) references " + database + ".self(id))",
 			"insert into " + database + ".self values(1,1)",
