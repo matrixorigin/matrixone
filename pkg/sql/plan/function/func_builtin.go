@@ -767,6 +767,12 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 		}
 
 		members := strings.Split(enumStr, ",")
+		if typ.Oid == types.T_uint64 {
+			if enumStr == "" {
+				return nil, nil
+			}
+			members = types.DecodeSetValues(enumStr)
+		}
 		for i := range members {
 			members[i] = sqlquote.String(members[i])
 		}

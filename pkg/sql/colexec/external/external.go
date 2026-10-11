@@ -785,12 +785,13 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 		// whitespace bytes are data and must not be trimmed.
 		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
-			id != types.T_bit {
+			id != types.T_bit && id != types.T_enum && !(id == types.T_uint64 && col.Typ.Enumvalues != "") {
 			field.Val = strings.TrimSpace(field.Val)
 		}
 		isNullOrEmpty := field.IsNull || (getNullFlag(param.NullMap, col.Name, field.Val))
 		if id != types.T_char && id != types.T_varchar &&
-			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text && id != types.T_datalink {
+			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
+			id != types.T_enum && !(id == types.T_uint64 && col.Typ.Enumvalues != "") {
 			isNullOrEmpty = isNullOrEmpty || len(field.Val) == 0
 		}
 		if isNullOrEmpty {
@@ -1002,22 +1003,8 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 				return false
 			}
 		case types.T_enum:
-			_, err := strconv.ParseUint(field.Val, 10, 16)
-			if err == nil {
-				continue
-			} else if errors.Is(err, strconv.ErrSyntax) {
-				_, err := types.ParseEnum(col.Typ.Enumvalues, field.Val)
-				if err != nil {
-					return false
-				}
-			} else {
-				if errors.Is(err, strconv.ErrRange) {
-					return false
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < 0 || f > math.MaxUint16 {
-					return false
-				}
+			if _, err := types.ParseEnum(col.Typ.Enumvalues, field.Val); err != nil {
+				return false
 			}
 		case types.T_decimal64:
 			_, err := types.ParseDecimal64(field.Val, col.Typ.Width, col.Typ.Scale)
@@ -1156,8 +1143,9 @@ func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 // of the ENUM definition, using the same comma split and case folding as
 // types.ParseEnum.
 func isEnumMember(enumValues, name string) bool {
+	// The ENUM OID distinguishes a single empty member from absent metadata.
 	if len(enumValues) == 0 {
-		return false
+		return name == ""
 	}
 	for {
 		i := strings.IndexByte(enumValues, ',')
@@ -2057,34 +2045,11 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_enum:
-		d, err := strconv.ParseUint(field.Val, 10, 16)
-		if err == nil {
-			if err := vector.AppendFixed(vec, types.Enum(d), false, mp); err != nil {
-				return err
-			}
-		} else if errors.Is(err, strconv.ErrSyntax) {
-			v, err := types.ParseEnum(col.Typ.Enumvalues, field.Val)
-			if err != nil {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return err
-			}
-			if err := vector.AppendFixed(vec, types.Enum(v), false, mp); err != nil {
-				return err
-			}
-		} else {
-			if errors.Is(err, strconv.ErrRange) {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
-			}
-			f, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil || f < 0 || f > math.MaxUint16 {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
-			}
-			if err := vector.AppendFixed(vec, types.Enum(f), false, mp); err != nil {
-				return err
-			}
+		v, err := types.ParseEnum(col.Typ.Enumvalues, field.Val)
+		if err != nil {
+			return err
 		}
+		return vector.AppendFixed(vec, v, false, mp)
 	case types.T_decimal64:
 		d, err := types.ParseDecimal64(field.Val, vec.GetType().Width, vec.GetType().Scale)
 		if err != nil {
