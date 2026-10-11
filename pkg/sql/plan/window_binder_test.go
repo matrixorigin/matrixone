@@ -1905,3 +1905,57 @@ func TestContainsTagCoversWindowSubAndCorrBranches(t *testing.T) {
 	}, 4))
 	require.False(t, containsTag(makePlan2Int64ConstExprWithType(1), 5))
 }
+
+func TestWindowScalarInputsAreLowered(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		noJoin    bool
+	}{
+		{"null key", "select row_number() over(partition by n_regionkey order by (select null)) from nation", true},
+		{"nested key", "select row_number() over(order by coalesce((select 1),0)) from nation", true},
+		{"partition key", "select row_number() over(partition by (select n_regionkey) order by n_nationkey) from nation", true},
+		{"function argument", "select sum((select n_nationkey)) over(partition by n_regionkey) from nation", true},
+		{"table key", "select row_number() over(order by (select max(n_nationkey) from nation)) from nation", false},
+		{"grouped input", "select n_regionkey,sum(n_nationkey),sum(sum(n_nationkey)) over(order by (select max(n_nationkey) from nation)) from nation group by n_regionkey", false},
+		{"named window", "select row_number() over w from nation window w as (partition by n_regionkey order by (select 1))", true},
+		{"stacked windows", "select row_number() over(order by (select 1)),sum((select n_nationkey)) over(partition by n_regionkey) from nation", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opt := NewMockOptimizer(false, newPlanTestProcess(t))
+			stmts, err := parsers.Parse(opt.CurrentContext().GetContext(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			p, err := BuildPlan(opt.CurrentContext(), stmts[0], false)
+			require.NoError(t, err)
+			windows := allWindowSpecs(p)
+			require.NotEmpty(t, windows)
+			for _, w := range windows {
+				require.False(t, hasSubquery(w.WindowFunc), "window argument")
+				for _, key := range w.PartitionBy {
+					require.False(t, hasSubquery(key), "window partition key")
+				}
+				for _, key := range w.OrderBy {
+					require.False(t, hasSubquery(key.Expr), "window order key")
+				}
+			}
+			if tc.noJoin {
+				for _, node := range p.GetQuery().Nodes {
+					require.NotEqual(t, planpb.Node_JOIN, node.NodeType,
+						"no-FROM scalars must reuse their expressions without runtime joins")
+				}
+			}
+		})
+	}
+}
+
+func TestWindowScalarInputsRejectMultipleColumns(t *testing.T) {
+	for _, sql := range []string{
+		"select row_number() over(order by (select 1,2)) from nation",
+		"select row_number() over(partition by (select 1,2)) from nation",
+	} {
+		ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+		stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		_, err = BuildPlan(ctx, stmts[0], false)
+		require.ErrorContains(t, err, "subquery should return 1 column")
+	}
+}

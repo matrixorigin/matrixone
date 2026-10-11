@@ -10792,6 +10792,15 @@ func (builder *QueryBuilder) appendWindowNode(
 		return
 	}
 
+	// Materialize every window's scalar producers over the post-aggregation
+	// input before adding any window operator. Later windows must not introduce
+	// joins that change an earlier window's input or column layout.
+	for i, w := range ctx.windows {
+		if nodeID, ctx.windows[i], err = builder.flattenSubqueries(nodeID, w, ctx); err != nil {
+			return
+		}
+	}
+
 	for i, w := range ctx.windows {
 		e := w.GetW()
 		if len(e.PartitionBy) > 0 {
