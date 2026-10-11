@@ -95,6 +95,10 @@ func fileDigest(path string) (string, error) {
 }
 
 func loadDataset(ctx context.Context, cfg configuration, manifestPath, database string) (map[string]any, error) {
+	return loadDatasetWithOpener(ctx, cfg, manifestPath, database, sql.Open)
+}
+
+func loadDatasetWithOpener(ctx context.Context, cfg configuration, manifestPath, database string, open databaseOpener) (map[string]any, error) {
 	if strings.ContainsAny(database, "`\x00") || database == "" {
 		return nil, errors.New("invalid database")
 	}
@@ -118,7 +122,7 @@ func loadDataset(ctx context.Context, cfg configuration, manifestPath, database 
 	if err != nil || actualDDL != manifest.DDL {
 		return nil, errors.New("dataset DDL identity mismatch")
 	}
-	db, err := sql.Open("mysql", cfg.DSN)
+	db, err := open("mysql", cfg.DSN)
 	if err != nil {
 		return nil, err
 	}
@@ -173,12 +177,19 @@ func loadDataset(ctx context.Context, cfg configuration, manifestPath, database 
 	return map[string]any{"schema_version": 2, "dataset_sha256": manifest.Digest, "scale_factor": manifest.Scale, "tables": results}, nil
 }
 
-func verifyDatasetTable(ctx context.Context, connection *sql.Conn, table, sourcePath string, expectedRows uint64) (string, error) {
-	rows, err := connection.QueryContext(ctx, "select * from "+table)
+func verifyDatasetTable(ctx context.Context, connection *sql.Conn, table, sourcePath string, expectedRows uint64) (identity string, err error) {
+	queryCtx, cancelQuery := context.WithCancel(ctx)
+	defer cancelQuery()
+	rows, err := connection.QueryContext(queryCtx, "select * from "+table)
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
+	defer func() {
+		if err != nil {
+			cancelQuery()
+		}
+		err = errors.Join(err, rows.Close())
+	}()
 	columns, err := rows.ColumnTypes()
 	if err != nil {
 		return "", err

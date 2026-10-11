@@ -137,6 +137,7 @@ func TestPublicDrainRejectsLateErrorsAndClosesEveryFailure(t *testing.T) {
 type cancellationRows struct {
 	ctx      context.Context
 	next     int
+	payload  string
 	closed   atomic.Int32
 	canceled atomic.Bool
 }
@@ -152,7 +153,10 @@ func (r *cancellationRows) Next(values []driver.Value) error {
 	if r.next == 2 {
 		return io.EOF
 	}
-	values[0] = strings.Repeat("x", 70<<10)
+	values[0] = r.payload
+	if r.payload == "" {
+		values[0] = strings.Repeat("x", 70<<10)
+	}
 	r.next++
 	return nil
 }

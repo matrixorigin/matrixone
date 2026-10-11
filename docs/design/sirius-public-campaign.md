@@ -6,7 +6,8 @@ Design version: 3. Owners: MatrixOne public SQL, compile/CN evidence and
 The user approved this design before implementation on 2026-10-09 and selected
 one complete D PR, combining runner, lifecycle tests and full campaign evidence.
 The approved implementation sequence remains #29690. C #29757 merged as af5a75c5f9. D starts from authoritative main containing
-that merge and retains merged Sirius #29 at 908ffc75. The user approved this
+that merge. Sirius #30 merged as 955b6881 on 2026-10-11; D now pins that merged
+native source for the guarded release SDK. The user approved this
 implementation revision on 2026-10-11 after selecting one complete D PR and
 separate allocation profiling without a native observability prerequisite. E/F and Docker changes are excluded.
 

@@ -206,7 +206,13 @@ func encodeCell(column publicColumn, raw []byte) (cell, error) {
 	return result, nil
 }
 
-func run(ctx context.Context, cfg configuration, spec runSpec) (out output, err error) {
+type databaseOpener func(string, string) (*sql.DB, error)
+
+func run(ctx context.Context, cfg configuration, spec runSpec) (output, error) {
+	return runWithOpener(ctx, cfg, spec, sql.Open)
+}
+
+func runWithOpener(ctx context.Context, cfg configuration, spec runSpec, open databaseOpener) (out output, err error) {
 	if spec.Sequence < 1 || spec.Query < 1 || spec.Query > 22 || spec.SpoolBudget < 1 || spec.SpoolBudget > 4<<30 || (spec.Route != "mo-native" && spec.Route != "embedded-mo") {
 		return out, errors.New("invalid run specification")
 	}
@@ -229,7 +235,7 @@ func run(ctx context.Context, cfg configuration, spec runSpec) (out output, err 
 	if driverCfg.MultiStatements || driverCfg.AllowAllFiles || driverCfg.ParseTime {
 		return out, errors.New("unsafe campaign driver options")
 	}
-	db, err := sql.Open("mysql", cfg.DSN)
+	db, err := open("mysql", cfg.DSN)
 	if err != nil {
 		return out, err
 	}
