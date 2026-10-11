@@ -113,6 +113,40 @@ func TestGetColDataKeepsEmptyEnumAndSetDistinctFromNull(t *testing.T) {
 		}
 	}
 
+	// A declared leading-space SET member is not trimmed into another member;
+	// LOAD stores what native INSERT (types.ParseSet) stores. Padded input that
+	// is not valid as written keeps the trimming compatibility.
+	padTyp := plan.Type{Id: int32(types.T_uint64), Enumvalues: " a,a,中文"}
+	for _, mode := range []string{"strict", "parallel", "local-nonstrict"} {
+		for _, tc := range []struct {
+			val, text string // input, text expected under parallel load
+			want      uint64
+		}{
+			{" a", " a", 1}, {"a", "a", 2}, {"中文", "中文", 4}, {" a,a", " a,a", 3},
+			{"a ", "a ", 2}, {" 中文", "中文", 4}, {" 4 ", "4", 4},
+		} {
+			native, err := types.ParseSet(padTyp.Enumvalues, tc.text)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, native, tc.val)
+			param := enumSetLoadParam(padTyp, mode)
+			vecTyp := types.T_uint64.ToType()
+			if mode == "parallel" {
+				vecTyp = types.T_varchar.ToType()
+			}
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(vecTyp)
+			require.NoError(t, getColData(bat, []csvparser.Field{{Val: tc.val}}, 0, param, proc.Mp(), param.Attrs[0], proc))
+			name := mode + "/" + tc.val
+			require.False(t, bat.Vecs[0].GetNulls().Contains(0), name)
+			if mode == "parallel" {
+				require.Equal(t, tc.text, bat.Vecs[0].GetStringAt(0), name)
+			} else {
+				require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0])[0], name)
+			}
+			bat.Clean(proc.Mp())
+		}
+	}
+
 	// ENUM without a declared '' member keeps the previous behavior (NULL).
 	param := enumSetLoadParam(plan.Type{Id: int32(types.T_enum), Enumvalues: "red,blue"}, "strict")
 	bat := batch.NewWithSize(1)
@@ -120,6 +154,20 @@ func TestGetColDataKeepsEmptyEnumAndSetDistinctFromNull(t *testing.T) {
 	defer bat.Clean(proc.Mp())
 	require.NoError(t, getColData(bat, []csvparser.Field{{Val: ""}}, 0, param, proc.Mp(), param.Attrs[0], proc))
 	require.True(t, bat.Vecs[0].GetNulls().Contains(0))
+}
+
+func TestIsPaddedSetInput(t *testing.T) {
+	for _, tc := range []struct {
+		def, val string
+		want     bool
+	}{
+		{" a,a", " a", true}, {" a,a", "a", false}, {" a,a", " a,a", true},
+		{"a,b", " a", false}, {"a,b", "a ", true}, {"a,b", " 1", false}, {"a,b", "", false},
+	} {
+		require.Equal(t, tc.want, isPaddedSetInput(tc.def, tc.val), "%q in %q", tc.val, tc.def)
+	}
+	// unpadded values, the common case, are not parsed here
+	require.Zero(t, testing.AllocsPerRun(100, func() { isPaddedSetInput("a,b", "a,b") }))
 }
 
 func TestIsEnumMember(t *testing.T) {

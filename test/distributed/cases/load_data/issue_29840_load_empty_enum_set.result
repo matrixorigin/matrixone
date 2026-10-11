@@ -6,73 +6,73 @@ drop table if exists issue_29840_csv_par;
 drop table if exists issue_29840_csv_local;
 drop table if exists issue_29840_jl;
 drop table if exists issue_29840_jl_par;
-create table issue_29840_ins(id int primary key, e enum(' ','red',''), s set('0','a'));
-insert into issue_29840_ins values (1,'',''), (2,' ',''), (3,'red','a'), (4,null,null), (5,'','0'), (6,'red','0,a');
-select id, concat('[',e,']') e, e+0 e_idx, e is null e_null, concat('[',s,']') s, s+0 s_bits, s is null s_null from issue_29840_ins order by id;
-➤ id[4,32,0]  ¦  e[-1,16383,0]  ¦  e_idx[-5,64,0]  ¦  e_null[-7,1,0]  ¦  s[-1,16383,0]  ¦  s_bits[-5,64,0]  ¦  s_null[-7,1,0]  𝄀
-1  ¦  []  ¦  3  ¦  0  ¦  []  ¦  0  ¦  0  𝄀
-2  ¦  [ ]  ¦  1  ¦  0  ¦  []  ¦  0  ¦  0  𝄀
-3  ¦  [red]  ¦  2  ¦  0  ¦  [a]  ¦  2  ¦  0  𝄀
-4  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  ¦  1  𝄀
-5  ¦  []  ¦  3  ¦  0  ¦  [0]  ¦  1  ¦  0  𝄀
-6  ¦  [red]  ¦  2  ¦  0  ¦  [0,a]  ¦  3  ¦  0
+create table issue_29840_ins(id int primary key, e enum(' ','red',''), s set('0','a'), t set(' a','a','中文'));
+insert into issue_29840_ins values (1,'','',' a'), (2,' ','','中文'), (3,'red','a','a'), (4,null,null,null), (5,'','0',' a,a'), (6,'red','0,a','a ');
+select id, concat('[',e,']') e, e+0 e_idx, e is null e_null, concat('[',s,']') s, s+0 s_bits, s is null s_null, concat('[',t,']') t, t+0 t_bits from issue_29840_ins order by id;
+➤ id[4,32,0]  ¦  e[-1,16383,0]  ¦  e_idx[-5,64,0]  ¦  e_null[-7,1,0]  ¦  s[-1,16383,0]  ¦  s_bits[-5,64,0]  ¦  s_null[-7,1,0]  ¦  t[-1,16383,0]  ¦  t_bits[-5,64,0]  𝄀
+1  ¦  []  ¦  3  ¦  0  ¦  []  ¦  0  ¦  0  ¦  [ a]  ¦  1  𝄀
+2  ¦  [ ]  ¦  1  ¦  0  ¦  []  ¦  0  ¦  0  ¦  [中文]  ¦  4  𝄀
+3  ¦  [red]  ¦  2  ¦  0  ¦  [a]  ¦  2  ¦  0  ¦  [a]  ¦  2  𝄀
+4  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  𝄀
+5  ¦  []  ¦  3  ¦  0  ¦  [0]  ¦  1  ¦  0  ¦  [ a,a]  ¦  3  𝄀
+6  ¦  [red]  ¦  2  ¦  0  ¦  [0,a]  ¦  3  ¦  0  ¦  [a]  ¦  2
 create table issue_29840_csv like issue_29840_ins;
 load data infile '$resources/load_data/issue_29840_enum_set.csv' into table issue_29840_csv fields terminated by ',' optionally enclosed by '"';
-select id, concat('[',e,']') e, e+0 e_idx, e is null e_null, concat('[',s,']') s, s+0 s_bits, s is null s_null from issue_29840_csv order by id;
-➤ id[4,32,0]  ¦  e[-1,16383,0]  ¦  e_idx[-5,64,0]  ¦  e_null[-7,1,0]  ¦  s[-1,16383,0]  ¦  s_bits[-5,64,0]  ¦  s_null[-7,1,0]  𝄀
-1  ¦  []  ¦  3  ¦  0  ¦  []  ¦  0  ¦  0  𝄀
-2  ¦  [ ]  ¦  1  ¦  0  ¦  []  ¦  0  ¦  0  𝄀
-3  ¦  [red]  ¦  2  ¦  0  ¦  [a]  ¦  2  ¦  0  𝄀
-4  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  ¦  1  𝄀
-5  ¦  []  ¦  3  ¦  0  ¦  [0]  ¦  1  ¦  0  𝄀
-6  ¦  [red]  ¦  2  ¦  0  ¦  [0,a]  ¦  3  ¦  0
+select id, concat('[',e,']') e, e+0 e_idx, e is null e_null, concat('[',s,']') s, s+0 s_bits, s is null s_null, concat('[',t,']') t, t+0 t_bits from issue_29840_csv order by id;
+➤ id[4,32,0]  ¦  e[-1,16383,0]  ¦  e_idx[-5,64,0]  ¦  e_null[-7,1,0]  ¦  s[-1,16383,0]  ¦  s_bits[-5,64,0]  ¦  s_null[-7,1,0]  ¦  t[-1,16383,0]  ¦  t_bits[-5,64,0]  𝄀
+1  ¦  []  ¦  3  ¦  0  ¦  []  ¦  0  ¦  0  ¦  [ a]  ¦  1  𝄀
+2  ¦  [ ]  ¦  1  ¦  0  ¦  []  ¦  0  ¦  0  ¦  [中文]  ¦  4  𝄀
+3  ¦  [red]  ¦  2  ¦  0  ¦  [a]  ¦  2  ¦  0  ¦  [a]  ¦  2  𝄀
+4  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  𝄀
+5  ¦  []  ¦  3  ¦  0  ¦  [0]  ¦  1  ¦  0  ¦  [ a,a]  ¦  3  𝄀
+6  ¦  [red]  ¦  2  ¦  0  ¦  [0,a]  ¦  3  ¦  0  ¦  [a]  ¦  2
 create table issue_29840_csv_par like issue_29840_ins;
 load data infile '$resources/load_data/issue_29840_enum_set.csv' into table issue_29840_csv_par fields terminated by ',' optionally enclosed by '"' parallel 'true';
-select id, concat('[',e,']') e, e+0 e_idx, e is null e_null, concat('[',s,']') s, s+0 s_bits, s is null s_null from issue_29840_csv_par order by id;
-➤ id[4,32,0]  ¦  e[-1,16383,0]  ¦  e_idx[-5,64,0]  ¦  e_null[-7,1,0]  ¦  s[-1,16383,0]  ¦  s_bits[-5,64,0]  ¦  s_null[-7,1,0]  𝄀
-1  ¦  []  ¦  3  ¦  0  ¦  []  ¦  0  ¦  0  𝄀
-2  ¦  [ ]  ¦  1  ¦  0  ¦  []  ¦  0  ¦  0  𝄀
-3  ¦  [red]  ¦  2  ¦  0  ¦  [a]  ¦  2  ¦  0  𝄀
-4  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  ¦  1  𝄀
-5  ¦  []  ¦  3  ¦  0  ¦  [0]  ¦  1  ¦  0  𝄀
-6  ¦  [red]  ¦  2  ¦  0  ¦  [0,a]  ¦  3  ¦  0
+select id, concat('[',e,']') e, e+0 e_idx, e is null e_null, concat('[',s,']') s, s+0 s_bits, s is null s_null, concat('[',t,']') t, t+0 t_bits from issue_29840_csv_par order by id;
+➤ id[4,32,0]  ¦  e[-1,16383,0]  ¦  e_idx[-5,64,0]  ¦  e_null[-7,1,0]  ¦  s[-1,16383,0]  ¦  s_bits[-5,64,0]  ¦  s_null[-7,1,0]  ¦  t[-1,16383,0]  ¦  t_bits[-5,64,0]  𝄀
+1  ¦  []  ¦  3  ¦  0  ¦  []  ¦  0  ¦  0  ¦  [ a]  ¦  1  𝄀
+2  ¦  [ ]  ¦  1  ¦  0  ¦  []  ¦  0  ¦  0  ¦  [中文]  ¦  4  𝄀
+3  ¦  [red]  ¦  2  ¦  0  ¦  [a]  ¦  2  ¦  0  ¦  [a]  ¦  2  𝄀
+4  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  𝄀
+5  ¦  []  ¦  3  ¦  0  ¦  [0]  ¦  1  ¦  0  ¦  [ a,a]  ¦  3  𝄀
+6  ¦  [red]  ¦  2  ¦  0  ¦  [0,a]  ¦  3  ¦  0  ¦  [a]  ¦  2
 set sql_mode = '';
 create table issue_29840_csv_local like issue_29840_ins;
 load data local infile '$resources/load_data/issue_29840_enum_set.csv' into table issue_29840_csv_local fields terminated by ',' optionally enclosed by '"';
 set sql_mode = 'STRICT_TRANS_TABLES';
-select id, concat('[',e,']') e, e+0 e_idx, e is null e_null, concat('[',s,']') s, s+0 s_bits, s is null s_null from issue_29840_csv_local order by id;
-➤ id[4,32,0]  ¦  e[-1,16383,0]  ¦  e_idx[-5,64,0]  ¦  e_null[-7,1,0]  ¦  s[-1,16383,0]  ¦  s_bits[-5,64,0]  ¦  s_null[-7,1,0]  𝄀
-1  ¦  []  ¦  3  ¦  0  ¦  []  ¦  0  ¦  0  𝄀
-2  ¦  [ ]  ¦  1  ¦  0  ¦  []  ¦  0  ¦  0  𝄀
-3  ¦  [red]  ¦  2  ¦  0  ¦  [a]  ¦  2  ¦  0  𝄀
-4  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  ¦  1  𝄀
-5  ¦  []  ¦  3  ¦  0  ¦  [0]  ¦  1  ¦  0  𝄀
-6  ¦  [red]  ¦  2  ¦  0  ¦  [0,a]  ¦  3  ¦  0
+select id, concat('[',e,']') e, e+0 e_idx, e is null e_null, concat('[',s,']') s, s+0 s_bits, s is null s_null, concat('[',t,']') t, t+0 t_bits from issue_29840_csv_local order by id;
+➤ id[4,32,0]  ¦  e[-1,16383,0]  ¦  e_idx[-5,64,0]  ¦  e_null[-7,1,0]  ¦  s[-1,16383,0]  ¦  s_bits[-5,64,0]  ¦  s_null[-7,1,0]  ¦  t[-1,16383,0]  ¦  t_bits[-5,64,0]  𝄀
+1  ¦  []  ¦  3  ¦  0  ¦  []  ¦  0  ¦  0  ¦  [ a]  ¦  1  𝄀
+2  ¦  [ ]  ¦  1  ¦  0  ¦  []  ¦  0  ¦  0  ¦  [中文]  ¦  4  𝄀
+3  ¦  [red]  ¦  2  ¦  0  ¦  [a]  ¦  2  ¦  0  ¦  [a]  ¦  2  𝄀
+4  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  𝄀
+5  ¦  []  ¦  3  ¦  0  ¦  [0]  ¦  1  ¦  0  ¦  [ a,a]  ¦  3  𝄀
+6  ¦  [red]  ¦  2  ¦  0  ¦  [0,a]  ¦  3  ¦  0  ¦  [a]  ¦  2
 create table issue_29840_jl like issue_29840_ins;
 load data infile {'filepath'='$resources/load_data/issue_29840_enum_set.jl','format'='jsonline','jsondata'='object'} into table issue_29840_jl;
-select id, concat('[',e,']') e, e+0 e_idx, e is null e_null, concat('[',s,']') s, s+0 s_bits, s is null s_null from issue_29840_jl order by id;
-➤ id[4,32,0]  ¦  e[-1,16383,0]  ¦  e_idx[-5,64,0]  ¦  e_null[-7,1,0]  ¦  s[-1,16383,0]  ¦  s_bits[-5,64,0]  ¦  s_null[-7,1,0]  𝄀
-1  ¦  []  ¦  3  ¦  0  ¦  []  ¦  0  ¦  0  𝄀
-2  ¦  [ ]  ¦  1  ¦  0  ¦  []  ¦  0  ¦  0  𝄀
-3  ¦  [red]  ¦  2  ¦  0  ¦  [a]  ¦  2  ¦  0  𝄀
-4  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  ¦  1  𝄀
-5  ¦  []  ¦  3  ¦  0  ¦  [0]  ¦  1  ¦  0  𝄀
-6  ¦  [red]  ¦  2  ¦  0  ¦  [0,a]  ¦  3  ¦  0
+select id, concat('[',e,']') e, e+0 e_idx, e is null e_null, concat('[',s,']') s, s+0 s_bits, s is null s_null, concat('[',t,']') t, t+0 t_bits from issue_29840_jl order by id;
+➤ id[4,32,0]  ¦  e[-1,16383,0]  ¦  e_idx[-5,64,0]  ¦  e_null[-7,1,0]  ¦  s[-1,16383,0]  ¦  s_bits[-5,64,0]  ¦  s_null[-7,1,0]  ¦  t[-1,16383,0]  ¦  t_bits[-5,64,0]  𝄀
+1  ¦  []  ¦  3  ¦  0  ¦  []  ¦  0  ¦  0  ¦  [ a]  ¦  1  𝄀
+2  ¦  [ ]  ¦  1  ¦  0  ¦  []  ¦  0  ¦  0  ¦  [中文]  ¦  4  𝄀
+3  ¦  [red]  ¦  2  ¦  0  ¦  [a]  ¦  2  ¦  0  ¦  [a]  ¦  2  𝄀
+4  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  𝄀
+5  ¦  []  ¦  3  ¦  0  ¦  [0]  ¦  1  ¦  0  ¦  [ a,a]  ¦  3  𝄀
+6  ¦  [red]  ¦  2  ¦  0  ¦  [0,a]  ¦  3  ¦  0  ¦  [a]  ¦  2
 create table issue_29840_jl_par like issue_29840_ins;
 load data infile {'filepath'='$resources/load_data/issue_29840_enum_set.jl','format'='jsonline','jsondata'='object'} into table issue_29840_jl_par parallel 'true';
-select id, concat('[',e,']') e, e+0 e_idx, e is null e_null, concat('[',s,']') s, s+0 s_bits, s is null s_null from issue_29840_jl_par order by id;
-➤ id[4,32,0]  ¦  e[-1,16383,0]  ¦  e_idx[-5,64,0]  ¦  e_null[-7,1,0]  ¦  s[-1,16383,0]  ¦  s_bits[-5,64,0]  ¦  s_null[-7,1,0]  𝄀
-1  ¦  []  ¦  3  ¦  0  ¦  []  ¦  0  ¦  0  𝄀
-2  ¦  [ ]  ¦  1  ¦  0  ¦  []  ¦  0  ¦  0  𝄀
-3  ¦  [red]  ¦  2  ¦  0  ¦  [a]  ¦  2  ¦  0  𝄀
-4  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  ¦  1  𝄀
-5  ¦  []  ¦  3  ¦  0  ¦  [0]  ¦  1  ¦  0  𝄀
-6  ¦  [red]  ¦  2  ¦  0  ¦  [0,a]  ¦  3  ¦  0
-select * from (select 'csv' t, count(*) diff from issue_29840_ins i join issue_29840_csv x using(id) where not (i.e+0 <=> x.e+0 and i.s+0 <=> x.s+0)
-union all select 'csv_par', count(*) from issue_29840_ins i join issue_29840_csv_par x using(id) where not (i.e+0 <=> x.e+0 and i.s+0 <=> x.s+0)
-union all select 'csv_local', count(*) from issue_29840_ins i join issue_29840_csv_local x using(id) where not (i.e+0 <=> x.e+0 and i.s+0 <=> x.s+0)
-union all select 'jl', count(*) from issue_29840_ins i join issue_29840_jl x using(id) where not (i.e+0 <=> x.e+0 and i.s+0 <=> x.s+0)
-union all select 'jl_par', count(*) from issue_29840_ins i join issue_29840_jl_par x using(id) where not (i.e+0 <=> x.e+0 and i.s+0 <=> x.s+0)) d order by t;
+select id, concat('[',e,']') e, e+0 e_idx, e is null e_null, concat('[',s,']') s, s+0 s_bits, s is null s_null, concat('[',t,']') t, t+0 t_bits from issue_29840_jl_par order by id;
+➤ id[4,32,0]  ¦  e[-1,16383,0]  ¦  e_idx[-5,64,0]  ¦  e_null[-7,1,0]  ¦  s[-1,16383,0]  ¦  s_bits[-5,64,0]  ¦  s_null[-7,1,0]  ¦  t[-1,16383,0]  ¦  t_bits[-5,64,0]  𝄀
+1  ¦  []  ¦  3  ¦  0  ¦  []  ¦  0  ¦  0  ¦  [ a]  ¦  1  𝄀
+2  ¦  [ ]  ¦  1  ¦  0  ¦  []  ¦  0  ¦  0  ¦  [中文]  ¦  4  𝄀
+3  ¦  [red]  ¦  2  ¦  0  ¦  [a]  ¦  2  ¦  0  ¦  [a]  ¦  2  𝄀
+4  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  ¦  1  ¦  null  ¦  null  𝄀
+5  ¦  []  ¦  3  ¦  0  ¦  [0]  ¦  1  ¦  0  ¦  [ a,a]  ¦  3  𝄀
+6  ¦  [red]  ¦  2  ¦  0  ¦  [0,a]  ¦  3  ¦  0  ¦  [a]  ¦  2
+select * from (select 'csv' t, count(*) diff from issue_29840_ins i join issue_29840_csv x using(id) where not (i.e+0 <=> x.e+0 and i.s+0 <=> x.s+0 and i.t+0 <=> x.t+0)
+union all select 'csv_par', count(*) from issue_29840_ins i join issue_29840_csv_par x using(id) where not (i.e+0 <=> x.e+0 and i.s+0 <=> x.s+0 and i.t+0 <=> x.t+0)
+union all select 'csv_local', count(*) from issue_29840_ins i join issue_29840_csv_local x using(id) where not (i.e+0 <=> x.e+0 and i.s+0 <=> x.s+0 and i.t+0 <=> x.t+0)
+union all select 'jl', count(*) from issue_29840_ins i join issue_29840_jl x using(id) where not (i.e+0 <=> x.e+0 and i.s+0 <=> x.s+0 and i.t+0 <=> x.t+0)
+union all select 'jl_par', count(*) from issue_29840_ins i join issue_29840_jl_par x using(id) where not (i.e+0 <=> x.e+0 and i.s+0 <=> x.s+0 and i.t+0 <=> x.t+0)) d order by t;
 ➤ t[12,9,0]  ¦  diff[-5,64,0]  𝄀
 csv  ¦  0  𝄀
 csv_local  ¦  0  𝄀
@@ -81,14 +81,14 @@ jl  ¦  0  𝄀
 jl_par  ¦  0
 truncate table issue_29840_csv;
 load data infile '$resources/load_data/issue_29840_enum_set.csv' into table issue_29840_csv fields terminated by ',' optionally enclosed by '"' set e=NULLIF(e,''), s=NULLIF(s,'');
-select id, e+0 e_idx, e is null e_null, s+0 s_bits, s is null s_null from issue_29840_csv order by id;
-➤ id[4,32,0]  ¦  e_idx[-5,64,0]  ¦  e_null[-7,1,0]  ¦  s_bits[-5,64,0]  ¦  s_null[-7,1,0]  𝄀
-1  ¦  null  ¦  1  ¦  null  ¦  1  𝄀
-2  ¦  1  ¦  0  ¦  null  ¦  1  𝄀
-3  ¦  2  ¦  0  ¦  2  ¦  0  𝄀
-4  ¦  null  ¦  1  ¦  null  ¦  1  𝄀
-5  ¦  null  ¦  1  ¦  1  ¦  0  𝄀
-6  ¦  2  ¦  0  ¦  3  ¦  0
+select id, e+0 e_idx, e is null e_null, s+0 s_bits, s is null s_null, concat('[',t,']') t, t+0 t_bits from issue_29840_csv order by id;
+➤ id[4,32,0]  ¦  e_idx[-5,64,0]  ¦  e_null[-7,1,0]  ¦  s_bits[-5,64,0]  ¦  s_null[-7,1,0]  ¦  t[-1,16383,0]  ¦  t_bits[-5,64,0]  𝄀
+1  ¦  null  ¦  1  ¦  null  ¦  1  ¦  [ a]  ¦  1  𝄀
+2  ¦  1  ¦  0  ¦  null  ¦  1  ¦  [中文]  ¦  4  𝄀
+3  ¦  2  ¦  0  ¦  2  ¦  0  ¦  [a]  ¦  2  𝄀
+4  ¦  null  ¦  1  ¦  null  ¦  1  ¦  null  ¦  null  𝄀
+5  ¦  null  ¦  1  ¦  1  ¦  0  ¦  [ a,a]  ¦  3  𝄀
+6  ¦  2  ¦  0  ¦  3  ¦  0  ¦  [a]  ¦  2
 drop table issue_29840_ins;
 drop table issue_29840_csv;
 drop table issue_29840_csv_par;

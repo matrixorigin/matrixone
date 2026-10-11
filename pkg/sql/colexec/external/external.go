@@ -1170,6 +1170,22 @@ func isEnumMember(enumValues, name string) bool {
 	}
 }
 
+// isPaddedSetInput reports whether val has outer whitespace and is already
+// valid input for the SET definition, as native INSERT parses it. Trimming such
+// a value could select a different member (' a' vs 'a'); padded non-member
+// input keeps being trimmed. Unpadded values return early without parsing.
+func isPaddedSetInput(setValues, val string) bool {
+	if len(val) == 0 || (!isASCIISpace(val[0]) && !isASCIISpace(val[len(val)-1])) {
+		return false
+	}
+	_, err := types.ParseSet(setValues, val)
+	return err == nil
+}
+
+func isASCIISpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
+}
+
 func shouldLoadEmptyNumericAsZero(param *ExternalParam, id types.T) bool {
 	if param == nil || param.Extern == nil ||
 		param.Extern.ExternType != int32(plan.ExternType_LOAD) ||
@@ -1594,8 +1610,10 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 		id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
 		id != types.T_bit &&
-		// A declared ENUM member is kept as written (e.g. ' ' or '').
-		!(id == types.T_enum && isEnumMember(col.Typ.Enumvalues, field.Val)) {
+		// A declared ENUM member is kept as written (e.g. ' ' or ''), and so is
+		// valid SET input, which may name a leading-space member (' a').
+		!(id == types.T_enum && isEnumMember(col.Typ.Enumvalues, field.Val)) &&
+		!(isSet && isPaddedSetInput(col.Typ.Enumvalues, field.Val)) {
 		field.Val = strings.TrimSpace(field.Val)
 		trimSpace = true
 	}
