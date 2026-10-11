@@ -2224,6 +2224,7 @@ func parse128(x string, exactTail bool) (y Decimal128, scale int32, next byte, e
 	}
 	var z Decimal128
 	width := 0
+	dropped := false
 	t := false
 	scale = -1
 	i := 0
@@ -2312,7 +2313,14 @@ func parse128(x string, exactTail bool) (y Decimal128, scale int32, next byte, e
 					return
 				}
 				if exactTail {
-					next = x[i] - '0'
+					if !dropped {
+						next = x[i] - '0'
+						dropped = true
+					}
+					// Keep scanning through the existing token loop so separators
+					// cannot hide an exponent or an invalid trailing token.
+					i++
+					continue
 				} else if x[i] >= '5' {
 					y, err = y.Add128(Decimal128{1, 0})
 					if y1, _ := y.Mod128(Decimal128{10, 0}); y1.B0_63 == 0 {

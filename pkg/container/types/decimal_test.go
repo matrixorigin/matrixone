@@ -1742,12 +1742,24 @@ func TestParseDecimal128LeadingZeroDoesNotConsumePrecision(t *testing.T) {
 // not first at the 38-digit parser limit and again at the scale.
 func TestParseDecimal128RoundsOnceWhenDownscaling(t *testing.T) {
 	zeros := strings.Repeat("0", 36)
+	ones := strings.Repeat("1", 38)
 	for _, tc := range []struct {
 		input string
 		width int32
 		scale int32
 		want  string
 	}{
+		// These inputs retain 38 significant digits before reaching the tail.
+		{"0." + ones + "4", 38, 38, "0." + ones},
+		{"0." + ones + "5", 38, 38, "0." + ones[:37] + "2"},
+		{"-0." + ones + "5", 38, 38, "-0." + ones[:37] + "2"},
+		{"0." + ones + "054e0", 38, 38, "0." + ones},
+		{"0." + ones[:37] + "45", 38, 37, "0." + ones[:37]},
+		{"-0." + ones[:37] + "45", 38, 37, "-0." + ones[:37]},
+		{"0." + strings.Repeat("9", 38) + "5", 38, 37, "1." + strings.Repeat("0", 37)},
+		{"0." + ones + "4e-1", 38, 38, "0.0" + ones[:37]},
+		{"0." + ones + "4 e-1", 38, 38, "0.0" + ones[:37]},
+		{"-0." + ones + "4+e-1", 38, 38, "-0.0" + ones[:37]},
 		{"0." + zeros + "145", 38, 37, "0." + zeros + "1"},
 		{"-0." + zeros + "145", 38, 37, "-0." + zeros + "1"},
 		{"0." + zeros + "149", 38, 37, "0." + zeros + "1"},
@@ -1779,5 +1791,27 @@ func TestParseDecimal128RoundsOnceWhenDownscaling(t *testing.T) {
 		got, err := ParseDecimal128(tc.input, tc.width, tc.scale)
 		require.NoError(t, err, tc.input)
 		require.Equal(t, tc.want, got.Format(tc.scale), tc.input)
+	}
+}
+
+func TestParseDecimal128PostRoundingRange(t *testing.T) {
+	max := strings.Repeat("9", 38)
+	for _, sign := range []string{"", "-"} {
+		got, err := ParseDecimal128(sign+max+".4", 38, 0)
+		require.NoError(t, err)
+		require.Equal(t, sign+max, got.Format(0))
+		got, err = ParseDecimal128(sign+"0."+max+"4", 38, 38)
+		require.NoError(t, err)
+		require.Equal(t, sign+"0."+max, got.Format(38))
+		for _, tail := range []string{"5", "7"} {
+			_, err = ParseDecimal128(sign+max+"."+tail, 38, 0)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			_, err = ParseDecimal128(sign+"0."+max+tail, 38, 38)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		}
+	}
+	for _, suffix := range []string{"4 e-", "4z"} {
+		_, err := ParseDecimal128("0."+strings.Repeat("1", 38)+suffix, 38, 38)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	}
 }
