@@ -1036,18 +1036,18 @@ func sameHavingColumnReference(ctx *BindContext, left, right *tree.UnresolvedNam
 
 // resolveTableBinding resolves only this scope. A different explicit database
 // is a miss, so the binder can continue through its existing parent traversal.
-func (ctx *BindContext) resolveTableBinding(db, table string) *Binding {
-	binding := ctx.bindingByTable[table]
+func (bc *BindContext) resolveTableBinding(db, table string) *Binding {
+	binding := bc.bindingByTable[table]
 	if db == "" {
 		return binding
 	}
 	if binding != nil && binding.db != "" &&
-		(db == binding.db || db == tree.NewCStr(binding.db, ctx.lower).Compare() ||
+		(db == binding.db || db == tree.NewCStr(binding.db, bc.lower).Compare() ||
 			(slices.Contains(mysql.CaseInsensitiveDbs, binding.db) && strings.EqualFold(db, binding.db))) {
 		return binding
 	}
-	if ctx.remapOption != nil {
-		return ctx.bindingByTable[db+"."+table]
+	if bc.remapOption != nil {
+		return bc.bindingByTable[db+"."+table]
 	}
 	return nil
 }
