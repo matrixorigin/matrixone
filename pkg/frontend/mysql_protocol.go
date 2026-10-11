@@ -1425,7 +1425,9 @@ func (mp *MysqlProtocolImpl) appendIntLenEnc(value uint64) error {
 // read the count of bytes from the buffer at the position
 // return bytes slice ; position + count ; true - succeeded or false - failed
 func (mp *MysqlProtocolImpl) readCountOfBytes(data []byte, pos int, count int) ([]byte, int, bool) {
-	if pos+count-1 >= len(data) {
+	// count may come from a client-supplied length-encoded integer; reject
+	// negative values (uint64 > MaxInt64 converted to int) before slicing.
+	if count < 0 || pos < 0 || pos > len(data) || count > len(data)-pos {
 		return nil, 0, false
 	}
 	return data[pos : pos+count], pos + count, true
@@ -1504,10 +1506,12 @@ func (mp *MysqlProtocolImpl) readStringLenEnc(data []byte, pos int) (string, int
 	if !ok {
 		return "", 0, false
 	}
-	sLength := int(value)
-	if pos+sLength-1 >= len(data) {
+	// Compare as uint64 before converting: a length above MaxInt64 would
+	// become a negative int and pass a signed bounds check.
+	if pos > len(data) || value > uint64(len(data)-pos) {
 		return "", 0, false
 	}
+	sLength := int(value)
 	return string(data[pos : pos+sLength]), pos + sLength, true
 }
 
