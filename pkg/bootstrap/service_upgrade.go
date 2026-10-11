@@ -604,23 +604,26 @@ func retryRun(
 	wait := time.Second
 	maxWait := time.Second * 10
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		err := fn(ctx)
 		if err == nil {
 			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		logger.Error("execute task failed, retry later",
 			zap.String("task", name),
 			zap.Duration("wait", wait),
 			zap.Error(err))
-		time.Sleep(wait)
+		if err := waitBootstrapRetry(ctx, wait); err != nil {
+			return err
+		}
 		wait *= 2
 		if wait > maxWait {
 			wait = maxWait
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
 		}
 	}
 }
