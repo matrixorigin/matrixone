@@ -112,19 +112,23 @@ func alterDataBranchParticipationSQL(oldTableID uint64) string {
 
 func alterDataBranchHistoricalSourceScopeSQL(
 	accountName, databaseName, tableName string,
-	tableID uint64,
+	tableID, logicalID uint64,
 ) string {
 	accountName = sqlquote.EscapeString(accountName)
 	databaseName = sqlquote.EscapeString(databaseName)
 	tableName = sqlquote.EscapeString(tableName)
+	object := fmt.Sprintf("obj_id = %d", tableID)
+	if logicalID != 0 && logicalID != tableID {
+		object = fmt.Sprintf("obj_id in (%d,%d)", tableID, logicalID)
+	}
 	return fmt.Sprintf(
 		`(level = 'cluster' or (`+
 			`account_name = '%s' and (`+
 			`level = 'account' or `+
 			`(level = 'database' and database_name = '%s') or `+
-			`(level = 'table' and (obj_id = %d or (database_name = '%s' and table_name = '%s')))`+
+			`(level = 'table' and (%s or (database_name = '%s' and table_name = '%s')))`+
 			`)))`,
-		accountName, databaseName, tableID, databaseName, tableName,
+		accountName, databaseName, object, databaseName, tableName,
 	)
 }
 
@@ -133,7 +137,7 @@ func alterDataBranchHistoricalSnapshotSourceSQL(
 	tableID uint64,
 ) string {
 	return alterDataBranchHistoricalSnapshotSourceProbeSQL(
-		accountName, databaseName, tableName, tableID, true,
+		accountName, databaseName, tableName, tableID, true, 0,
 	)
 }
 
@@ -141,6 +145,7 @@ func alterDataBranchHistoricalSnapshotSourceProbeSQL(
 	accountName, databaseName, tableName string,
 	tableID uint64,
 	forUpdate bool,
+	logicalID uint64,
 ) string {
 	lockClause := ""
 	if forUpdate {
@@ -149,7 +154,7 @@ func alterDataBranchHistoricalSnapshotSourceProbeSQL(
 	return fmt.Sprintf(
 		"select 1 from %s.%s where kind = 'user' and %s limit 1%s",
 		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
-		alterDataBranchHistoricalSourceScopeSQL(accountName, databaseName, tableName, tableID),
+		alterDataBranchHistoricalSourceScopeSQL(accountName, databaseName, tableName, tableID, logicalID),
 		lockClause,
 	)
 }
@@ -159,7 +164,7 @@ func alterDataBranchHistoricalPitrSourceSQL(
 	tableID uint64,
 ) string {
 	return alterDataBranchHistoricalPitrSourceProbeSQL(
-		accountName, databaseName, tableName, tableID, true,
+		accountName, databaseName, tableName, tableID, true, 0,
 	)
 }
 
@@ -167,6 +172,7 @@ func alterDataBranchHistoricalPitrSourceProbeSQL(
 	accountName, databaseName, tableName string,
 	tableID uint64,
 	forUpdate bool,
+	logicalID uint64,
 ) string {
 	lockClause := ""
 	if forUpdate {
@@ -175,7 +181,7 @@ func alterDataBranchHistoricalPitrSourceProbeSQL(
 	return fmt.Sprintf(
 		"select 1 from %s.%s where pitr_status = 1 and %s limit 1%s",
 		catalog.MO_CATALOG, catalog.MO_PITR,
-		alterDataBranchHistoricalSourceScopeSQL(accountName, databaseName, tableName, tableID),
+		alterDataBranchHistoricalSourceScopeSQL(accountName, databaseName, tableName, tableID, logicalID),
 		lockClause,
 	)
 }
@@ -261,10 +267,10 @@ func (c *Compile) alterTableHasLatestHistoricalBranchSource(
 			},
 			[]string{
 				alterDataBranchHistoricalSnapshotSourceProbeSQL(
-					accountName, databaseName, tableName, oldTableID, false,
+					accountName, databaseName, tableName, oldTableID, false, 0,
 				),
 				alterDataBranchHistoricalPitrSourceProbeSQL(
-					accountName, databaseName, tableName, oldTableID, false,
+					accountName, databaseName, tableName, oldTableID, false, 0,
 				),
 			},
 		)
@@ -1155,7 +1161,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		var retryErr error
 		if !isTemp {
 			if c.isLifecycleRC() {
-				if dbSource, originRel, err = c.admitBroadTableLifecycleRC(dbName, tblName, oldId, false); err != nil {
+				if dbSource, originRel, err = c.admitBroadTableLifecycleRC(dbName, tblName, oldId); err != nil {
 					return err
 				}
 				if plannedID := qry.TableDef.GetTblId(); plannedID != 0 && plannedID != oldId {
@@ -1345,7 +1351,11 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		}
 		c.proc.Ctx = plan2.WithPersistedDDLReplay(baseCtx, qry.TableDef, qry.CopyTableDef)
 		defer func() { c.proc.Ctx = originalCtx }()
-		return c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts)
+		create := func() error { return c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts) }
+		if !isTemp && c.isLifecycleRC() {
+			return c.withDropLifecycle(dropLifecycleAdmission{}, create)
+		}
+		return create()
 	}()
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "Create copy table for alter table",
@@ -1499,7 +1509,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	if !isTemp && c.isLifecycleRC() {
 		// G-X and the source table lock are already held. The synchronous
 		// internal DROP must not reacquire C after G or advance its snapshot.
-		err = c.withBroadDropLifecycle(drop)
+		err = c.withDropLifecycle(dropLifecycleAdmission{}, drop)
 	} else {
 		err = drop()
 	}
