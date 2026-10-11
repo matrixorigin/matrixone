@@ -2777,6 +2777,12 @@ func buildCreateTable(
 	var asSelectCols []*ColDef
 	var asSelectQuery *Query
 	if stmt.IsAsSelect {
+		// Binding qualifies and rewrites SELECT nodes in place. Keep the caller's
+		// source intact for admission retries and prepared execution, while using
+		// the same private source for inferred columns and the follow-up INSERT.
+		private := *stmt
+		private.AsSource = DeepCopySelect(stmt.AsSource)
+		stmt = &private
 		explicitTargetColumns := make(map[string]struct{})
 		for _, item := range stmt.Defs {
 			if colDef, ok := item.(*tree.ColumnTableDef); ok && colDef.Name != nil {

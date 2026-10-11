@@ -653,16 +653,16 @@ func TestBorrowedCreateAdmissionPreservesCallerWrites(t *testing.T) {
 			res, _ := exec.Exec(cleanup, "drop database if exists "+database, executor.Options{}.WithAccountID(0))
 			res.Close()
 		}()
-		result, err = exec.Exec(ctx, "create table "+database+".existing(id int primary key)", executor.Options{}.WithAccountID(0))
+		result, err = exec.Exec(ctx, "create table "+database+".existing(id int primary key,created datetime)", executor.Options{}.WithAccountID(0))
 		require.NoError(t, err)
 		result.Close()
 		require.NoError(t, exec.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
-			res, err := tx.Exec("insert into "+database+".existing values(7)", executor.StatementOption{})
+			res, err := tx.Exec("insert into "+database+".existing values(7,'2023-11-11 10:00:01')", executor.StatementOption{})
 			if err != nil {
 				return err
 			}
 			res.Close()
-			res, err = exec.Exec(ctx, "create table "+database+".new_table(id int primary key)", executor.Options{}.WithAccountID(0).WithTxn(tx.Txn()).WithDisableIncrStatement())
+			res, err = exec.Exec(ctx, "create table "+database+".new_table as select date_format(created, '%W %M %Y') from "+database+".existing", executor.Options{}.WithAccountID(0).WithTxn(tx.Txn()).WithDisableIncrStatement())
 			if err != nil {
 				return err
 			}
@@ -678,5 +678,31 @@ func TestBorrowedCreateAdmissionPreservesCallerWrites(t *testing.T) {
 			return true
 		})
 		require.Equal(t, []int32{7}, rows, "CREATE admission cannot roll back its caller's statement")
+		// The borrowed CREATE uses pre-effect admission refresh. Check metadata
+		// and population through the public SQL interface after its caller commits.
+		db, err := sql.Open("mysql", issue27487DSN(cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		var name, formatted string
+		require.NoError(t, db.QueryRowContext(ctx, "select column_name from information_schema.columns where table_schema=? and table_name='new_table'", database).Scan(&name))
+		require.Equal(t, "date_format(created, '%W %M %Y')", name)
+		require.NoError(t, db.QueryRowContext(ctx, "select * from "+database+".new_table").Scan(&formatted))
+		require.Equal(t, "Saturday November 2023", formatted)
+		prepared, err := db.PrepareContext(ctx, "create table "+database+".prepared_ctas as select date_format(created, '%W %M %Y'), ? as marker from "+database+".existing")
+		require.NoError(t, err)
+		defer prepared.Close()
+		for _, value := range []int{2, 7} {
+			_, err = prepared.ExecContext(ctx, value)
+			require.NoError(t, err)
+			var marker int
+			require.NoError(t, db.QueryRowContext(ctx, "select * from "+database+".prepared_ctas").Scan(&formatted, &marker))
+			require.Equal(t, "Saturday November 2023", formatted)
+			require.Equal(t, value, marker)
+			require.NoError(t, db.QueryRowContext(ctx, "select column_name from information_schema.columns where table_schema=? and table_name='prepared_ctas' and ordinal_position=1", database).Scan(&name))
+			require.Equal(t, "date_format(created, '%W %M %Y')", name)
+			_, err = db.ExecContext(ctx, "drop table "+database+".prepared_ctas")
+			require.NoError(t, err)
+		}
+
 	})
 }

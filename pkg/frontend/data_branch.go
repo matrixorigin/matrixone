@@ -1003,11 +1003,9 @@ func diffMergeAgency(
 	if err != nil {
 		return
 	}
-	defer func() {
-		if deferred != nil {
-			err = deferred(err)
-		}
-	}()
+	if deferred != nil {
+		defer finishDataBranchComponent(execCtx.reqCtx, deferred, &err)
+	}
 
 	ctx, cancel := context.WithCancel(execCtx.reqCtx)
 	defer cancel()
@@ -1065,8 +1063,8 @@ func diffMergeAgency(
 		done        bool
 		wg          = new(sync.WaitGroup)
 		outputErr   atomic.Value
-		retBatCh    = make(chan batchWithKind, 10)
-		stopCh      = make(chan struct{})
+		retBatCh    chan batchWithKind
+		stopCh      chan struct{}
 		stopOnce    sync.Once
 		emit        emitFunc
 		stop        func()
@@ -1085,13 +1083,6 @@ func diffMergeAgency(
 			tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 		}
 	}()
-
-	emit = newEmitter(ctx, stopCh, retBatCh)
-	stop = func() {
-		stopOnce.Do(func() {
-			close(stopCh)
-		})
-	}
 
 	if diffStmt != nil {
 		if err = buildOutputSchema(ctx, ses, diffStmt, tblStuff); err != nil {
@@ -1151,41 +1142,50 @@ func diffMergeAgency(
 		}
 	}
 
+	if diffStmt == nil {
+		// The apply owner prepares stages before production and consumes each
+		// batch inline. A retry must never cancel a concurrent LCA probe.
+		copt.onlineApply = true
+		produce := func(emit emitFunc) error {
+			wg.Add(1)
+			return diffOnBase(ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit,
+				pkFilter, pickKeyHashmap, betweenFrom, betweenTo)
+		}
+		if pickStmt != nil {
+			return pickMergeDiffs(ctx, cancel, ses, bh, pickStmt, tblStuff, produce)
+		}
+		return mergeDiffs(ctx, cancel, ses, bh, tblStuff, produce)
+	}
+
+	retBatCh = make(chan batchWithKind, 10)
+	stopCh = make(chan struct{})
+	emit = newEmitter(ctx, stopCh, retBatCh)
+	stop = func() {
+		stopOnce.Do(func() {
+			close(stopCh)
+		})
+	}
 	wg.Add(2)
 	outputCh := retBatCh
 
 	go func() {
 		defer wg.Done()
-		if diffStmt != nil {
-			// 1. all rows
-			// 2. limit rows
-			// 3. count
-			// 4. as table
-			// 5. as file
+		// 1. all rows
+		// 2. limit rows
+		// 3. count
+		// 4. as table
+		// 5. as file
 
-			var err2 error
-			if outputPhase != nil {
-				err2 = outputPhase.drain(ctx, cancel, tblStuff.retPool, outputCh)
-			} else {
-				err2 = satisfyDiffOutputOpt(
-					ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, outputCh,
-				)
-			}
-			if err2 != nil {
-				outputErr.Store(err2)
-			}
-		} else if pickStmt != nil {
-			if err2 := pickMergeDiffs(
-				ctx, cancel, ses, bh, pickStmt, dagInfo, tblStuff, outputCh,
-			); err2 != nil {
-				outputErr.Store(err2)
-			}
+		var err2 error
+		if outputPhase != nil {
+			err2 = outputPhase.drain(ctx, cancel, tblStuff.retPool, outputCh)
 		} else {
-			if err2 := mergeDiffs(
-				ctx, cancel, ses, bh, mergeStmt, dagInfo, tblStuff, outputCh,
-			); err2 != nil {
-				outputErr.Store(err2)
-			}
+			err2 = satisfyDiffOutputOpt(
+				ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, outputCh,
+			)
+		}
+		if err2 != nil {
+			outputErr.Store(err2)
 		}
 	}()
 
@@ -1193,7 +1193,7 @@ func diffMergeAgency(
 		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit, pkFilter, pickKeyHashmap,
 		betweenFrom, betweenTo,
 	); err != nil {
-		// If the consumer cancelled the context (e.g., PICK conflict FAIL),
+		// If the DIFF consumer cancelled the context (e.g., an output failure),
 		// wait for it to finish and prefer its real error over context.Canceled.
 		if retBatCh != nil {
 			close(retBatCh)

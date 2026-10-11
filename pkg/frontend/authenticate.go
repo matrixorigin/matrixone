@@ -9404,7 +9404,7 @@ func authenticateCreateTableAsSelectSourcePrivilege(
 
 	// Rebuild source-select plan and reuse normal table-scan privilege extraction,
 	// instead of manually parsing AST table references.
-	sourcePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st.AsSource)
+	sourcePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), plan2.DeepCopySelect(st.AsSource))
 	if err != nil {
 		return false, stats, err
 	}

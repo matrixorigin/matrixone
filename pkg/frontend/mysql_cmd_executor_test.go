@@ -12012,3 +12012,34 @@ func TestRecordStatementUTF8(t *testing.T) {
 		})
 	}
 }
+
+func TestPreparedCTASCompileRetryPreservesNamesAndParameters(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), catalog.System_Account)
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	ses.SetSql("execute ctas_retry")
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "create table tpch.ctas_retry as select a + ? as value, a + 1 from select_test.bind_select", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	compiler := plan.NewMockCompilerContext(true, newPlanTestProcess(t))
+	compiler.SetContext(ctx)
+	params := vector.NewVec(types.T_text.ToType())
+	proc := compiler.GetProcess()
+	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("2"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	originalSource := tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL)
+	for _, value := range []int64{2, 7, 2} {
+		require.NoError(t, vector.SetStringAt(params, 0, fmt.Sprint(value), proc.Mp()))
+		retry := newPreparedExecutionRetry([]any{plan.ParamValue{Value: value}})
+		got, err := buildPlanForCompileRetry(ctx, ses, compiler, stmt, false, retry)
+		require.NoError(t, err)
+		require.Empty(t, queryParamPositions(got.GetDdl().Query))
+		cols := got.GetDdl().GetCreateTable().TableDef.Cols
+		require.Equal(t, "value", cols[0].Name)
+		require.Equal(t, "a + 1", cols[1].Name)
+		require.Equal(t, originalSource, tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL))
+		// Specialization retains each supplied value, rather than freezing the first retry.
+		require.Contains(t, got.GetDdl().Query.String(), fmt.Sprintf("sval:%q", fmt.Sprint(value)))
+	}
+}

@@ -30,6 +30,8 @@ The correction design is gpt-6.1-sol / xhigh session `01a12985-fd30-7230-b012-ab
 
 Borrowed internal CREATE pins its names before physical compilation. If binding/frontier validation requires a refresh, the existing planner rebuilds once within the same admitted name domain, preserving caller writes and statement ownership. Arbitrary later execution failures still return to the caller; child execution never invokes the outer retry transition. Planner and execution both exclude foreign-key-banned catalog databases.
 
+CTAS binding and its source-privilege precheck use private copies of the caller's current SELECT AST. Qualification cannot change inferred column names across admission retries or prepared execution. The CREATE planner uses its same private source for column inference and generated INSERT SQL; explicit qualifiers, aliases and parameter offsets remain intact. The existing AST copy utility also isolates mutable maps and SAMPLE columns. Ordinary SELECT/DML do not enter these copy boundaries. This correction and its privilege amendment were designed by gpt-6.1-sol/xhigh sessions `01a12a1a-4d02-7ff0-a3b9-433d16928f29` and `01a12a25-d1ca-7d13-a9ee-a3a4fccb3dbb`.
+
 Partition replacement includes actual descendant names from the existing partition metadata and naming owner. Descendants borrow the lifecycle frontier but receive no root FK catalog payload. Actor, transaction and lifetime validation remains mandatory; payload preservation applies only to its exact root target.
 
 The existing transaction creation journal certifies unpublished scalar replacement and cleanup only when both physical and original logical generations were created in that transaction. Statement rollback revokes this proof. Scalar shape and FK/lineage/history exclusions still apply, and D/T ownership remains required. Certified private DELETE/TRUNCATE/DROP avoids late global lifecycle acquisition; replacements of published logical generations retain normal admission. No name-prefix exemption or additional journal is introduced.
@@ -71,3 +73,5 @@ Matched public SQL runs with 5,000 actual tables measured baseline DROP at 101.8
 - Incremental formatting/static analysis, owning-package race checks, focused integration regressions and final gpt-6.1-sol/xhigh overall review.
 
 No mixed-version upgrade protocol is required. No existing-data validation is added to declarations authored with foreign_key_checks=0.
+
+Online MERGE/PICK owns stage initialization, batch production/application, and cleanup synchronously. LCA SQL and retry-capable apply SQL cannot overlap in their shared transaction; online shard delivery uses one execution lane, while hash construction and read-only DIFF retain parallelism. This removes retry-triggered sibling cancellation without adding SQL locks or result spooling. Design amendment: `gpt-6.1-sol/xhigh`, session `01a12a33-9b70-7733-a833-0c569d079da9`.

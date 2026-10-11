@@ -29,6 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
@@ -135,7 +139,7 @@ func TestTransactionLocalReplacementRequiresBothGenerations(t *testing.T) {
 }
 
 func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
-	for _, mode := range []string{"unknown_binding", "stable_binding", "changed_domain", "canceled"} {
+	for _, mode := range []string{"unknown_binding", "stable_binding", "changed_domain", "canceled", "ctas_refresh"} {
 		t.Run(mode, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProcess(t)
@@ -176,11 +180,27 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 				q.FkNameBinding = &binding
 			}
 			original := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{DdlType: plan.DataDefinition_CREATE_TABLE, Definition: &plan.DataDefinition_CreateTable{CreateTable: q}}}}
+			var source tree.Statement
+			var planner *plan2.MockCompilerContext
+			if mode == "ctas_refresh" {
+				var err error
+				source, err = parsers.ParseOne(t.Context(), dialect.MYSQL, "create table db.t as select a + 1 from select_test.bind_select", 1)
+				require.NoError(t, err)
+				defer source.Free()
+				planner = plan2.NewMockCompilerContext(true, testutil.NewProcess(t))
+				original, err = plan2.BuildPlan(planner, source, false)
+				require.NoError(t, err)
+			}
 			builds := 0
 			rebuilt := original
 			c := &Compile{proc: proc, e: barrier, buildPlanFunc: func(ctx context.Context) (*plan.Plan, error) {
 				builds++
 				require.Equal(t, frontier, now, "rebuild follows workspace frontier")
+				if mode == "ctas_refresh" {
+					var err error
+					rebuilt, err = plan2.BuildPlan(planner, source, false)
+					return rebuilt, err
+				}
 				if mode == "changed_domain" {
 					rebuilt = &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{DdlType: plan.DataDefinition_CREATE_TABLE, Definition: &plan.DataDefinition_CreateTable{CreateTable: &plan.CreateTable{Database: "db", TableDef: &plan.TableDef{Name: "different"}}}}}}
 				}
@@ -212,6 +232,10 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 				require.Equal(t, 1, builds)
 				require.Equal(t, 1, advances)
 				require.True(t, c.createNamePinsAdmitted)
+			}
+			if mode == "ctas_refresh" {
+				require.Equal(t, "a + 1", got.GetDdl().GetCreateTable().TableDef.Cols[0].Name)
+				require.Equal(t, original.GetDdl().GetCreateTable().CreateAsSelectSql, got.GetDdl().GetCreateTable().CreateAsSelectSql)
 			}
 			// No workspace rollback, statement increment or token cancellation method
 			// is expected on these mocks: planning is not an execution retry.
