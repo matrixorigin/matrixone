@@ -2317,10 +2317,6 @@ func parse128(x string, exactTail bool) (y Decimal128, scale int32, next byte, e
 						next = x[i] - '0'
 						dropped = true
 					}
-					// Keep scanning through the existing token loop so separators
-					// cannot hide an exponent or an invalid trailing token.
-					i++
-					continue
 				} else if x[i] >= '5' {
 					y, err = y.Add128(Decimal128{1, 0})
 					if y1, _ := y.Mod128(Decimal128{10, 0}); y1.B0_63 == 0 {
@@ -2328,10 +2324,11 @@ func parse128(x string, exactTail bool) (y Decimal128, scale int32, next byte, e
 						y, _ = y.Scale(-1)
 					}
 				}
-				// Skip the remaining dropped digits but keep a trailing exponent.
+				// Skip the dropped digit span. Exact mode resumes the existing
+				// token loop for separators, exponents and invalid trailing tokens.
 				for i++; i < len(x) && x[i] >= '0' && x[i] <= '9'; i++ {
 				}
-				if i < len(x) && (x[i] == 'e' || x[i] == 'E') {
+				if exactTail || (i < len(x) && (x[i] == 'e' || x[i] == 'E')) {
 					continue
 				}
 				break
