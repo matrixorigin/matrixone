@@ -2336,22 +2336,26 @@ func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (
 				semanticType = ctr.orderVecs[i].Typ[j]
 			}
 
-			if ctr.orderVecs[i].Vec[j] != nil {
-				ctr.orderVecs[i].Vec[j].CleanOnlyData()
-				if err = ctr.orderVecs[i].Vec[j].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+			owned := ctr.orderVecs[i].Vec[j]
+			if owned != nil && !owned.IsConst() && !vec.IsConst() {
+				owned.CleanOnlyData()
+				if err = owned.UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
 					return err
 				}
-				if semanticType.Oid != types.T_any {
-					ctr.orderVecs[i].Vec[j].SetType(semanticType)
-				}
 			} else {
-				ctr.orderVecs[i].Vec[j], err = vec.Dup(proc.Mp())
+				// UnionBatch appends into a flat vector; preserve constant
+				// representation and acquire the replacement before freeing old data.
+				next, err := vec.Dup(proc.Mp())
 				if err != nil {
 					return err
 				}
-				if semanticType.Oid != types.T_any {
-					ctr.orderVecs[i].Vec[j].SetType(semanticType)
+				if owned != nil {
+					owned.Free(proc.Mp())
 				}
+				ctr.orderVecs[i].Vec[j] = next
+			}
+			if semanticType.Oid != types.T_any {
+				ctr.orderVecs[i].Vec[j].SetType(semanticType)
 			}
 		}
 	}

@@ -79,14 +79,22 @@ func (partition *Partition) Prepare(proc *process.Process) (err error) {
 	ctr.batchList = make([]*batch.Batch, 0, 16)
 	ctr.orderCols = make([][]*vector.Vector, 0, 16)
 
-	partition.ctr.executors = make([]colexec.ExpressionExecutor, len(partition.OrderBySpecs))
+	// Literal keys are equal across rows and batches; omit them from both
+	// execution and comparison without changing the operator's plan specs.
+	specs := make([]*plan2.OrderBySpec, 0, len(partition.OrderBySpecs))
+	for _, spec := range partition.OrderBySpecs {
+		if spec.Expr.GetLit() == nil {
+			specs = append(specs, spec)
+		}
+	}
+	partition.ctr.executors = make([]colexec.ExpressionExecutor, len(specs))
 	for i := range partition.ctr.executors {
-		partition.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, partition.OrderBySpecs[i].Expr)
+		partition.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, specs[i].Expr)
 		if err != nil {
 			return err
 		}
 	}
-	ctr.generateCompares(partition.OrderBySpecs)
+	ctr.generateCompares(specs)
 	return nil
 }
 

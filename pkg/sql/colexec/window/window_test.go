@@ -3096,6 +3096,101 @@ func TestWindowOrdersPartitionedInput(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestWindowConstantNullKeysAcrossBatches(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		function          string
+		partitioned       bool
+		constantPartition bool
+		want              []uint64
+	}{
+		{"partitioned_row_number", "row_number", true, false, []uint64{1, 2, 1}},
+		{"partitioned_rank", "rank", true, false, []uint64{1, 1, 1}},
+		{"unpartitioned_dense_rank", "dense_rank", false, false, []uint64{1, 1, 1}},
+		{"constant_partition_then_id", "row_number", true, true, []uint64{1, 2, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+			t.Cleanup(proc.Free)
+			batches := []*batch.Batch{batch.NewWithSize(1), batch.NewWithSize(1)}
+			op := colexec.NewMockOperator().WithBatchs(batches)
+			t.Cleanup(func() { op.Free(proc, false, nil) })
+			for i, values := range [][]int32{{1, 1}, {2}} {
+				batches[i].Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+				batches[i].SetRowCount(len(values))
+			}
+			null := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_any)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+			}
+			var partitions []*plan.Expr
+			var orders []*plan.OrderBySpec
+			if tc.constantPartition {
+				partitions = append(partitions, null)
+				orders = append(orders, &plan.OrderBySpec{Expr: null})
+			}
+			if tc.partitioned {
+				partitions = append(partitions, newColExpr(0))
+				orders = append(orders, &plan.OrderBySpec{Expr: newColExpr(0)})
+			}
+			orders = append(orders, &plan.OrderBySpec{Expr: null})
+			arg := &Window{
+				WinSpecList: []*plan.Expr{{Expr: &plan.Expr_W{W: &plan.WindowSpec{
+					Name: tc.function, WindowFunc: newFunExpr(tc.function),
+					PartitionBy: partitions, OrderBy: orders,
+				}}}},
+				Aggs: []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, tc.function)},
+			}
+			t.Cleanup(func() { arg.Free(proc, false, nil) })
+			arg.AppendChild(op)
+			require.NoError(t, arg.Prepare(proc))
+			require.Equal(t, tc.want, collectFixedWindowColumn[uint64](t, arg, proc, 1))
+		})
+	}
+}
+
+func TestWindowOrderVectorRepresentationChanges(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+	t.Cleanup(proc.Free)
+	batches := []*batch.Batch{batch.NewWithSize(1), batch.NewWithSize(1), batch.NewWithSize(1), batch.NewWithSize(1)}
+	t.Cleanup(func() {
+		for _, bat := range batches {
+			bat.Clean(proc.Mp())
+		}
+	})
+	var err error
+	batches[0].Vecs[0], err = vector.NewConstFixed(types.T_int32.ToType(), int32(7), 2, proc.Mp())
+	require.NoError(t, err)
+	batches[1].Vecs[0] = testutil.MakeInt32Vector([]int32{8, 7}, nil, proc.Mp())
+	batches[2].Vecs[0] = testutil.MakeInt32Vector([]int32{4}, nil, proc.Mp())
+	batches[3].Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 3, proc.Mp())
+	order, err := colexec.MakeEvalVector(proc, []*plan.Expr{newColExpr(0)})
+	require.NoError(t, err)
+	ctr := &container{orderVecs: []colexec.ExprEvalVector{order}}
+	t.Cleanup(ctr.freeExes)
+	t.Cleanup(func() { ctr.freeVector(proc.Mp()) })
+	var previous *vector.Vector
+	for i, bat := range batches {
+		source := bat.Vecs[0]
+		bat.SetRowCount(source.Length())
+		require.NoError(t, ctr.evalOrderVector(bat, proc))
+		owned := ctr.orderVecs[0].Vec[0]
+		require.NotSame(t, source, owned)
+		require.Equal(t, source.Length(), owned.Length())
+		require.Equal(t, source.IsConst(), owned.IsConst())
+		require.Equal(t, source.IsConstNull(), owned.IsConstNull())
+		if !source.IsConstNull() {
+			require.Equal(t, vector.MustFixedColWithTypeCheck[int32](source), vector.MustFixedColWithTypeCheck[int32](owned))
+		}
+		if i == 2 {
+			require.Same(t, previous, owned) // Normal flat batches retain buffer reuse.
+		}
+		previous = owned
+	}
+}
+
 func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	first := batch.NewWithSize(2)
