@@ -270,6 +270,17 @@ func TestRemoteExpressionPlacementRechecksGenerationAndWorkers(t *testing.T) {
 	place(plan2.ExecTypeAP_MULTICN, 2)
 	client.versions["second:9000"] = defines.MORPCVersion71
 	place(plan2.ExecTypeAP_ONECN, 2)
+	// View metadata joins the same placement floor and live worker checks.
+	for _, id := range []int32{function.MO_VIEW_DEFINITION, function.MO_VIEW_CHECK_OPTION} {
+		qry.Nodes[0].ProjectList = []*planpb.Expr{{Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(id, 0)},
+		}}}}
+		client.versions["worker:9000"] = defines.MORPCVersion110
+		client.versions["second:9000"] = defines.MORPCVersion109
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion110
+		place(plan2.ExecTypeAP_MULTICN, 2)
+	}
 	qry.Nodes[0].ProjectList = []*planpb.Expr{plan2.MakePlan2Int64ConstExprWithType(1)}
 	place(plan2.ExecTypeAP_MULTICN, 0)
 }

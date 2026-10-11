@@ -403,7 +403,10 @@ type RemoteExpressionFeatures struct {
 	CalendarIntervalNormalization bool
 	// ScalarDivision is syntactic only. SELECT warning policy supplies its
 	// execution-only floor; persisted expression contracts remain unchanged.
-	ScalarDivision                  bool
+	ScalarDivision bool
+	// ViewMetadataFunctions requires v110 for MO_VIEW_DEFINITION/CHECK_OPTION.
+	ViewMetadataFunctions bool
+
 	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
 	YearBitCast                     bool
@@ -449,7 +452,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -979,6 +982,11 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 				if id == castJSONToArrayFunctionID && isMediumIntArrayCast(current, fn) {
 					features.MediumIntAssignmentBounds = true
+				}
+				// The planner depends on this package, so registry IDs cannot be
+				// imported here. Compile tests bind these IDs to the registry.
+				if id == 591 || id == 592 { // MO_VIEW_DEFINITION / MO_VIEW_CHECK_OPTION
+					features.ViewMetadataFunctions = true
 				}
 				if id == 21 && current.Typ.Id == 11 && len(fn.Args) > 0 &&
 					fn.Args[0] != nil && fn.Args[0].Typ.Id == 55 { // CAST YEAR -> BIT

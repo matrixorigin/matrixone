@@ -21,6 +21,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestRequiredRemoteExpressionFeaturesViewMetadataIdentities(t *testing.T) {
+	for _, tc := range []struct {
+		id   int64
+		want bool
+	}{{590, false}, {591, true}, {592, true}, {593, false}} {
+		t.Run(fmt.Sprintf("function_%d", tc.id), func(t *testing.T) {
+			// Identity, not the spelling or the surrounding expression shape,
+			// controls the floor. A subquery child exercises nested detection.
+			expr := &Expr{Expr: &Expr_Sub{Sub: &SubqueryRef{Child: &Expr{Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: tc.id << 32, ObjName: "mo_view_definition"},
+			}}}}}}
+			features, err := RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.ViewMetadataFunctions)
+			require.Equal(t, tc.want, features.Any())
+		})
+	}
+}
+
 func TestValidateStringLiteralFormsAfterWireDecode(t *testing.T) {
 	original := &Expr{Expr: &Expr_Lit{Lit: &Literal{
 		Value:       &Literal_Sval{Sval: "x"},

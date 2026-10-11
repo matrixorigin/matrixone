@@ -173,12 +173,6 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if err = validateRemoteMongoUserQueryPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
-	if err = validateRemoteViewDefinitionPipelineProtocol(proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateRemoteViewDefinitionDestinationProtocol(proc, p); err != nil {
-		return nil, err
-	}
 	if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
@@ -307,9 +301,6 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateRemoteViewDefinitionPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
@@ -2472,6 +2463,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 			"geodetic spatial-distance semantics require MORPC protocol version 90",
 		)
 	}
+	if features.ViewMetadataFunctions && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion110) {
+		return moerr.NewNotSupportedNoCtx("view metadata remote execution requires MORPC protocol version 110")
+	}
 	return nil
 }
 
@@ -2963,9 +2957,8 @@ func validateRemoteArrowLoadPipelineProtocol(proc *process.Process, p *pipeline.
 }
 
 // validateRemoteViewDefinitionPipelineProtocol protects the function IDs that
-// occur in the persisted VIEWS definition. It is used at both marshal and
-// unmarshal boundaries, so a stale prepared or remote pipeline fails closed
-// instead of being bound by a CN that predates the function registration.
+// occur in the persisted VIEWS definition for standalone scope encoding.
+// Remote send and receive reuse the shared expression feature analysis.
 func validateRemoteViewDefinitionPipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
@@ -2975,46 +2968,16 @@ func validateRemoteViewDefinitionPipelineProtocol(
 	if proc != nil && supportsRemoteViewDefinitionFunction(proc.GetService()) {
 		return nil
 	}
-	if p == nil || (!pipelineContainsFunctionID(p, function.MO_VIEW_DEFINITION) &&
-		!pipelineContainsFunctionID(p, function.MO_VIEW_CHECK_OPTION)) {
+	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	if err != nil {
+		return err
+	}
+	if !features.ViewMetadataFunctions {
 		return nil
 	}
 	if proc == nil || !supportsRemoteViewDefinitionFunction(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
 			"view metadata remote execution requires MORPC protocol version 110",
-		)
-	}
-	return nil
-}
-
-// validateRemoteViewDefinitionDestinationProtocol closes the sender-side
-// race between compile-time placement and RemoteRun. The coordinator's
-// protocol version is not evidence that the selected destination CN has the
-// new function registrations.
-func validateRemoteViewDefinitionDestinationProtocol(
-	proc *process.Process,
-	p *pipeline.Pipeline,
-) error {
-	if p == nil || (!pipelineContainsFunctionID(p, function.MO_VIEW_DEFINITION) &&
-		!pipelineContainsFunctionID(p, function.MO_VIEW_CHECK_OPTION)) {
-		return nil
-	}
-	if p.Node == nil {
-		return moerr.NewNotSupportedNoCtx(
-			"view metadata remote execution requires a versioned remote destination",
-		)
-	}
-	supported, err := remoteWorkersSupportProtocol(
-		proc,
-		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}},
-		defines.MORPCVersion110,
-	)
-	if err != nil {
-		return err
-	}
-	if !supported {
-		return moerr.NewNotSupportedNoCtx(
-			"remote destination does not support view metadata functions (MORPC version 109)",
 		)
 	}
 	return nil
