@@ -55,6 +55,7 @@ func TestIssue29095RewriteMetadataVisibility(t *testing.T) {
 				owner := open("dump")
 				defer owner.Close()
 				const database = "DbCase29095"
+				const callerDatabase = "caller29095"
 				const role = "rewrite_metadata_role"
 				const user = "rewrite_metadata_user"
 				const snapshot = "rewrite_metadata_snapshot"
@@ -74,6 +75,7 @@ func TestIssue29095RewriteMetadataVisibility(t *testing.T) {
 						"drop role if exists " + role,
 						"drop snapshot if exists " + snapshot,
 						"drop database if exists " + database,
+						"drop database if exists " + callerDatabase,
 					} {
 						execSQLRequire(t, cleanup, cleanupOwner, statement)
 					}
@@ -82,11 +84,13 @@ func TestIssue29095RewriteMetadataVisibility(t *testing.T) {
 					require.Zero(t, n)
 					require.NoError(t, cleanupOwner.QueryRowContext(cleanup, "select count(*) from mo_catalog.mo_role where role_name='"+role+"'").Scan(&n))
 					require.Zero(t, n)
-					require.NoError(t, cleanupOwner.QueryRowContext(cleanup, "select count(*) from mo_catalog.mo_database where lower(datname)=lower('"+database+"')").Scan(&n))
+					require.NoError(t, cleanupOwner.QueryRowContext(cleanup, "select count(*) from mo_catalog.mo_database where lower(datname) in (lower('"+database+"'),lower('"+callerDatabase+"'))").Scan(&n))
 					require.Zero(t, n)
 				}()
 				for _, statement := range []string{
 					"create database " + database,
+					"create database " + callerDatabase,
+					"create table " + callerDatabase + ".Controlled(id int)",
 					"create table " + database + ".Controlled(id int, secret int)",
 					"create table " + database + ".Unrelated(id int, secret int)",
 					"create table " + database + ".PublicControl(id int, secret int)",
@@ -94,6 +98,7 @@ func TestIssue29095RewriteMetadataVisibility(t *testing.T) {
 					"create user " + user + " identified by '111' default role " + role,
 					"grant connect on account * to " + role,
 					"grant select on table " + database + ".Controlled to " + role,
+					"grant select on table " + callerDatabase + ".Controlled to " + role,
 					"grant select on table " + database + ".PublicControl to " + role,
 				} {
 					execSQLRequire(t, ctx, owner, statement)
@@ -121,6 +126,8 @@ func TestIssue29095RewriteMetadataVisibility(t *testing.T) {
 					invalid           bool
 				}
 				scenarios := []scenario{
+					{"implicit database star", "Controlled", "select * from Controlled", []string{"id"}, nil, false},
+					{"implicit database projection", "Controlled", "select id from Controlled", []string{"id"}, nil, false},
 					{"qualified column", "Controlled", "select Controlled.id from " + database + ".Controlled", []string{"id"}, []string{"id"}, false},
 					{"alias column", "Controlled", "select a.id from " + database + ".Controlled as a", []string{"id"}, []string{"id"}, false},
 					{"qualified star", "Controlled", "select Controlled.* from " + database + ".Controlled", []string{"id", "secret"}, []string{"id", "secret"}, false},
@@ -141,6 +148,9 @@ func TestIssue29095RewriteMetadataVisibility(t *testing.T) {
 						restricted := open(user)
 						defer restricted.Close()
 						execSQLRequire(t, ctx, restricted, "set enable_remap_hint=1")
+						// Unqualified rewrite sources bind in this caller database;
+						// explicit sources must retain the target's identity under USE.
+						execSQLRequire(t, ctx, restricted, "use "+callerDatabase)
 						var activeMode int
 						require.NoError(t, restricted.QueryRowContext(ctx, "select @@lower_case_table_names").Scan(&activeMode))
 						require.Equal(t, mode, activeMode)

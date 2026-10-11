@@ -60,10 +60,20 @@ func TestRewriteVisibleColumns(t *testing.T) {
 			sql:  "select id as identifier from db.controlled",
 		},
 		{
-			name:      "implicit database",
-			sql:       "select id from controlled",
-			expected:  map[string]struct{}{"id": {}},
-			supported: true,
+			name: "implicit database projection fails closed",
+			sql:  "select id from controlled",
+		},
+		{
+			name: "implicit database star fails closed",
+			sql:  "select * from controlled",
+		},
+		{
+			name: "implicit database alias fails closed",
+			sql:  "select a.id from controlled as a",
+		},
+		{
+			name: "implicit database qualified star fails closed",
+			sql:  "select controlled.* from controlled",
 		},
 		{
 			name: "different database fails closed",

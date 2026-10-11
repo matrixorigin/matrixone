@@ -335,7 +335,11 @@ func rewriteMetadataSingleTableSource(clause *tree.SelectClause, database, table
 		return "", false, false
 	}
 	sourceDatabase := string(tableName.Schema())
-	if sourceDatabase != "" && tree.NewCStr(sourceDatabase, lower).Compare() != tree.NewCStr(database, lower).Compare() {
+	// An unqualified source binds in the caller's default database (or to a
+	// CTE), not necessarily in the rule's target database. Require an explicit
+	// schema rather than infer its identity from the metadata view's context.
+	if !tableName.ExplicitSchema || sourceDatabase == "" ||
+		tree.NewCStr(sourceDatabase, lower).Compare() != tree.NewCStr(database, lower).Compare() {
 		return "", false, false
 	}
 	return qualifier, aliased, true
