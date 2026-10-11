@@ -75,6 +75,52 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 			require.True(t, collation.Valid, "collation_name must be exposed for %s.%s", table, column)
 			return charset.String, collation.String
 		}
+		queryShowColumnCollation := func(table, column string) string {
+			t.Helper()
+			rows, err := db.QueryContext(ctx, "show full columns from `"+table+"`")
+			require.NoError(t, err)
+			defer rows.Close()
+
+			columnNames, err := rows.Columns()
+			require.NoError(t, err)
+			fieldIndex, collationIndex := -1, -1
+			for i, name := range columnNames {
+				switch name {
+				case "Field":
+					fieldIndex = i
+				case "Collation":
+					collationIndex = i
+				}
+			}
+			require.NotEqual(t, -1, fieldIndex)
+			require.NotEqual(t, -1, collationIndex)
+
+			asString := func(value any) string {
+				switch value := value.(type) {
+				case string:
+					return value
+				case []byte:
+					return string(value)
+				default:
+					return ""
+				}
+			}
+			for rows.Next() {
+				values := make([]any, len(columnNames))
+				dest := make([]any, len(values))
+				for i := range values {
+					dest[i] = &values[i]
+				}
+				require.NoError(t, rows.Scan(dest...))
+				if asString(values[fieldIndex]) == column {
+					require.NoError(t, rows.Err())
+					return asString(values[collationIndex])
+				}
+			}
+			require.NoError(t, rows.Err())
+			t.Fatalf("column %s.%s was not returned by SHOW FULL COLUMNS", table, column)
+			return ""
+		}
 
 		exec("drop database if exists " + schema)
 		exec("create database " + schema)
@@ -105,6 +151,7 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 		charset, collation := queryColumnCollation("words", "s")
 		require.Equal(t, "utf8mb4", charset)
 		require.Equal(t, "utf8mb4_unicode_ci", collation)
+		require.Equal(t, "utf8mb4_unicode_ci", queryShowColumnCollation("words", "s"))
 		require.Equal(t, 2, queryCount("select count(*) from words where lower(s)='a'"))
 		// Conditional and ordered string expressions must carry the native
 		// Unicode revision through their rebuilt result type. Include mixed-width
@@ -148,6 +195,7 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 		charset, collation = queryColumnCollation("utf8mb3_write", "s")
 		require.Equal(t, "utf8", charset)
 		require.Equal(t, "utf8_unicode_ci", collation)
+		require.Equal(t, "utf8_unicode_ci", queryShowColumnCollation("utf8mb3_write", "s"))
 		_, err = db.ExecContext(ctx, "insert into utf8mb3_write values ('😀')")
 		require.Error(t, err)
 		_, err = db.ExecContext(ctx, "insert into utf8mb3_write values (unhex('30fbc130ffff20'))")
