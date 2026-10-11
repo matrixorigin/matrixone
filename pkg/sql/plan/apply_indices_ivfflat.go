@@ -540,7 +540,7 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		return nil, nil
 	}
 
-	nThread, err := builder.compCtx.ResolveVariable("ivf_threads_search", true, false)
+	nThread, err := builder.resolveInt64Variable("ivf_threads_search", 0)
 	if err != nil {
 		return nil, err
 	}
@@ -591,7 +591,7 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		pkPos:           pkPos,
 		pkType:          pkType,
 		lossyEntries:    lossyEntries,
-		nThread:         nThread.(int64),
+		nThread:         nThread,
 		nProbe:          nProbe,
 		totalLists:      totalLists,
 		pushdownEnabled: (mode == "pre"),

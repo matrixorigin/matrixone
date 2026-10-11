@@ -17,7 +17,6 @@ package idxcron
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/bytedance/sonic"
@@ -107,9 +106,6 @@ func UnregisterUpdate(ctx context.Context,
 		sql = fmt.Sprintf("DELETE FROM mo_catalog.mo_index_update WHERE account_id = %d AND table_id = %d AND index_name = '%s' AND action = '%s'",
 			tenantId, tableId, sqlquote.EscapeString(indexname), sqlquote.EscapeString(action))
 	}
-
-	os.Stderr.WriteString(sql)
-	os.Stderr.WriteString("\n")
 
 	res, err := runCmdSql(sqlproc, sql)
 	if err != nil {

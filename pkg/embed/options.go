@@ -15,6 +15,7 @@
 package embed
 
 import (
+	"context"
 	"os"
 	"time"
 
@@ -65,6 +66,15 @@ func WithTesting() Option {
 		if c.options.storeTimeout == 0 {
 			c.options.storeTimeout = testHAKeeperStoreTimeout
 		}
+	}
+}
+
+// WithTestAdmissionContext controls admission waits for a WithTesting cluster.
+// It does not cancel service startup or shutdown. A nil context retains the
+// default background context; successful admission remains owned until Close.
+func WithTestAdmissionContext(ctx context.Context) Option {
+	return func(c *cluster) {
+		c.options.testAdmissionContext = ctx
 	}
 }
 
