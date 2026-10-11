@@ -96,8 +96,15 @@ select * from t4;
 drop stage parqstage;
 create table t5(id bigint, name varchar, int8column tinyint, int16column smallint, binarycolumn binary, varbinarycolumn varbinary(32), blobcolumn blob);
 load data infile {'filepath'='$resources/load_data/int8_int16_binary_varbinary_blob.parq', 'format'='parquet'} into table t5;
-select * from t5;
-➤ id[-5,64,0]  ¦  name[12,-1,0]  ¦  int8column[-6,8,0]  ¦  int16column[5,16,0]  ¦  binarycolumn[12,3,0]  ¦  varbinarycolumn[12,96,0]  ¦  blobcolumn[12,0,0]  𝄀
+internal error: Src length 7 is larger than Dest length 1
+select count(*) from t5;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table t5;
+create table t5(id bigint, name varchar, int8column tinyint, int16column smallint, binarycolumn binary(7), varbinarycolumn varbinary(32), blobcolumn blob);
+load data infile {'filepath'='$resources/load_data/int8_int16_binary_varbinary_blob.parq', 'format'='parquet'} into table t5;
+select * from t5 order by id;
+➤ id[-5,64,0]  ¦  name[12,-1,0]  ¦  int8column[-6,8,0]  ¦  int16column[5,16,0]  ¦  binarycolumn[-2,7,0]  ¦  varbinarycolumn[12,96,0]  ¦  blobcolumn[12,0,0]  𝄀
 1  ¦  Alice  ¦  1  ¦  100  ¦  binary1  ¦  varbinary1  ¦  blob1  𝄀
 2  ¦  Bob  ¦  2  ¦  200  ¦  binary2  ¦  varbinary2  ¦  blob2  𝄀
 3  ¦  Charlie  ¦  3  ¦  300  ¦  binary3  ¦  varbinary3  ¦  blob3  𝄀
@@ -117,6 +124,34 @@ select * from t7;
 1  ¦  Alice  ¦  [85, 90, 78]  ¦  {"city": "Beijing", "zip": "100000"}  ¦  {"key1": "value1", "key2": "value2"}  𝄀
 2  ¦  Bob  ¦  [92, 88]  ¦  {"city": "Shanghai", "zip": "200000"}  ¦  {"a": "b"}  𝄀
 3  ¦  Charlie  ¦  [76, 85, 90, 95]  ¦  {"city": "Guangzhou", "zip": "510000"}  ¦  {"m": "n", "x": "y", "z": "w"}
+create table pq_nested_char(id int, address char(4));
+load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table pq_nested_char;
+internal error: Src length 36 is larger than Dest length 4
+select count(*) from pq_nested_char;
+➤ count(*)[-5,64,0]  𝄀
+0
+alter table pq_nested_char modify address char(64);
+load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table pq_nested_char;
+select id, hex(address) as address_hex from pq_nested_char order by id;
+➤ id[4,32,0]  ¦  address_hex[12,-1,0]  𝄀
+1  ¦  7B2263697479223A20224265696A696E67222C20227A6970223A2022313030303030227D  𝄀
+2  ¦  7B2263697479223A20225368616E67686169222C20227A6970223A2022323030303030227D  𝄀
+3  ¦  7B2263697479223A20224775616E677A686F75222C20227A6970223A2022353130303030227D
+drop table pq_nested_char;
+create table pq_nested_varchar(id int, address varchar(4));
+load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table pq_nested_varchar;
+internal error: Src length 36 is larger than Dest length 4
+select count(*) from pq_nested_varchar;
+➤ count(*)[-5,64,0]  𝄀
+0
+alter table pq_nested_varchar modify address varchar(64);
+load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table pq_nested_varchar;
+select id, hex(address) as address_hex from pq_nested_varchar order by id;
+➤ id[4,32,0]  ¦  address_hex[12,-1,0]  𝄀
+1  ¦  7B2263697479223A20224265696A696E67222C20227A6970223A2022313030303030227D  𝄀
+2  ¦  7B2263697479223A20225368616E67686169222C20227A6970223A2022323030303030227D  𝄀
+3  ¦  7B2263697479223A20224775616E677A686F75222C20227A6970223A2022353130303030227D
+drop table pq_nested_varchar;
 drop table if exists pq_nullable_test;
 CREATE TABLE pq_nullable_test (
 id BIGINT NOT NULL,
@@ -468,16 +503,16 @@ select
 hex(bin_fixed) as fixed_hex,
 hex(bin_var) as var_hex,
 hex(bin_blob) as blob_hex
-from pq_binary_test;
+from pq_binary_test order by hex(bin_fixed);
 ➤ fixed_hex[12,-1,0]  ¦  var_hex[12,-1,0]  ¦  blob_hex[12,-1,0]  𝄀
-3132333435  ¦  68656C6C6F20776F726C64  ¦  FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011  𝄀
-4142434445  ¦  6D61747269786F6E65  ¦  62696E6172795F64617461  𝄀
-464748494A  ¦  70617271756574  ¦  null
-select length(bin_fixed) from pq_binary_test;
-➤ length(bin_fixed)[-5,64,0]  𝄀
-5  𝄀
-5  𝄀
-5
+31323334350000000000  ¦  68656C6C6F20776F726C64  ¦  FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011FF0011  𝄀
+41424344450000000000  ¦  6D61747269786F6E65  ¦  62696E6172795F64617461  𝄀
+464748494A0000000000  ¦  70617271756574  ¦  null
+select length(bin_fixed) as fixed_len, length(bin_var) as var_len from pq_binary_test order by hex(bin_fixed);
+➤ fixed_len[-5,64,0]  ¦  var_len[-5,64,0]  𝄀
+10  ¦  11  𝄀
+10  ¦  9  𝄀
+10  ¦  7
 select count(*) from pq_binary_test where bin_blob is null;
 ➤ count(*)[-5,64,0]  𝄀
 1
