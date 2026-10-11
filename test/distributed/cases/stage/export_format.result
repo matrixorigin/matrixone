@@ -152,6 +152,47 @@ select * from export_verify order by id;
 3  ¦  Charlie  ¦  35  ¦  60000.75  ¦  0  ¦  2023-03-10 09:15:00  𝄀
 4  ¦  Diana  ¦  28  ¦  55000.25  ¦  1  ¦  2023-04-05 16:00:00  𝄀
 5  ¦  Eve  ¦  32  ¦  52000.00  ¦  0  ¦  2023-05-12 11:30:00
+create table export_float_source(id int primary key, v float);
+create table export_float_verify(id int primary key, v float);
+create table export_float_widen(id int primary key, v double);
+insert into export_float_source values (1, bit_cast(unhex('0000807f') as float)), (2, bit_cast(unhex('000080ff') as float)), (3, null), (4, 1.5);
+select id, hex(serial(v)) as value_bits, v is null as value_null from export_float_source order by id;
+➤ id[4,32,0]  ¦  value_bits[12,-1,0]  ¦  value_null[-7,1,0]  𝄀
+1  ¦  20FF800000  ¦  0  𝄀
+2  ¦  20007FFFFF  ¦  0  𝄀
+3  ¦  null  ¦  1  𝄀
+4  ¦  20BFC00000  ¦  0
+remove files from stage if exists 'stage://export_test_stage/float_roundtrip.parquet';
+select id, v from export_float_source order by id into outfile 'stage://export_test_stage/float_roundtrip.parquet' format 'parquet';
+load data infile {'filepath'='stage://export_test_stage/float_roundtrip.parquet', 'format'='parquet'} into table export_float_verify;
+select id, hex(serial(v)) as value_bits, v is null as value_null from export_float_verify order by id;
+➤ id[4,32,0]  ¦  value_bits[12,-1,0]  ¦  value_null[-7,1,0]  𝄀
+1  ¦  20FF800000  ¦  0  𝄀
+2  ¦  20007FFFFF  ¦  0  𝄀
+3  ¦  null  ¦  1  𝄀
+4  ¦  20BFC00000  ¦  0
+load data infile {'filepath'='stage://export_test_stage/float_roundtrip.parquet', 'format'='parquet'} into table export_float_widen;
+select id, hex(serial(v)) as value_bits, v is null as value_null from export_float_widen order by id;
+➤ id[4,32,0]  ¦  value_bits[12,-1,0]  ¦  value_null[-7,1,0]  𝄀
+1  ¦  21FFF0000000000000  ¦  0  𝄀
+2  ¦  21000FFFFFFFFFFFFF  ¦  0  𝄀
+3  ¦  null  ¦  1  𝄀
+4  ¦  21BFF8000000000000  ¦  0
+truncate table export_float_widen;
+insert into export_float_widen values (1, 1e100);
+remove files from stage if exists 'stage://export_test_stage/float_overflow.parquet';
+select id, v from export_float_widen into outfile 'stage://export_test_stage/float_overflow.parquet' format 'parquet';
+truncate table export_float_verify;
+load data infile {'filepath'='stage://export_test_stage/float_overflow.parquet', 'format'='parquet'} into table export_float_verify;
+invalid input: parquet value 1e+100 overflows FLOAT
+select count(*) from export_float_verify;
+➤ count(*)[-5,64,0]  𝄀
+0
+remove files from stage if exists 'stage://export_test_stage/float_roundtrip.parquet';
+remove files from stage if exists 'stage://export_test_stage/float_overflow.parquet';
+drop table export_float_source;
+drop table export_float_verify;
+drop table export_float_widen;
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_xml.txt' format 'xml';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. invalid format, must be csv, jsonline or parquet at line 1 column 107 near " 'xml';";
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_json.txt' format 'json';
