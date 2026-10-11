@@ -325,6 +325,7 @@ func (builder *QueryBuilder) unionSubscriptionStatistics(nodes []int32) (int32, 
 		unionCtx.snapshot = firstCtx.snapshot
 		unionCtx.defaultDatabase = firstCtx.defaultDatabase
 		unionCtx.cteName = firstCtx.cteName
+		unionCtx.cteDatabase = firstCtx.cteDatabase
 		unionCtx.viewPath = append([]*planpb.ViewStep(nil), firstCtx.viewPath...)
 		unionCtx.restoreViewMySQLSpecialTypes = firstCtx.restoreViewMySQLSpecialTypes
 		unionCtx.headings = append([]string{}, firstCtx.headings...)
