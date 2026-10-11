@@ -1179,6 +1179,7 @@ func alterCopyCreateOptions(qry *plan.AlterTable) executor.StatementOption {
 	// reconciled after the original relation is replaced, so avoid materializing
 	// an intermediate parent->temporary-table relationship here.
 	opts := executor.StatementOption{}.WithIgnoreForeignKey()
+	opts = opts.WithDisableLock()
 	if oldLogicalId := qry.GetTableDef().GetLogicalId(); oldLogicalId != 0 {
 		opts = opts.WithKeepLogicalId(oldLogicalId)
 	}
@@ -1255,11 +1256,10 @@ func (c *Compile) alterCopySourceChangedSinceCopy(
 	rel engine.Relation,
 	copyTS int64,
 ) (bool, error) {
-	from := types.BuildTS(copyTS, 0)
-	if from.IsEmpty() {
-		from = from.Next()
+	mustExceed := types.BuildTS(copyTS, 0)
+	if mustExceed.IsEmpty() {
+		mustExceed = mustExceed.Next()
 	}
-	mp := c.proc.GetMPool()
 	ctx := c.proc.Ctx
 	if ctx == nil {
 		ctx = c.proc.GetTopContext()
@@ -1276,41 +1276,23 @@ func (c *Compile) alterCopySourceChangedSinceCopy(
 			return false, nil
 		}
 	}
-	handle, err := rel.CollectChanges(
-		ctx, from, types.MaxTs(), false, mp,
-	)
+	provider, ok := rel.(engine.SourceCommitTSProvider)
+	if !ok {
+		return false, moerr.NewInternalError(
+			ctx, "ALTER COPY source does not support source commit timestamp validation",
+		)
+	}
+	sourceCommitTS, err := provider.SourceCommitTS(ctx, mustExceed)
 	if err != nil {
 		return false, err
 	}
+	return sourceCommitTS.GT(&mustExceed), nil
+}
 
-	changed := false
-	for {
-		data, tombstone, _, err := handle.Next(ctx, mp)
-		if err != nil {
-			if closeErr := handle.Close(); closeErr != nil {
-				return false, closeErr
-			}
-			return false, err
-		}
-		if data == nil && tombstone == nil {
-			break
-		}
-		if data != nil {
-			changed = changed || data.RowCount() > 0
-			data.Clean(mp)
-		}
-		if tombstone != nil {
-			changed = changed || tombstone.RowCount() > 0
-			tombstone.Clean(mp)
-		}
-		if changed {
-			break
-		}
-	}
-	if err := handle.Close(); err != nil {
-		return false, err
-	}
-	return changed, nil
+func (c *Compile) alterCopyPostPublicationConflict(reason string) error {
+	return moerr.NewTxnWriteConflict(
+		c.proc.Ctx, "ALTER COPY source changed after physical preparation: "+reason,
+	)
 }
 
 func (s *Scope) AlterTableCopy(c *Compile) (err error) {
@@ -1626,7 +1608,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 				return err
 			}
 			if plannedID := qry.TableDef.GetTblId(); plannedID != 0 && plannedID != oldId {
-				return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+				return c.alterCopyPostPublicationConflict("planned relation id changed")
 			}
 		} else if lineageTxnOp.Txn().IsPessimistic() {
 			if err = c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
@@ -1656,13 +1638,13 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			return err
 		}
 		if originRel.GetTableID(c.proc.Ctx) != oldId {
-			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+			return c.alterCopyPostPublicationConflict("source relation was replaced")
 		}
 		if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
 			return err
 		}
 		if originRel.GetTableDef(c.proc.Ctx).GetVersion() != sourceDefVersion {
-			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+			return c.alterCopyPostPublicationConflict("source definition changed")
 		}
 		sourceChanged, sourceChangedErr := c.alterCopySourceChangedSinceCopy(
 			originRel, lineagePlan.cloneTS,
@@ -1671,7 +1653,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			return sourceChangedErr
 		}
 		if sourceChanged {
-			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+			return c.alterCopyPostPublicationConflict("source data changed")
 		}
 		sourceForeignKeys, sourceRefChildTbls, err = snapshotAlterCopyForeignKeyState(
 			c.proc.Ctx, originRel,

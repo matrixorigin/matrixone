@@ -2466,66 +2466,41 @@ type alterCopyGateConcurrencyExecutor struct {
 	coordinator *alterCopyGateConcurrencyCoordinator
 }
 
-type alterCopyNoChangesHandle struct{}
-
-func (alterCopyNoChangesHandle) Next(
-	context.Context, *mpool.MPool,
-) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
-	return nil, nil, engine.ChangesHandle_Tail_done, nil
-}
-
-func (alterCopyNoChangesHandle) Close() error {
-	return nil
-}
-
-type alterCopyOneRowChangesHandle struct {
-	data     *batch.Batch
-	closed   bool
-	nextUsed bool
-}
-
-func (h *alterCopyOneRowChangesHandle) Next(
-	context.Context, *mpool.MPool,
-) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
-	if h.nextUsed {
-		return nil, nil, engine.ChangesHandle_Tail_done, nil
-	}
-	h.nextUsed = true
-	return h.data, nil, engine.ChangesHandle_Tail_done, nil
-}
-
-func (h *alterCopyOneRowChangesHandle) Close() error {
-	h.closed = true
-	return nil
-}
-
-type alterCopySourceChangesProvider interface {
-	alterCopySourceChanges() engine.ChangesHandle
-}
-
 type alterCopySourceDefVersionProvider interface {
 	alterCopySourceDefVersion() uint32
 }
 
 type alterCopyCreatedInCurrentTxnRelation struct {
 	engine.Relation
-	collectCalled bool
+	sourceCommitTSCalled bool
 }
 
-func (rel *alterCopyCreatedInCurrentTxnRelation) CollectChanges(
-	_ context.Context,
-	_, _ types.TS,
-	_ bool,
-	_ *mpool.MPool,
-) (engine.ChangesHandle, error) {
-	rel.collectCalled = true
-	return nil, errors.New("created-in-current-txn relation has no committed CDC history")
+func (rel *alterCopyCreatedInCurrentTxnRelation) SourceCommitTS(
+	context.Context, types.TS,
+) (types.TS, error) {
+	rel.sourceCommitTSCalled = true
+	return types.TS{}, errors.New("created-in-current-txn relation has no committed source timestamp")
 }
 
 func (rel *alterCopyCreatedInCurrentTxnRelation) CreatedInCurrentTxn(
 	_ context.Context,
 ) (bool, error) {
 	return true, nil
+}
+
+type alterCopySourceCommitTSRelation struct {
+	engine.Relation
+	sourceCommitTS func(context.Context, types.TS) (types.TS, error)
+}
+
+func (rel *alterCopySourceCommitTSRelation) SourceCommitTS(
+	ctx context.Context, mustExceed types.TS,
+) (types.TS, error) {
+	return rel.sourceCommitTS(ctx, mustExceed)
+}
+
+type alterCopySourceCommitTSProvider interface {
+	alterCopySourceCommitTS(context.Context, types.TS) (types.TS, error)
 }
 
 func (e *alterCopyGateConcurrencyExecutor) Exec(
@@ -2604,11 +2579,11 @@ func newAlterCopyGateConcurrencyFixture(
 			},
 		},
 	}
-	originRel := mock_frontend.NewMockRelation(ctrl)
-	originRel.EXPECT().GetTableID(gomock.Any()).DoAndReturn(
+	originMock := mock_frontend.NewMockRelation(ctrl)
+	originMock.EXPECT().GetTableID(gomock.Any()).DoAndReturn(
 		func(context.Context) uint64 { return sourceID() },
 	).AnyTimes()
-	originRel.EXPECT().GetTableDef(gomock.Any()).DoAndReturn(
+	originMock.EXPECT().GetTableDef(gomock.Any()).DoAndReturn(
 		func(context.Context) *plan2.TableDef {
 			return &plan2.TableDef{
 				TblId:   sourceID(),
@@ -2617,24 +2592,16 @@ func newAlterCopyGateConcurrencyFixture(
 			}
 		},
 	).AnyTimes()
-	originRel.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
-	originRel.EXPECT().CopyTableDef(gomock.Any()).
+	originMock.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
+	originMock.EXPECT().CopyTableDef(gomock.Any()).
 		Return(plan.DeepCopyTableDef(tableDef, true)).AnyTimes()
-	originRel.EXPECT().CollectChanges(
-		gomock.Any(), gomock.Any(), gomock.Any(), false, gomock.Any(),
-	).DoAndReturn(func(
-		_ context.Context,
-		_, _ types.TS,
-		_ bool,
-		_ *mpool.MPool,
-	) (engine.ChangesHandle, error) {
-		if provider, ok := exec.(alterCopySourceChangesProvider); ok {
-			if handle := provider.alterCopySourceChanges(); handle != nil {
-				return handle, nil
-			}
+	originRel := engine.Relation(originMock)
+	if provider, ok := exec.(alterCopySourceCommitTSProvider); ok {
+		originRel = &alterCopySourceCommitTSRelation{
+			Relation:       originMock,
+			sourceCommitTS: provider.alterCopySourceCommitTS,
 		}
-		return alterCopyNoChangesHandle{}, nil
-	}).AnyTimes()
+	}
 	copyRel := mock_frontend.NewMockRelation(ctrl)
 	copyRel.EXPECT().CopyTableDef(gomock.Any()).Return(copyTableDef).AnyTimes()
 	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyTableDef).AnyTimes()
@@ -3176,12 +3143,21 @@ type alterCopyLateOwnerExecutor struct {
 	dropSourceSQL    string
 	sourceRenamed    bool
 	onGate           func()
-	sourceChanges    engine.ChangesHandle
+	sourceChanged    bool
+	sourceCommitErr  error
 	sourceDefVersion uint32
 }
 
-func (e *alterCopyLateOwnerExecutor) alterCopySourceChanges() engine.ChangesHandle {
-	return e.sourceChanges
+func (e *alterCopyLateOwnerExecutor) alterCopySourceCommitTS(
+	_ context.Context, mustExceed types.TS,
+) (types.TS, error) {
+	if e.sourceCommitErr != nil {
+		return types.TS{}, e.sourceCommitErr
+	}
+	if e.sourceChanged {
+		return mustExceed.Next(), nil
+	}
+	return mustExceed, nil
 }
 
 func (e *alterCopyLateOwnerExecutor) alterCopySourceDefVersion() uint32 {
@@ -3295,7 +3271,7 @@ func TestAlterCopyRejectsSourceReplacementAfterGate(t *testing.T) {
 	exec.mp = compile.proc.Mp()
 
 	err := scope.AlterTableCopy(compile)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 	require.Empty(t, exec.metadataSQL)
 	require.Empty(t, exec.snapshotSQL)
 }
@@ -3304,13 +3280,10 @@ func TestAlterCopyRejectsSourceDataChangeAfterCopy(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	data := &batch.Batch{}
-	data.SetRowCount(1)
-	sourceChanges := &alterCopyOneRowChangesHandle{data: data}
 	stubAlterCopySourceLocks(t, nil)
 	exec := &alterCopyLateOwnerExecutor{
 		t:             t,
-		sourceChanges: sourceChanges,
+		sourceChanged: true,
 	}
 	scope, compile := newAlterCopyGateConcurrencyFixture(
 		t, ctrl, exec, "source-data-changed", 123456789,
@@ -3318,9 +3291,7 @@ func TestAlterCopyRejectsSourceDataChangeAfterCopy(t *testing.T) {
 	exec.mp = compile.proc.Mp()
 
 	err := scope.AlterTableCopy(compile)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
-	require.True(t, sourceChanges.closed)
-	require.True(t, sourceChanges.nextUsed)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 	require.Empty(t, exec.metadataSQL)
 	require.Empty(t, exec.snapshotSQL)
 }
@@ -3362,7 +3333,82 @@ func TestAlterCopySkipsSourceChangesForRelationCreatedInCurrentTxn(t *testing.T)
 	changed, err := compile.alterCopySourceChangedSinceCopy(rel, 123456789)
 	require.NoError(t, err)
 	require.False(t, changed)
-	require.False(t, rel.collectCalled)
+	require.False(t, rel.sourceCommitTSCalled)
+}
+
+func TestAlterCopyCreateOptionsDisablesNestedCreateLock(t *testing.T) {
+	opts := alterCopyCreateOptions(&plan2.AlterTable{
+		TableDef: &plan2.TableDef{LogicalId: 7, TableType: "rel"},
+	})
+	require.True(t, opts.DisableLock())
+	require.True(t, opts.IgnoreForeignKey())
+	require.Equal(t, uint64(7), opts.KeepLogicalId())
+	kind, hasKind := opts.KeepRelKind()
+	require.True(t, hasKind)
+	require.Equal(t, "rel", kind)
+}
+
+func TestAlterCopySourceChangedSinceCopyUsesSourceCommitTS(t *testing.T) {
+	compile := &Compile{proc: testutil.NewProcess(t)}
+	cases := []struct {
+		name      string
+		sourceTS  func(types.TS) types.TS
+		want      bool
+		wantError bool
+	}{
+		{name: "unchanged", sourceTS: func(ts types.TS) types.TS { return ts }},
+		{name: "changed", sourceTS: func(ts types.TS) types.TS { return ts.Next() }, want: true},
+		{name: "provider failure", wantError: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			rel := &alterCopySourceCommitTSRelation{
+				sourceCommitTS: func(_ context.Context, mustExceed types.TS) (types.TS, error) {
+					if testCase.sourceTS == nil {
+						return types.TS{}, errors.New("source timestamp unavailable")
+					}
+					return testCase.sourceTS(mustExceed), nil
+				},
+			}
+			changed, err := compile.alterCopySourceChangedSinceCopy(rel, 123456789)
+			if testCase.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, testCase.want, changed)
+		})
+	}
+}
+
+func TestAlterCopySourceChangedSinceCopyFailsClosedWithoutProvider(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	compile := &Compile{proc: testutil.NewProcess(t)}
+
+	_, err := compile.alterCopySourceChangedSinceCopy(
+		mock_frontend.NewMockRelation(ctrl), 123456789,
+	)
+	require.ErrorContains(t, err, "does not support source commit timestamp validation")
+}
+
+func TestAlterCopyPostPublicationConflictIsNotStatementRetryable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	proc := testutil.NewProcess(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
+		Mode:      txn.TxnMode_Pessimistic,
+		Isolation: txn.TxnIsolation_RC,
+	}).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+	compile := &Compile{proc: proc}
+
+	err := compile.alterCopyPostPublicationConflict("source data changed")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
+	require.False(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+	require.False(t, compile.isRetryErr(err))
+	require.False(t, compile.canRetry(err))
 }
 
 func TestAlterCopyRejectsSameIDSourceDefChangeAfterGate(t *testing.T) {
@@ -3378,7 +3424,7 @@ func TestAlterCopyRejectsSameIDSourceDefChangeAfterGate(t *testing.T) {
 	exec.mp = compile.proc.Mp()
 
 	err := scope.AlterTableCopy(compile)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 	require.True(t, exec.physicalStarted)
 	require.True(t, exec.ownerPublished)
 	require.Empty(t, exec.dropSourceSQL)

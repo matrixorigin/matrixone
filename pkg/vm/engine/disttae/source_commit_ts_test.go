@@ -16,16 +16,32 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+type sourceCommitTSStub struct {
+	engine.Relation
+	ts    types.TS
+	err   error
+	calls *int
+}
+
+func (rel *sourceCommitTSStub) SourceCommitTS(
+	context.Context, types.TS,
+) (types.TS, error) {
+	*rel.calls++
+	return rel.ts, rel.err
+}
 
 // failClosedTxnTable builds a txnTable whose workspace holds an uncommitted write
 // to its own table, so SourceCommitTS fails closed before touching partition state.
@@ -86,12 +102,66 @@ func TestSourceCommitTSNoProcess(t *testing.T) {
 	require.Error(t, err)
 }
 
-// A combined (partitioned) table cannot prove coverage across its members, so it
-// declines outright — without consulting the primary. A nil primary proves the
-// primary is never dereferenced (the old primary-only delegation would panic).
-func TestCombinedTxnTableSourceCommitTSFailsClosed(t *testing.T) {
+// A combined table without member discovery cannot prove coverage, and must not
+// dereference a nil primary.
+func TestCombinedTxnTableSourceCommitTSRequiresMembers(t *testing.T) {
 	_, err := (&combinedTxnTable{}).SourceCommitTS(context.Background(), types.TS{})
 	require.Error(t, err)
+}
+
+func TestCombinedTxnTableSourceCommitTSReturnsMax(t *testing.T) {
+	calls := 0
+	table := &combinedTxnTable{tablesFunc: func() ([]engine.Relation, error) {
+		return []engine.Relation{
+			&sourceCommitTSStub{ts: types.BuildTS(10, 0), calls: &calls},
+			&sourceCommitTSStub{ts: types.BuildTS(30, 0), calls: &calls},
+			&sourceCommitTSStub{ts: types.BuildTS(20, 0), calls: &calls},
+		}, nil
+	}}
+
+	sourceTS, err := table.SourceCommitTS(context.Background(), types.TS{})
+	require.NoError(t, err)
+	require.Equal(t, types.BuildTS(30, 0), sourceTS)
+	require.Equal(t, 3, calls)
+}
+
+func TestCombinedTxnTableSourceCommitTSShortCircuits(t *testing.T) {
+	calls := 0
+	table := &combinedTxnTable{tablesFunc: func() ([]engine.Relation, error) {
+		return []engine.Relation{
+			&sourceCommitTSStub{ts: types.BuildTS(30, 0), calls: &calls},
+			&sourceCommitTSStub{ts: types.BuildTS(40, 0), calls: &calls},
+		}, nil
+	}}
+
+	sourceTS, err := table.SourceCommitTS(
+		context.Background(), types.BuildTS(20, 0),
+	)
+	require.NoError(t, err)
+	require.Equal(t, types.BuildTS(30, 0), sourceTS)
+	require.Equal(t, 1, calls)
+}
+
+func TestCombinedTxnTableSourceCommitTSFailsClosedForMissingProvider(t *testing.T) {
+	table := &combinedTxnTable{tablesFunc: func() ([]engine.Relation, error) {
+		return []engine.Relation{struct{ engine.Relation }{}}, nil
+	}}
+	_, err := table.SourceCommitTS(context.Background(), types.TS{})
+	require.ErrorContains(t, err, "partition member")
+}
+
+func TestCombinedTxnTableSourceCommitTSPropagatesMemberError(t *testing.T) {
+	calls := 0
+	memberErr := errors.New("member unavailable")
+	table := &combinedTxnTable{tablesFunc: func() ([]engine.Relation, error) {
+		return []engine.Relation{
+			&sourceCommitTSStub{err: memberErr, calls: &calls},
+			&sourceCommitTSStub{ts: types.BuildTS(40, 0), calls: &calls},
+		}, nil
+	}}
+	_, err := table.SourceCommitTS(context.Background(), types.TS{})
+	require.ErrorIs(t, err, memberErr)
+	require.Equal(t, 1, calls)
 }
 
 // txnTableDelegate routes to origin, or to the combined table when combined.is.

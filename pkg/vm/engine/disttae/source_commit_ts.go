@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 // SourceCommitTS returns the timestamp an async index watermark must cover for
@@ -72,11 +73,31 @@ func (tbl *txnTableDelegate) SourceCommitTS(ctx context.Context, mustExceed type
 }
 
 func (t *combinedTxnTable) SourceCommitTS(ctx context.Context, mustExceed types.TS) (types.TS, error) {
-	// A combined table aggregates a partitioned table's members. Proving async
-	// index coverage would require the max source commit AND a transaction-local
-	// write check across every member, not just the primary; the primary alone
-	// under-reports both. Until that exists, fail closed so the mandatory probe
-	// declines to a table scan rather than firing against an index that may be
-	// missing a non-primary member's committed rows.
-	return types.TS{}, moerr.NewInternalErrorNoCtx("source commit ts is unavailable for a partitioned table")
+	if t.tablesFunc == nil {
+		return types.TS{}, moerr.NewInternalErrorNoCtx("source commit ts has no partitioned members")
+	}
+	relations, err := t.tablesFunc()
+	if err != nil {
+		return types.TS{}, err
+	}
+	maxTS := types.TS{}
+	for _, relation := range relations {
+		provider, ok := relation.(engine.SourceCommitTSProvider)
+		if !ok {
+			return types.TS{}, moerr.NewInternalErrorNoCtx(
+				"source commit ts is unavailable for a partition member",
+			)
+		}
+		sourceTS, err := provider.SourceCommitTS(ctx, mustExceed)
+		if err != nil {
+			return types.TS{}, err
+		}
+		if maxTS.IsEmpty() || sourceTS.GT(&maxTS) {
+			maxTS = sourceTS
+		}
+		if !mustExceed.IsEmpty() && maxTS.GT(&mustExceed) {
+			return maxTS, nil
+		}
+	}
+	return maxTS, nil
 }
