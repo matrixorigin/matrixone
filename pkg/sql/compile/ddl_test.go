@@ -967,7 +967,7 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 		c := newCompileWithStubEngine(t, eng, "drop table t2")
 		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error { return nil })
 		defer lockMoDb.Reset()
-		err := c.withBroadDropLifecycle(func() error {
+		err := c.withDropLifecycle(dropLifecycleAdmission{}, func() error {
 			return dropTableScope(&plan2.DropTable{Database: "db1", Table: "t2"}).DropTable(c)
 		})
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
@@ -2350,19 +2350,22 @@ func TestAlterTableAddForeignKeyLocksDistinctParentData(t *testing.T) {
 	child := mock_frontend.NewMockRelation(ctrl)
 	parentOne := mock_frontend.NewMockRelation(ctrl)
 	parentTwo := mock_frontend.NewMockRelation(ctrl)
+	parentOne.EXPECT().GetTableID(gomock.Any()).Return(uint64(20))
+	parentTwo.EXPECT().GetTableID(gomock.Any()).Return(uint64(30))
 	child.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 	child.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{}).AnyTimes()
 
 	childDB := mock_frontend.NewMockDatabase(ctrl)
 	childDB.EXPECT().GetDatabaseId(gomock.Any()).Return("1").AnyTimes()
 	childDB.EXPECT().Relation(gomock.Any(), "child", gomock.Any()).Return(child, nil).AnyTimes()
-	childDB.EXPECT().Relation(gomock.Any(), "parent_one", gomock.Any()).Return(parentOne, nil).Times(1)
+	childDB.EXPECT().Relation(gomock.Any(), "parent_one", gomock.Any()).Return(parentOne, nil).Times(2)
+	childDB.EXPECT().Relation(gomock.Any(), "missing_parent", gomock.Any()).Return(nil, moerr.NewNoSuchTableNoCtx("child_db", "missing_parent"))
 	parentDB := mock_frontend.NewMockDatabase(ctrl)
-	parentDB.EXPECT().Relation(gomock.Any(), "parent_two", gomock.Any()).Return(parentTwo, nil).Times(1)
+	parentDB.EXPECT().Relation(gomock.Any(), "parent_two", gomock.Any()).Return(parentTwo, nil).Times(2)
 
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().Database(gomock.Any(), "child_db", gomock.Any()).Return(childDB, nil).AnyTimes()
-	eng.EXPECT().Database(gomock.Any(), "parent_db", gomock.Any()).Return(parentDB, nil).Times(1)
+	eng.EXPECT().Database(gomock.Any(), "parent_db", gomock.Any()).Return(parentDB, nil).Times(2)
 
 	getConstraintDef := gostub.Stub(&GetConstraintDef,
 		func(context.Context, engine.Relation) (*engine.ConstraintDef, error) {
@@ -3442,7 +3445,7 @@ func TestDropTableSingleSkipsMissingFkTables(t *testing.T) {
 		ForeignTbl:           []uint64{42},
 		FkChildTblsReferToMe: []uint64{43},
 	}
-	err := c.withBroadDropLifecycle(func() error {
+	err := c.withDropLifecycle(dropLifecycleAdmission{}, func() error {
 		return dropTableScope(qry).DropTable(c)
 	})
 	require.NoError(t, err)

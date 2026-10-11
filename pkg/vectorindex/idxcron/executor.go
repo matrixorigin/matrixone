@@ -150,7 +150,7 @@ func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bo
 
 	// update status
 	sql := fmt.Sprintf(sqlfmt,
-		string(bytes), t.TableId, t.AccountId, t.Action)
+		sqlquote.EscapeString(string(bytes)), t.TableId, t.AccountId, sqlquote.EscapeString(t.Action))
 	res, err2 := runSaveStatusSql(sqlproc, sql)
 	if err2 != nil {
 		return err2

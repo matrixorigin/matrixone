@@ -40,6 +40,7 @@ import (
 )
 
 const (
+	defaultTableScanInterval      = 15 * time.Second
 	DefaultSlowThreshold          = 10 * time.Minute
 	DefaultPrintInterval          = 5 * time.Minute
 	DefaultWatermarkCleanupPeriod = 5 * time.Minute
@@ -178,11 +179,20 @@ var GetTableDetector = func(cnUUID string) *TableDetector {
 // CN process; SQL integration tests start several CN lifecycles in one Go
 // process, so retaining the old SQL executor would make scans query a closed
 // runtime.
-func ResetTableDetectorForTest(cnUUID string) {
+// An optional interval scopes faster periodic discovery to a private fixture.
+// Call only with the previous fixture stopped and before registering callbacks.
+func ResetTableDetectorForTest(cnUUID string, scanInterval ...time.Duration) {
 	if detector != nil {
 		detector.Close()
 	}
-	detector = newTableDetector(getSqlExecutor(cnUUID))
+	replacement := newTableDetector(getSqlExecutor(cnUUID))
+	replacement.scanInterval = defaultTableScanInterval
+	if len(scanInterval) > 0 && scanInterval[0] > 0 {
+		replacement.scanInterval = scanInterval[0]
+	}
+	// Reset also works before the first Get; once must not overwrite it.
+	once.Do(func() {})
+	detector = replacement
 }
 
 // TblMap key is dbName.tableName, e.g. db1.t1
@@ -335,7 +345,8 @@ type TableDetector struct {
 	// tablename -> [taska, taskb ...]
 	SubscribedTableNames map[string][]string
 
-	scanTableFn func() error
+	scanTableFn  func() error
+	scanInterval time.Duration // Immutable after construction/test reset.
 
 	// to make sure there is at most only one handleNewTables running, so the truncate info will not be lost
 	handling        bool
@@ -504,7 +515,10 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 		tickerDuration = 1 * time.Millisecond
 		retryTickerDuration = 1 * time.Millisecond
 	} else {
-		tickerDuration = 15 * time.Second
+		tickerDuration = s.scanInterval
+		if tickerDuration <= 0 {
+			tickerDuration = defaultTableScanInterval
+		}
 		retryTickerDuration = 5 * time.Second
 	}
 	ticker := time.NewTicker(tickerDuration)

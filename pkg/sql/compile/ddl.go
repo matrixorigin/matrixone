@@ -147,6 +147,10 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
+	if c.scalarDropLifecycle() {
+		return moerr.NewInternalError(c.proc.Ctx, "scalar lifecycle cannot authorize DROP DATABASE")
+	}
+
 	c.setAffectedRows(0)
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
@@ -1088,6 +1092,11 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					}
 					retryErr = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 				}
+				if retryErr == nil {
+					if err := c.validateForeignKeyParentGeneration(parentDB, parentTable, act.AddFk.Fkey.ForeignTbl); err != nil {
+						return err
+					}
+				}
 				// FOREIGN_KEY_CHECKS=0 permits a forward reference whose parent
 				// does not exist yet. Its catalog key is still serialized above,
 				// but there is no parent data keyspace to lock.
@@ -1771,6 +1780,12 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateTable()
+	if !qry.GetTemporary() && createTablePublishesForeignKeys(qry) {
+		if err := c.admitForeignKeyCreate(); err != nil {
+			return err
+		}
+	}
+
 	if err := incrservice.CheckAutoIDCache(c.proc.Ctx, c.proc.GetService(), qry.GetTableDef().GetAutoIdCache()); err != nil {
 		return err
 	}
@@ -1926,6 +1941,10 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			)
 			return err
 		}
+	}
+
+	if err := c.validateCreateForeignKeyParents(qry, dbName); err != nil {
+		return err
 	}
 
 	if len(qry.IndexTables) > 0 {
@@ -4009,12 +4028,23 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return nil
 	}
 
-	if !isTemp && c.proc.GetTxnOperator().Txn().IsPessimistic() {
+	var scalarAdmission *dropLifecycleAdmission
+	if !isTemp && c.isLifecycleRC() && !truncate.GetIsDelete() {
+		var admittedDB engine.Database
+		var admittedRel engine.Relation
+		admittedDB, admittedRel, scalarAdmission, err = c.admitScalarReplacementRC(db, relationName, rel)
+		if err != nil {
+			return err
+		}
+		if scalarAdmission != nil {
+			dbSource, rel = admittedDB, admittedRel
+		}
+	}
+	if !isTemp && scalarAdmission == nil && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		if c.isLifecycleRC() {
-			// Unfiltered DELETE shares this physical path. Its ordinary DML
-			// cleanup must wait on a fresh gate; public TRUNCATE keeps the
-			// prompt-conflict contract.
-			if dbSource, rel, err = c.admitBroadTableLifecycleRC(db, relationName, oldID, !truncate.GetIsDelete()); err != nil {
+			// Public TRUNCATE and unfiltered DELETE share transaction-owned
+			// admission: fresh owners wait; retained gate upgrades fast-fail.
+			if dbSource, rel, err = c.admitBroadTableLifecycleRC(db, relationName, oldID); err != nil {
 				return err
 			}
 		} else {
@@ -4052,7 +4082,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	lineageTxnOp := c.proc.GetTxnOperator()
 	lineageSnapshotAdvanced := false
 	lineageCloneTS := int64(0)
-	if !isTemp {
+	if !isTemp && scalarAdmission == nil {
 		if shouldAdvanceAlterDataBranchLineageSnapshot(
 			lineageTxnOp.Txn().IsPessimistic(), lineageTxnOp.Txn().IsRCIsolation(),
 		) {
@@ -4117,6 +4147,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		dropOpts = dropOpts.WithDisableDropIncrStatement()
 		createOpts = createOpts.WithKeepAutoIncrement(oldID)
 	}
+	if scalarAdmission != nil {
+		dropOpts = dropOpts.WithSkipDataBranchReclaim()
+	}
 	if lineagePlan.enabled {
 		// The successor edge is published after CREATE obtains its physical ID.
 		// Keep the old edge until then; the shared reclaim below retires it.
@@ -4150,9 +4183,13 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return c.runSqlWithAccountIdAndOptions(dropSQL, int32(accountID), dropOpts)
 	}
 	if !isTemp && c.isLifecycleRC() {
-		// G-X is still held. Nested DROP must not reacquire C/D or advance the
-		// snapshot after this owner has already locked the target relation.
-		err = c.withBroadDropLifecycle(drop)
+		// The outer admission owns the target locks. Nested DROP borrows that
+		// authority without reacquiring C/D or advancing the snapshot.
+		admission := dropLifecycleAdmission{}
+		if scalarAdmission != nil {
+			admission = *scalarAdmission
+		}
+		err = c.withDropLifecycle(admission, drop)
 	} else {
 		err = drop()
 	}
@@ -4161,11 +4198,15 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	// create table
-	if err = c.runSqlWithAccountIdAndOptions(
-		createSQL,
-		int32(accountID),
-		createOpts,
-	); err != nil {
+	create := func() error {
+		return c.runSqlWithAccountIdAndOptions(createSQL, int32(accountID), createOpts)
+	}
+	if !isTemp && c.isLifecycleRC() && scalarAdmission == nil {
+		err = c.withDropLifecycle(dropLifecycleAdmission{}, create)
+	} else {
+		err = create()
+	}
+	if err != nil {
 		return err
 	}
 
@@ -4458,7 +4499,7 @@ func (s *Scope) DropTable(c *Compile) (retErr error) {
 	if len(tables) == 0 {
 		tables = []*plan.DropTable{qry}
 	}
-	lifecycleAdmitted, err := c.borrowedDropLifecycle()
+	lifecycleAdmitted, err := c.borrowedDropLifecycle(tables...)
 	if err != nil {
 		return err
 	}
@@ -4682,8 +4723,10 @@ func (s *Scope) dropTableSingleResolved(
 	if !c.disableLock &&
 		!isTemp &&
 		c.proc.GetTxnOperator().Txn().IsPessimistic() {
-		if err = lockDroppedRelation(c, dbName, tblName, rel, !isView && !isSource); err != nil {
-			return err
+		if !c.scalarDropLifecycle() {
+			if err = lockDroppedRelation(c, dbName, tblName, rel, !isView && !isSource); err != nil {
+				return err
+			}
 		}
 	}
 
