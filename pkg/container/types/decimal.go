@@ -2375,8 +2375,18 @@ func parse128(x string, exactTail bool) (y Decimal128, scale int32, next byte, e
 }
 
 func Parse256(x string) (y Decimal256, scale int32, err error) {
+	y, scale, _, err = parse256(x, false)
+	return
+}
+
+// parse256 is the Decimal256 text parser. Once 76 digits are kept, Parse256
+// rounds at that limit. With exactTail (used by ParseDecimal256, which rounds
+// again to the column scale) leading zeros are not counted as digits, nothing
+// is rounded here and the first dropped digit is returned in next, so the
+// caller rounds exactly once to its final scale.
+func parse256(x string, exactTail bool) (y Decimal256, scale int32, next byte, err error) {
 	if x == "" {
-		return Decimal256{}, 0, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal256")
+		return Decimal256{}, 0, 0, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal256")
 	}
 	var z Decimal256
 	width := 0
@@ -2452,12 +2462,25 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 			err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
 			return
 		} else {
+			if (scale == -1 || exactTail) && x[i] == '0' &&
+				y.B0_63 == 0 && y.B64_127 == 0 && y.B128_191 == 0 && y.B192_255 == 0 {
+				// Leading zeros are not significant digits and must not count
+				// toward the 76-digit limit.
+				flag = true
+				if scale != -1 {
+					scale++
+				}
+				i++
+				continue
+			}
 			if width == 76 {
 				if scale == -1 {
 					err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
 					return
 				}
-				if x[i] >= '5' {
+				if exactTail {
+					next = x[i] - '0'
+				} else if x[i] >= '5' {
 					y, err = y.Add256(Decimal256{1, 0, 0, 0})
 					if err != nil {
 						err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
@@ -2467,6 +2490,12 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 						scale--
 						y, _ = y.Scale(-1)
 					}
+				}
+				// Skip the remaining dropped digits but keep a trailing exponent.
+				for i++; i < len(x) && x[i] >= '0' && x[i] <= '9'; i++ {
+				}
+				if i < len(x) && (x[i] == 'e' || x[i] == 'E') {
+					continue
 				}
 				break
 			}
@@ -2596,13 +2625,28 @@ func ParseDecimal256(x string, width, scale int32) (y Decimal256, err error) {
 		width = 76
 	}
 	n := int32(0)
-	y, n, err = Parse256(x)
+	next := byte(0)
+	y, n, next, err = parse256(x, true)
 	if err != nil {
 		err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
 		return
 	}
+	// Round once to the final scale: when n > scale the deciding digit is
+	// still in y, otherwise it is the first digit parse256 dropped.
 	if n > scale {
 		y, _ = y.Scale(scale - n)
+	} else if n == scale {
+		if next >= 5 {
+			if y.Sign() {
+				y, err = y.Sub256(Decimal256{1, 0, 0, 0})
+			} else {
+				y, err = y.Add256(Decimal256{1, 0, 0, 0})
+			}
+			if err != nil {
+				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
+				return
+			}
+		}
 	} else {
 		y, err = y.Scale(scale - n)
 		if err != nil {
