@@ -681,19 +681,27 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
-	if stm := cwft.ses.GetStmtInfo(); stm != nil {
-		waitActiveCost := time.Duration(0)
-		if handler := cwft.ses.GetTxnHandler(); handler.InActiveTxn() {
-			txn := handler.GetTxn()
-			if txn != nil {
-				waitActiveCost = txn.GetWaitActiveCost()
-			}
+	return cwft.recordExecPlan(ctx, phyPlan, nil)
+}
+
+// statementWaitActiveCost copies the admission measurement before transaction
+// release. A missing measurement is distinct from a measured zero.
+func (cwft *TxnComputationWrapper) statementWaitActiveCost() time.Duration {
+	if handler := cwft.ses.GetTxnHandler(); handler != nil && handler.InActiveTxn() {
+		if txn := handler.GetTxn(); txn != nil {
+			return txn.GetWaitActiveCost()
 		}
+	}
+	return -1
+}
+
+func (cwft *TxnComputationWrapper) recordExecPlan(ctx context.Context, phyPlan *models.PhyPlan, runErr error) error {
+	if stm := cwft.ses.GetStmtInfo(); stm != nil {
 		opts := []marshalPlanOptions{
-			WithWaitActiveCost(waitActiveCost),
+			WithWaitActiveCost(cwft.statementWaitActiveCost()),
 			withSchedulingTraceRecorder(&cwft.schedulingTrace),
 		}
-		handler := NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, opts...)
+		handler := newJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, runErr, opts...)
 		if handler.persistSchedulingTrace {
 			stm.DisableAgg()
 		}
@@ -716,7 +724,7 @@ func (cwft *TxnComputationWrapper) recordSchedulingTraceOnCompileError(ctx conte
 	}
 	if stm := cwft.ses.GetStmtInfo(); stm != nil {
 		stm.DisableAgg()
-		stm.SetSerializableExecPlan(newSchedulingTracePlanHandler(ctx, traceSnapshot))
+		stm.SetSerializableExecPlan(newSchedulingTracePlanHandler(ctx, traceSnapshot, cwft.statementWaitActiveCost()))
 	}
 }
 

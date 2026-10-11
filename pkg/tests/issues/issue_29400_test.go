@@ -235,12 +235,17 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				case <-time.After(15 * time.Second):
 					t.Fatal("competing lifecycle owner did not wait for the prior UPDATE lock")
 				}
-				select {
-				case earlyErr := <-otherDone:
-					otherFinished = true
-					t.Fatalf("competing lifecycle owner finished before the reciprocal wait: %v", earlyErr)
-				default:
+				requireOtherWaiting := func() {
+					t.Helper()
+					require.NoError(t, otherCtx.Err(), "competing lifecycle owner must remain live")
+					select {
+					case earlyErr := <-otherDone:
+						otherFinished = true
+						t.Fatalf("competing lifecycle owner finished before the reciprocal wait: %v", earlyErr)
+					default:
+					}
 				}
+				requireOtherWaiting()
 				if scenario.name == "shared_gate" {
 					// Prove independent progress while B still waits for A's T,
 					// not a two-second SQL/commit latency on the test runner.

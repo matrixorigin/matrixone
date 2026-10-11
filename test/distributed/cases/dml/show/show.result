@@ -241,7 +241,7 @@ t1  ¦  CREATE TABLE `t1` (
   `c12` datetime DEFAULT NULL,
   `c13` timestamp NULL DEFAULT NULL ON UPDATE current_timestamp(),
   `c14` char(1) DEFAULT NULL,
-  `c15` varchar(65535) DEFAULT 'q',
+  `c15` varchar(16383) DEFAULT 'q',
   `c16` json DEFAULT NULL,
   `c17` decimal(38,0) DEFAULT NULL,
   `c18` text DEFAULT NULL,

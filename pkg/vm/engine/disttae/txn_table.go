@@ -1934,6 +1934,8 @@ func validateReplaceDefVersion(current uint32, replaceDef *api.AlterTableReplace
 }
 
 func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
+	tbl.getTxn().beginCatalogMutation()
+	defer tbl.getTxn().endCatalogMutation()
 	// AlterTale Inplace do not touch columns, we don't use NextSeqNum at the moment.
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("cannot alter table in snapshot operation")

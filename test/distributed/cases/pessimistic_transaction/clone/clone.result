@@ -274,7 +274,7 @@ show create table src;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 src  ¦  CREATE TABLE `src` (
   `id` bigint NOT NULL,
-  `body` varchar(65535) DEFAULT NULL,
+  `body` varchar(16383) DEFAULT NULL,
   `title` text DEFAULT NULL,
   PRIMARY KEY (`id`),
  FULLTEXT `ftidx`(`body`,`title`)
@@ -345,7 +345,7 @@ show create table src;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 src  ¦  CREATE TABLE `src` (
   `id` bigint NOT NULL,
-  `body` varchar(65535) DEFAULT NULL,
+  `body` varchar(16383) DEFAULT NULL,
   `title` text DEFAULT NULL,
   PRIMARY KEY (`id`),
  FULLTEXT `ftidx`(`body`,`title`)
