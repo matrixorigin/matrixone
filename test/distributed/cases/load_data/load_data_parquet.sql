@@ -51,8 +51,13 @@ select * from t4;
 drop stage parqstage;
 
 create table t5(id bigint, name varchar, int8column tinyint, int16column smallint, binarycolumn binary, varbinarycolumn varbinary(32), blobcolumn blob);
+-- Default BINARY is one byte: reject the seven-byte values without inserting rows.
 load data infile {'filepath'='$resources/load_data/int8_int16_binary_varbinary_blob.parq', 'format'='parquet'} into table t5;
-select * from t5;
+select count(*) from t5;
+drop table t5;
+create table t5(id bigint, name varchar, int8column tinyint, int16column smallint, binarycolumn binary(7), varbinarycolumn varbinary(32), blobcolumn blob);
+load data infile {'filepath'='$resources/load_data/int8_int16_binary_varbinary_blob.parq', 'format'='parquet'} into table t5;
+select * from t5 order by id;
 
 -- nested types (List/Struct/Map) to TEXT
 create table t6(id int, name varchar(100), scores text, address text, metadata text);
@@ -349,8 +354,8 @@ select
     hex(bin_fixed) as fixed_hex,
     hex(bin_var) as var_hex,
     hex(bin_blob) as blob_hex
-from pq_binary_test;
-select length(bin_fixed) from pq_binary_test;
+from pq_binary_test order by hex(bin_fixed);
+select length(bin_fixed) as fixed_len, length(bin_var) as var_len from pq_binary_test order by hex(bin_fixed);
 select count(*) from pq_binary_test where bin_blob is null;
 select length(bin_empty) from pq_binary_test limit 1;
 
