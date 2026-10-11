@@ -651,7 +651,10 @@ func restoreFunctionRevisionCatalogWithCurrentSchema(
 	if err := bh.Exec(targetCtx, dropTableIfExistsSQL(moCatalog, "mo_function_revisions")); err != nil {
 		return err
 	}
-	if err := bh.Exec(targetCtx, MoCatalogMoFunctionRevisionDDL); err != nil {
+	// This schema is owned by the running binary, just like the function head
+	// table. Its historical VARCHAR widths require trusted catalog DDL admission.
+	internalDDL := context.WithValue(targetCtx, defines.InternalExecutorKey{}, true)
+	if err := bh.Exec(internalDDL, MoCatalogMoFunctionRevisionDDL); err != nil {
 		return err
 	}
 
