@@ -154,6 +154,13 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 			r.reader = nil
 			r.plh = nil
 			fileFinished = true
+			if r.prevStr != "" && param.Extern.Format == tree.JSONLINE && !param.ErrorMode.Tolerate {
+				// A record still held over at end of file never completed:
+				// the file is truncated or the record is malformed. Fail
+				// instead of silently dropping it.
+				r.prevStr = ""
+				return false, moerr.NewInvalidInput(proc.Ctx, "incomplete json record")
+			}
 			break
 		}
 
