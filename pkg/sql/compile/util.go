@@ -23,8 +23,10 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -170,10 +172,10 @@ var (
 
 var (
 	insertIntoSingleIndexTableWithPKeyFormat    = "insert into  `%s`.`%s` select (%s), %s from `%s`.`%s` where (%s) is not null;"
-	insertIntoUniqueIndexTableWithPKeyFormat    = "insert into  `%s`.`%s` select serial(%s), %s from `%s`.`%s` where serial(%s) is not null;"
-	insertIntoSecondaryIndexTableWithPKeyFormat = "insert into  `%s`.`%s` select serial_full(%s), %s from `%s`.`%s`;"
+	insertIntoUniqueIndexTableWithPKeyFormat    = "insert into  `%s`.`%s` select %s, %s from `%s`.`%s` where %s is not null;"
+	insertIntoSecondaryIndexTableWithPKeyFormat = "insert into  `%s`.`%s` select %s, %s from `%s`.`%s`;"
 	insertIntoSingleIndexTableWithoutPKeyFormat = "insert into  `%s`.`%s` select (%s) from `%s`.`%s` where (%s) is not null;"
-	insertIntoIndexTableWithoutPKeyFormat       = "insert into  `%s`.`%s` select serial(%s) from `%s`.`%s` where serial(%s) is not null;"
+	insertIntoIndexTableWithoutPKeyFormat       = "insert into  `%s`.`%s` select %s from `%s`.`%s` where %s is not null;"
 	insertIntoMasterIndexTableFormat            = "insert into  `%s`.`%s` select serial_full('%s', %s, %s), %s from `%s`.`%s`;"
 )
 
@@ -201,11 +203,15 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 	if spatialIndex && len(indexDef.Parts) > 0 {
 		temp = partsToIndexExprStr(indexDef.Parts[:1], prefixLengths)
 	}
+	singlePart := len(indexDef.Parts) == 1 || spatialIndex
+	physicalSinglePart := singlePart && indexSinglePartNeedsPhysicalKey(originTableDef, indexDef)
+	withPKey := originTableDef.Pkey != nil && originTableDef.Pkey.PkeyColName != ""
+	keyExpr := indexBackfillKeyExpr(temp, indexDef.KeyFormat, isUnique, singlePart, physicalSinglePart, withPKey)
 	if len(originTableDef.Pkey.PkeyColName) == 0 {
 		if len(indexDef.Parts) == 1 || spatialIndex {
-			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
+			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, keyExpr, DBName, originTableDef.Name, keyExpr)
 		} else {
-			insertSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
+			insertSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, keyExpr, DBName, originTableDef.Name, keyExpr)
 		}
 	} else {
 		pkeyName := originTableDef.Pkey.PkeyColName
@@ -224,16 +230,54 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 			pKeyMsg = quoteMySQLQualifiedIdent(pkeyName)
 		}
 		if len(indexDef.Parts) == 1 || spatialIndex {
-			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, keyExpr, pKeyMsg, DBName, originTableDef.Name, keyExpr)
 		} else {
 			if isUnique {
-				insertSQL = fmt.Sprintf(insertIntoUniqueIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+				insertSQL = fmt.Sprintf(insertIntoUniqueIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, keyExpr, pKeyMsg, DBName, originTableDef.Name, keyExpr)
 			} else {
-				insertSQL = fmt.Sprintf(insertIntoSecondaryIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name)
+				insertSQL = fmt.Sprintf(insertIntoSecondaryIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, keyExpr, pKeyMsg, DBName, originTableDef.Name)
 			}
 		}
 	}
 	return insertSQL, nil
+}
+
+// indexBackfillKeyExpr mirrors the DML physical-key choice. Legacy backfills
+// retain their historical raw/serial expressions; a V1 index must materialize
+// exactly the same opaque key as the physical index-maintenance functions.
+func indexBackfillKeyExpr(partsExpr string, keyFormat uint32, isUnique, singlePart, physicalSinglePart, withPKey bool) string {
+	if keyFormat != collation.KeyFormatV1 {
+		if singlePart {
+			return partsExpr
+		}
+		if isUnique || !withPKey {
+			return fmt.Sprintf("serial(%s)", partsExpr)
+		}
+		return fmt.Sprintf("serial_full(%s)", partsExpr)
+	}
+	if singlePart {
+		if !physicalSinglePart {
+			return partsExpr
+		}
+		return fmt.Sprintf("physical_collation_key(%s)", partsExpr)
+	}
+	if isUnique || !withPKey {
+		return fmt.Sprintf("physical_serial(%s)", partsExpr)
+	}
+	return fmt.Sprintf("physical_serial_full(%s)", partsExpr)
+}
+
+func indexSinglePartNeedsPhysicalKey(originTableDef *plan.TableDef, indexDef *plan.IndexDef) bool {
+	if originTableDef == nil || indexDef == nil || len(indexDef.Parts) == 0 {
+		return false
+	}
+	part := catalog.ResolveAlias(indexDef.Parts[0])
+	for _, col := range originTableDef.Cols {
+		if col != nil && col.Name == part {
+			return types.IsUnicodeCollation(uint8(col.Typ.Charset)) && types.T(col.Typ.Id).IsMySQLString()
+		}
+	}
+	return false
 }
 
 // genInsertIndexTableSqlForMasterIndex: Create inserts for master index table
