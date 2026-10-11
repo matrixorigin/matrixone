@@ -16,11 +16,15 @@ package iscp
 
 import (
 	"context"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -436,4 +440,63 @@ func TestNewIvfflatSqlWriterDelete(t *testing.T) {
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
 	require.Equal(t, "DELETE FROM `test_db`.`entries_tbl` WHERE `__mo_index_pri_col` IN (1000,2000,3000)", string(bytes))
+}
+
+func TestIvfflatSqlWriterEnumReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name, pkMembers, includeMembers string
+	}{
+		{"distinct domains", "cold,hot,warm", "warm,cold,hot"},
+		{"numeric and escaped labels", "2,1", "a'b,c\\d"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tabledef := newTestIvfflatTableDef("pk", types.T_enum, "vec", types.T_array_float32, 2,
+				ivfflatIncludeColSpec{name: "status", typ: types.T_enum})
+			tabledef.Cols[0].Typ.Enumvalues = tc.pkMembers
+			tabledef.Cols[3].Typ.Enumvalues = tc.includeMembers
+			// Exercise the catalog reload path, without runtime INCLUDE metadata.
+			for _, idx := range tabledef.Indexes {
+				idx.IncludedColumns = nil
+				idx.IndexAlgoParams = `{"included_columns":"status","lists":"1","op_type":"vector_l2_ops"}`
+			}
+			writer, err := NewIvfflatSqlWriter("ivfflat", newTestJobID(), newTestConsumerInfo(), tabledef, tabledef.Indexes)
+			require.NoError(t, err)
+			for _, upsert := range []bool{false, true} {
+				writer.Reset()
+				write := writer.Insert
+				if upsert {
+					write = writer.Upsert
+				}
+				require.NoError(t, write(t.Context(), []any{types.Enum(1), []float32{0, 0}, nil, types.Enum(2)}))
+				require.NoError(t, write(t.Context(), []any{types.Enum(2), []float32{1, 0}, nil, nil}))
+				generated, err := writer.ToSql()
+				require.NoError(t, err)
+				sql := string(generated)
+				require.Contains(t, sql, "VALUES ROW(1,CAST('[0, 0]' as VECF32(2)),2),ROW(2,CAST('[1, 0]' as VECF32(2)),CAST(NULL as SMALLINT UNSIGNED))")
+				stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+				require.NoError(t, err)
+				stmt.Free()
+				// Inspect parsed domains from the actual generated source casts.
+				for _, col := range []struct {
+					pattern, members string
+				}{
+					{`(CAST\(column_0 as .*?\)) as `, tc.pkMembers},
+					{`(CAST\(column_2 as .*?\)) as `, tc.includeMembers},
+				} {
+					match := regexp.MustCompile(col.pattern).FindStringSubmatch(sql)
+					require.Len(t, match, 2)
+					parsed, err := mysql.ParseOne(t.Context(), "SELECT "+match[1], 1)
+					require.NoError(t, err)
+					cast := parsed.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.CastExpr)
+					require.Equal(t, strings.Split(col.members, ","), cast.Type.(*tree.T).InternalType.EnumValues)
+					parsed.Free()
+				}
+			}
+			writer.Reset()
+			require.NoError(t, writer.Delete(t.Context(), []any{types.Enum(1)}))
+			deleted, err := writer.ToSql()
+			require.NoError(t, err)
+			require.Equal(t, "DELETE FROM `test_db`.`entries_tbl` WHERE `__mo_index_pri_col` IN (1)", string(deleted))
+		})
+	}
 }

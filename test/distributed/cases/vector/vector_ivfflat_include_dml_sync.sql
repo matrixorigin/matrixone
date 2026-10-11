@@ -15,6 +15,18 @@ insert into vector_ivfflat_async_pk values
 create index idx_ivf_async_pk using ivfflat on vector_ivfflat_async_pk(embedding)
 lists=1 op_type "vector_l2_ops" async;
 
+-- ENUM origin PK and INCLUDE types must retain distinct member lists through
+-- async catalog creation, initial population, and subsequent CDC replay.
+create table vector_ivfflat_async_enum(
+    id enum('cold','hot','warm') primary key,
+    status enum('warm','cold','hot'),
+    embedding vecf32(2)
+);
+insert into vector_ivfflat_async_enum values
+    ('cold', 'hot', '[0,0]'), (2, 2, '[1,0]');
+create index idx_ivf_async_enum using ivfflat on vector_ivfflat_async_enum(embedding)
+lists=1 op_type 'vector_l2_ops' include(status) async;
+
 drop table if exists vector_ivfflat_include_phase3;
 create table vector_ivfflat_include_phase3(
     id int primary key,
@@ -152,6 +164,81 @@ execute s2;
 
 deallocate prepare s2;
 drop table vector_ivfflat_fake_pk;
+
+-- Synchronous population and DML use the same value-bearing ENUM metadata.
+-- Different PK/INCLUDE member orders expose accidental ordinal-domain copying.
+create table vector_ivfflat_sync_enum(
+    id enum('cold','hot','warm') primary key,
+    status enum('warm','cold','hot'),
+    embedding vecf32(2)
+);
+insert into vector_ivfflat_sync_enum values
+    ('cold', 'hot', '[0,0]'), (2, 2, '[1,0]');
+create index idx_ivf_sync_enum using ivfflat on vector_ivfflat_sync_enum(embedding)
+lists=1 op_type 'vector_l2_ops' include(status);
+set @enum_entries = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'idx_ivf_sync_enum' and algo_table_type = 'entries'
+      and table_id in (select rel_id from mo_catalog.mo_tables
+          where reldatabase = database() and relname = 'vector_ivfflat_sync_enum')
+);
+set @enum_q = concat(
+    'select __mo_index_pri_col as id, __mo_index_pri_col+0 as pk_ordinal, ',
+    '__mo_index_include_status as status, __mo_index_include_status+0 as status_ordinal ',
+    'from `', database(), '`.`', @enum_entries, '` order by __mo_index_pri_col'
+);
+prepare enum_sync from @enum_q;
+execute enum_sync;
+insert into vector_ivfflat_sync_enum values (3, 1, '[2,0]');
+execute enum_sync;
+select id, id+0 as pk_ordinal, status, status+0 as status_ordinal
+from vector_ivfflat_sync_enum order by id;
+select id, status from vector_ivfflat_sync_enum where status = 'hot'
+order by l2_distance(embedding, '[0,0]') limit 3 by rank with option 'mode=include';
+select id, status from vector_ivfflat_sync_enum where status = 'hot'
+order by l2_distance(embedding, '[0,0]') limit 3 by rank with option 'mode=force';
+deallocate prepare enum_sync;
+drop table vector_ivfflat_sync_enum;
+
+set @enum_async_entries = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'idx_ivf_async_enum' and algo_table_type = 'entries'
+      and table_id in (select rel_id from mo_catalog.mo_tables
+          where reldatabase = database() and relname = 'vector_ivfflat_async_enum')
+);
+set @enum_async_metadata = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'idx_ivf_async_enum' and algo_table_type = 'metadata'
+      and table_id in (select rel_id from mo_catalog.mo_tables
+          where reldatabase = database() and relname = 'vector_ivfflat_async_enum')
+);
+select attname as column_name, attr_enum as enum_values from mo_catalog.mo_columns
+where att_database = database() and att_relname = @enum_async_entries
+  and attname in ('__mo_index_pri_col', '__mo_index_include_status')
+order by attname;
+set @enum_async_q = concat(
+    'select __mo_index_pri_col as id, __mo_index_pri_col+0 as pk_ordinal, ',
+    '__mo_index_include_status as status, __mo_index_include_status+0 as status_ordinal ',
+    'from `', database(), '`.`', @enum_async_entries, '` ',
+    'where __mo_index_centroid_fk_version = (select cast(__mo_index_val as bigint) ',
+    'from `', database(), '`.`', @enum_async_metadata, '` where __mo_index_key = ''version'') ',
+    'order by __mo_index_pri_col'
+);
+prepare enum_async from @enum_async_q;
+-- @wait_expect(2, 60)
+execute enum_async;
+update vector_ivfflat_async_enum set id = 'warm', status = 'warm' where id = 'cold';
+-- @wait_expect(2, 60)
+execute enum_async;
+select id, id+0 as pk_ordinal, status, status+0 as status_ordinal
+from vector_ivfflat_async_enum order by id;
+update vector_ivfflat_async_enum set status = null where id = 'warm';
+-- @wait_expect(2, 60)
+execute enum_async;
+select id, id+0 as pk_ordinal, status, status+0 as status_ordinal
+from vector_ivfflat_async_enum order by id;
+deallocate prepare enum_async;
+drop table vector_ivfflat_async_enum;
 
 -- Async IVF maintenance is CDC-only. Updating the source PK must replace the
 -- active-version entry identity without retaining the old PK or duplicating

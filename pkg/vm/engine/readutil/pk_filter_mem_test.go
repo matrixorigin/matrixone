@@ -97,6 +97,7 @@ func TestIvfEntriesMembershipUsesOriginPrimaryKey(t *testing.T) {
 	mixin.filterState.hasBF = true
 	mixin.tryUpdateColumns([]string{"version", "centroid", catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, catalog.SystemSI_IVFFLAT_TblCol_Entries_entry, catalog.CPrimaryKeyColName})
 	require.Equal(t, []uint16{4, 2}, mixin.filterState.seqnums)
+	require.Equal(t, int32(4), mixin.filterState.pkSeqNum)
 
 	// Physical copies may expose only the hidden composite key in Pkey.Names;
 	// the source-key binding must still be retained.
@@ -106,6 +107,15 @@ func TestIvfEntriesMembershipUsesOriginPrimaryKey(t *testing.T) {
 	copiedMixin.filterState.hasBF = true
 	copiedMixin.tryUpdateColumns([]string{"version", "centroid", catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, catalog.SystemSI_IVFFLAT_TblCol_Entries_entry, catalog.CPrimaryKeyColName})
 	require.Equal(t, []uint16{4, 2}, copiedMixin.filterState.seqnums)
+	require.Equal(t, int32(4), copiedMixin.filterState.pkSeqNum)
+
+	for _, hasBF := range []bool{false, true} {
+		physicalOnly := withFilterMixin{tableDef: &copied}
+		physicalOnly.filterState.hasBF = hasBF
+		physicalOnly.tryUpdateColumns([]string{catalog.CPrimaryKeyColName})
+		require.Equal(t, []uint16{4}, physicalOnly.filterState.seqnums)
+		require.Equal(t, int32(4), physicalOnly.filterState.pkSeqNum)
+	}
 }
 
 func TestNewMemPKFilter_WithBF_FulltextTable(t *testing.T) {

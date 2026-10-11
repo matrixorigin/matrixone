@@ -335,12 +335,8 @@ func (f *MemPKFilter) setFilterHint(tableDef *plan.TableDef, filterHint engine.F
 		// filter; the hidden composite PK must remain available only for ordinary
 		// PK pruning. Do not infer this from Pkey.Names: copied physical tables
 		// can expose only their hidden composite key there.
-		membershipColName := catalog.IndexTablePrimaryColName
-		if tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			membershipColName = catalog.SystemSI_IVFFLAT_TblCol_Entries_pk
-		}
 		for _, col := range tableDef.Cols {
-			if strings.EqualFold(col.Name, membershipColName) {
+			if strings.EqualFold(col.Name, catalog.IndexTablePrimaryColName) {
 				f.BFSeqNum = int16(col.Seqnum)
 				break
 			}

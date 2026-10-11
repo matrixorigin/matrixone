@@ -732,6 +732,15 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 	cnames := make([]string, 0, len(w.srcPos))
 	for i := range w.srcPos {
 		typstr := w.srcType[i].DescString()
+		if w.srcType[i].Oid == types.T_enum {
+			// Runtime types omit ENUM members; reconstruct the domain from the
+			// catalog-loaded source column, including SQL escaping of labels.
+			members := strings.Split(w.tabledef.Cols[w.srcPos[i]].Typ.Enumvalues, ",")
+			for j, member := range members {
+				members[j] = sqlquote.String(member)
+			}
+			typstr = "ENUM(" + strings.Join(members, ",") + ")"
+		}
 		cnames = append(cnames, fmt.Sprintf("src%d", i))
 		coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as %s", i, typstr, sqlquote.Ident(cnames[i])))
 	}

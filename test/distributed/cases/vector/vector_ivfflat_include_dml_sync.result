@@ -10,6 +10,15 @@ insert into vector_ivfflat_async_pk values
 (30, "[7,8,9]");
 create index idx_ivf_async_pk using ivfflat on vector_ivfflat_async_pk(embedding)
 lists=1 op_type "vector_l2_ops" async;
+create table vector_ivfflat_async_enum(
+id enum('cold','hot','warm') primary key,
+status enum('warm','cold','hot'),
+embedding vecf32(2)
+);
+insert into vector_ivfflat_async_enum values
+('cold', 'hot', '[0,0]'), (2, 2, '[1,0]');
+create index idx_ivf_async_enum using ivfflat on vector_ivfflat_async_enum(embedding)
+lists=1 op_type 'vector_l2_ops' include(status) async;
 drop table if exists vector_ivfflat_include_phase3;
 create table vector_ivfflat_include_phase3(
 id int primary key,
@@ -149,6 +158,107 @@ execute s2;
 2  ¦  after,peer
 deallocate prepare s2;
 drop table vector_ivfflat_fake_pk;
+create table vector_ivfflat_sync_enum(
+id enum('cold','hot','warm') primary key,
+status enum('warm','cold','hot'),
+embedding vecf32(2)
+);
+insert into vector_ivfflat_sync_enum values
+('cold', 'hot', '[0,0]'), (2, 2, '[1,0]');
+create index idx_ivf_sync_enum using ivfflat on vector_ivfflat_sync_enum(embedding)
+lists=1 op_type 'vector_l2_ops' include(status);
+set @enum_entries = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'idx_ivf_sync_enum' and algo_table_type = 'entries'
+and table_id in (select rel_id from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'vector_ivfflat_sync_enum')
+);
+set @enum_q = concat(
+'select __mo_index_pri_col as id, __mo_index_pri_col+0 as pk_ordinal, ',
+'__mo_index_include_status as status, __mo_index_include_status+0 as status_ordinal ',
+'from `', database(), '`.`', @enum_entries, '` order by __mo_index_pri_col'
+);
+prepare enum_sync from @enum_q;
+execute enum_sync;
+➤ id[12,65535,0]  ¦  pk_ordinal[-5,64,0]  ¦  status[12,65535,0]  ¦  status_ordinal[-5,64,0]  𝄀
+cold  ¦  1  ¦  hot  ¦  3  𝄀
+hot  ¦  2  ¦  cold  ¦  2
+insert into vector_ivfflat_sync_enum values (3, 1, '[2,0]');
+execute enum_sync;
+➤ id[12,65535,0]  ¦  pk_ordinal[-5,64,0]  ¦  status[12,65535,0]  ¦  status_ordinal[-5,64,0]  𝄀
+cold  ¦  1  ¦  hot  ¦  3  𝄀
+hot  ¦  2  ¦  cold  ¦  2  𝄀
+warm  ¦  3  ¦  warm  ¦  1
+select id, id+0 as pk_ordinal, status, status+0 as status_ordinal
+from vector_ivfflat_sync_enum order by id;
+➤ id[12,65535,0]  ¦  pk_ordinal[-5,64,0]  ¦  status[12,65535,0]  ¦  status_ordinal[-5,64,0]  𝄀
+cold  ¦  1  ¦  hot  ¦  3  𝄀
+hot  ¦  2  ¦  cold  ¦  2  𝄀
+warm  ¦  3  ¦  warm  ¦  1
+select id, status from vector_ivfflat_sync_enum where status = 'hot'
+order by l2_distance(embedding, '[0,0]') limit 3 by rank with option 'mode=include';
+➤ id[12,65535,0]  ¦  status[12,65535,0]  𝄀
+cold  ¦  hot
+select id, status from vector_ivfflat_sync_enum where status = 'hot'
+order by l2_distance(embedding, '[0,0]') limit 3 by rank with option 'mode=force';
+➤ id[12,65535,0]  ¦  status[12,65535,0]  𝄀
+cold  ¦  hot
+deallocate prepare enum_sync;
+drop table vector_ivfflat_sync_enum;
+set @enum_async_entries = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'idx_ivf_async_enum' and algo_table_type = 'entries'
+and table_id in (select rel_id from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'vector_ivfflat_async_enum')
+);
+set @enum_async_metadata = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'idx_ivf_async_enum' and algo_table_type = 'metadata'
+and table_id in (select rel_id from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'vector_ivfflat_async_enum')
+);
+select attname as column_name, attr_enum as enum_values from mo_catalog.mo_columns
+where att_database = database() and att_relname = @enum_async_entries
+and attname in ('__mo_index_pri_col', '__mo_index_include_status')
+order by attname;
+➤ column_name[12,-1,0]  ¦  enum_values[12,-1,0]  𝄀
+__mo_index_include_status  ¦  warm,cold,hot  𝄀
+__mo_index_pri_col  ¦  cold,hot,warm
+set @enum_async_q = concat(
+'select __mo_index_pri_col as id, __mo_index_pri_col+0 as pk_ordinal, ',
+'__mo_index_include_status as status, __mo_index_include_status+0 as status_ordinal ',
+'from `', database(), '`.`', @enum_async_entries, '` ',
+'where __mo_index_centroid_fk_version = (select cast(__mo_index_val as bigint) ',
+'from `', database(), '`.`', @enum_async_metadata, '` where __mo_index_key = ''version'') ',
+'order by __mo_index_pri_col'
+);
+prepare enum_async from @enum_async_q;
+execute enum_async;
+➤ id[12,65535,0]  ¦  pk_ordinal[-5,64,0]  ¦  status[12,65535,0]  ¦  status_ordinal[-5,64,0]  𝄀
+cold  ¦  1  ¦  hot  ¦  3  𝄀
+hot  ¦  2  ¦  cold  ¦  2
+update vector_ivfflat_async_enum set id = 'warm', status = 'warm' where id = 'cold';
+execute enum_async;
+➤ id[12,65535,0]  ¦  pk_ordinal[-5,64,0]  ¦  status[12,65535,0]  ¦  status_ordinal[-5,64,0]  𝄀
+hot  ¦  2  ¦  cold  ¦  2  𝄀
+warm  ¦  3  ¦  warm  ¦  1
+select id, id+0 as pk_ordinal, status, status+0 as status_ordinal
+from vector_ivfflat_async_enum order by id;
+➤ id[12,65535,0]  ¦  pk_ordinal[-5,64,0]  ¦  status[12,65535,0]  ¦  status_ordinal[-5,64,0]  𝄀
+hot  ¦  2  ¦  cold  ¦  2  𝄀
+warm  ¦  3  ¦  warm  ¦  1
+update vector_ivfflat_async_enum set status = null where id = 'warm';
+execute enum_async;
+➤ id[12,65535,0]  ¦  pk_ordinal[-5,64,0]  ¦  status[12,65535,0]  ¦  status_ordinal[-5,64,0]  𝄀
+hot  ¦  2  ¦  cold  ¦  2  𝄀
+warm  ¦  3  ¦  NULL  ¦  NULL
+select id, id+0 as pk_ordinal, status, status+0 as status_ordinal
+from vector_ivfflat_async_enum order by id;
+➤ id[12,65535,0]  ¦  pk_ordinal[-5,64,0]  ¦  status[12,65535,0]  ¦  status_ordinal[-5,64,0]  𝄀
+hot  ¦  2  ¦  cold  ¦  2  𝄀
+warm  ¦  3  ¦  NULL  ¦  NULL
+deallocate prepare enum_async;
+drop table vector_ivfflat_async_enum;
 set @async_entries = (
 select index_table_name
 from mo_catalog.mo_indexes
