@@ -64,6 +64,8 @@ func TestInitSchemaDefersViewsUntilAuthoringFence(t *testing.T) {
 	joined := strings.Join(statements, "\n")
 	require.Contains(t, joined, InformationSchemaViewsLegacyDDL)
 	require.NotContains(t, joined, "mo_view_definition(")
+	require.Contains(t, statements, InformationSchemaColumnsDDL)
+	require.NotContains(t, statements, InformationSchemaColumnsV100DDL())
 
 	statements = nil
 	rt.SetGlobalVariables(

@@ -71,6 +71,11 @@ intentional: a tenant can have been created while capability discovery was
 incomplete, can have stopped between a drop and create, or can be carrying an
 older view definition from a prior upgrade. Treating only one literal
 predecessor as repairable would leave those states permanently stale.
+The catalog probe recognizes both `VIEWS` and the default case-folded `views`
+name. It still compares the full persisted CREATE statement exactly; name
+folding must not turn a stale definition into an installed marker. Both the
+upgrade entry and periodic maintenance use this same probe, so a committed
+repair is a no-op on every later pass, regardless of catalog name casing.
 
 The reconciliation transaction owns one account page (32 accounts by default)
 and publishes its process-local account cursor only after commit. A replacement
@@ -91,7 +96,7 @@ public catalog contract from being reported as fully successful, while the
 bounded VIEWS page remains independently rollback-safe.
 
 MORPC v110 is allocated as `MORPCLatestVersion + 1` from official main v109 at
-`1335f9f70f46bd15752dc6e5a2d6a70b29f1e02a`, which owns the current protocol
+`4022729da24d71b082c22b52aaed3faba2b77ea5`, which owns the current protocol
 floor for native Unicode collation identities in persisted information_schema.COLUMNS metadata. The current main function end marker is 591 after its JSON_ARRAY_INSERT
 and physical serializer additions; the two VIEWS function IDs are 591 and 592, and the end
 marker advances to 593. These IDs are allocated from the rebased official main and are
@@ -109,8 +114,10 @@ reuses the guarded transactional entry to converge missing or stale VIEWS
 definitions to the current contract. Any cluster with a CN below v110, including
 the immediate predecessors v104, v105, v106, v108, and v109, preserves the predecessor VIEWS
 definition while retaining each existing protocol-specific metadata contract,
-including the independent v100 COLUMNS contract. COLUMNS installation still
-requires a positive common-v100 probe; unknown local runtime versions retain
+including the independent v100 and v109 COLUMNS contracts. A local v110 CN
+that defers VIEWS uses the immediate v109 predecessor, preserving native Unicode
+collation metadata. COLUMNS installation still requires a positive common-v100
+or common-v109 probe according to its selected definition; unknown local runtime versions retain
 the minimum supported catalog contract. Pipeline preparation, remote marshal, and
 remote unmarshal reject a
 pipeline containing either function ID below v110. The receiver check protects

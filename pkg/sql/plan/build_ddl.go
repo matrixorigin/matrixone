@@ -243,7 +243,6 @@ func inferViewColumns(
 	colNames tree.IdentifierList,
 	viewDatabase string,
 	viewName string,
-	checkOption string,
 	forAuthoring bool,
 ) (*viewColumnInference, error) {
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
@@ -491,7 +490,7 @@ func stableViewSQLWithExpandedStars(
 	viewSql string,
 	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
 ) (string, bool) {
-	stableSQL, _, rewritten := stableViewSQLWithExpandedStarsAndSelect(ctx, stmt, viewSql, inferred.expandedSelectLists)
+	stableSQL, _, rewritten := stableViewSQLWithExpandedStarsAndSelect(ctx, stmt, viewSql, expandedSelectLists)
 	return stableSQL, rewritten
 }
 

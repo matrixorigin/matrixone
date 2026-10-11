@@ -56,7 +56,10 @@ func TestMaintainInformationSchemaViewsRetriesFailedReplacement(t *testing.T) {
 	) (bool, string, error) {
 		require.Equal(t, uint32(accountID), id)
 		require.Equal(t, sysview.InformationDBConst, schema)
-		require.Equal(t, "VIEWS", viewName)
+		require.Contains(t, []string{"VIEWS", "views"}, viewName)
+		if viewName == "VIEWS" {
+			return false, "", nil
+		}
 		return true, viewDefinition, nil
 	}
 	t.Cleanup(func() { versions.CheckViewDefinition = oldCheck })
@@ -585,7 +588,7 @@ func installTransactionalInformationSchemaViewsCheck(
 	) (bool, string, error) {
 		require.Equal(t, uint32(accountID), id)
 		require.Equal(t, sysview.InformationDBConst, schema)
-		require.Equal(t, "VIEWS", viewName)
+		require.Contains(t, []string{"VIEWS", "views"}, viewName)
 		definition := state.definition
 		if reader, ok := txn.(interface {
 			informationSchemaViewsDefinition() string
