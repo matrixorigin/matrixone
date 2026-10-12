@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func equiVectorPlanFixture(t *testing.T, sql string, unique, defaultAuto bool) *plan.Query {
+func equiVectorPlanFixture(t testing.TB, sql string, unique, defaultAuto bool, configure ...func(*customMockCompilerContext)) *plan.Query {
 	t.Helper()
 	ctx := newVectorJoinMockCtx()
 	resolve := ctx.resolveVarFunc
@@ -65,6 +65,9 @@ func equiVectorPlanFixture(t *testing.T, sql string, unique, defaultAuto bool) *
 	for _, table := range []*plan.TableDef{a, b} {
 		ctx.tables[table.Name] = table
 		ctx.objects[table.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: table.Name, Obj: int64(table.TblId)}
+	}
+	for _, configureContext := range configure {
+		configureContext(ctx)
 	}
 	stmts, err := mysql.Parse(ctx.GetContext(), sql, 1)
 	require.NoError(t, err)

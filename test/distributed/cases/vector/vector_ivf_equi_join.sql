@@ -8,8 +8,8 @@ set probe_limit = 1;
 create table chunks (id varchar(32) primary key, v vecf32(2) not null, document_id varchar(32), category varchar(32));
 insert into chunks values ('c0','[0,0]','u','x'),('c1','[0.01,0]','u','x'),('c2','[0.1,0]','d1','x'),('c3','[0.2,0]','d2','z'),('c4','[0.3,0]','d1','y'),('c5','[0.6,0]','d3','outside'),('c6','[0.15,0]',null,'null');
 create index chunks_ivf using ivfflat on chunks(v) lists=1 op_type 'vector_l2_ops';
-create table documents (row_id int primary key, document_id varchar(32), label varchar(32));
-insert into documents values (1,'d1','x'),(2,'d1','y'),(3,'d2','z'),(4,'d3','outside'),(5,null,'null');
+create table documents (row_id int primary key, document_id varchar(32), label varchar(32), payload varchar(32));
+insert into documents values (1,'d1','x','first'),(2,'d1','y','second'),(3,'d2','z','third'),(4,'d3','outside','fourth'),(5,null,'null','fifth');
 create table unique_documents (document_id varchar(32) primary key, label varchar(32));
 insert into unique_documents values ('d1','x'),('d2','z'),('d3','outside');
 -- @regex("ivf_search",true)
@@ -110,5 +110,23 @@ select a.id from chunks a join empty_documents b on a.document_id=b.document_id 
 explain select a.id from chunks a left join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 3;
 -- @regex("ivf_search",false)
 explain select a.id from chunks a join documents b on a.document_id<b.document_id order by l2_distance(a.v,'[0,0]') limit 3;
+-- B 的普通索引既用于资格域，也用于保留重复行的最终 JOIN；非覆盖投影仍需回表。
+insert into documents values (6,'d1','x','duplicate');
+create index idx_label_document on documents(label,document_id);
+-- @regex("documents.idx_label_document",true)
+explain select a.id from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("ivf_search",true)
+explain select a.id from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+select a.id,b.document_id from documents b join chunks a on b.document_id=a.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id,b.document_id from documents b join chunks a on b.document_id=a.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+-- @sortkey:0,1
+select a.id,b.payload from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 4;
+-- @sortkey:0,1
+select a.id,b.payload from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 4 by rank with option 'mode=force';
+-- @regex("documents.idx_label_document",false)
+explain select a.id from chunks a join documents b ignore index(idx_label_document) on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from chunks a join documents b ignore index(idx_label_document) on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
 drop database vector_ivf_equi_join;
 set experimental_ivf_index=@saved_experimental_ivf_index;

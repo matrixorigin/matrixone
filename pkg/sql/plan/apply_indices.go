@@ -70,6 +70,7 @@ type specialIndexKind uint8
 const (
 	specialIndexKindFullText specialIndexKind = 1 << iota
 	specialIndexKindVector
+	specialIndexKindEquiVector
 )
 
 type specialIndexGuard struct {
@@ -311,6 +312,7 @@ func exprUsesOnlyMappedCols(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) bo
 }
 
 func (builder *QueryBuilder) prepareSpecialIndexGuards(rootID int32) {
+	builder.vectorCandidateAuto = nil
 	if builder.protectedScans == nil {
 		builder.protectedScans = make(map[int32]int)
 	} else {
@@ -331,6 +333,7 @@ func (builder *QueryBuilder) prepareSpecialIndexGuards(rootID int32) {
 }
 
 func (builder *QueryBuilder) resetSpecialIndexGuards() {
+	builder.vectorCandidateAuto = nil
 	if builder.protectedScans != nil {
 		for k := range builder.protectedScans {
 			delete(builder.protectedScans, k)
@@ -353,7 +356,7 @@ func (builder *QueryBuilder) collectSpecialIndexGuards(nodeID int32) {
 			builder.registerProjectGuard(node.NodeId, specialIndexKindVector, scanIDs)
 		}
 		if scanIDs := builder.detectEquiVectorJoinGuard(node); len(scanIDs) > 0 {
-			builder.registerProjectGuard(node.NodeId, specialIndexKindVector, scanIDs)
+			builder.registerProjectGuard(node.NodeId, specialIndexKindEquiVector, scanIDs)
 		}
 	}
 
@@ -580,8 +583,14 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 	return fmt.Sprintf("%d", tblCol.GetSeqnum())
 }
 
-func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
-	defer builder.clearProjectGuard(projNode.NodeId)
+func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (rootID int32, err error) {
+	rootID = -1 // A planning panic must only release protection, not start another rewrite.
+	defer func() {
+		defer builder.clearProjectGuard(projNode.NodeId)
+		if guard := builder.projectSpecialGuards[projNode.NodeId]; err == nil && rootID >= 0 && guard != nil && guard.kinds&specialIndexKindEquiVector != 0 {
+			rootID = builder.applyDeferredEquiJoinIndexes(rootID, guard.scanNodeIDs, colRefCnt, idxColMap)
+		}
+	}()
 	var vecCtx *vectorSortContext
 	// FullText
 	{

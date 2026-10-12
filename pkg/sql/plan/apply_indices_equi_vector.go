@@ -31,8 +31,7 @@ type vectorEquiJoinContext struct {
 }
 
 func (builder *QueryBuilder) buildVectorEquiJoinContext(proj *plan.Node) *vectorEquiJoinContext {
-	if builder.sqlCalcFoundRows || proj == nil || proj.NodeType != plan.Node_PROJECT ||
-		!builder.vectorCandidateRegionSafe(proj.NodeId) {
+	if builder.sqlCalcFoundRows || proj == nil || proj.NodeType != plan.Node_PROJECT {
 		return nil
 	}
 	sort := builder.resolveSortNode(proj, 1)
@@ -86,6 +85,10 @@ func (builder *QueryBuilder) buildVectorEquiJoinContext(proj *plan.Node) *vector
 			other := right
 			if side == 1 {
 				other = left
+			}
+			// Reject ordinary projections before inspecting statement-wide replay risks.
+			if !builder.vectorCandidateRegionSafe(proj.NodeId) {
+				return nil
 			}
 			folded := DeepCopyExpr(distance)
 			folded.GetF().Args[1-arg] = value
@@ -160,6 +163,12 @@ func (builder *QueryBuilder) applyVectorIndexForEquiJoin(nodeID int32) (int32, b
 	builder.rebindScanNode(a)
 	builder.rebindScanNode(b)
 	aID, bID := builder.appendNode(a, ctx), builder.appendNode(b, ctx)
+	builder.inheritIndexHints(bID, vc.other.NodeId)
+	if guard := builder.projectSpecialGuards[nodeID]; guard != nil && guard.kinds&specialIndexKindEquiVector != 0 {
+		// The eligibility copy needs its own scalar-index pass after the vector
+		// rewrite no longer requires raw scans. A declined rewrite leaves it unreachable.
+		builder.registerProjectGuard(nodeID, specialIndexKindEquiVector, []int32{bID})
+	}
 	on := DeepCopyExprList(vc.join.OnList)
 	for _, expr := range on {
 		replaceColRefTag(expr, oldA, a.BindingTags[0])
@@ -196,4 +205,42 @@ func (builder *QueryBuilder) applyVectorIndexForEquiJoin(nodeID int32) (int32, b
 	builder.tag2NodeID[oldA] = newID
 	vc.join.Children[vc.scanSide] = newID
 	return nodeID, true, nil
+}
+
+// Complete only the scalar-index work deferred by this equi-join guard. This
+// runs after all special-index attempts, including their declined-rewrite path.
+func (builder *QueryBuilder) applyDeferredEquiJoinIndexes(
+	rootID int32, scanIDs []int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr,
+) int32 {
+	refs := make(map[[2]int32]int)
+	builder.countColRefs(rootID, refs)
+	pending := make(map[int32]bool, len(scanIDs))
+	for _, id := range scanIDs {
+		pending[id] = true
+		scan := builder.qry.Nodes[id]
+		// Include references outside this PROJECT for original scans; copied
+		// eligibility inputs only need the columns consumed by their own subtree.
+		for i := range scan.TableDef.Cols {
+			key := [2]int32{scan.BindingTags[0], int32(i)}
+			refs[key] = max(refs[key], colRefCnt[key])
+		}
+	}
+	if idxColMap == nil {
+		idxColMap = make(map[[2]int32]*plan.Expr)
+	}
+	var visit func(int32) int32
+	visit = func(id int32) int32 {
+		node := builder.qry.Nodes[id]
+		for i, child := range node.Children {
+			node.Children[i] = visit(child)
+		}
+		replaceColumnsForNode(node, idxColMap)
+		if pending[id] && node.NodeType == plan.Node_TABLE_SCAN && !node.IndexScanInfo.IsIndexScan {
+			builder.withSuspendedScanProtection(id, func() {
+				id = builder.applyIndicesForFilters(id, node, refs, idxColMap)
+			})
+		}
+		return id
+	}
+	return visit(rootID)
 }
