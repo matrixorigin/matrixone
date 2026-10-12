@@ -793,7 +793,7 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				if ownerErr != nil {
 					var deadlock *mysql.MySQLError
 					require.ErrorAs(t, ownerErr, &deadlock)
-					require.Equal(t, moerr.ErrDeadLockDetected, deadlock.Number)
+					require.Equal(t, moerr.ErrLockConflict, deadlock.Number)
 					require.NoError(t, otherErr, "the competing owner must finish after victim rollback")
 				} else {
 					var deadlock *mysql.MySQLError
@@ -1069,8 +1069,12 @@ func TestIssue29400DropDatabaseRCReclaimFailureRollsBackWholeDatabase(t *testing
 			require.NoError(t, err, query)
 		}
 		var laterID, hiddenID, jobID uint64
+		var indexRowsBefore int
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='later'", name).Scan(&laterID))
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_indexes where table_id=?", laterID).Scan(&indexRowsBefore))
+		require.Positive(t, indexRowsBefore)
 		var hiddenName string
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"select index_table_name from mo_catalog.mo_indexes where table_id=? and name='ft_tail' and algo='fulltext2' and algo_table_type='ftv2_index'", laterID).Scan(&hiddenName))
@@ -1124,6 +1128,10 @@ func TestIssue29400DropDatabaseRCReclaimFailureRollsBackWholeDatabase(t *testing
 			require.NoError(t, conn.QueryRowContext(ctx, check.query).Scan(&count), check.query)
 			require.Equal(t, check.want, count, check.query)
 		}
+		var indexRowsAfter int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_indexes where table_id=?", laterID).Scan(&indexRowsAfter))
+		require.Equal(t, indexRowsBefore, indexRowsAfter, "late DROP failure must restore index catalog rows")
 		var survivingID uint64
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='later'", name).Scan(&survivingID))

@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -845,4 +847,65 @@ func TestInternalCompilerStatsCacheObservations(t *testing.T) {
 	_, err = ctx.StatsWithTableDef(obj, tableDef, nil)
 	require.NoError(t, err)
 	require.Equal(t, before+1, calls, "anonymous overlays cannot retain the 3s fast hit")
+}
+
+type failingStatementWorkspace struct {
+	Ws
+	err      error
+	prepared int
+}
+
+func (w *failingStatementWorkspace) IncrStatementID(context.Context, bool) error {
+	w.prepared++
+	return w.err
+}
+
+type deferredRollbackTxn struct {
+	client.TxnOperator
+	sealed error
+}
+
+func (op *deferredRollbackTxn) RollbackAfterRunningSQL(err error) { op.sealed = err }
+
+func (op *deferredRollbackTxn) TryEnterRunSqlWithTokenAndSQL(context.CancelFunc, string) (uint64, error) {
+	if op.sealed != nil {
+		return 0, moerr.NewTxnClosedNoCtx(nil)
+	}
+	return 1, nil
+}
+func (op *deferredRollbackTxn) ExitRunSqlWithToken(uint64) {}
+
+func TestBorrowedExecutorSealsFatalErrorBeforeCallbackCanSuppressIt(t *testing.T) {
+	for _, fatal := range []bool{false, true} {
+		t.Run(map[bool]string{false: "statement error", true: "joined fatal error"}[fatal], func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mock := mock_frontend.NewMockTxnOperator(ctrl)
+			failure := error(moerr.NewInternalErrorNoCtx("statement failed"))
+			if fatal {
+				failure = errors.Join(failure, fmt.Errorf("lock owner: %w", moerr.NewLockConflictNoCtx()))
+			}
+			mock.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic}).AnyTimes()
+			workspace := &failingStatementWorkspace{err: failure}
+			mock.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+			owner := &deferredRollbackTxn{TxnOperator: mock}
+			exec := &txnExecutor{ctx: context.Background(), opts: executor.Options{}.WithTxn(owner)}
+			// Simulate a callback that catches Exec's error and returns success.
+			callback := func() error {
+				_, err := exec.Exec("select 1", executor.StatementOption{})
+				require.ErrorIs(t, err, failure)
+				if fatal {
+					require.ErrorIs(t, owner.sealed, failure)
+				} else {
+					require.NoError(t, owner.sealed)
+				}
+				if fatal {
+					_, nextErr := exec.Exec("select 2", executor.StatementOption{})
+					require.True(t, moerr.IsMoErrCode(nextErr, moerr.ErrTxnClosed))
+					require.Equal(t, 1, workspace.prepared, "sealed transaction cannot prepare another statement")
+				}
+				return nil
+			}
+			require.NoError(t, callback())
+		})
+	}
 }

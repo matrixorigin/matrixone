@@ -1990,6 +1990,10 @@ message CreateTable {
 
   reserved 14;
   string RawSQL = 15;
+  // Names remain dependencies even when checks=0 permits an absent parent.
+  repeated ObjectRef unresolved_fk_parents = 16;
+  // Cached metadata-name owner observed before catalog-dependent planning.
+  lock.LockTable fk_name_binding = 17;
 }
 
 message AlterTableDrop {

@@ -524,7 +524,8 @@ type BaseProcess struct {
 	groupConcatSourceRowProvenanceUntrusted bool
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
-	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
+	// (frontend derived execution or executor.Options.WithDisableIncrStatement).
+	// Compiles on such a process
 	// must not advance the workspace snapshot write offset: that is a
 	// statement-boundary action, and moving the boundary mid-statement breaks
 	// the positional visibility of the caller's workspace entries.

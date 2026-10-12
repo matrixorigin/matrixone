@@ -381,6 +381,26 @@ func TestSortByVectorsWithScratchMatchesConveniencePath(t *testing.T) {
 	require.Len(t, scratch.Diffs, len(got))
 }
 
+func TestSortByVectorsConstantNullKey(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	constant := vector.NewConstNull(types.T_any.ToType(), 4, mp)
+	defer constant.Free(mp)
+	key := vector.NewVec(types.T_int64.ToType())
+	defer key.Free(mp)
+	require.NoError(t, vector.AppendFixedList(key, []int64{2, 1, 2, 1}, nil, mp))
+	for _, keys := range [][]*vector.Vector{{constant, key}, {key, constant}} {
+		selectors := []int64{0, 1, 2, 3}
+		SortByVectorsWithScratch(selectors, keys, []bool{false, false}, []bool{false, false}, &ByVectorsScratch{Partitions: make([]int64, 0, 4), Diffs: make([]bool, 4)})
+		values := vector.MustFixedColWithTypeCheck[int64](key)
+		got := make([]int64, len(selectors))
+		for i, sel := range selectors {
+			got[i] = values[sel]
+		}
+		require.Equal(t, []int64{1, 1, 2, 2}, got)
+	}
+}
+
 func BenchmarkSortInt(b *testing.B) {
 	vs := make([]int, BenchmarkRows)
 	for i := range vs {

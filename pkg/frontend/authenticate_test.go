@@ -16816,7 +16816,7 @@ func TestDoCreateStage(t *testing.T) {
 			},
 			Status: tree.StageStatus{
 				Exist:  true,
-				Option: tree.StageStatusEnabled,
+				Option: tree.StageStatusDisabled,
 			},
 			Comment: tree.StageComment{
 				Exist: false,
@@ -16834,6 +16834,8 @@ func TestDoCreateStage(t *testing.T) {
 
 		err := doCreateStage(ctx, ses, cs)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(strings.Join(bh.executedSQLs, "\n"), convey.ShouldContainSubstring, "stage_status")
+		convey.So(strings.Join(bh.executedSQLs, "\n"), convey.ShouldContainSubstring, "'disabled'")
 	})
 
 	convey.Convey("doCreateStage fail", t, func() {

@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -94,11 +95,21 @@ func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnaps
 		}
 		return names[i].mode == lock.LockMode_Exclusive && names[j].mode != lock.LockMode_Exclusive
 	})
+	// Inspect retained ownership before adding C. Retained data/database/name
+	// locks can form a reverse edge even without a prior registry-key lock.
+	retained, err := txnOp.Snapshot()
+	if err != nil {
+		return err
+	}
+	var waitPolicy []lock.WaitPolicy
+	if len(retained.LockTables) > 0 {
+		waitPolicy = []lock.WaitPolicy{lock.WaitPolicy_FastFail}
+	}
 	systemCtx := context.WithValue(
 		defines.AttachAccountId(ctx, catalog.System_Account),
 		defines.LockWriterFairKey{}, false,
 	)
-	if err := c.lockLifecycleIdentityRC(); err != nil {
+	if err := c.lockLifecycleIdentityRC(waitPolicy...); err != nil {
 		return err
 	}
 	systemDB, err := c.e.Database(systemCtx, catalog.MO_CATALOG, txnOp)
@@ -117,16 +128,10 @@ func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnaps
 		return err
 	}
 	gateMode := lock.LockMode_Shared
-	var waitPolicy []lock.WaitPolicy
 	if exclusiveSnapshotGate {
 		gateMode = lock.LockMode_Exclusive
-		// An existing holder can create an upgrade wait cycle with its
-		// retained database/component keys. Fresh owners can wait for readers
-		// instead of failing ordinary concurrent DDL or DML.
-		if txnOp.HasLockTable(registry.GetTableID(systemCtx)) {
-			waitPolicy = []lock.WaitPolicy{lock.WaitPolicy_FastFail}
-		}
 	}
+
 	_, err = lockop.LockRowsForAdmissionWithContext(systemCtx, c.e, c.proc,
 		registry.GetTableID(systemCtx), registryKeys, 0, *registryKeys.Vecs[0].GetType(),
 		gateMode, catalog.System_Account, waitPolicy...)
@@ -136,6 +141,10 @@ func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnaps
 	}
 
 	if len(names) > 0 {
+		databasePolicy := waitPolicy
+		if exclusiveSnapshotGate {
+			databasePolicy = []lock.WaitPolicy{lock.WaitPolicy_FastFail}
+		}
 		dbRel, err := systemDB.Relation(systemCtx, catalog.MO_DATABASE, nil)
 		if err != nil {
 			return err
@@ -150,7 +159,7 @@ func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnaps
 			}
 			_, err = lockop.LockRowsForAdmissionWithContext(ctx, c.e, c.proc,
 				dbRel.GetTableID(systemCtx), keys, 0, *keys.Vecs[0].GetType(),
-				name.mode, name.accountID)
+				name.mode, name.accountID, databasePolicy...)
 			keys.Vecs[0].Free(c.proc.Mp())
 			if err != nil {
 				return err
@@ -178,7 +187,7 @@ func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnaps
 
 // lockLifecycleIdentityRC pins the registry's physical relation before any
 // caller resolves or locks its row. Broad owners also use this before G X.
-func (c *Compile) lockLifecycleIdentityRC() error {
+func (c *Compile) lockLifecycleIdentityRC(waitPolicy ...lock.WaitPolicy) error {
 	ctx := context.WithValue(
 		defines.AttachAccountId(c.proc.Ctx, catalog.System_Account),
 		defines.LockWriterFairKey{}, false,
@@ -199,7 +208,7 @@ func (c *Compile) lockLifecycleIdentityRC() error {
 	defer keys.Vecs[0].Free(c.proc.Mp())
 	_, err = lockop.LockRowsForAdmissionWithContext(ctx, c.e, c.proc,
 		relation.GetTableID(ctx), keys, 0, *keys.Vecs[0].GetType(),
-		lock.LockMode_Shared, catalog.System_Account)
+		lock.LockMode_Shared, catalog.System_Account, waitPolicy...)
 	return err
 }
 
@@ -321,6 +330,17 @@ func (c *Compile) retryBroadReplacement() error {
 	return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 }
 
+// Both generations must originate here. A replacement of a published table
+// has a local physical ID but retains the published logical ID.
+func (c *Compile) transactionLocalReplacement(rel engine.Relation) bool {
+	return c.transactionLocalTableIDs(rel.GetTableID(c.proc.Ctx), plan2.SnapshotTableID(rel.GetTableDef(c.proc.Ctx)))
+}
+
+func (c *Compile) transactionLocalTableIDs(physicalID, logicalID uint64) bool {
+	workspace, ok := c.proc.GetTxnOperator().GetWorkspace().(client.TableCreationView)
+	return ok && workspace.IsTableCreatedInTxn(physicalID) && workspace.IsTableCreatedInTxn(logicalID)
+}
+
 func (c *Compile) admitScalarReplacementRC(database, table string, original engine.Relation) (engine.Database, engine.Relation, *dropLifecycleAdmission, error) {
 	ctx := c.proc.Ctx
 	eligible, err := scalarReplacementShape(ctx, original)
@@ -337,15 +357,28 @@ func (c *Compile) admitScalarReplacementRC(database, table string, original engi
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if err := c.admitLifecycleRC([]lifecycleDatabaseName{{accountID: accountID, name: database, mode: lock.LockMode_Shared}}, false); err != nil {
-		return nil, nil, nil, err
-	}
-	dag, err := c.loadBranchReclaimComponentsRC([]uint64{id})
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if len(dag.Info) != 0 {
-		return nil, nil, nil, c.retryBroadReplacement()
+	local := c.transactionLocalReplacement(original)
+	if local {
+		// Unpublished scalar tables cannot be discovered by another transaction.
+		// Their workspace checks above remain authoritative without late G admission.
+		databases, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if _, err = c.lockCatalogName(databases, accountID, []string{database}, lock.LockMode_Shared, lock.WaitPolicy_FastFail); err != nil {
+			return nil, nil, nil, err
+		}
+	} else {
+		if err := c.admitLifecycleRC([]lifecycleDatabaseName{{accountID: accountID, name: database, mode: lock.LockMode_Shared}}, false); err != nil {
+			return nil, nil, nil, err
+		}
+		dag, err := c.loadBranchReclaimComponentsRC([]uint64{id})
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if len(dag.Info) != 0 {
+			return nil, nil, nil, c.retryBroadReplacement()
+		}
 	}
 	catalogRel, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
 	if err != nil {
@@ -355,8 +388,12 @@ func (c *Compile) admitScalarReplacementRC(database, table string, original engi
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	var policy []lock.WaitPolicy
+	if local {
+		policy = []lock.WaitPolicy{lock.WaitPolicy_FastFail}
+	}
 	_, err = lockop.LockRowsForAdmissionWithContext(ctx, c.e, c.proc,
-		catalogRel.GetTableID(ctx), keys, 0, *keys.Vecs[0].GetType(), lock.LockMode_Exclusive, accountID)
+		catalogRel.GetTableID(ctx), keys, 0, *keys.Vecs[0].GetType(), lock.LockMode_Exclusive, accountID, policy...)
 	keys.Vecs[0].Free(c.proc.Mp())
 	if err != nil {
 		return nil, nil, nil, err
@@ -365,8 +402,10 @@ func (c *Compile) admitScalarReplacementRC(database, table string, original engi
 	if err := lockTable(ctx, c.e, c.proc, original, database, true); err != nil {
 		return nil, nil, nil, err
 	}
-	if err := c.advanceLifecycleAdmissionSnapshot(); err != nil {
-		return nil, nil, nil, err
+	if !local {
+		if err := c.advanceLifecycleAdmissionSnapshot(); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	db, err := c.e.Database(ctx, database, c.proc.GetTxnOperator())
 	if err != nil {

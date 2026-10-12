@@ -299,6 +299,7 @@ func (s *service) fenceViewMetadataCatalog(
 	}
 	if snapshot.CatalogFencedEpoch >= snapshot.Epoch {
 		s.viewMetadataCatalogFencedEpoch.Store(snapshot.Epoch)
+		s.notifyHeartbeat()
 		return nil
 	}
 	if !s.viewMetadataCatalogFenceReady.Load() || s.sqlExecutor == nil {
@@ -308,6 +309,7 @@ func (s *service) fenceViewMetadataCatalog(
 		return err
 	}
 	s.viewMetadataCatalogFencedEpoch.Store(snapshot.Epoch)
+	s.notifyHeartbeat()
 	return nil
 }
 

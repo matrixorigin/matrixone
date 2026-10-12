@@ -1362,7 +1362,8 @@ func validateRequiredVectorMembership(spec *plan.RuntimeFilterSpec, msg message.
 	if err := keys.UnmarshalBinary(msg.Data); err != nil {
 		return err
 	}
-	if keys.Length() != int(msg.Card) || keys.HasNull() || keys.GetType().Oid != types.T(spec.Expr.Typ.Id) {
+	if keys.Length() != int(msg.Card) || keys.HasNull() ||
+		!types.MembershipKeyTypeCompatible(keys.GetType().Oid, types.T(spec.Expr.Typ.Id)) {
 		return moerr.NewInvalidStateNoCtx("required vector membership has invalid cardinality or key type")
 	}
 	return nil

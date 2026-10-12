@@ -5707,15 +5707,19 @@ func resolveForeignKeyCatalogLayout(ctx CompilerContext) (foreignKeyCatalogLayou
 	if err != nil {
 		return foreignKeyCatalogLegacy, err
 	}
+	return foreignKeyCatalogLayoutForDef(tableDef), nil
+}
+
+func foreignKeyCatalogLayoutForDef(tableDef *plan.TableDef) foreignKeyCatalogLayout {
 	if tableDef == nil {
-		return foreignKeyCatalogLegacy, nil
+		return foreignKeyCatalogLegacy
 	}
 	for _, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		if FindColumn(tableDef.Cols, column) == nil {
-			return foreignKeyCatalogLegacy, nil
+			return foreignKeyCatalogLegacy
 		}
 	}
-	return foreignKeyCatalogExtended, nil
+	return foreignKeyCatalogExtended
 }
 
 // quoteSQLStringLiteral emits a literal that MatrixOne's MySQL scanner reads
@@ -5771,15 +5775,30 @@ func GetFkReferredTo(ctx CompilerContext, db, table string) (map[FkReferKey]map[
 }
 
 func getFkReferredToWithCatalogLayout(ctx CompilerContext, db, table string) (map[FkReferKey]map[string][]*FkReferDef, foreignKeyCatalogLayout, error) {
-	//exclude fk self reference
 	layout, err := resolveForeignKeyCatalogLayout(ctx)
 	if err != nil {
 		return nil, foreignKeyCatalogLegacy, err
 	}
+	ret, err := readForeignKeysReferredTo(db, table, layout, func(sql string) (executor.Result, error) { return runSql(ctx, sql) })
+	return ret, layout, err
+}
+
+// ReadForeignKeysReferredTo shares the planner's layout negotiation and decoder
+// with execution, which supplies its current definition and transaction reader.
+// extended reports whether selected-key backfill is supported by this catalog.
+func ReadForeignKeysReferredTo(tableDef *plan.TableDef, db, table string,
+	query func(string) (executor.Result, error)) (ret map[FkReferKey]map[string][]*FkReferDef, extended bool, err error) {
+	layout := foreignKeyCatalogLayoutForDef(tableDef)
+	ret, err = readForeignKeysReferredTo(db, table, layout, query)
+	return ret, layout == foreignKeyCatalogExtended, err
+}
+
+func readForeignKeysReferredTo(db, table string, layout foreignKeyCatalogLayout,
+	query func(string) (executor.Result, error)) (map[FkReferKey]map[string][]*FkReferDef, error) {
 	sql := getSqlForFkReferredToWithCatalogLayout(db, table, layout)
-	res, err := runSql(ctx, sql)
+	res, err := query(sql)
 	if err != nil {
-		return nil, layout, err
+		return nil, err
 	}
 	defer res.Close()
 	ret := make(map[FkReferKey]map[string][]*FkReferDef)
@@ -5828,7 +5847,7 @@ func getFkReferredToWithCatalogLayout(ctx CompilerContext, db, table string) (ma
 			}
 		}
 	}
-	return ret, layout, nil
+	return ret, nil
 }
 
 func legacyForeignKeyActionOrigin(action string) string {
@@ -5941,7 +5960,8 @@ func getSqlForAddFkWithCatalogLayout(db, table string, data *FkData, layout fore
 	return sb.String()
 }
 
-func getSqlForUpdateFkReferencedIndex(db, table, constraintName, referencedIndexName string) string {
+// GetSqlForUpdateFkReferencedIndex records a key selected by the current binder.
+func GetSqlForUpdateFkReferencedIndex(db, table, constraintName, referencedIndexName string) string {
 	return fmt.Sprintf(
 		"update `mo_catalog`.`mo_foreign_keys` set referenced_index_name = %s where db_name = %s and table_name = %s and constraint_name = %s",
 		quoteSQLStringLiteral(referencedIndexName),

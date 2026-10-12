@@ -211,6 +211,21 @@ func bytesPartitionBy(sels []int64, diffs []bool, partitions []int64, vec *vecto
 // by default, the 0th row is always not equal to the one before it
 // (though it doesn't exist)
 func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector) []int64 {
+	// A constant NULL has no payload domain (a literal NULL can be ANY).
+	// It contributes no new boundaries, but must retain earlier sort keys.
+	if vec.IsConstNull() {
+		partitions = partitions[:0]
+		if len(sels) == 0 {
+			return partitions
+		}
+		diffs[0] = true
+		for i, different := range diffs[:len(sels)] {
+			if different {
+				partitions = append(partitions, int64(i))
+			}
+		}
+		return partitions
+	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		return genericPartition[bool](sels, diffs, partitions, vec)
@@ -283,6 +298,11 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		// vecf8/vecf4 cells are equal when their decoded values are
 		return bytesPartitionBy(sels, diffs, partitions, vec, true)
 	default:
+		if vec.IsConst() {
+			// Even untyped NULL contributes no boundaries. This path never
+			// reads values, so the helper's type parameter is immaterial.
+			return genericPartition[bool](sels, diffs, partitions, vec)
+		}
 		panic(moerr.NewNotSupportedNoCtx(vec.GetType().Oid.String()))
 	}
 }

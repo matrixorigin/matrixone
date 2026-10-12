@@ -215,13 +215,39 @@ func (a *allocator) forceSetOffset(
 }
 
 func (a *allocator) enqueue(ctx context.Context, act action) error {
+	accepted := false
+	// Unlock the queue before returning the borrow: its final exit may
+	// schedule transaction rollback and run allocator-cache callbacks.
+	defer func() {
+		if !accepted && act.release != nil {
+			act.release()
+		}
+	}()
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if a.closed {
 		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
 	}
+	if act.txnOp != nil {
+		// An accepted action borrows the caller's workspace even if the caller
+		// stops waiting. Register before publication so rollback/restart also
+		// waits for actions that have not reached the worker yet.
+		borrowedCtx, cancel := context.WithCancel(ctx)
+		op := act.txnOp
+		token, err := client.TryEnterRunSqlWithTokenAndSQL(op, cancel, "<AUTO_INCREMENT allocator>")
+		if err != nil {
+			cancel()
+			return err
+		}
+		ctx, act.ctx = borrowedCtx, borrowedCtx
+		act.release = func() {
+			cancel()
+			op.ExitRunSqlWithToken(token)
+		}
+	}
 	select {
 	case a.c <- act:
+		accepted = true
 		return nil
 	case <-ctx.Done():
 		return context.Cause(ctx)
@@ -236,17 +262,34 @@ func (a *allocator) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case act := <-a.c:
-			switch act.actionType {
-			case allocType:
-				a.doAllocate(act)
-			case updateType:
-				a.doUpdate(act)
-			case forceUpdateType:
-				a.doForceSetOffset(act)
-			case barrierType:
-				act.applyUpdate(nil)
-			}
+			a.doAction(act)
 		}
+	}
+}
+
+func (a *allocator) doAction(act action) {
+	if act.release != nil {
+		defer act.release()
+	}
+	if act.ctx != nil {
+		if err := context.Cause(act.ctx); err != nil {
+			if act.actionType == allocType {
+				act.applyAllocate(0, 0, timestamp.Timestamp{}, err)
+			} else {
+				act.applyUpdate(err)
+			}
+			return
+		}
+	}
+	switch act.actionType {
+	case allocType:
+		a.doAllocate(act)
+	case updateType:
+		a.doUpdate(act)
+	case forceUpdateType:
+		a.doForceSetOffset(act)
+	case barrierType:
+		act.applyUpdate(nil)
 	}
 }
 
@@ -258,10 +301,6 @@ func (a *allocator) doForceSetOffset(act action) {
 	ctx := defines.AttachAccountId(baseCtx, act.accountID)
 	ctx, cancel := context.WithTimeoutCause(ctx, defaultForceSetOffsetTimeout, moerr.CauseDoForceSetOffset)
 	defer cancel()
-	if err := context.Cause(ctx); err != nil {
-		act.applyUpdate(err)
-		return
-	}
 	err := a.store.ForceSetOffset(ctx, act.tableID, act.colIndex, act.col, act.minValue, act.txnOp)
 	err = moerr.AttachCause(ctx, err)
 	act.applyUpdate(err)
@@ -349,6 +388,7 @@ var (
 )
 
 type action struct {
+	release       func()
 	ctx           context.Context
 	txnOp         client.TxnOperator
 	accountID     uint32

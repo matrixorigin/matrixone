@@ -73,7 +73,6 @@ func runCDCGenerationContract(t *testing.T, cnCount int, fn func(Cluster)) {
 	// final close/reset. Its existing owner retains incomplete cleanup.
 	t.Cleanup(func() {
 		require.NoError(t, state.CloseIfActive())
-		cdc.ResetCDCWatermarkUpdaterForTest()
 	})
 	state.Run(t, func() (Cluster, error) {
 		return startBasicCluster(cnCount, basicClusterSetupTracer(t, cnCount), adjustCDCGenerationContractService)
@@ -297,7 +296,6 @@ func TestCDCEndTsWildcardLateTableOnMO(t *testing.T) {
 		// cluster that has closed. Rebind before admitting this task.
 		cdc.ResetTableDetectorForTest(cn.ServiceID(), time.Second)
 		defer cdc.GetTableDetector(cn.ServiceID()).Close()
-		cdc.ResetCDCWatermarkUpdaterForTest()
 		port := cn.GetServiceConfig().CN.Frontend.Port
 		root, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
 		require.NoError(t, err)
@@ -404,7 +402,6 @@ func testCDCGenerationReplacementOnMO(t *testing.T, cluster Cluster) {
 	// the live CN before the task is admitted.
 	cdc.ResetTableDetectorForTest(cn.ServiceID(), time.Second)
 	defer cdc.GetTableDetector(cn.ServiceID()).Close()
-	cdc.ResetCDCWatermarkUpdaterForTest()
 	port := cn.GetServiceConfig().CN.Frontend.Port
 	root, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
 	require.NoError(t, err)
@@ -617,7 +614,6 @@ func testCDCFirstAckHoldsSourceGenerationAcrossCN(t *testing.T, cluster Cluster)
 	require.NoError(t, err)
 	cdc.ResetTableDetectorForTest(cn0.ServiceID(), time.Second)
 	defer cdc.GetTableDetector(cn0.ServiceID()).Close()
-	cdc.ResetCDCWatermarkUpdaterForTest()
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 	root, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", ports[0]))
@@ -819,7 +815,6 @@ func TestCDCTargetSetupTransientDiagnosticOnMO(t *testing.T) {
 		closeErr := CloseSingleCNBaseClusterTests()
 		cdc.OpenDbConn = originalOpen
 		restoreCollect()
-		cdc.ResetCDCWatermarkUpdaterForTest()
 		require.NoError(t, closeErr)
 	})
 	runCDCGenerationContract(t, 1, func(cluster Cluster) {
@@ -827,7 +822,6 @@ func TestCDCTargetSetupTransientDiagnosticOnMO(t *testing.T) {
 		require.NoError(t, err)
 		cdc.ResetTableDetectorForTest(cn.ServiceID(), time.Second)
 		defer cdc.GetTableDetector(cn.ServiceID()).Close()
-		cdc.ResetCDCWatermarkUpdaterForTest()
 		port := cn.GetServiceConfig().CN.Frontend.Port
 		root, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
 		require.NoError(t, err)

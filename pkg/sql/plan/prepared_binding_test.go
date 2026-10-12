@@ -197,6 +197,224 @@ func TestPreparedDecimalComparisonAdmissionOwnership(t *testing.T) {
 	}
 }
 
+func TestPreparedDecimalIntegerConsumerPruning(t *testing.T) {
+	for _, decimal := range []types.Type{
+		types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal128, 18, 2), types.New(types.T_decimal256, 30, 12),
+	} {
+		for _, tc := range []struct {
+			name, predicate string
+			binding         types.T
+			values          []string
+			native          bool
+			guarded         bool
+		}{
+			{"integer list", "c in (?, ?)", types.T_int64, []string{"16001", "16002"}, true, true},
+			{"integer range", "c between ? and ?", types.T_int64, []string{"16001", "16002"}, true, true},
+			{"unsigned list", "c in (?, ?)", types.T_uint64, []string{"16001", "16002"}, true, true},
+			{"integer list literal", "c in (?, 16002)", types.T_int64, []string{"16001"}, true, true},
+			{"integer range literal", "c between 16001 and ?", types.T_int64, []string{"16002"}, true, true},
+			{"wide list", "c in (?, ?)", types.T_int64, []string{"16001", "9223372036854775807"}, false, false},
+			{"wide range", "c between ? and ?", types.T_int64, []string{"16001", "9223372036854775807"}, false, false},
+			{"wide unsigned list", "c in (?, ?)", types.T_uint64, []string{"16001", "18446744073709551615"}, false, false},
+			{"explicit column cast control", "cast(c as decimal(30,2)) in (?, ?)", types.T_int64, []string{"16001", "16002"}, false, false},
+			{"signed cast integer", "c = cast(? as signed)", types.T_int64, []string{"16001"}, true, true},
+			{"signed cast unsigned control", "c = cast(? as signed)", types.T_uint64, []string{"18446744073709551615"}, false, false},
+			{"signed cast double control", "c = cast(? as signed)", types.T_float64, []string{"16001.75"}, false, false},
+			{"double cast integer control", "c = cast(? as double)", types.T_int64, []string{"16001"}, false, false},
+			{"abs double cast integer control", "c = abs(cast(? as double))", types.T_int64, []string{"-16001"}, false, false},
+			{"double cast collision", "c = cast(? as double)", types.T_int64, []string{"9007199254740992"}, false, false},
+		} {
+			if decimal.Oid == types.T_decimal256 && tc.name != "integer list" && tc.name != "integer range" {
+				continue
+			}
+			t.Run(decimal.String()+"/"+tc.name, func(t *testing.T) {
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
+				table := makeExprOptCompositeSortKeyTableDef()
+				table.Name, table.TblId = "decimal_consumer_filters", 99005
+				table.Cols[2].Typ = makePlan2Type(&decimal)
+				mock.ctxt.tables[table.Name] = table
+				mock.ctxt.objects[table.Name] = &ObjectRef{ObjName: table.Name, Obj: int64(table.TblId)}
+				proc := mock.ctxt.GetProcess()
+				params := vector.NewVec(types.T_text.ToType())
+				t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+				bindings := make([]PreparedSourceBinding, len(tc.values))
+				values := make([]any, len(tc.values))
+				for i, value := range tc.values {
+					bindings[i] = PreparedSourceBinding{Position: int32(i), Type: tc.binding.ToType()}
+					values[i] = ParamValue{Value: value, IsBinaryProtocol: true}
+					require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
+				}
+				proc.SetPrepareParams(params)
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+					"select c from decimal_consumer_filters where "+tc.predicate, 1)
+				require.NoError(t, err)
+				t.Cleanup(stmt.Free)
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+				require.NoError(t, err)
+				if tc.guarded {
+					require.False(t, bound.ValueDependent, "safe admitted domains remain reusable")
+					require.NotEmpty(t, bound.DiagnosticCandidates)
+					for pos := range tc.values {
+						for _, probe := range []struct {
+							value      string
+							null, safe bool
+						}{
+							{"16003", false, true},
+							{"1" + strings.Repeat("0", int(decimal.Width-decimal.Scale)), false, false},
+							{"", true, true},
+							{"16001", false, true},
+						} {
+							func() {
+								current := vector.NewVec(types.T_text.ToType())
+								defer func() { proc.SetPrepareParams(params); current.Free(proc.Mp()) }()
+								for i, value := range tc.values {
+									null := false
+									if i == pos {
+										value, null = probe.value, probe.null
+									}
+									require.NoError(t, vector.AppendBytes(current, []byte(value), null, proc.Mp()))
+								}
+								proc.SetPrepareParams(current)
+								safe, err := ProbePreparedDiagnosticCandidates(proc, bound.DiagnosticCandidates)
+								require.NoError(t, err)
+								require.Equal(t, probe.safe, safe, "ordinal %d current binding %q", pos, probe.value)
+							}()
+						}
+					}
+				}
+				foundScan, columnCast, widerDecimal, executableParam := false, false, false, false
+				for _, node := range bound.Plan.GetQuery().Nodes {
+					if node.NodeType != planpb.Node_TABLE_SCAN || node.TableDef.Name != table.Name {
+						continue
+					}
+					foundScan = true
+					for _, filter := range node.FilterList {
+						if tc.native {
+							require.True(t, ExprIsZonemappable(context.Background(), filter), filter.String())
+						}
+						executableParam = executableParam || function.ContainsParameter(filter)
+						require.NoError(t, planpb.VisitExprTree(filter, func(expr *Expr) error {
+							widerDecimal = widerDecimal || types.T(expr.Typ.Id).IsDecimal() && expr.Typ.Width > decimal.Width
+							if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 &&
+								fn.Args[0].GetCol() != nil && fn.Args[0].Typ.Id == table.Cols[2].Typ.Id {
+								columnCast = true
+							}
+							return nil
+						}))
+					}
+				}
+				require.True(t, foundScan)
+				if tc.native {
+					require.False(t, columnCast, bound.Plan.String())
+				} else {
+					// A wide peer can retain its exact domain without casting a
+					// DECIMAL128 column again. The domain, not one plan spelling,
+					// is the fallback contract.
+					require.True(t, columnCast || widerDecimal, bound.Plan.String())
+				}
+				require.True(t, executableParam, "proof witness must not replace the original binding")
+			})
+		}
+	}
+}
+
+func TestPreparedDecimalIntegerPeersAtomicAdmission(t *testing.T) {
+	for _, name := range []string{"in", "not_in", "between"} {
+		for _, tc := range []struct {
+			name    string
+			values  []any
+			binding types.T
+			admit   bool
+		}{
+			{"safe", []any{int64(7), int64(8)}, types.T_int64, true},
+			{"wide upper", []any{int64(7), int64(10000000000)}, types.T_int64, false},
+			{"wide lower", []any{int64(-10000000000), int64(8)}, types.T_int64, false},
+			{"null upper", []any{int64(7), nil}, types.T_int64, false},
+			{"mixed domain", []any{int64(7), float64(8)}, types.T_float64, false},
+		} {
+			for _, dependent := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/dependent=%t", name, tc.name, dependent), func(t *testing.T) {
+					ctx := withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{
+						{Position: 0, Type: types.T_int64.ToType()}, {Position: 1, Type: tc.binding.ToType()},
+					}, tc.values)
+					state := preparedBindingState(ctx)
+					state.selectStatement, state.valueDependent = true, dependent
+					prior := makePlan2Int64ConstExprWithType(42)
+					state.diagnosticCandidates = []*Expr{prior}
+					lower, err := bindPreparedSource(ctx, 1)
+					require.NoError(t, err)
+					upper, err := bindPreparedSource(ctx, 2)
+					require.NoError(t, err)
+					decimal := types.New(types.T_decimal64, 12, 2)
+					column := &Expr{Typ: makePlan2Type(&decimal), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+					args := []*Expr{column, lower, upper}
+					if name != "between" {
+						args = []*Expr{column, {Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*Expr{lower, upper}}}}}
+					}
+					got, err := bindPreparedConsumerArguments(ctx, name, args)
+					require.NoError(t, err)
+					require.Same(t, prior, state.diagnosticCandidates[0])
+					require.Equal(t, int32(types.T_int64), lower.Typ.Id, "sibling marker remains in source domain")
+					require.Equal(t, int32(tc.binding), upper.Typ.Id)
+					if tc.admit {
+						require.Len(t, state.diagnosticCandidates, 3)
+						require.Equal(t, dependent, state.valueDependent)
+						peers := got[1:]
+						if name != "between" {
+							peers = got[1].GetList().List
+						}
+						for _, peer := range peers {
+							require.True(t, sameDecimalComparisonType(peer.Typ, column.Typ))
+						}
+					} else {
+						require.Len(t, state.diagnosticCandidates, 1, "failed admission must not publish partial guards")
+						for i := range args {
+							require.Same(t, args[i], got[i], "failed admission leaves the whole original predicate")
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestPreparedDecimalIntegerCastAdmission(t *testing.T) {
+	for _, sourceType := range []types.T{types.T_int32, types.T_int64, types.T_uint64, types.T_float64} {
+		for _, selectStatement := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/select=%t", sourceType, selectStatement), func(t *testing.T) {
+				ctx := withPreparedSourceBindings(context.Background(),
+					[]PreparedSourceBinding{{Position: 0, Type: sourceType.ToType()}}, []any{int64(7)})
+				state := preparedBindingState(ctx)
+				state.selectStatement = selectStatement
+				source, err := bindPreparedSource(ctx, 1)
+				require.NoError(t, err)
+				cast, err := appendExplicitCastBeforeExpr(ctx, source, makeSimplePlan2Type(types.T_int64))
+				require.NoError(t, err)
+				decimal := types.New(types.T_decimal64, 12, 2)
+				column := &Expr{Typ: makePlan2Type(&decimal), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+				args := []*Expr{column, cast}
+				got, admitted, err := bindPreparedDecimalIntegerArguments(ctx, "=", args)
+				require.NoError(t, err)
+				want := selectStatement && sourceType.IsSignedInt()
+				require.Equal(t, want, admitted)
+				require.Equal(t, int32(sourceType), source.Typ.Id)
+				if !want {
+					require.Empty(t, state.diagnosticCandidates)
+					require.Same(t, cast, got[1])
+					return
+				}
+				require.Len(t, state.diagnosticCandidates, 1)
+				require.False(t, state.valueDependent)
+				retained := got[1].GetF().Args[0]
+				require.NotNil(t, retained.GetF(), "the explicit integer cast must still execute")
+				_, overload := function.DecodeOverloadID(retained.GetF().Func.Obj)
+				require.EqualValues(t, 1, overload)
+				require.NotNil(t, retained.GetF().Args[0].GetP())
+			})
+		}
+	}
+}
+
 func TestPreparedNumericPredicateFiltering(t *testing.T) {
 	for _, tc := range []struct {
 		name, predicate string

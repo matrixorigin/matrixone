@@ -109,7 +109,8 @@ func NewPlanReaders(proc *process.Process, spec *plan.VectorIndexScan, req searc
 	}
 	pos, ok := spec.SourceTableDef.Name2ColIndex[pk.PkeyColName]
 	if !ok || pos < 0 || int(pos) >= len(spec.SourceTableDef.Cols) || keys.HasNull() ||
-		keys.GetType().Oid != types.T(spec.SourceTableDef.Cols[pos].Typ.Id) {
+		!types.MembershipKeyTypeCompatible(
+			keys.GetType().Oid, types.T(spec.SourceTableDef.Cols[pos].Typ.Id)) {
 		return nil, moerr.NewInvalidInputNoCtx("PRE membership key type does not match the source primary key")
 	}
 	if (parallelism > 1 || distributed) && !docfilter.SupportsBitset(*keys.GetType()) {

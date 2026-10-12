@@ -177,7 +177,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 		bat.Vecs[i] = vector.NewVec(types.New(types.T_enum, 2, 0))
 		v := types.Enum(uint16(1))
 		vector.AppendFixed[types.Enum](bat.Vecs[i], v, false, proc.Mp())
-		res[i] = "'1'"
+		res[i] = "1"
 		i += 1
 	}
 

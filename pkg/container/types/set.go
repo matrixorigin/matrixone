@@ -72,6 +72,18 @@ func ParseSet(setStr string, name string) (uint64, error) {
 	return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL set failed: item %s is not in set [%s]", name, strings.Join(descriptor.values, ","))
 }
 
+// MatchSetName reports whether name is a list of member names of the SET
+// definition, exactly as ParseSet matches names, without building an error.
+// Numeric bitmap input is not considered.
+func MatchSetName(setStr string, name string) bool {
+	descriptor, err := getSetDescriptor(setStr)
+	if err != nil {
+		return false
+	}
+	_, matched := descriptor.parseName(name)
+	return matched
+}
+
 func ParseSetValue(setStr string, bits uint64) (uint64, error) {
 	descriptor, err := getSetDescriptor(setStr)
 	if err != nil {
@@ -142,16 +154,22 @@ func (d *setDescriptor) parseName(name string) (uint64, bool) {
 		return 0, true
 	}
 
+	// Walk the comma-separated items in place (same items as strings.Split)
+	// so a member-name lookup does not allocate.
 	setBits := uint64(0)
-	for _, item := range strings.Split(name, ",") {
+	for {
+		item, rest, more := strings.Cut(name, ",")
 		normalized := strings.ToLower(strings.TrimRight(item, " "))
 		origin, ok := d.normalizedToOrigin[normalized]
 		if !ok {
 			return 0, false
 		}
 		setBits |= d.valueToBit[origin]
+		if !more {
+			return setBits, true
+		}
+		name = rest
 	}
-	return setBits, true
 }
 
 func (d *setDescriptor) parseValue(bits uint64) (uint64, error) {
