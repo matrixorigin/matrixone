@@ -2104,6 +2104,12 @@ func (tc *txnOperator) closeUnadmitted(err error) {
 // cleaning concurrently is unsafe because the running SQL still owns the
 // workspace. Sealing rejects new SQL before the final exit performs one
 // detached, bounded rollback.
+// RollbackAfterRunningSQL shares the existing terminal owner with SQL callers
+// that borrow a transaction and may otherwise catch a fatal statement error.
+func (tc *txnOperator) RollbackAfterRunningSQL(err error) {
+	tc.scheduleRollbackAfterRunningSQL(err)
+}
+
 func (tc *txnOperator) scheduleRollbackAfterRunningSQL(waitErr error) {
 	tc.mu.Lock()
 	if tc.mu.closed || tc.mu.terminalAction != txnTerminalActionNone {

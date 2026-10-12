@@ -498,9 +498,43 @@ kill -TERM "$$"
 	// active. The injected hook delivers TERM after join-start but before the
 	// blocking wait, so cancellation must stop both the issues owner and every
 	// compiler child without falling through to authoritative execution.
-	joinCancelScript := embeddedSetup + `
+	t.Run("join", func(t *testing.T) {
+		joinCancelScript := "unset UT_HELPER_TERM_GRACE_TICKS\n" + embeddedSetup + `
+[[ "$UT_HELPER_TERM_GRACE_TICKS" == 60 ]] || exit 98
+# Keep the real wait/kill logic. Only the parent's prebuild wait observes the
+# helper's drained-but-not-yet-acknowledged boundary through existing FIFOs.
+wait_function=$(declare -f wait_for_ut_process_group)
+# shellcheck disable=SC2016 # Match literal function syntax, not the current tick.
+wait_anchor='tick=$((tick + 1))'
+[[ "$wait_function" == *"$wait_anchor"* ]] || exit 99
+wait_suffix=${wait_function#*"$wait_anchor"}
+[[ "$wait_suffix" != *"$wait_anchor"* ]] || exit 99
+eval "${wait_function/wait_for_ut_process_group/wait_for_ut_unobserved_group}"
+wait_function=${wait_function/wait_for_ut_process_group/wait_for_ut_observed_group}
+# shellcheck disable=SC2016 # Expand these locals only inside the copied function.
+wait_function=${wait_function/"$wait_anchor"/'tick=$((tick + 1)); ut_test_prebuild_grace_tick "$pid" "$tick"'}
+eval "$wait_function"
+function ut_test_prebuild_grace_tick() {
+ if (( $2 == 1 )); then read -r _ <&8; fi
+ if (( $2 == 5 )); then
+  printf 'release\n' >&7
+  read -r _ <&8
+ fi
+}
+function wait_for_ut_process_group() {
+ if (( UT_TERMINATING == 1 )) && [[ "$1" == "$CLUSTER_PREBUILD_JOB_PID" ]]; then
+  wait_for_ut_observed_group "$@"
+ else
+  wait_for_ut_unobserved_group "$@"
+ fi
+}
+
 cleanup_check() {
  status=$?
+ completion=no; retained=no
+ [[ -f "$G_WKSP/$G_TS-owner-complete.CLUSTER_PREBUILD_JOB_PID" && "$(<"$G_WKSP/$G_TS-owner-complete.CLUSTER_PREBUILD_JOB_PID")" == 143 ]] && completion=yes
+ [[ -d "$artifact_dir" ]] && retained=yes
+ printf 'JOIN_STATE status=%s drain=%s ack=%s retained=%s\n' "$status" "$CLUSTER_PREBUILD_DRAIN_FAILED" "$completion" "$retained"
  for p in a b; do
   [[ -f "$CASE_DIR/stopped-$p" ]] || status=90
   if kill -0 "$(<"$CASE_DIR/pid-$p")" 2>/dev/null; then status=91; fi
@@ -508,14 +542,13 @@ cleanup_check() {
  done
  [[ -f "$CASE_DIR/issues-stopped" ]] || status=96
  if kill -0 "$issues_pid" 2>/dev/null; then status=97; fi
- [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID" ]] || status=93
+ [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID$CLUSTER_PREBUILD_REPORT$CLUSTER_PREBUILD_DIR" ]] || status=93
  [[ ! -d "$artifact_dir" ]] || status=94
  [[ ! -d "$CASE_DIR/authoritative" ]] || status=95
  printf 'JOIN_CANCELLED %s\n' "$status"
  exit "$status"
 }
 trap cleanup_check EXIT
-UT_HELPER_TERM_GRACE_TICKS=4
 export RUNNER_PID=$$
 start_embedded_prebuild "$scope" 2
 artifact_dir=$CLUSTER_PREBUILD_DIR
@@ -531,19 +564,39 @@ issues_pid=$CURRENT_UT_PID
 while [[ ! -e "$CASE_DIR/issues-active" ]]; do sleep 0.01; done
 run_embedded_tests "$scope"
 `
-	joinCancelTransform := func(text string) string {
-		const anchor = `    join_ut_owner CLUSTER_PREBUILD_JOB_PID CLUSTER_PREBUILD_DRAIN_FAILED || prebuild_status=$?
+		joinCancelTransform := func(text string) string {
+			const anchor = `    join_ut_owner CLUSTER_PREBUILD_JOB_PID CLUSTER_PREBUILD_DRAIN_FAILED || prebuild_status=$?
 `
-		if strings.Count(text, anchor) != 1 {
-			t.Fatalf("missing unique embedded prebuild join wait")
+			if strings.Count(text, anchor) != 1 {
+				t.Fatalf("missing unique embedded prebuild join wait")
+			}
+			text = strings.Replace(text, anchor, "    : > \"$CASE_DIR/join-waiting\"\n"+anchor, 1)
+			const completion = `        wait 2>/dev/null || true
+        publish_ut_helper_completion 143 || exit 125
+        exit 143
+    }
+    trap cancel_embedded_wave TERM
+`
+			if strings.Count(text, completion) != 1 {
+				t.Fatal("missing unique embedded cancellation completion")
+			}
+			barrier := `        wait 2>/dev/null || true
+        printf 'drained\n' >&8
+        read -r _ <&7
+        publish_ut_helper_completion 143 || exit 125
+        printf 'published\n' >&8
+        exit 143
+    }
+    trap cancel_embedded_wave TERM
+`
+			return strings.Replace(text, completion, barrier, 1)
 		}
-		return strings.Replace(text, anchor, "    : > \"$CASE_DIR/join-waiting\"\n"+anchor, 1)
-	}
-	out, err := scheduleHarnessWithMockTransform(t, joinCancelScript, embeddedGoMock, joinCancelTransform, "MODE=build-cancel", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=")
-	exit, ok := err.(*exec.ExitError)
-	if !ok || exit.ExitCode() != 143 || !strings.Contains(string(out), "JOIN_CANCELLED 143") {
-		t.Fatalf("embedded prebuild join cancellation: %v\n%s", err, out)
-	}
+		out, err := scheduleHarnessWithMockTransform(t, joinCancelScript, embeddedGoMock, joinCancelTransform, "MODE=build-cancel", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=")
+		exit, ok := err.(*exec.ExitError)
+		if !ok || exit.ExitCode() != 143 || !strings.Contains(string(out), "JOIN_CANCELLED 143") || !strings.Contains(string(out), "JOIN_STATE status=143 drain=0 ack=yes retained=no") {
+			t.Fatalf("embedded prebuild join cancellation: %v\n%s", err, out)
+		}
+	})
 }
 
 func TestEmbeddedPrebuiltExecutionCancellation(t *testing.T) {
