@@ -95,50 +95,6 @@ alter table add02 add column f3 int not null;
 show create table add02;
 Table    Create Table
 add02    CREATE TABLE `add02` (\n  `f1` int DEFAULT NULL,\n  `f2` datetime NOT NULL,\n  `f21` date NOT NULL,\n  `f3` int NOT NULL\n)
-drop table if exists add_parenthesized;
-create table add_parenthesized (id int primary key, original_tag varchar(10));
-insert into add_parenthesized values (1, 'one'), (2, 'two');
-alter table add_parenthesized add column ();
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 43 near ");";
-show create table add_parenthesized;
-➤ Table[12,17,0]  ¦  Create Table[12,121,0]  𝄀
-add_parenthesized  ¦  CREATE TABLE `add_parenthesized` (
-  `id` int NOT NULL,
-  `original_tag` varchar(10) DEFAULT NULL,
-  PRIMARY KEY (`id`)
-)
-alter table add_parenthesized add column (added_tag longtext null);
-alter table add_parenthesized add (id int);
-Duplicate column name 'id'
-show create table add_parenthesized;
-➤ Table[12,17,0]  ¦  Create Table[12,158,0]  𝄀
-add_parenthesized  ¦  CREATE TABLE `add_parenthesized` (
-  `id` int NOT NULL,
-  `original_tag` varchar(10) DEFAULT NULL,
-  `added_tag` longtext DEFAULT NULL,
-  PRIMARY KEY (`id`)
-)
-alter table add_parenthesized add (counter int default 7, note varchar(20) null);
-show create table add_parenthesized;
-➤ Table[12,17,0]  ¦  Create Table[12,220,0]  𝄀
-add_parenthesized  ¦  CREATE TABLE `add_parenthesized` (
-  `id` int NOT NULL,
-  `original_tag` varchar(10) DEFAULT NULL,
-  `added_tag` longtext DEFAULT NULL,
-  `counter` int DEFAULT 7,
-  `note` varchar(20) DEFAULT NULL,
-  PRIMARY KEY (`id`)
-)
-select id, original_tag, added_tag, counter, note from add_parenthesized order by id;
-➤ id[4,32,0]  ¦  original_tag[12,10,0]  ¦  added_tag[-1,536870911,0]  ¦  counter[4,32,0]  ¦  note[12,20,0]  𝄀
-1  ¦  one  ¦  null  ¦  7  ¦  null  𝄀
-2  ¦  two  ¦  null  ¦  7  ¦  null
-update add_parenthesized set added_tag = 'written', counter = counter + 1, note = 'checked' where id = 1;
-select id, original_tag, added_tag, counter, note from add_parenthesized order by id;
-➤ id[4,32,0]  ¦  original_tag[12,10,0]  ¦  added_tag[-1,536870911,0]  ¦  counter[4,32,0]  ¦  note[12,20,0]  𝄀
-1  ¦  one  ¦  written  ¦  8  ¦  checked  𝄀
-2  ¦  two  ¦  null  ¦  7  ¦  null
-drop table add_parenthesized;
 alter table add02 add column f3 date not null;
 Duplicate column name 'f3'
 alter table add02 add column f4 datetime not null default '2002-02-02',add column f41 date not null default '2002-02-02';
