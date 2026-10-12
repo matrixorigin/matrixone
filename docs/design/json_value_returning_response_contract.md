@@ -63,30 +63,36 @@ values are not automatically recomputed. Upgrade validation covers views,
 generated columns, indexes, values over the 512-character boundary, and the
 explicit rebuild procedure.
 
-### Versioned compatibility decision (candidate revision 7, 2026-10-09)
+### Versioned compatibility decision (candidate revision 8, 2026-10-13)
 
 Status: independent maintainer approval pending. This candidate updates revision
-6 after an intervening main allocation, retaining shutdown-upgrade acceptance;
+7 after an intervening main allocation, retaining shutdown-upgrade acceptance;
 superseded details remain in PR history rather than this contract.
 Approval must identify
 this revision's immutable commit and an independent approver. Author replies,
 thread resolution and approvals of earlier revisions do not approve this one.
 
-The current source is a provisional MORPC v111 validation candidate for
+The current source is a provisional MORPC v112 validation candidate for
 JSON_VALUE function ID 462, overload 2, based on
-`f802ab6a6fd66fed0f094d1772a6f93049004e8a` (v110). It preserves main's
+`cd8d5abf9665a97d13e50b04840fb74b877fd339` (v111). It preserves main's
 functional-index metadata and generated-key maintenance capability at v107 and
 isolated user-variable NULL regexp migration history at v108, plus native Unicode
 collation identities in persisted information_schema.COLUMNS metadata at v109;
-and MEDIUMINT assignment/CAST bounds, catalog and migration semantics at v110.
-Main's v110 capability must still reject this candidate's seven-argument
-JSON_VALUE contract; the cumulative latest version is v111.
+and MEDIUMINT assignment/CAST bounds, catalog and migration semantics at v110,
+plus IndexSearchScan for every vector/fulltext index with algo_options/algo_exprs
+at v111. The actual IndexSearchScan implementation and its independent v111
+placement, transport and receiver gates remain intact, including rejection of
+the older representation without algo_options. Main's v111 capability must
+still reject this candidate's seven-argument JSON_VALUE contract; the cumulative
+latest version is v112. Algorithm-expression-only owners participate in the
+same expression feature walk; an ordinary projection is not required.
 It is not the final landing
 build. The [maintainer landing decision](https://github.com/matrixorigin/matrixone/pull/28275#issuecomment-6054197734)
 ordered #28935, #28947, then this PR against the former v106 base. Its conditional
 v107/v108/v109 assignments are superseded by the actual functional-index landing
-in #29472 and the subsequently landed v108 migration, v109 Unicode and v110
-MEDIUMINT capabilities. The independently proposed CRC v111 candidate in #28935
+in #29472 and the subsequently landed v108 migration, v109 Unicode, v110
+MEDIUMINT and v111 IndexSearchScan capabilities. The independently proposed CRC
+v112 candidate in #28935
 is not landed and is not included in this executable. If it lands first, the
 actual cumulative allocation and all corresponding gates must be reconciled
 again; this candidate does not reserve that number. A refreshed
@@ -98,12 +104,12 @@ binaries. The source gates, immediate-predecessor
 tests, final design and earlier-capability preservation tests move together
 after cumulative integration. No independent design approval is carried forward.
 
-The planner requires the deployment-wide MOProtocolVersion to be at least 111
+The planner requires the deployment-wide MOProtocolVersion to be at least 112
 for RETURNING, ON EMPTY or ON ERROR. Bare two-argument calls keep the legacy
 plan and its NULL-document short circuit. In the new clause-bearing contract,
 a non-NULL invalid path is a hard error even when the document is SQL NULL.
 
-Both current sender and receiver validate overload 2 against v111 before remote
+Both current sender and receiver validate overload 2 against v112 before remote
 execution. Those checks do not retrofit an old receiver. The accepted deployment
 scope is a shutdown upgrade: stop all old processes, replace the binaries with
 the final cumulative build, then start and admit the deployment before authoring
@@ -122,7 +128,7 @@ The SQL grammar rejects JSON_VALUE in ON UPDATE; internal owner-walk coverage
 does not imply SQL support for that combination. Prepared execution is tested separately; a session prepared statement is not
 assumed to be a durable catalog object.
 
-Do not admit pre-v111 CNs after committing a v111 durable floor. The existing
+Do not admit pre-v112 CNs after committing a v112 durable floor. The existing
 floor advances monotonically; deleting views/generated expressions or indexes
 does not by itself lower it. In-place rollback below that floor is unsupported
 unless a separately supported, validated floor-lowering procedure exists.
@@ -230,7 +236,7 @@ at immutable source `88c5d3e65be9a887a5094ae584d371d35d4e95d2`; they are not
 new-head PASS evidence. In particular, admitted-extraction benchmarks exclude
 generic vector ingestion/unmarshal and cannot answer their regression cost.
 
-Current source tests the merged grammar and provisional protocol111 predecessor110
+Current source tests the merged grammar and provisional protocol112 predecessor111
 boundaries separately. Final cumulative integration, predecessor-data shutdown
 upgrade, durable floor restart/restore, deployment QA and independent approval
 remain required and are not claimed complete. A focused base/head ingestion/unmarshal
@@ -238,8 +244,9 @@ and legacy two-argument JSON_VALUE comparison must include actual measurements,
 equivalent inputs, environment and variation, plus a retained-cost decision.
 Preserve structural and canonical JSON safety checks while that evidence is pending.
 
-The main-v110 conflict repair and v111 gates are unvalidated local candidate
+The main-v111 conflict repair and v112 gates are unvalidated local candidate
 content until their applicable planner, sender/receiver, persisted-owner and
-functional-index/migration/Unicode/MEDIUMINT preservation checks actually run. Prior v108 JSON_VALUE
-measurements remain bound to their historical source; they do not prove the final
+functional-index/migration/Unicode/MEDIUMINT/IndexSearchScan preservation checks
+actually run. Prior v111 runtime and BVT receipts and v108 JSON_VALUE measurements
+remain bound to their historical source; they do not prove the final
 cumulative executable, final predecessor-data compatibility or durable recovery.

@@ -175,14 +175,14 @@ func PlanCallsAnyFunc(query *plan.Query, names ...string) bool {
 				checkExpr(node.IndexReaderParam.DistRange.UpperBound)
 			}
 		}
-		if node.VectorIndexScan != nil {
-			checkExpr(node.VectorIndexScan.QueryVector)
-			checkExpr(node.VectorIndexScan.CandidateLimit)
-			checkExprs(node.VectorIndexScan.PreFilters)
-			checkExpr(node.VectorIndexScan.FirstRoundLimit)
-			if node.VectorIndexScan.DistanceRange != nil {
-				checkExpr(node.VectorIndexScan.DistanceRange.LowerBound)
-				checkExpr(node.VectorIndexScan.DistanceRange.UpperBound)
+		if node.IndexSearchScan != nil {
+			checkExpr(node.IndexSearchScan.QueryPayload)
+			checkExpr(node.IndexSearchScan.CandidateLimit)
+			checkExprs(node.IndexSearchScan.PreFilters)
+			checkExprs(node.IndexSearchScan.AlgoExprs)
+			if node.IndexSearchScan.DistanceRange != nil {
+				checkExpr(node.IndexSearchScan.DistanceRange.LowerBound)
+				checkExpr(node.IndexSearchScan.DistanceRange.UpperBound)
 			}
 		}
 		if node.RowsetData != nil {

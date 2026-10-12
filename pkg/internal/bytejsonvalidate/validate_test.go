@@ -70,6 +70,51 @@ func TestContainerNumericEncoding(t *testing.T) {
 	if ContainerWithNumericEncoding(typeArray, deep, benchmarkScalar) {
 		t.Fatal("depth bound bypassed")
 	}
+	t.Run("numeric prefix stops at callback", func(t *testing.T) {
+		for _, repair := range []bool{false, true} {
+			d := testScalarArray([]byte{typeInt64, typeUint64, typeString, typeInt64}, [][]byte{make([]byte, 8), make([]byte, 8), {1, 'x'}, make([]byte, 8)})
+			if repair {
+				d[headerSize+3*valEntrySize] = 0xfd
+			}
+			visits := 0
+			got := ContainerWithNumericEncoding(typeArray, d, func(tp byte, scalar []byte) bool {
+				visits++
+				if tp != typeString {
+					t.Fatalf("unexpected callback type %x", tp)
+				}
+				if repair {
+					d[headerSize+3*valEntrySize] = typeInt64
+				} else {
+					d[headerSize+3*valEntrySize] = 0xfd
+				}
+				return benchmarkScalar(tp, scalar)
+			})
+			if got != repair || visits != 1 {
+				t.Fatalf("repair=%v valid=%v callbacks=%d", repair, got, visits)
+			}
+		}
+	})
+	t.Run("numeric prefix charges before callback", func(t *testing.T) {
+		const count = 9
+		payload := headerSize + count*valEntrySize
+		d := make([]byte, payload+10)
+		binary.LittleEndian.PutUint32(d, count)
+		binary.LittleEndian.PutUint32(d[docSizeOff:], uint32(len(d)))
+		for i := 0; i < count-1; i++ {
+			d[headerSize+i*valEntrySize] = typeInt64
+			binary.LittleEndian.PutUint32(d[headerSize+i*valEntrySize+valTypeSize:], uint32(payload))
+		}
+		d[headerSize+(count-1)*valEntrySize] = typeString
+		binary.LittleEndian.PutUint32(d[headerSize+(count-1)*valEntrySize+valTypeSize:], uint32(payload+8))
+		d[payload+8], d[payload+9] = 1, 'x'
+		if ContainerWithNumericEncoding(typeArray, d, func(byte, []byte) bool {
+			t.Fatal("byte budget must reject before the nonnumeric callback")
+			return true
+		}) {
+			t.Fatal("numeric alias expansion accepted")
+		}
+	})
+
 }
 
 func testLiteralArray() []byte {

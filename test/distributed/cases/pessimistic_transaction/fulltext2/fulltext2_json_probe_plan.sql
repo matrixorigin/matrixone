@@ -32,7 +32,7 @@ deallocate prepare wait_ftj;
 -- residual coverage delay under load.
 -- @separator:table
 -- @wait_expect(2, 120)
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from t where json_extract_string(j,'$.foo') = 'needle';
 
 -- and the results stay exact (the probe is a superset; the predicate re-checks).
@@ -40,7 +40,7 @@ select id from t where json_extract_string(j,'$.foo') = 'needle' order by id;
 
 -- a numeric range probe fires too (coverage already holds)
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from t where json_extract_float64(j,'$.n') > 10;
 select id from t where json_extract_float64(j,'$.n') > 10 order by id;
 

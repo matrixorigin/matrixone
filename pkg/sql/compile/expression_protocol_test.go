@@ -28,6 +28,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -52,8 +53,8 @@ func TestJSONValueProtocolFloorComposesWithLandedContracts(t *testing.T) {
 		JSONScalarLiteralContracts: true,
 		MediumIntAssignmentBounds:  true,
 	}
-	require.Equal(t, defines.MORPCVersion111, requiredExpressionContractProtocolVersion(features))
-	require.Equal(t, defines.MORPCVersion111, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion112, requiredExpressionContractProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion112, remoteExpressionProtocolVersion(features))
 	features.JSONValueContract = false
 	require.Equal(t, defines.MORPCVersion104, requiredExpressionContractProtocolVersion(features))
 	require.Equal(t, defines.MORPCVersion110, remoteExpressionProtocolVersion(features))
@@ -65,13 +66,104 @@ func TestJSONValueDestinationRequiresItsOwnProtocolFloor(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
 			features := planpb.RemoteExpressionFeatures{JSONValueContract: true, MediumIntAssignmentBounds: mixed}
 			p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}
-			client.version = defines.MORPCVersion110
-			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 111")
+			client.version = defines.MORPCVersion111
+			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 112")
 			require.Equal(t, 1, client.calls)
 			require.Equal(t, client.calls, client.releases)
-			client.version = defines.MORPCVersion111
+			client.version = defines.MORPCVersion112
 			require.NoError(t, validateRemoteExpressionDestination(c.proc, p, features))
 			require.Equal(t, 2, client.calls)
+			require.Equal(t, client.calls, client.releases)
+		})
+	}
+}
+
+func TestJSONValueIndexSearchAlgoExprsProtocolComposition(t *testing.T) {
+	require.Equal(t, defines.MORPCVersion111, int64(vectorscan.IndexSearchScanProtocolVersion))
+	text := func(value string) *planpb.Expr {
+		return &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: value}}}}
+	}
+	nullResult := func() *planpb.Expr {
+		return &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
+	}
+	errorPolicy := func() *planpb.Expr {
+		return &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 2}}}}
+	}
+	jsonValue := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.JSON_VALUE, 2), ObjName: "json_value"},
+		Args: []*planpb.Expr{text(`{"a":1}`), text("$.a"), nullResult(), errorPolicy(), nullResult(), errorPolicy(), nullResult()},
+	}}}
+	for _, shape := range []string{"data source", "apply", "nested"} {
+		t.Run(shape, func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			rt := moruntime.ServiceRuntime(c.proc.GetService())
+			jsonInput := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CONCAT, 0), ObjName: "concat"},
+				Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_json)}}},
+			}}}
+			scan := &planpb.IndexSearchScan{AlgoOptions: []byte(`{}`), AlgoExprs: []*planpb.Expr{jsonInput}}
+			node := &planpb.Node{NodeType: planpb.Node_INDEX_SEARCH_SCAN, IndexSearchScan: scan}
+			p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}
+			if shape == "apply" {
+				p.InstructionList = []*pipeline.Instruction{{Apply: &pipeline.Apply{IndexSearchScan: scan}}}
+			} else if shape == "nested" {
+				p.Children = []*pipeline.Pipeline{{DataSource: &pipeline.Source{Node: node}}}
+			} else {
+				p.DataSource = &pipeline.Source{Node: node}
+			}
+			require.Equal(t, defines.MORPCVersion111, minimumRemoteVectorProtocol(p))
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
+			require.ErrorContains(t, validateRemoteVectorPartitionProtocol(c.proc, p), "version 111")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+			client.version = defines.MORPCVersion111
+			require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, p))
+			require.NoError(t, validateVectorPartitionDestination(c.proc, p))
+			features, err := planpb.RequiredRemoteExpressionFeatures(p)
+			require.NoError(t, err)
+			require.False(t, features.JSONValueContract)
+			require.True(t, features.JSONInputContracts)
+			require.Equal(t, defines.MORPCVersion101, remoteExpressionProtocolVersion(features))
+			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+			require.NoError(t, validateRemoteExpressionDestination(c.proc, p, features))
+
+			// No ProjectList, QueryPayload or candidate-limit expression can
+			// accidentally supply the JSON feature missing from this owner.
+			scan.AlgoExprs = []*planpb.Expr{jsonValue}
+			data, err := p.Marshal()
+			require.NoError(t, err)
+			decoded := &pipeline.Pipeline{}
+			require.NoError(t, decoded.Unmarshal(data))
+			for _, owner := range []*pipeline.Pipeline{p, decoded} {
+				features, err = planpb.RequiredRemoteExpressionFeatures(owner)
+				require.NoError(t, err)
+				require.True(t, features.JSONValueContract)
+				require.Equal(t, defines.MORPCVersion112, remoteExpressionProtocolVersion(features))
+				require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, owner))
+				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, owner), "version 112")
+				require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, owner, features), "version 112")
+			}
+			qry := &planpb.Query{Nodes: []*planpb.Node{node}, Steps: []int32{0}}
+			c.execType = plan2.ExecTypeAP_MULTICN
+			c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+			require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+			client.version = defines.MORPCVersion112
+			c.execType = plan2.ExecTypeAP_MULTICN
+			c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+			require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+			for _, owner := range []*pipeline.Pipeline{p, decoded} {
+				require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, owner))
+				require.NoError(t, validateVectorPartitionDestination(c.proc, owner))
+				require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, owner))
+				require.NoError(t, validateRemoteExpressionDestination(c.proc, owner, features))
+			}
+			// The new JSON floor must not bypass main's independent rejection
+			// of the older index-search representation.
+			scan.AlgoOptions = nil
+			require.ErrorContains(t, validateRemoteVectorPartitionProtocol(c.proc, p), "from an older version")
 			require.Equal(t, client.calls, client.releases)
 		})
 	}
