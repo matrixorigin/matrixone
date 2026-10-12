@@ -1723,6 +1723,14 @@ func (builder *QueryBuilder) isProjectedNullValueAtNode(
 // row-preserving projections. Prove the relational path before changing any
 // projection: following tags alone can jump below an untagged DISTINCT or LIMIT.
 func (builder *QueryBuilder) materializeTransparentMySQLSpecialValue(expr *Expr) (*Expr, bool) {
+	value, ok := builder.materializeTransparentMySQLSpecialAssignmentValue(expr)
+	if ok && isSetPlanType(&value.Typ) {
+		value.Typ.Enumvalues = "" // numeric consumers own an ordinary bitmap
+	}
+	return value, ok
+}
+
+func (builder *QueryBuilder) materializeTransparentMySQLSpecialAssignmentValue(expr *Expr) (*Expr, bool) {
 	if !builder.proveTransparentMySQLSpecialValue(expr, make(map[[2]int32]bool)) {
 		return nil, false
 	}
@@ -1787,7 +1795,7 @@ func (builder *QueryBuilder) mysqlSpecialRowPreservingInput(nodeID int32, visiti
 }
 
 func (builder *QueryBuilder) materializeTransparentMySQLSpecialValueImpl(expr *Expr) *Expr {
-	if raw, ok := storedMySQLSpecialTypeExpr(expr); ok {
+	if raw, ok := storedMySQLSpecialDomainExpr(expr); ok {
 		return raw
 	}
 	col := expr.GetCol()
@@ -1796,10 +1804,13 @@ func (builder *QueryBuilder) materializeTransparentMySQLSpecialValueImpl(expr *E
 	key := [2]int32{nodeID, col.ColPos}
 	// Share SET slots already carried for casts/FIND_IN_SET. ENUM slots use the
 	// same position cache, retaining their type until the numeric consumer casts.
-	if pos, ok := builder.setBitmapByDisplayNode[key]; ok {
-		return GetColExpr(node.ProjectList[pos].Typ, col.RelPos, pos)
-	}
+	// Numeric SET consumers may have primed this shared slot without member
+	// metadata. Recover the proven source domain through the same input chain;
+	// reuse its physical slot regardless of which consumer arrived first.
 	raw := builder.materializeTransparentMySQLSpecialValueImpl(node.ProjectList[col.ColPos])
+	if pos, ok := builder.setBitmapByDisplayNode[key]; ok {
+		return GetColExpr(raw.Typ, col.RelPos, pos)
+	}
 	pos := int32(len(node.ProjectList))
 	node.ProjectList = append(node.ProjectList, raw)
 	builder.setBitmapByDisplayNode[key] = pos

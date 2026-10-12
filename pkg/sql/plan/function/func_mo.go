@@ -1047,9 +1047,15 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
+	// The legacy overload takes text; the typed overload takes the source
+	// definition followed by one native ENUM argument.
 	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
+	var ordinals vector.FunctionParameterWrapper[types.Enum]
+	if len(ivecs) == 3 {
+		ordinals = vector.GenerateFunctionFixedTypeParameter[types.Enum](ivecs[2])
+	}
 	var valueIndex *enumValueIndex
-	if length >= enumValueIndexMinRows && ivecs[0].IsConst() && !ivecs[0].IsConstNull() {
+	if !selectList.IgnoreAllRow() && length >= enumValueIndexMinRows && ivecs[0].IsConst() && !ivecs[0].IsConstNull() {
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(0)
 		if !typeEnumNull {
 			valueIndex = buildEnumValueIndexForBatch(functionUtil.QuickBytesToStr(typeEnum), length)
@@ -1057,8 +1063,20 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
 		enumValue, enumValNull := enumValues.GetStrValue(i)
+		var ordinal types.Enum
+		if ordinals != nil {
+			var null bool
+			ordinal, null = ordinals.GetValue(i)
+			enumValNull = enumValNull || null
+		}
 		if typeEnumNull || enumValNull {
 			if err := rs.Append(0, true); err != nil {
 				return err
@@ -1066,6 +1084,19 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		} else {
 			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
 			enumStr := functionUtil.QuickBytesToStr(enumValue)
+			if ordinals != nil {
+				if ordinal == 0 {
+					if err := rs.Append(0, false); err != nil {
+						return err
+					}
+					continue
+				}
+				var err error
+				enumStr, err = types.ParseEnumIndex(enumStr, ordinal)
+				if err != nil {
+					return err
+				}
+			}
 
 			var (
 				index types.Enum

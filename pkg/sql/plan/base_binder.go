@@ -4413,6 +4413,15 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 	}
+	if name == "if" || name == "iff" {
+		for i := 1; i < len(args); i++ {
+			var err error
+			args[i], err = makeEnumOrSetDisplayValue(b.GetContext(), args[i])
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	if preparedBindingState(b.GetContext()) != nil {
 		var err error
 		if isIfNull && len(args) == 3 {
@@ -6877,13 +6886,6 @@ func bindFuncExprImplByPlanExpr(
 			return nil, moerr.NewInvalidArg(ctx, "function "+name, len(args))
 		}
 	}
-	if name == moEnumCastValueToIndexFun && len(args) == 3 {
-		mode := args[2].GetLit()
-		if !allowInternalFunctionArgs || args[2].Typ.Id != int32(types.T_bool) ||
-			mode == nil || !mode.GetBval() {
-			return nil, moerr.NewInvalidArg(ctx, "function "+name, len(args))
-		}
-	}
 	if name == "member of" {
 		if len(args) > 0 {
 			args[0], err = makeEnumOrSetDisplayValue(ctx, args[0])
@@ -8170,6 +8172,13 @@ func bindFuncExprImplByPlanExpr(
 		// domain so assignment restores the stored ordinal without converting
 		// it through a different (or empty) domain.
 		Typ.Enumvalues = args[2].Typ.Enumvalues
+	}
+	if name == "if" && len(args) == 3 &&
+		isEnumOrSetPlanType(&args[1].Typ) && args[1].Typ.Id == args[2].Typ.Id &&
+		args[1].Typ.Enumvalues == args[2].Typ.Enumvalues && Typ.Id == args[1].Typ.Id {
+		// IF selects already-normalized storage values; runtime types do not
+		// carry the member domain needed by downstream assignment consumers.
+		Typ.Enumvalues = args[1].Typ.Enumvalues
 	}
 	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
 	if returnType.Oid == types.T_varchar || returnType.Oid == types.T_text {
@@ -11026,6 +11035,16 @@ func storedSetBitmapExpr(expr *Expr) (*Expr, bool) {
 // string contexts, but numeric contracts must consume the stored ENUM ordinal
 // or SET bitmap.  Keep this narrowly structural: only the wrappers made by
 // makeEnumOrSetDisplayValue are unwrapped.
+// storedMySQLSpecialDomainExpr retains the member domain when storage is an
+// assignment source rather than an ordinary numeric consumer.
+func storedMySQLSpecialDomainExpr(expr *Expr) (*Expr, bool) {
+	raw, ok := storedMySQLSpecialTypeExpr(expr)
+	if ok {
+		raw.Typ.Enumvalues = expr.GetF().Args[1].Typ.Enumvalues
+	}
+	return raw, ok
+}
+
 func storedMySQLSpecialTypeExpr(expr *Expr) (*Expr, bool) {
 	if isSetDisplayValueExpr(expr) {
 		return storedSetBitmapExpr(expr)

@@ -1221,7 +1221,13 @@ func checkExprForVolatileFunc(ctx context.Context, expr *plan.Expr) error {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_F:
 		ov, exists := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
-		if exists && (ov.CannotFold() || ov.IsRealTimeRelated()) {
+		functionID, _ := function.DecodeOverloadID(e.F.Func.Obj)
+		// These internal display conversions are deterministic in their two
+		// operands. Their flags conservatively disable folding; they do not
+		// make an otherwise valid generated expression volatile. Continue
+		// checking children so an actual volatile producer is still rejected.
+		storageDisplay := functionID == function.CAST_INDEX_TO_VALUE || functionID == function.CAST_INDEX_TO_SET_VALUE
+		if exists && !storageDisplay && (ov.CannotFold() || ov.IsRealTimeRelated()) {
 			return moerr.NewInvalidInputf(ctx,
 				"expression of generated column cannot refer to a non-deterministic function '%s'", e.F.Func.ObjName)
 		}
