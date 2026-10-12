@@ -227,3 +227,5 @@ MySQL oracle：实际连接并记录版本/digest/config，再固定默认值 AL
 - **TS恢复定义包含durable defaults**：cluster快照的TS loader与account/PITR loader一致，从同一source tenant/TS读取database identity与defaults；普通CREATE重放携带合法identity/revision的声明，由目标CREATE分配新DB ID。legacy缺关系/缺行保持既有fallback；坏generation、读取失败与cancel不被伪装成无default。
 - **能力不是数据有效性**：protocol110不能跳过source preflight。所有可恢复定义必须在account等不可逆操作前校验；TABLE-only仍遵循原能力检查与不覆盖DB default的边界。复用已有context/BackgroundExec/transaction owner，不增加cache/state/worker、row scan或生产retry；额外metadata读取按DB数量有界。
 - 原批准设计/历史验收不自动覆盖这些组合。新增typed UT、真实emoji/cluster恢复反例与公开case保留原fixture、正负oracle、teardown和普通比较，具体失败→修复结果见验证记录。
+
+2026-10-12 上游080365f0已使用591–595作为TANH/COSH/ASINH/ACOSH/ATANH。按r1的未占用编号顺延规则，本PR尚未发布的`INTERNAL_TABLE_COLLATION`从历史591移至**596**，`FUNCTION_END_NUMBER=597`；保留上游全部编号及588–590。本补充不改变SQL函数名字、C03 classifier0展示、wire tags、protocol110或4.0.15迁移，历史591证据不当作当前编号。

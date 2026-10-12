@@ -870,8 +870,14 @@ const (
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	UUID_SHORT = 587
 
-	INTERNAL_TABLE_COLLATION = 591
-	FUNCTION_END_NUMBER      = 592
+	TANH  = 591
+	COSH  = 592
+	ASINH = 593
+	ACOSH = 594
+	ATANH = 595
+
+	INTERNAL_TABLE_COLLATION = 596
+	FUNCTION_END_NUMBER      = 597
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1104,6 +1110,11 @@ var functionIdRegister = map[string]int32{
 	"sign":                           SIGN,
 	"sin":                            SIN,
 	"sinh":                           SINH,
+	"tanh":                           TANH,
+	"cosh":                           COSH,
+	"asinh":                          ASINH,
+	"acosh":                          ACOSH,
+	"atanh":                          ATANH,
 	"space":                          SPACE,
 	"tan":                            TAN,
 	"week":                           WEEK,

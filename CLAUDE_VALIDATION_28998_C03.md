@@ -163,3 +163,13 @@
 - **公开普通验收**：现有conversion SQL/result增加两个代表性metadata-only组合及emoji/column/table default oracle，无新fixture/data/service。genrs只是candidate，完整diff只采用21行新语义结果，两个旧FULL COLUMNS trailing-empty-cell格式差异未采纳。最终新main native-linked四个完整scripts同实例两轮各**739/739，0 failed/ignored/abnormal**，errors空；初始化下一轮前所有mapped DB/账户/快照残留0。原同样四脚本在64b也通过，但最终以f536新native运行资格为准；不改变忽略规则、SQL/data量、timeout或预算。
 - **覆盖与静态**：严格增量AST token **2/2=100%**（block4/4），PR-base相对f536严格 **578/740=78.11%**（aux707/830=85.18%）。采用fresh current plan/function，b7中语义有效的compile/frontend/txn成功profile，及逐文件byte-identical bootstrap/tree/sysview/PB旧profile；缺映射/未采集仍计未覆盖，无失败/RED/canceled profile。最终六包vet/lint、匹配gofmt和whitespace通过；非全仓SCA/非Linux CI。
 - **资源与交付资格**：多次执行前>17GiB gate拒绝时未启动测试。精确task-owned/no-handles/terminal旧cache、历史native binary和一个f09 BVT临时data根回收，SHA256/manifest及5份cfg/log保留映射；不操作只读C03/global cache/其它任务服务。磁盘后来自然恢复36GiB，来源未归因，门槛未放宽。所有成功/失败和private driver留worktree不提交。增量source/tests/result/self-review闭包无未解决blocker；仅正常提交/推送既有draft PR，不提交GitHub review/issue comment，不声称远端Linux CI已绿。
+
+### 推送后的上游函数编号冲突（080365f0）
+
+P2六文件提交214fc22a已正常推送。随后PR出现dirty，post-push fetch确认main刚新增五个hyperbolic函数591–595，碰撞本PR未发布的internal_table_collation591。正常merge后只协调两个手写function-ID contract冲突，**保留TANH591/COSH592/ASINH593/ACOSH594/ATANH595，C03 INTERNAL_TABLE_COLLATION596、END597**；588–590及旧SINH、SQL名字/返回VARCHAR(64)/classifier0、PB#18、protocol110/4.0.15不改。持久sysview保存SQL函数名，最新service按name绑定当前ID；未将草稿PR旧编号当已发布协议，也不手改生成代码。
+
+- 重新完整plan/function owner PASS（12.214s/10.979s，14846/10682个PASS事件），含所有ID预定义/注册检查、hyperbolic encoded执行及C3元数据域正负控制。P2 source/tests/SQL/result与214fc22a字节一致，不删/弱化assertion。
+- 最新native普通比较扩展原四case加完整upstream func_math_hyperbolic，五个明确脚本同实例两轮各**772/772，0 failed/ignored/abnormal**，Java3s/7s；全部mapped global DB/accounts/snapshots及hyperbolic_input表在下轮初始化前均0，errors为空。573服务ERROR原样保留，metadata/DOUBLE/溢出/nullable/prepare controls和原C03 controls不改，未重生成golden。
+- 最新两个受影响package vet/lint及匹配gofmt/whitespace通过；之前六包证据限定复用。PR-base改以080365f0，fresh current plan/function配已qualified compile/frontend/txn和byte-identical非core profiles，严格仍**578/740=78.11%**（aux707/830）；纯编号/声明修改无新增执行token，registry/编码及公开consumer负责其合同。旧f536/64b结果保留各自冻结范围，不冒称重测全部C03/无关upstream功能。
+
+此次正常merge补推既有draft PR，保留214fc22a历史，不force/rebase/新PR，不评论/关闭issue或持续监控CI；远端Linux CI仍未确认。
