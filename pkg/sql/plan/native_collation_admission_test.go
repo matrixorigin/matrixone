@@ -84,3 +84,56 @@ func TestNativeCollationMetadataRejectsFoldedProjection(t *testing.T) {
 		})
 	}
 }
+
+func TestCollationCatalogAdmissionPreservesAllowedDomainsAndReuse(t *testing.T) {
+	contracts := []struct {
+		name                          string
+		identity, revision, keyFormat uint32
+		allowed                       bool
+	}{
+		{"legacy0", 0, 0, 0, true},
+		{"binary1", 1, 0, 0, true},
+		{"legacy_bin2", 2, 0, 0, true},
+		{"legacy_ci3", 3, 0, 0, true},
+		{"unicode9", 9, 1, 0, true},
+		{"unicode10", 10, 1, 0, true},
+		{"native4", 4, 1, 0, false},
+		{"native5", 5, 1, 0, false},
+		{"wide_identity", 260, 1, 0, false},
+		{"unknown_revision", 3, 2, 0, false},
+		{"native_format", 3, 0, 1, false},
+		{"wide_format", 3, 0, 256, false},
+	}
+	for _, contract := range contracts {
+		for _, sql := range []string{"select 1 from nation", "select * from nation limit 0"} {
+			t.Run(contract.name+"/"+sql, func(t *testing.T) {
+				ctx := &viewMetadataConsumerContext{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t))}
+				table := ctx.tables["nation"]
+				col := FindColumn(table.Cols, "n_name")
+				require.NotNil(t, col)
+				col.Typ.Charset, col.Typ.CollationVersion = contract.identity, contract.revision
+				table.KeyFormat = contract.keyFormat
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+				require.NoError(t, err)
+				_, err = BuildPlan(ctx, stmt, false)
+				stmt.Free()
+				if contract.allowed {
+					require.NoError(t, err)
+				} else {
+					require.Error(t, err)
+				}
+				if sql == "select * from nation limit 0" {
+					require.Positive(t, ctx.fastCalls, "catalog-only shortcut must be covered")
+				}
+				// The admission visitor is per call; an error must not poison
+				// the same compiler context's subsequent legacy query.
+				col.Typ.Charset, col.Typ.CollationVersion, table.KeyFormat = 3, 0, 0
+				stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL, "select 1 from nation", 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				_, err = BuildPlan(ctx, stmt, false)
+				require.NoError(t, err)
+			})
+		}
+	}
+}

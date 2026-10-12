@@ -12645,6 +12645,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			// Both frontend and internal compiler contexts must identify Views.
 			// Their persisted columns are not an output schema, even for no rows.
 			if tableDef != nil && tableDef.TableType != catalog.SystemViewRel && tableDef.ViewSql == nil {
+				if err = plan.RequireLegacyCollations(tableDef); err != nil {
+					return 0, "", err
+				}
 				object := &plan.ObjectRef{DbName: catalogDatabase, SchemaName: catalogDatabase, ObjName: table,
 					Db: int64(tableDef.DbId), Obj: int64(tableDef.TblId)}
 				builder.qry.CatalogDependencies = appendPrepareSchemas(
@@ -12668,6 +12671,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		}
 		if tableDef == nil {
 			return 0, "", moerr.NewNoSuchTablef(builder.GetContext(), "SQL parser error: table %q does not exist", table)
+		}
+		// Admit the complete catalog schema before pruning unused columns or
+		// replacing scans. The final plan fence cannot see metadata erased by
+		// those rewrites, even when the query only projects a constant.
+		if err = plan.RequireLegacyCollations(tableDef); err != nil {
+			return 0, "", err
 		}
 		if explicitNamedSnapshot {
 			err = ValidateSnapshotScope(snapshot, catalogDatabase, table, tableDef.DbId, SnapshotTableID(tableDef))
