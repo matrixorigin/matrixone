@@ -2,7 +2,7 @@
 
 - 关联问题：https://github.com/matrixorigin/matrixone/issues/29839
 - 历史相关请求：https://github.com/matrixorigin/matrixone/issues/2095
-- 实现 PR：尚未创建；交付时补充。
+- 实现 PR：https://github.com/matrixorigin/matrixone/pull/29987 （draft，目标 main，关联 #29839）。
 - 日期：2026-10-12。
 - 设计基线：`mo/main`，`5a5501b3e1048f3d19d96824cc68a62b7f0fcb07`。
 - 用户已批准功能范围：TANH、COSH、ASINH、ACOSH、ATANH。
@@ -123,3 +123,9 @@ BVT 使用 mo-tester 生成 `.result`，逐行审查值与 DOUBLE 元数据，�
 - 额外 molint 的两处旧 unsafe 诊断与准确干净基线报告逐字一致；不将它们归因于本次修改，也不擅自修复。
 - 详细命令、输入签名、报告路径与完整变更审查见本 worktree 的 `CLAUDE_REVIEW_2026-10-12.md`；本记录不声称全仓 CI、多 CN 或混合版本验证。
 - 任何实质偏离仍需更新设计并重新审核。
+
+### PR 交付前的新鲜基线验证
+
+用户已确认关联 #29839。功能提交 `d4695eadf2` 后，以 merge/pull 合并最新 `mo/main` 的 `7af631bdf7`，验证 head 为 `871f59109c`。上游新增 join ownership、truncate lifecycle 测试与 Sirius SQL campaign；本任务的函数包源/测试、SQL case/result、Go 模块、Makefile、CPU 原生输入均不变，上游变化 Go 包与函数包依赖闭包交集为空，因此复用原 UT、覆盖率及静态证据。
+
+鉴于 frontend/compile/plan 公共消费者有变化，重建合并版本服务并用新的干净任务专属实例正常 BVT 两轮，各 33/33、failed/ignored/abnormal=0，分别 0.135s/0.119s。预期结果没有重新生成或放宽；每轮表数量 0，实例正常停止 0，源/case/result 与服务 SHA 校验一致。详细验证摘要已附在 draft PR；本次文档交付记录更新没有改变数值代码或批准语义。
