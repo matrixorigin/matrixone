@@ -88,6 +88,53 @@ func TestInsertOnDupIncomingPrimaryKeyOnlyNoop(t *testing.T) {
 	requireOnDupUpdateColumns(t, logicPlan, nil, []int32{0})
 }
 
+func TestInsertOnDupPrimaryKeyLiteralIdentityIsRuntimeGuarded(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	logicPlan, err := runOneStmt(mock, t,
+		"insert into constraint_test.t1(a, b) values (1, 'x') "+
+			"on duplicate key update a = (1), b = values(b)")
+	require.NoError(t, err)
+	requireOnDupUpdateColumns(t, logicPlan, []int32{0, 1}, nil)
+	requireODKUPKIdentityGuard(t, logicPlan, 0)
+}
+
+func TestInsertOnDupPrimaryKeyPreparedMarkerIsRuntimeGuarded(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	logicPlan, err := runOneStmt(mock, t,
+		"prepare pk_identity from 'insert into constraint_test.t1(a, b) "+
+			"values (?, ?) on duplicate key update a = ?, b = values(b)'")
+	require.NoError(t, err)
+	prepare := logicPlan.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	requireOnDupUpdateColumns(t, prepare.Plan, []int32{0, 1}, nil)
+	requireODKUPKIdentityGuard(t, prepare.Plan, 0)
+}
+
+func requireODKUPKIdentityGuard(t *testing.T, logicPlan *planpb.Plan, updateColIdx int32) {
+	t.Helper()
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_JOIN || node.JoinType != planpb.Node_DEDUP ||
+			node.OnDuplicateAction != planpb.Node_UPDATE {
+			continue
+		}
+		for i, colIdx := range node.DedupJoinCtx.UpdateColIdxList {
+			if colIdx != updateColIdx {
+				continue
+			}
+			guarded := node.DedupJoinCtx.UpdateColExprList[i].GetF()
+			require.NotNil(t, guarded)
+			require.Equal(t, "if", guarded.Func.ObjName)
+			require.NotEmpty(t, guarded.Args)
+			assertion := guarded.Args[0].GetF()
+			require.NotNil(t, assertion)
+			require.Equal(t, "assert", assertion.Func.ObjName)
+			require.Equal(t, "odku_pk_mutation", assertion.Args[2].GetLit().GetSval())
+			return
+		}
+	}
+	t.Fatalf("expected runtime identity guard for primary-key column index %d", updateColIdx)
+}
+
 func TestInsertOnDupIncomingCompositePrimaryKeyNoop(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t,

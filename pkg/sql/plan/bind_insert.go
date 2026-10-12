@@ -2674,6 +2674,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	updateColIdxList := make([]int32, 0, len(astUpdateExprs))
 	updateColExprList := make([]*plan.Expr, 0, len(astUpdateExprs))
 	possiblyChangedCols := make(map[string]struct{})
+	immutablePrimaryKeyCols := make(map[string]struct{})
 	autoUpdateCols := make(map[string]bool)
 
 	if len(astUpdateExprs) == 0 {
@@ -2773,6 +2774,27 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if err != nil {
 				return 0, err
 			}
+			// MySQL clients such as NiFi's JDBC writer assign every inserted
+			// column in the ODKU arm, including a literal or prepared marker for
+			// the primary key. The value is only a no-op when it equals the row
+			// selected by the primary-key arbiter, so retain the assignment in
+			// order and validate it against the old row at execution time.
+			if firstUniqueIdxPos < 0 &&
+				slices.Contains(tableDef.Pkey.Names, colDef.Name) &&
+				isDirectODKUPKIdentityValue(astExpr) {
+				oldPrimaryKey := &plan.Expr{
+					Typ: colDef.Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: scanTag,
+						ColPos: int32(colIdx),
+					}},
+				}
+				updateExpr, err = buildODKUPKIdentityGuard(builder.GetContext(), oldPrimaryKey, updateExpr)
+				if err != nil {
+					return 0, err
+				}
+				immutablePrimaryKeyCols[colDef.Name] = struct{}{}
+			}
 			updateExprs[colDef.Name] = updateExpr
 			updateColIdxList = append(updateColIdxList, colIdx)
 			updateColExprList = append(updateColExprList, updateExpr)
@@ -2806,6 +2828,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		// while possiblyChangedCols describes which keys may need maintenance.
 		seedCols := make(map[string]struct{}, len(updateExprs))
 		for colName := range updateExprs {
+			if _, immutable := immutablePrimaryKeyCols[colName]; immutable {
+				continue
+			}
 			seedCols[colName] = struct{}{}
 		}
 		possiblyChangedCols, err = collectGeneratedColumnDependents(
@@ -4431,6 +4456,50 @@ func insertUniqueLockKeyPrefixLengths(idxDef *IndexDef, skip bool) (map[string]i
 func isOnDupIncomingColumn(expr *plan.Expr, selectTag, colPos int32) bool {
 	col := expr.GetCol()
 	return col != nil && col.RelPos == selectTag && col.ColPos == colPos
+}
+
+// isDirectODKUPKIdentityValue limits the runtime no-op guard to values whose
+// identity is available without evaluating an arbitrary expression. Keep
+// wrapped expressions and cross-column references on the existing unsupported
+// path; direct parentheses do not change the assignment's meaning.
+func isDirectODKUPKIdentityValue(expr tree.Expr) bool {
+	switch unwrapParenExpr(expr).(type) {
+	case *tree.NumVal, *tree.StrVal, *tree.ParamExpr:
+		return true
+	default:
+		return false
+	}
+}
+
+func buildODKUPKIdentityGuard(ctx context.Context, oldPrimaryKey, candidate *plan.Expr) (*plan.Expr, error) {
+	candidateSerial, err := BindFuncExprImplByPlanExpr(ctx, "serial", []*plan.Expr{candidate})
+	if err != nil {
+		return nil, err
+	}
+	oldSerial, err := BindFuncExprImplByPlanExpr(ctx, "serial", []*plan.Expr{oldPrimaryKey})
+	if err != nil {
+		return nil, err
+	}
+	samePrimaryKey, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{candidateSerial, oldSerial})
+	if err != nil {
+		return nil, err
+	}
+	assertSamePrimaryKey, err := BindFuncExprImplByPlanExpr(ctx, "assert", []*plan.Expr{
+		samePrimaryKey,
+		makePlan2StringConstExprWithType("update primary key on duplicate"),
+		makePlan2StringConstExprWithType("odku_pk_mutation"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Return the original key on success. The unreachable typed-NULL branch
+	// keeps the assertion observable to expression simplification and makes a
+	// NULL comparison fail closed in assert before it can become an assignment.
+	return BindFuncExprImplByPlanExpr(ctx, "if", []*plan.Expr{
+		assertSamePrimaryKey,
+		DeepCopyExpr(oldPrimaryKey),
+		makePlan2NullConstExprWithType(),
+	})
 }
 
 // getInsertColsFromStmt retrieves the list of column names to be inserted into a table
