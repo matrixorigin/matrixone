@@ -1,8 +1,56 @@
 # Case-preserving catalog name resolution
 
 Revision 10. Owner: issue #29418; implementation: PR #29422.
-The accepted native design is recorded in the coordinator's design-8 artifact.
+The distinct design approval is recorded in [Revision 10 design approval](#revision-10-design-approval).
 The integration target is main `cd8d5abf9665a97d13e50b04840fb74b877fd339`.
+
+## Revision 10 design approval
+
+Change scope: the complete mode-2 catalog-resolution and namespace-admission
+change for issue #29418 and PR #29422. The design gate applies because the change
+crosses catalog visibility, transaction/lifecycle, authorization, tenant and
+distributed-admission ownership boundaries.
+
+Reviewed design: [revision 10 at commit
+2a26e7c503cefce29e2cb711bf963026839cd277](https://github.com/matrixorigin/matrixone/blob/2a26e7c503cefce29e2cb711bf963026839cd277/docs/design/20260927_mode2_catalog_name_resolution.md).
+SHA256 of that document before this traceability addendum:
+`c34fa36a745e25ac60e0d379beb62ce3a62a503a71c6e549cd63fc8af8a9acb6`.
+
+Distinct design-first phase: the revision-10 implementation plan was approved by
+native `gpt-6.1-sol/xhigh`, session `01a12eb1-da69-73c0-b3a8-4eabe4904833`, turn
+`01a130de-f59a-79f2-b3a4-68c1991cfd2e`. Its decision was **PASS for implementation
+plan only**; it required contraction of the independent migration extension and
+integration with the target admission owners before final implementation review.
+
+Renewed exact-revision decision: **PASS** for the contract linked above, by native
+`gpt-6.1-sol/xhigh`, session `01a12e1c-8887-7b32-8c01-41c0fe8887fe`, turn
+`01a13271-bf53-7d42-8350-1d1681954e3d`, on 2026-10-13. No blocking design finding
+remains. This addendum records approval without changing the revision-10 contract.
+
+Decision log: parser-only spelling preservation cannot resolve aliases in an
+exact-keyed catalog/workspace. A session-dependent shared comparator cannot
+preserve one stable index order. A unified-index alternative was rejected for
+additional exact-lookup allocation/default-path cost. The selected sparse folded
+index and transaction/session overlays retain their existing visibility,
+cleanup and bounded-resource owners. Physical identity flows into authorization,
+publication and recovery; folded admission uses the existing transaction owner
+and TN-ordered frontier before effects. SI never advances its fixed snapshot.
+
+Compatibility scope: fixed naming modes retain existing migration safety gates.
+The independent ModeAtSource/ModeAtSourceExported fields and mandatory marker are
+removed. Arbitrary global/default drift during connection migration is a
+separate capability. No new persisted catalog-key format or rollout exception
+is part of this contract.
+
+Accepted tradeoffs: mixed-name maintenance and retained heap have extra cost;
+forward-FK discovery is O(tenant FK-name cardinality). Exact-lookup allocation
+and canonical-update budgets, cleanup, public SQL and contention controls remain
+the acceptance criteria in this document. Measurements do not claim universal
+SQL throughput. External CHANGES_REQUESTED remains outstanding.
+
+Implementation deviations: none introduced by this documentation repair.
+Design approval does not replace normal/race/SCA/SQL/resource evidence or the
+separate native final review of the complete corrected committed candidate.
 
 ## Scope and contract
 
