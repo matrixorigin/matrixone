@@ -1,11 +1,7 @@
 // Copyright 2026 Matrix Origin
-//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
+// You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,374 +11,370 @@
 package plan
 
 import (
-	"context"
-	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
-func TestFunctionalIndexColumnNameIsStableAndCaseInsensitive(t *testing.T) {
-	got := functionalIndexColumnName("Idx_JSON")
-	require.Equal(t, catalog.FunctionalIndexColumnPrefix+"8f9256a3501a5ab88af691888f120a86", got)
-	require.Equal(t, got, functionalIndexColumnName("  idx_json "))
-	require.NotEqual(t, got, functionalIndexColumnName("idx_json_2"))
-}
-
-func TestSetEmptyIndexNameForFunctionalKeyPart(t *testing.T) {
-	index := &tree.Index{KeyParts: []*tree.KeyPart{{Expr: tree.NewNumVal(int64(1), "1", false, tree.P_int64)}}}
-	names := map[string]bool{indexNameKey("functional_index"): true}
-	setEmptyIndexName(names, index)
-	require.Equal(t, "functional_index_2", index.Name)
-}
-
-func TestRequireFunctionalIndexProtocol(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	rt := runtime.ServiceRuntime(proc.GetService())
-	original, hadOriginal := rt.GetGlobalVariables(runtime.MOProtocolVersion)
-	defer func() {
-		if hadOriginal {
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, original)
-		} else {
-			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
-		}
-	}()
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion56)
-	require.ErrorContains(t, requireFunctionalIndexProtocol(context.Background(), proc), "version 107")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion58)
-	require.ErrorContains(t, requireFunctionalIndexProtocol(context.Background(), proc), "version 107")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion106)
-	require.Error(t, requireFunctionalIndexProtocol(context.Background(), proc), "current main without functional-index support must reject admission")
+func TestFunctionalIndexOwnershipAfterDropColumn(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
+	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
-	require.NoError(t, requireFunctionalIndexProtocol(context.Background(), proc))
-}
-
-func TestNormalAlterIndexKeyPartIsNotFunctional(t *testing.T) {
-	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, "ALTER TABLE t1 DROP INDEX idx, ADD INDEX idx(b)", 1)
-	require.NoError(t, err)
-	alter, ok := stmts[0].(*tree.AlterTable)
-	require.True(t, ok)
-	for _, option := range alter.Options {
-		if add, ok := option.(*tree.AlterOptionAdd); ok {
-			index, ok := add.Def.(*tree.Index)
-			require.True(t, ok)
-			require.False(t, hasFunctionalIndexKeyPart(index.KeyParts))
+	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, old) })
+	for _, order := range [][]string{{"tenant", "spare"}, {"spare", "tenant"}} {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+			"create table t(id int primary key,tenant int,name varchar(40),spare int,index ix(tenant,(lower(name)),spare,(upper(name)),(lower(name))),index iy((lower(name)),tenant))", 1)
+		require.NoError(t, err)
+		p, err := BuildPlan(ctx, stmt, false)
+		stmt.Free()
+		require.NoError(t, err)
+		table := p.GetDdl().GetCreateTable().TableDef
+		ensureName2ColIndexForReplace(table)
+		owners := functionalIndexColumns(table, table.Indexes[0])
+		require.Len(t, owners, 3)
+		origins := []string{owners[0].GeneratedCol.OriginString, owners[1].GeneratedCol.OriginString, owners[2].GeneratedCol.OriginString}
+		alias := table.Indexes[0].Parts[len(table.Indexes[0].Parts)-1]
+		for _, name := range order {
+			col := FindColumn(table.Cols, name)
+			require.NoError(t, handleDropColumnWithIndex(t.Context(), name, table))
+			for _, owner := range owners {
+				require.Same(t, owner, table.Cols[table.Name2ColIndex[owner.Name]])
+			}
+			require.NoError(t, handleDropColumnPosition(t.Context(), table, col))
+			table.Name2ColIndex = nil // COPY rebuilds physical column positions.
+			ensureName2ColIndexForReplace(table)
+			require.NoError(t, validateFunctionalTable(t.Context(), table))
 		}
-	}
-	algorithm, err := ResolveAlterTableAlgorithm(context.Background(), alter.Options, &TableDef{})
-	require.NoError(t, err)
-	require.Equal(t, plan.AlterTable_INPLACE, algorithm)
-}
-
-func TestCheckFunctionalIndexResultTypeRejectsUnindexableTypes(t *testing.T) {
-	ctx := context.Background()
-	for _, id := range []types.T{types.T_json, types.T_text, types.T_blob, types.T_geometry, types.T_array_float32} {
-		err := checkFunctionalIndexResultType(ctx, Type{Id: int32(id)})
-		require.Error(t, err, id)
-	}
-	require.NoError(t, checkFunctionalIndexResultType(ctx, Type{Id: int32(types.T_varchar), Width: 64, Charset: uint32(types.CharsetType(types.T_varchar))}))
-}
-
-func TestFunctionalExpressionMatchesNormalizesRelationAndAssignmentCast(t *testing.T) {
-	typ := Type{Id: int32(types.T_int64), Width: 64}
-	generated := &plan.Expr{
-		Typ:  typ,
-		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 12, ColPos: 3}},
-	}
-	query := &plan.Expr{
-		Typ:  typ,
-		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 3}},
-	}
-	require.True(t, functionalExpressionMatches(generated, query))
-
-	casted := &plan.Expr{
-		Typ:  typ,
-		Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "cast_assign"}, Args: []*plan.Expr{query}}},
-	}
-	require.True(t, functionalExpressionMatches(generated, casted))
-
-	wrongColumn := DeepCopyExpr(query)
-	wrongColumn.GetCol().ColPos++
-	require.False(t, functionalExpressionMatches(generated, wrongColumn))
-
-	stringType := Type{Id: int32(types.T_varchar), Width: 16, Charset: uint32(types.CharsetUTF8)}
-	stringGenerated := &plan.Expr{Typ: stringType, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
-	stringQuery := DeepCopyExpr(stringGenerated)
-	stringQuery.Typ.PadSpace = true
-	require.False(t, functionalExpressionMatches(stringGenerated, stringQuery))
-}
-
-func TestFunctionalIndexDefRequiresCompleteHiddenGeneratedColumn(t *testing.T) {
-	require.NoError(t, validateFunctionalIndexMetadata(context.Background(), &TableDef{
-		Indexes: []*plan.IndexDef{nil},
-	}))
-	table := &TableDef{
-		Cols: []*ColDef{{
-			Name:   "__mo_fi_deadbeef",
-			Hidden: true,
-			GeneratedCol: &plan.GeneratedCol{
-				Expr:         &plan.Expr{Typ: Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
-				OriginString: "lower(name)",
-			},
-		}},
-		Indexes: []*plan.IndexDef{{
-			IndexName: "idx_name",
-			IndexAlgo: "",
-			Parts:     []string{"__mo_fi_deadbeef", catalog.CreateAlias("id")},
-		}},
-	}
-	require.True(t, isFunctionalIndexDef(table, table.Indexes[0]))
-	require.Equal(t, "lower(name)", func() string {
-		origin, ok := functionalIndexOrigin(table, table.Indexes[0])
-		if !ok {
-			return ""
+		for i, col := range owners {
+			require.Same(t, col, functionalIndexPartColumn(table, table.Indexes[0], i))
+			require.Equal(t, functionalColumnName("ix", i), col.Name)
+			require.Equal(t, col.Name, col.OriginName)
+			require.Equal(t, origins[i], col.GeneratedCol.OriginString)
+			require.Same(t, col, table.Cols[table.Name2ColIndex[col.Name]])
 		}
-		return origin
-	}())
-
-	table.Cols[0].GeneratedCol = nil
-	require.False(t, isFunctionalIndexDef(table, table.Indexes[0]))
-	table.Cols[0].GeneratedCol = &plan.GeneratedCol{
-		Expr:         &plan.Expr{Typ: Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
-		OriginString: "lower(name)",
-		IsStored:     true,
+		require.Equal(t, alias, table.Indexes[0].Parts[3])
+		require.Len(t, functionalIndexColumns(table, table.Indexes[1]), 1)
 	}
-	require.False(t, isFunctionalIndexDef(table, table.Indexes[0]))
-	require.Error(t, validateFunctionalIndexMetadata(context.Background(), table))
-
-	table.Cols[0].GeneratedCol = &plan.GeneratedCol{
-		Expr:         &plan.Expr{Typ: Type{Id: int32(types.T_int64)}},
-		OriginString: "lower(name)",
-	}
-	table.Indexes[0].Parts = append(table.Indexes[0].Parts, "b")
-	require.False(t, isFunctionalIndexDef(table, table.Indexes[0]))
-	require.Error(t, validateFunctionalIndexMetadata(context.Background(), table))
-	table.Indexes[0].Parts = table.Indexes[0].Parts[:2]
-	table.Indexes = append(table.Indexes, &plan.IndexDef{
-		IndexName: "idx_bad_shape",
-		Parts:     []string{catalog.CreateAlias("id"), "__mo_fi_deadbeef"},
-	})
-	require.Error(t, validateFunctionalIndexMetadata(context.Background(), table))
-	table.Indexes = table.Indexes[:1]
-	table.Indexes = nil
-	require.Error(t, validateFunctionalIndexMetadata(context.Background(), table))
 }
 
-func TestTrimFunctionalOuterParenthesesOnlyWhenTheyEncloseWholeExpr(t *testing.T) {
-	require.Equal(t, "a + 1", trimFunctionalOuterParentheses("(a + 1)"))
-	require.Equal(t, "(a + 1) * 2", trimFunctionalOuterParentheses("(a + 1) * 2"))
-	require.Equal(t, "json_extract(doc, '$.sku')", trimFunctionalOuterParentheses("(json_extract(doc, '$.sku'))"))
-	require.Equal(t, "(a + 1", trimFunctionalOuterParentheses("(a + 1"))
-}
-
-func TestLowerFunctionalIndexAddsPrivateVirtualGeneratedColumn(t *testing.T) {
-	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, "select a + 1", 1)
+func TestFunctionalIndexLegacyVisibleColumn(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table legacy(id int primary key,user_value int,index ordinary(user_value))", 1)
 	require.NoError(t, err)
-	selectStmt := stmts[0].(*tree.Select)
-	selectClause := selectStmt.Select.(*tree.SelectClause)
-
-	cctx := NewMockCompilerContext(false, newPlanTestProcess(t))
-	cctx.SetContext(context.Background())
-	table := &TableDef{
-		Name: "t",
-		Cols: []*ColDef{{
-			Name: "a",
-			Typ:  Type{Id: int32(types.T_int32), Width: 32},
-		}},
+	p, err := BuildPlan(ctx, stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+	// Model catalog metadata written before the functional-index feature.
+	table := p.GetDdl().GetCreateTable().TableDef
+	col := FindColumn(table.Cols, "user_value")
+	col.Name, col.OriginName = "__mo_fi_user", "__mo_fi_user"
+	table.Indexes[0].Parts[0] = col.Name
+	table.Cols = append(table.Cols, &ColDef{Name: catalog.Row_ID, Hidden: true, Typ: Type{Id: int32(types.T_Rowid)}})
+	table.Name2ColIndex = nil
+	ensureName2ColIndexForReplace(table)
+	require.NoError(t, validateTableIndexDefinitions(table))
+	require.Nil(t, functionalIndexColumn(table, table.Indexes[0]))
+	ctx.tables["legacy"] = table
+	ctx.objects["legacy"] = &ObjectRef{ObjName: "legacy", SchemaName: "tpch"}
+	ctx.isDml = true
+	for _, indexTable := range p.GetDdl().GetCreateTable().IndexTables {
+		indexTable.Cols = append(indexTable.Cols, &ColDef{Name: catalog.Row_ID, Hidden: true, Typ: Type{Id: int32(types.T_Rowid)}})
+		ctx.tables[indexTable.Name] = indexTable
+		ctx.objects[indexTable.Name] = &ObjectRef{ObjName: indexTable.Name, SchemaName: "tpch"}
 	}
-	index := &tree.Index{
-		Name: "idx_a_plus_one",
-		KeyParts: []*tree.KeyPart{{
-			Expr: selectClause.Exprs[0].Expr,
-		}},
-	}
-	lowered, err := lowerFunctionalIndex(cctx, index, table)
-	require.NoError(t, err)
-	require.Len(t, table.Cols, 2)
-	hidden := table.Cols[1]
-	require.True(t, hidden.Hidden)
-	require.Equal(t, functionalIndexColumnName(index.Name), hidden.Name)
-	require.NotNil(t, hidden.GeneratedCol)
-	require.False(t, hidden.GeneratedCol.IsStored)
-	require.Equal(t, "a + 1", hidden.GeneratedCol.OriginString)
-	require.Equal(t, hidden.Name, lowered.KeyParts[0].ColName.ColName())
-	require.Nil(t, index.KeyParts[0].ColName)
-}
-
-func TestBuildCreateTableLowersInlineFunctionalIndex(t *testing.T) {
-	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
-	created, err := runOneStmt(optimizer, t, "create table functional_inline (id int primary key, a int, key idx_a ((a + 1)))")
-	require.NoError(t, err)
-	table := created.GetDdl().GetCreateTable().GetTableDef()
-	require.Len(t, table.Indexes, 1)
-	require.Len(t, table.Cols, 3)
-	hidden := table.Cols[2]
-	require.True(t, hidden.Hidden)
-	require.NotNil(t, hidden.GeneratedCol)
-	require.Equal(t, "a + 1", hidden.GeneratedCol.OriginString)
-	require.Equal(t, hidden.Name, table.Indexes[0].Parts[0])
-
-	jsonTable, err := runOneStmt(optimizer, t, "create table functional_json_text (id int primary key, doc json, key idx_sku ((json_unquote(json_extract(doc, '$.sku')))))")
-	require.NoError(t, err)
-	jsonDef := jsonTable.GetDdl().GetCreateTable().GetTableDef()
-	require.Len(t, jsonDef.GetIndexes(), 1)
-	jsonHidden := FindColumn(jsonDef.GetCols(), jsonDef.GetIndexes()[0].GetParts()[0])
-	require.NotNil(t, jsonHidden)
-	require.Equal(t, int32(types.T_varchar), jsonHidden.GetTyp().Id)
-
-	noPK, err := runOneStmt(optimizer, t, "create table functional_no_pk (a int, key idx_a ((a + 1)))")
-	require.NoError(t, err)
-	noPKDef := noPK.GetDdl().GetCreateTable().GetTableDef()
-	require.True(t, catalog.IsFakePkName(noPKDef.GetCols()[len(noPKDef.GetCols())-1].GetName()))
-	require.True(t, noPKDef.GetCols()[len(noPKDef.GetCols())-2].GetHidden())
-}
-
-func TestBuildStandaloneAndAlterFunctionalIndexUseCopyDDL(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		sql  string
-	}{
-		{name: "create index", sql: "create index idx_expr on constraint_test.t1 ((a + 1))"},
-		{name: "alter table", sql: "alter table constraint_test.t1 add index idx_expr2 ((a + 1))"},
-		{name: "index before new column", sql: "alter table constraint_test.t1 add index idx_late ((late_col + 1)), add column late_col int default 7"},
-		{name: "new column before index", sql: "alter table constraint_test.t1 add column late_col int default 7, add index idx_late ((late_col + 1))"},
+	for _, sql := range []string{
+		"select __mo_fi_user from legacy", "insert into legacy(id,__mo_fi_user) values(1,7)",
+		"insert into legacy(id,__mo_fi_user) values(1,default)",
+		"update legacy set __mo_fi_user=8 where id=1", "delete from legacy where __mo_fi_user=8",
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
-			got, err := buildSingleStmt(optimizer, t, tc.sql)
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
-			alter := got.GetDdl().GetAlterTable()
-			require.NotNil(t, alter)
-			require.Equal(t, plan.AlterTable_COPY, alter.GetAlgorithmType())
-			require.NotNil(t, alter.GetCopyTableDef())
-			var functional *plan.IndexDef
-			for _, indexDef := range alter.GetCopyTableDef().GetIndexes() {
-				if indexDef != nil && indexDef.GetIndexName() != "PRIMARY" && isFunctionalIndexDef(alter.GetCopyTableDef(), indexDef) {
-					functional = indexDef
-					break
+			defer stmt.Free()
+			_, err = BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+		})
+	}
+	bad := DeepCopyTableDef(table, true)
+	FindColumn(bad.Cols, "__mo_fi_user").Hidden = true
+	require.Error(t, validateFunctionalTable(t.Context(), bad), "hidden backing metadata cannot lose its generated expression")
+	bad = DeepCopyTableDef(table, true)
+	bad.Indexes[0].Parts[0] = "__mo_fi_missing"
+	require.Error(t, validateFunctionalTable(t.Context(), bad), "missing internal key metadata must fail closed")
+	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
+	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
+	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, old) })
+	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table collision(name varchar(40),"+functionalColumnName("ix")+" int,index ix((lower(name))))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(ctx, stmt, false)
+	require.ErrorContains(t, err, "backing column already exists")
+}
+
+func TestFunctionalIndexSyntheticKeyLayout(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
+	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
+	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, old) })
+	for _, sql := range []string{
+		"create table t(a int,b int,primary key(a,b),index ix((a+1)),index iy(b,(a+2)))",
+		"create table t(a int,b int,index ix((a+1)),index iy(b,(a+2))) cluster by(a,b)",
+	} {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		p, err := BuildPlan(ctx, stmt, false)
+		stmt.Free()
+		require.NoError(t, err)
+		table := p.GetDdl().GetCreateTable().TableDef
+		synthetic := table.Pkey.PkeyColName
+		if table.ClusterBy != nil {
+			synthetic = table.ClusterBy.Name
+		} else {
+			require.Equal(t, catalog.CPrimaryKeyColName, synthetic)
+		}
+		require.Equal(t, synthetic, table.Cols[len(table.Cols)-1].Name)
+		require.NoError(t, validateFunctionalTable(t.Context(), table))
+	}
+}
+
+func TestFunctionalIndexDDL(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
+	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
+	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, old) })
+	build := func(sql string) (*Plan, error) {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		return BuildPlan(ctx, stmt, false)
+	}
+	// #29898: expression UNIQUE indexes must be rejected before index construction.
+	probe, err := build("CREATE TABLE mo_index_probe (id INT PRIMARY KEY, email VARCHAR(254))")
+	require.NoError(t, err)
+	ctx.tables["mo_index_probe"] = probe.GetDdl().GetCreateTable().TableDef
+	ctx.objects["mo_index_probe"] = &ObjectRef{ObjName: "mo_index_probe", SchemaName: "tpch"}
+	for _, tc := range []struct {
+		sql  string
+		code uint16
+	}{
+		{"CREATE UNIQUE INDEX mo_unique_email_expression ON mo_index_probe ((LOWER(email)))", moerr.ErrNotSupported},
+		{"CREATE TABLE unique_expression_probe (email VARCHAR(254), UNIQUE INDEX bad ((LOWER(email))))", moerr.ErrInternal},
+		{"ALTER TABLE mo_index_probe ADD UNIQUE INDEX bad ((LOWER(email)))", moerr.ErrInternal},
+		{"ALTER TABLE mo_index_probe ADD UNIQUE INDEX bad ((LOWER(email))), ALGORITHM=COPY", moerr.ErrInternal},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			p, err := build(tc.sql)
+			require.Nil(t, p)
+			require.True(t, moerr.IsMoErrCode(err, tc.code), err)
+		})
+	}
+	ordinary, err := build("CREATE UNIQUE INDEX mo_unique_email ON mo_index_probe (email)")
+	require.NoError(t, err)
+	index := ordinary.GetDdl().GetCreateIndex().GetIndex().GetTableDef().GetIndexes()
+	require.Len(t, index, 1)
+	require.True(t, index[0].Unique)
+	require.Equal(t, []string{"email"}, index[0].Parts)
+	for _, sql := range []string{
+		"create table fi (id int primary key, name varchar(40), index idx_lower ((lower(name))))",
+		"create table fi (id int primary key, value int, index idx_value ((value + 1)))",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			p, err := build(sql)
+			require.NoError(t, err)
+			table := p.GetDdl().GetCreateTable().TableDef
+			ctx.tables["fi"] = table
+			ctx.objects["fi"] = &ObjectRef{ObjName: "fi", SchemaName: "tpch"}
+			for _, indexTable := range p.GetDdl().GetCreateTable().IndexTables {
+				ctx.tables[indexTable.Name] = indexTable
+				ctx.objects[indexTable.Name] = &ObjectRef{ObjName: indexTable.Name, SchemaName: "tpch"}
+			}
+			require.Len(t, table.Indexes, 1)
+			col := functionalIndexColumn(table, table.Indexes[0])
+			require.NotNil(t, col)
+			query := "select * from fi where lower(name)='abc'"
+			if table.Cols[1].Name == "value" {
+				query = "select * from fi where value+1=2"
+			}
+			qp, queryErr := build(query)
+			require.NoError(t, queryErr)
+			indexScan := false
+			residual := false
+			for _, n := range qp.GetQuery().Nodes {
+				if n.NodeType == pb.Node_TABLE_SCAN && n.TableDef != nil && n.TableDef.Name == "fi" {
+					residual = len(n.FilterList) > 0
+				}
+				if n.NodeType == pb.Node_TABLE_SCAN && n.TableDef != nil && n.TableDef.Name == table.Indexes[0].IndexTableName {
+					indexScan = true
 				}
 			}
-			require.NotNil(t, functional)
-			name := catalog.ResolveAlias(functional.GetParts()[0])
-			hidden := FindColumn(alter.GetCopyTableDef().GetCols(), name)
-			require.NotNil(t, hidden)
-			require.True(t, hidden.GetHidden())
-			require.NotNil(t, hidden.GetGeneratedCol())
+			require.True(t, indexScan, "functional equality must use an index")
+			require.True(t, residual, "functional equality must retain the base-row predicate")
+			require.NoError(t, validateFunctionalTable(t.Context(), table))
+			bad := DeepCopyTableDef(table, true)
+			functionalIndexColumn(bad, bad.Indexes[0]).Typ.Width++
+			require.Error(t, validateFunctionalTable(t.Context(), bad), "physical and expression types must agree")
+			bad = DeepCopyTableDef(table, true)
+			bad.Indexes = nil
+			require.Error(t, validateFunctionalTable(t.Context(), bad), "backing columns must have an owner")
+			ddl, _, err := constructCreateTableSQL(ctx, table, nil, false, nil, false, nil)
+			require.NoError(t, err)
+			require.NotContains(t, ddl, functionalColumnPrefix)
+			rebuilt, err := build(ddl)
+			require.NoError(t, err)
+			require.NotNil(t, functionalIndexColumn(rebuilt.GetDdl().GetCreateTable().TableDef, rebuilt.GetDdl().GetCreateTable().TableDef.Indexes[0]))
+		})
+	}
+	for _, sql := range []string{
+		"create table fi (id int, index bad ((rand())))",
+		"create table fi (ts timestamp, index bad ((cast(ts as char(19)))))",
+		"create table fi (name varchar(40), index bad ((lower(name)), (rand())))",
+		"create table fi (name varchar(40), index bad ((lower(name)) desc))",
+		"create table fi (name varchar(40), index bad ((lower(name))) include(name))",
+		"create table fi (id int auto_increment primary key, index bad ((id+1)))",
+		"create table fi (name varchar(40), g varchar(40) as (cast(now() as char(40))), index bad ((lower(g))))",
+	} {
+		t.Run(sql, func(t *testing.T) { _, err := build(sql); require.Error(t, err) })
+	}
+	for _, sql := range []string{
+		"create index idx_fi on nation ((n_nationkey + 1))",
+		"alter table nation add index idx_fi ((n_nationkey + 1))",
+	} {
+		p, err := build(sql)
+		require.NoError(t, err)
+		require.Equal(t, pb.AlterTable_COPY, p.GetDdl().GetAlterTable().AlgorithmType)
+		require.Contains(t, p.GetDdl().GetAlterTable().CreateTmpTableSql, "idx_fi")
+		require.NotContains(t, p.GetDdl().GetAlterTable().CreateTmpTableSql, functionalColumnPrefix)
+	}
+	_, err = build("alter table nation add index idx_fi ((n_nationkey + 1)), algorithm=inplace")
+	require.Error(t, err)
+	// The current main predecessor (MORPC v106) must not be able to author
+	// functional-index metadata before all CNs understand the new contract.
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion106)
+	_, err = build("create table fi (id int, index idx ((id + 1)))")
+	require.ErrorContains(t, err, "protocol version 107")
+}
+
+func TestFunctionalCompositeIndexDDL(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
+	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	// Functional-index metadata is a new persisted contract.  The current main
+	// predecessor stops at v106; successful composite authoring must run with
+	// the newly allocated cumulative capability v107.
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
+	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, old) })
+	build := func(sql string) (*Plan, error) {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		return BuildPlan(ctx, stmt, false)
+	}
+	for _, parts := range []string{
+		"(lower(name)), (id+1)", "id, (lower(name))", "(lower(name)), id",
+		"(lower(name)), (lower(name))", "id, (lower(name)), (upper(name))",
+	} {
+		t.Run(parts, func(t *testing.T) {
+			p, err := build("create table fi (id int primary key, name varchar(40), index ix (" + parts + "))")
+			require.NoError(t, err)
+			table := p.GetDdl().GetCreateTable().TableDef
+			ctx.tables["fi"] = table
+			ctx.objects["fi"] = &ObjectRef{ObjName: "fi", SchemaName: "tpch"}
+			for _, it := range p.GetDdl().GetCreateTable().IndexTables {
+				ctx.tables[it.Name] = it
+				ctx.objects[it.Name] = &ObjectRef{ObjName: it.Name, SchemaName: "tpch"}
+			}
+			require.NoError(t, validateFunctionalTable(t.Context(), table))
+			cols := functionalIndexColumns(table, table.Indexes[0])
+			require.NotEmpty(t, cols)
+			seen := map[string]bool{}
+			for _, col := range cols {
+				require.False(t, seen[col.Name])
+				seen[col.Name] = true
+			}
+			ddl, _, err := ConstructCreateTableSQL(ctx, table, nil, false, nil)
+			require.NoError(t, err)
+			require.NotContains(t, ddl, functionalColumnPrefix)
+			rebuilt, err := build(ddl)
+			require.NoError(t, err)
+			require.Len(t, functionalIndexColumns(rebuilt.GetDdl().GetCreateTable().TableDef, rebuilt.GetDdl().GetCreateTable().TableDef.Indexes[0]), len(cols))
+			bad := DeepCopyTableDef(table, true)
+			bad.Indexes[0].Parts[0], bad.Indexes[0].Parts[1] = bad.Indexes[0].Parts[1], bad.Indexes[0].Parts[0]
+			require.Error(t, validateFunctionalTable(t.Context(), bad), "backing ownership includes key position")
+			if len(cols) > 1 {
+				bad = DeepCopyTableDef(table, true)
+				functionalIndexColumns(bad, bad.Indexes[0])[1].Typ.Width++
+				require.Error(t, validateFunctionalTable(t.Context(), bad), "validate later expression parts too")
+			}
 		})
 	}
 }
 
-func TestBuildCreateTableRejectsUnsupportedFunctionalIndexShapes(t *testing.T) {
-	tests := []string{
-		"create table functional_unique (id int primary key, a int, unique key idx_a ((a + 1)))",
-		"create table functional_composite (id int primary key, a int, b int, key idx_ab ((a + 1), b))",
-		"create table functional_json (id int primary key, doc json, key idx_doc ((json_extract(doc, '$.sku'))))",
+func TestFunctionalIndexOriginStringQuotesLiterals(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
+	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
+	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, old) })
+
+	build := func(sql string) *TableDef {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		plan, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+		return plan.GetDdl().GetCreateTable().TableDef
 	}
-	for _, sql := range tests {
-		t.Run(sql, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
-			require.Error(t, err)
-			require.Contains(t, strings.ToLower(err.Error()), "functional")
+
+	for _, tc := range []struct {
+		name, expression, want, value string
+	}{
+		{name: "same named column", expression: "lower('abc')", want: "lower('abc')", value: "abc"},
+		{name: "quoted literal", expression: "lower('a''b')", want: "lower('a''b')", value: "a'b"},
+		{name: "backslash literal", expression: `lower('a\\b')`, want: "lower(cast(0x615c62 as varchar))", value: "a\\b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			table := build("create table fi (abc varchar(40), index ix ((" + tc.expression + ")))")
+			owner := functionalIndexColumn(table, table.Indexes[0])
+			require.NotNil(t, owner)
+			require.Equal(t, tc.want, owner.GeneratedCol.OriginString)
+			require.Equal(t, tc.value, functionalIndexLiteralValue(owner.GeneratedCol.Expr))
+
+			ddl, _, err := constructCreateTableSQL(ctx, table, nil, false, nil, false, nil)
+			require.NoError(t, err)
+			rebuilt := build(ddl)
+			rebuiltOwner := functionalIndexColumn(rebuilt, rebuilt.Indexes[0])
+			require.Equal(t, tc.want, rebuiltOwner.GeneratedCol.OriginString)
+			require.Equal(t, tc.value, functionalIndexLiteralValue(rebuiltOwner.GeneratedCol.Expr))
 		})
 	}
 }
 
-func TestBuildCreateTableRejectsSessionDependentFunctionalCast(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
-		"create table functional_time (id int primary key, ts timestamp, key idx_time ((cast(ts as char(19)))))")
-	require.Error(t, err)
-	require.Contains(t, strings.ToLower(err.Error()), "functional")
-}
-
-func TestLowerFunctionalIndexRejectsSessionDependentCastBeforePublishingColumn(t *testing.T) {
-	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, "select cast(ts as char(19))", 1)
-	require.NoError(t, err)
-	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
-	table := &TableDef{
-		Cols: []*ColDef{
-			{Name: "id", Typ: Type{Id: int32(types.T_int32), Width: 32}},
-			{Name: "ts", Typ: Type{Id: int32(types.T_timestamp), Scale: 6}},
-		},
+func functionalIndexLiteralValue(expr *Expr) string {
+	if fn := expr.GetF(); fn != nil && len(fn.Args) == 1 {
+		expr = fn.Args[0]
 	}
-	index := &tree.Index{Name: "idx_time", KeyParts: []*tree.KeyPart{{Expr: selectClause.Exprs[0].Expr}}}
-	_, err = lowerFunctionalIndex(NewMockCompilerContext(false, newPlanTestProcess(t)), index, table)
-	require.Error(t, err)
-	require.Contains(t, strings.ToLower(err.Error()), "functional")
-	require.Len(t, table.Cols, 2)
-}
-
-func TestFunctionalIndexAdmissionRejectsSessionDependentGeneratedDependency(t *testing.T) {
-	created, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
-		"create table functional_time_dependency (id int primary key, ts timestamp, g varchar(19) generated always as (cast(ts as char(19))) virtual)")
-	require.NoError(t, err)
-	table := created.GetDdl().GetCreateTable().GetTableDef()
-	generated := FindColumn(table.Cols, "g")
-	require.NotNil(t, generated)
-	require.NotNil(t, generated.GeneratedCol)
-	require.Error(t, validateFunctionalIndexExpression(context.Background(), generated.GeneratedCol.Expr, table))
-}
-
-func TestFunctionalIndexAdmissionRejectsUnknownOverload(t *testing.T) {
-	table := &TableDef{Cols: []*ColDef{{Name: "a", Typ: Type{Id: int32(types.T_int64), Width: 64}}}}
-	expr := &plan.Expr{
-		Typ: Type{Id: int32(types.T_int64), Width: 64},
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{Obj: int64(1000000) << 32, ObjName: "unknown"},
-		}},
+	for {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 {
+			break
+		}
+		expr = fn.Args[0]
 	}
-	require.Error(t, validateFunctionalIndexExpression(context.Background(), expr, table))
-}
-
-func TestFunctionalIndexAdmissionRejectsGeneratedColumnCycle(t *testing.T) {
-	table := &TableDef{Cols: []*ColDef{
-		{Name: "a", Typ: Type{Id: int32(types.T_int64), Width: 64}, GeneratedCol: &plan.GeneratedCol{
-			Expr: &plan.Expr{Typ: Type{Id: int32(types.T_int64), Width: 64}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}},
-		}},
-		{Name: "b", Typ: Type{Id: int32(types.T_int64), Width: 64}, GeneratedCol: &plan.GeneratedCol{
-			Expr: &plan.Expr{Typ: Type{Id: int32(types.T_int64), Width: 64}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
-		}},
-	}}
-	expr := &plan.Expr{Typ: Type{Id: int32(types.T_int64), Width: 64}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
-	require.Error(t, validateFunctionalIndexExpression(context.Background(), expr, table))
-}
-
-func TestFunctionalIndexQueryRejectsUnsafePersistedMetadata(t *testing.T) {
-	created, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
-		"create table functional_metadata (id int primary key, a int, key idx_a ((a + 1)))")
-	require.NoError(t, err)
-	table := created.GetDdl().GetCreateTable().GetTableDef()
-	hidden := FindColumn(table.Cols, table.Indexes[0].Parts[0])
-	require.NotNil(t, hidden)
-	hidden.GeneratedCol.Expr = &plan.Expr{
-		Typ: hidden.Typ,
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{Obj: int64(1000000) << 32, ObjName: "unknown"},
-		}},
+	if lit := expr.GetLit(); lit != nil {
+		return lit.GetSval()
 	}
-	_, _, ok := functionalIndexQueryExpr(table, table.Indexes[0])
-	require.False(t, ok)
-}
-
-func TestShowCreateTableRendersFunctionalExpressionAndHidesImplementationColumn(t *testing.T) {
-	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
-	tableDef, err := buildTestCreateTableStmt(optimizer, "create table functional_show (id int primary key, a int, key idx_a ((a + 1)))")
-	require.NoError(t, err)
-	got, _, err := ConstructCreateTableSQL(&optimizer.ctxt, tableDef, nil, false, nil)
-	require.NoError(t, err)
-	require.Contains(t, got, "KEY `idx_a` ((a + 1))")
-	require.NotContains(t, got, catalog.FunctionalIndexColumnPrefix)
-
-	tableDef.Cols[len(tableDef.Cols)-1].GeneratedCol.OriginString = ""
-	_, _, err = ConstructCreateTableSQL(&optimizer.ctxt, tableDef, nil, false, nil)
-	require.Error(t, err)
+	return ""
 }

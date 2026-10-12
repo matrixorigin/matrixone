@@ -1,19 +1,22 @@
 # Fractional temporal values must retain their source scale during numeric
-# coercion for variance and standard-deviation aggregates.
+# coercion for SUM/AVG, variance, and standard-deviation aggregates.
+DROP TABLE IF EXISTS temporal_sum_avg_ctas;
+DROP VIEW IF EXISTS temporal_sum_avg;
 DROP TABLE IF EXISTS variance_fraction;
 CREATE TABLE variance_fraction (
     id INT,
+    date_value DATE,
     t TIME(6),
     d DATETIME(6),
     ts TIMESTAMP(6)
 );
 INSERT INTO variance_fraction VALUES
-    (1, '00:00:00.100000', '2020-01-01 00:00:00.100000', '2020-01-01 00:00:00.100000'),
-    (1, '00:00:00.300000', '2020-01-01 00:00:00.300000', '2020-01-01 00:00:00.300000'),
-    (1, NULL, NULL, NULL),
-    (2, '-00:00:00.100000', '2020-01-01 00:00:00.100000', '2020-01-01 00:00:00.100000'),
-    (2, '-00:00:00.300000', '2020-01-01 00:00:00.300000', '2020-01-01 00:00:00.300000'),
-    (2, NULL, NULL, NULL);
+    (1, '2020-01-01', '00:00:00.100000', '2020-01-01 00:00:00.100000', '2020-01-01 00:00:00.100000'),
+    (1, '2020-01-02', '00:00:00.300000', '2020-01-01 00:00:00.300000', '2020-01-01 00:00:00.300000'),
+    (1, NULL, NULL, NULL, NULL),
+    (2, '2020-01-01', '-00:00:00.100000', '2020-01-01 00:00:00.100000', '2020-01-01 00:00:00.100000'),
+    (2, '2020-01-02', '-00:00:00.300000', '2020-01-01 00:00:00.300000', '2020-01-01 00:00:00.300000'),
+    (2, NULL, NULL, NULL, NULL);
 
 # Distributed aggregation, NULL neighbors, and negative TIME.
 SELECT id,
@@ -24,13 +27,43 @@ FROM variance_fraction
 GROUP BY id
 ORDER BY id;
 
+# Exact temporal SUM/AVG domains, source scale, and negative TIME.
+-- @metacmp(true)
+SELECT id, SUM(date_value), AVG(date_value), SUM(t), AVG(t),
+       SUM(d), AVG(d), SUM(ts), AVG(ts)
+FROM variance_fraction GROUP BY id ORDER BY id;
+SELECT SUM(t), AVG(t), SUM(d), AVG(d), SUM(ts), AVG(ts)
+FROM variance_fraction WHERE t IS NULL;
+SELECT SUM(t), AVG(t), SUM(date_value), AVG(date_value)
+FROM variance_fraction WHERE id < 0;
+SELECT id, CAST(t AS DECIMAL(38,6)) AS numeric_time,
+       SUM(t) OVER (PARTITION BY id ORDER BY t ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_sum,
+       AVG(t) OVER (PARTITION BY id ORDER BY t ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_avg
+FROM variance_fraction ORDER BY id, t;
+
 # Prepared execution must retain the temporal scale as well.
 SET @variance_fraction_id = 1;
 PREPARE variance_fraction_stmt FROM
-    'SELECT VAR_POP(t), VAR_SAMP(t), STDDEV_POP(t), STDDEV_SAMP(t) FROM variance_fraction WHERE id = ?';
+    'SELECT SUM(t), AVG(t), SUM(d), AVG(d), SUM(ts), AVG(ts), VAR_POP(t), VAR_SAMP(t), STDDEV_POP(t), STDDEV_SAMP(t) FROM variance_fraction WHERE id = ?';
+EXECUTE variance_fraction_stmt USING @variance_fraction_id;
+SET @variance_fraction_id = 2;
 EXECUTE variance_fraction_stmt USING @variance_fraction_id;
 DEALLOCATE PREPARE variance_fraction_stmt;
 
+# Materialization must preserve the exact temporal result domains and fractions.
+CREATE VIEW temporal_sum_avg AS
+    SELECT id, SUM(date_value) AS date_sum, AVG(date_value) AS date_avg,
+           SUM(t) AS time_sum, AVG(t) AS time_avg, SUM(d) AS datetime_sum, AVG(d) AS datetime_avg,
+           SUM(ts) AS timestamp_sum, AVG(ts) AS timestamp_avg
+    FROM variance_fraction GROUP BY id;
+SELECT * FROM temporal_sum_avg ORDER BY id;
+CREATE TABLE temporal_sum_avg_ctas AS SELECT * FROM temporal_sum_avg;
+SELECT * FROM temporal_sum_avg_ctas ORDER BY id;
+SELECT column_name, data_type, numeric_precision, numeric_scale FROM information_schema.columns
+WHERE table_schema = DATABASE() AND table_name = 'temporal_sum_avg_ctas'
+ORDER BY ordinal_position;
+DROP TABLE temporal_sum_avg_ctas;
+DROP VIEW temporal_sum_avg;
 DROP TABLE variance_fraction;
 
 # Large temporal variance must decimalize the stable float result without

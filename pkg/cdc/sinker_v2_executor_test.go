@@ -27,6 +27,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -603,12 +604,17 @@ func TestExecutorTargetOwnershipLock(t *testing.T) {
 			context.Background(), "account/task/db/table",
 			func(context.Context) error { return nil }, nil,
 		))
-		releaseErr := errors.New("release response lost")
+		releaseErr := context.DeadlineExceeded
 		mock.ExpectQuery("SELECT RELEASE_LOCK").
 			WithArgs(sqlmock.AnyArg()).
 			WillReturnError(releaseErr)
-		require.ErrorIs(t, executor.ReleaseTargetLock(), releaseErr)
+		mock.ExpectClose()
+		err = executor.ReleaseTargetLock()
+		require.ErrorIs(t, err, releaseErr)
+		require.ErrorIs(t, err, sql.ErrConnDone)
 		require.Nil(t, executor.targetLockConn)
+		require.Empty(t, executor.targetLockName)
+		require.Zero(t, db.Stats().OpenConnections)
 
 		require.NoError(t, executor.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
@@ -914,26 +920,28 @@ func TestExecutor_execWithRetry_NonRetryableError(t *testing.T) {
 }
 
 func TestExecutor_execWithRetry_DurationLimit(t *testing.T) {
-	executor := &Executor{
-		retryTimes:    -1,
-		retryDuration: 10 * time.Millisecond,
-	}
-	executor.initRetryPolicy()
-	require.NotNil(t, executor.retryPolicy.Backoff,
-		"initRetryPolicy must install a backoff strategy")
-	// This test isolates the retry-duration cutoff from backoff delay.
-	executor.retryPolicy.Backoff = nil
+	synctest.Test(t, func(t *testing.T) {
+		executor := &Executor{
+			retryTimes:    -1,
+			retryDuration: 10 * time.Millisecond,
+		}
+		executor.initRetryPolicy()
+		require.NotNil(t, executor.retryPolicy.Backoff,
+			"initRetryPolicy must install a backoff strategy")
+		// This test isolates the retry-duration cutoff from backoff delay.
+		executor.retryPolicy.Backoff = nil
 
-	attempts := 0
-	err := executor.execWithRetry(context.Background(), nil, func() error {
-		attempts++
-		time.Sleep(5 * time.Millisecond)
-		return driver.ErrBadConn
+		attempts := 0
+		err := executor.execWithRetry(context.Background(), nil, func() error {
+			attempts++
+			time.Sleep(5 * time.Millisecond)
+			return driver.ErrBadConn
+		})
+
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "retry limit exceeded")
+		require.GreaterOrEqual(t, attempts, 1)
 	})
-
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "retry limit exceeded")
-	require.GreaterOrEqual(t, attempts, 1)
 }
 
 func TestExecutor_execWithRetry_CircuitBreakerOpens(t *testing.T) {
@@ -953,6 +961,7 @@ func TestExecutor_execWithRetry_CircuitBreakerOpens(t *testing.T) {
 
 	v2.CdcSinkerRetryCounter.Reset()
 	v2.CdcSinkerCircuitStateGauge.Reset()
+	sqlErrorsBefore := readCounterValue(t, v2.CdcMysqlSinkErrorCounter)
 
 	attempts := 0
 	err := executor.execWithRetry(context.Background(), nil, func() error {
@@ -991,6 +1000,8 @@ func TestExecutor_execWithRetry_CircuitBreakerOpens(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, attempts)
 	require.False(t, executor.circuitBreaker.IsOpen())
+	// Retry callbacks and circuit rejection do not dispatch SQL themselves.
+	require.Equal(t, sqlErrorsBefore, readCounterValue(t, v2.CdcMysqlSinkErrorCounter))
 }
 
 func TestExecutor_ExecSQL(t *testing.T) {
@@ -1065,10 +1076,12 @@ func TestExecutor_ExecSQL(t *testing.T) {
 			Pause:  make(chan struct{}),
 			Cancel: make(chan struct{}),
 		}
+		before := readCounterValue(t, v2.CdcMysqlSinkErrorCounter)
 		err = executor.ExecSQL(ctx, ar, sqlBuf, false)
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "too short")
+		require.Equal(t, before, readCounterValue(t, v2.CdcMysqlSinkErrorCounter))
 	})
 
 	t.Run("ExecSQLReestablishesConnectionWhenNil", func(t *testing.T) {

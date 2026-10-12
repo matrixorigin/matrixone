@@ -816,6 +816,12 @@ func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []by
 }
 
 func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) (int, error) {
+	// Reject unresolved types before serializing or changing block metadata.
+	for i, vec := range bat.Vecs {
+		if vec.GetType().Oid == types.T_any {
+			return 0, moerr.NewNotSupportedNoCtxf("object column %d has unresolved ANY type", i)
+		}
+	}
 	// CHANGE ME
 	// block.BlockHeader()return w.WriteWithCompress(offset, buf.Bytes()).SetBlockID(w.lastId)
 	blockMeta.BlockHeader().SetSequence(uint16(w.lastId))
@@ -891,9 +897,6 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 		block.data = append(block.data, data)
 		blockMeta.ColumnMeta(seqnums.Seqs[i]).setLocation(ext)
 		blockMeta.ColumnMeta(seqnums.Seqs[i]).setDataType(uint8(vec.GetType().Oid))
-		if vec.GetType().Oid == types.T_any {
-			panic("any type batch")
-		}
 		blockMeta.ColumnMeta(seqnums.Seqs[i]).SetNullCnt(uint32(vec.GetNulls().GetCardinality()))
 		w.originSize += ext.OriginSize()
 	}

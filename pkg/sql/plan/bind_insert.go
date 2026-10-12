@@ -2150,13 +2150,13 @@ func (builder *QueryBuilder) insertIgnoreAutoIncrementReorderable(
 	if !hasOtherUnique || builder.canSkipDedup(tableDef) {
 		return 0, false
 	}
-	visibleWidth := 0
+	materializedWidth := 0
 	for _, col := range tableDef.Cols {
-		if col != nil && (!col.Hidden || col.Name == catalog.FakePrimaryKeyColName) {
-			visibleWidth++
+		if col != nil && (!col.Hidden || col.GeneratedCol != nil || col.Name == catalog.FakePrimaryKeyColName) {
+			materializedWidth++
 		}
 	}
-	return int32(visibleWidth), true
+	return int32(materializedWidth), true
 }
 
 func hasAutoIncrementDependentConstraint(tableDef *plan.TableDef, autoColPos int32) bool {
@@ -4463,6 +4463,9 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 			if !ok {
 				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
+			if isFunctionalColumn(tableDef.Cols[idx]) {
+				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
+			}
 			if tableDef.Cols[idx].GeneratedCol != nil {
 				return nil, moerr.NewInvalidInputf(builder.GetContext(), "the value specified for generated column '%s' in table '%s' is not allowed", colName, tableDef.Name)
 			}
@@ -4544,6 +4547,9 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	for i, col := range astCols {
 		colName := strings.ToLower(string(col))
 		if idx, ok := tableDef.Name2ColIndex[colName]; ok {
+			if isFunctionalColumn(tableDef.Cols[idx]) {
+				return nil, nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
+			}
 			if tableDef.Cols[idx].GeneratedCol != nil {
 				genPositions[i] = true
 				generatedColumnCount++
@@ -4736,7 +4742,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		return 0, nil, nil, -1, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
 	}
 
-	if err = builder.addBinding(lastNodeID, tree.AliasClause{Alias: derivedTableName}, bindCtx); err != nil {
+	if err = builder.addBinding(lastNodeID, tree.AliasClause{Alias: derivedTableName}, bindCtx, ""); err != nil {
 		return 0, nil, nil, -1, err
 	}
 
@@ -5043,12 +5049,12 @@ func isPreparedAssignmentParam(builder *QueryBuilder, expr tree.Expr) bool {
 }
 
 func insertProjectionTypes(insertColumns []string, tableDef *plan.TableDef, ignore bool) []Type {
-	// only numeric targets may seed the numeric assignment context; a zero
-	// Type keeps the projection binder on the default binding path
+	// Numeric targets seed numeric context; ENUM targets preserve same-domain
+	// bare columns. A zero Type keeps the default binding path.
 	targets := make([]Type, len(insertColumns))
 	for i, column := range insertColumns {
 		typ := tableDef.Cols[tableDef.Name2ColIndex[column]].Typ
-		if useNumericAssignmentContext(typ, ignore) {
+		if useNumericAssignmentContext(typ, ignore) || isEnumPlanType(&typ) {
 			targets[i] = typ
 		}
 	}
@@ -5345,6 +5351,8 @@ func valuesExprIsFuncCall(e tree.Expr) bool {
 			e = v.Expr
 		case *tree.CastExpr:
 			e = v.Expr
+		case *tree.SerialExtractExpr:
+			return true
 		case *tree.FuncExpr:
 			// mod() is arithmetic and shares the numeric-context binder with the
 			// binary operators (see numericAstFunctionName); every other function
@@ -5732,7 +5740,7 @@ func (builder *QueryBuilder) buildValueScan(
 		Uuid:        nodeId[:],
 	}
 	nodeID := builder.appendNode(scanNode, bindCtx)
-	if err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, bindCtx); err != nil {
+	if err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, bindCtx, ""); err != nil {
 		return 0, nil, err
 	}
 

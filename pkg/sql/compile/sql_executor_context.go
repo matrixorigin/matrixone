@@ -731,6 +731,15 @@ func (c *compilerContext) ResolveVariableType(varName string, isSystemVar, isGlo
 	return plan.Type{}, nil
 }
 
+func (c *compilerContext) ResolveVariableRegexpStringResult(varName string) (bool, error) {
+	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+		if resolver, ok := delegate.(plan.UserVariableRegexpCastResolver); ok {
+			return resolver.ResolveVariableRegexpStringResult(varName)
+		}
+	}
+	return false, nil
+}
+
 func (c *compilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

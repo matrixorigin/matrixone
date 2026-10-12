@@ -49,6 +49,75 @@ func TestCSVPipelineErrorKeepsNonCanceledRootCause(t *testing.T) {
 	assert.NoError(t, csvPipelineError(nil, nil))
 }
 
+func TestFunctionalIndexCheckpointDDL(t *testing.T) {
+	const backing = "__mo_fi_123"
+	schema := &TableSchema{TableName: "fi", Columns: []TableColumn{{Name: "name", SQLType: "VARCHAR(40)", Position: 1}},
+		UniqueKeys: []TableUniqueKey{{Name: "idx", Columns: []string{backing}}}}
+	encoded, err := types.Encode(&plan.GeneratedCol{OriginString: "lower(`name`)"})
+	require.NoError(t, err)
+	columns := &LogicalTableView{Headers: []string{"object", "block", "row", "att_relname_id", "attname", "att_is_hidden", "attr_generated"},
+		Rows: [][]string{{}, {"o", "0", "0", "42", backing, "1", string(encoded)}}}
+	attachFunctionalIndexExpressions(schema, columns, 42)
+	ddl := RenderCreateTableDDLFromSchema(cloneTableSchema(schema))
+	require.Contains(t, ddl, "KEY `idx`((lower(`name`)))")
+	require.NotContains(t, ddl, backing)
+	indexes := &LogicalTableView{Headers: []string{"object", "block", "row", "table_id", "name", "column_name", "type", "ordinal_position"},
+		Rows: [][]string{{"o", "0", "0", "42", "idx", backing, "INDEX", "1"}}}
+	statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ALTER TABLE `fi` ADD KEY `idx`((lower(`name`)));"}, statements)
+	schema.UniqueKeys[0].Expressions = nil
+	require.Empty(t, RenderCreateTableDDLFromSchema(schema))
+	_, err = buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
+	require.Error(t, err)
+}
+
+func TestOrdinaryPrefixedColumnCheckpointDDL(t *testing.T) {
+	schema := &TableSchema{TableName: "legacy", Columns: []TableColumn{{Name: "__mo_fi_user", SQLType: "INT", Position: 1}},
+		UniqueKeys: []TableUniqueKey{{Name: "ordinary", Columns: []string{"__mo_fi_user"}}}}
+	ddl := RenderCreateTableDDLFromSchema(schema)
+	require.Contains(t, ddl, "KEY `ordinary`(`__mo_fi_user`)")
+	indexes := &LogicalTableView{Headers: []string{"object", "block", "row", "table_id", "name", "column_name", "type", "ordinal_position", "hidden"},
+		Rows: [][]string{{"o", "0", "0", "42", "ordinary", "__mo_fi_user", "INDEX", "1", "0"}}}
+	statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "legacy", schema)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ALTER TABLE `legacy` ADD KEY `ordinary`(`__mo_fi_user`);"}, statements)
+	// Visible catalog columns take precedence over stale expression annotations.
+	schema.UniqueKeys[0].Expressions = map[string]string{"__mo_fi_user": "lower(`name`)"}
+	require.Contains(t, RenderCreateTableDDLFromSchema(schema), "KEY `ordinary`(`__mo_fi_user`)")
+	statements, err = buildCreateIndexStatementsFromMoIndexes(indexes, 42, "legacy", schema)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ALTER TABLE `legacy` ADD KEY `ordinary`(`__mo_fi_user`);"}, statements)
+}
+
+func TestFunctionalCompositeIndexCheckpointDDL(t *testing.T) {
+	const first, second = "__mo_fi_a_1", "__mo_fi_a_2"
+	schema := &TableSchema{TableName: "fi", Columns: []TableColumn{{Name: "id", SQLType: "INT", Position: 1}, {Name: "name", SQLType: "VARCHAR(40)", Position: 2}}, UniqueKeys: []TableUniqueKey{{Name: "idx", Columns: []string{"id", first, second}}}}
+	columns := &LogicalTableView{Headers: []string{"object", "block", "row", "att_relname_id", "attname", "att_is_hidden", "attr_generated"}}
+	for _, part := range []struct{ name, expr string }{{first, "lower(`name`)"}, {second, "upper(`name`)"}} {
+		encoded, err := types.Encode(&plan.GeneratedCol{OriginString: part.expr})
+		require.NoError(t, err)
+		columns.Rows = append(columns.Rows, []string{"o", "0", "0", "42", part.name, "1", string(encoded)})
+	}
+	attachFunctionalIndexExpressions(schema, columns, 42)
+	clone := cloneTableSchema(schema)
+	require.Contains(t, RenderCreateTableDDLFromSchema(clone), "KEY `idx`(`id`, (lower(`name`)), (upper(`name`)))")
+	require.NotContains(t, RenderCreateTableDDLFromSchema(clone), "__mo_fi_")
+	indexes := &LogicalTableView{Headers: []string{"object", "block", "row", "table_id", "name", "column_name", "type", "ordinal_position"}, Rows: [][]string{
+		{"o", "0", "0", "42", "idx", second, "INDEX", "3"},
+		{"o", "0", "0", "42", "idx", "id", "INDEX", "1"},
+		{"o", "0", "0", "42", "idx", first, "INDEX", "2"},
+	}}
+	statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ALTER TABLE `fi` ADD KEY `idx`(`id`, (lower(`name`)), (upper(`name`)));"}, statements)
+	delete(schema.UniqueKeys[0].Expressions, second)
+	require.NotEmpty(t, clone.UniqueKeys[0].Expressions[second], "clone owns expression map")
+	require.Empty(t, RenderCreateTableDDLFromSchema(schema))
+	_, err = buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
+	require.Error(t, err)
+}
+
 func TestComposeAtUsesLatestUsableGlobalCheckpoint(t *testing.T) {
 	older := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
 	newer := checkpoint.NewCheckpointEntry("", types.BuildTS(11, 0), types.BuildTS(20, 0), checkpoint.ET_Global)
@@ -647,11 +716,18 @@ func TestRenderColumnSQLTypeEnumSetAndArrayBranches(t *testing.T) {
 		want string
 	}{
 		{"plain", TableColumn{SQLType: "INT"}, "INT"},
+		{"single empty enum", TableColumn{SQLType: "ENUM"}, "ENUM('')"},
+		{"single empty set", TableColumn{SQLType: "BIGINT UNSIGNED", EnumValues: ","}, "SET('')"},
+		{"plain uint64", TableColumn{SQLType: "BIGINT UNSIGNED"}, "BIGINT UNSIGNED"},
 		{"json array", TableColumn{SQLType: "JSON", EnumValues: "array(int)"}, "ARRAY(int)"},
 		{"json non array", TableColumn{SQLType: "JSON", EnumValues: "plain"}, "JSON"},
-		{"enum bare values", TableColumn{SQLType: "ENUM", EnumValues: "a,'b,c',\"d\""}, "ENUM('a','b,c',\"d\")"},
-		{"enum already typed", TableColumn{SQLType: "ENUM", EnumValues: "ENUM('x')"}, "ENUM('x')"},
-		{"set parens", TableColumn{SQLType: "SET", EnumValues: "(x,y)"}, "SET('x','y')"},
+		{"enum raw quotes", TableColumn{SQLType: "ENUM", EnumValues: `a,'b',"d"`}, `ENUM('a','''b''','"d"')`},
+		{"enum SQL-like member", TableColumn{SQLType: "ENUM", EnumValues: "ENUM('x')"}, "ENUM('ENUM(''x'')')"},
+		{"set parentheses in members", TableColumn{SQLType: "SET", EnumValues: "(x,y)"}, "SET('(x','y)')"},
+		{"enum mixed empty members", TableColumn{SQLType: "ENUM", EnumValues: ", x,"}, "ENUM('',' x','')"},
+		{"set leading whitespace", TableColumn{SQLType: "SET", EnumValues: " x,y"}, "SET(' x','y')"},
+		{"enum whitespace member", TableColumn{SQLType: "ENUM", EnumValues: " "}, "ENUM(' ')"},
+		{"set backslash member", TableColumn{SQLType: "SET", EnumValues: `a\b`}, `SET('a\\b')`},
 		{"bigint unsigned set", TableColumn{SQLType: "BIGINT UNSIGNED", EnumValues: "red,blue"}, "SET('red','blue')"},
 	}
 	for _, tc := range cases {
@@ -660,10 +736,6 @@ func TestRenderColumnSQLTypeEnumSetAndArrayBranches(t *testing.T) {
 		})
 	}
 
-	require.Equal(t, []string{"'a,b'", " c", " 'd''e'", " f\\", "g"}, splitEnumSetValues("'a,b', c, 'd''e', f\\,g"))
-	require.Equal(t, "x,y", stripEnumSetValueParens(" ( x,y ) "))
-	require.True(t, isQuotedSQLString(`"x"`))
-	require.False(t, isQuotedSQLString(`x`))
 }
 
 func TestAppendColumnDDLAttributesBranches(t *testing.T) {
@@ -2356,45 +2428,6 @@ func TestBuildCreateIndexStatementsFromMoIndexes_FullTextParserAndCatalogOrder(t
 		"ALTER TABLE `ca_comprehensive_dataset` ADD KEY `sink_file_path`(`sink_file_path`);",
 		"ALTER TABLE `ca_comprehensive_dataset` ADD KEY `source_file_path`(`source_file_path`);",
 	}, got)
-}
-
-func TestBuildCreateIndexStatementsFromMoIndexes_FunctionalIndex(t *testing.T) {
-	internalName := catalog.FunctionalIndexColumnPrefix + "0123456789abcdef0123456789abcdef"
-	view := &LogicalTableView{
-		Headers: append([]string{"object", "block", "row"}, moIndexesHeaders...),
-		Rows: [][]string{func() []string {
-			data := make([]string, len(moIndexesHeaders))
-			set := func(header, value string) {
-				for i, h := range moIndexesHeaders {
-					if h == header {
-						data[i] = value
-						return
-					}
-				}
-				t.Fatalf("missing mo_indexes header %s", header)
-			}
-			set("id", "1")
-			set("table_id", "42")
-			set("name", "idx_doc_sku")
-			set("type", "MULTIPLE")
-			set(catalog.IndexAlgoName, "")
-			set("column_name", internalName)
-			set("ordinal_position", "1")
-			set("hidden", "1")
-			return append([]string{"obj", "0", "1"}, data...)
-		}()},
-	}
-
-	got, err := buildCreateIndexStatementsFromMoIndexesWithGenerated(
-		view, 42, "docs", map[string]string{internalName: "json_unquote(json_extract(doc, '$.sku'))"},
-	)
-	require.NoError(t, err)
-	require.Equal(t, []string{
-		"ALTER TABLE `docs` ADD KEY `idx_doc_sku`((json_unquote(json_extract(doc, '$.sku'))));",
-	}, got)
-
-	_, err = buildCreateIndexStatementsFromMoIndexesWithGenerated(view, 42, "docs", nil)
-	require.Error(t, err)
 }
 
 func TestDecodeMoColumnEncodedSQLType_TemporalScale(t *testing.T) {

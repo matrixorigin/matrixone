@@ -61,17 +61,14 @@ func (f *cappedCreateFactory) Create(
 	}, nil
 }
 
-// Helper function to get backend with retry for async creation
+// Helper function to get backend while the manager completes async creation.
 func getBackendWithRetry(t *testing.T, client *client, backend string, lock bool) Backend {
 	var b Backend
 	var err error
-	for i := 0; i < 10; i++ {
+	require.Eventually(t, func() bool {
 		b, err = client.getBackend(backend, lock)
-		if err == nil && b != nil {
-			return b
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return err == nil && b != nil
+	}, time.Second, time.Millisecond)
 	require.NoError(t, err)
 	require.NotNil(t, b)
 	return b
@@ -130,6 +127,7 @@ func TestGlobalClientGC_RegisterUnregister(t *testing.T) {
 
 func TestGlobalClientGC_GCIdleLoop(t *testing.T) {
 	mgr := newClientGCManager()
+	defer mgr.stop()
 
 	// Create a client with idle duration
 	c, err := NewClient("test-client",
@@ -151,35 +149,27 @@ func TestGlobalClientGC_GCIdleLoop(t *testing.T) {
 	tb.activeTime = time.Now().Add(-time.Second * 2)
 	tb.RWMutex.Unlock()
 
-	// Wait for GC to run (ticker is 10 seconds, but we can trigger manually)
-	// Since we can't easily test the ticker, we'll test the doGCIdle method directly
-	time.Sleep(time.Millisecond * 50)
+	// Bypass the ticker: doGCIdle owns the cleanup operation and scans
+	// synchronously when invoked directly.
 	mgr.doGCIdle()
-
-	// Wait a bit for cleanup
-	time.Sleep(time.Millisecond * 50)
 
 	// Verify backend was closed
 	client.mu.Lock()
 	backends := client.mu.backends["b1"]
 	client.mu.Unlock()
 
-	// Backend should be removed if it was idle
-	tb.RWMutex.RLock()
-	closed := tb.closed
-	tb.RWMutex.RUnlock()
+	assert.Empty(t, backends, "idle backend should be removed")
+	require.Eventually(t, func() bool {
+		tb.RWMutex.RLock()
+		defer tb.RWMutex.RUnlock()
+		return tb.closed
+	}, time.Second, time.Millisecond)
 
-	// The backend should be closed if it was idle
-	if len(backends) == 0 {
-		assert.True(t, closed, "idle backend should be closed")
-	}
-
-	mgr.unregister(client)
-	mgr.stop()
 }
 
 func TestGlobalClientGC_GCInactiveLoop(t *testing.T) {
 	mgr := newClientGCManager()
+	defer mgr.stop()
 
 	c, err := NewClient("test-client", newTestBackendFactory(), WithClientEnableAutoCreateBackend())
 	require.NoError(t, err)
@@ -201,23 +191,18 @@ func TestGlobalClientGC_GCInactiveLoop(t *testing.T) {
 	// Trigger GC inactive
 	mgr.triggerGCInactive(client, "b1")
 
-	// Wait for processing
-	time.Sleep(time.Millisecond * 100)
+	// Verify the asynchronous worker reaches the terminal removal state.
+	require.Eventually(t, func() bool {
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		return len(client.mu.backends["b1"]) == 0
+	}, time.Second, time.Millisecond)
 
-	// Verify backend was removed
-	client.mu.Lock()
-	backends := client.mu.backends["b1"]
-	client.mu.Unlock()
-
-	// Backend should be removed
-	assert.Equal(t, 0, len(backends), "inactive backend should be removed")
-
-	mgr.unregister(client)
-	mgr.stop()
 }
 
 func TestGlobalClientGC_CreateLoop(t *testing.T) {
 	mgr := newClientGCManager()
+	defer mgr.stop()
 
 	c, err := NewClient("test-client",
 		newTestBackendFactory(),
@@ -238,17 +223,13 @@ func TestGlobalClientGC_CreateLoop(t *testing.T) {
 	// Trigger create
 	triggerCreateForTest(mgr, client, "b1")
 
-	// Wait for processing
-	time.Sleep(time.Millisecond * 100)
+	// Verify the asynchronous worker publishes the backend.
+	require.Eventually(t, func() bool {
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		return len(client.mu.backends["b1"]) == 1
+	}, time.Second, time.Millisecond)
 
-	// Verify backend was created
-	client.mu.Lock()
-	backends = client.mu.backends["b1"]
-	client.mu.Unlock()
-	assert.Equal(t, 1, len(backends), "backend should be created")
-
-	mgr.unregister(client)
-	mgr.stop()
 }
 
 func TestGlobalClientGC_CreateWorkersBoundFactoryConcurrency(t *testing.T) {
@@ -634,21 +615,18 @@ func TestGlobalClientGC_ChannelFull(t *testing.T) {
 		triggerCreateForTest(mgr, client, "b1")
 	}
 
-	// Should not block or panic
-	time.Sleep(time.Millisecond * 50)
-
 	mgr.unregister(client)
 	mgr.stop()
 }
 
 func TestGlobalClientGC_UnregisteredClientIgnored(t *testing.T) {
 	mgr := newClientGCManager()
-
-	c, err := NewClient("test-client", newTestBackendFactory())
+	defer mgr.stop()
+	factory := newTestBackendFactory()
+	c, err := NewClient("test-client", factory)
 	require.NoError(t, err)
-	defer c.Close()
-
 	client := c.(*client)
+	t.Cleanup(func() { assert.NoError(t, c.Close()) })
 
 	// Register and then unregister
 	mgr.register(client)
@@ -656,20 +634,28 @@ func TestGlobalClientGC_UnregisteredClientIgnored(t *testing.T) {
 
 	// Try to trigger GC on unregistered client
 	mgr.triggerGCInactive(client, "b1")
-	triggerCreateForTest(mgr, client, "b1")
+	client.mu.Lock()
+	generation := client.backendGenerationLocked("b1")
+	client.mu.Unlock()
+	state, admitted := mgr.triggerCreateAtGenerationState(client, "b1", generation)
+	require.True(t, admitted)
+	require.NotNil(t, state)
+	select {
+	case <-state.done:
+	case <-time.After(time.Second):
+		t.Fatal("unregistered create request did not complete")
+	}
 
-	// Wait a bit
-	time.Sleep(time.Millisecond * 100)
+	factory.RLock()
+	attempts := factory.id
+	factory.RUnlock()
+	require.Zero(t, attempts, "unregistered client must not enter the factory")
 
 	// Should not process requests for unregistered client
 	client.mu.Lock()
 	backends := client.mu.backends["b1"]
 	client.mu.Unlock()
-
-	// No backend should be created since client is unregistered
-	assert.Equal(t, 0, len(backends))
-
-	mgr.stop()
+	require.Empty(t, backends)
 }
 
 func TestGlobalClientGC_Stop(t *testing.T) {
@@ -700,6 +686,7 @@ func TestGlobalClientGC_Stop(t *testing.T) {
 
 func TestGlobalClientGC_GCIdleRespectsMaxIdleDuration(t *testing.T) {
 	mgr := newClientGCManager()
+	defer mgr.stop()
 
 	// Create client without maxIdleDuration (should not GC)
 	c1, err := NewClient("test-client-1", newTestBackendFactory(), WithClientEnableAutoCreateBackend())
@@ -744,9 +731,6 @@ func TestGlobalClientGC_GCIdleRespectsMaxIdleDuration(t *testing.T) {
 	// Run GC
 	mgr.doGCIdle()
 
-	// Wait a bit
-	time.Sleep(time.Millisecond * 50)
-
 	// Client1 should not GC (no maxIdleDuration)
 	client1.mu.Lock()
 	backends1 := client1.mu.backends["b1"]
@@ -754,15 +738,18 @@ func TestGlobalClientGC_GCIdleRespectsMaxIdleDuration(t *testing.T) {
 
 	// Client2 should GC (has maxIdleDuration)
 	client2.mu.Lock()
-	_ = client2.mu.backends["b2"]
+	backends2 := client2.mu.backends["b2"]
 	client2.mu.Unlock()
 
 	// Client1 should still have backend (no GC)
 	assert.Greater(t, len(backends1), 0, "client without maxIdleDuration should not GC")
+	assert.Empty(t, backends2, "client with maxIdleDuration should GC idle backend")
+	require.Eventually(t, func() bool {
+		tb2.RWMutex.RLock()
+		defer tb2.RWMutex.RUnlock()
+		return tb2.closed
+	}, time.Second, time.Millisecond)
 
-	mgr.unregister(client1)
-	mgr.unregister(client2)
-	mgr.stop()
 }
 
 func TestGlobalClientGC_Integration(t *testing.T) {
@@ -799,11 +786,6 @@ func TestGlobalClientGC_Integration(t *testing.T) {
 	client.mu.Unlock()
 	assert.Greater(t, len(backends), 0, "backend should be created")
 
-	// Wait for idle GC
-	time.Sleep(time.Millisecond * 300)
-
-	// Backend might be GC'd if idle, but that's OK
-	// No need to check as the test just verifies the integration works
 }
 
 func TestGlobalClientGC_StressTest(t *testing.T) {
@@ -1195,6 +1177,7 @@ func TestGlobalClientGC_CloseIdleBackendsOnClosedClient(t *testing.T) {
 		WithClientMaxBackendMaxIdleDuration(time.Millisecond*10),
 		WithClientEnableAutoCreateBackend())
 	require.NoError(t, err)
+	defer c.Close()
 
 	client := c.(*client)
 
@@ -1220,6 +1203,7 @@ func TestGlobalClientGC_DoRemoveInactiveOnClosedClient(t *testing.T) {
 	c, err := NewClient("test-client", newTestBackendFactory(),
 		WithClientEnableAutoCreateBackend())
 	require.NoError(t, err)
+	defer c.Close()
 
 	client := c.(*client)
 
@@ -1251,6 +1235,13 @@ func TestGlobalClientGC_CreateOnClosedClient(t *testing.T) {
 
 	client := c.(*client)
 	mgr.register(client)
+	defer func() {
+		mgr.stop()
+		client.mu.Lock()
+		client.mu.closed = false
+		client.mu.Unlock()
+		c.Close()
+	}()
 
 	// Close the client but keep it registered (simulates race condition)
 	client.mu.Lock()
@@ -1258,10 +1249,7 @@ func TestGlobalClientGC_CreateOnClosedClient(t *testing.T) {
 	client.mu.Unlock()
 
 	// Trigger create - should be safely ignored
-	triggerCreateForTest(mgr, client, "b1")
-
-	// Give time for the create loop to process
-	time.Sleep(time.Millisecond * 50)
+	require.False(t, triggerCreateForTest(mgr, client, "b1"))
 
 	// Verify no backends were created (client was closed)
 	client.mu.Lock()
@@ -1269,18 +1257,8 @@ func TestGlobalClientGC_CreateOnClosedClient(t *testing.T) {
 	client.mu.Unlock()
 	assert.Equal(t, 0, len(backends), "no backends should be created for closed client")
 
-	mgr.unregister(client)
-	mgr.stop()
-
-	// Properly close the client
-	client.mu.Lock()
-	client.mu.closed = false // Reset for proper Close()
-	client.mu.Unlock()
-	c.Close()
 }
 
-// TestGlobalClientGC_RaceConditionSimulation simulates the exact race condition
-// that was fixed: GC goroutine accessing client while it's being closed.
 func TestGlobalClientGC_RaceConditionSimulation(t *testing.T) {
 	const numIterations = 100
 

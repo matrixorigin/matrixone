@@ -497,7 +497,7 @@ SELECT data_type, column_type
 FROM information_schema.columns
 WHERE table_schema = DATABASE() AND table_name = 'if_control_flow_binary_metadata' AND column_name = 'b';
 ➤ data_type[12,65535,0]  ¦  column_type[12,65535,0]  𝄀
-binary  ¦  BINARY(4)
+binary  ¦  binary(4)
 SELECT HEX(b) AS case_fixed_binary_hex FROM if_control_flow_binary_metadata;
 ➤ case_fixed_binary_hex[12,8,0]  𝄀
 61000000
@@ -510,7 +510,7 @@ FROM information_schema.columns
 WHERE table_schema = DATABASE() AND table_name = 'if_control_flow_binary_width_metadata'
 ORDER BY ordinal_position;
 ➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  ¦  column_type[12,65535,0]  𝄀
-if_b  ¦  varbinary  ¦  VARBINARY(8)  𝄀
-case_b  ¦  varbinary  ¦  VARBINARY(8)
+if_b  ¦  varbinary  ¦  varbinary(8)  𝄀
+case_b  ¦  varbinary  ¦  varbinary(8)
 DROP TABLE if_control_flow_binary_width_metadata;
 SET TIME_ZONE = "SYSTEM";

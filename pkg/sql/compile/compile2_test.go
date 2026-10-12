@@ -315,16 +315,21 @@ func TestCompileResetBeginsSQLCalcFoundRowsExecution(t *testing.T) {
 func TestMarkInsertTableScansNotLockMetaDoesNotMutateWriteTarget(t *testing.T) {
 	targetRef := &plan.ObjectRef{SchemaName: "db", ObjName: "target"}
 	sourceRef := &plan.ObjectRef{SchemaName: "db", ObjName: "source"}
+	indexRef := &plan.ObjectRef{SchemaName: "db", ObjName: "__mo_index_unique_target"}
+	indexScan := &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: indexRef}
 	targetScan := &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: targetRef}
 	sourceScan := &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: sourceRef}
 	write := &plan.Node{
 		NodeType: plan.Node_MULTI_UPDATE,
 		UpdateCtxList: []*plan.UpdateCtx{{
 			ObjRef: targetRef,
+		}, {
+			ObjRef: indexRef,
 		}},
 	}
 	query := &plan.Query{Nodes: []*plan.Node{
 		targetScan,
+		indexScan,
 		sourceScan,
 		{NodeType: plan.Node_TABLE_SCAN},
 		write,
@@ -333,6 +338,10 @@ func TestMarkInsertTableScansNotLockMetaDoesNotMutateWriteTarget(t *testing.T) {
 	markInsertTableScansNotLockMeta(query)
 
 	require.NotSame(t, targetRef, targetScan.ObjRef)
+	require.NotSame(t, indexRef, indexScan.ObjRef)
+	require.True(t, indexScan.ObjRef.NotLockMeta)
+	require.False(t, indexRef.NotLockMeta)
+	require.Same(t, indexRef, write.UpdateCtxList[1].ObjRef)
 	require.NotSame(t, sourceRef, sourceScan.ObjRef)
 	require.True(t, targetScan.ObjRef.NotLockMeta)
 	require.True(t, sourceScan.ObjRef.NotLockMeta)
@@ -342,9 +351,11 @@ func TestMarkInsertTableScansNotLockMetaDoesNotMutateWriteTarget(t *testing.T) {
 
 	c := &Compile{needLockMeta: true, lockMeta: NewLockMeta()}
 	c.appendMetaTables(targetScan.ObjRef)
+	c.appendMetaTables(indexScan.ObjRef)
+	c.appendMetaTables(write.UpdateCtxList[1].ObjRef)
 	c.appendMetaTables(sourceScan.ObjRef)
 	c.appendMetaTables(write.UpdateCtxList[0].ObjRef)
-	require.Equal(t, map[string]struct{}{"db target": {}}, c.lockMeta.metaTables)
+	require.Equal(t, map[string]struct{}{"db target": {}, "db __mo_index_unique_target": {}}, c.lockMeta.metaTables)
 }
 
 func TestSelectMetaLockRequirement(t *testing.T) {
@@ -398,8 +409,7 @@ func TestSelectMetaLockRequirement(t *testing.T) {
 		{
 			name: "rewritten fulltext plan",
 			query: &plan.Query{Nodes: []*plan.Node{{
-				NodeType:    plan.Node_FUNCTION_SCAN,
-				ProjectList: []*plan.Expr{call("fulltext_index_scan")},
+				NodeType: plan.Node_INDEX_SEARCH_SCAN,
 			}}},
 		},
 	}
@@ -551,31 +561,31 @@ func TestNodeContainsUnresolvedFullTextRuntimeSlots(t *testing.T) {
 		},
 		{
 			name: "vector query vector",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{QueryVector: match()}},
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{QueryPayload: match()}},
 		},
 		{
 			name: "vector candidate limit",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{CandidateLimit: match()}},
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{CandidateLimit: match()}},
 		},
 		{
 			name: "vector first round limit",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{FirstRoundLimit: match()}},
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{AlgoExprs: []*plan.Expr{match()}, AlgoExprNames: []string{"first_round_limit"}}},
 		},
 		{
 			name: "vector lower distance bound",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{
 				DistanceRange: &plan.DistRange{LowerBound: match()},
 			}},
 		},
 		{
 			name: "vector upper distance bound",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{
 				DistanceRange: &plan.DistRange{UpperBound: match()},
 			}},
 		},
 		{
 			name: "vector prefilter",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{PreFilters: []*plan.Expr{match()}}},
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{PreFilters: []*plan.Expr{match()}}},
 		},
 		{
 			name: "runtime filter probe expression",
@@ -605,8 +615,8 @@ func TestNodeContainsUnresolvedFullTextIgnoresSourceTableDefaults(t *testing.T) 
 		Func: &plan.ObjectRef{ObjName: "fulltext_match"},
 	}}}
 	node := &plan.Node{
-		NodeType: plan.Node_VECTOR_INDEX_SCAN,
-		VectorIndexScan: &plan.VectorIndexScan{
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		IndexSearchScan: &plan.IndexSearchScan{
 			SourceTableDef: &plan.TableDef{Cols: []*plan.ColDef{{
 				Default: &plan.Default{Expr: match},
 			}}},

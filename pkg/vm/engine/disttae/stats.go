@@ -234,7 +234,11 @@ type statsUpdateJob struct {
 }
 
 type GlobalStats struct {
-	ctx context.Context
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	closeOnce sync.Once
+	workers   sync.WaitGroup
 
 	// engine is the global Engine instance.
 	engine *Engine
@@ -312,23 +316,42 @@ type GlobalStats struct {
 }
 
 func NewGlobalStats(
-	ctx context.Context, e *Engine, keyRouter client.KeyRouter[pb.StatsInfoKey], opts ...GlobalStatsOption,
+	ctx context.Context,
+	e *Engine,
+	keyRouter client.KeyRouter[pb.StatsInfoKey],
+	publish func(*GlobalStats),
+	opts ...GlobalStatsOption,
 ) *GlobalStats {
+	if publish == nil {
+		panic("global stats requires an owner")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ownerCtx, cancel := context.WithCancel(ctx)
 	s := &GlobalStats{
-		ctx:          ctx,
+		ctx:          ownerCtx,
+		cancel:       cancel,
 		engine:       e,
 		tailC:        make(chan *logtail.TableLogtail, 10000),
 		updateC:      make(chan statsUpdateJob, 3000),
 		KeyRouter:    keyRouter,
 		queueWatcher: newQueueWatcher(),
 	}
+	constructed := false
+	defer func() {
+		if !constructed {
+			s.Close()
+		}
+	}()
+	publish(s)
 	s.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
 	s.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
 	s.mu.tableDefVersions = make(map[pb.StatsInfoKey]uint32)
 	s.mu.cond = sync.NewCond(&s.mu)
 	// One lifecycle callback wakes every current waiter when update workers
 	// stop. Register it once per GlobalStats rather than once per cache miss.
-	context.AfterFunc(ctx, s.notifyStatsWaiters)
+	context.AfterFunc(ownerCtx, s.notifyStatsWaiters)
 	s.initStatsRefreshAdmission()
 	for _, opt := range opts {
 		opt(s)
@@ -354,17 +377,41 @@ func NewGlobalStats(
 	// Calculate updateWorker concurrency: executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
 	updateWorkerConcurrency := max(executorConcurrency/WorkerConcurrencyRatio, MinWorkerConcurrency)
 	s.concurrentExecutor = newConcurrentExecutor(executorConcurrency)
-	s.concurrentExecutor.Run(ctx)
-	go s.logtailConsumer(ctx)
-	s.spawnUpdateWorkers(ctx, updateWorkerConcurrency) // updateWorker内部已启动goroutines，不需要再用go
-	go s.queueWatcher.run(ctx)
+	s.concurrentExecutor.Run(ownerCtx)
+	s.workers.Add(1)
+	go func() {
+		defer s.workers.Done()
+		s.logtailConsumer(ownerCtx)
+	}()
+	s.spawnUpdateWorkers(ownerCtx, updateWorkerConcurrency) // updateWorker内部已启动goroutines，不需要再用go
+	s.workers.Add(1)
+	go func() {
+		defer s.workers.Done()
+		s.queueWatcher.run(ownerCtx)
+	}()
 	logutil.Info(
 		"GlobalStats-Started",
 		zap.Int("exector-num", executorConcurrency),
 		zap.Int("worker-num", updateWorkerConcurrency),
 		zap.Int("worker-factor", s.updateWorkerFactor),
 	)
+	constructed = true
 	return s
+}
+
+// Close cancels statistics producers and joins every root and queued-task
+// completion callback owned by this GlobalStats instance.
+func (gs *GlobalStats) Close() {
+	gs.closeOnce.Do(func() {
+		if gs.cancel != nil {
+			gs.cancel()
+		}
+		gs.notifyStatsWaiters()
+		gs.workers.Wait()
+		if waiter, ok := gs.concurrentExecutor.(interface{ Wait() }); ok {
+			waiter.Wait()
+		}
+	})
 }
 
 func (gs *GlobalStats) initStatsRefreshAdmission() {
@@ -831,7 +878,14 @@ func (gs *GlobalStats) waitForStatsUpdate(
 }
 
 func (gs *GlobalStats) enqueue(tail *logtail.TableLogtail) {
+	if gs.ctx != nil {
+		if cause := context.Cause(gs.ctx); cause != nil {
+			return
+		}
+	}
 	select {
+	case <-gs.lifecycleDone():
+		return
 	case gs.tailC <- tail:
 	default:
 		logutil.Errorf("the channel of logtails is full")
@@ -851,8 +905,10 @@ func (gs *GlobalStats) logtailConsumer(ctx context.Context) {
 }
 
 func (gs *GlobalStats) spawnUpdateWorkers(ctx context.Context, num int) {
+	gs.workers.Add(num)
 	for range num {
 		go func() {
+			defer gs.workers.Done()
 			for {
 				select {
 				case <-ctx.Done():
@@ -876,6 +932,9 @@ func (gs *GlobalStats) enqueueStatsUpdateForRecord(
 	expectedRecord *updateRecord,
 ) bool {
 	if expectedRecord == nil {
+		return false
+	}
+	if cause := gs.statsRefreshCancellationCause(key.Ctx); cause != nil {
 		return false
 	}
 	defer func() {
@@ -907,6 +966,11 @@ func (gs *GlobalStats) enqueueStatsUpdateForRecord(
 	}
 
 	select {
+	case <-gs.lifecycleDone():
+		if gs.unregisterStatsUpdateJob(key.Key, expectedRecord) {
+			gs.notifyStatsWaiters()
+		}
+		return false
 	case gs.updateC <- job:
 		gs.queueWatcher.add(key.Key.TableID)
 		v2.StatsTriggerUnforcedCounter.Add(1)

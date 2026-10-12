@@ -21,7 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-const retainedWriteCacheBytes = int64(256 << 10)
+const (
+	retainedWriteCacheBytes = int64(256 << 10)
+	writebackBatchBytes     = retainedWriteCacheBytes / 2
+)
 
 var errInvalidSequentialWrite = moerr.NewInternalErrorNoCtx("invalid sequential spill write")
 
@@ -30,25 +33,38 @@ var errInvalidSequentialWrite = moerr.NewInternalErrorNoCtx("invalid sequential 
 // of the contract; completed ranges only need to become clean before the
 // kernel is advised that their cache pages can be reclaimed.
 type SequentialWriteCache struct {
-	written int64
-	dropped int64
+	written   int64
+	submitted int64
+	dropped   int64
 }
 
-// RecordWrite advances one successful sequential write. The newest bounded
-// tail remains cached so small appends can coalesce in the kernel; older ranges
-// are written back and made immediately reclaimable.
+// RecordWrite advances one successful sequential write. Small appends accumulate
+// before submitting a contiguous batch for writeback. Keep a second batch in the
+// bounded window so writing can overlap the previous batch's I/O, and wait/drop
+// only when reclaiming an older batch is necessary to maintain the bound.
 func (c *SequentialWriteCache) RecordWrite(file *os.File, size int) error {
 	if c == nil || file == nil || size <= 0 || c.written < 0 || c.dropped < 0 ||
-		c.dropped > c.written || int64(size) > math.MaxInt64-c.written {
+		c.submitted < c.dropped || c.submitted > c.written ||
+		int64(size) > math.MaxInt64-c.written {
 		return errInvalidSequentialWrite
 	}
-	start := c.written
 	c.written += int64(size)
-	startWriteback(file, start, int64(size))
+	pageSize := int64(os.Getpagesize())
+	if c.written-c.submitted >= writebackBatchBytes {
+		submitEnd := c.written - c.written%pageSize
+		startWriteback(file, c.submitted, submitEnd-c.submitted)
+		c.submitted = submitEnd
+	}
 	if c.written-c.dropped <= retainedWriteCacheBytes {
 		return nil
 	}
+	// DONTNEED ignores partial pages. Advance only over whole pages so an
+	// unaligned record boundary cannot strand a cached page at every flush.
+	// Round up to reclaim a whole batch rather than waiting on every append.
 	dropEnd := c.written - retainedWriteCacheBytes
+	if remainder := dropEnd % writebackBatchBytes; remainder != 0 {
+		dropEnd += writebackBatchBytes - remainder
+	}
 	finishWritebackAndDrop(file, c.dropped, dropEnd-c.dropped)
 	c.dropped = dropEnd
 	return nil
@@ -61,6 +77,7 @@ func (c *SequentialWriteCache) Finish(file *os.File) {
 		return
 	}
 	finishWritebackAndDrop(file, c.dropped, c.written-c.dropped)
+	c.submitted = c.written
 	c.dropped = c.written
 }
 

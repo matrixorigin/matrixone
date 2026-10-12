@@ -14,10 +14,10 @@ Tables_in_alter_table_rename_new_synax
 staff
 desc staff;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO    PRI    null    auto_increment    
-first_name    VARCHAR(50)    NO        null        
-last_name    VARCHAR(50)    NO        null        
-department    VARCHAR(50)    YES        null        
+id    int    NO    PRI    null    auto_increment    
+first_name    varchar(50)    NO        null        
+last_name    varchar(50)    NO        null        
+department    varchar(50)    YES        null        
 drop table employees;
 no such table alter_table_rename_new_synax.employees
 drop table staff;
@@ -39,10 +39,10 @@ Tables_in_test
 staff
 desc staff;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO    PRI    null    auto_increment    
-first_name    VARCHAR(50)    NO        null        
-last_name    VARCHAR(50)    NO        null        
-department    VARCHAR(50)    YES        null        
+id    int    NO    PRI    null    auto_increment    
+first_name    varchar(50)    NO        null        
+last_name    varchar(50)    NO        null        
+department    varchar(50)    YES        null        
 drop database test;
 create database test;
 use test;

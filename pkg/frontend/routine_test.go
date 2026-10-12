@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -46,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -2409,6 +2411,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 		panic(fmt.Sprintf("there is no mysqlResultset for the sql %s", sql))
 	}
 	uuid, _ := uuid.NewV7()
+	var execCtx *ExecCtx
 	runner := mock_frontend.NewMockComputationRunner(ctrl)
 	runner.EXPECT().Run(gomock.Any()).DoAndReturn(func(uint64) (*util.RunResult, error) {
 		proto := ses.GetResponser().MysqlRrWr()
@@ -2429,6 +2432,13 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 					res.resultX.Store(contextCancel)
 				}
 			}
+			// This fake writes prebuilt rows directly rather than through the
+			// pipeline callback, so it must honor the same metadata boundary.
+			if mrs.GetRowCount() > 0 && execCtx.resultMetadata != nil {
+				if err = execCtx.resultMetadata.publish(); err != nil {
+					return nil, err
+				}
+			}
 			err = proto.WriteResultSetRow(mrs, mrs.GetRowCount())
 			if err != nil {
 				logutil.Errorf("flush error %v", err)
@@ -2441,7 +2451,10 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	mcw.EXPECT().GetAst().Return(stmt).AnyTimes()
 	mcw.EXPECT().GetProcess().Return(proc).AnyTimes()
 	mcw.EXPECT().GetColumns(gomock.Any()).Return(columns, nil).AnyTimes()
-	mcw.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
+	mcw.EXPECT().Compile(gomock.Any(), gomock.Any()).DoAndReturn(func(ec any, _ func(*batch.Batch, *perfcounter.CounterSet) error) (any, error) {
+		execCtx = ec.(*ExecCtx)
+		return runner, nil
+	}).AnyTimes()
 	mcw.EXPECT().GetUUID().Return(uuid[:]).AnyTimes()
 	mcw.EXPECT().RecordExecPlan(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	mcw.EXPECT().RecordCompoundStmt(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()

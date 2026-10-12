@@ -226,18 +226,28 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag in
 }
 
 func getJoinSideWithOuterScope(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag int32) (side int8) {
+	if expr == nil {
+		return JoinSideOuter
+	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
+		if exprImpl.F == nil || exprImpl.F.Func == nil {
+			return JoinSideOuter
+		}
 		for _, arg := range exprImpl.F.Args {
 			side |= getJoinSideWithOuterScope(arg, leftTags, rightTags, markTag)
 		}
-
 	case *plan.Expr_List:
+		if exprImpl.List == nil {
+			return JoinSideOuter
+		}
 		for _, arg := range exprImpl.List.List {
 			side |= getJoinSideWithOuterScope(arg, leftTags, rightTags, markTag)
 		}
-
 	case *plan.Expr_Col:
+		if exprImpl.Col == nil {
+			return JoinSideOuter
+		}
 		tag := exprImpl.Col.RelPos
 		if leftTags[tag] {
 			side = JoinSideLeft
@@ -248,11 +258,14 @@ func getJoinSideWithOuterScope(expr *plan.Expr, leftTags, rightTags map[int32]bo
 		} else {
 			side = JoinSideOuter
 		}
-
 	case *plan.Expr_Corr:
 		side = JoinSideCorrelated
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T, *plan.Expr_Vec, *plan.Expr_Fold:
+		// Literal.Src records provenance, not an executable column dependency.
+	default:
+		// Unbound or non-scalar forms cannot prove single-input evaluation.
+		side = JoinSideOuter
 	}
-
 	return
 }
 
@@ -3055,10 +3068,14 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) error {
 
 	fpath := GetFilePathFromParam(param)
+	if param.StageFilepath != "" {
+		fpath = param.StageFilepath
+	}
 
 	if !strings.HasPrefix(fpath, stage.STAGE_PROTOCOL+"://") {
 		return InitInfileParam(param)
 	}
+	param.StageFilepath = fpath
 
 	s, err := stageutil.UrlToStageDef(fpath, proc)
 	if err != nil {
@@ -3072,6 +3089,8 @@ func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) erro
 	if s.Url.Scheme == stage.S3_PROTOCOL {
 		return InitStageS3Param(param, s)
 	} else if s.Url.Scheme == stage.FILE_PROTOCOL {
+		param.ScanType = tree.INFILE
+		param.S3Param = nil
 
 		err := InitInfileParam(param)
 		if err != nil {
@@ -5295,7 +5314,7 @@ func collectPreparedJSONComparisonParamPositions(
 			for i, arg := range impl.F.Args {
 				valueArg := functionName == "json_array" ||
 					(functionName == "json_object" && i%2 == 1) ||
-					((functionName == "json_set" || functionName == "json_insert" || functionName == "json_replace" || functionName == "json_array_append") && i >= 2 && i%2 == 0)
+					((functionName == "json_set" || functionName == "json_insert" || functionName == "json_replace" || functionName == "json_array_append" || functionName == "json_array_insert") && i >= 2 && i%2 == 0)
 				if valueArg {
 					if param := arg.GetP(); param != nil {
 						positions[param.Pos] = struct{}{}
@@ -8225,7 +8244,7 @@ func refreshPreparedPlanProjectionTypes(
 				return plan.Type{}, false
 			}
 			switch node.NodeType {
-			case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN, plan.Node_VECTOR_QUERY_SOURCE:
+			case plan.Node_FUNCTION_SCAN, plan.Node_INDEX_SEARCH_SCAN, plan.Node_VECTOR_QUERY_SOURCE:
 				// These scans project their own result schema. A child supplies
 				// function inputs (for example a query vector), not output columns.
 				if col.RelPos == 0 && node.TableDef != nil && int(col.ColPos) < len(node.TableDef.Cols) &&

@@ -221,8 +221,13 @@ func TestBoolNumericAggregateScopeIsUnchanged(t *testing.T) {
 			require.NoError(t, err, mode.name)
 			require.Equal(t, []types.T{types.T_int32}, aggregateArgTypes(t, p), mode.name)
 
-			_, err = buildOneQuery(t, ctx, "select sum(n_name) from nation", mode.prepare)
-			require.Error(t, err, "%s: a VARCHAR argument must still be rejected", mode.name)
+			stringSQL := "select sum(n_name) from nation"
+			onPlan, err := buildOneQuery(t, ctx, stringSQL, mode.prepare)
+			require.NoError(t, err, mode.name)
+			offPlan, err := buildOneQuery(t, boolSumAvgMockContext(t, false), stringSQL, mode.prepare)
+			require.NoError(t, err, mode.name)
+			require.Equal(t, []types.T{types.T_float64}, aggregateArgTypes(t, onPlan), mode.name)
+			require.Equal(t, offPlan.String(), onPlan.String(), "BOOL mode must not affect string coercion")
 		}
 	})
 

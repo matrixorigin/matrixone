@@ -20,8 +20,10 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -129,6 +131,18 @@ func TestCompare(t *testing.T) {
 	}
 }
 
+func TestNewOrderUsesPlanUnicodeTypeWhenVectorMetadataIsPhysical(t *testing.T) {
+	mp := mpool.MustNewZero()
+	physical := vector.NewVec(types.T_varchar.ToType())
+	defer physical.Free(mp)
+	require.NoError(t, vector.AppendStringList(physical, []string{"A", "a"}, nil, mp))
+	semantic := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	c := NewOrder(semantic, false, false)
+	c.Set(0, physical)
+	c.Set(1, physical)
+	require.Equal(t, 0, c.Compare(0, 1, 0, 1))
+}
+
 func TestNewOrderJSONUsesSQLComparison(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_json.ToType())
@@ -166,7 +180,7 @@ func TestNewOrderJSONUsesSQLComparison(t *testing.T) {
 
 func TestJSONOrderMetadataAndCopy(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	source := vector.NewVec(types.T_json.ToType())
 	destination := vector.NewVec(types.T_json.ToType())
 	value := vector.NewVec(types.T_json.ToType())
@@ -250,7 +264,7 @@ func TestCopyGrowsAccountedRowMetadata(t *testing.T) {
 		for _, metadata := range []string{"null", "const-null", "grouping"} {
 			t.Run(tc.name+"/"+metadata, func(t *testing.T) {
 				mp := mpool.MustNewZero()
-				proc := testutil.NewProcessWithMPool(t, "", mp)
+				proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 				registry, err := mpool.NewAllocationAccountRegistry(1, 16)
 				require.NoError(t, err)
 				account, err := registry.Open(1 << 20)
@@ -299,7 +313,7 @@ func TestCopyGrowsAccountedRowMetadata(t *testing.T) {
 
 func TestCopyAccountedNullAdmissionFailure(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
@@ -399,4 +413,46 @@ func TestBlockRowIdsCompare(t *testing.T) {
 		}
 
 	})
+}
+
+func TestDomainlessNullCompare(t *testing.T) {
+	for _, factory := range []struct {
+		name string
+		new  func(types.Type, bool, bool) Compare
+	}{{"identity", New}, {"order", NewOrder}} {
+		t.Run(factory.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			constant := vector.NewConstNull(types.T_any.ToType(), 3, mp)
+			flat := vector.NewVec(types.T_any.ToType())
+			flat.SetLength(3)
+			nulls.AddRange(flat.GetNulls(), 0, 3)
+			defer func() { constant.Free(mp); flat.Free(mp); require.Zero(t, mp.CurrNB()) }()
+			require.NoError(t, constant.SetStringSource(types.StringSourceLiteral))
+			for _, desc := range []bool{false, true} {
+				c := factory.new(types.T_any.ToType(), desc, desc)
+				require.NotNil(t, c)
+				c.Set(0, constant)
+				c.Set(1, flat)
+				require.Same(t, constant, c.Vector())
+				require.Zero(t, c.Compare(0, 1, 2, 1))
+				require.Zero(t, c.Compare(1, 0, 1, 2))
+				require.NoError(t, c.Copy(0, 1, 2, 1, proc))
+				require.True(t, flat.IsNull(1))
+				require.Equal(t, types.StringSourceLiteral, flat.GetStringSourceAt(1))
+				// ANY has no non-NULL value domain; don't broaden unsupported values.
+				nulls.Del(flat.GetNulls(), 0)
+				require.True(t, moerr.IsMoErrCode(c.Copy(1, 0, 0, 0, proc), moerr.ErrNotSupported))
+				func() {
+					defer func() {
+						e, ok := recover().(error)
+						require.True(t, ok)
+						require.True(t, moerr.IsMoErrCode(e, moerr.ErrNotSupported))
+					}()
+					c.Compare(1, 0, 0, 0)
+				}()
+				nulls.Add(flat.GetNulls(), 0)
+			}
+		})
+	}
 }

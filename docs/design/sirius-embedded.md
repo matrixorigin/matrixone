@@ -261,6 +261,8 @@ embedded selection with MO-reader input only.
 
 All PRs reference #28966; no intermediate PR auto-closes the migration.
 Numeric #28968 has its own design and PR count outside this table.
+This original map remains the historical record; the remaining sequence below
+incorporates the delivered prerequisites and the owner-approved native split.
 
 | PR | Repository | Closure | Dependencies | Merge evidence |
 | --- | --- | --- | --- | --- |
@@ -290,6 +292,47 @@ target their `main` branches. Pin MO artifacts to merged Sirius commits, not
 moving branch names. Do not mark dependent PRs ready with unresolved contracts
 or cumulative unmerged diffs. Optional later submissions of reusable patches
 to `sirius-db/sirius:dev` are outside this ten-PR count.
+
+### Remaining implementation sequence
+
+Owner-approved on 2026-10-08. MO #29547 delivers the opt-in bounded MO-reader
+bridge; Sirius #25 delivers numeric primitives. Importer #3/#4 are merged.
+These are prerequisites, not all-22 or production cutover evidence.
+
+| Order | Repository | Complete closure | Required predecessor |
+| --- | --- | --- | --- |
+| A | Sirius | Scoped exact type/literal import, immutable binding, clone fidelity and masked scalar GPU execution; capability disabled | Merged Sirius #25 and importer #4 |
+| B | Sirius | SUM/AVG/MIN/MAX, exact grouping/join/sort keys, spillable states, complete admission, statuses 12/13 and capability 16u | Merged A |
+| C | MO | Capability-scoped lowering, Decimal256 publication/reconstruction, public typed errors and query-local evidence; opt-in | Merged and pinned B |
+| D | MO | Real native-MO/embedded-MO runner, all-22 SF1/SF10 public/type/error parity, lifecycle/resource and performance acceptance | Merged C |
+| E | MO | Embedded default, Flight removal and strict configuration/recovery migration | D and all acceptance gates |
+| F | sidecar | Retire superseded MO Flight service/deployment/tests while retaining independent tools and historical records | E and verified available MO release artifact |
+
+Native A may not expose partial numeric support. Native B completes and validates
+the entire family before advertising it. C must preserve one export profile
+through validation and serialization; ordinary Flight emission remains unchanged
+during coexistence. Exact semantic approval remains MO #29449 document blob
+`42a89f09a1d168d02b9583cb3ea7b4de6dbb5634`.
+
+D versions the campaign contract around required native-MO and embedded-MO
+routes. The obsolete embedded-TAE route is not required. Equivalent Flight
+coverage is optional and explicitly recorded; unavailable comparisons are N/A,
+not incomplete results presented as full-suite evidence. The matched Flight+MO
+ratio limit remains 1.0 for common-suite metrics and Q9 where available. The
+numeric regression limit remains 10% against valid equivalent baselines.
+
+E rejects enabled legacy Flight selections and removed transport settings with
+actionable migration errors. Disabled Sirius and ordinary CPU behavior remain
+unchanged. Cutover requires authoritative replay/readiness and no unresolved
+Flight executions; a nil or unready lease manager is not proof of empty state.
+Retain GC protection until old consumers are proven quiescent. Reconciliation
+and post-removal rollback use the previous release. F waits for the actual MO
+release artifact, preserves DuckDB/TAE/HTTP and standalone Sirius tools, and
+maps useful tests to retained replacements before transport-only deletion.
+
+Close #28968 only after numeric/public/resource/performance acceptance passes;
+close #28966 only after E, release availability and F are delivered. Docker
+image/base changes remain a separate later PR.
 
 ## 9. Verification and observability
 

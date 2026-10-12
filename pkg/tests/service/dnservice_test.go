@@ -16,9 +16,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/stretchr/testify/require"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -51,4 +53,57 @@ func Test_buildTNOptions(t *testing.T) {
 	}(c)
 	// start the cluster
 	require.NoError(t, c.Start())
+}
+
+type lifecycleTN struct {
+	tnservice.Service
+	startErr error
+	closeErr error
+	closes   int
+	starts   int
+}
+
+func (s *lifecycleTN) Start() error { s.starts++; return s.startErr }
+func (s *lifecycleTN) Close() error { s.closes++; return s.closeErr }
+
+func TestTNWrapperClosesAcquiredBackend(t *testing.T) {
+	failure := errors.New("TN close incomplete")
+	for _, tc := range []struct {
+		name               string
+		status             ServiceStatus
+		startErr, closeErr error
+	}{
+		{name: "initialized", status: ServiceInitialized},
+		{name: "failed Start", status: ServiceInitialized, startErr: errors.New("start refused")},
+		{name: "incomplete Close", status: ServiceStarted, closeErr: failure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &lifecycleTN{startErr: tc.startErr, closeErr: tc.closeErr}
+			owner := &tnService{status: tc.status, svc: backend}
+			t.Cleanup(func() { _ = owner.Close() })
+			if tc.startErr != nil {
+				require.Same(t, tc.startErr, owner.Start())
+			}
+			for i := 0; i < 2; i++ {
+				require.Equal(t, tc.closeErr, owner.Close())
+			}
+			require.Equal(t, 1, backend.closes)
+			require.Error(t, owner.Start())
+			task, ok := owner.GetTaskService()
+			require.Nil(t, task)
+			require.False(t, ok)
+			if tc.closeErr == nil {
+				require.Equal(t, ServiceClosed, owner.Status())
+			} else {
+				require.Equal(t, ServiceStarted, owner.Status())
+			}
+		})
+	}
+}
+
+func TestLogWrapperCloseBeforeStartIsTerminal(t *testing.T) {
+	owner := &logService{status: ServiceInitialized}
+	require.NoError(t, owner.Close())
+	require.Equal(t, ServiceClosed, owner.Status())
+	require.NoError(t, owner.Close())
 }

@@ -464,7 +464,7 @@ func testTopSpillOutputUsesRowAndByteBounds(t *testing.T, limit int, orderedOutp
 
 func TestTopSpillPrepareParamMetadata(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	arg := &Top{
 		Limit: plan2.MakePlan2Uint64ConstExprWithType(topSpillThreshold + 1),
 		Fs: []*plan.OrderBySpec{{
@@ -586,7 +586,7 @@ func TestTopSpillWriteHonorsCancellationAfterInputBatch(t *testing.T) {
 }
 
 func TestTopSpillBatchCancellationBeforeWrite(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseCtx := proc.Ctx
 	arg := &Top{}
 	arg.ctr.n = 1
@@ -614,7 +614,7 @@ func TestTopSpillBatchCancellationBeforeWrite(t *testing.T) {
 }
 
 func TestTopSpillBatchRejectsShortWrite(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &Top{}
 	arg.ctr.n = 1
 	arg.ctr.spillWriter = shortTopSpillWriter{}
@@ -634,7 +634,7 @@ func TestTopSpillBatchRejectsShortWrite(t *testing.T) {
 }
 
 func TestTopSpillBatchCancellationAfterWrite(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseCtx := proc.Ctx
 	arg := &Top{}
 	arg.ctr.n = 1
@@ -671,7 +671,7 @@ func TestTopSpillEvalCancellationCheckpoints(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			arg := &Top{}
 			arg.ctr.n = 1
 			analyzer := process.NewAnalyzer(0, false, false, "top-cancel-eval")

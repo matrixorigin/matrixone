@@ -91,16 +91,39 @@ type CCPRTxnCache struct {
 	// markerCleanupRunning bounds opportunistic foreground marker release to
 	// one detached operation. When busy, durable TN replay remains the owner.
 	markerCleanupRunning atomic.Bool
+
+	lifecycleMu sync.Mutex
+	ctx         context.Context
+	cancel      context.CancelFunc
+	closeOnce   sync.Once
+	closed      atomic.Bool
+	workers     sync.WaitGroup
 }
 
 // NewCCPRTxnCache creates a new CCPRTxnCache instance
 func NewCCPRTxnCache(gcPool *ants.Pool, fs fileservice.FileService) *CCPRTxnCache {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &CCPRTxnCache{
 		items:    btree.NewBTreeG(ItemEntry.Less),
 		txnIndex: btree.NewBTreeG(TxnIndexEntry.Less),
 		gcPool:   gcPool,
 		fs:       fs,
+		ctx:      ctx,
+		cancel:   cancel,
 	}
+}
+
+func (c *CCPRTxnCache) Close() {
+	c.closeOnce.Do(func() {
+		c.lifecycleMu.Lock()
+		c.closed.Store(true)
+		cancel := c.cancel
+		c.lifecycleMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		c.workers.Wait()
+	})
 }
 
 // WriteObject checks if an object needs to be written and registers it with the given transaction ID.
@@ -548,14 +571,21 @@ func (c *CCPRTxnCache) scheduleCleanupMarkerDeletion(markers []string) {
 	if len(filtered) == 0 {
 		return
 	}
-	if !c.markerCleanupRunning.CompareAndSwap(false, true) {
+	c.lifecycleMu.Lock()
+	if c.closed.Load() ||
+		!c.markerCleanupRunning.CompareAndSwap(false, true) {
+		c.lifecycleMu.Unlock()
 		return
 	}
+	c.workers.Add(1)
+	ownerCtx := c.ctx
+	c.lifecycleMu.Unlock()
 	owned := append([]string(nil), filtered...)
 	go func() {
+		defer c.workers.Done()
 		defer c.markerCleanupRunning.Store(false)
 		ctx, cancel := context.WithTimeoutCause(
-			context.Background(), ccprObjectCleanupTimeout,
+			ownerCtx, ccprObjectCleanupTimeout,
 			moerr.CauseCleanUpUselessFiles)
 		defer cancel()
 		if deleteErr := c.fs.Delete(ctx, owned...); deleteErr != nil &&

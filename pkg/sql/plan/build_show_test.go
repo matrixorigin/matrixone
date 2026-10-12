@@ -38,6 +38,8 @@ func TestCoverage_buildShowGrants_ForUser(t *testing.T) {
 	// The mock optimizer doesn't have mo_user_grant table, so this should fail with a known error
 	sqls := []string{
 		"show grants for 'testuser'@'localhost'",
+		"show grants for current_user",
+		"show grants for current_user()",
 	}
 	// This is expected to fail in mock because mo_user_grant doesn't exist
 	for _, sql := range sqls {
@@ -175,35 +177,28 @@ func TestShowKeysUsesMySQLIndexOrder(t *testing.T) {
 			}
 			require.Len(t, sortNodes, 1)
 			require.Len(t, sortNodes[0].GetOrderBy(), 3)
-			nodes := logicPlan.GetQuery().GetNodes()
-			resolveSortExpr := func(spec *plan.OrderBySpec) *plan.Expr {
-				expr := spec.GetExpr()
-				nodeID := sortNodes[0].GetChildren()[0]
-				for step := 0; step < len(nodes); step++ {
-					col := expr.GetCol()
-					if col == nil || col.GetRelPos() != 0 || col.GetColPos() < 0 || int(col.GetColPos()) >= len(nodes[nodeID].GetProjectList()) {
-						break
-					}
-					expr = nodes[nodeID].GetProjectList()[col.GetColPos()]
-					children := nodes[nodeID].GetChildren()
-					if len(children) == 0 {
-						break
-					}
-					nodeID = children[0]
+			// The Expression output introduces a projection below SORT. Resolve
+			// its column references rather than requiring expressions inline.
+			require.Len(t, sortNodes[0].Children, 1)
+			child := logicPlan.GetQuery().GetNodes()[sortNodes[0].Children[0]]
+			orderExpr := func(i int) *plan.Expr {
+				expr := sortNodes[0].GetOrderBy()[i].GetExpr()
+				if child.NodeType == plan.Node_PROJECT && expr.GetCol() != nil {
+					pos := int(expr.GetCol().ColPos)
+					require.GreaterOrEqual(t, pos, 0)
+					require.Less(t, pos, len(child.ProjectList))
+					return child.ProjectList[pos]
 				}
 				return expr
 			}
-			firstOrderExpr := resolveSortExpr(sortNodes[0].GetOrderBy()[0])
-			require.NotNil(t, firstOrderExpr.GetF())
-			require.Equal(t, "case", firstOrderExpr.GetF().GetFunc().GetObjName())
-			secondOrderExpr := resolveSortExpr(sortNodes[0].GetOrderBy()[1])
-			if secondOrderExpr.GetF() != nil {
-				require.Equal(t, "MIN(idx.id)", secondOrderExpr.GetF().GetFunc().GetObjName())
-			} else {
-				require.Equal(t, "MIN(idx.id)", secondOrderExpr.GetCol().GetName())
-			}
-			thirdOrderExpr := resolveSortExpr(sortNodes[0].GetOrderBy()[2])
-			require.Equal(t, "idx.ordinal_position", thirdOrderExpr.GetCol().GetName())
+			class := orderExpr(0).GetF()
+			require.Equal(t, "case", class.GetFunc().GetObjName())
+			require.Len(t, class.Args, 5)
+			require.Equal(t, int64(0), class.Args[1].GetLit().GetI64Val())
+			require.Equal(t, int64(1), class.Args[3].GetLit().GetI64Val())
+			require.Equal(t, int64(2), class.Args[4].GetLit().GetI64Val())
+			require.Equal(t, "MIN(idx.id)", orderExpr(1).GetCol().GetName())
+			require.Equal(t, "idx.ordinal_position", orderExpr(2).GetCol().GetName())
 		})
 	}
 }

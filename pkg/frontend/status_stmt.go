@@ -81,7 +81,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 				return
 			}
-			if err = finalizePerformQueryResult(execCtx); err != nil {
+			if err = finalizeQueryResult(execCtx); err != nil {
 				return
 			}
 			queryResultFinalized = true

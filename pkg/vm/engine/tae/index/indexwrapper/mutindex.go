@@ -189,7 +189,7 @@ func (idx *MutIndex) GetDuplicatedRows(
 		var maxRow uint32
 		exist := false
 		for i := len(rows) - 1; i >= 0; i-- {
-			if int32(rows[i]) <= minVisibleRow {
+			if int32(rows[i]) < minVisibleRow {
 				break
 			}
 			if int32(rows[i]) < maxVisibleRow {

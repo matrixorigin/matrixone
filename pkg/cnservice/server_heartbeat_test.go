@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -39,6 +40,7 @@ type blockingCNHeartbeatCommandClient struct {
 	heartbeatReentered chan struct{}
 	pollEntered        chan struct{}
 	heartbeatCalls     atomic.Int32
+	heartbeatSnapshots chan pb.CNStoreHeartbeat
 	commandBatch       pb.CommandBatch
 }
 
@@ -194,6 +196,13 @@ func (c *blockingCNHeartbeatCommandClient) SendCNHeartbeat(
 	ctx context.Context,
 	hb pb.CNStoreHeartbeat,
 ) (pb.CommandBatch, error) {
+	if c.heartbeatSnapshots != nil {
+		select {
+		case c.heartbeatSnapshots <- hb:
+		case <-ctx.Done():
+			return pb.CommandBatch{}, ctx.Err()
+		}
+	}
 	if c.heartbeatCalls.Add(1) == 1 {
 		close(c.heartbeatEntered)
 		select {
@@ -310,6 +319,75 @@ func TestWithdrawViewMetadataAdmissionFailureIsNotCleanHandoff(t *testing.T) {
 		}
 		require.ErrorIs(t, s.withdrawViewMetadataAdmission(), context.DeadlineExceeded)
 	})
+}
+
+func TestCNHeartbeatPublishesCatalogFenceWhileHeartbeatIsInFlight(t *testing.T) {
+	conf := &Config{UUID: "catalog-fence-wakeup-cn"}
+	conf.HAKeeper.HeatbeatInterval.Duration = time.Hour
+	conf.HAKeeper.HeatbeatTimeout.Duration = time.Minute
+	client := &blockingCNHeartbeatCommandClient{
+		testHAKClient:      &testHAKClient{cfg: conf},
+		heartbeatEntered:   make(chan struct{}),
+		heartbeatRelease:   make(chan struct{}),
+		heartbeatReentered: make(chan struct{}),
+		heartbeatSnapshots: make(chan pb.CNStoreHeartbeat, 2),
+		pollEntered:        make(chan struct{}),
+	}
+	s := &service{
+		cfg: conf, _hakeeperClient: client, config: util.NewConfigData(nil), logger: zap.NewNop(),
+		heartbeatWakeup: make(chan struct{}, 1), hakeeperConnected: make(chan struct{}),
+		viewMetadataAdmissionGeneration: 17,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+	}
+	t.Cleanup(s.viewMetadataEpochFence.Close)
+	s.task.holder = &observingTaskHolder{created: make(chan struct{}, 1)}
+	s.sqlExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		if sql == catalog.ViewMetadataLifecycleGateSQL {
+			return viewMetadataLifecycleGateTestResult(), nil
+		}
+		return executor.Result{}, nil
+	})
+	s.viewMetadataCatalogFenceReady.Store(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	controlDone := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-controlDone:
+		case <-time.After(10 * time.Second):
+			t.Error("control-plane workers did not terminate")
+		}
+	})
+	s.notifyHeartbeat()
+	go func() {
+		defer close(controlDone)
+		s.controlTask(ctx)
+	}()
+	select {
+	case heartbeat := <-client.heartbeatSnapshots:
+		require.Zero(t, heartbeat.ViewMetadataCatalogFencedEpoch)
+		require.Zero(t, heartbeat.ViewMetadataObservedEpoch)
+	case <-time.After(10 * time.Second):
+		t.Fatal("initial heartbeat did not enter")
+	}
+	snapshot := &pb.ViewMetadataAdmission{Epoch: 6, RevalidationRequired: true}
+	require.NoError(t, s.viewMetadataEpochFence.Advance(ctx, snapshot.Epoch))
+	require.NoError(t, s.fenceViewMetadataCatalog(ctx, snapshot))
+	// The queued notification carries no snapshot: coalescing another epoch
+	// must still publish the latest state when the serial owner resumes.
+	snapshot.Epoch = 7
+	require.NoError(t, s.viewMetadataEpochFence.Advance(ctx, snapshot.Epoch))
+	require.NoError(t, s.fenceViewMetadataCatalog(ctx, snapshot))
+	require.NoError(t, s.fenceViewMetadataCatalog(ctx, snapshot))
+	close(client.heartbeatRelease)
+	select {
+	case heartbeat := <-client.heartbeatSnapshots:
+		require.Equal(t, uint64(7), heartbeat.ViewMetadataCatalogFencedEpoch)
+		require.Equal(t, uint64(7), heartbeat.ViewMetadataObservedEpoch)
+		require.False(t, heartbeat.ViewMetadataIngressReady, "a catalog fence must not publish ingress")
+	case <-time.After(10 * time.Second):
+		t.Fatal("committed catalog fence waited for the hourly heartbeat tick")
+	}
 }
 
 func TestCNCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {

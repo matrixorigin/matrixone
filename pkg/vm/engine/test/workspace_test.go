@@ -2519,10 +2519,12 @@ func TestGCFiles(t *testing.T) {
 
 	for j := 0; j < 2; j++ {
 		if j == 1 {
-			pool, err = ants.NewPool(0, ants.WithNonblocking(true))
+			pool, err = ants.NewPool(1, ants.WithNonblocking(true))
 			require.NoError(t, err)
-			p.D.Engine.ResetGCWorkerPool(pool)
-			pool.Release()
+			require.NoError(t, p.D.Engine.ResetGCWorkerPool(pool))
+			release := make(chan struct{})
+			require.NoError(t, pool.Submit(func() { <-release }))
+			defer close(release)
 		}
 
 		err = txn.GCObjsByStats(files...)

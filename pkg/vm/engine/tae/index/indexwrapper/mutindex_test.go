@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -66,4 +67,60 @@ func TestContainsSkipsDuplicateAbortedOffsets(t *testing.T) {
 	require.False(t, check(func(uint32) error {
 		return index.ErrNotFound
 	}), "all-aborted offsets must leave the key visible")
+}
+
+func TestGetDuplicatedRowsWindow(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		offsets  []int
+		min, max int32
+		aborted  map[uint32]bool
+		conflict bool
+		want     int
+	}{
+		{name: "row zero", offsets: []int{0}, min: 0, max: 1, want: 0},
+		{name: "inclusive lower", offsets: []int{0, 1}, min: 1, max: 2, want: 1},
+		{name: "exclusive upper", offsets: []int{1}, min: 0, max: 1, want: -1},
+		{name: "empty window", offsets: []int{1}, min: 1, max: 1, want: -1},
+		{name: "aborted latest", offsets: []int{0, 1}, min: 0, max: 2, aborted: map[uint32]bool{1: true}, want: 0},
+		{name: "all aborted", offsets: []int{0, 1}, min: 0, max: 2, aborted: map[uint32]bool{0: true, 1: true}, want: -1},
+		{name: "conflict outside window", offsets: []int{1}, min: 0, max: 1, conflict: true, want: -1},
+		{name: "conflict in empty window", offsets: []int{1}, min: 1, max: 1, conflict: true, want: -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			idx := NewMutIndex(types.T_int32.ToType())
+			defer idx.Close()
+			keys := vector.NewVec(types.T_int32.ToType())
+			defer keys.Free(mp)
+			require.NoError(t, vector.AppendFixed(keys, int32(7), false, mp))
+			for _, offset := range tc.offsets {
+				require.NoError(t, idx.BatchUpsert(keys, offset))
+			}
+			rows := vector.NewVec(types.T_Rowid.ToType())
+			defer rows.Free(mp)
+			require.NoError(t, vector.AppendFixed(rows, types.Rowid{}, true, mp))
+			err := idx.GetDuplicatedRows(context.Background(), keys, index.NewZM(types.T_int32, 0), &types.Blockid{}, rows,
+				func() (int32, int32, error) { return tc.min, tc.max, nil },
+				func(row uint32) error {
+					if tc.aborted[row] {
+						return index.ErrNotFound
+					}
+					if tc.conflict {
+						return moerr.NewTxnWWConflictNoCtx(0, "")
+					}
+					return nil
+				}, mp)
+			if tc.conflict {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want < 0, rows.IsNull(0))
+			if tc.want >= 0 {
+				require.Equal(t, uint32(tc.want), vector.MustFixedColNoTypeCheck[types.Rowid](rows)[0].GetRowOffset())
+			}
+		})
+	}
 }

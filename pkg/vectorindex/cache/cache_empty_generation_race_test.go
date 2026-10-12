@@ -75,7 +75,7 @@ func (m *raceEmptyGenSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, 
 // unlocked algoEmptyGeneration read fired. With the flag captured under the read lock, the two
 // accesses to raceEmptyGenSearch.empty are serialized and -race stays clean.
 func TestEmptyGenerationDestroyRace(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
 	idxcfg.Usearch.Metric = usearch.L2sq
@@ -116,7 +116,7 @@ func TestEmptyGenerationDestroyRace(t *testing.T) {
 // TestEmptyGenerationDestroyRaceSearchInto is the box-free twin: the SearchInto path captures
 // and reads the empty-generation flag under the same read lock.
 func TestEmptyGenerationDestroyRaceSearchInto(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
 	idxcfg.Usearch.Metric = usearch.L2sq

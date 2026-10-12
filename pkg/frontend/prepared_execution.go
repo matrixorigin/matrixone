@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -43,29 +44,34 @@ func preparedExecutionBindings(ctx context.Context, values []any, protocolTypes 
 			continue
 		}
 		if param.IsBinaryProtocol {
-			if i*2+1 >= len(protocolTypes) {
-				return nil, moerr.NewInvalidInput(ctx, "prepared parameter has no protocol source type")
-			}
-			mysqlType := defines.MysqlType(protocolTypes[i*2])
 			if param.Value == nil {
-				if binaryProtocolPrepareParamIsBinaryString(mysqlType) {
+				// NULL bitmap entries need no source type. Connector/J can omit
+				// the entire type vector on an initial all-NULL execution.
+				if i*2+1 < len(protocolTypes) &&
+					binaryProtocolPrepareParamIsBinaryString(defines.MysqlType(protocolTypes[i*2])) {
 					binding.Type = types.T_blob.ToType()
 				}
-			} else if param.PrepareParamKind == vector.PrepareParamBoolean {
-				binding.Type = types.T_bool.ToType()
-			} else if mysqlType == defines.MYSQL_TYPE_DECIMAL || mysqlType == defines.MYSQL_TYPE_NEWDECIMAL {
-				binding.Type, binding.NumericType = param.DirectResultType, param.RuntimeType
-				if !param.HasDirectResultType || !param.HasRuntimeType {
-					return nil, invalidBinaryDecimalParameter(ctx, param.Value)
-				}
 			} else {
-				oid, supported := binaryProtocolPrepareParamConcreteType(mysqlType, protocolTypes[i*2+1]&0x80 != 0)
-				if !supported {
-					return nil, moerr.NewInvalidInput(ctx, "unsupported prepared parameter source type")
+				if i*2+1 >= len(protocolTypes) {
+					return nil, moerr.NewInvalidInput(ctx, "prepared parameter has no protocol source type")
 				}
-				binding.Type = oid.ToType()
-				if binaryProtocolTemporalMysqlType(mysqlType) {
-					binding.Type = binaryProtocolTemporalParamType(oid, fmt.Sprint(param.Value))
+				mysqlType := defines.MysqlType(protocolTypes[i*2])
+				if param.PrepareParamKind == vector.PrepareParamBoolean {
+					binding.Type = types.T_bool.ToType()
+				} else if mysqlType == defines.MYSQL_TYPE_DECIMAL || mysqlType == defines.MYSQL_TYPE_NEWDECIMAL {
+					binding.Type, binding.NumericType = param.DirectResultType, param.RuntimeType
+					if !param.HasDirectResultType || !param.HasRuntimeType {
+						return nil, invalidBinaryDecimalParameter(ctx, param.Value)
+					}
+				} else {
+					oid, supported := binaryProtocolPrepareParamConcreteType(mysqlType, protocolTypes[i*2+1]&0x80 != 0)
+					if !supported {
+						return nil, moerr.NewInvalidInput(ctx, "unsupported prepared parameter source type")
+					}
+					binding.Type = oid.ToType()
+					if binaryProtocolTemporalMysqlType(mysqlType) {
+						binding.Type = binaryProtocolTemporalParamType(oid, fmt.Sprint(param.Value))
+					}
 				}
 			}
 		} else if param.HasSourceType {
@@ -84,19 +90,36 @@ func preparedExecutionBindings(ctx context.Context, values []any, protocolTypes 
 // inspect spelling mark their plan value-dependent instead of extending this
 // key with value hashes or parser-specific categories.
 func preparedExecutionBindingKey(bindings []plan2.PreparedSourceBinding, values []any) string {
+	// Keep the existing framed identity without allocating formatting arguments.
 	var key strings.Builder
+	var number [20]byte
+	writeInt := func(value int64, separator byte) {
+		key.Write(strconv.AppendInt(number[:0], value, 10))
+		key.WriteByte(separator)
+	}
+	writeBool := func(value bool, separator byte) {
+		key.WriteString(strconv.FormatBool(value))
+		key.WriteByte(separator)
+	}
 	writeType := func(typ types.Type) {
-		fmt.Fprintf(&key, "%d:%d:%d:%d;", typ.Oid, typ.Charset, typ.Width, typ.Scale)
+		writeInt(int64(typ.Oid), ':')
+		writeInt(int64(typ.Charset), ':')
+		writeInt(int64(typ.Width), ':')
+		writeInt(int64(typ.Scale), ';')
 	}
 	for i, binding := range bindings {
-		fmt.Fprintf(&key, "%d;", binding.Position)
+		writeInt(int64(binding.Position), ';')
 		writeType(binding.Type)
 		writeType(binding.NumericType)
 		writeType(binding.BitCountType)
 		if param, ok := values[i].(plan2.ParamValue); ok {
-			fmt.Fprintf(&key, "%d:%t:%t:%t:%d:%t:%t;", param.PrepareParamKind,
-				param.IsBinaryProtocol, param.IsBin, param.IsBinaryString,
-				param.RuntimeStringDomain, param.EnableNumericPrefix, param.Value == nil)
+			writeInt(int64(param.PrepareParamKind), ':')
+			writeBool(param.IsBinaryProtocol, ':')
+			writeBool(param.IsBin, ':')
+			writeBool(param.IsBinaryString, ':')
+			writeInt(int64(param.RuntimeStringDomain), ':')
+			writeBool(param.EnableNumericPrefix, ':')
+			writeBool(param.Value == nil, ';')
 		}
 	}
 	return key.String()

@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -171,27 +173,28 @@ func TestGenInsertMOIndexesSqlPersistsInvisibleIndex(t *testing.T) {
 	require.Contains(t, sql, "'', '', '', 0, 0, '', 'a', 1, "+NULL_VALUE+", "+NULL_VALUE)
 }
 
-func TestGenInsertMOIndexesSqlMarksFunctionalKeyPartHidden(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockEngine := mock_frontend.NewMockEngine(ctrl)
-	mockEngine.EXPECT().AllocateIDByKey(gomock.Any(), ALLOCID_INDEX_KEY).Return(uint64(272512), nil)
-
-	proc := testutil.NewProc(t)
-	hiddenName := catalog.FunctionalIndexColumnPrefix + "0123456789abcdef0123456789abcdef"
-	tableDef := &plan.TableDef{
-		Name2ColIndex: map[string]int32{hiddenName: 0},
-		Cols:          []*plan.ColDef{{Name: hiddenName, OriginName: hiddenName}},
+func TestDeleteMOIndexesSQLPreservesIndexName(t *testing.T) {
+	for _, name := range []string{"idx", "idx'\\tail", `idx\path`, `idx\tail`, `trailing\`} {
+		t.Run(name, func(t *testing.T) {
+			query := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, uint64(42), sqlquote.String(name))
+			statements, err := mysql.Parse(t.Context(), query, 1)
+			require.NoError(t, err)
+			require.Len(t, statements, 1)
+			defer statements[0].Free()
+			require.Contains(t, query, "table_id = 42")
+			scanner := mysql.NewScanner(dialect.MYSQL, query)
+			defer mysql.PutScanner(scanner)
+			var values []string
+			for {
+				token, value := scanner.Scan()
+				if token == 0 {
+					break
+				}
+				if token == mysql.STRING {
+					values = append(values, value)
+				}
+			}
+			require.Equal(t, []string{name}, values)
+		})
 	}
-	ct := &engine.ConstraintDef{Cts: []engine.Constraint{&engine.IndexDef{Indexes: []*plan.IndexDef{{
-		IndexName:  "idx_expr",
-		Parts:      []string{hiddenName, catalog.CreateAlias("id")},
-		TableExist: true,
-	}}}}}
-
-	sql, err := genInsertMOIndexesSql(mockEngine, proc, "123456", 272466, ct, tableDef)
-	require.NoError(t, err)
-	require.Contains(t, sql, "1, 1, '', '"+hiddenName+"', 1")
-	require.Contains(t, sql, "1, 0, '', '__mo_alias_id', 2")
 }

@@ -1,122 +1,64 @@
--- MySQL-style non-unique single-expression functional-index regression suite.
-drop database if exists functional_index;
-create database functional_index;
-use functional_index;
-
-create table fi_inline (
-    id int primary key,
-    doc json,
-    name varchar(32),
-    qty int,
-    key idx_sku ((json_unquote(json_extract(doc, '$.sku'))))
-);
-insert into fi_inline (id, doc, name, qty) values
-    (1, '{"sku":"alpha"}', 'Alice', 2),
-    (2, '{"sku":"beta"}', 'Bob', 4),
-    (3, '{"sku":null}', 'Carol', 6),
-    (4, '{"other":"missing"}', 'Dora', 8);
-select id, json_unquote(json_extract(doc, '$.sku')) as sku from fi_inline order by id;
--- @regex("KEY `idx_sku`.*json_unquote", true)
--- @regex("__mo_fi_", false)
-show create table fi_inline;
--- @regex("idx_sku.*NULL.*json_unquote", true)
-show index from fi_inline;
--- @regex("Index Table Scan.*idx_sku", true)
-explain select id from fi_inline where json_unquote(json_extract(doc, '$.sku')) = 'alpha';
-select id from fi_inline where json_unquote(json_extract(doc, '$.sku')) = 'alpha';
-
-create index idx_name_lower on fi_inline ((lower(name)));
-alter table fi_inline add index idx_qty_plus ((qty + 1));
-insert into fi_inline (id, doc, name, qty) values (5, '{"sku":"gamma"}', 'Eve', 10);
-update fi_inline set doc = '{"sku":"delta"}', qty = 11 where id = 1;
-delete from fi_inline where id = 2;
-replace into fi_inline (id, doc, name, qty) values (3, '{"sku":"epsilon"}', 'Carol', 12);
-insert into fi_inline (id, doc, name, qty) values (1, '{"sku":"zeta"}', 'Alice', 13) on duplicate key update doc = values(doc), qty = values(qty);
-select id, json_unquote(json_extract(doc, '$.sku')) as sku, qty from fi_inline order by id;
-
--- Accepted-expression writer/query session matrix. The indexed lower(name)
--- result must remain equivalent to a forced index and a forced table scan
--- after the writer and reader use different session settings.
-set @fi_matrix_old_time_zone = @@time_zone;
-set @fi_matrix_old_sql_mode = @@sql_mode;
-set time_zone = '+00:00';
-set sql_mode = '';
-create table fi_session_matrix (
-    id int primary key,
-    name varchar(32),
-    key idx_lower ((lower(name)))
-);
-insert into fi_session_matrix (id, name) values (1, 'Alice'), (2, 'ALICE'), (3, 'Bob');
-set time_zone = '+08:00';
-set sql_mode = 'NO_UNSIGNED_SUBTRACTION';
-select id from fi_session_matrix where lower(name) = 'alice' order by id;
-select id from fi_session_matrix force index (idx_lower) where lower(name) = 'alice' order by id;
-select id from fi_session_matrix ignore index (idx_lower) where lower(name) = 'alice' order by id;
-set time_zone = '-05:00';
-set sql_mode = 'STRICT_TRANS_TABLES';
-select id from fi_session_matrix where lower(name) = 'alice' order by id;
-select id from fi_session_matrix force index (idx_lower) where lower(name) = 'alice' order by id;
-select id from fi_session_matrix ignore index (idx_lower) where lower(name) = 'alice' order by id;
-drop table fi_session_matrix;
-set sql_mode = @fi_matrix_old_sql_mode;
-set time_zone = @fi_matrix_old_time_zone;
-
-drop index idx_name_lower on fi_inline;
-alter table fi_inline drop index idx_qty_plus;
-drop index idx_sku on fi_inline;
--- @regex("__mo_fi_", false)
-show create table fi_inline;
-select count(*) from mo_catalog.mo_columns where att_relname = 'fi_inline' and att_database = 'functional_index' and attname like '__mo_fi_%';
-select count(*) from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'fi_inline' and reldatabase = 'functional_index') and column_name like '__mo_fi_%';
-
--- COPY binds functional indexes after all column mutations, in either clause order.
-create table fi_clause_order (id int primary key, b int);
-insert into fi_clause_order values (1, 10), (2, 20);
-alter table fi_clause_order add index idx_late ((late_col + 1)), add column late_col int default 7;
-select id, late_col from fi_clause_order order by id;
-select id from fi_clause_order force index (idx_late) where late_col + 1 = 8 order by id;
-select id from fi_clause_order ignore index (idx_late) where late_col + 1 = 8 order by id;
-select count(*) from mo_catalog.mo_columns where att_relname = 'fi_clause_order' and att_database = 'functional_index' and attname like '__mo_fi_%';
-drop table fi_clause_order;
-
-
--- Stable rejection matrix.
--- @regex("functional", true)
-create table fi_unique (id int primary key, a int, unique key uq ((a + 1)));
--- @regex("functional", true)
-create table fi_composite (id int primary key, a int, b int, key bad ((a + 1), b));
--- @regex("unsupported type", true)
-create table fi_json (id int primary key, doc json, key bad ((json_extract(doc, '$.sku'))));
--- A session-dependent temporal cast is rejected before a hidden column or
--- index row is published, for both a direct expression and a generated-column
--- dependency.
--- @regex("functional", true)
-create table fi_time_inline (id int primary key, ts timestamp, key bad ((cast(ts as char(19)))));
-select count(*) from mo_catalog.mo_tables where relname = 'fi_time_inline' and reldatabase = 'functional_index';
--- @regex("functional", true)
-create table fi_time_inline_dep (id int primary key, ts timestamp, g varchar(19) generated always as (cast(ts as char(19))) virtual, key bad ((g)));
-select count(*) from mo_catalog.mo_tables where relname = 'fi_time_inline_dep' and reldatabase = 'functional_index';
-create table fi_time_create (id int primary key, ts timestamp);
--- @regex("functional", true)
-create index bad_time_create on fi_time_create ((cast(ts as char(19))));
-select count(*) from mo_catalog.mo_columns where att_relname = 'fi_time_create' and att_database = 'functional_index' and attname like '__mo_fi_%';
-select count(*) from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'fi_time_create' and reldatabase = 'functional_index') and column_name like '__mo_fi_%';
-create table fi_time_create_dep (id int primary key, ts timestamp, g varchar(19) generated always as (cast(ts as char(19))) virtual);
--- @regex("functional", true)
-create index bad_time_create_dep on fi_time_create_dep ((g));
-select count(*) from mo_catalog.mo_columns where att_relname = 'fi_time_create_dep' and att_database = 'functional_index' and attname like '__mo_fi_%';
-select count(*) from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'fi_time_create_dep' and reldatabase = 'functional_index') and column_name like '__mo_fi_%';
-create table fi_time_alter (id int primary key, ts timestamp);
--- @regex("functional", true)
-alter table fi_time_alter add index bad_time_alter ((cast(ts as char(19))));
-select count(*) from mo_catalog.mo_columns where att_relname = 'fi_time_alter' and att_database = 'functional_index' and attname like '__mo_fi_%';
-select count(*) from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'fi_time_alter' and reldatabase = 'functional_index') and column_name like '__mo_fi_%';
-create table fi_time_alter_dep (id int primary key, ts timestamp, g varchar(19) generated always as (cast(ts as char(19))) virtual);
--- @regex("functional", true)
-alter table fi_time_alter_dep add index bad_time_alter_dep ((g));
-select count(*) from mo_catalog.mo_columns where att_relname = 'fi_time_alter_dep' and att_database = 'functional_index' and attname like '__mo_fi_%';
-select count(*) from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'fi_time_alter_dep' and reldatabase = 'functional_index') and column_name like '__mo_fi_%';
--- @regex("functional", true)
-create temporary table fi_temp (id int, a int, key bad ((a + 1)));
-
-drop database functional_index;
+-- @suit
+-- @case
+-- @desc: Single-expression functional index lifecycle and metadata.
+-- @label:bvt
+drop database if exists functional_index_bvt;
+create database functional_index_bvt;
+use functional_index_bvt;
+-- #29898: unsupported UNIQUE expressions leave schema/data intact and the session usable.
+CREATE TABLE mo_index_probe (id INT PRIMARY KEY, email VARCHAR(254));
+insert into mo_index_probe values (1,'alice@example.com'),(2,'bob@example.com');
+show create table mo_index_probe;
+select id,email from mo_index_probe order by id;
+select index_name,column_name from information_schema.statistics where table_schema='functional_index_bvt' and table_name='mo_index_probe' order by index_name;
+select count(*) as generated_columns from mo_catalog.mo_columns where att_database='functional_index_bvt' and att_relname='mo_index_probe' and attr_has_generated=1;
+select count(*) as relations from mo_catalog.mo_tables where reldatabase='functional_index_bvt';
+CREATE UNIQUE INDEX mo_unique_email_expression ON mo_index_probe ((LOWER(email)));
+show create table mo_index_probe;
+select id,email from mo_index_probe order by id;
+select index_name,column_name from information_schema.statistics where table_schema='functional_index_bvt' and table_name='mo_index_probe' order by index_name;
+select count(*) as generated_columns from mo_catalog.mo_columns where att_database='functional_index_bvt' and att_relname='mo_index_probe' and attr_has_generated=1;
+select count(*) as relations from mo_catalog.mo_tables where reldatabase='functional_index_bvt';
+select 1 as session_usable;
+create unique index mo_unique_email on mo_index_probe(email);
+insert into mo_index_probe values (3,'alice@example.com');
+select id,email from mo_index_probe order by id;
+drop table mo_index_probe;
+create table t (id int primary key, name varchar(40), index il ((lower(name))));
+insert into t values (1,'ABC'),(2,'def'),(3,NULL);
+select count(*) as matched from t force index(il) where lower(name)='abc';
+update t set name='aBc' where id=2;
+select count(*) as matched from t force index(il) where lower(name)='abc';
+replace into t values (2,'XYZ');
+select count(*) as matched from t force index(il) where lower(name)='abc';
+insert into t values (2,'ABC') on duplicate key update name=values(name);
+select count(*) as matched from t force index(il) where lower(name)='abc';
+create index ip on t ((id+1));
+select id from t force index(ip) where id+1=3;
+alter table t add column extra int first;
+alter table t modify name varchar(60);
+select count(*) as matched from t force index(il) where lower(name)='abc';
+begin;
+delete from t where id=1;
+rollback;
+select count(*) as matched from t force index(il) where lower(name)='abc';
+create table cloned like t;
+insert into cloned(id,name) select id,name from t;
+select count(*) as matched from cloned force index(il) where lower(name)='abc';
+select index_name,column_name is null as functional,expression is not null as has_expression from information_schema.statistics where table_schema='functional_index_bvt' and table_name='t' order by index_name;
+drop index il on t;
+drop index ip on t;
+select count(*) as hidden_generated from mo_catalog.mo_columns where att_database='functional_index_bvt' and att_relname='t' and attr_has_generated=1;
+select id,name from t order by id;
+create table load_fi(id int primary key,name varchar(40),index il((lower(name))));
+load data inline format='csv', data='1,ABC\n2,abc\n' into table load_fi fields terminated by ',' (id,name);
+select count(*) as matched from load_fi force index(il) where lower(name)='abc';
+create table multi_fi(id int primary key,tenant int,name varchar(40),index ix((lower(name)),(id+1)),index im(tenant,(lower(name))));
+insert into multi_fi values(1,7,'ABC'),(2,7,'abc'),(3,7,NULL);
+select count(*) as matched from multi_fi force index(ix) where lower(name)='abc' and id+1=2;
+select count(*) as matched from multi_fi force index(im) where tenant=7 and lower(name)='abc';
+drop index ix on multi_fi;
+select count(*) as hidden_generated from mo_catalog.mo_columns where att_database='functional_index_bvt' and att_relname='multi_fi' and attr_has_generated=1;
+drop index im on multi_fi;
+select count(*) as hidden_generated from mo_catalog.mo_columns where att_database='functional_index_bvt' and att_relname='multi_fi' and attr_has_generated=1;
+drop database functional_index_bvt;

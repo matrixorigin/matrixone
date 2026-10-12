@@ -177,7 +177,7 @@ func TestDecimal256RangeConstantPartitions(t *testing.T) {
 }
 
 func TestDecimal256RangePrepareReuse(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	typ := types.New(types.T_decimal256, 65, 2)
 	planned := makePreparedRangeFrame(t, 0, 0, typ)
 	arg := makeWindowWithFrame(planned)

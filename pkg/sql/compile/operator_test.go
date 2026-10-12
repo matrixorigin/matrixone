@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -46,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	windowop "github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -372,7 +370,7 @@ func TestConstructAggregateConfigPreservesOrderedGroupConcatArgs(t *testing.T) {
 }
 
 func TestConstructAggregateConfigApproxPercentileWithinGroup(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
@@ -399,7 +397,7 @@ func TestConstructAggregateConfigApproxPercentileWithinGroup(t *testing.T) {
 }
 
 func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
@@ -423,7 +421,7 @@ func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
 }
 
 func TestConstructAggregateConfigPreparedPercentile(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("0.25"), false, proc.Mp()))
@@ -455,7 +453,7 @@ func TestConstructAggregateConfigPreparedPercentile(t *testing.T) {
 }
 
 func TestConstructAggregateConfigPreparedPercentileExpression(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
@@ -515,7 +513,7 @@ func TestConstructAggregateConfigPreparedPercentileExpression(t *testing.T) {
 }
 
 func TestConstructAggregateConfigPreparedPercentileExpressionDivisionByZero(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("50"), false, proc.Mp()))
@@ -541,7 +539,7 @@ func TestConstructAggregateConfigPreparedPercentileExpressionDivisionByZero(t *t
 }
 
 func TestConstructAggregateConfigPreparedDecimalPercentilePreservesPrecision(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	parameter := &plan.Expr{
@@ -598,7 +596,7 @@ func TestConstructAggregateConfigPreparedDecimalPercentilePreservesPrecision(t *
 }
 
 func TestPreflightPercentileConfigsReturnsPreparedValueError(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
 	for _, test := range []struct {
@@ -704,7 +702,7 @@ func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testin
 			require.NotNil(t, percentileFn.GetArgs()[1].GetF(), "raw planner output should retain the static cast")
 			originalConfigExpr := plan2.DeepCopyExpr(percentileFn.GetArgs()[1])
 
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			defer proc.Free()
 			args, config := constructAggregateConfig(percentileFn, proc)
 			require.Len(t, args, 1)
@@ -738,7 +736,7 @@ func TestConstructAggregateConfigApproxPercentileNormalizesStaticCast(t *testing
 	require.Len(t, percentileFn.GetArgs(), 2)
 	require.NotNil(t, percentileFn.GetArgs()[1].GetF(), "raw planner output should retain the static cast")
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	args, config := constructAggregateConfig(percentileFn, proc)
 	require.Len(t, args, 1)
@@ -746,7 +744,7 @@ func TestConstructAggregateConfigApproxPercentileNormalizesStaticCast(t *testing
 }
 
 func TestConstructAggregateConfigOrderedPercentileRejectsInvalidInput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
@@ -1059,7 +1057,7 @@ func TestConstructTimeWindowUsesRegularSumForPartialSum(t *testing.T) {
 }
 
 func TestConstructTimeWindowApproxPercentileConfig(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	fn, err := function.GetFunctionByName(context.Background(), plan2.NameApproxPercentile, []types.Type{
@@ -1086,7 +1084,7 @@ func TestConstructTimeWindowApproxPercentileConfig(t *testing.T) {
 }
 
 func TestConstructTimeWindowApproxPercentileRejectsInvalidConfig(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	fn, err := function.GetFunctionByName(context.Background(), plan2.NameApproxPercentile, []types.Type{
@@ -1131,7 +1129,7 @@ func TestConstructTimeWindowApproxPercentileRejectsInvalidConfig(t *testing.T) {
 }
 
 func TestCompileRejectsInvalidAggregateConfigWithoutPanicFrames(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	fn, err := function.GetFunctionByName(context.Background(), plan2.NameApproxPercentile, []types.Type{
@@ -1155,7 +1153,7 @@ func TestCompileRejectsInvalidAggregateConfigWithoutPanicFrames(t *testing.T) {
 }
 
 func TestCompileValidatesAggregateConfigsBeforeBuildingEachOperator(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	fn, err := function.GetFunctionByName(context.Background(), plan2.NameApproxPercentile, []types.Type{
@@ -1227,7 +1225,7 @@ func TestCompileValidatesAggregateConfigsBeforeBuildingEachOperator(t *testing.T
 }
 
 func TestConstructAggregateConfigRejectsOrderedPercentileErrors(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	value := &plan.Expr{
@@ -1278,7 +1276,7 @@ func TestConstructAggregateConfigRejectsOrderedPercentileErrors(t *testing.T) {
 }
 
 func TestConstructAggregateConfigPropagatesConfigExpressionErrors(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	value := &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_int32)},
@@ -1296,7 +1294,7 @@ func TestConstructAggregateConfigPropagatesConfigExpressionErrors(t *testing.T) 
 }
 
 func TestConstructAggregateConfigCoversLegacyConfigurationFailures(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
 	badString := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
@@ -1337,7 +1335,7 @@ func TestConstructAggregateConfigCoversLegacyConfigurationFailures(t *testing.T)
 }
 
 func TestGroupConcatNullSeparatorConfig(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 		return int64(1024), nil
@@ -1354,7 +1352,7 @@ func TestGroupConcatNullSeparatorConfig(t *testing.T) {
 }
 
 func TestConstructAggregateConfigPreservesOtherSpecialConfigs(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
 		require.Equal(t, "group_concat_max_len", name)
@@ -1672,7 +1670,7 @@ func TestRangeShuffleJoinSingleBucketSkewedBatch(t *testing.T) {
 	require.Nil(t, arg.ShuffleRangeInt64)
 
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = testutil.MakeScalarInt64(key, rowCount, mp)
 	input.SetRowCount(rowCount)
@@ -1918,38 +1916,6 @@ func makeTimeWindowIntervalExpr(value int64, unit string) *plan.Expr {
 			},
 		},
 	}
-}
-
-func TestDupOperatorTableFunctionPreservesProbeState(t *testing.T) {
-	op := table_function.NewArgument()
-	op.FuncName = "unnest"
-	op.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
-		{Tag: 8, UseMembershipFilter: true},
-	}
-	op.IndexReaderParam = &plan.IndexReaderParam{
-		Limit:        plan2.MakePlan2Uint64ConstExprWithType(7),
-		OrigFuncName: "l2_distance",
-	}
-	op.FulltextSourceRef = &plan.ObjectRef{SchemaName: "publisher", ObjName: "source", PubInfo: &plan.PubInfo{TenantId: 42}}
-	op.FulltextIndexRef = &plan.ObjectRef{SchemaName: "publisher", ObjName: "index", PubInfo: &plan.PubInfo{TenantId: 42}}
-
-	dup := dupOperator(op, 0, 1).(*table_function.TableFunction)
-	require.Equal(t, op.RuntimeFilterSpecs, dup.RuntimeFilterSpecs)
-	require.Equal(t, uint64(7), dup.IndexReaderParam.GetLimit().GetLit().GetU64Val())
-	require.Equal(t, "l2_distance", dup.IndexReaderParam.GetOrigFuncName())
-	require.Equal(t, op.FulltextSourceRef, dup.FulltextSourceRef)
-	require.Equal(t, op.FulltextIndexRef, dup.FulltextIndexRef)
-}
-
-func TestDupOperatorApplyPreservesFulltextReferences(t *testing.T) {
-	tableFunction := table_function.NewArgument()
-	tableFunction.FulltextSourceRef = &plan.ObjectRef{SchemaName: "publisher", ObjName: "source", PubInfo: &plan.PubInfo{TenantId: 42}}
-	tableFunction.FulltextIndexRef = &plan.ObjectRef{SchemaName: "publisher", ObjName: "index", PubInfo: &plan.PubInfo{TenantId: 42}}
-	op := &apply.Apply{TableFunction: tableFunction}
-
-	dup := dupOperator(op, 0, 1).(*apply.Apply)
-	require.Equal(t, tableFunction.FulltextSourceRef, dup.TableFunction.FulltextSourceRef)
-	require.Equal(t, tableFunction.FulltextIndexRef, dup.TableFunction.FulltextIndexRef)
 }
 
 func TestPreInsertEstimatedRowsAreOnlyBoundedPrefetchHints(t *testing.T) {

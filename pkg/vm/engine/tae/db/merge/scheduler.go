@@ -1493,12 +1493,6 @@ func (p *launchPad) gatherByTrigger(ctx context.Context,
 		p.revisedResults = append(p.revisedResults,
 			controlTaskMemInPlace(trigger.assigns, rc, 1)...)
 	}
-	if trigger.table.ID() == MergeHeroID {
-		logutil.Infof(
-			"MergeHero: lastMergeTime: %s",
-			p.lastMergeTime,
-		)
-	}
 	return p.revisedResults
 }
 

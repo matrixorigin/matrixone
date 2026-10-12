@@ -802,6 +802,7 @@ func TestExternalInsertTargetIsLocalFile(t *testing.T) {
 	require.NoError(t, err)
 	proc.GetStageCache().Set("local_stage", stage.StageDef{Name: "local_stage", Url: fileURL})
 	proc.GetStageCache().Set("s3_stage", stage.StageDef{Name: "s3_stage", Url: s3URL})
+	proc.GetStageCache().Set("disabled_stage", stage.StageDef{Name: "disabled_stage", Url: fileURL, Status: "disabled"})
 
 	node := &plan.Node{InsertCtx: &plan.InsertCtx{TableDef: &plan.TableDef{
 		TableType: catalog.SystemExternalRel,
@@ -814,6 +815,11 @@ func TestExternalInsertTargetIsLocalFile(t *testing.T) {
 	node.InsertCtx.TableDef.Createsql = extWriteCreatesql(t, "stage://s3_stage/p-%U.csv")
 	isLocal, err = externalInsertTargetIsLocalFile(proc, node, time.Unix(1, 0).UTC())
 	require.NoError(t, err)
+	require.False(t, isLocal)
+
+	node.InsertCtx.TableDef.Createsql = extWriteCreatesql(t, "stage://disabled_stage/p-%U.csv")
+	isLocal, err = externalInsertTargetIsLocalFile(proc, node, time.Unix(1, 0).UTC())
+	require.ErrorContains(t, err, "stage disabled_stage is disabled")
 	require.False(t, isLocal)
 
 	isLocal, err = externalInsertTargetIsLocalFile(proc, nil, time.Unix(1, 0).UTC())

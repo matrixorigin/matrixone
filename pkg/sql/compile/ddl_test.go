@@ -967,7 +967,7 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 		c := newCompileWithStubEngine(t, eng, "drop table t2")
 		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error { return nil })
 		defer lockMoDb.Reset()
-		err := c.withBroadDropLifecycle(func() error {
+		err := c.withDropLifecycle(dropLifecycleAdmission{}, func() error {
 			return dropTableScope(&plan2.DropTable{Database: "db1", Table: "t2"}).DropTable(c)
 		})
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
@@ -1098,7 +1098,7 @@ func TestAdvanceCreateIndexSnapshotUsesRollingUpgradeFence(t *testing.T) {
 	proc.Base.TxnClient = txnClient
 	proc.Base.TxnOperator = txnOp
 
-	require.NoError(t, (&Compile{proc: proc}).advanceCreateIndexSnapshot())
+	require.NoError(t, (&Compile{proc: proc}).advanceIndexDDLSnapshot())
 }
 
 type testCreateIndexLogtailBarrier struct {
@@ -1145,18 +1145,18 @@ func TestAdvanceCreateIndexSnapshotFailsClosed(t *testing.T) {
 
 	t.Run("missing ordered barrier capability", func(t *testing.T) {
 		c, _ := newCompile(t, newStubEngine())
-		require.ErrorContains(t, c.advanceCreateIndexSnapshot(), "barrier is unavailable")
+		require.ErrorContains(t, c.advanceIndexDDLSnapshot(), "barrier is unavailable")
 	})
 
 	t.Run("ordered barrier failure", func(t *testing.T) {
 		c, _ := newCompile(t, newBarrier(wantErr))
-		require.ErrorIs(t, c.advanceCreateIndexSnapshot(), wantErr)
+		require.ErrorIs(t, c.advanceIndexDDLSnapshot(), wantErr)
 	})
 
 	t.Run("missing workspace", func(t *testing.T) {
 		c, txnOp := newCompile(t, newBarrier(nil))
 		txnOp.EXPECT().GetWorkspace().Return(nil)
-		require.ErrorContains(t, c.advanceCreateIndexSnapshot(), "missing workspace")
+		require.ErrorContains(t, c.advanceIndexDDLSnapshot(), "missing workspace")
 	})
 
 	t.Run("workspace advance failure", func(t *testing.T) {
@@ -1164,7 +1164,7 @@ func TestAdvanceCreateIndexSnapshotFailsClosed(t *testing.T) {
 		workspace := mock_frontend.NewMockWorkspace(gomock.NewController(t))
 		workspace.EXPECT().AdvanceSnapshot(gomock.Any(), frontier).Return(wantErr)
 		txnOp.EXPECT().GetWorkspace().Return(workspace)
-		require.ErrorIs(t, c.advanceCreateIndexSnapshot(), wantErr)
+		require.ErrorIs(t, c.advanceIndexDDLSnapshot(), wantErr)
 	})
 
 	t.Run("workspace remains at the frontier", func(t *testing.T) {
@@ -1173,7 +1173,7 @@ func TestAdvanceCreateIndexSnapshotFailsClosed(t *testing.T) {
 		workspace.EXPECT().AdvanceSnapshot(gomock.Any(), frontier).Return(nil)
 		txnOp.EXPECT().GetWorkspace().Return(workspace)
 		txnOp.EXPECT().SnapshotTS().Return(frontier)
-		require.ErrorContains(t, c.advanceCreateIndexSnapshot(), "did not advance past")
+		require.ErrorContains(t, c.advanceIndexDDLSnapshot(), "did not advance past")
 	})
 }
 
@@ -2350,19 +2350,22 @@ func TestAlterTableAddForeignKeyLocksDistinctParentData(t *testing.T) {
 	child := mock_frontend.NewMockRelation(ctrl)
 	parentOne := mock_frontend.NewMockRelation(ctrl)
 	parentTwo := mock_frontend.NewMockRelation(ctrl)
+	parentOne.EXPECT().GetTableID(gomock.Any()).Return(uint64(20))
+	parentTwo.EXPECT().GetTableID(gomock.Any()).Return(uint64(30))
 	child.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 	child.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{}).AnyTimes()
 
 	childDB := mock_frontend.NewMockDatabase(ctrl)
 	childDB.EXPECT().GetDatabaseId(gomock.Any()).Return("1").AnyTimes()
 	childDB.EXPECT().Relation(gomock.Any(), "child", gomock.Any()).Return(child, nil).AnyTimes()
-	childDB.EXPECT().Relation(gomock.Any(), "parent_one", gomock.Any()).Return(parentOne, nil).Times(1)
+	childDB.EXPECT().Relation(gomock.Any(), "parent_one", gomock.Any()).Return(parentOne, nil).Times(2)
+	childDB.EXPECT().Relation(gomock.Any(), "missing_parent", gomock.Any()).Return(nil, moerr.NewNoSuchTableNoCtx("child_db", "missing_parent"))
 	parentDB := mock_frontend.NewMockDatabase(ctrl)
-	parentDB.EXPECT().Relation(gomock.Any(), "parent_two", gomock.Any()).Return(parentTwo, nil).Times(1)
+	parentDB.EXPECT().Relation(gomock.Any(), "parent_two", gomock.Any()).Return(parentTwo, nil).Times(2)
 
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().Database(gomock.Any(), "child_db", gomock.Any()).Return(childDB, nil).AnyTimes()
-	eng.EXPECT().Database(gomock.Any(), "parent_db", gomock.Any()).Return(parentDB, nil).Times(1)
+	eng.EXPECT().Database(gomock.Any(), "parent_db", gomock.Any()).Return(parentDB, nil).Times(2)
 
 	getConstraintDef := gostub.Stub(&GetConstraintDef,
 		func(context.Context, engine.Relation) (*engine.ConstraintDef, error) {
@@ -3442,7 +3445,7 @@ func TestDropTableSingleSkipsMissingFkTables(t *testing.T) {
 		ForeignTbl:           []uint64{42},
 		FkChildTblsReferToMe: []uint64{43},
 	}
-	err := c.withBroadDropLifecycle(func() error {
+	err := c.withDropLifecycle(dropLifecycleAdmission{}, func() error {
 		return dropTableScope(qry).DropTable(c)
 	})
 	require.NoError(t, err)
@@ -3565,6 +3568,119 @@ func TestTruncateLocksLifecycleBeforeTable(t *testing.T) {
 	}}}}
 	require.ErrorIs(t, s.TruncateTable(c), stop)
 	require.Equal(t, []string{"lifecycle", "table", "storage", "barrier"}, order)
+}
+
+func TestTruncateLifecycleRCWaitPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		retained bool
+		cancel   bool
+	}{
+		{name: "fresh owner waits"},
+		{name: "fresh wait can be canceled", cancel: true},
+		{name: "retained owner fails promotion", retained: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			proc.Ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+			proc.ReplaceTopCtx(proc.Ctx)
+			service := proc.GetService()
+			const registryID uint64 = 41
+			op := mock_frontend.NewMockTxnOperator(ctrl)
+			op.EXPECT().Txn().Return(txn.TxnMeta{
+				ID: []byte("truncate"), LockService: service,
+				Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC,
+			}).AnyTimes()
+			op.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+			op.EXPECT().CreateTS().Return(timestamp.Timestamp{}).AnyTimes()
+			var retained []lock.LockTable
+			if tc.retained {
+				retained = []lock.LockTable{{Table: registryID, Valid: true}}
+			}
+			op.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{LockTables: retained}, nil)
+			var pending atomic.Int32
+			op.EXPECT().AddWaitLock(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+				func(uint64, [][]byte, lock.LockOptions) uint64 { pending.Add(1); return 1 }).AnyTimes()
+			op.EXPECT().RemoveWaitLock(gomock.Any()).Do(func(uint64) { pending.Add(-1) }).AnyTimes()
+			op.EXPECT().AddLockTable(gomock.Any()).Return(nil).AnyTimes()
+			proc.Base.TxnOperator = op
+			ls := mock_lock.NewMockLockService(ctrl)
+			ls.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: service}).AnyTimes()
+			ls.EXPECT().GetServiceID().Return(service).AnyTimes()
+			proc.Base.LockService = ls
+			eng := newStubEngine()
+			registry := newStubRelation(catalog.MO_FEATURE_REGISTRY)
+			registry.tableID = registryID
+			eng.dbs[catalog.MO_CATALOG].rels[catalog.MO_FEATURE_REGISTRY] = registry
+			db := newStubDatabase("test")
+			db.rels["t"] = newStubRelation("t")
+			// Indexed tables retain broad admission rather than scalar replacement.
+			db.rels["t"].tableDef = &plan2.TableDef{
+				TableType: catalog.SystemOrdinaryRel,
+				Indexes:   []*plan2.IndexDef{{IndexName: "idx"}},
+			}
+			eng.dbs["test"] = db
+			requested := make(chan struct{})
+			release := make(chan struct{})
+			stop := errors.New("gate owner released")
+			ls.EXPECT().Lock(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+				func(ctx context.Context, table uint64, _ [][]byte, _ []byte, opts lock.LockOptions) (lock.Result, error) {
+					if table != registryID {
+						return lock.Result{LockedOn: lock.LockTable{Table: table, Group: opts.Group, Valid: true}}, nil
+					}
+					close(requested)
+					if opts.Mode != lock.LockMode_Exclusive {
+						return lock.Result{}, errors.New("TRUNCATE must retain exclusive admission")
+					}
+					if opts.Policy == lock.WaitPolicy_FastFail {
+						return lock.Result{}, moerr.NewLockConflict(ctx)
+					}
+					select {
+					case <-release:
+						return lock.Result{}, stop
+					case <-ctx.Done():
+						return lock.Result{}, ctx.Err()
+					}
+				}).AnyTimes()
+			c := &Compile{e: eng, proc: proc}
+			s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+				Definition: &plan2.DataDefinition_TruncateTable{TruncateTable: &plan2.TruncateTable{
+					Database: "test", Table: "t", TableId: 1,
+				}},
+			}}}}
+			result := make(chan error, 1)
+			var worker sync.WaitGroup
+			worker.Add(1)
+			defer func() { cancel(); worker.Wait() }()
+			go func() { defer worker.Done(); result <- s.TruncateTable(c) }()
+			select {
+			case <-requested:
+			case <-ctx.Done():
+				t.Fatal("TRUNCATE did not request lifecycle admission")
+			}
+			if tc.cancel {
+				cancel()
+			} else if !tc.retained {
+				close(release)
+			}
+			select {
+			case err := <-result:
+				if tc.retained {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockConflict), "%v", err)
+				} else if tc.cancel {
+					require.ErrorIs(t, err, context.Canceled)
+				} else {
+					require.ErrorIs(t, err, stop)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("TRUNCATE did not leave admission after release/cancel")
+			}
+			require.Zero(t, pending.Load(), "admission must remove wait bookkeeping on every exit")
+		})
+	}
 }
 
 func TestAlterCopyAndTruncateSerializeBeforeTableLocks(t *testing.T) {

@@ -32,7 +32,7 @@ import (
 )
 
 func TestWindowOrderSpillsAndKeepsArgumentsAligned(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
 	input.Vecs[1] = testutil.MakeInt32Vector([]int32{3, 1, 2}, nil, proc.Mp())
@@ -70,7 +70,7 @@ func TestWindowOrderSpillsAndKeepsArgumentsAligned(t *testing.T) {
 }
 
 func TestWindowOrderSpillReleasesConsumedMaterializedInput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
 	input.Vecs[1] = testutil.MakeInt32Vector([]int32{3, 1, 2}, nil, proc.Mp())
@@ -128,7 +128,7 @@ func TestWindowOrderSpillResourceAdmissionCleans(t *testing.T) {
 		{name: "file descriptor", component: process.ExecutionResourceComponentSpillFD},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			t.Cleanup(func() {
 				proc.Free()
 				require.Zero(t, proc.Mp().CurrNB())
@@ -200,7 +200,7 @@ func TestWindowOrderSpillResourceAdmissionCleans(t *testing.T) {
 }
 
 func TestWindowOrderSpillPreservesAggregateArguments(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
 	input.Vecs[1] = testutil.MakeInt32Vector([]int32{3, 1, 2}, nil, proc.Mp())

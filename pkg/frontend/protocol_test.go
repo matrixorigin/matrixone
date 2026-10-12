@@ -29,6 +29,7 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
 type observedCloseProtocol struct {
@@ -180,6 +181,89 @@ func Test_SendResponse(t *testing.T) {
 	})
 }
 
+func TestSendResponseQueryCancellation(t *testing.T) {
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	rawConn := &testConn{}
+	ioses, err := NewIOSessionWithOptions(rawConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := ioses.Close(); err != nil {
+			t.Errorf("close IO session: %v", err)
+		}
+	})
+	mp := &MysqlProtocolImpl{io: NewIOPackage(true), tcpConn: ioses, capability: CLIENT_PROTOCOL_41}
+	ctx := context.Background()
+	badField := moerr.NewBadFieldErrorf(ctx, "unknown column")
+	convertedCancel := moerr.ConvertGoError(ctx, context.Canceled)
+	convertedDeadline := moerr.ConvertGoError(ctx, context.DeadlineExceeded)
+	buildCancellation := message.NewJoinMapBuildError(context.Canceled).AsError()
+	buildDeadline := message.NewJoinMapBuildError(context.DeadlineExceeded).AsError()
+	tests := []struct {
+		name  string
+		err   error
+		code  uint16
+		state string
+	}{
+		{"raw", context.Canceled, moerr.ER_QUERY_INTERRUPTED, "70100"},
+		{"wrapped", fmt.Errorf("scan: %w", context.Canceled), moerr.ER_QUERY_INTERRUPTED, "70100"},
+		{"joined cancellations", errors.Join(context.Canceled, convertedCancel), moerr.ER_QUERY_INTERRUPTED, "70100"},
+		{"nested cancellations", fmt.Errorf("query: %w", errors.Join(context.Canceled, fmt.Errorf("reader: %w", convertedCancel))), moerr.ER_QUERY_INTERRUPTED, "70100"},
+		{"converted", convertedCancel, moerr.ER_QUERY_INTERRUPTED, "70100"},
+		{"typed failure after cancel", errors.Join(context.Canceled, badField), moerr.ER_BAD_FIELD_ERROR, "42S22"},
+		{"typed failure before cancel", errors.Join(badField, context.Canceled), moerr.ER_BAD_FIELD_ERROR, "42S22"},
+		{"typed failure after converted cancel", errors.Join(convertedCancel, badField), moerr.ER_BAD_FIELD_ERROR, "42S22"},
+		{"typed failure before converted cancel", errors.Join(badField, convertedCancel), moerr.ER_BAD_FIELD_ERROR, "42S22"},
+		{"wrapped typed failure", fmt.Errorf("query: %w", errors.Join(convertedCancel, fmt.Errorf("reader: %w", badField))), moerr.ER_BAD_FIELD_ERROR, "42S22"},
+		{"untyped failure after cancel", errors.Join(context.Canceled, errors.New("disk failure")), moerr.ER_UNKNOWN_ERROR, DefaultMySQLState},
+		{"untyped failure before cancel", errors.Join(errors.New("disk failure"), context.Canceled), moerr.ER_UNKNOWN_ERROR, DefaultMySQLState},
+		{"untyped failure after converted cancel", errors.Join(convertedCancel, errors.New("disk failure")), moerr.ER_UNKNOWN_ERROR, DefaultMySQLState},
+		{"cancellation text is not identity", errors.New("context canceled"), moerr.ER_UNKNOWN_ERROR, DefaultMySQLState},
+		{"deadline", context.DeadlineExceeded, moerr.ER_UNKNOWN_ERROR, DefaultMySQLState},
+		{"deadline joined with cancel", errors.Join(context.Canceled, context.DeadlineExceeded), moerr.ER_UNKNOWN_ERROR, DefaultMySQLState},
+		{"deadline after converted cancel", errors.Join(convertedCancel, context.DeadlineExceeded), moerr.ER_UNKNOWN_ERROR, DefaultMySQLState},
+		{"deadline before converted cancel", errors.Join(context.DeadlineExceeded, convertedCancel), moerr.ER_UNKNOWN_ERROR, DefaultMySQLState},
+		{"converted deadline", errors.Join(convertedCancel, convertedDeadline), moerr.ErrDeadlineExceeded, DefaultMySQLState},
+		{"explicit interruption", moerr.NewQueryInterrupted(ctx), moerr.ER_QUERY_INTERRUPTED, "70100"},
+		{"dependency cancellation", buildCancellation, moerr.ER_QUERY_INTERRUPTED, "70100"},
+		{"typed failure after dependency cancellation", errors.Join(buildCancellation, badField), moerr.ER_BAD_FIELD_ERROR, "42S22"},
+		{"typed failure before dependency cancellation", errors.Join(badField, buildCancellation), moerr.ER_BAD_FIELD_ERROR, "42S22"},
+		{"dependency timeout identity", buildDeadline, moerr.ER_QUERY_TIMEOUT, DefaultMySQLState},
+		{"wrapped dependency timeout", fmt.Errorf("join: %w", buildDeadline), moerr.ER_QUERY_TIMEOUT, DefaultMySQLState},
+		{"dependency timeout after cancel", errors.Join(convertedCancel, buildDeadline), moerr.ER_QUERY_TIMEOUT, DefaultMySQLState},
+	}
+	for _, cmd := range []CommandType{COM_QUERY, COM_STMT_EXECUTE} {
+		t.Run(fmt.Sprint(cmd), func(t *testing.T) {
+			for _, tc := range tests {
+				t.Run(tc.name, func(t *testing.T) {
+					rawConn.data = nil
+					if err := mp.SendResponse(ctx, NewGeneralErrorResponse(cmd, 0, tc.err)); err != nil {
+						t.Fatal(err)
+					}
+					packets := splitProtocolPackets(t, rawConn.data)
+					if len(packets) != 1 {
+						t.Fatalf("expected one error packet, got %d", len(packets))
+					}
+					if code := binary.LittleEndian.Uint16(packets[0][1:]); code != tc.code {
+						t.Fatalf("expected error code %d, got %d", tc.code, code)
+					}
+					if state := string(packets[0][4:9]); state != tc.state {
+						t.Fatalf("expected SQLSTATE %s, got %s", tc.state, state)
+					}
+					if message := string(packets[0][9:]); message != tc.err.Error() {
+						t.Fatalf("expected message %q, got %q", tc.err.Error(), message)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestSendResponseServerShutdown(t *testing.T) {
 	sv, err := getSystemVariables("test/system_vars_config.toml")
 	if err != nil {
@@ -214,8 +298,7 @@ func TestSendResponseServerShutdown(t *testing.T) {
 	}
 	resp := NewGeneralErrorResponse(COM_QUERY, 0, context.Canceled)
 
-	// A query canceled while the service is still running keeps the existing
-	// generic error classification.
+	// A query canceled while the service is still running is interrupted.
 	if err = mp.SendResponse(serverCtx, resp); err != nil {
 		t.Fatal(err)
 	}
@@ -223,11 +306,11 @@ func TestSendResponseServerShutdown(t *testing.T) {
 	if len(packets) != 1 {
 		t.Fatalf("expected one error packet, got %d", len(packets))
 	}
-	if code := binary.LittleEndian.Uint16(packets[0][1:]); code != moerr.ER_UNKNOWN_ERROR {
-		t.Fatalf("expected error code %d, got %d", moerr.ER_UNKNOWN_ERROR, code)
+	if code := binary.LittleEndian.Uint16(packets[0][1:]); code != moerr.ER_QUERY_INTERRUPTED {
+		t.Fatalf("expected error code %d, got %d", moerr.ER_QUERY_INTERRUPTED, code)
 	}
-	if state := string(packets[0][4:9]); state != DefaultMySQLState {
-		t.Fatalf("expected SQLSTATE %s, got %s", DefaultMySQLState, state)
+	if state := string(packets[0][4:9]); state != "70100" {
+		t.Fatalf("expected SQLSTATE %s, got %s", "70100", state)
 	}
 
 	// CDC target guards classify this exact wire code as a whole-transaction retry.

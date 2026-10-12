@@ -26,9 +26,11 @@ import (
 	"testing"
 	"time"
 
+	sm "github.com/lni/dragonboat/v4/statemachine"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/require"
 )
@@ -938,7 +940,7 @@ func TestAddWALRecoveryStatusIsScopedToRecoveryMode(t *testing.T) {
 		t.Fatal("normal LogService unexpectedly entered WAL recovery")
 	}
 	service.addWALRecoveryStatus(&hb)
-	if _, ok := hb.ConfigData.Content[walRecoveryStatusConfigKey]; ok {
+	if _, ok := hb.ConfigData.Content[pb.WALRecoveryStatusConfigKey]; ok {
 		t.Fatal("normal LogService heartbeat unexpectedly contains WAL recovery status")
 	}
 
@@ -947,16 +949,16 @@ func TestAddWALRecoveryStatusIsScopedToRecoveryMode(t *testing.T) {
 	service.addWALRecoveryStatus(nil)
 	service.walRecovery.pending.Store(true)
 	service.addWALRecoveryStatus(&hb)
-	if got := hb.ConfigData.Content[walRecoveryStatusConfigKey].CurrentValue; got != walRecoveryStatusCoordinatorPending {
+	if got := hb.ConfigData.Content[pb.WALRecoveryStatusConfigKey].CurrentValue; got != walRecoveryStatusCoordinatorPending {
 		t.Fatalf("unexpected recovery status: got %q, want %q", got, walRecoveryStatusCoordinatorPending)
 	}
-	if _, ok := static[walRecoveryStatusConfigKey]; ok {
+	if _, ok := static[pb.WALRecoveryStatusConfigKey]; ok {
 		t.Fatal("recovery status mutated the shared static config map")
 	}
 
 	service.setWALRecoveryInProgress(false)
 	service.addWALRecoveryStatus(&hb)
-	if got := hb.ConfigData.Content[walRecoveryStatusConfigKey].CurrentValue; got != walRecoveryStatusComplete {
+	if got := hb.ConfigData.Content[pb.WALRecoveryStatusConfigKey].CurrentValue; got != walRecoveryStatusComplete {
 		t.Fatalf("unexpected recovery status: got %q, want %q", got, walRecoveryStatusComplete)
 	}
 }
@@ -973,7 +975,7 @@ func TestWALRecoveryPendingUsesReplicatedStoreState(t *testing.T) {
 			Stores: map[string]pb.LogStoreInfo{
 				"remote-log-store": {
 					ConfigData: &pb.ConfigData{Content: map[string]*pb.ConfigItem{
-						walRecoveryStatusConfigKey: {
+						pb.WALRecoveryStatusConfigKey: {
 							CurrentValue: walRecoveryStatusPending,
 						},
 					}},
@@ -990,7 +992,7 @@ func TestWALRecoveryPendingUsesReplicatedStoreState(t *testing.T) {
 	}
 	state.LogServiceRecoveryCompleted = false
 	state.LogState.Stores["remote-log-store"].ConfigData.
-		Content[walRecoveryStatusConfigKey].CurrentValue = walRecoveryStatusComplete
+		Content[pb.WALRecoveryStatusConfigKey].CurrentValue = walRecoveryStatusComplete
 	if walRecoveryPending(state) {
 		t.Fatal("completed remote recovery must not block bootstrap")
 	}
@@ -1002,7 +1004,7 @@ func TestWALRecoveryPendingUsesReplicatedStoreState(t *testing.T) {
 func TestWALRecoveryCoordinator(t *testing.T) {
 	recoveryStore := func(status string) pb.LogStoreInfo {
 		return pb.LogStoreInfo{ConfigData: &pb.ConfigData{Content: map[string]*pb.ConfigItem{
-			walRecoveryStatusConfigKey: {CurrentValue: status},
+			pb.WALRecoveryStatusConfigKey: {CurrentValue: status},
 		}}}
 	}
 	state := &pb.CheckerState{
@@ -1063,6 +1065,43 @@ func TestWALRecoveryCoordinator(t *testing.T) {
 	state.LogState.Stores["store-b"] = recoveryStore("invalid")
 	if _, ready := walRecoveryCoordinator(state, 3); ready {
 		t.Fatal("stores with an invalid recovery status must not elect a coordinator")
+	}
+}
+
+func TestWALRecoveryDecisionsUseSchedulingProjection(t *testing.T) {
+	for _, status := range []string{"", walRecoveryStatusPending, walRecoveryStatusCoordinatorPending, walRecoveryStatusComplete, "unknown"} {
+		t.Run(status, func(t *testing.T) {
+			rsm := hakeeper.NewStateMachine(hakeeper.DefaultHAKeeperShardID, 1)
+			content := map[string]*pb.ConfigItem{"display": {CurrentValue: "visible"}}
+			if status != "" {
+				content[pb.WALRecoveryStatusConfigKey] = &pb.ConfigItem{CurrentValue: status}
+			}
+			hb := pb.LogStoreHeartbeat{UUID: "log", ConfigData: &pb.ConfigData{Content: content},
+				Replicas: []pb.LogReplicaInfo{{LogShardInfo: pb.LogShardInfo{
+					ShardID: firstLogShardID, Replicas: map[uint64]string{1: "log"},
+				}}},
+			}
+			data, err := hb.Marshal()
+			require.NoError(t, err)
+			_, err = rsm.Update(sm.Entry{Index: 1, Cmd: hakeeper.GetLogStoreHeartbeatCmd(data)})
+			require.NoError(t, err)
+			fullValue, err := rsm.Lookup(&hakeeper.StateQuery{})
+			require.NoError(t, err)
+			projectedValue, err := rsm.Lookup(&hakeeper.StateQuery{Scheduling: true})
+			require.NoError(t, err)
+			full, projected := fullValue.(*pb.CheckerState), projectedValue.(*pb.CheckerState)
+			for _, completed := range []bool{false, true} {
+				full.LogServiceRecoveryCompleted = completed
+				projected.LogServiceRecoveryCompleted = completed
+				require.Equal(t, walRecoveryPending(full), walRecoveryPending(projected))
+				for _, replicas := range []uint64{0, 1, 2} {
+					wantID, wantReady := walRecoveryCoordinator(full, replicas)
+					id, ready := walRecoveryCoordinator(projected, replicas)
+					require.Equal(t, wantID, id)
+					require.Equal(t, wantReady, ready)
+				}
+			}
+		})
 	}
 }
 

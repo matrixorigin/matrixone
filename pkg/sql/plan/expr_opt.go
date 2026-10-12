@@ -1712,15 +1712,31 @@ func (builder *QueryBuilder) rewriteExprByInDomains(
 		newExpr, changed := builder.mergeInsInAnd(expr)
 		return newExpr, anyChanged || changed
 	case "or":
+		// Normalize the whole OR component before grouping its equalities.
+		// Merging each prefix turns pairs into IN nodes which cannot join
+		// later equality groups, and repeatedly rebinds the remaining tree.
+		leaves := collectInDomainORLeaves(expr)
+		disjuncts := make([]*plan.Expr, 0, len(leaves))
 		anyChanged := false
-		for idx, arg := range fn.Args {
-			newArg, changed := builder.rewriteExprByInDomains(arg, domains)
+		for _, leaf := range leaves {
+			newArg, changed := builder.rewriteExprByInDomains(leaf.expr, domains)
 			if changed {
-				fn.Args[idx] = newArg
+				// Keep successful child rewrites in the original topology so
+				// a failed merge/rebind can return a valid fallback expression.
+				leaf.parent.Args[leaf.index] = newArg
 				anyChanged = true
 			}
+			// Cast-aware rewrites can generate another OR. Flatten that
+			// result for grouping without rewriting its prefixes again.
+			if newFn := newArg.GetF(); newFn != nil && newFn.Func.ObjName == "or" {
+				for _, generated := range collectInDomainORLeaves(newArg) {
+					disjuncts = append(disjuncts, generated.expr)
+				}
+			} else {
+				disjuncts = append(disjuncts, newArg)
+			}
 		}
-		newExpr, changed := builder.mergeEqualsInOr(expr)
+		newExpr, changed := builder.mergeEqualsInOr(expr, disjuncts)
 		return newExpr, anyChanged || changed
 	default:
 		anyChanged := false
@@ -1733,6 +1749,34 @@ func (builder *QueryBuilder) rewriteExprByInDomains(
 		}
 		return expr, anyChanged
 	}
+}
+
+type inDomainORLeaf struct {
+	expr   *plan.Expr
+	parent *plan.Function
+	index  int
+}
+
+// collectInDomainORLeaves walks a maximal OR component in input order without
+// growing the Go stack for a left-associated predicate. Parent slots preserve
+// the original tree when no grouping succeeds or reconstruction fails.
+func collectInDomainORLeaves(expr *plan.Expr) []inDomainORLeaf {
+	stack := []inDomainORLeaf{{expr: expr}}
+	leaves := make([]inDomainORLeaf, 0, 4)
+	for len(stack) > 0 {
+		last := len(stack) - 1
+		item := stack[last]
+		stack = stack[:last]
+		fn := item.expr.GetF()
+		if fn == nil || fn.Func.ObjName != "or" {
+			leaves = append(leaves, item)
+			continue
+		}
+		for i := len(fn.Args) - 1; i >= 0; i-- {
+			stack = append(stack, inDomainORLeaf{expr: fn.Args[i], parent: fn, index: i})
+		}
+	}
+	return leaves
 }
 
 func (builder *QueryBuilder) rewriteNotInByDomains(
@@ -1919,9 +1963,7 @@ func (builder *QueryBuilder) mergeInsInAnd(expr *plan.Expr) (*plan.Expr, bool) {
 // mergeEqualsInOr collapses `col = v1 OR col = v2 ...` into `col IN (...)`.
 // It runs after cast-aware rewrites, where a cast IN list may have been
 // represented as many equality disjuncts by the binder.
-func (builder *QueryBuilder) mergeEqualsInOr(expr *plan.Expr) (*plan.Expr, bool) {
-	disjuncts := make([]*plan.Expr, 0, 4)
-	flattenLogicalExpressions(expr, "or", &disjuncts)
+func (builder *QueryBuilder) mergeEqualsInOr(expr *plan.Expr, disjuncts []*plan.Expr) (*plan.Expr, bool) {
 	if len(disjuncts) < 2 {
 		return expr, false
 	}
@@ -1998,7 +2040,7 @@ func (builder *QueryBuilder) mergeEqualsInOr(expr *plan.Expr) (*plan.Expr, bool)
 	if len(newDisjuncts) == 0 {
 		return MakeFalseExpr(), true
 	}
-	newExpr, err := combinePlanDisjunction(builder.GetContext(), newDisjuncts)
+	newExpr, err := combinePlanExprsBalanced(builder.GetContext(), "or", newDisjuncts)
 	if err != nil {
 		return expr, false
 	}
@@ -2655,6 +2697,16 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		Parts = util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 		numParts = len(Parts)
 	}
+	// The serialized composite-key shortcut is byte-oriented.  It is not a
+	// valid replacement for predicates over native Unicode collations, whose
+	// equality domain is defined by the UCA key rather than the source bytes.
+	// Keep the original component predicates so the normal collation-aware
+	// expression path remains responsible for filtering rows.  Treat missing
+	// metadata as unsafe as well; this path must never optimize on an unknown
+	// key definition.
+	if tableDefHasNativeUnicodeKeyPart(tableDef, Parts) {
+		return filters
+	}
 
 	for i, expr := range filters {
 		if expr == nil {
@@ -3252,6 +3304,22 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 	}
 
 	return newFilterList
+}
+
+func tableDefHasNativeUnicodeKeyPart(tableDef *plan.TableDef, parts []string) bool {
+	if tableDef == nil || len(parts) == 0 {
+		return true
+	}
+	for _, part := range parts {
+		idx, ok := tableDef.Name2ColIndex[part]
+		if !ok || idx < 0 || int(idx) >= len(tableDef.Cols) || tableDef.Cols[idx] == nil {
+			return true
+		}
+		if types.IsUnicodeCollation(uint8(tableDef.Cols[idx].Typ.GetCharset())) {
+			return true
+		}
+	}
+	return false
 }
 
 func flattenLogicalExpressions(expr *plan.Expr, opName string, args *[]*plan.Expr) {

@@ -17,6 +17,7 @@ package frontend
 import (
 	"container/list"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
@@ -1269,13 +1271,115 @@ func Test_makeExecuteSql(t *testing.T) {
 			want: "",
 		},
 	}
+	require.NoError(t, ses1.SetPrepareStmt(ctx, "empty_sql", &PrepareStmt{Name: "empty_sql"}))
+	// Independent oracle: complete known diagnostic followed by a valid prefix.
+	abbreviate := func(full string, limit int) string {
+		if limit == 0 || limit < -1 {
+			return ""
+		}
+		if limit == -1 || len(full) <= limit {
+			return full
+		}
+		end := limit
+		for !utf8.ValidString(full[:end]) {
+			end--
+		}
+		return full[:end] + "..."
+	}
+	limits := func(full string) []int {
+		result := []int{-2, -1}
+		for limit := 0; limit <= len(full)+1; limit++ {
+			result = append(result, limit)
+		}
+		return result
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := makeExecuteSql(ctx, tt.args.ses, tt.args.stmt, false, ""); strings.TrimSpace(got) != strings.TrimSpace(tt.want) {
-				t.Errorf("makeExecuteSql() = %v, want %v", got, tt.want)
+			const env = "execute test"
+			full := env
+			if tt.want != "" {
+				full += " // " + tt.want
+				if strings.HasSuffix(tt.want, " ;") {
+					full += " "
+				}
+			}
+			for _, limit := range limits(full) {
+				got := makeExecuteSql(ctx, tt.args.ses, tt.args.stmt, false, "", env, limit)
+				require.Equal(t, abbreviate(full, limit), got, "limit=%d", limit)
 			}
 		})
 	}
+	for _, env := range []string{"", "你😀"} {
+		full := env + " //  ; "
+		for _, limit := range limits(full) {
+			require.Equal(t, abbreviate(full, limit), makeExecuteSql(ctx, ses1, &tree.Select{}, true, "empty_sql", env, limit))
+		}
+	}
+	t.Run("malformed EXECUTE USING text", func(t *testing.T) {
+		const rawSQL = "select /* \xff */ ?"
+		const rawVariable = "set @value = '你\xe4\xbd'"
+		require.NoError(t, ses1.SetPrepareStmt(ctx, "malformed_sql", &PrepareStmt{Name: "malformed_sql", Sql: rawSQL}))
+		ses1.SetUserDefinedVar("malformed_value", "unused", rawVariable)
+		stmt := &tree.Execute{Name: "malformed_sql", Variables: []*tree.VarExpr{{Name: "malformed_value"}}}
+		const full = "execute ? // select /* ? */ ? ; set @value = '你??'"
+		for _, limit := range limits(full) {
+			got := makeExecuteSql(ctx, ses1, stmt, false, "", "execute \xff", limit)
+			require.Equal(t, abbreviate(full, limit), got, "limit=%d", limit)
+			require.True(t, utf8.ValidString(got))
+		}
+		prepared, err := ses1.GetPrepareStmt(ctx, "malformed_sql")
+		require.NoError(t, err)
+		require.Equal(t, rawSQL, prepared.Sql)
+		value, err := ses1.GetUserDefinedVar("malformed_value")
+		require.NoError(t, err)
+		require.Equal(t, rawVariable, value.Sql)
+	})
+
+	for _, tc := range []struct{ name, value, want string }{
+		{"binary", "\xff\xfe", "x'fffe'"},
+		{"partial two", "\xc2", "x'c2'"},
+		{"partial three", "\xe4\xbd", "x'e4bd'"},
+		{"partial four", "\xf0\x9f\x98", "x'f09f98'"},
+		{"invalid last", "你😀\xff", "x'e4bda0f09f9880ff'"},
+		{"NUL", "a\x00b", "x'610062'"},
+		{"control", "\x01\x1b\x7f", "x'011b7f'"},
+		{"text", "你😀�", "你😀�"},
+		{"whitespace and punctuation", "'\\\t\n\r", "'\\\t\n\r"},
+		{"numeric", "-123.5", "-123.5"},
+		{"empty", "", ""},
+		{"text NULL", "NULL", "NULL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params := vector.NewVec(types.T_text.ToType())
+			prepared := &PrepareStmt{Name: "binary_diagnostic", Sql: "select ?, ?, ?", params: params}
+			t.Cleanup(func() { prepared.params = nil; params.Free(mp) })
+			for _, value := range []string{tc.value, "", "42"} {
+				require.NoError(t, vector.AppendBytes(params, []byte(value), false, mp))
+			}
+			params.GetNulls().Add(1)
+			require.NoError(t, ses1.SetPrepareStmt(ctx, prepared.Name, prepared))
+			full := "execute binary_diagnostic // select ?, ?, ? ; " + tc.want + " ; NULL ; 42"
+			for _, limit := range limits(full) {
+				got := makeExecuteSql(ctx, ses1, &tree.Select{}, true, prepared.Name, "execute binary_diagnostic", limit)
+				require.Equal(t, abbreviate(full, limit), got, "limit=%d", limit)
+				require.True(t, utf8.ValidString(got))
+			}
+			require.Equal(t, tc.value, params.GetStringAt(0))
+			require.True(t, params.GetNulls().Contains(1))
+			require.Equal(t, "42", params.GetStringAt(2))
+			if strings.HasPrefix(tc.want, "x'") {
+				decoded, err := hex.DecodeString(tc.want[2 : len(tc.want)-1])
+				require.NoError(t, err)
+				require.Equal(t, []byte(tc.value), decoded)
+			} else {
+				var retained bool
+				allocs := testing.AllocsPerRun(10, func() { retained = isTextExecuteParam(tc.value) })
+				require.True(t, retained)
+				require.Zero(t, allocs)
+			}
+		})
+	}
+
 }
 
 func Test_getVariableValue(t *testing.T) {
@@ -1910,6 +2014,27 @@ func Test_setMysqlColumnTypeMetadataDecimalLength(t *testing.T) {
 	}
 }
 
+func Test_setMysqlColumnTypeMetadataMediumIntLength(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    types.Type
+		signed bool
+		length uint32
+	}{
+		{name: "signed", typ: types.New(types.T_int32, 24, -1), signed: true, length: 9},
+		{name: "unsigned", typ: types.New(types.T_uint32, 24, -1), signed: false, length: 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			col.SetSigned(tc.signed)
+			setMysqlColumnTypeMetadata(col, tc.typ)
+
+			require.Equal(t, tc.length, col.Length())
+			require.Zero(t, col.Decimal())
+		})
+	}
+}
+
 func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -2212,6 +2337,25 @@ func TestMysqlBlobMetadataPreservesKnownAndUnknownBounds(t *testing.T) {
 			require.Equal(t, uint16(charsetBinary), col.Charset())
 			require.Equal(t, tc.length, col.Length())
 			require.Equal(t, uint16(defines.BLOB_FLAG|defines.BINARY_FLAG), col.Flag())
+		})
+	}
+}
+
+func TestMysqlMediumIntProtocolMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		sign bool
+	}{
+		{name: "signed", typ: types.New(types.T_int32, 24, -1), sign: true},
+		{name: "unsigned", typ: types.New(types.T_uint32, 24, -1), sign: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			require.NoError(t, setMysqlColumnTypeInfo(context.Background(), tc.typ, col))
+			require.Equal(t, defines.MYSQL_TYPE_INT24, col.ColumnType())
+			require.Equal(t, tc.sign, col.IsSigned())
+			require.Zero(t, col.Decimal())
 		})
 	}
 }

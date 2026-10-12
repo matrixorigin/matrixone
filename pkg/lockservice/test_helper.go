@@ -101,11 +101,11 @@ func RunLockServicesForTest(
 		testSockets,
 		lockTableBindTimeout,
 		morpc.Config{},
+		func(owner LockTableAllocator) { cleanup.allocatorCloser = owner.Close },
 		func(lta *lockTableAllocator) {
 			lta.options.removeDisconnectDuration = removeDisconnectDuration
 		},
 	)
-	cleanup.allocatorCloser = allocator.Close
 	for _, cfg := range configs {
 		lockService := NewLockService(cfg, opts...)
 		services = append(services, lockService)

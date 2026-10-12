@@ -99,6 +99,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -275,7 +276,7 @@ func (c *Compile) SetPlanGenerationReused(reused bool) {
 // frontend or another streaming consumer.
 func (c *Compile) FreezeResultMetadata() {
 	if c != nil {
-		c.resultMetadataFrozen = true
+		c.resultMetadataFrozen.Store(true)
 	}
 }
 
@@ -311,8 +312,10 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	// are deliberately ineligible for LOAD unique-index promotion.
 	c.clearLoadUniqueIndexPromotion()
 	c.executionGeneration = 0
+	c.runSqlToken = 0
+	c.createNamePinsAdmitted = false
 	c.retryTimes = 0
-	c.resultMetadataFrozen = false
+	c.resultMetadataFrozen.Store(false)
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
 
 	if c.lockMeta != nil {
@@ -499,6 +502,8 @@ func (c *Compile) clear() {
 	c.preparedJoinDiagnosticFree = false
 	c.resultSink = nil
 	c.executionGeneration = 0
+	c.runSqlToken = 0
+	c.createNamePinsAdmitted = false
 	c.retryTimes = 0
 	c.affectRows.Store(0)
 	c.addr = ""
@@ -523,7 +528,7 @@ func (c *Compile) clear() {
 	c.planGenerationReused = false
 	c.stringShuffleHashAlgorithm = process.StringShuffleHashLegacy
 	c.stringShuffleHashAlgorithmFrozen = false
-	c.resultMetadataFrozen = false
+	c.resultMetadataFrozen.Store(false)
 	c.planGenerationRebuilt = false
 	c.sequenceState = sequenceStatementState{}
 
@@ -846,7 +851,7 @@ func (c *Compile) preferPrimaryScopeResult(current, candidate scopeRunResult) sc
 }
 
 func (c *Compile) canRetry(err error) bool {
-	if c.disableRetry {
+	if c.disableRetry || c.proc.IncrStatementDisabled() {
 		return false
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode) {
@@ -1938,11 +1943,11 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 			ss = c.compileLimit(node, ss)
 		}
 		return ss, nil
-	case plan.Node_VECTOR_INDEX_SCAN:
+	case plan.Node_INDEX_SEARCH_SCAN:
 		c.appendMetaTables(node.ObjRef)
 
 		c.setAnalyzeCurrent(nil, int(curNodeIdx))
-		ss, err = c.compileVectorIndexScan(node)
+		ss, err = c.compileIndexSearchScan(node)
 		if err != nil {
 			return nil, err
 		}
@@ -2569,6 +2574,14 @@ func (c *Compile) getExternParam(proc *process.Process, externScan *plan.ExternS
 	param.ExternType = externScan.Type
 	param.FileService = c.proc.Base.FileService
 	param.Ctx = c.proc.Ctx
+
+	if externScan.Type == int32(plan.ExternType_LOAD) && param.StageFilepath != "" {
+		// Keep the prepared plan's bound source and derived file metadata, but
+		// authorize its original stage dependency against this execution's catalog.
+		if _, err := stageutil.UrlToStageDef(param.StageFilepath, proc); err != nil {
+			return nil, err
+		}
+	}
 
 	if externScan.Type == int32(plan.ExternType_EXTERNAL_TB) || externScan.Type == int32(plan.ExternType_RESULT_SCAN) {
 		switch param.ScanType {
@@ -5303,7 +5316,9 @@ func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, 
 			return c.compileSingleTableFunction(node)
 		}
 	}
-	if planplugin.TableFuncRequiresCoordinator(node.TableDef.TblFunc.Name) {
+	if name := node.TableDef.GetTblFunc().GetName(); name == "json_table" || planplugin.TableFuncRequiresCoordinator(name) {
+		// G2 has no distributed keyed-once warning transport. Execute this
+		// consumer once on the coordinator; input scans may remain remote.
 		ss = []*Scope{c.newMergeScope(ss)}
 	}
 	for i := range ss {
@@ -5383,7 +5398,7 @@ func (c *Compile) compileTableScanWithNode(node *plan.Node, engNode engine.Node,
 	return s, nil
 }
 
-func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
+func (c *Compile) compileIndexSearchScan(node *plan.Node) ([]*Scope, error) {
 	var nodes engine.Nodes
 	var workspace client.Workspace
 	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
@@ -5393,6 +5408,7 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 	required := requiredVectorMembership(node)
 	distributedPRE := required && qualified && vectorID == node.NodeId
 	if c.execType == plan2.ExecTypeAP_MULTICN && len(c.cnList) > 1 &&
+		plan2.IndexSearchScanPartitioned(node.IndexSearchScan) &&
 		(workspace == nil || workspace.Readonly()) &&
 		((node.Stats == nil || !node.Stats.ForceOneCN) && !required || distributedPRE) {
 		nodes = make(engine.Nodes, len(c.cnList))
@@ -5405,33 +5421,28 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 				CNIDX: int32(i),
 			}
 		}
-		version := defines.MORPCVersion96
-		if distributedPRE {
-			version = defines.MORPCVersion103
-		}
-		stable, err := remoteWorkersSupportProtocol(c.proc, nodes, version)
+		supported, err := remoteWorkersSupportProtocol(c.proc, nodes, vectorscan.IndexSearchScanProtocolVersion)
 		if err != nil {
 			return nil, err
 		}
-		if distributedPRE && !stable {
-			return nil, moerr.NewNotSupportedNoCtx("required IVF worker capability changed after placement")
+		if !supported {
+			return nil, moerr.NewNotSupportedNoCtxf(
+				"index search scan requires MORPC protocol version %d on every CN", vectorscan.IndexSearchScanProtocolVersion)
 		}
-		if stable {
-			// Keep the query's coordinator-first list intact for other scans.
-			// Object owners depend only on the selected identities, not ingress.
-			slices.SortFunc(nodes, func(a, b engine.Node) int {
-				if n := cmp.Compare(a.Id, b.Id); n != 0 {
-					return n
-				}
-				return cmp.Compare(a.Addr, b.Addr)
-			})
-			for i := range nodes {
-				nodes[i].CNIDX = int32(i)
+		// Keep the query's coordinator-first list intact for other scans.
+		// Object owners depend only on the selected identities, not ingress.
+		slices.SortFunc(nodes, func(a, b engine.Node) int {
+			if n := cmp.Compare(a.Id, b.Id); n != 0 {
+				return n
 			}
+			return cmp.Compare(a.Addr, b.Addr)
+		})
+		for i := range nodes {
+			nodes[i].CNIDX = int32(i)
 		}
 	} else {
 		local := getEngineNode(c)
-		parallelism, err := c.vectorIndexScanParallelism(node, local.Mcpu)
+		parallelism, err := c.indexSearchScanParallelism(node, local.Mcpu)
 		if err != nil {
 			return nil, err
 		}
@@ -5452,7 +5463,7 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 		s.TxnOffset = c.TxnOffset
 		s.DataSource = &Source{
 			node:                    nodeCopy,
-			vectorIndexScanTemplate: plan2.DeepCopyVectorIndexScan(nodeCopy.VectorIndexScan),
+			indexSearchScanTemplate: plan2.DeepCopyIndexSearchScan(nodeCopy.IndexSearchScan),
 		}
 		op := constructTableScan(nodeCopy)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -5473,8 +5484,8 @@ func requiredVectorMembership(node *plan.Node) bool {
 	return false
 }
 
-func (c *Compile) vectorIndexScanParallelism(node *plan.Node, capacity int) (int, error) {
-	if !requiredVectorMembership(node) || node.GetVectorIndexScan().GetScanWork() == nil || node.Stats == nil || node.Stats.Dop <= 1 {
+func (c *Compile) indexSearchScanParallelism(node *plan.Node, capacity int) (int, error) {
+	if !requiredVectorMembership(node) || node.GetIndexSearchScan().GetScanWork() == nil || node.Stats == nil || node.Stats.Dop <= 1 {
 		return 1, nil
 	}
 	resolve := c.proc.GetResolveVariableFunc()
@@ -5539,40 +5550,40 @@ func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator
 	return txnOp, ctx, nil
 }
 
-// normalizeVectorIndexScanSnapshot closes the two representations of a
+// normalizeIndexSearchScanSnapshot closes the two representations of a
 // vector scan's snapshot before the generic datasource transaction selection
 // runs.  The node-level snapshot is the compiler contract; the nested copy is
 // the self-contained identity consumed by the index reader.  Keep a fallback
 // from the nested field for plans produced before the node-level field was
 // populated, then make independent copies so later expression folding or
 // remote-scope cloning cannot mutate either representation.
-func normalizeVectorIndexScanSnapshot(node *plan.Node) {
-	if node == nil || node.VectorIndexScan == nil {
+func normalizeIndexSearchScanSnapshot(node *plan.Node) {
+	if node == nil || node.IndexSearchScan == nil {
 		return
 	}
 	snapshot := node.ScanSnapshot
 	if snapshot == nil {
-		snapshot = node.VectorIndexScan.ScanSnapshot
+		snapshot = node.IndexSearchScan.ScanSnapshot
 	}
 	if snapshot == nil {
 		return
 	}
 	node.ScanSnapshot = plan2.DeepCopySnapshot(snapshot)
-	node.VectorIndexScan.ScanSnapshot = plan2.DeepCopySnapshot(node.ScanSnapshot)
+	node.IndexSearchScan.ScanSnapshot = plan2.DeepCopySnapshot(node.ScanSnapshot)
 }
 
-func prepareVectorIndexScanForExecution(source *Source, proc *process.Process) (*plan.VectorIndexScan, error) {
-	if source == nil || source.node == nil || source.node.VectorIndexScan == nil {
+func prepareIndexSearchScanForExecution(source *Source, proc *process.Process) (*plan.IndexSearchScan, error) {
+	if source == nil || source.node == nil || source.node.IndexSearchScan == nil {
 		return nil, moerr.NewInvalidInputNoCtx("vector index scan is missing its specification")
 	}
-	if source.vectorIndexScanTemplate == nil {
-		source.vectorIndexScanTemplate = plan2.DeepCopyVectorIndexScan(source.node.VectorIndexScan)
+	if source.indexSearchScanTemplate == nil {
+		source.indexSearchScanTemplate = plan2.DeepCopyIndexSearchScan(source.node.IndexSearchScan)
 	}
-	spec, err := vectorscan.PrepareScalar(source.vectorIndexScanTemplate, proc)
+	spec, err := vectorscan.PrepareScalar(source.indexSearchScanTemplate, proc)
 	if err != nil {
 		return nil, err
 	}
-	source.node.VectorIndexScan = spec
+	source.node.IndexSearchScan = spec
 	return spec, nil
 }
 
@@ -5744,17 +5755,17 @@ func filterScanStorageExprs(proc *process.Process, exprs []*plan.Expr, provenFre
 	return filtered
 }
 
-func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {
+func (c *Compile) compileIndexSearchScanDataSource(s *Scope) error {
 	node := s.DataSource.node
-	if node == nil || node.VectorIndexScan == nil {
+	if node == nil || node.IndexSearchScan == nil {
 		return moerr.NewInvalidInputNoCtx("vector index scan is missing its specification")
 	}
 
-	_, err := prepareVectorIndexScanForExecution(s.DataSource, c.proc)
+	_, err := prepareIndexSearchScanForExecution(s.DataSource, c.proc)
 	if err != nil {
 		return err
 	}
-	normalizeVectorIndexScanSnapshot(node)
+	normalizeIndexSearchScanSnapshot(node)
 	txnOp, _, err := c.getCompileTableScanDataSourceTxn(s)
 	if err != nil {
 		return err
@@ -6929,15 +6940,6 @@ func canUseHashMarkJoinWithInputs(node, left, right *plan.Node) bool {
 	allNotNull := true
 	for _, condition := range hashConditions {
 		fn := condition.GetF()
-		if fn == nil || !plan2.IsEqualFunc(fn.Func.GetObj()) || len(fn.Args) != 2 {
-			return false
-		}
-		leftRel, leftSingleRel := hashMarkOperandRel(fn.Args[0])
-		rightRel, rightSingleRel := hashMarkOperandRel(fn.Args[1])
-		if !leftSingleRel || !rightSingleRel ||
-			!((leftRel == 0 && rightRel == 1) || (leftRel == 1 && rightRel == 0)) {
-			return false
-		}
 		if left != nil && right != nil {
 			allNotNull = allNotNull &&
 				plan2.IsJoinExprEffectivelyNotNullable(fn.Args[0], left, right) &&
@@ -6981,40 +6983,6 @@ func canUseShuffleHashMarkJoinWithInputs(node, left, right *plan.Node) bool {
 		}
 	}
 	return true
-}
-
-// hashMarkOperandRel returns the single relation referenced by an equality
-// operand. MARK cannot hash an operand that mixes probe and build columns: the
-// resulting residual condition needs row-aware evaluation by LoopJoin.
-func hashMarkOperandRel(expr *plan.Expr) (int32, bool) {
-	relPos := int32(-1)
-	singleRel := true
-
-	var visit func(*plan.Expr)
-	visit = func(current *plan.Expr) {
-		if current == nil || !singleRel {
-			return
-		}
-		switch impl := current.Expr.(type) {
-		case *plan.Expr_Col:
-			if relPos == -1 {
-				relPos = impl.Col.RelPos
-			} else if relPos != impl.Col.RelPos {
-				singleRel = false
-			}
-		case *plan.Expr_F:
-			for _, arg := range impl.F.Args {
-				visit(arg)
-			}
-		case *plan.Expr_List:
-			for _, item := range impl.List.List {
-				visit(item)
-			}
-		}
-	}
-
-	visit(expr)
-	return relPos, singleRel && relPos >= 0
 }
 
 func (c *Compile) broadcastJoinUsesHash(node *plan.Node) bool {
@@ -7475,10 +7443,11 @@ func hasMultiScopeGroup(groups [][]*Scope) bool {
 
 func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	name := right.GetTableDef().GetTblFunc().GetName()
-	if name == "mo_view_columns" || planplugin.TableFuncRequiresCoordinator(name) {
+	if name == "mo_view_columns" || name == "json_table" || planplugin.TableFuncRequiresCoordinator(name) {
 		// Session-bound functions and index writers must use the origin process:
 		// a remote mirror workspace cannot publish writes in its transaction.
 		// Gather inputs here without changing the source scans' placement.
+		// JSON_TABLE stays local until its keyed-once warning transport exists.
 		rs = []*Scope{c.newMergeScope(rs)}
 	}
 

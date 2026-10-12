@@ -199,7 +199,6 @@ func TestHandleAddNonVotingReplica(t *testing.T) {
 }
 
 func TestHandleStartNonVotingReplica(t *testing.T) {
-	t.Skip() // pls re-open after https://github.com/matrixorigin/matrixone/pull/19025
 	fn := func(t *testing.T, s *Service) {
 		var cfg Config
 		genCfg := func() Config {

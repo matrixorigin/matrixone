@@ -514,16 +514,24 @@ const (
 	basicClusterHAKeeperBootstrapRetryInterval = 500 * time.Millisecond
 	basicClusterServiceStartupRetryInterval    = 100 * time.Millisecond
 	basicClusterTaskServiceReadyTimeout        = 30 * time.Second
+	testLockBindTimeout                        = 5 * time.Second
+	testLockBindHeartbeatInterval              = 100 * time.Millisecond
 )
 
 func startBasicCluster(
 	cnCount int,
 	trace func(phase string, duration time.Duration, err error),
+	adjust func(ServiceOperator),
 ) (Cluster, error) {
 	started := time.Now()
 	c, err := StartTestCluster(
 		WithCNCount(cnCount),
-		WithPreStart(adjustBasicClusterService),
+		WithPreStart(func(service ServiceOperator) {
+			adjustBasicClusterService(service)
+			if adjust != nil {
+				adjust(service)
+			}
+		}),
 	)
 	if trace != nil {
 		trace("cluster-start", time.Since(started), err)
@@ -576,10 +584,10 @@ func adjustBasicClusterService(svc ServiceOperator) {
 	}
 }
 
-// adjustTestingClusterStartup applies local test-cluster Raft timing
-// and readiness polling before scenario overrides. Readiness conditions,
-// store liveness, and bootstrap failure budgets are unchanged.
-func adjustTestingClusterStartup(svc ServiceOperator) {
+// adjustTestingClusterTiming applies local Raft, readiness and lock-bind
+// timing before scenario overrides. Lock expiry keeps its grace period and
+// authoritative validation; healthy CNs refresh well inside that period.
+func adjustTestingClusterTiming(svc ServiceOperator) {
 	switch svc.ServiceType() {
 	case metadata.ServiceType_LOG:
 		svc.Adjust(func(config *ServiceConfig) {
@@ -591,10 +599,18 @@ func adjustTestingClusterStartup(svc ServiceOperator) {
 	case metadata.ServiceType_TN:
 		svc.Adjust(func(config *ServiceConfig) {
 			config.HAKeeperRunningRetryInterval.Duration = basicClusterServiceStartupRetryInterval
+			tn := config.TN_please_use_getTNServiceConfig
+			if tn == nil {
+				tn = config.TNCompatible
+			}
+			if tn != nil {
+				tn.LockService.KeepBindTimeout.Duration = testLockBindTimeout
+			}
 		})
 	case metadata.ServiceType_CN:
 		svc.Adjust(func(config *ServiceConfig) {
 			config.TNShardReadyRetryInterval.Duration = basicClusterServiceStartupRetryInterval
+			config.CN.LockService.KeepBindDuration.Duration = testLockBindHeartbeatInterval
 		})
 	}
 }
@@ -671,7 +687,7 @@ func RunBaseClusterTests(
 ) {
 	t.Helper()
 	basicClusterState.Run(t, func() (Cluster, error) {
-		return startBasicCluster(basicClusterCNCount, basicClusterSetupTracer(t, basicClusterCNCount))
+		return startBasicCluster(basicClusterCNCount, basicClusterSetupTracer(t, basicClusterCNCount), nil)
 	}, func(c Cluster) {
 		fn(c)
 	})
@@ -694,7 +710,7 @@ func RunSingleCNBaseClusterTests(
 ) {
 	t.Helper()
 	singleCNClusterState.Run(t, func() (Cluster, error) {
-		return startBasicCluster(1, basicClusterSetupTracer(t, 1))
+		return startBasicCluster(1, basicClusterSetupTracer(t, 1), nil)
 	}, func(c Cluster) {
 		fn(c)
 	})
