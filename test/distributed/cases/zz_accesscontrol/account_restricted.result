@@ -71,8 +71,8 @@ system_metrics
 use res_test;
 desc r_test;
 Field    Type    Null    Key    Default    Extra    Comment
-c1    INT(32)    YES    UNI    null        
-c2    VARCHAR(20)    YES        null        
+c1    int    YES    UNI    null        
+c2    varchar(20)    YES        null        
 show tables;
 Tables_in_res_test
 r_test
@@ -81,12 +81,12 @@ Table    Create Table
 r_test    CREATE TABLE `r_test` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(20) DEFAULT NULL,\n  UNIQUE KEY `ui` (`c1`)\n)
 show columns from r_test;
 Field    Type    Null    Key    Default    Extra    Comment
-c1    INT(32)    YES    UNI    null        
-c2    VARCHAR(20)    YES        null        
+c1    int    YES    UNI    null        
+c2    varchar(20)    YES        null        
 show full columns from r_test;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-c1    INT(32)    null    YES    UNI    null        select,insert,update,references    
-c2    VARCHAR(20)    utf8mb4_general_ci    YES        null        select,insert,update,references    
+c1    int    null    YES    UNI    null        select,insert,update,references    
+c2    varchar(20)    utf8mb4_general_ci    YES        null        select,insert,update,references    
 show variables where value = 'MatrixOne';
 Variable_name    Value
 version_comment    MatrixOne
@@ -258,12 +258,12 @@ Table    Create Table
 r_test    CREATE TABLE `r_test` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(20) DEFAULT NULL,\n  UNIQUE KEY `ui` (`c1`)\n)
 show columns from r_test;
 Field    Type    Null    Key    Default    Extra    Comment
-c1    INT(32)    YES    UNI    null        
-c2    VARCHAR(20)    YES        null        
+c1    int    YES    UNI    null        
+c2    varchar(20)    YES        null        
 show full columns from r_test;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-c1    INT(32)    null    YES    UNI    null        select,insert,update,references    
-c2    VARCHAR(20)    utf8mb4_general_ci    YES        null        select,insert,update,references    
+c1    int    null    YES    UNI    null        select,insert,update,references    
+c2    varchar(20)    utf8mb4_general_ci    YES        null        select,insert,update,references    
 show variables where value = 'MatrixOne';
 Variable_name    Value
 version_comment    MatrixOne

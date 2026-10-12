@@ -20,22 +20,22 @@ t1  𝄀
 t2
 show columns from t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-str  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-name  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
+id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+str  ¦  char(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+name  ¦  varchar(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
 show full columns from t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  null  ¦  NO  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-str  ¦  CHAR(10)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-name  ¦  VARCHAR(10)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
+id  ¦  int  ¦  null  ¦  NO  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+str  ¦  char(10)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+name  ¦  varchar(10)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
 show full columns from t1 like '%';
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  null  ¦  NO  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-str  ¦  CHAR(10)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-name  ¦  VARCHAR(10)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
+id  ¦  int  ¦  null  ¦  NO  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+str  ¦  char(10)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+name  ¦  varchar(10)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
 show full columns from t1 where Field ='id';
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  null  ¦  NO  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
+id  ¦  int  ¦  null  ¦  NO  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
 drop database if exists test01;
 show charset;
 ➤ Charset[12,64,0]  ¦  Description[12,2048,0]  ¦  Default collation[12,64,0]  ¦  Maxlen[4,32,0]  𝄀
@@ -50,10 +50,10 @@ create database test01;
 use test01;
 show columns from test02.t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  TINYINT(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  SMALLINT(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-d  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  tinyint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  smallint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦  
 create database if not exists db11111111111;
 CREATE TABLE db11111111111.t1 (col1 int DEFAULT NULL);
 create table db11111111111.t2(col1 int auto_increment) comment 't2';
@@ -456,25 +456,25 @@ drop table if exists t1;
 create table t1(a int, b int, c int, primary key(a));
 show columns from t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop table t1;
 drop table if exists t2;
 create table t2(a int, b int, c int, primary key(a, b));
 show columns from t2;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-b  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop table t2;
 drop table if exists t3;
 create table t3(a int, b int, c int, primary key(a, b, c));
 show columns from t3;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-b  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-c  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
+a  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
 drop table t3;
 drop database test;
 DROP DATABASE test;

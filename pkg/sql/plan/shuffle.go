@@ -913,7 +913,7 @@ func selectShuffleJoinCondition(
 
 		isEqui := isEquiCond(condition, leftTags, rightTags)
 		if afterRemap {
-			isEqui = isEquiCond2(condition)
+			isEqui = IsEquiJoinCondition(condition)
 		}
 		if !isEqui {
 			continue
@@ -1144,7 +1144,7 @@ func markJoinSupportsShuffle(
 		}
 		isEqui := isEquiCond(condition, leftTags, rightTags)
 		if afterRemap {
-			isEqui = isEquiCond2(condition)
+			isEqui = IsEquiJoinCondition(condition)
 		}
 		if !isEqui {
 			return false

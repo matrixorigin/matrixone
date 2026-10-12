@@ -223,6 +223,31 @@ func TestPartitionChangesHandlePreservesHistoryContext(t *testing.T) {
 	))
 }
 
+// TestPartitionChangesHandlePreservesKeepTrailingDeletesContext pins the option
+// capture added for #28847: a range split into successive sub-handles calls Next
+// with a caller context that does not carry the CollectChanges options, so the
+// handle must re-attach the trailing-delete policy it captured at construction.
+// Without it the sub-handle coalesces the clone's insert+delete pair away and the
+// copied index entry of the deleted row stays queryable.
+func TestPartitionChangesHandlePreservesKeepTrailingDeletesContext(t *testing.T) {
+	base := context.Background()
+	require.False(t, engine.CollectChangesKeepTrailingDeletesFromContext(
+		(&PartitionChangesHandle{}).collectChangesContext(base),
+	))
+	require.True(t, engine.CollectChangesKeepTrailingDeletesFromContext(
+		(&PartitionChangesHandle{keepTrailingDeletes: true}).collectChangesContext(base),
+	))
+
+	// Both options are re-attached together, and neither implies the other.
+	both := &PartitionChangesHandle{preserveAllVersions: true, keepTrailingDeletes: true}
+	got := both.collectChangesContext(base)
+	require.True(t, engine.CollectChangesKeepTrailingDeletesFromContext(got))
+	require.True(t, engine.CollectChangesPreserveAllVersionsFromContext(got))
+	require.False(t, engine.CollectChangesKeepTrailingDeletesFromContext(
+		(&PartitionChangesHandle{preserveAllVersions: true}).collectChangesContext(base),
+	))
+}
+
 func TestInitializeVisibleStateRangeRecovery(t *testing.T) {
 	missing := moerr.NewFileNotFoundNoCtx("gc-ed-object")
 	recoveryCalls := 0

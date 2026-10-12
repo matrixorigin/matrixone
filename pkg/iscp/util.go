@@ -228,6 +228,11 @@ func convertColIntoSql(
 	sqlBuff []byte) ([]byte, error) {
 	if data == nil {
 		typstr := typ.DescString()
+		if typ.Oid == types.T_enum {
+			// The source projection restores the ENUM domain. Its transport type
+			// must be valid SQL without member metadata in the runtime type.
+			typstr = types.T_uint16.ToType().DescString()
+		}
 		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST(NULL as %s)", typstr))
 		return sqlBuff, nil
 	}
@@ -380,9 +385,8 @@ func convertColIntoSql(
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_enum:
 		value := data.(types.Enum)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value.String())
-		sqlBuff = appendByte(sqlBuff, '\'')
+		// Preserve ordinals even when member labels themselves are numeric.
+		sqlBuff = appendUint64(sqlBuff, uint64(value))
 	default:
 		logutil.Error(
 			"Failed to extract row from vector, unsupported type",
@@ -433,6 +437,9 @@ func appendFloat64(buf []byte, value float64, bitSize int) []byte {
 	return buf
 }
 
+// CollectChanges reads one ISCP iteration's change range for index maintenance.
+// The caller's ctx carries the read policy: collectChangesCtxForJobs decides
+// whether this range may keep the trailing DELETE of an insert-then-delete key.
 var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
 	return rel.CollectChanges(ctx, fromTs, toTs, false, mp)
 }

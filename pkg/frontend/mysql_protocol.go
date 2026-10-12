@@ -319,6 +319,8 @@ func (mp *MysqlProtocolImpl) SetU32(id PropertyID, v uint32) {
 	switch id {
 	case CONNID:
 		mp.connectionID = v
+	case CAPABILITY:
+		mp.SetCapability(v)
 	default:
 	}
 }

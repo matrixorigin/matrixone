@@ -2777,6 +2777,12 @@ func buildCreateTable(
 	var asSelectCols []*ColDef
 	var asSelectQuery *Query
 	if stmt.IsAsSelect {
+		// Binding qualifies and rewrites SELECT nodes in place. Keep the caller's
+		// source intact for admission retries and prepared execution, while using
+		// the same private source for inferred columns and the follow-up INSERT.
+		private := *stmt
+		private.AsSource = DeepCopySelect(stmt.AsSource)
+		stmt = &private
 		explicitTargetColumns := make(map[string]struct{})
 		for _, item := range stmt.Defs {
 			if colDef, ok := item.(*tree.ColumnTableDef); ok && colDef.Name != nil {
@@ -3096,7 +3102,7 @@ func buildCreateTable(
 			BindingTags: []int32{builder.genNewBindTag()},
 		}, bindContext)
 
-		err = builder.addBinding(nodeID, tree.AliasClause{}, bindContext)
+		err = builder.addBinding(nodeID, tree.AliasClause{}, bindContext, createTable.Database)
 		if err != nil {
 			return nil, err
 		}
@@ -3359,6 +3365,23 @@ func makeClusterTableAttributeDefault(colType plan.Type) *plan.Default {
 }
 
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
+	// Observe the name-lock generation before reading FK catalog facts. A
+	// cache miss remains unknown and forces execution to refresh before effects.
+	if proc := ctx.GetProcess(); proc != nil && !createTable.Temporary && !IsFkBannedDatabase(createTable.Database) {
+		if txn := proc.GetTxnOperator(); txn != nil && txn.Txn().IsPessimistic() && txn.Txn().IsRCIsolation() {
+			if service := proc.GetLockService(); service != nil {
+				actor, err := ctx.GetAccountId()
+				if err != nil {
+					return err
+				}
+				binding, err := service.GetLockTableBind(actor, catalog.MO_TABLES_ID)
+				if err != nil {
+					return err
+				}
+				createTable.FkNameBinding = &binding
+			}
+		}
+	}
 	replay := ddlReplayForTable(ctx.GetContext(), string(stmt.Table.ObjectName))
 	// all below fields' key is lower case
 	// Keep the SELECT output schema in its original coordinate system. The
@@ -3817,6 +3840,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 			dedupFkName.Insert(fkData.Def.Name)
 
+			if fkData.ForwardRefer {
+				createTable.UnresolvedFkParents = append(createTable.UnresolvedFkParents, &plan.ObjectRef{
+					DbName: fkData.ParentDbName, ObjName: fkData.ParentTableName,
+				})
+			}
 			// only setups foreign key without forward reference
 			if !fkData.ForwardRefer {
 				createTable.FkDbs = append(createTable.FkDbs, fkData.ParentDbName)
@@ -4252,7 +4280,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			return err
 		}
 		if existingTableDef == nil {
-			fks, catalogLayout, err := getFkReferredToWithCatalogLayout(ctx, createTable.Database, createTable.TableDef.Name)
+			fks, _, err := getFkReferredToWithCatalogLayout(ctx, createTable.Database, createTable.TableDef.Name)
 			if err != nil {
 				return err
 			}
@@ -4262,18 +4290,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				def.ColId = uint64(i)
 			}
 			for rkey, fkDefs := range fks {
+				// Self references are reconstructed by the outgoing sentinel owner.
+				if rkey.Db == createTable.Database && rkey.Tbl == createTable.TableDef.Name {
+					continue
+				}
 				for constraintName, defs := range fkDefs {
 					data, err := buildFkDataOfForwardRefer(ctx, constraintName, defs, createTable)
 					if err != nil {
 						return err
-					}
-					// The child was created while foreign_key_checks was disabled, so
-					// its catalog row has no parent key name. Persist the selected key
-					// when the metadata column exists; an old-layout row is reconciled
-					// by the tenant migration after the columns are committed.
-					if catalogLayout == foreignKeyCatalogExtended {
-						createTable.UpdateFkSqls = append(createTable.UpdateFkSqls,
-							getSqlForUpdateFkReferencedIndex(rkey.Db, rkey.Tbl, constraintName, data.Def.ReferencedIndexName))
 					}
 					info := &plan.ForeignKeyInfo{
 						Db:           rkey.Db,
@@ -6195,6 +6219,14 @@ func checkDropReferencedKeyForeignKeyDependency(
 	indexName string,
 	ignoredSelfForeignKeys map[string]struct{},
 ) error {
+	return CheckDropReferencedKeyForeignKeyDependency(ctx.GetContext(), parentTableDef, indexName, ignoredSelfForeignKeys,
+		func(id uint64) (*plan.TableDef, error) { _, def, err := ctx.ResolveById(id, nil); return def, err })
+}
+
+// CheckDropReferencedKeyForeignKeyDependency protects the selected key using
+// the current parent definition and child resolver supplied by its owner.
+func CheckDropReferencedKeyForeignKeyDependency(ctx context.Context, parentTableDef *plan.TableDef, indexName string,
+	ignoredSelfForeignKeys map[string]struct{}, resolve func(uint64) (*plan.TableDef, error)) error {
 	var targetColumns []string
 	if indexName == "PRIMARY" && parentTableDef.Pkey != nil {
 		targetColumns = parentTableDef.Pkey.Names
@@ -6214,12 +6246,12 @@ func checkDropReferencedKeyForeignKeyDependency(
 		selfReference := childTableID == 0 || childTableID == parentTableDef.TblId
 		childTableDef := parentTableDef
 		if !selfReference {
-			_, resolved, err := ctx.ResolveById(childTableID, nil)
+			resolved, err := resolve(childTableID)
 			if err != nil {
 				return err
 			}
 			if resolved == nil {
-				return moerr.NewInternalErrorf(ctx.GetContext(),
+				return moerr.NewInternalErrorf(ctx,
 					"The reference foreign key table %d does not exist", childTableID)
 			}
 			childTableDef = resolved
@@ -6241,19 +6273,19 @@ func checkDropReferencedKeyForeignKeyDependency(
 				for i, columnID := range fk.ForeignCols {
 					column := FindColumnByColId(parentTableDef.Cols, columnID)
 					if column == nil {
-						return moerr.NewInternalErrorf(ctx.GetContext(),
+						return moerr.NewInternalErrorf(ctx,
 							"foreign key %s references missing column id %d", fk.Name, columnID)
 					}
 					referredColumns[i] = column.Name
 				}
 				if foreignKeyReferencedColumnsMatch(targetColumns, referredColumns) {
-					return moerr.NewErrDropIndexNeededInForeignKey(ctx.GetContext(), indexName)
+					return moerr.NewErrDropIndexNeededInForeignKey(ctx, indexName)
 				}
 				continue
 			}
 
 			if referencedIndexName == indexName {
-				return moerr.NewErrDropIndexNeededInForeignKey(ctx.GetContext(), indexName)
+				return moerr.NewErrDropIndexNeededInForeignKey(ctx, indexName)
 			}
 		}
 	}
@@ -7558,7 +7590,7 @@ type foreignKeyReferencedKey struct {
 // FK creation and by DDL lifecycle checks. A reference may use an ordered
 // leading prefix of a PRIMARY/UNIQUE key. PRIMARY wins ties; otherwise the
 // lexicographically first named UNIQUE key wins.
-func selectForeignKeyReferencedIndex(parentTableDef *TableDef, referredColumns []string) (string, bool) {
+func selectForeignKeyReferencedIndex(parentTableDef *TableDef, referredColumns []string, preferred ...string) (string, bool) {
 	keys := make([]foreignKeyReferencedKey, 0, len(parentTableDef.Indexes)+1)
 	if parentTableDef.Pkey != nil {
 		keys = append(keys, foreignKeyReferencedKey{name: "PRIMARY", columns: parentTableDef.Pkey.Names})
@@ -7576,11 +7608,32 @@ func selectForeignKeyReferencedIndex(parentTableDef *TableDef, referredColumns [
 	})
 
 	for _, key := range keys {
+		if len(preferred) > 0 && key.name != preferred[0] {
+			continue
+		}
 		if foreignKeyReferencedColumnsMatch(key.columns, referredColumns) {
 			return key.name, true
 		}
 	}
 	return "", false
+}
+
+// ForeignKeyReferencedIndexMatches validates an explicitly retained key without
+// selecting a different compatible key during physical table reconstruction.
+func ForeignKeyReferencedIndexMatches(parent *plan.TableDef, columns []uint64, name string) bool {
+	if parent == nil || name == "" || len(columns) == 0 {
+		return false
+	}
+	names := make([]string, len(columns))
+	for i, id := range columns {
+		col := FindColumnByColId(parent.Cols, id)
+		if col == nil {
+			return false
+		}
+		names[i] = col.Name
+	}
+	_, matched := selectForeignKeyReferencedIndex(parent, names, name)
+	return matched
 }
 
 func foreignKeyReferencedColumnsMatch(keyColumns, referredColumns []string) bool {
@@ -7614,6 +7667,10 @@ otherwise the lexicographically first named UNIQUE key is selected. Persisting
 this selected name makes information_schema.REFERENTIAL_CONSTRAINTS deterministic.
 */
 func checkFkColsAreValid(ctx CompilerContext, fkData *FkData, parentTableDef *TableDef) error {
+	return checkForeignKeyColumns(ctx.GetContext(), fkData, parentTableDef)
+}
+
+func checkForeignKeyColumns(ctx context.Context, fkData *FkData, parentTableDef *TableDef) error {
 	// colId in parent table-> position in parent table
 	columnIdPos := make(map[uint64]int)
 	// columnName in parent table -> position in parent table
@@ -7627,23 +7684,23 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *FkData, parentTableDef *Ta
 	// 2. check if the referred column does not exist in the parent table
 	for _, colName := range fkData.ColsReferred.Cols {
 		if _, exists := columnNamePos[colName]; !exists { // column exists in parent table
-			return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' no exists in table '%v'", colName, fkData.ParentTableName)
+			return moerr.NewBadFieldErrorf(ctx, "internal error: column '%v' no exists in table '%v'", colName, fkData.ParentTableName)
 		}
 	}
-	if err := checkFkVirtualGeneratedColumns(ctx.GetContext(), parentTableDef, fkData.ColsReferred.Cols); err != nil {
+	if err := checkFkVirtualGeneratedColumns(ctx, parentTableDef, fkData.ColsReferred.Cols); err != nil {
 		return err
 	}
 
 	indexName, matched := selectForeignKeyReferencedIndex(parentTableDef, fkData.ColsReferred.Cols)
 	if !matched {
-		return moerr.NewInternalError(ctx.GetContext(), "failed to add the foreign key constraint")
+		return moerr.NewInternalError(ctx, "failed to add the foreign key constraint")
 	}
 
 	matchCols := make([]uint64, len(fkData.ColsReferred.Cols))
 	for i, referredColName := range fkData.ColsReferred.Cols {
 		colID := parentTableDef.Cols[columnNamePos[referredColName]].ColId
 		if parentTableDef.Cols[columnIdPos[colID]].Typ.Id != fkData.ColTyps[i].Id {
-			return moerr.NewInternalErrorf(ctx.GetContext(), "type of reference column '%v' is not match for column '%v'", referredColName, fkData.Cols.Cols[i])
+			return moerr.NewInternalErrorf(ctx, "type of reference column '%v' is not match for column '%v'", referredColName, fkData.Cols.Cols[i])
 		}
 		matchCols[i] = colID
 	}
@@ -7668,10 +7725,29 @@ func checkFkVirtualGeneratedColumns(ctx context.Context, parentTableDef *TableDe
 // buildFkDataOfForwardRefer rebuilds the fk relationships based on
 // the mo_catalog.mo_foreign_keys.
 func buildFkDataOfForwardRefer(ctx CompilerContext,
-	constraintName string,
-	fkDefs []*FkReferDef,
-	createTable *plan.CreateTable) (*FkData, error) {
+	constraintName string, fkDefs []*FkReferDef, createTable *plan.CreateTable) (*FkData, error) {
+	if len(fkDefs) == 0 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "empty forward foreign key declaration")
+	}
+	_, childTableDef, err := ctx.Resolve(fkDefs[0].Db, fkDefs[0].Tbl, nil)
+	if err != nil {
+		return nil, err
+	}
+	if childTableDef == nil {
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), fkDefs[0].Db, fkDefs[0].Tbl)
+	}
+	return BindForwardForeignKey(ctx.GetContext(), constraintName, fkDefs, childTableDef, createTable.TableDef)
+}
+
+// BindForwardForeignKey applies the same semantic rules to plan previews and
+// execution-time definitions. Column IDs always come from the supplied owners.
+func BindForwardForeignKey(ctx context.Context, constraintName string,
+	fkDefs []*FkReferDef, childTableDef, parentTableDef *plan.TableDef) (*FkData, error) {
+	if len(fkDefs) == 0 || childTableDef == nil || parentTableDef == nil {
+		return nil, moerr.NewInternalError(ctx, "incomplete forward foreign key binding")
+	}
 	fkData := FkData{
+		ParentTableName: parentTableDef.Name,
 		Def: &plan.ForeignKeyDef{
 			Name:                constraintName,
 			Cols:                make([]uint64, len(fkDefs)),
@@ -7682,14 +7758,6 @@ func buildFkDataOfForwardRefer(ctx CompilerContext,
 			OnDeleteOrigin:      convertIntoReferActionOrigin(fkDefs[0].OnDeleteOrigin),
 			OnUpdateOrigin:      convertIntoReferActionOrigin(fkDefs[0].OnUpdateOrigin),
 		},
-	}
-	// 1. get tableDef of the child table
-	_, childTableDef, err := ctx.Resolve(fkDefs[0].Db, fkDefs[0].Tbl, nil)
-	if err != nil {
-		return nil, err
-	}
-	if childTableDef == nil {
-		return nil, moerr.NewNoSuchTable(ctx.GetContext(), fkDefs[0].Db, fkDefs[0].Tbl)
 	}
 	// 2. fill fkdata
 	fkData.Cols = &plan.FkColName{
@@ -7710,7 +7778,7 @@ func buildFkDataOfForwardRefer(ctx CompilerContext,
 			// column type from tableDef
 			fkData.ColTyps[i] = &colDef.Typ
 		} else {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' no exists in table '%v'", fkDef.Col, fkDefs[0].Tbl)
+			return nil, moerr.NewInternalErrorf(ctx, "column '%v' no exists in table '%v'", fkDef.Col, fkDefs[0].Tbl)
 		}
 	}
 
@@ -7722,7 +7790,7 @@ func buildFkDataOfForwardRefer(ctx CompilerContext,
 	}
 
 	// 3. check fk valid or not
-	if err := checkFkColsAreValid(ctx, &fkData, createTable.TableDef); err != nil {
+	if err := checkForeignKeyColumns(ctx, &fkData, parentTableDef); err != nil {
 		return nil, err
 	}
 	return &fkData, nil
@@ -7972,7 +8040,7 @@ func constructAddedPartitionDefs(
 			TableDef:    tableDef,
 			BindingTags: []int32{partBuilder.genNewBindTag()},
 		}, partBindCtx)
-		if err := partBuilder.addBinding(nodeID, tree.AliasClause{}, partBindCtx); err != nil {
+		if err := partBuilder.addBinding(nodeID, tree.AliasClause{}, partBindCtx, tableDef.DbName); err != nil {
 			return nil, err
 		}
 		partitionBinder := NewPartitionBinder(partBuilder, partBindCtx)
