@@ -6207,6 +6207,28 @@ func TestTemporalUnitSyntaxParseFormatParse(t *testing.T) {
 	}
 }
 
+func TestCharCharsetCastParseFormatParse(t *testing.T) {
+	for _, sql := range []string{
+		"select cast('a' as char character set utf8mb4)",
+		"select cast('abc' as char(2) character set binary)",
+		"select convert('abc', char(3) character set utf8mb3)",
+		"select convert('abc', char character set utf8)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			formatted := tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
+			require.Contains(t, formatted, "character set")
+			reparsed, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			defer reparsed.Free()
+			require.Equal(t, formatted, tree.StringWithOpts(reparsed, dialect.MYSQL, tree.WithSingleQuoteString()))
+		})
+	}
+}
+
 func TestCreateSQLTaskPreservesComplexTimestampUnits(t *testing.T) {
 	stmt, err := ParseOne(context.TODO(), `create task task_time_complex as begin
 insert into silver_fiix_offline_tracker

@@ -1472,7 +1472,22 @@ func (node *CastExpr) Format(ctx *FmtCtx) {
 	ctx.WriteString("cast(")
 	node.Expr.Format(ctx)
 	ctx.WriteString(" as ")
-	node.Type.(*T).InternalType.Format(ctx)
+	typ := node.Type.(*T).InternalType
+	if typ.CastCharsetName == "" {
+		typ.Format(ctx)
+	} else {
+		// CHAR without a length is represented internally as VARCHAR for cast
+		// width semantics. Keep the original CHAR target in formatted SQL so the
+		// CHARACTER SET suffix remains parseable and round-trips.
+		ctx.WriteString("char")
+		if typ.DisplayWith >= 0 {
+			ctx.WriteByte('(')
+			ctx.WriteString(strconv.FormatInt(int64(typ.DisplayWith), 10))
+			ctx.WriteByte(')')
+		}
+		ctx.WriteString(" character set ")
+		ctx.WriteString(typ.CastCharsetName)
+	}
 	ctx.WriteByte(')')
 }
 

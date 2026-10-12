@@ -149,6 +149,11 @@ type InternalType struct {
 	//type id
 	Oid uint32
 
+	// CastCharsetName preserves CHARACTER SET syntax for expression CHAR casts.
+	// It is not a column attribute; expression binding resolves it through the
+	// same charset admission policy as CONVERT(... USING charset).
+	CastCharsetName string
+
 	EnumValues []string
 
 	//the type of array elements.

@@ -72,6 +72,26 @@ func sqlTaskInt64(v any) int64 {
 
 const restoreSnapshotFromSyntaxHint = `FROM SNAPSHOT is not supported; use RESTORE DATABASE [account.]database{snapshot="snapshot_name"}`
 
+func makeCharsetCastCharType(width int32, charsetName string) *tree.T {
+	locale := ""
+	familyString := "char"
+	oid := uint32(defines.MYSQL_TYPE_STRING)
+	if width == -1 {
+		// Match the existing CAST/CONVERT no-length CHAR target, which uses
+		// VARCHAR's expression width while preserving CHAR syntax for deparse.
+		familyString = "varchar"
+		oid = uint32(defines.MYSQL_TYPE_VARCHAR)
+	}
+	return &tree.T{InternalType: tree.InternalType{
+		Family:          tree.StringFamily,
+		FamilyString:    familyString,
+		DisplayWith:     width,
+		Locale:          &locale,
+		Oid:             oid,
+		CastCharsetName: charsetName,
+	}}
+}
+
 func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.OrderBy, frame *tree.FrameClause) *tree.WindowSpec {
     hasFrame := frame != nil
     if frame == nil {
@@ -13033,6 +13053,10 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
+|   CAST '(' expression AS CHAR length_option_opt CHARACTER SET charset_name ')'
+    {
+        $$ = tree.NewCastExpr($3, makeCharsetCastCharType($6, $9))
+    }
 |   SERIAL_EXTRACT '(' expression ',' expression AS mo_cast_type ')'
     {
 	$$ = tree.NewSerialExtractExpr($3, $5, $7)
@@ -13477,6 +13501,10 @@ mysql_cast_type:
                 DisplayWith: $2,
             },
         }
+    }
+|   CHAR length_option_opt CHARACTER SET charset_name
+    {
+        $$ = makeCharsetCastCharType($2, $5)
     }
 |   DATE
     {
