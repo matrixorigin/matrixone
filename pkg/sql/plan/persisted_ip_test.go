@@ -1212,19 +1212,19 @@ func TestPersistedCRC32JSONProtocolAdmission(t *testing.T) {
 	require.True(t, features.CRC32JSONTextBytes)
 	required, err := RequiredPersistedExpressionProtocolVersion(expr)
 	require.NoError(t, err)
-	require.Equal(t, int64(defines.MORPCVersion111), required)
+	require.Equal(t, int64(defines.MORPCVersion112), required)
 
-	for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110} {
+	for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		require.ErrorContains(t,
-			RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 111")
+			RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 112")
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
 	// The read floor never grants permission to author a new catalog expression.
 	for key, version := range map[string]int64{
-		moruntime.PersistedExpressionProtocolFloor:          defines.MORPCVersion111,
-		moruntime.PersistedExpressionProtocolAuthoringFloor: defines.MORPCVersion110,
+		moruntime.PersistedExpressionProtocolFloor:          defines.MORPCVersion112,
+		moruntime.PersistedExpressionProtocolAuthoringFloor: defines.MORPCVersion111,
 	} {
 		saved, present := rt.GetGlobalVariables(key)
 		rt.SetGlobalVariables(key, version)
@@ -1237,8 +1237,8 @@ func TestPersistedCRC32JSONProtocolAdmission(t *testing.T) {
 		})
 	}
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
-	require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, expr), "protocol version 111")
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion111)
+	require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, expr), "protocol version 112")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion112)
 	require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, expr))
 	legacy := DeepCopyExpr(expr)
 	legacy.GetF().Func.Obj = function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload)
@@ -1269,7 +1269,7 @@ func TestPersistedCRC32MixedOwnerKeepsHighestFloor(t *testing.T) {
 	require.True(t, features.JSONInputContracts)
 	required, err := RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, int64(defines.MORPCVersion111), required)
+	require.Equal(t, int64(defines.MORPCVersion112), required)
 }
 
 func checkAdmissionResult(t *testing.T, version int64, err error, required int64) {

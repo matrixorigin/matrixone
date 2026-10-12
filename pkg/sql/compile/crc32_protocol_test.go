@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -57,8 +58,8 @@ func TestCRC32JSONDestinationProtocolValidation(t *testing.T) {
 
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}}
 	// Functional-index v107, migration-regexp v108 and Unicode metadata v109
-	// and MEDIUMINT v110 do not implement CRC32 overload 1.
-	for _, version := range []int64{defines.MORPCVersion100, defines.MORPCVersion101, defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110} {
+	// MEDIUMINT v110 and IndexSearchScan v111 do not implement CRC32 overload 1.
+	for _, version := range []int64{defines.MORPCVersion100, defines.MORPCVersion101, defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
@@ -73,7 +74,7 @@ func TestCRC32JSONDestinationProtocolValidation(t *testing.T) {
 		require.Equal(t, 1, client.calls-calls)
 	}
 
-	client.version = defines.MORPCVersion111
+	client.version = defines.MORPCVersion112
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
@@ -116,16 +117,16 @@ func TestCRC32JSONPlacementLocalFloor(t *testing.T) {
 	}}}}
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}}
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110} {
+	for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111} {
 		for _, kind := range []plan2.ExecType{plan2.ExecTypeTP, plan2.ExecTypeAP_ONECN, plan2.ExecTypeAP_MULTICN} {
 			c.execType = kind
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-			require.ErrorContains(t, c.constrainRemoteExpressionWorkers(qry), "protocol version 111")
+			require.ErrorContains(t, c.constrainRemoteExpressionWorkers(qry), "protocol version 112")
 			require.Equal(t, kind, c.execType)
 		}
 	}
 	require.Zero(t, client.calls)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
 	c.execType = plan2.ExecTypeAP_ONECN
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Zero(t, client.calls)
@@ -159,9 +160,9 @@ func TestCRC32JSONProtocolIncludesMergedMediumIntBounds(t *testing.T) {
 		version   int64
 	}{
 		{"mediumint_only", []*planpb.Expr{mediumInt}, true, false, defines.MORPCVersion110},
-		{"crc32_only", []*planpb.Expr{crc32JSON}, false, true, defines.MORPCVersion111},
-		{"mediumint_then_crc32", []*planpb.Expr{mediumInt, crc32JSON}, true, true, defines.MORPCVersion111},
-		{"crc32_then_mediumint", []*planpb.Expr{crc32JSON, mediumInt}, true, true, defines.MORPCVersion111},
+		{"crc32_only", []*planpb.Expr{crc32JSON}, false, true, defines.MORPCVersion112},
+		{"mediumint_then_crc32", []*planpb.Expr{mediumInt, crc32JSON}, true, true, defines.MORPCVersion112},
+		{"crc32_then_mediumint", []*planpb.Expr{crc32JSON, mediumInt}, true, true, defines.MORPCVersion112},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
@@ -221,4 +222,52 @@ func TestCRC32JSONProtocolIncludesMergedMediumIntBounds(t *testing.T) {
 			require.Equal(t, client.calls, client.releases)
 		})
 	}
+}
+
+func TestCRC32JSONProtocolIncludesMergedIndexSearchScan(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	require.Equal(t, int64(defines.MORPCVersion111), int64(vectorscan.IndexSearchScanProtocolVersion))
+	expr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_uint64)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CRC32, function.CRC32JSONTextOverload)},
+			Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}},
+		}},
+	}
+	p := &pipeline.Pipeline{
+		Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"},
+		DataSource: &pipeline.Source{Node: &planpb.Node{
+			NodeType:        planpb.Node_INDEX_SEARCH_SCAN,
+			IndexSearchScan: &planpb.IndexSearchScan{AlgoOptions: []byte(`{}`), AlgoExprs: []*planpb.Expr{expr}},
+		}},
+		InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}},
+	}
+	features, err := planpb.RequiredRemoteExpressionFeatures(p)
+	require.NoError(t, err)
+	require.True(t, features.CRC32JSONTextBytes)
+	require.Equal(t, int64(defines.MORPCVersion112), remoteExpressionProtocolVersion(features))
+	// The merged algo_exprs owner must independently retain the CRC32 floor;
+	// the ordinary projection cannot hide a missing new-owner traversal.
+	p.InstructionList = nil
+	algoFeatures, err := planpb.RequiredRemoteExpressionFeatures(p)
+	require.NoError(t, err)
+	require.Equal(t, features, algoFeatures)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	for _, version := range []int64{defines.MORPCVersion111, defines.MORPCVersion112} {
+		client.version = version
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		// Preserve the actual merged capability, not merely its version number.
+		require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, p))
+		require.NoError(t, validateVectorPartitionDestination(c.proc, p))
+		receive := validateRemoteExpressionPipelineProtocol(c.proc, p)
+		send := validateRemoteExpressionDestination(c.proc, p, features)
+		if version == defines.MORPCVersion111 {
+			require.ErrorContains(t, receive, "protocol version 112")
+			require.ErrorContains(t, send, "MORPC version 112")
+		} else {
+			require.NoError(t, receive)
+			require.NoError(t, send)
+		}
+	}
+	require.Equal(t, client.calls, client.releases)
 }
