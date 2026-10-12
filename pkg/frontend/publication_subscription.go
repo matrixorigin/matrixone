@@ -242,6 +242,19 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 		accountNamesStr string
 	)
 
+	// IF NOT EXISTS must be a no-op when the publication already exists for this
+	// account. Without this check the insert hits the (account_id, pub_name)
+	// unique key and returns ERROR 1062 even when the clause was specified.
+	if cp.IfNotExists {
+		existing, err := getPubInfo(ctx, bh, string(cp.Name))
+		if err != nil {
+			return err
+		}
+		if existing != nil {
+			return nil
+		}
+	}
+
 	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh, false)
 	if err != nil {
 		return

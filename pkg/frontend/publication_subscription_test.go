@@ -202,6 +202,60 @@ func TestCreatePublicationRejectsMissingContextAccount(t *testing.T) {
 	require.ErrorContains(t, err, "account 99 does not exist")
 }
 
+
+func TestCreatePublicationIfNotExistsIsNoOp(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := defines.AttachAccount(context.Background(), catalog.System_Account, 1, 2)
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+
+	// getPubInfo -> checkColExists(account_name): column present
+	bh.EXPECT().ClearExecResultSet()
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil)
+	erCol := mock_frontend.NewMockExecResult(ctrl)
+	erCol.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{erCol})
+
+	// getPubInfo -> existing publication row (current schema with account_name)
+	bh.EXPECT().ClearExecResultSet()
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil)
+	erPub := mock_frontend.NewMockExecResult(ctrl)
+	erPub.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+	erPub.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
+	erPub.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("sys", nil).AnyTimes()
+	erPub.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("e2e_pub_idem", nil).AnyTimes()
+	erPub.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("pub50", nil).AnyTimes()
+	erPub.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(4)).Return(uint64(1), nil).AnyTimes()
+	erPub.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("visible", nil).AnyTimes()
+	erPub.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("*", nil).AnyTimes()
+	erPub.EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("", nil).AnyTimes()
+	erPub.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(8)).Return(true, nil).AnyTimes()
+	erPub.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(9)).Return(uint64(0), nil).AnyTimes()
+	erPub.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(10)).Return(uint64(0), nil).AnyTimes()
+	erPub.EXPECT().GetString(gomock.Any(), uint64(0), uint64(11)).Return("", nil).AnyTimes()
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{erPub})
+
+	stmts, err := mysql.Parse(ctx, "create publication if not exists e2e_pub_idem database pub50 table visible account all", 1)
+	require.NoError(t, err)
+	defer freeStatements(stmts)
+	cp := stmts[0].(*tree.CreatePublication)
+	require.True(t, cp.IfNotExists)
+
+	// Must return nil without proceeding to getAccounts / insert.
+	err = createPublication(ctx, bh, cp)
+	require.NoError(t, err)
+}
+
+func TestCreatePublicationWithoutIfNotExistsStillLooksUpNothingExtra(t *testing.T) {
+	// Parser regression: without IF NOT EXISTS the flag stays false.
+	ctx := context.Background()
+	stmts, err := mysql.Parse(ctx, "create publication e2e_pub_plain database pub50 table visible account all", 1)
+	require.NoError(t, err)
+	defer freeStatements(stmts)
+	require.False(t, stmts[0].(*tree.CreatePublication).IfNotExists)
+}
+
 func Test_showTablesFromDbQuotesDatabaseName(t *testing.T) {
 	testCases := []struct {
 		name        string
