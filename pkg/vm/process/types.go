@@ -17,6 +17,7 @@ package process
 import (
 	"context"
 	"io"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -474,6 +475,9 @@ type BaseProcess struct {
 	// expressions or the session until the statement succeeds.
 	ODKUResult       *ODKUResultState
 	ODKUInputOrdinal *uint64
+	// Immutable per-attempt range, initialized before child pipelines run.
+	odkuInputOrdinalBase  uint64
+	odkuInputOrdinalLimit uint64
 	// AffectedRows carries the number of rows affected by the previous
 	// statement in the same session, used by the ROW_COUNT() builtin.
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
@@ -633,8 +637,9 @@ func (summary *ODKUResultSummary) Merge(other ODKUResultSummary) {
 // reduce rows locally and merge a bounded summary at batch or terminal
 // boundaries, so this mutex is not acquired for every input row.
 type ODKUResultState struct {
-	mu      sync.Mutex
-	Summary ODKUResultSummary
+	mu         sync.Mutex
+	generation uint64
+	Summary    ODKUResultSummary
 }
 
 // One remote pipeline gets a disjoint ordinal range before it starts. The
@@ -959,42 +964,68 @@ func (proc *Process) ResetODKUResult() {
 	if proc.Base.ODKUResult != nil {
 		proc.Base.ODKUResult.mu.Lock()
 		proc.Base.ODKUResult.Summary = ODKUResultSummary{}
+		proc.Base.ODKUResult.generation++
 		proc.Base.ODKUResult.mu.Unlock()
 	}
 	if proc.Base.ODKUInputOrdinal != nil {
-		atomic.StoreUint64(proc.Base.ODKUInputOrdinal, 0)
+		atomic.StoreUint64(proc.Base.ODKUInputOrdinal, proc.Base.odkuInputOrdinalBase)
 	}
 }
 
-// NextODKUInputOrdinal reserves a contiguous range for one PRE_INSERT batch.
-// The returned value is the first ordinal in that range.  A zero value is a
-// valid ordinal, so callers must use the count rather than a zero sentinel.
-func (proc *Process) NextODKUInputOrdinal(count int) uint64 {
-	if proc == nil || proc.Base == nil || count <= 0 || proc.Base.ODKUInputOrdinal == nil {
-		return 0
+// NextODKUInputOrdinal reserves one PRE_INSERT batch before any row is changed.
+// Ordinals describe the coordinator input stream, not generated ID magnitude.
+func (proc *Process) NextODKUInputOrdinal(count int) (uint64, error) {
+	if count < 0 {
+		return 0, moerr.NewInvalidInputNoCtx("negative ODKU input ordinal count")
 	}
-	end := atomic.AddUint64(proc.Base.ODKUInputOrdinal, uint64(count))
-	return end - uint64(count)
+	return proc.reserveODKUInputOrdinals(uint64(count))
 }
 
-// NextODKURemoteOrdinalBase reserves a disjoint statement-local ordinal range
-// for one remote pipeline. It is called by the initiating CN before the
-// ProcessInfo RPC is sent, so remote terminal summaries cannot collide merely
-// because their local processes start at zero.
-func (proc *Process) NextODKURemoteOrdinalBase() uint64 {
+// NextODKURemoteOrdinalBase reserves a disjoint range, not SQL row order.
+func (proc *Process) NextODKURemoteOrdinalBase() (uint64, error) {
+	return proc.reserveODKUInputOrdinals(odkuRemoteOrdinalBlockSize)
+}
+
+func (proc *Process) reserveODKUInputOrdinals(count uint64) (uint64, error) {
 	if proc == nil || proc.Base == nil || proc.Base.ODKUInputOrdinal == nil {
-		return 0
+		return 0, moerr.NewInternalErrorNoCtx("ODKU input ordinal owner is missing")
 	}
-	return atomic.AddUint64(proc.Base.ODKUInputOrdinal, odkuRemoteOrdinalBlockSize) - odkuRemoteOrdinalBlockSize
+	limit := proc.Base.odkuInputOrdinalLimit
+	if limit == 0 {
+		limit = math.MaxUint64
+	}
+	for {
+		start := atomic.LoadUint64(proc.Base.ODKUInputOrdinal)
+		if start > limit || count > limit-start {
+			return 0, moerr.NewInvalidInputNoCtx("ODKU input ordinal range exhausted")
+		}
+		if atomic.CompareAndSwapUint64(proc.Base.ODKUInputOrdinal, start, start+count) {
+			return start, nil
+		}
+	}
 }
 
-// SetODKUInputOrdinalBase initializes the statement-local ordinal range on a
-// remote process reconstructed from ProcessInfo.
-func (proc *Process) SetODKUInputOrdinalBase(base uint64) {
-	if proc == nil || proc.Base == nil || proc.Base.ODKUInputOrdinal == nil {
-		return
+// ValidateODKUInputOrdinalBase rejects an invalid wire range before allocating
+// the remote process or publishing its generation to child pipelines.
+func ValidateODKUInputOrdinalBase(base uint64) error {
+	if base > math.MaxUint64-odkuRemoteOrdinalBlockSize {
+		return moerr.NewInvalidInputNoCtx("ODKU input ordinal base overflows its range")
 	}
+	return nil
+}
+
+// SetODKUInputOrdinalBase initializes the immutable retry boundary before use.
+func (proc *Process) SetODKUInputOrdinalBase(base uint64) error {
+	if err := ValidateODKUInputOrdinalBase(base); err != nil {
+		return err
+	}
+	if proc == nil || proc.Base == nil || proc.Base.ODKUInputOrdinal == nil {
+		return moerr.NewInternalErrorNoCtx("ODKU input ordinal owner is missing")
+	}
+	proc.Base.odkuInputOrdinalBase = base
+	proc.Base.odkuInputOrdinalLimit = base + odkuRemoteOrdinalBlockSize
 	atomic.StoreUint64(proc.Base.ODKUInputOrdinal, base)
+	return nil
 }
 
 func (proc *Process) RecordODKUGenerated(ordinal, id uint64) {
@@ -1037,6 +1068,30 @@ func (proc *Process) MergeODKUResultSummary(summary ODKUResultSummary) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.Summary.Merge(summary)
+}
+
+// ODKUResultGeneration captures the existing statement-result owner, rather
+// than looking up a new generation when an old remote callback arrives.
+func (proc *Process) ODKUResultGeneration() uint64 {
+	if proc == nil || proc.Base == nil || proc.Base.ODKUResult == nil {
+		return 0
+	}
+	state := proc.Base.ODKUResult
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.generation
+}
+
+func (proc *Process) MergeODKUResultSummaryAtGeneration(summary ODKUResultSummary, generation uint64) {
+	if proc == nil || proc.Base == nil || proc.Base.ODKUResult == nil {
+		return
+	}
+	state := proc.Base.ODKUResult
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.generation == generation {
+		state.Summary.Merge(summary)
+	}
 }
 
 // GetODKUProtocolID returns the OK-packet value. A successfully generated

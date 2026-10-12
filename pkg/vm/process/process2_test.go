@@ -284,12 +284,20 @@ func TestODKUResultSummaryOrderingAndSessionSplit(t *testing.T) {
 	require.Zero(t, id)
 
 	proc.ResetODKUResult()
-	base0 := proc.NextODKURemoteOrdinalBase()
-	base1 := proc.NextODKURemoteOrdinalBase()
+	base0, err := proc.NextODKURemoteOrdinalBase()
+	require.NoError(t, err)
+	base1, err := proc.NextODKURemoteOrdinalBase()
+	require.NoError(t, err)
 	require.Zero(t, base0)
 	require.Equal(t, odkuRemoteOrdinalBlockSize, base1)
-	proc.SetODKUInputOrdinalBase(base1)
-	require.Equal(t, base1, proc.NextODKUInputOrdinal(1))
+	require.NoError(t, proc.SetODKUInputOrdinalBase(base1))
+	ordinal, err := proc.NextODKUInputOrdinal(1)
+	require.NoError(t, err)
+	require.Equal(t, base1, ordinal)
+	proc.ResetODKUResult()
+	ordinal, err = proc.NextODKUInputOrdinal(1)
+	require.NoError(t, err)
+	require.Equal(t, base1, ordinal, "retry must retain the decoded range")
 }
 
 func TestODKUResultMethodsHandlePartialProcesses(t *testing.T) {
@@ -302,9 +310,11 @@ func TestODKUResultMethodsHandlePartialProcesses(t *testing.T) {
 	id, generated := nilProc.GetODKUProtocolID()
 	require.Zero(t, id)
 	require.False(t, generated)
-	require.Zero(t, nilProc.NextODKUInputOrdinal(1))
-	require.Zero(t, nilProc.NextODKURemoteOrdinalBase())
-	nilProc.SetODKUInputOrdinalBase(7)
+	_, err := nilProc.NextODKUInputOrdinal(1)
+	require.Error(t, err)
+	_, err = nilProc.NextODKURemoteOrdinalBase()
+	require.Error(t, err)
+	require.Error(t, nilProc.SetODKUInputOrdinalBase(7))
 
 	proc := &Process{Base: &BaseProcess{}}
 	proc.ResetODKUResult()
@@ -312,11 +322,15 @@ func TestODKUResultMethodsHandlePartialProcesses(t *testing.T) {
 	proc.RecordODKUAction(0, 1, true)
 	proc.MergeODKUResultSummary(ODKUResultSummary{HasAction: true, LastActionID: 1})
 	require.Zero(t, proc.GetODKUResultSummary())
-	require.Zero(t, proc.NextODKUInputOrdinal(0))
-	require.Zero(t, proc.NextODKUInputOrdinal(-1))
-	require.Zero(t, proc.NextODKURemoteOrdinalBase())
-	proc.SetODKUInputOrdinalBase(7)
-	require.Zero(t, proc.NextODKUInputOrdinal(0))
+	_, err = proc.NextODKUInputOrdinal(0)
+	require.Error(t, err)
+	_, err = proc.NextODKUInputOrdinal(-1)
+	require.Error(t, err)
+	_, err = proc.NextODKURemoteOrdinalBase()
+	require.Error(t, err)
+	require.Error(t, proc.SetODKUInputOrdinalBase(7))
+	_, err = proc.NextODKUInputOrdinal(0)
+	require.Error(t, err)
 
 	var nilSummary *ODKUResultSummary
 	nilSummary.RecordGenerated(0, 1)
@@ -517,4 +531,28 @@ func TestGetPrepareParamsAtWithoutParams(t *testing.T) {
 	value, err := proc.GetPrepareParamsAt(0)
 	require.Error(t, err)
 	require.Nil(t, value)
+}
+
+func TestODKUOrdinalReservationRejectsBeforeMutation(t *testing.T) {
+	proc := &Process{Base: &BaseProcess{ODKUInputOrdinal: new(uint64), ODKUResult: &ODKUResultState{}}}
+	require.NoError(t, proc.SetODKUInputOrdinalBase(odkuRemoteOrdinalBlockSize))
+	start, err := proc.reserveODKUInputOrdinals(odkuRemoteOrdinalBlockSize)
+	require.NoError(t, err)
+	require.Equal(t, odkuRemoteOrdinalBlockSize, start)
+	end := *proc.Base.ODKUInputOrdinal
+	_, err = proc.NextODKUInputOrdinal(1)
+	require.Error(t, err)
+	require.Equal(t, end, *proc.Base.ODKUInputOrdinal)
+	proc.ResetODKUResult()
+	start, err = proc.NextODKUInputOrdinal(1)
+	require.NoError(t, err)
+	require.Equal(t, odkuRemoteOrdinalBlockSize, start)
+	max := ^uint64(0)
+	require.Error(t, proc.SetODKUInputOrdinalBase(max))
+	require.Equal(t, start+1, *proc.Base.ODKUInputOrdinal)
+	proc.Base.odkuInputOrdinalLimit = 0
+	*proc.Base.ODKUInputOrdinal = max - 1
+	_, err = proc.NextODKURemoteOrdinalBase()
+	require.Error(t, err)
+	require.Equal(t, max-1, *proc.Base.ODKUInputOrdinal)
 }

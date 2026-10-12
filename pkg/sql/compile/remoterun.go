@@ -136,7 +136,7 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
-	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	features, err := pipelineExpressionFeatures(p)
 	if err != nil {
 		return nil, err
 	}
@@ -268,6 +268,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteStatementLastInsertIDPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteODKUBaselinePresence(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteTargetAwareUpdatePipelineProtocol(proc, p); err != nil {
@@ -788,7 +791,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		if t.TrackODKUResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 			return ctxId, nil, moerr.NewNotSupportedNoCtx(
-				"remote ODKU result tracking requires MORPC protocol version 58")
+				"remote ODKU result tracking requires MORPC protocol version 114")
 		}
 		in.PreInsert = &pipeline.PreInsert{
 			SchemaName:                   t.SchemaName,
@@ -1136,7 +1139,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		if t.ODKUResultTracking && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 			return ctxId, nil, moerr.NewNotSupportedNoCtx(
-				"remote ODKU result tracking requires MORPC protocol version 58")
+				"remote ODKU result tracking requires MORPC protocol version 114")
 		}
 		relList, colList := getRelColList(t.Result)
 		in.DedupJoin = &pipeline.DedupJoin{
@@ -2073,6 +2076,11 @@ func validateRemoteAggregateProtocol(
 				"collation-aware text MIN/MAX remote execution requires MORPC protocol version 14",
 			)
 		}
+		if aggregateUsesJSONMinMax(agg) {
+			if err := validateRemoteExpressionFeatures(proc, plan.RemoteExpressionFeatures{JSONMinMaxTypedComparison: true}); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -2233,7 +2241,7 @@ func validateRemoteExpressionPipelineProtocol(
 	if err := plan.RequireLegacyCollations(p); err != nil {
 		return err
 	}
-	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	features, err := pipelineExpressionFeatures(p)
 	if err != nil {
 		return err
 	}
@@ -2259,6 +2267,20 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	protocolVersion, hasProtocolVersion := int64(0), false
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if features.SessionLastInsertIDBaseline {
+		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion114 {
+			return moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID baseline requires MORPC protocol version 114")
+		}
+		if proc == nil || (proc.GetResolveVariableFunc() == nil && !proc.GetSessionInfo().LastInsertIDSet) {
+			return moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID requires an explicit session baseline")
+		}
+	}
+	if features.JSONMinMaxTypedComparison && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
+		return moerr.NewNotSupportedNoCtx("typed JSON MIN/MAX requires MORPC protocol version 113")
+	}
+	if features.JSONStringConsumerOverload && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion112) {
+		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 112")
 	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")
@@ -2489,6 +2511,27 @@ func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
 	return nil
 }
 
+// A zero session baseline is authoritative only when explicitly transported.
+// Keep this at the remote decode boundary, before scope/operator construction.
+func validateRemoteODKUBaselinePresence(proc *process.Process, p *pipeline.Pipeline) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		tracked := instruction.GetPreInsert() != nil && instruction.GetPreInsert().TrackOdkuResult ||
+			instruction.GetDedupJoin() != nil && instruction.GetDedupJoin().OdkuResultTracking
+		if tracked && (proc == nil || proc.Base == nil || !proc.GetSessionInfo().LastInsertIDSet) {
+			return moerr.NewNotSupportedNoCtx("remote ODKU result tracking requires an explicit session LAST_INSERT_ID baseline")
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteODKUBaselinePresence(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateRemoteStatementLastInsertIDPipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
@@ -2504,13 +2547,13 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 			}
 			if preInsert.TrackOdkuResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 				return moerr.NewNotSupportedNoCtx(
-					"remote ODKU result tracking requires MORPC protocol version 58")
+					"remote ODKU result tracking requires MORPC protocol version 114")
 			}
 		}
 		if dedup := instruction.GetDedupJoin(); dedup != nil && dedup.OdkuResultTracking &&
 			(proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 			return moerr.NewNotSupportedNoCtx(
-				"remote ODKU result tracking requires MORPC protocol version 58")
+				"remote ODKU result tracking requires MORPC protocol version 114")
 		}
 		if preInsertUnique := instruction.GetPreInsertUnique(); preInsertUnique != nil {
 			if err := validateRemoteAutoIncrementSessionOptionsProtocol(
@@ -2879,6 +2922,10 @@ func aggregateUsesCollationAwareTextMinMax(agg aggexec.AggFuncExecExpression) bo
 	default:
 		return false
 	}
+}
+
+func aggregateUsesJSONMinMax(agg aggexec.AggFuncExecExpression) bool {
+	return plan.IsJSONMinMaxAggregate(agg.GetAggID(), agg.GetArgExpressions())
 }
 
 // convert []aggexec.AggFuncExecExpression to []*pipeline.Aggregate

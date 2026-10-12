@@ -385,6 +385,9 @@ const (
 // MediumIntAssignmentBounds requires MORPC v110 because older executors treat
 // the shared INT32 storage type as a full-width INT rather than a 24-bit value.
 type RemoteExpressionFeatures struct {
+	SessionLastInsertIDBaseline     bool
+	JSONMinMaxTypedComparison       bool
+	JSONStringConsumerOverload      bool
 	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
 	YearBitCast                     bool
@@ -419,7 +422,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.SessionLastInsertIDBaseline || features.JSONMinMaxTypedComparison || features.JSONStringConsumerOverload || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -903,7 +906,12 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
+				features.JSONMinMaxTypedComparison = features.JSONMinMaxTypedComparison || IsJSONMinMaxAggregate(fn.Func.Obj, fn.Args)
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				// LAST_INSERT_ID() is function237/overload0; remote evaluation
+				// needs the captured session baseline, not a worker-local zero.
+				features.SessionLastInsertIDBaseline = features.SessionLastInsertIDBaseline || (id == 237 && overload == 0)
+				features.JSONStringConsumerOverload = features.JSONStringConsumerOverload || isRemoteJSONStringConsumerOverload(id, overload)
 				mediumIntAssignmentTarget := len(fn.Args) > 1 && fn.Args[1] != nil &&
 					isPlanMediumIntType(fn.Args[1].Typ)
 				if (id == mediumIntStrictCastFunctionID ||
@@ -1659,4 +1667,37 @@ func expressionOwnerContainer(kind reflect.Kind) bool {
 	default:
 		return false
 	}
+}
+
+// RequiresMORPCVersion112JSONStringConsumerOverload detects the distinct JSON-aware
+// ELT identity. Current-main v101 retains the existing JSON-aware
+// CONCAT and CONCAT_WS overload 0 contracts.
+func RequiresMORPCVersion112JSONStringConsumerOverload(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.JSONStringConsumerOverload, err
+}
+
+const (
+	remoteJSONStringConsumerELTFunctionID int32 = 384
+)
+
+func isRemoteJSONStringConsumerOverload(functionID, overloadID int32) bool {
+	if overloadID != 1 {
+		return false
+	}
+	switch functionID {
+	case remoteJSONStringConsumerELTFunctionID:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsJSONMinMaxAggregate identifies the unchanged MIN/MAX overload zero with a
+// physical JSON argument. DISTINCT sets the high bit of the aggregate identity.
+// Lowered pipelines retain Op and arguments but no outer function expression.
+func IsJSONMinMaxAggregate(op int64, args []*Expr) bool {
+	op = int64(uint64(op) & ^(uint64(1) << 63))
+	return (op == int64(139)<<32 || op == int64(137)<<32) &&
+		len(args) > 0 && args[0] != nil && args[0].Typ.Id == planJSONTypeID
 }

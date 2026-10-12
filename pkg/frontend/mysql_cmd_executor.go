@@ -5975,6 +5975,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		TimeZone:               ses.GetTimeZone(),
 		StorageEngine:          pu.StorageEngine,
 		LastInsertID:           ses.GetLastInsertID(),
+		LastInsertIDSet:        true,
 		SqlHelper:              ses.GetSqlHelper(),
 		CompilerContext:        ses.txnCompileCtx,
 		Buf:                    ses.GetBuffer(),
@@ -6266,6 +6267,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// that attempt baseline aligned when COM_QUERY reuses the process across
 		// statements.
 		proc.Base.SessionInfo.LastInsertID = lastInsertID
+		proc.Base.SessionInfo.LastInsertIDSet = true
 		proc.ResetODKUResult()
 		if isTopLevelClientStatement(ses, execCtx, currentInput) {
 			execCtx.captureDiagnosticCountsSnapshot(ses)

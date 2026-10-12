@@ -147,7 +147,10 @@ const (
 	MORPCVersion109    int64 = 109 // native Unicode collation identities in persisted information_schema.COLUMNS metadata
 	MORPCVersion110    int64 = 110 // MEDIUMINT assignment bounds for mixed-version CN safety
 	MORPCVersion111    int64 = 111 // IndexSearchScan for every vector and fulltext index, algo_options/algo_exprs
-	MORPCLatestVersion       = MORPCVersion111
+	MORPCVersion112    int64 = 112 // selected JSON ELT expression execution
+	MORPCVersion113    int64 = 113 // typed JSON MIN/MAX aggregate comparison
+	MORPCVersion114    int64 = 114 // ordered ODKU result summary and captured session LAST_INSERT_ID baseline
+	MORPCLatestVersion       = MORPCVersion114
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

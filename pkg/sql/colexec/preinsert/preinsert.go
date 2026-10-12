@@ -368,7 +368,10 @@ func (preInsert *PreInsert) captureODKUInputOrdinals(proc *proc, bat *batch.Batc
 	if bat == nil {
 		return moerr.NewInternalError(proc.Ctx, "ODKU input ordinal capture received nil batch")
 	}
-	start := proc.NextODKUInputOrdinal(bat.RowCount())
+	start, err := proc.NextODKUInputOrdinal(bat.RowCount())
+	if err != nil {
+		return err
+	}
 	preInsert.ctr.odkuOrdinals = make([]uint64, bat.RowCount())
 	for i := range preInsert.ctr.odkuOrdinals {
 		preInsert.ctr.odkuOrdinals[i] = start + uint64(i)

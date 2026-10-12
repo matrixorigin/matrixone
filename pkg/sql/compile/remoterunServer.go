@@ -548,6 +548,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			receiver.resourceMissingMemoryDomains = aggregate.MissingMemoryDomainCount
 			receiver.resourcePendingAllocationGroups = aggregate.PendingAllocationGroups
 			receiver.resourceCompletedAllocationGroups = aggregate.CompletedAllocationGroups
+			if err != nil {
+				receiver.odkuResult = nil
+			}
 		}()
 		if statementGroupEnabled {
 			expectedFragments, ok := runCompile.remoteFragmentCounts[runCompile.addr]
@@ -1009,6 +1012,9 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 
 // newCompile make and return a new compile to run a pipeline.
 func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
+	if err := process.ValidateODKUInputOrdinalBase(receiver.procBuildHelper.odkuOrdinalBase); err != nil {
+		return nil, err
+	}
 	// A remote compile used to have an unlimited local pool. HashBuild could
 	// therefore grow until the CN was killed even though the process limitation
 	// was already present on the wire. Keep a finite physical backstop while the
@@ -1043,7 +1049,8 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
 	proc.SetLastInsertID(pHelper.sessionInfo.LastInsertID)
-	proc.SetODKUInputOrdinalBase(pHelper.odkuOrdinalBase)
+	// The range was checked before constructing the process.
+	_ = proc.SetODKUInputOrdinalBase(pHelper.odkuOrdinalBase)
 	warningLimit := process.WarningDiagnosticLegacyRetentionLimit
 	if proc.Base.SessionInfo.MaxErrorCountSet {
 		warningLimit = proc.Base.SessionInfo.MaxErrorCount

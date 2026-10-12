@@ -5856,6 +5856,7 @@ func eltCheck(overloads []overload, inputs []types.Type) checkResult {
 	}
 
 	shouldCast := false
+	hasJSON := false
 	castTypes := make([]types.Type, len(inputs))
 
 	// ELT accepts numeric and string-convertible indexes.
@@ -5877,7 +5878,10 @@ func eltCheck(overloads []overload, inputs []types.Type) checkResult {
 
 	// Rest arguments must be strings
 	for i := 1; i < len(inputs); i++ {
-		if !inputs[i].Oid.IsMySQLString() && inputs[i].Oid != types.T_any {
+		if inputs[i].Oid == types.T_json {
+			hasJSON = true
+			castTypes[i] = inputs[i]
+		} else if !inputs[i].Oid.IsMySQLString() && inputs[i].Oid != types.T_any {
 			c, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{types.T_varchar})
 			if c == matchFailed {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -5893,6 +5897,16 @@ func eltCheck(overloads []overload, inputs []types.Type) checkResult {
 		}
 	}
 
+	if hasJSON {
+		idx := jsonStringConsumerOverloadIndex(overloads)
+		if idx < 0 {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		if shouldCast {
+			return newCheckResultWithCast(idx, castTypes)
+		}
+		return newCheckResultWithSuccess(idx)
+	}
 	if shouldCast {
 		return newCheckResultWithCast(0, castTypes)
 	}
@@ -5914,7 +5928,10 @@ func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process
 		return rs.AppendBytes(nil, true)
 	}
 	appendValue := func(row uint64, idx uint64) error {
-		str, null := strParams[idx].GetStrValue(row)
+		str, null, err := getJSONStringConsumerValue(strParams[idx], row)
+		if err != nil {
+			return err
+		}
 		if null {
 			return appendNull()
 		}

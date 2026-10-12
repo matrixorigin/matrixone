@@ -1,0 +1,124 @@
+drop database if exists issue28905_json_string_consumers;
+create database issue28905_json_string_consumers;
+use issue28905_json_string_consumers;
+create table src (id int primary key, js json, v varchar(20));
+insert into src values
+(1, '{"b":2,"a":1}', 'A'),
+(2, '1', ''),
+(3, 'null', null),
+(4, null, null);
+select id, concat('', js) as concat_left, concat(js, '') as concat_right, concat('', js) is null as concat_left_is_null, concat(js, '') is null as concat_right_is_null, concat_ws('|', 'x', js, 'y') as concat_ws_middle, concat_ws('|', js, v) as concat_ws_column, concat_ws('|', js, v) = '' as concat_ws_empty from src order by id;
+id    concat_left    concat_right    concat_left_is_null    concat_right_is_null    concat_ws_middle    concat_ws_column    concat_ws_empty
+1    {"a": 1, "b": 2}    {"a": 1, "b": 2}    0    0    x|{"a": 1, "b": 2}|y    {"a": 1, "b": 2}|A    0
+2    1    1    0    0    x|1|y    1|    0
+3    null    null    0    0    x|null|y    null    0
+4    null    null    1    1    x|y        1
+select id, elt(2, 'fallback', js, 'other') as elt_selected from src order by id;
+id    elt_selected
+1    {"a": 1, "b": 2}
+2    1
+3    null
+4    null
+select id, elt(2, 'fallback', js, 'other') is null as selected_is_null from src order by id;
+➤ id[4,32,0]  ¦  selected_is_null[-7,1,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  0  𝄀
+4  ¦  1
+create view json_elt_view as select id, elt(2, 'fallback', js) as c from src;
+select id, c, c is null as selected_is_null from json_elt_view order by id;
+➤ id[4,32,0]  ¦  c[-1,16383,0]  ¦  selected_is_null[-7,1,0]  𝄀
+1  ¦  {"a": 1, "b": 2}  ¦  0  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  null  ¦  0  𝄀
+4  ¦  null  ¦  1
+create table json_elt_ctas as select id, elt(2, 'fallback', js) as c from src;
+select id, c, c is null as selected_is_null from json_elt_ctas order by id;
+➤ id[4,32,0]  ¦  c[-1,16383,0]  ¦  selected_is_null[-7,1,0]  𝄀
+1  ¦  {"a": 1, "b": 2}  ¦  0  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  null  ¦  0  𝄀
+4  ¦  null  ¦  1
+prepare json_elt_column_stmt from 'select id, elt(2, ''fallback'', js) as c, elt(2, ''fallback'', js) is null as selected_is_null from src order by id';
+execute json_elt_column_stmt;
+➤ id[4,32,0]  ¦  c[-1,16383,0]  ¦  selected_is_null[-7,1,0]  𝄀
+1  ¦  {"a": 1, "b": 2}  ¦  0  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  null  ¦  0  𝄀
+4  ¦  null  ¦  1
+deallocate prepare json_elt_column_stmt;
+select concat(cast('{"k":1}' as json), '!') as constant_concat, concat_ws('|', cast('[1,2]' as json), 'x') as constant_concat_ws, elt(1, cast('{"k":1}' as json), 'fallback') as constant_elt;
+constant_concat    constant_concat_ws    constant_elt
+{"k": 1}!    [1, 2]|x    {"k": 1}
+create view json_string_view as select id, concat_ws('|', 'x', js, 'y') as c from src;
+select id, c from json_string_view order by id;
+id    c
+1    x|{"a": 1, "b": 2}|y
+2    x|1|y
+3    x|null|y
+4    x|y
+create table json_string_ctas as select id, concat('', js) as c from src;
+select id, c from json_string_ctas order by id;
+id    c
+1    {"a": 1, "b": 2}
+2    1
+3    null
+4    null
+set @json_string_param = '{"p":1}';
+prepare json_string_stmt from 'select id, concat(cast(? as json), js) as c from src order by id';
+execute json_string_stmt using @json_string_param;
+➤ id[4,32,0]  ¦  c[-1,16383,0]  𝄀
+1  ¦  {"p": 1}{"a": 1, "b": 2}  𝄀
+2  ¦  {"p": 1}1  𝄀
+3  ¦  {"p": 1}null  𝄀
+4  ¦  null
+set @json_string_param = '[2]';
+execute json_string_stmt using @json_string_param;
+➤ id[4,32,0]  ¦  c[-1,16383,0]  𝄀
+1  ¦  [2]{"a": 1, "b": 2}  𝄀
+2  ¦  [2]1  𝄀
+3  ¦  [2]null  𝄀
+4  ¦  null
+deallocate prepare json_string_stmt;
+prepare json_kind_stmt from 'select case when ? is null then ''NULL'' else charset(?) end as source_charset, coalesce(json_type(cast(? as json)) = ''OBJECT'', false) as parsed_object, cast(? as json) is null as value_is_null';
+set @json_string_param = binary '{"p":1}';
+execute json_kind_stmt using @json_string_param, @json_string_param, @json_string_param, @json_string_param;
+➤ source_charset[12,65535,0]  ¦  parsed_object[-7,1,0]  ¦  value_is_null[-7,1,0]  𝄀
+binary  ¦  0  ¦  0
+set @json_string_param = '{"p":1}';
+execute json_kind_stmt using @json_string_param, @json_string_param, @json_string_param, @json_string_param;
+➤ source_charset[12,65535,0]  ¦  parsed_object[-7,1,0]  ¦  value_is_null[-7,1,0]  𝄀
+utf8mb4  ¦  1  ¦  0
+set @json_string_param = binary '{"p":1}';
+execute json_kind_stmt using @json_string_param, @json_string_param, @json_string_param, @json_string_param;
+➤ source_charset[12,65535,0]  ¦  parsed_object[-7,1,0]  ¦  value_is_null[-7,1,0]  𝄀
+binary  ¦  0  ¦  0
+set @json_string_param = null;
+execute json_kind_stmt using @json_string_param, @json_string_param, @json_string_param, @json_string_param;
+➤ source_charset[12,65535,0]  ¦  parsed_object[-7,1,0]  ¦  value_is_null[-7,1,0]  𝄀
+NULL  ¦  0  ¦  1
+deallocate prepare json_kind_stmt;
+select elt(1, 'ok', cast('bad' as json)) as selected_text, elt(null, cast('bad' as json), 'ok') is null as null_selector, elt(0, cast('bad' as json), 'ok') is null as zero_selector, elt(3, cast('bad' as json), 'ok') is null as outside_selector;
+➤ selected_text[-1,16383,0]  ¦  null_selector[-7,1,0]  ¦  zero_selector[-7,1,0]  ¦  outside_selector[-7,1,0]  𝄀
+ok  ¦  1  ¦  1  ¦  1
+prepare json_elt_lazy_stmt from 'select elt(?, ''ok'', cast(''bad'' as json)) as selected_text';
+set @json_elt_selector = 1;
+execute json_elt_lazy_stmt using @json_elt_selector;
+➤ selected_text[-1,16383,0]  𝄀
+ok
+set @json_elt_selector = null;
+execute json_elt_lazy_stmt using @json_elt_selector;
+➤ selected_text[-1,16383,0]  𝄀
+null
+set @json_elt_selector = 0;
+execute json_elt_lazy_stmt using @json_elt_selector;
+➤ selected_text[-1,16383,0]  𝄀
+null
+deallocate prepare json_elt_lazy_stmt;
+create table lazy_src(id int primary key, n int, js json, txt varchar(20));
+insert into lazy_src values (1, 1, '{"p":1}', 'bad'), (2, 2, '{"p":1}', '[2]');
+select id, elt(n, js, cast(txt as json)) as selected_value from lazy_src order by id;
+➤ id[4,32,0]  ¦  selected_value[-1,16383,0]  𝄀
+1  ¦  {"p": 1}  𝄀
+2  ¦  [2]
+drop database issue28905_json_string_consumers;
