@@ -71,7 +71,7 @@ func (c *Candidate) EmbeddedMOReads() ([]EmbeddedMORead, error) {
 		if err != nil {
 			return nil, err
 		}
-		result[i], _, err = embeddedMORead(node)
+		result[i], _, err = embeddedMORead(node, c.profile)
 		if err != nil {
 			return nil, err
 		}
@@ -90,7 +90,7 @@ func (c *Candidate) BuildEmbedded(bindings map[int32]EmbeddedReadBinding) ([]byt
 	if err := c.validateEmbeddedBindings(bindings); err != nil {
 		return nil, err
 	}
-	e := exporter{query: c.query, embeddedBindings: bindings}
+	e := exporter{query: c.query, embeddedBindings: bindings, embeddedMO: true, profile: c.profile}
 	relations := make([]*spb.PlanRel, 0, len(c.query.Steps))
 	for step, rootID := range c.query.Steps {
 		e.stepOrdinal = int32(step)
@@ -105,9 +105,10 @@ func (c *Candidate) BuildEmbedded(bindings map[int32]EmbeddedReadBinding) ([]byt
 		}
 	}
 	plan := &spb.Plan{
-		Version:    &spb.Version{MajorNumber: 0, MinorNumber: 78, PatchNumber: 0, Producer: "matrixone"},
-		Relations:  relations,
-		Extensions: e.extensions(),
+		Version:       &spb.Version{MajorNumber: 0, MinorNumber: 78, PatchNumber: 0, Producer: "matrixone"},
+		Relations:     relations,
+		Extensions:    e.extensions(),
+		ExtensionUrns: e.extensionURNs(),
 	}
 	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(plan)
 	if err != nil {
@@ -150,7 +151,7 @@ func (c *Candidate) validateEmbeddedBindings(bindings map[int32]EmbeddedReadBind
 		if err != nil {
 			return err
 		}
-		if _, _, err = embeddedMORead(node); err != nil {
+		if _, _, err = embeddedMORead(node, c.profile); err != nil {
 			return err
 		}
 	}
@@ -218,8 +219,8 @@ func (c *Candidate) embeddedReadNode(id int32) (*planpb.Node, error) {
 	return node, nil
 }
 
-func embeddedMORead(node *planpb.Node) (EmbeddedMORead, *spb.NamedStruct, error) {
-	physicalSchema, err := namedStruct(node.TableDef)
+func embeddedMORead(node *planpb.Node, profile EmbeddedExportProfile) (EmbeddedMORead, *spb.NamedStruct, error) {
+	physicalSchema, err := namedStructForProfile(node.TableDef, profile)
 	if err != nil {
 		return EmbeddedMORead{}, nil, err
 	}
@@ -252,7 +253,7 @@ func embeddedMORead(node *planpb.Node) (EmbeddedMORead, *spb.NamedStruct, error)
 			if expression.Typ.Id != physicalType.Id || expression.Typ.Width != physicalType.Width || expression.Typ.Scale != physicalType.Scale {
 				return EmbeddedMORead{}, nil, notEligiblef(EligibilityType, "embedded MO scan node %d output %d type does not match source column %d", node.NodeId, output, ordinal)
 			}
-			if _, typeErr := substraitType(&expression.Typ); typeErr != nil {
+			if _, typeErr := profile.substraitType(&expression.Typ); typeErr != nil {
 				return EmbeddedMORead{}, nil, typeErr
 			}
 			ordinals[output] = ordinal
@@ -273,7 +274,7 @@ func embeddedMORead(node *planpb.Node) (EmbeddedMORead, *spb.NamedStruct, error)
 	for output, ordinal := range ordinals {
 		column := visible[ordinal]
 		name := "col_" + strconv.Itoa(output)
-		typ, typeErr := substraitType(&outputTypes[output])
+		typ, typeErr := profile.substraitType(&outputTypes[output])
 		if typeErr != nil {
 			return EmbeddedMORead{}, nil, typeErr
 		}

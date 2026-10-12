@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -1124,6 +1126,83 @@ func Test_MakeIntervalParamAny(t *testing.T) {
 	require.Zero(t, got)
 }
 
+func TestBuiltInConvertUsingCodecCancellation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"\xff"}, []bool{false}),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"utf8mb4"}, []bool{false}),
+	}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), builtInConvertUsingCharset)
+	t.Cleanup(fc.Free)
+	require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	defer cancel()
+	proc.Ctx = ctx
+	cancel()
+	// A cancellation is an error, not CONVERT's successful invalid-byte NULL.
+	require.ErrorIs(t, fc.fn(fc.parameters, fc.result, proc, fc.fnLength, nil), context.Canceled)
+	require.Zero(t, fc.result.GetResultVector().Length())
+}
+
+type convertCancelAtPublication struct {
+	context.Context
+	checks int
+}
+
+func (ctx *convertCancelAtPublication) Err() error {
+	ctx.checks++
+	if ctx.checks == 1 {
+		return nil
+	}
+	return context.Canceled
+}
+
+func TestBuiltInConvertUsingBatchPublication(t *testing.T) {
+	for _, target := range []string{"binary", "utf8mb4"} {
+		t.Run(target, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			values := make([]string, 128)
+			for i := range values {
+				values[i] = "abcdefgh"
+			}
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), values, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{target}, nil),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), builtInConvertUsingCharset)
+			t.Cleanup(fc.Free)
+			require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
+			ctx := &convertCancelAtPublication{Context: proc.Ctx}
+			proc.Ctx = ctx
+			require.ErrorIs(t, fc.fn(fc.parameters, fc.result, proc, fc.fnLength, nil), context.Canceled)
+			// Values are staged, not a successful result: publication must fail.
+			require.Equal(t, 128, fc.result.GetResultVector().Length())
+			require.Equal(t, 2, ctx.checks)
+			fn, err := GetFunctionByName(ctx.Context, "convert", []types.Type{
+				types.T_varchar.ToType(), types.T_varchar.ToType(),
+			})
+			require.NoError(t, err)
+			proc.Ctx = &convertCancelAtPublication{Context: ctx.Context}
+			before := proc.Mp().CurrNB()
+			out, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), fc.parameters, fc.fnLength)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Nil(t, out) // The public consumer must discard staged values.
+			require.Equal(t, before, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestBuiltInConvertUsingEmptyAndNUL(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inline := strings.Repeat("a", types.VarlenaInlineSize)
+	external := inline + "a"
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "\x00\xff", "\x00", "\ufffd", "", external, inline}, []bool{false, false, false, false, true, false, false}),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"utf8mb4", "binary", "utf8mb3", "utf8", "utf8mb4", "utf8mb4", "binary"}, []bool{false, false, false, false, false, false, false}),
+	}, NewFunctionTestResult(types.T_varchar.ToType(), false,
+		[]string{"", "\x00\xff", "\x00", "\ufffd", "", external, inline}, []bool{false, false, false, false, true, false, false}), builtInConvertUsingCharset)
+	ok, info := fc.RunAndFree()
+	require.True(t, ok, info)
+}
+
 func TestBuiltInConvertUsingUTF8InvalidBytes(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tc := tcTemp{
@@ -1360,6 +1439,26 @@ func Test_BuiltIn_MoShowVisibleBinArrayMetadata(t *testing.T) {
 	require.True(t, succeed, tc.info, info)
 }
 
+func Test_BuiltIn_MoShowVisibleBinEnumAndSetPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		oid  types.T
+		want string
+	}{
+		{types.T_enum, `enum('UP','Down word','O''Brien','Back\\slash','Back\\''quote')`},
+		{types.T_uint64, `set('UP','Down word','O''Brien','Back\\slash','Back\\''quote')`},
+	} {
+		encoded, err := types.Encode(&types.Type{Oid: tc.oid})
+		require.NoError(t, err)
+		testCase := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{string(encoded)}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`UP,Down word,O'Brien,Back\slash,Back\'quote`}, nil),
+		}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), builtInMoShowVisibleBinEnum)
+		succeed, info := testCase.RunAndFree()
+		require.True(t, succeed, info)
+	}
+}
+
 func Test_BuiltIn_MoShowVisibleBinGeometryWithLen(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	typeBytes, err := types.Encode(&types.Type{Oid: types.T_geometry})
@@ -1385,18 +1484,23 @@ func Test_BuiltIn_MoShowVisibleBinIntegerMetadata(t *testing.T) {
 		typ  types.Type
 		want string
 	}{
-		{name: "tinyint", typ: types.New(types.T_int8, 0, 0), want: "TINYINT"},
-		{name: "tinyint unsigned", typ: types.New(types.T_uint8, 0, 0), want: "TINYINT UNSIGNED"},
-		{name: "smallint", typ: types.New(types.T_int16, 0, 0), want: "SMALLINT"},
-		{name: "smallint unsigned", typ: types.New(types.T_uint16, 0, 0), want: "SMALLINT UNSIGNED"},
-		{name: "int", typ: types.New(types.T_int32, 0, 0), want: "INT"},
-		{name: "int unsigned", typ: types.New(types.T_uint32, 0, 0), want: "INT UNSIGNED"},
-		{name: "bigint", typ: types.New(types.T_int64, 0, 0), want: "BIGINT"},
-		{name: "bigint unsigned", typ: types.New(types.T_uint64, 0, 0), want: "BIGINT UNSIGNED"},
-		{name: "int with physical width", typ: types.New(types.T_int32, 32, 0), want: "INT(32)"},
-		{name: "bit keeps width zero", typ: types.New(types.T_bit, 0, 0), want: "BIT(0)"},
-		{name: "decimal keeps precision", typ: types.New(types.T_decimal64, 10, 2), want: "DECIMAL(10,2)"},
-		{name: "varchar keeps length", typ: types.New(types.T_varchar, 20, 0), want: "VARCHAR(20)"},
+		{name: "tinyint", typ: types.New(types.T_int8, 0, 0), want: "tinyint"},
+		{name: "tinyint unsigned", typ: types.New(types.T_uint8, 0, 0), want: "tinyint unsigned"},
+		{name: "smallint", typ: types.New(types.T_int16, 0, 0), want: "smallint"},
+		{name: "smallint unsigned", typ: types.New(types.T_uint16, 0, 0), want: "smallint unsigned"},
+		{name: "int", typ: types.New(types.T_int32, 0, 0), want: "int"},
+		{name: "int unsigned", typ: types.New(types.T_uint32, 0, 0), want: "int unsigned"},
+		{name: "bigint", typ: types.New(types.T_int64, 0, 0), want: "bigint"},
+		{name: "bigint unsigned", typ: types.New(types.T_uint64, 0, 0), want: "bigint unsigned"},
+		{name: "int with physical width", typ: types.New(types.T_int32, 32, 0), want: "int"},
+		{name: "uint physical width", typ: types.New(types.T_uint64, 64, 0), want: "bigint unsigned"},
+		{name: "date", typ: types.New(types.T_date, 0, 0), want: "date"},
+		{name: "json", typ: types.New(types.T_json, 0, 0), want: "json"},
+		{name: "float precision and scale", typ: types.New(types.T_float32, 5, 2), want: "float(5,2)"},
+		{name: "datetime precision", typ: types.New(types.T_datetime, 3, 3), want: "datetime(3)"},
+		{name: "bit keeps width zero", typ: types.New(types.T_bit, 0, 0), want: "bit(0)"},
+		{name: "decimal keeps precision", typ: types.New(types.T_decimal64, 10, 2), want: "decimal(10,2)"},
+		{name: "varchar keeps length", typ: types.New(types.T_varchar, 20, 0), want: "varchar(20)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			typeBytes, err := types.Encode(&tc.typ)
@@ -1423,11 +1527,11 @@ func Test_BuiltIn_MoShowVisibleBinTextFamilyWithLen(t *testing.T) {
 		typ  types.Type
 		want string
 	}{
-		{name: "legacy text", typ: types.New(types.T_text, 0, 0), want: "TEXT"},
-		{name: "text", typ: types.New(types.T_text, types.MaxStringSize, 0), want: "TEXT"},
-		{name: "tinytext", typ: types.New(types.T_text, types.MaxTinyTextLen, 0), want: "TINYTEXT"},
-		{name: "mediumtext", typ: types.New(types.T_text, types.MaxMediumTextLen, 0), want: "MEDIUMTEXT"},
-		{name: "longtext", typ: types.New(types.T_text, types.MaxLongTextLen, 0), want: "LONGTEXT"},
+		{name: "legacy text", typ: types.New(types.T_text, 0, 0), want: "text"},
+		{name: "text", typ: types.New(types.T_text, types.MaxStringSize, 0), want: "text"},
+		{name: "tinytext", typ: types.New(types.T_text, types.MaxTinyTextLen, 0), want: "tinytext"},
+		{name: "mediumtext", typ: types.New(types.T_text, types.MaxMediumTextLen, 0), want: "mediumtext"},
+		{name: "longtext", typ: types.New(types.T_text, types.MaxLongTextLen, 0), want: "longtext"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			typeBytes, err := types.Encode(&tc.typ)
@@ -1454,10 +1558,10 @@ func Test_BuiltIn_MoShowVisibleBinBlobFamilyWithLen(t *testing.T) {
 		typ  types.Type
 		want string
 	}{
-		{name: "tinyblob", typ: types.New(types.T_blob, types.MaxTinyTextLen, 0), want: "TINYBLOB"},
-		{name: "blob", typ: types.New(types.T_blob, types.MaxStringSize, 0), want: "BLOB"},
-		{name: "mediumblob", typ: types.New(types.T_blob, types.MaxMediumTextLen, 0), want: "MEDIUMBLOB"},
-		{name: "longblob", typ: types.New(types.T_blob, types.MaxLongTextLen, 0), want: "LONGBLOB"},
+		{name: "tinyblob", typ: types.New(types.T_blob, types.MaxTinyTextLen, 0), want: "tinyblob"},
+		{name: "blob", typ: types.New(types.T_blob, types.MaxStringSize, 0), want: "blob"},
+		{name: "mediumblob", typ: types.New(types.T_blob, types.MaxMediumTextLen, 0), want: "mediumblob"},
+		{name: "longblob", typ: types.New(types.T_blob, types.MaxLongTextLen, 0), want: "longblob"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			typeBytes, err := types.Encode(&tc.typ)
@@ -1905,6 +2009,85 @@ func TestSerialAndSerialFullEncodeNonNullRowsIdentically(t *testing.T) {
 			"non-NULL comparison bounds must be byte-compatible with stored keys",
 		)
 	}
+}
+
+func TestSerialFullUnicodeKeepsOriginalValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	unicodeType := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	input := newVectorByType(proc.Mp(), unicodeType, []string{"b"}, nil)
+	defer input.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	op := newOpSerial()
+	defer op.Close()
+	require.NoError(t, op.BuiltInSerialFull([]*vector.Vector{input}, result, proc, 1, nil))
+
+	tuple, err := types.Unpack(result.GetResultVector().GetBytesAt(0))
+	require.NoError(t, err)
+	require.Len(t, tuple, 1)
+	require.Equal(t, []byte("b"), tuple[0])
+}
+
+func TestSerialUnicodeKeepsOriginalValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	unicodeType := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	input := newVectorByType(proc.Mp(), unicodeType, []string{"b"}, nil)
+	defer input.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	op := newOpSerial()
+	defer op.Close()
+	require.NoError(t, op.BuiltInSerial([]*vector.Vector{input}, result, proc, 1, nil))
+
+	tuple, err := types.Unpack(result.GetResultVector().GetBytesAt(0))
+	require.NoError(t, err)
+	require.Len(t, tuple, 1)
+	require.Equal(t, []byte("b"), tuple[0])
+}
+
+func TestPhysicalSerialUsesUnicodeComparisonKeys(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	unicodeType := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	input := newVectorByType(proc.Mp(), unicodeType, []string{"b"}, nil)
+	defer input.Free(proc.Mp())
+
+	physicalResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer physicalResult.Free()
+	require.NoError(t, physicalResult.PreExtendAndReset(1))
+	op := newOpSerial()
+	defer op.Close()
+	require.NoError(t, op.BuiltInPhysicalSerial([]*vector.Vector{input}, physicalResult, proc, 1, nil))
+	tuple, err := types.Unpack(physicalResult.GetResultVector().GetBytesAt(0))
+	require.NoError(t, err)
+	require.Equal(t, []byte(types.CollationKeyOrOriginal(unicodeType.Charset, []byte("b"))), tuple[0])
+
+	keyResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer keyResult.Free()
+	require.NoError(t, keyResult.PreExtendAndReset(1))
+	require.NoError(t, BuiltInPhysicalCollationKey([]*vector.Vector{input}, keyResult, proc, 1, nil))
+	require.Equal(t, types.CollationKeyOrOriginal(unicodeType.Charset, []byte("b")), keyResult.GetResultVector().GetBytesAt(0))
+}
+
+func TestPhysicalSerialRejectsOutOfRepertoireValues(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	// Build the bytes under the legacy identity, then change only the vector
+	// metadata. This models a malformed/unvalidated boundary without bypassing
+	// the normal vector admission checks in test setup.
+	input := newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"😀"}, nil)
+	defer input.Free(proc.Mp())
+	input.GetType().Charset = types.CharsetUTF8MB3UnicodeCI
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	op := newOpSerial()
+	defer op.Close()
+	err := op.BuiltInPhysicalSerialFull([]*vector.Vector{input}, result, proc, 1, nil)
+	require.ErrorIs(t, err, collation.ErrRepertoire)
 }
 
 func Test_BuiltIn_SerialFull(t *testing.T) {
@@ -3224,6 +3407,42 @@ func TestBuiltInExpOverflowAllocationsDoNotScaleWithRows(t *testing.T) {
 		oneRowAllocs, batchAllocs)
 }
 
+// Keep setup, capacity growth and input construction outside the timer. The
+// same benchmark can run against the base/review/fixed evaluator revisions.
+func BenchmarkBuiltInConvertUsingBorrowedBatch(b *testing.B) {
+	const rows = 128
+	for _, charset := range []string{"binary", "utf8mb4"} {
+		b.Run(charset, func(b *testing.B) {
+			proc := testutil.NewProcess(b)
+			values := make([]string, rows)
+			for i := range values {
+				values[i] = "abcdefgh"
+			}
+			input := newVectorByType(proc.Mp(), types.T_varchar.ToType(), values, nil)
+			defer input.Free(proc.Mp())
+			target, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(charset), rows, proc.Mp())
+			require.NoError(b, err)
+			defer target.Free(proc.Mp())
+			parameters := []*vector.Vector{input, target}
+			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(b, result.PreExtendAndReset(rows))
+			require.NoError(b, builtInConvertUsingCharset(parameters, result, proc, rows, nil))
+			b.ReportAllocs()
+			b.SetBytes(rows * 8)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := result.PreExtendAndReset(rows); err != nil {
+					b.Fatal(err)
+				}
+				if err := builtInConvertUsingCharset(parameters, result, proc, rows, nil); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkBuiltInExpOverflowBatch(b *testing.B) {
 	const rowCount = 8192
 	proc := testutil.NewProcess(b)
@@ -3976,6 +4195,63 @@ func TestBuiltInUUIDSwapFlagStringCoercion(t *testing.T) {
 			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{u}, nil), builtInBinToUUID)
 			succeed, info = fromBin.RunAndFree()
 			require.True(t, succeed, info)
+		})
+	}
+}
+
+func Test_BuiltIn_MoShowVisibleBinBooleanMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	encoded := make([]string, 0, 7)
+	for _, typ := range []types.Type{
+		types.New(types.T_bool, 0, 0), types.New(types.T_bool, 64, 3), types.New(types.T_bool, -1, 0),
+		types.New(types.T_int32, 32, 0), types.New(types.T_decimal64, 10, 2), types.T_enum.ToType(),
+	} {
+		data, err := types.Encode(&typ)
+		require.NoError(t, err)
+		encoded = append(encoded, string(data))
+	}
+	encoded = append(encoded, "", "")
+	for _, tc := range []struct {
+		mode uint8
+		want []string
+	}{
+		{typNormal, []string{"BOOL", "BOOL", "BOOL", "INT", "DECIMAL", "ENUM", "", ""}},
+		{typWithLen, []string{"boolean", "boolean", "boolean", "int", "decimal(10,2)", "enum('')", "", ""}},
+	} {
+		t.Run(fmt.Sprint(tc.mode), func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), encoded, []bool{false, false, false, false, false, false, true, false}),
+				NewFunctionTestInput(types.T_uint8.ToType(), []uint8{tc.mode}, nil),
+			}
+			want := NewFunctionTestResult(types.T_varchar.ToType(), false, tc.want, []bool{false, false, false, false, false, false, true, true})
+			testCase := NewFunctionTestCase(proc, inputs, want, builtInMoShowVisibleBin)
+			succeed, info := testCase.RunAndFree()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func Test_BuiltIn_MoShowVisibleBinInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	encoded, err := types.Encode(&types.Type{Oid: types.T_int32})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		input string
+		mode  uint8
+		want  string
+	}{
+		{"x", typWithLen, "short type encoding"},
+		{string(encoded), 255, "the second argument must be in [0, 6]"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.input}, nil),
+				NewFunctionTestInput(types.T_uint8.ToType(), []uint8{tc.mode}, nil),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), builtInMoShowVisibleBin)
+			t.Cleanup(testCase.Free)
+			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+			require.ErrorContains(t, testCase.fn(testCase.parameters, testCase.result, proc, testCase.fnLength, nil), tc.want)
+			require.Zero(t, testCase.result.GetResultVector().Length())
 		})
 	}
 }

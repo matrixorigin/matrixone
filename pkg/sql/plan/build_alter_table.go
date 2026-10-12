@@ -1771,12 +1771,8 @@ func storageAgnosticType(
 	defaultCharset uint32,
 ) (ok bool, err error) {
 
-	nTy, err := getTypeFromAst(ctx, nCol.Type)
+	nTy, err := getColumnTypeFromAst(ctx, nCol, defaultCharset, nil)
 	if err != nil {
-		return
-	}
-	nTy.Charset = uint32(types.CharsetType(types.T(nTy.Id)))
-	if err = applyDefaultAndColumnAttributesToType(ctx, &nTy, defaultCharset, nCol.Attributes); err != nil {
 		return
 	}
 

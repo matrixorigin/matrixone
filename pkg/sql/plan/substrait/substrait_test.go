@@ -68,7 +68,7 @@ func TestCollationMetadataSubstraitBoundaries(t *testing.T) {
 		require.ErrorContains(t, err, "unsupported collation metadata")
 
 		q = embeddedProjectedScanQuery()
-		embedded, err := ExportEmbeddedMO(q)
+		embedded, err := ExportEmbeddedMO(q, EmbeddedExportProfile{})
 		require.NoError(t, err)
 		reads, err := embedded.EmbeddedMOReads()
 		require.NoError(t, err)
@@ -78,7 +78,7 @@ func TestCollationMetadataSubstraitBoundaries(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEmpty(t, wire)
 		mutate(q.Nodes[0].TableDef)
-		_, err = ExportEmbeddedMO(q)
+		_, err = ExportEmbeddedMO(q, EmbeddedExportProfile{})
 		require.ErrorContains(t, err, "unsupported collation metadata")
 		reads, err = embedded.EmbeddedMOReads()
 		require.ErrorContains(t, err, "unsupported collation metadata")

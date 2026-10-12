@@ -811,13 +811,16 @@ var predefinedFunids = map[int]int{
 	JSON_DEPTH:                     584,
 	JSON_AGG_TO_DOUBLE:             585,
 	JSON_ARRAY_INSERT:              586,
+	PHYSICAL_SERIAL:                588,
+	PHYSICAL_SERIAL_FULL:           589,
+	PHYSICAL_COLLATION_KEY:         590,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	EXTRACTVALUE:            581,
 	UPDATEXML:               582,
 	TO_INTERVAL_MICROSECOND: 583,
 	UUID_SHORT:              587,
-	FUNCTION_END_NUMBER:     588,
+	FUNCTION_END_NUMBER:     591,
 }
 
 func Test_funids(t *testing.T) {

@@ -18,8 +18,8 @@ id    v
 1    mn
 desc t_def;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO    PRI    NULL
-v    VARCHAR(20)    YES        (concat('m', 'n'))
+id    int    NO    PRI    NULL
+v    varchar(20)    YES        (concat('m', 'n'))
 show create table t_def;
 Table    Create Table
 t_def    CREATE TABLE `t_def` (\n  `id` int NOT NULL,\n  `v` varchar(20) DEFAULT (concat('m', 'n')),\n  PRIMARY KEY (`id`)\n)

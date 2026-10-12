@@ -16,6 +16,7 @@
 FROM matrixorigin/golang:1.27.0-ubuntu22.04 AS warm
 
 ENV GOWORK=off
+ENV GOTOOLCHAIN=auto
 # Keep the module cache world-writable: the default read-only directory
 # layout breaks extracting the cache onto CI runners (a read-only parent
 # directory is created before its children can be copied in).
@@ -131,6 +132,7 @@ RUN if [ -x optools/images/ci-builder-fingerprint.sh ]; then \
 FROM matrixorigin/golang:1.27.0-ubuntu22.04
 
 ENV GOWORK=off
+ENV GOTOOLCHAIN=auto
 ENV GOFLAGS=-modcacherw
 
 ARG GOPROXY="https://proxy.golang.org,direct"

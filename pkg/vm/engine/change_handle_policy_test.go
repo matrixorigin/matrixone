@@ -73,3 +73,22 @@ func TestCollectChangesPreserveAllVersionsContextRoundTrip(t *testing.T) {
 	ctx := WithCollectChangesPreserveAllVersions(base)
 	require.True(t, CollectChangesPreserveAllVersionsFromContext(ctx))
 }
+
+func TestCollectChangesKeepTrailingDeletesContextRoundTrip(t *testing.T) {
+	base := context.Background()
+
+	require.False(t, CollectChangesKeepTrailingDeletesFromContext(nil))
+	require.False(t, CollectChangesKeepTrailingDeletesFromContext(base))
+	require.Nil(t, WithCollectChangesKeepTrailingDeletes(nil))
+
+	ctx := WithCollectChangesKeepTrailingDeletes(base)
+	require.True(t, CollectChangesKeepTrailingDeletesFromContext(ctx))
+
+	// Independent of the sibling history knob: each option survives the other.
+	both := WithCollectChangesPreserveAllVersions(ctx)
+	require.True(t, CollectChangesKeepTrailingDeletesFromContext(both))
+	require.True(t, CollectChangesPreserveAllVersionsFromContext(both))
+	require.False(t, CollectChangesKeepTrailingDeletesFromContext(
+		WithCollectChangesPreserveAllVersions(base),
+	))
+}

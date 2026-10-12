@@ -257,6 +257,7 @@ func vectorPayloadBytes(vectors []Vector) (uint64, error) {
 type Runtime struct {
 	mu             sync.Mutex
 	native         driver
+	capabilities   uint64 // Immutable after New publishes the runtime.
 	closing        bool
 	queries        map[*Query]struct{}
 	inflight       int
@@ -268,6 +269,15 @@ type Runtime struct {
 	closeDone      chan struct{}
 	maxQueries     int
 	cleanupTimeout time.Duration
+}
+
+// Capabilities returns the native ABI snapshot taken before runtime publication.
+// Query admission never polls or mutates process-global native capabilities.
+func (r *Runtime) Capabilities() uint64 {
+	if r == nil {
+		return 0
+	}
+	return r.capabilities
 }
 
 func newRuntime(d driver) *Runtime {

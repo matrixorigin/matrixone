@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/assert"
@@ -2932,4 +2933,176 @@ func TestCountRows_VisibleAppendableDataObjects(t *testing.T) {
 		_, err = state.CountRows(ctx, types.BuildTS(10, 0), emptyFs, mp)
 		require.Error(t, err, "CountRows must return error when CollectDataStats fails")
 	})
+}
+
+func TestCheckpointDurableAppendableObjectReplay(t *testing.T) {
+	for _, tombstone := range []bool{false, true} {
+		t.Run(map[bool]string{false: "data", true: "tombstone"}[tombstone], func(t *testing.T) {
+			state := NewPartitionState("", false, 42, false)
+			objectID := objectio.NewObjectid()
+			stats := objectio.NewObjectStatsWithObjectID(&objectID, true, false, false)
+			require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+			require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+			entry := objectio.ObjectEntry{ObjectStats: *stats, CreateTime: types.BuildTS(1, 0)}
+			index := state.dataObjectsNameIndex
+			if tombstone {
+				index = state.tombstoneObjectsNameIndex
+			}
+			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, entry, tombstone))
+			require.Equal(t, 0, index.Len(), "zero-sized creation has no durable rows")
+			require.NoError(t, objectio.SetObjectStatsSize(&entry.ObjectStats, 1000))
+			mp := mpool.MustNewZero()
+			liveProto := newReplayObjectListBatch(t, mp, entry, entry.CreateTime)
+			if tombstone {
+				state.HandleTombstoneObjectList(t.Context(), &api.Entry{Bat: liveProto}, nil, mp)
+			} else {
+				state.HandleDataObjectList(t.Context(), &api.Entry{Bat: liveProto}, nil, mp)
+			}
+			require.Zero(t, index.Len(), "live creation is filtered even when stats are nonzero")
+			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, entry, tombstone))
+			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, entry, tombstone))
+			require.Equal(t, 1, index.Len(), "checkpoint duplicate cannot duplicate an object")
+			loaded, ok := index.Get(entry)
+			require.True(t, ok)
+			require.True(t, loaded.Visible(types.BuildTS(2, 0)))
+			deleted := entry
+			deleted.DeleteTime = types.BuildTS(3, 0)
+			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, deleted, tombstone))
+			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, entry, tombstone))
+			loaded, ok = index.Get(entry)
+			require.True(t, ok)
+			require.Equal(t, deleted.DeleteTime, loaded.DeleteTime, "lazy checkpoint cannot resurrect a deleted object")
+			require.True(t, loaded.Visible(types.BuildTS(2, 0)))
+			require.False(t, loaded.Visible(types.BuildTS(4, 0)))
+		})
+	}
+}
+
+func TestTombstoneReplayReclamationBoundaries(t *testing.T) {
+	for _, checkpoint := range []bool{true, false} {
+		t.Run(map[bool]string{true: "checkpoint", false: "live"}[checkpoint], func(t *testing.T) {
+			state := NewPartitionState("", false, 42, false)
+			pool := mpool.MustNewZero()
+			packer := types.NewPacker()
+			defer packer.Close()
+			var dataObject, target types.Objectid
+			dataObject[0], target[0] = 9, 2
+			dataBlock := types.NewBlockidWithObjectID(&dataObject, 0)
+			input := batch.NewWithSize(4)
+			defer input.Clean(pool)
+			input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+			input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+			input.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+			input.Vecs[3] = vector.NewVec(types.T_Rowid.ToType())
+			rowIDs := make([]types.Rowid, 7)
+			for i, v := range []struct {
+				object byte
+				ts     int64
+			}{{1, 2}, {1, 6}, {2, 2}, {2, 4}, {2, 6}, {3, 2}, {3, 6}} {
+				object := target
+				object[0] = v.object
+				block := types.NewBlockidWithObjectID(&object, 0)
+				rowIDs[i] = types.NewRowid(&dataBlock, uint32(i))
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], rowIDs[i], false, pool))
+				require.NoError(t, vector.AppendFixed(input.Vecs[1], types.BuildTS(v.ts, 0), false, pool))
+				require.NoError(t, vector.AppendFixed(input.Vecs[2], int64(i), false, pool))
+				require.NoError(t, vector.AppendFixed(input.Vecs[3], types.NewRowid(&block, uint32(i)), false, pool))
+			}
+			input.SetRowCount(len(rowIDs))
+			proto, err := batch.BatchToProtoBatch(input)
+			require.NoError(t, err)
+			state.HandleRowsDelete(t.Context(), proto, packer, pool)
+			// An absent row must not stop cleanup of the remaining eligible rows.
+			orphan := &PrimaryIndexEntry{Bytes: target[:], Time: types.BuildTS(4, 0), RowEntryID: -1, RowID: types.NewRowid(&dataBlock, 99)}
+			state.inMemTombstoneRowIdIndex.Set(orphan)
+			stats := objectio.NewObjectStatsWithObjectID(&target, true, false, false)
+			require.NoError(t, objectio.SetObjectStatsSize(stats, 1000))
+			require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+			require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+			entry := objectio.ObjectEntry{ObjectStats: *stats, CreateTime: types.BuildTS(1, 0)}
+			replay := func() {
+				if checkpoint {
+					require.NoError(t, state.HandleObjectEntry(t.Context(), nil, entry, true))
+					return
+				}
+				proto := newReplayObjectListBatch(t, pool, entry, types.BuildTS(2, 0))
+				state.HandleTombstoneObjectList(t.Context(), &api.Entry{Bat: proto}, nil, pool)
+			}
+			checkRows := func(expected []types.Rowid) {
+				iter := state.NewRowsIter(types.BuildTS(10, 0), nil, true)
+				var actual []types.Rowid
+				for iter.Next() {
+					actual = append(actual, iter.Entry().RowID)
+				}
+				require.NoError(t, iter.Close())
+				require.ElementsMatch(t, expected, actual)
+				require.Equal(t, len(expected), state.rows.Len())
+				pkIter := state.rowPrimaryKeyIndex.Iter()
+				actual = nil
+				for ok := pkIter.First(); ok; ok = pkIter.Next() {
+					actual = append(actual, pkIter.Item().RowID)
+				}
+				pkIter.Release()
+				require.ElementsMatch(t, expected, actual)
+				tbIter := state.inMemTombstoneRowIdIndex.Iter()
+				actual = nil
+				for ok := tbIter.First(); ok; ok = tbIter.Next() {
+					actual = append(actual, tbIter.Item().RowID)
+				}
+				tbIter.Release()
+				require.ElementsMatch(t, append(append([]types.Rowid{}, expected...), orphan.RowID), actual)
+			}
+			replay()
+			replay()
+			checkRows(rowIDs)
+			if checkpoint {
+				require.Equal(t, 1, state.tombstoneObjectsNameIndex.Len())
+			} else {
+				require.Zero(t, state.tombstoneObjectsNameIndex.Len())
+			}
+			entry.DeleteTime = types.BuildTS(4, 0)
+			replay()
+			replay()
+			expected := []types.Rowid{rowIDs[0], rowIDs[1], rowIDs[4], rowIDs[5], rowIDs[6]}
+			if !checkpoint {
+				expected = append(expected, rowIDs[3])
+			}
+			checkRows(expected)
+			entry.DeleteTime = types.TS{}
+			replay()
+			checkRows(expected)
+			loaded, ok := state.tombstoneObjectsNameIndex.Get(entry)
+			require.True(t, ok)
+			require.Equal(t, types.BuildTS(4, 0), loaded.DeleteTime)
+			require.False(t, loaded.Visible(types.BuildTS(0, 0)))
+			require.True(t, loaded.Visible(types.BuildTS(2, 0)))
+			require.False(t, loaded.Visible(types.BuildTS(4, 0)))
+			require.Equal(t, 1, state.tombstoneObjectsNameIndex.Len())
+			require.Equal(t, 1, state.tombstoneObjectDTSIndex.Len())
+		})
+	}
+}
+
+// Match the real object-list wire layout for both replay entry points.
+func newReplayObjectListBatch(tb testing.TB, pool *mpool.MPool, entry objectio.ObjectEntry, start types.TS) *api.Batch {
+	tb.Helper()
+	live := batch.NewWithSize(10)
+	tb.Cleanup(func() { live.Clean(pool) })
+	var err error
+	for i := range live.Vecs {
+		live.Vecs[i], err = vector.NewConstFixed(types.T_TS.ToType(), entry.CreateTime, 1, pool)
+		require.NoError(tb, err)
+	}
+	live.Vecs[2].Free(pool)
+	live.Vecs[2], err = vector.NewConstBytes(types.T_binary.ToType(), entry.ObjectStats.Marshal(), 1, pool)
+	require.NoError(tb, err)
+	for i, ts := range map[int]types.TS{6: entry.DeleteTime, 7: start} {
+		live.Vecs[i].Free(pool)
+		live.Vecs[i], err = vector.NewConstFixed(types.T_TS.ToType(), ts, 1, pool)
+		require.NoError(tb, err)
+	}
+	live.SetRowCount(1)
+	proto, err := batch.BatchToProtoBatch(live)
+	require.NoError(tb, err)
+	return proto
 }

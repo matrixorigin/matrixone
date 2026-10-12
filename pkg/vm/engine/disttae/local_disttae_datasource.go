@@ -735,7 +735,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 
 		// apply bf filter on workspace entries
 		if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
-			if skipMask.IsEmpty() {
+			if !skipMask.IsValid() {
 				skipMask = objectio.GetReusableBitmap()
 			}
 			bfColVec := entry.bat.Vecs[ls.memPKFilter.BFSeqNum+1] // +1 for rowid

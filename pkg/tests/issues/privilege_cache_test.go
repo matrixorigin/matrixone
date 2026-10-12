@@ -16,8 +16,11 @@ package issues
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -34,7 +37,8 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
 		defer cancel()
-		open := func(index int, user string) *sql.Conn {
+		open := func(t *testing.T, index int, user string) *sql.Conn {
+			t.Helper()
 			cn, err := c.GetCNService(index)
 			require.NoError(t, err)
 			db, err := sql.Open("mysql", fmt.Sprintf("%s:111@tcp(127.0.0.1:%d)/", user, cn.GetServiceConfig().CN.Frontend.Port))
@@ -45,25 +49,33 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, conn.Close()) })
 			return conn
 		}
-		admin := open(0, "dump")
+		admin := open(t, 0, "dump")
 		mustExec(t, ctx, admin, "create account auth_cache admin_name 'admin' identified by '111'")
 		defer func() {
 			cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
 			defer stop()
 			mustExec(t, cleanup, admin, "drop account auth_cache")
 		}()
-		owner := open(0, "auth_cache#admin#accountadmin")
-		for _, stmt := range []string{
+		owner := open(t, 0, "auth_cache#admin#accountadmin")
+		// A remote commit does not imply CN1 has applied it under the default
+		// snapshot policy. Keep caches warm; synchronize catalog visibility before
+		// observing grants instead of changing the fixture's consistency mode.
+		catalogChange := func(t *testing.T, opCtx context.Context, actor *sql.Conn, stmts ...string) {
+			t.Helper()
+			for _, stmt := range stmts {
+				mustExec(t, opCtx, actor, stmt)
+			}
+			mustExec(t, opCtx, admin, "select mo_ctl('cn','synccommit','')")
+		}
+		catalogChange(t, ctx, owner,
 			"create database app", "create table app.t(id int primary key)", "insert into app.t values (1)",
 			"create role reader", "create user learner identified by '111' default role reader",
 			"grant reader to learner", "grant connect on account * to reader",
 			"grant select on table app.t to reader",
-		} {
-			mustExec(t, ctx, owner, stmt)
-		}
+		)
 		// Each protocol owns a distinct session cache: one query must not refresh
 		// another protocol's cache and hide a missing execution-time check.
-		readers := []*sql.Conn{open(1, "auth_cache#learner#reader"), open(1, "auth_cache#learner#reader"), open(1, "auth_cache#learner#reader")}
+		readers := []*sql.Conn{open(t, 1, "auth_cache#learner#reader"), open(t, 1, "auth_cache#learner#reader"), open(t, 1, "auth_cache#learner#reader")}
 		allReadersExec := func(stmt string) {
 			t.Helper()
 			for _, reader := range readers {
@@ -96,7 +108,46 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 		}
 		check(true)
 		check(true)
-		// A data write must not invalidate authorization catalog contents.
+		// A data write must not change authorization catalog contents. The
+		// conservative version also includes physical generations/watermarks:
+		// background catalog replay can change it without changing these rows.
+		catalogContents := func() map[string][sha256.Size]byte {
+			t.Helper()
+			contents := make(map[string][sha256.Size]byte)
+			for _, query := range []string{
+				"select * from mo_catalog.mo_database where datname='app'",
+				"select * from mo_catalog.mo_tables where reldatabase='app'",
+				"select * from mo_catalog.mo_user", "select * from mo_catalog.mo_role",
+				"select * from mo_catalog.mo_user_grant", "select * from mo_catalog.mo_role_grant",
+				"select * from mo_catalog.mo_role_privs",
+			} {
+				rows, err := owner.QueryContext(ctx, query)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, rows.Close()) })
+				columns, err := rows.Columns()
+				require.NoError(t, err)
+				var encodedRows []string
+				for rows.Next() {
+					values := make([]any, len(columns))
+					pointers := make([]any, len(columns))
+					for i := range values {
+						pointers[i] = &values[i]
+					}
+					require.NoError(t, rows.Scan(pointers...))
+					encoded, err := json.Marshal(values)
+					require.NoError(t, err)
+					encodedRows = append(encodedRows, string(encoded))
+				}
+				require.NoError(t, rows.Err())
+				require.NoError(t, rows.Close())
+				sort.Strings(encodedRows)
+				encoded, err := json.Marshal(encodedRows)
+				require.NoError(t, err)
+				// Compare all values without printing credential catalog contents.
+				contents[query] = sha256.Sum256(encoded)
+			}
+			return contents
+		}
 		cn, err := c.GetCNService(1)
 		require.NoError(t, err)
 		eng := cn.RawService().(cnservice.Service).GetEngine().(*disttae.Engine)
@@ -105,35 +156,39 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 		version, _, err := eng.GetPrivilegeCacheVersion(ctx, account, timestamp.Timestamp{})
 		require.NoError(t, err)
 		require.True(t, version != (disttae.PrivilegeCacheVersion{}))
+		beforeDataWrite := catalogContents()
 		mustExec(t, ctx, owner, "insert into app.t values (2)")
-		current, _, err := eng.GetPrivilegeCacheVersion(ctx, account, timestamp.Timestamp{})
-		require.NoError(t, err)
-		require.True(t, version == current)
+		var dataRows int
+		require.NoError(t, owner.QueryRowContext(ctx, "select count(*) from app.t").Scan(&dataRows))
+		require.Equal(t, 2, dataRows)
+		require.Equal(t, beforeDataWrite, catalogContents(), "ordinary DML must preserve authorization contents")
+		check(true)
 		canceled, stop := context.WithCancel(ctx)
 		stop()
-		current, _, err = eng.GetPrivilegeCacheVersion(canceled, account, timestamp.Timestamp{})
+		current, _, err := eng.GetPrivilegeCacheVersion(canceled, account, timestamp.Timestamp{})
 		require.ErrorIs(t, err, context.Canceled)
 		require.True(t, current == (disttae.PrivilegeCacheVersion{}))
 		allReadersExec("begin")
 		check(true)
-		mustExec(t, ctx, owner, "revoke select on table app.t from reader")
+		catalogChange(t, ctx, owner, "revoke select on table app.t from reader")
+		require.NotEqual(t, beforeDataWrite, catalogContents(), "the contents oracle must observe a real grant change")
 		check(false)
 		allReadersExec("rollback")
-		mustExec(t, ctx, owner, "grant select on table app.t to reader")
+		catalogChange(t, ctx, owner, "grant select on table app.t to reader")
 		check(true)
-		mustExec(t, ctx, owner, "revoke reader from learner")
+		catalogChange(t, ctx, owner, "revoke reader from learner")
 		check(false)
-		mustExec(t, ctx, owner, "grant reader to learner")
+		catalogChange(t, ctx, owner, "grant reader to learner")
 		check(true)
 		allReadersExec("set role public")
 		check(false)
 		allReadersExec("set role reader")
 		check(true)
-		mustExec(t, ctx, owner, "drop table app.t")
-		mustExec(t, ctx, owner, "create table app.t(id int primary key)")
-		mustExec(t, ctx, owner, "insert into app.t values (1)")
+		catalogChange(t, ctx, owner,
+			"drop table app.t", "create table app.t(id int primary key)",
+			"insert into app.t values (1)")
 		check(false)
-		mustExec(t, ctx, owner, "grant select on table app.t to reader")
+		catalogChange(t, ctx, owner, "grant select on table app.t to reader")
 		check(true)
 		for _, setting := range []string{"set clear_privilege_cache=on", "set enable_privilege_cache=off", "set enable_privilege_cache=on"} {
 			allReadersExec(setting)
@@ -149,7 +204,7 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 			}
 			return rows.Err()
 		}
-		t.Run("nested_authorization", func(t *testing.T) {
+		if !t.Run("nested_authorization", func(t *testing.T) {
 			// Each shell has its own warm cache before a remote revoke.
 			for _, query := range []string{
 				"set @nested_value=(select id from app.t)",
@@ -161,8 +216,8 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 				"execute nested_explain",
 				"binary set",
 			} {
-				t.Run(query, func(t *testing.T) {
-					conn := open(1, "auth_cache#learner#reader")
+				if !t.Run(query, func(t *testing.T) {
+					conn := open(t, 1, "auth_cache#learner#reader")
 					mustExec(t, ctx, conn, "set enable_privilege_cache=on")
 					var binary *sql.Stmt
 					switch query {
@@ -188,33 +243,44 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 					}
 					require.NoError(t, run())
 					mustExec(t, ctx, conn, "set @nested_value=-1")
-					mustExec(t, ctx, owner, "revoke select on table app.t from reader")
-					defer mustExec(t, ctx, owner, "grant select on table app.t to reader")
+					// REVOKE can commit even if its visibility fence fails.
+					defer func() {
+						cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+						defer stop()
+						catalogChange(t, cleanup, owner, "grant select on table app.t to reader")
+					}()
+					catalogChange(t, ctx, owner, "revoke select on table app.t from reader")
 					require.ErrorContains(t, run(), "privilege")
 					var value int
 					require.NoError(t, conn.QueryRowContext(ctx, "select @nested_value").Scan(&value))
 					require.Equal(t, -1, value, "denied evaluation must not assign a value")
-				})
+				}) {
+					return
+				}
 			}
-			conn := open(1, "auth_cache#learner#reader")
+			conn := open(t, 1, "auth_cache#learner#reader")
 			require.ErrorContains(t, consume(conn, "explain analyze update app.t set id=7"), "privilege")
 			var id int
 			require.NoError(t, owner.QueryRowContext(ctx, "select id from app.t").Scan(&id))
 			require.Equal(t, 1, id)
-		})
-		t.Run("grant_option_membership", func(t *testing.T) {
-			mustExec(t, ctx, owner, "create role recipient")
-			mustExec(t, ctx, owner, "grant select on table app.t to reader with grant option")
-			conn := open(1, "auth_cache#learner#reader")
+		}) {
+			return
+		}
+		if !t.Run("grant_option_membership", func(t *testing.T) {
+			catalogChange(t, ctx, owner, "create role recipient",
+				"grant select on table app.t to reader with grant option")
+			conn := open(t, 1, "auth_cache#learner#reader")
 			const grant = "grant select on table app.t to recipient"
-			mustExec(t, ctx, conn, grant)
-			mustExec(t, ctx, owner, "revoke reader from learner")
+			catalogChange(t, ctx, conn, grant)
+			catalogChange(t, ctx, owner, "revoke reader from learner")
 			require.ErrorContains(t, consume(conn, grant), "privilege")
-			mustExec(t, ctx, owner, "grant reader to learner")
-			mustExec(t, ctx, conn, grant)
-		})
+			catalogChange(t, ctx, owner, "grant reader to learner")
+			catalogChange(t, ctx, conn, grant)
+		}) {
+			return
+		}
 
-		t.Run("catalog_fault", func(t *testing.T) {
+		if !t.Run("catalog_fault", func(t *testing.T) {
 			type control struct {
 				query string
 				conn  *sql.Conn
@@ -222,7 +288,7 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 			controls := make([]control, 0, 10)
 			for _, user := range []string{"learner#reader", "admin#accountadmin"} {
 				for _, query := range []string{"set clear_privilege_cache=on", "set enable_privilege_cache=off", "show warnings", "set clear_privilege_cache=1", "set @constant=1+1"} {
-					conn := open(1, "auth_cache#"+user)
+					conn := open(t, 1, "auth_cache#"+user)
 					mustExec(t, ctx, conn, "set enable_privilege_cache=on")
 					require.NoError(t, consume(conn, "select id from app.t"))
 					controls = append(controls, control{query, conn})
@@ -251,7 +317,9 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 				}
 				require.ErrorContains(t, err, "injected subscribe table err", query)
 			}
-		})
+		}) {
+			return
+		}
 		check(true)
 
 	})

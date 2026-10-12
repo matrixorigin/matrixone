@@ -15,19 +15,20 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
-	"math/rand"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/BurntSushi/toml"
@@ -1439,66 +1440,114 @@ const (
 	quitStr = "MysqlClientQuit"
 )
 
-// makeExecuteSql appends the PREPARE sql and its values of parameters for the EXECUTE statement.
-// Format 1: execute ... using ...
-// execute.... // prepare stmt1 from .... ; set var1 = val1 ; set var2 = val2 ;
-// Format 2: COM_STMT_EXECUTE
-// execute.... // prepare stmt1 from .... ; param0 ; param1 ...
-func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement, binExec bool, prepareName string) string {
+// makeExecuteSql composes the diagnostic environment, prepared SQL and values.
+// The existing output limit bounds construction; Abbreviate owns the final UTF-8
+// boundary and ellipsis semantics.
+func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement, binExec bool, prepareName, envStmt string, limit int) string {
 	if ses == nil || stmt == nil {
+		return commonutil.Abbreviate(envStmt, limit)
+	}
+	name := prepareName
+	var variables []*tree.VarExpr
+	if !binExec {
+		execute, ok := stmt.(*tree.Execute)
+		if !ok {
+			return commonutil.Abbreviate(envStmt, limit)
+		}
+		name = string(execute.Name)
+		variables = execute.Variables
+	}
+	prepared, err := ses.GetPrepareStmt(ctx, name)
+	if err != nil || prepared == nil {
+		return commonutil.Abbreviate(envStmt, limit)
+	}
+	if limit == 0 || limit < -1 {
 		return ""
 	}
-	isExec := false
-	name := ""
-	var Variables []*tree.VarExpr
-	if binExec {
-		isExec = true
-		name = prepareName
-	} else if t, ok := stmt.(*tree.Execute); ok {
-		isExec = true
-		name = string(t.Name)
-		Variables = t.Variables
-	}
-	preSql := ""
-	bb := &strings.Builder{}
-	//fill prepare parameters
-	if isExec {
-		prepareStmt, err := ses.GetPrepareStmt(ctx, name)
-		if err != nil || prepareStmt == nil {
-			return ""
+	var bb strings.Builder
+	appendPart := func(part string) bool {
+		if limit > 0 && len(part) > limit-bb.Len() {
+			remaining := limit - bb.Len()
+			// Retain a complete crossing rune for the common boundary owner,
+			// plus evidence that the complete diagnostic exceeds the limit.
+			keep := remaining + min(len(part)-remaining, utf8.UTFMax)
+			bb.WriteString(part[:keep])
+			return false
 		}
-		preSql = strings.TrimSpace(prepareStmt.Sql)
-		bb.WriteString(preSql)
-		bb.WriteString(" ; ")
-		if len(Variables) != 0 {
-			//for EXECUTE ... USING statement. append variables if there is.
-			//get SET VAR sql
-			setVarSqls := make([]string, len(Variables))
-			for i, v := range Variables {
-				userVal, err := ses.GetUserDefinedVar(v.Name)
-				if err == nil && userVal != nil && len(userVal.Sql) != 0 {
-					setVarSqls[i] = userVal.Sql
-				}
+		bb.WriteString(part)
+		return true
+	}
+	finish := func() string { return commonutil.Abbreviate(bb.String(), limit) }
+	if !appendPart(envStmt) || !appendPart(" // ") || !appendPart(strings.TrimSpace(prepared.Sql)) || !appendPart(" ; ") {
+		return finish()
+	}
+	if len(variables) != 0 {
+		for i, variable := range variables {
+			if i != 0 && !appendPart(" ; ") {
+				return finish()
 			}
-			bb.WriteString(strings.Join(setVarSqls, " ; "))
-		} else if prepareStmt.params != nil {
-			//for COM_STMT_EXECUTE
-			//get value of parameters
-			paramCnt := prepareStmt.params.Length()
-			paramValues := make([]string, paramCnt)
-			vs := vector.MustFixedColNoTypeCheck[types.Varlena](prepareStmt.params)
-			for i := 0; i < paramCnt; i++ {
-				isNull := prepareStmt.params.GetNulls().Contains(uint64(i))
-				if isNull {
-					paramValues[i] = "NULL"
-				} else {
-					paramValues[i] = vs[i].UnsafeGetString(prepareStmt.params.GetArea())
-				}
+			userVal, err := ses.GetUserDefinedVar(variable.Name)
+			if err == nil && userVal != nil && !appendPart(userVal.Sql) {
+				return finish()
 			}
-			bb.WriteString(strings.Join(paramValues, " ; "))
+		}
+	} else if prepared.params != nil {
+		vs := vector.MustFixedColNoTypeCheck[types.Varlena](prepared.params)
+		for i := 0; i < prepared.params.Length(); i++ {
+			if i != 0 && !appendPart(" ; ") {
+				return finish()
+			}
+			if prepared.params.GetNulls().Contains(uint64(i)) {
+				if !appendPart("NULL") {
+					return finish()
+				}
+				continue
+			}
+			value := vs[i].UnsafeGetString(prepared.params.GetArea())
+			if limit > 0 && bb.Len() == limit && len(value) > 0 {
+				appendPart("x") // Overflow is known; the discarded value needs no rendering.
+				return finish()
+			}
+			if isTextExecuteParam(value) {
+				if !appendPart(value) {
+					return finish()
+				}
+				continue
+			}
+			length := len(value)
+			if limit > 0 {
+				length = min(length, (limit-bb.Len())/2)
+			}
+			var encoded bytes.Buffer
+			writeSQLHexLiteral(&encoded, commonutil.UnsafeStringToBytes(value[:length]))
+			literal := encoded.String()
+			if length < len(value) {
+				// A partial value has no closing quote in the complete prefix.
+				literal = literal[:len(literal)-1]
+			}
+			if !appendPart(literal) {
+				return finish()
+			}
 		}
 	}
-	return bb.String()
+	return finish()
+}
+
+// isTextExecuteParam selects the compatible text presentation without copying
+// execution bytes. Visible values may require a full scan to detect a malformed
+// final byte; discarded values are never classified.
+func isTextExecuteParam(value string) bool {
+	for offset, r := range value {
+		if (r < 0x20 && r != '\t' && r != '\n' && r != '\r') || r == 0x7f {
+			return false
+		}
+		if r == utf8.RuneError {
+			if _, width := utf8.DecodeRuneInString(value[offset:]); width == 1 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batch.Batch, *plan.ResultColDef, error) {
@@ -2030,7 +2079,7 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 		return err
 	}
 	if typ.Charset != 255 {
-		if err := collation.RequireLegacy(uint32(typ.Charset), uint32(typ.CollationVersion), 0); err != nil {
+		if err := collation.ValidateMetadata(uint32(typ.Charset), uint32(typ.CollationVersion)); err != nil {
 			return err
 		}
 	}
@@ -2050,7 +2099,10 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	// Keep zero-value protocol defaults. Explicit collation metadata comes
 	// from the same capability owner as admission; 255 is a numeric CAST marker.
 	if typ.Charset != types.CharsetLegacy && typ.Charset != 255 {
-		d, _ := collation.EffectiveDefinition(uint32(typ.Charset), uint32(typ.CollationVersion))
+		d, err := collation.EffectiveDefinition(uint32(typ.Charset), uint32(typ.CollationVersion))
+		if err != nil {
+			return err
+		}
 		col.SetCharset(d.ProtocolID)
 	}
 	if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
@@ -2159,6 +2211,10 @@ func mysqlTextMaxBytesPerCharacter(charset uint8) uint32 {
 	switch charset {
 	case types.CharsetUTF8, types.CharsetUTF8MB4Bin:
 		return utf8mb4MaxBytesPerCharacter
+	case types.CharsetUTF8MB4UnicodeCI:
+		return utf8mb4MaxBytesPerCharacter
+	case types.CharsetUTF8MB3UnicodeCI:
+		return 3
 	case types.CharsetBinary:
 		return 1
 	default:
@@ -2178,28 +2234,11 @@ func mysqlStringColumnLength(width int32, maxBytesPerCharacter uint32) uint32 {
 	return uint32(length)
 }
 
-// errCodeRollbackWholeTxn denotes that the error code
-// that should rollback the whole txn
-var errCodeRollbackWholeTxn = map[uint16]bool{
-	moerr.ErrRetryForCNRollingRestart: false,
-	moerr.ErrDeadLockDetected:         false,
-	moerr.ErrLockTableBindChanged:     false,
-	moerr.ErrLockTableNotFound:        false,
-	moerr.ErrDeadlockCheckBusy:        false,
-	moerr.ErrLockConflict:             false,
-	moerr.ErrRemoteLockWaitTimeout:    false,
-	moerr.ErrLockWaitTimeout:          false,
-	moerr.ErrTxnUnknown:               false,
-	moerr.ErrBackendClosed:            false,
-	moerr.ErrNoAvailableBackend:       false,
-	moerr.ErrBackendCannotConnect:     false,
-}
-
 // sessionRollsBackTxnOnError reports whether the session has opted into
 // treating this error as fatal to the whole transaction rather than to the
 // statement alone.
 //
-// The static errCodeRollbackWholeTxn set above is infrastructure -- deadlock,
+// The shared moerr.MustRollbackTxn policy covers infrastructure -- deadlock,
 // lock timeout, a backend that went away -- failures after which the
 // transaction genuinely cannot continue, and it is only twelve of the ~240
 // error codes MO defines. Every other error, from a syntax error to a
@@ -2237,61 +2276,7 @@ func sessionRollsBackTxnOnError(ses FeSession, inputErr error) bool {
 }
 
 func isErrorRollbackWholeTxn(inputErr error) bool {
-	if inputErr == nil {
-		return false
-	}
-	me, ok := inputErr.(*moerr.Error)
-	if !ok {
-		// This is not a moerr
-		return false
-	}
-	if _, has := errCodeRollbackWholeTxn[me.ErrorCode()]; has {
-		return true
-	}
-	return false
-}
-
-func getRandomErrorRollbackWholeTxn() error {
-	x := rand.Intn(len(errCodeRollbackWholeTxn))
-	arr := make([]uint16, 0, len(errCodeRollbackWholeTxn))
-	for k := range errCodeRollbackWholeTxn {
-		arr = append(arr, k)
-	}
-	return newErrorRollbackWholeTxn(arr[x])
-}
-
-// newErrorRollbackWholeTxn keeps the test error factory in sync with
-// errCodeRollbackWholeTxn. Its deterministic input lets tests cover every map
-// entry instead of relying on getRandomErrorRollbackWholeTxn to select it.
-func newErrorRollbackWholeTxn(code uint16) error {
-	switch code {
-	case moerr.ErrRetryForCNRollingRestart:
-		return moerr.NewRetryForCNRollingRestart()
-	case moerr.ErrDeadLockDetected:
-		return moerr.NewDeadLockDetectedNoCtx()
-	case moerr.ErrLockTableBindChanged:
-		return moerr.NewLockTableBindChangedNoCtx()
-	case moerr.ErrLockTableNotFound:
-		return moerr.NewLockTableNotFoundNoCtx()
-	case moerr.ErrDeadlockCheckBusy:
-		return moerr.NewDeadlockCheckBusyNoCtx()
-	case moerr.ErrLockConflict:
-		return moerr.NewLockConflictNoCtx()
-	case moerr.ErrRemoteLockWaitTimeout:
-		return moerr.NewRemoteLockWaitTimeoutNoCtx()
-	case moerr.ErrLockWaitTimeout:
-		return moerr.NewLockWaitTimeoutNoCtx()
-	case moerr.ErrTxnUnknown:
-		return moerr.NewTxnUnknown(context.Background(), "test")
-	case moerr.ErrBackendClosed:
-		return moerr.NewBackendClosedNoCtx()
-	case moerr.ErrNoAvailableBackend:
-		return moerr.NewNoAvailableBackendNoCtx()
-	case moerr.ErrBackendCannotConnect:
-		return moerr.NewBackendCannotConnectNoCtx("test")
-	default:
-		panic(fmt.Sprintf("unsupported error code %d", code))
-	}
+	return moerr.MustRollbackTxn(inputErr)
 }
 
 func skipClientQuit(info string) bool {

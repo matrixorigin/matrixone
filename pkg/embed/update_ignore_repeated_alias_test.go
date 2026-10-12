@@ -92,7 +92,9 @@ func TestUpdateIgnoreRepeatedAliasesAdvanceGreedily(t *testing.T) {
 		defer func() {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			_, _ = conn.ExecContext(cleanupCtx, "drop database if exists update_ignore_greedy_test")
+			if _, cleanupErr := conn.ExecContext(cleanupCtx, "drop database if exists update_ignore_greedy_test"); cleanupErr != nil {
+				t.Errorf("drop UPDATE IGNORE test database: %v", cleanupErr)
+			}
 		}()
 		exec("use update_ignore_greedy_test")
 
@@ -102,27 +104,23 @@ func TestUpdateIgnoreRepeatedAliasesAdvanceGreedily(t *testing.T) {
 		assertAffected(result, 2)
 		require.Equal(t, []int64{2, 1, 9}, queryInts("select u,v,x from unique_t where id=1", 3))
 
-		exec("truncate table unique_t")
-		exec("insert into unique_t values (1,1,1,0),(2,2,2,0)")
+		exec("update unique_t set u=1,v=1,x=0 where id=1")
 		result = exec("update ignore unique_t a join unique_t b on a.id=b.id join unique_t c on b.id=c.id set a.u=2,b.v=2,b.x=7,c.v=3 where a.id=1")
 		assertAffected(result, 2)
 		require.Equal(t, []int64{2, 3, 0}, queryInts("select u,v,x from unique_t where id=1", 3))
 
-		exec("truncate table unique_t")
-		exec("insert into unique_t values (1,1,1,0),(2,2,2,0)")
+		exec("update unique_t set u=1,v=1,x=0 where id=1")
 		result = exec("update ignore unique_t a join unique_t b on a.id=b.id join unique_t c on b.id=c.id set a.u=?,b.v=?,c.x=? where a.id=1", 2, 2, 9)
 		assertAffected(result, 2)
 		require.Equal(t, []int64{2, 1, 9}, queryInts("select u,v,x from unique_t where id=1", 3))
 
-		exec("truncate table unique_t")
-		exec("insert into unique_t values (1,1,1,0),(2,2,2,0)")
+		exec("update unique_t set u=1,v=1,x=0 where id=1")
 		result = exec("update ignore unique_t a join unique_t b on a.id=b.id join unique_t c on b.id=c.id set c.x=9,b.v=2,a.u=2 where a.id=1")
 		assertAffected(result, 2)
 		require.Equal(t, []int64{2, 1, 9}, queryInts("select u,v,x from unique_t where id=1", 3),
 			"SET order must not change repeated-alias evaluation order")
 
-		exec("truncate table unique_t")
-		exec("insert into unique_t values (1,1,1,0),(2,2,2,0)")
+		exec("update unique_t set u=1,v=1,x=0 where id=1")
 		result = exec("update ignore unique_t a join unique_t b on a.id=b.id set a.x=2,b.x=3 where a.id=1")
 		assertAffected(result, 2)
 		require.Equal(t, []int64{3}, queryInts("select x from unique_t where id=1", 1),

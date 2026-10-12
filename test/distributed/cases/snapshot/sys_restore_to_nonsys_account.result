@@ -456,7 +456,7 @@ system_metrics
 use fulltext_acc01;
 show create table src;
 Table    Create Table
-src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` text DEFAULT NULL,\n  `json2` varchar(65535) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`json1`) WITH PARSER json\n)
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` text DEFAULT NULL,\n  `json2` varchar(16383) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`json1`) WITH PARSER json\n)
 select * from src;
 id    json1    json2
 0    {"a":1, "b":"red"}    {"d": "happy birthday", "f":"winter"}

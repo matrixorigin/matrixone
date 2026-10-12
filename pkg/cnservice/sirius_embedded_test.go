@@ -40,6 +40,8 @@ type embeddedRuntimeTestRecorder struct {
 
 func (*embeddedRuntimeTestRecorder) Accepting() bool { return true }
 
+func (*embeddedRuntimeTestRecorder) Capabilities() uint64 { return 0 }
+
 func (r *embeddedRuntimeTestRecorder) Close(context.Context) error {
 	r.closed = true
 	return nil

@@ -3923,6 +3923,103 @@ func TestPreparedSignedNarrowingCacheGuard(t *testing.T) {
 	}
 }
 
+func TestPreparedDecimalIntegerConsumerCacheGuard(t *testing.T) {
+	for _, predicate := range []string{
+		"n_nationkey in (?, ?)",
+		"n_nationkey between ? and ?",
+		"n_nationkey = cast(? as signed)",
+	} {
+		t.Run(predicate, func(t *testing.T) {
+			base := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
+			_, table, err := base.Resolve("tpch", "nation", nil)
+			require.NoError(t, err)
+			for _, col := range table.Cols {
+				if col.Name == "n_nationkey" {
+					col.Typ.Id, col.Typ.Width, col.Typ.Scale = int32(types.T_decimal64), 12, 2
+				}
+			}
+			ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, table: table}
+			ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
+				t, 233, "select n_name from nation where "+predicate, ctx)
+			ctx.proc = cw.proc
+			t.Cleanup(func() {
+				cw.proc.SetPrepareParams(nil)
+				cw.releaseRuntimeCacheRetiredCompiles()
+				prepared.Close()
+			})
+			bind := func(values []string, nullAt int) {
+				t.Helper()
+				cw.proc.SetPrepareParams(nil)
+				if prepared.params != nil {
+					prepared.params.Free(cw.proc.Mp())
+				}
+				prepared.params = vector.NewVec(types.T_text.ToType())
+				prepared.ParamTypes = nil
+				for i, value := range values {
+					require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), i == nullAt, cw.proc.Mp()))
+					prepared.ParamTypes = append(prepared.ParamTypes, byte(defines.MYSQL_TYPE_LONGLONG), 0)
+				}
+			}
+			execute := func() (*compile.Compile, *plan.Plan) {
+				t.Helper()
+				cw.discardRuntimeCacheCandidate()
+				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(
+					execCtx, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx)
+				if owned && stmt != nil {
+					stmt.Free()
+				}
+				require.NoError(t, err)
+				return comp, p
+			}
+			values := []string{"7"}
+			if strings.Count(predicate, "?") == 2 {
+				values = append(values, "8")
+			}
+			bind(values, -1)
+			_, nativePlan := execute()
+			require.Same(t, nativePlan, cw.runtimeCachePlan)
+			require.NotEmpty(t, cw.runtimeCacheDiagnostics)
+			cached := compile.NewCompile("", "", prepared.Sql, "", "", nil,
+				cw.proc, prepared.PrepareStmt, false, nil, time.Now())
+			installed := false
+			t.Cleanup(func() {
+				if !installed {
+					cached.FreeOperator()
+					cached.Release()
+				}
+			})
+			installed = cw.installRuntimeCacheCandidate(cached)
+			require.True(t, installed)
+			for pos := range values {
+				for _, value := range []string{"9", "10000000000", "-10000000000", "7"} {
+					current := append([]string(nil), values...)
+					current[pos] = value
+					bind(current, -1)
+					comp, p := execute()
+					if len(value) < 10 {
+						require.Same(t, cached, comp)
+						require.Same(t, nativePlan, p)
+					} else {
+						require.Nil(t, comp)
+						require.NotSame(t, nativePlan, p)
+						require.Nil(t, cw.runtimeCacheTarget, "wide values must not replace an admitted domain")
+					}
+					require.Same(t, cached, prepared.runtimeCompile)
+					require.Same(t, nativePlan, prepared.runtimePlan)
+				}
+				bind(values, pos)
+				comp, _ := execute()
+				require.Nil(t, comp, "NULL is a different source category")
+				require.Same(t, nativePlan, prepared.runtimePlan)
+				bind(values, -1)
+				comp, p := execute()
+				require.Same(t, cached, comp)
+				require.Same(t, nativePlan, p)
+			}
+		})
+	}
+}
+
 func BenchmarkInitExecuteStmtParamRepeatedTPCCArithmeticUpdate(b *testing.B) {
 	optimizer := plan2.NewMockOptimizer(false, newPlanTestProcess(b))
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(

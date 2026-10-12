@@ -308,7 +308,8 @@ count(format(d3, 2))
 SELECT ABS(format(d3,0)) FROM format_01;
 invalid argument cast to int, bad value 46,787,698
 SELECT SUM(format(id,2)) FROM format_01;
-invalid argument aggregate function sum, bad value [VARCHAR]
+➤ SUM(format(id, 2))[8,53,31]  𝄀
+15.0
 SELECT CEIL(format(d3, 4))FROM format_01;
 strconv.ParseFloat: parsing "46,787,698.0000": invalid syntax
 SELECT ROUND(format(d4, 0)) FROM format_01;

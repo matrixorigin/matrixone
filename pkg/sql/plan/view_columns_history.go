@@ -68,7 +68,7 @@ func (builder *QueryBuilder) historicalViewColumnsSQL(
 	if err := json.Unmarshal([]byte(currentDef.ViewSql.View), &current); err != nil {
 		return "", err
 	}
-	if !sysview.IsCurrentInformationSchemaColumnsDDL(current.Stmt) {
+	if !sysview.IsInformationSchemaColumnsMigrationDDL(current.Stmt) {
 		return definition, nil
 	}
 	if err := RequirePersistedProtocolVersion(builder.GetContext(), ctx.GetProcess(), defines.MORPCVersion100); err != nil {

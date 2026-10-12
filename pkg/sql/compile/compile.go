@@ -99,6 +99,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -311,6 +312,8 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	// are deliberately ineligible for LOAD unique-index promotion.
 	c.clearLoadUniqueIndexPromotion()
 	c.executionGeneration = 0
+	c.runSqlToken = 0
+	c.createNamePinsAdmitted = false
 	c.retryTimes = 0
 	c.resultMetadataFrozen.Store(false)
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
@@ -499,6 +502,8 @@ func (c *Compile) clear() {
 	c.preparedJoinDiagnosticFree = false
 	c.resultSink = nil
 	c.executionGeneration = 0
+	c.runSqlToken = 0
+	c.createNamePinsAdmitted = false
 	c.retryTimes = 0
 	c.affectRows.Store(0)
 	c.addr = ""
@@ -846,7 +851,7 @@ func (c *Compile) preferPrimaryScopeResult(current, candidate scopeRunResult) sc
 }
 
 func (c *Compile) canRetry(err error) bool {
-	if c.disableRetry {
+	if c.disableRetry || c.proc.IncrStatementDisabled() {
 		return false
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode) {
@@ -2569,6 +2574,14 @@ func (c *Compile) getExternParam(proc *process.Process, externScan *plan.ExternS
 	param.ExternType = externScan.Type
 	param.FileService = c.proc.Base.FileService
 	param.Ctx = c.proc.Ctx
+
+	if externScan.Type == int32(plan.ExternType_LOAD) && param.StageFilepath != "" {
+		// Keep the prepared plan's bound source and derived file metadata, but
+		// authorize its original stage dependency against this execution's catalog.
+		if _, err := stageutil.UrlToStageDef(param.StageFilepath, proc); err != nil {
+			return nil, err
+		}
+	}
 
 	if externScan.Type == int32(plan.ExternType_EXTERNAL_TB) || externScan.Type == int32(plan.ExternType_RESULT_SCAN) {
 		switch param.ScanType {
@@ -5303,7 +5316,9 @@ func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, 
 			return c.compileSingleTableFunction(node)
 		}
 	}
-	if planplugin.TableFuncRequiresCoordinator(node.TableDef.TblFunc.Name) {
+	if name := node.TableDef.GetTblFunc().GetName(); name == "json_table" || planplugin.TableFuncRequiresCoordinator(name) {
+		// G2 has no distributed keyed-once warning transport. Execute this
+		// consumer once on the coordinator; input scans may remain remote.
 		ss = []*Scope{c.newMergeScope(ss)}
 	}
 	for i := range ss {
@@ -6929,15 +6944,6 @@ func canUseHashMarkJoinWithInputs(node, left, right *plan.Node) bool {
 	allNotNull := true
 	for _, condition := range hashConditions {
 		fn := condition.GetF()
-		if fn == nil || !plan2.IsEqualFunc(fn.Func.GetObj()) || len(fn.Args) != 2 {
-			return false
-		}
-		leftRel, leftSingleRel := hashMarkOperandRel(fn.Args[0])
-		rightRel, rightSingleRel := hashMarkOperandRel(fn.Args[1])
-		if !leftSingleRel || !rightSingleRel ||
-			!((leftRel == 0 && rightRel == 1) || (leftRel == 1 && rightRel == 0)) {
-			return false
-		}
 		if left != nil && right != nil {
 			allNotNull = allNotNull &&
 				plan2.IsJoinExprEffectivelyNotNullable(fn.Args[0], left, right) &&
@@ -6981,40 +6987,6 @@ func canUseShuffleHashMarkJoinWithInputs(node, left, right *plan.Node) bool {
 		}
 	}
 	return true
-}
-
-// hashMarkOperandRel returns the single relation referenced by an equality
-// operand. MARK cannot hash an operand that mixes probe and build columns: the
-// resulting residual condition needs row-aware evaluation by LoopJoin.
-func hashMarkOperandRel(expr *plan.Expr) (int32, bool) {
-	relPos := int32(-1)
-	singleRel := true
-
-	var visit func(*plan.Expr)
-	visit = func(current *plan.Expr) {
-		if current == nil || !singleRel {
-			return
-		}
-		switch impl := current.Expr.(type) {
-		case *plan.Expr_Col:
-			if relPos == -1 {
-				relPos = impl.Col.RelPos
-			} else if relPos != impl.Col.RelPos {
-				singleRel = false
-			}
-		case *plan.Expr_F:
-			for _, arg := range impl.F.Args {
-				visit(arg)
-			}
-		case *plan.Expr_List:
-			for _, item := range impl.List.List {
-				visit(item)
-			}
-		}
-	}
-
-	visit(expr)
-	return relPos, singleRel && relPos >= 0
 }
 
 func (c *Compile) broadcastJoinUsesHash(node *plan.Node) bool {
@@ -7475,10 +7447,11 @@ func hasMultiScopeGroup(groups [][]*Scope) bool {
 
 func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	name := right.GetTableDef().GetTblFunc().GetName()
-	if name == "mo_view_columns" || planplugin.TableFuncRequiresCoordinator(name) {
+	if name == "mo_view_columns" || name == "json_table" || planplugin.TableFuncRequiresCoordinator(name) {
 		// Session-bound functions and index writers must use the origin process:
 		// a remote mirror workspace cannot publish writes in its transaction.
 		// Gather inputs here without changing the source scans' placement.
+		// JSON_TABLE stays local until its keyed-once warning transport exists.
 		rs = []*Scope{c.newMergeScope(rs)}
 	}
 

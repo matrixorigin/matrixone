@@ -70,8 +70,21 @@ func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...str
 	return scheduleHarnessWithMockTransform(t, script, mock, nil, variables...)
 }
 
+// Assign in the caller: a command-substitution wrapper would identify its
+// subshell instead. The exec fallback also works with system Bash 3.2.
+const scheduleFixturePID = `function fixture_self_pid() {
+ if [[ -n "${BASHPID:-}" ]]; then
+  printf -v "$1" '%s' "$BASHPID"
+ else
+  printf -v "$1" '%s' "$(exec /bin/sh -c 'printf "%s" "$PPID"')"
+ fi
+}
+`
+
 func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transform func(string) string, variables ...string) ([]byte, error) {
 	t.Helper()
+	script = scheduleFixturePID + script
+	mock = strings.Replace(mock, "#!/bin/bash\n", "#!/bin/bash\n"+scheduleFixturePID, 1)
 	root := t.TempDir()
 	dir := filepath.Join(root, "optools")
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -150,6 +163,10 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 		validationError string
 	}{
 		{name: "serial-default", want: "4 1 1", accepted: true},
+		{name: "darwin-default", args: []string{"UNAME_S=darwin"}, want: "4 1 1", accepted: true},
+		{name: "issues-only-opt-in", args: []string{"UT_ISSUES_BATCH_PARALLEL=2"}, want: "4 2 1", accepted: true},
+		{name: "embedded-only-opt-in", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=2"}, want: "4 1 2", accepted: true},
+		{name: "issues-serial-embedded-rollback", args: []string{"UT_ISSUES_BATCH_PARALLEL=1"}, want: "4 1 1", accepted: true},
 		{name: "single-batch-rollback", args: []string{"UT_ISSUES_BATCHES=1"}, want: "1 1 1", accepted: true},
 		{name: "pool-opt-in", args: []string{"UT_ISSUES_BATCH_PARALLEL=2", "UT_EMBEDDED_PACKAGE_PARALLEL=2"}, want: "4 2 2", accepted: true},
 		{name: "invalid-single-batch-pool", args: []string{"UT_ISSUES_BATCHES=1", "UT_ISSUES_BATCH_PARALLEL=2"}, want: "1 2 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
@@ -203,6 +220,20 @@ grep -Fq "$EXPECT_VALIDATION_ERROR" "$CASE_DIR/validation-log" || exit 92
 			}
 		})
 	}
+	for _, batches := range []string{"1", "4"} {
+		t.Run("direct-unset-defaults/batches="+batches, func(t *testing.T) {
+			script := `unset UT_ISSUES_BATCH_PARALLEL UT_EMBEDDED_PACKAGE_PARALLEL
+UT_ISSUES_BATCHES="$BATCHES"
+source ./run_ut.sh UT
+[[ "$UT_ISSUES_BATCH_PARALLEL $UT_EMBEDDED_PACKAGE_PARALLEL" == "1 1" ]]
+`
+			out, err := scheduleHarness(t, script, "BATCHES="+batches)
+			if err != nil {
+				t.Fatalf("direct runner defaults: %v\n%s", err, out)
+			}
+		})
+	}
+
 }
 
 func TestResolveCgroupMemoryBoundary(t *testing.T) {
@@ -471,7 +502,7 @@ mkfifo "$CASE_DIR/engine-ready" "$CASE_DIR/engine-hold"
 exec 8<>"$CASE_DIR/engine-hold"
 exec 9<>"$CASE_DIR/engine-ready"
 function run_engine_race_shards() {
-	trap 'if grep -q "^engine$" "$UT_REPORT"; then touch "$CASE_DIR/report-consumed-early"; fi; touch "$CASE_DIR/engine-stopped"; exit 143' TERM
+	trap 'if grep -q "^engine$" "$UT_REPORT"; then touch "$CASE_DIR/report-consumed-early"; fi; touch "$CASE_DIR/engine-stopped"; publish_ut_helper_completion 143; exit 143' TERM
 	printf 'engine\n' > "$ENGINE_RACE_REPORT"
 	touch "$CASE_DIR/engine-started"
 	printf 'ready\n' >&9
@@ -493,11 +524,11 @@ trap cleanup EXIT
 start_engine_race example/engine 2
 `
 	transform := func(text string) string {
-		const anchor = "    run_engine_race_shards \"$1\" \"$2\" &\n    ENGINE_RACE_JOB_PID=$!\n"
+		const anchor = "    invoke_ut_helper ENGINE_RACE_JOB_PID run_engine_race_shards \"$1\" \"$2\" &\n    ENGINE_RACE_JOB_PID=$!\n"
 		if got := strings.Count(text, anchor); got != 1 {
 			t.Fatalf("engine launch anchor count = %d, want 1", got)
 		}
-		return strings.Replace(text, anchor, "    run_engine_race_shards \"$1\" \"$2\" &\n    ut_test_after_engine_spawn \"$!\"\n    ENGINE_RACE_JOB_PID=$!\n", 1)
+		return strings.Replace(text, anchor, "    invoke_ut_helper ENGINE_RACE_JOB_PID run_engine_race_shards \"$1\" \"$2\" &\n    ut_test_after_engine_spawn \"$!\"\n    ENGINE_RACE_JOB_PID=$!\n", 1)
 	}
 	script = "function ut_test_after_engine_spawn() {\n printf '%s\\n' \"$1\" > \"$CASE_DIR/engine-pid\"\n IFS= read -r -t 10 _ <&9 || exit 94\n kill -TERM \"$$\"\n}\n" + script
 	out, err := scheduleHarnessWithMockTransform(t, script, `#!/bin/bash
@@ -530,7 +561,7 @@ cleanup() {
     status=$?
     if [[ -s "$ENGINE_CHILD_PID_FILE" ]]; then
         child_pid=$(<"$ENGINE_CHILD_PID_FILE")
-        if kill -0 "$child_pid" 2>/dev/null || kill -0 -- -"$child_pid" 2>/dev/null; then
+        if ut_process_group_alive "$child_pid"; then
             kill -KILL -- -"$child_pid" 2>/dev/null || kill -KILL "$child_pid" 2>/dev/null || true
             status=90
         fi
@@ -722,7 +753,7 @@ status=$?
 touch "$CASE_DIR/helper-returned"
 exit "$status"
 CHILD
-function run_engine_race_shards() { exec bash "$CASE_DIR/helper.sh"; }
+function run_engine_race_shards() { bash "$CASE_DIR/helper.sh"; }
 function cleanup_check() {
  local status=$? pid
  if [[ -f "$CASE_DIR/owned-pids" ]]; then
@@ -809,20 +840,24 @@ trap handle_ut_termination TERM
 trap 'printf "\nCANCEL_REPORT\n"; cat "$UT_REPORT"' EXIT
 ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
 printf 'engine\n' > "$ENGINE_RACE_REPORT"
+mkfifo "$CASE_DIR/writer-ready" "$CASE_DIR/writer-wait"
+exec 8<>"$CASE_DIR/writer-wait" 9<>"$CASE_DIR/writer-ready"
 start_ut_command heavy 'heavy writer' bash -c '
  trap '\''printf "heavy-stopped\n"; exit 143'\'' TERM
  printf "heavy-start\n"
- touch "$CASE_DIR/heavy-ready"
- while :; do sleep 0.01; done
+ printf "heavy\n" >&9
+ IFS= read -r _ <&8
 '
 function run_plan_race_shards() {
- trap 'printf "plan-stopped\n" >> "$PLAN_RACE_REPORT"; exit 143' TERM
+ trap 'printf "plan-stopped\n" >> "$PLAN_RACE_REPORT"; publish_ut_helper_completion 143 || exit 125; exit 143' TERM
  printf 'plan-start\n' > "$PLAN_RACE_REPORT"
- touch "$CASE_DIR/plan-ready"
- while :; do sleep 0.01; done
+ printf 'plan\n' >&9
+ IFS= read -r _ <&8
 }
 start_plan_race example/plan
-while [[ ! -e "$CASE_DIR/heavy-ready" || ! -e "$CASE_DIR/plan-ready" ]]; do sleep 0.01; done
+IFS= read -r -t 10 first <&9 || exit 91
+IFS= read -r -t 10 second <&9 || exit 92
+[[ "$first:$second" == heavy:plan || "$first:$second" == plan:heavy ]] || exit 93
 kill -TERM "$$"
 `
 	out, err := scheduleHarness(t, script)
@@ -1477,5 +1512,73 @@ fi
 				t.Fatalf("default prebuild dispatch: %v\n%s", err, out)
 			}
 		})
+	}
+}
+
+// One outstanding TERM at a time tests parser reentry without a signal flood.
+// The main PID comes from Go; the subshell PID comes from its parent's $!.
+func TestFixturePIDDuringAcknowledgedTERM(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	script := scheduleFixturePID + `
+set -e
+scratch=$1
+fixture_self_pid main
+printf 'MAIN %s\n' "$main"
+mkfifo "$scratch/child" "$scratch/ack"
+exec 8<>"$scratch/child" 7<>"$scratch/ack"
+(fixture_self_pid child; printf '%s\n' "$child" >&8) &
+child_pid=$!
+read -r observed <&8
+wait "$child_pid"
+printf 'CHILD %s %s\n' "$observed" "$child_pid"
+handled=0
+ack_pending=0
+trap 'fixture_self_pid trap_pid; [[ "$trap_pid" == "$main" ]] || exit 97; handled=$((handled+1)); ack_pending=1' TERM
+(
+ for ((j=0; j<200; j++)); do
+  kill -TERM "$main"
+  read -r acknowledgment <&7
+  [[ "$acknowledgment" == ack ]] || exit 98
+ done
+ touch "$scratch/done"
+) &
+sender=$!
+trap 'kill "$sender" 2>/dev/null || :; wait "$sender" 2>/dev/null || :' EXIT
+while [[ ! -f "$scratch/done" ]]; do
+ # Reenter BASHPID expansion in modern Bash. The legacy fallback spawns
+ # a child, whose output can be interrupted by TERM; its PID is checked
+ # at startup, in the subshell, and by each TERM handler instead.
+ if [[ -n "${BASHPID:-}" ]]; then
+  fixture_self_pid observed
+  [[ "$observed" == "$main" ]] || exit 99
+ fi
+ # Acknowledge only after the handler returns. Otherwise the sender can
+ # deliver the next TERM while TERM is still blocked inside the handler,
+ # and Bash can coalesce it with the signal already being handled.
+ if (( ack_pending )); then
+  ack_pending=0
+  printf 'ack\n' >&7
+ fi
+done
+wait "$sender"
+trap - EXIT
+printf 'TERMS %s\n' "$handled"
+`
+	root := t.TempDir()
+	cmd := exec.CommandContext(ctx, "bash", "-c", script, "fixture-pid", root)
+	cmd.Env = append(os.Environ(), "CASE_DIR="+root)
+	out, err, diagnostic := runScheduleHarnessCommand(ctx, cmd, root)
+	if err != nil {
+		t.Fatalf("PID helper signal execution: %v\n%s\n%s", err, out, diagnostic)
+	}
+	mainPID := strconv.Itoa(cmd.Process.Pid)
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 3 || lines[0] != "MAIN "+mainPID || lines[2] != "TERMS 200" {
+		t.Fatalf("unexpected PID/TERM result: %s", out)
+	}
+	child := strings.Fields(lines[1])
+	if len(child) != 3 || child[0] != "CHILD" || child[1] != child[2] || child[1] == mainPID {
+		t.Fatalf("subshell did not identify its actual process: %s", out)
 	}
 }
