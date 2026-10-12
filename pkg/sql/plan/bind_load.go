@@ -254,7 +254,16 @@ func (builder *QueryBuilder) bindExternalScan(
 }
 
 func loadAssignmentIgnore(stmt *tree.Load) bool {
-	return tree.IsIgnoreStatement(stmt)
+	if stmt == nil {
+		return false
+	}
+	if tree.IsIgnoreStatement(stmt) {
+		return true
+	}
+	// Assignment policy is distinct from decoder/global IGNORE. In particular,
+	// LOCAL must not relax strict parsing of unrelated input column types.
+	_, replace := stmt.DuplicateHandling.(*tree.DuplicateKeyReplace)
+	return stmt.Local && !replace
 }
 
 func (builder *QueryBuilder) applyLoadAssignmentCasts(

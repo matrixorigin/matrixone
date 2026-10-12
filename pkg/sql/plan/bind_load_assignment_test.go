@@ -47,6 +47,68 @@ func TestLoadAssignmentIgnorePolicy(t *testing.T) {
 	}))
 }
 
+func TestLocalLoadTimeAssignmentAndDecoderPolicies(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy%v", legacy), func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			ctx := NewMockCompilerContext(true, proc)
+			create, err := mysql.ParseOne(t.Context(), "create table local_time_load(v time(6))", 1)
+			require.NoError(t, err)
+			defer create.Free()
+			ddl, err := BuildPlan(ctx, create, false)
+			require.NoError(t, err)
+			table := ddl.GetDdl().GetCreateTable().TableDef
+			table.TblId = 990004
+			ctx.tables["local_time_load"] = table
+			ctx.objects["local_time_load"] = &planpb.ObjectRef{Obj: int64(table.TblId), SchemaName: "tpch", ObjName: "local_time_load"}
+			parsed, err := mysql.ParseOne(t.Context(), "load data local infile 'client.csv' into table local_time_load", 1)
+			require.NoError(t, err)
+			defer parsed.Free()
+			stmt := parsed.(*tree.Load)
+			build := func() (*planpb.Plan, error) {
+				if legacy {
+					return buildLoad(stmt, ctx, false)
+				}
+				return BuildPlan(ctx, stmt, false)
+			}
+			// Reuse one parsed statement through IGNORE, implicit LOCAL, REPLACE
+			// and implicit LOCAL again: decoder policy and assignment are distinct.
+			for _, tc := range []struct {
+				duplicate tree.DuplicateKey
+				cast      string
+				global    bool
+			}{
+				{&tree.DuplicateKeyIgnore{}, "cast_ignore", true},
+				{&tree.DuplicateKeyError{}, "cast_ignore", false},
+				{&tree.DuplicateKeyReplace{}, "cast_assign", false},
+				{&tree.DuplicateKeyError{}, "cast_ignore", false},
+			} {
+				stmt.DuplicateHandling = tc.duplicate
+				require.Equal(t, tc.global, tree.IsIgnoreStatement(stmt))
+				result, err := build()
+				require.NoError(t, err)
+				var assignment *planpb.Expr
+				for _, n := range result.GetQuery().Nodes {
+					for _, expr := range n.ProjectList {
+						if fn := expr.GetF(); fn != nil && expr.Typ.Id == int32(types.T_time) && (fn.Func.ObjName == "cast_assign" || fn.Func.ObjName == "cast_ignore") {
+							assignment = expr
+						}
+					}
+				}
+				require.NotNil(t, assignment)
+				require.Equal(t, tc.cast, assignment.GetF().Func.ObjName)
+				require.Equal(t, int32(types.T_varchar), assignment.GetF().Args[0].Typ.Id)
+			}
+			// LOCAL Parquet is rejected by both real planner entries before a
+			// reader can run; its nonexistent implicit policy needs no runtime bit.
+			stmt.Param.Format = tree.PARQUET
+			_, err = build()
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI), "%v", err)
+			require.ErrorContains(t, err, "load parquet local")
+		})
+	}
+}
+
 func TestApplyLoadAssignmentCasts(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	setLoadAssignmentProtocol(t, builder.compCtx.GetProcess())

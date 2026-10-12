@@ -3058,7 +3058,7 @@ func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
 	parsed, err = mysql.Parse(ctx, "load data local infile 'data.csv' into table t fields terminated by ',' ignore 1 lines", 1)
 	require.NoError(t, err)
 	require.Len(t, parsed, 1)
-	require.True(t, tree.IsIgnoreStatement(parsed[0]), "LOCAL supplies the error policy; the header count does not")
+	require.False(t, tree.IsIgnoreStatement(parsed[0]), "LOCAL and header counts must not enable global IGNORE")
 	parsed, err = mysql.Parse(ctx, "load data infile 'data.csv' into table t fields terminated by ',' ignore 1 lines", 1)
 	require.NoError(t, err)
 	require.Len(t, parsed, 1)
@@ -3103,7 +3103,8 @@ func TestRecordStatementSetsIgnoreForLoadDataIgnore(t *testing.T) {
 		stmt *tree.Load
 		want bool
 	}{
-		{&tree.Load{Local: true, DuplicateHandling: &tree.DuplicateKeyError{}}, true},
+		{&tree.Load{Local: true, DuplicateHandling: &tree.DuplicateKeyIgnore{}}, true},
+		{&tree.Load{Local: true, DuplicateHandling: &tree.DuplicateKeyError{}}, false},
 		{&tree.Load{Local: true, DuplicateHandling: &tree.DuplicateKeyReplace{}}, false},
 		{&tree.Load{DuplicateHandling: &tree.DuplicateKeyError{}}, false},
 	} {
