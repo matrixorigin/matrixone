@@ -97,3 +97,49 @@ func TestNormalizeSetValuesMaxMembers(t *testing.T) {
 	_, err := NormalizeSetValues(values)
 	require.Error(t, err)
 }
+
+func TestSetDomainEncoding(t *testing.T) {
+	for _, tc := range []struct {
+		values  []string
+		encoded string
+	}{
+		{[]string{""}, ","}, {[]string{"   "}, ","}, {[]string{"red", "blue"}, "red,blue"}, {[]string{"", "a"}, ",a"},
+	} {
+		encoded, err := EncodeSetValues(tc.values)
+		require.NoError(t, err)
+		require.Equal(t, tc.encoded, encoded)
+		normalized, err := NormalizeSetValues(tc.values)
+		require.NoError(t, err)
+		require.Equal(t, normalized, DecodeSetValues(encoded))
+	}
+	require.Nil(t, DecodeSetValues(""))
+	for _, values := range [][]string{nil, {"", ""}, {","}} {
+		_, err := EncodeSetValues(values)
+		require.Error(t, err)
+	}
+	for _, tc := range []struct {
+		input string
+		bits  uint64
+	}{{"", 0}, {"0", 0}, {"1", 1}} {
+		bits, err := ParseSet(",", tc.input)
+		require.NoError(t, err)
+		require.Equal(t, tc.bits, bits)
+	}
+	for _, bits := range []uint64{0, 1} {
+		got, err := ParseSetValue(",", bits)
+		require.NoError(t, err)
+		require.Equal(t, bits, got)
+		label, err := ParseSetIndex(",", bits)
+		require.NoError(t, err)
+		require.Empty(t, label)
+	}
+	_, err := ParseSetValue(",", 2)
+	require.Error(t, err)
+	_, err = ParseSet(",", "bad")
+	require.Error(t, err)
+	mask, err := SetValidBitmap(",")
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), mask)
+	_, err = SetValidBitmap("")
+	require.Error(t, err)
+}
