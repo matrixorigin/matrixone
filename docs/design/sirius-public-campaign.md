@@ -392,6 +392,13 @@ preserving all supported/old/unknown/cancellation assertions. Its earlier
 GPU-default failure reproduced on the old-native baseline. This test correction
 changes no production dispatch or captured measurement.
 
+The conflict-resolution sync includes authoritative main `0a4db0e6a6` at
+`87803799f0`. Main's updated IndexSearchScan protocol fixture already selects
+CPU centroid workers and uses its current protocol version; the integration
+has no remaining Go-file delta against that base. The full compiler suite and
+all 22 actual native preparations pass after the sync. These checks retain
+their new execution identity; the measured release capture above is unchanged.
+
 ## Release validation record
 
 The generated development and release captures are preserved in contributor-fork
