@@ -871,13 +871,22 @@ func (proc *Process) BeginUserVariableAssignment(name string, rowCount int) {
 		proc.Base.userVariableAssignmentRows[name] = rows
 		proc.Base.userVariableAssignmentRowValid[name] = valid
 	} else {
-		// Each top-level executor invocation owns one input batch. Reset this
-		// variable's row vector even when the next batch happens to have the
-		// same cardinality; the scalar values map remains intact for
-		// self-referential assignments.
+		// Each top-level executor invocation owns one input batch. Reset every
+		// variable's row vector, not just the variable written by this executor:
+		// a nested assignment such as @a := @b := @b + 1 can read b's row
+		// history while evaluating a. Keeping b's rows across batches would
+		// make the result depend on the physical batch partition. The scalar
+		// values map remains intact so self-referential assignments continue
+		// from the last value published by the previous batch.
 		proc.Base.userVariableAssignmentBatchRows = rowCount
-		proc.Base.userVariableAssignmentRows[name] = make([]UserVariableAssignment, rowCount)
-		proc.Base.userVariableAssignmentRowValid[name] = make([]bool, rowCount)
+		for variableName := range proc.Base.userVariableAssignmentRows {
+			proc.Base.userVariableAssignmentRows[variableName] = make([]UserVariableAssignment, rowCount)
+			proc.Base.userVariableAssignmentRowValid[variableName] = make([]bool, rowCount)
+		}
+		if _, ok := proc.Base.userVariableAssignmentRows[name]; !ok {
+			proc.Base.userVariableAssignmentRows[name] = make([]UserVariableAssignment, rowCount)
+			proc.Base.userVariableAssignmentRowValid[name] = make([]bool, rowCount)
+		}
 	}
 	proc.Base.userVariableAssignmentActive = true
 }
