@@ -16,7 +16,7 @@ execute wait_ftj;
 1
 deallocate prepare wait_ftj;
 explain select id from t where json_extract_string(j,'$.foo') = 'needle' and status = 'active';
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
@@ -24,11 +24,12 @@ Project  𝄀
         Join Cond: (t.id = #[1,0])  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on ft2_json_multicol.t  𝄀
-              Filter Cond: (json_extract_string(t.j, '$.foo') = 'needle'), (t.status = 'active')  𝄀
+              Filter Cond: (t.status = 'active'), (json_extract_string(t.j, '$.foo') = 'needle')  𝄀
               Runtime Filter Probe: t.id  𝄀
         ->  Aggregate  𝄀
               Group Key: mo_fulltext_alias_0.__mo_ft_doc_id  𝄀
-              ->  Table Function on fulltext2_search
+              ->  Fulltext Index Scan on ftj  𝄀
+                    Fulltext Index: ftj
 explain select id from t where json_extract_string(j,'$.foo') = 'needle' and status = 'active';
 -- @regex("status = 'active'", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
@@ -38,11 +39,12 @@ Project  𝄀
         Join Cond: (t.id = #[1,0])  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on ft2_json_multicol.t  𝄀
-              Filter Cond: (json_extract_string(t.j, '$.foo') = 'needle'), (t.status = 'active')  𝄀
+              Filter Cond: (t.status = 'active'), (json_extract_string(t.j, '$.foo') = 'needle')  𝄀
               Runtime Filter Probe: t.id  𝄀
         ->  Aggregate  𝄀
               Group Key: mo_fulltext_alias_0.__mo_ft_doc_id  𝄀
-              ->  Table Function on fulltext2_search
+              ->  Fulltext Index Scan on ftj  𝄀
+                    Fulltext Index: ftj
 select id from t where json_extract_string(j,'$.foo') = 'needle' and status = 'active' order by id;
 ➤ id[-5,64,0]  𝄀
 1
