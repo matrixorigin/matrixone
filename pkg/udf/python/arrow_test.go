@@ -728,6 +728,21 @@ func TestNewTypeDescriptorNormalizesPlannerOnlySentinels(t *testing.T) {
 	require.Equal(t, int32(0), descriptor.Scale)
 }
 
+func TestNewTypeDescriptorRejectsMediumInt(t *testing.T) {
+	for _, oid := range []types.T{types.T_int32, types.T_uint32} {
+		t.Run(oid.String(), func(t *testing.T) {
+			_, err := NewTypeDescriptor(types.New(oid, 24, 0))
+			require.ErrorContains(t, err, "python udf does not support MEDIUMINT")
+
+			// The ordinary 32-bit domain still admits planner display metadata.
+			descriptor, err := NewTypeDescriptor(types.New(oid, 32, -1))
+			require.NoError(t, err)
+			require.Equal(t, int32(0), descriptor.Width)
+			require.Equal(t, int32(0), descriptor.Scale)
+		})
+	}
+}
+
 func TestBuildInputRecordCanonicalizesJSONText(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	input := vector.NewVec(types.T_json.ToType())
