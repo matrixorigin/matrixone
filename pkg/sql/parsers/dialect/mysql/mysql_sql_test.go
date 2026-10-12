@@ -105,6 +105,29 @@ func TestDiagnosticCountAndLimitSyntax(t *testing.T) {
 	}
 }
 
+func TestShowGrantsForCurrentUser(t *testing.T) {
+	tests := []struct {
+		sql string
+	}{
+		{sql: "show grants for current_user"},
+		{sql: "show grants for current_user()"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+
+			grants, ok := stmt.(*tree.ShowGrants)
+			require.True(t, ok)
+			require.True(t, grants.CurrentUser)
+			require.Empty(t, grants.Username)
+			require.Empty(t, grants.Hostname)
+			require.Equal(t, "show grants for current_user", tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
 func TestCreateTablePreservesIndexIdentifierCase(t *testing.T) {
 	stmt, err := ParseOne(context.Background(),
 		"create table t (id int, v varchar(20), key MixedCaseIdx(v), unique key `UniQue_Mix`(id))", 1)

@@ -745,7 +745,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	// before defaults can read those assigned values, including the FK fallback.
 	for i, col := range originTableDef.Cols {
 		if _, supplied := colToIndex[col.Name]; !supplied ||
-			(col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text)) {
+			(col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) && !isMediumIntPlanType(col.Typ)) {
 			continue
 		}
 		projectNode.ProjectList[i], err = builder.forceAssignmentCastExpr(projectNode.ProjectList[i], col.Typ, loadAssignmentIgnore(stmt))
@@ -1162,7 +1162,7 @@ func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *pl
 			Expr: expr,
 		}
 
-		if typ.Id == int32(types.T_blob) || typ.Id == int32(types.T_text) {
+		if typ.Id == int32(types.T_blob) || typ.Id == int32(types.T_text) || isMediumIntPlanType(typ) {
 			// The following assignment projection owns both conversion and
 			// width enforcement. An ordinary TINYTEXT cast here would silently
 			// truncate before strict/IGNORE assignment can inspect the payload.
