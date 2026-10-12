@@ -256,7 +256,7 @@ func (builder *QueryBuilder) applyLoadAssignmentCasts(
 ) error {
 	for _, col := range tableDef.Cols {
 		expr, ok := insertColToExpr[col.Name]
-		if !ok || (col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text)) {
+		if !ok || (col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) && !isMediumIntPlanType(col.Typ)) {
 			continue
 		}
 		casted, err := builder.forceAssignmentCastExpr(expr, col.Typ, assignmentIgnore)

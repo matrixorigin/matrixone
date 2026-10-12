@@ -30,9 +30,6 @@ func ParseIntToEnum(input int64) (Enum, error) {
 
 // ParseEnum return item index with item name or value.
 func ParseEnum(enumStr string, name string) (Enum, error) {
-	if len(enumStr) == 0 {
-		return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL enum failed: enum define is empty %v", enumStr)
-	}
 	elems := strings.Split(enumStr, ",")
 	enumName, _ := parseEnumName(elems, name)
 	if enumName != Enum(0) {
@@ -42,6 +39,9 @@ func ParseEnum(enumStr string, name string) (Enum, error) {
 	// if name doesn't exist, it's maybe an integer
 	num, err := strconv.ParseUint(name, 0, 64)
 	if err == nil {
+		if num > uint64(MaxEnumLen) {
+			return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL enum failed: number %d overflow enum boundary [1, %d]", num, len(elems))
+		}
 		return parseEnumValue(elems, uint16(num))
 	}
 
@@ -50,9 +50,6 @@ func ParseEnum(enumStr string, name string) (Enum, error) {
 
 // ParseEnumName return item index with item name.
 func ParseEnumName(enumStr string, name string) (Enum, error) {
-	if len(enumStr) == 0 {
-		return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL enum failed: enum define is empty %v", enumStr)
-	}
 	elems := strings.Split(enumStr, ",")
 	return parseEnumName(elems, name)
 }
@@ -67,9 +64,6 @@ func parseEnumName(elems []string, name string) (Enum, error) {
 
 // ParseEnumValue return item index with special number.
 func ParseEnumValue(enumStr string, number uint16) (Enum, error) {
-	if len(enumStr) == 0 {
-		return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL enum failed: enum define is empty %v", enumStr)
-	}
 	elems := strings.Split(enumStr, ",")
 	return parseEnumValue(elems, number)
 }
@@ -83,9 +77,6 @@ func parseEnumValue(elems []string, number uint16) (Enum, error) {
 
 // ParseEnumIndex return item value with index.
 func ParseEnumIndex(enumStr string, index Enum) (string, error) {
-	if len(enumStr) == 0 {
-		return "", moerr.NewInternalErrorNoCtxf("parse MySQL enum failed: enum type length err %d", len(enumStr))
-	}
 	elems := strings.Split(enumStr, ",")
 	if index == 0 || index > Enum(len(elems)) {
 		return "", moerr.NewInternalErrorNoCtxf("parse MySQL enum failed: index %d overflow enum boundary [1, %d]", index, len(elems))

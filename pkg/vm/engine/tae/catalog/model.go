@@ -245,6 +245,7 @@ func AttrFromColDef(col *ColDef) (attrs *engine.Attribute, err error) {
 	attr := &engine.Attribute{
 		Name:          col.Name,
 		Type:          col.Type,
+		EnumVlaues:    col.EnumValues,
 		Primary:       col.IsPrimary(),
 		IsHidden:      col.IsHidden(),
 		IsRowId:       col.IsPhyAddr(),

@@ -193,6 +193,85 @@ remove files from stage if exists 'stage://export_test_stage/float_overflow.parq
 drop table export_float_source;
 drop table export_float_verify;
 drop table export_float_widen;
+drop table if exists export_zero_external_char;
+drop table if exists export_zero_external_varchar;
+drop table if exists export_zero_source;
+drop table if exists export_zero_char;
+drop table if exists export_zero_varchar;
+create table export_zero_source(id int primary key, v varchar(4));
+create table export_zero_char(id int primary key, v char(0));
+create table export_zero_varchar(id int primary key, v varchar(0));
+insert into export_zero_char values (99, '');
+insert into export_zero_varchar values (99, null);
+insert into export_zero_char values (3, 'x');
+Data truncation: Can't cast 'x' to CHAR type. Src length 1 is larger than Dest length 0
+insert into export_zero_varchar values (3, 'x');
+Data truncation: Can't cast 'x' to VARCHAR type. Src length 1 is larger than Dest length 0
+insert into export_zero_source values (1, ''), (2, null);
+remove files from stage if exists 'stage://export_test_stage/zero_valid.parquet';
+select id, v from export_zero_source order by id into outfile 'stage://export_test_stage/zero_valid.parquet' format 'parquet';
+load data infile {'filepath'='stage://export_test_stage/zero_valid.parquet', 'format'='parquet'} into table export_zero_char;
+load data infile {'filepath'='stage://export_test_stage/zero_valid.parquet', 'format'='parquet'} into table export_zero_varchar;
+select id, v is null as value_null, char_length(v) as value_length from export_zero_char order by id;
+➤ id[4,32,0]  ¦  value_null[-7,1,0]  ¦  value_length[-5,64,0]  𝄀
+1  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  null  𝄀
+99  ¦  0  ¦  0
+select id, v is null as value_null, char_length(v) as value_length from export_zero_varchar order by id;
+➤ id[4,32,0]  ¦  value_null[-7,1,0]  ¦  value_length[-5,64,0]  𝄀
+1  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  null  𝄀
+99  ¦  1  ¦  null
+create external table export_zero_external_char(id int, v char(0)) infile {'filepath'='stage://export_test_stage/zero_valid.parquet', 'format'='parquet'};
+create external table export_zero_external_varchar(id int, v varchar(0)) infile {'filepath'='stage://export_test_stage/zero_valid.parquet', 'format'='parquet'};
+select id, v is null as value_null, char_length(v) as value_length from export_zero_external_char order by id;
+➤ id[4,32,0]  ¦  value_null[-7,1,0]  ¦  value_length[-5,64,0]  𝄀
+1  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  null
+select id, v is null as value_null, char_length(v) as value_length from export_zero_external_varchar order by id;
+➤ id[4,32,0]  ¦  value_null[-7,1,0]  ¦  value_length[-5,64,0]  𝄀
+1  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  null
+drop table export_zero_external_char;
+drop table export_zero_external_varchar;
+delete from export_zero_char where id <> 99;
+delete from export_zero_varchar where id <> 99;
+insert into export_zero_source values (3, 'x'), (4, 'é'), (5, '😀');
+remove files from stage if exists 'stage://export_test_stage/zero_mixed.parquet';
+select id, v from export_zero_source order by id into outfile 'stage://export_test_stage/zero_mixed.parquet' format 'parquet';
+load data infile {'filepath'='stage://export_test_stage/zero_mixed.parquet', 'format'='parquet'} into table export_zero_char parallel 'false';
+internal error: Src length 1 is larger than Dest length 0
+load data infile {'filepath'='stage://export_test_stage/zero_mixed.parquet', 'format'='parquet'} into table export_zero_varchar parallel 'true';
+internal error: Src length 1 is larger than Dest length 0
+select id, v is null as value_null, char_length(v) as value_length from export_zero_char order by id;
+➤ id[4,32,0]  ¦  value_null[-7,1,0]  ¦  value_length[-5,64,0]  𝄀
+99  ¦  0  ¦  0
+select id, v is null as value_null, char_length(v) as value_length from export_zero_varchar order by id;
+➤ id[4,32,0]  ¦  value_null[-7,1,0]  ¦  value_length[-5,64,0]  𝄀
+99  ¦  1  ¦  null
+create external table export_zero_external_char(id int, v char(0)) infile {'filepath'='stage://export_test_stage/zero_mixed.parquet', 'format'='parquet'};
+create external table export_zero_external_varchar(id int, v varchar(0)) infile {'filepath'='stage://export_test_stage/zero_mixed.parquet', 'format'='parquet'};
+select id, char_length(v) from export_zero_external_char order by id;
+internal error: Src length 1 is larger than Dest length 0
+select id, char_length(v) from export_zero_external_varchar order by id;
+internal error: Src length 1 is larger than Dest length 0
+insert into export_zero_char select id, v from export_zero_external_char;
+internal error: Src length 1 is larger than Dest length 0
+insert into export_zero_varchar select id, v from export_zero_external_varchar;
+internal error: Src length 1 is larger than Dest length 0
+select id, v is null as value_null, char_length(v) as value_length from export_zero_char order by id;
+➤ id[4,32,0]  ¦  value_null[-7,1,0]  ¦  value_length[-5,64,0]  𝄀
+99  ¦  0  ¦  0
+select id, v is null as value_null, char_length(v) as value_length from export_zero_varchar order by id;
+➤ id[4,32,0]  ¦  value_null[-7,1,0]  ¦  value_length[-5,64,0]  𝄀
+99  ¦  1  ¦  null
+drop table export_zero_external_char;
+drop table export_zero_external_varchar;
+remove files from stage if exists 'stage://export_test_stage/zero_valid.parquet';
+remove files from stage if exists 'stage://export_test_stage/zero_mixed.parquet';
+drop table export_zero_source;
+drop table export_zero_char;
+drop table export_zero_varchar;
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_xml.txt' format 'xml';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. invalid format, must be csv, jsonline or parquet at line 1 column 107 near " 'xml';";
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_json.txt' format 'json';
