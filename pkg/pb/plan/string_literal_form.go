@@ -904,9 +904,11 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				mediumIntAssignmentTarget := len(fn.Args) > 1 && fn.Args[1] != nil &&
+					isPlanMediumIntType(fn.Args[1].Typ)
 				if (id == mediumIntStrictCastFunctionID ||
 					id == mediumIntAssignmentCastFunctionID ||
-					id == mediumIntIgnoreCastFunctionID) && isPlanMediumIntType(current.Typ) {
+					id == mediumIntIgnoreCastFunctionID) && mediumIntAssignmentTarget {
 					features.MediumIntAssignmentBounds = true
 				}
 				if id == castJSONToArrayFunctionID && isMediumIntArrayCast(current, fn) {

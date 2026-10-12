@@ -96,6 +96,9 @@ func TestMediumIntAssignmentProtocolPlacementAndSend(t *testing.T) {
 			},
 		}},
 	}
+	// A UNION branch can widen only this outer metadata while retaining the
+	// assignment CAST's width-24 target argument.
+	expr.Typ.Width = 32
 	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 	require.NoError(t, err)
 	require.True(t, features.MediumIntAssignmentBounds)

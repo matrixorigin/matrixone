@@ -145,6 +145,17 @@ func TestMediumIntAssignmentRequiresClusterProtocolFence(t *testing.T) {
 		version, err := RequiredPersistedExpressionProtocolVersion(resolved)
 		require.NoError(t, err)
 		require.Equal(t, int64(defines.MORPCVersion110), version, tc.name)
+
+		// Set-operation alignment may shallow-widen the result metadata while
+		// preserving the assignment CAST and its MEDIUMINT target argument.
+		widenedResult := DeepCopyExpr(resolved)
+		widenedResult.Typ.Width = 32
+		features, err = pb.RequiredRemoteExpressionFeatures(widenedResult)
+		require.NoError(t, err)
+		require.True(t, features.MediumIntAssignmentBounds, tc.name+" after result widening")
+		version, err = RequiredPersistedExpressionProtocolVersion(widenedResult)
+		require.NoError(t, err)
+		require.Equal(t, int64(defines.MORPCVersion110), version, tc.name+" after result widening")
 	}
 
 	ordinaryIntType := types.T_int32.ToType()

@@ -1005,14 +1005,24 @@ func TestRequiredRemoteExpressionFeaturesMediumIntAssignmentBounds(t *testing.T)
 			},
 		}}}
 	}
+	widenedResult := func(functionID int32, functionName string) *Expr {
+		castExpr := cast(functionID, functionName, Type{Id: planInt32TypeID, Width: 24})
+		// UNION can widen only the outer result metadata while retaining the
+		// assignment CAST and its width-24 target argument.
+		castExpr.Typ.Width = 32
+		return castExpr
+	}
 	for _, tc := range []struct {
 		name string
 		expr *Expr
 		want bool
 	}{
 		{name: "strict signed MEDIUMINT assignment", expr: cast(541, "cast_strict", Type{Id: planInt32TypeID, Width: 24}), want: true},
+		{name: "strict assignment target after UNION result widening", expr: widenedResult(541, "cast_strict"), want: true},
 		{name: "signed MEDIUMINT assignment", expr: cast(554, "cast_assign", Type{Id: planInt32TypeID, Width: 24}), want: true},
+		{name: "assignment target after UNION result widening", expr: widenedResult(554, "cast_assign"), want: true},
 		{name: "ignored signed MEDIUMINT assignment", expr: cast(555, "cast_ignore", Type{Id: planInt32TypeID, Width: 24}), want: true},
+		{name: "ignore target after UNION result widening", expr: widenedResult(555, "cast_ignore"), want: true},
 		{name: "unsigned MEDIUMINT assignment", expr: cast(554, "cast_assign", Type{Id: planUint32TypeID, Width: 24}), want: true},
 		{name: "ordinary INT assignment", expr: cast(554, "cast_assign", Type{Id: planInt32TypeID, Width: 32})},
 		{name: "generic CAST to MEDIUMINT", expr: cast(21, "cast", Type{Id: planInt32TypeID, Width: 24})},
