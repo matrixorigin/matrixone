@@ -23,6 +23,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planrule "github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/stretchr/testify/require"
 )
 
@@ -286,4 +287,14 @@ func TestUserVariableAssignmentPlanHelpers(t *testing.T) {
 
 	sub := &planpb.Expr{Expr: &planpb.Expr_Sub{Sub: &planpb.SubqueryRef{NodeId: 1}}}
 	require.True(t, hasSubquery(makePlanUserVariableAssignment(sub)))
+	require.True(t, containsVolatileFunction(assignment))
+	require.False(t, exprCanRemoveProject(assignment))
+	require.True(t, exprHasColRef(assignment))
+
+	proc := newPlanTestProcess(t)
+	node := &planpb.Node{ProjectList: []*planpb.Expr{makePlanUserVariableAssignment(
+		makePlan2Int64ConstExprWithType(1),
+	)}}
+	planrule.NewConstantFold(false).Apply(node, nil, proc)
+	require.NotNil(t, node.ProjectList[0].GetUserVarAssignment().GetValue())
 }
