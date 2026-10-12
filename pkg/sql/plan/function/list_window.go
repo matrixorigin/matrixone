@@ -145,7 +145,7 @@ var supportedWindowInNewFramework = []FuncNew{
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			// LAG(expr) or LAG(expr, offset) or LAG(expr, offset, default)
 			if len(inputs) >= 1 && len(inputs) <= 3 {
-				return newCheckResultWithSuccess(0)
+				return checkValueWindowDomain(inputs)
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		},
@@ -172,7 +172,7 @@ var supportedWindowInNewFramework = []FuncNew{
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			// LEAD(expr) or LEAD(expr, offset) or LEAD(expr, offset, default)
 			if len(inputs) >= 1 && len(inputs) <= 3 {
-				return newCheckResultWithSuccess(0)
+				return checkValueWindowDomain(inputs)
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		},
@@ -198,7 +198,7 @@ var supportedWindowInNewFramework = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 1 {
-				return newCheckResultWithSuccess(0)
+				return checkValueWindowDomain(inputs)
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		},
@@ -223,7 +223,7 @@ var supportedWindowInNewFramework = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 1 {
-				return newCheckResultWithSuccess(0)
+				return checkValueWindowDomain(inputs)
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		},
@@ -249,7 +249,7 @@ var supportedWindowInNewFramework = []FuncNew{
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			// NTH_VALUE(expr, n)
 			if len(inputs) == 2 {
-				return newCheckResultWithSuccess(0)
+				return checkValueWindowDomain(inputs)
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		},
@@ -267,4 +267,15 @@ var supportedWindowInNewFramework = []FuncNew{
 			},
 		},
 	},
+}
+
+// checkValueWindowDomain gives domainless NULL the same concrete transport
+// type as SELECT NULL. Typed inputs retain their complete declared type.
+func checkValueWindowDomain(inputs []types.Type) checkResult {
+	if inputs[0].Oid == types.T_any {
+		targets := append([]types.Type(nil), inputs...)
+		targets[0] = types.T_text.ToType()
+		return newCheckResultWithCast(0, targets)
+	}
+	return newCheckResultWithSuccess(0)
 }
