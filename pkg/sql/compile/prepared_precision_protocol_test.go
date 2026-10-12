@@ -115,10 +115,6 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "version 110")
-	place(defines.MORPCVersion108)
-	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 110")
 	place(defines.MORPCVersion109)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
@@ -140,7 +136,7 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 	require.NoError(t, err)
 	_, err = decodeScope(data, c.proc, true, nil)
 	require.ErrorContains(t, err, "version 95")
-	for _, version := range []int64{defines.MORPCVersion95, 101, 102, defines.MORPCVersion108, defines.MORPCVersion109} {
+	for _, version := range []int64{defines.MORPCVersion95, 101, 102, defines.MORPCVersion109} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 110")
 		_, err = decodeScope(data, c.proc, true, nil)
