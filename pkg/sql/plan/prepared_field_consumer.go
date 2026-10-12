@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -100,15 +101,18 @@ func (owner *preparedFieldDomainBinder) bind(expr *Expr, ast *tree.FuncExpr) err
 	} // private probes/cloned ASTs never own published facts
 	var authoredCase bool
 	if len(ast.Exprs) > 0 {
-		operand := ast.Exprs[0]
-		for {
-			paren, ok := operand.(*tree.ParenExpr)
-			if !ok {
-				break
+		authoredCase = preparedFieldAuthoredCaseReturnAST(ast.Exprs[0])
+		if _, sqlCast := unwrapParenExpr(ast.Exprs[0]).(*tree.CastExpr); !sqlCast {
+			if fn := expr.GetF(); fn != nil && len(fn.Args) > 0 {
+				source := fn.Args[0]
+				if cast := source.GetF(); cast != nil && cast.Func != nil && cast.Func.ObjName == "cast" && len(cast.Args) == 2 {
+					source = cast.Args[0]
+				}
+				if witness := preparedFieldBoundCaseContractWitness(source); witness != nil {
+					authoredCase = authoredCase || witness.GetF().Args[0].GetLit() != nil
+				}
 			}
-			operand = paren.Expr
 		}
-		_, authoredCase = operand.(*tree.CaseExpr)
 	}
 	projected := len(ast.Exprs) > 0 && preparedFieldProjectedReturnAST(ast.Exprs[0]) &&
 		expr.GetF() != nil && len(expr.GetF().Args) > 0 && preparedFieldProjectedMarkerValue(expr.GetF().Args[0])
@@ -117,9 +121,9 @@ func (owner *preparedFieldDomainBinder) bind(expr *Expr, ast *tree.FuncExpr) err
 			if fn := expr.GetF(); fn != nil && len(fn.Args) > 0 {
 				cast := fn.Args[0].GetF()
 				if cast != nil && cast.Func != nil && cast.Func.ObjName == "cast" && isExplicitPreparedCast(fn.Args[0]) && len(cast.Args) == 2 {
-					if selected := cast.Args[0].GetF(); selected != nil && selected.Func != nil && selected.Func.ObjName == "case" {
-						// The original operand is CASE, so this outer CAST is
-						// FIELD's private comparison probe, not SQL authorship.
+					if selected := cast.Args[0]; selected != nil {
+						// The operand forwards an authored CASE, so this outer
+						// CAST is FIELD's private probe, not SQL authorship.
 						// Restore the resolved return owner before that probe can
 						// replace a numeric lifetime with this binding's charset.
 						fn.Args[0] = cast.Args[0]
@@ -146,6 +150,18 @@ func preparedFieldProjectedMarkerValue(expr *Expr) bool {
 	if expr.GetCol() != nil || expr.GetSub() != nil {
 		// A column forwarding a raw marker declares default text. A column
 		// forwarding a CASE contract does not redeclare that CASE's domain.
+		source := preparedStringDomainDependencyWitness(expr)
+		if fn := source.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "coalesce" {
+			marker := false
+			for _, arg := range fn.Args {
+				if arg.GetP() != nil {
+					marker = true
+				} else if !arg.GetLit().GetIsnull() || arg.Typ.Id != int32(types.T_any) {
+					return false
+				}
+			}
+			return marker
+		}
 		return preparedFieldCaseConditionMarker(expr) != nil
 	}
 	fn := expr.GetF()
@@ -175,11 +191,14 @@ func preparedFieldProjectedReturnAST(expr tree.Expr) bool {
 	case *tree.UnresolvedName:
 		return true
 	case *tree.Subquery:
-		result := preparedFieldScalarResultAST(e.Select)
-		if _, marker := result.(*tree.ParamExpr); marker {
-			return true
+		for _, result := range preparedFieldScalarResultsAST(e.Select) {
+			if _, marker := result.(*tree.ParamExpr); marker {
+				return true
+			}
+			if preparedFieldProjectedReturnAST(result) {
+				return true
+			}
 		}
-		return preparedFieldProjectedReturnAST(result)
 	case *tree.ParamExpr:
 		return false
 	case *tree.ParenExpr:
@@ -217,23 +236,116 @@ func preparedFieldProjectedReturnAST(expr tree.Expr) bool {
 // a marker shared with another consumer. Text-first resolution remains native
 // until an actual numeric binding reparses FIELD, then stays numeric for strings.
 func preparedFieldScalarResultAST(statement tree.SelectStatement) tree.Expr {
+	results := preparedFieldScalarResultsAST(statement)
+	if len(results) == 1 {
+		return results[0]
+	}
+	return nil
+}
+
+// Inspect every UNION value owner, not its predicates or ordering expressions.
+// This slice is binding-local; it is never retained in handle or plan metadata.
+func preparedFieldScalarResultsAST(statement tree.SelectStatement) []tree.Expr {
 	switch s := statement.(type) {
 	case *tree.ParenSelect:
-		return preparedFieldScalarResultAST(s.Select)
+		return preparedFieldScalarResultsAST(s.Select)
 	case *tree.Select:
-		if clause, ok := s.Select.(*tree.SelectClause); ok && len(clause.Exprs) == 1 {
-			return clause.Exprs[0].Expr
+		return preparedFieldScalarResultsAST(s.Select)
+	case *tree.UnionClause:
+		if s.Type != tree.UNION {
+			return nil // EXCEPT/INTERSECT peers are not transparent return owners
+		}
+		return append(preparedFieldScalarResultsAST(s.Left), preparedFieldScalarResultsAST(s.Right)...)
+	case *tree.SelectClause:
+		if len(s.Exprs) == 1 {
+			return []tree.Expr{unwrapParenExpr(s.Exprs[0].Expr)}
 		}
 	}
 	return nil
 }
 
+// UNION marker/NULL alternatives declare a projected text value but are not
+// an exact parameter alias. Keep unique markers and at most one NULL atom.
+func preparedFieldScalarMarkerWitness(ctx context.Context, results []tree.Expr, typ Type) (*Expr, error) {
+	if len(results) < 2 {
+		return nil, nil
+	}
+	collector := stringDomainWitnessCollector{seen: make(map[string]struct{})}
+	hasNull := false
+	for _, result := range results {
+		if marker, ok := result.(*tree.ParamExpr); ok {
+			source, err := bindPreparedSource(ctx, marker.Offset)
+			if err != nil {
+				return nil, err
+			}
+			collector.addMarker(source)
+		} else if literal, ok := result.(*tree.NumVal); ok && literal.ValType == tree.P_null {
+			hasNull = true
+		} else {
+			return nil, nil // computed/CAST/physical branches own independent declarations
+		}
+	}
+	if len(collector.args) == 0 {
+		return nil, nil
+	}
+	args := collector.args
+	if hasNull {
+		args = append(args, makePlan2NullConstExprWithType())
+	}
+	if len(args) == 1 {
+		return args[0], nil
+	}
+	return &Expr{Typ: typ, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "coalesce"}, Args: args,
+	}}}, nil
+}
+
+func preparedFieldAuthoredCaseReturnAST(expr tree.Expr) bool {
+	switch e := expr.(type) {
+	case *tree.CaseExpr:
+		return true
+	case *tree.ParenExpr:
+		return preparedFieldAuthoredCaseReturnAST(e.Expr)
+	case *tree.Subquery:
+		for _, result := range preparedFieldScalarResultsAST(e.Select) {
+			if preparedFieldAuthoredCaseReturnAST(result) {
+				return true
+			}
+		}
+	case *tree.FuncExpr:
+		ref, ok := e.Func.FunctionReference.(*tree.UnresolvedName)
+		if !ok {
+			return false
+		}
+		name := strings.ToLower(ref.ColName())
+		if name == "nullif" {
+			return len(e.Exprs) > 0 && preparedFieldAuthoredCaseReturnAST(e.Exprs[0])
+		}
+		if name != "coalesce" && name != "ifnull" && name != "max" && name != "min" && name != "any_value" && name != "if" && name != "iff" {
+			return false
+		}
+		for index, arg := range e.Exprs {
+			if (name == "if" || name == "iff") && index == 0 {
+				continue
+			}
+			if preparedFieldAuthoredCaseReturnAST(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func preparedFieldDeclaredBinaryReturnAST(expr tree.Expr) bool {
 	switch e := expr.(type) {
 	case *tree.NumVal:
-		return e.ValType == tree.P_ScoreBinary || e.ValType == tree.P_ScoreBinaryHexnum
+		return e.ValType == tree.P_ScoreBinary || e.ValType == tree.P_ScoreBinaryHexnum || e.ValType == tree.P_hexnum || e.ValType == tree.P_bit
 	case *tree.Subquery:
-		return preparedFieldDeclaredBinaryReturnAST(preparedFieldScalarResultAST(e.Select))
+		for _, result := range preparedFieldScalarResultsAST(e.Select) {
+			if preparedFieldDeclaredBinaryReturnAST(result) {
+				return true
+			}
+		}
 	case *tree.CastExpr:
 		typ, ok := e.Type.(*tree.T)
 		return ok && (strings.EqualFold(typ.InternalType.FamilyString, "binary") || strings.EqualFold(typ.InternalType.FamilyString, "varbinary"))
@@ -255,7 +367,7 @@ func preparedFieldDeclaredBinaryReturnAST(expr tree.Expr) bool {
 		if name == "nullif" {
 			return len(e.Exprs) > 0 && preparedFieldDeclaredBinaryReturnAST(e.Exprs[0])
 		}
-		if name != "coalesce" && name != "ifnull" && name != "max" && name != "min" && name != "any_value" && name != "if" && name != "iff" {
+		if name != "coalesce" && name != "ifnull" && name != "least" && name != "greatest" && name != "max" && name != "min" && name != "any_value" && name != "if" && name != "iff" {
 			return false
 		}
 		for index, arg := range e.Exprs {
@@ -367,7 +479,7 @@ func preparedFieldFixedBinaryReturn(expr *Expr) bool {
 	if name == "cast" && len(fn.Args) > 0 {
 		return preparedFieldFixedBinaryReturn(fn.Args[0])
 	}
-	if name != "case" && name != "coalesce" && name != "ifnull" && name != "if" && name != "iff" && name != "max" && name != "min" && name != "any_value" {
+	if name != "case" && name != "coalesce" && name != "ifnull" && name != "least" && name != "greatest" && name != "if" && name != "iff" && name != "max" && name != "min" && name != "any_value" {
 		return false
 	}
 	for index, arg := range fn.Args {

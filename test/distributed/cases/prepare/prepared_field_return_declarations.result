@@ -1,0 +1,255 @@
+SELECT 'scalar_parens';
+➤ scalar_parens[12,13,0]  𝄀
+scalar_parens
+SET @p0=0,@p1=NULL,@p2='a';
+PREPARE p FROM 'select field(case when ? then null else (select (?)) end,?)';
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(case when ? then null else (select (?)) end, ?)[-5,64,0]  𝄀
+0
+SET @p1='A',@p2='a';
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(case when ? then null else (select (?)) end, ?)[-5,64,0]  𝄀
+1
+SET @p1=CAST('A' AS BINARY);
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(case when ? then null else (select (?)) end, ?)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p;
+SELECT 'scalar_union';
+➤ scalar_union[12,12,0]  𝄀
+scalar_union
+SET @p0=0,@p1=NULL,@p2='a';
+PREPARE p FROM 'select field(case when ? then null else (select ? union all select null limit 1) end,?)';
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(case when ? then null else (select ? union all select null limit 1) end, ?)[-5,64,0]  𝄀
+0
+SET @p1='A',@p2='a';
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(case when ? then null else (select ? union all select null limit 1) end, ?)[-5,64,0]  𝄀
+1
+SET @p1=CAST('A' AS BINARY);
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(case when ? then null else (select ? union all select null limit 1) end, ?)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p;
+SELECT 'computed_scalar';
+➤ computed_scalar[12,15,0]  𝄀
+computed_scalar
+SET @p0=0,@p1=42,@p2=42;
+PREPARE p FROM 'select field((select case when ?+0 then null else ? end),?)';
+EXECUTE p USING @p0,@p1,@p2;
+➤ field((select case when ? + 0 then null else ? end), ?)[-5,64,0]  𝄀
+1
+SET @p1='A',@p2='a';
+EXECUTE p USING @p0,@p1,@p2;
+➤ field((select case when ? + 0 then null else ? end), ?)[-5,64,0]  𝄀
+1
+SET @p1=CAST('A' AS BINARY);
+EXECUTE p USING @p0,@p1,@p2;
+➤ field((select case when ? + 0 then null else ? end), ?)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p;
+SELECT 'computed_coalesce';
+➤ computed_coalesce[12,17,0]  𝄀
+computed_coalesce
+SET @p0=0,@p1=42,@p2=42;
+PREPARE p FROM 'select field(coalesce(case when ?+0 then null else ? end,null),?)';
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(coalesce(case when ? + 0 then null else ? end, null), ?)[-5,64,0]  𝄀
+1
+SET @p1='A',@p2='a';
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(coalesce(case when ? + 0 then null else ? end, null), ?)[-5,64,0]  𝄀
+1
+SET @p1=CAST('A' AS BINARY);
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(coalesce(case when ? + 0 then null else ? end, null), ?)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p;
+SELECT 'computed_nullif';
+➤ computed_nullif[12,15,0]  𝄀
+computed_nullif
+SET @p0=0,@p1=42,@p2=42;
+PREPARE p FROM 'select field(nullif(case when ?+0 then null else ? end,null),?)';
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(nullif(case when ? + 0 then null else ? end, null), ?)[-5,64,0]  𝄀
+1
+SET @p1='A',@p2='a';
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(nullif(case when ? + 0 then null else ? end, null), ?)[-5,64,0]  𝄀
+1
+SET @p1=CAST('A' AS BINARY);
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(nullif(case when ? + 0 then null else ? end, null), ?)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p;
+SELECT 'computed_derived';
+➤ computed_derived[12,16,0]  𝄀
+computed_derived
+SET @p0=42,@p1=0,@p2=42;
+PREPARE p FROM 'select field(v,?) from (select case when ?+0 then null else ? end v)d';
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(d.v, ?)[-5,64,0]  𝄀
+1
+SET @p2='A',@p0='a';
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(d.v, ?)[-5,64,0]  𝄀
+1
+SET @p2=CAST('A' AS BINARY);
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(d.v, ?)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p;
+SELECT 'hex_literal';
+➤ hex_literal[12,11,0]  𝄀
+hex_literal
+SET @p0=42,@p1=42;
+PREPARE p FROM 'select field(coalesce(?,X''41''),?)';
+EXECUTE p USING @p0,@p1;
+➤ field(coalesce(?, 0x41), ?)[-5,64,0]  𝄀
+1
+SET @p0='A',@p1='a';
+EXECUTE p USING @p0,@p1;
+➤ field(coalesce(?, 0x41), ?)[-5,64,0]  𝄀
+1
+SET @p0=CAST('A' AS BINARY);
+EXECUTE p USING @p0,@p1;
+➤ field(coalesce(?, 0x41), ?)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p;
+SELECT 'hexnum_literal';
+➤ hexnum_literal[12,14,0]  𝄀
+hexnum_literal
+SET @p0=42,@p1=42;
+PREPARE p FROM 'select field(coalesce(?,0x41),?)';
+EXECUTE p USING @p0,@p1;
+➤ field(coalesce(?, 0x41), ?)[-5,64,0]  𝄀
+1
+SET @p0='A',@p1='a';
+EXECUTE p USING @p0,@p1;
+➤ field(coalesce(?, 0x41), ?)[-5,64,0]  𝄀
+1
+SET @p0=CAST('A' AS BINARY);
+EXECUTE p USING @p0,@p1;
+➤ field(coalesce(?, 0x41), ?)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p;
+SELECT 'bit_literal';
+➤ bit_literal[12,11,0]  𝄀
+bit_literal
+SET @p0=42,@p1=42;
+PREPARE p FROM 'select field(coalesce(?,b''01000001''),?)';
+EXECUTE p USING @p0,@p1;
+➤ field(coalesce(?, 0b01000001), ?)[-5,64,0]  𝄀
+1
+SET @p0='A',@p1='a';
+EXECUTE p USING @p0,@p1;
+➤ field(coalesce(?, 0b01000001), ?)[-5,64,0]  𝄀
+1
+SET @p0=CAST('A' AS BINARY);
+EXECUTE p USING @p0,@p1;
+➤ field(coalesce(?, 0b01000001), ?)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p;
+SELECT 'least_binary';
+➤ least_binary[12,12,0]  𝄀
+least_binary
+SET @p0=0,@p1=0;
+PREPARE p FROM 'select field(least(?,cast(''A'' as binary)),?)';
+EXECUTE p USING @p0,@p1;
+➤ field(least(?, cast(A as binary)), ?)[-5,64,0]  𝄀
+1
+SET @p0='A',@p1='a';
+EXECUTE p USING @p0,@p1;
+➤ field(least(?, cast(A as binary)), ?)[-5,64,0]  𝄀
+1
+SET @p0=CAST('A' AS BINARY);
+EXECUTE p USING @p0,@p1;
+➤ field(least(?, cast(A as binary)), ?)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p;
+SELECT 'greatest_binary';
+➤ greatest_binary[12,15,0]  𝄀
+greatest_binary
+SET @p0=42,@p1=42;
+PREPARE p FROM 'select field(greatest(?,cast(''A'' as binary)),?)';
+EXECUTE p USING @p0,@p1;
+➤ field(greatest(?, cast(A as binary)), ?)[-5,64,0]  𝄀
+0
+SET @p0='A',@p1='a';
+EXECUTE p USING @p0,@p1;
+➤ field(greatest(?, cast(A as binary)), ?)[-5,64,0]  𝄀
+1
+SET @p0=CAST('A' AS BINARY);
+EXECUTE p USING @p0,@p1;
+➤ field(greatest(?, cast(A as binary)), ?)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p;
+SELECT 'double_derived_binary';
+➤ double_derived_binary[12,21,0]  𝄀
+double_derived_binary
+SET @p0=42,@p1=42;
+PREPARE p FROM 'select field(v,?) from (select v from (select coalesce(?,cast(''A'' as binary)) v)d0)d1';
+EXECUTE p USING @p0,@p1;
+➤ field(d1.v, ?)[-5,64,0]  𝄀
+1
+SET @p1='A',@p0='a';
+EXECUTE p USING @p0,@p1;
+➤ field(d1.v, ?)[-5,64,0]  𝄀
+1
+SET @p1=CAST('A' AS BINARY);
+EXECUTE p USING @p0,@p1;
+➤ field(d1.v, ?)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p;
+SELECT 'double_derived_case';
+➤ double_derived_case[12,19,0]  𝄀
+double_derived_case
+SET @p0=42,@p1=0,@p2=42;
+PREPARE p FROM 'select field(v,?) from (select v from (select case when ?+0 then null else ? end v)d0)d1';
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(d1.v, ?)[-5,64,0]  𝄀
+1
+SET @p2='A',@p0='a';
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(d1.v, ?)[-5,64,0]  𝄀
+1
+SET @p2=CAST('A' AS BINARY);
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(d1.v, ?)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p;
+SELECT 'explicit_char_control';
+➤ explicit_char_control[12,21,0]  𝄀
+explicit_char_control
+SET @p0=0,@p1=42,@p2=42;
+PREPARE p FROM 'select field(cast((select case when ?+0 then null else ? end) as char),?)';
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(cast((select case when ? + 0 then null else ? end) as varchar), ?)[-5,64,0]  𝄀
+1
+SET @p1='A',@p2='a';
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(cast((select case when ? + 0 then null else ? end) as varchar), ?)[-5,64,0]  𝄀
+1
+SET @p1=CAST('A' AS BINARY);
+EXECUTE p USING @p0,@p1,@p2;
+➤ field(cast((select case when ? + 0 then null else ? end) as varchar), ?)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p;
+SELECT 'explicit_binary_peer_control';
+➤ explicit_binary_peer_control[12,28,0]  𝄀
+explicit_binary_peer_control
+SET @p0=42,@p1=42;
+PREPARE p FROM 'select field(nullif(?,cast(''B'' as binary)),?)';
+EXECUTE p USING @p0,@p1;
+➤ field(nullif(?, cast(B as binary)), ?)[-5,64,0]  𝄀
+1
+SET @p0='A',@p1='a';
+EXECUTE p USING @p0,@p1;
+➤ field(nullif(?, cast(B as binary)), ?)[-5,64,0]  𝄀
+0
+SET @p0=CAST('A' AS BINARY);
+EXECUTE p USING @p0,@p1;
+➤ field(nullif(?, cast(B as binary)), ?)[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p;

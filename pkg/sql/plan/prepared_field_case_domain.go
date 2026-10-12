@@ -362,19 +362,44 @@ func preparedFieldBoundCaseValues(expr *Expr, collector *stringDomainWitnessColl
 
 // CASE resolution ownership survives a numeric common type chosen for an
 // all-NULL binding. Preserve only returned markers, one NULL and one control
-// marker; no executable producer or relational graph is retained.
+// atom; no executable producer or relational graph is retained.
 func preparedFieldBoundCaseContractWitness(source *Expr) *Expr {
+	if source == nil || isExplicitPreparedCast(source) {
+		return nil
+	}
+	if provenance := preparedStringDomainDependencyWitness(source); provenance != nil {
+		return preparedFieldBoundCaseContractWitness(provenance)
+	}
 	condition := preparedFieldNullCaseCondition(source)
-	if condition == nil {
+	control := preparedFieldCaseConditionMarker(condition)
+	if control == nil {
+		if fn := source.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "case" && len(fn.Args) == 3 {
+			if lit := fn.Args[0].GetLit(); lit != nil && !lit.Isnull && lit.Src == nil && fn.Args[0].Typ.Id == int32(types.T_bool) {
+				control = DeepCopyExpr(fn.Args[0])
+			}
+		}
+	}
+	return preparedFieldCaseValueWitness(source, control)
+}
+
+// Only the original CASE AST owner can preserve a computed/fixed control.
+// A typed BOOL atom distinguishes this resolved predicate from the marker
+// predicate that admits a NULL-first string default. Neither is executable.
+// Lowered NULLIFs never enter this declaration-owned path.
+func preparedFieldAuthoredCaseContractWitness(source *Expr) *Expr {
+	if source == nil || preparedFieldNullCaseHasDynamicCondition(source) {
+		return nil
+	}
+	return preparedFieldCaseValueWitness(source, makePlan2BoolConstExprWithType(false))
+}
+
+func preparedFieldCaseValueWitness(source, control *Expr) *Expr {
+	if control == nil {
 		return nil
 	}
 	values := stringDomainWitnessCollector{seen: make(map[string]struct{})}
 	marker, nullValue, other := preparedFieldBoundCaseValues(source, &values)
 	if !marker || !nullValue || other {
-		return nil
-	}
-	control := preparedFieldCaseConditionMarker(condition)
-	if control == nil {
 		return nil
 	}
 	returned := &Expr{Typ: source.Typ, Expr: &planpb.Expr_F{F: &planpb.Function{

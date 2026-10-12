@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,14 +35,28 @@ func TestPreparedFieldScalarComparisonLifetime(t *testing.T) {
 		key                           int32
 	}{
 		{"scalar_marker", "select field(case when ? then null else (select ?) end,?)", true, false, true, 1},
+		{"scalar_parens", "select field(case when ? then null else (select (?)) end,?)", true, false, true, 1},
+		{"scalar_union", "select field(case when ? then null else (select ? union all select null limit 1) end,?)", true, false, true, 1},
 		{"scalar_char", "select field((select case when ? then cast(null as char) else ? end),?)", true, false, true, 0},
 		{"computed_case", "select field(case when ?+0 then null else ? end,?)", true, false, false, 1},
 		{"computed_case_parens", "select field((case when ?+0 then null else ? end),?)", true, false, false, 1},
+		{"computed_scalar", "select field((select case when ?+0 then null else ? end),?)", true, false, false, 1},
+		{"computed_coalesce", "select field(coalesce(case when ?+0 then null else ? end,null),?)", true, false, false, 1},
+		{"computed_nullif", "select field(nullif(case when ?+0 then null else ? end,null),?)", true, false, false, 1},
+		{"computed_derived", "select field(v,?) from (select case when ?+0 then null else ? end v)d", true, true, false, 1},
 		{"nullif_peer_control", "select field(nullif(?,cast('B' as binary)),?)", false, false, false, 0},
 		{"binary_literal", "select field(coalesce(?,_binary 'A'),?)", false, false, false, -1},
+		{"hex_literal", "select field(coalesce(?,X'41'),?)", false, false, false, -1},
+		{"hexnum_literal", "select field(coalesce(?,0x41),?)", false, false, false, -1},
+		{"bit_literal", "select field(coalesce(?,b'01000001'),?)", false, false, false, -1},
+		{"least_binary", "select field(least(?,cast('A' as binary)),?)", false, false, false, -1},
+		{"greatest_binary", "select field(greatest(?,cast('A' as binary)),?)", false, false, false, -1},
 		{"nullif_wrapper", "select field(nullif(coalesce(?,cast('A' as binary)),null),?)", false, false, false, -1},
 		{"scalar_binary", "select field((select coalesce(?,cast('A' as binary))),?)", false, false, false, -1},
 		{"derived_binary", "select field(v,?) from (select coalesce(?,cast('A' as binary)) v)d", false, true, false, -1},
+		{"double_derived_binary", "select field(v,?) from (select v from (select coalesce(?,cast('A' as binary)) v)d0)d1", false, true, false, -1},
+		{"double_derived_case", "select field(v,?) from (select v from (select case when ?+0 then null else ? end v)d0)d1", true, true, false, 1},
+		{"double_derived_hex", "select field(v,?) from (select v from (select coalesce(?,X'41') v)d0)d1", false, true, false, -1},
 		{"derived_case_control", "select field(v,?) from (select case when ? then null else ? end v from (select 1 union all select 2) seed limit 1)d", true, true, true, 1},
 		{"window_case_control", "select distinct field(v,?) from (select max(case when ? then null else ? end) over () v from (select 1 union all select 2) seed)d", true, true, true, 1},
 	} {
@@ -71,6 +86,9 @@ func TestPreparedFieldScalarComparisonLifetime(t *testing.T) {
 					var value any = int64(42)
 					source := types.T_int64.ToType()
 					var match any = int64(42)
+					if step == 0 && tc.name == "least_binary" {
+						value, match = int64(0), int64(0)
+					}
 					matchType := source
 					if step == 0 && tc.nullFirst {
 						value = nil
@@ -112,7 +130,7 @@ func TestPreparedFieldScalarComparisonLifetime(t *testing.T) {
 					filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), bound.Plan, values)
 					require.NoError(t, err, "fill step %d", step)
 					require.NotNil(t, filled)
-					if !tc.derived {
+					if !tc.derived && tc.name != "scalar_union" {
 						actual := func() uint64 {
 							proc := mock.ctxt.GetProcess()
 							parameters := vector.NewVec(types.T_text.ToType())
@@ -133,7 +151,7 @@ func TestPreparedFieldScalarComparisonLifetime(t *testing.T) {
 							return vector.GetFixedAtWithTypeCheck[uint64](out, 0)
 						}()
 						want := uint64(1)
-						if step == 0 && tc.nullFirst {
+						if step == 0 && (tc.nullFirst || tc.name == "greatest_binary") {
 							want = 0
 						}
 						if tc.name == "nullif_peer_control" && step > 0 {
@@ -168,4 +186,32 @@ func TestPreparedFieldScalarComparisonLifetime(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestPreparedFieldScalarMarkerWitnessBoundaries(t *testing.T) {
+	for _, operation := range []tree.UnionType{tree.EXCEPT, tree.INTERSECT, tree.UT_MINUS} {
+		require.Nil(t, preparedFieldScalarResultsAST(&tree.UnionClause{Type: operation}), "set-operation peers must not become returned-value owners")
+	}
+	binding := PreparedSourceBinding{Position: 7, Type: types.T_any.ToType()}
+	ctx := withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{binding})
+	marker := tree.NewParamExpr(1)
+	null := tree.NewNumVal("", "", false, tree.P_null)
+	witness, err := preparedFieldScalarMarkerWitness(ctx, []tree.Expr{marker, null, marker, null}, makePlan2Type(&binding.Type))
+	require.NoError(t, err)
+	require.Len(t, witness.GetF().Args, 2, "duplicate branches retain one marker and one NULL, not a UNION graph")
+	require.Equal(t, int32(7), witness.GetF().Args[0].GetP().Pos, "parser ordinals are not execution slots")
+	require.True(t, witness.GetF().Args[1].GetLit().Isnull)
+	for _, branches := range [][]tree.Expr{
+		{null, null},
+		{marker, tree.NewNumVal("A", "A", false, tree.P_char)},
+		{marker, tree.NewCastExpr(marker, tree.TYPE_BOOL)},
+	} {
+		witness, err = preparedFieldScalarMarkerWitness(ctx, branches, makePlan2Type(&binding.Type))
+		require.NoError(t, err)
+		require.Nil(t, witness, "all-NULL, fixed values and authored CASTs do not declare a raw projected marker")
+	}
+	witness, err = preparedFieldScalarMarkerWitness(ctx, []tree.Expr{tree.NewParamExpr(2), null}, makePlan2Type(&binding.Type))
+	require.Error(t, err)
+	require.Nil(t, witness)
+	require.Equal(t, binding, preparedSourceBindings(ctx)[0], "failed witness binding leaves its source snapshot immutable")
 }

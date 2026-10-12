@@ -995,6 +995,14 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 					return nil, err
 				}
 				ensurePreparedNumericMetadata(returnExpr).StringDomainSource = source
+			} else {
+				witness, err := preparedFieldScalarMarkerWitness(b.GetContext(), preparedFieldScalarResultsAST(astExpr.Select), returnExpr.Typ)
+				if err != nil {
+					return nil, err
+				}
+				if witness != nil {
+					ensurePreparedNumericMetadata(returnExpr).StringDomainSource = witness
+				}
 			}
 		}
 	}
@@ -1033,7 +1041,15 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32, isRoot bo
 		args = append(args, tree.NewNumVal("", "", false, tree.P_null))
 	}
 
-	return b.bindFuncExprImplByAstExpr("case", args, depth)
+	bound, err := b.bindFuncExprImplByAstExpr("case", args, depth)
+	if err == nil {
+		if state := preparedBindingState(b.GetContext()); state != nil && state.fieldConsumers != nil && state.fieldConsumers.caseIDs[astExpr] != 0 {
+			if witness := preparedFieldAuthoredCaseContractWitness(bound); witness != nil {
+				ensurePreparedNumericMetadata(bound).StringDomainSource = witness
+			}
+		}
+	}
+	return bound, err
 }
 
 func bindCaseConditionParam(expr tree.Expr) tree.Expr {
