@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
@@ -75,8 +75,13 @@ func TestIssue29395DropDatabaseStatementRollback(t *testing.T) {
 					execSQLMaybe(t, cleanupCtx, db, "drop database if exists "+targetDB)
 				}()
 				table := targetDB + ".auto_table"
-				execSQLRequire(t, ctx, db, "create table "+table+" (id bigint primary key auto_increment, v int)")
+				execSQLRequire(t, ctx, db, "create table "+table+" (id bigint primary key auto_increment, v int unique)")
 				execSQLRequire(t, ctx, db, "insert into "+table+" (v) values (1)")
+				var tableID uint64
+				require.NoError(t, db.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='auto_table'", targetDB).Scan(&tableID))
+				var indexRowsBefore int
+				require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_indexes where table_id=?", tableID).Scan(&indexRowsBefore))
+				require.Positive(t, indexRowsBefore)
 
 				dropConn, err := db.Conn(ctx)
 				require.NoError(t, err)
@@ -153,12 +158,21 @@ func TestIssue29395DropDatabaseStatementRollback(t *testing.T) {
 				var secondID int64
 				require.NoError(t, db.QueryRowContext(ctx, "select id from "+table+" where v=2").Scan(&secondID))
 				require.Greater(t, secondID, firstID)
+				var indexRowsAfter int
+				require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_indexes where table_id=?", tableID).Scan(&indexRowsAfter))
+				require.Equal(t, indexRowsBefore, indexRowsAfter, "canceled DROP must preserve index catalog rows")
+				_, err = db.ExecContext(ctx, "insert into "+table+" (v) values (1)")
+				var duplicate *mysql.MySQLError
+				require.ErrorAs(t, err, &duplicate)
+				require.Equal(t, uint16(1062), duplicate.Number)
 
 				// With the fault removed, the ordinary successful DROP still works.
 				_, err = fault.RemoveFaultPoint(ctx, barrier)
 				require.NoError(t, err)
 				_, err = db.ExecContext(ctx, "drop database "+targetDB)
 				require.NoError(t, err)
+				require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_indexes where table_id=?", tableID).Scan(&indexRowsAfter))
+				require.Zero(t, indexRowsAfter, "successful retry must clean index catalog rows")
 			})
 		}
 	})

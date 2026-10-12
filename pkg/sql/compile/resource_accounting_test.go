@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -436,6 +438,66 @@ func TestRemoteTerminalEnvelopeDecodesLegacyPlan(t *testing.T) {
 	emptySender := &messageSenderOnClient{anal: &AnalyzeModule{}}
 	require.NoError(t, emptySender.dealRemoteTerminal(empty))
 	require.Empty(t, emptySender.anal.remotePhyPlans)
+}
+
+func TestRemoteTerminalScanWork(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		remoteRows   int64
+		remoteBlocks int64
+		localRows    int64
+		localBlocks  int64
+		legacy       bool
+	}{
+		{name: "remote", remoteRows: 32768, remoteBlocks: 4},
+		{name: "empty"},
+		{name: "envelope-omitted-blocks", remoteRows: 32768},
+		{name: "legacy-omitted-blocks", remoteRows: 32768, legacy: true},
+		{name: "local-and-remote", remoteRows: 32768, remoteBlocks: 4, localRows: 8192, localBlocks: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scan := func(rows, blocks int64) models.PhyScope {
+				return models.PhyScope{
+					Magic: "Merge",
+					RootOperator: &models.PhyOperator{
+						OpName: "TableScan", NodeIdx: 0, IsFirst: true, IsLast: true,
+						OpStats: &process.OperatorStats{InputRows: rows, InputBlocks: blocks},
+					},
+				}
+			}
+			message := &pipeline.Message{}
+			receiver := &messageReceiverOnServer{phyPlan: &models.PhyPlan{
+				Version: "1.0", LocalScope: []models.PhyScope{scan(tc.remoteRows, tc.remoteBlocks)},
+			}}
+			require.NoError(t, receiver.setTerminalAnalysis(message))
+			if tc.legacy {
+				// Older senders omitted InputBlocks. Missing diagnostic data must
+				// remain zero, not be inferred from rows or a presumed block size.
+				message.SetAnalysis([]byte(`{"version":"1.0","scope":[{"Magic":"Merge","RootOperator":{"OpName":"TableScan","NodeIdx":0,"IsFirst":true,"IsLast":true,"OpStats":{"InputRows":32768}}}]}`))
+			}
+			if tc.remoteBlocks == 0 {
+				require.NotContains(t, string(message.GetAnalyse()), `"InputBlocks"`)
+			}
+			anal := &AnalyzeModule{qry: &plan.Query{Nodes: []*plan.Node{{NodeId: 0, NodeType: plan.Node_TABLE_SCAN}}}}
+			sender := &messageSenderOnClient{anal: anal}
+			require.NoError(t, sender.dealRemoteTerminal(message.GetAnalyse()))
+			require.NoError(t, sender.dealRemoteTerminal(message.GetAnalyse()))
+			require.Len(t, anal.remotePhyPlans, 1)
+			remoteStats := anal.remotePhyPlans[0].LocalScope[0].RootOperator.OpStats
+			require.Equal(t, tc.remoteRows, remoteStats.InputRows)
+			require.Equal(t, tc.remoteBlocks, remoteStats.InputBlocks)
+
+			compiled := &Compile{anal: anal}
+			compiled.GenPhyPlan(compiled)
+			if tc.localRows != 0 {
+				anal.phyPlan.LocalScope = []models.PhyScope{scan(tc.localRows, tc.localBlocks)}
+			}
+			compiled.fillPlanNodeAnalyzeInfo(statistic.NewStatsInfo())
+			got := anal.qry.Nodes[0].AnalyzeInfo
+			require.Equal(t, tc.localRows+tc.remoteRows, got.InputRows)
+			require.Equal(t, tc.localBlocks+tc.remoteBlocks, got.InputBlocks)
+		})
+	}
 }
 
 func TestRemoteTerminalV3OwnerGapRemainsPartialAcrossV4Hop(t *testing.T) {

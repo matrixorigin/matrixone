@@ -3169,3 +3169,28 @@ func TestCanceledSuffixCleanupAfterPromotion(t *testing.T) {
 	c.mu.RUnlock()
 	require.Zero(t, users, "all user admission reservations were released")
 }
+
+func TestClosedClientRejectsMetadataBeforeRetiredRuntimeLookup(t *testing.T) {
+	sid := t.Name()
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, sid, logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 { return 1 }, 0)))
+	runtime.SetupServiceBasedRuntime(sid, rt)
+	t.Cleanup(func() { runtime.CompareAndDeleteServiceBasedRuntime(sid, rt) })
+	c := NewTxnClient(sid, newTestTxnSender())
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	c.Resume()
+	ctx := context.Background()
+	op, err := c.New(ctx, timestamp.Timestamp{})
+	require.NoError(t, err)
+	require.NoError(t, op.Rollback(ctx))
+	require.NoError(t, c.Close())
+	require.True(t, runtime.CompareAndDeleteServiceBasedRuntime(sid, rt))
+	for _, create := range []func() (TxnOperator, error){
+		func() (TxnOperator, error) { return c.New(ctx, timestamp.Timestamp{}) },
+		func() (TxnOperator, error) { return c.(*txnClient).RestartTxn(ctx, op, timestamp.Timestamp{}) },
+	} {
+		got, err := create()
+		require.Nil(t, got)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed), err)
+	}
+}

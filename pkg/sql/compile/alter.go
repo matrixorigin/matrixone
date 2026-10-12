@@ -1152,6 +1152,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 	}
 
+	replacementAdmission := dropLifecycleAdmission{}
 	oldId := originRel.GetTableID(c.proc.Ctx)
 	lineagePlan := alterDataBranchLineagePlan{}
 	lineageSnapshotAdvanced := false
@@ -1236,6 +1237,18 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 
 		if retryErr != nil {
 			return retryErr
+		}
+		if !isTemp && c.isLifecycleRC() {
+			var added []*plan.AlterTableAddFk
+			for _, action := range qry.Actions {
+				if fk := action.GetAddFk(); fk != nil {
+					added = append(added, fk)
+				}
+			}
+			replacementAdmission.createNames, err = c.admitReplacementNames(dbName, tblName, qry.CopyTableDef.Name, originRel, added)
+			if err != nil {
+				return err
+			}
 		}
 		if !isTemp && shouldAdvanceAlterDataBranchLineageSnapshot(
 			lineageTxnOp.Txn().IsPessimistic(), lineageTxnOp.Txn().IsRCIsolation(),
@@ -1353,7 +1366,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		defer func() { c.proc.Ctx = originalCtx }()
 		create := func() error { return c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts) }
 		if !isTemp && c.isLifecycleRC() {
-			return c.withDropLifecycle(dropLifecycleAdmission{}, create)
+			return c.withDropLifecycle(replacementAdmission, create)
 		}
 		return create()
 	}()
