@@ -1193,8 +1193,18 @@ func canonicalSystemVariableName(name string) string {
 		return transactionIsolationSystemVariable
 	case transactionReadOnlySystemVariableAlias:
 		return transactionReadOnlySystemVariable
+	case "innodb_lock_wait_timeout":
+		return "lock_wait_timeout"
 	}
 	return name
+}
+
+func init() {
+	// The compatibility spelling shares the native scope, validator and default.
+	// SystemVariables resolves both names to the same lock_wait_timeout state.
+	alias := gSysVarsDefs["lock_wait_timeout"]
+	alias.Name = "innodb_lock_wait_timeout"
+	gSysVarsDefs[alias.Name] = alias
 }
 
 func isTransactionIsolationSystemVariable(name string) bool {

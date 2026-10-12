@@ -74,6 +74,54 @@ func TestLockWaitTimeoutDefaultIsBounded(t *testing.T) {
 	})
 }
 
+func TestInnoDBLockWaitTimeoutAlias(t *testing.T) {
+	ctx := context.Background()
+	native := gSysVarsDefs["lock_wait_timeout"]
+	alias := gSysVarsDefs["innodb_lock_wait_timeout"]
+	assert.Equal(t, "innodb_lock_wait_timeout", alias.Name)
+	native.Name = alias.Name
+	assert.Equal(t, native, alias)
+	assert.Equal(t, "lock_wait_timeout", canonicalSystemVariableName("InnoDB_LOCK_WAIT_TIMEOUT"))
+
+	ses := &Session{}
+	for _, name := range []string{"lock_wait_timeout", "INNODB_LOCK_WAIT_TIMEOUT"} {
+		got, err := ses.GetSessionSysVar(name)
+		assert.NoError(t, err)
+		assert.Equal(t, defaultLockWaitTimeoutSeconds, got)
+		got, err = ses.GetGlobalSysVar(name)
+		assert.NoError(t, err)
+		assert.Equal(t, defaultLockWaitTimeoutSeconds, got)
+	}
+	global := &SystemVariables{mp: map[string]interface{}{"lock_wait_timeout": int64(7)}}
+	ses.gSysVars, ses.sesSysVars = global, global
+	other := &Session{}
+	other.sesSysVars = global.Clone()
+	for _, value := range []int64{1, 31536000, 2} {
+		assert.NoError(t, ses.SetSessionSysVar(ctx, "INNODB_LOCK_WAIT_TIMEOUT", value))
+		for _, name := range []string{"lock_wait_timeout", "innodb_lock_wait_timeout"} {
+			got, err := ses.GetSessionSysVar(name)
+			assert.NoError(t, err)
+			assert.Equal(t, value, got)
+		}
+	}
+	for _, value := range []interface{}{int64(0), int64(31536001), "bad", nil} {
+		assert.Error(t, ses.SetSessionSysVar(ctx, "innodb_lock_wait_timeout", value))
+		got, err := ses.GetSessionSysVar("lock_wait_timeout")
+		assert.NoError(t, err)
+		assert.Equal(t, int64(2), got)
+	}
+	assert.NoError(t, ses.SetSessionSysVar(ctx, "lock_wait_timeout", int64(3)))
+	got, err := ses.GetSessionSysVar("innodb_lock_wait_timeout")
+	assert.NoError(t, err)
+	assert.Equal(t, int64(3), got)
+	assert.Equal(t, int64(7), global.Get("innodb_lock_wait_timeout"))
+	got, err = other.GetSessionSysVar("innodb_lock_wait_timeout")
+	assert.NoError(t, err)
+	assert.Equal(t, int64(7), got)
+	_, err = ses.GetSessionSysVar("unknown_lock_wait_timeout")
+	assert.Error(t, err)
+}
+
 func TestGroupConcatMaxLenDefault(t *testing.T) {
 	convey.Convey("group_concat_max_len should use the MySQL default", t, func() {
 		sv, ok := gSysVarsDefs["group_concat_max_len"]
