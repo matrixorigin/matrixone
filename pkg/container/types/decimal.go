@@ -2390,6 +2390,7 @@ func parse256(x string, exactTail bool) (y Decimal256, scale int32, next byte, e
 	}
 	var z Decimal256
 	width := 0
+	dropped := false
 	t := false
 	scale = -1
 	i := 0
@@ -2479,7 +2480,10 @@ func parse256(x string, exactTail bool) (y Decimal256, scale int32, next byte, e
 					return
 				}
 				if exactTail {
-					next = x[i] - '0'
+					if !dropped {
+						next = x[i] - '0'
+						dropped = true
+					}
 				} else if x[i] >= '5' {
 					y, err = y.Add256(Decimal256{1, 0, 0, 0})
 					if err != nil {
@@ -2491,10 +2495,10 @@ func parse256(x string, exactTail bool) (y Decimal256, scale int32, next byte, e
 						y, _ = y.Scale(-1)
 					}
 				}
-				// Skip the remaining dropped digits but keep a trailing exponent.
+				// Exact mode validates the whole tail after skipping dropped digits.
 				for i++; i < len(x) && x[i] >= '0' && x[i] <= '9'; i++ {
 				}
-				if i < len(x) && (x[i] == 'e' || x[i] == 'E') {
+				if exactTail || (i < len(x) && (x[i] == 'e' || x[i] == 'E')) {
 					continue
 				}
 				break
