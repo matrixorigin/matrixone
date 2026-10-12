@@ -50,6 +50,9 @@ func TestExactEmbeddedTPCHNativePreparation(t *testing.T) {
 	for number := 1; number <= 22; number++ {
 		t.Run(fmt.Sprintf("q%d", number), func(t *testing.T) {
 			bound := exactTPCHQuery(t, mock, number)
+			expanded, err := ExpandEmbeddedMOSteps(bound)
+			require.NoError(t, err)
+			bound = expanded
 			candidate, err := ExportEmbeddedMO(bound, NewEmbeddedExportProfile(runtime.Capabilities()))
 			require.NoError(t, err)
 			reads, err := candidate.EmbeddedMOReads()
