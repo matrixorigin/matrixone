@@ -205,7 +205,7 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		reusesProjection = true
 		if int(pos) < len(b.ctx.numericProjectionTypes) {
 			target := b.ctx.numericProjectionTypes[pos]
-			if target.Id != 0 {
+			if isNumericAssignmentTarget(target) {
 				numericTarget = &target
 			}
 		}
@@ -226,7 +226,7 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 				astExpr = b.selectList[colPos-1].Expr
 				if int(colPos) <= len(b.ctx.numericProjectionTypes) {
 					target := b.ctx.numericProjectionTypes[colPos-1]
-					if target.Id != 0 {
+					if isNumericAssignmentTarget(target) {
 						numericTarget = &target
 					}
 				}

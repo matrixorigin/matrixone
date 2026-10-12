@@ -5049,12 +5049,12 @@ func isPreparedAssignmentParam(builder *QueryBuilder, expr tree.Expr) bool {
 }
 
 func insertProjectionTypes(insertColumns []string, tableDef *plan.TableDef, ignore bool) []Type {
-	// only numeric targets may seed the numeric assignment context; a zero
-	// Type keeps the projection binder on the default binding path
+	// Numeric targets seed numeric context; ENUM targets preserve same-domain
+	// bare columns. A zero Type keeps the default binding path.
 	targets := make([]Type, len(insertColumns))
 	for i, column := range insertColumns {
 		typ := tableDef.Cols[tableDef.Name2ColIndex[column]].Typ
-		if useNumericAssignmentContext(typ, ignore) {
+		if useNumericAssignmentContext(typ, ignore) || isEnumPlanType(&typ) {
 			targets[i] = typ
 		}
 	}
