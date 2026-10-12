@@ -269,6 +269,38 @@ select id from persisted_bigint where grp<=101 order by l2_distance(v,'[0,0]') l
 select id from persisted_bigint where id<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
 select id from persisted_bigint where id<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
 
+-- CHAR keys are normalized to VARCHAR by the membership producer. Eleven
+-- nearer ineligible rows exhaust the LIMIT 1 POST budget (k + 10); AUTO must
+-- execute PRE next. The non-equality predicate keeps AUTO away from its
+-- estimated-small-result FORCE shortcut without growing this 13-row fixture.
+create table ivf_char_retry(id char(8) primary key, grp int, v vecf32(2));
+insert into ivf_char_retry
+select concat('c', lpad(result, 2, '0')), 0,
+       cast(concat('[', result, ',0]') as vecf32(2))
+from generate_series(1,11) g;
+insert into ivf_char_retry values ('hit1', 1, '[20,0]'), ('hit2', 1, '[21,0]');
+create index char_idx using ivfflat on ivf_char_retry(v)
+lists=1 op_type 'vector_l2_ops';
+set probe_limit = 1;
+select id from ivf_char_retry where grp<>0
+order by l2_distance(v,'[0,0]') limit 1 by rank with option 'mode=force';
+select id from ivf_char_retry where grp<>0
+order by l2_distance(v,'[0,0]') limit 1 by rank with option 'mode=pre';
+select id from ivf_char_retry where grp<>0
+order by l2_distance(v,'[0,0]') limit 1 by rank with option 'mode=auto';
+-- A non-empty PRE branch after an empty POST projection proves actual retry.
+-- FORCE stays unexecuted; its scan has no nonzero Analyze row counts.
+-- @separator:table
+-- @ignore:0
+-- @regex("Adaptive Top[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*inputRows=1 outputRows=1", true)
+-- @regex("->  Project[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*inputRows=0 outputRows=0", true)
+-- @regex("Vector Index Scan[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*inputRows=11 outputRows=11", true)
+-- @regex("Vector Index Scan[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*inputRows=2 outputRows=2[^\n]*\n[^\n]*Runtime Filter Probe", true)
+-- @regex("Table Scan[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Table:[^\n]*\n[^\n]*Analyze:[^\n]*inputBlocks=0 inputRows=0 outputRows=0", true)
+explain analyze verbose select id from ivf_char_retry where grp<>0
+order by l2_distance(v,'[0,0]') limit 1 by rank with option 'mode=auto';
+drop table ivf_char_retry;
+
 set ivf_preload_entries = 0;
 set probe_limit = 5;
 drop database ivf_membership;

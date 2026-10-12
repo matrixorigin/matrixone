@@ -642,6 +642,71 @@ execute integer_peer using @v;
 ➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
 1  ¦  54321.00
 deallocate prepare integer_peer;
+set @a = cast(54321 as signed), @b = cast(54322 as signed);
+prepare integer_list_peers from 'select count(*), min(d) from t where d in (?, ?)';
+explain analyze force execute integer_list_peers using @a, @b;
+➤ tp query plan[12,-1,0]  𝄀
+execute integer_list_peers using @a, @b;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+2  ¦  54321.00
+prepare integer_range_peers from 'select count(*), min(d) from t where d between ? and ?';
+explain analyze force execute integer_range_peers using @a, @b;
+➤ tp query plan[12,-1,0]  𝄀
+execute integer_range_peers using @a, @b;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+2  ¦  54321.00
+prepare integer_not_list_peers from 'select count(*), min(d) from t where d not in (?, ?)';
+execute integer_not_list_peers using @a, @b;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+99998  ¦  0.10
+set @b = 9223372036854775807;
+execute integer_list_peers using @a, @b;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+1  ¦  54321.00
+execute integer_range_peers using @a, @b;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+45680  ¦  54321.00
+set @b = null;
+execute integer_list_peers using @a, @b;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+1  ¦  54321.00
+execute integer_range_peers using @a, @b;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+0  ¦  null
+execute integer_not_list_peers using @a, @b;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+0  ¦  null
+set @a = cast(54322 as signed), @b = cast(54323 as signed);
+explain analyze force execute integer_list_peers using @a, @b;
+➤ tp query plan[12,-1,0]  𝄀
+execute integer_list_peers using @a, @b;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+2  ¦  54322.00
+execute integer_range_peers using @a, @b;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+2  ¦  54322.00
+deallocate prepare integer_list_peers;
+deallocate prepare integer_range_peers;
+deallocate prepare integer_not_list_peers;
+create index decimal_peer_idx on t(d);
+set @v = cast(54321 as signed);
+prepare integer_signed_peer from 'select count(*), min(d) from t where d = cast(? as signed)';
+explain analyze force execute integer_signed_peer using @v;
+➤ tp query plan[12,-1,0]  𝄀
+execute integer_signed_peer using @v;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+1  ¦  54321.00
+set @v = 9223372036854775807;
+execute integer_signed_peer using @v;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+0  ¦  null
+set @v = cast(54322 as signed);
+execute integer_signed_peer using @v;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+1  ¦  54322.00
+deallocate prepare integer_signed_peer;
+drop index decimal_peer_idx on t;
+set @v = 54321;
 prepare integer_cast_peer from 'select count(*), min(d) from t where d = cast(? as double)';
 execute integer_cast_peer using @v;
 ➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀

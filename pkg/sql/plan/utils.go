@@ -3055,10 +3055,14 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) error {
 
 	fpath := GetFilePathFromParam(param)
+	if param.StageFilepath != "" {
+		fpath = param.StageFilepath
+	}
 
 	if !strings.HasPrefix(fpath, stage.STAGE_PROTOCOL+"://") {
 		return InitInfileParam(param)
 	}
+	param.StageFilepath = fpath
 
 	s, err := stageutil.UrlToStageDef(fpath, proc)
 	if err != nil {
@@ -3072,6 +3076,8 @@ func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) erro
 	if s.Url.Scheme == stage.S3_PROTOCOL {
 		return InitStageS3Param(param, s)
 	} else if s.Url.Scheme == stage.FILE_PROTOCOL {
+		param.ScanType = tree.INFILE
+		param.S3Param = nil
 
 		err := InitInfileParam(param)
 		if err != nil {

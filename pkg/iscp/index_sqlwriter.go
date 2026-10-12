@@ -67,6 +67,8 @@ type BaseIndexSqlWriter struct {
 	srcPos    []int32
 	srcType   []*types.Type
 	dbName    string
+
+	enumTuples bool
 }
 
 // Fulltext Sql Writer.  Only one hidden secondary index table
@@ -143,7 +145,7 @@ func (w *BaseIndexSqlWriter) writeRow(ctx context.Context, row []any) error {
 			return err
 		}
 	} else {
-		w.vbuf, err = convertColIntoSql(ctx, row[w.pkPos], w.pkType, w.vbuf)
+		w.vbuf, err = w.convertSourceCol(ctx, row[w.pkPos], w.pkType, w.vbuf)
 		if err != nil {
 			return err
 		}
@@ -152,7 +154,7 @@ func (w *BaseIndexSqlWriter) writeRow(ctx context.Context, row []any) error {
 	for i, t := range w.partsType {
 		w.vbuf = appendString(w.vbuf, ",")
 		pos := w.partsPos[i]
-		w.vbuf, err = convertColIntoSql(ctx, row[pos], t, w.vbuf)
+		w.vbuf, err = w.convertSourceCol(ctx, row[pos], t, w.vbuf)
 		if err != nil {
 			return err
 		}
@@ -161,6 +163,26 @@ func (w *BaseIndexSqlWriter) writeRow(ctx context.Context, row []any) error {
 	w.vbuf = appendString(w.vbuf, ")")
 	w.ndata += 1
 	return nil
+}
+
+func (w *BaseIndexSqlWriter) convertSourceCol(ctx context.Context, value any, typ *types.Type, buf []byte) ([]byte, error) {
+	if !w.enumTuples || typ.Oid != types.T_enum {
+		return convertColIntoSql(ctx, value, typ, buf)
+	}
+	// Replay restores committed storage, including the ENUM error ordinal 0
+	// produced by INSERT IGNORE. Keep it distinct from member 1 (possibly an
+	// empty label) and NULL without re-running user-input ENUM validation.
+	var tuple [8]byte // one ENUM (uint16) or NULL fits the fixed buffer
+	packer := types.NewPackerWithFixedBuffer(tuple[:])
+	if value == nil {
+		packer.EncodeNull()
+	} else {
+		packer.EncodeEnum(value.(types.Enum))
+	}
+	if err := packer.Err(); err != nil {
+		return buf, err
+	}
+	return fmt.Appendf(buf, "x'%x'", packer.GetBuf()), nil
 }
 
 func (w *BaseIndexSqlWriter) writeDeleteRow(ctx context.Context, row []any) error {
@@ -564,7 +586,7 @@ func resolveHostSpillDir(sqlproc *sqlexec.SqlProcess) string {
 
 // Implementation of Ivfflat Sql writer
 func NewIvfflatSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
-	w := &IvfflatSqlWriter{BaseIndexSqlWriter: BaseIndexSqlWriter{algo: algo, tabledef: tabledef, indexdef: indexdef, jobID: jobID, info: info, vbuf: make([]byte, 0, 1024)}}
+	w := &IvfflatSqlWriter{BaseIndexSqlWriter: BaseIndexSqlWriter{algo: algo, tabledef: tabledef, indexdef: indexdef, jobID: jobID, info: info, vbuf: make([]byte, 0, 1024), enumTuples: true}}
 
 	if len(indexdef) != 3 {
 		return nil, moerr.NewInternalErrorNoCtx("ivf index table must have 3 secondary tables")
@@ -730,10 +752,27 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 
 	coldefs := make([]string, 0, len(w.srcPos))
 	cnames := make([]string, 0, len(w.srcPos))
+	projCols := make([]string, 0, len(w.srcPos))
 	for i := range w.srcPos {
 		typstr := w.srcType[i].DescString()
 		cnames = append(cnames, fmt.Sprintf("src%d", i))
-		coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as %s", i, typstr, sqlquote.Ident(cnames[i])))
+		if w.srcType[i].Oid == types.T_enum {
+			// Runtime types omit ENUM members; reconstruct the domain from the
+			// catalog-loaded source column, including SQL escaping of labels.
+			members := strings.Split(w.tabledef.Cols[w.srcPos[i]].Typ.Enumvalues, ",")
+			for j, member := range members {
+				members[j] = sqlquote.String(member)
+			}
+			typstr = "ENUM(" + strings.Join(members, ",") + ")"
+			// Keep tuple bytes through the CTE and join. Referencing an ENUM
+			// column there would convert it to its display label (losing 0).
+			// Decode only in the final assignment projection.
+			coldefs = append(coldefs, fmt.Sprintf("column_%d as %s", i, sqlquote.Ident(cnames[i])))
+			projCols = append(projCols, fmt.Sprintf("SERIAL_EXTRACT(%s, 0 as %s)", cnames[i], typstr))
+		} else {
+			coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as %s", i, typstr, sqlquote.Ident(cnames[i])))
+			projCols = append(projCols, cnames[i])
+		}
 	}
 
 	cols := strings.Join(coldefs, ", ")
@@ -748,7 +787,7 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 	// (pure-async indexes that never trained bounds — search also uses identity
 	// there, so the two stay consistent). float16/bf16 narrow losslessly via the
 	// implicit cast, so only int8 needs this.
-	entryProj := cnames[len(cnames)-1]
+	entryProj := projCols[len(projCols)-1]
 	if qt, ok := quantizer.ToVectorType(w.ivfparam.Quantization); ok && (qt == types.T_array_int8 || qt == types.T_array_uint8) {
 		metaTbl := sqlquote.QualifiedIdent(w.info.DBName, w.meta_tbl)
 		sub := func(k string) string {
@@ -764,7 +803,6 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 			entryProj = quantizer.Int8EntrySQLFromBounds(cnames[len(cnames)-1], minS, maxS, w.partsType[0].Width)
 		}
 	}
-	projCols := append([]string(nil), cnames...)
 	projCols[len(projCols)-1] = entryProj
 	cnames_str := strings.Join(projCols, ", ")
 

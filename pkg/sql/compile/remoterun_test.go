@@ -5392,3 +5392,43 @@ func TestNotifyLateErrorSurvivesSuccessfulStop(t *testing.T) {
 		})
 	}
 }
+
+func TestRemoteStatementSendErrorPreservesCauseWithoutMaskingInvariant(t *testing.T) {
+	native := moerr.NewOutOfRangeNoCtx("int8", "1000")
+	for _, tc := range []struct {
+		name       string
+		diagnostic error
+		wantNative bool
+	}{
+		{"cleanup-cancellation", context.Canceled, true},
+		{"cleanup-error", errors.New("cleanup failed"), true},
+		{"allocation-invariant", mpool.ErrAllocationAccountInvariant, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			session := mock_morpc.NewMockClientSession(ctrl)
+			var response *pipeline.Message
+			session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, m morpc.Message) error {
+				response = m.(*pipeline.Message)
+				return nil
+			})
+			receiver := &messageReceiverOnServer{
+				messageCtx:      context.Background(),
+				clientSession:   session,
+				statementError:  snapshotRemoteStatementError(native),
+				messageAcquirer: func() morpc.Message { return new(pipeline.Message) },
+			}
+			require.NoError(t, receiver.sendError(errors.Join(native, tc.diagnostic)))
+			require.NotNil(t, response)
+			got := new(moerr.Error)
+			require.NoError(t, got.UnmarshalBinary(response.Err))
+			if tc.wantNative {
+				require.Equal(t, native.MySQLCode(), got.MySQLCode())
+				require.Equal(t, native.SqlState(), got.SqlState())
+			} else {
+				require.NotEqual(t, native.MySQLCode(), got.MySQLCode())
+				require.Contains(t, got.Error(), mpool.ErrAllocationAccountInvariant.Error())
+			}
+		})
+	}
+}

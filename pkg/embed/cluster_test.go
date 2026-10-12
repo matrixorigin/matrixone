@@ -32,6 +32,7 @@ import (
 	"github.com/BurntSushi/toml"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	commonruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -47,6 +48,7 @@ type closeTrackingService struct {
 	closeCount atomic.Int32
 	startErr   error
 	closeErr   error
+	onClose    func()
 }
 
 func (s *closeTrackingService) Start() error {
@@ -54,12 +56,16 @@ func (s *closeTrackingService) Start() error {
 }
 
 func (s *closeTrackingService) Close() error {
+	if s.onClose != nil {
+		s.onClose()
+	}
 	s.closeCount.Add(1)
 	return s.closeErr
 }
 
 type closeTrackingFileService struct {
 	closeCount atomic.Int32
+	onClose    func()
 }
 
 // A diagnostic error does not imply that the owner still uses dependencies.
@@ -160,7 +166,28 @@ func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
 	cn := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
 	dependency := &closeTrackingService{}
 	fs := &closeTrackingFileService{}
-	op := &operator{state: started}
+	op := &operator{sid: t.Name(), state: started}
+	rt := commonruntime.DefaultRuntime()
+	commonruntime.SetupServiceBasedRuntime(op.sid, rt)
+	op.reset.rt = rt
+	t.Cleanup(func() { commonruntime.CompareAndDeleteServiceBasedRuntime(op.sid, rt) })
+	cn.onClose = func() { require.Same(t, rt, commonruntime.ServiceRuntime(op.sid)) }
+	joined := make(chan struct{})
+	op.reset.stopper = stopper.NewStopper(t.Name())
+	t.Cleanup(op.reset.stopper.Stop)
+	require.NoError(t, op.reset.stopper.RunTask(func(ctx context.Context) {
+		<-ctx.Done()
+		assert.Same(t, rt, commonruntime.ServiceRuntime(op.sid))
+		close(joined)
+	}))
+	fs.onClose = func() {
+		require.Same(t, rt, commonruntime.ServiceRuntime(op.sid))
+		select {
+		case <-joined:
+		default:
+			t.Fatal("file service closed before stopper joined")
+		}
+	}
 	op.reset.svc, op.reset.fs = cn, fs
 	dep := &operator{state: started}
 	dep.reset.svc = dependency
@@ -176,6 +203,8 @@ func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
 	err = c.Close()
 	require.ErrorIs(t, err, failure)
 	require.False(t, op.needsCleanup())
+	require.Nil(t, op.reset.rt)
+	require.Nil(t, commonruntime.ServiceRuntime(op.sid))
 	require.Equal(t, int32(1), fs.closeCount.Load())
 	require.Equal(t, int32(1), dependency.closeCount.Load())
 	require.Nil(t, c.testAdmission)
@@ -212,15 +241,22 @@ func TestClusterClosePendingOwnerPrecedesDependencies(t *testing.T) {
 
 func TestOperatorStartPreservesIncompleteOwnership(t *testing.T) {
 	svc := &completedCloseService{}
-	op := &operator{}
+	op := &operator{sid: t.Name()}
+	rt := commonruntime.DefaultRuntime()
+	commonruntime.SetupServiceBasedRuntime(op.sid, rt)
+	op.reset.rt = rt
+	t.Cleanup(func() { commonruntime.CompareAndDeleteServiceBasedRuntime(op.sid, rt) })
 	op.reset.svc = svc // partial startup did not reach state=started
 	require.ErrorContains(t, op.Start(), "cleanup is incomplete")
 	require.Same(t, svc, op.reset.svc)
 	require.ErrorContains(t, op.Close(), "cleanup is incomplete", "nil error is not a completion certificate")
 	require.True(t, op.needsCleanup())
+	require.Same(t, rt, op.reset.rt)
+	require.Same(t, rt, commonruntime.ServiceRuntime(op.sid))
 	svc.complete = true
 	require.NoError(t, op.Close())
 	require.False(t, op.needsCleanup())
+	require.Nil(t, commonruntime.ServiceRuntime(op.sid))
 }
 
 func TestClusterStartRollbackCompletedErrorReleasesAdmission(t *testing.T) {
@@ -241,13 +277,23 @@ func TestClusterStartRollbackCompletedErrorReleasesAdmission(t *testing.T) {
 }
 
 func (s *closeTrackingFileService) Close(context.Context) {
+	if s.onClose != nil {
+		s.onClose()
+	}
 	s.closeCount.Add(1)
 }
 
 func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
 	startErr := errors.New("service partially started")
 	svc := &closeTrackingService{startErr: startErr}
-	op := &operator{}
+	op := &operator{sid: t.Name()}
+	rt, replacement := commonruntime.DefaultRuntime(), commonruntime.DefaultRuntime()
+	t.Cleanup(func() {
+		commonruntime.CompareAndDeleteServiceBasedRuntime(op.sid, rt)
+		commonruntime.CompareAndDeleteServiceBasedRuntime(op.sid, replacement)
+	})
+	commonruntime.SetupServiceBasedRuntime(op.sid, rt)
+	op.reset.rt = rt
 
 	err := op.startConstructedServiceLocked(svc)
 	require.ErrorIs(t, err, startErr)
@@ -255,6 +301,23 @@ func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
 
 	require.NoError(t, op.Close())
 	require.Equal(t, int32(1), svc.closeCount.Load())
+	require.False(t, op.needsCleanup())
+	require.Nil(t, commonruntime.ServiceRuntime(op.sid))
+	require.NoError(t, op.Close())
+	require.Equal(t, int32(1), svc.closeCount.Load())
+
+	// A partial start can own just a runtime; a newer registration is separate.
+	op.reset.rt = rt
+	commonruntime.SetupServiceBasedRuntime(op.sid, rt)
+	require.True(t, op.needsCleanup())
+	require.ErrorContains(t, op.Start(), "cleanup is incomplete")
+	commonruntime.SetupServiceBasedRuntime(op.sid, replacement)
+	require.NoError(t, op.Close())
+	require.Nil(t, op.reset.rt)
+	require.Same(t, replacement, commonruntime.ServiceRuntime(op.sid), "old owner must not delete replacement")
+	require.True(t, commonruntime.CompareAndDeleteServiceBasedRuntime(op.sid, replacement))
+	op.reset.rt = rt // missing registration also retires successfully
+	require.NoError(t, op.Close())
 	require.False(t, op.needsCleanup())
 }
 
@@ -305,6 +368,10 @@ func TestHAKeeperHeartbeatTimeoutHonorsLegacyTNConfig(t *testing.T) {
 
 	require.Same(t, cfg.TNCompatible, cfg.TN_please_use_getTNServiceConfig)
 	require.Equal(t, timeout, cfg.getTNServiceConfig().HAKeeper.HeatbeatTimeout.Duration)
+	cfg.TN_please_use_getTNServiceConfig = nil
+	op := &operator{cfg: *cfg, serviceType: metadata.ServiceType_TN}
+	adjustTestingClusterTiming(op)
+	require.Equal(t, 5*time.Second, cfg.TNCompatible.LockService.KeepBindTimeout.Duration)
 }
 
 func TestClusterLifecycleAndCNExpansion(t *testing.T) {
@@ -366,6 +433,16 @@ func TestClusterLifecycleAndCNExpansion(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, cn.GetServiceConfig().CN.AutomaticUpgrade)
 	require.Equal(t, 0, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
+
+	services := c.(*cluster).services
+	for _, svc := range services {
+		require.NotNil(t, commonruntime.ServiceRuntime(svc.ServiceID()))
+	}
+	require.NoError(t, c.Close())
+	for _, svc := range services {
+		require.Nil(t, commonruntime.ServiceRuntime(svc.ServiceID()), "closed service %s retained runtime", svc.ServiceID())
+		require.Nil(t, svc.reset.rt)
+	}
 }
 
 func TestSharedBaseClusterCanWorkWithConcurrentCluster(t *testing.T) {
@@ -771,6 +848,30 @@ func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 				opts = append(opts, WithTesting())
 			}
 			opts = append(opts, WithPreStart(func(svc ServiceOperator) {
+				cfg := svc.GetServiceConfig()
+				if svc.ServiceType() == metadata.ServiceType_TN {
+					// Non-testing construction keeps the production default unset.
+					want := time.Duration(0)
+					if testingMode {
+						want = 5 * time.Second
+					}
+					require.Equal(t, want, cfg.getTNServiceConfig().LockService.KeepBindTimeout.Duration)
+					svc.Adjust(func(cfg *ServiceConfig) {
+						tn := cfg.TN_please_use_getTNServiceConfig
+						if tn == nil {
+							tn = cfg.TNCompatible
+						}
+						tn.LockService.KeepBindTimeout.Duration = 7 * time.Second
+					})
+				}
+				if svc.ServiceType() == metadata.ServiceType_CN {
+					want := time.Duration(0)
+					if testingMode {
+						want = 100 * time.Millisecond
+					}
+					require.Equal(t, want, cfg.CN.LockService.KeepBindDuration.Duration)
+					svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.LockService.KeepBindDuration.Duration = 350 * time.Millisecond })
+				}
 				if svc.ServiceType() == metadata.ServiceType_LOG {
 					cfg := svc.GetServiceConfig()
 					wantRTT := uint64(200)
@@ -799,6 +900,10 @@ func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 			}
 			require.NoError(t, err)
 			for _, svc := range c.(*cluster).services {
+				if svc.ServiceType() == metadata.ServiceType_TN {
+					cfg := svc.GetServiceConfig()
+					require.Equal(t, 7*time.Second, cfg.getTNServiceConfig().LockService.KeepBindTimeout.Duration)
+				}
 				if svc.ServiceType() == metadata.ServiceType_LOG {
 					require.Equal(t, uint64(75), svc.GetServiceConfig().LogService.RTTMillisecond)
 				}
@@ -808,6 +913,7 @@ func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 				cn, err := c.GetCNService(i)
 				require.NoError(t, err)
 				require.Equal(t, 8192, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
+				require.Equal(t, 350*time.Millisecond, cn.GetServiceConfig().CN.LockService.KeepBindDuration.Duration)
 			}
 		})
 	}

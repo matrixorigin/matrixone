@@ -363,7 +363,7 @@ func TestCDCSourceGuardRetryContract(t *testing.T) {
 			// and the next callback's catalog consumer, without a live cluster.
 			catalog := &futureCDCAdmissionCatalog{owner: 123}
 			updater := cdc.NewCDCWatermarkUpdater(t.Name(), catalog)
-			updater.Start()
+			updater.Start(context.Background())
 			defer updater.Stop()
 			fence := cdc.NewOwnerFenceForGeneration(time.UnixMicro(123), func(context.Context) error { return nil })
 			key := &cdc.WatermarkKey{AccountId: 1, TaskId: "task", DBName: "db", TableName: "t"}
@@ -454,7 +454,7 @@ func TestCDCTargetSetupRetryAdmission(t *testing.T) {
 			fence := cdc.NewOwnerFenceForGeneration(time.UnixMicro(123), func(context.Context) error { return nil })
 			catalog := &futureCDCAdmissionCatalog{owner: fence.GenerationToken(), source: 42, watermark: "10-0"}
 			updater := cdc.NewCDCWatermarkUpdater(t.Name(), catalog)
-			updater.Start()
+			updater.Start(context.Background())
 			defer updater.Stop()
 			exec = &CDCTaskExecutor{
 				spec:     &task.CreateCdcDetails{TaskId: "task", TaskName: "task", Accounts: []*task.Account{{Id: 1}}},
