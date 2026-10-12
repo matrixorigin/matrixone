@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r9-2026-10-13`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r10-2026-10-13`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -166,3 +166,14 @@ repair retains the nine idempotent shared-function entries. The current Python
 ABI and opt-in, unisolated test/development scope are unchanged. Historical r8
 records remain immutable. Independent Architecture and SQL/Planner approval of
 this current revision remains pending; rebase and validation do not supply it.
+
+## r10 documentation errata (2026-10-13)
+
+This revision corrects two stale r9 prose references: shared revision
+publication/Python reads and `GetPythonUdfStatus` both require MORPC 112,
+as implemented at `5daca2160a95495ef343a4c13ebdc8337309dab5`. Protocol 111
+remains the official IndexSearchScan capability and Python's immediate
+predecessor rejection case. The implementation, ABI, catalog repair, and
+test/development scope are unchanged. The r9 maintenance record above is
+retained. Independent Architecture and SQL/Planner approval of the current
+revision remains pending; this documentation correction does not grant it.
