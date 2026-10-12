@@ -11,18 +11,21 @@ INSERT INTO numeric_strings VALUES
 SELECT SUM(s), AVG(s) FROM numeric_strings WHERE id <= 4;
 ➤ SUM(s)[8,53,31]  ¦  AVG(s)[8,53,31]  𝄀
 2.5  ¦  0.625
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_avg_saved_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT SUM(s), AVG(s) FROM numeric_strings;
 ➤ SUM(s)[8,53,31]  ¦  AVG(s)[8,53,31]  𝄀
 15.5  ¦  1.9375
 SELECT SUM(CAST(s AS DOUBLE)), AVG(CAST(s AS DOUBLE)) FROM numeric_strings;
 ➤ SUM(cast(s as double))[8,53,31]  ¦  AVG(cast(s as double))[8,53,31]  𝄀
 15.5  ¦  1.9375
+SET @@sql_mode = @sum_avg_saved_mode;
 SELECT SUM(s), AVG(s) FROM numeric_strings WHERE id < 0;
 ➤ SUM(s)[8,53,31]  ¦  AVG(s)[8,53,31]  𝄀
 null  ¦  null
 SELECT SUM(s), AVG(s) FROM numeric_strings WHERE g = 3;
 ➤ SUM(s)[8,53,31]  ¦  AVG(s)[8,53,31]  𝄀
 null  ¦  null
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_avg_saved_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT SUM(DISTINCT s), CAST(AVG(DISTINCT s) AS DECIMAL(16,6)) FROM numeric_strings;
 ➤ SUM(distinct s)[8,53,31]  ¦  cast(AVG(distinct s) as decimal(16, 6))[3,16,6]  𝄀
 14.5  ¦  2.416667
@@ -31,6 +34,7 @@ SELECT g, SUM(s), AVG(s) FROM numeric_strings GROUP BY g ORDER BY g;
 1  ¦  3.5  ¦  0.7  𝄀
 2  ¦  12.0  ¦  4.0  𝄀
 3  ¦  null  ¦  null
+SET @@sql_mode = @sum_avg_saved_mode;
 SELECT id,
 SUM(s) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_sum,
 CAST(AVG(s) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS DECIMAL(12,4)) AS running_avg
@@ -45,6 +49,7 @@ INSERT INTO string_domains VALUES ('1', '1', x'01', x'01', '1'), ('2.5', '2.5', 
 SELECT SUM(c), AVG(c), SUM(t), AVG(t), SUM(bl), AVG(bl) FROM string_domains;
 ➤ SUM(c)[8,53,31]  ¦  AVG(c)[8,53,31]  ¦  SUM(t)[8,53,31]  ¦  AVG(t)[8,53,31]  ¦  SUM(bl)[8,53,31]  ¦  AVG(bl)[8,53,31]  𝄀
 3.5  ¦  1.75  ¦  3.5  ¦  1.75  ¦  3.5  ¦  1.75
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_avg_saved_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT SUM(b) = SUM(CAST(b AS DOUBLE)) AS binary_sum_matches,
 AVG(b) = AVG(CAST(b AS DOUBLE)) AS binary_avg_matches,
 SUM(vb) = SUM(CAST(vb AS DOUBLE)) AS varbinary_sum_matches,
@@ -52,6 +57,7 @@ AVG(vb) = AVG(CAST(vb AS DOUBLE)) AS varbinary_avg_matches
 FROM string_domains;
 ➤ binary_sum_matches[-7,1,0]  ¦  binary_avg_matches[-7,1,0]  ¦  varbinary_sum_matches[-7,1,0]  ¦  varbinary_avg_matches[-7,1,0]  𝄀
 1  ¦  1  ¦  1  ¦  1
+SET @@sql_mode = @sum_avg_saved_mode;
 SELECT CAST(SUM(x'1fffffffffffff') AS DECIMAL(38,0)), CAST(AVG(x'1fffffffffffff') AS DECIMAL(38,0)),
 CAST(SUM(x'20000000000000') AS DECIMAL(38,0)), CAST(AVG(x'20000000000000') AS DECIMAL(38,0)),
 CAST(SUM(x'20000000000001') AS DECIMAL(38,0)), CAST(AVG(x'20000000000001') AS DECIMAL(38,0));
@@ -110,9 +116,11 @@ EXECUTE string_aggregate USING @sum_avg_group;
 ➤ SUM(numeric_strings.s)[8,53,31]  ¦  AVG(numeric_strings.s)[8,53,31]  𝄀
 3.5  ¦  0.7
 SET @sum_avg_group = 2;
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_avg_saved_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 EXECUTE string_aggregate USING @sum_avg_group;
 ➤ SUM(numeric_strings.s)[8,53,31]  ¦  AVG(numeric_strings.s)[8,53,31]  𝄀
 12.0  ¦  4.0
+SET @@sql_mode = @sum_avg_saved_mode;
 SET @sum_avg_group = 3;
 EXECUTE string_aggregate USING @sum_avg_group;
 ➤ SUM(numeric_strings.s)[8,53,31]  ¦  AVG(numeric_strings.s)[8,53,31]  𝄀
@@ -128,14 +136,17 @@ EXECUTE string_marker USING @sum_avg_value, @sum_avg_value;
 ➤ SUM(cast(? as varchar))[8,53,31]  ¦  AVG(cast(? as varchar))[8,53,31]  𝄀
 2.5  ¦  2.5
 SET @sum_avg_value = '12x';
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_avg_saved_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 EXECUTE string_marker USING @sum_avg_value, @sum_avg_value;
 ➤ SUM(cast(? as varchar))[8,53,31]  ¦  AVG(cast(? as varchar))[8,53,31]  𝄀
 12.0  ¦  12.0
+SET @@sql_mode = @sum_avg_saved_mode;
 SET @sum_avg_value = NULL;
 EXECUTE string_marker USING @sum_avg_value, @sum_avg_value;
 ➤ SUM(cast(? as varchar))[8,53,31]  ¦  AVG(cast(? as varchar))[8,53,31]  𝄀
 null  ¦  null
 DEALLOCATE PREPARE string_marker;
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_avg_saved_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 CREATE VIEW string_totals AS SELECT g, SUM(s) AS total, AVG(s) AS mean FROM numeric_strings GROUP BY g;
 SELECT * FROM string_totals ORDER BY g;
 ➤ g[4,32,0]  ¦  total[8,53,31]  ¦  mean[8,53,31]  𝄀
@@ -155,8 +166,10 @@ ORDER BY ordinal_position;
 g  ¦  int  𝄀
 total  ¦  double  𝄀
 mean  ¦  double
+SET @@sql_mode = @sum_avg_saved_mode;
 SET @@optimizer_hints = 'execType=2';
 SET @@max_dop = 1;
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_avg_saved_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT g, SUM(s), AVG(s) FROM numeric_strings GROUP BY g ORDER BY g;
 ➤ g[4,32,0]  ¦  SUM(s)[8,53,31]  ¦  AVG(s)[8,53,31]  𝄀
 1  ¦  3.5  ¦  0.7  𝄀
@@ -171,6 +184,7 @@ SELECT g, SUM(s), AVG(s) FROM numeric_strings GROUP BY g ORDER BY g;
 SELECT SUM(DISTINCT s), CAST(AVG(DISTINCT s) AS DECIMAL(16,6)) FROM numeric_strings;
 ➤ SUM(distinct s)[8,53,31]  ¦  cast(AVG(distinct s) as decimal(16, 6))[3,16,6]  𝄀
 14.5  ¦  2.416667
+SET @@sql_mode = @sum_avg_saved_mode;
 SET @@max_dop = @sum_avg_saved_dop;
 SET @@optimizer_hints = @sum_avg_saved_hints;
 SET @@sql_mode = CONCAT_WS(',', @sum_avg_saved_mode, 'MATRIXONE_NATIVE');
@@ -182,7 +196,9 @@ invalid input: "12x" is invalid numeric string
 SELECT AVG(s) FROM numeric_strings WHERE id = 6;
 invalid input: "12x" is invalid numeric string
 SET @@sql_mode = @sum_avg_saved_mode;
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_avg_saved_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT SUM(s), AVG(s) FROM numeric_strings WHERE id = 6;
+SET @@sql_mode = @sum_avg_saved_mode;
 ➤ SUM(s)[8,53,31]  ¦  AVG(s)[8,53,31]  𝄀
 12.0  ¦  12.0
 DROP DATABASE sum_avg_numeric;
