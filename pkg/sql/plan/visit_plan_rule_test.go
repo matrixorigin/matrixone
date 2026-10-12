@@ -3578,6 +3578,20 @@ func TestPreparedNumericCommonType(t *testing.T) {
 		wantOK    bool
 	}{
 		{
+			name: "decimal128 carrier survives same exact domain",
+			operands: []types.Type{
+				types.New(types.T_decimal128, 18, 2), types.New(types.T_decimal64, 5, 0),
+			},
+			wantOID: types.T_decimal128, wantWidth: 18, wantScale: 2, wantOK: true,
+		},
+		{
+			name: "decimal256 carrier survives small declared precision",
+			operands: []types.Type{
+				types.New(types.T_decimal64, 3, 2), types.New(types.T_decimal256, 6, 1),
+			},
+			wantOID: types.T_decimal256, wantWidth: 7, wantScale: 2, wantOK: true,
+		},
+		{
 			name: "uint64 keeps full integral capacity",
 			operands: []types.Type{
 				types.New(types.T_decimal128, 20, 4), types.T_uint64.ToType(),

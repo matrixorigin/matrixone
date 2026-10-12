@@ -5183,6 +5183,10 @@ show_grants_stmt:
     {
         $$ = &tree.ShowGrants{Username: $4.Username, Hostname: $4.Hostname, Roles: $5, ShowGrantType: tree.GrantForUser}
     }
+|   SHOW GRANTS FOR CURRENT_USER braces_opt using_roles_opt
+    {
+        $$ = &tree.ShowGrants{CurrentUser: true, Roles: $6, ShowGrantType: tree.GrantForUser}
+    }
 |   SHOW GRANTS FOR ROLE ident
     {
         s := &tree.ShowGrants{}
