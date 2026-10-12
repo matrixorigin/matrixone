@@ -318,6 +318,31 @@ not restore admission or publish complete evidence. Small live-writer tests
 exercise quota growth during finalization/export and preserve the original
 reduced-quota counterexamples.
 
+## Bounded input batching integration
+
+Sirius #31 merged as `b953bb5a87788e17557929987208b3a0068d933b`.
+This follow-up pins that merged revision and rebuilds the guarded release SDK.
+Native input now collects toward the existing 32 MiB expanded target, flushing
+on EOS, source bounds or producer credit pressure. Both readiness and direct
+claims enforce the policy; immutable size/string/NULL summaries remain charged
+to the 64 MiB input window. Public ABI and exact numeric semantics are preserved.
+
+The user approved the batching-plus-MO-integration plan with EOS/pressure-only
+flushing on 2026-10-12. Premerge development validation uses MO base `64b7a43852`,
+Sirius `955b6881` versus `585536bf`, the same frozen provider and immutable
+datasets, two streams, one excluded warmup and five measured repetitions. Q1 GPU
+medians improve from 0.775129 to 0.185689 seconds at SF1 and from 9.296148 to
+2.217461 seconds at SF10; median input units fall from 600 to 12 and 7,264 to 117.
+All 22 SF1 public comparisons pass exactly. These targeted development results
+retain their identities and do not replace the original D release records.
+
+Merged-source release validation requires the complete 744-execution timing and
+correctness schedule plus the separate 264-execution resource schedule, existing
+numeric/lifecycle/sanitizer gates and a fresh matched full-suite regression limit
+of 5%. Generate captures outside Git and preserve their actual source/binary/SDK
+identities. E and numeric execution changes remain separate; no sidecar repository
+retirement is required.
+
 ## Release validation record
 
 The generated development and release captures are preserved in contributor-fork
