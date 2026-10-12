@@ -99,7 +99,7 @@ collect_artifacts() {
     cp "$TMP_DIR/mo-service.log" "$REPORT_DIR/mo-service.log" || return 1
   fi
   compose logs --no-color >"$TMP_DIR/connect-compose.raw.log" 2>&1 || return 1
-  python3 - "$TMP_DIR/connect-compose.raw.log" "$REPORT_DIR/connect-compose.log" <<'PY'
+  python3 - "$TMP_DIR/connect-compose.raw.log" "$REPORT_DIR/connect-compose.log" <<'PY' || return 1
 import re
 import sys
 

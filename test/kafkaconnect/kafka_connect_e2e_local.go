@@ -622,7 +622,7 @@ func sinkConfig(opts runOptions) map[string]string {
 		"table.name.format":    tableName,
 		"flush.max.retries":    "3",
 		"flush.retry.delay.ms": "500",
-		"max.batch.size":       "1",
+		"batch.size":           "1",
 	}
 }
 
@@ -644,10 +644,23 @@ func portFromDSN(dsn string) string {
 	return "6001"
 }
 
-func waitForDatabase(ctx context.Context, db *sql.DB) error {
-	return poll(ctx, "MatrixOne SQL readiness", time.Second, func(ctx context.Context) (bool, error) {
-		return true, db.PingContext(ctx)
+type databasePinger interface {
+	PingContext(context.Context) error
+}
+
+func waitForDatabase(ctx context.Context, db databasePinger) error {
+	var lastPingErr error
+	err := poll(ctx, "MatrixOne SQL readiness", time.Second, func(ctx context.Context) (bool, error) {
+		if err := db.PingContext(ctx); err != nil {
+			lastPingErr = err
+			return false, nil
+		}
+		return true, nil
 	})
+	if err != nil && lastPingErr != nil {
+		return fmt.Errorf("%w (last ping: %v)", err, lastPingErr)
+	}
+	return err
 }
 
 func prepareTarget(ctx context.Context, db *sql.DB) error {

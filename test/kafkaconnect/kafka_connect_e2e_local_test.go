@@ -197,6 +197,74 @@ func TestKafkaConnectRunnerMarksCleanupFailureInReport(t *testing.T) {
 	}
 }
 
+func TestKafkaConnectRunnerFailsWhenArtifactRedactionFails(t *testing.T) {
+	collectArtifacts := kafkaConnectRunnerFunction(t, "collect_artifacts", "cleanup()")
+	root := t.TempDir()
+	reportDir := filepath.Join(root, "reports")
+	tmpDir := filepath.Join(root, "run")
+	if err := os.Mkdir(reportDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(tmpDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	psCalled := filepath.Join(root, "ps-called")
+	script := strings.Join([]string{
+		"set -u",
+		"TMP_DIR=\"$TEST_TMP_DIR\"",
+		"REPORT_DIR=\"$TEST_REPORT_DIR\"",
+		"compose() { case \"$1\" in logs) return 0 ;; ps) : >\"$TEST_PS_CALLED\"; return 0 ;; esac; }",
+		"python3() { return 17; }",
+		collectArtifacts,
+		"collect_artifacts",
+	}, "\n")
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(),
+		"TEST_TMP_DIR="+tmpDir,
+		"TEST_REPORT_DIR="+reportDir,
+		"TEST_PS_CALLED="+psCalled,
+	)
+	output, runErr := cmd.CombinedOutput()
+	if runErr == nil {
+		t.Fatalf("artifact collection succeeded when log redaction failed:\n%s", output)
+	}
+	if _, err := os.Stat(psCalled); !os.IsNotExist(err) {
+		t.Fatalf("Compose ps ran after log redaction failed; got stat error %v", err)
+	}
+}
+
+func TestWaitForDatabaseRetriesTransientPingFailure(t *testing.T) {
+	pinger := &sequenceDatabasePinger{}
+	if err := waitForDatabase(t.Context(), pinger); err != nil {
+		t.Fatalf("waitForDatabase() returned error after a transient PingContext failure: %v", err)
+	}
+	if pinger.calls != 2 {
+		t.Fatalf("PingContext calls = %d, want first failed ping followed by successful retry", pinger.calls)
+	}
+}
+
+type sequenceDatabasePinger struct {
+	calls int
+}
+
+func (p *sequenceDatabasePinger) PingContext(context.Context) error {
+	p.calls++
+	if p.calls == 1 {
+		return errors.New("transient connection refusal")
+	}
+	return nil
+}
+
+func TestSinkConfigUsesDebeziumJdbcBatchSize(t *testing.T) {
+	config := sinkConfig(runOptions{dsn: "root:111@tcp(127.0.0.1:6001)/"})
+	if got := config["batch.size"]; got != "1" {
+		t.Fatalf("batch.size = %q, want 1", got)
+	}
+	if _, exists := config["max.batch.size"]; exists {
+		t.Fatal("sink config contains unsupported max.batch.size property")
+	}
+}
+
 func kafkaConnectRunnerFunction(t *testing.T, name, next string) string {
 	t.Helper()
 	_, testFile, _, ok := runtime.Caller(0)
