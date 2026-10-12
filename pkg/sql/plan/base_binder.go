@@ -165,6 +165,14 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindFuncExprImplByAstExpr("serial_extract", []tree.Expr{astExpr}, depth)
 
 	case *tree.CastExpr:
+		if typ, ok := exprImpl.Type.(*tree.T); ok &&
+			defines.MysqlType(typ.InternalType.Oid) == defines.MYSQL_TYPE_INT24 {
+			// MySQL accepts MEDIUMINT in DDL but does not accept it as a CAST
+			// target. Keep that syntax boundary separate from internal assignment
+			// casts, which enforce the target column's 24-bit domain.
+			err = moerr.NewNYI(b.GetContext(), "CAST to MEDIUMINT is not supported")
+			return
+		}
 		var typ Type
 		typ, err = getTypeFromAst(b.GetContext(), exprImpl.Type)
 		if err != nil {
@@ -8067,8 +8075,11 @@ func bindFuncExprImplByPlanExpr(
 	case "lead", "lag":
 		// For lead/lag window functions, cast the default value (3rd arg)
 		// to match the value type (1st arg).
-		if len(args) >= 3 && !argsType[2].Eq(argsType[0]) {
-			argsCastType = []types.Type{argsType[0], argsType[1], argsType[0]}
+		if len(args) >= 3 && !argsType[2].Eq(returnType) {
+			if len(argsCastType) == 0 {
+				argsCastType = append([]types.Type(nil), argsType...)
+			}
+			argsCastType[2] = returnType
 		}
 	}
 

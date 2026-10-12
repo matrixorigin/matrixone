@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -41,7 +42,7 @@ const (
 )
 
 func GetDefaultTestPath(module string, name string) string {
-	return filepath.Join("/tmp", module, name)
+	return filepath.Join(os.TempDir(), module, name)
 }
 
 func MakeDefaultTestPath(module string, name string) string {
@@ -668,4 +669,69 @@ func TestBoolZoneMapPersistence(t *testing.T) {
 	require.True(t, types.DecodeBool(first.GetMaxBuf()))
 	offset, _ := BlockIndex(raw).BlockMetaPos(0)
 	require.False(t, types.DecodeBool(ZoneMap(raw[offset:offset+ZoneMapSize]).GetMaxBuf()))
+}
+
+func TestObjectWriterRejectsUnresolvedTypeBeforeMutation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	defer fs.Close(t.Context())
+	for _, entry := range []string{"Write", "WriteWithoutSeqnum", "WriteSubBlock"} {
+		for _, flat := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/flat=%v", entry, flat), func(t *testing.T) {
+				arena := NewArena(1024)
+				defer arena.FreeBuffers()
+				id := NewObjectid()
+				writer, err := NewObjectWriter(BuildObjectNameWithObjectID(&id), fs, 0, []uint16{0, 1}, arena)
+				require.NoError(t, err)
+				bat := batch.NewWithSize(2)
+				defer bat.Clean(mp)
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(7), false, mp))
+				if flat {
+					bat.Vecs[1] = vector.NewVec(types.T_any.ToType())
+					require.NoError(t, vector.AppendNull(bat.Vecs[1], mp))
+				} else {
+					bat.Vecs[1] = vector.NewConstNull(types.T_any.ToType(), 1, mp)
+				}
+				bat.SetRowCount(1)
+				write := func() error {
+					switch entry {
+					case "Write":
+						_, err := writer.Write(bat)
+						return err
+					case "WriteWithoutSeqnum":
+						_, err := writer.WriteWithoutSeqnum(bat)
+						return err
+					default:
+						_, _, err := writer.WriteSubBlock(bat, CkpMetaStart)
+						return err
+					}
+				}
+				err = write()
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+				require.Zero(t, writer.originSize)
+				require.Zero(t, writer.lastId)
+				require.Zero(t, arena.serialPeak)
+				require.Zero(t, arena.usedOffset)
+				for _, blocks := range writer.blocks {
+					require.Empty(t, blocks)
+				}
+				bat.Vecs[1].Free(mp)
+				bat.Vecs[1] = vector.NewConstNull(types.T_text.ToType(), 1, mp)
+				require.NoError(t, write(), "supported same-schema retry")
+				require.EqualValues(t, 1, writer.lastId)
+				origin := writer.originSize
+				bat.Vecs[1].Free(mp)
+				bat.Vecs[1] = vector.NewConstNull(types.T_any.ToType(), 1, mp)
+				require.True(t, moerr.IsMoErrCode(write(), moerr.ErrNotSupported))
+				require.Equal(t, origin, writer.originSize, "later rejection preserves an admitted block")
+				require.EqualValues(t, 1, writer.lastId)
+				_, err = writer.WriteEnd(t.Context())
+				require.NoError(t, err)
+			})
+		}
+	}
+	require.Zero(t, mp.CurrNB())
 }

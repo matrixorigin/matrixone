@@ -972,6 +972,10 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 // preservation. DDL-specific error mapping is applied by the DDL validation
 // layer rather than changing cast_strict's execution contract.
 func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	if isMediumIntPlanType(targetType) {
+		return forceAssignmentCastExprWithName(
+			ctx, expr, targetType, assignmentCastFunctionName(targetType, false, nil))
+	}
 	if types.T(targetType.Id).IsArrayRelate() {
 		// 生成列即使类型元数据相同，也必须校验实际载荷的维度。
 		return forceAssignmentCastExprWithName(ctx, expr, targetType, "cast")
@@ -990,6 +994,10 @@ func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Typ
 // semantics. Stored procedure declarations and assignments use the same
 // conversion contract as values written to SQL columns.
 func MakePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	if isMediumIntPlanType(targetType) {
+		return forceAssignmentCastExprWithName(
+			ctx, expr, targetType, assignmentCastFunctionName(targetType, false, nil))
+	}
 	return makePlan2CastExprWithName(
 		ctx,
 		expr,
