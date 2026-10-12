@@ -504,7 +504,7 @@ func (mo *MOServer) handshake(rs *Conn) error {
 				ts[TSUpgradeTLSStart] = time.Now()
 				ses.Debugf(tempCtx, "upgrade to TLS")
 				// do upgradeTls
-				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
+				tlsConn := tls.Server(rs.connForTLS(), rm.getTlsConfig())
 				ses.Debugf(tempCtx, "get TLS conn ok")
 				tlsCtx, cancelFun := context.WithTimeoutCause(tempCtx, 20*time.Second, moerr.CauseHandshake2)
 				if err = tlsConn.HandshakeContext(tlsCtx); err != nil {
@@ -550,7 +550,7 @@ func (mo *MOServer) handshake(rs *Conn) error {
 				ts[TSUpgradeTLSStart] = time.Now()
 				ses.Debugf(tempCtx, "upgrade to TLS")
 				// do upgradeTls
-				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
+				tlsConn := tls.Server(rs.connForTLS(), rm.getTlsConfig())
 				ses.Debugf(tempCtx, "get TLS conn ok")
 				tlsCtx, cancelFun := context.WithTimeoutCause(tempCtx, 20*time.Second, moerr.CauseHandshake2)
 				if err = tlsConn.HandshakeContext(tlsCtx); err != nil {

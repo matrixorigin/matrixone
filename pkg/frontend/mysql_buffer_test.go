@@ -16,9 +16,16 @@ package frontend
 
 import (
 	"bytes"
+	cryptorand "crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/binary"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"math/rand"
 	"net"
 	"reflect"
@@ -808,6 +815,152 @@ func TestNewIOSessionWithOptions(t *testing.T) {
 		require.NoError(t, second.Close())
 		require.NoError(t, third.Close())
 	})
+}
+
+func TestConnForTLSPreservesBufferedBytes(t *testing.T) {
+	rawConn, conn := newTestConn(t, NewLeakCheckAllocator())
+	defer conn.Close()
+
+	clientHello := []byte("coalesced client hello")
+	rawConn.data = append(makePacket([]byte("ssl request"), 1), clientHello...)
+	payload, err := conn.Read()
+	require.NoError(t, err)
+	require.Equal(t, []byte("ssl request"), payload)
+
+	tlsConn := conn.connForTLS()
+	require.NotSame(t, rawConn, tlsConn)
+	require.Empty(t, conn.fixBuf.AvailableData())
+
+	got := make([]byte, len(clientHello))
+	_, err = io.ReadFull(tlsConn, got)
+	require.NoError(t, err)
+	require.Equal(t, clientHello, got)
+
+	nextPacket := []byte("next encrypted packet")
+	rawConn.data = append(rawConn.data, nextPacket...)
+	got = make([]byte, len(nextPacket))
+	_, err = io.ReadFull(tlsConn, got)
+	require.NoError(t, err)
+	require.Equal(t, nextPacket, got)
+}
+
+func TestConnForTLSWithoutBufferedBytesUsesRawConnection(t *testing.T) {
+	rawConn, conn := newTestConn(t, NewLeakCheckAllocator())
+	defer conn.Close()
+
+	require.Same(t, rawConn, conn.connForTLS())
+}
+
+func TestConnForTLSCoalescedClientHello(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	allocator := NewLeakCheckAllocator()
+	conn, err := NewIOSessionWithOptions(
+		serverConn,
+		pu,
+		"",
+		WithIOSessionAllocator(allocator),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = conn.Close()
+		require.True(t, allocator.CheckBalance())
+	})
+
+	certificate := newTestTLSCertificate(t)
+	clientTLS := tls.Client(&prefixWriteConn{
+		Conn:   clientConn,
+		prefix: makePacket(bytes.Repeat([]byte{0x01}, 32), 1),
+	}, &tls.Config{
+		InsecureSkipVerify: true, // test certificate is intentionally self-signed
+		MinVersion:         tls.VersionTLS12,
+	})
+
+	serverConn.SetDeadline(time.Now().Add(5 * time.Second))
+	clientConn.SetDeadline(time.Now().Add(5 * time.Second))
+	clientHandshake := make(chan error, 1)
+	go func() {
+		clientHandshake <- clientTLS.Handshake()
+	}()
+
+	payload, err := conn.Read()
+	require.NoError(t, err)
+	require.Equal(t, bytes.Repeat([]byte{0x01}, 32), payload)
+
+	serverTLS := tls.Server(conn.connForTLS(), &tls.Config{
+		Certificates: []tls.Certificate{certificate},
+		MinVersion:   tls.VersionTLS12,
+	})
+	require.NoError(t, serverTLS.Handshake())
+	require.NoError(t, <-clientHandshake)
+
+	want := []byte("post-handshake packet")
+	clientWrite := make(chan error, 1)
+	go func() {
+		_, writeErr := clientTLS.Write(want)
+		clientWrite <- writeErr
+	}()
+	got := make([]byte, len(want))
+	_, err = io.ReadFull(serverTLS, got)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.NoError(t, <-clientWrite)
+}
+
+type prefixWriteConn struct {
+	net.Conn
+	prefix      []byte
+	prefixWrote bool
+}
+
+func (c *prefixWriteConn) Write(p []byte) (int, error) {
+	if c.prefixWrote || len(c.prefix) == 0 {
+		return c.Conn.Write(p)
+	}
+	c.prefixWrote = true
+	combined := make([]byte, 0, len(c.prefix)+len(p))
+	combined = append(combined, c.prefix...)
+	combined = append(combined, p...)
+	n, err := c.Conn.Write(combined)
+	if err != nil {
+		return 0, err
+	}
+	if n != len(combined) {
+		return 0, io.ErrShortWrite
+	}
+	return len(p), nil
+}
+
+func newTestTLSCertificate(t *testing.T) tls.Certificate {
+	t.Helper()
+	key, err := rsa.GenerateKey(cryptorand.Reader, 2048)
+	require.NoError(t, err)
+	serial, err := cryptorand.Int(cryptorand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	require.NoError(t, err)
+	template := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "localhost"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost"},
+	}
+	der, err := x509.CreateCertificate(cryptorand.Reader, template, template, &key.PublicKey, key)
+	require.NoError(t, err)
+	certificate, err := tls.X509KeyPair(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}),
+	)
+	require.NoError(t, err)
+	return certificate
 }
 
 func testDefer1(t *testing.T) {

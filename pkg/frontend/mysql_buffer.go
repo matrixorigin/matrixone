@@ -353,6 +353,44 @@ func (c *Conn) RawConn() net.Conn {
 	return c.conn
 }
 
+// connForTLS returns a connection that preserves bytes read ahead of the
+// MySQL packet being processed. During the SSLRequest transition, Conn.Read
+// can read the SSLRequest and the first TLS record in one read. Those TLS
+// bytes live in fixBuf rather than the underlying net.Conn, so tls.Server must
+// consume them before reading from the underlying connection.
+func (c *Conn) connForTLS() net.Conn {
+	pending := c.fixBuf.AvailableData()
+	if len(pending) == 0 {
+		return c.conn
+	}
+
+	prefix := make([]byte, len(pending))
+	copy(prefix, pending)
+	c.fixBuf.ResetIndices()
+	return &bufferedNetConn{
+		Conn:   c.conn,
+		prefix: prefix,
+	}
+}
+
+// bufferedNetConn exposes prefix bytes before delegating reads to Conn. It is
+// used only while upgrading a MySQL connection to TLS; embedding net.Conn
+// keeps deadlines, writes, addresses and close behavior unchanged.
+type bufferedNetConn struct {
+	net.Conn
+	prefix []byte
+}
+
+func (c *bufferedNetConn) Read(p []byte) (int, error) {
+	if len(c.prefix) == 0 {
+		return c.Conn.Read(p)
+	}
+
+	n := copy(p, c.prefix)
+	c.prefix = c.prefix[n:]
+	return n, nil
+}
+
 // GetSequenceID returns the sequence expected for the next MySQL packet.
 func (c *Conn) GetSequenceID() uint8 {
 	return c.sequenceId
