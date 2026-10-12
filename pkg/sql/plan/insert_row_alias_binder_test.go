@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -865,5 +867,42 @@ func TestLegacyOndupWholeRHSAdmission(t *testing.T) {
 		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 			"insert into constraint_test.fake_pk_no_unique_gen(a) values(1) on duplicate key update a="+rhs)
 		require.NoError(t, err, rhs)
+	}
+}
+
+type odkuAdmissionCountingContext struct {
+	CompilerContext
+	udfCalls int
+}
+
+func (c *odkuAdmissionCountingContext) ResolveUdf(name string, args []*planpb.Expr) (*function.Udf, error) {
+	c.udfCalls++
+	return nil, moerr.NewInvalidInputf(c.GetContext(), "unknown function '%s'", name)
+}
+
+func TestLegacyOndupAdmissionRecoveryDoesNotRebindVisitedChildren(t *testing.T) {
+	for _, wrappers := range []int{1, 2, 4, 8} {
+		for _, keyed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("wrappers%d/keyed%t", wrappers, keyed), func(t *testing.T) {
+				ctx := &odkuAdmissionCountingContext{CompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+				insert := "insert into constraint_test.fake_pk_no_unique_gen(a) values(1) on duplicate key update a="
+				if keyed {
+					insert = "insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc="
+				}
+				rhs := strings.Repeat("missing_fn(", wrappers) + "(select 1)" + strings.Repeat(")", wrappers)
+				stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, insert+rhs, 1)
+				require.NoError(t, err)
+				defer stmts[0].Free()
+				p, err := BuildPlan(ctx, stmts[0], false)
+				if keyed {
+					require.ErrorContains(t, err, "unknown function 'missing_fn'")
+					require.Equal(t, wrappers+1, ctx.udfCalls, "one admission visit per wrapper plus the ordinary binding failure")
+				} else {
+					require.NoError(t, err, "unreachable uncorrelated UPDATE keeps its legacy admission")
+					require.NotNil(t, p)
+					require.Equal(t, wrappers, ctx.udfCalls, "the discarded admission probe visits each wrapper once")
+				}
+			})
+		}
 	}
 }

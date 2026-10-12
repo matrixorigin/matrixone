@@ -64,6 +64,16 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	}
 	defer leaveBinding()
 	if b.builder != nil && b.builder.odkuAdmission != nil {
+		admission := b.builder.odkuAdmission
+		if admission.visited == nil {
+			admission.visited = make(map[odkuAdmissionExprKey]struct{})
+		}
+		admission.visited[odkuAdmissionExprKey{astExpr, b.ctx, depth}] = struct{}{}
+		bindUnvisitedOperand := func(operand tree.Expr) {
+			if _, visited := admission.visited[odkuAdmissionExprKey{operand, b.ctx, depth}]; !visited {
+				_, _ = b.impl.BindExpr(operand, depth, false)
+			}
+		}
 		// This builder only resolves ODKU admission. Keep visiting siblings after
 		// an invalid expression; its placeholder plan is always discarded.
 		defer func() {
@@ -74,7 +84,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				switch failed := astExpr.(type) {
 				case *tree.Subquery:
 				case *tree.FullTextMatchExpr:
-					_, _ = b.impl.BindExpr(failed.Pattern, depth, false)
+					bindUnvisitedOperand(failed.Pattern)
 					for _, key := range failed.KeyParts {
 						if key.ColName != nil {
 							_, _ = b.impl.BindColRef(key.ColName, depth, false)
@@ -87,7 +97,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 							root = false
 							return true
 						}
-						_, _ = b.impl.BindExpr(operand, depth, false)
+						bindUnvisitedOperand(operand)
 						return false
 					})
 				}

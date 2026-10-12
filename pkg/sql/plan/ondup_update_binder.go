@@ -430,6 +430,16 @@ func (b *OndupUpdateBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr,
 // whether the complete subquery expression can be built.
 type odkuAdmissionState struct {
 	hasOuterReference bool
+	// Recovery only needs to visit operands that ordinary binding did not
+	// reach. Keep visits scoped to their canonical query block and depth;
+	// the same AST in another scope must still resolve its own provenance.
+	visited map[odkuAdmissionExprKey]struct{}
+}
+
+type odkuAdmissionExprKey struct {
+	expr  tree.Expr
+	ctx   *BindContext
+	depth int32
 }
 
 // validateSubqueryAdmission classifies the complete legacy assignment before
