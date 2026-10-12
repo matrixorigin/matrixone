@@ -9966,6 +9966,106 @@ var supportedMathBuiltIns = []FuncNew{
 			},
 		},
 	},
+
+	// function `tanh`
+	{
+		functionId: TANH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInTanh
+				},
+			},
+		},
+	},
+
+	// function `cosh`
+	{
+		functionId: COSH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInCosh
+				},
+			},
+		},
+	},
+
+	// function `asinh`
+	{
+		functionId: ASINH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInASinh
+				},
+			},
+		},
+	},
+
+	// function `acosh`
+	{
+		functionId: ACOSH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInACosh
+				},
+			},
+		},
+	},
+
+	// function `atanh`
+	{
+		functionId: ATANH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInATanh
+				},
+			},
+		},
+	},
 }
 
 var supportedDateAndTimeBuiltIns = []FuncNew{

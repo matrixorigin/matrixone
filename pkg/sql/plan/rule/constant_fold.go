@@ -235,7 +235,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	}
 	// Admission must still see JSON ELT after optimization; selected-subtree
 	// constant evaluation belongs to its lazy expression executor.
-	if requiresJSON, err := plan.RequiresMORPCVersion110JSONStringConsumerOverload(expr); err != nil || requiresJSON {
+	if requiresJSON, err := plan.RequiresMORPCVersion111JSONStringConsumerOverload(expr); err != nil || requiresJSON {
 		return expr
 	}
 	if f.CannotFold() { // function cannot be fold
