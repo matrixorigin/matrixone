@@ -120,6 +120,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     tableName *tree.TableName
     tableNames tree.TableNames
     columnTableDef *tree.ColumnTableDef
+    columnTableDefs []*tree.ColumnTableDef
     tableOption tree.TableOption
     tableOptions []tree.TableOption
     tableExprs tree.TableExprs
@@ -785,6 +786,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <tableName> table_name table_name_opt_wild
 %type <tableNames> table_name_list alter_publication_table_opt
 %type <columnTableDef> column_def
+%type <columnTableDefs> alter_column_def_list
 %type <columnType> mo_cast_type mysql_cast_type
 %type <columnType> column_type char_type spatial_type time_type numeric_type decimal_type int_type as_datatype_opt
 %type <str> integer_opt spatial_type_name
@@ -818,7 +820,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <referenceOptionType> ref_opt on_delete on_update
 %type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
-%type <alterTableOptions> alter_option_list
+%type <alterTableOptions> alter_option_list alter_option_group
 %type <alterTableOption> alter_option alter_table_drop alter_table_alter alter_table_rename alter_table_reindex
 %type <renameTableOptions> rename_table_list
 %type <renameTableOption> rename_option
@@ -4117,11 +4119,36 @@ alter_table_reindex:
     }
 
 alter_option_list:
+    alter_option_group
+    {
+        $$ = $1
+    }
+|   alter_option_list ',' alter_option_group
+    {
+        $$ = append($1, $3...)
+    }
+
+alter_option_group:
     alter_option
     {
-        $$ = []tree.AlterTableOption{$1}
+        $$ = tree.AlterTableOptions{$1}
     }
-|   alter_option_list ',' alter_option
+|   ADD column_keyword_opt '(' alter_column_def_list ')'
+    {
+        options := make(tree.AlterTableOptions, 0, len($4))
+        for _, column := range $4 {
+            position := tree.NewColumnPosition(tree.ColumnPositionNone, nil)
+            options = append(options, tree.AlterTableOption(tree.NewAlterAddCol(column, position)))
+        }
+        $$ = options
+    }
+
+alter_column_def_list:
+    column_def
+    {
+        $$ = []*tree.ColumnTableDef{$1}
+    }
+|   alter_column_def_list ',' column_def
     {
         $$ = append($1, $3)
     }

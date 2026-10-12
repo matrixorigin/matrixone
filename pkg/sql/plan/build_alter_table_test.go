@@ -406,6 +406,25 @@ func TestAlterTableAddColumns(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestAlterTableAddParenthesizedColumnsBuildsCopy(t *testing.T) {
+	logicPlan, err := buildSingleStmt(
+		NewMockOptimizer(false, newPlanTestProcess(t)),
+		t,
+		`ALTER TABLE constraint_test.t1 ADD COLUMN (added_a BIGINT NULL, added_b VARCHAR(16) DEFAULT 'x')`,
+	)
+	require.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+	require.NotNil(t, alter.CopyTableDef)
+	addedA := FindColumn(alter.CopyTableDef.Cols, "added_a")
+	addedB := FindColumn(alter.CopyTableDef.Cols, "added_b")
+	require.NotNil(t, addedA)
+	require.NotNil(t, addedB)
+	require.Equal(t, "added_a", addedA.Name)
+	require.Equal(t, "added_b", addedB.Name)
+}
+
 func TestAlterTableCopySupportsForeignKeyOnAddedColumn(t *testing.T) {
 	for _, sql := range []string{
 		`ALTER TABLE t1 ADD COLUMN parent_id BIGINT, ADD CONSTRAINT fk_t1_parent FOREIGN KEY (parent_id) REFERENCES t1(a)`,

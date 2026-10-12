@@ -61,6 +61,82 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestAlterAddParenthesizedColumns(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		wantNames []string
+	}{
+		{
+			name:      "reported single column",
+			sql:       "alter table probe_add add column (added_tag longtext null)",
+			wantNames: []string{"added_tag"},
+		},
+		{
+			name:      "multiple columns and neighboring options",
+			sql:       "alter table t add (x int, y decimal(10, 2) default 1.25), add z int after x, add column (w int)",
+			wantNames: []string{"x", "y", "z", "w"},
+		},
+		{
+			name:      "existing unparenthesized options",
+			sql:       "alter table t add column a int, add column b int first",
+			wantNames: []string{"a", "b"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			alter, ok := stmt.(*tree.AlterTable)
+			require.True(t, ok)
+			require.Len(t, alter.Options, len(test.wantNames))
+
+			names := make([]string, 0, len(alter.Options))
+			for i, option := range alter.Options {
+				add, ok := option.(*tree.AlterAddCol)
+				require.True(t, ok, "option %d should add a column", i)
+				names = append(names, add.Column.Name.ColName())
+				require.NotNil(t, add.Position)
+			}
+			require.Equal(t, test.wantNames, names)
+
+			if test.name == "multiple columns and neighboring options" {
+				first, ok := alter.Options[0].(*tree.AlterAddCol)
+				require.True(t, ok)
+				require.Equal(t, tree.ColumnPositionNone, first.Position.Typ)
+				positioned, ok := alter.Options[2].(*tree.AlterAddCol)
+				require.True(t, ok)
+				require.Equal(t, tree.ColumnPositionAfter, positioned.Position.Typ)
+				require.Equal(t, "x", positioned.Position.RelativeColumn.ColName())
+			}
+
+			formatted := tree.String(stmt, dialect.MYSQL)
+			roundTripped, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			defer roundTripped.Free()
+			require.Equal(t, formatted, tree.String(roundTripped, dialect.MYSQL))
+		})
+	}
+
+	for _, sql := range []string{
+		"alter table t add column ()",
+		"alter table t add column (x int,)",
+		"alter table t add column (x int",
+		"alter table t add (x int first)",
+		"alter table t add (x int) after id",
+	} {
+		_, err := ParseOne(context.Background(), sql, 1)
+		require.Error(t, err, "input should be rejected: %s", sql)
+
+		stmt, err := ParseOne(context.Background(), "alter table t add column valid_after_error int", 1)
+		require.NoError(t, err, "parser should accept a valid statement after rejecting: %s", sql)
+		stmt.Free()
+	}
+}
+
 func TestDiagnosticCountAndLimitSyntax(t *testing.T) {
 	tests := []struct {
 		name      string

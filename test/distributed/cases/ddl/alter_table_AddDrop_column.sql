@@ -82,6 +82,30 @@ insert into add02 values(1,'2000-01-01','2000-01-01');
 alter table add02 add column f3 int not null;
 show create table add02;
 
+-- parenthesized ADD COLUMN regression (Issue #29851)
+drop table if exists add_parenthesized;
+create table add_parenthesized (id int primary key, original_tag varchar(10));
+insert into add_parenthesized values (1, 'one'), (2, 'two');
+
+-- An empty list is rejected without stopping the session or changing the table.
+alter table add_parenthesized add column ();
+show create table add_parenthesized;
+
+-- Exact Debezium JDBC shape from Issue #29851.
+alter table add_parenthesized add column (added_tag longtext null);
+
+-- A duplicate-column execution error also leaves the schema usable.
+alter table add_parenthesized add (id int);
+show create table add_parenthesized;
+
+-- Optional COLUMN, multiple definitions, nullable/default values, and old-row backfill.
+alter table add_parenthesized add (counter int default 7, note varchar(20) null);
+show create table add_parenthesized;
+select id, original_tag, added_tag, counter, note from add_parenthesized order by id;
+update add_parenthesized set added_tag = 'written', counter = counter + 1, note = 'checked' where id = 1;
+select id, original_tag, added_tag, counter, note from add_parenthesized order by id;
+drop table add_parenthesized;
+
 -- duplicate column name
 alter table add02 add column f3 date not null;
 alter table add02 add column f4 datetime not null default '2002-02-02',add column f41 date not null default '2002-02-02';
