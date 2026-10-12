@@ -10541,6 +10541,79 @@ func TestExecRequestProtocolCommandRowCount(t *testing.T) {
 	require.Equal(t, int64(7), ses.GetProc().GetAffectedRows())
 }
 
+func TestExecRequestSetOptionResponseHonorsDeprecateEOF(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.txnHandler = &TxnHandler{}
+	ec := newTestExecCtx(context.Background(), ctrl)
+	proto := ses.GetResponser().MysqlRrWr().(*MysqlProtocolImpl)
+	rawConn := proto.tcpConn.RawConn().(*testConn)
+
+	tests := []struct {
+		name       string
+		capability uint32
+		option     uint16
+		header     byte
+		category   int
+	}{
+		{
+			name:       "legacy EOF terminator option on",
+			capability: DefaultCapability &^ CLIENT_DEPRECATE_EOF,
+			option:     0,
+			header:     defines.EOFHeader,
+			category:   EoFResponse,
+		},
+		{
+			name:       "legacy EOF terminator option off",
+			capability: DefaultCapability &^ CLIENT_DEPRECATE_EOF,
+			option:     1,
+			header:     defines.EOFHeader,
+			category:   EoFResponse,
+		},
+		{
+			name:       "deprecate EOF OK terminator option on",
+			capability: DefaultCapability,
+			option:     0,
+			header:     defines.OKHeader,
+			category:   OkResponse,
+		},
+		{
+			name:       "deprecate EOF OK terminator option off",
+			capability: DefaultCapability,
+			option:     1,
+			header:     defines.OKHeader,
+			category:   OkResponse,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proto.SetCapability(tt.capability)
+			proto.SetSequenceID(0)
+			rawConn.data = nil
+
+			resp, err := ExecRequest(ses, ec, &Request{
+				cmd:  COM_SET_OPTION,
+				data: []byte{byte(tt.option), byte(tt.option >> 8)},
+			})
+			require.NoError(t, err)
+			require.Equal(t, tt.category, resp.GetCategory())
+			if tt.option == 1 {
+				require.Zero(t, proto.GetCapability()&CLIENT_MULTI_STATEMENTS)
+			}
+			require.NoError(t, proto.SendResponse(context.Background(), resp))
+
+			packets := splitProtocolPackets(t, rawConn.data)
+			require.Len(t, packets, 1)
+			require.NotEmpty(t, packets[0])
+			require.Equal(t, tt.header, packets[0][0])
+		})
+	}
+}
+
 func TestExecRequestStmtSendLongDataRowCount(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
