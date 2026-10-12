@@ -67,6 +67,18 @@ func TestPrepare(t *testing.T) {
 	require.Error(t, err)
 }
 
+// A pipeline from an older coordinator that carries a removed search table
+// function fails to prepare.
+func TestPrepareRemovedSearchTableFunction(t *testing.T) {
+	for _, name := range []string{"hnsw_search", "cagra_search", "ivfpq_search", "fulltext2_search", "fulltext_index_scan"} {
+		arg := TableFunction{FuncName: name}
+		err := arg.Prepare(testutil.NewProc(t))
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), name)
+		require.ErrorContains(t, err, "table function "+name+" is not supported")
+		arg.Free(testutil.NewProc(t), false, nil)
+	}
+}
+
 func TestEvalLimitExpression(t *testing.T) {
 	proc := testutil.NewProc(t)
 	params := testutil.NewVector(1, types.T_text.ToType(), proc.Mp(), false, []string{"17"})

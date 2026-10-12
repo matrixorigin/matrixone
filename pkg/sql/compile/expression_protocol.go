@@ -99,10 +99,10 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 
 func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	if features.JSONMinMaxTypedComparison {
-		return defines.MORPCVersion112
+		return defines.MORPCVersion113
 	}
 	if features.JSONStringConsumerOverload {
-		return defines.MORPCVersion111
+		return defines.MORPCVersion112
 	}
 	if features.JSONScalarLiteralContracts {
 		return defines.MORPCVersion104

@@ -5104,7 +5104,7 @@ func TestJSONMinMaxGroupAndMergeGroupPhysicalSpillReload(t *testing.T) {
 
 func TestJSONMinMaxFinalGroupPhysicalSpillReload(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	var inputs []*batch.Batch
+	inputs := make([]*batch.Batch, 0, 2)
 	for _, value := range []int64{1, 256} {
 		input := batch.NewWithSize(2)
 		input.Vecs[0] = vector.NewVec(types.T_int32.ToType())

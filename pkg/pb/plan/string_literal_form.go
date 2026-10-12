@@ -1665,10 +1665,10 @@ func expressionOwnerContainer(kind reflect.Kind) bool {
 	}
 }
 
-// RequiresMORPCVersion111JSONStringConsumerOverload detects the distinct JSON-aware
+// RequiresMORPCVersion112JSONStringConsumerOverload detects the distinct JSON-aware
 // ELT identity. Current-main v101 retains the existing JSON-aware
 // CONCAT and CONCAT_WS overload 0 contracts.
-func RequiresMORPCVersion111JSONStringConsumerOverload(owner any) (bool, error) {
+func RequiresMORPCVersion112JSONStringConsumerOverload(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.JSONStringConsumerOverload, err
 }
