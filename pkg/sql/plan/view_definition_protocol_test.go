@@ -91,11 +91,19 @@ func TestViewDefinitionFunctionsPersistAndEnforceProtocol(t *testing.T) {
 	require.NotNil(t, data.RequiredProtocolVersion)
 	require.Equal(t, int64(defines.MORPCVersion112), *data.RequiredProtocolVersion)
 
-	plain, err := buildView("create view plain as select 1", 0)
-	require.NoError(t, err)
-	var plainData ViewData
-	require.NoError(t, json.Unmarshal([]byte(plain.GetViewSql().GetView()), &plainData))
-	require.Nil(t, plainData.RequiredProtocolVersion)
+	for _, sql := range []string{
+		"create view plain as select 1",
+		"create view bytes_v as select format_bytes(1) as formatted",
+		"create view time_v as select format_pico_time(1) as formatted",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			plain, err := buildView(sql, 0)
+			require.NoError(t, err)
+			var plainData ViewData
+			require.NoError(t, json.Unmarshal([]byte(plain.GetViewSql().GetView()), &plainData))
+			require.Nil(t, plainData.RequiredProtocolVersion)
+		})
+	}
 
 	bindView := func(protocol, readFloor int64) error {
 		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, protocol)
