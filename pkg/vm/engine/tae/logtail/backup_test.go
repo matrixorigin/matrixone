@@ -37,7 +37,9 @@ import (
 
 type failingReadFileService struct {
 	fileservice.FileService
-	failPath string
+	failPath  string
+	failAfter int
+	reads     int
 }
 
 type persistThenErrorBackupFileService struct {
@@ -102,6 +104,12 @@ func TestBackupDataSinkerCleanupAfterWriteError(t *testing.T) {
 }
 
 func (fs *failingReadFileService) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	if fs.failAfter > 0 {
+		fs.reads++
+		if fs.reads > fs.failAfter {
+			return errors.New("late checkpoint data read failure")
+		}
+	}
 	if vector.FilePath == fs.failPath {
 		return errors.New("checkpoint data read failure")
 	}
@@ -433,6 +441,18 @@ func TestRewriteCheckpointCanonicalizesBackupTombstone(t *testing.T) {
 		backupTS,
 	)
 	require.ErrorContains(t, err, "checkpoint data read failure")
+	lateSourceFS := &failingReadFileService{FileService: srcFS, failAfter: 6}
+	_, _, _, lateErr := ReWriteCheckpointAndBlockFromKey(
+		ctx,
+		"backup-test",
+		lateSourceFS,
+		testutil.NewSharedFS(),
+		checkpointLocation,
+		lastReader,
+		CheckpointCurrentVersion,
+		backupTS,
+	)
+	require.ErrorContains(t, lateErr, "late checkpoint data read failure")
 	failingDstBase, err := fileservice.NewMemoryFS(
 		"shared", fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
