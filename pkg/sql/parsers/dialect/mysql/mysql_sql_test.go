@@ -60,6 +60,93 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestConfigIsContextualKeyword(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "unquoted JSON column",
+			sql:  "CREATE TABLE config_probe(id INT,config JSON);",
+		},
+		{
+			name: "unquoted integer column",
+			sql:  "CREATE TABLE t(config INT)",
+		},
+		{
+			name: "SHOW CONFIG remains a statement",
+			sql:  "SHOW CONFIG",
+		},
+		{
+			name: "config in SHOW filter remains an identifier",
+			sql:  "SHOW CONFIG WHERE config = 1",
+		},
+		{
+			name: "ALTER ACCOUNT CONFIG remains a statement",
+			sql:  "ALTER ACCOUNT CONFIG test_account SET MYSQL_COMPATIBILITY_MODE='1'",
+		},
+		{
+			name: "ALTER ACCOUNT CONFIG without account remains a statement",
+			sql:  "ALTER ACCOUNT CONFIG SET MYSQL_COMPATIBILITY_MODE a = 1",
+		},
+		{
+			name: "config remains an account name",
+			sql:  "ALTER ACCOUNT config SUSPEND",
+		},
+		{
+			name: "config remains a new account name",
+			sql:  "CREATE ACCOUNT config admin_name = admin IDENTIFIED BY 'Passw0rd'",
+		},
+		{
+			name: "config remains a select alias",
+			sql:  "SELECT account config FROM t",
+		},
+		{
+			name: "config remains a table alias after account",
+			sql:  "UPDATE account config SET MYSQL_COMPATIBILITY_MODE = '1'",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			stmt.Free()
+		})
+	}
+}
+
+func TestConfigJSONColumnType(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "CREATE TABLE config_probe(id INT,config JSON);", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	createTable, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	require.Len(t, createTable.Defs, 2)
+	configColumn, ok := createTable.Defs[1].(*tree.ColumnTableDef)
+	require.True(t, ok)
+	require.Equal(t, "config", configColumn.Name.ColName())
+	require.Equal(t, tree.JsonFamily, configColumn.Type.(*tree.T).InternalType.Family)
+}
+
+func TestConfigContextIsResetWhenParserIsReused(t *testing.T) {
+	parser := &MySQLParser{}
+	ctx := context.Background()
+
+	stmts, err := parser.Parse(ctx, "ALTER ACCOUNT CONFIG test_account SET MYSQL_COMPATIBILITY_MODE='1'", 1)
+	require.NoError(t, err)
+	for _, stmt := range stmts {
+		stmt.Free()
+	}
+
+	stmts, err = parser.Parse(ctx, "CREATE TABLE config_probe(id INT,config JSON);", 1)
+	require.NoError(t, err)
+	for _, stmt := range stmts {
+		stmt.Free()
+	}
+}
+
 func TestDropFunctionIfExists(t *testing.T) {
 	tests := []struct {
 		sql      string
