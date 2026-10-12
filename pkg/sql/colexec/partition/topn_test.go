@@ -771,12 +771,10 @@ func TestPartitionTopNNonLiteralAnyNullOrder(t *testing.T) {
 	t.Cleanup(func() { arg.Free(proc, false, nil) })
 
 	for generation := 0; generation < 2; generation++ {
-		batches := []*batch.Batch{
-			makeAnyNullTopNBatch(t, proc, []int32{1, 2}, []int64{10, 20}, false),
-			makeAnyNullTopNBatch(t, proc, []int32{1, 2}, []int64{11, 21}, true),
-		}
-		child := colexec.NewMockOperator().WithBatchs(batches)
+		child := colexec.NewMockOperator()
 		t.Cleanup(func() { child.Free(proc, false, nil) })
+		child.WithBatchs([]*batch.Batch{makeAnyNullTopNBatch(t, proc, []int32{1, 2}, []int64{10, 20}, false)})
+		child.WithBatchs([]*batch.Batch{makeAnyNullTopNBatch(t, proc, []int32{1, 2}, []int64{11, 21}, true)})
 		arg.Children = nil
 		arg.AppendChild(child)
 
@@ -805,10 +803,15 @@ func TestPartitionTopNNonLiteralAnyNullOrder(t *testing.T) {
 	}
 }
 
-func makeAnyNullTopNBatch(t *testing.T, proc *process.Process, groups []int32, payloads []int64, constant bool) *batch.Batch {
+func makeAnyNullTopNBatch(t *testing.T, proc *process.Process, groups []int32, payloads []int64, constant bool) (result *batch.Batch) {
 	t.Helper()
 	require.Len(t, groups, len(payloads))
 	bat := batch.NewWithSize(3)
+	defer func() {
+		if result == nil {
+			bat.Clean(proc.Mp())
+		}
+	}()
 	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], groups, nil, proc.Mp()))
 	if constant {
