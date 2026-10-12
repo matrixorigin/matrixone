@@ -96,7 +96,7 @@ func (owner *preparedFieldDomainBinder) bindCase(expr *Expr, key int32, projecte
 	}
 	current := makeTypeByPlan2Expr(subject)
 	dynamicCondition := preparedFieldNullCaseHasDynamicCondition(subject)
-	if !dynamicCondition && (!authoredCase || !current.IsNumeric() && !(found && target.IsNumeric())) {
+	if !dynamicCondition && !projectedValue && (!authoredCase || !current.IsNumeric() && !(found && target.IsNumeric())) {
 		return nil // fixed predicates do not admit a NULL-first string default
 	}
 	// String-origin changes are assignable to an already resolved type.
@@ -402,7 +402,15 @@ func preparedFieldCaseValueWitness(source, control *Expr) *Expr {
 	if !marker || !nullValue || other {
 		return nil
 	}
-	returned := &Expr{Typ: source.Typ, Expr: &planpb.Expr_F{F: &planpb.Function{
+	returnType := source.Typ
+	if preparedFieldProjectedMarkerValue(source) {
+		// The returned projection declares default text independently of
+		// its current NULL transport and of the containing CASE predicate.
+		text := types.T_text.ToType()
+		text.Width = -1
+		returnType = makePlan2Type(&text)
+	}
+	returned := &Expr{Typ: returnType, Expr: &planpb.Expr_F{F: &planpb.Function{
 		Func: &planpb.ObjectRef{ObjName: "coalesce"},
 		Args: append(values.args, makePlan2NullConstExprWithType()),
 	}}}

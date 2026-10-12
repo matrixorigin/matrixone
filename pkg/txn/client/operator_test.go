@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"github.com/matrixorigin/matrixone/pkg/util/protoc"
@@ -870,7 +871,7 @@ func TestMissingSenderWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
-	newTxnOperator("", nil, nil, txn.TxnMeta{})
+	newTxnOperator("", runtime.DefaultRuntime().Logger(), clock.NewHLCClock(func() int64 { return 1 }, 0), nil, txn.TxnMeta{})
 }
 
 func TestMissingTxnIDWillPanic(t *testing.T) {
@@ -881,7 +882,7 @@ func TestMissingTxnIDWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
-	newTxnOperator("", nil, newTestTxnSender(), txn.TxnMeta{})
+	newTxnOperator("", runtime.DefaultRuntime().Logger(), clock.NewHLCClock(func() int64 { return 1 }, 0), newTestTxnSender(), txn.TxnMeta{})
 }
 
 func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
@@ -894,7 +895,8 @@ func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	newTxnOperator(
 		"",
-		nil,
+		runtime.DefaultRuntime().Logger(),
+		clock.NewHLCClock(func() int64 { return 1 }, 0),
 		newTestTxnSender(),
 		txn.TxnMeta{ID: []byte{1}, SnapshotTS: timestamp.Timestamp{PhysicalTime: 1}},
 		WithTxnReadyOnly(),

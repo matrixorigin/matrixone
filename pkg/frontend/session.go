@@ -287,6 +287,8 @@ type Session struct {
 	// rewriteEnabled caches the enable_remap_hint system variable state
 	// to avoid expensive GetSessionSysVar calls on every SQL query
 	rewriteEnabled atomic.Bool
+	// Result-schema evidence is opt-in and costs one atomic read when disabled.
+	campaignEvidenceEnabled atomic.Bool
 
 	mu sync.Mutex
 
@@ -525,6 +527,12 @@ func (ses *Session) initSystemVariablesFromGlobal(ctx context.Context, sv *Syste
 	txnHandler := ses.txnHandler
 	ses.mu.Unlock()
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
+	ses.campaignEvidenceEnabled.Store(false)
+	if v := sessionVars.Get("mo_sirius_campaign_evidence"); v != nil {
+		if on, convErr := valueIsBoolTrue(v); convErr == nil {
+			ses.campaignEvidenceEnabled.Store(on)
+		}
+	}
 
 	// Initialize rewriteEnabled cache
 	if v := sessionVars.Get("enable_remap_hint"); v != nil {

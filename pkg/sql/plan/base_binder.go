@@ -165,6 +165,14 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindFuncExprImplByAstExpr("serial_extract", []tree.Expr{astExpr}, depth)
 
 	case *tree.CastExpr:
+		if typ, ok := exprImpl.Type.(*tree.T); ok &&
+			defines.MysqlType(typ.InternalType.Oid) == defines.MYSQL_TYPE_INT24 {
+			// MySQL accepts MEDIUMINT in DDL but does not accept it as a CAST
+			// target. Keep that syntax boundary separate from internal assignment
+			// casts, which enforce the target column's 24-bit domain.
+			err = moerr.NewNYI(b.GetContext(), "CAST to MEDIUMINT is not supported")
+			return
+		}
 		var typ Type
 		typ, err = getTypeFromAst(b.GetContext(), exprImpl.Type)
 		if err != nil {
@@ -391,7 +399,14 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 					}
 					if isRoot {
 						// Physical relational columns cannot carry ANY.
-						return MakePlan2NullTextConstExprWithType(""), nil
+						null := MakePlan2NullTextConstExprWithType("")
+						if state.fieldConsumers != nil {
+							// This physical projection lost its executable marker, not
+							// its returned-value declaration. Keep one source atom for
+							// FIELD consumers; never retain a producer or selected value.
+							ensurePreparedNumericMetadata(null).StringDomainSource = param
+						}
+						return null, nil
 					}
 				}
 			}
@@ -6116,6 +6131,11 @@ func (b *baseBinder) annotateStringDomainSource(
 		// All-NULL CASE can nevertheless have a numeric common type without
 		// losing its resolution contract. Follow aliases to its first owner;
 		// still stop at ordinary arithmetic and explicit type boundaries.
+		if source.GetLit().GetIsnull() {
+			if marker := source.GetPreparedNumeric().GetStringDomainSource(); marker.GetP() != nil {
+				source = marker // finite source retained by a physical marker projection
+			}
+		}
 		caseWitness := preparedFieldBoundCaseContractWitness(source)
 		if source.GetCol() == nil && possibleStringDomainsForExpr(source) == 0 && caseWitness == nil {
 			memo[key] = nil

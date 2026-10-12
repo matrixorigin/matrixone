@@ -59,6 +59,8 @@ type TargetColumn struct {
 	NotNull  bool
 	MOIndex  int
 	AttrName string
+	// SetValues carries logical SET metadata separately from physical uint64.
+	SetValues string
 }
 
 type conversionKind uint8
@@ -76,6 +78,11 @@ const (
 	conversionMaterializeNull
 )
 
+type setBitmapConstraint struct {
+	column      int
+	validBitmap uint64
+}
+
 type columnPlan struct {
 	source int
 	target TargetColumn
@@ -88,6 +95,7 @@ type Plan struct {
 	schemaFingerprint     [sha256.Size]byte
 	conversionFingerprint [sha256.Size]byte
 	columns               []columnPlan
+	setConstraints        []setBitmapConstraint
 	attrs                 []string
 }
 
@@ -179,6 +187,16 @@ func BindLoad(
 		}
 		if err := validateLoadTargetType(ctx, target.Type); err != nil {
 			return nil, err
+		}
+		if target.SetValues != "" {
+			if target.Type.Oid != types.T_uint64 {
+				return nil, moerr.NewInvalidInput(ctx, "SET metadata requires uint64 storage")
+			}
+			bitmap, err := types.SetValidBitmap(target.SetValues)
+			if err != nil {
+				return nil, err
+			}
+			plan.setConstraints = append(plan.setConstraints, setBitmapConstraint{column: target.MOIndex, validBitmap: bitmap})
 		}
 		plan.columns[target.MOIndex] = columnPlan{source: sourceIndex, target: target, kind: kind}
 		plan.attrs[target.MOIndex] = target.AttrName
@@ -375,6 +393,7 @@ func planFingerprint(plan *Plan, mode MatchMode) [sha256.Size]byte {
 		writeFingerprintUint64(h, uint64(column.source))
 		writeFingerprintString(h, column.target.Name)
 		writeFingerprintString(h, column.target.AttrName)
+		writeFingerprintString(h, column.target.SetValues)
 		writeFingerprintUint64(h, uint64(column.target.MOIndex))
 		writeFingerprintBool(h, column.target.NotNull)
 		writeFingerprintUint64(h, uint64(column.target.Type.Oid))

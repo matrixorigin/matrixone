@@ -16,6 +16,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -34,6 +35,18 @@ func TestPreparedFieldScalarComparisonLifetime(t *testing.T) {
 		condition, derived, nullFirst bool
 		key                           int32
 	}{
+		{"case_value_projection", "select field(v,?) from (select case when ? then null else x end v from (select ? x)u)d", true, true, true, 1},
+		{"case_value_projection_computed", "select field(v,?) from (select case when ?+0 then null else x end v from (select ? x)u)d", true, true, true, 1},
+		{"case_value_projection_double", "select field(v,?) from (select v from (select case when ? then null else x end v from (select ? x)u)d0)d1", true, true, true, 1},
+		{"case_value_projection_computed_double", "select field(v,?) from (select v from (select case when ?+0 then null else x end v from (select ? x)u)d0)d1", true, true, true, 1},
+		{"coalesce_bare_null", "select field(coalesce(?,null),?)", false, false, false, -1},
+		{"coalesce_scalar_null", "select field((select coalesce(?,null)),?)", false, false, false, -1},
+		{"coalesce_projected_null", "select field(v,?) from (select coalesce(?,null) v from (select 1 union all select 2)seed limit 1)d", false, true, false, -1},
+		{"coalesce_projected_text", "select field(v,?) from (select coalesce(?,'A') v from (select 1 union all select 2)seed limit 1)d", false, true, false, -1},
+		{"coalesce_double_null", "select field(v,?) from (select v from (select coalesce(?,null) v from (select 1 union all select 2)seed limit 1)d0)d1", false, true, false, -1},
+		{"nullif_hex_peer", "select field(nullif(?,X'42'),?)", false, false, false, -1},
+		{"nullif_hexnum_peer", "select field(nullif(?,0x42),?)", false, false, false, -1},
+		{"nullif_bit_peer", "select field(nullif(?,b'01000010'),?)", false, false, false, -1},
 		{"scalar_marker", "select field(case when ? then null else (select ?) end,?)", true, false, true, 1},
 		{"scalar_parens", "select field(case when ? then null else (select (?)) end,?)", true, false, true, 1},
 		{"scalar_union", "select field(case when ? then null else (select ? union all select null limit 1) end,?)", true, false, true, 1},
@@ -172,7 +185,7 @@ func TestPreparedFieldScalarComparisonLifetime(t *testing.T) {
 					require.Contains(t, domains, tc.key, "step %d", step)
 					if tc.nullFirst {
 						want := types.StringDomainText
-						if tc.derived {
+						if tc.derived && !strings.HasPrefix(tc.name, "case_value_projection") {
 							want = types.StringDomainBinary
 						}
 						if tc.derived {
