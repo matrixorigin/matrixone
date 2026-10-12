@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r6-2026-10-11`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r7-2026-10-12`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -111,3 +111,26 @@ head-table restore; ordinary user DDL does not acquire that context.
 This maintenance stays within the authorized test/development scope.
 Independent Architecture and SQL/Planner approval remains pending; this
 addendum records implementation changes and does not grant approval.
+
+## r7 rebase maintenance addendum (2026-10-12)
+
+Official main `11914526ba0cd40d471299d8e5e2929909b9e09c` has allocated
+MORPC 110 to MEDIUMINT assignment bounds. The Python capability therefore moves
+to the next version, 111, with 110 as its immediate predecessor rejection case.
+The published 4.0.14 handler remains unchanged; the separate 4.0.15 repair still
+replays the same nine idempotent shared-function entries. Catalog publication,
+reads, prepared reuse, physical execution, remote sender/receiver admission,
+repair scheduling and direct replay, and the status RPC share the new floor.
+Tests reject predecessor-only and mixed 111/110 CNs before catalog mutation,
+and retain MEDIUMINT's independent version-110 admission.
+
+The new upstream MEDIUMINT uses a 24-bit logical domain in INT32 storage. The
+current Python ABI rejects signed/unsigned MEDIUMINT declarations and inputs
+before normalization could widen that domain; ordinary 32-bit INT is unchanged.
+Typed descriptor and parsed CREATE FUNCTION cases cover this fail-closed boundary.
+
+This supersedes r6's candidate protocol allocation and records the new upstream
+type boundary. It preserves the existing opt-in, unisolated test/development
+scope and catalog repair contract.
+Independent Architecture and SQL/Planner approval remains pending. Neither this
+mechanical rebase nor its validation grants approval or extends production scope.

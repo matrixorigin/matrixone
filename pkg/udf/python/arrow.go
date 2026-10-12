@@ -67,6 +67,12 @@ type TypeDescriptor struct {
 }
 
 func NewTypeDescriptor(typ types.Type) (TypeDescriptor, error) {
+	// MEDIUMINT uses INT32 storage, but Width=24 is a value-domain contract,
+	// not display metadata. The current Python ABI has no 24-bit integer
+	// descriptor, so reject it before normalization can widen the domain.
+	if typ.IsMediumInt() {
+		return TypeDescriptor{}, udferr.Newf("python udf does not support MEDIUMINT")
+	}
 	// Planner types use scale=-1 as the sentinel for types whose SQL
 	// definition has no scale (for example INT and BINARY).  That sentinel is
 	// an internal planner representation and cannot cross the Python ABI:
