@@ -176,6 +176,41 @@ func TestFilteredSetOperationProjection(t *testing.T) {
 				require.Equal(t, tc.want, readWindowNullRows(t, rows))
 			}
 		})
+		t.Run("function-columns", func(t *testing.T) {
+			for _, tc := range []struct {
+				name, query string
+				want        []string
+			}{
+				{"path", `select path from (select n.path,n.value from unnest('[1,2]') n union all select n.path,n.value from unnest('[3,4]') n) u order by path`, []string{"$[0]", "$[0]", "$[1]", "$[1]"}},
+				{"value", `select value from (select n.path,n.value from unnest('[1,2]') n union all select n.path,n.value from unnest('[3,4]') n) u order by value`, []string{"1", "2", "3", "4"}},
+				{"filter-demand", `select path from (select n.path,n.value from unnest('[1,2]') n where cast(n.value as varchar)='1' union all select n.path,n.value from unnest('[3,4]') n where cast(n.value as varchar)='3') u order by path`, []string{"$[0]", "$[0]"}},
+				{"membership-tuple", `select path from (select n.path,n.value from unnest('[1]') n union select n.path,n.value from unnest('[2]') n) u`, []string{"$[0]", "$[0]"}},
+				{"count-carrier", `select count(*) from (select n.path,n.value from unnest('[1,2]') n union all select n.path,n.value from unnest('[3,4]') n) u`, []string{"4"}},
+				{"empty", `select path from (select n.path,n.value from unnest('[]') n union all select n.path,n.value from unnest('[]') n) u`, nil},
+				{"null-input", `select path from (select n.path,n.value from unnest(cast(NULL as json)) n union all select n.path,n.value from unnest(cast(NULL as json)) n) u`, nil},
+				{"outer-empty-count", `select count(*) from (select n.path,n.value from unnest('[]','$',true) n union all select n.path,n.value from unnest('[]','$',true) n) u`, []string{"2"}},
+				{"lateral-input", `select path from (select n.path,n.value from (select '[1,2]' j) t,unnest(t.j) n union all select n.path,n.value from (select '[3,4]' j) t,unnest(t.j) n) u order by path`, []string{"$[0]", "$[0]", "$[1]", "$[1]"}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					rows, err := conn.QueryContext(ctx, tc.query)
+					require.NoError(t, err)
+					require.Equal(t, tc.want, readWindowNullRows(t, rows))
+				})
+			}
+			stmt, err := conn.PrepareContext(ctx, `select path from (select n.path,n.value from unnest(?) n union all select n.path,n.value from unnest(?) n) u order by path`)
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, tc := range []struct {
+				arg  any
+				want []string
+			}{
+				{"[1,2]", []string{"$[0]", "$[0]", "$[1]", "$[1]"}}, {"[]", nil}, {nil, nil}, {"[3]", []string{"$[0]", "$[0]"}},
+			} {
+				rows, err := stmt.QueryContext(ctx, tc.arg, tc.arg)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, readWindowNullRows(t, rows))
+			}
+		})
 		t.Run("persisted-values", func(t *testing.T) {
 			defer cleanupSQLIntegration(t, cn, "drop database if exists set_projection_regression")
 			for _, q := range []string{
@@ -201,6 +236,14 @@ func TestFilteredSetOperationProjection(t *testing.T) {
 			var effects string
 			require.NoError(t, conn.QueryRowContext(ctx, "select currval('effect_seq')").Scan(&effects))
 			require.Equal(t, "1", effects, "hidden branch expression must evaluate exactly once")
+			_, err = conn.ExecContext(ctx, "create sequence function_effect_seq start with 1")
+			require.NoError(t, err)
+			rows, err = conn.QueryContext(ctx, `select count(*) from (select n.path,n.value from unnest(cast(concat('[',cast(nextval('function_effect_seq') as varchar),']') as json)) n union all select n.path,n.value from unnest(cast(concat('[',cast(nextval('function_effect_seq') as varchar),']') as json)) n) u`)
+			require.NoError(t, err)
+			require.Equal(t, []string{"2"}, readWindowNullRows(t, rows))
+			require.NoError(t, conn.QueryRowContext(ctx, "select currval('function_effect_seq')").Scan(&effects))
+			require.Equal(t, "2", effects, "pruned function outputs must retain exactly-once argument effects")
+
 			for _, tc := range []struct {
 				query string
 				want  []string

@@ -26,6 +26,60 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSetOperationFunctionColumnPruning(t *testing.T) {
+	for _, tc := range []struct {
+		name, query string
+		columns     []string
+	}{
+		{"path", `select path from (select n.path,n.value from unnest('[1,2]') n union all select n.path,n.value from unnest('[3,4]') n) u`, []string{"path"}},
+		{"value", `select value from (select n.path,n.value from unnest('[1,2]') n union all select n.path,n.value from unnest('[3,4]') n) u`, []string{"value"}},
+		{"expression-alias", `select p from (select concat(n.path,'') p,n.value from unnest('[1,2]') n union all select concat(n.path,''),n.value from unnest('[3,4]') n) u`, []string{"path"}},
+		{"filter-demand", `select path from (select n.path,n.value from unnest('[1,2]') n where cast(n.value as varchar)='1' union all select n.path,n.value from unnest('[3,4]') n where cast(n.value as varchar)='3') u`, []string{"path", "value"}},
+		{"count-carrier", `select count(*) from (select n.path,n.value from unnest('[1,2]') n union all select n.path,n.value from unnest('[3,4]') n) u`, []string{"path"}},
+		{"membership-tuple", `select path from (select n.path,n.value from unnest('[1]') n union select n.path,n.value from unnest('[2]') n) u`, []string{"path", "value"}},
+		{"lateral-input", `select path from (select n.path,n.value from (select '[1,2]' j) t,unnest(t.j) n union all select n.path,n.value from (select '[3,4]' j) t,unnest(t.j) n) u`, []string{"path"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			p, err := runOneStmt(mock, t, tc.query)
+			require.NoError(t, err)
+			q := p.GetQuery()
+			seen := make(map[int32]bool)
+			scans := 0
+			var visit func(int32)
+			visit = func(id int32) {
+				if seen[id] {
+					return
+				}
+				seen[id] = true
+				n := q.Nodes[id]
+				if n.NodeType == planpb.Node_FUNCTION_SCAN && n.TableDef.GetTblFunc().GetName() == "unnest" {
+					scans++
+					var cols []string
+					for _, c := range n.TableDef.Cols {
+						cols = append(cols, c.Name)
+						if c.Name == "path" {
+							require.Equal(t, int32(types.T_varchar), c.Typ.Id)
+						}
+						if c.Name == "value" {
+							require.Equal(t, int32(types.T_json), c.Typ.Id)
+						}
+					}
+					require.Equal(t, tc.columns, cols, "runtime attributes must reflect output and owner-local demands")
+					require.Len(t, n.TblFuncExprList, 1, "pruning must retain the function argument")
+				}
+				for _, child := range n.Children {
+					visit(child)
+				}
+			}
+			for _, step := range q.Steps {
+				visit(step)
+			}
+			require.Equal(t, 2, scans)
+		})
+	}
+}
+
 func TestSetOperationExternalColumnPruning(t *testing.T) {
 	for _, tc := range []struct {
 		name, query string
