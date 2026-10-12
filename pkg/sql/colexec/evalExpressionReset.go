@@ -378,5 +378,11 @@ func (expr *ParamExpressionExecutor) ResetForNextQuery() {
 }
 
 func (expr *VarExpressionExecutor) ResetForNextQuery() {
-	// do nothing.
+	// Session variable values are refreshed lazily, but a row-wise assignment
+	// overlay belongs to the completed statement and must not be retained by a
+	// prepared expression across executions.
+	if expr.overlayVec != nil {
+		expr.overlayVec.Free(expr.mp)
+		expr.overlayVec = nil
+	}
 }

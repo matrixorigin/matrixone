@@ -1,0 +1,209 @@
+package plan
+
+import (
+	"context"
+	"reflect"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+)
+
+func containsUserVarAssignment(expr tree.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	return containsUserVarAssignmentValue(reflect.ValueOf(expr), make(map[assignmentVisit]struct{}))
+}
+
+// containsUserVarAssignmentValue deliberately does not use tree.Expr.Accept:
+// several legacy AST nodes (notably Subquery) still panic from Accept because
+// they were never needed by the old visitors. Scope validation runs for every
+// SELECT, so using Accept here would make unrelated queries panic. Reflection
+// is limited to the AST's exported fields and is only used during binding.
+type assignmentVisit struct {
+	typ reflect.Type
+	ptr uintptr
+}
+
+var userVarAssignmentExprType = reflect.TypeOf((*tree.UserVarAssignmentExpr)(nil))
+
+func containsUserVarAssignmentValue(v reflect.Value, seen map[assignmentVisit]struct{}) bool {
+	if !v.IsValid() {
+		return false
+	}
+	for v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return false
+		}
+		v = v.Elem()
+	}
+	switch v.Kind() {
+	case reflect.Pointer:
+		if v.IsNil() {
+			return false
+		}
+		if v.Type() == userVarAssignmentExprType {
+			return true
+		}
+		visit := assignmentVisit{typ: v.Type(), ptr: v.Pointer()}
+		if _, ok := seen[visit]; ok {
+			return false
+		}
+		seen[visit] = struct{}{}
+		return containsUserVarAssignmentValue(v.Elem(), seen)
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			field := v.Field(i)
+			if !field.CanInterface() {
+				continue
+			}
+			if containsUserVarAssignmentValue(field, seen) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			if containsUserVarAssignmentValue(v.Index(i), seen) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isUserVarAssignmentRoot(expr tree.Expr) bool {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	_, ok := expr.(*tree.UserVarAssignmentExpr)
+	return ok
+}
+
+func userVarAssignmentNotSupported(ctx context.Context, scope string) error {
+	return moerr.NewNotSupported(ctx,
+		"user-variable assignment is supported only as a top-level SELECT projection; "+scope+" is not supported")
+}
+
+func validateUserVarAssignmentScope(
+	ctx context.Context,
+	clause *tree.SelectClause,
+	astOrderBy tree.OrderBy,
+	astLimit *tree.Limit,
+) error {
+	if clause == nil {
+		return nil
+	}
+	hasAssignment := false
+	for _, selectExpr := range clause.Exprs {
+		if containsUserVarAssignment(selectExpr.Expr) {
+			hasAssignment = true
+			if !isUserVarAssignmentRoot(selectExpr.Expr) {
+				return userVarAssignmentNotSupported(ctx, "a nested projection expression")
+			}
+		}
+	}
+	if clause.Where != nil && containsUserVarAssignment(clause.Where.Expr) {
+		return userVarAssignmentNotSupported(ctx, "WHERE")
+	}
+	if clause.From != nil && containsUserVarAssignmentValue(reflect.ValueOf(clause.From), make(map[assignmentVisit]struct{})) {
+		return userVarAssignmentNotSupported(ctx, "FROM/JOIN")
+	}
+	if clause.GroupBy != nil {
+		for _, exprs := range clause.GroupBy.GroupByExprsList {
+			for _, expr := range exprs {
+				if containsUserVarAssignment(expr) {
+					return userVarAssignmentNotSupported(ctx, "GROUP BY")
+				}
+			}
+		}
+		for _, expr := range clause.GroupBy.GroupingSet {
+			if containsUserVarAssignment(expr) {
+				return userVarAssignmentNotSupported(ctx, "GROUP BY")
+			}
+		}
+	}
+	if clause.Having != nil && containsUserVarAssignment(clause.Having.Expr) {
+		return userVarAssignmentNotSupported(ctx, "HAVING")
+	}
+	for _, definition := range clause.Windows {
+		if definition == nil || definition.Spec == nil {
+			continue
+		}
+		for _, expr := range definition.Spec.PartitionBy {
+			if containsUserVarAssignment(expr) {
+				return userVarAssignmentNotSupported(ctx, "WINDOW PARTITION BY")
+			}
+		}
+		for _, order := range definition.Spec.OrderBy {
+			if order != nil && containsUserVarAssignment(order.Expr) {
+				return userVarAssignmentNotSupported(ctx, "WINDOW ORDER BY")
+			}
+		}
+	}
+	for _, order := range astOrderBy {
+		if order != nil && containsUserVarAssignment(order.Expr) {
+			return userVarAssignmentNotSupported(ctx, "ORDER BY")
+		}
+	}
+	if !hasAssignment {
+		return nil
+	}
+	if clause.Distinct {
+		return userVarAssignmentNotSupported(ctx, "DISTINCT")
+	}
+	if len(astOrderBy) > 0 {
+		return userVarAssignmentNotSupported(ctx, "ORDER BY with user-variable assignment")
+	}
+	if astLimit != nil {
+		return userVarAssignmentNotSupported(ctx, "LIMIT with user-variable assignment")
+	}
+	return nil
+}
+
+func selectContainsUserVarAssignment(selectStmt *tree.Select) bool {
+	if selectStmt == nil {
+		return false
+	}
+	if containsUserVarAssignmentInSelectStatement(selectStmt.Select) {
+		return true
+	}
+	for _, order := range selectStmt.OrderBy {
+		if order != nil && containsUserVarAssignment(order.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsUserVarAssignmentInSelectStatement(stmt tree.SelectStatement) bool {
+	switch selectStmt := stmt.(type) {
+	case *tree.SelectClause:
+		for _, expr := range selectStmt.Exprs {
+			if containsUserVarAssignment(expr.Expr) {
+				return true
+			}
+		}
+		if selectStmt.Where != nil && containsUserVarAssignment(selectStmt.Where.Expr) {
+			return true
+		}
+		if selectStmt.Having != nil && containsUserVarAssignment(selectStmt.Having.Expr) {
+			return true
+		}
+	case *tree.UnionClause:
+		return containsUserVarAssignmentInSelectStatement(selectStmt.Left) ||
+			containsUserVarAssignmentInSelectStatement(selectStmt.Right)
+	case *tree.ValuesClause:
+		for _, row := range selectStmt.Rows {
+			for _, expr := range row {
+				if containsUserVarAssignment(expr) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}

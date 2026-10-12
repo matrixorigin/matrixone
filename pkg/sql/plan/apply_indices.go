@@ -1114,6 +1114,10 @@ func containsVolatileFunction(expr *plan.Expr) bool {
 	}
 
 	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_UserVarAssignment:
+		// Assignment changes session state and must never be duplicated,
+		// folded, pushed into storage, or evaluated on a remote worker.
+		return true
 	case *plan.Expr_Sub:
 		return true
 	case *plan.Expr_F:

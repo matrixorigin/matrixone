@@ -313,6 +313,30 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	case *tree.VarExpr:
 		expr, err = b.baseBindVar(exprImpl, depth, isRoot)
 
+	case *tree.UserVarAssignmentExpr:
+		if exprImpl.Value == nil || exprImpl.Name == "" {
+			err = moerr.NewInvalidInput(b.GetContext(), "invalid user-variable assignment")
+			break
+		}
+		var value *Expr
+		value, err = b.impl.BindExpr(exprImpl.Value, depth, false)
+		if err != nil {
+			break
+		}
+		// A row-wise side-effecting expression must never inherit a negative
+		// memo id from a pure-expression rewrite: caching its RHS would make
+		// later rows observe the first row's value.
+		ResetAuxIdForExpr(value)
+		expr = &Expr{
+			Typ: value.Typ,
+			Expr: &plan.Expr_UserVarAssignment{
+				UserVarAssignment: &plan.UserVarAssignment{
+					Name:  strings.ToLower(exprImpl.Name),
+					Value: value,
+				},
+			},
+		}
+
 	case *tree.ParamExpr:
 		if (b.builder == nil || !b.builder.isPrepareStatement) && preparedSourceBindings(b.GetContext()) == nil {
 			err = moerr.NewInvalidInput(b.GetContext(), "only prepare statement can use ? expr")

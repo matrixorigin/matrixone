@@ -153,6 +153,10 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 
 	fn := expr.GetF()
 	if fn == nil {
+		if assignment := expr.GetUserVarAssignment(); assignment != nil {
+			assignment.Value = r.constantFold(assignment.Value, proc)
+			return expr
+		}
 		if elist := expr.GetList(); elist != nil {
 			exprList := elist.List
 			cannotFold := false

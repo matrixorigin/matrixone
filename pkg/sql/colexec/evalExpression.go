@@ -406,6 +406,23 @@ func newExpressionExecutorWithAllocation(
 		}
 		return ve, nil
 
+	case *plan.Expr_UserVarAssignment:
+		if t.UserVarAssignment == nil || t.UserVarAssignment.Value == nil {
+			return nil, moerr.NewInvalidInput(proc.Ctx, "invalid user-variable assignment expression")
+		}
+		child, err := newExpressionExecutorWithAllocation(
+			proc, t.UserVarAssignment.Value, selection, buildCtx)
+		if err != nil {
+			return nil, err
+		}
+		return &UserVarAssignmentExpressionExecutor{
+			mp:         proc.Mp(),
+			allocation: selection,
+			child:      child,
+			name:       t.UserVarAssignment.Name,
+			typ:        typ,
+		}, nil
+
 	case *plan.Expr_Vec:
 		vec := vector.NewVec(types.T_any.ToType())
 		err := vec.UnmarshalBinary(t.Vec.Data)
@@ -835,6 +852,7 @@ type VarExpressionExecutor struct {
 	// the value cache used by a later selected evaluation.
 	maskedNull *vector.Vector
 	vec        *vector.Vector
+	overlayVec *vector.Vector
 
 	name              string
 	system            bool
@@ -857,6 +875,32 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		}
 		expr.maskedNull.SetLength(rowCount)
 		return expr.maskedNull, nil
+	}
+	if proc != nil {
+		if row := proc.GetUserVariableAssignmentCurrentRow(); row >= 0 {
+			if value, ok := proc.ResolveUserVariableAssignment(expr.name, row); ok {
+				if expr.vec != nil {
+					expr.vec.Free(expr.mp)
+					expr.vec = nil
+				}
+				var err error
+				expr.vec, err = evalStagedUserVariableValue(proc, expr.typ, value, expr.allocation, rowCount)
+				return expr.vec, err
+			}
+		}
+		if rows, _, ok := proc.GetUserVariableAssignmentRows(expr.name, rowCount); ok {
+			if expr.overlayVec != nil {
+				expr.overlayVec.Free(expr.mp)
+				expr.overlayVec = nil
+			}
+			var err error
+			expr.overlayVec, err = evalStagedUserVariableRows(proc, expr.typ, rows, expr.allocation)
+			if err != nil {
+				return nil, err
+			}
+			expr.overlayVec.SetLength(rowCount)
+			return expr.overlayVec, nil
+		}
 	}
 	resolveVariableFunc := proc.GetResolveVariableFunc()
 	if resolveVariableFunc == nil {
@@ -965,6 +1009,10 @@ func (expr *VarExpressionExecutor) EvalWithoutResultReusing(proc *process.Proces
 		expr.null = nil
 		return vec, nil
 	}
+	if vec == expr.overlayVec {
+		expr.overlayVec = nil
+		return vec, nil
+	}
 	expr.vec = nil
 	return vec, nil
 }
@@ -984,6 +1032,10 @@ func (expr *VarExpressionExecutor) Free() {
 	if expr.maskedNull != nil {
 		expr.maskedNull.Free(expr.mp)
 		expr.maskedNull = nil
+	}
+	if expr.overlayVec != nil {
+		expr.overlayVec.Free(expr.mp)
+		expr.overlayVec = nil
 	}
 	reuse.Free[VarExpressionExecutor](expr, nil)
 }

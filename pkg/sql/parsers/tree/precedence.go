@@ -39,6 +39,9 @@ const (
 
 func precedenceFor(in Expr) Precedence {
 	switch node := in.(type) {
+	case *UserVarAssignmentExpr:
+		// MySQL's := binds weaker than every ordinary expression operator.
+		return P17
 	case *OrExpr:
 		return P16
 	case *XorExpr:

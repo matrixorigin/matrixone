@@ -316,6 +316,7 @@ message Expr {
     MaxValue max = 13;
     LiteralVec vec = 14;
     FoldVal fold = 15;
+    UserVarAssignment user_var_assignment = 24;
   }
 
   int32 aux_id = 16;
@@ -2437,4 +2438,13 @@ message ViewStep {
   string view_name = 2;
   Snapshot snapshot = 3;
   string subscription_name = 4;
+}
+
+// Assign a value to a MySQL user variable as part of expression evaluation.
+// This is deliberately separate from VarRef (a read) and SetVariables (the
+// SET statement path): the executor must preserve expression ordering and
+// publish the completed prefix once statement execution reaches its boundary.
+message UserVarAssignment {
+  string name = 1;
+  Expr value = 2;
 }

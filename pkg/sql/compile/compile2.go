@@ -205,6 +205,13 @@ func (c *Compile) Compile(
 	// initialize some attributes for Compile.
 	c.fill = resultWriteBack
 	c.pn = queryPlan
+	// User-variable assignments are ordered session side effects. Retrying the
+	// physical pipeline after a partial execution would replay already staged
+	// rows (and any volatile/sequence RHS), so this statement must fail at the
+	// first retryable error instead of rebuilding and executing again.
+	if planHasUserVariableAssignment(queryPlan) {
+		c.disableRetry = true
+	}
 	c.prepareLoadUniqueIndexPromotion(queryPlan)
 
 	// combine top context with some values and replace.

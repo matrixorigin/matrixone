@@ -190,6 +190,11 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 		}
 	case *plan.Expr_P:
 		buf.WriteString("?")
+	case *plan.Expr_UserVarAssignment:
+		buf.WriteString("@" + exprImpl.UserVarAssignment.Name + " := ")
+		if err := describeExpr(ctx, exprImpl.UserVarAssignment.Value, options, buf); err != nil {
+			return err
+		}
 	case *plan.Expr_List:
 		exprlist := expr.Expr.(*plan.Expr_List)
 		if exprlist.List.List != nil {

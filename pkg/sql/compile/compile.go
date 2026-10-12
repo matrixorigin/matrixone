@@ -5983,11 +5983,50 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) ensureCoordinatorOnlyFunctions(node *plan.Node, ss []*Scope) []*Scope {
-	if (!nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node) &&
+	if (!nodeHasUserVariableAssignment(node) && !nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node) &&
 		!c.needsCoordinatorIgnoreCheck(node) && !c.needsCoordinatorConstantFilterDiagnostic(node)) || c.scopesRunOnCoordinator(ss) {
 		return ss
 	}
 	return []*Scope{c.newMergeScope(ss)}
+}
+
+// User-variable assignment is a session side effect. Keep the projection that
+// contains it on the coordinator instead of attaching it to a distributed
+// TableScan/Group scope, where the remote process has no session publisher and
+// could evaluate the assignment more than once or in an arbitrary order.
+func nodeHasUserVariableAssignment(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, expr := range node.ProjectList {
+		found := false
+		_ = plan.VisitExprTree(expr, func(current *plan.Expr) error {
+			if current.GetUserVarAssignment() != nil {
+				found = true
+			}
+			return nil
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+func planHasUserVariableAssignment(queryPlan *plan.Plan) bool {
+	if queryPlan == nil {
+		return false
+	}
+	query := queryPlan.GetQuery()
+	if query == nil {
+		return false
+	}
+	for _, node := range query.Nodes {
+		if nodeHasUserVariableAssignment(node) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Compile) needsCoordinatorConstantFilterDiagnostic(node *plan.Node) bool {

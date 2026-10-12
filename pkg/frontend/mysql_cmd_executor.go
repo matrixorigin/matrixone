@@ -5731,6 +5731,30 @@ func executeStmt(ses *Session,
 ) (err error) {
 	ses.EnterFPrint(FPExecStmt)
 	defer ses.ExitFPrint(FPExecStmt)
+	assignmentProc := execCtx.proc
+	if assignmentProc != nil {
+		assignmentProc.SetUserVariableAssignmentCommitFunc(func(value process.UserVariableAssignment) error {
+			return setUserDefinedVarWithTypeAndDomain(
+				ses,
+				value.Name,
+				value.Value,
+				execCtx.sqlOfStmt,
+				value.IsBin,
+				value.Type,
+				value.StringDomain,
+			)
+		})
+		defer func() {
+			// User-variable writes are session state rather than transactional
+			// data.  Preserve the successfully evaluated prefix when a later
+			// row fails, then publish that prefix once at statement finalization.
+			// Do not replace an execution error with a setter error.
+			if commitErr := assignmentProc.CommitUserVariableAssignments(); commitErr != nil && err == nil {
+				err = commitErr
+			}
+			assignmentProc.SetUserVariableAssignmentCommitFunc(nil)
+		}()
+	}
 	var cmpBegin time.Time
 	var ret interface{}
 

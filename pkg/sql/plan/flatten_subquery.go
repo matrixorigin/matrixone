@@ -4776,6 +4776,8 @@ func exprHasColRef(expr *plan.Expr) bool {
 	switch item := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		return true
+	case *plan.Expr_UserVarAssignment:
+		return exprHasColRef(item.UserVarAssignment.Value)
 	case *plan.Expr_F:
 		for _, arg := range item.F.Args {
 			if exprHasColRef(arg) {
