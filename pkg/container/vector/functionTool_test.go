@@ -488,76 +488,123 @@ func TestAppendByteJsonEncodedConstResult(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-func TestReuseFunctionParameterStr(t *testing.T) {
-	mp := mpool.MustNewZeroNoFixed()
-	vec := NewVec(types.T_varchar.ToType())
-	for i := uint64(0); i < 10; i++ {
-		err := appendOneBytes(vec, []byte("x"), false, mp)
-		require.NoError(t, err)
-	}
-	g1 := GenerateFunctionStrParameter(vec)
-	ok := ReuseFunctionStrParameter(vec, g1)
-	require.Equal(t, true, ok)
-
-	err := appendOneBytes(vec, []byte("x"), true, mp)
-	require.NoError(t, err)
-	ok = ReuseFunctionStrParameter(vec, g1)
-	require.Equal(t, false, ok)
-	g1 = GenerateFunctionStrParameter(vec)
-	ok = ReuseFunctionStrParameter(vec, g1)
-	require.Equal(t, true, ok)
-
-	vec = NewConstNull(types.T_varchar.ToType(), 0, mp)
-	ok = ReuseFunctionStrParameter(vec, g1)
-	require.Equal(t, false, ok)
-	g1 = GenerateFunctionStrParameter(vec)
-	ok = ReuseFunctionStrParameter(vec, g1)
-	require.Equal(t, true, ok)
-
-	err = appendOneBytes(vec, []byte("x"), false, mp)
-	require.Error(t, err)
-
-	ok = ReuseFunctionStrParameter(vec, g1)
-	require.Equal(t, true, ok)
-
-	g1 = GenerateFunctionStrParameter(vec)
-	ok = ReuseFunctionStrParameter(vec, g1)
-	require.Equal(t, true, ok)
+func TestFunctionParameterReuseTransitions(t *testing.T) {
+	t.Run("fixed", func(t *testing.T) {
+		exerciseParameterReuse(t, types.T_int32.ToType(), 1, GenerateFunctionFixedTypeParameter[int32], ReuseFunctionFixedTypeParameter[int32], OptGetParamFromWrapper[int32],
+			func(v *Vector, n, changed bool, mp *mpool.MPool) error {
+				value := int32(7)
+				if changed {
+					value = 9
+				}
+				return appendOneFixed(v, value, n, mp)
+			},
+			func(p FunctionParameterWrapper[int32], i uint64, n, changed bool) {
+				value, isNull := p.GetValue(i)
+				want := int32(7)
+				if changed {
+					want = 9
+				}
+				if n {
+					want = 0
+				}
+				if value != want || isNull != n {
+					t.Fatalf("value=%d null=%v; want=%d null=%v", value, isNull, want, n)
+				}
+			})
+	})
+	t.Run("string", func(t *testing.T) {
+		exerciseParameterReuse(t, types.T_varchar.ToType(), 0, GenerateFunctionStrParameter, ReuseFunctionStrParameter, OptGetBytesParamFromWrapper,
+			func(v *Vector, n, changed bool, mp *mpool.MPool) error {
+				value := "x"
+				if changed {
+					value = "y"
+				}
+				return appendOneBytes(v, []byte(value), n, mp)
+			},
+			func(p FunctionParameterWrapper[types.Varlena], i uint64, n, changed bool) {
+				value, isNull := p.GetStrValue(i)
+				want := "x"
+				if changed {
+					want = "y"
+				}
+				if n {
+					want = ""
+				}
+				if string(value) != want || isNull != n {
+					t.Fatalf("value=%q null=%v; want=%q null=%v", value, isNull, want, n)
+				}
+			})
+	})
 }
 
-func TestReuseFunctionParameterFixed(t *testing.T) {
-	mp := mpool.MustNewZero()
-	var err error
-	vec1 := NewVec(types.T_int32.ToType())
-	for i := uint64(0); i < 10; i++ {
-		err = appendOneFixed(vec1, int32(i), false, mp)
-		require.NoError(t, err)
-	}
-	g2 := GenerateFunctionFixedTypeParameter[int32](vec1)
-	ok := ReuseFunctionFixedTypeParameter(vec1, g2)
-	require.Equal(t, true, ok)
-
-	err = appendOneFixed(vec1, 0, true, mp)
-	require.NoError(t, err)
-	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
-	require.Equal(t, false, ok)
-	g2 = GenerateFunctionFixedTypeParameter[int32](vec1)
-	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
-	require.Equal(t, true, ok)
-
-	vec1 = NewConstNull(types.T_int32.ToType(), 1, mp)
-	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
-	require.Equal(t, false, ok)
-	g2 = GenerateFunctionFixedTypeParameter[int32](vec1)
-	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
-	require.Equal(t, true, ok)
-
-	err = appendOneFixed(vec1, int32(0), false, mp)
-	require.Error(t, err)
-
-	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
-	require.Equal(t, true, ok)
-	g2 = GenerateFunctionFixedTypeParameter[int32](vec1)
-	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
-	require.Equal(t, true, ok)
+func exerciseParameterReuse[T types.FixedSizeT](t *testing.T, typ types.Type, scalarLength int,
+	generate func(*Vector) FunctionParameterWrapper[T], reuse func(*Vector, FunctionParameterWrapper[T]) bool,
+	acquire func(FunctionResultWrapper, int, *Vector) FunctionParameterWrapper[T],
+	appendValue func(*Vector, bool, bool, *mpool.MPool) error, checkValue func(FunctionParameterWrapper[T], uint64, bool, bool)) {
+	t.Helper()
+	mp := mpool.MustNewZeroNoFixed()
+	func() {
+		v := NewVec(typ)
+		defer v.Free(mp)
+		require.NoError(t, appendValue(v, false, false, mp))
+		parameter := generate(v)
+		check := func(p FunctionParameterWrapper[T], source *Vector, index uint64, isNull, changed bool) {
+			t.Helper()
+			if p.GetSourceVector() != source || p.GetType() != *source.GetType() {
+				t.Fatal("parameter source or complete type changed")
+			}
+			checkValue(p, index, isNull, changed)
+		}
+		require.True(t, reuse(v, parameter))
+		check(parameter, v, 0, false, false)
+		require.NoError(t, appendValue(v, true, false, mp))
+		require.False(t, reuse(v, parameter))
+		parameter = generate(v)
+		require.True(t, reuse(v, parameter))
+		check(parameter, v, 0, false, false)
+		check(parameter, v, 1, true, false)
+		scalar := NewConstNull(typ, scalarLength, mp)
+		defer scalar.Free(mp)
+		require.False(t, reuse(scalar, parameter))
+		parameter = generate(scalar)
+		require.True(t, reuse(scalar, parameter))
+		check(parameter, scalar, 0, true, false)
+		require.Error(t, appendValue(scalar, false, false, mp))
+		require.Equal(t, scalarLength, scalar.Length())
+		require.True(t, reuse(scalar, parameter))
+		check(parameter, scalar, 0, true, false)
+		parameter = generate(scalar)
+		require.True(t, reuse(scalar, parameter))
+		check(parameter, scalar, 0, true, false)
+		// A NULL wrapper rejects both value shapes without changing its source.
+		constant := NewVec(typ)
+		defer constant.Free(mp)
+		require.NoError(t, appendValue(constant, false, false, mp))
+		constant.SetClass(CONSTANT)
+		require.False(t, reuse(constant, parameter))
+		require.False(t, reuse(v, parameter))
+		check(parameter, scalar, 0, true, false)
+		parameter = generate(constant)
+		require.True(t, reuse(constant, parameter))
+		check(parameter, constant, 0, false, false)
+		changed := typ
+		changed.Width++
+		other := NewVec(changed)
+		defer other.Free(mp)
+		require.NoError(t, appendValue(other, false, true, mp))
+		require.NoError(t, appendValue(other, true, true, mp))
+		result := NewFunctionResultWrapper(typ, mp)
+		defer result.Free()
+		result.UseOptFunctionParamFrame(1)
+		old := acquire(result, 0, v)
+		require.False(t, reuse(other, old))
+		check(old, v, 0, false, false)
+		fresh := acquire(result, 0, other)
+		require.NotSame(t, old, fresh)
+		require.True(t, reuse(other, fresh))
+		check(fresh, other, 0, false, true)
+		check(fresh, other, 1, true, true)
+		check(old, v, 0, false, false)
+	}()
+	require.Zero(t, mp.CurrNB())
 }

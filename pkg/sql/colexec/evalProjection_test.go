@@ -38,7 +38,7 @@ type projectionTestCase struct {
 func makeTestCases(t *testing.T) []projectionTestCase {
 	return []projectionTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			Projection: Projection{
 				ProjectList: []*plan.Expr{
 					{

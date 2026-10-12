@@ -39,6 +39,52 @@ select percentile_cont(0.25) within group (order by v) as p25_cont,
 percentile_disc(0.25) within group (order by v) as p25_disc
 from t_ordered_set_bvt;
 
+prepare ordered_percentile_p from
+    'select percentile_disc(?) within group (order by v) as prepared_p from t_ordered_set_bvt';
+set @ordered_p = 0.25;
+execute ordered_percentile_p using @ordered_p;
+set @ordered_p = 0.75;
+execute ordered_percentile_p using @ordered_p;
+set @ordered_p = 1.5;
+execute ordered_percentile_p using @ordered_p;
+set @ordered_p = 0.5;
+execute ordered_percentile_p using @ordered_p;
+deallocate prepare ordered_percentile_p;
+
+prepare ordered_percentile_expr from
+    'select g,
+            percentile_cont(? / 100.0) within group (order by v) as prepared_cont,
+            percentile_disc((? + ?) / 100.0) within group (order by v) as prepared_disc
+       from t_ordered_set_bvt group by g order by g';
+set @ordered_cont_pct = 50;
+set @ordered_disc_base = 25;
+set @ordered_disc_delta = 50;
+execute ordered_percentile_expr using
+    @ordered_cont_pct, @ordered_disc_base, @ordered_disc_delta;
+set @ordered_cont_pct = 150;
+execute ordered_percentile_expr using
+    @ordered_cont_pct, @ordered_disc_base, @ordered_disc_delta;
+set @ordered_cont_pct = 50;
+execute ordered_percentile_expr using
+    @ordered_cont_pct, @ordered_disc_base, @ordered_disc_delta;
+deallocate prepare ordered_percentile_expr;
+
+prepare empty_ordered_percentile_expr from
+    'select percentile_cont(? / 100.0) within group (order by v)
+       from t_ordered_set_bvt where g = 99';
+set @empty_ordered_pct = 150;
+execute empty_ordered_percentile_expr using @empty_ordered_pct;
+deallocate prepare empty_ordered_percentile_expr;
+
+prepare exact_decimal_percentile_expr from
+    'select percentile_disc(cast(? as decimal(19,18))) within group (order by v) as exact_decimal_p
+       from t_ordered_set_bvt where g = 1 and sort_key in (1, 2)';
+set @exact_decimal_pct = '0.500000000000000001';
+execute exact_decimal_percentile_expr using @exact_decimal_pct;
+set @exact_decimal_pct = '1.000000000000000001';
+execute exact_decimal_percentile_expr using @exact_decimal_pct;
+deallocate prepare exact_decimal_percentile_expr;
+
 select percentile_disc(0.5) within group (order by cast(v as decimal(38,0))) as p50_disc_dec38
 from t_ordered_set_bvt;
 
@@ -76,11 +122,72 @@ from t_ordered_set_bvt
 where g = 3
 group by g;
 
+drop table if exists t_ordered_set_types_bvt;
+create table t_ordered_set_types_bvt(s varchar(20), d date, d256 decimal(65,2));
+insert into t_ordered_set_types_bvt values
+    ('gamma', '2026-01-03', 3.00),
+    ('alpha', '2026-01-01', 1.00),
+    ('beta', '2026-01-02', 2.00),
+    (NULL, NULL, NULL);
+select percentile_disc(0.5) within group (order by s) as p50_string,
+       percentile_disc(0.5) within group (order by d) as p50_date,
+       percentile_disc(0.5) within group (order by d256) as p50_decimal256
+from t_ordered_set_types_bvt;
+
+select s,
+       percentile_disc(0.5) within group (order by s) over () as window_string,
+       percentile_disc(0.5) within group (order by d) over () as window_date,
+       percentile_disc(0.5) within group (order by d256) over () as window_decimal256
+from t_ordered_set_types_bvt
+order by s is null, s;
+drop table t_ordered_set_types_bvt;
+
 drop table if exists t_within_identifier_bvt;
 create table t_within_identifier_bvt (id int, within int);
 insert into t_within_identifier_bvt values (1, 10), (2, 20);
 select within from t_within_identifier_bvt order by id;
 select word, reserved from information_schema.KEYWORDS where word = 'WITHIN';
 drop table t_within_identifier_bvt;
+
+select g, sort_key,
+       percentile_cont(0.5) within group (order by v) over (partition by g) as window_cont,
+       percentile_disc(0.5) within group (order by v desc) over (partition by g) as window_disc_desc
+from t_ordered_set_bvt
+order by g, sort_key;
+
+select g, sort_key,
+       percentile_disc(0.5) within group (order by v)
+           over (partition by g order by sort_key rows between unbounded preceding and current row) as running_disc
+from t_ordered_set_bvt
+order by g, sort_key;
+
+select g, sort_key,
+       median() within group (order by v) over (partition by g) as window_median,
+       approx_percentile(0.5) within group (order by v) over (partition by g) as window_approx
+from t_ordered_set_bvt
+order by g, sort_key;
+
+select g, sort_key,
+       percentile_disc(0.5) within group (order by v)
+           over (partition by g order by sort_key rows between 1 preceding and 1 preceding) as preceding_disc
+from t_ordered_set_bvt
+order by g, sort_key;
+
+select percentile_cont(0.5) within group (order by cast(v as decimal(38,0))) over () as window_cont_dec38
+from t_ordered_set_bvt limit 1;
+
+prepare ordered_percentile_window_p from
+    'select sort_key,
+            percentile_disc(?) within group (order by v) over (partition by g) as prepared_window_p
+       from t_ordered_set_bvt where g = 2 order by sort_key';
+set @ordered_window_p = 0.25;
+execute ordered_percentile_window_p using @ordered_window_p;
+set @ordered_window_p = 0.75;
+execute ordered_percentile_window_p using @ordered_window_p;
+set @ordered_window_p = 1.5;
+execute ordered_percentile_window_p using @ordered_window_p;
+set @ordered_window_p = 0.5;
+execute ordered_percentile_window_p using @ordered_window_p;
+deallocate prepare ordered_percentile_window_p;
 
 drop table t_ordered_set_bvt;

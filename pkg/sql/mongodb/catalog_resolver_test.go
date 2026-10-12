@@ -193,7 +193,8 @@ func newMappingCatalogResult(t *testing.T, accountID uint32, mappingID, version 
 
 func newConnectionCatalogResult(t *testing.T, accountID uint32, connectionID, version uint64, disabled bool) executor.Result {
 	t.Helper()
-	columnTypes := []types.Type{types.T_uint32.ToType(), types.T_uint64.ToType()}
+	columnTypes := make([]types.Type, 0, 18)
+	columnTypes = append(columnTypes, types.T_uint32.ToType(), types.T_uint64.ToType())
 	for range 12 {
 		columnTypes = append(columnTypes, types.T_varchar.ToType())
 	}

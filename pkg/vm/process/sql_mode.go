@@ -49,6 +49,13 @@ func IsStrictNoZeroDateMode(mode any) bool {
 	return strict && noZeroDate
 }
 
+// IsNoZeroDateMode is the SELECT-expression rule. Data-changing statements
+// retain their separate strict-mode check at the assignment boundary.
+func IsNoZeroDateMode(mode any) bool {
+	_, noZeroDate, _ := parseStrictSQLMode(mode)
+	return noZeroDate
+}
+
 // IsStrictDivisionByZeroMode reports whether sql_mode requires division by zero
 // to error in data-changing statements without IGNORE. TRADITIONAL enables both
 // strict mode and ERROR_FOR_DIVISION_BY_ZERO.
@@ -69,6 +76,40 @@ func IsPadCharToFullLengthMode(mode any) bool {
 		}
 	}
 	return false
+}
+
+// IsTimeTruncateFractionalMode reports whether temporal casts must discard
+// fractional digits instead of applying the normal half-up rounding rule.
+func IsTimeTruncateFractionalMode(mode any) bool {
+	modeStr, ok := mode.(string)
+	if !ok {
+		return false
+	}
+	for token := range strings.SplitSeq(modeStr, ",") {
+		if strings.EqualFold(strings.TrimSpace(token), "TIME_TRUNCATE_FRACTIONAL") {
+			return true
+		}
+	}
+	return false
+}
+
+// ResolveTimeTruncateFractional reads the live session mode when available
+// and otherwise uses the mode snapshot carried to a remote process.
+func ResolveTimeTruncateFractional(proc *Process) (bool, error) {
+	if proc == nil {
+		return false, nil
+	}
+	if resolveFunc := proc.GetResolveVariableFunc(); resolveFunc != nil {
+		mode, err := resolveFunc("sql_mode", true, false)
+		if err != nil {
+			return false, err
+		}
+		return IsTimeTruncateFractionalMode(mode), nil
+	}
+	if proc.GetSessionInfo() == nil {
+		return false, nil
+	}
+	return IsTimeTruncateFractionalMode(proc.GetSessionInfo().SqlMode), nil
 }
 
 // ResolvePadCharToFullLength reports the current PAD_CHAR_TO_FULL_LENGTH mode.
@@ -92,17 +133,16 @@ func ResolveExplicitZeroTemporalCastReturnsNull(proc *Process) (bool, error) {
 	if proc == nil {
 		return false, nil
 	}
-	if proc.GetSessionInfo().ExplicitZeroTemporalCastReturnsNull {
-		return true, nil
-	}
 	resolveFunc := proc.GetResolveVariableFunc()
-	if resolveFunc == nil {
-		return false, nil
+	if resolveFunc != nil {
+		mode, err := resolveFunc("sql_mode", true, false)
+		if err != nil {
+			return false, err
+		}
+		return IsNoZeroDateMode(mode), nil
 	}
-
-	mode, err := resolveFunc("sql_mode", true, false)
-	if err != nil {
-		return false, err
+	if proc.GetSessionInfo().SqlMode != "" {
+		return IsNoZeroDateMode(proc.GetSessionInfo().SqlMode), nil
 	}
-	return IsStrictNoZeroDateMode(mode), nil
+	return proc.GetSessionInfo().ExplicitZeroTemporalCastReturnsNull, nil
 }

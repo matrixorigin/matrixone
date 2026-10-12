@@ -1710,6 +1710,29 @@ func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
 	return nil
 }
 
+// ShuffleWithAllocationAccount is Shuffle with replacement vector storage
+// admitted through selection's capacity class.
+func (bat *Batch) ShuffleWithAllocationAccount(
+	sels []int64,
+	m *mpool.MPool,
+	selection *vector.AllocationAccountSelection,
+) error {
+	if len(sels) > 0 {
+		seen := make(map[*vector.Vector]uint8)
+		for _, vec := range bat.Vecs {
+			if _, ok := seen[vec]; ok {
+				continue
+			}
+			seen[vec]++
+			if err := vec.ShuffleWithAllocationAccount(sels, m, selection); err != nil {
+				return err
+			}
+		}
+		bat.rowCount = len(sels)
+	}
+	return nil
+}
+
 func (bat *Batch) Size() int {
 	var size int
 

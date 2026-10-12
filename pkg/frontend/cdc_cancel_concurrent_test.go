@@ -24,28 +24,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// createMockTableDetector creates a mock TableDetector without a background
-// scanner. Scanner behavior belongs to the cdc package tests.
-func createMockTableDetector() *cdc.TableDetector {
-	return createMockTableDetectorForTest()("test-cn")
-}
-
-// setupMockTableDetector creates and stubs a mock TableDetector for testing
-// Returns gostub.Stubs that should be reset with .Reset()
-// Uses a shared mock detector instance.
-func setupMockTableDetector() *gostub.Stubs {
-	sharedDetector := createMockTableDetector()
-
-	// Return the same shared detector instance for all calls
-	return gostub.Stub(&cdc.GetTableDetector, func(cnUUID string) *cdc.TableDetector {
-		return sharedDetector
-	})
-}
 
 // mockConcurrentChangeReader implements cdc.ChangeReader for concurrent testing
 type mockConcurrentChangeReader struct {
@@ -116,7 +97,6 @@ func (m *mockConcurrentChangeReader) GetTableInfo() *cdc.DbTableInfo {
 
 // TestCancelSynchronouslyStopsReaders verifies that Cancel() waits for all readers to stop
 func TestCancelSynchronouslyStopsReaders(t *testing.T) {
-	// Note: GetTableDetector is already stubbed globally in cdc_test.go init()
 
 	// Get baseline goroutine count
 	baselineGoroutines := runtime.NumGoroutine()
@@ -208,7 +188,6 @@ func TestCancelSynchronouslyStopsReaders(t *testing.T) {
 // TestCancelWithoutReadersDoesNotBlock verifies Cancel works when no readers exist
 func TestCancelWithoutReadersDoesNotBlock(t *testing.T) {
 	// Setup mock table detector
-	// Note: GetTableDetector is already stubbed globally in cdc_test.go init()
 
 	exec := &CDCTaskExecutor{
 		spec: &task.CreateCdcDetails{
@@ -241,7 +220,6 @@ func TestCancelWithoutReadersDoesNotBlock(t *testing.T) {
 // TestCancelIdempotent verifies calling Cancel multiple times is safe
 func TestCancelIdempotent(t *testing.T) {
 	// Setup mock table detector
-	// Note: GetTableDetector is already stubbed globally in cdc_test.go init()
 
 	exec := &CDCTaskExecutor{
 		spec: &task.CreateCdcDetails{
@@ -292,7 +270,6 @@ func TestStopAllReadersWithNilMap(t *testing.T) {
 // TestCancelMultipleReaders verifies Cancel works correctly with multiple readers
 func TestCancelMultipleReaders(t *testing.T) {
 	// Setup mock table detector
-	// Note: GetTableDetector is already stubbed globally in cdc_test.go init()
 
 	exec := &CDCTaskExecutor{
 		spec: &task.CreateCdcDetails{
@@ -360,4 +337,27 @@ func TestCancelMultipleReaders(t *testing.T) {
 	assert.Equal(t, 0, readerCount, "All readers should be removed from map")
 
 	t.Logf("Cancel duration: %v (waited for %d readers)", cancelDuration, numReaders)
+}
+
+func TestCDCDetectorShutdownCancelsCallbackAndPinsCleanup(t *testing.T) {
+	old := createMockTableDetector()
+	next := createMockTableDetector()
+	defer old.Close()
+	defer next.Close()
+	exec := &CDCTaskExecutor{tableDetector: old, spec: &task.CreateCdcDetails{TaskId: "owned"}}
+	exec.callbackMu.Lock()
+	ctx := exec.callbackContextLocked()
+	exec.callbackMu.Unlock()
+	// Existing mock detectors do not start scanner workers.
+	old.Callbacks["owned"] = func(map[uint32]cdc.TblMap) error { return nil }
+	next.Callbacks["owned"] = func(map[uint32]cdc.TblMap) error { return nil }
+	old.Stop()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("CN shutdown did not cancel callback")
+	}
+	exec.unregisterTableDetector()
+	require.False(t, old.IsTaskRegistered("owned"))
+	require.True(t, next.IsTaskRegistered("owned"), "old cleanup must not unregister the replacement CN")
 }

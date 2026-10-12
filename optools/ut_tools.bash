@@ -16,6 +16,37 @@
 
 GO_UT_ANALYSIS_VERSION="v0.0.0-20250711025253-f31acb12d3b1"
 
+# make ut already owns native preparation. Its invocation-local indication is
+# accepted only with the existing source/platform/artifact provenance proof.
+# Direct script calls, archives, and stale artifacts keep the build fallback.
+function prepare_ut_native() {
+    local accelerator optimization simsimd extra platform
+    local goos goarch hostos hostarch library
+    local expected_accelerator=cpu expected_simsimd=0
+    [[ "${MO_CL_CUDA:-0}" == 1 ]] && expected_accelerator=gpu
+    [[ "${MO_CL_SIMSIMD:-0}" == 1 ]] && expected_simsimd=1
+    IFS=: read -r accelerator optimization simsimd extra <<< "${UT_NATIVE_PREPARED:-}"
+    if [[ -z "${extra}" && "${accelerator}" == "${expected_accelerator}" &&
+          ( "${optimization}" == release || "${optimization}" == debug ) &&
+          "${simsimd}" == "${expected_simsimd}" ]]; then
+        if platform=$(go env GOOS GOARCH GOHOSTOS GOHOSTARCH); then
+            read -r goos goarch hostos hostarch <<< "$(printf '%s' "${platform}" | tr '\n' ' ')"
+            library=""
+            case "${goos}" in
+                darwin) library=libmo.dylib ;;
+                linux) library=libmo.so ;;
+            esac
+            if [[ -n "${library}" && "${goos}" == "${hostos}" && "${goarch}" == "${hostarch}" ]] &&
+                ./cgo/mo-native-provenance verify "$PWD" "$PWD/cgo/${library}" \
+                    "${goos}" "${goarch}" "${accelerator}" "${optimization}" "${simsimd}"; then
+                printf '%s\n' '[ut_native] verified Makefile-prepared artifacts; reuse native preparation'
+                return 0
+            fi
+        fi
+    fi
+    make cgo
+}
+
 function retry_command() {
     if (( $# < 3 )); then
         echo "Usage: retry_command MAX_ATTEMPTS DELAY_SECONDS COMMAND [ARG...]" >&2
@@ -74,6 +105,60 @@ function install_go_ut_analysis() {
 
     retry_command "${max_attempts}" "${delay_seconds}" \
         go install "github.com/matrixorigin/go-ut-analysis@${GO_UT_ANALYSIS_VERSION}"
+}
+
+# Partition roots from the exact race binary. Keep each root indivisible so
+# subtests, fuzz seeds and internal stress loops retain their ordinary selection.
+# Callers own shard_patterns, shard_counts and test_count in their local scope.
+# Bash dynamic scoping keeps this compatible with Bash 3.2.
+function partition_race_test_inventory() {
+    local inventory=$1 groups=$2 layout=$3
+    local name escaped meta index=0 group width duplicates
+    local -a names=()
+
+    shard_patterns=()
+    shard_counts=()
+    test_count=0
+    if ! [[ "${groups}" =~ ^[1-9][0-9]*$ ]] || (( groups > 64 )) ||
+        [[ "${layout}" != roundrobin && "${layout}" != contiguous ]] ||
+        [[ ! -r "${inventory}" ]]; then
+        return 2
+    fi
+    while IFS= read -r name || [[ -n "${name}" ]]; do
+        case "${name}" in Test*|Fuzz*|Example*) ;; *) continue ;; esac
+        if [[ "${name}" == *$'\t'* || "${name}" == *' '* ]]; then
+            echo "invalid runnable test name: ${name}" >&2
+            return 2
+        fi
+        names+=("${name}")
+    done < "${inventory}"
+    (( ${#names[@]} > 0 )) || return 2
+    duplicates=$(set -o pipefail; printf '%s\n' "${names[@]}" | LC_ALL=C sort | uniq -d) || return 2
+    if [[ -n "${duplicates}" ]]; then
+        echo "duplicate runnable test names: ${duplicates}" >&2
+        return 2
+    fi
+
+    width=$(( (${#names[@]} + groups - 1) / groups ))
+    for (( group=0; group<groups; group++ )); do
+        shard_patterns[group]='^('
+        shard_counts[group]=0
+    done
+    for name in "${names[@]}"; do
+        group=$(( index % groups ))
+        if [[ "${layout}" == contiguous ]]; then group=$(( index / width )); fi
+        # Names are literal roots, not caller-supplied regular expressions.
+        escaped=${name//\\/\\\\}
+        for meta in '.' '[' ']' '(' ')' '{' '}' '*' '+' '?' '^' '$' '|'; do
+            escaped=${escaped//"${meta}"/\\"${meta}"}
+        done
+        if (( shard_counts[group] > 0 )); then shard_patterns[group]+='|'; fi
+        shard_patterns[group]+="${escaped}"
+        shard_counts[group]=$(( shard_counts[group] + 1 ))
+        index=$((index + 1))
+    done
+    for (( group=0; group<groups; group++ )); do shard_patterns[group]+=')$'; done
+    test_count=${#names[@]}
 }
 
 # list_embedded_cluster_test_packages prints every requested test package whose

@@ -556,12 +556,12 @@ func (c ParquetConcatRewriteDataFilesCompactor) compactGroup(ctx context.Context
 		FilePathHash:     api.PathHash(location),
 	}
 	return RewriteDataFileRewrite{
-			Group:            group,
-			ReplacementFiles: []api.DataFile{replacement},
-		}, ObjectWrite{
-			Location: location,
-			Payload:  output.Bytes(),
-		}, nil
+		Group:            group,
+		ReplacementFiles: []api.DataFile{replacement},
+	}, ObjectWrite{
+		Location: location,
+		Payload:  output.Bytes(),
+	}, nil
 }
 
 type boundedRewriteBuffer struct {

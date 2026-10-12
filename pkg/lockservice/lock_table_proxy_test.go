@@ -119,6 +119,95 @@ func proxyReentrantWaiterCount(ops *sharedOps) int {
 	return n
 }
 
+func TestProxyWriterFairSharedBypassesCache(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		release := make(chan struct{})
+		close(release)
+		remote := &blockingProxyLockTable{
+			bind: pb.LockTable{
+				Group:     0,
+				Table:     28079,
+				ServiceID: "remote",
+				Valid:     true,
+			},
+			started: make(chan struct{}, 1),
+			release: release,
+		}
+		proxy := newLockTableProxy("local", "", remote, getLogger("")).(*localLockTableProxy)
+		txn := newActiveTxn([]byte("writer-fair-reader"), "writer-fair-reader", newFixedSlicePool(4), "")
+		txn.Lock()
+		var resultErr error
+		proxy.lock(
+			context.Background(),
+			txn,
+			[][]byte{[]byte("row")},
+			LockOptions{LockOptions: pb.LockOptions{
+				Mode:       pb.LockMode_Shared,
+				WriterFair: true,
+			}},
+			func(_ pb.Result, err error) { resultErr = err },
+		)
+		txn.Unlock()
+
+		require.NoError(t, resultErr)
+		require.Equal(t, int32(1), remote.calls.Load())
+		proxy.mu.RLock()
+		require.Empty(t, proxy.mu.holders,
+			"the proxy cannot decide fairness without the owner's waiter queue")
+		require.Empty(t, proxy.mu.currentHolder)
+		proxy.mu.RUnlock()
+		closeProxyTestTxn(t, txn, proxy)
+	})
+}
+
+func TestProxyWriterFairReentryUsesExistingAdmission(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		release := make(chan struct{})
+		close(release)
+		remote := &blockingProxyLockTable{
+			bind: pb.LockTable{
+				Group:     0,
+				Table:     28080,
+				ServiceID: "remote",
+				Valid:     true,
+			},
+			started: make(chan struct{}, 1),
+			release: release,
+		}
+		proxy := newLockTableProxy("local", "", remote, getLogger("")).(*localLockTableProxy)
+		txn := newActiveTxn([]byte("existing-reader"), "existing-reader", newFixedSlicePool(4), "")
+		key := "row"
+		proxy.mu.holders[key] = &sharedOps{
+			result: pb.Result{NewLockAdd: true},
+			txns:   []*activeTxn{txn},
+		}
+		proxy.mu.currentHolder[key] = txn.txnID
+
+		txn.Lock()
+		var resultErr error
+		proxy.lock(
+			context.Background(),
+			txn,
+			[][]byte{[]byte(key)},
+			LockOptions{LockOptions: pb.LockOptions{
+				Mode:       pb.LockMode_Shared,
+				WriterFair: true,
+			}},
+			func(_ pb.Result, err error) { resultErr = err },
+		)
+		txn.Unlock()
+
+		require.NoError(t, resultErr)
+		require.Zero(t, remote.calls.Load(),
+			"a fair re-entry must not wait behind its own proxy representative")
+		proxy.mu.Lock()
+		delete(proxy.mu.holders, key)
+		delete(proxy.mu.currentHolder, key)
+		proxy.mu.Unlock()
+		closeProxyTestTxn(t, txn, proxy)
+	})
+}
+
 func TestProxySameTxnSharedReentryJoinsInFlightGeneration(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		for _, cancelReentry := range []bool{false, true} {

@@ -255,7 +255,7 @@ originalName varchar(200)
 create table kb_portal_article_item (
 id bigint primary key,
 uniqueCode varchar(64) not null,
-rtfContent text
+rtfContent mediumtext
 );
 insert into kb_portal_article_order values
 (1,'U001',12,'Q-小','E1','orig1'),

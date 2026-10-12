@@ -115,10 +115,11 @@ func NewPipelineClient(
 		morpc.WithBackendLogger(logger),
 	)
 
-	clientOptions := []morpc.ClientOption{
+	clientOptions := make([]morpc.ClientOption, 0, 2)
+	clientOptions = append(clientOptions,
 		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
 		morpc.WithClientLogger(logger),
-	}
+	)
 	clientOptions = append(clientOptions, pipelineBackendCreateOptions(cfg)...)
 	cli, err := morpc.NewClient(
 		"pipeline-client",

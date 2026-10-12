@@ -1,0 +1,72 @@
+drop snapshot if exists recreated_pub_s;
+drop account if exists recreated_pub;
+drop account if exists recreated_sub;
+create account recreated_pub admin_name 'admin' identified by '111';
+create account recreated_sub admin_name 'admin' identified by '111';
+set @old_pub_id = (select account_id from mo_catalog.mo_account where account_name = 'recreated_pub');
+set @old_sub_id = (select account_id from mo_catalog.mo_account where account_name = 'recreated_sub');
+create database app;
+create table app.t(id int);
+insert into app.t values (17);
+create publication p database app account recreated_sub;
+create database subdb from recreated_pub publication p;
+create role reader;
+create user u1 identified by '111' default role reader;
+grant reader to u1;
+grant connect on account * to reader;
+grant select on table subdb.* to reader;
+create snapshot recreated_pub_s for cluster;
+set @old_owner = (select owner from mo_catalog.mo_pubs where account_name = 'recreated_pub' and pub_name = 'p');
+set @old_creator = (select creator from mo_catalog.mo_pubs where account_name = 'recreated_pub' and pub_name = 'p');
+drop account recreated_sub;
+drop account recreated_pub;
+restore cluster {snapshot='recreated_pub_s'};
+select account_id <> @old_pub_id as publisher_recreated from mo_catalog.mo_account where account_name = 'recreated_pub';
+➤ publisher_recreated[-7,1,0]  𝄀
+1
+select account_id <> @old_sub_id as subscriber_recreated from mo_catalog.mo_account where account_name = 'recreated_sub';
+➤ subscriber_recreated[-7,1,0]  𝄀
+1
+select count(*) as bound_publication from mo_catalog.mo_pubs p
+join mo_catalog.mo_account a on p.account_id = a.account_id
+where a.account_name = 'recreated_pub' and p.pub_name = 'p';
+➤ bound_publication[-5,64,0]  𝄀
+1
+select count(*) as publication_principals from mo_catalog.mo_pubs
+where account_name = 'recreated_pub' and pub_name = 'p'
+and owner = @old_owner and creator = @old_creator;
+➤ publication_principals[-5,64,0]  𝄀
+1
+select * from app.t;
+➤ id[4,32,0]  𝄀
+17
+select * from subdb.t;
+➤ id[4,32,0]  𝄀
+17
+delete from subdb.t;
+internal error: cannot insert/update/delete from public table
+select count(*) as bound_subscription_grants from mo_catalog.mo_role_privs p
+join mo_catalog.mo_database d on p.obj_id = d.dat_id
+where p.role_name = 'reader' and p.privilege_level = 'd.*' and d.datname = 'subdb';
+➤ bound_subscription_grants[-5,64,0]  𝄀
+1
+drop snapshot recreated_pub_s;
+create publication expired_p database app account recreated_sub;
+create database expired_sub from recreated_pub publication expired_p;
+drop publication expired_p;
+create snapshot recreated_pub_s for cluster;
+restore cluster {snapshot='recreated_pub_s'};
+select count(*) as live_publications from mo_catalog.mo_pubs
+where account_name = 'recreated_pub' and pub_name = 'p';
+➤ live_publications[-5,64,0]  𝄀
+1
+select count(*) as expired_publications from mo_catalog.mo_pubs
+where account_name = 'recreated_pub' and pub_name = 'expired_p';
+➤ expired_publications[-5,64,0]  𝄀
+0
+select * from subdb.t;
+➤ id[4,32,0]  𝄀
+17
+drop snapshot recreated_pub_s;
+drop account recreated_sub;
+drop account recreated_pub;

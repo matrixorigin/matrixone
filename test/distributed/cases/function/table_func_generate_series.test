@@ -79,6 +79,14 @@ select * from generate_random_float64(10, 42) t;
 select * from generate_random_float64(10, 42, '') t;
 select * from generate_random_float64(10, 42, 'exp') t;
 select * from generate_random_float64(10, 42, 'normal') t;
+select nth from generate_random_int64(3, 42, 'int64n', 100) t order by nth;
+select i64 from generate_random_int64(3, 42, 'int64n', 100) t order by nth;
+select count(*) as n from generate_random_int64(3, 42, 'int64n', 100) t;
+select min(i64) = 11 and max(i64) = 75 as values_ok from generate_random_int64(3, 42, 'int64n', 100) t;
+select nth from generate_random_float64(3, 42, 'normal') t order by nth;
+select f64 from generate_random_float64(3, 42, 'normal') t order by nth;
+select count(*) as n from generate_random_float64(3, 42, 'normal') t;
+select min(f64) < -0.49 and max(f64) > 1.55 as values_ok from generate_random_float64(3, 42, 'normal') t;
 
 -- Non-correlated table functions on the right side of JOIN are source
 -- relations.  They must not inherit a per-left-row execution dependency.

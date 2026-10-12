@@ -126,14 +126,10 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 					errch <- err
 					return
 				}
-				// The tail this flush committed is now durable but the querying CN may
-				// still serve a warm cache loaded before it (an index created empty has
-				// no tag=0 base, so that warm copy is doc-less). Drop it IF idle so the
-				// next query reloads the tail; a busy entry stays warm and refreshes
-				// later. No-op when nothing was written.
-				if len(segs) > 0 {
-					fulltext2.EvictIdleCache(w.cfg.IndexTable)
-				}
+				// A successful CDC flush only makes the new tail durable. Search-cache
+				// freshness is governed by the normal generation/stale/TTL lifecycle;
+				// CDC must not evict or refresh a warm read-only search object here.
+				// This also avoids making every ordinary tail flush contend with readers.
 				return
 			}
 

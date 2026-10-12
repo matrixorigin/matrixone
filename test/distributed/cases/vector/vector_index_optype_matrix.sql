@@ -7,7 +7,8 @@
 --                        chosen from the QUERY's function, not the op_type)
 --   vector_l1_ops     -> l1_distance          (ivfflat only; usearch has no L1)
 --   vector_ip_ops     -> inner_product
---   vector_cosine_ops -> cosine_distance
+--   vector_cosine_ops -> cosine_distance (HNSW uses native usearch cosine ANN for
+--                        normalized vectors; a zero/subnormal query is rejected)
 --
 -- Each block asserts three things: the served function reaches the index
 -- (VECTOR_INDEX_SCAN / hnsw_search in the plan), a non-served function does not, and
@@ -198,6 +199,8 @@ alter table h drop index h_l2sq;
 
 create index h_cos using hnsw on hc(v) op_type 'vector_cosine_ops';
 -- @separator:table
+-- HNSW cosine uses native usearch ANN for normalized vectors (#29082). hc holds unit vectors
+-- and the query is a unit vector, so the index serves it.
 -- @regex("hnsw_search", true)
 explain select a from hc order by cosine_distance(v,'[1,0,0,0]') limit 3;
 

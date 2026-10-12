@@ -15,153 +15,32 @@
 package plan
 
 import (
-	"context"
 	"testing"
-
-	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/stretchr/testify/require"
 )
 
-// Existing planner tests exercise the candidate native implementation without
-// a running cluster. This switch exists only in test binaries; production has
-// no way to turn the admission fence on before the durable rollout gate lands.
-func init() {
-	native0900TestAdmission.Store(true)
-}
-
-func native0900AdmissionDisabled(t *testing.T) {
-	previous := native0900TestAdmission.Swap(false)
-	t.Cleanup(func() { native0900TestAdmission.Store(previous) })
-}
-
-func TestBuildPlanAllowsUnqualifiedLegacyTextByDefault(t *testing.T) {
-	native0900AdmissionDisabled(t)
-	ctx := NewMockCompilerContext(true)
-	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
-		"create table t (name varchar(32))", 1)
-	require.NoError(t, err)
-	p, err := BuildPlan(ctx, stmt, false)
-	require.NoError(t, err)
-	require.Zero(t, p.GetDdl().GetCreateTable().GetTableDef().Cols[0].Typ.CollationVersion)
-}
-
-func TestBuildPlanLegacyExplicitCollationWithAdmissionDisabled(t *testing.T) {
-	native0900AdmissionDisabled(t)
-	for _, sql := range []string{
-		"create table t (name varchar(32) collate utf8mb4_general_ci)",
-		"create table t (name varchar(32) collate utf8mb4_bin)",
-		"create table t (name varchar(32) character set utf8mb4)",
-		"create table t (name varchar(32)) collate utf8mb4_general_ci",
-	} {
-		t.Run(sql, func(t *testing.T) {
-			ctx := NewMockCompilerContext(true)
-			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
-			require.NoError(t, err)
-			p, err := BuildPlan(ctx, stmt, false)
-			stmt.Free()
-			require.NoError(t, err)
-			require.Zero(t, p.GetDdl().GetCreateTable().GetTableDef().Cols[0].Typ.CollationVersion)
-		})
+// Main's canonical metadata owner admits the already implemented UCA400
+// contract while the staged 0900 and versioned physical format remain closed.
+func TestCollationMetadataIntegrationUsesCanonicalAdmission(t *testing.T) {
+	for _, identity := range []uint32{0, 1, 2, 3} {
+		typ := planpb.Type{Id: int32(types.T_varchar), Charset: identity}
+		require.NoError(t, planpb.RequireLegacyCollations(typ))
 	}
-	for _, sql := range []string{
-		"select 'a' collate utf8mb4_bin",
-		"select 'a' collate utf8mb4_general_ci",
-	} {
-		t.Run(sql, func(t *testing.T) {
-			ctx := NewMockCompilerContext(true)
-			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
-			require.NoError(t, err)
-			_, err = BuildPlan(ctx, stmt, false)
-			stmt.Free()
-			require.NoError(t, err)
-		})
+	for _, identity := range []uint32{9, 10} {
+		typ := planpb.Type{Id: int32(types.T_varchar), Charset: identity, CollationVersion: 1}
+		require.NoError(t, planpb.RequireLegacyCollations(typ))
+		require.NoError(t, planpb.RequireLegacyCollations(&planpb.TableDef{Cols: []*planpb.ColDef{{Typ: typ}}}))
 	}
-	ctx := NewMockCompilerContext(true)
-	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
-		"select 'a' collate utf8mb4_0900_ai_ci", 1)
-	require.NoError(t, err)
-	_, err = BuildPlan(ctx, stmt, false)
-	stmt.Free()
-	require.ErrorContains(t, err, native0900AdmissionError)
-	stmt, err = parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
-		"create table t (name varchar(32) collate utf8mb4_0900_ai_ci)", 1)
-	require.NoError(t, err)
-	_, err = BuildPlan(ctx, stmt, false)
-	stmt.Free()
-	require.ErrorContains(t, err, native0900AdmissionError)
-}
-
-func TestTableDefaultTextKeepsLegacySemanticVersion(t *testing.T) {
-	typ := &planpb.Type{Id: int32(types.T_varchar)}
-	applyTableDefaultCharsetToPlanType(typ, uint32(types.CharsetUTF8))
-	require.Equal(t, uint32(types.CharsetUTF8), typ.Charset)
-	require.Zero(t, typ.CollationVersion)
-}
-
-func TestDefaultOnlyNativeCollationIsNotAdmitted(t *testing.T) {
-	native0900AdmissionDisabled(t)
-	for _, collation := range []string{"utf8mb4_0900_ai_ci", "utf8mb4_0900_bin"} {
-		for _, columns := range []string{
-			"id int",
-			"id int, name varchar(32) collate utf8mb4_general_ci",
-		} {
-			t.Run(collation+"/"+columns, func(t *testing.T) {
-				ctx := NewMockCompilerContext(true)
-				stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
-					"create table t ("+columns+") collate "+collation, 1)
-				require.NoError(t, err)
-				_, err = BuildPlan(ctx, stmt, false)
-				stmt.Free()
-				require.ErrorContains(t, err, native0900AdmissionError)
-			})
-		}
+	for _, identity := range []uint32{4, 5, 260} {
+		typ := planpb.Type{Id: int32(types.T_varchar), Charset: identity, CollationVersion: 1}
+		require.Error(t, planpb.RequireLegacyCollations(typ))
+		require.Error(t, planpb.RequireLegacyCollations(&planpb.Expr{Typ: typ}))
 	}
-	table := &planpb.TableDef{DefaultCharset: 260}
-	plan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
-		Nodes: []*planpb.Node{{TableDef: table}},
-	}}}
-	require.ErrorContains(t, requireNative0900PlanAdmission(context.Background(), nil, plan),
-		"unsupported table default collation identity")
-}
-
-func TestNativeCollationRelationFormatIsRejectedByDefault(t *testing.T) {
-	native0900AdmissionDisabled(t)
-	p := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
-		Nodes: []*planpb.Node{{TableDef: &planpb.TableDef{
-			KeyFormat: uint32(types.PADSpaceKeyV1),
-		}}},
-	}}}
-	require.ErrorContains(t,
-		requireNative0900PlanAdmission(context.Background(), nil, p),
-		native0900AdmissionError)
-}
-
-func TestCollationKeyOnlyPlanIsRejectedByDefault(t *testing.T) {
-	native0900AdmissionDisabled(t)
-	p := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
-		Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{{
-			Typ: planpb.Type{Id: int32(types.T_varbinary)},
-			Expr: &planpb.Expr_F{F: &planpb.Function{
-				Func: &planpb.ObjectRef{
-					Obj:     int64(581) << 32,
-					ObjName: "internal_collation_key",
-				},
-				Args: []*planpb.Expr{{
-					Typ:  planpb.Type{Id: int32(types.T_varchar)},
-					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
-				}, {
-					Typ: planpb.Type{Id: int32(types.T_uint64)},
-					Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
-						Value: &planpb.Literal_U64Val{U64Val: uint64(types.CharsetUTF8)},
-					}},
-				}},
-			}},
-		}}}},
-	}}}
-	err := requireNative0900PlanAdmission(context.Background(), nil, p)
-	require.ErrorContains(t, err, native0900AdmissionError)
+	require.Error(t, planpb.RequireLegacyCollations(planpb.Type{Id: int32(types.T_varchar), Charset: 3, CollationVersion: 2}))
+	for _, format := range []uint32{1, 256} {
+		require.Error(t, planpb.RequireLegacyCollations(&planpb.TableDef{DefaultCharset: 3, KeyFormat: format}))
+	}
 }

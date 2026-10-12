@@ -86,7 +86,7 @@ func ftCmp(t *testing.T, b *QueryBuilder, op string, match *plan.Expr, bound *pl
 
 func TestFulltextRuntimeScoreGuard(t *testing.T) {
 	newB := func() *QueryBuilder {
-		return NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		return NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	}
 	lit := func(v float64) *plan.Expr { return makePlan2Float64ConstExprWithType(v) }
 
@@ -205,7 +205,7 @@ func TestFulltextRuntimeScoreGuard(t *testing.T) {
 // Otherwise `MATCH(...) < 0` raises 20105 while `MATCH(...) < ?` bound to 0 executes
 // and returns rows, which is a difference the user can see and no comment can justify.
 func TestDrivingHarvestLiteralParameterParity(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	fn := ftMatchFn("body", 1)
 	lit := makePlan2Float64ConstExprWithType
 

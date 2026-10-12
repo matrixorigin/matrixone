@@ -62,7 +62,7 @@ func indexBuildRawSpec(tag, upperLimit int32, typ types.Type) *plan.RuntimeFilte
 }
 
 func indexBuildTestProcess(t *testing.T) *process.Process {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	return proc
 }
@@ -356,7 +356,7 @@ func TestIndexBuildRuntimeFilterCopyFailureFailsOpen(t *testing.T) {
 		mpool.NoFixed,
 	)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", limited)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", limited)
 	proc.SetMessageBoard(message.NewMessageBoard())
 
 	sourceMP := mpool.MustNewZero()
@@ -428,7 +428,7 @@ func TestIndexBuildRuntimeFilterClosureFailureFailsOpen(t *testing.T) {
 		mpool.NoFixed,
 	)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, service, limited)
+	proc := testutil.NewProcessWithOwnedMPool(t, service, limited)
 	proc.SetMessageBoard(message.NewMessageBoard())
 	arg := NewArgument()
 	arg.RuntimeFilterSpec = spec

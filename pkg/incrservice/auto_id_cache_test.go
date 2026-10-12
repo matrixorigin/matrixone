@@ -75,6 +75,69 @@ func TestAutoIDCacheConfig(t *testing.T) {
 	require.Equal(t, 80, base.CountPerAllocate)
 }
 
+func TestEstimatedRowsDoNotConsumeDurableAutoIncrementRange(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		estimate int64
+		capacity int
+		values   []int32
+		offset   uint64
+		next     int32
+		requests []int
+	}{
+		{"finite_object_bound", math.MaxUint32, 0, []int32{1, 2, 3}, 10000, 10001, []int{10000, 10000}},
+		{"large_int64_bound", math.MaxInt64 - 1, 0, []int32{1, 2, 3}, 10000, 10001, []int{10000, 10000}},
+		{"actual_batch_larger_than_cache", math.MaxUint32, 4, []int32{1, 2, 3, 4, 5, 6, 7, 8, 9}, 13, 14, []int{4, 9, 4}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime.RunTest("", func(runtime.Runtime) {
+				ctx := defines.AttachAccountId(t.Context(), catalog.System_Account)
+				store := &autoIDCacheStore{IncrValueStore: NewMemStore()}
+				cols := []AutoColumn{{ColName: "id", Step: 1}}
+				require.NoError(t, store.Create(ctx, 0, cols, nil))
+				cfg := Config{CountPerAllocate: tc.capacity}
+				cfg.adjust()
+				a1 := newValueAllocator("", store)
+				defer a1.close()
+				first, err := newTableCache(ctx, "", 0, 0, cols, cfg, a1, nil, true)
+				require.NoError(t, err)
+				defer first.close()
+				mp := mpool.MustNewZero()
+				insert := func(cache incrTableCache, rows int, hint int64) []int32 {
+					v := vector.NewVec(types.T_int32.ToType())
+					defer v.Free(mp)
+					for range rows {
+						require.NoError(t, vector.AppendFixed(v, int32(0), true, mp))
+					}
+					_, err := cache.insertAutoValues(ctx, 0, []*vector.Vector{v}, rows, hint)
+					require.NoError(t, err)
+					return append([]int32(nil), vector.MustFixedColWithTypeCheck[int32](v)...)
+				}
+				require.Equal(t, tc.values, insert(first, len(tc.values), tc.estimate))
+				cc := first.(*tableCache).getColumnCache("id")
+				cc.Lock()
+				err = cc.waitPrevAllocatingLocked(ctx)
+				cc.Unlock()
+				require.NoError(t, err)
+				offset, _, err := store.GetColumnValue(ctx, 0, "id", nil)
+				require.NoError(t, err)
+				require.Equal(t, tc.offset, offset, "durable reservation follows cache policy and actual rows, not the guessed cardinality")
+				// A fresh allocator represents another CN or a lost local cache.
+				freshCols, err := store.GetColumns(ctx, 0, nil)
+				require.NoError(t, err)
+				a2 := newValueAllocator("", store)
+				defer a2.close()
+				second, err := newTableCache(ctx, "", 0, 0, freshCols, cfg, a2, nil, true)
+				require.NoError(t, err)
+				defer second.close()
+				require.Equal(t, []int32{tc.next}, insert(second, 1, 0))
+				require.Equal(t, tc.requests, store.requests())
+				require.Zero(t, mp.CurrNB())
+			})
+		})
+	}
+}
+
 func TestAutoIDCacheDemandOnly(t *testing.T) {
 	for _, tc := range []struct {
 		name              string

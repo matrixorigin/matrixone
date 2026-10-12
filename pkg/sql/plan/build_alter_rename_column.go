@@ -91,8 +91,9 @@ func updateRenameColumnInTableDef(
 		return nil, nil
 	}
 
-	// Renaming a referenced column would leave dependent generated expressions stale.
-	if err := checkColumnWithGeneratedDependency(ctx.GetContext(), tableDef, oldColName); err != nil {
+	// COPY replays owned functional expressions with the renamed source.
+	// Ordinary generated dependencies are still rejected.
+	if err := renameFunctionalColumnDependencies(ctx.GetContext(), tableDef, oldColName, newColNameOrigin); err != nil {
 		return nil, err
 	}
 	if err := checkColumnWithDefaultDependency(ctx.GetContext(), tableDef, oldColName); err != nil {
@@ -477,7 +478,7 @@ func AlterColumn(
 				defer func() {
 					tmpColumnDef.Free()
 				}()
-				defaultValue, err := buildDefaultExprWithColumns(
+				defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx),
 					tmpColumnDef, colDef.Typ, ctx.GetProcess(), tableDef.Cols,
 				)
 				if err != nil {

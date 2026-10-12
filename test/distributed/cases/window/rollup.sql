@@ -188,7 +188,7 @@ insert into categories (category_id, category_name) values
 (2, 'Books');
 select * from categories;
 
--- @bvt:issue#20000
+-- Regression for #20000 / #29096: JOIN/ENUM ROLLUP without GROUPING projections.
 select
     year(o.order_date) as order_year,
     month(o.order_date) as order_month,
@@ -219,7 +219,6 @@ order by
     order_month,
     c.city,
     cat.category_name;
--- @bvt:issue
 
 select
     year(o.order_date) as order_year,
@@ -903,6 +902,7 @@ select column_name, is_nullable from information_schema.columns where table_sche
 create view grouping_extension_rollup_v as select a, b, sum(v) as s from grouping_extension_metadata_src group by a, b with rollup;
 select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_rollup_v' and column_name in ('a', 'b') order by ordinal_position;
 select count(*) from grouping_extension_rollup_v where a is null or b is null;
+select count(*) from grouping_extension_rollup_v where b = 10;
 create view grouping_extension_cube_v as select a, b, sum(v) as s from grouping_extension_metadata_src group by cube(a, b);
 select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_cube_v' and column_name in ('a', 'b') order by ordinal_position;
 select count(*) from grouping_extension_cube_v where a is null or b is null;
@@ -976,5 +976,8 @@ group by rollup(a, b, c)
 order by g, a, b, c;
 set optimizer_hints = @saved_optimizer_hints;
 drop table grouping_set_decimal_sum_order;
+
+-- A dummy VALUE_SCAN must not discard a filter retained above expansion.
+select count(*) from (select 1 as k, count(*) as n from dual group by rollup(1)) d where k is null;
 
 drop database rollup_test;

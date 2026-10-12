@@ -35,7 +35,7 @@ func newCounterLogExporter(counter *counterSet) stats.LogExporter {
 
 // Export implements the stats.LogExporter interface.
 func (e *counterLogExporter) Export() []zap.Field {
-	var fields []zap.Field
+	fields := make([]zap.Field, 0, 15)
 	fields = append(fields, zap.Int64("accepted connections",
 		e.counter.connAccepted.Load()))
 	fields = append(fields, zap.Int64("total connections",

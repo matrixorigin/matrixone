@@ -20,7 +20,7 @@
   <properties>
     <!-- Java 8 bytecode: the jar must run on the JDK 8 that MatrixOne CI
          provides (setup-env installs JDK 8; the BVT tester docker image is
-         matrixorigin/tester:go1.26.4-jdk8).  All dependencies below still
+         matrixorigin/tester:go1.27.0-jdk8).  All dependencies below still
          ship Java-8-compatible bytecode.  javac 8 has no - -release flag, so
          the flag is applied only on JDK 9+ via the profile below. -->
     <maven.compiler.source>1.8</maven.compiler.source>
@@ -194,6 +194,12 @@
                   <artifactId>mysql-connector-java</artifactId>
                   <version>8.0.15</version>
                   <destFileName>mysql-connector-java-8.0.15.jar</destFileName>
+                </artifactItem>
+                <artifactItem>
+                  <groupId>com.mysql</groupId>
+                  <artifactId>mysql-connector-j</artifactId>
+                  <version>8.3.0</version>
+                  <destFileName>mysql-connector-j-8.3.0.jar</destFileName>
                 </artifactItem>
                 <artifactItem>
                   <groupId>com.mysql</groupId>

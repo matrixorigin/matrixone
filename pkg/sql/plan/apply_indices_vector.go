@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 func decodeVectorIndexAlgoParams(value string) (map[string]json.RawMessage, error) {
@@ -980,9 +981,14 @@ func (builder *QueryBuilder) resolveProjectedVectorSortTiebreak(projectNode *pla
 // three bits of context needed to recognize its own `distfn(col, vec_lit)`
 // expression.
 func (builder *QueryBuilder) getDistRangeFromFilters(
-	filters []*plan.Expr, partPos int32, origFuncName string, vecLitArg *plan.Expr,
+	filters []*plan.Expr, partPos int32, origFuncName string, vecLitArg *plan.Expr, scanTags ...int32,
 ) ([]*plan.Expr, *plan.DistRange) {
 	var distRange *plan.DistRange
+	var scanTag int32
+	hasScanTag := len(scanTags) > 0
+	if hasScanTag {
+		scanTag = scanTags[0]
+	}
 
 	currIdx := 0
 	for _, filter := range filters {
@@ -1001,7 +1007,8 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 			goto NO_RANGE
 		}
 
-		if partCol := fdist.Args[0].GetCol(); partCol == nil || partCol.ColPos != partPos {
+		if partCol := fdist.Args[0].GetCol(); partCol == nil || partCol.ColPos != partPos ||
+			(hasScanTag && partCol.RelPos != scanTag) {
 			goto NO_RANGE
 		}
 
@@ -1073,6 +1080,100 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 	}
 
 	return filters[:currIdx], distRange
+}
+
+// filtersContainIndexedDistanceExpr reports whether a residual filter still
+// depends on a vector distance over the indexed scan column.  Any such
+// predicate cannot run after the index has truncated its candidate stream:
+// even a different query vector or metric can accept a row outside the
+// nearest K candidates for the ORDER BY distance.  The walk is deliberately
+// recursive so wrappers such as BETWEEN, NOT, OR, and reversed comparisons
+// are covered without trying to normalize their SQL three-valued semantics
+// into a range.
+func filtersContainIndexedDistanceExpr(
+	filters []*plan.Expr,
+	scanTag, partPos int32,
+	_ string,
+	_ *plan.Expr,
+) bool {
+	for _, filter := range filters {
+		if exprContainsIndexedDistanceExpr(filter, scanTag, partPos) {
+			return true
+		}
+	}
+	return false
+}
+
+func exprContainsIndexedDistanceExpr(
+	expr *plan.Expr,
+	scanTag, partPos int32,
+) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if indexedDistanceExprMatches(fn, scanTag, partPos) {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if exprContainsIndexedDistanceExpr(arg, scanTag, partPos) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if exprContainsIndexedDistanceExpr(item, scanTag, partPos) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func exprDependsOnIndexedColumn(
+	expr *plan.Expr,
+	scanTag, partPos int32,
+) bool {
+	if expr == nil {
+		return false
+	}
+	if col := expr.GetCol(); col != nil {
+		return col.RelPos == scanTag && col.ColPos == partPos
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if exprDependsOnIndexedColumn(arg, scanTag, partPos) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if exprDependsOnIndexedColumn(item, scanTag, partPos) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func indexedDistanceExprMatches(
+	fn *plan.Function,
+	scanTag, partPos int32,
+) bool {
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 {
+		return false
+	}
+	if _, ok := metric.DistFuncOpTypes[fn.Func.ObjName]; !ok {
+		return false
+	}
+	for _, arg := range fn.Args {
+		if exprDependsOnIndexedColumn(arg, scanTag, partPos) {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeUpperBound folds a new upper bound into dr, keeping the tighter (smaller,
@@ -1458,6 +1559,25 @@ func exprCallsFunc(expr *plan.Expr, fnName string) bool {
 				return true
 			}
 		}
+	case *plan.Expr_W:
+		// A MATCH inside a window spec (function arg, PARTITION BY, ORDER BY) must be detected
+		// too, mirroring replaceScoreFnInExprBy's Expr_W traversal (#28974). Guard e.W like that
+		// sibling does, so a partially-built Expr_W with a nil spec does not panic here.
+		if e.W != nil {
+			if exprCallsFunc(e.W.WindowFunc, fnName) {
+				return true
+			}
+			for _, p := range e.W.PartitionBy {
+				if exprCallsFunc(p, fnName) {
+					return true
+				}
+			}
+			for _, o := range e.W.OrderBy {
+				if o != nil && exprCallsFunc(o.Expr, fnName) {
+					return true
+				}
+			}
+		}
 	}
 	return false
 }
@@ -1484,6 +1604,22 @@ func replaceScoreFnInExprBy(expr *plan.Expr, rewrite func(*plan.Function) *plan.
 	case *plan.Expr_List:
 		for i, sub := range e.List.List {
 			e.List.List[i] = replaceScoreFnInExprBy(sub, rewrite)
+		}
+	case *plan.Expr_W:
+		// A window spec carries its function and OVER partition/order-by as nested exprs. Recurse so a
+		// served MATCH inside a window function argument or its OVER order-by is rewritten to the score
+		// column too -- reached only from the WINDOW fulltext anchor; aggregate/projection exprs never
+		// hold an Expr_W, so existing callers are unaffected.
+		if e.W != nil {
+			e.W.WindowFunc = replaceScoreFnInExprBy(e.W.WindowFunc, rewrite)
+			for i, p := range e.W.PartitionBy {
+				e.W.PartitionBy[i] = replaceScoreFnInExprBy(p, rewrite)
+			}
+			for i, o := range e.W.OrderBy {
+				if o != nil {
+					e.W.OrderBy[i].Expr = replaceScoreFnInExprBy(o.Expr, rewrite)
+				}
+			}
 		}
 	}
 	return expr

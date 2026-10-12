@@ -3458,7 +3458,7 @@ func (m *lockTableHolders) detachWithFilter(
 	filter func(uint64, lockTable) bool,
 ) []lockTable {
 	m.RLock()
-	var removed []lockTable
+	removed := make([]lockTable, 0, len(m.holders))
 	for _, h := range m.holders {
 		removed = append(removed, h.detachWithFilter(filter)...)
 	}

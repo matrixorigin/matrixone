@@ -727,9 +727,11 @@ func (slices *ColumnSlices) GetDatetime(r uint64, i uint64) (string, error) {
 	case types.T_datetime:
 		scale := vec.GetType().Scale
 		dt := slices.arrDatetime[sliceIdx][r]
-		// If fractional seconds are 0, format without fractional part (MySQL behavior)
 		if scale > 0 && dt.MicroSec() == 0 {
-			return dt.String2(0), nil
+			if scale > 9 {
+				scale = 9
+			}
+			return dt.String() + ".000000000"[:scale+1], nil
 		}
 		return dt.String2(scale), nil
 	default:

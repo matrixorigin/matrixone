@@ -143,7 +143,7 @@ func TestUnionAreaProjectionBoundaryMatrix(t *testing.T) {
 }
 
 func TestSerializedRuntimeFilterBoundsNullAndAreaModes(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	keys := vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(keys,
 		make([]byte, types.VarlenaInlineSize+9), false, proc.Mp()))

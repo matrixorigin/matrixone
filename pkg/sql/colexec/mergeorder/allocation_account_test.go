@@ -15,10 +15,10 @@
 package mergeorder
 
 import (
-	"errors"
 	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -96,7 +96,7 @@ func newAccountedMergeOrder() *MergeOrder {
 }
 
 func TestAccountedMergeOrderResidentLifecycle(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeOrder()
 	state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
 	batches := []*batch.Batch{
@@ -122,7 +122,7 @@ func TestAccountedMergeOrderResidentLifecycle(t *testing.T) {
 }
 
 func TestAccountedMergeOrderResetAndReuse(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeOrder()
 	first := installMergeOrderTestAllocation(t, op, proc, 64<<20)
 	resetChildren(op, []*batch.Batch{
@@ -156,7 +156,7 @@ func TestAccountedMergeOrderResetAndReuse(t *testing.T) {
 }
 
 func TestAccountedMergeOrderSpillRunBoundAndResources(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeOrder()
 	state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
 	require.NoError(t, op.Prepare(proc))
@@ -188,7 +188,7 @@ func TestAccountedMergeOrderSpillRunBoundAndResources(t *testing.T) {
 }
 
 func TestAccountedMergeOrderResidentMetadataBoundSpills(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeOrder()
 	op.SpillThreshold = 1 << 30
 	state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
@@ -211,7 +211,7 @@ func TestAccountedMergeOrderResidentMetadataBoundSpills(t *testing.T) {
 }
 
 func TestAccountedMergeOrderForcedSpillKeepsOrdering(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeOrder()
 	op.SpillThreshold = 1
 	state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
@@ -239,7 +239,7 @@ func TestAccountedMergeOrderForcedSpillKeepsOrdering(t *testing.T) {
 }
 
 func TestAccountedMergeOrderPhysicalPressureSpillsBelowPolicyHint(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeOrder()
 	// Keep the logical policy ceiling well above this input while disabling
 	// append-tail state. The only spill trigger below is real account pressure.
@@ -282,15 +282,49 @@ func TestAccountedMergeOrderPhysicalPressureSpillsBelowPolicyHint(t *testing.T) 
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestAccountedMergeOrderDynamicShareSpillsBelowPolicyHint(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	op := newAccountedMergeOrder()
+	op.SpillThreshold = 1 << 30
+	state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
+	first := newValuesBatch(proc, make([]int8, 4096))
+	second := newValuesBatch(proc, make([]int8, 4096))
+	op.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second}))
+	require.NoError(t, op.Prepare(proc))
+	require.NotNil(t, op.ctr.growthParticipant)
+	require.True(t, op.ctr.growthParticipant.Release())
+
+	batchBytes := uint64(first.Size())
+	budget := process.MustNewExecutionResourceBudget(
+		batchBytes+batchBytes/2,
+		batchBytes+batchBytes/2,
+	)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	op.ctr.growthParticipant, err = generation.RegisterMemoryGrowthParticipant()
+	require.NoError(t, err)
+
+	require.Len(t, collectInt8Results(t, op, proc, 0), 8192)
+	require.Positive(t, op.OpAnalyzer.GetOpStats().SpillSize)
+	require.Nil(t, op.ctr.growthParticipant)
+	require.Zero(t, generation.Snapshot().MemoryGrowthParticipants)
+
+	op.Children[0].Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	finalizeMergeOrderTestAllocation(t, op, state)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestAccountedMergeOrderSpillResourceAdmissionCleans(t *testing.T) {
 	tests := []struct {
-		name      string
-		component process.ExecutionResourceComponent
-		reserve   func(*process.ExecutionResourceGeneration) (func(), error)
+		name    string
+		message string
+		reserve func(*process.ExecutionResourceGeneration) (func(), error)
 	}{
 		{
-			name:      "disk",
-			component: process.ExecutionResourceComponentSpillDisk,
+			name:    "disk",
+			message: "merge order spill disk budget exceeded",
 			reserve: func(generation *process.ExecutionResourceGeneration) (func(), error) {
 				token, err := generation.ReserveSpillDisk(generation.SpillDiskCap())
 				return func() {
@@ -301,8 +335,8 @@ func TestAccountedMergeOrderSpillResourceAdmissionCleans(t *testing.T) {
 			},
 		},
 		{
-			name:      "file-descriptor",
-			component: process.ExecutionResourceComponentSpillFD,
+			name:    "file-descriptor",
+			message: "merge order spill file descriptor budget exceeded",
 			reserve: func(generation *process.ExecutionResourceGeneration) (func(), error) {
 				token, err := generation.ReserveSpillFD(generation.SpillFDCap())
 				return func() {
@@ -315,7 +349,7 @@ func TestAccountedMergeOrderSpillResourceAdmissionCleans(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			op := newAccountedMergeOrder()
 			state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
 			releaseBlocker, err := tc.reserve(state.generation)
@@ -326,22 +360,21 @@ func TestAccountedMergeOrderSpillResourceAdmissionCleans(t *testing.T) {
 					releaseBlocker()
 				}
 			}()
+			op.SpillThreshold = 1
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+				newValuesBatch(proc, []int8{1, 2, 3}),
+			})
+			op.AppendChild(child)
 			require.NoError(t, op.Prepare(proc))
 
-			bat := newValuesBatch(proc, []int8{1, 2, 3})
-			_, err = op.ctr.spillBatchToNewRun(
-				proc,
-				bat,
-				nil,
-				process.NewAnalyzer(0, false, false, "mergeorder-admission"),
-			)
-			bat.Clean(proc.Mp())
-			var resourceErr *process.ExecutionResourceError
-			require.True(t, errors.As(err, &resourceErr))
-			require.Equal(t, tc.component, resourceErr.Component)
+			_, err = vm.Exec(op, proc)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), err)
+			require.Contains(t, err.Error(), tc.message)
+			require.NotContains(t, err.Error(), process.ErrExecutionResourceAdmission.Error())
 
 			releaseBlocker()
 			released = true
+			child.Free(proc, true, err)
 			op.Free(proc, true, err)
 			require.Zero(t, state.generation.SpillDiskUsed())
 			require.Zero(t, state.generation.SpillFDUsed())
@@ -353,7 +386,7 @@ func TestAccountedMergeOrderSpillResourceAdmissionCleans(t *testing.T) {
 }
 
 func TestAccountedMergeOrderShortDiskWriteReconciles(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeOrder()
 	state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
 	require.NoError(t, op.Prepare(proc))
@@ -381,7 +414,7 @@ func TestAccountedMergeOrderShortDiskWriteReconciles(t *testing.T) {
 }
 
 func TestAccountedMergeOrderOptionalTailFallsBackToCommittedRun(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Base.Lim.Size = 64 << 20
 	generation, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
@@ -465,7 +498,7 @@ func BenchmarkMergeOrderUnaccountedResident(b *testing.B) {
 }
 
 func benchmarkMergeOrderResident(b *testing.B, accounted bool) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	defer proc.Free()
 	b.ReportAllocs()
 	for b.Loop() {

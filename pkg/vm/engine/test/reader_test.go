@@ -171,94 +171,6 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	require.NoError(t, txn.Commit(ctx))
 }
 
-func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
-	t.Skip("not finished")
-	var (
-		err          error
-		mp           *mpool.MPool
-		txn          client.TxnOperator
-		accountId    = catalog.System_Account
-		tableName    = "test_reader_table"
-		databaseName = "test_reader_database"
-
-		primaryKeyIdx int = 3
-
-		relation engine.Relation
-		_        engine.Database
-
-		taeEngine     *testutil.TestTxnStorage
-		rpcAgent      *testutil.MockRPCAgent
-		disttaeEngine *testutil.TestDisttaeEngine
-	)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
-
-	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
-	schema.Name = tableName
-
-	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
-	defer func() {
-		disttaeEngine.Close(ctx)
-		taeEngine.Close(true)
-		rpcAgent.Close()
-	}()
-
-	ctx, cancel = context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
-	require.NoError(t, err)
-
-	rowsCount := 10
-	bat1 := catalog2.MockBatch(schema, rowsCount)
-
-	// write table
-	{
-		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
-		require.NoError(t, err)
-
-		require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bat1)))
-
-		var bat2 *batch.Batch
-		txn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(
-			relation.GetDBID(ctx), relation.GetTableID(ctx), 1, func(entry disttae.Entry) {
-				waitedDeletes := vector.MustFixedColWithTypeCheck[types.Rowid](entry.Bat().GetVector(0))
-				waitedDeletes = waitedDeletes[:rowsCount/2]
-				bat2 = batch.NewWithSize(1)
-				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-				require.NoError(t, vector.AppendFixedList[types.Rowid](bat2.Vecs[0], waitedDeletes, nil, mp))
-			})
-
-		require.NoError(t, relation.Delete(ctx, bat2, catalog.Row_ID))
-	}
-
-	expr := []*plan.Expr{
-		readutil.MakeFunctionExprForTest("=", []*plan.Expr{
-			readutil.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
-			plan2.MakePlan2Int64ConstExprWithType(bat1.Vecs[primaryKeyIdx].Get(9).(int64)),
-		}),
-	}
-
-	reader, err := testutil.GetRelationReader(
-		ctx,
-		disttaeEngine,
-		txn,
-		relation,
-		expr,
-		mp,
-		t,
-	)
-	require.NoError(t, err)
-
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
-	_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, ret)
-	require.NoError(t, err)
-
-	require.Equal(t, 1, int(ret.RowCount()))
-	require.NoError(t, txn.Commit(ctx))
-}
-
 func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 	var (
 		err          error
@@ -1339,7 +1251,7 @@ func Test_ShardingLocalReader(t *testing.T) {
 
 func Test_SimpleReader(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	proc := testutil3.NewProcessWithMPool(t, "", mp)
+	proc := testutil3.NewProcessWithOwnedMPool(t, "", mp)
 	pkType := types.T_int32.ToType()
 	bat1 := readutil.NewCNTombstoneBatch(
 		&pkType,

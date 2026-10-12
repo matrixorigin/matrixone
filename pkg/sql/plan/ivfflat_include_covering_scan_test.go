@@ -51,7 +51,7 @@ func TestBuildIvfSearchColDefsIncludesCoveringColumnsWithoutMutatingBase(t *test
 }
 
 func TestApplyIndicesForSortUsingIvfflatBuildsDynamicColsForOptimizerPath(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(false)
+	baseMockCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {

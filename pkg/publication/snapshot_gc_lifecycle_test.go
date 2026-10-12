@@ -18,13 +18,17 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -94,4 +98,38 @@ func TestDeleteSnapshotWithLifecycleGateIsAtomicAndOrdered(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDeleteSnapshotInSeparateTxnForcesPessimisticRC(t *testing.T) {
+	client.RunTxnTests(func(txnClient client.TxnClient, _ rpc.TxnSender) {
+		ctrl := gomock.NewController(t)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().LatestLogtailAppliedTime().Return(timestamp.Timestamp{})
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil)
+
+		oldExecWithResult := ExecWithResult
+		defer func() { ExecWithResult = oldExecWithResult }()
+		var sqls []string
+		ExecWithResult = func(
+			_ context.Context,
+			sql string,
+			_ string,
+			txnOp client.TxnOperator,
+		) (executor.Result, error) {
+			sqls = append(sqls, sql)
+			require.Equal(t, txn.TxnMode_Pessimistic, txnOp.Txn().Mode)
+			require.Equal(t, txn.TxnIsolation_RC, txnOp.Txn().Isolation)
+			return executor.Result{}, nil
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		require.NoError(t, deleteSnapshotInSeparateTxn(
+			ctx, eng, txnClient, "cn", "snapshot",
+		))
+		require.Equal(t, []string{
+			databranchutils.LineageOwnerLifecycleLockSQL(),
+			"delete from mo_catalog.mo_snapshots where sname = 'snapshot'",
+		}, sqls)
+	})
 }

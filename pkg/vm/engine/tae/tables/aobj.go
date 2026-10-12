@@ -202,7 +202,13 @@ func (obj *aobject) GetDuplicatedRows(
 			if maxv, err = obj.GetMaxRowByTS(to); err != nil {
 				return
 			}
-			minv, err = obj.GetMaxRowByTS(from)
+			// GetMaxRowByTS returns an exclusive row endpoint. Include appends
+			// at from by looking up the endpoint immediately before it.
+			lowerTS := from
+			if !lowerTS.IsEmpty() {
+				lowerTS = lowerTS.Prev()
+			}
+			minv, err = obj.GetMaxRowByTS(lowerTS)
 			return
 		}
 		return node.GetDuplicatedRows(

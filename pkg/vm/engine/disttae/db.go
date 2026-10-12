@@ -687,6 +687,9 @@ func parseSnapshotCheckpointEntries(
 			"", start, end, checkpoint.EntryType(entry.EntryType),
 		)
 		checkpointEntry.SetLocation(entry.Location1, entry.Location2)
+		if entry.Version != 0 {
+			checkpointEntry.SetVersion(entry.Version)
+		}
 		checkpointEntries = append(checkpointEntries, checkpointEntry)
 		if start.LT(&minTS) {
 			minTS = start
@@ -835,7 +838,7 @@ func (e *Engine) getOrCreateSnapPartBy(
 	err = snap.ConsumeSnapCkps(ctx, ckps, func(
 		checkpoint *checkpoint.CheckpointEntry,
 		state *logtailreplay.PartitionState) error {
-		locs := make([]string, 0)
+		locs := make([]string, 0, 2)
 		locs = append(locs, checkpoint.GetLocation().String())
 		locs = append(locs, strconv.Itoa(int(checkpoint.GetVersion())))
 		locations := strings.Join(locs, ";")
@@ -916,8 +919,21 @@ func (e *Engine) LazyLoadLatestCkp(
 	dbName string) (*logtailreplay.Partition, error) {
 
 	part := e.GetOrCreateLatestPart(ctx, accId, dbID, tableID)
+	if err := e.consumeLatestCkp(ctx, part, tableID, tableName, dbID, dbName); err != nil {
+		return nil, err
+	}
+	return part, nil
+}
 
-	if err := part.ConsumeCheckpoints(
+func (e *Engine) consumeLatestCkp(
+	ctx context.Context,
+	part *logtailreplay.Partition,
+	tableID uint64,
+	tableName string,
+	dbID uint64,
+	dbName string,
+) error {
+	return part.ConsumeCheckpoints(
 		ctx,
 		func(checkpoint string, state *logtailreplay.PartitionState) error {
 			err := logtail.ConsumeCheckpointEntries(
@@ -936,9 +952,5 @@ func (e *Engine) LazyLoadLatestCkp(
 			}
 			return nil
 		},
-	); err != nil {
-		return nil, err
-	}
-
-	return part, nil
+	)
 }

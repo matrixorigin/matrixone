@@ -2539,8 +2539,13 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		})
 		bh.sql2result[sql] = mrs
 
+		// CLONE owns the historical schema lookup; inject its failure rather
+		// than relying on an absent result for a redundant SHOW CREATE.
+		cloneSQL := restoreTableDataByTsSQL(moCatalog, "mo_user", resovleTs)
+		cloneFailure := moerr.NewInternalErrorNoCtx("catalog clone failed")
+		bh.sql2err[cloneSQL] = cloneFailure
 		err = restoreSystemDatabaseWithPitr(ctx, "", bh, "pitr01", resovleTs, 0)
-		assert.Error(t, err)
+		assert.ErrorIs(t, err, cloneFailure)
 
 		sql = buildTableInfoListSQL(moCatalog, "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
@@ -3948,6 +3953,70 @@ func TestDoAlterPitrRejectsZeroRangeBeforeTransaction(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid pitr value 0")
 	require.NotContains(t, bh.executedSQLs, "begin;")
+}
+
+func TestPitrMutationUsesLifecycleOwnerTxn(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		run  func(context.Context, *Session) error
+	}{
+		{
+			name: "create",
+			run: func(ctx context.Context, ses *Session) error {
+				return doCreatePitr(ctx, ses, &tree.CreatePitr{
+					Name: "pitr01", Level: tree.PITRLEVELACCOUNT,
+					PitrValue: 1, PitrUnit: "h",
+				})
+			},
+		},
+		{
+			name: "drop",
+			run: func(ctx context.Context, ses *Session) error {
+				return doDropPitr(ctx, ses, &tree.DropPitr{Name: "pitr01"})
+			},
+		},
+		{
+			name: "alter",
+			run: func(ctx context.Context, ses *Session) error {
+				return doAlterPitr(ctx, ses, &tree.AlterPitr{
+					Name: "pitr01", PitrValue: 1, PitrUnit: "h",
+				})
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ctx := context.Background()
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:      sysAccountName,
+				DefaultRole: moAdminRoleName,
+			})
+			bh := &backgroundExecTest{}
+			bh.init()
+			beginErr := errors.New("begin failed")
+			bh.sql2err["begin;"] = beginErr
+			oldNewBackgroundExec := NewBackgroundExec
+			defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+			forcedPessimisticRC := false
+			NewBackgroundExec = func(
+				_ context.Context,
+				_ FeSession,
+				opts ...*BackgroundExecOption,
+			) BackgroundExec {
+				for _, opt := range opts {
+					forcedPessimisticRC = forcedPessimisticRC ||
+						opt != nil && opt.forcePessimisticRC
+				}
+				return bh
+			}
+
+			err := testCase.run(ctx, ses)
+			require.ErrorIs(t, err, beginErr)
+			require.True(t, forcedPessimisticRC)
+		})
+	}
 }
 
 // Test_unservableViewErrorIsIdentifiable pins the contract the restore paths rely on.

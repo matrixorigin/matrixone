@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -128,7 +129,6 @@ func (r *checkLockTableBindsReader) Close() error {
 
 func newTestCase(t *testing.T, format, jsondata string) externalTestCase {
 	proc := testutil.NewProcess(t)
-	proc.Base.FileService = testutil.NewFS(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	return externalTestCase{
 		proc:  proc,
@@ -196,7 +196,7 @@ func TestCallPropagatesLoadLockTableBindCheckError(t *testing.T) {
 	require.Equal(t, 1, op.calls)
 }
 
-func TestGetColDataParallelLoadEmptyNumericAsZero(t *testing.T) {
+func TestGetColDataParallelLoadEmptyNumericAndJSONNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
@@ -242,8 +242,7 @@ func TestGetColDataParallelLoadEmptyNumericAsZero(t *testing.T) {
 		proc,
 	)
 	require.NoError(t, err)
-	require.False(t, bat.Vecs[0].GetNulls().Contains(0))
-	require.Equal(t, "0", string(bat.Vecs[0].GetBytesAt(0)))
+	require.True(t, bat.Vecs[0].GetNulls().Contains(0))
 
 	bat.CleanOnlyData()
 	err = getColData(
@@ -1427,6 +1426,7 @@ func TestIcebergParquetProfileStats(t *testing.T) {
 
 func TestReadFileOffsetCompressedUnsafe(t *testing.T) {
 	fs := testutil.NewFS(t)
+	t.Cleanup(func() { fs.Close(context.Background()) })
 	content := []byte("0,0,1,2,0,0,3,4,0,0,abc,2024-01-01,2024-01-01 00:00:01,2024-01-01 00:00:01,1,1.23,txt,aaa,bbb,ccc\n")
 	var buf bytes.Buffer
 	zw := zlib.NewWriter(&buf)
@@ -2696,4 +2696,57 @@ func TestMakeTypeParallelLoadKeepsVectorType(t *testing.T) {
 	require.Equal(t, types.T_array_float32, vectorType.Oid)
 	require.Equal(t, int32(3), vectorType.Width)
 	require.Equal(t, types.T_varchar, makeType(&plan.Type{Id: int32(types.T_int64)}, true).Oid)
+}
+
+func TestGetColDataEmptyDomains(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct {
+		name    string
+		oid     types.T
+		domain  string
+		input   string
+		null    bool
+		want    uint64
+		invalid bool
+	}{
+		{"empty enum", types.T_enum, "", "", false, 1, false}, {"enum null", types.T_enum, "", "", true, 0, false},
+		{"enum ordinal", types.T_enum, "", "1", false, 1, false}, {"enum invalid", types.T_enum, "", "2", false, 0, true},
+		{"empty set", types.T_uint64, ",", "", false, 0, false}, {"set bitmap", types.T_uint64, ",", "1", false, 1, false},
+		{"set null", types.T_uint64, ",", "", true, 0, false}, {"set invalid", types.T_uint64, ",", "2", false, 0, true},
+		{"uint64 control", types.T_uint64, "", "2", false, 2, false},
+	} {
+		for _, parallel := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/parallel=%v", tc.name, parallel), func(t *testing.T) {
+				col := &plan.ColDef{Name: "v", Typ: plan.Type{Id: int32(tc.oid), Enumvalues: tc.domain}}
+				param := &ExternalParam{ExParamConst: ExParamConst{ParallelLoad: parallel, Cols: []*plan.ColDef{col}, Extern: &tree.ExternParam{ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD)}}}, ExParam: ExParam{Fileparam: &ExFileparam{}}}
+				typ := tc.oid.ToType()
+				if parallel {
+					typ = types.T_varchar.ToType()
+				}
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(typ)
+				defer bat.Clean(proc.Mp())
+				field := csvparser.Field{Val: tc.input, IsNull: tc.null}
+				err := getColData(bat, []csvparser.Field{field}, 0, param, proc.Mp(), plan.ExternAttr{ColName: "v", ColIndex: 0, ColFieldIndex: 0}, proc)
+				if !parallel && tc.invalid {
+					require.Error(t, err)
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, tc.null, bat.Vecs[0].IsNull(0))
+				if tc.null {
+					return
+				}
+				if parallel {
+					require.Equal(t, tc.input, bat.Vecs[0].GetStringAt(0))
+				} else if tc.oid == types.T_enum {
+					require.Equal(t, types.Enum(tc.want), vector.GetFixedAtWithTypeCheck[types.Enum](bat.Vecs[0], 0))
+				} else {
+					require.Equal(t, tc.want, vector.GetFixedAtWithTypeCheck[uint64](bat.Vecs[0], 0))
+				}
+				require.Equal(t, !tc.invalid, isLegalLine(param.Extern, []*plan.ColDef{col}, []csvparser.Field{field}))
+			})
+		}
+	}
 }

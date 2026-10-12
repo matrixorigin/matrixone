@@ -15,11 +15,10 @@
 package types
 
 import (
+	"cmp"
 	"math"
 	"sort"
 	"testing"
-
-	"golang.org/x/exp/constraints"
 
 	"github.com/stretchr/testify/require"
 )
@@ -93,13 +92,12 @@ func TestDecimal128MarshalAndUnmarshal(t *testing.T) {
 
 func TestTypeMarshalAndUnmarshal(t *testing.T) {
 	typ := Type{
-		Oid:              T(1),
-		Charset:          2,
-		notNull:          0,
-		CollationVersion: 1,
-		Size:             5,
-		Width:            6,
-		Scale:            -1,
+		Oid:     T(1),
+		Charset: 2,
+		notNull: 0,
+		Size:    5,
+		Width:   6,
+		Scale:   -1,
 	}
 
 	size := typ.ProtoSize()
@@ -139,11 +137,6 @@ func TestMergeStringCharset(t *testing.T) {
 	require.Equal(t, CharsetLegacy, MergeStringCharset([]Type{general, legacy}, CharsetUTF8))
 	require.Equal(t, CharsetUTF8MB4Bin, MergeStringCharset([]Type{legacy, utf8mb4Bin}, CharsetUTF8))
 	require.Equal(t, CharsetBinary, MergeStringCharset([]Type{utf8mb4Bin, opaqueBinary}, CharsetUTF8))
-	ai := NewWithCharset(T_varchar, 32, 0, CharsetUTF8MB40900AI)
-	bin0900 := NewWithCharset(T_varchar, 32, 0, CharsetUTF8MB40900Bin)
-	require.Equal(t, CharsetUTF8MB40900Bin, MergeStringCharset([]Type{ai, bin0900}, CharsetUTF8))
-	require.Equal(t, CharsetUTF8MB40900Bin, MergeStringCharset([]Type{bin0900, ai}, CharsetUTF8))
-	require.Equal(t, CharsetUTF8MB40900AI, MergeStringCharset([]Type{legacy, ai}, CharsetUTF8))
 }
 
 func TestType_String(t *testing.T) {
@@ -248,7 +241,7 @@ func BenchmarkCopy(b *testing.B) {
 	}
 }
 
-func sliceCopyG[T constraints.Ordered](a, b []T) {
+func sliceCopyG[T cmp.Ordered](a, b []T) {
 	for i := range a {
 		b[i] = a[i] + a[i]
 	}
@@ -355,7 +348,7 @@ func TestTypeCompare(t *testing.T) {
 	obj1 := NewObjectid()
 	blockId_1_1291 := NewBlockidWithObjectID(&obj1, 1291)
 	blockId_1_1036 := NewBlockidWithObjectID(&obj1, 1036)
-	var blocks []Blockid
+	blocks := make([]Blockid, 0, 2)
 	blocks = append(blocks, blockId_1_1291)
 	blocks = append(blocks, blockId_1_1036)
 
@@ -365,7 +358,7 @@ func TestTypeCompare(t *testing.T) {
 	require.Equal(t, uint16(1036), blocks[0].Sequence())
 	require.Equal(t, uint16(1291), blocks[1].Sequence())
 
-	var blocks2 []Blockid
+	blocks2 := make([]Blockid, 0, len(blocks))
 	blocks2 = append(blocks2, blocks...)
 	sort.Slice(blocks2, func(i, j int) bool {
 		return blocks[j].LT(&blocks[i])

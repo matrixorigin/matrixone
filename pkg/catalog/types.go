@@ -929,7 +929,7 @@ var (
 	}
 	MoDatabaseAllColsString  = strings.Join(append([]string{Row_ID}, MoDatabaseSchema...), ",")
 	MoDatabaseAllQueryFormat = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s = %%d and %s = %%q",
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%s",
 		MoDatabaseAllColsString, MO_CATALOG, MO_DATABASE,
 		SystemDBAttr_AccID, SystemDBAttr_Name)
 
@@ -944,7 +944,7 @@ var (
 		SystemDBAttr_AccID)
 
 	MoDatabaseRowidQueryFormat = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s = %%d and %s = %%q",
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%s",
 		Row_ID, MO_CATALOG, MO_DATABASE,
 		SystemDBAttr_AccID, SystemDBAttr_Name)
 
@@ -977,7 +977,7 @@ var (
 		fmt.Sprintf("`%s`", SystemRelAttr_Constraint),
 		-1)
 	MoTablesAllQueryFormat = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s = %%d and %s = %%q and %s = %%q",
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%s and %s = %%s",
 		MoTablesAllColsString, MO_CATALOG, MO_TABLES,
 		SystemRelAttr_AccID, SystemRelAttr_DBName, SystemRelAttr_Name)
 
@@ -987,12 +987,12 @@ var (
 		MoTablesAllColsString, MO_CATALOG, MO_TABLES, SystemRelAttr_ID, MO_RESERVED_MAX)
 
 	MoTablesInDBQueryFormat = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s = %%d and %s = %%q",
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%s",
 		SystemRelAttr_Name, MO_CATALOG, MO_TABLES,
 		SystemRelAttr_AccID, SystemRelAttr_DBName)
 
 	MoTablesRowidQueryFormat = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s = %%d and %s = %%q and %s = %%q",
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%s and %s = %%s",
 		Row_ID, MO_CATALOG, MO_TABLES,
 		SystemRelAttr_AccID, SystemRelAttr_DBName, SystemRelAttr_Name)
 
@@ -1032,7 +1032,7 @@ var (
 	}
 	MoColumnsAllColsString  = strings.Join(append([]string{Row_ID}, MoColumnsSchema...), ",")
 	MoColumnsAllQueryFormat = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s = %%d and %s = %%q and %s = %%q and %s = %%d",
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%s and %s = %%s and %s = %%d",
 		MoColumnsAllColsString, MO_CATALOG, MO_COLUMNS,
 		SystemColAttr_AccID, SystemColAttr_DBName, SystemColAttr_RelName, SystemColAttr_RelID)
 
@@ -1043,7 +1043,7 @@ var (
 		SystemColAttr_AccID, SystemColAttr_DBName, SystemColAttr_RelName)
 
 	MoColumnsRowidsQueryFormat = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s = %%d and %s = %%q and %s = %%q and %s = %%d order by %s",
+		"select %s from `%s`.`%s` where %s = %%d and %s = %%s and %s = %%s and %s = %%d order by %s",
 		Row_ID, MO_CATALOG, MO_COLUMNS,
 		SystemColAttr_AccID, SystemColAttr_DBName, SystemColAttr_RelName, SystemColAttr_RelID, SystemColAttr_Num)
 
@@ -1169,7 +1169,6 @@ var (
 	QueryResultMetaDir  string
 	//ProfileDir holds all profiles dumped by the runtime/pprof
 	ProfileDir string
-	TraceDir   string
 )
 
 func init() {
@@ -1177,7 +1176,6 @@ func init() {
 	QueryResultMetaPath = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta/%s_%s.blk")
 	QueryResultMetaDir = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta")
 	ProfileDir = fileservice.JoinPath(defines.ETLFileServiceName, "/profile")
-	TraceDir = fileservice.JoinPath(defines.ETLFileServiceName, "/trace")
 }
 
 type Meta struct {

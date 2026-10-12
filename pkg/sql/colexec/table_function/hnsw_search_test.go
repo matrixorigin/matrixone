@@ -479,3 +479,6 @@ func TestNewHnswAlgoFn(t *testing.T) {
 func (m *MockSearch) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
 	return nil
 }
+
+// BuildTS stubs (fulltext2 async-freshness interface method).
+func (m *MockSearch) BuildTS() int64 { return 0 }

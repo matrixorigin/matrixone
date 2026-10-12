@@ -93,10 +93,13 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		MatrixOneNativeMode:                 true,
 		LogLevel:                            zap.WarnLevel,
 		SessionId:                           uuid.MustParse("11111111-2222-3333-4444-555555555555"),
-		ExplicitZeroTemporalCastReturnsNull: true,
+		ExplicitZeroTemporalCastReturnsNull: false,
 		SqlMode:                             "STRICT_TRANS_TABLES",
 		AutoIncrementIncrement:              7,
 		AutoIncrementOffset:                 4,
+		MaxErrorCount:                       128,
+		MaxErrorCountSet:                    true,
+		LCTimeNames:                         "fr_FR",
 	}
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
@@ -154,6 +157,8 @@ func TestProcessCodecHelpers(t *testing.T) {
 			SqlMode:                             "STRICT_ALL_TABLES",
 			AutoIncrementIncrement:              7,
 			AutoIncrementOffset:                 4,
+			MaxErrorCount:                       128,
+			MaxErrorCountSet:                    true,
 		})
 		require.NoError(t, err)
 		require.Equal(t, "u", info.User)
@@ -164,11 +169,31 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.Equal(t, "STRICT_ALL_TABLES", info.SqlMode)
 		require.Equal(t, uint64(7), info.AutoIncrementIncrement)
 		require.Equal(t, uint64(4), info.AutoIncrementOffset)
+		require.Equal(t, 128, info.MaxErrorCount)
+		require.True(t, info.MaxErrorCountSet)
 		require.Equal(t, "UTC", info.TimeZone.String())
 
 		info, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: []byte("bad")})
 		require.NoError(t, err)
 		require.Nil(t, info.TimeZone)
+		_, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{
+			MaxErrorCount:    uint32(^uint16(0)) + 1,
+			MaxErrorCountSet: true,
+		})
+		require.Error(t, err)
+		zero, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{
+			MaxErrorCountSet: true,
+		})
+		require.NoError(t, err)
+		require.Zero(t, zero.MaxErrorCount)
+		require.True(t, zero.MaxErrorCountSet)
+		max, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{
+			MaxErrorCount:    uint32(^uint16(0)),
+			MaxErrorCountSet: true,
+		})
+		require.NoError(t, err)
+		require.Equal(t, int(^uint16(0)), max.MaxErrorCount)
+		require.True(t, max.MaxErrorCountSet)
 	})
 
 	t.Run("lock wait timeout resolution", func(t *testing.T) {
@@ -258,13 +283,18 @@ func TestProcessCodecHelpers(t *testing.T) {
 func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	proc.Base.IsFrontend = false
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "default_week_format" {
+			return int64(0), nil
+		}
 		return "", nil
 	})
 
 	first, err := proc.BuildProcessInfo("select 1")
 	require.NoError(t, err)
 	require.Equal(t, "STRICT_TRANS_TABLES", first.SessionInfo.SqlMode)
+	require.Equal(t, uint32(128), first.SessionInfo.MaxErrorCount)
+	require.True(t, first.SessionInfo.MaxErrorCountSet)
 
 	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
 	decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), first)
@@ -277,6 +307,83 @@ func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) 
 	second, err := decoded.BuildProcessInfo("select 1")
 	require.NoError(t, err)
 	require.Equal(t, "STRICT_TRANS_TABLES", second.SessionInfo.SqlMode)
+	require.Equal(t, uint32(128), second.SessionInfo.MaxErrorCount)
+	require.True(t, second.SessionInfo.MaxErrorCountSet)
+}
+
+func TestBuildProcessInfoPreservesWeekModePerExecution(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	mode := int64(3)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "default_week_format" {
+			return mode, nil
+		}
+		return nil, nil
+	})
+	first, err := proc.BuildProcessInfo("select week(d)")
+	require.NoError(t, err)
+	require.Equal(t, uint32(3), first.SessionInfo.DefaultWeekFormat)
+	require.True(t, first.SessionInfo.DefaultWeekFormatSet)
+	wire, err := first.Marshal()
+	require.NoError(t, err)
+	var received pipeline.ProcessInfo
+	require.NoError(t, received.Unmarshal(wire))
+	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	remote, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), received)
+	require.NoError(t, err)
+	defer remote.Free()
+	got, present, err := ResolveDefaultWeekFormatMode(remote)
+	require.NoError(t, err)
+	require.True(t, present)
+	require.Equal(t, 3, got)
+	forwarded, err := remote.BuildProcessInfo("select week(d)")
+	require.NoError(t, err)
+	require.Equal(t, first.SessionInfo.DefaultWeekFormat, forwarded.SessionInfo.DefaultWeekFormat)
+	require.True(t, forwarded.SessionInfo.DefaultWeekFormatSet)
+
+	mode = 0 // A new prepared execution reads the new session value.
+	second, err := proc.BuildProcessInfo("select week(d)")
+	require.NoError(t, err)
+	require.Equal(t, uint32(0), second.SessionInfo.DefaultWeekFormat)
+	require.True(t, second.SessionInfo.DefaultWeekFormatSet)
+	missing := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{}}}
+	_, present, err = ResolveDefaultWeekFormatMode(missing)
+	require.NoError(t, err)
+	require.False(t, present)
+}
+
+func TestBuildProcessInfoUsesEffectiveWarningSinkAcrossForwards(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	proc.Base.SessionInfo.MaxErrorCount = WarningDiagnosticDefaultRetentionLimit
+	proc.Base.SessionInfo.MaxErrorCountSet = true
+	proc.WarningSink = &retentionWarningSession{limit: 2048}
+
+	first, err := proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Equal(t, uint32(2048), first.SessionInfo.MaxErrorCount)
+	require.True(t, first.SessionInfo.MaxErrorCountSet)
+
+	// An explicit zero from the active attempt must survive serialization even
+	// when the reused Process still carries the normal SessionInfo default.
+	proc.WarningSink = &retentionWarningSession{limit: 0}
+	zero, err := proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Zero(t, zero.SessionInfo.MaxErrorCount)
+	require.True(t, zero.SessionInfo.MaxErrorCountSet)
+
+	// Decode the effective snapshot and forward it again from a second CN. The
+	// second hop must use its current attempt sink, rather than resurrecting the
+	// NewTopProcess default of 1024.
+	proc.WarningSink = &retentionWarningSession{limit: 2048}
+	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), first)
+	require.NoError(t, err)
+	defer decoded.Free()
+	decoded.WarningSink = &retentionWarningSession{limit: 2048}
+	second, err := decoded.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Equal(t, uint32(2048), second.SessionInfo.MaxErrorCount)
+	require.True(t, second.SessionInfo.MaxErrorCountSet)
 }
 
 func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
@@ -602,11 +709,17 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, uint64(99), info.SessionInfo.ConnectionId)
 	require.Equal(t, int64(7), info.SessionInfo.LockWaitTimeout)
 	require.True(t, info.SessionInfo.MatrixoneNativeMode)
-	require.True(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
+	require.False(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, "STRICT_TRANS_TABLES", info.SessionInfo.SqlMode)
 	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, uint64(7), info.SessionInfo.AutoIncrementIncrement)
 	require.Equal(t, uint64(4), info.SessionInfo.AutoIncrementOffset)
+	require.Equal(t, uint32(128), info.SessionInfo.MaxErrorCount)
+	require.True(t, info.SessionInfo.MaxErrorCountSet)
+	require.Equal(t, "fr_FR", info.SessionInfo.LcTimeNames)
+	decodedSession, err := ConvertToProcessSessionInfo(info.SessionInfo)
+	require.NoError(t, err)
+	require.Equal(t, "fr_FR", decodedSession.LCTimeNames)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
 
 	// A rolling-upgrade receiver compiled before LockWaitTimeoutSet ignores the
@@ -751,11 +864,14 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Equal(t, info.SessionInfo.User, decodedProc.Base.SessionInfo.User)
 	require.Equal(t, info.SessionInfo.LockWaitTimeout, decodedProc.Base.SessionInfo.LockWaitTimeout)
 	require.Equal(t, info.SessionInfo.MatrixoneNativeMode, decodedProc.Base.SessionInfo.MatrixOneNativeMode)
-	require.True(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
+	require.False(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, info.SessionInfo.SqlMode, decodedProc.Base.SessionInfo.SqlMode)
+	require.Equal(t, info.SessionInfo.LcTimeNames, decodedProc.Base.SessionInfo.LCTimeNames)
 	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, info.SessionInfo.AutoIncrementIncrement, decodedProc.Base.SessionInfo.AutoIncrementIncrement)
 	require.Equal(t, info.SessionInfo.AutoIncrementOffset, decodedProc.Base.SessionInfo.AutoIncrementOffset)
+	require.Equal(t, info.SessionInfo.MaxErrorCount, uint32(decodedProc.Base.SessionInfo.MaxErrorCount))
+	require.Equal(t, info.SessionInfo.MaxErrorCountSet, decodedProc.Base.SessionInfo.MaxErrorCountSet)
 	require.NotNil(t, decodedProc.GetPrepareParams())
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
 	require.True(t, decodedProc.GetPrepareParams().GetNulls().Contains(1))

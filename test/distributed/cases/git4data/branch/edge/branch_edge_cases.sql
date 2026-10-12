@@ -42,10 +42,21 @@ data branch create table conflict_dst from base;
 data branch create table conflict_src from base;
 insert into conflict_dst values (4, 104, 40, 'dst-four');
 insert into conflict_src values (5, 104, 50, 'src-five');
+delete from conflict_src where id = 1;
+set mo_rollback_txn_on_error = 0;
+begin;
+insert into base values (6, 106, 60, 'prior');
 -- MERGE must not bypass unique-index validation.
 -- @regex("Duplicate entry '104' for key '(u|__mo_index_idx_col)'(\[[0-9,]+\])?",true)
 data branch merge conflict_src into conflict_dst when conflict accept;
 select id, u, k, v from conflict_dst order by id;
+
+
+select id, u, k, v from base where id = 6;
+select count(*) as remaining_stages from mo_catalog.mo_tables
+where reldatabase = 'br_index' and relname like '__mo_diff_%';
+commit;
+select id, u, k, v from base where id = 6;
 
 drop database br_index;
 

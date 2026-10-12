@@ -1,0 +1,64 @@
+drop database if exists temporal_guarded_prepared_join_28851;
+create database temporal_guarded_prepared_join_28851;
+use temporal_guarded_prepared_join_28851;
+create table a (id int, t time(6));
+create table b (id int, t time(6));
+insert into a values (1,'00:00:01'),(-1,'00:00:02'),(2,'00:00:01'),(3,'00:00:01');
+insert into b values (1,'00:00:09'),(-1,'00:00:02'),(2,null),(2,null),(4,'00:00:01');
+set @valid_join_time_28851 = '00:00:01.000000';
+prepare guarded_case from
+'select count(*) from a join b on a.id=b.id and a.t=case when b.id>0 then time(?) else b.t end';
+execute guarded_case using @valid_join_time_28851;
+➤ count(*)[-5,64,0]  𝄀
+4
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+prepare reversed_case from
+'select count(*) from a join b on a.id=b.id and case when b.id>0 then time(?) else b.t end=a.t';
+execute reversed_case using @valid_join_time_28851;
+➤ count(*)[-5,64,0]  𝄀
+4
+deallocate prepare reversed_case;
+prepare guarded_coalesce from
+'select count(*) from a join b on a.id=b.id and a.t=coalesce(b.t,time(?))';
+execute guarded_coalesce using @valid_join_time_28851;
+➤ count(*)[-5,64,0]  𝄀
+3
+set @invalid_join_time_28851 = 'bad';
+deallocate prepare guarded_coalesce;
+prepare inactive_coalesce from
+'select count(*) from a join b on a.id=b.id and a.t=coalesce(a.t,time(?))';
+execute inactive_coalesce using @invalid_join_time_28851;
+➤ count(*)[-5,64,0]  𝄀
+4
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+deallocate prepare inactive_coalesce;
+prepare inactive_case from
+'select count(*) from a join b on a.id=b.id and a.t=case when b.id>100 then time(?) else b.t end';
+execute inactive_case using @invalid_join_time_28851;
+➤ count(*)[-5,64,0]  𝄀
+1
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+deallocate prepare inactive_case;
+delete from b;
+insert into b values (4,'00:00:01');
+execute guarded_case using @valid_join_time_28851;
+➤ count(*)[-5,64,0]  𝄀
+0
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+delete from b;
+execute guarded_case using @valid_join_time_28851;
+➤ count(*)[-5,64,0]  𝄀
+0
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+deallocate prepare guarded_case;
+drop database temporal_guarded_prepared_join_28851;

@@ -1,0 +1,16 @@
+drop table if exists issue_29313_t;
+create table issue_29313_t (g int, e enum('20','3','z'), s set('x','y','z'));
+insert into issue_29313_t values (1,'20','x'),(1,'3','y'),(1,'z','x,y'),(1,null,null),(2,'3','z');
+select sum(e), avg(e), sum(s), avg(s) from issue_29313_t;
+prepare issue_29313_all from 'select sum(e), avg(e), sum(s), avg(s) from issue_29313_t';
+execute issue_29313_all;
+prepare issue_29313_group from 'select sum(e), avg(e), sum(s), avg(s) from issue_29313_t where g=?';
+set @issue_29313_g = 1;
+execute issue_29313_group using @issue_29313_g;
+prepare issue_29313_distinct from 'select sum(distinct e), avg(distinct s) from issue_29313_t';
+execute issue_29313_distinct;
+execute issue_29313_all;
+deallocate prepare issue_29313_distinct;
+deallocate prepare issue_29313_group;
+deallocate prepare issue_29313_all;
+drop table issue_29313_t;

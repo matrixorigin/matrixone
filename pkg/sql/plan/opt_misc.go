@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -165,6 +166,12 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	}
 
 	replaceColumnsForNode(node, projMap)
+	if node.NodeType == plan.Node_APPLY && len(node.Children) == 2 {
+		// Correlated function arguments consume the left sibling's output,
+		// rather than the function node's own children.
+		right := builder.qry.Nodes[node.Children[1]]
+		replaceColumnsForExprList(right.TblFuncExprList, projMap)
+	}
 
 	if builder.canRemoveProject(parentType, node) {
 		allColRef := true
@@ -224,7 +231,7 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	if parentType == plan.Node_DISTINCT || parentType == plan.Node_UNKNOWN {
 		return false
 	}
-	if parentType == plan.Node_UNION || parentType == plan.Node_UNION_ALL {
+	if parentType == plan.Node_UNION || parentType == plan.Node_UNION_ALL || parentType == plan.Node_ADAPTIVE_TOP || parentType == plan.Node_VECTOR_QUERY_TOP {
 		return false
 	}
 	if parentType == plan.Node_MINUS || parentType == plan.Node_MINUS_ALL {
@@ -332,6 +339,7 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForExprList(node.AggList, projMap)
 	replaceColumnsForExprList(node.WinSpecList, projMap)
 	replaceColumnsForExprList(node.TimeWindowPartitionBy, projMap)
+	replaceColumnsForExprList(node.TblFuncExprList, projMap)
 
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr = replaceColumnsForExpr(node.OrderBy[i].Expr, projMap)
@@ -445,7 +453,11 @@ func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *pl
 		}
 		mapID := [2]int32{ne.Col.RelPos, ne.Col.ColPos}
 		if projExpr, ok := projMap[mapID]; ok {
-			return DeepCopyExpr(projExpr)
+			inlined := DeepCopyExpr(projExpr)
+			if isIntegerSelector(inlined) || projectedExplicitFloatValue(inlined) {
+				ensurePreparedNumericMetadata(inlined).ProjectedCommonValue = true
+			}
+			return inlined
 		}
 
 	case *plan.Expr_F:
@@ -489,6 +501,18 @@ func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *pl
 		}
 	}
 	return expr
+}
+
+// A projected explicit CAST has already established the column's DOUBLE
+// domain. Inlining it must not turn that value boundary into a consumer's
+// direct CAST, whose integer conversion deliberately truncates.
+func projectedExplicitFloatValue(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || !types.T(expr.Typ.Id).IsFloat() {
+		return false
+	}
+	_, overload := function.DecodeOverloadID(fn.Func.Obj)
+	return fn.SyntaxExplicitCast || overload == 1
 }
 
 func (builder *QueryBuilder) swapJoinChildren(nodeID int32) {
@@ -736,6 +760,9 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 	if !node.Stats.HashmapStats.HashOnPK {
 		goto END
 	}
+	if builder.joinOwnsConstantDiagnostic(node) || builder.subtreeOwnsConstantDiagnostic(node.Children[1]) {
+		goto END
+	}
 
 	nodeID = node.Children[0]
 
@@ -779,7 +806,8 @@ END:
 }
 
 func dedupJoinMetadataCols(ctx *plan.DedupJoinCtx) []*plan.ColRef {
-	cols := []*plan.ColRef{ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol}
+	cols := make([]*plan.ColRef, 0, 3+len(ctx.ForeignKeyChecks))
+	cols = append(cols, ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol)
 	for i := range ctx.ForeignKeyChecks {
 		cols = append(cols, ctx.ForeignKeyChecks[i].EligibilityCol)
 	}
@@ -1210,11 +1238,11 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 		return
 	}
 	scan := builder.qry.Nodes[node.Children[0]]
-	if scan.NodeType != plan.Node_TABLE_SCAN || scan.TableDef == nil || scan.TableDef.Pkey == nil {
+	if scan.NodeType != plan.Node_TABLE_SCAN || scan.TableDef == nil {
 		return
 	}
-	pkPositions, ok := sqlEqualityCompatiblePrimaryKeyColumnPositions(scan.TableDef)
-	if !ok || len(scan.BindingTags) != 1 {
+	uniqueKeys := sqlEqualityCompatibleScanUniqueKeys(scan.TableDef)
+	if len(uniqueKeys) == 0 || len(scan.BindingTags) != 1 {
 		return
 	}
 	seenBindingTags := map[int32]struct{}{scan.BindingTags[0]: {}}
@@ -1238,17 +1266,29 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 			groupCol = append(groupCol, col.ColPos)
 		}
 	}
-	for _, pk := range pkPositions {
-		found := false
-		for _, group := range groupCol {
-			if group == pk {
-				found = true
+	containsCompleteUniqueKey := false
+	for _, key := range uniqueKeys {
+		complete := true
+		for _, keyColumn := range key.columnPositions {
+			found := false
+			for _, group := range groupCol {
+				if group == keyColumn {
+					found = true
+					break
+				}
+			}
+			if !found {
+				complete = false
 				break
 			}
 		}
-		if !found {
-			return
+		if complete {
+			containsCompleteUniqueKey = true
+			break
 		}
+	}
+	if !containsCompleteUniqueKey {
+		return
 	}
 	if limitDemand {
 		for _, expr := range node.GroupBy {
@@ -1899,7 +1939,7 @@ func singleRowCastIsTotal(source, target plan.Type) bool {
 	// source, that cast cannot reject or truncate any source value.
 	if targetID == types.T_char &&
 		(sourceID == types.T_char || sourceID == types.T_varchar) &&
-		source.Charset == target.Charset && source.Width > 0 &&
+		source.SameCollation(target) && source.Width > 0 &&
 		target.Width >= source.Width {
 		return true
 	}
@@ -2328,24 +2368,38 @@ func (builder *QueryBuilder) subqueryPredicatePlanningDisabled() bool {
 }
 
 func (builder *QueryBuilder) parseOptimizeHints() {
-	v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().GetService()).GetGlobalVariables("optimizer_hints")
-	if !ok {
-		return
+	applyHints := func(str string) {
+		if len(str) == 0 {
+			return
+		}
+		kvs := strings.Split(str, ",")
+		for i := range kvs {
+			handleOptimizerHints(kvs[i], builder)
+		}
 	}
-	str := v.(string)
-	if len(str) == 0 {
-		return
+	if v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().GetService()).GetGlobalVariables("optimizer_hints"); ok {
+		if str, ok := v.(string); ok {
+			applyHints(str)
+		}
 	}
-	kvs := strings.Split(str, ",")
-	for i := range kvs {
-		handleOptimizerHints(kvs[i], builder)
+	// Per-statement optimizer_hints (same key=value format as the global variable) carried on the
+	// execution context by the internal SQL executor (StatementOption.WithOptimizerHints). Applied
+	// AFTER the global so a statement can override it -- e.g. the fulltext2 json probe's fallback/
+	// tail SQL passes applyIndices=1 so its base-table scan does not re-trigger the probe rewrite.
+	if v := builder.compCtx.GetContext().Value(defines.OptimizerHints{}); v != nil {
+		if str, ok := v.(string); ok {
+			applyHints(str)
+		}
 	}
 }
 
-func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
+func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
 	rootID, _ = builder.pushdownFilters(rootID, nil, false)
 	transposeTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
+	if err := builder.rewriteNumericDomainFilters(rootID, plan.Node_TABLE_SCAN); err != nil {
+		return rootID, err
+	}
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.rewriteInDomainNotInFilters(rootID)
 	compositePartBlockFilters := builder.collectCompositePartBlockFilters(rootID)
@@ -2358,7 +2412,7 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	builder.appendCompoundKeyBlockFilters(rootID)
 	builder.appendCompositePartBlockFilters(compositePartBlockFilters)
 	sortFilterListByStats(builder.GetContext(), rootID, builder)
-	return rootID
+	return rootID, nil
 }
 
 // plan for dml  don't go optimizer, which cause some problem, and this need refactoring

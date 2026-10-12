@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/parquet-go/parquet-go"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
@@ -52,6 +53,7 @@ type ExportConfig struct {
 
 	// curFileSize
 	CurFileSize uint64
+	hasCSVData  bool // True when this file has accepted non-empty CSV data bytes.
 	Rows        uint64
 	FileCnt     uint
 	ColumnFlag  []bool
@@ -79,12 +81,14 @@ type writeParam struct {
 	Index      atomic.Int32
 	WriteIndex atomic.Int32
 	ByteChan   chan *BatchByte
-	BatchMap   map[int32][]byte
+	BatchMap   map[int32]*BatchByte
 }
 
 type BatchByte struct {
 	index     int32
 	writeByte []byte
+	rowEnds   []int
+	rowCount  int
 	err       error
 }
 
@@ -141,6 +145,7 @@ var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSe
 	var err error
 	var filePath string
 	ep.CurFileSize = 0
+	ep.hasCSVData = false
 
 	// For parquet format, we don't use pipe-based writing
 	// Parquet data is accumulated in memory and written at the end
@@ -311,7 +316,9 @@ func getEffectiveMaxFileSize(ep *ExportConfig) uint64 {
 // writeToCSVFile function may create a new file. Make sure the output buffer contains the complete CSV row to keep the CSV parser happy.
 func writeToCSVFile(ep *ExportConfig, output []byte) error {
 	maxSize := getEffectiveMaxFileSize(ep)
-	if maxSize != 0 && ep.CurFileSize+uint64(len(output)) > maxSize {
+	isCSV := ep.getExportFormat() == "csv"
+	if maxSize != 0 && exceedsFileSize(ep.CurFileSize, uint64(len(output)), maxSize) &&
+		(!isCSV || (ep.hasCSVData && len(output) > 0)) {
 		if err := Close(ep); err != nil {
 			return err
 		}
@@ -323,7 +330,66 @@ func writeToCSVFile(ep *ExportConfig, output []byte) error {
 	if err := writeDataToCSVFile(ep, output); err != nil {
 		return err
 	}
+	if isCSV && len(output) > 0 {
+		ep.hasCSVData = true
+	}
 	return nil
+}
+
+func exceedsFileSize(currentSize, additionalSize, maxSize uint64) bool {
+	return currentSize > maxSize || additionalSize > maxSize-currentSize
+}
+
+func writeExportBatchToFile(ep *ExportConfig, batch *BatchByte) error {
+	if ep.getExportFormat() != "csv" {
+		return writeToCSVFile(ep, batch.writeByte)
+	}
+	if batch.rowCount == 0 {
+		return nil
+	}
+
+	maxSize := getEffectiveMaxFileSize(ep)
+	if maxSize == 0 {
+		if err := writeToCSVFile(ep, batch.writeByte); err != nil {
+			return err
+		}
+		ep.Rows += uint64(batch.rowCount)
+		return nil
+	}
+
+	chunkStart, chunkEnd, chunkRows := 0, 0, 0
+	flushChunk := func() error {
+		if chunkRows == 0 {
+			return nil
+		}
+		if err := writeToCSVFile(ep, batch.writeByte[chunkStart:chunkEnd]); err != nil {
+			return err
+		}
+		ep.Rows += uint64(chunkRows)
+		chunkStart = chunkEnd
+		chunkRows = 0
+		return nil
+	}
+
+	for _, rowEnd := range batch.rowEnds {
+		if chunkRows == 0 || exceedsFileSize(ep.CurFileSize, uint64(rowEnd-chunkStart), maxSize) {
+			if err := flushChunk(); err != nil {
+				return err
+			}
+			rowSize := uint64(rowEnd - chunkStart)
+			if rowSize > 0 && ep.hasCSVData && exceedsFileSize(ep.CurFileSize, rowSize, maxSize) {
+				if err := Close(ep); err != nil {
+					return err
+				}
+				if err := openNewFile(ep.ctx, ep, ep.mrs); err != nil {
+					return err
+				}
+			}
+		}
+		chunkEnd = rowEnd
+		chunkRows++
+	}
+	return flushChunk()
 }
 
 var writeDataToCSVFile = func(ep *ExportConfig, output []byte) error {
@@ -417,7 +483,12 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 
 	buffer := &bytes.Buffer{}
 
-	for i := 0; i < bat.RowCount(); i++ {
+	rowCount := bat.RowCount()
+	var rowEnds []int
+	if getEffectiveMaxFileSize(ep) != 0 {
+		rowEnds = make([]int, 0, rowCount)
+	}
+	for i := 0; i < rowCount; i++ {
 		for j, vec := range bat.Vecs {
 			if vec.GetNulls().Contains(uint64(i)) {
 				formatOutputString(ep, []byte("\\N"), symbol[j], closeby, flag[j], buffer)
@@ -585,6 +656,9 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				return
 			}
 		}
+		if rowEnds != nil {
+			rowEnds = append(rowEnds, buffer.Len())
+		}
 	}
 
 	// copy data. byteBuffer.Bytes() is not able to pass to channel
@@ -596,6 +670,8 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 	if !sendExportBatchByte(ctx, ByteChan, &BatchByte{
 		index:     index,
 		writeByte: result,
+		rowEnds:   rowEnds,
+		rowCount:  rowCount,
 		err:       nil,
 	}) {
 		bat.Clean(mp)
@@ -838,7 +914,7 @@ func exportDataFromBatchToCSVFile(ep *ExportConfig) error {
 		if tmp.err != nil {
 			return tmp.err
 		}
-		ep.BatchMap[tmp.index] = tmp.writeByte
+		ep.BatchMap[tmp.index] = tmp
 	}
 
 	value, ok := ep.BatchMap[ep.WriteIndex.Load()+1]
@@ -846,7 +922,7 @@ func exportDataFromBatchToCSVFile(ep *ExportConfig) error {
 		return nil
 	}
 
-	err := writeToCSVFile(ep, value)
+	err := writeExportBatchToFile(ep, value)
 	if err != nil {
 		return err
 	}
@@ -875,14 +951,14 @@ func exportAllDataFromBatches(ep *ExportConfig) error {
 			if tmp.err != nil {
 				return tmp.err
 			}
-			ep.BatchMap[tmp.index] = tmp.writeByte
+			ep.BatchMap[tmp.index] = tmp
 		}
 
 		value, ok := ep.BatchMap[ep.WriteIndex.Load()+1]
 		if !ok {
 			continue
 		}
-		if err := writeToCSVFile(ep, value); err != nil {
+		if err := writeExportBatchToFile(ep, value); err != nil {
 			return err
 		}
 		ep.WriteIndex.Add(1)
@@ -898,6 +974,22 @@ func exportAllDataFromBatches(ep *ExportConfig) error {
 
 // finalizeParquetExport closes the parquet writer and writes the complete parquet file
 func finalizeParquetExport(ep *ExportConfig) error {
+	if ep.parquetWriter == nil {
+		// A writer that was just closed at a split boundary represents a
+		// complete export. Do not create a trailing empty split; only an export
+		// with no rows needs an explicitly initialized empty writer.
+		if ep.Rows > 0 {
+			return nil
+		}
+		if ep.mrs == nil {
+			return moerr.NewInternalError(ep.ctx, "mrs is nil for parquet export")
+		}
+		writer, err := NewParquetWriter(ep.ctx, ep.mrs)
+		if err != nil {
+			return err
+		}
+		ep.parquetWriter = writer
+	}
 	return ep.flushParquetFile()
 }
 
@@ -946,7 +1038,7 @@ var _ CsvWriter = &ExportConfig{}
 
 func (ec *ExportConfig) init() {
 	ec.ByteChan = make(chan *BatchByte, 10)
-	ec.BatchMap = make(map[int32][]byte)
+	ec.BatchMap = make(map[int32]*BatchByte)
 	ec.Index.Store(0)
 	ec.WriteIndex.Store(0)
 }
@@ -990,7 +1082,13 @@ func cloneExportWorkerBatch(
 
 // writeParquet writes a batch to the parquet writer
 func (ec *ExportConfig) writeParquet(execCtx *ExecCtx, bat *batch.Batch) error {
+	if bat == nil {
+		return nil
+	}
 	defer bat.Clean(execCtx.ses.GetMemPool())
+	if bat.RowCount() == 0 {
+		return nil
+	}
 
 	// Initialize parquet writer if not already done
 	if ec.parquetWriter == nil {
@@ -1012,25 +1110,48 @@ func (ec *ExportConfig) writeParquet(execCtx *ExecCtx, bat *batch.Batch) error {
 		timeZone = time.UTC
 	}
 
-	// Write batch to parquet writer
-	if err := ec.parquetWriter.WriteBatch(bat, execCtx.ses.GetMemPool(), timeZone); err != nil {
-		return err
-	}
-
 	// Check if we need to split the file
 	splitSize := getEffectiveMaxFileSize(ec)
-	if shouldSplitParquetFile(uint64(ec.parquetWriter.Size()), splitSize) {
-		// Flush current parquet file
-		if err := ec.flushParquetFile(); err != nil {
+	if splitSize == 0 {
+		if err := ec.parquetWriter.WriteBatch(bat, execCtx.ses.GetMemPool(), timeZone); err != nil {
 			return err
 		}
-		// Increment file counter
-		ec.FileCnt++
-		// Create new parquet writer for next file
-		var err error
-		ec.parquetWriter, err = NewParquetWriter(execCtx.reqCtx, ec.mrs)
+		ec.Rows += uint64(bat.RowCount())
+		return nil
+	}
+
+	// Accumulate bounded row groups across executor batches. Flush ends a row
+	// group, so flushing every row causes large metadata overhead and exhausts
+	// parquet-go's per-file row-group limit long before SPLITSIZE is reached.
+	for row := 0; row < bat.RowCount(); {
+		if ec.parquetWriter == nil {
+			var err error
+			ec.parquetWriter, err = NewParquetWriter(execCtx.reqCtx, ec.mrs)
+			if err != nil {
+				return err
+			}
+		}
+		writer := ec.parquetWriter
+		groupBudget := min(uint64(maxParquetRowGroupBytes), splitSize-uint64(writer.Size()))
+		next, err := writer.writeBatchChunk(bat, row, bat.RowCount(), groupBudget, timeZone)
 		if err != nil {
 			return err
+		}
+		ec.Rows += uint64(next - row)
+		row = next
+		if writer.bufferedBytes < groupBudget && writer.bufferedRows < maxParquetRowGroupRows {
+			continue
+		}
+		if err := writer.Flush(); err != nil {
+			return err
+		}
+		// A row group (and the final footer) can exceed the target. Rotate at
+		// parquet-go's format limit too, even for highly compressible/NULL data.
+		if shouldSplitParquetFile(uint64(writer.Size()), splitSize) || writer.rowGroups == parquet.MaxRowGroups {
+			if err := ec.flushParquetFile(); err != nil {
+				return err
+			}
+			ec.FileCnt++
 		}
 	}
 
@@ -1051,8 +1172,13 @@ func (ec *ExportConfig) flushParquetFile() error {
 		return nil
 	}
 
+	writer := ec.parquetWriter
+	// Release the writer before writing the completed bytes. A failed
+	// fileservice write must not leave a closed writer attached to the session.
+	ec.parquetWriter = nil
+
 	// Close the parquet writer to get the complete parquet data (including footer)
-	parquetData, err := ec.parquetWriter.Close()
+	parquetData, err := writer.Close()
 	if err != nil {
 		return err
 	}
@@ -1062,7 +1188,6 @@ func (ec *ExportConfig) flushParquetFile() error {
 		return err
 	}
 
-	ec.parquetWriter = nil
 	return nil
 }
 

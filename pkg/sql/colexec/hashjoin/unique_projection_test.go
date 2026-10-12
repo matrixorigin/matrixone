@@ -30,7 +30,7 @@ import (
 )
 
 func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	left := makeInt32Batch(proc, []int32{0, 1, 2, 3, 4, 5, 6, 7})
 	arg := &HashJoin{ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}}}
 	ctr := &arg.ctr
@@ -94,7 +94,7 @@ func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
 
 func TestHashJoinUniqueProjectionResumesAndReuses(t *testing.T) {
 	typ := types.T_int32.ToType()
-	tc := newTestCase(t, []bool{false}, []types.Type{typ}, nil,
+	tc := newTestCase(t, []types.Type{typ}, nil,
 		[][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}})
 	tc.arg.JoinType, tc.arg.NonEqCond = plan.Node_INNER, nil
 	tc.arg.ResultCols = []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}}
@@ -160,7 +160,7 @@ func TestHashJoinUniqueProjectionResumesAndReuses(t *testing.T) {
 }
 
 func TestHashJoinUniqueProjectionPropagatesAllocationFailure(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	left := makeInt32Batch(proc, []int32{1})
 	arg := &HashJoin{
 		LeftTypes:  []types.Type{types.T_int32.ToType()},
@@ -185,10 +185,16 @@ func TestHashJoinUniqueProjectionPropagatesAllocationFailure(t *testing.T) {
 	require.Zero(t, matched)
 	require.Zero(t, arg.ctr.resBat.RowCount())
 	require.Zero(t, account.Snapshot().Used)
+	arg.ctr.probeLeftSemi = true
+	matched, err = arg.ctr.appendMembershipMatches(arg, proc, 1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Zero(t, matched)
+	require.Zero(t, arg.ctr.resBat.RowCount())
+	require.Zero(t, account.Snapshot().Used)
 }
 
 func BenchmarkHashJoinUniqueProjection(b *testing.B) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	arg := &HashJoin{}
 	ctr := &arg.ctr
 	ctr.leftBat = batch.NewWithSize(4)

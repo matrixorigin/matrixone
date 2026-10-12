@@ -26,7 +26,7 @@ create table typed_result as select u + s as q from mixed_values where id = 1;
 select column_type from information_schema.columns
 where table_schema = 'mixed_unsigned_arithmetic_28581' and table_name = 'typed_result' and column_name = 'q';
 column_type
-BIGINT UNSIGNED(64)
+bigint unsigned
 create table rejected_result as select u + s as q from mixed_values where id = 2;
 Data truncation: data out of range: data type BIGINT UNSIGNED, (mixed signed/unsigned + result 18446744073709551616)
 select count(*) from information_schema.tables

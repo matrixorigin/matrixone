@@ -26,6 +26,10 @@ const SQLModeMatrixOneNative = "MATRIXONE_NATIVE"
 // rejects it when this token is absent.
 const SQLModeEnableBoolSumAvg = "ENABLE_BOOL_SUMAVG"
 
+// SQLModeNoUnsignedSubtraction selects signed result-domain binding for
+// subtraction when either operand is unsigned.
+const SQLModeNoUnsignedSubtraction = "NO_UNSIGNED_SUBTRACTION"
+
 const sqlModeIgnoreSpace = "IGNORE_SPACE"
 
 const (

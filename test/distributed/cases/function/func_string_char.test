@@ -64,8 +64,8 @@ SELECT a, b, CHAR(a, b) AS char_nullable FROM t2;
 DROP TABLE t2;
 
 # Prepared numeric context and BOOL compatibility (issues #28454 and #28456).
-# Reuse one SQL PREPARE plan across DECIMAL, string-backed numeric and BOOL
-# values; direct string CHAR must keep its prefix-truncation contract.
+# Reuse one SQL PREPARE plan across DECIMAL, text and BOOL values;
+# prepared and direct strings keep the same integer-prefix contract.
 PREPARE p_char_issue_28454 FROM 'SELECT HEX(CHAR(?)) AS char_value';
 SET @char_value_issue_28454 = 65.5;
 EXECUTE p_char_issue_28454 USING @char_value_issue_28454;

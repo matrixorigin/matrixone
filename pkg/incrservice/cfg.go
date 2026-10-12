@@ -40,6 +40,9 @@ type Config struct {
 	LowCapacity int `toml:"low-capacity"`
 	// demandOnly is set by AUTO_ID_CACHE=1, never by the service TOML defaults.
 	demandOnly bool
+	// defaultAllocation distinguishes the service default from an explicitly
+	// configured reservation of the same numeric size.
+	defaultAllocation bool
 }
 
 func (c Config) forTable(ctx context.Context, size uint64) (Config, error) {
@@ -53,6 +56,7 @@ func (c Config) forTable(ctx context.Context, size uint64) (Config, error) {
 		c.CountPerAllocate = int(size)
 		c.LowCapacity = int(size / 2)
 		c.demandOnly = size == 1
+		c.defaultAllocation = false
 	}
 	return c, nil
 }
@@ -104,6 +108,7 @@ func CheckAutoIDCache(ctx context.Context, sid string, size uint64) error {
 func (c *Config) adjust() {
 	if c.CountPerAllocate == 0 {
 		c.CountPerAllocate = defaultCountPerAllocate
+		c.defaultAllocation = true
 	}
 	if c.LowCapacity == 0 ||
 		c.LowCapacity > c.CountPerAllocate {

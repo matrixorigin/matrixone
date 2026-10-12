@@ -26,14 +26,28 @@ func TestCapacityReservationCommitAndRelease(t *testing.T) {
 	reservation, err := account.ReserveCapacity(800, AllocationOwnerExternal, 1)
 	require.NoError(t, err)
 	require.Equal(t, uint64(800), account.Snapshot().Used)
+	require.Zero(t, registry.CommittedCapacity(), "admission is not backing publication")
 
 	lease, err := reservation.Commit(512)
 	require.NoError(t, err)
 	require.Equal(t, uint64(512), lease.Capacity())
 	require.Equal(t, uint64(512), account.Snapshot().Used)
+	require.Equal(t, uint64(512), registry.CommittedCapacity())
+	sample := registry.SnapshotBacking()
+	require.Equal(t, uint64(512), sample.RetainedCapacity())
+	other, err := account.ReserveCapacity(64, AllocationOwnerExternal, 1)
+	require.NoError(t, err)
+	otherLease, err := other.Commit(64)
+	require.NoError(t, err)
+	// Backing acquired after the sample must not replace its credited backing.
+	require.Equal(t, uint64(512), sample.RetainedCapacity())
 	lease.Release()
 	lease.Release()
+	require.Zero(t, sample.RetainedCapacity())
+	require.Equal(t, uint64(64), registry.CommittedCapacity())
+	otherLease.Release()
 	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, registry.CommittedCapacity())
 	finalizeTestAllocationAccount(t, registry, account)
 }
 
@@ -47,6 +61,7 @@ func TestCapacityReservationAbortAndOversizedCommit(t *testing.T) {
 	reservation.Abort()
 	reservation.Abort()
 	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, registry.CommittedCapacity())
 	finalizeTestAllocationAccount(t, registry, account)
 }
 
@@ -72,6 +87,7 @@ func TestCapacityReservationCommitAbortRace(t *testing.T) {
 			lease.Release()
 		}
 		require.Zero(t, account.Snapshot().Used)
+		require.Zero(t, registry.CommittedCapacity())
 		finalizeTestAllocationAccount(t, registry, account)
 	}
 }

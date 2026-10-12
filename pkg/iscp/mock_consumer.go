@@ -184,6 +184,18 @@ func NewInteralSqlConsumer(
 }
 
 func (s *interalSqlConsumer) createTargetTable(ctx context.Context) error {
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, s.dataRetriever.GetAccountID())
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	// Consumers are recreated for every iteration. Check the current tenant's
+	// schema instead of planning two no-op DDL statements on every warm run.
+	// Do not cache readiness across instances: a target may have been dropped.
+	exists, err := s.targetTableExists(ctx)
+	if err != nil || exists {
+		return err
+	}
+
 	createDBSql := fmt.Sprintf("create database if not exists %s", TargetDbName)
 	srcCreateSql := s.tableInfo.Createsql
 	if len(srcCreateSql) < len(createTableIfNotExists) || !strings.EqualFold(srcCreateSql[:len(createTableIfNotExists)], createTableIfNotExists) {
@@ -193,9 +205,6 @@ func (s *interalSqlConsumer) createTargetTable(ctx context.Context) error {
 	tableEnd := strings.Index(srcCreateSql, "(")
 	newTablePart := fmt.Sprintf("%s.%s", TargetDbName, s.targetTableName)
 	createTableSql := srcCreateSql[:tableStart] + " " + newTablePart + srcCreateSql[tableEnd:]
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, s.dataRetriever.GetAccountID())
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
-	defer cancel()
 	result, err := s.internalSqlExecutor.Exec(ctx, createDBSql, executor.Options{})
 	result.Close()
 	if err != nil {
@@ -204,6 +213,24 @@ func (s *interalSqlConsumer) createTargetTable(ctx context.Context) error {
 	result, err = s.internalSqlExecutor.Exec(ctx, createTableSql, executor.Options{})
 	result.Close()
 	return err
+}
+
+func (s *interalSqlConsumer) targetTableExists(ctx context.Context) (exists bool, err error) {
+	txn, err := getTxn(ctx, s.cnEngine, s.cnTxnClient, "internalSqlConsumer target lookup")
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		err = finishISCPTransaction(ctx, txn, err)
+	}()
+	db, err := s.cnEngine.Database(ctx, TargetDbName, txn)
+	if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return db.RelationExists(ctx, s.targetTableName, nil)
 }
 
 func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) (err error) {

@@ -51,9 +51,9 @@ drop table if exists t7;
 create cluster table t7(a int, b int);
 desc t7;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
-b    INT(32)    YES        null        
-account_id    INT UNSIGNED(32)    NO        null        the account_id added by the mo
+a    int    YES        null        
+b    int    YES        null        
+account_id    int unsigned    NO        null        the account_id added by the mo
 drop table t7;
 use mo_catalog;
 drop table if exists cluster_table_1;
@@ -90,11 +90,11 @@ a    b
 1    1
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mo_catalog' and att_relname='statement_cu' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 name    data_type    maximum    minimum
-statement_id    VARCHAR(36)    null    null
-account    VARCHAR(300)    null    null
-response_at    DATETIME(0)    null    null
-cu    DECIMAL(23,3)    null    null
-account_id    INT UNSIGNED(32)    null    null
+statement_id    varchar(36)    null    null
+account    varchar(300)    null    null
+response_at    datetime    null    null
+cu    decimal(23,3)    null    null
+account_id    int unsigned    null    null
 use mo_catalog;
 select * from cluster_table_1;
 a    b
@@ -102,11 +102,11 @@ a    b
 1    1
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mo_catalog' and att_relname='statement_cu' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 name    data_type    maximum    minimum
-statement_id    VARCHAR(36)    null    null
-account    VARCHAR(300)    null    null
-response_at    DATETIME(0)    null    null
-cu    DECIMAL(23,3)    null    null
-account_id    INT UNSIGNED(32)    null    null
+statement_id    varchar(36)    null    null
+account    varchar(300)    null    null
+response_at    datetime    null    null
+cu    decimal(23,3)    null    null
+account_id    int unsigned    null    null
 insert into cluster_table_1 values(200,200, 0);
 insert into cluster_table_1 values(100,100, 0);
 insert into cluster_table_1 values(50,50, 0);
@@ -323,12 +323,12 @@ col1    col2
 use mo_catalog;
 desc cluster_table_4;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null        
-col2    VARCHAR(65535)    YES        null        
-account_id    INT UNSIGNED(32)    NO        null        the account_id added by the mo
+col1    int    YES        null        
+col2    varchar(16383)    YES        null        
+account_id    int unsigned    NO        null        the account_id added by the mo
 show create table cluster_table_4;
 Table    Create Table
-cluster_table_4    CREATE CLUSTER TABLE `cluster_table_4` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(65535) DEFAULT NULL\n)
+cluster_table_4    CREATE CLUSTER TABLE `cluster_table_4` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(16383) DEFAULT NULL\n)
 drop table cluster_table_4;
 internal error: do not have privilege to execute the statement
 use mo_catalog;
@@ -754,74 +754,74 @@ DROP TABLE IF EXISTS `mo_catalog`.`document`;
 CREATE CLUSTER TABLE IF NOT EXISTS `mo_catalog`.`document` (`id` VARCHAR(36) NOT NULL, `kb_id` BIGINT NOT NULL, `name` VARCHAR(100) NOT NULL, `user` VARCHAR(100) NOT NULL, `path` VARCHAR(256) NOT NULL, `reason` VARCHAR(256) NOT NULL, `size` BIGINT NOT NULL, `seg_count` BIGINT NOT NULL, `data_source` TINYINT NOT NULL, `doc_type` TINYINT NOT NULL, `status` TINYINT NOT NULL, `created_at` DATETIME(3) DEFAULT NULL, `updated_at` DATETIME(3) DEFAULT NULL,PRIMARY KEY (`id`, `account_id`));
 desc document;
 Field    Type    Null    Key    Default    Extra    Comment
-id    VARCHAR(36)    NO    PRI    null        
-kb_id    BIGINT(64)    NO        null        
-name    VARCHAR(100)    NO        null        
-user    VARCHAR(100)    NO        null        
-path    VARCHAR(256)    NO        null        
-reason    VARCHAR(256)    NO        null        
-size    BIGINT(64)    NO        null        
-seg_count    BIGINT(64)    NO        null        
-data_source    TINYINT(8)    NO        null        
-doc_type    TINYINT(8)    NO        null        
-status    TINYINT(8)    NO        null        
-created_at    DATETIME(3)    YES        null        
-updated_at    DATETIME(3)    YES        null        
-account_id    INT UNSIGNED(32)    NO    PRI    null        the account_id added by the mo
+id    varchar(36)    NO    PRI    null        
+kb_id    bigint    NO        null        
+name    varchar(100)    NO        null        
+user    varchar(100)    NO        null        
+path    varchar(256)    NO        null        
+reason    varchar(256)    NO        null        
+size    bigint    NO        null        
+seg_count    bigint    NO        null        
+data_source    tinyint    NO        null        
+doc_type    tinyint    NO        null        
+status    tinyint    NO        null        
+created_at    datetime(3)    YES        null        
+updated_at    datetime(3)    YES        null        
+account_id    int unsigned    NO    PRI    null        the account_id added by the mo
 ALTER TABLE document add meta longtext;
 desc document;
 Field    Type    Null    Key    Default    Extra    Comment
-id    VARCHAR(36)    NO    PRI    null        
-kb_id    BIGINT(64)    NO        null        
-name    VARCHAR(100)    NO        null        
-user    VARCHAR(100)    NO        null        
-path    VARCHAR(256)    NO        null        
-reason    VARCHAR(256)    NO        null        
-size    BIGINT(64)    NO        null        
-seg_count    BIGINT(64)    NO        null        
-data_source    TINYINT(8)    NO        null        
-doc_type    TINYINT(8)    NO        null        
-status    TINYINT(8)    NO        null        
-created_at    DATETIME(3)    YES        null        
-updated_at    DATETIME(3)    YES        null        
-meta    LONGTEXT    YES        null        
-account_id    INT UNSIGNED(32)    NO    PRI    null        the account_id added by the mo
+id    varchar(36)    NO    PRI    null        
+kb_id    bigint    NO        null        
+name    varchar(100)    NO        null        
+user    varchar(100)    NO        null        
+path    varchar(256)    NO        null        
+reason    varchar(256)    NO        null        
+size    bigint    NO        null        
+seg_count    bigint    NO        null        
+data_source    tinyint    NO        null        
+doc_type    tinyint    NO        null        
+status    tinyint    NO        null        
+created_at    datetime(3)    YES        null        
+updated_at    datetime(3)    YES        null        
+meta    longtext    YES        null        
+account_id    int unsigned    NO    PRI    null        the account_id added by the mo
 DROP TABLE document;
 CREATE CLUSTER TABLE IF NOT EXISTS `mo_catalog`.`document` (`id` VARCHAR(36) NOT NULL, `kb_id` BIGINT NOT NULL, `name` VARCHAR(100) NOT NULL, `user` VARCHAR(100) NOT NULL, `path` VARCHAR(256) NOT NULL, `reason` VARCHAR(256) NOT NULL, `size` BIGINT NOT NULL, `seg_count` BIGINT NOT NULL, `data_source` TINYINT NOT NULL, `doc_type` TINYINT NOT NULL, `status` TINYINT NOT NULL, `created_at` DATETIME(3) DEFAULT NULL, `updated_at` DATETIME(3) DEFAULT NULL,PRIMARY KEY (`id`, `account_id`));
 desc mo_catalog.document;
 Field    Type    Null    Key    Default    Extra    Comment
-id    VARCHAR(36)    NO    PRI    null        
-kb_id    BIGINT(64)    NO        null        
-name    VARCHAR(100)    NO        null        
-user    VARCHAR(100)    NO        null        
-path    VARCHAR(256)    NO        null        
-reason    VARCHAR(256)    NO        null        
-size    BIGINT(64)    NO        null        
-seg_count    BIGINT(64)    NO        null        
-data_source    TINYINT(8)    NO        null        
-doc_type    TINYINT(8)    NO        null        
-status    TINYINT(8)    NO        null        
-created_at    DATETIME(3)    YES        null        
-updated_at    DATETIME(3)    YES        null        
-account_id    INT UNSIGNED(32)    NO    PRI    null        the account_id added by the mo
+id    varchar(36)    NO    PRI    null        
+kb_id    bigint    NO        null        
+name    varchar(100)    NO        null        
+user    varchar(100)    NO        null        
+path    varchar(256)    NO        null        
+reason    varchar(256)    NO        null        
+size    bigint    NO        null        
+seg_count    bigint    NO        null        
+data_source    tinyint    NO        null        
+doc_type    tinyint    NO        null        
+status    tinyint    NO        null        
+created_at    datetime(3)    YES        null        
+updated_at    datetime(3)    YES        null        
+account_id    int unsigned    NO    PRI    null        the account_id added by the mo
 ALTER TABLE mo_catalog.document add meta longtext;
 desc mo_catalog.document;
 Field    Type    Null    Key    Default    Extra    Comment
-id    VARCHAR(36)    NO    PRI    null        
-kb_id    BIGINT(64)    NO        null        
-name    VARCHAR(100)    NO        null        
-user    VARCHAR(100)    NO        null        
-path    VARCHAR(256)    NO        null        
-reason    VARCHAR(256)    NO        null        
-size    BIGINT(64)    NO        null        
-seg_count    BIGINT(64)    NO        null        
-data_source    TINYINT(8)    NO        null        
-doc_type    TINYINT(8)    NO        null        
-status    TINYINT(8)    NO        null        
-created_at    DATETIME(3)    YES        null        
-updated_at    DATETIME(3)    YES        null        
-meta    LONGTEXT    YES        null        
-account_id    INT UNSIGNED(32)    NO    PRI    null        the account_id added by the mo
+id    varchar(36)    NO    PRI    null        
+kb_id    bigint    NO        null        
+name    varchar(100)    NO        null        
+user    varchar(100)    NO        null        
+path    varchar(256)    NO        null        
+reason    varchar(256)    NO        null        
+size    bigint    NO        null        
+seg_count    bigint    NO        null        
+data_source    tinyint    NO        null        
+doc_type    tinyint    NO        null        
+status    tinyint    NO        null        
+created_at    datetime(3)    YES        null        
+updated_at    datetime(3)    YES        null        
+meta    longtext    YES        null        
+account_id    int unsigned    NO    PRI    null        the account_id added by the mo
 DROP TABLE mo_catalog.document;
 DROP TABLE IF EXISTS ct_truncate_implicit_account;
 CREATE CLUSTER TABLE ct_truncate_implicit_account (

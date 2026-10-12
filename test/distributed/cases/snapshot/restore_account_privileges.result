@@ -1,0 +1,94 @@
+drop snapshot if exists restore_priv_s1;
+drop snapshot if exists restore_priv_s2;
+drop account if exists restore_priv_source;
+drop account if exists restore_priv_target;
+create account restore_priv_source admin_name 'admin' identified by '111';
+create account restore_priv_target admin_name 'admin' identified by '111';
+create database app;
+create table app.t (id int primary key);
+insert into app.t values (1);
+create view app.v as select * from app.t;
+create table app.secret (id int);
+create role reader;
+create user u1 identified by '111' default role reader;
+grant connect on account * to reader;
+grant select on table app.t to reader with grant option;
+grant select on view app.v to reader;
+grant insert on table app.* to reader;
+grant create table on database app to reader;
+grant reader to u1;
+select * from app.t;
+➤ id[4,32,0]  𝄀
+1
+select * from app.v;
+➤ id[4,32,0]  𝄀
+1
+create database app;
+create table app.t (id int primary key);
+insert into app.t values (99);
+create snapshot restore_priv_s1 for account restore_priv_source;
+restore account restore_priv_source {snapshot = 'restore_priv_s1'} to account restore_priv_target;
+select * from app.t;
+➤ id[4,32,0]  𝄀
+1
+select count(*) as bound_view_grants from mo_catalog.mo_role_privs p
+join mo_catalog.mo_tables t on p.obj_id = t.rel_logical_id
+where p.role_name = 'reader' and p.obj_type = 'view'
+and p.privilege_name = 'select' and t.reldatabase = 'app' and t.relname = 'v';
+➤ bound_view_grants[-5,64,0]  𝄀
+1
+select count(*) as bound_table_grants from mo_catalog.mo_role_privs p
+join mo_catalog.mo_tables t on p.obj_id = t.rel_logical_id
+where p.role_name = 'reader' and p.obj_type = 'table'
+and p.privilege_name = 'select' and t.reldatabase = 'app' and t.relname = 't';
+➤ bound_table_grants[-5,64,0]  𝄀
+1
+select * from app.t;
+➤ id[4,32,0]  𝄀
+1
+insert into app.t values (2);
+create table app.owned (id int);
+select * from app.secret;
+internal error: do not have privilege to execute the statement
+delete from app.t;
+internal error: do not have privilege to execute the statement
+truncate table app.t;
+insert into app.t values (3);
+show grants for role reader;
+➤ Grants for reader[12,236,0]  𝄀
+GRANT connect ON account  `reader`  𝄀
+GRANT create table ON database d `reader`  𝄀
+GRANT insert ON table d.* `reader`  𝄀
+GRANT select ON table d.t `reader`  𝄀
+GRANT select ON view d.t `reader`  𝄀
+GRANT table ownership ON table d.t `reader`
+create snapshot restore_priv_s2 for account restore_priv_target;
+grant select on table app.secret to reader;
+insert into app.t values (4);
+restore account restore_priv_target {snapshot = 'restore_priv_s2'};
+select * from app.t;
+➤ id[4,32,0]  𝄀
+3
+select * from app.secret;
+internal error: do not have privilege to execute the statement
+delete from app.t;
+internal error: do not have privilege to execute the statement
+show grants for role reader;
+➤ Grants for reader[12,236,0]  𝄀
+GRANT connect ON account  `reader`  𝄀
+GRANT create table ON database d `reader`  𝄀
+GRANT insert ON table d.* `reader`  𝄀
+GRANT select ON table d.t `reader`  𝄀
+GRANT table ownership ON table d.t `reader`  𝄀
+GRANT select ON view d.t `reader`
+select count(*) as bound_table_grants from mo_catalog.mo_role_privs p
+join mo_catalog.mo_tables t on p.obj_id = t.rel_logical_id
+where p.role_name = 'reader' and p.obj_type = 'table'
+and p.privilege_name = 'select' and p.with_grant_option = true
+and t.reldatabase = 'app' and t.relname = 't';
+➤ bound_table_grants[-5,64,0]  𝄀
+1
+drop snapshot restore_priv_s2;
+drop snapshot restore_priv_s1;
+drop account restore_priv_target;
+drop account restore_priv_source;

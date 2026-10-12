@@ -207,4 +207,98 @@ select (col1,col2) = ('abcdef','{"t1": "a"}') from row05;
 select (col1,col2) != ('abcdef','{"ehyiuwqnve": "ashyiujewv"}') from row05;
 drop table row05;
 
+-- #28295: direct row constructors against multi-column scalar subqueries.
+drop table if exists row_scalar_28295;
+create table row_scalar_28295(id int primary key, a int, b int);
+insert into row_scalar_28295 values (1,1,5),(2,1,null),(3,2,8),(4,2,10);
+select (1,5) = (select a,b from row_scalar_28295 where id=1) as match_v;
+select (1,5) = (select a,b from row_scalar_28295 where id=99) as empty_v;
+select (1,5) = (select a,b from row_scalar_28295 where id=2) as null_v;
+select (1,4) < (select a,b from row_scalar_28295 where id=1) as order_v;
+select (1,null) <=> (select a,b from row_scalar_28295 where id=2) as null_safe_v;
+select (1,(select 5)) = (select a,b from row_scalar_28295 where id=1) as nested_scalar_v;
+select id from row_scalar_28295 outer_row
+where (outer_row.a, outer_row.b) =
+      (select inner_row.a, inner_row.b from row_scalar_28295 inner_row where inner_row.id=outer_row.id)
+order by id;
+select id from row_scalar_28295 outer_row
+where (outer_row.id, outer_row.a) =
+      (select outer_row.id, inner_row.a from row_scalar_28295 inner_row where inner_row.id=outer_row.id)
+order by id;
+select (1,7) =
+       (select outer_row.id,7 from row_scalar_28295 inner_row
+        where inner_row.id=outer_row.id limit 1) as outer_limit_v
+from row_scalar_28295 outer_row where outer_row.id=1;
+select (1,7) =
+       (select distinct outer_row.id,7 from row_scalar_28295 inner_row
+        where inner_row.id=outer_row.id) as outer_distinct_v
+from row_scalar_28295 outer_row where outer_row.id=1;
+select (0,null) <=>
+       (select count(*),sum(inner_row.b) from row_scalar_28295 inner_row
+        where inner_row.id=outer_row.id+100 having count(*)=0) as aggregate_empty_v
+from row_scalar_28295 outer_row where outer_row.id=1;
+create table row_scalar_outer_28295(k int primary key);
+create table row_scalar_inner_28295(k int, v int);
+insert into row_scalar_outer_28295 values (1),(2);
+insert into row_scalar_inner_28295 values (1,10);
+select o.k, (0,null) <=>
+       (select count(1),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as real_rows_only
+from row_scalar_outer_28295 o order by o.k;
+select o.k, (0,null) <=>
+       (select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k limit 0) as rejected_limit
+from row_scalar_outer_28295 o order by o.k;
+select o.k, (0,null) <=>
+       (select sum(coalesce(i.v,0)),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as rejected_expression
+from row_scalar_outer_28295 o order by o.k;
+select o.k, (o.k,(select v from row_scalar_inner_28295 where k=1)) =
+       (select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as rejected_composition
+from row_scalar_outer_28295 o order by o.k;
+select 1 as query_after_rejections;
+insert into row_scalar_inner_28295 values (1,20);
+select o.k, (select group_concat(i.v order by i.v desc separator '~')
+             from row_scalar_inner_28295 i where i.k<o.k) as ordered_concat
+from row_scalar_outer_28295 o order by o.k;
+create table row_scalar_decimal_28295(x decimal(10,2) not null, y int not null);
+select (1.001,1) = (select x,y from row_scalar_decimal_28295) as empty_decimal_eq;
+select (1.001,1) <> (select x,y from row_scalar_decimal_28295) as empty_decimal_neq;
+select (select x,y from row_scalar_decimal_28295) = (1.001,1) as reversed_empty_decimal_eq;
+select 1.001 = (select x from row_scalar_decimal_28295) as ordinary_empty_decimal_eq;
+insert into row_scalar_decimal_28295 values (1.00,1);
+select (1.001,1) <> (select x,y from row_scalar_decimal_28295) as matched_decimal_neq;
+select o.k, (1.001,1) <> (select i.x,i.y from row_scalar_decimal_28295 i where i.y=o.k) as correlated_decimal_neq
+from row_scalar_outer_28295 o order by o.k;
+select o.k, (1.001,0) <> (select min(i.x),count(*) from row_scalar_decimal_28295 i where i.y<o.k) as aggregate_decimal_neq
+from row_scalar_outer_28295 o order by o.k;
+drop table row_scalar_decimal_28295;
+create table row_scalar_ifnull_outer_28295(k int primary key);
+insert into row_scalar_ifnull_outer_28295 values (1),(2),(3);
+create table row_scalar_ifnull_inner_28295(k int, v int);
+insert into row_scalar_ifnull_inner_28295 values (1,10),(1,20),(2,null);
+select o.k, ifnull((select min(i.v) from row_scalar_ifnull_inner_28295 i where i.k<o.k),0) as selected_ifnull
+from row_scalar_ifnull_outer_28295 o order by o.k;
+select o.k, (select min(i.v) from row_scalar_ifnull_inner_28295 i where i.k<o.k) as raw_min
+from row_scalar_ifnull_outer_28295 o order by o.k;
+drop table row_scalar_ifnull_inner_28295;
+drop table row_scalar_ifnull_outer_28295;
+drop table row_scalar_inner_28295;
+drop table row_scalar_outer_28295;
+select (1,5) = (select a,b from row_scalar_28295 where id>0) as multi_v;
+select (1,2) = (select 1,2 limit 0) as no_from_empty_limit_v;
+select (1,2) = (select 1,2 limit 1 offset 1) as no_from_empty_offset_v;
+select (1,2) = (select 1,2 limit 1 offset 0) as no_from_one_v;
+select (1,2) <=> (select 1,2 limit 0) as no_from_null_safe_empty_v;
+create sequence row_scalar_guard_seq;
+select (nextval('row_scalar_guard_seq'),0) < (select 1,1) as volatile_order_v;
+select (0,null) <=>
+       (select count(*),sum(inner_row.b) from row_scalar_28295 inner_row
+        where inner_row.id=outer_row.id+100 having nextval('row_scalar_guard_seq')=1) as volatile_having_v
+from row_scalar_28295 outer_row where outer_row.id=1;
+select nextval('row_scalar_guard_seq') as first_value_after_rejection;
+drop sequence row_scalar_guard_seq;
+set @row_scalar_a=1, @row_scalar_b=5;
+prepare row_scalar_stmt from 'select (?,?) = (select a,b from row_scalar_28295 where id=1) as prepared_v';
+execute row_scalar_stmt using @row_scalar_a, @row_scalar_b;
+deallocate prepare row_scalar_stmt;
+drop table row_scalar_28295;
+
 drop database test;

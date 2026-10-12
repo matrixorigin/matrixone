@@ -128,9 +128,9 @@ select count(*) as contract_columns
 from information_schema.columns
 where table_schema = 'bounded_result_metadata'
   and table_name in ('bounded_numeric_view', 'bounded_numeric_ctas')
-  and ((column_name = 'pos_v' and column_type = 'INT')
-    or (column_name = 'cmp_v' and column_type = 'INT')
-    or (column_name = 'chars_v' and column_type = 'BIGINT')
-    or (column_name = 'crc_v' and column_type = 'BIGINT UNSIGNED'));
+  and ((column_name = 'pos_v' and column_type = 'int')
+    or (column_name = 'cmp_v' and column_type = 'int')
+    or (column_name = 'chars_v' and column_type = 'bigint')
+    or (column_name = 'crc_v' and column_type = 'bigint unsigned'));
 
 drop database bounded_result_metadata;

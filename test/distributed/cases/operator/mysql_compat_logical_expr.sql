@@ -48,4 +48,11 @@ select id, s, n,
 from t_logical_mixed
 order by id;
 
+select id,
+       s xor 1 as right_const,
+       1 xor n as left_const,
+       if(id <= 3, s xor n, true) as selected_xor
+from t_logical_mixed
+order by id;
+
 drop database mysql_compat_logical_expr;

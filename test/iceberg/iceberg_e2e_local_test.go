@@ -324,6 +324,63 @@ func TestLocalE2ECaseReportsRedactAndSummarize(t *testing.T) {
 	}
 }
 
+func TestRecordSuccessfulRESTSeed(t *testing.T) {
+	t.Run("records case and artifact", func(t *testing.T) {
+		dir := t.TempDir()
+		summary := runSummary{}
+		if err := recordSuccessfulRESTSeed(dir, &summary); err != nil {
+			t.Fatalf("record successful REST seed: %v", err)
+		}
+		if len(summary.Cases) != 1 {
+			t.Fatalf("unexpected seed case count: %d", len(summary.Cases))
+		}
+		result := summary.Cases[0]
+		if result.ID != "ICE-CI-E2E-000" || result.Name != "rest-seed" || result.Status != "passed" {
+			t.Fatalf("unexpected seed result: %+v", result)
+		}
+		if !sameLines(result.SQL, []string{"seed Iceberg REST catalog tables"}) ||
+			!sameLines(result.Expected, []string{"seed completed"}) ||
+			!sameLines(result.Actual, []string{"seed completed"}) {
+			t.Fatalf("unexpected seed result contract: %+v", result)
+		}
+		caseDir := filepath.Join(dir, safeFileName(result.ID+"_"+result.Name))
+		for _, name := range []string{"mo.out", "metadata.json", "diff.json", "summary.md"} {
+			if _, err := os.Stat(filepath.Join(caseDir, name)); err != nil {
+				t.Fatalf("missing seed artifact %s: %v", name, err)
+			}
+		}
+	})
+
+	t.Run("rejects invalid arguments", func(t *testing.T) {
+		if err := recordSuccessfulRESTSeed(t.TempDir(), nil); err == nil || !strings.Contains(err.Error(), "summary is nil") {
+			t.Fatalf("expected nil-summary error, got %v", err)
+		}
+		summary := runSummary{}
+		if err := recordSuccessfulRESTSeed(" ", &summary); err == nil || !strings.Contains(err.Error(), "directory is empty") {
+			t.Fatalf("expected empty-directory error, got %v", err)
+		}
+		if len(summary.Cases) != 0 {
+			t.Fatalf("invalid arguments changed summary: %+v", summary.Cases)
+		}
+	})
+
+	t.Run("does not append when artifact write fails", func(t *testing.T) {
+		dir := t.TempDir()
+		blockingFile := filepath.Join(dir, "not-a-directory")
+		if err := os.WriteFile(blockingFile, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write blocking file: %v", err)
+		}
+		summary := runSummary{}
+		err := recordSuccessfulRESTSeed(blockingFile, &summary)
+		if err == nil || !strings.Contains(err.Error(), "write REST seed report") {
+			t.Fatalf("expected wrapped artifact error, got %v", err)
+		}
+		if len(summary.Cases) != 0 {
+			t.Fatalf("failed artifact write changed summary: %+v", summary.Cases)
+		}
+	})
+}
+
 func TestLocalE2EReportErrorBranches(t *testing.T) {
 	dir := t.TempDir()
 	blockingFile := filepath.Join(dir, "not-a-directory")

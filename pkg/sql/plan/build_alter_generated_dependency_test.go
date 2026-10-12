@@ -398,7 +398,7 @@ func TestAlterCopyAffectedForeignKeyColumnsSkipsMetadataForNewStoredColumn(t *te
 func TestAlterForeignKeyValidationResolvesSelfReferencesLocally(t *testing.T) {
 	for _, selfMarker := range []uint64{0, 100} {
 		t.Run(fmt.Sprintf("self marker %d", selfMarker), func(t *testing.T) {
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			int32Type := planpb.Type{Id: int32(types.T_int32)}
 			int64Type := planpb.Type{Id: int32(types.T_int64)}
 			selfTable := func() *planpb.TableDef {
@@ -495,7 +495,7 @@ func TestAlterForeignKeyValidationResolvesExternalReferences(t *testing.T) {
 		} {
 			t.Run(operation+"/"+tc.name, func(t *testing.T) {
 				ctx := &alterForeignKeyResolveTestContext{
-					CompilerContext: NewMockCompilerContext(false),
+					CompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 					tables:          map[uint64]*TableDef{200: child(tc.wantError)},
 				}
 				var err error
@@ -528,7 +528,7 @@ func TestAlterForeignKeyValidationRejectsScaleChangesOnEveryEndpoint(t *testing.
 
 	t.Run("outgoing composite child endpoint", func(t *testing.T) {
 		ctx := &alterForeignKeyResolveTestContext{
-			CompilerContext: NewMockCompilerContext(false),
+			CompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 			tables: map[uint64]*TableDef{
 				200: {Cols: []*planpb.ColDef{
 					{ColId: 10, Name: "parent_a", Typ: decimal(1)},
@@ -556,7 +556,7 @@ func TestAlterForeignKeyValidationRejectsScaleChangesOnEveryEndpoint(t *testing.
 
 	t.Run("outgoing varchar capacity widening remains legal", func(t *testing.T) {
 		ctx := &alterForeignKeyResolveTestContext{
-			CompilerContext: NewMockCompilerContext(false),
+			CompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 			tables: map[uint64]*TableDef{
 				200: {Cols: []*planpb.ColDef{{
 					ColId: 10, Name: "parent_key", Typ: planpb.Type{
@@ -587,7 +587,7 @@ func TestAlterForeignKeyValidationRejectsScaleChangesOnEveryEndpoint(t *testing.
 
 	t.Run("incoming parent endpoint", func(t *testing.T) {
 		ctx := &alterForeignKeyResolveTestContext{
-			CompilerContext: NewMockCompilerContext(false),
+			CompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 			tables: map[uint64]*TableDef{
 				200: {
 					Fkeys: []*planpb.ForeignKeyDef{{
@@ -625,7 +625,7 @@ func TestAlterForeignKeyValidationRejectsScaleChangesOnEveryEndpoint(t *testing.
 				}},
 				RefChildTbls: []uint64{selfMarker},
 			}
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			err := checkColumnForeignkeyConstraint(ctx, table, table.Cols[0], &planpb.ColDef{
 				ColId: 1, Name: "parent_a", Typ: decimal(0),
 			})
@@ -658,8 +658,8 @@ func addAlterTestIndex(t *testing.T, mock *MockOptimizer, base *planpb.TableDef,
 func registerAlterIndexVisibilityRows(t *testing.T, mock *MockOptimizer, base *planpb.TableDef) {
 	t.Helper()
 	proc := mock.ctxt.GetProcess()
-	require.NotNil(t, mock.ctxt.processHolder)
-	mock.ctxt.processHolder.internalSQLExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+	require.NotNil(t, mock.ctxt.GetProcess())
+	mock.ctxt.internalSQLExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 		require.Equal(t, fmt.Sprintf(
 			"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = %d",
 			base.TblId,
@@ -682,7 +682,7 @@ func registerAlterIndexVisibilityRows(t *testing.T, mock *MockOptimizer, base *p
 
 func newGeneratedIndexAlterMock(t *testing.T) *MockOptimizer {
 	t.Helper()
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	configureMockGeneratedIndex(t, mock, true)
 	base := mock.ctxt.tables["t_on_update_gen"]
 	addAlterTestIndex(t, mock, base, "idx_val", "val", false)
@@ -761,7 +761,7 @@ func TestAlterAddThenModifyDoesNotSeedOriginalGeneratedDependencies(t *testing.T
 }
 
 func TestAlterSourceAffectingGeneratedPrimaryKeyRebuildsAllIndexes(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	configureMockGeneratedPrimaryKey(t, mock)
 	base := mock.ctxt.tables["t_on_update_gen"]
 	addAlterTestIndex(t, mock, base, "idx_pk_payload", "updated_at", true)

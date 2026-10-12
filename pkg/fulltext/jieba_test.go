@@ -50,6 +50,108 @@ func TestParsePatternInNLModeNgramUnchanged(t *testing.T) {
 	assert.Equal(t, STAR, ps[0].Operator)
 }
 
+// #29296: a < 3-rune NL pattern must be lowercased before the STAR prefix, so a capitalized short
+// pattern looks up the lowercased stored token instead of prefix-searching the raw string.
+func TestParsePatternInNLModeShortLowercases(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"hi", "hi*"}, // already lowercase (control)
+		{"Hi", "hi*"},
+		{"HI", "hi*"},
+		{"Ab", "ab*"},
+		{"AB", "ab*"},
+	} {
+		for _, parser := range []string{"", "ngram", "default"} {
+			ps, err := ParsePatternInNLMode(c.in, parser)
+			require.Nil(t, err, "%q parser=%q", c.in, parser)
+			require.Len(t, ps, 1, "%q parser=%q", c.in, parser)
+			assert.Equal(t, c.want, ps[0].Text, "%q parser=%q", c.in, parser)
+			assert.Equal(t, STAR, ps[0].Operator, "%q parser=%q", c.in, parser)
+		}
+	}
+
+	// A 3-rune pattern stays an exact token (the short-prefix rule does not apply) and is
+	// tokenized (already lowercased there); this fix only touches the < 3-rune branch.
+	ps, err := ParsePatternInNLMode("hig", "")
+	require.Nil(t, err)
+	require.Len(t, ps, 1)
+	assert.Equal(t, "hig", ps[0].Text)
+	assert.Equal(t, TEXT, ps[0].Operator)
+}
+
+// #29296 (regression): the short-prefix case fold must match SimpleTokenizer, which folds ONLY
+// Latin-class runes (<0x7FF, outputLatin) and preserves wider runes verbatim (outputCJK). Blanket
+// strings.ToLower folded fullwidth/CJK capitals like `Ａ`/`ẞ`, so the prefix looked up a token the
+// index never stored and missed the original row.
+func TestParsePatternInNLModeShortMatchesTokenizerFolding(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		// <0x7FF cased runes DO fold (they route through outputLatin).
+		{"À", "à*"},   // Latin-1 (U+00C0)
+		{"Α", "α*"},   // Greek (U+0391)
+		{"Àb", "àb*"}, // mixed short run still folds each <0x7FF rune
+		// >=0x7FF runes are preserved verbatim (outputCJK), NOT folded.
+		{"Ａ", "Ａ*"}, // fullwidth A (U+FF21)
+		{"ẞ", "ẞ*"}, // capital sharp S (U+1E9E)
+		{"中", "中*"}, // CJK (control: already caseless, must stay)
+	} {
+		for _, parser := range []string{"", "ngram", "default", "json"} {
+			ps, err := ParsePatternInNLMode(c.in, parser)
+			require.Nil(t, err, "%q parser=%q", c.in, parser)
+			require.Len(t, ps, 1, "%q parser=%q", c.in, parser)
+			assert.Equal(t, c.want, ps[0].Text, "%q parser=%q", c.in, parser)
+			assert.Equal(t, STAR, ps[0].Operator, "%q parser=%q", c.in, parser)
+		}
+	}
+}
+
+// #29296 (regression): json_value stores ByteJson.TokenizeValue output verbatim (no case folding),
+// so its short query prefix must preserve case exactly. Blanket lowercasing turned even an ASCII `Hi`
+// into `hi*`, matching the wrong stored value.
+func TestParsePatternInNLModeShortJSONValuePreservesCase(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"Hi", "Hi*"},
+		{"HI", "HI*"},
+		{"hi", "hi*"}, // already lowercase (control)
+		{"ẞ", "ẞ*"},
+	} {
+		ps, err := ParsePatternInNLMode(c.in, "json_value")
+		require.Nil(t, err, c.in)
+		require.Len(t, ps, 1, c.in)
+		assert.Equal(t, c.want, ps[0].Text, c.in)
+		assert.Equal(t, STAR, ps[0].Operator, c.in)
+	}
+}
+
+// #29288: BOOLEAN mode dropped a final one-rune term after whitespace (it starts and ends on the
+// last rune, so it never reached the flush the multi-rune final term uses). MATCH then missed
+// documents that term would return, breaking the boolean-OR superset property.
+func TestParsePatternBooleanFinalOneRuneTerm(t *testing.T) {
+	b := func(p string) []string {
+		ps, err := ParsePattern(p, int64(tree.FULLTEXT_BOOLEAN), "")
+		require.Nil(t, err, p)
+		return collectTexts(ps)
+	}
+
+	// The dropped-term cases: the trailing single rune (CJK / latin / wildcard) is now kept.
+	assert.Equal(t, []string{"nope", "蕉"}, b("nope 蕉"))
+	assert.Equal(t, []string{"apple", "a"}, b("apple a"))
+	assert.Equal(t, []string{"apple", "*"}, b("apple *"))
+
+	// `nope 蕉` must be a superset of `蕉` (boolean OR).
+	assert.Subset(t, b("nope 蕉"), b("蕉"))
+
+	// Controls: a lone single rune, a multi-rune final term (must not double-emit), and a trailing
+	// bracket group are unchanged.
+	assert.Equal(t, []string{"蕉"}, b("蕉"))
+	assert.Equal(t, []string{"nope", "xy"}, b("nope xy"))
+	assert.Len(t, b("apple (a b)"), 2)
+
+	// The final `*` keeps its STAR operator.
+	ps, err := ParsePattern("apple *", int64(tree.FULLTEXT_BOOLEAN), "")
+	require.Nil(t, err)
+	require.Len(t, ps, 2)
+	assert.Equal(t, STAR, ps[1].Operator)
+}
+
 func TestParsePatternRoutesByParser(t *testing.T) {
 	// gojieba: "苹果香蕉" segments cleanly into two TEXT tokens.
 	ps, err := ParsePattern("苹果香蕉", int64(tree.FULLTEXT_NL), "gojieba")
@@ -177,4 +279,58 @@ func TestParsePhraseWhitespaceParserUnchanged(t *testing.T) {
 	assert.Equal(t, []string{"is", "not", "red"}, collectTexts(children))
 	assert.Equal(t, []int32{0, 3, 7},
 		[]int32{children[0].Position, children[1].Position, children[2].Position})
+}
+
+// TestParsePhraseShortTokenizes29271 is the public-path control for #29271 P2: a SHORT
+// (< ngram) phrase that mixes scripts or contains a breaker must tokenize like the index
+// (via the full NewSearchAccum -> PHRASE build), not return a raw whole-string leaf. It
+// asserts token AND position agreement -- "a中" must decompose to 'a' at byte 0 (short
+// Latin, exact) and '中*' at byte 1 (short CJK, prefix), matching the stored 'a'@0 / '中'@1.
+func TestParsePhraseShortTokenizes29271(t *testing.T) {
+	for _, c := range []struct {
+		phrase    string
+		texts     []string
+		positions []int32
+		ops       []int
+	}{
+		{`"a中"`, []string{"a", "中*"}, []int32{0, 1}, []int{TEXT, STAR}},
+		{`"中a"`, []string{"中*", "a"}, []int32{0, 3}, []int{STAR, TEXT}},
+		{`"a-"`, []string{"a"}, []int32{0}, []int{TEXT}},  // hyphen is a discarded breaker
+		{`"-a"`, []string{"a"}, []int32{1}, []int{TEXT}},  // 'a' stored at byte 1
+		{`"中。"`, []string{"中*"}, []int32{0}, []int{STAR}}, // punctuation discarded
+	} {
+		s, err := NewSearchAccum("src", "idx", c.phrase, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+		require.Nil(t, err, c.phrase)
+		require.Len(t, s.Pattern, 1, c.phrase)
+		require.Equal(t, PHRASE, s.Pattern[0].Operator, c.phrase)
+		children := s.Pattern[0].Children
+		require.Equal(t, c.texts, collectTexts(children), c.phrase)
+		for i, ch := range children {
+			require.Equal(t, c.positions[i], ch.Position, "%s child %d position", c.phrase, i)
+			require.Equal(t, c.ops[i], ch.Operator, "%s child %d operator", c.phrase, i)
+		}
+	}
+}
+
+// TestParsePhraseJSONValue29271 verifies that a quoted BOOLEAN phrase on a json_value index is
+// matched as ONE verbatim token, not SimpleTokenizer sub-tokens. json_value's index build
+// (fulltext_index_tokenize) stores each JSON value whole and does NOT run SimpleTokenizer, so
+// decomposing "update_json" into update+json (its underscore is a SimpleTokenizer breaker)
+// looked up tokens the index never stored and matched nothing (#29271 regression).
+func TestParsePhraseJSONValue29271(t *testing.T) {
+	ps, err := ParsePhrase("update_json", "json_value")
+	require.NoError(t, err)
+	require.Len(t, ps, 1)
+	require.Equal(t, PHRASE, ps[0].Operator)
+	children := ps[0].Children
+	require.Len(t, children, 1)
+	require.Equal(t, TEXT, children[0].Operator)
+	require.Equal(t, "update_json", children[0].Text)
+
+	// Contrast: the default parser DOES decompose on the underscore breaker, matching its
+	// per-value SimpleTokenizer index build.
+	def, err := ParsePhrase("update_json", "")
+	require.NoError(t, err)
+	require.Len(t, def, 1)
+	require.Equal(t, []string{"update", "json"}, collectTexts(def[0].Children))
 }

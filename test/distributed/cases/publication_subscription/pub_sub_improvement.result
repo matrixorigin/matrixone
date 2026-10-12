@@ -191,7 +191,7 @@ col1
 2
 desc table01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null        
+col1    int    YES        null        
 show table status;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
 table01    Tae    Dynamic    3    0    144    0    0    NULL    0    2024-12-02 16:06:34    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
@@ -215,10 +215,10 @@ Tables_in_sub_database03
 table01
 show columns from table01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null        
+col1    int    YES        null        
 desc table01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null        
+col1    int    YES        null        
 select * from table01;
 col1
 -1

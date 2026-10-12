@@ -103,34 +103,6 @@ func BenchmarkTxnNewAppendCallbackRollback(b *testing.B) {
 	})
 }
 
-func BenchmarkTxnNewAppendTraceCallbacksRollback(b *testing.B) {
-	events := []EventType{
-		WaitActiveEvent, UpdateSnapshotEvent, CommitEvent, RollbackEvent,
-		CommitResponseEvent, CommitWaitApplyEvent, UnlockEvent, RangesEvent,
-		BuildPlanEvent, ExecuteSQLEvent, CompileEvent, TableScanEvent,
-		WorkspaceWriteEvent, WorkspaceAdjustEvent,
-	}
-	callback := NewTxnEventCallback(func(context.Context, TxnOperator, TxnEvent, any) error {
-		return nil
-	})
-	c := newBenchmarkTxnClient(b)
-	ctx := context.Background()
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		op, err := c.New(ctx, timestamp.Timestamp{})
-		if err != nil {
-			b.Fatal(err)
-		}
-		for _, event := range events {
-			op.AppendEventCallback(event, callback)
-		}
-		if err := op.Rollback(ctx); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
 func newBenchmarkTxnClient(b *testing.B) TxnClient {
 	b.Helper()
 	rt := commonruntime.NewRuntime(

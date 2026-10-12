@@ -71,7 +71,7 @@ func requireODKUBaseLockUsesResolvedTarget(
 }
 
 func TestInsertOnDupIncomingPrimaryKeyNoop(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t,
 		"insert into constraint_test.t1(a, b) values (1, 'x') "+
 			"on duplicate key update a = values(a), b = values(b)")
@@ -80,7 +80,7 @@ func TestInsertOnDupIncomingPrimaryKeyNoop(t *testing.T) {
 }
 
 func TestInsertOnDupIncomingPrimaryKeyOnlyNoop(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t,
 		"insert into constraint_test.t1(a, b) values (1, 'x') "+
 			"on duplicate key update a = values(a)")
@@ -89,7 +89,7 @@ func TestInsertOnDupIncomingPrimaryKeyOnlyNoop(t *testing.T) {
 }
 
 func TestInsertOnDupIncomingCompositePrimaryKeyNoop(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t,
 		"insert into tpch.partsupp values (1, 2, 3, 4.50, 'x') "+
 			"on duplicate key update ps_partkey = values(ps_partkey), "+
@@ -99,7 +99,7 @@ func TestInsertOnDupIncomingCompositePrimaryKeyNoop(t *testing.T) {
 }
 
 func TestInsertOnDupPrimaryKeyMutationStillRejected(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	_, err := runOneStmt(mock, t,
 		"insert into constraint_test.t1(a, b) values (1, 'x') "+
 			"on duplicate key update a = a + 1, b = values(b)")
@@ -107,7 +107,7 @@ func TestInsertOnDupPrimaryKeyMutationStillRejected(t *testing.T) {
 }
 
 func TestInsertOnDupPrimaryKeyFromDifferentIncomingColumnStillRejected(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	_, err := runOneStmt(mock, t,
 		"insert into constraint_test.t1(a, b) values (1, '2') "+
 			"on duplicate key update a = values(b)")
@@ -115,7 +115,7 @@ func TestInsertOnDupPrimaryKeyFromDifferentIncomingColumnStillRejected(t *testin
 }
 
 func TestInsertOnDupCompositePrimaryKeyFromDifferentIncomingColumnStillRejected(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	_, err := runOneStmt(mock, t,
 		"insert into tpch.partsupp values (1, 2, 3, 4.50, 'x') "+
 			"on duplicate key update ps_partkey = values(ps_suppkey), "+
@@ -124,7 +124,7 @@ func TestInsertOnDupCompositePrimaryKeyFromDifferentIncomingColumnStillRejected(
 }
 
 func TestInsertOnDupWrappedIncomingPrimaryKeyStillRejected(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	_, err := runOneStmt(mock, t,
 		"insert into constraint_test.t1(a, b) values (1, 'x') "+
 			"on duplicate key update a = cast(values(a) as signed)")
@@ -132,7 +132,7 @@ func TestInsertOnDupWrappedIncomingPrimaryKeyStillRejected(t *testing.T) {
 }
 
 func TestInsertOnDupIncomingPrimaryKeyWithSecondaryUniqueStillRejected(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	_, err := runOneStmt(mock, t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') "+
 			"on duplicate key update deptno = values(deptno), loc = values(loc)")
@@ -148,7 +148,7 @@ func TestIsOnDupIncomingColumn(t *testing.T) {
 }
 
 func TestInsertOnDupPreservesAssignmentOrderAndDuplicates(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t,
 		"insert into constraint_test.t1(a, b) values (1, 'Alice') "+
 			"on duplicate key update b = concat(b, 'x'), b = concat(b, 'y'), b = concat(b, 'z')")
@@ -188,7 +188,7 @@ func TestInsertOnDupLocksResolvedConflictTarget(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			logicPlan, err := runOneStmt(mock, t, tc.sql)
 			require.NoError(t, err)
 			requireODKUBaseLockUsesResolvedTarget(t, logicPlan, mock.ctxt.tables[tc.tableName])
@@ -206,7 +206,7 @@ func TestInsertOnDupCarriesFoundRowsMode(t *testing.T) {
 		{name: "client found rows", wantFoundRows: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			mock.CurrentContext().GetProcess().Base.SessionInfo.CountUpdateChangedRows = tc.countUpdateChangedRows
 			logicPlan, err := runOneStmt(mock, t,
 				"insert into constraint_test.t1(a, b) values (1, 'x') on duplicate key update b = values(b)")

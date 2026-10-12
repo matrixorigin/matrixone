@@ -95,6 +95,17 @@ func TestAutoIDCacheRestartAndDisabledNode(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx, "show create table ai_cache_recovery.t").Scan(&name, &ddl))
 	require.Contains(t, ddl, "AUTO_ID_CACHE=1")
 	exec("create table ai_cache_recovery.default_policy(id int auto_increment primary key) auto_id_cache=0")
+	// A restarted CN can acknowledge the DDL before its logtail consumer has
+	// published the new table to the local catalog. Wait for that metadata
+	// frontier before using the table so this check exercises the AUTO_ID_CACHE
+	// policy instead of racing catalog visibility.
+	require.Eventually(t, func() bool {
+		var tableName, tableDDL string
+		err := db.QueryRowContext(ctx,
+			"show create table ai_cache_recovery.default_policy").Scan(&tableName, &tableDDL)
+		return err == nil
+	}, 30*time.Second, 100*time.Millisecond,
+		"default_policy table did not become visible after CREATE TABLE")
 	exec("insert into ai_cache_recovery.default_policy values(NULL)")
 	restart(true)
 	require.NoError(t, db.QueryRowContext(ctx, "show create table ai_cache_recovery.t").Scan(&name, &ddl))

@@ -32,7 +32,7 @@ func TestRollupDerivedFilterPushdownRespectsGroupingFlag(t *testing.T) {
 		{name: "is not null", predicate: "grp is not null", filterName: "isnotnull"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			useLegacyGroupingSetPlan(t, mock)
 			logicPlan, err := runOneStmt(mock, t, `
 				select grp, total
@@ -94,7 +94,7 @@ func TestRollupMultiColumnFilterPushdownRespectsEachBranch(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			useLegacyGroupingSetPlan(t, mock)
 			logicPlan, err := runOneStmt(mock, t, `
 				select grp1, grp2, total
@@ -176,7 +176,7 @@ func TestAggFilterPushdownConservativelyKeepsUnsafeGroupRefs(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, false)
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 			scanTag := builder.GenNewBindTag()
 			groupTag := builder.GenNewBindTag()
 			aggregateTag := builder.GenNewBindTag()
@@ -214,7 +214,7 @@ func TestAggFilterPushdownConservativelyKeepsUnsafeGroupRefs(t *testing.T) {
 }
 
 func TestAggFilterPushdownWithoutGroupingFlagsKeepsLegacyPath(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 		select grp
 		from (select distinct n_comment as grp from nation) as distinct_rows
 		where grp is null`)

@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+	"maps"
 	"slices"
 
 	"github.com/gogo/protobuf/proto"
@@ -336,45 +337,46 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		TimeWindowPartitionColPos: slices.Clone(node.TimeWindowPartitionColPos),
 		FuzzyBuildSide:            node.FuzzyBuildSide,
 
-		DeleteCtx:              DeepCopyDeleteCtx(node.DeleteCtx),
-		TblFuncExprList:        DeepCopyExprList(node.TblFuncExprList),
-		ClusterTable:           DeepCopyClusterTable(node.GetClusterTable()),
-		InsertCtx:              DeepCopyInsertCtx(node.InsertCtx),
-		NotCacheable:           node.NotCacheable,
-		SourceStep:             slices.Clone(node.SourceStep),
-		PreInsertCtx:           DeepCopyPreInsertCtx(node.PreInsertCtx),
-		PreInsertUkCtx:         DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
-		PreInsertSkCtx:         DeepCopyPreInsertUkCtx(node.PreInsertSkCtx),
-		LockTargets:            make([]*plan.LockTarget, len(node.LockTargets)),
-		AnalyzeInfo:            DeepCopyAnalyzeInfo(node.AnalyzeInfo),
-		IsEnd:                  node.IsEnd,
-		RecursiveSink:          node.RecursiveSink,
-		ExternScan:             deepCopyExternScan(node.ExternScan),
-		SampleFunc:             DeepCopySampleFuncSpec(node.SampleFunc),
-		OnUpdateExprs:          DeepCopyExprList(node.OnUpdateExprs),
-		DedupColName:           node.DedupColName,
-		DedupColTypes:          slices.Clone(node.DedupColTypes),
-		UpdateCtxList:          DeepCopyUpdateCtxList(node.UpdateCtxList),
-		DedupJoinCtx:           DeepCopyDedupJoinCtx(node.DedupJoinCtx),
-		IndexReaderParam:       DeepCopyIndexReaderParam(node.IndexReaderParam),
-		ScanSnapshot:           DeepCopySnapshot(node.ScanSnapshot),
-		VectorIndexScan:        DeepCopyVectorIndexScan(node.VectorIndexScan),
-		OriginViews:            slices.Clone(node.OriginViews),
-		DirectView:             node.DirectView,
-		RankOption:             DeepCopyRankOption(node.RankOption),
-		WindowIdx:              node.WindowIdx,
-		RecursiveCte:           node.RecursiveCte,
-		ApplyType:              node.ApplyType,
-		PostDmlCtx:             DeepCopyPostDmlCtx(node.PostDmlCtx),
-		OnDuplicateAction:      node.OnDuplicateAction,
-		RollupFilter:           node.RollupFilter,
-		RecursiveUnionDistinct: node.RecursiveUnionDistinct,
-		FilterIsBarrier:        node.FilterIsBarrier,
-		PartitionByCount:       node.PartitionByCount,
-		PartitionAlgorithm:     node.PartitionAlgorithm,
-		DedupInputKeysUnique:   node.DedupInputKeysUnique,
-		EmitCompressedRowCount: node.EmitCompressedRowCount,
-		SpillMem:               node.SpillMem,
+		DeleteCtx:                  DeepCopyDeleteCtx(node.DeleteCtx),
+		TblFuncExprList:            DeepCopyExprList(node.TblFuncExprList),
+		ClusterTable:               DeepCopyClusterTable(node.GetClusterTable()),
+		InsertCtx:                  DeepCopyInsertCtx(node.InsertCtx),
+		NotCacheable:               node.NotCacheable,
+		SourceStep:                 slices.Clone(node.SourceStep),
+		PreInsertCtx:               DeepCopyPreInsertCtx(node.PreInsertCtx),
+		PreInsertUkCtx:             DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
+		PreInsertSkCtx:             DeepCopyPreInsertUkCtx(node.PreInsertSkCtx),
+		LockTargets:                make([]*plan.LockTarget, len(node.LockTargets)),
+		AnalyzeInfo:                DeepCopyAnalyzeInfo(node.AnalyzeInfo),
+		IsEnd:                      node.IsEnd,
+		RecursiveSink:              node.RecursiveSink,
+		ExternScan:                 deepCopyExternScan(node.ExternScan),
+		SampleFunc:                 DeepCopySampleFuncSpec(node.SampleFunc),
+		OnUpdateExprs:              DeepCopyExprList(node.OnUpdateExprs),
+		DedupColName:               node.DedupColName,
+		DedupColTypes:              slices.Clone(node.DedupColTypes),
+		UpdateCtxList:              DeepCopyUpdateCtxList(node.UpdateCtxList),
+		DedupJoinCtx:               DeepCopyDedupJoinCtx(node.DedupJoinCtx),
+		IndexReaderParam:           DeepCopyIndexReaderParam(node.IndexReaderParam),
+		ScanSnapshot:               DeepCopySnapshot(node.ScanSnapshot),
+		VectorIndexScan:            DeepCopyVectorIndexScan(node.VectorIndexScan),
+		ViewPath:                   DeepCopyViewPath(node.ViewPath),
+		RankOption:                 DeepCopyRankOption(node.RankOption),
+		WindowIdx:                  node.WindowIdx,
+		RecursiveCte:               node.RecursiveCte,
+		ApplyType:                  node.ApplyType,
+		PostDmlCtx:                 DeepCopyPostDmlCtx(node.PostDmlCtx),
+		OnDuplicateAction:          node.OnDuplicateAction,
+		RollupFilter:               node.RollupFilter,
+		RecursiveUnionDistinct:     node.RecursiveUnionDistinct,
+		FilterIsBarrier:            node.FilterIsBarrier,
+		PartitionByCount:           node.PartitionByCount,
+		PartitionAlgorithm:         node.PartitionAlgorithm,
+		DedupInputKeysUnique:       node.DedupInputKeysUnique,
+		EmitCompressedRowCount:     node.EmitCompressedRowCount,
+		AdaptiveTopFallbackOnEmpty: node.AdaptiveTopFallbackOnEmpty,
+		VectorQuerySourceId:        node.VectorQuerySourceId,
+		SpillMem:                   node.SpillMem,
 		RuntimeFilterProbeList: DeepCopyRuntimeFilterSpecList(
 			node.RuntimeFilterProbeList),
 		RuntimeFilterBuildList: DeepCopyRuntimeFilterSpecList(
@@ -541,21 +543,9 @@ func DeepCopyType(typ *plan.Type) *plan.Type {
 	if typ == nil {
 		return nil
 	}
-	return &plan.Type{
-		Id:                       typ.Id,
-		NotNullable:              typ.NotNullable,
-		Width:                    typ.Width,
-		Scale:                    typ.Scale,
-		AutoIncr:                 typ.AutoIncr,
-		Table:                    typ.Table,
-		Enumvalues:               typ.Enumvalues,
-		Charset:                  typ.Charset,
-		CollationVersion:         typ.CollationVersion,
-		PadSpace:                 typ.PadSpace,
-		CollationCoercibility:    typ.CollationCoercibility,
-		CollationCoercibilitySet: typ.CollationCoercibilitySet,
-		CollationMergeConflict:   typ.CollationMergeConflict,
-	}
+	result := *typ
+	result.XXX_unrecognized = slices.Clone(typ.XXX_unrecognized)
+	return &result
 }
 
 func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
@@ -567,7 +557,7 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		Name:          col.Name,
 		OriginName:    col.OriginName,
 		Alg:           col.Alg,
-		Typ:           col.Typ,
+		Typ:           *DeepCopyType(&col.Typ),
 		Default:       DeepCopyDefault(col.Default),
 		Primary:       col.Primary,
 		Unique:        col.Unique,
@@ -625,9 +615,10 @@ func DeepCopyIndexDef(indexDef *plan.IndexDef) *plan.IndexDef {
 		IndexAlgo:          indexDef.IndexAlgo,
 		IndexAlgoTableType: indexDef.IndexAlgoTableType,
 		IndexAlgoParams:    indexDef.IndexAlgoParams,
+		KeyFormat:          indexDef.KeyFormat,
+		XXX_unrecognized:   slices.Clone(indexDef.XXX_unrecognized),
 		Parts:              slices.Clone(indexDef.Parts),
 		IncludedColumns:    slices.Clone(indexDef.IncludedColumns),
-		KeyFormat:          indexDef.KeyFormat,
 	}
 	newindexDef.Option = DeepCopyIndexOption(indexDef.Option)
 	return newindexDef
@@ -724,7 +715,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		Checks:           make([]*plan.CheckDef, len(table.Checks)),
 		Props:            make([]*plan.PropertyDef, len(table.Props)),
 		Defs:             make([]*plan.TableDef_DefType, len(table.Defs)),
-		Name2ColIndex:    table.Name2ColIndex,
+		Name2ColIndex:    maps.Clone(table.Name2ColIndex),
 		IsLocked:         table.IsLocked,
 		TableLockType:    table.TableLockType,
 		IsTemporary:      table.IsTemporary,
@@ -732,8 +723,9 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		AutoIncrEpoch:    table.AutoIncrEpoch,
 		AutoIdCache:      table.AutoIdCache,
 		DefaultCharset:   table.DefaultCharset,
-		KeyFormat:        table.KeyFormat,
 		CollationVersion: table.CollationVersion,
+		KeyFormat:        table.KeyFormat,
+		XXX_unrecognized: slices.Clone(table.XXX_unrecognized),
 		DbName:           table.DbName,
 		DbId:             table.DbId,
 		FeatureFlag:      table.FeatureFlag,
@@ -841,6 +833,23 @@ func DeepCopyColData(col *plan.ColData) *plan.ColData {
 	return newCol
 }
 
+// DeepCopyViewPath isolates query-owned binding contexts from plan copies.
+func DeepCopyViewPath(path []*plan.ViewStep) []*plan.ViewStep {
+	if path == nil {
+		return nil
+	}
+	out := make([]*plan.ViewStep, len(path))
+	for i, step := range path {
+		if step != nil {
+			out[i] = &plan.ViewStep{
+				DatabaseName: step.DatabaseName, ViewName: step.ViewName,
+				SubscriptionName: step.SubscriptionName, Snapshot: DeepCopySnapshot(step.Snapshot),
+			}
+		}
+	}
+	return out
+}
+
 func DeepCopyQuery(qry *plan.Query) *plan.Query {
 	backgroundQueries := make([]*plan.Query, len(qry.BackgroundQueries))
 	for idx, query := range qry.BackgroundQueries {
@@ -849,27 +858,38 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		}
 	}
 	newQry := &plan.Query{
-		StmtType:            qry.StmtType,
-		Steps:               slices.Clone(qry.Steps),
-		Nodes:               make([]*plan.Node, len(qry.Nodes)),
-		Params:              DeepCopyExprList(qry.Params),
-		Headings:            slices.Clone(qry.Headings),
-		LoadTag:             qry.LoadTag,
-		LoadWriteS3:         qry.LoadWriteS3,
-		BackgroundQueries:   backgroundQueries,
-		MaxDop:              qry.MaxDop,
-		HasForeignKeyAction: qry.HasForeignKeyAction,
-		HasReturning:        qry.HasReturning,
-		ReturningStep:       qry.ReturningStep,
-		ApplySqlSelectLimit: qry.ApplySqlSelectLimit,
-		DetectSqls:          slices.Clone(qry.DetectSqls),
-		CatalogDependencies: make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
+		StmtType:                 qry.StmtType,
+		Steps:                    slices.Clone(qry.Steps),
+		Nodes:                    make([]*plan.Node, len(qry.Nodes)),
+		Params:                   DeepCopyExprList(qry.Params),
+		Headings:                 slices.Clone(qry.Headings),
+		LoadTag:                  qry.LoadTag,
+		LoadWriteS3:              qry.LoadWriteS3,
+		BackgroundQueries:        backgroundQueries,
+		MaxDop:                   qry.MaxDop,
+		HasForeignKeyAction:      qry.HasForeignKeyAction,
+		HasReturning:             qry.HasReturning,
+		ReturningStep:            qry.ReturningStep,
+		ApplySqlSelectLimit:      qry.ApplySqlSelectLimit,
+		DetectSqls:               slices.Clone(qry.DetectSqls),
+		CatalogDependencies:      make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
+		ViewMetadataDependsOnUdf: qry.ViewMetadataDependsOnUdf,
 	}
 	for idx, node := range qry.Nodes {
 		newQry.Nodes[idx] = DeepCopyNode(node)
 	}
 	for idx, dependency := range qry.CatalogDependencies {
 		newQry.CatalogDependencies[idx] = DeepCopyObjectRef(dependency)
+	}
+	if qry.ViewReferences != nil {
+		newQry.ViewReferences = make([]*plan.ViewReference, len(qry.ViewReferences))
+		for i, reference := range qry.ViewReferences {
+			if reference != nil {
+				newQry.ViewReferences[i] = &plan.ViewReference{
+					ViewPath: DeepCopyViewPath(reference.ViewPath),
+				}
+			}
+		}
 	}
 	if qry.UnresolvedIndexHints != nil {
 		newQry.UnresolvedIndexHints = make([]*plan.UnresolvedIndexHint, len(qry.UnresolvedIndexHints))
@@ -1160,7 +1180,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		return nil
 	}
 	newExpr := &Expr{
-		Typ:             expr.Typ,
+		Typ:             *DeepCopyType(&expr.Typ),
 		Ndv:             expr.Ndv,
 		Selectivity:     expr.Selectivity,
 		PreparedNumeric: copyPreparedNumericMetadata(expr.PreparedNumeric),
@@ -1176,12 +1196,13 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	switch item := expr.Expr.(type) {
 	case *plan.Expr_Lit:
 		pc := &plan.Literal{
-			Isnull:       item.Lit.GetIsnull(),
-			IsBin:        item.Lit.GetIsBin(),
-			Src:          DeepCopyExpr(item.Lit.Src),
-			IsSerialized: item.Lit.GetIsSerialized(),
-			LiteralForm:  item.Lit.GetLiteralForm(),
-			StringSource: item.Lit.GetStringSource(),
+			Isnull:                    item.Lit.GetIsnull(),
+			IsBin:                     item.Lit.GetIsBin(),
+			Src:                       DeepCopyExpr(item.Lit.Src),
+			IsSerialized:              item.Lit.GetIsSerialized(),
+			LiteralForm:               item.Lit.GetLiteralForm(),
+			StringSource:              item.Lit.GetStringSource(),
+			DecimalLiteralRequiresV82: item.Lit.GetDecimalLiteralRequiresV82(),
 		}
 
 		switch c := item.Lit.Value.(type) {
@@ -1247,9 +1268,10 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_V:
 		newExpr.Expr = &plan.Expr_V{
 			V: &plan.VarRef{
-				Name:   item.V.GetName(),
-				Global: item.V.GetGlobal(),
-				System: item.V.GetSystem(),
+				Name:              item.V.GetName(),
+				Global:            item.V.GetGlobal(),
+				System:            item.V.GetSystem(),
+				BoundStringDomain: item.V.GetBoundStringDomain(),
 			},
 		}
 
@@ -1274,7 +1296,6 @@ func DeepCopyExpr(expr *Expr) *Expr {
 				AggConfig:          bytes.Clone(item.F.AggConfig),
 				AggConfigType:      item.F.AggConfigType,
 				SyntaxExplicitCast: item.F.SyntaxExplicitCast,
-				ExplicitCollation:  item.F.ExplicitCollation,
 			},
 		}
 
@@ -1344,10 +1365,11 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_Vec:
 		newExpr.Expr = &plan.Expr_Vec{
 			Vec: &plan.LiteralVec{
-				Len:          item.Vec.Len,
-				Data:         bytes.Clone(item.Vec.Data),
-				IsSerialized: item.Vec.IsSerialized,
-				StringSource: item.Vec.StringSource,
+				Len:                       item.Vec.Len,
+				Data:                      bytes.Clone(item.Vec.Data),
+				IsSerialized:              item.Vec.IsSerialized,
+				StringSource:              item.Vec.StringSource,
+				DecimalLiteralRequiresV82: item.Vec.DecimalLiteralRequiresV82,
 			},
 		}
 

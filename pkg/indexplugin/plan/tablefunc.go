@@ -29,8 +29,13 @@ type TableFuncBuilder func(pb PlanBuilder, tbl *tree.TableFunction, ctx BindCont
 
 var (
 	tableFuncMu sync.RWMutex
-	tableFuncs  = map[string]TableFuncBuilder{}
+	tableFuncs  = map[string]tableFuncRegistration{}
 )
+
+type tableFuncRegistration struct {
+	builder         TableFuncBuilder
+	coordinatorOnly bool
+}
 
 // RegisterTableFunc installs a per-name table-function builder. Called from
 // plugin init(). Panics on duplicate registration.
@@ -39,12 +44,23 @@ var (
 // table-function dispatch switch (default arm) so per-algorithm builders
 // can live entirely inside the algo's plugin package.
 func RegisterTableFunc(name string, b TableFuncBuilder) {
+	registerTableFunc(name, b, false)
+}
+
+// RegisterCoordinatorTableFunc registers a builder whose execution must share
+// the initiating CN's transaction workspace. Its input scans may still run on
+// other CNs, but APPLY must gather them before invoking this function.
+func RegisterCoordinatorTableFunc(name string, b TableFuncBuilder) {
+	registerTableFunc(name, b, true)
+}
+
+func registerTableFunc(name string, b TableFuncBuilder, coordinatorOnly bool) {
 	tableFuncMu.Lock()
 	defer tableFuncMu.Unlock()
 	if _, ok := tableFuncs[name]; ok {
 		panic("planplugin: duplicate RegisterTableFunc for " + name)
 	}
-	tableFuncs[name] = b
+	tableFuncs[name] = tableFuncRegistration{builder: b, coordinatorOnly: coordinatorOnly}
 }
 
 // TableFunc returns the registered builder for name, or (nil, false) if
@@ -52,6 +68,14 @@ func RegisterTableFunc(name string, b TableFuncBuilder) {
 func TableFunc(name string) (TableFuncBuilder, bool) {
 	tableFuncMu.RLock()
 	defer tableFuncMu.RUnlock()
-	b, ok := tableFuncs[name]
-	return b, ok
+	registration, ok := tableFuncs[name]
+	return registration.builder, ok
+}
+
+// TableFuncRequiresCoordinator reports the registered execution placement
+// requirement. Unknown functions retain the default distributed behavior.
+func TableFuncRequiresCoordinator(name string) bool {
+	tableFuncMu.RLock()
+	defer tableFuncMu.RUnlock()
+	return tableFuncs[name].coordinatorOnly
 }

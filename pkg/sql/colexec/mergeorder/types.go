@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -110,8 +111,9 @@ type container struct {
 	status int
 
 	// batchList is the data structure to store the all the received batches
-	batchList []*batch.Batch
-	orderCols [][]*vector.Vector
+	batchList  []*batch.Batch
+	orderCols  [][]*vector.Vector
+	orderTypes []types.Type
 	// indexList[i] = k means the number of rows before k in batchList[i] has been merged and send.
 	indexList []int64
 
@@ -127,6 +129,7 @@ type container struct {
 	outputAllocation     *vector.AllocationAccountSelection
 	spillAllocation      *spillutil.SpillAllocationAccount
 	budget               *process.ExecutionResourceGeneration
+	growthParticipant    *process.ExecutionMemoryGrowthParticipant
 
 	inMemoryHeap    *inMemoryMergeHeap
 	inMemoryHeapPos []int
@@ -220,6 +223,7 @@ func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, 
 			ctr.buf.CleanOnlyData()
 		}
 	}
+	ctr.releaseGrowthParticipant()
 	ctr.budget = nil
 }
 
@@ -243,6 +247,7 @@ func (mergeOrder *MergeOrder) Free(proc *process.Process, pipelineFailed bool, e
 		ctr.buf.Clean(proc.Mp())
 		ctr.buf = nil
 	}
+	ctr.releaseGrowthParticipant()
 	ctr.budget = nil
 }
 
@@ -394,6 +399,14 @@ func (ctr *container) cleanupSpill(proc *process.Process) {
 	ctr.spillFS = nil
 	clear(ctr.spillKeyCols)
 	ctr.spillKeyCols = nil
+}
+
+func (ctr *container) releaseGrowthParticipant() {
+	if ctr == nil || ctr.growthParticipant == nil {
+		return
+	}
+	ctr.growthParticipant.Release()
+	ctr.growthParticipant = nil
 }
 
 func closeSpillRuns(runs []*spillRun) {

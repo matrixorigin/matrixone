@@ -189,8 +189,9 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 	if !ok {
 		return false, "", moerr.NewInternalErrorNoCtx("hnsw_meta index definition not found")
 	}
-	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` hnsw FORCE_SYNC",
-		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
+	return true, fmt.Sprintf("ALTER TABLE %s ALTER REINDEX %s hnsw FORCE_SYNC",
+		sqlquote.QualifiedIdent(ctx.QryDatabase(), ctx.OriginalTableDef().Name),
+		sqlquote.Ident(metaDef.IndexName)), nil
 }
 
 // AlterCopyInitSQL — no InitSQL needed. RunHnsw (the ISCP consumer) rebuilds the whole graph
@@ -203,6 +204,9 @@ func (Hooks) AlterCopyInitSQL(_ compileplugin.CompileContext, _ map[string]*plan
 }
 
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
+	if err := compileplugin.RejectMerge(alter, "hnsw"); err != nil {
+		return nil, err
+	}
 	return compileplugin.MergeReindexParams(old, alter, "hnsw",
 		catalog.HnswM,
 		catalog.HnswEfConstruction,

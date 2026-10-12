@@ -59,7 +59,7 @@ func NewBufferPipe2CSVWorker(opt ...BufferOption) PipeImpl {
 
 // NewItemBuffer implement batchpipe.PipeImpl
 func (t batchETLHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, any] {
-	var opts []BufferOption
+	opts := make([]BufferOption, 0, 2+len(t.defaultOpts))
 	var f genBatchFunc = genETLData
 	logutil.Debugf("NewItemBuffer name: %s", name)
 	switch name {

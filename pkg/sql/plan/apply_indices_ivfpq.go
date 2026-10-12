@@ -93,24 +93,22 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 	pkPos := vecCtx.scanNode.TableDef.Name2ColIndex[vecCtx.scanNode.TableDef.Pkey.PkeyColName]
 	pkType := vecCtx.scanNode.TableDef.Cols[pkPos].Typ
 
-	nThread, err := builder.compCtx.ResolveVariable("ivfpq_threads_search", true, false)
+	nThread, err := builder.resolveInt64Variable("ivfpq_threads_search", 0)
 	if err != nil {
 		return nil, err
 	}
 
-	batchWindow, err := builder.compCtx.ResolveVariable("ivfpq_batch_window", true, false)
+	batchWindow, err := builder.resolveInt64Variable("ivfpq_batch_window", 0)
 	if err != nil {
 		return nil, err
 	}
 
-	nProbe := int64(20)
-	if nProbeIf, err2 := builder.compCtx.ResolveVariable("probe_limit", true, false); err2 != nil {
-		return nil, err2
-	} else if nProbeIf != nil {
-		nProbe = nProbeIf.(int64)
+	nProbe, err := builder.resolveInt64Variable("probe_limit", 20)
+	if err != nil {
+		return nil, err
 	}
 
-	gpuMultiSim, err := builder.compCtx.ResolveVariable("gpu_multi_simulation", true, false)
+	gpuMultiSim, err := builder.resolveInt64Variable("gpu_multi_simulation", 0)
 	if err != nil {
 		return nil, err
 	}
@@ -126,10 +124,10 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 		pkPos:        pkPos,
 		pkType:       pkType,
 		params:       idxDef.IndexAlgoParams,
-		nThread:      nThread.(int64),
-		batchWindow:  batchWindow.(int64),
+		nThread:      nThread,
+		batchWindow:  batchWindow,
 		nProbe:       nProbe,
-		gpuMultiSim:  gpuMultiSim.(int64),
+		gpuMultiSim:  gpuMultiSim,
 	}, nil
 }
 
@@ -232,7 +230,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 	}
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 
-	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier("mo_ivfpq_alias_0")}, ctx)
+	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier("mo_ivfpq_alias_0")}, ctx, "")
 	if err != nil {
 		return 0, err
 	}

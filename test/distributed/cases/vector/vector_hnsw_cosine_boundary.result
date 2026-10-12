@@ -1,0 +1,49 @@
+drop database if exists hnsw_cosine_boundary;
+create database hnsw_cosine_boundary;
+use hnsw_cosine_boundary;
+set experimental_hnsw_index = 1;
+create table h_norm(id bigint primary key, v vecf32(3));
+insert into h_norm values
+(1, '[1,0,0]'),
+(2, '[0,1,0]'),
+(3, '[0,0,1]'),
+(4, '[0.70710677,0.70710677,0]'),
+(5, '[0.57735026,0.57735026,0.57735026]');
+create index h_cos using hnsw on h_norm(v) op_type 'vector_cosine_ops';
+alter table h_norm alter reindex h_cos hnsw force_sync;
+explain select id, cosine_distance(v, '[1,0,0]') as d
+from h_norm order by cosine_distance(v, '[1,0,0]') limit 3;
+-- @regex("hnsw_search", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (h_norm.id = mo_hnsw_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hnsw_cosine_boundary.h_norm  𝄀
+                    Runtime Filter Probe: h_norm.id  𝄀
+              ->  Table Function on hnsw_search  𝄀
+                    Index Reader Param:  Limit: 3  𝄀
+                    Limit: 3
+select id, round(cosine_distance(v, '[1,0,0]'), 6) as d
+from h_norm order by cosine_distance(v, '[1,0,0]') limit 3;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+4  ¦  0.292893  𝄀
+5  ¦  0.42265
+select id from h_norm order by cosine_distance(v, '[0,0,0]') limit 3;
+internal error: hnsw cosine search requires a normalized (non-zero, non-subnormal) query vector; its L2 norm 0 underflows the float32 domain the index computes in
+select id from h_norm order by cosine_distance(v, '[1e-20,1e-20,1e-20]') limit 3;
+internal error: hnsw cosine search requires a normalized (non-zero, non-subnormal) query vector; its L2 norm 1.73205075260315e-20 underflows the float32 domain the index computes in
+select id, cosine_distance(v, '[0,0,0]') as d from h_norm order by id;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.0  𝄀
+3  ¦  1.0  𝄀
+4  ¦  1.0  𝄀
+5  ¦  1.0
+set experimental_hnsw_index = 0;
+drop database hnsw_cosine_boundary;

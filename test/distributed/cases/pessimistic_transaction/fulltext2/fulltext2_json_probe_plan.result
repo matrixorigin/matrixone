@@ -1,0 +1,54 @@
+set experimental_fulltext2_index = 1;
+drop database if exists ft2_json_probe_plan;
+create database ft2_json_probe_plan;
+use ft2_json_probe_plan;
+create table t (id bigint primary key, j json);
+create fulltext2 index ftj on t(j) with parser json;
+insert into t values
+(1, '{"foo":"needle"}'),
+(2, '{"foo":"hay"}'),
+(3, '{"foo":"needle"}'),
+(4, '{"n":42}');
+set @ftj = (select index_table_name from mo_catalog.mo_indexes where name = 'ftj' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1);
+set @wait_ftj_sql = concat('select coalesce(max(chunk_id), -1) >= 0 as ready from `', database(), '`.`', @ftj, '` where index_id = ''cdc_tail'' and tag = 1');
+prepare wait_ftj from @wait_ftj_sql;
+execute wait_ftj;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_ftj;
+explain select id from t where json_extract_string(j,'$.foo') = 'needle';
+-- @regex("Table Function on fulltext2_search", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INNER  𝄀
+        Join Cond: (t.id = #[1,0])  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on ft2_json_probe_plan.t  𝄀
+              Filter Cond: (json_extract_string(t.j, '$.foo') = 'needle')  𝄀
+              Runtime Filter Probe: t.id  𝄀
+        ->  Aggregate  𝄀
+              Group Key: mo_fulltext_alias_0.__mo_ft_doc_id  𝄀
+              ->  Table Function on fulltext2_search
+select id from t where json_extract_string(j,'$.foo') = 'needle' order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+3
+explain select id from t where json_extract_float64(j,'$.n') > 10;
+-- @regex("Table Function on fulltext2_search", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INNER  𝄀
+        Join Cond: (t.id = #[1,0])  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on ft2_json_probe_plan.t  𝄀
+              Filter Cond: (json_extract_float64(t.j, '$.n') > 10)  𝄀
+              Runtime Filter Probe: t.id  𝄀
+        ->  Aggregate  𝄀
+              Group Key: mo_fulltext_alias_0.__mo_ft_doc_id  𝄀
+              ->  Table Function on fulltext2_search
+select id from t where json_extract_float64(j,'$.n') > 10 order by id;
+➤ id[-5,64,0]  𝄀
+4
+drop database ft2_json_probe_plan;

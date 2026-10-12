@@ -159,3 +159,6 @@ func TestDispatchPluginDropIndexesNoPluginIndexes(t *testing.T) {
 	require.True(t, cachedIndexPresent("__mo_untouched_centroids:0"))
 	require.False(t, kept.destroyed)
 }
+
+// BuildTS stubs (fulltext2 async-freshness interface method).
+func (s *stubIndexSearch) BuildTS() int64 { return 0 }

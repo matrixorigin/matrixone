@@ -38,7 +38,7 @@ func parseLimit(t *testing.T, sql string) *tree.Limit {
 
 func bindLimitExpr(t *testing.T, astExpr tree.Expr, isOffset bool) (*plan.Expr, error) {
 	t.Helper()
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	binder := NewLimitBinder(builder, bindCtx, isOffset)
 	return binder.BindExpr(astExpr, 0, true)
 }
@@ -109,7 +109,7 @@ func TestLimitBinder_OffsetWithoutLimitParameter(t *testing.T) {
 	require.Nil(t, astLimit.Count)
 	require.NotNil(t, astLimit.Offset)
 
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	builder.isPrepareStatement = true
 	expr, err := NewLimitBinder(builder, bindCtx, true).BindExpr(astLimit.Offset, 0, true)
 	require.NoError(t, err)
@@ -178,7 +178,7 @@ func TestLimitBinder_LargeUint64(t *testing.T) {
 }
 
 func TestLimitBinder_StarInLimit(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	binder := NewLimitBinder(builder, bindCtx, false)
 
 	_, err := binder.BindExpr(&tree.UnqualifiedStar{}, 0, true)

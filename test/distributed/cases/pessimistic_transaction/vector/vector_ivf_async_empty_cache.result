@@ -1,0 +1,48 @@
+SET experimental_ivf_index=1;
+drop database if exists ivf_async_partial_cache;
+CREATE DATABASE ivf_async_partial_cache;
+USE ivf_async_partial_cache;
+CREATE TABLE t(id BIGINT PRIMARY KEY, v VECF32(2));
+INSERT INTO t
+SELECT result, CAST(CONCAT('[', result, ',0]') AS VECF32(2))
+FROM generate_series(1,100) g;
+CREATE INDEX ix USING ivfflat ON t(v)
+LISTS=4 OP_TYPE 'vector_l2_ops' ASYNC;
+SET probe_limit=4;
+select count(*) >= 0 as warmed
+from (select id from t order by l2_distance(v,'[50,0]') limit 1) x;
+➤ warmed[-7,1,0]  𝄀
+1
+set @ix_entries = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'ix' and algo = 'ivfflat' and algo_table_type = 'entries'
+and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't')
+limit 1
+);
+set @ix_metadata = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'ix' and algo = 'ivfflat' and algo_table_type = 'metadata'
+and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't')
+limit 1
+);
+set @wait_ix_sql = concat(
+'select count(*) as active_entries from `', database(), '`.`', @ix_entries,
+'` where `__mo_index_centroid_fk_version` = ',
+'(select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @ix_metadata,
+'` where `__mo_index_key` = ''version'')'
+);
+prepare wait_ix from @wait_ix_sql;
+execute wait_ix;
+➤ active_entries[-5,64,0]  𝄀
+100
+deallocate prepare wait_ix;
+SELECT id FROM t ORDER BY l2_distance(v,'[50,0]') LIMIT 1 BY RANK WITH OPTION 'mode=include';
+➤ id[-5,64,0]  𝄀
+50
+SELECT id FROM t ORDER BY l2_distance(v,'[50,0]') LIMIT 1 BY RANK WITH OPTION 'mode=include';
+➤ id[-5,64,0]  𝄀
+50
+SELECT id FROM t ORDER BY l2_distance(v,'[50,0]') LIMIT 1 BY RANK WITH OPTION 'mode=include';
+➤ id[-5,64,0]  𝄀
+50
+drop database ivf_async_partial_cache;

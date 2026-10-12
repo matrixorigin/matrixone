@@ -279,13 +279,121 @@ func informationSchemaSubscriptionColumnAuthorizationPredicate() string {
 		"OR (rp.privilege_level = 'd' AND rp.obj_id = mc.att_database_id)))))"
 }
 
-func informationSchemaColumnsV58DDL() string {
+func informationSchemaCurrentColumnsDDL() string {
+	return informationSchemaDerivedColumnsDDL(informationSchemaColumnsNativeUnicodeDDL())
+}
+
+// AdaptLegacyInformationSchemaColumnsDDL changes only the column authority of
+// known historical templates. Keep their projection/formatting rules; reading
+// a snapshot must not change its character-set selectors or add subscriptions
+// to a template that did not expose them.
+func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
+	definition = canonicalColumnsViewName(definition)
+	// V100 already contains the subscription-derived branches. Keep it byte
+	// stable when binding historical snapshots; re-deriving it would duplicate
+	// those branches and could change the persisted legacy projection.
+	if definition == InformationSchemaColumnsV100DDL() {
+		return definition, true
+	}
+	for _, legacy := range []string{InformationSchemaColumnsV41DDL, InformationSchemaColumnsV46DDL, InformationSchemaColumnsV46UpgradeDDL, InformationSchemaColumnsV58DDL()} {
+		if definition == legacy {
+			return informationSchemaDerivedColumnsDDL(legacy), true
+		}
+	}
+	return "", false
+}
+
+func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
+	return canonicalColumnsViewName(definition) == InformationSchemaColumnsDDL
+}
+
+// IsInformationSchemaColumnsMigrationDDL reports whether a persisted COLUMNS
+// definition has the on-demand View-column migration needed by historical
+// snapshot binding. The protocol-100 definition intentionally keeps the
+// historical selector projection, while the protocol-109 definition adds the
+// native Unicode selectors; both definitions are safe migration gates.
+func IsInformationSchemaColumnsMigrationDDL(definition string) bool {
+	definition = canonicalColumnsViewName(definition)
+	return definition == InformationSchemaColumnsV100DDL() ||
+		definition == InformationSchemaColumnsDDL
+}
+
+func canonicalColumnsViewName(definition string) string {
+	// Older upgrades used the lowercase spelling of this identifier. Do not
+	// case-fold literals or accept arbitrary lookalike system-view SQL.
+	return strings.Replace(definition, "CREATE VIEW information_schema.columns AS ",
+		"CREATE VIEW information_schema.COLUMNS AS ", 1)
+}
+
+func informationSchemaDerivedColumnsDDL(original string) string {
+	prefix := "CREATE VIEW information_schema.COLUMNS AS " + informationSchemaMetadataVisibilityCTE()
+	branches := strings.SplitN(strings.TrimPrefix(original, prefix), " UNION ALL ", 2)
+	local := branches[0]
+	viewRows := strings.Replace(local, informationSchemaColumnsLocalFromSQL(),
+		"from __mo_visible_tables mt cross apply mo_view_columns(mt.rel_id) mc ", 1)
+	viewRows = strings.NewReplacer(
+		"mc.att_database", "mt.reldatabase",
+		"mc.att_relname", "mt.relname",
+		"mc.account_id", "mt.account_id",
+		"mk.key_priority", "0",
+	).Replace(viewRows)
+	viewRows = castViewColumnNames(viewRows)
+	userView := "mt.relkind = 'v' AND mt.reldatabase NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug')"
+	if len(branches) == 1 {
+		return prefix + local + " AND NOT (" + userView + ") UNION ALL " + viewRows + " AND (" + userView + ")"
+	}
+	// Restrict the left side of APPLY before describing publisher Views. A
+	// post-APPLY WHERE cannot prevent invisible Views from consuming budget.
+	// Keep this projection explicit: CREATE VIEW freezes projection stars and
+	// reformats the entire definition. Upgrade readiness compares the persisted
+	// SQL with this template exactly, so a star would make every retry rebuild it.
+	prefix += ", __mo_visible_subscription_views AS (SELECT mt.account_id, mt.rel_id, mt.relname, " +
+		"mt.reldatabase, mt.relkind, mt.rel_createsql, mt.extra_info, mt.publisher_account_id " +
+		"FROM mo_subscription_tables() mt WHERE mt.relkind = 'v' AND (" +
+		informationSchemaSubscriptionViewAuthorizationPredicate() + ")) "
+	return prefix + local + " AND NOT (" + userView + ") UNION ALL " +
+		viewRows + " AND (" + userView + ") UNION ALL " + branches[1] +
+		" AND NOT (mc.relkind = 'v' AND mc.att_database NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug')) UNION ALL " +
+		informationSchemaSubscriptionViewColumnsSelect(local)
+}
+
+func InformationSchemaColumnsV58DDL() string {
 	return strings.NewReplacer(
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' WHEN 2 then 'binary' WHEN 3 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,",
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8mb4' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4' else NULL end) AS CHARACTER_SET_NAME,",
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8_bin' else NULL end) AS COLLATION_NAME,",
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_general_ci' WHEN 1 then 'utf8mb4_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4_general_ci' else NULL end) AS COLLATION_NAME,",
 	).Replace(InformationSchemaColumnsV46DDL)
+}
+
+// InformationSchemaColumnsV100DDL is the protocol-100 view definition. It
+// preserves the V58 selector projection while adding the subscription-view
+// branches introduced by the protocol-100 metadata migration. Keep this
+// definition frozen: protocol 100 through 108 workers must not persist native
+// Unicode selector identities during a rolling upgrade.
+func InformationSchemaColumnsV100DDL() string {
+	return informationSchemaDerivedColumnsDDL(InformationSchemaColumnsV58DDL())
+}
+
+// informationSchemaColumnsNativeUnicodeDDL extends the V58 selector
+// projection with the native UCA 4.0.0 identities introduced after the
+// historical protocol-100 view.
+func informationSchemaColumnsNativeUnicodeDDL() string {
+	return strings.NewReplacer(
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8mb4' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4' else NULL end) AS CHARACTER_SET_NAME,",
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8mb4' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4' WHEN 4 then 'utf8' WHEN 5 then 'utf8mb4' else NULL end) AS CHARACTER_SET_NAME,",
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_general_ci' WHEN 1 then 'utf8mb4_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4_general_ci' else NULL end) AS COLLATION_NAME,",
+		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_general_ci' WHEN 1 then 'utf8mb4_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4_general_ci' WHEN 4 then 'utf8_unicode_ci' WHEN 5 then 'utf8mb4_unicode_ci' else NULL end) AS COLLATION_NAME,",
+	).Replace(InformationSchemaColumnsV58DDL())
+}
+
+func informationSchemaSubscriptionViewAuthorizationPredicate() string {
+	return strings.NewReplacer(
+		"mc.att_database", "mt.reldatabase",
+		"mc.table_owner", "mt.owner",
+		"mc.att_database_id", "mt.reldatabase_id",
+		"mc.rel_logical_id", "mt.rel_logical_id",
+	).Replace(informationSchemaSubscriptionColumnAuthorizationPredicate())
 }
 
 func informationSchemaSubscriptionColumnsDDL() string {
@@ -320,6 +428,30 @@ func informationSchemaSubscriptionColumnsDDL() string {
 	).Replace(subscriptionSelect)
 	return "CREATE VIEW information_schema.COLUMNS AS " +
 		informationSchemaMetadataVisibilityCTE() + localSelect + " UNION ALL " + subscriptionSelect
+}
+
+// The catalog name columns are varchar(256); without these casts the wider
+// mo_tables names promote the public I_S.COLUMNS UNION output to varchar(5000).
+func castViewColumnNames(selectSQL string) string {
+	return strings.NewReplacer(
+		"mt.reldatabase as TABLE_SCHEMA,", "cast(mt.reldatabase as varchar(256)) as TABLE_SCHEMA,",
+		"mt.relname AS TABLE_NAME,", "cast(mt.relname as varchar(256)) AS TABLE_NAME,",
+	).Replace(selectSQL)
+}
+
+func informationSchemaSubscriptionViewColumnsSelect(localSelect string) string {
+	subscriptionViewSelect := strings.NewReplacer(
+		informationSchemaColumnsLocalFromSQL(),
+		"from __mo_visible_subscription_views mt "+
+			"cross apply mo_subscription_view_columns(mt.publisher_account_id, mt.rel_id) mc ",
+		"mc.att_database", "mt.reldatabase",
+		"mc.att_relname", "mt.relname",
+		"mc.account_id", "mt.account_id",
+		"mk.key_priority", "0",
+	).Replace(localSelect)
+	subscriptionViewSelect = castViewColumnNames(subscriptionViewSelect)
+	subscriptionViewSelect += " AND mt.relkind = 'v'"
+	return subscriptionViewSelect
 }
 
 // `information_schema` database
@@ -409,7 +541,7 @@ var (
 	InformationSchemaColumnsV46UpgradeDDL = strings.NewReplacer(
 		" WHEN 3 then 'utf8'", "", " WHEN 3 then 'utf8_bin'", "",
 	).Replace(InformationSchemaColumnsV46DDL)
-	InformationSchemaColumnsDDL = informationSchemaColumnsV58DDL()
+	InformationSchemaColumnsDDL = informationSchemaCurrentColumnsDDL()
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +
@@ -592,6 +724,9 @@ var (
 		"LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
 		"WHERE tbl.account_id = current_account_id() and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'"
 
+	// Legacy mo_indexes rows encode the default B-tree algorithm as either NULL
+	// or an empty string. Normalize that representation at the MySQL-compatible
+	// information_schema boundary so ORM filters on INDEX_TYPE remain effective.
 	InformationSchemaStatisticsDDL = fmt.Sprintf("CREATE VIEW information_schema.`STATISTICS` AS "+informationSchemaMetadataVisibilityCTE()+
 		"select 'def' AS `TABLE_CATALOG`,"+
 		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`,"+
@@ -600,17 +735,17 @@ var (
 		"`tbl`.`reldatabase` AS `INDEX_SCHEMA`,"+
 		"`idx`.`name` AS `INDEX_NAME`,"+
 		"`idx`.`ordinal_position` AS `SEQ_IN_INDEX`,"+
-		"`idx`.`column_name` AS `COLUMN_NAME`,"+
+		"if(`tcl`.`att_is_hidden` = 1 and `tcl`.`attr_has_generated` = 1, NULL, `idx`.`column_name`) AS `COLUMN_NAME`,"+
 		"'A' AS `COLLATION`,"+
 		"0 AS `CARDINALITY`,"+
 		"NULL AS `SUB_PART`,"+
 		"NULL AS `PACKED`,"+
 		"if((`tcl`.`attnotnull` = 0),'YES','') AS `NULLABLE`,"+
-		"`idx`.`algo` AS `INDEX_TYPE`,"+
+		"coalesce(nullif(`idx`.`algo`, ''), 'BTREE') AS `INDEX_TYPE`,"+
 		"if(((`idx`.`type` = 'PRIMARY') or (`idx`.`type` = 'UNIQUE')),'','') AS `COMMENT`,"+
 		"`idx`.`comment` AS `INDEX_COMMENT`,"+
 		"if(`idx`.`is_visible`,'YES','NO') AS `IS_VISIBLE`,"+
-		"NULL AS `EXPRESSION` "+
+		"if(`tcl`.`att_is_hidden` = 1 and `tcl`.`attr_has_generated` = 1, mo_show_visible_bin(`tcl`.`attr_generated`, 5), NULL) AS `EXPRESSION` "+
 		"from (`mo_catalog`.`mo_indexes` `idx` "+
 		"join `__mo_visible_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)) "+
 		"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname` "+
@@ -618,7 +753,7 @@ var (
 		"where `tbl`.`account_id` = current_account_id() and not startswith(`tbl`.`relname`, '%s') and %s "+
 		"group by `tbl`.`reldatabase`, `tbl`.`relname`, `idx`.`type`, `idx`.`name`, "+
 		"`idx`.`ordinal_position`, `idx`.`column_name`, `tcl`.`attnotnull`, `idx`.`algo`, "+
-		"`idx`.`comment`, `idx`.`is_visible`",
+		"`idx`.`comment`, `idx`.`is_visible`, `tcl`.`att_is_hidden`, `tcl`.`attr_has_generated`, `tcl`.`attr_generated`",
 		catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate("tbl"))
 
 	InformationSchemaReferentialConstraintsDDL = "CREATE VIEW information_schema.REFERENTIAL_CONSTRAINTS AS " +
@@ -949,8 +1084,8 @@ func informationSchemaCollationsDataSQL() string {
 func informationSchemaCharacterSetsDataSQL() string {
 	values := []string{
 		fmt.Sprintf("('binary','%s','Binary pseudo charset',1)", DefaultCollationForCharset("binary")),
-		fmt.Sprintf("('utf8','%s','UTF-8 Unicode',3)", DefaultCollationForCharset("utf8")),
-		fmt.Sprintf("('utf8mb4','%s','UTF-8 Unicode',4)", DefaultCollationForCharset("utf8mb4")),
+		fmt.Sprintf("('utf8','%s','UTF-8 Unicode',%d)", DefaultCollationForCharset("utf8"), characterSetMaxBytes("utf8")),
+		fmt.Sprintf("('utf8mb4','%s','UTF-8 Unicode',%d)", DefaultCollationForCharset("utf8mb4"), characterSetMaxBytes("utf8mb4")),
 	}
 	return "INSERT INTO information_schema.CHARACTER_SETS VALUES " + strings.Join(values, ",")
 }

@@ -28,6 +28,61 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
+type ParamValue struct {
+	Value any
+	IsBin bool
+	// IsBinaryString is the legacy binary-domain metadata retained for
+	// compatibility with callers that have not adopted RuntimeStringDomain.
+	IsBinaryString bool
+	// IsBinaryProtocol records that the value came from COM_STMT_EXECUTE.
+	// It is intentionally separate from IsBin: a VAR_STRING parameter is a
+	// binary-protocol value without being a binary string literal.
+	IsBinaryProtocol bool
+	PrepareParamKind vector.PrepareParamKind
+	// SourceType is the logical type of a SQL EXECUTE USING user variable. It
+	// is deliberately separate from RuntimeType: SQL parameters are transported
+	// through a text vector. Selected functions with runtime-domain-sensitive
+	// semantics (including FIELD and variadic extrema) restore this type on the
+	// execute-time plan copy; ordinary comparisons retain their established
+	// common-type and numeric-prefix contracts.
+	SourceType          types.Type
+	HasSourceType       bool
+	RuntimeStringDomain types.RuntimeStringDomain
+	// RuntimeType is the type advertised by the binary-protocol parameter
+	// binding.  Prepared plans deliberately keep parameter markers as TEXT
+	// while they are cached, so the execute-time copy can use this optional
+	// type to rebind overloaded functions and result metadata without mutating
+	// the cached plan.
+	RuntimeType    types.Type
+	HasRuntimeType bool
+	// InetNtoaSourceType carries a SQL EXECUTE user's assignment-time domain
+	// only for INET_NTOA. It must not participate in generic parameter
+	// coercion: a DATE/TIME/JSON user variable is still a text transport value
+	// for unrelated arithmetic and comparisons.
+	InetNtoaSourceType    types.Type
+	HasInetNtoaSourceType bool
+	// DirectResultType is the wire-visible DECIMAL domain parsed from the same
+	// binary-protocol lexeme as RuntimeType. RuntimeType keeps the normalized
+	// numeric-prefix domain used by common-type consumers; a direct result keeps
+	// the visible scale when representable and otherwise uses the normalized
+	// domain for lexemes whose only excess digits are removable trailing zeroes.
+	DirectResultType    types.Type
+	HasDirectResultType bool
+	// MaterializedValue is a bounded canonical DECIMAL lexeme produced by the
+	// protocol scanner. Typed literal construction uses it instead of reparsing
+	// the potentially max-packet-sized raw Value.
+	MaterializedValue string
+	// RetainParamRef records that a specialized query plan will be cached and
+	// therefore must retain this parameter as runtime provenance even when the
+	// parameter itself is unrelated to numeric-prefix specialization.
+	RetainParamRef bool
+	// EnableNumericPrefix records that the deployment-wide protocol version can
+	// execute planner-injected MySQL numeric-prefix casts.  Keep the negotiated
+	// capability on each value so execute-time plan specialization does not need
+	// to guess a service identity from context.Context.
+	EnableNumericPrefix bool
+}
+
 // WithDisableIncrStatement disable incr statement
 func (opts Options) WithDisableIncrStatement() Options {
 	opts.disableIncrStatement = true
@@ -178,6 +233,19 @@ func (opts StatementOption) AlterCopyDedupOpt() *plan.AlterCopyOpt {
 	return opts.alterCopyOpt
 }
 
+// WithPrePipelineLockTable requests an Exclusive table-range lock before an
+// internal INSERT starts. The caller must own the newly created physical target
+// in the same transaction. This requests normal lock acquisition; it does not
+// assert that the lock is already held or disable locking. Zero means no request.
+func (opts StatementOption) WithPrePipelineLockTable(tableID uint64) StatementOption {
+	opts.prePipelineLockTableID = tableID
+	return opts
+}
+
+func (opts StatementOption) PrePipelineLockTable() uint64 {
+	return opts.prePipelineLockTableID
+}
+
 func (opts StatementOption) AccountID() uint32 {
 	return opts.accountId
 }
@@ -232,13 +300,22 @@ func (opts StatementOption) AllowMoColumnsUpdate() bool {
 	return opts.allowMoColumnsUpdate
 }
 
-func (opts StatementOption) IgnoreForeignKey() bool {
-	return opts.ignoreForeignKey
+// WithOptimizerHints sets a per-statement optimizer_hints string (same comma-separated
+// key=value format as the global optimizer_hints variable). The internal SQL executor
+// bridges it onto the execution context and the planner's parseOptimizeHints applies it
+// on top of the global, so a single internal statement can override optimizer behavior
+// (e.g. applyIndices=1) without touching the process-wide global.
+func (opts StatementOption) WithOptimizerHints(hints string) StatementOption {
+	opts.optimizerHints = hints
+	return opts
 }
 
-func (opts Options) WithDisableTrace() Options {
-	opts.txnOpts = append(opts.txnOpts, client.WithDisableTrace(true))
-	return opts
+func (opts StatementOption) OptimizerHints() string {
+	return opts.optimizerHints
+}
+
+func (opts StatementOption) IgnoreForeignKey() bool {
+	return opts.ignoreForeignKey
 }
 
 func (opts Options) WithDisableWaitPaused() Options {
@@ -275,6 +352,26 @@ func (opts Options) TxnIsolation() txn.TxnIsolation {
 	return opts.txnIsolation
 }
 
+// WithTxnMode overrides the runtime default for a newly created internal
+// transaction.
+func (opts Options) WithTxnMode(mode txn.TxnMode) Options {
+	opts.txnMode = mode
+	opts.txnModeSet = true
+	opts.txnOpts = append(opts.txnOpts, client.WithTxnMode(mode))
+	return opts
+}
+
+// HasTxnMode reports whether this execution explicitly supplied a transaction
+// mode for a newly created internal transaction.
+func (opts Options) HasTxnMode() bool {
+	return opts.txnModeSet
+}
+
+// TxnMode returns the explicitly supplied transaction mode.
+func (opts Options) TxnMode() txn.TxnMode {
+	return opts.txnMode
+}
+
 // WithLockWaitTimeout sets a per-execution lock wait budget. It is propagated
 // both to newly created transactions and to the process used by an existing
 // transaction, so background execution can override the global default
@@ -300,15 +397,6 @@ func (opts Options) HasLockWaitTimeout() bool {
 // check HasLockWaitTimeout before treating a zero value as an explicit budget.
 func (opts Options) LockWaitTimeout() time.Duration {
 	return opts.lockWaitTimeout
-}
-
-func (opts Options) WithEnableTrace() Options {
-	opts.enableTrace = true
-	return opts
-}
-
-func (opts Options) EnableTrace() bool {
-	return opts.enableTrace
 }
 
 func (opts Options) WithLowerCaseTableNames(lower *int64) Options {
@@ -422,6 +510,19 @@ func (opts StatementOption) WithParamsAndNulls(
 	opts.params = values
 	opts.paramNulls = nulls
 	return opts
+}
+
+// WithPreparedParamValues preserves the SQL source domain of parameters
+// passed through an internal statement, such as CTAS's follow-up INSERT.
+// Values remain transported by WithParamsAndNulls; this metadata only informs
+// execute-time plan specialization.
+func (opts StatementOption) WithPreparedParamValues(values []ParamValue) StatementOption {
+	opts.preparedParamValues = append([]ParamValue(nil), values...)
+	return opts
+}
+
+func (opts StatementOption) PreparedParamValues() []ParamValue {
+	return opts.preparedParamValues
 }
 
 func (opts Options) WithForceRebuildPlan() Options {

@@ -322,9 +322,9 @@ func TestCdcUpsertReplaceNoMerge(t *testing.T) {
 	require.Equal(t, []any{int64(1)}, queryIDs(t, idx, "gamma"), "only the final upsert term is live")
 }
 
-// TestCdcUpsertEmptyShadows: an upsert to empty text (also how a NULL indexed column
-// arrives — rowText returns "") must shadow the old indexed version. A row with no
-// searchable content must stop matching its old terms.
+// TestCdcUpsertEmptyShadows: an upsert with no searchable content (for example,
+// all indexed columns SQL NULL, so rowText returns "") must shadow the old indexed
+// version. A row with no searchable content must stop matching its old terms.
 func TestCdcUpsertEmptyShadows(t *testing.T) {
 	base := mkBase(t, map[int64]string{1: "alpha", 2: "delta"})
 	c := NewCdc(int32(types.T_int64))

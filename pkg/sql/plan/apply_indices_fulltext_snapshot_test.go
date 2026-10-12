@@ -37,7 +37,7 @@ func coveredFulltext2Fixture(t *testing.T, snapshot *plan.Snapshot) (
 ) {
 	t.Helper()
 
-	builder = NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder = NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
 	scanTag := builder.genNewBindTag()

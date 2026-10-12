@@ -31,7 +31,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/publication"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -73,58 +76,35 @@ const (
 	getDbAccountIdAndTypByIdFormat = `select account_id,dat_type from mo_catalog.mo_database where dat_id = %d and datname = '%s';`
 )
 
-var (
-	showPublicationsOutputColumns = [8]Column{
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "publication",
-				columnType: defines.MYSQL_TYPE_VARCHAR,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "database",
-				columnType: defines.MYSQL_TYPE_VARCHAR,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "tables",
-				columnType: defines.MYSQL_TYPE_TEXT,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "sub_account",
-				columnType: defines.MYSQL_TYPE_TEXT,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "subscribed_accounts",
-				columnType: defines.MYSQL_TYPE_TEXT,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "create_time",
-				columnType: defines.MYSQL_TYPE_TIMESTAMP,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "update_time",
-				columnType: defines.MYSQL_TYPE_TIMESTAMP,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "comments",
-				columnType: defines.MYSQL_TYPE_TEXT,
-			},
-		},
+// publicationShowResultColumns is shared by PREPARE metadata and execution.
+// Return fresh definitions so metadata consumers cannot mutate another query.
+func publicationShowResultColumns(stmt tree.Statement) []*plan.ColDef {
+	var columns []*plan.ColDef
+	switch stmt.(type) {
+	case *tree.ShowPublications:
+		columns = []*plan.ColDef{
+			{Name: "publication", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "database", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "tables", Typ: plan.Type{Id: int32(types.T_text)}},
+			{Name: "sub_account", Typ: plan.Type{Id: int32(types.T_text)}},
+			{Name: "subscribed_accounts", Typ: plan.Type{Id: int32(types.T_text)}},
+			{Name: "create_time", Typ: plan.Type{Id: int32(types.T_timestamp)}},
+			{Name: "update_time", Typ: plan.Type{Id: int32(types.T_timestamp)}},
+			{Name: "comments", Typ: plan.Type{Id: int32(types.T_text)}},
+		}
+	case *tree.ShowPublicationCoverage:
+		columns = []*plan.ColDef{
+			{Name: "Database", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "Table", Typ: plan.Type{Id: int32(types.T_varchar)}},
+		}
 	}
+	for _, column := range columns {
+		column.OriginName = column.Name
+	}
+	return columns
+}
 
+var (
 	showSubscriptionsOutputColumns = [9]Column{
 		&MysqlColumn{
 			ColumnImpl: ColumnImpl{
@@ -234,7 +214,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		v2.CreatePubHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()
@@ -323,7 +303,10 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 				}
 			}
 		}
-		if ctx, dbId, dbType, err = resolvePublicationDatabaseByName(ctx, bh, dbName, targetAccountIDs); err != nil {
+		if ctx, dbId, _, err = resolvePublicationDatabaseByName(ctx, bh, dbName, targetAccountIDs); err != nil {
+			return
+		}
+		if dbType, err = lockPublicationDatabase(ctx, bh, dbName, dbId); err != nil {
 			return
 		}
 		if !isUserDatabaseType(dbType, currentProtocolVersionForService(bh.Service())) {
@@ -427,7 +410,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		dbType          string
 		sql             string
 	)
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()
@@ -539,7 +522,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 
 		if ap.DbName == "" {
 			var databaseAccountID uint32
-			if databaseAccountID, dbType, err = getDbAccountIdAndTypeById(ctx, bh, dbName, pub.DbId); err != nil {
+			if databaseAccountID, _, err = getDbAccountIdAndTypeById(ctx, bh, dbName, pub.DbId); err != nil {
 				return err
 			}
 			dbId = pub.DbId
@@ -552,9 +535,12 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 				}
 				slices.Sort(targetAccountIDs)
 			}
-			if databaseCtx, dbId, dbType, err = resolvePublicationDatabaseByName(ctx, bh, dbName, targetAccountIDs); err != nil {
+			if databaseCtx, dbId, _, err = resolvePublicationDatabaseByName(ctx, bh, dbName, targetAccountIDs); err != nil {
 				return err
 			}
+		}
+		if dbType, err = lockPublicationDatabase(databaseCtx, bh, dbName, dbId); err != nil {
+			return err
 		}
 		if !isUserDatabaseType(dbType, currentProtocolVersionForService(bh.Service())) {
 			return moerr.NewInternalErrorf(ctx, "database '%s' is not a user database", dbName)
@@ -663,7 +649,7 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 		v2.DropPubHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()
@@ -1303,7 +1289,7 @@ func getPubInfos(ctx context.Context, bh BackgroundExec, like string) (pubInfos 
 	}
 	sql := fmt.Sprintf(getPubInfoSql, accountId)
 	if len(like) > 0 {
-		sql += fmt.Sprintf(" and pub_name like '%s' order by pub_name", like)
+		sql += " and pub_name like " + escapeSQLString(like) + " order by pub_name"
 	} else {
 		sql += " order by update_time desc, created_time desc"
 	}
@@ -1803,27 +1789,48 @@ func getSubInfosFromSubWithOptions(
 	return
 }
 
+// showPublicationsLike reads the current execution's binding without mutating
+// the reusable prepared AST. The empty pattern retains the literal SHOW behavior.
+func showPublicationsLike(ctx context.Context, sp *tree.ShowPublications, proc *process.Process) (string, error) {
+	if sp.Like == nil {
+		return "", nil
+	}
+	switch pattern := sp.Like.Right.(type) {
+	case *tree.NumVal:
+		if pattern.Kind() == tree.Str {
+			return pattern.String(), nil
+		}
+	case *tree.ParamExpr:
+		if proc == nil || proc.GetPrepareParams() == nil || pattern.Offset != 1 || proc.GetPrepareParams().Length() != 1 {
+			return "", moerr.NewInvalidInput(ctx, "SHOW PUBLICATIONS LIKE parameter has no execution value")
+		}
+		params := proc.GetPrepareParams()
+		typ := proc.GetPrepareParamType(0)
+		if params.IsNull(0) || !params.GetType().Oid.IsMySQLString() ||
+			proc.GetPrepareParamKind(0) != vector.PrepareParamNone ||
+			(typ != types.T_any && !typ.IsMySQLString()) {
+			return "", moerr.NewInvalidInput(ctx, "SHOW PUBLICATIONS LIKE parameter must be a non-NULL string")
+		}
+		return params.GetStringAt(0), nil
+	}
+	return "", moerr.NewInvalidInput(ctx, "SHOW PUBLICATIONS LIKE requires a string literal or parameter marker")
+}
+
 func doShowPublications(ctx context.Context, ses *Session, sp *tree.ShowPublications) (err error) {
 	start := time.Now()
 	defer func() {
 		v2.ShowPubHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	like, err := showPublicationsLike(ctx, sp, ses.GetProc())
+	if err != nil {
+		return err
+	}
+
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()
-
-	like := ""
-	if sp.Like != nil {
-		right, ok := sp.Like.Right.(*tree.NumVal)
-		if !ok || right.Kind() != tree.Str {
-			err = moerr.NewInternalError(ctx, "like clause must be a string")
-			return
-		}
-		like = right.String()
-	}
-
 	pubInfos, err := getPubInfos(ctx, bh, like)
 	if err != nil {
 		return
@@ -1835,8 +1842,12 @@ func doShowPublications(ctx context.Context, ses *Session, sp *tree.ShowPublicat
 	}
 
 	var rs = &MysqlResultSet{}
-	for _, column := range showPublicationsOutputColumns {
-		rs.AddColumn(column)
+	for _, column := range publicationShowResultColumns(sp) {
+		mysqlColumn, err := colDef2MysqlColumn(ctx, column)
+		if err != nil {
+			return err
+		}
+		rs.AddColumn(mysqlColumn)
 	}
 	for _, pubInfo := range pubInfos {
 		var updateTime interface{}
@@ -2238,18 +2249,13 @@ func doShowPublicationCoverage(ctx context.Context, ses *Session, spc *tree.Show
 
 	// Build result set with columns: Database, Table
 	var rs = &MysqlResultSet{}
-	rs.AddColumn(&MysqlColumn{
-		ColumnImpl: ColumnImpl{
-			name:       "Database",
-			columnType: defines.MYSQL_TYPE_VARCHAR,
-		},
-	})
-	rs.AddColumn(&MysqlColumn{
-		ColumnImpl: ColumnImpl{
-			name:       "Table",
-			columnType: defines.MYSQL_TYPE_VARCHAR,
-		},
-	})
+	for _, column := range publicationShowResultColumns(spc) {
+		mysqlColumn, err := colDef2MysqlColumn(ctx, column)
+		if err != nil {
+			return err
+		}
+		rs.AddColumn(mysqlColumn)
+	}
 
 	// Get database name
 	dbName := pubInfo.DbName
@@ -2370,6 +2376,52 @@ func resolvePublicationDatabaseByName(
 		}
 	}
 	return
+}
+
+// lockPublicationDatabase pins the resolved physical source until the
+// publication transaction commits. DROP DATABASE takes the same catalog key
+// exclusively, then checks publication references after refreshing its RC
+// snapshot. A replacement under the same name must not inherit this reference.
+var lockPublicationDatabase = func(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName string,
+	expectedID uint64,
+) (dbType string, err error) {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return "", err
+	}
+	back, ok := bh.(*backExec)
+	if !ok || back.backSes.upstream == nil {
+		return "", moerr.NewInternalError(ctx, "publication database lock requires a session-backed executor")
+	}
+	if err = lockDatabaseCatalogRow(ctx, back.backSes.upstream, bh, accountID, dbName, lock.LockMode_Shared); err != nil {
+		return "", err
+	}
+	sql, err := getSqlForGetDbIdAndType(ctx, dbName, true, uint64(accountID))
+	if err != nil {
+		return "", err
+	}
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return "", err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return "", err
+	}
+	if !execResultArrayHasData(erArray) {
+		return "", moerr.NewInternalErrorf(ctx, "database '%s' does not exist", dbName)
+	}
+	id, err := erArray[0].GetUint64(ctx, 0, 0)
+	if err != nil {
+		return "", err
+	}
+	if id != expectedID {
+		return "", moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	return erArray[0].GetString(ctx, 0, 1)
 }
 
 // getDbAccountIdAndTypeById resolves the exact database row already owned by a
@@ -2892,7 +2944,10 @@ func getSqlForDbPubCount(ctx context.Context, dbName string) (string, error) {
 }
 
 func checkColExists(ctx context.Context, bh BackgroundExec, dbName, tblName, colName string) (exists bool, err error) {
-	sql := fmt.Sprintf("select 1 from mo_catalog.mo_columns where att_database = '%s' and att_relname = '%s' and attname = '%s'", dbName, tblName, colName)
+	// These compatibility checks describe sys-owned catalog tables, not the
+	// tenant rows stored in them. Include the leading catalog primary-key part
+	// so a check does not scan every tenant's column metadata.
+	sql := fmt.Sprintf("select 1 from mo_catalog.mo_columns where account_id = %d and att_database = '%s' and att_relname = '%s' and attname = '%s'", catalog.System_Account, dbName, tblName, colName)
 
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	bh.ClearExecResultSet()

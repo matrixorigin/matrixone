@@ -52,6 +52,39 @@ select result % 4 as g, count(*) as rows, sum(result) as total,
 from generate_series(1, 300) g
 group by g order by g;
 
+-- Regression for issue #28654. Ordered GROUP_CONCAT must use its bounded
+-- ordered-run path after Group binds an allocation account, and the spilled
+-- result must match the resident result.
+set @group_concat_spill_saved_max_len = @@group_concat_max_len;
+set @group_concat_spill_saved_dop = @@max_dop;
+set session group_concat_max_len = 1048576;
+set @@max_dop = 1;
+set @@agg_spill_mem = 65536;
+select length(gc) as gc_len, sha2(gc, 256) as gc_sha
+from (
+    select group_concat(concat(result, '-', repeat('x', 256))
+                        order by result separator '|') as gc
+    from generate_series(1, 512) g
+) ordered_spill;
+
+set @@agg_spill_mem = 536870912;
+select length(gc) as gc_len, sha2(gc, 256) as gc_sha
+from (
+    select group_concat(concat(result, '-', repeat('x', 256))
+                        order by result separator '|') as gc
+    from generate_series(1, 512) g
+) ordered_resident;
+
+set @@agg_spill_mem = 65536;
+-- @regex("SpillRows=[1-9][0-9]*", true)
+-- @regex("SpillSize=[1-9][0-9.]* [KMGT]iB", true)
+explain (analyze true)
+select group_concat(concat(result, '-', repeat('x', 256))
+                    order by result separator '|') as gc
+from generate_series(1, 512) g;
+set session group_concat_max_len = @group_concat_spill_saved_max_len;
+set @@max_dop = @group_concat_spill_saved_dop;
+
 -- A normal byte threshold is the nearest control for the debug threshold.
 set @@agg_spill_mem = 536870912;
 select count(*) from tiny_scalar;

@@ -150,13 +150,13 @@ Table    Create Table
 items    CREATE TABLE `items` (\n  `id` bigint NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  `description` text DEFAULT NULL,\n  `image_vector` vecf32(4) DEFAULT NULL,\n  `text_vector` vecf32(10) DEFAULT NULL,\n  `category` varchar(50) DEFAULT NULL,\n  `created_at` timestamp DEFAULT now(),\n  PRIMARY KEY (`id`),\n  KEY `idx_items_text_vector_ivf` USING hnsw (`text_vector`) m = 48  ef_construction = 64  ef_search = 64  op_type 'vector_l2_ops' ,\n  KEY `idx_items_image_vector_hnsw` USING hnsw (`image_vector`) m = 48  ef_construction = 64  ef_search = 64  op_type 'vector_l2_ops' \n)
 desc items;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT(64)    NO    PRI    null        
-name    VARCHAR(100)    YES        null        
-description    TEXT(0)    YES        null        
+id    bigint    NO    PRI    null        
+name    varchar(100)    YES        null        
+description    text    YES        null        
 image_vector    VECF32(4)    YES    MUL    null        
 text_vector    VECF32(10)    YES    MUL    null        
-category    VARCHAR(50)    YES        null        
-created_at    TIMESTAMP(0)    YES        now()        
+category    varchar(50)    YES        null        
+created_at    timestamp    YES        now()        
 drop index idx_items_text_vector_ivf on items;
 drop index idx_items_image_vector_hnsw on items;
 select
@@ -233,12 +233,12 @@ id    name    description    text_vector    category    created_at
 5    空向量测试    null    null    null    2025-11-05 16:58:10
 desc items;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT(64)    NO    PRI    null        
-name    VARCHAR(100)    YES        null        
-description    TEXT(0)    YES        null        
+id    bigint    NO    PRI    null        
+name    varchar(100)    YES        null        
+description    text    YES        null        
 text_vector    VECF32(10)    YES        null        
-category    VARCHAR(50)    YES        null        
-created_at    TIMESTAMP(0)    YES        now()        
+category    varchar(50)    YES        null        
+created_at    timestamp    YES        now()        
 show create table items;
 Table    Create Table
 items    CREATE TABLE `items` (\n  `id` bigint NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  `description` text DEFAULT NULL,\n  `text_vector` vecf32(10) DEFAULT NULL,\n  `category` varchar(50) DEFAULT NULL,\n  `created_at` timestamp DEFAULT now(),\n  PRIMARY KEY (`id`)\n)

@@ -707,7 +707,7 @@ func icebergMergeAssignmentValueExpr(ctx CompilerContext, expr *planpb.Expr, tar
 	value := DeepCopyExpr(expr)
 	var err error
 	if isDefaultValExpr(value) {
-		value, err = getDefaultExpr(ctx.GetContext(), targetCol)
+		value, err = getDefaultExprForAssignment(ctx.GetContext(), targetCol, ctx.GetProcess(), false)
 		if err != nil {
 			return nil, err
 		}

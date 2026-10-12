@@ -15,7 +15,7 @@
 // NOTE: This file is intentionally UNTAGGED (no //go:build constraint).
 // The distance KERNELS live in build-tag alternatives — distance_func.go
 // (scalar, !(amd64 && goexperiment.simd)) and distance_func_amd64.go (SIMD,
-// amd64 && go1.26 && goexperiment.simd) — so only one compiles per build. The
+// amd64 && go1.27 && goexperiment.simd) — so only one compiles per build. The
 // resolver / orchestration helpers below are build-tag-independent (they just
 // pick and call a kernel), so they must NOT live in a tagged file, or they
 // would vanish on the SIMD build and break every caller (kmeans / brute_force /
@@ -224,8 +224,24 @@ func GoPairWiseDistance[T types.ArrayElement](
 	}
 
 	if metric == Metric_L2Distance {
+		// The overflow screen rides along with the sqrt rather than taking a second pass over res:
+		// the squared distance is already non-finite when the float32 accumulation overflowed, and
+		// sqrt keeps it so.
+		//
+		// OR-ing the raw bits keeps the screen branch-free, which a per-entry `finite && ...` is
+		// not (measured: a branch there costs ~2% of this loop at 8192x50). Every non-finite
+		// float32 has all eight exponent bits set, so any such entry sets them in the OR. The
+		// converse does not hold -- two finite entries with complementary exponents can set them
+		// between them -- so the OR only screens, and CheckFiniteDists then decides.
+		var bits uint32
 		for i := range res {
 			res[i] = float32(math.Sqrt(float64(res[i])))
+			bits |= math.Float32bits(res[i])
+		}
+		if bits&0x7f800000 == 0x7f800000 {
+			if err := CheckFiniteDists(res, l2What); err != nil {
+				return nil, err
+			}
 		}
 	}
 
