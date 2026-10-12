@@ -139,3 +139,140 @@ select sum(e) as se, avg(e) as ae from (select e from special_numeric_empty) d;
 se    ae
 3    1.0000
 drop table special_numeric_empty;
+drop table if exists special_single_empty;
+create table special_single_empty (id int primary key, e enum('') default '', s set('') default '', u bigint unsigned);
+insert into special_single_empty values (1, '', '', 2), (2, 1, 1, 18446744073709551615), (3, null, null, null);
+select id, concat('[',e,']') as label, e+0 as ordinal, concat('[',s,']') as members, s+0 as bitmap,
+find_in_set('',s) as empty_member_position, u, e is null, s is null
+from special_single_empty order by id;
+➤ id[4,32,0]  ¦  label[-1,16383,0]  ¦  ordinal[-5,64,0]  ¦  members[-1,16383,0]  ¦  bitmap[-5,64,0]  ¦  empty_member_position[-5,3,0]  ¦  u[-5,64,0]  ¦  e is null[-7,1,0]  ¦  s is null[-7,1,0]  𝄀
+1  ¦  []  ¦  1  ¦  []  ¦  0  ¦  0  ¦  2  ¦  0  ¦  0  𝄀
+2  ¦  []  ¦  1  ¦  []  ¦  1  ¦  1  ¦  18446744073709551615  ¦  0  ¦  0  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  1  ¦  1
+insert ignore into special_single_empty values (4, 'bad', 'bad', 4), (5, 65537, 3, 5), (6, -1, -1, 6);
+select id, e+0 as ordinal, s+0 as bitmap from special_single_empty order by id;
+➤ id[4,32,0]  ¦  ordinal[-5,64,0]  ¦  bitmap[-5,64,0]  𝄀
+1  ¦  1  ¦  0  𝄀
+2  ¦  1  ¦  1  𝄀
+3  ¦  null  ¦  null  𝄀
+4  ¦  0  ¦  0  𝄀
+5  ¦  0  ¦  1  𝄀
+6  ¦  0  ¦  1
+insert into special_single_empty values (7, 1, 1, 7), (8, 2, 1, 8);
+internal error: convert to MySQL enum failed: number 2 overflow enum boundary [1, 1]
+update special_single_empty set s=2 where id=3;
+internal error: convert to MySQL set failed: value 2 overflow set boundary 1
+select id, e+0 as ordinal, s+0 as bitmap from special_single_empty order by id;
+➤ id[4,32,0]  ¦  ordinal[-5,64,0]  ¦  bitmap[-5,64,0]  𝄀
+1  ¦  1  ¦  0  𝄀
+2  ¦  1  ¦  1  𝄀
+3  ¦  null  ¦  null  𝄀
+4  ¦  0  ¦  0  𝄀
+5  ¦  0  ¦  1  𝄀
+6  ¦  0  ¦  1
+update special_single_empty set e='',s='' where id=3;
+insert into special_single_empty (id,u) values (9,9);
+select id,e+0 as ordinal,s+0 as bitmap from special_single_empty where id in (3,9) order by id;
+➤ id[4,32,0]  ¦  ordinal[-5,64,0]  ¦  bitmap[-5,64,0]  𝄀
+3  ¦  1  ¦  0  𝄀
+9  ¦  1  ¦  0
+show create table special_single_empty;
+➤ Table[12,20,0]  ¦  Create Table[12,170,0]  𝄀
+special_single_empty  ¦  CREATE TABLE `special_single_empty` (
+  `id` int NOT NULL,
+  `e` enum('') DEFAULT '',
+  `s` set('') DEFAULT '',
+  `u` bigint unsigned DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+show columns from special_single_empty;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+e  ¦  enum('')  ¦  YES  ¦    ¦    ¦    ¦    𝄀
+s  ¦  set('')  ¦  YES  ¦    ¦    ¦    ¦    𝄀
+u  ¦  bigint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦  
+select column_name,data_type,column_type from information_schema.columns
+where table_schema=database() and table_name='special_single_empty' order by ordinal_position;
+➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  ¦  column_type[12,65535,0]  𝄀
+id  ¦  int  ¦  int  𝄀
+e  ¦  enum  ¦  enum('')  𝄀
+s  ¦  set  ¦  set('')  𝄀
+u  ¦  bigint  ¦  bigint unsigned
+create view special_single_empty_view as select id,e,s,u from special_single_empty;
+select id,e+0 as ordinal,s+0 as bitmap from special_single_empty_view order by id;
+➤ id[4,32,0]  ¦  ordinal[-5,64,0]  ¦  bitmap[-5,64,0]  𝄀
+1  ¦  1  ¦  0  𝄀
+2  ¦  1  ¦  1  𝄀
+3  ¦  1  ¦  0  𝄀
+4  ¦  0  ¦  0  𝄀
+5  ¦  0  ¦  1  𝄀
+6  ¦  0  ¦  1  𝄀
+9  ¦  1  ¦  0
+create table special_single_empty_copy like special_single_empty;
+insert into special_single_empty_copy select * from special_single_empty;
+select id,e+0 as ordinal,s+0 as bitmap from special_single_empty_copy order by id;
+➤ id[4,32,0]  ¦  ordinal[-5,64,0]  ¦  bitmap[-5,64,0]  𝄀
+1  ¦  1  ¦  0  𝄀
+2  ¦  1  ¦  1  𝄀
+3  ¦  1  ¦  0  𝄀
+4  ¦  0  ¦  0  𝄀
+5  ¦  0  ¦  1  𝄀
+6  ¦  0  ¦  1  𝄀
+9  ¦  1  ¦  0
+create table special_single_empty_clone clone special_single_empty;
+select id,e+0 as ordinal,s+0 as bitmap from special_single_empty_clone order by id;
+➤ id[4,32,0]  ¦  ordinal[-5,64,0]  ¦  bitmap[-5,64,0]  𝄀
+1  ¦  1  ¦  0  𝄀
+2  ¦  1  ¦  1  𝄀
+3  ¦  1  ¦  0  𝄀
+4  ¦  0  ¦  0  𝄀
+5  ¦  0  ¦  1  𝄀
+6  ¦  0  ¦  1  𝄀
+9  ¦  1  ¦  0
+insert into special_single_empty_copy(id,e,s,u) select 12,e,0,12 from (select distinct e from special_single_empty where id in (1,4)) d;
+insert into special_single_empty_copy(id,e,s,u) select 13,e,0,13 from special_single_empty where id=1 union select 13,e,0,13 from special_single_empty where id=4;
+insert into special_single_empty_copy(id,e) select 14,e from special_single_empty where id in (1,4) group by 2;
+insert into special_single_empty_copy(id,e) select 15,(e) from (select e from special_single_empty where id=4) d;
+insert into special_single_empty_copy(id,e) select 16,cast(e as char) from special_single_empty where id=4;
+insert into special_single_empty_copy(id,e) with d as (select e from special_single_empty where id=4) select 17,e from d;
+select id,e+0 as ordinal from special_single_empty_copy where id>=12 order by id;
+➤ id[4,32,0]  ¦  ordinal[-5,64,0]  𝄀
+12  ¦  1  𝄀
+13  ¦  1  𝄀
+14  ¦  1  𝄀
+15  ¦  0  𝄀
+16  ¦  1  𝄀
+17  ¦  0
+prepare single_empty_insert from 'insert into special_single_empty_copy values (?, ?, ?, ?)';
+set @empty_id=10,@empty_label='',@empty_bitmap=1,@empty_unsigned=10;
+execute single_empty_insert using @empty_id,@empty_label,@empty_bitmap,@empty_unsigned;
+set @empty_id=11,@empty_label=null,@empty_bitmap=null;
+execute single_empty_insert using @empty_id,@empty_label,@empty_bitmap,@empty_unsigned;
+deallocate prepare single_empty_insert;
+select id,e+0 as ordinal,s+0 as bitmap from special_single_empty_copy where id>=10 order by id;
+➤ id[4,32,0]  ¦  ordinal[-5,64,0]  ¦  bitmap[-5,64,0]  𝄀
+10  ¦  1  ¦  1  𝄀
+11  ¦  null  ¦  null  𝄀
+12  ¦  1  ¦  0  𝄀
+13  ¦  1  ¦  0  𝄀
+14  ¦  1  ¦  0  𝄀
+15  ¦  0  ¦  0  𝄀
+16  ¦  1  ¦  0  𝄀
+17  ¦  0  ¦  0
+create table special_single_empty_load like special_single_empty;
+load data inline format='csv', data='1,,,1\n2,1,1,2\n' into table special_single_empty_load fields terminated by ',';
+select id,e+0 as ordinal,s+0 as bitmap from special_single_empty_load order by id;
+➤ id[4,32,0]  ¦  ordinal[-5,64,0]  ¦  bitmap[-5,64,0]  𝄀
+1  ¦  1  ¦  0  𝄀
+2  ¦  1  ¦  1
+truncate table special_single_empty_load;
+load data inline format='jsonline', data='{"id":1,"e":"","s":"","u":1}\n{"id":2,"e":null,"s":null,"u":2}\n', jsontype='object' into table special_single_empty_load;
+select id,e+0 as ordinal,s+0 as bitmap from special_single_empty_load order by id;
+➤ id[4,32,0]  ¦  ordinal[-5,64,0]  ¦  bitmap[-5,64,0]  𝄀
+1  ¦  1  ¦  0  𝄀
+2  ¦  null  ¦  null
+drop table special_single_empty_load;
+drop table special_single_empty_clone;
+drop table special_single_empty_copy;
+drop view special_single_empty_view;
+drop table special_single_empty;

@@ -17,4 +17,4 @@ package vectorscan
 import "github.com/matrixorigin/matrixone/pkg/defines"
 
 // IndexSearchScanProtocolVersion is the first MORPC protocol version that carries IndexSearchScan.
-const IndexSearchScanProtocolVersion = defines.MORPCVersion110
+const IndexSearchScanProtocolVersion = defines.MORPCVersion111
