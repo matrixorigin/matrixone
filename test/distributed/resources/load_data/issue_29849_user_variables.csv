@@ -1,0 +1,5 @@
+1,10,null-source,NULL,NULL,null
+2,20,ordinary-value,kept,kept,true
+3,30,empty-value,empty,,false
+4,40,similar-value,marker,NULLish,1
+5,50,sql-null,\N,\N,\N

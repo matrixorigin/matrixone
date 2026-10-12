@@ -93,9 +93,8 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 			tbColToDataCol[colName] = int32(i)
 			newCols = append(newCols, newTableDef.Cols[tbColIdx])
 		case *tree.VarExpr:
-			//NOTE:variable like '@abc' will be passed by.
-			name := realCol.Name
-			tbColToDataCol[name] = -1 // when in external call, can use len of the map to check load data row whether valid
+			// Row-variable slots are recorded after target columns so referenced
+			// values can be exposed to the LOAD assignment projection.
 		default:
 			return nil, nil, nil, nil, moerr.NewInternalErrorf(ctx.GetContext(), "unsupported column type %v", realCol)
 		}
@@ -615,6 +614,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
+	userVariableAssignments, err := loadUserVariableNullIfAssignments(stmt.Param, ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
 		return nil, err
@@ -644,6 +647,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
+	userVariableColumns := appendLoadUserVariableScanColumns(
+		stmt.Param.Tail.ColumnList, userVariableAssignments, originTableDef,
+		tableDef, &tbColToDataCol, &externalProject,
+	)
 
 	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
 		return nil, err
@@ -669,6 +676,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	applyLoadParallelAdmission(stmt.Param, offset)
 
 	stmt.Param.Tail.ColumnList = nil
+	stmt.Param.Tail.Assignments = nil
 	if stmt.Param.ScanType != tree.INLINE {
 		json_byte, err := json.Marshal(stmt.Param)
 		if err != nil {
@@ -725,7 +733,13 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		Stats:    &plan.Stats{},
 	}
 
-	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, originTableDef, colToIndex)
+	setExpressions, err := builder.bindLoadUserVariableAssignments(
+		stmt, userVariableAssignments, originTableDef, tableDef, userVariableColumns, 0,
+	)
+	if err != nil {
+		return nil, err
+	}
+	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, originTableDef, colToIndex, setExpressions)
 
 	if err != nil {
 		return nil, err
@@ -753,7 +767,15 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 			return nil, err
 		}
 	}
-	lastNodeId, err = builder.appendLoadDefaultProjections(bindCtx, projectNode, originTableDef, colToIndex)
+	for target, expr := range setExpressions {
+		for i, col := range originTableDef.Cols {
+			if strings.EqualFold(col.Name, target) {
+				projectNode.ProjectList[i] = expr
+				break
+			}
+		}
+	}
+	lastNodeId, err = builder.appendLoadDefaultProjections(bindCtx, projectNode, originTableDef, colToIndex, setExpressions)
 	if err != nil {
 		return nil, err
 	}
@@ -956,13 +978,28 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	return param.Filepath, nil
 }
 
-func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef, colToIndex map[string]int32) (bool, error) {
+func getProjectNode(
+	stmt *tree.Load,
+	ctx CompilerContext,
+	node *plan.Node,
+	tableDef *TableDef,
+	colToIndex map[string]int32,
+	setExpressions map[string]*plan.Expr,
+) (bool, error) {
 	tblName := string(stmt.Table.ObjectName)
 	ifExistAutoPkCol := false
 	node.ProjectList = make([]*plan.Expr, len(tableDef.Cols))
 	var tmp *plan.Expr
 
 	for i := 0; i < len(tableDef.Cols); i++ {
+		if expr, ok := setExpressions[tableDef.Cols[i].Name]; ok {
+			node.ProjectList[i] = expr
+			if _, supplied := colToIndex[tableDef.Cols[i].Name]; !supplied &&
+				tableDef.Cols[i].Typ.AutoIncr && tableDef.Cols[i].Name == tableDef.Pkey.PkeyColName {
+				ifExistAutoPkCol = true
+			}
+			continue
+		}
 		if colListId, ok := colToIndex[tableDef.Cols[i].Name]; ok {
 			tmp = &plan.Expr{
 				Typ: tableDef.Cols[i].Typ,
@@ -995,11 +1032,17 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 // logical binding tags. Normalize file columns first, then reuse the same
 // dependency stages as INSERT and lower their tags to child-batch coordinates.
 func (builder *QueryBuilder) appendLoadDefaultProjections(
-	bindCtx *BindContext, node *plan.Node, tableDef *TableDef, supplied map[string]int32,
+	bindCtx *BindContext,
+	node *plan.Node,
+	tableDef *TableDef,
+	supplied map[string]int32,
+	setExpressions map[string]*plan.Expr,
 ) (int32, error) {
 	needed := false
 	for i, col := range tableDef.Cols {
-		if _, ok := supplied[col.Name]; !ok && exprHasLocalColumnRef(node.ProjectList[i]) {
+		_, sourceSupplied := supplied[col.Name]
+		_, setSupplied := setExpressions[col.Name]
+		if !sourceSupplied && !setSupplied && exprHasLocalColumnRef(node.ProjectList[i]) {
 			needed = true
 			break
 		}
@@ -1016,7 +1059,9 @@ func (builder *QueryBuilder) appendLoadDefaultProjections(
 		pos := int32(i)
 		positions[pos] = pos
 		expr := DeepCopyExpr(node.ProjectList[i])
-		if _, ok := supplied[col.Name]; ok {
+		_, sourceSupplied := supplied[col.Name]
+		_, setSupplied := setExpressions[col.Name]
+		if sourceSupplied || setSupplied {
 			replaceColRefTag(expr, 0, inputTag)
 		} else if exprHasLocalColumnRef(expr) {
 			materialize[pos] = true
@@ -1048,21 +1093,25 @@ func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
 		expr, ok := param.Tail.Assignments[i].Expr.(*tree.FuncExpr)
 		if !ok {
 			param.Tail.Assignments[i].Expr = nil
-			return nil
+			continue
 		}
 		if len(expr.Exprs) != 2 {
 			param.Tail.Assignments[i].Expr = nil
-			return nil
+			continue
 		}
 
 		expr2, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
-		if !ok || expr2.ColName() != "nullif" {
+		if !ok || !strings.EqualFold(expr2.ColName(), "nullif") {
 			param.Tail.Assignments[i].Expr = nil
-			return nil
+			continue
 		}
 
 		expr3, ok := expr.Exprs[0].(*tree.UnresolvedName)
 		if !ok {
+			if _, isVariable := expr.Exprs[0].(*tree.VarExpr); isVariable {
+				param.Tail.Assignments[i].Expr = nil
+				continue
+			}
 			return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func first param is not UnresolvedName form")
 		}
 

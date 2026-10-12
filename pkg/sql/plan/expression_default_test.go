@@ -239,14 +239,14 @@ func TestLoadDefaultMaterialization(t *testing.T) {
 		node := &planpb.Node{NodeType: planpb.Node_PROJECT, Children: []int32{child}}
 		load := &tree.Load{Table: &tree.TableName{}, Param: &tree.ExternParam{}}
 		supplied := map[string]int32{"b": 0, "a": 1}
-		_, err = getProjectNode(load, ctx, node, table, supplied)
+		_, err = getProjectNode(load, ctx, node, table, supplied, nil)
 		require.NoError(t, err)
 		if parallel {
 			before := node.ProjectList[2]
 			node.ProjectList = makeCastExpr(load, "row.csv", table, node, supplied)
 			require.Same(t, before, node.ProjectList[2], "default is already typed")
 		}
-		id, err := builder.appendLoadDefaultProjections(bindCtx, node, table, supplied)
+		id, err := builder.appendLoadDefaultProjections(bindCtx, node, table, supplied, nil)
 		require.NoError(t, err)
 		last := builder.qry.Nodes[id]
 		require.Equal(t, []int32{2}, collectRefColPos(last.ProjectList[3]))
