@@ -357,7 +357,7 @@ the CPU (`ivfflat/plan_reader.go`); ivfflat is outside the GPU policy in this de
 | # | Claim | Black-box test |
 |---|---|---|
 | 1 | A query with no new mode or knob produces the same plan and rows as before, on all four indexes. | the existing case files that create an ivfflat, hnsw, cagra or ivfpq index under `cases/vector/` and `gpu_cases/vector/` |
-| 2 | Explicit `mode=pre` or `mode=auto` on an index without membership support is an error. | `cases/vector/vector_filtered_search_modes.sql` (PR1) |
+| 2 | Explicit `mode=pre` or `mode=auto` on an index without membership support is an error; ivfflat accepts both. | `cases/vector/vector_filtered_search_modes.sql` (hnsw, ivfflat), `cases/vector/vector_hybrid_fulltext.sql` (hnsw), `gpu_cases/vector/vector_hybrid_fulltext_gpu.sql` (cagra, ivfpq) |
 | 3 | `itopk`, `max_itopk`, `nprobe`, `max_nprobe` are accepted on their family and rejected on the other; values must be positive with max ≥ start. | `cases/vector/vector_filtered_search_knobs.sql` |
 | 4 | `EXPLAIN` shows the mode, `Candidate Limit`, each knob, its cap and source, and inactive knobs. | `cases/vector/vector_filtered_search_knobs.sql` |
 | 5 | A `SET vector_max_itopk` after `PREPARE` applies to the next `EXECUTE`; `probe_limit` behaves as before. | `cases/vector/vector_filtered_search_knobs.sql` |

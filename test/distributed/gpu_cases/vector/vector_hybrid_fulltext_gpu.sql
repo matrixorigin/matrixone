@@ -255,16 +255,13 @@ select d.id from t_ref_ft d join query_vectors q on q.name = 'lo' order by l2_di
 explain select d.id from t_ft_cagra d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
 select d.id from t_ft_cagra d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
 select d.id from t_ref_ft d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
--- rank mode clause: cagra plans and returns the same with mode=pre, mode=post and no clause
--- @separator:table
--- @regex("Join Type: SEMI", false)
--- @regex("Vector Index Scan on", true)
-explain select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
+-- rank mode clause: cagra rejects mode=pre and mode=auto; mode=post and no clause plan and return the same
+select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
+select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=auto';
 -- @separator:table
 -- @regex("Join Type: SEMI", false)
 -- @regex("Vector Index Scan on", true)
 explain select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post';
-select (select group_concat(id order by id) from (select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) = (select group_concat(id order by id) from (select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_pre;
 select (select group_concat(id order by id) from (select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) = (select group_concat(id order by id) from (select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_post;
 
 -- Top-K over a join with another table: ivfpq uses no vector index, with or without a MATCH
@@ -291,16 +288,13 @@ select d.id from t_ref_ft d join query_vectors q on q.name = 'lo' order by l2_di
 explain select d.id from t_ft_ivfpq d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
 select d.id from t_ft_ivfpq d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
 select d.id from t_ref_ft d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
--- rank mode clause: ivfpq plans and returns the same with mode=pre, mode=post and no clause
--- @separator:table
--- @regex("Join Type: SEMI", false)
--- @regex("Vector Index Scan on", true)
-explain select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
+-- rank mode clause: ivfpq rejects mode=pre and mode=auto; mode=post and no clause plan and return the same
+select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
+select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=auto';
 -- @separator:table
 -- @regex("Join Type: SEMI", false)
 -- @regex("Vector Index Scan on", true)
 explain select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post';
-select (select group_concat(id order by id) from (select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) = (select group_concat(id order by id) from (select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_pre;
 select (select group_concat(id order by id) from (select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) = (select group_concat(id order by id) from (select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_post;
 
 drop database hybrid_ft_vec_gpu;

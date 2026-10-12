@@ -321,7 +321,7 @@ func (builder *QueryBuilder) buildVectorSortContextThroughMembershipJoin(
 	if scanNode == nil || scanNode.TableDef == nil || orderExpr == nil || joinNode.Children[0] != scanNode.NodeId || len(joinNode.OnList) == 0 {
 		return nil
 	}
-	if !hasIvfFlatIndex(scanNode.TableDef) {
+	if !hasMembershipVectorIndex(scanNode.TableDef) {
 		return nil
 	}
 	distFnExpr := orderExpr.GetF()
@@ -438,12 +438,14 @@ func (builder *QueryBuilder) tryJoinThroughVectorSide(
 	return scanNode, vecArgExpr
 }
 
-func hasIvfFlatIndex(tableDef *plan.TableDef) bool {
+// hasMembershipVectorIndex reports whether tableDef has an index whose algorithm has the
+// membership capability (indexplugin.SupportsMembership).
+func hasMembershipVectorIndex(tableDef *plan.TableDef) bool {
 	if tableDef == nil {
 		return false
 	}
 	for _, idx := range tableDef.Indexes {
-		if idx != nil && idx.IndexAlgo == catalog.MoIndexIvfFlatAlgo.ToString() {
+		if idx != nil && indexplugin.SupportsMembership(idx.IndexAlgo) {
 			return true
 		}
 	}

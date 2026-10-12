@@ -1038,23 +1038,10 @@ Project  𝄀
                     Vector Index: vi, Metric: l2_distance, Candidate Limit: 3, NProbe: 5  𝄀
               ->  Table Scan on hybrid_ft_vec.t_ft_ivfflat  𝄀
                     Filter Cond: (t_ft_ivfflat.tag = 1)
-explain select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
--- @regex("Join Type: SEMI", false)
--- @regex("Vector Index Scan on", true)
-➤ TP QUERY PLAN[12,-1,0]  𝄀
-Project  𝄀
-  ->  Sort  𝄀
-        Sort Key: #[0,1] INTERNAL  𝄀
-        Limit: 3  𝄀
-        ->  Join  𝄀
-              Join Type: INNER  𝄀
-              Join Cond: (t_ft_hnsw.id = #[1,0])  𝄀
-              Runtime Filter Build: #[-1,0]  𝄀
-              ->  Table Scan on hybrid_ft_vec.t_ft_hnsw  𝄀
-                    Filter Cond: (t_ft_hnsw.tag = 1)  𝄀
-                    Runtime Filter Probe: t_ft_hnsw.id  𝄀
-              ->  Vector Index Scan on vi [l2_distance]  𝄀
-                    Vector Index: vi, Metric: l2_distance, Candidate Limit: 3
+select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
+not supported: mode=pre on index type hnsw
+select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=auto';
+not supported: mode=auto on index type hnsw
 explain select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post';
 -- @regex("Join Type: SEMI", false)
 -- @regex("Vector Index Scan on", true)
@@ -1072,9 +1059,6 @@ Project  𝄀
                     Runtime Filter Probe: t_ft_hnsw.id  𝄀
               ->  Vector Index Scan on vi [l2_distance]  𝄀
                     Vector Index: vi, Metric: l2_distance, Candidate Limit: 3
-select (select group_concat(id order by id) from (select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) = (select group_concat(id order by id) from (select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_pre;
-➤ same_pre[-7,1,0]  𝄀
-1
 select (select group_concat(id order by id) from (select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) = (select group_concat(id order by id) from (select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_post;
 ➤ same_post[-7,1,0]  𝄀
 1

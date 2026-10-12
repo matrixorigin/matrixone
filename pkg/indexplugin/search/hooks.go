@@ -117,6 +117,13 @@ type ExplainHooks interface {
 	ExplainSettings(spec *plan.IndexSearchScan) ([]string, error)
 }
 
+// MembershipHooks optionally reports that the search applies a membership key
+// set (Request.MembershipFilter) inside the index search, so the planner may
+// build the PRE shape and serve a fulltext MATCH or membership join with it.
+type MembershipHooks interface {
+	SupportsMembership() bool
+}
+
 // CandidateBudgetHooks optionally sizes the candidate budget of a scan whose
 // results are post-filtered (IndexSearchScan.PostFilterOverFetch). Without it
 // the budget is overfetch.FilteredPostModeLimit(resultLimit).

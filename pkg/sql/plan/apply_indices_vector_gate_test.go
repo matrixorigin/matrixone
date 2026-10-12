@@ -15,9 +15,11 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -63,4 +65,40 @@ func TestVectorIndexSupportsContextProjectedMatch(t *testing.T) {
 	}
 	plainProj := &planpb.Node{NodeType: planpb.Node_PROJECT, Children: []int32{scanID}}
 	require.True(t, builder.vectorIndexSupportsContext(&vectorSortContext{scanNode: scan, projNode: plainProj}, catalog.MoIndexHnswAlgo.ToString()))
+}
+
+func TestCheckVectorSearchMode(t *testing.T) {
+	ctx := context.Background()
+	ivfflat := catalog.MoIndexIvfFlatAlgo.ToString()
+	for _, algo := range []string{
+		catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString(),
+	} {
+		for _, mode := range []string{"pre", "auto"} {
+			err := checkVectorSearchMode(ctx, &vectorSortContext{rankOption: &planpb.RankOption{Mode: mode}}, algo)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%s %s", algo, mode)
+			require.ErrorContains(t, err, "mode="+mode+" on index type "+algo)
+		}
+		for _, mode := range []string{"post", "force", "include", ""} {
+			require.NoError(t, checkVectorSearchMode(ctx, &vectorSortContext{rankOption: &planpb.RankOption{Mode: mode}}, algo), "%s %s", algo, mode)
+		}
+		require.NoError(t, checkVectorSearchMode(ctx, &vectorSortContext{}, algo))
+		require.NoError(t, checkVectorSearchMode(ctx, nil, algo))
+	}
+	for _, mode := range []string{"pre", "auto"} {
+		require.NoError(t, checkVectorSearchMode(ctx, &vectorSortContext{rankOption: &planpb.RankOption{Mode: mode}}, ivfflat))
+	}
+}
+
+func TestHasMembershipVectorIndex(t *testing.T) {
+	def := func(algos ...string) *planpb.TableDef {
+		td := &planpb.TableDef{}
+		for _, a := range algos {
+			td.Indexes = append(td.Indexes, &planpb.IndexDef{IndexAlgo: a})
+		}
+		return td
+	}
+	require.False(t, hasMembershipVectorIndex(nil))
+	require.False(t, hasMembershipVectorIndex(def()))
+	require.False(t, hasMembershipVectorIndex(def(catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString())))
+	require.True(t, hasMembershipVectorIndex(def(catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexIvfFlatAlgo.ToString())))
 }

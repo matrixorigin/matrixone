@@ -350,7 +350,7 @@ func TestApplyIndicesForSortUsingIvfpq_Success(t *testing.T) {
 		},
 		limit:       &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
 		resultLimit: makePlan2Uint64ConstExprWithType(10),
-		rankOption:  &plan.RankOption{Mode: "pre"},
+		rankOption:  &plan.RankOption{Mode: "post"},
 	}
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
 	mti := &MultiTableIndex{
@@ -527,7 +527,7 @@ func TestApplyIndicesForSortUsingIvfpq_RichPushdown(t *testing.T) {
 		},
 		limit:       &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 5}}}},
 		resultLimit: makePlan2Uint64ConstExprWithType(5),
-		rankOption:  &plan.RankOption{Mode: "pre"},
+		rankOption:  &plan.RankOption{Mode: "post"},
 	}
 
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "included_columns":"price"}`
@@ -629,7 +629,7 @@ func TestApplyIndicesForSortUsingIvfpq_Success_WithFiltersOverFetch(t *testing.T
 		},
 		limit:       &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{}}},
 		resultLimit: &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{}}},
-		rankOption:  &plan.RankOption{Mode: "pre"},
+		rankOption:  &plan.RankOption{Mode: "post"},
 	}
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
 	mti := &MultiTableIndex{

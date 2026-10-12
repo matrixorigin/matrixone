@@ -1947,23 +1947,38 @@ func (builder *QueryBuilder) detectVectorGuardFromSort(sortNode *plan.Node) []in
 }
 
 // vectorIndexSupportsContext reports whether algo may serve vecCtx. A membership join or a
-// fulltext MATCH filter on the scan restricts the Top-K to a key set. Algorithms other than
-// ivfflat only post-filter their candidates, which can drop rows of that Top-K, so they leave
-// such a query to the exact sort. A MATCH only in the projection of the Top-K is served by
-// the fulltext rewrite of that projection, which needs the scan directly under it, so no
-// algorithm rewrites the scan.
+// fulltext MATCH filter on the scan restricts the Top-K to a key set. An algorithm without
+// the membership capability (indexplugin.SupportsMembership) only post-filters its
+// candidates, which can drop rows of that Top-K, so it leaves such a query to the exact
+// sort. A MATCH only in the projection of the Top-K is served by the fulltext rewrite of that
+// projection, which needs the scan directly under it, so no algorithm rewrites the scan.
 func (builder *QueryBuilder) vectorIndexSupportsContext(vecCtx *vectorSortContext, algo string) bool {
 	if vecCtx == nil || vecCtx.scanNode == nil {
 		return true
 	}
-	ivfflat := algo == catalog.MoIndexIvfFlatAlgo.ToString()
+	membership := indexplugin.SupportsMembership(algo)
 	if builder.scanHasMatchedFullTextFilter(vecCtx.scanNode) {
-		return ivfflat
+		return membership
 	}
 	if builder.projectionMatchesScan(vecCtx) {
 		return false
 	}
-	return ivfflat || !vecCtx.hasMembership
+	return membership || !vecCtx.hasMembership
+}
+
+// checkVectorSearchMode rejects an explicit mode=pre or mode=auto on an algorithm without
+// the membership capability.
+func checkVectorSearchMode(ctx context.Context, vecCtx *vectorSortContext, algo string) error {
+	if vecCtx == nil || vecCtx.rankOption == nil {
+		return nil
+	}
+	switch mode := vecCtx.rankOption.Mode; mode {
+	case "pre", "auto":
+		if !indexplugin.SupportsMembership(algo) {
+			return moerr.NewNotSupportedf(ctx, "mode=%s on index type %s", mode, algo)
+		}
+	}
+	return nil
 }
 
 // projectionMatchesScan reports whether the project above or below the Top-K of vecCtx

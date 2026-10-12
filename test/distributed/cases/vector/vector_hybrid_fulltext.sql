@@ -288,16 +288,13 @@ explain select id from t_ft_ivfflat where tag = 1 order by l2_distance(v,'[0,0,0
 -- @regex("Join Type: SEMI", false)
 -- @regex("Vector Index Scan on", true)
 explain select id from t_ft_ivfflat where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post';
--- rank mode clause: hnsw plans and returns the same with mode=pre, mode=post and no clause
--- @separator:table
--- @regex("Join Type: SEMI", false)
--- @regex("Vector Index Scan on", true)
-explain select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
+-- rank mode clause: hnsw rejects mode=pre and mode=auto; mode=post and no clause plan and return the same
+select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
+select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=auto';
 -- @separator:table
 -- @regex("Join Type: SEMI", false)
 -- @regex("Vector Index Scan on", true)
 explain select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post';
-select (select group_concat(id order by id) from (select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) = (select group_concat(id order by id) from (select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_pre;
 select (select group_concat(id order by id) from (select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) = (select group_concat(id order by id) from (select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_post;
 
 -- the search table functions are not callable from SQL

@@ -168,6 +168,22 @@ func IsVectorIndexAlgo(algo string) bool {
 	return p.Catalog().IsVectorIndex()
 }
 
+// SupportsMembership reports whether algo's search applies a membership key set
+// inside the index search (searchplugin.MembershipHooks). An unregistered algo,
+// one without a SearchPlugin, or one without the hook reports false.
+func SupportsMembership(algo string) bool {
+	p, ok := Get(algo)
+	if !ok {
+		return false
+	}
+	sp, ok := p.(SearchPlugin)
+	if !ok {
+		return false
+	}
+	h, ok := sp.Search().(searchplugin.MembershipHooks)
+	return ok && h.SupportsMembership()
+}
+
 // IsFullTextIndexAlgo reports whether algo is the fulltext index
 // algorithm AND the fulltext plugin is registered.
 func IsFullTextIndexAlgo(algo string) bool {
