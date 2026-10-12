@@ -57,6 +57,22 @@ func migrateOnListConditions(src *plan.Node, dst *plan.Node, tagsMap map[int32]b
 	src.OnList = kept
 }
 
+// migrateOnListConditionsForInputs moves a predicate only when all of its
+// inputs are available in the destination join. A predicate can mention both
+// the tag being moved and another tag; moving it based on a single matching
+// tag would detach that other input from the predicate's owner.
+func migrateOnListConditionsForInputs(src *plan.Node, dst *plan.Node, requiredTags, allowedTags map[int32]bool) {
+	var kept []*plan.Expr
+	for _, cond := range src.OnList {
+		if checkExprInvolvesTags(cond, requiredTags) && containsOnlyTags(cond, allowedTags) {
+			dst.OnList = append(dst.OnList, cond)
+		} else {
+			kept = append(kept, cond)
+		}
+	}
+	src.OnList = kept
+}
+
 // getTableNameOrLabel returns table name from node's TableDef, or a label (A/B/C) if not available
 func (builder *QueryBuilder) getTableNameOrLabel(nodeID int32, label string) string {
 	node := builder.qry.Nodes[nodeID]
@@ -209,7 +225,11 @@ func (builder *QueryBuilder) applyAssociativeLawRule3(nodeID int32) int32 {
 
 	// Migrate OnList:
 	// - node: move conditions involving B to leftChild
-	// - leftChild: move conditions involving C to node
+	// - leftChild: move conditions involving C and only A/C inputs to node
+	tagsAMap := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(NodeA.NodeId) {
+		tagsAMap[tag] = true
+	}
 	tagsBMap := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(NodeB.NodeId) {
 		tagsBMap[tag] = true
@@ -219,7 +239,14 @@ func (builder *QueryBuilder) applyAssociativeLawRule3(nodeID int32) int32 {
 		tagsCMap[tag] = true
 	}
 	migrateOnListConditions(node, leftChild, tagsBMap)
-	migrateOnListConditions(leftChild, node, tagsCMap)
+	allowedAC := make(map[int32]bool, len(tagsAMap)+len(tagsCMap))
+	for tag := range tagsAMap {
+		allowedAC[tag] = true
+	}
+	for tag := range tagsCMap {
+		allowedAC[tag] = true
+	}
+	migrateOnListConditionsForInputs(leftChild, node, tagsCMap, allowedAC)
 
 	// Record table names and stats after migration
 	tableNameA := builder.getTableNameOrLabel(NodeA.NodeId, "A")
