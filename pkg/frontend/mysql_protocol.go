@@ -3818,11 +3818,7 @@ func (mp *MysqlProtocolImpl) writeResultSetRow2(
 				err = mp.appendResultSetTextRow2(mrs, colSlices, i)
 			}
 			if err != nil {
-				//ERR_Packet in case of error
-				err1 := mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
-				if err1 != nil {
-					return err1
-				}
+				// The statement handler writes the terminal error response.
 				return err
 			}
 		}

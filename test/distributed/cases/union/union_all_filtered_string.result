@@ -1,0 +1,30 @@
+SELECT v AS value
+FROM (SELECT 1 AS k, 'ten' AS v UNION ALL SELECT 2, 'twenty') AS u
+WHERE k > 0
+ORDER BY v;
+value
+ten
+twenty
+SELECT 1 AS after_direct;
+after_direct
+1
+PREPARE issue_30010_stmt FROM
+'SELECT v AS value FROM
+(SELECT 1 AS k, "ten" AS v UNION ALL SELECT 2, "twenty") AS u
+WHERE k > ? ORDER BY v';
+SET @issue_30010_threshold = 0;
+EXECUTE issue_30010_stmt USING @issue_30010_threshold;
+value
+ten
+twenty
+SELECT 1 AS after_prepared;
+after_prepared
+1
+SET @issue_30010_threshold = 1;
+EXECUTE issue_30010_stmt USING @issue_30010_threshold;
+value
+twenty
+SELECT 1 AS after_reuse;
+after_reuse
+1
+DEALLOCATE PREPARE issue_30010_stmt;
