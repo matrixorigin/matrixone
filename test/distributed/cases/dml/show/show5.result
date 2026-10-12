@@ -36,8 +36,8 @@ deptno    INT UNSIGNED(32)    YES        null        所在部门
 show full columns from emp;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
 empno    INT UNSIGNED(32)    null    NO    PRI    null    auto_increment    select,insert,update,references    雇员编号
-ename    VARCHAR(15)    null    YES        null        select,insert,update,references    雇员姓名
-job    VARCHAR(10)    null    YES        null        select,insert,update,references    雇员职位
+ename    VARCHAR(15)    utf8mb4_general_ci    YES        null        select,insert,update,references    雇员姓名
+job    VARCHAR(10)    utf8mb4_general_ci    YES        null        select,insert,update,references    雇员职位
 mgr    INT UNSIGNED(32)    null    YES        null        select,insert,update,references    雇员对应的领导的编号
 hiredate    DATE(0)    null    YES        null        select,insert,update,references    雇员的雇佣日期
 sal    DECIMAL(7,2)    null    YES        null        select,insert,update,references    雇员的基本工资
@@ -61,8 +61,8 @@ job    VARCHAR(10)    YES        null
 show full columns from v1;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
 empno    INT UNSIGNED(32)    null    NO        null        select,insert,update,references    
-ename    VARCHAR(15)    null    YES        null        select,insert,update,references    
-job    VARCHAR(10)    null    YES        null        select,insert,update,references    
+ename    VARCHAR(15)    utf8mb4_general_ci    YES        null        select,insert,update,references    
+job    VARCHAR(10)    utf8mb4_general_ci    YES        null        select,insert,update,references    
 show columns from v1 like 'e%';
 Field    Type    Null    Key    Default    Extra    Comment
 empno    INT UNSIGNED(32)    NO        null        

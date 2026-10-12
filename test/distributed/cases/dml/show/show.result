@@ -26,13 +26,13 @@ name  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦
 show full columns from t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  INT(32)  ¦  null  ¦  NO  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-str  ¦  CHAR(10)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-name  ¦  VARCHAR(10)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
+str  ¦  CHAR(10)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+name  ¦  VARCHAR(10)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
 show full columns from t1 like '%';
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  INT(32)  ¦  null  ¦  NO  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-str  ¦  CHAR(10)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-name  ¦  VARCHAR(10)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
+str  ¦  CHAR(10)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+name  ¦  VARCHAR(10)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
 show full columns from t1 where Field ='id';
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  INT(32)  ¦  null  ¦  NO  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
