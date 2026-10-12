@@ -17,6 +17,7 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -98,6 +99,53 @@ func TestInsertOnDupPrimaryKeyLiteralIdentityIsRuntimeGuarded(t *testing.T) {
 	requireODKUPKIdentityGuard(t, logicPlan, 0)
 }
 
+func TestInsertOnDupCharPrimaryKeyGuardPreservesType(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	for _, table := range []*planpb.TableDef{
+		mock.ctxt.tables["t1"],
+		mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "t1")],
+	} {
+		require.NotNil(t, table)
+		for i := range table.Cols {
+			if table.Cols[i].Name == "a" {
+				table.Cols[i].Typ.Id = int32(types.T_char)
+				table.Cols[i].Typ.Width = 4
+			}
+		}
+	}
+
+	logicPlan, err := runOneStmt(mock, t,
+		"insert into constraint_test.t1(a, b) values ('x', 'seed') "+
+			"on duplicate key update a = 'x ', b = values(b)")
+	require.NoError(t, err)
+
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_JOIN || node.JoinType != planpb.Node_DEDUP ||
+			node.OnDuplicateAction != planpb.Node_UPDATE {
+			continue
+		}
+		for i, colIdx := range node.DedupJoinCtx.UpdateColIdxList {
+			if colIdx != 0 {
+				continue
+			}
+			guarded := node.DedupJoinCtx.UpdateColExprList[i]
+			require.Equal(t, int32(types.T_char), guarded.Typ.Id)
+			require.Equal(t, int32(4), guarded.Typ.Width)
+			guard := guarded.GetF()
+			require.NotNil(t, guard)
+			require.Equal(t, "if", guard.Func.ObjName)
+			require.Len(t, guard.Args, 3)
+			nullBranch := guard.Args[2]
+			require.True(t, nullBranch.GetLit().Isnull)
+			require.Equal(t, int32(types.T_char), nullBranch.Typ.Id)
+			require.Equal(t, int32(4), nullBranch.Typ.Width)
+			require.False(t, nullBranch.Typ.NotNullable)
+			return
+		}
+	}
+	t.Fatal("expected a CHAR primary-key identity guard")
+}
+
 func TestInsertOnDupPrimaryKeyPreparedMarkerIsRuntimeGuarded(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t,
@@ -129,6 +177,8 @@ func requireODKUPKIdentityGuard(t *testing.T, logicPlan *planpb.Plan, updateColI
 			require.NotNil(t, assertion)
 			require.Equal(t, "assert", assertion.Func.ObjName)
 			require.Equal(t, "odku_pk_mutation", assertion.Args[2].GetLit().GetSval())
+			require.False(t, planExprContainsFunction(assertion.Args[0], "serial"),
+				"integer primary-key identity should not serialize both values")
 			return
 		}
 	}
@@ -186,12 +236,58 @@ func TestInsertOnDupWrappedIncomingPrimaryKeyStillRejected(t *testing.T) {
 	require.ErrorContains(t, err, "unsupported DML: update primary key on duplicate")
 }
 
-func TestInsertOnDupIncomingPrimaryKeyWithSecondaryUniqueStillRejected(t *testing.T) {
+func TestInsertOnDupPrimaryKeyLiteralIdentityWithSecondaryUniqueIsRuntimeGuarded(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
-	_, err := runOneStmt(mock, t,
+	logicPlan, err := runOneStmt(mock, t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') "+
-			"on duplicate key update deptno = values(deptno), loc = values(loc)")
-	require.ErrorContains(t, err, "unsupported DML: update primary key on duplicate")
+			"on duplicate key update deptno = 1, loc = values(loc)")
+	require.NoError(t, err)
+	requireODKUPKIdentityGuard(t, logicPlan, 0)
+	requireODKUBaseLockUsesResolvedTarget(t, logicPlan, mock.ctxt.tables["dept"])
+}
+
+func TestInsertOnDupPreparedPrimaryKeyIdentityWithSecondaryUniqueIsRuntimeGuarded(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	logicPlan, err := runOneStmt(mock, t,
+		"prepare pk_identity_unique from 'insert into constraint_test.dept(deptno, dname, loc) "+
+			"values (?, ?, ?) on duplicate key update deptno = ?'")
+	require.NoError(t, err)
+	prepare := logicPlan.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	requireODKUPKIdentityGuard(t, prepare.Plan, 0)
+	requireODKUBaseLockUsesResolvedTarget(t, prepare.Plan, mock.ctxt.tables["dept"])
+}
+
+func TestBindPrimaryKeyIdentityExprRetainsFloatBitIdentity(t *testing.T) {
+	typ := planpb.Type{Id: int32(types.T_float64)}
+	expr := &planpb.Expr{
+		Typ: typ,
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Dval{Dval: 1.5},
+		}},
+	}
+	identity, err := bindPrimaryKeyIdentityExpr(nil, expr, typ)
+	require.NoError(t, err)
+	require.True(t, planExprContainsFunction(identity, "serial"))
+}
+
+func planExprContainsFunction(expr *planpb.Expr, name string) bool {
+	if expr == nil {
+		return false
+	}
+	function := expr.GetF()
+	if function == nil {
+		return false
+	}
+	if function.Func.ObjName == name {
+		return true
+	}
+	for _, arg := range function.Args {
+		if planExprContainsFunction(arg, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestIsOnDupIncomingColumn(t *testing.T) {

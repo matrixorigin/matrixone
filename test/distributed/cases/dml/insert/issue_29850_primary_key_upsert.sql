@@ -1,6 +1,5 @@
 -- Regression for direct primary-key assignments emitted by MySQL-style ODKU clients.
--- Only a runtime-equal PK assignment is accepted; actual mutations and ambiguous
--- secondary-UNIQUE arbitration remain unsupported.
+-- Only a runtime-equal PK assignment is accepted; actual mutations remain unsupported.
 
 drop table if exists t_issue_29850_pk;
 create table t_issue_29850_pk (id int primary key, payload varchar(40));
@@ -59,13 +58,21 @@ insert into t_issue_29850_composite values (1, 2, 'would-update')
     on duplicate key update a = 1, b = 3, payload = values(payload);
 select * from t_issue_29850_composite order by a, b;
 
--- A secondary UNIQUE arbiter can select a row with a different primary key;
--- keep the existing static rejection in that ambiguous case.
+-- A secondary UNIQUE arbiter can select a row with a different primary key.
+-- The guard compares against that resolved row: an equal assignment succeeds,
+-- while a different assignment fails atomically. If two constraints target
+-- different rows, PRIMARY wins according to the arbiter's stable order.
 drop table if exists t_issue_29850_secondary;
 create table t_issue_29850_secondary (id int primary key, uk int unique, payload varchar(40));
-insert into t_issue_29850_secondary values (1, 10, 'seed');
-insert into t_issue_29850_secondary values (2, 10, 'ambiguous')
-    on duplicate key update id = values(id), payload = values(payload);
+insert into t_issue_29850_secondary values (1, 10, 'seed'), (2, 20, 'second');
+insert into t_issue_29850_secondary values (3, 10, 'unique-target')
+    on duplicate key update payload = values(payload), id = 1;
+select * from t_issue_29850_secondary order by id;
+insert into t_issue_29850_secondary values (3, 10, 'rollback')
+    on duplicate key update payload = values(payload), id = 3;
+select * from t_issue_29850_secondary order by id;
+insert into t_issue_29850_secondary values (2, 10, 'primary-target')
+    on duplicate key update payload = values(payload), id = 2;
 select * from t_issue_29850_secondary order by id;
 
 -- A guarded PK no-op must not trigger an implicit ON UPDATE timestamp, while
@@ -86,6 +93,36 @@ insert into t_issue_29850_timestamp(id, payload) values (1, 20)
 select payload, updated_at > '2000-01-01 00:00:00' as timestamp_advanced
     from t_issue_29850_timestamp where id = 1;
 
+-- CHAR's trailing-space equality is the primary-key identity too. A guarded
+-- no-op preserves the stored key, payload, and implicit ON UPDATE timestamp.
+drop table if exists t_issue_29850_char;
+create table t_issue_29850_char (
+  id char(4) primary key,
+  payload int,
+  updated_at timestamp default '2000-01-01 00:00:00' on update current_timestamp
+);
+insert into t_issue_29850_char(id, payload) values ('x', 10);
+insert into t_issue_29850_char(id, payload) values ('x', 10)
+    on duplicate key update id = 'x ';
+select hex(cast(id as binary(4))), payload,
+       updated_at = '2000-01-01 00:00:00' as timestamp_unchanged
+    from t_issue_29850_char;
+insert into t_issue_29850_char(id, payload) values ('x', 20)
+    on duplicate key update id = 'x ', payload = values(payload);
+select hex(cast(id as binary(4))), payload,
+       updated_at > '2000-01-01 00:00:00' as timestamp_advanced
+    from t_issue_29850_char;
+
+-- Binary primary-key identity is byte-exact: a different value must fail.
+drop table if exists t_issue_29850_binary;
+create table t_issue_29850_binary (id varbinary(8) primary key, payload varchar(40));
+insert into t_issue_29850_binary values (x'41', 'seed');
+insert into t_issue_29850_binary values (x'41', 'would-change')
+    on duplicate key update id = x'42', payload = values(payload);
+select hex(id), payload from t_issue_29850_binary;
+
+drop table if exists t_issue_29850_binary;
+drop table if exists t_issue_29850_char;
 drop table if exists t_issue_29850_timestamp;
 drop table if exists t_issue_29850_secondary;
 drop table if exists t_issue_29850_composite;

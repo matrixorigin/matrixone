@@ -72,13 +72,26 @@ select * from t_issue_29850_composite order by a, b;
 1  ¦  2  ¦  equal
 drop table if exists t_issue_29850_secondary;
 create table t_issue_29850_secondary (id int primary key, uk int unique, payload varchar(40));
-insert into t_issue_29850_secondary values (1, 10, 'seed');
-insert into t_issue_29850_secondary values (2, 10, 'ambiguous')
-on duplicate key update id = values(id), payload = values(payload);
+insert into t_issue_29850_secondary values (1, 10, 'seed'), (2, 20, 'second');
+insert into t_issue_29850_secondary values (3, 10, 'unique-target')
+on duplicate key update payload = values(payload), id = 1;
+select * from t_issue_29850_secondary order by id;
+➤ id[4,32,0]  ¦  uk[4,32,0]  ¦  payload[12,40,0]  𝄀
+1  ¦  10  ¦  unique-target  𝄀
+2  ¦  20  ¦  second
+insert into t_issue_29850_secondary values (3, 10, 'rollback')
+on duplicate key update payload = values(payload), id = 3;
 unsupported DML: update primary key on duplicate
 select * from t_issue_29850_secondary order by id;
 ➤ id[4,32,0]  ¦  uk[4,32,0]  ¦  payload[12,40,0]  𝄀
-1  ¦  10  ¦  seed
+1  ¦  10  ¦  unique-target  𝄀
+2  ¦  20  ¦  second
+insert into t_issue_29850_secondary values (2, 10, 'primary-target')
+on duplicate key update payload = values(payload), id = 2;
+select * from t_issue_29850_secondary order by id;
+➤ id[4,32,0]  ¦  uk[4,32,0]  ¦  payload[12,40,0]  𝄀
+1  ¦  10  ¦  unique-target  𝄀
+2  ¦  20  ¦  primary-target
 drop table if exists t_issue_29850_timestamp;
 create table t_issue_29850_timestamp (
 id int primary key,
@@ -98,6 +111,38 @@ select payload, updated_at > '2000-01-01 00:00:00' as timestamp_advanced
 from t_issue_29850_timestamp where id = 1;
 ➤ payload[4,32,0]  ¦  timestamp_advanced[-7,1,0]  𝄀
 20  ¦  1
+drop table if exists t_issue_29850_char;
+create table t_issue_29850_char (
+id char(4) primary key,
+payload int,
+updated_at timestamp default '2000-01-01 00:00:00' on update current_timestamp
+);
+insert into t_issue_29850_char(id, payload) values ('x', 10);
+insert into t_issue_29850_char(id, payload) values ('x', 10)
+on duplicate key update id = 'x ';
+select hex(cast(id as binary(4))), payload,
+updated_at = '2000-01-01 00:00:00' as timestamp_unchanged
+from t_issue_29850_char;
+➤ hex(cast(id as binary(4)))[12,8,0]  ¦  payload[4,32,0]  ¦  timestamp_unchanged[-7,1,0]  𝄀
+78000000  ¦  10  ¦  1
+insert into t_issue_29850_char(id, payload) values ('x', 20)
+on duplicate key update id = 'x ', payload = values(payload);
+select hex(cast(id as binary(4))), payload,
+updated_at > '2000-01-01 00:00:00' as timestamp_advanced
+from t_issue_29850_char;
+➤ hex(cast(id as binary(4)))[12,8,0]  ¦  payload[4,32,0]  ¦  timestamp_advanced[-7,1,0]  𝄀
+78000000  ¦  20  ¦  1
+drop table if exists t_issue_29850_binary;
+create table t_issue_29850_binary (id varbinary(8) primary key, payload varchar(40));
+insert into t_issue_29850_binary values (x'41', 'seed');
+insert into t_issue_29850_binary values (x'41', 'would-change')
+on duplicate key update id = x'42', payload = values(payload);
+unsupported DML: update primary key on duplicate
+select hex(id), payload from t_issue_29850_binary;
+➤ hex(id)[12,16,0]  ¦  payload[12,40,0]  𝄀
+41  ¦  seed
+drop table if exists t_issue_29850_binary;
+drop table if exists t_issue_29850_char;
 drop table if exists t_issue_29850_timestamp;
 drop table if exists t_issue_29850_secondary;
 drop table if exists t_issue_29850_composite;
