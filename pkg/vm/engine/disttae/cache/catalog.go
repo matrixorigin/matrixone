@@ -378,6 +378,61 @@ func (cc *CatalogCache) GetTableByIdAndTime(accountID uint32, databaseId, tblId 
 	return rel
 }
 
+// GetTablesByIdAndTime resolves IDs in one traversal of the name-ordered
+// catalog, using the same visibility rules as GetTableByIdAndTime. Results
+// retain the input order and duplicates, with nil for IDs not visible at ts.
+// A zero databaseID searches all databases in the account.
+func (cc *CatalogCache) GetTablesByIdAndTime(accountID uint32, databaseID uint64, ids []uint64, ts timestamp.Timestamp) []*TableItem {
+	if len(ids) == 0 {
+		return nil
+	}
+	if len(ids) == 1 {
+		return []*TableItem{cc.GetTableByIdAndTime(accountID, databaseID, ids[0], ts)}
+	}
+
+	wanted := make(map[uint64]*TableItem, len(ids))
+	for _, id := range ids {
+		wanted[id] = nil
+	}
+	remaining := len(wanted)
+	prevTableName := ""
+	prevDatabaseID := databaseID
+	cc.tables.data.Ascend(&TableItem{AccountId: accountID, DatabaseId: databaseID}, func(item *TableItem) bool {
+		if item.AccountId != accountID {
+			return false
+		}
+		if item.DatabaseId != prevDatabaseID {
+			if databaseID != 0 {
+				return false
+			}
+			prevDatabaseID = item.DatabaseId
+			prevTableName = ""
+		}
+		if item.Ts.Greater(ts) {
+			return true
+		}
+		if item.Name == prevTableName {
+			return true
+		}
+		// A visible deletion or a replacement ID hides every older version
+		// of the same name, including IDs requested by this batch.
+		prevTableName = item.Name
+		if !item.deleted {
+			if found, requested := wanted[item.Id]; requested && found == nil {
+				wanted[item.Id] = item
+				remaining--
+			}
+		}
+		return remaining != 0
+	})
+
+	items := make([]*TableItem, len(ids))
+	for i, id := range ids {
+		items[i] = wanted[id]
+	}
+	return items
+}
+
 // GetTableById scans retained catalog versions. A latest DROP tombstone hides
 // every older incarnation of that name, so historical rows cannot make a
 // dropped or truncated table appear current.
