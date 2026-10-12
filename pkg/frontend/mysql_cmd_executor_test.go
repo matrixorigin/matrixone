@@ -9233,6 +9233,12 @@ func Test_getSqlType(t *testing.T) {
 			want []string
 		}{
 			{"select 1; /* save_result */ select 2", []string{constant.ExternSql, constant.CloudUserSql}},
+			{"SELECT t.begin, t.rank FROM t; /* save_result */ SELECT 2", []string{constant.ExternSql, constant.CloudUserSql}},
+			{"SELECT t.begin, t.rank FROM t; /* cloud_nonuser */ SELECT 2", []string{constant.ExternSql, constant.CloudNoUserSql}},
+			{"SELECT t.`begin`, t.rank FROM t; /* save_result */ SELECT 2", []string{constant.ExternSql, constant.CloudUserSql}},
+			{"SELECT t. /* first */ /* second */ begin, t.rank FROM t; /* save_result */ SELECT 2", []string{constant.ExternSql, constant.CloudUserSql}},
+			{"SELECT t./*! begin */, t.rank FROM t; /* cloud_nonuser */ SELECT 2", []string{constant.ExternSql, constant.CloudNoUserSql}},
+			{"/*! SELECT t.begin, t.rank FROM t; */ /* save_result */ SELECT 2", []string{constant.ExternSql, constant.CloudUserSql}},
 			{"/*\tcloud_user\n*/ select 1; /*\nsave_result\t*/ select 2; /*\tcloud_nonuser\n*/ select 3", []string{constant.CloudUserSql, constant.CloudUserSql, constant.CloudNoUserSql}},
 			{"/* SAVE_RESULT */ select 'cloud_nonuser'; /* ordinary */ select 2", []string{constant.ExternSql, constant.ExternSql}},
 			{"/* benign */; select 1; ; select 2", []string{constant.ExternSql, constant.ExternSql}},
@@ -9286,6 +9292,25 @@ func Test_getSqlType(t *testing.T) {
 				require.Equal(t, []string{constant.InternalSql}, input.sqlSourceType)
 				input.setSqlSourceTypes(ses, []string{constant.CloudUserSql, constant.ExternSql})
 				require.Equal(t, []string{constant.InternalSql, constant.InternalSql}, input.sqlSourceType)
+			})
+		}
+	})
+	t.Run("qualified statement source markers", func(t *testing.T) {
+		for _, tc := range []struct {
+			sql, mode string
+			want      string
+		}{
+			{"SELECT t.begin, t.rank FROM t /* save_result */", "", constant.CloudUserSql},
+			{"SELECT t.begin, t.rank FROM t /* cloud_nonuser */", "", constant.CloudNoUserSql},
+			{"SELECT t. /* first */ -- second\n begin, t.rank FROM t /* save_result */", "", constant.CloudUserSql},
+			{"SELECT t.begin, '/* save_result */' FROM t", "", constant.ExternSql},
+			{`SELECT t.begin, 'x\' FROM t /* save_result */`, "NO_BACKSLASH_ESCAPES", constant.CloudUserSql},
+			{`SELECT t."begin", t.rank FROM t /* save_result */`, "ANSI_QUOTES", constant.CloudUserSql},
+			{"SELECT t.begin, 'unterminated /* save_result */", "", constant.ExternSql},
+			{"SELECT t.😀 FROM t /* save_result */", "", constant.ExternSql},
+		} {
+			t.Run(tc.sql+tc.mode, func(t *testing.T) {
+				require.Equal(t, tc.want, statementSQLSource(tc.sql, tc.mode))
 			})
 		}
 	})
@@ -9968,6 +9993,9 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 		want []string
 	}{
 		{"/* save_result */ select 1; select from", []string{constant.CloudUserSql, constant.ExternSql}},
+		{"SELECT t.begin, t.rank FROM t; /* save_result */ SELECT FROM", []string{constant.ExternSql, constant.CloudUserSql}},
+		{"SELECT t. /* first */ begin, t.rank FROM t; /* cloud_nonuser */ SELECT FROM", []string{constant.ExternSql, constant.CloudNoUserSql}},
+		{"SELECT t.begin, 'unterminated; /* save_result */ SELECT 2", []string{constant.ExternSql}},
 		{"select 1; /* cloud_nonuser */ select '", []string{constant.ExternSql, constant.CloudNoUserSql}},
 		{"select '\\'; /* cloud_nonuser */ select 1", []string{constant.ExternSql}},
 	} {

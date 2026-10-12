@@ -19,5 +19,12 @@ insert into qualified_identifier.select values (1,7,null);
 select t.id,t.begin,t.null from qualified_identifier.select t order by t.id;
 -- Executable-comment rescanning preserves qualified BEGIN and the closing wrapper.
 /*! select t.begin,t.null from qualified_identifier.select t; */;
+-- A source marker after qualified BEGIN must still request result saving.
+set @qualified_identifier_saved_result = @@session.save_query_result;
+set save_query_result = on;
+select t.begin,t.null from qualified_identifier.select t /* save_result */;
+select * from result_scan(last_query_id()) as saved;
+set save_query_result = @qualified_identifier_saved_result;
+set @qualified_identifier_saved_result = null;
 drop database qualified_identifier;
 show databases like 'qualified_identifier';

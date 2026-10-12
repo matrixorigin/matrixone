@@ -30,6 +30,16 @@ select t.id,t.begin,t.null from qualified_identifier.select t order by t.id;
 /*! select t.begin,t.null from qualified_identifier.select t; */;
 ➤ begin[4,32,0]  ¦  null[4,32,0]  𝄀
 7  ¦  null
+set @qualified_identifier_saved_result = @@session.save_query_result;
+set save_query_result = on;
+select t.begin,t.null from qualified_identifier.select t /* save_result */;
+➤ begin[4,32,0]  ¦  null[4,32,0]  𝄀
+7  ¦  null
+select * from result_scan(last_query_id()) as saved;
+➤ begin[4,32,0]  ¦  null[4,32,0]  𝄀
+7  ¦  null
+set save_query_result = @qualified_identifier_saved_result;
+set @qualified_identifier_saved_result = null;
 drop database qualified_identifier;
 show databases like 'qualified_identifier';
 ➤ Database[12,5000,0]

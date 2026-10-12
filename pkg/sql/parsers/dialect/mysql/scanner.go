@@ -130,9 +130,19 @@ func (s *Scanner) Scan() (int, string) { return s.scan(false) }
 // scanAfterDot classifies identifier words before keyword-specific lookahead.
 // Keep this context scoped so standalone scanner consumers retain their rules.
 func (s *Scanner) scanAfterDot() (int, string) {
+	return s.scanQualified(false)
+}
+
+// ScanWithCommentsAfterDot applies qualified-identifier rules while returning
+// ordinary comments. Callers must retain dot context across those comments.
+func (s *Scanner) ScanWithCommentsAfterDot() (int, string) {
+	return s.scanQualified(true)
+}
+
+func (s *Scanner) scanQualified(comments bool) (int, string) {
 	s.identifierAfterDot = true
 	defer func() { s.identifierAfterDot = false }()
-	return s.Scan()
+	return s.scan(comments)
 }
 
 // ScanWithComments retains the authoritative lexer rules while exposing ordinary comments.
