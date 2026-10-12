@@ -668,6 +668,12 @@ func setOperationOutputType(
 ) plan.Type {
 	switch nodeType {
 	case plan.Node_UNION, plan.Node_UNION_ALL:
+		if commonType, ok := function.CommonMediumIntType([]types.Type{
+			{Oid: types.T(leftType.Id), Width: leftType.Width, Scale: leftType.Scale},
+			{Oid: types.T(rightType.Id), Width: rightType.Width, Scale: rightType.Scale},
+		}); ok {
+			leftType.Width = commonType.Width
+		}
 		leftType.NotNullable = leftType.NotNullable && rightType.NotNullable
 	}
 	return leftType
@@ -1167,7 +1173,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		}
 		node.ProjectList = newProjectList
 
-	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN, plan.Node_VECTOR_QUERY_SOURCE:
+	case plan.Node_FUNCTION_SCAN, plan.Node_INDEX_SEARCH_SCAN, plan.Node_VECTOR_QUERY_SOURCE:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -1545,28 +1551,37 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			}
 		}
 
-		if rightNode.NodeType == plan.Node_PROJECT {
-			projectTag := rightNode.BindingTags[0]
-			if pruneOutput {
-				for _, i := range neededProj {
-					increaseRefCnt(&plan.Expr{
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: projectTag,
-								ColPos: int32(i),
-							},
-						}}, 1, colRefCnt)
+		// Set-operation expressions reference the left branch's project tags.
+		// Pin the same ordinal positions on the right branch explicitly, even
+		// when a transparent operator (for example a pushed-down FILTER) sits
+		// between the set operation and its output PROJECT. Otherwise pruning
+		// may keep the right branch's first column in place of a used second one.
+		for outputID := rightID; ; {
+			output := builder.qry.Nodes[outputID]
+			if output.NodeType == plan.Node_PROJECT {
+				projectTag := output.BindingTags[0]
+				if pruneOutput {
+					for _, i := range neededProj {
+						colRefCnt[[2]int32{projectTag, int32(i)}]++
+					}
+				} else {
+					for i := range output.ProjectList {
+						colRefCnt[[2]int32{projectTag, int32(i)}]++
+					}
 				}
-			} else {
-				for i := range rightNode.ProjectList {
-					increaseRefCnt(&plan.Expr{
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: projectTag,
-								ColPos: int32(i),
-							},
-						}}, 1, colRefCnt)
-				}
+				break
+			}
+			if len(output.Children) != 1 {
+				break
+			}
+			switch output.NodeType {
+			case plan.Node_FILTER, plan.Node_ASSERT, plan.Node_SORT, plan.Node_PARTITION:
+				outputID = output.Children[0]
+			default:
+				outputID = -1
+			}
+			if outputID < 0 {
+				break
 			}
 		}
 		leftRemapping, err := builder.remapAllColRefs(leftID, step, colRefCnt, colRefBool, sinkColRef)
@@ -3284,8 +3299,8 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		right := builder.qry.Nodes[node.Children[1]]
 		rightTag := right.BindingTags[0]
 		rightArgs := right.TblFuncExprList
-		if right.NodeType == plan.Node_VECTOR_INDEX_SCAN && right.VectorIndexScan != nil {
-			rightArgs = []*plan.Expr{right.VectorIndexScan.QueryVector, right.VectorIndexScan.CandidateLimit}
+		if right.NodeType == plan.Node_INDEX_SEARCH_SCAN && right.IndexSearchScan != nil {
+			rightArgs = []*plan.Expr{right.IndexSearchScan.QueryPayload, right.IndexSearchScan.CandidateLimit}
 		}
 
 		for _, expr := range rightArgs {
@@ -4338,6 +4353,11 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	var projectTypList [][]types.Type
 	selectStmtLength := len(selectStmts)
 	setProjectionTypes := builder.numericSetProjectionTypes(ctx, selectStmts)
+	for i := range setProjectionTypes {
+		if isEnumPlanType(&setProjectionTypes[i]) {
+			setProjectionTypes[i] = Type{}
+		}
+	}
 	nodes := make([]int32, selectStmtLength)
 	subCtxList := make([]*BindContext, selectStmtLength)
 	var projectLength int
@@ -4556,7 +4576,21 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				}
 			}
 			for idx, tmpID := range nodes {
-				if !argsType[idx].Eq(targetArgType) {
+				needsCast := !argsType[idx].Eq(targetArgType)
+				sameMediumIntStorageWidth := argsType[idx].Oid == targetArgType.Oid &&
+					(argsType[idx].IsMediumInt() || targetArgType.IsMediumInt()) &&
+					argsType[idx].Scale == targetArgType.Scale &&
+					argsType[idx].Width != targetArgType.Width
+				if !needsCast && sameMediumIntStorageWidth {
+					// MEDIUMINT and INT share the same physical int32/uint32
+					// vector. Widen the branch metadata without adding a per-row
+					// conversion or mutating an expression shared by another node.
+					projected := builder.qry.Nodes[tmpID].ProjectList[columnIdx]
+					widened := *projected
+					widened.Typ.Width = targetArgType.Width
+					builder.qry.Nodes[tmpID].ProjectList[columnIdx] = &widened
+				}
+				if needsCast {
 					node := builder.qry.Nodes[tmpID]
 					source := node.ProjectList[columnIdx]
 					if argsType[idx].Oid == types.T_any || setBranchPureNull[idx][columnIdx] {
@@ -5167,7 +5201,7 @@ func (builder *QueryBuilder) numericSetProjectionTypes(ctx *BindContext, stmts [
 	}
 	resolved := append([]Type(nil), ctx.numericProjectionTypes...)
 	for i := 0; i < len(resolved) && i < len(merged); i++ {
-		if resolved[i].Id == 0 || merged[i].incompatible {
+		if !isNumericAssignmentTarget(resolved[i]) || merged[i].incompatible {
 			continue
 		}
 		if typ, ok := numericTypeFromAstScan(merged[i], &resolved[i]); ok {
@@ -6368,7 +6402,7 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 
 	targetPos := 0
 	for _, selectExpr := range clause.Exprs {
-		switch expr := selectExpr.Expr.(type) {
+		switch expr := unwrapParenExpr(selectExpr.Expr).(type) {
 		case tree.UnqualifiedStar:
 			cursor := 0
 			outputs, ok := numericProjectionStarOutputs(clause.From.Tables[0], sources, &cursor)
@@ -6617,7 +6651,7 @@ func numericProjectionExprTarget(
 	expr tree.Expr,
 	outer Type,
 ) (Type, bool) {
-	if outer.Id == 0 {
+	if !isNumericAssignmentTarget(outer) {
 		return Type{}, false
 	}
 	binder := NewProjectionBinder(builder, ctx, nil)
@@ -6826,10 +6860,13 @@ func uniqueNumericStarOutput(outputs []numericProjectionStarOutput, name string)
 }
 
 func sameNumericProjectionTarget(left, right Type) bool {
-	return left.Id == right.Id && left.Width == right.Width && left.Scale == right.Scale
+	return left.Id == right.Id && left.Width == right.Width && left.Scale == right.Scale && left.Enumvalues == right.Enumvalues
 }
 
 func mergeNumericProjectionTargets(left, right Type) (Type, bool) {
+	if !isNumericAssignmentTarget(left) || !isNumericAssignmentTarget(right) {
+		return Type{}, false
+	}
 	resolved, ok := function.InferNumericParameterType(
 		[]types.Type{makeTypeByPlan2Type(left), makeTypeByPlan2Type(right)}, nil,
 	)
@@ -13707,15 +13744,18 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 
 	id := tbl.Id()
 
-	// Plugin-registered table functions (hnsw_create / hnsw_search /
-	// ivf_create / cagra_create / cagra_search /
-	// ivfpq_create / ivfpq_search) live under
-	// pkg/vectorindex/<algo>/plugin/plan/tablefunc.go. The plugin
-	// registers each builder via planplugin.RegisterTableFunc at init
-	// time; this lookup routes the parser-side dispatch through that
-	// registry before the hardcoded switch below.
+	// Index plugins register their table functions (hnsw_create, ivf_create,
+	// cagra_create, ivfpq_create, fulltext2_create, fulltext2_compact,
+	// fulltext_index_tokenize) in <algo>/plugin/plan/tablefunc.go via
+	// planplugin.RegisterTableFunc at init time; this lookup routes the
+	// parser-side dispatch through that registry before the hardcoded switch
+	// below. The input relation's node is planning metadata for the builder.
 	if b, ok := planplugin.TableFunc(id); ok {
-		nodeId, err = b(builder, tbl, ctx, exprs, nil)
+		var inputNode *plan.Node
+		if input != nil && input.nodeID >= 0 && int(input.nodeID) < len(builder.qry.Nodes) {
+			inputNode = builder.qry.Nodes[input.nodeID]
+		}
+		nodeId, err = b(builder, tbl, ctx, exprs, nil, inputNode)
 	} else {
 		switch id {
 		case "json_table":
@@ -13758,14 +13798,6 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildViewColumns(tbl, ctx, exprs, nil)
 		case subscriptionColumnsFunctionName:
 			nodeId, err = builder.buildSubscriptionColumns(tbl, ctx, exprs, nil)
-		case "fulltext_index_scan":
-			nodeId, err = builder.buildFullTextIndexScan(tbl, ctx, exprs, nil)
-		case "fulltext_index_tokenize":
-			inputNodeID := int32(-1)
-			if input != nil {
-				inputNodeID = input.nodeID
-			}
-			nodeId, err = builder.buildFullTextIndexTokenize(tbl, ctx, exprs, nil, inputNodeID)
 		case "stage_list":
 			nodeId, err = builder.buildStageList(tbl, ctx, exprs, nil)
 		case "moplugin_table":
@@ -13888,7 +13920,7 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 
 func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {
 	switch node.NodeType {
-	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
+	case plan.Node_FUNCTION_SCAN, plan.Node_INDEX_SEARCH_SCAN:
 		if onlyContainsTag(expr, node.BindingTags[0]) {
 			return true
 		}

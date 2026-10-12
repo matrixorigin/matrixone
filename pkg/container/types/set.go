@@ -26,6 +26,40 @@ const MaxSetMembers = 64
 
 var setDescriptorCache sync.Map
 
+// EncodeSetValues keeps an empty member distinct from absent SET metadata.
+// The reserved comma cannot encode a valid legacy domain: members cannot
+// contain commas, and two empty members are rejected as duplicates.
+func EncodeSetValues(values []string) (string, error) {
+	values, err := NormalizeSetValues(values)
+	if err != nil {
+		return "", err
+	}
+	if len(values) == 1 && values[0] == "" {
+		return ",", nil
+	}
+	return strings.Join(values, ","), nil
+}
+
+// DecodeSetValues decodes domain metadata, not a SET row's display value.
+func DecodeSetValues(value string) []string {
+	switch value {
+	case "":
+		return nil
+	case ",":
+		return []string{""}
+	default:
+		return strings.Split(value, ",")
+	}
+}
+
+func SetValidBitmap(definition string) (uint64, error) {
+	descriptor, err := getSetDescriptor(definition)
+	if err != nil {
+		return 0, err
+	}
+	return descriptor.validBitmap, nil
+}
+
 func NormalizeSetValues(values []string) ([]string, error) {
 	if len(values) == 0 {
 		return nil, moerr.NewInvalidInputNoCtx("set type length err")
@@ -126,7 +160,7 @@ func buildSetDescriptor(setStr string) (*setDescriptor, error) {
 		return nil, moerr.NewInternalErrorNoCtxf("convert to MySQL set failed: set define is empty %v", setStr)
 	}
 
-	values, err := NormalizeSetValues(strings.Split(setStr, ","))
+	values, err := NormalizeSetValues(DecodeSetValues(setStr))
 	if err != nil {
 		return nil, err
 	}

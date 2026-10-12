@@ -1404,6 +1404,126 @@ func (builder *QueryBuilder) casePreservesType(expr *plan.Expr) bool {
 	return err == nil && caseFn.GetReturnType().Eq(sourceType)
 }
 
+// A total comparison cast does not prove a column's computed origin total.
+// Inspect only referenced origins in the input graph, without expanding or
+// mutating expressions. Unknown producers retain the historical IS TRUE barrier.
+func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*plan.Expr, inputs ...int32) bool {
+	if !areTruncationSafePredicates(predicates) {
+		return false
+	}
+	origins := make(map[int32]*plan.Node)
+	visited := make(map[int32]uint8)
+	var collect func(int32) bool
+	collect = func(id int32) bool {
+		if id < 0 || int(id) >= len(builder.qry.Nodes) || builder.qry.Nodes[id] == nil {
+			return false
+		}
+		if visited[id] != 0 {
+			return visited[id] == 2
+		}
+		visited[id] = 1
+		node := builder.qry.Nodes[id]
+		switch node.NodeType {
+		case plan.Node_PROJECT, plan.Node_TABLE_SCAN:
+			if len(node.BindingTags) != 1 {
+				return false
+			}
+			tag := node.BindingTags[0]
+			if previous := origins[tag]; previous != nil && previous != node {
+				return false
+			}
+			origins[tag] = node
+			if node.NodeType == plan.Node_TABLE_SCAN {
+				if node.TableDef == nil || len(node.Children) != 0 {
+					return false
+				}
+				visited[id] = 2
+				return true
+			}
+			if len(node.Children) != 1 {
+				return false
+			}
+		case plan.Node_FILTER, plan.Node_SORT, plan.Node_DISTINCT, plan.Node_PARTITION:
+			if len(node.Children) != 1 || len(node.BindingTags) != 0 {
+				return false
+			}
+		case plan.Node_JOIN:
+			if len(node.Children) != 2 {
+				return false
+			}
+		default:
+			// Do not certify columns defined by aggregate, window, CTE or
+			// other computed producers merely because their inputs are safe.
+			visited[id] = 2
+			return true
+		}
+		for _, child := range node.Children {
+			if !collect(child) {
+				return false
+			}
+		}
+		visited[id] = 2
+		return true
+	}
+	for _, id := range inputs {
+		if !collect(id) {
+			return false
+		}
+	}
+
+	proved := make(map[[2]int32]uint8)
+	var inspect func(*plan.Expr) bool
+	inspect = func(expr *plan.Expr) bool {
+		if col := expr.GetCol(); col != nil {
+			key := [2]int32{col.RelPos, col.ColPos}
+			if proved[key] != 0 {
+				return proved[key] == 2
+			}
+			proved[key] = 1
+			node := origins[col.RelPos]
+			if node == nil || col.ColPos < 0 {
+				return false
+			}
+			if node.NodeType == plan.Node_TABLE_SCAN {
+				if int(col.ColPos) >= len(node.TableDef.Cols) {
+					return false
+				}
+			} else {
+				if int(col.ColPos) >= len(node.ProjectList) {
+					return false
+				}
+				origin := node.ProjectList[col.ColPos]
+				if !isTruncationSafePredicateValue(origin) || !inspect(origin) {
+					return false
+				}
+			}
+			proved[key] = 2
+			return true
+		}
+		if fn := expr.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				if !inspect(arg) {
+					return false
+				}
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				if !inspect(item) {
+					return false
+				}
+			}
+		}
+		return true // Non-column leaves were checked by the totality gate.
+	}
+	for _, predicate := range predicates {
+		if !inspect(predicate) {
+			return false
+		}
+	}
+	return true
+}
+
 func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan.Expr, outerPred *plan.Expr, negate bool, ctx *BindContext) (nodeID int32, markExpr *plan.Expr, err error) {
 	markTag := builder.genNewBindTag()
 	existential := outerPred == nil
@@ -1416,10 +1536,13 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 	// during hash-key lowering. Keep the historical IS TRUE wrapper unless the
 	// predicate is proven total and side-effect-free.
 	keepRawExistential := existential && !builder.subqueryPredicatePlanningDisabled() &&
-		areTruncationSafePredicates(joinPreds)
+		builder.existentialJoinPredicatesAreTotal(joinPreds, left, right)
 	if !keepRawExistential {
 		for i, pred := range joinPreds {
-			if !pred.Typ.NotNullable {
+			// Non-nullability does not prove that evaluating a key is total.
+			// EXISTS needs this structural barrier whenever its proof fails;
+			// retain historical null normalization for IN/ANY/ALL.
+			if existential || !pred.Typ.NotNullable {
 				joinPreds[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "istrue", []*plan.Expr{pred})
 				if err != nil {
 					return

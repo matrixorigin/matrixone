@@ -3616,7 +3616,77 @@ explain_stmt:
     }
 
 explain_plan_stmt:
-    explain_sym explainable_stmt
+    explain_sym FORMAT '=' explain_format_value explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($5); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.FormatOption, $4),
+        }
+        $$ = tree.MakeExplainStmt($5, options)
+    }
+|   explain_sym FORMAT '=' STRING explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($5); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.FormatOption, $4),
+        }
+        $$ = tree.MakeExplainStmt($5, options)
+    }
+|   explain_sym ANALYZE FORMAT '=' explain_format_value explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($6); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
+            tree.MakeOptionElem(tree.FormatOption, $5),
+        }
+        $$ = tree.MakeExplainStmt($6, options)
+    }
+|   explain_sym ANALYZE FORMAT '=' STRING explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($6); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
+            tree.MakeOptionElem(tree.FormatOption, $5),
+        }
+        $$ = tree.MakeExplainStmt($6, options)
+    }
+|   explain_sym PHYPLAN FORMAT '=' explain_format_value explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($6); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
+            tree.MakeOptionElem(tree.FormatOption, $5),
+        }
+        $$ = tree.MakeExplainStmt($6, options)
+    }
+|   explain_sym PHYPLAN FORMAT '=' STRING explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($6); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
+            tree.MakeOptionElem(tree.FormatOption, $5),
+        }
+        $$ = tree.MakeExplainStmt($6, options)
+    }
+|   explain_sym explainable_stmt
     {
         if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
             yylex.Error(intoErr)
@@ -5182,6 +5252,10 @@ show_grants_stmt:
 |   SHOW GRANTS FOR user_name using_roles_opt
     {
         $$ = &tree.ShowGrants{Username: $4.Username, Hostname: $4.Hostname, Roles: $5, ShowGrantType: tree.GrantForUser}
+    }
+|   SHOW GRANTS FOR CURRENT_USER braces_opt using_roles_opt
+    {
+        $$ = &tree.ShowGrants{CurrentUser: true, Roles: $6, ShowGrantType: tree.GrantForUser}
     }
 |   SHOW GRANTS FOR ROLE ident
     {

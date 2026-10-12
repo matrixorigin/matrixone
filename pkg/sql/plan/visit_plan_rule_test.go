@@ -422,7 +422,7 @@ func TestPrepareRulesTraverseEveryWindowSpecParameter(t *testing.T) {
 	})
 }
 
-func TestPrepareRulesTraverseVectorIndexScanExpressions(t *testing.T) {
+func TestPrepareRulesTraverseIndexSearchScanExpressions(t *testing.T) {
 	param := func(pos int32) *planpb.Expr {
 		return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
 	}
@@ -430,13 +430,14 @@ func TestPrepareRulesTraverseVectorIndexScanExpressions(t *testing.T) {
 		Steps: []int32{0},
 		Nodes: []*planpb.Node{{
 			NodeId:   0,
-			NodeType: planpb.Node_VECTOR_INDEX_SCAN,
-			VectorIndexScan: &planpb.VectorIndexScan{
-				QueryVector:     param(4),
-				CandidateLimit:  param(3),
-				FirstRoundLimit: param(0),
-				PreFilters:      []*planpb.Expr{param(2)},
-				DistanceRange:   &planpb.DistRange{LowerBound: param(1)},
+			NodeType: planpb.Node_INDEX_SEARCH_SCAN,
+			IndexSearchScan: &planpb.IndexSearchScan{
+				QueryPayload:   param(4),
+				CandidateLimit: param(3),
+				AlgoExprs:      []*planpb.Expr{param(0)},
+				AlgoExprNames:  []string{"first_round_limit"},
+				PreFilters:     []*planpb.Expr{param(2)},
+				DistanceRange:  &planpb.DistRange{LowerBound: param(1)},
 			},
 		}},
 	}}}
@@ -3577,6 +3578,20 @@ func TestPreparedNumericCommonType(t *testing.T) {
 		wantScale int32
 		wantOK    bool
 	}{
+		{
+			name: "decimal128 carrier survives same exact domain",
+			operands: []types.Type{
+				types.New(types.T_decimal128, 18, 2), types.New(types.T_decimal64, 5, 0),
+			},
+			wantOID: types.T_decimal128, wantWidth: 18, wantScale: 2, wantOK: true,
+		},
+		{
+			name: "decimal256 carrier survives small declared precision",
+			operands: []types.Type{
+				types.New(types.T_decimal64, 3, 2), types.New(types.T_decimal256, 6, 1),
+			},
+			wantOID: types.T_decimal256, wantWidth: 7, wantScale: 2, wantOK: true,
+		},
 		{
 			name: "uint64 keeps full integral capacity",
 			operands: []types.Type{

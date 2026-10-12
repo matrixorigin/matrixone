@@ -229,6 +229,13 @@ func (c *Compile) Compile(
 	if materialization.query != nil {
 		defer materialization.restore()
 	}
+	restorePreparedLimit, limitErr := c.materializePreparedLimitZero(queryPlan)
+	if limitErr != nil {
+		return limitErr
+	}
+	if restorePreparedLimit != nil {
+		defer restorePreparedLimit()
+	}
 	if offloaded, offloadErr := c.tryCompileSiriusRead(execTopContext, queryPlan); offloadErr != nil {
 		return offloadErr
 	} else if offloaded {
@@ -360,12 +367,8 @@ func nodeContainsUnresolvedFullText(node *plan.Node) bool {
 			return true
 		}
 	}
-	if scan := node.VectorIndexScan; scan != nil {
-		if expressionsContainUnresolvedFullText(scan.PreFilters) ||
-			expressionsContainUnresolvedFullText([]*plan.Expr{
-				scan.QueryVector, scan.CandidateLimit, scan.FirstRoundLimit,
-				scan.DistanceRange.GetLowerBound(), scan.DistanceRange.GetUpperBound(),
-			}) {
+	if scan := node.IndexSearchScan; scan != nil {
+		if expressionsContainUnresolvedFullText(plan2.IndexSearchScanExprs(scan)) {
 			return true
 		}
 	}

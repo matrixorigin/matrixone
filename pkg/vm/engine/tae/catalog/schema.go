@@ -795,11 +795,12 @@ func (s *Schema) AppendSortColWithAttribute(attr engine.Attribute, sorIdx int, i
 
 func colDefFromPlan(col *plan.ColDef, idx int, seqnum uint16) *ColDef {
 	newcol := &ColDef{
-		Name:   col.GetOriginCaseName(),
-		Idx:    idx,
-		SeqNum: seqnum,
-		Type:   vector.ProtoTypeToType(col.Typ),
-		Hidden: col.Hidden,
+		Name:       col.GetOriginCaseName(),
+		Idx:        idx,
+		SeqNum:     seqnum,
+		Type:       vector.ProtoTypeToType(col.Typ),
+		EnumValues: col.Typ.Enumvalues,
+		Hidden:     col.Hidden,
 		// PhyAddr false
 		// Null  later
 		AutoIncrement: col.Typ.AutoIncr,

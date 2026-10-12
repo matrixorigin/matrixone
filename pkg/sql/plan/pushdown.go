@@ -1026,7 +1026,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 			}
 		}
-	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
+	case plan.Node_FUNCTION_SCAN, plan.Node_INDEX_SEARCH_SCAN:
 		downFilters := make([]*plan.Expr, 0)
 		selfFilters := make([]*plan.Expr, 0)
 		for _, filter := range filters {
