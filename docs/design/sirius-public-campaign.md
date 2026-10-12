@@ -343,6 +343,43 @@ of 5%. Generate captures outside Git and preserve their actual source/binary/SDK
 identities. E and numeric execution changes remain separate; no sidecar repository
 retirement is required.
 
+The merged-source release capture uses MO `81db83e921` on base `080365f013`,
+Sirius `b953bb5a` and guarded SDK
+`4f2235b64347a2642dbad1328de2f031cfbfc401ce114ed55bafcb0e68802ee6`.
+All 744 timing/correctness executions and the separate 264 resource executions
+pass, with six zero-growth SF1/SF10 stream 1/2/4 allocation profiles. A fresh
+744-execution old-native campaign uses the same MO base and semantic inputs.
+
+| GPU median full suite | Old pin `955b6881` | Merged pin `b953bb5a` |
+| --- | ---: | ---: |
+| SF1 | 4.216747 s | 2.537705 s |
+| SF10 | 49.884309 s | 28.475628 s |
+
+Median suites and sums of query medians pass the 5% regression limit. Q1 medians
+fall from 0.876390 to 0.230886 seconds at SF1 and from 9.446339 to 2.359481 seconds
+at SF10; median input units fall from 670 to 12 and 7,258 to 117. GPU full-suite
+execution remains slower than native MO on this RTX 3070.
+
+Final validation closes all ten lifecycle cases, fresh production numeric ABI
+and 96 MiB result ownership checks, public runner/compiler normal and race
+cleanup checks, and actual GPU data/cancellation plus cuVS/Sirius coexistence.
+Native control normal/ASan+UBSan+LSan/TSan runs pass 91 cases/750 assertions;
+their actual `585536bf` execution revision is retained and qualified by complete
+native-tree equality with merged `b953bb5a`. Fresh GPU memory checking passes
+30 cases/34,509 assertions. Four raw sanitizer statuses remain 99, reconciled
+only against the exact Native A CUB and no-GPU-work cuDF pinned-pool controls
+and all six current steady profiles. Fresh matched numeric cases each retain
+21 samples; the maximum ratio is 1.021216 against the 1.1 limit.
+
+Linked native test builds refreshed a receipt-covered static archive. The real
+SDK target and guarded consumer build regenerate validation SDK `f65b21f4`,
+with identical native source, compilers and explicit link arguments. Reports
+retain this actual consumer execution context separately from the preserved
+measured service/runtime bundle and SDK `4f2235b6`; no capture is relabeled.
+The artifact acceptance command reports local completion, with required CI and
+reviewer approval remaining. Generated captures and raw repetitions stay outside
+Git; the original D archive below retains its original measurements.
+
 ## Release validation record
 
 The generated development and release captures are preserved in contributor-fork
