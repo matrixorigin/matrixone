@@ -1132,6 +1132,36 @@ func TestBooleanPhraseDecomposesLikeIndex29271(t *testing.T) {
 	}
 }
 
+// #29896: a lone double quote satisfied both HasPrefix and HasSuffix, so the phrase
+// branch sliced pattern[1:len-1] == pattern[1:0] and panicked with slice bounds out
+// of range. A single `"` is not a phrase (no closing quote); it must be handled as an
+// ordinary boolean token. This covers every path: the classic plan/exec parser and
+// the fulltext2 front-end, which both funnel through ParsePattern/PatternToString.
+func TestBooleanSingleQuoteNoPanic29896(t *testing.T) {
+	require.NotPanics(t, func() { _, _ = ParsePatternInBooleanMode(`"`, "") })
+	require.NotPanics(t, func() { _, _ = PatternToString(`"`, int64(tree.FULLTEXT_BOOLEAN)) })
+
+	// a lone quote is an ordinary one-rune text token, not a phrase
+	ps, err := ParsePatternInBooleanMode(`"`, "")
+	require.NoError(t, err)
+	require.Len(t, ps, 1)
+	require.Equal(t, TEXT, ps[0].Operator)
+	require.Equal(t, `"`, ps[0].Text)
+
+	// a genuine but empty phrase is still a controlled error, never a panic
+	for _, p := range []string{`""`, `"  "`} {
+		_, err := ParsePatternInBooleanMode(p, "")
+		require.Error(t, err, p)
+		require.Contains(t, err.Error(), "phrase is empty string", p)
+	}
+
+	// a well-formed phrase still parses
+	ps, err = ParsePatternInBooleanMode(`"ok"`, "")
+	require.NoError(t, err)
+	require.Len(t, ps, 1)
+	require.Equal(t, PHRASE, ps[0].Operator)
+}
+
 // A phrase whose body tokenizes to nothing (only breakers/punctuation) is rejected rather than
 // looked up as the raw string, matching natural-language mode on the same input (#29271).
 func TestBooleanPhraseRejectsEmptyTokenization29271(t *testing.T) {
