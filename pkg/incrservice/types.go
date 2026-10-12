@@ -233,15 +233,18 @@ type AutoColumn struct {
 
 // ValidateAutoColumnOffset rejects allocator offsets that cannot be represented
 // by the destination AUTO_INCREMENT column type.
-func ValidateAutoColumnOffset(ctx context.Context, typ types.T, offset uint64) error {
+func ValidateAutoColumnOffset(ctx context.Context, typ types.Type, offset uint64) error {
 	var limit uint64
-	switch typ {
+	switch typ.Oid {
 	case types.T_uint8:
 		limit = math.MaxUint8
 	case types.T_uint16:
 		limit = math.MaxUint16
 	case types.T_uint32:
 		limit = math.MaxUint32
+		if typ.IsMediumInt() {
+			limit = 1<<24 - 1
+		}
 	case types.T_uint64:
 		return nil
 	case types.T_int8:
@@ -250,6 +253,9 @@ func ValidateAutoColumnOffset(ctx context.Context, typ types.T, offset uint64) e
 		limit = math.MaxInt16
 	case types.T_int32:
 		limit = math.MaxInt32
+		if typ.IsMediumInt() {
+			limit = 1<<23 - 1
+		}
 	case types.T_int64:
 		limit = math.MaxInt64
 	default:
@@ -260,7 +266,7 @@ func ValidateAutoColumnOffset(ctx context.Context, typ types.T, offset uint64) e
 	}
 	return moerr.NewOutOfRangef(
 		ctx,
-		typ.ToType().String(),
+		typ.String(),
 		"AUTO_INCREMENT value %d",
 		offset,
 	)

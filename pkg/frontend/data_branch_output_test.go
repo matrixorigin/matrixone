@@ -2672,6 +2672,10 @@ func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
 		require.Equal(t, []string{"payload"}, staged)
 		require.Equal(t, []string{"value"}, special)
 
+		emptyEnumTable, emptyEnumDef := newSpecialTable(types.T_enum.ToType(), "")
+		staged, special = dataBranchStagedUpdateColumnNames(emptyEnumTable, emptyEnumDef, emptyEnumTable.def.writableIdxes)
+		require.Equal(t, []string{"payload"}, staged)
+		require.Equal(t, []string{"value"}, special)
 		geometryTable, geometryDef := newSpecialTable(types.T_geometry32.ToType(), "")
 		staged, special = dataBranchStagedUpdateColumnNames(geometryTable, geometryDef, geometryTable.def.writableIdxes)
 		require.Equal(t, []string{"payload"}, staged)
