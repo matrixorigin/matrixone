@@ -226,18 +226,28 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag in
 }
 
 func getJoinSideWithOuterScope(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag int32) (side int8) {
+	if expr == nil {
+		return JoinSideOuter
+	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
+		if exprImpl.F == nil || exprImpl.F.Func == nil {
+			return JoinSideOuter
+		}
 		for _, arg := range exprImpl.F.Args {
 			side |= getJoinSideWithOuterScope(arg, leftTags, rightTags, markTag)
 		}
-
 	case *plan.Expr_List:
+		if exprImpl.List == nil {
+			return JoinSideOuter
+		}
 		for _, arg := range exprImpl.List.List {
 			side |= getJoinSideWithOuterScope(arg, leftTags, rightTags, markTag)
 		}
-
 	case *plan.Expr_Col:
+		if exprImpl.Col == nil {
+			return JoinSideOuter
+		}
 		tag := exprImpl.Col.RelPos
 		if leftTags[tag] {
 			side = JoinSideLeft
@@ -248,11 +258,14 @@ func getJoinSideWithOuterScope(expr *plan.Expr, leftTags, rightTags map[int32]bo
 		} else {
 			side = JoinSideOuter
 		}
-
 	case *plan.Expr_Corr:
 		side = JoinSideCorrelated
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T, *plan.Expr_Vec, *plan.Expr_Fold:
+		// Literal.Src records provenance, not an executable column dependency.
+	default:
+		// Unbound or non-scalar forms cannot prove single-input evaluation.
+		side = JoinSideOuter
 	}
-
 	return
 }
 

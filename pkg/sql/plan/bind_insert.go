@@ -2783,7 +2783,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			// selected by the primary-key arbiter, so retain the assignment in
 			// order and validate it against the old row at execution time.
 			if slices.Contains(tableDef.Pkey.Names, colDef.Name) {
-				if firstUniqueIdxPos < 0 && isDirectODKUPKIdentityValue(astExpr) {
+				if isDirectODKUPKIdentityValue(astExpr) {
 					if _, unproven := unprovenPrimaryKeyCols[colDef.Name]; !unproven {
 						oldPrimaryKey := &plan.Expr{
 							Typ: colDef.Typ,
@@ -2792,7 +2792,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 								ColPos: int32(colIdx),
 							}},
 						}
-						updateExpr, err = buildODKUPKIdentityGuard(builder.GetContext(), oldPrimaryKey, updateExpr)
+						updateExpr, err = buildODKUPKIdentityGuard(builder, oldPrimaryKey, updateExpr)
 						if err != nil {
 							return 0, err
 						}
@@ -4479,20 +4479,21 @@ func isDirectODKUPKIdentityValue(expr tree.Expr) bool {
 	}
 }
 
-func buildODKUPKIdentityGuard(ctx context.Context, oldPrimaryKey, candidate *plan.Expr) (*plan.Expr, error) {
-	candidateSerial, err := BindFuncExprImplByPlanExpr(ctx, "serial", []*plan.Expr{candidate})
+func buildODKUPKIdentityGuard(builder *QueryBuilder, oldPrimaryKey, candidate *plan.Expr) (*plan.Expr, error) {
+	identityType := oldPrimaryKey.Typ
+	oldIdentity, err := bindPrimaryKeyIdentityExpr(builder, oldPrimaryKey, identityType)
 	if err != nil {
 		return nil, err
 	}
-	oldSerial, err := BindFuncExprImplByPlanExpr(ctx, "serial", []*plan.Expr{oldPrimaryKey})
+	candidateIdentity, err := bindPrimaryKeyIdentityExpr(builder, candidate, identityType)
 	if err != nil {
 		return nil, err
 	}
-	samePrimaryKey, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{candidateSerial, oldSerial})
+	samePrimaryKey, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{candidateIdentity, oldIdentity})
 	if err != nil {
 		return nil, err
 	}
-	assertSamePrimaryKey, err := BindFuncExprImplByPlanExpr(ctx, "assert", []*plan.Expr{
+	assertSamePrimaryKey, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*plan.Expr{
 		samePrimaryKey,
 		makePlan2StringConstExprWithType("update primary key on duplicate"),
 		makePlan2StringConstExprWithType("odku_pk_mutation"),
@@ -4500,14 +4501,30 @@ func buildODKUPKIdentityGuard(ctx context.Context, oldPrimaryKey, candidate *pla
 	if err != nil {
 		return nil, err
 	}
-	// Return the original key on success. The unreachable typed-NULL branch
-	// keeps the assertion observable to expression simplification and makes a
-	// NULL comparison fail closed in assert before it can become an assignment.
-	return BindFuncExprImplByPlanExpr(ctx, "if", []*plan.Expr{
+	// Return the original key on success. Keep the unreachable NULL branch at
+	// the key's exact type: an ANY NULL would promote CHAR keys to VARCHAR in IF,
+	// which makes an unchanged key look like a changed ODKU value and can fire
+	// implicit ON UPDATE columns. NULL comparisons fail closed in assert before
+	// this branch can become an assignment.
+	nullPrimaryKey := makePlan2NullConstExprWithType()
+	nullPrimaryKey.Typ = oldPrimaryKey.Typ
+	nullPrimaryKey.Typ.NotNullable = false
+	guard, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{
 		assertSamePrimaryKey,
 		DeepCopyExpr(oldPrimaryKey),
-		makePlan2NullConstExprWithType(),
+		nullPrimaryKey,
 	})
+	if err != nil {
+		return nil, err
+	}
+	// A successful assert can only return true; false or NULL comparisons fail
+	// before the IF can select its NULL branch. The old value is a primary key,
+	// so every successful evaluation returns a non-NULL value. Keep the NULL
+	// branch nullable and exactly typed above to preserve CHAR key semantics,
+	// while exposing the guard's successful-result nullability to later ODKU
+	// constraint planning.
+	guard.Typ.NotNullable = true
+	return guard, nil
 }
 
 // getInsertColsFromStmt retrieves the list of column names to be inserted into a table
