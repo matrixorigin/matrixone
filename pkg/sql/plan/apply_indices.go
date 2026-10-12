@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
-	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -353,6 +352,9 @@ func (builder *QueryBuilder) collectSpecialIndexGuards(nodeID int32) {
 		if scanIDs := builder.detectVectorGuard(node); len(scanIDs) > 0 {
 			builder.registerProjectGuard(node.NodeId, specialIndexKindVector, scanIDs)
 		}
+		if scanIDs := builder.detectEquiVectorJoinGuard(node); len(scanIDs) > 0 {
+			builder.registerProjectGuard(node.NodeId, specialIndexKindVector, scanIDs)
+		}
 	}
 
 	for _, childID := range node.Children {
@@ -644,6 +646,10 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 	}
 END_FULLTEXT:
 
+	if rewritten, applied, err := builder.applyVectorIndexForEquiJoin(nodeID); applied || err != nil {
+		return rewritten, err
+	}
+
 	// 1. Vector Index Check
 	// Handle Queries like
 	// SELECT id,embedding FROM tbl ORDER BY l2_distance(embedding, "[1,2,3]") LIMIT 10;
@@ -652,60 +658,9 @@ END_FULLTEXT:
 		vecCtx = builder.buildVectorSortContextThroughJoin(projNode)
 	}
 	if vecCtx != nil {
-		multiTableIndexes, err := builder.collectVectorIndexes(vecCtx.scanNode)
-		if err != nil {
-			return nodeID, err
+		if rewritten, applied, err := builder.applyVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap); applied || err != nil {
+			return rewritten, err
 		}
-		if len(multiTableIndexes) == 0 {
-			return nodeID, nil
-		}
-		// Preserve the dependency closure before a plugin is allowed to rewrite
-		// away the owning TABLE_SCAN. The final plan shape cannot be used as the
-		// source of truth after an index-only rewrite.
-		if err := builder.recordPreparedPluginDependencies(vecCtx.scanNode); err != nil {
-			return nodeID, err
-		}
-
-		var multiTableIndexKeys []string
-		for key := range multiTableIndexes {
-			multiTableIndexKeys = append(multiTableIndexKeys, key)
-		}
-
-		// Plugin-mediated dispatch — every plugin-registered vector
-		// index exposes Hooks.ApplyForSort, which routes back into the
-		// builder's per-algo redirect (plugin_builder.go) and then into
-		// the real body in apply_indices_<algo>.go. The pluginless
-		// hardcoded switch was the bug surface that let CAGRA / IVF-PQ
-		// drift behind HNSW / IVF-FLAT; one loop here keeps the algo
-		// set canonical.
-		opts := planplugin.ApplyForSortOpts{ColRefCnt: colRefCnt, IdxColMap: idxColMap}
-		for _, multiTableIndexKey := range multiTableIndexKeys {
-			multiTableIndex := multiTableIndexes[multiTableIndexKey]
-			// Defence in depth: collectVectorIndexes already filters
-			// via IsVectorIndexAlgo, but the dispatch site re-checks so
-			// a future change that loosens collectVectorIndexes can't
-			// silently route fulltext (or any other non-vector
-			// plugin-registered algo) through the vector ANN rewrite
-			// path. indexplugin.Get alone is not sufficient — fulltext
-			// is plugin-registered too.
-			if !indexplugin.IsVectorIndexAlgo(multiTableIndex.IndexAlgo) ||
-				!vectorIndexSupportsContext(vecCtx, multiTableIndex.IndexAlgo) {
-				continue
-			}
-			p, ok := indexplugin.Get(multiTableIndex.IndexAlgo)
-			if !ok {
-				continue
-			}
-			vctxExt, mtiExt := toPlanplugin(vecCtx, multiTableIndex)
-			newNodeID, applied, err := p.Plan().ApplyForSort(builder, vctxExt, mtiExt, nodeID, opts)
-			if err != nil {
-				return newNodeID, err
-			}
-			if applied {
-				return newNodeID, nil
-			}
-		}
-
 		builder.stabilizeExactVectorSort(vecCtx)
 	}
 	// 2. Regular Index Check

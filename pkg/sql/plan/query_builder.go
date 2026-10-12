@@ -6632,6 +6632,9 @@ func (builder *QueryBuilder) bindSelectClause(
 	boundHavingList []*plan.Expr,
 	err error,
 ) {
+	if clause.Option&tree.QuerySpecOptionSqlCalcFoundRows != 0 {
+		builder.sqlCalcFoundRows = true
+	}
 	if ctx.bindingRecurStmt() && clause.Distinct {
 		err = moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
 		return

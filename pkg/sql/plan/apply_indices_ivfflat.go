@@ -1307,6 +1307,11 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	}
 
 	newFilterList, distRange := builder.getDistRangeFromFilters(scanNode.FilterList, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
+	// 4.2 的 ivf_search 不消费 IndexReaderParam.DistRange；资格域必须
+	// 保留原谓词，不能只留下尚无执行语义的计划注解。
+	if vecCtx.hasMembership && distRange != nil {
+		newFilterList = scanNode.FilterList
+	}
 	includeColumns, err := getVectorIndexIncludedColumns(multiTableIndex)
 	if err != nil {
 		return 0, err
@@ -1568,7 +1573,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			partPos := ivfCtx.partPos
 			var cleanedFilters []*plan.Expr
 			for _, expr := range secondScanNode.FilterList {
-				if refsColumn(expr, newTag, partPos) {
+				if !vecCtx.hasMembership && refsColumn(expr, newTag, partPos) {
 					continue
 				}
 				cleanedFilters = append(cleanedFilters, expr)
