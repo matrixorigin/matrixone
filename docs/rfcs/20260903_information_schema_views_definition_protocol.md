@@ -1,10 +1,37 @@
-- Status: proposed — implementation complete; pending independent approval
+- Status: proposed — independent architectural assessment recorded; allocation corrected; pending approval of the corrected revision
 - Start Date: 2026-09-03
 - Authors: MatrixOne maintainers
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/27716
 - Issue for this RFC: https://github.com/matrixorigin/matrixone/issues/27655
 
 # Parser-derived `information_schema.VIEWS` definitions
+
+## Independent design assessment and revision
+
+[Independent review 5495923812](https://github.com/matrixorigin/matrixone/pull/27716#pullrequestreview-5495923812)
+assessed this RFC at implementation revision
+`5db81447b4afffea9a3a1cbfec528fb1cca901d1` on 2026-10-12. Its decision was
+REQUEST_CHANGES for the function IDs newly occupied by official main; it found
+the ownership model and architectural tradeoffs otherwise acceptable. The
+accepted decisions include CREATE/ALTER ownership of frozen metadata,
+side-effect-free parser fallback, transaction-owned bounded reconciliation,
+the historical raw-wildcard limitation, separate parsing for both legacy
+metadata columns, serial maintenance ordering, and forward-only recovery after
+the monotonic protocol floor.
+
+Revision `3ba7fee3155d332f94ddedb83a9883faa5e7d5ab` reconciles the allocation with
+official main `fa7cc1d9b38e3324572a4efc5617033522de0cbf`: FORMAT_BYTES and
+FORMAT_PICO_TIME retain 596/597, VIEWS uses 598/599, and MORPC remains 112 above
+main's 111. Registry, shared raw-ID detection, FORMAT negative controls, and
+the persisted/Prepare/send/receive tests passed together on this combined tree.
+The remaining non-blocking duplicate persisted-expression walk is removed by
+consuming the existing `ViewMetadataFunctions` result; the persisted marker and
+read/authoring admission remain separate consumers of that shared detection.
+
+This records the independent assessment and its concrete correction. It does
+not turn the REQUEST_CHANGES decision on the earlier revision into a blanket
+approval of the corrected implementation. Approval of that revision remains an
+external review state.
 
 ## Summary
 
@@ -159,6 +186,8 @@ NotSupported error rather than returning wrong metadata.
 The sender detects both VIEWS function identities in its existing
 `RequiredRemoteExpressionFeatures` walk. That feature feeds the shared placement,
 local/receiver, and destination gates; it does not add another pipeline traversal.
+Persisted-expression admission consumes the same feature result to record v112,
+without another expression traversal or a separate copy of the function IDs.
 The owner walker skips scalar containers, including `MembershipFilter`,
 `LiteralVec.Data`, and `FoldVal.Data`. Ordinary pipelines therefore add only a
 constant-time feature check and no destination RPC. A pipeline with VIEWS
@@ -180,6 +209,8 @@ probe and the all-CN capability fence.
 Generated ViewData tests cover both function IDs, nested detection, the
 authoring/read floor values 0, v104, v105, v106, v108, v109, v110, and v111, and binding the exact generated
 metadata at the immediate predecessor and current protocol.
+Real CREATE VIEW controls using FORMAT_BYTES and FORMAT_PICO_TIME succeed with
+the VIEWS authoring floor closed and persist no protocol marker.
 System-view tests prove mixed, unknown, and RPC-failing CN capability probes
 fall back to the predecessor VIEWS DDL, while an all-v112 inventory uses the
 parser-derived DDL. Tenant initialization keeps the final account version but
@@ -260,5 +291,6 @@ unchanged by this compatibility-check optimization.
 
 ## Unresolved questions
 
-None. This RFC is proposed pending independent design approval; it documents
-the delivery contract and does not self-approve the design.
+None. The independent architectural assessment and allocation correction are
+recorded above. This RFC remains proposed pending approval of the corrected
+revision; it does not self-approve the implementation.
