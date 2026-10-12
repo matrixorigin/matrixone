@@ -84,6 +84,7 @@ func TestPreparedDecimalComparisonPruning(t *testing.T) {
 				{"unsigned integer", "c=?", "16001", types.T_uint64, true},
 				{"wide unsigned integer", "c=?", "18446744073709551615", types.T_uint64, false},
 				{"varchar control", "c=?", "16001", types.T_varchar, true},
+				{"text prefix exact", "c=?", "16001", types.T_text, true},
 				{"double control", "c=?", "16001", types.T_float64, true},
 			} {
 				if decimal.Oid == types.T_decimal256 && !tc.binding.IsInteger() {
@@ -107,7 +108,7 @@ func TestPreparedDecimalComparisonPruning(t *testing.T) {
 					defer stmt.Free()
 					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
 						[]PreparedSourceBinding{{Position: 0, Type: tc.binding.ToType()}},
-						[]any{ParamValue{Value: tc.value, IsBinaryProtocol: true}})
+						[]any{ParamValue{Value: tc.value, IsBinaryProtocol: true, EnableNumericPrefix: tc.binding == types.T_text}})
 					require.NoError(t, err)
 					if tc.binding.IsInteger() && tc.native {
 						require.False(t, bound.ValueDependent, "safe plans reuse the existing per-execution conversion guard")
