@@ -12614,7 +12614,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				return 0, "", err
 			}
 			if err = ValidateMaterializedViewSources(builder.compCtx, tableDef); err != nil {
-				return 0, err
+				return 0, "", err
 			}
 
 			// Both frontend and internal compiler contexts must identify Views.
@@ -12651,7 +12651,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			return 0, "", err
 		}
 		if err = ValidateMaterializedViewSources(builder.compCtx, tableDef); err != nil {
-			return 0, err
+			return 0, "", err
 		}
 
 		// Empty-result rewrites can remove scans, not semantic dependencies.
