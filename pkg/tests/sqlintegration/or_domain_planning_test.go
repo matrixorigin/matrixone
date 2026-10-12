@@ -55,6 +55,9 @@ func orPlanningPredicate(n int, shape string) string {
 }
 
 func TestLargeORPlanningSemantics(t *testing.T) {
+	// A successful predecessor may retain the shared fixture's cluster admission.
+	require.NoError(t, embed.CloseSingleCNBaseClusterTests())
+
 	// Own a disposable cluster. TCP-only startup keeps long, mandated disk
 	// TMPDIR paths from exceeding AF_UNIX's limit without altering shared fixtures.
 	cluster, err := embed.StartTestCluster(embed.WithCNCount(1), embed.WithPreStart(func(op embed.ServiceOperator) {
