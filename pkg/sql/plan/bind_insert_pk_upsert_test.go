@@ -80,7 +80,7 @@ func TestInsertOnDupIncomingPrimaryKeyNoop(t *testing.T) {
 }
 
 func TestInsertOnDupCarriesAutoIncrementResultProvenance(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	table := mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "t1")]
 	require.NotNil(t, table)
 	require.NotEmpty(t, table.Cols)

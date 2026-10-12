@@ -386,6 +386,7 @@ const (
 // the shared INT32 storage type as a full-width INT rather than a 24-bit value.
 type RemoteExpressionFeatures struct {
 	SessionLastInsertIDBaseline     bool
+	ODKUStatementResult             bool
 	JSONMinMaxTypedComparison       bool
 	JSONStringConsumerOverload      bool
 	JSONScalarLiteralContracts      bool
@@ -422,7 +423,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.SessionLastInsertIDBaseline || features.JSONMinMaxTypedComparison || features.JSONStringConsumerOverload || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.ODKUStatementResult || features.SessionLastInsertIDBaseline || features.JSONMinMaxTypedComparison || features.JSONStringConsumerOverload || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -1115,6 +1116,19 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			return nil
 		})
+	}, func(owner any) {
+		// The same owner walk sees lowered protobuf tracking metadata even
+		// when there are no session-function expressions. Getter interfaces
+		// avoid coupling plan to pipeline, which already imports plan.
+		switch metadata := owner.(type) {
+		case interface{ GetTrackOdkuResult() bool }:
+			features.ODKUStatementResult = features.ODKUStatementResult || metadata.GetTrackOdkuResult()
+		case interface{ GetOdkuResultTracking() bool }:
+			features.ODKUStatementResult = features.ODKUStatementResult || metadata.GetOdkuResultTracking()
+		case *DedupJoinCtx:
+			features.ODKUStatementResult = features.ODKUStatementResult ||
+				(metadata.OdkuOrdinalCol != nil && metadata.OdkuGeneratedCol != nil)
+		}
 	})
 	return
 }
@@ -1594,7 +1608,7 @@ func validateStringLiteralFormsInOwner(owner any) error {
 	})
 }
 
-func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
+func walkExpressionsInOwner(owner any, visitor func(*Expr) error, metadataVisitors ...func(any)) error {
 	seen := make(map[uintptr]struct{})
 	var walk func(reflect.Value) error
 	walk = func(value reflect.Value) error {
@@ -1619,6 +1633,9 @@ func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 				return nil
 			}
 			seen[pointer] = struct{}{}
+			for _, observe := range metadataVisitors {
+				observe(value.Interface())
+			}
 			return walk(value.Elem())
 		}
 		switch value.Kind() {
