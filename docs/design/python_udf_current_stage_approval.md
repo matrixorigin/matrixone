@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r7-2026-10-12`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r8-2026-10-12`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -134,3 +134,17 @@ type boundary. It preserves the existing opt-in, unisolated test/development
 scope and catalog repair contract.
 Independent Architecture and SQL/Planner approval remains pending. Neither this
 mechanical rebase nor its validation grants approval or extends production scope.
+
+## r8 rebase maintenance addendum (2026-10-12)
+
+Official main is now b09f2c6fc54eb159f549f69db2636fd5fb6e5125. Its MORPC
+latest remains 110, so Python capability 111 and immediate predecessor 110
+remain unchanged. The published catalog 4.0.14 handler and separate 4.0.15
+Python revision repair retain the r7 contract, including signed/unsigned
+MEDIUMINT rejection before descriptor normalization. This rebase incorporates
+upstream decimal-tail validation, the lock-timeout compatibility alias, and
+batched catalog ID lookup for table statistics without adding Python ABI or
+rollout scope. The immutable r7 maintenance record above remains historical;
+this addendum records the new implementation baseline only. Independent
+Architecture and SQL/Planner approval remains pending, and validation does not
+supply that approval.
