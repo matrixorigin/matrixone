@@ -110,7 +110,11 @@ create table t1(a bigint, b float, c double, d double, e varchar(1000));
 #insert into t1 values(21474836471, 12412490231412.124124124124, 124141231249124124.1241241243124123, 12421512141241241241241241849912840129402.1241124124241241, space(1000));
 insert into t1 select 21474836471, 12412490231412.124124124124, 124141231249124124.1241241243124123, 12421512141241241241241241849912840129402.1241124124241241, space(1000);
 insert into t1 select 21474836471, 12412490231412.124124124124, 124141231249124124.1241241243124123, 12421512141241241241241241849912840129402.1241124124241241, space(1000);
+SET @sum_empty_prefix_saved_mode_28487 = @@sql_mode;
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_empty_prefix_saved_mode_28487, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 select sum(a), sum(b),sum(c),sum(d),sum(e) from t1;
+SET @@sql_mode = @sum_empty_prefix_saved_mode_28487;
+SET @sum_empty_prefix_saved_mode_28487 = NULL;
 select sum(a), sum(b),sum(c),sum(d) from t1;
 drop table t1;
 

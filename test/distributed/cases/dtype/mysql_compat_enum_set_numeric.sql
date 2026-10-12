@@ -117,7 +117,11 @@ create table special_numeric_text as select cast(e as char) as e, cast(s as char
 select column_name, data_type from information_schema.columns
 where table_schema = database() and table_name = 'special_numeric_text' order by ordinal_position;
 select concat('[', e, ']') as e, concat('[', s, ']') as s from special_numeric_text order by e, s;
+SET @enum_text_prefix_saved_mode_28487 = @@sql_mode;
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@enum_text_prefix_saved_mode_28487, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 select sum(s) from special_numeric_text;
+SET @@sql_mode = @enum_text_prefix_saved_mode_28487;
+SET @enum_text_prefix_saved_mode_28487 = NULL;
 drop table special_numeric_text;
 drop view special_numeric_view;
 insert ignore into special_numeric_empty values (4, 0, null);
