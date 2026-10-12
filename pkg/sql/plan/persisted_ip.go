@@ -139,7 +139,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion101)
 	}
 	if features.LowPrecisionFloatIntegerArguments {
-		requiredVersion = defines.MORPCVersion111
+		requiredVersion = defines.MORPCVersion112
 	}
 	return requiredVersion, nil
 }

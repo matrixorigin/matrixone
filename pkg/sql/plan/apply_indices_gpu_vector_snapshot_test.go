@@ -26,8 +26,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ScanSnapshot propagation from the base scan into the ivfpq_search / cagra_search
-// FUNCTION_SCAN nodes (#27927).
+// ScanSnapshot propagation from the base scan into the ivfpq / cagra
+// INDEX_SEARCH_SCAN nodes (#27927).
 
 // gpuVectorSnapshotFixture builds the scan/sort/project shape both applyIndicesForSortUsing*
 // entry points expect. snapshot is attached to the base scan node.
@@ -115,16 +115,17 @@ func gpuVectorSnapshotMTI(algo, metaType, storageType string) *MultiTableIndex {
 	}
 }
 
-// findVectorSearchTVF walks PROJECT -> SORT -> JOIN(SCAN, FUNCTION_SCAN).
-func findVectorSearchTVF(t *testing.T, builder *QueryBuilder, vecCtx *vectorSortContext) *plan.Node {
+// findGpuIndexSearchScan walks PROJECT -> SORT -> JOIN(SCAN, INDEX_SEARCH_SCAN).
+func findGpuIndexSearchScan(t *testing.T, builder *QueryBuilder, vecCtx *vectorSortContext) *plan.Node {
 	t.Helper()
 	sort := builder.qry.Nodes[vecCtx.projNode.Children[0]]
 	require.Equal(t, plan.Node_SORT, sort.NodeType)
 	join := builder.qry.Nodes[sort.Children[0]]
 	require.Equal(t, plan.Node_JOIN, join.NodeType)
-	tvf := builder.qry.Nodes[join.Children[1]]
-	require.Equal(t, plan.Node_FUNCTION_SCAN, tvf.NodeType)
-	return tvf
+	node := builder.qry.Nodes[join.Children[1]]
+	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, node.NodeType)
+	require.NotNil(t, node.IndexSearchScan)
+	return node
 }
 
 func gpuVectorTestSnapshot() *plan.Snapshot {
@@ -133,7 +134,7 @@ func gpuVectorTestSnapshot() *plan.Snapshot {
 	}
 }
 
-// The ivfpq_search TVF node carries a deep copy of the base scan's snapshot.
+// The ivfpq search node carries a deep copy of the base scan's snapshot.
 func TestApplyIndicesForSortUsingIvfpq_PropagatesScanSnapshot(t *testing.T) {
 	snapshot := gpuVectorTestSnapshot()
 	builder, scanNodeID, vecCtx := gpuVectorSnapshotFixture(
@@ -144,17 +145,19 @@ func TestApplyIndicesForSortUsingIvfpq_PropagatesScanSnapshot(t *testing.T) {
 			catalog.Ivfpq_TblType_Metadata, catalog.Ivfpq_TblType_Storage), nil)
 	require.NoError(t, err)
 
-	tvf := findVectorSearchTVF(t, builder, vecCtx)
-	require.NotNil(t, tvf.ScanSnapshot, "ivfpq_search TVF must carry the base scan's snapshot")
-	require.NotNil(t, tvf.ScanSnapshot.TS)
-	assert.Equal(t, snapshot.TS.PhysicalTime, tvf.ScanSnapshot.TS.PhysicalTime)
-	assert.Equal(t, snapshot.TS.LogicalTime, tvf.ScanSnapshot.TS.LogicalTime)
-	assert.NotSame(t, snapshot, tvf.ScanSnapshot, "must be a deep copy, not the scan node's own Snapshot")
-	assert.NotSame(t, snapshot.TS, tvf.ScanSnapshot.TS, "the TS must be deep-copied too")
+	node := findGpuIndexSearchScan(t, builder, vecCtx)
+	for _, got := range []*plan.Snapshot{node.ScanSnapshot, node.IndexSearchScan.ScanSnapshot} {
+		require.NotNil(t, got)
+		require.NotNil(t, got.TS)
+		assert.Equal(t, snapshot.TS.PhysicalTime, got.TS.PhysicalTime)
+		assert.Equal(t, snapshot.TS.LogicalTime, got.TS.LogicalTime)
+		assert.NotSame(t, snapshot, got)
+		assert.NotSame(t, snapshot.TS, got.TS)
+	}
 }
 
-// No snapshot on the base scan leaves the TVF node's ScanSnapshot nil.
-func TestApplyIndicesForSortUsingIvfpq_NoSnapshotLeavesTVFUnsnapshotted(t *testing.T) {
+// No snapshot on the base scan leaves the search node's ScanSnapshot nil.
+func TestApplyIndicesForSortUsingIvfpq_NoSnapshotLeavesSearchUnsnapshotted(t *testing.T) {
 	builder, scanNodeID, vecCtx := gpuVectorSnapshotFixture(
 		t, "ivfpq_threads_search", "ivfpq_batch_window", nil)
 
@@ -163,10 +166,12 @@ func TestApplyIndicesForSortUsingIvfpq_NoSnapshotLeavesTVFUnsnapshotted(t *testi
 			catalog.Ivfpq_TblType_Metadata, catalog.Ivfpq_TblType_Storage), nil)
 	require.NoError(t, err)
 
-	assert.Nil(t, findVectorSearchTVF(t, builder, vecCtx).ScanSnapshot)
+	node := findGpuIndexSearchScan(t, builder, vecCtx)
+	assert.Nil(t, node.ScanSnapshot)
+	assert.Nil(t, node.IndexSearchScan.ScanSnapshot)
 }
 
-// The cagra_search TVF node carries a deep copy of the base scan's snapshot.
+// The cagra search node carries a deep copy of the base scan's snapshot.
 func TestApplyIndicesForSortUsingCagra_PropagatesScanSnapshot(t *testing.T) {
 	snapshot := gpuVectorTestSnapshot()
 	builder, scanNodeID, vecCtx := gpuVectorSnapshotFixture(
@@ -177,17 +182,19 @@ func TestApplyIndicesForSortUsingCagra_PropagatesScanSnapshot(t *testing.T) {
 			catalog.Cagra_TblType_Metadata, catalog.Cagra_TblType_Storage), nil)
 	require.NoError(t, err)
 
-	tvf := findVectorSearchTVF(t, builder, vecCtx)
-	require.NotNil(t, tvf.ScanSnapshot, "cagra_search TVF must carry the base scan's snapshot")
-	require.NotNil(t, tvf.ScanSnapshot.TS)
-	assert.Equal(t, snapshot.TS.PhysicalTime, tvf.ScanSnapshot.TS.PhysicalTime)
-	assert.Equal(t, snapshot.TS.LogicalTime, tvf.ScanSnapshot.TS.LogicalTime)
-	assert.NotSame(t, snapshot, tvf.ScanSnapshot, "must be a deep copy, not the scan node's own Snapshot")
-	assert.NotSame(t, snapshot.TS, tvf.ScanSnapshot.TS, "the TS must be deep-copied too")
+	node := findGpuIndexSearchScan(t, builder, vecCtx)
+	for _, got := range []*plan.Snapshot{node.ScanSnapshot, node.IndexSearchScan.ScanSnapshot} {
+		require.NotNil(t, got)
+		require.NotNil(t, got.TS)
+		assert.Equal(t, snapshot.TS.PhysicalTime, got.TS.PhysicalTime)
+		assert.Equal(t, snapshot.TS.LogicalTime, got.TS.LogicalTime)
+		assert.NotSame(t, snapshot, got)
+		assert.NotSame(t, snapshot.TS, got.TS)
+	}
 }
 
-// No snapshot on the base scan leaves the TVF node's ScanSnapshot nil.
-func TestApplyIndicesForSortUsingCagra_NoSnapshotLeavesTVFUnsnapshotted(t *testing.T) {
+// No snapshot on the base scan leaves the search node's ScanSnapshot nil.
+func TestApplyIndicesForSortUsingCagra_NoSnapshotLeavesSearchUnsnapshotted(t *testing.T) {
 	builder, scanNodeID, vecCtx := gpuVectorSnapshotFixture(
 		t, "cagra_threads_search", "cagra_batch_window", nil)
 
@@ -196,5 +203,7 @@ func TestApplyIndicesForSortUsingCagra_NoSnapshotLeavesTVFUnsnapshotted(t *testi
 			catalog.Cagra_TblType_Metadata, catalog.Cagra_TblType_Storage), nil)
 	require.NoError(t, err)
 
-	assert.Nil(t, findVectorSearchTVF(t, builder, vecCtx).ScanSnapshot)
+	node := findGpuIndexSearchScan(t, builder, vecCtx)
+	assert.Nil(t, node.ScanSnapshot)
+	assert.Nil(t, node.IndexSearchScan.ScanSnapshot)
 }

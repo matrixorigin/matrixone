@@ -30,7 +30,7 @@ func RequiredIVFPlacement(q *plan.Query) (vectorID, membershipID int32, localSca
 	}
 	hasRequired := false
 	for _, n := range q.Nodes {
-		if n.GetNodeType() != plan.Node_VECTOR_INDEX_SCAN {
+		if n.GetNodeType() != plan.Node_INDEX_SEARCH_SCAN {
 			continue
 		}
 		for _, rf := range n.RuntimeFilterProbeList {
@@ -81,11 +81,11 @@ func RequiredIVFPlacement(q *plan.Query) (vectorID, membershipID int32, localSca
 	}
 	vectorID = member.Children[0]
 	v := nodes[vectorID]
-	if v == nil || v.NodeType != plan.Node_VECTOR_INDEX_SCAN || len(v.Children) != 0 || v.VectorIndexScan == nil {
+	if v == nil || v.NodeType != plan.Node_INDEX_SEARCH_SCAN || len(v.Children) != 0 || v.IndexSearchScan == nil {
 		return
 	}
-	spec := v.VectorIndexScan
-	if len(spec.Index.GetParts()) != 1 || spec.QueryVector == nil || !rule.IsConstant(spec.QueryVector, true) || spec.Index == nil || !catalog.IsIvfIndexAlgo(spec.Index.IndexAlgo) || spec.SourceTable == nil || spec.SourceTableDef == nil || spec.FirstRoundLimit != nil || spec.BucketExpandStep != 0 ||
+	spec := v.IndexSearchScan
+	if len(spec.Index.GetParts()) != 1 || spec.QueryPayload == nil || !rule.IsConstant(spec.QueryPayload, true) || spec.Index == nil || !catalog.IsIvfIndexAlgo(spec.Index.IndexAlgo) || spec.SourceTable == nil || spec.SourceTableDef == nil || !indexSearchScanCanParallelize(spec) ||
 		spec.ScanWork == nil || spec.ScanWork.Objects < 2 || !positiveScanWork(spec.ScanWork.Rows) || !positiveScanWork(spec.ScanWork.VectorBytesPerRow) || spec.ScanWork.Blocks <= 0 {
 		return
 	}
@@ -119,13 +119,13 @@ func RequiredIVFPlacement(q *plan.Query) (vectorID, membershipID int32, localSca
 			if col == nil || expr.Typ.Id != pkType {
 				continue
 			}
-			if n.NodeType == plan.Node_TABLE_SCAN || n.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+			if n.NodeType == plan.Node_TABLE_SCAN || n.NodeType == plan.Node_INDEX_SEARCH_SCAN {
 				if col.RelPos != 0 || col.ColPos < 0 || int(col.ColPos) >= len(n.GetTableDef().GetCols()) {
 					continue
 				}
 				name := n.TableDef.Cols[col.ColPos].Name
 				expected := pk.PkeyColName
-				if n.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+				if n.NodeType == plan.Node_INDEX_SEARCH_SCAN {
 					expected = "pkid"
 				} else if n.IndexScanInfo.IsIndexScan {
 					expected = catalog.IndexTablePrimaryColName
@@ -161,7 +161,7 @@ func RequiredIVFPlacement(q *plan.Query) (vectorID, membershipID int32, localSca
 	}
 	builders, consumers := 0, 0
 	for _, n := range nodes {
-		if n != v && n.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+		if n != v && n.NodeType == plan.Node_INDEX_SEARCH_SCAN {
 			return
 		}
 		for _, rf := range n.RuntimeFilterBuildList {

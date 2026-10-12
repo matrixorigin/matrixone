@@ -384,7 +384,7 @@ const (
 // decode JSON-typed Sval literals as VARCHAR rather than encoded JSON.
 // MediumIntAssignmentBounds requires MORPC v110 because older executors treat
 // the shared INT32 storage type as a full-width INT rather than a 24-bit value.
-// LowPrecisionFloatIntegerArguments requires MORPC v111 because older executors reject
+// LowPrecisionFloatIntegerArguments requires MORPC v112 because older executors reject
 // bf16/float16/float8/float4 sources of private CAST 5..8.
 type RemoteExpressionFeatures struct {
 	LowPrecisionFloatIntegerArguments bool

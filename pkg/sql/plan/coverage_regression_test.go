@@ -59,8 +59,8 @@ func TestApplyIndicesForSortUsingIvfflat_PostModeOffsetCompensationUsesCompensat
 	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
-	require.Equal(t, uint64(3), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
-	require.True(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
+	require.Equal(t, uint64(3), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.True(t, tableFuncNode.IndexSearchScan.GetPostFilterOverFetch())
 }
 
 func TestApplyIndicesForSortUsingIvfflat_DistancePredicateOwnership(t *testing.T) {
@@ -136,9 +136,9 @@ func TestApplyIndicesForSortUsingIvfflat_DistancePredicateOwnership(t *testing.T
 
 			tableFuncNode := findIvfTableFunctionNode(builder, vecCtx.projNode.Children[0])
 			require.NotNil(t, tableFuncNode)
-			require.Equal(t, uint64(3), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
-			require.NotNil(t, tableFuncNode.VectorIndexScan.GetDistanceRange().GetUpperBound())
-			require.False(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
+			require.Equal(t, uint64(3), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
+			require.NotNil(t, tableFuncNode.IndexSearchScan.GetDistanceRange().GetUpperBound())
+			require.False(t, tableFuncNode.IndexSearchScan.GetPostFilterOverFetch())
 			require.Empty(t, scanNode.FilterList)
 		})
 	}
