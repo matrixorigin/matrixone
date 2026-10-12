@@ -107,6 +107,16 @@ select a.id,b.id from nearest a join nearest b on a.id=b.id order by a.id;
 ➤ id[12,-1,0]  ¦  id[12,-1,0]  𝄀
 a  ¦  a  𝄀
 b  ¦  b
+with a as (select concat(id,'') as id from items where id>'a' order by l2_distance(v,(select v from query_vectors where id='q')) limit 2),
+b as (select concat(id,'') as id from items where id<'c' order by l2_distance(v,(select v from query_vectors where id='missing')) limit 2)
+select a.id,b.id from a join b on a.id=b.id order by a.id;
+➤ id[12,-1,0]  ¦  id[12,-1,0]  𝄀
+b  ¦  b
+with a as (select concat(id,'') as id from items where id>'a' order by l2_distance(v,(select v from query_vectors where id='q')) limit 2 by rank with option 'mode=force'),
+b as (select concat(id,'') as id from items where id<'c' order by l2_distance(v,(select v from query_vectors where id='missing')) limit 2 by rank with option 'mode=force')
+select a.id,b.id from a join b on a.id=b.id order by a.id;
+➤ id[12,-1,0]  ¦  id[12,-1,0]  𝄀
+b  ¦  b
 prepare p from 'select id from items where id=''a'' order by l2_distance(v,(select v from query_vectors where id=?)) limit ?';
 set @id='q';
 set @k=0;
@@ -210,6 +220,16 @@ b as (select concat(id,'') as id from items order by l2_distance(v,(select v fro
 select a.id,b.id from a join b on a.id=b.id order by a.id;
 ➤ id[12,-1,0]  ¦  id[12,-1,0]  𝄀
 1  ¦  1  𝄀
+2  ¦  2
+with a as (select concat(id,'') as id from items where id>1 order by l2_distance(v,(select v from query_vectors where id=1)) limit 2),
+b as (select concat(id,'') as id from items where id<3 order by l2_distance(v,(select v from query_vectors where id=2)) limit 2)
+select a.id,b.id from a join b on a.id=b.id order by a.id;
+➤ id[12,-1,0]  ¦  id[12,-1,0]  𝄀
+2  ¦  2
+with a as (select concat(id,'') as id from items where id>1 order by l2_distance(v,(select v from query_vectors where id=1)) limit 2 by rank with option 'mode=force'),
+b as (select concat(id,'') as id from items where id<3 order by l2_distance(v,(select v from query_vectors where id=2)) limit 2 by rank with option 'mode=force')
+select a.id,b.id from a join b on a.id=b.id order by a.id;
+➤ id[12,-1,0]  ¦  id[12,-1,0]  𝄀
 2  ¦  2
 prepare p from 'select id from items order by l2_distance(v,(select v from query_vectors where id=?)) limit ?';
 set @id=1;

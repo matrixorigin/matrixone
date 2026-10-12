@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -336,6 +337,9 @@ type Compile struct {
 	lockMeta   *LockMeta
 	lockTables map[uint64]*plan.LockTarget
 
+	// 惰性 datasource 初始化可与其它 scope 的 Fold 注册/求值并行。
+	// 同时保护 registry 和 executor 可变状态，不能只锁 selector 的启动。
+	filterExprMu   sync.Mutex
 	filterExprExes []colexec.ExpressionExecutor
 
 	// compiledRightSingleNodes records semantic right-SINGLE nodes actually

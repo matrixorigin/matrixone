@@ -1004,11 +1004,11 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeFilters []receivedRuntim
 			if plan2.HasFoldValExpr(e) {
 				return nil, moerr.NewInternalErrorNoCtx("remote block filter contains a sender-owned Fold value")
 			}
-			if _, err := plan2.ReplaceFoldExpr(s.Proc, e, &c.filterExprExes); err != nil {
+			if err := c.replaceFoldExpr(s.Proc, e); err != nil {
 				return nil, err
 			}
 		}
-		err := plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
+		err := c.evalFoldExpr(s.Proc, e)
 		if err != nil {
 			return nil, err
 		}

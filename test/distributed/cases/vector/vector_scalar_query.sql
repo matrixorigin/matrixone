@@ -32,6 +32,13 @@ b as (select concat(id,'') as id from items order by l2_distance(v,(select v fro
 select a.id,b.id from a join b on a.id=b.id order by a.id;
 with nearest as (select id from items order by l2_distance(v,(select v from query_vectors where id='q')) limit 2)
 select a.id,b.id from nearest a join nearest b on a.id=b.id order by a.id;
+-- 并发 selector 使用不同 Fold 值；ANN 与空 provider fallback 都保留各自过滤器。
+with a as (select concat(id,'') as id from items where id>'a' order by l2_distance(v,(select v from query_vectors where id='q')) limit 2),
+b as (select concat(id,'') as id from items where id<'c' order by l2_distance(v,(select v from query_vectors where id='missing')) limit 2)
+select a.id,b.id from a join b on a.id=b.id order by a.id;
+with a as (select concat(id,'') as id from items where id>'a' order by l2_distance(v,(select v from query_vectors where id='q')) limit 2 by rank with option 'mode=force'),
+b as (select concat(id,'') as id from items where id<'c' order by l2_distance(v,(select v from query_vectors where id='missing')) limit 2 by rank with option 'mode=force')
+select a.id,b.id from a join b on a.id=b.id order by a.id;
 prepare p from 'select id from items where id=''a'' order by l2_distance(v,(select v from query_vectors where id=?)) limit ?';
 set @id='q';
 set @k=0;
@@ -79,6 +86,13 @@ select * from (select id from items order by l2_distance(v,(select v from query_
 select * from (select id from items order by l2_distance(v,(select v from query_vectors where id=1)) limit 2) t limit 5 offset 1;
 with a as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors where id=1)) limit 2),
 b as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors where id=1)) limit 2)
+select a.id,b.id from a join b on a.id=b.id order by a.id;
+-- 两个 HNSW selector 的 provider、数据过滤条件不同，Fold ID 不得相互覆盖。
+with a as (select concat(id,'') as id from items where id>1 order by l2_distance(v,(select v from query_vectors where id=1)) limit 2),
+b as (select concat(id,'') as id from items where id<3 order by l2_distance(v,(select v from query_vectors where id=2)) limit 2)
+select a.id,b.id from a join b on a.id=b.id order by a.id;
+with a as (select concat(id,'') as id from items where id>1 order by l2_distance(v,(select v from query_vectors where id=1)) limit 2 by rank with option 'mode=force'),
+b as (select concat(id,'') as id from items where id<3 order by l2_distance(v,(select v from query_vectors where id=2)) limit 2 by rank with option 'mode=force')
 select a.id,b.id from a join b on a.id=b.id order by a.id;
 prepare p from 'select id from items order by l2_distance(v,(select v from query_vectors where id=?)) limit ?';
 set @id=1;

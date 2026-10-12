@@ -188,7 +188,7 @@ func (c *Compile) Release() {
 	doCompileRelease(c)
 }
 
-func (c Compile) TypeName() string {
+func (c *Compile) TypeName() string {
 	return "compile.Compile"
 }
 
@@ -244,9 +244,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		}
 	}
 
-	for _, e := range c.filterExprExes {
-		e.ResetForNextQuery()
-	}
+	c.resetFilterExprExecutors()
 
 	c.MessageBoard = c.MessageBoard.Reset()
 	proc.SetMessageBoard(c.MessageBoard)
@@ -356,10 +354,7 @@ func (c *Compile) clear() {
 	c.disableLock = false
 	c.icebergScanPlanner = nil
 
-	for _, exe := range c.filterExprExes {
-		exe.Free()
-	}
-	c.filterExprExes = nil
+	c.freeFilterExprExecutors()
 
 	for k := range c.lockTables {
 		delete(c.lockTables, k)
@@ -4021,14 +4016,14 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	if len(node.FilterList) != len(s.DataSource.FilterList) {
 		s.DataSource.FilterList = plan2.DeepCopyExprList(node.FilterList)
 		for _, e := range s.DataSource.FilterList {
-			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
+			err := c.replaceFoldExpr(c.proc, e)
 			if err != nil {
 				return err
 			}
 		}
 	}
 	for _, e := range s.DataSource.FilterList {
-		err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
+		err = c.evalFoldExpr(c.proc, e)
 		if err != nil {
 			return err
 		}
@@ -4038,7 +4033,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	if len(node.BlockFilterList) != len(s.DataSource.BlockFilterList) {
 		s.DataSource.BlockFilterList = plan2.DeepCopyExprList(node.BlockFilterList)
 		for _, e := range s.DataSource.BlockFilterList {
-			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
+			err := c.replaceFoldExpr(c.proc, e)
 			if err != nil {
 				return err
 			}

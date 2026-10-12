@@ -198,10 +198,26 @@ func TestScalarVectorGuardDoesNotMutateProvider(t *testing.T) {
 }
 
 func TestScalarVectorJoinConsumers(t *testing.T) {
-	q := scalarVectorPlanFixture(t, `with a as (select concat(id,'') as id from scalar_items order by l2_distance(v,(select v from scalar_provider where id='ref')) limit 2),
- b as (select concat(id,'') as id from scalar_items order by l2_distance(v,(select v from scalar_provider where id='ref')) limit 2)
- select a.id,b.id from a join b on a.id=b.id order by a.id`, false)
-	selectors := scalarVectorSelectors(q)
-	require.Len(t, selectors, 2)
-	require.NotEqual(t, selectors[0].VectorQuerySourceId, selectors[1].VectorQuerySourceId)
+	for _, hnsw := range []bool{false, true} {
+		for _, filtered := range []bool{false, true} {
+			t.Run(fmt.Sprintf("hnsw=%t/filtered=%t", hnsw, filtered), func(t *testing.T) {
+				keyA, keyB, filterA, filterB := "'ref'", "'ref'", "", ""
+				if hnsw {
+					keyA, keyB = "1", "2"
+				}
+				if filtered {
+					filterA, filterB, keyB = "where id>'a'", "where id<'c'", "'missing'"
+					if hnsw {
+						filterA, filterB, keyB = "where id>1", "where id<3", "2"
+					}
+				}
+				q := scalarVectorPlanFixture(t, fmt.Sprintf(`with a as (select concat(id,'') as id from scalar_items %s order by l2_distance(v,(select v from scalar_provider where id=%s)) limit 2),
+ b as (select concat(id,'') as id from scalar_items %s order by l2_distance(v,(select v from scalar_provider where id=%s)) limit 2)
+ select a.id,b.id from a join b on a.id=b.id order by a.id`, filterA, keyA, filterB, keyB), hnsw)
+				selectors := scalarVectorSelectors(q)
+				require.Len(t, selectors, 2)
+				require.NotEqual(t, selectors[0].VectorQuerySourceId, selectors[1].VectorQuerySourceId)
+			})
+		}
+	}
 }

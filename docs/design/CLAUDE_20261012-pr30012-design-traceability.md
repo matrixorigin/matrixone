@@ -106,4 +106,29 @@ provider 的 EOF 只是输入消费结束。selector 随后等待 `done[0]`，�
 
 对上述实现仍有效的既有证据（按相关输入未变复用，并非所有命令都在同一提交重复执行）：六个 owning 包正常测试及 vet、聚焦生命周期 race 连跑三次、compile/merge/vectorquery/materialized 四包完整 race 一次、新 BVT 两 CN 各 92/92；与 #30013 组合验证各 440/440。组合 merge 已撤销，不包含在任一独立 PR 中。覆盖率为修改生产行相交语句块 458/543（84.35%），不是包总覆盖率。
 
-本轮只发布文档和更新 PR 链接，不修改 Go/protobuf/测试/构建输入；逐文件确认这些输入与上面实现提交一致后复用既有证据，不把文档发布描述为新一轮运行或新的设计批准。
+以上描述的是首次设计材料发布：`b75a76eda3` 只发布文档和更新 PR 链接，没有修改 Go/protobuf/测试/构建输入；当时逐文件确认运行输入不变后复用证据。后续代码修复和新验证如下，不把历史证据冒称为在新修订上重跑。
+
+## 6. Review 修复：多个 selector 的 Fold 共享状态（2026-10-12/13）
+
+ONECN 只约束执行位置，不会串行化本 CN 的 selector。两个 `InitAllDataSource(c)` 可同时通过 ReplaceFoldExpr 分配 Fold ID、追加 `Compile.filterExprExes`；正在运行的 scope 同时通过 `handleRuntimeFilters` 求值该表，远端 scope 还会注册 Fold。修复前的回归已复现读写/写写 race，并发现应为 **11** 的 Fold 值读成 **23**。
+
+修正归属遗漏：由 Compile 的统一互斥边界保护注册、ID 发布、求值及 executor 可变状态，覆盖 Reset/Free。所有生产入口统一使用 [Fold 封装](../../pkg/sql/compile/fold_expr.go)，不再直接访问 registry；表达式仍归各 scope，executor 仍归 Compile。TypeName 改为指针接收者，避免复制 mutex。
+
+- 不采用每个 selector 的独立锁，也不只锁两个启动入口，否则漏掉运行中的普通/远端消费者。
+- 只锁 Fold 操作，不跨 datasource relation 获取、runtime-filter 消息等待、分支提交或 join；不提前初始化或求值未选分支。
+- **Q1**：不新建第二套 executor 所有者；已注册项仍由 Compile Reset/Free，Free 清空 registry。
+- **Q2**：error/panic 经 defer 释放锁。Reset/Free 仍必须在旧 scope 全部 join 后执行，新锁不允许执行中跨代重置。
+- **Q3**：仅新增一个 Compile mutex，无新队列、worker 或缓存；本地 datasource 复用已注册 Fold ID。
+
+验证基于 `b75a76eda3` 加本节所述修复，Go 1.26.4、仓库 CGo wrapper，完整退出状态均已核对：
+
+| 契约 | 新验证 |
+| --- | --- |
+| 两个惰性初始化与既有本地读者/远端注册互不污染 | `TestVectorQueryConcurrentDataSourceFolds`：启动屏障，Fold ID/值、raw plan 不变、Reset 复用与 mpool 回落；修复前 race 失败，修复后 race 单次及精确 `-count=100` 通过 |
+| 错误与 panic 解锁 | `TestCompileFoldLockTerminalPaths`：Replace/Eval 四种终态；race 单次及精确 `-count=100` 通过 |
+| 多代 Reset、一次释放及清空后的重复清理 | `TestCompileFoldExecutorLifecycle` |
+| 公共查询确有两个独立 selector | `TestScalarVectorJoinConsumers`：IVF/HNSW × 有/无不同过滤条件 |
+| SQL 值不会串用，原路径兼容 | scalar BVT 各 **96/96**，原 IVF membership/mode/mode_advanced/retry 各 **275/275**；同一个双 CN 实例从两个入口分别运行，总计每入口 **371/371**。新增结果已人工核对再执行 comparison，IVF 为 `(b,b)`，HNSW 为 `(2,2)`，均匹配 FORCE |
+| owning、静态与交付 | 完整 compile/plan normal + vet、完整 compile race、native build、Go 1.26.4 gofmt 和 diff check 通过；自有服务停止后日志无 mpool 泄漏或 pipeline cleanup timeout |
+
+本修复增量语句块覆盖 **63/65（96.92%）**；以新 compile/plan profile 替换旧 profile 的对应文件，其他未变文件复用原证据，整个 PR 为 **521/608（85.69%）**。此前四包 race 和组合 JOIN 的 440/440 仍标明原验证修订，未冒称本轮重新执行组合 merge。设计 v1 原文及批准 hash 未变；本修正不新增 SQL 能力或改变 selector/source/CN 生命周期设计，也不等于 reviewer 已通过整体设计门禁。
