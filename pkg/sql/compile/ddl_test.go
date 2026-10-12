@@ -3596,7 +3596,11 @@ func TestTruncateLifecycleRCWaitPolicy(t *testing.T) {
 			}).AnyTimes()
 			op.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 			op.EXPECT().CreateTS().Return(timestamp.Timestamp{}).AnyTimes()
-			op.EXPECT().HasLockTable(registryID).Return(tc.retained)
+			retained := txn.CNTxnSnapshot{}
+			if tc.retained {
+				retained.LockTables = []lock.LockTable{{Table: registryID}}
+			}
+			op.EXPECT().Snapshot().Return(retained, nil)
 			var pending atomic.Int32
 			op.EXPECT().AddWaitLock(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 				func(uint64, [][]byte, lock.LockOptions) uint64 { pending.Add(1); return 1 }).AnyTimes()

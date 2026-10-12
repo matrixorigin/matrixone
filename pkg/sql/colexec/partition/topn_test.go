@@ -135,7 +135,7 @@ func TestPartitionTopNRejectsUnsupportedOrderType(t *testing.T) {
 	arg := newTopNArgument(1)
 	t.Cleanup(func() { arg.Free(proc, true, nil) })
 	arg.OrderBySpecs = arg.OrderBySpecs[:2]
-	arg.OrderBySpecs[1].Expr = topNCol(1, types.T_any)
+	arg.OrderBySpecs[1].Expr = topNCol(1, types.T_tuple)
 	err := arg.Prepare(proc)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 }
