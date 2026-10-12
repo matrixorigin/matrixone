@@ -3139,6 +3139,198 @@ func TestWindowOrdersPartitionedInput(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestWindowConstantNullKeysAcrossBatches(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		function          string
+		partitioned       bool
+		constantPartition bool
+		want              []uint64
+	}{
+		{"partitioned_row_number", "row_number", true, false, []uint64{1, 2, 1}},
+		{"partitioned_rank", "rank", true, false, []uint64{1, 1, 1}},
+		{"unpartitioned_dense_rank", "dense_rank", false, false, []uint64{1, 1, 1}},
+		{"constant_partition_then_id", "row_number", true, true, []uint64{1, 2, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+			t.Cleanup(proc.Free)
+			batches := []*batch.Batch{batch.NewWithSize(1), batch.NewWithSize(1)}
+			op := colexec.NewMockOperator().WithBatchs(batches)
+			t.Cleanup(func() { op.Free(proc, false, nil) })
+			for i, values := range [][]int32{{1, 1}, {2}} {
+				batches[i].Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+				batches[i].SetRowCount(len(values))
+			}
+			null := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_any)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+			}
+			var partitions []*plan.Expr
+			var orders []*plan.OrderBySpec
+			if tc.constantPartition {
+				partitions = append(partitions, null)
+				orders = append(orders, &plan.OrderBySpec{Expr: null})
+			}
+			if tc.partitioned {
+				partitions = append(partitions, newColExpr(0))
+				orders = append(orders, &plan.OrderBySpec{Expr: newColExpr(0)})
+			}
+			orders = append(orders, &plan.OrderBySpec{Expr: null})
+			arg := &Window{
+				WinSpecList: []*plan.Expr{{Expr: &plan.Expr_W{W: &plan.WindowSpec{
+					Name: tc.function, WindowFunc: newFunExpr(tc.function),
+					PartitionBy: partitions, OrderBy: orders,
+				}}}},
+				Aggs: []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, tc.function)},
+			}
+			t.Cleanup(func() { arg.Free(proc, false, nil) })
+			arg.AppendChild(op)
+			require.NoError(t, arg.Prepare(proc))
+			require.Equal(t, tc.want, collectFixedWindowColumn[uint64](t, arg, proc, 1))
+		})
+	}
+}
+
+func TestWindowConstantKeysWithForcedSpill(t *testing.T) {
+	for _, tc := range []struct {
+		name, function         string
+		partitioned, realOrder bool
+		want                   []uint64
+	}{
+		{"partition_and_null", "row_number", true, false, []uint64{1, 2, 3, 1}},
+		{"mixed_order_peers", "rank", true, true, []uint64{1, 1, 3, 1}},
+		{"all_constant", "dense_rank", false, false, []uint64{1, 1, 1, 1}},
+		{"range_peer_sum", "sum", true, true, nil},
+		{"spill_admission_failure", "rank", true, true, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+			t.Cleanup(proc.Free)
+			input := batch.NewWithSize(2)
+			input.Vecs[0] = testutil.MakeInt32Vector([]int32{2, 1, 1, 1}, nil, proc.Mp())
+			input.Vecs[1] = testutil.MakeInt32Vector([]int32{30, 20, 10, 10}, nil, proc.Mp())
+			input.SetRowCount(4)
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			t.Cleanup(func() { child.Free(proc, false, nil) })
+			null := &plan.Expr{Typ: plan.Type{Id: int32(types.T_any)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+			partitions := []*plan.Expr{null}
+			orders := []*plan.OrderBySpec{{Expr: null}}
+			if tc.partitioned {
+				partitions = append(partitions, newColExpr(0))
+			}
+			if tc.realOrder {
+				orders = append(orders, &plan.OrderBySpec{Expr: newColExpr(1)}, &plan.OrderBySpec{Expr: null})
+			}
+			arg := &Window{
+				WinSpecList: []*plan.Expr{{Expr: &plan.Expr_W{W: &plan.WindowSpec{
+					Name: tc.function, WindowFunc: newFunExpr(tc.function), PartitionBy: partitions, OrderBy: orders,
+				}}}},
+				Aggs:           []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, "rank")},
+				SpillThreshold: 1,
+				PartitionTopN:  true,
+			}
+			if tc.function != "sum" {
+				arg.Aggs = []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, tc.function)}
+			}
+			if tc.function == "sum" {
+				arg.Aggs = []aggexec.AggFuncExecExpression{newAggExprAt(1)}
+				arg.WinSpecList[0].GetW().Frame = &plan.FrameClause{
+					Type:  plan.FrameClause_RANGE,
+					Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+					End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+				}
+			}
+			t.Cleanup(func() { arg.Free(proc, false, nil) })
+			arg.AppendChild(child)
+			require.NoError(t, arg.Prepare(proc))
+			if tc.name == "spill_admission_failure" {
+				budget, err := proc.GetExecutionResourceBudget()
+				require.NoError(t, err)
+				reservation, err := budget.ReserveSpillDisk(budget.SpillDiskCap())
+				require.NoError(t, err)
+				t.Cleanup(func() {
+					if reservation != nil {
+						require.True(t, reservation.Release())
+					}
+					require.Zero(t, budget.SpillDiskUsed())
+					require.Zero(t, budget.SpillFDUsed())
+				})
+				_, err = arg.Call(proc)
+				var resourceErr *process.ExecutionResourceError
+				require.ErrorAs(t, err, &resourceErr)
+				require.Equal(t, process.ExecutionResourceComponentSpillDisk, resourceErr.Component)
+				require.Equal(t, []int32{2, 1, 1, 1}, vector.MustFixedColWithTypeCheck[int32](input.Vecs[0]))
+				for i, order := range arg.Fs {
+					if order.Expr.GetLit() != nil {
+						require.NotNil(t, arg.ctr.orderVecs[i].Vec[0])
+						require.True(t, arg.ctr.orderVecs[i].Vec[0].IsConst())
+					}
+				}
+				return
+			}
+			if tc.function == "sum" {
+				require.Equal(t, []int64{20, 20, 20, 30}, collectFixedWindowColumn[int64](t, arg, proc, 2))
+			} else {
+				require.Equal(t, tc.want, collectFixedWindowColumn[uint64](t, arg, proc, 2))
+			}
+			if tc.partitioned {
+				require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillRows)
+			} else {
+				require.Zero(t, arg.OpAnalyzer.GetOpStats().SpillRows)
+			}
+			for i, order := range arg.Fs {
+				if order.Expr.GetLit() != nil {
+					require.True(t, arg.ctr.orderVecs[i].Vec[0].IsConst())
+				}
+			}
+		})
+	}
+}
+
+func TestWindowOrderVectorRepresentationChanges(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+	t.Cleanup(proc.Free)
+	batches := []*batch.Batch{batch.NewWithSize(1), batch.NewWithSize(1), batch.NewWithSize(1), batch.NewWithSize(1)}
+	t.Cleanup(func() {
+		for _, bat := range batches {
+			bat.Clean(proc.Mp())
+		}
+	})
+	var err error
+	batches[0].Vecs[0], err = vector.NewConstFixed(types.T_int32.ToType(), int32(7), 2, proc.Mp())
+	require.NoError(t, err)
+	batches[1].Vecs[0] = testutil.MakeInt32Vector([]int32{8, 7}, nil, proc.Mp())
+	batches[2].Vecs[0] = testutil.MakeInt32Vector([]int32{4}, nil, proc.Mp())
+	batches[3].Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 3, proc.Mp())
+	order, err := colexec.MakeEvalVector(proc, []*plan.Expr{newColExpr(0)})
+	require.NoError(t, err)
+	ctr := &container{orderVecs: []colexec.ExprEvalVector{order}}
+	t.Cleanup(ctr.freeExes)
+	t.Cleanup(func() { ctr.freeVector(proc.Mp()) })
+	var previous *vector.Vector
+	for i, bat := range batches {
+		source := bat.Vecs[0]
+		bat.SetRowCount(source.Length())
+		require.NoError(t, ctr.evalOrderVector(bat, proc))
+		owned := ctr.orderVecs[0].Vec[0]
+		require.NotSame(t, source, owned)
+		require.Equal(t, source.Length(), owned.Length())
+		require.Equal(t, source.IsConst(), owned.IsConst())
+		require.Equal(t, source.IsConstNull(), owned.IsConstNull())
+		if !source.IsConstNull() {
+			require.Equal(t, vector.MustFixedColWithTypeCheck[int32](source), vector.MustFixedColWithTypeCheck[int32](owned))
+		}
+		if i == 2 {
+			require.Same(t, previous, owned) // Normal flat batches retain buffer reuse.
+		}
+		previous = owned
+	}
+}
+
 func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	first := batch.NewWithSize(2)

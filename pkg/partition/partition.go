@@ -258,6 +258,11 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		//Byte partition logic doesn't use byte.Compare or Str.
 		//Hence, we can use bytesPartition here.
 	default:
+		if vec.IsConst() {
+			// Even untyped NULL contributes no boundaries. This path never
+			// reads values, so the helper's type parameter is immaterial.
+			return genericPartition[bool](sels, diffs, partitions, vec)
+		}
 		panic(moerr.NewNotSupportedNoCtx(vec.GetType().Oid.String()))
 	}
 }

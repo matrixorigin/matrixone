@@ -18,6 +18,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -154,6 +155,45 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v15)
 	require.Equal(t, []int64{0, 1}, partitions)
 
+}
+
+func TestPartitionConstantKeys(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	untyped := vector.NewConstNull(types.T_any.ToType(), 4, mp)
+	defer untyped.Free(mp)
+	typed := vector.NewConstNull(types.T_int32.ToType(), 4, mp)
+	defer typed.Free(mp)
+	value, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 4, mp)
+	require.NoError(t, err)
+	defer value.Free(mp)
+
+	for _, partition := range []struct {
+		name string
+		run  func([]int64, []bool, []int64, *vector.Vector) []int64
+	}{{"group", Partition}, {"order", PartitionForOrder}} {
+		t.Run(partition.name, func(t *testing.T) {
+			for _, vec := range []*vector.Vector{untyped, typed, value} {
+				require.Empty(t, partition.run(nil, nil, []int64{99}, vec))
+				require.Equal(t, []int64{0}, partition.run([]int64{0}, []bool{false, true}, nil, vec))
+				sels := []int64{3, 1, 0, 2}
+				diffs := []bool{false, true, false, true}
+				require.Equal(t, []int64{0, 1, 3}, partition.run(sels, diffs, []int64{99}, vec))
+				require.Equal(t, []bool{true, true, false, true}, diffs)
+			}
+			unsupported := vector.NewVec(types.T_any.ToType())
+			defer unsupported.Free(mp)
+			unsupported.SetLength(1)
+			func() {
+				defer func() {
+					err, ok := recover().(error)
+					require.True(t, ok)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+				}()
+				partition.run([]int64{0}, []bool{false}, nil, unsupported)
+			}()
+		})
+	}
 }
 
 func TestPartitionForOrderTreatsNaNPayloadsAsPeers(t *testing.T) {
