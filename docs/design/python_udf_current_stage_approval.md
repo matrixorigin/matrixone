@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r10-2026-10-13`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r11-2026-10-13`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -177,3 +177,19 @@ predecessor rejection case. The implementation, ABI, catalog repair, and
 test/development scope are unchanged. The r9 maintenance record above is
 retained. Independent Architecture and SQL/Planner approval of the current
 revision remains pending; this documentation correction does not grant it.
+
+## r11 rebase maintenance addendum (2026-10-13)
+
+Official main is now `fa7cc1d9b38e3324572a4efc5617033522de0cbf`.
+Its MORPC latest remains 111, so Python capability 112 and immediate
+predecessor 111 remain unchanged. The published catalog 4.0.14 handler and
+separate 4.0.15 Python revision repair retain the r10 contract. The rebase
+incorporates upstream prepared COALESCE typing, integer common-type precision,
+OR normalization, Unicode collation metadata, performance-schema formatters,
+buffered TLS handshakes, and bounded gossip fixtures without changing Python
+ABI or rollout scope. The embedded admission test now releases concurrent
+light packages through distinct FIFO channels and checks each package's token;
+its admission, exclusion, failure, and cleanup assertions remain in force.
+
+Historical r10 records remain immutable. Independent Architecture and
+SQL/Planner approval remains pending; rebase and validation do not supply it.
