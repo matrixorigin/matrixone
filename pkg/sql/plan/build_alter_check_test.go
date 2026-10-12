@@ -167,6 +167,34 @@ func TestAlterCheckRejectsInvalidActions(t *testing.T) {
 }
 
 func TestAlterConstraintDropResolution(t *testing.T) {
+	for _, test := range []struct{ indexes, clause, name string }{
+		{"", "add unique(v), drop constraint v", "v"},
+		{"", "add unique key uv(v), drop constraint uv", "uv"},
+		{",key v(v)", "add unique(v), drop constraint v_2", "v_2"},
+		{"", "add index(v), add unique(v), drop constraint v_2", "v_2"},
+		{",key v(v)", "drop index v, add unique(v), drop constraint v", "v"},
+	} {
+		t.Run(test.clause+test.indexes, func(t *testing.T) {
+			mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,v int"+test.indexes+")")
+			source := mock.ctxt.tables["check_t"]
+			before := proto.Clone(source).(*planpb.TableDef)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "alter table check_t "+test.clause, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			astBefore := tree.String(stmt, dialect.MYSQL)
+			for range 2 {
+				p, err := BuildPlan(&mock.ctxt, stmt, false)
+				require.NoError(t, err)
+				alter := p.GetDdl().GetAlterTable()
+				require.Equal(t, planpb.AlterTable_INPLACE, alter.AlgorithmType)
+				drop := alter.Actions[len(alter.Actions)-1].GetDrop()
+				require.Equal(t, planpb.AlterTableDrop_INDEX, drop.Typ)
+				require.Equal(t, test.name, drop.Name)
+				require.Equal(t, before, source)
+				require.Equal(t, astBefore, tree.String(stmt, dialect.MYSQL))
+			}
+		})
+	}
 	t.Run("generic primary drop uses copy", func(t *testing.T) {
 		mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,v int)")
 		p, err := runOneStmt(mock, t, "alter table check_t drop constraint `PRIMARY`")
@@ -213,4 +241,23 @@ func TestAlterConstraintDropResolution(t *testing.T) {
 		_, err := runOneStmt(mock, t, "alter table check_t drop check ck")
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 	})
+}
+
+func TestAlterCheckPreservesFinalCopyIndexNames(t *testing.T) {
+	for _, index := range []string{"key w(v)", "unique key w(v)"} {
+		for _, clause := range []string{"drop column v,add unique(w)", "add unique(w),drop column v"} {
+			t.Run(index+"/"+clause, func(t *testing.T) {
+				for _, check := range []string{"", ",add check(w>0)"} {
+					mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,v int,w int,"+index+")")
+					p, err := runOneStmt(mock, t, "alter table check_t "+clause+check)
+					require.NoError(t, err)
+					alter := p.GetDdl().GetAlterTable()
+					require.Equal(t, planpb.AlterTable_COPY, alter.AlgorithmType)
+					require.Len(t, alter.CopyTableDef.Indexes, 1)
+					require.True(t, alter.CopyTableDef.Indexes[0].Unique)
+					require.Equal(t, "w", alter.CopyTableDef.Indexes[0].IndexName)
+				}
+			})
+		}
+	}
 }

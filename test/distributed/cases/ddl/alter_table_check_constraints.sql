@@ -131,4 +131,17 @@ alter table runs add check(status <> ''), algorithm=inplace;
 select count(*) from information_schema.check_constraints
     where constraint_schema=database();
 
+-- Generic DROP sees generated UNIQUE names and ordinary-index occupancy.
+create table ordered_indexes(v int,key v(v));
+insert into ordered_indexes values (1);
+alter table ordered_indexes add unique(v), drop constraint v_2;
+alter table ordered_indexes add index(v), add unique(v), drop constraint v_3;
+select index_name,non_unique from information_schema.statistics
+    where table_schema=database() and table_name='ordered_indexes' order by index_name;
+alter table ordered_indexes drop index v, add unique(v), drop constraint v;
+insert into ordered_indexes values (1);
+select v from ordered_indexes order by v;
+select index_name,non_unique from information_schema.statistics
+    where table_schema=database() and table_name='ordered_indexes' order by index_name;
+
 drop database alter_check_constraints;

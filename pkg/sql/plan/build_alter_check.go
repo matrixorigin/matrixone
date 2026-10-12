@@ -53,7 +53,9 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 		fkeys[fk.Name] = true
 	}
 	unique := make(map[string]bool)
+	indexNames := make(map[string]bool, len(current.Indexes))
 	for _, index := range current.Indexes {
+		indexNames[indexNameKey(index.IndexName)] = true
 		if index.Unique {
 			unique[indexNameKey(index.IndexName)] = true
 		}
@@ -85,7 +87,45 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 			case *tree.ForeignKey:
 				fkeys[def.ConstraintSymbol] = true
 			case *tree.UniqueIndex:
-				unique[indexNameKey(def.GetIndexName())] = true
+				copy := *def
+				if copy.GetIndexName() == "" {
+					if err := checkIndexKeypartSupportability(ctx.GetContext(), copy.KeyParts); err != nil {
+						return nil, err
+					}
+					setEmptyUniqueIndexName(indexNames, &copy)
+				}
+				name := indexNameKey(copy.GetIndexName())
+				unique[name] = true
+				indexNames[name] = true
+				// Only infer the name for generic DROP resolution. COPY names
+				// pending indexes after all column changes; keep its decision.
+				copy.Name = def.Name
+				add := *opt
+				add.Def = &copy
+				resolved[i] = &add
+			case *tree.Index:
+				copy := *def
+				if copy.Name == "" && !hasFunctionalKey(copy.KeyParts) {
+					setEmptyIndexName(indexNames, &copy)
+				}
+				indexNames[indexNameKey(copy.Name)] = true
+				copy.Name = def.Name
+				add := *opt
+				add.Def = &copy
+				resolved[i] = &add
+			case *tree.FullTextIndex:
+				copy := *def
+				if copy.Name == "" {
+					if err := checkIndexKeypartSupportability(ctx.GetContext(), copy.KeyParts); err != nil {
+						return nil, err
+					}
+					setEmptyFullTextIndexName(indexNames, &copy)
+				}
+				indexNames[indexNameKey(copy.Name)] = true
+				copy.Name = def.Name
+				add := *opt
+				add.Def = &copy
+				resolved[i] = &add
 			case *tree.PrimaryKeyIndex:
 				primary = true
 			}
@@ -123,6 +163,7 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 				delete(fkeys, name)
 			case tree.AlterTableDropIndex, tree.AlterTableDropKey:
 				delete(unique, indexNameKey(name))
+				delete(indexNames, indexNameKey(name))
 			case tree.AlterTableDropPrimaryKey:
 				primary = false
 			}
