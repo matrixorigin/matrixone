@@ -50,6 +50,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -1567,6 +1568,15 @@ func buildTablePairFromCache(
 ) (tbl tablePair, ok bool) {
 
 	item := eng.(*Engine).GetLatestCatalogCache().GetTableByIdAndTime(uint32(accId), dbId, tblId, snapshot.ToTimestamp())
+	return buildTablePairFromItem(item, accId, dbId, tblId, snapshot, onlyUpdateTS)
+}
+
+func buildTablePairFromItem(
+	item *cache.TableItem,
+	accId, dbId, tblId uint64,
+	snapshot types.TS,
+	onlyUpdateTS bool,
+) (tbl tablePair, ok bool) {
 	if item == nil || item.IsDeleted() {
 		// account, db, tbl may delete already
 		// the `update_time` not change anymore
@@ -1589,6 +1599,56 @@ func buildTablePairFromCache(
 	tbl.onlyUpdateTS = onlyUpdateTS
 
 	return tbl, true
+}
+
+func buildTablePairsFromCache(
+	eng engine.Engine,
+	accs, dbs, tbls []uint64,
+	snapshot types.TS,
+	onlyUpdateTS bool,
+) []tablePair {
+	if len(tbls) == 0 {
+		return nil
+	}
+	if len(tbls) == 1 {
+		if tbl, ok := buildTablePairFromCache(eng, accs[0], dbs[0], tbls[0], snapshot, onlyUpdateTS); ok {
+			return []tablePair{tbl}
+		}
+		return nil
+	}
+
+	// ID lookup scans a name-ordered BTree. Group requests by catalog scope
+	// so missing and dropped IDs do not each rescan all retained versions.
+	groups := make(map[[2]uint64][]int)
+	for i := range tbls {
+		key := [2]uint64{accs[i], dbs[i]}
+		groups[key] = append(groups[key], i)
+	}
+	cc := eng.(*Engine).GetLatestCatalogCache()
+	ts := snapshot.ToTimestamp()
+	items := make([]*cache.TableItem, len(tbls))
+	for key, indices := range groups {
+		if len(indices) == 1 {
+			i := indices[0]
+			items[i] = cc.GetTableByIdAndTime(uint32(key[0]), key[1], tbls[i], ts)
+			continue
+		}
+		ids := make([]uint64, len(indices))
+		for i, index := range indices {
+			ids[i] = tbls[index]
+		}
+		for i, item := range cc.GetTablesByIdAndTime(uint32(key[0]), key[1], ids, ts) {
+			items[indices[i]] = item
+		}
+	}
+
+	var pairs []tablePair
+	for i, item := range items {
+		if tbl, ok := buildTablePairFromItem(item, accs[i], dbs[i], tbls[i], snapshot, onlyUpdateTS); ok {
+			pairs = append(pairs, tbl)
+		}
+	}
+	return pairs
 }
 
 func (tp *tablePair) String() string {
@@ -3080,29 +3140,11 @@ func getChangedTableList(
 		return
 	}
 
-	var (
-		tp tablePair
-		ok bool
-	)
-
-	for i := range nullTSAcc {
-		if tp, ok = buildTablePairFromCache(de,
-			nullTSAcc[i], nullTSDB[i], nullTSTbl[i], *to, false); !ok {
-			continue
-		}
-		*pairs = append(*pairs, tp)
-	}
+	*pairs = append(*pairs, buildTablePairsFromCache(de, nullTSAcc, nullTSDB, nullTSTbl, *to, false)...)
 
 	// a table in the response means there exists updates,
 	// need calculate the size/rows...
-	for i := range resp.AccIds {
-		if tp, ok = buildTablePairFromCache(de,
-			resp.AccIds[i], resp.DatabaseIds[i], resp.TableIds[i], *to, false); !ok {
-			continue
-		}
-
-		*pairs = append(*pairs, tp)
-	}
+	*pairs = append(*pairs, buildTablePairsFromCache(de, resp.AccIds, resp.DatabaseIds, resp.TableIds, *to, false)...)
 
 	// for the CheckChanged type, a table not in the response
 	// means no update yet, update it's ts only.

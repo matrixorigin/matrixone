@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/parquet-go/parquet-go"
 )
 
@@ -262,8 +263,18 @@ func vectorValueToParquet(vec *vector.Vector, i int, timeZone *time.Location) (a
 		return vector.GetFixedAtNoTypeCheck[float32](vec, i), nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](vec, i), nil
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		return string(vec.GetBytesAt(i)), nil
+	case types.T_geometry, types.T_geometry32:
+		text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt(i))
+		if err != nil {
+			return nil, err
+		}
+		// Stored WKB has no SRID: carry the vector's type metadata in EWKT.
+		if width := vec.GetType().Width; width > 0 {
+			text = "SRID=" + strconv.FormatInt(int64(width-1), 10) + ";" + text
+		}
+		return text, nil
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		return vec.GetBytesAt(i), nil
 	case types.T_json:
@@ -291,6 +302,14 @@ func vectorValueToParquet(vec *vector.Vector, i int, timeZone *time.Location) (a
 		return types.BytesToArrayToString[float32](vec.GetBytesAt(i)), nil
 	case types.T_array_float64:
 		return types.BytesToArrayToString[float64](vec.GetBytesAt(i)), nil
+	case types.T_array_bf16:
+		return types.BytesToArrayToString[types.BF16](vec.GetBytesAt(i)), nil
+	case types.T_array_float16:
+		return types.BytesToArrayToString[types.Float16](vec.GetBytesAt(i)), nil
+	case types.T_array_int8:
+		return types.BytesToArrayToString[int8](vec.GetBytesAt(i)), nil
+	case types.T_array_uint8:
+		return types.BytesToArrayToString[uint8](vec.GetBytesAt(i)), nil
 	case types.T_year:
 		return vector.GetFixedAtNoTypeCheck[types.MoYear](vec, i).String(), nil
 	case types.T_decimal64:
