@@ -174,7 +174,7 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 		require.False(t, queryShowColumnCollation("show_full_columns_meta_probe", "id").Valid)
 		require.False(t, queryShowColumnCollation("show_full_columns_meta_probe", "amount").Valid)
 		require.False(t, queryShowColumnCollation("show_full_columns_meta_probe", "choice").Valid)
-		require.Equal(t, "ENUM('MiXeD','ABC')", queryShowColumnField("show_full_columns_meta_probe", "choice", "Type").String)
+		require.Equal(t, "enum('MiXeD','ABC')", queryShowColumnField("show_full_columns_meta_probe", "choice", "Type").String)
 		require.Equal(t, 2, queryCount("select count(*) from words where lower(s)='a'"))
 		// Conditional and ordered string expressions must carry the native
 		// Unicode revision through their rebuilt result type. Include mixed-width
