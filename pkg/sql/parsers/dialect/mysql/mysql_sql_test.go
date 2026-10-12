@@ -197,6 +197,43 @@ func TestCreateIndexPreservesIndexIdentifierCase(t *testing.T) {
 	require.Equal(t, tree.Identifier("MixedCaseIdx"), createStmt.Name)
 }
 
+func TestCreateIndexUsingSuffix(t *testing.T) {
+	cases := []struct {
+		sql     string
+		typ     tree.IndexType
+		comment string
+	}{
+		{"create index idx on t(v) using btree", tree.INDEX_TYPE_BTREE, ""},
+		{"create index idx using hash on t(v) using btree comment 'tail'", tree.INDEX_TYPE_BTREE, "tail"},
+		{"create index idx using hash on t(v) comment 'tail' using btree", tree.INDEX_TYPE_BTREE, "tail"},
+		{"create index idx using btree on t(v)", tree.INDEX_TYPE_BTREE, ""},
+		{"create index idx on t(v)", tree.INDEX_TYPE_INVALID, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), tc.sql, 1)
+			require.NoError(t, err)
+			createStmt, ok := stmt.(*tree.CreateIndex)
+			require.True(t, ok)
+			require.Equal(t, tc.typ, createStmt.IndexOption.IType)
+			require.Equal(t, tc.comment, createStmt.IndexOption.Comment)
+
+			// IndexOption formatting currently emits COMMENT values without SQL
+			// quotes, so keep the AST round-trip assertion to representable cases.
+			if tc.comment != "" {
+				return
+			}
+			formatted := tree.String(stmt, dialect.MYSQL)
+			roundTripped, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err, formatted)
+			roundTrippedCreate, ok := roundTripped.(*tree.CreateIndex)
+			require.True(t, ok)
+			require.Equal(t, tc.typ, roundTrippedCreate.IndexOption.IType)
+			require.Equal(t, tc.comment, roundTrippedCreate.IndexOption.Comment)
+		})
+	}
+}
+
 func TestForeignKeyNameRemainsCaseInsensitive(t *testing.T) {
 	stmt, err := ParseOne(context.Background(),
 		"create table t (id int, parent_id int, foreign key MixedFK(parent_id) references t(id))", 1)
