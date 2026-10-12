@@ -21,13 +21,17 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1031,39 +1035,6 @@ func TestGeometrySRIDNullShortCircuit(t *testing.T) {
 	}
 }
 
-func TestWrapAstExprForMySQLSpecialTypeLeavesColumnRefsToQueryBind(t *testing.T) {
-	ctx := context.Background()
-	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: ",red,blue"}
-	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,b"}
-
-	for _, target := range []plan.Type{enumType, setType} {
-		// Qualified and unqualified column references cannot be bound without
-		// a query context; they must not be rejected as ambiguous here.
-		for _, colRef := range []tree.Expr{
-			tree.NewUnresolvedName(tree.NewCStr("incoming", 1), tree.NewCStr("v", 1)),
-			tree.NewUnresolvedColName("s"),
-		} {
-			got, err := wrapAstExprForMySQLSpecialType(ctx, target, colRef)
-			require.NoError(t, err)
-			require.Same(t, colRef, got)
-
-			castExpr := &tree.CastExpr{Expr: colRef, Type: tree.TYPE_VARCHAR}
-			got, err = wrapAstExprForMySQLSpecialType(ctx, target, castExpr)
-			require.NoError(t, err)
-			require.Same(t, tree.Expr(castExpr), got)
-		}
-
-		// Context-free literals are still converted at the AST boundary.
-		lit := tree.NewNumVal("red", "red", false, tree.P_char)
-		got, err := wrapAstExprForMySQLSpecialType(ctx, target, lit)
-		require.NoError(t, err)
-		fn, ok := got.(*tree.FuncExpr)
-		require.True(t, ok)
-		require.Len(t, fn.Exprs, 2)
-		require.Same(t, tree.Expr(lit), fn.Exprs[1])
-	}
-}
-
 func TestGuardTargetLocalExprKeepsEnumAssignmentType(t *testing.T) {
 	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: ",red,blue"}
 	col := func(pos int32, typ plan.Type) *plan.Expr {
@@ -1088,4 +1059,162 @@ func TestGuardTargetLocalExprKeepsEnumAssignmentType(t *testing.T) {
 	got, err = builder.guardTargetLocalExpr(selected, col(1, intType), col(2, intType))
 	require.NoError(t, err)
 	require.Equal(t, "if", got.GetF().Func.GetObjName())
+}
+
+func TestSpecialAssignmentStorageAndGuardExecution(t *testing.T) {
+	ctx := context.Background()
+	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: ",red"}
+	enumValue := func(v uint32, null bool) *plan.Expr {
+		return &plan.Expr{Typ: enumType, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: null, Value: &plan.Literal_EnumVal{EnumVal: v}}}}
+	}
+	var builder *QueryBuilder
+	for _, tc := range []struct {
+		name     string
+		selected bool
+		new, old *plan.Expr
+		want     types.Enum
+		null     bool
+	}{
+		{"inactive-old-zero", false, enumValue(1, false), enumValue(0, false), 0, false},
+		{"selected-new-zero", true, enumValue(0, false), enumValue(1, false), 0, false},
+		{"declared-empty", true, enumValue(1, false), enumValue(0, false), 1, false},
+		{"selected-null", true, enumValue(0, true), enumValue(1, false), 0, true},
+		{"inactive-null", false, enumValue(1, false), enumValue(0, true), 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, err := builder.guardTargetLocalExpr(MakePlan2BoolConstExprWithType(tc.selected), tc.new, tc.old)
+			require.NoError(t, err)
+			require.Equal(t, enumType.Enumvalues, e.Typ.Enumvalues)
+			proc := testutil.NewProcess(t)
+			executor, err := colexec.NewExpressionExecutor(proc, e)
+			require.NoError(t, err)
+			defer executor.Free()
+			v, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.null, v.IsNull(0))
+			if !tc.null {
+				require.Equal(t, tc.want, vector.GetFixedAtWithTypeCheck[types.Enum](v, 0))
+			}
+		})
+	}
+	t.Run("inactive-invalid-new", func(t *testing.T) {
+		invalid, err := funcCastForEnumType(ctx, makePlan2StringConstExprWithType("invalid"), enumType)
+		require.NoError(t, err)
+		e, err := builder.guardTargetLocalExpr(MakePlan2BoolConstExprWithType(false), invalid, enumValue(0, false))
+		require.NoError(t, err)
+		proc := testutil.NewProcess(t)
+		executor, err := colexec.NewExpressionExecutor(proc, e)
+		require.NoError(t, err)
+		defer executor.Free()
+		v, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		require.NoError(t, err)
+		require.Equal(t, types.Enum(0), vector.GetFixedAtWithTypeCheck[types.Enum](v, 0))
+	})
+	t.Run("cross-domain-mixed-mask", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		input := batch.NewWithSize(2)
+		input.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+		input.Vecs[1] = vector.NewVec(types.T_enum.ToType())
+		defer input.Clean(proc.Mp())
+		require.NoError(t, vector.AppendFixedList(input.Vecs[0], []bool{true, true, false, true}, nil, proc.Mp()))
+		require.NoError(t, vector.AppendFixedList(input.Vecs[1], []types.Enum{0, 1, 99, 0}, nil, proc.Mp()))
+		input.Vecs[1].GetNulls().Add(3)
+		input.SetRowCount(4)
+		sourceType := plan.Type{Id: int32(types.T_enum), Enumvalues: "red,blue"}
+		targetType := plan.Type{Id: int32(types.T_enum), Enumvalues: ",blue,red"}
+		converted, err := funcCastForEnumType(ctx, GetColExpr(sourceType, 0, 1), targetType)
+		require.NoError(t, err)
+		require.Len(t, converted.GetF().Args, 3)
+		old := &plan.Expr{Typ: targetType, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_EnumVal{EnumVal: 0}}}}
+		e, err := builder.guardTargetLocalExpr(GetColExpr(plan.Type{Id: int32(types.T_bool)}, 0, 0), converted, old)
+		require.NoError(t, err)
+		executor, err := colexec.NewExpressionExecutor(proc, e)
+		require.NoError(t, err)
+		defer executor.Free()
+		v, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		for i, want := range []types.Enum{0, 3, 0} {
+			require.False(t, v.IsNull(uint64(i)))
+			require.Equal(t, want, vector.GetFixedAtWithTypeCheck[types.Enum](v, i))
+		}
+		require.True(t, v.IsNull(3))
+	})
+	for _, tc := range []struct {
+		name           string
+		source, target plan.Type
+		value          *plan.Literal
+		want           uint64
+	}{
+		{"reordered-enum", plan.Type{Id: int32(types.T_enum), Enumvalues: "red,blue"}, plan.Type{Id: int32(types.T_enum), Enumvalues: "blue,red"}, &plan.Literal{Value: &plan.Literal_EnumVal{EnumVal: 1}}, 2},
+		{"reordered-set", plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,b"}, plan.Type{Id: int32(types.T_uint64), Enumvalues: "b,a"}, &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 1}}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := &plan.Expr{Typ: tc.source, Expr: &plan.Expr_Lit{Lit: tc.value}}
+			var e *plan.Expr
+			var err error
+			if isEnumPlanType(&tc.target) {
+				e, err = funcCastForEnumType(ctx, source, tc.target)
+			} else {
+				e, err = funcCastForSetType(ctx, source, tc.target)
+			}
+			require.NoError(t, err)
+			proc := testutil.NewProcess(t)
+			executor, err := colexec.NewExpressionExecutor(proc, e)
+			require.NoError(t, err)
+			defer executor.Free()
+			v, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			if isEnumPlanType(&tc.target) {
+				require.Equal(t, tc.want, uint64(vector.GetFixedAtWithTypeCheck[types.Enum](v, 0)))
+			} else {
+				require.Equal(t, tc.want, vector.GetFixedAtWithTypeCheck[uint64](v, 0))
+			}
+		})
+	}
+}
+
+func TestSpecialAssignmentStorageCachePreservesDomain(t *testing.T) {
+	for _, numericFirst := range []bool{true, false} {
+		t.Run(map[bool]string{true: "numeric-first", false: "assignment-first"}[numericFirst], func(t *testing.T) {
+			mock := newMySQLSpecialOrderMock(t)
+			builder := NewQueryBuilder(plan.Query_SELECT, &mock.ctxt, false, true)
+			typ := plan.Type{Id: int32(types.T_uint64), Enumvalues: ",a,b"}
+			raw := GetColExpr(typ, 10, 0)
+			display, err := makeEnumOrSetDisplayValue(context.Background(), raw)
+			require.NoError(t, err)
+			builder.qry.Nodes = []*plan.Node{
+				{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{10}},
+				{NodeType: plan.Node_PROJECT, BindingTags: []int32{20}, Children: []int32{0}, ProjectList: []*plan.Expr{display}},
+				{NodeType: plan.Node_PROJECT, BindingTags: []int32{30}, Children: []int32{1}, ProjectList: []*plan.Expr{GetColExpr(display.Typ, 20, 0)}},
+			}
+			builder.tag2NodeID[10] = 0
+			builder.tag2NodeID[20] = 1
+			builder.tag2NodeID[30] = 2
+			source := GetColExpr(display.Typ, 30, 0)
+			numeric := func() {
+				v, ok := builder.materializeProjectedSetBitmap(source, make(map[[2]int32]struct{}))
+				require.True(t, ok)
+				require.Empty(t, v.Typ.Enumvalues)
+			}
+			assignment := func() {
+				v, ok := builder.materializeTransparentMySQLSpecialAssignmentValue(source)
+				require.True(t, ok)
+				require.Equal(t, typ.Enumvalues, v.Typ.Enumvalues)
+			}
+			if numericFirst {
+				numeric()
+				assignment()
+			} else {
+				assignment()
+				numeric()
+			}
+			for range 3 {
+				numeric()
+				assignment()
+			}
+			require.Len(t, builder.qry.Nodes[1].ProjectList, 2)
+			require.Len(t, builder.qry.Nodes[2].ProjectList, 2)
+			require.Len(t, builder.setBitmapByDisplayNode, 2)
+		})
+	}
 }

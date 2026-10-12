@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"testing"
@@ -420,4 +421,94 @@ func TestEmptyDomainVectorConversions(t *testing.T) {
 	run([]FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, nil), NewFunctionTestInput(types.T_int64.ToType(), []int64{1, -1, 65537}, nil)}, NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{1, 0, 0}, nil), castIntegerToEnum[int64])
 	run([]FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{","}, nil), NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1, 3, -1}, nil)}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 1, 1, 1}, nil), castIntegerToSet[int64])
 
+}
+
+func TestCastValueToIndexTypedSource(t *testing.T) {
+	for _, tc := range []struct {
+		name, target string
+		values, want []types.Enum
+		nulls        []bool
+	}{
+		{"with-empty", ",blue,red", []types.Enum{0, 1, 2, 3, 0}, []types.Enum{0, 1, 3, 2, 0}, []bool{false, false, false, false, true}},
+		{"without-empty", "blue,red", []types.Enum{0, 2, 3, 0}, []types.Enum{0, 2, 1, 0}, []bool{false, false, false, true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			targets, sources := make([]string, len(tc.values)), make([]string, len(tc.values))
+			for i := range targets {
+				targets[i] = tc.target
+				sources[i] = ",red,blue"
+			}
+			c := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), targets, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), sources, nil),
+				NewFunctionTestInput(types.T_enum.ToType(), tc.values, tc.nulls),
+			}, NewFunctionTestResult(types.T_enum.ToType(), false, tc.want, tc.nulls), CastValueToIndex)
+			ok, info := c.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+	for _, ignore := range []bool{false, true} {
+		t.Run("missing-label-ignore-"+strconv.FormatBool(ignore), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetStmtProfile(&process.StmtProfile{})
+			proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", ignore)
+			c := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"blue"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"red,blue"}, nil),
+				NewFunctionTestInput(types.T_enum.ToType(), []types.Enum{1}, nil),
+			}, NewFunctionTestResult(types.T_enum.ToType(), !ignore, []types.Enum{0}, nil), CastValueToIndex)
+			ok, info := c.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestCastValueToIndexSkipsMaskedRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, typed := range []bool{false, true} {
+		t.Run(strconv.FormatBool(typed), func(t *testing.T) {
+			inputs := []FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"blue,red", "blue,red", "blue,red"}, nil)}
+			if typed {
+				inputs = append(inputs, NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"red,blue", "red,blue", "red,blue"}, nil), NewFunctionTestInput(types.T_enum.ToType(), []types.Enum{1, 99, 2}, nil))
+			} else {
+				inputs = append(inputs, NewFunctionTestInput(types.T_varchar.ToType(), []string{"red", "invalid", "blue"}, nil))
+			}
+			c := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_enum.ToType(), false, nil, nil), CastValueToIndex)
+			defer c.Free()
+			c = c.WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
+			v, err := c.DebugRun()
+			require.NoError(t, err)
+			require.Equal(t, types.Enum(2), vector.GetFixedAtNoTypeCheck[types.Enum](v, 0))
+			require.True(t, v.IsNull(1))
+			require.Equal(t, types.Enum(1), vector.GetFixedAtNoTypeCheck[types.Enum](v, 2))
+			c = c.WithSelectList(&FunctionSelectList{AllNull: true})
+			v, err = c.DebugRun()
+			require.NoError(t, err)
+			for i := uint64(0); i < 3; i++ {
+				require.True(t, v.IsNull(i))
+			}
+			c = c.WithSelectList(nil)
+			_, err = c.DebugRun()
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestCastValueToIndexOverloadIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		args     []types.Type
+		overload int32
+	}{
+		{[]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()}, 0},
+		{[]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_enum.ToType()}, 1},
+	} {
+		f, err := GetFunctionByName(context.Background(), "cast_value_to_index", tc.args)
+		require.NoError(t, err)
+		require.Equal(t, EncodeOverloadID(CAST_VALUE_TO_INDEX, tc.overload), f.GetEncodedOverloadID())
+	}
+	for _, typ := range []types.T{types.T_uint16, types.T_bool, types.T_varchar} {
+		_, err := GetFunctionByName(context.Background(), "cast_value_to_index", []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), typ.ToType()})
+		require.Error(t, err)
+	}
 }

@@ -29,14 +29,23 @@ update t29923_dst d join t29923_src s on d.id = s.id
  where d.id = 3;
 select id, e, cast(e as unsigned), s, note from t29923_dst order by id;
 
--- Re-seed error member, then JOIN UPDATE only id=2 so id=3 stays on the
--- inactive IF branch and must keep ordinal 0 without revalidation errors.
+-- Re-seed error member, then verify filtered-out rows remain unchanged.
 delete from t29923_dst where id = 3;
 insert ignore into t29923_dst values (3, 'nope', 'x', 'err');
 update t29923_dst d join t29923_src s on d.id = s.id
    set d.e = s.e
  where d.note = 'upd';
 select id, e, cast(e as unsigned), note from t29923_dst order by id;
+
+-- Duplicate target matches reach the inactive selector; WHERE filtering does not.
+drop table if exists t29923_dup;
+create table t29923_dup(id int primary key, owner int, note int);
+insert into t29923_dup values(1,3,0),(2,3,0);
+update t29923_dst d join t29923_dup s on d.id=s.owner
+   set d.e=d.e, s.note=s.note+1;
+select id,e,cast(e as unsigned),note from t29923_dst order by id;
+select id,note from t29923_dup order by id;
+drop table t29923_dup;
 
 drop table t29923_src;
 drop table t29923_dst;
