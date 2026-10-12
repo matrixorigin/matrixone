@@ -1049,6 +1049,12 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
+	// Overload 1 supplies a source definition and native ENUM ordinals.
+	var ordinals vector.FunctionParameterWrapper[types.Enum]
+	var sourceMembers []string
+	if len(ivecs) == 3 {
+		ordinals = vector.GenerateFunctionFixedTypeParameter[types.Enum](ivecs[2])
+	}
 	var valueIndex *enumValueIndex
 	indexAttempted := false
 	allowAdjustment := allowEnumSetAdjustment(proc)
@@ -1064,6 +1070,12 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		}
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
 		enumValue, enumValNull := enumValues.GetStrValue(i)
+		var ordinal types.Enum
+		if ordinals != nil {
+			var null bool
+			ordinal, null = ordinals.GetValue(i)
+			enumValNull = enumValNull || null
+		}
 		if typeEnumNull || enumValNull {
 			if err := rs.Append(0, true); err != nil {
 				return err
@@ -1071,6 +1083,36 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		} else {
 			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
 			enumStr := functionUtil.QuickBytesToStr(enumValue)
+			if ordinals != nil {
+				if ordinal == 0 {
+					if err := rs.Append(0, false); err != nil {
+						return err
+					}
+					continue
+				}
+				if ivecs[1].IsConst() {
+					// Decode only after selection/NULL/zero admission, once per call.
+					if sourceMembers == nil {
+						sourceMembers = strings.Split(enumStr, ",")
+					}
+					if len(sourceMembers) <= types.MaxEnumLen && int(ordinal) <= len(sourceMembers) {
+						enumStr = sourceMembers[int(ordinal)-1]
+					} else {
+						// Keep the established malformed-ordinal error contract.
+						var err error
+						enumStr, err = types.ParseEnumIndex(enumStr, ordinal)
+						if err != nil {
+							return err
+						}
+					}
+				} else {
+					var err error
+					enumStr, err = types.ParseEnumIndex(enumStr, ordinal)
+					if err != nil {
+						return err
+					}
+				}
+			}
 			if !indexAttempted && ivecs[0].IsConst() {
 				indexAttempted = true
 				valueIndex = buildEnumValueIndexForBatch(typeEnumVal, length)
