@@ -37,8 +37,17 @@ func TestAutoColumnVisibilityAndOffsetValidation(t *testing.T) {
 	require.Equal(t, []string{"id"}, autoColumnNames(GetUserAutoColumnFromDef(def)))
 	require.Equal(t, []string{"__mo_fake_pk_col"}, autoColumnNames(GetInternalAutoColumnFromDef(def)))
 
-	require.NoError(t, ValidateAutoColumnOffset(context.Background(), types.T_uint8, math.MaxUint8))
-	err := ValidateAutoColumnOffset(context.Background(), types.T_uint8, math.MaxUint8+1)
+	require.NoError(t, ValidateAutoColumnOffset(context.Background(), types.T_uint8.ToType(), math.MaxUint8))
+	err := ValidateAutoColumnOffset(context.Background(), types.T_uint8.ToType(), math.MaxUint8+1)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+
+	signedMedium := types.New(types.T_int32, 24, -1)
+	unsignedMedium := types.New(types.T_uint32, 24, -1)
+	require.NoError(t, ValidateAutoColumnOffset(context.Background(), signedMedium, 1<<23-1))
+	err = ValidateAutoColumnOffset(context.Background(), signedMedium, 1<<23)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+	require.NoError(t, ValidateAutoColumnOffset(context.Background(), unsignedMedium, 1<<24-1))
+	err = ValidateAutoColumnOffset(context.Background(), unsignedMedium, 1<<24)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
 }
 

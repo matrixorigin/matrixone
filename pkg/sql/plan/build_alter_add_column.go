@@ -60,6 +60,9 @@ func AddColumn(
 	if err != nil {
 		return false, err
 	}
+	if err = requireMediumIntProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), colType); err != nil {
+		return false, err
+	}
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {
 		return false, err
 	}
