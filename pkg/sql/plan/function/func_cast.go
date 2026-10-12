@@ -1063,7 +1063,7 @@ func NewExplicitCast(parameters []*vector.Vector, result vector.FunctionResultWr
 
 func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, mode castMode, allowTrailingSpaceTrim bool) error {
 	err := newCastWithoutMediumIntBounds(parameters, result, proc, length, selectList, mode, allowTrailingSpaceTrim)
-	if err != nil || len(parameters) < 2 || !parameters[1].GetType().IsMediumInt() {
+	if err != nil || !mode.isAssignment() || len(parameters) < 2 || !parameters[1].GetType().IsMediumInt() {
 		return err
 	}
 	return enforceMediumIntAssignmentBounds(

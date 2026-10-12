@@ -959,15 +959,22 @@ func buildDefaultExprWithColumns(
 		}
 	}
 	if constantMediumIntDefault {
-		executor, execErr := colexec.NewExpressionExecutor(proc, newExpr)
-		if execErr != nil {
-			err = execErr
+		cast := newExpr.GetF()
+		strictExpr, strictErr := forceAssignmentCastExprWithName(
+			bindCtx, cast.Args[0], typ, "cast_strict")
+		if strictErr != nil {
+			err = strictErr
+		} else if strictExecutor, strictExecErr := colexec.NewExpressionExecutor(proc, strictExpr); strictExecErr != nil {
+			err = strictExecErr
 		} else {
-			_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-			executor.Free()
+			_, err = strictExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			strictExecutor.Free()
 		}
 	}
 	if err != nil {
+		if constantMediumIntDefault && moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+			return nil, moerr.NewErrInvalidDefault(bindCtx, colNameOrigin)
+		}
 		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
 	}
 	if typ.Id == int32(types.T_timestamp) && newExpr.GetLit() != nil &&

@@ -221,3 +221,154 @@ ORDER BY ordinal_position`, strings.ToLower(dbName))
 		require.Error(t, err, "restarted catalog must retain MEDIUMINT assignment semantics")
 	})
 }
+
+func TestIssue29723MediumIntAdjacentContracts(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+		defer cancel()
+
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer func() { require.NoError(t, db.Close()) }()
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+		require.NoError(t, db.PingContext(ctx))
+
+		dbName := testutils.GetDatabaseName(t)
+		execSQLRequire(t, ctx, db, "CREATE DATABASE `"+dbName+"`")
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			execSQLMaybe(t, cleanupCtx, db, "DROP DATABASE IF EXISTS `"+dbName+"`")
+		}()
+
+		medium := "`" + dbName + "`.medium_source"
+		integer := "`" + dbName + "`.integer_source"
+		execSQLRequire(t, ctx, db, "CREATE TABLE "+medium+" (v MEDIUMINT)")
+		execSQLRequire(t, ctx, db, "INSERT INTO "+medium+" VALUES (-8388608), (8388607)")
+		execSQLRequire(t, ctx, db, "CREATE TABLE "+integer+" (v INT)")
+		execSQLRequire(t, ctx, db, "INSERT INTO "+integer+" VALUES (8388608)")
+
+		t.Run("comparison operands are not assignment bounds", func(t *testing.T) {
+			var count int64
+			err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+medium+" WHERE v=8388608").Scan(&count)
+			require.NoError(t, err)
+			require.Zero(t, count)
+			err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+medium+" WHERE 8388608=v").Scan(&count)
+			require.NoError(t, err)
+			require.Zero(t, count)
+			err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+integer+" WHERE v=8388608").Scan(&count)
+			require.NoError(t, err)
+			require.Equal(t, int64(1), count, "ordinary INT comparison keeps its existing behavior")
+			_, err = db.ExecContext(ctx, "INSERT INTO "+medium+" VALUES (8388608)")
+			require.Error(t, err, "stored MEDIUMINT writes must keep enforcing the domain")
+		})
+
+		t.Run("ddl defaults reject overflow in every sql_mode", func(t *testing.T) {
+			for _, mode := range []struct {
+				name string
+				sql  string
+			}{
+				{name: "strict", sql: "SET SESSION sql_mode='STRICT_TRANS_TABLES'"},
+				{name: "non-strict", sql: "SET SESSION sql_mode=''"},
+			} {
+				t.Run(mode.name, func(t *testing.T) {
+					execSQLRequire(t, ctx, db, mode.sql)
+					var actualMode string
+					require.NoError(t, db.QueryRowContext(ctx, "SELECT @@session.sql_mode").Scan(&actualMode))
+					t.Logf("sql_mode=%q", actualMode)
+					for _, invalid := range []struct {
+						name    string
+						typeSQL string
+						value   string
+					}{
+						{name: "signed", typeSQL: "MEDIUMINT", value: "8388608"},
+						{name: "unsigned", typeSQL: "MEDIUMINT UNSIGNED", value: "16777216"},
+					} {
+						t.Run(invalid.name, func(t *testing.T) {
+							tableName := "invalid_default_" + strings.ReplaceAll(mode.name, "-", "_") + "_" + invalid.name
+							table := "`" + dbName + "`." + tableName
+							_, err := db.ExecContext(ctx, "CREATE TABLE "+table+" (v "+invalid.typeSQL+" DEFAULT "+invalid.value+")")
+							require.Error(t, err, "out-of-range constant defaults must be rejected regardless of sql_mode")
+							require.ErrorContains(t, err, "1067", "invalid defaults use MySQL's ER_INVALID_DEFAULT error")
+							var tableCount int
+							require.NoError(t, db.QueryRowContext(ctx,
+								"SELECT count(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
+								strings.ToLower(dbName), tableName,
+							).Scan(&tableCount))
+							require.Zero(t, tableCount, "invalid default must not publish a table")
+						})
+					}
+				})
+			}
+			execSQLRequire(t, ctx, db, "SET SESSION sql_mode='STRICT_TRANS_TABLES'")
+		})
+
+		assertIntResult := func(t *testing.T, query string) {
+			t.Helper()
+			rows, err := db.QueryContext(ctx, query)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, rows.Close()) }()
+			columnTypes, err := rows.ColumnTypes()
+			require.NoError(t, err)
+			require.Equal(t, "INT", columnTypes[0].DatabaseTypeName())
+			var count int
+			var maxValue int64
+			for rows.Next() {
+				var value int64
+				require.NoError(t, rows.Scan(&value))
+				count++
+				if value > maxValue {
+					maxValue = value
+				}
+			}
+			require.NoError(t, rows.Err())
+			require.Equal(t, 3, count)
+			require.Equal(t, int64(8388608), maxValue)
+		}
+
+		unionForward := "SELECT v FROM " + medium + " UNION SELECT v FROM " + integer
+		unionReverse := "SELECT v FROM " + integer + " UNION SELECT v FROM " + medium
+		for _, tc := range []struct {
+			name  string
+			query string
+		}{
+			{name: "mediumint first", query: unionForward},
+			{name: "int first", query: unionReverse},
+		} {
+			t.Run("union result "+tc.name, func(t *testing.T) {
+				assertIntResult(t, tc.query)
+			})
+			t.Run("union ctas "+tc.name, func(t *testing.T) {
+				tableName := "union_" + strings.ReplaceAll(tc.name, " ", "_")
+				table := "`" + dbName + "`." + tableName
+				_, err := db.ExecContext(ctx, "CREATE TABLE "+table+" AS "+tc.query)
+				require.NoError(t, err)
+				var columnType string
+				err = db.QueryRowContext(ctx, "SELECT data_type FROM information_schema.columns WHERE table_schema=? AND table_name=? AND column_name='v'", strings.ToLower(dbName), tableName).Scan(&columnType)
+				require.NoError(t, err)
+				require.Equal(t, "int", strings.ToLower(columnType))
+				var maxValue int64
+				require.NoError(t, db.QueryRowContext(ctx, "SELECT max(v) FROM "+table).Scan(&maxValue))
+				require.Equal(t, int64(8388608), maxValue)
+			})
+		}
+
+		t.Run("case common integer result widens before materialization", func(t *testing.T) {
+			tableName := "case_mixed_integer"
+			table := "`" + dbName + "`." + tableName
+			query := "SELECT CASE WHEN m.v < 0 THEN m.v ELSE i.v END AS v FROM " + medium + " m CROSS JOIN " + integer + " i"
+			_, err := db.ExecContext(ctx, "CREATE TABLE "+table+" AS "+query)
+			require.NoError(t, err)
+			var columnType string
+			err = db.QueryRowContext(ctx, "SELECT data_type FROM information_schema.columns WHERE table_schema=? AND table_name=? AND column_name='v'", strings.ToLower(dbName), tableName).Scan(&columnType)
+			require.NoError(t, err)
+			require.Equal(t, "int", strings.ToLower(columnType))
+			var maxValue int64
+			require.NoError(t, db.QueryRowContext(ctx, "SELECT max(v) FROM "+table).Scan(&maxValue))
+			require.Equal(t, int64(8388608), maxValue)
+		})
+	})
+}

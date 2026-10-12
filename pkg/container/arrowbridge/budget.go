@@ -131,9 +131,12 @@ func validateMediumIntValues(ctx context.Context, column arrow.Array, target typ
 		if column.IsNull(row) {
 			continue
 		}
-		value, signed, err := mediumIntArrowValue(ctx, column, row)
+		value, signed, valid, err := mediumIntArrowValue(ctx, column, row)
 		if err != nil {
 			return err
+		}
+		if !valid {
+			continue
 		}
 		if signed {
 			if value < min || value > max {
@@ -149,38 +152,44 @@ func validateMediumIntValues(ctx context.Context, column arrow.Array, target typ
 // mediumIntArrowValue follows the integer conversion matrix accepted by
 // BindLoad. Unsigned 64-bit inputs above MaxInt64 are immediately out of the
 // MEDIUMINT domain and are represented by MaxInt64 for the caller's check.
-func mediumIntArrowValue(ctx context.Context, column arrow.Array, row int) (int64, bool, error) {
+func mediumIntArrowValue(ctx context.Context, column arrow.Array, row int) (int64, bool, bool, error) {
+	if column.DataType().ID() == arrow.NULL || column.IsNull(row) {
+		return 0, false, false, nil
+	}
 	if dictionary, ok := column.(*array.Dictionary); ok {
 		values := dictionary.Dictionary()
 		index, err := checkedDictionaryIndex(ctx, dictionary, row, values.Len())
 		if err != nil {
-			return 0, false, err
+			return 0, false, false, err
+		}
+		if values.DataType().ID() == arrow.NULL || values.IsNull(index) {
+			return 0, false, false, nil
 		}
 		return mediumIntArrowValue(ctx, values, index)
 	}
 	switch values := column.(type) {
 	case *array.Int8:
-		return int64(values.Value(row)), true, nil
+		return int64(values.Value(row)), true, true, nil
 	case *array.Int16:
-		return int64(values.Value(row)), true, nil
+		return int64(values.Value(row)), true, true, nil
 	case *array.Int32:
-		return int64(values.Value(row)), true, nil
+		return int64(values.Value(row)), true, true, nil
 	case *array.Int64:
-		return values.Value(row), true, nil
+		return values.Value(row), true, true, nil
 	case *array.Uint8:
-		return int64(values.Value(row)), false, nil
+		return int64(values.Value(row)), false, true, nil
 	case *array.Uint16:
-		return int64(values.Value(row)), false, nil
+		return int64(values.Value(row)), false, true, nil
 	case *array.Uint32:
-		return int64(values.Value(row)), false, nil
+		return int64(values.Value(row)), false, true, nil
 	case *array.Uint64:
 		value := values.Value(row)
 		if value > math.MaxInt64 {
-			return math.MaxInt64, false, nil
+			return math.MaxInt64, false, true, nil
 		}
-		return int64(value), false, nil
+		return int64(value), false, true, nil
 	default:
-		return 0, false, moerr.NewInvalidInputf(ctx, "unsupported Arrow value %T for MEDIUMINT", column)
+		return 0, false, false, moerr.NewInvalidInputf(ctx, "unsupported Arrow value %T for MEDIUMINT", column)
 	}
 }
 

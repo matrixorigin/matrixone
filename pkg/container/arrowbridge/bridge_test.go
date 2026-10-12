@@ -2123,6 +2123,115 @@ func TestMediumIntArrowLoadEnforcesLogicalBounds(t *testing.T) {
 	}
 }
 
+func TestMediumIntDictionaryValidationUsesLogicalNulls(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		target     types.Type
+		nullIndex  bool
+		buildValue func(*memory.CheckedAllocator) arrow.Array
+		wantErr    bool
+	}{
+		{
+			name:   "null int32 dictionary value with out-of-range payload",
+			target: types.New(types.T_int32, 24, -1),
+			buildValue: func(alloc *memory.CheckedAllocator) arrow.Array {
+				validity := memory.NewBufferBytes([]byte{0})
+				payload := memory.NewBufferBytes(arrow.Int32Traits.CastToBytes([]int32{1 << 23}))
+				data := array.NewData(arrow.PrimitiveTypes.Int32, 1, []*memory.Buffer{validity, payload}, nil, 1, 0)
+				values := array.NewInt32Data(data)
+				data.Release()
+				validity.Release()
+				payload.Release()
+				return values
+			},
+		},
+		{
+			name:   "null arrow dictionary value",
+			target: types.New(types.T_int32, 24, -1),
+			buildValue: func(*memory.CheckedAllocator) arrow.Array {
+				return array.NewNull(1)
+			},
+		},
+		{
+			name:      "null index with out-of-range dictionary payload",
+			target:    types.New(types.T_int32, 24, -1),
+			nullIndex: true,
+			buildValue: func(alloc *memory.CheckedAllocator) arrow.Array {
+				builder := array.NewInt32Builder(alloc)
+				builder.Append(1 << 23)
+				values := builder.NewArray()
+				builder.Release()
+				return values
+			},
+		},
+		{
+			name:    "non-null out-of-range dictionary value remains invalid",
+			target:  types.New(types.T_int32, 24, -1),
+			wantErr: true,
+			buildValue: func(alloc *memory.CheckedAllocator) arrow.Array {
+				builder := array.NewInt32Builder(alloc)
+				builder.Append(1 << 23)
+				values := builder.NewArray()
+				builder.Release()
+				return values
+			},
+		},
+		{
+			name:   "ordinary int null payload is unchanged",
+			target: types.T_int32.ToType(),
+			buildValue: func(alloc *memory.CheckedAllocator) arrow.Array {
+				validity := memory.NewBufferBytes([]byte{0})
+				payload := memory.NewBufferBytes(arrow.Int32Traits.CastToBytes([]int32{1 << 23}))
+				data := array.NewData(arrow.PrimitiveTypes.Int32, 1, []*memory.Buffer{validity, payload}, nil, 1, 0)
+				values := array.NewInt32Data(data)
+				data.Release()
+				validity.Release()
+				payload.Release()
+				return values
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+			values := tc.buildValue(alloc)
+			indicesBuilder := array.NewInt8Builder(alloc)
+			if tc.nullIndex {
+				indicesBuilder.AppendNull()
+			} else {
+				indicesBuilder.Append(0)
+			}
+			indices := indicesBuilder.NewArray()
+			indicesBuilder.Release()
+			dictType := &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int8, ValueType: values.DataType()}
+			dictionary := array.NewDictionaryArray(dictType, indices, values)
+			schema := arrow.NewSchema([]arrow.Field{{Name: "m", Type: dictType}}, nil)
+			record := array.NewRecordBatch(schema, []arrow.Array{dictionary}, 1)
+			plan, err := BindLoad(context.Background(), schema, []TargetColumn{{Name: "m", Type: tc.target}}, MatchByName)
+			require.NoError(t, err)
+			mp := mpool.MustNewZero()
+
+			validationErr := plan.ValidateRecord(context.Background(), record)
+			converted, _, convertErr := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+			if tc.wantErr {
+				require.ErrorContains(t, validationErr, "outside MEDIUMINT range")
+				require.ErrorContains(t, convertErr, "outside MEDIUMINT range")
+				require.Nil(t, converted)
+			} else {
+				require.NoError(t, validationErr)
+				require.NoError(t, convertErr)
+				require.True(t, converted.Vecs[0].IsNull(0))
+				converted.Clean(mp)
+			}
+			require.Zero(t, mp.CurrNB())
+			record.Release()
+			dictionary.Release()
+			indices.Release()
+			values.Release()
+			alloc.AssertSize(t, 0)
+		})
+	}
+}
+
 func TestDictionaryFixedWidthAndTemporalGather(t *testing.T) {
 	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
 	indicesBuilder := array.NewUint16Builder(alloc)
