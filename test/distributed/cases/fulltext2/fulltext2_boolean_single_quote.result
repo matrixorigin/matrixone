@@ -1,0 +1,20 @@
+set experimental_fulltext2_index = 1;
+drop table if exists bookmark2;
+create table bookmark2 (
+id int not null auto_increment,
+title text not null,
+excerpt text not null default (''),
+content text not null default (''),
+primary key (id)
+);
+insert into bookmark2 (title, excerpt, content) values ('test title', 'test excerpt', 'test content');
+create fulltext2 index ft_idx on bookmark2 (title, excerpt, content);
+select id from bookmark2 where match(title, excerpt, content) against('"' in boolean mode) order by id;
+➤ id[4,32,0]
+select id from bookmark2 where match(title, excerpt, content) against('"test title"' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from bookmark2 where match(title, excerpt, content) against('title' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1
+drop table if exists bookmark2;
