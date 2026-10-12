@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -160,6 +161,32 @@ func TestFunctionalIndexDDL(t *testing.T) {
 		defer stmt.Free()
 		return BuildPlan(ctx, stmt, false)
 	}
+	// #29898: expression UNIQUE indexes must be rejected before index construction.
+	probe, err := build("CREATE TABLE mo_index_probe (id INT PRIMARY KEY, email VARCHAR(254))")
+	require.NoError(t, err)
+	ctx.tables["mo_index_probe"] = probe.GetDdl().GetCreateTable().TableDef
+	ctx.objects["mo_index_probe"] = &ObjectRef{ObjName: "mo_index_probe", SchemaName: "tpch"}
+	for _, tc := range []struct {
+		sql  string
+		code uint16
+	}{
+		{"CREATE UNIQUE INDEX mo_unique_email_expression ON mo_index_probe ((LOWER(email)))", moerr.ErrNotSupported},
+		{"CREATE TABLE unique_expression_probe (email VARCHAR(254), UNIQUE INDEX bad ((LOWER(email))))", moerr.ErrInternal},
+		{"ALTER TABLE mo_index_probe ADD UNIQUE INDEX bad ((LOWER(email)))", moerr.ErrInternal},
+		{"ALTER TABLE mo_index_probe ADD UNIQUE INDEX bad ((LOWER(email))), ALGORITHM=COPY", moerr.ErrInternal},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			p, err := build(tc.sql)
+			require.Nil(t, p)
+			require.True(t, moerr.IsMoErrCode(err, tc.code), err)
+		})
+	}
+	ordinary, err := build("CREATE UNIQUE INDEX mo_unique_email ON mo_index_probe (email)")
+	require.NoError(t, err)
+	index := ordinary.GetDdl().GetCreateIndex().GetIndex().GetTableDef().GetIndexes()
+	require.Len(t, index, 1)
+	require.True(t, index[0].Unique)
+	require.Equal(t, []string{"email"}, index[0].Parts)
 	for _, sql := range []string{
 		"create table fi (id int primary key, name varchar(40), index idx_lower ((lower(name))))",
 		"create table fi (id int primary key, value int, index idx_value ((value + 1)))",
@@ -263,7 +290,6 @@ func TestFunctionalIndexDDL(t *testing.T) {
 	for _, sql := range []string{
 		"create table fi (id int, index bad ((rand())))",
 		"create table fi (ts timestamp, index bad ((cast(ts as char(19)))))",
-		"create table fi (name varchar(40), unique index bad ((lower(name))))",
 		"create table fi (name varchar(40), index bad ((lower(name)), (rand())))",
 		"create table fi (name varchar(40), index bad ((lower(name)) desc))",
 		"create table fi (name varchar(40), index bad ((lower(name))) include(name))",
@@ -282,7 +308,7 @@ func TestFunctionalIndexDDL(t *testing.T) {
 		require.Contains(t, p.GetDdl().GetAlterTable().CreateTmpTableSql, "idx_fi")
 		require.NotContains(t, p.GetDdl().GetAlterTable().CreateTmpTableSql, functionalColumnPrefix)
 	}
-	_, err := build("alter table nation add index idx_fi ((n_nationkey + 1)), algorithm=inplace")
+	_, err = build("alter table nation add index idx_fi ((n_nationkey + 1)), algorithm=inplace")
 	require.Error(t, err)
 	// The current main predecessor (MORPC v106) must not be able to author
 	// functional-index metadata before all CNs understand the new contract.

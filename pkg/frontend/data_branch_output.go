@@ -2138,7 +2138,7 @@ func dataBranchSpecialUpdateColumn(
 		return false
 	}
 	baseCol := dataBranchColumnDefByName(baseDef, tblStuff.def.baseColNames[idx])
-	return baseCol != nil && baseCol.Typ.Enumvalues != ""
+	return baseCol != nil && (baseCol.Typ.Id == int32(types.T_enum) || baseCol.Typ.Enumvalues != "")
 }
 
 func appendOrStageDataBranchApplyRow(

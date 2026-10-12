@@ -280,7 +280,7 @@ func geometrySRIDSourceIsNull(ctx context.Context, expr *plan.Expr) bool {
 }
 
 func isEnumPlanType(typ *plan.Type) bool {
-	return typ != nil && typ.Id == int32(types.T_enum) && len(typ.GetEnumvalues()) > 0
+	return typ != nil && typ.Id == int32(types.T_enum)
 }
 
 // isSetPlanType identifies a SET column. SET is stored as T_uint64 with a non-empty
@@ -361,7 +361,7 @@ func mysqlEnumLiteralIndex(enumValues string, value *tree.NumVal) (types.Enum, e
 
 func mysqlSetIgnoreLiteralBits(setValues string, value *tree.NumVal) uint64 {
 	if value.ValType == tree.P_int64 {
-		if v, ok := value.Int64(); ok && v >= 0 {
+		if v, ok := value.Int64(); ok {
 			return uint64(v) & mysqlSetValidBitmap(setValues)
 		}
 	}
@@ -382,11 +382,8 @@ func mysqlSetIgnoreLiteralBits(setValues string, value *tree.NumVal) uint64 {
 }
 
 func mysqlSetValidBitmap(setValues string) uint64 {
-	memberCount := len(strings.Split(setValues, ","))
-	if memberCount >= types.MaxSetMembers {
-		return ^uint64(0)
-	}
-	return (uint64(1) << uint(memberCount)) - 1
+	bitmap, _ := types.SetValidBitmap(setValues)
+	return bitmap
 }
 
 func mysqlYearLiteralIsValid(value *tree.NumVal) bool {
@@ -753,7 +750,7 @@ func enumFoldKey(value string) string {
 func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
 	switch {
 	case isSetPlanType(typ):
-		values, err := types.NormalizeSetValues(strings.Split(typ.Enumvalues, ","))
+		values, err := types.NormalizeSetValues(types.DecodeSetValues(typ.Enumvalues))
 		if err != nil {
 			return false
 		}
@@ -1027,7 +1024,7 @@ func setTypeHasEmptyMember(typ *plan.Type) bool {
 	if !isSetPlanType(typ) {
 		return false
 	}
-	values, err := types.NormalizeSetValues(strings.Split(typ.Enumvalues, ","))
+	values, err := types.NormalizeSetValues(types.DecodeSetValues(typ.Enumvalues))
 	if err != nil {
 		return false
 	}

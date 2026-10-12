@@ -1237,6 +1237,25 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			})
 		}
 	case types.T_uint64:
+		if dt.Enumvalues != "" && (isParquetRoundedIntegerSource(st) || isParquetIntegerSource(st, true)) {
+			definition := dt.Enumvalues
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, uint64(0), func(v parquet.Value) (uint64, error) {
+					var bits uint64
+					var err error
+					if isParquetRoundedIntegerSource(st) {
+						bits, err = parquetValueToRoundedUint64(proc.Ctx, st, v)
+					} else {
+						bits, err = parquetValueToUint64(proc.Ctx, st, v)
+					}
+					if err != nil {
+						return 0, err
+					}
+					return types.ParseSetValue(definition, bits)
+				})
+			}
+			break
+		}
 		if isParquetRoundedIntegerSource(st) {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, uint64(0), func(v parquet.Value) (uint64, error) {
