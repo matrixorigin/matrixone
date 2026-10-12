@@ -1572,29 +1572,33 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion93)
 		err = validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
-		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 110")
+		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 111")
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 		client.version = defines.MORPCVersion93
 		_, err = encodeRemoteScope(scope, c.proc)
 		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics")
 
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline), "protocol version 110")
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline), "protocol version 111")
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline), "protocol version 111")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
-		client.version = defines.MORPCVersion110
-		cRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
+		client.version = defines.MORPCVersion111
+		cRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
 		encoded, err := encodeRemoteScope(scope, c.proc)
 		require.NoError(t, err)
 		decoded, err := decodeScope(encoded, c.proc, true, nil)
 		require.NoError(t, err)
 		decoded.release()
 
-		cRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
-		decoded, err = decodeScope(encoded, c.proc, true, nil)
-		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 110")
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
-		require.Nil(t, decoded)
+		for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110} {
+			cRT.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+			decoded, err = decodeScope(encoded, c.proc, true, nil)
+			require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 111")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+			require.Nil(t, decoded)
+		}
 	})
 
 	t.Run("typed BIN/CONV sender and receiver boundary", func(t *testing.T) {

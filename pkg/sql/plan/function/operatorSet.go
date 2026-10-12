@@ -401,6 +401,25 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			source = append(source, inputs[l-1])
 		}
 
+		if retType, ok := CommonMediumIntType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			shouldCast := needCast
+			for i := range inputs {
+				isValue := i%2 == 1 || (len(inputs)%2 == 1 && i == len(inputs)-1)
+				if !isValue {
+					finalTypes[i] = types.T_bool.ToType()
+					shouldCast = shouldCast || inputs[i].Oid != types.T_bool
+					continue
+				}
+				finalTypes[i] = retType
+				shouldCast = shouldCast || !sameMediumIntCommonType(inputs[i], retType)
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+
 		if retType, ok := conditionalTemporalCommonType(source); ok {
 			finalTypes := make([]types.Type, len(inputs))
 			for i := range finalTypes {
@@ -754,6 +773,16 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 
 		source := []types.Type{inputs[1], inputs[2]}
+		if retType, ok := CommonMediumIntType(source); ok {
+			finalTypes := []types.Type{conditionType, retType, retType}
+			shouldCast := needCast ||
+				!sameMediumIntCommonType(source[0], retType) ||
+				!sameMediumIntCommonType(source[1], retType)
+			if shouldCast {
+				return newCheckResultWithCast(0, finalTypes)
+			}
+			return newCheckResultWithSuccess(0)
+		}
 		if retType, ok := conditionalTemporalCommonType(source); ok {
 			finalTypes := []types.Type{conditionType, retType, retType}
 			shouldCast := needCast

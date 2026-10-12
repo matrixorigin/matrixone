@@ -1005,3 +1005,56 @@ func TestTemporalConversionProtocolSourceMatrix(t *testing.T) {
 		})
 	}
 }
+
+func TestRequiredRemoteExpressionFeaturesMediumIntAssignmentBounds(t *testing.T) {
+	cast := func(functionID int32, functionName string, target Type) *Expr {
+		return &Expr{Typ: target, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(functionID) << 32, ObjName: functionName},
+			Args: []*Expr{
+				{Typ: Type{Id: planInt32TypeID}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}},
+				{Typ: target, Expr: &Expr_T{T: &TargetType{}}},
+			},
+		}}}
+	}
+	arrayCast := func(typeName string) *Expr {
+		return &Expr{Typ: Type{Id: planJSONTypeID, Enumvalues: typeName}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(castJSONToArrayFunctionID) << 32, ObjName: "cast_json_to_array"},
+			Args: []*Expr{
+				{Typ: Type{Id: planVarcharTypeID}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: typeName}}}},
+				{Typ: Type{Id: planJSONTypeID}, Expr: &Expr_Col{Col: &ColRef{ColPos: 1}}},
+			},
+		}}}
+	}
+	widenedResult := func(functionID int32, functionName string) *Expr {
+		castExpr := cast(functionID, functionName, Type{Id: planInt32TypeID, Width: 24})
+		// UNION can widen only the outer result metadata while retaining the
+		// assignment CAST and its width-24 target argument.
+		castExpr.Typ.Width = 32
+		return castExpr
+	}
+	for _, tc := range []struct {
+		name string
+		expr *Expr
+		want bool
+	}{
+		{name: "strict signed MEDIUMINT assignment", expr: cast(541, "cast_strict", Type{Id: planInt32TypeID, Width: 24}), want: true},
+		{name: "strict assignment target after UNION result widening", expr: widenedResult(541, "cast_strict"), want: true},
+		{name: "signed MEDIUMINT assignment", expr: cast(554, "cast_assign", Type{Id: planInt32TypeID, Width: 24}), want: true},
+		{name: "assignment target after UNION result widening", expr: widenedResult(554, "cast_assign"), want: true},
+		{name: "ignored signed MEDIUMINT assignment", expr: cast(555, "cast_ignore", Type{Id: planInt32TypeID, Width: 24}), want: true},
+		{name: "ignore target after UNION result widening", expr: widenedResult(555, "cast_ignore"), want: true},
+		{name: "unsigned MEDIUMINT assignment", expr: cast(554, "cast_assign", Type{Id: planUint32TypeID, Width: 24}), want: true},
+		{name: "ordinary INT assignment", expr: cast(554, "cast_assign", Type{Id: planInt32TypeID, Width: 32})},
+		{name: "generic CAST to MEDIUMINT", expr: cast(21, "cast", Type{Id: planInt32TypeID, Width: 24})},
+		{name: "signed typed array", expr: arrayCast("array(mediumint)"), want: true},
+		{name: "unsigned nested typed array", expr: arrayCast("array(array(mediumint unsigned))"), want: true},
+		{name: "ordinary INT typed array", expr: arrayCast("array(int)")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(tc.expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.MediumIntAssignmentBounds)
+			require.Equal(t, tc.want, features.Any())
+		})
+	}
+}

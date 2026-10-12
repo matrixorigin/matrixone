@@ -111,6 +111,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.IntegerParameterCoercion && requiredVersion < defines.MORPCVersion85 {
 		requiredVersion = defines.MORPCVersion85
 	}
+	if features.MediumIntAssignmentBounds && requiredVersion < defines.MORPCVersion110 {
+		requiredVersion = defines.MORPCVersion110
+	}
 	if features.BoundedConditionalStringDomains && requiredVersion < defines.MORPCVersion83 {
 		requiredVersion = defines.MORPCVersion83
 	}
@@ -121,8 +124,8 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.SpatialDistanceSemantics && requiredVersion < defines.MORPCVersion90 {
 		requiredVersion = defines.MORPCVersion90
 	}
-	if features.CRC32JSONTextBytes && requiredVersion < defines.MORPCVersion110 {
-		requiredVersion = defines.MORPCVersion110
+	if features.CRC32JSONTextBytes && requiredVersion < defines.MORPCVersion111 {
+		requiredVersion = defines.MORPCVersion111
 	}
 	if features.DecimalDivisionSemantics && requiredVersion < defines.MORPCVersion97 {
 		requiredVersion = defines.MORPCVersion97

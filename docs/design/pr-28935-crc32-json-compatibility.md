@@ -10,7 +10,7 @@ PR data.
 | Identity | Binding and execution |
 | --- | --- |
 | CRC32 overload 0 | Existing catalog/wire expressions hash binary JSON; ordinary non-JSON calls retain their original bytes and scalar casts. |
-| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires candidate MORPC v110. |
+| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires candidate MORPC v111. |
 
 The result stays UINT64; the executor also retains the historic UINT32 wrapper.
 A stored legacy generated value can intentionally differ from a freshly bound
@@ -20,7 +20,7 @@ INSERT, UPDATE, REPLACE, ODKU, prepared rebinding and index maintenance.
 ## Boundaries
 
 Placement checks workers and falls back to one CN. Sending rechecks the actual
-worker at candidate v110; receiving checks the new identity. Old coordinators send identity
+worker at candidate v111; receiving checks the new identity. Old coordinators send identity
 0, which new workers still implement. Unknown capabilities fail closed.
 
 Catalog read and authoring use the existing separate durable admission floors.
@@ -39,20 +39,21 @@ is not a lossless way to preserve a legacy generated expression's algorithm.
 
 ## Upgrade and rollback
 
-Supported sources include main through v109 and supported released versions, not
+Supported sources include main through v110 and supported released versions, not
 earlier unmerged experiment binaries that changed overload 0 in place. Such data
 cannot be distinguished by identity and must not be admitted as a supported
 upgrade source. The current maintenance candidate integrates main
-`a059450c2bedf761dcb585b9e51600b383875568`, preserving all contracts through v109,
+`f802ab6a6fd66fed0f094d1772a6f93049004e8a`, preserving all contracts through v110,
 including v101's JSON source domains, v107's functional-index contracts and
 v108's isolated user-variable NULL regexp history during migration and v109's
-native Unicode collation metadata. CRC32 uses candidate v110. This number is
+native Unicode collation metadata and v110's MEDIUMINT assignment bounds.
+CRC32 uses candidate v111. This number is
 not claimed unique among other unmerged maintenance
 candidates. Before landing, reallocate it against the actual cumulative main and
 rerun the predecessor/admission tests; a higher number cannot advertise missing
 predecessor capabilities. Cross-PR allocation coordination remains open.
 
-Publishing new persisted expressions requires the durable candidate v110 authoring barrier.
+Publishing new persisted expressions requires the durable candidate v111 authoring barrier.
 Once the durable floor is raised, old CNs must stay excluded, including after
 restart. A failed activation does not imply the floor can be lowered. Rollback
 must respect the existing admission mechanism; this change adds no floor reset.
@@ -87,7 +88,26 @@ Real two-binary rolling upgrade, persistent old-table DML after restart and
 post-floor downgrade rejection remain separate environment acceptance tests;
 mock version values and same-version CI do not prove them.
 
-## Current main integration candidate on 2026-10-10
+## Current main integration candidate on 2026-10-12
+
+Actual main `f802ab6a6fd66fed0f094d1772a6f93049004e8a` has landed MEDIUMINT
+assignment bounds at v110. The normal merge retains its independent feature
+walker, placement, destination, receiver and persisted-expression gates at v110;
+CRC32's independent overload-one identity now requires candidate v111 at local
+execution, placement, actual destination send, receive, persisted read and
+durable authoring. Latest is cumulative v111, not a relabelled CRC-only v110.
+The cumulative regression uses main's width-24 assignment target with widened
+INT result metadata alongside a real CRC32 JSON overload-one expression. It
+checks both expression orders, individual v110/v111 floors, wire feature
+retention and predecessor rejection/current admission at the send and receive
+boundaries. Legacy overload zero and conservative PREPARE migration remain
+unchanged. New-tree focused/owning tests, incremental vet/lint, production BVT
+and integration execution are pending the root-owned validation slot. Prior
+validation below retains its own revision and is not new v111 evidence. Final
+maintainer allocation, design acceptance and release/deployment gates remain
+open.
+
+## Historical main integration candidate on 2026-10-10
 
 The normal merge integrates actual main `a059450c2bedf761dcb585b9e51600b383875568`,
 including Unicode collation metadata and its bootstrap/read/authoring v109

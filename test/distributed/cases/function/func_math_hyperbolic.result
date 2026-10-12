@@ -1,0 +1,90 @@
+SELECT TANH(0) AS tanh_zero, COSH(0) AS cosh_zero, ASINH(0) AS asinh_zero, ACOSH(1) AS acosh_one, ATANH(0) AS atanh_zero;
+➤ tanh_zero[8,53,31]  ¦  cosh_zero[8,53,31]  ¦  asinh_zero[8,53,31]  ¦  acosh_one[8,53,31]  ¦  atanh_zero[8,53,31]  𝄀
+0.0  ¦  1.0  ¦  0.0  ¦  0.0  ¦  0.0
+SELECT ROUND(TANH(1),12) AS tanh_one, ROUND(TANH(-2),12) AS tanh_negative_two, ROUND(COSH(-1),12) AS cosh_negative_one, ROUND(ASINH(2),12) AS asinh_two, ROUND(ACOSH(2),12) AS acosh_two, ROUND(ATANH(-0.5),12) AS atanh_negative_half;
+➤ tanh_one[8,53,31]  ¦  tanh_negative_two[8,53,31]  ¦  cosh_negative_one[8,53,31]  ¦  asinh_two[8,53,31]  ¦  acosh_two[8,53,31]  ¦  atanh_negative_half[8,53,31]  𝄀
+0.761594155956  ¦  -0.964027580076  ¦  1.543080634815  ¦  1.443635475179  ¦  1.316957896925  ¦  -0.549306144334
+SELECT TANH(NULL) AS tanh_null, COSH(NULL) AS cosh_null, ASINH(NULL) AS asinh_null, ACOSH(NULL) AS acosh_null, ATANH(NULL) AS atanh_null;
+➤ tanh_null[8,53,31]  ¦  cosh_null[8,53,31]  ¦  asinh_null[8,53,31]  ¦  acosh_null[8,53,31]  ¦  atanh_null[8,53,31]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null
+SELECT ABS(TANH(CAST('1e-20' AS DOUBLE))/CAST('1e-20' AS DOUBLE)-1)<1e-15 AS tanh_tiny, ABS(TANH(CAST('-1e-20' AS DOUBLE))/CAST('-1e-20' AS DOUBLE)-1)<1e-15 AS tanh_negative_tiny, ABS(ASINH(CAST('1e-20' AS DOUBLE))/CAST('1e-20' AS DOUBLE)-1)<1e-15 AS asinh_tiny, ABS(ATANH(CAST('1e-20' AS DOUBLE))/CAST('1e-20' AS DOUBLE)-1)<1e-15 AS atanh_tiny;
+➤ tanh_tiny[-7,1,0]  ¦  tanh_negative_tiny[-7,1,0]  ¦  asinh_tiny[-7,1,0]  ¦  atanh_tiny[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+SELECT TANH(CAST('1e308' AS DOUBLE)) AS tanh_large, TANH(CAST('-1e308' AS DOUBLE)) AS tanh_negative_large, ABS(ASINH(CAST('1e308' AS DOUBLE))-709.889355822726)<1e-12 AS asinh_large, ABS(ACOSH(CAST('1e308' AS DOUBLE))-709.889355822726)<1e-12 AS acosh_large;
+➤ tanh_large[8,53,31]  ¦  tanh_negative_large[8,53,31]  ¦  asinh_large[-7,1,0]  ¦  acosh_large[-7,1,0]  𝄀
+1.0  ¦  -1.0  ¦  1  ¦  1
+SELECT ABS(COSH(710)/CAST('1.1169973830808555e308' AS DOUBLE)-1)<1e-14 AS cosh_large_finite, ABS(COSH(-710)/CAST('1.1169973830808555e308' AS DOUBLE)-1)<1e-14 AS cosh_negative_large_finite;
+➤ cosh_large_finite[-7,1,0]  ¦  cosh_negative_large_finite[-7,1,0]  𝄀
+1  ¦  1
+SELECT ABS(ACOSH(CAST('1.0000000000000002' AS DOUBLE))-CAST('2.1073424255447017e-8' AS DOUBLE))<1e-22 AS acosh_near_one, ABS(ATANH(CAST('0.9999999999999999' AS DOUBLE))-18.714973875118524)<1e-13 AS atanh_near_one;
+➤ acosh_near_one[-7,1,0]  ¦  atanh_near_one[-7,1,0]  𝄀
+1  ¦  1
+SELECT ACOSH(-1) IS NULL AS acosh_negative_invalid, ACOSH(0) IS NULL AS acosh_zero_invalid, ACOSH(CAST('0.9999999999999999' AS DOUBLE)) IS NULL AS acosh_near_invalid, ATANH(-1) IS NULL AS atanh_negative_boundary, ATANH(1) IS NULL AS atanh_positive_boundary, ATANH(-2) IS NULL AS atanh_negative_invalid, ATANH(2) IS NULL AS atanh_positive_invalid;
+➤ acosh_negative_invalid[-7,1,0]  ¦  acosh_zero_invalid[-7,1,0]  ¦  acosh_near_invalid[-7,1,0]  ¦  atanh_negative_boundary[-7,1,0]  ¦  atanh_positive_boundary[-7,1,0]  ¦  atanh_negative_invalid[-7,1,0]  ¦  atanh_positive_invalid[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1
+SELECT COSH(711);
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'cosh(711)'
+SELECT COSH(-711);
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'cosh(-711)'
+SELECT ROUND(TANH(TRUE),12) AS tanh_bool, COSH(FALSE) AS cosh_bool, ROUND(ASINH(CAST(1 AS DECIMAL(10,3))),12) AS asinh_decimal, ACOSH('1') AS acosh_string, ROUND(ATANH(CAST('0.5' AS FLOAT)),12) AS atanh_float;
+➤ tanh_bool[8,53,31]  ¦  cosh_bool[8,53,31]  ¦  asinh_decimal[8,53,31]  ¦  acosh_string[8,53,31]  ¦  atanh_float[8,53,31]  𝄀
+0.761594155956  ¦  1.0  ¦  0.88137358702  ¦  0.0  ¦  0.549306144334
+DROP TABLE IF EXISTS hyperbolic_input;
+CREATE TABLE hyperbolic_input(id INT PRIMARY KEY, x DOUBLE);
+INSERT INTO hyperbolic_input VALUES (1,-2),(2,-1),(3,-0.5),(4,0),(5,0.5),(6,1),(7,2),(8,NULL);
+SELECT id, ROUND(TANH(x),12) AS tanh_x, ROUND(COSH(x),12) AS cosh_x, ROUND(ASINH(x),12) AS asinh_x, ROUND(ACOSH(x),12) AS acosh_x, ROUND(ATANH(x),12) AS atanh_x FROM hyperbolic_input ORDER BY id;
+➤ id[4,32,0]  ¦  tanh_x[8,53,31]  ¦  cosh_x[8,53,31]  ¦  asinh_x[8,53,31]  ¦  acosh_x[8,53,31]  ¦  atanh_x[8,53,31]  𝄀
+1  ¦  -0.964027580076  ¦  3.762195691084  ¦  -1.443635475179  ¦  null  ¦  null  𝄀
+2  ¦  -0.761594155956  ¦  1.543080634815  ¦  -0.88137358702  ¦  null  ¦  null  𝄀
+3  ¦  -0.46211715726  ¦  1.127625965206  ¦  -0.48121182506  ¦  null  ¦  -0.549306144334  𝄀
+4  ¦  0.0  ¦  1.0  ¦  0.0  ¦  null  ¦  0.0  𝄀
+5  ¦  0.46211715726  ¦  1.127625965206  ¦  0.48121182506  ¦  null  ¦  0.549306144334  𝄀
+6  ¦  0.761594155956  ¦  1.543080634815  ¦  0.88137358702  ¦  0.0  ¦  null  𝄀
+7  ¦  0.964027580076  ¦  3.762195691084  ¦  1.443635475179  ¦  1.316957896925  ¦  null  𝄀
+8  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+SELECT COUNT(TANH(x)) AS tanh_count, COUNT(COSH(x)) AS cosh_count, COUNT(ASINH(x)) AS asinh_count, COUNT(ACOSH(x)) AS acosh_count, COUNT(ATANH(x)) AS atanh_count, ABS(AVG(TANH(x)))<1e-15 AS tanh_balanced, ABS(AVG(ASINH(x)))<1e-15 AS asinh_balanced, ABS(AVG(ATANH(x)))<1e-15 AS atanh_balanced FROM hyperbolic_input;
+➤ tanh_count[-5,64,0]  ¦  cosh_count[-5,64,0]  ¦  asinh_count[-5,64,0]  ¦  acosh_count[-5,64,0]  ¦  atanh_count[-5,64,0]  ¦  tanh_balanced[-7,1,0]  ¦  asinh_balanced[-7,1,0]  ¦  atanh_balanced[-7,1,0]  𝄀
+7  ¦  7  ¦  7  ¦  2  ¦  3  ¦  1  ¦  1  ¦  1
+SELECT COUNT(ACOSH(id-2)) AS acosh_not_null_input_count, COUNT(ATANH(id-4)) AS atanh_not_null_input_count FROM hyperbolic_input;
+➤ acosh_not_null_input_count[-5,64,0]  ¦  atanh_not_null_input_count[-5,64,0]  𝄀
+6  ¦  1
+SELECT id FROM hyperbolic_input WHERE ACOSH(id-2) IS NULL ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+SELECT id FROM hyperbolic_input WHERE ATANH(id-4) IS NOT NULL ORDER BY id;
+➤ id[4,32,0]  𝄀
+4
+SELECT id, ROUND(CASE WHEN x=0 THEN COSH(x*1000) ELSE TANH(x) END,12) AS selected_value FROM hyperbolic_input ORDER BY id;
+➤ id[4,32,0]  ¦  selected_value[8,53,31]  𝄀
+1  ¦  -0.964027580076  𝄀
+2  ¦  -0.761594155956  𝄀
+3  ¦  -0.46211715726  𝄀
+4  ¦  1.0  𝄀
+5  ¦  0.46211715726  𝄀
+6  ¦  0.761594155956  𝄀
+7  ¦  0.964027580076  𝄀
+8  ¦  null
+SELECT COSH(id*1000) FROM hyperbolic_input WHERE id=1;
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'cosh(1000)'
+PREPARE hyperbolic_stmt FROM 'SELECT TANH(?), COSH(?), ASINH(?), ACOSH(?), ATANH(?)';
+SET @hyperbolic_param=TRUE;
+EXECUTE hyperbolic_stmt USING @hyperbolic_param, @hyperbolic_param, @hyperbolic_param, @hyperbolic_param, @hyperbolic_param;
+➤ TANH(?)[8,53,31]  ¦  COSH(?)[8,53,31]  ¦  ASINH(?)[8,53,31]  ¦  ACOSH(?)[8,53,31]  ¦  ATANH(?)[8,53,31]  𝄀
+0.7615941559557649  ¦  1.5430806348152437  ¦  0.881373587019543  ¦  0.0  ¦  null
+SET @hyperbolic_param=FALSE;
+EXECUTE hyperbolic_stmt USING @hyperbolic_param, @hyperbolic_param, @hyperbolic_param, @hyperbolic_param, @hyperbolic_param;
+➤ TANH(?)[8,53,31]  ¦  COSH(?)[8,53,31]  ¦  ASINH(?)[8,53,31]  ¦  ACOSH(?)[8,53,31]  ¦  ATANH(?)[8,53,31]  𝄀
+0.0  ¦  1.0  ¦  0.0  ¦  null  ¦  0.0
+DEALLOCATE PREPARE hyperbolic_stmt;
+SELECT TANH();
+invalid argument function tanh, bad value []
+SELECT COSH(1,2);
+invalid argument function cosh, bad value [BIGINT BIGINT]
+SELECT ASINH(CAST('2026-01-01' AS DATE));
+invalid argument function asinh, bad value [DATE]
+SELECT ACOSH(1,2);
+invalid argument function acosh, bad value [BIGINT BIGINT]
+SELECT ATANH();
+invalid argument function atanh, bad value []
+DROP TABLE hyperbolic_input;

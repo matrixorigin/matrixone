@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -248,6 +249,11 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 				return plan.Type{Id: int32(types.T_uint16), Width: n.InternalType.Width, Scale: -1}, nil
 			}
 			return plan.Type{Id: int32(types.T_int16), Width: n.InternalType.Width, Scale: -1}, nil
+		case defines.MYSQL_TYPE_INT24:
+			if n.InternalType.Unsigned || n.InternalType.Zerofill {
+				return plan.Type{Id: int32(types.T_uint32), Width: n.InternalType.Width, Scale: -1}, nil
+			}
+			return plan.Type{Id: int32(types.T_int32), Width: n.InternalType.Width, Scale: -1}, nil
 		case defines.MYSQL_TYPE_LONG:
 			if n.InternalType.Unsigned {
 				return plan.Type{Id: int32(types.T_uint32), Width: n.InternalType.Width, Scale: -1}, nil
@@ -440,12 +446,12 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 
 			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
 		case defines.MYSQL_TYPE_SET:
-			setValues, err := types.NormalizeSetValues(n.InternalType.EnumValues)
+			setValues, err := types.EncodeSetValues(n.InternalType.EnumValues)
 			if err != nil {
 				return plan.Type{}, err
 			}
 
-			return plan.Type{Id: int32(types.T_uint64), Enumvalues: strings.Join(setValues, ",")}, nil
+			return plan.Type{Id: int32(types.T_uint64), Enumvalues: setValues}, nil
 		default:
 			return plan.Type{}, moerr.NewNYIf(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}
@@ -952,7 +958,32 @@ func buildDefaultExprWithColumns(
 
 	// try to calculate default value, return err if fails
 	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
+	// cast_assign remains an executable expression because its behavior depends
+	// on sql_mode, so rule.IsConstant rejects the outer function. Validate when
+	// its source value is constant, without eagerly evaluating volatile defaults.
+	constantMediumIntDefault := false
+	if err == nil && isMediumIntPlanType(typ) && newExpr.GetLit() == nil {
+		if cast := newExpr.GetF(); cast != nil && len(cast.Args) > 0 {
+			constantMediumIntDefault = rule.IsConstant(cast.Args[0], false)
+		}
+	}
+	if constantMediumIntDefault {
+		cast := newExpr.GetF()
+		strictExpr, strictErr := forceAssignmentCastExprWithName(
+			bindCtx, cast.Args[0], typ, "cast_strict")
+		if strictErr != nil {
+			err = strictErr
+		} else if strictExecutor, strictExecErr := colexec.NewExpressionExecutor(proc, strictExpr); strictExecErr != nil {
+			err = strictExecErr
+		} else {
+			_, err = strictExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			strictExecutor.Free()
+		}
+	}
 	if err != nil {
+		if constantMediumIntDefault && moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+			return nil, moerr.NewErrInvalidDefault(bindCtx, colNameOrigin)
+		}
 		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
 	}
 	if typ.Id == int32(types.T_timestamp) && newExpr.GetLit() != nil &&
@@ -969,7 +1000,7 @@ func buildDefaultExprWithColumns(
 		}
 	}
 
-	crc32Text, err := plan.RequiresMORPCVersion110CRC32JSONTextBytes(defaultExpr)
+	crc32Text, err := plan.RequiresMORPCVersion111CRC32JSONTextBytes(defaultExpr)
 	if err != nil {
 		return nil, err
 	}

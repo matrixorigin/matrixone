@@ -44,29 +44,34 @@ func preparedExecutionBindings(ctx context.Context, values []any, protocolTypes 
 			continue
 		}
 		if param.IsBinaryProtocol {
-			if i*2+1 >= len(protocolTypes) {
-				return nil, moerr.NewInvalidInput(ctx, "prepared parameter has no protocol source type")
-			}
-			mysqlType := defines.MysqlType(protocolTypes[i*2])
 			if param.Value == nil {
-				if binaryProtocolPrepareParamIsBinaryString(mysqlType) {
+				// NULL bitmap entries need no source type. Connector/J can omit
+				// the entire type vector on an initial all-NULL execution.
+				if i*2+1 < len(protocolTypes) &&
+					binaryProtocolPrepareParamIsBinaryString(defines.MysqlType(protocolTypes[i*2])) {
 					binding.Type = types.T_blob.ToType()
 				}
-			} else if param.PrepareParamKind == vector.PrepareParamBoolean {
-				binding.Type = types.T_bool.ToType()
-			} else if mysqlType == defines.MYSQL_TYPE_DECIMAL || mysqlType == defines.MYSQL_TYPE_NEWDECIMAL {
-				binding.Type, binding.NumericType = param.DirectResultType, param.RuntimeType
-				if !param.HasDirectResultType || !param.HasRuntimeType {
-					return nil, invalidBinaryDecimalParameter(ctx, param.Value)
-				}
 			} else {
-				oid, supported := binaryProtocolPrepareParamConcreteType(mysqlType, protocolTypes[i*2+1]&0x80 != 0)
-				if !supported {
-					return nil, moerr.NewInvalidInput(ctx, "unsupported prepared parameter source type")
+				if i*2+1 >= len(protocolTypes) {
+					return nil, moerr.NewInvalidInput(ctx, "prepared parameter has no protocol source type")
 				}
-				binding.Type = oid.ToType()
-				if binaryProtocolTemporalMysqlType(mysqlType) {
-					binding.Type = binaryProtocolTemporalParamType(oid, fmt.Sprint(param.Value))
+				mysqlType := defines.MysqlType(protocolTypes[i*2])
+				if param.PrepareParamKind == vector.PrepareParamBoolean {
+					binding.Type = types.T_bool.ToType()
+				} else if mysqlType == defines.MYSQL_TYPE_DECIMAL || mysqlType == defines.MYSQL_TYPE_NEWDECIMAL {
+					binding.Type, binding.NumericType = param.DirectResultType, param.RuntimeType
+					if !param.HasDirectResultType || !param.HasRuntimeType {
+						return nil, invalidBinaryDecimalParameter(ctx, param.Value)
+					}
+				} else {
+					oid, supported := binaryProtocolPrepareParamConcreteType(mysqlType, protocolTypes[i*2+1]&0x80 != 0)
+					if !supported {
+						return nil, moerr.NewInvalidInput(ctx, "unsupported prepared parameter source type")
+					}
+					binding.Type = oid.ToType()
+					if binaryProtocolTemporalMysqlType(mysqlType) {
+						binding.Type = binaryProtocolTemporalParamType(oid, fmt.Sprint(param.Value))
+					}
 				}
 			}
 		} else if param.HasSourceType {

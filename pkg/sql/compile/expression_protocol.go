@@ -45,8 +45,8 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	}
 	if features.CRC32JSONTextBytes {
 		version, known := remoteMORPCProtocolVersion(c.proc.GetService())
-		if !known || version < defines.MORPCVersion110 {
-			return moerr.NewNotSupportedNoCtx("CRC32 JSON text-byte semantics require MORPC protocol version 110")
+		if !known || version < defines.MORPCVersion111 {
+			return moerr.NewNotSupportedNoCtx("CRC32 JSON text-byte semantics require MORPC protocol version 111")
 		}
 	}
 	if c.execType != plan2.ExecTypeAP_MULTICN {
@@ -97,8 +97,11 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	if features.DecimalLiteralSemantics {
 		required = max(required, defines.MORPCVersion89)
 	}
-	if features.CRC32JSONTextBytes {
+	if features.MediumIntAssignmentBounds {
 		required = max(required, defines.MORPCVersion110)
+	}
+	if features.CRC32JSONTextBytes {
+		required = max(required, defines.MORPCVersion111)
 	}
 	return required
 }

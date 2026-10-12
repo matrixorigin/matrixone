@@ -94,6 +94,42 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 	require.ErrorContains(t, err, "temporal result vector")
 }
 
+func TestPersistedMediumIntRequirementCombinesWithJSONInput(t *testing.T) {
+	mediumIntCast := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_int32), Width: 24},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CAST_ASSIGN, 0), ObjName: "cast_assign"},
+			Args: []*planpb.Expr{
+				{Typ: planpb.Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+				{Typ: planpb.Type{Id: int32(types.T_int32), Width: 24}, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}},
+			},
+		}},
+	}
+	jsonConcat := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CONCAT, 0)},
+			Args: []*planpb.Expr{{
+				Typ:  planpb.Type{Id: int32(types.T_json)},
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}},
+			}},
+		}},
+	}
+	for _, exprs := range [][]*planpb.Expr{{mediumIntCast, jsonConcat}, {jsonConcat, mediumIntCast}} {
+		owner := &planpb.TableDef{Cols: []*planpb.ColDef{
+			{Default: &planpb.Default{Expr: exprs[0]}},
+			{Default: &planpb.Default{Expr: exprs[1]}},
+		}}
+		features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+		require.NoError(t, err)
+		require.True(t, features.MediumIntAssignmentBounds)
+		require.True(t, features.JSONInputContracts)
+		version, err := RequiredPersistedExpressionProtocolVersion(owner)
+		require.NoError(t, err)
+		require.Equal(t, int64(defines.MORPCVersion110), version)
+	}
+}
+
 func TestPersistedDecimalDivisionRequiresV97(t *testing.T) {
 	division := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal128), Width: 16, Scale: 6},
 		Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{
@@ -1176,31 +1212,33 @@ func TestPersistedCRC32JSONProtocolAdmission(t *testing.T) {
 	require.True(t, features.CRC32JSONTextBytes)
 	required, err := RequiredPersistedExpressionProtocolVersion(expr)
 	require.NoError(t, err)
-	require.Equal(t, int64(defines.MORPCVersion110), required)
+	require.Equal(t, int64(defines.MORPCVersion111), required)
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
-	require.ErrorContains(t,
-		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 110")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
+	for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		require.ErrorContains(t,
+			RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 111")
+	}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
 	// The read floor never grants permission to author a new catalog expression.
 	for key, version := range map[string]int64{
-		moruntime.PersistedExpressionProtocolFloor:          defines.MORPCVersion110,
-		moruntime.PersistedExpressionProtocolAuthoringFloor: defines.MORPCVersion109,
+		moruntime.PersistedExpressionProtocolFloor:          defines.MORPCVersion111,
+		moruntime.PersistedExpressionProtocolAuthoringFloor: defines.MORPCVersion110,
 	} {
 		saved, present := rt.GetGlobalVariables(key)
 		rt.SetGlobalVariables(key, version)
 		t.Cleanup(func() {
 			if present {
 				rt.SetGlobalVariables(key, saved)
-			} else {
-				rt.CompareAndDeleteGlobalVariables(key, version)
+			} else if current, ok := rt.GetGlobalVariables(key); ok {
+				rt.CompareAndDeleteGlobalVariables(key, current)
 			}
 		})
 	}
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
-	require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, expr), "protocol version 110")
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion110)
+	require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, expr), "protocol version 111")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion111)
 	require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, expr))
 	legacy := DeepCopyExpr(expr)
 	legacy.GetF().Func.Obj = function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload)
@@ -1231,7 +1269,7 @@ func TestPersistedCRC32MixedOwnerKeepsHighestFloor(t *testing.T) {
 	require.True(t, features.JSONInputContracts)
 	required, err := RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, int64(defines.MORPCVersion110), required)
+	require.Equal(t, int64(defines.MORPCVersion111), required)
 }
 
 func checkAdmissionResult(t *testing.T, version int64, err error, required int64) {
