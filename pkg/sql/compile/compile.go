@@ -6951,15 +6951,6 @@ func canUseHashMarkJoinWithInputs(node, left, right *plan.Node) bool {
 	allNotNull := true
 	for _, condition := range hashConditions {
 		fn := condition.GetF()
-		if fn == nil || !plan2.IsEqualFunc(fn.Func.GetObj()) || len(fn.Args) != 2 {
-			return false
-		}
-		leftRel, leftSingleRel := hashMarkOperandRel(fn.Args[0])
-		rightRel, rightSingleRel := hashMarkOperandRel(fn.Args[1])
-		if !leftSingleRel || !rightSingleRel ||
-			!((leftRel == 0 && rightRel == 1) || (leftRel == 1 && rightRel == 0)) {
-			return false
-		}
 		if left != nil && right != nil {
 			allNotNull = allNotNull &&
 				plan2.IsJoinExprEffectivelyNotNullable(fn.Args[0], left, right) &&
@@ -7003,40 +6994,6 @@ func canUseShuffleHashMarkJoinWithInputs(node, left, right *plan.Node) bool {
 		}
 	}
 	return true
-}
-
-// hashMarkOperandRel returns the single relation referenced by an equality
-// operand. MARK cannot hash an operand that mixes probe and build columns: the
-// resulting residual condition needs row-aware evaluation by LoopJoin.
-func hashMarkOperandRel(expr *plan.Expr) (int32, bool) {
-	relPos := int32(-1)
-	singleRel := true
-
-	var visit func(*plan.Expr)
-	visit = func(current *plan.Expr) {
-		if current == nil || !singleRel {
-			return
-		}
-		switch impl := current.Expr.(type) {
-		case *plan.Expr_Col:
-			if relPos == -1 {
-				relPos = impl.Col.RelPos
-			} else if relPos != impl.Col.RelPos {
-				singleRel = false
-			}
-		case *plan.Expr_F:
-			for _, arg := range impl.F.Args {
-				visit(arg)
-			}
-		case *plan.Expr_List:
-			for _, item := range impl.List.List {
-				visit(item)
-			}
-		}
-	}
-
-	visit(expr)
-	return relPos, singleRel && relPos >= 0
 }
 
 func (c *Compile) broadcastJoinUsesHash(node *plan.Node) bool {
