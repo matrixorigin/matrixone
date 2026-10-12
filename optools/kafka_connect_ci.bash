@@ -156,8 +156,7 @@ with open(path, encoding="utf-8") as report_file:
     report = json.load(report_file)
 report["cleanup_status"] = "failed"
 report["cleanup_errors"] = cleanup_errors
-if report.get("status") == "passed":
-    report["status"] = "failed"
+report["status"] = "failed"
 message = "cleanup failed: " + "; ".join(cleanup_errors)
 report["error"] = "; ".join(value for value in (report.get("error"), message) if value)
 with open(path, "w", encoding="utf-8") as report_file:
