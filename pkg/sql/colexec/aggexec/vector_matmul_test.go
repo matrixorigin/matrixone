@@ -444,6 +444,74 @@ func TestVectorMatmulAccountedMerge(t *testing.T) {
 	require.ErrorIs(t, dst.PreflightBatchMerge(src, 5, merge), mpool.ErrAllocationAccountInvalid)
 }
 
+// vmTextVectors builds varchar ids and vecf8 cells.
+func vmTextVectors(t *testing.T, mp *mpool.MPool, ids []string, rows [][]float32) []*vector.Vector {
+	t.Helper()
+	idv := vector.NewVec(types.T_varchar.ToType())
+	vv := vector.NewVec(vmVecType())
+	for i, r := range rows {
+		require.NoError(t, vector.AppendBytes(idv, []byte(ids[i]), false, mp))
+		cell, err := types.AppendBlockScaled(nil, types.BlockScaledMXFP8, r)
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendBytes(vv, cell, false, mp))
+	}
+	return []*vector.Vector{idv, vv}
+}
+
+// An empty id is stored at the arena offset the next id starts at; merge and compaction keep
+// both spans.
+func TestVectorMatmulEmptyIDSharesOffset(t *testing.T) {
+	query := [][]float32{{1, 0, 0, 0}}
+	long := strings.Repeat("z", 100)
+	for _, accounted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("accounted=%v", accounted), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Zero(t, mp.CurrNB()) }()
+			var allocation *AllocationAccount
+			if accounted {
+				allocation = vmAllocation(t)
+			}
+			mk := func(topk int) *vectorMatmulExec {
+				exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_varchar.ToType(), vmVecType()})
+				require.NoError(t, err)
+				require.NoError(t, exec.SetExtraInformation(vmConfig(topk, query), 0))
+				if accounted {
+					require.NoError(t, exec.(AllocationAccountOwner).SetAllocationAccount(allocation))
+				}
+				require.NoError(t, exec.GroupGrow(1))
+				return exec.(*vectorMatmulExec)
+			}
+			fill := func(exec *vectorMatmulExec, ids []string, rows [][]float32) {
+				vecs := vmTextVectors(t, mp, ids, rows)
+				defer vmFree(mp, vecs)
+				groups := make([]uint64, len(ids))
+				for i := range groups {
+					groups[i] = 1
+				}
+				require.NoError(t, exec.PreflightBatchFill(0, groups, vecs))
+				require.NoError(t, exec.BatchFill(0, groups, vecs))
+			}
+
+			// merge into an empty destination
+			src, dst := mk(2), mk(2)
+			fill(src, []string{"", "winner"}, [][]float32{{0, 0, 0, 0}, {1, 0, 0, 0}})
+			require.NoError(t, dst.PreflightBatchMerge(src, 0, []uint64{1}))
+			require.NoError(t, dst.BatchMerge(src, 0, []uint64{1}))
+			require.Equal(t, []string{`[[["winner",-1],["",0]]]`}, vmFlush(t, mp, dst))
+			require.Equal(t, []string{`[[["winner",-1],["",0]]]`}, vmFlush(t, mp, src))
+			src.Free()
+			dst.Free()
+
+			// the long id overflows the arena and compacts it
+			exec := mk(3)
+			fill(exec, []string{"", "winner"}, [][]float32{{0, 0, 0, 0}, {1, 0, 0, 0}})
+			fill(exec, []string{long}, [][]float32{{2, 0, 0, 0}})
+			require.Equal(t, []string{`[[["` + long + `",-2],["winner",-1],["",0]]]`}, vmFlush(t, mp, exec))
+			exec.Free()
+		})
+	}
+}
+
 func TestVectorMatmulMergeRejectsDifferentConfig(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()) }()

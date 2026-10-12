@@ -549,6 +549,12 @@ type vectorMatmulEntry struct {
 	n     uint32
 }
 
+// vectorMatmulSpan identifies the arena text of an entry. An empty id takes the offset the
+// next id is stored at, so the offset alone does not identify a span.
+type vectorMatmulSpan struct{ off, n uint32 }
+
+func (e vectorMatmulEntry) span() vectorMatmulSpan { return vectorMatmulSpan{e.off, e.n} }
+
 // vectorMatmulState is one group's state: per query a min-heap of at most k entries
 // ordered worst first, and an arena holding the id text of the entries.
 type vectorMatmulState struct {
@@ -645,29 +651,28 @@ func (s *vectorMatmulState) insert(j int, e vectorMatmulEntry) {
 
 // compact moves the referenced id text to the front of the arena in offset order.
 func (s *vectorMatmulState) compact() {
-	type ref struct{ off, n uint32 }
-	var refs []ref
-	seen := make(map[uint32]struct{})
+	var refs []vectorMatmulSpan
+	seen := make(map[vectorMatmulSpan]struct{})
 	for j := 0; j < s.q; j++ {
 		for _, e := range s.hits(j) {
-			if _, ok := seen[e.off]; !ok {
-				seen[e.off] = struct{}{}
-				refs = append(refs, ref{e.off, e.n})
+			if _, ok := seen[e.span()]; !ok {
+				seen[e.span()] = struct{}{}
+				refs = append(refs, e.span())
 			}
 		}
 	}
-	slices.SortFunc(refs, func(a, b ref) int { return int(a.off) - int(b.off) })
-	moved := make(map[uint32]uint32, len(refs))
+	slices.SortFunc(refs, func(a, b vectorMatmulSpan) int { return int(a.off) - int(b.off) })
+	moved := make(map[vectorMatmulSpan]uint32, len(refs))
 	w := 0
 	for _, r := range refs {
 		copy(s.arena[w:], s.arena[r.off:r.off+r.n])
-		moved[r.off] = uint32(w)
+		moved[r] = uint32(w)
 		w += int(r.n)
 	}
 	for j := 0; j < s.q; j++ {
 		h := s.hits(j)
 		for i := range h {
-			h[i].off = moved[h[i].off]
+			h[i].off = moved[h[i].span()]
 		}
 	}
 	s.used = w
@@ -764,20 +769,20 @@ func (s *vectorMatmulState) Merge(other *vectorMatmulState) error {
 	if err := s.reserve(other.used); err != nil {
 		return err
 	}
-	moved := make(map[uint32]uint32)
+	moved := make(map[vectorMatmulSpan]uint32)
 	for j := 0; j < other.q; j++ {
 		for _, e := range other.hits(j) {
 			id := other.id(e)
 			if !s.admits(j, e.score, id) {
 				continue
 			}
-			off, ok := moved[e.off]
+			off, ok := moved[e.span()]
 			if !ok {
 				var err error
 				if off, err = s.appendID(id); err != nil {
 					return err
 				}
-				moved[e.off] = off
+				moved[e.span()] = off
 			}
 			s.insert(j, vectorMatmulEntry{score: e.score, off: off, n: e.n})
 		}

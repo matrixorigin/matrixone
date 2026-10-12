@@ -615,7 +615,8 @@ within the fp32 GEMM's tolerance, rows closer than it in either order.
   empty groups (`[]` per query); several groups; merge of three partial states in both
   orders against a brute-force reference; intermediate-result round trip; accounted fill
   and merge under an allocation account (preflight, in-place arena compaction, no leaked
-  bytes); state codec including malformed input; id text of every supported id type;
+  bytes); an empty string id next to the id stored at the same arena offset, through merge
+  and compaction; state codec including malformed input; id text of every supported id type;
   configuration errors; executors share one parsed configuration (parsed once under
   concurrent first use, dropped after the last executor is freed, errors not kept).
   Binder and compile tests cover the constant-argument rule and the configuration
