@@ -986,6 +986,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		returnExpr.GetSub().Typ = plan.SubqueryRef_EXISTS
 	} else if rowSize == 1 {
 		returnExpr.Typ = subCtx.results[0].Typ
+		if source, ok := collationForExpression(subCtx.results[0]); ok {
+			source.apply(&returnExpr.Typ)
+		}
 	}
 
 	return returnExpr, nil
@@ -8108,6 +8111,13 @@ func bindFuncExprImplByPlanExpr(
 					}
 				}
 				typ := makePlan2Type(&castType)
+				if castType.Oid.IsMySQLString() && args[idx].Typ.CollationCoercibilitySet {
+					// Overload adaptation (including width promotion) is transparent
+					// to provenance. Runtime types do not carry these plan fields.
+					typ.CollationCoercibility = args[idx].Typ.CollationCoercibility
+					typ.CollationCoercibilitySet = true
+					typ.CollationMergeConflict = args[idx].Typ.CollationMergeConflict
+				}
 				if isPadSpaceComparisonFunction(name) &&
 					argsType[idx].Oid == types.T_char && castType.Oid == types.T_varchar {
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
@@ -11850,6 +11860,13 @@ func validNameConstValueExpr(arg *plan.Expr, allowCanonicalStringCast bool) bool
 		return true
 	}
 	fn := arg.GetF()
+	if fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && !fn.SyntaxExplicitCast &&
+		len(fn.Args) == 2 && fn.Args[1].GetT() != nil &&
+		arg.Typ.CollationCoercibilitySet && arg.Typ.CollationCoercibility == 0 {
+		// COLLATE binds as a cast with explicit collation provenance. Validate
+		// its operand recursively instead of admitting arbitrary foldable code.
+		return validNameConstValueExpr(fn.Args[0], allowCanonicalStringCast)
+	}
 	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
 		return false
 	}
@@ -11882,6 +11899,8 @@ func validNameConstLiteralValueAst(expr tree.Expr, allowCanonicalStringCast bool
 	switch value := expr.(type) {
 	case *tree.NumVal:
 		return true
+	case *tree.CollateExpr:
+		return validNameConstLiteralValueAst(value.Expr, allowCanonicalStringCast)
 	case *tree.CastExpr:
 		return allowCanonicalStringCast && isCanonicalStringLiteralCastAst(value)
 	case *tree.UnaryExpr:

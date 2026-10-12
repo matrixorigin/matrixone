@@ -77,4 +77,28 @@ EXECUTE expression_values USING @left, @right;
 SET @right = _binary'a ';
 EXECUTE expression_values USING @left, @right;
 DEALLOCATE PREPARE expression_values;
+
+-- A scalar subquery retains the projected expression's comparison domain.
+CREATE TABLE scalar_values (id INT PRIMARY KEY, s VARCHAR(20) COLLATE utf8mb4_unicode_ci);
+INSERT INTO scalar_values VALUES (1, 'Á');
+SELECT s = 'a', (SELECT s FROM scalar_values WHERE id = 1) = 'a',
+       'a' = (SELECT s FROM scalar_values WHERE id = 1) FROM scalar_values;
+SELECT (SELECT n.s FROM scalar_values n WHERE n.id = t.id) = 'a' FROM scalar_values t;
+SELECT (SELECT s FROM scalar_values WHERE id = 2) = 'a',
+       (SELECT s FROM scalar_values WHERE id = 2) <=> NULL;
+
+-- Width promotion is transparent; a SQL CAST has its own implicit priority.
+SELECT LEAST('a' COLLATE utf8mb4_bin, 'bb') = 'a' COLLATE utf8mb4_general_ci;
+SELECT GREATEST('a' COLLATE utf8mb4_bin, 'bb') = 'bb' COLLATE utf8mb4_general_ci;
+SELECT LEAST('a' COLLATE utf8mb4_bin, 'b') = 'a' COLLATE utf8mb4_general_ci;
+SELECT LEAST('Á' COLLATE utf8mb4_unicode_ci, 'zz') = 'a';
+SELECT CAST(LEAST('a' COLLATE utf8mb4_bin, 'bb') AS CHAR(20)) = 'a' COLLATE utf8mb4_general_ci;
+
+-- COLLATE qualifies a literal without admitting arbitrary folded expressions.
+SELECT NAME_CONST('v', 'Á' COLLATE utf8mb4_unicode_ci) = 'a';
+SELECT sub.v = 'a' FROM (SELECT NAME_CONST('v', 'Á' COLLATE utf8mb4_unicode_ci)) sub;
+SELECT NAME_CONST('v', 1 COLLATE utf8mb4_unicode_ci) = '1';
+SELECT NAME_CONST('v', 'a' COLLATE utf8mb4_unicode_ci) = 'a' COLLATE utf8mb4_bin;
+SELECT NAME_CONST('v', LOWER('A') COLLATE utf8mb4_unicode_ci);
+SELECT NAME_CONST('v', CAST('a' AS CHAR) COLLATE utf8mb4_unicode_ci);
 DROP DATABASE collation_expression_test;

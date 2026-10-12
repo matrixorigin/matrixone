@@ -1627,6 +1627,18 @@ func TestBindNameConstConstArgs(t *testing.T) {
 		sql  string
 	}{
 		{
+			name: "collated string literal",
+			sql:  "select name_const('myname', _utf8mb4'Á' collate utf8mb4_unicode_ci)",
+		},
+		{
+			name: "collated numeric literal",
+			sql:  "select name_const('myname', 1 collate utf8mb4_unicode_ci)",
+		},
+		{
+			name: "derived collated literal",
+			sql:  "select sub.myname from (select name_const('myname', ('Á') collate utf8mb4_unicode_ci)) sub",
+		},
+		{
 			name: "string name and int value",
 			sql:  "select name_const('myname', 14)",
 		},
@@ -1674,6 +1686,22 @@ func TestBindNameConstInvalidArgs(t *testing.T) {
 		name string
 		sql  string
 	}{
+		{
+			name: "collated name",
+			sql:  "select name_const('myname' collate utf8mb4_unicode_ci, 'a')",
+		},
+		{
+			name: "collated function value",
+			sql:  "select name_const('myname', lower('A') collate utf8mb4_unicode_ci)",
+		},
+		{
+			name: "collated explicit cast value",
+			sql:  "select name_const('myname', cast('a' as char) collate utf8mb4_unicode_ci)",
+		},
+		{
+			name: "collated column value",
+			sql:  "select name_const('myname', a collate utf8mb4_unicode_ci) from t",
+		},
 		{
 			name: "wrong arg count",
 			sql:  "select name_const('myname')",

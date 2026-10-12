@@ -196,9 +196,59 @@ func TestFunctionalIndexDDL(t *testing.T) {
 			require.True(t, indexScan, "functional equality must use an index")
 			require.True(t, residual, "functional equality must retain the base-row predicate")
 			require.NoError(t, validateFunctionalTable(t.Context(), table))
+			// Existing expressions can predate coercibility metadata. Their
+			// fully resolved value domain still matches a newly bound predicate.
+			historical := DeepCopyTableDef(table, true)
+			require.NoError(t, pb.VisitExprTree(functionalIndexColumn(historical, historical.Indexes[0]).GeneratedCol.Expr, func(e *Expr) error {
+				e.Typ.CollationCoercibility, e.Typ.CollationCoercibilitySet = 0, false
+				return nil
+			}))
+			ctx.tables["fi"] = historical
+			oldPlan, oldErr := build(query)
+			ctx.tables["fi"] = table
+			require.NoError(t, oldErr)
+			oldIndexScan := false
+			for _, n := range oldPlan.GetQuery().Nodes {
+				if n.NodeType == pb.Node_TABLE_SCAN && n.TableDef != nil && n.TableDef.Name == table.Indexes[0].IndexTableName {
+					oldIndexScan = true
+				}
+			}
+			require.True(t, oldIndexScan, "historical expression provenance must not disable the functional index")
+			corrupt := DeepCopyExpr(col.GeneratedCol.Expr)
+			corrupt.Typ.CollationCoercibility, corrupt.Typ.CollationCoercibilitySet = 7, true
+			require.False(t, normalizeFunctionalExpression(corrupt, 0))
+			corrupt = DeepCopyExpr(col.GeneratedCol.Expr)
+			corrupt.Typ.CollationMergeConflict = true
+			require.False(t, normalizeFunctionalExpression(corrupt, 0))
+			require.False(t, normalizeFunctionalExpression(nil, 0))
+			// Catalog columns round-trip through the physical type codec, while
+			// generated expressions retain their plan-only provenance.
+			physical, err := types.TypeFromPlan(col.Typ)
+			require.NoError(t, err)
+			decoded, err := types.DecodeTypeChecked(types.EncodeType(&physical))
+			require.NoError(t, err)
+			col.Typ = decoded.PlanType()
+			encoded, err := col.GeneratedCol.MarshalBinary()
+			require.NoError(t, err)
+			var generated pb.GeneratedCol
+			require.NoError(t, generated.UnmarshalBinary(encoded))
+			col.GeneratedCol = &generated
+			require.NoError(t, validateFunctionalTable(t.Context(), table))
 			bad := DeepCopyTableDef(table, true)
 			functionalIndexColumn(bad, bad.Indexes[0]).Typ.Width++
 			require.Error(t, validateFunctionalTable(t.Context(), bad), "physical and expression types must agree")
+			for _, change := range []func(*Type){
+				func(typ *Type) { typ.Scale++ },
+				func(typ *Type) { typ.Charset++ },
+				func(typ *Type) { typ.CollationVersion++ },
+				func(typ *Type) { typ.PadSpace = !typ.PadSpace },
+				func(typ *Type) { typ.CollationCoercibility = 7; typ.CollationCoercibilitySet = true },
+				func(typ *Type) { typ.CollationMergeConflict = true },
+			} {
+				bad := DeepCopyTableDef(table, true)
+				change(&functionalIndexColumn(bad, bad.Indexes[0]).Typ)
+				require.Error(t, validateFunctionalTable(t.Context(), bad), "value-bearing metadata must still agree")
+			}
 			bad = DeepCopyTableDef(table, true)
 			bad.Indexes = nil
 			require.Error(t, validateFunctionalTable(t.Context(), bad), "backing columns must have an owner")

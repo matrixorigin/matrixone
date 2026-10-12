@@ -104,6 +104,10 @@ func collationForExpression(expr *Expr) (expressionCollation, bool) {
 		c.rank = 6
 	case expr.GetCol() != nil || expr.GetCorr() != nil || expr.GetV() != nil:
 		c.rank = 2
+	case expr.GetSub() != nil && expr.GetSub().Typ == plan.SubqueryRef_SCALAR:
+		// Old plans may omit provenance on a materialized scalar result.
+		// Newly bound subqueries retain the projected source's exact rank.
+		c.rank = 2
 	case expr.GetLit() != nil || expr.GetP() != nil:
 		c.rank = 4
 	case expr.GetF() != nil && expr.GetF().Func != nil:
@@ -197,6 +201,10 @@ func expressionCollationIndexes(name string, arity int) []int {
 		return indexes
 	}
 	switch name {
+	case "name_const":
+		if arity == 2 {
+			return []int{1}
+		}
 	case "=", "<=>", "<", "<=", ">", ">=", "<>", "!=", "between", "in", "not_in",
 		"concat", "concat_ws", "nullif", "union", "values":
 		indexes := make([]int, arity)

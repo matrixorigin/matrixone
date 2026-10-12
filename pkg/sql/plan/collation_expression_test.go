@@ -39,6 +39,10 @@ func TestExplicitCollationConflicts(t *testing.T) {
 		"select least(" + left + "," + right + ")",
 		"select " + left + " union all select " + right,
 		"values row(" + left + "), row(" + right + ")",
+		"select least('a' collate utf8mb4_bin,'bb') = 'a' collate utf8mb4_general_ci",
+		"select greatest('a' collate utf8mb4_bin,'bb') = 'bb' collate utf8mb4_general_ci",
+		"select least('a' collate utf8mb4_bin,'b') = 'a' collate utf8mb4_general_ci",
+		"select name_const('x','a' collate utf8mb4_unicode_ci) = 'a' collate utf8mb4_bin",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
@@ -170,6 +174,71 @@ func TestExpressionCollationDerivedMetadata(t *testing.T) {
 	}
 }
 
+func TestExpressionCollationSubqueryProvenance(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	native := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+	native.CollationVersion = 1
+	compiler.tables["collation_scalar"] = &TableDef{Name: "collation_scalar", Cols: []*ColDef{
+		{Name: "s", Typ: native.PlanType()},
+	}}
+	compiler.objects["collation_scalar"] = &ObjectRef{ObjName: "collation_scalar", SchemaName: "tpch"}
+	for _, tc := range []struct {
+		sql  string
+		rank uint32
+	}{
+		{"select (select s from collation_scalar)", 2},
+		{"select (select 'a')", 4},
+		{"select (select 'a' collate utf8mb4_unicode_ci)", 0},
+		{"select (select cast('a' collate utf8mb4_unicode_ci as char(20)))", 2},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			builder := NewQueryBuilder(pb.Query_SELECT, compiler, false, true)
+			ctx := NewBindContext(builder, nil)
+			binder := NewProjectionBinder(builder, ctx, nil)
+			ctx.binder = binder
+			ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			sub, err := binder.BindExpr(ast, 0, false)
+			require.NoError(t, err)
+			require.NotNil(t, sub.GetSub())
+			require.True(t, sub.Typ.CollationCoercibilitySet)
+			require.Equal(t, tc.rank, sub.Typ.CollationCoercibility)
+			if tc.rank == 2 && sub.Typ.CollationVersion == 1 {
+				bound, err := BindFuncExprImplByPlanExpr(t.Context(), "=", []*Expr{sub, makePlan2StringConstExprWithType("a")})
+				require.NoError(t, err)
+				for _, arg := range bound.GetF().Args {
+					require.Equal(t, uint32(types.CharsetUTF8MB4UnicodeCI), arg.Typ.Charset)
+					require.Equal(t, uint32(1), arg.Typ.CollationVersion)
+				}
+			}
+		})
+	}
+}
+
+func TestExpressionCollationPromotionProvenance(t *testing.T) {
+	for _, name := range []string{"least", "greatest"} {
+		for _, right := range []string{"b", "bb"} {
+			sql := "select " + name + "('a' collate utf8mb4_bin,'" + right + "')"
+			t.Run(sql, func(t *testing.T) {
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+				bound, err := NewDefaultBinder(t.Context(), nil, nil, Type{}, nil).BindExpr(ast, 0, false)
+				require.NoError(t, err)
+				require.True(t, bound.Typ.CollationCoercibilitySet)
+				require.Zero(t, bound.Typ.CollationCoercibility)
+				for _, arg := range bound.GetF().Args {
+					require.True(t, arg.Typ.CollationCoercibilitySet)
+					require.Zero(t, arg.Typ.CollationCoercibility)
+				}
+			})
+		}
+	}
+}
+
 func TestExpressionCollationWindowTraversal(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
 		"select lag('a') over () collate utf8mb4_unicode_ci, ? collate utf8mb4_unicode_ci", 1)
@@ -289,6 +358,13 @@ func TestExpressionCollationResolution(t *testing.T) {
 		require.Equal(t, uint32(1), arg.Typ.CollationVersion)
 	}
 	require.NotNil(t, bound.GetF().Args[0].GetCol(), "unchanged native columns stay visible to safe indexed access")
+	oldSubquery := &Expr{Typ: column.Typ, Expr: &pb.Expr_Sub{Sub: &pb.SubqueryRef{Typ: pb.SubqueryRef_SCALAR}}}
+	bound, err = BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{oldSubquery, literal})
+	require.NoError(t, err)
+	for _, arg := range bound.GetF().Args {
+		require.Equal(t, uint32(types.CharsetUTF8MB4UnicodeCI), arg.Typ.Charset)
+		require.Equal(t, uint32(1), arg.Typ.CollationVersion)
+	}
 }
 
 func TestExpressionCollationVectorAndReuse(t *testing.T) {

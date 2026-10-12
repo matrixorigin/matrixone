@@ -388,8 +388,17 @@ func rewriteFunctionalColumnDependency(ctx context.Context, col *ColDef, names [
 }
 
 func sameFunctionalValueType(a, b Type) bool {
+	if a.ValidateCollation() != nil || b.ValidateCollation() != nil ||
+		a.CollationMergeConflict || b.CollationMergeConflict {
+		return false
+	}
 	a.Table, b.Table = "", ""
 	a.NotNullable, b.NotNullable = false, false
+	// The catalog's physical type codec omits expression coercibility. Keep
+	// identity, revision, width, scale and padding exact after validating both
+	// plans; a generated expression still owns its binding provenance.
+	a.CollationCoercibility, b.CollationCoercibility = 0, 0
+	a.CollationCoercibilitySet, b.CollationCoercibilitySet = false, false
 	return proto.Equal(&a, &b)
 }
 
@@ -441,11 +450,17 @@ func (builder *QueryBuilder) addFunctionalIndexFilters(node *pb.Node) {
 }
 
 func normalizeFunctionalExpression(expr *Expr, tag int32) bool {
+	if expr == nil || expr.Typ.ValidateCollation() != nil || expr.Typ.CollationMergeConflict {
+		return false
+	}
 	expr.AuxId, expr.Ndv, expr.Selectivity = 0, 0, 0
 	// Provenance and inferred nullability do not change expression values.
 	// Keep value-bearing type metadata (width, scale, charset, padding) exact.
 	expr.Typ.Table = ""
 	expr.Typ.NotNullable = false
+	// Compare fully bound values across catalog generations. Coercibility
+	// affects binding, while the resolved identity/revision remains exact.
+	expr.Typ.CollationCoercibility, expr.Typ.CollationCoercibilitySet = 0, false
 	if col := expr.GetCol(); col != nil {
 		if col.RelPos != tag {
 			return false

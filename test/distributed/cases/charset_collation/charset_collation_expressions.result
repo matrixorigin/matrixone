@@ -142,4 +142,44 @@ EXECUTE expression_values USING @left, @right;
 a   𝄀
 Á
 DEALLOCATE PREPARE expression_values;
+CREATE TABLE scalar_values (id INT PRIMARY KEY, s VARCHAR(20) COLLATE utf8mb4_unicode_ci);
+INSERT INTO scalar_values VALUES (1, 'Á');
+SELECT s = 'a', (SELECT s FROM scalar_values WHERE id = 1) = 'a',
+'a' = (SELECT s FROM scalar_values WHERE id = 1) FROM scalar_values;
+➤ s = a[-7,1,0]  ¦  (select s from scalar_values where id = 1) = a[-7,1,0]  ¦  a = (select s from scalar_values where id = 1)[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+SELECT (SELECT n.s FROM scalar_values n WHERE n.id = t.id) = 'a' FROM scalar_values t;
+➤ (select n.s from scalar_values as n where n.id = t.id) = a[-7,1,0]  𝄀
+1
+SELECT (SELECT s FROM scalar_values WHERE id = 2) = 'a',
+(SELECT s FROM scalar_values WHERE id = 2) <=> NULL;
+➤ (select s from scalar_values where id = 2) = a[-7,1,0]  ¦  (select s from scalar_values where id = 2) <=> null[-7,1,0]  𝄀
+null  ¦  1
+SELECT LEAST('a' COLLATE utf8mb4_bin, 'bb') = 'a' COLLATE utf8mb4_general_ci;
+Illegal mix of collations (utf8mb4_bin,EXPLICIT) and (utf8mb4_general_ci,EXPLICIT) for operation '='
+SELECT GREATEST('a' COLLATE utf8mb4_bin, 'bb') = 'bb' COLLATE utf8mb4_general_ci;
+Illegal mix of collations (utf8mb4_bin,EXPLICIT) and (utf8mb4_general_ci,EXPLICIT) for operation '='
+SELECT LEAST('a' COLLATE utf8mb4_bin, 'b') = 'a' COLLATE utf8mb4_general_ci;
+Illegal mix of collations (utf8mb4_bin,EXPLICIT) and (utf8mb4_general_ci,EXPLICIT) for operation '='
+SELECT LEAST('Á' COLLATE utf8mb4_unicode_ci, 'zz') = 'a';
+➤ LEAST((Á) collate utf8mb4_unicode_ci, zz) = a[-7,1,0]  𝄀
+1
+SELECT CAST(LEAST('a' COLLATE utf8mb4_bin, 'bb') AS CHAR(20)) = 'a' COLLATE utf8mb4_general_ci;
+➤ cast(LEAST((a) collate utf8mb4_bin, bb) as char(20)) = (a) collate utf8mb4_general_ci[-7,1,0]  𝄀
+1
+SELECT NAME_CONST('v', 'Á' COLLATE utf8mb4_unicode_ci) = 'a';
+➤ NAME_CONST(v, (Á) collate utf8mb4_unicode_ci) = a[-7,1,0]  𝄀
+1
+SELECT sub.v = 'a' FROM (SELECT NAME_CONST('v', 'Á' COLLATE utf8mb4_unicode_ci)) sub;
+➤ sub.v = a[-7,1,0]  𝄀
+1
+SELECT NAME_CONST('v', 1 COLLATE utf8mb4_unicode_ci) = '1';
+➤ NAME_CONST(v, (1) collate utf8mb4_unicode_ci) = 1[-7,1,0]  𝄀
+1
+SELECT NAME_CONST('v', 'a' COLLATE utf8mb4_unicode_ci) = 'a' COLLATE utf8mb4_bin;
+Illegal mix of collations (utf8mb4_unicode_ci,EXPLICIT) and (utf8mb4_bin,EXPLICIT) for operation '='
+SELECT NAME_CONST('v', LOWER('A') COLLATE utf8mb4_unicode_ci);
+invalid argument NAME_CONST, bad value 
+SELECT NAME_CONST('v', CAST('a' AS CHAR) COLLATE utf8mb4_unicode_ci);
+invalid argument NAME_CONST, bad value 
 DROP DATABASE collation_expression_test;
