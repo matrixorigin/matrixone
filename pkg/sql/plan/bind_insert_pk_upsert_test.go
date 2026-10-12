@@ -99,6 +99,29 @@ func TestInsertOnDupPrimaryKeyLiteralIdentityIsRuntimeGuarded(t *testing.T) {
 	requireODKUPKIdentityGuard(t, logicPlan, 0)
 }
 
+func TestInsertOnDupGuardedPrimaryKeyDoesNotEnableActionReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		assignment string
+	}{
+		{name: "primary-key-only", assignment: "a = 1"},
+		{name: "primary-key-and-payload", assignment: "a = 1, b = values(b)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t,
+				"insert into constraint_test.t1(a, b) values (1, 'x') "+
+					"on duplicate key update "+tc.assignment)
+			require.NoError(t, err)
+
+			ctx := odkuDedupCtx(t, logicPlan)
+			require.False(t, ctx.EmitActionRows,
+				"a successfully guarded, unchanged primary key must not trigger redundant NOT NULL action replay")
+			requireODKUPKIdentityGuard(t, logicPlan, 0)
+		})
+	}
+}
+
 func TestInsertOnDupCharPrimaryKeyGuardPreservesType(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	for _, table := range []*planpb.TableDef{
@@ -172,6 +195,8 @@ func requireODKUPKIdentityGuard(t *testing.T, logicPlan *planpb.Plan, updateColI
 			guarded := node.DedupJoinCtx.UpdateColExprList[i].GetF()
 			require.NotNil(t, guarded)
 			require.Equal(t, "if", guarded.Func.ObjName)
+			require.True(t, node.DedupJoinCtx.UpdateColExprList[i].Typ.NotNullable,
+				"successful identity guards always return the existing non-NULL primary key")
 			require.NotEmpty(t, guarded.Args)
 			assertion := guarded.Args[0].GetF()
 			require.NotNil(t, assertion)

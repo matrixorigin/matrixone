@@ -4509,11 +4509,22 @@ func buildODKUPKIdentityGuard(builder *QueryBuilder, oldPrimaryKey, candidate *p
 	nullPrimaryKey := makePlan2NullConstExprWithType()
 	nullPrimaryKey.Typ = oldPrimaryKey.Typ
 	nullPrimaryKey.Typ.NotNullable = false
-	return BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{
+	guard, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{
 		assertSamePrimaryKey,
 		DeepCopyExpr(oldPrimaryKey),
 		nullPrimaryKey,
 	})
+	if err != nil {
+		return nil, err
+	}
+	// A successful assert can only return true; false or NULL comparisons fail
+	// before the IF can select its NULL branch. The old value is a primary key,
+	// so every successful evaluation returns a non-NULL value. Keep the NULL
+	// branch nullable and exactly typed above to preserve CHAR key semantics,
+	// while exposing the guard's successful-result nullability to later ODKU
+	// constraint planning.
+	guard.Typ.NotNullable = true
+	return guard, nil
 }
 
 // getInsertColsFromStmt retrieves the list of column names to be inserted into a table
