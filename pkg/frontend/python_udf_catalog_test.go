@@ -137,6 +137,28 @@ func TestInitPythonFunctionValidatesArtifactBeforeCatalogReadiness(t *testing.T)
 
 	tenant := &TenantInfo{User: "root", TenantID: 27, DefaultRoleID: accountAdminRoleID}
 	session := &Session{feSessionImpl: feSessionImpl{service: service, tenant: tenant}}
+	for _, test := range []struct {
+		name, argument, result string
+	}{
+		{"signed_argument", "mediumint", "bigint"},
+		{"unsigned_argument", "mediumint unsigned", "bigint"},
+		{"signed_result", "bigint", "mediumint"},
+		{"unsigned_result", "bigint", "mediumint unsigned"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			statement, err := parsers.ParseOne(ctx, dialect.MYSQL, fmt.Sprintf(
+				"create function app.py_echo(value %s) returns %s language python as 'def py_echo(ctx, value): return value' handler 'py_echo'",
+				test.argument, test.result), 1)
+			require.NoError(t, err)
+			defer statement.Free()
+			runtime.definition = nil
+			background.executedSqls = nil
+			err = InitFunction(session, &ExecCtx{reqCtx: ctx}, tenant, statement.(*tree.CreateFunction))
+			require.ErrorContains(t, err, "python udf does not support MEDIUMINT")
+			require.Nil(t, runtime.definition, "unsupported types must fail before worker validation")
+			require.Empty(t, background.executedSqls, "unsupported types must fail before catalog access")
+		})
+	}
 	err = InitFunction(session, &ExecCtx{reqCtx: ctx}, tenant, createFunction)
 	require.ErrorContains(t, err, "Python UDF catalog contract is not ready")
 	require.ErrorContains(t, err, missingRevisionCatalog.Error())
@@ -537,7 +559,7 @@ func setSharedRoutineRevisionProtocolForTest(t *testing.T, version int64) {
 }
 
 func TestSharedRoutineRevisionProtocolGatesMixedVersionSQLUdfWrites(t *testing.T) {
-	setSharedRoutineRevisionProtocolForTest(t, defines.MORPCVersion106)
+	setSharedRoutineRevisionProtocolForTest(t, sharedRoutineRevisionProtocolVersion-1)
 
 	create := &backgroundExecTestWithHistory{}
 	create.init()
@@ -561,7 +583,7 @@ func TestSharedRoutineRevisionProtocolGatesMixedVersionSQLUdfWrites(t *testing.T
 		wantError           string
 	}{
 		{name: "legacy_zero_head"},
-		{name: "revision_head", revision: 1, namespace: 1, wantError: "SQL UDF revision replacement requires MORPC protocol version 110"},
+		{name: "revision_head", revision: 1, namespace: 1, wantError: "SQL UDF revision replacement requires MORPC protocol version 111"},
 		{name: "half_zero_revision", namespace: 1, wantError: "invalid revision head"},
 		{name: "half_zero_namespace", revision: 1, wantError: "invalid revision head"},
 	} {
@@ -607,7 +629,7 @@ func TestSharedRoutineRevisionProtocolGatesMixedVersionSQLUdfWrites(t *testing.T
 }
 
 func TestReadSQLRevisionUsesLegacyBodyBeforeRevisionProtocol(t *testing.T) {
-	setSharedRoutineRevisionProtocolForTest(t, defines.MORPCVersion106)
+	setSharedRoutineRevisionProtocolForTest(t, sharedRoutineRevisionProtocolVersion-1)
 
 	background := &backgroundExecTestWithHistory{}
 	background.init()
@@ -620,12 +642,12 @@ func TestReadSQLRevisionUsesLegacyBodyBeforeRevisionProtocol(t *testing.T) {
 }
 
 func TestPythonUdfRevisionProtocolRejectsImmediatePredecessor(t *testing.T) {
-	setSharedRoutineRevisionProtocolForTest(t, defines.MORPCVersion109)
+	setSharedRoutineRevisionProtocolForTest(t, defines.MORPCVersion110)
 
 	background := &backgroundExecTestWithHistory{}
 	background.init()
 	err := ensurePythonUdfCatalogReady(context.Background(), background)
-	require.ErrorContains(t, err, "Python UDF catalog contract requires MORPC protocol version 110")
+	require.ErrorContains(t, err, "Python UDF catalog contract requires MORPC protocol version 111")
 	require.Empty(t, background.executedSqls)
 }
 
