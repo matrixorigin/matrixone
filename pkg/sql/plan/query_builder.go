@@ -1545,28 +1545,37 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			}
 		}
 
-		if rightNode.NodeType == plan.Node_PROJECT {
-			projectTag := rightNode.BindingTags[0]
-			if pruneOutput {
-				for _, i := range neededProj {
-					increaseRefCnt(&plan.Expr{
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: projectTag,
-								ColPos: int32(i),
-							},
-						}}, 1, colRefCnt)
+		// Set-operation expressions reference the left branch's project tags.
+		// Pin the same ordinal positions on the right branch explicitly, even
+		// when a transparent operator (for example a pushed-down FILTER) sits
+		// between the set operation and its output PROJECT. Otherwise pruning
+		// may keep the right branch's first column in place of a used second one.
+		for outputID := rightID; ; {
+			output := builder.qry.Nodes[outputID]
+			if output.NodeType == plan.Node_PROJECT {
+				projectTag := output.BindingTags[0]
+				if pruneOutput {
+					for _, i := range neededProj {
+						colRefCnt[[2]int32{projectTag, int32(i)}]++
+					}
+				} else {
+					for i := range output.ProjectList {
+						colRefCnt[[2]int32{projectTag, int32(i)}]++
+					}
 				}
-			} else {
-				for i := range rightNode.ProjectList {
-					increaseRefCnt(&plan.Expr{
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: projectTag,
-								ColPos: int32(i),
-							},
-						}}, 1, colRefCnt)
-				}
+				break
+			}
+			if len(output.Children) != 1 {
+				break
+			}
+			switch output.NodeType {
+			case plan.Node_FILTER, plan.Node_ASSERT, plan.Node_SORT, plan.Node_PARTITION:
+				outputID = output.Children[0]
+			default:
+				outputID = -1
+			}
+			if outputID < 0 {
+				break
 			}
 		}
 		leftRemapping, err := builder.remapAllColRefs(leftID, step, colRefCnt, colRefBool, sinkColRef)
