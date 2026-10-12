@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Design revision | `python-udf-current-stage-r9-2026-10-13` |
+| Design revision | `python-udf-current-stage-r10-2026-10-13` |
 | Applies to | MatrixOne PR #29152, test/development-stage Python UDF |
 | Upstream repair baseline | `0a4db0e6a6517e489a333ad9073dfcdc5d26aff4` (MORPC 111 for IndexSearchScan; the native COLUMNS repair remains catalog 4.0.14) |
-| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r9 repair preserves the upstream catalog 4.0.14 handler unchanged, adds a separate Python revision repair in catalog 4.0.15, and uses protocol 112 admission, including prepared reuse and physical/remote execution. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
+| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r10 contract preserves the upstream catalog 4.0.14 handler unchanged, adds a separate Python revision repair in catalog 4.0.15, and uses protocol 112 admission, including prepared reuse and physical/remote execution. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
 | Not covered | Production tenant isolation, sandbox, Operator rollout, or cross-version rollback/restore |
 
 This is the versioned governing proposal for the current PR stage. The owner
@@ -106,14 +106,14 @@ rechecks every CN before catalog access on login compensation or direct replay; 
 
 Python DDL probes the required tenant schema and refuses admission until it is
 present. Shared revision publication and Python reads require active protocol
-111. That value is rollout state in the service runtime, not a computed live
+112. That value is rollout state in the service runtime, not a computed live
 cluster minimum. Cached/prepared Python plans and new or reused physical
 evaluators check it again before catalog reads, input evaluation or worker calls.
 Below the floor, revision-bearing SQL plans invalidate and rebind to the legacy
 row. Sender admission also probes the actual remote CN endpoint, and the receiver
 checks its own active protocol; coordinator state alone cannot admit an old
 receiver. Missing or malformed protocol state fails closed. The read-only
-`GetPythonUdfStatus` method uses wire capability 111. Worker capability negotiation
+`GetPythonUdfStatus` method uses wire capability 112. Worker capability negotiation
 remains a separate exact-contract check.
 
 The migration has no down handler. Do not manually remove the revision table,
