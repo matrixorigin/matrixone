@@ -45,20 +45,22 @@ func TestWindowNullDomainAndRange(t *testing.T) {
 			require.NoError(t, err, q)
 		}
 		base := " from (select 1 point,1 eid,cast(1 as double) value union all select 2,1,2 union all select 3,2,3) f order by point"
-		cases := []struct {
+		type queryCase struct {
 			name, q string
 			want    []string
-		}{
-			{"29972-any-value", "select id,first_value(NULL) over(order by id) from r order by id", []string{"1:NULL", "2:NULL", "3:NULL"}},
-			{"29972-typed-control", "select id,first_value(cast(NULL as signed)) over(order by id) from r order by id", []string{"1:NULL", "2:NULL", "3:NULL"}},
-			{"29973-desc-following", "select id,count(*) over(order by k desc range between 1 following and 2 following),sum(v) over(order by k desc range between 1 following and 2 following) from r order by id", []string{"1:1:100", "2:0:NULL", "3:1:10"}},
-			{"29925-lag-null", "select point,eid,lag(value,1,NULL) over(partition by eid order by point)" + base, []string{"1:1:NULL", "2:1:1", "3:2:NULL"}},
-			{"29925-lag-typed-null", "select point,eid,lag(value,1,cast(NULL as double)) over(partition by eid order by point)" + base, []string{"1:1:NULL", "2:1:1", "3:2:NULL"}},
-			{"29925-lag-omitted", "select point,eid,lag(value) over(partition by eid order by point)" + base, []string{"1:1:NULL", "2:1:1", "3:2:NULL"}},
-			{"29925-lead-null", "select point,eid,lead(value,1,NULL) over(partition by eid order by point)" + base, []string{"1:1:2", "2:1:NULL", "3:2:NULL"}},
-			{"29925-lead-typed-null", "select point,eid,lead(value,1,cast(NULL as double)) over(partition by eid order by point)" + base, []string{"1:1:2", "2:1:NULL", "3:2:NULL"}},
-			{"29925-lead-omitted", "select point,eid,lead(value) over(partition by eid order by point)" + base, []string{"1:1:2", "2:1:NULL", "3:2:NULL"}},
 		}
+		cases := make([]queryCase, 0, 17)
+		cases = append(cases,
+			queryCase{"29972-any-value", "select id,first_value(NULL) over(order by id) from r order by id", []string{"1:NULL", "2:NULL", "3:NULL"}},
+			queryCase{"29972-typed-control", "select id,first_value(cast(NULL as signed)) over(order by id) from r order by id", []string{"1:NULL", "2:NULL", "3:NULL"}},
+			queryCase{"29973-desc-following", "select id,count(*) over(order by k desc range between 1 following and 2 following),sum(v) over(order by k desc range between 1 following and 2 following) from r order by id", []string{"1:1:100", "2:0:NULL", "3:1:10"}},
+			queryCase{"29925-lag-null", "select point,eid,lag(value,1,NULL) over(partition by eid order by point)" + base, []string{"1:1:NULL", "2:1:1", "3:2:NULL"}},
+			queryCase{"29925-lag-typed-null", "select point,eid,lag(value,1,cast(NULL as double)) over(partition by eid order by point)" + base, []string{"1:1:NULL", "2:1:1", "3:2:NULL"}},
+			queryCase{"29925-lag-omitted", "select point,eid,lag(value) over(partition by eid order by point)" + base, []string{"1:1:NULL", "2:1:1", "3:2:NULL"}},
+			queryCase{"29925-lead-null", "select point,eid,lead(value,1,NULL) over(partition by eid order by point)" + base, []string{"1:1:2", "2:1:NULL", "3:2:NULL"}},
+			queryCase{"29925-lead-typed-null", "select point,eid,lead(value,1,cast(NULL as double)) over(partition by eid order by point)" + base, []string{"1:1:2", "2:1:NULL", "3:2:NULL"}},
+			queryCase{"29925-lead-omitted", "select point,eid,lead(value) over(partition by eid order by point)" + base, []string{"1:1:2", "2:1:NULL", "3:2:NULL"}},
+		)
 		for _, fn := range []string{"last_value(NULL)", "nth_value(NULL,2)", "lag(NULL)", "lead(NULL)", "lag(NULL,1,7)", "lead(NULL,1,7)"} {
 			want := []string{"1:NULL", "2:NULL", "3:NULL"}
 			if fn == "lag(NULL,1,7)" {
@@ -67,16 +69,10 @@ func TestWindowNullDomainAndRange(t *testing.T) {
 			if fn == "lead(NULL,1,7)" {
 				want[2] = "3:7"
 			}
-			cases = append(cases, struct {
-				name, q string
-				want    []string
-			}{fn, "select id," + fn + " over(order by id) from r order by id", want})
+			cases = append(cases, queryCase{fn, "select id," + fn + " over(order by id) from r order by id", want})
 		}
 		for _, key := range []string{"cast(k as decimal(10,2))", "cast(k as double)"} {
-			cases = append(cases, struct {
-				name, q string
-				want    []string
-			}{"range/" + key, "select id,count(*) over(order by " + key + " desc range between 1 following and 2 following),sum(v) over(order by " + key + " desc range between 1 following and 2 following) from r order by id", []string{"1:1:100", "2:0:NULL", "3:1:10"}})
+			cases = append(cases, queryCase{"range/" + key, "select id,count(*) over(order by " + key + " desc range between 1 following and 2 following),sum(v) over(order by " + key + " desc range between 1 following and 2 following) from r order by id", []string{"1:1:100", "2:0:NULL", "3:1:10"}})
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
