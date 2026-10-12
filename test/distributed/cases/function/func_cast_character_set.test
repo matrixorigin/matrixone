@@ -9,3 +9,17 @@ select hex(cast('abcdef' as char(3) character set binary)), length(cast('abcdef'
 select hex(cast('你好' as char(2) character set binary)), length(cast('你好' as char(2) character set binary));
 select hex(convert('abcdef', char(3) character set binary)), length(convert('abcdef', char(3) character set binary));
 select cast(null as char(2) character set utf8mb4) is null, convert(null, char(2) character set binary) is null;
+select hex(cast('abc' as char(0) character set binary)), length(cast('abc' as char(0) character set binary)), hex(cast('abc' as char(0) character set utf8mb4)), char_length(cast('abc' as char(0) character set utf8mb4));
+select hex(cast('a' as char character set binary)), length(cast('a' as char character set binary)), charset(cast('a' as char character set binary)), collation(cast('a' as char character set binary));
+select hex(cast(12345 as char(3) character set binary)), length(cast(12345 as char(3) character set binary));
+select cast(12345 as char(3) character set utf8mb4);
+select hex(cast(cast(12.34 as decimal(5,2)) as char(3) character set binary)), length(cast(cast(12.34 as decimal(5,2)) as char(3) character set binary));
+select cast(date '2020-01-02' as char(4) character set utf8mb4);
+prepare char_cs_stmt from 'select hex(cast(? as char(3) character set binary)), length(cast(? as char(3) character set binary))';
+set @char_cs_long='abcdef';
+execute char_cs_stmt using @char_cs_long, @char_cs_long;
+set @char_cs_short='a';
+execute char_cs_stmt using @char_cs_short, @char_cs_short;
+set @char_cs_null=null;
+execute char_cs_stmt using @char_cs_null, @char_cs_null;
+deallocate prepare char_cs_stmt;
