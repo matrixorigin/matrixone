@@ -659,6 +659,7 @@ func (t *runSQLTracker) waitingInfo(keepToken uint64, skipToken uint64) []string
 
 func newTxnOperator(
 	sid string,
+	logger *log.MOLogger,
 	clock clock.Clock,
 	sender rpc.TxnSender,
 	txnMeta txn.TxnMeta,
@@ -666,7 +667,7 @@ func newTxnOperator(
 ) *txnOperator {
 	tc := &txnOperator{
 		sid:    sid,
-		logger: util.GetLogger(sid),
+		logger: logger,
 		sender: sender,
 		clock:  clock,
 	}

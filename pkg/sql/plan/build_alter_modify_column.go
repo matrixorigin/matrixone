@@ -38,6 +38,9 @@ func updateNewColumnInTableDef(
 	if err != nil {
 		return false, err
 	}
+	if err = requireMediumIntProtocolForAuthoring(ctx, cctx.GetProcess(), nTy); err != nil {
+		return false, err
+	}
 
 	if err = checkTypeCapSize(ctx, &nTy, nColSpec.Name.ColName()); err != nil {
 		return false, err

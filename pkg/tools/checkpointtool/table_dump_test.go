@@ -716,11 +716,18 @@ func TestRenderColumnSQLTypeEnumSetAndArrayBranches(t *testing.T) {
 		want string
 	}{
 		{"plain", TableColumn{SQLType: "INT"}, "INT"},
+		{"single empty enum", TableColumn{SQLType: "ENUM"}, "ENUM('')"},
+		{"single empty set", TableColumn{SQLType: "BIGINT UNSIGNED", EnumValues: ","}, "SET('')"},
+		{"plain uint64", TableColumn{SQLType: "BIGINT UNSIGNED"}, "BIGINT UNSIGNED"},
 		{"json array", TableColumn{SQLType: "JSON", EnumValues: "array(int)"}, "ARRAY(int)"},
 		{"json non array", TableColumn{SQLType: "JSON", EnumValues: "plain"}, "JSON"},
-		{"enum bare values", TableColumn{SQLType: "ENUM", EnumValues: "a,'b,c',\"d\""}, "ENUM('a','b,c',\"d\")"},
-		{"enum already typed", TableColumn{SQLType: "ENUM", EnumValues: "ENUM('x')"}, "ENUM('x')"},
-		{"set parens", TableColumn{SQLType: "SET", EnumValues: "(x,y)"}, "SET('x','y')"},
+		{"enum raw quotes", TableColumn{SQLType: "ENUM", EnumValues: `a,'b',"d"`}, `ENUM('a','''b''','"d"')`},
+		{"enum SQL-like member", TableColumn{SQLType: "ENUM", EnumValues: "ENUM('x')"}, "ENUM('ENUM(''x'')')"},
+		{"set parentheses in members", TableColumn{SQLType: "SET", EnumValues: "(x,y)"}, "SET('(x','y)')"},
+		{"enum mixed empty members", TableColumn{SQLType: "ENUM", EnumValues: ", x,"}, "ENUM('',' x','')"},
+		{"set leading whitespace", TableColumn{SQLType: "SET", EnumValues: " x,y"}, "SET(' x','y')"},
+		{"enum whitespace member", TableColumn{SQLType: "ENUM", EnumValues: " "}, "ENUM(' ')"},
+		{"set backslash member", TableColumn{SQLType: "SET", EnumValues: `a\b`}, `SET('a\\b')`},
 		{"bigint unsigned set", TableColumn{SQLType: "BIGINT UNSIGNED", EnumValues: "red,blue"}, "SET('red','blue')"},
 	}
 	for _, tc := range cases {
@@ -729,10 +736,6 @@ func TestRenderColumnSQLTypeEnumSetAndArrayBranches(t *testing.T) {
 		})
 	}
 
-	require.Equal(t, []string{"'a,b'", " c", " 'd''e'", " f\\", "g"}, splitEnumSetValues("'a,b', c, 'd''e', f\\,g"))
-	require.Equal(t, "x,y", stripEnumSetValueParens(" ( x,y ) "))
-	require.True(t, isQuotedSQLString(`"x"`))
-	require.False(t, isQuotedSQLString(`x`))
 }
 
 func TestAppendColumnDDLAttributesBranches(t *testing.T) {

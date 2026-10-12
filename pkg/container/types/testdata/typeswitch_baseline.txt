@@ -203,8 +203,6 @@ pkg/sql/plan/function/func_cast.go	int8ToOthers	float	1
 pkg/sql/plan/function/func_cast.go	jsonAppendNull	float	1
 pkg/sql/plan/function/func_cast.go	jsonAppendValue	float	1
 pkg/sql/plan/function/func_cast.go	jsonToOthers	float	1
-pkg/sql/plan/function/func_cast.go	newCast	float	4
-pkg/sql/plan/function/func_cast.go	newCast	vector	1
 pkg/sql/plan/function/func_cast.go	strTypeToOthers	float	1
 pkg/sql/plan/function/func_cast.go	strTypeToOthers	vector	2
 pkg/sql/plan/function/func_cast.go	uint16ToOthers	float	1

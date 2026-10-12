@@ -21,6 +21,12 @@ import "fmt"
 // are handled by their callers. String remains the internal type name.
 func FormatSQLColumnType(t Type) (string, bool) {
 	name := t.String()
+	if t.IsMediumInt() {
+		if t.Oid == T_uint32 {
+			return "MEDIUMINT UNSIGNED", true
+		}
+		return "MEDIUMINT", true
+	}
 	switch t.Oid {
 	case T_bool:
 		return "BOOLEAN", true

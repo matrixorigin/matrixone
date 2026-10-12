@@ -867,19 +867,25 @@ const (
 	UPDATEXML               = 582
 	TO_INTERVAL_MICROSECOND = 583
 	// VECTOR_MATMUL is the batch dot-product top-k aggregate over vecf8/vecf4 columns.
-	VECTOR_MATMUL = 591
+	VECTOR_MATMUL = 596
 
 	// VECBLOCK_JSON returns the exact text of a vecf8/vecf4 value: its blocks as stored.
-	VECBLOCK_JSON = 592
+	VECBLOCK_JSON = 597
 
 	// VECBLOCK_BINARY returns the stored cell of a vecf8/vecf4 value as a BLOB.
-	VECBLOCK_BINARY = 593
+	VECBLOCK_BINARY = 598
 
 	UUID_SHORT = 587
 
+	TANH  = 591
+	COSH  = 592
+	ASINH = 593
+	ACOSH = 594
+	ATANH = 595
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 594
+	FUNCTION_END_NUMBER = 599
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1112,6 +1118,11 @@ var functionIdRegister = map[string]int32{
 	"sign":                           SIGN,
 	"sin":                            SIN,
 	"sinh":                           SINH,
+	"tanh":                           TANH,
+	"cosh":                           COSH,
+	"asinh":                          ASINH,
+	"acosh":                          ACOSH,
+	"atanh":                          ATANH,
 	"space":                          SPACE,
 	"tan":                            TAN,
 	"week":                           WEEK,

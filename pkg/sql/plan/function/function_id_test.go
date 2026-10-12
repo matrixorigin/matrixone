@@ -812,9 +812,9 @@ var predefinedFunids = map[int]int{
 	JSON_DEPTH:                     584,
 	JSON_AGG_TO_DOUBLE:             585,
 	JSON_ARRAY_INSERT:              586,
-	VECTOR_MATMUL:                  591,
-	VECBLOCK_JSON:                  592,
-	VECBLOCK_BINARY:                593,
+	VECTOR_MATMUL:                  596,
+	VECBLOCK_JSON:                  597,
+	VECBLOCK_BINARY:                598,
 	PHYSICAL_SERIAL:                588,
 	PHYSICAL_SERIAL_FULL:           589,
 	PHYSICAL_COLLATION_KEY:         590,
@@ -824,7 +824,12 @@ var predefinedFunids = map[int]int{
 	UPDATEXML:               582,
 	TO_INTERVAL_MICROSECOND: 583,
 	UUID_SHORT:              587,
-	FUNCTION_END_NUMBER:     594,
+	TANH:                    591,
+	COSH:                    592,
+	ASINH:                   593,
+	ACOSH:                   594,
+	ATANH:                   595,
+	FUNCTION_END_NUMBER:     599,
 }
 
 func Test_funids(t *testing.T) {

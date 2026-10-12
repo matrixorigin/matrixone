@@ -5,6 +5,25 @@
 drop database if exists functional_index_bvt;
 create database functional_index_bvt;
 use functional_index_bvt;
+-- #29898: unsupported UNIQUE expressions leave schema/data intact and the session usable.
+CREATE TABLE mo_index_probe (id INT PRIMARY KEY, email VARCHAR(254));
+insert into mo_index_probe values (1,'alice@example.com'),(2,'bob@example.com');
+show create table mo_index_probe;
+select id,email from mo_index_probe order by id;
+select index_name,column_name from information_schema.statistics where table_schema='functional_index_bvt' and table_name='mo_index_probe' order by index_name;
+select count(*) as generated_columns from mo_catalog.mo_columns where att_database='functional_index_bvt' and att_relname='mo_index_probe' and attr_has_generated=1;
+select count(*) as relations from mo_catalog.mo_tables where reldatabase='functional_index_bvt';
+CREATE UNIQUE INDEX mo_unique_email_expression ON mo_index_probe ((LOWER(email)));
+show create table mo_index_probe;
+select id,email from mo_index_probe order by id;
+select index_name,column_name from information_schema.statistics where table_schema='functional_index_bvt' and table_name='mo_index_probe' order by index_name;
+select count(*) as generated_columns from mo_catalog.mo_columns where att_database='functional_index_bvt' and att_relname='mo_index_probe' and attr_has_generated=1;
+select count(*) as relations from mo_catalog.mo_tables where reldatabase='functional_index_bvt';
+select 1 as session_usable;
+create unique index mo_unique_email on mo_index_probe(email);
+insert into mo_index_probe values (3,'alice@example.com');
+select id,email from mo_index_probe order by id;
+drop table mo_index_probe;
 create table t (id int primary key, name varchar(40), index il ((lower(name))));
 insert into t values (1,'ABC'),(2,'def'),(3,NULL);
 select count(*) as matched from t force index(il) where lower(name)='abc';
