@@ -67,10 +67,6 @@ func (tbl *txnTable) sourceCommitTSFromPartitionState(
 	return info.Max(), nil
 }
 
-func (tbl *txnTable) HasTransactionLocalWrites(context.Context) (bool, error) {
-	return tbl.hasTransactionLocalWrites(), nil
-}
-
 func (tbl *txnTable) hasTransactionLocalWrites() bool {
 	txn := tbl.getTxn()
 	txn.Lock()
@@ -97,13 +93,6 @@ func (tbl *txnTableDelegate) SourceCommitTSAfterCopy(
 		return tbl.combined.tbl.SourceCommitTSAfterCopy(ctx, mustExceed)
 	}
 	return tbl.origin.SourceCommitTSAfterCopy(ctx, mustExceed)
-}
-
-func (tbl *txnTableDelegate) HasTransactionLocalWrites(ctx context.Context) (bool, error) {
-	if tbl.combined.is {
-		return tbl.combined.tbl.HasTransactionLocalWrites(ctx)
-	}
-	return tbl.origin.HasTransactionLocalWrites(ctx)
 }
 
 func (t *combinedTxnTable) SourceCommitTS(ctx context.Context, mustExceed types.TS) (types.TS, error) {
@@ -158,30 +147,4 @@ func (t *combinedTxnTable) sourceCommitTS(
 		}
 	}
 	return maxTS, nil
-}
-
-func (t *combinedTxnTable) HasTransactionLocalWrites(ctx context.Context) (bool, error) {
-	if t.tablesFunc == nil {
-		return false, moerr.NewInternalErrorNoCtx("source commit ts has no partitioned members")
-	}
-	relations, err := t.tablesFunc()
-	if err != nil {
-		return false, err
-	}
-	for _, relation := range relations {
-		writer, ok := relation.(engine.RelationHasTransactionLocalWrites)
-		if !ok {
-			return false, moerr.NewInternalErrorNoCtx(
-				"source local-write state is unavailable for a partition member",
-			)
-		}
-		hasLocalWrites, err := writer.HasTransactionLocalWrites(ctx)
-		if err != nil {
-			return false, err
-		}
-		if hasLocalWrites {
-			return true, nil
-		}
-	}
-	return false, nil
 }

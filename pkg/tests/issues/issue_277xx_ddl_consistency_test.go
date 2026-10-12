@@ -25,6 +25,7 @@ import (
 
 	mysql "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
@@ -152,7 +153,7 @@ func TestIssue277xxDDLConsistency(t *testing.T) {
 				"insert into `"+database+"`.`child` values (6, 9, 'allowed', 0)")
 		})
 
-		t.Run("27725 concurrent alter terminal conflict supports external retry", func(t *testing.T) {
+		t.Run("27725 concurrent alter conflict supports external retry", func(t *testing.T) {
 			const database = "issue_27725_concurrent_alter"
 			resetIssue277xxDatabase(t, ctx, db0, database)
 			defer execSQLMaybe(t, ctx, db0, "drop database if exists `"+database+"`")
@@ -188,7 +189,13 @@ func TestIssue277xxDDLConsistency(t *testing.T) {
 					}
 					var mysqlErr *mysql.MySQLError
 					require.ErrorAsf(t, alterErr, &mysqlErr,
-						"concurrent ALTER %d must expose the terminal post-copy conflict", i)
+						"concurrent ALTER %d must expose a retryable conflict", i)
+					if mysqlErr.Number == moerr.ErrLockConflict {
+						require.Containsf(t, mysqlErr.Message,
+							"lock options conflict, wait policy is fast fail",
+							"concurrent ALTER %d must identify the pre-copy admission conflict", i)
+						continue
+					}
 					require.Equalf(t, uint16(20601), mysqlErr.Number,
 						"concurrent ALTER %d must not expose a stale index generation", i)
 					require.Containsf(t, mysqlErr.Message,
