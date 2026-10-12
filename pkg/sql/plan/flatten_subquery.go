@@ -4719,7 +4719,13 @@ func correlatedPaginationPartitionTypeSupported(typ types.T) bool {
 func (builder *QueryBuilder) pullupThroughAgg(ctx *BindContext, node *plan.Node, tag int32, expr *plan.Expr) *plan.Expr {
 	if !hasCorrCol(expr) {
 		switch expr.Expr.(type) {
-		case *plan.Expr_Col, *plan.Expr_F:
+		case *plan.Expr_F:
+			// A foldable scalar needs no inner row. Exporting it would create
+			// an artificial dependency inside the outer correlated expression.
+			if function.IsConstant(expr, false) {
+				return expr
+			}
+		case *plan.Expr_Col:
 			break
 
 		default:
@@ -4763,7 +4769,13 @@ func (builder *QueryBuilder) pullupThroughAgg(ctx *BindContext, node *plan.Node,
 func (builder *QueryBuilder) pullupThroughProj(ctx *BindContext, node *plan.Node, tag int32, expr *plan.Expr) *plan.Expr {
 	if !hasCorrCol(expr) {
 		switch expr.Expr.(type) {
-		case *plan.Expr_Col, *plan.Expr_F:
+		case *plan.Expr_F:
+			// A foldable scalar needs no inner row. Exporting it would create
+			// an artificial dependency inside the outer correlated expression.
+			if function.IsConstant(expr, false) {
+				return expr
+			}
+		case *plan.Expr_Col:
 			break
 
 		default:
