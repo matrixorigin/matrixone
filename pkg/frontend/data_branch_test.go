@@ -218,7 +218,7 @@ func TestFormatValIntoString_ControlByteRoundTrip(t *testing.T) {
 
 func TestFormatValIntoString_BinaryHexLiteral(t *testing.T) {
 	val := []byte{'x', 0x00, '\\', 0x07, '\''}
-	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+	for _, oid := range []types.T{types.T_varbinary, types.T_blob} {
 		t.Run(oid.String(), func(t *testing.T) {
 			var buf bytes.Buffer
 			require.NoError(t, formatValIntoString(&Session{}, val, types.New(oid, 0, 0), &buf))
@@ -233,6 +233,26 @@ func TestFormatValIntoString_BinaryHexLiteral(t *testing.T) {
 			require.Equal(t, `x'7800'`, buf.String())
 		})
 	}
+}
+
+func TestFormatValIntoString_BinaryTypedLiteral(t *testing.T) {
+	for _, width := range []int32{1, 255} {
+		for _, tc := range []struct {
+			value any
+			hex   string
+		}{
+			{[]byte{}, ""},
+			{[]byte{0xff, 0x00, '\\', '\''}, "ff005c27"},
+			{"AB\x00", "414200"},
+		} {
+			var buf bytes.Buffer
+			require.NoError(t, formatValIntoString(&Session{}, tc.value, types.New(types.T_binary, width, 0), &buf))
+			require.Equal(t, fmt.Sprintf("serial_extract(serial(x'%s'),0 as BINARY(%d))", tc.hex, width), buf.String())
+		}
+	}
+	var buf bytes.Buffer
+	require.NoError(t, formatValIntoString(&Session{}, nil, types.New(types.T_binary, 255, 0), &buf))
+	require.Equal(t, "NULL", buf.String())
 }
 
 func TestFormatValIntoString_Time(t *testing.T) {

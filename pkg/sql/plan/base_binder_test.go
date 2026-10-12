@@ -32,6 +32,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSerialExtractBinaryAssignment(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select serial_extract(serial(x'4142'),0 as binary(255))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+	require.True(t, valuesExprIsFuncCall(ast))
+	require.True(t, valuesExprIsFuncCall(&tree.ParenExpr{Expr: ast}))
+	binder := NewDefaultBinder(t.Context(), nil, nil, plan.Type{}, nil)
+	bound, err := binder.BindExpr(ast, 0, false)
+	require.NoError(t, err)
+	target := plan.Type{Id: int32(types.T_binary), Width: 255}
+	require.Equal(t, target, bound.Typ)
+	assigned, err := forceAssignmentCastExpr(t.Context(), bound, target)
+	require.NoError(t, err)
+	require.Same(t, bound, assigned)
+}
+
 func TestStoredProcedureVariablesUseDeclaredDecimalType(t *testing.T) {
 	scopes := []map[string]interface{}{{
 		"p1": "10.00",

@@ -1417,6 +1417,77 @@ func TestSerialExtract(t *testing.T) {
 	}
 }
 
+func TestSerialExtractBinaryReturnType(t *testing.T) {
+	utf8 := types.New(types.T_binary, 255, -1)
+	utf8.Charset = types.CharsetType(types.T_varchar)
+	for _, target := range []types.Type{
+		types.New(types.T_binary, 1, -1),
+		types.New(types.T_binary, 255, -1),
+		types.New(types.T_binary, 255, 0),
+		types.New(types.T_varbinary, 255, 0),
+		types.New(types.T_decimal128, 16, 6),
+		utf8,
+	} {
+		inputs := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), target}
+		fn, err := GetFunctionByName(t.Context(), "serial_extract", inputs)
+		require.NoError(t, err)
+		want := target
+		if want.Oid == types.T_binary && want.Scale == -1 {
+			want.Scale = 0
+		}
+		require.Equal(t, want, fn.GetReturnType())
+		require.Equal(t, target, inputs[2])
+	}
+}
+
+func TestSerialExtractBinaryBytes(t *testing.T) {
+	values := []string{"", "AB", "AB\x00", "\x00\xff\x00\\'", strings.Repeat("Z", 255), ""}
+	nulls := []bool{false, false, false, false, false, true}
+	packed := make([]string, len(values))
+	packer := types.NewPacker()
+	defer packer.Close()
+	for i, value := range values {
+		packer.Reset()
+		if nulls[i] {
+			packer.EncodeNull()
+		} else {
+			packer.EncodeStringType([]byte(value))
+		}
+		packed[i] = string(packer.Bytes())
+	}
+	proc := testutil.NewProcess(t)
+	target := types.New(types.T_binary, 255, -1)
+	resultType := types.New(types.T_binary, 255, 0)
+	for _, constantIndex := range []bool{false, true} {
+		index := NewFunctionTestInput(types.T_int64.ToType(), make([]int64, len(values)), nil)
+		if constantIndex {
+			index = NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, nil)
+		}
+		fc := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), packed, nil),
+			index,
+			NewFunctionTestConstInput(target, []string{""}, nil),
+		}, NewFunctionTestResult(resultType, false, values, nulls), builtInSerialExtract)
+		t.Cleanup(func() {
+			for _, parameter := range fc.parameters {
+				parameter.Free(proc.Mp())
+			}
+			fc.result.Free()
+		})
+		require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
+		require.NoError(t, fc.fn(fc.parameters, fc.result, proc, fc.fnLength, nil))
+		result := fc.GetResultVectorDirectly()
+		require.Equal(t, resultType, *result.GetType())
+		require.Equal(t, len(values), result.Length())
+		for i, value := range values {
+			require.Equal(t, nulls[i], result.IsNull(uint64(i)))
+			if !nulls[i] {
+				require.Equal(t, []byte(value), result.GetBytesAt(i))
+			}
+		}
+	}
+}
+
 func TestSerialExtractConstIndex(t *testing.T) {
 	ps := types.NewPacker()
 	defer ps.Close()
