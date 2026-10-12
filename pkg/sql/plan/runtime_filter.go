@@ -511,6 +511,12 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		return
 	}
 
+	// Shuffle specs above are dependencies, not optional scan filters. Apply
+	// the disable hint to both single-key and composite broadcast candidates.
+	if builder.optimizerHints != nil && builder.optimizerHints.runtimeFilter != 0 && !mustRuntimeFilter(node) {
+		return
+	}
+
 	policy := analyzeRuntimeFilterJoinPolicy(node)
 	if !policy.eligible || !builder.canSatisfyRuntimeFilterDelivery(node, policy) {
 		return
@@ -705,10 +711,6 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			//if probeCol.Name != tableDef.Pkey.PkeyColName && builder.getColOverlap(probeCol) > overlapThreshold {
 			//	return
 			//}
-		}
-
-		if builder.optimizerHints != nil && builder.optimizerHints.runtimeFilter != 0 && !mustRuntimeFilter(node) {
-			return
 		}
 
 		// A leading composite-key component can use its own zonemap and an

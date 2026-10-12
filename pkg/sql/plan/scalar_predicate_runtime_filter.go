@@ -37,6 +37,10 @@ func (builder *QueryBuilder) generateScalarPredicateRuntimeFilters(nodeID int32)
 // filter only after observing exactly one scalar row; zero rows publish DROP
 // and multiple rows publish PASS.
 func (builder *QueryBuilder) generateScalarPredicateRuntimeFilter(filter *plan.Node) {
+	// This late optional path must honor the same hint as broadcast RF.
+	if builder.optimizerHints != nil && builder.optimizerHints.runtimeFilter != 0 {
+		return
+	}
 	proc := builder.compCtx.GetProcess()
 	if proc == nil {
 		return
