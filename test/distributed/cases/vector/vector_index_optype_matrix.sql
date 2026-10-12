@@ -11,7 +11,7 @@
 --                        normalized vectors; a zero/subnormal query is rejected)
 --
 -- Each block asserts three things: the served function reaches the index
--- (VECTOR_INDEX_SCAN / hnsw_search in the plan), a non-served function does not, and
+-- (Vector Index Scan in the plan), a non-served function does not, and
 -- the SCORE the index returns equals the brute-force distance — t_ref is the
 -- same rows with no index, so the two projections must print identical values.
 -- The score is what the rewrite substitutes for the distance expression, so a
@@ -167,13 +167,13 @@ create index h_l1 using hnsw on h(v) op_type 'vector_l1_ops';
 
 create index h_l2 using hnsw on h(v) op_type 'vector_l2_ops';
 -- @separator:table
--- @regex("hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 explain select a from h order by l2_distance(v,'[1,1,1,1]') limit 3;
 -- @separator:table
--- @regex("hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 explain select a from h order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
 -- @separator:table
--- @regex("hnsw_search", false)
+-- @regex("Vector Index Scan on", false)
 explain select a from h order by cosine_distance(v,'[1,1,1,1]') limit 3;
 
 select a, l2_distance(v,'[1,1,1,1]') as d from h order by l2_distance(v,'[1,1,1,1]') limit 3;
@@ -186,10 +186,10 @@ alter table h drop index h_l2;
 
 create index h_l2sq using hnsw on h(v) op_type 'vector_l2sq_ops';
 -- @separator:table
--- @regex("hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 explain select a from h order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
 -- @separator:table
--- @regex("hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 explain select a from h order by l2_distance(v,'[1,1,1,1]') limit 3;
 
 select a, l2_distance_sq(v,'[1,1,1,1]') as dsq from h order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
@@ -201,7 +201,7 @@ create index h_cos using hnsw on hc(v) op_type 'vector_cosine_ops';
 -- @separator:table
 -- HNSW cosine uses native usearch ANN for normalized vectors (#29082). hc holds unit vectors
 -- and the query is a unit vector, so the index serves it.
--- @regex("hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 explain select a from hc order by cosine_distance(v,'[1,0,0,0]') limit 3;
 
 -- round(d,4): row a=1 IS the query vector, so its cosine distance is the degenerate 0.
@@ -221,7 +221,7 @@ alter table hc drop index h_cos;
 -- so only these value comparisons catch it.
 create index h_ip using hnsw on h(v) op_type 'vector_ip_ops';
 -- @separator:table
--- @regex("hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 explain select a from h order by inner_product(v,'[1,1,1,1]') limit 3;
 
 select a, inner_product(v,'[1,1,1,1]') as d from h order by inner_product(v,'[1,1,1,1]') limit 3;

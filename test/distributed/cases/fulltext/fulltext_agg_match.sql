@@ -45,7 +45,7 @@ select match(body) against('hello') as score, count(*) as c from docs where matc
 
 -- The index is still reached (the rewrite did not fall back to a full scan).
 -- @separator:table
--- @regex("fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select max(match(body) against('hello')) from docs where match(body) against('hello');
 
 drop database ft_agg_match;
