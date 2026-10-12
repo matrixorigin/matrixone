@@ -92,9 +92,60 @@ func TestStageFail(t *testing.T) {
 // state a repeated lookup reaches in production, and the state in which a cycle spins without
 // issuing any SQL.
 func setStage(t *testing.T, proc *process.Process, name, rawurl string) {
+	setStageWithStatus(t, proc, name, rawurl, "")
+}
+
+func setStageWithStatus(t *testing.T, proc *process.Process, name, rawurl, status string) {
 	u, err := url.Parse(rawurl)
 	require.NoError(t, err)
-	proc.GetStageCache().Set(name, stage.StageDef{Id: 1, Name: name, Url: u})
+	proc.GetStageCache().Set(name, stage.StageDef{Id: 1, Name: name, Url: u, Status: status})
+}
+
+func TestStageStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		status   string
+		rejected bool
+	}{
+		{name: "empty legacy fixture", status: ""},
+		{name: "legacy in_use", status: "in_use"},
+		{name: "enabled", status: "enabled"},
+		{name: "disabled", status: "disabled", rejected: true},
+		{name: "disabled with whitespace and case", status: " DISABLED ", rejected: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			setStageWithStatus(t, proc, "status_stage", "file:///tmp", tc.status)
+
+			resolved, err := UrlToStageDef("stage://status_stage/file.csv", proc)
+			if tc.rejected {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "stage status_stage is disabled")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, "file:///tmp/file.csv", resolved.Url.String())
+		})
+	}
+}
+
+func TestDisabledSubStageAndExportRejected(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	setStageWithStatus(t, proc, "disabled_stage", "file:///tmp", "disabled")
+	setStage(t, proc, "outer_stage", "stage://disabled_stage/prefix")
+
+	_, err := UrlToStageDef("stage://outer_stage/file.csv", proc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "stage disabled_stage is disabled")
+
+	_, err = UrlToStageDefForExport("stage://disabled_stage/file-%U.csv", proc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "stage disabled_stage is disabled")
+
+	setStageWithStatus(t, proc, "disabled_stage", "file:///tmp", "enabled")
+	resolved, err := UrlToStageDef("stage://outer_stage/file.csv", proc)
+	require.NoError(t, err)
+	require.Equal(t, "file:///tmp/prefix/file.csv", resolved.Url.String())
 }
 
 // TestStageCyclicReference: a stage:// cycle has no concrete URL to resolve to, so resolution must

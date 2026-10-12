@@ -333,6 +333,8 @@ type Compile struct {
 	// retaining the physical plan built at this timestamp.
 	planSnapshotTS    timestamp.Timestamp
 	hasPlanSnapshotTS bool
+	// Fixed CREATE target/declared-parent pins survive only this statement retry.
+	createNamePinsAdmitted bool
 	// planGenerationReused is true only when this execution admitted an
 	// existing session/prepared generation. A definition rebuild clears it;
 	// data-only retries retain it with the same logical generation.

@@ -2775,14 +2775,11 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 			},
 		}
 	}
-	e, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || !plan2.IsEqualFunc(e.F.Func.GetObj()) {
+	if !plan2.IsEquiJoinCondition(expr) {
 		panic(moerr.NewNYIf(proc.GetTopContext(), "join condition '%s'", expr))
 	}
-	if exprRelPos(e.F.Args[0]) == 1 {
-		return e.F.Args[1], e.F.Args[0]
-	}
-	return e.F.Args[0], e.F.Args[1]
+	args := expr.GetF().Args
+	return args[0], args[1]
 }
 
 func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *apply.Apply {
@@ -2863,40 +2860,17 @@ func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 	exprs = colexec.SplitAndExprs(exprs)
 	eqConds := make([]*plan.Expr, 0, len(exprs))
 	notEqConds := make([]*plan.Expr, 0, len(exprs))
-	for i, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !plan2.IsEqualFunc(e.F.Func.GetObj()) {
-				notEqConds = append(notEqConds, exprs[i])
-				continue
-			}
-			lpos, rpos := plan2.HasColExpr(e.F.Args[0], -1), plan2.HasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				notEqConds = append(notEqConds, exprs[i])
-				continue
-			}
-			eqConds = append(eqConds, exprs[i])
+	for _, expr := range exprs {
+		if plan2.IsEquiJoinCondition(expr) {
+			eqConds = append(eqConds, expr)
 		} else {
-			notEqConds = append(notEqConds, exprs[i])
+			notEqConds = append(notEqConds, expr)
 		}
 	}
 	if len(notEqConds) == 0 {
 		return nil, eqConds
 	}
 	return colexec.RewriteFilterExprList(notEqConds), eqConds
-}
-
-func exprRelPos(expr *plan.Expr) int32 {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		return e.Col.RelPos
-	case *plan.Expr_F:
-		for i := range e.F.Args {
-			if relPos := exprRelPos(e.F.Args[i]); relPos >= 0 {
-				return relPos
-			}
-		}
-	}
-	return -1
 }
 
 func constructPostDml(node *plan.Node, eng engine.Engine) *postdml.PostDml {

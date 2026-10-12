@@ -436,8 +436,15 @@ func LockTableWithContext(
 	tableID uint64,
 	pkType types.Type,
 	changeDef bool) error {
-	return lockTableWithModeAndContext(
-		ctx, eng, proc, tableID, pkType, lock.LockMode_Exclusive, changeDef, true, false, 0)
+	return lockTableWithModeAndContext(ctx, eng, proc, tableID, pkType, lock.LockMode_Exclusive, changeDef, true, false, 0)
+}
+
+// LockTableWithWaitPolicy uses a request-local policy without mutating the process.
+func LockTableWithWaitPolicy(
+	ctx context.Context, eng engine.Engine, proc *process.Process,
+	tableID uint64, pkType types.Type, changeDef bool, policy lock.WaitPolicy,
+) error {
+	return lockTableWithModeAndContext(ctx, eng, proc, tableID, pkType, lock.LockMode_Exclusive, changeDef, true, false, 0, policy)
 }
 
 // LockTableWithMode locks all rows in a table with the specified lock mode.
@@ -483,7 +490,8 @@ func lockTableWithModeAndContext(
 	changeDef bool,
 	retryOnRefresh bool,
 	refreshTableSnapshot bool,
-	lockWaitDeadline int64) error {
+	lockWaitDeadline int64,
+	waitPolicy ...lock.WaitPolicy) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
@@ -511,6 +519,9 @@ func lockTableWithModeAndContext(
 		WithLockTable(true, changeDef).
 		WithTableSnapshotRefresh(refreshTableSnapshot).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
+	if len(waitPolicy) > 0 {
+		opts.waitPolicy = &waitPolicy[0]
+	}
 	_, defChanged, refreshTS, err := doLock(
 		ctx,
 		eng,
@@ -565,6 +576,15 @@ func LockRows(
 	return lockRows(eng, proc, rel, tableID, bat, idx, pkType, lockMode, sharding, group, true)
 }
 
+// LockRowsWithWaitPolicy uses the existing row-lock path with a request-local policy.
+func LockRowsWithWaitPolicy(
+	eng engine.Engine, proc *process.Process, rel engine.Relation, tableID uint64,
+	bat *batch.Batch, idx int32, pkType types.Type, mode lock.LockMode,
+	sharding lock.Sharding, group uint32, policy lock.WaitPolicy,
+) error {
+	return lockRows(eng, proc, rel, tableID, bat, idx, pkType, mode, sharding, group, true, policy)
+}
+
 // LockRowsForSnapshotRefresh admits caller-supplied rows before their values
 // are read. It accepts a successful RC refresh without asking the caller to
 // replay input, but still rejects definition changes and all lock failures.
@@ -596,6 +616,7 @@ func lockRows(
 	sharding lock.Sharding,
 	group uint32,
 	retryOnRefresh bool,
+	waitPolicy ...lock.WaitPolicy,
 ) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
@@ -632,6 +653,9 @@ func lockRows(
 		WithLockMode(lockMode).
 		WithLockGroup(group).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
+	if len(waitPolicy) > 0 {
+		opts.waitPolicy = &waitPolicy[0]
+	}
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
 		eng,
@@ -832,6 +856,9 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, err
 	}
 	if opts.admissionOnly {
+		if opts.admissionResult != nil {
+			*opts.admissionResult = result
+		}
 		return false, false, result.Timestamp, nil
 	}
 
@@ -1418,15 +1445,30 @@ const (
 )
 
 func defaultLockRetryMemoryPressureLevel() lockRetryMemoryPressureLevel {
-	total := system.MemoryTotal()
-	if total == 0 {
+	available, measured := system.MemoryAvailableIncludingCache()
+	return classifyLockRetryMemoryPressure(system.MemoryTotal(), system.CgroupMemoryLimit(), available, measured)
+}
+
+func classifyLockRetryMemoryPressure(host, cgroup, available uint64, measured bool) lockRetryMemoryPressureLevel {
+	host = system.NormalizeMemoryCapacity(host)
+	cgroup = system.NormalizeMemoryCapacity(cgroup)
+	capacity := host
+	if cgroup > 0 && (capacity == 0 || cgroup < capacity) {
+		capacity = cgroup
+	}
+	if !measured || capacity == 0 {
 		return lockRetryMemoryPressureNormal
 	}
-	used := system.MemoryUsed()
-	if used >= total*lockRetryCriticalMemoryPercent/100 {
+	available = min(available, capacity)
+	used := capacity - available
+	// Split the product to preserve the exact threshold without overflow.
+	threshold := func(percent uint64) uint64 {
+		return capacity/100*percent + capacity%100*percent/100
+	}
+	if used >= threshold(lockRetryCriticalMemoryPercent) {
 		return lockRetryMemoryPressureCritical
 	}
-	if used >= total*lockRetryHighMemoryPercent/100 {
+	if used >= threshold(lockRetryHighMemoryPercent) {
 		return lockRetryMemoryPressureHigh
 	}
 	return lockRetryMemoryPressureNormal

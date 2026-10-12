@@ -286,6 +286,50 @@ execute integer_peer using @v;
 set @v = 54321;
 execute integer_peer using @v;
 deallocate prepare integer_peer;
+
+-- #29661: all integer list/range peers share guarded DECIMAL admission.
+set @a = cast(54321 as signed), @b = cast(54322 as signed);
+prepare integer_list_peers from 'select count(*), min(d) from t where d in (?, ?)';
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute integer_list_peers using @a, @b;
+execute integer_list_peers using @a, @b;
+prepare integer_range_peers from 'select count(*), min(d) from t where d between ? and ?';
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute integer_range_peers using @a, @b;
+execute integer_range_peers using @a, @b;
+prepare integer_not_list_peers from 'select count(*), min(d) from t where d not in (?, ?)';
+execute integer_not_list_peers using @a, @b;
+set @b = 9223372036854775807;
+execute integer_list_peers using @a, @b;
+execute integer_range_peers using @a, @b;
+set @b = null;
+execute integer_list_peers using @a, @b;
+execute integer_range_peers using @a, @b;
+execute integer_not_list_peers using @a, @b;
+set @a = cast(54322 as signed), @b = cast(54323 as signed);
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute integer_list_peers using @a, @b;
+execute integer_list_peers using @a, @b;
+execute integer_range_peers using @a, @b;
+deallocate prepare integer_list_peers;
+deallocate prepare integer_range_peers;
+deallocate prepare integer_not_list_peers;
+
+-- A value-preserving explicit SIGNED peer must retain native index access.
+create index decimal_peer_idx on t(d);
+set @v = cast(54321 as signed);
+prepare integer_signed_peer from 'select count(*), min(d) from t where d = cast(? as signed)';
+-- @regex("Index Table Scan on[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=1\b",true)
+explain analyze force execute integer_signed_peer using @v;
+execute integer_signed_peer using @v;
+set @v = 9223372036854775807;
+execute integer_signed_peer using @v;
+set @v = cast(54322 as signed);
+execute integer_signed_peer using @v;
+deallocate prepare integer_signed_peer;
+drop index decimal_peer_idx on t;
+set @v = 54321;
+
 prepare integer_cast_peer from 'select count(*), min(d) from t where d = cast(? as double)';
 execute integer_cast_peer using @v;
 set @v = 54322;

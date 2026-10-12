@@ -381,6 +381,38 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 			}
 		}
 
+	case *plan.Expr_W:
+		// Window arguments and keys consume values over the same input; they
+		// do not inherit a filter's NULL rejection or existential policy.
+		w := exprImpl.W
+		var childAffected bool
+		nodeID, w.WindowFunc, childAffected, err = builder.flattenSubqueriesWithConsumerAndChange(
+			nodeID, w.WindowFunc, ctx, false, existentialIneligible, guarded)
+		if err != nil {
+			return 0, nil, false, err
+		}
+		affected = childAffected
+		if childAffected {
+			expr.Typ = w.WindowFunc.Typ
+		}
+		for i, key := range w.PartitionBy {
+			nodeID, w.PartitionBy[i], childAffected, err = builder.flattenSubqueriesWithConsumerAndChange(
+				nodeID, key, ctx, false, existentialIneligible, guarded)
+			if err != nil {
+				return 0, nil, false, err
+			}
+			affected = affected || childAffected
+		}
+		for _, order := range w.OrderBy {
+			nodeID, order.Expr, childAffected, err = builder.flattenSubqueriesWithConsumerAndChange(
+				nodeID, order.Expr, ctx, false, existentialIneligible, guarded)
+			if err != nil {
+				return 0, nil, false, err
+			}
+			affected = affected || childAffected
+		}
+		// Frame bounds retain their bind-time constant/parameter contract.
+
 	case *plan.Expr_List:
 		for i, item := range exprImpl.List.List {
 			// Tuple comparisons are not strictly null-propagating: an earlier
@@ -421,6 +453,10 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	nodeID int32, subquery *plan.SubqueryRef, ctx *BindContext,
 	nullResultRejected bool, consumer existentialConsumer, guarded bool,
 ) (int32, *plan.Expr, error) {
+	if subquery.Typ == plan.SubqueryRef_SCALAR && subquery.Child == nil && subquery.RowSize > 1 {
+		return 0, nil, moerr.NewInvalidInput(builder.GetContext(), "subquery should return 1 column")
+	}
+
 	if id, expr, handled, err := builder.tryDeepExistential(nodeID, subquery, ctx, consumer); handled {
 		return id, expr, err
 	}
@@ -4683,7 +4719,13 @@ func correlatedPaginationPartitionTypeSupported(typ types.T) bool {
 func (builder *QueryBuilder) pullupThroughAgg(ctx *BindContext, node *plan.Node, tag int32, expr *plan.Expr) *plan.Expr {
 	if !hasCorrCol(expr) {
 		switch expr.Expr.(type) {
-		case *plan.Expr_Col, *plan.Expr_F:
+		case *plan.Expr_F:
+			// A foldable scalar needs no inner row. Exporting it would create
+			// an artificial dependency inside the outer correlated expression.
+			if function.IsConstant(expr, false) {
+				return expr
+			}
+		case *plan.Expr_Col:
 			break
 
 		default:
@@ -4727,7 +4769,13 @@ func (builder *QueryBuilder) pullupThroughAgg(ctx *BindContext, node *plan.Node,
 func (builder *QueryBuilder) pullupThroughProj(ctx *BindContext, node *plan.Node, tag int32, expr *plan.Expr) *plan.Expr {
 	if !hasCorrCol(expr) {
 		switch expr.Expr.(type) {
-		case *plan.Expr_Col, *plan.Expr_F:
+		case *plan.Expr_F:
+			// A foldable scalar needs no inner row. Exporting it would create
+			// an artificial dependency inside the outer correlated expression.
+			if function.IsConstant(expr, false) {
+				return expr
+			}
+		case *plan.Expr_Col:
 			break
 
 		default:

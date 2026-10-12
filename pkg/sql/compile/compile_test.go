@@ -208,65 +208,92 @@ func TestFilterScanStorageExprsExcludesVolatilePredicates(t *testing.T) {
 }
 
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
-	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
-	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.ApplySQLSelectLimit = true
-	proc.GetSessionInfo().Buf = buffer.New()
-	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
-		if name == plan2.SQLSelectLimitVariable {
-			return ^uint64(0), nil
-		}
-		return "STRICT_TRANS_TABLES", nil
-	})
-	compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
-	compilerCtx.SetContext(ctx)
-	stmts, err := mysql.Parse(ctx, "select ?", 1)
-	require.NoError(t, err)
-	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], true)
-	require.NoError(t, err)
-	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}, IsPrepare: true}
-	_, _, err = plan2.ResetPreparePlan(compilerCtx, pn)
-	require.NoError(t, err)
+	for _, tc := range []struct {
+		name     string
+		borrowed bool
+		cause    error
+	}{
+		{"ordinary_rc", false, moerr.NewTxnNeedRetryNoCtx()},
+		{"borrowed_rc", true, moerr.NewTxnNeedRetryNoCtx()},
+		{"borrowed_definition", true, moerr.NewTxnNeedRetryWithDefChangedNoCtx()},
+		{"borrowed_vector", true, moerr.NewVectorNeedRetryWithPreModeNoCtx()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			borrowed := tc.borrowed
+			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+			proc := testutil.NewProcess(t)
+			proc.Base.SessionInfo.ApplySQLSelectLimit = true
+			proc.GetSessionInfo().Buf = buffer.New()
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == plan2.SQLSelectLimitVariable {
+					return ^uint64(0), nil
+				}
+				return "STRICT_TRANS_TABLES", nil
+			})
+			compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
+			compilerCtx.SetContext(ctx)
+			stmts, err := mysql.Parse(ctx, "select ?", 1)
+			require.NoError(t, err)
+			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], true)
+			require.NoError(t, err)
+			pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}, IsPrepare: true}
+			_, _, err = plan2.ResetPreparePlan(compilerCtx, pn)
+			require.NoError(t, err)
 
-	ctrl := gomock.NewController(t)
-	txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
-	proc.Base.TxnClient = txnCli
-	proc.Base.TxnOperator = txnOp
-	proc.Ctx = ctx
-	proc.ReplaceTopCtx(ctx)
+			ctrl := gomock.NewController(t)
+			txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+			proc.Base.TxnClient = txnCli
+			proc.Base.TxnOperator = txnOp
+			proc.SetIncrStatementDisabled(borrowed)
+			rollbacks := 0
+			txnOp.GetWorkspace().(*Ws).rollbackLastStatement = func(context.Context) error { rollbacks++; return nil }
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
 
-	want := []byte{'A', 'B', 0, 0}
-	params := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(params, want, false, proc.Mp()))
-	proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
+			want := []byte{'A', 'B', 0, 0}
+			params := vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(params, want, false, proc.Mp()))
+			proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
 
-	evaluations := 0
-	fill := func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
-		if bat == nil {
-			return nil
-		}
-		require.Len(t, bat.Vecs, 1)
-		require.True(t, bat.Vecs[0].GetIsBin(), "binary semantics were lost on evaluation %d", evaluations+1)
-		require.Equal(t, want, bat.Vecs[0].GetBytesAt(0))
-		evaluations++
-		if evaluations <= 2 {
-			return moerr.NewTxnNeedRetryNoCtx()
-		}
-		return nil
+			evaluations := 0
+			fill := func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+				if bat == nil {
+					return nil
+				}
+				require.Len(t, bat.Vecs, 1)
+				require.True(t, bat.Vecs[0].GetIsBin(), "binary semantics were lost on evaluation %d", evaluations+1)
+				require.Equal(t, want, bat.Vecs[0].GetBytesAt(0))
+				evaluations++
+				if evaluations <= 2 {
+					return tc.cause
+				}
+				return nil
+			}
+
+			c := NewCompile("test", "test", "select ?", "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+			require.NoError(t, c.Compile(ctx, pn, fill))
+			_, err = c.Run(0)
+			if borrowed {
+				require.ErrorIs(t, err, tc.cause, "borrowed execution must return the original retry error")
+				require.Equal(t, 1, evaluations)
+				require.Zero(t, rollbacks, "child retry must not roll back caller writes")
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, 3, evaluations)
+				require.Equal(t, 2, c.retryTimes)
+				require.Equal(t, 2, rollbacks)
+			}
+			if !borrowed {
+				require.Zero(t, params.Length())
+				require.Nil(t, params.GetData())
+				require.Nil(t, params.GetArea())
+			}
+			c.Release()
+			proc.Free()
+			proc.GetSessionInfo().Buf.Free()
+
+		})
 	}
-
-	c := NewCompile("test", "test", "select ?", "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
-	require.NoError(t, c.Compile(ctx, pn, fill))
-	_, err = c.Run(0)
-	require.NoError(t, err)
-	require.Equal(t, 3, evaluations)
-	require.Equal(t, 2, c.retryTimes)
-	require.Zero(t, params.Length())
-	require.Nil(t, params.GetData())
-	require.Nil(t, params.GetArea())
-	c.Release()
-	proc.Free()
-	proc.GetSessionInfo().Buf.Free()
 }
 
 func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
@@ -323,6 +350,45 @@ func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
 	_, err = c.Run(0)
 	require.NoError(t, err)
 	require.Zero(t, rows)
+
+	// The same cached Compile must follow the current statement owner after
+	// Reset, rather than retain a policy chosen when it was first constructed.
+	limitValue = 1
+	rows = 0
+	rollbacks := 0
+	txnOp.GetWorkspace().(*Ws).rollbackLastStatement = func(context.Context) error { rollbacks++; return nil }
+	cause := moerr.NewTxnNeedRetryNoCtx()
+	proc.SetIncrStatementDisabled(true)
+	fill = func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+		if bat != nil {
+			rows += bat.RowCount()
+			return cause
+		}
+		return nil
+	}
+	require.NoError(t, c.Reset(proc, time.Now(), fill, sql))
+	_, err = c.Run(0)
+	require.ErrorIs(t, err, cause)
+	require.Equal(t, 1, rows)
+	require.Zero(t, rollbacks)
+
+	proc.SetIncrStatementDisabled(false)
+	rows = 0
+	fill = func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+		if bat != nil {
+			rows += bat.RowCount()
+			if rows == 1 {
+				return cause
+			}
+		}
+		return nil
+	}
+	require.NoError(t, c.Reset(proc, time.Now(), fill, sql))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Equal(t, 2, rows)
+	require.Equal(t, 1, rollbacks)
+
 }
 
 func TestSQLSelectLimitOperatorSelection(t *testing.T) {
@@ -893,7 +959,8 @@ func TestApplyExecutorLockWaitTimeout(t *testing.T) {
 }
 
 type Ws struct {
-	advanceSnapshot func(context.Context, timestamp.Timestamp) error
+	rollbackLastStatement func(context.Context) error
+	advanceSnapshot       func(context.Context, timestamp.Timestamp) error
 }
 
 func (w *Ws) SetCloneTxn(snapshot int64) {}
@@ -930,6 +997,9 @@ func (w *Ws) AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error 
 }
 
 func (w *Ws) RollbackLastStatement(ctx context.Context) error {
+	if w.rollbackLastStatement != nil {
+		return w.rollbackLastStatement(ctx)
+	}
 	return nil
 }
 
@@ -3823,14 +3893,14 @@ func newShuffleJoinTestNode(dop int32) *plan.Node {
 	leftCol := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_int64)},
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{
-			RelPos: 1,
+			RelPos: 0,
 			ColPos: 0,
 		}},
 	}
 	rightCol := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_int64)},
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{
-			RelPos: 2,
+			RelPos: 1,
 			ColPos: 0,
 		}},
 	}
@@ -3850,6 +3920,7 @@ func newShuffleJoinTestNode(dop int32) *plan.Node {
 		OnList: []*plan.Expr{{
 			Typ: plan.Type{Id: int32(types.T_bool)},
 			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.EQUAL, 0), ObjName: "="},
 				Args: []*plan.Expr{leftCol, rightCol},
 			}},
 		}},

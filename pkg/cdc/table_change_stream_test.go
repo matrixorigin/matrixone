@@ -2208,7 +2208,7 @@ func newTableStreamHarness(t *testing.T, opts ...tableStreamHarnessOption) *tabl
 		updaterStop = cfg.updaterStop
 	} else {
 		defaultUpdater, _ := InitCDCWatermarkUpdaterForTest(t)
-		defaultUpdater.Start()
+		defaultUpdater.Start(context.Background())
 		updater = defaultUpdater
 		updaterStop = defaultUpdater.Stop
 	}
