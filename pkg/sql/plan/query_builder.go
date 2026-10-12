@@ -3884,12 +3884,7 @@ func isRowCountOnlyInnerEquiJoin(node *plan.Node) bool {
 		return false
 	}
 	for _, condition := range conditions {
-		fn := condition.GetF()
-		if fn == nil || len(fn.Args) != 2 || !IsEqualFunc(fn.Func.GetObj()) {
-			return false
-		}
-		left, right := HasColExpr(fn.Args[0], -1), HasColExpr(fn.Args[1], -1)
-		if !((left == 0 && right == 1) || (left == 1 && right == 0)) {
+		if !IsEquiJoinCondition(condition) {
 			return false
 		}
 	}
