@@ -7,10 +7,11 @@ dependencies. Images are pinned by digest in `compose.connect.yaml`.
 
 The run checks a baseline insert, kills the owned Connect worker, writes an
 insert, update, and keyed tombstone while it is down, then starts the same
-worker and checks the exact destination rows and both Connect and Kafka
-consumer offsets. It also stops the connector, rewinds the fixture consumer
-offset through Kafka Connect's REST API, verifies replay leaves the target
-unchanged, and checks an empty-work worker restart. The report records the
+worker and checks the exact destination rows plus the Connect REST offset,
+Kafka consumer-group committed offset, and Kafka log-end offset. It also stops
+the connector, rewinds the fixture consumer offset through Kafka Connect's REST
+API, verifies replay leaves the target unchanged, and checks an empty-work
+worker restart. The report records the
 MatrixOne binary source revision, harness source revision, binary digest,
 Connect/plugin versions, exact rows, and offsets under
 `test/kafkaconnect/reports/` by default. Set

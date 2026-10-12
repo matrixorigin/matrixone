@@ -90,6 +90,25 @@ func TestPhaseReportIncludesZeroOffsets(t *testing.T) {
 	}
 }
 
+func TestRunResultMarksFailedReport(t *testing.T) {
+	report := runReport{Status: "running"}
+	setRunResult(&report, errors.New("sink offset did not reach the expected value"))
+	data, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "failed" || got.Error != "sink offset did not reach the expected value" {
+		t.Fatalf("failed run report = %+v, want failed status and error", got)
+	}
+}
+
 func TestExpectedFinalRowsHaveUniqueIDsAndCoverRecoveryContract(t *testing.T) {
 	rows := expectedFinalRows()
 	if err := validateUniqueRowIDs(rows); err != nil {

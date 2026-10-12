@@ -232,11 +232,7 @@ func main() {
 	defer cancel()
 
 	err := run(ctx, opts, &report)
-	if err != nil {
-		report.Error = err.Error()
-	} else {
-		report.Status = "passed"
-	}
+	setRunResult(&report, err)
 	report.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if writeErr := writeReport(opts.reportDir, report); writeErr != nil {
 		if err == nil {
@@ -252,6 +248,15 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func setRunResult(report *runReport, runErr error) {
+	if runErr != nil {
+		report.Status = "failed"
+		report.Error = runErr.Error()
+		return
+	}
+	report.Status = "passed"
 }
 
 func run(ctx context.Context, opts runOptions, report *runReport) error {
