@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
@@ -107,16 +107,34 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 		require.Equal(t, "utf8mb4_unicode_ci", collation)
 		require.Equal(t, 2, queryCount("select count(*) from words where lower(s)='a'"))
 		// Conditional and ordered string expressions must carry the native
-		// Unicode revision through their rebuilt result type. Include mixed-width
-		// branches and typed NULLs so a revision-zero intermediate is observable
-		// at the comparison boundary.
+		// Unicode revision through their rebuilt result type. Ordinary NULLs are
+		// ignorable, while weak literals must not replace the native domain.
 		require.Equal(t, 2, queryCount("select count(*) from words where coalesce(s,'x')='a'"))
 		require.Equal(t, 0, queryCount("select count(*) from words where coalesce('x',s)='a'"))
-		require.Equal(t, 2, queryCount("select count(*) from words where coalesce(s,cast(null as varchar(1)))='a'"))
+		require.Equal(t, 2, queryCount("select count(*) from words where coalesce(s,null)='a'"))
 		require.Equal(t, 3, queryCount("select count(*) from words where case when id=1 then 'a' else s end='a'"))
-		require.Equal(t, 2, queryCount("select count(*) from words where case when id=1 then cast(null as varchar(1)) else s end='a'"))
+		require.Equal(t, 2, queryCount("select count(*) from words where case when id=1 then null else s end='a'"))
 		require.Equal(t, 3, queryCount("select count(*) from words where if(id=1,s,'a')='a'"))
-		require.Equal(t, 2, queryCount("select count(*) from words where if(id=1,cast(null as varchar(1)),s)='a'"))
+		require.Equal(t, 2, queryCount("select count(*) from words where if(id=1,null,s)='a'"))
+		// Typed NULL retains its static collation source. A native COLLATE keeps
+		// these mixed-width expressions valid, but a revision-zero SQL CAST and
+		// the native column have equal implicit priority and must be rejected.
+		for _, expression := range []string{
+			"coalesce(s,%s)",
+			"case when id=1 then %s else s end",
+			"if(id=1,%s,s)",
+		} {
+			query := "select count(*) from words where " + expression + "='a'"
+			native := fmt.Sprintf(query, "cast(null as varchar(1)) collate utf8mb4_unicode_ci")
+			require.Equal(t, 2, queryCount(native), native)
+
+			legacy := fmt.Sprintf(query, "cast(null as varchar(1))")
+			var count int
+			queryErr := db.QueryRowContext(ctx, legacy).Scan(&count)
+			var sqlErr *mysql.MySQLError
+			require.ErrorAs(t, queryErr, &sqlErr, legacy)
+			require.Equal(t, uint16(1267), sqlErr.Number, legacy)
+		}
 		require.Equal(t, 2, queryCount("select count(*) from words where least(s,'z')='a'"))
 		require.Equal(t, 2, queryCount("select count(*) from words where greatest(s,'0')='a'"))
 		require.Equal(t, 2, queryCount("select count(*) from words where repeat(s,1)='a'"))
