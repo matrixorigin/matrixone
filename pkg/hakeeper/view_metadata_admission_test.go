@@ -16,6 +16,7 @@ package hakeeper
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -23,8 +24,11 @@ import (
 	sm "github.com/lni/dragonboat/v4/statemachine"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 func updateViewMetadataCN(
@@ -484,9 +488,11 @@ func TestPersistedExpressionProtocolActivationRevokesStaleLowerCN(t *testing.T) 
 	require.True(t, rsm.state.ViewMetadataAdmissionPreparing)
 	require.False(t, rsm.state.CNState.Stores["stale-cn"].ViewMetadataAdmissionReady)
 	details := rsm.handleClusterDetailsQuery(cfg)
-	for _, store := range details.CNStores {
-		require.NotEqual(t, "stale-cn", store.UUID)
-	}
+	require.Len(t, details.CNStores, 1)
+	require.Equal(t, "stale-cn", details.CNStores[0].UUID)
+	require.Equal(t, pb.TimeoutState, details.CNStores[0].State)
+	require.False(t, details.CNStores[0].ViewMetadataAdmissionReady,
+		"internal discovery must not grant public routing admission")
 }
 
 func TestPersistedExpressionProtocolRaiseKeepsOldGenerationDrainTarget(t *testing.T) {
@@ -537,7 +543,15 @@ func TestPersistedExpressionProtocolRaiseKeepsOldGenerationDrainTarget(t *testin
 	require.False(t, rsm.state.CNState.Stores["cn-1"].ViewMetadataAdmissionReady)
 }
 
-func TestViewMetadataAdmissionPreparingKeepsLegacyAndHidesPendingCN(t *testing.T) {
+type admissionInventoryClient struct {
+	details pb.ClusterDetails // Immutable snapshot; cluster refresh may read it concurrently.
+}
+
+func (c *admissionInventoryClient) GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
+	return c.details, ctx.Err()
+}
+
+func TestViewMetadataAdmissionPreparingKeepsRegisteredOwners(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	rsm.state.LogState.Shards[DefaultHAKeeperShardID] = pb.LogShardInfo{
 		Replicas: map[uint64]string{1: "log-1"},
@@ -550,6 +564,7 @@ func TestViewMetadataAdmissionPreparingKeepsLegacyAndHidesPendingCN(t *testing.T
 	updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
 		UUID:                            "pending-cn",
 		ServiceAddress:                  "pending-pipeline",
+		LockServiceAddress:              "pending-lock",
 		ViewMetadataAdmissionSupported:  true,
 		ViewMetadataAdmissionGeneration: 2,
 	})
@@ -564,8 +579,50 @@ func TestViewMetadataAdmissionPreparingKeepsLegacyAndHidesPendingCN(t *testing.T
 	require.False(t, rsm.state.CNState.Stores["pending-cn"].ViewMetadataAdmissionReady)
 
 	details := rsm.handleClusterDetailsQuery(Config{})
+	require.Len(t, details.CNStores, 2)
+	require.False(t, rsm.state.CNState.Stores["pending-cn"].ViewMetadataAdmissionSupported)
+	runtime.SetupServiceBasedRuntime(t.Name(), runtime.DefaultRuntime())
+	cluster := clusterservice.NewMOCluster(t.Name(), &admissionInventoryClient{details: *details}, time.Hour)
+	t.Cleanup(cluster.Close)
+	require.NoError(t, cluster.(clusterservice.AuthoritativeRefresher).Refresh(context.Background()))
+	var raw []string
+	require.NoError(t, clusterservice.GetCNServiceRawWithContext(context.Background(), cluster,
+		clusterservice.NewSelectAll(), func(cn metadata.CNService) bool {
+			raw = append(raw, cn.ServiceID)
+			if cn.ServiceID == "pending-cn" {
+				require.Equal(t, "pending-lock", cn.LockServiceAddress)
+				require.Equal(t, uint64(2), cn.ViewMetadataAdmissionGeneration)
+			}
+			return true
+		}))
+	require.ElementsMatch(t, []string{"legacy-cn", "pending-cn"}, raw)
+	var public []string
+	collectPublic := func(cn metadata.CNService) bool {
+		public = append(public, cn.ServiceID)
+		return true
+	}
+	cluster.GetCNService(clusterservice.NewSelectAll(), collectPublic)
+	require.Equal(t, []string{"legacy-cn"}, public)
+	public = nil
+	cluster.GetCNServiceWithoutWorkingState(clusterservice.NewSelectAll(), collectPublic)
+	require.Equal(t, []string{"legacy-cn"}, public)
+	public = nil
+	require.NoError(t, clusterservice.GetCNServiceWithoutWorkingStateWithContext(context.Background(),
+		cluster, clusterservice.NewSelectAll(), collectPublic))
+	require.Equal(t, []string{"legacy-cn"}, public)
+
+	updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID: "pending-cn", LockServiceAddress: "pending-lock",
+		ViewMetadataAdmissionSupported: true, ViewMetadataAdmissionGeneration: 2,
+	})
+	require.Len(t, rsm.handleClusterDetailsQuery(Config{}).CNStores, 2)
+	require.False(t, rsm.state.CNState.Stores["pending-cn"].ViewMetadataAdmissionReady)
+	_, err = rsm.Update(sm.Entry{Index: rsm.state.Index + 1,
+		Cmd: GetDeleteCNStoreCmd(pb.DeleteCNStore{StoreID: "pending-cn"})})
+	require.NoError(t, err)
+	details = rsm.handleClusterDetailsQuery(Config{})
 	require.Len(t, details.CNStores, 1)
-	require.Equal(t, "legacy-cn", details.CNStores[0].UUID)
+	require.Equal(t, "legacy-cn", details.CNStores[0].UUID, "real deletion must still remove the owner")
 }
 
 func TestViewMetadataAdmissionRejectsStaleGeneration(t *testing.T) {
@@ -1036,7 +1093,7 @@ func TestViewMetadataAdmissionRejectsStaleCatalogFence(t *testing.T) {
 	require.True(t, batch.ViewMetadataAdmission.Ready)
 }
 
-func TestClusterDetailsKeepsSupportedPendingButHidesLegacyIngress(t *testing.T) {
+func TestClusterDetailsKeepsRegisteredPendingButHidesLegacyIngress(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	rsm.state.ViewMetadataAdmissionEnabled = true
 	rsm.state.ViewMetadataAdmissionEpoch = 1
@@ -1063,6 +1120,7 @@ func TestClusterDetailsKeepsSupportedPendingButHidesLegacyIngress(t *testing.T) 
 	require.False(t, byID["pending"].ViewMetadataAdmissionReady)
 	require.Contains(t, byID, "ready")
 	require.NotContains(t, byID, "legacy")
+
 }
 
 func TestViewMetadataAdmissionSnapshotRoundTripAndOldSnapshotFailClosed(t *testing.T) {

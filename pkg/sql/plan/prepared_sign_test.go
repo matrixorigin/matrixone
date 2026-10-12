@@ -28,7 +28,7 @@ import (
 
 func TestPreparedSignRebindsRuntimeNumericDomain(t *testing.T) {
 	ctx := context.Background()
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_sign from 'select sign(?)'")
 	require.NoError(t, err)
 	preparePlan := prepared.GetDcl().GetPrepare().Plan
@@ -39,7 +39,7 @@ func TestPreparedSignRebindsRuntimeNumericDomain(t *testing.T) {
 	require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(preparePlan))
 	require.True(t, PreparedPlanHasDeferredNumericFunction(preparePlan))
 
-	ordinary, err := runOneStmt(NewMockOptimizer(false), t,
+	ordinary, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_sign_column from 'select sign(n_regionkey) from nation'")
 	require.NoError(t, err)
 	ordinaryFn := findPlanFunctionExpr(ordinary.GetDcl().GetPrepare().Plan, "sign")
@@ -55,7 +55,7 @@ func TestPreparedSignRebindsRuntimeNumericDomain(t *testing.T) {
 		{name: "explicit integer", sql: "prepare stmt_sign_integer from 'select sign(cast(? as signed))'"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			plan := prepared.GetDcl().GetPrepare().Plan
 			require.Empty(t, PreparedPlanNumericFallbackParamPositions(plan),
@@ -100,7 +100,7 @@ func signOverloadForTest(expr *Expr) int32 {
 
 func TestPreparedEltRebindsRuntimeNumericDomain(t *testing.T) {
 	ctx := context.Background()
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_elt from 'select elt(?, ''a'', ''b'', ''c'')'")
 	require.NoError(t, err)
 	preparePlan := prepared.GetDcl().GetPrepare().Plan
@@ -126,11 +126,11 @@ func TestPreparedEltRebindsRuntimeNumericDomain(t *testing.T) {
 		{name: "decimal rounds two point five", value: "2.5", kind: vector.PrepareParamDecimal, want: "c", wantType: types.T_int64, specialized: true},
 		{name: "decimal rounds two point six", value: "2.6", kind: vector.PrepareParamDecimal, want: "c", wantType: types.T_int64, specialized: true},
 		{name: "numeric text follows decimal conversion", value: "1.6", kind: vector.PrepareParamNone, want: "b", wantType: types.T_int64, specialized: true},
-		{name: "numeric prefix remains accepted", value: "2tail", kind: vector.PrepareParamNone, want: "b", wantType: types.T_int64, specialized: false},
+		{name: "numeric prefix remains accepted", value: "2tail", kind: vector.PrepareParamNone, want: "b", wantType: types.T_int64, specialized: true},
 		{name: "integer remains exact", value: "1", kind: vector.PrepareParamInteger, want: "a", wantType: types.T_int64, specialized: true},
 		{name: "out of range index", value: "4", kind: vector.PrepareParamInteger, wantNull: true, wantType: types.T_int64, specialized: true},
-		{name: "non-numeric text maps to zero", value: "foo", kind: vector.PrepareParamNone, wantNull: true, wantType: types.T_int64, specialized: false},
-		{name: "null index", value: nil, kind: vector.PrepareParamNone, wantNull: true, specialized: false},
+		{name: "non-numeric text maps to zero", value: "foo", kind: vector.PrepareParamNone, wantNull: true, wantType: types.T_int64, specialized: true},
+		{name: "null index", value: nil, kind: vector.PrepareParamNone, wantNull: true, specialized: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtimePlan, specialized, err := FillValuesOfParamsInPlanWithPreparedNumericOverload(
@@ -163,18 +163,26 @@ func TestPreparedEltRebindsRuntimeNumericDomain(t *testing.T) {
 		})
 	}
 
-	preparedDouble, err := runOneStmt(NewMockOptimizer(false), t,
+	preparedDouble, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_elt_double from 'select elt(cast(? as double), ''a'', ''b'')'")
 	require.NoError(t, err)
 	doublePlan := preparedDouble.GetDcl().GetPrepare().Plan
-	require.Empty(t, PreparedPlanNumericFallbackParamPositions(doublePlan))
+	require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(doublePlan))
 	filled, specialized, err := FillValuesOfParamsInPlanWithPreparedNumericOverload(
 		ctx, doublePlan, []any{ParamValue{
 			Value: "1.5", PrepareParamKind: vector.PrepareParamFloat,
 		}})
 	require.NoError(t, err)
-	require.False(t, specialized)
+	require.True(t, specialized)
 	doubleFn := findPlanFunctionExpr(filled, "elt")
 	require.NotNil(t, doubleFn)
 	require.Equal(t, int32(types.T_float64), doubleFn.GetF().Args[0].GetF().Args[0].Typ.Id)
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	executor, err := colexec.NewExpressionExecutor(proc, doubleFn)
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, "a", result.GetStringAt(0), "explicit DOUBLE uses truncation, not implicit rounding")
 }

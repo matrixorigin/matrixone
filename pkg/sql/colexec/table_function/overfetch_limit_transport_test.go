@@ -41,7 +41,7 @@ import (
 func TestOverFetchLimitExprResolvesInTVF(t *testing.T) {
 	ctx := context.Background()
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 
 	for _, k := range []uint64{0, 1, 2, 9, 10, 11, 49, 50, 51, 99, 100, 199, 200, 201, 1000} {
 		want := overfetch.PostFilterLimit(k)
@@ -82,7 +82,7 @@ func TestOverFetchLimitExprResolvesInTVF(t *testing.T) {
 // The planner must therefore never emit nil here.
 func TestOverFetchLimitNeverNilForOldExecutor(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 
 	// The failure mode being guarded against, stated explicitly.
 	underReturned, err := evalLimitExpression(proc, nil, 1)

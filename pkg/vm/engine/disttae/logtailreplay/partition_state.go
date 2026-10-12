@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -94,6 +93,22 @@ type PartitionState struct {
 	// should have been in the Partition structure, but doing that requires much more codes changes
 	// so just put it here.
 	shared *sharedStates
+}
+
+// DataVersion identifies the contents of one subscribed partition without
+// retaining its rows or objects. GC/copy preserve it; reconstruction does not.
+type DataVersion struct {
+	generation *sharedStates
+	appliedTo  types.TS
+}
+
+func (p *PartitionState) DataVersion() DataVersion {
+	return DataVersion{generation: p.shared, appliedTo: p.appliedTo}
+}
+
+// VisibleAt excludes mutations ahead of an exclusive transaction snapshot.
+func (v DataVersion) VisibleAt(snapshot types.TS) bool {
+	return v.generation != nil && !v.appliedTo.IsEmpty() && v.appliedTo.LT(&snapshot)
 }
 
 // SourceCommitTS is the timestamp an async index watermark must cover at a
@@ -393,8 +408,10 @@ func (p *PartitionState) handleDataObjectEntry(
 		p.lastFlushTimestamp = commitTS
 	}
 
-	if objEntry.Size() == 0 || (objEntry.GetAppendable() && objEntry.DeleteTime.IsEmpty()) {
-		// CN doesn't consume the create event of appendable object
+	// Checkpoint creation records can carry durable appendable stats from a
+	// later flush. Persisted rows retain commit/abort visibility; live creation
+	// events are filtered by separate handlers.
+	if objEntry.Size() == 0 {
 		return
 	}
 
@@ -516,7 +533,7 @@ func (p *PartitionState) handleTombstoneObjectEntry(
 	if commitTS.GT(&p.lastFlushTimestamp) {
 		p.lastFlushTimestamp = commitTS
 	}
-	if objEntry.Size() == 0 || (objEntry.GetAppendable() && objEntry.DeleteTime.IsEmpty()) {
+	if objEntry.Size() == 0 {
 		return
 	}
 
@@ -550,42 +567,44 @@ func (p *PartitionState) handleTombstoneObjectEntry(
 		return
 	}
 
-	truncatePoint := objEntry.DeleteTime
+	// Durable checkpoint creations register the object but have no GC cutoff.
+	if !objEntry.DeleteTime.IsEmpty() {
+		truncatePoint := objEntry.DeleteTime
 
-	var deletedRow *RowEntry
-	var tbIter = p.inMemTombstoneRowIdIndex.Copy().Iter()
-	defer tbIter.Release()
+		var deletedRow *RowEntry
+		var tbIter = p.inMemTombstoneRowIdIndex.Copy().Iter()
+		defer tbIter.Release()
 
-	for ok := tbIter.Seek(&PrimaryIndexEntry{
-		Bytes: objEntry.ObjectName().ObjectId()[:],
-		Time:  types.MaxTs(),
-	}); ok; ok = tbIter.Next() {
-		if truncatePoint.LT(&tbIter.Item().Time) {
-			continue
-		}
+		for ok := tbIter.Seek(&PrimaryIndexEntry{
+			Bytes: objEntry.ObjectName().ObjectId()[:],
+			Time:  types.MaxTs(),
+		}); ok; ok = tbIter.Next() {
+			current := types.Objectid(tbIter.Item().Bytes)
+			if !objEntry.ObjectName().ObjectId().EQ(&current) {
+				break
+			}
+			if truncatePoint.LT(&tbIter.Item().Time) {
+				continue
+			}
 
-		current := types.Objectid(tbIter.Item().Bytes)
-		if !objEntry.ObjectName().ObjectId().EQ(&current) {
-			break
-		}
+			if deletedRow, exist = p.rows.Get(&RowEntry{
+				ID:      tbIter.Item().RowEntryID,
+				BlockID: tbIter.Item().BlockID,
+				RowID:   tbIter.Item().RowID,
+				Time:    tbIter.Item().Time,
+			}); !exist {
+				continue
+			}
 
-		if deletedRow, exist = p.rows.Get(&RowEntry{
-			ID:      tbIter.Item().RowEntryID,
-			BlockID: tbIter.Item().BlockID,
-			RowID:   tbIter.Item().RowID,
-			Time:    tbIter.Item().Time,
-		}); !exist {
-			continue
-		}
-
-		p.rows.Delete(deletedRow)
-		p.inMemTombstoneRowIdIndex.Delete(tbIter.Item())
-		if len(deletedRow.PrimaryIndexBytes) > 0 {
-			p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
-				Bytes:      deletedRow.PrimaryIndexBytes,
-				RowEntryID: deletedRow.ID,
-				Time:       deletedRow.Time,
-			})
+			p.rows.Delete(deletedRow)
+			p.inMemTombstoneRowIdIndex.Delete(tbIter.Item())
+			if len(deletedRow.PrimaryIndexBytes) > 0 {
+				p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
+					Bytes:      deletedRow.PrimaryIndexBytes,
+					RowEntryID: deletedRow.ID,
+					Time:       deletedRow.Time,
+				})
+			}
 		}
 	}
 
@@ -601,7 +620,6 @@ func (p *PartitionState) HandleLogtailEntry(
 	packer *types.Packer,
 	pool *mpool.MPool,
 ) {
-	txnTrace.GetService(p.service).ApplyLogtail(entry, 1)
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if IsDataObjectList(entry.TableName) {
@@ -848,13 +866,12 @@ func (p *PartitionState) HandleTombstoneObjectList(
 			Bytes: objEntry.ObjectName().ObjectId()[:],
 			Time:  types.MaxTs(),
 		}); ok; ok = tbIter.Next() {
-			if truncatePoint.LT(&tbIter.Item().Time) {
-				continue
-			}
-
 			current := types.Objectid(tbIter.Item().Bytes)
 			if !objEntry.ObjectName().ObjectId().EQ(&current) {
 				break
+			}
+			if truncatePoint.LT(&tbIter.Item().Time) {
+				continue
 			}
 
 			if deletedRow, exist = p.rows.Get(&RowEntry{

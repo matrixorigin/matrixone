@@ -26,6 +26,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/stretchr/testify/require"
 )
@@ -467,6 +469,11 @@ func TestSnapshotEpochSQLUsesEscapedKeys(t *testing.T) {
 	require.Contains(t, sql, "db_name = 'd''b'")
 	require.Contains(t, sql, "table_name = 't''bl'")
 	require.Contains(t, CDCSQLBuilder.InsertSnapshotEpochSQL(key, 9, types.BuildTS(10, 1)), "ON DUPLICATE KEY UPDATE snapshot_epoch = snapshot_epoch")
+	ownedInsert := CDCSQLBuilder.InsertSnapshotEpochOwnedSQL(key, 9, types.BuildTS(10, 1), 123)
+	require.Contains(t, ownedInsert, "task_id = 't''ask' FOR UPDATE")
+	require.Contains(t, ownedInsert, "w.owner_generation = 123 AND w.source_table_id < 9")
+	_, err := parsers.ParseOne(context.Background(), dialect.MYSQL, ownedInsert, 1)
+	require.NoError(t, err, "the owner-fenced epoch claim must be accepted by the MO SQL parser")
 	require.Contains(t, CDCSQLBuilder.ClaimWatermarkOwnerSQL(key, 123), "GREATEST(owner_generation, 123)")
 	require.Contains(t, CDCSQLBuilder.GetWatermarkOwnerProgressSQL(key), "SELECT owner_generation, watermark, source_table_id")
 	require.Contains(t, CDCSQLBuilder.GetHighestOtherSnapshotGenerationSQL(key, 9), "ORDER BY source_table_id DESC")

@@ -140,6 +140,9 @@ func TestSubscriptionMetadataQueryBuilders(t *testing.T) {
 	require.Contains(t, columnsSQL, "mc.att_relname IN ("+sqlquote.String("orders")+")")
 	require.Contains(t, columnsSQL, "kt.relname IN ("+sqlquote.String("orders")+")")
 	require.Contains(t, columnsSQL, "pt.relname IN ("+sqlquote.String("orders")+")")
+	// Persisted V58 COLUMNS still consumes this producer on a newer CN.
+	// Filtering View rows here would hide them until the tenant migration runs.
+	require.NotContains(t, columnsSQL, "mt.relkind = 'v'")
 
 	allTablesSQL := buildSubscriptionTablesQuery(candidate, nil)
 	require.NotContains(t, allTablesSQL, "tbl.relname IN")

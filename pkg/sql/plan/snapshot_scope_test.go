@@ -157,7 +157,7 @@ func TestBuildShowDatabasesRejectsTableSnapshot(t *testing.T) {
 
 func TestBuildShowDatabasesRestrictsDatabaseSnapshot(t *testing.T) {
 	ctx := &namedSnapshotCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(true),
+		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
 		snapshot: &Snapshot{
 			TS:     &timestamp.Timestamp{PhysicalTime: 42},
 			Tenant: &planpb.SnapshotTenant{},

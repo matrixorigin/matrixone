@@ -1,0 +1,61 @@
+drop database if exists temporal_join_raw_28851;
+create database temporal_join_raw_28851;
+use temporal_join_raw_28851;
+create table lhs (id int, t time(6));
+create table rhs (id int);
+insert into lhs values (1,'00:00:00'),(2,'00:00:00'),(3,'00:00:00');
+insert into rhs values (1),(2),(3);
+prepare raw_add from 'select count(*) from lhs a join rhs b on a.id=b.id and a.t=date_add(time ''00:00:00'', interval ? hour)';
+set @interval_28851='900';
+execute raw_add using @interval_28851;
+➤ count(*)[-5,64,0]  𝄀
+0
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+delete from rhs;
+insert into rhs values (4);
+execute raw_add using @interval_28851;
+➤ count(*)[-5,64,0]  𝄀
+0
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+delete from rhs;
+execute raw_add using @interval_28851;
+➤ count(*)[-5,64,0]  𝄀
+0
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+insert into rhs values (1),(2),(3);
+set @interval_28851='0';
+execute raw_add using @interval_28851;
+➤ count(*)[-5,64,0]  𝄀
+3
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+deallocate prepare raw_add;
+prepare raw_sub from 'select count(*) from lhs a join rhs b on a.id=b.id and a.t=date_sub(time ''00:00:00'', interval cast(? as decimal(10,1)) hour)';
+set @interval_28851=900;
+execute raw_sub using @interval_28851;
+➤ count(*)[-5,64,0]  𝄀
+0
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+deallocate prepare raw_sub;
+select count(*) from lhs a join rhs b on a.id=b.id and a.t=date_add(time '00:00:00', interval '900' hour);
+➤ count(*)[-5,64,0]  𝄀
+0
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+select count(*) from lhs a join rhs b on a.id=b.id and a.t=case when false then date_add(time '00:00:00', interval '900' hour) else time '00:00:00' end;
+➤ count(*)[-5,64,0]  𝄀
+3
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+drop database temporal_join_raw_28851;

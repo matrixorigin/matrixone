@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -31,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +39,6 @@ import (
 // TestStartCleansUpOldReaders verifies that Start() properly cleans up old readers before starting new ones
 func TestStartCleansUpOldReaders(t *testing.T) {
 	// Setup mocks
-	// Note: GetTableDetector is already stubbed globally in cdc_test.go init()
 
 	// Get baseline goroutine count
 	baselineGoroutines := runtime.NumGoroutine()
@@ -164,9 +163,6 @@ func TestStartCleansUpOldReaders(t *testing.T) {
 
 // TestStartWithNilRunningReaders verifies Start handles nil runningReaders gracefully
 func TestStartWithNilRunningReaders(t *testing.T) {
-	// Setup mocks
-	stubs := setupMockTableDetector()
-	defer stubs.Reset()
 
 	exec := &CDCTaskExecutor{
 		spec: &task.CreateCdcDetails{
@@ -200,9 +196,6 @@ func TestStartWithNilRunningReaders(t *testing.T) {
 
 // TestStartCleanupWithClosedReaders verifies Start handles already-closed readers
 func TestStartCleanupWithClosedReaders(t *testing.T) {
-	// Setup mocks
-	stubs := setupMockTableDetector()
-	defer stubs.Reset()
 
 	exec := &CDCTaskExecutor{
 		spec: &task.CreateCdcDetails{
@@ -477,6 +470,9 @@ func TestRestartEarlyStartFailureMovesGenerationToFailed(t *testing.T) {
 		stateMachine: NewExecutorStateMachine(),
 		holdCh:       make(chan int, 1),
 	}
+	exec.tableDetector = createMockTableDetector()
+	exec.watermarkUpdater = cdc.NewCDCWatermarkUpdater(t.Name(), catalog)
+	t.Cleanup(exec.watermarkUpdater.Stop)
 	exec.startFunc = exec.Start
 	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
 	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
@@ -770,11 +766,19 @@ func (e *blockingRestartPublicationExecutor) Query(
 			"",
 			tables,
 			"",
-			"",
+			"2026-09-16T00:00:00Z",
 			"",
 			"true",
-			`{}`,
+			fmt.Sprintf(`{"%s":"%s","%s":"%s"}`,
+				cdc.CDCTaskExtraOptions_InitialSnapshotProtocol,
+				cdc.CDCInitialSnapshotProtocolNoFullHLC,
+				cdc.CDCTaskExtraOptions_GenerationProtocol,
+				cdc.CDCGenerationAwareProtocolV2),
 		}}
+	}
+	if strings.Contains(sql, "SELECT pending_source_table_id, target_identity FROM mo_catalog.mo_cdc_watermark LIMIT 0") {
+		// The capability probe is deliberately an empty successful result.
+		return &cdcStateQueryResult{rows: 0}
 	}
 	e.stateMu.Lock()
 	defer e.stateMu.Unlock()
@@ -805,10 +809,6 @@ func TestRestartTimeoutWinsInFlightCatalogPublication(t *testing.T) {
 		}
 	})
 	detector := createMockTableDetector()
-	stubs := gostub.Stub(&cdc.GetTableDetector, func(string) *cdc.TableDetector {
-		return detector
-	})
-	t.Cleanup(stubs.Reset)
 
 	exec := &CDCTaskExecutor{
 		activeRoutine: cdc.NewCdcActiveRoutine(),
@@ -817,6 +817,8 @@ func TestRestartTimeoutWinsInFlightCatalogPublication(t *testing.T) {
 			TaskName: "restart-publication-timeout",
 			Accounts: []*task.Account{{Id: 1}},
 		},
+		tableDetector:               detector,
+		watermarkUpdater:            cdc.NewCDCWatermarkUpdater(t.Name(), catalog),
 		ie:                          catalog,
 		cnUUID:                      "restart-publication-timeout-cn",
 		stateMachine:                NewExecutorStateMachine(),
@@ -828,6 +830,7 @@ func TestRestartTimeoutWinsInFlightCatalogPublication(t *testing.T) {
 		},
 	}
 	exec.startFunc = exec.Start
+	t.Cleanup(exec.watermarkUpdater.Stop)
 	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
 	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
 

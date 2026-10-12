@@ -1,0 +1,37 @@
+drop table if exists issue_29311_src;
+drop table if exists issue_29311_hll;
+drop table if exists issue_29311_bitmap;
+create table issue_29311_src (v int);
+insert into issue_29311_src values (1), (2), (2);
+create table issue_29311_hll as select hll_add_agg(v) as sketch from issue_29311_src;
+create table issue_29311_bitmap as select bitmap_construct_agg(bitmap_bit_position(v)) as state from issue_29311_src;
+select sketch into @issue_29311_sketch from issue_29311_hll;
+select state into @issue_29311_bitmap from issue_29311_bitmap;
+prepare issue_29311_card from 'select hll_cardinality(?)';
+execute issue_29311_card using @issue_29311_sketch;
+➤ hll_cardinality(?)[-5,64,0]  𝄀
+2
+prepare issue_29311_merge from 'select hll_cardinality(hll_merge_agg(?)) from issue_29311_src';
+execute issue_29311_merge using @issue_29311_sketch;
+➤ hll_cardinality(hll_merge_agg(?))[-5,64,0]  𝄀
+2
+prepare issue_29311_or from 'select bitmap_count(bitmap_or_agg(?)) from issue_29311_src';
+execute issue_29311_or using @issue_29311_bitmap;
+➤ bitmap_count(bitmap_or_agg(?))[-5,64,0]  𝄀
+2
+set @issue_29311_bad = unhex('00');
+execute issue_29311_card using @issue_29311_bad;
+invalid input: invalid HLL sketch: too short binary
+set @issue_29311_null = null;
+execute issue_29311_card using @issue_29311_null;
+➤ hll_cardinality(?)[-5,64,0]  𝄀
+null
+execute issue_29311_card using @issue_29311_sketch;
+➤ hll_cardinality(?)[-5,64,0]  𝄀
+2
+deallocate prepare issue_29311_or;
+deallocate prepare issue_29311_merge;
+deallocate prepare issue_29311_card;
+drop table issue_29311_bitmap;
+drop table issue_29311_hll;
+drop table issue_29311_src;

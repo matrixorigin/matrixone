@@ -143,10 +143,10 @@ func (c *Compile) prepareLoadUniqueIndexPromotion(pn *plan.Plan) {
 	txnOp := c.proc.GetTxnOperator()
 	if !loadUniqueIndexPromotionTxnEligible(txnOp) ||
 		client.LockWaitTimeoutFromTxn(txnOp) <= 0 ||
-		!supportsLoadLogtailReadBarrier(c.proc.GetService()) {
+		!supportsLogtailReadBarrier(c.proc.GetService()) {
 		return
 	}
-	if _, ok := loadLogtailReadBarrier(c.e); !ok {
+	if _, ok := getLogtailReadBarrier(c.e); !ok {
 		return
 	}
 	lockService := c.proc.GetLockService()
@@ -187,7 +187,7 @@ func loadUniqueIndexPromotionTxnEligible(txnOp client.TxnOperator) bool {
 		opts.Autocommit && !opts.ByBegin
 }
 
-func supportsLoadLogtailReadBarrier(service string) bool {
+func supportsLogtailReadBarrier(service string) bool {
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
 		return false
@@ -197,11 +197,11 @@ func supportsLoadLogtailReadBarrier(service string) bool {
 	return ok && valid && version >= defines.MORPCVersion39
 }
 
-// loadLogtailReadBarrier unwraps EntireEngine before capability admission.
+// getLogtailReadBarrier unwraps EntireEngine before capability admission.
 // EntireEngine itself exposes a forwarding method even when its underlying
 // engine lacks the optional capability, so a direct type assertion would
 // acquire hidden locks before discovering an unsupported engine.
-func loadLogtailReadBarrier(eng engine.Engine) (engine.LogtailReadBarrier, bool) {
+func getLogtailReadBarrier(eng engine.Engine) (engine.LogtailReadBarrier, bool) {
 	for eng != nil {
 		if entire, ok := eng.(*engine.EntireEngine); ok {
 			if entire == nil || entire.Engine == nil {
@@ -580,11 +580,11 @@ func (c *Compile) maybePromoteLoadUniqueIndexes() error {
 		!c.resourceAttemptOwnerEligible || c.executionGeneration != 0 ||
 		state.logicalPlan != c.pn || c.planGenerationReused || c.disableRetry ||
 		!loadUniqueIndexPromotionTxnEligible(c.proc.GetTxnOperator()) ||
-		!supportsLoadLogtailReadBarrier(c.proc.GetService()) {
+		!supportsLogtailReadBarrier(c.proc.GetService()) {
 		state.disable()
 		return nil
 	}
-	barrier, ok := loadLogtailReadBarrier(c.e)
+	barrier, ok := getLogtailReadBarrier(c.e)
 	if !ok {
 		state.disable()
 		return nil

@@ -43,7 +43,6 @@ func newCatalogTombstoneFixture(t testing.TB, rows int, cn bool) (*process.Proce
 	mp := proc.Mp()
 	t.Cleanup(func() {
 		proc.Free()
-		proc.GetFileService().Close(context.Background())
 		require.Zero(t, mp.CurrNB())
 	})
 	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)

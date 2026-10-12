@@ -1,0 +1,177 @@
+--- @metacmp(true)
+-- @suite
+-- @setup
+drop database if exists expression_result_contracts;
+create database expression_result_contracts;
+use expression_result_contracts;
+
+create table source (
+    txt varchar(512),
+    b varbinary(128),
+    t0 time(0),
+    t6 time(6),
+    dt0 datetime(0),
+    dt6 datetime(6),
+    ip varchar(32)
+);
+insert into source values
+    ('abcdefghi', _binary 'abc', '00:00:00', '00:00:00.123456',
+     '2024-01-02 03:04:05', '2024-01-02 03:04:05.123456', '1.6'),
+    ('short', _binary 'z', NULL, '00:00:01.654321',
+     NULL, '2024-01-02 03:04:06.654321', '1.6');
+
+-- Bounded string results and conditional temporal precision must survive
+-- CTAS/view materialization instead of falling back to generic metadata.
+create table contract_ctas as
+select to_base64(b) as b64,
+       substring(txt, 1, 7) as sub7,
+       left(txt, 7) as left7,
+       right(txt, 7) as right7,
+       coalesce(t0, t6) as coalesce_time,
+       ifnull(t0, t6) as ifnull_time,
+       if(dt0 is null, dt6, dt0) as if_datetime,
+       case when t0 is null then t6 else t0 end as case_time,
+       nullif(t0, t6) as nullif_time,
+       inet_ntoa(ip) as ip_text,
+       is_ipv4(ip) as ip_flag
+from source;
+select column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = database() and table_name = 'contract_ctas'
+order by ordinal_position;
+select b64, sub7, left7, right7, coalesce_time, ifnull_time,
+       if_datetime, case_time, nullif_time, ip_text, ip_flag
+from contract_ctas;
+create index idx_contract_b64 on contract_ctas (b64);
+select count(*) as indexed_bounded_result
+from mo_catalog.mo_indexes as i
+join mo_catalog.mo_tables as t on i.table_id = t.rel_id
+where t.reldatabase = database() and t.relname = 'contract_ctas'
+  and i.name = 'idx_contract_b64' and i.column_name = 'b64';
+
+create view contract_view as
+select to_base64(b) as b64,
+       substring(txt, 1, 7) as sub7,
+       left(txt, 7) as left7,
+       right(txt, 7) as right7,
+       coalesce(t0, t6) as coalesce_time,
+       ifnull(t0, t6) as ifnull_time,
+       if(dt0 is null, dt6, dt0) as if_datetime,
+       case when t0 is null then t6 else t0 end as case_time,
+       nullif(t0, t6) as nullif_time,
+       inet_ntoa(ip) as ip_text,
+       is_ipv4(ip) as ip_flag
+from source;
+select column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = database() and table_name = 'contract_view'
+order by ordinal_position;
+select b64, sub7, left7, right7, coalesce_time, ifnull_time,
+       if_datetime, case_time, nullif_time, ip_text, ip_flag
+from contract_view
+order by if_datetime is null, if_datetime;
+
+-- Character bounds count characters, not UTF-8 bytes. NULLIF follows its
+-- first argument, including its FSP, rather than the comparison operand.
+create table slice_source (id int, txt varchar(5000), t6 time(6), t0 time(0), dt6 datetime(6), dt0 datetime(0));
+insert into slice_source values
+    (1, '甲乙丙丁', '00:00:00.123456', '00:00:00', '2024-01-02 03:04:05.123456', '2024-01-02 03:04:05'),
+    (2, 'abc', '00:00:01', '00:00:01', '2024-01-02 03:04:05', '2024-01-02 03:04:05'),
+    (3, NULL, NULL, '00:00:01', NULL, '2024-01-02 03:04:05'),
+    (4, '甲乙丙丁', '00:00:00.999999', NULL, '2024-01-02 03:04:05.999999', NULL);
+select id, substring(txt, 1, 3) as sub3, left(txt, 3) as left3, right(txt, 3) as right3,
+       nullif(t6, t0) as nt6, nullif(t0, t6) as nt0,
+       nullif(dt6, dt0) as nd6, nullif(dt0, dt6) as nd0
+from slice_source order by id;
+create view slice_view as
+select id, substring(txt, 1, 3) as sub3, substr(txt, 2, 3) as substr3,
+       mid(txt, 2, 3) as mid3, left(txt, 3) as left3, right(txt, 3) as right3,
+       substring(txt, 1, 100) as sub100,
+       nullif(t6, t0) as nt6, nullif(t0, t6) as nt0,
+       nullif(dt6, dt0) as nd6, nullif(dt0, dt6) as nd0
+from slice_source;
+create table slice_ctas as select * from slice_view;
+select table_name, column_name, column_type from information_schema.columns
+where table_schema = database() and table_name in ('slice_view', 'slice_ctas')
+order by table_name, ordinal_position;
+select * from slice_view order by id;
+select * from slice_ctas order by id;
+prepare slice_reuse from 'select id, substring(txt, 1, 3) as sub3, char_length(left(txt, 3)) as chars, octet_length(left(txt, 3)) as bytes, nullif(t6, t0) as nt6, nullif(t0, t6) as nt0, nullif(dt6, dt0) as nd6 from slice_source where id = ?';
+set @slice_id = 1;
+execute slice_reuse using @slice_id;
+set @slice_id = 2;
+execute slice_reuse using @slice_id;
+set @slice_id = 3;
+execute slice_reuse using @slice_id;
+set @slice_id = 4;
+execute slice_reuse using @slice_id;
+set @slice_id = 1;
+execute slice_reuse using @slice_id;
+deallocate prepare slice_reuse;
+
+-- Dynamic INET_NTOA conversion is row-local: invalid, out-of-range and NULL
+-- values do not poison neighboring rows.
+create table ip_inputs (v varchar(32));
+insert into ip_inputs values ('1.6'), ('4294967295.9'), ('4294967296'), ('bad'), (NULL);
+select v, inet_ntoa(v) as ip_text from ip_inputs order by v is null, v;
+select inet_ntoa(true) as bool_value,
+       inet_ntoa(date '2024-01-02') as date_value,
+       inet_ntoa(time '00:00:02.654321') as time_value,
+       inet_ntoa(cast(1.6 as json)) as json_number,
+       inet_ntoa(json_extract(cast('1.6' as json), '$')) as json_extract_number,
+       inet_ntoa(cast(true as json)) as json_true,
+       inet_ntoa(cast(false as json)) as json_false,
+       inet_ntoa(json_extract(json_array('258'), '$[0]')) as json_string_integer,
+       inet_ntoa(json_extract(json_array('bad'), '$[0]')) as json_string_bad,
+       inet_ntoa(json_extract(json_array('1e100'), '$[0]')) as json_string_overflow;
+
+-- A single prepared plan must retain its source-domain semantics across
+-- numeric, string, temporal, JSON and NULL user variables. The JSON source
+-- hint is local to INET_NTOA; a second marker using the same variable keeps
+-- the ordinary text contract in CONCAT.
+prepare inet_ntoa_contract_reuse from 'select inet_ntoa(?) as ip_text';
+set @inet_value = 1.6;
+execute inet_ntoa_contract_reuse using @inet_value;
+prepare inet_ntoa_domain_isolation from 'select inet_ntoa(?) as ip_text, concat(?, ''x'') as text_value';
+set @inet_value = cast(1.6 as json);
+execute inet_ntoa_domain_isolation using @inet_value, @inet_value;
+deallocate prepare inet_ntoa_domain_isolation;
+set @inet_value = '1.6';
+execute inet_ntoa_contract_reuse using @inet_value;
+set @inet_value = cast('2024-01-02' as date);
+execute inet_ntoa_contract_reuse using @inet_value;
+set @inet_value = cast('00:00:02.654321' as time(6));
+execute inet_ntoa_contract_reuse using @inet_value;
+set @inet_value = cast(1.6 as json);
+execute inet_ntoa_contract_reuse using @inet_value;
+set @inet_value = json_extract(json_array('258'), '$[0]');
+execute inet_ntoa_contract_reuse using @inet_value;
+set @inet_value = NULL;
+execute inet_ntoa_contract_reuse using @inet_value;
+deallocate prepare inet_ntoa_contract_reuse;
+
+-- DML assignment casts preserve the target VARCHAR contract while the
+-- INET_NTOA marker still follows the execute-time source domain.
+create table inet_ntoa_dml_contract (ip varchar(31));
+prepare inet_ntoa_dml_insert from
+    'insert into inet_ntoa_dml_contract values (inet_ntoa(?))';
+set @inet_insert_value = cast(1.6 as json);
+execute inet_ntoa_dml_insert using @inet_insert_value;
+set @inet_insert_value = '1.6';
+execute inet_ntoa_dml_insert using @inet_insert_value;
+select ip from inet_ntoa_dml_contract order by ip;
+deallocate prepare inet_ntoa_dml_insert;
+drop table inet_ntoa_dml_contract;
+
+-- HEX/BIT literals are numeric for INET_NTOA; binary strings keep prefix
+-- conversion semantics.
+select inet_ntoa(0x0102) as hex_value,
+       inet_ntoa(X'31') as hex_string_value,
+       inet_ntoa(b'100000010') as bit_value,
+       inet_ntoa(_binary '1.6') as binary_string_value,
+       inet_ntoa(_binary X'31') as binary_hex_string_value,
+       inet_ntoa(concat(X'31')) as nested_hex_concat_value,
+       inet_ntoa(cast(X'31' as char)) as nested_hex_cast_value;
+
+-- @teardown
+drop database if exists expression_result_contracts;

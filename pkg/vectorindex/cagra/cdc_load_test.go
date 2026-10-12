@@ -83,7 +83,7 @@ func encodeChunk(t *testing.T, dim, includeBytesPerRow int, ops []cuvscdc.CdcOp,
 // same chunks.
 func TestLoadCdcEventsFromDB_RoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	tblcfg := testTblcfg()
@@ -111,7 +111,7 @@ func TestLoadCdcEventsFromDB_RoundTrip(t *testing.T) {
 // TestLoadCdcEventsFromDB_Empty: zero rows is a valid empty result.
 func TestLoadCdcEventsFromDB_Empty(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	orig := runSql
@@ -198,7 +198,7 @@ func TestReplayEventChunks_MultiChunkOrder(t *testing.T) {
 //     (delete_id replay was applied to the loaded cuvs index).
 func TestLoadIndex_WithCdcDeltas(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := testIdxcfg()

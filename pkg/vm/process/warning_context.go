@@ -19,6 +19,8 @@ import "context"
 type warningSinkContextKey struct{}
 type warningSinkContextValue struct{ sink any }
 
+type warningRetentionLimitContextKey struct{}
+
 // ContextWithWarningSink captures an execution generation for internal SQL
 // that creates a new top-level Process. Pass WarningSink, not Session fallback.
 // An explicit nil masks a binding inherited from an older execution.
@@ -42,4 +44,28 @@ func WarningSinkFromContext(ctx context.Context) any {
 	}
 	v, _ := ctx.Value(warningSinkContextKey{}).(warningSinkContextValue)
 	return v.sink
+}
+
+// ContextWithWarningRetentionLimit captures the immutable diagnostic capacity
+// for one statement generation. An explicit zero is retained by the context
+// and is distinguished from a missing value by WarningRetentionLimitFromContext.
+func ContextWithWarningRetentionLimit(ctx context.Context, limit int) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, warningRetentionLimitContextKey{}, clampWarningRetentionLimit(limit))
+}
+
+// WarningRetentionLimitFromContext returns the capacity captured for the
+// current statement generation. The boolean distinguishes an explicit zero
+// from a context that has no statement snapshot.
+func WarningRetentionLimitFromContext(ctx context.Context) (int, bool) {
+	if ctx == nil {
+		return 0, false
+	}
+	limit, ok := ctx.Value(warningRetentionLimitContextKey{}).(int)
+	if !ok {
+		return 0, false
+	}
+	return clampWarningRetentionLimit(limit), true
 }

@@ -1,0 +1,114 @@
+DROP DATABASE IF EXISTS cte_recursive_scalar_agg_29135;
+CREATE DATABASE cte_recursive_scalar_agg_29135;
+USE cte_recursive_scalar_agg_29135;
+CREATE TABLE sales_29135(dt DATE, price DECIMAL(8, 2));
+INSERT INTO sales_29135 VALUES
+('2024-02-27', 10),
+('2024-03-01', 20);
+WITH RECURSIVE dates(dt) AS (
+SELECT MIN(dt) FROM sales_29135
+UNION ALL
+SELECT DATE_ADD(dt, INTERVAL 1 DAY)
+FROM dates
+WHERE DATE_ADD(dt, INTERVAL 1 DAY) <= (SELECT MAX(dt) FROM sales_29135)
+)
+SELECT dt FROM dates ORDER BY dt;
+➤ dt[91,10,0]  𝄀
+2024-02-27  𝄀
+2024-02-28  𝄀
+2024-02-29  𝄀
+2024-03-01
+WITH RECURSIVE seq(n, row_count) AS (
+SELECT 1, 0
+UNION ALL
+SELECT n + 1, (SELECT COUNT(*) FROM sales_29135)
+FROM seq
+WHERE n < 3
+)
+SELECT n, row_count FROM seq ORDER BY n;
+➤ n[-5,64,0]  ¦  row_count[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  2  𝄀
+3  ¦  2
+CREATE TABLE empty_bounds_29135(dt DATE);
+CREATE TABLE null_bounds_29135(dt DATE);
+INSERT INTO null_bounds_29135 VALUES (NULL), (NULL);
+WITH RECURSIVE empty_count(n, row_count) AS (
+SELECT 1, 0
+UNION ALL
+SELECT n + 1, (SELECT COUNT(*) FROM empty_bounds_29135)
+FROM empty_count
+WHERE n < 2
+)
+SELECT n, row_count FROM empty_count ORDER BY n;
+➤ n[-5,64,0]  ¦  row_count[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0
+WITH RECURSIVE null_min(n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1
+FROM null_min
+WHERE n < 2 AND (SELECT MIN(dt) FROM null_bounds_29135) IS NULL
+)
+SELECT n FROM null_min ORDER BY n;
+➤ n[-5,64,0]  𝄀
+1  𝄀
+2
+CREATE TABLE limits_29135(limit_n INT);
+INSERT INTO limits_29135 VALUES (2), (4);
+WITH RECURSIVE correlated_count(n, row_count) AS (
+SELECT 1, 0
+UNION ALL
+SELECT n + 1,
+(SELECT COUNT(*)
+FROM limits_29135
+WHERE limit_n = correlated_count.n)
+FROM correlated_count
+WHERE n < 4
+)
+SELECT n, row_count FROM correlated_count ORDER BY n;
+➤ n[-5,64,0]  ¦  row_count[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  1  𝄀
+4  ¦  0
+WITH RECURSIVE nested_arg(n, value) AS (
+SELECT 1, 0
+UNION ALL
+SELECT n + 1,
+(SELECT MAX(limit_n + (SELECT COUNT(*) FROM sales_29135))
+FROM limits_29135)
+FROM nested_arg
+WHERE n < 2
+)
+SELECT n, value FROM nested_arg ORDER BY n;
+➤ n[-5,64,0]  ¦  value[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  6
+PREPARE p_29135 FROM 'WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < (SELECT MAX(limit_n) FROM limits_29135 WHERE limit_n <= ?)) SELECT n FROM r ORDER BY n';
+SET @limit_29135 = 2;
+EXECUTE p_29135 USING @limit_29135;
+➤ n[-5,64,0]  𝄀
+1  𝄀
+2
+SET @limit_29135 = 4;
+EXECUTE p_29135 USING @limit_29135;
+➤ n[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+DEALLOCATE PREPARE p_29135;
+WITH RECURSIVE rejected_29135(n) AS (
+SELECT 1
+UNION ALL
+SELECT MAX(n) FROM rejected_29135 WHERE n < 3
+)
+SELECT * FROM rejected_29135;
+-- @regex("not support aggregate function recursive cte", true)
+internal error: not support aggregate function recursive cte
+SELECT 'after direct aggregate error' AS service_status;
+➤ service_status[12,28,0]  𝄀
+after direct aggregate error
+DROP DATABASE cte_recursive_scalar_agg_29135;

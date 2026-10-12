@@ -228,6 +228,11 @@ func convertColIntoSql(
 	sqlBuff []byte) ([]byte, error) {
 	if data == nil {
 		typstr := typ.DescString()
+		if typ.Oid == types.T_enum {
+			// The source projection restores the ENUM domain. Its transport type
+			// must be valid SQL without member metadata in the runtime type.
+			typstr = types.T_uint16.ToType().DescString()
+		}
 		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST(NULL as %s)", typstr))
 		return sqlBuff, nil
 	}
@@ -380,9 +385,8 @@ func convertColIntoSql(
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_enum:
 		value := data.(types.Enum)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value.String())
-		sqlBuff = appendByte(sqlBuff, '\'')
+		// Preserve ordinals even when member labels themselves are numeric.
+		sqlBuff = appendUint64(sqlBuff, uint64(value))
 	default:
 		logutil.Error(
 			"Failed to extract row from vector, unsupported type",
@@ -433,6 +437,9 @@ func appendFloat64(buf []byte, value float64, bitSize int) []byte {
 	return buf
 }
 
+// CollectChanges reads one ISCP iteration's change range for index maintenance.
+// The caller's ctx carries the read policy: collectChangesCtxForJobs decides
+// whether this range may keep the trailing DELETE of an insert-then-delete key.
 var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
 	return rel.CollectChanges(ctx, fromTs, toTs, false, mp)
 }
@@ -454,7 +461,7 @@ func finishISCPTransaction(ctx context.Context, txnOp client.TxnOperator, err er
 	cleanupCtx, cancel := context.WithTimeoutCause(
 		context.WithoutCancel(ctx),
 		time.Minute*5,
-		moerr.NewInternalErrorNoCtx("iscp transaction finish timeout"),
+		moerr.CauseISCPTransactionFinishTimeout,
 	)
 	defer cancel()
 	if err != nil {
@@ -570,7 +577,7 @@ func GetTaskRunner(
 	txn client.TxnOperator,
 ) (string, error) {
 	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctxWithTimeout, cancel := context.WithTimeoutCause(ctxWithSysAccount, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp get task runner timeout"))
+	ctxWithTimeout, cancel := context.WithTimeoutCause(ctxWithSysAccount, time.Minute*5, moerr.CauseISCPGetTaskRunnerTimeout)
 	defer cancel()
 
 	sql := `select task_runner from mo_task.sys_daemon_task where task_type = "ISCP" and task_runner is not null`
@@ -582,23 +589,32 @@ func GetTaskRunner(
 	return readSingleTaskRunner(result)
 }
 
+// Result callbacks carry logical cardinality; a constant vector can encode
+// several rows in one physical value. Do not infer lease uniqueness from it.
 func readSingleTaskRunner(result executor.Result) (string, error) {
-	runners := make([]string, 0, 1)
+	var runner string
+	var rowCount int
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		if rows == 0 {
 			return true
 		}
-		runners = append(runners, executor.GetStringRows(cols[0])...)
-		return len(runners) < 2
+		rowCount += rows
+		if rowCount != 1 {
+			return false
+		}
+		if !cols[0].IsNull(0) {
+			runner = cols[0].GetStringAt(0)
+		}
+		return true
 	})
-	if len(runners) == 0 {
+	if rowCount == 0 {
 		return "", nil
 	}
-	if len(runners) != 1 {
-		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", len(runners)))
+	if rowCount != 1 {
+		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", rowCount))
 	}
-	if runners[0] == "" {
+	if runner == "" {
 		return "", moerr.NewInternalErrorNoCtx("task runner is null")
 	}
-	return runners[0], nil
+	return runner, nil
 }

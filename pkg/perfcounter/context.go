@@ -67,7 +67,7 @@ func WithCounterSet(ctx context.Context, sets ...*CounterSet) context.Context {
 
 func WithCounterSetFrom(ctx context.Context, fromCtx context.Context) context.Context {
 	if v := fromCtx.Value(CtxKeyCounters); v != nil {
-		var sets []*CounterSet
+		sets := make([]*CounterSet, 0, len(v.(CounterSets)))
 		for set := range v.(CounterSets) {
 			sets = append(sets, set)
 		}

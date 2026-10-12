@@ -71,7 +71,7 @@ func TestPartitionTopNRecognizesLiteralRankBounds(t *testing.T) {
 
 func TestPartitionTopNRecognizesRankWithBoundaryTies(t *testing.T) {
 	sql := formatPartitionTopNFunctionSQL("rank", "rn <= 2")
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 	require.NoError(t, err)
 	partition := findBoundedPartition(logicPlan.GetQuery())
 	require.NotNil(t, partition)
@@ -100,7 +100,7 @@ func TestPartitionTopNFallsBackForUnsupportedShapes(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			require.Nil(t, findBoundedPartition(logicPlan.GetQuery()))
 		})
@@ -108,7 +108,7 @@ func TestPartitionTopNFallsBackForUnsupportedShapes(t *testing.T) {
 }
 
 func TestPartitionTopNPreparedPlanFallsBack(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(
 		context.Background(), dialect.MYSQL, formatPartitionTopNSQL("rn <= 2"), 1)
 	require.NoError(t, err)
@@ -121,11 +121,11 @@ func buildPartitionTopNPlan(t *testing.T, predicate string, prepared bool) *plan
 	t.Helper()
 	sql := formatPartitionTopNSQL(predicate)
 	if !prepared {
-		logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+		logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 		require.NoError(t, err)
 		return logicPlan.GetQuery()
 	}
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	logicPlan, err := BuildPlan(ctx, stmt, true)

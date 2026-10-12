@@ -55,15 +55,9 @@ func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 // WithBootstrapOptions setup bootstrap options
 func WithBootstrapOptions(options ...bootstrap.Option) Option {
 	return func(s *service) {
-		s.options.bootstrapOptions = options
-	}
-}
-
-// WithTxnTraceData sets the root directory for transaction trace data. Each CN
-// stores its trace data in a child directory keyed by its service UUID.
-func WithTxnTraceData(traceDataPath string) Option {
-	return func(s *service) {
-		s.options.traceDataPath = traceDataPath
+		// Constructor-supplied configuration must not discard caller-supplied
+		// version handlers and scheduling options.
+		s.options.bootstrapOptions = append(s.options.bootstrapOptions, options...)
 	}
 }
 

@@ -157,9 +157,10 @@ func marshalSpillRecordAccounted(
 	return cnt, nil
 }
 
-func (ctr *container) writeSpillPayload(
+func (ctr *container) writeOpenSpillPayload(
 	proc *process.Process,
 	file *os.File,
+	bucket int,
 	payload []byte,
 	rows int64,
 	analyzer process.Analyzer,
@@ -178,7 +179,7 @@ func (ctr *container) writeSpillPayload(
 	if ctr.hashmapBuilder.budget == nil || ctr.spillBundle == nil {
 		return process.ErrExecutionResourceInvalid
 	}
-	_, _, err := ctr.spillBundle.growDisk(file, ctr.hashmapBuilder.budget, uint64(len(payload)))
+	_, _, err := ctr.spillBundle.growDisk(bucket, ctr.hashmapBuilder.budget, uint64(len(payload)))
 	if err != nil {
 		return err
 	}
@@ -195,7 +196,11 @@ func (ctr *container) writeSpillPayload(
 	// The exact payload length was admitted. Record logical ownership only
 	// after the full write; partial writes retain the conservative charge
 	// until the enclosing bundle closes the file.
-	ctr.spillBundle.recordDiskWrite(file, rows, uint64(written))
+	if err := ctr.spillBundle.recordDiskWrite(
+		bucket, file, rows, uint64(written),
+	); err != nil {
+		return err
+	}
 	if analyzer != nil {
 		analyzer.Spill(int64(written))
 		analyzer.SpillRows(rows)
@@ -216,7 +221,8 @@ func (ctr *container) getSpillFS(proc *process.Process) (fileservice.MutableFile
 	return fs, nil
 }
 
-// ensureSpillFile lazily creates an anonymous spill file for the given bucket.
+// ensureSpillFile opens one named bucket only for the current physical write.
+// closeSpillFile must follow before another bucket is opened.
 func (ctr *container) ensureSpillFile(proc *process.Process, files []*os.File, bucket int) (*os.File, error) {
 	if bucket < 0 || bucket >= len(files) {
 		return nil, process.ErrExecutionResourceInvalid
@@ -235,23 +241,60 @@ func (ctr *container) ensureSpillFile(proc *process.Process, files []*os.File, b
 	if ctr.hashmapBuilder.budget == nil {
 		return nil, process.ErrExecutionResourceInvalid
 	}
-	fdToken, err := ctr.hashmapBuilder.budget.ReserveSpillFD(1)
-	if err != nil {
-		return nil, err
-	}
-	f, err := spillfs.CreateAndRemoveFile(proc.Ctx, name)
-	if err != nil {
-		if fdToken != nil {
-			fdToken.Release()
-		}
-		return nil, err
-	}
-	files[bucket] = f
 	if ctr.spillBundle == nil {
 		ctr.spillBundle = &spillFileBundle{}
 	}
-	ctr.spillBundle.addFD(f, bucket, fdToken)
+	f, err := ctr.spillBundle.openFile(
+		proc.Ctx,
+		ctr.hashmapBuilder.budget,
+		bucket,
+		spillfs,
+		name,
+	)
+	if err != nil {
+		return nil, err
+	}
+	files[bucket] = f
 	return f, nil
+}
+
+func (ctr *container) closeSpillFile(files []*os.File, bucket int) error {
+	if ctr == nil || ctr.spillBundle == nil ||
+		bucket < 0 || bucket >= len(files) || files[bucket] == nil {
+		return process.ErrExecutionResourceInvalid
+	}
+	err := ctr.spillBundle.closeFile(bucket)
+	files[bucket] = nil
+	return err
+}
+
+func (ctr *container) writeSpillPayload(
+	proc *process.Process,
+	files []*os.File,
+	bucket int,
+	payload []byte,
+	rows int64,
+	analyzer process.Analyzer,
+) error {
+	file, err := ctr.ensureSpillFile(proc, files, bucket)
+	if err != nil {
+		return err
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = ctr.closeSpillFile(files, bucket)
+		}
+	}()
+	writeErr := ctr.writeOpenSpillPayload(
+		proc, file, bucket, payload, rows, analyzer,
+	)
+	closeErr := ctr.closeSpillFile(files, bucket)
+	closed = true
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
 }
 
 // spillBatchBounded partitions one input batch without retaining 32 bucket
@@ -434,17 +477,13 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 				}
 				if spillErr == nil {
 					selected.SetRowCount(n)
-					var file *os.File
-					file, spillErr = ctr.ensureSpillFile(proc, files, int(bucket))
-					if spillErr == nil {
-						spillErr = ctr.appendSpillRecord(
-							proc,
-							file,
-							int(bucket),
-							selected,
-							analyzer,
-						)
-					}
+					spillErr = ctr.appendSpillRecord(
+						proc,
+						files,
+						int(bucket),
+						selected,
+						analyzer,
+					)
 				}
 				selected.CleanOnlyData()
 				if spillErr == nil {
@@ -485,6 +524,7 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 							"hashbuild",
 							"spill-selected-or-codec",
 							ctr.hashmapBuilder.mapAllocationAccount,
+							spillErr,
 						)
 					}
 					analyzer.GetOpStats().AddExtraStat(
@@ -501,6 +541,7 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 					"hashbuild",
 					"spill-selected-or-codec",
 					ctr.hashmapBuilder.mapAllocationAccount,
+					spillErr,
 				)
 			}
 		}
@@ -521,12 +562,9 @@ func (ctr *container) reclaimOptionalSpillBuffers(
 			continue
 		}
 		if buffer.Len() > 0 {
-			if bucket >= len(files) || files[bucket] == nil {
-				return process.ErrExecutionResourceInvalid
-			}
 			if err := ctr.flushPendingSpillBucket(
 				proc,
-				files[bucket],
+				files,
 				bucket,
 				analyzer,
 			); err != nil {
@@ -676,6 +714,7 @@ func (ctr *container) spillBatchWithPressure(
 						"hashbuild",
 						"spill-hash-or-expression",
 						ctr.hashmapBuilder.mapAllocationAccount,
+						err,
 					)
 				}
 				minimumRetried = true
@@ -685,10 +724,13 @@ func (ctr *container) spillBatchWithPressure(
 				)
 				continue
 			}
+			// Preserve the terminal classification; the original retryable cause
+			// is diagnostic text, not another error in the unwrap chain.
 			return NewMinimumAllocationPressureError(
 				"hashbuild",
 				"spill-hash-or-expression",
 				ctr.hashmapBuilder.mapAllocationAccount,
+				err,
 			)
 		}
 		chunk = (attempted + 1) / 2
@@ -709,7 +751,7 @@ func (ctr *container) spillBatchWithPressure(
 // temporary copy can be retained.
 func (ctr *container) appendSpillRecord(
 	proc *process.Process,
-	file *os.File,
+	files []*os.File,
 	bucket int,
 	bat *batch.Batch,
 	analyzer process.Analyzer,
@@ -740,14 +782,14 @@ func (ctr *container) appendSpillRecord(
 	}
 	payload := ctr.spillAccountedWrite.Bytes()
 	if ctr.spillCoalesceDisabled {
-		return ctr.writeSpillPayload(proc, file, payload, cnt, analyzer)
+		return ctr.writeSpillPayload(proc, files, bucket, payload, cnt, analyzer)
 	}
 	buffer := ctr.spillAccountedBuckets[bucket]
 	if buffer != nil && buffer.Len() > 0 &&
 		buffer.Len()+len(payload) > spillWriteCoalesceSize {
 		if err := ctr.flushPendingSpillBucket(
 			proc,
-			file,
+			files,
 			bucket,
 			analyzer,
 		); err != nil {
@@ -755,7 +797,7 @@ func (ctr *container) appendSpillRecord(
 		}
 	}
 	if len(payload) > spillWriteCoalesceSize {
-		return ctr.writeSpillPayload(proc, file, payload, cnt, analyzer)
+		return ctr.writeSpillPayload(proc, files, bucket, payload, cnt, analyzer)
 	}
 	if buffer == nil {
 		buffer, err = mpool.NewAccountedBuffer(
@@ -774,7 +816,8 @@ func (ctr *container) appendSpillRecord(
 			if mpool.IsRetryableAllocationCapacity(err) {
 				return ctr.writeSpillPayload(
 					proc,
-					file,
+					files,
+					bucket,
 					payload,
 					cnt,
 					analyzer,
@@ -790,7 +833,7 @@ func (ctr *container) appendSpillRecord(
 	if buffer.Len() >= spillWriteCoalesceSize {
 		return ctr.flushPendingSpillBucket(
 			proc,
-			file,
+			files,
 			bucket,
 			analyzer,
 		)
@@ -800,7 +843,7 @@ func (ctr *container) appendSpillRecord(
 
 func (ctr *container) flushPendingSpillBucket(
 	proc *process.Process,
-	file *os.File,
+	files []*os.File,
 	bucket int,
 	analyzer process.Analyzer,
 ) error {
@@ -812,7 +855,7 @@ func (ctr *container) flushPendingSpillBucket(
 	if buffer == nil || buffer.Len() == 0 {
 		return nil
 	}
-	err := ctr.writeSpillPayload(proc, file, buffer.Bytes(), rows, analyzer)
+	err := ctr.writeSpillPayload(proc, files, bucket, buffer.Bytes(), rows, analyzer)
 	// Clear even on a failed/partial write. A caller's enclosing failure path
 	// owns cleanup, and retrying the same bytes could duplicate records.
 	buffer.Reset()
@@ -849,19 +892,7 @@ func (ctr *container) flushSpillBuffers(proc *process.Process, files []*os.File,
 			ctr.spillBucketWriteRows[bucket] = 0
 			continue
 		}
-		var file *os.File
-		if bucket < len(files) {
-			file = files[bucket]
-		}
-		if file == nil {
-			firstErr = process.ErrExecutionResourceInvalid
-			if ctr.spillAccountedBuckets[bucket] != nil {
-				ctr.spillAccountedBuckets[bucket].Reset()
-			}
-			ctr.spillBucketWriteRows[bucket] = 0
-			continue
-		}
-		if err := ctr.flushPendingSpillBucket(proc, file, bucket, analyzer); err != nil {
+		if err := ctr.flushPendingSpillBucket(proc, files, bucket, analyzer); err != nil {
 			firstErr = err
 		}
 	}
@@ -880,11 +911,13 @@ func (ctr *container) initSpillExprExecs(proc *process.Process, conditions []*pl
 	ctr.spillConditions = conditions
 	if len(ctr.hashmapBuilder.executors) != len(conditions) {
 		ctr.hashmapBuilder.FreeExecutors()
-		execs, err := newExpressionExecutorsWithCapacityClass(
+		execs, err := newExpressionExecutorsWithCapacityClassAndDiagnostic(
 			proc,
 			conditions,
 			ctr.hashmapBuilder.mapAllocationAccount,
 			ctr.recoveryCapacityClass,
+			ctr.hashmapBuilder.joinDiagnostic != nil,
+			ctr.hashmapBuilder.joinDiagnostic,
 		)
 		if err != nil {
 			return nil, err
@@ -934,11 +967,66 @@ func (hashBuild *HashBuild) shouldSpillBatches() bool {
 // that batch when this is called. Moving the existing decision before the copy
 // prevents the threshold-crossing reservation from consuming the scratch
 // headroom needed to start spill; it does not size or reserve spill scratch.
-func (hashBuild *HashBuild) shouldSpillBeforeRetain(inputBatchSize int64) bool {
+func (hashBuild *HashBuild) shouldSpillBeforeRetain(
+	inputBatchSize int64,
+	input *batch.Batch,
+) (bool, error) {
 	if !hashBuild.IsShuffle || !hashBuild.NeedHashMap {
-		return false
+		return false, nil
 	}
 	ctr := &hashBuild.ctr
+	if ctr.autoSpill {
+		if inputBatchSize <= 0 {
+			return false, nil
+		}
+		if ctr.memoryGrowthParticipant == nil {
+			return false, process.ErrExecutionResourceInvalid
+		}
+		retained := ctr.memUsed()
+		if retained < 0 {
+			return false, process.ErrExecutionResourceInvalid
+		}
+		limit, err := ctr.memoryGrowthParticipant.RetainedLimit(
+			uint64(retained),
+		)
+		if err != nil {
+			return false, err
+		}
+		predicted := uint64(retained)
+		if uint64(inputBatchSize) > ^uint64(0)-predicted {
+			predicted = ^uint64(0)
+		} else {
+			predicted += uint64(inputBatchSize)
+		}
+		// Each retained batch passed through this ingress once. Inspect only the
+		// new input, including the threshold-crossing batch, instead of rescanning
+		// the entire growing build relation on every admission decision.
+		if ctr.hashmapBuilder.keyWidth <= 8 && !ctr.autoSpillHasGrouping {
+			ctr.autoSpillHasGrouping = ctr.hashmapBuilder.hasGroupingKeyInBatches([]*batch.Batch{input})
+		}
+		mapBytes, err := estimatedHashMapBytes(
+			int64(ctr.hashmapBuilder.InputBatchRowCount),
+			ctr.hashmapBuilder.keyWidth <= 8 && !ctr.autoSpillHasGrouping,
+		)
+		if err != nil {
+			return false, err
+		}
+		projectedBuild := predicted + mapBytes
+		if mapBytes > math.MaxUint64-predicted {
+			projectedBuild = math.MaxUint64
+		}
+		adaptiveSpill := projectedBuild > limit
+		staticSpill := colexec.ShouldSpill(
+			int64(min(predicted, uint64(math.MaxInt64))),
+			int64(ctr.hashmapBuilder.InputBatchRowCount),
+			ctr.spillThreshold,
+		)
+		if adaptiveSpill {
+			ctr.autoSpillTriggered = true
+			ctr.autoSpillLimitAtTrigger = limit
+		}
+		return adaptiveSpill || staticSpill, nil
+	}
 	predicted := ctr.memUsed()
 	if inputBatchSize < 0 || predicted > math.MaxInt64-inputBatchSize {
 		predicted = math.MaxInt64
@@ -949,7 +1037,7 @@ func (hashBuild *HashBuild) shouldSpillBeforeRetain(inputBatchSize int64) bool {
 		predicted,
 		int64(ctr.hashmapBuilder.InputBatchRowCount),
 		ctr.spillThreshold,
-	)
+	), nil
 }
 
 // computeXXHash computes hash values for spill-partitioning using

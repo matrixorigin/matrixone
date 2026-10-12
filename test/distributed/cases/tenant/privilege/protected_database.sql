@@ -102,11 +102,20 @@ use protected_bvt_db;
 show tables;
 select a from t1;
 select a from protected_bvt_db.t1;
+-- TABLE wildcard grants do not authorize VIEW objects.
 select a from protected_bvt_db.v1;
 -- @session
 
 -- @session:id=1&user=protected_bvt_acc:admin&password=111
 set enable_privilege_cache = off;
+grant select on view protected_bvt_db.v1 to protected_bvt_writer;
+-- @session
+
+-- @session:id=2&user=protected_bvt_acc:protected_bvt_user:protected_bvt_writer&password=111
+select a from protected_bvt_db.v1;
+-- @session
+
+-- @session:id=1&user=protected_bvt_acc:admin&password=111
 create sequence protected_bvt_db.s1;
 create function protected_bvt_db.f1(a int) returns int language sql as '$1 + 1';
 create procedure protected_bvt_db.p1() 'begin select 1; end';

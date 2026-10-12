@@ -277,7 +277,8 @@ func TestUpgradeEntries(t *testing.T) {
 	columnsBinaryStrings := tenantUpgEntries[len(tenantUpgEntries)-2]
 	require.Equal(t, "COLUMNS", columnsBinaryStrings.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, columnsBinaryStrings.UpgType)
-	require.Equal(t, sysview.InformationSchemaColumnsDDL, columnsBinaryStrings.UpgSql)
+	require.Equal(t, sysview.InformationSchemaColumnsV58DDL(), columnsBinaryStrings.UpgSql)
+	require.NotContains(t, columnsBinaryStrings.UpgSql, "mo_subscription_view_columns")
 	require.Equal(t, int64(defines.MORPCVersion58), columnsBinaryStrings.RequiredProtocolVersion)
 	characterSetsUTF8Maxlen := tenantUpgEntries[len(tenantUpgEntries)-1]
 	require.Equal(t, "CHARACTER_SETS", characterSetsUTF8Maxlen.TableName)
@@ -627,9 +628,9 @@ func TestInformationSchemaCharacterSetsUpgradeCheckUsesCanonicalDefaults(t *test
 				sysview.DefaultCollationForCharset(charset)+"'")
 	}
 	require.Contains(t, checkSQL,
-		"CHARACTER_SET_NAME = 'utf8' AND DEFAULT_COLLATE_NAME = 'utf8_general_ci' AND MAXLEN = 3")
-	require.NotContains(t, checkSQL,
 		"CHARACTER_SET_NAME = 'utf8' AND DEFAULT_COLLATE_NAME = 'utf8_general_ci' AND MAXLEN = 4")
+	require.NotContains(t, checkSQL,
+		"CHARACTER_SET_NAME = 'utf8' AND DEFAULT_COLLATE_NAME = 'utf8_general_ci' AND MAXLEN = 3")
 }
 
 func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *testing.T) {
@@ -1986,12 +1987,13 @@ func TestEnsureInformationSchemaCharacterSetsTableIsIdempotent(t *testing.T) {
 
 func TestPopulateInformationSchemaCharacterSetsIsIdempotent(t *testing.T) {
 	entry := populateInformationSchemaCharacterSets()
+	checkSQL := sysview.InformationSchemaCharacterSetsCheckSQL()
 	populated := false
 	var executed []string
 	txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
 		executed = append(executed, sql)
 		switch {
-		case strings.HasPrefix(sql, "SELECT 1 FROM information_schema.CHARACTER_SETS"):
+		case sql == checkSQL:
 			if populated {
 				result := executor.NewMemResult(nil, nil)
 				result.NewBatchWithRowCount(1)
@@ -2005,14 +2007,14 @@ func TestPopulateInformationSchemaCharacterSetsIsIdempotent(t *testing.T) {
 
 	require.NoError(t, entry.Upgrade(txn, 42))
 	require.Len(t, executed, 3)
-	require.True(t, strings.HasPrefix(executed[0], "SELECT 1 FROM information_schema.CHARACTER_SETS"))
+	require.Equal(t, checkSQL, executed[0])
 	require.Equal(t, entry.PreSql, executed[1])
 	require.Equal(t, entry.UpgSql, executed[2])
 
 	executed = nil
 	require.NoError(t, entry.Upgrade(txn, 42))
 	require.Len(t, executed, 1)
-	require.True(t, strings.HasPrefix(executed[0], "SELECT 1 FROM information_schema.CHARACTER_SETS"))
+	require.Equal(t, checkSQL, executed[0])
 }
 
 func TestRetireKafkaSinkDaemonTasks(t *testing.T) {

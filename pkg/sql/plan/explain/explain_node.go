@@ -228,6 +228,12 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Sample"
 	case plan.Node_SORT:
 		pname = "Sort"
+	case plan.Node_ADAPTIVE_TOP:
+		pname = "Adaptive Top"
+	case plan.Node_VECTOR_QUERY_TOP:
+		pname = "Scalar Vector Query"
+	case plan.Node_VECTOR_QUERY_SOURCE:
+		pname = "Scalar Vector Source"
 	case plan.Node_PARTITION:
 		pname = "Partition"
 		if ndesc.Node.Limit != nil && ndesc.Node.PartitionByCount > 0 {

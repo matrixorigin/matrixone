@@ -58,3 +58,15 @@ DROP TABLE t1;
 # Complex format strings
 SELECT TIME_FORMAT('15:30:45.123456', '%H:%i:%s.%f') AS complex_format;
 SELECT TIME_FORMAT('15:30:45', 'Time is %H:%i:%s') AS with_text;
+
+# Row-dependent format expressions must use the format from the current row.
+CREATE TABLE temporal_time_format_rows(id INT, tm TIME, fmt VARCHAR(32));
+INSERT INTO temporal_time_format_rows VALUES
+    (1, '03:04:05.000006', '%H'),
+    (2, '14:05:06.000007', '%i'),
+    (3, '23:06:07.000008', '%s.%f'),
+    (4, '12:00:00', NULL);
+SELECT id, TIME_FORMAT(tm, fmt) AS formatted
+FROM temporal_time_format_rows
+ORDER BY id;
+DROP TABLE temporal_time_format_rows;

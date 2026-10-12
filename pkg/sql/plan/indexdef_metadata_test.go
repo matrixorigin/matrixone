@@ -89,7 +89,7 @@ func TestSparseIndexMetadataMutationPathsFailClosed(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(test.dml)
+			mock := NewMockOptimizer(test.dml, newPlanTestProcess(t))
 			tableDef := mock.ctxt.tables["single_idx_t"]
 			require.NotNil(t, tableDef)
 			require.NotEmpty(t, tableDef.Indexes)
@@ -138,7 +138,7 @@ func TestSparseIndexMetadataRelatedMutationTablesFailClosed(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			test.setup(mock)
 
 			_, err := runOneStmt(mock, t, test.sql)
@@ -177,7 +177,7 @@ func TestSparseIndexMetadataLegacyDMLTargetsFailClosed(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			tableDef := mock.ctxt.tables["emp"]
 			require.NotNil(t, tableDef)
 			require.NotEmpty(t, tableDef.Indexes)

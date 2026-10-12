@@ -76,6 +76,48 @@ func TestGetTenantVersion(t *testing.T) {
 	)
 }
 
+func TestTenantVersionLookupFailuresAreNonFatal(t *testing.T) {
+	for _, lookup := range []struct {
+		name      string
+		forUpdate bool
+		get       func(int32, executor.TxnExecutor) (string, error)
+	}{
+		{name: "ordinary", get: GetTenantVersion},
+		{name: "locking", forUpdate: true, get: GetTenantCreateVersionForUpdate},
+	} {
+		for _, test := range []struct {
+			name    string
+			batches [][]string
+			code    uint16
+		}{
+			{name: "deleted_account", code: moerr.ErrNotFound},
+			{name: "empty_batch", batches: [][]string{{}}, code: moerr.ErrNotFound},
+			{name: "empty_version", batches: [][]string{{""}}, code: moerr.ErrInvalidState},
+			{name: "duplicate_rows", batches: [][]string{{"4.0.7", "4.0.7"}}, code: moerr.ErrInternal},
+			{name: "duplicate_batches", batches: [][]string{{"4.0.7"}, {"4.0.7"}}, code: moerr.ErrInternal},
+		} {
+			t.Run(lookup.name+"/"+test.name, func(t *testing.T) {
+				res, mp := newSingleStringResult(t, test.batches)
+				defer mpool.DeleteMPool(mp)
+				exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+					want := "select create_version from mo_account where account_id = 11"
+					if lookup.forUpdate {
+						want += " for update"
+					}
+					require.Equal(t, want, sql)
+					return res, nil
+				}, nil) // no logger/transaction is needed to return a normal error
+				require.NotPanics(t, func() {
+					version, err := lookup.get(11, exec)
+					require.Empty(t, version)
+					require.True(t, moerr.IsMoErrCode(err, test.code), "unexpected error: %v", err)
+				})
+				require.Zero(t, mp.CurrNB(), "the lookup must close its SQL result on failure")
+			})
+		}
+	}
+}
+
 func TestGetUpgradeTenantTasksSkipsDeletedRanges(t *testing.T) {
 	sid := ""
 	runtime.RunTest(

@@ -73,6 +73,7 @@ type container struct {
 
 	spillEngine    *spillutil.SpillEngine
 	spillThreshold int64
+	autoSpill      bool
 	resultBatch    *batch.Batch
 }
 

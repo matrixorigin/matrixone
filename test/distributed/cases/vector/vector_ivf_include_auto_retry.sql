@@ -1,6 +1,7 @@
--- Regression for IVF auto fallback with included columns.
--- The post path sees only the nearby category=0 cluster. Auto must rebuild
--- the equivalent pre path without changing result-column metadata.
+-- Regression for explicit IVF POST fallback with included columns.
+-- The initial POST path sees only the nearby category=0 cluster. An empty
+-- INCLUDE-covered page must retry the same subtree exactly, while AUTO keeps
+-- its existing POST/PRE/FORCE behavior.
 drop database if exists vector_ivf_include_auto_retry;
 create database vector_ivf_include_auto_retry;
 use vector_ivf_include_auto_retry;
@@ -40,11 +41,24 @@ create index idx using ivfflat on t(vec)
 set experimental_ivf_index = 1;
 set probe_limit = 1;
 
-select id, category, payload
+-- Check the executed empty POST and non-empty exact fallback, not only final rows.
+-- Match each operator's own Analyze line without pinning IDs, timings or costs.
+-- @separator:table
+-- @ignore:0
+-- @regex("Adaptive Top[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*inputRows=1 outputRows=1", true)
+-- @regex("->  Project[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*inputRows=0 outputRows=0", true)
+-- @regex("Vector Index Scan[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*outputRows=[1-9][0-9]*", true)
+-- @regex("->  Sort[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*inputRows=1 outputRows=1", true)
+explain analyze verbose select id, category, payload
 from t
 where category = 1
 order by l2_distance(vec, '[0,0,0]')
 limit 1 by rank with option 'mode=post';
+
+prepare p from 'select id, category, payload from t where category = 1 order by l2_distance(vec, ''[0,0,0]'') limit 1 by rank with option ''mode=post''';
+execute p;
+execute p;
+deallocate prepare p;
 
 select id, category, payload
 from t

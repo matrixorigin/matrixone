@@ -320,7 +320,18 @@ order_year,
 order_month,
 c.city,
 cat.category_name;
-[unknown result because it is related to issue#20000]
+order_year    order_month    city    category_name    total_sales
+null    null    null    null    139.95
+2024    null    null    null    139.95
+2024    1    null    null    139.95
+2024    1    null    Books    49.99
+2024    1    null    Electronics    89.96
+2024    1    Chicago    Books    49.99
+2024    1    Chicago    Books    49.99
+2024    1    Chicago    Books    49.99
+2024    1    New York    Electronics    89.96
+2024    1    New York    Electronics    89.96
+2024    1    New York    Electronics    89.96
 select
 year(o.order_date) as order_year,
 month(o.order_date) as order_month,
@@ -1385,6 +1396,9 @@ b	YES
 select count(*) from grouping_extension_rollup_v where a is null or b is null;
 count(*)
 3
+select count(*) from grouping_extension_rollup_v where b = 10;
+count(*)
+2
 create view grouping_extension_cube_v as select a, b, sum(v) as s from grouping_extension_metadata_src group by cube(a, b);
 select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_cube_v' and column_name in ('a', 'b') order by ordinal_position;
 column_name	is_nullable
@@ -1510,4 +1524,7 @@ a	b	c	s	g
 null	null	null	null	7
 set optimizer_hints = @saved_optimizer_hints;
 drop table grouping_set_decimal_sum_order;
+select count(*) from (select 1 as k, count(*) as n from dual group by rollup(1)) d where k is null;
+count(*)
+1
 drop database rollup_test;

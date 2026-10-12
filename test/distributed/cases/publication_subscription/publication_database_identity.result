@@ -1,0 +1,34 @@
+drop publication if exists pub_identity_guard;
+drop account if exists pub_identity_tenant;
+drop database if exists pub_identity_a;
+create account pub_identity_tenant admin_name = 'admin' identified by '111';
+create database pub_identity_a;
+create database pub_identity_b;
+create table pub_identity_b.marker (v int);
+prepare drop_b from 'drop database pub_identity_b';
+create publication pub_identity_guard database pub_identity_a account pub_identity_tenant;
+create database pub_identity_a;
+drop database pub_identity_a;
+alter publication pub_identity_guard comment 'same source';
+drop database pub_identity_a;
+internal error: can not drop database 'pub_identity_a' which is publishing
+alter publication pub_identity_guard database pub_identity_b;
+drop database pub_identity_a;
+execute drop_b;
+internal error: can not drop database 'pub_identity_b' which is publishing
+drop account pub_identity_tenant;
+internal error: can not drop database 'pub_identity_b' which is publishing
+insert into pub_identity_b.marker values (1);
+deallocate prepare drop_b;
+drop publication pub_identity_guard;
+drop account pub_identity_tenant;
+create database pub_identity_replaced;
+prepare drop_replaced from 'drop database pub_identity_replaced';
+drop database pub_identity_replaced;
+create database pub_identity_replaced;
+create table pub_identity_replaced.t (v int, key pub_identity_idx (v));
+execute drop_replaced;
+select count(*) from mo_catalog.mo_indexes where name = 'pub_identity_idx';
+➤ count(*)[-5,64,0]  𝄀
+0
+deallocate prepare drop_replaced;

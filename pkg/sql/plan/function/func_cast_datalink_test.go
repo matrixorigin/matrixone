@@ -29,7 +29,7 @@ func TestCastToDatalinkValidatesValues(t *testing.T) {
 
 	for _, test := range []struct {
 		name       string
-		cast       fEvalFn
+		cast       executeLogicOfOverload
 		values     []string
 		nulls      []bool
 		selectList *FunctionSelectList
@@ -82,7 +82,7 @@ func TestCastToDatalinkValidatesValues(t *testing.T) {
 				test.cast,
 			).WithSelectList(test.selectList)
 
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}

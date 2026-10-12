@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"bufio"
+	"bytes"
 	"io"
 	"time"
 
@@ -117,9 +118,16 @@ func (st *parseJsonlState) start(tf *TableFunction, proc *process.Process, nthRo
 
 	// Only uncompress the file if it's not from data,
 	if !st.fromData {
-		st.reader, err = crt.GetUnCompressReader(proc, tree.AUTO, dataSrcStr, st.reader)
+		src := st.reader
+		st.reader, err = crt.GetUnCompressReader(proc, tree.AUTO, dataSrcStr, src)
 		if err != nil {
+			src.Close()
 			return err
+		}
+		if st.reader == nil {
+			// An empty compressed file: nothing to decode, like the CSV reader.
+			src.Close()
+			st.reader = io.NopCloser(bytes.NewReader(nil))
 		}
 	}
 

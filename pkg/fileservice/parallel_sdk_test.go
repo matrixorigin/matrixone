@@ -64,6 +64,21 @@ func (r *failAfterBytesReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// eofSignalReader notifies a waiting worker when the producer reaches EOF.
+type eofSignalReader struct {
+	r       io.Reader
+	eof     chan struct{}
+	eofOnce sync.Once
+}
+
+func (r *eofSignalReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if errors.Is(err, io.EOF) {
+		r.eofOnce.Do(func() { close(r.eof) })
+	}
+	return n, err
+}
+
 type waitAfterBytesReader struct {
 	r         io.Reader
 	readSoFar int64
@@ -145,6 +160,7 @@ func newMockAWSServer(t *testing.T, failPart int32) (*httptest.Server, *awsServe
 			_, _ = io.ReadAll(r.Body)
 			state.mu.Lock()
 			state.deleteMultiCount++
+			state.deleteMultiHasContentMD5 = r.Header.Get("Content-MD5") != ""
 			state.mu.Unlock()
 			if state.failDeleteMultiMalformed {
 				w.WriteHeader(http.StatusBadRequest)
@@ -156,6 +172,24 @@ func newMockAWSServer(t *testing.T, failPart int32) (*httptest.Server, *awsServe
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Header().Set("Content-Type", "application/xml")
 				_, _ = w.Write([]byte(awsS3ErrorXML("InternalError", "internal error")))
+				return
+			}
+			if state.failDeleteMultiChecksum && !state.deleteMultiHasContentMD5 {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Header().Set("Content-Type", "application/xml")
+				_, _ = w.Write([]byte(awsS3ErrorXML("MissingContentMD5", "Content-MD5 is required")))
+				return
+			}
+			if state.failDeleteMultiMissing && !state.deleteMultiHasContentMD5 {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Header().Set("Content-Type", "application/xml")
+				_, _ = w.Write([]byte(awsS3ErrorXML("MissingArgument", "Missing Some Required Arguments")))
+				return
+			}
+			if state.failDeleteMultiPlain && !state.deleteMultiHasContentMD5 {
+				w.Header().Set("Content-Type", "text/plain")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte("Missing required header for this request: Content-MD5"))
 				return
 			}
 			w.Header().Set("Content-Type", "application/xml")
@@ -195,6 +229,10 @@ type awsServerState struct {
 	deleteSingleKeys         []string
 	failDeleteMultiMalformed bool
 	failDeleteMultiInternal  bool
+	failDeleteMultiChecksum  bool
+	failDeleteMultiMissing   bool
+	failDeleteMultiPlain     bool
+	deleteMultiHasContentMD5 bool
 }
 
 func awsObjectKeyFromPath(path string) string {
@@ -211,11 +249,17 @@ func awsS3ErrorXML(code, message string) string {
 }
 
 func newTestAWSClient(t *testing.T, srv *httptest.Server) *AwsSDKv2 {
+	return newTestAWSClientWithTransport(t, srv, srv.Client().Transport)
+}
+
+func newTestAWSClientWithTransport(t *testing.T, srv *httptest.Server, transport http.RoundTripper) *AwsSDKv2 {
 	t.Helper()
+	httpClient := srv.Client()
+	httpClient.Transport = transport
 	cfg := aws.Config{
 		Region:      "us-east-1",
 		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider("id", "key", "")),
-		HTTPClient:  srv.Client(),
+		HTTPClient:  httpClient,
 		Retryer: func() aws.Retryer {
 			return aws.NopRetryer{}
 		},
@@ -667,6 +711,80 @@ func TestAwsDeleteMultiFallsBackToSinglesOnMalformedXML(t *testing.T) {
 	}
 }
 
+func TestAwsDeleteMultiFallsBackToSinglesOnChecksumRejection(t *testing.T) {
+	server, state := newMockAWSServer(t, 0)
+	defer server.Close()
+	state.failDeleteMultiChecksum = true
+
+	sdk := newTestAWSClient(t, server)
+	if err := sdk.Delete(context.Background(), "a", "b", "c"); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+	if state.deleteMultiCount != 1 {
+		t.Fatalf("expected 1 batch delete attempt, got %d", state.deleteMultiCount)
+	}
+	if state.deleteMultiHasContentMD5 {
+		t.Fatal("expected the compatibility endpoint to reject the SDK's non-MD5 batch checksum")
+	}
+	if strings.Join(state.deleteSingleKeys, ",") != "a,b,c" {
+		t.Fatalf("expected single-delete fallback for all keys, got %v", state.deleteSingleKeys)
+	}
+
+	if err := sdk.Delete(context.Background(), "d", "e"); err != nil {
+		t.Fatalf("second delete failed: %v", err)
+	}
+	if state.deleteMultiCount != 1 {
+		t.Fatalf("expected later deletes to skip batch after checksum rejection, got %d batch attempts", state.deleteMultiCount)
+	}
+	if strings.Join(state.deleteSingleKeys, ",") != "a,b,c,d,e" {
+		t.Fatalf("expected later deletes to go directly to single-delete path, got %v", state.deleteSingleKeys)
+	}
+}
+
+func TestAwsDeleteMultiFallsBackToSinglesOnMissingArgument(t *testing.T) {
+	server, state := newMockAWSServer(t, 0)
+	defer server.Close()
+	state.failDeleteMultiMissing = true
+
+	sdk := newTestAWSClient(t, server)
+	if err := sdk.Delete(context.Background(), "a", "b"); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+	if state.deleteMultiCount != 1 {
+		t.Fatalf("expected 1 batch delete attempt, got %d", state.deleteMultiCount)
+	}
+	if strings.Join(state.deleteSingleKeys, ",") != "a,b" {
+		t.Fatalf("expected single-delete fallback for all keys, got %v", state.deleteSingleKeys)
+	}
+
+	if err := sdk.Delete(context.Background(), "c", "d"); err != nil {
+		t.Fatalf("second delete failed: %v", err)
+	}
+	if state.deleteMultiCount != 1 {
+		t.Fatalf("expected later deletes to skip batch after missing-argument rejection, got %d batch attempts", state.deleteMultiCount)
+	}
+	if strings.Join(state.deleteSingleKeys, ",") != "a,b,c,d" {
+		t.Fatalf("expected later deletes to go directly to single-delete path, got %v", state.deleteSingleKeys)
+	}
+}
+
+func TestAwsDeleteMultiFallsBackToSinglesOnUnstructuredChecksumRejection(t *testing.T) {
+	server, state := newMockAWSServer(t, 0)
+	defer server.Close()
+	state.failDeleteMultiPlain = true
+
+	sdk := newTestAWSClient(t, server)
+	if err := sdk.Delete(context.Background(), "a", "b"); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+	if state.deleteMultiCount != 1 {
+		t.Fatalf("expected 1 batch delete attempt, got %d", state.deleteMultiCount)
+	}
+	if strings.Join(state.deleteSingleKeys, ",") != "a,b" {
+		t.Fatalf("expected single-delete fallback for all keys, got %v", state.deleteSingleKeys)
+	}
+}
+
 func TestAwsDeleteMultiDoesNotFallbackOnOtherErrors(t *testing.T) {
 	server, state := newMockAWSServer(t, 0)
 	defer server.Close()
@@ -1080,12 +1198,84 @@ func TestCOSMultipartInitDoesNotRequireListPermission(t *testing.T) {
 	require.Equal(t, int32(1), state.initCalls.Load())
 }
 
+func TestAwsMultipartWorkerCancellationAborts(t *testing.T) {
+	server, state := newMockAWSServer(t, 0)
+	defer server.Close()
+	state.uploadID = "aws-worker-canceled"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sdk := newTestAWSClient(t, server)
+
+	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize))
+	reader := &eofSignalReader{r: bytes.NewReader(data), eof: make(chan struct{})}
+	size := int64(len(data))
+	err := sdk.WriteMultipartParallel(ctx, "object", reader, &size, &ParallelMultipartOption{
+		PartSize: size,
+		beforePartUpload: func() {
+			<-reader.eof
+			cancel()
+		},
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, state.aborted.Load())
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	require.Empty(t, state.completeBody)
+	require.Empty(t, state.parts)
+}
+
+func TestCOSMultipartWorkerCancellationAborts(t *testing.T) {
+	server, state := newMockCOSServer(t, 0)
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sdk := newTestCOSClient(t, server)
+
+	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize))
+	reader := &eofSignalReader{r: bytes.NewReader(data), eof: make(chan struct{})}
+	size := int64(len(data))
+	err := sdk.WriteMultipartParallel(ctx, "object", reader, &size, &ParallelMultipartOption{
+		PartSize: size,
+		beforePartUpload: func() {
+			<-reader.eof
+			cancel()
+		},
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, state.aborted.Load())
+	require.False(t, state.completed.Load())
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	require.Empty(t, state.parts)
+}
+
+func TestAwsMultipartInitCancellationCleansOwnedUpload(t *testing.T) {
+	server, state := newMockAWSServer(t, 0)
+	defer server.Close()
+	state.uploadID = "aws-uid-canceled"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sdk := newTestAWSClientWithTransport(t, server, &multipartInitCancelAfterResponseTransport{
+		base:   server.Client().Transport,
+		cancel: cancel,
+	})
+
+	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
+	size := int64(len(data))
+	err := sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, state.aborted.Load())
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	require.Empty(t, state.completeBody)
+}
+
 func TestCOSMultipartInitCancellationCleansOwnedUpload(t *testing.T) {
 	server, state := newMockCOSServer(t, 0)
 	defer server.Close()
 	state.uploadID = "cos-uid-canceled"
 	ctx, cancel := context.WithCancel(context.Background())
-	transport := &cosMultipartInitCancelAfterResponseTransport{
+	transport := &multipartInitCancelAfterResponseTransport{
 		base:   server.Client().Transport,
 		cancel: cancel,
 	}
@@ -1282,7 +1472,7 @@ type denyMultipartListTransport struct {
 	listCalls atomic.Int32
 }
 
-type cosMultipartInitCancelAfterResponseTransport struct {
+type multipartInitCancelAfterResponseTransport struct {
 	base   http.RoundTripper
 	cancel context.CancelFunc
 }
@@ -1326,7 +1516,7 @@ func (t *cosMultipartInitInvalidSuccessBodyTransport) RoundTrip(req *http.Reques
 	return resp, nil
 }
 
-func (t *cosMultipartInitCancelAfterResponseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (t *multipartInitCancelAfterResponseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
 	if err != nil {
 		return nil, err

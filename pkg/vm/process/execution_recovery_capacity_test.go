@@ -124,6 +124,45 @@ func TestExecutionRecoveryCapacityTransfersPhysicalCharge(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestExecutionRecoveryCapacityTrimsOnlyUnusedFloor(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(1024, 1024)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 4)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(1024, generation)
+	require.NoError(t, err)
+	recovery, err := NewExecutionRecoveryCapacity(generation)
+	require.NoError(t, err)
+	class, err := account.RegisterCapacityController(recovery)
+	require.NoError(t, err)
+	require.NoError(t, recovery.EnsureCapacity(256))
+
+	mp := mpool.MustNewZero()
+	physical, err := mp.AllocAccountedWithCapacityClass(
+		128, account, 1, 1, class)
+	require.NoError(t, err)
+	capacity, err := recovery.TrimUnusedCapacity()
+	require.NoError(t, err)
+	require.Equal(t, uint64(128), capacity)
+	require.Equal(t, uint64(128), generation.Used())
+	capacity, borrowed := recovery.Snapshot()
+	require.Equal(t, uint64(128), capacity)
+	require.Equal(t, uint64(128), borrowed)
+
+	mp.Free(physical)
+	capacity, err = recovery.TrimUnusedCapacity()
+	require.NoError(t, err)
+	require.Zero(t, capacity)
+	require.Zero(t, generation.Used())
+	require.NoError(t, recovery.Close())
+	require.NoError(t,
+		account.UnregisterCapacityController(class, recovery))
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestExecutionRecoveryCapacityRejectsUncoveredGrowth(t *testing.T) {
 	budget := MustNewExecutionResourceBudget(300, 300)
 	generation, err := budget.OpenGeneration(1)

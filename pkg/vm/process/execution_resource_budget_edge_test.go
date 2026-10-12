@@ -220,6 +220,50 @@ func TestExecutionResourceLiveReservationRejectsCapShrinkAndClose(t *testing.T) 
 	budget.Close()
 }
 
+func TestAutomaticSpillDiskCapTracksIdleStorageWithoutGrowingLiveEnvelope(t *testing.T) {
+	require.Zero(t, automaticSpillDiskCap(0))
+	require.Equal(t, uint64(1), automaticSpillDiskCap(1))
+	require.Equal(t, uint64(1), automaticSpillDiskCap(16<<30))
+	require.Equal(t, uint64(48<<30), automaticSpillDiskCap(64<<30))
+	require.Equal(t, uint64(1<<40), automaticSpillDiskCap(4<<40))
+
+	budget := MustNewExecutionResourceBudget(1024, 1024)
+	require.NoError(t, budget.setAutomaticSpillDiskCapFromAvailable(64<<30))
+	generation, err := budget.openProcessGeneration(1, 1024, 0)
+	require.NoError(t, err)
+	require.Equal(t, uint64(48<<30), generation.SpillDiskCap())
+	disk, err := generation.ReserveSpillDisk(8 << 30)
+	require.NoError(t, err)
+
+	// The physical sample has fallen by exactly the bytes owned by this ledger.
+	// Reconstructing the pre-spill capacity keeps the envelope stable instead
+	// of double-counting the query's own spill as external disk consumption.
+	require.NoError(t, budget.setAutomaticSpillDiskCapFromAvailable(56<<30))
+	require.Equal(t, uint64(48<<30), budget.SpillDiskCap())
+
+	// Sixteen GiB of real external consumption reduces the reconstructed idle
+	// capacity from 64 to 48 GiB. The absolute headroom floor then tightens the
+	// cap to 32 GiB.
+	require.NoError(t, budget.setAutomaticSpillDiskCapFromAvailable(40<<30))
+	require.Equal(t, uint64(32<<30), budget.SpillDiskCap())
+
+	// A concurrent statement cannot repeatedly enlarge the envelope from a
+	// fresh free-space sample while spill admitted by the first one is live.
+	require.NoError(t, budget.setAutomaticSpillDiskCapFromAvailable(120<<30))
+	require.Equal(t, uint64(32<<30), budget.SpillDiskCap())
+
+	require.True(t, disk.Release())
+	require.NoError(t, budget.setAutomaticSpillDiskCapFromAvailable(128<<30))
+	require.Equal(t, uint64(96<<30), budget.SpillDiskCap())
+	second, err := budget.openProcessGeneration(2, 1024, 0)
+	require.NoError(t, err)
+	require.Equal(t, uint64(96<<30), second.SpillDiskCap())
+
+	require.NoError(t, budget.raiseSpillDiskCapToExplicitLimit(128<<30))
+	require.NoError(t, budget.setAutomaticSpillDiskCapFromAvailable(32<<30))
+	require.Equal(t, uint64(128<<30), budget.SpillDiskCap())
+}
+
 func TestExecutionResourceRefreshRejectsZeroCeiling(t *testing.T) {
 	var nilBudget *ExecutionResourceBudget
 	_, _, _, err := nilBudget.refreshAggregateCap(false, 0)

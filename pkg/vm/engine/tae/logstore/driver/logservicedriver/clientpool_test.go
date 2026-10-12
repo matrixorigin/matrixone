@@ -15,6 +15,8 @@
 package logservicedriver
 
 import (
+	"bytes"
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -52,7 +54,84 @@ func TestNewClientPoolRetriesThenSucceeds(t *testing.T) {
 	require.GreaterOrEqual(t, attempts.Load(), int32(2))
 	require.Len(t, pool.clients, 1)
 	require.NotNil(t, pool.clients[0])
-	require.NotNil(t, pool.clients[0].buf)
+	require.NotNil(t, pool.clients[0].wrapped)
+	require.Nil(t, pool.clients[0].buf.Data)
+}
+
+type recordingPayloadClient struct {
+	BackendClient
+	sizes   []int
+	records []logservice.LogRecord
+	err     error
+}
+
+func (c *recordingPayloadClient) GetLogRecord(size int) logservice.LogRecord {
+	c.sizes = append(c.sizes, size)
+	return logservice.NewUserLogRecord(42, size)
+}
+
+func (c *recordingPayloadClient) Append(_ context.Context, record logservice.LogRecord) (uint64, error) {
+	c.records = append(c.records, record.Clone())
+	return uint64(len(c.records)), c.err
+}
+
+func TestClientPayloadAllocatedOnlyForAppend(t *testing.T) {
+	backend := NewMockBackend()
+	pool := newClientPool(&Config{
+		ClientMaxCount: 1, ClientBufSize: 128, ClientRetryTimes: 1,
+		ClientFactory: func() (logservice.Client, error) {
+			return newMockBackendClient(backend), nil
+		},
+	})
+	t.Cleanup(pool.Close)
+	c, err := pool.Get()
+	require.NoError(t, err)
+	recorder := &recordingPayloadClient{BackendClient: c.wrapped}
+	c.wrapped = recorder
+	pool.Put(c) // An unused checkout must not create a record, even on return.
+	require.Empty(t, recorder.sizes)
+	require.Nil(t, c.buf.Data)
+
+	for _, size := range []int{0, 16, 256, 8} {
+		c, err = pool.Get()
+		require.NoError(t, err)
+		payload := bytes.Repeat([]byte{byte(size + 1)}, size)
+		_, err = c.Append(context.Background(), LogEntry(payload), nil)
+		require.NoError(t, err)
+		record := recorder.records[len(recorder.records)-1]
+		require.Equal(t, uint64(42), record.GetReplicaID())
+		require.Equal(t, logservice.NewUserLogRecord(42, 0).GetUpdateType(), record.GetUpdateType())
+		require.Equal(t, payload, record.Payload())
+		pool.Put(c)
+	}
+	// Keep the existing growth policy after the first configured reserve.
+	require.Equal(t, []int{128, 16, 256}, recorder.sizes)
+
+	c, err = pool.Get()
+	require.NoError(t, err)
+	recorder.err = context.Canceled
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = c.Append(ctx, LogEntry("cancel"), nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, []byte("cancel"), recorder.records[len(recorder.records)-1].Payload())
+	recorder.err = nil
+	_, err = c.Append(context.Background(), LogEntry("retry"), nil)
+	require.NoError(t, err)
+	require.Equal(t, []int{128, 16, 256}, recorder.sizes)
+
+	payload := bytes.Repeat([]byte{42}, DefaultRecordSize+1)
+	_, err = c.Append(context.Background(), LogEntry(payload), nil)
+	require.NoError(t, err)
+	require.Equal(t, payload, recorder.records[len(recorder.records)-1].Payload())
+	pool.Put(c)
+	require.Len(t, c.buf.Payload(), DefaultRecordSize)
+	require.Equal(t, []int{128, 16, 256, DefaultRecordSize + 1, DefaultRecordSize}, recorder.sizes)
+
+	onFly, err := pool.GetOnFly()
+	require.NoError(t, err)
+	t.Cleanup(onFly.Close)
+	require.Nil(t, onFly.buf.Data)
 }
 
 func TestNewClientPoolPanicsWhenFactoryAlwaysFail(t *testing.T) {

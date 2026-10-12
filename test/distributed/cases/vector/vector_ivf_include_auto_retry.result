@@ -33,32 +33,84 @@ create index idx using ivfflat on t(vec)
 lists=5 op_type 'vector_l2_ops' include(category, payload);
 set experimental_ivf_index = 1;
 set probe_limit = 1;
-select id, category, payload
+explain analyze verbose select id, category, payload
 from t
 where category = 1
 order by l2_distance(vec, '[0,0,0]')
 limit 1 by rank with option 'mode=post';
-➤ id[4,32,0]  ¦  category[4,32,0]  ¦  payload[12,-1,0]
+-- @regex("Adaptive Top[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*inputRows=1 outputRows=1", true)
+-- @regex("->  Project[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*inputRows=0 outputRows=0", true)
+-- @regex("Vector Index Scan[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*outputRows=[1-9][0-9]*", true)
+-- @regex("->  Sort[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*inputRows=1 outputRows=1", true)
+➤ ap query plan on multicn(24 core)[12,-1,0]  𝄀
+Adaptive Top[8] (cost=1.00 outcnt=1.00 selectivity=0.0010 dop=1 blockNum=1 rowsize=100.00)  𝄀
+  Output: #[0,0], #[0,1], #[0,2]  𝄀
+  Analyze: timeConsumed=0ms waitTime=16ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=32 bytes OutputSize=32 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
+  Limit: 1  𝄀
+  ->  Project[4] (cost=1.00 outcnt=1.00 selectivity=0.0909 dop=1 blockNum=1 rowsize=100.00)  𝄀
+        Output: t.id, t.category, t.payload  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        ->  Sort[3] (cost=11.00 outcnt=1.00 selectivity=0.0909 dop=1 blockNum=1 rowsize=100.00)  𝄀
+              Output: t.id, t.category, t.payload  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+              Sort Key: #[0,3] INTERNAL  𝄀
+              Limit: 1  𝄀
+              ->  Join[2] (cost=1200.00 outcnt=11.00 selectivity=0.0110 dop=1 blockNum=1 hashmapSize=11.00 rowsize=100.00)  𝄀
+                    Output: t.id, t.category, t.payload, #[1,1]  𝄀
+                    Analyze: timeConsumed=0ms waitTime=16ms inputRows=5 outputRows=0 (min=0, max=0) InputSize=80 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32.17 KiB (min=16.06 KiB, max=16.11 KiB)  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (t.id = #[1,0])  𝄀
+                    ->  Table Scan[0] on vector_ivf_include_auto_retry.t (cost=1000.00 outcnt=1000.00 selectivity=1.0000 dop=1 blockNum=1 rowsize=100.00)  𝄀
+                          Output: t.id, t.category, t.payload  𝄀
+                          Table: 't' (0:'id', 1:'category', 2:'payload') shuffle: hash(id)  𝄀
+                          Analyze: timeConsumed=0ms waitTime=6ms inputBlocks=1 inputRows=21 outputRows=1 (min=1, max=1) InputSize=672 bytes OutputSize=32 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=725 bytes (min=725 bytes, max=725 bytes)  𝄀
+                          Filter Cond: (t.category = 1)  𝄀
+                    ->  Vector Index Scan[1] on idx [l2_distance] (cost=200.00 outcnt=11.00 selectivity=0.0110 dop=1 blockNum=1 rowsize=40.00)  𝄀
+                          Output: pkid, score  𝄀
+                          Analyze: timeConsumed=0ms _time=[0ms,0ms] waitTime=11ms inputRows=4 outputRows=4 (min=0, max=4) InputSize=48 bytes OutputSize=48 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=0 bytes, max=96 bytes)  𝄀
+                          Vector Index: idx, Metric: l2_distance, Candidate Limit: 1, NProbe: 1  𝄀
+  ->  Project[7] (cost=1.00 outcnt=1.00 selectivity=0.0010 dop=1 blockNum=1 rowsize=100.00)  𝄀
+        Output: t.id, t.category, t.payload  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=0 (min=0, max=0) InputSize=32 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32 bytes (min=0 bytes, max=32 bytes)  𝄀
+        ->  Sort[6] (cost=1000.00 outcnt=1.00 selectivity=0.0010 dop=1 blockNum=1 rowsize=100.00)  𝄀
+              Output: t.id, t.category, t.payload  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=56 bytes OutputSize=32 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32 bytes (min=32 bytes, max=32 bytes)  𝄀
+              Sort Key: l2_distance(t.vec, ) INTERNAL, t.id INTERNAL  𝄀
+              Limit: 1  𝄀
+              ->  Table Scan[5] on vector_ivf_include_auto_retry.t (cost=1000.00 outcnt=1000.00 selectivity=1.0000 dop=1 blockNum=1 rowsize=100.00)  𝄀
+                    Output: t.id, t.vec, t.category, t.payload  𝄀
+                    Table: 't' (0:'id', 1:'vec', 2:'category', 3:'payload') shuffle: hash(id)  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=21 outputRows=1 (min=1, max=1) InputSize=1.15 KiB OutputSize=56 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.22 KiB (min=1.22 KiB, max=1.22 KiB)  𝄀
+                    Filter Cond: (t.category = 1)  𝄀
+  Vector Index Execution: search_count=1 readers=2 metadata_blocks=2 metadata_rows=2 metadata_time_ns=2189984 centroid_blocks=2 centroid_rows=10 centroid_time_ns=3296865 entry_blocks_selected=1 entry_blocks_read=0 entry_output_rows=4 entry_time_ns=2525354 storage_filter_rows=0:0 vector_rows_scored=4 vector_chunks=0 vector_chunk_cache_hits=0 vector_compressed_bytes=0 vector_decoded_bytes=0 block_topk_rows=4 output_rows=4
+prepare p from 'select id, category, payload from t where category = 1 order by l2_distance(vec, ''[0,0,0]'') limit 1 by rank with option ''mode=post''';
+execute p;
+➤ id[4,32,0]  ¦  category[4,32,0]  ¦  payload[12,32,0]  𝄀
+999  ¦  1  ¦  hit
+execute p;
+➤ id[4,32,0]  ¦  category[4,32,0]  ¦  payload[12,32,0]  𝄀
+999  ¦  1  ¦  hit
+deallocate prepare p;
 select id, category, payload
 from t
 where category = 1
 order by l2_distance(vec, '[0,0,0]')
 limit 1 by rank with option 'mode=auto';
-➤ id[4,32,0]  ¦  category[4,32,0]  ¦  payload[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  category[4,32,0]  ¦  payload[12,32,0]  𝄀
 999  ¦  1  ¦  hit
 prepare s from 'select id, category, payload from t where category = 1 order by l2_distance(vec, ''[0,0,0]'') limit 1 by rank with option ''mode=auto''';
 execute s;
-➤ id[4,32,0]  ¦  category[4,32,0]  ¦  payload[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  category[4,32,0]  ¦  payload[12,32,0]  𝄀
 999  ¦  1  ¦  hit
 execute s;
-➤ id[4,32,0]  ¦  category[4,32,0]  ¦  payload[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  category[4,32,0]  ¦  payload[12,32,0]  𝄀
 999  ¦  1  ¦  hit
 deallocate prepare s;
 drop table t;
 drop database vector_ivf_include_auto_retry;
 show databases;
 -- @regex("vector_ivf_include_auto_retry", false)
-➤ Database[12,-1,0]  𝄀
+➤ Database[12,5000,0]  𝄀
 information_schema  𝄀
 mo_catalog  𝄀
 mo_debug  𝄀

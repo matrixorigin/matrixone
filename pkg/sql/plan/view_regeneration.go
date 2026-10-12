@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // RegeneratedViewDefinition is produced by exactly the same schema generator
@@ -69,6 +70,46 @@ type viewRegenerationContext struct {
 	lowerCaseTableNames int64
 }
 
+// Use the error-returning catalog lookup rather than DatabaseExists: the
+// latter collapses both genuine absence and storage failures into false.
+func (c *viewRegenerationContext) CheckViewDatabase(name string, snapshot *Snapshot) (bool, error) {
+	// Subscription View definitions are rebound in the publisher's isolated
+	// context. A historical snapshot still names the subscriber as its tenant;
+	// GetDatabaseId would otherwise switch back to that tenant and reject a
+	// valid publisher source (or accept an unrelated same-named database).
+	if sub := c.GetQueryingSubscription(); sub != nil && snapshot != nil {
+		// Ordinary binding may use the subscriber alias as its default. S2
+		// stored SQL already names publisher databases, even on a collision.
+		if name == sub.SubName && c.GetContext().Value(viewSchemaContextKey{}) == nil {
+			name = sub.DbName
+		}
+		snapshot = DeepCopySnapshot(snapshot)
+		snapshot.Tenant = &planpb.SnapshotTenant{TenantID: uint32(sub.AccountId)}
+	}
+	_, err := c.CompilerContext.GetDatabaseId(name, snapshot)
+	if err == nil {
+		return true, nil
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		return false, nil
+	}
+	return false, err
+}
+
+// ViewUdfResolver resolves unqualified functions in the persisted View's
+// definition database without changing the caller's session/default database.
+// The binding context is isolated by the View description provider.
+type ViewUdfResolver interface {
+	ResolveViewUdf(name string, args []*Expr, database string) (*function.Udf, error)
+}
+
+func (c *viewRegenerationContext) ResolveUdf(name string, args []*Expr) (*function.Udf, error) {
+	if resolver, ok := c.CompilerContext.(ViewUdfResolver); ok {
+		return resolver.ResolveViewUdf(name, args, c.defaultDatabase)
+	}
+	return c.CompilerContext.ResolveUdf(name, args)
+}
+
 func (c *viewRegenerationContext) DefaultDatabase() string { return c.defaultDatabase }
 func (c *viewRegenerationContext) GetRootSql() string      { return c.rootSQL }
 func (c *viewRegenerationContext) GetLowerCaseTableNames() int64 {
@@ -95,13 +136,52 @@ func (c *viewRegenerationContext) ResolveViewDependencyAccount(
 	return accountID, nil
 }
 
-// RegenerateViewDefinition parses a persisted View with its original lexical
-// and database context, then delegates to genViewTableDef. Unknown ViewData JSON
-// fields are retained when the dependency snapshot is updated.
-func RegenerateViewDefinition(
+// DescribeViewColumns binds the persisted semantic definition in the caller's
+// catalog context. It shares output inference with CREATE/ALTER VIEW, but does
+// not assemble, stabilize, or patch a replacement catalog definition.
+func DescribeViewColumns(ctx CompilerContext, persistedViewData string) ([]*planpb.ColDef, error) {
+	if len(persistedViewData) > 16<<20 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "View definition exceeds metadata binding budget")
+	}
+	if err := ctx.GetContext().Err(); err != nil {
+		return nil, err
+	}
+	parsed, err := parsePersistedViewDefinition(ctx, persistedViewData)
+	if err != nil {
+		return nil, err
+	}
+	defer parsed.free()
+	inferred, err := inferViewColumns(
+		parsed.ctx, parsed.selectStmt, parsed.columnNames, parsed.database, parsed.name, false)
+	if err != nil {
+		return nil, err
+	}
+	return inferred.columns, nil
+}
+
+// parsedViewDefinition owns the parsed statements. Its select list and column
+// names are borrowed from those statements and must not outlive free.
+type parsedViewDefinition struct {
+	ctx         *viewRegenerationContext
+	data        ViewData
+	statements  []tree.Statement
+	selectStmt  *tree.Select
+	columnNames tree.IdentifierList
+	database    string
+	name        string
+}
+
+func (p *parsedViewDefinition) free() {
+	for _, statement := range p.statements {
+		statement.Free()
+	}
+	p.statements = nil
+}
+
+func parsePersistedViewDefinition(
 	ctx CompilerContext,
 	persistedViewData string,
-) (*RegeneratedViewDefinition, error) {
+) (*parsedViewDefinition, error) {
 	var viewData ViewData
 	if err := json.Unmarshal([]byte(persistedViewData), &viewData); err != nil {
 		return nil, err
@@ -128,14 +208,16 @@ func RegenerateViewDefinition(
 	}
 	statements, err := parsers.ParseWithSQLMode(
 		ctx.GetContext(), dialect.MYSQL, viewData.Stmt, lowerCaseTableNames, parserSQLMode)
+	parsed := &parsedViewDefinition{statements: statements}
+	transferred := false
+	defer func() {
+		if !transferred {
+			parsed.free()
+		}
+	}()
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		for _, statement := range statements {
-			statement.Free()
-		}
-	}()
 	if len(statements) != 1 {
 		return nil, moerr.NewParseError(ctx.GetContext(), "persisted View must contain one statement")
 	}
@@ -163,8 +245,27 @@ func RegenerateViewDefinition(
 		rootSQL:             viewData.Stmt,
 		lowerCaseTableNames: lowerCaseTableNames,
 	}
+	parsed.ctx, parsed.data = regenerationCtx, viewData
+	parsed.selectStmt, parsed.columnNames = selectStmt, columnNames
+	parsed.database, parsed.name = viewDatabase, viewName
+	transferred = true
+	return parsed, nil
+}
+
+// RegenerateViewDefinition also assembles a replacement catalog definition.
+// Metadata readers use DescribeViewColumns instead; only definition owners may
+// publish the regenerated SQL and direct dependency snapshot.
+func RegenerateViewDefinition(
+	ctx CompilerContext,
+	persistedViewData string,
+) (*RegeneratedViewDefinition, error) {
+	parsed, err := parsePersistedViewDefinition(ctx, persistedViewData)
+	if err != nil {
+		return nil, err
+	}
+	defer parsed.free()
 	tableDef, err := genViewTableDef(
-		regenerationCtx, selectStmt, columnNames, viewDatabase, viewName, false)
+		parsed.ctx, parsed.selectStmt, parsed.columnNames, parsed.database, parsed.name, false)
 	if err != nil {
 		return nil, err
 	}
@@ -175,8 +276,8 @@ func RegenerateViewDefinition(
 
 	updatedViewData, err := patchPersistedViewMetadata(
 		persistedViewData, &generatedData.Stmt, generatedData.Dependencies,
-		lowerCaseTableNames, maxPersistedProtocolVersion(
-			viewData.RequiredProtocolVersion, generatedData.RequiredProtocolVersion))
+		parsed.ctx.lowerCaseTableNames, maxPersistedProtocolVersion(
+			parsed.data.RequiredProtocolVersion, generatedData.RequiredProtocolVersion))
 	if err != nil {
 		return nil, err
 	}

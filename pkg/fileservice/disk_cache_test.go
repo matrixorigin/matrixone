@@ -1144,10 +1144,10 @@ func TestDiskCacheReadUsesMemoryCacheReservation(t *testing.T) {
 	data := vec.Entries[0].CachedData.(*Bytes)
 	require.Same(t, memoryCache.allocator.owner, data.CacheDataOwner())
 	require.Zero(t, memoryCache.cache.Used())
-	require.Equal(t, int64(memoryCache.BackingSize(request)), memoryCache.reservedBytes)
+	require.Equal(t, int64(memoryCache.BackingSize(request)), memoryCache.reservedBytes.Load())
 	vec.Release()
 	memoryCache.Flush(ctx)
-	require.Zero(t, memoryCache.reservedBytes)
+	require.Zero(t, memoryCache.reservedBytes.Load())
 }
 
 func TestDiskCacheQuotaExceeded(t *testing.T) {

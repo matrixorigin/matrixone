@@ -77,7 +77,7 @@ func TestTime_StringAndString2(t *testing.T) {
 
 func TestMySQLTimeRange(t *testing.T) {
 	columnMax := TimeFromClock(false, 838, 59, 59, 0)
-	functionMax := TimeFromClock(false, 838, 59, 59, 999999)
+	functionMax := columnMax
 	require.Equal(t, columnMax, MySQLTimeMax)
 	require.Equal(t, functionMax, MySQLTimeFunctionMax)
 	require.True(t, IsMySQLTime(columnMax))
@@ -98,8 +98,8 @@ func TestMySQLTimeRange(t *testing.T) {
 	require.Equal(t, functionMax, ClampMySQLTimeFunctionForScale(functionMax+1, 6))
 	require.Equal(t, -functionMax, ClampMySQLTimeFunctionForScale(-functionMax-1, 6))
 	require.Equal(t, columnMax, MySQLTimeFunctionMaxForScale(0))
-	require.Equal(t, TimeFromClock(false, 838, 59, 59, 900000), MySQLTimeFunctionMaxForScale(1))
-	require.Equal(t, TimeFromClock(false, 838, 59, 59, 999000), MySQLTimeFunctionMaxForScale(3))
+	require.Equal(t, columnMax, MySQLTimeFunctionMaxForScale(1))
+	require.Equal(t, columnMax, MySQLTimeFunctionMaxForScale(3))
 	require.Equal(t, functionMax, MySQLTimeFunctionMaxForScale(6))
 }
 

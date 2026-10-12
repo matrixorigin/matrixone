@@ -67,7 +67,7 @@ func ChangeColumn(
 
 	// If renaming the column, check if any generated column depends on it
 	if newColName != oldColName {
-		if err := checkColumnWithGeneratedDependency(ctx, tableDef, oldColName); err != nil {
+		if err := renameFunctionalColumnDependencies(ctx, tableDef, oldColName, newColNameOrigin); err != nil {
 			return false, err
 		}
 		if err := checkColumnWithDefaultDependency(ctx, tableDef, oldColName); err != nil {
@@ -221,27 +221,27 @@ func buildColumnAndConstraint(
 			}
 			targetTableDef.Indexes = append(targetTableDef.Indexes, indexDef)
 		case *tree.AttributeDefault:
-			defaultValue, err := buildDefaultExprWithColumns(specNewColumn, colType, ctx.GetProcess(), defaultScope)
+			defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope)
 			if err != nil {
 				return nil, err
 			}
 			newCol.Default = defaultValue
 			hasDefaultValue = true
 		case *tree.AttributeNull:
-			defaultValue, err := buildDefaultExprWithColumns(specNewColumn, colType, ctx.GetProcess(), defaultScope)
+			defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope)
 			if err != nil {
 				return nil, err
 			}
 			newCol.Default = defaultValue
 			hasNullFlag = defaultValue.NullAbility
 		case *tree.AttributeOnUpdate:
-			onUpdateExpr, err := buildOnUpdate(specNewColumn, colType, ctx.GetProcess())
+			onUpdateExpr, err := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
 			newCol.OnUpdate = onUpdateExpr
 		case *tree.AttributeGeneratedAlways:
-			generatedCol, err := buildGeneratedExpr(specNewColumn, colType, targetTableDef.Cols, ctx.GetProcess())
+			generatedCol, err := buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, targetTableDef.Cols, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
@@ -273,7 +273,7 @@ func buildColumnAndConstraint(
 			return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
 		}
 		if !hasDefaultValue {
-			defaultValue, err := buildDefaultExprWithColumns(specNewColumn, colType, ctx.GetProcess(), defaultScope)
+			defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope)
 			if err != nil {
 				return nil, err
 			}
@@ -336,7 +336,10 @@ func buildColumnAndConstraint(
 }
 
 func checkIndexedColumnTypeChange(ctx context.Context, tableDef *plan.TableDef, oldCol, newCol *ColDef) error {
-	if oldCol == nil || newCol == nil || oldCol.Name == "" || oldCol.Typ.Id == newCol.Typ.Id {
+	if oldCol == nil || newCol == nil || oldCol.Name == "" ||
+		(oldCol.Typ.Id == newCol.Typ.Id &&
+			oldCol.Typ.Charset == newCol.Typ.Charset &&
+			oldCol.Typ.CollationVersion == newCol.Typ.CollationVersion) {
 		return nil
 	}
 

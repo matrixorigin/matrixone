@@ -15,11 +15,14 @@
 package clusteradmission
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,32 +35,71 @@ const (
 )
 
 func TestAdmissionRejectsImplicitReentrancyAndAllowsExplicitConcurrency(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "cluster.lock")
-	owner := newManager(path, time.Millisecond)
-	contender := newManager(path, time.Millisecond)
-
-	first, err := owner.acquire(context.Background(), Exclusive)
-	require.NoError(t, err)
-	_, err = owner.acquire(context.Background(), Exclusive)
-	require.ErrorContains(t, err, "another complete test cluster")
-	second, err := owner.acquire(context.Background(), AllowConcurrent)
-	require.NoError(t, err)
-
-	tryContender := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		defer cancel()
-		_, err := contender.acquire(ctx, Exclusive)
-		require.ErrorIs(t, err, context.DeadlineExceeded)
+	t.Setenv(ProcessPoolSizeEnv, "2")
+	for _, initial := range []struct {
+		name string
+		mode Mode
+	}{
+		{"exclusive", Exclusive},
+		{"pooled", AllowConcurrentProcesses},
+	} {
+		t.Run(initial.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "cluster.lock")
+			owner := newManager(path, time.Millisecond)
+			contender := newManager(path, time.Millisecond)
+			first, err := owner.acquire(t.Context(), initial.mode)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, first.Release()) })
+			for _, next := range []struct {
+				name   string
+				mode   Mode
+				borrow bool
+			}{
+				{"exclusive", Exclusive, false},
+				{"local", AllowConcurrent, true},
+				{"process", AllowConcurrentProcesses, false},
+				{"local-and-process", AllowConcurrent | AllowConcurrentProcesses, true},
+			} {
+				t.Run(next.name, func(t *testing.T) {
+					lease, err := owner.acquire(t.Context(), next.mode)
+					if !next.borrow {
+						require.ErrorContains(t, err, "another complete test cluster")
+						require.Nil(t, lease)
+						require.Equal(t, 1, owner.references)
+						return
+					}
+					require.NoError(t, err)
+					t.Cleanup(func() { require.NoError(t, lease.Release()) })
+					require.NoError(t, lease.Release())
+					require.Equal(t, 1, owner.references)
+				})
+			}
+			canceled, cancel := context.WithCancel(t.Context())
+			cancel()
+			_, err = owner.acquire(canceled, AllowConcurrent|AllowConcurrentProcesses)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Equal(t, 1, owner.references)
+			second, err := owner.acquire(t.Context(), AllowConcurrent)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, second.Release()) })
+			tryContender := func() {
+				ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+				defer cancel()
+				lease, err := contender.acquire(ctx, Exclusive)
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				require.Nil(t, lease)
+			}
+			tryContender()
+			require.NoError(t, first.Release())
+			tryContender()
+			require.NoError(t, second.Release())
+			next, err := contender.acquire(t.Context(), Exclusive)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, next.Release()) })
+			require.NoError(t, next.Release())
+			require.NoError(t, next.Release())
+		})
 	}
-	tryContender()
-	require.NoError(t, first.Release())
-	tryContender()
-	require.NoError(t, second.Release())
-
-	next, err := contender.acquire(context.Background(), Exclusive)
-	require.NoError(t, err)
-	require.NoError(t, next.Release())
-	require.NoError(t, next.Release())
 }
 
 func TestAcquireRejectsInvalidContexts(t *testing.T) {
@@ -102,6 +144,61 @@ func TestAdmissionIsExclusiveAcrossProcesses(t *testing.T) {
 	runAdmissionHelper(t, path, "acquired")
 }
 
+func TestAdmissionProcessPoolIsBoundedAndExcludesExclusive(t *testing.T) {
+	t.Setenv(ProcessPoolSizeEnv, "2")
+	path := filepath.Join(t.TempDir(), "cluster.lock")
+	firstManager := newManager(path, time.Millisecond)
+	secondManager := newManager(path, time.Millisecond)
+	thirdManager := newManager(path, time.Millisecond)
+
+	first, err := firstManager.acquire(context.Background(), AllowConcurrent|AllowConcurrentProcesses)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, first.Release()) })
+	second, err := secondManager.acquire(context.Background(), AllowConcurrentProcesses)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, second.Release()) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err = thirdManager.acquire(ctx, AllowConcurrentProcesses)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	exclusiveManager := newManager(path, time.Millisecond)
+	exclusiveCtx, exclusiveCancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer exclusiveCancel()
+	_, err = exclusiveManager.acquire(exclusiveCtx, Exclusive)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	borrowed, err := firstManager.acquire(t.Context(), AllowConcurrent|AllowConcurrentProcesses)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, borrowed.Release()) })
+	require.NoError(t, first.Release())
+	retainedCtx, retainedCancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer retainedCancel()
+	_, err = thirdManager.acquire(retainedCtx, AllowConcurrentProcesses)
+	require.ErrorIs(t, err, context.DeadlineExceeded, "borrower retains the first process slot")
+	require.NoError(t, borrowed.Release())
+	next, err := thirdManager.acquire(context.Background(), AllowConcurrentProcesses)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, next.Release()) })
+	require.NoError(t, next.Release())
+	require.NoError(t, second.Release())
+}
+
+func TestAdmissionProcessPoolWorksAcrossProcesses(t *testing.T) {
+	t.Setenv(ProcessPoolSizeEnv, "2")
+	path := filepath.Join(t.TempDir(), "cluster.lock")
+	owner := newManager(path, time.Millisecond)
+	lease, err := owner.acquire(context.Background(), AllowConcurrentProcesses)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, lease.Release()) })
+
+	// The subprocess must take the second slot rather than wait for the
+	// owner's shared gate. This exercises the same file-lock boundary used by
+	// two concurrent race-UT batch processes.
+	runAdmissionHelper(t, path, "pooled-acquired")
+}
+
 func TestAdmissionSubprocessHelper(t *testing.T) {
 	mode := os.Getenv(helperModeEnv)
 	if mode == "" {
@@ -110,12 +207,25 @@ func TestAdmissionSubprocessHelper(t *testing.T) {
 	manager := newManager(os.Getenv(helperPathEnv), time.Millisecond)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	lease, err := manager.acquire(ctx, Exclusive)
+	modeValue := Exclusive
+	if mode == "pooled-acquired" {
+		modeValue = AllowConcurrentProcesses
+	}
+	lease, err := manager.acquire(ctx, modeValue)
 
 	switch mode {
 	case "blocked":
 		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case "hold":
+		require.NoError(t, err)
+		fmt.Println("ready")
+		var buffer [1]byte
+		_, _ = os.Stdin.Read(buffer[:])
+		require.NoError(t, lease.Release())
 	case "acquired":
+		require.NoError(t, err)
+		require.NoError(t, lease.Release())
+	case "pooled-acquired":
 		require.NoError(t, err)
 		require.NoError(t, lease.Release())
 	default:
@@ -132,4 +242,73 @@ func runAdmissionHelper(t *testing.T, path, mode string) {
 	)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
+}
+
+func TestProcessDeathReleasesAdmission(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cluster.lock")
+	readyRead, readyWrite, err := os.Pipe()
+	require.NoError(t, err)
+	defer readyRead.Close()
+	defer readyWrite.Close()
+	inputRead, inputWrite, err := os.Pipe()
+	require.NoError(t, err)
+	defer inputRead.Close()
+	defer inputWrite.Close()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAdmissionSubprocessHelper$")
+	cmd.Env = append(os.Environ(), helperModeEnv+"=hold", helperPathEnv+"="+path)
+	cmd.Stdin, cmd.Stdout = inputRead, readyWrite
+	require.NoError(t, cmd.Start())
+	var stopped sync.Once
+	stop := func() { stopped.Do(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }) }
+	t.Cleanup(stop)
+	require.NoError(t, readyWrite.Close())
+	require.NoError(t, readyRead.SetReadDeadline(time.Now().Add(5*time.Second)))
+	message, err := bufio.NewReader(readyRead).ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "ready\n", message)
+	runAdmissionHelper(t, path, "blocked")
+	stop()
+	runAdmissionHelper(t, path, "acquired")
+}
+
+func TestAdmissionProcessPoolEnvironment(t *testing.T) {
+	for _, value := range []string{"", "0", "1", "invalid", "2"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv(ProcessPoolSizeEnv, value)
+			m := newManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+			lease, err := m.acquire(t.Context(), AllowConcurrentProcesses)
+			if value != "2" {
+				require.ErrorContains(t, err, ProcessPoolSizeEnv)
+				require.Nil(t, lease)
+				return
+			}
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, lease.Release()) })
+			require.NoError(t, lease.Release())
+			// An ordinary exclusive lease must work again after the pool releases.
+			next, err := m.acquire(t.Context(), Exclusive)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, next.Release()) })
+		})
+	}
+}
+
+func TestAdmissionProcessPoolBlockedByExclusive(t *testing.T) {
+	t.Setenv(ProcessPoolSizeEnv, "2")
+	path := filepath.Join(t.TempDir(), "cluster.lock")
+	owner := newManager(path, time.Millisecond)
+	lease, err := owner.acquire(t.Context(), Exclusive)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, lease.Release()) })
+	contender := newManager(path, time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	_, err = contender.acquire(ctx, AllowConcurrentProcesses)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, contender.lock)
+	require.Nil(t, contender.gate)
+	require.NoError(t, lease.Release())
+	next, err := contender.acquire(t.Context(), AllowConcurrentProcesses)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, next.Release()) })
 }

@@ -483,12 +483,41 @@ func readMetaWithTableID(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (dataRanges, tombstoneRanges []ckputil.TableRange, err error) {
-	var metaBatch *batch.Batch
-	var release func()
-	if metaBatch, release, err = readMetaBatch(ctx, location, mp, fs); err != nil {
+	tableIDs := containers.NewVectors(1)
+	_, release, _, err := ioutil.LoadColumnsData(
+		ctx, ckputil.MetaSeqnums[:1], ckputil.MetaTypes[:1],
+		fs, location, tableIDs, mp, 0,
+	)
+	if err != nil {
 		return
 	}
 	defer release()
+
+	// Select while the fixed-width ID column is pinned; do not duplicate the
+	// global checkpoint's varlen metadata for each subscribing table.
+	ids := vector.MustFixedColNoTypeCheck[uint64](&tableIDs[0])
+	start := vector.OrderedFindFirstIndexInSortedSlice(tableID, ids)
+	if start == -1 {
+		return nil, nil, nil
+	}
+	end := start + 1
+	for end < len(ids) && ids[end] == tableID {
+		end++
+	}
+	sels := make([]int64, end-start)
+	for i := range sels {
+		sels[i] = int64(start + i)
+	}
+
+	metaBatch := ckputil.NewMetaBatch()
+	defer metaBatch.Clean(mp)
+	if _, _, err = ioutil.LoadColumnsDataInto(
+		ctx, ckputil.MetaSeqnums, ckputil.MetaTypes, fs, location,
+		metaBatch.Vecs, sels, nil, mp, 0,
+	); err != nil {
+		return
+	}
+	metaBatch.SetRowCount(len(sels))
 	dataRanges = ckputil.ExportToTableRangesByFilter(metaBatch, tableID, ckputil.ObjectType_Data)
 	tombstoneRanges = ckputil.ExportToTableRangesByFilter(metaBatch, tableID, ckputil.ObjectType_Tombstone)
 	return
@@ -868,7 +897,7 @@ func getMetaInfo(
 	tombstoneInfo map[uint64]*tableinfo,
 	tombstone map[string]struct{},
 ) (res *ObjectInfoJson, err error) {
-	tableinfos := make([]*tableinfo, 0)
+	tableinfos := make([]*tableinfo, 0, len(files))
 	objectCount := uint64(0)
 	addCount := uint64(0)
 	deleteCount := uint64(0)
@@ -895,7 +924,7 @@ func getMetaInfo(
 			tableJsons = append(tableJsons, tablejson)
 		}
 	}
-	tableinfos2 := make([]*tableinfo, 0)
+	tableinfos2 := make([]*tableinfo, 0, len(tombstoneInfo))
 	objectCount2 := uint64(0)
 	addCount2 := uint64(0)
 	for _, count := range tombstoneInfo {

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -101,6 +102,12 @@ func NewMemPKFilter(
 	// The membership filter selects a separate key column for IVF/fulltext and
 	// remains useful even when the SQL predicate cannot produce a PK fast path.
 	filter.setFilterHint(tableDef, filterHint)
+	if tablePrimaryKeyUsesUnicodeCollation(tableDef) {
+		// The in-memory primary-key iterator also compares packed original bytes;
+		// do not publish a raw probe for a UCA text key. The independent
+		// membership hint above remains available for index/fulltext readers.
+		return filter, nil
+	}
 
 	if !basePKFilter.Valid || tableDef.Pkey == nil || packerPool == nil {
 		return
@@ -324,9 +331,12 @@ func (f *MemPKFilter) setFilterHint(tableDef *plan.TableDef, filterHint engine.F
 	if f.FilterHint.BF != nil && f.FilterHint.BF.Valid() {
 		f.HasBF = true
 		f.BFSeqNum = -1
-		// For IVF entries table, use __mo_index_pri_col for BF filtering.
+		// For IVF entries, origin_pk is the source key domain used to build this
+		// filter; the hidden composite PK must remain available only for ordinary
+		// PK pruning. Do not infer this from Pkey.Names: copied physical tables
+		// can expose only their hidden composite key there.
 		for _, col := range tableDef.Cols {
-			if col.Name == catalog.IndexTablePrimaryColName {
+			if strings.EqualFold(col.Name, catalog.IndexTablePrimaryColName) {
 				f.BFSeqNum = int16(col.Seqnum)
 				break
 			}

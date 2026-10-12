@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -49,6 +50,13 @@ var viewMetadataSynchronousRefreshBudget = 0
 
 const viewMetadataClosureWritePageSize = 16
 const viewMetadataRecoveryCallTimeout = 30 * time.Second
+
+func viewMetadataLifecycleWriterOptions() executor.Options {
+	return executor.Options{}.
+		WithAccountID(catalog.System_Account).
+		WithTxnMode(txn.TxnMode_Pessimistic).
+		WithTxnIsolation(txn.TxnIsolation_RC)
+}
 
 type viewMetadataRecoveryCommand struct {
 	WorkerID   string `json:"worker_id"`
@@ -84,18 +92,24 @@ func viewMetadataRequireRevalidationSQL() []string {
 }
 
 // ViewMetadataRequireRevalidationSQL returns the statements that atomically
-// fence a lifecycle-unaware mutation. Frontend catalog mutations execute these
-// statements in their existing transaction while this lifecycle layer remains
-// inactive, matching Compile.viewMetadataRefreshAvailable.
+// fence an explicit lifecycle-unaware mutation. Snapshot/restore pathways may
+// call these while View refresh is inactive; ordinary Compile DDL does not
+// maintain an incremental marker while View refresh is inactive.
 func ViewMetadataRequireRevalidationSQL() []string {
 	return viewMetadataRequireRevalidationSQL()
 }
 
 // RequireViewMetadataRevalidation durably records that lifecycle DDL may be
-// skipped while lifecycle activation is unavailable.
+// skipped while lifecycle activation is unavailable. The operation owner's
+// deadline covers lock acquisition and Commit; only unbounded callers receive
+// the default recovery timeout. Background recovery pages retain their own bound.
 func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQLExecutor) error {
-	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
-	defer cancel()
+	callCtx := ctx
+	if _, bounded := ctx.Deadline(); !bounded {
+		var cancel context.CancelFunc
+		callCtx, cancel = context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
+		defer cancel()
+	}
 	return sqlExecutor.ExecTxn(callCtx, func(txn executor.TxnExecutor) error {
 		statements := viewMetadataRequireRevalidationSQL()
 		result, err := txn.Exec(statements[0], executor.StatementOption{})
@@ -129,7 +143,7 @@ func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.S
 		}
 		_, _, err = seedViewMetadataRevalidationPage(txn)
 		return err
-	}, executor.Options{}.WithAccountID(catalog.System_Account))
+	}, viewMetadataLifecycleWriterOptions())
 }
 
 const viewMetadataRevalidationSeedComplete = uint32(^uint32(0))
@@ -299,7 +313,7 @@ func StartViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQL
 		}
 		result.Close()
 		return nil
-	}, executor.Options{}.WithAccountID(catalog.System_Account))
+	}, viewMetadataLifecycleWriterOptions())
 }
 
 // RunViewMetadataRecovery performs one bounded local-CN recovery tick. It is
@@ -344,7 +358,7 @@ func RunViewMetadataRecovery(
 		result, err := sqlExecutor.Exec(callCtx, fmt.Sprintf(
 			"select mo_ctl('CN','RefreshViewMetadata','%s')",
 			sqlquote.EscapeString(string(command))),
-			executor.Options{}.WithAccountID(catalog.System_Account))
+			viewMetadataLifecycleWriterOptions())
 		if err != nil {
 			failure := classifyViewRefreshFailure(err)
 			if !discover && failure.code == viewRefreshFailureTxnConflict {
@@ -530,6 +544,16 @@ func beginViewMetadataRevalidation(proc *process.Process) (int, error) {
 func lockViewMetadataLifecycleGate(proc *process.Process) error {
 	if !viewMetadataRefreshEnabled(proc.GetService()) {
 		return nil
+	}
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil {
+		return moerr.NewInternalError(proc.Ctx,
+			"view metadata lifecycle writer requires a pessimistic RC transaction")
+	}
+	txnMeta := txnOp.Txn()
+	if !txnMeta.IsPessimistic() || !txnMeta.IsRCIsolation() {
+		return moerr.NewInternalError(proc.Ctx,
+			"view metadata lifecycle writer requires a pessimistic RC transaction")
 	}
 	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
@@ -1339,11 +1363,7 @@ func (c *Compile) enqueueViewsAfterDatabaseRemoval(
 		(c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx)) {
 		return nil
 	}
-	available, err := c.viewMetadataRefreshAvailable()
-	if err != nil {
-		return err
-	}
-	if !available {
+	if !viewMetadataRefreshEnabled(c.proc.GetService()) {
 		return nil
 	}
 	return c.enqueueDependentViewClosure(fmt.Sprintf(

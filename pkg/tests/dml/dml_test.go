@@ -203,7 +203,7 @@ func TestForcedMultiCNDeleteAndInsertIgnore(t *testing.T) {
 			remaining, execErr := internalExec.Exec(ctx,
 				"select a from "+deleteTable+" order by a", deleteOpts)
 			require.NoError(t, execErr)
-			var remainingKeys []string
+			remainingKeys := make([]string, 0, len(remaining.Batches))
 			for _, batch := range remaining.Batches {
 				remainingKeys = append(remainingKeys, executor.GetStringRows(batch.Vecs[0])...)
 			}
@@ -318,63 +318,77 @@ func runDataBranchUpdateApplySpecialColumns(t *testing.T, ctx context.Context, d
 	t.Helper()
 
 	t.Run("generated_primary_key", func(t *testing.T) {
-		execSQLDB(t, ctx, db, "create table update_generated_base (a int, b int generated always as (a * 2) stored, payload int, primary key (b))")
-		execSQLDB(t, ctx, db, "insert into update_generated_base(a, payload) values (1, 10)")
-		execSQLDB(t, ctx, db, "data branch create table update_generated_branch from update_generated_base")
-		execSQLDB(t, ctx, db, "update update_generated_branch set payload = 11 where b = 2")
-		execSQLDB(t, ctx, db, "data branch merge update_generated_branch into update_generated_base when conflict accept")
-		require.Equal(t, [][]string{{"1", "2", "11"}}, queryStringRows(t, ctx, db, "select a, b, payload from update_generated_base"))
+		t.Run("payload", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_generated_base (a int, b int generated always as (a * 2) stored, payload int, primary key (b))")
+			execSQLDB(t, ctx, db, "insert into update_generated_base(a, payload) values (1, 10)")
+			execSQLDB(t, ctx, db, "data branch create table update_generated_branch from update_generated_base")
+			execSQLDB(t, ctx, db, "data branch create table update_generated_pick_src from update_generated_base")
+			execSQLDB(t, ctx, db, "data branch create table update_generated_pick_dst from update_generated_base")
 
-		execSQLDB(t, ctx, db, "create table update_generated_pick_base (a int, b int generated always as (a * 2) stored, payload int, primary key (b))")
-		execSQLDB(t, ctx, db, "insert into update_generated_pick_base(a, payload) values (1, 10)")
-		execSQLDB(t, ctx, db, "data branch create table update_generated_pick_src from update_generated_pick_base")
-		execSQLDB(t, ctx, db, "data branch create table update_generated_pick_dst from update_generated_pick_base")
-		execSQLDB(t, ctx, db, "update update_generated_pick_src set payload = 11 where b = 2")
-		execSQLDB(t, ctx, db, "data branch pick update_generated_pick_src into update_generated_pick_dst keys(2) when conflict accept")
-		require.Equal(t, [][]string{{"1", "2", "11"}}, queryStringRows(t, ctx, db, "select a, b, payload from update_generated_pick_dst"))
+			t.Run("merge", func(t *testing.T) {
+				execSQLDB(t, ctx, db, "update update_generated_branch set payload = 11 where b = 2")
+				execSQLDB(t, ctx, db, "data branch merge update_generated_branch into update_generated_base when conflict accept")
+				require.Equal(t, [][]string{{"1", "2", "11"}}, queryStringRows(t, ctx, db, "select a, b, payload from update_generated_base"))
+			})
+			t.Run("pick", func(t *testing.T) {
+				execSQLDB(t, ctx, db, "update update_generated_pick_src set payload = 11 where b = 2")
+				execSQLDB(t, ctx, db, "data branch pick update_generated_pick_src into update_generated_pick_dst keys(2) when conflict accept")
+				require.Equal(t, [][]string{{"1", "2", "11"}}, queryStringRows(t, ctx, db, "select a, b, payload from update_generated_pick_dst"))
+			})
+		})
 
-		execSQLDB(t, ctx, db, "create table update_generated_special_base (a int, b int generated always as (a * 2) stored, v set('a','b','c'), primary key (b))")
-		execSQLDB(t, ctx, db, "insert into update_generated_special_base(a, v) values (1, 'a')")
-		execSQLDB(t, ctx, db, "data branch create table update_generated_special_branch from update_generated_special_base")
-		execSQLDB(t, ctx, db, "update update_generated_special_branch set v = 'b,c' where b = 2")
-		execSQLDB(t, ctx, db, "data branch merge update_generated_special_branch into update_generated_special_base when conflict accept")
-		require.Equal(t, [][]string{{"1", "2", "b,c"}}, queryStringRows(t, ctx, db, "select a, b, cast(v as char) from update_generated_special_base"))
+		t.Run("set", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_generated_special_base (a int, b int generated always as (a * 2) stored, v set('a','b','c'), primary key (b))")
+			execSQLDB(t, ctx, db, "insert into update_generated_special_base(a, v) values (1, 'a')")
+			execSQLDB(t, ctx, db, "data branch create table update_generated_special_branch from update_generated_special_base")
+			execSQLDB(t, ctx, db, "data branch create table update_generated_special_pick_src from update_generated_special_base")
+			execSQLDB(t, ctx, db, "data branch create table update_generated_special_pick_dst from update_generated_special_base")
 
-		execSQLDB(t, ctx, db, "create table update_generated_special_pick_base (a int, b int generated always as (a * 2) stored, v set('a','b','c'), primary key (b))")
-		execSQLDB(t, ctx, db, "insert into update_generated_special_pick_base(a, v) values (1, 'a')")
-		execSQLDB(t, ctx, db, "data branch create table update_generated_special_pick_src from update_generated_special_pick_base")
-		execSQLDB(t, ctx, db, "data branch create table update_generated_special_pick_dst from update_generated_special_pick_base")
-		execSQLDB(t, ctx, db, "update update_generated_special_pick_src set v = 'b,c' where b = 2")
-		execSQLDB(t, ctx, db, "data branch pick update_generated_special_pick_src into update_generated_special_pick_dst keys(2) when conflict accept")
-		require.Equal(t, [][]string{{"1", "2", "b,c"}}, queryStringRows(t, ctx, db, "select a, b, cast(v as char) from update_generated_special_pick_dst"))
+			t.Run("merge", func(t *testing.T) {
+				execSQLDB(t, ctx, db, "update update_generated_special_branch set v = 'b,c' where b = 2")
+				execSQLDB(t, ctx, db, "data branch merge update_generated_special_branch into update_generated_special_base when conflict accept")
+				require.Equal(t, [][]string{{"1", "2", "b,c"}}, queryStringRows(t, ctx, db, "select a, b, cast(v as char) from update_generated_special_base"))
+			})
+			t.Run("pick", func(t *testing.T) {
+				execSQLDB(t, ctx, db, "update update_generated_special_pick_src set v = 'b,c' where b = 2")
+				execSQLDB(t, ctx, db, "data branch pick update_generated_special_pick_src into update_generated_special_pick_dst keys(2) when conflict accept")
+				require.Equal(t, [][]string{{"1", "2", "b,c"}}, queryStringRows(t, ctx, db, "select a, b, cast(v as char) from update_generated_special_pick_dst"))
+			})
+		})
 	})
 
 	t.Run("set", func(t *testing.T) {
-		execSQLDB(t, ctx, db, "create table update_set_base (id int primary key, v set('a','b','c'))")
-		execSQLDB(t, ctx, db, "insert into update_set_base values (1, 'a')")
-		execSQLDB(t, ctx, db, "data branch create table update_set_branch from update_set_base")
-		execSQLDB(t, ctx, db, "update update_set_branch set v = 'b,c' where id = 1")
-		execSQLDB(t, ctx, db, "data branch merge update_set_branch into update_set_base when conflict accept")
-		require.Equal(t, [][]string{{"1", "b,c"}}, queryStringRows(t, ctx, db, "select id, cast(v as char) from update_set_base"))
+		t.Run("ordinary_merge", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_set_base (id int primary key, v set('a','b','c'))")
+			execSQLDB(t, ctx, db, "insert into update_set_base values (1, 'a')")
+			execSQLDB(t, ctx, db, "data branch create table update_set_branch from update_set_base")
+			execSQLDB(t, ctx, db, "update update_set_branch set v = 'b,c' where id = 1")
+			execSQLDB(t, ctx, db, "data branch merge update_set_branch into update_set_base when conflict accept")
+			require.Equal(t, [][]string{{"1", "b,c"}}, queryStringRows(t, ctx, db, "select id, cast(v as char) from update_set_base"))
+		})
 
-		execSQLDB(t, ctx, db, "create table update_set_fk_merge_base (id int primary key, v set('a','b','c'))")
-		execSQLDB(t, ctx, db, "create table update_set_fk_merge_child (id int primary key, parent_id int, constraint fk_set_merge foreign key (parent_id) references update_set_fk_merge_base(id))")
-		execSQLDB(t, ctx, db, "insert into update_set_fk_merge_base values (1, 'a')")
-		execSQLDB(t, ctx, db, "insert into update_set_fk_merge_child values (1, 1)")
-		execSQLDB(t, ctx, db, "data branch create table update_set_fk_merge_branch from update_set_fk_merge_base")
-		execSQLDB(t, ctx, db, "update update_set_fk_merge_branch set v = 'b,c' where id = 1")
-		execSQLDB(t, ctx, db, "data branch merge update_set_fk_merge_branch into update_set_fk_merge_base when conflict accept")
-		require.Equal(t, [][]string{{"1", "b,c", "1"}}, queryStringRows(t, ctx, db, "select p.id, cast(p.v as char), c.parent_id from update_set_fk_merge_base p join update_set_fk_merge_child c on p.id = c.parent_id"))
+		t.Run("foreign_key_merge", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_set_fk_merge_base (id int primary key, v set('a','b','c'))")
+			execSQLDB(t, ctx, db, "create table update_set_fk_merge_child (id int primary key, parent_id int, constraint fk_set_merge foreign key (parent_id) references update_set_fk_merge_base(id))")
+			execSQLDB(t, ctx, db, "insert into update_set_fk_merge_base values (1, 'a')")
+			execSQLDB(t, ctx, db, "insert into update_set_fk_merge_child values (1, 1)")
+			execSQLDB(t, ctx, db, "data branch create table update_set_fk_merge_branch from update_set_fk_merge_base")
+			execSQLDB(t, ctx, db, "update update_set_fk_merge_branch set v = 'b,c' where id = 1")
+			execSQLDB(t, ctx, db, "data branch merge update_set_fk_merge_branch into update_set_fk_merge_base when conflict accept")
+			require.Equal(t, [][]string{{"1", "b,c", "1"}}, queryStringRows(t, ctx, db, "select p.id, cast(p.v as char), c.parent_id from update_set_fk_merge_base p join update_set_fk_merge_child c on p.id = c.parent_id"))
+		})
 
-		execSQLDB(t, ctx, db, "create table update_set_fk_pick_base (id int primary key, v set('a','b','c'))")
-		execSQLDB(t, ctx, db, "create table update_set_fk_pick_child (id int primary key, parent_id int, constraint fk_set_pick foreign key (parent_id) references update_set_fk_pick_base(id))")
-		execSQLDB(t, ctx, db, "insert into update_set_fk_pick_base values (1, 'a')")
-		execSQLDB(t, ctx, db, "insert into update_set_fk_pick_child values (1, 1)")
-		execSQLDB(t, ctx, db, "data branch create table update_set_fk_pick_src from update_set_fk_pick_base")
-		execSQLDB(t, ctx, db, "update update_set_fk_pick_src set v = 'b,c' where id = 1")
-		execSQLDB(t, ctx, db, "update update_set_fk_pick_base set v = 'c' where id = 1")
-		execSQLDB(t, ctx, db, "data branch pick update_set_fk_pick_src into update_set_fk_pick_base keys(1) when conflict accept")
-		require.Equal(t, [][]string{{"1", "b,c", "1"}}, queryStringRows(t, ctx, db, "select p.id, cast(p.v as char), c.parent_id from update_set_fk_pick_base p join update_set_fk_pick_child c on p.id = c.parent_id"))
+		t.Run("foreign_key_pick", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_set_fk_pick_base (id int primary key, v set('a','b','c'))")
+			execSQLDB(t, ctx, db, "create table update_set_fk_pick_child (id int primary key, parent_id int, constraint fk_set_pick foreign key (parent_id) references update_set_fk_pick_base(id))")
+			execSQLDB(t, ctx, db, "insert into update_set_fk_pick_base values (1, 'a')")
+			execSQLDB(t, ctx, db, "insert into update_set_fk_pick_child values (1, 1)")
+			execSQLDB(t, ctx, db, "data branch create table update_set_fk_pick_src from update_set_fk_pick_base")
+			execSQLDB(t, ctx, db, "update update_set_fk_pick_src set v = 'b,c' where id = 1")
+			execSQLDB(t, ctx, db, "update update_set_fk_pick_base set v = 'c' where id = 1")
+			execSQLDB(t, ctx, db, "data branch pick update_set_fk_pick_src into update_set_fk_pick_base keys(1) when conflict accept")
+			require.Equal(t, [][]string{{"1", "b,c", "1"}}, queryStringRows(t, ctx, db, "select p.id, cast(p.v as char), c.parent_id from update_set_fk_pick_base p join update_set_fk_pick_child c on p.id = c.parent_id"))
+		})
 	})
 
 	t.Run("geometry32", func(t *testing.T) {
@@ -387,94 +401,110 @@ func runDataBranchUpdateApplySpecialColumns(t *testing.T, ctx context.Context, d
 	})
 
 	t.Run("indexed_enum", func(t *testing.T) {
-		execSQLDB(t, ctx, db, "create table update_enum_unique_merge_base (id int primary key, status enum('new','paid','shipped'), unique key uk_status(status))")
-		execSQLDB(t, ctx, db, "insert into update_enum_unique_merge_base values (1, 'new'), (2, 'paid')")
-		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_merge_branch from update_enum_unique_merge_base")
-		execSQLDB(t, ctx, db, "update update_enum_unique_merge_branch set status = 'shipped' where id = 1")
-		execSQLDB(t, ctx, db, "data branch merge update_enum_unique_merge_branch into update_enum_unique_merge_base when conflict accept")
-		require.Equal(t, [][]string{{"1", "shipped"}, {"2", "paid"}}, queryStringRows(t, ctx, db, "select id, cast(status as char) from update_enum_unique_merge_base order by id"))
+		t.Run("unique", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_enum_unique_merge_base (id int primary key, status enum('new','paid','shipped'), unique key uk_status(status))")
+			execSQLDB(t, ctx, db, "insert into update_enum_unique_merge_base values (1, 'new'), (2, 'paid')")
+			execSQLDB(t, ctx, db, "data branch create table update_enum_unique_merge_branch from update_enum_unique_merge_base")
+			execSQLDB(t, ctx, db, "data branch create table update_enum_unique_pick_src from update_enum_unique_merge_base")
+			execSQLDB(t, ctx, db, "data branch create table update_enum_unique_pick_dst from update_enum_unique_merge_base")
 
-		execSQLDB(t, ctx, db, "create table update_enum_unique_payload_base (id int primary key, payload varchar(32), status enum('new','paid'), unique key uk_status(status))")
-		execSQLDB(t, ctx, db, "insert into update_enum_unique_payload_base values (1, 'one', 'new'), (2, 'two', 'paid')")
-		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_payload_branch from update_enum_unique_payload_base")
-		execSQLDB(t, ctx, db, "update update_enum_unique_payload_branch set payload = 'branch-one' where id = 1")
-		execSQLDB(t, ctx, db, "data branch merge update_enum_unique_payload_branch into update_enum_unique_payload_base when conflict accept")
-		require.Equal(t, [][]string{{"1", "branch-one", "new"}, {"2", "two", "paid"}}, queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_enum_unique_payload_base order by id"))
+			t.Run("merge", func(t *testing.T) {
+				execSQLDB(t, ctx, db, "update update_enum_unique_merge_branch set status = 'shipped' where id = 1")
+				execSQLDB(t, ctx, db, "data branch merge update_enum_unique_merge_branch into update_enum_unique_merge_base when conflict accept")
+				require.Equal(t, [][]string{{"1", "shipped"}, {"2", "paid"}}, queryStringRows(t, ctx, db, "select id, cast(status as char) from update_enum_unique_merge_base order by id"))
+			})
+			t.Run("pick", func(t *testing.T) {
+				execSQLDB(t, ctx, db, "update update_enum_unique_pick_src set status = 'shipped' where id = 1")
+				execSQLDB(t, ctx, db, "data branch pick update_enum_unique_pick_src into update_enum_unique_pick_dst keys(1) when conflict accept")
+				require.Equal(t, [][]string{{"1", "shipped"}, {"2", "paid"}}, queryStringRows(t, ctx, db, "select id, cast(status as char) from update_enum_unique_pick_dst order by id"))
+			})
+		})
 
-		execSQLDB(t, ctx, db, "create table update_enum_unique_merge_duplicate_base (id int primary key, status enum('new','paid','shipped'), unique key uk_status(status))")
-		execSQLDB(t, ctx, db, "insert into update_enum_unique_merge_duplicate_base values (1, 'new'), (2, 'paid')")
-		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_merge_duplicate_branch from update_enum_unique_merge_duplicate_base")
-		execSQLDB(t, ctx, db, "update update_enum_unique_merge_duplicate_branch set status = 'shipped' where id = 1")
-		execSQLDB(t, ctx, db, "update update_enum_unique_merge_duplicate_base set status = 'shipped' where id = 2")
-		_, err := db.ExecContext(ctx, "data branch merge update_enum_unique_merge_duplicate_branch into update_enum_unique_merge_duplicate_base when conflict accept")
-		require.Error(t, err)
-		require.Equal(t, [][]string{{"1", "new"}, {"2", "shipped"}}, queryStringRows(t, ctx, db, "select id, cast(status as char) from update_enum_unique_merge_duplicate_base order by id"))
+		t.Run("payload", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_enum_unique_payload_base (id int primary key, payload varchar(32), status enum('new','paid'), unique key uk_status(status))")
+			execSQLDB(t, ctx, db, "insert into update_enum_unique_payload_base values (1, 'one', 'new'), (2, 'two', 'paid')")
+			execSQLDB(t, ctx, db, "data branch create table update_enum_unique_payload_branch from update_enum_unique_payload_base")
+			t.Run("merge", func(t *testing.T) {
+				execSQLDB(t, ctx, db, "update update_enum_unique_payload_branch set payload = 'branch-one' where id = 1")
+				execSQLDB(t, ctx, db, "data branch merge update_enum_unique_payload_branch into update_enum_unique_payload_base when conflict accept")
+				require.Equal(t, [][]string{{"1", "branch-one", "new"}, {"2", "two", "paid"}}, queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_enum_unique_payload_base order by id"))
+			})
+		})
 
-		execSQLDB(t, ctx, db, "create table update_enum_unique_pick_base (id int primary key, status enum('new','paid','shipped'), unique key uk_status(status))")
-		execSQLDB(t, ctx, db, "insert into update_enum_unique_pick_base values (1, 'new'), (2, 'paid')")
-		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_pick_src from update_enum_unique_pick_base")
-		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_pick_dst from update_enum_unique_pick_base")
-		execSQLDB(t, ctx, db, "update update_enum_unique_pick_src set status = 'shipped' where id = 1")
-		execSQLDB(t, ctx, db, "data branch pick update_enum_unique_pick_src into update_enum_unique_pick_dst keys(1) when conflict accept")
-		require.Equal(t, [][]string{{"1", "shipped"}, {"2", "paid"}}, queryStringRows(t, ctx, db, "select id, cast(status as char) from update_enum_unique_pick_dst order by id"))
+		t.Run("duplicate_merge", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_enum_unique_merge_duplicate_base (id int primary key, status enum('new','paid','shipped'), unique key uk_status(status))")
+			execSQLDB(t, ctx, db, "insert into update_enum_unique_merge_duplicate_base values (1, 'new'), (2, 'paid')")
+			execSQLDB(t, ctx, db, "data branch create table update_enum_unique_merge_duplicate_branch from update_enum_unique_merge_duplicate_base")
+			execSQLDB(t, ctx, db, "update update_enum_unique_merge_duplicate_branch set status = 'shipped' where id = 1")
+			execSQLDB(t, ctx, db, "update update_enum_unique_merge_duplicate_base set status = 'shipped' where id = 2")
+			_, err := db.ExecContext(ctx, "data branch merge update_enum_unique_merge_duplicate_branch into update_enum_unique_merge_duplicate_base when conflict accept")
+			require.Error(t, err)
+			require.Equal(t, [][]string{{"1", "new"}, {"2", "shipped"}}, queryStringRows(t, ctx, db, "select id, cast(status as char) from update_enum_unique_merge_duplicate_base order by id"))
+		})
 
-		execSQLDB(t, ctx, db, "create table update_enum_unique_pick_duplicate_base (id int primary key, status enum('new','paid','shipped'), unique key uk_status(status))")
-		execSQLDB(t, ctx, db, "insert into update_enum_unique_pick_duplicate_base values (1, 'new'), (2, 'paid')")
-		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_pick_duplicate_src from update_enum_unique_pick_duplicate_base")
-		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_pick_duplicate_dst from update_enum_unique_pick_duplicate_base")
-		execSQLDB(t, ctx, db, "update update_enum_unique_pick_duplicate_src set status = 'shipped' where id = 1")
-		execSQLDB(t, ctx, db, "update update_enum_unique_pick_duplicate_dst set status = 'shipped' where id = 2")
-		_, err = db.ExecContext(ctx, "data branch pick update_enum_unique_pick_duplicate_src into update_enum_unique_pick_duplicate_dst keys(1) when conflict accept")
-		require.Error(t, err)
-		require.Equal(t, [][]string{{"1", "new"}, {"2", "shipped"}}, queryStringRows(t, ctx, db, "select id, cast(status as char) from update_enum_unique_pick_duplicate_dst order by id"))
+		t.Run("duplicate_pick", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_enum_unique_pick_duplicate_base (id int primary key, status enum('new','paid','shipped'), unique key uk_status(status))")
+			execSQLDB(t, ctx, db, "insert into update_enum_unique_pick_duplicate_base values (1, 'new'), (2, 'paid')")
+			execSQLDB(t, ctx, db, "data branch create table update_enum_unique_pick_duplicate_src from update_enum_unique_pick_duplicate_base")
+			execSQLDB(t, ctx, db, "data branch create table update_enum_unique_pick_duplicate_dst from update_enum_unique_pick_duplicate_base")
+			execSQLDB(t, ctx, db, "update update_enum_unique_pick_duplicate_src set status = 'shipped' where id = 1")
+			execSQLDB(t, ctx, db, "update update_enum_unique_pick_duplicate_dst set status = 'shipped' where id = 2")
+			_, err := db.ExecContext(ctx, "data branch pick update_enum_unique_pick_duplicate_src into update_enum_unique_pick_duplicate_dst keys(1) when conflict accept")
+			require.Error(t, err)
+			require.Equal(t, [][]string{{"1", "new"}, {"2", "shipped"}}, queryStringRows(t, ctx, db, "select id, cast(status as char) from update_enum_unique_pick_duplicate_dst order by id"))
+		})
 	})
 
 	t.Run("indexed_enum_conflict_accept", func(t *testing.T) {
 		execSQLDB(t, ctx, db, "create table update_enum_unique_conflict_merge_base (id int primary key, payload varchar(32), status enum('new','paid','shipped'), unique key uk_status(status))")
 		execSQLDB(t, ctx, db, "insert into update_enum_unique_conflict_merge_base values (1, 'base-one', 'new'), (2, 'two', 'paid')")
 		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_conflict_merge_src from update_enum_unique_conflict_merge_base")
-		execSQLDB(t, ctx, db, "update update_enum_unique_conflict_merge_src set payload = 'source-one' where id = 1")
-		execSQLDB(t, ctx, db, "update update_enum_unique_conflict_merge_base set status = 'shipped' where id = 1")
-		execSQLDB(t, ctx, db, "data branch merge update_enum_unique_conflict_merge_src into update_enum_unique_conflict_merge_base when conflict accept")
-		require.Equal(t,
-			[][]string{{"1", "source-one", "new"}, {"2", "two", "paid"}},
-			queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_enum_unique_conflict_merge_base order by id"),
-		)
+		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_conflict_pick_src from update_enum_unique_conflict_merge_base")
+		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_conflict_pick_dst from update_enum_unique_conflict_merge_base")
 
-		execSQLDB(t, ctx, db, "create table update_enum_unique_conflict_pick_base (id int primary key, payload varchar(32), status enum('new','paid','shipped'), unique key uk_status(status))")
-		execSQLDB(t, ctx, db, "insert into update_enum_unique_conflict_pick_base values (1, 'base-one', 'new'), (2, 'two', 'paid')")
-		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_conflict_pick_src from update_enum_unique_conflict_pick_base")
-		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_conflict_pick_dst from update_enum_unique_conflict_pick_base")
-		execSQLDB(t, ctx, db, "update update_enum_unique_conflict_pick_src set payload = 'source-one' where id = 1")
-		execSQLDB(t, ctx, db, "update update_enum_unique_conflict_pick_dst set status = 'shipped' where id = 1")
-		execSQLDB(t, ctx, db, "data branch pick update_enum_unique_conflict_pick_src into update_enum_unique_conflict_pick_dst keys(1) when conflict accept")
-		require.Equal(t,
-			[][]string{{"1", "source-one", "new"}, {"2", "two", "paid"}},
-			queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_enum_unique_conflict_pick_dst order by id"),
-		)
+		t.Run("merge", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "update update_enum_unique_conflict_merge_src set payload = 'source-one' where id = 1")
+			execSQLDB(t, ctx, db, "update update_enum_unique_conflict_merge_base set status = 'shipped' where id = 1")
+			execSQLDB(t, ctx, db, "data branch merge update_enum_unique_conflict_merge_src into update_enum_unique_conflict_merge_base when conflict accept")
+			require.Equal(t,
+				[][]string{{"1", "source-one", "new"}, {"2", "two", "paid"}},
+				queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_enum_unique_conflict_merge_base order by id"),
+			)
+		})
+		t.Run("pick", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "update update_enum_unique_conflict_pick_src set payload = 'source-one' where id = 1")
+			execSQLDB(t, ctx, db, "update update_enum_unique_conflict_pick_dst set status = 'shipped' where id = 1")
+			execSQLDB(t, ctx, db, "data branch pick update_enum_unique_conflict_pick_src into update_enum_unique_conflict_pick_dst keys(1) when conflict accept")
+			require.Equal(t,
+				[][]string{{"1", "source-one", "new"}, {"2", "two", "paid"}},
+				queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_enum_unique_conflict_pick_dst order by id"),
+			)
+		})
 	})
 
 	t.Run("mixed_schema_ordinary_assignment", func(t *testing.T) {
 		execSQLDB(t, ctx, db, "create table update_mixed_merge_base (id int primary key, payload varchar(32), status enum('new','ready'))")
 		execSQLDB(t, ctx, db, "insert into update_mixed_merge_base values (1, 'one', 'new'), (2, 'two', 'ready'), (3, 'three', 'new')")
 		execSQLDB(t, ctx, db, "data branch create table update_mixed_merge_branch from update_mixed_merge_base")
-		execSQLDB(t, ctx, db, "update update_mixed_merge_branch set payload = concat('branch-', payload) where id in (1, 2, 3)")
-		execSQLDB(t, ctx, db, "data branch merge update_mixed_merge_branch into update_mixed_merge_base when conflict accept")
-		require.Equal(t,
-			[][]string{{"1", "branch-one", "new"}, {"2", "branch-two", "ready"}, {"3", "branch-three", "new"}},
-			queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_mixed_merge_base order by id"),
-		)
+		execSQLDB(t, ctx, db, "data branch create table update_mixed_pick_src from update_mixed_merge_base")
+		execSQLDB(t, ctx, db, "data branch create table update_mixed_pick_dst from update_mixed_merge_base")
 
-		execSQLDB(t, ctx, db, "create table update_mixed_pick_base (id int primary key, payload varchar(32), status enum('new','ready'))")
-		execSQLDB(t, ctx, db, "insert into update_mixed_pick_base values (1, 'one', 'new'), (2, 'two', 'ready'), (3, 'three', 'new')")
-		execSQLDB(t, ctx, db, "data branch create table update_mixed_pick_src from update_mixed_pick_base")
-		execSQLDB(t, ctx, db, "data branch create table update_mixed_pick_dst from update_mixed_pick_base")
-		execSQLDB(t, ctx, db, "update update_mixed_pick_src set payload = concat('branch-', payload) where id in (1, 2, 3)")
-		execSQLDB(t, ctx, db, "data branch pick update_mixed_pick_src into update_mixed_pick_dst keys(1, 2, 3) when conflict accept")
-		require.Equal(t,
-			[][]string{{"1", "branch-one", "new"}, {"2", "branch-two", "ready"}, {"3", "branch-three", "new"}},
-			queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_mixed_pick_dst order by id"),
-		)
+		t.Run("merge", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "update update_mixed_merge_branch set payload = concat('branch-', payload) where id in (1, 2, 3)")
+			execSQLDB(t, ctx, db, "data branch merge update_mixed_merge_branch into update_mixed_merge_base when conflict accept")
+			require.Equal(t,
+				[][]string{{"1", "branch-one", "new"}, {"2", "branch-two", "ready"}, {"3", "branch-three", "new"}},
+				queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_mixed_merge_base order by id"),
+			)
+		})
+		t.Run("pick", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "update update_mixed_pick_src set payload = concat('branch-', payload) where id in (1, 2, 3)")
+			execSQLDB(t, ctx, db, "data branch pick update_mixed_pick_src into update_mixed_pick_dst keys(1, 2, 3) when conflict accept")
+			require.Equal(t,
+				[][]string{{"1", "branch-one", "new"}, {"2", "branch-two", "ready"}, {"3", "branch-three", "new"}},
+				queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_mixed_pick_dst order by id"),
+			)
+		})
 	})
 }
 
@@ -536,8 +566,10 @@ func runCloneCommitFailureRollbackKeepsSourceFiles(t *testing.T, parentCtx conte
 	require.NoError(t, err)
 	defer removeForceFlush()
 
-	execSQLDB(t, ctx, db, "insert into src select result, result * 10, concat('seed_', cast(result as char)) from generate_series(1,5000) g")
-	require.Equal(t, 5000, queryRowCount(t, ctx, db, "select count(*) from src"))
+	// ForceFlush bypasses the volume threshold; two rows in one object suffice
+	// to detect source loss or corruption after clone rollback.
+	execSQLDB(t, ctx, db, "insert into src values (1,10,'seed_1'),(100,1000,'seed_100')")
+	require.Equal(t, 2, queryRowCount(t, ctx, db, "select count(*) from src"))
 
 	removeCommitFailure, err := objectio.SimpleInject(objectio.FJ_CNCommitAfterWorkspaceDumpFailed)
 	require.NoError(t, err)
@@ -545,12 +577,7 @@ func runCloneCommitFailureRollbackKeepsSourceFiles(t *testing.T, parentCtx conte
 
 	conn, err := db.Conn(ctx)
 	require.NoError(t, err)
-	connClosed := false
-	defer func() {
-		if !connClosed {
-			_ = conn.Close()
-		}
-	}()
+	defer conn.Close()
 
 	_, err = conn.ExecContext(ctx, fmt.Sprintf("use `%s`", dbName))
 	require.NoError(t, err)
@@ -563,15 +590,14 @@ func runCloneCommitFailureRollbackKeepsSourceFiles(t *testing.T, parentCtx conte
 	_, err = conn.ExecContext(ctx, "commit")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "injected commit failure after workspace dump")
-	_ = conn.Close()
-	connClosed = true
+	require.NoError(t, conn.Close())
 
 	removeCommitFailure()
 
 	require.Equal(t, 0, queryRowCount(t, ctx, db,
 		fmt.Sprintf("select count(*) from information_schema.tables where table_schema = '%s' and table_name = 'clone_t'", dbName)))
-	require.Equal(t, 5000, queryRowCount(t, ctx, db, "select count(*) from src"))
-	require.Equal(t, 50, queryRowCount(t, ctx, db, "select count(*) from src where id mod 100 = 0"))
+	require.Equal(t, [][]string{{"1", "10", "seed_1"}, {"100", "1000", "seed_100"}},
+		queryStringRows(t, ctx, db, "select id, value, note from src order by id"))
 }
 
 func runSinglePKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {

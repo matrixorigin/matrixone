@@ -1242,6 +1242,49 @@ func TestDeadLockWith2Txn(t *testing.T) {
 	}
 }
 
+func TestNewWaitSubmitsDeadlockCheckBeforeLazyTick(t *testing.T) {
+	previous := defaultLazyCheckDuration.Load().(time.Duration)
+	defer defaultLazyCheckDuration.Store(previous)
+
+	runLockServiceTestsWithAdjustConfig(t, []string{"s1", "s2"}, 10*time.Second, func(_ *lockTableAllocator, services []*service) {
+		require.Equal(t, 30*time.Second, defaultLazyCheckDuration.Load())
+		s := services[0]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const tableID = uint64(29457)
+		row := [][]byte{{1}}
+		holder, waiting := []byte("holder"), []byte("waiting")
+		mustAddTestLock(t, ctx, s, tableID, holder, row, pb.Granularity_Row)
+
+		checked := make(chan struct{}, 1)
+		s.deadlockDetector.mu.Lock()
+		s.deadlockDetector.mu.preCheckFunc = func(_ []byte, txn pb.WaitTxn) error {
+			if string(txn.TxnID) == string(waiting) {
+				select {
+				case checked <- struct{}{}:
+				default:
+				}
+			}
+			return nil
+		}
+		s.deadlockDetector.mu.Unlock()
+
+		result := make(chan error, 1)
+		go func() {
+			_, err := s.Lock(ctx, tableID, row, waiting, newTestRowExclusiveOptions())
+			result <- err
+		}()
+		select {
+		case <-checked:
+		case <-ctx.Done():
+			t.Fatal("new wait did not submit a deadlock check before the lazy tick")
+		}
+		require.NoError(t, s.Unlock(ctx, holder, timestamp.Timestamp{}))
+		require.NoError(t, <-result)
+		require.NoError(t, s.Unlock(ctx, waiting, timestamp.Timestamp{}))
+	}, func(*Config) { defaultLazyCheckDuration.Store(30 * time.Second) })
+}
+
 func TestDeadLockWithIndirectDependsOn(t *testing.T) {
 	for name, runner := range runners {
 		if name == "local" {
@@ -2855,7 +2898,8 @@ func TestRestartInRollingRestartCN(t *testing.T) {
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
 			alloc.setRestartService("s1")
-			require.Equal(t, true, alloc.canRestartService("s1"))
+			require.Equal(t, false, alloc.canRestartService("s1"),
+				"SetRestart must wait for the CN to confirm drain completion")
 		},
 	)
 }
@@ -5565,29 +5609,104 @@ func TestHandleBindChangedConcurrently(t *testing.T) {
 			holder := &bindChangeCountingTxnHolder{activeTxnHolder: s.activeTxnHolder}
 			s.activeTxnHolder = holder
 
+			ctx, cancel := context.WithCancel(ctx)
+			release := make(chan struct{})
+			startCallbacks := make(chan struct{})
+			var releaseOnce, startOnce sync.Once
+			releaseTransactions := func() { releaseOnce.Do(func() { close(release) }) }
+			runCallbacks := func() { startOnce.Do(func() { close(startCallbacks) }) }
 			var wg sync.WaitGroup
-			for i := 0; i < 20; i++ {
+			// Join before the enclosing fixture closes, including on FailNow.
+			defer func() {
+				cancel()
+				releaseTransactions()
+				runCallbacks()
+				wg.Wait()
+			}()
+
+			type workerResult struct {
+				txn       []byte
+				lockErr   error
+				unlockErr error
+			}
+			held := make(chan error, 2)
+			results := make(chan workerResult, 2)
+			for i := byte(1); i <= 2; i++ {
+				txn := newTestTxnID(i)
 				wg.Add(1)
-				go func(i int) {
+				go func() {
 					defer wg.Done()
-					option := newTestRowSharedOptions()
-					rows := newTestRows(1)
-					txn := newTestTxnID(byte(i))
-					for i := 0; i < 1000; i++ {
-						_, err := s.Lock(ctx, table, rows, txn, option)
-						require.NoError(t, err)
-						require.NoError(t, s.Unlock(ctx, txn, timestamp.Timestamp{}))
+					result := workerResult{txn: txn}
+					// Even a failed Lock can leave transaction state to release.
+					defer func() {
+						result.unlockErr = s.Unlock(ctx, txn, timestamp.Timestamp{})
+						results <- result
+					}()
+					_, result.lockErr = s.Lock(ctx, table, newTestRows(1), txn, newTestRowSharedOptions())
+					held <- result.lockErr
+					if result.lockErr != nil {
+						return
 					}
-				}(i)
+					select {
+					case <-release:
+					case <-ctx.Done():
+						result.lockErr = ctx.Err()
+						return
+					}
+					// Duplicate callbacks must leave the existing transaction usable.
+					_, result.lockErr = s.Lock(ctx, table, newTestRows(2), txn, newTestRowSharedOptions())
+				}()
 			}
-			for i := 0; i < 1000; i++ {
-				s.handleBindChanged(bind)
+			for i := 0; i < 2; i++ {
+				select {
+				case err := <-held:
+					require.NoError(t, err)
+				case <-ctx.Done():
+					t.Fatal("transactions did not acquire their initial shared locks", ctx.Err())
+				}
 			}
+
+			// Competing duplicate callbacks run while both transactions own locks.
+			callbacksDone := make(chan struct{}, 2)
+			for i := 0; i < 2; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					defer func() { callbacksDone <- struct{}{} }()
+					select {
+					case <-startCallbacks:
+					case <-ctx.Done():
+						return
+					}
+					s.handleBindChanged(bind)
+					s.handleBindChanged(bind)
+				}()
+			}
+			runCallbacks()
+			for i := 0; i < 2; i++ {
+				select {
+				case <-callbacksDone:
+				case <-ctx.Done():
+					t.Fatal("duplicate bind callbacks did not complete", ctx.Err())
+				}
+			}
+			checkUnchanged := func() {
+				t.Helper()
+				assert.Same(t, lt, s.tableGroups.get(bind.Group, bind.Table))
+				assert.Zero(t, logs.FilterMessage("bind created").Len())
+				assert.Zero(t, logs.FilterMessage("bind closed").Len())
+				assert.Zero(t, holder.fenceCalls.Load())
+			}
+			checkUnchanged()
+			releaseTransactions()
 			wg.Wait()
-			require.Same(t, lt, s.tableGroups.get(bind.Group, bind.Table))
-			assert.Zero(t, logs.FilterMessage("bind created").Len())
-			assert.Zero(t, logs.FilterMessage("bind closed").Len())
-			assert.Zero(t, holder.fenceCalls.Load())
+			for i := 0; i < 2; i++ {
+				result := <-results
+				assert.NoError(t, result.lockErr, "transaction %x", result.txn)
+				assert.NoError(t, result.unlockErr, "transaction %x cleanup", result.txn)
+				assert.Nil(t, s.activeTxnHolder.getActiveTxn(result.txn, false, ""))
+			}
+			checkUnchanged()
 		},
 	)
 }
@@ -6754,7 +6873,13 @@ func TestDrainPinsAsyncRemoteWaiterIntent(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("remote waiter did not acquire after holder unlock")
 			}
+			require.False(t, owner.isStatus(pb.Status_ServiceUnLockSucc),
+				"a remote lock holder must keep the owner in drain-waiting")
 			require.NoError(t, caller.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+			require.Eventually(t, func() bool {
+				return owner.isStatus(pb.Status_ServiceUnLockSucc)
+			}, time.Second, time.Millisecond,
+				"owner must advertise restart only after the remote waiter releases")
 		})
 }
 
@@ -7338,6 +7463,73 @@ func TestRangeSharedHolderPromotionUpdatesBothEndpoints(t *testing.T) {
 			require.ErrorIs(t, err, ErrLockConflict)
 			require.NoError(t, s.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
 			require.NoError(t, s.Unlock(ctx, promotingTxn, timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestWriterFairSharedRowWaitsBehindQueuedWriter(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"writer-fair-shared-row"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			const table = uint64(28079)
+			row := []byte("snapshot-gate")
+			holder1 := []byte("reader-holder-1")
+			holder2 := []byte("reader-holder-2")
+			writerTxn := []byte("queued-writer")
+			lateReaderTxn := []byte("late-reader")
+			_, err := s.Lock(ctx, table, [][]byte{row}, holder1, newTestRowSharedOptions())
+			require.NoError(t, err)
+			_, err = s.Lock(ctx, table, [][]byte{row}, holder2, newTestRowSharedOptions())
+			require.NoError(t, err)
+
+			writerDone := make(chan error, 1)
+			go func() {
+				_, lockErr := s.Lock(ctx, table, [][]byte{row}, writerTxn, newTestRowExclusiveOptions())
+				writerDone <- lockErr
+			}()
+			waitWaiters(t, s, table, row, 1)
+
+			fairReader := newTestRowSharedOptions()
+			fairReader.WriterFair = true
+			readerDone := make(chan error, 1)
+			go func() {
+				_, lockErr := s.Lock(ctx, table, [][]byte{row}, lateReaderTxn, fairReader)
+				readerDone <- lockErr
+			}()
+			waitWaiters(t, s, table, row, 2)
+
+			require.NoError(t, s.Unlock(ctx, holder1, timestamp.Timestamp{}))
+			select {
+			case lockErr := <-writerDone:
+				t.Fatalf("writer acquired while a Shared holder remained: %v", lockErr)
+			case <-time.After(20 * time.Millisecond):
+			}
+			require.NoError(t, s.Unlock(ctx, holder2, timestamp.Timestamp{}))
+			select {
+			case lockErr := <-writerDone:
+				require.NoError(t, lockErr)
+			case <-ctx.Done():
+				t.Fatalf("writer did not acquire after readers released: %v", ctx.Err())
+			}
+			select {
+			case lockErr := <-readerDone:
+				t.Fatalf("late reader bypassed queued writer: %v", lockErr)
+			case <-time.After(20 * time.Millisecond):
+			}
+
+			require.NoError(t, s.Unlock(ctx, writerTxn, timestamp.Timestamp{}))
+			select {
+			case lockErr := <-readerDone:
+				require.NoError(t, lockErr)
+			case <-ctx.Done():
+				t.Fatalf("late reader did not acquire after writer released: %v", ctx.Err())
+			}
+			require.NoError(t, s.Unlock(ctx, lateReaderTxn, timestamp.Timestamp{}))
 		},
 	)
 }

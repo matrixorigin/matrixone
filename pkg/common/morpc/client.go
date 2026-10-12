@@ -1863,6 +1863,7 @@ func (c *client) closeIdleBackends() int {
 			}
 			if !b.Locked() &&
 				time.Since(lastActive) > c.options.maxIdleDuration &&
+				markBackendIdle(b, c.options.maxIdleDuration) &&
 				c.tryStartBackendCleanupLocked(b) {
 				closed++
 				continue
@@ -1931,6 +1932,13 @@ func (c *client) canCreateLocked(backend string) bool {
 	// transport. The extra physical generation is a hard per-remote bound.
 	return admissible < c.options.maxBackendsPerHost &&
 		len(backends) < c.options.maxBackendsPerHost+1
+}
+
+// Backend implementations without admission state retain the existing idle
+// policy. remoteBackend rechecks pending work and seals admission atomically.
+func markBackendIdle(backend Backend, maxIdle time.Duration) bool {
+	value, ok := backend.(interface{ markIdle(time.Duration) bool })
+	return !ok || value.markIdle(maxIdle)
 }
 
 type backendAdmission interface {

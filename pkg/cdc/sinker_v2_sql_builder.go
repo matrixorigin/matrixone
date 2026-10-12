@@ -81,7 +81,7 @@ func NewCDCStatementBuilder(
 		if col.Name == "" {
 			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("column %d has an empty name", i))
 		}
-		if _, ok := catalog.InternalColumns[col.Name]; ok {
+		if _, ok := catalog.InternalColumns[col.Name]; ok || col.Hidden {
 			continue
 		}
 		b.insertColTypes = append(b.insertColTypes, &types.Type{
@@ -116,6 +116,10 @@ func NewCDCStatementBuilder(
 			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("primary key column %q mapping does not match column metadata", pkName))
 		}
 		if _, internal := catalog.InternalColumns[col.Name]; internal {
+			// __mo_fake_pk_col is an engine-only placeholder for tables without a
+			// user-visible row identity. It is omitted from sink INSERT values and
+			// cannot safely support DELETE predicates or idempotent snapshot replay,
+			// so fail closed instead of emitting SQL that can lose or duplicate rows.
 			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("primary key column %q is internal", pkName))
 		}
 		pkColNames = append(pkColNames, pkName)
@@ -135,11 +139,16 @@ func NewCDCStatementBuilder(
 		useReplace = useReplace || indexDef.Unique
 	}
 
+	quotedColumns := make([]string, len(insertColNames))
+	for i, name := range insertColNames {
+		quotedColumns[i] = quoteSQLIdentifier(name)
+	}
+	columnList := " (" + strings.Join(quotedColumns, ",") + ") VALUES "
 	if useReplace {
-		b.insertStem = []byte("REPLACE INTO " + qualifiedTable + " VALUES ")
+		b.insertStem = []byte("REPLACE INTO " + qualifiedTable + columnList)
 		b.insertSuffix = []byte(";")
 	} else {
-		b.insertStem = []byte("INSERT INTO " + qualifiedTable + " VALUES ")
+		b.insertStem = []byte("INSERT INTO " + qualifiedTable + columnList)
 		b.insertSuffix = buildUpsertSuffix(insertColNames)
 	}
 	b.deleteStem = []byte("DELETE FROM " + qualifiedTable + " WHERE " + buildPKColumnList(pkColNames) + " IN (")

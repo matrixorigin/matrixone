@@ -52,9 +52,6 @@ const (
 // Mo function unit tests are not ported, because it is too heavy and does not test enough cases.
 // Mo functions are better tested with bvt.
 
-var MoTableRowsSizeUseOldImpl atomic.Bool
-var MoTableRowsSizeForceUpdate atomic.Bool
-
 const (
 	MoTableRowsSizeForceUpdateVarName    = "mo_table_stats.force_update"
 	MoTableRowSizeUseOldImplVarName      = "mo_table_stats.use_old_impl"
@@ -140,7 +137,7 @@ func MoTableSize(
 ) (err error) {
 
 	useOldStr := GetUseOldImplVariable(proc)
-	if (MoTableRowsSizeUseOldImpl.Load()) || useOldStr {
+	if useOldStr {
 		// the old implement
 		return MoTableSizeOld(iVecs, result, proc, length, selectList)
 	}
@@ -157,7 +154,7 @@ func MoTableRows(
 ) (err error) {
 
 	useOldStr := GetUseOldImplVariable(proc)
-	if (MoTableRowsSizeUseOldImpl.Load()) || useOldStr {
+	if useOldStr {
 		// the old implement
 		return MoTableRowsOld(iVecs, result, proc, length, selectList)
 	}
@@ -172,9 +169,13 @@ func MoTableRows(
 // some special cases:
 // 1. cluster table
 
-type GetMoTableSizeRowsFuncType = func() func(
-	context.Context, []uint64, []uint64, []uint64,
-	engine.Engine, bool, bool) ([]uint64, error)
+// MoTableStatsResolver is synchronous and must not be retained by the executor.
+type MoTableStatsResolver = func() (accs, dbs, tbls []uint64, err error)
+
+// GetMoTableSizeRowsFuncType dispatches to the caller engine. A nil error
+// with handled=false requests the existing old SQL implementation.
+type GetMoTableSizeRowsFuncType = func(
+	context.Context, engine.Engine, MoTableStatsResolver, bool, bool) (values []uint64, err error, handled bool)
 
 var GetMoTableSizeFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
 var GetMoTableRowsFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
@@ -294,6 +295,7 @@ func MoTableSizeRowsHelper(
 	length int,
 	selectList *FunctionSelectList,
 	executor *atomic.Pointer[GetMoTableSizeRowsFuncType],
+	fallback executeLogicOfOverload,
 ) (err error) {
 
 	var (
@@ -310,6 +312,7 @@ func MoTableSizeRowsHelper(
 		txn client.TxnOperator
 
 		ret                   []uint64
+		positions             []int
 		accIds, dbIds, tblIds []uint64
 
 		forceUpdate     = GetForceUpdateVariable(proc)
@@ -363,68 +366,89 @@ func MoTableSizeRowsHelper(
 
 	txn = proc.GetTxnOperator()
 
-	for i := uint64(0); i < uint64(length); i++ {
-		if dbName, tblName, ok = decodeNames(i); !ok {
-			if err = rs.Append(0, true); err != nil {
-				return err
+	resolve := func() ([]uint64, []uint64, []uint64, error) {
+		positions = make([]int, length)
+
+		for i := uint64(0); i < uint64(length); i++ {
+			if dbName, tblName, ok = decodeNames(i); !ok {
+				positions[i] = -1 // NULL
+				continue
 			}
-			continue
-		}
 
-		if ok, err = specialTableFilterForNonSys(proc.Ctx, dbName, tblName); ok && err == nil {
-			if err = rs.Append(int64(0), false); err != nil {
-				return err
+			if ok, err = specialTableFilterForNonSys(proc.Ctx, dbName, tblName); ok && err == nil {
+				positions[i] = -2 // special table
+				continue
 			}
-			continue
-		}
 
-		if err != nil {
-			return err
-		}
-
-		if db, err = eng.Database(proc.Ctx, dbName, txn); err != nil {
-			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-				return moerr.NewInternalErrorNoCtxf("db not exist: %s(%s)",
-					dbName, "OkExpectedEOB")
+			if err != nil {
+				return nil, nil, nil, err
 			}
-			return err
-		}
 
-		var sub subscription
-		if sub, err = isSubscribedTable(
-			proc, accountId, db, dbName, tblName); err != nil {
-			return err
-		} else if sub.valid {
-			// is subscription
-			accIds = append(accIds, sub.oriAccId)
-			dbIds = append(dbIds, sub.oriDatabaseId)
-			tblIds = append(tblIds, sub.oriTableId)
-		} else {
-			if rel, err = db.Relation(proc.Ctx, tblName, nil); err != nil {
+			if db, err = eng.Database(proc.Ctx, dbName, txn); err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					return moerr.NewInternalErrorNoCtxf("tbl not exist: %s-%s(%s)",
-						dbName, tblName, "OkExpectedEOB")
+					return nil, nil, nil, moerr.NewInternalErrorNoCtxf("db not exist: %s(%s)",
+						dbName, "OkExpectedEOB")
 				}
-				return err
+				return nil, nil, nil, err
 			}
 
-			accIds = append(accIds, uint64(accountId))
-			dbIds = append(dbIds, uint64(rel.GetDBID(proc.Ctx)))
-			tblIds = append(tblIds, uint64(rel.GetTableID(proc.Ctx)))
+			positions[i] = len(tblIds)
+			var sub subscription
+			if sub, err = isSubscribedTable(
+				proc, accountId, db, dbName, tblName); err != nil {
+				return nil, nil, nil, err
+			} else if sub.valid {
+				// is subscription
+				accIds = append(accIds, sub.oriAccId)
+				dbIds = append(dbIds, sub.oriDatabaseId)
+				tblIds = append(tblIds, sub.oriTableId)
+			} else {
+				if rel, err = db.Relation(proc.Ctx, tblName, nil); err != nil {
+					if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+						return nil, nil, nil, moerr.NewInternalErrorNoCtxf("tbl not exist: %s-%s(%s)",
+							dbName, tblName, "OkExpectedEOB")
+					}
+					return nil, nil, nil, err
+				}
+
+				accIds = append(accIds, uint64(accountId))
+				dbIds = append(dbIds, uint64(rel.GetDBID(proc.Ctx)))
+				tblIds = append(tblIds, uint64(rel.GetTableID(proc.Ctx)))
+			}
 		}
+
+		return accIds, dbIds, tblIds, nil
 	}
 
-	ret, err = (*executor.Load())()(
-		proc.Ctx, accIds, dbIds, tblIds, eng,
-		forceUpdate || MoTableRowsSizeForceUpdate.Load(),
+	fn := executor.Load()
+	if fn == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableSizeRows: statistics executor is nil")
+	}
+	var handled bool
+	ret, err, handled = (*fn)(
+		proc.Ctx, eng, resolve,
+		forceUpdate,
 		resetUpdateTime)
 
 	if err != nil {
 		return err
 	}
 
-	for _, val := range ret {
-		if err = rs.Append(int64(val), false); err != nil {
+	if !handled {
+		if err := proc.Ctx.Err(); err != nil {
+			return err
+		}
+		return fallback(iVecs, result, proc, length, selectList)
+	}
+	if len(ret) != len(tblIds) {
+		return moerr.NewInternalError(proc.Ctx, "MoTableSizeRows: invalid statistics cardinality")
+	}
+	for _, position := range positions {
+		var value int64
+		if position >= 0 {
+			value = int64(ret[position])
+		}
+		if err = rs.Append(value, position == -1); err != nil {
 			return err
 		}
 	}
@@ -440,7 +464,7 @@ func MoTableSizeNew(
 	selectList *FunctionSelectList,
 ) (err error) {
 
-	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableSizeFunc)
+	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableSizeFunc, MoTableSizeOld)
 }
 
 func MoTableRowsNew(
@@ -451,7 +475,7 @@ func MoTableRowsNew(
 	selectList *FunctionSelectList,
 ) (err error) {
 
-	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableRowsFunc)
+	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableRowsFunc, MoTableRowsOld)
 }
 
 //#endregion MoTableSizeRows New Implements

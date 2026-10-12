@@ -19,12 +19,16 @@ import (
 	"errors"
 
 	gomysql "github.com/go-sql-driver/mysql"
+	mysql "github.com/matrixorigin/mysql"
 )
 
 // MySQLErrorClassifier recognises transient MySQL errors that are worth retrying.
 type MySQLErrorClassifier struct{}
 
 var mysqlRetryableErrorCodes = map[uint16]struct{}{
+	// Timeout reading/writing communication packets.
+	1159: {},
+	1161: {},
 	// Lock wait timeout exceeded; try restarting transaction
 	1205: {},
 	// Deadlock found when trying to get lock; try restarting transaction
@@ -49,12 +53,24 @@ func (MySQLErrorClassifier) IsRetryable(err error) bool {
 		return true
 	}
 
-	var mysqlErr *gomysql.MySQLError
-	if errors.As(err, &mysqlErr) {
-		if _, ok := mysqlRetryableErrorCodes[mysqlErr.Number]; ok {
+	if code, ok := MySQLErrorCode(err); ok {
+		if _, ok := mysqlRetryableErrorCodes[code]; ok {
 			return true
 		}
 	}
 
 	return false
+}
+
+// MySQLErrorCode extracts a wire error number from either supported MySQL driver.
+func MySQLErrorCode(err error) (uint16, bool) {
+	var production *mysql.MySQLError
+	if errors.As(err, &production) {
+		return production.Number, true
+	}
+	var upstream *gomysql.MySQLError
+	if errors.As(err, &upstream) {
+		return upstream.Number, true
+	}
+	return 0, false
 }

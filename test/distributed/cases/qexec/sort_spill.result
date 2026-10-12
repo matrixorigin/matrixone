@@ -34,6 +34,18 @@ Project  𝄀
         Sort Key: t1.grp INTERNAL, t1.id INTERNAL  𝄀
         ->  Table Scan on qesortspill.t1  𝄀
               Analyze: timeConsumed=3ms waitTime=0ms inputBlocks=26 inputRows=200006 outputRows=200006 (min=200006, max=200006) InputSize=1.53 MiB OutputSize=1.53 MiB ReadSize=794.26 KiB|0 bytes|794.26 KiB MemorySize=128.00 KiB (min=128.00 KiB, max=128.00 KiB)
+explain (analyze true, check '["Window", "SpillRows=", "SpillSize="]')
+select id, row_number() over (order by grp, id) as rn from t1;
+-- @regex("SpillRows=[1-9][0-9]*", true)
+-- @regex("SpillSize=[1-9][0-9]*", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=200006 outputRows=200006 (min=200006, max=200006) InputSize=3.05 MiB OutputSize=2.29 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96.00 KiB (min=96.00 KiB, max=96.00 KiB)  𝄀
+  ->  Window  𝄀
+        Analyze: timeConsumed=34ms waitTime=12ms inputRows=200006 outputRows=200006 (min=200006, max=200006) InputSize=1.53 MiB OutputSize=3.05 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.65 MiB (min=128.00 KiB, max=1.53 MiB) SpillRows=200006 SpillSize=1.53 MiB (min=0 bytes, max=1.53 MiB)  𝄀
+        Window Function: row_number(); Order By: t1.grp, t1.id  𝄀
+        ->  Table Scan on qesortspill.t1  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=26 inputRows=200006 outputRows=200006 (min=200006, max=200006) InputSize=1.53 MiB OutputSize=1.53 MiB ReadSize=794.26 KiB|0 bytes|0 bytes MemorySize=128.00 KiB (min=128.00 KiB, max=128.00 KiB)
 set @@max_dop = 0;
 set @@sort_spill_mem = 0;
 show variables like 'sort_spill_mem';

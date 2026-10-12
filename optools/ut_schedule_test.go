@@ -15,13 +15,13 @@
 package optools
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -33,6 +33,12 @@ if [[ -n "${EXPECTED_HEAVY_PARALLEL:-}" ]]; then
  case " $* " in
   *" -p ${EXPECTED_HEAVY_PARALLEL} "*) ;;
   *) printf 'unexpected heavy parallelism: %s\n' "$*" >&2; exit 94 ;;
+ esac
+fi
+if [[ "$1" == test && -n "${EXPECTED_LIGHT_PARALLEL:-}" && "$*" == *pkg/light-package* ]]; then
+ case " $* " in
+  *" -p ${EXPECTED_LIGHT_PARALLEL} "*) ;;
+  *) printf 'unexpected light parallelism: %s\n' "$*" >&2; exit 96 ;;
  esac
 fi
 if [[ "${EXPECT_ENGINE_BEFORE_HEAVY:-}" == 1 && "$1" == test && "$*" == *" -json "* && "$*" == *" -race "* ]]; then
@@ -64,14 +70,27 @@ func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...str
 	return scheduleHarnessWithMockTransform(t, script, mock, nil, variables...)
 }
 
+// Assign in the caller: a command-substitution wrapper would identify its
+// subshell instead. The exec fallback also works with system Bash 3.2.
+const scheduleFixturePID = `function fixture_self_pid() {
+ if [[ -n "${BASHPID:-}" ]]; then
+  printf -v "$1" '%s' "$BASHPID"
+ else
+  printf -v "$1" '%s' "$(exec /bin/sh -c 'printf "%s" "$PPID"')"
+ fi
+}
+`
+
 func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transform func(string) string, variables ...string) ([]byte, error) {
 	t.Helper()
+	script = scheduleFixturePID + script
+	mock = strings.Replace(mock, "#!/bin/bash\n", "#!/bin/bash\n"+scheduleFixturePID, 1)
 	root := t.TempDir()
 	dir := filepath.Join(root, "optools")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"run_ut.sh", "utilities.sh", "ut_tools.bash", "ut_process.bash", "active_ut_cases.awk", "summarize_ut_slow_cases.py"} {
+	for _, name := range []string{"run_ut.sh", "utilities.sh", "ut_tools.bash", "ut_process.bash", "ut_link_gate.sh", "active_ut_cases.awk", "active_ut_incremental.py", "summarize_ut_slow_cases.py"} {
 		data, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
@@ -98,16 +117,123 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "-c", script)
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-	cmd.WaitDelay = 3 * time.Second
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root)
+	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root, "UT_LINK_PARALLEL=0", "GOFLAGS=", "UT_ISSUES_BATCH_PARALLEL=1", "UT_EMBEDDED_PACKAGE_PARALLEL=1")
 	cmd.Env = append(cmd.Env, variables...)
-	out, err := cmd.CombinedOutput()
+	out, err, diagnostic := runScheduleHarnessCommand(ctx, cmd, root)
+	if diagnostic != "" {
+		t.Log(diagnostic)
+	}
 	if ctx.Err() != nil {
-		t.Fatalf("runner harness timed out: %s", out)
+		t.Fatalf("runner harness timed out: %v\n%s\n%s", err, out, diagnostic)
 	}
 	return out, err
+}
+
+func TestMakeUTProcessPoolConfiguration(t *testing.T) {
+	// CI uses a detached, untagged shallow checkout. Reproduce its real Git
+	// diagnostics without cloning a repository or changing this worktree.
+	gitDir := filepath.Join(t.TempDir(), "git")
+	gitEnv := append(os.Environ(), "GIT_DIR="+gitDir,
+		"GIT_AUTHOR_NAME=UT", "GIT_AUTHOR_EMAIL=ut@example.invalid",
+		"GIT_COMMITTER_NAME=UT", "GIT_COMMITTER_EMAIL=ut@example.invalid")
+	git := func(input string, args ...string) string {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Env = gitEnv
+		cmd.Stdin = strings.NewReader(input)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("Git fixture %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("", "init", "--bare", "--quiet", gitDir)
+	tree := git("", "mktree")
+	commit := git("UT fixture\n", "commit-tree", tree)
+	for _, name := range []string{"HEAD", "shallow"} {
+		if err := os.WriteFile(filepath.Join(gitDir, name), []byte(commit+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name, want      string
+		args            []string
+		accepted        bool
+		validationError string
+	}{
+		{name: "serial-default", want: "4 1 1", accepted: true},
+		{name: "darwin-default", args: []string{"UNAME_S=darwin"}, want: "4 1 1", accepted: true},
+		{name: "issues-only-opt-in", args: []string{"UT_ISSUES_BATCH_PARALLEL=2"}, want: "4 2 1", accepted: true},
+		{name: "embedded-only-opt-in", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=2"}, want: "4 1 2", accepted: true},
+		{name: "issues-serial-embedded-rollback", args: []string{"UT_ISSUES_BATCH_PARALLEL=1"}, want: "4 1 1", accepted: true},
+		{name: "single-batch-rollback", args: []string{"UT_ISSUES_BATCHES=1"}, want: "1 1 1", accepted: true},
+		{name: "pool-opt-in", args: []string{"UT_ISSUES_BATCH_PARALLEL=2", "UT_EMBEDDED_PACKAGE_PARALLEL=2"}, want: "4 2 2", accepted: true},
+		{name: "invalid-single-batch-pool", args: []string{"UT_ISSUES_BATCHES=1", "UT_ISSUES_BATCH_PARALLEL=2"}, want: "1 2 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
+		{name: "issues-parallel-overflow", args: []string{"UT_ISSUES_BATCH_PARALLEL=18446744073709551618"}, want: "4 18446744073709551618 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
+		{name: "embedded-parallel-overflow", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=18446744073709551618"}, want: "4 1 18446744073709551618", validationError: "UT_EMBEDDED_PACKAGE_PARALLEL must be"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"--no-print-directory", "-s", "-f", "Makefile", "-f", "-", "print-ut-pool-config", "UNAME_S=linux"}, tc.args...)
+			cmd := exec.CommandContext(t.Context(), "make", args...)
+			cmd.Dir = ".."
+			cmd.Stdin = strings.NewReader(".PHONY: print-ut-pool-config\nprint-ut-pool-config:\n\t@printf '%s %s %s\\n' \"$$UT_ISSUES_BATCHES\" \"$$UT_ISSUES_BATCH_PARALLEL\" \"$$UT_EMBEDDED_PACKAGE_PARALLEL\"\n")
+			// Test Make's defaults, not the enclosing UT's scheduling overrides.
+			for _, value := range os.Environ() {
+				key, _, _ := strings.Cut(value, "=")
+				switch key {
+				case "UT_ISSUES_BATCHES", "UT_ISSUES_BATCH_PARALLEL", "UT_EMBEDDED_PACKAGE_PARALLEL", "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "GIT_DIR", "GIT_WORK_TREE":
+					continue
+				}
+				cmd.Env = append(cmd.Env, value)
+			}
+			cmd.Env = append(cmd.Env, "GIT_DIR="+gitDir)
+			var diagnostics bytes.Buffer
+			cmd.Stderr = &diagnostics
+			out, err := cmd.Output()
+			if err != nil || strings.TrimSpace(string(out)) != tc.want {
+				t.Fatalf("Make config: want %q, got %q: %v\nstderr: %s", tc.want, out, err, &diagnostics)
+			}
+			if diagnostics.Len() == 0 {
+				t.Fatal("detached untagged checkout did not produce its expected version diagnostic")
+			}
+			values := strings.Fields(string(out))
+			script := `source ./run_ut.sh UT
+function logger() { printf '%s\n' "$*" >> "$CASE_DIR/validation-log"; }
+# Stop at the existing post-validation boundary, before cache/native work.
+function mark_ut_stage() {
+ if [[ "$1" == prepare && "$3" == start ]]; then
+  [[ "$EXPECT_ACCEPTED" == true ]] || exit 90
+  exit 0
+ fi
+}
+run_tests
+[[ "$EXPECT_ACCEPTED" == false && "$UT_TEST_STATUS" == 1 ]] || exit 91
+grep -Fq "$EXPECT_VALIDATION_ERROR" "$CASE_DIR/validation-log" || exit 92
+`
+			out, err = scheduleHarness(t, script,
+				"UT_ISSUES_BATCHES="+values[0], "UT_ISSUES_BATCH_PARALLEL="+values[1],
+				"UT_EMBEDDED_PACKAGE_PARALLEL="+values[2], "EXPECT_ACCEPTED="+strconv.FormatBool(tc.accepted),
+				"EXPECT_VALIDATION_ERROR="+tc.validationError)
+			if err != nil {
+				t.Fatalf("runner config: %v\n%s", err, out)
+			}
+		})
+	}
+	for _, batches := range []string{"1", "4"} {
+		t.Run("direct-unset-defaults/batches="+batches, func(t *testing.T) {
+			script := `unset UT_ISSUES_BATCH_PARALLEL UT_EMBEDDED_PACKAGE_PARALLEL
+UT_ISSUES_BATCHES="$BATCHES"
+source ./run_ut.sh UT
+[[ "$UT_ISSUES_BATCH_PARALLEL $UT_EMBEDDED_PACKAGE_PARALLEL" == "1 1" ]]
+`
+			out, err := scheduleHarness(t, script, "BATCHES="+batches)
+			if err != nil {
+				t.Fatalf("direct runner defaults: %v\n%s", err, out)
+			}
+		})
+	}
+
 }
 
 func TestResolveCgroupMemoryBoundary(t *testing.T) {
@@ -232,6 +358,9 @@ func TestHeavyPlanSchedulesEngineBeforeResourceWave(t *testing.T) {
 		{"engine-failure", "3", "1", "1", "7", "0", "0", "1"},
 		{"heavy-failure", "3", "1", "1", "0", "8", "0", "1"},
 		{"plan-failure", "3", "1", "1", "0", "0", "9", "1"},
+		{"plan-undrained", "3", "1", "1", "0", "0", "125", "1"},
+		{"plan-undrained-sequential", "3", "0", "1", "0", "0", "125", "1"},
+		{"engine-undrained", "3", "1", "1", "125", "0", "0", "1"},
 		{"sequential-baseline", "3", "0", "1", "0", "0", "0", "0"},
 		{"one-slot", "1", "1", "1", "0", "0", "0", "0"},
 		{"two-slots", "2", "1", "1", "0", "0", "0", "0"},
@@ -284,6 +413,7 @@ function go() {
 	 [[ "${2:-}" == "${EXPECTED_ENGINE_SHARDS}" ]] || return 96
 	 printf 'engine\n' > "$ENGINE_RACE_REPORT"
 	 touch "$CASE_DIR/engine-finished"
+ if [[ "$ENGINE_STATUS" == 125 ]]; then touch "$ENGINE_RACE_TEST_BINARY"; fi
  return "$ENGINE_STATUS"
 }
 	function run_plan_race_shards() {
@@ -292,9 +422,27 @@ function go() {
 	 [[ -e "$CASE_DIR/engine-finished" ]] || return 92
  printf 'plan\n' > "$PLAN_RACE_REPORT"
  touch "$CASE_DIR/plan-started"
+ if [[ "$PLAN_STATUS" == 125 ]]; then touch "$PLAN_RACE_TEST_BINARY"; fi
  return "$PLAN_STATUS"
 }
 run_tests
+if [[ "$PLAN_STATUS" == 125 || "$ENGINE_STATUS" == 125 ]]; then
+ [[ "$UT_TEST_STATUS" == 1 && ! -e "$CASE_DIR/final-memory" ]] || exit 99
+ if [[ "$ENGINE_STATUS" == 125 ]]; then
+  retained_binary=$ENGINE_RACE_TEST_BINARY
+  retained_report=$ENGINE_RACE_REPORT
+  [[ ! -e "$CASE_DIR/plan-started" && ! -e "$CASE_DIR/heavy-started" ]] || exit 100
+ else
+  retained_binary=$PLAN_RACE_TEST_BINARY
+  retained_report=$PLAN_RACE_REPORT
+ fi
+ [[ -f "$retained_binary" && -s "$retained_report" && -z "$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 101
+ start_plan_race example/plan; [[ "$?" == 125 ]] || exit 102
+ start_engine_race example/engine 1; [[ "$?" == 125 ]] || exit 103
+ trap 'status=$?; [[ -f "$retained_binary" && -s "$retained_report" ]] || status=104; printf "UNDRAINED_RETAINED\n"; exit "$status"' EXIT
+ kill -TERM "$$"
+ exit 105
+fi
 [[ "$UT_TEST_STATUS" == "$EXPECTED_STATUS" ]] || exit 93
 [[ -d "$CASE_DIR/engine-once" && -d "$CASE_DIR/plan-once" ]] || exit 94
 [[ -z "$CURRENT_UT_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 95
@@ -303,7 +451,7 @@ printf '\nREPORT\n'
 	cat "$UT_REPORT"
 `
 			transform := func(text string) string {
-				const anchor = "            wait \"${ENGINE_RACE_JOB_PID}\"\n            engine_status=$?\n"
+				const anchor = "            join_ut_owner ENGINE_RACE_JOB_PID ENGINE_RACE_DRAIN_FAILED\n            engine_status=$?\n"
 				if got := strings.Count(text, anchor); got != 1 {
 					t.Fatalf("engine join anchor count = %d, want 1", got)
 				}
@@ -322,6 +470,16 @@ printf '\nREPORT\n'
 				expectedEngineShards = "1"
 			}
 			out, err := scheduleHarnessWithDefaultMockTransform(t, script, transform, "HEAVY_RACE_PARALLEL="+tc.budget, "UT_OVERLAP_PLAN="+tc.overlap, "PLAN_RACE_PARALLEL="+tc.planParallel, "ENGINE_STATUS="+tc.engine, "HEAVY_STATUS="+tc.heavy, "PLAN_STATUS="+tc.plan, "EXPECTED_STATUS="+tc.expected, "EXPECT_OVERLAP="+expectedOverlap, "EXPECT_ENGINE_BEFORE_HEAVY=1", "EXPECTED_ENGINE_SHARDS="+expectedEngineShards, "EXPECTED_PLAN_PARALLEL="+tc.planParallel, "EXPECTED_HEAVY_PARALLEL="+expectedHeavyParallel)
+			if tc.plan == "125" || tc.engine == "125" {
+				exit, ok := err.(*exec.ExitError)
+				if !ok || exit.ExitCode() != 125 {
+					t.Fatalf("failed-drain schedule: %v\n%s", err, out)
+				}
+				if !strings.Contains(string(out), "UNDRAINED_RETAINED") {
+					t.Fatalf("lost undrained plan artifact: %s", out)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("schedule: %v\n%s", err, out)
 			}
@@ -344,7 +502,7 @@ mkfifo "$CASE_DIR/engine-ready" "$CASE_DIR/engine-hold"
 exec 8<>"$CASE_DIR/engine-hold"
 exec 9<>"$CASE_DIR/engine-ready"
 function run_engine_race_shards() {
-	trap 'if grep -q "^engine$" "$UT_REPORT"; then touch "$CASE_DIR/report-consumed-early"; fi; touch "$CASE_DIR/engine-stopped"; exit 143' TERM
+	trap 'if grep -q "^engine$" "$UT_REPORT"; then touch "$CASE_DIR/report-consumed-early"; fi; touch "$CASE_DIR/engine-stopped"; publish_ut_helper_completion 143; exit 143' TERM
 	printf 'engine\n' > "$ENGINE_RACE_REPORT"
 	touch "$CASE_DIR/engine-started"
 	printf 'ready\n' >&9
@@ -366,11 +524,11 @@ trap cleanup EXIT
 start_engine_race example/engine 2
 `
 	transform := func(text string) string {
-		const anchor = "    run_engine_race_shards \"$1\" \"$2\" &\n    ENGINE_RACE_JOB_PID=$!\n"
+		const anchor = "    invoke_ut_helper ENGINE_RACE_JOB_PID run_engine_race_shards \"$1\" \"$2\" &\n    ENGINE_RACE_JOB_PID=$!\n"
 		if got := strings.Count(text, anchor); got != 1 {
 			t.Fatalf("engine launch anchor count = %d, want 1", got)
 		}
-		return strings.Replace(text, anchor, "    run_engine_race_shards \"$1\" \"$2\" &\n    ut_test_after_engine_spawn \"$!\"\n    ENGINE_RACE_JOB_PID=$!\n", 1)
+		return strings.Replace(text, anchor, "    invoke_ut_helper ENGINE_RACE_JOB_PID run_engine_race_shards \"$1\" \"$2\" &\n    ut_test_after_engine_spawn \"$!\"\n    ENGINE_RACE_JOB_PID=$!\n", 1)
 	}
 	script = "function ut_test_after_engine_spawn() {\n printf '%s\\n' \"$1\" > \"$CASE_DIR/engine-pid\"\n IFS= read -r -t 10 _ <&9 || exit 94\n kill -TERM \"$$\"\n}\n" + script
 	out, err := scheduleHarnessWithMockTransform(t, script, `#!/bin/bash
@@ -403,7 +561,7 @@ cleanup() {
     status=$?
     if [[ -s "$ENGINE_CHILD_PID_FILE" ]]; then
         child_pid=$(<"$ENGINE_CHILD_PID_FILE")
-        if kill -0 "$child_pid" 2>/dev/null || kill -0 -- -"$child_pid" 2>/dev/null; then
+        if ut_process_group_alive "$child_pid"; then
             kill -KILL -- -"$child_pid" 2>/dev/null || kill -KILL "$child_pid" 2>/dev/null || true
             status=90
         fi
@@ -519,29 +677,122 @@ exit 97
 }
 
 func TestEngineRaceShardReportOpenFailureDrainsEarlierShard(t *testing.T) {
-	transform := func(text string) string {
-		const anchor = "        if ! exec 7>\"${shard_reports[shard]}\"; then\n"
-		if got := strings.Count(text, anchor); got != 1 {
-			t.Fatalf("shard report open anchor count = %d, want 1", got)
-		}
-		return strings.Replace(text, anchor,
-			"        if (( shard == 1 )); then while [[ ! -f \"${CASE_DIR}/engine-tool-ready\" ]]; do sleep 0.01; done; mkdir -p \"${CASE_DIR}/blocked-report\"; shard_reports[shard]=\"${CASE_DIR}/blocked-report\"; fi\n"+anchor, 1)
-	}
-	script := `source ./run_ut.sh UT
+	for _, mode := range []string{"drained", "failed-drain", "failed-drain-term", "marker-drain-term", "marker-cancel-term", "marker-report-open", "marker-completion"} {
+		t.Run(mode, func(t *testing.T) {
+			transform := func(text string) string {
+				const anchor = "            if ! exec 7>\"${reports[index]}\"; then\n"
+				if strings.Count(text, anchor) != 1 {
+					t.Fatal("missing unique shard report-open boundary")
+				}
+				text = strings.Replace(text, anchor, `            if (( index == 1 )); then
+                read -r -t 5 _ <&8 || exit 89
+                if [[ "$MODE" == marker-completion ]]; then
+                    :
+                elif [[ "$MODE" == marker-drain-term || "$MODE" == marker-cancel-term ]]; then
+                    touch "${expired[0]}.drain"
+                    if [[ "$MODE" == marker-cancel-term ]]; then
+                        touch "$CASE_DIR/term-sent"
+                        kill -TERM "$$"
+                    fi
+                else
+                    if [[ "$MODE" == marker-report-open ]]; then touch "${expired[0]}.drain"; fi
+                    mkdir "$CASE_DIR/blocked-report"
+                    reports[index]="$CASE_DIR/blocked-report"
+                fi
+            fi
+`+anchor, 1)
+				const completionAnchor = "\n            if ut_process_group_alive \"${test_pids[index]}\"; then\n"
+				if strings.Count(text, completionAnchor) != 1 {
+					t.Fatal("missing unique command completion poll")
+				}
+				text = strings.Replace(text, completionAnchor, `
+            if [[ "$MODE" == marker-completion && "$index" == 0 ]]; then
+                # Shard0's readiness was consumed at shard1 admission above.
+                # Observe shard1 active before publishing a late failure for shard0.
+                read -r -t 5 _ <&8 || exit 89
+                touch "${expired[index]}" "${expired[index]}.drain"
+                terminate_ut_process_group "${test_pids[index]}" KILL
+                wait_for_ut_process_group "${test_pids[index]}" 1 || exit 89
+            fi
+`+completionAnchor, 1)
+				for _, pid := range []string{"test_pids", "watchdog_pids"} {
+					anchor := "            " + pid + "[index]=$!\n"
+					if strings.Count(text, anchor) != 1 {
+						t.Fatal("missing unique execution owner publication")
+					}
+					text = strings.Replace(text, anchor, anchor+"            printf '%s\\n' \"$!\" >> \"$CASE_DIR/owned-pids\"\n", 1)
+				}
+				return text
+			}
+			script := `source ./run_ut.sh UT
+function logger() { :; }
+mkfifo "$CASE_DIR/ready"
+exec 8<>"$CASE_DIR/ready"
+cat > "$CASE_DIR/helper.sh" <<'CHILD'
+cd "$CASE_DIR/optools"
+source ./run_ut.sh UT
 function logger() { :; }
 ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
 ENGINE_RACE_REPORT_READY="$ENGINE_RACE_REPORT.ready"
 ENGINE_RACE_TEST_BINARY="$CASE_DIR/engine.test"
+function exit() {
+ if [[ "$1" == 125 && ( "$MODE" == *-term || "$MODE" == marker-* ) ]]; then
+  touch "$CASE_DIR/term-sent"
+  kill -TERM "$$"
+ fi
+ builtin exit "$@"
+}
+if [[ "$MODE" == failed-drain* ]]; then
+ function terminate_ut_process_groups() {
+  function wait() { touch "$CASE_DIR/forbidden-join"; builtin wait "$@"; }
+  return 1
+ }
+fi
 run_engine_race_shards example/engine 2
 status=$?
-[[ "$status" == 1 ]] || exit 90
-[[ -s "$CASE_DIR/engine-tool.pid" ]] || exit 91
-tool_pid=$(<"$CASE_DIR/engine-tool.pid")
-if kill -0 "$tool_pid" 2>/dev/null || kill -0 -- -"$tool_pid" 2>/dev/null; then
-    exit 92
+touch "$CASE_DIR/helper-returned"
+exit "$status"
+CHILD
+function run_engine_race_shards() { bash "$CASE_DIR/helper.sh"; }
+function cleanup_check() {
+ local status=$? pid
+ if [[ -f "$CASE_DIR/owned-pids" ]]; then
+  while read -r pid; do
+   terminate_ut_process_group "$pid" KILL
+   wait_for_ut_process_group "$pid" 1 || status=92
+  done < "$CASE_DIR/owned-pids"
+ fi
+ exit "$status"
+}
+trap cleanup_check EXIT
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_RACE_REPORT_READY="$ENGINE_RACE_REPORT.ready"
+ENGINE_RACE_TEST_BINARY="$CASE_DIR/engine.test"
+start_engine_race example/engine 2
+status=0
+join_ut_owner ENGINE_RACE_JOB_PID ENGINE_RACE_DRAIN_FAILED || status=$?
+[[ -z "$ENGINE_RACE_JOB_PID" ]] || exit 90
+if [[ "$MODE" == drained ]]; then
+ [[ "$status" == 1 && -e "$CASE_DIR/helper-returned" ]] || exit 91
+ if ut_process_group_alive "$(<"$CASE_DIR/engine-tool.pid")"; then exit 92; fi
+ exit 0
 fi
+[[ "$status" == 125 && -f "$ENGINE_RACE_TEST_BINARY" && -f "$ENGINE_RACE_REPORT.00" && ! -e "$CASE_DIR/helper-returned" && ! -e "$CASE_DIR/forbidden-join" ]] || exit 93
+if [[ "$MODE" == failed-drain* ]]; then ut_process_group_alive "$(<"$CASE_DIR/engine-tool.pid")" || exit 94; fi
+if [[ "$MODE" == *-term || "$MODE" == marker-* ]]; then [[ -f "$CASE_DIR/term-sent" ]] || exit 95; fi
+if [[ "$MODE" == marker-* ]]; then [[ -f "$ENGINE_RACE_REPORT-expired.0.drain" ]] || exit 95; fi
+if [[ "$MODE" == marker-completion ]]; then
+ # The production stop must drain the other admitted shard and watchdog;
+ # fixture reclamation cannot satisfy this oracle after the fact.
+ while read -r pid; do ! ut_process_group_alive "$pid" || exit 94; done < "$CASE_DIR/owned-pids"
+fi
+consume_engine_race_report; [[ "$?" == 125 ]] || exit 96
+start_plan_race example/plan; [[ "$?" == 125 ]] || exit 97
+trap handle_ut_termination TERM
+kill -TERM "$$"
+exit 98
 `
-	mock := `#!/bin/bash
+			mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
 if [[ "$1" == list ]]; then
     printf '%s\t%s\n' "$CASE_DIR" 'example/engine'
@@ -560,15 +811,24 @@ if [[ "$1" == test && "$*" == *' -c '* ]]; then
 fi
 if [[ "$1" == tool ]]; then
     printf '%s\n' "$$" > "$CASE_DIR/engine-tool.pid"
-    touch "$CASE_DIR/engine-tool-ready"
+    printf 'ready\n' >&8
     trap 'exit 143' TERM
     while :; do sleep 0.01; done
 fi
 exit 99
 `
-	out, err := scheduleHarnessWithMockTransform(t, script, mock, transform)
-	if err != nil {
-		t.Fatalf("engine shard report-open failure: %v\n%s", err, out)
+			out, err := scheduleHarnessWithMockTransform(t, script, mock, transform, "MODE="+mode)
+			if mode == "drained" {
+				if err != nil {
+					t.Fatalf("drained report-open failure: %v\n%s", err, out)
+				}
+				return
+			}
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 125 {
+				t.Fatalf("prebuilt failed-drain transfer: %v\n%s", err, out)
+			}
+		})
 	}
 }
 
@@ -580,20 +840,24 @@ trap handle_ut_termination TERM
 trap 'printf "\nCANCEL_REPORT\n"; cat "$UT_REPORT"' EXIT
 ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
 printf 'engine\n' > "$ENGINE_RACE_REPORT"
+mkfifo "$CASE_DIR/writer-ready" "$CASE_DIR/writer-wait"
+exec 8<>"$CASE_DIR/writer-wait" 9<>"$CASE_DIR/writer-ready"
 start_ut_command heavy 'heavy writer' bash -c '
  trap '\''printf "heavy-stopped\n"; exit 143'\'' TERM
  printf "heavy-start\n"
- touch "$CASE_DIR/heavy-ready"
- while :; do sleep 0.01; done
+ printf "heavy\n" >&9
+ IFS= read -r _ <&8
 '
 function run_plan_race_shards() {
- trap 'printf "plan-stopped\n" >> "$PLAN_RACE_REPORT"; exit 143' TERM
+ trap 'printf "plan-stopped\n" >> "$PLAN_RACE_REPORT"; publish_ut_helper_completion 143 || exit 125; exit 143' TERM
  printf 'plan-start\n' > "$PLAN_RACE_REPORT"
- touch "$CASE_DIR/plan-ready"
- while :; do sleep 0.01; done
+ printf 'plan\n' >&9
+ IFS= read -r _ <&8
 }
 start_plan_race example/plan
-while [[ ! -e "$CASE_DIR/heavy-ready" || ! -e "$CASE_DIR/plan-ready" ]]; do sleep 0.01; done
+IFS= read -r -t 10 first <&9 || exit 91
+IFS= read -r -t 10 second <&9 || exit 92
+[[ "$first:$second" == heavy:plan || "$first:$second" == plan:heavy ]] || exit 93
 kill -TERM "$$"
 `
 	out, err := scheduleHarness(t, script)
@@ -637,6 +901,32 @@ exit 0
 	}
 }
 
+func TestCgroupResourceBreakdown(t *testing.T) {
+	script := `source ./run_ut.sh UT
+mkdir "$CASE_DIR/cgroup"
+printf 'anon 1024\nfile 2048\nshmem 512\nslab 256\nunrelated 999\n' > "$CASE_DIR/cgroup/memory.stat"
+printf 'max 6\noom 0\noom_kill 0\n' > "$CASE_DIR/cgroup/memory.events"
+printf 'usage_usec 100\nnr_throttled 3\nthrottled_usec 40\n' > "$CASE_DIR/cgroup/cpu.stat"
+printf '800000 100000\n' > "$CASE_DIR/cgroup/cpu.max"
+printf '0-7\n' > "$CASE_DIR/cgroup/cpuset.cpus.effective"
+printf 'some avg10=1.00 avg60=0.50 avg300=0.10 total=123\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=4\n' > "$CASE_DIR/cgroup/memory.pressure"
+cgroup_resource_breakdown "$CASE_DIR/cgroup"
+cgroup_resource_breakdown "$CASE_DIR/missing"
+`
+	out, err := scheduleHarness(t, script)
+	if err != nil {
+		t.Fatalf("resource breakdown: %v\n%s", err, out)
+	}
+	for _, field := range []string{"cpu.max.quota=800000", "cpu.max.period=100000", "cpu.cpuset.effective=0-7", "memory.stat.anon=1024", "memory.stat.file=2048", "memory.stat.shmem=512", "memory.events.max=6", "memory.events.oom_kill=0", "cpu.stat.nr_throttled=3", "cpu.stat.throttled_usec=40", "memory.pressure.some.total=123", "memory.pressure.full.total=4"} {
+		if !strings.Contains(string(out), field) {
+			t.Errorf("missing %s in %s", field, out)
+		}
+	}
+	if strings.Contains(string(out), "unrelated") || strings.Contains(string(out), "avg10") {
+		t.Fatalf("unexpected fields: %s", out)
+	}
+}
+
 func TestUTHeartbeatStopsCleanly(t *testing.T) {
 	script := `source ./run_ut.sh UT
 mkfifo "$CASE_DIR/heartbeat-ready"
@@ -658,6 +948,11 @@ stop_ut_heartbeat
 ! kill -0 "$heartbeat_pid" 2>/dev/null || exit 90
 
 UT_HEARTBEAT_INTERVAL=1
+# Exercise the actual heartbeat formatting without exposing real process data.
+function ps() {
+    [[ "$*" == '-eo pid=,ppid=,rss=,comm=' ]] || return 93
+    printf '1 0 100 tiny\n2 1 200 small\n3 1 300 third\n4 1 400 fourth\n5 1 500 fifth\n6 1 600 sixth\n7 1 700 seventh\n8 1 800 eighth\n9 1 900 largest\n'
+}
 start_ut_heartbeat
 LIGHT_RACE_REPORT="$G_WKSP/${G_TS}-light-race-report.out"
 cat > "$LIGHT_RACE_REPORT" <<'EOF'
@@ -674,6 +969,10 @@ grep -q 'event=heartbeat' "$UT_CHECKPOINT"
 grep -q 'active_cases=2' "$CASE_DIR/ut.log"
 grep -q 'TestPrivate' "$CASE_DIR/ut.log"
 grep -q 'TestShard' "$CASE_DIR/ut.log"
+grep -q 'processes=9' "$CASE_DIR/ut.log"
+grep -q 'processes.top_rss=pid=9,ppid=1,rss_kib=900,comm=largest;pid=8,ppid=1,rss_kib=800,comm=eighth;' "$CASE_DIR/ut.log"
+grep -q 'pid=2,ppid=1,rss_kib=200,comm=small;' "$CASE_DIR/ut.log"
+! grep -q 'pid=1,ppid=0,rss_kib=100,comm=tiny;' "$CASE_DIR/ut.log"
 `
 	mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
@@ -958,6 +1257,7 @@ exit 99
 	}{
 		{name: "success", lightStatus: "0", serialStatus: "0"},
 		{name: "light-failure", lightStatus: "7", serialStatus: "0"},
+		{name: "light-undrained", lightStatus: "125", serialStatus: "0"},
 		{name: "serial-failure", lightStatus: "0", serialStatus: "9"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -978,13 +1278,31 @@ light_status=0
 finish_light_race || light_status=$?
 [[ "$serial_status" == "$SERIAL_STATUS" ]] || exit 90
 [[ "$light_status" == "$LIGHT_STATUS" ]] || exit 91
+if [[ "$LIGHT_STATUS" == 125 ]]; then
+ retained_report=$LIGHT_RACE_REPORT
+ UT_LINK_DIR="$CASE_DIR/link-slots"
+ UT_LINK_PARALLEL=1
+ mkdir "$UT_LINK_DIR"
+ touch "$UT_LINK_DIR/slot-0"
+ [[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID" && -s "$retained_report" ]] || exit 94
+ cleanup_light_link_gate; [[ "$?" == 125 ]] || exit 95
+ start_light_race example/light-package 2; [[ "$?" == 125 ]] || exit 96
+ trap 'status=$?; [[ -s "$retained_report" && -f "$UT_LINK_DIR/slot-0" && "$(cat "$UT_REPORT")" == $'"'"'serial-start\nserial-end'"'"' ]] || status=97; exit "$status"' EXIT
+ kill -TERM "$$"
+ exit 98
+fi
 [[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID$LIGHT_RACE_REPORT" ]] || exit 92
 report=$(cat "$UT_REPORT")
 [[ "$report" == $'serial-start\nserial-end\nlight-start\nlight-end' ]] || { printf 'REPORT=%q\n' "$report"; exit 93; }
 `
 			out, err := scheduleHarnessWithMock(t, script, mock,
 				"LIGHT_STATUS="+tc.lightStatus, "SERIAL_STATUS="+tc.serialStatus)
-			if err != nil {
+			if tc.lightStatus == "125" {
+				exit, ok := err.(*exec.ExitError)
+				if !ok || exit.ExitCode() != 125 {
+					t.Fatalf("undrained overlap: %v\n%s", err, out)
+				}
+			} else if err != nil {
 				t.Fatalf("overlap: %v\n%s", err, out)
 			}
 		})
@@ -1036,6 +1354,12 @@ if [[ "$*" == *pkg/vectorindex/hnsw* ]]; then
  exit 0
 fi
 if [[ "$*" == *pkg/light-package* ]]; then
+ if [[ -n "${EXPECTED_LIGHT_PARALLEL:-}" ]]; then
+  case " $* " in
+   *" -p ${EXPECTED_LIGHT_PARALLEL} "*) ;;
+   *) printf 'unexpected light parallelism: %s\n' "$*" >&2; exit 96 ;;
+  esac
+ fi
  if [[ "$EXPECT_OVERLAP" == 1 ]]; then
   [[ -e "$CASE_DIR/hnsw-done" ]] || exit 81
  fi
@@ -1056,21 +1380,40 @@ if [[ "$*" == *pkg/tests/issues* ]]; then
  printf 'serial-end\n'
  exit 0
 fi
-if [[ "$*" == *pkg/tests/embedded* ]]; then printf 'embedded\n'; exit 0; fi
+if [[ "$*" == *pkg/tests/embedded* ]]; then
+ if [[ "$*" == *' -c '* ]]; then
+  printf 'prebuild-start\n'
+  touch "$CASE_DIR/prebuild-started"
+  if [[ "$EXPECT_PREBUILD_ACTIVE" == 1 ]]; then
+   while [[ ! -e "$CASE_DIR/serial-started" ]]; do sleep 0.01; done
+  fi
+  printf 'prebuild-end\n'
+  exit 0
+ fi
+ # Cluster admission does not bound a waiting binary's memory or linking.
+ # Check the real run_tests -> run_embedded_tests command boundary.
+ [[ " $* " == *' -p 1 '* ]] || { printf 'unexpected embedded parallelism: %s\n' "$*" >&2; exit 97; }
+ printf 'embedded\n'
+ exit "${EMBEDDED_STATUS:-0}"
+fi
 if [[ "$*" == *pkg/backup* ]]; then printf 'heavy\n'; exit 0; fi
 exit 0
 `
-	for _, tc := range []struct {
-		name, parallel, overlap, expectOverlap, expected string
-	}{
-		{name: "default-off", parallel: "6", overlap: "__default__", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
-		{name: "overlap", parallel: "6", overlap: "1", expectOverlap: "1", expected: "hnsw\nserial\nserial-end\nlight\nlight-end"},
-		{name: "sequential-explicit-off", parallel: "6", overlap: "0", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
-		{name: "sequential-single-slot", parallel: "1", overlap: "0", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
-		{name: "single-slot-guard", parallel: "1", overlap: "1", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
-	} {
+	type lightScheduleCase struct {
+		name, parallel, lightParallel, expectedLightParallel, overlap, overlapParallel, expectOverlap, expected, expectedStatus, forceLaunchFailure, prebuild, expectPrebuildActive, embeddedStatus string
+	}
+	cases := []lightScheduleCase{
+		{name: "default-off", parallel: "6", lightParallel: "__default__", expectedLightParallel: "6", overlap: "__default__", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+		{name: "overlap", parallel: "6", lightParallel: "__default__", expectedLightParallel: "2", overlap: "1", overlapParallel: "2", expectOverlap: "1", expected: "hnsw\nserial\nserial-end\nlight\nlight-end", expectedStatus: "0", forceLaunchFailure: "0"},
+		{name: "sequential-explicit-off", parallel: "6", lightParallel: "__default__", expectedLightParallel: "6", overlap: "0", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+		{name: "sequential-single-slot", parallel: "1", lightParallel: "6", expectedLightParallel: "1", overlap: "0", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+		{name: "single-slot-guard", parallel: "1", lightParallel: "6", expectedLightParallel: "1", overlap: "1", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+		{name: "embedded-failure", parallel: "6", lightParallel: "6", expectedLightParallel: "6", overlap: "0", overlapParallel: "2", expectOverlap: "0", expectedStatus: "1", forceLaunchFailure: "0", embeddedStatus: "7"},
+	}
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			script := `if [[ "$UT_OVERLAP_VALUE" == "__default__" ]]; then unset UT_OVERLAP_LIGHT; fi
+if [[ "$UT_LIGHT_PARALLEL_VALUE" == "__default__" ]]; then unset UT_LIGHT_PARALLEL; else UT_LIGHT_PARALLEL="$UT_LIGHT_PARALLEL_VALUE"; fi
 source ./run_ut.sh UT
 function logger() { :; }
 function make() { :; }
@@ -1079,9 +1422,12 @@ function egrep() { echo fake.pb.go; }
 	UT_SHARD=all
 UT_PARALLEL=${UT_PARALLEL_VALUE}
 if [[ "$UT_OVERLAP_VALUE" != "__default__" ]]; then UT_OVERLAP_LIGHT=${UT_OVERLAP_VALUE}; fi
-UT_OVERLAP_LIGHT_PARALLEL=2
+UT_OVERLAP_LIGHT_PARALLEL=${OVERLAP_PARALLEL_VALUE}
 UT_OVERLAP_PLAN=0
-UT_PREBUILD_EMBEDDED=0
+UT_PREBUILD_EMBEDDED=${PREBUILD_VALUE:-0}
+if [[ "$FORCE_LIGHT_LAUNCH_FAILURE" == 1 ]]; then
+ function start_light_race() { return 1; }
+fi
 function go() {
  if [[ "$1" == clean ]]; then return 0; fi
  if [[ "$1" != list ]]; then return 0; fi
@@ -1099,19 +1445,131 @@ function run_engine_race_shards() { printf 'engine\n' > "$ENGINE_RACE_REPORT"; r
 function run_plan_race_shards() { return 0; }
 trap handle_ut_termination TERM
 run_tests
-[[ "$UT_TEST_STATUS" == 0 ]] || exit 90
+[[ "$UT_TEST_STATUS" == "$EXPECTED_STATUS" ]] || { cat "$UT_REPORT" "$UT_STDERR"; exit 90; }
+if [[ -n "$EMBEDDED_STATUS" ]]; then
+ [[ "$(grep -c '^embedded$' "$UT_REPORT")" == 1 ]] || exit 97
+ grep -q "event=finish stage=embedded label=embedded-cluster race-test packages status=${EMBEDDED_STATUS}" "$UT_CHECKPOINT" || exit 98
+fi
+if [[ "$EXPECTED_STATUS" != 0 ]]; then exit 0; fi
 [[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 91
 report=$(cat "$UT_REPORT")
 [[ "$report" == *"$EXPECTED_REPORT"* ]] || { printf 'REPORT=%q\n' "$report"; exit 92; }
+if [[ "$PREBUILD_VALUE" == 1 ]]; then
+ [[ -e "$CASE_DIR/prebuild-started" && -e "$CASE_DIR/serial-started" ]] || exit 93
+ [[ "$(grep -c 'event=start stage=embedded-prebuild' "$UT_CHECKPOINT")" -ge 1 ]] || exit 94
+ [[ "$(grep -c 'event=join-start stage=embedded-prebuild' "$UT_CHECKPOINT")" == 1 ]] || exit 95
+ [[ "$(grep -c 'event=join-finish stage=embedded-prebuild' "$UT_CHECKPOINT")" == 1 ]] || exit 96
+fi
 `
-			out, err := scheduleHarnessWithMock(t, script, mock,
-				"UT_PARALLEL_VALUE="+tc.parallel,
-				"UT_OVERLAP_VALUE="+tc.overlap,
-				"EXPECT_OVERLAP="+tc.expectOverlap,
-				"EXPECTED_REPORT="+tc.expected)
+			runCase := func(caseData lightScheduleCase) ([]byte, error) {
+				return scheduleHarnessWithMock(t, script, mock,
+					"UT_PARALLEL_VALUE="+caseData.parallel,
+					"UT_LIGHT_PARALLEL_VALUE="+caseData.lightParallel,
+					"UT_OVERLAP_VALUE="+caseData.overlap,
+					"OVERLAP_PARALLEL_VALUE="+caseData.overlapParallel,
+					"EXPECT_OVERLAP="+caseData.expectOverlap,
+					"EXPECTED_LIGHT_PARALLEL="+caseData.expectedLightParallel,
+					"EXPECTED_STATUS="+caseData.expectedStatus,
+					"EXPECTED_REPORT="+caseData.expected,
+					"FORCE_LIGHT_LAUNCH_FAILURE="+caseData.forceLaunchFailure,
+					"PREBUILD_VALUE="+caseData.prebuild,
+					"EXPECT_PREBUILD_ACTIVE="+caseData.expectPrebuildActive,
+					"EMBEDDED_STATUS="+caseData.embeddedStatus)
+			}
+			out, err := runCase(tc)
 			if err != nil {
 				t.Fatalf("scheduler: %v\n%s", err, out)
 			}
+			if tc.name != "default-off" {
+				return
+			}
+
+			// Keep the existing subtest identity set stable while adding the
+			// new budget and fallback counterexamples as same-test harness runs.
+			for _, extra := range []lightScheduleCase{
+				{name: "explicit-light-six", parallel: "6", lightParallel: "6", expectedLightParallel: "6", overlap: "0", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+				{name: "overlap-capped", parallel: "6", lightParallel: "1", expectedLightParallel: "1", overlap: "1", overlapParallel: "4", expectOverlap: "1", expected: "hnsw\nserial\nserial-end\nlight\nlight-end", expectedStatus: "0", forceLaunchFailure: "0"},
+				{name: "overlap-fallback-capped", parallel: "6", lightParallel: "1", expectedLightParallel: "1", overlap: "1", overlapParallel: "4", expectOverlap: "0", expected: "hnsw\nlight\nlight-end\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "1"},
+				{name: "reject-zero-light-budget", parallel: "6", lightParallel: "0", overlap: "0", overlapParallel: "2", expectOverlap: "0", expectedStatus: "1", forceLaunchFailure: "0"},
+				{name: "reject-malformed-light-budget", parallel: "6", lightParallel: "not-a-number", overlap: "0", overlapParallel: "2", expectOverlap: "0", expectedStatus: "1", forceLaunchFailure: "0"},
+			} {
+				out, err = runCase(extra)
+				if err != nil {
+					t.Fatalf("scheduler case %s: %v\n%s", extra.name, err, out)
+				}
+			}
+
+			wrong := tc
+			wrong.expectedLightParallel = "3"
+			if out, err = runCase(wrong); err == nil {
+				t.Fatalf("scheduler accepted an intentionally wrong light budget assertion\n%s", out)
+			}
+
+			prebuild := tc
+			prebuild.prebuild = "1"
+			prebuild.expectPrebuildActive = "1"
+			if out, err = runCase(prebuild); err != nil {
+				t.Fatalf("default prebuild dispatch: %v\n%s", err, out)
+			}
 		})
+	}
+}
+
+// One outstanding TERM at a time tests parser reentry without a signal flood.
+// The main PID comes from Go; the subshell PID comes from its parent's $!.
+func TestFixturePIDDuringAcknowledgedTERM(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	script := scheduleFixturePID + `
+set -e
+scratch=$1
+fixture_self_pid main
+printf 'MAIN %s\n' "$main"
+mkfifo "$scratch/child" "$scratch/ack"
+exec 8<>"$scratch/child" 7<>"$scratch/ack"
+(fixture_self_pid child; printf '%s\n' "$child" >&8) &
+child_pid=$!
+read -r observed <&8
+wait "$child_pid"
+printf 'CHILD %s %s\n' "$observed" "$child_pid"
+handled=0
+trap 'fixture_self_pid trap_pid; [[ "$trap_pid" == "$main" ]] || exit 97; handled=$((handled+1)); printf "ack\n" >&7' TERM
+(
+ for ((j=0; j<200; j++)); do
+  kill -TERM "$main"
+  read -r acknowledgment <&7
+  [[ "$acknowledgment" == ack ]] || exit 98
+ done
+ touch "$scratch/done"
+) &
+sender=$!
+trap 'kill "$sender" 2>/dev/null || :; wait "$sender" 2>/dev/null || :' EXIT
+while [[ ! -f "$scratch/done" ]]; do
+ # Reenter BASHPID expansion in modern Bash. The legacy fallback spawns
+ # a child, whose output can be interrupted by TERM; its PID is checked
+ # at startup, in the subshell, and by each TERM handler instead.
+ if [[ -n "${BASHPID:-}" ]]; then
+  fixture_self_pid observed
+  [[ "$observed" == "$main" ]] || exit 99
+ fi
+done
+wait "$sender"
+printf 'TERMS %s\n' "$handled"
+`
+	root := t.TempDir()
+	cmd := exec.CommandContext(ctx, "bash", "-c", script, "fixture-pid", root)
+	cmd.Env = append(os.Environ(), "CASE_DIR="+root)
+	out, err, diagnostic := runScheduleHarnessCommand(ctx, cmd, root)
+	if err != nil {
+		t.Fatalf("PID helper signal execution: %v\n%s\n%s", err, out, diagnostic)
+	}
+	mainPID := strconv.Itoa(cmd.Process.Pid)
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 3 || lines[0] != "MAIN "+mainPID || lines[2] != "TERMS 200" {
+		t.Fatalf("unexpected PID/TERM result: %s", out)
+	}
+	child := strings.Fields(lines[1])
+	if len(child) != 3 || child[0] != "CHILD" || child[1] != child[2] || child[1] == mainPID {
+		t.Fatalf("subshell did not identify its actual process: %s", out)
 	}
 }

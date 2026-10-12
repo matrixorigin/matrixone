@@ -70,3 +70,63 @@ with_null_byte
 SELECT HEX(QUOTE(CONCAT('test', CHAR(26), 'end'))) AS with_ctrl_z;
 with_ctrl_z
 27746573745C5A656E6427
+DROP TABLE IF EXISTS quote_binary_domain;
+CREATE TABLE quote_binary_domain(id INT PRIMARY KEY, b VARBINARY(64));
+INSERT INTO quote_binary_domain VALUES
+(1, CAST('Ashcraft' AS VARBINARY(64))),
+(2, UNHEX('410042')),
+(3, UNHEX('C3A9')),
+(4, UNHEX('41FF42')),
+(5, X''),
+(6, NULL);
+SELECT id, HEX(QUOTE(b)) AS quoted_hex
+FROM quote_binary_domain WHERE id <> 4 ORDER BY id;
+id    quoted_hex
+1    27417368637261667427
+2    27415C304227
+3    27C3A927
+5    2727
+6    4E554C4C
+CREATE VIEW quote_binary_view AS SELECT QUOTE(b) AS q FROM quote_binary_domain WHERE id <> 4;
+CREATE TABLE quote_binary_ctas AS SELECT QUOTE(b) AS q FROM quote_binary_domain WHERE id <> 4;
+SELECT table_name, column_name, data_type, character_maximum_length,
+character_set_name, collation_name
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+AND table_name IN ('quote_binary_view', 'quote_binary_ctas')
+ORDER BY table_name;
+table_name    column_name    data_type    character_maximum_length    character_set_name    collation_name
+quote_binary_ctas    q    varchar    130    utf8mb4    utf8mb4_general_ci
+quote_binary_view    q    varchar    130    utf8mb4    utf8mb4_general_ci
+SELECT QUOTE(b) FROM quote_binary_domain WHERE id = 4;
+Cannot convert string 'A�B' from binary to utf8mb4
+DROP TABLE quote_binary_ctas;
+DROP VIEW quote_binary_view;
+DROP TABLE quote_binary_domain;
+PREPARE quote_prepared_28912 FROM 'SELECT HEX(QUOTE(?)) AS quoted_hex, QUOTE(?) IS NULL AS is_null';
+SET @quote_prepared_28912 = UNHEX('41FF42');
+EXECUTE quote_prepared_28912 USING @quote_prepared_28912, @quote_prepared_28912;
+quoted_hex    is_null
+    0
+SET @quote_prepared_28912 = 'valid';
+EXECUTE quote_prepared_28912 USING @quote_prepared_28912, @quote_prepared_28912;
+quoted_hex    is_null
+2776616C696427    0
+SET @quote_prepared_28912 = UNHEX('41FF42');
+EXECUTE quote_prepared_28912 USING @quote_prepared_28912, @quote_prepared_28912;
+quoted_hex    is_null
+    0
+SET @quote_prepared_28912 = NULL;
+EXECUTE quote_prepared_28912 USING @quote_prepared_28912, @quote_prepared_28912;
+quoted_hex    is_null
+4E554C4C    0
+DEALLOCATE PREPARE quote_prepared_28912;
+PREPARE quote_explicit_binary_28912 FROM 'SELECT HEX(QUOTE(CAST(? AS VARBINARY(3)))) AS quoted_hex';
+SET @quote_explicit_binary_28912 = UNHEX('41FF42');
+EXECUTE quote_explicit_binary_28912 USING @quote_explicit_binary_28912;
+Cannot convert string 'A�B' from binary to utf8mb4
+SET @quote_explicit_binary_28912 = UNHEX('41');
+EXECUTE quote_explicit_binary_28912 USING @quote_explicit_binary_28912;
+quoted_hex
+274127
+DEALLOCATE PREPARE quote_explicit_binary_28912;

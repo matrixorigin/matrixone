@@ -1628,7 +1628,7 @@ Table    Create Table
 spatial_idx_t1    CREATE TABLE `spatial_idx_t1` (\n  `id` int NOT NULL,\n  `g` point NOT NULL,\n  PRIMARY KEY (`id`),\n  SPATIAL KEY `idx_g` (`g`)\n)
 show index from spatial_idx_t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-spatial_idx_t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+spatial_idx_t1    0    PRIMARY    1    id    A    0    NULL    NULL        BTREE                YES    id
 spatial_idx_t1    1    idx_g    1    g    A    0    NULL    NULL        rtree                YES    g
 select name, type, algo, column_name
 from mo_catalog.mo_indexes
@@ -2134,11 +2134,11 @@ Table    Create Table
 geo_srid_show    CREATE TABLE `geo_srid_show` (\n  `id` int NOT NULL,\n  `location` point srid 4326 NOT NULL,\n  PRIMARY KEY (`id`)\n)
 desc geo_srid_show;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO    PRI    null        
+id    int    NO    PRI    null        
 location    POINT SRID 4326    NO        null        
 show columns from geo_srid_show;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO    PRI    null        
+id    int    NO    PRI    null        
 location    POINT SRID 4326    NO        null        
 select data_type, column_type, srs_id
 from information_schema.columns

@@ -1012,12 +1012,12 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) (
 		return itr.values, itr.zValues, nil
 	}
 
-	defer func() {
-		for i := 0; i < count; i++ {
-			itr.keys[i] = 0
-		}
-		copy(itr.keyOffs[:count], zeroUint32)
-	}()
+	// Find leaves encoded scratch populated. Initialize every insertion,
+	// including read-to-write transitions and reuse with a different owner.
+	for i := 0; i < count; i++ {
+		itr.keys[i] = 0
+	}
+	copy(itr.keyOffs[:count], zeroUint32)
 
 	copy(itr.zValues[:count], OneInt64s[:count])
 	itr.nonMatching = prepareNonMatchingMask(

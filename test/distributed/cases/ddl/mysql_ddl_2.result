@@ -109,35 +109,35 @@ KEY `idx_sub_company_id` (`sub_company_id`)
 );
 desc `projects`;
 Field    Type    Null    Key    Default    Extra    Comment
-project_id    VARCHAR(64)    NO    PRI    null        
-company_id    VARCHAR(64)    NO    MUL    null        
-project_no    VARCHAR(255)    YES        null        
-project_name    VARCHAR(255)    NO        null        
-project_type    VARCHAR(255)    NO        null        
-project_unit    VARCHAR(255)    YES        null        
-project_leader    VARCHAR(255)    NO        null        
-address    VARCHAR(255)    YES        null        
-number_of_building    INT(32)    YES        null        
-project_state    VARCHAR(64)    YES    MUL    null        
-supervisor    VARCHAR(255)    YES        null        
-build_license    VARCHAR(64)    YES        null        
-ceiling_normal_plane_distance    VARCHAR(32)    YES        null        顶板距法面距离
-floor_normal_plane_distance    VARCHAR(32)    YES        null        底板距法面距离
-ext1    VARCHAR(1024)    YES        null        扩展字段
-ext2    VARCHAR(1024)    YES        null        扩展字段
-ext3    VARCHAR(1024)    YES        null        扩展字段
-sub_company_id    VARCHAR(64)    YES    MUL    null        
-parent_project_id    VARCHAR(64)    YES        null        
-distinguish_suite    INT(32)    YES        1        是否分户(0,否 1，是)
-draw_switch    INT(32)    YES        null        
-version    VARCHAR(64)    YES        null        
-created_by    VARCHAR(64)    YES        null        
-created_time    DATETIME(0)    YES        null        
-updated_by    VARCHAR(64)    YES        null        
-updated_time    DATETIME(0)    YES        null        
-is_deleted    INT(32)    YES        null        
-deleted_by    VARCHAR(64)    YES        null        
-deleted_time    DATETIME(0)    YES        null        
+project_id    varchar(64)    NO    PRI    null        
+company_id    varchar(64)    NO    MUL    null        
+project_no    varchar(255)    YES        null        
+project_name    varchar(255)    NO        null        
+project_type    varchar(255)    NO        null        
+project_unit    varchar(255)    YES        null        
+project_leader    varchar(255)    NO        null        
+address    varchar(255)    YES        null        
+number_of_building    int    YES        null        
+project_state    varchar(64)    YES    MUL    null        
+supervisor    varchar(255)    YES        null        
+build_license    varchar(64)    YES        null        
+ceiling_normal_plane_distance    varchar(32)    YES        null        顶板距法面距离
+floor_normal_plane_distance    varchar(32)    YES        null        底板距法面距离
+ext1    varchar(1024)    YES        null        扩展字段
+ext2    varchar(1024)    YES        null        扩展字段
+ext3    varchar(1024)    YES        null        扩展字段
+sub_company_id    varchar(64)    YES    MUL    null        
+parent_project_id    varchar(64)    YES        null        
+distinguish_suite    int    YES        1        是否分户(0,否 1，是)
+draw_switch    int    YES        null        
+version    varchar(64)    YES        null        
+created_by    varchar(64)    YES        null        
+created_time    datetime    YES        null        
+updated_by    varchar(64)    YES        null        
+updated_time    datetime    YES        null        
+is_deleted    int    YES        null        
+deleted_by    varchar(64)    YES        null        
+deleted_time    datetime    YES        null        
 ALTER TABLE `projects`
 MODIFY COLUMN `build_license` varchar (64) NULL DEFAULT NULL AFTER `supervisor`,
 MODIFY COLUMN `created_by` varchar(64) NULL DEFAULT NULL AFTER `distinguish_suite`,
@@ -159,37 +159,37 @@ ADD COLUMN `draw_switch2` int(11) NULL AFTER `distinguish_suite`,
 ADD COLUMN `version2` varchar (64) NULL AFTER `draw_switch`;
 desc `projects`;
 Field    Type    Null    Key    Default    Extra    Comment
-project_id    VARCHAR(64)    NO    PRI    null        
-company_id    VARCHAR(64)    NO    MUL    null        
-project_no    VARCHAR(255)    YES        null        
-project_name    VARCHAR(255)    NO        null        
-project_type    VARCHAR(255)    NO        null        
-project_unit    VARCHAR(255)    YES        null        
-project_leader    VARCHAR(255)    NO        null        
-address    VARCHAR(255)    YES        null        
-number_of_building    INT(32)    YES        null        
-project_state    VARCHAR(64)    YES    MUL    null        
-supervisor    VARCHAR(255)    YES        null        
-build_license    VARCHAR(64)    YES        null        
-ceiling_normal_plane_distance    VARCHAR(32)    YES        null        顶板距法面距离
-floor_normal_plane_distance    VARCHAR(32)    YES        null        底板距法面距离
-ext1    VARCHAR(1024)    YES        null        扩展字段
-ext2    VARCHAR(1024)    YES        null        扩展字段
-ext3    VARCHAR(1024)    YES        null        扩展字段
-sub_company_id    VARCHAR(64)    YES    MUL    null        
-parent_project_id    VARCHAR(64)    YES        null        
-distinguish_suite    INT(32)    YES        1        是否分户(0,否 1，是)
-draw_switch2    INT(32)    YES        null        
-created_by    VARCHAR(64)    YES        null        
-created_time    DATETIME(0)    YES        null        
-draw_switch    INT(32)    YES        null        
-version2    VARCHAR(64)    YES        null        
-version    VARCHAR(64)    YES        null        
-updated_by    VARCHAR(64)    YES        null        
-updated_time    DATETIME(0)    YES        null        
-is_deleted    INT(32)    YES        null        
-deleted_by    VARCHAR(64)    YES        null        
-deleted_time    DATETIME(0)    YES        null        
+project_id    varchar(64)    NO    PRI    null        
+company_id    varchar(64)    NO    MUL    null        
+project_no    varchar(255)    YES        null        
+project_name    varchar(255)    NO        null        
+project_type    varchar(255)    NO        null        
+project_unit    varchar(255)    YES        null        
+project_leader    varchar(255)    NO        null        
+address    varchar(255)    YES        null        
+number_of_building    int    YES        null        
+project_state    varchar(64)    YES    MUL    null        
+supervisor    varchar(255)    YES        null        
+build_license    varchar(64)    YES        null        
+ceiling_normal_plane_distance    varchar(32)    YES        null        顶板距法面距离
+floor_normal_plane_distance    varchar(32)    YES        null        底板距法面距离
+ext1    varchar(1024)    YES        null        扩展字段
+ext2    varchar(1024)    YES        null        扩展字段
+ext3    varchar(1024)    YES        null        扩展字段
+sub_company_id    varchar(64)    YES    MUL    null        
+parent_project_id    varchar(64)    YES        null        
+distinguish_suite    int    YES        1        是否分户(0,否 1，是)
+draw_switch2    int    YES        null        
+created_by    varchar(64)    YES        null        
+created_time    datetime    YES        null        
+draw_switch    int    YES        null        
+version2    varchar(64)    YES        null        
+version    varchar(64)    YES        null        
+updated_by    varchar(64)    YES        null        
+updated_time    datetime    YES        null        
+is_deleted    int    YES        null        
+deleted_by    varchar(64)    YES        null        
+deleted_time    datetime    YES        null        
 drop database if exists mysql_ddl_test_db;
 create database  mysql_ddl_test_db;
 use mysql_ddl_test_db;
@@ -224,27 +224,27 @@ UNIQUE KEY col4 (col4)
 ) ;
 desc table_basic_for_alter_100m;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    TINYINT(8)    YES        null        
-col2    SMALLINT(16)    YES        null        
-col3    INT(32)    NO    MUL    null        
-col4    BIGINT(64)    NO    PRI    null        
-col5    TINYINT UNSIGNED(8)    YES        null        
-col6    SMALLINT UNSIGNED(16)    YES        null        
-col7    INT UNSIGNED(32)    YES        null        
-col8    BIGINT UNSIGNED(64)    YES        null        
-col9    FLOAT(0)    YES        null        
-col10    DOUBLE(0)    YES        null        
-col11    VARCHAR(255)    YES        null        
-col12    DATE(0)    YES        null        
-col13    DATETIME(0)    YES        null        
-col14    TIMESTAMP(0)    YES        null        
-col15    BOOL(0)    YES        null        
-col16    DECIMAL(16,6)    YES        null        
-col17    TEXT(0)    YES        null        
-col18    JSON(0)    YES        null        
-col19    BLOB(0)    YES        null        
-col20    BINARY(255)    YES        null        
-col21    VARBINARY(255)    YES        null        
+col1    tinyint    YES        null        
+col2    smallint    YES        null        
+col3    int    NO    MUL    null        
+col4    bigint    NO    PRI    null        
+col5    tinyint unsigned    YES        null        
+col6    smallint unsigned    YES        null        
+col7    int unsigned    YES        null        
+col8    bigint unsigned    YES        null        
+col9    float    YES        null        
+col10    double    YES        null        
+col11    varchar(255)    YES        null        
+col12    date    YES        null        
+col13    datetime    YES        null        
+col14    timestamp    YES        null        
+col15    boolean    YES        null
+col16    decimal(16,6)    YES        null        
+col17    text    YES        null        
+col18    json    YES        null        
+col19    blob    YES        null
+col20    binary(255)    YES        null        
+col21    varbinary(255)    YES        null        
 col22    VECF32(3)    YES        null        
 col23    VECF32(3)    YES        null        
 col24    VECF64(3)    YES        null        
@@ -256,8 +256,8 @@ UNIQUE KEY (id)
 );
 desc user_table;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    YES    UNI    null        
-name    VARCHAR(50)    YES        null        
+id    int    YES    UNI    null        
+name    varchar(50)    YES        null        
 CREATE TABLE users (
 id INT(11) NOT NULL,
 name VARCHAR(50),
@@ -265,8 +265,8 @@ UNIQUE KEY (id)
 );
 desc users;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO    PRI    null        
-name    VARCHAR(50)    YES        null        
+id    int    NO    PRI    null        
+name    varchar(50)    YES        null        
 drop database if exists mysql_ddl_test_db;
 drop database if exists db1;
 create database db1;
@@ -281,10 +281,10 @@ UNIQUE KEY(a, b)
 );
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES    MUL    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    YES    MUL    null        
+b    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 drop table if exists t2;
 CREATE TABLE t2(
 col1 TINYINT DEFAULT NULL,
@@ -296,10 +296,10 @@ UNIQUE KEY (col4)
 ) ;
 desc t2;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    TINYINT(8)    YES        null        
-col2    SMALLINT(16)    YES        null        
-col3    INT(32)    NO    MUL    null        
-col4    BIGINT(64)    NO    PRI    null        
+col1    tinyint    YES        null        
+col2    smallint    YES        null        
+col3    int    NO    MUL    null        
+col4    bigint    NO    PRI    null        
 drop table if exists t3;
 CREATE TABLE t3(
 a INTEGER,
@@ -311,10 +311,10 @@ UNIQUE KEY (d)
 );
 desc t3;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES    MUL    null        
-d    DECIMAL(7,2)    YES    UNI    null        
+a    int    YES        null        
+b    char(10)    YES        null        
+c    date    YES    MUL    null        
+d    decimal(7,2)    YES    UNI    null        
 drop table if exists t4;
 CREATE TABLE t4(
 a INTEGER,
@@ -326,8 +326,8 @@ UNIQUE KEY (a)
 );
 desc t4;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES    UNI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    YES    UNI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 drop database if exists db1;

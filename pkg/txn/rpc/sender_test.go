@@ -48,6 +48,20 @@ type backendRetryErrorClient struct {
 	sendCalls     atomic.Int32
 }
 
+// retryWaitContext observes select evaluation without changing cancellation.
+// backendRetryErrorClient does not call Done, so this marks the retry wait.
+type retryWaitContext struct {
+	context.Context
+	evaluated chan struct{}
+	once      sync.Once
+}
+
+func (c *retryWaitContext) Done() <-chan struct{} {
+	done := c.Context.Done()
+	c.once.Do(func() { close(c.evaluated) })
+	return done
+}
+
 type startServerAfterSendErrorClient struct {
 	morpc.RPCClient
 	onError func(error)
@@ -750,49 +764,97 @@ func TestSendWithMultiRequestStopsWhenBackendRetryBudgetExceeded(t *testing.T) {
 }
 
 func TestSendReturnsBackendErrorWhenContextCanceledDuringBackendRetryWait(t *testing.T) {
-	assert.NoError(t, os.RemoveAll(testTN5Addr[7:]))
-
 	oldWait := defaultWaitTimeOnRetryBackendSend
 	oldBudget := defaultMaxWaitTimeOnRetryBackendSend
-	defaultWaitTimeOnRetryBackendSend = 50 * time.Millisecond
-	defaultMaxWaitTimeOnRetryBackendSend = 500 * time.Millisecond
+	restoreRetryConfig := true
+	// Timer/budget completion must remain outside the cancellation guard.
+	defaultWaitTimeOnRetryBackendSend = 30 * time.Second
+	defaultMaxWaitTimeOnRetryBackendSend = 30 * time.Second
 	defer func() {
-		defaultWaitTimeOnRetryBackendSend = oldWait
-		defaultMaxWaitTimeOnRetryBackendSend = oldBudget
+		if restoreRetryConfig {
+			defaultWaitTimeOnRetryBackendSend = oldWait
+			defaultMaxWaitTimeOnRetryBackendSend = oldBudget
+		}
 	}()
 
-	sd, err := NewSender(
-		Config{},
-		newTestRuntime(newTestClock(), nil),
-	)
-	assert.NoError(t, err)
-	defer func() {
-		assert.NoError(t, sd.Close())
-	}()
+	sd, err := NewSender(Config{}, newTestRuntime(newTestClock(), nil))
+	require.NoError(t, err)
+	sender := sd.(*sender)
+	originalClient := sender.client
+	backendErr := moerr.NewBackendClosedNoCtx()
+	fakeClient := &backendRetryErrorClient{sendErr: backendErr}
+	sender.client = fakeClient
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	time.AfterFunc(3*defaultWaitTimeOnRetryBackendSend+20*time.Millisecond, cancel)
-
-	req := txn.TxnRequest{
-		Method: txn.TxnMethod_Write,
-		CNRequest: &txn.CNOpRequest{
-			Target: metadata.TNShard{
-				Address: testTN5Addr,
-			},
-			Payload: make([]byte, 10),
-		},
+	parent, cancel := context.WithCancel(context.Background())
+	ctx := &retryWaitContext{Context: parent, evaluated: make(chan struct{})}
+	type outcome struct {
+		result *SendResult
+		err    error
 	}
+	completed := make(chan outcome, 1)
+	joined := false
+	var received outcome
+	defer func() {
+		cancel()
+		if !joined {
+			select {
+			case received = <-completed:
+				joined = true
+			case <-time.After(40 * time.Second):
+				// Do not restore globals while a stuck worker may read them.
+				restoreRetryConfig = false
+				t.Error("sender did not stop after cancellation")
+				return
+			}
+		}
+		if received.result != nil {
+			received.result.Release()
+		}
+		assert.NoError(t, sender.Close())
+		assert.NoError(t, originalClient.Close())
+	}()
+	go func() {
+		result, err := sd.Send(ctx, []txn.TxnRequest{{
+			Method: txn.TxnMethod_Write,
+			CNRequest: &txn.CNOpRequest{
+				Target: metadata.TNShard{Address: testTN5Addr},
+			},
+		}})
+		completed <- outcome{result: result, err: err}
+	}()
 
-	start := time.Now()
-	result, err := sd.Send(ctx, []txn.TxnRequest{req})
-	assert.Nil(t, result)
-	assert.Error(t, err)
-	assert.True(t,
-		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
-			moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
-			moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
-	assert.Less(t, time.Since(start), defaultMaxWaitTimeOnRetryBackendSend)
+	guard, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	select {
+	case <-ctx.evaluated:
+		require.NoError(t, guard.Err(), "retry wait was not entered in time")
+	case received = <-completed:
+		joined = true
+		t.Fatal("sender returned before entering the retry wait")
+	case <-guard.Done():
+		t.Fatal("sender did not enter the retry wait")
+	}
+	require.NoError(t, parent.Err())
+	require.Equal(t, int32(1), fakeClient.sendCalls.Load())
+	select {
+	case received = <-completed:
+		joined = true
+		t.Fatal("sender returned before cancellation")
+	default:
+	}
+	cancel()
+	select {
+	case received = <-completed:
+		joined = true
+		require.NoError(t, guard.Err(), "sender did not respond to cancellation in time")
+	case <-guard.Done():
+		t.Fatal("sender did not respond to cancellation")
+	}
+	require.ErrorIs(t, parent.Err(), context.Canceled)
+	require.Nil(t, received.result)
+	require.Same(t, backendErr, received.err)
+	require.True(t, moerr.IsMoErrCode(received.err, moerr.ErrBackendClosed))
+	require.Equal(t, int32(1), fakeClient.sendCalls.Load())
 }
 
 func TestSendWithTxnUnknown(t *testing.T) {

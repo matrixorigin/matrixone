@@ -161,4 +161,27 @@ drop table child_fk;
 drop table parent_fk;
 drop table if exists child_fk;
 drop table if exists parent_fk;
+drop database if exists drop_multi_guard;
+create database drop_multi_guard;
+create table first_fail(id int primary key auto_increment);
+create table later_ok(id int primary key auto_increment);
+insert into first_fail values (1);
+insert into later_ok values (5);
+create table drop_multi_guard.child(id int primary key, fid int, foreign key(fid) references drop_multi.first_fail(id));
+set @later_ok_id = (select rel_id from mo_catalog.mo_tables where account_id = 0 and relname = 'later_ok' and reldatabase_id = (select dat_id from mo_catalog.mo_database where account_id = 0 and datname = 'drop_multi'));
+begin;
+drop table first_fail, later_ok;
+internal error: can not drop table 'first_fail' referenced by some foreign key constraint
+commit;
+select rel_id = @later_ok_id as same_later from mo_catalog.mo_tables where account_id = 0 and rel_id = @later_ok_id;
+➤ same_later[-7,1,0]  𝄀
+1
+insert into later_ok values (null);
+select id from later_ok order by id;
+➤ id[4,32,0]  𝄀
+5  𝄀
+6
+drop table drop_multi_guard.child;
+drop database drop_multi_guard;
+drop table first_fail, later_ok;
 drop database drop_multi;

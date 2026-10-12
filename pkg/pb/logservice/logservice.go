@@ -165,6 +165,7 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.ViewMetadataIngressReady = hb.ViewMetadataIngressReady
 	storeInfo.PersistedExpressionProtocolVersion = hb.PersistedExpressionProtocolVersion
 	storeInfo.CatalogMetadataCapabilities = hb.CatalogMetadataCapabilities
+	storeInfo.CatalogMetadataAck = hb.CatalogMetadataAck
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -428,6 +429,8 @@ func (s *ProxyState) Update(hb ProxyHeartbeat, tick uint64) {
 	storeInfo.UUID = hb.UUID
 	storeInfo.Tick = tick
 	storeInfo.ListenAddress = hb.ListenAddress
+	storeInfo.CatalogMetadataCapabilities = hb.CatalogMetadataCapabilities
+	storeInfo.CatalogMetadataAck = hb.CatalogMetadataAck
 	storeInfo.ViewMetadataAdmissionSupported = hb.ViewMetadataAdmissionSupported
 	storeInfo.ViewMetadataAdmissionGeneration = hb.ViewMetadataAdmissionGeneration
 	storeInfo.ViewMetadataObservedEpoch = hb.ViewMetadataObservedEpoch

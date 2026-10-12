@@ -36,6 +36,8 @@ func newFuture(releaseFunc func(f *Future)) *Future {
 type Future struct {
 	id   uint64
 	send RPCMessage
+	// Sender lifecycle time belongs to the Future, not copied wire envelopes.
+	createAt time.Time
 	// streamOwner is local-only send lifecycle state. It is deliberately kept
 	// out of RPCMessage so ordinary wire envelopes are not enlarged or coupled
 	// to a client-side stream object.
@@ -80,7 +82,7 @@ func (f *Future) init(send RPCMessage) {
 	f.requestMetrics = nil
 	f.send = send
 	f.streamOwner = nil
-	f.send.createAt = time.Now()
+	f.createAt = time.Now()
 	f.id = send.Message.GetID()
 	f.oneWay = send.oneWay
 	f.mu.Lock()
@@ -106,7 +108,7 @@ func (f *Future) observeRequest(outcome requestOutcome) {
 	if m == nil || !f.requestMetricObserved.CompareAndSwap(false, true) {
 		return
 	}
-	m.requestCompleted(f.send.createAt, outcome)
+	m.requestCompleted(f.createAt, outcome)
 }
 
 func (f *Future) observeRequestError(err error, fallback requestOutcome) {
@@ -335,6 +337,7 @@ func (f *Future) reset() {
 	default:
 	}
 	f.send = RPCMessage{}
+	f.createAt = time.Time{}
 	f.streamOwner = nil
 	f.writtenAt.Store(0)
 	f.sendRelease = nil

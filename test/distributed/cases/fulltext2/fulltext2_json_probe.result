@@ -1,3 +1,49 @@
+drop database if exists ft2_signed_zero;
+create database ft2_signed_zero;
+use ft2_signed_zero;
+set experimental_fulltext2_index = 1;
+create table z (id int primary key, doc json);
+create table z_plain (id int primary key, doc json);
+insert into z values (1,'{"n":-0.0}'),(2,'{"n":0.0}'),(3,'{"n":-0}'),(4,'{"n":0}');
+insert into z_plain select * from z;
+create fulltext2 index ftz on z(doc) with parser json;
+select id from z where json_extract_float64(doc,'$.n') = 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+select id from z_plain where json_extract_float64(doc,'$.n') = 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+select id from z where json_extract_float64(doc,'$.n') = -0.0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+select id from z_plain where json_extract_float64(doc,'$.n') = -0.0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+select id from z where json_extract_float64(doc,'$.n') >= 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+select id from z_plain where json_extract_float64(doc,'$.n') >= 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+drop database ft2_signed_zero;
 drop database if exists ft2_json_probe;
 create database ft2_json_probe;
 use ft2_json_probe;

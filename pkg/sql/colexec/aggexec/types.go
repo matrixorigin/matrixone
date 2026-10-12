@@ -277,6 +277,20 @@ func RequiresCanonicalDistinctKeyWire(agg AggFuncExec) bool {
 	return false
 }
 
+// RequiresModernDistinctFloatKeyWire reports whether an aggregate was built
+// with the modern FLOAT DISTINCT membership policy. A producer must not send
+// that state to a pre-v79 peer after a capability downgrade: the legacy peer
+// compares fixed-width float bytes and the modern state may already have
+// collapsed distinct NaN payloads.
+func RequiresModernDistinctFloatKeyWire(agg AggFuncExec) bool {
+	if configurable, ok := agg.(interface {
+		requiresModernDistinctFloatKeyWire() bool
+	}); ok {
+		return configurable.requiresModernDistinctFloatKeyWire()
+	}
+	return false
+}
+
 // AllocationAccountOwner is implemented by aggregate executors whose complete
 // retained state can participate in an operator's physical allocation
 // account.  It is deliberately separate from AggFuncExec: callers that do not
@@ -533,6 +547,13 @@ func makeAgg(
 	legacyDecimalSumResult bool,
 	param ...types.Type,
 ) (AggFuncExec, error) {
+	// Compact spill vectors inherit their type from this execution contract;
+	// ordinary partial-state vectors also validate their own wire metadata.
+	for _, typ := range param {
+		if err := requireLegacyAggregateType(typ); err != nil {
+			return nil, err
+		}
+	}
 	exec, ok, err := makeSpecialAggExec(
 		mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState,
 		legacyDecimalSumState, legacyDecimalSumResult, param...)

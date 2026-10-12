@@ -80,21 +80,9 @@ func TestAutoCreateEnabled(t *testing.T) {
 	assert.Error(t, err) // No backend available yet
 	assert.True(t, errors.Is(err, ErrBackendCreating))
 
-	// Wait for async creation
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	for {
-		b, err := c.getBackend("test-addr", false)
-		if err == nil && b != nil {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatal("Backend creation timed out")
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
+	// Reuse the completion-aware helper to observe backend publication.
+	b := getBackendWithRetry(t, c, "test-addr", false)
+	require.NotNil(t, b)
 
 	// Verify backend was created
 	c.mu.Lock()

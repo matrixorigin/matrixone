@@ -49,10 +49,16 @@ func TestJSONStringConsumerJSONOverloads(t *testing.T) {
 			got, err := GetFunctionByName(context.Background(), tc.name, tc.args)
 			require.NoError(t, err)
 			_, overloadIndex := DecodeOverloadID(got.GetEncodedOverloadID())
-			require.Equal(t, int32(1), overloadIndex)
+			wantOverload := int32(0)
+			if tc.name == "elt" {
+				wantOverload = 1
+			}
+			require.Equal(t, wantOverload, overloadIndex)
 			_, shouldCast := got.ShouldDoImplicitTypeCast()
 			require.False(t, shouldCast)
-			require.Equal(t, wantType, got.GetReturnType())
+			if tc.name == "elt" {
+				require.Equal(t, wantType, got.GetReturnType())
+			}
 		})
 	}
 }
@@ -102,7 +108,11 @@ func TestJSONStringConsumerRegisteredExecutors(t *testing.T) {
 			got, err := GetFunctionByName(proc.Ctx, tc.name, tc.args)
 			require.NoError(t, err)
 			_, overloadIndex := DecodeOverloadID(got.GetEncodedOverloadID())
-			require.Equal(t, int32(1), overloadIndex)
+			wantOverload := int32(0)
+			if tc.name == "elt" {
+				wantOverload = 1
+			}
+			require.Equal(t, wantOverload, overloadIndex)
 
 			inputs := make([]*vector.Vector, len(tc.inputs))
 			for i, input := range tc.inputs {
@@ -134,7 +144,11 @@ func TestJSONStringConsumerBinaryReturnType(t *testing.T) {
 			got, err := GetFunctionByName(context.Background(), name, args)
 			require.NoError(t, err)
 			_, overloadIndex := DecodeOverloadID(got.GetEncodedOverloadID())
-			require.Equal(t, int32(1), overloadIndex)
+			wantOverload := int32(0)
+			if name == "elt" {
+				wantOverload = 1
+			}
+			require.Equal(t, wantOverload, overloadIndex)
 			require.Equal(t, binaryType, got.GetReturnType())
 		})
 	}
@@ -147,8 +161,6 @@ func TestJSONStringConsumerChecksRejectMissingOverload(t *testing.T) {
 		check func([]overload, []types.Type) checkResult
 		args  []types.Type
 	}{
-		{name: "concat", check: builtInConcatCheck, args: []types.Type{types.T_json.ToType(), types.T_varchar.ToType()}},
-		{name: "concat_ws", check: concatWsCheck, args: []types.Type{types.T_json.ToType(), types.T_varchar.ToType()}},
 		{name: "elt", check: eltCheck, args: []types.Type{types.T_int64.ToType(), types.T_json.ToType()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -164,7 +176,7 @@ func TestJSONStringConsumersRejectMalformedStoredJSON(t *testing.T) {
 		name   string
 		inputs []FunctionTestInput
 		jsonAt int
-		fn     fEvalFn
+		fn     executeLogicOfOverload
 	}{
 		{
 			name: "concat",
@@ -238,7 +250,7 @@ func TestJSONStringConsumerCastsOnlyNonJSONOperands(t *testing.T) {
 			castAt:     1,
 			castType:   types.T_varchar,
 			castWidth:  20,
-			returnType: types.NewWithCharset(types.T_text, 0, 0, types.CharsetUTF8MB4Bin),
+			returnType: types.NewWithCharset(types.T_text, 0, 0, types.CharsetUTF8),
 		},
 		{
 			name:       "concat_ws",
@@ -247,7 +259,7 @@ func TestJSONStringConsumerCastsOnlyNonJSONOperands(t *testing.T) {
 			castAt:     1,
 			castType:   types.T_varchar,
 			castWidth:  20,
-			returnType: types.NewWithCharset(types.T_text, 0, 0, types.CharsetUTF8MB4Bin),
+			returnType: types.NewWithCharset(types.T_text, 0, 0, types.CharsetUTF8),
 		},
 		{
 			name:       "elt",
@@ -264,7 +276,11 @@ func TestJSONStringConsumerCastsOnlyNonJSONOperands(t *testing.T) {
 			got, err := GetFunctionByName(proc.Ctx, tc.name, tc.args)
 			require.NoError(t, err)
 			_, overloadIndex := DecodeOverloadID(got.GetEncodedOverloadID())
-			require.Equal(t, int32(1), overloadIndex)
+			wantOverload := int32(0)
+			if tc.name == "elt" {
+				wantOverload = 1
+			}
+			require.Equal(t, wantOverload, overloadIndex)
 			casts, shouldCast := got.ShouldDoImplicitTypeCast()
 			require.True(t, shouldCast)
 			require.Equal(t, types.T_json, casts[tc.jsonAt].Oid)

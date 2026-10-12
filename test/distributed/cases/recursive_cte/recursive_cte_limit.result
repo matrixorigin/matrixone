@@ -1,0 +1,59 @@
+with recursive c(n) as (select 1 union all select n + 1 from c where n < 10 limit 3 offset 1) select n from c order by n;
+➤ n[-5,64,0]  𝄀
+2  𝄀
+3  𝄀
+4
+with recursive c(n) as (select 1 union all select n + 1 from c where n < 10 limit 3 offset 1) select n from c where n > 3;
+➤ n[-5,64,0]  𝄀
+4
+with recursive c(n) as (select 1 union all select n + 1 from c where n < 10 limit 3 offset 1) select count(*), sum(n) from c;
+➤ count(*)[-5,64,0]  ¦  sum(n)[3,38,0]  𝄀
+3  ¦  9
+with recursive c(n) as (select n from (select 1 as n union all select 1) seed union all select n + 2 from c where n < 4 limit 3 offset 1) select n from c order by n;
+➤ n[-5,64,0]  𝄀
+1  𝄀
+3  𝄀
+3
+with recursive c(n) as (select 1 union all select n + 1 from c limit 3) select n from c order by n;
+➤ n[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+with recursive c(n) as (select 1 union all select n + 1 from c limit 2 offset 3) select n from c order by n;
+➤ n[-5,64,0]  𝄀
+4  𝄀
+5
+with recursive c(n) as (select 1 union all select n + 1 from c where n < 3 limit 0) select n from c;
+➤ n[-5,64,0]
+with recursive c(n) as (select 1 union all select n + 1 from c limit 0 offset 2) select n from c;
+➤ n[-5,64,0]
+with recursive c(n) as (select 1 union distinct select n + 1 from c limit 0) select n from c;
+➤ n[-5,64,0]
+with recursive c(n) as (select 1 union all select n + 1 from c where n < 3 limit 2 offset 3) select n from c;
+➤ n[-5,64,0]
+with recursive c(n) as (select 1 union all select n + 1 from c where n < 3 limit 18446744073709551615 offset 1) select n from c order by n;
+➤ n[-5,64,0]  𝄀
+2  𝄀
+3
+with recursive c(n) as (select 1 union distinct select n + 1 from c where n < 5 limit 2 offset 2) select n from c order by n;
+➤ n[-5,64,0]  𝄀
+3  𝄀
+4
+prepare cte_window from 'with recursive c(n) as (select 1 union all select n + 1 from c where n < 5 limit ? offset ?) select n from c order by n';
+set @cte_limit = 2;
+set @cte_offset = 1;
+execute cte_window using @cte_limit, @cte_offset;
+➤ n[-5,64,0]  𝄀
+2  𝄀
+3
+set @cte_limit = 0;
+execute cte_window using @cte_limit, @cte_offset;
+➤ n[-5,64,0]
+set @cte_limit = 1;
+set @cte_offset = 3;
+execute cte_window using @cte_limit, @cte_offset;
+➤ n[-5,64,0]  𝄀
+4
+deallocate prepare cte_window;
+set @cte_limit = null;
+set @cte_offset = null;

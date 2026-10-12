@@ -15,7 +15,7 @@ select * from temp_idx1 where name = 'bob';
 2  ¦  bob  ¦  30
 show index from temp_idx1;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_idx1  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name
+temp_idx1  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  name
 drop table temp_idx1;
 create temporary table temp_idx2 (
 id int,
@@ -36,8 +36,8 @@ select * from temp_idx2 where age = 25;
 3  ¦  charlie  ¦  25
 show index from temp_idx2;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_idx2  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
-temp_idx2  ¦  1  ¦  idx_age  ¦  1  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age
+temp_idx2  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
+temp_idx2  ¦  1  ¦  idx_age  ¦  1  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  age
 drop table temp_idx2;
 create temporary table temp_unique (
 id int,
@@ -92,11 +92,11 @@ select * from temp_composite where first_name = 'john' and last_name = 'smith' a
 3  ¦  john  ¦  smith  ¦  35
 show index from temp_composite;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_composite  ¦  1  ¦  idx_name  ¦  1  ¦  first_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  first_name  𝄀
-temp_composite  ¦  1  ¦  idx_name  ¦  2  ¦  last_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  last_name  𝄀
-temp_composite  ¦  1  ¦  idx_name_age  ¦  1  ¦  first_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  first_name  𝄀
-temp_composite  ¦  1  ¦  idx_name_age  ¦  2  ¦  last_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  last_name  𝄀
-temp_composite  ¦  1  ¦  idx_name_age  ¦  3  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age
+temp_composite  ¦  1  ¦  idx_name  ¦  1  ¦  first_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  first_name  𝄀
+temp_composite  ¦  1  ¦  idx_name  ¦  2  ¦  last_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  last_name  𝄀
+temp_composite  ¦  1  ¦  idx_name_age  ¦  1  ¦  first_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  first_name  𝄀
+temp_composite  ¦  1  ¦  idx_name_age  ¦  2  ¦  last_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  last_name  𝄀
+temp_composite  ¦  1  ¦  idx_name_age  ¦  3  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  age
 drop table temp_composite;
 create temporary table temp_alter_idx (
 id int,
@@ -111,10 +111,10 @@ alter table temp_alter_idx add unique index idx_email (email);
 alter table temp_alter_idx add index idx_name_age (name, age);
 show index from temp_alter_idx;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_alter_idx  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
-temp_alter_idx  ¦  0  ¦  idx_email  ¦  1  ¦  email  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  email  𝄀
-temp_alter_idx  ¦  1  ¦  idx_name_age  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
-temp_alter_idx  ¦  1  ¦  idx_name_age  ¦  2  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age
+temp_alter_idx  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
+temp_alter_idx  ¦  0  ¦  idx_email  ¦  1  ¦  email  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  email  𝄀
+temp_alter_idx  ¦  1  ¦  idx_name_age  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
+temp_alter_idx  ¦  1  ¦  idx_name_age  ¦  2  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  age
 select * from temp_alter_idx where name = 'alice';
 ➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  email[12,-1,0]  ¦  age[4,32,0]  𝄀
 1  ¦  alice  ¦  alice@example.com  ¦  25
@@ -133,12 +133,12 @@ insert into temp_drop_idx values (1, 'alice', 25);
 insert into temp_drop_idx values (2, 'bob', 30);
 show index from temp_drop_idx;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_drop_idx  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
-temp_drop_idx  ¦  1  ¦  idx_age  ¦  1  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age
+temp_drop_idx  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
+temp_drop_idx  ¦  1  ¦  idx_age  ¦  1  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  age
 alter table temp_drop_idx drop index idx_name;
 show index from temp_drop_idx;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_drop_idx  ¦  1  ¦  idx_age  ¦  1  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age
+temp_drop_idx  ¦  1  ¦  idx_age  ¦  1  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  age
 alter table temp_drop_idx drop index idx_age;
 show index from temp_drop_idx;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]
@@ -152,12 +152,12 @@ create index idx_name on temp_drop_idx2(name);
 create index idx_email on temp_drop_idx2(email);
 show index from temp_drop_idx2;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_drop_idx2  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
-temp_drop_idx2  ¦  1  ¦  idx_email  ¦  1  ¦  email  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  email
+temp_drop_idx2  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
+temp_drop_idx2  ¦  1  ¦  idx_email  ¦  1  ¦  email  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  email
 drop index idx_name on temp_drop_idx2;
 show index from temp_drop_idx2;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_drop_idx2  ¦  1  ¦  idx_email  ¦  1  ¦  email  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  email
+temp_drop_idx2  ¦  1  ¦  idx_email  ¦  1  ¦  email  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  email
 drop index idx_email on temp_drop_idx2;
 show index from temp_drop_idx2;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]
@@ -174,7 +174,7 @@ insert into temp_fulltext values (2, 'temporary tables guide', 'learn how to use
 insert into temp_fulltext values (3, 'index management', 'creating and managing indexes in matrixone');
 show index from temp_fulltext;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_fulltext  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_fulltext  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
 temp_fulltext  ¦  1  ¦  idx_ft_title  ¦  1  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title  𝄀
 temp_fulltext  ¦  1  ¦  idx_ft_content  ¦  1  ¦  content  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  content
 drop table temp_fulltext;
@@ -188,7 +188,7 @@ insert into temp_fulltext2 values (1, 'database tutorial', 'learn about database
 insert into temp_fulltext2 values (2, 'matrixone features', 'explore the features of matrixone');
 show index from temp_fulltext2;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_fulltext2  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_fulltext2  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
 temp_fulltext2  ¦  1  ¦  idx_ft_multi  ¦  1  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title  𝄀
 temp_fulltext2  ¦  1  ¦  idx_ft_multi  ¦  2  ¦  body  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  body
 drop table temp_fulltext2;
@@ -203,7 +203,7 @@ insert into temp_vector values (2, '[4.0, 5.0, 6.0]');
 insert into temp_vector values (3, '[7.0, 8.0, 9.0]');
 show index from temp_vector;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_vector  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_vector  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
 temp_vector  ¦  1  ¦  idx_ivf  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"1","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
 drop table temp_vector;
 create temporary table temp_vector2 (
@@ -213,7 +213,7 @@ vec128 vecf32(128)
 create index idx_vec128 using ivfflat on temp_vector2(vec128) lists=2 op_type "vector_l2_ops";
 show index from temp_vector2;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_vector2  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_vector2  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
 temp_vector2  ¦  1  ¦  idx_vec128  ¦  1  ¦  vec128  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  vec128
 drop table temp_vector2;
 set experimental_ivf_index = 0;
@@ -231,11 +231,11 @@ create index idx_age_created on temp_multi_idx(age, created_at);
 create fulltext index idx_bio on temp_multi_idx(bio);
 show index from temp_multi_idx;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_multi_idx  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
-temp_multi_idx  ¦  1  ¦  idx_username  ¦  1  ¦  username  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  username  𝄀
-temp_multi_idx  ¦  0  ¦  idx_email  ¦  1  ¦  email  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  email  𝄀
-temp_multi_idx  ¦  1  ¦  idx_age_created  ¦  1  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age  𝄀
-temp_multi_idx  ¦  1  ¦  idx_age_created  ¦  2  ¦  created_at  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  created_at  𝄀
+temp_multi_idx  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_multi_idx  ¦  1  ¦  idx_username  ¦  1  ¦  username  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  username  𝄀
+temp_multi_idx  ¦  0  ¦  idx_email  ¦  1  ¦  email  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  email  𝄀
+temp_multi_idx  ¦  1  ¦  idx_age_created  ¦  1  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  age  𝄀
+temp_multi_idx  ¦  1  ¦  idx_age_created  ¦  2  ¦  created_at  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  created_at  𝄀
 temp_multi_idx  ¦  1  ¦  idx_bio  ¦  1  ¦  bio  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  bio
 insert into temp_multi_idx values
 (1, 'alice', 'alice@example.com', 25, 'software engineer', '2024-01-01 10:00:00'),
@@ -259,7 +259,7 @@ name varchar(50)
 create index idx_name on temp_empty_idx(name);
 show index from temp_empty_idx;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_empty_idx  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name
+temp_empty_idx  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  name
 insert into temp_empty_idx values (1, 'test');
 select * from temp_empty_idx where name = 'test';
 ➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
@@ -275,7 +275,7 @@ insert into temp_data_idx values (3, 'value3');
 create index idx_value on temp_data_idx(value);
 show index from temp_data_idx;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_data_idx  ¦  1  ¦  idx_value  ¦  1  ¦  value  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  value
+temp_data_idx  ¦  1  ¦  idx_value  ¦  1  ¦  value  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  value
 select * from temp_data_idx where value = 'value2';
 ➤ id[4,32,0]  ¦  value[12,-1,0]  𝄀
 2  ¦  value2
@@ -303,7 +303,7 @@ INSERT INTO temp_ft_basic (title, content) VALUES
 ('MatrixOne Performance Optimization', 'Tips and tricks for optimizing query performance');
 SHOW INDEX FROM temp_ft_basic;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_ft_basic  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_ft_basic  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
 temp_ft_basic  ¦  1  ¦  idx_ft_title  ¦  1  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title
 SELECT id, title FROM temp_ft_basic
 WHERE MATCH(title) AGAINST('MatrixOne' IN NATURAL LANGUAGE MODE);
@@ -341,10 +341,10 @@ INSERT INTO temp_ft_multi_column (document_code, title, abstract, body, author, 
 'Bob Johnson', 'AI/ML', '2024-02-01');
 SHOW INDEX FROM temp_ft_multi_column;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_ft_multi_column  ¦  0  ¦  document_code  ¦  1  ¦  document_code  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  document_code  𝄀
-temp_ft_multi_column  ¦  1  ¦  idx_category  ¦  1  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
-temp_ft_multi_column  ¦  1  ¦  idx_author  ¦  1  ¦  author  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  author  𝄀
-temp_ft_multi_column  ¦  0  ¦  PRIMARY  ¦  1  ¦  doc_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  doc_id  𝄀
+temp_ft_multi_column  ¦  0  ¦  document_code  ¦  1  ¦  document_code  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  document_code  𝄀
+temp_ft_multi_column  ¦  1  ¦  idx_category  ¦  1  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
+temp_ft_multi_column  ¦  1  ¦  idx_author  ¦  1  ¦  author  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  author  𝄀
+temp_ft_multi_column  ¦  0  ¦  PRIMARY  ¦  1  ¦  doc_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  doc_id  𝄀
 temp_ft_multi_column  ¦  1  ¦  idx_ft_title_abstract  ¦  1  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title  𝄀
 temp_ft_multi_column  ¦  1  ¦  idx_ft_title_abstract  ¦  2  ¦  abstract  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  abstract  𝄀
 temp_ft_multi_column  ¦  1  ¦  idx_ft_body  ¦  1  ¦  body  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  body
@@ -397,14 +397,14 @@ INSERT INTO temp_ft_composite_pk (article_id, language_code, title, subtitle, co
 'temporary, tables, session, storage, cleanup', 103, 1, 950);
 SHOW INDEX FROM temp_ft_composite_pk;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_ft_composite_pk  ¦  1  ¦  idx_author  ¦  1  ¦  author_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  author_id  𝄀
-temp_ft_composite_pk  ¦  1  ¦  idx_category  ¦  1  ¦  category_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  category_id  𝄀
-temp_ft_composite_pk  ¦  1  ¦  idx_views  ¦  1  ¦  view_count  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  view_count  𝄀
-temp_ft_composite_pk  ¦  1  ¦  idx_created  ¦  1  ¦  created_at  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  created_at  𝄀
-temp_ft_composite_pk  ¦  1  ¦  idx_author_category  ¦  1  ¦  author_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  author_id  𝄀
-temp_ft_composite_pk  ¦  1  ¦  idx_author_category  ¦  2  ¦  category_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  category_id  𝄀
-temp_ft_composite_pk  ¦  0  ¦  PRIMARY  ¦  1  ¦  article_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  article_id  𝄀
-temp_ft_composite_pk  ¦  0  ¦  PRIMARY  ¦  2  ¦  language_code  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  language_code  𝄀
+temp_ft_composite_pk  ¦  1  ¦  idx_author  ¦  1  ¦  author_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  author_id  𝄀
+temp_ft_composite_pk  ¦  1  ¦  idx_category  ¦  1  ¦  category_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  category_id  𝄀
+temp_ft_composite_pk  ¦  1  ¦  idx_views  ¦  1  ¦  view_count  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  view_count  𝄀
+temp_ft_composite_pk  ¦  1  ¦  idx_created  ¦  1  ¦  created_at  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  created_at  𝄀
+temp_ft_composite_pk  ¦  1  ¦  idx_author_category  ¦  1  ¦  author_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  author_id  𝄀
+temp_ft_composite_pk  ¦  1  ¦  idx_author_category  ¦  2  ¦  category_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  category_id  𝄀
+temp_ft_composite_pk  ¦  0  ¦  PRIMARY  ¦  1  ¦  article_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  article_id  𝄀
+temp_ft_composite_pk  ¦  0  ¦  PRIMARY  ¦  2  ¦  language_code  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  language_code  𝄀
 temp_ft_composite_pk  ¦  1  ¦  idx_ft_title_subtitle  ¦  1  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title  𝄀
 temp_ft_composite_pk  ¦  1  ¦  idx_ft_title_subtitle  ¦  2  ¦  subtitle  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  subtitle  𝄀
 temp_ft_composite_pk  ¦  1  ¦  idx_ft_content  ¦  1  ¦  content  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  content  𝄀
@@ -468,18 +468,18 @@ INSERT INTO temp_ft_complex_indexes (sku, barcode, product_name, description, sp
 'ViewPro', 'Electronics', 'Displays', 499.99, 30, 1003, 2);
 SHOW INDEX FROM temp_ft_complex_indexes;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_ft_complex_indexes  ¦  0  ¦  sku  ¦  1  ¦  sku  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  sku  𝄀
-temp_ft_complex_indexes  ¦  0  ¦  barcode  ¦  1  ¦  barcode  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  barcode  𝄀
-temp_ft_complex_indexes  ¦  0  ¦  idx_sku_brand  ¦  1  ¦  sku  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  sku  𝄀
-temp_ft_complex_indexes  ¦  0  ¦  idx_sku_brand  ¦  2  ¦  brand  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  brand  𝄀
-temp_ft_complex_indexes  ¦  1  ¦  idx_category_subcategory  ¦  1  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
-temp_ft_complex_indexes  ¦  1  ¦  idx_category_subcategory  ¦  2  ¦  subcategory  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  subcategory  𝄀
-temp_ft_complex_indexes  ¦  1  ¦  idx_price_stock  ¦  1  ¦  price  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  price  𝄀
-temp_ft_complex_indexes  ¦  1  ¦  idx_price_stock  ¦  2  ¦  stock_quantity  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  stock_quantity  𝄀
-temp_ft_complex_indexes  ¦  1  ¦  idx_supplier  ¦  1  ¦  supplier_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  supplier_id  𝄀
-temp_ft_complex_indexes  ¦  1  ¦  idx_brand_category  ¦  1  ¦  brand  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  brand  𝄀
-temp_ft_complex_indexes  ¦  1  ¦  idx_brand_category  ¦  2  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
-temp_ft_complex_indexes  ¦  0  ¦  PRIMARY  ¦  1  ¦  product_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  product_id  𝄀
+temp_ft_complex_indexes  ¦  0  ¦  sku  ¦  1  ¦  sku  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  sku  𝄀
+temp_ft_complex_indexes  ¦  0  ¦  barcode  ¦  1  ¦  barcode  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  barcode  𝄀
+temp_ft_complex_indexes  ¦  0  ¦  idx_sku_brand  ¦  1  ¦  sku  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  sku  𝄀
+temp_ft_complex_indexes  ¦  0  ¦  idx_sku_brand  ¦  2  ¦  brand  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  brand  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_category_subcategory  ¦  1  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_category_subcategory  ¦  2  ¦  subcategory  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  subcategory  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_price_stock  ¦  1  ¦  price  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  price  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_price_stock  ¦  2  ¦  stock_quantity  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  stock_quantity  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_supplier  ¦  1  ¦  supplier_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  supplier_id  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_brand_category  ¦  1  ¦  brand  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  brand  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_brand_category  ¦  2  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
+temp_ft_complex_indexes  ¦  0  ¦  PRIMARY  ¦  1  ¦  product_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  product_id  𝄀
 temp_ft_complex_indexes  ¦  1  ¦  idx_ft_name_desc  ¦  1  ¦  product_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  product_name  𝄀
 temp_ft_complex_indexes  ¦  1  ¦  idx_ft_name_desc  ¦  2  ¦  description  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  description  𝄀
 temp_ft_complex_indexes  ¦  1  ¦  idx_ft_specs  ¦  1  ¦  specifications  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  specifications  𝄀
@@ -527,8 +527,8 @@ INSERT INTO temp_vec_basic (item_name, embedding, category) VALUES
 ('Item E', '[10.0, 11.0, 12.0]', 'Category3');
 SHOW INDEX FROM temp_vec_basic;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_vec_basic  ¦  1  ¦  idx_category  ¦  1  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
-temp_vec_basic  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_vec_basic  ¦  1  ¦  idx_category  ¦  1  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
+temp_vec_basic  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
 temp_vec_basic  ¦  1  ¦  idx_vec_embedding  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
 SELECT id, item_name, category, embedding
 FROM temp_vec_basic
@@ -569,11 +569,11 @@ INSERT INTO temp_vec_multi_vectors (user_id, session_id, user_profile_vec, behav
 (1004, 1, '[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]', '[0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]', '[0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3]', 'Diana Prince', 'Standard', '2023-04-05', 650);
 SHOW INDEX FROM temp_vec_multi_vectors;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_vec_multi_vectors  ¦  1  ¦  idx_user_type  ¦  1  ¦  user_type  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  user_type  𝄀
-temp_vec_multi_vectors  ¦  1  ¦  idx_registration  ¦  1  ¦  registration_date  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  registration_date  𝄀
-temp_vec_multi_vectors  ¦  1  ¦  idx_interactions  ¦  1  ¦  total_interactions  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  total_interactions  𝄀
-temp_vec_multi_vectors  ¦  0  ¦  PRIMARY  ¦  1  ¦  user_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  user_id  𝄀
-temp_vec_multi_vectors  ¦  0  ¦  PRIMARY  ¦  2  ¦  session_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  session_id  𝄀
+temp_vec_multi_vectors  ¦  1  ¦  idx_user_type  ¦  1  ¦  user_type  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  user_type  𝄀
+temp_vec_multi_vectors  ¦  1  ¦  idx_registration  ¦  1  ¦  registration_date  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  registration_date  𝄀
+temp_vec_multi_vectors  ¦  1  ¦  idx_interactions  ¦  1  ¦  total_interactions  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  total_interactions  𝄀
+temp_vec_multi_vectors  ¦  0  ¦  PRIMARY  ¦  1  ¦  user_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  user_id  𝄀
+temp_vec_multi_vectors  ¦  0  ¦  PRIMARY  ¦  2  ¦  session_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  session_id  𝄀
 temp_vec_multi_vectors  ¦  1  ¦  idx_vec_profile  ¦  1  ¦  user_profile_vec  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"3","op_type":"vector_l2_ops"}  ¦  YES  ¦  user_profile_vec  𝄀
 temp_vec_multi_vectors  ¦  1  ¦  idx_vec_behavior  ¦  1  ¦  behavior_vec  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"3","op_type":"vector_l2_ops"}  ¦  YES  ¦  behavior_vec  𝄀
 temp_vec_multi_vectors  ¦  1  ¦  idx_vec_preference  ¦  1  ¦  preference_vec  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"3","op_type":"vector_l2_ops"}  ¦  YES  ¦  preference_vec
@@ -639,16 +639,16 @@ INSERT INTO temp_vec_high_dim (image_name, image_hash, feature_vector, category,
 'Urban', 'Cityscape', 'city,night,lights,buildings,urban', 2001, '2024-01-20', 2560, 1920, 1080, 'JPEG', 18000);
 SHOW INDEX FROM temp_vec_high_dim;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_vec_high_dim  ¦  0  ¦  image_hash  ¦  1  ¦  image_hash  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  image_hash  𝄀
-temp_vec_high_dim  ¦  1  ¦  idx_category_subcat  ¦  1  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
-temp_vec_high_dim  ¦  1  ¦  idx_category_subcat  ¦  2  ¦  subcategory  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  subcategory  𝄀
-temp_vec_high_dim  ¦  1  ¦  idx_upload_user  ¦  1  ¦  upload_user_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  upload_user_id  𝄀
-temp_vec_high_dim  ¦  1  ¦  idx_upload_date  ¦  1  ¦  upload_date  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  upload_date  𝄀
-temp_vec_high_dim  ¦  1  ¦  idx_dimensions  ¦  1  ¦  width  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  width  𝄀
-temp_vec_high_dim  ¦  1  ¦  idx_dimensions  ¦  2  ¦  height  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  height  𝄀
-temp_vec_high_dim  ¦  1  ¦  idx_public_views  ¦  1  ¦  is_public  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  is_public  𝄀
-temp_vec_high_dim  ¦  1  ¦  idx_public_views  ¦  2  ¦  view_count  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  view_count  𝄀
-temp_vec_high_dim  ¦  0  ¦  PRIMARY  ¦  1  ¦  image_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  image_id  𝄀
+temp_vec_high_dim  ¦  0  ¦  image_hash  ¦  1  ¦  image_hash  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  image_hash  𝄀
+temp_vec_high_dim  ¦  1  ¦  idx_category_subcat  ¦  1  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
+temp_vec_high_dim  ¦  1  ¦  idx_category_subcat  ¦  2  ¦  subcategory  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  subcategory  𝄀
+temp_vec_high_dim  ¦  1  ¦  idx_upload_user  ¦  1  ¦  upload_user_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  upload_user_id  𝄀
+temp_vec_high_dim  ¦  1  ¦  idx_upload_date  ¦  1  ¦  upload_date  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  upload_date  𝄀
+temp_vec_high_dim  ¦  1  ¦  idx_dimensions  ¦  1  ¦  width  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  width  𝄀
+temp_vec_high_dim  ¦  1  ¦  idx_dimensions  ¦  2  ¦  height  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  height  𝄀
+temp_vec_high_dim  ¦  1  ¦  idx_public_views  ¦  1  ¦  is_public  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  is_public  𝄀
+temp_vec_high_dim  ¦  1  ¦  idx_public_views  ¦  2  ¦  view_count  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  view_count  𝄀
+temp_vec_high_dim  ¦  0  ¦  PRIMARY  ¦  1  ¦  image_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  image_id  𝄀
 temp_vec_high_dim  ¦  1  ¦  idx_vec_features  ¦  1  ¦  feature_vector  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"5","op_type":"vector_l2_ops"}  ¦  YES  ¦  feature_vector
 SELECT image_id, image_name, category, view_count
 FROM temp_vec_high_dim
@@ -738,20 +738,20 @@ INSERT INTO temp_hybrid_search VALUES
 3003, 'Dr. Emily Rodriguez', 'Database', 'Architecture', 'en', '2024-02-01', '2024-02-01', 120, 2200, 4.80, TRUE);
 SHOW INDEX FROM temp_hybrid_search;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-temp_hybrid_search  ¦  0  ¦  idx_doc_version  ¦  1  ¦  doc_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  doc_id  𝄀
-temp_hybrid_search  ¦  0  ¦  idx_doc_version  ¦  2  ¦  version  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  version  𝄀
-temp_hybrid_search  ¦  1  ¦  idx_author  ¦  1  ¦  author_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  author_id  𝄀
-temp_hybrid_search  ¦  1  ¦  idx_author  ¦  2  ¦  author_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  author_name  𝄀
-temp_hybrid_search  ¦  1  ¦  idx_category_subcat  ¦  1  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
-temp_hybrid_search  ¦  1  ¦  idx_category_subcat  ¦  2  ¦  subcategory  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  subcategory  𝄀
-temp_hybrid_search  ¦  1  ¦  idx_publish_date  ¦  1  ¦  publish_date  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  publish_date  𝄀
-temp_hybrid_search  ¦  1  ¦  idx_citations_downloads  ¦  1  ¦  citation_count  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  citation_count  𝄀
-temp_hybrid_search  ¦  1  ¦  idx_citations_downloads  ¦  2  ¦  download_count  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  download_count  𝄀
-temp_hybrid_search  ¦  1  ¦  idx_rating  ¦  1  ¦  rating  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  rating  𝄀
-temp_hybrid_search  ¦  1  ¦  idx_featured_rating  ¦  1  ¦  is_featured  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  is_featured  𝄀
-temp_hybrid_search  ¦  1  ¦  idx_featured_rating  ¦  2  ¦  rating  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  rating  𝄀
-temp_hybrid_search  ¦  0  ¦  PRIMARY  ¦  1  ¦  doc_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  doc_id  𝄀
-temp_hybrid_search  ¦  0  ¦  PRIMARY  ¦  2  ¦  version  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  version  𝄀
+temp_hybrid_search  ¦  0  ¦  idx_doc_version  ¦  1  ¦  doc_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  doc_id  𝄀
+temp_hybrid_search  ¦  0  ¦  idx_doc_version  ¦  2  ¦  version  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  version  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_author  ¦  1  ¦  author_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  author_id  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_author  ¦  2  ¦  author_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  author_name  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_category_subcat  ¦  1  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_category_subcat  ¦  2  ¦  subcategory  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  subcategory  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_publish_date  ¦  1  ¦  publish_date  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  publish_date  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_citations_downloads  ¦  1  ¦  citation_count  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  citation_count  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_citations_downloads  ¦  2  ¦  download_count  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  download_count  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_rating  ¦  1  ¦  rating  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  rating  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_featured_rating  ¦  1  ¦  is_featured  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  is_featured  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_featured_rating  ¦  2  ¦  rating  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  rating  𝄀
+temp_hybrid_search  ¦  0  ¦  PRIMARY  ¦  1  ¦  doc_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  doc_id  𝄀
+temp_hybrid_search  ¦  0  ¦  PRIMARY  ¦  2  ¦  version  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  version  𝄀
 temp_hybrid_search  ¦  1  ¦  idx_ft_title  ¦  1  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title  𝄀
 temp_hybrid_search  ¦  1  ¦  idx_ft_abstract  ¦  1  ¦  abstract  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  abstract  𝄀
 temp_hybrid_search  ¦  1  ¦  idx_ft_fulltext  ¦  1  ¦  full_text  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  full_text  𝄀

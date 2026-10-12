@@ -409,48 +409,6 @@ func reclaimAccountOwnedBranchMetadataWithBH(
 	return nil
 }
 
-// reclaimBranchSnapshotsWithBH is the BackgroundExec-backed entry point used
-// by dataBranchDeleteTable and dataBranchDeleteDatabase. It always executes
-// the DELETE under the sys account so snapshot rows owned by cross-account
-// parents can be removed.
-func reclaimBranchSnapshotsWithBH(
-	ctx context.Context,
-	ses *Session,
-	bh BackgroundExec,
-	accountID uint32,
-	deadTIDs []uint64,
-) error {
-	if len(deadTIDs) == 0 {
-		return nil
-	}
-	logutil.Info(
-		"DataBranch-ProtectSnapshot-Reclaim-Start",
-		zap.String("entry", "bh"),
-		zap.Uint64s("dead_tids", deadTIDs),
-	)
-	loadDAG := func() (databranchutils.BranchReclaimDag, error) {
-		return loadBranchDAGWithBH(ctx, bh)
-	}
-	markDeleted := func() error {
-		return markBranchTablesDeleted(ctx, ses, bh, accountID, deadTIDs)
-	}
-	execDelete := func(snames []string) error {
-		sysCtx := defines.AttachAccountId(ctx, sysAccountID)
-		sql := databranchutils.BuildBranchSnapshotDeleteSQL(snames)
-		bh.ClearExecResultSet()
-		if err := bh.Exec(sysCtx, sql); err != nil {
-			return err
-		}
-		logutil.Info(
-			"DataBranch-ProtectSnapshot-Reclaim-Done",
-			zap.String("entry", "bh"),
-			zap.Strings("released", snames),
-		)
-		return nil
-	}
-	return databranchutils.MarkAndReclaimBranchSnapshotsCore(deadTIDs, loadDAG, markDeleted, execDelete)
-}
-
 // getBranchParentAccountName resolves the account name for the source
 // account id recorded on the receipt. It is cached on the receipt to avoid
 // repeated lookups when the same receipt is used for both metadata and

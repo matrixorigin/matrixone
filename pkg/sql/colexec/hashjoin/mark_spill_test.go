@@ -41,9 +41,7 @@ func newMarkSpillTestCase(t *testing.T) joinTestCase {
 }
 
 func newTypedMarkSpillTestCase(t *testing.T, typ types.Type) joinTestCase {
-	tc := newTestCase(t,
-		[]bool{true},
-		[]types.Type{typ},
+	tc := newTestCase(t, []types.Type{typ},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{
 			{newExpr(0, typ)},

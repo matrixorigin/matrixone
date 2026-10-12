@@ -131,7 +131,7 @@ func (s *service) gcZombieTxn(ctx context.Context) {
 		case <-timer.C:
 			s.transactions.Range(func(_, value any) bool {
 				txnCtx := value.(*txnContext)
-				txnMeta := txnCtx.getTxn()
+				txnMeta, createdAt := txnCtx.getTxnSnapshot()
 				// if a txn is not a distributed txn coordinator, wait coordinator dnshard.
 				if len(txnMeta.TNShards) == 0 ||
 					(len(txnMeta.TNShards) > 0 && s.shard.ShardID != txnMeta.TNShards[0].ShardID) {
@@ -139,7 +139,7 @@ func (s *service) gcZombieTxn(ctx context.Context) {
 				}
 
 				now := time.Now()
-				if now.Sub(txnCtx.createAt) > s.zombieTimeout {
+				if now.Sub(createdAt) > s.zombieTimeout {
 					cleanTxns = append(cleanTxns, txnMeta)
 				}
 				return true
@@ -174,15 +174,21 @@ func (s *service) maybeAddTxn(meta txn.TxnMeta) (*txnContext, bool) {
 	}
 
 	txnCtx := s.acquireTxnContext()
+	// Old requests may retain this pooled pointer, including requests with the
+	// same transaction ID. Keep ownership until publication or loser cleanup.
+	txnCtx.initLocked(meta, acquireNotifier())
+
 	v, loaded := s.transactions.LoadOrStore(id, txnCtx)
 	if loaded {
-		s.releaseTxnContext(txnCtx)
+		s.releaseTxnContextLocked(txnCtx)
+	}
+	txnCtx.mu.Unlock()
+	if loaded {
 		return v.(*txnContext), false
 	}
 
 	// 1. first transaction write request at current DNShard
 	// 2. transaction already committed or aborted, the transaction context will be removed by gcZombieTxn.
-	txnCtx.init(meta, acquireNotifier())
 	util.LogTxnCreateOn(s.logger, meta, s.shard)
 	return txnCtx, true
 }
@@ -211,13 +217,17 @@ func (s *service) validTNShard(tn metadata.TNShard) bool {
 	return true
 }
 
+// acquireTxnContext returns a context with mu exclusively locked. The caller
+// must publish or retire it before unlocking, even when reusing the same ID.
 func (s *service) acquireTxnContext() *txnContext {
 	txn := s.pool.Get().(*txnContext)
+	txn.mu.Lock()
 	txn.logger = s.logger
 	return txn
 }
 
-func (s *service) releaseTxnContext(txnCtx *txnContext) {
+// releaseTxnContextLocked requires the caller to hold txnCtx.mu exclusively.
+func (s *service) releaseTxnContextLocked(txnCtx *txnContext) {
 	txnCtx.resetLocked()
 	s.pool.Put(txnCtx)
 }
@@ -225,7 +235,7 @@ func (s *service) releaseTxnContext(txnCtx *txnContext) {
 type txnContext struct {
 	logger   *log.MOLogger
 	nt       *notifier
-	createAt time.Time
+	createAt time.Time // protected by mu, together with txn metadata
 
 	mu struct {
 		sync.RWMutex
@@ -246,19 +256,17 @@ func (c *txnContext) addWaiter(txnID []byte, w *waiter, waitStatus txn.TxnStatus
 	return true
 }
 
-func (c *txnContext) init(txn txn.TxnMeta, nt *notifier) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+// initLocked requires the caller to hold c.mu exclusively.
+func (c *txnContext) initLocked(txn txn.TxnMeta, nt *notifier) {
 	c.mu.txn = txn
 	c.nt = nt
 	c.createAt = time.Now()
 }
 
-func (c *txnContext) getTxn() txn.TxnMeta {
+func (c *txnContext) getTxnSnapshot() (txn.TxnMeta, time.Time) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.getTxnLocked()
+	return c.getTxnLocked(), c.createAt
 }
 
 func (c *txnContext) getTxnLocked() txn.TxnMeta {

@@ -324,7 +324,7 @@ func TestCoverage_NewMergeTaskFromSpecObjects(t *testing.T) {
 
 func TestCoverage_todoPQ(t *testing.T) {
 	t.Run("Len", func(t *testing.T) {
-		pq := todoPQ{}
+		pq := make(todoPQ, 0, 1)
 		assert.Equal(t, 0, pq.Len())
 
 		pq = append(pq, &todoItem{})

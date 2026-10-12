@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/topsites"
 )
 
 // Source stores one producer's immutable batches so multiple dependent
@@ -123,6 +124,8 @@ type SpillConfig struct {
 	FileFactory       SpillFileFactory
 	Budget            SpillBudget
 	AllocationAccount *mpool.AllocationAccount
+	// 默认保留 CTE 的归属；Top 仅用于子树级自适应候选缓冲。
+	AllocationOwner mpool.AllocationOwner
 }
 
 const (
@@ -184,13 +187,19 @@ func (s *Source) Begin(mp *mpool.MPool, spillConfig ...SpillConfig) error {
 				"materialized sink spill allocation account is unavailable",
 			)
 		}
+		owner := s.spillConfig.AllocationOwner
+		sites := [4]mpool.AllocationSite{cteAllocationSiteData, cteAllocationSiteArea, cteAllocationSiteNulls, cteAllocationSiteGrouping}
+		switch owner {
+		case 0, mpool.AllocationOwnerCTE:
+			owner = mpool.AllocationOwnerCTE
+		case mpool.AllocationOwnerTop:
+			sites = [4]mpool.AllocationSite{topsites.AdaptiveTopRetainedData, topsites.AdaptiveTopRetainedArea, topsites.AdaptiveTopRetainedNulls, topsites.AdaptiveTopRetainedGrouping}
+		default:
+			return mpool.ErrAllocationAccountInvalid
+		}
 		allocation, err := vector.NewAllocationAccountSelection(
-			s.spillConfig.AllocationAccount,
-			mpool.AllocationOwnerCTE,
-			cteAllocationSiteData,
-			cteAllocationSiteArea,
-			cteAllocationSiteNulls,
-			cteAllocationSiteGrouping,
+			s.spillConfig.AllocationAccount, owner,
+			sites[0], sites[1], sites[2], sites[3],
 		)
 		if err != nil {
 			return err

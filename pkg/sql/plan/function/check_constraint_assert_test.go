@@ -42,8 +42,8 @@ func TestCheckConstraintAssert(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		flag := newVectorByType(mp, types.T_bool.ToType(), []bool{true}, &nulls.Nulls{})
-		message := newVectorByType(mp, types.T_varchar.ToType(), []string{"unused"}, &nulls.Nulls{})
 		defer flag.Free(mp)
+		message := newVectorByType(mp, types.T_varchar.ToType(), []string{"unused"}, &nulls.Nulls{})
 		defer message.Free(mp)
 
 		fn := resolve()
@@ -60,13 +60,13 @@ func TestCheckConstraintAssert(t *testing.T) {
 
 	t.Run("constraint violation", func(t *testing.T) {
 		flag := newVectorByType(mp, types.T_bool.ToType(), []bool{false}, &nulls.Nulls{})
+		defer flag.Free(mp)
 		message := newVectorByType(
 			mp,
 			types.T_varchar.ToType(),
 			[]string{"Check constraint 't_chk_1' is violated"},
 			&nulls.Nulls{},
 		)
-		defer flag.Free(mp)
 		defer message.Free(mp)
 
 		fn := resolve()
@@ -94,13 +94,13 @@ func TestCheckConstraintAssertIgnoreAddsBoundedWarningsAndFiltersRows(t *testing
 	mp := proc.Mp()
 
 	flag := newVectorByType(mp, types.T_bool.ToType(), []bool{true, false, false}, &nulls.Nulls{})
+	defer flag.Free(mp)
 	message := newVectorByType(
 		mp,
 		types.T_varchar.ToType(),
 		[]string{"Check constraint 'ck_pos' is violated."},
 		&nulls.Nulls{},
 	)
-	defer flag.Free(mp)
 	defer message.Free(mp)
 
 	fn, err := GetFunctionByName(

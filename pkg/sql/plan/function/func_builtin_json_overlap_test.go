@@ -590,7 +590,7 @@ func TestJSONOverlapsSQL(t *testing.T) {
 			[]int64{1, 0, 1, 0, 1}, []bool{false, false, false, true, false}),
 		jsonOverlaps,
 	)
-	succeed, message := testCase.Run()
+	succeed, message := testCase.RunAndFree()
 	require.True(t, succeed, message)
 }
 
@@ -628,7 +628,7 @@ func TestJSONOverlapsMySQLDocumentCases(t *testing.T) {
 			[]int64{1, 1, 1, 1, 0, 0, 0, 1, 1}, nil),
 		jsonOverlaps,
 	)
-	succeed, message := testCase.Run()
+	succeed, message := testCase.RunAndFree()
 	require.True(t, succeed, message)
 }
 
@@ -644,7 +644,7 @@ func TestJSONOverlapsTypedJSON(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil),
 		jsonOverlaps,
 	)
-	succeed, message := testCase.Run()
+	succeed, message := testCase.RunAndFree()
 	require.True(t, succeed, message)
 
 	tooDeep := strings.Repeat(`{"a":`, bytejson.JSONDocumentMaxNestingDepth+1) + `1` +
@@ -666,6 +666,7 @@ func TestJSONOverlapsTypedJSON(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
 		jsonOverlaps,
 	)
+	defer testCase.Free()
 	require.NoError(t, testCase.result.PreExtendAndReset(1))
 	err = testCase.fn(testCase.parameters, testCase.result, proc, 1, nil)
 	require.ErrorContains(t, err, "nesting depth exceeds 100")
@@ -701,6 +702,7 @@ func TestJSONOverlapsEvaluationOrder(t *testing.T) {
 				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{tt.wantError == ""}),
 				jsonOverlaps,
 			)
+			defer testCase.Free()
 			require.NoError(t, testCase.result.PreExtendAndReset(1))
 			err := testCase.fn(testCase.parameters, testCase.result, proc, 1, nil)
 			if tt.wantError == "" {
@@ -807,7 +809,7 @@ func TestJSONOverlapsMySQLBinaryStringTypes(t *testing.T) {
 					[]int64{1, 0, 1, 0}, []bool{false, false, false, true}),
 				jsonOverlaps,
 			)
-			succeed, message := testCase.Run()
+			succeed, message := testCase.RunAndFree()
 			require.True(t, succeed, message)
 		})
 	}
@@ -824,6 +826,7 @@ func TestJSONOverlapsIgnoreAllRowsDoesNotParse(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 		jsonOverlaps,
 	)
+	defer testCase.Free()
 	require.NoError(t, testCase.result.PreExtendAndReset(1))
 	err := testCase.fn(testCase.parameters, testCase.result, proc, 1, &FunctionSelectList{AllNull: true})
 	require.NoError(t, err)
@@ -843,6 +846,7 @@ func TestJSONOverlapEvaluableRowsExcludesSelectedAndNullRows(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 		jsonOverlaps,
 	)
+	defer testCase.Free()
 	left := jsonOverlapOperand{wrapper: vector.GenerateFunctionStrParameter(testCase.parameters[0])}
 	right := jsonOverlapOperand{wrapper: vector.GenerateFunctionStrParameter(testCase.parameters[1])}
 	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}}
@@ -862,6 +866,7 @@ func TestJSONOverlapsPartialSelectListSkipsParsingAndPreservesNulls(t *testing.T
 		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 		jsonOverlaps,
 	)
+	defer testCase.Free()
 	require.NoError(t, testCase.result.PreExtendAndReset(4))
 	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true, false}}
 

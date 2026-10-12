@@ -1,4 +1,4 @@
-//go:build amd64 && go1.26 && goexperiment.simd
+//go:build amd64 && go1.27 && goexperiment.simd
 
 // Copyright 2023 Matrix Origin
 //
@@ -98,8 +98,8 @@ func l2sqF16SIMD(a, b []types.Float16) (float64, error) {
 	acc0, acc1 := archsimd.Float32x16{}, archsimd.Float32x16{}
 	np, j := len(au), 0
 	for ; j <= np-16; j += 16 {
-		ua := archsimd.LoadUint32x16Slice(au[j : j+16])
-		ub := archsimd.LoadUint32x16Slice(bu[j : j+16])
+		ua := archsimd.LoadUint32x16(au[j : j+16])
+		ub := archsimd.LoadUint32x16(bu[j : j+16])
 		dE := f16dec(ua.And(mLo), m7fff, m8000, mInf, magic, infNan).Sub(f16dec(ub.And(mLo), m7fff, m8000, mInf, magic, infNan))
 		dO := f16dec(ua.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan).Sub(f16dec(ub.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan))
 		acc0 = dE.MulAdd(dE, acc0)
@@ -123,8 +123,8 @@ func innerProductF16SIMD(a, b []types.Float16) (float64, error) {
 	acc0, acc1 := archsimd.Float32x16{}, archsimd.Float32x16{}
 	np, j := len(au), 0
 	for ; j <= np-16; j += 16 {
-		ua := archsimd.LoadUint32x16Slice(au[j : j+16])
-		ub := archsimd.LoadUint32x16Slice(bu[j : j+16])
+		ua := archsimd.LoadUint32x16(au[j : j+16])
+		ub := archsimd.LoadUint32x16(bu[j : j+16])
 		acc0 = f16dec(ua.And(mLo), m7fff, m8000, mInf, magic, infNan).MulAdd(f16dec(ub.And(mLo), m7fff, m8000, mInf, magic, infNan), acc0)
 		acc1 = f16dec(ua.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan).MulAdd(f16dec(ub.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan), acc1)
 	}
@@ -132,7 +132,7 @@ func innerProductF16SIMD(a, b []types.Float16) (float64, error) {
 	for i := j * 2; i < n; i++ {
 		sum += f16fast(a[i]) * f16fast(b[i])
 	}
-	return float64(-sum), nil
+	return recoverInnerProductF16(float64(-sum), a, b)
 }
 
 func l1DistanceF16SIMD(a, b []types.Float16) (float64, error) {
@@ -146,8 +146,8 @@ func l1DistanceF16SIMD(a, b []types.Float16) (float64, error) {
 	acc0, acc1 := archsimd.Float32x16{}, archsimd.Float32x16{}
 	np, j := len(au), 0
 	for ; j <= np-16; j += 16 {
-		ua := archsimd.LoadUint32x16Slice(au[j : j+16])
-		ub := archsimd.LoadUint32x16Slice(bu[j : j+16])
+		ua := archsimd.LoadUint32x16(au[j : j+16])
+		ub := archsimd.LoadUint32x16(bu[j : j+16])
 		dE := f16dec(ua.And(mLo), m7fff, m8000, mInf, magic, infNan).Sub(f16dec(ub.And(mLo), m7fff, m8000, mInf, magic, infNan))
 		dO := f16dec(ua.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan).Sub(f16dec(ub.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan))
 		acc0 = acc0.Add(dE.AsUint32x16().And(absMask).AsFloat32x16())
@@ -179,8 +179,8 @@ func cosineDistanceF16SIMD(a, b []types.Float16) (float64, error) {
 	nb0, nb1 := archsimd.Float32x16{}, archsimd.Float32x16{}
 	np, j := len(au), 0
 	for ; j <= np-16; j += 16 {
-		ua := archsimd.LoadUint32x16Slice(au[j : j+16])
-		ub := archsimd.LoadUint32x16Slice(bu[j : j+16])
+		ua := archsimd.LoadUint32x16(au[j : j+16])
+		ub := archsimd.LoadUint32x16(bu[j : j+16])
 		aE := f16dec(ua.And(mLo), m7fff, m8000, mInf, magic, infNan)
 		aO := f16dec(ua.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan)
 		bE := f16dec(ub.And(mLo), m7fff, m8000, mInf, magic, infNan)
@@ -205,5 +205,5 @@ func cosineDistanceF16SIMD(a, b []types.Float16) (float64, error) {
 	if denom == 0 {
 		return 1.0, nil
 	}
-	return cosineDistClamped(float64(dot), denom), nil
+	return recoverCosineF16(cosineDistClamped(float64(dot), denom), a, b)
 }

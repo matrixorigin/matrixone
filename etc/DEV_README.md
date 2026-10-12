@@ -90,6 +90,7 @@ make dev-help
 - [Local Development Methods](#local-development-methods) - **Start here!** Three ways to run MatrixOne locally with complete setup, data directories, and cleanup instructions
 - [Standalone MatrixOne Setup](#standalone-matrixone-setup) - Complete standalone workflow details
 - [Multi-CN Cluster Setup](#multi-cn-cluster-setup-docker-compose) - Complete multi-CN workflow details
+- [Experimental embedded Sirius bridge](../pkg/sql/compile/siriusbridge/README.md) - Pixi build, CN configuration, native GPU verification, and current SQL limitations
 
 ---
 

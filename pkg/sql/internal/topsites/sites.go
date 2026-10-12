@@ -49,3 +49,10 @@ const (
 	MergeTopSelections
 	MergeTopAppendCheckpoints
 )
+
+const (
+	AdaptiveTopRetainedData mpool.AllocationSite = iota + 96
+	AdaptiveTopRetainedArea
+	AdaptiveTopRetainedNulls
+	AdaptiveTopRetainedGrouping
+)

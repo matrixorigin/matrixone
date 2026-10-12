@@ -54,7 +54,7 @@ func TestBuildPlanFlattensUncorrelatedScalarGroupKeys(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, test.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			assertScalarGroupKeysFlattened(t, logicPlan.GetQuery(), test.wantJoin)
 		})
@@ -68,7 +68,7 @@ func TestBuildPreparedPlanFlattensUncorrelatedScalarGroupKey(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	logicPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, true)
+	logicPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true)
 	require.NoError(t, err)
 	assertScalarGroupKeysFlattened(t, logicPlan.GetQuery(), true)
 }
@@ -116,7 +116,7 @@ func TestBuildPlanKeepsUnsupportedGroupSubqueriesFailClosed(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(true), t, test.sql)
+			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, test.sql)
 			require.ErrorContains(t, err, test.wantErr)
 		})
 	}

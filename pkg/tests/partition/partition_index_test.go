@@ -29,202 +29,177 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestInsertAndDeleteWithIndex(
-	t *testing.T,
-) {
+func TestPartitionUniqueIndex(t *testing.T) {
+	const (
+		populatedTable = "partition_unique_index_fixture"
+		conflictTable  = "partition_unique_index_conflict"
+	)
+
 	runPartitionClusterTest(
 		t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
 			eng := cn.RawService().(cnservice.Service).GetEngine()
-			exec := testutils.GetSQLExecutor(cn)
+			sqlExec := testutils.GetSQLExecutor(cn)
 
 			db := testutils.GetDatabaseName(t)
 			testutils.CreateTestDatabase(t, db, cn)
 
-			sql := fmt.Sprintf(
-				"create table %s (c int primary key, d int, unique key(d)) partition by list (c) (partition p1 values in (1,2), partition p2 values in (3,4))",
-				t.Name(),
-			)
+			createPartitionedTable := func(test *testing.T, table string) {
+				testutils.ExecSQL(
+					test,
+					db,
+					cn,
+					fmt.Sprintf(
+						"create table `%s` (c int primary key, d int, unique key(d)) partition by list (c) (partition p1 values in (1,2), partition p2 values in (3,4))",
+						table,
+					),
+				)
+			}
 
+			createPartitionedTable(t, populatedTable)
 			testutils.ExecSQL(
 				t,
 				db,
 				cn,
-				sql,
+				fmt.Sprintf(
+					"insert into `%s` values (1,1), (2,2), (3,3), (4,4)",
+					populatedTable,
+				),
 			)
 
-			sql = fmt.Sprintf("insert into %s values (1,1), (2,2), (3,3), (4,4)", t.Name())
-			testutils.ExecSQL(
-				t,
-				db,
-				cn,
-				sql,
-			)
-
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
-			defer cancel()
-			exec.ExecTxn(
-				ctx,
-				func(txn executor.TxnExecutor) error {
-					metadata := getMetadata(
-						t,
-						0,
-						db,
-						t.Name(),
-						cn,
-					)
-
-					for _, p := range metadata.Partitions {
-						_, _, r, err := eng.GetRelationById(
-							defines.AttachAccountId(ctx, 0),
-							txn.Txn(),
-							p.PartitionID,
-						)
-						require.NoError(t, err)
-
-						_, _, indexR, err := eng.GetRelationById(
-							defines.AttachAccountId(ctx, 0),
-							txn.Txn(),
-							r.GetExtraInfo().IndexTables[0],
-						)
-						require.NoError(t, err)
-
-						txn.Use(db)
-						rs, err := txn.Exec(
-							fmt.Sprintf("select count(1) from `%s`", indexR.GetTableName()),
-							executor.StatementOption{},
-						)
-						require.NoError(t, err)
-						n := int64(0)
-						rs.ReadRows(
-							func(rows int, cols []*vector.Vector) bool {
-								n += executor.GetFixedRows[int64](cols[0])[0]
-								return true
-							},
-						)
-						rs.Close()
-						require.Equal(t, int64(2), n)
-					}
-
-					return nil
-				},
-				executor.Options{},
-			)
-		},
-	)
-}
-
-func TestSelectWithUniqueIndex(
-	t *testing.T,
-) {
-	runPartitionClusterTest(
-		t,
-		func(c embed.Cluster) {
-			cn, err := c.GetCNService(0)
-			require.NoError(t, err)
-			exec := testutils.GetSQLExecutor(cn)
-
-			db := testutils.GetDatabaseName(t)
-			testutils.CreateTestDatabase(t, db, cn)
-
-			sql := fmt.Sprintf(
-				"create table %s (c int primary key, d int, unique key(d)) partition by list (c) (partition p1 values in (1,2), partition p2 values in (3,4))",
-				t.Name(),
-			)
-
-			testutils.ExecSQL(
-				t,
-				db,
-				cn,
-				sql,
-			)
-
-			sql = fmt.Sprintf("insert into %s values (1,1), (2,2), (3,3), (4,4)", t.Name())
-			testutils.ExecSQL(
-				t,
-				db,
-				cn,
-				sql,
-			)
-
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
-			defer cancel()
-			for i := 0; i < 4; i++ {
-				res, err := exec.Exec(
+			t.Run("InsertAndDeleteWithIndex", func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+				defer cancel()
+				err := sqlExec.ExecTxn(
 					ctx,
-					fmt.Sprintf("select c from %s where d = %d", t.Name(), i+1),
+					func(txn executor.TxnExecutor) error {
+						metadata := getMetadata(
+							t,
+							0,
+							db,
+							populatedTable,
+							cn,
+						)
+
+						for _, p := range metadata.Partitions {
+							_, _, r, err := eng.GetRelationById(
+								defines.AttachAccountId(ctx, 0),
+								txn.Txn(),
+								p.PartitionID,
+							)
+							require.NoError(t, err)
+
+							_, _, indexR, err := eng.GetRelationById(
+								defines.AttachAccountId(ctx, 0),
+								txn.Txn(),
+								r.GetExtraInfo().IndexTables[0],
+							)
+							require.NoError(t, err)
+
+							txn.Use(db)
+							rs, err := txn.Exec(
+								fmt.Sprintf("select count(1) from `%s`", indexR.GetTableName()),
+								executor.StatementOption{},
+							)
+							require.NoError(t, err)
+							n := int64(0)
+							rs.ReadRows(
+								func(rows int, cols []*vector.Vector) bool {
+									n += executor.GetFixedRows[int64](cols[0])[0]
+									return true
+								},
+							)
+							rs.Close()
+							require.Equal(t, int64(2), n)
+						}
+
+						return nil
+					},
+					executor.Options{},
+				)
+				require.NoError(t, err)
+			})
+
+			t.Run("SelectWithUniqueIndex", func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+				defer cancel()
+				for i := 0; i < 4; i++ {
+					res, err := sqlExec.Exec(
+						ctx,
+						fmt.Sprintf(
+							"select c from `%s` where d = %d",
+							populatedTable,
+							i+1,
+						),
+						executor.Options{}.WithDatabase(db),
+					)
+					require.NoError(t, err)
+					n := 0
+					v := int32(0)
+					res.ReadRows(
+						func(rows int, cols []*vector.Vector) bool {
+							n += rows
+							v = executor.GetFixedRows[int32](cols[0])[0]
+							return true
+						},
+					)
+					res.Close()
+					require.Equal(t, 1, n)
+					require.Equal(t, int32(i+1), v)
+				}
+			})
+
+			t.Run("UniqueIndexCanWork", func(t *testing.T) {
+				createPartitionedTable(t, conflictTable)
+				testutils.ExecSQL(
+					t,
+					db,
+					cn,
+					fmt.Sprintf("insert into `%s` values (1,1)", conflictTable),
+				)
+
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+				defer cancel()
+
+				_, err := sqlExec.Exec(
+					ctx,
+					fmt.Sprintf("insert into `%s` values (2,1)", conflictTable),
+					executor.Options{}.WithDatabase(db),
+				)
+				require.Error(t, err)
+
+				_, err = sqlExec.Exec(
+					ctx,
+					fmt.Sprintf("insert into `%s` values (3,1)", conflictTable),
+					executor.Options{}.WithDatabase(db),
+				)
+				require.Error(t, err)
+
+				res, err := sqlExec.Exec(
+					ctx,
+					fmt.Sprintf("select c, d from `%s`", conflictTable),
 					executor.Options{}.WithDatabase(db),
 				)
 				require.NoError(t, err)
 				n := 0
-				v := int32(0)
+				var c, d int32
 				res.ReadRows(
 					func(rows int, cols []*vector.Vector) bool {
 						n += rows
-						v = executor.GetFixedRows[int32](cols[0])[0]
+						if rows > 0 {
+							c = executor.GetFixedRows[int32](cols[0])[0]
+							d = executor.GetFixedRows[int32](cols[1])[0]
+						}
 						return true
 					},
 				)
 				res.Close()
 				require.Equal(t, 1, n)
-				require.Equal(t, int32(i+1), v)
-			}
-		},
-	)
-}
-
-func TestUniqueIndexCanWork(
-	t *testing.T,
-) {
-	runPartitionClusterTest(
-		t,
-		func(c embed.Cluster) {
-			cn, err := c.GetCNService(0)
-			require.NoError(t, err)
-			exec := testutils.GetSQLExecutor(cn)
-
-			db := testutils.GetDatabaseName(t)
-			testutils.CreateTestDatabase(t, db, cn)
-
-			sql := fmt.Sprintf(
-				"create table %s (c int primary key, d int, unique key(d)) partition by list (c) (partition p1 values in (1,2), partition p2 values in (3,4))",
-				t.Name(),
-			)
-
-			testutils.ExecSQL(
-				t,
-				db,
-				cn,
-				sql,
-			)
-
-			sql = fmt.Sprintf("insert into %s values (1,1)", t.Name())
-			testutils.ExecSQL(
-				t,
-				db,
-				cn,
-				sql,
-			)
-
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
-			defer cancel()
-			sql = fmt.Sprintf("insert into %s values (2,1)", t.Name())
-			_, err = exec.Exec(
-				ctx,
-				sql,
-				executor.Options{}.WithDatabase(db),
-			)
-			require.Error(t, err)
-
-			sql = fmt.Sprintf("insert into %s values (3,1)", t.Name())
-			_, err = exec.Exec(
-				ctx,
-				sql,
-				executor.Options{}.WithDatabase(db),
-			)
-			require.Error(t, err)
+				require.Equal(t, int32(1), c)
+				require.Equal(t, int32(1), d)
+			})
 		},
 	)
 }

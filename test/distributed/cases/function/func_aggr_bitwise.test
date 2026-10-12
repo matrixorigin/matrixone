@@ -236,3 +236,40 @@ DROP TABLE t_bitwise_nested_distinct_28226;
 SELECT BIT_AND(CAST('9223372036854775808' AS DECIMAL(20,0))) AS bit_and_positive, BIT_OR(CAST('9223372036854775808' AS DECIMAL(20,0))) AS bit_or_positive, BIT_XOR(CAST('9223372036854775808' AS DECIMAL(20,0))) AS bit_xor_positive;
 SELECT BIT_AND(CAST('-9223372036854775809' AS DECIMAL(20,0))) AS bit_and_negative, BIT_OR(CAST('-9223372036854775809' AS DECIMAL(20,0))) AS bit_or_negative, BIT_XOR(CAST('-9223372036854775809' AS DECIMAL(20,0))) AS bit_xor_negative;
 SELECT BIT_AND(CAST('9223372036854775807.5' AS DECIMAL(20,1))) AS bit_and_positive_half, BIT_AND(CAST('-9223372036854775808.5' AS DECIMAL(20,1))) AS bit_and_negative_half;
+
+# Grouped BIT CTAS must materialize non-NULL numeric and binary aggregate values.
+DROP TABLE IF EXISTS bitwise_ctas_and_29323;
+DROP TABLE IF EXISTS bitwise_ctas_or_29323;
+DROP TABLE IF EXISTS bitwise_ctas_xor_29323;
+DROP TABLE IF EXISTS bitwise_ctas_not_null_29323;
+DROP TABLE IF EXISTS bitwise_ctas_src_29323;
+CREATE TABLE bitwise_ctas_src_29323 (g INT, i INT, b BINARY(2), v VARBINARY(2));
+INSERT INTO bitwise_ctas_src_29323 VALUES
+    (1, 15, X'0F0F', X'3333'), (1, 51, X'3333', X'0F0F'), (2, NULL, NULL, NULL);
+SELECT g, BIT_AND(i) AS a, BIT_OR(i) AS o, BIT_XOR(i) AS x
+FROM bitwise_ctas_src_29323 GROUP BY g ORDER BY g;
+SELECT g, a, o, x FROM (
+    SELECT g, BIT_AND(i) AS a, BIT_OR(i) AS o, BIT_XOR(i) AS x
+    FROM bitwise_ctas_src_29323 GROUP BY g
+) AS grouped_bits ORDER BY g;
+CREATE TABLE bitwise_ctas_and_29323 AS
+    SELECT g, BIT_AND(i) AS ni, BIT_AND(b) AS bb, BIT_AND(v) AS vb
+    FROM bitwise_ctas_src_29323 GROUP BY g;
+SELECT g, ni, HEX(bb) AS bb, HEX(vb) AS vb FROM bitwise_ctas_and_29323 ORDER BY g;
+CREATE TABLE bitwise_ctas_or_29323 AS
+    SELECT g, BIT_OR(i) AS ni, BIT_OR(b) AS bb, BIT_OR(v) AS vb
+    FROM bitwise_ctas_src_29323 GROUP BY g;
+SELECT g, ni, HEX(bb) AS bb, HEX(vb) AS vb FROM bitwise_ctas_or_29323 ORDER BY g;
+CREATE TABLE bitwise_ctas_xor_29323 AS
+    SELECT g, BIT_XOR(i) AS ni, BIT_XOR(b) AS bb, BIT_XOR(v) AS vb
+    FROM bitwise_ctas_src_29323 GROUP BY g;
+SELECT g, ni, HEX(bb) AS bb, HEX(vb) AS vb FROM bitwise_ctas_xor_29323 ORDER BY g;
+CREATE TABLE bitwise_ctas_not_null_29323 (v INT NOT NULL);
+-- @regex("Column 'v' cannot be null", true)
+INSERT INTO bitwise_ctas_not_null_29323 VALUES (NULL);
+SELECT COUNT(*) AS rejected_rows FROM bitwise_ctas_not_null_29323;
+DROP TABLE bitwise_ctas_not_null_29323;
+DROP TABLE bitwise_ctas_xor_29323;
+DROP TABLE bitwise_ctas_or_29323;
+DROP TABLE bitwise_ctas_and_29323;
+DROP TABLE bitwise_ctas_src_29323;

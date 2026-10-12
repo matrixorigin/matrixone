@@ -1,0 +1,71 @@
+set @old_cte_max_recursion_depth = @@session.cte_max_recursion_depth;
+set session cte_max_recursion_depth = 2;
+with recursive r(n) as (
+select 1
+union all
+select n + 1 from r where n < 3
+)
+select n from r order by n;
+➤ n[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+set session cte_max_recursion_depth = 1;
+with recursive r(n) as (
+select 1
+union all
+select n + 1 from r where n < 2
+)
+select n from r order by n;
+➤ n[-5,64,0]  𝄀
+1  𝄀
+2
+set session cte_max_recursion_depth = 1;
+with recursive r(n) as (
+select 1
+union all
+select n + 1 from r where n < 3
+)
+select n from r order by n;
+recursive level out of range
+set session cte_max_recursion_depth = 0;
+with recursive r(n) as (
+select 1
+union all
+select n + 1 from r where n < 1
+)
+select n from r order by n;
+➤ n[-5,64,0]  𝄀
+1
+set session cte_max_recursion_depth = 0;
+with recursive r(n) as (
+select 1
+union distinct
+select n from r
+)
+select count(*) from r;
+➤ count(*)[-5,64,0]  𝄀
+1
+with recursive r(n) as (
+select 1
+union all
+select n + 1 from r where n < 2
+)
+select n from r order by n;
+recursive level out of range
+drop table if exists cte_29138_insert;
+create table cte_29138_insert(n int);
+set session cte_max_recursion_depth = 1;
+insert into cte_29138_insert
+with recursive r(n) as (
+select 1
+union all
+select n + 1 from r where n < 3
+)
+select n from r;
+recursive level out of range
+select count(*) from cte_29138_insert;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table cte_29138_insert;
+set session cte_max_recursion_depth = @old_cte_max_recursion_depth;

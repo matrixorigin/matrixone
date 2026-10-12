@@ -690,7 +690,8 @@ func TestByteLikeSegmentMatcherFindsLateValidAlignment(t *testing.T) {
 func TestByteLikeSegmentMatcherRejectsRepeatedAnchor(t *testing.T) {
 	mp := mpool.MustNewZero()
 	value := bytes.Repeat([]byte{'a'}, 32_000)
-	pattern := []byte{'%', 'a'}
+	pattern := make([]byte, 0, 16_002)
+	pattern = append(pattern, '%', 'a')
 	pattern = append(pattern, bytes.Repeat([]byte{'_'}, 16_000-2)...)
 	pattern = append(pattern, 'b', '%')
 	matched, err := byteLike(pattern, value, nil, false, mp)
@@ -728,7 +729,7 @@ func TestByteLikeCompiledPatternUsesLinearAccountedStorage(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), inputMP)
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
-	limitedProc := testutil.NewProcessWithMPool(t, "byte-like-compile-limit", limited)
+	limitedProc := testutil.NewProcessWithOwnedMPool(t, "byte-like-compile-limit", limited)
 	require.Error(t, newOpBuiltInRegexp().likeFn(
 		[]*vector.Vector{value, patternVector}, result, limitedProc, 1, nil))
 	require.Zero(t, limited.CurrNB())
@@ -913,7 +914,8 @@ func makeDenseDirectMultiSegmentByteLike(segmentCount, segmentLength int) (value
 
 func makeSingleCandidateByteLike(segmentLength int) (value, pattern []byte) {
 	value = bytes.Repeat([]byte{'a'}, segmentLength)
-	pattern = []byte{'%', 'a'}
+	pattern = make([]byte, 0, segmentLength+2)
+	pattern = append(pattern, '%', 'a')
 	pattern = append(pattern, bytes.Repeat([]byte{'_'}, segmentLength-2)...)
 	pattern = append(pattern, 'a', '%')
 	return value, pattern
@@ -1005,7 +1007,7 @@ func TestByteLikeGlobalDirectBudgetBoundsMultiSegmentVerification(t *testing.T) 
 	require.LessOrEqual(t, patternLength, types.MaxBlobLen)
 	require.Greater(t, directVerificationWork, budget.remaining)
 
-	const denseSegmentCount, denseSegmentLength = 32, 8_192
+	const denseSegmentCount, denseSegmentLength = 32, 4_352
 	denseValue, densePattern := makeDenseDirectMultiSegmentByteLike(denseSegmentCount, denseSegmentLength)
 	localCursor := 0
 	for segment := 0; segment < denseSegmentCount; segment++ {
@@ -1086,7 +1088,8 @@ func TestByteLikeDirectVerificationHonorsMidMatchCancellation(t *testing.T) {
 func makeEqualFrequencyByteLikeAdversary(size int) (value, pattern []byte) {
 	value = append(bytes.Repeat([]byte{'a'}, size), bytes.Repeat([]byte{'b'}, size+1)...)
 	value = append(value, bytes.Repeat([]byte{'a'}, size)...)
-	pattern = []byte{'%', 'a'}
+	pattern = make([]byte, 0, 2*size+3)
+	pattern = append(pattern, '%', 'a')
 	pattern = append(pattern, bytes.Repeat([]byte{'_'}, size-1)...)
 	pattern = append(pattern, 'a')
 	pattern = append(pattern, bytes.Repeat([]byte{'_'}, size-1)...)
@@ -1146,7 +1149,7 @@ func TestByteLikeSparseEqualFrequencyAdversary(t *testing.T) {
 }
 
 func TestByteLikeConvolutionUsesSegmentSizedBlocks(t *testing.T) {
-	const segmentLength = 1_000
+	const segmentLength = 8_192
 	pattern := append([]byte{'a'}, bytes.Repeat([]byte{'_'}, segmentLength-2)...)
 	pattern = append(pattern, 'b')
 	value := bytes.Repeat([]byte{'a'}, 20_000)
@@ -1159,8 +1162,13 @@ func TestByteLikeConvolutionUsesSegmentSizedBlocks(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, used)
 	require.Equal(t, -1, matchedAt)
-	require.Less(t, cap(compiled.convolutionScratch), 100_000,
-		"scratch must follow one segment-sized block, not the full remaining value")
+	require.Equal(t, 401_408, cap(compiled.convolutionScratch),
+		"three 32768-element transforms and one 8192-candidate block")
+	value[len(value)-1] = 'b'
+	matchedAt, used, err = compiled.findSegmentByConvolution(0, len(pattern), value, 0, len(value))
+	require.NoError(t, err)
+	require.True(t, used)
+	require.Equal(t, len(value)-segmentLength, matchedAt)
 }
 
 func TestByteLikeConvolutionUsesBothModuliForExactResult(t *testing.T) {
@@ -1231,7 +1239,7 @@ func TestByteLikeConvolutionAllocationFailureDoesNotLeak(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), inputMP)
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
-	limitedProc := testutil.NewProcessWithMPool(t, "byte-like-convolution-limit", limited)
+	limitedProc := testutil.NewProcessWithOwnedMPool(t, "byte-like-convolution-limit", limited)
 	err = newOpBuiltInRegexp().likeFn([]*vector.Vector{values, patterns}, result, limitedProc, 1, nil)
 	require.Error(t, err)
 	require.Zero(t, limited.CurrNB())
@@ -1400,7 +1408,8 @@ func BenchmarkByteLikeRepeatedAnchorRejection(b *testing.B) {
 	for _, size := range []int{2_000, 4_000, 8_000, 16_000, 32_000, 64_000} {
 		b.Run(fmt.Sprintf("n=%d", size), func(b *testing.B) {
 			value := bytes.Repeat([]byte{'a'}, size)
-			pattern := []byte{'%', 'a'}
+			pattern := make([]byte, 0, size/2+2)
+			pattern = append(pattern, '%', 'a')
 			pattern = append(pattern, bytes.Repeat([]byte{'_'}, size/2-2)...)
 			pattern = append(pattern, 'b', '%')
 			compiled, err := compileByteLikePattern(pattern, nil, false, mpool.MustNewZero())

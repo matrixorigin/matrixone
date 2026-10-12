@@ -27,9 +27,13 @@ const (
 )
 
 const (
-	FJ_CommitDelete               = "fj/commit/delete"
-	FJ_CommitSlowLog              = "fj/commit/slowlog"
-	FJ_CommitWait                 = "fj/commit/wait"
+	FJ_CommitDelete  = "fj/commit/delete"
+	FJ_CommitSlowLog = "fj/commit/slowlog"
+	FJ_CommitWait    = "fj/commit/wait"
+	// FJ_CommitWaitTargetTenant restricts FJ_CommitWait to one tenant in
+	// multi-tenant lifecycle tests. Without this selector, FJ_CommitWait keeps
+	// its original process-wide behavior.
+	FJ_CommitWaitTargetTenant     = "fj/commit/wait-target-tenant"
 	FJ_TransferSlow               = "fj/transfer/slow"
 	FJ_DataMergeAfterCollectTS    = "fj/merge/data/after-collect-ts"
 	FJ_TransferError              = "fj/transfer/error"
@@ -92,11 +96,10 @@ const (
 
 	FJ_WALReplayFailed = "fj/wal/replay/failed"
 
-	FJ_CDCHandleSlow             = "fj/cdc/handleslow"
-	FJ_CDCHandleErr              = "fj/cdc/handleerr"
-	FJ_CDCScanTableErr           = "fj/cdc/scantableerr"
-	FJ_CDCAddExecErr             = "fj/cdc/addexecerr"
-	FJ_CDCAddExecConsumeTruncate = "fj/cdc/addexecconsumetruncate"
+	FJ_CDCHandleSlow   = "fj/cdc/handleslow"
+	FJ_CDCHandleErr    = "fj/cdc/handleerr"
+	FJ_CDCScanTableErr = "fj/cdc/scantableerr"
+	FJ_CDCAddExecErr   = "fj/cdc/addexecerr"
 
 	FJ_CNFlushSmallObjs      = "fj/cn/flush_small_objs"
 	FJ_CNSubscribeTableFail  = "fj/cn/subscribe_table_fail"
@@ -451,7 +454,10 @@ func PrintFlushEntryInjected() (string, bool) {
 	return sarg, injected
 }
 
-func CommitWaitInjected() (string, bool) {
+func CommitWaitInjected(tenantID uint32) (string, bool) {
+	if target, _, selected := fault.TriggerFault(FJ_CommitWaitTargetTenant); selected && uint32(target) != tenantID {
+		return "", false
+	}
 	_, sarg, injected := fault.TriggerFault(FJ_CommitWait)
 	return sarg, injected
 }
@@ -817,11 +823,6 @@ func CDCScanTableErrInjected() bool {
 
 func CDCAddExecErrInjected() bool {
 	_, _, injected := fault.TriggerFault(FJ_CDCAddExecErr)
-	return injected
-}
-
-func CDCAddExecConsumeTruncateInjected() bool {
-	_, _, injected := fault.TriggerFault(FJ_CDCAddExecConsumeTruncate)
 	return injected
 }
 

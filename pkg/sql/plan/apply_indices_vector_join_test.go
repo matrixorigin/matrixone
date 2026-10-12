@@ -26,8 +26,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newVectorJoinMockCtx() *customMockCompilerContext {
-	baseMockCtx := NewMockCompilerContext(false)
+func newVectorJoinMockCtx(t testing.TB) *customMockCompilerContext {
+	baseMockCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	return &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -257,7 +257,7 @@ type vectorJoinPlanOptions struct {
 func newVectorJoinPlanCase(t *testing.T, opts vectorJoinPlanOptions) vectorJoinPlanCase {
 	t.Helper()
 
-	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(t), false, true)
 	ctx := NewBindContext(builder, nil)
 	mainTableDef := newVectorJoinTableDef(true, false)
 	if opts.joinType == plan.Node_SEMI {
@@ -769,7 +769,7 @@ func TestApplyIndicesForProject_JoinThroughReachesVectorRule(t *testing.T) {
 }
 
 func TestGetArgsFromDistFnForJoinBranches(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(t), false, true)
 	floatTyp := plan.Type{Id: int32(types.T_array_float32)}
 	intTyp := plan.Type{Id: int32(types.T_int64)}
 	scanTag := int32(7)
@@ -857,7 +857,7 @@ func TestExtractJoinThroughProviderVectorArgBranches(t *testing.T) {
 }
 
 func TestVectorProviderNonNullProofBranches(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(t), false, true)
 	ctx := NewBindContext(builder, nil)
 	floatTyp := plan.Type{Id: int32(types.T_array_float32)}
 	notNullFloatTyp := plan.Type{Id: int32(types.T_array_float32), NotNullable: true}
@@ -919,7 +919,7 @@ func TestVectorProviderNonNullProofBranches(t *testing.T) {
 }
 
 func TestSingleRowVectorProviderProofBranches(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(t), false, true)
 	ctx := NewBindContext(builder, nil)
 	varcharTyp := plan.Type{Id: int32(types.T_varchar)}
 	floatTyp := plan.Type{Id: int32(types.T_array_float32)}
@@ -974,7 +974,7 @@ func TestSingleRowVectorProviderProofBranches(t *testing.T) {
 }
 
 func TestVectorExprAndTagHelpersBranches(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(t), false, true)
 	ctx := NewBindContext(builder, nil)
 	varcharTyp := plan.Type{Id: int32(types.T_varchar)}
 	tags := map[int32]bool{1: true}
@@ -1029,7 +1029,7 @@ func TestVectorJoinGuardHelperBranches(t *testing.T) {
 		},
 	}))
 
-	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(t), false, true)
 	require.Nil(t, builder.directScanWithVectorIndex(nil))
 	require.Nil(t, builder.directScanWithVectorIndex(&plan.Node{NodeType: plan.Node_TABLE_SCAN}))
 	require.Nil(t, builder.directScanWithVectorIndex(&plan.Node{
@@ -1051,7 +1051,7 @@ func TestVectorJoinGuardHelperBranches(t *testing.T) {
 }
 
 func TestGetDistRangeFromFiltersWithJoinVectorArg(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(t), false, true)
 	floatTyp := plan.Type{Id: int32(types.T_array_float32)}
 	filter := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_bool)},

@@ -91,7 +91,31 @@ func (cm ColumnMeta) setLocation(location Extent) {
 }
 
 func (cm ColumnMeta) ZoneMap() ZoneMap {
+	return persistedZoneMapView(cm.rawZoneMap())
+}
+
+// rawZoneMap is used when serializing metadata; compatibility read views must
+// not replace the physical bounds written by the current producer.
+func (cm ColumnMeta) rawZoneMap() ZoneMap {
 	return ZoneMap(cm[zoneMapOff : zoneMapOff+zoneMapLen])
+}
+
+// persistedZoneMapView protects reads of historical BOOL bounds. The old vector
+// min/max producer used AND for the maximum, so false/false can also represent a
+// block containing true. Without writer provenance those bounds cannot prune
+// true. Widen a private view, preserving shared metadata and exact expression ZMs.
+func persistedZoneMapView(zm ZoneMap) ZoneMap {
+	if len(zm) < ZoneMapSize || zm.GetType() != types.T_bool || !zm[:ZoneMapSize].IsInited() {
+		return zm
+	}
+	maximum := zm.GetMaxBuf()
+	if len(maximum) != 1 || types.DecodeBool(maximum) {
+		return zm
+	}
+	view := make(ZoneMap, len(zm))
+	copy(view, zm)
+	view.GetMaxBuf()[0] = 1
+	return view
 }
 
 func (cm ColumnMeta) SetZoneMap(zm ZoneMap) {

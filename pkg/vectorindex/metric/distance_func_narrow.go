@@ -123,7 +123,7 @@ func innerProductBF16(a, b []types.BF16) (float64, error) {
 	for ; i < n; i++ {
 		sum += a[i].ToFloat32() * b[i].ToFloat32()
 	}
-	return float64(-sum), nil
+	return nanToPosInf(float64(-sum)), nil
 }
 
 func l1DistanceBF16(a, b []types.BF16) (float64, error) {
@@ -152,7 +152,11 @@ func cosineDistClamped(dot, denom float64) float64 {
 	} else if sim < -1 {
 		sim = -1
 	}
-	return 1.0 - sim
+	// A NaN dot (float lane overflow cancelling signs) leaves sim NaN -- the clamp
+	// does not catch it (NaN compares false). Map the result to +Inf so ranking stays
+	// well-ordered; this is the single finalizer every cosine kernel calls, and is a
+	// no-op for the already-finite f32/f64/int8 paths (#29496).
+	return nanToPosInf(1.0 - sim)
 }
 
 func cosineDistanceBF16(a, b []types.BF16) (float64, error) {
@@ -268,7 +272,7 @@ func innerProductF16(a, b []types.Float16) (float64, error) {
 	for ; i < n; i++ {
 		sum += f16fast(a[i]) * f16fast(b[i])
 	}
-	return float64(-sum), nil
+	return nanToPosInf(float64(-sum)), nil
 }
 
 func l1DistanceF16(a, b []types.Float16) (float64, error) {

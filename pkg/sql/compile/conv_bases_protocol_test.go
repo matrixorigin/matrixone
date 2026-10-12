@@ -45,7 +45,7 @@ func TestConvBasesPlacementAndActualSender(t *testing.T) {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-		require.NoError(t, c.constrainConvBasesWorkers(qry))
+		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 		data, err := encodeRemoteScope(scope, c.proc)
 		if version < defines.MORPCVersion70 {
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)

@@ -209,7 +209,7 @@ func TestBuildPlanElidesStableLiteralGroupKeys(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 
 			var aggregate, projection *pbplan.Node
@@ -240,7 +240,7 @@ func TestBuildPlanPreservesLiteralGroupKeysForGroupingExtensions(t *testing.T) {
 	}
 	for _, sql := range queries {
 		t.Run(sql, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			require.NoError(t, err)
 
 			foundLiteralGroup := false
@@ -289,7 +289,7 @@ func TestBuildPlanPreservesLogicalConstantGroupKeysForSample(t *testing.T) {
 	}
 	for _, test := range rejected {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.ErrorContains(t, err, "cannot sample the group by column")
 		})
 	}
@@ -334,7 +334,7 @@ func TestBuildPlanPreservesLogicalConstantGroupKeysForSample(t *testing.T) {
 	}
 	for _, test := range accepted {
 		t.Run(test.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 
 			var sample *pbplan.Node

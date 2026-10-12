@@ -133,6 +133,34 @@ func migrateFoldedHexDefault(proc *process.Process, col *plan.ColDef) error {
 	if err != nil {
 		return nil
 	}
+	// This is the v74 catalog repair, not a new SQL binding. Reuse its stable
+	// execution identities even after new HEX bindings use private integer
+	// coercion (v85). Otherwise a v74 reader could publish a v85 expression,
+	// or reconstruct the legacy value from an already-rounded DECIMAL.
+	if fn := bound.GetF(); fn != nil && len(fn.Args) == 1 && isIntegerArgumentCast(fn.Args[0]) {
+		source := fn.Args[0].GetF().Args[0]
+		var overload int32
+		switch types.T(source.Typ.Id) {
+		case types.T_float64:
+			overload = function.HexExplicitFloat64Overload
+		case types.T_decimal64:
+			overload = 8
+		case types.T_decimal128:
+			overload = 9
+		case types.T_decimal256:
+			overload = 10
+		case types.T_bool:
+			source, err = makePlan2CastExpr(proc.Ctx, source, plan.Type{Id: int32(types.T_int64)})
+			if err != nil {
+				return nil
+			}
+			overload = 2
+		default:
+			return nil
+		}
+		fn.Args[0] = source
+		fn.Func.Obj = function.EncodeOverloadID(function.HEX, overload)
+	}
 	legacy := DeepCopyExpr(bound)
 	fn := legacy.GetF()
 	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {

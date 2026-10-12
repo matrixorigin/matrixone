@@ -474,9 +474,6 @@ func (r *runner) onPostCheckpointEntries(entries ...any) {
 		logutil.Debugf("Post %s", entry.String())
 	}
 
-	// Schedule a debounced arena drain.  The timer resets on each
-	// checkpoint, so during active operation the pools stay warm.
-	objectio.ScheduleArenaDrain()
 	mergesort.DrainTransferSlabPool()
 }
 

@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -482,7 +484,9 @@ func (p *Pattern) Eval(accum *SearchAccum, docvec []uint8, docLen int64, aggcnt 
 
 		return result, nil
 	case PHRASE:
-		// all children are TEXT and AND operations
+		// children are TEXT or STAR leaves, AND'd together; SqlPhrase enforces their relative
+		// positions, so here it is a presence-AND across the leaves (a STAR leaf evaluates through
+		// EvalLeaf like a TEXT one).
 		for i, c := range p.Children {
 			child_result, err := c.Eval(accum, docvec, docLen, aggcnt, weight, nil)
 			if err != nil {
@@ -533,8 +537,11 @@ func (p *Pattern) Validate() error {
 		}
 	case PHRASE:
 		for _, c := range p.Children {
-			if c.Operator != TEXT {
-				return moerr.NewInternalErrorNoCtx("PHRASE can only have text Pattern")
+			// SqlPhrase resolves a STAR child as a positional prefix_eq, so a phrase may hold a STAR
+			// -- a short CJK tail (a prefix of a stored trigram) or a short query word decomposes into
+			// one (#29271). Reject only nested/compound operators.
+			if c.Operator != TEXT && c.Operator != STAR {
+				return moerr.NewInternalErrorNoCtx("PHRASE can only have text or star Pattern")
 			}
 		}
 	case GROUP:
@@ -639,7 +646,11 @@ func CreatePattern(pattern string, parser string) (*Pattern, error) {
 		if lastop == '*' {
 			operator = STAR
 		}
-		return &Pattern{Text: pattern, Operator: operator}, nil
+		// Case-fold the leaf word here (not the whole pattern) so a quoted phrase keeps its original
+		// bytes for SimpleTokenizer (#29271 P2). A TEXT leaf is re-tokenized downstream by GenTextSql
+		// and a STAR prefix is looked up verbatim by truncateStarPrefix (which does not fold), so the
+		// leaf must arrive folded to match the index's lowercased Latin tokens.
+		return &Pattern{Text: strings.ToLower(pattern), Operator: operator}, nil
 	}
 
 	// check sub-expression
@@ -651,10 +662,85 @@ func CreatePattern(pattern string, parser string) (*Pattern, error) {
 	return &Pattern{Text: pattern, Operator: operator, Children: p}, nil
 }
 
-// ParsePhrase splits a quoted-phrase body into TEXT children for a PHRASE
-// node. With parser="gojieba" the phrase is segmented through jieba so the
-// children match how the index stores Chinese words; otherwise the legacy
-// whitespace split is used.
+// isAllCJK reports whether every rune is CJK-class (>= 0x7FF), the same boundary SimpleTokenizer.isLatin
+// uses to decide trigram tiling vs whole-word. A stem with any Latin rune is left to the plain
+// single-prefix star path.
+func isAllCJK(runes []rune) bool {
+	if len(runes) == 0 {
+		return false
+	}
+	for _, r := range runes {
+		if r < 0x7FF {
+			return false
+		}
+	}
+	return true
+}
+
+// cjkStarPhraseChildren tiles a CJK stem into non-overlapping trigrams as byte-positioned exact TEXT
+// terms, with the trailing piece -- a full trigram if the length is a clean multiple of 3, else the
+// 1-2 rune tail -- turned into a STAR (prefix_eq). The positions match SimpleTokenizer.outputCJK's
+// stored tokens (苹果香@0 ... 蕉@9), so SqlPhrase's positional JOIN pins the whole stem. Returns nil
+// for a stem <= one trigram or containing a Latin rune (handled by the plain prefix_eq star path).
+func cjkStarPhraseChildren(stem string) []*Pattern {
+	runes := []rune(stem)
+	if len(runes) <= 3 || !isAllCJK(runes) {
+		return nil
+	}
+	children := make([]*Pattern, 0, len(runes)/3+1)
+	// Track the byte offset in one pass; re-encoding string(runes[:i]) per child is O(n^2) and a long
+	// CJK stem (thousands of runes) would amplify per-query CPU/GC before execution (#29273 P2).
+	bytePos := int32(0)
+	for i := 0; i < len(runes); i += 3 {
+		end := i + 3
+		if end > len(runes) {
+			end = len(runes)
+		}
+		text := string(runes[i:end])
+		children = append(children, &Pattern{
+			Text:     text,
+			Operator: TEXT,
+			Position: bytePos,
+		})
+		bytePos += int32(len(text))
+	}
+	last := children[len(children)-1]
+	last.Operator = STAR
+	last.Text += "*"
+	return children
+}
+
+// jiebaStarPhraseChildren segments a gojieba stem and turns the last word into a STAR (prefix). A
+// multi-word stem yields the positional phrase children; a single word returns nil (plain prefix).
+func jiebaStarPhraseChildren(stem string) ([]*Pattern, error) {
+	tok, err := tokenizer.SharedJiebaTokenizer(false)
+	if err != nil {
+		return nil, err
+	}
+	children := make([]*Pattern, 0, 8)
+	for t, err := range tok.Tokenize([]byte(stem)) {
+		if err != nil {
+			return nil, err
+		}
+		slen := t.TokenBytes[0]
+		children = append(children, &Pattern{Text: string(t.TokenBytes[1 : slen+1]), Operator: TEXT, Position: t.BytePos})
+	}
+	if len(children) <= 1 {
+		return nil, nil
+	}
+	last := children[len(children)-1]
+	last.Operator = STAR
+	last.Text += "*"
+	return children, nil
+}
+
+// ParsePhrase splits a quoted-phrase body into children for a PHRASE node. With
+// parser="gojieba" the phrase is segmented through jieba; otherwise it is run
+// through SimpleTokenizer -- the same tokenizer the index build uses -- so the
+// children match how the index stored the phrase: CJK trigrams, Latin words
+// capped at 23 bytes, and splits on hyphen/apostrophe. The legacy whitespace-only
+// split looked up the raw phrase string, which is never an indexed token, so a
+// CJK / long-Latin / hyphenated phrase matched nothing (#29271).
 //
 // Children carry BytePos as Position so SqlPhrase's positional JOIN
 // (kw[i].pos - kw[0].pos = ps[i].Position - ps[0].Position) is consistent
@@ -664,29 +750,24 @@ func ParsePhrase(pattern string, parser string) ([]*Pattern, error) {
 		return parsePhraseJieba(pattern)
 	}
 
-	// phrase here
-	offset := int32(0)
-	isspace := false
-	var children []*Pattern
-
-	for pos, r := range pattern {
-		if r == ' ' {
-			if isspace {
-				continue
-			} else {
-				children = append(children, &Pattern{Text: string(pattern[offset:pos]), Operator: TEXT, Position: offset})
-			}
-			isspace = true
-		} else {
-			if isspace {
-				// start of the word
-				offset = int32(pos)
-			}
-			isspace = false
+	// json_value stores each JSON value as ONE verbatim token (fulltext_index_tokenize's
+	// json_value case does NOT run SimpleTokenizer over the value), so a phrase must match the
+	// whole value as a single term -- exactly like GenTextSql's json_value branch -- rather than
+	// splitting it into SimpleTokenizer sub-tokens the index never stored (#29271 regression).
+	if parser == "json_value" {
+		children := []*Pattern{{Text: pattern, Operator: TEXT, Position: 0}}
+		ret := []*Pattern{{Text: pattern, Operator: PHRASE, Children: children}}
+		idx := int32(0)
+		for _, p := range ret {
+			assignPatternIndex(p, &idx)
 		}
+		return ret, nil
 	}
 
-	children = append(children, &Pattern{Text: string(pattern[offset:]), Operator: TEXT, Position: offset})
+	children, err := simpleTokenizePatterns(pattern, parser, true)
+	if err != nil {
+		return nil, err
+	}
 	ret := []*Pattern{{Text: pattern, Operator: PHRASE, Children: children}}
 
 	// assign index
@@ -696,7 +777,6 @@ func ParsePhrase(pattern string, parser string) ([]*Pattern, error) {
 	}
 
 	return ret, nil
-
 }
 
 // parsePhraseJieba tokenizes a quoted-phrase body with gojieba and builds
@@ -830,6 +910,21 @@ func ParsePatternInBooleanMode(pattern string, parser string) ([]*Pattern, error
 
 				// open bracket found and find next close bracket
 				bracket += 1
+			} else if i == len(runeSlice)-1 {
+				// A one-rune term in final position after a space both starts and ends on this rune,
+				// so it never reaches the !isspace branch that flushes a multi-rune final term on its
+				// last rune. Flush it here so a trailing single-rune OR term (text `a`, CJK `蕉`, or a
+				// bare `*`) is not silently dropped (#29288).
+				term := string(runeSlice[offset : end+1])
+				p, err := CreatePattern(term, parser)
+				if err != nil {
+					return nil, err
+				}
+				// A trailing bare `*` flushes as a STAR (prefix) term; anything else is an exact leaf.
+				if p.Operator == STAR {
+					logutil.Debugf("fulltext boolean: flushed trailing single-rune wildcard %q", p.Text)
+				}
+				tokens = append(tokens, p)
 			}
 		}
 
@@ -915,17 +1010,83 @@ func parsePatternInNLModeJieba(pattern string) ([]*Pattern, error) {
 	return list, nil
 }
 
+// normalizeShortPattern lowercases a short (<3-rune) query prefix the SAME way the selected index
+// parser normalizes stored tokens, so the prefix_eq matches what was indexed (#29296):
+//   - json_value stores ByteJson.TokenizeValue output verbatim (no case folding) -> preserve as-is.
+//   - SimpleTokenizer (default/ngram/json) folds ONLY Latin-class runes (<0x7FF, via outputLatin) and
+//     preserves wider runes verbatim (outputCJK), so a fullwidth/CJK capital like `Ａ` or `ẞ` must not
+//     be folded (that would prefix-search a token the index never stored).
+//
+// Blanket strings.ToLower is wrong for both: it folds `Ａ`/`ẞ` (which the ngram index stores cased)
+// and folds every json_value character (which is stored uncased).
+func normalizeShortPattern(pattern, parser string) string {
+	if parser == "json_value" {
+		return pattern
+	}
+	var b strings.Builder
+	b.Grow(len(pattern))
+	for _, r := range pattern {
+		// 0x7FF is SimpleTokenizer.isLatin's boundary: <0x7FF routes to outputLatin (lowercased),
+		// >=0x7FF to outputCJK (preserved).
+		if r < 0x7FF {
+			b.WriteRune(unicode.ToLower(r))
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // Parse search string in natural language mode
 func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
 	if parser == "gojieba" {
 		return parsePatternInNLModeJieba(pattern)
 	}
 
+	list, err := simpleTokenizePatterns(pattern, parser, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// assign index
+	idx := int32(0)
+	for _, p := range list {
+		assignPatternIndex(p, &idx)
+	}
+
+	return list, nil
+}
+
+// simpleTokenizePatterns decomposes pattern into positioned TEXT/STAR patterns with SimpleTokenizer,
+// the same tokenizer the index build (fulltext_index_tokenize) uses, so the emitted words and byte
+// Positions match the stored tokens. It is shared by natural-language term expansion and quoted-phrase
+// decomposition (#29271): a quoted BOOLEAN phrase on the ""/default/ngram parser must be broken into
+// the same CJK trigrams, 23-byte-capped Latin tokens, and hyphen/apostrophe splits the index holds,
+// instead of a raw whole-string `word =` lookup that never matches an indexed token. Indices are not
+// assigned here -- the caller wraps the result (a flat OR list for NL, a PHRASE node for a phrase)
+// and assigns them.
+//
+// forPhrase changes how a SHORT (< 3-rune) token is matched. NL mode prefix-searches a short query
+// word (STAR). A phrase must instead reproduce the STORED token: outputLatin stores a Latin word
+// whole, so a short Latin token is matched EXACTLY (TEXT) -- prefix there would falsely match a
+// longer word for a single-word phrase, which has no positional anchor to pin it. A short CJK token
+// is only ever a prefix of a stored trigram (e.g. 苹果 of 苹果甜), so it stays a STAR either way.
+func simpleTokenizePatterns(pattern string, parser string, forPhrase bool) ([]*Pattern, error) {
 	runeSlice := []rune(pattern)
 	ngram_size := 3
-	// if number of character is small than Ngram size = 3, do prefix search
-	if len(runeSlice) < ngram_size {
-		return []*Pattern{{Text: pattern + "*", Operator: STAR}}, nil
+	// Natural-language mode keeps its legacy short-query shortcut: a whole query below the ngram
+	// size prefix-searches the normalized raw string. Normalize case to match how the selected
+	// parser stored its tokens (SimpleTokenizer folds only Latin runes; json_value preserves
+	// case), so a capitalized short pattern (e.g. `Hi`) looks up the stored token instead of
+	// prefix-searching the raw string (#29296).
+	//
+	// The PHRASE path must NOT take this shortcut. A short phrase mixing scripts or breakers --
+	// "a中", "a-", "中。" -- is tokenized at index time into separate stored tokens ('a'@0, '中'@1;
+	// the hyphen/punctuation is a discarded breaker), so a raw whole-string leaf can never hit
+	// (#29271 P2). Tokenize for every phrase length and classify each emitted token below (short
+	// Latin -> exact TEXT, short CJK -> prefix STAR), exactly as the >= ngram path does.
+	if !forPhrase && len(runeSlice) < ngram_size {
+		return []*Pattern{{Text: normalizeShortPattern(pattern, parser) + "*", Operator: STAR}}, nil
 	}
 
 	list := make([]*Pattern, 0, 32)
@@ -945,7 +1106,7 @@ func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
 		word := string(t.TokenBytes[1 : slen+1])
 
 		newBytePos := t.BytePos
-		newEndBytePos := t.BytePos + int32(slen)
+		newEndBytePos := t.BytePos + t.OrigLen
 		if newBytePos >= currBytePos && newBytePos < currEndBytePos {
 			// skip the overlapping token
 			overlaps = append(overlaps, t)
@@ -963,7 +1124,7 @@ func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
 				for _, tt := range overlaps {
 					ttslen := tt.TokenBytes[0]
 					ttword := string(tt.TokenBytes[1 : ttslen+1])
-					endpos := tt.BytePos + int32(ttslen)
+					endpos := tt.BytePos + tt.OrigLen
 					if endpos == newEndBytePos {
 						//  longest overlap
 						runeSlice = []rune(ttword)
@@ -978,7 +1139,14 @@ func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
 				}
 			}
 			if !found {
-				list = append(list, &Pattern{Text: word + "*", Operator: STAR, Position: t.BytePos})
+				if forPhrase && t.Latin {
+					// A short Latin token (no overlapping trigram) is stored whole; match it exactly.
+					// Use the writer's ORIGINAL rune class, not []rune of the folded spelling: a Latin
+					// rune (e.g. U+023A) can fold to a >=0x7FF rune and be misclassified as CJK (#29271 P2).
+					list = append(list, &Pattern{Text: word, Operator: TEXT, Position: t.BytePos})
+				} else {
+					list = append(list, &Pattern{Text: word + "*", Operator: STAR, Position: t.BytePos})
+				}
 			}
 		} else {
 			list = append(list, &Pattern{Text: word, Operator: TEXT, Position: t.BytePos})
@@ -991,12 +1159,6 @@ func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
 
 	if len(list) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("Invalid input search string.  search string converted to empty pattern")
-	}
-
-	// assign index
-	idx := int32(0)
-	for _, p := range list {
-		assignPatternIndex(p, &idx)
 	}
 
 	return list, nil
@@ -1057,9 +1219,15 @@ func ParsePattern(pattern string, mode int64, parser string) ([]*Pattern, error)
 	case int64(tree.FULLTEXT_BOOLEAN):
 		// BOOLEAN MODE
 
-		lowerp := strings.ToLower(pattern)
-
-		ps, err := ParsePatternInBooleanMode(lowerp, parser)
+		// Do NOT case-fold the whole pattern here. A quoted phrase must reach SimpleTokenizer with its
+		// ORIGINAL bytes so the writer-matching tokenizer owns per-token folding and 23-byte truncation
+		// with ORIGINAL byte positions. Blanket-folding first breaks that: U+0130 (İ, 2 bytes) folds to
+		// i (1 byte), so a pre-folded phrase shifts every following token's byte position and truncates
+		// a Latin run one byte earlier than the index stored it, and its tokens never match (#29271 P2).
+		// Non-phrase TEXT/STAR leaves are folded at the leaf in CreatePattern, reproducing the previous
+		// whole-pattern behavior for words (TEXT re-tokenizes via GenTextSql; STAR prefixes via
+		// truncateStarPrefix, which does not fold).
+		ps, err := ParsePatternInBooleanMode(pattern, parser)
 		if err != nil {
 			return nil, err
 		}

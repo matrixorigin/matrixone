@@ -57,7 +57,7 @@ func (rs *RemoteDataSource) String() string {
 }
 
 func (rs *RemoteDataSource) Next(
-	_ context.Context,
+	ctx context.Context,
 	_ []string,
 	_ []types.Type,
 	seqNums []uint16,
@@ -67,7 +67,7 @@ func (rs *RemoteDataSource) Next(
 	_ *batch.Batch,
 ) (*objectio.BlockInfo, engine.DataState, error) {
 
-	rs.batchPrefetch(seqNums)
+	rs.batchPrefetch(ctx, seqNums)
 
 	if rs.cursor >= rs.data.DataCnt() {
 		return nil, engine.End, nil
@@ -77,7 +77,7 @@ func (rs *RemoteDataSource) Next(
 	return &cur, engine.Persisted, nil
 }
 
-func (rs *RemoteDataSource) batchPrefetch(seqNums []uint16) {
+func (rs *RemoteDataSource) batchPrefetch(ctx context.Context, seqNums []uint16) {
 	// TODO: remove proc and don't GetService
 	if rs.proc == nil {
 		return
@@ -100,10 +100,12 @@ func (rs *RemoteDataSource) batchPrefetch(seqNums []uint16) {
 		bids[idx-begin] = blk.BlockID
 	}
 
-	err := ioutil.Prefetch(
-		rs.proc.GetService(), rs.fs, blks[0].MetaLocation())
-	if err != nil {
-		logutil.Errorf("pefetch block data: %s", err.Error())
+	if !fileservice.GetFileServicePolicy(ctx).Any(fileservice.SkipFullFilePreloads) {
+		err := ioutil.Prefetch(
+			rs.proc.GetService(), rs.fs, blks[0].MetaLocation())
+		if err != nil {
+			logutil.Errorf("pefetch block data: %s", err.Error())
+		}
 	}
 
 	tombstoner := rs.data.GetTombstones()
@@ -261,6 +263,18 @@ func FastApplyDeletesByRowIds(
 
 	if isDeletedRowIdsSorted {
 		panicIfRowIdsUnsortedIfRaceDetectorEnabled(deletedRowIds)
+	}
+	if len(deletedRowIds) >= 32 && isDeletedRowIdsSorted && len(*leftRows) == 1 {
+		// Catalog point reads can revisit a block with many transaction-local
+		// deletes. Avoid scanning the whole sorted delete list for one row.
+		rowID := types.NewRowid(checkBid, uint32((*leftRows)[0]))
+		_, found := sort.Find(len(deletedRowIds), func(i int) int {
+			return rowID.Compare(&deletedRowIds[i])
+		})
+		if found {
+			*leftRows = (*leftRows)[:0]
+		}
+		return
 	}
 
 	var (

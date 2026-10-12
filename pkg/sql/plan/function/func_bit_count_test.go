@@ -33,7 +33,7 @@ func TestBitCountInteger(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 1, 1, 64, 63}, nil),
 		BitCountInteger[int64])
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -59,7 +59,7 @@ func TestBitCountString(t *testing.T) {
 			1,
 		}, nil),
 		BitCountNonBinaryString)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -99,7 +99,7 @@ func TestBitCountFloat(t *testing.T) {
 			64, 1,
 		}, nil),
 		BitCountFloat[float64])
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 
 	_, err := bitCountFromFloat(math.NaN(), proc)
@@ -123,7 +123,7 @@ func TestBitCountDecimal64(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 1, 2, 64, 63, 63}, nil),
 		BitCountDecimal64)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 
 	got, err := bitCountFromDecimal64(types.Decimal64Max, 0)
@@ -159,7 +159,7 @@ func TestBitCountDecimal128(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{63, 1, 64, 64, 1, 1}, nil),
 		BitCountDecimal128)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 
 	overflow, err := types.ParseDecimal128("18446744073709551616", typ.Width, typ.Scale)
@@ -188,7 +188,7 @@ func TestBitCountDecimal256(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 2, 63, 63, 1, 64, 64, 1}, nil),
 		BitCountDecimal256)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 
 	overflow := mustParseDecimal256(t, "18446744073709551616.0", typ.Scale)
@@ -204,7 +204,7 @@ func TestBitCountBinaryString(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{7, 1, 8}, nil),
 		BitCountBinaryString)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 

@@ -56,7 +56,11 @@ func bindJSONStringConsumerExpr(t *testing.T, name string) *planpb.Expr {
 	expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), name, args)
 	require.NoError(t, err)
 	_, overloadID := function.DecodeOverloadID(expr.GetF().Func.Obj)
-	require.Equal(t, int32(1), overloadID)
+	wantOverload := int32(0)
+	if name == "elt" {
+		wantOverload = 1
+	}
+	require.Equal(t, wantOverload, overloadID)
 	return expr
 }
 
@@ -86,36 +90,39 @@ func TestJSONStringConsumerProtocolPlanAdmissionAndCachedRun(t *testing.T) {
 		if hadPrevious {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
 		}
 	})
 
-	for _, name := range []string{"concat", "concat_ws", "elt"} {
+	for _, name := range []string{"elt"} {
 		t.Run(name, func(t *testing.T) {
 			expr := bindJSONStringConsumerExpr(t, name)
 			for _, owner := range []string{"check", "default", "generated", "on_update"} {
 				t.Run(owner, func(t *testing.T) {
 					queryPlan := jsonStringConsumerCreateTablePlan(expr, owner)
-					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
 					require.NoError(t, validateJSONStringConsumerProtocol(proc, queryPlan))
 
-					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
 					c := &Compile{proc: proc, pn: queryPlan}
 					require.ErrorContains(t,
 						c.Compile(context.Background(), queryPlan, nil),
-						"protocol version 86")
+						"protocol version 110")
 					_, err := c.Run(0)
-					require.ErrorContains(t, err, "protocol version 86")
+					require.ErrorContains(t, err, "protocol version 110")
 				})
 			}
 		})
 	}
 }
 
-func TestJSONStringConsumerRollingUpgradeFencesOldWorker(t *testing.T) {
+// This component test simulates reported worker and receiver versions. It
+// checks placement and serialized-scope admission, without starting an old
+// binary or executing a remote pipeline.
+func TestJSONStringConsumerSimulatedVersionSerializationFences(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	expr := bindJSONStringConsumerExpr(t, "concat")
+	expr := bindJSONStringConsumerExpr(t, "elt")
 	qry := &planpb.Query{
 		Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}},
 		Steps: []int32{0},
@@ -131,37 +138,61 @@ func TestJSONStringConsumerRollingUpgradeFencesOldWorker(t *testing.T) {
 	}
 	workers := engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 
-	// New coordinator + old-head worker: placement must fall back before a
-	// pipeline carrying overload 1 can be sent to the old worker.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
-	client.version = defines.MORPCVersion75
+	// A simulated v109 worker response forces one-CN placement and prevents
+	// encoding a pipeline carrying overload 1 for that destination.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
+	client.version = defines.MORPCVersion109
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = workers
-	require.NoError(t, c.constrainJSONStringConsumerWorkers(qry))
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err := encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 
-	// The same new coordinator may use the distributed path once the selected
-	// worker reports the new capability.
-	client.version = defines.MORPCVersion86
+	// A simulated v110 worker response retains multi-CN placement and permits
+	// encoding. This does not prove remote pipeline execution.
+	client.version = defines.MORPCVersion110
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = workers
-	require.NoError(t, c.constrainJSONStringConsumerWorkers(qry))
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 
-	// An old-head receiver rejects the already serialized overload instead of
-	// reaching GetFunctionById, while a v86 receiver accepts and executes it.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
+	// A simulated v109 receiver rejects the serialized overload; a simulated
+	// v110 receiver accepts decoding. Neither case executes the decoded scope.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
 	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "protocol version 86")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
+	require.ErrorContains(t, err, "protocol version 110")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
 	decoded, err := decodeScope(data, c.proc, true, nil)
 	require.NoError(t, err)
 	require.NotNil(t, decoded)
 	require.Positive(t, client.calls)
 	require.Equal(t, client.calls, client.releases)
+}
+
+func TestJSONStringConsumerActualOwnerProtocolFloors(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		floor    int64
+		overload int32
+	}{
+		{"concat", defines.MORPCVersion101, 0},
+		{"concat_ws", defines.MORPCVersion101, 0},
+		{"elt", defines.MORPCVersion110, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := bindJSONStringConsumerExpr(t, tc.name)
+			require.Equal(t, tc.overload, int32(expr.GetF().GetFunc().GetObj()))
+			features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.name == "elt", features.JSONStringConsumerOverload)
+			require.Equal(t, tc.floor, remoteExpressionProtocolVersion(features))
+			floor, err := plan2.RequiredPersistedExpressionProtocolVersion(expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.floor, floor)
+		})
+	}
 }

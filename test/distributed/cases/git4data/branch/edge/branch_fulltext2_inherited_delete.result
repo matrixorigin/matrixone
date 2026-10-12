@@ -1,0 +1,105 @@
+set experimental_fulltext2_index = 1;
+drop database if exists issue28847_branch_ft2_delete;
+create database issue28847_branch_ft2_delete;
+use issue28847_branch_ft2_delete;
+create table src(
+id bigint primary key,
+body text not null,
+tag int not null
+);
+insert into src values
+(1, 'alpha inherited row', 10),
+(2, 'beta retained row', 20);
+create fulltext2 index ft on src(body) include(tag);
+alter table src alter reindex ft fulltext2 force_sync;
+explain select id, tag from src
+where match(body) against('alpha' in boolean mode) order by id;
+-- @regex("Table Function on fulltext2_search", true)
+-- @regex("Join", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_doc_id INTERNAL  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+              ->  Table Function on fulltext2_search
+select id, tag from src
+where match(body) against('alpha' in boolean mode) order by id;
+➤ id[-5,64,0]  ¦  tag[4,32,0]  𝄀
+1  ¦  10
+data branch create table leaf from src;
+delete from leaf where id = 1;
+insert into leaf values (3, 'alpha branch new', 30);
+insert into leaf values (9, 'alpha phantom', 90);
+delete from leaf where id = 9;
+set @leaf_id = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'leaf'
+);
+set @leaf_dml_done_ns = cast(unix_timestamp(now(6)) * 1000000000 as unsigned);
+set @leaf_ft2_ready_sql = concat(
+'select coalesce(min(cast(substring_index(watermark, ''-'', 1) as unsigned)), 0) >= ',
+@leaf_dml_done_ns, ' as ready from mo_catalog.mo_iscp_log',
+' where table_id = ', @leaf_id, ' and drop_at is null'
+);
+prepare wait_leaf_ft2 from @leaf_ft2_ready_sql;
+execute wait_leaf_ft2;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_leaf_ft2;
+select id, body, tag from leaf order by id;
+➤ id[-5,64,0]  ¦  body[-1,16383,0]  ¦  tag[4,32,0]  𝄀
+2  ¦  beta retained row  ¦  20  𝄀
+3  ¦  alpha branch new  ¦  30
+explain select id, tag from leaf
+where match(body) against('alpha' in boolean mode) order by id;
+-- @regex("Table Function on fulltext2_search", true)
+-- @regex("Join", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_doc_id INTERNAL  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+              ->  Table Function on fulltext2_search
+select id, tag from leaf
+where match(body) against('alpha' in boolean mode) order by id;
+➤ id[-5,64,0]  ¦  tag[4,32,0]  𝄀
+3  ¦  30
+select id from leaf
+where match(body) against('alpha' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+3
+explain select id, body from leaf
+where match(body) against('alpha' in boolean mode) order by id;
+-- @regex("Join Type: INNER", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: leaf.id INTERNAL  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (leaf.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on issue28847_branch_ft2_delete.leaf  𝄀
+                          Runtime Filter Probe: leaf.id  𝄀
+                    ->  Table Function on fulltext2_search
+select id, body from leaf
+where match(body) against('alpha' in boolean mode) order by id;
+➤ id[-5,64,0]  ¦  body[-1,16383,0]  𝄀
+3  ¦  alpha branch new
+select id, tag from leaf
+where match(body) against('beta' in boolean mode) order by id;
+➤ id[-5,64,0]  ¦  tag[4,32,0]  𝄀
+2  ¦  20
+select id, tag from leaf
+where match(body) against('phantom' in boolean mode) order by id;
+➤ id[-5,64,0]  ¦  tag[4,32,0]
+select id, tag from src
+where match(body) against('alpha' in boolean mode) order by id;
+➤ id[-5,64,0]  ¦  tag[4,32,0]  𝄀
+1  ¦  10
+drop database issue28847_branch_ft2_delete;
+set experimental_fulltext2_index = 0;

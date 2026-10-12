@@ -1,0 +1,20 @@
+select cast(cast('"abc"' as json) as char), json_unquote(cast('"abc"' as json));
+➤ cast(cast("abc" as json) as varchar)[12,65535,0]  ¦  json_unquote(cast("abc" as json))[12,65535,0]  𝄀
+"abc"  ¦  abc
+select cast('"abc"' as json) = 'abc', cast('"abc"' as json) like 'abc';
+➤ cast("abc" as json) = abc[-7,1,0]  ¦  cast("abc" as json) like abc[-7,1,0]  𝄀
+1  ¦  1
+select cast(cast('"a\\"b"' as json) as varchar(20));
+➤ cast(cast("a\\"b" as json) as varchar(20))[12,20,0]  𝄀
+"a\"b"
+select cast(cast('42' as json) as char), cast(cast('null' as json) as char);
+➤ cast(cast(42 as json) as varchar)[12,65535,0]  ¦  cast(cast(null as json) as varchar)[12,65535,0]  𝄀
+42  ¦  null
+create table issue_29471_assignment(v varchar(10));
+insert into issue_29471_assignment values (cast('"abc"' as json));
+insert into issue_29471_assignment values (cast(cast('"abc"' as json) as char));
+select v from issue_29471_assignment order by v;
+➤ v[12,10,0]  𝄀
+"abc"  𝄀
+abc
+drop table issue_29471_assignment;

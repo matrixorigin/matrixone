@@ -31,6 +31,7 @@ func TestTopAllocationSiteRangesDoNotOverlap(t *testing.T) {
 		{"spill", spillutil.SpillAllocationSiteDecodedData, spillutil.SpillAllocationSiteReadBuffer},
 		{"top", TopRetainedData, TopSpillWriteBuffer},
 		{"merge-top", MergeTopRetainedData, MergeTopAppendCheckpoints},
+		{"adaptive-top", AdaptiveTopRetainedData, AdaptiveTopRetainedGrouping},
 	}
 	for i, current := range ranges {
 		require.GreaterOrEqual(t, current.first, mpool.AllocationSiteMin, current.name)

@@ -40,7 +40,7 @@ func getJSONStringConsumerValue(
 	if isNull || parameter.GetType().Oid != types.T_json {
 		return value, isNull, nil
 	}
-	visible, err := types.DecodeJson(value).MarshalJSON()
+	visible, err := concatStringValue(parameter.GetType().Oid, value)
 	if err != nil {
 		return nil, false, err
 	}

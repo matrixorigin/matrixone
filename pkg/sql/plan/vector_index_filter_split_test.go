@@ -182,3 +182,30 @@ func TestVectorIndexCoverageAcceptsPreparedParameterOnIncludedColumn(t *testing.
 	require.Equal(t, []*Expr{filter}, pushdown)
 	require.Empty(t, remaining)
 }
+
+func TestVectorIndexCoverageFallbackRequiresIncludedColumnReference(t *testing.T) {
+	_, _, scanNode, _, _ := newIvfIncludeModeTestBuilder(t)
+	scanTag := scanNode.BindingTags[0]
+	idEq := makeIvfHelperFnExpr(
+		"=",
+		Type{Id: int32(types.T_bool)},
+		makeIvfHelperColExpr(scanTag, 0, scanNode.TableDef),
+		MakePlan2Int32ConstExprWithType(1),
+	)
+	categoryEq := makeIvfHelperFnExpr(
+		"=",
+		Type{Id: int32(types.T_bool)},
+		makeIvfHelperColExpr(scanTag, 3, scanNode.TableDef),
+		MakePlan2Int32ConstExprWithType(20),
+	)
+	constant := makeIvfHelperFnExpr(
+		"=",
+		Type{Id: int32(types.T_bool)},
+		MakePlan2Int32ConstExprWithType(1),
+		MakePlan2Int32ConstExprWithType(1),
+	)
+
+	require.False(t, hasVectorIndexIncludedColumnFilter([]*Expr{idEq}, scanNode, []string{"title", "category"}))
+	require.False(t, hasVectorIndexIncludedColumnFilter([]*Expr{constant}, scanNode, []string{"title", "category"}))
+	require.True(t, hasVectorIndexIncludedColumnFilter([]*Expr{categoryEq}, scanNode, []string{"title", "category"}))
+}

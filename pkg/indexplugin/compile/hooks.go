@@ -20,7 +20,11 @@
 package compile
 
 import (
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -241,6 +245,29 @@ type ReindexParamUpdate struct {
 	// — e.g. fulltext2 forbids changing POSITION_FREE on a MERGE, since a
 	// tail-into-base compaction cannot re-derive positions the base does not hold.
 	Merge bool
+
+	// BaseVectorType is the type of the indexed column; zero when unknown.
+	BaseVectorType types.T
+}
+
+// ReindexQuantizationChange returns the QUANTIZATION update specifies and whether it differs,
+// ignoring case, from the stored one.
+func ReindexQuantizationChange(old map[string]string, update ReindexParamUpdate) (string, bool) {
+	q, ok := update.Params[catalog.Quantization]
+	if !ok || strings.EqualFold(q, old[catalog.Quantization]) {
+		return q, false
+	}
+	return q, true
+}
+
+// RejectMerge returns an error when update is a MERGE. algo names the index algorithm in the
+// message. For plugins whose HandleReindex has no MERGE (tail-compaction) path.
+func RejectMerge(update ReindexParamUpdate, algo string) error {
+	if !update.Merge {
+		return nil
+	}
+	return moerr.NewNotSupportedNoCtxf(
+		"ALTER ... REINDEX MERGE is not supported for a %s index; use ALTER ... REINDEX without MERGE", algo)
 }
 
 // MergeReindexParams is the shared body for a plugin's

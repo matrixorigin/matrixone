@@ -36,7 +36,7 @@ func BenchmarkWindowFirstBatch(b *testing.B) {
 
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 		values := make([]int32, rows)
 		for row := range values {
 			values[row] = int32(row + 1)
@@ -98,7 +98,7 @@ func BenchmarkWindowBoundedRowsSum(b *testing.B) {
 		b.Run(width.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+				proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 				values := make([]int32, rows)
 				for row := range values {
 					values[row] = 1
@@ -170,7 +170,7 @@ func BenchmarkWindowBoundedRangeAvg(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
-				proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+				proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 				values := make([]int32, rows)
 				boundaries := make([]int64, 0, rows/peer.size)
 				for row := range values {
@@ -274,7 +274,7 @@ func BenchmarkCumulativeMaxPartitionShapes(b *testing.B) {
 			b.ReportAllocs()
 			var mpoolAllocBytes, mpoolAllocs int64
 			for i := 0; i < b.N; i++ {
-				proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+				proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 				values := make([]int32, rows)
 				for row := range values {
 					values[row] = int32(rows - row)

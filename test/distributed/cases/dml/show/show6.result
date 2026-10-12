@@ -6,5 +6,5 @@ KEY `uidx` (`abc`)
 );
 SHOW INDEX FROM `t1`;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    1    uidx    1    abc    A    0    NULL    NULL                        YES    abc
+t1    1    uidx    1    abc    A    0    NULL    NULL        BTREE                YES    abc
 drop database if exists test_show;

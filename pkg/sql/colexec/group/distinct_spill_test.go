@@ -219,7 +219,7 @@ func TestDistinctSpillRecordEnvelopeRejectsCorruption(t *testing.T) {
 }
 
 func TestDistinctContributionEnvelopeRejectsCorruption(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{countDistinctAgg(0)})
 	allocation := installGroupTestAllocation(t, g, proc, 64<<20)
 	require.NoError(t, g.Prepare(proc))
@@ -480,7 +480,7 @@ func TestDistinctSpillControllerBoundaryContracts(t *testing.T) {
 	require.ErrorIs(t, controller.markContributionPathApplied(
 		[spillMaxPass]uint8{}, spillMaxPass+1), mpool.ErrAllocationAccountInvalid)
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{countDistinctAgg(0)})
 	allocation := installGroupTestAllocation(t, g, proc, 64<<20)
 	require.NoError(t, g.Prepare(proc))
@@ -608,7 +608,7 @@ func TestDistinctSpillControllerBoundaryContracts(t *testing.T) {
 }
 
 func TestDistinctSpillInternalIOFailureBoundaries(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{countDistinctAgg(0)})
 	allocation := installGroupTestAllocation(t, g, proc, 64<<20)
 	require.NoError(t, g.Prepare(proc))
@@ -811,7 +811,7 @@ func TestDistinctSpillInternalIOFailureBoundaries(t *testing.T) {
 }
 
 func TestDistinctSpillExternalSortFailureBoundaries(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{countDistinctAgg(0)})
 	allocation := installGroupTestAllocation(t, g, proc, 64<<20)
 	require.NoError(t, g.Prepare(proc))
@@ -884,7 +884,7 @@ func TestDistinctSpillExternalSortFailureBoundaries(t *testing.T) {
 }
 
 func TestDistinctSpillTerminalStateBoundaries(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	g := newGroupOp(
 		proc,
 		[]*plan.Expr{colExpr(0, types.T_int32)},
@@ -1026,7 +1026,7 @@ func TestDistinctSpillTerminalStateBoundaries(t *testing.T) {
 }
 
 func TestH0DistinctNoSpillKeepsNormalPath(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = testutil.MakeInt32Vector(
 		[]int32{1, 1, 2}, nil, proc.Mp())
@@ -1056,7 +1056,7 @@ func TestH0DistinctNoSpillKeepsNormalPath(t *testing.T) {
 }
 
 func TestDistinctSpillCancellationCleansPublishedOwnership(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = testutil.MakeInt32Vector(
 		[]int32{1, 2, 3}, nil, proc.Mp())
@@ -1090,7 +1090,7 @@ func TestDistinctSpillCancellationCleansPublishedOwnership(t *testing.T) {
 }
 
 func TestDistinctSpillDrainPublishesBeforeResidentRelease(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = testutil.MakeInt32Vector(
 		[]int32{1, 1, 2, 3, 3}, nil, proc.Mp())
@@ -1134,7 +1134,7 @@ func TestDistinctSpillDrainPublishesBeforeResidentRelease(t *testing.T) {
 }
 
 func TestH0CountDistinctCompletesThroughBoundedSpill(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = testutil.MakeInt32Vector(
 		[]int32{1, 1, 2, 3, 3}, nil, proc.Mp())
@@ -1168,7 +1168,7 @@ func TestH0CountDistinctCompletesThroughBoundedSpill(t *testing.T) {
 }
 
 func TestH0CountDistinctForcedCollisionUsesExternalSort(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	values := make([]int32, 0, 150)
 	for value := int32(0); value < 100; value++ {
 		values = append(values, value)
@@ -1216,7 +1216,7 @@ func TestH0CountDistinctForcedCollisionUsesExternalSort(t *testing.T) {
 }
 
 func TestH0DistinctExternalSortMergesMultipleWideKeyRuns(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	values := make([]string, 0, 60)
 	for i := 0; i < 40; i++ {
 		value := fmt.Sprintf("%04d-%s", i, strings.Repeat("x", 4096))
@@ -1259,7 +1259,7 @@ func TestH0DistinctExternalSortMergesMultipleWideKeyRuns(t *testing.T) {
 }
 
 func TestH0CountDistinctRecursivelyRepartitionsOversizedLeaf(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	values := make([]int32, 100)
 	for i := range values {
 		values[i] = int32(i)
@@ -1308,7 +1308,7 @@ func TestH0CountDistinctRecursivelyRepartitionsOversizedLeaf(t *testing.T) {
 }
 
 func TestGroupedHotKeyCountDistinctCompletesThroughKeySpill(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector(
 		[]int32{1, 1, 2, 2, 2}, nil, proc.Mp())
@@ -1356,7 +1356,7 @@ func TestGroupedHotKeyCountDistinctCompletesThroughKeySpill(t *testing.T) {
 }
 
 func TestGroupedHotKeyForcedCollisionUsesExternalSort(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	groups := make([]int32, 100)
 	values := make([]int32, 100)
 	for i := range values {
@@ -1410,7 +1410,7 @@ func TestGroupedHotKeyForcedCollisionUsesExternalSort(t *testing.T) {
 }
 
 func TestGroupedDistinctSpillRecursivelyRepartitionsOversizedLeaf(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	groups := make([]int32, 100)
 	values := make([]int32, 100)
 	for i := range values {
@@ -1467,7 +1467,7 @@ func TestGroupedDistinctSpillRecursivelyRepartitionsOversizedLeaf(t *testing.T) 
 }
 
 func TestGroupedDistinctSpillPreservesMixedAggregateState(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(3)
 	input.Vecs[0] = testutil.MakeInt32Vector(
 		[]int32{1, 1, 2, 2, 2}, nil, proc.Mp())
@@ -1529,7 +1529,7 @@ func TestGroupedDistinctSpillPreservesMixedAggregateState(t *testing.T) {
 }
 
 func TestDistinctKeySpillComposesWithRecursiveGroupSpill(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector(
 		[]int32{1, 1, 2, 2, 3, 3}, nil, proc.Mp())
@@ -1578,7 +1578,7 @@ func TestDistinctKeySpillComposesWithRecursiveGroupSpill(t *testing.T) {
 }
 
 func TestDistinctContributionPathIsPartitionedAndAppliedOnce(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector(
 		[]int32{1, 2}, nil, proc.Mp())
@@ -1641,7 +1641,7 @@ func TestDistinctContributionPathIsPartitionedAndAppliedOnce(t *testing.T) {
 }
 
 func TestIntermediateDistinctSpillEmitsExactKeysAcrossWorkers(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	aggs := []aggexec.AggFuncExecExpression{countDistinctAgg(0)}
 	buildPartial := func(values []int32) []*batch.Batch {
 		input := batch.NewWithSize(1)
@@ -1706,7 +1706,7 @@ func TestIntermediateDistinctSpillEmitsExactKeysAcrossWorkers(t *testing.T) {
 }
 
 func TestIntermediateDistinctSpillRepartitionsOversizedLeaf(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	values := make([]int32, 100)
 	for i := range values {
 		values[i] = int32(i)
@@ -1782,7 +1782,7 @@ func TestIntermediateDistinctSpillTerminalLeafContinuesWithinHardAccount(t *test
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			partial := newGroupOp(
 				proc,
 				[]*plan.Expr{colExpr(0, types.T_int32)},
@@ -1950,7 +1950,7 @@ func assertGroupedDistinctHardAccountResult(
 }
 
 func TestGroupedDistinctSpillFinalizationCompletesWithinHardAccount(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	first := groupedDistinctHardAccountInput(proc, 1)
 	second := groupedDistinctHardAccountInput(proc, 2)
 	g := newGroupOp(
@@ -1986,7 +1986,7 @@ func TestGroupedDistinctSpillFinalizationCompletesWithinHardAccount(t *testing.T
 }
 
 func TestMergeGroupedDistinctSpillFinalizationCompletesWithinHardAccount(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	const partialGroups = 512
 	partials := make([]*batch.Batch, 0,
 		2*aggexec.AggBatchSize/partialGroups)
@@ -2026,7 +2026,7 @@ func TestMergeGroupedDistinctSpillFinalizationCompletesWithinHardAccount(t *test
 }
 
 func TestGroupedDistinctSpillMultiChunkDrainCompletesWithinHardAccount(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	const chunks = 3
 	inputs := make([]*batch.Batch, 0, chunks)
 	for chunk := range chunks {
@@ -2066,7 +2066,7 @@ func TestGroupedDistinctSpillMultiChunkDrainCompletesWithinHardAccount(t *testin
 }
 
 func TestMergeGroupedDistinctSpillMultiChunkDrainCompletesWithinHardAccount(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	const chunks = 3
 	partials := make([]*batch.Batch, 0, chunks)
 	for chunk := range chunks {
@@ -2104,7 +2104,7 @@ func TestMergeGroupedDistinctSpillMultiChunkDrainCompletesWithinHardAccount(t *t
 }
 
 func TestH0DistinctSpillPreservesMultiArgumentNullSemantics(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt64Vector(
 		[]int64{1, 1, 2, 2, 3, 4}, nil, proc.Mp())
@@ -2144,7 +2144,7 @@ func TestH0DistinctSpillPreservesMultiArgumentNullSemantics(t *testing.T) {
 }
 
 func TestH0DistinctSpillCanonicalizesSignedZero(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = testutil.MakeFloat64Vector(
 		[]float64{math.Copysign(0, -1), 0, 1, 1}, nil, proc.Mp())
@@ -2183,7 +2183,7 @@ func TestH0DistinctSpillRespectsHardAccountBelowFullSetSize(t *testing.T) {
 		batchKeys    = 4
 	)
 	require.Greater(t, uint64(payloadBytes*keys), accountLimit)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	batches := make([]*batch.Batch, 0, keys/batchKeys)
 	for start := 0; start < keys; start += batchKeys {
 		values := make([]string, batchKeys)
@@ -2253,7 +2253,7 @@ func BenchmarkExactCountDistinctSpill(b *testing.B) {
 		},
 	} {
 		b.Run(test.name, func(b *testing.B) {
-			proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 			defer proc.Free()
 			keys := make([]int32, rows)
 			values := make([]int32, rows)

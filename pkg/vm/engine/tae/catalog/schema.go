@@ -369,12 +369,20 @@ func (s *Schema) MustGetExtraBytes() []byte {
 }
 
 func (s *Schema) MustRestoreExtra(data []byte) {
-	s.Extra = &apipb.SchemaExtra{}
-	if err := s.Extra.Unmarshal(data); err != nil {
+	if err := s.restoreExtra(data); err != nil {
 		panic(err)
 	}
-	// Sync FromPublication from Extra after deserialization
-	s.FromPublication = s.Extra.FromPublication
+}
+
+func (s *Schema) restoreExtra(data []byte) error {
+	extra := &apipb.SchemaExtra{}
+	if err := extra.Unmarshal(data); err != nil {
+		return err
+	}
+	s.Extra = extra
+	// Sync FromPublication from Extra after deserialization.
+	s.FromPublication = extra.FromPublication
+	return nil
 }
 
 func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
@@ -439,7 +447,9 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 	if err != nil {
 		return
 	}
-	s.MustRestoreExtra(extraData)
+	if err = s.restoreExtra(extraData); err != nil {
+		return
+	}
 	n += sn
 	colCnt := uint16(0)
 	if sn2, err = r.Read(types.EncodeUint16(&colCnt)); err != nil {
@@ -457,7 +467,9 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 			return
 		}
 		n += int64(types.TSize)
-		def.Type = types.DecodeType(colBuf)
+		if def.Type, err = types.DecodeTypeChecked(colBuf); err != nil {
+			return
+		}
 		if def.Name, sn, err = objectio.ReadString(r); err != nil {
 			return
 		}

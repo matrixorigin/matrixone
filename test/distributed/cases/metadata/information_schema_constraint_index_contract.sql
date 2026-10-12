@@ -79,10 +79,13 @@ where table_schema = 'information_schema_constraint_index_contract'
   and table_name = 'vec'
   and index_name = 'vidx';
 
-select index_name, seq_in_index, column_name, non_unique
+select index_name, seq_in_index, column_name, non_unique, index_type
 from information_schema.statistics
 where table_schema = 'information_schema_constraint_index_contract'
   and table_name = 'abmoxindexyfoo'
+  and index_type = 'BTREE'
 order by lower(index_name), index_name, seq_in_index;
+
+show index from abmoxindexyfoo where Index_type = 'BTREE';
 
 drop database information_schema_constraint_index_contract;

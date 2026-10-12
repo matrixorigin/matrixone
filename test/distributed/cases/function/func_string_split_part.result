@@ -63,4 +63,4 @@ select split_part(a,b,c) from t1;
 invalid input: split_part: field contains non-positive integer
 insert into t1 values('axxx','x',-1);
 select split_part(a,b,c) from t1;
-Data truncation: data out of range: data type uint, value '-1'
+Data truncation: data out of range: data type uint32, value '-1'

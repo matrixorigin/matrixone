@@ -563,13 +563,23 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 			bitmap := block.bitmap
 			if bitmap.Contains(uint64(rowOffset)) {
 				continue
-			} else {
-				bitmap.Add(uint64(rowOffset))
 			}
 
-			vector.AppendFixed(block.bat.GetVector(RowIDIdx), rowID, false, proc.GetMPool())
-			block.bat.GetVector(PkIdx).UnionOne(bat.GetVector(PkIdx), int64(i), proc.GetMPool())
-			block.bat.SetRowCount(block.bat.Vecs[0].Length())
+			rowIDDst := block.bat.GetVector(RowIDIdx)
+			pkDst := block.bat.GetVector(PkIdx)
+			rowIDCheckpoint := rowIDDst.MakeAppendCheckpoint()
+			pkCheckpoint := pkDst.MakeAppendCheckpoint()
+			if err := vector.AppendFixed(rowIDDst, rowID, false, proc.GetMPool()); err != nil {
+				rowIDDst.RollbackAppend(rowIDCheckpoint, 1)
+				return nil, err
+			}
+			if err := pkDst.UnionOne(bat.GetVector(PkIdx), int64(i), proc.GetMPool()); err != nil {
+				rowIDDst.RollbackAppend(rowIDCheckpoint, 1)
+				pkDst.RollbackAppend(pkCheckpoint, 1)
+				return nil, err
+			}
+			block.bat.SetRowCount(rowIDDst.Length())
+			bitmap.Add(uint64(rowOffset))
 		}
 	}
 
@@ -586,6 +596,7 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 		return a.Compare(&b)
 	})
 	deleteBats := batch.NewBatchSet(objectio.BlockMaxRows)
+	defer deleteBats.Clean(proc.GetMPool())
 	for _, blkid := range blkids {
 		bat := blockMap[blkid].bat
 		delete(blockMap, blkid)

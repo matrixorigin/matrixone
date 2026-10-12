@@ -9,7 +9,7 @@ insert into test01 values('9999-01-01 26:25:26');
 invalid input: invalid datetime value 9999-01-01 26:25:26
 insert into test01 values(NULL);
 select * from test01;
-➤ col1[93,64,0]  𝄀
+➤ col1[93,19,0]  𝄀
 2020-01-13 12:20:59  𝄀
 2023-04-17 01:01:45  𝄀
 null
@@ -24,7 +24,7 @@ insert into test01 values('2020-01-13 12:20:59.12343243');
 insert into test01 values('2023-04-17 01:01:45');
 insert into test01 values(NULL);
 select * from test01;
-➤ col1[93,64,0]  𝄀
+➤ col1[93,23,0]  𝄀
 2020-01-13 12:20:59.123000000  𝄀
 2023-04-17 01:01:45  𝄀
 null
@@ -39,7 +39,7 @@ insert into test02 values('2020-12-13');
 insert into test02 values('2023-01-01');
 insert into test02 values(NULL);
 select * from test02;
-➤ col1[91,64,0]  𝄀
+➤ col1[91,10,0]  𝄀
 2020-12-13  𝄀
 2023-01-01  𝄀
 null
@@ -163,7 +163,7 @@ insert into test14 values(1,'2020-01-13 12:20:59',NULL);
 insert into test14 values(2,'2023-04-17 01:01:45',-8.89789552);
 insert into test14 values(3,NULL,456456.7887994512);
 select * from test14;
-➤ col1[4,32,0]  ¦  col2[93,64,0]  ¦  col3[3,20,5]  𝄀
+➤ col1[4,32,0]  ¦  col2[93,19,0]  ¦  col3[3,20,5]  𝄀
 1  ¦  2020-01-13 12:20:59  ¦  null  𝄀
 2  ¦  2023-04-17 01:01:45  ¦  -8.89790  𝄀
 3  ¦  null  ¦  456456.78880
@@ -233,14 +233,14 @@ insert into test14 values(1,'2020-01-13 12:20:59');
 insert into test14 values(2,'2023-04-17 01:01:45');
 insert into test14 values(3,NULL);
 select * from test14;
-➤ col1[4,32,0]  ¦  col2[93,64,0]  𝄀
+➤ col1[4,32,0]  ¦  col2[93,19,0]  𝄀
 1  ¦  2020-01-13 12:20:59  𝄀
 2  ¦  2023-04-17 01:01:45  𝄀
 3  ¦  null
 select col2 / col1 from test14;
-➤ col2 / col1[3,38,6]  𝄀
-20200113122059.000000  𝄀
-10115208505072.500000  𝄀
+➤ col2 / col1[3,18,4]  𝄀
+20200113122059.0000  𝄀
+10115208505072.5000  𝄀
 null
 select col1 * col2 from test14;
 ➤ col1 * col2[3,38,0]  𝄀
@@ -268,7 +268,7 @@ create table datetime01(col1 datetime(3), col2 decimal(38,0));
 insert into datetime01 values('2000-12-12 12:58:58.123',123.454648);
 insert into datetime01 values('1996-04-06 01:01:01.4',-78645312.7894);
 select * from datetime01;
-➤ col1[93,64,0]  ¦  col2[3,38,0]  𝄀
+➤ col1[93,23,0]  ¦  col2[3,38,0]  𝄀
 2000-12-12 12:58:58.123000000  ¦  123  𝄀
 1996-04-06 01:01:01.400000000  ¦  -78645313
 select col1 + col2 from datetime01;
@@ -284,9 +284,9 @@ select col1 * col2 from datetime01;
 2460149091480549.129  𝄀
 -1569792378271505764738.200
 select col1 / col2 from datetime01;
-➤ col1 / col2[3,38,9]  𝄀
-162611480698.033520325  𝄀
--253802.868202729
+➤ col1 / col2[3,21,7]  𝄀
+162611480698.0335203  𝄀
+-253802.8682027
 select col1 % col2 from datetime01;
 ➤ col1 % col2[3,38,3]  𝄀
 4.123  𝄀
@@ -307,7 +307,7 @@ create table datetime01(col1 datetime(3), col2 datetime);
 insert into datetime01 values('2000-12-12 12:58:58','1969-03-03 01:05:59');
 insert into datetime01 values('1996-04-06 01:01:01','2019-05-04 23:12:29');
 select * from datetime01;
-➤ col1[93,64,0]  ¦  col2[93,64,0]  𝄀
+➤ col1[93,23,0]  ¦  col2[93,19,0]  𝄀
 2000-12-12 12:58:58  ¦  1969-03-03 01:05:59  𝄀
 1996-04-06 01:01:01  ¦  2019-05-04 23:12:29
 select col1 - col2 from datetime01;
@@ -321,14 +321,14 @@ insert into time01 values(1,'12:20:59');
 insert into time01 values(2,'23:59:59');
 insert into time01 values(3,NULL);
 select * from time01;
-➤ col1[4,32,0]  ¦  col2[92,64,0]  𝄀
+➤ col1[4,32,0]  ¦  col2[92,10,0]  𝄀
 1  ¦  12:20:59  𝄀
 2  ¦  23:59:59  𝄀
 3  ¦  null
 select col2 / col1 from time01;
-➤ col2 / col1[3,38,6]  𝄀
-122059.000000  𝄀
-117979.500000  𝄀
+➤ col2 / col1[3,18,4]  𝄀
+122059.0000  𝄀
+117979.5000  𝄀
 null
 select col1 * col2 from time01;
 ➤ col1 * col2[3,38,0]  𝄀
@@ -356,13 +356,13 @@ create table time01(col1 decimal(38,0),col2 time);
 insert into time01 values(1787945645414794854456412,'12:20:59');
 insert into time01 values(-789466511231027845,'23:59:59');
 select * from time01;
-➤ col1[3,38,0]  ¦  col2[92,64,0]  𝄀
+➤ col1[3,38,0]  ¦  col2[92,10,0]  𝄀
 1787945645414794854456412  ¦  12:20:59  𝄀
 -789466511231027845  ¦  23:59:59
 select col2 / col1 from time01;
-➤ col2 / col1[3,38,6]  𝄀
-0.000000  𝄀
-0.000000
+➤ col2 / col1[3,18,4]  𝄀
+0.0000  𝄀
+0.0000
 select col1 * col2 from time01;
 ➤ col1 * col2[3,38,0]  𝄀
 218234857533684445140095192308  𝄀
@@ -387,7 +387,7 @@ insert into test03 values('1997-01-13 12:20:59.898612');
 insert into test03 values('1970-01-30 23:59:59');
 insert into test03 values(NULL);
 select * from test03;
-➤ col1[93,64,0]  𝄀
+➤ col1[93,19,0]  𝄀
 1997-01-13 12:21:00  𝄀
 1970-01-30 23:59:59  𝄀
 null
@@ -402,7 +402,7 @@ insert into test03 values('1997-01-13 12:20:59.898612');
 insert into test03 values('1970-01-30 23:59:59');
 insert into test03 values(NULL);
 select * from test03;
-➤ col1[93,64,0]  𝄀
+➤ col1[93,25,0]  𝄀
 1997-01-13 12:20:59.898610000  𝄀
 1970-01-30 23:59:59  𝄀
 null
@@ -464,7 +464,7 @@ insert into timestamp01 values(10000,'2020-01-13 12:20:59');
 insert into timestamp01 values(-22220,'2023-04-17 01:01:45');
 insert into timestamp01 values(123654,NULL);
 select * from timestamp01;
-➤ col1[4,32,0]  ¦  col2[93,64,0]  𝄀
+➤ col1[4,32,0]  ¦  col2[93,19,0]  𝄀
 10000  ¦  2020-01-13 12:20:59  𝄀
 -22220  ¦  2023-04-17 01:01:45  𝄀
 123654  ¦  null
@@ -484,9 +484,9 @@ select col1 * col2 from timestamp01;
 -449519865965421900  𝄀
 null
 select col2 / col1 from timestamp01;
-➤ col2 / col1[3,38,6]  𝄀
-2020011312.205900  𝄀
--910459811.437669  𝄀
+➤ col2 / col1[3,18,4]  𝄀
+2020011312.2059  𝄀
+-910459811.4377  𝄀
 null
 select col2 % col1 from timestamp01;
 ➤ col2 % col1[3,38,0]  𝄀
@@ -500,7 +500,7 @@ insert into timestamp01 values(NULL,'2020-01-13 12:20:59');
 insert into timestamp01 values(-4514531.548451,'2023-04-17 01:01:45');
 insert into timestamp01 values(123654.7897948,NULL);
 select * from timestamp01;
-➤ col1[3,38,18]  ¦  col2[93,64,0]  𝄀
+➤ col1[3,38,18]  ¦  col2[93,19,0]  𝄀
 null  ¦  2020-01-13 12:20:59  𝄀
 -4514531.548451000000000000  ¦  2023-04-17 01:01:45  𝄀
 123654.789794800000000000  ¦  null
@@ -520,9 +520,9 @@ null  𝄀
 -91330855830619356626.035395000000000000  𝄀
 null
 select col2 / col1 from timestamp01;
-➤ col2 / col1[3,38,6]  𝄀
+➤ col2 / col1[3,36,4]  𝄀
 null  𝄀
--4481177.458398  𝄀
+-4481177.4584  𝄀
 null
 select col2 % col1 from timestamp01;
 ➤ col2 % col1[3,38,18]  𝄀

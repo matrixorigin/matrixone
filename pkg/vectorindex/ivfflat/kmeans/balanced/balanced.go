@@ -238,7 +238,9 @@ type pointDiff struct {
 func (km *BalancedKMeans[T]) Cluster(ctx context.Context) (any, error) {
 	if km.normalize {
 		for i := range km.vectorList {
-			metric.NormalizeL2(km.vectorList[i], km.vectorList[i])
+			if err := metric.NormalizeL2(km.vectorList[i], km.vectorList[i]); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -278,9 +280,13 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 	rnd *rand.Rand,
 ) error {
 	if k == 1 {
-		computeMeanFromIndicesInPlace(km.vectorList, indices, km.centroids[clusterStart])
+		if err := computeMeanFromIndicesInPlace(km.vectorList, indices, km.centroids[clusterStart]); err != nil {
+			return err
+		}
 		if km.normalize {
-			metric.NormalizeL2(km.centroids[clusterStart], km.centroids[clusterStart])
+			if err := metric.NormalizeL2(km.centroids[clusterStart], km.centroids[clusterStart]); err != nil {
+				return err
+			}
 		}
 		for _, idx := range indices {
 			km.assignments[idx] = clusterStart
@@ -375,11 +381,19 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 			break
 		}
 
-		computeMeanFromIndicesAndAssignInPlace(km.vectorList, indices, curAssign, 0, c1)
-		computeMeanFromIndicesAndAssignInPlace(km.vectorList, indices, curAssign, 1, c2)
+		if err := computeMeanFromIndicesAndAssignInPlace(km.vectorList, indices, curAssign, 0, c1); err != nil {
+			return err
+		}
+		if err := computeMeanFromIndicesAndAssignInPlace(km.vectorList, indices, curAssign, 1, c2); err != nil {
+			return err
+		}
 		if km.normalize {
-			metric.NormalizeL2(c1, c1)
-			metric.NormalizeL2(c2, c2)
+			if err := metric.NormalizeL2(c1, c1); err != nil {
+				return err
+			}
+			if err := metric.NormalizeL2(c2, c2); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -414,7 +428,21 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 	return nil
 }
 
-func computeMeanFromIndicesAndAssignInPlace[T types.RealNumbers](data [][]T, indices []int, assignments []int, target int, out []T) {
+// checkMeanSum rejects a centroid sum that left T's domain. The sums below accumulate in T for
+// speed, so summing finite elements can overflow T (two float32 MaxFloat32 points sum to +Inf)
+// even though their mean is representable. An overflowed sum divides to a non-finite centroid,
+// which makes every distance to it meaningless, so clustering fails here instead of continuing
+// from one. x-x is 0 for every finite x and NaN for +Inf, -Inf and NaN alike.
+func checkMeanSum[T types.RealNumbers](sum []T) error {
+	for _, v := range sum {
+		if v-v != 0 {
+			return moerr.NewInternalErrorNoCtx("kmeans: vector magnitude is too large, the centroid sum overflows the element domain")
+		}
+	}
+	return nil
+}
+
+func computeMeanFromIndicesAndAssignInPlace[T types.RealNumbers](data [][]T, indices []int, assignments []int, target int, out []T) error {
 	dim := len(out)
 	for j := 0; j < dim; j++ {
 		out[j] = 0
@@ -434,6 +462,9 @@ func computeMeanFromIndicesAndAssignInPlace[T types.RealNumbers](data [][]T, ind
 		}
 	}
 	if count > 0 {
+		if err := checkMeanSum(out); err != nil {
+			return err
+		}
 		isZero := true
 		for j := 0; j < dim; j++ {
 			out[j] /= T(count)
@@ -445,11 +476,12 @@ func computeMeanFromIndicesAndAssignInPlace[T types.RealNumbers](data [][]T, ind
 			copy(out, data[firstIdx])
 		}
 	}
+	return nil
 }
 
-func computeMeanFromIndicesInPlace[T types.RealNumbers](data [][]T, indices []int, out []T) {
+func computeMeanFromIndicesInPlace[T types.RealNumbers](data [][]T, indices []int, out []T) error {
 	if len(indices) == 0 {
-		return
+		return nil
 	}
 	dim := len(out)
 	for j := 0; j < dim; j++ {
@@ -459,6 +491,9 @@ func computeMeanFromIndicesInPlace[T types.RealNumbers](data [][]T, indices []in
 		for j := 0; j < dim; j++ {
 			out[j] += data[vIdx][j]
 		}
+	}
+	if err := checkMeanSum(out); err != nil {
+		return err
 	}
 	isZero := true
 	for j := 0; j < dim; j++ {
@@ -470,6 +505,7 @@ func computeMeanFromIndicesInPlace[T types.RealNumbers](data [][]T, indices []in
 	if isZero {
 		copy(out, data[indices[0]])
 	}
+	return nil
 }
 
 // SSE returns the sum of squared errors.

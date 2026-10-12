@@ -33,6 +33,13 @@ var tnCommandPollFailed = logutil.Event{
 	Message: "failed to poll tn schedule commands",
 }
 
+func (s *store) notifyHeartbeat() {
+	select {
+	case s.heartbeatWakeup <- struct{}{}:
+	default:
+	}
+}
+
 func (s *store) heartbeatTask(ctx context.Context) {
 	if s.cfg.HAKeeper.HeatbeatInterval.Duration == 0 {
 		panic("invalid heartbeat interval")
@@ -49,13 +56,17 @@ func (s *store) heartbeatTask(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.heartbeat(ctx)
-			// see pkg/logservice/service_commands.go#130
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
+		case <-s.heartbeatWakeup:
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		s.heartbeat(ctx)
+		// see pkg/logservice/service_commands.go#130
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
 	}
 }
@@ -67,6 +78,7 @@ func (s *store) controlTask(ctx context.Context) {
 		defer close(commandDone)
 		s.commandTask(ctx)
 	}()
+	s.notifyHeartbeat()
 	s.heartbeatTask(ctx)
 	<-commandDone
 }

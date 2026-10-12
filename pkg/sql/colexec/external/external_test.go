@@ -128,7 +128,6 @@ func (r *checkLockTableBindsReader) Close() error {
 
 func newTestCase(t *testing.T, format, jsondata string) externalTestCase {
 	proc := testutil.NewProcess(t)
-	proc.Base.FileService = testutil.NewFS(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	return externalTestCase{
 		proc:  proc,
@@ -196,7 +195,7 @@ func TestCallPropagatesLoadLockTableBindCheckError(t *testing.T) {
 	require.Equal(t, 1, op.calls)
 }
 
-func TestGetColDataParallelLoadEmptyNumericAsZero(t *testing.T) {
+func TestGetColDataParallelLoadEmptyNumericAndJSONNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
@@ -242,8 +241,7 @@ func TestGetColDataParallelLoadEmptyNumericAsZero(t *testing.T) {
 		proc,
 	)
 	require.NoError(t, err)
-	require.False(t, bat.Vecs[0].GetNulls().Contains(0))
-	require.Equal(t, "0", string(bat.Vecs[0].GetBytesAt(0)))
+	require.True(t, bat.Vecs[0].GetNulls().Contains(0))
 
 	bat.CleanOnlyData()
 	err = getColData(
@@ -1427,6 +1425,7 @@ func TestIcebergParquetProfileStats(t *testing.T) {
 
 func TestReadFileOffsetCompressedUnsafe(t *testing.T) {
 	fs := testutil.NewFS(t)
+	t.Cleanup(func() { fs.Close(context.Background()) })
 	content := []byte("0,0,1,2,0,0,3,4,0,0,abc,2024-01-01,2024-01-01 00:00:01,2024-01-01 00:00:01,1,1.23,txt,aaa,bbb,ccc\n")
 	var buf bytes.Buffer
 	zw := zlib.NewWriter(&buf)

@@ -1,8 +1,9 @@
-- Status: drafted
+- Status: in progress
 - Revision: 2026-09-07 semantic review repair
 - Start Date: 2026-09-04
 - Authors: MatrixOne SQL team
-- Implementation PR: pending (issue #28036)
+- Approved design revision: [PR #28273](https://github.com/matrixorigin/matrixone/pull/28273), merged as `ba08a03265a362261b698af0b5dd1ecc247cdb1d`
+- Implementation PR: [PR #28924](https://github.com/matrixorigin/matrixone/pull/28924) (G1 foundation; issue #28036)
 - Issue for this RFC: #28036
 
 # MySQL `JSON_TABLE()` compatibility

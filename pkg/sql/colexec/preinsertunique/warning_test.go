@@ -51,7 +51,7 @@ func (s *preInsertWarningSession) AppendWarningBatch(total uint64, codes []uint1
 
 func TestInsertIgnoreMultiDedupReportsWarningForAcceptedSetConflict(t *testing.T) {
 	session := &preInsertWarningSession{}
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Session = session
 	proc.SetStmtProfile(&process.StmtProfile{})
 	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
@@ -82,7 +82,7 @@ func TestInsertIgnoreMultiDedupReportsWarningForAcceptedSetConflict(t *testing.T
 
 func TestInsertIgnoreMultiDedupSkipsMetadataForNoConflict(t *testing.T) {
 	session := &preInsertWarningSession{}
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Session = session
 	proc.SetStmtProfile(&process.StmtProfile{})
 	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)

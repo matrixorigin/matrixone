@@ -192,6 +192,10 @@ func (exec *bitOpExecFixed[T]) Flush() ([]*vector.Vector, error) {
 				}
 			}
 		}
+		// The state bitmap was initialized over its full capacity, which can
+		// exceed the number of groups. BIT aggregates never return NULL, so
+		// discard the unused tail as well as the logical rows cleared above.
+		vecs[i].GetNulls().Clear()
 	}
 	return vecs, nil
 }
@@ -334,6 +338,9 @@ func (exec *bitOpExecBytes) Flush() ([]*vector.Vector, error) {
 				}
 			}
 		}
+		// The unused capacity remains marked NULL in aggregate state. The
+		// terminal result is non-NULL for every group, including empty ones.
+		vecs[i].GetNulls().Clear()
 	}
 	return vecs, nil
 }

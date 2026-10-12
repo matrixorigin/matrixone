@@ -61,8 +61,8 @@ ONNX_VERSION=1.26.0
 ONNX_REPO_COMMIT=655365097e21c4df0f82337063f9a12b66700593
 ONNX_BASE_URL=https://github.com/matrixorigin/thirdparty/raw/$(ONNX_REPO_COMMIT)/onnxrt/$(ONNX_VERSION)
 # GitHub's media endpoint serves the same immutable Git LFS objects directly.
-# It is used only after the primary endpoint times out and is still verified by
-# the platform-specific SHA-256 below.
+# It is used only after a primary timeout or HTTP failure and is still verified
+# by the platform-specific SHA-256 below.
 ONNX_FALLBACK_BASE_URL=https://media.githubusercontent.com/media/matrixorigin/thirdparty/$(ONNX_REPO_COMMIT)/onnxrt/$(ONNX_VERSION)
 # The MatrixOne CI builder image ships these pinned artifacts. Keep this a
 # versioned directory so a base-image update cannot accidentally satisfy a

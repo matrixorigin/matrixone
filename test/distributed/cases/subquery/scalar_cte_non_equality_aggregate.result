@@ -1,0 +1,199 @@
+drop database if exists test_scalar_cte_non_eq_agg;
+create database test_scalar_cte_non_eq_agg;
+use test_scalar_cte_non_eq_agg;
+create table outer_rows (id int primary key, n int);
+create table inner_rows (n int, v int);
+insert into outer_rows values (1, 1), (2, 2), (3, 3), (4, 0), (5, null), (6, 2);
+insert into inner_rows values (1, 10), (2, null), (3, 30), (4, 40);
+select o.id, o.n,
+(with x as (select max(i.n) as m from inner_rows i where i.n <= o.n) select m from x) as max_le,
+(with x as (select sum(i.n) as s from inner_rows i where i.n < o.n) select s from x) as sum_lt,
+(with x as (select count(*) as c from inner_rows i where i.n >= o.n) select c from x) as count_ge,
+(with x as (select count(i.v) as c from inner_rows i where i.n <= o.n) select c from x) as count_value
+from outer_rows o order by o.id;
+➤ id[4,32,0]  ¦  n[4,32,0]  ¦  max_le[4,32,0]  ¦  sum_lt[-5,64,0]  ¦  count_ge[-5,64,0]  ¦  count_value[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  null  ¦  4  ¦  1  𝄀
+2  ¦  2  ¦  2  ¦  1  ¦  3  ¦  1  𝄀
+3  ¦  3  ¦  3  ¦  3  ¦  2  ¦  2  𝄀
+4  ¦  0  ¦  null  ¦  null  ¦  4  ¦  0  𝄀
+5  ¦  null  ¦  null  ¦  null  ¦  0  ¦  0  𝄀
+6  ¦  2  ¦  2  ¦  1  ¦  3  ¦  1
+select o.id,
+(with x as (select min(i.v) as m from inner_rows i where i.n > o.n) select m from x) as min_gt,
+(with x as (select count(*) as c, sum(i.n) as s from inner_rows i where i.n <= o.n) select s from x) as second_aggregate,
+(with x as (select count(*) as c from inner_rows i where i.n = o.n) select c from x) as count_eq,
+(with x as (select count(i.v) as c from inner_rows i where i.n = o.n) select c from x) as count_eq_value
+from outer_rows o order by o.id;
+➤ id[4,32,0]  ¦  min_gt[4,32,0]  ¦  second_aggregate[-5,64,0]  ¦  count_eq[-5,64,0]  ¦  count_eq_value[-5,64,0]  𝄀
+1  ¦  30  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  30  ¦  3  ¦  1  ¦  0  𝄀
+3  ¦  40  ¦  6  ¦  1  ¦  1  𝄀
+4  ¦  10  ¦  null  ¦  0  ¦  0  𝄀
+5  ¦  null  ¦  null  ¦  0  ¦  0  𝄀
+6  ¦  30  ¦  3  ¦  1  ¦  0
+select o.id,
+(with x as (select count(*) as c from inner_rows i where i.n = o.n) select c from x) +
+coalesce((with x as (select sum(i.n) as s from inner_rows i where i.n <= o.n) select s from x), 0) as combined_value
+from outer_rows o order by o.id;
+➤ id[4,32,0]  ¦  combined_value[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  4  𝄀
+3  ¦  7  𝄀
+4  ¦  0  𝄀
+5  ¦  0  𝄀
+6  ¦  4
+select o.id, (select max(i.n) from inner_rows i where i.n <= o.n) as direct_max,
+(with x as (select max(i.n) as m from inner_rows i where i.n = o.n) select m from x) as cte_equal_max
+from outer_rows o order by o.id;
+➤ id[4,32,0]  ¦  direct_max[4,32,0]  ¦  cte_equal_max[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2  𝄀
+3  ¦  3  ¦  3  𝄀
+4  ¦  null  ¦  null  𝄀
+5  ¦  null  ¦  null  𝄀
+6  ¦  2  ¦  2
+select o.id, (select max(i.n) from inner_rows i where i.n <= o.n) as direct_max
+from outer_rows o where exists (select 1 from inner_rows e where e.n = o.n) order by o.id;
+➤ id[4,32,0]  ¦  direct_max[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+6  ¦  2
+select o.id, exists (select 1 from inner_rows e where e.n = o.n) as present,
+(with x as (select max(i.n) as m from inner_rows i where i.n <= o.n) select m from x) as cte_max
+from outer_rows o order by o.id;
+➤ id[4,32,0]  ¦  present[-7,1,0]  ¦  cte_max[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  2  𝄀
+3  ¦  1  ¦  3  𝄀
+4  ¦  0  ¦  null  𝄀
+5  ¦  0  ¦  null  𝄀
+6  ¦  1  ¦  2
+select o.id, p.id,
+(with x as (select count(*) as c from inner_rows i where i.n = o.n) select c from x) as cte_count
+from outer_rows o cross join outer_rows p
+where o.id in (1, 4) and p.id in (1, 4) order by o.id, p.id;
+➤ id[4,32,0]  ¦  id[4,32,0]  ¦  cte_count[-5,64,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+1  ¦  4  ¦  1  𝄀
+4  ¦  1  ¦  0  𝄀
+4  ¦  4  ¦  0
+select o.id, (with a as (select max(i.n) as m from inner_rows i where i.n <= o.n),
+x as (select sum(m) as s from a) select s from x) as nested_value
+from outer_rows o order by o.id;
+nested non-equality correlated aggregate cannot be safely decorrelated is not yet implemented
+select o.id, (with x as (select max(i.n) as m from inner_rows i where i.n <= o.n),
+y as (select 1 as k) select x.m from x cross join y) as joined_value
+from outer_rows o order by o.id;
+non-equality correlated aggregate behind a non-transparent projection is not yet implemented
+select o.id, (with x as (select count(*) as c from inner_rows i where i.n = o.n)
+select c + 1 from x) as computed_count
+from outer_rows o order by o.id;
+➤ id[4,32,0]  ¦  computed_count[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  2  𝄀
+3  ¦  2  𝄀
+4  ¦  1  𝄀
+5  ¦  1  𝄀
+6  ¦  2
+select o.id,
+(with x as (select max(i.v) as m from inner_rows i where i.n = o.n
+having max(i.v) > 0) select m from x) as having_max,
+(with x as (select count(*) as c from inner_rows i where i.n = o.n
+group by i.n) select c from x) as grouped_count
+from outer_rows o where o.id in (1, 2, 4) order by o.id;
+➤ id[4,32,0]  ¦  having_max[4,32,0]  ¦  grouped_count[-5,64,0]  𝄀
+1  ¦  10  ¦  1  𝄀
+2  ¦  null  ¦  1  𝄀
+4  ¦  null  ¦  null
+select o.id, (select i.v from inner_rows i where i.n = o.n) as raw_value,
+(with x as (select max(i.n) as m from inner_rows i where i.n <= o.n)
+select m from x) as range_max
+from outer_rows o where o.id in (1, 2, 4) order by o.id;
+➤ id[4,32,0]  ¦  raw_value[4,32,0]  ¦  range_max[4,32,0]  𝄀
+1  ¦  10  ¦  1  𝄀
+2  ¦  null  ¦  2  𝄀
+4  ¦  null  ¦  null
+select o.id from outer_rows o where
+(with x as (select max(i.n) as m from inner_rows i where i.n <= o.n)
+select m from x) > 0 or
+(with x as (select sum(i.n) as s from inner_rows i where i.n < o.n)
+select s from x) > 0 order by o.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+6
+select o.id from outer_rows o where
+exists (select 1 from inner_rows e where e.n = o.n and e.v is null) or
+(with x as (select max(i.n) as m from inner_rows i where i.n <= o.n)
+select m from x) < 0 order by o.id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+6
+select o.id,
+(0, 0) = (with x as (select count(*) as c, count(i.v) as d
+from inner_rows i where i.n = o.n)
+select c, d from x) as zero_pair,
+(1, 0) = (with x as (select count(*) as c, count(i.v) as d
+from inner_rows i where i.n = o.n)
+select c, d from x) as null_value_pair
+from outer_rows o order by o.id;
+➤ id[4,32,0]  ¦  zero_pair[-7,1,0]  ¦  null_value_pair[-7,1,0]  𝄀
+1  ¦  0  ¦  0  𝄀
+2  ¦  0  ¦  1  𝄀
+3  ¦  0  ¦  0  𝄀
+4  ¦  1  ¦  0  𝄀
+5  ¦  1  ¦  0  𝄀
+6  ¦  0  ¦  1
+select o.id, (with a as (select max(i.n) as m from inner_rows i where i.n = o.n),
+x as (select count(*) as c from a) select c from x) as nested_count
+from outer_rows o order by o.id;
+➤ id[4,32,0]  ¦  nested_count[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  1  𝄀
+5  ¦  1  𝄀
+6  ¦  1
+select o.id,
+(with x as (select count(*) as c from inner_rows i where i.n = o.n)
+select c + 1 from x) as equality_count_plus_one,
+(with a as (select max(i.n) as m from inner_rows i where i.n = o.n),
+x as (select count(*) as c from a) select c from x) as nested_count,
+(with x as (select max(i.n) as m from inner_rows i where i.n <= o.n)
+select m from x) as range_max
+from outer_rows o order by o.id;
+➤ id[4,32,0]  ¦  equality_count_plus_one[-5,64,0]  ¦  nested_count[-5,64,0]  ¦  range_max[4,32,0]  𝄀
+1  ¦  2  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  1  ¦  2  𝄀
+3  ¦  2  ¦  1  ¦  3  𝄀
+4  ¦  1  ¦  1  ¦  null  𝄀
+5  ¦  1  ¦  1  ¦  null  𝄀
+6  ¦  2  ¦  1  ¦  2
+select o.id, (with x as (select max(i.n) as m from inner_rows i
+where i.n = o.n or i.n = o.n + 1) select m from x) as or_max
+from outer_rows o order by o.id;
+➤ id[4,32,0]  ¦  or_max[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  3  𝄀
+3  ¦  4  𝄀
+4  ¦  1  𝄀
+5  ¦  null  𝄀
+6  ¦  3
+select o.id, (with x as (select count(*) as c from inner_rows i)
+select c from x where c = o.id) as independent_count
+from outer_rows o order by o.id;
+➤ id[4,32,0]  ¦  independent_count[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  4  𝄀
+5  ¦  null  𝄀
+6  ¦  null
+select o.id, (with x as (select i.n, max(i.v) as m from inner_rows i group by i.n)
+select m from x where x.n < o.n) as independent_group
+from outer_rows o where o.id = 2;
+➤ id[4,32,0]  ¦  independent_group[4,32,0]  𝄀
+2  ¦  10
+drop database test_scalar_cte_non_eq_agg;

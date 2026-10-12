@@ -28,6 +28,9 @@ import (
 )
 
 func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
+	if len(tbl.Func.Exprs) == 0 {
+		return 0, moerr.NewInvalidArg(builder.GetContext(), "result_scan", "missing query id")
+	}
 	var err error
 	val, err := builder.compCtx.ResolveVariable("save_query_result", true, false)
 	if err == nil {
@@ -78,9 +81,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	}
 	typs := make([]types.Type, len(cols))
 	for i, c := range cols {
-		typs[i] = types.NewWithCharset(
-			types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale, uint8(c.Typ.Charset),
-		)
+		typs[i] = types.MustTypeFromPlan(c.Typ)
 	}
 	builder.compCtx.GetProcess().GetSessionInfo().ResultColTypes = typs
 	name2ColIndex := map[string]int32{}

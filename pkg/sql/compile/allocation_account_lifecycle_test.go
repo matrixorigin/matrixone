@@ -508,10 +508,8 @@ func TestAllocationAccountTransportParticipantsDoNotActivateLifecycle(t *testing
 	require.Nil(t, c.allocationAccountRegistry)
 	require.NoError(t, c.attachRuntimeAllocationOwners(c.scopes))
 
-	transportOwners := []executionAllocationAccountOwner{
-		connectorOp,
-		dispatchOp,
-	}
+	transportOwners := make([]executionAllocationAccountOwner, 0, 3)
+	transportOwners = append(transportOwners, connectorOp, dispatchOp)
 	require.False(t, hasAllocationAccountActivator(transportOwners))
 
 	active := &allocationLifecycleOwnerOperator{

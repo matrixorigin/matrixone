@@ -16,8 +16,10 @@ package proxy
 
 import (
 	"bufio"
-	"bytes"
+	"encoding/binary"
 	io "io"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func (i *ExtraInfo) Encode() ([]byte, error) {
@@ -26,9 +28,11 @@ func (i *ExtraInfo) Encode() ([]byte, error) {
 		return nil, err
 	}
 	size := len(data)
+	if size > 0xffff {
+		return nil, moerr.NewInvalidInputNoCtxf("proxy extra info too large: %d bytes", size)
+	}
 	ret := make([]byte, 2, len(data)+2)
-	ret[0] = uint8(size)
-	ret[1] = uint8(size >> 8)
+	binary.LittleEndian.PutUint16(ret, uint16(size))
 	ret = append(ret, data...)
 	return ret, nil
 }
@@ -47,8 +51,7 @@ func readData(reader *bufio.Reader) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	buf := bytes.NewBuffer(s)
-	size := uint16(buf.Bytes()[0]) + uint16(buf.Bytes()[1])<<8 + 2
+	size := int(binary.LittleEndian.Uint16(s)) + 2
 	data := make([]byte, size)
 	_, err = io.ReadFull(reader, data)
 	if err != nil {

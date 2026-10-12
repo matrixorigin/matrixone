@@ -44,7 +44,7 @@ func installTestAllocation(t testing.TB, owners ...testAllocationOwner) *mpool.A
 }
 
 func TestDedupJoinResultAndFinalizeBatchesUseAllocationAccount(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	arg := &DedupJoin{
 		Result:     []colexec.ResultPos{{Rel: 0, Pos: 0}},
@@ -85,7 +85,7 @@ func TestDedupJoinResultAndFinalizeBatchesHonorAllocationCapacity(t *testing.T) 
 	}
 
 	t.Run("probe result", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		defer proc.Free()
 		account := newAccount(t)
 		arg := &DedupJoin{
@@ -102,7 +102,7 @@ func TestDedupJoinResultAndFinalizeBatchesHonorAllocationCapacity(t *testing.T) 
 	})
 
 	t.Run("multi batch finalize", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		defer proc.Free()
 		account := newAccount(t)
 		arg := &DedupJoin{

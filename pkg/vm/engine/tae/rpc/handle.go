@@ -255,7 +255,7 @@ func (h *Handle) handleRequests(
 	commitRequests *txn.TxnCommitRequest,
 	response *txn.TxnResponse,
 	txnMeta txn.TxnMeta,
-) (bigDelete []uint64, hasDDL bool, err error) {
+) (bigDelete []uint64, hasDDL bool, postFuncs []func(types.TS), err error) {
 
 	var (
 		entry any
@@ -266,7 +266,6 @@ func (h *Handle) handleRequests(
 		persistedMemoryInsertRows int
 		inMemoryTombstoneRows     int
 		persistedTombstoneRows    int
-		postFuncs                 []func()
 	)
 
 	defer func() {
@@ -371,7 +370,7 @@ func (h *Handle) handleRequests(
 			}
 
 			var r1, r2, r3, r4 int
-			var postFs []func()
+			var postFs []func(types.TS)
 			r1, r2, r3, r4, postFs, err = h.HandleWrite(ctx, txn, wr)
 			postFuncs = append(postFuncs, postFs...)
 			if err == nil {
@@ -408,22 +407,21 @@ func (h *Handle) handleRequests(
 			bigDelete = append(bigDelete, tableID)
 		}
 	}
-	if len(postFuncs) > 0 {
-		if hasDDL {
-			// the target table of merge settings might not put into scheduler yet,
-			// so we need to delay the post func execution
-			time.AfterFunc(5*time.Second, func() {
-				for _, f := range postFuncs {
-					f()
-				}
-			})
-		} else {
-			for _, f := range postFuncs {
-				f()
-			}
-		}
-	}
 	return
+}
+
+func commitWithMergeSettingsCallbacks(
+	ctx context.Context, txn txnif.AsyncTxn, callbacks []func(types.TS),
+) error {
+	if len(callbacks) == 0 {
+		return txn.Commit(ctx)
+	}
+	return txn.CommitWithCallback(ctx, func() {
+		commitTS := txn.GetCommitTS()
+		for _, callback := range callbacks {
+			callback(commitTS)
+		}
+	})
 }
 
 type autoIncrEpochRecorder interface {
@@ -590,9 +588,10 @@ func (h *Handle) HandleCommit(
 	start := time.Now()
 
 	var (
-		txn      txnif.AsyncTxn
-		releaseF []func()
-		hasDDL   bool = false
+		txn       txnif.AsyncTxn
+		releaseF  []func()
+		hasDDL    bool = false
+		postFuncs []func(types.TS)
 	)
 	defer func() {
 		for _, f := range releaseF {
@@ -632,7 +631,7 @@ func (h *Handle) HandleCommit(
 	}
 
 	var bigDeleteTbls []uint64
-	if bigDeleteTbls, hasDDL, err = h.handleRequests(
+	if bigDeleteTbls, hasDDL, postFuncs, err = h.handleRequests(
 		ctx, txn, commitRequests, response, meta); err != nil {
 		return
 	}
@@ -643,7 +642,7 @@ func (h *Handle) HandleCommit(
 	}
 	v2.TxnBeforeCommitDurationHistogram.Observe(time.Since(start).Seconds())
 
-	err = txn.Commit(ctx)
+	err = commitWithMergeSettingsCallbacks(ctx, txn, postFuncs)
 	cts = txn.GetCommitTS().ToTimestamp()
 	if cts.PhysicalTime == txnif.UncommitTS.Physical() {
 		panic("bad committs causing hung")
@@ -668,11 +667,11 @@ func (h *Handle) HandleCommit(
 				zap.String("new-txn", txn.GetID()),
 			)
 			//Handle precommit-write command for 1PC
-			bigDeleteTbls, hasDDL, err = h.handleRequests(ctx, txn, commitRequests, response, meta)
+			bigDeleteTbls, hasDDL, postFuncs, err = h.handleRequests(ctx, txn, commitRequests, response, meta)
 			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
 				break
 			}
-			err = txn.Commit(ctx)
+			err = commitWithMergeSettingsCallbacks(ctx, txn, postFuncs)
 			cts = txn.GetCommitTS().ToTimestamp()
 			if err == nil && len(bigDeleteTbls) > 0 {
 				h.db.Runtime.BigDeleteHinter.RecordBigDel(bigDeleteTbls, types.TimestampToTS(cts))
@@ -904,7 +903,7 @@ func (h *Handle) HandleWrite(
 	persistedMemoryInsertRows int,
 	inMemoryTombstoneRows int,
 	persistedTombstoneRows int,
-	postFunc []func(),
+	postFunc []func(types.TS),
 	err error,
 ) {
 	defer func() {
@@ -1079,7 +1078,11 @@ func (h *Handle) HandleWrite(
 	rowIDVec := containers.ToTNVector(req.Batch.GetVector(0), common.WorkspaceAllocator)
 	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
 	if req.DatabaseId == pkgcatalog.MO_CATALOG_ID && req.TableName == pkgcatalog.MO_MERGE_SETTINGS {
-		postFunc = append(postFunc, parse_merge_settings_unset(pkVec, h.db.MergeScheduler))
+		var unset func(types.TS)
+		if unset, err = parse_merge_settings_unset(pkVec, h.db.MergeScheduler); err != nil {
+			return
+		}
+		postFunc = append(postFunc, unset)
 	}
 	inMemoryTombstoneRows += rowIDVec.Length()
 	//defer pkVec.Close()
@@ -1192,22 +1195,26 @@ func (h *Handle) HandleSoftDeleteObject(
 func parse_merge_settings_set(
 	bat *batch.Batch,
 	scheduler *merge.MergeScheduler,
-) func() {
+) func(types.TS) {
 	settings := make([]*merge.MergeSettings, 0, 1)
 	tids := make([]uint64, 0, 1)
 	merge.DecodeMergeSettingsBatchAnd(bat, func(tid uint64, setting *merge.MergeSettings) {
 		settings = append(settings, setting)
 		tids = append(tids, tid)
 	})
-	return func() {
+	return func(ts types.TS) {
 		for i, tid := range tids {
-			err := scheduler.SendConfig(tid, settings[i])
+			err := scheduler.SendConfig(tid, settings[i], ts)
 			if err != nil {
+				setting := "<invalid>"
+				if settings[i] != nil {
+					setting = settings[i].String()
+				}
 				logutil.Error("MergeExecutorEvent",
 					zap.String("event", "send config"),
 					zap.Uint64("table-id", tid),
 					zap.Error(err),
-					zap.String("settings", settings[i].String()),
+					zap.String("settings", setting),
 				)
 			}
 		}
@@ -1217,25 +1224,34 @@ func parse_merge_settings_set(
 func parse_merge_settings_unset(
 	pkVec containers.Vector,
 	scheduler *merge.MergeScheduler,
-) func() {
+) (func(types.TS), error) {
 	tids := make([]uint64, 0, 1)
 	for i := 0; i < pkVec.Length(); i++ {
-		bs := pkVec.Get(i).([]byte)
+		bs, ok := pkVec.Get(i).([]byte)
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtxf("invalid merge setting key at row %d", i)
+		}
 		tuple, _, _, err := types.DecodeTuple(bs)
 		if err != nil {
-			logutil.Error("MergeExecutorEvent",
-				zap.String("event", "unmarshal settings pk tuple"),
-				zap.Int("idx", i),
-				zap.Error(err),
-			)
+			return nil, err
 		}
-		tids = append(tids, tuple[1].(uint64))
+		if len(tuple) < 2 {
+			return nil, moerr.NewInternalErrorNoCtxf("invalid merge setting key at row %d", i)
+		}
+		tid, ok := tuple[1].(uint64)
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtxf("invalid merge setting table ID at row %d", i)
+		}
+		tids = append(tids, tid)
 	}
-	return func() {
+	return func(ts types.TS) {
 		for _, tid := range tids {
-			scheduler.SendConfig(tid, nil)
+			if err := scheduler.SendConfig(tid, nil, ts); err != nil {
+				logutil.Error("MergeExecutorEvent", zap.String("event", "unset config"),
+					zap.Uint64("table-id", tid), zap.Error(err))
+			}
 		}
-	}
+	}, nil
 }
 
 func (h *Handle) HandleAlterTable(

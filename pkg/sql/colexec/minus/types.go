@@ -78,6 +78,7 @@ type container struct {
 
 	// hash table related
 	hashTable *hashmap.StrHashMap
+	iterator  hashmap.Iterator
 
 	// result batch of minus column execute operator
 	bat *batch.Batch
@@ -113,6 +114,8 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 }
 
 func (ctr *container) cleanHashMap() {
+	hashmap.IteratorClearOwner(ctr.iterator)
+	ctr.iterator = nil
 	if ctr.hashTable != nil {
 		ctr.hashTable.Free()
 		ctr.hashTable = nil

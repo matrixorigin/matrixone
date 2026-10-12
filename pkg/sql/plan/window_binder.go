@@ -16,7 +16,6 @@ package plan
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -39,6 +38,7 @@ type windowFuncExprBinder interface {
 	bindPreparedNumericFuncExpr(string, []tree.Expr, int32) (*plan.Expr, error)
 	bindPreparedWindowFrameBound(tree.Expr, *plan.Type) (*plan.Expr, error)
 	makeFrameConstValue(tree.Expr, *plan.Type) (*plan.Expr, error)
+	mysqlSpecialOrderKey(*plan.Expr, *plan.Type) (*plan.Expr, error)
 	GetContext() context.Context
 }
 
@@ -122,7 +122,7 @@ func isGroupConcatAggregateExpr(astExpr tree.Expr) bool {
 		return false
 	}
 	name := funcExpr.FuncName.Compare()
-	return strings.EqualFold(name, NameGroupConcat)
+	return strings.EqualFold(name, NameGroupConcat) || strings.EqualFold(name, "listagg")
 }
 
 func semanticNodeKey(node tree.NodeFormatter) string {
@@ -775,8 +775,7 @@ func windowValidationPrivilegeCarrier(node *plan.Node) *plan.Node {
 		ObjRef:       DeepCopyObjectRef(node.ObjRef),
 		ParentObjRef: DeepCopyObjectRef(node.ParentObjRef),
 		ScanSnapshot: DeepCopySnapshot(node.ScanSnapshot),
-		OriginViews:  append([]string(nil), node.OriginViews...),
-		DirectView:   node.DirectView,
+		ViewPath:     DeepCopyViewPath(node.ViewPath),
 	}
 	if node.TableDef != nil {
 		// Authorization only needs the table type to identify cluster tables.
@@ -811,8 +810,11 @@ func windowValidationPrivilegeCarrier(node *plan.Node) *plan.Node {
 // windowValidationPrivilegeCarrierKey preserves distinct view and snapshot
 // authorization contexts while coalescing repeated references to one relation.
 func windowValidationPrivilegeCarrierKey(node *plan.Node) string {
-	return fmt.Sprintf("%d/%v/%v/%v/%s/%s", node.NodeType, node.ObjRef,
-		node.ParentObjRef, node.ScanSnapshot, strings.Join(node.OriginViews, "\x00"), node.DirectView)
+	data, err := node.Marshal()
+	if err != nil {
+		panic(err) // Compact carriers contain only generated protobuf value fields.
+	}
+	return string(data)
 }
 
 // mergeWindowValidationDependencies retains the catalog closure discovered
@@ -844,6 +846,7 @@ func mergeWindowValidationDependencies(builder, validationBuilder *QueryBuilder)
 			dependencies, prepareSchemaRefWithSnapshot(objRef, tableDef, dependency.snapshot))
 	}
 	builder.qry.CatalogDependencies = appendPrepareSchemas(builder.qry.CatalogDependencies, dependencies...)
+	builder.qry.ViewReferences = append(builder.qry.ViewReferences, validationBuilder.qry.ViewReferences...)
 	return nil
 }
 
@@ -908,7 +911,7 @@ func bindWindowSpec(
 					expr = fn.Args[1]
 				}
 			} else if storageType := ctx.mysqlSpecialOrderTypeForExpr(expr); storageType != nil {
-				expr, err = makeMySQLSpecialOrderKey(b.GetContext(), expr, storageType)
+				expr, err = b.mysqlSpecialOrderKey(expr, storageType)
 				if err != nil {
 					return nil, err
 				}
@@ -1052,16 +1055,41 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	if err := validateWindowFuncNoNested(b.GetContext(), &resolvedAstExpr); err != nil {
 		return nil, err
 	}
-	if len(astExpr.OrderBy) > 0 {
+	orderedSetSpec, orderedSet := orderedSetAggregateSpecFor(funcName, astExpr.WithinGroup)
+	if len(astExpr.OrderBy) > 0 && !orderedSet {
 		return nil, moerr.NewNYI(b.GetContext(), "function-local ORDER BY in window function")
 	}
 
 	astStr := windowExprAstKey(&resolvedAstExpr)
 
+	// Ordered-set aggregates use the same executor overload as their scalar
+	// aggregate form. Lower the WITHIN GROUP expression to the first function
+	// argument while keeping OVER's PARTITION BY / ORDER BY / frame in the
+	// WindowSpec below.
+	windowArgs := astExpr.Exprs
+	var err error
+	var orderedSetOrder *tree.Order
+	if orderedSet {
+		orderedSetOrder, err = validateOrderedSetAggregateShape(
+			b.GetContext(), funcName, astExpr, orderedSetSpec)
+		if err != nil {
+			return nil, err
+		}
+		windowArgs = make([]tree.Expr, 0, 1+len(astExpr.Exprs))
+		windowArgs = append(windowArgs, orderedSetOrder.Expr)
+		windowArgs = append(windowArgs, astExpr.Exprs...)
+	}
+
 	// window function
-	windowFunc, err := b.bindPreparedNumericFuncExpr(funcName, astExpr.Exprs, depth)
+	windowFunc, err := b.bindPreparedNumericFuncExpr(funcName, windowArgs, depth)
 	if err != nil {
 		return nil, err
+	}
+	if orderedSet {
+		if err = applyOrderedSetAggregateDirection(
+			b.GetContext(), windowFunc, orderedSetSpec, orderedSetOrder); err != nil {
+			return nil, err
+		}
 	}
 	if err = rejectWindowResultDependency(b.GetContext(), windowFunc, ctx.windowTag); err != nil {
 		return nil, err
@@ -1197,7 +1225,7 @@ func hasWindowFrameParamInOrderBy(orderBy tree.OrderBy) bool {
 }
 
 func (b *baseBinder) bindPreparedWindowFrameBound(expr tree.Expr, typ *plan.Type) (*plan.Expr, error) {
-	if b.builder == nil || !b.builder.isPrepareStatement {
+	if b.builder == nil || !b.builder.isReusablePlan() {
 		return nil, moerr.NewInvalidInput(b.GetContext(), "only prepare statement can use ? expr")
 	}
 	if typ == nil {
@@ -1233,6 +1261,15 @@ func makeWindowFrameConstValue(
 	if err != nil {
 		return nil, err
 	}
+	// A window frame bound is evaluated HERE, at bind time -- before the frontend's mo_ctl
+	// sys-admin gate runs on the built plan, and the evaluated bound is then replaced by a
+	// constant so the gate's plan scan can never see it. A control function (mo_ctl / fault_inject)
+	// is never a legitimate frame offset, so reject it outright rather than let its cluster-wide
+	// side effect fire unauthenticated (#28985). The ctl execution-entry backstop also blocks it,
+	// but this gives a precise error and refuses it for every account, including sys-admin.
+	if HasMoCtrl(e) {
+		return nil, moerr.NewNotSupported(bindCtx, "mo_ctl or fault_inject is not allowed in a window frame bound")
+	}
 	if e.Typ.Id == int32(types.T_interval) {
 		return resetWindowIntervalExpr(bindCtx, proc, e)
 	}
@@ -1253,7 +1290,24 @@ func makeWindowFrameConstValue(
 	if err != nil {
 		return nil, err
 	}
+	if vec.GetType().Oid == types.T_decimal256 {
+		// Literal has no Decimal256 scalar variant. Keep the exact coefficient
+		// in the existing vector-literal representation, owned independently of
+		// the expression executor, rather than publishing a nil scalar literal.
+		data, err := vec.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		requiresDecimal, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(e)
+		if err != nil {
+			return nil, err
+		}
+		return &plan.Expr{Typ: *typ, Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
+			Len: int32(vec.Length()), Data: data, DecimalLiteralRequiresV82: requiresDecimal,
+		}}}, nil
+	}
 	c := rule.GetConstantValue(vec, false, 0)
+	rule.PreserveFoldedDecimalLiteralSemantics(e, c)
 
 	return &plan.Expr{
 		Typ:  *typ,
@@ -1284,6 +1338,16 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 
 	isTimeUnit := intervalType == types.Second || intervalType == types.Minute ||
 		intervalType == types.Hour || intervalType == types.Day
+	if isTimeUnit {
+		if finalValue, negative, handled, err := normalizeDecimalIntervalValue(e1, intervalType); err != nil {
+			return nil, err
+		} else if handled {
+			if negative {
+				return nil, newWindowFrameIllegalError(bindCtx)
+			}
+			return setWindowIntervalValue(bindCtx, e, finalValue, types.MicroSecond)
+		}
+	}
 	isDecimalOrFloat := e1.Typ.Id == int32(types.T_decimal64) ||
 		e1.Typ.Id == int32(types.T_decimal128) || e1.Typ.Id == int32(types.T_float32) ||
 		e1.Typ.Id == int32(types.T_float64)
@@ -1374,7 +1438,10 @@ func setWindowIntervalValue(
 		return nil, newWindowFrameIllegalError(bindCtx)
 	}
 
-	e.Expr.(*plan.Expr_List).List.List[0] = makePlan2Int64ConstExprWithType(value)
+	list := e.Expr.(*plan.Expr_List).List.List
+	valueExpr := makePlan2Int64ConstExprWithType(value)
+	valueExpr.GetLit().DecimalLiteralRequiresV82 = decimalIntervalRequiresProtocol(list[0])
+	list[0] = valueExpr
 	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))
 	return e, nil
 }

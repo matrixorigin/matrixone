@@ -17,6 +17,8 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,7 +38,17 @@ type ParquetWriter struct {
 	schema      *parquet.Schema
 	columnNames []string
 	columnTypes []defines.MysqlType
+
+	bufferedBytes uint64 // Plain value bytes plus definition levels, before encoding.
+	bufferedRows  int
+	rowGroups     int
 }
+
+// Bound a row group independently of SPLITSIZE, including narrow/all-NULL rows.
+const (
+	maxParquetRowGroupBytes = 64 << 20
+	maxParquetRowGroupRows  = 1 << 20
+)
 
 // NewParquetWriter creates a new ParquetWriter
 func NewParquetWriter(ctx context.Context, mrs *MysqlResultSet) (*ParquetWriter, error) {
@@ -46,11 +58,17 @@ func NewParquetWriter(ctx context.Context, mrs *MysqlResultSet) (*ParquetWriter,
 
 	columnNames := make([]string, len(mrs.Columns))
 	columnTypes := make([]defines.MysqlType, len(mrs.Columns))
+	columnNamesSeen := make(map[string]struct{}, len(mrs.Columns))
 
 	// Build parquet schema from column definitions using Group (map[string]Node)
 	group := make(parquet.Group)
 	for i, col := range mrs.Columns {
 		columnNames[i] = col.Name()
+		columnKey := strings.ToLower(columnNames[i])
+		if _, exists := columnNamesSeen[columnKey]; exists {
+			return nil, moerr.NewInvalidInputf(ctx, "duplicate column name %q in parquet export", columnNames[i])
+		}
+		columnNamesSeen[columnKey] = struct{}{}
 		// Get the column type from MysqlColumn
 		mysqlCol, ok := col.(*MysqlColumn)
 		if !ok {
@@ -62,7 +80,9 @@ func NewParquetWriter(ctx context.Context, mrs *MysqlResultSet) (*ParquetWriter,
 
 	schema := parquet.NewSchema("export", group)
 	buf := &bytes.Buffer{}
-	writer := parquet.NewGenericWriter[any](buf, schema)
+	// Disable parquet-go's separate write buffer so Flush makes the serialized
+	// row-group bytes observable through buf.Len for split-size accounting.
+	writer := parquet.NewGenericWriter[any](buf, schema, parquet.WriteBufferSize(0))
 
 	return &ParquetWriter{
 		ctx:         ctx,
@@ -90,14 +110,26 @@ func buildParquetNode(typ defines.MysqlType, flag uint16) parquet.Node {
 		}
 		return parquet.Optional(parquet.Leaf(parquet.Int32Type))
 	case defines.MYSQL_TYPE_BIT:
-		return parquet.Optional(parquet.Leaf(parquet.Int64Type))
+		return parquet.Optional(parquet.String())
 	case defines.MYSQL_TYPE_LONGLONG:
+		if isUnsigned {
+			// Parquet INT64 cannot represent the complete BIGINT UNSIGNED
+			// domain. Keep the decimal representation so LOAD can parse values
+			// above math.MaxInt64 without loss.
+			return parquet.Optional(parquet.String())
+		}
 		return parquet.Optional(parquet.Leaf(parquet.Int64Type))
 	case defines.MYSQL_TYPE_FLOAT:
 		return parquet.Optional(parquet.Leaf(parquet.FloatType))
 	case defines.MYSQL_TYPE_DOUBLE:
 		return parquet.Optional(parquet.Leaf(parquet.DoubleType))
-	case defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP, defines.MYSQL_TYPE_TIME:
+	case defines.MYSQL_TYPE_TIMESTAMP:
+		return parquet.Optional(parquet.TimestampAdjusted(parquet.Microsecond, true))
+	case defines.MYSQL_TYPE_YEAR:
+		// YEAR is represented as its canonical four-digit text so that the
+		// loader can preserve the MySQL YEAR domain (including 0000).
+		return parquet.Optional(parquet.String())
+	case defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIME:
 		// Use string representation for date/time types for simplicity and compatibility
 		return parquet.Optional(parquet.String())
 	case defines.MYSQL_TYPE_DECIMAL:
@@ -106,8 +138,12 @@ func buildParquetNode(typ defines.MysqlType, flag uint16) parquet.Node {
 	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
 		defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_UUID, defines.MYSQL_TYPE_TEXT:
 		return parquet.Optional(parquet.String())
-	case defines.MYSQL_TYPE_BLOB:
-		return parquet.Optional(parquet.Leaf(parquet.ByteArrayType))
+	case defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_BLOB,
+		defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB:
+		if flag&uint16(defines.BINARY_FLAG) != 0 {
+			return parquet.Optional(parquet.Leaf(parquet.ByteArrayType))
+		}
+		return parquet.Optional(parquet.String())
 	default:
 		// Default to string for unknown types
 		return parquet.Optional(parquet.String())
@@ -119,32 +155,83 @@ func (pw *ParquetWriter) WriteBatch(bat *batch.Batch, mp *mpool.MPool, timeZone 
 	if bat == nil || bat.RowCount() == 0 {
 		return nil
 	}
+	return pw.writeBatchRange(bat, 0, bat.RowCount(), timeZone)
+}
 
-	rows := make([]any, bat.RowCount())
-	for i := 0; i < bat.RowCount(); i++ {
-		row := make(map[string]any)
-		rows[i] = row
+func (pw *ParquetWriter) writeBatchRange(bat *batch.Batch, start, end int, timeZone *time.Location) error {
+	_, err := pw.writeBatchChunk(bat, start, end, 0, timeZone)
+	return err
+}
+
+// writeBatchChunk stops at a bounded row-group budget when maxBufferedBytes is
+// nonzero. The estimate controls buffering only; split decisions use the actual
+// serialized size after Flush. A single row is indivisible.
+func (pw *ParquetWriter) writeBatchChunk(bat *batch.Batch, start, end int, maxBufferedBytes uint64, timeZone *time.Location) (int, error) {
+	if bat == nil || start >= end {
+		return start, nil
 	}
-
-	// Convert each column
+	if len(bat.Vecs) != len(pw.columnNames) {
+		return start, moerr.NewInternalErrorf(pw.ctx, "parquet batch has %d vectors for %d columns", len(bat.Vecs), len(pw.columnNames))
+	}
 	for colIdx, vec := range bat.Vecs {
-		colName := pw.columnNames[colIdx]
-		for rowIdx := 0; rowIdx < bat.RowCount(); rowIdx++ {
-			row := rows[rowIdx].(map[string]any)
-			if vec.GetNulls().Contains(uint64(rowIdx)) {
-				row[colName] = nil
-				continue
-			}
-			val, err := vectorValueToParquet(vec, rowIdx, timeZone)
-			if err != nil {
-				return err
-			}
-			row[colName] = val
+		if vec == nil {
+			return start, moerr.NewInternalErrorf(pw.ctx, "parquet batch vector %d is nil", colIdx)
 		}
 	}
 
-	_, err := pw.writer.Write(rows)
-	return err
+	rows := make([]any, 0, end-start)
+	var valueBytes uint64
+	for rowIdx := start; rowIdx < end; rowIdx++ {
+		row := make(map[string]any, len(pw.columnNames))
+		for colIdx, vec := range bat.Vecs {
+			colName := pw.columnNames[colIdx]
+			valueBytes++ // Optional field's definition level, also for NULL.
+			if nulls := vec.GetNulls(); nulls != nil && nulls.Contains(uint64(rowIdx)) {
+				row[colName] = nil
+				continue
+			}
+			val, err := pw.vectorValueToParquet(vec, colIdx, rowIdx, timeZone)
+			if err != nil {
+				return start, err
+			}
+			row[colName] = val
+			switch v := val.(type) {
+			case bool:
+				valueBytes++
+			case int32, float32:
+				valueBytes += 4
+			case int64, float64:
+				valueBytes += 8
+			case string:
+				valueBytes += uint64(4 + len(v))
+			case []byte:
+				valueBytes += uint64(4 + len(v))
+			}
+		}
+		rows = append(rows, row)
+		if maxBufferedBytes > 0 && (pw.bufferedBytes+valueBytes >= maxBufferedBytes || pw.bufferedRows+len(rows) >= maxParquetRowGroupRows) {
+			break
+		}
+	}
+
+	n, err := pw.writer.Write(rows)
+	if err == nil {
+		pw.bufferedBytes += valueBytes
+		pw.bufferedRows += n
+	}
+	return start + n, err
+}
+
+// vectorValueToParquet preserves the MySQL column domain when the execution
+// vector carries a compatible temporal representation. YEAR can arrive as a
+// DATE vector on the SELECT projection path, but its exported value must still
+// be the four-digit year rather than a calendar date.
+func (pw *ParquetWriter) vectorValueToParquet(vec *vector.Vector, colIdx, rowIdx int, timeZone *time.Location) (any, error) {
+	if pw.columnTypes[colIdx] == defines.MYSQL_TYPE_YEAR && vec.GetType().Oid == types.T_date {
+		value := vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIdx)
+		return types.MoYear(value.Year()).String(), nil
+	}
+	return vectorValueToParquet(vec, rowIdx, timeZone)
 }
 
 // vectorValueToParquet converts a vector value to a parquet-compatible Go value
@@ -168,9 +255,9 @@ func vectorValueToParquet(vec *vector.Vector, i int, timeZone *time.Location) (a
 		// Use int64 to avoid overflow (uint32 max > int32 max)
 		return int64(vector.GetFixedAtNoTypeCheck[uint32](vec, i)), nil
 	case types.T_uint64:
-		return int64(vector.GetFixedAtNoTypeCheck[uint64](vec, i)), nil
+		return strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](vec, i), 10), nil
 	case types.T_bit:
-		return int64(vector.GetFixedAtNoTypeCheck[uint64](vec, i)), nil
+		return strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](vec, i), 10), nil
 	case types.T_float32:
 		return vector.GetFixedAtNoTypeCheck[float32](vec, i), nil
 	case types.T_float64:
@@ -194,12 +281,18 @@ func vectorValueToParquet(vec *vector.Vector, i int, timeZone *time.Location) (a
 		val := vector.GetFixedAtNoTypeCheck[types.Time](vec, i).String2(scale)
 		return val, nil
 	case types.T_timestamp:
-		if timeZone == nil {
-			timeZone = time.UTC
-		}
-		scale := vec.GetType().Scale
-		val := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, i).String2(timeZone, scale)
-		return val, nil
+		// The internal timestamp stores the instant as microseconds since the
+		// Gregorian epoch used by MatrixOne. Parquet's adjusted UTC timestamp
+		// stores microseconds since the Unix epoch, so subtract the same epoch
+		// offset here. This representation is independent of the session zone.
+		val := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, i)
+		return int64(val) - int64(types.UnixMicroToTimestamp(0)), nil
+	case types.T_array_float32:
+		return types.BytesToArrayToString[float32](vec.GetBytesAt(i)), nil
+	case types.T_array_float64:
+		return types.BytesToArrayToString[float64](vec.GetBytesAt(i)), nil
+	case types.T_year:
+		return vector.GetFixedAtNoTypeCheck[types.MoYear](vec, i).String(), nil
 	case types.T_decimal64:
 		scale := vec.GetType().Scale
 		val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, i).Format(scale)
@@ -231,10 +324,27 @@ func (pw *ParquetWriter) Close() ([]byte, error) {
 	return pw.buf.Bytes(), nil
 }
 
+// Flush makes buffered row-group data visible in the output buffer. It is
+// used by split-size accounting before the writer is closed for a file.
+func (pw *ParquetWriter) Flush() error {
+	if err := pw.writer.Flush(); err != nil {
+		return err
+	}
+	if pw.bufferedRows > 0 {
+		pw.rowGroups++
+	}
+	pw.bufferedRows = 0
+	pw.bufferedBytes = 0
+	return nil
+}
+
 // Reset resets the writer for a new file
 func (pw *ParquetWriter) Reset() {
 	pw.buf.Reset()
 	pw.writer.Reset(pw.buf)
+	pw.bufferedBytes = 0
+	pw.bufferedRows = 0
+	pw.rowGroups = 0
 }
 
 // Size returns the current buffer size in bytes

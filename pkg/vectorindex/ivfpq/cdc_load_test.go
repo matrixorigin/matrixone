@@ -74,7 +74,7 @@ func encodeChunk(t *testing.T, dim, includeBytesPerRow int, ops []cuvscdc.CdcOp,
 
 func TestLoadCdcEventsFromDB_RoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	tblcfg := testTblcfg()
@@ -101,7 +101,7 @@ func TestLoadCdcEventsFromDB_RoundTrip(t *testing.T) {
 
 func TestLoadCdcEventsFromDB_Empty(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	orig := runSql
@@ -174,7 +174,7 @@ func TestReplayEventChunks_MultiChunkOrder(t *testing.T) {
 // for the architectural commentary.
 func TestLoadIndex_WithCdcDeltas(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := testIdxcfg()

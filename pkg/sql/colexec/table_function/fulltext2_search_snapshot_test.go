@@ -116,7 +116,7 @@ func startFT2SnapshotSearchWithLimit(
 
 	ctrl := gomock.NewController(t)
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
 		SnapshotTS: timestamp.Timestamp{PhysicalTime: ft2SnapshotCurrentPhysicalTS},

@@ -323,13 +323,10 @@ func TestBackupData(t *testing.T) {
 	}
 	backupTime := time.Now().UTC()
 	currTs := types.BuildTS(backupTime.UnixNano(), 0)
-	locations := make([]string, 0)
-	locations = append(locations, backupTime.Format(time.DateTime))
 	location, err := db.ForceCheckpointForBackup(ctx, currTs)
 	assert.Nil(t, err)
 	_, err = db.BGCheckpointRunner.DisableCheckpoint(ctx)
 	assert.NoError(t, err)
-	locations = append(locations, location)
 	checkpoints := db.BGCheckpointRunner.GetAllCheckpoints()
 	files := make(map[string]string, 0)
 	for _, candidate := range checkpoints {
@@ -341,6 +338,9 @@ func TestBackupData(t *testing.T) {
 			files[candidate.GetLocation().Name().String()] = loc
 		}
 	}
+	locations := make([]string, 0, 2+len(files))
+	locations = append(locations, backupTime.Format(time.DateTime))
+	locations = append(locations, location)
 	for _, location := range files {
 		locations = append(locations, location)
 	}
@@ -423,13 +423,10 @@ func TestBackupData2(t *testing.T) {
 	}
 	backupTime := time.Now().UTC()
 	currTs := types.BuildTS(backupTime.UnixNano(), 0)
-	locations := make([]string, 0)
-	locations = append(locations, backupTime.Format(time.DateTime))
 	location, err := db.ForceCheckpointForBackup(ctx, currTs)
 	assert.Nil(t, err)
 	_, err = db.BGCheckpointRunner.DisableCheckpoint(ctx)
 	assert.NoError(t, err)
-	locations = append(locations, location)
 	compacted := db.BGCheckpointRunner.GetCompacted()
 	checkpoints := db.BGCheckpointRunner.GetAllCheckpointsForBackup(compacted)
 	files := make(map[string]string, 0)
@@ -442,6 +439,9 @@ func TestBackupData2(t *testing.T) {
 			files[candidate.GetLocation().Name().String()] = loc
 		}
 	}
+	locations := make([]string, 0, 2+len(files))
+	locations = append(locations, backupTime.Format(time.DateTime))
+	locations = append(locations, location)
 	for _, location := range files {
 		locations = append(locations, location)
 	}
@@ -494,13 +494,10 @@ func TestBackupData3(t *testing.T) {
 	defer service.Close(ctx)
 	backupTime := time.Now().UTC()
 	currTs := types.BuildTS(backupTime.UnixNano(), 0)
-	locations := make([]string, 0)
-	locations = append(locations, backupTime.Format(time.DateTime))
 	location, err := db.ForceCheckpointForBackup(ctx, currTs)
 	assert.Nil(t, err)
 	_, err = db.BGCheckpointRunner.DisableCheckpoint(ctx)
 	assert.NoError(t, err)
-	locations = append(locations, location)
 	compacted := db.BGCheckpointRunner.GetCompacted()
 	checkpoints := db.BGCheckpointRunner.GetAllCheckpointsForBackup(compacted)
 	files := make(map[string]string, 0)
@@ -513,6 +510,9 @@ func TestBackupData3(t *testing.T) {
 			files[candidate.GetLocation().Name().String()] = loc
 		}
 	}
+	locations := make([]string, 0, 2+len(files))
+	locations = append(locations, backupTime.Format(time.DateTime))
+	locations = append(locations, location)
 	for _, location := range files {
 		locations = append(locations, location)
 	}
@@ -575,13 +575,10 @@ func TestBackupData4(t *testing.T) {
 	defer service.Close(ctx)
 	backupTime := time.Now().UTC()
 	currTs := types.BuildTS(backupTime.UnixNano(), 0)
-	locations := make([]string, 0)
-	locations = append(locations, backupTime.Format(time.DateTime))
 	location, err := db.ForceCheckpointForBackup(ctx, currTs)
 	assert.Nil(t, err)
 	_, err = db.BGCheckpointRunner.DisableCheckpoint(ctx)
 	assert.NoError(t, err)
-	locations = append(locations, location)
 	compacted := db.BGCheckpointRunner.GetCompacted()
 	checkpoints := db.BGCheckpointRunner.GetAllCheckpointsForBackup(compacted)
 	files := make(map[string]string, 0)
@@ -594,6 +591,9 @@ func TestBackupData4(t *testing.T) {
 			files[candidate.GetLocation().Name().String()] = loc
 		}
 	}
+	locations := make([]string, 0, 2+len(files))
+	locations = append(locations, backupTime.Format(time.DateTime))
+	locations = append(locations, location)
 	for _, location := range files {
 		locations = append(locations, location)
 	}
@@ -687,13 +687,10 @@ func TestBackupData5(t *testing.T) {
 	}
 	backupTime := time.Now().UTC()
 	currTs := types.BuildTS(backupTime.UnixNano(), 0)
-	locations := make([]string, 0)
-	locations = append(locations, backupTime.Format(time.DateTime))
 	location, err := db.ForceCheckpointForBackup(ctx, currTs)
 	assert.Nil(t, err)
 	_, err = db.BGCheckpointRunner.DisableCheckpoint(ctx)
 	assert.NoError(t, err)
-	locations = append(locations, location)
 	checkpoints := db.BGCheckpointRunner.GetAllCheckpoints()
 	files := make(map[string]string, 0)
 	for _, candidate := range checkpoints {
@@ -705,6 +702,9 @@ func TestBackupData5(t *testing.T) {
 			files[candidate.GetLocation().Name().String()] = loc
 		}
 	}
+	locations := make([]string, 0, 2+len(files))
+	locations = append(locations, backupTime.Format(time.DateTime))
+	locations = append(locations, location)
 	for _, location := range files {
 		locations = append(locations, location)
 	}

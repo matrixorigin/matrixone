@@ -20,9 +20,11 @@ TYPECHECK=1 docker-compose -f etc/launch-tae-compose/compose.yaml --profile laun
 use default image
 
 ```shell
-docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn pull
 docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d
 ```
+
+MinIO and mc are built from pinned official release binaries with SHA-256
+verification. Their Compose services use linux/amd64 images.
 
 The default launch builds `xtool/jstfu` from source and publishes the jar
 through a Compose volume. CI can reuse an exact-head jar produced by its shared

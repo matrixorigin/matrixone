@@ -15,12 +15,14 @@
 package plan
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	fulltextplan "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/plan"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
@@ -199,7 +201,7 @@ func inspectFulltextODKUPlan(t *testing.T, mock *MockOptimizer, sql string) full
 
 func fulltextODKUPlanShape(t *testing.T, sql string) fulltextODKUShape {
 	t.Helper()
-	return inspectFulltextODKUPlan(t, NewMockOptimizer(true), sql)
+	return inspectFulltextODKUPlan(t, NewMockOptimizer(true, newPlanTestProcess(t)), sql)
 }
 
 func nullSafeEqualityColumns(t *testing.T, marker *planpb.Expr) []string {
@@ -282,7 +284,7 @@ func TestOnDuplicateIrregularMaintenanceUsesOnlyEligibleRows(t *testing.T) {
 	})
 
 	t.Run("raw vector without ANN index has no irregular maintenance", func(t *testing.T) {
-		logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 			"insert into constraint_test.docs_vec_raw(id, embedding, payload) values (1, '[1,2,3]', 1) on duplicate key update payload = values(payload)")
 		require.NoError(t, err)
 		for _, node := range logicPlan.GetQuery().Nodes {
@@ -322,7 +324,7 @@ func assertEverySinkStepHasConsumer(t *testing.T, query *planpb.Query) {
 
 func TestOnDuplicateIrregularMaintenanceBuildsPerIndexValueMarkers(t *testing.T) {
 	t.Run("multi-column fulltext compares every indexed value", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		base := mock.ctxt.tables["docs_ft_dual"]
 		require.NotNil(t, base)
 		base.Indexes = []*planpb.IndexDef{base.Indexes[0]}
@@ -366,7 +368,7 @@ func configureMockGeneratedFulltext(t *testing.T, mock *MockOptimizer) {
 
 func TestOnDuplicateGeneratedFulltextUsesDependencyClosure(t *testing.T) {
 	t.Run("unrelated update remains insert only", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		configureMockGeneratedFulltext(t, mock)
 		shape := inspectFulltextODKUPlan(t, mock,
 			"insert into constraint_test.docs_ft_dual(id, summary, payload) values (1, 'same summary', 1) "+
@@ -378,7 +380,7 @@ func TestOnDuplicateGeneratedFulltextUsesDependencyClosure(t *testing.T) {
 	})
 
 	t.Run("source update compares the final generated value", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		configureMockGeneratedFulltext(t, mock)
 		shape := inspectFulltextODKUPlan(t, mock,
 			"insert into constraint_test.docs_ft_dual(id, summary, payload) values (1, 'new summary', 1) "+
@@ -589,7 +591,7 @@ func TestOnDuplicateIrregularValueMarkerRejectsInvalidPositions(t *testing.T) {
 		{name: "missing value marker", newRowMarkerPos: 0, valueMarkerPos: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+			builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 			bindCtx := NewBindContext(builder, nil)
 			finalProjTag := builder.genNewBindTag()
 			finalProjID := builder.appendNode(&planpb.Node{
@@ -612,7 +614,7 @@ func TestOnDuplicateIrregularValueMarkerRejectsInvalidPositions(t *testing.T) {
 }
 
 func TestDeletePkColExprUsesSourceSpecificPruneMap(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
 		NodeType:    planpb.Node_SINK,
 		ProjectList: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_int64)}}},
@@ -640,20 +642,53 @@ func TestIrregularIVFMaintenancePropagatesInvalidParams(t *testing.T) {
 	tableDef := &planpb.TableDef{Indexes: []*planpb.IndexDef{indexDef}}
 
 	t.Run("insert", func(t *testing.T) {
-		builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		err := builder.buildIrregularIndexInsertMaintenance(bindCtx, 0, tableDef)
 		require.Error(t, err)
 	})
 
 	t.Run("delete", func(t *testing.T) {
-		builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		builder.irregularMaintTableDef = tableDef
 		builder.irregularMaintDeleteStep = 0
 		err := builder.buildIrregularIndexDeleteMaintenance(bindCtx)
 		require.Error(t, err)
 	})
+}
+
+func TestAlterCopySkipsClonedAndNewPluginIndexInsertMaintenance(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	ctx.SetContext(context.WithValue(context.Background(), defines.AlterCopyOpt{}, &planpb.AlterCopyOpt{
+		TargetTableName:  "copy_t",
+		SkipIndexesCopy:  map[string]bool{"cloned_ft": true},
+		NewPluginIndexes: map[string]bool{"new_ft": true},
+	}))
+	builder := NewQueryBuilder(planpb.Query_INSERT, ctx, false, true)
+	bindCtx := NewBindContext(builder, nil)
+	tableDef := &planpb.TableDef{
+		Name: "copy_t",
+		Indexes: []*planpb.IndexDef{
+			{
+				IndexName:      "cloned_ft",
+				IndexAlgo:      catalog.MOIndexFullTextAlgo.ToString(),
+				IndexTableName: "cloned_ft_table",
+				TableExist:     true,
+			},
+			{
+				IndexName:      "new_ft",
+				IndexAlgo:      catalog.MOIndexFullTextAlgo.ToString(),
+				IndexTableName: "new_ft_table",
+				TableExist:     true,
+			},
+		},
+	}
+
+	before := len(builder.qry.Nodes)
+	require.NoError(t, builder.buildIrregularIndexInsertMaintenance(bindCtx, 0, tableDef))
+	require.Len(t, builder.qry.Nodes, before,
+		"COPY must not populate plugin index tables that are cloned or rebuilt after the base-table copy")
 }
 
 func TestReduceSinkSinkScanKeepsOtherApplyInput(t *testing.T) {

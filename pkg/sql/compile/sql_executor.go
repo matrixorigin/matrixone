@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -277,8 +278,7 @@ func (s *sqlExecutor) adjustOptions(
 				opts.AccountID(),
 				"",
 				"sql-executor",
-				0),
-			client.WithDisableTrace(!opts.EnableTrace()))
+				0))
 		txnOp, err := s.txnClient.New(
 			ctx,
 			opts.MinCommittedTS(),
@@ -350,7 +350,39 @@ func (exec *txnExecutor) Use(db string) {
 func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption,
-) (executor.Result, error) {
+) (execResult executor.Result, retErr error) {
+	// Seal before returning to an owned or borrowed callback, even if it
+	// suppresses this error. Cleanup waits on the existing SQL-drain owner.
+	ownerTxn := exec.opts.Txn()
+	if exec.opts.ExistsTxn() && ownerTxn != nil && ownerTxn.Txn().IsPessimistic() {
+		if _, ok := ownerTxn.(client.DeferredTxnRollback); !ok {
+			return executor.Result{}, moerr.NewInternalError(exec.ctx, "borrowed pessimistic executor lacks deferred rollback ownership")
+		}
+	}
+	var sqlToken uint64
+	if ownerTxn != nil {
+		statementCtx, cancel := context.WithCancel(exec.ctx)
+		var err error
+		sqlToken, err = client.TryEnterRunSqlWithTokenAndSQL(ownerTxn, cancel, sql)
+		if err != nil {
+			cancel()
+			return executor.Result{}, err
+		}
+		originalCtx := exec.ctx
+		exec.ctx = statementCtx
+		defer func() { cancel(); exec.ctx = originalCtx }()
+	}
+	defer func() {
+		if moerr.MustRollbackTxn(retErr) && ownerTxn != nil {
+			if owner, ok := ownerTxn.(client.DeferredTxnRollback); ok {
+				owner.RollbackAfterRunningSQL(retErr)
+			}
+		}
+		if ownerTxn != nil {
+			ownerTxn.ExitRunSqlWithToken(sqlToken)
+		}
+	}()
+
 	parentCtx := exec.ctx
 	exec.ctx = markInternalJSONMergeWarningContext(
 		newInternalStatementContext(parentCtx))
@@ -513,8 +545,23 @@ func (exec *txnExecutor) Exec(
 		proc.Free()
 	}()
 
-	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower)
-	compileContext.SetRootSql(sql)
+	newCompileContext := func(ctx context.Context) *compilerContext {
+		cc := exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower)
+		if statementOption.AllowMoColumnsUpdate() {
+			cc.SetContext(context.WithValue(cc.GetContext(), defines.MoColumnsUpdateKey{}, true))
+		}
+		cc.SetRootSql(sql)
+		return cc
+	}
+	compileContext := newCompileContext(exec.ctx)
+	proc.Base.SessionInfo.CompilerContext = compileContext
+	buildPlan := func(ctx *compilerContext, prepared bool) (*plan.Plan, error) {
+		pn, err := plan.BuildPlan(ctx, stmts[0], prepared)
+		if err == nil && statementOption.AllowMoColumnsUpdate() {
+			markMoColumnsUpdatePlan(pn)
+		}
+		return pn, err
+	}
 
 	var pn *plan.Plan
 
@@ -537,42 +584,40 @@ func (exec *txnExecutor) Exec(
 			return executor.Result{}, err
 		}
 	default:
-		pn, err = plan.BuildPlan(compileContext, stmt, prepared)
+		pn, err = buildPlan(compileContext, prepared)
 	}
 
 	if err != nil {
 		return executor.Result{}, err
 	}
-	if statementOption.AllowMoColumnsUpdate() {
-		markMoColumnsUpdatePlan(pn)
-	}
-
 	if prepared {
 		_, _, err := plan.ResetPreparePlan(compileContext, pn)
+		if err != nil {
+			return executor.Result{}, err
+		}
+		pn, err = specializeInternalPreparedPlan(exec.ctx, pn, statementOption.PreparedParamValues())
 		if err != nil {
 			return executor.Result{}, err
 		}
 	}
 
 	c := exec.newCompile(proc, stmts[0], sql, receiveAt)
+	c.runSqlToken = sqlToken
 	c.SetOriginSQL(sql)
 	c.adjustTableExtraFunc = exec.opts.AdjustTableExtraFunc()
 	c.disableDropAutoIncrement = statementOption.DisableDropIncrStatement()
 	c.skipDataBranchReclaim = statementOption.SkipDataBranchReclaim()
 	c.keepAutoIncrement = statementOption.KeepAutoIncrement()
-	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.ignorePublish = statementOption.IgnorePublish()
 	c.ignoreCheckExperimental = statementOption.IgnoreCheckExperimental()
 	c.disableLock = statementOption.DisableLock()
+	c.prePipelineLockTableID = statementOption.PrePipelineLockTable()
 
 	defer c.Release()
 
 	if prepared {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-			pn, err := plan.BuildPlan(
-				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
-				stmts[0], true,
-			)
+			pn, err := buildPlan(newCompileContext(ctx), true)
 			if err != nil {
 				return pn, err
 			}
@@ -580,13 +625,11 @@ func (exec *txnExecutor) Exec(
 			if err != nil {
 				return pn, err
 			}
-			return pn, nil
+			return specializeInternalPreparedPlan(ctx, pn, statementOption.PreparedParamValues())
 		})
 	} else {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-			return plan.BuildPlan(
-				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
-				stmts[0], false)
+			return buildPlan(newCompileContext(ctx), false)
 		})
 	}
 
@@ -708,6 +751,30 @@ func publishInternalExecutorStreamResult(
 		result.Close()
 		return execCtx.Err()
 	}
+}
+
+// The internal executor reparses CTAS population SQL. Apply the same prepared
+// specialization used by the frontend after each plan build, including retry
+// rebuilds, so parameter source domains survive that reparse.
+func specializeInternalPreparedPlan(
+	ctx context.Context, pn *plan.Plan, values []executor.ParamValue,
+) (*plan.Plan, error) {
+	if len(values) == 0 {
+		return pn, nil
+	}
+	params := make([]any, len(values))
+	for i := range values {
+		params[i] = values[i]
+	}
+	specialized, changed, err := plan.FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
+		ctx, pn, params)
+	if err != nil {
+		return nil, err
+	}
+	if changed {
+		return specialized, nil
+	}
+	return pn, nil
 }
 
 func (exec *txnExecutor) LockTable(table string) error {

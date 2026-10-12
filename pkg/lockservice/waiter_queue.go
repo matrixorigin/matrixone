@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -44,6 +45,8 @@ type waiterQueue interface {
 	// read methods, can used any where
 	iter(func(*waiter) bool)
 	size() int
+	hasExclusiveWaiterBefore(*waiter) bool
+	notifyLeadingShared(notifyValue)
 }
 
 func newWaiterQueue() waiterQueue {
@@ -304,6 +307,52 @@ func (q *sliceBasedWaiterQueue) size() int {
 	q.RLock()
 	defer q.RUnlock()
 	return q.getCommittedIdx()
+}
+
+// hasExclusiveWaiterBefore reports whether an Exclusive request precedes
+// target. A fresh request is not in the queue, so every queued writer precedes
+// it. A notified Shared waiter remains queued until admission and may join the
+// leading Shared cohort when no writer is ahead of it.
+func (q *sliceBasedWaiterQueue) hasExclusiveWaiterBefore(target *waiter) bool {
+	found := false
+	q.iter(func(w *waiter) bool {
+		if w == target {
+			return false
+		}
+		found = w.lockWaitMode == pb.LockMode_Exclusive
+		return !found
+	})
+	return found
+}
+
+// notifyLeadingShared advances one member of the leading Shared cohort. Each
+// admitted member wakes the next, stopping at the first Exclusive waiter.
+func (q *sliceBasedWaiterQueue) notifyLeadingShared(value notifyValue) {
+	q.Lock()
+	defer q.Unlock()
+
+	if value.ts.Less(q.keyCommittedAt) {
+		value.ts = q.keyCommittedAt
+	} else {
+		q.keyCommittedAt = value.ts
+	}
+	if q.beginChangeIdx != -1 {
+		panic("BUG: cannot call notify in changing waiter queue")
+	}
+
+	if len(q.waiters) == 0 {
+		return
+	}
+	w := q.waiters[0]
+	if w.lockWaitMode != pb.LockMode_Shared || w.notifyOnSharedHolderChange {
+		return
+	}
+	// notified/completed can mean that this legitimate head has consumed its
+	// wakeup but has not retried under the lock-table mutex yet. Retain its FIFO
+	// position; cancellation cleanup removes it and invokes this helper again.
+	if w.getStatus() == blocking {
+		w.notify(value, q.logger)
+	}
 }
 
 func (q *sliceBasedWaiterQueue) reset() {

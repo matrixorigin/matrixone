@@ -85,6 +85,12 @@ type tableCacheLifecycleAction struct {
 	pendingCommit *pendingTableCacheCommit
 }
 
+type createCallback struct {
+	tableID uint64
+	txnKey  string
+	ready   chan struct{}
+}
+
 func (s *service) runTableCacheLifecycleAction(a tableCacheLifecycleAction) {
 	defer s.builders.Done()
 	if a.pendingCommit != nil {
@@ -125,8 +131,7 @@ type service struct {
 		private          map[privateResetKey]incrTableCache
 		privateCallbacks map[privateResetKey]*privateResetRegistration
 		createdResets    map[privateResetKey]incrTableCache
-		creates          map[string][]uint64
-		deletes          map[string][]deleteCtx
+		creates          map[privateResetKey]*createCallback
 	}
 }
 
@@ -154,8 +159,7 @@ func NewIncrService(
 	s.mu.private = make(map[privateResetKey]incrTableCache)
 	s.mu.privateCallbacks = make(map[privateResetKey]*privateResetRegistration)
 	s.mu.createdResets = make(map[privateResetKey]incrTableCache)
-	s.mu.creates = make(map[string][]uint64, 1024)
-	s.mu.deletes = make(map[string][]deleteCtx, 1024)
+	s.mu.creates = make(map[privateResetKey]*createCallback, 1024)
 	if err := s.stopper.RunTask(s.destroyTables); err != nil {
 		panic(err)
 	}
@@ -190,9 +194,15 @@ func (s *service) Create(
 		zap.String("txn", txnOp.Txn().DebugString()),
 	)
 
-	txnOp.AppendEventCallback(
-		client.ClosedEvent,
-		client.NewTxnEventCallback(s.txnClosed))
+	callback := &createCallback{
+		tableID: tableID,
+		txnKey:  string(txnOp.Txn().ID),
+		ready:   make(chan struct{}),
+	}
+	defer close(callback.ready)
+	txnOp.AppendEventCallback(client.ClosedEvent, client.TxnEventCallback{
+		Func: s.createClosed, Value: callback, StatementScoped: true,
+	})
 	if err := s.store.Create(ctx, tableID, cols, txnOp); err != nil {
 		s.logger.Error(
 			"incrservice.create.cache.failed",
@@ -219,8 +229,7 @@ func (s *service) Create(
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := string(txnOp.Txn().ID)
-	s.mu.creates[key] = append(s.mu.creates[key], tableID)
+	s.mu.creates[privateResetKey{txnID: callback.txnKey, tableID: tableID}] = callback
 	return s.doCreateLocked(
 		tableID,
 		c,
@@ -296,22 +305,13 @@ func (s *service) Delete(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator) error {
-	s.logger.Info("delete auto increment table",
-		zap.Uint64("table-id", tableID),
-		zap.String("txn", txnOp.Txn().DebugString()))
-
-	txnOp.AppendEventCallback(
-		client.ClosedEvent,
-		client.NewTxnEventCallback(s.txnClosed))
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	delCtx, err := newDeleteCtx(ctx, tableID)
 	if err != nil {
 		return err
 	}
-	key := string(txnOp.Txn().ID)
-	s.mu.deletes[key] = append(s.mu.deletes[key], delCtx)
+	txnOp.AppendEventCallback(client.ClosedEvent, client.TxnEventCallback{
+		Func: s.deleteClosed, Value: delCtx, StatementScoped: true,
+	})
 	if s.logger.Enabled(zap.InfoLevel) {
 		s.logger.Info("ready to delete auto increment table cache",
 			zap.Uint64("table-id", tableID),
@@ -533,7 +533,7 @@ func (s *service) SetOffset(
 
 	if ownedCreate {
 		// CREATE TABLE (including clone/copy ALTER) is tracked by
-		// handleCreatesLocked. Publish the post-reset cache through that path so
+		// createClosed. Publish the post-reset cache through that path so
 		// the committed table cannot retain its pre-reset range.
 		replacement, err := newTableCache(
 			ctx,
@@ -590,12 +590,7 @@ func (s *service) SetOffset(
 }
 
 func (s *service) ownsCreateLocked(txnKey string, tableID uint64) bool {
-	for _, id := range s.mu.creates[txnKey] {
-		if id == tableID {
-			return true
-		}
-	}
-	return false
+	return s.mu.creates[privateResetKey{txnID: txnKey, tableID: tableID}] != nil
 }
 
 func (s *service) startGenerationBuildLocked(tableID uint64) uint64 {
@@ -1175,16 +1170,39 @@ func (s *service) acquireCommittedTableCache(
 	return s.getCommittedTableCacheForEpoch(ctx, tableID, 0, nil, true)
 }
 
-func (s *service) txnClosed(ctx context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) error {
+func (s *service) createClosed(_ context.Context, _ client.TxnOperator, event client.TxnEvent, v any) error {
+	callback := v.(*createCallback)
+	<-callback.ready
 	s.mu.Lock()
 	if s.mu.closed {
 		s.mu.Unlock()
 		return nil
 	}
-	actions := s.handleCreatesLocked(event.Txn)
-	retired := s.handleDeletesLocked(event.Txn)
-	for _, tc := range retired {
-		actions = append(actions, tableCacheLifecycleAction{tableID: tc.table(), cache: tc})
+	resetKey := privateResetKey{txnID: callback.txnKey, tableID: callback.tableID}
+	if s.mu.creates[resetKey] != callback {
+		s.mu.Unlock()
+		return nil
+	}
+	delete(s.mu.creates, resetKey)
+	id := callback.tableID
+	var actions []tableCacheLifecycleAction
+	if previous := s.mu.createdResets[resetKey]; previous != nil {
+		actions = append(actions, tableCacheLifecycleAction{tableID: id, cache: previous})
+		delete(s.mu.createdResets, resetKey)
+	}
+	if tc := s.mu.tables[id]; tc != nil {
+		if event.Committed() {
+			pending := &pendingTableCacheCommit{ready: make(chan struct{})}
+			s.mu.pendingCommits[id] = pending
+			actions = append(actions, tableCacheLifecycleAction{
+				tableID: id, cache: tc, commit: true, pendingCommit: pending,
+			})
+		} else {
+			delete(s.mu.tables, id)
+			actions = append(actions, tableCacheLifecycleAction{tableID: id, cache: tc})
+			s.logger.Info("incrservice.cache.destroyed",
+				zap.Uint64("table-id", id), zap.String("txn", hex.EncodeToString(event.Txn.ID)))
+		}
 	}
 	// Register every action before releasing service.mu. Close sets closed under
 	// the same lock before waiting, so no lifecycle work can outlive the cache,
@@ -1201,71 +1219,39 @@ func (s *service) txnClosed(ctx context.Context, txnOp client.TxnOperator, event
 	return nil
 }
 
-func (s *service) handleCreatesLocked(txnMeta txn.TxnMeta) []tableCacheLifecycleAction {
-	key := string(txnMeta.ID)
-	tables, ok := s.mu.creates[key]
-	if !ok {
+func (s *service) deleteClosed(_ context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) error {
+	if !event.Committed() {
 		return nil
 	}
-
-	var actions []tableCacheLifecycleAction
-	for _, id := range tables {
-		resetKey := privateResetKey{txnID: key, tableID: id}
-		if previous := s.mu.createdResets[resetKey]; previous != nil {
-			actions = append(actions, tableCacheLifecycleAction{tableID: id, cache: previous})
-			delete(s.mu.createdResets, resetKey)
-		}
-		if tc, ok := s.mu.tables[id]; ok {
-			if txnMeta.Status == txn.TxnStatus_Committed {
-				pending := &pendingTableCacheCommit{ready: make(chan struct{})}
-				s.mu.pendingCommits[id] = pending
-				actions = append(actions, tableCacheLifecycleAction{
-					tableID: id, cache: tc, commit: true, pendingCommit: pending,
-				})
-			} else {
-				actions = append(actions, tableCacheLifecycleAction{tableID: id, cache: tc})
-				delete(s.mu.tables, id)
-				s.logger.Info(
-					"incrservice.cache.destroyed",
-					zap.Uint64("table-id", id),
-					zap.String("txn", hex.EncodeToString(txnMeta.ID)),
-				)
-			}
+	delCtx := v.(deleteCtx)
+	if txnOp != nil {
+		// Statement callbacks cover ordinary rollback; the workspace confirms
+		// that a physical table deletion still exists at transaction close.
+		if deletions, ok := txnOp.GetWorkspace().(client.TerminalTableDeletionView); ok &&
+			!deletions.IsTableDeletedAtTxnClose(delCtx.tableID) {
+			return nil
 		}
 	}
-
-	delete(s.mu.creates, key)
-	return actions
-}
-
-func (s *service) handleDeletesLocked(txnMeta txn.TxnMeta) []incrTableCache {
-	key := string(txnMeta.ID)
-	tables, ok := s.mu.deletes[key]
-	if !ok {
+	s.mu.Lock()
+	if s.mu.closed {
+		s.mu.Unlock()
 		return nil
 	}
-
-	var retired []incrTableCache
-	if txnMeta.Status == txn.TxnStatus_Committed {
-		for _, ctx := range tables {
-			// The cache may still be under construction and therefore absent from
-			// tables. The committed delete must invalidate that builder and leave a
-			// tombstone so it cannot publish a cache after the table was dropped.
-			s.bumpGenerationLocked(ctx.tableID)
-			if tc, ok := s.mu.tables[ctx.tableID]; ok {
-				delete(s.mu.tables, ctx.tableID)
-				retired = append(retired, tc)
-			}
-			s.mu.destroyed[ctx.tableID] = ctx
-			s.logger.Info(
-				"incrservice.cache.deleted",
-				zap.Uint64("table-id", ctx.tableID),
-				zap.String("txn", hex.EncodeToString(txnMeta.ID)),
-			)
-		}
+	// Invalidate even an in-flight builder so it cannot publish after DROP.
+	s.bumpGenerationLocked(delCtx.tableID)
+	tc := s.mu.tables[delCtx.tableID]
+	if tc != nil {
+		delete(s.mu.tables, delCtx.tableID)
+		s.builders.Add(1)
 	}
-	delete(s.mu.deletes, key)
-	return retired
+	s.mu.destroyed[delCtx.tableID] = delCtx
+	s.logger.Info("incrservice.cache.deleted",
+		zap.Uint64("table-id", delCtx.tableID), zap.String("txn", hex.EncodeToString(event.Txn.ID)))
+	s.mu.Unlock()
+	if tc != nil {
+		s.runTableCacheLifecycleAction(tableCacheLifecycleAction{tableID: delCtx.tableID, cache: tc})
+	}
+	return nil
 }
 
 func (s *service) getTableCache(ctx context.Context, tableID uint64) (incrTableCache, error) {
