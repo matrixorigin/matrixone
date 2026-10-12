@@ -17,6 +17,7 @@ package gc
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -253,7 +254,17 @@ func (w *GCWindow) ScanCheckpoints(
 		return false, nil
 	}
 	sinker := w.getSinker(0, buffer)
-	defer sinker.Close()
+	transferred := false
+	defer func() {
+		if !transferred {
+			if _, cleanupErr := sinker.DeletePersisted(ctx); cleanupErr != nil {
+				err = errors.Join(err, cleanupErr)
+			}
+		}
+		if closeErr := sinker.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
 	if err = readutil.StreamBatchProcess(
 		ctx,
 		getOneBatch,
@@ -288,6 +299,7 @@ func (w *GCWindow) ScanCheckpoints(
 		return
 	}
 	w.files = append(w.files, newFiles...)
+	transferred = true
 	return metaFile, nil
 }
 

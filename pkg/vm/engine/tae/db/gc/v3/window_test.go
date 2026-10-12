@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -45,11 +46,77 @@ func (*failingCKPDataReader) Read(context.Context, *batch.Batch, *mpool.MPool) (
 
 func (*failingCKPDataReader) Reset(context.Context) {}
 
-func injectFailingCKPDataReader(reader *logtail.CKPReader) {
+func injectCKPDataReader(reader *logtail.CKPReader, dataReader interface{}) {
 	field := reflect.ValueOf(reader).Elem().FieldByName("ckpDataReader")
 	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(
-		reflect.ValueOf(&failingCKPDataReader{}),
+		reflect.ValueOf(dataReader),
 	)
+}
+
+func injectFailingCKPDataReader(reader *logtail.CKPReader) {
+	injectCKPDataReader(reader, &failingCKPDataReader{})
+}
+
+type spillingCKPDataReader struct {
+	rows    int
+	emitted bool
+}
+
+func (r *spillingCKPDataReader) Read(_ context.Context, bat *batch.Batch, mp *mpool.MPool) (bool, error) {
+	if r.emitted {
+		return true, nil
+	}
+	for i := 0; i < r.rows; i++ {
+		var uuid types.Uuid
+		for j := range uuid {
+			uuid[j] = byte(uint64(i+1) >> (j * 8))
+		}
+		stats := objectio.NewObjectStats()
+		if err := objectio.SetObjectStatsObjectName(stats, objectio.BuildObjectName(&uuid, 0)); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_Accout_Idx], uint32(0), false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_DB_Idx], uint64(1), false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_Table_Idx], uint64(i+1), false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx], ckputil.ObjectType_Data, false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendBytes(bat.Vecs[ckputil.TableObjectsAttr_ID_Idx], stats[:], false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], types.BuildTS(1, 0), false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], types.TS{}, false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_PhysicalAddr_Idx], types.Rowid{}, false, mp); err != nil {
+			return false, err
+		}
+	}
+	bat.SetRowCount(r.rows)
+	r.emitted = true
+	return false, nil
+}
+
+func (r *spillingCKPDataReader) Reset(context.Context) {
+	r.emitted = false
+}
+
+type recordingMemoryFS struct {
+	*fileservice.MemoryFS
+	writes int
+}
+
+func (fs *recordingMemoryFS) Write(ctx context.Context, vector fileservice.IOVector) error {
+	fs.writes++
+	return fs.MemoryFS.Write(ctx, vector)
 }
 
 func TestGCWindowScanCheckpointsPropagatesReaderError(t *testing.T) {
@@ -79,6 +146,50 @@ func TestGCWindowScanCheckpointsPropagatesReaderError(t *testing.T) {
 		buffer,
 	)
 	require.ErrorContains(t, err, "checkpoint reader failure")
+}
+
+func TestGCWindowScanCheckpointsDeletesSpilledObjectsOnReaderError(t *testing.T) {
+	ctx := context.Background()
+	baseFS, err := fileservice.NewMemoryFS("gc-window", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	fs := &recordingMemoryFS{MemoryFS: baseFS}
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	window := NewGCWindow(mp, fs, WithWindowDir(t.TempDir()))
+	buffer := containers.NewOneSchemaBatchBuffer(32*mpool.MB, ObjectTableAttrs, ObjectTableTypes, false)
+	defer buffer.Close(mp)
+	entries := []*checkpoint.CheckpointEntry{
+		checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(2, 0), checkpoint.ET_Incremental),
+		checkpoint.NewCheckpointEntry("", types.BuildTS(2, 0), types.BuildTS(3, 0), checkpoint.ET_Incremental),
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		readerCalls := 0
+		_, err = window.ScanCheckpoints(
+			ctx,
+			entries,
+			func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPReader, error) {
+				readerCalls++
+				if readerCalls == 1 {
+					reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, objectio.Location{}, mp, nil)
+					injectCKPDataReader(reader, &spillingCKPDataReader{rows: 300000})
+					return reader, nil
+				}
+				reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, objectio.Location{}, mp, nil)
+				injectFailingCKPDataReader(reader)
+				return reader, nil
+			},
+			nil,
+			nil,
+			buffer,
+		)
+		require.ErrorContains(t, err, "checkpoint reader failure")
+		require.Greater(t, fs.writes, 0, "the first checkpoint must spill before the second fails")
+		files, listErr := fileservice.SortedList(fs.List(ctx, ""))
+		require.NoError(t, listErr)
+		require.Empty(t, files, "failed scans must not accumulate unpublished objects")
+	}
 }
 
 // Constants for test module
