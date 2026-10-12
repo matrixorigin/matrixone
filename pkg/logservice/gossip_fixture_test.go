@@ -384,77 +384,114 @@ func TestGossipFixtureStartupCancellation(t *testing.T) {
 }
 
 func TestGossipFixtureStartupRealBindCollision(t *testing.T) {
-	runtime.RunTest("", func(rt runtime.Runtime) {
-		defer leaktest.AfterTest(t)()
-		attempts := 0
-		var firstConfigs []Config
-		var occupied net.Listener
-		var collisionErr error
-		t.Cleanup(func() {
-			if occupied != nil {
-				require.NoError(t, occupied.Close())
-			}
-		})
-		configs, services, err := startGossipFixture(t, t.Context(),
-			func() ([]Config, error) {
-				attempts++
-				configs, err := makeGossipFixtureConfigs(t, rt, 2)
-				if attempts == 1 {
-					firstConfigs = configs
-				}
-				return configs, err
-			},
-			func(cfg Config) (*Service, error) {
-				if attempts == 1 && cfg.UUID == firstConfigs[1].UUID {
-					var err error
-					occupied, err = net.Listen("tcp4", cfg.GossipListenAddr())
-					if err != nil {
-						return nil, fmt.Errorf("collision injection failed: %w", err)
+	for _, earlierCollision := range []bool{false, true} {
+		name := "late node collision"
+		if earlierCollision {
+			name = "earlier collision before late node injection"
+		}
+		t.Run(name, func(t *testing.T) {
+			runtime.RunTest("", func(rt runtime.Runtime) {
+				defer leaktest.AfterTest(t)()
+				attempts := 0
+				injectedAttempt := 0
+				var currentConfigs, injectedConfigs []Config
+				var failedConfigs [][]Config
+				var occupied, earlierOccupied net.Listener
+				var collisionErr, earlierErr error
+				reopenedNode := false
+				t.Cleanup(func() {
+					for _, listener := range []net.Listener{occupied, earlierOccupied} {
+						if listener != nil {
+							require.NoError(t, listener.Close())
+						}
 					}
-					service, err := newGossipFixtureService(cfg)
-					collisionErr = err
-					return service, err
+				})
+				configs, services, err := startGossipFixture(t, t.Context(),
+					func() ([]Config, error) {
+						attempts++
+						configs, err := makeGossipFixtureConfigs(t, rt, 2)
+						currentConfigs = configs
+						return configs, err
+					},
+					func(cfg Config) (*Service, error) {
+						if earlierCollision && attempts == 1 && cfg.UUID == currentConfigs[0].UUID {
+							var err error
+							earlierOccupied, err = net.Listen("tcp4", cfg.GossipListenAddr())
+							if err != nil {
+								return nil, fmt.Errorf("earlier collision injection failed: %w", err)
+							}
+							service, err := newGossipFixtureService(cfg)
+							earlierErr = err
+							return service, err
+						}
+						// Incidental collisions may prevent an earlier cohort from reaching
+						// this node. Inject once in the first generation that gets here.
+						if occupied == nil && cfg.UUID == currentConfigs[1].UUID {
+							var err error
+							occupied, err = net.Listen("tcp4", cfg.GossipListenAddr())
+							if err != nil {
+								return nil, fmt.Errorf("collision injection failed: %w", err)
+							}
+							injectedAttempt = attempts
+							injectedConfigs = currentConfigs
+							service, err := newGossipFixtureService(cfg)
+							collisionErr = err
+							return service, err
+						}
+						return newGossipFixtureService(cfg)
+					},
+					func(configs []Config, services []*Service) error {
+						failedConfigs = append(failedConfigs, configs)
+						if err := closeGossipFixture(rt, configs, services); err != nil {
+							return err
+						}
+						// Reopen the successfully started node from the injected generation
+						// to prove rollback released locks, listeners and background workers.
+						if attempts == injectedAttempt && len(services) == 1 {
+							cfg := configs[0]
+							runtime.SetupServiceBasedRuntime(cfg.UUID, rt)
+							reopened, err := newGossipFixtureService(cfg)
+							if err != nil {
+								runtime.CompareAndDeleteServiceBasedRuntime(cfg.UUID, rt)
+								return fmt.Errorf("reopen rolled-back node: %w", err)
+							}
+							reopenedNode = true
+							return closeGossipFixture(rt, []Config{cfg}, []*Service{reopened})
+						}
+						return nil
+					})
+				if services != nil {
+					defer func() { require.NoError(t, closeGossipFixture(rt, configs, services)) }()
 				}
-				return newGossipFixtureService(cfg)
-			},
-			func(configs []Config, services []*Service) error {
-				if err := closeGossipFixture(rt, configs, services); err != nil {
-					return err
+				require.NoError(t, err)
+				require.Greater(t, injectedAttempt, 0)
+				require.Greater(t, attempts, injectedAttempt)
+				require.LessOrEqual(t, attempts, maxGossipFixtureStartupAttempts)
+				require.Error(t, collisionErr)
+				require.True(t, isGossipFixtureBindCollision(collisionErr), "%v", collisionErr)
+				require.True(t, reopenedNode)
+				if earlierCollision {
+					require.Error(t, earlierErr)
+					require.True(t, isGossipFixtureBindCollision(earlierErr), "%v", earlierErr)
+					require.Greater(t, injectedAttempt, 1)
 				}
-				// Reopening the first successfully started node with its exact saved
-				// configuration proves failed-cohort cleanup released its directory lock,
-				// raft/service/gossip listeners and background workers before retry.
-				if attempts == 1 && len(services) == 1 {
-					cfg := configs[0]
-					runtime.SetupServiceBasedRuntime(cfg.UUID, rt)
-					reopened, err := newGossipFixtureService(cfg)
-					if err != nil {
-						runtime.CompareAndDeleteServiceBasedRuntime(cfg.UUID, rt)
-						return fmt.Errorf("reopen rolled-back node: %w", err)
+				t.Logf("real memberlist collision on attempt %d, recovered on attempt %d: %v", injectedAttempt, attempts, collisionErr)
+				require.Len(t, services, 2)
+				for _, cfg := range configs {
+					require.NotEqual(t, injectedConfigs[0].UUID, cfg.UUID)
+					require.NotEqual(t, injectedConfigs[1].UUID, cfg.UUID)
+					require.Equal(t, []string{getTestGossipAddress(configs[0].GossipPort), getTestGossipAddress(configs[1].GossipPort)}, cfg.GossipSeedAddresses)
+					for _, failed := range failedConfigs {
+						for _, old := range failed {
+							require.NotEqual(t, old.UUID, cfg.UUID)
+							require.NotContains(t, cfg.GossipSeedAddresses, getTestGossipAddress(old.GossipPort))
+							require.Nil(t, runtime.ServiceRuntime(old.UUID))
+						}
 					}
-					return closeGossipFixture(rt, []Config{cfg}, []*Service{reopened})
 				}
-				return nil
 			})
-		if services != nil {
-			defer func() { require.NoError(t, closeGossipFixture(rt, configs, services)) }()
-		}
-		require.NoError(t, err)
-		require.Equal(t, 2, attempts)
-		require.Error(t, collisionErr)
-		require.True(t, isGossipFixtureBindCollision(collisionErr), "%v", collisionErr)
-		t.Logf("real memberlist collision: %v", collisionErr)
-		require.Len(t, services, 2)
-		for _, cfg := range configs {
-			require.NotEqual(t, firstConfigs[0].UUID, cfg.UUID)
-			require.NotEqual(t, firstConfigs[1].UUID, cfg.UUID)
-			require.NotContains(t, cfg.GossipSeedAddresses, getTestGossipAddress(firstConfigs[1].GossipPort))
-			require.Equal(t, []string{getTestGossipAddress(configs[0].GossipPort), getTestGossipAddress(configs[1].GossipPort)}, cfg.GossipSeedAddresses)
-		}
-		for _, cfg := range firstConfigs {
-			require.Nil(t, runtime.ServiceRuntime(cfg.UUID))
-		}
-	})
+		})
+	}
 }
 
 func TestGossipFixtureStartupConfigurationFailure(t *testing.T) {
