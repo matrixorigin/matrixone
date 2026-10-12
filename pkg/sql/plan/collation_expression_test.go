@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -43,6 +44,9 @@ func TestExplicitCollationConflicts(t *testing.T) {
 		"select greatest('a' collate utf8mb4_bin,'bb') = 'bb' collate utf8mb4_general_ci",
 		"select least('a' collate utf8mb4_bin,'b') = 'a' collate utf8mb4_general_ci",
 		"select name_const('x','a' collate utf8mb4_unicode_ci) = 'a' collate utf8mb4_bin",
+		"select least(coalesce(cast('a' as char(3)) collate utf8mb4_bin,'a'),coalesce(cast('bb' as char(3)),'bb')) = 'a' collate utf8mb4_general_ci",
+		"select greatest(coalesce(cast('a' as char(3)) collate utf8mb4_bin,'a'),coalesce(cast('bb' as char(3)),'bb')) = 'bb' collate utf8mb4_general_ci",
+		"select least(ifnull(cast('a' as char(3)) collate utf8mb4_bin,'a'),ifnull(cast('b' as char(4)),'b')) = 'a' collate utf8mb4_general_ci",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
@@ -76,6 +80,134 @@ func TestExpressionCollationAdmission(t *testing.T) {
 			var sqlErr *moerr.Error
 			require.ErrorAs(t, err, &sqlErr)
 			require.Equal(t, tc.code, sqlErr.MySQLCode())
+		})
+	}
+}
+
+func TestExpressionCollationAssignmentAdmission(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	build := func(sql string) (*Plan, error) {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		return BuildPlan(compiler, stmt, false)
+	}
+	created, err := build("create table collation_assign(id int primary key,t varchar(4),b varbinary(4))")
+	require.NoError(t, err)
+	table := created.GetDdl().GetCreateTable().TableDef
+	table.Cols = append(table.Cols, &ColDef{Name: catalog.Row_ID, Hidden: true, Typ: Type{Id: int32(types.T_Rowid)}})
+	compiler.tables["collation_assign"] = table
+	compiler.objects["collation_assign"] = &ObjectRef{ObjName: "collation_assign", SchemaName: "tpch"}
+	compiler.isDml = true
+	for _, operation := range []string{"insert", "replace"} {
+		for _, destination := range []string{"t", "b"} {
+			for _, tc := range []struct {
+				expression string
+				valid      bool
+			}{
+				{"_binary'a' collate 'binary'", true},
+				{"'a' collate utf8mb4_unicode_ci", true},
+				{"cast(_binary'a' as char(4)) collate utf8mb4_unicode_ci", true},
+				{"_binary'a' collate utf8mb4_unicode_ci", false},
+				{"'a' collate 'binary'", false},
+			} {
+				sql := operation + " into collation_assign(id," + destination + ") values(1," + tc.expression + ")"
+				t.Run(sql, func(t *testing.T) {
+					_, err := build(sql)
+					if tc.valid {
+						require.NoError(t, err)
+					} else {
+						var sqlErr *moerr.Error
+						require.ErrorAs(t, err, &sqlErr)
+						require.Equal(t, uint16(1253), sqlErr.MySQLCode())
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestExpressionCollationAssignmentHintRestored(t *testing.T) {
+	typ := types.New(types.T_varchar, 4, 0).PlanType()
+	for _, original := range []bool{false, true} {
+		binder := NewDefaultBinder(t.Context(), nil, nil, typ, nil)
+		binder.suppressDefaultValueBindType = original
+		bind := func(input string) (*Expr, error) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select "+input, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			return binder.BindExpr(ast, 0, false)
+		}
+		for _, tc := range []struct {
+			input string
+			valid bool
+		}{
+			{"_binary'a' collate 'binary'", true},
+			{"(_binary'a' collate 'binary') collate 'binary'", true},
+			{"_binary'a' collate utf8mb4_unicode_ci", false},
+		} {
+			_, err := bind(tc.input)
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
+				var sqlErr *moerr.Error
+				require.ErrorAs(t, err, &sqlErr)
+				require.Equal(t, uint16(1253), sqlErr.MySQLCode())
+			}
+			require.Equal(t, original, binder.suppressDefaultValueBindType)
+		}
+		_, err := bind("nonexistent_collation_function('a') collate utf8mb4_unicode_ci")
+		require.Error(t, err)
+		require.Equal(t, original, binder.suppressDefaultValueBindType)
+		plain, err := bind("_binary'z'")
+		require.NoError(t, err)
+		if original {
+			require.Equal(t, int32(types.T_varbinary), plain.Typ.Id)
+		} else {
+			require.Equal(t, typ.Id, plain.Typ.Id)
+			require.Equal(t, typ.Width, plain.Typ.Width)
+		}
+	}
+}
+
+func TestExpressionCollationComparisonCanonicalization(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		oid  types.T
+		cast func(context.Context, *Expr) (*Expr, error)
+	}{
+		{"promoted_pad_space", types.T_varchar, appendPadSpaceComparisonCastIfNeeded},
+		{"char_window_key", types.T_char, appendPadSpaceWindowKeyCastIfNeeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typ := types.NewWithCharset(tc.oid, 8, 0, types.CharsetUTF8MB4Bin).PlanType()
+			typ.PadSpace = true
+			expressionCollation{charset: typ.Charset, rank: 1, conflict: true}.apply(&typ)
+			source := &Expr{Typ: typ, Expr: &pb.Expr_Col{Col: &pb.ColRef{ColPos: 0}}}
+			original := DeepCopyExpr(source)
+			bound, err := tc.cast(t.Context(), source)
+			require.NoError(t, err)
+			require.True(t, isCastOverload(bound, 2))
+			require.False(t, bound.Typ.PadSpace)
+			require.Equal(t, typ.CollationCoercibility, bound.Typ.CollationCoercibility)
+			require.True(t, bound.Typ.CollationCoercibilitySet)
+			require.True(t, bound.Typ.CollationMergeConflict)
+			require.True(t, proto.Equal(original, source), "canonicalizing a shared source must not relabel it")
+
+			// A caller's resolved target wins; the fallback only fills provenance
+			// lost when converting a runtime type back to a plan type.
+			selected := bound.Typ
+			selected.CollationCoercibility, selected.CollationMergeConflict = 0, false
+			rebound, err := appendComparisonCastBeforeExpr(t.Context(), source, selected)
+			require.NoError(t, err)
+			require.Zero(t, rebound.Typ.CollationCoercibility)
+			require.False(t, rebound.Typ.CollationMergeConflict)
+			toNumber := types.T_int64.ToType().PlanType()
+			numeric, err := appendComparisonCastBeforeExpr(t.Context(), source, toNumber)
+			require.NoError(t, err)
+			require.False(t, numeric.Typ.CollationCoercibilitySet)
+			require.True(t, proto.Equal(original, source))
 		})
 	}
 }

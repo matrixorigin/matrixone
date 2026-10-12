@@ -45,7 +45,15 @@ func (b *baseBinder) bindCollateExpr(ast *tree.CollateExpr, depth int32) (*Expr,
 	if err := collation.RequireLegacy(uint32(identity), version, 0); err != nil {
 		return nil, err
 	}
-	expr, err := b.impl.BindExpr(ast.Expr, depth, false)
+	expr, err := func() (*Expr, error) {
+		// Validate COLLATE against its operand's source charset. VALUES and
+		// assignments apply the destination conversion after this expression;
+		// using their type hint here can invert binary literal admission.
+		previous := b.suppressDefaultValueBindType
+		b.suppressDefaultValueBindType = true
+		defer func() { b.suppressDefaultValueBindType = previous }()
+		return b.impl.BindExpr(ast.Expr, depth, false)
+	}()
 	if err != nil {
 		return nil, err
 	}

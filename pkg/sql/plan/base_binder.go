@@ -10788,6 +10788,17 @@ func appendSyntaxExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType 
 }
 
 func appendComparisonCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	if types.T(expr.Typ.Id).IsMySQLString() && types.T(toType.Id).IsMySQLString() &&
+		expr.Typ.Charset == toType.Charset && expr.Typ.CollationVersion == toType.CollationVersion &&
+		expr.Typ.CollationCoercibilitySet && !toType.CollationCoercibilitySet {
+		// Comparison canonicalization changes representation, not collation
+		// priority. PAD SPACE and window adapters rebuild targets from runtime
+		// types, which omit these plan-only fields. Keep an already resolved
+		// target's provenance when the caller supplies one.
+		toType.CollationCoercibility = expr.Typ.CollationCoercibility
+		toType.CollationCoercibilitySet = true
+		toType.CollationMergeConflict = expr.Typ.CollationMergeConflict
+	}
 	return appendCastBeforeExprWithOverload(ctx, expr, toType, 2)
 }
 

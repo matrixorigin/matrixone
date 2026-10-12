@@ -101,4 +101,34 @@ SELECT NAME_CONST('v', 1 COLLATE utf8mb4_unicode_ci) = '1';
 SELECT NAME_CONST('v', 'a' COLLATE utf8mb4_unicode_ci) = 'a' COLLATE utf8mb4_bin;
 SELECT NAME_CONST('v', LOWER('A') COLLATE utf8mb4_unicode_ci);
 SELECT NAME_CONST('v', CAST('a' AS CHAR) COLLATE utf8mb4_unicode_ci);
+
+-- COLLATE admission uses the source domain before column assignment.
+CREATE TABLE assignment_values (id INT PRIMARY KEY, t VARCHAR(4), b VARBINARY(4));
+INSERT INTO assignment_values VALUES
+       (1, _binary'a' COLLATE 'binary', _binary'b' COLLATE 'binary'),
+       (2, 'c', _binary'd');
+REPLACE INTO assignment_values VALUES (1, _binary'e' COLLATE 'binary', 'f' COLLATE utf8mb4_unicode_ci);
+SELECT id, HEX(t), HEX(b) FROM assignment_values ORDER BY id;
+INSERT INTO assignment_values (id, t) VALUES (3, _binary'a' COLLATE utf8mb4_unicode_ci);
+REPLACE INTO assignment_values (id, t) VALUES (1, _binary'a' COLLATE utf8mb4_unicode_ci);
+INSERT INTO assignment_values (id, b) VALUES (4, 'a' COLLATE 'binary');
+REPLACE INTO assignment_values (id, b) VALUES (1, 'a' COLLATE 'binary');
+SELECT id, HEX(t), HEX(b) FROM assignment_values ORDER BY id;
+
+-- PAD SPACE adaptation also keeps explicit provenance across derived CHAR.
+CREATE TABLE pad_values (c CHAR(3));
+INSERT INTO pad_values VALUES ('a');
+SELECT LEAST(COALESCE(c COLLATE utf8mb4_bin, 'a'), COALESCE(c, 'bb'))
+       = 'a' COLLATE utf8mb4_general_ci FROM pad_values;
+SELECT LEAST(COALESCE(CAST('a' AS CHAR(3)) COLLATE utf8mb4_bin, 'a'),
+             COALESCE(CAST('bb' AS CHAR(3)), 'bb')) = 'a' COLLATE utf8mb4_general_ci;
+SELECT GREATEST(COALESCE(CAST('a' AS CHAR(3)) COLLATE utf8mb4_bin, 'a'),
+                COALESCE(CAST('bb' AS CHAR(3)), 'bb')) = 'bb' COLLATE utf8mb4_general_ci;
+SELECT LEAST(IFNULL(CAST('a' AS CHAR(3)) COLLATE utf8mb4_bin, 'a'),
+             IFNULL(CAST('b' AS CHAR(4)), 'b')) = 'a' COLLATE utf8mb4_general_ci;
+SELECT LEAST(COALESCE(CAST('a' AS CHAR(3)) COLLATE utf8mb4_bin, 'a'),
+             COALESCE(CAST('bb' AS CHAR(3)), 'bb')) = 'a';
+SELECT LEAST(COALESCE(CAST(NULL AS CHAR(3)) COLLATE utf8mb4_unicode_ci, 'Á'), 'zz') = 'a';
+SELECT CAST(LEAST(COALESCE(c COLLATE utf8mb4_bin, 'a'), COALESCE(c, 'bb')) AS CHAR(20))
+       = 'a' COLLATE utf8mb4_general_ci FROM pad_values;
 DROP DATABASE collation_expression_test;
