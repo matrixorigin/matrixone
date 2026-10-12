@@ -202,13 +202,17 @@ func handleExecuteSQLTask(ctx context.Context, ses *Session, stmt *tree.ExecuteS
 	executor := taskservice.NewSQLTaskExecutor(func() ie.InternalExecutor {
 		return NewInternalExecutor(ses.GetService())
 	}, ts, ses.GetService())
-	if err := executor.ExecuteContext(detachSQLTaskExecuteContext(ctx), spec, true); err != nil {
+	executionContext := detachSQLTaskExecuteContext(ctx)
+	executionErr := executor.ExecuteContext(executionContext, spec, true)
+	// Completion metadata may commit on another CN, including on body failure.
+	// Fence the caller's next snapshot before returning the original result.
+	syncSQLTaskMetadataCommitTimestamp(executionContext, ses)
+	if err := executionErr; err != nil {
 		if err == taskservice.ErrSQLTaskOverlap {
 			return moerr.NewInternalError(ctx, "sql task is already running")
 		}
 		return err
 	}
-	syncSQLTaskMetadataCommitTimestamp(ctx, ses)
 	return nil
 }
 

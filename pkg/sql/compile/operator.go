@@ -437,10 +437,6 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Params = t.Params
 		op.IsSingle = t.IsSingle
 		op.Limit = t.Limit
-		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
-		op.IndexReaderParam = t.IndexReaderParam
-		op.FulltextSourceRef = t.FulltextSourceRef
-		op.FulltextIndexRef = t.FulltextIndexRef
 		op.SetInfo(&info)
 		if op.FuncName == "generate_series" {
 			op.GenerateSeriesCtrNumState(t.OffsetTotal[index][0], t.OffsetTotal[index][1], t.GetGenerateSeriesCtrNumStateStep(), t.OffsetTotal[index][0])
@@ -652,7 +648,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ApplyType = t.ApplyType
 		op.Result = t.Result
 		op.Typs = t.Typs
-		op.VectorIndexScan = plan2.DeepCopyVectorIndexScan(t.VectorIndexScan)
+		op.IndexSearchScan = plan2.DeepCopyIndexSearchScan(t.IndexSearchScan)
 		op.VectorAttrs = slices.Clone(t.VectorAttrs)
 		op.TxnOffset = t.TxnOffset
 		if t.TableFunction != nil {
@@ -664,10 +660,6 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 			op.TableFunction.Params = t.TableFunction.Params
 			op.TableFunction.IsSingle = t.TableFunction.IsSingle
 			op.TableFunction.Limit = t.TableFunction.Limit
-			op.TableFunction.RuntimeFilterSpecs = t.TableFunction.RuntimeFilterSpecs
-			op.TableFunction.IndexReaderParam = t.TableFunction.IndexReaderParam
-			op.TableFunction.FulltextSourceRef = t.TableFunction.FulltextSourceRef
-			op.TableFunction.FulltextIndexRef = t.TableFunction.FulltextIndexRef
 			op.TableFunction.SetInfo(&info)
 		}
 		op.SetInfo(&info)
@@ -1545,13 +1537,8 @@ func constructTableFunction(node *plan.Node, qry *plan.Query) *table_function.Ta
 	arg.FuncName = node.TableDef.TblFunc.Name
 	arg.Params = node.TableDef.TblFunc.Param
 	arg.IsSingle = node.TableDef.TblFunc.IsSingle
-	arg.FulltextSourceRef = node.TableDef.TblFunc.FulltextSourceRef
-	arg.FulltextIndexRef = node.TableDef.TblFunc.FulltextIndexRef
 	arg.ScanSnapshot = node.ScanSnapshot
 	arg.Limit = node.Limit
-	// probe side runtime filter specs
-	arg.RuntimeFilterSpecs = node.RuntimeFilterProbeList
-	arg.IndexReaderParam = node.IndexReaderParam
 	return arg
 }
 
@@ -2802,14 +2789,11 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 			},
 		}
 	}
-	e, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || !plan2.IsEqualFunc(e.F.Func.GetObj()) {
+	if !plan2.IsEquiJoinCondition(expr) {
 		panic(moerr.NewNYIf(proc.GetTopContext(), "join condition '%s'", expr))
 	}
-	if exprRelPos(e.F.Args[0]) == 1 {
-		return e.F.Args[1], e.F.Args[0]
-	}
-	return e.F.Args[0], e.F.Args[1]
+	args := expr.GetF().Args
+	return args[0], args[1]
 }
 
 func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *apply.Apply {
@@ -2825,8 +2809,8 @@ func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *
 	arg.ApplyType = applyType
 	arg.Result = result
 	arg.Typs = rightTyps
-	if right.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		arg.VectorIndexScan = plan2.DeepCopyVectorIndexScan(right.VectorIndexScan)
+	if right.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		arg.IndexSearchScan = plan2.DeepCopyIndexSearchScan(right.IndexSearchScan)
 		arg.VectorAttrs = make([]string, len(right.TableDef.Cols))
 		for i, col := range right.TableDef.Cols {
 			arg.VectorAttrs[i] = col.GetOriginCaseName()
@@ -2890,40 +2874,17 @@ func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 	exprs = colexec.SplitAndExprs(exprs)
 	eqConds := make([]*plan.Expr, 0, len(exprs))
 	notEqConds := make([]*plan.Expr, 0, len(exprs))
-	for i, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !plan2.IsEqualFunc(e.F.Func.GetObj()) {
-				notEqConds = append(notEqConds, exprs[i])
-				continue
-			}
-			lpos, rpos := plan2.HasColExpr(e.F.Args[0], -1), plan2.HasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				notEqConds = append(notEqConds, exprs[i])
-				continue
-			}
-			eqConds = append(eqConds, exprs[i])
+	for _, expr := range exprs {
+		if plan2.IsEquiJoinCondition(expr) {
+			eqConds = append(eqConds, expr)
 		} else {
-			notEqConds = append(notEqConds, exprs[i])
+			notEqConds = append(notEqConds, expr)
 		}
 	}
 	if len(notEqConds) == 0 {
 		return nil, eqConds
 	}
 	return colexec.RewriteFilterExprList(notEqConds), eqConds
-}
-
-func exprRelPos(expr *plan.Expr) int32 {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		return e.Col.RelPos
-	case *plan.Expr_F:
-		for i := range e.F.Args {
-			if relPos := exprRelPos(e.F.Args[i]); relPos >= 0 {
-				return relPos
-			}
-		}
-	}
-	return -1
 }
 
 func constructPostDml(node *plan.Node, eng engine.Engine) *postdml.PostDml {

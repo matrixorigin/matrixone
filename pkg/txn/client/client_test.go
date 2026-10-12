@@ -2334,6 +2334,7 @@ func TestCanceledMaxActiveWaitRemovesQueueEntry(t *testing.T) {
 			client := tc.(*txnClient)
 			op := newTxnOperator(
 				client.sid,
+				client.logger,
 				client.clock,
 				client.sender,
 				client.newTxnMeta(),
@@ -2389,6 +2390,7 @@ func TestCanceledMaxActivePromotionReleasesOwnership(t *testing.T) {
 			waitEntered := make(chan struct{})
 			waiting := newTxnOperator(
 				client.sid,
+				client.logger,
 				client.clock,
 				client.sender,
 				meta,
@@ -2496,6 +2498,7 @@ func TestQueuedSnapshotFailureDuringPromotionReleasesOwnership(t *testing.T) {
 			}
 			waiting := newTxnOperator(
 				client.sid,
+				client.logger,
 				client.clock,
 				client.sender,
 				meta,
@@ -3168,4 +3171,129 @@ func TestCanceledSuffixCleanupAfterPromotion(t *testing.T) {
 	users := c.mu.users
 	c.mu.RUnlock()
 	require.Zero(t, users, "all user admission reservations were released")
+}
+
+func TestClosedClientRejectsMetadataBeforeRetiredRuntimeLookup(t *testing.T) {
+	sid := t.Name()
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, sid, logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 { return 1 }, 0)))
+	runtime.SetupServiceBasedRuntime(sid, rt)
+	t.Cleanup(func() { runtime.CompareAndDeleteServiceBasedRuntime(sid, rt) })
+	c := NewTxnClient(sid, newTestTxnSender())
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	c.Resume()
+	ctx := context.Background()
+	op, err := c.New(ctx, timestamp.Timestamp{})
+	require.NoError(t, err)
+	require.NoError(t, op.Rollback(ctx))
+	require.NoError(t, c.Close())
+	require.True(t, runtime.CompareAndDeleteServiceBasedRuntime(sid, rt))
+	for _, create := range []func() (TxnOperator, error){
+		func() (TxnOperator, error) { return c.New(ctx, timestamp.Timestamp{}) },
+		func() (TxnOperator, error) { return c.(*txnClient).RestartTxn(ctx, op, timestamp.Timestamp{}) },
+	} {
+		got, err := create()
+		require.Nil(t, got)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed), err)
+	}
+}
+
+func TestNewUsesClientLoggerAfterRuntimeRetirement(t *testing.T) {
+	for _, state := range []string{"retained", "retired", "replaced", "public-New"} {
+		t.Run(state, func(t *testing.T) {
+			sid := t.Name()
+			rt := runtime.NewRuntime(metadata.ServiceType_CN, sid, logutil.GetPanicLogger(),
+				runtime.WithClock(clock.NewHLCClock(func() int64 { return 1 }, 0)))
+			runtime.SetupServiceBasedRuntime(sid, rt)
+			t.Cleanup(func() { runtime.CompareAndDeleteServiceBasedRuntime(sid, rt) })
+			sender := newTestTxnSender()
+			c := NewTxnClient(sid, sender).(*txnClient)
+			t.Cleanup(func() { require.NoError(t, c.Close()) })
+			c.Resume()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			var op *txnOperator
+			var created TxnOperator
+			var err error
+			if state == "public-New" {
+				entered := make(chan *txnOperator, 1)
+				release := make(chan struct{})
+				var once sync.Once
+				unblock := func() { once.Do(func() { close(release) }) }
+				result := make(chan txnCreateResult, 1)
+				joined := false
+				t.Cleanup(func() {
+					unblock()
+					if !joined {
+						select {
+						case <-result:
+						case <-time.After(5 * time.Second):
+							t.Error("New did not finish after releasing the option")
+						}
+					}
+				})
+				go func() {
+					got, err := c.New(ctx, timestamp.Timestamp{}, func(op *txnOperator) {
+						entered <- op
+						<-release
+					})
+					result <- txnCreateResult{op: got, err: err}
+				}()
+				select {
+				case op = <-entered:
+				case <-ctx.Done():
+					t.Fatal("New did not reach operator initialization")
+				}
+				// The option holds op.mu; Close must finish without waiting for it.
+				closed := make(chan error, 1)
+				go func() { closed <- c.Close() }()
+				select {
+				case err := <-closed:
+					require.NoError(t, err)
+				case <-ctx.Done():
+					t.Fatal("Close waited for an unadmitted operator")
+				}
+				require.True(t, runtime.CompareAndDeleteServiceBasedRuntime(sid, rt))
+				unblock()
+				select {
+				case got := <-result:
+					created, err, joined = got.op, got.err, true
+				case <-ctx.Done():
+					t.Fatal("New did not finish after retirement")
+				}
+			} else {
+				// Exercise the exact post-metadata boundary without scheduler timing.
+				meta, metaErr := c.snapshotTxnMeta()
+				require.NoError(t, metaErr)
+				require.NoError(t, c.Close())
+				if state != "retained" {
+					require.True(t, runtime.CompareAndDeleteServiceBasedRuntime(sid, rt))
+				}
+				if state == "replaced" {
+					replacement := runtime.NewRuntime(metadata.ServiceType_CN, sid, logutil.GetPanicLogger())
+					runtime.SetupServiceBasedRuntime(sid, replacement)
+					t.Cleanup(func() { runtime.CompareAndDeleteServiceBasedRuntime(sid, replacement) })
+					require.Same(t, replacement, runtime.ServiceRuntime(sid))
+					require.NotSame(t, c.logger, replacement.Logger())
+				}
+				op = newTxnOperator(sid, c.logger, c.clock, c.sender, meta, c.getTxnOptions(nil)...)
+				created, err = c.doCreateTxn(ctx, op, timestamp.Timestamp{})
+			}
+			require.Same(t, c.logger, op.logger)
+			require.Nil(t, created)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed), err)
+			op.mu.RLock()
+			closed, status := op.mu.closed, op.mu.txn.Status
+			op.mu.RUnlock()
+			require.True(t, closed)
+			require.Equal(t, txn.TxnStatus_Aborted, status)
+			require.True(t, op.reset.runSQLTracker.sealed.Load())
+			require.Equal(t, uint32(txnTerminalCallSealed), op.terminalCall.Load())
+			users, active, waiting := txnAdmissionCounts(c)
+			require.Zero(t, users)
+			require.Zero(t, active)
+			require.Zero(t, waiting)
+			require.Empty(t, sender.getLastRequests())
+		})
+	}
 }

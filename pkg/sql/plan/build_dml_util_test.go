@@ -212,7 +212,7 @@ func TestGetSqlForAddFkStoresDefaultActionsAsNoAction(t *testing.T) {
 func TestGetSqlForUpdateFkReferencedIndexEscapesCatalogValues(t *testing.T) {
 	require.Equal(t,
 		"update `mo_catalog`.`mo_foreign_keys` set referenced_index_name = 'uk\\'parent' where db_name = 'child\\'db' and table_name = 'child\\\\table' and constraint_name = 'fk\\'child'",
-		getSqlForUpdateFkReferencedIndex("child'db", `child\table`, "fk'child", "uk'parent"),
+		GetSqlForUpdateFkReferencedIndex("child'db", `child\table`, "fk'child", "uk'parent"),
 	)
 }
 

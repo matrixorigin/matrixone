@@ -595,3 +595,23 @@ func makeMarkJoinTestColumn(relPos, colPos int32, notNullable bool) *plan.Expr {
 		},
 	}
 }
+
+func TestJoinKeysRejectMixedOperandAndRetainResidual(t *testing.T) {
+	mixed := makeMarkJoinTestCondition(t, "=", 0, true)
+	mixed.GetF().Args[0] = makeMarkJoinTestCondition(t, "=", 1, true)
+	residual, keys := extraJoinConditions([]*plan.Expr{mixed})
+	require.Same(t, mixed, residual)
+	require.Empty(t, keys)
+	require.False(t, plan2.IsEquiJoin2([]*plan.Expr{mixed}))
+	require.False(t, canUseHashMarkJoin(&plan.Node{JoinType: plan.Node_MARK, OnList: []*plan.Expr{mixed}}))
+
+	key := makeMarkJoinTestCondition(t, "=", 0, true)
+	key.GetF().Args[0], key.GetF().Args[1] = key.GetF().Args[1], key.GetF().Args[0]
+	residual, keys = extraJoinConditions([]*plan.Expr{key, mixed})
+	require.Same(t, mixed, residual)
+	require.Equal(t, []*plan.Expr{key}, keys)
+	left, right := constructJoinCondition(key, nil)
+	require.Equal(t, int32(0), left.GetCol().RelPos)
+	require.Equal(t, int32(1), right.GetCol().RelPos)
+	require.True(t, plan2.IsEquiJoin2([]*plan.Expr{key, mixed}))
+}

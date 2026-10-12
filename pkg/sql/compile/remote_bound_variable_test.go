@@ -112,7 +112,7 @@ func TestRemoteBoundStringVariableAdmissionOwners(t *testing.T) {
 		{DataSource: &pipeline.Source{RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{{Expr: variable}}}},
 		{DataSource: &pipeline.Source{Node: &plan.Node{BlockFilterList: []*plan.Expr{variable}}}},
 		{DataSource: &pipeline.Source{Node: &plan.Node{IndexReaderParam: &plan.IndexReaderParam{Limit: variable}}}},
-		{DataSource: &pipeline.Source{Node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{QueryVector: variable}}}},
+		{DataSource: &pipeline.Source{Node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{QueryPayload: variable}}}},
 		{DataSource: &pipeline.Source{TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Default: &plan.Default{Expr: variable}}}}}},
 		{DataSource: &pipeline.Source{Node: &plan.Node{TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Default: &plan.Default{Expr: variable}}}}}}},
 	} {

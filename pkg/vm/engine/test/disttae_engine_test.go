@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1163,7 +1164,7 @@ func TestApplyDeletesFromTombstoneObjects(t *testing.T) {
 	rel := p.CreateTableInDB(txnop, "db", schema2)
 	require.NoError(t, txnop.Commit(p.Ctx))
 
-	querySql := fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, 0, "db", "table2", rel.GetTableID(p.Ctx))
+	querySql := fmt.Sprintf(catalog.MoColumnsRowidsQueryFormat, 0, sqlquote.String("db"), sqlquote.String("table2"), rel.GetTableID(p.Ctx))
 
 	txn, _ := tae.StartTxn(nil)
 	udb, _ := txn.GetDatabaseByID(catalog.MO_CATALOG_ID)

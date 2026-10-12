@@ -1,0 +1,27 @@
+drop table if exists bookmark;
+create table bookmark (
+id int not null auto_increment,
+url text not null,
+title text not null,
+excerpt text not null default (''),
+content text not null default (''),
+primary key (id),
+fulltext (title, excerpt, content)
+);
+insert into bookmark (url, title, excerpt, content) values ('https://owned.invalid/example', 'test title', 'test excerpt', 'test content');
+select id from bookmark where match(title, excerpt, content) against('"' in boolean mode) order by id;
+➤ id[4,32,0]
+select id, title from bookmark
+where 1 and (
+url like '%"%' or
+id in (select id from bookmark where match(title, excerpt, content) against('"' in boolean mode))
+)
+order by id;
+➤ id[4,32,0]  ¦  title[-1,16383,0]
+select id from bookmark where match(title, excerpt, content) against('"test title"' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from bookmark where match(title, excerpt, content) against('title' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1
+drop table if exists bookmark;

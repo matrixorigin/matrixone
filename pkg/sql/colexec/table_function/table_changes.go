@@ -284,14 +284,14 @@ func validateTableChangesSchemaWindow(
 	current *plan.TableDef,
 	after, until types.TS,
 ) error {
-	untilDef, err := tableChangesTableDefAt(ctx, e, proc, databaseName, tableName, until)
+	untilDef, err := engine.TableDefAt(ctx, e, proc.GetTxnOperator(), databaseName, tableName, until)
 	if err != nil {
 		return err
 	}
 	if after.IsEmpty() {
 		return validateTableChangesSchemaIdentity(current, nil, untilDef, true)
 	}
-	afterDef, err := tableChangesTableDefAt(ctx, e, proc, databaseName, tableName, after)
+	afterDef, err := engine.TableDefAt(ctx, e, proc.GetTxnOperator(), databaseName, tableName, after)
 	if err != nil {
 		return err
 	}
@@ -302,8 +302,8 @@ func validateTableChangesSchemaIdentity(
 	current, after, until *plan.TableDef,
 	unboundedAfter bool,
 ) error {
-	if !sameTableChangesSchema(current, until) ||
-		(!unboundedAfter && !sameTableChangesSchema(current, after)) {
+	if !engine.SameTableSchema(current, until) ||
+		(!unboundedAfter && !engine.SameTableSchema(current, after)) {
 		return tableChangesSchemaWindowError()
 	}
 	// A zero-version table has not been altered since creation. For an
@@ -313,36 +313,6 @@ func validateTableChangesSchemaIdentity(
 		return tableChangesSchemaWindowError()
 	}
 	return nil
-}
-
-func tableChangesTableDefAt(
-	ctx context.Context,
-	e engine.Engine,
-	proc *process.Process,
-	databaseName, tableName string,
-	at types.TS,
-) (*plan.TableDef, error) {
-	snapshotOp := proc.GetTxnOperator().CloneSnapshotOp(at.ToTimestamp())
-	database, err := e.Database(ctx, databaseName, snapshotOp)
-	if err != nil {
-		if moerr.IsMoErrCode(err, moerr.ErrBadDB) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	relation, err := database.Relation(ctx, tableName, nil)
-	if err != nil {
-		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return relation.CopyTableDef(ctx), nil
-}
-
-func sameTableChangesSchema(left, right *plan.TableDef) bool {
-	return left != nil && right != nil &&
-		left.TblId == right.TblId && left.Version == right.Version
 }
 
 func tableChangesSchemaWindowError() error {

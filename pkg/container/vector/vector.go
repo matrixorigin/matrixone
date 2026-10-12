@@ -3833,11 +3833,9 @@ func (v *Vector) GetRawBytesAt(i int) []byte {
 }
 
 func (v *Vector) CleanOnlyData() {
-	hadData := v.data != nil
 	v.releaseBorrowedBacking()
-	if hadData {
-		v.length = 0
-	}
+	// Constant NULLs have logical rows without a payload allocation.
+	v.length = 0
 	if v.area != nil {
 		v.area = v.area[:0]
 	}

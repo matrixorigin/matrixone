@@ -90,27 +90,27 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		}
 		before := describe("desc view_description_test.v")
 		require.Len(t, before, 2)
-		require.Equal(t, "VARCHAR(5)", before[0][1].String)
+		require.Equal(t, "varchar(5)", before[0][1].String)
 		exec("alter table view_description_test.src modify column x varchar(60)")
 		exec("alter table view_description_test.src modify column qty bigint not null default 9")
 		after := describe("desc view_description_test.v")
 		require.Len(t, after, 2)
-		require.Equal(t, "VARCHAR(60)", after[0][1].String)
+		require.Equal(t, "varchar(60)", after[0][1].String)
 		require.Equal(t, "9", after[1][4].String)
 		require.Equal(t, "NO", after[1][2].String)
 		filtered := describe("show columns from view_description_test.v like 'label'")
 		require.Len(t, filtered, 1)
-		require.Equal(t, "VARCHAR(60)", filtered[0][1].String)
+		require.Equal(t, "varchar(60)", filtered[0][1].String)
 		filtered = describe("show columns from view_description_test.v where Field = 'qty'")
 		require.Len(t, filtered, 1)
 		require.Equal(t, "9", filtered[0][4].String)
 		full := describe("show full columns from view_description_test.v")
 		require.Len(t, full, 2)
-		require.Equal(t, "VARCHAR(60)", full[0][1].String)
+		require.Equal(t, "varchar(60)", full[0][1].String)
 		require.Equal(t, "9", full[1][5].String)
 		var stored string
 		require.NoError(t, db.QueryRowContext(ctx, "select mo_show_visible_bin(atttyp,3) from mo_catalog.mo_columns where att_database='view_description_test' and att_relname='v' and attname='label'").Scan(&stored))
-		require.Equal(t, "VARCHAR(5)", stored)
+		require.Equal(t, "varchar(5)", stored)
 		// A prepared SHOW must not retain the VALUES rows produced by its first bind.
 		showConn, err := db.Conn(ctx)
 		require.NoError(t, err)
@@ -137,7 +137,7 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 				require.Equal(t, want, got)
 				return firstType
 			}
-			require.Equal(t, "VARCHAR(60)", checkShow("label", "qty"))
+			require.Equal(t, "varchar(60)", checkShow("label", "qty"))
 			writer, err := db.Conn(ctx)
 			require.NoError(t, err)
 			defer writer.Close()
@@ -165,11 +165,11 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 				require.False(t, rows.Next())
 				require.NoError(t, rows.Err())
 			}
-			checkNested("VARCHAR(60)")
+			checkNested("varchar(60)")
 			_, err = writer.ExecContext(ctx, "alter table src modify column x varchar(70)")
 			require.NoError(t, err)
-			require.Equal(t, "VARCHAR(70)", checkShow("label", "qty"))
-			checkNested("VARCHAR(70)")
+			require.Equal(t, "varchar(70)", checkShow("label", "qty"))
+			checkNested("varchar(70)")
 			_, err = writer.ExecContext(ctx, "drop table src")
 			require.NoError(t, err)
 			func() {
@@ -182,7 +182,7 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 			}()
 			_, err = writer.ExecContext(ctx, "create table src (x varchar(60), qty bigint not null default 9)")
 			require.NoError(t, err)
-			require.Equal(t, "VARCHAR(60)", checkShow("label", "qty"))
+			require.Equal(t, "varchar(60)", checkShow("label", "qty"))
 		}()
 		exec("create table view_description_test.unrelated_source (x int)")
 		exec("create view view_description_test.unrelated_view as select x from view_description_test.unrelated_source")
@@ -235,7 +235,7 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		exec("create table view_description_test.src (x varchar(90), qty bigint not null default 11)")
 		repaired := describe("desc view_description_test.v")
 		require.Len(t, repaired, 2)
-		require.Equal(t, "VARCHAR(90)", repaired[0][1].String)
+		require.Equal(t, "varchar(90)", repaired[0][1].String)
 		require.Equal(t, "11", repaired[1][4].String)
 		require.NoError(t, db.QueryRowContext(ctx, "select character_maximum_length from information_schema.columns where table_schema='view_description_test' and table_name='v' and column_name='label'").Scan(&width))
 		require.Equal(t, 90, width)
@@ -342,7 +342,7 @@ func testShowColumnsTargetReplacement(t *testing.T, ctx context.Context, db *sql
 			}()
 		}
 	}
-	check("VARCHAR(5)")
+	check("varchar(5)")
 	exec("drop table view_description_test.show_target")
 	exec("create view view_description_test.show_target as select x from view_description_test.show_source")
 	exec("alter table view_description_test.show_source modify column x varchar(60)")
@@ -351,12 +351,12 @@ func testShowColumnsTargetReplacement(t *testing.T, ctx context.Context, db *sql
 		"select character_maximum_length from information_schema.columns "+
 			"where table_schema='view_description_test' and table_name='show_target'").Scan(&width))
 	require.Equal(t, 60, width, "execution-time metadata is the independent control")
-	check("VARCHAR(60)")
+	check("varchar(60)")
 	// A rebuilt View plan must also notice replacement by an ordinary table.
 	exec("drop view view_description_test.show_target")
 	exec("create table view_description_test.show_target (x bigint)")
 	exec("drop table view_description_test.show_source")
-	check("BIGINT(64)")
+	check("bigint")
 	exec("drop table view_description_test.show_target")
 	rows, err := prepared.QueryContext(ctx)
 	if rows != nil {
@@ -424,7 +424,7 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 		require.NoError(t, err)
 		_, err = definition.ExecContext(ctx, "create view v as select f_answer() as answer")
 		require.NoError(t, err)
-		expectedType := "BIGINT"
+		expectedType := "bigint"
 		checkShow := func(query string) {
 			t.Helper()
 			rows, queryErr := definition.QueryContext(ctx, query)
@@ -441,7 +441,7 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 			}
 			require.NoError(t, rows.Scan(targets...))
 			require.Equal(t, "answer", values[0].String)
-			require.Equal(t, expectedType, strings.ToUpper(values[1].String))
+			require.Equal(t, expectedType, values[1].String)
 			require.False(t, rows.Next())
 			require.NoError(t, rows.Err())
 		}
@@ -478,7 +478,7 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 			require.NoError(t, prepared.QueryRowContext(ctx).Scan(
 				&field, &typ, &nullable, &key, &defaultValue, &extra, &comment))
 			require.Equal(t, "answer", field.String)
-			require.Equal(t, expectedType, strings.ToUpper(typ.String))
+			require.Equal(t, expectedType, typ.String)
 		}
 		checkShow("desc view_description_udf.v")
 		checkPrepared()
@@ -503,7 +503,7 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 		require.NoError(t, err)
 		_, err = definition.ExecContext(ctx, "use mo_catalog")
 		require.NoError(t, err)
-		expectedType = "VARCHAR(9)"
+		expectedType = "varchar(9)"
 		checkShow("show full columns from view_description_udf.v")
 		checkShow("execute view_udf_columns")
 		checkPrepared()
@@ -521,7 +521,7 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 					result.ReadRows(func(n int, cols []*vector.Vector) bool {
 						require.Equal(t, 1, n)
 						require.Equal(t, "answer", executor.GetStringRows(cols[0])[0])
-						require.Equal(t, expectedType, strings.ToUpper(executor.GetStringRows(cols[1])[0]))
+						require.Equal(t, expectedType, executor.GetStringRows(cols[1])[0])
 						found = true
 						return true
 					})
@@ -851,7 +851,7 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		require.NoError(t, subscriber.QueryRowContext(ctx, "desc subscribed.v").Scan(
 			&field, &typ, &nullable, &key, &defaultValue, &extra, &comment))
 		require.Equal(t, "x", field.String)
-		require.Equal(t, "VARCHAR(60)", typ.String)
+		require.Equal(t, "varchar(60)", typ.String)
 		showStmt, err := subscriber.PrepareContext(ctx, "show columns from subscribed.v")
 		require.NoError(t, err)
 		defer showStmt.Close()
@@ -866,8 +866,8 @@ func TestViewDescriptionSubscription(t *testing.T) {
 			require.False(t, rows.Next())
 			require.NoError(t, rows.Err())
 		}
-		checkSubscribedShow("VARCHAR(60)")
-		checkSubscribedShow("VARCHAR(60)")
+		checkSubscribedShow("varchar(60)")
+		checkSubscribedShow("varchar(60)")
 		// System View columns remain sourced from the catalog, not regenerated
 		// from the internal SQL used to populate the View.
 		rows, err := subscriber.QueryContext(ctx, "desc mo_catalog.mo_variables")
@@ -895,7 +895,7 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		defer cleanup(subscriber, "drop snapshot view_description_sub_same_name")
 		exec("alter table view_description_pub.src modify column x varchar(90)")
 		checkHistoricalView("view_description_sub_same_name", 60)
-		checkSubscribedShow("VARCHAR(90)")
+		checkSubscribedShow("varchar(90)")
 		require.NoError(t, prepared.QueryRowContext(ctx).Scan(&width))
 		require.Equal(t, 90, width)
 		// Batch metadata scans omit invalid Views, but retain a diagnostic for

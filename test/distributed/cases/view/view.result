@@ -9,8 +9,8 @@ insert into t1 values (1, 11), (2, 22), (3, 33);
 insert into t2 values (1, "aa"), (2, "bb");
 show columns from v1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from v1 where a > 1;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
 2  ¦  22  𝄀
@@ -92,7 +92,7 @@ insert into t1 values(1, 'aaaa'),(2, 'bbbbbb'),(3, 'cccccccc');
 create view v1 as select (case when a>1 then 'NO' else 'YES' end) as IS_NULLABLE from t1;
 desc v1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-is_nullable  ¦  VARCHAR(3)  ¦  NO  ¦    ¦  null  ¦    ¦  
+is_nullable  ¦  varchar(3)  ¦  NO  ¦    ¦  null  ¦    ¦  
 drop view v1;
 drop database if exists test;
 create database test;
@@ -108,9 +108,9 @@ create table t2(a int not null, b varchar(20), c char(20));
 create view v2 as select * from t2;
 desc v2;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  CHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  varchar(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  char(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop database test;
 drop database if exists test;
 create database test;
@@ -123,8 +123,8 @@ drop view if exists v1;
 create view v1 as select a.project_id as project_id, b.project_name as project_name from t1 a left join t2 b on a.project_id = b.project_id;
 desc v1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-project_id  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-project_name  ¦  VARCHAR(255)  ¦  YES  ¦    ¦  null  ¦    ¦  
+project_id  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+project_name  ¦  varchar(255)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop table t1;
 drop table t2;
 drop view v1;

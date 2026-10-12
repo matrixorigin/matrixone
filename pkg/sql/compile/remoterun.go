@@ -191,9 +191,6 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err = validateRemoteAutoIDCachePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
-	if err = validateFulltext2ProbeTailDestination(proc, p); err != nil {
-		return nil, err
-	}
 	return p.Marshal()
 }
 
@@ -1026,16 +1023,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *table_function.TableFunction:
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:                  t.Attrs,
-			Rets:                   t.Rets,
-			Args:                   t.Args,
-			Params:                 t.Params,
-			Name:                   t.FuncName,
-			IsSingle:               t.IsSingle,
-			IndexReaderParam:       t.IndexReaderParam,
-			RuntimeFilterProbeList: t.RuntimeFilterSpecs,
-			FulltextSourceRef:      t.FulltextSourceRef,
-			FulltextIndexRef:       t.FulltextIndexRef,
+			Attrs:    t.Attrs,
+			Rets:     t.Rets,
+			Args:     t.Args,
+			Params:   t.Params,
+			Name:     t.FuncName,
+			IsSingle: t.IsSingle,
 		}
 		in.Limit = t.Limit
 
@@ -1205,22 +1198,18 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RelList:         relList,
 			ColList:         colList,
 			Types:           convertToPlanTypes(t.Typs),
-			VectorIndexScan: t.VectorIndexScan,
+			IndexSearchScan: t.IndexSearchScan,
 			VectorAttrs:     t.VectorAttrs,
 			TxnOffset:       int64(t.TxnOffset),
 		}
 		if t.TableFunction != nil {
 			in.TableFunction = &pipeline.TableFunction{
-				Attrs:                  t.TableFunction.Attrs,
-				Rets:                   t.TableFunction.Rets,
-				Args:                   t.TableFunction.Args,
-				Params:                 t.TableFunction.Params,
-				Name:                   t.TableFunction.FuncName,
-				IsSingle:               t.TableFunction.IsSingle,
-				IndexReaderParam:       t.TableFunction.IndexReaderParam,
-				RuntimeFilterProbeList: t.TableFunction.RuntimeFilterSpecs,
-				FulltextSourceRef:      t.TableFunction.FulltextSourceRef,
-				FulltextIndexRef:       t.TableFunction.FulltextIndexRef,
+				Attrs:    t.TableFunction.Attrs,
+				Rets:     t.TableFunction.Rets,
+				Args:     t.TableFunction.Args,
+				Params:   t.TableFunction.Params,
+				Name:     t.TableFunction.FuncName,
+				IsSingle: t.TableFunction.IsSingle,
 			}
 		}
 	case *multi_update.MultiUpdate, *multi_update.PartitionMultiUpdate:
@@ -1715,10 +1704,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
 		arg.IsSingle = opr.TableFunction.IsSingle
-		arg.IndexReaderParam = opr.TableFunction.IndexReaderParam
-		arg.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
-		arg.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
-		arg.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
 		arg.Limit = opr.Limit
 		op = arg
 	case vm.External:
@@ -1880,7 +1865,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ApplyType = int(t.ApplyType)
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
-		arg.VectorIndexScan = t.VectorIndexScan
+		arg.IndexSearchScan = t.IndexSearchScan
 		arg.VectorAttrs = t.VectorAttrs
 		arg.TxnOffset = int(t.TxnOffset)
 		if opr.TableFunction != nil {
@@ -1891,10 +1876,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			arg.TableFunction.FuncName = opr.TableFunction.Name
 			arg.TableFunction.Params = opr.TableFunction.Params
 			arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
-			arg.TableFunction.IndexReaderParam = opr.TableFunction.IndexReaderParam
-			arg.TableFunction.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
-			arg.TableFunction.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
-			arg.TableFunction.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
 		}
 		op = arg
 	case vm.MultiUpdate:
@@ -2216,7 +2197,7 @@ func validateRemotePartitionFulltextRouteProtocol(
 	}
 	if proc == nil || !supportsRemotePartitionFulltextRoute(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"partitioned FULLTEXT routing requires MORPC protocol version 110",
+			"partitioned FULLTEXT routing requires MORPC protocol version 112",
 		)
 	}
 	return nil
@@ -2303,6 +2284,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	}
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
+	}
+	if features.MediumIntAssignmentBounds && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion110) {
+		return moerr.NewNotSupportedNoCtx("MEDIUMINT assignment bounds require MORPC protocol version 110")
 	}
 	if features.SpecialIntegerConsumers && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
 		return moerr.NewNotSupportedNoCtx("special integer consumers require MORPC protocol version 98")

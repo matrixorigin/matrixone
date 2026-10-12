@@ -21,7 +21,7 @@ insert into articles values
     (3, 'Transaction Guide', 'database transaction engine', 1),
     (4, 'Mixed Guide', 'database vector integration', 2);
 
--- @regex("Table Function on fulltext_index_scan",true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from articles
 where id in (
     select id from articles

@@ -316,6 +316,7 @@ func TestPartitionedFulltextMaintenanceUsesIndexOnlyMultiUpdate(t *testing.T) {
 	require.Equal(t, 1, preInsertWithRoute,
 		"routed FULLTEXT maintenance must preserve one complete input layout through PRE_INSERT")
 
+	var fulltextApplyWithRoute int
 	for _, node := range query.Nodes {
 		if node == nil || node.NodeType != planpb.Node_APPLY || len(node.ProjectList) == 0 {
 			continue
@@ -328,7 +329,7 @@ func TestPartitionedFulltextMaintenanceUsesIndexOnlyMultiUpdate(t *testing.T) {
 			child := query.Nodes[childID]
 			if child != nil && child.NodeType == planpb.Node_FUNCTION_SCAN &&
 				child.TableDef != nil && child.TableDef.TblFunc != nil &&
-				child.TableDef.TblFunc.Name == fulltext_index_tokenize_func_name {
+				child.TableDef.TblFunc.Name == fulltextplan.TokenizeFuncName {
 				isFulltextApply = true
 				break
 			}
@@ -336,11 +337,13 @@ func TestPartitionedFulltextMaintenanceUsesIndexOnlyMultiUpdate(t *testing.T) {
 		if !isFulltextApply {
 			continue
 		}
+		fulltextApplyWithRoute++
 		route := node.ProjectList[len(node.ProjectList)-1].GetCol()
 		require.NotNil(t, route, "partition route must remain a column projection")
 		require.Equal(t, int32(0), route.RelPos,
 			"APPLY result projections read the left input through relation 0")
 	}
+	require.Equal(t, 1, fulltextApplyWithRoute, "the actual FULLTEXT APPLY route projection must be inspected")
 }
 
 func TestPartitionedFulltextMaintenanceRebuildsWhenPartitionColumnChanges(t *testing.T) {

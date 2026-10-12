@@ -58,6 +58,11 @@ var kAlwaysFalseExpr = &plan.Expr{
 }
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
+	leaveBinding, bindErr := enterViewSchemaBinding(b.GetContext())
+	if bindErr != nil {
+		return nil, bindErr
+	}
+	defer leaveBinding()
 	if b.numericParamType != nil && !b.isNumericContextNode(astExpr, depth) {
 		paramType := b.numericParamType
 		b.numericParamType = nil
@@ -160,6 +165,14 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindFuncExprImplByAstExpr("serial_extract", []tree.Expr{astExpr}, depth)
 
 	case *tree.CastExpr:
+		if typ, ok := exprImpl.Type.(*tree.T); ok &&
+			defines.MysqlType(typ.InternalType.Oid) == defines.MYSQL_TYPE_INT24 {
+			// MySQL accepts MEDIUMINT in DDL but does not accept it as a CAST
+			// target. Keep that syntax boundary separate from internal assignment
+			// casts, which enforce the target column's 24-bit domain.
+			err = moerr.NewNYI(b.GetContext(), "CAST to MEDIUMINT is not supported")
+			return
+		}
 		var typ Type
 		typ, err = getTypeFromAst(b.GetContext(), exprImpl.Type)
 		if err != nil {
@@ -648,19 +661,8 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			err = moerr.NewBadFieldErrorf(localErrCtx, "invalid input: column %s does not exist", name)
 		}
 	} else {
-		var binding *Binding
-		var ok bool
-		// try resolve table in current context
-		if binding, ok = b.ctx.bindingByTable[table]; !ok {
-			// if remap option exists, try with db-qualified name
-			if b.ctx.remapOption != nil {
-				if len(db) == 0 {
-					db = b.builder.compCtx.DefaultDatabase()
-				}
-				binding, ok = b.ctx.bindingByTable[db+"."+table]
-			}
-		}
-		if ok {
+		binding := b.resolveTableBinding(b.ctx, db, table)
+		if binding != nil {
 			colPos = binding.FindColumn(col)
 			if colPos == AmbiguousName {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
@@ -676,7 +678,8 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		}
 	}
 
-	if groupPos, ok := b.correlatedGroupByColPos(depth, name, table, col); ok {
+	// A grouped spelling cannot override a failed explicit namespace lookup.
+	if groupPos, ok := b.correlatedGroupByColPos(depth, name, table, col); ok && (db == "" || colPos != NotFound) {
 		expr = &plan.Expr{
 			Typ: b.ctx.groupOutputType(groupPos),
 			Expr: &plan.Expr_Corr{
@@ -2402,19 +2405,22 @@ func (b *baseBinder) numericColumnTypeInContext(
 		return Type{}, false, false
 	}
 
-	binding, ok := ctx.bindingByTable[table]
-	if !ok && ctx.remapOption != nil {
-		db := astExpr.DbName()
-		if db == "" && b.builder != nil {
-			db = b.builder.compCtx.DefaultDatabase()
-		}
-		binding, ok = ctx.bindingByTable[db+"."+table]
-	}
-	if !ok {
+	binding := b.resolveTableBinding(ctx, astExpr.DbName(), table)
+	if binding == nil {
 		return Type{}, false, false
 	}
 	typ, found = bindingColumnType(binding, col)
 	return typ, found, false
+}
+
+// resolveTableBinding preserves the lazy default-database lookup for rewritten
+// tables. Qualified namespace matching belongs to BindContext.
+func (b *baseBinder) resolveTableBinding(ctx *BindContext, db, table string) *Binding {
+	binding := ctx.resolveTableBinding(db, table)
+	if binding == nil && db == "" && ctx.remapOption != nil && b.builder != nil {
+		binding = ctx.resolveTableBinding(b.builder.compCtx.DefaultDatabase(), table)
+	}
+	return binding
 }
 
 func bindingColumnType(binding *Binding, col string) (Type, bool) {
@@ -8069,8 +8075,11 @@ func bindFuncExprImplByPlanExpr(
 	case "lead", "lag":
 		// For lead/lag window functions, cast the default value (3rd arg)
 		// to match the value type (1st arg).
-		if len(args) >= 3 && !argsType[2].Eq(argsType[0]) {
-			argsCastType = []types.Type{argsType[0], argsType[1], argsType[0]}
+		if len(args) >= 3 && !argsType[2].Eq(returnType) {
+			if len(argsCastType) == 0 {
+				argsCastType = append([]types.Type(nil), argsType...)
+			}
+			argsCastType[2] = returnType
 		}
 	}
 
@@ -8148,6 +8157,12 @@ func bindFuncExprImplByPlanExpr(
 
 	// return new expr
 	Typ := makePlan2Type(&returnType)
+	if name == "serial_extract" && returnType.Oid == types.T_enum {
+		// The runtime type omits ENUM members. Preserve the declared result
+		// domain so assignment restores the stored ordinal without converting
+		// it through a different (or empty) domain.
+		Typ.Enumvalues = args[2].Typ.Enumvalues
+	}
 	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
 	if returnType.Oid == types.T_varchar || returnType.Oid == types.T_text {
 		for _, idx := range padSpaceValueArgumentIndexes(name, len(args)) {

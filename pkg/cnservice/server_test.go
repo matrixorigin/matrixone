@@ -32,6 +32,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1563,4 +1564,20 @@ func TestNewServiceFailureRetiresPublishedEngine(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestCNServiceDetectorShutdownUsesOwnedRuntime(t *testing.T) {
+	sid := t.Name()
+	oldRT := moruntime.NewRuntime(metadata.ServiceType_CN, sid, zap.NewNop())
+	nextRT := moruntime.NewRuntime(metadata.ServiceType_CN, sid, zap.NewNop())
+	old := cdc.InitTableDetector(oldRT, nil)
+	next := cdc.InitTableDetector(nextRT, nil)
+	defer next.Close()
+	moruntime.SetupServiceBasedRuntime(sid, nextRT)
+	t.Cleanup(func() { moruntime.CompareAndDeleteServiceBasedRuntime(sid, nextRT) })
+	s := &service{rt: oldRT}
+	require.NoError(t, s.stopTableDetector())
+	require.NoError(t, s.closeTableDetector())
+	require.ErrorIs(t, old.Context().Err(), context.Canceled)
+	require.NoError(t, next.Context().Err())
 }
