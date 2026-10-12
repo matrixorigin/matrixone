@@ -104,7 +104,7 @@ type SqlProcess struct {
 	// Used to drive additional filtering in internal SQL executor (e.g. ivf entries scan).
 	IndexReaderParam *plan.IndexReaderParam
 
-	// RelationScanner is installed by VECTOR_INDEX_SCAN. Query-time index
+	// RelationScanner is installed by INDEX_SEARCH_SCAN. Query-time index
 	// reads use it instead of generating SQL and invoking a nested planner.
 	RelationScanner RelationScanExecutor
 
