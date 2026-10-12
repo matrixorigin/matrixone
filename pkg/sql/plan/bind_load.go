@@ -171,8 +171,8 @@ func (builder *QueryBuilder) bindExternalScan(
 		insertColToExpr[target] = expr
 	}
 
-	// External scans expose target-typed columns. For BLOB/TEXT, equal type
-	// metadata does not prove that the runtime payload fits the target family.
+	// External scans expose target-typed columns. Equal type metadata does not
+	// prove that BLOB/TEXT payloads or internal TIME values fit the target domain.
 	if err = builder.applyLoadAssignmentCasts(tableDef, insertColToExpr, assignmentIgnore); err != nil {
 		return -1, nil, err
 	}
@@ -274,7 +274,8 @@ func (builder *QueryBuilder) applyLoadAssignmentCasts(
 ) error {
 	for _, col := range tableDef.Cols {
 		expr, ok := insertColToExpr[col.Name]
-		if !ok || (col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) && !isMediumIntPlanType(col.Typ)) {
+		if !ok || (col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) &&
+			col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ)) {
 			continue
 		}
 		casted, err := builder.forceAssignmentCastExpr(expr, col.Typ, assignmentIgnore)

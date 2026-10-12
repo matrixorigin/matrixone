@@ -391,6 +391,7 @@ func (h *ParquetHandler) findColumnIgnoreCase(ctx context.Context, name string) 
 }
 
 func (h *ParquetHandler) prepare(param *ExternalParam) error {
+	h.timeAssignment = param.Extern != nil && param.Extern.ExternType == int32(plan.ExternType_LOAD)
 	if h.rowGroup == nil && h.file != nil {
 		if len(h.rowGroups) == 0 {
 			h.rowGroups = h.file.RowGroups()
@@ -954,7 +955,7 @@ func makeMediumIntMapper(st parquet.Type, unsigned bool) func(*columnMapper, par
 	}
 }
 
-func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper {
+func (h *ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper {
 	if sc == nil || sc.Type() == nil {
 		return nil
 	}
@@ -1850,10 +1851,19 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
 			// Support STRING to TIME conversion
 			scale := dt.Scale
+			assignment := h.timeAssignment
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				truncateFractional := false
+				if assignment {
+					var err error
+					truncateFractional, err = process.ResolveTimeTruncateFractional(proc)
+					if err != nil {
+						return err
+					}
+				}
 				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (types.Time, error) {
-						timeVal, err := types.ParseTime(util.UnsafeBytesToString(data), scale)
+						timeVal, err := parseExternalTime(util.UnsafeBytesToString(data), scale, truncateFractional)
 						if err != nil {
 							return 0, err
 						}
@@ -1880,6 +1890,11 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 			if lt.Timestamp != nil {
 				scale := dt.Scale
+				if h.timeAssignment {
+					// Preserve microseconds until assignment resolves rounding versus
+					// TIME_TRUNCATE_FRACTIONAL at the target precision.
+					scale = 6
+				}
 				mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 					loc := parquetSessionLocation(proc)
 					return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Time(0), func(v parquet.Value) (types.Time, error) {
