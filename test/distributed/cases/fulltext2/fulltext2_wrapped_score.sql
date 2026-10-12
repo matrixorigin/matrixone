@@ -34,7 +34,7 @@ select id, round(match(body) against('hello') + 1, 3) as r from docs where match
 select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello') order by r desc;
 
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello');
 
 -- ---------------- wrapped in a FILTER above a view ----------------------------
@@ -55,7 +55,7 @@ select id from v where sc > 0.037 and id > 1 order by id;
 select id from v where round(cast(sc as double) * 2, 3) > 0.074 order by id;
 
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from v where round(sc, 4) > 0;
 
 -- ---------------- DISCRIMINATING thresholds ------------------------------------
@@ -129,7 +129,7 @@ select count(*) as n from two where match(body) against('hello') > 0.0132;   -- 
 select count(*) as n from two where match(body) against('hello') > 0.9;
 
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from two where match(body) against('hello') > 0.0132;
 
 -- a MATCH no INDEX can serve is still left alone and still raises 20105
@@ -160,7 +160,7 @@ select id from two where match(body) against('hello') and (match(body) against('
 
 -- the index must still be used
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from two where match(body) against('hello') and match(body) against('hello') > 0.0125;
 
 -- ---------------- wrapped MATCH on the COVERED fast path -------------------------
@@ -180,7 +180,7 @@ select body, tag, round(match(body) against('hello'),3) as r from covpk where ma
 
 -- and it must still be the covered plan, not a fallback to the JOIN
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select body, tag, round(match(body) against('hello'),3) as r from covpk where match(body) against('hello');
 
 -- ---------------- lifted predicate vs the candidate LIMIT ------------------------

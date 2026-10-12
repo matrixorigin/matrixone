@@ -870,11 +870,22 @@ const (
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	UUID_SHORT = 587
 
-	FUNCTION_END_NUMBER = 591
+	TANH  = 591
+	COSH  = 592
+	ASINH = 593
+	ACOSH = 594
+	ATANH = 595
+
+	FORMAT_BYTES     = 596
+	FORMAT_PICO_TIME = 597
+
+	FUNCTION_END_NUMBER = 598
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"format_bytes":            FORMAT_BYTES,
+	"format_pico_time":        FORMAT_PICO_TIME,
 	"to_interval_microsecond": TO_INTERVAL_MICROSECOND,
 	"extractvalue":            EXTRACTVALUE,
 	"updatexml":               UPDATEXML,
@@ -1103,6 +1114,11 @@ var functionIdRegister = map[string]int32{
 	"sign":                           SIGN,
 	"sin":                            SIN,
 	"sinh":                           SINH,
+	"tanh":                           TANH,
+	"cosh":                           COSH,
+	"asinh":                          ASINH,
+	"acosh":                          ACOSH,
+	"atanh":                          ATANH,
 	"space":                          SPACE,
 	"tan":                            TAN,
 	"week":                           WEEK,

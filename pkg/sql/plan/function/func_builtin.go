@@ -767,6 +767,12 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 		}
 
 		members := strings.Split(enumStr, ",")
+		if typ.Oid == types.T_uint64 {
+			if enumStr == "" {
+				return nil, nil
+			}
+			members = types.DecodeSetValues(enumStr)
+		}
 		for i := range members {
 			members[i] = sqlquote.String(members[i])
 		}
@@ -778,7 +784,7 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
 		enumStr, null2 := enumVal.GetStrValue(i)
-		if null1 || null2 || len(v1) == 0 || len(enumStr) == 0 {
+		if null1 || null2 || len(v1) == 0 {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -4647,6 +4653,47 @@ func builtInSinh(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}
 	}
 	return nil
+}
+
+func builtInTanh(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[float64, float64](parameters, result, proc, length, math.Tanh, selectList)
+}
+
+func builtInCosh(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithErrorCheck[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		r := math.Cosh(v)
+		if math.IsInf(r, 0) && !math.IsInf(v, 0) {
+			// 标准库的 Exp(abs(v))/2 可能提前溢出；先缩放再相乘，保留可表示的 COSH 结果。
+			e := math.Exp(math.Abs(v) / 2)
+			r = (e / 2) * e
+		}
+		if math.IsInf(r, 0) {
+			return 0, moerr.NewOutOfRangeNoCtxf("float64", "DOUBLE value is out of range in 'cosh(%v)'", v)
+		}
+		return r, nil
+	}, selectList)
+}
+
+func builtInASinh(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[float64, float64](parameters, result, proc, length, math.Asinh, selectList)
+}
+
+func builtInACosh(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithNullCheck[float64, float64](parameters, result, length, func(v float64) (float64, bool) {
+		if v < 1 {
+			return 0, true
+		}
+		return math.Acosh(v), false
+	}, selectList)
+}
+
+func builtInATanh(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithNullCheck[float64, float64](parameters, result, length, func(v float64) (float64, bool) {
+		if v <= -1 || v >= 1 {
+			return 0, true
+		}
+		return math.Atanh(v), false
+	}, selectList)
 }
 
 func builtInCos(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

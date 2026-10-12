@@ -1490,6 +1490,8 @@ func Test_BuiltIn_MoShowVisibleBinIntegerMetadata(t *testing.T) {
 		{name: "smallint unsigned", typ: types.New(types.T_uint16, 0, 0), want: "smallint unsigned"},
 		{name: "int", typ: types.New(types.T_int32, 0, 0), want: "int"},
 		{name: "int unsigned", typ: types.New(types.T_uint32, 0, 0), want: "int unsigned"},
+		{name: "mediumint", typ: types.New(types.T_int32, 24, -1), want: "mediumint"},
+		{name: "mediumint unsigned", typ: types.New(types.T_uint32, 24, -1), want: "mediumint unsigned"},
 		{name: "bigint", typ: types.New(types.T_int64, 0, 0), want: "bigint"},
 		{name: "bigint unsigned", typ: types.New(types.T_uint64, 0, 0), want: "bigint unsigned"},
 		{name: "int with physical width", typ: types.New(types.T_int32, 32, 0), want: "int"},
@@ -4254,4 +4256,27 @@ func Test_BuiltIn_MoShowVisibleBinInvalidInput(t *testing.T) {
 			require.Zero(t, testCase.result.GetResultVector().Length())
 		})
 	}
+}
+
+func TestEmptyDomainVisibleMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct {
+		oid          types.T
+		domain, want string
+		wantNull     bool
+	}{
+		{types.T_enum, "", "enum('')", false}, {types.T_uint64, ",", "set('')", false}, {types.T_uint64, "", "", true},
+	} {
+		encoded, err := types.Encode(&types.Type{Oid: tc.oid})
+		require.NoError(t, err)
+		tcc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{string(encoded)}, nil), NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.domain}, nil)}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{tc.wantNull}), builtInMoShowVisibleBinEnum)
+		ok, info := tcc.RunAndFree()
+		require.True(t, ok, info)
+	}
+	encoded, err := types.Encode(&types.Type{Oid: types.T_enum})
+	require.NoError(t, err)
+	tcc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{string(encoded)}, nil), NewFunctionTestInput(types.T_uint8.ToType(), []uint8{typWithLen}, nil)}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"enum('')"}, nil), builtInMoShowVisibleBin)
+	ok, info := tcc.RunAndFree()
+	require.True(t, ok, info)
 }
