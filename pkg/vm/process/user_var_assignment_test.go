@@ -1,6 +1,7 @@
 package process
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -49,5 +50,53 @@ func TestUserVariableAssignmentOverlayCanBeDiscarded(t *testing.T) {
 	proc.StageUserVariableAssignment(UserVariableAssignment{Name: "a", Value: int64(1)}, 0)
 	proc.DiscardUserVariableAssignments()
 	_, ok := proc.ResolveUserVariableAssignment("a", 0)
+	require.False(t, ok)
+}
+
+func TestUserVariableAssignmentOverlayEdgeCases(t *testing.T) {
+	proc := &Process{Base: &BaseProcess{}}
+	require.Equal(t, -1, proc.GetUserVariableAssignmentCurrentRow())
+
+	// Negative batch sizes are normalized, and a nested invocation grows its
+	// row history when the child advertises a larger effective batch.
+	proc.BeginUserVariableAssignment("a", -1)
+	proc.BeginUserVariableAssignment("b", 1)
+	proc.SetUserVariableAssignmentCurrentRow(0)
+	proc.BeginUserVariableAssignment("b", 2)
+	proc.StageUserVariableAssignment(UserVariableAssignment{Name: "b", Value: int64(1)}, 0)
+	proc.StageUserVariableAssignment(UserVariableAssignment{Name: "b", Value: int64(2)}, 1)
+	proc.SetUserVariableAssignmentCurrentRow(-1)
+	rows, valid, ok := proc.GetUserVariableAssignmentRows("b", 2)
+	require.True(t, ok)
+	require.Len(t, rows, 2)
+	require.Equal(t, []bool{true, true}, valid)
+
+	// Stage and snapshot also initialize their maps when called on a fresh
+	// process, which is useful for callers that do not have an executor yet.
+	staged := &Process{Base: &BaseProcess{}}
+	staged.StageUserVariableAssignment(UserVariableAssignment{Name: "x", Value: int64(1)}, -1)
+	snapshot := &Process{Base: &BaseProcess{}}
+	snapshot.SnapshotUserVariableAssignmentRow(UserVariableAssignment{Name: "x", Value: int64(1)}, -1)
+
+	// A partially populated row history is not exposed as a complete vector.
+	partial := &Process{Base: &BaseProcess{}}
+	partial.BeginUserVariableAssignment("x", 2)
+	partial.StageUserVariableAssignment(UserVariableAssignment{Name: "x", Value: int64(1)}, 0)
+	_, _, ok = partial.GetUserVariableAssignmentRows("x", 2)
+	require.False(t, ok)
+
+	// Commit order is deterministic, and publisher errors are returned after
+	// the overlay has been cleared.
+	committed := &Process{Base: &BaseProcess{}}
+	committed.StageUserVariableAssignment(UserVariableAssignment{Name: "z", Value: int64(3)}, -1)
+	committed.StageUserVariableAssignment(UserVariableAssignment{Name: "a", Value: int64(1)}, -1)
+	var names []string
+	committed.SetUserVariableAssignmentCommitFunc(func(value UserVariableAssignment) error {
+		names = append(names, value.Name)
+		return errors.New("publisher stopped")
+	})
+	require.Error(t, committed.CommitUserVariableAssignments())
+	require.Equal(t, []string{"a"}, names)
+	_, ok = committed.ResolveUserVariableAssignment("a", -1)
 	require.False(t, ok)
 }
