@@ -12,13 +12,17 @@ INSERT INTO numeric_strings VALUES
     (5, 1, '1.0'), (6, 2, '12x'), (7, 2, ''), (8, 2, 'abc'), (9, 3, NULL);
 -- @metacmp(true)
 SELECT SUM(s), AVG(s) FROM numeric_strings WHERE id <= 4;
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_avg_saved_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT SUM(s), AVG(s) FROM numeric_strings;
 SELECT SUM(CAST(s AS DOUBLE)), AVG(CAST(s AS DOUBLE)) FROM numeric_strings;
+SET @@sql_mode = @sum_avg_saved_mode;
 SELECT SUM(s), AVG(s) FROM numeric_strings WHERE id < 0;
 SELECT SUM(s), AVG(s) FROM numeric_strings WHERE g = 3;
 -- Numeric DISTINCT must collapse '1' and '1.0' and the two nonnumeric zeros.
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_avg_saved_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT SUM(DISTINCT s), CAST(AVG(DISTINCT s) AS DECIMAL(16,6)) FROM numeric_strings;
 SELECT g, SUM(s), AVG(s) FROM numeric_strings GROUP BY g ORDER BY g;
+SET @@sql_mode = @sum_avg_saved_mode;
 SELECT id,
        SUM(s) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_sum,
        CAST(AVG(s) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS DECIMAL(12,4)) AS running_avg
@@ -28,11 +32,13 @@ FROM numeric_strings WHERE id <= 4 ORDER BY id;
 CREATE TABLE string_domains (c CHAR(8), t TEXT, b BINARY(1), vb VARBINARY(1), bl BLOB);
 INSERT INTO string_domains VALUES ('1', '1', x'01', x'01', '1'), ('2.5', '2.5', x'02', x'02', '2.5');
 SELECT SUM(c), AVG(c), SUM(t), AVG(t), SUM(bl), AVG(bl) FROM string_domains;
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_avg_saved_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT SUM(b) = SUM(CAST(b AS DOUBLE)) AS binary_sum_matches,
        AVG(b) = AVG(CAST(b AS DOUBLE)) AS binary_avg_matches,
        SUM(vb) = SUM(CAST(vb AS DOUBLE)) AS varbinary_sum_matches,
        AVG(vb) = AVG(CAST(vb AS DOUBLE)) AS varbinary_avg_matches
 FROM string_domains;
+SET @@sql_mode = @sum_avg_saved_mode;
 
 -- HEX/BIT literals retain their exact unsigned domain across the DOUBLE precision boundary.
 SELECT CAST(SUM(x'1fffffffffffff') AS DECIMAL(38,0)), CAST(AVG(x'1fffffffffffff') AS DECIMAL(38,0)),
@@ -69,7 +75,9 @@ PREPARE string_aggregate FROM 'SELECT SUM(s), AVG(s) FROM numeric_strings WHERE 
 SET @sum_avg_group = 1;
 EXECUTE string_aggregate USING @sum_avg_group;
 SET @sum_avg_group = 2;
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_avg_saved_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 EXECUTE string_aggregate USING @sum_avg_group;
+SET @@sql_mode = @sum_avg_saved_mode;
 SET @sum_avg_group = 3;
 EXECUTE string_aggregate USING @sum_avg_group;
 DEALLOCATE PREPARE string_aggregate;
@@ -79,12 +87,15 @@ EXECUTE string_marker USING @sum_avg_value, @sum_avg_value;
 SET @sum_avg_value = 2.5;
 EXECUTE string_marker USING @sum_avg_value, @sum_avg_value;
 SET @sum_avg_value = '12x';
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_avg_saved_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 EXECUTE string_marker USING @sum_avg_value, @sum_avg_value;
+SET @@sql_mode = @sum_avg_saved_mode;
 SET @sum_avg_value = NULL;
 EXECUTE string_marker USING @sum_avg_value, @sum_avg_value;
 DEALLOCATE PREPARE string_marker;
 
 -- View and CTAS must preserve DOUBLE results and nullable groups.
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_avg_saved_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 CREATE VIEW string_totals AS SELECT g, SUM(s) AS total, AVG(s) AS mean FROM numeric_strings GROUP BY g;
 SELECT * FROM string_totals ORDER BY g;
 CREATE TABLE materialized_totals AS SELECT * FROM string_totals;
@@ -92,14 +103,17 @@ SELECT * FROM materialized_totals ORDER BY g;
 SELECT column_name, data_type FROM information_schema.columns
 WHERE table_schema = 'sum_avg_numeric' AND table_name = 'materialized_totals'
 ORDER BY ordinal_position;
+SET @@sql_mode = @sum_avg_saved_mode;
 
 -- Force AP estimates so both one-worker and two-worker aggregation are exercised with few rows.
 SET @@optimizer_hints = 'execType=2';
 SET @@max_dop = 1;
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_avg_saved_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT g, SUM(s), AVG(s) FROM numeric_strings GROUP BY g ORDER BY g;
 SET @@max_dop = 2;
 SELECT g, SUM(s), AVG(s) FROM numeric_strings GROUP BY g ORDER BY g;
 SELECT SUM(DISTINCT s), CAST(AVG(DISTINCT s) AS DECIMAL(16,6)) FROM numeric_strings;
+SET @@sql_mode = @sum_avg_saved_mode;
 SET @@max_dop = @sum_avg_saved_dop;
 SET @@optimizer_hints = @sum_avg_saved_hints;
 
@@ -109,5 +123,7 @@ SELECT SUM(s), AVG(s) FROM numeric_strings WHERE id <= 4;
 SELECT SUM(s) FROM numeric_strings WHERE id = 6;
 SELECT AVG(s) FROM numeric_strings WHERE id = 6;
 SET @@sql_mode = @sum_avg_saved_mode;
+SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_avg_saved_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT SUM(s), AVG(s) FROM numeric_strings WHERE id = 6;
+SET @@sql_mode = @sum_avg_saved_mode;
 DROP DATABASE sum_avg_numeric;
