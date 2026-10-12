@@ -1,0 +1,191 @@
+drop database if exists alter_check_constraints;
+create database alter_check_constraints;
+use alter_check_constraints;
+create table parent_rows(id int primary key);
+insert into parent_rows values (1);
+create table checked_rows (
+id int primary key,
+pid int,
+v int,
+unique key uv(v),
+key idx_pid(pid),
+constraint fk_parent foreign key(pid) references parent_rows(id),
+constraint ck_limit check(v <= 100)
+);
+insert into checked_rows values (1,1,1),(2,null,null);
+create table referring_rows(id int primary key, rid int,
+constraint fk_checked foreign key(rid) references checked_rows(id));
+insert into referring_rows values (1,1);
+alter table checked_rows add constraint ck_positive check(v > 0);
+select id,pid,v from checked_rows order by id;
+id    pid    v
+1    1    1
+2    null    null
+select constraint_name,check_clause from information_schema.check_constraints
+where constraint_schema=database() order by constraint_name;
+constraint_name    check_clause
+ck_limit    `v` <= 100
+ck_positive    `v` > 0
+insert into checked_rows values (3,1,2),(4,1,-1);
+constraint violation: Check constraint 'ck_positive' is violated
+update checked_rows set v=-1 where id=1;
+constraint violation: Check constraint 'ck_positive' is violated
+select id,pid,v from checked_rows order by id;
+id    pid    v
+1    1    1
+2    null    null
+insert into checked_rows values (3,999,2);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into checked_rows values (3,1,1);
+Duplicate entry '1' for key 'v'
+delete from checked_rows where id=1;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+delete from parent_rows where id=1;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+alter table checked_rows drop check ck_positive;
+insert into checked_rows values (3,1,-1);
+insert into checked_rows values (4,1,101);
+constraint violation: Check constraint 'ck_limit' is violated
+select id,pid,v from checked_rows order by id;
+id    pid    v
+1    1    1
+2    null    null
+3    1    -1
+select constraint_name from information_schema.check_constraints
+where constraint_schema=database() order by constraint_name;
+constraint_name
+ck_limit
+alter table checked_rows add constraint ck_nonzero check(v <> 0),
+add constraint ck_positive check(v > 0);
+constraint violation: Check constraint 'ck_positive' is violated
+select id,pid,v from checked_rows order by id;
+id    pid    v
+1    1    1
+2    null    null
+3    1    -1
+select constraint_name from information_schema.check_constraints
+where constraint_schema=database() order by constraint_name;
+constraint_name
+ck_limit
+insert into checked_rows values (4,999,2);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into checked_rows values (4,1,1);
+Duplicate entry '1' for key 'v'
+delete from checked_rows where id=1;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+delete from parent_rows where id=1;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+delete from checked_rows where id=3;
+alter table checked_rows add constraint ck_positive check(v > 0);
+alter table checked_rows drop constraint ck_positive,
+add constraint ck_positive check(v >= -10);
+insert into checked_rows values (3,1,-1);
+insert into checked_rows values (4,1,-11);
+constraint violation: Check constraint 'ck_positive' is violated
+alter table checked_rows add constraint uv check(v <> 0);
+alter table checked_rows drop constraint uv;
+invalid input: ambiguous constraint name 'uv'; use constraint-specific DROP syntax
+alter table checked_rows drop check uv;
+insert into checked_rows values (4,1,1);
+Duplicate entry '1' for key 'v'
+alter table checked_rows drop foreign key ck_limit;
+internal error: Can't DROP 'ck_limit'; check that column/key exists
+alter table checked_rows drop constraint ck_limit;
+insert into checked_rows values (4,1,101);
+select id,pid,v from checked_rows order by id;
+id    pid    v
+1    1    1
+2    null    null
+3    1    -1
+4    1    101
+select constraint_name,check_clause from information_schema.check_constraints
+where constraint_schema=database() order by constraint_name;
+constraint_name    check_clause
+ck_positive    `v` >= -10
+select index_name,non_unique,column_name from information_schema.statistics
+where table_schema=database() and table_name='checked_rows'
+order by index_name,seq_in_index;
+index_name    non_unique    column_name
+PRIMARY    0    id
+idx_pid    1    pid
+uv    0    v
+insert into checked_rows values (5,999,2);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+delete from checked_rows where id=1;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+delete from parent_rows where id=1;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+create table last_check(id int primary key,v int,constraint ck_only check(v>=0));
+insert into last_check values (1,1);
+alter table last_check drop constraint ck_only;
+insert into last_check values (2,-1);
+select * from last_check order by id;
+id    v
+1    1
+2    -1
+select count(*) from information_schema.check_constraints
+where constraint_schema=database() and constraint_name='ck_only';
+count(*)
+0
+alter table last_check drop check absent;
+Can't DROP 'absent'; check that column/key exists
+select * from last_check order by id;
+id    v
+1    1
+2    -1
+create table anonymous_checks(v int,check(v>=0),check(v<=100));
+alter table anonymous_checks drop check __mo_chk_1;
+alter table anonymous_checks add check(v > -10);
+select constraint_name from information_schema.table_constraints
+where table_schema=database() and table_name='anonymous_checks' and constraint_type='CHECK'
+order by constraint_name;
+constraint_name
+__mo_chk_2
+__mo_chk_3
+insert into anonymous_checks values (-11);
+constraint violation: Check constraint '__mo_chk_3' is violated
+insert into anonymous_checks values (101);
+constraint violation: Check constraint '__mo_chk_2' is violated
+create table final_columns(id int primary key);
+insert into final_columns values (1);
+alter table final_columns add constraint ck_added check(w>0), add column w int default 1;
+insert into final_columns values (2,0);
+constraint violation: Check constraint 'ck_added' is violated
+alter table final_columns add column g int generated always as (w+1) stored,
+add constraint ck_generated check(g<5);
+update final_columns set w=5 where id=1;
+constraint violation: Check constraint 'ck_generated' is violated
+select * from final_columns order by id;
+id    w    g
+1    1    2
+alter table final_columns drop check ck_added, drop column w;
+invalid input: Cannot modify column 'w': generated column 'g' depends on it
+insert into final_columns(id,w) values (2,0);
+constraint violation: Check constraint 'ck_added' is violated
+select * from final_columns order by id;
+id    w    g
+1    1    2
+create table drop_columns(id int primary key,a int,b int,constraint ck_sum check(a+b>0));
+insert into drop_columns values (1,1,1);
+alter table drop_columns drop column a, drop check ck_sum;
+select * from drop_columns order by id;
+id    b
+1    1
+create table runs(id int primary key,status varchar(20));
+insert into runs values (1,'RUNNING');
+alter table runs add check(status in ('SCHEDULED','FAILED','FINISHED','RUNNING','KILLED'));
+insert into runs values (2,'INVALID');
+constraint violation: Check constraint '__mo_chk_1' is violated
+update runs set status='FINISHED' where id=1;
+select * from runs order by id;
+id    status
+1    FINISHED
+alter table runs add check(status <> '') not enforced;
+not supported: NOT ENFORCED CHECK constraints
+alter table runs add check(status <> ''), algorithm=inplace;
+invalid input: ALGORITHM=INPLACE is not supported. Reason: this operation requires ALGORITHM=COPY. Try ALGORITHM=COPY.
+select count(*) from information_schema.check_constraints
+where constraint_schema=database();
+count(*)
+6
+drop database alter_check_constraints;
