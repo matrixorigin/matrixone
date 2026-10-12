@@ -91,6 +91,7 @@ func TestMathFunctionsAcceptBoolInNumericContext(t *testing.T) {
 	for _, name := range []string{
 		"sqrt", "acos", "asin", "atan", "degrees", "radians", "cos",
 		"cot", "exp", "ln", "log", "log2", "log10", "sin", "sinh", "tan",
+		"tanh", "cosh", "asinh", "acosh", "atanh",
 	} {
 		resolved, err := GetFunctionByName(ctx, name, []types.Type{boolType})
 		require.NoError(t, err, name)
