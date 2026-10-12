@@ -5392,7 +5392,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			HasAutoCol:                   hasAutoCol,
 			CompPkeyExpr:                 compPkeyExpr,
 			ClusterByExpr:                clusterByExpr,
-			TrackAutoIncrementGenerated:  trackAutoIncrementGenerated,
+			TrackAutoIncrementGenerated:  trackAutoIncrementGenerated && !trackODKUResult,
 			AutoIncrementGeneratedColumn: markerPhysicalPos,
 			TrackOdkuResult:              trackODKUResult,
 			OdkuOrdinalColumn:            markerPhysicalPos + 1,
@@ -5415,7 +5415,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 		BindingTags: []int32{builder.genNewBindTag()},
 	}, tmpCtx)
 
-	if !trackAutoIncrementGenerated {
+	if !trackAutoIncrementGenerated && !trackODKUResult {
 		markerPhysicalPos = -1
 	}
 	return lastNodeID, colName2Idx, skipUniqueIdx, markerPhysicalPos, nil

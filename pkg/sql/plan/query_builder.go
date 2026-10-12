@@ -3716,7 +3716,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				},
 			})
 		}
-		if node.PreInsertCtx.TrackAutoIncrementGenerated {
+		if node.PreInsertCtx.TrackAutoIncrementGenerated || node.PreInsertCtx.TrackOdkuResult {
 			markerRef := [2]int32{
 				node.BindingTags[0],
 				node.PreInsertCtx.AutoIncrementGeneratedColumn,

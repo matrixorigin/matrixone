@@ -80,7 +80,7 @@ func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 			return
 		}
 	}
-	if preInsert.TrackAutoIncrementGenerated && preInsert.AutoIncrementGeneratedColumn < 0 {
+	if (preInsert.TrackAutoIncrementGenerated || preInsert.TrackODKUResult) && preInsert.AutoIncrementGeneratedColumn < 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "invalid auto-increment provenance column")
 	}
 	if preInsert.TrackODKUResult && preInsert.ODKUOrdinalColumn < 0 {
@@ -88,10 +88,6 @@ func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 	}
 	if preInsert.TrackODKUResult && preInsert.ODKUAutoIncrementColumn < 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "invalid ODKU auto-increment source column")
-	}
-	if preInsert.TrackODKUResult && !preInsert.TrackAutoIncrementGenerated {
-		return moerr.NewInvalidInput(proc.Ctx,
-			"ODKU result tracking requires auto-increment provenance")
 	}
 	if preInsert.TrackODKUResult && !preInsert.HasAutoCol {
 		return moerr.NewInvalidInput(proc.Ctx,
@@ -380,7 +376,7 @@ func (preInsert *PreInsert) captureODKUInputOrdinals(proc *proc, bat *batch.Batc
 }
 
 func (preInsert *PreInsert) captureAutoIncrementGeneratedRows(bat *batch.Batch) error {
-	if !preInsert.TrackAutoIncrementGenerated {
+	if !preInsert.TrackAutoIncrementGenerated && !preInsert.TrackODKUResult {
 		return nil
 	}
 	autoCol := int(preInsert.ODKUAutoIncrementColumn)
@@ -426,7 +422,7 @@ func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
 	bat *batch.Batch,
 	first bool,
 ) error {
-	if !preInsert.TrackAutoIncrementGenerated {
+	if !preInsert.TrackAutoIncrementGenerated && !preInsert.TrackODKUResult {
 		return nil
 	}
 	markerPos := int(preInsert.AutoIncrementGeneratedColumn)
