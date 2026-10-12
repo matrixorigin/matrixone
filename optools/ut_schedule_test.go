@@ -1533,7 +1533,8 @@ read -r observed <&8
 wait "$child_pid"
 printf 'CHILD %s %s\n' "$observed" "$child_pid"
 handled=0
-trap 'fixture_self_pid trap_pid; [[ "$trap_pid" == "$main" ]] || exit 97; handled=$((handled+1)); printf "ack\n" >&7' TERM
+ack_pending=0
+trap 'fixture_self_pid trap_pid; [[ "$trap_pid" == "$main" ]] || exit 97; handled=$((handled+1)); ack_pending=1' TERM
 (
  for ((j=0; j<200; j++)); do
   kill -TERM "$main"
@@ -1552,8 +1553,16 @@ while [[ ! -f "$scratch/done" ]]; do
   fixture_self_pid observed
   [[ "$observed" == "$main" ]] || exit 99
  fi
+ # Acknowledge only after the handler returns. Otherwise the sender can
+ # deliver the next TERM while TERM is still blocked inside the handler,
+ # and Bash can coalesce it with the signal already being handled.
+ if (( ack_pending )); then
+  ack_pending=0
+  printf 'ack\n' >&7
+ fi
 done
 wait "$sender"
+trap - EXIT
 printf 'TERMS %s\n' "$handled"
 `
 	root := t.TempDir()
