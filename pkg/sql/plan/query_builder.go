@@ -1105,12 +1105,12 @@ func (builder *QueryBuilder) setOperationAliasesCanPrune(expr *plan.Expr, memo m
 		switch source.NodeType {
 		case plan.Node_TABLE_SCAN, plan.Node_VALUE_SCAN:
 			return true
-		case plan.Node_AGG, plan.Node_SAMPLE:
+		case plan.Node_AGG, plan.Node_SAMPLE, plan.Node_TIME_WINDOW:
 			// These owners prune computed slots while retaining effects,
-			// grouping/HAVING consumers and their row-count/row-set safeguards.
+			// grouping/HAVING, time boundaries and row-count/row-set safeguards.
 			return len(source.BindingTags) >= 2
-		case plan.Node_WINDOW:
-			// Window pruning owns effects, filter consumers and partition inputs.
+		case plan.Node_WINDOW, plan.Node_FILL:
+			// These owners retain effects, filter consumers and partition inputs.
 			return len(source.BindingTags) == 1
 		case plan.Node_PROJECT, plan.Node_MATERIAL:
 			return builder.setOperationOutputCanPrune(source, int(col.ColPos), memo)

@@ -916,6 +916,53 @@ func TestUnionAllComputedOutputPruning(t *testing.T) {
 	}
 }
 
+func TestUnionAllTimeWindowOutputPruning(t *testing.T) {
+	for _, tc := range []struct {
+		name, output, suffix string
+		width, sums          int
+	}{
+		{"unused time aggregate", "c", "", 1, 2},
+		{"unused fill aggregate", "c", " fill(null)", 1, 2},
+		{"referenced outputs", "c,s", "", 2, 4},
+		{"nonzero ordinal", "s", "", 1, 2},
+		{"boundary output", "w", "", 1, 0},
+		{"fill previous", "c", " fill(prev)", 1, 2},
+		{"effectful fill", "c", " fill(value,sleep(0))", 1, 4},
+		{"hidden having", "c", "", 1, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			branch := "select sum(id) c,sum(val) s,_wstart w from " + twTable
+			if tc.name == "hidden having" {
+				branch += " having sum(val)>0"
+			}
+			branch += " interval(updated_at,5,second)" + tc.suffix
+			operand := "select c,s,w from (" + branch + ") t"
+			p, err := buildOneStmt(plan2.NewMockOptimizer(false, newPlanTestProcess(t)), t,
+				"select "+tc.output+" from ("+operand+" union all "+operand+") u")
+			require.NoError(t, err)
+			unions, windows, sums := 0, 0, 0
+			for _, n := range reachablePlanNodes(p.GetQuery()) {
+				switch n.NodeType {
+				case plan.Node_UNION_ALL:
+					unions++
+					require.Len(t, n.ProjectList, tc.width)
+				case plan.Node_TIME_WINDOW:
+					windows++
+					for _, e := range n.AggList {
+						if e.GetF() != nil && e.GetF().Func.ObjName == "sum" {
+							sums++
+						}
+					}
+					requireSlotsWithinLayout(t, n)
+				}
+			}
+			require.Equal(t, 1, unions)
+			require.Equal(t, 2, windows)
+			require.Equal(t, tc.sums, sums)
+		})
+	}
+}
+
 func TestColumnPruneOperatorShape(t *testing.T) {
 	t.Run("scan chooses deterministic row carrier", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(

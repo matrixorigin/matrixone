@@ -99,6 +99,8 @@ func TestFilteredSetOperationProjection(t *testing.T) {
 				"insert into sample_values values (1,10),(2,20),(3,30)",
 				"create table nullable_sample(a bigint,b bigint)",
 				"insert into nullable_sample values (1,NULL),(NULL,20),(3,30)",
+				"create table time_values(ts datetime,a bigint,b bigint)",
+				"insert into time_values values ('2026-01-01 00:00:00',10,100),('2026-01-01 00:00:10',20,200),('2026-01-01 00:01:00',40,400)",
 			} {
 				_, err := conn.ExecContext(ctx, q)
 				require.NoError(t, err, q)
@@ -130,6 +132,13 @@ func TestFilteredSetOperationProjection(t *testing.T) {
 				{"select count(*) from (select sample(a,b,2 rows) from sample_values union all select sample(a,b,2 rows) from sample_values) u", []string{"4"}},
 				{"select count(*) from (select sample(a,b,10 rows) from nullable_sample union all select sample(a,b,10 rows) from nullable_sample) u", []string{"6"}},
 				{"select count(*) from (select sample(a,b,10 rows) from nullable_sample union all select sample(a,b,10 rows) from nullable_sample) u where a is null", []string{"2"}},
+				{"select c from (select c,s from (select sum(a) c,sum(b) s from time_values interval(ts,1,minute)) t union all select c,s from (select sum(a) c,sum(b) s from time_values interval(ts,1,minute)) t) u order by c", []string{"30", "30", "40", "40"}},
+				{"select s from (select c,s from (select sum(a) c,sum(b) s from time_values interval(ts,1,minute)) t union all select c,s from (select sum(a) c,sum(b) s from time_values interval(ts,1,minute)) t) u order by s", []string{"300", "300", "400", "400"}},
+				{"select c,s from (select c,s from (select sum(a) c,sum(b) s from time_values interval(ts,1,minute)) t union all select c,s from (select sum(a) c,sum(b) s from time_values interval(ts,1,minute)) t) u order by c", []string{"30:300", "30:300", "40:400", "40:400"}},
+				{"select c from (select c,s from (select sum(a) c,sum(b) s from time_values interval(ts,1,minute) fill(null)) t union all select c,s from (select sum(a) c,sum(b) s from time_values interval(ts,1,minute) fill(null)) t) u order by c", []string{"30", "30", "40", "40"}},
+				{"select count(*) from (select c,s from (select sum(a) c,sum(b) s from time_values where a<0 interval(ts,1,minute)) t union all select c,s from (select sum(a) c,sum(b) s from time_values where a<0 interval(ts,1,minute)) t) u", []string{"0"}},
+				{"select c from (select c,s from (select sum(a) c,sum(b) s from time_values having sum(b)>300 interval(ts,1,minute)) t union all select c,s from (select sum(a) c,sum(b) s from time_values having sum(b)>300 interval(ts,1,minute)) t) u", []string{"40", "40"}},
+				{"select c from (select c,s,w from (select sum(a) c,sum(b) s,_wstart w from time_values interval(ts,1,minute) fill(prev)) t union all select c,s,w from (select sum(a) c,sum(b) s,_wstart w from time_values interval(ts,1,minute) fill(prev)) t) u order by c", []string{"30", "30", "40", "40"}},
 				{"select v from saved", []string{"30"}},
 				{"select v from copied order by v", []string{"10", "20"}},
 				{"select sum(v) from (select 1 k,10 v union all select 2,v from copied where v=20) u where k>0", []string{"30"}},
@@ -152,6 +161,13 @@ func TestFilteredSetOperationProjection(t *testing.T) {
 			require.Equal(t, []string{"10", "20", "30"}, readWindowNullRows(t, rows))
 			require.NoError(t, conn.QueryRowContext(ctx, "select currval('window_effect_seq')").Scan(&effects))
 			require.Equal(t, "3", effects, "unused window arguments must evaluate once per input row")
+			_, err = conn.ExecContext(ctx, "create sequence time_effect_seq start with 1")
+			require.NoError(t, err)
+			rows, err = conn.QueryContext(ctx, "select c from (select c,s from (select sum(a) c,sum(cast(nextval('time_effect_seq') as bigint)) s from time_values interval(ts,1,minute)) t union all select c,s from (select sum(a) c,sum(cast(nextval('time_effect_seq') as bigint)) s from time_values interval(ts,1,minute)) t) u order by c")
+			require.NoError(t, err)
+			require.Equal(t, []string{"30", "30", "40", "40"}, readWindowNullRows(t, rows))
+			require.NoError(t, conn.QueryRowContext(ctx, "select currval('time_effect_seq')").Scan(&effects))
+			require.Equal(t, "6", effects, "unused time-window aggregate arguments must evaluate once per input row")
 			_, err = conn.ExecContext(ctx, "create sequence sample_effect_seq start with 1")
 			require.NoError(t, err)
 			rows, err = conn.QueryContext(ctx, "select count(*) from (select sample(a,cast(nextval('sample_effect_seq') as bigint),10 rows) from sample_values union all select sample(a,cast(nextval('sample_effect_seq') as bigint),10 rows) from sample_values) u")
