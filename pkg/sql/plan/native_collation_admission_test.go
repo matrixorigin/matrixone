@@ -19,6 +19,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,5 +44,43 @@ func TestCollationMetadataIntegrationUsesCanonicalAdmission(t *testing.T) {
 	require.Error(t, planpb.RequireLegacyCollations(planpb.Type{Id: int32(types.T_varchar), Charset: 3, CollationVersion: 2}))
 	for _, format := range []uint32{1, 256} {
 		require.Error(t, planpb.RequireLegacyCollations(&planpb.TableDef{DefaultCharset: 3, KeyFormat: format}))
+	}
+}
+
+// The retired prototype function must fail while binding, before folding can
+// erase its identity. This does not claim SQL COLLATE syntax preserves metadata.
+func TestRetiredNativeCollationKeyRejectsBeforeFolding(t *testing.T) {
+	for _, sql := range []string{
+		"select length(internal_collation_key('Alpha', cast(4 as unsigned)))",
+		"select length(internal_collation_key(n_name, cast(4 as unsigned))) from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = BuildPlan(ctx, stmt, false)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "internal_collation_key")
+		})
+	}
+}
+
+func TestNativeCollationMetadataRejectsFoldedProjection(t *testing.T) {
+	for _, sql := range []string{
+		"select 1 from nation",
+		"select length(n_name) from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+			col := FindColumn(ctx.tables["nation"].Cols, "n_name")
+			require.NotNil(t, col)
+			col.Typ.Charset, col.Typ.CollationVersion = 4, 1
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = BuildPlan(ctx, stmt, false)
+			require.ErrorContains(t, err, "disabled")
+		})
 	}
 }
