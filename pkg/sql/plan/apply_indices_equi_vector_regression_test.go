@@ -259,3 +259,46 @@ func BenchmarkEquiVectorOrdinaryProjectionGuards(b *testing.B) {
 		})
 	}
 }
+
+func equiVectorInputIndexFixture(ctx *customMockCompilerContext) {
+	const indexTable = "__mo_index_equi_chunks_category"
+	a := ctx.tables["equi_chunks"]
+	a.Indexes = append(a.Indexes, &plan.IndexDef{
+		IndexName: "idx_category_document", IndexAlgo: "btree", IndexTableName: indexTable,
+		TableExist: true, Parts: []string{"category", "document_id", catalog.CreateAlias("id")},
+	})
+	ctx.tables[indexTable] = &plan.TableDef{Name: indexTable, TblId: 898,
+		Cols: []*plan.ColDef{
+			{Name: catalog.IndexTableIndexColName, Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: catalog.IndexTablePrimaryColName, Typ: a.Cols[0].Typ},
+		}, Name2ColIndex: map[string]int32{catalog.IndexTableIndexColName: 0, catalog.IndexTablePrimaryColName: 1},
+	}
+	ctx.objects[indexTable] = &plan.ObjectRef{SchemaName: "tpch", ObjName: indexTable, Obj: 898}
+}
+
+func TestVectorCandidateCopiesPreserveInputIndexHints(t *testing.T) {
+	for _, shape := range []struct{ name, sql string }{
+		{"inner", "select a.id from equi_chunks a %s join equi_documents b on a.document_id=b.document_id where a.category='x'"},
+		{"reversed", "select a.id from equi_documents b join equi_chunks a %s on b.document_id=a.document_id where a.category='x'"},
+		{"semi", "select a.id from equi_chunks a %s where a.document_id in(select document_id from equi_documents) and a.category='x'"},
+	} {
+		for _, hint := range []string{"", "ignore index(idx_category_document)", "use index(idx_ivf_v)", "ignore index for join(idx_category_document)"} {
+			t.Run(shape.name+"/"+hint, func(t *testing.T) {
+				statement := fmt.Sprintf(shape.sql, hint) + " order by l2_distance(a.v,'[0,0]') limit 2"
+				q := equiVectorPlanFixture(t, statement, false, false, equiVectorInputIndexFixture)
+				require.Len(t, equiVectorSearchNodes(q), 1, "scalar restrictions retain IVF eligibility")
+				indexes := 0
+				for id := range reachableVectorJoinNodeIDs(q, q.Steps[0]) {
+					if q.Nodes[id].IndexScanInfo.IndexName == "idx_category_document" {
+						indexes++
+					}
+				}
+				if hint == "" || hint == "ignore index for join(idx_category_document)" {
+					require.Positive(t, indexes, "control must exercise the scalar index path")
+				} else {
+					require.Zero(t, indexes, "every reachable candidate/row-fetch scan obeys the input hint")
+				}
+			})
+		}
+	}
+}

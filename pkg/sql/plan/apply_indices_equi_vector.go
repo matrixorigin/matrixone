@@ -163,6 +163,7 @@ func (builder *QueryBuilder) applyVectorIndexForEquiJoin(nodeID int32) (int32, b
 	builder.rebindScanNode(a)
 	builder.rebindScanNode(b)
 	aID, bID := builder.appendNode(a, ctx), builder.appendNode(b, ctx)
+	builder.inheritIndexHints(aID, vc.scan.NodeId)
 	builder.inheritIndexHints(bID, vc.other.NodeId)
 	if guard := builder.projectSpecialGuards[nodeID]; guard != nil && guard.kinds&specialIndexKindEquiVector != 0 {
 		// The eligibility copy needs its own scalar-index pass after the vector
