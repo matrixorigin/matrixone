@@ -5333,6 +5333,10 @@ func executeStmtWithTxn(ses FeSession,
 ) (err error) {
 	ses.EnterFPrint(FPExecStmtWithTxn)
 	defer ses.ExitFPrint(FPExecStmtWithTxn)
+	// The process survives across statements, including statements handled
+	// directly by the frontend. Stage definitions are only valid within one
+	// statement's catalog snapshot, so discard entries before planning/dispatch.
+	execCtx.proc.GetStageCache().Clear()
 	if !ses.IsDerivedStmt() {
 		err = executeStmtWithWorkspace(ses, statsArr, execCtx)
 	} else {
@@ -5340,6 +5344,12 @@ func executeStmtWithTxn(ses FeSession,
 		txnOp := ses.GetTxnHandler().GetTxn()
 		//refresh proc txnOp
 		execCtx.proc.Base.TxnOperator = txnOp
+
+		// Derived execution borrows the caller's workspace statement. A retry
+		// must be returned to its owner rather than rolling back only this child.
+		wasDisabled := execCtx.proc.IncrStatementDisabled()
+		execCtx.proc.SetIncrStatementDisabled(true)
+		defer execCtx.proc.SetIncrStatementDisabled(wasDisabled)
 
 		err = dispatchStmt(ses, statsArr, execCtx)
 		recordSessionDDL(ses, execCtx, err)
@@ -5439,6 +5449,7 @@ func executeStmtWithWorkspace(ses FeSession,
 		// initExecuteStmtParam recorded its binding database before authorization.
 		effectiveDefaultDatabase = execCtx.effectiveTxnDefaultDatabase
 	}
+	execCtx.effectiveTxnStatement = effectiveStmt
 	execCtx.effectiveTxnDefaultDatabase = effectiveDefaultDatabase
 	execCtx.txnOpt.forcePessimisticObjectLifecycle = requiresPessimisticObjectLifecycleTxn(
 		ses, effectiveStmt, effectiveDefaultDatabase,
@@ -5594,6 +5605,14 @@ func executeStmtWithIncrStmt(ses FeSession,
 	if err != nil || hasRecovered {
 		return err
 	}
+	// Frontend statements have no physical Compile to establish their workspace
+	// boundary. Capture it after prior-statement maintenance, before any child
+	// execution can reorder writes or fail. Engine statements retain their
+	// existing NewCompile/Reset owner.
+	if execCtx.effectiveTxnStatement.StmtKind().ExecLocation() == tree.EXEC_IN_FRONTEND {
+		txnOp.GetWorkspace().UpdateSnapshotWriteOffset()
+	}
+
 	stats := statistic.StatsInfoFromContext(newCtx)
 	stats.AddTxnIncrStatementS3Request(statistic.S3Request{
 		List:      crs.FileService.S3.List.Load(),
@@ -6914,7 +6933,11 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if err != nil {
 			return NewGeneralErrorResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
-		return NewGeneralOkResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus()), nil
+		status := ses.GetTxnHandler().GetServerStatus()
+		if ses.GetResponser().MysqlRrWr().GetU32(CAPABILITY)&CLIENT_DEPRECATE_EOF == 0 {
+			return NewResponse(EoFResponse, 0, 0, 0, status, int(COM_SET_OPTION), nil), nil
+		}
+		return NewGeneralOkResponse(COM_SET_OPTION, status), nil
 
 	default:
 		markRowCountFailed(ses, ses.GetProc())

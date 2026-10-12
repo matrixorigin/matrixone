@@ -15,57 +15,57 @@ primary key(empno)
 ) COMMENT='雇员表';
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    雇员编号
-ename    VARCHAR(15)    YES        null        雇员姓名
-job    VARCHAR(10)    YES        null        雇员职位
-mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
-hiredate    DATE(0)    YES        null        雇员的雇佣日期
-sal    DECIMAL(7,2)    YES        null        雇员的基本工资
-comm    DECIMAL(7,2)    YES        null        奖金
-deptno    INT UNSIGNED(32)    YES        null        所在部门
+empno    int unsigned    NO    PRI    null    auto_increment    雇员编号
+ename    varchar(15)    YES        null        雇员姓名
+job    varchar(10)    YES        null        雇员职位
+mgr    int unsigned    YES        null        雇员对应的领导的编号
+hiredate    date    YES        null        雇员的雇佣日期
+sal    decimal(7,2)    YES        null        雇员的基本工资
+comm    decimal(7,2)    YES        null        奖金
+deptno    int unsigned    YES        null        所在部门
 show columns from emp;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    雇员编号
-ename    VARCHAR(15)    YES        null        雇员姓名
-job    VARCHAR(10)    YES        null        雇员职位
-mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
-hiredate    DATE(0)    YES        null        雇员的雇佣日期
-sal    DECIMAL(7,2)    YES        null        雇员的基本工资
-comm    DECIMAL(7,2)    YES        null        奖金
-deptno    INT UNSIGNED(32)    YES        null        所在部门
+empno    int unsigned    NO    PRI    null    auto_increment    雇员编号
+ename    varchar(15)    YES        null        雇员姓名
+job    varchar(10)    YES        null        雇员职位
+mgr    int unsigned    YES        null        雇员对应的领导的编号
+hiredate    date    YES        null        雇员的雇佣日期
+sal    decimal(7,2)    YES        null        雇员的基本工资
+comm    decimal(7,2)    YES        null        奖金
+deptno    int unsigned    YES        null        所在部门
 show full columns from emp;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-empno    INT UNSIGNED(32)    null    NO    PRI    null    auto_increment    select,insert,update,references    雇员编号
-ename    VARCHAR(15)    utf8mb4_general_ci    YES        null        select,insert,update,references    雇员姓名
-job    VARCHAR(10)    utf8mb4_general_ci    YES        null        select,insert,update,references    雇员职位
-mgr    INT UNSIGNED(32)    null    YES        null        select,insert,update,references    雇员对应的领导的编号
-hiredate    DATE(0)    null    YES        null        select,insert,update,references    雇员的雇佣日期
-sal    DECIMAL(7,2)    null    YES        null        select,insert,update,references    雇员的基本工资
-comm    DECIMAL(7,2)    null    YES        null        select,insert,update,references    奖金
-deptno    INT UNSIGNED(32)    null    YES        null        select,insert,update,references    所在部门
+empno    int unsigned    null    NO    PRI    null    auto_increment    select,insert,update,references    雇员编号
+ename    varchar(15)    utf8mb4_general_ci    YES        null        select,insert,update,references    雇员姓名
+job    varchar(10)    utf8mb4_general_ci    YES        null        select,insert,update,references    雇员职位
+mgr    int unsigned    null    YES        null        select,insert,update,references    雇员对应的领导的编号
+hiredate    date    null    YES        null        select,insert,update,references    雇员的雇佣日期
+sal    decimal(7,2)    null    YES        null        select,insert,update,references    雇员的基本工资
+comm    decimal(7,2)    null    YES        null        select,insert,update,references    奖金
+deptno    int unsigned    null    YES        null        select,insert,update,references    所在部门
 show columns from emp like 'e%';
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    雇员编号
-ename    VARCHAR(15)    YES        null        雇员姓名
+empno    int unsigned    NO    PRI    null    auto_increment    雇员编号
+ename    varchar(15)    YES        null        雇员姓名
 create view v1 as select empno, ename, job from emp;
 desc v1;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO        null        
-ename    VARCHAR(15)    YES        null        
-job    VARCHAR(10)    YES        null        
+empno    int unsigned    NO        null        
+ename    varchar(15)    YES        null        
+job    varchar(10)    YES        null        
 show columns from v1;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO        null        
-ename    VARCHAR(15)    YES        null        
-job    VARCHAR(10)    YES        null        
+empno    int unsigned    NO        null        
+ename    varchar(15)    YES        null        
+job    varchar(10)    YES        null        
 show full columns from v1;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-empno    INT UNSIGNED(32)    null    NO        null        select,insert,update,references    
-ename    VARCHAR(15)    utf8mb4_general_ci    YES        null        select,insert,update,references
-job    VARCHAR(10)    utf8mb4_general_ci    YES        null        select,insert,update,references
+empno    int unsigned    null    NO        null        select,insert,update,references    
+ename    varchar(15)    utf8mb4_general_ci    YES        null        select,insert,update,references
+job    varchar(10)    utf8mb4_general_ci    YES        null        select,insert,update,references
 show columns from v1 like 'e%';
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO        null        
-ename    VARCHAR(15)    YES        null        
+empno    int unsigned    NO        null        
+ename    varchar(15)    YES        null        
 DROP TABLE emp;
 DROP database db9;

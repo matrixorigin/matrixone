@@ -74,6 +74,14 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 		sessionRollsBackTxnOnError(ses, execErr)
 	txnErr := ses.GetTxnHandler().Rollback(execCtx)
 	if txnErr != nil {
+		// A nested fatal error may already have sealed the cleanup owner. Keep
+		// the original typed failure for the client instead of masking it with
+		// that owner's terminal rejection (or a secondary cleanup failure).
+		if moerr.MustRollbackTxn(execErr) {
+			ses.Error(execCtx.reqCtx, txnErr.Error())
+			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, execErr)
+			return execErr
+		}
 		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, txnErr)
 		return txnErr
 	}

@@ -2879,6 +2879,13 @@ func buildPlanForCompileRetry(
 	forcePrepare bool,
 	preparedRetry *preparedExecutionRetry,
 ) (*plan2.Plan, error) {
+	originalContext := compilerContext.GetContext()
+	planningContext := originalContext
+	if planningContext == nil {
+		planningContext = ctx
+	}
+	compilerContext.SetContext(plan2.WithJSONMergeWarningOrigin(planningContext, plan2.JSONMergeWarningInternalReprepare))
+	defer compilerContext.SetContext(originalContext)
 	if ses != nil {
 		ctx = function.WithNoUnsignedSubtraction(ctx, mysql.HasSQLMode(sessionSQLMode(ses), "NO_UNSIGNED_SUBTRACTION"))
 		ctx = function.WithDivPrecisionIncrement(ctx, sessionDivPrecisionIncrement(ses))

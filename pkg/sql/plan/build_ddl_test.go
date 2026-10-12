@@ -6617,6 +6617,11 @@ func TestCheckFkColsAreValidRecordsReferencedKey(t *testing.T) {
 		}
 	}
 
+	require.True(t, ForeignKeyReferencedIndexMatches(parent, []uint64{1}, "uq_parent_id"), "retained UNIQUE remains valid even when PRIMARY would win new selection")
+	require.False(t, ForeignKeyReferencedIndexMatches(parent, []uint64{1}, "missing"))
+	require.False(t, ForeignKeyReferencedIndexMatches(parent, []uint64{2}, "uq_parent_id"))
+	require.False(t, ForeignKeyReferencedIndexMatches(parent, []uint64{99}, "PRIMARY"))
+	require.False(t, ForeignKeyReferencedIndexMatches(parent, nil, "PRIMARY"))
 	fk := newFK("id")
 	require.NoError(t, checkFkColsAreValid(ctx, fk, parent))
 	require.Equal(t, "PRIMARY", fk.Def.ReferencedIndexName)
@@ -6880,7 +6885,7 @@ func TestForwardForeignKeyCatalogLifecycle(t *testing.T) {
 	require.Equal(t, "PRIMARY", resolved.Def.ReferencedIndexName)
 	require.Equal(t,
 		"update `mo_catalog`.`mo_foreign_keys` set referenced_index_name = 'PRIMARY' where db_name = 'db' and table_name = 'child' and constraint_name = 'fk_child_parent'",
-		getSqlForUpdateFkReferencedIndex("db", "child", "fk_child_parent", resolved.Def.ReferencedIndexName))
+		GetSqlForUpdateFkReferencedIndex("db", "child", "fk_child_parent", resolved.Def.ReferencedIndexName))
 }
 
 func TestValidateIdentifierEncoding(t *testing.T) {

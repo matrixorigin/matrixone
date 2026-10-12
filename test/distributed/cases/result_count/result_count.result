@@ -62,8 +62,8 @@ t1  ¦  CREATE TABLE `t1` (
 )
 show columns from t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  VARCHAR(16383)  ¦  YES  ¦    ¦  null
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  varchar(16383)  ¦  YES  ¦    ¦  null
 drop view v1;
 drop table t1;
 drop view v2;

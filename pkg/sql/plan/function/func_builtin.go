@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -617,48 +618,17 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-
-			ts := typ.String()
-			ret := ""
-			// after decimal fix, remove this
-			if typ.Oid.IsDecimal() {
-				ts = "DECIMAL"
-				ret = fmt.Sprintf("%s(%d,%d)", ts, typ.Width, typ.Scale)
+			var ret string
+			// Public metadata queries use this path for ENUM with an empty
+			// attr_enum, which represents the single empty-string member.
+			if typ.Oid == types.T_enum {
+				ret = "enum('')"
+			} else if formatted, ok := types.FormatSQLColumnType(*typ); ok {
+				ret = strings.ToLower(formatted)
 			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
 				ret = geometryShowColumnType(typ)
-			} else if typ.Oid == types.T_text {
-				switch typ.Width {
-				case types.MaxTinyTextLen:
-					ret = "TINYTEXT"
-				case types.MaxMediumTextLen:
-					ret = "MEDIUMTEXT"
-				case types.MaxLongTextLen:
-					ret = "LONGTEXT"
-				case 0, types.MaxStringSize:
-					ret = "TEXT"
-				default:
-					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
-				}
-			} else if typ.Oid == types.T_blob {
-				switch typ.Width {
-				case types.MaxTinyTextLen:
-					ret = "TINYBLOB"
-				case types.MaxMediumTextLen:
-					ret = "MEDIUMBLOB"
-				case types.MaxLongTextLen:
-					ret = "LONGBLOB"
-				case types.MaxStringSize:
-					ret = "BLOB"
-				default:
-					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
-				}
-			} else if typ.IsIntOrUint() && typ.Width == 0 {
-				// Width is the physical type width for stored integer columns, but
-				// expression-only integer types may leave it unset. Do not expose
-				// that internal zero as a MySQL display width.
-				ret = ts
 			} else {
-				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
+				ret = fmt.Sprintf("%s(%d)", typ.String(), typ.Width)
 			}
 
 			return functionUtil.QuickStrToBytes(ret), nil
@@ -759,11 +729,11 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 		if err != nil {
 			return nil, err
 		}
-		typeName := "ENUM"
+		typeName := "enum"
 		if typ.Oid == types.T_json && strings.HasPrefix(strings.ToLower(strings.TrimSpace(enumStr)), "array(") {
 			return functionUtil.QuickStrToBytes(enumStr), nil
 		} else if typ.Oid == types.T_uint64 {
-			typeName = "SET"
+			typeName = "set"
 		} else if typ.Oid == types.T_geometry {
 			subtype := ""
 			sridDefined := false
@@ -796,16 +766,12 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum/set, but got %s", typ.String())
 		}
 
-		// get enum values
-		enums := strings.Split(enumStr, ",")
-		enumVal := ""
-		for i, e := range enums {
-			enumVal += fmt.Sprintf("'%s'", e)
-			if i < len(enums)-1 {
-				enumVal += ","
-			}
+		members := strings.Split(enumStr, ",")
+		for i := range members {
+			members[i] = sqlquote.String(members[i])
 		}
-		ret := fmt.Sprintf("%s(%s)", typeName, enumVal)
+		ret := typeName + "(" + strings.Join(members, ",") + ")"
+
 		return functionUtil.QuickStrToBytes(ret), nil
 	}
 

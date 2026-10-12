@@ -22,6 +22,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/gogo/protobuf/protoc-gen-gogo/descriptor"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
 func TestPlanFileDescriptorIsGzipEncoded(t *testing.T) {
@@ -119,6 +120,79 @@ func TestGeneratedJoinTypeEnumDescriptorContainsAsofValues(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("generated Node.JoinType descriptor missing ASOF values: %v", want)
+	}
+}
+
+func TestCreateTableDefaultsAndForeignKeyWireContract(t *testing.T) {
+	b, path := (&CreateTable{}).Descriptor()
+	message := decodePlanDescriptor(t, b).GetMessageType()[path[0]]
+	wantFields := map[string]int32{
+		"RawSQL":                15,
+		"unresolved_fk_parents": 16,
+		"fk_name_binding":       17,
+		"database_defaults":     18,
+	}
+	for _, field := range message.GetField() {
+		if number, ok := wantFields[field.GetName()]; ok {
+			if field.GetNumber() != number {
+				t.Fatalf("%s field number: got %d, want %d", field.GetName(), field.GetNumber(), number)
+			}
+			delete(wantFields, field.GetName())
+		}
+	}
+	if len(wantFields) != 0 {
+		t.Fatalf("missing CreateTable fields: %v", wantFields)
+	}
+	reserved := false
+	for _, span := range message.GetReservedRange() {
+		reserved = reserved || span.GetStart() <= 14 && span.GetEnd() > 14
+	}
+	if !reserved {
+		t.Fatal("CreateTable field 14 must remain reserved")
+	}
+
+	defaults := &DatabaseDefaults{
+		DatabaseId: 42, CharacterSet: "utf8mb4", Collation: "utf8mb4_bin",
+		Version: 7, CollationId: 2, CollationRevision: 0,
+	}
+	parents := []*ObjectRef{{SchemaName: "parent_db", ObjName: "parent_table", Obj: 91}}
+	binding := &lock.LockTable{Table: 93, Version: 4, ServiceID: "cn", Valid: true}
+	for _, tc := range []struct {
+		name string
+		plan *CreateTable
+	}{
+		{"empty", &CreateTable{}},
+		{"defaults_only", &CreateTable{DatabaseDefaults: defaults}},
+		{"foreign_keys_only", &CreateTable{UnresolvedFkParents: parents, FkNameBinding: binding}},
+		{"combined", &CreateTable{RawSQL: "create table child(id int)", DatabaseDefaults: defaults,
+			UnresolvedFkParents: parents, FkNameBinding: binding}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, err := tc.plan.Marshal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(encoded) != tc.plan.ProtoSize() {
+				t.Fatal("CreateTable wire size mismatch")
+			}
+			var decoded CreateTable
+			if err := decoded.Unmarshal(encoded); err != nil {
+				t.Fatal(err)
+			}
+			if !proto.Equal(tc.plan, &decoded) {
+				t.Fatalf("CreateTable wire round trip lost defaults or foreign-key admission: %v", &decoded)
+			}
+			cloned := proto.Clone(tc.plan).(*CreateTable)
+			if !proto.Equal(tc.plan, cloned) {
+				t.Fatal("CreateTable clone lost metadata")
+			}
+			if cloned.DatabaseDefaults != nil {
+				cloned.DatabaseDefaults.Version++
+				if tc.plan.DatabaseDefaults.Version != 7 {
+					t.Fatal("CreateTable clone aliases database defaults")
+				}
+			}
+		})
 	}
 }
 

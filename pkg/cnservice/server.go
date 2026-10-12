@@ -30,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -155,6 +156,7 @@ func NewService(
 	}
 
 	srv := &service{
+		rt: runtime.ServiceRuntime(cfg.UUID),
 		metadata: metadata.CNStore{
 			UUID: cfg.UUID,
 			Role: metadata.MustParseCNRole(cfg.Role),
@@ -571,7 +573,10 @@ func (s *service) closeService() error {
 			s.stopFrontendSerialized,
 			s.closeBootstrapService,
 			// Stop scheduled statements as well as interactive frontend work.
+			s.stopTableDetector,
 			s.stopTask,
+			s.closeTableDetector,
+			s.closeCDCWatermarkUpdater,
 			s.closePipelineAdmission,
 			func() error {
 				if s.server == nil {
@@ -1306,7 +1311,9 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 		s.udfService,
 		s.pu.GetTaskService(),
 	)
-	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.InternalSQLExecutor, s.sqlExecutor)
+	s.rt.SetGlobalVariables(runtime.InternalSQLExecutor, s.sqlExecutor)
+	cdc.InitTableDetector(s.rt, s.sqlExecutor)
+	cdc.InitCDCWatermarkUpdater(s.rt, frontend.NewInternalExecutor(s.cfg.UUID))
 	s.initMongoDBRuntime()
 }
 
@@ -1598,4 +1605,32 @@ func (s *service) initProcessCodecService() {
 
 func (s *service) GetTxnClient() client.TxnClient {
 	return s._txnClient
+}
+
+func (s *service) stopTableDetector() error {
+	if d := cdc.TableDetectorFromRuntime(s.rt); d != nil {
+		d.Stop()
+	}
+	return nil
+}
+
+func (s *service) closeTableDetector() error {
+	if d := cdc.TableDetectorFromRuntime(s.rt); d != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return d.CloseAndWait(ctx)
+	}
+	return nil
+}
+
+func (s *service) closeCDCWatermarkUpdater() error {
+	if u := cdc.CDCWatermarkUpdaterFromRuntime(s.rt); u != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := u.CloseAndWait(ctx); err != nil {
+			return err
+		}
+		s.rt.CompareAndDeleteGlobalVariables(runtime.CDCWatermarkUpdater, u)
+	}
+	return nil
 }

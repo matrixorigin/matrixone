@@ -49,10 +49,10 @@ native_defaults  ¦  CREATE TABLE `native_defaults` (
 ) COLLATE=utf8mb4_unicode_ci
 show full columns from native_defaults;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
-v  ¦  VARCHAR(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-g  ¦  VARCHAR(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references  ¦    𝄀
-raw  ¦  VARBINARY(8)  ¦  binary  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-n  ¦  INT(32)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references
+v  ¦  varchar(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+g  ¦  varchar(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references  ¦    𝄀
+raw  ¦  varbinary(8)  ¦  binary  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+n  ¦  int  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references
 select column_name,character_set_name,collation_name from information_schema.columns
 where table_schema='charset_defaults_contract' and table_name='native_defaults' order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
@@ -96,8 +96,8 @@ converted  ¦  CREATE TABLE `converted` (
 ) COLLATE=utf8mb4_unicode_ci
 show full columns from converted;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  null  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-v  ¦  VARCHAR(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  select,insert,update,references
+id  ¦  int  ¦  null  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+v  ¦  varchar(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  select,insert,update,references
 alter table converted default collate=utf8mb4_bin, add column added varchar(8), convert to character set utf8mb4 collate utf8mb4_unicode_ci;
 select column_name,collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='converted' order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  collation_name[12,18,0]  𝄀

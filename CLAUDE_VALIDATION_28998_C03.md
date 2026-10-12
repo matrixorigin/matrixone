@@ -121,3 +121,18 @@
 本地完整失败/成功日志、JSON、profiles、oracle、tester配置和私有缓存不提交。所有coverage仅采用成功终态profile；缺映射计未覆盖，生成代码/测试/纯声明不进入可执行差分分母。TODO、临时驱动、工具及工作目录不提交。
 
 只交付源代码、测试/result、批准设计与本记录；正常fast-forward推送现有PR head并更新draft PR #29374。保留独立worktree供未合并PR后续维护；所有测试拥有的服务与export collector已关闭，未操作其它worktree的服务、文件或缓存。实际交付提交与PR head由推送后核验，不以本记录创建或历史覆盖率代替。
+
+## 2026-10-12 冲突修复增量（mo/main 5a5501b3）
+
+本轮从已交付c02ef01f正常merge最新`mo/main`（19个上游提交），不改写历史、不替换PR。下列结果属于新的冻结输入，前述5f94c8f/f09d4788结果保留其历史范围，不自动视作对本轮上游全量回归的验收。
+
+- **冲突合同**：14文件=protobuf schema/generated及12个完整result。保留上游已发布的`CreateTable.unresolved_fk_parents#16`/`fk_name_binding#17`；本PR尚未发布的`database_defaults`移至**#18**，reserved14/RawSQL15不变。protocol110/独立4.0.15迁移及其它编号不变。前述历史descriptor中的#16不代表本轮编号。
+- **正常生成/完整descriptor**：`make generate-pb` exit0；20份无schema变化的生成noise从精确合并预image恢复。完整解压descriptor相对5a5501b3只增加DatabaseDefaults及CreateDatabase#5/AlterDatabase#3/CreateTable#18，其余字段/类型/reserved/enum/options相同。新增UT独立断言15/16/17/18、reserved14及empty/default-only/FK-only/combined的wire size、marshal/unmarshal和clone。
+- **交互审查**：12个自动合并source owner相对新main的460行C03差分完整读取，配合771行相关upstream source增量及实际锁/clone owner核对。数据库默认freshness仍位于CREATE name admission锁内、发布前；proto.Clone完整携带双方字段；prepared/auth、strict最终赋值/同域stored ColRef及subscriber defaults保持。17个result冲突hunk全部机械replay保留C03 domain/NULL/width/format，只组合上游MySQL Type spelling；额外conversion结果6行同步formatter。未声称人工逐字审读全部40803行上游delta。
+- **新UT/消费者**：12个完整普通owner全部PASS，34919个测试PASS事件；覆盖pb/plan、sql/plan、compile、frontend、txn/client、bootstrap、v2_0_0/v4_0_6/v4_0_15、tree、function、sysview。实际`TestDatabaseDefaultsTwoCNPreparedFreshness`串行复验PASS（包15.006s），证明新的CREATE字段与身份/代际prepared消费者边界。均count1、enabled vet、Go1.27.1/Darwin arm64、repository CGo入口。
+- **新race**：txn readonly indeterminate-lock及真实CommitTS两个exact独立成功测量T=0.00/0.01s，B=30s，各N=100独立同进程stress；再完整txn/client owner一次（280个PASS事件），均exit0。未为无关上游window/vector/LLM变更扩大race；原其它race保持历史范围，不冒称重跑。
+- **新公开普通比较**：26个完整脚本包含12冲突result及相关自动合并结果、C03 defaults/conversion/errors、原20M PK、会计脚本和既有cleanup owners。同实例两轮各**5427 total / 5423 success / 4原ignore / 0 failed / 0 abnormal**，Java116s/138s，完整native-linked driver321.27s PASS；每轮26个明确非空选择、errors空，下一轮初始化前四库残留0及owned进程终态。SQL/fixtures/ignore/oracle、20M、120000ms、accounting1保持。`otool`验证强制链接libmo/declared graph及绝对rpath；4282行服务ERROR原样保留，不宣称零ERROR或把error-construction日志当实际无限重试。
+- **新覆盖与静态**：仅3份本轮成功atomic profile（12普通owner+双CN_r2），不使用旧或失败profile；相对5a5501b3严格非生成可执行差分**574/727=78.95%**，aux**712/838=84.96%**，缺采集cdc_testutil计未覆盖。21包vet/lint exit0/0 issues，87份非生成Go符合匹配gofmt，target-relative whitespace exit0。toolchain/native、grammar/parser、protocol/version/function allocation输入与交付HEAD相同，未机械重跑无关全仓测试或另行声称parser重复生成。
+- **失败与资格记录**：首次双CN180s超时停在flock→clusteradmission→Start、尚未获得服务准入，等待本任务BVT exclusive lease；保留栈/exit1，BVT终态后用相同180s/count1串行复验，不加retry/skip或延长SQL timeout。第一版私有BVT的`-ldflags=-w`覆盖wrapper extldflags，虽两轮SQL均通过但不当最终CGo模式验收；保留结果，修正私有链接参数后重新执行相同26脚本。最终资格脚本误将YAML按JDBC URL匹配、误要求service log必须打印会计字段，已按实际YAML和普通比较原oracle修正只读谓词，未改SQL/result或为工具错误重跑成功SQL。
+
+本轮修改只组合既有合同，没有新的worker/queue/resource owner；新native准入前均满足>17GiB，未删除历史资源或操作只读C03来源。上游FK admission新消费者通过fresh owner/公开路径/双CN闭合；durable schema、迁移、AST source及独立历史restart/recovery验收不因字段换号被冒称全部重跑。所有私有driver/TODO/log/profile/manifest留在worktree且不提交。正常推送既有draft PR#29374；本地成功仍不代表远端Linux CI已绿。

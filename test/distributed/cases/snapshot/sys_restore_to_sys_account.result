@@ -1262,8 +1262,8 @@ select * from pri01;
 234222  ¦  -3923
 show columns from pri01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-col2  ¦  DECIMAL(38,0)  ¦  YES  ¦    ¦  null
+col1  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+col2  ¦  decimal(38,0)  ¦  YES  ¦    ¦  null
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp18'} where reldatabase = 'db11';
 ➤ count(*)[-5,64,0]  𝄀
 1

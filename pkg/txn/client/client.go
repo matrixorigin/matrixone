@@ -540,11 +540,15 @@ func (client *txnClient) New(
 	minTS timestamp.Timestamp,
 	options ...TxnOption,
 ) (TxnOperator, error) {
+	meta, err := client.snapshotTxnMeta()
+	if err != nil {
+		return nil, err
+	}
 	op := newTxnOperator(
 		client.sid,
 		client.clock,
 		client.sender,
-		client.newTxnMeta(),
+		meta,
 		client.getTxnOptions(options)...,
 	)
 	return client.doCreateTxn(
@@ -560,12 +564,16 @@ func (client *txnClient) RestartTxn(
 	minTS timestamp.Timestamp,
 	options ...TxnOption,
 ) (TxnOperator, error) {
+	meta, err := client.snapshotTxnMeta()
+	if err != nil {
+		return nil, err
+	}
 	op := txnOp.(*txnOperator)
 	if err := op.claimRestart(); err != nil {
 		return nil, err
 	}
 	op.initForRestart(
-		client.newTxnMeta(),
+		meta,
 		client.getTxnOptions(options)...,
 	)
 	restarted, err := client.doCreateTxn(
@@ -1345,6 +1353,17 @@ func (client *txnClient) getAllTxnOperators() []*txnOperator {
 	client.mu.RUnlock()
 
 	return ops
+}
+
+// Snapshot only metadata under the existing shutdown gate. Admission waits and
+// operator locks remain outside it; a later Close is checked by doCreateTxn.
+func (client *txnClient) snapshotTxnMeta() (txn.TxnMeta, error) {
+	client.lifecycle.gate.RLock()
+	defer client.lifecycle.gate.RUnlock()
+	if client.isClosed() {
+		return txn.TxnMeta{}, moerr.NewClientClosedNoCtx()
+	}
+	return client.newTxnMeta(), nil
 }
 
 func (client *txnClient) newTxnMeta() txn.TxnMeta {

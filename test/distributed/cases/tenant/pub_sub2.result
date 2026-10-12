@@ -69,8 +69,8 @@ Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_dat
 t1    Tae    Dynamic    3    0    156    0    0    NULL    0    2024-12-02 16:47:42    NULL    NULL    utf8mb4_general_ci    NULL            0    moadmin
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
-b    INT(32)    YES        null        
+a    int    YES        null        
+b    int    YES        null        
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL\n)
