@@ -38,6 +38,8 @@ func TestCoverage_buildShowGrants_ForUser(t *testing.T) {
 	// The mock optimizer doesn't have mo_user_grant table, so this should fail with a known error
 	sqls := []string{
 		"show grants for 'testuser'@'localhost'",
+		"show grants for current_user",
+		"show grants for current_user()",
 	}
 	// This is expected to fail in mock because mo_user_grant doesn't exist
 	for _, sql := range sqls {

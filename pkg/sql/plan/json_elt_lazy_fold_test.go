@@ -60,7 +60,7 @@ func TestJSONStringEltLazyPlannerFolding(t *testing.T) {
 						planrule.NewConstantFold(mode == "prepare").Apply(node, nil, proc)
 						expr = node.ProjectList[0]
 					}
-					requires, err := planpb.RequiresMORPCVersion110JSONStringConsumerOverload([]*planpb.Expr{expr})
+					requires, err := planpb.RequiresMORPCVersion111JSONStringConsumerOverload([]*planpb.Expr{expr})
 					require.NoError(t, err)
 					require.True(t, requires, "fold must retain durable/remote ELT identity")
 					result, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})

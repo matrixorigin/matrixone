@@ -145,8 +145,9 @@ const (
 	MORPCVersion107    int64 = 107 // functional-index metadata and generated-key maintenance
 	MORPCVersion108    int64 = 108 // isolated user-variable NULL regexp history in connection migration
 	MORPCVersion109    int64 = 109 // native Unicode collation identities in persisted information_schema.COLUMNS metadata
-	MORPCVersion110    int64 = 110 // selected JSON ELT expression execution
-	MORPCLatestVersion       = MORPCVersion110
+	MORPCVersion110    int64 = 110 // MEDIUMINT assignment bounds for mixed-version CN safety
+	MORPCVersion111    int64 = 111 // selected JSON ELT expression execution
+	MORPCLatestVersion       = MORPCVersion111
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

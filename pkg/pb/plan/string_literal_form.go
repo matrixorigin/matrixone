@@ -298,39 +298,47 @@ const (
 	internalJSONComparisonFunctionID int32 = 577
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
-	binFunctionID                    int32 = 270
-	convFunctionID                   int32 = 367
-	asciiFunctionID                  int32 = 52
-	asciiInt32ResultTypeID           int32 = 22
-	findInSetFunctionID              int32 = 101
-	lengthUTF8FunctionID             int32 = 125
-	strCmpFunctionID                 int32 = 344
-	uncompressedLengthFunctionID     int32 = 389
-	crc32FunctionID                  int32 = 81
-	coalesceFunctionID               int32 = 74
-	caseFunctionID                   int32 = 71
-	iffFunctionID                    int32 = 113
-	leftFunctionID                   int32 = 123
-	rightFunctionID                  int32 = 166
-	substringFunctionID              int32 = 210
-	stringNumericInt32ResultTypeID   int32 = 22
-	stringNumericInt64ResultTypeID   int32 = 23
-	stringNumericUint64ResultTypeID  int32 = 28
-	planVarcharTypeID                int32 = 61
-	planBinaryTypeID                 int32 = 64
-	planVarbinaryTypeID              int32 = 65
-	planBlobTypeID                   int32 = 70
-	planTextTypeID                   int32 = 71
-	ipInt32ResultTypeID              int32 = 22
-	planCharTypeID                   int32 = 60
-	planDateTypeID                   int32 = 50
-	planTimeTypeID                   int32 = 51
-	planDatetimeTypeID               int32 = 52
-	planTimestampTypeID              int32 = 53
-	planInt64TypeID                  int32 = 23
-	planUint32TypeID                 int32 = 27
-	planAnyTypeID                    int32 = 0
-	maxVarcharWidth                  int32 = 65535
+	planInt32TypeID                  int32 = 22
+	// These stable function IDs are mirrored from pkg/sql/plan/function to
+	// avoid a dependency cycle. The generic CAST operator is not an assignment
+	// bounds check; these three internal assignment casts are.
+	mediumIntStrictCastFunctionID     int32 = 541
+	mediumIntAssignmentCastFunctionID int32 = 554
+	mediumIntIgnoreCastFunctionID     int32 = 555
+	castJSONToArrayFunctionID         int32 = 513
+	binFunctionID                     int32 = 270
+	convFunctionID                    int32 = 367
+	asciiFunctionID                   int32 = 52
+	asciiInt32ResultTypeID            int32 = 22
+	findInSetFunctionID               int32 = 101
+	lengthUTF8FunctionID              int32 = 125
+	strCmpFunctionID                  int32 = 344
+	uncompressedLengthFunctionID      int32 = 389
+	crc32FunctionID                   int32 = 81
+	coalesceFunctionID                int32 = 74
+	caseFunctionID                    int32 = 71
+	iffFunctionID                     int32 = 113
+	leftFunctionID                    int32 = 123
+	rightFunctionID                   int32 = 166
+	substringFunctionID               int32 = 210
+	stringNumericInt32ResultTypeID    int32 = 22
+	stringNumericInt64ResultTypeID    int32 = 23
+	stringNumericUint64ResultTypeID   int32 = 28
+	planVarcharTypeID                 int32 = 61
+	planBinaryTypeID                  int32 = 64
+	planVarbinaryTypeID               int32 = 65
+	planBlobTypeID                    int32 = 70
+	planTextTypeID                    int32 = 71
+	ipInt32ResultTypeID               int32 = 22
+	planCharTypeID                    int32 = 60
+	planDateTypeID                    int32 = 50
+	planTimeTypeID                    int32 = 51
+	planDatetimeTypeID                int32 = 52
+	planTimestampTypeID               int32 = 53
+	planInt64TypeID                   int32 = 23
+	planUint32TypeID                  int32 = 27
+	planAnyTypeID                     int32 = 0
+	maxVarcharWidth                   int32 = 65535
 )
 
 // RemoteExpressionFeatures is the complete set of versioned expression
@@ -374,6 +382,8 @@ const (
 // execution contracts.
 // JSONScalarLiteralContracts requires MORPC v104 because older executors
 // decode JSON-typed Sval literals as VARCHAR rather than encoded JSON.
+// MediumIntAssignmentBounds requires MORPC v110 because older executors treat
+// the shared INT32 storage type as a full-width INT rather than a 24-bit value.
 type RemoteExpressionFeatures struct {
 	JSONStringConsumerOverload      bool
 	JSONScalarLiteralContracts      bool
@@ -406,6 +416,7 @@ type RemoteExpressionFeatures struct {
 	NormalizedIntervalUnits       bool
 	LegacyIntervalUnits           bool
 	WeekSessionDefault            bool
+	MediumIntAssignmentBounds     bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -433,7 +444,33 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.InvalidTemporalResultContract ||
 		features.NormalizedIntervalUnits ||
 		features.LegacyIntervalUnits ||
-		features.WeekSessionDefault
+		features.WeekSessionDefault ||
+		features.MediumIntAssignmentBounds
+}
+
+func isPlanMediumIntType(typ Type) bool {
+	return typ.Width == 24 && (typ.Id == planInt32TypeID || typ.Id == planUint32TypeID)
+}
+
+func hasMediumIntTypeName(typeName string) bool {
+	normalized := strings.ToLower(strings.NewReplacer("(", " ", ")", " ", ",", " ").Replace(typeName))
+	for _, token := range strings.Fields(normalized) {
+		if token == "mediumint" || token == "int3" {
+			return true
+		}
+	}
+	return false
+}
+
+func isMediumIntArrayCast(current *Expr, fn *Function) bool {
+	if current != nil && hasMediumIntTypeName(current.Typ.Enumvalues) {
+		return true
+	}
+	if fn == nil || len(fn.Args) == 0 || fn.Args[0] == nil || fn.Args[0].GetLit() == nil {
+		return false
+	}
+	literal, ok := fn.Args[0].GetLit().Value.(*Literal_Sval)
+	return ok && hasMediumIntTypeName(literal.Sval)
 }
 
 func hasPrivateIntegerPrecisionCast(expr *Expr) bool {
@@ -869,6 +906,16 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
 				features.JSONStringConsumerOverload = features.JSONStringConsumerOverload || isRemoteJSONStringConsumerOverload(id, overload)
+				mediumIntAssignmentTarget := len(fn.Args) > 1 && fn.Args[1] != nil &&
+					isPlanMediumIntType(fn.Args[1].Typ)
+				if (id == mediumIntStrictCastFunctionID ||
+					id == mediumIntAssignmentCastFunctionID ||
+					id == mediumIntIgnoreCastFunctionID) && mediumIntAssignmentTarget {
+					features.MediumIntAssignmentBounds = true
+				}
+				if id == castJSONToArrayFunctionID && isMediumIntArrayCast(current, fn) {
+					features.MediumIntAssignmentBounds = true
+				}
 				if id == 21 && current.Typ.Id == 11 && len(fn.Args) > 0 &&
 					fn.Args[0] != nil && fn.Args[0].Typ.Id == 55 { // CAST YEAR -> BIT
 					features.YearBitCast = true
@@ -1616,10 +1663,10 @@ func expressionOwnerContainer(kind reflect.Kind) bool {
 	}
 }
 
-// RequiresMORPCVersion110JSONStringConsumerOverload detects the distinct JSON-aware
+// RequiresMORPCVersion111JSONStringConsumerOverload detects the distinct JSON-aware
 // ELT identity. Current-main v101 retains the existing JSON-aware
 // CONCAT and CONCAT_WS overload 0 contracts.
-func RequiresMORPCVersion110JSONStringConsumerOverload(owner any) (bool, error) {
+func RequiresMORPCVersion111JSONStringConsumerOverload(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.JSONStringConsumerOverload, err
 }

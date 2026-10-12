@@ -111,6 +111,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.IntegerParameterCoercion && requiredVersion < defines.MORPCVersion85 {
 		requiredVersion = defines.MORPCVersion85
 	}
+	if features.MediumIntAssignmentBounds && requiredVersion < defines.MORPCVersion110 {
+		requiredVersion = defines.MORPCVersion110
+	}
 	if features.BoundedConditionalStringDomains && requiredVersion < defines.MORPCVersion83 {
 		requiredVersion = defines.MORPCVersion83
 	}
@@ -133,10 +136,10 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = defines.MORPCVersion98
 	}
 	if features.JSONInputContracts || features.YearBitCast {
-		requiredVersion = defines.MORPCVersion101
+		requiredVersion = max(requiredVersion, defines.MORPCVersion101)
 	}
 	if features.JSONStringConsumerOverload {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion110)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion111)
 	}
 	return requiredVersion, nil
 }
