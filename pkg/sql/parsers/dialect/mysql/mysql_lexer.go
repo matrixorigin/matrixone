@@ -641,8 +641,17 @@ func executableCommentEndsByFinalSemicolon(sql string, sqlMode string) map[int]i
 
 	var ends map[int]int
 	finalSemicolonEnd := 0
+	previousToken := 0
 	for {
-		typ, _ := scanner.Scan()
+		// Match Lex's qualification context before keyword-specific lookahead
+		// so accepted names such as t.begin cannot stop this boundary rescan.
+		var typ int
+		if previousToken == int('.') {
+			typ, _ = scanner.scanAfterDot()
+		} else {
+			typ, _ = scanner.Scan()
+		}
+		previousToken = typ
 		if commentEnd := scanner.TakeExecutableCommentEnd(); commentEnd != 0 {
 			if finalSemicolonEnd != 0 && commentEnd >= 2 && finalSemicolonEnd <= commentEnd-2 &&
 				strings.TrimSpace(sql[finalSemicolonEnd:commentEnd-2]) == "" {

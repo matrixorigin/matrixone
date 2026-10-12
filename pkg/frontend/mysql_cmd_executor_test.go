@@ -4135,21 +4135,32 @@ func TestGetComputationWrapperKeepsExecutableCommentStatementWhole(t *testing.T)
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	execCtx := newTestExecCtx(ctx, ctrl)
-	execCtx.ses = ses
-	const sql = "/*!40101 use mysql_ddl_test_db_3; */"
-	execCtx.input = &UserInput{sql: sql}
+	for _, tt := range []struct{ sql, record string }{
+		{"/*!40101 use mysql_ddl_test_db_3; */", "/*!40101 use mysql_ddl_test_db_3;*/"},
+		{"/*! SELECT t.begin, t.rank FROM t; */", "/*! SELECT t.begin, t.rank FROM t;*/"},
+		{"/*! SELECT t.`begin`, t.rank FROM t; */", "/*! SELECT t.`begin`, t.rank FROM t;*/"},
+		{"SELECT t./*! begin, t.rank FROM t; */", "SELECT t./*! begin, t.rank FROM t;*/"},
+	} {
+		t.Run(tt.sql, func(t *testing.T) {
+			execCtx := newTestExecCtx(ctx, ctrl)
+			execCtx.ses = ses
+			execCtx.input = &UserInput{sql: tt.sql}
 
-	cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
-	require.NoError(t, err)
-	require.Len(t, cws, 1)
-	defer cws[0].Free()
-
-	require.Equal(t, sql, cws[0].(interface{ SchedulingSQL() string }).SchedulingSQL())
-	records, err := sqlForRecordByStatement(ctx, sql)
-	require.NoError(t, err)
-	require.Len(t, records, 1)
-	require.Contains(t, records[0], "use mysql_ddl_test_db_3")
+			cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+			require.NoError(t, err)
+			defer func() {
+				for _, cw := range cws {
+					cw.Free()
+				}
+			}()
+			require.Len(t, cws, 1)
+			require.Equal(t, tt.sql, cws[0].(interface{ SchedulingSQL() string }).SchedulingSQL())
+			require.Equal(t, []string{constant.ExternSql}, execCtx.input.sqlSourceType)
+			records, err := sqlForRecordByStatement(ctx, tt.sql)
+			require.NoError(t, err)
+			require.Equal(t, []string{tt.record}, records)
+		})
+	}
 }
 
 func TestGetComputationWrapperKeepsRemapPerStatement(t *testing.T) {

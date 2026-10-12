@@ -240,6 +240,47 @@ func TestSplitSqlByStatementExecutableCommentTerminator(t *testing.T) {
 			sql:  "/*!40101 select 1; */;",
 			want: []string{"/*!40101 select 1; */", ""},
 		},
+		{
+			name: "qualified BEGIN before comma",
+			sql:  "/*! SELECT t.begin, t.rank FROM t; */",
+			want: []string{"/*! SELECT t.begin, t.rank FROM t; */"},
+		},
+		{
+			name: "quoted BEGIN control",
+			sql:  "/*! SELECT t.`begin`, t.rank FROM t; */",
+			want: []string{"/*! SELECT t.`begin`, t.rank FROM t; */"},
+		},
+		{
+			name: "qualified RANK control",
+			sql:  "/*! SELECT t.rank FROM t; */",
+			want: []string{"/*! SELECT t.rank FROM t; */"},
+		},
+		{
+			name: "qualified BEGIN after whitespace and line comment",
+			sql:  "/*! SELECT t. -- component\n begin, t.rank FROM t; */",
+			want: []string{"/*! SELECT t. -- component\n begin, t.rank FROM t; */"},
+		},
+		{
+			name: "qualification crosses executable comment opening",
+			sql:  "SELECT t./*! begin, t.rank FROM t; */",
+			want: []string{"SELECT t./*! begin, t.rank FROM t; */"},
+		},
+		{
+			name: "qualified BEGIN followed by ordinary statement",
+			sql:  "/*! SELECT t.begin, t.rank FROM t; */ SELECT 2;",
+			want: []string{"/*! SELECT t.begin, t.rank FROM t; */", "SELECT 2"},
+		},
+		{
+			name: "qualified BEGIN in consecutive executable comments",
+			sql:  "/*! SELECT t.begin, t.rank FROM t; */ /*! SELECT t.begin FROM t; */",
+			want: []string{"/*! SELECT t.begin, t.rank FROM t; */", "/*! SELECT t.begin FROM t; */"},
+		},
+		{
+			name:    "qualified BEGIN with NO_BACKSLASH_ESCAPES",
+			sql:     `/*! SELECT t.begin, 'x\', t.rank FROM t; */`,
+			sqlMode: "NO_BACKSLASH_ESCAPES",
+			want:    []string{`/*! SELECT t.begin, 'x\', t.rank FROM t; */`},
+		},
 	}
 
 	for _, test := range tests {

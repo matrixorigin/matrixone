@@ -17,5 +17,7 @@ select id,rank() over (order by id) as position from rank_source order by id;
 create table qualified_identifier.select (id int primary key, `begin` int, `null` int);
 insert into qualified_identifier.select values (1,7,null);
 select t.id,t.begin,t.null from qualified_identifier.select t order by t.id;
+-- Executable-comment rescanning preserves qualified BEGIN and the closing wrapper.
+/*! select t.begin,t.null from qualified_identifier.select t; */;
 drop database qualified_identifier;
 show databases like 'qualified_identifier';
