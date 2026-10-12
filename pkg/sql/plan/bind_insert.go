@@ -2675,6 +2675,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	updateColExprList := make([]*plan.Expr, 0, len(astUpdateExprs))
 	possiblyChangedCols := make(map[string]struct{})
 	immutablePrimaryKeyCols := make(map[string]struct{})
+	// Once any assignment to a primary key is not proven immutable, a later
+	// direct literal/marker assignment cannot make the ordered stream safe again.
+	unprovenPrimaryKeyCols := make(map[string]struct{})
 	autoUpdateCols := make(map[string]bool)
 
 	if len(astUpdateExprs) == 0 {
@@ -2779,21 +2782,26 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			// the primary key. The value is only a no-op when it equals the row
 			// selected by the primary-key arbiter, so retain the assignment in
 			// order and validate it against the old row at execution time.
-			if firstUniqueIdxPos < 0 &&
-				slices.Contains(tableDef.Pkey.Names, colDef.Name) &&
-				isDirectODKUPKIdentityValue(astExpr) {
-				oldPrimaryKey := &plan.Expr{
-					Typ: colDef.Typ,
-					Expr: &plan.Expr_Col{Col: &plan.ColRef{
-						RelPos: scanTag,
-						ColPos: int32(colIdx),
-					}},
+			if slices.Contains(tableDef.Pkey.Names, colDef.Name) {
+				if firstUniqueIdxPos < 0 && isDirectODKUPKIdentityValue(astExpr) {
+					if _, unproven := unprovenPrimaryKeyCols[colDef.Name]; !unproven {
+						oldPrimaryKey := &plan.Expr{
+							Typ: colDef.Typ,
+							Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: scanTag,
+								ColPos: int32(colIdx),
+							}},
+						}
+						updateExpr, err = buildODKUPKIdentityGuard(builder.GetContext(), oldPrimaryKey, updateExpr)
+						if err != nil {
+							return 0, err
+						}
+						immutablePrimaryKeyCols[colDef.Name] = struct{}{}
+					}
+				} else {
+					delete(immutablePrimaryKeyCols, colDef.Name)
+					unprovenPrimaryKeyCols[colDef.Name] = struct{}{}
 				}
-				updateExpr, err = buildODKUPKIdentityGuard(builder.GetContext(), oldPrimaryKey, updateExpr)
-				if err != nil {
-					return 0, err
-				}
-				immutablePrimaryKeyCols[colDef.Name] = struct{}{}
 			}
 			updateExprs[colDef.Name] = updateExpr
 			updateColIdxList = append(updateColIdxList, colIdx)

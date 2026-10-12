@@ -39,6 +39,15 @@ insert into t_issue_29850_pk values (1, 'repeated-would-update')
     on duplicate key update id = 2, id = 1, payload = values(payload);
 select * from t_issue_29850_pk order by id;
 
+-- Any unguarded assignment keeps the whole PK assignment stream unsupported,
+-- even when the stream also contains a direct equal literal.
+insert into t_issue_29850_pk values (1, 'guard-then-mutation')
+    on duplicate key update id = 1, id = id + 1, payload = values(payload);
+select * from t_issue_29850_pk order by id;
+insert into t_issue_29850_pk values (1, 'mutation-then-guard')
+    on duplicate key update id = id + 1, id = 2, payload = values(payload);
+select * from t_issue_29850_pk order by id;
+
 -- Each component of a composite key is guarded against the old conflicting row.
 drop table if exists t_issue_29850_composite;
 create table t_issue_29850_composite (a int, b int, payload varchar(40), primary key (a, b));

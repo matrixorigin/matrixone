@@ -146,11 +146,19 @@ func TestInsertOnDupIncomingCompositePrimaryKeyNoop(t *testing.T) {
 }
 
 func TestInsertOnDupPrimaryKeyMutationStillRejected(t *testing.T) {
-	mock := NewMockOptimizer(true, newPlanTestProcess(t))
-	_, err := runOneStmt(mock, t,
-		"insert into constraint_test.t1(a, b) values (1, 'x') "+
-			"on duplicate key update a = a + 1, b = values(b)")
-	require.ErrorContains(t, err, "unsupported DML: update primary key on duplicate")
+	for _, assignment := range []string{
+		"a = a + 1, b = values(b)",
+		"a = 1, a = a + 1, b = values(b)",
+		"a = a + 1, a = 1, b = values(b)",
+	} {
+		t.Run(assignment, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			_, err := runOneStmt(mock, t,
+				"insert into constraint_test.t1(a, b) values (1, 'x') "+
+					"on duplicate key update "+assignment)
+			require.ErrorContains(t, err, "unsupported DML: update primary key on duplicate")
+		})
+	}
 }
 
 func TestInsertOnDupPrimaryKeyFromDifferentIncomingColumnStillRejected(t *testing.T) {
