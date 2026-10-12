@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -49,11 +50,31 @@ func TestJSONValueProtocolFloorComposesWithLandedContracts(t *testing.T) {
 		JSONValueContract:          true,
 		JSONInputContracts:         true,
 		JSONScalarLiteralContracts: true,
+		MediumIntAssignmentBounds:  true,
 	}
-	require.Equal(t, defines.MORPCVersion110, requiredExpressionContractProtocolVersion(features))
-	require.Equal(t, defines.MORPCVersion110, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion111, requiredExpressionContractProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion111, remoteExpressionProtocolVersion(features))
 	features.JSONValueContract = false
 	require.Equal(t, defines.MORPCVersion104, requiredExpressionContractProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion110, remoteExpressionProtocolVersion(features))
+}
+
+func TestJSONValueDestinationRequiresItsOwnProtocolFloor(t *testing.T) {
+	for _, mixed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("mediumint=%t", mixed), func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			features := planpb.RemoteExpressionFeatures{JSONValueContract: true, MediumIntAssignmentBounds: mixed}
+			p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}
+			client.version = defines.MORPCVersion110
+			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 111")
+			require.Equal(t, 1, client.calls)
+			require.Equal(t, client.calls, client.releases)
+			client.version = defines.MORPCVersion111
+			require.NoError(t, validateRemoteExpressionDestination(c.proc, p, features))
+			require.Equal(t, 2, client.calls)
+			require.Equal(t, client.calls, client.releases)
+		})
+	}
 }
 
 func (c *expressionVersionClient) NewRequest(m query.CmdMethod) *query.Request {

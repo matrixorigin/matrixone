@@ -534,6 +534,50 @@ func TestIffCheck_PreservesVectorResultTypes(t *testing.T) {
 	}
 }
 
+func TestMediumIntCommonResultTypeIsOrderIndependent(t *testing.T) {
+	medium := types.New(types.T_int32, 24, -1)
+	ordinary := types.New(types.T_int32, 32, -1)
+
+	for _, inputs := range [][]types.Type{
+		{medium, ordinary},
+		{ordinary, medium},
+		{medium, types.T_any.ToType(), ordinary},
+	} {
+		resolved, err := GetFunctionByName(context.Background(), "coalesce", inputs)
+		require.NoError(t, err)
+		require.Equal(t, types.T_int32, resolved.GetReturnType().Oid)
+		require.False(t, resolved.GetReturnType().IsMediumInt())
+		targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+		require.True(t, shouldCast)
+		require.Len(t, targets, len(inputs))
+		for _, target := range targets {
+			require.Equal(t, types.T_int32, target.Oid)
+			require.Equal(t, int32(32), target.Width)
+		}
+	}
+
+	for _, inputs := range [][]types.Type{
+		{types.T_bool.ToType(), medium, ordinary},
+		{types.T_bool.ToType(), ordinary, medium},
+	} {
+		caseResult := caseCheck(nil, inputs)
+		require.Equal(t, succeedWithCast, caseResult.status)
+		require.Equal(t, int32(32), caseResult.finalType[1].Width)
+		require.Equal(t, int32(32), caseResult.finalType[2].Width)
+
+		ifResult := iffCheck(nil, inputs)
+		require.Equal(t, succeedWithCast, ifResult.status)
+		require.Equal(t, int32(32), ifResult.finalType[1].Width)
+		require.Equal(t, int32(32), ifResult.finalType[2].Width)
+	}
+
+	pure, ok := CommonMediumIntType([]types.Type{medium, types.T_any.ToType(), medium})
+	require.True(t, ok)
+	require.Equal(t, int32(24), pure.Width)
+	_, ok = CommonMediumIntType([]types.Type{medium, types.T_uint32.ToType()})
+	require.False(t, ok, "mixed signedness keeps the existing integer promotion path")
+}
+
 func TestCaseCheckVectorResultTypes(t *testing.T) {
 	vectorTypes := []types.Type{
 		types.New(types.T_array_float32, 3, 0),

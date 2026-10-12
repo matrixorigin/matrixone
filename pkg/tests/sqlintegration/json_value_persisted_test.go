@@ -92,7 +92,7 @@ func TestJSONValueFunctionalIndexComposition(t *testing.T) {
 			return counts
 		}
 		composed := "(id int primary key,doc json,name varchar(40),v bigint generated always as (json_value(doc,'$' returning signed)) stored,index fi ((lower(name)),id),key v_idx(v))"
-		for _, protocol := range []int64{defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110} {
+		for _, protocol := range []int64{defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111} {
 			admission.protocol.Store(protocol)
 			admission.readFloor.Store(protocol)
 			admission.authoring.Store(defines.MORPCVersion107)
@@ -102,12 +102,12 @@ func TestJSONValueFunctionalIndexComposition(t *testing.T) {
 			exec(fmt.Sprintf("create view legacy_control_%d as select json_value('1','$') as v", protocol))
 			before := catalogCounts()
 			_, err := conn.ExecContext(ctx, fmt.Sprintf("create table rejected_%d%s", protocol, composed))
-			require.ErrorContains(t, err, "protocol version 110")
+			require.ErrorContains(t, err, "protocol version 111")
 			require.Equal(t, before, catalogCounts(), "rejected composition must not publish table, column or index metadata")
 		}
 		admission.protocol.Store(0)
 		admission.readFloor.Store(0)
-		admission.authoring.Store(defines.MORPCVersion110)
+		admission.authoring.Store(defines.MORPCVersion111)
 		for _, query := range []string{
 			"create table rejected_direct(doc json,index fi ((json_value(doc,'$' returning signed))))",
 			"create table rejected_dependency(doc json,v bigint generated always as (json_value(doc,'$' returning signed)) stored,index fi ((v+1)))",
@@ -200,6 +200,11 @@ func TestJSONValuePersistedPublication(t *testing.T) {
 			}
 		}
 		defer restore()
+		// The landed v110 prefix supports MEDIUMINT, but not new JSON_VALUE
+		// clauses. Exercise real SQL/catalog publication under that same fence.
+		admission.protocol.Store(defines.MORPCVersion110)
+		admission.readFloor.Store(defines.MORPCVersion110)
+		admission.authoring.Store(defines.MORPCVersion110)
 		statements := []string{
 			`create table jv_default (v bigint default (json_value('1', '$' returning signed)))`,
 			`create table jv_generated (doc json, v bigint generated always as (json_value(doc, '$' returning signed)) stored, key v_idx(v))`,
@@ -209,7 +214,7 @@ func TestJSONValuePersistedPublication(t *testing.T) {
 		}
 		for _, statement := range statements {
 			_, err = conn.ExecContext(ctx, statement)
-			require.ErrorContains(t, err, "protocol version 110", statement)
+			require.ErrorContains(t, err, "protocol version 111", statement)
 			var count int
 			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='json_value_publication'").Scan(&count))
 			require.Zero(t, count, "failed authoring must not leave tables, views or index tables")
@@ -218,10 +223,20 @@ func TestJSONValuePersistedPublication(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_indexes where database_id in (select dat_id from mo_catalog.mo_database where datname='json_value_publication')").Scan(&count))
 			require.Zero(t, count, "failed authoring must not leave index metadata")
 		}
+		_, err = conn.ExecContext(ctx, `create table jv_mediumint_control (v mediumint, u mediumint unsigned)`)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, `insert into jv_mediumint_control values (8388607, 16777215)`)
+		require.NoError(t, err)
+		var mediumSigned, mediumUnsigned int64
+		require.NoError(t, conn.QueryRowContext(ctx, `select v,u from jv_mediumint_control`).Scan(&mediumSigned, &mediumUnsigned))
+		require.Equal(t, int64(8388607), mediumSigned)
+		require.Equal(t, int64(16777215), mediumUnsigned)
 		// Legacy expressions remain publishable at the predecessor floor.
 		_, err = conn.ExecContext(ctx, `create view jv_legacy as select json_value('{"v":1}', '$.v') as v`)
 		require.NoError(t, err)
-		admission.authoring.Store(defines.MORPCVersion110)
+		admission.protocol.Store(0)
+		admission.readFloor.Store(0)
+		admission.authoring.Store(defines.MORPCVersion111)
 		for _, statement := range statements {
 			_, err = conn.ExecContext(ctx, statement)
 			require.NoError(t, err, statement)
@@ -231,12 +246,17 @@ func TestJSONValuePersistedPublication(t *testing.T) {
 		var value int64
 		require.NoError(t, conn.QueryRowContext(ctx, `select v from jv_generated force index(v_idx) where v=1`).Scan(&value))
 		require.Equal(t, int64(1), value)
+		// The durable v111 view cannot be read through a v110 read floor,
+		// independently of its authoring gate; rejection leaves its value intact.
+		admission.readFloor.Store(defines.MORPCVersion110)
+		require.ErrorContains(t, conn.QueryRowContext(ctx, `select v from jv_view`).Scan(&value), "protocol version 111")
+		admission.readFloor.Store(0)
 		// Read admission and write admission have distinct responsibilities.
 		admission.authoring.Store(defines.MORPCVersion107)
 		require.NoError(t, conn.QueryRowContext(ctx, `select v from jv_view`).Scan(&value))
 		require.Equal(t, int64(1), value)
 		_, err = conn.ExecContext(ctx, `alter view jv_view as select json_value('2', '$' returning signed) as v`)
-		require.ErrorContains(t, err, "protocol version 110")
+		require.ErrorContains(t, err, "protocol version 111")
 		require.NoError(t, conn.QueryRowContext(ctx, `select v from jv_view`).Scan(&value))
 		require.Equal(t, int64(1), value, "failed ALTER must preserve published view")
 
@@ -299,27 +319,28 @@ func TestJSONValuePersistedPublication(t *testing.T) {
 			}
 			for _, state := range []struct{ protocol, authoring int64 }{
 				{defines.MORPCVersion109, defines.MORPCVersion109},
-				{defines.MORPCVersion110, defines.MORPCVersion109},
+				{defines.MORPCVersion110, defines.MORPCVersion110},
+				{defines.MORPCVersion111, defines.MORPCVersion110},
 			} {
 				admission.protocol.Store(state.protocol)
 				admission.readFloor.Store(state.protocol)
 				admission.authoring.Store(state.authoring)
 				for _, query := range views {
 					_, err := conn.ExecContext(ctx, query)
-					require.ErrorContains(t, err, "protocol version 110", query)
+					require.ErrorContains(t, err, "protocol version 111", query)
 					var published int
 					require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='json_value_publication' and relname in ('jv_reuse_projection','jv_reuse_having')").Scan(&published))
 					require.Zero(t, published, "rejected mixed-form views must not be published")
 				}
 			}
-			admission.protocol.Store(defines.MORPCVersion110)
-			admission.readFloor.Store(defines.MORPCVersion110)
-			admission.authoring.Store(defines.MORPCVersion110)
+			admission.protocol.Store(defines.MORPCVersion111)
+			admission.readFloor.Store(defines.MORPCVersion111)
+			admission.authoring.Store(defines.MORPCVersion111)
 			for _, query := range views {
 				_, err := conn.ExecContext(ctx, query)
 				require.NoError(t, err, query)
 			}
-			admission.authoring.Store(defines.MORPCVersion109)
+			admission.authoring.Store(defines.MORPCVersion110)
 			require.NoError(t, conn.QueryRowContext(ctx, "select n from jv_reuse_projection where v is null").Scan(&count))
 			require.Equal(t, int64(1), count)
 			require.NoError(t, conn.QueryRowContext(ctx, "select n from jv_reuse_having").Scan(&count))
@@ -365,5 +386,8 @@ func TestJSONValuePersistedPublication(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, restartedConn.QueryRowContext(ctx, `select v from jv_generated force index(v_idx) where v=2`).Scan(&value))
 		require.Equal(t, int64(2), value)
+		require.NoError(t, restartedConn.QueryRowContext(ctx, `select v,u from jv_mediumint_control`).Scan(&mediumSigned, &mediumUnsigned))
+		require.Equal(t, int64(8388607), mediumSigned, "landed MEDIUMINT data survives the same real CN restart")
+		require.Equal(t, int64(16777215), mediumUnsigned)
 	})
 }

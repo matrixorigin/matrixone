@@ -82,6 +82,98 @@ func TestSpecialIntegerProtocolPlacementAndSend(t *testing.T) {
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 }
 
+func TestMediumIntAssignmentProtocolPlacementAndSend(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
+	expr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_int32), Width: 24},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CAST_ASSIGN, 0), ObjName: "cast_assign"},
+			Args: []*planpb.Expr{
+				{Typ: planpb.Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+				{Typ: planpb.Type{Id: int32(types.T_int32), Width: 24}, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}},
+			},
+		}},
+	}
+	// A UNION branch can widen only this outer metadata while retaining the
+	// assignment CAST's width-24 target argument.
+	expr.Typ.Width = 32
+	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+	require.NoError(t, err)
+	require.True(t, features.MediumIntAssignmentBounds)
+	version, err := plan2.RequiredPersistedExpressionProtocolVersion(expr)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion110), version)
+
+	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
+	op := projection.NewArgument()
+	defer op.Release()
+	op.ProjectList = []*planpb.Expr{expr}
+	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+	client.version = defines.MORPCVersion109
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 110")
+	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, nil, features), "versioned remote destination")
+	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 110")
+	data, err := p.Marshal()
+	require.NoError(t, err)
+	_, err = decodeScope(data, c.proc, true, nil)
+	require.ErrorContains(t, err, "version 110")
+
+	client.version = defines.MORPCVersion110
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.NoError(t, err)
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+	_, err = decodeScope(data, c.proc, true, nil)
+	require.NoError(t, err)
+
+	// Main's MEDIUMINT v110 capability does not imply the new JSON_VALUE
+	// contract. Placement, final send and serialized receive use the maximum.
+	args := make([]*planpb.Expr, 7)
+	for i := range args {
+		args[i] = &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
+	}
+	jsonValue := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.JSON_VALUE, 2), ObjName: "json_value"}, Args: args,
+	}}}
+	op.ProjectList = append(op.ProjectList, jsonValue)
+	qry.Nodes[0].ProjectList = op.ProjectList
+	p.InstructionList[0].ProjectList = op.ProjectList
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 111")
+	data, err = p.Marshal()
+	require.NoError(t, err)
+	_, err = decodeScope(data, c.proc, true, nil)
+	require.ErrorContains(t, err, "version 111")
+	client.version = defines.MORPCVersion111
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.NoError(t, err)
+	_, err = decodeScope(data, c.proc, true, nil)
+	require.NoError(t, err)
+	require.Equal(t, client.calls, client.releases)
+}
+
 func TestMakeTimeIntegerOverloadAlsoRequiresTemporalProtocol(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	expr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_time), Scale: 6}, Expr: &planpb.Expr_F{F: &planpb.Function{

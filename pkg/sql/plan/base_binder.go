@@ -167,6 +167,14 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindFuncExprImplByAstExpr("serial_extract", []tree.Expr{astExpr}, depth)
 
 	case *tree.CastExpr:
+		if typ, ok := exprImpl.Type.(*tree.T); ok &&
+			defines.MysqlType(typ.InternalType.Oid) == defines.MYSQL_TYPE_INT24 {
+			// MySQL accepts MEDIUMINT in DDL but does not accept it as a CAST
+			// target. Keep that syntax boundary separate from internal assignment
+			// casts, which enforce the target column's 24-bit domain.
+			err = moerr.NewNYI(b.GetContext(), "CAST to MEDIUMINT is not supported")
+			return
+		}
 		var typ Type
 		typ, err = getTypeFromAst(b.GetContext(), exprImpl.Type)
 		if err != nil {
@@ -3494,15 +3502,15 @@ func requireJSONValueContractProtocol(ctx context.Context, proc *process.Process
 	if rt == nil {
 		return moerr.NewNotSupported(
 			ctx,
-			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 110",
+			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 111",
 		)
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion110 {
+	if !ok || !valid || version < defines.MORPCVersion111 {
 		return moerr.NewNotSupported(
 			ctx,
-			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 110",
+			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 111",
 		)
 	}
 	return nil

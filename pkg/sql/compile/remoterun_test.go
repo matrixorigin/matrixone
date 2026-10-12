@@ -1393,7 +1393,11 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 	require.GreaterOrEqual(t, defines.MORPCLatestVersion, defines.MORPCVersion36,
 		"the v36 remote-expression capability must remain available after later protocol increments")
 
-	proc := testutil.NewProcess(t)
+	// A successful sender needs an observed capable destination, not only a
+	// coordinator floor. Reuse the protocol fixture's real endpoint mapping.
+	c, client := expressionProtocolTestCompile(t)
+	client.version = defines.MORPCVersion111
+	proc := c.proc
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
 	proc.Base.TxnOperator = fakeTxnOperator{}
 	proc.Base.SessionInfo.TimeZone = time.UTC
@@ -1477,9 +1481,10 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 	}
 	makeScope := func(expressions ...*planpb.Expr) *Scope {
 		return &Scope{
-			Magic:  Remote,
-			Proc:   proc,
-			RootOp: value_scan.NewArgument(),
+			Magic:    Remote,
+			Proc:     proc,
+			NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"},
+			RootOp:   value_scan.NewArgument(),
 			Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
 				Steps: []int32{0}, Nodes: []*planpb.Node{{NodeId: 0, ProjectList: expressions}},
 			}}},
@@ -1709,9 +1714,9 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		{
 			name:                "JSON_VALUE seven-argument plan",
 			expressions:         []*planpb.Expr{jsonValueContract()},
-			incompatibleVersion: defines.MORPCVersion109,
-			compatibleVersion:   defines.MORPCVersion110,
-			errorContains:       "seven-argument JSON_VALUE plans require MORPC protocol version 110",
+			incompatibleVersion: defines.MORPCVersion110,
+			compatibleVersion:   defines.MORPCVersion111,
+			errorContains:       "seven-argument JSON_VALUE plans require MORPC protocol version 111",
 		},
 		{
 			name:                "numeric prefix and JSON comparison",
