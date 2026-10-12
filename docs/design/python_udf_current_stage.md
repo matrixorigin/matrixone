@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Design revision | `python-udf-current-stage-r7-2026-10-12` |
+| Design revision | `python-udf-current-stage-r8-2026-10-12` |
 | Applies to | MatrixOne PR #29152, test/development-stage Python UDF |
-| Upstream repair baseline | `11914526ba0cd40d471299d8e5e2929909b9e09c` (MORPC 110 for MEDIUMINT; the native COLUMNS repair remains catalog 4.0.14) |
-| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r7 repair preserves the upstream catalog 4.0.14 handler unchanged, adds a separate Python revision repair in catalog 4.0.15, and uses protocol 111 admission, including prepared reuse and physical/remote execution. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
+| Upstream repair baseline | `b09f2c6fc54eb159f549f69db2636fd5fb6e5125` (MORPC 110 for MEDIUMINT; the native COLUMNS repair remains catalog 4.0.14) |
+| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r8 repair preserves the upstream catalog 4.0.14 handler unchanged, adds a separate Python revision repair in catalog 4.0.15, and uses protocol 111 admission, including prepared reuse and physical/remote execution. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
 | Not covered | Production tenant isolation, sandbox, Operator rollout, or cross-version rollback/restore |
 
 This is the versioned governing proposal for the current PR stage. The owner
