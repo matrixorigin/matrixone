@@ -419,11 +419,24 @@ func appendTimestampSQL(dst []byte, value types.Timestamp, scale int32) []byte {
 	// Timestamp is stored as a signed microsecond count.  Serializing that
 	// representation through BIT_CAST avoids parsing a session-timezone
 	// dependent string and preserves fractional values and zero timestamps.
-	_ = scale // the target column's type controls the effective scale on cast
 	buf := types.EncodeTimestamp(&value)
 	dst = appendString(dst, "bit_cast(unhex('")
 	dst = hex.AppendEncode(dst, buf)
-	return appendString(dst, "') AS TIMESTAMP)")
+	dst = appendString(dst, "') AS TIMESTAMP(")
+	dst = strconv.AppendInt(dst, int64(scale), 10)
+	return appendString(dst, "))")
+}
+
+// DescString omits temporal scale. Intermediate casts must retain it: casting
+// a TIMESTAMP(6) to the default TIMESTAMP(0) loses precision before assignment
+// to the hidden index, even if the destination column still has scale 6.
+func sqlCastTypeName(typ *types.Type) string {
+	switch typ.Oid {
+	case types.T_time, types.T_datetime, types.T_timestamp:
+		return fmt.Sprintf("%s(%d)", typ.Oid.String(), typ.Scale)
+	default:
+		return typ.DescString()
+	}
 }
 
 func appendByte(buf []byte, d byte) []byte {

@@ -754,7 +754,7 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 	cnames := make([]string, 0, len(w.srcPos))
 	projCols := make([]string, 0, len(w.srcPos))
 	for i := range w.srcPos {
-		typstr := w.srcType[i].DescString()
+		typstr := sqlCastTypeName(w.srcType[i])
 		cnames = append(cnames, fmt.Sprintf("src%d", i))
 		if w.srcType[i].Oid == types.T_enum {
 			// Runtime types omit ENUM members; reconstruct the domain from the

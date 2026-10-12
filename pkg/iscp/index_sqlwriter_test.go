@@ -16,6 +16,7 @@ package iscp
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -32,6 +33,7 @@ type ivfflatIncludeColSpec struct {
 	name  string
 	typ   types.T
 	width int32
+	scale int32
 }
 
 func newTestIvfflatTableDef(pkName string, pkType types.T, vecColName string, vecType types.T, vecWidth int32, includeCols ...ivfflatIncludeColSpec) *plan.TableDef {
@@ -49,7 +51,7 @@ func newTestIvfflatTableDef(pkName string, pkType types.T, vecColName string, ve
 	includedColumns := make([]string, 0, len(includeCols))
 	for _, includeCol := range includeCols {
 		name2ColIndex[includeCol.name] = int32(len(cols))
-		cols = append(cols, &plan.ColDef{Name: includeCol.name, Typ: plan.Type{Id: int32(includeCol.typ), Width: includeCol.width}})
+		cols = append(cols, &plan.ColDef{Name: includeCol.name, Typ: plan.Type{Id: int32(includeCol.typ), Width: includeCol.width, Scale: includeCol.scale}})
 		includedColumns = append(includedColumns, includeCol.name)
 	}
 
@@ -414,6 +416,34 @@ func TestNewIvfflatSqlWriterAsyncReloadPreservesIncludeColumns(t *testing.T) {
 	sql := string(bytes)
 	require.Contains(t, sql, "`__mo_index_include_title, label`, `__mo_index_include_ rank `")
 	require.Contains(t, sql, "'news'")
+}
+
+func TestNewIvfflatSqlWriterPreservesTemporalIncludeScale(t *testing.T) {
+	for _, scale := range []int32{0, 3, 6} {
+		t.Run(fmt.Sprintf("scale%d", scale), func(t *testing.T) {
+			tabledef := newTestIvfflatTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2,
+				ivfflatIncludeColSpec{name: "ts", typ: types.T_timestamp, scale: scale},
+				ivfflatIncludeColSpec{name: "dt", typ: types.T_datetime, scale: scale},
+				ivfflatIncludeColSpec{name: "tm", typ: types.T_time, scale: scale})
+			writer, err := NewIvfflatSqlWriter("ivfflat", newTestJobID(), newTestConsumerInfo(), tabledef, tabledef.Indexes)
+			require.NoError(t, err)
+			for _, write := range []func(context.Context, []any) error{writer.Insert, writer.Upsert} {
+				require.NoError(t, write(t.Context(), []any{int64(1), []float32{1, 2}, nil,
+					"2026-01-02 03:04:05.123456", "2026-01-02 03:04:05.123456", "03:04:05.123456"}))
+				require.NoError(t, write(t.Context(), []any{int64(2), []float32{2, 1}, nil, nil, nil, nil}))
+				sqlBytes, err := writer.ToSql()
+				require.NoError(t, err)
+				sql := string(sqlBytes)
+				for i, typ := range []string{"TIMESTAMP", "DATETIME", "TIME"} {
+					require.Contains(t, sql, fmt.Sprintf("CAST(column_%d as %s(%d))", i+2, typ, scale))
+				}
+				require.Contains(t, sql, fmt.Sprintf("AS TIMESTAMP(%d))", scale))
+				stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+				require.NoError(t, err)
+				stmt.Free()
+			}
+		})
+	}
 }
 
 func TestNewIvfflatSqlWriterAffineQuantizationUsesVectorBeforeInclude(t *testing.T) {

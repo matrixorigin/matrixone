@@ -144,7 +144,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 		bat.Vecs[i] = vector.NewVec(types.New(types.T_timestamp, 8, 0))
 		v := 0
 		vector.AppendFixed[types.Timestamp](bat.Vecs[i], types.Timestamp(v), false, proc.Mp())
-		res[i] = "bit_cast(unhex('0000000000000000') AS TIMESTAMP)"
+		res[i] = "bit_cast(unhex('0000000000000000') AS TIMESTAMP(0))"
 		i += 1
 	}
 
@@ -252,7 +252,7 @@ func TestConvertColIntoSQLSpecialValues(t *testing.T) {
 	require.NoError(t, err)
 	got, err = convertColIntoSql(ctx, value.String2(time.UTC, 6), ptrType(types.New(types.T_timestamp, 0, 6)), nil)
 	require.NoError(t, err)
-	require.Equal(t, "bit_cast(unhex('80957af55d07e300') AS TIMESTAMP)", string(got))
+	require.Equal(t, "bit_cast(unhex('80957af55d07e300') AS TIMESTAMP(6))", string(got))
 	_, err = mysql.ParseOne(ctx, "SELECT "+string(got), 1)
 	require.NoError(t, err)
 }

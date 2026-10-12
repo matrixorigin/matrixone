@@ -4663,7 +4663,10 @@ func irregularIndexAffectedByUpdatedColumnNames(
 			return false
 		}
 		visited[colPos] = true
-		defer delete(visited, colPos)
+		// This is one reachability search across all index parts and INCLUDE
+		// columns. Keep visited nodes after returning so shared dependencies are
+		// expanded once, rather than once per path. A positive result terminates
+		// the whole search; revisiting a completed negative branch cannot help.
 		for _, refPos := range collectRefColPos(col.GeneratedCol.Expr) {
 			if refPos >= 0 && int(refPos) < len(tableDef.Cols) && columnUpdated(tableDef.Cols[refPos].Name) {
 				return true
