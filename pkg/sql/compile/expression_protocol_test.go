@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -551,20 +552,70 @@ func TestPythonRoutineProtocolChecksActualRemoteDestination(t *testing.T) {
 	features, err := planpb.RequiredRemoteExpressionFeatures(p)
 	require.NoError(t, err)
 	require.True(t, features.PythonRoutineContract)
-	require.Equal(t, defines.MORPCVersion111, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion112, remoteExpressionProtocolVersion(features))
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	for _, version := range []int64{defines.MORPCVersion110, defines.MORPCVersion111} {
+	for _, version := range []int64{defines.MORPCVersion111, defines.MORPCVersion112} {
 		client.version = version
 		err := validateRemoteExpressionDestination(c.proc, p, features)
-		if version < defines.MORPCVersion111 {
+		if version < defines.MORPCVersion112 {
 			require.ErrorContains(t, err, "remote destination does not support Python")
 		} else {
 			require.NoError(t, err)
 		}
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "Python routine execution requires")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "Python routine execution requires")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 	require.Equal(t, client.calls, client.releases)
+}
+
+func TestPythonRoutineProtocolInsideIndexSearchScan(t *testing.T) {
+	for _, field := range []string{"query_payload", "algo_expr"} {
+		t.Run(field, func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			call := &planpb.RoutineCall{FunctionRef: &planpb.FunctionRef{FunctionId: 7, Revision: 3}, Language: "python"}
+			expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{RoutineCall: call}}}
+			scan := &planpb.IndexSearchScan{AlgoOptions: []byte(`{}`)}
+			if field == "query_payload" {
+				scan.QueryPayload = expr
+			} else {
+				scan.AlgoExprs = []*planpb.Expr{expr}
+				scan.AlgoExprNames = []string{"first_round_limit"}
+			}
+			cloned := plan2.DeepCopyNode(&planpb.Node{NodeType: planpb.Node_INDEX_SEARCH_SCAN, IndexSearchScan: scan})
+			require.True(t, proto.Equal(scan, cloned.IndexSearchScan))
+			var clonedExpr *planpb.Expr
+			if field == "query_payload" {
+				clonedExpr = cloned.IndexSearchScan.QueryPayload
+			} else {
+				clonedExpr = cloned.IndexSearchScan.AlgoExprs[0]
+			}
+			require.NotSame(t, call, clonedExpr.GetF().RoutineCall)
+			require.NotSame(t, call.FunctionRef, clonedExpr.GetF().RoutineCall.FunctionRef)
+			p := &pipeline.Pipeline{
+				Node:       &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"},
+				DataSource: &pipeline.Source{Node: cloned},
+			}
+			data, err := p.Marshal()
+			require.NoError(t, err)
+			var received pipeline.Pipeline
+			require.NoError(t, received.Unmarshal(data))
+			require.True(t, proto.Equal(scan, received.DataSource.Node.IndexSearchScan))
+			features, err := planpb.RequiredRemoteExpressionFeatures(&received)
+			require.NoError(t, err)
+			require.True(t, features.PythonRoutineContract)
+			require.Equal(t, defines.MORPCVersion112, remoteExpressionProtocolVersion(features))
+			rt := moruntime.ServiceRuntime(c.proc.GetService())
+			client.version = defines.MORPCVersion111
+			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, &received, features), "remote destination does not support Python")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, &received), "Python routine execution requires")
+			client.version = defines.MORPCVersion112
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+			require.NoError(t, validateRemoteExpressionDestination(c.proc, &received, features))
+			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, &received))
+			require.Equal(t, client.calls, client.releases)
+		})
+	}
 }
