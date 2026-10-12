@@ -4255,3 +4255,26 @@ func Test_BuiltIn_MoShowVisibleBinInvalidInput(t *testing.T) {
 		})
 	}
 }
+
+func TestEmptyDomainVisibleMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct {
+		oid          types.T
+		domain, want string
+		wantNull     bool
+	}{
+		{types.T_enum, "", "enum('')", false}, {types.T_uint64, ",", "set('')", false}, {types.T_uint64, "", "", true},
+	} {
+		encoded, err := types.Encode(&types.Type{Oid: tc.oid})
+		require.NoError(t, err)
+		tcc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{string(encoded)}, nil), NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.domain}, nil)}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{tc.wantNull}), builtInMoShowVisibleBinEnum)
+		ok, info := tcc.RunAndFree()
+		require.True(t, ok, info)
+	}
+	encoded, err := types.Encode(&types.Type{Oid: types.T_enum})
+	require.NoError(t, err)
+	tcc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{string(encoded)}, nil), NewFunctionTestInput(types.T_uint8.ToType(), []uint8{typWithLen}, nil)}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"enum('')"}, nil), builtInMoShowVisibleBin)
+	ok, info := tcc.RunAndFree()
+	require.True(t, ok, info)
+}

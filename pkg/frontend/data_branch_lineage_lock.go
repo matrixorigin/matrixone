@@ -198,7 +198,7 @@ func getDataBranchComponentExecutor(ctx context.Context, ses *Session, useTxnHan
 		handedOff = true
 		return nil, nil, nil, finish(err)
 	}
-	admission, err := beginLifecycleRCAdmission(ctx, ses, bh)
+	admission, err := beginLifecycleRCAdmission(ctx, ses, bh, lockpb.LockMode_Shared)
 	if err != nil {
 		handedOff = true
 		return nil, nil, nil, finish(err)

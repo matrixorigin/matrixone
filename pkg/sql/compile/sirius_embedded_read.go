@@ -36,9 +36,21 @@ func (c *Compile) compileEmbeddedSiriusRead(ctx context.Context, queryPlan *plan
 		return false, moerr.NewNotSupported(ctx, "statement is not eligible for embedded Sirius")
 	}
 	capabilities := runtime.Backend.Capabilities()
-	candidate, err := substrait.ExportEmbeddedMO(queryPlan.GetQuery(), substrait.NewEmbeddedExportProfile(capabilities))
+	query := queryPlan.GetQuery()
+	profile := substrait.NewEmbeddedExportProfile(capabilities)
+	candidate, err := substrait.ExportEmbeddedMO(query, profile)
 	if err != nil {
 		return false, err // explicit selection never falls back
+	}
+	if len(query.Steps) > 1 {
+		query, err = substrait.ExpandEmbeddedMOSteps(query)
+		if err != nil {
+			return false, err
+		}
+		candidate, err = substrait.ExportEmbeddedMO(query, profile)
+		if err != nil {
+			return false, err
+		}
 	}
 	reads, err := candidate.EmbeddedMOReads()
 	if err != nil {
@@ -70,7 +82,7 @@ func (c *Compile) compileEmbeddedSiriusRead(ctx context.Context, queryPlan *plan
 		spec := siriusReaderSpec{
 			parent: c.proc, e: c.e, addr: c.addr, db: c.db, sql: c.sql,
 			tenant: c.tenant, uid: c.uid, txnOffset: c.TxnOffset,
-			ncpu: max(1, c.ncpu), node: plan2.DeepCopyNode(queryPlan.GetQuery().Nodes[read.NodeID]),
+			ncpu: max(1, c.ncpu), node: plan2.DeepCopyNode(query.Nodes[read.NodeID]),
 			columns: columns,
 		}
 		descriptors[i] = SiriusReadDescriptor{BindingID: binding, Database: read.Database, Table: read.Table, Schema: read.Schema, Columns: columns, Producer: spec.run}

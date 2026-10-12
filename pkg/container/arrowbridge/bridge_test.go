@@ -2526,3 +2526,54 @@ func TestConvertRollbackSchemaDriftNotNullAndCancel(t *testing.T) {
 	strings.Release()
 	alloc.AssertSize(t, 0)
 }
+
+func TestConvertSetDomain(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	defer alloc.AssertSize(t, 0)
+	builder := array.NewUint64Builder(alloc)
+	defer builder.Release()
+	builder.AppendValues([]uint64{0, 1, 2, 99}, []bool{true, true, true, false})
+	values := builder.NewArray()
+	defer values.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "s", Type: arrow.PrimitiveTypes.Uint64, Nullable: true}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{values}, 4)
+	defer record.Release()
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	target := TargetColumn{Name: "s", Type: types.T_uint64.ToType(), SetValues: ","}
+	plan, err := Bind(context.Background(), schema, []TargetColumn{target}, MatchByName)
+	require.NoError(t, err)
+	plainTarget := target
+	plainTarget.SetValues = ""
+	plain, err := Bind(context.Background(), schema, []TargetColumn{plainTarget}, MatchByName)
+	require.NoError(t, err)
+	require.NotEqual(t, plan.conversionFingerprint, plain.conversionFingerprint)
+	for _, force := range []bool{false, true} {
+		bat, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{ForceMaterialize: force})
+		require.ErrorContains(t, err, "bitmap 2")
+		require.Nil(t, bat)
+		require.Zero(t, mp.CurrNB())
+		window := record.NewSlice(0, 2)
+		func() {
+			defer window.Release()
+			bat, _, err := plan.Convert(context.Background(), window, mp, ConvertOptions{ForceMaterialize: force})
+			require.NoError(t, err)
+			defer bat.Clean(mp)
+			require.Equal(t, []uint64{0, 1}, vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0]))
+		}()
+	}
+	window := record.NewSlice(3, 4)
+	func() {
+		defer window.Release()
+		bat, _, err := plan.Convert(context.Background(), window, mp, ConvertOptions{})
+		require.NoError(t, err)
+		defer bat.Clean(mp)
+		require.True(t, bat.Vecs[0].IsNull(0))
+	}()
+
+	bat, _, err := plain.Convert(context.Background(), record, mp, ConvertOptions{})
+	require.NoError(t, err)
+	defer bat.Clean(mp)
+	require.Equal(t, uint64(2), vector.GetFixedAtWithTypeCheck[uint64](bat.Vecs[0], 2))
+	require.True(t, bat.Vecs[0].IsNull(3))
+}

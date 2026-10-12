@@ -131,10 +131,13 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 			return b.baseBindExpr(astExpr, depth, isRoot)
 		}
 		_, isBareColumn := unwrapParenExpr(astExpr).(*tree.UnresolvedName)
-		if isBareColumn && isEnumOrSetPlanType(target) {
+		if isBareColumn && isEnumOrSetPlanType(target) && !(isEnumPlanType(target) && b.ctx.isDistinct) {
 			previousTarget := b.mysqlSpecialTargetType
 			b.mysqlSpecialTargetType = target
 			defer func() { b.mysqlSpecialTargetType = previousTarget }()
+		}
+		if isEnumPlanType(target) {
+			return b.baseBindExpr(astExpr, depth, isRoot)
 		}
 		if subquery, ok := scalarSubqueryExpr(astExpr); ok && !subquery.Exists {
 			previousSubqueryTarget := b.numericSubqueryTarget

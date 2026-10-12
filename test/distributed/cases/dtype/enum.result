@@ -31,7 +31,7 @@ no such table enum.enum02
 drop table if exists enum02;
 create table enum02(col1 enum('123214','*&*(234','database数据库'));
 insert into enum02 values('1232145');
-internal error: convert to MySQL enum failed: number 52497 overflow enum boundary [1, 3]
+internal error: convert to MySQL enum failed: number 1232145 overflow enum boundary [1, 3]
 insert into enum02 values('*&*(2344');
 internal error: convert to MySQL enum failed: item *&*(2344 is not in enum [123214 *&*(234 database数据库]
 drop table enum02;

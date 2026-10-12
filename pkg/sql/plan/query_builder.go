@@ -3884,12 +3884,7 @@ func isRowCountOnlyInnerEquiJoin(node *plan.Node) bool {
 		return false
 	}
 	for _, condition := range conditions {
-		fn := condition.GetF()
-		if fn == nil || len(fn.Args) != 2 || !IsEqualFunc(fn.Func.GetObj()) {
-			return false
-		}
-		left, right := HasColExpr(fn.Args[0], -1), HasColExpr(fn.Args[1], -1)
-		if !((left == 0 && right == 1) || (left == 1 && right == 0)) {
+		if !IsEquiJoinCondition(condition) {
 			return false
 		}
 	}
@@ -4343,6 +4338,11 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	var projectTypList [][]types.Type
 	selectStmtLength := len(selectStmts)
 	setProjectionTypes := builder.numericSetProjectionTypes(ctx, selectStmts)
+	for i := range setProjectionTypes {
+		if isEnumPlanType(&setProjectionTypes[i]) {
+			setProjectionTypes[i] = Type{}
+		}
+	}
 	nodes := make([]int32, selectStmtLength)
 	subCtxList := make([]*BindContext, selectStmtLength)
 	var projectLength int
@@ -5172,7 +5172,7 @@ func (builder *QueryBuilder) numericSetProjectionTypes(ctx *BindContext, stmts [
 	}
 	resolved := append([]Type(nil), ctx.numericProjectionTypes...)
 	for i := 0; i < len(resolved) && i < len(merged); i++ {
-		if resolved[i].Id == 0 || merged[i].incompatible {
+		if !isNumericAssignmentTarget(resolved[i]) || merged[i].incompatible {
 			continue
 		}
 		if typ, ok := numericTypeFromAstScan(merged[i], &resolved[i]); ok {
@@ -6373,7 +6373,7 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 
 	targetPos := 0
 	for _, selectExpr := range clause.Exprs {
-		switch expr := selectExpr.Expr.(type) {
+		switch expr := unwrapParenExpr(selectExpr.Expr).(type) {
 		case tree.UnqualifiedStar:
 			cursor := 0
 			outputs, ok := numericProjectionStarOutputs(clause.From.Tables[0], sources, &cursor)
@@ -6622,7 +6622,7 @@ func numericProjectionExprTarget(
 	expr tree.Expr,
 	outer Type,
 ) (Type, bool) {
-	if outer.Id == 0 {
+	if !isNumericAssignmentTarget(outer) {
 		return Type{}, false
 	}
 	binder := NewProjectionBinder(builder, ctx, nil)
@@ -6831,10 +6831,13 @@ func uniqueNumericStarOutput(outputs []numericProjectionStarOutput, name string)
 }
 
 func sameNumericProjectionTarget(left, right Type) bool {
-	return left.Id == right.Id && left.Width == right.Width && left.Scale == right.Scale
+	return left.Id == right.Id && left.Width == right.Width && left.Scale == right.Scale && left.Enumvalues == right.Enumvalues
 }
 
 func mergeNumericProjectionTargets(left, right Type) (Type, bool) {
+	if !isNumericAssignmentTarget(left) || !isNumericAssignmentTarget(right) {
+		return Type{}, false
+	}
 	resolved, ok := function.InferNumericParameterType(
 		[]types.Type{makeTypeByPlan2Type(left), makeTypeByPlan2Type(right)}, nil,
 	)
@@ -10004,6 +10007,15 @@ type treeClonePointer struct {
 	ptr uintptr
 }
 
+// DeepCopySelect gives binding a private AST, including mutable nested sources.
+// The copy is GC-owned; it must not be returned to the parser's pools with Free.
+func DeepCopySelect(source *tree.Select) *tree.Select {
+	if source == nil {
+		return nil
+	}
+	return cloneTreeValue(reflect.ValueOf(source), make(map[treeClonePointer]reflect.Value)).Interface().(*tree.Select)
+}
+
 func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Value) reflect.Value {
 	if !value.IsValid() {
 		return value
@@ -10031,6 +10043,11 @@ func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Va
 		if value.Elem().Kind() == reflect.Struct {
 			result.Elem().Set(value.Elem())
 			cloneTreeStructFields(result.Elem(), value.Elem(), visited)
+			if sample, ok := value.Interface().(*tree.SampleExpr); ok {
+				columns, star := sample.GetColumns()
+				result.Interface().(*tree.SampleExpr).SetColumns(
+					cloneTreeValue(reflect.ValueOf(columns), visited).Interface().(tree.Exprs), star)
+			}
 		} else {
 			result.Elem().Set(cloneTreeValue(value.Elem(), visited))
 		}
@@ -10047,6 +10064,20 @@ func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Va
 		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
 		for i := 0; i < value.Len(); i++ {
 			result.Index(i).Set(cloneTreeValue(value.Index(i), visited))
+		}
+		return result
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		key := treeClonePointer{typ: value.Type(), ptr: uintptr(value.UnsafePointer())}
+		if cloned, ok := visited[key]; ok {
+			return cloned
+		}
+		result := reflect.MakeMapWithSize(value.Type(), value.Len())
+		visited[key] = result
+		for iter := value.MapRange(); iter.Next(); {
+			result.SetMapIndex(cloneTreeValue(iter.Key(), visited), cloneTreeValue(iter.Value(), visited))
 		}
 		return result
 	case reflect.Array:
@@ -10790,6 +10821,15 @@ func (builder *QueryBuilder) appendWindowNode(
 	if ctx.bindingRecurStmt() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support window function in recursive cte")
 		return
+	}
+
+	// Materialize every window's scalar producers over the post-aggregation
+	// input before adding any window operator. Later windows must not introduce
+	// joins that change an earlier window's input or column layout.
+	for i, w := range ctx.windows {
+		if nodeID, ctx.windows[i], err = builder.flattenSubqueries(nodeID, w, ctx); err != nil {
+			return
+		}
 	}
 
 	for i, w := range ctx.windows {
