@@ -287,15 +287,19 @@ func restoreToAccountFromTS(
 ) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore account: %v, restore timestamp : %d", restoreAccount, snapshotTs, restoreAccount, snapshotTs))
 
-	var dbNames []string
+	var currentDBNames, restoreDBNames []string
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
 
-	// delete current dbs from to account
-	if dbNames, err = showDatabases(toCtx, sid, bh, ""); err != nil {
+	if restoreDBNames, err = showDatabasesFromTS(ctx, sid, bh, snapshotTs, restoreAccount, toAccountId); err != nil {
 		return
 	}
 
-	for _, dbName := range dbNames {
+	// delete current dbs from to account
+	if currentDBNames, err = showDatabases(toCtx, sid, bh, ""); err != nil {
+		return
+	}
+
+	for _, dbName := range currentDBNames {
 		if needSkipDb(dbName) {
 			if toAccountId == 0 && dbName == moCatalog {
 				// drop existing cluster tables
@@ -313,10 +317,7 @@ func restoreToAccountFromTS(
 	}
 
 	// restore dbs
-	if dbNames, err = showDatabasesFromTS(ctx, sid, bh, snapshotTs, restoreAccount, toAccountId); err != nil {
-		return
-	}
-	for _, dbName := range dbNames {
+	for _, dbName := range restoreDBNames {
 		if needSkipDb(dbName) {
 			getLogger(sid).Info(fmt.Sprintf("[%d:%d] skip restore db: %v", restoreAccount, snapshotTs, dbName))
 			continue
@@ -348,6 +349,32 @@ func restoreToAccountFromTS(
 	}
 
 	return
+}
+
+func preflightLogicalRestoreAccountFromTS(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotTS int64,
+	sourceAccount uint32,
+	targetAccount uint32,
+) error {
+	databaseNames, err := showDatabasesFromTS(
+		ctx, sid, bh, snapshotTS, sourceAccount, targetAccount,
+	)
+	if err != nil {
+		return err
+	}
+	return preflightLogicalRestoreDatabases(
+		ctx,
+		databaseNames,
+		currentProtocolVersionForService(bh.Service()),
+		func(dbName string) (logicalRestoreDatabaseDefinition, error) {
+			return getCreateDatabaseSqlFromTS(
+				ctx, sid, bh, dbName, snapshotTS, sourceAccount, targetAccount,
+			)
+		},
+	)
 }
 
 func showDatabasesFromTS(ctx context.Context, sid string, bh BackgroundExec, ts int64, from, to uint32) ([]string, error) {
@@ -385,14 +412,21 @@ func restoreDatabaseFromTS(
 	subDbToRestore map[string]*subDbRestoreRecord,
 ) (err error) {
 
-	var createDbSql string
+	var definition logicalRestoreDatabaseDefinition
 	var isSubDb bool
-	createDbSql, err = getCreateDatabaseSqlFromTS(ctx, sid, bh, dbName, snapshotTs, restoreAccount, toAccountId)
+	definition, err = getCreateDatabaseSqlFromTS(ctx, sid, bh, dbName, snapshotTs, restoreAccount, toAccountId)
 	if err != nil {
 		return
 	}
+	createDbSql := definition.createSQL
 
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
+	toCtx, err = prepareLogicalRestoreDatabase(
+		toCtx, dbName, definition, currentProtocolVersionForService(bh.Service()),
+	)
+	if err != nil {
+		return
+	}
 	// if restore to table, check if the db is sub db
 	isSubDb, err = checkDbWhetherSub(ctx, createDbSql)
 	if err != nil {
@@ -431,7 +465,10 @@ func restoreDatabaseFromTS(
 
 	if isSubDb {
 		var isPubExist bool
-		isPubExist, _ = checkPubExistOrNot(toCtx, sid, bh, "", dbName, snapshotTs)
+		isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, "", dbName, snapshotTs)
+		if err != nil {
+			return err
+		}
 		if !isPubExist {
 			getLogger(sid).Info(fmt.Sprintf("[%d:%d] skip restore db: %v, no publication", restoreAccount, snapshotTs, dbName))
 			return
@@ -439,7 +476,7 @@ func restoreDatabaseFromTS(
 
 		// create db with publication
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create db with pub: %v, create db sql: %s", restoreAccount, snapshotTs, dbName, createDbSql))
-		if err = bh.Exec(toCtx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 
@@ -448,7 +485,7 @@ func restoreDatabaseFromTS(
 		createDbSql = createDatabaseIfNotExistsSQL(dbName)
 		// create db
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create db: %v, create db sql: %s", restoreAccount, snapshotTs, dbName, createDbSql))
-		if err = bh.Exec(toCtx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 	}
@@ -502,25 +539,25 @@ func getCreateDatabaseSqlFromTS(ctx context.Context,
 	dbName string,
 	ts int64,
 	from,
-	to uint32) (string, error) {
+	to uint32) (logicalRestoreDatabaseDefinition, error) {
 
 	newCtx := defines.AttachAccountId(ctx, from)
-	sql := "select datname, dat_createsql from mo_catalog.mo_database"
+	sql := "select datname, dat_createsql, dat_type from mo_catalog.mo_database"
 	if ts > 0 {
 		sql += fmt.Sprintf(" {MO_TS = %d }", ts)
 	}
 	sql += fmt.Sprintf(" where datname = '%s' and account_id = %d", dbName, from)
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] get create database `%s` sql: %s", from, ts, dbName, sql))
 
-	// cols: database_name, create_sql
-	colsList, err := getStringColsListFromTS(newCtx, bh, sql, from, to, 0, 1)
+	// cols: database_name, create_sql, database_type
+	colsList, err := getStringColsListFromTS(newCtx, bh, sql, from, to, 0, 1, 2)
 	if err != nil {
-		return "", err
+		return logicalRestoreDatabaseDefinition{}, err
 	}
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
-		return "", moerr.NewBadDB(newCtx, dbName)
+		return logicalRestoreDatabaseDefinition{}, moerr.NewBadDB(newCtx, dbName)
 	}
-	return colsList[0][1], nil
+	return newLogicalRestoreDatabaseDefinition(newCtx, dbName, colsList[0])
 }
 
 func recreateTableFromTS(
@@ -543,6 +580,10 @@ func recreateTableFromTS(
 			restoreAccount,
 			toAccountId,
 		)
+	}
+	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		return err
 	}
 	if isSequence(tblInfo) {
 		return restoreSequence(
@@ -569,14 +610,6 @@ func recreateTableFromTS(
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to drop table: %v,", restoreAccount, snapshotTs, tblInfo.tblName))
 	if err = bh.Exec(ctx, dropTableIfExistsSQL("", tblInfo.tblName)); err != nil {
 		return
-	}
-
-	if !isRestoreByCloneSql.MatchString(restoreTableDataByTsFmt) {
-		// create table
-		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create table: %v, create table sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, tblInfo.createSql))
-		if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
-			return
-		}
 	}
 
 	insertIntoSql := restoreTableDataByTsSQL(tblInfo.dbName, tblInfo.tblName, snapshotTs)
@@ -617,9 +650,12 @@ func restoreSystemDatabaseFromTS(
 		}
 
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore system table: %v.%v", restoreAccount, snapshotTs, moCatalog, tblInfo.tblName))
-		tblInfo.createSql, err = getCreateTableSqlFromTS(ctx, bh, dbName, tblInfo.tblName, snapshotTs, restoreAccount, toAccountId)
-		if err != nil {
-			return err
+		// Sequences use their CREATE definition; table schemas belong to CLONE.
+		if isSequence(tblInfo) {
+			tblInfo.createSql, err = getCreateTableSqlFromTS(ctx, bh, dbName, tblInfo.tblName, snapshotTs, restoreAccount, toAccountId)
+			if err != nil {
+				return err
+			}
 		}
 
 		// checks if the given context has been canceled.

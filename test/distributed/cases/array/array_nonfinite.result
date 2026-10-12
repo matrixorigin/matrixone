@@ -1,0 +1,84 @@
+drop database if exists array_nonfinite;
+create database array_nonfinite;
+use array_nonfinite;
+create table t32(id bigint primary key, v vecf32(3));
+insert into t32 values (1,'[1,2,3]'),(2,'[0,0,0]'),(4,'[2,1,0]');
+insert into t32 values (3,'[NaN,0,0]');
+internal error: vector element cannot be NaN or Inf: NaN
+insert into t32 values (5,'[Inf,0,0]');
+internal error: vector element cannot be NaN or Inf: +Inf
+insert into t32 values (6,'[-Inf,0,0]');
+internal error: vector element cannot be NaN or Inf: -Inf
+insert into t32 values (7,'[0,nan,0]');
+internal error: vector element cannot be NaN or Inf: NaN
+insert into t32 values (8,'[0,0,+Inf]');
+internal error: vector element cannot be NaN or Inf: +Inf
+create table t64(id bigint primary key, v vecf64(3));
+insert into t64 values (1,'[1,2,3]');
+insert into t64 values (2,'[NaN,0,0]');
+internal error: vector element cannot be NaN or Inf: NaN
+insert into t64 values (3,'[-Inf,0,0]');
+internal error: vector element cannot be NaN or Inf: -Inf
+create table tbf16(id bigint primary key, v vecbf16(3));
+insert into tbf16 values (1,'[1,2,3]');
+insert into tbf16 values (2,'[NaN,0,0]');
+internal error: vector element cannot be NaN or Inf: NaN
+insert into tbf16 values (3,'[Inf,0,0]');
+internal error: vector element cannot be NaN or Inf: +Inf
+create table tf16(id bigint primary key, v vecf16(3));
+insert into tf16 values (1,'[1,2,3]');
+insert into tf16 values (2,'[NaN,0,0]');
+internal error: vector element cannot be NaN or Inf: NaN
+insert into tf16 values (3,'[-Inf,0,0]');
+internal error: vector element cannot be NaN or Inf: -Inf
+create table ti8(id bigint primary key, v vecint8(3));
+insert into ti8 values (1,'[1,2,3]');
+select id from t32 order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+4
+select id from t64 order by id;
+➤ id[-5,64,0]  𝄀
+1
+select id from tbf16 order by id;
+➤ id[-5,64,0]  𝄀
+1
+select id from tf16 order by id;
+➤ id[-5,64,0]  𝄀
+1
+select id from ti8 order by id;
+➤ id[-5,64,0]  𝄀
+1
+update t32 set v='[Inf,0,0]' where id=1;
+internal error: vector element cannot be NaN or Inf: +Inf
+update t64 set v='[NaN,0,0]' where id=1;
+internal error: vector element cannot be NaN or Inf: NaN
+update t32 set v='[3,3,3]' where id=1;
+select id, v from t32 where id=1;
+➤ id[-5,64,0]  ¦  v[12,3,0]  𝄀
+1  ¦  [3, 3, 3]
+create table lt_ok(id int, v vecf32(3));
+load data infile '$resources/load_data/vec_f32_dim_ok.csv' into table lt_ok fields terminated by ',' ignore 1 lines;
+select count(*) as cnt from lt_ok;
+➤ cnt[-5,64,0]  𝄀
+2
+create table lt_bad_f32(id int, v vecf32(3));
+load data infile '$resources/load_data/vec_nonfinite.csv' into table lt_bad_f32 fields terminated by ',' ignore 1 lines;
+internal error: vector element cannot be NaN or Inf: NaN
+select count(*) as cnt from lt_bad_f32;
+➤ cnt[-5,64,0]  𝄀
+0
+create table lt_bad_f64(id int, v vecf64(3));
+load data infile '$resources/load_data/vec_nonfinite.csv' into table lt_bad_f64 fields terminated by ',' ignore 1 lines;
+internal error: vector element cannot be NaN or Inf: NaN
+select count(*) as cnt from lt_bad_f64;
+➤ cnt[-5,64,0]  𝄀
+0
+create index ix using ivfflat on t32(v) lists=2 op_type 'vector_l2_ops';
+select id from t32 order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+4
+drop database array_nonfinite;

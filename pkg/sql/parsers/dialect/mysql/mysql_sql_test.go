@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 
@@ -57,6 +58,73 @@ func TestDebug(t *testing.T) {
 	out := tree.String(ast, dialect.MYSQL)
 	if debugSQL.output != out {
 		t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", debugSQL.output, out)
+	}
+}
+
+func TestDiagnosticCountAndLimitSyntax(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		want      string
+		count     bool
+		errors    bool
+		hasLimit  bool
+		wantError bool
+	}{
+		{name: "warning count", input: "show count(*) warnings", want: "show count(*) warnings", count: true},
+		{name: "error count", input: "show count(*) errors", want: "show count(*) errors", count: true, errors: true},
+		{name: "warning limit", input: "show warnings limit 2", want: "show warnings limit 2", hasLimit: true},
+		{name: "error comma limit", input: "show errors limit 1, 2", want: "show errors limit 2 offset 1", hasLimit: true, errors: true},
+		{name: "warning offset limit", input: "show warnings limit 2 offset 1", want: "show warnings limit 2 offset 1", hasLimit: true},
+		{name: "count limit rejected", input: "show count(*) warnings limit 1", wantError: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.input, 1)
+			if test.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, tree.String(stmt, dialect.MYSQL))
+
+			switch stmt := stmt.(type) {
+			case *tree.ShowWarnings:
+				require.False(t, test.errors)
+				require.Equal(t, test.count, stmt.Count)
+				require.Equal(t, test.hasLimit, stmt.Limit != nil)
+			case *tree.ShowErrors:
+				require.True(t, test.errors)
+				require.Equal(t, test.count, stmt.Count)
+				require.Equal(t, test.hasLimit, stmt.Limit != nil)
+			default:
+				t.Fatalf("unexpected statement type %T", stmt)
+			}
+		})
+	}
+}
+
+func TestShowGrantsForCurrentUser(t *testing.T) {
+	tests := []struct {
+		sql string
+	}{
+		{sql: "show grants for current_user"},
+		{sql: "show grants for current_user()"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+
+			grants, ok := stmt.(*tree.ShowGrants)
+			require.True(t, ok)
+			require.True(t, grants.CurrentUser)
+			require.Empty(t, grants.Username)
+			require.Empty(t, grants.Hostname)
+			require.Equal(t, "show grants for current_user", tree.String(stmt, dialect.MYSQL))
+		})
 	}
 }
 
@@ -369,6 +437,65 @@ func TestQualifiedInsertColumnsDoNotExpandSharedConsumers(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestInsertIgnoreAndOnDuplicateUpdateAreIndependent(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		wantIgnore bool
+		wantUpdate int
+	}{
+		{
+			name:       "plain ignore",
+			sql:        "insert ignore into t values (1)",
+			wantIgnore: true,
+		},
+		{
+			name:       "ignore with update",
+			sql:        "insert ignore into t (id, v) values (1, 2) on duplicate key update v = values(v), v = v + 1",
+			wantIgnore: true,
+			wantUpdate: 2,
+		},
+		{
+			name:       "legacy duplicate ignore",
+			sql:        "insert into t values (1) on duplicate key ignore",
+			wantIgnore: true,
+		},
+		{
+			name:       "combined duplicate ignore",
+			sql:        "insert ignore into t values (1) on duplicate key ignore",
+			wantIgnore: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			insert, ok := stmt.(*tree.Insert)
+			require.True(t, ok)
+			require.Equal(t, test.wantIgnore, insert.IsIgnore())
+			require.Len(t, insert.GetOnDuplicateUpdate(), test.wantUpdate)
+			if test.wantUpdate > 0 {
+				// Keep duplicate assignment targets as an ordered stream.
+				require.Equal(t, "v", insert.GetOnDuplicateUpdate()[0].Names[0].ColName())
+				require.Equal(t, "v", insert.GetOnDuplicateUpdate()[1].Names[0].ColName())
+			}
+
+			formatted := tree.String(stmt, dialect.MYSQL)
+			roundTripped, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			defer roundTripped.Free()
+			roundTripInsert, ok := roundTripped.(*tree.Insert)
+			require.True(t, ok)
+			require.Equal(t, insert.IsIgnore(), roundTripInsert.IsIgnore())
+			require.Len(t, roundTripInsert.GetOnDuplicateUpdate(), test.wantUpdate)
+			require.Equal(t, formatted, tree.String(roundTripped, dialect.MYSQL))
+		})
+	}
+}
+
 func TestQuantifiedTableSubqueryParse(t *testing.T) {
 	tests := []struct {
 		sql  string
@@ -566,6 +693,86 @@ func TestSQLModeParserModes(t *testing.T) {
 		require.Equal(t, uint32(defines.MYSQL_TYPE_FLOAT), firstColumnType(t, stmt).Oid)
 		require.Equal(t, int32(32), firstColumnType(t, stmt).Width)
 	})
+}
+
+func TestHighNotPrecedence(t *testing.T) {
+	ctx := context.Background()
+
+	parseExpr := func(t *testing.T, sql, sqlMode string) tree.Expr {
+		t.Helper()
+		stmt, err := ParseOneWithSQLMode(ctx, sql, 1, sqlMode)
+		require.NoError(t, err)
+		t.Cleanup(stmt.Free)
+		return firstSelectExpr(t, stmt)
+	}
+
+	t.Run("between changes precedence only when enabled", func(t *testing.T) {
+		defaultExpr := parseExpr(t, "select not 1 between 2 and 3", "")
+		defaultNot, ok := defaultExpr.(*tree.NotExpr)
+		require.True(t, ok)
+		require.IsType(t, &tree.RangeCond{}, defaultNot.Expr)
+
+		highExpr := parseExpr(t, "select not 1 between 2 and 3", "HIGH_NOT_PRECEDENCE")
+		highBetween, ok := highExpr.(*tree.RangeCond)
+		require.True(t, ok)
+		require.IsType(t, &tree.NotExpr{}, highBetween.Left)
+	})
+
+	t.Run("in changes precedence only when enabled", func(t *testing.T) {
+		defaultExpr := parseExpr(t, "select not 0 in (0, 1)", "")
+		defaultNot, ok := defaultExpr.(*tree.NotExpr)
+		require.True(t, ok)
+		defaultIn, ok := defaultNot.Expr.(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.IN, defaultIn.Op)
+
+		highExpr := parseExpr(t, "select not 0 in (0, 1)", "HIGH_NOT_PRECEDENCE")
+		highIn, ok := highExpr.(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.IN, highIn.Op)
+		require.IsType(t, &tree.NotExpr{}, highIn.Left)
+	})
+
+	t.Run("high NOT is accepted in simple-expression unary positions", func(t *testing.T) {
+		minusExpr, ok := parseExpr(t, "select - not 0", "HIGH_NOT_PRECEDENCE").(*tree.UnaryExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.UNARY_MINUS, minusExpr.Op)
+		require.IsType(t, &tree.NotExpr{}, minusExpr.Expr)
+
+		bangExpr, ok := parseExpr(t, "select ! not 0", "HIGH_NOT_PRECEDENCE").(*tree.UnaryExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.UNARY_MARK, bangExpr.Op)
+		require.IsType(t, &tree.NotExpr{}, bangExpr.Expr)
+
+		likeExpr, ok := parseExpr(t, "select '1' like not 0", "HIGH_NOT_PRECEDENCE").(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.LIKE, likeExpr.Op)
+		require.IsType(t, &tree.NotExpr{}, likeExpr.Right)
+	})
+
+	for _, sql := range []string{
+		"select not (1 between 2 and 3)",
+		"select (not 1) between 2 and 3",
+		"select 1 not in (1)",
+		"select 1 not like '2'",
+		"select 1 not ilike '2'",
+		"select 1 not regexp '2'",
+		"select 1 not between 2 and 3",
+		"select 1 is not null",
+		"select 1 is not unknown",
+		"select 1 is not true",
+		"select 1 is not false",
+		"create table if not exists t_high_not (a int not null)",
+		"alter table t_high_not alter constraint c not enforced",
+		"merge into target t using source s on t.id = s.id when not matched then insert (id) values (s.id)",
+		"merge into target t using source s on t.id = s.id when not matched then insert values (s.id)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOneWithSQLMode(ctx, sql, 1, "HIGH_NOT_PRECEDENCE")
+			require.NoError(t, err)
+			stmt.Free()
+		})
+	}
 }
 
 // A fulltext MATCH ... AGAINST pattern is stored unescaped and re-escaped on Format.
@@ -4730,10 +4937,10 @@ var (
 			output: "alter table t1 algorithm = COPY",
 		}, {
 			input:  "alter table t1 default CHARACTER SET = a COLLATE = b",
-			output: "alter table t1 charset = a",
+			output: "alter table t1 charset = a collate = b",
 		}, {
 			input:  "alter table t1 CONVERT TO CHARACTER SET a COLLATE b",
-			output: "alter table t1 charset = a",
+			output: "alter table t1 charset = a collate = b",
 		}, {
 			input:  "alter table t1 DISABLE KEYS",
 			output: "alter table t1 charset = DISABLE",
@@ -5324,6 +5531,8 @@ func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
 	for _, sql := range []string{
 		"select group_concat(v) within group (order by k desc) from t",
 		"select group_concat(v) within /* ordered-set */ group (order by k desc) from t",
+		"select listagg(v, '|') within group (order by k desc) from t",
+		"select listagg(distinct v) within group (order by k) from t",
 		"select percentile_cont(0.95) within group (order by v) from t",
 		"select percentile_cont(0.95) within /* ordered-set */ group (order by v) from t",
 		"select percentile_disc(1) within group (order by v desc) from t",
@@ -5345,10 +5554,48 @@ func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestArrayAggCompatibilityDeparseRoundTrip(t *testing.T) {
+	for _, sql := range []string{
+		"select array_agg(v) from t",
+		"select array_agg(distinct v) from t",
+		"select array_agg(v) over (partition by g order by k) from t",
+	} {
+		ast, err := ParseOne(t.Context(), sql, 1)
+		require.NoError(t, err, sql)
+
+		formatted := tree.String(ast, dialect.MYSQL)
+		require.Contains(t, strings.ToLower(formatted), "array_agg(")
+		roundTripped, err := ParseOne(t.Context(), formatted, 1)
+		require.NoError(t, err, formatted)
+		require.Equal(t, formatted, tree.String(roundTripped, dialect.MYSQL))
+	}
+}
+
+func TestOrderedCollectionCompatibilityNamesRemainIdentifiers(t *testing.T) {
+	for _, sql := range []string{
+		"select listagg from t",
+		"select array_agg from t",
+	} {
+		_, err := ParseOne(t.Context(), sql, 1)
+		require.NoError(t, err, sql)
+	}
+}
+
 func TestGroupConcatRejectsDoubleOrderBy(t *testing.T) {
 	_, err := ParseOne(context.Background(),
 		"select group_concat(v order by v) within group (order by k) from t", 1)
 	require.ErrorContains(t, err, "group_concat cannot use both ORDER BY and WITHIN GROUP ORDER BY")
+}
+
+func TestListAggRejectsInvalidShape(t *testing.T) {
+	for _, sql := range []string{
+		"select listagg() from t",
+		"select listagg(a, '|', '!') from t",
+		"select listagg(a, lower('|')) from t",
+	} {
+		_, err := ParseOne(t.Context(), sql, 1)
+		require.Error(t, err, sql)
+	}
 }
 
 func TestWithinRemainsIdentifierCompatible(t *testing.T) {
@@ -5509,6 +5756,40 @@ func TestFullTextMatchDeparseRoundTrip(t *testing.T) {
 		ast2, err := ParseOne(ctx, out, 1)
 		require.NoError(t, err, "deparsed SQL must re-parse: "+out)
 		require.Equal(t, out, tree.String(ast2, dialect.MYSQL), "deparse must be idempotent")
+	}
+}
+
+func TestFullTextRoutineVariablePatternRoundTrip(t *testing.T) {
+	for _, sql := range []string{
+		"select id from docs where match(body) against(q)",
+		"select id from docs where match(body) against(q in boolean mode)",
+		"select id from docs where match(body) against(`QueryTerm` in natural language mode)",
+	} {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		selectStmt := stmt.(*tree.Select).Select.(*tree.SelectClause)
+		match := selectStmt.Where.Expr.(*tree.FullTextMatchExpr)
+		name, ok := match.Pattern.(*tree.UnresolvedName)
+		require.True(t, ok)
+		require.Equal(t, 1, name.NumParts)
+
+		formatted := tree.String(stmt, dialect.MYSQL)
+		stmt.Free()
+		reparsed, err := ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+		require.Equal(t, formatted, tree.String(reparsed, dialect.MYSQL))
+		reparsed.Free()
+	}
+
+	for _, sql := range []string{
+		"select id from docs where match(body) against(t.q)",
+		"select id from docs where match(body) against(@q)",
+		"select id from docs where match(body) against(concat('en', 'gine'))",
+		"select id from docs where match(body) against(sum(id))",
+		"select id from docs where match(body) against(rand())",
+	} {
+		_, err := ParseOne(context.Background(), sql, 1)
+		require.Error(t, err, sql)
 	}
 }
 
@@ -5981,6 +6262,18 @@ var (
 	invalidSQL = []struct {
 		input string
 	}{
+		{
+			input: "alter table t1 alter reindex idx1 ivfflat lists = 2, alter reindex idx1 ivfflat quantization 'float16'",
+		},
+		{
+			input: "alter table t1 alter reindex idx1 ivfflat lists = 2, alter reindex idx2 ivfflat lists = 4",
+		},
+		{
+			input: "alter table t1 alter reindex idx1 ivfflat lists = 2, add column c int",
+		},
+		{
+			input: "alter table t1 add column c int, alter reindex idx1 ivfflat lists = 2",
+		},
 		{
 			input: "alter table t1 add constraint index (col3, col4)",
 		},
@@ -6553,6 +6846,46 @@ func TestNonGeometrySRIDSyntaxRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, ast)
 			require.Equal(t, test.output, tree.String(ast, dialect.MYSQL))
+		})
+	}
+}
+
+func TestLexerErrorUTF8Excerpt(t *testing.T) {
+	for _, tc := range []struct{ name, raw, want string }{
+		{"empty", "", ""}, {"ASCII", "FROM bad", "FROM bad"},
+		{"ASCII exact", strings.Repeat("a", 1024), strings.Repeat("a", 1024)},
+		{"ASCII overflow", strings.Repeat("a", 1025), strings.Repeat("a", 1024)},
+		{"two byte cut", strings.Repeat("a", 1023) + "¢", strings.Repeat("a", 1023)},
+		{"two byte aligned", strings.Repeat("a", 1022) + "¢z", strings.Repeat("a", 1022) + "¢"},
+		{"three byte cut", strings.Repeat("a", 1023) + "你", strings.Repeat("a", 1023)},
+		{"three byte aligned", strings.Repeat("a", 1021) + "你z", strings.Repeat("a", 1021) + "你"},
+		{"four byte cut", strings.Repeat("a", 1022) + "😀", strings.Repeat("a", 1022)},
+		{"four byte aligned", strings.Repeat("a", 1020) + "😀z", strings.Repeat("a", 1020) + "😀"},
+		{"malformed", "FROM \xff\xe4\xbd", "FROM ???"},
+		{"literal replacement", "FROM �", "FROM �"},
+		{"discarded malformed", strings.Repeat("a", 1024) + "\xff", strings.Repeat("a", 1024)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scanner := &Scanner{buf: "prefix" + tc.raw, PrePos: 6, Line: 3, Col: 7}
+			lexer := &Lexer{scanner: scanner}
+			lexer.Error("syntax error")
+			err, ok := scanner.LastError.(PositionedErr)
+			require.True(t, ok)
+			require.Equal(t, tc.want, err.Near)
+			require.True(t, utf8.ValidString(err.Error()))
+			require.LessOrEqual(t, len(err.Near), 1024)
+			require.Equal(t, 3, err.Line)
+			require.Equal(t, 7, err.Col)
+			require.Equal(t, "prefix"+tc.raw, scanner.buf)
+			require.Equal(t, 6, scanner.PrePos)
+			if len(tc.raw) <= 1024 {
+				require.Empty(t, err.LenStr)
+			} else {
+				require.NotEmpty(t, err.LenStr)
+			}
+			if tc.name == "ASCII" {
+				require.Equal(t, `You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 4 column 7 near "FROM bad";`, err.Error())
+			}
 		})
 	}
 }

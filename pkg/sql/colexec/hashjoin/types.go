@@ -74,6 +74,9 @@ type container struct {
 	// globalBuildRowCnt is independent of the currently loaded spill bucket.
 	// MARK join needs the global empty-build fact for SQL three-valued logic.
 	globalBuildRowCnt int64
+	// Borrowed from eqCondExecs/nonEqCondExec; never freed independently.
+	joinDiagnosticActivation []colexec.ExpressionExecutor
+	joinDiagnosticActivated  bool
 
 	leftBat *batch.Batch
 	resBat  *batch.Batch
@@ -168,6 +171,7 @@ type container struct {
 	// spill support
 	spillEngine       *spillutil.SpillEngine
 	spillThreshold    int64
+	autoSpill         bool
 	probeBucketActive bool // true while reading probe batches from a bucket
 }
 
@@ -219,11 +223,13 @@ type HashJoin struct {
 	JoinType    plan.Node_JoinType
 	IsRightJoin bool
 
-	ResultCols []colexec.ResultPos
-	LeftTypes  []types.Type
-	RightTypes []types.Type
-	NonEqCond  *plan.Expr
-	EqConds    [][]*plan.Expr
+	ResultCols                    []colexec.ResultPos
+	LeftTypes                     []types.Type
+	RightTypes                    []types.Type
+	NonEqCond                     *plan.Expr
+	EqConds                       [][]*plan.Expr
+	OwnsConstantFilterDiagnostics bool
+	JoinDiagnostic                *colexec.DeferredJoinDiagnostic
 
 	Mailbox *BitmapMailbox
 	NumCPU  uint64
@@ -254,6 +260,12 @@ type HashJoin struct {
 	recursiveProbe bool
 
 	vm.OperatorBase
+
+	// Fixed scratch for one Find chunk; every selected slot is overwritten.
+	// Keep it last to preserve the locality of existing hot state/config fields.
+	// Operator ownership avoids per-chunk heap escapes through Vector.Union.
+	uniqueLeftRows  [hashmap.UnitLimit]int64
+	uniqueRightRows [hashmap.UnitLimit]int64
 }
 
 func (hashJoin *HashJoin) SetAllocationAccount(
@@ -388,6 +400,9 @@ func (hashJoin *HashJoin) ExecProjection(proc *process.Process, input *batch.Bat
 }
 
 func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if hashJoin.JoinDiagnostic != nil {
+		hashJoin.JoinDiagnostic.Reset()
+	}
 	ctr := &hashJoin.ctr
 	hashmap.IteratorClearOwner(ctr.itr)
 	ctr.itr = nil
@@ -403,6 +418,8 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.cleanEqCondExecutors()
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
+	ctr.joinDiagnosticActivation = nil
+	ctr.joinDiagnosticActivated = false
 	if ctr.resBat != nil {
 		ctr.resBat.Clean(proc.GetMPool())
 		ctr.resBat = nil
@@ -427,6 +444,9 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 }
 
 func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if hashJoin.JoinDiagnostic != nil {
+		hashJoin.JoinDiagnostic.Reset()
+	}
 	ctr := &hashJoin.ctr
 	ctr.cleanAsofIndexes(proc)
 	ctr.cleanAsofBuildLeftState(proc)
@@ -435,6 +455,8 @@ func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanEqCondExecutors()
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
+	ctr.joinDiagnosticActivation = nil
+	ctr.joinDiagnosticActivated = false
 }
 
 func (ctr *container) cleanAsofIndexes(proc *process.Process) {
@@ -620,5 +642,6 @@ func (hashJoin *HashJoin) EmitUnmatchedBuild() bool {
 }
 
 func (ctr *container) setSpillThreshold(threshold int64) {
+	ctr.autoSpill = threshold == 0
 	ctr.spillThreshold = colexec.ResolveSpillThreshold(threshold)
 }

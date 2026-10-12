@@ -354,6 +354,32 @@ run_port_plan() {
   fi
 }
 
+# Exercise lease ownership without depending on the host's current port usage.
+# This internal test profile deliberately requires an isolated/explicit lease
+# directory and blocks on stdin until released; production E2E allocation still
+# goes through run_port_plan/run_e2e and retains its socket availability checks.
+run_port_lease_test() {
+  require python3
+  local base="${MO_MONGODB_LOG_PORT_BASE:-}"
+  local lease_dir="${MO_MONGODB_PORT_LEASE_DIR:-}"
+  local ready_file="${MO_MONGODB_PORT_PLAN_READY_FILE:-}"
+  local release_token
+
+  [[ -n "$base" ]] || die "port-lease-test requires MO_MONGODB_LOG_PORT_BASE"
+  [[ -n "$lease_dir" ]] || die "port-lease-test requires MO_MONGODB_PORT_LEASE_DIR"
+  [[ -n "$ready_file" ]] || die "port-lease-test requires MO_MONGODB_PORT_PLAN_READY_FILE"
+  validate_port_block_base "MO_MONGODB_LOG_PORT_BASE" "$base"
+
+  trap release_port_block_lease EXIT
+  acquire_port_block_lease "$base" || \
+    die "MO_MONGODB_LOG_PORT_BASE is already leased by another MongoDB E2E run"
+  printf 'ready\n' >"$ready_file"
+
+  if IFS= read -r release_token; then
+    [[ "$release_token" == "release" ]] || die "port-lease-test received an invalid release token"
+  fi
+}
+
 print_port_plan() {
   printf 'LOG_PORT_BASE=%s\n' "$LOG_PORT_BASE"
   printf 'LOG_RAFT_PORT=%s\n' "$LOG_RAFT_PORT"
@@ -497,6 +523,7 @@ case "$PROFILE" in
   unit) run_unit ;;
   e2e-local) run_e2e ;;
   port-plan) run_port_plan ;;
+  port-lease-test) run_port_lease_test ;;
   nightly)
 	run_unit
 	run_e2e

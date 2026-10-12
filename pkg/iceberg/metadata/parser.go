@@ -152,7 +152,7 @@ func resolveSnapshotAtTimestamp(meta *api.TableMetadata, timestampMS int64) (api
 	if chosen != nil {
 		return resolveSnapshotID(meta, chosen.SnapshotID)
 	}
-	var snapshots []api.Snapshot
+	snapshots := make([]api.Snapshot, 0, len(meta.Snapshots))
 	snapshots = append(snapshots, meta.Snapshots...)
 	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].TimestampMS < snapshots[j].TimestampMS })
 	for i := len(snapshots) - 1; i >= 0; i-- {

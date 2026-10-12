@@ -19,6 +19,7 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 // A DISTINCT aggregate still needs its ordered skiplist for state merge and
@@ -121,6 +122,14 @@ func distinctFixedKeyWidth(info *aggInfo) int {
 	}
 	size := int(info.argTypes[0].GetSize())
 	if size <= 0 || size > 8 || !info.argTypes[0].IsFixedLen() {
+		return 0
+	}
+	// Scaled FLOAT32 equality is a many-to-one normalization. The fixed index
+	// stores only its membership key, while value-producing DISTINCT
+	// aggregates must retain the representative physical payload. Keep this
+	// type on the canonical skiplist path so equality and payload ownership
+	// cannot diverge by execution shape.
+	if info.argTypes[0].Oid == types.T_float32 && info.argTypes[0].Scale > 0 {
 		return 0
 	}
 	return size

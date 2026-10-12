@@ -117,6 +117,7 @@ type SessionInfo struct {
 	Role                string
 	ConnectionID        uint64
 	LastInsertID        uint64
+	LastInsertIDSet     bool // authoritative transported session baseline, including zero
 	Database            string
 	Version             string
 	TimeZone            *time.Location
@@ -135,12 +136,23 @@ type SessionInfo struct {
 	// SqlMode is captured on the initiating CN and used when a remote process has
 	// no session variable resolver.
 	SqlMode string
+	// Captured per execution for one-argument WEEK on remote/forwarded CNs.
+	DefaultWeekFormat    uint8
+	DefaultWeekFormatSet bool
+	// Effective lc_time_names captured on the initiating CN and used when a
+	// remote process has no session-variable resolver.
+	LCTimeNames string
 	// AutoIncrementIncrement and AutoIncrementOffset are captured on the
 	// initiating CN and used by remote PRE_INSERT operators.  They are
 	// statement-scoped; zero means the default value one for compatibility with
 	// old process payloads and internal/background processes.
 	AutoIncrementIncrement uint64
 	AutoIncrementOffset    uint64
+	// MaxErrorCount is the statement-scoped capacity for retained diagnostic
+	// records. MaxErrorCountSet distinguishes an explicit zero from an older
+	// ProcessInfo payload which did not carry this field.
+	MaxErrorCount    int
+	MaxErrorCountSet bool
 	// ApplySQLSelectLimit distinguishes client statements from frontend
 	// background SQL, which may inherit a session-variable resolver but must not
 	// be affected by a client's row cap.
@@ -164,9 +176,12 @@ type SessionInfo struct {
 	SeqAddValues      map[uint64]string
 	SeqLastValue      []string
 	SqlHelper         sqlHelper
-	Buf               *buffer.Buffer
-	LogLevel          zapcore.Level
-	SessionId         uuid.UUID
+	// CompilerContext is request-local and never serialized. Origin-only metadata
+	// operators use it to bind View definitions in the executing transaction.
+	CompilerContext any
+	Buf             *buffer.Buffer
+	LogLevel        zapcore.Level
+	SessionId       uuid.UUID
 }
 
 type Session interface {
@@ -480,8 +495,11 @@ type BaseProcess struct {
 	UdfService                          udf.Service
 	WaitPolicy                          lock.WaitPolicy
 	messageBoard                        *message.MessageBoard
+	executionResourceBudgetBorrowed     bool
 	executionResourceBudgetMu           sync.Mutex
 	executionResourceBudget             *ExecutionResourceGeneration
+	warningDiagnosticBudgetMu           sync.Mutex
+	warningDiagnosticBudget             *WarningDiagnosticBudget
 	cteMemoryBudgetMu                   sync.Mutex
 	cteMemoryBudget                     *CTEMemoryBudget
 	logger                              *log.MOLogger
@@ -499,9 +517,22 @@ type BaseProcess struct {
 	// It is intentionally not part of SessionInfo: remote/rebuilt session state
 	// must not copy or replace a live synchronization object.
 	sequenceGate sequenceGate
+	// groupConcatInputRowCounters gives each logical Group operator one
+	// statement-scoped source-row cursor. A BaseProcess is shared by local
+	// parallel child processes, so partial producers do not restart at row 1.
+	// The map is reset with the query context and is not serialized to remote
+	// processes; remote state keeps the source rows assigned by its producer.
+	groupConcatInputRowCountersMu sync.Mutex
+	groupConcatInputRowCounters   map[int]*atomic.Uint64
+	// groupConcatSourceRowProvenanceUntrusted is true on a remote process that
+	// cannot share the coordinator's input-row namespace. It is kept on the
+	// shared BaseProcess so child pipelines inherit the same decision. The
+	// negative form keeps zero-value test processes compatible with local use.
+	groupConcatSourceRowProvenanceUntrusted bool
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
-	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
+	// (frontend derived execution or executor.Options.WithDisableIncrStatement).
+	// Compiles on such a process
 	// must not advance the workspace snapshot write offset: that is a
 	// statement-boundary action, and moving the boundary mid-statement breaks
 	// the positional visibility of the caller's workspace entries.
@@ -674,18 +705,13 @@ type WrapCs struct {
 	// ReceiverStopped certifies an explicit StopSending while the registration
 	// connection and message remain live. It does not imply query success.
 	ReceiverStopped func() bool
-	// TerminalBacked marks registrations whose immutable terminal owns the
-	// generation result. Such registrations must not use Err for a second,
-	// competing terminal notification; Err is nil for that path.
-	TerminalBacked bool
-	MsgId          uint64
-	Uid            uuid.UUID
-	Cs             morpc.ClientSession
-	Err            chan error
-	ReserveBatch   func(context.Context, uint64) (uint64, error)
-	RollbackBatch  func(uint64)
-	BatchCredits   uint32
-	ByteCredits    uint64
+	MsgId           uint64
+	Uid             uuid.UUID
+	Cs              morpc.ClientSession
+	ReserveBatch    func(context.Context, uint64) (uint64, error)
+	RollbackBatch   func(uint64)
+	BatchCredits    uint32
+	ByteCredits     uint64
 }
 
 // RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.
@@ -708,10 +734,16 @@ func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
 	proc.Base.executionResourceBudgetMu.Lock()
 	if proc.Base.executionResourceBudget != nil {
-		proc.Base.executionResourceBudget.Close()
+		if !proc.Base.executionResourceBudgetBorrowed {
+			proc.Base.executionResourceBudget.Close()
+		}
 		proc.Base.executionResourceBudget = nil
+		proc.Base.executionResourceBudgetBorrowed = false
 	}
 	proc.Base.executionResourceBudgetMu.Unlock()
+	proc.Base.warningDiagnosticBudgetMu.Lock()
+	proc.Base.warningDiagnosticBudget = nil
+	proc.Base.warningDiagnosticBudgetMu.Unlock()
 	proc.Base.cteMemoryBudgetMu.Lock()
 	if proc.Base.cteMemoryBudget != nil {
 		proc.Base.cteMemoryBudget.Close()

@@ -652,6 +652,23 @@ drop database if exists test15_new;
 
 create database test12_new clone test12;
 create database test13_new clone test13;
+-- The cloned HNSW indexes initialize with asynchronous ALTER REINDEX.
+-- Finish that phase before testing the next clone of their source schema.
+-- @session
+-- @wait_expect(1, 60)
+select count(distinct t.rel_id) = 2 as clone_indexes_ready
+from mo_catalog.mo_iscp_log j
+join mo_catalog.mo_tables t on t.account_id = j.account_id and t.rel_id = j.table_id
+join mo_catalog.mo_account a on a.account_id = j.account_id
+where a.account_name = 'acc05' and t.reldatabase = 'test13_new'
+  and t.relname in ('vector_index_09', 'vector_ip_01') and j.job_name = 'index_idx01'
+  and j.job_id = (select max(g.job_id) from mo_catalog.mo_iscp_log g
+                  where g.account_id = j.account_id and g.table_id = j.table_id and g.job_name = j.job_name)
+  and cast(json_unquote(json_extract(j.job_status, '$.Stage')) as signed) = 1
+  and cast(json_unquote(json_extract(j.job_status, '$.LSN')) as unsigned) > 0
+  and cast(json_unquote(json_extract(j.job_status, '$.ErrorCode')) as signed) = 0;
+-- @session:id=5&user=acc05:test_account&password=111
+SET experimental_hnsw_index = 1;
 use test12_new;
 drop table t1;
 drop table bit01;

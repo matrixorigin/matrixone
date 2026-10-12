@@ -190,9 +190,7 @@ func NewLogtailServerSegmentPool(maxMessageSize int) LogtailServerSegmentPool {
 		maxMessageSize: maxMessageSize,
 		pool: &sync.Pool{
 			New: func() any {
-				seg := &LogtailResponseSegment{}
-				seg.Payload = make([]byte, maxMessageSize)
-				return seg
+				return &LogtailResponseSegment{}
 			},
 		},
 	}

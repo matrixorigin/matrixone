@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	"io"
 	"math"
 	"strconv"
 	"strings"
@@ -119,20 +120,20 @@ func makeCountColumnDistinctExec(t *testing.T, mp *mpool.MPool, typ types.Type) 
 }
 
 type expectedCount struct {
-	count    int64
-	count20k int64
+	count int64
+	two   [2]int64
 }
 
 func TestCountStarExec(t *testing.T) {
-	testAggExec(t, makeCountStarExec, expectedCount{count: 20, count20k: 40000})
+	testAggExec(t, makeCountStarExec, expectedCount{count: 20, two: [2]int64{10, 10}})
 }
 
 func TestCountColumnExec(t *testing.T) {
-	testAggExec(t, makeCountColumnExec, expectedCount{count: 18, count20k: 36000})
+	testAggExec(t, makeCountColumnExec, expectedCount{count: 18, two: [2]int64{9, 9}})
 }
 
 func TestCountColumnDistinctExec(t *testing.T) {
-	testAggExec(t, makeCountColumnDistinctExec, expectedCount{count: 11, count20k: 36000})
+	testAggExec(t, makeCountColumnDistinctExec, expectedCount{count: 11, two: [2]int64{6, 5}})
 }
 
 func TestCountDistinctSignedZeroUsesOneValue(t *testing.T) {
@@ -176,7 +177,145 @@ func TestCountDistinctSignedZeroUsesOneValue(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestCountDistinctFixedIndexPreservesFloatNaNIdentity(t *testing.T) {
+func TestCountDistinctFloat64SignedZeroSurvivesIntermediateMerge(t *testing.T) {
+	mp := mpool.MustNewZero()
+	makePartial := func(value float64) []byte {
+		exec := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_float64.ToType()},
+		).(*countColumnExec)
+		require.NoError(t, exec.GroupGrow(1))
+		vec := testutil.NewFloat64Vector(
+			1, types.T_float64.ToType(), mp, false, nil, []float64{value})
+		require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{vec}))
+		SetCanonicalDistinctKeyWire(exec, false)
+		var encoded bytes.Buffer
+		require.NoError(t, exec.SaveIntermediateResultOfChunk(0, &encoded))
+		vec.Free(mp)
+		exec.Free()
+		return bytes.Clone(encoded.Bytes())
+	}
+
+	minusZero := makePartial(math.Copysign(0, -1))
+	plusZero := makePartial(0)
+	legacyPayload := func(encoded []byte) []byte {
+		r := bytes.NewReader(encoded)
+		magic, err := types.ReadUint64(r)
+		require.NoError(t, err)
+		require.Equal(t, magicNumber, magic)
+		chunks, err := types.ReadInt32(r)
+		require.NoError(t, err)
+		require.Equal(t, int32(1), chunks)
+		rows, err := types.ReadInt32(r)
+		require.NoError(t, err)
+		require.Equal(t, int32(1), rows)
+		count, err := types.ReadUint32(r)
+		require.NoError(t, err)
+		require.Equal(t, uint32(1), count)
+		payload := make([]byte, 8)
+		_, err = io.ReadFull(r, payload)
+		require.NoError(t, err)
+		return payload
+	}
+	// A pre-canonical fixed-width reader compares the wire bytes directly.
+	// The legacy output must therefore carry canonical +0, even when the
+	// retained in-memory representative was -0.
+	require.Equal(t, make([]byte, 8), legacyPayload(minusZero))
+	require.Equal(t, make([]byte, 8), legacyPayload(plusZero))
+	target := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_float64.ToType()},
+	).(*countColumnExec)
+	other := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_float64.ToType()},
+	).(*countColumnExec)
+	SetCanonicalDistinctKeyWire(target, false)
+	SetCanonicalDistinctKeyWire(other, false)
+	require.NoError(t, target.UnmarshalFromReader(bytes.NewReader(minusZero), mp))
+	require.NoError(t, other.UnmarshalFromReader(bytes.NewReader(plusZero), mp))
+	require.NoError(t, target.BatchMerge(other, 0, []uint64{1}))
+	result, err := target.Flush()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
+
+	result[0].Free(mp)
+	target.Free()
+	other.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestCountDistinctUsesCanonicalTypedKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		fill func(*testing.T, *vector.Vector, *mpool.MPool)
+		want int64
+	}{
+		{
+			name: "char-pad-space",
+			typ:  types.New(types.T_char, 4, 0),
+			fill: func(t *testing.T, vec *vector.Vector, mp *mpool.MPool) {
+				for _, value := range []string{"a", "a ", "a  ", "b"} {
+					require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+				}
+			},
+			want: 2,
+		},
+		{
+			name: "json-numeric-encoding",
+			typ:  types.T_json.ToType(),
+			fill: func(t *testing.T, vec *vector.Vector, mp *mpool.MPool) {
+				for _, value := range []string{"1", "1.0", "1e0", "2"} {
+					json, err := types.ParseStringToByteJson(value)
+					require.NoError(t, err)
+					encoded, err := types.EncodeJson(json)
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendBytes(vec, encoded, false, mp))
+				}
+			},
+			want: 2,
+		},
+		{
+			name: "vector-signed-zero",
+			typ:  types.T_array_float32.ToType(),
+			fill: func(t *testing.T, vec *vector.Vector, mp *mpool.MPool) {
+				negativeZero := float32(math.Copysign(0, -1))
+				for _, value := range [][]float32{
+					{1, 0, 3}, {1, negativeZero, 3}, {1, 2, 3},
+				} {
+					require.NoError(t, vector.AppendBytes(
+						vec, types.ArrayToBytes(value), false, mp))
+				}
+			},
+			want: 2,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			values := vector.NewVec(tc.typ)
+			tc.fill(t, values, mp)
+			exec := newCountColumnExec(mp, AggIdOfCountColumn, true, []types.Type{tc.typ})
+			require.NoError(t, exec.GroupGrow(1))
+			groups := make([]uint64, values.Length())
+			for i := range groups {
+				groups[i] = 1
+			}
+			require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(
+				0, groups, []*vector.Vector{values}))
+			require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{values}))
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Equal(t, tc.want,
+				vector.MustFixedColNoTypeCheck[int64](results[0])[0])
+			for _, result := range results {
+				result.Free(mp)
+			}
+			exec.Free()
+			values.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestCountDistinctFixedIndexCanonicalizesFloatNaNPeers(t *testing.T) {
 	mp := mpool.MustNewZero()
 	values := []float64{
 		math.Float64frombits(0x7ff8000000000001),
@@ -216,12 +355,11 @@ func TestCountDistinctFixedIndexPreservesFloatNaNIdentity(t *testing.T) {
 		return got
 	}
 
-	// The fixed index must preserve the pre-existing byte-exact aggregate key
-	// contract: equal NaN payloads remain one key, distinct payloads remain
-	// distinct, and signed zeroes remain one key.
+	// The fixed index must use the same SQL equivalence key as the canonical
+	// skiplist path: all NaN payloads are one key and signed zeroes are one key.
 	legacy := count(t, 1)
 	fixed := count(t, distinctFixedIndexMinGroups)
-	require.Equal(t, int64(3), legacy)
+	require.Equal(t, int64(2), legacy)
 	require.Equal(t, legacy, fixed)
 	require.Zero(t, mp.CurrNB())
 }
@@ -683,376 +821,303 @@ func TestCountDistinctFixedIndexRejectsMismatchedPayload(t *testing.T) {
 func testAggExec(t *testing.T,
 	makeAgg func(t *testing.T, mp *mpool.MPool, typ types.Type) AggFuncExec,
 	expected expectedCount) {
-	mp := mpool.MustNewZero()
+	mp := newAggExecTestPool(t)
 	typs, vecs, nvecs := buildTestDataVecs(t, mp)
-
-	t.Run("BulkFill", func(t *testing.T) {
-		for i, typ := range typs {
-			curNB := mp.CurrNB()
-			exec := makeAgg(t, mp, typ)
-			exec.GetOptResult().modifyChunkSize(1)
-			require.NoError(t, exec.GroupGrow(1))
-
-			require.NoError(t, exec.BulkFill(0, vecs[i:i+1]))
-			require.NoError(t, exec.BulkFill(0, nvecs[i:i+1]))
-
-			results, err := exec.Flush()
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			vals := vector.MustFixedColNoTypeCheck[int64](results[0])
-			if expected.count != vals[0] {
-				t.Errorf("expected %d, got %d", expected.count, vals[0])
+	t.Cleanup(func() {
+		for _, inputs := range [][]*vector.Vector{vecs, nvecs} {
+			for _, input := range inputs {
+				input.Free(mp)
 			}
-			exec.Free()
-			for _, result := range results {
-				result.Free(mp)
-			}
-			require.Equal(t, curNB, mp.CurrNB())
 		}
 	})
 
-	t.Run("BatchFill1", func(t *testing.T) {
-		for i, typ := range typs {
-			curNB := mp.CurrNB()
-			exec := makeAgg(t, mp, typ)
-			require.NoError(t, exec.GroupGrow(1))
-
-			require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, vecs[i:i+1]))
-			require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, nvecs[i:i+1]))
-
-			results, err := exec.Flush()
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			vals := vector.MustFixedColNoTypeCheck[int64](results[0])
-			require.Equal(t, 1, len(vals))
-			require.Equal(t, expected.count, vals[0])
-			exec.Free()
-			for _, result := range results {
-				result.Free(mp)
+	for _, shape := range []struct {
+		name   string
+		bulk   bool
+		groups []uint64
+		rows   int
+	}{
+		{name: "BulkFill", bulk: true, rows: 1},
+		{name: "BatchFill1", groups: []uint64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, rows: 1},
+		{name: "BatchFill2", groups: []uint64{1, 2, 1, 2, 1, 2, 1, 2, 1, 2}, rows: 2},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			for i, typ := range typs {
+				t.Run(typ.Oid.String(), func(t *testing.T) {
+					baseline := mp.CurrNB()
+					t.Cleanup(func() { require.Equal(t, baseline, mp.CurrNB()) })
+					exec := makeAgg(t, mp, typ)
+					t.Cleanup(exec.Free)
+					if shape.bulk {
+						exec.GetOptResult().modifyChunkSize(1)
+					}
+					require.NoError(t, exec.GroupGrow(shape.rows))
+					for _, inputs := range [][]*vector.Vector{vecs[i : i+1], nvecs[i : i+1]} {
+						if shape.bulk {
+							require.NoError(t, exec.BulkFill(0, inputs))
+						} else {
+							require.NoError(t, exec.BatchFill(0, shape.groups, inputs))
+						}
+					}
+					results, err := exec.Flush()
+					t.Cleanup(func() {
+						for _, result := range results {
+							result.Free(mp)
+						}
+					})
+					require.NoError(t, err)
+					require.Len(t, results, 1)
+					require.Equal(t, types.T_int64.ToType(), *results[0].GetType())
+					require.Zero(t, results[0].GetNulls().Count())
+					want := []int64{expected.count}
+					if shape.rows == 2 {
+						want = expected.two[:]
+					}
+					require.Equal(t, want, vector.MustFixedColNoTypeCheck[int64](results[0]))
+				})
 			}
-			require.Equal(t, curNB, mp.CurrNB())
-		}
-	})
-
-	t.Run("BatchFill2", func(t *testing.T) {
-		for i, typ := range typs {
-			curNB := mp.CurrNB()
-			exec := makeAgg(t, mp, typ)
-			require.NoError(t, exec.GroupGrow(2))
-
-			require.NoError(t, exec.BatchFill(0, []uint64{1, 2, 1, 2, 1, 2, 1, 2, 1, 2}, vecs[i:i+1]))
-			require.NoError(t, exec.BatchFill(0, []uint64{1, 2, 1, 2, 1, 2, 1, 2, 1, 2}, nvecs[i:i+1]))
-
-			results, err := exec.Flush()
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			vals := vector.MustFixedColNoTypeCheck[int64](results[0])
-			require.Equal(t, 2, len(vals))
-			require.Equal(t, expected.count, vals[0]+vals[1])
-			exec.Free()
-			for _, result := range results {
-				result.Free(mp)
+		})
+	}
+	for _, shape := range []struct {
+		name   string
+		chunk  bool
+		groups []uint64
+		mask   []uint8
+		rows   int
+	}{
+		{name: "Merge", chunk: true, rows: 1},
+		{name: "BatchMerge1", groups: []uint64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, mask: []uint8{1}, rows: 1},
+		{name: "BatchMerge2", groups: []uint64{1, 2, 1, 2, 1, 2, 1, 2, 1, 2}, mask: []uint8{1, 0}, rows: 2},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			for i, typ := range typs {
+				t.Run(typ.Oid.String(), func(t *testing.T) {
+					baseline := mp.CurrNB()
+					t.Cleanup(func() { require.Equal(t, baseline, mp.CurrNB()) })
+					var restored [2]AggFuncExec
+					for side, inputs := range [][]*vector.Vector{vecs[i : i+1], nvecs[i : i+1]} {
+						source := makeAgg(t, mp, typ)
+						t.Cleanup(source.Free)
+						restored[side] = makeAgg(t, mp, typ)
+						t.Cleanup(restored[side].Free)
+						if shape.chunk {
+							source.GetOptResult().modifyChunkSize(1)
+							restored[side].GetOptResult().modifyChunkSize(1)
+							// Retain vector reuse in one destination and cold decode in its peer.
+							if side == 0 && !source.IsDistinct() {
+								require.NoError(t, restored[side].GroupGrow(1))
+							}
+						}
+						require.NoError(t, source.GroupGrow(shape.rows))
+						var wire bytes.Buffer
+						if shape.chunk {
+							require.NoError(t, source.BulkFill(0, inputs))
+							require.NoError(t, source.SaveIntermediateResultOfChunk(0, &wire))
+						} else {
+							require.NoError(t, source.BatchFill(0, shape.groups, inputs))
+							require.NoError(t, source.SaveIntermediateResult(1, [][]uint8{shape.mask}, &wire))
+						}
+						require.NoError(t, restored[side].UnmarshalFromReader(bytes.NewReader(wire.Bytes()), mp))
+					}
+					if shape.chunk {
+						require.NoError(t, restored[0].Merge(restored[1], 0, 0))
+					} else {
+						require.NoError(t, restored[0].BatchMerge(restored[1], 0, []uint64{1}))
+					}
+					results, err := restored[0].Flush()
+					t.Cleanup(func() {
+						for _, result := range results {
+							result.Free(mp)
+						}
+					})
+					require.NoError(t, err)
+					require.Len(t, results, 1)
+					require.Equal(t, types.T_int64.ToType(), *results[0].GetType())
+					require.Zero(t, results[0].GetNulls().Count())
+					want := expected.count
+					if shape.rows == 2 {
+						want = expected.two[0]
+					}
+					require.Equal(t, []int64{want}, vector.MustFixedColNoTypeCheck[int64](results[0]))
+				})
 			}
-			require.Equal(t, curNB, mp.CurrNB())
-		}
-	})
+		})
+	}
 
-	t.Run("BatchFill20000", func(t *testing.T) {
+	t.Run("BoundaryFillAndMerge", func(t *testing.T) {
 		for i, typ := range typs {
-			curNB := mp.CurrNB()
-			exec := makeAgg(t, mp, typ)
-			// grow twice, so we have 20000 groups.
-			require.NoError(t, exec.GroupGrow(10000))
-			require.NoError(t, exec.GroupGrow(10000))
-
-			for j := 0; j < 2000; j++ {
-				groups := make([]uint64, 10)
-				for k := range groups {
-					groups[k] = uint64(j*10 + k + 1)
+			t.Run(typ.Oid.String(), func(t *testing.T) {
+				baseline := mp.CurrNB()
+				t.Cleanup(func() { require.Equal(t, baseline, mp.CurrNB()) })
+				const n = 2*AggBatchSize + 2
+				source := makeAgg(t, mp, typ)
+				t.Cleanup(func() {
+					if source != nil {
+						source.Free()
+					}
+				})
+				want := make([]int64, n)
+				pattern := [...]int64{2, 2, 2, 2, 1, 2, 2, 2, 2, 1}
+				if source.AggID() == AggIdOfCountStar {
+					pattern = [...]int64{2, 2, 2, 2, 2, 2, 2, 2, 2, 2}
+				}
+				dense := 0
+				if source.IsDistinct() {
+					switch typ.Oid {
+					case types.T_int8:
+						dense = 150
+					case types.T_decimal128, types.T_varchar:
+						dense = 7700
+					}
+				}
+				fill := func(origin int) {
+					var groups [10]uint64
+					for row := range groups {
+						groups[row] = uint64(origin + row + 1)
+						want[origin+row] = pattern[row]
+					}
+					for _, inputs := range [][]*vector.Vector{vecs[i : i+1], nvecs[i : i+1]} {
+						require.NoError(t, source.BatchFill(0, groups[:5], inputs))
+						require.NoError(t, source.BatchFill(5, groups[5:], inputs))
+					}
+				}
+				require.NoError(t, source.GroupGrow(AggBatchSize+1))
+				if dense > 0 {
+					for origin := 0; origin < dense; origin += 10 {
+						fill(origin)
+					}
+				} else {
+					fill(0)
+				}
+				var boundary [10]uint64
+				for row := range boundary {
+					boundary[row] = uint64(AggBatchSize - 5 + row + 1)
+					want[AggBatchSize-5+row] = pattern[row]
+				}
+				for _, inputs := range [][]*vector.Vector{vecs[i : i+1], nvecs[i : i+1]} {
+					require.NoError(t, source.BatchFill(0, boundary[:5], inputs))
+				}
+				require.NoError(t, source.GroupGrow(AggBatchSize+1))
+				for _, inputs := range [][]*vector.Vector{vecs[i : i+1], nvecs[i : i+1]} {
+					require.NoError(t, source.BatchFill(5, boundary[5:], inputs))
+				}
+				fill(2*AggBatchSize - 8)
+				require.NoError(t, source.BatchFill(0, []uint64{0}, vecs[i:i+1]))
+				require.NoError(t, source.BatchFill(4, []uint64{AggBatchSize - 19}, nvecs[i:i+1]))
+				if source.AggID() == AggIdOfCountStar {
+					want[AggBatchSize-20] = 1
+				}
+				if dense > 0 {
+					state := source.GetOptResult().(*aggExec).state[0]
+					if typ.Oid == types.T_int8 {
+						require.Greater(t, len(state.distinctIndex.slotKeys), 256)
+						require.Greater(t, cap(state.distinctIndex.logKeys), 256)
+					} else {
+						require.Greater(t, len(state.argbuf), 512*1024)
+					}
+				}
+				flags := [2][][]uint8{}
+				selected := [2][]int64{}
+				for side := range flags {
+					for chunk, length := range []int{AggBatchSize, AggBatchSize, 2} {
+						mask := make([]uint8, length)
+						for row := range mask {
+							if row%2 == side {
+								mask[row] = 1
+								selected[side] = append(selected[side], want[chunk*AggBatchSize+row])
+							}
+						}
+						flags[side] = append(flags[side], mask)
+					}
+				}
+				var encoded [2]bytes.Buffer
+				for side := range encoded {
+					require.NoError(t, source.SaveIntermediateResult(AggBatchSize+1, flags[side], &encoded[side]))
+				}
+				var tail bytes.Buffer
+				require.NoError(t, source.SaveIntermediateResultOfChunk(2, &tail))
+				check := func(t *testing.T, exec AggFuncExec, expected []int64) {
+					t.Helper()
+					results, err := exec.Flush()
+					defer func() {
+						for _, result := range results {
+							result.Free(mp)
+						}
+					}()
+					require.NoError(t, err)
+					require.Len(t, results, (len(expected)+AggBatchSize-1)/AggBatchSize)
+					offset := 0
+					for _, result := range results {
+						require.Equal(t, types.T_int64.ToType(), *result.GetType())
+						length := min(AggBatchSize, len(expected)-offset)
+						require.Equal(t, length, result.Length())
+						require.Zero(t, result.GetNulls().Count())
+						require.Equal(t, expected[offset:offset+length], vector.MustFixedColNoTypeCheck[int64](result))
+						offset += length
+					}
+					require.Equal(t, len(expected), offset)
+				}
+				if source.IsDistinct() && typ.Oid == types.T_int8 {
+					t.Run("DecodeSelectedCounts", func(t *testing.T) {
+						for _, count := range []int{1023, 1024} {
+							t.Run("rows-"+strconv.Itoa(count), func(t *testing.T) {
+								mask := make([]uint8, AggBatchSize)
+								for row := 0; row < count; row++ {
+									mask[row] = 1
+								}
+								var wire bytes.Buffer
+								require.NoError(t, source.SaveIntermediateResult(int64(count), [][]uint8{mask, make([]uint8, AggBatchSize), {0, 0}}, &wire))
+								restored := makeAgg(t, mp, typ)
+								defer restored.Free()
+								require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(wire.Bytes()), mp))
+								state := restored.GetOptResult().(*aggExec).state[0]
+								require.Equal(t, int32(count), state.length)
+								// Outer decode packs selected rows into default-capacity blocks.
+								// Logical selection count does not select the index representation.
+								require.Equal(t, int32(AggBatchSize), state.capacity)
+								require.Equal(t, 1, state.distinctKeyWidth)
+								check(t, restored, want[:count])
+							})
+						}
+					})
 				}
 
-				require.NoError(t, exec.BatchFill(0, groups[:5], vecs[i:i+1]))
-				require.NoError(t, exec.BatchFill(5, groups[5:], vecs[i:i+1]))
-				require.NoError(t, exec.BatchFill(0, groups[:5], nvecs[i:i+1]))
-				require.NoError(t, exec.BatchFill(5, groups[5:], nvecs[i:i+1]))
-			}
-
-			results, err := exec.Flush()
-			require.NoError(t, err)
-			require.Len(t, results, (20000+AggBatchSize-1)/AggBatchSize)
-			var totalGrp int
-			var totalCnt int64
-			for _, result := range results {
-				num := int(result.Length())
-				vals := vector.MustFixedColNoTypeCheck[int64](result)
-				for _, val := range vals {
-					totalCnt += val
-				}
-
-				totalGrp += num
-				result.Free(mp)
-			}
-			require.Equal(t, 20000, totalGrp)
-			require.Equal(t, expected.count20k, totalCnt)
-			exec.Free()
-			require.Equal(t, curNB, mp.CurrNB())
-		}
-	})
-
-	t.Run("Merge", func(t *testing.T) {
-		for i, typ := range typs {
-			curNB := mp.CurrNB()
-
-			execa1 := makeAgg(t, mp, typ)
-			execa2 := makeAgg(t, mp, typ)
-			execa1.GetOptResult().modifyChunkSize(1)
-			execa2.GetOptResult().modifyChunkSize(1)
-			require.NoError(t, execa1.GroupGrow(1))
-			require.NoError(t, execa2.GroupGrow(1))
-
-			execb1 := makeAgg(t, mp, typ)
-			execb2 := makeAgg(t, mp, typ)
-			execb1.GetOptResult().modifyChunkSize(1)
-			execb1.GroupGrow(1)
-			execb2.GetOptResult().modifyChunkSize(1)
-			execb2.GroupGrow(1)
-
-			require.NoError(t, execa1.BulkFill(0, vecs[i:i+1]))
-			require.NoError(t, execa2.BulkFill(0, nvecs[i:i+1]))
-
-			buf1 := bytes.NewBuffer(make([]byte, 0, common.MiB))
-			buf2 := bytes.NewBuffer(make([]byte, 0, common.MiB))
-
-			err := execa1.SaveIntermediateResultOfChunk(0, buf1)
-			require.NoError(t, err)
-			err = execa2.SaveIntermediateResultOfChunk(0, buf2)
-			require.NoError(t, err)
-
-			r1 := bytes.NewReader(buf1.Bytes())
-			r2 := bytes.NewReader(buf2.Bytes())
-
-			err = execb1.UnmarshalFromReader(r1, mp)
-			require.NoError(t, err)
-			err = execb2.UnmarshalFromReader(r2, mp)
-			require.NoError(t, err)
-
-			execb1.Merge(execb2, 0, 0)
-			results, err := execb1.Flush()
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			vals := vector.MustFixedColNoTypeCheck[int64](results[0])
-			if expected.count != vals[0] {
-				t.Errorf("expected %d, got %d", expected.count, vals[0])
-			}
-			for _, result := range results {
-				result.Free(mp)
-			}
-
-			execa1.Free()
-			execa2.Free()
-			execb1.Free()
-			execb2.Free()
-
-			require.Equal(t, curNB, mp.CurrNB())
-		}
-	})
-
-	t.Run("BatchMerge1", func(t *testing.T) {
-		for i, typ := range typs {
-			curNB := mp.CurrNB()
-
-			execa1 := makeAgg(t, mp, typ)
-			execa2 := makeAgg(t, mp, typ)
-			require.NoError(t, execa1.GroupGrow(1))
-			require.NoError(t, execa2.GroupGrow(1))
-
-			require.NoError(t, execa1.BatchFill(0, []uint64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, vecs[i:i+1]))
-			require.NoError(t, execa2.BatchFill(0, []uint64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, nvecs[i:i+1]))
-
-			buf1 := bytes.NewBuffer(make([]byte, 0, common.MiB))
-			buf2 := bytes.NewBuffer(make([]byte, 0, common.MiB))
-
-			err := execa1.SaveIntermediateResult(1, [][]uint8{{1}}, buf1)
-			require.NoError(t, err)
-			err = execa2.SaveIntermediateResult(1, [][]uint8{{1}}, buf2)
-			require.NoError(t, err)
-
-			execb1 := makeAgg(t, mp, typ)
-			execb2 := makeAgg(t, mp, typ)
-
-			r1 := bytes.NewReader(buf1.Bytes())
-			r2 := bytes.NewReader(buf2.Bytes())
-
-			err = execb1.UnmarshalFromReader(r1, mp)
-			require.NoError(t, err)
-			err = execb2.UnmarshalFromReader(r2, mp)
-			require.NoError(t, err)
-
-			execb1.BatchMerge(execb2, 0, []uint64{1})
-			results, err := execb1.Flush()
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			vals := vector.MustFixedColNoTypeCheck[int64](results[0])
-			require.Equal(t, expected.count, vals[0])
-			for _, result := range results {
-				result.Free(mp)
-			}
-
-			execa1.Free()
-			execa2.Free()
-			execb1.Free()
-			execb2.Free()
-
-			require.Equal(t, curNB, mp.CurrNB())
-		}
-	})
-	t.Run("BatchMerge2", func(t *testing.T) {
-		for i, typ := range typs {
-			curNB := mp.CurrNB()
-			execa1 := makeAgg(t, mp, typ)
-			execa2 := makeAgg(t, mp, typ)
-			require.NoError(t, execa1.GroupGrow(2))
-			require.NoError(t, execa2.GroupGrow(2))
-
-			require.NoError(t, execa1.BatchFill(0, []uint64{1, 2, 1, 2, 1, 2, 1, 2, 1, 2}, vecs[i:i+1]))
-			require.NoError(t, execa2.BatchFill(0, []uint64{1, 2, 1, 2, 1, 2, 1, 2, 1, 2}, nvecs[i:i+1]))
-
-			buf1 := bytes.NewBuffer(make([]byte, 0, common.MiB))
-			buf2 := bytes.NewBuffer(make([]byte, 0, common.MiB))
-
-			err := execa1.SaveIntermediateResult(1, [][]uint8{{1, 0}}, buf1)
-			require.NoError(t, err)
-			err = execa2.SaveIntermediateResult(1, [][]uint8{{1, 0}}, buf2)
-			require.NoError(t, err)
-
-			execb1 := makeAgg(t, mp, typ)
-			execb2 := makeAgg(t, mp, typ)
-
-			r1 := bytes.NewReader(buf1.Bytes())
-			r2 := bytes.NewReader(buf2.Bytes())
-
-			err = execb1.UnmarshalFromReader(r1, mp)
-			require.NoError(t, err)
-			err = execb2.UnmarshalFromReader(r2, mp)
-			require.NoError(t, err)
-
-			execb1.BatchMerge(execb2, 0, []uint64{1})
-			results, err := execb1.Flush()
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			vals := vector.MustFixedColNoTypeCheck[int64](results[0])
-			// distinct, 11, will produce 6.
-			require.Equal(t, (expected.count+1)/2, vals[0])
-			for _, result := range results {
-				result.Free(mp)
-			}
-
-			execa1.Free()
-			execa2.Free()
-			execb1.Free()
-			execb2.Free()
-
-			require.Equal(t, curNB, mp.CurrNB())
-		}
-	})
-	t.Run("BatchMerge20000", func(t *testing.T) {
-		for i, typ := range typs {
-			curNB := mp.CurrNB()
-			execa := makeAgg(t, mp, typ)
-			require.NoError(t, execa.GroupGrow(20000))
-
-			for j := 0; j < 2000; j++ {
-				groups := make([]uint64, 10)
-				for k := range groups {
-					groups[k] = uint64(j*10 + k + 1)
-				}
-
-				require.NoError(t, execa.BatchFill(0, groups[:5], vecs[i:i+1]))
-				require.NoError(t, execa.BatchFill(5, groups[5:], vecs[i:i+1]))
-				require.NoError(t, execa.BatchFill(0, groups[:5], nvecs[i:i+1]))
-				require.NoError(t, execa.BatchFill(5, groups[5:], nvecs[i:i+1]))
-			}
-
-			if v, ok := execa.(*countColumnExec); ok {
-				v.aggExec.checkArgsSkl()
-			}
-
-			// save intermediate result of chunk 1, and 2
-			flags1 := make([][]uint8, 3)
-			flags1[0] = make([]uint8, 8192)
-			flags1[1] = make([]uint8, 8192)
-			flags1[2] = make([]uint8, 20000-8192*2)
-			flags2 := make([][]uint8, 3)
-			flags2[0] = make([]uint8, 8192)
-			flags2[1] = make([]uint8, 8192)
-			flags2[2] = make([]uint8, 20000-8192*2)
-
-			for j := range flags1 {
-				for k := range flags1[j] {
-					flags1[j][k] = uint8(k) % 2
-				}
-			}
-			for j := range flags2 {
-				for k := range flags2[j] {
-					flags2[j][k] = uint8(k+1) % 2
-				}
-			}
-
-			buf1 := bytes.NewBuffer(make([]byte, 0, common.MiB))
-			buf2 := bytes.NewBuffer(make([]byte, 0, common.MiB))
-
-			err := execa.SaveIntermediateResult(10000, flags1, buf1)
-			require.NoError(t, err)
-			err = execa.SaveIntermediateResult(10000, flags2, buf2)
-			require.NoError(t, err)
-
-			execb1 := makeAgg(t, mp, typ)
-			execb2 := makeAgg(t, mp, typ)
-
-			r1 := bytes.NewReader(buf1.Bytes())
-			r2 := bytes.NewReader(buf2.Bytes())
-
-			err = execb1.UnmarshalFromReader(r1, mp)
-			require.NoError(t, err)
-			err = execb2.UnmarshalFromReader(r2, mp)
-			require.NoError(t, err)
-
-			for i := 0; i < 1000; i++ {
-				grps := make([]uint64, 10)
-				for k := range grps {
-					grps[k] = uint64(i*10 + k + 1)
-				}
-				err = execb1.BatchMerge(execb2, i*10, grps)
-				require.NoError(t, err)
-			}
-
-			results, err := execb1.Flush()
-			require.NoError(t, err)
-			// we have 10000 groups, 8192 + 1808 = 10000
-			var totalCnt int64
-			require.Len(t, results, 2)
-			vals := vector.MustFixedColNoTypeCheck[int64](results[0])
-			require.Equal(t, 8192, len(vals))
-			for _, val := range vals {
-				totalCnt += val
-			}
-			vals = vector.MustFixedColNoTypeCheck[int64](results[1])
-			require.Equal(t, 1808, len(vals))
-			for _, val := range vals {
-				totalCnt += val
-			}
-
-			if expected.count20k != totalCnt {
-				t.Errorf("expected %d, got %d", expected.count20k, totalCnt)
-			}
-
-			results[0].Free(mp)
-			results[1].Free(mp)
-			execa.Free()
-			execb1.Free()
-			execb2.Free()
-
-			require.Equal(t, curNB, mp.CurrNB())
+				t.Run("Fill", func(t *testing.T) { check(t, source, want) })
+				source.Free()
+				source = nil
+				t.Run("ShortChunk", func(t *testing.T) {
+					exec := makeAgg(t, mp, typ)
+					defer exec.Free()
+					require.NoError(t, exec.UnmarshalFromReader(bytes.NewReader(tail.Bytes()), mp))
+					check(t, exec, want[2*AggBatchSize:])
+				})
+				t.Run("FilteredDecode", func(t *testing.T) {
+					for side := range encoded {
+						exec := makeAgg(t, mp, typ)
+						func() {
+							defer exec.Free()
+							require.NoError(t, exec.UnmarshalFromReader(bytes.NewReader(encoded[side].Bytes()), mp))
+							check(t, exec, selected[side])
+						}()
+					}
+				})
+				t.Run("Merge", func(t *testing.T) {
+					left, right := makeAgg(t, mp, typ), makeAgg(t, mp, typ)
+					defer left.Free()
+					defer right.Free()
+					require.NoError(t, left.UnmarshalFromReader(bytes.NewReader(encoded[0].Bytes()), mp))
+					require.NoError(t, right.UnmarshalFromReader(bytes.NewReader(encoded[1].Bytes()), mp))
+					mapping := make([]uint64, AggBatchSize+1)
+					combined := make([]int64, len(mapping))
+					for group := range mapping {
+						mapping[group] = uint64(group + 1)
+						combined[group] = selected[0][group] + selected[1][group]
+					}
+					require.NoError(t, left.BatchMerge(right, 0, mapping[:AggBatchSize-1]))
+					require.NoError(t, left.BatchMerge(right, AggBatchSize-1, mapping[AggBatchSize-1:]))
+					check(t, left, combined)
+				})
+			})
 		}
 	})
 

@@ -17,12 +17,10 @@ package spool
 import (
 	"bytes"
 	"fmt"
-	"math/rand"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
@@ -50,19 +48,21 @@ func TestSpool(t *testing.T) {
 	wg := new(sync.WaitGroup)
 	wg.Add(numConsumers)
 	var count atomic.Int64
+	errs := make(chan error, numConsumers)
 	for i := range numConsumers {
 		cursor := cursors[i]
 		go func() {
 			defer wg.Done()
+			defer cursor.Close()
 			var expect testElement
 			for {
-				time.Sleep(time.Millisecond * time.Duration(rand.Intn(10))) // random delay
 				v, ok := cursor.Next()
 				if !ok {
 					break
 				}
 				if v.N != expect.N {
-					panic(fmt.Sprintf("got %v, expecting %v", v, expect))
+					errs <- fmt.Errorf("got %v, expecting %v", v, expect)
+					return
 				}
 				expect.N++
 				if v.N == 42 {
@@ -70,7 +70,6 @@ func TestSpool(t *testing.T) {
 				}
 				count.Add(1)
 			}
-			cursor.Close()
 		}()
 	}
 
@@ -88,6 +87,10 @@ func TestSpool(t *testing.T) {
 	spool.Close()
 
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
 
 	if c := int(count.Load()); c != numConsumers*42 {
 		t.Fatalf("got %v", c)
@@ -130,8 +133,8 @@ func TestSendAny(t *testing.T) {
 		cursor := cursors[i]
 		go func() {
 			defer wg.Done()
+			defer cursor.Close()
 			for {
-				time.Sleep(time.Millisecond * time.Duration(rand.Intn(10))) // random delay
 				v, ok := cursor.Next()
 				if !ok {
 					break
@@ -139,7 +142,6 @@ func TestSendAny(t *testing.T) {
 				_ = v
 				count.Add(1)
 			}
-			cursor.Close()
 		}()
 	}
 
@@ -364,6 +366,7 @@ func TestBytes(t *testing.T) {
 	spool, cursors := New[testBytes](512, numCursors)
 
 	var nRead atomic.Int64
+	errs := make(chan error, numCursors)
 	wg := new(sync.WaitGroup)
 	wg.Add(numCursors)
 	for _, cursor := range cursors {
@@ -371,14 +374,14 @@ func TestBytes(t *testing.T) {
 			defer wg.Done()
 			defer cursor.Close()
 			for i := 0; true; i++ {
-				time.Sleep(time.Millisecond * time.Duration(rand.Intn(10)))
 				v, ok := cursor.Next()
 				if !ok {
 					break
 				}
 				expected := []byte(fmt.Sprintf("%d", i))
 				if !bytes.Equal(v.Bytes, expected) {
-					panic("not expected")
+					errs <- fmt.Errorf("got %q, expecting %q", v.Bytes, expected)
+					return
 				}
 				nRead.Add(1)
 			}
@@ -401,6 +404,10 @@ func TestBytes(t *testing.T) {
 	spool.Close()
 
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
 
 	if nRead.Load() != int64(numCursors)*512 {
 		t.Fatal()

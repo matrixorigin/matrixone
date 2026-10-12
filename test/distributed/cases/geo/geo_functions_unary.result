@@ -89,10 +89,20 @@ select st_astext(st_centroid(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')))
 centroid
 POINT(1 1)
 select st_astext(st_centroid(st_geomfromtext('MULTIPOINT(0 0,2 0,2 2,0 2)'))) as centroid_mp;
-invalid input: geometry type is not supported by ST_Centroid
+centroid_mp
+POINT(1 1)
+select st_astext(st_centroid(st_geomfromtext('GEOMETRYCOLLECTION EMPTY'))) as centroid_empty_collection;
+centroid_empty_collection
+null
 select st_astext(st_envelope(st_geomfromtext('LINESTRING(1 2,3 4,0 5)'))) as envelope;
 envelope
 POLYGON((0 2,3 2,3 5,0 5,0 2))
+select st_astext(st_envelope(st_geomfromtext('MULTIPOINT(0 0,1 1)'))) as envelope_mp;
+envelope_mp
+POLYGON((0 0,1 0,1 1,0 1,0 0))
+select st_astext(st_envelope(st_geomfromtext('GEOMETRYCOLLECTION EMPTY'))) as envelope_empty_collection;
+envelope_empty_collection
+GEOMETRYCOLLECTION EMPTY
 select st_astext(st_boundary(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))'))) as boundary;
 boundary
 MULTILINESTRING((0 0,4 0,4 4,0 4,0 0))

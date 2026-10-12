@@ -33,6 +33,19 @@ var ivfflatCatalogHooks = ivfflatrt.CatalogHooks{}
 
 const maxIvfflatIncludeColumns = 10
 
+// copyIvfflatColumnType copies the physical type attributes that an IVF
+// secondary table needs from a source column.  Constraint and auto-increment
+// flags deliberately stay on the source table; Enumvalues is part of the
+// physical type, however, and omitting it creates an unusable ENUM(0) column.
+func copyIvfflatColumnType(src plan.Type) plan.Type {
+	return plan.Type{
+		Id:         src.Id,
+		Width:      src.Width,
+		Scale:      src.Scale,
+		Enumvalues: src.Enumvalues,
+	}
+}
+
 func ivfflatIncludeColumnNames(indexInfo *tree.Index) []string {
 	if indexInfo == nil || indexInfo.IndexOption == nil || len(indexInfo.IndexOption.IncludeColumns) == 0 {
 		return nil
@@ -282,13 +295,10 @@ func (Hooks) BuildSecondaryIndexDefs(
 		tableDefs[2].Cols[2] = &plan.ColDef{
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				// Don't copy original PK Type wholesale — would inherit
-				// AutoIncrement and break entries-table INSERTs.
-				Id:    colMap[pkeyName].Typ.Id,
-				Width: colMap[pkeyName].Typ.Width,
-				Scale: colMap[pkeyName].Typ.Scale,
-			},
+			// Don't copy the original PK Type wholesale — that would inherit
+			// AutoIncrement and break entries-table INSERTs. Enumvalues is
+			// nevertheless required because it is part of the physical type.
+			Typ:     copyIvfflatColumnType(colMap[pkeyName].Typ),
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
 		// Entry type follows the QUANTIZATION option: CREATE INDEX ... USING
@@ -315,13 +325,9 @@ func (Hooks) BuildSecondaryIndexDefs(
 				// int8 base with QUANTIZATION='float32') is unsupported — it costs 2-4x the
 				// entry storage for no precision gain and forces the f32 distance kernel
 				// over narrow entries. Omit QUANTIZATION to keep the base-width entries.
-				baseSize := types.Type{Oid: types.T(colMap[colName].Typ.Id)}.GetArrayElementSize()
-				quantSize := types.Type{Oid: qt}.GetArrayElementSize()
-				if quantSize > baseSize {
-					return nil, nil, moerr.NewNotSupportedf(ctx.GetContext(),
-						"ivfflat QUANTIZATION '%s' (%d bytes/element) cannot upcast base column %s (%d bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type",
-						indexInfo.IndexOption.Quantization, quantSize,
-						types.T(colMap[colName].Typ.Id).String(), baseSize)
+				if err := quantizer.CheckNoUpcast("ivfflat", indexInfo.IndexOption.Quantization,
+					types.T(colMap[colName].Typ.Id)); err != nil {
+					return nil, nil, err
 				}
 				entryTyp.Id = int32(qt)
 				entryTyp.Scale = 0
@@ -336,13 +342,9 @@ func (Hooks) BuildSecondaryIndexDefs(
 		for i, includeColName := range includeColNames {
 			srcCol := colMap[includeColName]
 			tableDefs[2].Cols[4+i] = &plan.ColDef{
-				Name: catalog.SystemSI_IVFFLAT_IncludeColPrefix + includeColName,
-				Alg:  plan.CompressType_Lz4,
-				Typ: plan.Type{
-					Id:    srcCol.Typ.Id,
-					Width: srcCol.Typ.Width,
-					Scale: srcCol.Typ.Scale,
-				},
+				Name:    catalog.SystemSI_IVFFLAT_IncludeColPrefix + includeColName,
+				Alg:     plan.CompressType_Lz4,
+				Typ:     copyIvfflatColumnType(srcCol.Typ),
 				Default: &plan.Default{NullAbility: true, Expr: nil, OriginString: ""},
 			}
 		}

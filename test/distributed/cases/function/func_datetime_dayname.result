@@ -59,3 +59,11 @@ DAYNAME('2001-11-0') AS incomplete_variable,
 DAYNAME('0000-00-00 12:34:56') AS zero_datetime;
 ➤ incomplete_datetime[12,-1,0]  ¦  incomplete_compact[12,-1,0]  ¦  incomplete_variable[12,-1,0]  ¦  zero_datetime[12,-1,0]  𝄀
 null  ¦  null  ¦  null  ¦  null
+SET lc_time_names = 'fr_FR';
+CREATE TABLE locale_t1(d DATE);
+INSERT INTO locale_t1 VALUES ('2024-12-01');
+SELECT DAYNAME(d) AS day_name, DATE_FORMAT(d, '%M') AS month_name FROM locale_t1;
+➤ day_name[12,-1,0]  ¦  month_name[12,134,0]  𝄀
+dimanche  ¦  décembre
+DROP TABLE locale_t1;
+SET lc_time_names = 'en_US';

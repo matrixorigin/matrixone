@@ -75,12 +75,16 @@ type container struct {
 	bat                     *batch.Batch
 	buildBat                *batch.Batch //temp batch, do not need free or reset
 
-	allocationAccount    *mpool.AllocationAccount
-	retainedAllocation   *vector.AllocationAccountSelection
-	expressionAllocation *vector.AllocationAccountSelection
-	outputAllocation     *vector.AllocationAccountSelection
-	spillAllocation      *spillutil.SpillAllocationAccount
-	budget               *process.ExecutionResourceGeneration
+	allocationAccount      *mpool.AllocationAccount
+	retainedAllocation     *vector.AllocationAccountSelection
+	expressionAllocation   *vector.AllocationAccountSelection
+	outputAllocation       *vector.AllocationAccountSelection
+	spillAllocation        *spillutil.SpillAllocationAccount
+	budget                 *process.ExecutionResourceGeneration
+	recoveryCapacity       *process.ExecutionRecoveryCapacity
+	recoveryCapacityClass  mpool.AllocationCapacityClass
+	recoveryCapacityActive bool
+	recoveryCapacityFloor  uint64
 
 	spilling          bool
 	boundedResident   bool   // actual schema needs byte admission and reclamation
@@ -205,17 +209,6 @@ func (ctr *container) setAllocationAccount(
 		len(ctr.rowRefs) != 0 || ctr.spillFile != nil || ctr.spillWriter != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	retained, err := vector.NewAllocationAccountSelection(
-		account,
-		mpool.AllocationOwnerTop,
-		topsites.TopRetainedData,
-		topsites.TopRetainedArea,
-		topsites.TopRetainedNulls,
-		topsites.TopRetainedGrouping,
-	)
-	if err != nil {
-		return err
-	}
 	expression, err := vector.NewAllocationAccountSelection(
 		account,
 		mpool.AllocationOwnerTop,
@@ -227,29 +220,54 @@ func (ctr *container) setAllocationAccount(
 	if err != nil {
 		return err
 	}
-	output, err := vector.NewAllocationAccountSelection(
+	recoveryCapacity := process.NewExecutionRecoveryCapacitySlot()
+	recoveryClass, err := account.RegisterCapacityController(recoveryCapacity)
+	if err != nil {
+		return err
+	}
+	rollbackRecovery := func(cause error) error {
+		_ = account.UnregisterCapacityController(recoveryClass, recoveryCapacity)
+		return cause
+	}
+	retained, err := vector.NewAllocationAccountSelectionWithCapacityClass(
+		account,
+		mpool.AllocationOwnerTop,
+		topsites.TopRetainedData,
+		topsites.TopRetainedArea,
+		topsites.TopRetainedNulls,
+		topsites.TopRetainedGrouping,
+		recoveryClass,
+	)
+	if err != nil {
+		return rollbackRecovery(err)
+	}
+	output, err := vector.NewAllocationAccountSelectionWithCapacityClass(
 		account,
 		mpool.AllocationOwnerTop,
 		topsites.TopOutputData,
 		topsites.TopOutputArea,
 		topsites.TopOutputNulls,
 		topsites.TopOutputGrouping,
+		recoveryClass,
 	)
 	if err != nil {
-		return err
+		return rollbackRecovery(err)
 	}
-	spill, err := spillutil.NewSpillAllocationAccount(
+	spill, err := spillutil.NewSpillAllocationAccountWithCapacityClass(
 		account,
 		mpool.AllocationOwnerTop,
+		recoveryClass,
 	)
 	if err != nil {
-		return err
+		return rollbackRecovery(err)
 	}
 	ctr.allocationAccount = account
 	ctr.retainedAllocation = retained
 	ctr.expressionAllocation = expression
 	ctr.outputAllocation = output
 	ctr.spillAllocation = spill
+	ctr.recoveryCapacity = recoveryCapacity
+	ctr.recoveryCapacityClass = recoveryClass
 	return nil
 }
 
@@ -268,12 +286,91 @@ func (ctr *container) clearAllocationAccount(
 		ctr.spillFDToken != nil || ctr.spillDiskToken != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
+	if err := ctr.clearRecoveryCapacity(account); err != nil {
+		return err
+	}
 	ctr.allocationAccount = nil
 	ctr.retainedAllocation = nil
 	ctr.expressionAllocation = nil
 	ctr.outputAllocation = nil
 	ctr.spillAllocation = nil
 	ctr.budget = nil
+	return nil
+}
+
+func (ctr *container) installRecoveryCapacity() error {
+	if ctr == nil || ctr.budget == nil || ctr.recoveryCapacity == nil ||
+		ctr.recoveryCapacityClass == mpool.AllocationCapacityClassDefault {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if ctr.recoveryCapacityActive {
+		return nil
+	}
+	if err := ctr.recoveryCapacity.Activate(ctr.budget); err != nil {
+		return err
+	}
+	ctr.recoveryCapacityActive = true
+	return nil
+}
+
+func (ctr *container) ensureRecoveryCapacity(target uint64) error {
+	if ctr == nil || ctr.recoveryCapacity == nil || target == 0 {
+		return nil
+	}
+	if target <= ctr.recoveryCapacityFloor {
+		return nil
+	}
+	if err := ctr.recoveryCapacity.EnsureCapacity(target); err != nil {
+		return err
+	}
+	ctr.recoveryCapacityFloor = target
+	return nil
+}
+
+func (ctr *container) releaseRecoveryCapacity() error {
+	if ctr == nil || ctr.recoveryCapacity == nil || !ctr.recoveryCapacityActive {
+		return nil
+	}
+	if err := ctr.recoveryCapacity.Close(); err != nil {
+		return err
+	}
+	ctr.recoveryCapacityActive = false
+	ctr.recoveryCapacityFloor = 0
+	return nil
+}
+
+func (ctr *container) trimRecoveryCapacity() error {
+	if ctr == nil || ctr.recoveryCapacity == nil || !ctr.recoveryCapacityActive {
+		return nil
+	}
+	capacity, err := ctr.recoveryCapacity.TrimUnusedCapacity()
+	if err != nil {
+		return err
+	}
+	ctr.recoveryCapacityFloor = capacity
+	return nil
+}
+
+func (ctr *container) clearRecoveryCapacity(
+	account *mpool.AllocationAccount,
+) error {
+	if ctr == nil || ctr.recoveryCapacity == nil {
+		return nil
+	}
+	if account == nil || account != ctr.allocationAccount ||
+		ctr.recoveryCapacityClass == mpool.AllocationCapacityClassDefault {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	if err := ctr.releaseRecoveryCapacity(); err != nil {
+		return err
+	}
+	capacity := ctr.recoveryCapacity
+	class := ctr.recoveryCapacityClass
+	if err := account.UnregisterCapacityController(class, capacity); err != nil {
+		return err
+	}
+	ctr.recoveryCapacity = nil
+	ctr.recoveryCapacityClass = mpool.AllocationCapacityClassDefault
 	return nil
 }
 
@@ -318,6 +415,7 @@ func (ctr *container) reset(proc *process.Process) {
 	ctr.topValueZM = nil
 	ctr.buildBat = nil
 	ctr.budget = nil
+	_ = ctr.releaseRecoveryCapacity()
 }
 
 func (ctr *container) free(proc *process.Process) {
@@ -345,6 +443,7 @@ func (ctr *container) free(proc *process.Process) {
 	ctr.poses = nil
 	ctr.cmps = nil
 	ctr.budget = nil
+	_ = ctr.releaseRecoveryCapacity()
 }
 
 func (ctr *container) cleanupSpill(proc *process.Process) {

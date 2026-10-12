@@ -69,4 +69,39 @@ alter table reb alter reindex ftidx fulltext2;
 select count(*) from reb where match(body) against('zebra');
 ➤ count(*)[-5,64,0]  𝄀
 0
+create table reb_one (id bigint primary key, body text);
+insert into reb_one values (1, 'single stale');
+create fulltext2 index ftidx on reb_one(body);
+select count(*) from reb_one where match(body) against('single');
+➤ count(*)[-5,64,0]  𝄀
+1
+set @reb_one_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'reb_one') limit 1);
+set @capture_reb_one_tail_sql = concat(
+'select coalesce(max(chunk_id), -1) into @reb_one_tail_before from `', database(), '`.`', @reb_one_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_reb_one_tail from @capture_reb_one_tail_sql;
+execute capture_reb_one_tail;
+deallocate prepare capture_reb_one_tail;
+update reb_one set body = NULL where id = 1;
+set @wait_reb_one_sql = concat(
+'select coalesce(max(chunk_id), -1) > ', @reb_one_tail_before,
+' as reb_one_update_ready from `', database(), '`.`', @reb_one_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_reb_one from @wait_reb_one_sql;
+execute wait_reb_one;
+➤ reb_one_update_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_reb_one;
+select id from reb_one where id = 1;
+➤ id[-5,64,0]  𝄀
+1
+alter table reb_one alter reindex ftidx fulltext2 force_sync;
+select id from reb_one where id = 1;
+➤ id[-5,64,0]  𝄀
+1
+select count(*) from reb_one where match(body) against('single');
+➤ count(*)[-5,64,0]  𝄀
+0
 drop database ft2_bugfix;

@@ -70,3 +70,16 @@ drop table t;
 # independent of client character rendering.
 SELECT HEX(REGEXP_SUBSTR(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), 2)) AS binary_substr,
        HEX(REGEXP_SUBSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2)) AS varbinary_substr;
+
+# match_type is applied before position-aware matching, including the
+# recompiled iterator that preserves the full subject for multiline anchors.
+SELECT REGEXP_SUBSTR('Abc abc', 'abc', 1, 1, 'i') AS insensitive,
+       REGEXP_SUBSTR('Abc abc', 'abc', 1, 1, 'c') AS sensitive;
+SELECT REGEXP_SUBSTR('a\nb', '^b', 3, 1, 'm') AS multiline,
+       REGEXP_SUBSTR('a\nb', '^b', 3, 1, 'c') AS singleline;
+
+# Binary case folding changes character comparison, not byte indexing/results.
+SELECT HEX(REGEXP_SUBSTR(CAST(X'78C9' AS BINARY(2)), CAST(X'E9' AS BINARY(1)), 1, 1, 'i')) AS binary_i,
+       HEX(REGEXP_SUBSTR(CAST(X'78C9' AS VARBINARY(2)), CAST(X'E9' AS VARBINARY(1)), 1, 1, 'i')) AS varbinary_i;
+SELECT HEX(REGEXP_SUBSTR(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), 2, 1, 'i')) AS binary_byte_pos,
+       HEX(REGEXP_SUBSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2, 1, 'i')) AS varbinary_byte_pos;

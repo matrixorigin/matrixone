@@ -378,11 +378,11 @@ type Segment struct {
 	// term dict, LOADED-side representation — set by Deserialize, nil on a
 	// build-side segment. `dict` is the vellum FST mapping term → the BYTE OFFSET of
 	// that term's self-contained directory entry in `ranking`. A loaded segment does
-	// NOT expand any term at load: query lookup (LookupLoaded) decodes just the touched
-	// term's directory entry from `ranking` on demand and points its blocks/positions at
-	// `blocks`/`positions` — so the resident directory heap is O(the current query), not
-	// O(vocabulary). `ranking`/`blocks`/`positions` are views into the mmap/blob (kept
-	// alive by mmapData or GC). The build-side `terms` map is left nil.
+	// not traverse posting directories at load: LookupLoaded decodes the touched
+	// term's directory on demand, while clean-segment DF reads only its header.
+	// Block/position data remains in `blocks`/`positions`, so resident directory heap
+	// is O(the current query), not O(vocabulary). These slices are views into the
+	// mmap/blob (kept alive by mmapData or GC). The build-side `terms` map is left nil.
 	dict                       *termDict
 	ranking, blocks, positions []byte
 

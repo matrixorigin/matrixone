@@ -81,7 +81,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 				return
 			}
-			if err = finalizePerformQueryResult(execCtx); err != nil {
+			if err = finalizeQueryResult(execCtx); err != nil {
 				return
 			}
 			queryResultFinalized = true
@@ -311,19 +311,27 @@ func capturePersistentDropTableTargets(
 		if name == nil {
 			continue
 		}
-		dbName := string(name.SchemaName)
-		if dbName == "" {
-			dbName = defaultDatabase
-			if dbName == "" {
-				dbName = ses.GetDatabaseName()
-			}
-		}
-		if _, isTemporary := ses.GetTempTable(dbName, string(name.ObjectName)); isTemporary {
+		if isSessionTemporaryTable(ses, name, defaultDatabase) {
 			continue
 		}
 		targets = append(targets, name)
 	}
 	return targets
+}
+
+func isSessionTemporaryTable(ses FeSession, name *tree.TableName, defaultDatabase string) bool {
+	if ses == nil || name == nil {
+		return false
+	}
+	dbName := string(name.SchemaName)
+	if dbName == "" {
+		dbName = defaultDatabase
+		if dbName == "" {
+			dbName = ses.GetDatabaseName()
+		}
+	}
+	_, isTemporary := ses.GetTempTable(dbName, string(name.ObjectName))
+	return isTemporary
 }
 
 func (resper *MysqlResp) respStatus(ses *Session,

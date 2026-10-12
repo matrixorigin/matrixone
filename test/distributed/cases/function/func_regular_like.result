@@ -106,6 +106,10 @@ r
 select regexp_like('CAT','cat','iiiiiiic') r;
 r
 0
+SELECT REGEXP_LIKE('a\nb', '^b', 'mu') AS unix_lf,
+REGEXP_LIKE('a\rb', '^b', 'mu') AS unix_cr;
+unix_lf    unix_cr
+1    0
 select regexp_like(cast(_binary'A' as varbinary(1)), cast(_binary'a' as varbinary(1)), 'i') binary_i,
 regexp_like(cast(_binary'A' as varbinary(1)), cast(_binary'a' as varbinary(1)), 'ci') binary_ci,
 regexp_like(cast(_binary'A' as varbinary(1)), cast(_binary'a' as varbinary(1)), 'ic') binary_ic,
@@ -154,3 +158,27 @@ abc reg_match a
 select 'abc' rlike '^a';
 abc reg_match ^a
 1
+DROP TABLE IF EXISTS t_regexp_match_type;
+CREATE TABLE t_regexp_match_type (
+id INT,
+s VARCHAR(40),
+p VARCHAR(20),
+r VARCHAR(8),
+mt VARCHAR(8)
+);
+INSERT INTO t_regexp_match_type VALUES
+(1, 'Abc', 'abc', 'X', 'i'),
+(2, 'Abc', 'abc', 'X', 'c'),
+(3, 'abc', 'abc', 'X', 'u');
+SELECT id,
+REGEXP_LIKE(s, p, mt) AS is_match,
+REGEXP_INSTR(s, p, 1, 1, 0, mt) AS start_pos,
+REGEXP_SUBSTR(s, p, 1, 1, mt) AS substr_value,
+REGEXP_REPLACE(s, p, r, 1, 0, mt) AS replaced
+FROM t_regexp_match_type
+ORDER BY id;
+id    is_match    start_pos    substr_value    replaced
+1    1    1    Abc    X
+2    0    0    null    Abc
+3    1    1    abc    X
+DROP TABLE t_regexp_match_type;

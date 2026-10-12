@@ -70,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
@@ -178,6 +179,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.NeedAllocateSels = t.NeedAllocateSels
 		op.IsShuffle = t.IsShuffle
 		op.Conditions = t.Conditions
+		op.OwnsConstantFilterDiagnostics = t.OwnsConstantFilterDiagnostics
+		op.JoinDiagnostic = t.JoinDiagnostic
 		op.JoinMapTag = t.JoinMapTag
 		op.JoinMapRefCnt = t.JoinMapRefCnt
 		if t.IsShuffle && t.ShuffleIdx == -1 {
@@ -222,6 +225,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.JoinType = t.JoinType
 		op.IsRightJoin = t.IsRightJoin
 		op.NonEqCond = t.NonEqCond
+		op.OwnsConstantFilterDiagnostics = t.OwnsConstantFilterDiagnostics
+		op.JoinDiagnostic = t.JoinDiagnostic
 		op.ResultCols = t.ResultCols
 		op.LeftTypes = t.LeftTypes
 		op.RightTypes = t.RightTypes
@@ -258,6 +263,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.LeftTypes = t.LeftTypes
 		op.RightTypes = t.RightTypes
 		op.NonEqCond = t.NonEqCond
+		op.OwnsConstantFilterDiagnostics = t.OwnsConstantFilterDiagnostics
 		op.JoinMapTag = t.JoinMapTag
 		op.JoinType = t.JoinType
 		op.MarkPos = t.MarkPos
@@ -325,6 +331,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.FilterExprs = t.FilterExprs
 		op.RuntimeFilterExprs = t.RuntimeFilterExprs
 		op.IsAssert = t.IsAssert
+		op.OwnsConstantCastWarnings = t.OwnsConstantCastWarnings
 		op.SetInfo(&info)
 		return op
 	case vm.Top:
@@ -345,6 +352,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Limit = t.Limit
 		op.PartitionByCount = t.PartitionByCount
 		op.PreReduce = t.PreReduce
+		op.WithTies = t.WithTies
 		op.Algorithm = t.Algorithm
 		op.SpillMem = t.SpillMem
 		op.SetInfo(&info)
@@ -356,6 +364,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Fs = t.Fs
 		op.Aggs = t.Aggs
 		op.PartitionTopN = t.PartitionTopN
+		op.SpillThreshold = t.SpillThreshold
 		op.SetInfo(&info)
 		return op
 	case vm.MergeTop:
@@ -382,6 +391,12 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 	case vm.Minus: // 2
 		t := sourceOp.(*minus.Minus)
 		op := minus.NewArgument()
+		op.KeyExprs = t.KeyExprs
+		op.SetInfo(&info)
+		return op
+	case vm.MinusAll:
+		t := sourceOp.(*minusall.MinusAll)
+		op := minusall.NewArgument()
 		op.KeyExprs = t.KeyExprs
 		op.SetInfo(&info)
 		return op
@@ -422,10 +437,6 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Params = t.Params
 		op.IsSingle = t.IsSingle
 		op.Limit = t.Limit
-		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
-		op.IndexReaderParam = t.IndexReaderParam
-		op.FulltextSourceRef = t.FulltextSourceRef
-		op.FulltextIndexRef = t.FulltextIndexRef
 		op.SetInfo(&info)
 		if op.FuncName == "generate_series" {
 			op.GenerateSeriesCtrNumState(t.OffsetTotal[index][0], t.OffsetTotal[index][1], t.GetGenerateSeriesCtrNumStateStep(), t.OffsetTotal[index][0])
@@ -625,13 +636,21 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
+	case vm.UnionAll:
+		t := sourceOp.(*unionall.UnionAll)
+		if t.SequentialBranches != 0 {
+			panic("cannot duplicate a sequential UNION ALL scheduler")
+		}
+		op := unionall.NewArgument()
+		op.SetInfo(&info)
+		return op
 	case vm.Apply:
 		t := sourceOp.(*apply.Apply)
 		op := apply.NewArgument()
 		op.ApplyType = t.ApplyType
 		op.Result = t.Result
 		op.Typs = t.Typs
-		op.VectorIndexScan = plan2.DeepCopyVectorIndexScan(t.VectorIndexScan)
+		op.IndexSearchScan = plan2.DeepCopyIndexSearchScan(t.IndexSearchScan)
 		op.VectorAttrs = slices.Clone(t.VectorAttrs)
 		op.TxnOffset = t.TxnOffset
 		if t.TableFunction != nil {
@@ -643,10 +662,6 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 			op.TableFunction.Params = t.TableFunction.Params
 			op.TableFunction.IsSingle = t.TableFunction.IsSingle
 			op.TableFunction.Limit = t.TableFunction.Limit
-			op.TableFunction.RuntimeFilterSpecs = t.TableFunction.RuntimeFilterSpecs
-			op.TableFunction.IndexReaderParam = t.TableFunction.IndexReaderParam
-			op.TableFunction.FulltextSourceRef = t.TableFunction.FulltextSourceRef
-			op.TableFunction.FulltextIndexRef = t.TableFunction.FulltextIndexRef
 			op.TableFunction.SetInfo(&info)
 		}
 		op.SetInfo(&info)
@@ -863,13 +878,18 @@ func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.Fuz
 
 func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, proc *process.Process) (*preinsert.PreInsert, error) {
 	preCtx := node.PreInsertCtx
+	if err := incrservice.CheckAutoIDCache(proc.Ctx, proc.GetService(), preCtx.TableDef.GetAutoIdCache()); err != nil {
+		return nil, err
+	}
 	schemaName := preCtx.Ref.SchemaName
 	var err error
 
 	//var attrs []string
 	attrs := make([]string, 0)
 	for _, col := range preCtx.TableDef.Cols {
-		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+		// Hidden generated values (functional index backing columns) have
+		// already been materialized in the input, unlike synthesized keys.
+		if col.Hidden && col.GeneratedCol == nil && col.Name != catalog.FakePrimaryKeyColName {
 			continue
 		}
 		attrs = append(attrs, col.GetOriginCaseName())
@@ -908,7 +928,10 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.Attrs = attrs
 	op.IsOldUpdate = preCtx.IsOldUpdate
 	op.IsNewUpdate = preCtx.IsNewUpdate
-	op.EstimatedRowCount = int64(nodes[node.Children[0]].Stats.Outcnt)
+	op.EstimatedRowCount = 0
+	if preCtx.HasAutoCol && nodes[node.Children[0]].Stats != nil {
+		op.EstimatedRowCount = plan2.EstimatedRowsInt64(nodes[node.Children[0]].Stats.Outcnt)
+	}
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
 	op.ColOffset = preCtx.ColOffset
@@ -1511,13 +1534,8 @@ func constructTableFunction(node *plan.Node, qry *plan.Query) *table_function.Ta
 	arg.FuncName = node.TableDef.TblFunc.Name
 	arg.Params = node.TableDef.TblFunc.Param
 	arg.IsSingle = node.TableDef.TblFunc.IsSingle
-	arg.FulltextSourceRef = node.TableDef.TblFunc.FulltextSourceRef
-	arg.FulltextIndexRef = node.TableDef.TblFunc.FulltextIndexRef
 	arg.ScanSnapshot = node.ScanSnapshot
 	arg.Limit = node.Limit
-	// probe side runtime filter specs
-	arg.RuntimeFilterSpecs = node.RuntimeFilterProbeList
-	arg.IndexReaderParam = node.IndexReaderParam
 	return arg
 }
 
@@ -1544,6 +1562,10 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	arg.RightTypes = right_types
 	arg.ResultCols = result
 	arg.NonEqCond = nonEqCond
+	arg.OwnsConstantFilterDiagnostics = containsStatementInvariantDiagnosticInList(proc, node.OnList)
+	if arg.OwnsConstantFilterDiagnostics {
+		arg.JoinDiagnostic = new(colexec.DeferredJoinDiagnostic)
+	}
 	arg.EqConds = constructJoinConditions(eqConds, proc)
 	arg.RuntimeFilterSpecs = node.RuntimeFilterBuildList
 	arg.HashOnPK = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.HashOnPK
@@ -1814,8 +1836,8 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 		aggregationExpressions = append(
 			aggregationExpressions,
 			aggexec.MakeAggFunctionExpression(functionID, isDistinct, args, cfg))
-		typs = append(typs, types.NewWithCharset(
-			types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale, uint8(e.Typ.Charset),
+		typs = append(typs, types.MustTypeFromPlan(
+			e.Typ,
 		))
 	}
 	wStart := layout.WStartSlot != plan2.TimeWindowSlotNone
@@ -1893,6 +1915,7 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 	arg := window.NewArgument()
 	arg.Aggs = aggregationExpressions
 	arg.WinSpecList = node.WinSpecList
+	arg.SpillThreshold = node.SpillMem
 	return arg
 }
 
@@ -1933,8 +1956,8 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 
 	typs := make([]types.Type, len(childNode.ProjectList))
 	for i, e := range childNode.ProjectList {
-		typs[i] = types.NewWithCharset(
-			types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale, uint8(e.Typ.Charset),
+		typs[i] = types.MustTypeFromPlan(
+			e.Typ,
 		)
 	}
 
@@ -1949,94 +1972,254 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	return arg
 }
 
+// preflightPercentileConfigs evaluates runtime percentile arguments
+// before the aggregate's child scopes are compiled. constructGroup follows the
+// operator-construction convention of panicking on errors; using that path for
+// a user-supplied prepared-statement value both decorates the client error with
+// a panic stack and strands the scopes that were already constructed.
+func preflightPercentileConfigs(node *plan.Node, proc *process.Process) error {
+	for _, expr := range node.AggList {
+		f := expr.GetF()
+		if f == nil {
+			continue
+		}
+		switch f.Func.ObjName {
+		case plan2.NameApproxPercentile:
+			if len(f.Args) <= 1 || !expressionContainsParam(f.Args[len(f.Args)-1]) {
+				continue
+			}
+			if _, _, err := constructApproxPercentileConfig(f, proc); err != nil {
+				return err
+			}
+		case plan2.NamePercentileCont, plan2.NamePercentileDisc:
+			if len(f.Args) != 2 || !expressionContainsParam(f.Args[1]) {
+				continue
+			}
+			if _, _, err := constructOrderedPercentileConfig(f, proc); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func expressionContainsParam(expr *plan.Expr) bool {
+	found := false
+	_ = plan.VisitExprTree(expr, func(current *plan.Expr) error {
+		if current.GetP() != nil {
+			found = true
+		}
+		return nil
+	})
+	return found
+}
+
 func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.Expr, []byte) {
+	args, config, err := constructAggregateConfigWithError(f, proc)
+	if err != nil {
+		panic(err)
+	}
+	return args, config
+}
+
+// constructAggregateConfigWithError is the error-bearing configuration
+// boundary used by SQL compilation. Invalid user configuration is expected
+// input, so it must leave the compile path as an error instead of entering
+// Compile's panic recovery (which adds internal stack frames and source
+// paths). The legacy wrapper above remains for callers that have no error
+// channel, but the query compiler validates before constructing operators.
+func constructAggregateConfigWithError(
+	f *plan.Function,
+	proc *process.Process,
+) ([]*plan.Expr, []byte, error) {
+	if f == nil || f.Func == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx(
+			"aggregate function configuration is nil")
+	}
 	args := f.Args
 	switch f.Func.ObjName {
 	case plan2.NameGroupConcat:
 		value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
 		if err != nil {
-			panic(err)
+			return nil, nil, err
 		}
-		maxLen, ok := value.(int64)
-		if !ok || maxLen < 0 {
-			panic(moerr.NewInternalErrorNoCtxf(
-				"group_concat_max_len has invalid value %v", value))
+		maxLen, ok := groupConcatMaxLenAsUint64(value)
+		if !ok {
+			return nil, nil, moerr.NewInternalErrorNoCtxf(
+				"group_concat_max_len has invalid value %v", value)
 		}
 		if f.AggConfigType == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
-			return args, aggexec.EncodeGroupConcatOrderedConfig(f.AggConfig, uint64(maxLen))
+			return args, aggexec.EncodeGroupConcatOrderedConfig(f.AggConfig, maxLen), nil
 		}
 		separator := ","
 		if len(args) > 1 {
-			separator = evaluateAggregateConfigString(proc, args[len(args)-1])
+			var err error
+			separator, err = evaluateAggregateConfigString(proc, args[len(args)-1])
+			if err != nil {
+				return nil, nil, err
+			}
 			args = args[:len(args)-1]
 		}
-		return args, aggexec.EncodeGroupConcatConfig(separator, uint64(maxLen))
+		return args, aggexec.EncodeGroupConcatConfig(separator, maxLen), nil
 
 	case plan2.NameClusterCenters:
 		if len(args) > 1 {
-			config := evaluateAggregateConfigString(proc, args[len(args)-1])
-			return args[:len(args)-1], []byte(config)
+			config, err := evaluateAggregateConfigString(proc, args[len(args)-1])
+			if err != nil {
+				return nil, nil, err
+			}
+			return args[:len(args)-1], []byte(config), nil
 		}
 
 	case plan2.NameApproxPercentile:
 		if len(args) > 1 {
-			configExpr := args[len(args)-1]
-			if err := validateApproxPercentileExpr(configExpr); err != nil {
-				panic(err)
-			}
-			vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+			args, config, err := constructApproxPercentileConfig(f, proc)
 			if err != nil {
-				panic(err)
+				return nil, nil, err
 			}
-			defer free()
-			config, err := getPercentileConfig(vec)
-			if err != nil {
-				panic(err)
-			}
-			// The existing approximate-percentile executor always ranks values in
-			// ascending order. An ordered-set DESC call has the same result as the
-			// ascending complementary percentile, so preserve the executor and its
-			// wire-compatible text configuration by translating p to 1-p here.
-			if len(f.AggConfig) > 0 && f.AggConfig[0] != 0 {
-				config, err = complementPercentileConfig(config)
-				if err != nil {
-					panic(err)
-				}
-			}
-			return args[:len(args)-1], config
+			return args, config, nil
 		}
 
 	case plan2.NamePercentileCont, plan2.NamePercentileDisc:
-		if len(args) != 2 {
-			panic(moerr.NewInvalidInputNoCtxf(
-				"%s requires a value and percentile argument", f.Func.ObjName))
-		}
-		configExpr := args[1]
-		if err := validateOrderedPercentileExpr(configExpr, f.Func.ObjName); err != nil {
-			panic(err)
-		}
-		vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+		args, config, err := constructOrderedPercentileConfig(f, proc)
 		if err != nil {
-			panic(err)
+			return nil, nil, err
 		}
-		defer free()
-		percentile, err := getPercentileConfigNamed(vec, f.Func.ObjName)
-		if err != nil {
-			panic(err)
-		}
-		descending := len(f.AggConfig) > 0 && f.AggConfig[0] != 0
-		return args[:1], aggexec.EncodeOrderedPercentileConfig(percentile, descending)
+		return args, config, nil
 	}
-	return args, nil
+	return args, nil, nil
 }
 
-func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) string {
-	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
+// validateAggregateConfigs checks only operator nodes whose aggregate
+// configuration is consumed during physical construction. It intentionally
+// runs before the child scopes are built so an invalid percentile cannot leave
+// partially constructed pipelines behind before returning its user error.
+func validateAggregateConfigs(node *plan.Node, proc *process.Process) error {
+	if node == nil {
+		return nil
+	}
+	validate := func(expr *plan.Expr) error {
+		if expr == nil {
+			return nil
+		}
+		f, ok := expr.Expr.(*plan.Expr_F)
+		if !ok || f.F == nil || f.F.Func == nil {
+			return nil
+		}
+		_, _, err := constructAggregateConfigWithError(f.F, proc)
+		return err
+	}
+	for _, expr := range node.AggList {
+		if err := validate(expr); err != nil {
+			return err
+		}
+	}
+	for _, expr := range node.WinSpecList {
+		w, ok := expr.Expr.(*plan.Expr_W)
+		if !ok || w.W == nil || w.W.WindowFunc == nil {
+			continue
+		}
+		if err := validate(w.W.WindowFunc); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func constructApproxPercentileConfig(
+	f *plan.Function, proc *process.Process,
+) ([]*plan.Expr, []byte, error) {
+	args := f.Args
+	if len(args) != 2 {
+		return nil, nil, moerr.NewInvalidInputNoCtx(
+			"approx_percentile requires a value and percentile argument")
+	}
+	configExpr := args[1]
+	if err := validateApproxPercentileExpr(configExpr); err != nil {
+		return nil, nil, err
+	}
+	configExpr, err := normalizeAggregateConfigExpr(proc, configExpr)
 	if err != nil {
-		panic(err)
+		return nil, nil, err
+	}
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
 	}
 	defer free()
-	return vec.GetStringAt(0)
+	config, err := getEvaluatedPercentileConfigNamed(vec, f.Func.ObjName)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Preserve the v76 executor's explicit direction, including SQL NaN ordering,
+	// while evaluating a prepared percentile exactly once for this execution.
+	descending := len(f.AggConfig) > 0 && f.AggConfig[0] != 0
+	return args[:1], aggexec.EncodeApproxPercentileConfig(config, descending), nil
+}
+
+func constructOrderedPercentileConfig(
+	f *plan.Function, proc *process.Process,
+) ([]*plan.Expr, []byte, error) {
+	args := f.Args
+	if len(args) != 2 {
+		return nil, nil, moerr.NewInvalidInputNoCtxf(
+			"%s requires a value and percentile argument", f.Func.ObjName)
+	}
+	configExpr := args[1]
+	if err := validateOrderedPercentileExpr(configExpr, f.Func.ObjName); err != nil {
+		return nil, nil, err
+	}
+	configExpr, err := normalizeAggregateConfigExpr(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
+	}
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer free()
+	percentile, err := getEvaluatedPercentileConfigNamed(vec, f.Func.ObjName)
+	if err != nil {
+		return nil, nil, err
+	}
+	descending := len(f.AggConfig) > 0 && f.AggConfig[0] != 0
+	return args[:1], aggexec.EncodeOrderedPercentileConfig(percentile, descending), nil
+}
+
+// normalizeAggregateConfigExpr materializes a semantically constant function
+// expression as a literal before a scalar aggregate configuration consumes it.
+// Some internal plans (notably CTAS's INSERT ... SELECT) bypass the optional
+// optimizer constant-fold pass.  Their expression executor can therefore
+// return a one-row flat vector for a constant cast, although the plan still
+// satisfies rule.IsConstant.  Fold a private copy here so the configuration
+// boundary does not depend on which planner path produced the expression.
+func normalizeAggregateConfigExpr(proc *process.Process, expr *plan.Expr) (*plan.Expr, error) {
+	if expr == nil || expr.GetF() == nil {
+		return expr, nil
+	}
+	folded, err := plan2.ConstantFold(
+		batch.EmptyForConstFoldBatch,
+		plan2.DeepCopyExpr(expr),
+		proc,
+		false,
+		true,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return folded, nil
+}
+
+func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) (string, error) {
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
+	if err != nil {
+		return "", err
+	}
+	defer free()
+	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
+		return "", nil
+	}
+	return vec.GetStringAt(0), nil
 }
 
 func constructDispatchLocal(all bool, isSink, rec bool, recCTE bool, regs []*process.WaitRegister) *dispatch.Dispatch {
@@ -2173,9 +2356,9 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 	arg.StringHashKey = isStringShuffleKeyType(typ)
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, plan2.EstimatedRowsInt64(node.Stats.TableCnt))
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, plan2.EstimatedRowsInt64(node.Stats.TableCnt))
 	}
 	if left && len(node.RuntimeFilterProbeList) > 0 {
 		arg.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
@@ -2199,9 +2382,9 @@ func constructShuffleArgForGroup(bucketNum int32, node *plan.Node) *shuffle.Shuf
 	arg.StringHashKey = isStringShuffleKeyType(typ)
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, plan2.EstimatedRowsInt64(node.Stats.TableCnt))
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, plan2.EstimatedRowsInt64(node.Stats.TableCnt))
 	}
 	return arg
 }
@@ -2281,8 +2464,8 @@ func constructMergeGroup(
 	if arg.EmptyGroupingSet || len(arg.EmptyGroupingSetIDs) > 0 {
 		arg.GroupByTypes = make([]types.Type, len(node.GroupBy))
 		for i, expr := range node.GroupBy {
-			arg.GroupByTypes[i] = types.NewWithCharset(
-				types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset))
+			arg.GroupByTypes[i] = types.MustTypeFromPlan(
+				expr.Typ)
 		}
 	}
 	return arg
@@ -2307,6 +2490,7 @@ func constructPartition(node *plan.Node) *partition.Partition {
 	arg.OrderBySpecs = node.OrderBy
 	arg.Limit = node.Limit
 	arg.PartitionByCount = node.PartitionByCount
+	arg.WithTies = node.PartitionTopNWithTies
 	arg.Algorithm = node.PartitionAlgorithm
 	arg.SpillMem = node.SpillMem
 	return arg
@@ -2357,6 +2541,7 @@ func constructLoopJoin(node *plan.Node, leftTypes, rightTypes []types.Type, proc
 	arg.LeftTypes = leftTypes
 	arg.RightTypes = rightTypes
 	arg.NonEqCond = colexec.RewriteFilterExprList(node.OnList)
+	arg.OwnsConstantFilterDiagnostics = containsStatementInvariantDiagnosticInList(proc, node.OnList)
 	arg.JoinType = node.JoinType
 	for i := range node.SendMsgList {
 		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
@@ -2438,6 +2623,8 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 			buildConditions = arg.EqConds[0]
 		}
 		ret.Conditions = rewriteJoinExprToHashBuildExpr(buildConditions)
+		ret.OwnsConstantFilterDiagnostics = arg.JoinDiagnostic != nil
+		ret.JoinDiagnostic = arg.JoinDiagnostic
 
 		ret.NeedBatches = arg.NeedBuildBatches()
 
@@ -2616,14 +2803,11 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 			},
 		}
 	}
-	e, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || !plan2.IsEqualFunc(e.F.Func.GetObj()) {
+	if !plan2.IsEquiJoinCondition(expr) {
 		panic(moerr.NewNYIf(proc.GetTopContext(), "join condition '%s'", expr))
 	}
-	if exprRelPos(e.F.Args[0]) == 1 {
-		return e.F.Args[1], e.F.Args[0]
-	}
-	return e.F.Args[0], e.F.Args[1]
+	args := expr.GetF().Args
+	return args[0], args[1]
 }
 
 func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *apply.Apply {
@@ -2639,8 +2823,8 @@ func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *
 	arg.ApplyType = applyType
 	arg.Result = result
 	arg.Typs = rightTyps
-	if right.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		arg.VectorIndexScan = plan2.DeepCopyVectorIndexScan(right.VectorIndexScan)
+	if right.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		arg.IndexSearchScan = plan2.DeepCopyIndexSearchScan(right.IndexSearchScan)
 		arg.VectorAttrs = make([]string, len(right.TableDef.Cols))
 		for i, col := range right.TableDef.Cols {
 			arg.VectorAttrs[i] = col.GetOriginCaseName()
@@ -2704,40 +2888,17 @@ func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 	exprs = colexec.SplitAndExprs(exprs)
 	eqConds := make([]*plan.Expr, 0, len(exprs))
 	notEqConds := make([]*plan.Expr, 0, len(exprs))
-	for i, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !plan2.IsEqualFunc(e.F.Func.GetObj()) {
-				notEqConds = append(notEqConds, exprs[i])
-				continue
-			}
-			lpos, rpos := plan2.HasColExpr(e.F.Args[0], -1), plan2.HasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				notEqConds = append(notEqConds, exprs[i])
-				continue
-			}
-			eqConds = append(eqConds, exprs[i])
+	for _, expr := range exprs {
+		if plan2.IsEquiJoinCondition(expr) {
+			eqConds = append(eqConds, expr)
 		} else {
-			notEqConds = append(notEqConds, exprs[i])
+			notEqConds = append(notEqConds, expr)
 		}
 	}
 	if len(notEqConds) == 0 {
 		return nil, eqConds
 	}
 	return colexec.RewriteFilterExprList(notEqConds), eqConds
-}
-
-func exprRelPos(expr *plan.Expr) int32 {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		return e.Col.RelPos
-	case *plan.Expr_F:
-		for i := range e.F.Args {
-			if relPos := exprRelPos(e.F.Args[i]); relPos >= 0 {
-				return relPos
-			}
-		}
-	}
-	return -1
 }
 
 func constructPostDml(node *plan.Node, eng engine.Engine) *postdml.PostDml {
@@ -2974,19 +3135,23 @@ func constructTableClone(
 }
 
 func validateApproxPercentileExpr(expr *plan.Expr) error {
-	if expr == nil || !rule.IsConstant(expr, false) {
+	if !isPercentileConfigExpr(expr) {
 		return moerr.NewInvalidInputNoCtx(
-			"percentile argument of approx_percentile must be a constant")
+			"percentile argument of approx_percentile must be a constant or parameter")
 	}
 	return nil
 }
 
 func validateOrderedPercentileExpr(expr *plan.Expr, name string) error {
-	if expr == nil || !rule.IsConstant(expr, false) {
+	if !isPercentileConfigExpr(expr) {
 		return moerr.NewInvalidInputNoCtxf(
-			"percentile argument of %s must be a constant", name)
+			"percentile argument of %s must be a constant or parameter", name)
 	}
 	return nil
+}
+
+func isPercentileConfigExpr(expr *plan.Expr) bool {
+	return plan2.IsPercentileConfigExpr(expr)
 }
 
 // getPercentileConfig extracts the percentile value from a vector for
@@ -2996,27 +3161,20 @@ func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
 	return getPercentileConfigNamed(vec, "approx_percentile")
 }
 
-func complementPercentileConfig(config []byte) ([]byte, error) {
-	text := string(config)
-	percentile, ok := new(big.Rat).SetString(text)
-	if !ok || percentile.Sign() < 0 || percentile.Cmp(big.NewRat(1, 1)) > 0 {
-		return nil, moerr.NewInvalidInputNoCtxf(
-			"invalid percentile configuration %q", text)
-	}
-	scale := 0
-	if point := strings.IndexByte(text, '.'); point >= 0 {
-		scale = len(text) - point - 1
-	}
-	complement := new(big.Rat).Sub(big.NewRat(1, 1), percentile)
-	return []byte(complement.FloatString(scale)), nil
+func getEvaluatedPercentileConfigNamed(vec *vector.Vector, functionName string) ([]byte, error) {
+	return getPercentileConfigValue(vec, functionName, true)
 }
 
 func getPercentileConfigNamed(vec *vector.Vector, functionName string) ([]byte, error) {
-	if vec == nil || !vec.IsConst() {
+	return getPercentileConfigValue(vec, functionName, false)
+}
+
+func getPercentileConfigValue(vec *vector.Vector, functionName string, allowSingleton bool) ([]byte, error) {
+	if vec == nil || (!vec.IsConst() && !(allowSingleton && vec.Length() == 1)) {
 		return nil, moerr.NewInvalidInputNoCtxf(
 			"percentile argument of %s must be a constant", functionName)
 	}
-	if vec.Length() == 0 || vec.IsConstNull() {
+	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
 		return nil, moerr.NewInvalidInputNoCtxf(
 			"percentile argument of %s cannot be NULL", functionName)
 	}

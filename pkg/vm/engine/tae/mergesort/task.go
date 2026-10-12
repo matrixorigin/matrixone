@@ -205,41 +205,28 @@ func GetTransferMap(rowCnt int) []api.TransferDestPos {
 
 var ErrNoMoreBlocks = moerr.NewInternalErrorNoCtx("no more blocks")
 
-// TransferTable holds the block-to-block row mapping produced by a merge or flush.
-// It supports two formats:
-//   - Slab-based (from merger): a single contiguous allocation indexed by
-//     blockIdx*Stride + rowIdx, with BlockActive tracking which blocks
-//     have any transferred rows.
-//   - Legacy (from flush / debug RPC): a plain api.TransferMaps.
-//
-// Use GetBlockMap to access a block's transfer map regardless of format.
+// TransferTable holds the slab-based block-to-block row mapping produced by a
+// merge. The slab is indexed by blockIdx*Stride + rowIdx, with BlockActive
+// tracking which blocks have any transferred rows.
 type TransferTable struct {
 	Slab        []api.TransferDestPos
 	Stride      int
 	BlockActive []bool
-
-	Maps api.TransferMaps
 }
 
 // GetBlockMap returns the transfer map for block idx, or nil if the block
 // was fully deleted (no rows transferred).
 func (t *TransferTable) GetBlockMap(idx int) api.TransferMap {
-	if t.Slab != nil {
-		if !t.BlockActive[idx] {
-			return nil
-		}
-		start := idx * t.Stride
-		return t.Slab[start : start+t.Stride]
+	if !t.BlockActive[idx] {
+		return nil
 	}
-	return t.Maps[idx]
+	start := idx * t.Stride
+	return t.Slab[start : start+t.Stride]
 }
 
 // Len returns the total number of block slots.
 func (t *TransferTable) Len() int {
-	if t.Slab != nil {
-		return len(t.BlockActive)
-	}
-	return len(t.Maps)
+	return len(t.BlockActive)
 }
 
 // Release nils all references and returns the slab to the pool.
@@ -247,18 +234,9 @@ func (t *TransferTable) Release() {
 	putTransferSlab(t.Slab)
 	t.Slab = nil
 	t.BlockActive = nil
-	for i := range t.Maps {
-		t.Maps[i] = nil
-	}
-	t.Maps = nil
 }
 
-// NewTransferTableFromMaps wraps a legacy api.TransferMaps into a TransferTable.
-func NewTransferTableFromMaps(maps api.TransferMaps) *TransferTable {
-	return &TransferTable{Maps: maps}
-}
-
-// DisposableVecPool bridge the gap between the vector pools in cn and tn
+// DisposableVecPool provides vectors owned by a merge task host.
 type DisposableVecPool interface {
 	GetVector(*types.Type) (ret *vector.Vector, release func())
 	GetMPool() *mpool.MPool
@@ -267,7 +245,6 @@ type DisposableVecPool interface {
 type MergeTaskHost interface {
 	DisposableVecPool
 	Name() string
-	HostHintName() string
 	TaskSourceNote() string
 	GetCommitEntry() *api.MergeCommitEntry
 	HasBigDelEvent() bool
@@ -319,7 +296,7 @@ func DoMergeAndWrite(
 		mergehost.TaskSourceNote(),
 		mergehost.Name(),
 		txnInfo,
-		mergehost.HostHintName(),
+		"TN",
 		commitEntry.StartTs.DebugString(),
 		commitEntry.MergedObjs,
 		int8(commitEntry.Level),

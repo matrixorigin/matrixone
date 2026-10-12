@@ -21,10 +21,16 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		panic("usage: plan_string_literal_form <plan.pb.go>")
+	if len(os.Args) != 3 {
+		panic("usage: plan_string_literal_form <plan.pb.go> <api.pb.go>")
 	}
 	if err := patch(os.Args[1]); err != nil {
+		panic(err)
+	}
+	if err := patchCollationMetadata(os.Args[1], "Type", "TableDef", "IndexDef"); err != nil {
+		panic(err)
+	}
+	if err := patchCollationMetadata(os.Args[2], "SchemaExtra"); err != nil {
 		panic(err)
 	}
 }

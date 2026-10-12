@@ -380,7 +380,7 @@ func (r *optSplitResult) unmarshalFromReader(reader io.Reader) (retErr error) {
 	r.nowIdx1 = 0
 
 	r.resultList[0] = vector.NewOffHeapVecWithType(r.resultType)
-	if err = r.resultList[0].UnmarshalWithReader(reader, r.mp); err != nil {
+	if err = unmarshalAggregateVector(r.resultList[0], reader, r.mp); err != nil {
 		return err
 	}
 
@@ -396,7 +396,7 @@ func (r *optSplitResult) unmarshalFromReader(reader io.Reader) (retErr error) {
 		r.emptyList = make([]*vector.Vector, 1)
 		r.bsFromEmptyList = make([][]bool, 1)
 		r.emptyList[0] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
-		if err = r.emptyList[0].UnmarshalWithReader(reader, r.mp); err != nil {
+		if err = unmarshalAggregateVector(r.emptyList[0], reader, r.mp); err != nil {
 			return err
 		}
 		r.bsFromEmptyList[0] = vector.MustFixedColNoTypeCheck[bool](r.emptyList[0])

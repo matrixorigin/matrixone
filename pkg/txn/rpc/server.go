@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
@@ -281,7 +282,11 @@ func (s *server) Drain(ctx context.Context) error {
 		}
 	}
 	zero := s.activeHandlers.zero
+	active := s.activeHandlers.active
 	s.activeHandlers.Unlock()
+	if active > 0 {
+		fault.TriggerFault(FJ_TxnServerDrainWithActiveHandler)
+	}
 	select {
 	case <-zero:
 		return quiesceErr

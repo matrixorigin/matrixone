@@ -157,6 +157,15 @@ func TestGetTableDefRestoresChecksFromSchemaExtra(t *testing.T) {
 	require.Equal(t, uint32(types.CharsetBinary), tableDef.DefaultCharset)
 }
 
+func TestGetTableDefRestoresAutoIDCache(t *testing.T) {
+	for _, size := range []uint64{0, 1, 2, 1000000} {
+		tableDef, _ := getTableDef(&TableItem{
+			Name: "t", ExtraInfo: &api.SchemaExtra{AutoIdCache: size},
+		}, nil)
+		require.Equal(t, size, tableDef.AutoIdCache)
+	}
+}
+
 func TestGetTableDefKeepsTemporarySessionStateContextual(t *testing.T) {
 	tableDef, _ := getTableDef(&TableItem{Kind: catalog.SystemTemporaryTable}, nil)
 	require.NotNil(t, tableDef)
@@ -711,7 +720,7 @@ func TestParseColumnsBatchPreservesUnsignedFlag(t *testing.T) {
 }
 
 func newTestTableBatch(mp *mpool.MPool) *batch.Batch {
-	var typs []types.Type
+	typs := make([]types.Type, 0, 2+len(catalog.MoTablesTypes))
 
 	typs = append(typs, types.New(types.T_Rowid, 0, 0))
 	typs = append(typs, types.New(types.T_TS, 0, 0))
@@ -720,7 +729,7 @@ func newTestTableBatch(mp *mpool.MPool) *batch.Batch {
 }
 
 func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch.Batch {
-	var typs []types.Type
+	typs := make([]types.Type, 0, 2+len(catalog.MoColumnsTypes))
 	var vec *vector.Vector
 
 	typs = append(typs, types.New(types.T_Rowid, 0, 0))
@@ -815,7 +824,7 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 }
 
 func newTestDatabaseBatch(mp *mpool.MPool) *batch.Batch {
-	var typs []types.Type
+	typs := make([]types.Type, 0, 2+len(catalog.MoDatabaseTypes))
 
 	typs = append(typs, types.New(types.T_Rowid, 0, 0))
 	typs = append(typs, types.New(types.T_TS, 0, 0))

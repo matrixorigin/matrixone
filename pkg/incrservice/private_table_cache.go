@@ -172,13 +172,13 @@ func (c *lazyPrivateTableCache) insertAutoValues(ctx context.Context, tableID ui
 	defer cache.release()
 	return cache.insertAutoValues(ctx, tableID, vecs, rows, estimate)
 }
-func (c *lazyPrivateTableCache) currentValue(ctx context.Context, tableID uint64, col string) (uint64, error) {
+func (c *lazyPrivateTableCache) currentValue(ctx context.Context, tableID uint64, col string, store IncrValueStore) (uint64, error) {
 	cache, err := c.load(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer cache.release()
-	return cache.currentValue(ctx, tableID, col)
+	return cache.currentValue(ctx, tableID, col, store)
 }
 func (c *lazyPrivateTableCache) getLastAllocateTS(ctx context.Context, colName string) (timestamp.Timestamp, error) {
 	cache, err := c.load(ctx)

@@ -685,6 +685,7 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 
 retryInsertValues:
 	tableID := preInsert.ctr.tblId
+	policyCtx := incrservice.WithAutoIDCachePolicy(proc.Ctx, preInsert.TableDef.TblId, preInsert.TableDef.AutoIdCache)
 	needReCheck := checkIfNeedReGenAutoIncrCol(bat, preInsert)
 
 	// Capture the oldest active range's allocation timestamp before InsertValues.
@@ -692,7 +693,7 @@ retryInsertValues:
 	// but conflict detection must still cover every value generated for this batch.
 	lastAllocateTSMap := make(map[string]timestamp.Timestamp)
 	for col := range needReCheck {
-		ts, err := proc.GetIncrService().GetLastAllocateTS(proc.Ctx, tableID, preInsert.TableDef.AutoIncrEpoch, currentTxn, col)
+		ts, err := proc.GetIncrService().GetLastAllocateTS(policyCtx, tableID, preInsert.TableDef.AutoIncrEpoch, currentTxn, col)
 		if err != nil {
 			return err
 		}
@@ -704,7 +705,7 @@ retryInsertValues:
 		proc.GetSessionInfo().AutoIncrementOffset,
 	)
 	autoIncrementCtx := incrservice.WithAutoIncrementOptions(
-		proc.Ctx, options.Increment, options.Offset)
+		policyCtx, options.Increment, options.Offset)
 	lastInsertValue, err := proc.GetIncrService().InsertValues(
 		autoIncrementCtx,
 		tableID,

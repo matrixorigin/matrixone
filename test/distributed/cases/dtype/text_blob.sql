@@ -129,7 +129,7 @@ create table blob_04(a int,b varchar(290));
 insert into blob_04 values(1,load_file('$resources/blob_file/blob1.csv'));
 
 -- 音频文件，图文文件
-create table blob_02(a int,b blob);
+create table blob_02(a int,b mediumblob);
 insert into blob_02 values(3,load_file('$resources/blob_file/blob1.csv'));
 insert into blob_02 values(4,load_file('$resources/blob_file/blob3.jpeg'));
 insert into blob_02 values(5,load_file('$resources/blob_file/blob4.gif'));

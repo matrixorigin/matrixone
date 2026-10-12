@@ -42,7 +42,7 @@ func TestTimeWindowHavingRepeatedAggregateStaysAfterFill(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.objects["tw_repeated_having"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_repeated_having", Obj: 42}
 			mock.ctxt.tables["tw_repeated_having"] = &plan.TableDef{
 				Name: "tw_repeated_having",
@@ -110,7 +110,7 @@ func TestTimeWindowHavingNestedAggregateRejected(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.objects["tw_repeated_having"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_repeated_having", Obj: 42}
 			mock.ctxt.tables["tw_repeated_having"] = &plan.TableDef{
 				Name: "tw_repeated_having",

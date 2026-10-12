@@ -94,6 +94,21 @@ func TestNumericTextIntegerConversionIsExact(t *testing.T) {
 
 }
 
+func TestIsNumericTextDistinguishesOverflowFromPrefix(t *testing.T) {
+	for _, test := range []struct {
+		text string
+		want bool
+	}{
+		{text: "1e100", want: true},
+		{text: "18446744073709551616", want: true},
+		{text: "258abc", want: false},
+		{text: " 258", want: false},
+		{text: "", want: false},
+	} {
+		require.Equal(t, test.want, IsNumericText(test.text), test.text)
+	}
+}
+
 func TestNumericByteJSONIntegerConversionPreservesSourceDomain(t *testing.T) {
 	signed, ok := NumericToInt64(makeDecimalJson("9007199254740993.9"))
 	require.True(t, ok)
@@ -127,6 +142,11 @@ func TestCompareNumericFailsClosedForMalformedValues(t *testing.T) {
 		ByteJson{Type: TpCodeInt64, Data: []byte{1}},
 		ByteJson{Type: TpCodeInt64, Data: []byte{1}},
 	)
+	require.False(t, ok)
+	notANumber := makeJsonWithoutParse(math.NaN())
+	_, ok = CompareNumeric(notANumber, notANumber)
+	require.False(t, ok)
+	_, ok = ParseNumeric(notANumber)
 	require.False(t, ok)
 
 	parsedLeft, ok := ParseNumeric(makeDecimalJson("9007199254740992.1"))

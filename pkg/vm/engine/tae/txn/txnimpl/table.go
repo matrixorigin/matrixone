@@ -127,8 +127,6 @@ type txnTable struct {
 	transferredTombstoneRollback      bool
 	transferredTombstoneCleanupLogged bool
 
-	dedupTS types.TS
-
 	idx int
 
 	// expectedAutoIncrEpochs are the known CN allocator epochs this
@@ -1243,19 +1241,19 @@ func (tbl *txnTable) GetByFilter(
 	pks := tbl.store.rt.VectorPool.Small.GetVector(pkType)
 	defer pks.Close()
 	pks.Append(filter.Val, false)
-	rowIDs, err := tbl.dataTable.getRowsByPK(ctx, pks)
+	candidates, err := tbl.dataTable.getRowsByPK(ctx, pks)
 	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 		return
 	}
+	defer candidates.Close()
+	if candidates.HasCandidate() {
+		err = tbl.findDeletesForCandidates(tbl.store.ctx, candidates, types.TS{}, types.MaxTs())
+		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			return
+		}
+	}
+	rowIDs := candidates.Merge(tbl.store.rt.VectorPool.Small)
 	defer rowIDs.Close()
-	if rowIDs.IsNull(0) {
-		err = moerr.NewNotFoundNoCtx()
-		return
-	}
-	err = tbl.findDeletes(tbl.store.ctx, rowIDs, types.TS{}, types.MaxTs())
-	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
-		return
-	}
 	if rowIDs.IsNull(0) {
 		err = moerr.NewNotFoundNoCtx()
 		return
@@ -1414,7 +1412,7 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phas
 		return err
 	}
 	pkVec.Close()
-	tbl.dedupTS = ts
+	baseTable.dedupTS = ts
 	return
 }
 
@@ -1428,21 +1426,24 @@ func (tbl *txnTable) DedupSnapByPK(
 ) (err error) {
 	r := trace.StartRegion(ctx, "DedupSnapByPK")
 	defer r.End()
-	var rowIDs containers.Vector
-	rowIDs, err = tbl.getBaseTable(isTombstone).getRowsByPK(ctx, keys)
+	candidates, err := tbl.getBaseTable(isTombstone).getRowsByPK(ctx, keys)
+	if candidates != nil {
+		defer candidates.Close()
+	}
 	if err != nil {
 		logutil.Errorf("getRowsByPK failed, %v", err)
 		return
 	}
-	defer rowIDs.Close()
 	from, to := types.TS{}, tbl.store.txn.GetStartTS()
-	if !isTombstone {
-		err = tbl.findDeletes(ctx, rowIDs, from, to)
+	if !isTombstone && candidates.HasCandidate() {
+		err = tbl.findDeletesForCandidates(ctx, candidates, from, to)
 		if err != nil {
 			logutil.Errorf("getRowsByPK failed 2, %v", err)
 			return
 		}
 	}
+	rowIDs := candidates.Merge(tbl.store.rt.VectorPool.Small)
+	defer rowIDs.Close()
 	for i := 0; i < rowIDs.Length(); i++ {
 		colName := tbl.getBaseTable(isTombstone).schema.GetPrimaryKey().Name
 		if !rowIDs.IsNull(i) {
@@ -1463,6 +1464,50 @@ func (tbl *txnTable) DedupSnapByPK(
 		}
 	}
 	return
+}
+
+func (tbl *txnTable) findDeletesForCandidates(
+	ctx context.Context,
+	candidates *duplicatedRowIDs,
+	from, to types.TS,
+) error {
+	combined := tbl.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+	defer combined.Close()
+	type candidateRef struct {
+		rows  containers.Vector
+		index int
+	}
+	refs := make([]candidateRef, 0)
+	appendCandidates := func(rows containers.Vector, byKey [][]int) {
+		for _, indexes := range byKey {
+			for _, index := range indexes {
+				if rows.IsNull(index) {
+					combined.Append(nil, true)
+				} else {
+					combined.Append(vector.GetFixedAtNoTypeCheck[types.Rowid](rows.GetDownstreamVector(), index), false)
+				}
+				refs = append(refs, candidateRef{rows: rows, index: index})
+			}
+		}
+	}
+	appendCandidates(candidates.appendable, candidates.appendableByKey)
+	appendCandidates(candidates.nonAppendable, candidates.nonAppendableByKey)
+	copyBack := func() {
+		for i, ref := range refs {
+			if combined.IsNull(i) {
+				containers.UpdateValue(ref.rows.GetDownstreamVector(), uint32(ref.index), nil, true, common.WorkspaceAllocator)
+			} else {
+				containers.UpdateValue(ref.rows.GetDownstreamVector(), uint32(ref.index), vector.GetFixedAtNoTypeCheck[types.Rowid](combined.GetDownstreamVector(), i), false, common.WorkspaceAllocator)
+			}
+		}
+	}
+	err := tbl.findDeletes(ctx, combined, from, to)
+	// findDeletes may have completed filtering for earlier tombstones before
+	// returning a WW conflict from a later one. Preserve that partial result so
+	// callers that intentionally tolerate the conflict do not resurrect a stale
+	// candidate from the unfiltered vectors.
+	copyBack()
+	return err
 }
 
 /*
@@ -1525,19 +1570,20 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 	phase string,
 	ts types.TS,
 ) (err error) {
+	base := tbl.getBaseTable(isTombstone)
 	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
 		now := tbl.store.rt.Now()
-		if tbl.dedupTS.IsEmpty() {
-			tbl.dedupTS = tbl.store.txn.GetStartTS()
+		if base.dedupTS.IsEmpty() {
+			base.dedupTS = tbl.store.txn.GetStartTS()
 		}
 		var rowIDs containers.Vector
-		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(tbl.store.ctx, pks, tbl.dedupTS.Next(), ts, phase == txnif.PrePreparePhase)
+		rowIDs, err = base.incrementalGetRowsByPK(tbl.store.ctx, pks, base.dedupTS.Next(), ts, phase == txnif.PrePreparePhase)
 		if err != nil {
 			return
 		}
 		defer rowIDs.Close()
 		if !isTombstone {
-			err = tbl.findDeletes(tbl.store.ctx, rowIDs, tbl.dedupTS.Next(), now)
+			err = tbl.findDeletes(tbl.store.ctx, rowIDs, base.dedupTS.Next(), now)
 			if err != nil {
 				return
 			}
@@ -1554,7 +1600,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 					zap.String("table", tbl.dataTable.schema.Name),
 					zap.Bool("is tombstone", isTombstone),
 					zap.String("phase", phase),
-					zap.String("from", tbl.dedupTS.Next().ToString()),
+					zap.String("from", base.dedupTS.Next().ToString()),
 					zap.String("to", ts.ToString()),
 				)
 				entry := common.TypeStringValue(*pks.GetType(), pks.Get(i), false)
@@ -1573,7 +1619,8 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.
 	metaLocs := make([]objectio.Location, 0)
 	blkCount := stats.BlkCnt()
 	totalRow := stats.Rows()
-	schema := tbl.getBaseTable(isTombstone).schema
+	base := tbl.getBaseTable(isTombstone)
+	schema := base.schema
 	blkMaxRows := schema.Extra.BlockMaxRows
 	for i := uint16(0); i < uint16(blkCount); i++ {
 		var blkRow uint32
@@ -1609,16 +1656,16 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.
 		defer pks.Close()
 		var rowIDs containers.Vector
 		now := tbl.store.rt.Now()
-		if tbl.dedupTS.IsEmpty() {
-			tbl.dedupTS = tbl.store.txn.GetStartTS()
+		if base.dedupTS.IsEmpty() {
+			base.dedupTS = tbl.store.txn.GetStartTS()
 		}
-		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(ctx, pks, tbl.dedupTS.Next(), now, true)
+		rowIDs, err = base.incrementalGetRowsByPK(ctx, pks, base.dedupTS.Next(), now, true)
 		if err != nil {
 			return
 		}
 		defer rowIDs.Close()
 		if !isTombstone {
-			err = tbl.findDeletes(ctx, rowIDs, tbl.dedupTS, now)
+			err = tbl.findDeletes(ctx, rowIDs, base.dedupTS, now)
 		}
 		if err != nil {
 			return

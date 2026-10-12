@@ -227,6 +227,12 @@ func checkCommonProtocolVersion(txn executor.TxnExecutor, required int64) error 
 		encoded = cols[0].GetStringAt(0)
 		return false
 	})
+	return CheckProtocolVersionResponse(encoded, required)
+}
+
+// CheckProtocolVersionResponse validates every serving CN's protocol before a
+// persistent definition requiring that protocol is published.
+func CheckProtocolVersionResponse(encoded string, required int64) error {
 	if encoded == "" {
 		return moerr.NewNotSupportedNoCtxf(
 			"upgrade requires all CNs to support protocol version %d: no protocol response", required)

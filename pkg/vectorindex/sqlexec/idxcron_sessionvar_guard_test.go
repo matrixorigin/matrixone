@@ -33,8 +33,9 @@ import (
 // default instead of a silent reindex abort (the #25438 sql_mode failure: the strict resolver
 // errored "key sql_mode not found" and aborted every reindex).
 var reindexRequiredSessionVars = []string{
-	"sql_mode",          // #25438 zero-temporal-date write-policy check (process/sql_mode.go)
-	"lock_wait_timeout", // lockop / process_codec
+	"sql_mode",            // #25438 zero-temporal-date write-policy check (process/sql_mode.go)
+	"lock_wait_timeout",   // lockop / process_codec
+	"default_week_format", // process_codec session snapshot
 }
 
 // mockResolveExecutor is a stand-in InternalSQLExecutor whose Exec RESOLVES a fixed set of

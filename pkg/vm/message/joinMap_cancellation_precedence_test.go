@@ -98,7 +98,10 @@ func TestReceiveJoinMapResultCancellationTreePrecedence(t *testing.T) {
 		), 54, false, 0, mb)
 
 		_, err := ReceiveJoinMap(54, false, 0, mb, ctx)
-		require.True(t, moerr.IsMoErrCode(err, primaryErr.ErrorCode()), err)
+		var got *moerr.Error
+		require.ErrorAs(t, err, &got)
+		require.Equal(t, uint16(moerr.ErrQueryInterrupted), got.ErrorCode())
+		require.True(t, err.(interface{ IsPipelineFailure() bool }).IsPipelineFailure())
 	})
 
 	t.Run("mixed message keeps substantive leaf", func(t *testing.T) {

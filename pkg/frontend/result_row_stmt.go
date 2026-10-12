@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -31,6 +32,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
 func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColDef, []interface{}, error) {
@@ -54,19 +56,34 @@ func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColD
 }
 
 func getPreparedResultColumns(stmt *PrepareStmt, txnHaveDDL bool) []*plan2.ColDef {
-	return getPreparedResultColumnsFromPlan(stmt.PrepareStmt, stmt.PreparePlan, txnHaveDDL)
+	return getPreparedResultColumnsFromPlanWithGroupConcatMaxLen(
+		stmt.PrepareStmt, stmt.PreparePlan, txnHaveDDL, stmt.groupConcatMaxLenFloor)
 }
 
-func getPreparedResultColumnsFromPlan(stmt tree.Statement, preparedPlan *plan2.Plan, txnHaveDDL bool) []*plan2.ColDef {
+func getPreparedResultColumnsFromPlanWithGroupConcatMaxLen(
+	stmt tree.Statement, preparedPlan *plan2.Plan, txnHaveDDL bool, groupConcatMaxLenFloor uint64,
+) []*plan2.ColDef {
 	plan := preparedPlan.GetDcl().GetPrepare().GetPlan()
-	return getPreparedResultColumnsFor(stmt, plan, txnHaveDDL)
+	return getPreparedResultColumnsForWithGroupConcatMaxLen(
+		stmt, plan, txnHaveDDL, groupConcatMaxLenFloor)
 }
 
 func getPreparedResultColumnsFor(stmt tree.Statement, plan *plan.Plan, txnHaveDDL bool) []*plan2.ColDef {
+	return getPreparedResultColumnsForWithGroupConcatMaxLen(stmt, plan, txnHaveDDL, 0)
+}
+
+func getPreparedResultColumnsForWithGroupConcatMaxLen(
+	stmt tree.Statement, preparedPlan *plan.Plan, txnHaveDDL bool, groupConcatMaxLenFloor uint64,
+) []*plan2.ColDef {
 	if isPerformStatement(stmt) {
 		return nil
 	}
-	if query := plan.GetQuery(); query != nil {
+	// Frontend publication SHOW statements have no engine query plan. PREPARE
+	// and execution must use the same result schema and wire type conversion.
+	if columns := publicationShowResultColumns(stmt); columns != nil {
+		return columns
+	}
+	if query := preparedPlan.GetQuery(); query != nil {
 		var title string
 		switch stmt.(type) {
 		case *tree.ExplainStmt, *tree.ExplainAnalyze:
@@ -82,7 +99,192 @@ func getPreparedResultColumnsFor(stmt tree.Statement, plan *plan.Plan, txnHaveDD
 			}}
 		}
 	}
-	return plan2.GetResultColumnsFromPlan(plan)
+	columns := plan2.GetResultColumnsFromPlan(preparedPlan)
+	overlayPreparedGroupConcatResultMetadata(
+		preparedPlan.GetQuery(), columns, groupConcatMaxLenFloor)
+	return columns
+}
+
+const preparedGroupConcatVarcharMaxLen = 512
+
+type preparedGroupConcatResultColumnRef struct {
+	nodeID int32
+	colPos int32
+}
+
+func preparedPlanContainsGroupConcat(preparedPlan *plan.Plan) bool {
+	if preparedPlan == nil || preparedPlan.GetQuery() == nil {
+		return false
+	}
+	for _, node := range preparedPlan.GetQuery().Nodes {
+		if node == nil {
+			continue
+		}
+		for _, expr := range node.AggList {
+			if preparedExprContainsGroupConcat(expr) {
+				return true
+			}
+		}
+		for _, expr := range node.WinSpecList {
+			if preparedExprContainsGroupConcat(expr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func preparedExprContainsGroupConcat(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.GetFunc() != nil && fn.GetFunc().GetObjName() == plan2.NameGroupConcat {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if preparedExprContainsGroupConcat(arg) {
+				return true
+			}
+		}
+	}
+	if window := expr.GetW(); window != nil {
+		if preparedExprContainsGroupConcat(window.WindowFunc) {
+			return true
+		}
+		for _, arg := range window.PartitionBy {
+			if preparedExprContainsGroupConcat(arg) {
+				return true
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil && preparedExprContainsGroupConcat(order.Expr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// overlayPreparedGroupConcatResultMetadata applies the MySQL result-type rule
+// that depends on group_concat_max_len to prepared result metadata only. The
+// execution plan keeps the aggregate's engine type (T_text/T_blob); changing it
+// here would change vector allocation and aggregate execution semantics.
+func overlayPreparedGroupConcatResultMetadata(
+	query *plan.Query, columns []*plan2.ColDef, groupConcatMaxLen uint64,
+) {
+	if query == nil || groupConcatMaxLen == 0 || len(query.Steps) == 0 {
+		return
+	}
+	step := len(query.Steps) - 1
+	if query.HasReturning {
+		if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
+			return
+		}
+		step = int(query.ReturningStep)
+	}
+	rootID := query.Steps[step]
+	if rootID < 0 || int(rootID) >= len(query.Nodes) {
+		return
+	}
+	root := query.Nodes[rootID]
+	if root == nil || len(root.ProjectList) != len(columns) {
+		return
+	}
+
+	for idx, expr := range root.ProjectList {
+		if !isDirectPreparedGroupConcatResult(query, rootID, expr, make(map[preparedGroupConcatResultColumnRef]struct{})) {
+			continue
+		}
+		col := columns[idx]
+		if col == nil {
+			continue
+		}
+		isBinary := col.Typ.Id == int32(types.T_blob) ||
+			col.Typ.Charset == uint32(types.CharsetBinary)
+		if groupConcatMaxLen <= preparedGroupConcatVarcharMaxLen {
+			if isBinary {
+				col.Typ.Id = int32(types.T_varbinary)
+				col.Typ.Charset = uint32(types.CharsetBinary)
+			} else {
+				col.Typ.Id = int32(types.T_varchar)
+			}
+			col.Typ.Width = int32(groupConcatMaxLen)
+		} else if isBinary {
+			// MySQL exposes a binary GROUP_CONCAT as BLOB above the VARCHAR
+			// threshold. Keep the binary OID so colDef2MysqlColumn emits both
+			// the binary charset and BINARY_FLAG.
+			col.Typ.Id = int32(types.T_blob)
+			col.Typ.Charset = uint32(types.CharsetBinary)
+		} else {
+			col.Typ.Id = int32(types.T_text)
+			col.Typ.Width = types.MaxLongTextLen
+		}
+	}
+}
+
+func isDirectPreparedGroupConcatResult(
+	query *plan.Query, nodeID int32, expr *plan.Expr, seen map[preparedGroupConcatResultColumnRef]struct{},
+) bool {
+	if expr == nil {
+		return false
+	}
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+		return false
+	}
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	switch node.NodeType {
+	case plan.Node_UNION, plan.Node_UNION_ALL,
+		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+		plan.Node_MINUS, plan.Node_MINUS_ALL:
+		// Set-operation output types are common to both branches. Following
+		// only the left projection could narrow a result whose right branch
+		// still produces a wider value.
+		return false
+	}
+	if fn := expr.GetF(); fn != nil && fn.GetFunc() != nil {
+		return fn.GetFunc().GetObjName() == plan2.NameGroupConcat
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return false
+	}
+	switch {
+	case col.RelPos == -2:
+		if node.NodeType != plan.Node_AGG {
+			return false
+		}
+		aggPos := col.ColPos - int32(len(node.GroupBy))
+		if aggPos < 0 || int(aggPos) >= len(node.AggList) {
+			return false
+		}
+		return isDirectPreparedGroupConcatResult(
+			query, nodeID, node.AggList[aggPos], seen)
+	case col.RelPos >= 0:
+		if int(col.RelPos) >= len(node.Children) {
+			return false
+		}
+		childID := node.Children[col.RelPos]
+		if childID < 0 || int(childID) >= len(query.Nodes) {
+			return false
+		}
+		child := query.Nodes[childID]
+		if child == nil || col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) {
+			return false
+		}
+		ref := preparedGroupConcatResultColumnRef{nodeID: childID, colPos: col.ColPos}
+		if _, ok := seen[ref]; ok {
+			return false
+		}
+		seen[ref] = struct{}{}
+		return isDirectPreparedGroupConcatResult(
+			query, childID, child.ProjectList[col.ColPos], seen)
+	default:
+		return false
+	}
 }
 
 func sessionTxnHaveDDL(ses FeSession) bool {
@@ -119,6 +321,41 @@ func freezeResultMetadata(runner ComputationRunner) {
 	if freezer, ok := runner.(resultMetadataFreezer); ok {
 		freezer.FreezeResultMetadata()
 	}
+}
+
+// deferredResultMetadata belongs to one statement. A definition retry may
+// replace its plan before output starts; once metadata is published, the
+// existing compiler guard prevents a retry from changing that visible schema.
+type deferredResultMetadata struct {
+	once       sync.Once
+	initialize func() error
+	err        error
+}
+
+func (metadata *deferredResultMetadata) publish() error {
+	metadata.once.Do(func() { metadata.err = metadata.initialize() })
+	return metadata.err
+}
+
+func publishSelectResultMetadata(ses *Session, execCtx *ExecCtx) error {
+	if txnCW, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+		if runningCompile, ok := execCtx.runner.(Compile); ok {
+			txnCW.syncCompileExecution(runningCompile)
+			if runningCompile.PlanGenerationRebuilt() {
+				// Binary execution may retain column packets from the original
+				// prepared generation. Derive fresh packets from the current plan.
+				execCtx.prepareColDef = nil
+			}
+		}
+	}
+	columns, colDefs, err := getSelectColumnsAndResultColumns(execCtx.reqCtx, execCtx.cw)
+	if err != nil {
+		return err
+	}
+	ses.rs = &plan.ResultColDef{ResultCols: colDefs}
+	freezeResultMetadata(execCtx.runner)
+	recordCampaignResultMetadata(ses, colDefs)
+	return execCtx.resper.RespPreMeta(execCtx, columns)
 }
 
 // executeResultRowStmt run the statemet that responses result rows
@@ -173,22 +410,30 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	}
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
-
-		columns, colDefs, err = getSelectColumnsAndResultColumns(execCtx.reqCtx, execCtx.cw)
-		if err != nil {
-			ses.Error(execCtx.reqCtx,
-				"Failed to get columns from computation handler",
-				zap.Error(err))
-			return
-		}
-
-		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
-
 		ses.EnterFPrint(FPResultRowStmtSelect1)
 		defer ses.ExitFPrint(FPResultRowStmtSelect1)
-		freezeResultMetadata(execCtx.runner)
+		if txnCW, ok := execCtx.cw.(*TxnComputationWrapper); ok && txnCW.preparedStmt != nil {
+			// Hold a prepared execution after binding but before any result
+			// metadata is retained or published for deterministic DDL races.
+			fault.TriggerFaultWithContext(execCtx.reqCtx, "prepared-result-metadata-bound")
+		}
 		cursorExecute := execCtx.input != nil && execCtx.input.isCursorExecute
+		queryResultFinalized := false
+		defer func() {
+			// A producer or terminal step can fail after batches were saved.
+			// Cursor staging has its own abort owner; ordinary SELECT must clear
+			// its session state before another statement can save a result.
+			if !cursorExecute && !queryResultFinalized {
+				resetQueryResultState(ses)
+			}
+		}()
 		if cursorExecute {
+			columns, colDefs, err = getSelectColumnsAndResultColumns(execCtx.reqCtx, execCtx.cw)
+			if err != nil {
+				return err
+			}
+			ses.rs = &plan.ResultColDef{ResultCols: colDefs}
+			freezeResultMetadata(execCtx.runner)
 			// A cursor must retain its metadata before the pipeline starts so
 			// captured batches can be decoded, but its execute terminator must
 			// not be sent until all batches have materialized successfully.
@@ -198,9 +443,8 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				return moerr.NewInternalError(execCtx.reqCtx, "prepared cursor requires MySQL response writer")
 			}
 		} else {
-			err = execCtx.resper.RespPreMeta(execCtx, columns)
-			if err != nil {
-				return
+			execCtx.resultMetadata = &deferredResultMetadata{
+				initialize: func() error { return publishSelectResultMetadata(ses, execCtx) },
 			}
 		}
 
@@ -214,6 +458,19 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		// todo: add trace
 		if _, err = execCtx.runner.Run(0); err != nil {
 			return
+		}
+		if !cursorExecute {
+			// Empty results never invoke a positive-row output callback. Publish
+			// their metadata only after the successful final plan is known.
+			if err = execCtx.resultMetadata.publish(); err != nil {
+				return err
+			}
+			// Pipeline reset callbacks also run on failed attempts. Finalize a
+			// saved result only after Run succeeds with its final schema.
+			if err = finalizeQueryResult(execCtx); err != nil {
+				return err
+			}
+			queryResultFinalized = true
 		}
 		// Cursor metadata is retained above for decoding, but its wire response
 		// is emitted by respStreamResultRow after transaction finalization. This

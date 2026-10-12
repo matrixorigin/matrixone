@@ -16,6 +16,7 @@ package vector
 
 import (
 	"bytes"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -222,6 +223,49 @@ func TestBorrowedValidityLegacyMaterializationUsesReservedMPoolStorage(t *testin
 	account.Seal()
 	_, err = registry.Finalize(account)
 	require.NoError(t, err)
+}
+
+func TestUnionOneBorrowedFixedValidity(t *testing.T) {
+	for _, withNull := range []bool{false, true} {
+		t.Run(fmt.Sprintf("null=%t", withNull), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			releases := 0
+			t.Cleanup(func() {
+				require.Zero(t, mp.CurrNB())
+				expected := 1
+				if withNull {
+					expected = 2
+				}
+				require.Equal(t, expected, releases, "each borrowed owner releases exactly once")
+			})
+			data := types.EncodeSlice([]int64{11, 22, 33})
+			dataLease, err := NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
+			require.NoError(t, err)
+			t.Cleanup(dataLease.Release)
+			source, err := NewBorrowedFixedVector(types.T_int64.ToType(), 3, data, dataLease)
+			require.NoError(t, err)
+			t.Cleanup(func() { source.Free(nil) })
+			if withNull {
+				validity := []byte{0b00000101}
+				validityLease, err := NewRefCountedBufferLease(validity, int64(cap(validity)), func() { releases++ })
+				require.NoError(t, err)
+				t.Cleanup(validityLease.Release)
+				require.NoError(t, source.GetNulls().InstallBorrowedValidity(validity, 0, 3, 1, validityLease))
+			}
+			destination := NewVec(types.T_int64.ToType())
+			t.Cleanup(func() { destination.Free(mp) })
+			require.NoError(t, destination.PreExtend(3, mp))
+			for row, sel := range []int64{1, 2, 0} {
+				require.NoError(t, destination.UnionOne(source, sel, mp))
+				require.Equal(t, withNull && sel == 1, destination.IsNull(uint64(row)))
+				if !destination.IsNull(uint64(row)) {
+					require.Equal(t, []int64{11, 22, 33}[sel], GetFixedAtWithTypeCheck[int64](destination, row))
+				}
+			}
+			require.Equal(t, withNull, source.GetNulls().HasBorrowedValidity(), "copy does not materialize source validity")
+			require.Equal(t, []int64{11, 22, 33}, types.DecodeSlice[int64](data))
+		})
+	}
 }
 
 func TestRetainedReadonlyViewWithMPCopiesOwnedDescriptorsAndRetainsArea(t *testing.T) {

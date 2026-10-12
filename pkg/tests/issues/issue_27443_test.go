@@ -49,7 +49,11 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 
 		dbName := testutils.GetDatabaseName(t)
 		execSQLRequire(t, ctx, db, "create database `"+dbName+"`")
-		defer execSQLMaybe(t, ctx, db, "drop database if exists `"+dbName+"`")
+		defer func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+			defer stop()
+			execSQLRequire(t, cleanup, db, "drop database if exists `"+dbName+"`")
+		}()
 
 		execSQLRequire(t, ctx, db, "create table `"+dbName+"`.src (id int primary key, tenant int, payload varchar(32), amount decimal(12,2))")
 		execSQLRequire(t, ctx, db, "create table `"+dbName+"`.dst (id int primary key, tenant int, payload varchar(32), amount decimal(12,2))")
@@ -263,70 +267,40 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		defer func() {
 			require.NoError(t, indexedTextPredicateStmt.Close())
 		}()
-		_, err = indexedTextPredicateStmt.ExecContext(ctx, "1abc")
-		require.NoError(t, err)
-		require.NoError(t, db.QueryRowContext(ctx, "show warnings").Scan(&indexedLevel, &indexedCode, &indexedMessage))
-		require.Equal(t, "Warning", indexedLevel)
-		require.Equal(t, uint16(1292), indexedCode)
-		require.Contains(t, indexedMessage, "Truncated incorrect DOUBLE value")
-		require.NoError(t, db.QueryRowContext(ctx,
-			"select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
-		require.Equal(t, int64(16), status)
+		for _, tc := range []struct {
+			name             string
+			key              any
+			matched, warning bool
+		}{
+			{"prefix", "1abc", true, true},
+			{"nonnumeric", "foo", false, true},
+			{"fractional", "0.9", false, false},
+			{"NULL", nil, false, false},
+			{"exponent overflow", "1e309", false, false},
+			{"integer overflow", "2147483648", false, false},
+			{"valid recovery", "1", true, false},
+		} {
+			t.Run("indexed text "+tc.name, func(t *testing.T) {
+				execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status=0 where id=1")
+				_, err := indexedTextPredicateStmt.ExecContext(ctx, tc.key)
+				require.NoError(t, err)
+				if tc.warning {
+					require.NoError(t, db.QueryRowContext(ctx, "show warnings").Scan(&indexedLevel, &indexedCode, &indexedMessage))
+					require.Equal(t, "Warning", indexedLevel)
+					require.Equal(t, uint16(1292), indexedCode)
+					require.Contains(t, indexedMessage, "Truncated incorrect DOUBLE value")
+				}
+				require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+				want := int64(0)
+				if tc.matched {
+					want = 16
+				}
+				require.Equal(t, want, status)
+			})
+		}
 
-		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
-		nonNumericIndexedStmt, err := db.PrepareContext(ctx,
-			"update `"+dbName+"`.predicate_dst set status = 17 where id = ?")
-		require.NoError(t, err)
-		defer func() {
-			require.NoError(t, nonNumericIndexedStmt.Close())
-		}()
-		_, err = nonNumericIndexedStmt.ExecContext(ctx, "foo")
-		require.NoError(t, err)
-		require.NoError(t, db.QueryRowContext(ctx, "show warnings").Scan(&indexedLevel, &indexedCode, &indexedMessage))
-		require.Equal(t, "Warning", indexedLevel)
-		require.Equal(t, uint16(1292), indexedCode)
-		require.NoError(t, db.QueryRowContext(ctx,
-			"select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
-		require.Equal(t, int64(0), status)
-		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
-		_, err = indexedTextPredicateStmt.ExecContext(ctx, "0.9")
-		require.NoError(t, err)
-		require.NoError(t, db.QueryRowContext(ctx,
-			"select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
-		require.Equal(t, int64(0), status)
-
-		// NULL keeps SQL NULL comparison semantics and must not fall back to the
-		// prepare-time strict integer cast. The row remains untouched.
-		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
-		_, err = nonNumericIndexedStmt.ExecContext(ctx, nil)
-		require.NoError(t, err)
-		require.NoError(t, db.QueryRowContext(ctx,
-			"select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
-		require.Equal(t, int64(0), status)
-
-		// Range-overflow text values use the common DOUBLE domain and must be a
-		// no-match, not an invalid integer-cast error.
-		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
-		overflowIndexedStmt, err := db.PrepareContext(ctx,
-			"update `"+dbName+"`.predicate_dst set status = 18 where id = ?")
-		require.NoError(t, err)
-		defer func() { require.NoError(t, overflowIndexedStmt.Close()) }()
-		_, err = overflowIndexedStmt.ExecContext(ctx, "1e309")
-		require.NoError(t, err)
-		require.NoError(t, db.QueryRowContext(ctx,
-			"select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
-		require.Equal(t, int64(0), status)
-		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
-		_, err = overflowIndexedStmt.ExecContext(ctx, "2147483648")
-		require.NoError(t, err)
-		require.NoError(t, db.QueryRowContext(ctx,
-			"select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
-		require.Equal(t, int64(0), status)
-
-		// Text values above DOUBLE's exact-integer range must keep the filter in
-		// the common DOUBLE domain. Narrowing the converted value back to BIGINT
-		// would silently select only 9007199254740992 instead of both adjacent
-		// values, which compare equal after MySQL's string/numeric conversion.
+		// Complete signed integer text retains its exact identity beyond 2^53.
+		// The neighboring key must remain untouched by prepared DML.
 		execSQLRequire(t, ctx, db, "create table `"+dbName+"`.bigint_precision (id bigint primary key, status int)")
 		execSQLRequire(t, ctx, db, "insert into `"+dbName+"`.bigint_precision values (9007199254740992, 0), (9007199254740993, 0)")
 		bigintPrecisionStmt, err := db.PrepareContext(ctx,
@@ -338,7 +312,11 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		var matched int64
 		require.NoError(t, db.QueryRowContext(ctx,
 			"select count(*) from `"+dbName+"`.bigint_precision where status = 24").Scan(&matched))
-		require.Equal(t, int64(2), matched)
+		require.Equal(t, int64(1), matched)
+		var identities string
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select group_concat(concat(id, ':', status) order by id) from `"+dbName+"`.bigint_precision").Scan(&identities))
+		require.Equal(t, "9007199254740992:0,9007199254740993:24", identities)
 
 		// A fractional text prefix can round to an integral DOUBLE at the edge
 		// of DOUBLE's exact-integer range. It must stay in the common DOUBLE
@@ -350,6 +328,9 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		require.NoError(t, db.QueryRowContext(ctx,
 			"select count(*) from `"+dbName+"`.bigint_precision where status = 24").Scan(&matched))
 		require.Equal(t, int64(2), matched)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select group_concat(id order by id) from `"+dbName+"`.bigint_precision where status = 24").Scan(&identities))
+		require.Equal(t, "9007199254740992,9007199254740993", identities)
 
 		// DECIMAL/text comparison has the same common DOUBLE domain. Casting the
 		// text through DOUBLE and then back to DECIMAL changes this value to
@@ -413,6 +394,9 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		// the same prefix, missing-prefix, NULL, and range-overflow matrix.
 		execSQLRequire(t, ctx, db, "create table `"+dbName+"`.heap_predicate (id int, status int)")
 		execSQLRequire(t, ctx, db, "insert into `"+dbName+"`.heap_predicate values (1, 0), (2, 0)")
+		heapStmt, err := db.PrepareContext(ctx, "update `"+dbName+"`.heap_predicate set status=? where id=?")
+		require.NoError(t, err)
+		defer func() { require.NoError(t, heapStmt.Close()) }()
 		for _, test := range []struct {
 			name        string
 			value       any
@@ -426,11 +410,7 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 			{name: "range overflow", value: "1e309", status: 22, wantStatus: 0},
 		} {
 			t.Run("heap "+test.name, func(t *testing.T) {
-				stmt, err := db.PrepareContext(ctx,
-					fmt.Sprintf("update `%s`.heap_predicate set status = %d where id = ?", dbName, test.status))
-				require.NoError(t, err)
-				defer func() { require.NoError(t, stmt.Close()) }()
-				_, err = stmt.ExecContext(ctx, test.value)
+				_, err := heapStmt.ExecContext(ctx, test.status, test.value)
 				require.NoError(t, err)
 				if test.wantWarning {
 					var level, message string

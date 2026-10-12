@@ -217,121 +217,142 @@ func runPickByKeyValues(t *testing.T, parentCtx context.Context, db *sql.DB) {
 }
 
 // runPickConflictMatrix covers four conflict shapes against all three policies.
-// The cases share only their immutable LCA table; every source/destination pair
-// has unique names, so the matrix keeps independent state without paying for 12
-// database create/drop lifecycles.
+// The shapes use different keys in one common fixture. Each policy has its own
+// sibling destination, so the matrix keeps policy histories independent while
+// sharing the branch construction required by every shape.
 func runPickConflictMatrix(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	t.Helper()
 	// The parent already provides the suite's 360-second hang guard. Reuse it
-	// for the whole matrix rather than giving 12 cases a tighter aggregate
-	// deadline than they had as independent tests on slower CI runners.
+	// for the whole matrix rather than giving the 12 cases a tighter aggregate
+	// deadline than they had on slower CI runners.
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
 	execSQLDB(t, ctx, db, "create table conflict_base (a int primary key, b int)")
-	execSQLDB(t, ctx, db, "insert into conflict_base values (1,10),(2,20)")
+	execSQLDB(t, ctx, db, "insert into conflict_base values (1,10),(2,20),(4,40),(5,50)")
 
 	type conflictShape struct {
-		name        string
-		key         int
-		srcMutation string
-		dstMutation string
-		verify      func(*testing.T, context.Context, *sql.DB, string, string)
+		name string
+		key  int
 	}
 
 	shapes := []conflictShape{
-		{
-			name:        "insert_insert",
-			key:         3,
-			srcMutation: "insert into %s values (3,300)",
-			dstMutation: "insert into %s values (3,999)",
-			verify: func(t *testing.T, ctx context.Context, db *sql.DB, dst, policy string) {
-				expected := 999
-				if policy == "accept" {
-					expected = 300
+		{name: "insert_insert", key: 3},
+		{name: "update_update", key: 1},
+		{name: "update_delete", key: 4},
+		{name: "delete_update", key: 5},
+	}
+
+	// Create every branch from the same unmodified ancestor. In particular, do
+	// not clone destinations from src: doing so would turn insert/insert into an
+	// update conflict and would lose the LCA relationship being tested.
+	execSQLDB(t, ctx, db, "data branch create table conflict_src from conflict_base")
+	execSQLDB(t, ctx, db, "data branch create table conflict_dst_skip from conflict_base")
+	execSQLDB(t, ctx, db, "data branch create table conflict_dst_accept from conflict_base")
+	execSQLDB(t, ctx, db, "data branch create table conflict_dst_fail from conflict_base")
+
+	// The source carries one representative of each conflict shape. The
+	// destinations carry the opposing side of each conflict, plus the same
+	// untouched key 2 sentinel.
+	execSQLDB(t, ctx, db, "insert into conflict_src values (3,300)")
+	execSQLDB(t, ctx, db, "update conflict_src set b=111 where a=1")
+	execSQLDB(t, ctx, db, "update conflict_src set b=444 where a=4")
+	execSQLDB(t, ctx, db, "delete from conflict_src where a=5")
+
+	for _, dst := range []string{"conflict_dst_skip", "conflict_dst_accept", "conflict_dst_fail"} {
+		execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s values (3,999)", dst))
+		execSQLDB(t, ctx, db, fmt.Sprintf("update %s set b=999 where a=1", dst))
+		execSQLDB(t, ctx, db, fmt.Sprintf("delete from %s where a=4", dst))
+		execSQLDB(t, ctx, db, fmt.Sprintf("update %s set b=999 where a=5", dst))
+	}
+
+	sourceRows := queryStringRows(t, ctx, db, "select * from conflict_src order by a")
+	expectedSourceRows := [][]string{
+		{"1", "111"},
+		{"2", "20"},
+		{"3", "300"},
+		{"4", "444"},
+	}
+	require.Equal(t, expectedSourceRows, sourceRows, "source fixture must contain all four conflict shapes")
+	initialDestinationRows := [][]string{
+		{"1", "999"},
+		{"2", "20"},
+		{"3", "999"},
+		{"5", "999"},
+	}
+	cloneRows := func(rows [][]string) [][]string {
+		cloned := make([][]string, len(rows))
+		for i, row := range rows {
+			cloned[i] = append([]string(nil), row...)
+		}
+		return cloned
+	}
+	applyAcceptedShape := func(rows [][]string, shape string) [][]string {
+		accepted := cloneRows(rows)
+		switch shape {
+		case "insert_insert":
+			for _, row := range accepted {
+				if row[0] == "3" {
+					row[1] = "300"
 				}
-				var b int
-				require.NoError(t, db.QueryRowContext(ctx,
-					fmt.Sprintf("select b from %s where a=3", dst)).Scan(&b))
-				require.Equal(t, expected, b)
-			},
-		},
-		{
-			name:        "update_update",
-			key:         1,
-			srcMutation: "update %s set b=111 where a=1",
-			dstMutation: "update %s set b=999 where a=1",
-			verify: func(t *testing.T, ctx context.Context, db *sql.DB, dst, policy string) {
-				expected := 999
-				if policy == "accept" {
-					expected = 111
+			}
+		case "update_update":
+			for _, row := range accepted {
+				if row[0] == "1" {
+					row[1] = "111"
 				}
-				var b int
-				require.NoError(t, db.QueryRowContext(ctx,
-					fmt.Sprintf("select b from %s where a=1", dst)).Scan(&b))
-				require.Equal(t, expected, b)
-			},
-		},
-		{
-			name:        "update_delete",
-			key:         1,
-			srcMutation: "update %s set b=111 where a=1",
-			dstMutation: "delete from %s where a=1",
-			verify: func(t *testing.T, ctx context.Context, db *sql.DB, dst, policy string) {
-				if policy == "accept" {
-					require.Equal(t, 1, queryRowCount(t, ctx, db,
-						fmt.Sprintf("select count(*) from %s where a=1 and b=111", dst)))
-					return
+			}
+		case "update_delete":
+			accepted = append(accepted, []string{"4", "444"})
+		case "delete_update":
+			filtered := accepted[:0]
+			for _, row := range accepted {
+				if row[0] != "5" {
+					filtered = append(filtered, row)
 				}
-				require.Equal(t, 0, queryRowCount(t, ctx, db,
-					fmt.Sprintf("select count(*) from %s where a=1", dst)))
-			},
-		},
-		{
-			name:        "delete_update",
-			key:         1,
-			srcMutation: "delete from %s where a=1",
-			dstMutation: "update %s set b=999 where a=1",
-			verify: func(t *testing.T, ctx context.Context, db *sql.DB, dst, policy string) {
-				if policy == "accept" {
-					require.Equal(t, 0, queryRowCount(t, ctx, db,
-						fmt.Sprintf("select count(*) from %s where a=1", dst)))
-					return
-				}
-				require.Equal(t, 1, queryRowCount(t, ctx, db,
-					fmt.Sprintf("select count(*) from %s where a=1 and b=999", dst)))
-			},
-		},
+			}
+			accepted = filtered
+		}
+		sort.Slice(accepted, func(i, j int) bool { return accepted[i][0] < accepted[j][0] })
+		return accepted
+	}
+	acceptedRows := cloneRows(initialDestinationRows)
+	for _, dst := range []string{"conflict_dst_skip", "conflict_dst_accept", "conflict_dst_fail"} {
+		require.Equal(t, initialDestinationRows,
+			queryStringRows(t, ctx, db, "select * from "+dst+" order by a"),
+			"all policy destinations must start from the same conflict fixture")
 	}
 
 	for _, shape := range shapes {
 		t.Run(shape.name, func(t *testing.T) {
-			// PICK reads the source without mutating it. Share that immutable
-			// branch across policies, while each policy gets a fresh destination
-			// with the same common ancestor and conflict state.
-			src := fmt.Sprintf("src_%s", shape.name)
-			execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table %s from conflict_base", src))
-			execSQLDB(t, ctx, db, fmt.Sprintf(shape.srcMutation, src))
-			sourceRows := queryStringRows(t, ctx, db, "select * from "+src+" order by a")
 			for _, policy := range []string{"skip", "accept", "fail"} {
 				t.Run(policy, func(t *testing.T) {
-					dst := fmt.Sprintf("dst_%s_%s", shape.name, policy)
-					execSQLDB(t, ctx, db, fmt.Sprintf(
-						"data branch create table %s from conflict_base", dst))
-					execSQLDB(t, ctx, db, fmt.Sprintf(shape.dstMutation, dst))
+					dst := "conflict_dst_" + policy
 
 					stmt := fmt.Sprintf(
 						"data branch pick %s into %s keys(%d) when conflict %s",
-						src, dst, shape.key, policy)
+						"conflict_src", dst, shape.key, policy)
 					if policy == "fail" {
 						errMsg := execExpectError(t, ctx, db, stmt)
 						require.Contains(t, strings.ToLower(errMsg), "conflict")
-					} else {
+						require.Equal(t, initialDestinationRows,
+							queryStringRows(t, ctx, db, "select * from "+dst+" order by a"),
+							"fail must leave the full destination unchanged")
+					} else if policy == "skip" {
 						execSQLDB(t, ctx, db, stmt)
+						require.Equal(t, initialDestinationRows,
+							queryStringRows(t, ctx, db, "select * from "+dst+" order by a"),
+							"skip must retain the destination version")
+					} else {
+						expectedRows := applyAcceptedShape(acceptedRows, shape.name)
+						execSQLDB(t, ctx, db, stmt)
+						require.Equal(t, expectedRows,
+							queryStringRows(t, ctx, db, "select * from "+dst+" order by a"),
+							"accept must apply the source version while retaining accepted changes")
+						acceptedRows = expectedRows
 					}
-					shape.verify(t, ctx, db, dst, policy)
 					require.Equal(t, sourceRows, queryStringRows(t, ctx, db,
-						"select * from "+src+" order by a"), "PICK must leave the source unchanged")
+						"select * from conflict_src order by a"), "PICK must leave the source unchanged")
 				})
 			}
 		})

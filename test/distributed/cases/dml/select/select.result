@@ -204,7 +204,7 @@ create table t4(c1 int, c2 int);
 insert into t4 values (-3, 2);
 insert into t4 values (1, 2);
 select c1, -c2 from t4 order by -c1 desc;
-➤ c1[4,32,0]  ¦  -c2[4,32,0]  𝄀
+➤ c1[4,32,0]  ¦  -c2[-5,64,0]  𝄀
 -3  ¦  -2  𝄀
 1  ¦  -2
 drop table if exists t5;
@@ -380,7 +380,7 @@ select * from t1;
 ➤ a[4,32,0]
 show columns from t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  auto_increment  ¦  
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦  auto_increment  ¦  
 drop table if exists t1;
 create table if not exists t1(a bigint auto_increment);
 select * from t1;

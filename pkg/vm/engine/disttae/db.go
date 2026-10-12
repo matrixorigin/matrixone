@@ -687,6 +687,9 @@ func parseSnapshotCheckpointEntries(
 			"", start, end, checkpoint.EntryType(entry.EntryType),
 		)
 		checkpointEntry.SetLocation(entry.Location1, entry.Location2)
+		if entry.Version != 0 {
+			checkpointEntry.SetVersion(entry.Version)
+		}
 		checkpointEntries = append(checkpointEntries, checkpointEntry)
 		if start.LT(&minTS) {
 			minTS = start
@@ -704,7 +707,9 @@ func parseSnapshotCheckpointEntries(
 
 // requestSnapshotReadUntilReady distinguishes a temporarily lagging checkpoint
 // from a checkpoint set that cannot cover the requested snapshot. TN reports
-// the former as Succeed=false, so retry it with a bounded, context-aware wait.
+// the former as Succeed=false, so retry it with a context-aware wait. A caller
+// deadline is the operation's authoritative budget; the fallback timeout only
+// protects callers that did not provide one.
 // Once TN reports success, getOrCreateSnapPartBy still validates the returned
 // checkpoint range before using it.
 func requestSnapshotReadUntilReady(
@@ -712,19 +717,25 @@ func requestSnapshotReadUntilReady(
 	tbl *txnTable,
 	snapshot *types.TS,
 	retryInterval time.Duration,
-	retryTimeout time.Duration,
+	fallbackRetryTimeout time.Duration,
 ) (*cmd_util.SnapshotReadResp, error) {
-	retryCtx, cancel := context.WithTimeoutCause(
-		ctx,
-		retryTimeout,
-		moerr.NewServiceUnavailableNoCtx("checkpoint not ready for snapshot read"),
-	)
+	retryCtx := ctx
+	cancel := func() {}
+	if _, hasCallerDeadline := ctx.Deadline(); !hasCallerDeadline {
+		retryCtx, cancel = context.WithTimeoutCause(
+			ctx,
+			fallbackRetryTimeout,
+			moerr.NewServiceUnavailableNoCtx("checkpoint not ready for snapshot read"),
+		)
+	}
 	defer cancel()
 
 	var resp *cmd_util.SnapshotReadResp
 	err := common.RetryWithInterval(
 		retryCtx,
 		func() (bool, error) {
+			// TxnOperator.Debug requires a deadline. retryCtx preserves the caller's
+			// deadline when present and supplies the bounded fallback otherwise.
 			response, err := RequestSnapshotRead(retryCtx, tbl, snapshot)
 			if err != nil {
 				if retryCtx.Err() != nil {
@@ -827,7 +838,7 @@ func (e *Engine) getOrCreateSnapPartBy(
 	err = snap.ConsumeSnapCkps(ctx, ckps, func(
 		checkpoint *checkpoint.CheckpointEntry,
 		state *logtailreplay.PartitionState) error {
-		locs := make([]string, 0)
+		locs := make([]string, 0, 2)
 		locs = append(locs, checkpoint.GetLocation().String())
 		locs = append(locs, strconv.Itoa(int(checkpoint.GetVersion())))
 		locations := strings.Join(locs, ";")
@@ -908,8 +919,21 @@ func (e *Engine) LazyLoadLatestCkp(
 	dbName string) (*logtailreplay.Partition, error) {
 
 	part := e.GetOrCreateLatestPart(ctx, accId, dbID, tableID)
+	if err := e.consumeLatestCkp(ctx, part, tableID, tableName, dbID, dbName); err != nil {
+		return nil, err
+	}
+	return part, nil
+}
 
-	if err := part.ConsumeCheckpoints(
+func (e *Engine) consumeLatestCkp(
+	ctx context.Context,
+	part *logtailreplay.Partition,
+	tableID uint64,
+	tableName string,
+	dbID uint64,
+	dbName string,
+) error {
+	return part.ConsumeCheckpoints(
 		ctx,
 		func(checkpoint string, state *logtailreplay.PartitionState) error {
 			err := logtail.ConsumeCheckpointEntries(
@@ -928,9 +952,5 @@ func (e *Engine) LazyLoadLatestCkp(
 			}
 			return nil
 		},
-	); err != nil {
-		return nil, err
-	}
-
-	return part, nil
+	)
 }

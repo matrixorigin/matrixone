@@ -420,10 +420,9 @@ func TestCCPRTxnCacheCommitMarkerCleanupDoesNotBlock(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("marker deletion did not start")
 	}
+	cache.Close()
+	require.False(t, cache.markerCleanupRunning.Load())
 	release()
-	require.Eventually(t, func() bool {
-		return !cache.markerCleanupRunning.Load()
-	}, 5*time.Second, time.Millisecond)
 }
 
 func TestCCPRTxnCacheUnknownResultRetainsDurableOwner(t *testing.T) {
@@ -650,7 +649,6 @@ func TestCCPRTxnCache_OnTxnUnknownResultRemovesTrackingWithoutGC(t *testing.T) {
 	assert.True(t, objectExistsInFS(ctx, fs, objectName))
 
 	cache.OnTxnRollback(otherTxnID)
-	time.Sleep(50 * time.Millisecond)
 	assert.True(t, objectExistsInFS(ctx, fs, objectName))
 }
 
@@ -748,12 +746,10 @@ func TestCCPRTxnCache_Rollback_MultiTxn(t *testing.T) {
 
 	// Rollback txn1 → should NOT GC because txn2 still references it
 	cache.OnTxnRollback([]byte("txn1"))
-	time.Sleep(50 * time.Millisecond)
 	assert.True(t, objectExistsInFS(ctx, fs, "obj_multi"))
 
 	// Rollback txn2 → last txn, should GC
 	cache.OnTxnRollback([]byte("txn2"))
-	time.Sleep(100 * time.Millisecond)
 	assert.False(t, objectExistsInFS(ctx, fs, "obj_multi"))
 }
 

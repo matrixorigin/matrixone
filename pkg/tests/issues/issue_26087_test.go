@@ -378,7 +378,7 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				"data branch create table branch_quota_race.explicit_branch from branch_quota_race.src{snapshot='issue_26087_sp'}")
 			require.Error(t, explicitErr)
 			require.Contains(t, explicitErr.Error(),
-				"finite branch quota requires a pessimistic read committed transaction")
+				"lifecycle statements require an existing pessimistic transaction")
 			require.NoError(t, conn1.QueryRowContext(execCtx,
 				"select count(*) from branch_quota_race.mode_probe where a = 2",
 			).Scan(&fixedSnapshotProbe))
@@ -411,12 +411,14 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			).Scan(&modeProbeCount))
 			require.Zero(t, modeProbeCount)
 			require.NoError(t, execConn(conn2, "insert into branch_quota_race.mode_probe values (1)"))
-			require.NoError(t, execConn(conn1,
-				"data branch create table branch_quota_race.implicit_branch from branch_quota_race.src"))
+			implicitErr := execConn(conn1,
+				"data branch create table branch_quota_race.implicit_branch from branch_quota_race.src")
+			require.ErrorContains(t, implicitErr,
+				"lifecycle statements require an existing pessimistic transaction")
 			require.NoError(t, conn1.QueryRowContext(execCtx,
 				"select count(*) from branch_quota_race.mode_probe",
 			).Scan(&modeProbeCount))
-			require.Zero(t, modeProbeCount, "DATA BRANCH must not downgrade the outer SI transaction to RC")
+			require.Zero(t, modeProbeCount, "rejected DATA BRANCH must not advance the outer SI snapshot")
 			require.NoError(t, execConn(conn1, "rollback"))
 			require.NoError(t, execConn(conn1, "set autocommit = 1"))
 
@@ -425,7 +427,11 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname = 'explicit_branch'",
 			).Scan(&explicitBranchCount))
 			require.Zero(t, explicitBranchCount)
-			require.NoError(t, execConn(conn1, "data branch delete table branch_quota_race.implicit_branch"))
+			var implicitBranchCount int
+			require.NoError(t, conn1.QueryRowContext(execCtx,
+				"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname = 'implicit_branch'",
+			).Scan(&implicitBranchCount))
+			require.Zero(t, implicitBranchCount)
 
 			optimisticDB, err := sql.Open("mysql", fmt.Sprintf("%s#root#accountadmin:111@tcp(127.0.0.1:%d)/", accountName, port))
 			require.NoError(t, err)
@@ -487,6 +493,22 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname like 'optimistic\\_branch\\_%'",
 			).Scan(&optimisticBranchCount))
 			require.Equal(t, 1, optimisticBranchCount)
+
+			// The component protocol rejects a fixed-SI branch owner before
+			// quota, catalog, or source locks are taken.
+			rt.SetGlobalVariables(moruntime.TxnMode, pbtxn.TxnMode_Pessimistic)
+			require.NoError(t, execConn(conn1, "begin"))
+			quotaErr := execConn(conn1,
+				"data branch create table branch_quota_race.pessimistic_si_branch from branch_quota_race.src{snapshot='issue_26087_sp'}")
+			require.Error(t, quotaErr)
+			require.Contains(t, quotaErr.Error(),
+				"DATA BRANCH CREATE/DELETE requires pessimistic RC")
+			require.NoError(t, execConn(conn1, "rollback"))
+			var pessimisticSIBranchCount int
+			require.NoError(t, conn1.QueryRowContext(execCtx,
+				"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname = 'pessimistic_si_branch'",
+			).Scan(&pessimisticSIBranchCount))
+			require.Zero(t, pessimisticSIBranchCount)
 		})
 }
 

@@ -167,32 +167,40 @@ func TestTopPrepareSpillBoundary(t *testing.T) {
 }
 
 func TestTop(t *testing.T) {
-	for _, tc := range genTestCases(t) {
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		bats := []*batch.Batch{
-			newBatch(tc.types, tc.proc, Rows),
-			newBatch(tc.types, tc.proc, Rows),
-			batch.EmptyBatch,
+	expected := [][]int8{{0, 0, 1}, {9, 9, 8}, {9, 9, 8}}
+	for i, tc := range genTestCases(t) {
+		t.Cleanup(func() {
+			tc.arg.Free(tc.proc, false, nil)
+			require.Zero(t, tc.proc.Mp().CurrNB())
+		})
+		for range 2 {
+			func() {
+				bats := []*batch.Batch{
+					newBatch(tc.types, tc.proc, Rows),
+					newBatch(tc.types, tc.proc, Rows),
+					batch.EmptyBatch,
+				}
+				child := resetChildren(tc.arg, bats)
+				defer child.Free(tc.proc, false, nil)
+				defer tc.arg.Reset(tc.proc, false, nil)
+				require.NoError(t, tc.arg.Prepare(tc.proc))
+				result, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+				require.NotNil(t, result.Batch)
+				require.Equal(t, len(expected[i]), result.Batch.RowCount())
+				require.Len(t, result.Batch.Vecs, len(tc.types))
+				require.Equal(t, types.T_int8, result.Batch.Vecs[0].GetType().Oid)
+				require.Equal(t, expected[i], vector.MustFixedColWithTypeCheck[int8](result.Batch.Vecs[0]))
+				if len(tc.types) == 2 {
+					expectedSecond := make([]int64, len(expected[i]))
+					for j, value := range expected[i] {
+						expectedSecond[j] = int64(value)
+					}
+					require.Equal(t, types.T_int64, result.Batch.Vecs[1].GetType().Oid)
+					require.Equal(t, expectedSecond, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+				}
+			}()
 		}
-		resetChildren(tc.arg, bats)
-		_, _ = vm.Exec(tc.arg, tc.proc)
-		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.arg.Reset(tc.proc, false, nil)
-
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		bats = []*batch.Batch{
-			newBatch(tc.types, tc.proc, Rows),
-			newBatch(tc.types, tc.proc, Rows),
-			batch.EmptyBatch,
-		}
-		resetChildren(tc.arg, bats)
-		_, _ = vm.Exec(tc.arg, tc.proc)
-		tc.arg.Free(tc.proc, false, nil)
-		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.proc.Free()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
@@ -292,69 +300,70 @@ func TestTopOrdersFloatNaNLastAndUsesSecondaryKey(t *testing.T) {
 
 func TestTopSpill(t *testing.T) {
 	limit := int64(topSpillThreshold + 1000)
-	batchRows := 8192
-
-	tcs := []testCase{
-		newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType()}, limit,
-			[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-		newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType()}, limit,
-			[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: plan.OrderBySpec_DESC}}),
-		newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType(), types.T_int32.ToType()}, limit,
-			[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}, {Expr: newExpression(1), Flag: plan.OrderBySpec_DESC}}),
-	}
-
-	for _, tc := range tcs {
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		require.True(t, tc.arg.ctr.spilling)
-
-		inputBats := []*batch.Batch{
-			newBatch(tc.types, tc.proc, int64(batchRows)),
-			newBatch(tc.types, tc.proc, int64(batchRows)),
-			newBatch(tc.types, tc.proc, int64(batchRows)),
-			batch.EmptyBatch,
-		}
-		resetChildren(tc.arg, inputBats)
-
-		var totalRows int
-		for {
-			result, err := vm.Exec(tc.arg, tc.proc)
-			require.NoError(t, err)
-			if result.Batch == nil || result.Status == vm.ExecStop {
-				break
+	const batchRows = 8192
+	for _, config := range []struct {
+		name  string
+		types []types.Type
+		flags []plan.OrderBySpec_OrderByFlag
+		desc  bool
+	}{
+		{"ascending", []types.Type{types.T_int64.ToType()}, []plan.OrderBySpec_OrderByFlag{0}, false},
+		{"descending", []types.Type{types.T_int64.ToType()}, []plan.OrderBySpec_OrderByFlag{plan.OrderBySpec_DESC}, true},
+		{"multiple_keys", []types.Type{types.T_int64.ToType(), types.T_int32.ToType()}, []plan.OrderBySpec_OrderByFlag{0, plan.OrderBySpec_DESC}, false},
+	} {
+		t.Run(config.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { mpool.DeleteMPool(mp) })
+			specs := make([]*plan.OrderBySpec, len(config.flags))
+			for column, flag := range config.flags {
+				specs[column] = &plan.OrderBySpec{Expr: newExpression(int32(column)), Flag: flag}
 			}
-			totalRows += result.Batch.RowCount()
-		}
-		require.Equal(t, int(limit), totalRows)
-
-		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.arg.Reset(tc.proc, false, nil)
-
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		inputBats = []*batch.Batch{
-			newBatch(tc.types, tc.proc, int64(batchRows)),
-			newBatch(tc.types, tc.proc, int64(batchRows)),
-			newBatch(tc.types, tc.proc, int64(batchRows)),
-			batch.EmptyBatch,
-		}
-		resetChildren(tc.arg, inputBats)
-
-		totalRows = 0
-		for {
-			result, err := vm.Exec(tc.arg, tc.proc)
-			require.NoError(t, err)
-			if result.Batch == nil || result.Status == vm.ExecStop {
-				break
+			tc := newTestCase(t, mp, config.types, limit, specs)
+			t.Cleanup(func() {
+				tc.arg.Free(tc.proc, false, nil)
+				require.Zero(t, mp.CurrNB())
+			})
+			for range 2 {
+				func() {
+					input := []*batch.Batch{
+						newBatch(config.types, tc.proc, batchRows),
+						newBatch(config.types, tc.proc, batchRows),
+						newBatch(config.types, tc.proc, batchRows),
+						batch.EmptyBatch,
+					}
+					child := resetChildren(tc.arg, input)
+					defer child.Free(tc.proc, false, nil)
+					defer tc.arg.Reset(tc.proc, false, nil)
+					require.NoError(t, tc.arg.Prepare(tc.proc))
+					require.True(t, tc.arg.ctr.spilling)
+					totalRows := 0
+					for {
+						result, err := vm.Exec(tc.arg, tc.proc)
+						require.NoError(t, err)
+						if result.Batch == nil || result.Status == vm.ExecStop {
+							break
+						}
+						require.Len(t, result.Batch.Vecs, len(config.types))
+						require.Equal(t, types.T_int64, result.Batch.Vecs[0].GetType().Oid)
+						keys := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])
+						for row, key := range keys {
+							// Three identical 0..8191 inputs contribute three rows per key.
+							want := int64((totalRows + row) / 3)
+							if config.desc {
+								want = batchRows - 1 - want
+							}
+							require.Equal(t, want, key)
+							if len(config.types) == 2 {
+								require.Equal(t, types.T_int32, result.Batch.Vecs[1].GetType().Oid)
+								require.Equal(t, int32(want), vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[1])[row])
+							}
+						}
+						totalRows += result.Batch.RowCount()
+					}
+					require.Equal(t, int(limit), totalRows)
+				}()
 			}
-			totalRows += result.Batch.RowCount()
-		}
-		require.Equal(t, int(limit), totalRows)
-
-		tc.arg.Free(tc.proc, false, nil)
-		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.proc.Free()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		})
 	}
 }
 
@@ -455,7 +464,7 @@ func testTopSpillOutputUsesRowAndByteBounds(t *testing.T, limit int, orderedOutp
 
 func TestTopSpillPrepareParamMetadata(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	arg := &Top{
 		Limit: plan2.MakePlan2Uint64ConstExprWithType(topSpillThreshold + 1),
 		Fs: []*plan.OrderBySpec{{
@@ -577,7 +586,7 @@ func TestTopSpillWriteHonorsCancellationAfterInputBatch(t *testing.T) {
 }
 
 func TestTopSpillBatchCancellationBeforeWrite(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseCtx := proc.Ctx
 	arg := &Top{}
 	arg.ctr.n = 1
@@ -605,7 +614,7 @@ func TestTopSpillBatchCancellationBeforeWrite(t *testing.T) {
 }
 
 func TestTopSpillBatchRejectsShortWrite(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &Top{}
 	arg.ctr.n = 1
 	arg.ctr.spillWriter = shortTopSpillWriter{}
@@ -625,7 +634,7 @@ func TestTopSpillBatchRejectsShortWrite(t *testing.T) {
 }
 
 func TestTopSpillBatchCancellationAfterWrite(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseCtx := proc.Ctx
 	arg := &Top{}
 	arg.ctr.n = 1
@@ -662,7 +671,7 @@ func TestTopSpillEvalCancellationCheckpoints(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			arg := &Top{}
 			arg.ctr.n = 1
 			analyzer := process.NewAnalyzer(0, false, false, "top-cancel-eval")
@@ -804,25 +813,63 @@ func TestTopSpillMaxUint64LimitReturnsAllRows(t *testing.T) {
 }
 
 func BenchmarkTop(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		tcs := []testCase{
-			newTestCase(b, mpool.MustNewZero(), []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-			newTestCase(b, mpool.MustNewZero(), []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		}
-		for _, tc := range tcs {
-			err := tc.arg.Prepare(tc.proc)
-			require.NoError(b, err)
-
-			bats := []*batch.Batch{
-				newBatch(tc.types, tc.proc, BenchmarkRows),
-				newBatch(tc.types, tc.proc, BenchmarkRows),
-				batch.EmptyBatch,
-			}
-			resetChildren(tc.arg, bats)
-			_, _ = vm.Exec(tc.arg, tc.proc)
+	tcs := make([]testCase, 0, 2)
+	for _, flag := range []plan.OrderBySpec_OrderByFlag{0, 2} {
+		mp := mpool.MustNewZero()
+		b.Cleanup(func() { mpool.DeleteMPool(mp) })
+		tc := newTestCase(b, mp, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: flag}})
+		b.Cleanup(func() {
 			tc.arg.Free(tc.proc, false, nil)
-			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-			tc.proc.Free()
+			require.Zero(b, tc.proc.Mp().CurrNB())
+			require.Zero(b, tc.proc.Mp().OnHeapCurrNB())
+		})
+		tcs = append(tcs, tc)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for direction, tc := range tcs {
+			func() {
+				bats := []*batch.Batch{nil, nil, batch.EmptyBatch}
+				var child *colexec.MockOperator
+				defer func() {
+					tc.arg.Reset(tc.proc, false, nil)
+					if child == nil {
+						for _, bat := range bats {
+							if bat != nil && bat != batch.EmptyBatch {
+								bat.Clean(tc.proc.Mp())
+							}
+						}
+					} else {
+						child.Free(tc.proc, false, nil)
+					}
+					require.Zero(b, tc.proc.Mp().CurrNB())
+					// Reset retains the scalar uint64 LIMIT executor until Free.
+					require.Equal(b, int64(8), tc.proc.Mp().OnHeapCurrNB())
+				}()
+				bats[0] = newBatch(tc.types, tc.proc, BenchmarkRows)
+				bats[1] = newBatch(tc.types, tc.proc, BenchmarkRows)
+				child = resetChildren(tc.arg, bats)
+				require.NoError(b, tc.arg.Prepare(tc.proc))
+				var values []int8
+				stopped := false
+				for calls := 0; calls < 4; calls++ {
+					result, err := vm.Exec(tc.arg, tc.proc)
+					require.NoError(b, err)
+					if result.Batch != nil {
+						require.Len(b, result.Batch.Vecs, 1)
+						require.Equal(b, types.T_int8, result.Batch.Vecs[0].GetType().Oid)
+						require.Zero(b, result.Batch.Vecs[0].GetNulls().Count())
+						values = append(values, vector.MustFixedColNoTypeCheck[int8](result.Batch.Vecs[0])...)
+					}
+					if result.Status == vm.ExecStop {
+						stopped = true
+						break
+					}
+				}
+				require.True(b, stopped)
+				want := []int8{-128, 127}[direction]
+				require.Equal(b, []int8{want, want, want}, values)
+			}()
 		}
 	}
 }
@@ -834,13 +881,6 @@ func newTestCase(t testing.TB, m *mpool.MPool, ts []types.Type, limit int64, fs 
 		arg: &Top{
 			Fs:    fs,
 			Limit: plan2.MakePlan2Uint64ConstExprWithType(uint64(limit)),
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
 		},
 	}
 }
@@ -861,8 +901,9 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Top, bats []*batch.Batch) {
+func resetChildren(arg *Top, bats []*batch.Batch) *colexec.MockOperator {
 	op := colexec.NewMockOperator().WithBatchs(bats)
 	arg.Children = nil
 	arg.AppendChild(op)
+	return op
 }

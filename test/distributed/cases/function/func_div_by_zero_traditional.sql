@@ -1,0 +1,248 @@
+-- TRADITIONAL must enforce the same division errors as its strict components.
+-- Use a primary-keyed DECIMAL target to observe both NULL writes and atomicity.
+DROP DATABASE IF EXISTS div_zero_traditional;
+CREATE DATABASE div_zero_traditional;
+USE div_zero_traditional;
+CREATE TABLE t(id INT PRIMARY KEY, v DECIMAL(10,2));
+CREATE TABLE src(id INT PRIMARY KEY, n INT, d INT);
+INSERT INTO src VALUES (1,10,2),(2,10,0),(3,10,5);
+
+-- Mode: TRADITIONAL; SELECT is NULL, while each DML uses the current mode.
+SET SESSION sql_mode = 'TRADITIONAL';
+SELECT 10/0 AS v;
+INSERT INTO t VALUES(1,10/0);
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t VALUES(1,42);
+UPDATE t SET v=10/0;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/0)';
+EXECUTE p;
+DEALLOCATE PREPARE p;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src WHERE id=2;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+
+-- Mode: TRADITIONAL,ERROR_FOR_DIVISION_BY_ZERO; SELECT is NULL, while each DML uses the current mode.
+SET SESSION sql_mode = 'TRADITIONAL,ERROR_FOR_DIVISION_BY_ZERO';
+SELECT 10/0 AS v;
+INSERT INTO t VALUES(1,10/0);
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t VALUES(1,42);
+UPDATE t SET v=10/0;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/0)';
+EXECUTE p;
+DEALLOCATE PREPARE p;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src WHERE id=2;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+
+-- Mode: STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO; SELECT is NULL, while each DML uses the current mode.
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+SELECT 10/0 AS v;
+INSERT INTO t VALUES(1,10/0);
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t VALUES(1,42);
+UPDATE t SET v=10/0;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/0)';
+EXECUTE p;
+DEALLOCATE PREPARE p;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src WHERE id=2;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+
+-- Mode: STRICT_ALL_TABLES,ERROR_FOR_DIVISION_BY_ZERO; SELECT is NULL, while each DML uses the current mode.
+SET SESSION sql_mode = 'STRICT_ALL_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+SELECT 10/0 AS v;
+INSERT INTO t VALUES(1,10/0);
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t VALUES(1,42);
+UPDATE t SET v=10/0;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/0)';
+EXECUTE p;
+DEALLOCATE PREPARE p;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src WHERE id=2;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+
+-- Mode: STRICT_TRANS_TABLES; SELECT is NULL, while each DML uses the current mode.
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+SELECT 10/0 AS v;
+INSERT INTO t VALUES(1,10/0);
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t VALUES(1,42);
+UPDATE t SET v=10/0;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/0)';
+EXECUTE p;
+DEALLOCATE PREPARE p;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src WHERE id=2;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+
+-- Mode: ERROR_FOR_DIVISION_BY_ZERO; SELECT is NULL, while each DML uses the current mode.
+SET SESSION sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO';
+SELECT 10/0 AS v;
+INSERT INTO t VALUES(1,10/0);
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t VALUES(1,42);
+UPDATE t SET v=10/0;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/0)';
+EXECUTE p;
+DEALLOCATE PREPARE p;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src WHERE id=2;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+
+-- Mode: empty; SELECT is NULL, while each DML uses the current mode.
+SET SESSION sql_mode = '';
+SELECT 10/0 AS v;
+INSERT INTO t VALUES(1,10/0);
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t VALUES(1,42);
+UPDATE t SET v=10/0;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/0)';
+EXECUTE p;
+DEALLOCATE PREPARE p;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src WHERE id=2;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+DELETE FROM t;
+
+-- Scalar operators and numeric kernels all interpret TRADITIONAL identically.
+SET SESSION sql_mode = 'traditional';
+INSERT INTO t VALUES(1,10 DIV 0);
+INSERT INTO t VALUES(1,10 % 0);
+INSERT INTO t VALUES(1,MOD(10,0));
+INSERT INTO t VALUES(1,CAST(10 AS DECIMAL(10,2))/CAST(0 AS DECIMAL(10,2)));
+INSERT INTO t VALUES(1,CAST(10 AS DECIMAL(30,2))/CAST(0 AS DECIMAL(30,2)));
+INSERT INTO t VALUES(1,CAST(10 AS DOUBLE)/CAST(0 AS DOUBLE));
+SELECT COUNT(*) FROM t;
+SELECT 10 DIV 0 AS d,10 % 0 AS m,MOD(10,0) AS f;
+
+-- Vector arithmetic shares the same error policy as scalar expressions.
+INSERT INTO t SELECT id,n DIV d FROM src;
+INSERT INTO t SELECT id,n % d FROM src;
+INSERT INTO t SELECT id,CAST(n AS DECIMAL(10,2))/CAST(d AS DECIMAL(10,2)) FROM src;
+INSERT INTO t SELECT id,CAST(n AS DECIMAL(30,2))/CAST(d AS DECIMAL(30,2)) FROM src;
+SELECT COUNT(*) FROM t;
+
+-- Multi-row VALUES and UPDATE must retain no partial changes.
+INSERT INTO t VALUES(1,10/2),(2,10/0),(3,10/5);
+SELECT COUNT(*) FROM t;
+INSERT INTO t VALUES(1,41),(2,42),(3,43);
+UPDATE t SET v=10/(id-2);
+SELECT * FROM t ORDER BY id;
+DELETE FROM t;
+
+-- NULL operands, an empty source, and guarded zero divisors do not error.
+INSERT INTO t VALUES(1,NULL/0),(2,10/NULL),(3,NULL DIV 0),(4,NULL % 0);
+SELECT * FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src WHERE id < 0;
+SELECT COUNT(*) FROM t;
+INSERT INTO t SELECT id,n/d FROM src WHERE d <> 0;
+SELECT * FROM t ORDER BY id;
+DELETE FROM t;
+INSERT INTO t SELECT id,CASE WHEN d=0 THEN 99 ELSE n/d END FROM src;
+SELECT * FROM t ORDER BY id;
+DELETE FROM t;
+
+-- IGNORE suppresses the error for scalar and multi-row DML.
+INSERT IGNORE INTO t VALUES(1,10/0),(2,10 DIV 0),(3,10 % 0);
+SELECT * FROM t ORDER BY id;
+DELETE FROM t;
+INSERT IGNORE INTO t SELECT id,n/d FROM src;
+SELECT * FROM t ORDER BY id;
+DELETE FROM t;
+
+-- Prepared plans must pick up mode changes at EXECUTE, including parameters.
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/0)';
+SET SESSION sql_mode = 'TRADITIONAL';
+EXECUTE p;
+SELECT COUNT(*) FROM t;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+EXECUTE p;
+SELECT * FROM t ORDER BY id;
+DELETE FROM t;
+SET SESSION sql_mode = 'TRADITIONAL';
+EXECUTE p;
+SELECT COUNT(*) FROM t;
+DEALLOCATE PREPARE p;
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/?)';
+SET @d=0;
+EXECUTE p USING @d;
+SELECT COUNT(*) FROM t;
+SET @d=2;
+EXECUTE p USING @d;
+SELECT * FROM t ORDER BY id;
+DEALLOCATE PREPARE p;
+DELETE FROM t;
+
+-- A failed statement in a transaction must not erase earlier successful work.
+BEGIN;
+INSERT INTO t VALUES(9,99);
+INSERT INTO t SELECT id,n/d FROM src;
+SELECT * FROM t ORDER BY id;
+COMMIT;
+SELECT * FROM t ORDER BY id;
+-- A fresh connection observes only the successfully committed row.
+-- @session:id=1{
+SELECT * FROM div_zero_traditional.t ORDER BY id;
+-- @session}
+
+DROP DATABASE div_zero_traditional;
+SET SESSION sql_mode = DEFAULT;

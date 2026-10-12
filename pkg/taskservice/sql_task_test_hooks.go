@@ -14,7 +14,10 @@
 
 package taskservice
 
-import "sync/atomic"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 type sqlTaskRefreshHook struct {
 	refreshed func(serviceID string, taskIDs []uint64)
@@ -22,6 +25,7 @@ type sqlTaskRefreshHook struct {
 }
 
 var sqlTaskRefreshHookForTest atomic.Pointer[sqlTaskRefreshHook]
+var sqlTaskRefreshHookMu sync.Mutex
 
 // SetSQLTaskRefreshHookForTest observes successful scheduler reconciliation,
 // after removed cron jobs and their cron-managed callbacks have stopped. The
@@ -29,6 +33,7 @@ var sqlTaskRefreshHookForTest atomic.Pointer[sqlTaskRefreshHook]
 // callback receives an owned snapshot and must not block or call the scheduler.
 // Tests installing this process-wide observer must serialize its lifetime.
 func SetSQLTaskRefreshHookForTest(hook func(string, []uint64), catchUp func(string, uint64, bool)) func() {
+	sqlTaskRefreshHookMu.Lock()
 	previous := sqlTaskRefreshHookForTest.Load()
 	if hook == nil && catchUp == nil {
 		sqlTaskRefreshHookForTest.Store(nil)
@@ -36,7 +41,13 @@ func SetSQLTaskRefreshHookForTest(hook func(string, []uint64), catchUp func(stri
 		value := sqlTaskRefreshHook{refreshed: hook, catchUp: catchUp}
 		sqlTaskRefreshHookForTest.Store(&value)
 	}
-	return func() { sqlTaskRefreshHookForTest.Store(previous) }
+	var restoreOnce sync.Once
+	return func() {
+		restoreOnce.Do(func() {
+			sqlTaskRefreshHookForTest.Store(previous)
+			sqlTaskRefreshHookMu.Unlock()
+		})
+	}
 }
 
 func notifySQLTaskRefreshForTest(s *taskService) {

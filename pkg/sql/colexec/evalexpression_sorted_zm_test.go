@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -60,11 +61,15 @@ func zmInExpr(fnName string, data []byte, rows int) *plan.Expr {
 
 func zmTypedInExpr(fnName string, data []byte, rows int, typ types.Type) *plan.Expr {
 	colTyp := plan.Type{Id: int32(typ.Oid), Width: typ.Width, Scale: typ.Scale}
+	resolved, err := function.GetFunctionByName(context.Background(), fnName, []types.Type{typ, typ})
+	if err != nil {
+		panic(err)
+	}
 	return &plan.Expr{
 		Typ:   plan.Type{Id: int32(types.T_bool)},
 		AuxId: 0,
 		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{ObjName: fnName},
+			Func: &plan.ObjectRef{Obj: resolved.GetEncodedOverloadID(), ObjName: fnName},
 			Args: []*plan.Expr{
 				{Typ: colTyp, AuxId: 1, Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{Name: "k", ColPos: 0}}},
@@ -196,7 +201,7 @@ func TestZoneMapInVectorKeepsNullableInPruning(t *testing.T) {
 	require.True(t, ok, "nullable IN uses a linear scan and must still prune")
 
 	_, ok = zoneMapInVector(data, true)
-	require.False(t, ok, "prefix_in binary-searches and must refuse this order")
+	require.True(t, ok, "prefix_in scans linearly and does not require order")
 }
 
 // The evaluator runs once per object and again per block, and frees its vector
@@ -235,14 +240,17 @@ func TestZoneMapInVectorDecodesSortedPayloadZeroCopy(t *testing.T) {
 		"sorted payload was copied instead of decoded in place")
 }
 
-// An unsorted payload cannot be searched soundly, and normalizing it here would
-// cost a copy and a sort for every block. It must fail open instead.
+// AnyIn still requires ordered payloads, while PrefixIn's linear membership scan
+// can use the same payload without normalization.
 func TestZoneMapInVectorFailsOpenForUnsortedPayload(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	_, ok := zoneMapInVector(zmVarcharPayload(t, mp, "c", "a"), true)
-	require.False(t, ok, "unsorted payload must not be used for pruning")
+	unsorted := zmVarcharPayload(t, mp, "c", "a")
+	_, ok := zoneMapInVector(unsorted, false)
+	require.False(t, ok, "unsorted IN payload must not be used for pruning")
+	_, ok = zoneMapInVector(unsorted, true)
+	require.True(t, ok, "prefix_in membership is order-independent")
 
 	// Sorted but unflagged still prunes: the O(n) check confirms the order.
 	unflagged := vector.NewVec(types.T_varchar.ToType())
@@ -389,19 +397,23 @@ func TestZoneMapInVectorAcceptsConstPayload(t *testing.T) {
 	data, err := vec.MarshalBinary()
 	require.NoError(t, err)
 
-	for _, prefixSearch := range []bool{false, true} {
-		got, ok := zoneMapInVector(data, prefixSearch)
-		require.True(t, ok, "const payload is usable (prefixSearch=%v)", prefixSearch)
-		require.True(t, got.IsConst())
-	}
+	got, ok := zoneMapInVector(data, false)
+	require.True(t, ok)
+	require.True(t, got.IsConst())
+	_, ok = zoneMapInVector(data, true)
+	require.False(t, ok, "const class does not make a fixed-width vector a prefix carrier")
+	str, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("key"), 5, mp)
+	require.NoError(t, err)
+	defer str.Free(mp)
+	strData, err := str.MarshalBinary()
+	require.NoError(t, err)
+	got, ok = zoneMapInVector(strData, true)
+	require.True(t, ok)
+	require.True(t, got.IsConst())
 }
 
-// PrefixIn's sort.Search predicate is non-monotonic when one needle is a proper
-// byte-prefix of another, and sorting does not fix it: ascending ["a","ab"] against
-// a zone map ["az","c"] reads [true,false], so the search runs off the end and
-// answers false even though "az" starts with "a". The flag cannot be trusted here
-// either -- InplaceSortAndCompact sets it on exactly this payload -- so the block
-// must be kept whether or not the payload arrives flagged.
+// Proper-prefix needles remain usable for pruning: PrefixIn itself handles the
+// non-monotonic comparison relation instead of forcing the caller to fail open.
 func TestEvaluateFilterByZoneMapKeepsBlockForPrefixNeedleOfAnother(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -424,6 +436,9 @@ func TestEvaluateFilterByZoneMapKeepsBlockForPrefixNeedleOfAnother(t *testing.T)
 			}
 			data, err := vec.MarshalBinary()
 			require.NoError(t, err)
+			decoded, ok := zoneMapInVector(data, true)
+			require.True(t, ok, "proper-prefix payload must remain usable")
+			require.True(t, zm.PrefixIn(decoded), "PrefixIn must find the shorter matching needle")
 
 			dataMeta := objectio.BuildMetaData(1, 1)
 			meta := dataMeta.GetBlockMeta(0)

@@ -89,9 +89,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	// }
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
-	// INSERT IGNORE (OnDuplicateUpdate == [nil]) downgrades over-length
-	// CHAR/VARCHAR writes to truncation instead of rejection.
-	builder.isInsertIgnore = len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
+	// INSERT IGNORE is a statement-level conversion policy and may coexist with
+	// an executable ODKU assignment list.
+	builder.isInsertIgnore = stmt.IsIgnore()
 	if stmt.IsRestore {
 		builder.isRestore = true
 		if stmt.IsRestoreByTs {
@@ -131,7 +131,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		} else if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); !ok {
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "insert into read-only external table %s", tblName)
 		}
-		if len(stmt.OnDuplicateUpdate) > 0 {
+		if len(stmt.GetOnDuplicateUpdate()) > 0 {
 			if isIcebergMapping {
 				return nil, moerr.NewNotSupported(ctx.GetContext(), "ON DUPLICATE KEY UPDATE on Iceberg table mapping")
 			}
@@ -730,7 +730,10 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 }
 
 func getRewriteToReplaceStmt(tableDef *TableDef, stmt *tree.Insert, info *dmlSelectInfo, isPrepareStmt bool) *tree.Replace {
-	if len(info.onDuplicateIdx) == 0 {
+	// INSERT IGNORE + ODKU has a distinct action policy and affected-row
+	// contract; it must not be collapsed into REPLACE even when every assignment
+	// is a VALUES(self) no-op.
+	if stmt.IsIgnore() || len(info.onDuplicateIdx) == 0 {
 		return nil
 	}
 	if _, ok := stmt.Rows.Select.(*tree.ValuesClause); !ok {

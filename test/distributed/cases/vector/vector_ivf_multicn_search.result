@@ -35,12 +35,36 @@ Project  𝄀
               Vector Index: idx_int_b, Metric: l2_distance, Candidate Limit: 4, NProbe: 4
 select group_concat(a order by a) as nearest_ids, count(*) as row_count, count(distinct a) as distinct_count
 from (select a from t_int order by l2_distance(b, '[0,0,0,0]') limit 4) s;
-➤ nearest_ids[12,0,0]  ¦  row_count[-5,64,0]  ¦  distinct_count[-5,64,0]  𝄀
+➤ nearest_ids[-1,16383,0]  ¦  row_count[-5,64,0]  ¦  distinct_count[-5,64,0]  𝄀
 1,2,3,4  ¦  4  ¦  4
 select group_concat(a order by a) as exact_ids, count(*) as row_count, count(distinct a) as distinct_count
 from (select a from t_int where a in (1,2,3,4,5,6) order by l2_distance(b, '[0,0,0,0]') limit 4) s;
-➤ exact_ids[12,0,0]  ¦  row_count[-5,64,0]  ¦  distinct_count[-5,64,0]  𝄀
+➤ exact_ids[-1,16383,0]  ¦  row_count[-5,64,0]  ¦  distinct_count[-5,64,0]  𝄀
 1,2,3,4  ¦  4  ¦  4
+create table t_cos(a bigint primary key, b vecf32(4));
+insert into t_cos values
+(1, '[1,0,0,0]'),(2, '[0.8,0.6,0,0]'),(3, '[0,1,0,0]'),(4, '[-1,0,0,0]');
+create index idx_cos_b using ivfflat on t_cos(b) lists=4 op_type 'vector_cosine_ops';
+select group_concat(a order by a) as cosine_ids, count(*) as row_count, count(distinct a) as distinct_count
+from (select a from t_cos order by cosine_distance(b, '[1,0,0,0]') limit 3) s;
+➤ cosine_ids[-1,16383,0]  ¦  row_count[-5,64,0]  ¦  distinct_count[-5,64,0]  𝄀
+1,2,3  ¦  3  ¦  3
+create table t_ip(a bigint primary key, b vecf32(4));
+insert into t_ip values
+(1, '[1,0,0,0]'),(2, '[0.8,0.6,0,0]'),(3, '[0,1,0,0]'),(4, '[-0.2,0,0,0]');
+create index idx_ip_b using ivfflat on t_ip(b) lists=4 op_type 'vector_ip_ops';
+select group_concat(a order by a) as ip_ids, count(*) as row_count, count(distinct a) as distinct_count
+from (select a from t_ip order by inner_product(b, normalize_l2('[1,0.1,0,0]')) asc limit 3) s;
+➤ ip_ids[-1,16383,0]  ¦  row_count[-5,64,0]  ¦  distinct_count[-5,64,0]  𝄀
+1,2,3  ¦  3  ¦  3
+select count(*) as empty_count
+from (select a from t_ip where a < 0 order by inner_product(b, normalize_l2('[1,0.1,0,0]')) asc limit 3) s;
+➤ empty_count[-5,64,0]  𝄀
+0
+select group_concat(a order by a) as ip_followup_ids, count(*) as row_count, count(distinct a) as distinct_count
+from (select a from t_ip order by inner_product(b, normalize_l2('[1,0.1,0,0]')) asc limit 2) s;
+➤ ip_followup_ids[-1,16383,0]  ¦  row_count[-5,64,0]  ¦  distinct_count[-5,64,0]  𝄀
+1,2  ¦  2  ¦  2
 create table t_str(a varchar(8) primary key, b vecf32(4));
 insert into t_str values
 ('p01', '[0,0,0,0]'),('p02', '[1,0,0,0]'),('p03', '[2,0,0,0]'),('p04', '[3,0,0,0]'),
@@ -50,7 +74,7 @@ insert into t_str values
 create index idx_str_b using ivfflat on t_str(b) lists=4 op_type 'vector_l2_ops';
 select group_concat(a order by a) as str_ids, count(*) as row_count, count(distinct a) as distinct_count
 from (select a from t_str order by l2_distance(b, '[0,0,0,0]') limit 4) s;
-➤ str_ids[12,0,0]  ¦  row_count[-5,64,0]  ¦  distinct_count[-5,64,0]  𝄀
+➤ str_ids[-1,16383,0]  ¦  row_count[-5,64,0]  ¦  distinct_count[-5,64,0]  𝄀
 p01,p02,p03,p04  ¦  4  ¦  4
 create table t_comp(a int, c varchar(8), b vecf32(4), primary key(a, c));
 insert into t_comp values
@@ -61,7 +85,7 @@ insert into t_comp values
 create index idx_comp_b using ivfflat on t_comp(b) lists=4 op_type 'vector_l2_ops';
 select group_concat(concat(a, ':', c) order by a) as comp_ids, count(*) as row_count, count(distinct concat(a, ':', c)) as distinct_count
 from (select a, c from t_comp order by l2_distance(b, '[0,0,0,0]') limit 4) s;
-➤ comp_ids[12,0,0]  ¦  row_count[-5,64,0]  ¦  distinct_count[-5,64,0]  𝄀
+➤ comp_ids[-1,16383,0]  ¦  row_count[-5,64,0]  ¦  distinct_count[-5,64,0]  𝄀
 1:c01,2:c02,3:c03,4:c04  ¦  4  ¦  4
 create table t_sparse(a bigint primary key, b vecf32(4));
 insert into t_sparse values
@@ -70,6 +94,6 @@ create index idx_sparse_b using ivfflat on t_sparse(b) lists=8 op_type 'vector_l
 set probe_limit = 8;
 select group_concat(a order by a) as sparse_ids, count(*) as row_count, count(distinct a) as distinct_count
 from (select a from t_sparse order by l2_distance(b, '[0,0,0,0]') limit 10) s;
-➤ sparse_ids[12,0,0]  ¦  row_count[-5,64,0]  ¦  distinct_count[-5,64,0]  𝄀
+➤ sparse_ids[-1,16383,0]  ¦  row_count[-5,64,0]  ¦  distinct_count[-5,64,0]  𝄀
 1,2,3  ¦  3  ¦  3
 drop database vector_ivf_multicn_search;

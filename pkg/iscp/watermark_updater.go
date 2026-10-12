@@ -74,6 +74,17 @@ var ExecWithResult = func(
 	return exec.Exec(ctx, sql, opts)
 }
 
+// runInCallerTxn executes fn exactly once. The caller owns the transaction and
+// its statement lifecycle, so retryable errors must escape to the caller, which
+// can roll back and replay the whole statement. Retrying only fn can reuse
+// writes left by the failed attempt in the transaction workspace.
+func runInCallerTxn(ctx context.Context, fn func() error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return fn()
+}
+
 // RegisterJob create jobs. return true if create, return false if task already exists, return error when error
 // JobID.DBName: required, the name of the database.
 // JobID.TableName: required, the name of the table.
@@ -106,16 +117,11 @@ func RegisterJob(
 	jobID *JobID,
 	startFromNow bool,
 ) (ok bool, err error) {
-	return ok, retry(
-		ctx,
-		func() error {
-			ok, err = registerJob(ctx, cnUUID, txn, jobSpec, jobID, startFromNow)
-			return err
-		},
-		DefaultRetryTimes,
-		DefaultRetryInterval,
-		DefaultRetryDuration,
-	)
+	err = runInCallerTxn(ctx, func() error {
+		ok, err = registerJob(ctx, cnUUID, txn, jobSpec, jobID, startFromNow)
+		return err
+	})
+	return
 }
 
 func UnregisterJobsByDBName(
@@ -124,16 +130,9 @@ func UnregisterJobsByDBName(
 	txn client.TxnOperator,
 	dbName string,
 ) (err error) {
-	return retry(
-		ctx,
-		func() error {
-			err = unregisterJobsByDBName(ctx, cnUUID, txn, dbName)
-			return err
-		},
-		DefaultRetryTimes,
-		DefaultRetryInterval,
-		DefaultRetryDuration,
-	)
+	return runInCallerTxn(ctx, func() error {
+		return unregisterJobsByDBName(ctx, cnUUID, txn, dbName)
+	})
 }
 
 func unregisterJobsByDBName(
@@ -320,16 +319,11 @@ func UnregisterJob(
 	txn client.TxnOperator,
 	jobID *JobID,
 ) (ok bool, err error) {
-	return ok, retry(
-		ctx,
-		func() error {
-			ok, err = unregisterJob(ctx, cnUUID, txn, jobID)
-			return err
-		},
-		DefaultRetryTimes,
-		DefaultRetryInterval,
-		DefaultRetryDuration,
-	)
+	err = runInCallerTxn(ctx, func() error {
+		ok, err = unregisterJob(ctx, cnUUID, txn, jobID)
+		return err
+	})
+	return
 }
 
 func LookupJobLog(
@@ -374,15 +368,9 @@ func RenameSrcTable(
 	dbID, tbID uint64,
 	oldTableName, newTableName string,
 ) (err error) {
-	return retry(
-		ctx,
-		func() error {
-			return renameSrcTable(ctx, cnUUID, txn, dbID, tbID, oldTableName, newTableName)
-		},
-		DefaultRetryTimes,
-		DefaultRetryInterval,
-		DefaultRetryDuration,
-	)
+	return runInCallerTxn(ctx, func() error {
+		return renameSrcTable(ctx, cnUUID, txn, dbID, tbID, oldTableName, newTableName)
+	})
 }
 
 func renameSrcTable(
@@ -474,15 +462,9 @@ func UpdateJobSpec(
 	jobID *JobID,
 	jobSpec *JobSpec,
 ) (err error) {
-	return retry(
-		ctx,
-		func() error {
-			return updateJobSpec(ctx, cnUUID, txn, jobID, jobSpec)
-		},
-		DefaultRetryTimes,
-		DefaultRetryInterval,
-		DefaultRetryDuration,
-	)
+	return runInCallerTxn(ctx, func() error {
+		return updateJobSpec(ctx, cnUUID, txn, jobID, jobSpec)
+	})
 }
 
 func updateJobSpec(

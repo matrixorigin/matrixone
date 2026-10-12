@@ -24,8 +24,8 @@ import (
 
 const maxPartitionTopN = uint64(1024)
 
-// PartitionTopN annotates the dedicated PARTITION child of a ROW_NUMBER
-// window when the post-window predicate proves a small, literal upper bound.
+// PartitionTopN annotates the dedicated PARTITION child of a ROW_NUMBER or
+// RANK window when the post-window predicate proves a small, literal upper bound.
 // Prepared plans deliberately skip this rule: their parameter values are not
 // part of the reusable logical contract.
 type PartitionTopN struct {
@@ -53,7 +53,7 @@ func (r *PartitionTopN) Apply(node *plan.Node, qry *plan.Query, _ *process.Proce
 		return
 	}
 	windowFunctionID, _ := function.DecodeOverloadID(window.WindowFunc.GetF().Func.Obj)
-	if windowFunctionID != function.ROW_NUMBER {
+	if windowFunctionID != function.ROW_NUMBER && windowFunctionID != function.RANK {
 		return
 	}
 	for _, expr := range window.PartitionBy {
@@ -92,6 +92,7 @@ func (r *PartitionTopN) Apply(node *plan.Node, qry *plan.Query, _ *process.Proce
 		spec.Expr = proto.Clone(spec.Expr).(*plan.Expr)
 	}
 	child.PartitionByCount = int32(len(window.PartitionBy))
+	child.PartitionTopNWithTies = windowFunctionID == function.RANK
 	for _, spec := range window.OrderBy {
 		child.OrderBy = append(child.OrderBy, proto.Clone(spec).(*plan.OrderBySpec))
 	}

@@ -1,0 +1,170 @@
+drop table if exists decimal256_sum_precision_src;
+create table decimal256_sum_precision_src (
+grp int,
+v decimal(65,0)
+);
+insert into decimal256_sum_precision_src values
+(1, cast('99999999999999999999999999999999999999999999999999999999999999999' as decimal(65,0))),
+(1, cast('1' as decimal(65,0))),
+(2, cast('99999999999999999999999999999999999999999999999999999999999999999' as decimal(65,0))),
+(2, cast('1' as decimal(65,0))),
+(2, cast('-1' as decimal(65,0))),
+(3, cast('-99999999999999999999999999999999999999999999999999999999999999999' as decimal(65,0))),
+(3, cast('-1' as decimal(65,0))),
+(4, cast('99999999999999999999999999999999999999999999999999999999999999999' as decimal(65,0))),
+(4, cast('1' as decimal(65,0))),
+(5, cast('99999999999999999999999999999999999999999999999999999999999999999' as decimal(65,0))),
+(5, cast('99999999999999999999999999999999999999999999999999999999999999999' as decimal(65,0))),
+(6, cast('1' as decimal(65,0))),
+(6, cast('2' as decimal(65,0))),
+(7, cast('-99999999999999999999999999999999999999999999999999999999999999999' as decimal(65,0))),
+(8, cast('-99999999999999999999999999999999999999999999999999999999999999999' as decimal(65,0))),
+(8, cast('-1' as decimal(65,0))),
+(8, cast('1' as decimal(65,0)));
+select sum(v) as total
+from decimal256_sum_precision_src
+where grp = 2;
+➤ total[3,65,0]  𝄀
+99999999999999999999999999999999999999999999999999999999999999999
+select sum(v) as total
+from decimal256_sum_precision_src
+where grp = 7;
+➤ total[3,65,0]  𝄀
+-99999999999999999999999999999999999999999999999999999999999999999
+select grp, sum(v) as total
+from decimal256_sum_precision_src
+where grp in (2, 6, 8)
+group by grp
+order by grp;
+➤ grp[4,32,0]  ¦  total[3,65,0]  𝄀
+2  ¦  99999999999999999999999999999999999999999999999999999999999999999  𝄀
+6  ¦  3  𝄀
+8  ¦  -99999999999999999999999999999999999999999999999999999999999999999
+select sum(distinct v) as total
+from decimal256_sum_precision_src
+where grp = 5;
+➤ total[3,65,0]  𝄀
+99999999999999999999999999999999999999999999999999999999999999999
+select sum(v) over (
+order by v
+rows between unbounded preceding and unbounded following
+) as total
+from decimal256_sum_precision_src
+where grp = 2;
+➤ total[3,65,0]  𝄀
+99999999999999999999999999999999999999999999999999999999999999999  𝄀
+99999999999999999999999999999999999999999999999999999999999999999  𝄀
+99999999999999999999999999999999999999999999999999999999999999999
+select sum(v) as total
+from decimal256_sum_precision_src
+where grp = 1;
+-- @regex("beyond the range", true)
+invalid input: 100000000000000000000000000000000000000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,0).
+select sum(v) as total
+from decimal256_sum_precision_src
+where grp = 3;
+-- @regex("beyond the range", true)
+invalid input: -100000000000000000000000000000000000000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,0).
+select sum(v) over (order by v desc rows unbounded preceding) as total
+from decimal256_sum_precision_src
+where grp = 1;
+-- @regex("beyond the range", true)
+invalid input: 100000000000000000000000000000000000000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,0).
+select sum(v) over (order by v asc rows unbounded preceding) as total
+from decimal256_sum_precision_src
+where grp = 3;
+-- @regex("beyond the range", true)
+invalid input: -100000000000000000000000000000000000000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,0).
+select grp, sum(distinct v) as total
+from decimal256_sum_precision_src
+where grp = 4
+group by grp;
+-- @regex("beyond the range", true)
+invalid input: 100000000000000000000000000000000000000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,0).
+select sum(distinct v) as total
+from decimal256_sum_precision_src
+where grp = 3;
+-- @regex("beyond the range", true)
+invalid input: -100000000000000000000000000000000000000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,0).
+drop table if exists decimal256_sum_precision_ctas;
+create table decimal256_sum_precision_ctas as
+select sum(v) as total
+from decimal256_sum_precision_src
+where grp = 1;
+-- @regex("beyond the range", true)
+invalid input: 100000000000000000000000000000000000000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,0).
+show tables like 'decimal256_sum_precision_ctas';
+➤ Tables_in_sum_decimal256_precision[12,5000,0]
+drop table if exists decimal256_sum_precision_ctas;
+drop table if exists decimal256_sum_precision_ctas_valid;
+create table decimal256_sum_precision_ctas_valid as
+select sum(v) as total
+from decimal256_sum_precision_src
+where grp = 2;
+show create table decimal256_sum_precision_ctas_valid;
+➤ Table[12,35,0]  ¦  Create Table[12,91,0]  𝄀
+decimal256_sum_precision_ctas_valid  ¦  CREATE TABLE `decimal256_sum_precision_ctas_valid` (
+  `total` decimal(65,0) DEFAULT NULL
+)
+select * from decimal256_sum_precision_ctas_valid;
+➤ total[3,65,0]  𝄀
+99999999999999999999999999999999999999999999999999999999999999999
+drop table decimal256_sum_precision_ctas_valid;
+drop table if exists decimal256_sum_precision_ctas_negative;
+create table decimal256_sum_precision_ctas_negative as
+select sum(v) as total
+from decimal256_sum_precision_src
+where grp = 3;
+-- @regex("beyond the range", true)
+invalid input: -100000000000000000000000000000000000000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,0).
+show tables like 'decimal256_sum_precision_ctas_negative';
+➤ Tables_in_sum_decimal256_precision[12,5000,0]
+drop table if exists decimal256_sum_precision_ctas_negative;
+drop table if exists decimal256_sum_precision_dst;
+create table decimal256_sum_precision_dst (
+id int,
+total decimal(65,0)
+);
+insert into decimal256_sum_precision_dst (id, total)
+select 1, sum(v)
+from decimal256_sum_precision_src
+where grp = 1;
+-- @regex("beyond the range", true)
+invalid input: 100000000000000000000000000000000000000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,0).
+select * from decimal256_sum_precision_dst order by id;
+➤ id[4,32,0]  ¦  total[3,65,0]
+insert into decimal256_sum_precision_dst (id, total)
+select 2, sum(v)
+from decimal256_sum_precision_src
+where grp = 2;
+select * from decimal256_sum_precision_dst order by id;
+➤ id[4,32,0]  ¦  total[3,65,0]  𝄀
+2  ¦  99999999999999999999999999999999999999999999999999999999999999999
+insert into decimal256_sum_precision_dst (id, total)
+select 3, sum(v)
+from decimal256_sum_precision_src
+where grp = 3;
+-- @regex("beyond the range", true)
+invalid input: -100000000000000000000000000000000000000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,0).
+select * from decimal256_sum_precision_dst order by id;
+➤ id[4,32,0]  ¦  total[3,65,0]  𝄀
+2  ¦  99999999999999999999999999999999999999999999999999999999999999999
+select sum(v) as total
+from decimal256_sum_precision_src
+where grp = 99;
+➤ total[3,65,0]  𝄀
+null
+drop table decimal256_sum_precision_dst;
+drop table decimal256_sum_precision_src;
+drop table if exists decimal256_sum_precision_scale_src;
+create table decimal256_sum_precision_scale_src (
+v decimal(65,30)
+);
+insert into decimal256_sum_precision_scale_src values
+(cast('9999999999999999999999999999999999999.999999999999999999999999999999' as decimal(65,30))),
+(cast('0.000000000000000000000000000001' as decimal(65,30)));
+select sum(v) as total
+from decimal256_sum_precision_scale_src;
+-- @regex("beyond the range", true)
+invalid input: 100000000000000000000000000000000000.000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,30).
+drop table decimal256_sum_precision_scale_src;

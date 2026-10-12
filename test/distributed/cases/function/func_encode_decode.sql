@@ -148,3 +148,19 @@ select serial_extract(max(serial_full(cast(id as decimal), `vecf64_3`)), 0 as de
 select serial_extract(min(serial_full(cast(id as decimal), `vecf64_3`)), 1 as vecf64(3)) from vtab64;
 drop table vtab64;
 drop table test_base, t1, t2;
+
+-- MySQL-compatible TO_BASE64 line wrapping, checked as exact bytes.
+SELECT HEX(TO_BASE64(REPEAT('a', 56))) = HEX(CONCAT(REPEAT('YWFh', 18), 'YWE=')) AS wrapped_56, HEX(TO_BASE64(REPEAT('a', 57))) = HEX(REPEAT('YWFh', 19)) AS wrapped_57, HEX(TO_BASE64(REPEAT('a', 58))) = HEX(CONCAT(REPEAT('YWFh', 19), CHAR(10), 'YQ==')) AS wrapped_58, HEX(TO_BASE64(REPEAT('a', 59))) = HEX(CONCAT(REPEAT('YWFh', 19), CHAR(10), 'YWE=')) AS wrapped_59, HEX(TO_BASE64(REPEAT('a', 60))) = HEX(CONCAT(REPEAT('YWFh', 19), CHAR(10), 'YWFh')) AS wrapped_60, HEX(TO_BASE64(REPEAT('a', 113))) = HEX(CONCAT(REPEAT('YWFh', 19), CHAR(10), REPEAT('YWFh', 18), 'YWE=')) AS wrapped_113, HEX(TO_BASE64(REPEAT('a', 114))) = HEX(CONCAT(REPEAT('YWFh', 19), CHAR(10), REPEAT('YWFh', 19))) AS wrapped_114, HEX(TO_BASE64(REPEAT('a', 115))) = HEX(CONCAT(REPEAT('YWFh', 19), CHAR(10), REPEAT('YWFh', 19), CHAR(10), 'YQ==')) AS wrapped_115;
+SELECT HEX(TO_BASE64(CONCAT(REPEAT('a', 57), REPEAT('b', 57)))) = HEX(CONCAT(REPEAT('YWFh', 19), CHAR(10), REPEAT('YmJi', 19))) AS wrapped_mixed;
+SELECT HEX(TO_BASE64(REPEAT('a', 1000))) = HEX(CONCAT(REPEAT(CONCAT(REPEAT('YWFh', 19), CHAR(10)), 17), REPEAT('YWFh', 10), 'YQ==')) AS wrapped_1000;
+
+DROP TABLE IF EXISTS base64_wrap_binary;
+CREATE TABLE base64_wrap_binary(id INT PRIMARY KEY, v VARBINARY(58));
+INSERT INTO base64_wrap_binary VALUES (1, CAST(REPEAT('a', 58) AS VARBINARY(58))), (2, UNHEX(REPEAT('00', 58)));
+SELECT id, HEX(TO_BASE64(v)) = CASE id WHEN 1 THEN HEX(CONCAT(REPEAT('YWFh', 19), CHAR(10), 'YQ==')) WHEN 2 THEN HEX(CONCAT(REPEAT('A', 76), CHAR(10), 'AA==')) END AS wrapped FROM base64_wrap_binary ORDER BY id;
+PREPARE base64_wrap_stmt FROM 'SELECT HEX(TO_BASE64(CAST(? AS VARBINARY(58)))) = HEX(CONCAT(REPEAT(''YWFh'', 19), CHAR(10), ''YQ=='')) AS wrapped';
+SET @base64_wrap_input=REPEAT('a',58);
+EXECUTE base64_wrap_stmt USING @base64_wrap_input;
+DEALLOCATE PREPARE base64_wrap_stmt;
+SET @base64_wrap_input=NULL;
+drop table base64_wrap_binary;

@@ -286,6 +286,7 @@ type ShowGrants struct {
 	Username      string
 	Hostname      string
 	Roles         []*Role
+	CurrentUser   bool
 	ShowGrantType ShowGrantType
 }
 
@@ -306,7 +307,9 @@ func (node *ShowGrants) Format(ctx *FmtCtx) {
 		}
 	} else {
 		ctx.WriteString("show grants")
-		if node.Username != "" {
+		if node.CurrentUser {
+			ctx.WriteString(" for current_user")
+		} else if node.Username != "" {
 			ctx.WriteString(" for ")
 			ctx.WriteString(node.Username)
 			if node.Hostname != "" {
@@ -421,10 +424,20 @@ func NewShowProcessList(f bool) *ShowProcessList {
 
 type ShowErrors struct {
 	showImpl
+	Count bool
+	Limit *Limit
 }
 
 func (node *ShowErrors) Format(ctx *FmtCtx) {
-	ctx.WriteString("show errors")
+	ctx.WriteString("show ")
+	if node.Count {
+		ctx.WriteString("count(*) ")
+	}
+	ctx.WriteString("errors")
+	if node.Limit != nil {
+		ctx.WriteByte(' ')
+		node.Limit.Format(ctx)
+	}
 }
 func (node *ShowErrors) GetStatementType() string { return "Show Errors" }
 func (node *ShowErrors) GetQueryType() string     { return QueryTypeOth }
@@ -435,10 +448,20 @@ func NewShowErrors() *ShowErrors {
 
 type ShowWarnings struct {
 	showImpl
+	Count bool
+	Limit *Limit
 }
 
 func (node *ShowWarnings) Format(ctx *FmtCtx) {
-	ctx.WriteString("show warnings")
+	ctx.WriteString("show ")
+	if node.Count {
+		ctx.WriteString("count(*) ")
+	}
+	ctx.WriteString("warnings")
+	if node.Limit != nil {
+		ctx.WriteByte(' ')
+		node.Limit.Format(ctx)
+	}
 }
 func (node *ShowWarnings) GetStatementType() string { return "Show Warnings" }
 func (node *ShowWarnings) GetQueryType() string     { return QueryTypeOth }

@@ -21,6 +21,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// The strict predicates share token interpretation, but require different flags.
+func TestStrictSQLModePredicates(t *testing.T) {
+	for _, tc := range []struct {
+		name                                           string
+		mode                                           any
+		strict, zeroDate, division, expressionZeroDate bool
+	}{
+		{"traditional", "TRADITIONAL", true, true, true, true},
+		{"traditional combined", "ERROR_FOR_DIVISION_BY_ZERO, traditional ,TRADITIONAL", true, true, true, true},
+		{"strict trans", "STRICT_TRANS_TABLES", true, false, false, false},
+		{"strict all", "STRICT_ALL_TABLES", true, false, false, false},
+		{"division trans", "STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO", true, false, true, false},
+		{"division all", " error_for_division_by_zero , strict_all_tables ", true, false, true, false},
+		{"date trans", "NO_ZERO_DATE,STRICT_TRANS_TABLES", true, true, false, true},
+		{"date all", "STRICT_ALL_TABLES,NO_ZERO_DATE", true, true, false, true},
+		{"all explicit", "STRICT_ALL_TABLES,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO", true, true, true, true},
+		{"no strict", "ERROR_FOR_DIVISION_BY_ZERO,NO_ZERO_DATE", false, false, false, true},
+		{"traditional exact token", "TRADITIONAL_EXTRA", false, false, false, false},
+		{"strict exact token", "NOT_STRICT_TRANS_TABLES,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO", false, false, false, true},
+		{"component exact tokens", "STRICT_ALL_TABLES,NO_ZERO_DATE_EXTRA,ERROR_FOR_DIVISION_BY_ZERO_EXTRA", true, false, false, false},
+		{"unrelated", "ANSI,NO_ZERO_IN_DATE", false, false, false, false},
+		{"empty tokens", " , , ", false, false, false, false},
+		{"nil", nil, false, false, false, false},
+		{"non string", 1, false, false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.strict, IsStrictMode(tc.mode))
+			require.Equal(t, tc.zeroDate, IsStrictNoZeroDateMode(tc.mode))
+			require.Equal(t, tc.division, IsStrictDivisionByZeroMode(tc.mode))
+			require.Equal(t, tc.expressionZeroDate, IsNoZeroDateMode(tc.mode))
+		})
+	}
+}
+
 func TestIsPadCharToFullLengthMode(t *testing.T) {
 	tests := []struct {
 		name string
@@ -39,6 +73,33 @@ func TestIsPadCharToFullLengthMode(t *testing.T) {
 			require.Equal(t, test.want, IsPadCharToFullLengthMode(test.mode))
 		})
 	}
+}
+
+func TestTimeTruncateFractionalMode(t *testing.T) {
+	for _, tc := range []struct {
+		mode any
+		want bool
+	}{
+		{mode: "TIME_TRUNCATE_FRACTIONAL", want: true},
+		{mode: "STRICT_TRANS_TABLES, time_truncate_fractional ", want: true},
+		{mode: "TIME_TRUNCATE_FRACTIONAL_EXTRA", want: false},
+		{mode: "", want: false},
+		{mode: 1, want: false},
+	} {
+		require.Equal(t, tc.want, IsTimeTruncateFractionalMode(tc.mode))
+	}
+
+	enabled, err := ResolveTimeTruncateFractional(nil)
+	require.NoError(t, err)
+	require.False(t, enabled)
+	proc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: "TIME_TRUNCATE_FRACTIONAL"}}}
+	enabled, err = ResolveTimeTruncateFractional(proc)
+	require.NoError(t, err)
+	require.True(t, enabled)
+	proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return "", nil })
+	enabled, err = ResolveTimeTruncateFractional(proc)
+	require.NoError(t, err)
+	require.False(t, enabled)
 }
 
 func TestResolvePadCharToFullLength(t *testing.T) {

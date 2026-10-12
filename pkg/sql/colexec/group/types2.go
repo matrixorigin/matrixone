@@ -16,9 +16,11 @@ package group
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -109,11 +111,12 @@ type Group struct {
 }
 
 type spillBucket struct {
-	lv        int       // spill level
-	name      string    // spill bucket name
-	cnt       int64     // number of rows in this spill bucket
-	file      *os.File  // spill file
-	writer    io.Writer // file writer; tests may inject a failing writer
+	lv        int                            // spill level
+	name      string                         // spill bucket name
+	cnt       int64                          // number of rows in this spill bucket
+	file      *os.File                       // spill file
+	writer    io.Writer                      // file writer; tests may inject a failing writer
+	fileFS    fileservice.MutableFileService // owns the named file until free
 	fdToken   *process.ExecutionSpillFDReservation
 	diskToken *process.ExecutionSpillDiskReservation
 	path      [spillMaxPass]uint8
@@ -175,20 +178,66 @@ func (bkt *spillBucket) flushWriter() error {
 	return nil
 }
 
-func (bkt *spillBucket) free() error {
-	if bkt == nil {
-		return nil
-	}
-	err := bkt.flushWriter()
+func (bkt *spillBucket) closeFile() error {
+	var err error
 	if bkt.file != nil {
-		if closeErr := bkt.file.Close(); err == nil {
-			err = closeErr
-		}
+		err = bkt.file.Close()
 		bkt.file = nil
 	}
 	if bkt.fdToken != nil {
 		bkt.fdToken.Release()
 		bkt.fdToken = nil
+	}
+	return err
+}
+
+// A queued bucket owns disk bytes, not an open descriptor. Retaining every
+// waiting sibling's FD can prevent the active bucket from being repartitioned.
+func (bkt *spillBucket) finishWriting() error {
+	if err := bkt.flushWriter(); err != nil {
+		return err
+	}
+	if bkt.fileFS != nil {
+		return bkt.closeFile()
+	}
+	return nil // Externally supplied anonymous files cannot be reopened.
+}
+
+func (bkt *spillBucket) openReader(ctx context.Context, budget *process.ExecutionResourceGeneration) error {
+	if bkt.file != nil {
+		return nil
+	}
+	if bkt.fileFS == nil {
+		return moerr.NewInternalErrorNoCtx("group spill bucket has no file")
+	}
+	var err error
+	if budget != nil {
+		bkt.fdToken, err = budget.ReserveSpillFD(1)
+		if err != nil {
+			return err
+		}
+	}
+	bkt.file, err = bkt.fileFS.OpenFile(ctx, bkt.name)
+	if err != nil {
+		_ = bkt.closeFile()
+	}
+	return err
+}
+
+func (bkt *spillBucket) free() error {
+	if bkt == nil {
+		return nil
+	}
+	err := bkt.flushWriter()
+	if closeErr := bkt.closeFile(); err == nil {
+		err = closeErr
+	}
+	if bkt.fileFS != nil {
+		// Cancellation must not prevent deletion of a bucket owned by the query.
+		if removeErr := bkt.fileFS.RemoveFile(context.Background(), bkt.name); err == nil {
+			err = removeErr
+		}
+		bkt.fileFS = nil
 	}
 	if bkt.diskToken != nil {
 		bkt.diskToken.Release()
@@ -219,12 +268,18 @@ type container struct {
 
 	inputDone    bool
 	currBatchIdx int
+	// inputRowCount is the source-row cursor used by GROUP_CONCAT diagnostics.
+	// It survives resident spills/reloads but is reset for a new execution.
+	inputRowCount uint64
 
 	// hash.
 	hr          ResHashRelated
 	mtyp        int32
 	keyWidth    int32
 	keyNullable bool
+	// legacyH8CharSemantics keeps pre-v78 CHAR bytes intact when this
+	// container must merge a short variable-length H8 partial.
+	legacyH8CharSemantics bool
 	// groupingAware selects the collision-free HStr key grammar whenever a
 	// grouping-set rollup sentinel can appear, including NOT NULL input keys.
 	groupingAware bool
@@ -247,20 +302,49 @@ type container struct {
 	// survive resident spills, because later partials and queued spill records
 	// still belong to that same hash-key domain.
 	mergePartialMetadataSet bool
+	// groupConcatSourceRowsUntrusted is a statement-wide, monotonic fallback
+	// mode. It survives resident spills and aggregate rebuilds; once a remote
+	// or legacy partial is observed, every later finalization uses the legacy
+	// local warning counter.
+	groupConcatSourceRowsUntrusted bool
 
 	// aggs, which holds the intermediate state of agg functions.
-	aggList                []aggexec.GroupAggFuncExec
-	aggExprs               []aggexec.AggFuncExecExpression
-	prepareParamKind       aggexec.PrepareParamKindStates
-	prepareParamKindWireV1 bool
-	legacyTextMinMax       bool
-	legacyVarianceState    bool
+	aggList                     []aggexec.GroupAggFuncExec
+	aggExprs                    []aggexec.AggFuncExecExpression
+	warningRetentionLimit       int
+	warningRetentionSet         bool
+	groupConcatWarnings         aggexec.GroupConcatWarningAccumulator
+	prepareParamKind            aggexec.PrepareParamKindStates
+	prepareParamKindWireV1      bool
+	legacyTextMinMax            bool
+	legacyVarianceState         bool
+	legacyDecimalSumState       bool
+	legacyDecimalSumResult      bool
+	legacyApproxPercentileState bool
+	legacyHLLState              bool
+	floatZeroHLLState           bool
+	// legacyVectorHLLState keeps vector HLL_ADD_AGG on the raw v2 hash domain
+	// while a pre-v88 peer may consume that state.
+	legacyVectorHLLState bool
+	// legacyTextHLLAddState keeps CHAR and JSON HLL_ADD_AGG on the raw v2 hash
+	// domain while a pre-v91 peer may consume that state.
+	legacyTextHLLAddState bool
+	// legacyFloatHLLAddState keeps scalar FLOAT/DOUBLE HLL_ADD_AGG on the raw
+	// v2 hash domain while a pre-v92 peer may consume that state.
+	legacyFloatHLLAddState bool
+	// legacyDistinctFloatKeys is frozen before aggregate groups are admitted.
+	// Pre-v79 remote producers keep the compatibility FLOAT key policy, which
+	// preserves every non-zero bit pattern in the fixed index and wire output.
+	legacyDistinctFloatKeys bool
+	timeZone                *time.Location
 
 	// spill, agglist to load spilled data.
-	spillMem        int64
-	spillAggList    []aggexec.GroupAggFuncExec
-	spillBkts       list.Deque[*spillBucket]
-	currentSpillBkt []*spillBucket
+	spillMem                int64
+	autoSpill               bool
+	memoryGrowthParticipant *process.ExecutionMemoryGrowthParticipant
+	spillAggList            []aggexec.GroupAggFuncExec
+	spillBkts               list.Deque[*spillBucket]
+	currentSpillBkt         []*spillBucket
 
 	// reusable buffers for spill to avoid per-call allocations
 	spillFlagFlat   []uint8           // scratch 0/1 flags for one batch's rows during spill
@@ -488,6 +572,7 @@ func (ctr *container) releaseFinalRecoveryCapacity() error {
 		ctr.spillBkts != nil && ctr.spillBkts.Len() != 0 {
 		return nil
 	}
+	ctr.releaseMemoryGrowthParticipant()
 	ctr.freeSpillReloadStaging()
 	if ctr.spillReader != nil {
 		ctr.spillReader.DropReadAhead()
@@ -534,6 +619,7 @@ func (ctr *container) isSpilling() bool {
 }
 
 func (ctr *container) setSpillMem(m int64) {
+	ctr.autoSpill = m == 0
 	if m == 0 {
 		// 0 means auto config.   Here the formula is made up on the fly.
 		fileCacheMem := fileservice.GlobalMemoryCacheSizeHint.Load()
@@ -546,6 +632,29 @@ func (ctr *container) setSpillMem(m int64) {
 	} else {
 		ctr.spillMem = m
 	}
+}
+
+func (ctr *container) ensureMemoryGrowthParticipant() error {
+	if ctr == nil || !ctr.autoSpill || ctr.mtyp == H0 || ctr.budget == nil {
+		return nil
+	}
+	if ctr.memoryGrowthParticipant != nil {
+		return nil
+	}
+	participant, err := ctr.budget.RegisterMemoryGrowthParticipant()
+	if err != nil {
+		return err
+	}
+	ctr.memoryGrowthParticipant = participant
+	return nil
+}
+
+func (ctr *container) releaseMemoryGrowthParticipant() {
+	if ctr == nil || ctr.memoryGrowthParticipant == nil {
+		return
+	}
+	ctr.memoryGrowthParticipant.Release()
+	ctr.memoryGrowthParticipant = nil
 }
 
 func (ctr *container) freeAggList() {
@@ -623,7 +732,9 @@ func (ctr *container) freeGroupingRollups() {
 
 func (ctr *container) free() {
 	// free container stuff, WTH is the Free0?
+	ctr.releaseMemoryGrowthParticipant()
 	ctr.inputDone = false
+	ctr.inputRowCount = 0
 	ctr.hr.Free0()
 
 	ctr.groupByEvaluate.Free()
@@ -636,6 +747,7 @@ func (ctr *container) free() {
 	ctr.freeGroupByBatches()
 	ctr.freeGroupingRollups()
 	ctr.freeAggList()
+	ctr.groupConcatWarnings.Reset()
 	ctr.prepareParamKind.Reset(nil)
 	ctr.aggExprs = nil
 	ctr.prepareParamKindWireV1 = false
@@ -663,10 +775,28 @@ func (ctr *container) free() {
 	ctr.groupByHashKey = nil
 	ctr.hashKeyVecs = nil
 	ctr.mergePartialMetadataSet = false
+	ctr.groupConcatSourceRowsUntrusted = false
+	ctr.legacyDistinctFloatKeys = false
 	ctr.budget = nil
 
 	mpool.DeleteMPool(ctr.mp)
 	ctr.mp = nil
+}
+
+// refreshGroupConcatSourceRowTrust folds the current aggregate modes into the
+// logical Group/MergeGroup mode. The reduction is monotonic: a legacy or
+// independent remote partial permanently selects the fallback for this
+// execution, including all later spill rebuilds.
+func (ctr *container) refreshGroupConcatSourceRowTrust() {
+	if ctr == nil || ctr.groupConcatSourceRowsUntrusted {
+		return
+	}
+	for _, agg := range ctr.aggList {
+		if !aggexec.GroupConcatSourceRowsTrusted(agg) {
+			ctr.groupConcatSourceRowsUntrusted = true
+			return
+		}
+	}
 }
 
 func (ctr *container) reset() {
@@ -798,6 +928,9 @@ func (group *Group) ExecProjection(proc *process.Process, input *batch.Batch) (*
 
 func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) {
 	group.logDiagnostics(proc, pipelineFailed, err)
+	if !pipelineFailed && err == nil && proc != nil {
+		group.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
+	}
 	group.ctr.free()
 	// free projection stuff,
 	group.FreeProjection(proc)
@@ -805,6 +938,9 @@ func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) 
 
 func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	group.logDiagnostics(proc, pipelineFailed, err)
+	if !pipelineFailed && err == nil && proc != nil {
+		group.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
+	}
 	group.ctr.reset()
 	if group.ctr.allocationAccount != nil {
 		// Account selections are immutable per execution attempt, and function
@@ -937,7 +1073,10 @@ func (mergeGroup *MergeGroup) ExecProjection(proc *process.Process, input *batch
 	return mergeGroup.EvalProjection(input, proc)
 }
 
-func (mergeGroup *MergeGroup) Reset(proc *process.Process, _ bool, _ error) {
+func (mergeGroup *MergeGroup) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if !pipelineFailed && err == nil && proc != nil {
+		mergeGroup.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
+	}
 	mergeGroup.ctr.reset()
 	if mergeGroup.ctr.allocationAccount != nil {
 		mergeGroup.FreeProjection(proc)
@@ -946,7 +1085,10 @@ func (mergeGroup *MergeGroup) Reset(proc *process.Process, _ bool, _ error) {
 	}
 }
 
-func (mergeGroup *MergeGroup) Free(proc *process.Process, _ bool, _ error) {
+func (mergeGroup *MergeGroup) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if !pipelineFailed && err == nil && proc != nil {
+		mergeGroup.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
+	}
 	mergeGroup.ctr.free()
 	mergeGroup.FreeProjection(proc)
 }

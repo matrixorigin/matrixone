@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/prometheus/client_golang/prometheus"
-	"golang.org/x/sys/unix"
 )
 
 /*
@@ -54,6 +53,16 @@ type SimpleCAllocator struct {
 	updating        atomic.Bool
 	// currentInuse mirrors allocator in-use bytes and feeds absoluteInuseGauge.
 	currentInuse atomic.Int64
+	// libcFreedBytes accumulates small allocations returned to libc. libc may
+	// retain those pages in per-thread arenas.
+	libcFreedBytes atomic.Uint64
+	libcTrimQueued atomic.Bool
+	// The trim configuration is immutable after publication of the allocator.
+	libcTrimThreshold uint64
+	libcTrimCooldown  time.Duration
+	libcTrim          func() bool
+	libcTrimReleased  prometheus.Counter
+	libcTrimNoop      prometheus.Counter
 
 	// mmapCache is configured before the allocator is published and remains
 	// immutable afterwards. It retains only free mmap-backed allocations.
@@ -95,6 +104,29 @@ func (sca *SimpleCAllocator) EnableMmapCache(
 		simpleCAllocatorMmapCacheIdle,
 		cachedBytesGauge,
 	)
+}
+
+// EnableLibcTrim periodically returns completely free libc arena pages to the
+// OS after enough small-allocation churn. It must be called before the
+// allocator is used concurrently. threshold amortizes the process-wide trim
+// cost by released bytes; cooldown bounds it by time as well.
+func (sca *SimpleCAllocator) EnableLibcTrim(
+	threshold uint64,
+	cooldown time.Duration,
+	releasedCounter prometheus.Counter,
+	noopCounter prometheus.Counter,
+) {
+	if threshold == 0 || cooldown <= 0 {
+		panic("libc trim requires a positive threshold and cooldown")
+	}
+	if !canTrimCAllocator() {
+		return
+	}
+	sca.libcTrimThreshold = threshold
+	sca.libcTrimCooldown = cooldown
+	sca.libcTrim = trimCAllocator
+	sca.libcTrimReleased = releasedCounter
+	sca.libcTrimNoop = noopCounter
 }
 
 // Malloc does not clear the memory.
@@ -256,13 +288,7 @@ func (sca *SimpleCAllocator) allocateMemory(size uint64, clearMemory bool) ([]by
 				return slice, nil
 			}
 		}
-		slice, err := unix.Mmap(
-			-1,
-			0,
-			int(size),
-			unix.PROT_READ|unix.PROT_WRITE,
-			unix.MAP_PRIVATE|unix.MAP_ANONYMOUS,
-		)
+		slice, err := mmapMemory(int(size))
 		if err != nil {
 			return nil, moerr.NewOOMNoCtx()
 		}
@@ -293,12 +319,11 @@ func (sca *SimpleCAllocator) deallocateMemory(slice []byte, size uint64) {
 		if sca.mmapCache != nil && sca.mmapCache.put(fullAllocation) {
 			return
 		}
-		if err := unix.Munmap(fullAllocation); err != nil {
-			panic(moerr.NewInternalErrorNoCtxf("failed to unmap %d-byte allocation: %v", size, err))
-		}
+		unmapMemory(fullAllocation)
 		return
 	}
 	C.free(ptr)
+	sca.recordLibcFree(size)
 }
 
 func maxIntValue() int {
@@ -309,7 +334,6 @@ func (sca *SimpleCAllocator) triggerUpdate() {
 	const simpleCAllocatorUpdateWindow = time.Second
 	if sca.updating.CompareAndSwap(false, true) {
 		time.AfterFunc(simpleCAllocatorUpdateWindow, func() {
-
 			if sca.allocateBytesCounter != nil {
 				var n uint64
 				sca.allocateBytes.Each(func(v *atomic.Uint64) {
@@ -350,4 +374,48 @@ func (sca *SimpleCAllocator) triggerUpdate() {
 			sca.updating.Store(false)
 		})
 	}
+}
+
+func (sca *SimpleCAllocator) recordLibcFree(size uint64) {
+	if sca.libcTrimThreshold == 0 || sca.libcTrim == nil {
+		return
+	}
+	if sca.libcFreedBytes.Add(size) < sca.libcTrimThreshold {
+		return
+	}
+	sca.scheduleLibcTrim()
+}
+
+func (sca *SimpleCAllocator) scheduleLibcTrim() {
+	if !sca.libcTrimQueued.CompareAndSwap(false, true) {
+		return
+	}
+	time.AfterFunc(sca.libcTrimCooldown, func() {
+		sca.tryLibcTrim()
+		sca.libcTrimQueued.Store(false)
+		// A release racing the callback may have crossed the threshold while
+		// the callback still owned the queue token.
+		if sca.libcFreedBytes.Load() >= sca.libcTrimThreshold {
+			sca.scheduleLibcTrim()
+		}
+	})
+}
+
+func (sca *SimpleCAllocator) tryLibcTrim() bool {
+	freed := sca.libcFreedBytes.Swap(0)
+	if freed < sca.libcTrimThreshold {
+		if freed != 0 {
+			sca.libcFreedBytes.Add(freed)
+		}
+		return false
+	}
+	released := sca.libcTrim()
+	if released {
+		if sca.libcTrimReleased != nil {
+			sca.libcTrimReleased.Inc()
+		}
+	} else if sca.libcTrimNoop != nil {
+		sca.libcTrimNoop.Inc()
+	}
+	return true
 }

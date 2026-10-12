@@ -1,0 +1,31 @@
+-- @suite
+-- @case
+drop database if exists bit_sum_avg_exact;
+create database bit_sum_avg_exact;
+use bit_sum_avg_exact;
+create table t(g int, id int, b bit(64));
+insert into t values
+(1,1,18446744073709551613),(1,2,1),
+(2,1,18446744073709551614),(2,2,1),
+(3,1,9223372036854775808),(3,2,18446744073709551615),
+(4,1,null);
+select g,sum(b),avg(b) from t group by g order by g;
+select sum(b),avg(b) from t where g=3 and id<0;
+select sum(distinct b),avg(distinct b) from
+(select b from t where g=3 union all select b from t where g=3) d;
+select g,id,sum(b) over(partition by g),avg(b) over(partition by g)
+from t where g in (3,4) order by g,id;
+select g,sum(b)=sum(cast(b as unsigned)),avg(b)=avg(cast(b as unsigned))
+from t where g<4 group by g order by g;
+prepare p from 'select sum(b),avg(b) from t where g=?';
+set @g=3;
+execute p using @g;
+set @g=4;
+execute p using @g;
+deallocate prepare p;
+create table results as select sum(b) as s,avg(b) as a from t where g=3;
+select s,a from results;
+select column_name,data_type,numeric_precision,numeric_scale
+from information_schema.columns where table_schema='bit_sum_avg_exact' and table_name='results'
+order by ordinal_position;
+drop database bit_sum_avg_exact;

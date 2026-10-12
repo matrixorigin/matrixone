@@ -40,3 +40,33 @@ d
 DROP TABLE t;
 DROP TABLE t2;
 
+select cast('12345678901234567890100000000000000000000E-20' as decimal(38,0)) as v;
+v
+123456789012345678901
+select cast(concat('123456789012345678901', repeat('0',80), 'E-80') as decimal(65,0)) as v;
+v
+123456789012345678901
+select cast(concat('0.', repeat('0',80), '123E81') as decimal(5,2)) as v;
+v
+1.23
+select cast(concat('1.234', repeat('9',80), 'e0') as decimal(5,2)) as v;
+v
+1.23
+select cast('-1.235E0' as decimal(5,2)) as v;
+v
+-1.24
+select cast('1E99999999999999999999999' as decimal(5,2)) as v;
+v
+999.99
+select cast('1E-99999999999999999999999' as decimal(5,2)) as v;
+v
+0.00
+select cast(null as decimal(38,0)) as v;
+v
+NULL
+prepare scientific_cast from 'select cast(? as decimal(38,0)) as v';
+set @scientific_value = concat('123456789012345678901', repeat('0',80), 'E-80');
+execute scientific_cast using @scientific_value;
+v
+123456789012345678901
+deallocate prepare scientific_cast;

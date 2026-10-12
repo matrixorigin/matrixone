@@ -53,6 +53,49 @@ func TestChildProcessesInheritSession(t *testing.T) {
 	require.Same(t, parent.WarningSink, contextChild.GetWarningSink())
 }
 
+func TestNewTopProcessDefaultsWarningRetention(t *testing.T) {
+	proc := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer proc.Free()
+	require.Equal(t, WarningDiagnosticDefaultRetentionLimit, proc.Base.SessionInfo.MaxErrorCount)
+	require.True(t, proc.Base.SessionInfo.MaxErrorCountSet)
+}
+
+func TestNewTopProcessInheritsWarningRetentionLimitContext(t *testing.T) {
+	ctx := ContextWithWarningRetentionLimit(context.Background(), 0)
+	proc := NewTopProcess(ctx, mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer proc.Free()
+	require.Zero(t, proc.Base.SessionInfo.MaxErrorCount)
+	require.True(t, proc.Base.SessionInfo.MaxErrorCountSet)
+}
+
+func TestGroupConcatSourceRowProvenanceInheritedByChildren(t *testing.T) {
+	parent := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer parent.Free()
+
+	parent.SetGroupConcatSourceRowProvenanceTrusted(false)
+	child := parent.NewNoContextChildProc(0)
+	require.False(t, parent.GroupConcatSourceRowProvenanceTrusted())
+	require.False(t, child.GroupConcatSourceRowProvenanceTrusted())
+
+	parent.SetGroupConcatSourceRowProvenanceTrusted(true)
+	require.True(t, child.GroupConcatSourceRowProvenanceTrusted())
+}
+
+func TestGroupConcatSourceRowProvenanceIndependentProcessesAreUntrusted(t *testing.T) {
+	producerA := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	producerB := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer producerA.Free()
+	defer producerB.Free()
+
+	producerA.SetGroupConcatSourceRowProvenanceTrusted(false)
+	producerB.SetGroupConcatSourceRowProvenanceTrusted(false)
+	require.False(t, producerA.GroupConcatSourceRowProvenanceTrusted())
+	require.False(t, producerB.GroupConcatSourceRowProvenanceTrusted())
+	require.Equal(t, uint64(0), producerA.NextGroupConcatInputRowBase(7, 1))
+	require.Equal(t, uint64(0), producerB.NextGroupConcatInputRowBase(7, 1),
+		"independent CN processes start their local row namespaces at the same ordinal")
+}
+
 func TestBuildPipelineContext(t *testing.T) {
 	// Create a parent context
 	parentCtx := context.Background()

@@ -22,6 +22,12 @@ select * from t_odku_fakepk order by a;
 1  ¦  b1  𝄀
 2  ¦  b2  𝄀
 3  ¦  b3
+insert ignore into t_odku_fakepk values (2, 'combo') on duplicate key update b = values(b);
+select * from t_odku_fakepk order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  b1  𝄀
+2  ¦  combo  𝄀
+3  ¦  b3
 drop table if exists t_odku_fakepk;
 drop table if exists t_odku_fakepk_multi;
 create table t_odku_fakepk_multi (a int, b int, c varchar(20), unique key(a, b));

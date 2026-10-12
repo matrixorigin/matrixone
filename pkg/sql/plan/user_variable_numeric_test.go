@@ -66,7 +66,7 @@ func userVariableEffectiveTypes(plan *planpb.Plan) map[string]planpb.Type {
 }
 
 func TestUserVariablesUseNumericContextInArithmetic(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, "select @int_var + @float_var")
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select @int_var + @float_var")
 	require.NoError(t, err)
 
 	varTypes := userVariableEffectiveTypes(logicPlan)
@@ -103,7 +103,7 @@ func TestUserVariableNumericContextPreservesAssignedType(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 
 			varTypes := userVariableEffectiveTypes(logicPlan)
@@ -116,7 +116,7 @@ func TestUserVariableNumericContextPreservesAssignedType(t *testing.T) {
 }
 
 func TestUserVariableNumericContextCoercesNumericString(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	optimizer.ctxt.ResolveVariableFunc = func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		if name == "numeric_text_var" && !isSystemVar {
 			return "1.5", nil
@@ -136,7 +136,7 @@ func TestUserVariableNumericContextCoercesNumericString(t *testing.T) {
 }
 
 func TestUserVariableNumericContextCoercesNumericPrefixes(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	optimizer.ctxt.ResolveVariableFunc = func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		switch name {
 		case "integer_prefix_var":
@@ -165,7 +165,7 @@ func TestUserVariableNumericContextCoercesNumericPrefixes(t *testing.T) {
 }
 
 func TestPreparedTextUserVariableUsesValueIndependentNumericContext(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	currentValue := "1"
 	optimizer.ctxt.ResolveVariableFunc = func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		if name == "prepared_text_var" && !isSystemVar {
@@ -195,7 +195,7 @@ func TestPreparedTextUserVariableUsesValueIndependentNumericContext(t *testing.T
 }
 
 func TestUserVariableNumericContextCoercesNonNumericStringsToFloat(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	optimizer.ctxt.ResolveVariableFunc = func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		switch name {
 		case "non_numeric_text_var":
@@ -225,7 +225,7 @@ func TestUserVariableNumericContextCoercesNonNumericStringsToFloat(t *testing.T)
 }
 
 func TestPreparedParametersUseDefaultNumericContextInArithmetic(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, "prepare ps_count from 'select ? + ? as sum_val'")
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare ps_count from 'select ? + ? as sum_val'")
 	require.NoError(t, err)
 	prepare := logicPlan.GetDcl().GetPrepare()
 	require.NotNil(t, prepare)

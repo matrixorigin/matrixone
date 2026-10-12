@@ -55,13 +55,14 @@ const FSCacheRemoteHit = "FileService Cache Remote Hit"
 const Network = "Network"
 
 type ExplainData struct {
-	Steps        []Step `json:"steps"`
-	Code         uint16 `json:"code"`
-	Message      string `json:"message"`
-	Uuid         string `json:"uuid"`
-	PhyPlan      PhyPlan
-	NewPlanStats statistic.StatsInfo
-	Scheduling   *schedule.Trace `json:"scheduling,omitempty"`
+	StatementDiagnostics *StatementDiagnostics `json:"statement_diagnostics,omitempty"`
+	Steps                []Step                `json:"steps"`
+	Code                 uint16                `json:"code"`
+	Message              string                `json:"message"`
+	Uuid                 string                `json:"uuid"`
+	PhyPlan              PhyPlan
+	NewPlanStats         statistic.StatsInfo
+	Scheduling           *schedule.Trace `json:"scheduling,omitempty"`
 }
 
 type Step struct {

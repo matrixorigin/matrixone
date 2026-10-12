@@ -80,13 +80,13 @@ func validateReturningSyntax(builder *QueryBuilder, stmt tree.Statement) error {
 		if !s.HasReturning() {
 			return nil
 		}
-		if len(s.OnDuplicateUpdate) == 1 && s.OnDuplicateUpdate[0] == nil {
+		if s.IsIgnore() && len(s.GetOnDuplicateUpdate()) == 0 {
 			return returningNotSupported(builder, "INSERT IGNORE")
 		}
 		if s.Overwrite {
 			return returningNotSupported(builder, "INSERT OVERWRITE")
 		}
-		if len(s.OnDuplicateUpdate) > 0 {
+		if len(s.GetOnDuplicateUpdate()) > 0 {
 			return returningNotSupported(builder, "INSERT ON DUPLICATE KEY UPDATE")
 		}
 		if s.With != nil {
@@ -400,7 +400,7 @@ func (builder *QueryBuilder) appendReturningProjection(exprs tree.SelectExprs, b
 	if bindName == "" {
 		bindName = builder.returningTableName
 	}
-	if err := builder.addBinding(scanID, tree.AliasClause{Alias: tree.Identifier(bindName)}, returnCtx); err != nil {
+	if err := builder.addBinding(scanID, tree.AliasClause{Alias: tree.Identifier(bindName)}, returnCtx, builder.returningTableDef.DbName); err != nil {
 		return err
 	}
 	if len(returnCtx.bindings) != 1 {

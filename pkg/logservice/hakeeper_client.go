@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -679,6 +680,9 @@ func (c *managedHAKeeperClient) allocateID(
 		// RPC without an allocation lock, then publishes the batch and wakes all
 		// waiters exactly once on either success or failure.
 		firstID, err := c.allocateIDBatch(ctx, key, batchSize)
+		if err == nil && (firstID == 0 || batchSize == 0 || batchSize-1 > math.MaxUint64-firstID) {
+			err = moerr.NewInternalError(ctx, "HAKeeper returned an invalid ID reservation")
+		}
 		ids.Lock()
 		if err == nil {
 			ids.nextID = firstID + 1

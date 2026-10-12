@@ -234,6 +234,135 @@ type arrowLoadMinIO struct {
 	client      *minio.Client
 }
 
+func arrowLoadBucketCreateComplete(err error) bool {
+	return err == nil || minio.ToErrorResponse(err).Code == minio.BucketAlreadyOwnedByYou
+}
+
+func TestArrowLoadBucketCreateComplete(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "created", want: true},
+		{name: "bucket already owned after retry", err: minio.ErrorResponse{Code: minio.BucketAlreadyOwnedByYou}, want: true},
+		{name: "bucket exists but is not owned", err: minio.ErrorResponse{Code: minio.BucketAlreadyExists}},
+		{name: "access denied", err: minio.ErrorResponse{Code: minio.AccessDenied}},
+		{name: "transport error", err: errors.New("connection refused")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, arrowLoadBucketCreateComplete(tt.err))
+		})
+	}
+}
+
+type arrowLoadLoseFirstCreateResponse struct {
+	base http.RoundTripper
+	lost atomic.Bool
+}
+
+func (t *arrowLoadLoseFirstCreateResponse) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil {
+		return resp, err
+	}
+	if req.Method == http.MethodPut && t.lost.CompareAndSwap(false, true) {
+		_ = resp.Body.Close()
+		return nil, errors.New("injected lost bucket-create response")
+	}
+	return resp, nil
+}
+
+func TestArrowLoadBucketRetryAfterLostCreateResponse(t *testing.T) {
+	const bucket = "arrow-load-retry"
+	var (
+		requests     atomic.Int32
+		bucketExists atomic.Bool
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || strings.TrimSuffix(r.URL.Path, "/") != "/"+bucket {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		requests.Add(1)
+		if bucketExists.CompareAndSwap(false, true) {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte("<Error><Code>BucketAlreadyOwnedByYou</Code><Message>already owned</Message></Error>"))
+	}))
+	defer server.Close()
+
+	endpoint, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
+	baseTransport.Proxy = nil
+	t.Cleanup(baseTransport.CloseIdleConnections)
+	transport := &arrowLoadLoseFirstCreateResponse{base: baseTransport}
+	client, err := minio.New(endpoint.Host, &minio.Options{
+		Creds:     credentials.NewStaticV4("arrowtest", "arrowtest-secret", ""),
+		Region:    "us-east-1",
+		Transport: transport,
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err = retryArrowLoadBucket(ctx, 0, func(attemptCtx context.Context) error {
+		return client.MakeBucket(attemptCtx, bucket, minio.MakeBucketOptions{Region: "us-east-1"})
+	})
+	require.NoError(t, err)
+	require.True(t, transport.lost.Load(), "the first successful create response must be dropped")
+	require.True(t, bucketExists.Load(), "the first request must create server-side state")
+	require.GreaterOrEqual(t, requests.Load(), int32(2), "the retry must observe the existing bucket")
+}
+
+func TestRetryArrowLoadBucketStopsOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	attempts := 0
+	err := retryArrowLoadBucket(ctx, 0, func(ctx context.Context) error {
+		attempts++
+		return ctx.Err()
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, attempts)
+}
+
+func retryArrowLoadBucket(ctx context.Context, retryInterval time.Duration, makeBucket func(context.Context) error) error {
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		attemptCtx, cancel := context.WithTimeout(ctx, time.Second)
+		err := makeBucket(attemptCtx)
+		cancel()
+		if arrowLoadBucketCreateComplete(err) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return err
+		}
+		if retryInterval > 0 {
+			timer := time.NewTimer(retryInterval)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return err
+			case <-timer.C:
+			}
+		} else {
+			select {
+			case <-ctx.Done():
+				return err
+			default:
+			}
+		}
+	}
+}
+
 func startArrowLoadMinIO(t *testing.T) arrowLoadMinIO {
 	t.Helper()
 	executable, err := exec.LookPath("minio")
@@ -273,19 +402,12 @@ func startArrowLoadMinIO(t *testing.T) arrowLoadMinIO {
 	})
 	require.NoError(t, err)
 	bucket := "matrixone-arrow-load"
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		attemptCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-		err = client.MakeBucket(attemptCtx, bucket, minio.MakeBucketOptions{Region: "us-east-1"})
-		cancel()
-		if err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			logBytes, _ := os.ReadFile(logPath)
-			t.Fatalf("start local MinIO: %v\n%s", err, logBytes)
-		}
-		time.Sleep(100 * time.Millisecond)
+	err = retryArrowLoadBucket(context.Background(), 100*time.Millisecond, func(attemptCtx context.Context) error {
+		return client.MakeBucket(attemptCtx, bucket, minio.MakeBucketOptions{Region: "us-east-1"})
+	})
+	if err != nil {
+		logBytes, _ := os.ReadFile(logPath)
+		t.Fatalf("start local MinIO: %v\n%s", err, logBytes)
 	}
 	return arrowLoadMinIO{
 		endpoint: endpoint, endpointURL: "http://" + endpoint,

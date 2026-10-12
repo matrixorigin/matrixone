@@ -87,4 +87,55 @@ select id from js_plain where json_extract_float64(doc,'$.a') >= 2 order by id;
 select id from js where json_extract_float64(doc,'$.a') < 3 order by id;
 select id from js_plain where json_extract_float64(doc,'$.a') < 3 order by id;
 
+-- ================= multi-column SQL NULL parser controls =================
+-- Every parser must keep the non-NULL sibling searchable and must not create a
+-- synthetic term for an all-NULL row. The default parser is exercised separately
+-- from an explicit ngram declaration so the omitted-parser path stays covered.
+drop table if exists pnull_default;
+create table pnull_default(id bigint primary key, left_doc text, right_doc text);
+insert into pnull_default values
+ (1,NULL,'righttoken'),
+ (2,'lefttoken',NULL),
+ (3,NULL,NULL),
+ (4,'lefttoken','righttoken');
+create fulltext2 index ft_default on pnull_default(left_doc, right_doc);
+select id from pnull_default where match(left_doc, right_doc) against('righttoken') order by id;
+select id from pnull_default where match(left_doc, right_doc) against('lefttoken') order by id;
+select id from pnull_default where match(left_doc, right_doc) against('+lefttoken +righttoken' in boolean mode) order by id;
+
+drop table if exists pnull_ngram;
+create table pnull_ngram(id bigint primary key, left_doc text, right_doc text);
+insert into pnull_ngram values
+ (1,NULL,'righttoken'),
+ (2,'lefttoken',NULL),
+ (3,NULL,NULL),
+ (4,'lefttoken','righttoken');
+create fulltext2 index ft_ngram on pnull_ngram(left_doc, right_doc) with parser ngram;
+select id from pnull_ngram where match(left_doc, right_doc) against('righttoken') order by id;
+select id from pnull_ngram where match(left_doc, right_doc) against('lefttoken') order by id;
+select id from pnull_ngram where match(left_doc, right_doc) against('+lefttoken +righttoken' in boolean mode) order by id;
+
+drop table if exists pnull_gojieba;
+create table pnull_gojieba(id bigint primary key, left_doc text, right_doc text);
+insert into pnull_gojieba values
+ (1,NULL,'北京'),
+ (2,'上海',NULL),
+ (3,NULL,NULL),
+ (4,'北京','上海');
+create fulltext2 index ft_gojieba on pnull_gojieba(left_doc, right_doc) with parser gojieba;
+select id from pnull_gojieba where match(left_doc, right_doc) against('北京') order by id;
+select id from pnull_gojieba where match(left_doc, right_doc) against('上海') order by id;
+select id from pnull_gojieba where match(left_doc, right_doc) against('+北京 +上海' in boolean mode) order by id;
+
+drop table if exists pnull_json;
+create table pnull_json(id bigint primary key, left_doc json, right_doc json);
+insert into pnull_json values
+ (1,NULL,'{"k":"rightjson"}'),
+ (2,'{"k":"leftjson"}',NULL),
+ (3,NULL,NULL),
+ (4,'{"k":"leftjson"}','{"k":"rightjson"}');
+create fulltext2 index ft_json on pnull_json(left_doc, right_doc) with parser json;
+select id from pnull_json where json_extract_string(right_doc,'$.k') = 'rightjson' order by id;
+select id from pnull_json where json_extract_string(left_doc,'$.k') = 'leftjson' order by id;
+
 drop database fulltext2_parser;

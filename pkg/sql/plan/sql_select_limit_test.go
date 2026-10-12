@@ -57,7 +57,7 @@ func TestOffsetOnlyDoesNotDisableSQLSelectLimit(t *testing.T) {
 
 func buildSQLSelectLimitTestQuery(t *testing.T, sql string) *planpb.Query {
 	t.Helper()
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmts, err := mysql.Parse(ctx.GetContext(), sql, 1)
 	require.NoError(t, err)
 	require.Len(t, stmts, 1)

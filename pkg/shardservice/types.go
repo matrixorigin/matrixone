@@ -169,8 +169,7 @@ const (
 	ReadPrimaryKeysMayBeModified = 6
 	ReadGetColumMetadataScanInfo = 7
 	ReadBuildReader              = 8
-	ReadMergeObjects             = 9
-	ReadVisibleObjectStats       = 10
+	// 9 and 10 were used by the removed CN merge protocol.
 	ReadNext                     = 11
 	ReadClose                    = 12
 	ReadCollectTombstones        = 13

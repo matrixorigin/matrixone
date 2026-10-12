@@ -19,12 +19,47 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/stretchr/testify/require"
 )
+
+func TestInsertRolePrivilegeRestoreRows(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), 20)
+	for _, count := range []int{0, 255, 256, 257, 512} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			rows := make([]rolePrivilegeRestoreRow, count)
+			for i := range rows {
+				rows[i] = rolePrivilegeRestoreRow{
+					roleID: int64(i + 1), roleName: "read'er", objectType: "table", objectID: 200,
+					privilegeID: 2, privilegeName: "select", privilegeLevel: "d.t", operationUserID: 3,
+					grantedTime: "2026-09-30 00:00:00", withGrantOption: true,
+				}
+			}
+			require.NoError(t, insertRolePrivilegeRestoreRows(ctx, bh, rows))
+			require.Len(t, bh.executedSQLs, (count+255)/256)
+			for i, query := range bh.executedSQLs {
+				require.Equal(t, min(256, count-i*256), strings.Count(query, "'read''er'"))
+				require.Contains(t, query, ",'table',200,2,'select','d.t',3,'2026-09-30 00:00:00',true)")
+			}
+			queries := slices.Clone(bh.executedSQLs)
+			for i, query := range queries {
+				bh.executedSQLs = nil
+				failure := errors.New("insert failed")
+				bh.sql2err[query] = failure
+				require.ErrorIs(t, insertRolePrivilegeRestoreRows(ctx, bh, rows), failure)
+				require.Equal(t, queries[:i+1], bh.executedSQLs)
+				delete(bh.sql2err, query)
+			}
+		})
+	}
+}
 
 func TestBuildCatalogRestoreIdentityMap(t *testing.T) {
 	identityMap, err := buildCatalogRestoreIdentityMap(

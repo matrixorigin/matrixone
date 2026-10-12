@@ -239,7 +239,7 @@ func TestLocate(t *testing.T) {
 			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, buildInLocate3Args)
 		}
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }

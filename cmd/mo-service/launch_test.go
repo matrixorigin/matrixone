@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/fagongzi/goetty/v2"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -227,7 +228,7 @@ func TestDynamicClusterPartialStartupIsOwnedAndCleaned(t *testing.T) {
 		t.Run(fmt.Sprintf("child-%d", failAt), func(t *testing.T) {
 			setLaunchTestHooks(t)
 			baseDir := t.TempDir()
-			template := writeLaunchTestFile(t, "cn-template.toml", "%d\n%d\n%d\n%d\n%d\n%d\n")
+			template := writeLaunchTestFile(t, "cn-template.toml", "%d\n%d\n%d\n%d\n%d\n")
 			logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
 			tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n")
 			cfg := &LaunchConfig{
@@ -287,7 +288,7 @@ func TestDynamicClusterPartialStartupIsOwnedAndCleaned(t *testing.T) {
 func TestDynamicProxyStartFailureStillCleansStartedChildren(t *testing.T) {
 	setLaunchTestHooks(t)
 	baseDir := t.TempDir()
-	template := writeLaunchTestFile(t, "cn-template.toml", "%d\n%d\n%d\n%d\n%d\n%d\n")
+	template := writeLaunchTestFile(t, "cn-template.toml", "%d\n%d\n%d\n%d\n%d\n")
 	logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
 	tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n")
 	cfg := &LaunchConfig{
@@ -1120,5 +1121,24 @@ func TestWaitClusterCondition(t *testing.T) {
 	}
 	if client.closed {
 		t.Fatal("client unexpectedly closed after wait error")
+	}
+}
+
+func TestDynamicCNTemplatesPreserveAddressBindings(t *testing.T) {
+	for _, name := range []string{"launch-dynamic-cn", "launch-dynamic-with-proxy", "v1/launch-dynamic-cn", "v1/launch-dynamic-with-proxy"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, genDynamicCNConfigs(dir, Dynamic{ServiceCount: 2, CNTemplate: filepath.Join("../../etc", name, "cn.toml.base")}))
+			for i := 0; i < 2; i++ {
+				var cfg Config
+				_, err := toml.DecodeFile(filepath.Join(dir, fmt.Sprintf("cn-%d.toml", i)), &cfg)
+				require.NoError(t, err)
+				require.Equal(t, fmt.Sprintf("dd1dccb%d-4d3c-41f8-b482-5251dc7a41bf", baseUUID+i), cfg.CN.UUID)
+				require.Equal(t, basePort+i*100, cfg.CN.PortBase)
+				require.Equal(t, fmt.Sprintf("cn%d", i), cfg.CN.ServiceHost)
+				require.EqualValues(t, baseFrontendPort+i, cfg.CN.Frontend.Port)
+				require.Empty(t, cfg.CN.Txn.Trace.Dir)
+			}
+		})
 	}
 }

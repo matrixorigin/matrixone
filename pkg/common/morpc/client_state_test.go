@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -76,50 +77,52 @@ func TestErrClientClosing(t *testing.T) {
 
 // TestCircuitBreakerGetError tests CircuitBreakerManager.GetError()
 func TestCircuitBreakerGetError(t *testing.T) {
-	config := CircuitBreakerConfig{
-		Enabled:             true,
-		FailureThreshold:    3,
-		ResetTimeout:        100 * time.Millisecond,
-		HalfOpenMaxRequests: 2,
-	}
+	synctest.Test(t, func(t *testing.T) {
+		config := CircuitBreakerConfig{
+			Enabled:             true,
+			FailureThreshold:    3,
+			ResetTimeout:        100 * time.Millisecond,
+			HalfOpenMaxRequests: 2,
+		}
 
-	logger := logutil.GetGlobalLogger().Named("test")
-	manager := NewCircuitBreakerManager("test-client", config, logger)
-	backend := "test-backend"
+		logger := logutil.GetGlobalLogger().Named("test")
+		manager := NewCircuitBreakerManager("test-client", config, logger)
+		backend := "test-backend"
 
-	// Test 1: Closed state returns nil
-	err := manager.GetError(backend)
-	assert.Nil(t, err)
+		// Test 1: Closed state returns nil
+		err := manager.GetError(backend)
+		assert.Nil(t, err)
 
-	// Test 2: Trigger failures to open circuit
-	for i := 0; i < 3; i++ {
+		// Test 2: Trigger failures to open circuit
+		for i := 0; i < 3; i++ {
+			manager.Allow(backend)
+			manager.RecordFailure(backend)
+		}
+
+		// Circuit should be open
+		err = manager.GetError(backend)
+		assert.Equal(t, ErrCircuitOpen, err)
+
+		// Test 3: Wait for reset timeout to transition to half-open
+		time.Sleep(150 * time.Millisecond)
+
+		// Allow one request to trigger transition to half-open
+		allowed := manager.Allow(backend)
+		assert.True(t, allowed)
+
+		// Circuit should be half-open
+		err = manager.GetError(backend)
+		assert.Equal(t, ErrCircuitHalfOpen, err)
+
+		// Test 4: Successful probes close the circuit
+		manager.RecordSuccess(backend)
 		manager.Allow(backend)
-		manager.RecordFailure(backend)
-	}
+		manager.RecordSuccess(backend)
 
-	// Circuit should be open
-	err = manager.GetError(backend)
-	assert.Equal(t, ErrCircuitOpen, err)
-
-	// Test 3: Wait for reset timeout to transition to half-open
-	time.Sleep(150 * time.Millisecond)
-
-	// Allow one request to trigger transition to half-open
-	allowed := manager.Allow(backend)
-	assert.True(t, allowed)
-
-	// Circuit should be half-open
-	err = manager.GetError(backend)
-	assert.Equal(t, ErrCircuitHalfOpen, err)
-
-	// Test 4: Successful probes close the circuit
-	manager.RecordSuccess(backend)
-	manager.Allow(backend)
-	manager.RecordSuccess(backend)
-
-	// Circuit should be closed
-	err = manager.GetError(backend)
-	assert.Nil(t, err)
+		// Circuit should be closed
+		err = manager.GetError(backend)
+		assert.Nil(t, err)
+	})
 }
 
 // TestCircuitBreakerGetErrorDisabled tests GetError with disabled circuit breaker
@@ -301,43 +304,45 @@ func TestAutoCreateWaitTimeoutDeterministic(t *testing.T) {
 
 // TestCircuitBreakerStateTransitions tests all state transitions
 func TestCircuitBreakerStateTransitions(t *testing.T) {
-	config := CircuitBreakerConfig{
-		Enabled:             true,
-		FailureThreshold:    2,
-		ResetTimeout:        50 * time.Millisecond,
-		HalfOpenMaxRequests: 2,
-	}
+	synctest.Test(t, func(t *testing.T) {
+		config := CircuitBreakerConfig{
+			Enabled:             true,
+			FailureThreshold:    2,
+			ResetTimeout:        50 * time.Millisecond,
+			HalfOpenMaxRequests: 2,
+		}
 
-	logger := logutil.GetGlobalLogger().Named("test")
-	manager := NewCircuitBreakerManager("test-client", config, logger)
-	backend := "test-backend"
+		logger := logutil.GetGlobalLogger().Named("test")
+		manager := NewCircuitBreakerManager("test-client", config, logger)
+		backend := "test-backend"
 
-	// State 1: Closed (initial)
-	assert.Nil(t, manager.GetError(backend))
-	assert.True(t, manager.Allow(backend))
+		// State 1: Closed (initial)
+		assert.Nil(t, manager.GetError(backend))
+		assert.True(t, manager.Allow(backend))
 
-	// State 2: Closed -> Open (after failures)
-	manager.RecordFailure(backend)
-	manager.RecordFailure(backend)
-	assert.Equal(t, ErrCircuitOpen, manager.GetError(backend))
-	assert.False(t, manager.Allow(backend))
+		// State 2: Closed -> Open (after failures)
+		manager.RecordFailure(backend)
+		manager.RecordFailure(backend)
+		assert.Equal(t, ErrCircuitOpen, manager.GetError(backend))
+		assert.False(t, manager.Allow(backend))
 
-	// State 3: Open -> Half-Open (after timeout)
-	time.Sleep(60 * time.Millisecond)
-	assert.True(t, manager.Allow(backend)) // First probe allowed
-	assert.Equal(t, ErrCircuitHalfOpen, manager.GetError(backend))
+		// State 3: Open -> Half-Open (after timeout)
+		time.Sleep(60 * time.Millisecond)
+		assert.True(t, manager.Allow(backend)) // First probe allowed
+		assert.Equal(t, ErrCircuitHalfOpen, manager.GetError(backend))
 
-	// State 4: Half-Open -> Open (on failure)
-	manager.RecordFailure(backend)
-	assert.Equal(t, ErrCircuitOpen, manager.GetError(backend))
+		// State 4: Half-Open -> Open (on failure)
+		manager.RecordFailure(backend)
+		assert.Equal(t, ErrCircuitOpen, manager.GetError(backend))
 
-	// State 5: Open -> Half-Open -> Closed (on success)
-	time.Sleep(60 * time.Millisecond)
-	assert.True(t, manager.Allow(backend))
-	manager.RecordSuccess(backend)
-	assert.True(t, manager.Allow(backend))
-	manager.RecordSuccess(backend)
-	assert.Nil(t, manager.GetError(backend))
+		// State 5: Open -> Half-Open -> Closed (on success)
+		time.Sleep(60 * time.Millisecond)
+		assert.True(t, manager.Allow(backend))
+		manager.RecordSuccess(backend)
+		assert.True(t, manager.Allow(backend))
+		manager.RecordSuccess(backend)
+		assert.Nil(t, manager.GetError(backend))
+	})
 }
 
 // TestClientClosingDoesNotBlockClose tests that closing state doesn't deadlock

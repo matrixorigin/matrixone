@@ -24,13 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-var SessionsColTypes []types.Type
-
 func (builder *QueryBuilder) buildProcesslist(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	if len(tbl.Func.Exprs) > 0 {
 		return 0, moerr.NewInvalidArg(builder.GetContext(), "processlist function has invalid input args length", len(tbl.Func.Exprs))
 	}
-	SessionsColTypes = make([]types.Type, len(status.SessionField_name))
 	sessionsColDefs := make([]*plan.ColDef, len(status.SessionField_name))
 
 	for i := range status.SessionField_name {
@@ -41,7 +38,6 @@ func (builder *QueryBuilder) buildProcesslist(tbl *tree.TableFunction, ctx *Bind
 		default:
 			typ = types.New(types.T_varchar, types.MaxVarcharLen, 0)
 		}
-		SessionsColTypes[i] = typ
 		sessionsColDefs[i] = &plan.ColDef{
 			Name: strings.ToLower(status.SessionField_name[i]),
 			Typ:  makePlan2Type(&typ),

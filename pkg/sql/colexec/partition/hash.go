@@ -88,7 +88,7 @@ func (partition *Partition) prepareHash(proc *process.Process) (err error) {
 	for _, expr := range exprs {
 		keyWidth += int32(group.GetKeyWidth(types.T(expr.Typ.Id), expr.Typ.Width, ctr.keyNullable))
 	}
-	ctr.isStrHash = keyWidth > 8
+	ctr.isStrHash = keyWidth > 8 || group.HasVariableLengthKey(exprs)
 
 	if len(ctr.partitionEval.Executor) == 0 {
 		ctr.partitionEval, err = colexec.MakeEvalVector(proc, exprs)
@@ -373,7 +373,7 @@ func (ctr *hashContainer) finalizeSortFallback(proc *process.Process, analyzer p
 		} else if spec.Flag&plan.OrderBySpec_NULLS_LAST != 0 {
 			nullsLast = true
 		}
-		typ := types.NewWithCharset(types.T(spec.Expr.Typ.Id), spec.Expr.Typ.Width, spec.Expr.Typ.Scale, uint8(spec.Expr.Typ.Charset))
+		typ := types.MustTypeFromPlan(spec.Expr.Typ)
 		compares[i] = compare.New(typ, desc, nullsLast)
 		if compares[i] == nil {
 			return moerr.NewInternalErrorNoCtx("unsupported sort fallback partition key")

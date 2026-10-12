@@ -16,6 +16,8 @@ package frontend
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -23,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
@@ -298,6 +301,19 @@ func TestSelectIntoPlanIsNeverReusedFromPlanCache(t *testing.T) {
 	require.False(t, ses.isCached(input.getHash()))
 }
 
+func TestJSONMergePlanIsNeverReusedFromPlanCache(t *testing.T) {
+	pc := newPlanCache(2)
+	stmt := &trackedStatement{}
+	input := &UserInput{sql: "select json_merge('[1]', '[2]')"}
+	input.genHash()
+	pc.cache(input.getHash(), []tree.Statement{stmt}, []*plan.Plan{{}})
+
+	ses := &Session{planCache: pc}
+	require.Nil(t, cachedPlanForInput(ses, input))
+	require.False(t, ses.isCached(input.getHash()))
+	require.Equal(t, 1, stmt.freed)
+}
+
 func TestFreeStmtsSkipsNil(t *testing.T) {
 	good := &trackedStatement{}
 	stmts := []tree.Statement{nil, good, nil}
@@ -461,6 +477,113 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
 	require.False(t, ses.isCached("cached-sql"))
 	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "HIGH_NOT_PRECEDENCE"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	for _, mode := range []string{
+		"ANSI_QUOTES",
+		"PIPES_AS_CONCAT",
+		"NO_BACKSLASH_ESCAPES",
+		"REAL_AS_FLOAT",
+		"NO_UNSIGNED_SUBTRACTION",
+		"TIME_TRUNCATE_FRACTIONAL",
+	} {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
+		stmt = &trackedStatement{}
+		ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,"+mode))
+		require.False(t, ses.isCached("cached-sql"), mode)
+		require.Equal(t, 1, stmt.freed, mode)
+	}
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE,IGNORE_SPACE"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestTemporalSessionChangesInvalidatePreparedAndCachedPlans(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	for _, tc := range []struct {
+		name string
+		a, b interface{}
+	}{
+		{"lc_time_names", "en_US", "fr_FR"},
+		{"explicit_defaults_for_timestamp", int64(1), int64(0)},
+		{"sql_mode", "STRICT_TRANS_TABLES", "STRICT_TRANS_TABLES,TIME_TRUNCATE_FRACTIONAL"},
+		{"sql_mode", "", "STRICT_TRANS_TABLES"},
+	} {
+		t.Run(fmt.Sprintf("%s/%v", tc.name, tc.b), func(t *testing.T) {
+			ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+			require.NoError(t, ses.SetSessionSysVar(ctx, tc.name, tc.a))
+			prepared := &PrepareStmt{}
+			ses.prepareStmts["temporal"] = prepared
+			for _, value := range []interface{}{tc.b, tc.a} {
+				prepared.needsRebuild = false // represent a freshly installed plan
+				stmt := &trackedStatement{}
+				ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+				require.NoError(t, ses.SetSessionSysVar(ctx, tc.name, value))
+				require.False(t, ses.isCached("cached-sql"))
+				require.Equal(t, 1, stmt.freed)
+				require.True(t, prepared.needsRebuild)
+				prepared.needsRebuild = false
+				stmt = &trackedStatement{}
+				ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+				require.NoError(t, ses.SetSessionSysVar(ctx, tc.name, value))
+				require.True(t, ses.isCached("cached-sql"), "unchanged SET retains warm plans")
+				require.Zero(t, stmt.freed)
+				require.False(t, prepared.needsRebuild)
+				require.Error(t, ses.SetSessionSysVar(ctx, tc.name, "invalid"))
+				require.True(t, ses.isCached("cached-sql"), "failed SET preserves the installed plan")
+				require.Zero(t, stmt.freed)
+				require.False(t, prepared.needsRebuild)
+			}
+			ses.cleanCache()
+		})
+	}
+}
+
+func TestSessionDivPrecisionIncrementChangeClearsPlanCache(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "div_precision_increment", int64(4)))
+	stmt := &trackedStatement{}
+	ses.cachePlan("select decimal_a / decimal_b", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.True(t, ses.isCached("select decimal_a / decimal_b"))
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "DIV_PRECISION_INCREMENT", int64(4)))
+	require.True(t, ses.isCached("select decimal_a / decimal_b"))
+	require.Zero(t, stmt.freed)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "div_precision_increment", int64(10)))
+	require.False(t, ses.isCached("select decimal_a / decimal_b"))
+	require.Equal(t, 1, stmt.freed)
 }
 
 func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {
@@ -523,4 +646,67 @@ func TestSessionSQLModePresenceMatcherUsesExactToken(t *testing.T) {
 
 	_, ok = sqlModeHasEnableBoolSumAvgValue(int64(0))
 	require.False(t, ok)
+}
+
+func TestSessionSQLModeHighNotPrecedenceHelpers(t *testing.T) {
+	has, ok := sqlModeHasHighNotPrecedenceValue("STRICT_TRANS_TABLES,HIGH_NOT_PRECEDENCE")
+	require.True(t, ok)
+	require.True(t, has)
+
+	has, ok = sqlModeHasHighNotPrecedenceValue("STRICT_TRANS_TABLES,HIGH_NOT_PRECEDENCE_EXTRA")
+	require.True(t, ok)
+	require.False(t, has)
+
+	_, ok = sqlModeHasHighNotPrecedenceValue(int64(0))
+	require.False(t, ok)
+
+	flags, ok := sqlModeParserFlagsValue("ANSI_QUOTES,HIGH_NOT_PRECEDENCE")
+	require.True(t, ok)
+	require.Equal(t, mysqlparser.SQLModeFlags(mysqlparser.SQLModeANSIQuotes|mysqlparser.SQLModeHighNotPrecedence), flags)
+
+	_, ok = sqlModeParserFlagsValue(int64(0))
+	require.False(t, ok)
+
+	var nilSession *Session
+	require.False(t, nilSession.sqlModeHasHighNotPrecedence())
+	require.Zero(t, nilSession.sqlModeParserFlags())
+}
+
+func TestSessionVectorModeChangeClearsPlanCache(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	for _, name := range []string{"enable_vector_auto_mode_by_default", "enable_vector_prefilter_by_default"} {
+		t.Run(name, func(t *testing.T) {
+			ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+			t.Cleanup(ses.cleanCache)
+			require.NoError(t, ses.SetSessionSysVar(ctx, name, int64(0)))
+			prepared := &PrepareStmt{}
+			ses.prepareStmts["vector-prepare"] = prepared
+			off := &trackedStatement{}
+			ses.cachePlan("vector-sql", []tree.Statement{off}, []*plan.Plan{{}})
+			require.NoError(t, ses.SetSessionSysVar(ctx, strings.ToUpper(name), "off"))
+			require.Error(t, ses.SetSessionSysVar(ctx, name, "invalid"))
+			require.True(t, ses.isCached("vector-sql"))
+			require.Zero(t, off.freed)
+			require.False(t, prepared.needsRebuild)
+			require.NoError(t, ses.SetSessionSysVar(ctx, name, int64(1)))
+			require.False(t, ses.isCached("vector-sql"))
+			require.Equal(t, 1, off.freed)
+			require.True(t, prepared.needsRebuild)
+			require.Same(t, prepared, ses.prepareStmts["vector-prepare"])
+			prepared.needsRebuild = false // Simulate the existing successful EXECUTE rebuild.
+			on := &trackedStatement{}
+			ses.cachePlan("vector-sql", []tree.Statement{on}, []*plan.Plan{{}})
+			require.NoError(t, ses.SetSessionSysVar(ctx, name, "on"))
+			require.True(t, ses.isCached("vector-sql"))
+			require.Zero(t, on.freed)
+			require.False(t, prepared.needsRebuild)
+			require.NoError(t, ses.SetSessionSysVar(ctx, name, int64(0)))
+			require.False(t, ses.isCached("vector-sql"))
+			require.Equal(t, 1, on.freed)
+			require.True(t, prepared.needsRebuild)
+			require.Same(t, prepared, ses.prepareStmts["vector-prepare"])
+			require.Equal(t, 1, off.freed)
+		})
+	}
 }

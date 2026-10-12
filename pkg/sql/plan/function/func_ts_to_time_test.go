@@ -36,6 +36,7 @@ func TestTSToTimestampPreservesAbsoluteInstant(t *testing.T) {
 
 	newYork, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)
+	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		name string
 		zone *time.Location
@@ -45,7 +46,6 @@ func TestTSToTimestampPreservesAbsoluteInstant(t *testing.T) {
 		{name: "America/New_York", zone: newYork},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
 			proc.GetSessionInfo().TimeZone = tc.zone
 			input := testutil.MakeTSVector(values, []uint64{2}, proc.Mp())
 			defer input.Free(proc.Mp())
@@ -74,6 +74,7 @@ func TestCastTSToTimestampPreservesAbsoluteInstant(t *testing.T) {
 
 	newYork, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)
+	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		name string
 		zone *time.Location
@@ -83,7 +84,6 @@ func TestCastTSToTimestampPreservesAbsoluteInstant(t *testing.T) {
 		{name: "America/New_York", zone: newYork},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
 			proc.GetSessionInfo().TimeZone = tc.zone
 			input := testutil.MakeTSVector(values, []uint64{1}, proc.Mp())
 			defer input.Free(proc.Mp())
@@ -107,6 +107,7 @@ func TestCastTSToTimestampPreservesAbsoluteInstant(t *testing.T) {
 func TestTSToTimestampPrecisionContract(t *testing.T) {
 	physical := time.Date(2026, time.August, 26, 5, 45, 12, 125678987, time.UTC).UnixNano()
 	value := types.BuildTS(physical, 1)
+	proc := testutil.NewProcess(t)
 
 	for _, tc := range []struct {
 		name  string
@@ -117,7 +118,6 @@ func TestTSToTimestampPrecisionContract(t *testing.T) {
 		{name: "scale-6", scale: 6},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
 			input := testutil.MakeTSVector([]types.TS{value}, nil, proc.Mp())
 			defer input.Free(proc.Mp())
 			precision, err := vector.NewConstFixed(types.T_int64.ToType(), tc.scale, 1, proc.Mp())
@@ -141,6 +141,7 @@ func TestTSToTimestampPrecisionContract(t *testing.T) {
 }
 
 func TestTSToTimestampRejectsInvalidPrecision(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		name  string
 		scale int64
@@ -150,7 +151,6 @@ func TestTSToTimestampRejectsInvalidPrecision(t *testing.T) {
 		{name: "int32-overflow", scale: 1<<32 + 6},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
 			input := testutil.MakeTSVector([]types.TS{types.BuildTS(1, 0)}, nil, proc.Mp())
 			defer input.Free(proc.Mp())
 			precision, err := vector.NewConstFixed(types.T_int64.ToType(), tc.scale, 1, proc.Mp())

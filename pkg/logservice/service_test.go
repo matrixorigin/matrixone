@@ -21,7 +21,6 @@ import (
 	"math"
 	"net"
 	"runtime/debug"
-	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	hapkg "github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -43,6 +44,31 @@ type failOpenFS struct {
 	vfs.FS
 	path string
 	err  error
+}
+
+type closeOrderDataSync struct {
+	closed bool
+}
+
+func (d *closeOrderDataSync) Append(context.Context, uint64, []byte)     {}
+func (d *closeOrderDataSync) NotifyReplicaID(uint64, uint64, ChangeType) {}
+func (d *closeOrderDataSync) Close() error {
+	d.closed = true
+	return nil
+}
+
+type closeOrderRPCServer struct {
+	dataSync *closeOrderDataSync
+}
+
+func (s *closeOrderRPCServer) Start() error { return nil }
+func (s *closeOrderRPCServer) Close() error {
+	if s.dataSync.closed {
+		return errors.New("data sync closed before rpc ingress")
+	}
+	return nil
+}
+func (s *closeOrderRPCServer) RegisterRequestHandler(func(context.Context, morpc.RPCMessage, uint64, morpc.ClientSession) error) {
 }
 
 func (f *failOpenFS) Open(name string, opts ...vfs.OpenOption) (vfs.File, error) {
@@ -118,6 +144,20 @@ func TestNewService(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.NoError(t, service.Close())
+	assert.NoError(t, service.Close())
+}
+
+func TestServiceCloseStopsRPCBeforeDataSync(t *testing.T) {
+	ds := &closeOrderDataSync{}
+	service := &Service{
+		stopper:  stopper.NewStopper(t.Name()),
+		server:   &closeOrderRPCServer{dataSync: ds},
+		dataSync: ds,
+	}
+
+	require.NoError(t, service.Close())
+	require.True(t, ds.closed)
+	require.NoError(t, service.Close())
 }
 
 func TestNewServiceClosesStoreOnMetadataFailure(t *testing.T) {
@@ -154,6 +194,11 @@ func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 	var cfg Config
 	generate := func() Config {
 		cfg = genCfg()
+		// This fixture tests duplicate-replica startup cleanup, not remote
+		// membership discovery. An unrelated service at the default 32001
+		// address could classify the injected replica as a zombie and bypass
+		// the intended StartReplica failure. Self is excluded from that probe.
+		cfg.HAKeeperClientConfig.ServiceAddresses = []string{cfg.LogServiceServiceAddr()}
 		return cfg
 	}
 	defer vfs.ReportLeakedFD(fs, t)
@@ -175,6 +220,10 @@ func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, cfg.FS))
 
 	service, err = NewServiceWithRetry(generate, newFS(), nil)
+	if service != nil {
+		unexpected := service
+		t.Cleanup(func() { require.NoError(t, unexpected.Close()) })
+	}
 	require.Nil(t, service)
 	require.ErrorIs(t, err, dragonboat.ErrShardAlreadyExist)
 
@@ -355,6 +404,12 @@ func TestServiceHandleLogHeartbeat(t *testing.T) {
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
 		resp := s.handleLogHeartbeat(ctx, req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleLogHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -373,6 +428,12 @@ func TestServiceHandleCNHeartbeat(t *testing.T) {
 		resp := s.handleCNHeartbeat(ctx, req)
 		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleCNHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -416,6 +477,12 @@ func TestServiceHandleTNHeartbeat(t *testing.T) {
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
 		resp := s.handleTNHeartbeat(ctx, req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleTNHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -711,12 +778,13 @@ func TestServiceViewMetadataAdmissionActivation(t *testing.T) {
 			return s.handleCNHeartbeat(ctx, pb.Request{
 				Method: pb.CN_HEARTBEAT,
 				CNHeartbeat: &pb.CNStoreHeartbeat{
-					UUID:                            "cn-admission",
-					ViewMetadataAdmissionSupported:  true,
-					ViewMetadataAdmissionGeneration: 10,
-					ViewMetadataObservedEpoch:       observed,
-					ViewMetadataCatalogFencedEpoch:  catalog,
-					CommandDeliveryAckSupported:     true,
+					UUID:                               "cn-admission",
+					ViewMetadataAdmissionSupported:     true,
+					PersistedExpressionProtocolVersion: uint64(defines.MORPCLatestVersion),
+					ViewMetadataAdmissionGeneration:    10,
+					ViewMetadataObservedEpoch:          observed,
+					ViewMetadataCatalogFencedEpoch:     catalog,
+					CommandDeliveryAckSupported:        true,
 				},
 			})
 		}
@@ -767,6 +835,138 @@ func TestServiceViewMetadataAdmissionActivation(t *testing.T) {
 		admission, err = s.store.getViewMetadataAdmissionState(ctx)
 		require.NoError(t, err)
 		require.True(t, admission.Enabled)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceViewMetadataAdmissionReconcilesPendingBeforeProtocolRaise(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		propose := func(cmd []byte) {
+			session := s.store.nh.GetNoOPSession(hapkg.DefaultHAKeeperShardID)
+			_, err := s.store.propose(ctx, session, cmd)
+			require.NoError(t, err)
+		}
+		logHeartbeat := func() {
+			hb := s.store.getHeartbeatMessage()
+			response := s.handleLogHeartbeat(ctx, pb.Request{
+				Method:       pb.LOG_HEARTBEAT,
+				LogHeartbeat: &hb,
+			})
+			require.Equal(t, uint32(moerr.Ok), response.ErrorCode)
+		}
+		cnHeartbeat := func(generation, observed, fenced uint64) pb.Response {
+			response := s.handleCNHeartbeat(ctx, pb.Request{
+				Method: pb.CN_HEARTBEAT,
+				CNHeartbeat: &pb.CNStoreHeartbeat{
+					UUID:                               "cn-pending-reconcile",
+					ViewMetadataAdmissionSupported:     true,
+					PersistedExpressionProtocolVersion: uint64(defines.MORPCLatestVersion),
+					ViewMetadataAdmissionGeneration:    generation,
+					ViewMetadataObservedEpoch:          observed,
+					ViewMetadataCatalogFencedEpoch:     fenced,
+					ViewMetadataIngressReady:           true,
+					ViewMetadataRefreshSupported:       false,
+					CommandDeliveryAckSupported:        true,
+				},
+			})
+			require.Equal(t, uint32(moerr.Ok), response.ErrorCode)
+			return response
+		}
+		proxyHeartbeat := func(generation, observed uint64) {
+			response := s.handleProxyHeartbeat(ctx, pb.Request{
+				Method: pb.PROXY_HEARTBEAT,
+				ProxyHeartbeat: &pb.ProxyHeartbeat{
+					UUID:                            "proxy-pending-reconcile",
+					ViewMetadataAdmissionSupported:  true,
+					ViewMetadataAdmissionGeneration: generation,
+					ViewMetadataObservedEpoch:       observed,
+				},
+			})
+			require.Equal(t, uint32(moerr.Ok), response.ErrorCode)
+		}
+
+		// Simulate an already-enabled legacy cluster. This is the upgrade state
+		// that the normal current-version bootstrap path no longer creates.
+		logHeartbeat()
+		cnHeartbeat(10, 0, 0)
+		proxyHeartbeat(20, 0)
+		propose(hapkg.GetEnableViewMetadataAdmissionCmd())
+		logHeartbeat()
+		cnHeartbeat(10, 1, 1)
+		proxyHeartbeat(20, 1)
+		cfg := s.store.cfg.GetHAKeeperConfig()
+		cfg.Fill()
+		propose(hapkg.GetEnableViewMetadataAdmissionCmdForConfig(cfg))
+
+		admission, err := s.store.getViewMetadataAdmissionState(ctx)
+		require.NoError(t, err)
+		require.True(t, admission.Enabled)
+		require.False(t, admission.Pending)
+		require.Zero(t, admission.RequiredProtocolVersion)
+
+		// A same-UUID restart captures generation 10 as a drain target and
+		// starts a new epoch. The replacement acknowledges that epoch, but the
+		// old target remains pending until its logical timeout.
+		state, err := s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		oldTargetTick := state.Tick
+		restartResponse := cnHeartbeat(11, 2, 2)
+		require.NotNil(t, restartResponse.CommandBatch)
+		require.NotNil(t, restartResponse.CommandBatch.ViewMetadataAdmission)
+		restartEpoch := restartResponse.CommandBatch.ViewMetadataAdmission.Epoch
+		admission, err = s.store.getViewMetadataAdmissionState(ctx)
+		require.NoError(t, err)
+		require.True(t, admission.Pending)
+
+		timeoutTicks := uint64(cfg.CNStoreTimeout/time.Second) *
+			uint64(cfg.TickPerSecond)
+		for {
+			state, err = s.store.getCheckerStateWithContext(ctx)
+			require.NoError(t, err)
+			if state.Tick > oldTargetTick+timeoutTicks {
+				break
+			}
+			propose(hapkg.GetTickCmd())
+		}
+		// The first checker pass after expiry must use legacy reconciliation.
+		// It clears the old-generation target while the durable floor remains 0.
+		state, err = s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		_, err = s.store.tryEnableViewMetadataAdmission(ctx, state)
+		require.NoError(t, err)
+		admission, err = s.store.getViewMetadataAdmissionState(ctx)
+		require.NoError(t, err)
+		require.False(t, admission.Pending)
+		require.Zero(t, admission.RequiredProtocolVersion)
+
+		// Only after pending is durably cleared may the protocol-bearing entry
+		// raise the floor and begin a fresh admission epoch.
+		state, err = s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		_, err = s.store.tryEnableViewMetadataAdmission(ctx, state)
+		require.NoError(t, err)
+		admission, err = s.store.getViewMetadataAdmissionState(ctx)
+		require.NoError(t, err)
+		require.Equal(t, uint64(defines.MORPCLatestVersion), admission.RequiredProtocolVersion)
+		require.True(t, admission.Pending)
+
+		state, err = s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		newEpoch := restartEpoch + 1
+		cnHeartbeat(11, newEpoch, newEpoch)
+		proxyHeartbeat(20, newEpoch)
+		state, err = s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		enabled, err := s.store.tryEnableViewMetadataAdmission(ctx, state)
+		require.NoError(t, err)
+		require.True(t, enabled)
+		admission, err = s.store.getViewMetadataAdmissionState(ctx)
+		require.NoError(t, err)
+		require.False(t, admission.Pending)
+		require.Equal(t, uint64(defines.MORPCLatestVersion), admission.RequiredProtocolVersion)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -1164,68 +1364,15 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				// half-converged gossip state. Require complete short-suite coverage.
 				maxNotReady = 0
 			}
-			seedCount := min(nodeCount, 10)
-			gossipPorts := make([]int, nodeCount)
-			for i := range gossipPorts {
-				gossipPorts[i] = getTestGossipPort()
-			}
-			seedAddresses := make([]string, seedCount)
-			for i := range seedCount {
-				seedAddresses[i] = getTestGossipAddress(gossipPorts[i])
-			}
-			configs := make([]Config, 0, nodeCount)
-			services := make([]*Service, 0, nodeCount)
-			defer func() {
-				testLogger.Info("going to close all services")
-				var wg sync.WaitGroup
-				var closeErr error
-				var closeErrMu sync.Mutex
-				for _, s := range services {
-					if s != nil {
-						selected := s
-						wg.Add(1)
-						go func() {
-							defer wg.Done()
-							if err := selected.Close(); err != nil {
-								closeErrMu.Lock()
-								closeErr = errors.Join(closeErr, err)
-								closeErrMu.Unlock()
-							}
-							testLogger.Info("closed a service")
-						}()
-					}
-				}
-				wg.Wait()
-				require.NoError(t, closeErr)
-			}()
-			for i := 0; i < nodeCount; i++ {
-				cfg := DefaultConfig()
-				cfg.FS = vfs.NewStrictMem()
-				cfg.UUID = uuid.New().String()
-				cfg.DeploymentID = 1
-				cfg.RTTMillisecond = 200
-				cfg.DataDir = fmt.Sprintf("data-%d", i)
-				cfg.LogServicePort = getTestServicePort()
-				cfg.RaftPort = getAvailablePort()
-				cfg.GossipPort = gossipPorts[i]
-				cfg.GossipSeedAddresses = append([]string(nil), seedAddresses...)
-				cfg.DisableWorkers = true
-				cfg.LogDBBufferSize = 1024 * 16
-				cfg.GossipProbeInterval.Duration = 350 * time.Millisecond
-				configs = append(configs, cfg)
-
-				runtime.SetupServiceBasedRuntime(cfg.UUID, rt)
-
-				service, err := NewService(cfg,
-					newFS(),
-					nil,
-					WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-						return true
-					}),
-				)
-				require.NoError(t, err)
-				services = append(services, service)
-			}
+			configs, services, err := startGossipFixture(t, t.Context(),
+				func() ([]Config, error) { return makeGossipFixtureConfigs(t, rt, nodeCount) },
+				newGossipFixtureService,
+				func(configs []Config, services []*Service) error {
+					return closeGossipFixture(rt, configs, services)
+				},
+			)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, closeGossipFixture(rt, configs, services)) }()
 			// start all replicas
 			// shardID: [1, 16]
 			id := uint64(100)

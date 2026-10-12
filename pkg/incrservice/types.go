@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -165,13 +166,9 @@ type AutoIncrementService interface {
 // falls below this realm, an asynchronous task will be started to advance the allocation of
 // the next Range.
 //
-// In addition to passively assigning the next Range in advance, we are going to need to have
-// the ability to actively assign it in advance. Each allocated Range has a size, if the
-// allocated Range is not enough to meet the demand of one write, it will cause a delayed
-// wait for a write process that needs to go to allocate multiple Ranges. So when the amount
-// of data written at one time is particularly large, such as load, you need to actively tell
-// the cacheItem the approximate amount of data to be written, to avoid the scenario of multiple
-// allocations for one write.
+// Planner estimates can trigger one configured cache range in advance, but cannot
+// determine the size of a durable reservation. Actual batch demand can request a
+// larger range through the existing column-cache allocation path.
 type incrTableCache interface {
 	table() uint64
 	epoch() uint32
@@ -181,7 +178,7 @@ type incrTableCache interface {
 	commit()
 	columns() []AutoColumn
 	insertAutoValues(ctx context.Context, tableID uint64, vecs []*vector.Vector, rows int, estimate int64) (uint64, error)
-	currentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
+	currentValue(ctx context.Context, tableID uint64, col string, store IncrValueStore) (uint64, error)
 	getLastAllocateTS(ctx context.Context, colName string) (timestamp.Timestamp, error)
 	adjust(ctx context.Context, cols []AutoColumn) error
 	close() error
@@ -199,6 +196,8 @@ type valueAllocator interface {
 type IncrValueStore interface {
 	// GetColumns return auto columns of table.
 	GetColumns(ctx context.Context, tableID uint64, txnOp client.TxnOperator) ([]AutoColumn, error)
+	// GetColumnValue observes fresh offset/step without reserving IDs or reading table policy.
+	GetColumnValue(ctx context.Context, tableID uint64, colName string, txnOp client.TxnOperator) (uint64, uint64, error)
 	// Create add metadata records into catalog.AutoIncrTableName.
 	Create(ctx context.Context, tableID uint64, cols []AutoColumn, txnOp client.TxnOperator) error
 	// Allocate allocate new range for auto-increment column.
@@ -225,19 +224,27 @@ type AutoColumn struct {
 	ColIndex int
 	Offset   uint64
 	Step     uint64
+	// CacheSize is projected from the table's SchemaExtra, not stored in the allocator row.
+	CacheSize uint64
+	// isInternal is authoritative hidden fake-PK ownership from the table
+	// definition, not inferred from a name supplied by a SQL-visible column.
+	isInternal bool
 }
 
 // ValidateAutoColumnOffset rejects allocator offsets that cannot be represented
 // by the destination AUTO_INCREMENT column type.
-func ValidateAutoColumnOffset(ctx context.Context, typ types.T, offset uint64) error {
+func ValidateAutoColumnOffset(ctx context.Context, typ types.Type, offset uint64) error {
 	var limit uint64
-	switch typ {
+	switch typ.Oid {
 	case types.T_uint8:
 		limit = math.MaxUint8
 	case types.T_uint16:
 		limit = math.MaxUint16
 	case types.T_uint32:
 		limit = math.MaxUint32
+		if typ.IsMediumInt() {
+			limit = 1<<24 - 1
+		}
 	case types.T_uint64:
 		return nil
 	case types.T_int8:
@@ -246,6 +253,9 @@ func ValidateAutoColumnOffset(ctx context.Context, typ types.T, offset uint64) e
 		limit = math.MaxInt16
 	case types.T_int32:
 		limit = math.MaxInt32
+		if typ.IsMediumInt() {
+			limit = 1<<23 - 1
+		}
 	case types.T_int64:
 		limit = math.MaxInt64
 	default:
@@ -256,7 +266,7 @@ func ValidateAutoColumnOffset(ctx context.Context, typ types.T, offset uint64) e
 	}
 	return moerr.NewOutOfRangef(
 		ctx,
-		typ.ToType().String(),
+		typ.String(),
 		"AUTO_INCREMENT value %d",
 		offset,
 	)
@@ -284,11 +294,13 @@ func getAutoColumnsFromDef(def *plan.TableDef, include func(*plan.ColDef) bool) 
 	for i, col := range def.Cols {
 		if col.Typ.AutoIncr && include(col) {
 			cols = append(cols, AutoColumn{
-				ColName:  col.Name,
-				TableID:  def.TblId,
-				Step:     1,
-				Offset:   def.AutoIncrOffset,
-				ColIndex: i,
+				ColName:    col.Name,
+				TableID:    def.TblId,
+				Step:       1,
+				Offset:     def.AutoIncrOffset,
+				ColIndex:   i,
+				CacheSize:  def.AutoIdCache,
+				isInternal: col.Hidden && col.Name == catalog.FakePrimaryKeyColName,
 			})
 		}
 	}

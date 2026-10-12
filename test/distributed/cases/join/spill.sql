@@ -18,6 +18,9 @@ set @@join_spill_mem = 1000;
 select mo_ctl('dn', 'flush', 'd1.t1');
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t2');
+-- Complete the initial statistics publication before injecting planner costs.
+select table_cnt from table_stats('d1.t1', 'refresh', 'full') g;
+select table_cnt from table_stats('d1.t2', 'refresh', 'full') g;
 -- Keep the production planner's original 5M/4M estimates. Unlike forcing an
 -- exec type, patched table statistics still exercise shuffle selection.
 set @spill_t1_stats = '{"table_cnt":5000000,"block_number":640,"accurate_object_number":40,"approx_object_number":40,"ndv_map":{"c1":5000000,"c2":5000000,"c3":5000000},"min_val_map":{"c1":1,"c2":1,"c3":1},"max_val_map":{"c1":5000000,"c2":5000000,"c3":5000000},"shuffle_range_map":{"c1":{"overlap":0.1,"uniform":1,"result":[1,1250000,2500000,3750000,5000000]},"c2":{"overlap":0.1,"uniform":1,"result":[1,1250000,2500000,3750000,5000000]},"c3":{"overlap":0.1,"uniform":1,"result":[1,1250000,2500000,3750000,5000000]}}}';
@@ -158,6 +161,8 @@ create table t_dedup_spill (id int primary key, val int);
 insert into t_dedup_spill select *,* from generate_series(400000) g;
 set @@join_spill_mem = 1000;
 -- @ignore:0
+-- Keep the DEDUP action and primary-key hash shuffle stable without pinning topology-dependent plan layout.
+-- @regex("(?m)^[ \t]*Join Type: DEDUP [(]UPDATE[)][^\r\n]*\r?\n[ \t]*Join Cond: [^\r\n]*shuffle: hash[(]t_dedup_spill[.]id[)]", true)
 explain (check '["Join Type: DEDUP", "shuffle: hash"]')
 insert into t_dedup_spill select *, 0 from generate_series(200000, 600000) g
 on duplicate key update val = val + 1;

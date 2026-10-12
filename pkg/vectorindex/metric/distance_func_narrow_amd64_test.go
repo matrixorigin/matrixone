@@ -1,4 +1,4 @@
-//go:build amd64 && go1.26 && goexperiment.simd
+//go:build amd64 && go1.27 && goexperiment.simd
 
 // Copyright 2023 Matrix Origin
 //
@@ -21,7 +21,6 @@
 package metric
 
 import (
-	"math"
 	"math/rand"
 	"testing"
 
@@ -29,47 +28,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// dims exercise the 16-lane main loop (bf16/f16: 32/iter, int8: 64/iter) plus
-// every tail remainder, including odd final elements.
-var narrowSIMDDims = []int{1, 2, 3, 4, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 1000, 1024, 1025}
-
-func randF32(dim int, r *rand.Rand) []float32 {
-	f := make([]float32, dim)
-	for i := range f {
-		f[i] = float32(r.Float64()*16 - 8) // [-8, 8)
-	}
-	return f
-}
-func randBF16(dim int, r *rand.Rand) []types.BF16 { return types.Float32ToBF16Slice(randF32(dim, r)) }
-func randF16(dim int, r *rand.Rand) []types.Float16 {
-	return types.Float32ToFloat16Slice(randF32(dim, r))
-}
-func randI8(dim int, r *rand.Rand) []int8 {
-	v := make([]int8, dim)
-	for i := range v {
-		v[i] = int8(r.Intn(255) - 127)
-	}
-	return v
-}
-func randU8(dim int, r *rand.Rand) []uint8 {
-	v := make([]uint8, dim)
-	for i := range v {
-		v[i] = uint8(r.Intn(256))
-	}
-	return v
-}
-
-// checkPair asserts a SIMD kernel matches its scalar oracle. exact=true requires
-// bit-equality (integer int8 L2sq/IP/L1); otherwise a magnitude-scaled tolerance
-// (float reductions reorder).
-func checkPair(t *testing.T, name string, dim int, got, want float64, exact bool) {
-	t.Helper()
-	if exact {
-		require.Equal(t, want, got, "%s dim=%d", name, dim)
-		return
-	}
-	require.InDelta(t, want, got, 1e-4*(1+math.Abs(want)), "%s dim=%d", name, dim)
-}
+// narrowSIMDDims, randF32/randBF16/randF16/randI8/randU8 and checkPair are
+// shared with the arm64 equivalence tests and live in the untagged
+// distance_func_narrow_simd_shared_test.go.
 
 func TestBF16SIMDMatchesScalar(t *testing.T) {
 	if !hasAVX512 {

@@ -20,7 +20,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	log "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -106,4 +108,40 @@ func TestAddressFunc(t *testing.T) {
 		_, err := fn(ctx, true)
 		assert.NoError(t, err)
 	})
+
+	for _, phase := range []string{"preparing", "enabled", "disabled"} {
+		t.Run(phase, func(t *testing.T) {
+			sid := t.Name()
+			runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+			runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.BackgroundCNSelector,
+				clusterservice.NewSelector().SelectByLabel(map[string]string{"role": "background"}, clusterservice.EQ))
+			client := &testHAKeeperClient{value: log.ClusterDetails{
+				ViewMetadataAdmission: &log.ViewMetadataAdmission{
+					Preparing: phase == "preparing", Enabled: phase == "enabled",
+				},
+				CNStores: []log.CNStore{
+					{UUID: "ready", SQLAddress: "ready", WorkState: metadata.WorkState_Working, ViewMetadataAdmissionReady: true},
+					{UUID: "pending", SQLAddress: "pending", WorkState: metadata.WorkState_Working,
+						Labels: map[string]metadata.LabelList{"role": {Labels: []string{"background"}}}},
+				},
+			}}
+			fn := AddressFunc(sid, func() HAKeeperClient { return client })
+			for _, random := range []bool{false, true} {
+				address, err := fn(context.Background(), random)
+				require.NoError(t, err)
+				want := "ready"
+				if phase == "disabled" {
+					want = "pending"
+				}
+				require.Equal(t, want, address, "labels must not override SQL admission")
+			}
+			client.value.CNStores = client.value.CNStores[1:]
+			_, err := fn(context.Background(), false)
+			if phase == "disabled" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err, "no admitted CN must return an error, not a pending SQL endpoint")
+			}
+		})
+	}
 }

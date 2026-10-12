@@ -31,6 +31,10 @@ func writeMockGo(t *testing.T) string {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "go")
 	script := `#!/bin/bash
+if [[ "$1" == version ]]; then
+    if [[ -n "${MOCK_GO_BUILD_INFO:-}" ]]; then printf "%s\n" "$MOCK_GO_BUILD_INFO"; exit 0; fi
+    exit 1
+fi
 count=0
 if [[ -f "${MOCK_GO_COUNTER}" ]]; then count=$(<"${MOCK_GO_COUNTER}"); fi
 count=$((count + 1))
@@ -118,6 +122,90 @@ func TestInstallGoUTAnalysisPreservesFinalFailure(t *testing.T) {
 		t.Fatalf("expected status 42, got %d: %s", status, output)
 	}
 	assertAttempts(t, counter, arguments, 3)
+}
+
+func TestInstallGoUTAnalysisChecksCachedVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name, info string
+		cached     bool
+	}{
+		{"pinned", "mod github.com/matrixorigin/go-ut-analysis v0.0.0-20250711025253-f31acb12d3b1 h1:example", true},
+		{"stale", "mod github.com/matrixorigin/go-ut-analysis v0.0.0-old h1:example", false},
+		{"unreadable", "", false},
+		{"replaced", "mod github.com/matrixorigin/go-ut-analysis v0.0.0-20250711025253-f31acb12d3b1\n=> local", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := writeMockGo(t)
+			if err := os.WriteFile(filepath.Join(dir, "go-ut-analysis"), []byte("#!/bin/bash\nexit 99\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			counter, arguments := filepath.Join(dir, "counter"), filepath.Join(dir, "args")
+			toolsPath, err := filepath.Abs("ut_tools.bash")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("bash", "-c", `source "$1"; install_go_ut_analysis 1 0`, "bash", toolsPath)
+			cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "MOCK_GO_BUILD_INFO="+tc.info, "MOCK_GO_COUNTER="+counter, "MOCK_GO_ARGS="+arguments, "MOCK_GO_SUCCEED_AFTER=1", "MOCK_GO_FAILURE_STATUS=42")
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("install: %v: %s", err, output)
+			}
+			if tc.cached {
+				if _, err := os.Stat(counter); !os.IsNotExist(err) {
+					t.Fatalf("cached tool should avoid installation: %v", err)
+				}
+			} else {
+				assertAttempts(t, counter, arguments, 1)
+			}
+		})
+	}
+}
+
+func TestUTProcessGroupSnapshot(t *testing.T) {
+	processPath, err := filepath.Abs("ut_process.bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, snapshot, psStatus, filterStatus, want string
+	}{
+		{"live-leader", "42 7 S", "0", "", "0"},
+		{"live-descendant", "7 42 S", "0", "", "0"},
+		{"zombies-only", "42 42 Z\n7 42 Z", "0", "", "1"},
+		{"unrelated-group", "7 7 S", "0", "", "1"},
+		{"snapshot-failure", "", "7", "", "0"},
+		{"partial-snapshot-failure", "42 42 Z", "7", "", "0"},
+		{"filter-failure", "42 42 S", "0", "2", "0"},
+		{"pending-termination", "42 42 S", "0", "TERM", "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command("bash", "-c", `
+set -o nounset
+source "$1"
+snapshot=$2 ps_status=$3 filter_status=$4 expected=$5
+term_pending=0
+trap "term_pending=1" TERM
+function kill() { return 0; }
+function ps() { printf '%s\n' "$snapshot"; return "$ps_status"; }
+function awk() {
+    if [[ "$filter_status" == TERM ]]; then
+        command awk "$@"
+        local status=$?
+        command kill -TERM "$$"
+        return "$status"
+    fi
+    if [[ -n "$filter_status" ]]; then return "$filter_status"; fi
+    command awk "$@"
+}
+status=0
+ut_process_group_alive 42 || status=$?
+[[ "$filter_status" != TERM || "$term_pending" == 1 ]] || exit 1
+[[ "$status" == "$expected" ]] || { printf 'status=%s expected=%s\n' "$status" "$expected"; exit 1; }
+`, "bash", processPath, tc.snapshot, tc.psStatus, tc.filterStatus, tc.want)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("process group snapshot: %v\n%s", err, out)
+			}
+		})
+	}
 }
 
 func TestUTProcessGroupsEscalateAfterTerm(t *testing.T) {
@@ -256,6 +344,41 @@ fi
 	cmd := exec.Command("bash", "-c", script, "bash", processPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("report ownership harness failed: %v\n%s", err, output)
+	}
+}
+
+func TestAppendUTReportPreservesNumericShardOrder(t *testing.T) {
+	processPath, err := filepath.Abs("ut_process.bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Plan-race recovery uses fixed-width suffixes because append_ut_report
+	// consumes shard files through a lexical glob. Keep a two-digit case here
+	// so shard 10 cannot silently move ahead of shard 2.
+	script := `
+set -o nounset
+source "$1"
+test_dir=$(mktemp -d)
+trap 'rm -rf "$test_dir"' EXIT
+report="$test_dir/plan.out"
+destination="$test_dir/all.out"
+expected="$test_dir/expected.out"
+for (( shard = 0; shard < 12; shard++ )); do
+    suffix=$(printf '%02d' "$shard")
+    printf 'shard-%02d\n' "$shard" > "$report.$suffix"
+    printf 'shard-%02d\n' "$shard" >> "$expected"
+done
+append_ut_report "$report" "$destination"
+if ! cmp -s "$expected" "$destination"; then
+    echo "numeric shard order was not preserved" >&2
+    command cat "$destination" >&2
+    exit 1
+fi
+`
+	cmd := exec.Command("bash", "-c", script, "bash", processPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("numeric shard recovery harness failed: %v\n%s", err, output)
 	}
 }
 

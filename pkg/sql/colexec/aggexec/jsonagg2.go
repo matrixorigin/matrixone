@@ -16,21 +16,25 @@ package aggexec
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"math"
 	"slices"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/jsonvalue"
 )
 
 type jsonArrayAggExec struct {
 	aggExec
 	distinct     bool
 	distinctHash distinctHash
+	timeZone     *time.Location
 }
 
 func (exec *jsonArrayAggExec) SetAllocationAccount(
@@ -124,7 +128,7 @@ func (exec *jsonArrayAggExec) BatchFill(offset int, groups []uint64, vectors []*
 					continue
 				}
 			}
-			val, err = buildValueByteJson(vectors[0], uint64(row))
+			val, err = buildJSONArrayValueByteJson(vectors[0], uint64(row), exec.timeZone)
 			if err != nil {
 				return err
 			}
@@ -232,6 +236,7 @@ type jsonObjectAggExec struct {
 	aggExec
 	distinct     bool
 	distinctHash distinctHash
+	timeZone     *time.Location
 }
 
 func (exec *jsonObjectAggExec) SetAllocationAccount(
@@ -332,7 +337,7 @@ func (exec *jsonObjectAggExec) BatchFill(offset int, groups []uint64, vectors []
 		}
 		val := bytejson.Null
 		if !vectors[1].IsNull(uint64(valRow)) {
-			val, err = buildValueByteJson(vectors[1], uint64(valRow))
+			val, err = buildValueByteJsonWithLocation(vectors[1], uint64(valRow), exec.timeZone)
 			if err != nil {
 				return err
 			}
@@ -456,11 +461,27 @@ func appendJSONPayloadField(dst []byte, data []byte) []byte {
 	return append(dst, data...)
 }
 
-func jsonAggregateValueSize(vec *vector.Vector, row uint64) (int, error) {
+func jsonAggregateValueSize(vec *vector.Vector, row uint64, locations ...*time.Location) (int, error) {
+	var loc *time.Location
+	if len(locations) > 0 {
+		loc = locations[0]
+	}
 	if vec.IsNull(row) || vec.GetType().Oid == types.T_any || vec.GetType().Oid == types.T_bool {
 		return 2, nil
 	}
 	typ := vec.GetType()
+	if typ.Oid == types.T_date || typ.Oid == types.T_time || typ.Oid == types.T_datetime ||
+		typ.Oid == types.T_timestamp || typ.Oid == types.T_year {
+		value, err := buildValueByteJsonWithLocation(vec, row, loc)
+		if err != nil {
+			return 0, err
+		}
+		encoded, err := value.Marshal()
+		if err != nil {
+			return 0, err
+		}
+		return len(encoded), nil
+	}
 	switch typ.Oid {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
@@ -475,18 +496,6 @@ func jsonAggregateValueSize(vec *vector.Vector, row uint64) (int, error) {
 	case types.T_decimal256:
 		value := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)[row].Format(typ.Scale)
 		return jsonAggregateDecimalSize(value), nil
-	case types.T_date:
-		length := len(vector.MustFixedColNoTypeCheck[types.Date](vec)[row].String())
-		return 1 + jsonUvarintSize(uint64(length)) + length, nil
-	case types.T_time:
-		length := len(vector.MustFixedColNoTypeCheck[types.Time](vec)[row].String())
-		return 1 + jsonUvarintSize(uint64(length)) + length, nil
-	case types.T_datetime:
-		length := len(vector.MustFixedColNoTypeCheck[types.Datetime](vec)[row].String())
-		return 1 + jsonUvarintSize(uint64(length)) + length, nil
-	case types.T_timestamp:
-		length := len(vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[row].String())
-		return 1 + jsonUvarintSize(uint64(length)) + length, nil
 	case types.T_char, types.T_varchar, types.T_text:
 		length := len(vec.GetBytesAt(int(row)))
 		return 1 + jsonUvarintSize(uint64(length)) + length, nil
@@ -521,6 +530,21 @@ func jsonAggregateValueSize(vec *vector.Vector, row uint64) (int, error) {
 
 func jsonAggregateDecimalSize(value string) int {
 	return 1 + jsonUvarintSize(uint64(len(value))) + len(value)
+}
+
+func jsonArrayAggregateValueSize(vec *vector.Vector, row uint64, locations ...*time.Location) (int, error) {
+	var loc *time.Location
+	if len(locations) > 0 {
+		loc = locations[0]
+	}
+	if !isSharedJSONArrayValueType(vec.GetType().Oid) {
+		return jsonAggregateValueSize(vec, row, loc)
+	}
+	value, err := buildJSONArrayValueByteJson(vec, row, loc)
+	if err != nil {
+		return 0, err
+	}
+	return 1 + len(value.Data), nil
 }
 
 func appendJSONAggregateDecimal(dst []byte, value string) []byte {
@@ -573,11 +597,28 @@ func appendJSONAggregateValue(
 	dst []byte,
 	vec *vector.Vector,
 	row uint64,
+	locations ...*time.Location,
 ) ([]byte, error) {
+	var loc *time.Location
+	if len(locations) > 0 {
+		loc = locations[0]
+	}
 	if vec.IsNull(row) {
 		return append(dst, bytejson.TpCodeLiteral, bytejson.LiteralNull), nil
 	}
 	typ := vec.GetType()
+	if typ.Oid == types.T_date || typ.Oid == types.T_time || typ.Oid == types.T_datetime ||
+		typ.Oid == types.T_timestamp || typ.Oid == types.T_year {
+		value, err := buildValueByteJsonWithLocation(vec, row, loc)
+		if err != nil {
+			return nil, err
+		}
+		encoded, err := value.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		return append(dst, encoded...), nil
+	}
 	switch typ.Oid {
 	case types.T_any:
 		return append(dst, bytejson.TpCodeLiteral, bytejson.LiteralNull), nil
@@ -626,22 +667,6 @@ func appendJSONAggregateValue(
 	case types.T_decimal256:
 		value := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)[row].Format(typ.Scale)
 		return appendJSONAggregateDecimal(dst, value), nil
-	case types.T_date:
-		value := vector.MustFixedColNoTypeCheck[types.Date](vec)[row].String()
-		dst = append(dst, bytejson.TpCodeString)
-		return appendJSONBinaryString(dst, []byte(value)), nil
-	case types.T_time:
-		value := vector.MustFixedColNoTypeCheck[types.Time](vec)[row].String()
-		dst = append(dst, bytejson.TpCodeString)
-		return appendJSONBinaryString(dst, []byte(value)), nil
-	case types.T_datetime:
-		value := vector.MustFixedColNoTypeCheck[types.Datetime](vec)[row].String()
-		dst = append(dst, bytejson.TpCodeString)
-		return appendJSONBinaryString(dst, []byte(value)), nil
-	case types.T_timestamp:
-		value := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[row].String()
-		dst = append(dst, bytejson.TpCodeString)
-		return appendJSONBinaryString(dst, []byte(value)), nil
 	case types.T_char, types.T_varchar, types.T_text:
 		dst = append(dst, bytejson.TpCodeString)
 		return appendJSONBinaryString(dst, vec.GetBytesAt(int(row))), nil
@@ -674,6 +699,22 @@ func appendJSONAggregateValue(
 		return nil, moerr.NewInvalidInputNoCtxf(
 			"unsupported type for json aggregate: %v", typ.String())
 	}
+}
+
+func appendJSONArrayAggregateValue(dst []byte, vec *vector.Vector, row uint64, locations ...*time.Location) ([]byte, error) {
+	var loc *time.Location
+	if len(locations) > 0 {
+		loc = locations[0]
+	}
+	if !isSharedJSONArrayValueType(vec.GetType().Oid) {
+		return appendJSONAggregateValue(dst, vec, row, loc)
+	}
+	value, err := buildJSONArrayValueByteJson(vec, row, loc)
+	if err != nil {
+		return nil, err
+	}
+	dst = append(dst, byte(value.Type))
+	return append(dst, value.Data...), nil
 }
 
 func appendJSONArray[T types.ArrayElement](
@@ -724,7 +765,7 @@ func (exec *jsonArrayAggExec) batchFillAccounted(
 		if vectors[0].IsConst() {
 			row = 0
 		}
-		valueSize, err := jsonAggregateValueSize(vectors[0], uint64(row))
+		valueSize, err := jsonArrayAggregateValueSize(vectors[0], uint64(row), exec.timeZone)
 		if err != nil {
 			return err
 		}
@@ -740,7 +781,7 @@ func (exec *jsonArrayAggExec) batchFillAccounted(
 		payload := key[header : header+5]
 		payload[0] = 1
 		binary.NativeEndian.PutUint32(payload[1:], uint32(valueSize))
-		payload, err = appendJSONAggregateValue(payload, vectors[0], uint64(row))
+		payload, err = appendJSONArrayAggregateValue(payload, vectors[0], uint64(row), exec.timeZone)
 		if err != nil {
 			return err
 		}
@@ -778,7 +819,7 @@ func (exec *jsonObjectAggExec) batchFillAccounted(
 		if err != nil {
 			return err
 		}
-		valueSize, err := jsonAggregateValueSize(vectors[1], uint64(valueRow))
+		valueSize, err := jsonAggregateValueSize(vectors[1], uint64(valueRow), exec.timeZone)
 		if err != nil {
 			return err
 		}
@@ -797,7 +838,7 @@ func (exec *jsonObjectAggExec) batchFillAccounted(
 		payload = payload[:valueHeader+5]
 		payload[valueHeader] = 1
 		binary.NativeEndian.PutUint32(payload[valueHeader+1:], uint32(valueSize))
-		payload, err = appendJSONAggregateValue(payload, vectors[1], uint64(valueRow))
+		payload, err = appendJSONAggregateValue(payload, vectors[1], uint64(valueRow), exec.timeZone)
 		if err != nil {
 			return err
 		}
@@ -1040,7 +1081,21 @@ func (exec *jsonObjectAggExec) flushAccounted() (_ []*vector.Vector, retErr erro
 	return vecs, nil
 }
 
-func buildValueByteJson(vec *vector.Vector, row uint64) (bytejson.ByteJson, error) {
+func buildValueByteJsonWithLocation(vec *vector.Vector, row uint64, loc *time.Location) (bytejson.ByteJson, error) {
+	if vec.GetType().Oid == types.T_date {
+		// DATE has no session-dependent rendering; retain the aggregate's
+		// historical string representation.
+		return bytejson.CreateByteJSONWithCheck(vector.MustFixedColNoTypeCheck[types.Date](vec)[int(row)].String())
+	}
+	if vec.GetType().Oid == types.T_time ||
+		vec.GetType().Oid == types.T_datetime || vec.GetType().Oid == types.T_timestamp ||
+		vec.GetType().Oid == types.T_year {
+		value, err := jsonvalue.FromVector(context.Background(), vec, int(row), loc, 0, nil)
+		if err != nil {
+			return bytejson.ByteJson{}, err
+		}
+		return bytejson.CreateByteJSONWithCheck(value)
+	}
 	typ := vec.GetType()
 	switch typ.Oid {
 	case types.T_any:
@@ -1077,18 +1132,6 @@ func buildValueByteJson(vec *vector.Vector, row uint64) (bytejson.ByteJson, erro
 	case types.T_decimal256:
 		val := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)[int(row)]
 		return jsonAggregateDecimal(val.Format(typ.Scale)), nil
-	case types.T_date:
-		val := vector.MustFixedColNoTypeCheck[types.Date](vec)[int(row)]
-		return bytejson.CreateByteJSONWithCheck(val.String())
-	case types.T_time:
-		val := vector.MustFixedColNoTypeCheck[types.Time](vec)[int(row)]
-		return bytejson.CreateByteJSONWithCheck(val.String())
-	case types.T_datetime:
-		val := vector.MustFixedColNoTypeCheck[types.Datetime](vec)[int(row)]
-		return bytejson.CreateByteJSONWithCheck(val.String())
-	case types.T_timestamp:
-		val := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[int(row)]
-		return bytejson.CreateByteJSONWithCheck(val.String())
 	case types.T_char, types.T_varchar, types.T_text:
 		val := vector.GenerateFunctionStrParameter(vec)
 		data, _ := val.GetStrValue(row)
@@ -1161,6 +1204,23 @@ func buildValueByteJson(vec *vector.Vector, row uint64) (bytejson.ByteJson, erro
 		return types.DecodeJson(data), nil
 	default:
 		return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("unsupported type for json aggregate: %v", typ.String())
+	}
+}
+
+func buildJSONArrayValueByteJson(vec *vector.Vector, row uint64, locations ...*time.Location) (bytejson.ByteJson, error) {
+	var loc *time.Location
+	if len(locations) > 0 {
+		loc = locations[0]
+	}
+	return buildValueByteJsonWithLocation(vec, row, loc)
+}
+
+func isSharedJSONArrayValueType(oid types.T) bool {
+	switch oid {
+	case types.T_time, types.T_datetime, types.T_timestamp, types.T_year:
+		return true
+	default:
+		return false
 	}
 }
 

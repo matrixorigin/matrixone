@@ -1,0 +1,31 @@
+drop table if exists issue_28861_vector_signed_zero;
+create table issue_28861_vector_signed_zero(
+id int,
+v64 vecf64(2),
+v32 vecf32(2)
+);
+insert into issue_28861_vector_signed_zero values
+(1, '[0,1]', '[0,1]'),
+(2, '[-0,1]', '[-0,1]'),
+(3, '[2,1]', '[2,1]');
+select count(distinct v64) as exact64,
+approx_count_distinct(v64) as approx64,
+hll_cardinality(hll_add_agg(v64)) as hll64
+from issue_28861_vector_signed_zero;
+➤ exact64[-5,64,0]  ¦  approx64[-5,64,0]  ¦  hll64[-5,64,0]  𝄀
+2  ¦  2  ¦  2
+select count(distinct v32) as exact32,
+approx_count_distinct(v32) as approx32,
+hll_cardinality(hll_add_agg(v32)) as hll32
+from issue_28861_vector_signed_zero;
+➤ exact32[-5,64,0]  ¦  approx32[-5,64,0]  ¦  hll32[-5,64,0]  𝄀
+2  ¦  2  ¦  2
+select count(*) as groups64
+from (select v64 from issue_28861_vector_signed_zero group by v64) g;
+➤ groups64[-5,64,0]  𝄀
+2
+select count(*) as groups32
+from (select v32 from issue_28861_vector_signed_zero group by v32) g;
+➤ groups32[-5,64,0]  𝄀
+2
+drop table issue_28861_vector_signed_zero;

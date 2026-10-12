@@ -34,7 +34,7 @@ func TestBitwiseUint64UsesUnsignedResult(t *testing.T) {
 		NewFunctionTestResult(types.T_uint64.ToType(), false,
 			[]uint64{math.MaxUint64, math.MaxUint64}, nil),
 		operatorOpBitOrUint64Fn)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -48,7 +48,7 @@ func TestBitwiseUint64RightShiftIsLogical(t *testing.T) {
 		NewFunctionTestResult(types.T_uint64.ToType(), false,
 			[]uint64{math.MaxInt64, 0, 0}, nil),
 		operatorOpBitShiftRightUint64Fn)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -62,7 +62,7 @@ func TestBitwiseUint64PreservesHighBit(t *testing.T) {
 		NewFunctionTestResult(types.T_uint64.ToType(), false,
 			[]uint64{uint64(math.MaxInt64) + 1 + 8}, nil),
 		operatorOpBitOrUint64Fn)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -75,7 +75,7 @@ func TestBitwiseInt64UsesUnsignedBitPattern(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{math.MaxUint64}, nil),
 		operatorOpBitOrInt64Fn)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -88,7 +88,7 @@ func TestBitwiseInt64RightShiftUsesUnsignedBitPattern(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{math.MaxInt64, 0}, nil),
 		operatorOpBitShiftRightInt64Fn)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -101,7 +101,7 @@ func TestBitwiseMixedIntegerInputsUseUnsignedBitPatterns(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{math.MaxUint64}, nil),
 		operatorOpBitOrUint64Int64Fn)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 
 	tc = NewFunctionTestCase(proc,
@@ -111,7 +111,7 @@ func TestBitwiseMixedIntegerInputsUseUnsignedBitPatterns(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{math.MaxInt64}, nil),
 		operatorOpBitShiftRightInt64Uint64Fn)
-	ok, info = tc.Run()
+	ok, info = tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -197,4 +197,22 @@ func TestBitwiseBinaryArgumentsKeepBytewiseOverloads(t *testing.T) {
 	require.Equal(t, []types.Type{types.T_varbinary.ToType(), types.T_varbinary.ToType()}, targets)
 	require.Equal(t, int32(2), get.overloadId)
 	require.Equal(t, types.T_varbinary, get.GetReturnType().Oid)
+}
+
+func TestBitwiseBlobArgumentsSelectBytewiseOverloads(t *testing.T) {
+	ctx := context.Background()
+	for _, operator := range []string{"&", "|", "^"} {
+		t.Run(operator, func(t *testing.T) {
+			get, err := GetFunctionByName(ctx, operator,
+				[]types.Type{types.T_blob.ToType(), types.T_blob.ToType()})
+			require.NoError(t, err)
+			targets, cast := get.ShouldDoImplicitTypeCast()
+			require.False(t, cast)
+			require.Nil(t, targets)
+			require.Equal(t, int32(6), get.overloadId)
+			require.Equal(t, types.T_blob, get.GetReturnType().Oid)
+			require.Equal(t, types.CharsetBinary, get.GetReturnType().Charset)
+			assertBitwiseExecFactory(t, get)
+		})
+	}
 }

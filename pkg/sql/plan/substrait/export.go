@@ -48,10 +48,12 @@ const (
 // Candidate is a fully validated logical plan with unresolved storage reads.
 // The read handles are installed only after snapshot admission succeeds.
 type Candidate struct {
-	query    *planpb.Query
-	reads    []Read
-	headings []string
-	types    []planpb.Type
+	query      *planpb.Query
+	reads      []Read
+	headings   []string
+	types      []planpb.Type
+	embeddedMO bool
+	profile    EmbeddedExportProfile
 }
 
 // Read identifies one physical table scan which needs a TaeRead lease.
@@ -96,8 +98,22 @@ func (c *Candidate) OutputTypes() []planpb.Type {
 
 // Export validates q without performing I/O.
 func Export(q *planpb.Query) (*Candidate, error) {
+	return exportCandidate(q, false, EmbeddedExportProfile{})
+}
+
+// ExportEmbeddedMO validates a plan whose entire scans remain owned by MO.
+// Storage ordering hints are legal only at those scan boundaries; Flight
+// cannot claim their semantics because it bypasses the MO reader.
+func ExportEmbeddedMO(q *planpb.Query, profile EmbeddedExportProfile) (*Candidate, error) {
+	return exportCandidate(q, true, profile)
+}
+
+func exportCandidate(q *planpb.Query, embeddedMO bool, profile EmbeddedExportProfile) (*Candidate, error) {
 	if q == nil {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: missing query")
+	}
+	if err := planpb.RequireLegacyCollations(q); err != nil {
+		return nil, notEligiblef(EligibilityExpression, "unsupported collation metadata: %v", err)
 	}
 	if q.StmtType != planpb.Query_SELECT || len(q.Steps) == 0 || len(q.BackgroundQueries) != 0 {
 		return nil, notEligiblef(EligibilityPlanShape, "a SELECT query root is required")
@@ -110,8 +126,8 @@ func Export(q *planpb.Query) (*Candidate, error) {
 			return nil, notEligiblef(EligibilityOperator, "node %d carries unsupported rank semantics", nodeID)
 		}
 	}
-	c := &Candidate{query: q}
-	e := exporter{query: q, readValues: make(map[int32][]byte), validateOnly: true}
+	c := &Candidate{query: q, embeddedMO: embeddedMO, profile: profile}
+	e := exporter{query: q, readValues: make(map[int32][]byte), validateOnly: true, embeddedMO: embeddedMO, profile: profile}
 	for step, rootID := range q.Steps {
 		if rootID < 0 || int(rootID) >= len(q.Nodes) {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: invalid root node id %d at step %d", rootID, step)
@@ -145,6 +161,13 @@ func Export(q *planpb.Query) (*Candidate, error) {
 	if len(c.types) != width {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: query root has %d output types for %d columns", len(c.types), width)
 	}
+	if profile.exactDecimalV1 {
+		for i := range c.types {
+			if exactDecimalBits(&c.types[i]) == 256 && c.types[i].Width > 65 {
+				return nil, notEligiblef(EligibilityType, "public exact decimal precision exceeds 65")
+			}
+		}
+	}
 	return c, nil
 }
 
@@ -152,6 +175,12 @@ func Export(q *planpb.Query) (*Candidate, error) {
 func (c *Candidate) Build(readValues map[int32][]byte) ([]byte, error) {
 	if c == nil {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: nil candidate")
+	}
+	if err := planpb.RequireLegacyCollations(c.query); err != nil {
+		return nil, notEligiblef(EligibilityExpression, "unsupported collation metadata: %v", err)
+	}
+	if c.embeddedMO {
+		return nil, notEligiblef(EligibilityPlanShape, "MO-reader candidate cannot be emitted as Flight")
 	}
 	e := exporter{query: c.query, readValues: readValues}
 	relations := make([]*spb.PlanRel, 0, len(c.query.Steps))
@@ -184,14 +213,19 @@ func (c *Candidate) Build(readValues map[int32][]byte) ([]byte, error) {
 }
 
 type exporter struct {
-	query        *planpb.Query
-	readValues   map[int32][]byte
-	reads        []Read
-	functions    map[string]uint32
-	validateOnly bool
-	visiting     map[int32]bool
-	readSeen     map[int32]bool
-	stepOrdinal  int32
+	profile          EmbeddedExportProfile
+	exactUsed        bool
+	embeddedMO       bool
+	query            *planpb.Query
+	readValues       map[int32][]byte
+	embeddedBindings map[int32]EmbeddedReadBinding
+	reads            []Read
+	functions        map[string]uint32
+	validateOnly     bool
+	visiting         map[int32]bool
+	readSeen         map[int32]bool
+	embeddedReadSeen map[int32]bool
+	stepOrdinal      int32
 }
 
 func (e *exporter) node(id int32) (*spb.Rel, error) {
@@ -210,7 +244,8 @@ func (e *exporter) node(id int32) (*spb.Rel, error) {
 	if n == nil || n.NodeId != id {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d is missing or misindexed", id)
 	}
-	if n.NodeType != planpb.Node_SORT && len(n.OrderBy) != 0 {
+	moScan := n.NodeType == planpb.Node_TABLE_SCAN && (e.embeddedMO || e.embeddedBindings != nil)
+	if n.NodeType != planpb.Node_SORT && !moScan && len(n.OrderBy) != 0 {
 		return nil, notEligiblef(EligibilityOperator, "node %d carries sort semantics outside a SORT node", id)
 	}
 	var rel *spb.Rel
@@ -218,6 +253,9 @@ func (e *exporter) node(id int32) (*spb.Rel, error) {
 	switch n.NodeType {
 	case planpb.Node_TABLE_SCAN:
 		rel, err = e.read(n)
+		if err == nil && (e.embeddedBindings != nil || e.embeddedMO) {
+			return rel, nil
+		}
 	case planpb.Node_FILTER:
 		rel, err = e.unary(n)
 		if err == nil {
@@ -519,7 +557,7 @@ func (e *exporter) join(n *planpb.Node) (*spb.Rel, error) {
 	inputs := []int{leftWidth, rightWidth}
 	var condition *spb.Expression
 	if len(n.OnList) == 0 {
-		condition, err = literal(&planpb.Literal{Value: &planpb.Literal_Bval{Bval: true}}, &planpb.Type{Id: int32(types.T_bool), NotNullable: true})
+		condition, err = e.literal(&planpb.Literal{Value: &planpb.Literal_Bval{Bval: true}}, &planpb.Type{Id: int32(types.T_bool), NotNullable: true})
 	} else {
 		if err = validateExprFields(n.OnList, inputs); err != nil {
 			return nil, err
@@ -583,7 +621,7 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 	if n.IndexScanInfo.ProtoSize() != 0 || n.IndexReaderParam != nil {
 		return nil, notEligiblef(EligibilityOperator, "node %d carries unsupported index scan semantics", n.NodeId)
 	}
-	schema, err := namedStruct(n.TableDef)
+	schema, err := e.namedStruct(n.TableDef)
 	if err != nil {
 		return nil, err
 	}
@@ -610,6 +648,34 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 				Schema:        schemaBytes,
 			})
 		}
+	}
+	if e.embeddedBindings != nil || e.embeddedMO {
+		// Validation and emission consume the same post-scan contract. MO owns
+		// this scan's filters/projection/fetch; never validate them as a Flight
+		// expression and then silently omit them in the embedded build pass.
+		binding := EmbeddedReadBinding{BindingID: uint64(len(e.reads)), Source: EmbeddedReadMO}
+		if e.embeddedBindings != nil {
+			if e.embeddedReadSeen == nil {
+				e.embeddedReadSeen = make(map[int32]bool)
+			}
+			if e.embeddedReadSeen[n.NodeId] {
+				return nil, moerr.NewInternalErrorNoCtxf("substrait: embedded read node %d is replayed", n.NodeId)
+			}
+			e.embeddedReadSeen[n.NodeId] = true
+			var ok bool
+			binding, ok = e.embeddedBindings[n.NodeId]
+			if !ok {
+				return nil, moerr.NewInternalErrorNoCtxf("substrait: missing embedded binding for node %d", n.NodeId)
+			}
+		}
+		_, outputSchema, embeddedErr := embeddedMORead(n, e.profile)
+		if embeddedErr != nil {
+			return nil, embeddedErr
+		}
+		for _, typ := range outputSchema.Struct.Types {
+			e.exactUsed = e.exactUsed || typ.GetUserDefined() != nil
+		}
+		return embeddedNamedRead(binding, outputSchema), nil
 	}
 	value := e.readValues[n.NodeId]
 	if !e.validateOnly && len(value) == 0 {
@@ -686,7 +752,7 @@ func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
 		if len(n.GroupBy) == 0 && aggregateCanReturnNullOnEmpty(functionID) {
 			outputType.NotNullable = false
 		}
-		supported, capabilityErr := hasSemanticCapability(semanticAggregate, name, f.Func, f.Args, &outputType)
+		supported, capabilityErr := e.hasSemanticCapability(semanticAggregate, name, f.Func, f.Args, &outputType)
 		if capabilityErr != nil {
 			return nil, capabilityErr
 		}
@@ -704,9 +770,12 @@ func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
 			}
 			args[j] = valueArg(a)
 		}
-		out, xerr := substraitType(&outputType)
+		out, xerr := e.substraitType(&outputType)
 		if xerr != nil {
 			return nil, xerr
+		}
+		if e.profile.exactDecimalV1 && exactDecimalBits(&outputType) != 0 {
+			name = "mo_decimal_" + name
 		}
 		measures[i] = &spb.AggregateRel_Measure{Measure: &spb.AggregateFunction{FunctionReference: e.function(name), Arguments: args, OutputType: out, Phase: spb.AggregationPhase_AGGREGATION_PHASE_INITIAL_TO_RESULT, Invocation: spb.AggregateFunction_AGGREGATION_INVOCATION_ALL}}
 	}
@@ -786,6 +855,12 @@ func (e *exporter) fetch(input *spb.Rel, n *planpb.Node) (*spb.Rel, error) {
 		return input, nil
 	}
 	fetch := &spb.FetchRel{Input: input}
+	if e.embeddedMO {
+		// ABI-v1 preparation requires both constant modes to be explicit.
+		// Substrait's absent count means all rows and absent offset means zero.
+		fetch.CountMode = &spb.FetchRel_Count{Count: -1}
+		fetch.OffsetMode = &spb.FetchRel_Offset{Offset: 0}
+	}
 	if n.Limit != nil {
 		count, err := nonnegativeIntLiteral(n.Limit, 0)
 		if err != nil {
@@ -842,9 +917,18 @@ func (e *exporter) expr(x *planpb.Expr, inputs []int) (*spb.Expression, error) {
 		if err != nil {
 			return nil, err
 		}
+		if e.profile.exactDecimalV1 && exactDecimalBits(&x.Typ) != 0 {
+			if _, err := e.substraitType(&x.Typ); err != nil {
+				return nil, err
+			}
+			// A field selection has no declared output type. Retain MO's
+			// descriptor, including a projection's nullable view of a required
+			// grouped aggregate, through the checked exact function.
+			return e.scalar("mo_decimal_cast", &x.Typ, field(ordinal)), nil
+		}
 		return field(ordinal), nil
 	case *planpb.Expr_Lit:
-		return literal(v.Lit, &x.Typ)
+		return e.literal(v.Lit, &x.Typ)
 	case *planpb.Expr_List:
 		return nil, notEligiblef(EligibilityExpression, "an expression list is only valid as an IN argument")
 	case *planpb.Expr_F:
@@ -852,6 +936,9 @@ func (e *exporter) expr(x *planpb.Expr, inputs []int) (*spb.Expression, error) {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: malformed function")
 		}
 		functionID, _ := function.DecodeOverloadID(v.F.Func.Obj)
+		if e.profile.exactDecimalV1 && (decimalSignature(v.F.Args, &x.Typ) || functionID == function.COALESCE) {
+			return e.exactScalarExpr(x, v.F, inputs)
+		}
 		switch functionID {
 		case function.CAST:
 			return e.castExpr(x, v.F, inputs)
@@ -875,14 +962,14 @@ func (e *exporter) expr(x *planpb.Expr, inputs []int) (*spb.Expression, error) {
 		if err := validateScalarSignature(name, &x.Typ, v.F.Args); err != nil {
 			return nil, err
 		}
-		supported, capabilityErr := hasSemanticCapability(semanticScalar, name, v.F.Func, v.F.Args, &x.Typ)
+		supported, capabilityErr := e.hasSemanticCapability(semanticScalar, name, v.F.Func, v.F.Args, &x.Typ)
 		if capabilityErr != nil {
 			return nil, capabilityErr
 		}
 		if !supported {
 			return nil, notEligiblef(EligibilityExpression, "scalar overload %q has no declared Sirius semantic equivalence", v.F.Func.ObjName)
 		}
-		if _, err := substraitType(&x.Typ); err != nil {
+		if _, err := e.substraitType(&x.Typ); err != nil {
 			return nil, err
 		}
 		args := make([]*spb.Expression, len(v.F.Args))
@@ -903,7 +990,7 @@ func (e *exporter) unaryMinusExpr(result *planpb.Expr, call *planpb.Function, in
 	if len(call.Args) != 1 || call.Args[0] == nil || !isDecimalType(types.T(call.Args[0].Typ.Id)) || semanticTypeFromPlan(&call.Args[0].Typ) != semanticTypeFromPlan(&result.Typ) {
 		return nil, notEligiblef(EligibilityExpression, "unsupported unary minus signature")
 	}
-	supported, err := hasSemanticCapability(semanticScalar, "unary_minus", call.Func, call.Args, &result.Typ)
+	supported, err := e.hasSemanticCapability(semanticScalar, "unary_minus", call.Func, call.Args, &result.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -920,7 +1007,7 @@ func (e *exporter) unaryMinusExpr(result *planpb.Expr, call *planpb.Function, in
 	} else {
 		zero.Value = &planpb.Literal_Decimal128Val{Decimal128Val: &planpb.Decimal128{}}
 	}
-	zeroExpr, err := literal(zero, &result.Typ)
+	zeroExpr, err := e.literal(zero, &result.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -954,7 +1041,7 @@ func (e *exporter) castExpr(result *planpb.Expr, call *planpb.Function, inputs [
 	if len(call.Args) != 2 {
 		return nil, notEligiblef(EligibilityExpression, "cast requires a value and target type descriptor")
 	}
-	supported, err := hasSemanticCapability(semanticScalar, "cast", call.Func, call.Args, &result.Typ)
+	supported, err := e.hasSemanticCapability(semanticScalar, "cast", call.Func, call.Args, &result.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -969,7 +1056,7 @@ func (e *exporter) castExpr(result *planpb.Expr, call *planpb.Function, inputs [
 	if err != nil {
 		return nil, err
 	}
-	target, err := substraitType(&result.Typ)
+	target, err := e.substraitType(&result.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -982,7 +1069,7 @@ func (e *exporter) caseExpr(result *planpb.Expr, call *planpb.Function, inputs [
 	if len(call.Args) < 3 || len(call.Args)%2 == 0 {
 		return nil, notEligiblef(EligibilityExpression, "case requires condition/result pairs and an else expression")
 	}
-	supported, err := hasSemanticCapability(semanticScalar, "if_then", call.Func, call.Args, &result.Typ)
+	supported, err := e.hasSemanticCapability(semanticScalar, "if_then", call.Func, call.Args, &result.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -1015,7 +1102,7 @@ func (e *exporter) inExpr(result *planpb.Expr, call *planpb.Function, inputs []i
 	if len(call.Args) < 2 {
 		return nil, notEligiblef(EligibilityExpression, "in requires a value and at least one option")
 	}
-	supported, err := hasSemanticCapability(semanticScalar, "singular_or_list", call.Func, call.Args, &result.Typ)
+	supported, err := e.hasSemanticCapability(semanticScalar, "singular_or_list", call.Func, call.Args, &result.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -1095,6 +1182,7 @@ func literalVectorOptions(encoded *planpb.LiteralVec, expected *planpb.Type) (op
 			return nil, notEligiblef(EligibilityExpression, "folded IN list uses unsupported type %s", values.GetType().Oid.String())
 		}
 		value.IsSerialized = encoded.IsSerialized
+		value.DecimalLiteralRequiresV82 = encoded.DecimalLiteralRequiresV82
 		typ := *expected
 		typ.NotNullable = !value.Isnull
 		options[i] = &planpb.Expr{Typ: typ, Expr: &planpb.Expr_Lit{Lit: value}}
@@ -1103,14 +1191,29 @@ func literalVectorOptions(encoded *planpb.LiteralVec, expected *planpb.Type) (op
 }
 
 func (e *exporter) extractExpr(result *planpb.Expr, call *planpb.Function, inputs []int) (*spb.Expression, error) {
-	if len(call.Args) != 2 || call.Args[0].GetLit() == nil {
+	if len(call.Args) != 2 || call.Args[0].GetLit() == nil || call.Args[1] == nil {
 		return nil, notEligiblef(EligibilityExpression, "extract requires a literal field and one value")
 	}
 	unit := strings.ToLower(call.Args[0].GetLit().GetSval())
 	if unit == "" {
 		return nil, notEligiblef(EligibilityExpression, "extract field is empty")
 	}
-	supported, err := hasSemanticCapability(semanticScalar, "extract", call.Func, call.Args, &result.Typ)
+	// Sirius lowers EXTRACT to DuckDB date_part. Only the simple DATE fields
+	// share our contract: WEEK uses ISO weeks there, text has no tolerant
+	// parser, and TIME durations / TIMESTAMP session zones are not equivalent.
+	// Check the literal before either exact or parameterized admission.
+	if types.T(call.Args[1].Typ.Id) != types.T_date {
+		return nil, notEligiblef(EligibilityExpression, "extract requires a DATE value for Sirius")
+	}
+	switch unit {
+	case "year", "month", "day", "quarter":
+	default:
+		return nil, notEligiblef(EligibilityExpression, "extract field %q has no declared Sirius semantic equivalence", unit)
+	}
+	if e.embeddedMO && unit == "quarter" {
+		return nil, notEligiblef(EligibilityExpression, "embedded extract field %q has no native GPU function", unit)
+	}
+	supported, err := e.hasSemanticCapability(semanticScalar, "extract", call.Func, call.Args, &result.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -1121,7 +1224,47 @@ func (e *exporter) extractExpr(result *planpb.Expr, call *planpb.Function, input
 	if err != nil {
 		return nil, err
 	}
-	output, err := substraitType(&result.Typ)
+	if e.embeddedMO {
+		// The generic importer lowers extract to date_part, which has no
+		// Sirius GPU expression. Ordinary components also interpret MO's zero
+		// DATE sentinel as calendar 0000-12-31 after native input conversion.
+		// Guard that exact sentinel in the typed plan, preserving NULL behavior
+		// and the complete MO domain without changing published reader bytes.
+		zeroDate, err := e.literal(&planpb.Literal{Value: &planpb.Literal_Dateval{Dateval: int32(types.ZeroDate)}}, &planpb.Type{Id: int32(types.T_date), NotNullable: true})
+		if err != nil {
+			return nil, err
+		}
+		zero, err := e.literal(&planpb.Literal{Value: &planpb.Literal_I64Val{}}, &planpb.Type{Id: int32(types.T_int64), NotNullable: true})
+		if err != nil {
+			return nil, err
+		}
+		conditionType := &planpb.Type{Id: int32(types.T_bool), NotNullable: call.Args[1].Typ.NotNullable}
+		condition := e.scalar("equal", conditionType, value, zeroDate)
+		output, err := e.substraitType(&result.Typ)
+		if err != nil {
+			return nil, err
+		}
+		// The pinned component function physically returns INT16 but advertises
+		// BIGINT. A same-type cast is removed by binding; use the proven INT32
+		// component domain before BIGINT so CASE receives equal physical types.
+		componentType := result.Typ
+		componentType.Id = int32(types.T_int32)
+		component, err := e.substraitType(&componentType)
+		if err != nil {
+			return nil, err
+		}
+		part := &spb.Expression{RexType: &spb.Expression_Cast_{Cast: &spb.Expression_Cast{
+			Type: component, Input: e.scalar(unit, &result.Typ, value), FailureBehavior: spb.Expression_Cast_FAILURE_BEHAVIOR_THROW_EXCEPTION,
+		}}}
+		part = &spb.Expression{RexType: &spb.Expression_Cast_{Cast: &spb.Expression_Cast{
+			Type: output, Input: part, FailureBehavior: spb.Expression_Cast_FAILURE_BEHAVIOR_THROW_EXCEPTION,
+		}}}
+		return &spb.Expression{RexType: &spb.Expression_IfThen_{IfThen: &spb.Expression_IfThen{
+			Ifs:  []*spb.Expression_IfThen_IfClause{{If: condition, Then: zero}},
+			Else: part,
+		}}}, nil
+	}
+	output, err := e.substraitType(&result.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -1135,7 +1278,7 @@ func (e *exporter) extractExpr(result *planpb.Expr, call *planpb.Function, input
 }
 
 func (e *exporter) scalar(name string, typ *planpb.Type, args ...*spb.Expression) *spb.Expression {
-	out, _ := substraitType(typ)
+	out, _ := e.substraitType(typ)
 	fargs := make([]*spb.FunctionArgument, len(args))
 	for i := range args {
 		fargs[i] = valueArg(args[i])
@@ -1144,6 +1287,9 @@ func (e *exporter) scalar(name string, typ *planpb.Type, args ...*spb.Expression
 }
 
 func (e *exporter) function(name string) uint32 {
+	if strings.HasPrefix(name, "mo_decimal_") {
+		e.exactUsed = true
+	}
 	if e.functions == nil {
 		e.functions = make(map[string]uint32)
 	}
@@ -1161,13 +1307,28 @@ func (e *exporter) extensions() []*extensions.SimpleExtensionDeclaration {
 		byAnchor[anchor] = name
 	}
 	result := make([]*extensions.SimpleExtensionDeclaration, 0, len(e.functions))
+	if e.exactUsed {
+		result = append(result, &extensions.SimpleExtensionDeclaration{MappingType: &extensions.SimpleExtensionDeclaration_ExtensionType_{
+			ExtensionType: &extensions.SimpleExtensionDeclaration_ExtensionType{
+				ExtensionUrnReference: exactDecimalURNAnchor, TypeAnchor: exactDecimalTypeAnchor, Name: "mo_exact_decimal",
+			},
+		}})
+	}
 	for anchor := 1; anchor < len(byAnchor); anchor++ {
-		result = append(result, &extensions.SimpleExtensionDeclaration{MappingType: &extensions.SimpleExtensionDeclaration_ExtensionFunction_{ExtensionFunction: &extensions.SimpleExtensionDeclaration_ExtensionFunction{FunctionAnchor: uint32(anchor), Name: byAnchor[anchor]}}})
+		ref := uint32(0)
+		if strings.HasPrefix(byAnchor[anchor], "mo_decimal_") {
+			ref = exactDecimalURNAnchor
+		}
+		result = append(result, &extensions.SimpleExtensionDeclaration{MappingType: &extensions.SimpleExtensionDeclaration_ExtensionFunction_{ExtensionFunction: &extensions.SimpleExtensionDeclaration_ExtensionFunction{FunctionAnchor: uint32(anchor), Name: byAnchor[anchor], ExtensionUrnReference: ref}}})
 	}
 	return result
 }
 
 func namedStruct(t *planpb.TableDef) (*spb.NamedStruct, error) {
+	return namedStructForProfile(t, EmbeddedExportProfile{})
+}
+
+func namedStructForProfile(t *planpb.TableDef, profile EmbeddedExportProfile) (*spb.NamedStruct, error) {
 	names := make([]string, 0, len(t.Cols))
 	fields := make([]*spb.Type, 0, len(t.Cols))
 	hidden := false
@@ -1182,7 +1343,7 @@ func namedStruct(t *planpb.TableDef) (*spb.NamedStruct, error) {
 		if hidden {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: table %q has non-suffix hidden columns", t.Name)
 		}
-		typ, err := substraitType(&c.Typ)
+		typ, err := profile.substraitType(&c.Typ)
 		if err != nil {
 			if IsNotEligible(err) {
 				return nil, err
@@ -1286,6 +1447,9 @@ func validateExprFields(exprs []*planpb.Expr, inputs []int) error {
 // CanonicalSchema serializes the exact Substrait schema used in ReadRel and
 // lets snapshot admission detect catalog drift after logical planning.
 func CanonicalSchema(t *planpb.TableDef) ([]byte, error) {
+	if err := planpb.RequireLegacyCollations(t); err != nil {
+		return nil, notEligiblef(EligibilityExpression, "unsupported collation metadata: %v", err)
+	}
 	schema, err := namedStruct(t)
 	if err != nil {
 		return nil, err
@@ -1524,6 +1688,7 @@ type semanticDeclaration struct {
 var semanticDeclarations = []semanticDeclaration{
 	{semanticScalar, function.AND, "and", "and", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
 	{semanticScalar, function.OR, "or", "or", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
+	{semanticScalar, function.EXTRACT, "extract", "extract", []types.Type{types.T_varchar.ToType(), types.T_date.ToType()}, "sirius-v1:extract"},
 	{semanticScalar, function.NOT, "not", "not", []types.Type{types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
 	{semanticScalar, function.EQUAL, "=", "equal", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-comparison"},
 	{semanticScalar, function.NOT_EQUAL, "!=", "not_equal", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-comparison"},
@@ -1679,7 +1844,7 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 		case "singular_or_list":
 			declared = functionID == function.IN && len(args) >= 2 && (types.T(args[0].Typ.Id) == types.T_int32 || isTPCHStringType(types.T(args[0].Typ.Id)))
 		case "extract":
-			declared = functionID == function.EXTRACT && len(args) == 2 && types.T(args[0].Typ.Id) == types.T_varchar && types.T(args[1].Typ.Id) == types.T_date && types.T(out.Id) == types.T_uint32
+			declared = functionID == function.EXTRACT && len(args) == 2 && types.T(args[0].Typ.Id) == types.T_varchar && types.T(args[1].Typ.Id) == types.T_date && types.T(out.Id) == types.T_int64
 		}
 	case semanticAggregate:
 		switch name {
@@ -1709,12 +1874,19 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 		}
 		return semanticNotNullable(ref.Obj, args) == out.NotNullable, nil
 	}
+	characterSubstring := kind == semanticScalar && name == "substring" && functionID == function.SUBSTRING && len(args) == 3
 	inputs := make([]types.Type, len(args))
 	for i, argument := range args {
 		if argument == nil {
 			return false, nil
 		}
 		inputs[i] = types.Type{Oid: types.T(argument.Typ.Id), Width: argument.Typ.Width, Scale: argument.Typ.Scale}
+		if characterSubstring {
+			if argument.Typ.Charset > math.MaxUint8 {
+				return false, nil
+			}
+			inputs[i].Charset = uint8(argument.Typ.Charset)
+		}
 	}
 	resolved, err := function.GetFunctionByName(context.Background(), ref.ObjName, inputs)
 	if err != nil {
@@ -1724,14 +1896,91 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 		return false, nil
 	}
 	result := resolved.GetReturnType()
-	if int32(result.Oid) != out.Id || result.Width != out.Width || result.Scale != out.Scale {
+	widthMatches := result.Width == out.Width
+	if characterSubstring {
+		if out.Charset != uint32(result.Charset) {
+			return false, nil
+		}
+		if !widthMatches && tpchCharacterSliceSourceIsText(args[0]) {
+			width, narrowed := function.CharacterSliceLiteralWidth(args[0], args[2].GetLit(), result)
+			widthMatches = narrowed && width == out.Width
+		}
+	}
+	if int32(result.Oid) != out.Id || !widthMatches || result.Scale != out.Scale {
 		return false, nil
 	}
-	notNullable := semanticNotNullable(resolved.GetEncodedOverloadID(), args)
 	if kind == semanticAggregate && aggregateCanReturnNullOnEmpty(functionID) && !out.NotNullable {
 		return true, nil
 	}
-	return notNullable == out.NotNullable, nil
+	// Constant folding may replace a nullable expression with a non-NULL
+	// literal without strengthening its parent's annotation. Accept either
+	// the original argument contract or the concrete-literal proof; never
+	// strengthen a nullable column or a NULL-synthesizing function.
+	return function.DeduceNotNullable(resolved.GetEncodedOverloadID(), args) == out.NotNullable ||
+		semanticNotNullable(resolved.GetEncodedOverloadID(), args) == out.NotNullable, nil
+}
+
+// Only prove the text subset supported by this exporter. Static VARCHAR alone
+// cannot erase retained binary/mixed provenance. Child eligibility is still
+// checked independently by the recursive expression exporter.
+func tpchCharacterSliceSourceIsText(expr *planpb.Expr) bool {
+	if expr == nil || !isTPCHStringType(types.T(expr.Typ.Id)) {
+		return false
+	}
+	switch expr.Typ.Charset {
+	case 0, uint32(types.CharsetUTF8MB4Bin), uint32(types.CharsetUTF8):
+	default:
+		return false
+	}
+	// A real function keeps its executable source in Args. Its metadata may
+	// contain only declaration facts with NULL placeholders, not input values.
+	// Missing-input boundaries still require the retained provenance check.
+	if metadata := expr.GetPreparedNumeric(); expr.GetF() == nil && metadata != nil && metadata.StringDomainSource != nil &&
+		!tpchCharacterSliceSourceIsText(metadata.StringDomainSource) {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		if lit.Isnull || (lit.LiteralForm != planpb.StringLiteralForm_STRING_LITERAL_NONE &&
+			lit.LiteralForm != planpb.StringLiteralForm_STRING_LITERAL_TEXT) {
+			return false
+		}
+		if _, text := lit.Value.(*planpb.Literal_Sval); !text {
+			return false
+		}
+		return lit.Src == nil || tpchCharacterSliceSourceIsText(lit.Src)
+	}
+	if expr.GetCol() != nil {
+		return true
+	}
+	f := expr.GetF()
+	if f == nil || f.Func == nil {
+		return false
+	}
+	id, _ := function.DecodeOverloadID(f.Func.Obj)
+	switch id {
+	case function.CAST:
+		return len(f.Args) == 2 && tpchCharacterSliceSourceIsText(f.Args[0])
+	case function.SUBSTRING:
+		return len(f.Args) == 3 && tpchCharacterSliceSourceIsText(f.Args[0])
+	case function.CASE:
+		if len(f.Args) < 3 || len(f.Args)%2 != 1 {
+			return false
+		}
+		textArm := false
+		for i := 1; i <= len(f.Args); i += 2 {
+			arm := f.Args[min(i, len(f.Args)-1)]
+			if lit := arm.GetLit(); lit != nil && lit.Isnull {
+				continue
+			}
+			if !tpchCharacterSliceSourceIsText(arm) {
+				return false
+			}
+			textArm = true
+		}
+		return textArm
+	default:
+		return false
+	}
 }
 
 func isDecimalType(value types.T) bool {

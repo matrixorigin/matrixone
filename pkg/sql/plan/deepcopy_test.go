@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -67,6 +68,29 @@ func TestCloneTableDefForPlan(t *testing.T) {
 	require.Same(t, pkey, withoutCols.Pkey)
 }
 
+func TestDeepCopyTableDefOwnsName2ColIndex(t *testing.T) {
+	source := &planpb.TableDef{
+		Cols:          []*planpb.ColDef{{Name: "a"}},
+		Name2ColIndex: map[string]int32{"a": 0},
+	}
+
+	for _, withCols := range []bool{true, false} {
+		cloned := DeepCopyTableDef(source, withCols)
+		require.Equal(t, source.Name2ColIndex, cloned.Name2ColIndex)
+		cloned.Name2ColIndex["a"] = 1
+		cloned.Name2ColIndex["new"] = 2
+		require.Equal(t, map[string]int32{"a": 0}, source.Name2ColIndex)
+		if withCols {
+			require.Len(t, cloned.Cols, 1)
+		} else {
+			require.Nil(t, cloned.Cols)
+		}
+	}
+
+	withoutMap := DeepCopyTableDef(&planpb.TableDef{}, true)
+	require.Nil(t, withoutMap.Name2ColIndex)
+}
+
 func TestDeepCopyColDefPreservesOriginTable(t *testing.T) {
 	source := &planpb.ColDef{
 		Name:          "display_name",
@@ -81,25 +105,27 @@ func TestDeepCopyColDefPreservesOriginTable(t *testing.T) {
 	require.Equal(t, source, cloned)
 }
 
-func TestDeepCopyVectorIndexScanOwnsNestedMetadata(t *testing.T) {
-	source := &planpb.VectorIndexScan{
+func TestDeepCopyIndexSearchScanOwnsNestedMetadata(t *testing.T) {
+	source := &planpb.IndexSearchScan{
 		SourceTable:         &planpb.ObjectRef{SchemaName: "db", ObjName: "t"},
 		SourceTableDef:      &planpb.TableDef{Name: "t", Cols: []*planpb.ColDef{{Name: "v"}}},
 		Index:               &planpb.IndexDef{IndexName: "idx", IndexAlgo: "ivfflat"},
-		HiddenTables:        []*planpb.VectorIndexTableRef{{Role: "entries", Object: &planpb.ObjectRef{ObjName: "e"}}},
-		QueryVector:         &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
+		HiddenTables:        []*planpb.IndexHiddenTableRef{{Role: "entries", Object: &planpb.ObjectRef{ObjName: "e"}}},
+		QueryPayload:        &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
 		CandidateLimit:      MakePlan2Uint64ConstExprWithType(4),
 		IncludedColumns:     []string{"payload"},
-		InitialProbeCount:   2,
+		AlgoOptions:         []byte(`{"initial_probe_count":2}`),
+		AlgoExprs:           []*planpb.Expr{MakePlan2Uint64ConstExprWithType(3)},
+		AlgoExprNames:       []string{"first_round_limit"},
 		ScanSnapshot:        &planpb.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 9}, Tenant: &planpb.SnapshotTenant{TenantID: 7}},
 		PostFilterOverFetch: true,
 	}
 
-	cloned := DeepCopyVectorIndexScan(source)
+	cloned := DeepCopyIndexSearchScan(source)
 	require.NotSame(t, source, cloned)
 	require.Equal(t, source.SourceTable, cloned.SourceTable)
 	require.Equal(t, source.Index, cloned.Index)
-	require.Equal(t, source.QueryVector, cloned.QueryVector)
+	require.Equal(t, source.QueryPayload, cloned.QueryPayload)
 	require.Equal(t, source.CandidateLimit, cloned.CandidateLimit)
 	require.Equal(t, source.IncludedColumns, cloned.IncludedColumns)
 	require.Equal(t, source.ScanSnapshot, cloned.ScanSnapshot)
@@ -108,9 +134,78 @@ func TestDeepCopyVectorIndexScanOwnsNestedMetadata(t *testing.T) {
 	require.NotSame(t, source.SourceTableDef, cloned.SourceTableDef)
 	require.NotSame(t, source.Index, cloned.Index)
 	require.NotSame(t, source.HiddenTables[0], cloned.HiddenTables[0])
-	require.NotSame(t, source.QueryVector, cloned.QueryVector)
+	require.NotSame(t, source.QueryPayload, cloned.QueryPayload)
 	require.NotSame(t, source.CandidateLimit, cloned.CandidateLimit)
 	require.NotSame(t, source.ScanSnapshot, cloned.ScanSnapshot)
+	require.Equal(t, source.AlgoOptions, cloned.AlgoOptions)
+	require.Equal(t, source.AlgoExprs, cloned.AlgoExprs)
+	require.Equal(t, source.AlgoExprNames, cloned.AlgoExprNames)
+	require.NotSame(t, &source.AlgoOptions[0], &cloned.AlgoOptions[0])
+	require.NotSame(t, source.AlgoExprs[0], cloned.AlgoExprs[0])
+}
+
+func TestDeepCopyExprAuxIdSemantics(t *testing.T) {
+	require.Nil(t, DeepCopyExpr(nil))
+	for _, test := range []struct {
+		name        string
+		auxID, want int32
+	}{
+		{"zero", 0, 0},
+		{"execution numbering", 7, 0},
+		{"memo key", -7, -7},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := &planpb.Expr{
+				Typ:   planpb.Type{Id: int32(types.T_int64)},
+				AuxId: test.auxID, Ndv: 3, Selectivity: 0.25,
+				Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 2}},
+			}
+			expected := *source
+			expected.AuxId = test.want
+			cloned := DeepCopyExpr(source)
+			require.True(t, proto.Equal(&expected, cloned))
+			require.NotSame(t, source, cloned)
+			cloned.GetP().Pos = 9
+			require.Equal(t, int32(2), source.GetP().Pos)
+			require.Equal(t, test.auxID, source.AuxId)
+		})
+	}
+	t.Run("nested numbering and provenance", func(t *testing.T) {
+		source := &planpb.Expr{
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "+"},
+				Args: []*planpb.Expr{
+					{AuxId: 3, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
+					{AuxId: -4, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 1}}},
+				},
+			}},
+			PreparedNumeric: &planpb.PreparedNumericMetadata{
+				Fallback: true, ParamPos: 2, FallbackSource: true,
+				FallbackSourceNodeId: 7, FallbackSourceColPos: 5,
+				StringDomainSource: &planpb.Expr{AuxId: 8, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 2}}},
+			},
+		}
+		cloned := DeepCopyExpr(source)
+		require.Zero(t, cloned.GetF().Args[0].AuxId)
+		require.Equal(t, int32(-4), cloned.GetF().Args[1].AuxId)
+		require.Zero(t, cloned.PreparedNumeric.StringDomainSource.AuxId)
+		expectedMetadata := *source.PreparedNumeric
+		expectedDomain := *source.PreparedNumeric.StringDomainSource
+		expectedDomain.AuxId = 0
+		expectedMetadata.StringDomainSource = &expectedDomain
+		require.True(t, proto.Equal(&expectedMetadata, cloned.PreparedNumeric))
+		cloned.GetF().Args[0].GetP().Pos = 9
+		cloned.GetF().Args[1].GetP().Pos = 9
+		cloned.PreparedNumeric.ParamPos = 9
+		cloned.PreparedNumeric.StringDomainSource.GetP().Pos = 9
+		require.Equal(t, int32(0), source.GetF().Args[0].GetP().Pos)
+		require.Equal(t, int32(1), source.GetF().Args[1].GetP().Pos)
+		require.Equal(t, int32(2), source.PreparedNumeric.ParamPos)
+		require.Equal(t, int32(2), source.PreparedNumeric.StringDomainSource.GetP().Pos)
+		require.Equal(t, int32(3), source.GetF().Args[0].AuxId)
+		require.Equal(t, int32(-4), source.GetF().Args[1].AuxId)
+		require.Equal(t, int32(8), source.PreparedNumeric.StringDomainSource.AuxId)
+	})
 }
 
 func TestDeepCopyExprClonesAggregateConfig(t *testing.T) {
@@ -123,6 +218,8 @@ func TestDeepCopyExprClonesAggregateConfig(t *testing.T) {
 	}
 
 	cloned := DeepCopyExpr(source)
+	require.True(t, proto.Equal(source, cloned))
+	require.NotSame(t, source.GetF().Func, cloned.GetF().Func)
 	require.NotSame(t, source.GetF(), cloned.GetF())
 	require.Equal(t, source.GetF().Func, cloned.GetF().Func)
 	require.Equal(t, source.GetF().AggConfig, cloned.GetF().AggConfig)
@@ -309,10 +406,15 @@ func TestDeepCopyAsofRightColumnAcrossQueryAndPlan(t *testing.T) {
 	clonedQuery := DeepCopyQuery(query)
 	require.Equal(t, int32(7), clonedQuery.Nodes[0].AsofRightCol)
 
-	pl := &Plan{Plan: &planpb.Plan_Query{Query: query}, IsPrepare: true}
+	pl := &Plan{Plan: &planpb.Plan_Query{Query: query}, IsPrepare: true, TryRunTimes: 3}
 	clonedPlan := DeepCopyPlan(pl)
 	require.NotNil(t, clonedPlan)
 	require.True(t, clonedPlan.IsPrepare)
+	require.Equal(t, int32(3), clonedPlan.TryRunTimes)
+	require.NotSame(t, pl, clonedPlan)
+	require.NotSame(t, query, clonedPlan.GetQuery())
+	require.NotSame(t, sourceNode, clonedQuery.Nodes[0])
+	require.NotSame(t, sourceNode, clonedPlan.GetQuery().Nodes[0])
 	require.Equal(t, int32(7), clonedPlan.GetQuery().Nodes[0].AsofRightCol)
 }
 
@@ -368,6 +470,21 @@ func TestDeepCopyNodePreservesPreparedExecutionState(t *testing.T) {
 
 func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	source := &planpb.Query{
+		ViewReferences: []*planpb.ViewReference{{
+			ViewPath: []*planpb.ViewStep{{DatabaseName: "db", ViewName: "inner", SubscriptionName: "sub",
+				Snapshot: &planpb.Snapshot{
+					TS:        &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
+					Tenant:    &planpb.SnapshotTenant{TenantID: 9, TenantName: "tenant"},
+					ExtraInfo: &planpb.SnapshotExtraInfo{Name: "historical", Level: "account", ObjId: 9},
+				}}},
+		}},
+		UnresolvedIndexHints: []*planpb.UnresolvedIndexHint{
+			{Table: &planpb.ObjectRef{SchemaName: "db", ObjName: "t"}, IndexName: "idx_missing"},
+			nil,
+		},
+		Params:              []*planpb.Expr{{AuxId: -3, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 2}}}},
+		CatalogDependencies: []*planpb.ObjectRef{{SchemaName: "db", ObjName: "dependency"}},
+		HasReturning:        true, ReturningStep: 7, ApplySqlSelectLimit: true,
 		Steps:       []int32{3, 7},
 		Headings:    []string{"id"},
 		LoadTag:     true,
@@ -376,18 +493,45 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 		BackgroundQueries: []*planpb.Query{{
 			StmtType: planpb.Query_SELECT,
 			Headings: []string{"background"},
-		}},
+		}, nil},
 	}
 
+	encoded, err := (&planpb.Query{ViewReferences: source.ViewReferences}).Marshal()
+	require.NoError(t, err)
+	var decoded planpb.Query
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.Equal(t, source.ViewReferences, decoded.ViewReferences)
 	cloned := DeepCopyQuery(source)
+	require.True(t, proto.Equal(source, cloned))
+	require.Equal(t, source.ViewReferences, cloned.ViewReferences)
+	cloned.ViewReferences[0].ViewPath[0].ViewName = "changed"
+	cloned.ViewReferences[0].ViewPath[0].Snapshot.TS.PhysicalTime = 99
+	cloned.ViewReferences[0].ViewPath[0].Snapshot.Tenant.TenantID = 99
+	cloned.ViewReferences[0].ViewPath[0].Snapshot.ExtraInfo.Name = "changed"
+	require.Equal(t, "inner", source.ViewReferences[0].ViewPath[0].ViewName)
+	require.Equal(t, int64(42), source.ViewReferences[0].ViewPath[0].Snapshot.TS.PhysicalTime)
+	require.Equal(t, uint32(9), source.ViewReferences[0].ViewPath[0].Snapshot.Tenant.TenantID)
+	require.Equal(t, "historical", source.ViewReferences[0].ViewPath[0].Snapshot.ExtraInfo.Name)
+	require.Equal(t, source.UnresolvedIndexHints, cloned.UnresolvedIndexHints)
+	require.NotSame(t, source.UnresolvedIndexHints[0], cloned.UnresolvedIndexHints[0])
+	require.NotSame(t, source.UnresolvedIndexHints[0].Table, cloned.UnresolvedIndexHints[0].Table)
+	cloned.UnresolvedIndexHints[0].IndexName = "changed"
+	cloned.UnresolvedIndexHints[0].Table.ObjName = "changed"
+	require.Equal(t, "idx_missing", source.UnresolvedIndexHints[0].IndexName)
+	require.Equal(t, "t", source.UnresolvedIndexHints[0].Table.ObjName)
 	require.Equal(t, source.Steps, cloned.Steps)
 	require.Equal(t, source.Headings, cloned.Headings)
 	require.True(t, cloned.LoadTag)
 	require.True(t, cloned.LoadWriteS3)
 	require.Equal(t, int64(8), cloned.MaxDop)
-	require.Len(t, cloned.BackgroundQueries, 1)
+	require.Len(t, cloned.BackgroundQueries, 2)
+	require.Nil(t, cloned.BackgroundQueries[1])
 	require.NotSame(t, source.BackgroundQueries[0], cloned.BackgroundQueries[0])
 
+	cloned.Params[0].GetP().Pos = 99
+	cloned.CatalogDependencies[0].ObjName = "changed"
+	require.Equal(t, int32(2), source.Params[0].GetP().Pos)
+	require.Equal(t, "dependency", source.CatalogDependencies[0].ObjName)
 	cloned.Steps[0] = 99
 	cloned.Headings[0] = "changed"
 	cloned.BackgroundQueries[0].Headings[0] = "changed"

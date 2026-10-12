@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -39,6 +40,31 @@ func TestGetFunctionByIdRejectsUnknownOverload(t *testing.T) {
 	_, exists := GetFunctionByIdWithoutError(unknown)
 	require.False(t, exists)
 	require.False(t, GetFunctionIsWinOrderFunById(unknown))
+}
+
+func TestDecimalFloatAdditionResolvesToDouble(t *testing.T) {
+	decimal := types.New(types.T_decimal64, 10, 2)
+	double := types.T_float64.ToType()
+	doubleScale2 := types.T_float64.ToTypeWithScale(2)
+	for _, test := range []struct {
+		name string
+		in   [2]types.Type
+		want [2]types.Type
+	}{
+		{"double control", [2]types.Type{decimal, double}, [2]types.Type{doubleScale2, double}},
+		{"float32 promotes", [2]types.Type{decimal, types.T_float32.ToType()}, [2]types.Type{doubleScale2, double}},
+		{"float32 first", [2]types.Type{types.T_float32.ToType(), decimal}, [2]types.Type{double, doubleScale2}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), "+", test.in[:])
+			require.NoError(t, err)
+			targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast)
+			require.Equal(t, test.want[:], targets)
+			require.Equal(t, test.want[0], resolved.GetReturnType())
+			require.Equal(t, int32(0), resolved.overloadId)
+		})
+	}
 }
 
 func Test_fixedTypeCastRule1(t *testing.T) {
@@ -117,6 +143,17 @@ func Test_fixedTypeCastRule1(t *testing.T) {
 				{Oid: types.T_decimal128, Width: 38, Size: 16, Scale: 4},
 			},
 		},
+		{
+			shouldCast: true,
+			in: [2]types.Type{
+				types.T_int32.ToType(),
+				types.New(types.T_decimal256, 40, 2),
+			},
+			want: [2]types.Type{
+				types.New(types.T_decimal256, 76, 0),
+				types.New(types.T_decimal256, 40, 2),
+			},
+		},
 
 		// special rule, null + null
 		// we just cast it as int64 + int64
@@ -136,6 +173,78 @@ func Test_fixedTypeCastRule1(t *testing.T) {
 			require.Equal(t, in.want[0], t1, msg)
 			require.Equal(t, in.want[1], t2, msg)
 		}
+	}
+}
+
+func TestArithmeticTypeCastRule1BitSignedBigintUsesDecimal(t *testing.T) {
+	bit64 := types.New(types.T_bit, 64, 0)
+	signedBigint := types.T_int64.ToType()
+	want := types.New(types.T_decimal128, 38, 0)
+
+	for _, test := range []struct {
+		name  string
+		left  types.Type
+		right types.Type
+	}{
+		{name: "bit plus signed bigint", left: bit64, right: signedBigint},
+		{name: "signed bigint plus bit", left: signedBigint, right: bit64},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hasCast, left, right := arithmeticTypeCastRule1(test.left, test.right)
+			require.True(t, hasCast)
+			require.Equal(t, want, left)
+			require.Equal(t, want, right)
+		})
+	}
+
+	// The generic rule remains the comparison contract; only arithmetic uses
+	// the widened mixed-integer domain.
+	hasCast, left, right := fixedTypeCastRule1(bit64, signedBigint)
+	require.True(t, hasCast)
+	require.Equal(t, signedBigint, left)
+	require.Equal(t, signedBigint, right)
+}
+
+func TestGetArithmeticFunctionBitSignedBigintUsesDecimal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bit64 := types.New(types.T_bit, 64, 0)
+	want := types.New(types.T_decimal128, 38, 0)
+
+	for _, operands := range []struct {
+		name        string
+		left, right types.Type
+	}{
+		{name: "bit-left", left: bit64, right: types.T_int64.ToType()},
+		{name: "bit-right", left: types.T_int64.ToType(), right: bit64},
+	} {
+		for _, name := range []string{"+", "-", "*", "%"} {
+			t.Run(operands.name+"/"+name, func(t *testing.T) {
+				get, err := GetFunctionByName(proc.Ctx, name, []types.Type{operands.left, operands.right})
+				require.NoError(t, err)
+				targets, shouldCast := get.ShouldDoImplicitTypeCast()
+				require.True(t, shouldCast)
+				require.Equal(t, []types.Type{want, want}, targets)
+				require.Equal(t, want, get.GetReturnType())
+			})
+		}
+	}
+}
+
+func TestArithmeticTypeCastRule1BitWidthsUseUnsignedDomain(t *testing.T) {
+	int64Type := types.T_int64.ToType()
+	want := types.New(types.T_decimal128, 38, 0)
+
+	// The result of an arithmetic subtree can exceed the declared BIT width, so
+	// use the full unsigned domain even for narrow BIT inputs.
+	for _, width := range []int32{1, 8, 63, 64} {
+		t.Run(fmt.Sprintf("bit-%d", width), func(t *testing.T) {
+			hasCast, left, right := arithmeticTypeCastRule1(
+				types.New(types.T_bit, width, 0), int64Type,
+			)
+			require.True(t, hasCast)
+			require.Equal(t, want, left)
+			require.Equal(t, want, right)
+		})
 	}
 }
 
@@ -203,6 +312,19 @@ func TestComparisonTypeCastRuleNormalizesCharToVarchar(t *testing.T) {
 	require.Equal(t, rightIn.Width, rightOut.Width)
 	require.Equal(t, types.CharsetLegacy, leftOut.Charset)
 	require.Equal(t, types.CharsetLegacy, rightOut.Charset)
+}
+
+func TestComparisonTypeCastRulePreservesNativeUnicodeRevision(t *testing.T) {
+	native := types.NewWithCharset(types.T_varchar, 12, 0, types.CharsetUTF8MB4UnicodeCI)
+	defaultText := types.T_varchar.ToType()
+
+	hasCast, left, right := comparisonTypeCastRule(native, defaultText)
+
+	require.True(t, hasCast)
+	require.Equal(t, types.CharsetUTF8MB4UnicodeCI, left.Charset)
+	require.Equal(t, types.CharsetUTF8MB4UnicodeCI, right.Charset)
+	require.Equal(t, uint8(types.CollationVersionV1), left.CollationVersion)
+	require.Equal(t, uint8(types.CollationVersionV1), right.CollationVersion)
 }
 
 func Test_fixedTypeCastRule2(t *testing.T) {
@@ -336,14 +458,14 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldErr:  false,
 			requireFid: DIV, requireOid: 0,
 			shouldCast: true, requireTyp: []types.Type{types.T_decimal128.ToType(), types.T_decimal128.ToType()},
-			requireRet: types.New(types.T_decimal128, 38, 6),
+			requireRet: types.New(types.T_decimal128, 24, 4),
 		},
 		{
 			name: "/", args: []types.Type{types.T_int64.ToType(), types.T_uint64.ToType()},
 			shouldErr:  false,
 			requireFid: DIV, requireOid: 0,
 			shouldCast: true, requireTyp: []types.Type{types.T_decimal128.ToType(), types.T_decimal128.ToType()},
-			requireRet: types.New(types.T_decimal128, 38, 6),
+			requireRet: types.New(types.T_decimal128, 23, 4),
 		},
 
 		{
@@ -371,28 +493,28 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldErr:  false,
 			requireFid: LENGTH_UTF8, requireOid: 3,
 			shouldCast: false,
-			requireRet: types.T_uint64.ToType(),
+			requireRet: types.T_int64.ToType(),
 		},
 		{
 			name: "char_length", args: []types.Type{types.T_varbinary.ToType()},
 			shouldErr:  false,
 			requireFid: LENGTH_UTF8, requireOid: 4,
 			shouldCast: false,
-			requireRet: types.T_uint64.ToType(),
+			requireRet: types.T_int64.ToType(),
 		},
 		{
 			name: "char_length", args: []types.Type{types.T_blob.ToType()},
 			shouldErr:  false,
 			requireFid: LENGTH_UTF8, requireOid: 5,
 			shouldCast: false,
-			requireRet: types.T_uint64.ToType(),
+			requireRet: types.T_int64.ToType(),
 		},
 		{
 			name: "character_length", args: []types.Type{types.T_varbinary.ToType()},
 			shouldErr:  false,
 			requireFid: LENGTH_UTF8, requireOid: 4,
 			shouldCast: false,
-			requireRet: types.T_uint64.ToType(),
+			requireRet: types.T_int64.ToType(),
 		},
 
 		{
@@ -406,14 +528,14 @@ func Test_GetFunctionByName(t *testing.T) {
 			name: "elt", args: []types.Type{types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
 			shouldErr:  false,
 			requireFid: ELT, requireOid: 0,
-			shouldCast: false,
+			shouldCast: true, requireTyp: []types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
 			requireRet: types.T_varchar.ToType(),
 		},
 		{
 			name: "elt", args: []types.Type{types.T_bit.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
 			shouldErr:  false,
 			requireFid: ELT, requireOid: 0,
-			shouldCast: false,
+			shouldCast: true, requireTyp: []types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
 			requireRet: types.T_varchar.ToType(),
 		},
 		{
@@ -526,6 +648,29 @@ func TestMakeTimeReturnScale(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, types.T_time.ToTypeWithScale(6), defaultFloatResult.retType)
+
+	variableFloatResult, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(), types.T_int64.ToType(), types.T_float64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), variableFloatResult.retType,
+		"a FLOAT variable can contain fractional seconds even when its plan Scale is zero")
+}
+
+func TestTimeArithmeticFloatDurationKeepsFractionalPrecision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, name := range []string{"addtime", "subtime"} {
+		for _, floatType := range []types.T{types.T_float32, types.T_float64} {
+			result, err := GetFunctionByName(proc.Ctx, name, []types.Type{
+				types.T_time.ToType(), floatType.ToType(),
+			})
+			require.NoError(t, err)
+			require.True(t, result.needCast)
+			require.Equal(t, types.T_varchar, result.targetTypes[1].Oid)
+			require.Equal(t, int32(6), result.targetTypes[1].Scale)
+			require.Equal(t, int32(6), result.retType.Scale)
+		}
+	}
 }
 
 func TestSecToTimeReturnScale(t *testing.T) {
@@ -559,6 +704,12 @@ func TestSecToTimeReturnScale(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, types.T_time.ToTypeWithScale(6), floatResult.retType)
+
+	variableFloatResult, err := GetFunctionByName(proc.Ctx, "sec_to_time", []types.Type{
+		types.T_float64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), variableFloatResult.retType)
 }
 
 func TestUnixTimestampTemporalReturnScale(t *testing.T) {
@@ -585,6 +736,15 @@ func TestUnixTimestampTemporalReturnScale(t *testing.T) {
 	require.True(t, fractionalDatetimeResult.needCast)
 	require.Equal(t, []types.Type{types.T_timestamp.ToTypeWithScale(6)}, fractionalDatetimeResult.targetTypes)
 	require.Equal(t, types.New(types.T_decimal128, 38, 6), fractionalDatetimeResult.retType)
+}
+
+func requireLegacyMakeTimeSignature(t *testing.T, args []types.T) {
+	t.Helper()
+	signatures := make([][]types.T, 0, MakeTimeIntegerFloatOverload)
+	for _, ov := range allSupportedFunctions[MAKETIME].Overloads[:MakeTimeIntegerFloatOverload] {
+		signatures = append(signatures, ov.args)
+	}
+	require.Contains(t, signatures, args)
 }
 
 func TestMakeTimeDecimalHourMinuteUseExactOverloads(t *testing.T) {
@@ -619,7 +779,12 @@ func TestMakeTimeDecimalHourMinuteUseExactOverloads(t *testing.T) {
 		require.True(t, result.needCast)
 		selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
 		require.NoError(t, err)
-		require.Equal(t, test.args, selected.args)
+		requireLegacyMakeTimeSignature(t, test.args)
+		second := types.T_varchar
+		if test.inputs[2].Oid.IsInteger() {
+			second = types.T_int64
+		}
+		require.Equal(t, []types.T{types.T_int64, types.T_int64, second}, selected.args)
 	}
 }
 
@@ -652,7 +817,8 @@ func TestMakeTimeDecimal256OverloadMatrix(t *testing.T) {
 				require.NoError(t, err)
 				selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
 				require.NoError(t, err)
-				require.Equal(t, []types.T{hour.target, minute.target, second.target}, selected.args)
+				requireLegacyMakeTimeSignature(t, []types.T{hour.target, minute.target, second.target})
+				require.Equal(t, []types.T{types.T_int64, types.T_int64, second.input.Oid}, selected.args)
 			}
 		}
 	}
@@ -669,8 +835,8 @@ func TestMakeTimeStringSecondUsesExactOverload(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.needCast)
 	require.Len(t, result.targetTypes, 3)
-	require.Equal(t, types.T_float64, result.targetTypes[0].Oid)
-	require.Equal(t, types.T_float64, result.targetTypes[1].Oid)
+	require.Equal(t, types.T_int64, result.targetTypes[0].Oid)
+	require.Equal(t, types.T_int64, result.targetTypes[1].Oid)
 	require.Equal(t, types.T_varchar, result.targetTypes[2].Oid)
 	require.Equal(t, int32(-1), result.targetTypes[2].Scale)
 	require.Equal(t, types.T_time.ToTypeWithScale(6), result.retType)
@@ -1013,8 +1179,6 @@ func TestMakeTimeStringArgumentTargets(t *testing.T) {
 		name         string
 		inputs       []types.Type
 		overloadArgs []types.T
-		needCast     bool
-		targets      []types.Type
 		returnType   types.Type
 	}{
 		{
@@ -1031,11 +1195,7 @@ func TestMakeTimeStringArgumentTargets(t *testing.T) {
 				types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
 			},
 			overloadArgs: []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
-			needCast:     true,
-			targets: []types.Type{
-				types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToTypeWithScale(-1),
-			},
-			returnType: types.T_time.ToTypeWithScale(6),
+			returnType:   types.T_time.ToTypeWithScale(6),
 		},
 		{
 			name: "only hour is varchar",
@@ -1043,7 +1203,7 @@ func TestMakeTimeStringArgumentTargets(t *testing.T) {
 				types.T_varchar.ToType(), scaledFloat, scaledFloat,
 			},
 			overloadArgs: []types.T{types.T_varchar, types.T_float64, types.T_float64},
-			returnType:   types.T_time.ToTypeWithScale(1),
+			returnType:   types.T_time.ToTypeWithScale(6),
 		},
 		{
 			name: "only minute is varchar",
@@ -1051,7 +1211,7 @@ func TestMakeTimeStringArgumentTargets(t *testing.T) {
 				scaledFloat, types.T_varchar.ToType(), scaledFloat,
 			},
 			overloadArgs: []types.T{types.T_float64, types.T_varchar, types.T_float64},
-			returnType:   types.T_time.ToTypeWithScale(1),
+			returnType:   types.T_time.ToTypeWithScale(6),
 		},
 	}
 
@@ -1059,13 +1219,18 @@ func TestMakeTimeStringArgumentTargets(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			result, err := GetFunctionByName(proc.Ctx, "maketime", test.inputs)
 			require.NoError(t, err)
-			require.Equal(t, test.needCast, result.needCast)
-			require.Equal(t, test.targets, result.targetTypes)
+			requireLegacyMakeTimeSignature(t, test.overloadArgs)
+			require.True(t, result.needCast)
+			targets := []types.Type{types.T_int64.ToType(), types.T_int64.ToType(), test.inputs[2]}
+			if targets[2].Oid == types.T_varchar {
+				targets[2].Scale = -1
+			}
+			require.Equal(t, targets, result.targetTypes)
 			require.Equal(t, test.returnType, result.retType)
 
 			selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
 			require.NoError(t, err)
-			require.Equal(t, test.overloadArgs, selected.args)
+			require.Equal(t, []types.T{types.T_int64, types.T_int64, targets[2].Oid}, selected.args)
 		})
 	}
 }
@@ -1086,7 +1251,15 @@ func TestMakeTimeBinaryArgumentsUseNumericOverloads(t *testing.T) {
 			result, err := GetFunctionByName(proc.Ctx, "maketime", inputs)
 			require.NoError(t, err)
 			require.True(t, result.needCast)
-			require.Equal(t, types.T_int64, result.targetTypes[position].Oid)
+			if position == 2 {
+				// Seconds are not an integer parameter. Binary strings may
+				// contain fractions and require the floating numeric path.
+				require.Equal(t, types.T_float64, result.targetTypes[position].Oid)
+				require.Equal(t, int32(-1), result.targetTypes[position].Scale)
+				require.Equal(t, types.T_time.ToTypeWithScale(6), result.retType)
+			} else {
+				require.Equal(t, types.T_int64, result.targetTypes[position].Oid)
+			}
 		}
 	}
 }
@@ -1193,6 +1366,22 @@ func TestProducesNoNullUsesFunctionContract(t *testing.T) {
 	require.False(t, HasExecutableCTASTypeDefault(-1))
 }
 
+func TestFunctionLookupRejectsInvalidOverload(t *testing.T) {
+	invalid := EncodeOverloadID(BIN, 99)
+
+	_, err := GetFunctionById(context.Background(), invalid)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+
+	_, exists := GetFunctionByIdWithoutError(invalid)
+	require.False(t, exists)
+
+	zonemappable, err := GetFunctionIsZonemappableById(context.Background(), invalid)
+	require.Error(t, err)
+	require.False(t, zonemappable)
+	require.False(t, GetFunctionIsWinOrderFunById(invalid))
+}
+
 func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
 
@@ -1207,6 +1396,8 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		{name: "power domain or overflow", fid: POW, argCount: 2},
 		{name: "exponential overflow", fid: EXP, argCount: 1},
 		{name: "cotangent zero", fid: COT, argCount: 1},
+		{name: "inverse hyperbolic cosine domain", fid: ACOSH, argCount: 1},
+		{name: "inverse hyperbolic tangent domain", fid: ATANH, argCount: 1},
 		{name: "missing JSON path", fid: JSON_EXTRACT, argCount: 2},
 		{name: "JSON string extractor", fid: JSON_EXTRACT_STRING, argCount: 2},
 		{name: "JSON float64 extractor", fid: JSON_EXTRACT_FLOAT64, argCount: 2},
@@ -1234,6 +1425,100 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 			}
 			require.False(t, DeduceNotNullable(EncodeOverloadID(tt.fid, 0), args))
 		})
+	}
+}
+
+func TestTypedDateConversionNullability(t *testing.T) {
+	for _, sourceType := range []types.T{types.T_date, types.T_datetime} {
+		source := &plan.Expr{Typ: plan.Type{Id: int32(sourceType), NotNullable: true}}
+		target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_date), NotNullable: true}}
+		dateOverload := int32(0)
+		if sourceType == types.T_datetime {
+			dateOverload = 2
+		}
+		require.False(t, DeduceNotNullable(EncodeOverloadID(DATE, dateOverload), []*plan.Expr{source}))
+		require.False(t, DeduceNotNullable(EncodeOverloadID(CAST, 1), []*plan.Expr{source, target}))
+		require.True(t, DeduceNotNullable(EncodeOverloadID(CAST, 0), []*plan.Expr{source, target}))
+		require.True(t, DeduceNotNullable(EncodeOverloadID(CAST, 3), []*plan.Expr{source, target}))
+	}
+	dateSource := &plan.Expr{Typ: plan.Type{Id: int32(types.T_date), NotNullable: true}}
+	datetimeTarget := &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}}
+	require.True(t, DeduceNotNullable(EncodeOverloadID(CAST, 1), []*plan.Expr{dateSource, datetimeTarget}))
+	dateSource.Typ.NotNullable = false
+	require.False(t, DeduceNotNullable(EncodeOverloadID(CAST, 1), []*plan.Expr{dateSource, datetimeTarget}))
+}
+
+func TestTemporalArithmeticOverflowNullability(t *testing.T) {
+	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
+	for _, tt := range []struct {
+		name        string
+		fid         int32
+		first, last int32
+	}{
+		{"addtime", ADDTIME, 0, 5},
+		{"addtime new", ADDTIME, 9, 11},
+		{"subtime", SUBTIME, 0, 5},
+		{"subtime new", SUBTIME, 11, 15},
+		{"timediff", TIMEDIFF, 0, 8},
+		{"date_add", DATE_ADD, 0, 15},
+		{"date_sub", DATE_SUB, 0, 15},
+		{"maketime", MAKETIME, 0, 38},
+		{"timestampadd", TIMESTAMPADD, 0, 7},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			for id := tt.first; id <= tt.last; id++ {
+				op, err := GetFunctionById(t.Context(), EncodeOverloadID(tt.fid, id))
+				require.NoError(t, err)
+				args := make([]*plan.Expr, len(op.args))
+				for i := range args {
+					args[i] = notNull
+				}
+				require.False(t, DeduceNotNullable(EncodeOverloadID(tt.fid, id), args), "overload %d", id)
+			}
+		})
+	}
+	for _, tt := range []struct {
+		fid int32
+		ids []int32
+	}{
+		{ADDTIME, []int32{6, 7, 8}},
+		{SUBTIME, []int32{6, 7, 8, 9, 10}},
+	} {
+		for _, id := range tt.ids {
+			op, err := GetFunctionById(t.Context(), EncodeOverloadID(tt.fid, id))
+			require.NoError(t, err)
+			args := make([]*plan.Expr, len(op.args))
+			for i := range args {
+				args[i] = notNull
+			}
+			require.True(t, DeduceNotNullable(EncodeOverloadID(tt.fid, id), args), "legacy overload %d", id)
+		}
+	}
+}
+
+func TestTemporalExtractionNullability(t *testing.T) {
+	// Enumerate registered overloads so text aliases and optional WEEK modes
+	// cannot silently inherit a stronger guarantee than their executor.
+	for _, fid := range []int32{EXTRACT, YEAR, MONTH, QUARTER, DAY, DAYOFMONTH,
+		HOUR, MINUTE, SECOND, MICROSECOND, WEEK, WEEKOFYEAR, WEEKDAY, YEARWEEK,
+		DAYOFWEEK, DAYOFYEAR, DAYNAME, MONTHNAME, FROM_DAYS} {
+		for _, op := range allSupportedFunctions[fid].Overloads {
+			args := make([]*plan.Expr, len(op.args))
+			for i, typ := range op.args {
+				args[i] = &plan.Expr{Typ: plan.Type{Id: int32(typ), NotNullable: true}}
+			}
+			want := false
+			switch fid {
+			case EXTRACT:
+				want = op.overloadId < 5 // persisted legacy executors
+			case YEAR, MONTH, QUARTER, DAY, DAYOFMONTH, HOUR, MINUTE, SECOND, MICROSECOND:
+				want = !op.args[0].IsMySQLString()
+			}
+			id := EncodeOverloadID(fid, int32(op.overloadId))
+			require.Equal(t, want, DeduceNotNullable(id, args), "function %d overload %d", fid, op.overloadId)
+			args[0].Typ.NotNullable = false
+			require.False(t, DeduceNotNullable(id, args), "nullable input: function %d overload %d", fid, op.overloadId)
+		}
 	}
 }
 
@@ -1269,6 +1554,9 @@ func TestDeduceNotNullablePreservesArgumentDependentContracts(t *testing.T) {
 	}{
 		{name: "equality", fid: EQUAL, argCount: 2},
 		{name: "addition", fid: PLUS, argCount: 2},
+		{name: "hyperbolic tangent", fid: TANH, argCount: 1},
+		{name: "hyperbolic cosine", fid: COSH, argCount: 1},
+		{name: "inverse hyperbolic sine", fid: ASINH, argCount: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			args := make([]*plan.Expr, tt.argCount)
@@ -1342,14 +1630,19 @@ func TestUserLevelLockBuiltinRegistration(t *testing.T) {
 	cases := []struct {
 		name string
 		id   int
-		args []types.T
+		args [][]types.T
 		ret  types.Type
 	}{
-		{name: "get_lock", id: GET_LOCK, args: []types.T{types.T_varchar, types.T_float64}, ret: types.T_int64.ToType()},
-		{name: "release_lock", id: RELEASE_LOCK, args: []types.T{types.T_varchar}, ret: types.T_int64.ToType()},
-		{name: "is_free_lock", id: IS_FREE_LOCK, args: []types.T{types.T_varchar}, ret: types.T_int64.ToType()},
-		{name: "is_used_lock", id: IS_USED_LOCK, args: []types.T{types.T_varchar}, ret: types.T_uint64.ToType()},
-		{name: "release_all_locks", id: RELEASE_ALL_LOCKS, args: []types.T{}, ret: types.T_int64.ToType()},
+		{name: "get_lock", id: GET_LOCK, args: [][]types.T{
+			{types.T_varchar, types.T_float64},
+			{types.T_varchar, types.T_decimal64},
+			{types.T_varchar, types.T_decimal128},
+			{types.T_varchar, types.T_decimal256},
+		}, ret: types.T_int64.ToType()},
+		{name: "release_lock", id: RELEASE_LOCK, args: [][]types.T{{types.T_varchar}}, ret: types.T_int64.ToType()},
+		{name: "is_free_lock", id: IS_FREE_LOCK, args: [][]types.T{{types.T_varchar}}, ret: types.T_int64.ToType()},
+		{name: "is_used_lock", id: IS_USED_LOCK, args: [][]types.T{{types.T_varchar}}, ret: types.T_uint64.ToType()},
+		{name: "release_all_locks", id: RELEASE_ALL_LOCKS, args: [][]types.T{{}}, ret: types.T_int64.ToType()},
 	}
 
 	for _, tc := range cases {
@@ -1364,16 +1657,31 @@ func TestUserLevelLockBuiltinRegistration(t *testing.T) {
 			require.NotNil(t, fn)
 			require.Equal(t, plan.Function_STRICT, fn.class)
 			require.Equal(t, STANDARD_FUNCTION, fn.layout)
-			require.Len(t, fn.Overloads, 1)
+			require.Len(t, fn.Overloads, len(tc.args))
 
-			overload := fn.Overloads[0]
-			require.Equal(t, tc.args, overload.args)
-			require.True(t, overload.volatile)
-			require.True(t, overload.realTimeRelated)
-			require.Equal(t, tc.ret, overload.retType(nil))
-			require.NotNil(t, overload.newOp())
+			for i, overload := range fn.Overloads {
+				require.Equal(t, tc.args[i], overload.args)
+				require.True(t, overload.volatile)
+				require.True(t, overload.realTimeRelated)
+				require.Equal(t, tc.ret, overload.retType(nil))
+				require.NotNil(t, overload.newOp())
+			}
 		})
 	}
+}
+
+func TestUncompressedLengthOverloadsAreVolatile(t *testing.T) {
+	for i := range supportedStringBuiltIns {
+		if supportedStringBuiltIns[i].functionId != UNCOMPRESSED_LENGTH {
+			continue
+		}
+		require.Len(t, supportedStringBuiltIns[i].Overloads, 4)
+		for _, overload := range supportedStringBuiltIns[i].Overloads {
+			require.True(t, overload.volatile)
+		}
+		return
+	}
+	require.Fail(t, "UNCOMPRESSED_LENGTH registration not found")
 }
 
 func TestRunPositionCharFunctionDirectly(t *testing.T) {
@@ -1463,7 +1771,7 @@ func TestCastNanoToTimestamp(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastNanoToTimestamp)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("err info is '%s'", info))
 	}
 
@@ -1491,4 +1799,68 @@ func initCastNanoToTimestampTestCase(inputs []string, outputs []int64) []tcTemp 
 func convertStringToTimeUtcNano(str string) int64 {
 	ts, _ := time.Parse("2006-01-02 15:04:05.999999999", str)
 	return ts.UTC().UnixNano()
+}
+
+func TestZoneMapComparisonDomain(t *testing.T) {
+	for _, fid := range []int32{EQUAL, NULL_SAFE_EQUAL, NOT_EQUAL, GREAT_THAN, GREAT_EQUAL, LESS_THAN, LESS_EQUAL, BETWEEN} {
+		args := []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_varchar)}}, {Typ: plan.Type{Id: int32(types.T_varchar)}}}
+		id := EncodeOverloadID(fid, 0)
+		require.True(t, CanUseZoneMapComparison(id, args))
+		args[0].Typ.Id = int32(types.T_char)
+		require.False(t, CanUseZoneMapComparison(id, args), "CHAR comparison domain %d", fid)
+		args[0].Typ.Id = int32(types.T_varchar)
+		args[1].Typ.Id = int32(types.T_char)
+		require.True(t, CanUseZoneMapComparison(id, args), "VARCHAR domain with CHAR-declared rhs %d", fid)
+		args[0] = &plan.Expr{Typ: plan.Type{Id: int32(types.T_char)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: ""}}}}
+		require.True(t, CanUseZoneMapComparison(id, args), "literal uses canonical VARCHAR domain %d", fid)
+		args[0].GetLit().Isnull = true
+		require.False(t, CanUseZoneMapComparison(id, args), "unknown NULL domain %d", fid)
+	}
+	unicode := plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)}
+	for _, fid := range []int32{EQUAL, NULL_SAFE_EQUAL, NOT_EQUAL, GREAT_THAN, GREAT_EQUAL, LESS_THAN, LESS_EQUAL, BETWEEN} {
+		require.False(t, CanUseZoneMapComparison(
+			EncodeOverloadID(fid, 0), []*plan.Expr{{Typ: unicode}, {Typ: plan.Type{Id: int32(types.T_varchar)}}}),
+			"Unicode comparison must not use raw persisted metadata: %d", fid)
+	}
+	char := []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_char)}}}
+	for _, fid := range []int32{PREFIX_EQ, PREFIX_BETWEEN, AND, OR} {
+		require.True(t, CanUseZoneMapComparison(EncodeOverloadID(fid, 0), char), "separate operator domain %d", fid)
+	}
+}
+
+func TestZoneMapMembershipDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()); proc.Free() })
+	for _, oid := range []types.T{types.T_char, types.T_varchar} {
+		t.Run(oid.String(), func(t *testing.T) {
+			typ := plan.Type{Id: int32(oid), Width: 8}
+			v := vector.NewVec(types.New(oid, 8, 0))
+			t.Cleanup(func() { v.Free(proc.Mp()) })
+			require.NoError(t, vector.AppendBytes(v, []byte("MO "), false, proc.Mp()))
+			data, err := v.MarshalBinary()
+			require.NoError(t, err)
+			// The SQL tuple declaration is preserved by constant folding. Its actual
+			// item or encoded vector type determines PAD SPACE membership semantics.
+			list := &plan.Expr{Typ: plan.Type{Id: int32(types.T_tuple)}, Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{{Typ: typ}}}}}
+			vec := &plan.Expr{Typ: list.Typ, Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: data}}}
+			fold := &plan.Expr{Typ: list.Typ, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{Data: data}}}
+			for _, fid := range []int32{IN, NOT_IN} {
+				require.Equal(t, oid != types.T_char, CanUseZoneMapComparison(EncodeOverloadID(fid, 0), []*plan.Expr{{Typ: typ}, list}))
+				for _, rhs := range []*plan.Expr{vec, fold} {
+					require.True(t, CanUseZoneMapComparison(EncodeOverloadID(fid, 0), []*plan.Expr{{Typ: typ}, rhs}), "encoded domain is validated at the actual decoder")
+				}
+				malformed := &plan.Expr{Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: []byte{1, 2, 3}}}}
+				require.True(t, CanUseZoneMapComparison(EncodeOverloadID(fid, 0), []*plan.Expr{{Typ: typ}, malformed}), "admission does not duplicate checked decoding")
+			}
+		})
+	}
+	unicode := plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)}
+	unicodeItem := &plan.Expr{Typ: unicode}
+	unicodeList := &plan.Expr{Typ: plan.Type{Id: int32(types.T_tuple)}, Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{unicodeItem}}}}
+	require.False(t, CanUseZoneMapComparison(
+		EncodeOverloadID(IN, 0), []*plan.Expr{{Typ: unicode}, unicodeList}),
+		"Unicode membership must not use raw persisted metadata")
+	require.False(t, CanUseZoneMapComparison(
+		EncodeOverloadID(IN, 0), []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_varchar)}}, unicodeList}),
+		"Unicode list items must not use raw persisted metadata")
 }

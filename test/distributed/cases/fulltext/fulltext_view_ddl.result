@@ -80,7 +80,16 @@ select id, row_number() over (order by match(body) against('hello')) as rn from 
 Can't find FULLTEXT index matching the column list
 create view v_window_where as
 select id, row_number() over (order by id) as rn from docs where match(body) against('hello');
-Can't find FULLTEXT index matching the column list
+select id, rn from v_window_where order by id;
+➤ id[4,32,0]  ¦  rn[-5,64,0]  𝄀
+1  ¦  1  𝄀
+3  ¦  2
+create view v_window_part as
+select id, row_number() over (partition by title order by id) as rn from docs where match(body) against('hello');
+select id, rn from v_window_part order by id;
+➤ id[4,32,0]  ¦  rn[-5,64,0]  𝄀
+1  ¦  1  𝄀
+3  ¦  1
 create view v_window_plain as select id, row_number() over (order by id) as rn from docs;
 select id, rn from v_window_plain order by id;
 ➤ id[4,32,0]  ¦  rn[-5,64,0]  𝄀
@@ -88,8 +97,8 @@ select id, rn from v_window_plain order by id;
 2  ¦  2  𝄀
 3  ¦  3
 explain select id from v_good_filter;
--- @regex("Table Function on fulltext_index_scan", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+-- @regex("Fulltext Index Scan on", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_fulltext_alias_0.score DESC  𝄀
@@ -99,10 +108,11 @@ Project  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on ft_view_ddl.docs  𝄀
                     Runtime Filter Probe: docs.id  𝄀
-              ->  Table Function on fulltext_index_scan
+              ->  Fulltext Index Scan on ft_body  𝄀
+                    Fulltext Index: ft_body
 explain select id from v_good_score where score > 0;
--- @regex("Table Function on fulltext_index_scan", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+-- @regex("Fulltext Index Scan on", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_fulltext_alias_0.score DESC  𝄀
@@ -114,7 +124,8 @@ Project  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on ft_view_ddl.docs  𝄀
                           Runtime Filter Probe: docs.id  𝄀
-                    ->  Table Function on fulltext_index_scan
+                    ->  Fulltext Index Scan on ft_body  𝄀
+                          Fulltext Index: ft_body
 select id from v_good_score where score > 0 order by id;
 ➤ id[4,32,0]  𝄀
 1  𝄀

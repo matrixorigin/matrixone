@@ -16,12 +16,18 @@ package frontend
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
@@ -33,6 +39,64 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+func TestIsUserDatabaseType(t *testing.T) {
+	for _, version := range []int64{defines.MORPCVersion74, defines.MORPCVersion75} {
+		require.True(t, isUserDatabaseType("", version))
+		require.False(t, isUserDatabaseType(catalog.SystemDBTypeSubscription, version))
+		require.False(t, isUserDatabaseType("unknown", version))
+	}
+	require.False(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch, defines.MORPCVersion74))
+	require.True(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch, defines.MORPCVersion75))
+}
+
+func TestPublicationMutationUsesLifecycleOwnerTxn(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		run  func(context.Context, *Session) error
+	}{
+		{
+			name: "alter",
+			run: func(ctx context.Context, ses *Session) error {
+				return doAlterPublication(ctx, ses, &tree.AlterPublication{})
+			},
+		},
+		{
+			name: "drop",
+			run: func(ctx context.Context, ses *Session) error {
+				return doDropPublication(ctx, ses, &tree.DropPublication{})
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ctx := context.Background()
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:      sysAccountName,
+				DefaultRole: moAdminRoleName,
+			})
+			bh := &backgroundExecTest{}
+			bh.init()
+			beginErr := errors.New("begin failed")
+			bh.sql2err["begin;"] = beginErr
+			oldNewBackgroundExec := NewBackgroundExec
+			defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+			forcedPessimisticRC := false
+			NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+				for _, opt := range opts {
+					forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+				}
+				return bh
+			}
+
+			err := testCase.run(ctx, ses)
+			require.ErrorIs(t, err, beginErr)
+			require.True(t, forcedPessimisticRC)
+		})
+	}
+}
 
 func Test_doCreatePublication(t *testing.T) {
 	mockedAccountsResults := func(ctrl *gomock.Controller) []interface{} {
@@ -56,7 +120,7 @@ func Test_doCreatePublication(t *testing.T) {
 		er := mock_frontend.NewMockExecResult(ctrl)
 		er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
 		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(0)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return(catalog.SystemDBTypeDataBranch, nil).AnyTimes()
 		return []interface{}{er}
 	}
 
@@ -75,6 +139,8 @@ func Test_doCreatePublication(t *testing.T) {
 	}
 
 	convey.Convey("check create publication", t, func() {
+		lockStub := gostub.StubFunc(&lockPublicationDatabase, catalog.SystemDBTypeDataBranch, nil)
+		defer lockStub.Reset()
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -88,6 +154,7 @@ func Test_doCreatePublication(t *testing.T) {
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().Close().Return().AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Service().Return("").AnyTimes()
 		// get all accounts
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedAccountsResults(ctrl))
@@ -246,7 +313,7 @@ func Test_doAlterPublication(t *testing.T) {
 		er := mock_frontend.NewMockExecResult(ctrl)
 		er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
 		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(0)).Return(uint64(0), nil).AnyTimes()
-		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return(catalog.SystemDBTypeDataBranch, nil).AnyTimes()
 		return []interface{}{er}
 	}
 
@@ -277,6 +344,8 @@ func Test_doAlterPublication(t *testing.T) {
 	}
 
 	convey.Convey("check alter publication", t, func() {
+		lockStub := gostub.StubFunc(&lockPublicationDatabase, catalog.SystemDBTypeDataBranch, nil)
+		defer lockStub.Reset()
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -304,6 +373,7 @@ func Test_doAlterPublication(t *testing.T) {
 
 		bh.EXPECT().Close().Return().AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Service().Return("").AnyTimes()
 		// begin; commit; rollback
 		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
 		bh.EXPECT().Exec(gomock.Any(), "commit;").Return(nil).AnyTimes()
@@ -442,6 +512,216 @@ func Test_doAlterPublication2(t *testing.T) {
 	})
 }
 
+func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
+	tests := []struct {
+		name                string
+		protocol            int64
+		publication         string
+		publicationID       uint64
+		publicationAccounts string
+		statement           string
+		lookupDB            string
+		lookupPersisted     bool
+		databaseOwner       uint32
+		targetLookupDB      string
+		tableLookupDB       string
+		wantTableAccount    uint32
+		wantErr             bool
+	}{
+		{
+			name:          "v74 explicit database rejects",
+			protocol:      defines.MORPCVersion74,
+			publication:   "branch_db",
+			publicationID: 7,
+			statement:     "alter publication pub1 account acc1 database replacement_db comment 'updated'",
+			lookupDB:      "replacement_db",
+			wantErr:       true,
+		},
+		{
+			name:            "v74 effective database rejects",
+			protocol:        defines.MORPCVersion74,
+			publication:     "branch_db",
+			publicationID:   7,
+			statement:       "alter publication pub1 account acc1 comment 'updated'",
+			lookupPersisted: true,
+			wantErr:         true,
+		},
+		{
+			name:          "v75 explicit database succeeds",
+			protocol:      defines.MORPCVersion75,
+			publication:   "branch_db",
+			publicationID: 7,
+			statement:     "alter publication pub1 account acc1 database replacement_db comment 'updated'",
+			lookupDB:      "replacement_db",
+		},
+		{
+			name:            "v75 effective database succeeds",
+			protocol:        defines.MORPCVersion75,
+			publication:     "branch_db",
+			publicationID:   7,
+			statement:       "alter publication pub1 account acc1 comment 'updated'",
+			lookupPersisted: true,
+		},
+		{
+			name:                "v75 effective target account database succeeds",
+			protocol:            defines.MORPCVersion75,
+			publication:         "branch_db",
+			publicationID:       7,
+			publicationAccounts: "acc1",
+			statement:           "alter publication pub1 account acc1 comment 'updated'",
+			lookupPersisted:     true,
+			databaseOwner:       1,
+		},
+		{
+			name:                "v75 replacement target account database succeeds",
+			protocol:            defines.MORPCVersion75,
+			publication:         "branch_db",
+			publicationID:       7,
+			publicationAccounts: "acc1",
+			statement:           "alter publication pub1 account acc1 database replacement_db table t comment 'updated'",
+			targetLookupDB:      "replacement_db",
+			tableLookupDB:       "replacement_db",
+			wantTableAccount:    1,
+		},
+		{
+			name:        "account level remains database independent",
+			protocol:    defines.MORPCVersion74,
+			publication: pubsub.TableAll,
+			statement:   "alter publication pub1 account acc1 comment 'updated'",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			lockStub := gostub.StubFunc(&lockPublicationDatabase, catalog.SystemDBTypeDataBranch, nil)
+			t.Cleanup(lockStub.Reset)
+			ctrl := gomock.NewController(t)
+			tenant := &TenantInfo{
+				Tenant:        sysAccountName,
+				User:          rootName,
+				DefaultRole:   moAdminRoleName,
+				TenantID:      sysAccountID,
+				UserID:        rootID,
+				DefaultRoleID: moAdminRoleID,
+			}
+			ses := newSes(nil, ctrl)
+			ses.tenant = tenant
+
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+			pu.SV.SetDefaultValues()
+			setPu("", pu)
+			ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+			ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+			setProtocolVersionForTest(t, ses.GetService(), test.protocol)
+
+			bh := &backgroundExecTest{}
+			bh.init()
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			t.Cleanup(bhStub.Reset)
+
+			bh.sql2result[getAccountIdNamesSql] = newMrsForGetAllAccounts([][]interface{}{
+				{int64(sysAccountID), sysAccountName, "open", uint64(1), nil},
+				{int64(1), "acc1", "open", uint64(1), nil},
+			})
+			columnCheckSQL := "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_pubs' and attname = 'account_name'"
+			bh.sql2result[columnCheckSQL] = newMrsForRestoreStringRows([]string{"exists"}, [][]interface{}{{1}})
+			publicationAccounts := test.publicationAccounts
+			if publicationAccounts == "" {
+				publicationAccounts = pubsub.AccountAll
+			}
+			pubSQL := fmt.Sprintf(getPubInfoSql, sysAccountID) + " and pub_name = 'pub1'"
+			bh.sql2result[pubSQL] = newMrsForRestoreStringRows(
+				[]string{"account_id", "account_name", "pub_name", "database_name", "database_id", "table_list", "account_list", "created_time", "update_time", "owner", "creator", "comment"},
+				[][]interface{}{{int64(sysAccountID), sysAccountName, "pub1", test.publication, test.publicationID, pubsub.TableAll, publicationAccounts, "", nil, uint64(0), uint64(0), "old"}},
+			)
+			if test.lookupDB != "" {
+				dbSQL, err := getSqlForGetDbIdAndType(ctx, test.lookupDB, true, uint64(sysAccountID))
+				require.NoError(t, err)
+				bh.sql2result[dbSQL] = newMrsForRestoreStringRows(
+					[]string{"dat_id", "dat_type"},
+					[][]interface{}{{uint64(7), catalog.SystemDBTypeDataBranch}},
+				)
+			}
+			if test.lookupPersisted {
+				dbSQL := fmt.Sprintf(getDbAccountIdAndTypByIdFormat, test.publicationID, sanitizeSQLInput(test.publication))
+				bh.sql2result[dbSQL] = newMrsForRestoreStringRows(
+					[]string{"account_id", "dat_type"},
+					[][]interface{}{{uint64(test.databaseOwner), catalog.SystemDBTypeDataBranch}},
+				)
+			}
+			if test.targetLookupDB != "" {
+				dbSQL, err := getSqlForGetDbIdAndType(ctx, test.targetLookupDB, true, 1)
+				require.NoError(t, err)
+				bh.sql2result[dbSQL] = newMrsForRestoreStringRows(
+					[]string{"dat_id", "dat_type"},
+					[][]interface{}{{uint64(8), catalog.SystemDBTypeDataBranch}},
+				)
+			}
+			if test.tableLookupDB != "" {
+				bh.sql2result["show tables from "+sqlquote.Ident(test.tableLookupDB)] = newMrsForRestoreStringRows(
+					[]string{"Tables_in_" + test.tableLookupDB},
+					[][]interface{}{{"t"}},
+				)
+			}
+			bh.sql2result[getSubsSql+" and pub_account_name = 'sys' and pub_name = 'pub1'"] =
+				newMrsForRestoreStringRows(
+					[]string{"sub_account_id", "sub_account_name", "sub_name", "sub_time", "pub_account_id", "pub_account_name", "pub_name", "pub_database", "pub_tables", "pub_time", "pub_comment", "status"},
+					nil,
+				)
+
+			stmts, err := mysql.Parse(ctx, test.statement, 1)
+			require.NoError(t, err)
+			err = doAlterPublication(ctx, ses, stmts[0].(*tree.AlterPublication))
+			if test.wantErr {
+				require.ErrorContains(t, err, "is not a user database")
+				require.Contains(t, bh.executedSQLs, "rollback;")
+				require.NotContains(t, bh.executedSQLs, "commit;")
+				for _, sql := range bh.executedSQLs {
+					require.NotContains(t, sql, "update mo_catalog.mo_pubs")
+					require.NotContains(t, sql, "update mo_catalog.mo_subs")
+					require.NotContains(t, sql, "insert into mo_catalog.mo_subs")
+				}
+			} else {
+				require.NoError(t, err)
+				require.Contains(t, bh.executedSQLs, "commit;")
+			}
+
+			if test.lookupDB == "" && !test.lookupPersisted && test.targetLookupDB == "" {
+				for _, sql := range bh.executedSQLs {
+					require.NotContains(t, sql, "from mo_catalog.mo_database")
+				}
+			}
+			if test.lookupPersisted {
+				persistedLookup := fmt.Sprintf(getDbAccountIdAndTypByIdFormat, test.publicationID, sanitizeSQLInput(test.publication))
+				require.Contains(t, bh.executedSQLs, persistedLookup)
+				publisherLookup, err := getSqlForGetDbIdAndType(ctx, test.publication, true, uint64(sysAccountID))
+				require.NoError(t, err)
+				require.NotContains(t, bh.executedSQLs, publisherLookup)
+			}
+			if test.targetLookupDB != "" {
+				publisherLookup, err := getSqlForGetDbIdAndType(ctx, test.targetLookupDB, true, uint64(sysAccountID))
+				require.NoError(t, err)
+				targetLookup, err := getSqlForGetDbIdAndType(ctx, test.targetLookupDB, true, 1)
+				require.NoError(t, err)
+				require.Contains(t, bh.executedSQLs, publisherLookup)
+				require.Contains(t, bh.executedSQLs, targetLookup)
+				require.Contains(t, strings.Join(bh.executedSQLs, "\n"), "database_id = 8")
+			}
+			if test.tableLookupDB != "" {
+				tableSQL := "show tables from " + sqlquote.Ident(test.tableLookupDB)
+				foundTableLookup := false
+				for i, sql := range bh.executedSQLs {
+					if sql == tableSQL {
+						foundTableLookup = true
+						require.Equal(t, test.wantTableAccount, bh.executionAccountIDs[i])
+					}
+				}
+				require.True(t, foundTableLookup)
+			}
+		})
+	}
+}
+
 func Test_doDropPublication(t *testing.T) {
 	mockedCheckColResults := func(ctrl *gomock.Controller) []interface{} {
 		er := mock_frontend.NewMockExecResult(ctrl)
@@ -570,6 +850,36 @@ func TestGetSqlForGetDbIdAndType(t *testing.T) {
 	}
 }
 
+func TestShowPublicationsEmptyResultMetadata(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	ctx := context.WithValue(t.Context(), config.ParameterUnitKey, pu)
+	ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+	ses := newSes(nil, ctrl)
+	ses.tenant = &TenantInfo{Tenant: sysAccountName, TenantID: sysAccountID}
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	t.Cleanup(stub.Reset)
+	bh.EXPECT().Close()
+	bh.EXPECT().ClearExecResultSet().Times(2)
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(2)
+	result := mock_frontend.NewMockExecResult(ctrl)
+	result.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{result}).Times(2)
+
+	require.NoError(t, doShowPublications(ctx, ses, &tree.ShowPublications{}))
+	require.Empty(t, ses.mrs.Data)
+	require.Len(t, ses.mrs.Columns, 8)
+	for i, name := range []string{"publication", "database", "tables", "sub_account", "subscribed_accounts", "create_time", "update_time", "comments"} {
+		require.Equal(t, name, ses.mrs.Columns[i].Name())
+	}
+	require.Equal(t, defines.MYSQL_TYPE_BLOB, ses.mrs.Columns[2].ColumnType())
+	require.Equal(t, defines.MYSQL_TYPE_TIMESTAMP, ses.mrs.Columns[5].ColumnType())
+}
+
 func Test_doShowSubscriptions(t *testing.T) {
 	convey.Convey("do show subscriptions", t, func() {
 		ctrl := gomock.NewController(t)
@@ -648,24 +958,70 @@ func Test_getSqlForDbPubCount(t *testing.T) {
 }
 
 func Test_checkColExists(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	execErr := errors.New("catalog lookup failed")
+	for _, tc := range []struct {
+		name      string
+		table     string
+		column    string
+		rows      uint64
+		execErr   error
+		badResult bool
+	}{
+		{name: "publication-current", table: "mo_pubs", column: "account_name", rows: 1},
+		{name: "publication-legacy", table: "mo_pubs", column: "account_name"},
+		{name: "subscription-current", table: "mo_subs", column: "sub_account_name", rows: 1},
+		{name: "subscription-legacy", table: "mo_subs", column: "sub_account_name"},
+		{name: "execution-error", table: "mo_subs", column: "sub_account_name", execErr: execErr},
+		{name: "canceled", table: "mo_subs", column: "sub_account_name", execErr: context.Canceled},
+		{name: "invalid-result", table: "mo_pubs", column: "account_name", badResult: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			ctx := defines.AttachAccountId(context.Background(), uint32(42))
+			if tc.execErr == context.Canceled {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			// This independent SQL expectation also fails on the unscoped lookup.
+			sql := fmt.Sprintf("select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = '%s' and attname = '%s'", tc.table, tc.column)
+			bh.EXPECT().ClearExecResultSet()
+			bh.EXPECT().Exec(gomock.Any(), sql).DoAndReturn(func(execCtx context.Context, _ string) error {
+				accountID, err := defines.GetAccountId(execCtx)
+				require.NoError(t, err)
+				require.Equal(t, catalog.System_Account, accountID)
+				if tc.execErr == context.Canceled {
+					require.ErrorIs(t, execCtx.Err(), context.Canceled)
+				}
+				return tc.execErr
+			})
+			if tc.execErr == nil {
+				var results []interface{}
+				if tc.badResult {
+					results = []interface{}{struct{}{}}
+				} else {
+					er := mock_frontend.NewMockExecResult(ctrl)
+					er.EXPECT().GetRowCount().Return(tc.rows)
+					results = []interface{}{er}
+				}
+				bh.EXPECT().GetExecResultSet().Return(results)
+			}
 
-	bh := mock_frontend.NewMockBackgroundExec(ctrl)
-	bh.EXPECT().Close().Return().AnyTimes()
-	bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
-
-	mockedResults := func(ctrl *gomock.Controller) []interface{} {
-		er := mock_frontend.NewMockExecResult(ctrl)
-		er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-		return []interface{}{er}
+			exists, err := checkColExists(ctx, bh, "mo_catalog", tc.table, tc.column)
+			if tc.execErr != nil {
+				require.ErrorIs(t, err, tc.execErr)
+			} else if tc.badResult {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.execErr == nil && !tc.badResult && tc.rows > 0, exists)
+			callerID, callerErr := defines.GetAccountId(ctx)
+			require.NoError(t, callerErr)
+			require.Equal(t, uint32(42), callerID)
+		})
 	}
-	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	bh.EXPECT().GetExecResultSet().Return(mockedResults(ctrl))
-
-	exists, err := checkColExists(context.Background(), bh, "mo_catalog", "mo_pubs", "pub_name")
-	require.NoError(t, err)
-	require.True(t, exists)
 }
 
 func Test_extractPubInfosFromExecResultOld(t *testing.T) {

@@ -140,6 +140,21 @@ type LockService interface {
 	CloseRemoteLockTable(group uint32, tableID, version uint64) (bool, error)
 }
 
+// ExternalTxnLivenessRegistry lets a caller register transaction IDs whose
+// liveness is owned outside the transaction client. The registration remains
+// active until the caller unregisters it after terminal lock cleanup.
+//
+// The separate optional capability keeps ordinary LockService clients from
+// having to implement session-level transaction tracking.
+type ExternalTxnLivenessRegistry interface {
+	// RegisterExternalTxn must be called before issuing the corresponding Lock.
+	// An error leaves the registry unchanged.
+	RegisterExternalTxn(txnID []byte) error
+	// UnregisterExternalTxn must be called only after the corresponding lock
+	// cleanup has completed successfully.
+	UnregisterExternalTxn(txnID []byte)
+}
+
 // UnknownCommitResolver resolves a Commit whose request may have reached TN but
 // whose final response was not received by CN. It must not release the txn's
 // locks until the allocator proves that the txn cannot still be committing.

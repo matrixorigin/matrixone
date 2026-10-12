@@ -1,0 +1,374 @@
+DROP DATABASE IF EXISTS div_zero_traditional;
+CREATE DATABASE div_zero_traditional;
+USE div_zero_traditional;
+CREATE TABLE t(id INT PRIMARY KEY, v DECIMAL(10,2));
+CREATE TABLE src(id INT PRIMARY KEY, n INT, d INT);
+INSERT INTO src VALUES (1,10,2),(2,10,0),(3,10,5);
+SET SESSION sql_mode = 'TRADITIONAL';
+SELECT 10/0 AS v;
+➤ v[8,53,31]  𝄀
+null
+INSERT INTO t VALUES(1,10/0);
+Data truncation: division by zero
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]
+DELETE FROM t;
+INSERT INTO t VALUES(1,42);
+UPDATE t SET v=10/0;
+Data truncation: division by zero
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  42.00  ¦  0
+DELETE FROM t;
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/0)';
+EXECUTE p;
+Data truncation: division by zero
+DEALLOCATE PREPARE p;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src WHERE id=2;
+Data truncation: division by zero
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src;
+Data truncation: division by zero
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]
+DELETE FROM t;
+SET SESSION sql_mode = 'TRADITIONAL,ERROR_FOR_DIVISION_BY_ZERO';
+SELECT 10/0 AS v;
+➤ v[8,53,31]  𝄀
+null
+INSERT INTO t VALUES(1,10/0);
+Data truncation: division by zero
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]
+DELETE FROM t;
+INSERT INTO t VALUES(1,42);
+UPDATE t SET v=10/0;
+Data truncation: division by zero
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  42.00  ¦  0
+DELETE FROM t;
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/0)';
+EXECUTE p;
+Data truncation: division by zero
+DEALLOCATE PREPARE p;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src WHERE id=2;
+Data truncation: division by zero
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src;
+Data truncation: division by zero
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]
+DELETE FROM t;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+SELECT 10/0 AS v;
+➤ v[8,53,31]  𝄀
+null
+INSERT INTO t VALUES(1,10/0);
+Data truncation: division by zero
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]
+DELETE FROM t;
+INSERT INTO t VALUES(1,42);
+UPDATE t SET v=10/0;
+Data truncation: division by zero
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  42.00  ¦  0
+DELETE FROM t;
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/0)';
+EXECUTE p;
+Data truncation: division by zero
+DEALLOCATE PREPARE p;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src WHERE id=2;
+Data truncation: division by zero
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src;
+Data truncation: division by zero
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]
+DELETE FROM t;
+SET SESSION sql_mode = 'STRICT_ALL_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+SELECT 10/0 AS v;
+➤ v[8,53,31]  𝄀
+null
+INSERT INTO t VALUES(1,10/0);
+Data truncation: division by zero
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]
+DELETE FROM t;
+INSERT INTO t VALUES(1,42);
+UPDATE t SET v=10/0;
+Data truncation: division by zero
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  42.00  ¦  0
+DELETE FROM t;
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/0)';
+EXECUTE p;
+Data truncation: division by zero
+DEALLOCATE PREPARE p;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src WHERE id=2;
+Data truncation: division by zero
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src;
+Data truncation: division by zero
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]
+DELETE FROM t;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+SELECT 10/0 AS v;
+➤ v[8,53,31]  𝄀
+null
+INSERT INTO t VALUES(1,10/0);
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  null  ¦  1
+DELETE FROM t;
+INSERT INTO t VALUES(1,42);
+UPDATE t SET v=10/0;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  null  ¦  1
+DELETE FROM t;
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/0)';
+EXECUTE p;
+DEALLOCATE PREPARE p;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  null  ¦  1
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src WHERE id=2;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+2  ¦  null  ¦  1
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  5.00  ¦  0  𝄀
+2  ¦  null  ¦  1  𝄀
+3  ¦  2.00  ¦  0
+DELETE FROM t;
+SET SESSION sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO';
+SELECT 10/0 AS v;
+➤ v[8,53,31]  𝄀
+null
+INSERT INTO t VALUES(1,10/0);
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  null  ¦  1
+DELETE FROM t;
+INSERT INTO t VALUES(1,42);
+UPDATE t SET v=10/0;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  null  ¦  1
+DELETE FROM t;
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/0)';
+EXECUTE p;
+DEALLOCATE PREPARE p;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  null  ¦  1
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src WHERE id=2;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+2  ¦  null  ¦  1
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  5.00  ¦  0  𝄀
+2  ¦  null  ¦  1  𝄀
+3  ¦  2.00  ¦  0
+DELETE FROM t;
+SET SESSION sql_mode = '';
+SELECT 10/0 AS v;
+➤ v[8,53,31]  𝄀
+null
+INSERT INTO t VALUES(1,10/0);
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  null  ¦  1
+DELETE FROM t;
+INSERT INTO t VALUES(1,42);
+UPDATE t SET v=10/0;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  null  ¦  1
+DELETE FROM t;
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/0)';
+EXECUTE p;
+DEALLOCATE PREPARE p;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  null  ¦  1
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src WHERE id=2;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+2  ¦  null  ¦  1
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src;
+SELECT id,v,v IS NULL AS is_null FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  5.00  ¦  0  𝄀
+2  ¦  null  ¦  1  𝄀
+3  ¦  2.00  ¦  0
+DELETE FROM t;
+SET SESSION sql_mode = 'traditional';
+INSERT INTO t VALUES(1,10 DIV 0);
+Data truncation: division by zero
+INSERT INTO t VALUES(1,10 % 0);
+Data truncation: division by zero
+INSERT INTO t VALUES(1,MOD(10,0));
+Data truncation: division by zero
+INSERT INTO t VALUES(1,CAST(10 AS DECIMAL(10,2))/CAST(0 AS DECIMAL(10,2)));
+Data truncation: division by zero
+INSERT INTO t VALUES(1,CAST(10 AS DECIMAL(30,2))/CAST(0 AS DECIMAL(30,2)));
+Data truncation: division by zero
+INSERT INTO t VALUES(1,CAST(10 AS DOUBLE)/CAST(0 AS DOUBLE));
+Data truncation: division by zero
+SELECT COUNT(*) FROM t;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT 10 DIV 0 AS d,10 % 0 AS m,MOD(10,0) AS f;
+➤ d[-5,64,0]  ¦  m[-5,64,0]  ¦  f[-5,64,0]  𝄀
+null  ¦  null  ¦  null
+INSERT INTO t SELECT id,n DIV d FROM src;
+Data truncation: division by zero
+INSERT INTO t SELECT id,n % d FROM src;
+Data truncation: division by zero
+INSERT INTO t SELECT id,CAST(n AS DECIMAL(10,2))/CAST(d AS DECIMAL(10,2)) FROM src;
+Data truncation: division by zero
+INSERT INTO t SELECT id,CAST(n AS DECIMAL(30,2))/CAST(d AS DECIMAL(30,2)) FROM src;
+Data truncation: division by zero
+SELECT COUNT(*) FROM t;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+INSERT INTO t VALUES(1,10/2),(2,10/0),(3,10/5);
+Data truncation: division by zero
+SELECT COUNT(*) FROM t;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+INSERT INTO t VALUES(1,41),(2,42),(3,43);
+UPDATE t SET v=10/(id-2);
+Data truncation: division by zero
+SELECT * FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  𝄀
+1  ¦  41.00  𝄀
+2  ¦  42.00  𝄀
+3  ¦  43.00
+DELETE FROM t;
+INSERT INTO t VALUES(1,NULL/0),(2,10/NULL),(3,NULL DIV 0),(4,NULL % 0);
+SELECT * FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  null
+DELETE FROM t;
+INSERT INTO t SELECT id,n/d FROM src WHERE id < 0;
+SELECT COUNT(*) FROM t;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+INSERT INTO t SELECT id,n/d FROM src WHERE d <> 0;
+SELECT * FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  𝄀
+1  ¦  5.00  𝄀
+3  ¦  2.00
+DELETE FROM t;
+INSERT INTO t SELECT id,CASE WHEN d=0 THEN 99 ELSE n/d END FROM src;
+SELECT * FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  𝄀
+1  ¦  5.00  𝄀
+2  ¦  99.00  𝄀
+3  ¦  2.00
+DELETE FROM t;
+INSERT IGNORE INTO t VALUES(1,10/0),(2,10 DIV 0),(3,10 % 0);
+SELECT * FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+DELETE FROM t;
+INSERT IGNORE INTO t SELECT id,n/d FROM src;
+SELECT * FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  𝄀
+1  ¦  5.00  𝄀
+2  ¦  null  𝄀
+3  ¦  2.00
+DELETE FROM t;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/0)';
+SET SESSION sql_mode = 'TRADITIONAL';
+EXECUTE p;
+Data truncation: division by zero
+SELECT COUNT(*) FROM t;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+EXECUTE p;
+SELECT * FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  𝄀
+1  ¦  null
+DELETE FROM t;
+SET SESSION sql_mode = 'TRADITIONAL';
+EXECUTE p;
+Data truncation: division by zero
+SELECT COUNT(*) FROM t;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p;
+PREPARE p FROM 'INSERT INTO t VALUES(1,10/?)';
+SET @d=0;
+EXECUTE p USING @d;
+Data truncation: division by zero
+SELECT COUNT(*) FROM t;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SET @d=2;
+EXECUTE p USING @d;
+SELECT * FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  𝄀
+1  ¦  5.00
+DEALLOCATE PREPARE p;
+DELETE FROM t;
+BEGIN;
+INSERT INTO t VALUES(9,99);
+INSERT INTO t SELECT id,n/d FROM src;
+Data truncation: division by zero
+SELECT * FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  𝄀
+9  ¦  99.00
+COMMIT;
+SELECT * FROM t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  𝄀
+9  ¦  99.00
+SELECT * FROM div_zero_traditional.t ORDER BY id;
+➤ id[4,32,0]  ¦  v[3,10,2]  𝄀
+9  ¦  99.00
+DROP DATABASE div_zero_traditional;
+SET SESSION sql_mode = DEFAULT;

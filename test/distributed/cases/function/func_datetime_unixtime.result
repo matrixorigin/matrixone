@@ -289,12 +289,12 @@ AND table_name = 'temporal_ctas'
 AND column_name IN ('from_d3', 'from_d9', 'from_float', 'add_us', 'sub_us', 'timestampadd_us')
 ORDER BY ordinal_position;
 column_name    column_type    is_nullable
-from_d3    DATETIME(3)    YES
-from_d9    DATETIME(6)    YES
-from_float    DATETIME(6)    YES
-add_us    DATETIME(6)    YES
-sub_us    DATETIME(6)    YES
-timestampadd_us    DATETIME(6)    YES
+from_d3    datetime(3)    YES
+from_d9    datetime(6)    YES
+from_float    datetime(6)    YES
+add_us    datetime(6)    YES
+sub_us    datetime(6)    YES
+timestampadd_us    datetime(6)    YES
 INSERT INTO temporal_ctas VALUES
 (2,
 FROM_UNIXTIME(CAST(1704067201.234 AS DECIMAL(20,3))),

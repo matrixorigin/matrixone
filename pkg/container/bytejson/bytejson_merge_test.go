@@ -111,6 +111,8 @@ func TestByteJsonMergePreserveMySQLValueCombinations(t *testing.T) {
 		{`[1,2]`, `true`, `[1,2,true]`},
 		{`{"a":["x","y"]}`, `{"a":"b","c":"d"}`, `{"a":["x","y","b"],"c":"d"}`},
 		{`{"a":"b","c":"d"}`, `{"a":["x","y"]}`, `{"a":["b","x","y"],"c":"d"}`},
+		{`{"a":{"foo":"bar"}}`, `{"a":["foo","bar"]}`, `{"a":[{"foo":"bar"},"foo","bar"]}`},
+		{`{"a":["foo","bar"]}`, `{"a":{"foo":"bar"}}`, `{"a":["foo","bar",{"foo":"bar"}]}`},
 		{`{"a":"b","c":"d"}`, `true`, `[{"a":"b","c":"d"},true]`},
 	}
 

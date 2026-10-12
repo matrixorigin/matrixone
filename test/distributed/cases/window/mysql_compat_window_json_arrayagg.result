@@ -48,7 +48,7 @@ from orders order by id;
 7  ¦  30  ¦  ["paid"]  𝄀
 8  ¦  30  ¦  ["paid", "refund"]
 select id, customer_id,
-json_objectagg(cast(id as char), status) over (partition by customer_id order by id) v
+json_objectagg(id, status) over (partition by customer_id order by id) v
 from orders order by id;
 ➤ id[4,32,0]  ¦  customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
 1  ¦  10  ¦  {"1": "paid"}  𝄀
@@ -59,13 +59,26 @@ from orders order by id;
 6  ¦  20  ¦  {"4": "paid", "5": "paid", "6": "pending"}  𝄀
 7  ¦  30  ¦  {"7": "paid"}  𝄀
 8  ¦  30  ¦  {"7": "paid", "8": "refund"}
+select id, customer_id,
+json_objectagg(customer_id, status) over (partition by customer_id order by id
+rows between unbounded preceding and current row) v
+from orders order by id;
+➤ id[4,32,0]  ¦  customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
+1  ¦  10  ¦  {"10": "paid"}  𝄀
+2  ¦  10  ¦  {"10": "paid"}  𝄀
+3  ¦  10  ¦  {"10": "refund"}  𝄀
+4  ¦  20  ¦  {"20": "paid"}  𝄀
+5  ¦  20  ¦  {"20": "paid"}  𝄀
+6  ¦  20  ¦  {"20": "pending"}  𝄀
+7  ¦  30  ¦  {"30": "paid"}  𝄀
+8  ¦  30  ¦  {"30": "refund"}
 select customer_id, json_arrayagg(status) v
 from orders where id in (1, 4, 7) group by customer_id order by customer_id;
 ➤ customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
 10  ¦  ["paid"]  𝄀
 20  ¦  ["paid"]  𝄀
 30  ¦  ["paid"]
-select customer_id, json_objectagg(cast(id as char), status) v
+select customer_id, json_objectagg(id, status) v
 from orders where id in (1, 4, 7) group by customer_id order by customer_id;
 ➤ customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
 10  ¦  {"1": "paid"}  𝄀
@@ -77,4 +90,29 @@ select json_arrayagg, json_objectagg from t_ident;
 ➤ json_arrayagg[4,32,0]  ¦  json_objectagg[4,32,0]  𝄀
 1  ¦  2
 drop table t_ident;
+set @json_window_saved_time_zone = @@session.time_zone;
+set time_zone = '+00:00';
+create table timestamp_orders (
+id int primary key,
+customer_id int,
+k varchar(16),
+ts timestamp(6)
+);
+insert into timestamp_orders values
+(1,10,'a','2024-02-29 04:34:56.123456'),
+(2,10,'b','2024-02-29 05:34:56.123456');
+set time_zone = '+08:00';
+select id,
+json_unquote(json_extract(
+json_arrayagg(ts) over (partition by customer_id order by id),
+'$[0]')) array_agg,
+json_unquote(json_extract(
+json_objectagg(k, ts) over (partition by customer_id order by id),
+'$.a')) object_agg
+from timestamp_orders order by id;
+➤ id[4,32,0]  ¦  array_agg[12,65535,0]  ¦  object_agg[12,65535,0]  𝄀
+1  ¦  2024-02-29 12:34:56.123456  ¦  2024-02-29 12:34:56.123456  𝄀
+2  ¦  2024-02-29 12:34:56.123456  ¦  2024-02-29 12:34:56.123456
+drop table timestamp_orders;
+set time_zone = @json_window_saved_time_zone;
 drop database mysql_compat_window_json_arrayagg;

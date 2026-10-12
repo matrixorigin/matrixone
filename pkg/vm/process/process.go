@@ -228,9 +228,10 @@ func (proc *Process) SetPrepareParamsWithReusableTypedMeta(
 }
 
 // SetPrepareParamsWithTypedMeta borrows prepareParams and additionally keeps
-// the concrete SQL type needed by prepared JSON comparisons. Exact types use a
-// separate metadata axis; they must never be folded into PrepareParamKind,
-// whose five values are conversion categories rather than SQL types.
+// the concrete SQL type needed by domain-sensitive prepared consumers such as
+// JSON comparisons and JSON_STORAGE. Exact types use a separate metadata axis;
+// they must never be folded into PrepareParamKind, whose five values are
+// conversion categories rather than SQL types.
 func (proc *Process) SetPrepareParamsWithTypedMeta(
 	prepareParams *vector.Vector,
 	isBin []bool,

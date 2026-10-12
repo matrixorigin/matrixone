@@ -1260,6 +1260,19 @@ func computeStringJsonArrayAppend(json []byte, paths []*bytejson.Path, newVal []
 	return bj.Modify(paths, newVal, bytejson.JsonModifyArrayAppend)
 }
 
+func computeJsonArrayInsert(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj := types.DecodeJson(json)
+	return bj.Modify(paths, newVal, bytejson.JsonModifyArrayInsert)
+}
+
+func computeStringJsonArrayInsert(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj, err := types.ParseSliceToByteJson(json)
+	if err != nil {
+		return bytejson.Null, err
+	}
+	return bj.Modify(paths, newVal, bytejson.JsonModifyArrayInsert)
+}
+
 func computeJsonRemove(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, error) {
 	bj := types.DecodeJson(json)
 	return bj.Remove(paths)
@@ -1793,6 +1806,10 @@ func (op *opBuiltInJsonSet) buildJsonArrayAppend(parameters []*vector.Vector, re
 	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifyArrayAppend)
 }
 
+func (op *opBuiltInJsonSet) buildJsonArrayInsert(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifyArrayInsert)
+}
+
 func (op *opBuiltInJsonRemove) buildJsonRemove(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	var fn computeFn
 
@@ -2072,6 +2089,12 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 		} else {
 			fn = computeStringJsonArrayAppend
 		}
+	case bytejson.JsonModifyArrayInsert:
+		if jsonVec.GetType().Oid == types.T_json {
+			fn = computeJsonArrayInsert
+		} else {
+			fn = computeStringJsonArrayInsert
+		}
 	default:
 		return moerr.NewInvalidInput(proc.Ctx, "invalid json function type")
 	}
@@ -2118,10 +2141,8 @@ rowLoop:
 		// build all values
 		valExprs := make([]bytejson.ByteJson, 0, (len(parameters)-1)/2+1)
 		for j := 2; j < len(parameters); j += 2 {
-			// Unlike JSON_SET/INSERT/REPLACE, JSON_ARRAY_APPEND returns SQL
-			// NULL when any value argument is SQL NULL.  The other JSON
-			// modification functions intentionally convert SQL NULL values to
-			// the JSON null literal, so keep this check local to ARRAY_APPEND.
+			// Preserve the existing ARRAY_APPEND NULL behavior. Other modifiers,
+			// including ARRAY_INSERT, convert SQL NULL values to JSON null.
 			if jsonFuncType == bytejson.JsonModifyArrayAppend && parameters[j].IsNull(i) {
 				if err = rs.AppendBytes(nil, true); err != nil {
 					return err
@@ -2139,7 +2160,7 @@ rowLoop:
 		if err != nil {
 			return err
 		}
-		if out.IsNull() && jsonFuncType != bytejson.JsonModifyArrayAppend {
+		if out.IsNull() && jsonFuncType != bytejson.JsonModifyArrayAppend && jsonFuncType != bytejson.JsonModifyArrayInsert {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -2162,6 +2183,8 @@ func jsonModifyFunctionName(jsonFuncType bytejson.JsonModifyType) string {
 		return "json_replace"
 	case bytejson.JsonModifyArrayAppend:
 		return "json_array_append"
+	case bytejson.JsonModifyArrayInsert:
+		return "json_array_insert"
 	default:
 		return "json_modify"
 	}

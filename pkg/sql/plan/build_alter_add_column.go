@@ -17,7 +17,6 @@ package plan
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -57,12 +56,11 @@ func AddColumn(
 			"column name %s is reserved for external table scans", newColName)
 	}
 
-	colType, err := getTypeFromAst(ctx.GetContext(), specNewColumn.Type)
+	colType, err := getColumnTypeFromAst(ctx.GetContext(), specNewColumn, tableDef.DefaultCharset, nil)
 	if err != nil {
 		return false, err
 	}
-	colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
-	if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableDef.DefaultCharset, specNewColumn.Attributes); err != nil {
+	if err = requireMediumIntProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), colType); err != nil {
 		return false, err
 	}
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {
@@ -112,7 +110,10 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 	}
 
 	newCol := &ColDef{
-		ColId: math.MaxUint64,
+		// Keep planner-only IDs distinct until the replacement relation assigns
+		// durable IDs. Foreign keys added by the same COPY ALTER use these IDs to
+		// render column names in the temporary CREATE TABLE statement.
+		ColId: nextAlterCopyColumnID(alterPlan.CopyTableDef.Cols),
 		//Primary: originalCol.Primary,
 		//NotNull:  originalCol.NotNull,
 		//Default:  originalCol.Default,
@@ -191,13 +192,13 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		//	newCol.Default = defaultValue
 		//	hasDefaultValue = true
 		case *tree.AttributeOnUpdate:
-			onUpdateExpr, err := buildOnUpdate(specNewColumn, colType, ctx.GetProcess())
+			onUpdateExpr, err := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
 			newCol.OnUpdate = onUpdateExpr
 		case *tree.AttributeGeneratedAlways:
-			generatedCol, err := buildGeneratedExpr(specNewColumn, colType, scopeCols, ctx.GetProcess())
+			generatedCol, err := buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, scopeCols, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
@@ -221,7 +222,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 			OriginString: "",
 		}
 	} else {
-		defaultValue, err := buildDefaultExprWithColumns(specNewColumn, colType, ctx.GetProcess(), scopeCols)
+		defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), scopeCols)
 		if err != nil {
 			return nil, err
 		}
@@ -237,6 +238,21 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		}
 	}
 	return newCol, nil
+}
+
+func nextAlterCopyColumnID(cols []*ColDef) uint64 {
+	used := make(map[uint64]struct{}, len(cols))
+	for _, col := range cols {
+		if col != nil {
+			used[col.ColId] = struct{}{}
+		}
+	}
+	for candidate := UnKnownColId; candidate > 0; candidate-- {
+		if _, exists := used[candidate]; !exists {
+			return candidate
+		}
+	}
+	return 0
 }
 
 // checkTypeCapSize check type for add single column.
@@ -268,6 +284,9 @@ func checkTypeCapSize(ctx context.Context, ty *plan.Type, name string) error {
 }
 
 func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName string) error {
+	if err := rejectNativeUnicodePrimaryKey(ctx, colType, columnName); err != nil {
+		return err
+	}
 	if colType.GetId() == int32(types.T_blob) {
 		return moerr.NewNotSupported(ctx, "blob type in primary key")
 	}
@@ -293,6 +312,9 @@ func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName 
 }
 
 func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName string) error {
+	if err := rejectNativeUnicodeUniqueKey(ctx, colType, columnName); err != nil {
+		return err
+	}
 	if colType.GetId() == int32(types.T_blob) {
 		return moerr.NewNotSupported(ctx, "blob type in primary key")
 	}
@@ -452,11 +474,38 @@ func checkVisibleColumnCnt(ctx context.Context, tblInfo *TableDef, addCount, dro
 }
 
 func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *TableDef) error {
+	if err := validateFunctionalTable(ctx, tbInfo); err != nil {
+		return err
+	}
 	for i := 0; i < len(tbInfo.Indexes); i++ {
 		indexInfo := tbInfo.Indexes[i]
+		// Capture owners before deleting key parts: the ordinal is part of
+		// their identity, and successive renames can overlap old names.
+		var functionalOwners map[string]*ColDef
+		for ordinal, part := range indexInfo.Parts {
+			if col := functionalIndexPartColumn(tbInfo, indexInfo, ordinal); col != nil {
+				if functionalOwners == nil {
+					functionalOwners = make(map[string]*ColDef)
+				}
+				functionalOwners[part] = col
+			}
+		}
 		indexInfo.Parts = RemoveIf[string](indexInfo.Parts, func(t string) bool {
 			return catalog.ResolveAlias(t) == colName
 		})
+		for ordinal, part := range indexInfo.Parts {
+			if col := functionalOwners[part]; col != nil {
+				name := functionalColumnName(indexInfo.IndexName, ordinal)
+				if name != part {
+					if pos, ok := tbInfo.Name2ColIndex[part]; ok {
+						delete(tbInfo.Name2ColIndex, part)
+						tbInfo.Name2ColIndex[name] = pos
+					}
+					col.Name, col.OriginName = name, name
+					indexInfo.Parts[ordinal] = name
+				}
+			}
+		}
 
 		if indexInfo.Unique {
 			// handle unique index
@@ -514,7 +563,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 			}
 		}
 	}
-	return nil
+	return validateFunctionalTable(ctx, tbInfo)
 }
 
 func handleDropColumnWithPrimaryKey(ctx context.Context, colName string, tbInfo *TableDef) error {
@@ -544,6 +593,9 @@ func handleDropColumnWithPrimaryKey(ctx context.Context, colName string, tbInfo 
 func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, targetCol *ColDef) error {
 	colName := targetCol.Name
 	for _, fkInfo := range tbInfo.Fkeys {
+		if fkInfo == nil {
+			return moerr.NewInternalError(ctx.GetContext(), "nil foreign key definition while dropping column")
+		}
 		for _, colId := range fkInfo.Cols {
 			referCol := FindColumnByColId(tbInfo.Cols, colId)
 			if referCol == nil {
@@ -556,7 +608,7 @@ func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, target
 	}
 
 	for _, referredTblId := range tbInfo.RefChildTbls {
-		_, refTableDef, err := ctx.ResolveById(referredTblId, nil)
+		_, refTableDef, selfReference, err := resolveAlterForeignKeyTable(ctx, tbInfo, referredTblId)
 		if err != nil {
 			return err
 		}
@@ -564,11 +616,21 @@ func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, target
 			return moerr.NewInternalErrorf(ctx.GetContext(), "The reference foreign key table %d does not exist", referredTblId)
 		}
 		for _, referredFK := range refTableDef.Fkeys {
-			if referredFK.ForeignTbl == tbInfo.TblId {
-				for i := 0; i < len(referredFK.Cols); i++ {
-					if referredFK.ForeignCols[i] == targetCol.ColId {
-						return moerr.NewErrFkColumnCannotDropChild(ctx.GetContext(), colName, referredFK.Name, refTableDef.Name)
-					}
+			if referredFK == nil {
+				return moerr.NewInternalError(ctx.GetContext(), "nil foreign key definition while dropping column")
+			}
+			if len(referredFK.Cols) != len(referredFK.ForeignCols) {
+				return moerr.NewInternalErrorf(ctx.GetContext(),
+					"foreign key %s has mismatched child and parent columns", referredFK.Name)
+			}
+			if referredFK.ForeignTbl != tbInfo.TblId && !(selfReference && referredFK.ForeignTbl == 0) {
+				continue
+			}
+			for _, foreignColID := range referredFK.ForeignCols {
+				if foreignColID == targetCol.ColId {
+					return moerr.NewErrFkColumnCannotDropChild(
+						ctx.GetContext(), colName, referredFK.Name, refTableDef.Name,
+					)
 				}
 			}
 		}

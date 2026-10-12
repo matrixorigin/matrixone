@@ -61,7 +61,7 @@ func runNarrowCompareOps[T types.ArrayElement](t *testing.T, proc *process.Proce
 		}
 		expect := NewFunctionTestResult(types.T_bool.ToType(), false, op.exp, []bool{false, false, false})
 		fc := NewFunctionTestCase(proc, inputs, expect, op.fn)
-		ok, info := fc.Run()
+		ok, info := fc.RunAndFree()
 		require.True(t, ok, info, oid.String()+"/"+op.name)
 	}
 }

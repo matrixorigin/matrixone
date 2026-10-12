@@ -256,6 +256,7 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 	} else {
 		dedupJoin.OpAnalyzer.Reset()
 	}
+	dedupJoin.ctr.autoSpill = dedupJoin.SpillThreshold == 0
 	dedupJoin.ctr.spillThreshold = colexec.ResolveSpillThreshold(dedupJoin.SpillThreshold)
 	newEvalVectors := len(dedupJoin.ctr.vecs) == 0
 	newUpdateExecs := len(dedupJoin.ctr.exprExecs) == 0 && len(dedupJoin.UpdateColExprList) > 0
@@ -460,6 +461,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				BuildKeyExprs:             dedupJoin.Conditions[1],
 				ProbeKeyExprs:             dedupJoin.Conditions[0],
 				SpillThreshold:            ctr.spillThreshold,
+				AdaptiveMemory:            ctr.autoSpill,
 				NeedsBuildForEmptyProbe:   true,
 				NeedAllocateSels:          dedupJoin.OnDuplicateAction == plan.Node_UPDATE,
 				NeedBatches:               true,
@@ -1717,16 +1719,16 @@ func odkuUint64At(vec *vector.Vector, row int) (uint64, bool) {
 	switch vec.GetType().Oid {
 	case types.T_int8:
 		v := vector.GetFixedAtNoTypeCheck[int8](vec, row)
-		return uint64(v), v >= 0
+		return uint64(v), true
 	case types.T_int16:
 		v := vector.GetFixedAtNoTypeCheck[int16](vec, row)
-		return uint64(v), v >= 0
+		return uint64(v), true
 	case types.T_int32:
 		v := vector.GetFixedAtNoTypeCheck[int32](vec, row)
-		return uint64(v), v >= 0
+		return uint64(v), true
 	case types.T_int64:
 		v := vector.GetFixedAtNoTypeCheck[int64](vec, row)
-		return uint64(v), v >= 0
+		return uint64(v), true
 	case types.T_uint8:
 		return uint64(vector.GetFixedAtNoTypeCheck[uint8](vec, row)), true
 	case types.T_uint16:
@@ -2071,6 +2073,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 	warningsEnabled := proc != nil && proc.GetStmtProfile() != nil &&
 		proc.GetStmtProfile().GetStatementIgnore() && ap.OnDuplicateAction == plan.Node_IGNORE
 	var duplicateWarnings process.WarningAccumulator
+	duplicateWarnings.SetWarningRetentionForProcess(proc)
+	defer duplicateWarnings.Reset()
 	recordDuplicateWarning := func(row int) {
 		if !warningsEnabled {
 			return
@@ -2094,7 +2098,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 		}
 		duplicateWarnings.Add(
 			moerr.ER_DUP_ENTRY,
-			moerr.NewDuplicateEntry(proc.Ctx, rowStr, ap.DedupColName).Error(),
+			moerr.FormatDuplicateEntry(rowStr, ap.DedupColName),
 		)
 	}
 	for i := 0; i < count; i += hashmap.UnitLimit {

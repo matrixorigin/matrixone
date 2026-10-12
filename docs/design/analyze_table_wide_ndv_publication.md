@@ -5,7 +5,7 @@
 - Tracking issue: [matrixorigin/matrixone#27728](https://github.com/matrixorigin/matrixone/issues/27728)
 - Implementation PR: [matrixorigin/matrixone#28067](https://github.com/matrixorigin/matrixone/pull/28067)
 - Builds on: `docs/design/analyze_stats_publication.md`
-- Last updated: 2026-09-04
+- Last updated: 2026-09-11
 
 The schema-version and cache-publication fences described here remain in use.
 The later sampled-ANALYZE design replaces the derived full-table aggregate and
@@ -63,9 +63,27 @@ its existing local metadata refresh; local diagnostic readers may inspect the
 published process-local value without using it for a versioned plan.
 
 This adds no extra scan, storage, or network work to ANALYZE; one scalar count
-state piggybacks on the existing aggregate. It changes neither automatic
-metadata refresh nor planning for tables that have not been explicitly
-analyzed.
+state piggybacks on the existing aggregate. It does not alter automatic
+metadata refresh. The string-range safety rule below intentionally applies to
+aggregate planning for all tables because the range encoding is not a proven
+full-key distribution.
+
+### String range safety
+
+`ShuffleRange` stores string boundaries using only the first eight bytes. That
+encoding is sufficient to describe a possible join distribution, but it is not
+a full-key quantile distribution and cannot prove balanced ownership for an
+aggregate whose equality key is the complete string. The sampled ANALYZE path
+publishes NDV and related column statistics, but no full-key string range. The
+publication composes those table-wide values with a fresh physical metadata
+generation. That generation's range remains available to joins, scans, and
+filter costing; it is not a full-key proof for aggregate ownership.
+
+The planner also fails closed for string `GROUP BY` keys: it keeps the reset
+hash strategy and does not inherit a string range from a reusable child plan.
+Numeric keys and existing join range decisions retain their current behavior.
+This conservative boundary can be relaxed when a full-key range or quantile
+sketch is available.
 
 ## 3. Required invariants
 
@@ -162,8 +180,8 @@ The acceptance matrix covers:
 
 - high-NDV VARCHAR with a long common prefix: table-wide NDV must replace the
   metadata underestimate and enable hash shuffle;
-- high-NDV VARCHAR varying within the first eight bytes: existing range stats
-  and range shuffle must remain available;
+- high-NDV VARCHAR varying within the first eight bytes: join range behavior
+  remains available, while aggregate planning stays on the proven hash path;
 - low-NDV VARCHAR with the same long prefix: a small table-wide NDV must remain
   small and must not force shuffle;
 - empty/all-NULL, one-value, two-value, and committed-but-unflushed tables;

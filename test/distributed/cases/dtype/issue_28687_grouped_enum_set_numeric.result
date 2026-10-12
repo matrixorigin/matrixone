@@ -1,0 +1,75 @@
+drop database if exists issue_28687_grouped_numeric;
+create database issue_28687_grouped_numeric;
+use issue_28687_grouped_numeric;
+create table grouped_values (
+id int primary key,
+e enum('red', 'green', 'blue'),
+s set('a', 'b', 'c')
+);
+insert into grouped_values values
+(1, 'red', 'a'),
+(2, 'red', 'a,b'),
+(3, 'green', 'c'),
+(4, 'blue', 'a,b,c'),
+(5, null, null);
+insert ignore into grouped_values values (6, 'invalid', null);
+select id, e + 0, s + 0 from grouped_values order by id;
+➤ id[4,32,0]  ¦  e + 0[-5,64,0]  ¦  s + 0[3,38,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  3  𝄀
+3  ¦  2  ¦  4  𝄀
+4  ¦  3  ¦  7  𝄀
+5  ¦  null  ¦  null  𝄀
+6  ¦  0  ¦  null
+select e, e + 0, count(*) from grouped_values group by e order by e + 0;
+➤ e[12,65535,0]  ¦  e + 0[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  null  ¦  1  𝄀
+  ¦  0  ¦  1  𝄀
+red  ¦  1  ¦  2  𝄀
+green  ¦  2  ¦  1  𝄀
+blue  ¦  3  ¦  1
+select s, s + 0, count(*) from grouped_values group by s order by s + 0;
+➤ s[12,65535,0]  ¦  s + 0[3,38,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  null  ¦  2  𝄀
+a  ¦  1  ¦  1  𝄀
+a,b  ¦  3  ¦  1  𝄀
+c  ¦  4  ¦  1  𝄀
+a,b,c  ¦  7  ¦  1
+select e, e in (1, 2), e not in (1, 2)
+from grouped_values group by e order by e + 0;
+➤ e[12,65535,0]  ¦  e in (1, 2)[-7,1,0]  ¦  e not in (1, 2)[-7,1,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+  ¦  0  ¦  1  𝄀
+red  ¦  1  ¦  0  𝄀
+green  ¦  1  ¦  0  𝄀
+blue  ¦  0  ¦  1
+select 1 in (select e from grouped_values group by e);
+➤ 1 in (select e from grouped_values group by e)[-7,1,0]  𝄀
+1
+select 1 not in (select e from grouped_values group by e);
+➤ 1 not in (select e from grouped_values group by e)[-7,1,0]  𝄀
+0
+select 99 not in (select e from grouped_values group by e);
+➤ 99 not in (select e from grouped_values group by e)[-7,1,0]  𝄀
+null
+select (e, 1) in (select 1, e from grouped_values group by e)
+from grouped_values group by e order by e + 0;
+➤ (e, 1) in (select 1, e from grouped_values group by e)[-7,1,0]  𝄀
+null  𝄀
+0  𝄀
+1  𝄀
+0  𝄀
+0
+select 1 = any (select e from grouped_values group by e);
+➤ 1 = any (select e from grouped_values group by e)[-7,1,0]  𝄀
+1
+select d.e + 0
+from (select e from grouped_values group by e) d
+order by d.e + 0;
+➤ d.e + 0[-5,64,0]  𝄀
+null  𝄀
+0  𝄀
+1  𝄀
+2  𝄀
+3
+drop database issue_28687_grouped_numeric;

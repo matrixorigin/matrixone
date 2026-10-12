@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -96,109 +97,117 @@ func TestCircuitBreakerSuccessResetsFailures(t *testing.T) {
 }
 
 func TestCircuitBreakerHalfOpenAfterTimeout(t *testing.T) {
-	logger := zap.NewNop()
-	config := CircuitBreakerConfig{
-		Enabled:             true,
-		FailureThreshold:    2,
-		ResetTimeout:        50 * time.Millisecond,
-		HalfOpenMaxRequests: 2,
-	}
-	cb := NewCircuitBreaker(config, logger)
+	synctest.Test(t, func(t *testing.T) {
+		logger := zap.NewNop()
+		config := CircuitBreakerConfig{
+			Enabled:             true,
+			FailureThreshold:    2,
+			ResetTimeout:        50 * time.Millisecond,
+			HalfOpenMaxRequests: 2,
+		}
+		cb := NewCircuitBreaker(config, logger)
 
-	// Open the circuit
-	cb.RecordFailure()
-	cb.RecordFailure()
-	assert.Equal(t, CircuitOpen, cb.State())
-	assert.False(t, cb.Allow())
+		// Open the circuit
+		cb.RecordFailure()
+		cb.RecordFailure()
+		assert.Equal(t, CircuitOpen, cb.State())
+		assert.False(t, cb.Allow())
 
-	// Wait for reset timeout
-	time.Sleep(60 * time.Millisecond)
+		// Wait for reset timeout
+		time.Sleep(60 * time.Millisecond)
 
-	// First request should be allowed (transitions to half-open)
-	assert.True(t, cb.Allow())
-	assert.Equal(t, CircuitHalfOpen, cb.State())
+		// First request should be allowed (transitions to half-open)
+		assert.True(t, cb.Allow())
+		assert.Equal(t, CircuitHalfOpen, cb.State())
+	})
 }
 
 func TestCircuitBreakerHalfOpenSuccess(t *testing.T) {
-	logger := zap.NewNop()
-	config := CircuitBreakerConfig{
-		Enabled:             true,
-		FailureThreshold:    2,
-		ResetTimeout:        50 * time.Millisecond,
-		HalfOpenMaxRequests: 2,
-	}
-	cb := NewCircuitBreaker(config, logger)
+	synctest.Test(t, func(t *testing.T) {
+		logger := zap.NewNop()
+		config := CircuitBreakerConfig{
+			Enabled:             true,
+			FailureThreshold:    2,
+			ResetTimeout:        50 * time.Millisecond,
+			HalfOpenMaxRequests: 2,
+		}
+		cb := NewCircuitBreaker(config, logger)
 
-	// Open the circuit
-	cb.RecordFailure()
-	cb.RecordFailure()
+		// Open the circuit
+		cb.RecordFailure()
+		cb.RecordFailure()
 
-	// Wait for reset timeout
-	time.Sleep(60 * time.Millisecond)
+		// Wait for reset timeout
+		time.Sleep(60 * time.Millisecond)
 
-	// Transition to half-open
-	assert.True(t, cb.Allow())
-	assert.Equal(t, CircuitHalfOpen, cb.State())
+		// Transition to half-open
+		assert.True(t, cb.Allow())
+		assert.Equal(t, CircuitHalfOpen, cb.State())
 
-	// Record enough successes to close the circuit
-	cb.RecordSuccess()
-	cb.RecordSuccess()
+		// Record enough successes to close the circuit
+		cb.RecordSuccess()
+		cb.RecordSuccess()
 
-	assert.Equal(t, CircuitClosed, cb.State())
-	assert.True(t, cb.Allow())
+		assert.Equal(t, CircuitClosed, cb.State())
+		assert.True(t, cb.Allow())
+	})
 }
 
 func TestCircuitBreakerHalfOpenFailure(t *testing.T) {
-	logger := zap.NewNop()
-	config := CircuitBreakerConfig{
-		Enabled:             true,
-		FailureThreshold:    2,
-		ResetTimeout:        50 * time.Millisecond,
-		HalfOpenMaxRequests: 2,
-	}
-	cb := NewCircuitBreaker(config, logger)
+	synctest.Test(t, func(t *testing.T) {
+		logger := zap.NewNop()
+		config := CircuitBreakerConfig{
+			Enabled:             true,
+			FailureThreshold:    2,
+			ResetTimeout:        50 * time.Millisecond,
+			HalfOpenMaxRequests: 2,
+		}
+		cb := NewCircuitBreaker(config, logger)
 
-	// Open the circuit
-	cb.RecordFailure()
-	cb.RecordFailure()
+		// Open the circuit
+		cb.RecordFailure()
+		cb.RecordFailure()
 
-	// Wait for reset timeout
-	time.Sleep(60 * time.Millisecond)
+		// Wait for reset timeout
+		time.Sleep(60 * time.Millisecond)
 
-	// Transition to half-open
-	assert.True(t, cb.Allow())
-	assert.Equal(t, CircuitHalfOpen, cb.State())
+		// Transition to half-open
+		assert.True(t, cb.Allow())
+		assert.Equal(t, CircuitHalfOpen, cb.State())
 
-	// Record a failure - should reopen the circuit
-	cb.RecordFailure()
+		// Record a failure - should reopen the circuit
+		cb.RecordFailure()
 
-	assert.Equal(t, CircuitOpen, cb.State())
-	assert.False(t, cb.Allow())
+		assert.Equal(t, CircuitOpen, cb.State())
+		assert.False(t, cb.Allow())
+	})
 }
 
 func TestCircuitBreakerHalfOpenLimitedRequests(t *testing.T) {
-	logger := zap.NewNop()
-	config := CircuitBreakerConfig{
-		Enabled:             true,
-		FailureThreshold:    2,
-		ResetTimeout:        50 * time.Millisecond,
-		HalfOpenMaxRequests: 2,
-	}
-	cb := NewCircuitBreaker(config, logger)
+	synctest.Test(t, func(t *testing.T) {
+		logger := zap.NewNop()
+		config := CircuitBreakerConfig{
+			Enabled:             true,
+			FailureThreshold:    2,
+			ResetTimeout:        50 * time.Millisecond,
+			HalfOpenMaxRequests: 2,
+		}
+		cb := NewCircuitBreaker(config, logger)
 
-	// Open the circuit
-	cb.RecordFailure()
-	cb.RecordFailure()
+		// Open the circuit
+		cb.RecordFailure()
+		cb.RecordFailure()
 
-	// Wait for reset timeout
-	time.Sleep(60 * time.Millisecond)
+		// Wait for reset timeout
+		time.Sleep(60 * time.Millisecond)
 
-	// First 2 requests should be allowed
-	assert.True(t, cb.Allow())
-	assert.True(t, cb.Allow())
+		// First 2 requests should be allowed
+		assert.True(t, cb.Allow())
+		assert.True(t, cb.Allow())
 
-	// Third request should be rejected
-	assert.False(t, cb.Allow())
+		// Third request should be rejected
+		assert.False(t, cb.Allow())
+	})
 }
 
 func TestCircuitBreakerPermitNeutralRelease(t *testing.T) {

@@ -15,7 +15,6 @@
 package function
 
 import (
-	"bytes"
 	"sort"
 	"time"
 
@@ -82,10 +81,12 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 
 	case types.T_char:
 		return opBetweenBytesWithFunc(parameters, rs, proc, length, selectList, func(a, b []byte) int {
-			return bytes.Compare(bytes.TrimRight(a, " "), bytes.TrimRight(b, " "))
+			return compareTextBytes(*paramType, a, b)
 		})
 	case types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-		return opBetweenBytesWithFunc(parameters, rs, proc, length, selectList, bytes.Compare)
+		return opBetweenBytesWithFunc(parameters, rs, proc, length, selectList, func(a, b []byte) int {
+			return compareTextBytes(*paramType, a, b)
+		})
 	}
 
 	panic("unreached code")
@@ -693,7 +694,10 @@ func inRangeImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		})
 
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-		return inRangeBytesWithFunc(parameters, rs, proc, length, selectList, bytes.Compare)
+		paramType := parameters[0].GetType()
+		return inRangeBytesWithFunc(parameters, rs, proc, length, selectList, func(a, b []byte) int {
+			return compareTextBytes(*paramType, a, b)
+		})
 	}
 
 	panic("unreached code")

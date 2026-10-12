@@ -444,6 +444,60 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 // overload shape: the single WITHIN GROUP ORDER BY expression becomes the
 // first executor argument, followed by any direct arguments. Aggregate-specific
 // execution remains unchanged.
+func validateOrderedSetAggregateShape(
+	ctx context.Context,
+	funcName string,
+	astExpr *tree.FuncExpr,
+	spec orderedSetAggregateSpec,
+) (*tree.Order, error) {
+	if !astExpr.WithinGroup {
+		return nil, moerr.NewSyntaxErrorf(ctx,
+			"%s requires WITHIN GROUP (ORDER BY ...)", funcName)
+	}
+	if len(astExpr.Exprs) != spec.directArgumentCount {
+		if spec.directArgumentCount == 0 {
+			return nil, moerr.NewSyntaxErrorf(ctx,
+				"%s WITHIN GROUP does not accept a direct argument", funcName)
+		}
+		return nil, moerr.NewSyntaxErrorf(ctx,
+			"%s requires exactly one %s argument", funcName, spec.directArgumentName)
+	}
+	if len(astExpr.OrderBy) != 1 {
+		return nil, moerr.NewSyntaxErrorf(ctx,
+			"%s requires exactly one WITHIN GROUP ORDER BY expression", funcName)
+	}
+
+	orderExpr := astExpr.OrderBy[0]
+	if orderExpr == nil || orderExpr.Expr == nil {
+		return nil, moerr.NewSyntaxErrorf(ctx,
+			"%s requires an ORDER BY expression", funcName)
+	}
+	return orderExpr, nil
+}
+
+func applyOrderedSetAggregateDirection(
+	ctx context.Context,
+	expr *plan.Expr,
+	spec orderedSetAggregateSpec,
+	orderExpr *tree.Order,
+) error {
+	if !spec.directionMatters {
+		return nil
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return moerr.NewInternalError(ctx,
+			"invalid ordered-set aggregate expression")
+	}
+	if orderExpr.Direction == tree.Descending {
+		fn.AggConfig = []byte{1}
+	} else {
+		fn.AggConfig = []byte{0}
+	}
+	fn.AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
+	return nil
+}
+
 func (b *HavingBinder) bindOrderedSetAggregate(
 	funcName string,
 	astExpr *tree.FuncExpr,
@@ -455,27 +509,10 @@ func (b *HavingBinder) bindOrderedSetAggregate(
 		return nil, moerr.NewNotSupported(b.GetContext(),
 			"ordered-set percentile aggregates in time windows")
 	}
-	if !astExpr.WithinGroup {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"%s requires WITHIN GROUP (ORDER BY ...)", funcName)
-	}
-	if len(astExpr.Exprs) != spec.directArgumentCount {
-		if spec.directArgumentCount == 0 {
-			return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-				"%s WITHIN GROUP does not accept a direct argument", funcName)
-		}
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"%s requires exactly one %s argument", funcName, spec.directArgumentName)
-	}
-	if len(astExpr.OrderBy) != 1 {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"%s requires exactly one WITHIN GROUP ORDER BY expression", funcName)
-	}
-
-	orderExpr := astExpr.OrderBy[0]
-	if orderExpr == nil || orderExpr.Expr == nil {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"%s requires an ORDER BY expression", funcName)
+	orderExpr, err := validateOrderedSetAggregateShape(
+		b.GetContext(), funcName, astExpr, spec)
+	if err != nil {
+		return nil, err
 	}
 	value, err := b.BindExpr(orderExpr.Expr, depth, isRoot)
 	if err != nil {
@@ -491,8 +528,11 @@ func (b *HavingBinder) bindOrderedSetAggregate(
 		args = append(args, bound)
 	}
 	if spec.useStoredNumericContract {
-		args = useStoredMySQLSpecialTypesForNumericContract(
+		args, err = b.useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 			b.GetContext(), funcName, args)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var expr *plan.Expr
@@ -507,20 +547,10 @@ func (b *HavingBinder) bindOrderedSetAggregate(
 	if err != nil {
 		return nil, err
 	}
-	if !spec.directionMatters {
-		return expr, nil
+	if err = applyOrderedSetAggregateDirection(
+		b.GetContext(), expr, spec, orderExpr); err != nil {
+		return nil, err
 	}
-	fn := expr.GetF()
-	if fn == nil {
-		return nil, moerr.NewInternalError(b.GetContext(),
-			"invalid ordered-set aggregate expression")
-	}
-	if orderExpr.Direction == tree.Descending {
-		fn.AggConfig = []byte{1}
-	} else {
-		fn.AggConfig = []byte{0}
-	}
-	fn.AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
 	return expr, nil
 }
 
@@ -683,7 +713,10 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 		return moerr.NewSyntaxError(b.GetContext(), "group_concat requires arguments")
 	}
 	separatorLiteral := fn.Args[concatArgCount].GetLit()
-	if separatorLiteral == nil {
+	separator := ""
+	if separatorLiteral != nil {
+		separator = separatorLiteral.GetSval()
+	} else if value, ok := astExpr.Exprs[len(astExpr.Exprs)-1].(*tree.NumVal); !ok || (value.ValType != tree.P_null && value.ValType != tree.P_nulltext) {
 		return moerr.NewInternalError(b.GetContext(), "invalid group_concat separator")
 	}
 
@@ -711,10 +744,9 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 			}
 		}
 
-		if _, ok := orderExpr.(*tree.Subquery); ok {
-			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
-		}
-
+		// Keep scalar subqueries as aggregate arguments here. QueryBuilder
+		// flattens every aggregate argument before constructing the AGG node,
+		// including the hidden arguments used as GROUP_CONCAT order keys.
 		var boundExpr *plan.Expr
 		if orderArgIndex >= 0 {
 			// Reuse the already-bound aggregate argument. Rebinding an ordinal
@@ -730,9 +762,6 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 			if err != nil {
 				return err
 			}
-		}
-		if hasSubquery(boundExpr) {
-			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
 		}
 		// A literal key is equal for every input row and has no effect on the
 		// ordering. Do not expose it as an executor key (NULL has type ANY).
@@ -791,7 +820,7 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 		concatArgCount,
 		orderFlags,
 		orderArgIndexes,
-		separatorLiteral.GetSval(),
+		separator,
 	)
 	args := make([]*plan.Expr, 0, concatArgCount+len(orderExprs))
 	args = append(args, fn.Args[:concatArgCount]...)
@@ -810,7 +839,7 @@ func (b *HavingBinder) groupConcatOrderKey(expr *plan.Expr) (*plan.Expr, error) 
 		}
 	}
 	if storageType := b.ctx.mysqlSpecialOrderTypeForExpr(expr); storageType != nil {
-		return makeMySQLSpecialOrderKey(b.GetContext(), expr, storageType)
+		return b.builder.mysqlSpecialOrderKey(b.ctx, expr, storageType)
 	}
 	return expr, nil
 }

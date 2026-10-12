@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -120,8 +121,8 @@ type IndexUpdateStatus struct {
 
 func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bool, reason string, err error) error {
 
-	statussqlfmt := "UPDATE mo_catalog.mo_index_update SET status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s'"
-	updatesqlfmt := "UPDATE mo_catalog.mo_index_update SET last_update_at = now(), status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s'"
+	statussqlfmt := "UPDATE mo_catalog.mo_index_update SET status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s' AND index_name = '%s'"
+	updatesqlfmt := "UPDATE mo_catalog.mo_index_update SET last_update_at = now(), status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s' AND index_name = '%s'"
 
 	// skip update status if index is NOT updated
 	status := IndexUpdateStatus{Time: time.Now()}
@@ -149,7 +150,7 @@ func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bo
 
 	// update status
 	sql := fmt.Sprintf(sqlfmt,
-		string(bytes), t.TableId, t.AccountId, t.Action)
+		sqlquote.EscapeString(string(bytes)), t.TableId, t.AccountId, sqlquote.EscapeString(t.Action), sqlquote.EscapeString(t.IndexName))
 	res, err2 := runSaveStatusSql(sqlproc, sql)
 	if err2 != nil {
 		return err2
@@ -615,8 +616,12 @@ func buildReindexSql(dbName, tableName, indexName, algoToken, reindexOption stri
 	if reindexOption != "" {
 		reindexOpt = " " + reindexOption
 	}
-	return fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` %s%s FORCE_SYNC",
-		dbName, tableName, indexName, algoToken, reindexOpt)
+	// Identifiers go through sqlquote: a db/table/index name may legally contain a backtick,
+	// and raw interpolation would emit SQL the cron can never execute (it retries the same
+	// broken statement every cadence).
+	return fmt.Sprintf("ALTER TABLE %s ALTER REINDEX %s %s%s FORCE_SYNC",
+		sqlquote.QualifiedIdent(dbName, tableName), sqlquote.Ident(indexName),
+		algoToken, reindexOpt)
 }
 
 // idxcronFastIntervalSec — dev/test override (env MO_IDXCRON_INTERVAL_SEC, in seconds).

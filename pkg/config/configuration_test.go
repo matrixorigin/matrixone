@@ -31,6 +31,16 @@ func TestGetUnixSocketAddress(t *testing.T) {
 	assert.Equal(t, f.UnixSocketAddress, f.GetUnixSocketAddress())
 }
 
+func TestFrontendProcessLimitationSizeDefaultsToAutomatic(t *testing.T) {
+	var defaults FrontendParameters
+	defaults.SetDefaultValues()
+	require.Zero(t, defaults.ProcessLimitationSize)
+
+	explicit := FrontendParameters{ProcessLimitationSize: 8 << 30}
+	explicit.SetDefaultValues()
+	require.Equal(t, int64(8<<30), explicit.ProcessLimitationSize)
+}
+
 func TestIsFileExist(t *testing.T) {
 	existFile := "/tmp/TestIsFileExist/exist"
 	notExistFile := "/tmp/TestIsFileExist/not_exist"

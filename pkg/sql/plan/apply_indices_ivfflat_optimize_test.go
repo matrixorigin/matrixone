@@ -85,7 +85,7 @@ func makeConsistentIvfMultiTableIndexForOptimizeTest(part, idxAlgoParams string)
 }
 
 func TestApplyIndicesForProjectPreparedIvfIndexOnlyKeepsCatalogDependencies(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(false)
+	baseMockCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -215,7 +215,7 @@ func TestApplyIndicesForProjectPreparedIvfIndexOnlyKeepsCatalogDependencies(t *t
 		}
 	}
 	visit(builder.qry.Steps[0])
-	require.True(t, reachableTypes[plan.Node_VECTOR_INDEX_SCAN])
+	require.True(t, reachableTypes[plan.Node_INDEX_SEARCH_SCAN])
 	require.False(t, reachableTypes[plan.Node_TABLE_SCAN])
 	// A successful plugin rewrite returns the original project ID after
 	// changing its child in place. It must not fall through to exact-sort
@@ -236,7 +236,7 @@ func TestApplyIndicesForProjectPreparedIvfIndexOnlyKeepsCatalogDependencies(t *t
 
 func TestApplyIndicesForSortUsingIvfflat_PushdownOptimization(t *testing.T) {
 	// Setup Compiler Context with mocked variables
-	baseMockCtx := NewMockCompilerContext(false)
+	baseMockCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -327,7 +327,7 @@ func TestApplyIndicesForSortUsingIvfflat_PushdownOptimization(t *testing.T) {
 		require.Equal(t, plan.Node_SORT, sortNode.NodeType)
 
 		childNode := builder.qry.Nodes[sortNode.Children[0]]
-		assert.Equal(t, plan.Node_VECTOR_INDEX_SCAN, childNode.NodeType)
+		assert.Equal(t, plan.Node_INDEX_SEARCH_SCAN, childNode.NodeType)
 	})
 
 	// 2. Case: With filters. Should ENABLE pushdown (nested join)
@@ -364,12 +364,12 @@ func TestApplyIndicesForSortUsingIvfflat_PushdownOptimization(t *testing.T) {
 		sortNodeID := vecCtx.projNode.Children[0]
 		sortNode := builder.qry.Nodes[sortNodeID]
 		childNode := builder.qry.Nodes[sortNode.Children[0]]
-		assert.Equal(t, plan.Node_VECTOR_INDEX_SCAN, childNode.NodeType)
+		assert.Equal(t, plan.Node_INDEX_SEARCH_SCAN, childNode.NodeType)
 	})
 }
 
 func TestApplyIndicesForSortUsingIvfflat_OuterScanRegularIndexPreservesProtection(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(false)
+	baseMockCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -527,7 +527,7 @@ func TestApplyIndicesForSortUsingIvfflat_OuterScanRegularIndexPreservesProtectio
 }
 
 func TestApplyIndicesForSortUsingIvfflat_OuterScanIndexOnlyUsesOptimizedPk(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(false)
+	baseMockCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -754,7 +754,7 @@ func TestStabilizeExactVectorSort_GuardBranches(t *testing.T) {
 	var nilBuilder *QueryBuilder
 	nilBuilder.stabilizeExactVectorSort(nil)
 
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	tableWithPk := &plan.TableDef{
 		Cols: []*plan.ColDef{
@@ -807,7 +807,7 @@ func TestResolveProjectedVectorSortTiebreak_GuardBranches(t *testing.T) {
 	var nilBuilder *QueryBuilder
 	assert.Nil(t, nilBuilder.resolveProjectedVectorSortTiebreak(nil, plan.Type{}, "id"))
 
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	scanNode := &plan.Node{
 		NodeType: plan.Node_TABLE_SCAN,
 		TableDef: &plan.TableDef{
@@ -837,7 +837,7 @@ func TestResolveProjectedVectorSortTiebreak_GuardBranches(t *testing.T) {
 func newExactVectorFallbackApplyIndicesCase(t *testing.T, sortFlag plan.OrderBySpec_OrderByFlag, rankOption *plan.RankOption) (*QueryBuilder, int32, int32, int32) {
 	t.Helper()
 
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	vecTyp := plan.Type{Id: int32(types.T_array_float32)}
@@ -915,7 +915,7 @@ func newExactVectorFallbackApplyIndicesCase(t *testing.T, sortFlag plan.OrderByS
 func newProjectedExactVectorFallbackApplyIndicesCase(t *testing.T) (*QueryBuilder, int32, int32, int32) {
 	t.Helper()
 
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	vecTyp := plan.Type{Id: int32(types.T_array_float32)}
@@ -1018,7 +1018,7 @@ func newProjectedExactVectorFallbackApplyIndicesCase(t *testing.T) (*QueryBuilde
 func newProjectedHiddenPkExactVectorFallbackApplyIndicesCase(t *testing.T) (*QueryBuilder, int32, int32, int32, int32, int32) {
 	t.Helper()
 
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	vecTyp := plan.Type{Id: int32(types.T_array_float32)}

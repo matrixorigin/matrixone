@@ -1,0 +1,326 @@
+DROP DATABASE IF EXISTS div_zero_ctas;
+CREATE DATABASE div_zero_ctas;
+USE div_zero_ctas;
+SET @saved_sql_mode = @@SESSION.sql_mode;
+CREATE TABLE src(id INT PRIMARY KEY, n INT, d INT);
+INSERT INTO src VALUES (1,10,2),(2,10,0),(3,9,3);
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+SELECT 10/0 AS v;
+➤ v[8,53,31]  𝄀
+null
+SELECT id,n/d AS v FROM src ORDER BY id;
+➤ id[4,32,0]  ¦  v[8,53,31]  𝄀
+1  ¦  5.0  𝄀
+2  ¦  null  𝄀
+3  ¦  3.0
+CREATE TABLE copied AS SELECT id,n/d AS v FROM src ORDER BY id;
+Data truncation: division by zero
+SELECT * FROM copied;
+SQL parser error: table "copied" does not exist
+CREATE TABLE copied(marker INT);
+DROP TABLE copied;
+CREATE TABLE constant AS SELECT 10/0 AS v;
+Data truncation: division by zero
+SELECT * FROM constant;
+SQL parser error: table "constant" does not exist
+CREATE TABLE constant(marker INT);
+DROP TABLE constant;
+CREATE TABLE decimal_result AS SELECT CAST(n AS DECIMAL(18,4))/d AS v FROM src;
+Data truncation: division by zero
+SELECT * FROM decimal_result;
+SQL parser error: table "decimal_result" does not exist
+CREATE TABLE decimal_result(marker INT);
+DROP TABLE decimal_result;
+CREATE TABLE float_result AS SELECT CAST(n AS DOUBLE)/d AS v FROM src;
+Data truncation: division by zero
+SELECT * FROM float_result;
+SQL parser error: table "float_result" does not exist
+CREATE TABLE float_result(marker INT);
+DROP TABLE float_result;
+CREATE TABLE intdiv AS SELECT n DIV d AS v FROM src;
+Data truncation: division by zero
+SELECT * FROM intdiv;
+SQL parser error: table "intdiv" does not exist
+CREATE TABLE intdiv(marker INT);
+DROP TABLE intdiv;
+CREATE TABLE modulo AS SELECT n % d AS v FROM src;
+Data truncation: division by zero
+SELECT * FROM modulo;
+SQL parser error: table "modulo" does not exist
+CREATE TABLE modulo(marker INT);
+DROP TABLE modulo;
+CREATE TABLE modfunc AS SELECT MOD(n,d) AS v FROM src;
+Data truncation: division by zero
+SELECT * FROM modfunc;
+SQL parser error: table "modfunc" does not exist
+CREATE TABLE modfunc(marker INT);
+DROP TABLE modfunc;
+CREATE TABLE unioned AS SELECT n/d AS v FROM src UNION ALL SELECT 1;
+Data truncation: division by zero
+SELECT * FROM unioned;
+SQL parser error: table "unioned" does not exist
+CREATE TABLE unioned(marker INT);
+DROP TABLE unioned;
+CREATE TABLE derived AS SELECT v FROM (SELECT n/d AS v FROM src) q;
+Data truncation: division by zero
+SELECT * FROM derived;
+SQL parser error: table "derived" does not exist
+CREATE TABLE derived(marker INT);
+DROP TABLE derived;
+CREATE TABLE explicit_cols(v DOUBLE) SELECT n/d FROM src;
+Data truncation: division by zero
+SELECT * FROM explicit_cols;
+SQL parser error: table "explicit_cols" does not exist
+CREATE TABLE explicit_cols(marker INT);
+DROP TABLE explicit_cols;
+CREATE TABLE safe AS SELECT id,n/NULLIF(d,0) AS v FROM src ORDER BY id;
+SELECT id,v,v IS NULL AS is_null FROM safe ORDER BY id;
+➤ id[4,32,0]  ¦  v[8,53,31]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  5.0  ¦  0  𝄀
+2  ¦  null  ¦  1  𝄀
+3  ¦  3.0  ¦  0
+DROP TABLE safe;
+CREATE TABLE empty_result AS SELECT n/d AS v FROM src WHERE id < 0;
+SELECT COUNT(*) FROM empty_result;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+DROP TABLE empty_result;
+CREATE TABLE ignored IGNORE AS SELECT id,n/d AS v FROM src ORDER BY id;
+SELECT id,v,v IS NULL AS is_null FROM ignored ORDER BY id;
+➤ id[4,32,0]  ¦  v[8,53,31]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  5.0  ¦  0  𝄀
+2  ¦  null  ¦  1  𝄀
+3  ¦  3.0  ¦  0
+DROP TABLE ignored;
+CREATE TABLE replaced REPLACE AS SELECT n/d AS v FROM src;
+Data truncation: division by zero
+SELECT * FROM replaced;
+SQL parser error: table "replaced" does not exist
+CREATE TEMPORARY TABLE copied AS SELECT id,n/d AS v FROM src ORDER BY id;
+Data truncation: division by zero
+SELECT * FROM copied;
+SQL parser error: table "copied" does not exist
+CREATE TEMPORARY TABLE copied(marker INT);
+DROP TABLE copied;
+CREATE TEMPORARY TABLE constant AS SELECT 10/0 AS v;
+Data truncation: division by zero
+SELECT * FROM constant;
+SQL parser error: table "constant" does not exist
+CREATE TEMPORARY TABLE constant(marker INT);
+DROP TABLE constant;
+CREATE TEMPORARY TABLE decimal_result AS SELECT CAST(n AS DECIMAL(18,4))/d AS v FROM src;
+Data truncation: division by zero
+SELECT * FROM decimal_result;
+SQL parser error: table "decimal_result" does not exist
+CREATE TEMPORARY TABLE decimal_result(marker INT);
+DROP TABLE decimal_result;
+CREATE TEMPORARY TABLE float_result AS SELECT CAST(n AS DOUBLE)/d AS v FROM src;
+Data truncation: division by zero
+SELECT * FROM float_result;
+SQL parser error: table "float_result" does not exist
+CREATE TEMPORARY TABLE float_result(marker INT);
+DROP TABLE float_result;
+CREATE TEMPORARY TABLE intdiv AS SELECT n DIV d AS v FROM src;
+Data truncation: division by zero
+SELECT * FROM intdiv;
+SQL parser error: table "intdiv" does not exist
+CREATE TEMPORARY TABLE intdiv(marker INT);
+DROP TABLE intdiv;
+CREATE TEMPORARY TABLE modulo AS SELECT n % d AS v FROM src;
+Data truncation: division by zero
+SELECT * FROM modulo;
+SQL parser error: table "modulo" does not exist
+CREATE TEMPORARY TABLE modulo(marker INT);
+DROP TABLE modulo;
+CREATE TEMPORARY TABLE modfunc AS SELECT MOD(n,d) AS v FROM src;
+Data truncation: division by zero
+SELECT * FROM modfunc;
+SQL parser error: table "modfunc" does not exist
+CREATE TEMPORARY TABLE modfunc(marker INT);
+DROP TABLE modfunc;
+CREATE TEMPORARY TABLE unioned AS SELECT n/d AS v FROM src UNION ALL SELECT 1;
+Data truncation: division by zero
+SELECT * FROM unioned;
+SQL parser error: table "unioned" does not exist
+CREATE TEMPORARY TABLE unioned(marker INT);
+DROP TABLE unioned;
+CREATE TEMPORARY TABLE derived AS SELECT v FROM (SELECT n/d AS v FROM src) q;
+Data truncation: division by zero
+SELECT * FROM derived;
+SQL parser error: table "derived" does not exist
+CREATE TEMPORARY TABLE derived(marker INT);
+DROP TABLE derived;
+CREATE TEMPORARY TABLE explicit_cols(v DOUBLE) SELECT n/d FROM src;
+Data truncation: division by zero
+SELECT * FROM explicit_cols;
+SQL parser error: table "explicit_cols" does not exist
+CREATE TEMPORARY TABLE explicit_cols(marker INT);
+DROP TABLE explicit_cols;
+CREATE TEMPORARY TABLE safe AS SELECT id,n/NULLIF(d,0) AS v FROM src ORDER BY id;
+SELECT id,v,v IS NULL AS is_null FROM safe ORDER BY id;
+➤ id[4,32,0]  ¦  v[8,53,31]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  5.0  ¦  0  𝄀
+2  ¦  null  ¦  1  𝄀
+3  ¦  3.0  ¦  0
+DROP TABLE safe;
+CREATE TEMPORARY TABLE empty_result AS SELECT n/d AS v FROM src WHERE id < 0;
+SELECT COUNT(*) FROM empty_result;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+DROP TABLE empty_result;
+CREATE TEMPORARY TABLE ignored IGNORE AS SELECT id,n/d AS v FROM src ORDER BY id;
+SELECT id,v,v IS NULL AS is_null FROM ignored ORDER BY id;
+➤ id[4,32,0]  ¦  v[8,53,31]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  5.0  ¦  0  𝄀
+2  ¦  null  ¦  1  𝄀
+3  ¦  3.0  ¦  0
+DROP TABLE ignored;
+CREATE TEMPORARY TABLE replaced REPLACE AS SELECT n/d AS v FROM src;
+Data truncation: division by zero
+SELECT * FROM replaced;
+SQL parser error: table "replaced" does not exist
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+CREATE TABLE allowed AS SELECT id,n/d AS v,n DIV d AS q,n % d AS r FROM src ORDER BY id;
+SELECT id,v,q,r,v IS NULL AS is_null FROM allowed ORDER BY id;
+➤ id[4,32,0]  ¦  v[8,53,31]  ¦  q[-5,64,0]  ¦  r[4,32,0]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  5.0  ¦  5  ¦  0  ¦  0  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  1  𝄀
+3  ¦  3.0  ¦  3  ¦  0  ¦  0
+DROP TABLE allowed;
+CREATE TEMPORARY TABLE allowed AS SELECT id,n/d AS v,n DIV d AS q,n % d AS r FROM src ORDER BY id;
+SELECT id,v,q,r,v IS NULL AS is_null FROM allowed ORDER BY id;
+➤ id[4,32,0]  ¦  v[8,53,31]  ¦  q[-5,64,0]  ¦  r[4,32,0]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  5.0  ¦  5  ¦  0  ¦  0  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  1  𝄀
+3  ¦  3.0  ¦  3  ¦  0  ¦  0
+DROP TABLE allowed;
+SET SESSION sql_mode = 'STRICT_ALL_TABLES';
+CREATE TABLE allowed AS SELECT id,n/d AS v,n DIV d AS q,n % d AS r FROM src ORDER BY id;
+SELECT id,v,q,r,v IS NULL AS is_null FROM allowed ORDER BY id;
+➤ id[4,32,0]  ¦  v[8,53,31]  ¦  q[-5,64,0]  ¦  r[4,32,0]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  5.0  ¦  5  ¦  0  ¦  0  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  1  𝄀
+3  ¦  3.0  ¦  3  ¦  0  ¦  0
+DROP TABLE allowed;
+CREATE TEMPORARY TABLE allowed AS SELECT id,n/d AS v,n DIV d AS q,n % d AS r FROM src ORDER BY id;
+SELECT id,v,q,r,v IS NULL AS is_null FROM allowed ORDER BY id;
+➤ id[4,32,0]  ¦  v[8,53,31]  ¦  q[-5,64,0]  ¦  r[4,32,0]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  5.0  ¦  5  ¦  0  ¦  0  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  1  𝄀
+3  ¦  3.0  ¦  3  ¦  0  ¦  0
+DROP TABLE allowed;
+SET SESSION sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO';
+CREATE TABLE allowed AS SELECT id,n/d AS v,n DIV d AS q,n % d AS r FROM src ORDER BY id;
+SELECT id,v,q,r,v IS NULL AS is_null FROM allowed ORDER BY id;
+➤ id[4,32,0]  ¦  v[8,53,31]  ¦  q[-5,64,0]  ¦  r[4,32,0]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  5.0  ¦  5  ¦  0  ¦  0  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  1  𝄀
+3  ¦  3.0  ¦  3  ¦  0  ¦  0
+DROP TABLE allowed;
+CREATE TEMPORARY TABLE allowed AS SELECT id,n/d AS v,n DIV d AS q,n % d AS r FROM src ORDER BY id;
+SELECT id,v,q,r,v IS NULL AS is_null FROM allowed ORDER BY id;
+➤ id[4,32,0]  ¦  v[8,53,31]  ¦  q[-5,64,0]  ¦  r[4,32,0]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  5.0  ¦  5  ¦  0  ¦  0  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  1  𝄀
+3  ¦  3.0  ¦  3  ¦  0  ¦  0
+DROP TABLE allowed;
+SET SESSION sql_mode = '';
+CREATE TABLE allowed AS SELECT id,n/d AS v,n DIV d AS q,n % d AS r FROM src ORDER BY id;
+SELECT id,v,q,r,v IS NULL AS is_null FROM allowed ORDER BY id;
+➤ id[4,32,0]  ¦  v[8,53,31]  ¦  q[-5,64,0]  ¦  r[4,32,0]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  5.0  ¦  5  ¦  0  ¦  0  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  1  𝄀
+3  ¦  3.0  ¦  3  ¦  0  ¦  0
+DROP TABLE allowed;
+CREATE TEMPORARY TABLE allowed AS SELECT id,n/d AS v,n DIV d AS q,n % d AS r FROM src ORDER BY id;
+SELECT id,v,q,r,v IS NULL AS is_null FROM allowed ORDER BY id;
+➤ id[4,32,0]  ¦  v[8,53,31]  ¦  q[-5,64,0]  ¦  r[4,32,0]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  5.0  ¦  5  ¦  0  ¦  0  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  1  𝄀
+3  ¦  3.0  ¦  3  ¦  0  ¦  0
+DROP TABLE allowed;
+SET SESSION sql_mode = 'STRICT_ALL_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+CREATE TABLE all_strict AS SELECT n/d AS v FROM src;
+Data truncation: division by zero
+SELECT * FROM all_strict;
+SQL parser error: table "all_strict" does not exist
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+CREATE TABLE target(id INT PRIMARY KEY,v DOUBLE);
+INSERT INTO target SELECT id,n/d FROM src ORDER BY id;
+Data truncation: division by zero
+SELECT COUNT(*) FROM target;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+INSERT INTO target VALUES (1,7);
+UPDATE target SET v=10/0 WHERE id=1;
+Data truncation: division by zero
+SELECT * FROM target;
+➤ id[4,32,0]  ¦  v[8,53,31]  𝄀
+1  ¦  7.0
+PREPARE p FROM 'INSERT INTO target VALUES(?,10/0)';
+SET @id = 2;
+EXECUTE p USING @id;
+Data truncation: division by zero
+DEALLOCATE PREPARE p;
+SELECT * FROM target;
+➤ id[4,32,0]  ¦  v[8,53,31]  𝄀
+1  ¦  7.0
+PREPARE ctas FROM 'CREATE TABLE prepared AS SELECT n/d AS v FROM src';
+EXECUTE ctas;
+Data truncation: division by zero
+SELECT * FROM prepared;
+SQL parser error: table "prepared" does not exist
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+EXECUTE ctas;
+SELECT v,v IS NULL AS is_null FROM prepared ORDER BY v;
+➤ v[8,53,31]  ¦  is_null[-7,1,0]  𝄀
+null  ¦  1  𝄀
+3.0  ¦  0  𝄀
+5.0  ¦  0
+DROP TABLE prepared;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+EXECUTE ctas;
+Data truncation: division by zero
+SELECT * FROM prepared;
+SQL parser error: table "prepared" does not exist
+DEALLOCATE PREPARE ctas;
+PREPARE temp_ctas FROM 'CREATE TEMPORARY TABLE prepared_tmp AS SELECT id,n/d AS v FROM src ORDER BY id';
+EXECUTE temp_ctas;
+Data truncation: division by zero
+SELECT * FROM prepared_tmp;
+SQL parser error: table "prepared_tmp" does not exist
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+EXECUTE temp_ctas;
+SELECT id,v,v IS NULL AS is_null FROM prepared_tmp ORDER BY id;
+➤ id[4,32,0]  ¦  v[8,53,31]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  5.0  ¦  0  𝄀
+2  ¦  null  ¦  1  𝄀
+3  ¦  3.0  ¦  0
+DROP TABLE prepared_tmp;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+EXECUTE temp_ctas;
+Data truncation: division by zero
+SELECT * FROM prepared_tmp;
+SQL parser error: table "prepared_tmp" does not exist
+DEALLOCATE PREPARE temp_ctas;
+BEGIN;
+CREATE TABLE txn_failed AS SELECT id,n/d AS v FROM src ORDER BY id;
+Data truncation: division by zero
+SELECT * FROM txn_failed;
+SQL parser error: table "txn_failed" does not exist
+ROLLBACK;
+SELECT * FROM txn_failed;
+SQL parser error: table "txn_failed" does not exist
+SELECT * FROM target;
+➤ id[4,32,0]  ¦  v[8,53,31]  𝄀
+1  ¦  7.0
+SELECT id,n,d FROM src ORDER BY id;
+➤ id[4,32,0]  ¦  n[4,32,0]  ¦  d[4,32,0]  𝄀
+1  ¦  10  ¦  2  𝄀
+2  ¦  10  ¦  0  𝄀
+3  ¦  9  ¦  3
+SELECT 10/0 AS v;
+➤ v[8,53,31]  𝄀
+null
+SET SESSION sql_mode = @saved_sql_mode;
+DROP DATABASE div_zero_ctas;

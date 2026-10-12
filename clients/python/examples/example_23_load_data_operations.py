@@ -977,7 +977,7 @@ class LoadDataOperationsDemo:
                 table,
                 parquet_file,
                 compression='none',
-                use_dictionary=False,
+                use_dictionary=True,
                 write_statistics=False,
                 data_page_version='1.0',
             )

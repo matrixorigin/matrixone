@@ -501,6 +501,7 @@ create snapshot sp10 for account;
 drop database test02;
 
 restore account sys{snapshot="sp10"};
+use test02;
 drop view if exists employees_view;
 drop view if exists it_employees_view;
 drop view if exists employees_by_department_view;

@@ -16,6 +16,8 @@ package geo
 
 import (
 	"math"
+	"math/big"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -24,28 +26,129 @@ import (
 // It returns the number of intersection points (0, 1, or 2 for collinear
 // overlap) and the points themselves.
 func segmentIntersection(a1, a2, b1, b2 Coord) (int, Coord, Coord) {
+	return segmentIntersectionAtScale(a1, a2, b1, b2, snapScale, false)
+}
+
+func segmentIntersectionAtScale(a1, a2, b1, b2 Coord, scale float64, allowSnapError bool) (int, Coord, Coord) {
 	va := Coord{X: a2.X - a1.X, Y: a2.Y - a1.Y}
 	vb := Coord{X: b2.X - b1.X, Y: b2.Y - b1.Y}
 	e := Coord{X: b1.X - a1.X, Y: b1.Y - a1.Y}
 	cross := func(u, v Coord) float64 { return u.X*v.Y - u.Y*v.X }
-	dot := func(u, v Coord) float64 { return u.X*v.X + u.Y*v.Y }
 
 	kross := cross(va, vb)
-	if kross != 0 {
-		s := cross(e, vb) / kross
-		if s < 0 || s > 1 {
+	var exactDenominator *big.Float
+	if crossNeedsExact(kross, va, vb) {
+		// A float64 cross product can cancel to zero, or lose enough low bits
+		// to change the intersection ratio, even when the input vectors are
+		// not parallel. Recover the denominator and both numerators together
+		// before choosing the parallel branch. The high-precision fallback is
+		// paid only on this numerically indeterminate path.
+		exactDenominator = exactCross(va, vb)
+		if exactDenominator.Sign() == 0 {
+			kross = 0
+		} else if recovered, _ := exactDenominator.Float64(); recovered != 0 {
+			kross = recovered
+		}
+	}
+	if kross != 0 || (exactDenominator != nil && exactDenominator.Sign() != 0) {
+		nearParallel := allowSnapError && crossWithinSnapError(kross, va, vb, scale)
+		if nearParallel && lineOffsetWithinSnapError(a1, a2, b1, b2, scale) {
+			if n, lo, hi := collinearSegmentIntersection(a1, a2, b1, b2, scale); n == 2 {
+				return n, lo, hi
+			}
+		}
+		s, t := cross(e, vb)/kross, cross(e, va)/kross
+		var exactNumeratorS, exactNumeratorT *big.Float
+		if exactDenominator != nil && exactDenominator.Sign() != 0 {
+			exactNumeratorS = exactCross(e, vb)
+			exactNumeratorT = exactCross(e, va)
+			s = exactRatioFloat(exactNumeratorS, exactDenominator)
+			t = exactRatioFloat(exactNumeratorT, exactDenominator)
+		}
+		if allowSnapError {
+			sTol := snapParameterTolerance(va, scale)
+			tTol := snapParameterTolerance(vb, scale)
+			if !ratioWithinTolerance(exactNumeratorS, exactDenominator, s, sTol) ||
+				!ratioWithinTolerance(exactNumeratorT, exactDenominator, t, tTol) {
+				return 0, Coord{}, Coord{}
+			}
+			s = math.Max(0, math.Min(1, s))
+			t = math.Max(0, math.Min(1, t))
+		} else if !ratioWithinUnit(exactNumeratorS, exactDenominator, s) {
 			return 0, Coord{}, Coord{}
 		}
-		t := cross(e, va) / kross
-		if t < 0 || t > 1 {
+		if !allowSnapError && !ratioWithinUnit(exactNumeratorT, exactDenominator, t) {
 			return 0, Coord{}, Coord{}
 		}
-		return 1, snapCoord(Coord{X: a1.X + s*va.X, Y: a1.Y + s*va.Y}), Coord{}
+		return 1, snapCoordAtScale(Coord{X: a1.X + s*va.X, Y: a1.Y + s*va.Y}, scale), Coord{}
 	}
 	// Parallel segments.
-	if cross(e, va) != 0 {
+	collinear := cross(e, va)
+	if crossNeedsExact(collinear, e, va) {
+		if exact := exactCross(e, va); exact.Sign() != 0 {
+			if recovered, _ := exact.Float64(); recovered != 0 {
+				collinear = recovered
+			}
+		}
+	}
+	if allowSnapError {
+		if !lineOffsetWithinSnapError(a1, a2, b1, b2, scale) {
+			return 0, Coord{}, Coord{} // parallel, not collinear
+		}
+	} else if collinear != 0 {
 		return 0, Coord{}, Coord{} // parallel, not collinear
 	}
+	return collinearSegmentIntersection(a1, a2, b1, b2, scale)
+}
+
+func crossNeedsExact(cross float64, u, v Coord) bool {
+	if cross == 0 {
+		// Axis-aligned zero products are already exact in binary floating point
+		// and dominate ordinary polygon workloads. Avoid constructing big.Float
+		// values for those common parallel pairs; retain the exact path whenever
+		// all four components participate in a cancellation.
+		return u.X != 0 && u.Y != 0 && v.X != 0 && v.Y != 0
+	}
+	terms := math.Abs(u.X*v.Y) + math.Abs(u.Y*v.X)
+	return math.Abs(cross) <= 16*float64Epsilon*terms
+}
+
+func exactRatioFloat(numerator, denominator *big.Float) float64 {
+	if numerator == nil || denominator == nil || denominator.Sign() == 0 {
+		return 0
+	}
+	ratio, _ := new(big.Float).SetPrec(128).Quo(numerator, denominator).Float64()
+	return ratio
+}
+
+func ratioWithinUnit(numerator, denominator *big.Float, value float64) bool {
+	if numerator == nil || denominator == nil || denominator.Sign() == 0 {
+		return value >= 0 && value <= 1
+	}
+	if denominator.Sign() > 0 {
+		return numerator.Sign() >= 0 && numerator.Cmp(denominator) <= 0
+	}
+	return numerator.Sign() <= 0 && numerator.Cmp(denominator) >= 0
+}
+
+func ratioWithinTolerance(numerator, denominator *big.Float, value, tolerance float64) bool {
+	if numerator == nil || denominator == nil || denominator.Sign() == 0 {
+		return value >= -tolerance && value <= 1+tolerance
+	}
+	// The tolerance is deliberately applied after exact ratio evaluation. It
+	// is a parameter-space allowance for one snap cell, not a replacement for
+	// the high-precision sign and denominator checks.
+	low := -tolerance
+	high := 1 + tolerance
+	ratio := exactRatioFloat(numerator, denominator)
+	return ratio >= low && ratio <= high
+}
+
+func collinearSegmentIntersection(a1, a2, b1, b2 Coord, scale float64) (int, Coord, Coord) {
+	va := Coord{X: a2.X - a1.X, Y: a2.Y - a1.Y}
+	vb := Coord{X: b2.X - b1.X, Y: b2.Y - b1.Y}
+	e := Coord{X: b1.X - a1.X, Y: b1.Y - a1.Y}
+	dot := func(u, v Coord) float64 { return u.X*v.X + u.Y*v.Y }
 	sqrLenA := dot(va, va)
 	if sqrLenA == 0 {
 		return 0, Coord{}, Coord{}
@@ -61,90 +164,496 @@ func segmentIntersection(a1, a2, b1, b2 Coord) (int, Coord, Coord) {
 	lo := math.Max(smin, 0)
 	hi := math.Min(smax, 1)
 	if lo == hi {
-		return 1, snapCoord(pt(lo)), Coord{}
+		return 1, snapCoordAtScale(pt(lo), scale), Coord{}
 	}
-	return 2, snapCoord(pt(lo)), snapCoord(pt(hi))
+	return 2, snapCoordAtScale(pt(lo), scale), snapCoordAtScale(pt(hi), scale)
 }
 
-// orderEvents filters the swept events to those contributing to the result and
-// orders them, assigning the cross-link positions used by connectEdges.
-func orderEvents(sortedEvents []*ovEvent) []*ovEvent {
-	var resultEvents []*ovEvent
-	for _, e := range sortedEvents {
-		if (e.left && e.inResult) || (!e.left && e.other.inResult) {
-			resultEvents = append(resultEvents, e)
-		}
+func snapParameterTolerance(vector Coord, scale float64) float64 {
+	length := math.Hypot(vector.X, vector.Y)
+	if length == 0 {
+		return 0
 	}
-	// Overlapping edges may leave the list not fully sorted; settle it.
-	sorted := false
-	for !sorted {
-		sorted = true
-		for i := 0; i+1 < len(resultEvents); i++ {
-			if compareEvents(resultEvents[i], resultEvents[i+1]) == 1 {
-				resultEvents[i], resultEvents[i+1] = resultEvents[i+1], resultEvents[i]
-				sorted = false
+	return 1 / (scale * length)
+}
+
+// crossWithinSnapError treats two snapped vectors as collinear when their
+// orientation error is no larger than the error introduced by snap-rounding
+// their endpoints. This is intentionally scale-aware: a one-cell displacement
+// is the topology resolution of the overlay, while a fixed epsilon would
+// incorrectly merge either very small or very large edges. The machine-error
+// term covers the final floating-point multiply/subtract at large ordinates.
+func crossWithinSnapError(cross float64, u, v Coord, scale float64) bool {
+	if scale <= 0 || math.IsNaN(scale) || math.IsInf(scale, 0) {
+		scale = snapScale
+	}
+	grid := 1 / scale
+	snapBound := grid * (math.Abs(u.X) + math.Abs(u.Y) + math.Abs(v.X) + math.Abs(v.Y))
+	roundBound := 16 * float64Epsilon
+	roundBound *= math.Abs(u.X*v.Y) + math.Abs(u.Y*v.X)
+	if math.Abs(cross) > snapBound+roundBound {
+		return false
+	}
+	// The cross product can lose several ulps after multiplying large
+	// projected ordinates. Recompute only this near-degenerate case at higher
+	// precision, so the uncertainty test cannot turn a numerically noisy but
+	// genuinely separated line into an overlap. This check is also required when
+	// the float64 subtraction rounded to exactly zero: zero is not proof of
+	// collinearity for large or nearly cancelling coordinates. Normal Cartesian
+	// callers never enter this helper, and ordinary geodetic intersections return
+	// above.
+	limit := new(big.Float).SetPrec(128).SetFloat64(snapBound)
+	return exactCrossMagnitude(u, v).Cmp(limit) <= 0
+}
+
+// lineOffsetWithinSnapError checks the distance between two nearly parallel
+// lines in both directions. Checking both endpoint sets makes the result
+// invariant under swapping or reversing the segments; a one-way test would
+// accept a short segment that is nearly parallel to a much longer, separated
+// segment simply because its far endpoint is scaled by the longer edge.
+func lineOffsetWithinSnapError(a1, a2, b1, b2 Coord, scale float64) bool {
+	return lineOffsetWithinSnapErrorOneWay(a1, a2, b1, b2, scale) &&
+		lineOffsetWithinSnapErrorOneWay(b1, b2, a1, a2, scale)
+}
+
+func lineOffsetWithinSnapErrorOneWay(a1, a2, b1, b2 Coord, scale float64) bool {
+	if scale <= 0 || math.IsNaN(scale) || math.IsInf(scale, 0) {
+		scale = snapScale
+	}
+	va := Coord{X: a2.X - a1.X, Y: a2.Y - a1.Y}
+	length := math.Hypot(va.X, va.Y)
+	if length == 0 {
+		return false
+	}
+	limit := length / scale
+	limitFloat := new(big.Float).SetPrec(128).SetFloat64(limit)
+	for _, point := range []Coord{b1, b2} {
+		e := Coord{X: point.X - a1.X, Y: point.Y - a1.Y}
+		cross := e.X*va.Y - e.Y*va.X
+		roundBound := 16 * float64Epsilon * (math.Abs(e.X*va.Y) + math.Abs(e.Y*va.X))
+		if cross == 0 {
+			// Cancellation at large projected ordinates can hide a non-zero
+			// line offset. Do not let the cheap float result decide the
+			// tolerant classification; the exact check is still confined to
+			// this near-parallel path.
+			exact := exactCrossMagnitude(e, va)
+			if exact.Cmp(limitFloat) >= 0 {
+				return false
 			}
-		}
-	}
-	for i, e := range resultEvents {
-		e.pos = i
-	}
-	for _, e := range resultEvents {
-		if !e.left {
-			e.pos, e.other.pos = e.other.pos, e.pos
-		}
-	}
-	return resultEvents
-}
-
-func nextPos(pos int, resultEvents []*ovEvent, processed []bool, origIndex int) int {
-	newPos := pos + 1
-	length := len(resultEvents)
-	p := resultEvents[pos].p
-	for newPos < length && ovEqual(resultEvents[newPos].p, p) {
-		if !processed[newPos] {
-			return newPos
-		}
-		newPos++
-	}
-	newPos = pos - 1
-	for newPos >= origIndex && processed[newPos] {
-		newPos--
-	}
-	return newPos
-}
-
-// connectEdges walks the ordered result events to assemble closed rings.
-func connectEdges(sortedEvents []*ovEvent) [][]Coord {
-	resultEvents := orderEvents(sortedEvents)
-	processed := make([]bool, len(resultEvents))
-	var result [][]Coord
-
-	for i := range resultEvents {
-		if processed[i] {
 			continue
 		}
-		var contour []Coord
-		contour = append(contour, resultEvents[i].p)
-		pos := i
-		for pos >= i {
-			processed[pos] = true
-			pos = resultEvents[pos].pos
-			if pos < 0 || pos >= len(resultEvents) {
-				break
-			}
-			processed[pos] = true
-			contour = append(contour, resultEvents[pos].p)
-			pos = nextPos(pos, resultEvents, processed, i)
+		if math.Abs(cross) > limit+roundBound {
+			return false
 		}
-		if len(contour) >= 3 {
-			if !ovEqual(contour[0], contour[len(contour)-1]) {
-				contour = append(contour, contour[0])
-			}
-			result = append(result, contour)
+		exact := exactCrossMagnitude(e, va)
+		if exact.Cmp(limitFloat) >= 0 {
+			return false
 		}
 	}
-	return result
+	return true
+}
+
+func exactCrossMagnitude(u, v Coord) *big.Float {
+	cross := exactCross(u, v)
+	if cross.Sign() < 0 {
+		cross.Neg(cross)
+	}
+	return cross
+}
+
+func exactCross(u, v Coord) *big.Float {
+	const prec = uint(128)
+	left := new(big.Float).SetPrec(prec).SetFloat64(u.X)
+	left.Mul(left, new(big.Float).SetPrec(prec).SetFloat64(v.Y))
+	right := new(big.Float).SetPrec(prec).SetFloat64(u.Y)
+	right.Mul(right, new(big.Float).SetPrec(prec).SetFloat64(v.X))
+	left.Sub(left, right)
+	return left
+}
+
+type overlayBoundaryVertex struct {
+	firstRay  int
+	secondRay int
+	degree    int
+}
+
+// resultEdgeForward reports whether a selected canonical left event should be
+// traversed from its lexicographically smaller endpoint to its larger endpoint
+// so that the result interior remains on the left.
+func resultEdgeForward(e *ovEvent, op BoolOp) (bool, error) {
+	switch e.kind {
+	case edgeNormal:
+		switch op {
+		case OpIntersection, OpUnion:
+			return !e.inOut, nil
+		case OpDifference:
+			return e.subject != e.inOut, nil
+		case OpXOR:
+			return e.inOut != e.otherInOut, nil
+		}
+	case edgeSameTransition:
+		if op == OpIntersection || op == OpUnion {
+			return !e.inOut, nil
+		}
+	case edgeDifferentTransition:
+		if op == OpDifference {
+			return e.subject != e.inOut, nil
+		}
+	}
+	return false, moerr.NewInternalErrorNoCtxf("unexpected overlay result edge kind %d for operation %d", e.kind, op)
+}
+
+func overlayRayHalf(origin, point Coord) int {
+	dx, dy := point.X-origin.X, point.Y-origin.Y
+	if dy > 0 || (dy == 0 && dx >= 0) {
+		return 0
+	}
+	return 1
+}
+
+func overlayRayCross(origin, a, b Coord) float64 {
+	ax, ay := a.X-origin.X, a.Y-origin.Y
+	bx, by := b.X-origin.X, b.Y-origin.Y
+	return ax*by - ay*bx
+}
+
+// overlayRayLess orders rays counterclockwise around origin. Equal rays are
+// ordered deterministically and rejected by connectEdges as duplicate
+// incidences; the endpoint tie-breaker keeps sort.Slice's order strict.
+func overlayRayLess(origin, a, b Coord) bool {
+	ha, hb := overlayRayHalf(origin, a), overlayRayHalf(origin, b)
+	if ha != hb {
+		return ha < hb
+	}
+	if cross := overlayRayCross(origin, a, b); cross != 0 {
+		return cross > 0
+	}
+	ax, ay := a.X-origin.X, a.Y-origin.Y
+	bx, by := b.X-origin.X, b.Y-origin.Y
+	if ax != bx {
+		return ax < bx
+	}
+	return ay < by
+}
+
+func sameOverlayRay(origin, a, b Coord) bool {
+	return overlayRayHalf(origin, a) == overlayRayHalf(origin, b) && overlayRayCross(origin, a, b) == 0
+}
+
+func overlayBoundaryRayCode(edge int, outgoing bool) int {
+	code := edge << 1
+	if outgoing {
+		code |= 1
+	}
+	return code
+}
+
+func overlayBoundaryRayEdge(code int) int {
+	return code >> 1
+}
+
+func overlayBoundaryRayOutgoing(code int) bool {
+	return code&1 != 0
+}
+
+func overlayBoundaryRayPoint(code int, edges []*ovEvent, forwardEdges []bool) Coord {
+	edge := overlayBoundaryRayEdge(code)
+	if overlayBoundaryRayOutgoing(code) == forwardEdges[edge] {
+		return edges[edge].other.p
+	}
+	return edges[edge].p
+}
+
+func overlayGraphError(format string, args ...any) error {
+	return moerr.NewInternalErrorNoCtxf("invalid overlay boundary graph: "+format, args...)
+}
+
+// splitRepeatedRing decomposes a closed boundary walk into simple rings at
+// repeated branch vertices. A degree-two vertex has only one incoming and one
+// outgoing edge, so revisiting it would already repeat an edge and be rejected
+// by the traversal. The common simple-ring case therefore needs no per-vertex
+// path/map allocation.
+func splitRepeatedRing(ring []Coord, branchVertices map[Coord]struct{}) ([][]Coord, error) {
+	if len(ring) < 4 || !ovEqual(ring[0], ring[len(ring)-1]) {
+		return nil, overlayGraphError("boundary walk is not a closed ring")
+	}
+
+	var branchPositions map[Coord]int
+	for i, p := range ring[:len(ring)-1] {
+		if _, isBranch := branchVertices[p]; !isBranch {
+			continue
+		}
+		if branchPositions == nil {
+			branchPositions = make(map[Coord]int)
+		}
+		if _, ok := branchPositions[p]; ok {
+			return splitRepeatedRingWithRepeatedVertices(ring)
+		}
+		branchPositions[p] = i
+	}
+	return [][]Coord{ring}, nil
+}
+
+// splitRepeatedRingWithRepeatedVertices handles the uncommon case where a
+// validly noded boundary walk revisits a branch vertex. Each resulting cycle
+// retains its input segments exactly once.
+func splitRepeatedRingWithRepeatedVertices(ring []Coord) ([][]Coord, error) {
+	positions := make(map[Coord]int, len(ring)-1)
+	path := make([]Coord, 1, len(ring))
+	path[0] = ring[0]
+	positions[ring[0]] = 0
+	var result [][]Coord
+
+	for _, p := range ring[1:] {
+		if pos, ok := positions[p]; ok {
+			cycle := append([]Coord(nil), path[pos:]...)
+			cycle = append(cycle, p)
+			if len(cycle) < 4 {
+				return nil, overlayGraphError("boundary walk contains a degenerate cycle")
+			}
+			result = append(result, cycle)
+			for _, removed := range path[pos+1:] {
+				delete(positions, removed)
+			}
+			path = path[:pos+1]
+			continue
+		}
+		positions[p] = len(path)
+		path = append(path, p)
+	}
+
+	if len(path) != 1 || !ovEqual(path[0], ring[0]) {
+		return nil, overlayGraphError("repeated-vertex split left an open boundary")
+	}
+	return result, nil
+}
+
+// connectEdges directs selected sweep edges with the result interior on the
+// left, then follows the clockwise predecessor at each vertex to preserve the
+// filled result sector. sweptEdges contains the canonical left event for every
+// noded segment emitted by run.
+func connectEdges(sweptEdges []*ovEvent, op BoolOp) ([][]Coord, error) {
+	edges := make([]*ovEvent, 0, len(sweptEdges))
+	forwardEdges := make([]bool, 0, len(sweptEdges))
+	for _, e := range sweptEdges {
+		if e == nil || e.other == nil || !e.left {
+			return nil, overlayGraphError("sweep returned a noncanonical segment event")
+		}
+		if !e.inResult {
+			continue
+		}
+		forward, err := resultEdgeForward(e, op)
+		if err != nil {
+			return nil, err
+		}
+		if ovEqual(e.p, e.other.p) {
+			return nil, overlayGraphError("selected a zero-length boundary edge")
+		}
+		// pos is only used by the legacy connector after the sweep has completed.
+		// Reuse it for the successor index instead of copying endpoint coordinates
+		// into a parallel result-edge graph.
+		e.pos = -1
+		edges = append(edges, e)
+		forwardEdges = append(forwardEdges, forward)
+	}
+	if len(edges) == 0 {
+		return nil, nil
+	}
+
+	vertexIDs := make(map[Coord]int, len(edges))
+	vertices := make([]overlayBoundaryVertex, 0, len(edges))
+	var branchRaysByVertex map[int][]int
+	appendRay := func(vertex Coord, edge int, outgoing bool) {
+		vertexID, ok := vertexIDs[vertex]
+		if !ok {
+			vertexID = len(vertices)
+			vertexIDs[vertex] = vertexID
+			vertices = append(vertices, overlayBoundaryVertex{})
+		}
+		state := &vertices[vertexID]
+		ray := overlayBoundaryRayCode(edge, outgoing)
+		switch state.degree {
+		case 0:
+			state.firstRay = ray
+		case 1:
+			state.secondRay = ray
+		case 2:
+			if branchRaysByVertex == nil {
+				branchRaysByVertex = make(map[int][]int)
+			}
+			branchRays := make([]int, 3, 4)
+			branchRays[0] = state.firstRay
+			branchRays[1] = state.secondRay
+			branchRays[2] = ray
+			branchRaysByVertex[vertexID] = branchRays
+		default:
+			branchRaysByVertex[vertexID] = append(branchRaysByVertex[vertexID], ray)
+		}
+		state.degree++
+	}
+	for i, edge := range edges {
+		from, to := edge.p, edge.other.p
+		if !forwardEdges[i] {
+			from, to = to, from
+		}
+		appendRay(from, i, true)
+		appendRay(to, i, false)
+	}
+
+	predecessors := make([]bool, len(edges))
+	var branchVertices map[Coord]struct{}
+	for vertex, vertexID := range vertexIDs {
+		state := vertices[vertexID]
+		if state.degree > 2 {
+			if branchVertices == nil {
+				branchVertices = make(map[Coord]struct{})
+			}
+			branchVertices[vertex] = struct{}{}
+		}
+		if state.degree == 2 {
+			first, second := state.firstRay, state.secondRay
+			firstOutgoing, secondOutgoing := overlayBoundaryRayOutgoing(first), overlayBoundaryRayOutgoing(second)
+			if firstOutgoing == secondOutgoing {
+				return nil, overlayGraphError("unbalanced boundary at (%g,%g): 1 incoming, 1 outgoing required", vertex.X, vertex.Y)
+			}
+			if sameOverlayRay(
+				vertex,
+				overlayBoundaryRayPoint(first, edges, forwardEdges),
+				overlayBoundaryRayPoint(second, edges, forwardEdges),
+			) {
+				return nil, overlayGraphError("duplicate collinear boundary rays at (%g,%g)", vertex.X, vertex.Y)
+			}
+			incoming, outgoing := first, second
+			if firstOutgoing {
+				incoming, outgoing = second, first
+			}
+			outgoingEdge := overlayBoundaryRayEdge(outgoing)
+			if predecessors[outgoingEdge] {
+				return nil, overlayGraphError("boundary edge %d has multiple predecessors", outgoingEdge)
+			}
+			edges[overlayBoundaryRayEdge(incoming)].pos = outgoingEdge
+			predecessors[outgoingEdge] = true
+			continue
+		}
+
+		branchRays := branchRaysByVertex[vertexID]
+		if len(branchRays) != state.degree {
+			return nil, overlayGraphError("corrupt incidence list at (%g,%g)", vertex.X, vertex.Y)
+		}
+		incoming, outgoing := 0, 0
+		for _, ray := range branchRays {
+			if overlayBoundaryRayOutgoing(ray) {
+				outgoing++
+			} else {
+				incoming++
+			}
+		}
+		if incoming != outgoing {
+			return nil, overlayGraphError("unbalanced boundary at (%g,%g): %d incoming, %d outgoing", vertex.X, vertex.Y, incoming, outgoing)
+		}
+		sort.Slice(branchRays, func(i, j int) bool {
+			return overlayRayLess(
+				vertex,
+				overlayBoundaryRayPoint(branchRays[i], edges, forwardEdges),
+				overlayBoundaryRayPoint(branchRays[j], edges, forwardEdges),
+			)
+		})
+		for i := range branchRays {
+			j := (i + 1) % len(branchRays)
+			if sameOverlayRay(
+				vertex,
+				overlayBoundaryRayPoint(branchRays[i], edges, forwardEdges),
+				overlayBoundaryRayPoint(branchRays[j], edges, forwardEdges),
+			) {
+				return nil, overlayGraphError("duplicate collinear boundary rays at (%g,%g)", vertex.X, vertex.Y)
+			}
+		}
+		for i, ray := range branchRays {
+			if overlayBoundaryRayOutgoing(ray) {
+				continue
+			}
+			previous := branchRays[(i+len(branchRays)-1)%len(branchRays)]
+			if !overlayBoundaryRayOutgoing(previous) {
+				return nil, overlayGraphError("boundary directions do not alternate at (%g,%g)", vertex.X, vertex.Y)
+			}
+			previousEdge := overlayBoundaryRayEdge(previous)
+			if predecessors[previousEdge] {
+				return nil, overlayGraphError("boundary edge %d has multiple predecessors", previousEdge)
+			}
+			incomingEdge := overlayBoundaryRayEdge(ray)
+			edges[incomingEdge].pos = previousEdge
+			predecessors[previousEdge] = true
+		}
+	}
+	for i, hasPredecessor := range predecessors {
+		if !hasPredecessor || edges[i].pos < 0 {
+			return nil, overlayGraphError("boundary edge %d has no predecessor", i)
+		}
+	}
+
+	visited := make([]bool, len(edges))
+	var result [][]Coord
+	for start := range edges {
+		if visited[start] {
+			continue
+		}
+		cycleEdges := 0
+		current := start
+		for {
+			if current < 0 || current >= len(edges) {
+				return nil, overlayGraphError("boundary successor index %d is out of range", current)
+			}
+			if visited[current] {
+				return nil, overlayGraphError("boundary traversal entered an already consumed ring")
+			}
+			if cycleEdges >= len(edges) {
+				return nil, overlayGraphError("boundary traversal did not close")
+			}
+			cycleEdges++
+			current = edges[current].pos
+			if current == start {
+				break
+			}
+		}
+
+		startPoint := edges[start].p
+		if !forwardEdges[start] {
+			startPoint = edges[start].other.p
+		}
+		contour := make([]Coord, 1, cycleEdges+1)
+		contour[0] = startPoint
+		current = start
+		for steps := 0; steps < cycleEdges; steps++ {
+			if visited[current] {
+				return nil, overlayGraphError("boundary traversal entered an already consumed ring")
+			}
+			visited[current] = true
+			edge := edges[current]
+			from, to := edge.p, edge.other.p
+			if !forwardEdges[current] {
+				from, to = to, from
+			}
+			if !ovEqual(contour[len(contour)-1], from) {
+				return nil, overlayGraphError("successor edges do not share an endpoint")
+			}
+			contour = append(contour, to)
+			current = edge.pos
+		}
+		if current != start || !ovEqual(contour[0], contour[len(contour)-1]) {
+			return nil, overlayGraphError("boundary traversal did not close")
+		}
+		rings, err := splitRepeatedRing(contour, branchVertices)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, rings...)
+	}
+	for i, consumed := range visited {
+		if !consumed {
+			return nil, overlayGraphError("boundary edge %d was not consumed", i)
+		}
+	}
+	return result, nil
 }
 
 // ringContainsStrict reports whether p is strictly inside the closed ring.
@@ -292,6 +801,13 @@ func polygonRings(g Geometry) ([][]Coord, error) {
 
 // Overlay computes a Boolean operation between two areal geometries.
 func Overlay(a, b Geometry, op BoolOp) (Geometry, error) {
+	return overlayWithOptions(a, b, op, snapScale, false)
+}
+
+func overlayWithOptions(a, b Geometry, op BoolOp, scale float64, allowSnapError bool) (Geometry, error) {
+	if scale <= 0 || math.IsNaN(scale) || math.IsInf(scale, 0) {
+		scale = snapScale
+	}
 	ra, err := polygonRings(a)
 	if err != nil {
 		return nil, err
@@ -301,7 +817,7 @@ func Overlay(a, b Geometry, op BoolOp) (Geometry, error) {
 		return nil, err
 	}
 
-	o := &overlay{op: op}
+	o := &overlay{op: op, snapScale: scale, allowSnapError: allowSnapError}
 	for _, r := range ra {
 		o.addRing(r, true)
 	}
@@ -323,12 +839,11 @@ func Overlay(a, b Geometry, op BoolOp) (Geometry, error) {
 		}
 	}
 
-	processed := o.run()
-	sortedEvents := make([]*ovEvent, 0, len(processed)*2)
-	for _, e := range processed {
-		sortedEvents = append(sortedEvents, e, e.other)
+	sweptEdges := o.run()
+	rings, err := connectEdges(sweptEdges, op)
+	if err != nil {
+		return nil, err
 	}
-	rings := connectEdges(sortedEvents)
 	return assembleResult(rings), nil
 }
 

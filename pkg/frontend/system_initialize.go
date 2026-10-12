@@ -66,6 +66,9 @@ func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, fina
 	for _, sql := range createSqls {
 		addSqlIntoSet(sql)
 	}
+	// Fresh bootstrap starts at the final catalog version and does not replay
+	// upgrade entries. Only sys needs the cross-catalog snapshot quota index.
+	addSqlIntoSet(MoCatalogSysSnapshotQuotaIndexDDL)
 
 	//initialize the default data of tables for the tenant
 	//step 1: add new tenant entry to the mo_account
@@ -93,30 +96,11 @@ func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, fina
 	addSqlIntoSet(initMoUser1)
 	addSqlIntoSet(initMoUser2)
 
-	//step4: add new entries to the mo_role_privs
-	//moadmin role
-	for _, t := range entriesOfMoAdminForMoRolePrivsFor {
-		entry := privilegeEntriesMap[t]
-		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-			moAdminRoleID, moAdminRoleName,
-			entry.objType, entry.objId,
-			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
-			rootID, types.CurrentTimestamp().String2(time.UTC, 0),
-			entry.withGrantOption)
-		addSqlIntoSet(initMoRolePriv)
-	}
-
-	//public role
-	for _, t := range entriesOfPublicForMoRolePrivsFor {
-		entry := privilegeEntriesMap[t]
-		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-			publicRoleID, publicRoleName,
-			entry.objType, entry.objId,
-			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
-			rootID, types.CurrentTimestamp().String2(time.UTC, 0),
-			entry.withGrantOption)
-		addSqlIntoSet(initMoRolePriv)
-	}
+	// Initialize each role in one statement within the bootstrap transaction.
+	addSqlIntoSet(initialRolePrivilegesSQL(moAdminRoleID, moAdminRoleName,
+		rootID, entriesOfMoAdminForMoRolePrivsFor))
+	addSqlIntoSet(initialRolePrivilegesSQL(publicRoleID, publicRoleName,
+		rootID, entriesOfPublicForMoRolePrivsFor))
 
 	//step5: add new entries to the mo_user_grant
 
