@@ -54,6 +54,7 @@ func (s *spySQLExecutor) ExecTxn(
 
 func TestCompileRunSqlWithResultAndOptionsUsesTopContextWhenProcCtxNil(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 	topCtx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc.ReplaceTopCtx(topCtx)
 	proc.Ctx = nil
@@ -70,6 +71,13 @@ func TestCompileRunSqlWithResultAndOptionsUsesTopContextWhenProcCtxNil(t *testin
 	accountID, err := defines.GetAccountId(spyExec.ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint32(catalog.System_Account), accountID)
+
+	// The executor context owns an immutable copy, not a live SessionInfo pointer.
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = false
+	child := testutil.NewProcess(t)
+	applyInternalExecutorSessionModeSnapshot(spyExec.ctx, child)
+	require.False(t, child.GetSessionInfo().MatrixOneNativeMode)
+	require.True(t, child.GetSessionInfo().MySQLNumericCompatibilityMode)
 }
 
 func TestSQLExecutorExecTxnHandlesNilContext(t *testing.T) {
