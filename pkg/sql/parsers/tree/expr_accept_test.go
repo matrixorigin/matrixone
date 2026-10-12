@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -153,4 +154,28 @@ func TestExprAcceptVisitsSpecialOperands(t *testing.T) {
 		require.Len(t, columns, 1)
 		require.Equal(t, "new_col", columns[0].(*UnresolvedName).ColName())
 	})
+}
+
+func TestVarAndUserVariableAssignmentAccept(t *testing.T) {
+	num := NewNumVal(int64(1), "1", false, P_int64)
+	varExpr := NewVarExpr("v", false, false, num)
+	visited, ok := varExpr.Accept(passthroughExprVisitor{})
+	require.True(t, ok)
+	require.Same(t, varExpr, visited)
+
+	assignment := NewUserVarAssignmentExpr("rank", varExpr)
+	visited, ok = assignment.Accept(passthroughExprVisitor{})
+	require.True(t, ok)
+	require.Same(t, assignment, visited)
+
+	ctx := NewFmtCtx(dialect.MYSQL)
+	assignment.Format(ctx)
+	require.Equal(t, "@rank := @v", ctx.String())
+
+	nilVar := NewVarExpr("v", false, false, nil)
+	_, ok = nilVar.Accept(passthroughExprVisitor{})
+	require.True(t, ok)
+	nilAssignment := NewUserVarAssignmentExpr("rank", nil)
+	_, ok = nilAssignment.Accept(passthroughExprVisitor{})
+	require.True(t, ok)
 }

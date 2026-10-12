@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,6 +32,30 @@ import (
 type userVariableAssignmentBatchProbe struct {
 	rowCounts []int
 }
+
+type userVariableAssignmentErrorProbe struct {
+	err   error
+	empty bool
+}
+
+func (p *userVariableAssignmentErrorProbe) Eval(_ *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	if p.err != nil {
+		return nil, p.err
+	}
+	if p.empty {
+		return vector.NewVec(types.T_int64.ToType()), nil
+	}
+	return nil, nil
+}
+
+func (p *userVariableAssignmentErrorProbe) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+	return p.Eval(proc, batches, selectList)
+}
+
+func (p *userVariableAssignmentErrorProbe) ResetForNextQuery() {}
+func (p *userVariableAssignmentErrorProbe) Free()              {}
+func (p *userVariableAssignmentErrorProbe) IsColumnExpr() bool { return false }
+func (p *userVariableAssignmentErrorProbe) TypeName() string   { return "error-probe" }
 
 func (p *userVariableAssignmentBatchProbe) Eval(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
 	p.rowCounts = append(p.rowCounts, batches[0].RowCount())
@@ -398,4 +423,146 @@ func TestUserVariableAssignmentNestedSkippedRowsKeepHistory(t *testing.T) {
 	require.Nil(t, rows[0].Value)
 	require.Equal(t, int64(2), rows[1].Value)
 	require.Equal(t, int64(2), rows[2].Value)
+}
+
+func TestUserVariableAssignmentExecutorErrorAndResolverPaths(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithMPool(mpool.MustNewZero()), testutil.WithFileService(nil))
+	proc.Base.IsFrontend = true
+	int64Type := types.T_int64.ToType()
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(int64Type)
+	input.SetRowCount(1)
+	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(1), false, proc.Mp()))
+	defer input.Clean(proc.Mp())
+
+	unsupported := &UserVarAssignmentExpressionExecutor{mp: proc.Mp(), typ: int64Type}
+	_, err := unsupported.Eval(nil, []*batch.Batch{input}, nil)
+	require.Error(t, err)
+
+	filtered := &UserVarAssignmentExpressionExecutor{
+		mp: proc.Mp(), typ: int64Type,
+		child: &userVariableAssignmentBatchProbe{}, name: "filtered",
+	}
+	_, err = filtered.Eval(proc, []*batch.Batch{input}, []bool{false})
+	require.NoError(t, err)
+	filtered.Free()
+
+	filtered = &UserVarAssignmentExpressionExecutor{
+		mp: proc.Mp(), typ: int64Type,
+		child: &userVariableAssignmentBatchProbe{}, name: "filtered",
+	}
+	input2 := batch.NewWithSize(1)
+	input2.Vecs[0] = vector.NewVec(int64Type)
+	input2.SetRowCount(2)
+	require.NoError(t, vector.AppendFixedList(input2.Vecs[0], []int64{1, 2}, nil, proc.Mp()))
+	defer input2.Clean(proc.Mp())
+	_, err = filtered.Eval(proc, []*batch.Batch{input2}, []bool{true, false})
+	require.Error(t, err)
+	filtered.Free()
+
+	for _, probe := range []*userVariableAssignmentErrorProbe{
+		{err: errors.New("child failed")},
+		{empty: true},
+	} {
+		expr := &UserVarAssignmentExpressionExecutor{
+			mp: proc.Mp(), typ: int64Type, child: probe, name: "error",
+		}
+		_, err = expr.Eval(proc, []*batch.Batch{input}, nil)
+		require.Error(t, err)
+		expr.Free()
+	}
+
+	proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return int64(9), nil })
+	proc.SetResolveVariableIsBinFunc(func(string, bool, bool) (bool, error) { return true, nil })
+	proc.SetResolveVariableStringDomainFunc(func(string, bool, bool) (types.RuntimeStringDomain, error) {
+		return types.RuntimeStringBinary, nil
+	})
+	proc.BeginUserVariableAssignment("outer", 1)
+	proc.SetUserVariableAssignmentCurrentRow(0)
+	resolverExpr := &UserVarAssignmentExpressionExecutor{
+		mp: proc.Mp(), typ: int64Type, child: &userVariableAssignmentBatchProbe{}, name: "resolved",
+	}
+	_, err = resolverExpr.Eval(proc, []*batch.Batch{input}, []bool{false})
+	require.NoError(t, err)
+	resolverExpr.Free()
+}
+
+func TestCloneUserVariableAssignmentRowBatchesRejectsInvalidRows(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithMPool(mpool.MustNewZero()), testutil.WithFileService(nil))
+	_, err := cloneUserVariableAssignmentRowBatches(nil, -1, proc.Mp(), nil)
+	require.Error(t, err)
+
+	input := batch.NewWithSize(1)
+	input.SetRowCount(1)
+	defer input.Clean(proc.Mp())
+	_, err = cloneUserVariableAssignmentRowBatches([]*batch.Batch{input}, 1, proc.Mp(), nil)
+	require.Error(t, err)
+	_, err = cloneUserVariableAssignmentRowBatches([]*batch.Batch{nil}, 0, proc.Mp(), nil)
+	require.Error(t, err)
+}
+
+func TestUserVariableAssignmentExecutorLifecycleAndResolverErrors(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithMPool(mpool.MustNewZero()), testutil.WithFileService(nil))
+	proc.Base.IsFrontend = true
+	int64Type := types.T_int64.ToType()
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(int64Type)
+	input.SetRowCount(1)
+	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(1), false, proc.Mp()))
+	defer input.Clean(proc.Mp())
+
+	assignment := &UserVarAssignmentExpressionExecutor{
+		mp: proc.Mp(), child: &userVariableAssignmentBatchProbe{}, name: "a", typ: int64Type,
+	}
+	require.Equal(t, "user variable assignment a", assignment.TypeName())
+	require.False(t, assignment.IsColumnExpr())
+	_, err := assignment.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	assignment.ResetForNextQuery()
+	// ResetForNextQuery owns the result vector; Free remains safe afterward.
+	assignment.Free()
+
+	masked := &UserVarAssignmentExpressionExecutor{
+		mp: proc.Mp(), name: "masked", typ: int64Type,
+	}
+	vec, err := masked.Eval(proc, []*batch.Batch{input}, []bool{false})
+	require.NoError(t, err)
+	vec, err = masked.EvalWithoutResultReusing(proc, []*batch.Batch{input}, []bool{false})
+	require.NoError(t, err)
+	vec.Free(proc.Mp())
+	masked.Free()
+
+	resolverErr := errors.New("resolver failed")
+	for _, tc := range []struct {
+		name string
+		set  func(*process.Process)
+	}{
+		{name: "value", set: func(p *process.Process) {
+			p.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return nil, resolverErr })
+		}},
+		{name: "binary", set: func(p *process.Process) {
+			p.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return int64(1), nil })
+			p.SetResolveVariableIsBinFunc(func(string, bool, bool) (bool, error) { return false, resolverErr })
+		}},
+		{name: "string-domain", set: func(p *process.Process) {
+			p.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return int64(1), nil })
+			p.SetResolveVariableIsBinFunc(func(string, bool, bool) (bool, error) { return false, nil })
+			p.SetResolveVariableStringDomainFunc(func(string, bool, bool) (types.RuntimeStringDomain, error) {
+				return types.RuntimeStringBinary, resolverErr
+			})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := testutil.NewProcess(t, testutil.WithMPool(mpool.MustNewZero()), testutil.WithFileService(nil))
+			p.Base.IsFrontend = true
+			p.BeginUserVariableAssignment("outer", 1)
+			p.SetUserVariableAssignmentCurrentRow(0)
+			tc.set(p)
+			expr := &UserVarAssignmentExpressionExecutor{mp: p.Mp(), typ: int64Type, name: "missing"}
+			_, err := expr.Eval(p, []*batch.Batch{input}, []bool{false})
+			require.ErrorIs(t, err, resolverErr)
+			expr.Free()
+			p.Free()
+		})
+	}
 }
