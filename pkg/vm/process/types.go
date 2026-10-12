@@ -1110,6 +1110,17 @@ func (proc *Process) GetODKUProtocolID() (uint64, bool) {
 	return 0, false
 }
 
+// GetODKUProtocolIDForSource preserves MySQL's separate VALUES and SELECT
+// terminal owners. INSERT SELECT restores the default AUTO_INCREMENT field
+// before taking its non-generated fallback; that default is zero.
+func (proc *Process) GetODKUProtocolIDForSource(valuesSource bool) (uint64, bool) {
+	id, generated := proc.GetODKUProtocolID()
+	if !valuesSource && !generated {
+		return 0, false
+	}
+	return id, generated
+}
+
 // SetStatementLastInsertIDIfEarlier publishes the smallest non-zero generated
 // value seen by any parallel scope of the current statement.  Statement
 // LAST_INSERT_ID is reset before execution starts, so the shared coordinator

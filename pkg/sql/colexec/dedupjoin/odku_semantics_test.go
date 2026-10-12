@@ -140,7 +140,7 @@ func TestODKUUint64AtAcceptsIntegerStorageDomains(t *testing.T) {
 			name: "negative signed value", typ: types.T_int64.ToType(),
 			append: func(vec *vector.Vector) error {
 				return vector.AppendFixed(vec, int64(-1), false, proc.Mp())
-			}, want: 0, ok: false,
+			}, want: ^uint64(0), ok: true,
 		},
 		{
 			name: "unsupported type", typ: types.T_varchar.ToType(),
@@ -623,4 +623,18 @@ func TestODKUStableVectorPoolSurvivesJoinBatchWidthChange(t *testing.T) {
 	extra.Free(proc.Mp())
 	require.Equal(t, baseline, proc.Mp().CurrNB())
 	proc.Free()
+}
+
+func TestODKUOrdinalRejectsSignedIDReinterpretation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, value := range []int64{-1, 1} {
+		vec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(vec, value, false, proc.Mp()))
+		_, validID := odkuUint64At(vec, 0)
+		require.True(t, validID)
+		_, validOrdinal := odkuOrdinalAt(vec, 0)
+		require.False(t, validOrdinal)
+		vec.Free(proc.Mp())
+	}
 }

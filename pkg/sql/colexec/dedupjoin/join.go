@@ -1742,6 +1742,15 @@ func odkuUint64At(vec *vector.Vector, row int) (uint64, bool) {
 	}
 }
 
+// Row ordinals are produced by PRE_INSERT as unsigned provenance. Signed
+// AUTO_INCREMENT reinterpretation is an ID contract, never an ordinal cast.
+func odkuOrdinalAt(vec *vector.Vector, row int) (uint64, bool) {
+	if vec == nil || vec.GetType().Oid != types.T_uint64 {
+		return 0, false
+	}
+	return odkuUint64At(vec, row)
+}
+
 func (ctr *container) recordODKUGenerated(
 	ap *DedupJoin, input *batch.Batch, row int, proc *process.Process,
 ) {
@@ -1758,7 +1767,7 @@ func (ctr *container) recordODKUGenerated(
 		!vector.GetFixedAtNoTypeCheck[bool](marker, row) {
 		return
 	}
-	ordinal, ok := odkuUint64At(input.Vecs[ap.ODKUOrdinalCol], row)
+	ordinal, ok := odkuOrdinalAt(input.Vecs[ap.ODKUOrdinalCol], row)
 	if !ok {
 		return
 	}
@@ -1786,7 +1795,7 @@ func (ctr *container) recordODKUAction(
 		ap.ODKUTargetAutoIncrementCol >= int32(len(target.Vecs)) {
 		return
 	}
-	ordinal, ok := odkuUint64At(input.Vecs[ap.ODKUOrdinalCol], inputRow)
+	ordinal, ok := odkuOrdinalAt(input.Vecs[ap.ODKUOrdinalCol], inputRow)
 	if !ok {
 		return
 	}
@@ -1806,7 +1815,7 @@ func (ctr *container) recordODKUExplicitAction(
 		ap.ODKUGeneratedAutoIncrementCol >= int32(len(input.Vecs)) {
 		return
 	}
-	ordinal, ok := odkuUint64At(input.Vecs[ap.ODKUOrdinalCol], inputRow)
+	ordinal, ok := odkuOrdinalAt(input.Vecs[ap.ODKUOrdinalCol], inputRow)
 	if !ok {
 		return
 	}

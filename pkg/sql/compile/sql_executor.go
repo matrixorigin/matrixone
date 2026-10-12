@@ -715,7 +715,7 @@ func (exec *txnExecutor) Exec(
 
 	if insert, ok := c.stmt.(*tree.Insert); ok && len(insert.OnDuplicateUpdate) > 0 &&
 		!(len(insert.OnDuplicateUpdate) == 1 && insert.OnDuplicateUpdate[0] == nil) {
-		result.LastInsertID, _ = proc.GetODKUProtocolID()
+		result.LastInsertID, _ = proc.GetODKUProtocolIDForSource(insert.IsValuesSource())
 	} else {
 		result.LastInsertID = proc.GetStatementLastInsertID()
 	}

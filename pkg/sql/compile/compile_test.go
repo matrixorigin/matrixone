@@ -3980,7 +3980,7 @@ func TestCompileODKUPreInsertSingleInputStream(t *testing.T) {
 		t.Run(fmt.Sprint(tracked), func(t *testing.T) {
 			c := NewMockCompile(t)
 			c.addr = "local-cn:6001"
-			c.anal = &AnalyzeModule{}
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
 			inputs := make([]*Scope, 0, 2)
 			for range 2 {
 				input := newScope(Remote)

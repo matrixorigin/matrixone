@@ -77,7 +77,7 @@ func newODKUInsertStatusHarness(t *testing.T) (
 	*Session, *process.Process, *countingMysqlWriter, *MysqlResp, *ExecCtx,
 ) {
 	ses, proc, writer, resper, execCtx := newLastInsertIDHarness(t, 0)
-	execCtx.stmt = &tree.Insert{OnDuplicateUpdate: tree.UpdateExprs{&tree.UpdateExpr{}}}
+	execCtx.stmt = &tree.Insert{Rows: &tree.Select{Select: &tree.ValuesClause{}}, OnDuplicateUpdate: tree.UpdateExprs{&tree.UpdateExpr{}}}
 	return ses, proc, writer, resper, execCtx
 }
 
@@ -185,4 +185,34 @@ func TestMultiInsertNoAutoIncrTargetKeepsPreviousValue(t *testing.T) {
 	require.Zero(t, writer.responses[0].lastInsertId)
 	require.Equal(t, uint64(51), ses.GetLastInsertID())
 	require.Equal(t, uint64(51), proc.GetLastInsertID())
+}
+
+func TestODKUStatusDistinguishesValuesAndSelectFallback(t *testing.T) {
+	for _, values := range []bool{true, false} {
+		for _, generated := range []bool{false, true} {
+			ses, proc, writer, resper, execCtx := newODKUInsertStatusHarness(t)
+			ses.SetLastInsertID(700)
+			proc.SetLastInsertID(700)
+			if !values {
+				execCtx.stmt.(*tree.Insert).Rows.Select = &tree.SelectClause{}
+			}
+			proc.RecordODKUAction(0, 90, true)
+			proc.RecordODKUAction(1, 2, false) // final no-op, not ID magnitude/success ordinal
+			want, session := uint64(2), uint64(700)
+			if !values {
+				want = 0
+			}
+			if generated {
+				// Deliberately non-monotonic IDs distinguish input ordinal from
+				// the legacy smallest-ID reduction and remote delivery order.
+				proc.RecordODKUGenerated(8, 3)
+				proc.RecordODKUGenerated(2, 91)
+				want, session = 91, 91
+			}
+			require.NoError(t, resper.respStatus(ses, execCtx))
+			require.Len(t, writer.responses, 1)
+			require.Equal(t, want, writer.responses[0].lastInsertId)
+			require.Equal(t, session, ses.GetLastInsertID())
+		}
+	}
 }
