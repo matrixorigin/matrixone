@@ -1614,6 +1614,63 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		vec := mapScalar(t, f.Root().Column("c"), page, plan.Type{Id: int32(types.T_time), Scale: 6, NotNullable: true}, types.New(types.T_time, 0, 6))
 		require.Equal(t, []types.Time{0, types.Time(45_296_123_456)}, vector.MustFixedColWithTypeCheck[types.Time](vec))
 	})
+
+	t.Run("set member whitespace", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			node parquet.Node
+		}{
+			{"plain", parquet.String()},
+			{"dictionary", parquet.Encoded(parquet.String(), &parquet.RLEDictionary)},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				f, page := writeDictAndGetPage(t, tc.node, []parquet.Value{
+					parquet.ByteArrayValue([]byte(" a")), parquet.ByteArrayValue([]byte("a")),
+					parquet.ByteArrayValue([]byte("a ")), parquet.ByteArrayValue([]byte(" a ")),
+				})
+				vec := mapScalar(t, f.Root().Column("c"), page, plan.Type{Id: int32(types.T_uint64), Enumvalues: " a,a"}, types.T_uint64.ToType())
+				require.Equal(t, []uint64{1, 2, 2, 1}, vector.MustFixedColWithTypeCheck[uint64](vec))
+			})
+		}
+	})
+
+	t.Run("single empty domains", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.String(), []parquet.Value{parquet.ByteArrayValue([]byte("")), parquet.ByteArrayValue([]byte("1"))})
+		enumVec := mapScalar(t, f.Root().Column("c"), page, plan.Type{Id: int32(types.T_enum)}, types.T_enum.ToType())
+		require.Equal(t, []types.Enum{1, 1}, vector.MustFixedColWithTypeCheck[types.Enum](enumVec))
+		setVec := mapScalar(t, f.Root().Column("c"), page, plan.Type{Id: int32(types.T_uint64), Enumvalues: ","}, types.T_uint64.ToType())
+		require.Equal(t, []uint64{0, 1}, vector.MustFixedColWithTypeCheck[uint64](setVec))
+		f, page = writeDictAndGetPage(t, parquet.Int(64), []parquet.Value{parquet.Int64Value(0), parquet.Int64Value(1)})
+		setVec = mapScalar(t, f.Root().Column("c"), page, plan.Type{Id: int32(types.T_uint64), Enumvalues: ","}, types.T_uint64.ToType())
+		require.Equal(t, []uint64{0, 1}, vector.MustFixedColWithTypeCheck[uint64](setVec))
+		f, page = writeDictAndGetPage(t, parquet.Int(64), []parquet.Value{parquet.Int64Value(1), parquet.Int64Value(2)})
+		var h ParquetHandler
+		mapper := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), Enumvalues: ","})
+		require.NotNil(t, mapper)
+		invalid := vector.NewVec(types.T_uint64.ToType())
+		defer invalid.Free(proc.Mp())
+		require.Error(t, mapper.mapping(page, proc, invalid))
+		require.Zero(t, invalid.Length(), "mapping failure must roll back partial output")
+	})
+	t.Run("decimal bytes to set validate bitmap", func(t *testing.T) {
+		node := parquet.Decimal(0, 3, parquet.FixedLenByteArrayType(2))
+		value := func(v byte) parquet.Value { return parquet.FixedLenByteArrayValue([]byte{0, v}) }
+		f, page := writeDictAndGetPage(t, node, []parquet.Value{value(0), value(1)})
+		vec := mapScalar(t, f.Root().Column("c"), page, plan.Type{Id: int32(types.T_uint64), Enumvalues: ","}, types.T_uint64.ToType())
+		require.Equal(t, []uint64{0, 1}, vector.MustFixedColWithTypeCheck[uint64](vec))
+		f, page = writeDictAndGetPage(t, node, []parquet.Value{value(1), value(2)})
+		// Ordinary BIGINT retains the same numeric conversion.
+		vec = mapScalar(t, f.Root().Column("c"), page, plan.Type{Id: int32(types.T_uint64)}, types.T_uint64.ToType())
+		require.Equal(t, []uint64{1, 2}, vector.MustFixedColWithTypeCheck[uint64](vec))
+		var h ParquetHandler
+		mapper := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), Enumvalues: ","})
+		require.NotNil(t, mapper)
+		invalid := vector.NewVec(types.T_uint64.ToType())
+		defer invalid.Free(proc.Mp())
+		require.Error(t, mapper.mapping(page, proc, invalid))
+		require.Zero(t, invalid.Length(), "mapping failure must roll back partial output")
+	})
+
 	t.Run("string to enum", func(t *testing.T) {
 		f, page := writeDictAndGetPage(t, parquet.Encoded(parquet.String(), &parquet.RLEDictionary), []parquet.Value{
 			parquet.ByteArrayValue([]byte("red")),

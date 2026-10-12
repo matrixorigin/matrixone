@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -130,6 +131,113 @@ func TestIrregularIndexAffectedByUpdate(t *testing.T) {
 				tableDef, tableDef.Indexes[0], map[string]tree.Expr{tt.col: nil})
 			require.NoError(t, err)
 			require.Equal(t, tt.want, affected)
+		})
+	}
+}
+
+func TestIrregularIndexAffectedByGeneratedColumnSourceUpdate(t *testing.T) {
+	tableDef := &TableDef{
+		Pkey:          &PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Name2ColIndex: map[string]int32{"id": 0, "src": 1, "gmid": 2, "gvec": 3, "payload": 4, "ginclude": 5},
+		Cols: []*ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "src", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: "gmid", Typ: planpb.Type{Id: int32(types.T_int32)}, GeneratedCol: &planpb.GeneratedCol{Expr: &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1}}}}},
+			{Name: "gvec", Typ: planpb.Type{Id: int32(types.T_array_float32), Width: 2}, GeneratedCol: &planpb.GeneratedCol{Expr: &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 2}}}}},
+			{Name: "payload", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: "ginclude", Typ: planpb.Type{Id: int32(types.T_int32)}, GeneratedCol: &planpb.GeneratedCol{Expr: &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 2}}}}},
+		},
+	}
+	idx := &IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), Parts: []string{"gvec"}, IncludedColumns: []string{"ginclude"}}
+	for _, tc := range []struct {
+		name string
+		cols map[string]tree.Expr
+		want bool
+	}{
+		{name: "generated part", cols: map[string]tree.Expr{"src": nil}, want: true},
+		{name: "generated include", cols: map[string]tree.Expr{"src": nil}, want: true},
+		{name: "unrelated", cols: map[string]tree.Expr{"payload": nil}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := idx
+			if tc.name == "generated include" {
+				candidate = &IndexDef{IndexAlgo: idx.IndexAlgo, Parts: []string{"payload"}, IncludedColumns: []string{"ginclude"}}
+			}
+			got, err := irregularIndexAffectedByUpdate(tableDef, candidate, tc.cols)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// Each generated expression references its predecessor twice. The number of
+// dependency paths doubles per level, but the number of distinct columns does
+// not. Use the same shape for functional controls and the scale benchmark.
+func repeatedGeneratedDependencies(depth int) *TableDef {
+	tableDef := &TableDef{
+		Name2ColIndex: map[string]int32{"src": 0, "payload": 1, "vec": 2},
+		Cols: []*ColDef{
+			{Name: "src", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: "payload", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: "vec", Typ: planpb.Type{Id: int32(types.T_array_float32), Width: 2}},
+		},
+	}
+	for i := 0; i < depth; i++ {
+		pos := int32(len(tableDef.Cols))
+		refPos := pos - 1
+		if i == 0 {
+			refPos = 0
+		}
+		ref := &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: refPos}}}
+		name := fmt.Sprintf("g%d", i)
+		tableDef.Name2ColIndex[name] = pos
+		tableDef.Cols = append(tableDef.Cols, &ColDef{
+			Name: name, Typ: planpb.Type{Id: int32(types.T_int32)},
+			GeneratedCol: &planpb.GeneratedCol{Expr: &planpb.Expr{Expr: &planpb.Expr_F{
+				F: &planpb.Function{Args: []*planpb.Expr{ref, ref}},
+			}}},
+		})
+	}
+	return tableDef
+}
+
+func TestIrregularIndexAffectedBySharedGeneratedDependencies(t *testing.T) {
+	tableDef := repeatedGeneratedDependencies(4)
+	for _, idx := range []*IndexDef{
+		{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), Parts: []string{"vec"}, IncludedColumns: []string{"g3"}},
+		{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), Parts: []string{"vec"}, IncludedColumns: []string{"g3", "g2"}},
+		{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), Parts: []string{"vec"}, IncludedColumns: []string{"g2", "g3"}},
+	} {
+		for _, col := range []string{"src", "g0", "payload"} {
+			got, err := irregularIndexAffectedByUpdatedColumnNames(tableDef, idx, map[string]struct{}{col: {}})
+			require.NoError(t, err)
+			require.Equal(t, col != "payload", got)
+		}
+	}
+	// An ON UPDATE dependency is another seed, even when the assignment itself
+	// is unrelated. It must remain visible through shared generated branches.
+	tableDef.Cols[0].OnUpdate = &planpb.OnUpdate{}
+	got, err := irregularIndexAffectedByUpdatedColumnNames(tableDef,
+		&IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), Parts: []string{"vec"}, IncludedColumns: []string{"g3"}},
+		map[string]struct{}{"payload": {}})
+	require.NoError(t, err)
+	require.True(t, got)
+}
+
+func BenchmarkIrregularIndexAffectedByGeneratedDependencies(b *testing.B) {
+	for _, depth := range []int{8, 16, 24} {
+		b.Run(fmt.Sprintf("depth%d", depth), func(b *testing.B) {
+			tableDef := repeatedGeneratedDependencies(depth)
+			idx := &IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), Parts: []string{"vec"}, IncludedColumns: []string{fmt.Sprintf("g%d", depth-1)}}
+			updateCols := map[string]struct{}{"payload": {}}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				affected, err := irregularIndexAffectedByUpdatedColumnNames(tableDef, idx, updateCols)
+				if err != nil || affected {
+					b.Fatalf("unrelated update affected generated index: %v, %v", affected, err)
+				}
+			}
 		})
 	}
 }
