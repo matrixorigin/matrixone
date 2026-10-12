@@ -320,13 +320,50 @@ reduced-quota counterexamples.
 
 ## Release validation record
 
-The complete release evidence is in
-[sirius-campaign-release](evidence/sirius-campaign-release/README.md). At MO
-`9814347c1c`, merged Sirius `955b6881` and the guarded release SDK, all 744
-unprofiled timing executions and all 264 resource executions passed. All six
-allocation profiles have zero unexplained warmed growth, all ten matched numeric
-ratios pass 1.1, and the lifecycle and raw sanitizer control proofs satisfy the
-combined local validator. The GPU route was slower overall than native MO on the
-recorded hardware. Capture identities and the original contexts of qualified
-native proofs remain intact. Required CI and reviewer approval still gate final
-acceptance and merge; reviewer approval follows the ready-for-review handoff.
+The generated development and release captures are preserved in contributor-fork
+tag `evidence/sirius-d-4230ce3d14`, at commit
+`4230ce3d143e77a8b4be83feb47bd26858a8d459`. The
+[immutable release evidence tree](https://github.com/aunjgr/matrixone/tree/4230ce3d143e77a8b4be83feb47bd26858a8d459/docs/design/evidence/sirius-campaign-release)
+contains the original observations, provenance, numeric samples, lifecycle and
+sanitizer proofs, source qualifications and review-fix evidence. These generated
+records are outside the current source tree; application code and regression
+tests use no checked-in campaign captures. Earlier history remains intact.
+
+The measured source is MO `9814347c1ce38ec12f51412ef3176ede1501574d`, merged Sirius
+`955b6881afa6e92d0995f43e3fe9c383d86981c0`, and guarded release SDK
+`29bca11a537abf00d481581a423023591dbabda9b0fdd73d06c4a697e8ce01ce`.
+All 744 unprofiled timing and 264 resource executions passed; six allocation
+profiles had zero unexplained warmed growth and all ten numeric ratios passed
+1.1 (maximum 1.026527). Raw sanitizer status 99 is preserved with matched Native A
+CUB and no-GPU-work 41,386,248-byte cuDF pinned-resource controls. Median native/GPU
+suite times were 1.804130/4.789524 seconds at SF1 and 27.947777/52.826967 at SF10;
+the GPU route was slower overall on the recorded RTX 3070. Original contexts,
+binary hashes, PIDs and measurements are preserved. Earlier captures do not
+retrospectively certify the later continuous disk-quota monitor.
+
+To verify the original archive with the current validator, fetch the preservation
+tag and export into a temporary workspace; the source checkout need not change:
+
+```sh
+git fetch https://github.com/aunjgr/matrixone.git refs/tags/evidence/sirius-d-4230ce3d14
+task_evidence_dir=$(mktemp -d)
+git archive --format=tar 4230ce3d143e77a8b4be83feb47bd26858a8d459 \
+  docs/design/evidence/sirius-campaign-release > "$task_evidence_dir/release-evidence.tar"
+printf '%s  %s\n' \
+  28cfb19a161bc89aa917bf9add42e496b425a3b71f63399670d6daa43cfb269e \
+  "$task_evidence_dir/release-evidence.tar" | sha256sum -c -
+tar -xf "$task_evidence_dir/release-evidence.tar" -C "$task_evidence_dir"
+task_evidence_root="$task_evidence_dir/docs/design/evidence/sirius-campaign-release"
+python3 optools/sirius_acceptance.py \
+  --timing "$task_evidence_root/timing" --resource "$task_evidence_root/resource" \
+  --allocations "$task_evidence_root/allocations.json" \
+  --lifecycle "$task_evidence_root/lifecycle.json" \
+  --sanitizer "$task_evidence_root/sanitizer.json" \
+  --baselines "$task_evidence_root/numeric-baselines.json"
+```
+
+The archive SHA-256 is fixed above; its internal `checksums.json` has SHA-256
+`98cc3821567fd995c8f129a2370e85308cb179940efc8fb49df86d7f11dfa7bb`.
+The unchanged CLI verifies every listed artifact and returns
+`local_acceptance_complete: true`. CI and reviewer approval remain separate final
+acceptance and merge gates; an archived local result does not infer them.
