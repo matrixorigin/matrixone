@@ -6421,3 +6421,22 @@ func TestTemporalRangeCalendarIntervalOverflow(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchRightNarrowedNullSuffix(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	vec := vector.NewVec(types.T_int64.ToType())
+	defer vec.Free(mp)
+	for i, value := range []int64{1, 0, 0, 0} {
+		require.NoError(t, vector.AppendFixed(vec, value, i >= 2, mp))
+	}
+	offset := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 2}}}}
+	for _, start := range []int{0, 1, 2, 3, 4} {
+		got, err := searchRight(start, 4, 1, vec, offset, false, true)
+		require.NoError(t, err)
+		require.Equal(t, max(start, 2), got, "finite DESC FOLLOWING bound excludes NULL tail")
+	}
+	got, err := searchRight(0, 4, 2, vec, offset, false, true)
+	require.NoError(t, err)
+	require.Equal(t, 4, got, "NULL current key retains its peer group")
+}

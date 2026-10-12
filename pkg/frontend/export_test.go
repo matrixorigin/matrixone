@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -1981,4 +1982,79 @@ func TestParquetBlobFamilySchemaAndBytes(t *testing.T) {
 		require.NoError(t, reader.Close())
 		require.Zero(t, mp.CurrNB())
 	}
+}
+
+func TestParquetWriterExtendedTypes(t *testing.T) {
+	point := geo.Point{X: 1.0000001192092896, Y: -2.5}
+	point32, err := geo.WriteWKBFloat32(point)
+	require.NoError(t, err)
+	tests := []struct {
+		name string
+		typ  types.Type
+		data []byte
+		want string
+	}{
+		{"geometry SRID", types.New(types.T_geometry, 4327, int32(geo.POINT)), geo.WriteWKB(point), "SRID=4326;POINT(1.0000001192092896 -2.5)"},
+		{"geometry32 SRID", types.New(types.T_geometry32, 4327, int32(geo.POINT)), point32, "SRID=4326;POINT(1.0000001192092896 -2.5)"},
+		{"geometry explicit zero", types.New(types.T_geometry, 1, int32(geo.POINT)), geo.WriteWKB(point), "SRID=0;POINT(1.0000001192092896 -2.5)"},
+		{"geometry undefined SRID", types.T_geometry.ToType(), geo.WriteWKB(point), "POINT(1.0000001192092896 -2.5)"},
+		{"geometry empty", types.T_geometry32.ToType(), mustParquetEmptyPoint32(t), "POINT EMPTY"},
+		{"datalink", types.T_datalink.ToType(), []byte("file:///does-not-exist%20file?offset=2&size=3"), "file:///does-not-exist%20file?offset=2&size=3"},
+		{"vecbf16", types.New(types.T_array_bf16, 3, 0), types.ArrayToBytes(types.Float32ToBF16Slice([]float32{1.5, -2.5, 0})), "[1.5, -2.5, 0]"},
+		{"vecf16", types.New(types.T_array_float16, 3, 0), types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{1.5, -2.5, 65504})), "[1.5, -2.5, 65504]"},
+		{"vecint8", types.New(types.T_array_int8, 3, 0), types.ArrayToBytes([]int8{-128, 0, 127}), "[-128, 0, 127]"},
+		{"vecuint8", types.New(types.T_array_uint8, 3, 0), types.ArrayToBytes([]uint8{0, 128, 255}), "[0, 128, 255]"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			col := new(MysqlColumn)
+			col.SetName("value")
+			require.NoError(t, setMysqlColumnTypeInfo(context.Background(), tc.typ, col))
+			mrs := &MysqlResultSet{}
+			mrs.AddColumn(col)
+			writer, err := NewParquetWriter(context.Background(), mrs)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, writer.writer.Close()) }()
+			func() {
+				bat := batch.NewWithSize(1)
+				defer bat.Clean(mp)
+				bat.Vecs[0] = vector.NewVec(tc.typ)
+				require.NoError(t, vector.AppendBytes(bat.Vecs[0], tc.data, false, mp))
+				require.NoError(t, vector.AppendBytes(bat.Vecs[0], nil, true, mp))
+				bat.SetRowCount(2)
+				require.NoError(t, writer.WriteBatch(bat, mp, time.UTC))
+			}()
+			data, err := writer.Close()
+			require.NoError(t, err)
+			file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+			require.NoError(t, err)
+			field := file.Schema().Fields()[0]
+			require.True(t, field.Optional())
+			require.NotNil(t, field.Type().LogicalType().UTF8)
+			// A plain Parquet reader proves the representation independently of LOAD.
+			type row struct {
+				Value *string `parquet:"value,optional"`
+			}
+			reader := parquet.NewGenericReader[row](bytes.NewReader(data))
+			defer func() { require.NoError(t, reader.Close()) }()
+			rows := make([]row, 2)
+			n, err := reader.Read(rows)
+			require.ErrorIs(t, err, io.EOF)
+			require.Equal(t, 2, n)
+			require.NotNil(t, rows[0].Value)
+			require.Equal(t, tc.want, *rows[0].Value)
+			require.Nil(t, rows[1].Value)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func mustParquetEmptyPoint32(t *testing.T) []byte {
+	t.Helper()
+	g, err := geo.ParseWKT("POINT EMPTY")
+	require.NoError(t, err)
+	data, err := geo.WriteWKBFloat32(g)
+	require.NoError(t, err)
+	return data
 }

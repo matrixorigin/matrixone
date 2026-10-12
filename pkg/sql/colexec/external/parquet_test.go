@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1927,6 +1928,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 			numValues int
 			values    encoding.Values
 			dt        types.T
+			width     int32
 			want      any
 		}{
 			{name: "bool", st: parquet.BooleanType, numValues: 2, values: encoding.BooleanValues([]byte{0xFF}), dt: types.T_bool, want: []bool{true, true}},
@@ -1936,8 +1938,8 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 			{name: "uint64", st: parquet.Uint(64).Type(), numValues: 2, values: encoding.Uint64Values([]uint64{8, 10}), dt: types.T_uint64, want: []uint64{8, 10}},
 			{name: "float32", st: parquet.FloatType, numValues: 2, values: encoding.FloatValues([]float32{7.5, 3.25}), dt: types.T_float32, want: []float32{7.5, 3.25}},
 			{name: "float64", st: parquet.DoubleType, numValues: 2, values: encoding.DoubleValues([]float64{77.9, 0}), dt: types.T_float64, want: []float64{77.9, 0}},
-			{name: "string", st: parquet.String().Type(), numValues: 2, values: encoding.ByteArrayValues([]byte("abcdefg"), []uint32{0, 3, 7}), dt: types.T_varchar, want: []string{"abc", "defg"}},
-			{name: "fixed3", st: parquet.FixedLenByteArrayType(3), numValues: 2, values: encoding.FixedLenByteArrayValues([]byte("abcdef"), 3), dt: types.T_char, want: []string{"abc", "def"}},
+			{name: "string", st: parquet.String().Type(), numValues: 2, values: encoding.ByteArrayValues([]byte("abcdefg"), []uint32{0, 3, 7}), dt: types.T_varchar, width: 4, want: []string{"abc", "defg"}},
+			{name: "fixed3", st: parquet.FixedLenByteArrayType(3), numValues: 2, values: encoding.FixedLenByteArrayValues([]byte("abcdef"), 3), dt: types.T_char, width: 3, want: []string{"abc", "def"}},
 			// Gregorian epoch: 719162 days from 0001-01-01 to 1970-01-01.
 			{name: "date", st: parquet.Date().Type(), numValues: 2, values: encoding.Int32Values([]int32{0, 365}), dt: types.T_date, want: []types.Date{719162, 719527}},
 			{name: "time_ms", st: parquet.Time(parquet.Millisecond).Type(), numValues: 2, values: encoding.Int32Values([]int32{1_000, 61_000}), dt: types.T_time, want: []types.Time{1000000, 61000000}},
@@ -1964,16 +1966,16 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 				require.Equal(t, tc.numValues, n)
 				f := writeParquetFixture(t, parquet.Leaf(tc.st), []parquet.Row{parquet.MakeRow(vals)})
 
-				vec := vector.NewVec(types.New(tc.dt, 0, 0))
+				vec := vector.NewVec(types.New(tc.dt, tc.width, 0))
 				t.Cleanup(func() { vec.Free(proc.Mp()) })
 				var h ParquetHandler
-				mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(tc.dt), NotNullable: true})
+				mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(tc.dt), Width: tc.width, NotNullable: true})
 				require.NotNil(t, mp)
 				err = mp.mapping(page, proc, vec)
 				require.NoError(t, err)
 
 				require.Equal(t, tc.numValues, vec.Length())
-				require.Equal(t, types.New(tc.dt, 0, 0), *vec.GetType())
+				require.Equal(t, types.New(tc.dt, tc.width, 0), *vec.GetType())
 				require.True(t, vec.GetNulls().IsEmpty())
 				requireParquetScalarResult(t, vec, tc.want, 0)
 			})
@@ -1989,6 +1991,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 			node     parquet.Node
 			values   []parquet.Value
 			target   types.T
+			width    int32
 			want     any
 			delta    float64
 			nullable bool
@@ -2070,16 +2073,16 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 				{B0_63: 18446744073709551611, B64_127: 18446744073709551615, B128_191: 18446744073709551615, B192_255: 18446744073709551615},
 				{B0_63: 13, B64_127: 0, B128_191: 0, B192_255: 0},
 			}},
-			{name: "raw bytearray varchar", node: parquet.Encoded(parquet.Leaf(parquet.ByteArrayType), &parquet.RLEDictionary), values: []parquet.Value{parquet.ByteArrayValue([]byte("aa")), parquet.ByteArrayValue([]byte("bb")), parquet.ByteArrayValue([]byte("aa"))}, target: types.T_varchar, want: []string{"aa", "bb", "aa"}, nullable: true},
+			{name: "raw bytearray varchar", node: parquet.Encoded(parquet.Leaf(parquet.ByteArrayType), &parquet.RLEDictionary), values: []parquet.Value{parquet.ByteArrayValue([]byte("aa")), parquet.ByteArrayValue([]byte("bb")), parquet.ByteArrayValue([]byte("aa"))}, target: types.T_varchar, width: 2, want: []string{"aa", "bb", "aa"}, nullable: true},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				f, page := writeDictAndGetPage(t, tc.node, tc.values)
 				require.NotNil(t, page.Dictionary(), "fixture must exercise dictionary decoding")
-				vecType := types.New(tc.target, 0, 0)
+				vecType := types.New(tc.target, tc.width, 0)
 				vec := vector.NewVec(vecType)
 				t.Cleanup(func() { vec.Free(proc.Mp()) })
 				var h ParquetHandler
-				mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(tc.target), NotNullable: !tc.nullable})
+				mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(tc.target), Width: tc.width, NotNullable: !tc.nullable})
 				require.NotNil(t, mp)
 				require.NoError(t, mp.mapping(page, proc, vec))
 				require.Equal(t, vecType, *vec.GetType())
@@ -2225,6 +2228,8 @@ func TestParquetBoundedVarlenMapping(t *testing.T) {
 		}{
 			{"char rejects", types.T_char, 4},
 			{"varchar rejects", types.T_varchar, 4},
+			{"char zero width", types.T_char, 0},
+			{"varchar zero width", types.T_varchar, 0},
 			{"char exact width", types.T_char, 10},
 			{"varchar exact width", types.T_varchar, 10},
 			{"varchar wider", types.T_varchar, 32},
@@ -2242,8 +2247,8 @@ func TestParquetBoundedVarlenMapping(t *testing.T) {
 				require.NoError(t, h.processRow(rows[0], bat, param, proc))
 				require.True(t, bat.Vecs[0].IsNull(0))
 				err := h.processRow(rows[1], bat, param, proc)
-				if tc.width == 4 {
-					require.ErrorContains(t, err, "Src length 10 is larger than Dest length 4")
+				if (tc.target == types.T_char || tc.target == types.T_varchar) && tc.width < 10 {
+					require.ErrorContains(t, err, fmt.Sprintf("Src length 10 is larger than Dest length %d", tc.width))
 					require.Equal(t, 1, bat.Vecs[0].Length(), "reject before appending an invalid value")
 					return
 				}
@@ -2254,6 +2259,105 @@ func TestParquetBoundedVarlenMapping(t *testing.T) {
 					got = types.DecodeJson(bat.Vecs[0].GetBytesAt(1)).String()
 				}
 				require.Equal(t, `{"v": 123}`, got)
+			})
+		}
+	})
+
+	for _, target := range []types.T{types.T_char, types.T_varchar} {
+		for _, dictionary := range []bool{false, true} {
+			for _, tc := range []struct {
+				name  string
+				value []byte
+				err   string
+			}{
+				{name: "empty and NULL", value: []byte{}},
+				{name: "ASCII", value: []byte("x"), err: "Src length 1 is larger than Dest length 0"},
+				{name: "accent", value: []byte("é"), err: "Src length 1 is larger than Dest length 0"},
+				{name: "emoji", value: []byte("😀"), err: "Src length 1 is larger than Dest length 0"},
+				{name: "invalid UTF-8", value: []byte{0xff}, err: "invalid UTF-8"},
+			} {
+				t.Run(fmt.Sprintf("zero width/%s/dictionary=%t/%s", target, dictionary, tc.name), func(t *testing.T) {
+					node := parquet.Optional(parquet.String())
+					if dictionary {
+						node = parquet.Optional(parquet.Encoded(parquet.String(), &parquet.RLEDictionary))
+					}
+					f, page := writeColumnAndGetPage(t, node, []parquet.Row{
+						{parquet.ByteArrayValue([]byte{}).Level(0, 1, 0)},
+						{parquet.NullValue().Level(0, 0, 0)},
+						{parquet.ByteArrayValue(tc.value).Level(0, 1, 0)},
+					})
+					if dictionary {
+						require.NotNil(t, page.Dictionary())
+					} else {
+						require.Nil(t, page.Dictionary())
+					}
+					vec := vector.NewVec(types.New(target, 0, 0))
+					t.Cleanup(func() { vec.Free(proc.Mp()) })
+					require.NoError(t, vector.AppendBytes(vec, nil, true, proc.Mp()))
+					var h ParquetHandler
+					mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(target), Width: 0})
+					require.NotNil(t, mp)
+					err := mp.mapping(page, proc, vec)
+					if tc.err != "" {
+						require.ErrorContains(t, err, tc.err)
+						require.Equal(t, 1, vec.Length(), "failed page preserves the seed and rolls back its empty/NULL prefix")
+						require.Equal(t, []uint64{0}, vec.GetNulls().ToArray())
+						return
+					}
+					require.NoError(t, err)
+					require.Equal(t, 4, vec.Length())
+					require.Equal(t, []uint64{0, 2}, vec.GetNulls().ToArray())
+					require.Empty(t, vec.GetBytesAt(1))
+					require.Empty(t, vec.GetBytesAt(3), "repeated empty dictionary value remains non-NULL")
+				})
+			}
+		}
+	}
+
+	t.Run("zero width scalar consumers", func(t *testing.T) {
+		for _, target := range []types.T{types.T_char, types.T_varchar} {
+			for _, tc := range []struct {
+				name  string
+				node  parquet.Node
+				value parquet.Value
+			}{
+				{name: "string", node: parquet.String(), value: parquet.ByteArrayValue([]byte("x"))},
+				{name: "converted integer", node: parquet.Leaf(parquet.Int32Type), value: parquet.Int32Value(1)},
+			} {
+				t.Run(fmt.Sprintf("%s/%s", target, tc.name), func(t *testing.T) {
+					f, page := writeColumnAndGetPage(t, tc.node, []parquet.Row{{tc.value.Level(0, 0, 0)}})
+					vec := vector.NewVec(types.New(target, 0, 0))
+					t.Cleanup(func() { vec.Free(proc.Mp()) })
+					require.NoError(t, vector.AppendBytes(vec, nil, true, proc.Mp()))
+					def := &plan.ColDef{Typ: plan.Type{Id: int32(target), Width: 0}}
+					var h ParquetHandler
+					mp := h.getMapper(f.Root().Column("c"), def.Typ)
+					require.NotNil(t, mp)
+					require.ErrorContains(t, mp.mapping(page, proc, vec), "Dest length 0")
+					require.Equal(t, 1, vec.Length())
+					if tc.name == "string" {
+						require.ErrorContains(t, appendLeafValue(tc.value, f.Root().Column("c"), vec, def, proc), "Dest length 0")
+						require.Equal(t, 1, vec.Length())
+					}
+					require.True(t, vec.IsNull(0))
+				})
+			}
+		}
+	})
+
+	t.Run("internal negative text and zero binary widths retain their behavior", func(t *testing.T) {
+		for _, tc := range []struct {
+			target types.T
+			width  int32
+		}{
+			{types.T_char, -1}, {types.T_varchar, -1},
+			{types.T_binary, 0}, {types.T_varbinary, 0},
+		} {
+			t.Run(tc.target.String(), func(t *testing.T) {
+				vec := vector.NewVec(types.New(tc.target, tc.width, 0))
+				t.Cleanup(func() { vec.Free(proc.Mp()) })
+				require.NoError(t, appendParquetVarlenValue(proc.Ctx, vec, []byte("x"), false, proc, *vec.GetType()))
+				require.Equal(t, []byte("x"), vec.GetBytesAt(0))
 			})
 		}
 	})
@@ -2548,6 +2652,127 @@ func TestParquetTimestampMillisOverflowInFastPath(t *testing.T) {
 			require.ErrorContains(t, err, "overflows microseconds")
 			require.Zero(t, vec.Length())
 		})
+	}
+}
+
+func TestParquetGeometryAndDatalinkMapping(t *testing.T) {
+	point := geo.Point{X: 1.0000001192092896, Y: -2.5}
+	point32, err := geo.WriteWKBFloat32(point)
+	require.NoError(t, err)
+	line, err := geo.ParseWKT("LINESTRING(1.25 -2.5,3.75 4.5)")
+	require.NoError(t, err)
+	empty, err := geo.ParseWKT("POINT EMPTY")
+	require.NoError(t, err)
+	link := "file:///does-not-exist%20file?offset=2&size=3"
+	pointType := types.New(types.T_geometry, 4327, int32(geo.POINT))
+	type testCase struct {
+		name, text string
+		typ        types.Type
+		want       []byte
+		wantErr    string
+	}
+	tests := []testCase{
+		{"point", "SRID=4326;POINT(1.0000001192092896 -2.5)", pointType, geo.WriteWKB(point), ""},
+		{"point32", "srid=4326;POINT(1.0000001192092896 -2.5)", types.New(types.T_geometry32, 4327, int32(geo.POINT)), point32, ""},
+		{"unconstrained SRID", "SRID=4326;POINT(1.0000001192092896 -2.5)", types.T_geometry.ToType(), geo.WriteWKB(point), ""},
+		{"plain WKT", "POINT(1.0000001192092896 -2.5)", types.New(types.T_geometry, 1, int32(geo.POINT)), geo.WriteWKB(point), ""},
+		{"explicit zero", "SRID=0;POINT(1.0000001192092896 -2.5)", types.New(types.T_geometry, 1, int32(geo.POINT)), geo.WriteWKB(point), ""},
+		{"max SRID", fmt.Sprintf("SRID=%d;POINT(1.0000001192092896 -2.5)", geo.MaxSRID), types.New(types.T_geometry, int32(geo.MaxSRID)+1, int32(geo.POINT)), geo.WriteWKB(point), ""},
+		{"line", "SRID=4326;LINESTRING(1.25 -2.5,3.75 4.5)", types.New(types.T_geometry, 4327, int32(geo.LINESTRING)), geo.WriteWKB(line), ""},
+		{"empty", "POINT EMPTY", types.T_geometry.ToType(), geo.WriteWKB(empty), ""},
+		{"link value without content read", link, types.T_datalink.ToType(), []byte(link), ""},
+		{"nested SRID", "SRID=4326;SRID=0;POINT(1 2)", pointType, nil, "invalid geometry SRID"},
+		{"SRID mismatch", "SRID=0;POINT(1 2)", pointType, nil, "does not match column SRID"},
+		{"plain WKT mismatch", "POINT(1 2)", pointType, nil, "does not match column SRID"},
+		{"subtype mismatch", "SRID=4326;LINESTRING(1 2,3 4)", pointType, nil, "cannot store LINESTRING in POINT"},
+		{"invalid WKT", "SRID=4326;POINT(bad)", pointType, nil, "invalid"},
+		{"float32 overflow", "POINT(3.5e38 0)", types.T_geometry32.ToType(), nil, "coordinate is not finite"},
+		{"invalid link scheme", "https://example.com/value", types.T_datalink.ToType(), nil, "unsupported url scheme"},
+		{"invalid link offset", "file:///missing?offset=-1", types.T_datalink.ToType(), nil, "offset cannot be negative"},
+		{"invalid link size", "file:///missing?size=-2", types.T_datalink.ToType(), nil, "size cannot be less than -1"},
+		{"missing SRID", "SRID=;POINT(1 2)", pointType, nil, "invalid geometry SRID"},
+		{"negative SRID", "SRID=-1;POINT(1 2)", pointType, nil, "invalid geometry SRID"},
+		{"nonnumeric SRID", "SRID=abc;POINT(1 2)", pointType, nil, "invalid geometry SRID"},
+		{"overflowing SRID", "SRID=4294967296;POINT(1 2)", pointType, nil, "invalid geometry SRID"},
+		{"SRID exceeds type width", fmt.Sprintf("SRID=%d;POINT(1 2)", int64(geo.MaxSRID)+1), pointType, nil, "invalid geometry SRID"},
+		{"missing SRID separator", "SRID=4326POINT(1 2)", pointType, nil, "invalid geometry SRID"},
+	}
+	for _, dictionary := range []bool{false, true} {
+		for _, tc := range tests {
+			t.Run(fmt.Sprintf("%s/dictionary=%v", tc.name, dictionary), func(t *testing.T) {
+				proc := testutil.NewProc(t)
+				t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+				node := parquet.String()
+				if dictionary {
+					node = parquet.Encoded(node, &parquet.RLEDictionary)
+				}
+				f, page := writeColumnAndGetPage(t, parquet.Optional(node), []parquet.Row{
+					{parquet.ByteArrayValue([]byte(tc.text)).Level(0, 1, 0)},
+					{parquet.NullValue().Level(0, 0, 0)},
+				})
+				var h ParquetHandler
+				mapper := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(tc.typ.Oid), Width: tc.typ.Width, Scale: tc.typ.Scale})
+				require.NotNil(t, mapper)
+				vec := vector.NewVec(tc.typ)
+				t.Cleanup(func() { vec.Free(proc.Mp()) })
+				err := mapper.mapping(page, proc, vec)
+				if tc.wantErr != "" {
+					require.ErrorContains(t, err, tc.wantErr)
+					require.Zero(t, vec.Length())
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, 2, vec.Length())
+				require.Equal(t, tc.want, vec.GetBytesAt(0))
+				require.False(t, vec.GetNulls().Contains(0))
+				require.True(t, vec.GetNulls().Contains(1))
+			})
+		}
+	}
+}
+
+func TestParquetGeometryAndDatalinkRollback(t *testing.T) {
+	for _, oid := range []types.T{types.T_geometry, types.T_geometry32, types.T_datalink} {
+		for _, notNull := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/notNull=%v", oid, notNull), func(t *testing.T) {
+				proc := testutil.NewProc(t)
+				t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+				proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+					if name == "max_points_in_geometry" {
+						return int64(1), nil
+					}
+					return nil, nil
+				})
+				valid, invalid := "POINT(1 2)", "LINESTRING(1 2,3 4)"
+				if oid == types.T_datalink {
+					valid, invalid = "file:///missing", "file:///missing?offset=-1"
+				}
+				f, page := writeColumnAndGetPage(t, parquet.Optional(parquet.String()), []parquet.Row{
+					{parquet.ByteArrayValue([]byte(valid)).Level(0, 1, 0)},
+					{parquet.NullValue().Level(0, 0, 0)},
+					{parquet.ByteArrayValue([]byte(invalid)).Level(0, 1, 0)},
+				})
+				var h ParquetHandler
+				mapper := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(oid), NotNullable: notNull})
+				require.NotNil(t, mapper)
+				vec := vector.NewVec(oid.ToType())
+				t.Cleanup(func() { vec.Free(proc.Mp()) })
+				require.NoError(t, vector.AppendBytes(vec, []byte("seed"), false, proc.Mp()))
+				require.NoError(t, vector.AppendBytes(vec, nil, true, proc.Mp()))
+				err := mapper.mapping(page, proc, vec)
+				if notNull {
+					require.ErrorContains(t, err, "NOT NULL")
+				} else if oid == types.T_datalink {
+					require.ErrorContains(t, err, "offset cannot be negative")
+				} else {
+					require.ErrorContains(t, err, "max_points_in_geometry=1")
+				}
+				require.Equal(t, 2, vec.Length())
+				require.Equal(t, []byte("seed"), vec.GetBytesAt(0))
+				require.Equal(t, 1, vec.GetNulls().Count())
+				require.True(t, vec.GetNulls().Contains(1))
+			})
+		}
 	}
 }
 
