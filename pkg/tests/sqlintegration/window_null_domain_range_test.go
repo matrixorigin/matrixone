@@ -81,36 +81,8 @@ func TestWindowNullDomainAndRange(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				rows, err := db.QueryContext(ctx, tc.q)
-				if err != nil {
-					t.Errorf("query error: %v", err)
-					return
-				}
-				defer rows.Close()
-				cols, err := rows.Columns()
 				require.NoError(t, err)
-				var got []string
-				for rows.Next() {
-					values := make([]sql.NullFloat64, len(cols))
-					args := make([]any, len(cols))
-					for i := range values {
-						args[i] = &values[i]
-					}
-					require.NoError(t, rows.Scan(args...))
-					parts := make([]string, len(cols))
-					for i, v := range values {
-						parts[i] = "NULL"
-						if v.Valid {
-							parts[i] = fmt.Sprintf("%g", v.Float64)
-						}
-					}
-					got = append(got, strings.Join(parts, ":"))
-				}
-				if err := rows.Err(); err != nil {
-					t.Errorf("rows error: %v", err)
-					return
-				}
-				t.Logf("got=%v want=%v", got, tc.want)
-				require.Equal(t, tc.want, got)
+				require.Equal(t, tc.want, readWindowNullRows(t, rows))
 			})
 		}
 		for _, fn := range []string{"lag", "lead"} {
@@ -131,34 +103,12 @@ func TestWindowNullDomainAndRange(t *testing.T) {
 					{nil, 0, []string{"1:1:NULL", "2:1:1", "3:2:NULL"}, []string{"1:1:2", "2:1:NULL", "3:2:NULL"}},
 				} {
 					rows, err := stmt.QueryContext(ctx, tc.def, tc.min)
-					if err != nil {
-						t.Errorf("prepared def=%v min=%d: %v", tc.def, tc.min, err)
-						continue
+					require.NoError(t, err)
+					want := tc.wantLag
+					if fn == "lead" {
+						want = tc.wantLead
 					}
-					func() {
-						defer rows.Close()
-						var got []string
-						for rows.Next() {
-							var point, eid int
-							var value sql.NullFloat64
-							require.NoError(t, rows.Scan(&point, &eid, &value))
-							v := "NULL"
-							if value.Valid {
-								v = fmt.Sprintf("%g", value.Float64)
-							}
-							got = append(got, fmt.Sprintf("%d:%d:%s", point, eid, v))
-						}
-						if err := rows.Err(); err != nil {
-							t.Errorf("prepared rows: %v", err)
-							return
-						}
-						want := tc.wantLag
-						if fn == "lead" {
-							want = tc.wantLead
-						}
-						t.Logf("prepared def=%v min=%d got=%v want=%v", tc.def, tc.min, got, want)
-						require.Equal(t, want, got)
-					}()
+					require.Equal(t, want, readWindowNullRows(t, rows), "default=%v min=%d", tc.def, tc.min)
 				}
 			})
 		}
@@ -171,32 +121,8 @@ func TestWindowNullDomainAndRange(t *testing.T) {
 				want string
 			}{{nil, "NULL"}, {int64(7), "7"}, {"text", "text"}, {[]byte("binary"), "binary"}, {nil, "NULL"}} {
 				rows, err := stmt.QueryContext(ctx, tc.v)
-				if err != nil {
-					t.Errorf("prepared first_value(%v): %v", tc.v, err)
-					continue
-				}
-				func() {
-					defer rows.Close()
-					count := 0
-					for rows.Next() {
-						var id int
-						var value sql.NullString
-						require.NoError(t, rows.Scan(&id, &value))
-						got := "NULL"
-						if value.Valid {
-							got = value.String
-						}
-						if got != tc.want {
-							t.Errorf("first_value(%v) id=%d got=%s want=%s", tc.v, id, got, tc.want)
-						}
-						count++
-					}
-					if err := rows.Err(); err != nil {
-						t.Errorf("prepared first_value rows: %v", err)
-						return
-					}
-					require.Equal(t, 3, count)
-				}()
+				require.NoError(t, err)
+				require.Equal(t, []string{"1:" + tc.want, "2:" + tc.want, "3:" + tc.want}, readWindowNullRows(t, rows))
 			}
 		})
 
@@ -214,27 +140,13 @@ func TestWindowNullDomainAndRange(t *testing.T) {
 				} {
 					rows, err := stmt.QueryContext(ctx, tc.value, tc.fallback)
 					require.NoError(t, err)
-					func() {
-						defer rows.Close()
-						count := 0
-						for rows.Next() {
-							var id int
-							var value sql.NullString
-							require.NoError(t, rows.Scan(&id, &value))
-							want := tc.want
-							if (fn == "lag" && id == 1) || (fn == "lead" && id == 3) {
-								want = tc.boundary
-							}
-							got := "NULL"
-							if value.Valid {
-								got = value.String
-							}
-							require.Equal(t, want, got)
-							count++
-						}
-						require.NoError(t, rows.Err())
-						require.Equal(t, 3, count)
-					}()
+					want := []string{"1:" + tc.want, "2:" + tc.want, "3:" + tc.want}
+					if fn == "lag" {
+						want[0] = "1:" + tc.boundary
+					} else {
+						want[2] = "3:" + tc.boundary
+					}
+					require.Equal(t, want, readWindowNullRows(t, rows))
 				}
 			})
 		}
@@ -278,4 +190,30 @@ func TestWindowNullDomainAndRange(t *testing.T) {
 			require.Equal(t, 1, healthy)
 		})
 	})
+}
+
+func readWindowNullRows(t *testing.T, rows *sql.Rows) []string {
+	t.Helper()
+	defer rows.Close()
+	columns, err := rows.Columns()
+	require.NoError(t, err)
+	var result []string
+	for rows.Next() {
+		values := make([]sql.NullString, len(columns))
+		args := make([]any, len(columns))
+		for i := range values {
+			args[i] = &values[i]
+		}
+		require.NoError(t, rows.Scan(args...))
+		parts := make([]string, len(columns))
+		for i, value := range values {
+			parts[i] = "NULL"
+			if value.Valid {
+				parts[i] = value.String
+			}
+		}
+		result = append(result, strings.Join(parts, ":"))
+	}
+	require.NoError(t, rows.Err())
+	return result
 }
