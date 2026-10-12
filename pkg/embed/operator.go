@@ -222,8 +222,15 @@ func (op *operator) Start() error {
 	if err := op.cfg.validateClockConfiguration(); err != nil {
 		return err
 	}
-	if err := op.cfg.validateAuthenticationClockBudgetFor(op.serviceType); err != nil {
-		return err
+	// Authentication validation applies frontend defaults. Preserve an explicit
+	// testing socket choice, including empty (TCP-only), on either outcome.
+	unixAddress := op.cfg.CN.Frontend.UnixSocketAddress
+	authErr := op.cfg.validateAuthenticationClockBudgetFor(op.serviceType)
+	if op.testing && op.serviceType == metadata.ServiceType_CN {
+		op.cfg.CN.Frontend.UnixSocketAddress = unixAddress
+	}
+	if authErr != nil {
+		return authErr
 	}
 	if op.serviceType == metadata.ServiceType_CN {
 		if err := op.verifySiriusBenchmarkNoGC(); err != nil {
@@ -365,6 +372,9 @@ func (op *operator) startCNServiceLocked(
 	}
 	if op.testing {
 		options = append(options, op.testingCNOptions...)
+		// CN construction defaults the configuration again. Apply the caller's
+		// testing choice after those defaults, before frontend listeners exist.
+		options = append(options, cnservice.WithFrontendUnixSocketAddress(c.Frontend.UnixSocketAddress))
 	}
 	s, err := cnservice.NewService(
 		&c,

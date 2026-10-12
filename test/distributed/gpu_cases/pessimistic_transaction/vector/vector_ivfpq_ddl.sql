@@ -18,8 +18,6 @@
 
 SET experimental_ivfpq_index = 1;
 SET ivfpq_threads_build = 6;
-SET ivfpq_max_index_capacity = 99999;
-SET kmeans_train_percent = 100;
 SET probe_limit = 16;
 
 drop database if exists ivfpq_ddl;
@@ -49,7 +47,7 @@ insert into t values
     (19, '[19,19,19,19,19,19,19,19]', 0),
     (20, '[20,20,20,20,20,20,20,20]', 0);
 
-create index ix using ivfpq on t (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8;
+create index ix using ivfpq on t (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8 kmeans_train_percent 100 max_index_capacity 99999;
 
 -- 1. baseline
 select id from t order by l2_distance(v, '[5,5,5,5,5,5,5,5]') asc limit 1;
@@ -96,7 +94,7 @@ select id from t order by l2_distance(v, '[5,5,5,5,5,5,5,5]') asc limit 1;
 
 -- 6. reindex (synchronous drop + recreate)
 drop index ix on t;
-create index ix using ivfpq on t (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8;
+create index ix using ivfpq on t (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8 kmeans_train_percent 100 max_index_capacity 99999;
 select id from t order by l2_distance(v, '[5,5,5,5,5,5,5,5]') asc limit 1;
 
 drop database ivfpq_ddl;
