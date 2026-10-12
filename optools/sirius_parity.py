@@ -1343,6 +1343,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Reject stale output before constructing or invoking a runner.
         _ensure_output_directory_available(arguments.output)
         spec = json.loads(arguments.spec.read_text(encoding="utf-8"))
+        if spec.get("schema_version", 1) == 2:
+            from sirius_campaign_v2 import main_from_legacy
+            return main_from_legacy(arguments, spec, runner)
+        if spec.get("schema_version", 1) != 1:
+            raise CampaignError("unsupported campaign schema version")
         campaign = build_campaign(spec["provenance"], spec.get("float_tolerances"))
         canonical_json(campaign).encode("utf-8")
         executor = SubprocessExecutor(runner, arguments.timeout_seconds)
