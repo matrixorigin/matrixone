@@ -151,43 +151,22 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	}
 
 	if pkPos != -1 {
-		// For composite primary key, optimize BloomFilter filtering by using __mo_index_pri_col directly
-		// if all conditions are met (IVF entries table, has BF, last PK col is __mo_index_pri_col, query includes it).
-		if mixin.tableDef.Pkey != nil && len(mixin.tableDef.Pkey.Names) > 1 {
-			// Composite primary key: check optimization conditions.
-			lastPKColName := strings.ToLower(mixin.tableDef.Pkey.Names[len(mixin.tableDef.Pkey.Names)-1])
+		// Ordinary PK pruning always uses the physical primary key.
+		mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos]}
+		mixin.filterState.colTypes = mixin.columns.colTypes[pkPos : pkPos+1]
 
-			// Check all conditions for optimization (must all be satisfied):
-			// 1. Table type is IVF entries table.
-			isIVFEntriesTable := mixin.tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries
-			// 2. Has bloom filter.
-			hasBF := mixin.filterState.hasBF
-			// 3. Last PK column is __mo_index_pri_col.
-			isLastColPriCol := lastPKColName == strings.ToLower(catalog.IndexTablePrimaryColName)
-			// 4. Query includes __mo_index_pri_col.
-			lastPKColPos := -1
+		// IVF membership is built from the source origin PK. Bind it explicitly
+		// rather than relying on Pkey.Names, which physical copies may replace
+		// with the hidden composite key alone. Keep the common PK initialization
+		// below for workspace reads as well as persisted objects.
+		if mixin.tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries && mixin.filterState.hasBF {
 			for i, col := range cols {
-				if strings.ToLower(col) == lastPKColName {
-					lastPKColPos = i
+				if i != pkPos && strings.EqualFold(col, catalog.IndexTablePrimaryColName) {
+					mixin.filterState.seqnums = append(mixin.filterState.seqnums, mixin.columns.seqnums[i])
+					mixin.filterState.colTypes = []types.Type{mixin.columns.colTypes[pkPos], mixin.columns.colTypes[i]}
 					break
 				}
 			}
-
-			if isIVFEntriesTable && hasBF && isLastColPriCol && lastPKColPos != -1 {
-				// All conditions met: use both PK column and __mo_index_pri_col for filtering.
-				// cacheVectors[0] will be used for PK filtering.
-				// cacheVectors[1] will be used for BF filtering (directly, no unpacking needed).
-				mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos], mixin.columns.seqnums[lastPKColPos]}
-				mixin.filterState.colTypes = []types.Type{mixin.columns.colTypes[pkPos], mixin.columns.colTypes[lastPKColPos]}
-			} else {
-				// Conditions not met: use composite PK column only.
-				mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos]}
-				mixin.filterState.colTypes = mixin.columns.colTypes[pkPos : pkPos+1]
-			}
-		} else {
-			// Single primary key or non-composite: use the primary key column directly.
-			mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos]}
-			mixin.filterState.colTypes = mixin.columns.colTypes[pkPos : pkPos+1]
 		}
 	}
 

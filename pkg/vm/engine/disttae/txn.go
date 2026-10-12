@@ -3080,6 +3080,12 @@ func (txn *Transaction) rollbackTableOpLocked() {
 	}
 }
 
+var _ client.TableCreationView = (*Transaction)(nil)
+
+func (txn *Transaction) IsTableCreatedInTxn(tableID uint64) bool {
+	return txn.tableOps != nil && txn.tableOps.existCreatedInTxn(tableID)
+}
+
 var _ client.TerminalTableDeletionView = (*Transaction)(nil)
 
 // IsTableDeletedAtTxnClose reads the surviving physical deletion set after
@@ -3107,8 +3113,8 @@ func (txn *Transaction) GetSnapshotWriteOffset() int {
 }
 
 // UpdateSnapshotWriteOffset advances the statement boundary to the current
-// end of txn.writes. Only statement-boundary callers may use it (a new
-// compile of a user statement); internal SQL must never advance the
+// end of txn.writes. Only owning statement-boundary callers may use it:
+// frontend admission or a new user Compile/Reset. Borrowed SQL never advances the
 // boundary, or a mid-statement dump can compact entries covered by it.
 func (txn *Transaction) UpdateSnapshotWriteOffset() {
 	txn.beginCatalogMutation()

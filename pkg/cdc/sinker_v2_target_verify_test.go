@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	mysql "github.com/matrixorigin/mysql"
 	"github.com/stretchr/testify/require"
 )
@@ -594,6 +596,8 @@ func TestNormalizeCDCTargetColumnTypeFromMOAndMySQL(t *testing.T) {
 		{"DATETIME", "DATETIME(0)"},
 		{"TIMESTAMP", "TIMESTAMP(0)"},
 		{"BOOL", "BOOL(0)"},
+		{"BOOLEAN", "BOOL"},
+		{"BOOLEAN", "BOOL(0)"},
 		{"JSON", "JSON(0)"},
 	} {
 		require.Equal(t, normalizeCDCTargetColumnType(tc.source), normalizeCDCTargetColumnType(tc.target), tc)
@@ -603,6 +607,40 @@ func TestNormalizeCDCTargetColumnTypeFromMOAndMySQL(t *testing.T) {
 	require.NotEqual(t, normalizeCDCTargetColumnType("ENUM('a b')"), normalizeCDCTargetColumnType("ENUM('ab')"))
 	require.NotEqual(t, normalizeCDCTargetColumnType("ENUM('integer')"), normalizeCDCTargetColumnType("ENUM('int')"))
 	require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_int8)}, "BOOL(0)", CDCSinkType_MO, sql.NullInt64{}))
+	for _, target := range []string{"BOOLEAN", "BOOL", "BOOL(0)"} {
+		require.True(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, target, CDCSinkType_MO, sql.NullInt64{}))
+		require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_int8)}, target, CDCSinkType_MO, sql.NullInt64{}))
+	}
+	for _, source := range []plan.Type{
+		{Id: int32(types.T_float32), Width: 5, Scale: 2},
+		{Id: int32(types.T_float64), Width: 5, Scale: 0},
+		{Id: int32(types.T_float32), Width: 5, Scale: -1},
+	} {
+		scale := sql.NullInt64{Int64: int64(source.Scale), Valid: source.Scale >= 0}
+		canonical := plan2.FormatColType(source)
+		name := "float"
+		if types.T(source.Id) == types.T_float64 {
+			name = "double"
+		}
+		for _, target := range []string{canonical, fmt.Sprintf("%s(5)", name)} {
+			require.True(t, cdcTargetColumnTypeMatches(source, target, CDCSinkType_MO, scale))
+			require.False(t, cdcTargetColumnTypeMatches(source, target, CDCSinkType_MO, sql.NullInt64{Int64: 3, Valid: true}))
+		}
+		require.False(t, cdcTargetColumnTypeMatches(source, fmt.Sprintf("%s(6,2)", name), CDCSinkType_MO, scale))
+	}
+
+	for _, tc := range []struct {
+		source plan.Type
+		target string
+	}{
+		{plan.Type{Id: int32(types.T_enum), Enumvalues: `UP,O'Brien,Back\slash`}, `enum('UP','O''Brien','Back\\slash')`},
+		{plan.Type{Id: int32(types.T_uint64), Enumvalues: `UP,O'Brien,Back\slash`}, `set('UP','O''Brien','Back\\slash')`},
+	} {
+		require.True(t, cdcTargetColumnTypeMatches(tc.source, tc.target, CDCSinkType_MO, sql.NullInt64{}))
+		require.False(t, cdcTargetColumnTypeMatches(tc.source, strings.Replace(tc.target, "'UP'", "'up'", 1), CDCSinkType_MO, sql.NullInt64{}))
+		require.False(t, cdcTargetColumnTypeMatches(tc.source, strings.Replace(tc.target, "Back", "back", 1), CDCSinkType_MO, sql.NullInt64{}))
+	}
+
 	require.True(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MySQL, sql.NullInt64{}))
 	require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MO, sql.NullInt64{}))
 }

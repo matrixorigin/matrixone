@@ -70,10 +70,10 @@ null  ¦  null
 create table timestamp_pair_ctas as select timestamp(d, t6) as pair_value, timestamp('2024-01-15', '12:30:00') as literal_fsp0, timestamp('2024-01-15', '12:30:00.1') as literal_fsp1, timestamp('2024-01-15', '12:30:00.123456') as literal_fsp6 from timestamp_pair_src;
 select column_name, column_type, is_nullable from information_schema.columns where table_schema = 'timestamp_pair_test' and table_name = 'timestamp_pair_ctas' order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  𝄀
-pair_value  ¦  DATETIME(6)  ¦  YES  𝄀
-literal_fsp0  ¦  DATETIME(0)  ¦  YES  𝄀
-literal_fsp1  ¦  DATETIME(1)  ¦  YES  𝄀
-literal_fsp6  ¦  DATETIME(6)  ¦  YES
+pair_value  ¦  datetime(6)  ¦  YES  𝄀
+literal_fsp0  ¦  datetime  ¦  YES  𝄀
+literal_fsp1  ¦  datetime(1)  ¦  YES  𝄀
+literal_fsp6  ¦  datetime(6)  ¦  YES
 drop table timestamp_pair_ctas;
 drop table timestamp_pair_src;
 drop database timestamp_pair_test;

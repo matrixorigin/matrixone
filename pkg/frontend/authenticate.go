@@ -3831,6 +3831,9 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 		credentials = formatCredentials(cs.Credentials)
 
 		StageStatus = "in_use"
+		if cs.Status.Exist {
+			StageStatus = cs.Status.Option.String()
+		}
 
 		if cs.Comment.Exist {
 			comment = cs.Comment.Comment
@@ -9401,7 +9404,15 @@ func authenticateCreateTableAsSelectSourcePrivilege(
 
 	// Rebuild source-select plan and reuse normal table-scan privilege extraction,
 	// instead of manually parsing AST table references.
-	sourcePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st.AsSource)
+	compilerContext := ses.GetTxnCompileCtx()
+	originalContext := compilerContext.GetContext()
+	planningContext := originalContext
+	if planningContext == nil {
+		planningContext = ctx
+	}
+	compilerContext.SetContext(plan2.WithJSONMergeWarningOrigin(planningContext, plan2.JSONMergeWarningInternalReprepare))
+	defer compilerContext.SetContext(originalContext)
+	sourcePlan, err := buildPlan(ctx, ses, compilerContext, plan2.DeepCopySelect(st.AsSource))
 	if err != nil {
 		return false, stats, err
 	}

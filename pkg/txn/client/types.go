@@ -224,6 +224,12 @@ type RunSQLAdmissionOperator interface {
 	TryEnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error)
 }
 
+// DeferredTxnRollback seals a doomed operator immediately and uses its existing
+// SQL-drain owner for cleanup. Nested execution must not wait on its own token.
+type DeferredTxnRollback interface {
+	RollbackAfterRunningSQL(error)
+}
+
 // AutoIncrEpochFenceCommitter is an additive transaction capability used by
 // epoch-aware workspaces to require the V7-only terminal commit method.
 type AutoIncrEpochFenceCommitter interface {
@@ -382,6 +388,12 @@ type Workspace interface {
 // I/O, or call back into the transaction operator.
 type TerminalTableDeletionView interface {
 	IsTableDeletedAtTxnClose(physicalTableID uint64) bool
+}
+
+// TableCreationView exposes the workspace's rollback-aware creation journal.
+// A physical ID remains unpublished only while its creation belongs to this owner.
+type TableCreationView interface {
+	IsTableCreatedInTxn(tableID uint64) bool
 }
 
 // TxnOverview txn overview include meta and status

@@ -202,9 +202,9 @@ Project
               ->  Table Function on fulltext_index_scan
 desc src;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT(64)    NO    PRI    null        
-body    VARCHAR(16383)    YES    MUL    null        
-title    TEXT    YES        null        
+id    bigint    NO    PRI    null        
+body    varchar(16383)    YES    MUL    null        
+title    text    YES        null        
 show create table src;
 Table    Create Table
 src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(16383) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`body`,`title`) WITH PARSER gojieba,\n FULLTEXT `ftidx2`(`body`) WITH PARSER gojieba\n)

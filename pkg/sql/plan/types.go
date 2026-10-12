@@ -900,6 +900,9 @@ type BindContext struct {
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
 	cteName string
+	// cteDatabase is the exposed namespace of a view or rewritten table.
+	// It belongs to this relation root; ordinary CTEs/subqueries leave it empty.
+	cteDatabase string
 	//cte in binding or bound already
 	boundCtes map[string]*CTERef
 	headings  []string

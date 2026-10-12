@@ -617,24 +617,19 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 
 func renderColumnSQLType(col TableColumn) string {
 	sqlType := strings.TrimSpace(col.SQLType)
-	upperType := strings.ToUpper(sqlType)
-	enumValues := strings.TrimSpace(col.EnumValues)
-	if enumValues == "" {
-		return sqlType
-	}
-	switch {
-	case upperType == "JSON":
-		if arrayType := renderTypedArraySQLType(enumValues); arrayType != "" {
+	switch strings.ToUpper(sqlType) {
+	case "JSON":
+		if arrayType := renderTypedArraySQLType(col.EnumValues); arrayType != "" {
 			return arrayType
 		}
-		return sqlType
-	case upperType == "ENUM":
-		return renderEnumSetSQLType("ENUM", enumValues)
-	case upperType == "SET", upperType == "BIGINT UNSIGNED":
-		return renderEnumSetSQLType("SET", enumValues)
-	default:
-		return sqlType
+	case "ENUM":
+		return renderEnumSetSQLType("ENUM", strings.Split(col.EnumValues, ","))
+	case "SET", "BIGINT UNSIGNED":
+		if values := types.DecodeSetValues(col.EnumValues); len(values) != 0 {
+			return renderEnumSetSQLType("SET", values)
+		}
 	}
+	return sqlType
 }
 
 func renderTypedArraySQLType(enumValues string) string {
@@ -645,81 +640,14 @@ func renderTypedArraySQLType(enumValues string) string {
 	return "ARRAY" + values[len("array"):]
 }
 
-func renderEnumSetSQLType(kind string, enumValues string) string {
-	values := strings.TrimSpace(enumValues)
-	if values == "" {
-		return kind
+// EnumValues contains raw catalog members, not SQL literals or a type expression.
+// Quote every member without trimming so replay keeps empty members and whitespace.
+func renderEnumSetSQLType(kind string, values []string) string {
+	quoted := make([]string, len(values))
+	for i, value := range values {
+		quoted[i] = quoteDDLString(value)
 	}
-	upper := strings.ToUpper(values)
-	if strings.HasPrefix(upper, kind+"(") {
-		return values
-	}
-	if strings.HasPrefix(values, "(") {
-		return kind + renderEnumSetValueList(values)
-	}
-	return kind + renderEnumSetValueList(values)
-}
-
-func renderEnumSetValueList(values string) string {
-	parts := splitEnumSetValues(stripEnumSetValueParens(values))
-	quoted := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		if isQuotedSQLString(part) {
-			quoted = append(quoted, part)
-			continue
-		}
-		quoted = append(quoted, quoteDDLString(part))
-	}
-	return "(" + strings.Join(quoted, ",") + ")"
-}
-
-func stripEnumSetValueParens(values string) string {
-	values = strings.TrimSpace(values)
-	if len(values) >= 2 && values[0] == '(' && values[len(values)-1] == ')' {
-		return strings.TrimSpace(values[1 : len(values)-1])
-	}
-	return values
-}
-
-func splitEnumSetValues(values string) []string {
-	var parts []string
-	start := 0
-	inString := byte(0)
-	for i := 0; i < len(values); i++ {
-		ch := values[i]
-		if inString != 0 {
-			if ch == '\\' && i+1 < len(values) {
-				i++
-				continue
-			}
-			if ch == inString {
-				if i+1 < len(values) && values[i+1] == inString {
-					i++
-					continue
-				}
-				inString = 0
-			}
-			continue
-		}
-		switch ch {
-		case '\'', '"':
-			inString = ch
-		case ',':
-			parts = append(parts, values[start:i])
-			start = i + 1
-		}
-	}
-	parts = append(parts, values[start:])
-	return parts
-}
-
-func isQuotedSQLString(s string) bool {
-	s = strings.TrimSpace(s)
-	return len(s) >= 2 && ((s[0] == '\'' && s[len(s)-1] == '\'') || (s[0] == '"' && s[len(s)-1] == '"'))
+	return kind + "(" + strings.Join(quoted, ",") + ")"
 }
 
 func appendColumnDDLAttributes(sb *strings.Builder, col TableColumn) {

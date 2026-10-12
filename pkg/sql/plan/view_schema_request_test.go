@@ -480,6 +480,7 @@ func TestViewSchemaRequestSharedProjectionMemoMatchesCacheOff(t *testing.T) {
 		name, middleName, middleSQL, firstSQL, secondSQL string
 		catalogName                                      string
 	}{
+		{"database qualified projection", "middle_v", "select tpch.leaf_v.k, tpch.leaf_v.label from tpch.leaf_v", "select tpch.middle_v.k, tpch.middle_v.label from tpch.middle_v", "select tpch.middle_v.k, tpch.middle_v.label from tpch.middle_v", ""},
 		{"explicit projection", "middle_v", "select k, label from leaf_v", "select k, label from middle_v", "select k, label from middle_v", ""},
 		{"renamed projection", "middle_v", "select leaf_v.k as key_value, leaf_v.label from leaf_v", "select key_value, label from middle_v", "select middle_v.key_value, middle_v.label from middle_v", ""},
 		{"reference name differs from catalog", "mixed", "select k, label from leaf_v", "select k, label from mixed", "select mixed.k as key_value, mixed.label as Label from mixed", "Mixed"},
@@ -781,7 +782,7 @@ func TestViewSchemaRequestSubscriptionPublisherIsNotCreationDatabase(t *testing.
 				for _, disabled := range []bool{false, true} {
 					t.Run(fmt.Sprintf("nested=%t/creation=%q/shadow=%t/memoOff=%t", nested, creationDatabase, shadow, disabled), func(t *testing.T) {
 						f := newViewSchemaTestFixture(t)
-						published := f.addDefinition(t, "source_v", "create view pub.source_v as select n_name as label from pub.nation")
+						published := f.addDefinition(t, "source_v", "create view pub.source_v as select pub.nation.n_name as label from pub.nation")
 						published.DbName, published.DbId = "pub", 8
 						var data ViewData
 						require.NoError(t, json.Unmarshal([]byte(published.ViewSql.View), &data))

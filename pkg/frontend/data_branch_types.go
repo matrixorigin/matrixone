@@ -316,6 +316,8 @@ type retBatchList struct {
 }
 
 type compositeOption struct {
+	// onlineApply orders transaction probes and retry-capable MERGE/PICK writes.
+	onlineApply           bool
 	conflictOpt           *tree.ConflictOpt
 	outputSQL             bool
 	expandUpdate          bool

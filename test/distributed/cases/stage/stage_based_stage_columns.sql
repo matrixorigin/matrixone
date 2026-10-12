@@ -20,8 +20,8 @@ drop stage if exists stage01;
 create stage stage01 url = 'file:///$resources/into_outfile';
 drop stage if exists substage01;
 create stage substage01 url = 'stage://stage01/stage/';
--- @ignore:0,2,5
-select * from mo_catalog.mo_stages;
+-- Compare stable attributes: ignored stage IDs still affect mo-tester row sorting.
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
 select col1, col3 from t1 into outfile 'stage://substage01/local_stage_t001.csv';
@@ -54,8 +54,7 @@ drop stage if exists stage02;
 create stage stage02 url = 'file:///$resources/into_outfile';
 drop stage if exists substage02;
 create stage substage02 url = 'stage://stage02/stage';
--- @ignore:0,2,5
-select * from mo_catalog.mo_stages;
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
 select col3, col4 from t2 into outfile 'stage://substage02/local_stage_t002.csv';
@@ -88,8 +87,7 @@ drop stage if exists stage03;
 create stage stage03 url = 'file:///$resources/into_outfile';
 drop stage if exists substage03;
 create stage substage03 url = 'stage://stage03/stage';
--- @ignore:0,2,5
-select * from mo_catalog.mo_stages;
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
 select col2, col3 from t3 into outfile 'stage://substage03/local_stage_t003.csv';
@@ -126,8 +124,7 @@ drop stage if exists stage04;
 create stage stage04 url = 'file:///$resources/into_outfile';
 drop stage if exists substage04;
 create stage substage04 url = 'stage://stage04/stage';
--- @ignore:0,2,5
-select * from mo_catalog.mo_stages;
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
 select col2, col4, col6, col8 from t4 into outfile 'stage://substage04/local_stage_t004.csv';
@@ -162,8 +159,7 @@ drop stage if exists stage05;
 create stage stage05 url = 'file:///$resources/into_outfile';
 drop stage if exists substage05;
 create stage substage05 url = 'stage://stage05/stage';
--- @ignore:0,2,5
-select * from mo_catalog.mo_stages;
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
 select col1 from t5 into outfile 'stage://substage05/local_stage_t005.csv';
@@ -189,8 +185,7 @@ drop stage if exists stage06;
 create stage stage06 url = 'file:///$resources/into_outfile';
 drop stage if exists substage06;
 create stage substage06 url = 'stage://stage06/stage';
--- @ignore:0,2,5
-select * from mo_catalog.mo_stages;
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
 select col2 from t6 into outfile 'stage://substage06/local_stage_t006.csv' fields terminated by ',' enclosed by '' lines terminated by '\n' header 'false';
@@ -214,8 +209,7 @@ drop stage if exists stage07;
 create stage stage07 url = 'file:///$resources/into_outfile';
 drop stage if exists substage07;
 create stage substage07 url = 'stage://stage07/stage';
--- @ignore:0,2,5
-select * from mo_catalog.mo_stages;
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
 select col1 from t7 into outfile 'stage://substage07/local_stage_t007.csv';
@@ -239,8 +233,7 @@ drop stage if exists stage09;
 create stage stage09 url = 'file:///$resources/into_outfile' comment = '这是一个基于file system创建的stage';
 drop stage if exists substage09;
 create stage substage09 url = 'stage://stage09/stage';
--- @ignore:0,2,5
-select * from mo_catalog.mo_stages;
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
 select col1, col3 from t9 into outfile 'stage://substage09/local_stage_t009.csv';
@@ -251,8 +244,7 @@ select * from t9;
 show create table t9;
 drop table t9;
 drop stage stage09;
--- @ignore:0,2,5
-select * from mo_catalog.mo_stages;
+select stage_name, stage_credentials, stage_status, comment from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
 drop stage substage09;

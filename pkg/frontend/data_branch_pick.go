@@ -158,9 +158,8 @@ func pickMergeDiffs(
 	ses *Session,
 	bh BackgroundExec,
 	stmt *tree.DataBranchPick,
-	dagInfo branchMetaInfo,
 	tblStuff tableStuff,
-	retCh chan batchWithKind,
+	produce func(emitFunc) error,
 ) (err error) {
 
 	var (
@@ -169,7 +168,6 @@ func pickMergeDiffs(
 
 		insertIntoVals = acquireBuffer(tblStuff.bufPool)
 		deleteFromVals = acquireBuffer(tblStuff.bufPool)
-		firstErr       error
 		tmpValsBuffer  = acquireBuffer(tblStuff.bufPool)
 	)
 
@@ -210,42 +208,23 @@ func pickMergeDiffs(
 		}
 	}()
 
-	for wrapped := range retCh {
-		if firstErr != nil || ctx.Err() != nil {
-			if firstErr == nil {
-				firstErr = ctx.Err()
-			}
-			cancel()
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-			continue
+	if err = produce(func(wrapped batchWithKind) (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return false, err
 		}
-
-		if err = appendPickedBatchRows(
-			ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
-			stmt.ConflictOpt, skipSet, acceptedDirectUpdateKeys,
-		); err != nil {
-			firstErr = err
-			cancel()
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-			continue
+		if err := appendPickedBatchRows(ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
+			stmt.ConflictOpt, skipSet, acceptedDirectUpdateKeys); err != nil {
+			return false, err
 		}
-
 		tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+		return false, nil
+	}); err != nil {
+		return err
 	}
-	if firstErr == nil && len(acceptedDirectUpdateKeys) != 0 {
-		firstErr = moerr.NewInternalErrorNoCtx("Data Branch PICK accepted conflict is missing its source row")
+	if len(acceptedDirectUpdateKeys) != 0 {
+		return moerr.NewInternalErrorNoCtx("Data Branch PICK accepted conflict is missing its source row")
 	}
-
-	if err = appender.flushAll(); err != nil {
-		if firstErr == nil {
-			firstErr = err
-		}
-	}
-
-	if firstErr != nil {
-		return firstErr
-	}
-	return
+	return appender.flushAll()
 }
 
 // appendPickedBatchRows applies the user's conflict semantics to each row

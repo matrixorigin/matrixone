@@ -238,9 +238,9 @@ Project
               ->  Table Function on fulltext_index_scan
 desc src;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT(64)    NO    PRI    null        
-body    VARCHAR(16383)    YES    MUL    null        
-title    TEXT    YES        null        
+id    bigint    NO    PRI    null        
+body    varchar(16383)    YES    MUL    null        
+title    text    YES        null        
 show create table src;
 Table    Create Table
 src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(16383) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`body`,`title`),\n FULLTEXT `ftidx2`(`body`)\n)
@@ -293,9 +293,9 @@ id    json1    json2
 1    {"a": 2, "b": "中文學習教材"}    ["apple", "orange", "banana", "指引"]
 desc src;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT(64)    NO    PRI    null        
-json1    JSON(0)    YES    MUL    null        
-json2    JSON(0)    YES        null        
+id    bigint    NO    PRI    null        
+json1    json    YES    MUL    null        
+json2    json    YES        null        
 show create table src;
 Table    Create Table
 src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`json1`) WITH PARSER json,\n FULLTEXT `ftidx2`(`json1`,`json2`) WITH PARSER json\n)
@@ -321,9 +321,9 @@ id    json1    json2
 1    {"a":2, "b":"中文學習教材"}    ["apple", "orange", "banana", "指引"]
 desc src;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT(64)    NO    PRI    null        
-json1    TEXT    YES    MUL    null        
-json2    VARCHAR(16383)    YES        null        
+id    bigint    NO    PRI    null        
+json1    text    YES    MUL    null        
+json2    varchar(16383)    YES        null        
 show create table src;
 Table    Create Table
 src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` text DEFAULT NULL,\n  `json2` varchar(16383) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`json1`) WITH PARSER json,\n FULLTEXT `ftidx2`(`json1`,`json2`) WITH PARSER json\n)
@@ -435,9 +435,9 @@ count(*)
 0
 desc src;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT(64)    NO    PRI    null        
-body    VARCHAR(16383)    YES        null        
-title    TEXT    YES    MUL    null        
+id    bigint    NO    PRI    null        
+body    varchar(16383)    YES        null        
+title    text    YES    MUL    null        
 show create table src;
 Table    Create Table
 src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(16383) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`title`,`body`)\n)
@@ -454,10 +454,10 @@ id2    2    blue    t3    0.09061906
 id3    3    blue red    t4    0.09061906
 desc src2;
 Field    Type    Null    Key    Default    Extra    Comment
-id1    VARCHAR(16383)    NO    PRI    null        
-id2    BIGINT(64)    NO    PRI    null        
-body    CHAR(128)    YES    MUL    null        
-title    TEXT    YES        null        
+id1    varchar(16383)    NO    PRI    null        
+id2    bigint    NO    PRI    null        
+body    char(128)    YES    MUL    null        
+title    text    YES        null        
 show create table src2;
 Table    Create Table
 src2    CREATE TABLE `src2` (\n  `id1` varchar(16383) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT (`body`,`title`)\n)
@@ -483,9 +483,9 @@ id    json1    json2
 update src set json1='{"c":"update json"}' where id=0;
 desc src;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT(64)    NO    PRI    null        
-json1    JSON(0)    YES    MUL    null        
-json2    JSON(0)    YES        null        
+id    bigint    NO    PRI    null        
+json1    json    YES    MUL    null        
+json2    json    YES        null        
 show create table src;
 Table    Create Table
 src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`json1`) WITH PARSER json,\n FULLTEXT `ftidx2`(`json1`,`json2`) WITH PARSER json\n)
@@ -514,9 +514,9 @@ id    json1    json2
 0    {"c":"update json"}    {"d": "happy birthday", "f":"winter"}
 desc src;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT(64)    NO    PRI    null        
-json1    TEXT    YES    MUL    null        
-json2    VARCHAR(16383)    YES        null        
+id    bigint    NO    PRI    null        
+json1    text    YES    MUL    null        
+json2    varchar(16383)    YES        null        
 show create table src;
 Table    Create Table
 src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` text DEFAULT NULL,\n  `json2` varchar(16383) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`json1`) WITH PARSER json,\n FULLTEXT `ftidx2`(`json1`,`json2`) WITH PARSER json\n)

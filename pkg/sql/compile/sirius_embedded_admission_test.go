@@ -109,6 +109,34 @@ func TestEmbeddedSiriusAdmissionBindsWithoutStartingReaders(t *testing.T) {
 		}
 		require.Zero(t, eng.buildBlockReadersCalls)
 	}
+	t.Run("shared input occurrences", func(t *testing.T) {
+		shared := &planpb.Query{StmtType: planpb.Query_SELECT, Headings: []string{"left", "right"}, Steps: []int32{1, 4}, Nodes: []*planpb.Node{
+			query.Nodes[0],
+			{NodeId: 1, NodeType: planpb.Node_SINK, Children: []int32{0}},
+			{NodeId: 2, NodeType: planpb.Node_SINK_SCAN, SourceStep: []int32{0}},
+			{NodeId: 3, NodeType: planpb.Node_SINK_SCAN, SourceStep: []int32{0}},
+			{NodeId: 4, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER, Children: []int32{2, 3}},
+		}}
+		sharedPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: shared}}
+		backend.request = SiriusPrepareRequest{}
+		offloaded, err := c.compileEmbeddedSiriusRead(ctx, sharedPlan, runtime)
+		require.NoError(t, err)
+		require.True(t, offloaded)
+		require.Len(t, backend.request.Reads, 2)
+		for i, read := range backend.request.Reads {
+			require.Equal(t, uint64(i+1), read.BindingID)
+			require.NotNil(t, read.Producer)
+			require.Equal(t, "t", read.Table)
+			require.Equal(t, int32(types.T_decimal256), read.Columns[0].Type.Id)
+		}
+		require.Zero(t, eng.buildBlockReadersCalls)
+		require.Equal(t, []int32{1, 4}, shared.Steps)
+		require.Len(t, shared.Nodes, 5)
+		var sharedWire spb.Plan
+		require.NoError(t, proto.Unmarshal(backend.request.Plan, &sharedWire))
+		require.Len(t, sharedWire.Relations, 1)
+		c.siriusRead = nil
+	})
 	backend.err = errors.New("native prepare rejected")
 	offloaded, err = c.compileEmbeddedSiriusRead(ctx, plan, runtime)
 	require.ErrorIs(t, err, backend.err)
