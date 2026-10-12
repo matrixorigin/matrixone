@@ -1,6 +1,6 @@
 # Public Sirius acceptance campaign
 
-Design version: 3. Owners: MatrixOne public SQL, compile/CN evidence and
+Design version: 4. Owners: MatrixOne public SQL, compile/CN evidence and
 `optools` campaign tooling. Tracks MO #28968 and parent #28966.
 
 The user approved this design before implementation on 2026-10-09 and selected
@@ -10,6 +10,27 @@ that merge. Sirius #30 merged as 955b6881 on 2026-10-11; D now pins that merged
 native source for the guarded release SDK. The user approved this
 implementation revision on 2026-10-11 after selecting one complete D PR and
 separate allocation profiling without a native observability prerequisite. E/F and Docker changes are excluded.
+
+## Approved execution-profile optimization (2026-10-13)
+
+The owner approved the focused performance plan before implementation. This
+increment makes the owned campaign's Go CPU budget explicit and records pinned
+allocation granularity; production backend and service defaults do not change.
+Both `serve` and `freeze` require positive `--gomaxprocs` and accept
+`--host-block-bytes` of 65536 or 1048576, defaulting to 65536. New provenance
+records `config.gomaxprocs` and `config.native_host_block_bytes`. `run` validates
+the frozen profile before starting services and launches native and embedded
+routes with the same frozen budget, independently of its ambient environment.
+Historical captures retain their actual settings and controller identity;
+new runs require refrozen provenance. Runner/result schema version 2 is unchanged.
+
+The current-host qualification profile is 16 Go CPUs and 64 KiB host blocks.
+Compare code revisions at identical settings; profile/kernel observations are
+separate from uninstrumented timing. Canonical SF1/SF10 correctness, streams
+1/2/4, bounded input/results, cleanup and GPU evidence remain mandatory. Repeat
+pinned-pool controls at the new block size, retain the 5% full-suite regression
+and 10% numeric gates, and do not infer acceptance from the targeted diagnostics.
+Q15 shared-CTE reuse, Q13 join changes and default cutover require separate work.
 
 ## Contract and choice
 
