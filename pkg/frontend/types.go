@@ -1972,6 +1972,9 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 	} else {
 		ses.sesSysVars.Set(canonicalName, val)
 	}
+	if err == nil && name == "mo_sirius_campaign_evidence" {
+		ses.campaignEvidenceEnabled.Store(val.(int8) != 0)
+	}
 	if err == nil && name == "sql_mode" {
 		ses.updateSqlModeNoAutoValueOnZero(val)
 	}

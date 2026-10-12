@@ -1032,16 +1032,6 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 
 			enumVlaue, err := types.ParseEnumIndex(typeEnumVal, indexVal)
 			if err != nil {
-				// Ordinal zero is MySQL's ENUM error member.  INSERT IGNORE can
-				// store it for an invalid label and it is displayed as the empty
-				// string, regardless of whether the declaration also has an empty
-				// member at a non-zero ordinal.
-				if indexVal == 0 {
-					if err = rs.AppendBytes([]byte{}, false); err != nil {
-						return err
-					}
-					continue
-				}
 				return err
 			}
 
@@ -1166,13 +1156,12 @@ func (index *enumValueIndex) parse(value string) (types.Enum, error) {
 
 	num, err := strconv.ParseUint(value, 0, 64)
 	if err == nil {
-		number := uint16(num)
-		if number == 0 || int(number) > len(index.values) {
+		if num == 0 || num > uint64(len(index.values)) {
 			return 0, moerr.NewInternalErrorNoCtxf(
 				"convert to MySQL enum failed: number %d overflow enum boundary [1, %d]",
-				number, len(index.values))
+				num, len(index.values))
 		}
-		return types.Enum(number), nil
+		return types.Enum(num), nil
 	}
 
 	return 0, moerr.NewInternalErrorNoCtxf(
@@ -1196,9 +1185,13 @@ func enumEqualFoldKey(value string) string {
 // enum("a","b","c") -> CastIndexValueToIndex(1) -> 1
 // CastIndexValueToIndex returns enum type index according to the index value
 func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return castIntegerToEnum[uint16](ivecs, result, proc, length, selectList)
+}
+
+func castIntegerToEnum[T uint16 | uint64 | int64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
-	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
+	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
@@ -1211,7 +1204,12 @@ func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultW
 			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
 			var index types.Enum
 
-			index, err := types.ParseEnumValue(typeEnumVal, enumValueIndex)
+			var err error
+			if enumValueIndex < 0 || uint64(enumValueIndex) > uint64(types.MaxEnumLen) {
+				err = moerr.NewInvalidInputf(proc.Ctx, "invalid ENUM index %v", enumValueIndex)
+			} else {
+				index, err = types.ParseEnumValue(typeEnumVal, uint16(enumValueIndex))
+			}
 			if err != nil {
 				if !statementIgnore(proc) {
 					return err
@@ -1299,21 +1297,19 @@ func statementIgnore(proc *process.Process) bool {
 }
 
 func setMemberBitmap(definition string) uint64 {
-	var bitmap uint64
-	for bit := uint(0); bit < 64; bit++ {
-		member := uint64(1) << bit
-		if _, err := types.ParseSetValue(definition, member); err == nil {
-			bitmap |= member
-		}
-	}
+	bitmap, _ := types.SetValidBitmap(definition)
 	return bitmap
 }
 
 // set("a","b","c") -> CastSetIndexValueToIndex(3) -> 3
 func CastSetIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return castIntegerToSet[uint64](ivecs, result, proc, length, selectList)
+}
+
+func castIntegerToSet[T uint64 | int64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint64](result)
 	typeSets := vector.GenerateFunctionStrParameter(ivecs[0])
-	setIndexValues := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[1])
+	setIndexValues := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		typeSet, typeSetNull := typeSets.GetStrValue(i)
@@ -1325,13 +1321,19 @@ func CastSetIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResu
 			continue
 		}
 
-		index, err := types.ParseSetValue(functionUtil.QuickBytesToStr(typeSet), setIndexValue)
+		var index uint64
+		var err error
+		if setIndexValue < 0 {
+			err = moerr.NewInvalidInputf(proc.Ctx, "invalid SET bitmap %v", setIndexValue)
+		} else {
+			index, err = types.ParseSetValue(functionUtil.QuickBytesToStr(typeSet), uint64(setIndexValue))
+		}
 		if err != nil {
 			if !statementIgnore(proc) {
 				return err
 			}
 			// Numeric SET input keeps only bits represented by declared members.
-			index = setIndexValue & setMemberBitmap(functionUtil.QuickBytesToStr(typeSet))
+			index = uint64(setIndexValue) & setMemberBitmap(functionUtil.QuickBytesToStr(typeSet))
 		}
 		if err = rs.Append(index, false); err != nil {
 			return err

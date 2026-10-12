@@ -1912,7 +1912,7 @@ func buildNotNullColumnVal(col *ColDef) string {
 		defaultValue = "'{}'"
 	} else if isEnumPlanType(&col.Typ) {
 		enumvalues := strings.Split(col.Typ.Enumvalues, ",")
-		defaultValue = enumvalues[0]
+		defaultValue = "'" + formatStrInSingleQuotes(enumvalues[0]) + "'"
 	} else if types.T(col.Typ.Id).IsArrayRelate() {
 		// IsArrayRelate covers all six vector types. Enumerating only f32/f64
 		// here made ALTER TABLE ... ADD v VECF16(n) NOT NULL fall through to

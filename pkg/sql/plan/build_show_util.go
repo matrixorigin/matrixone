@@ -1269,6 +1269,9 @@ func formatColTypeForSQLMode(colType plan.Type, sqlMode string) string {
 			name = "SET"
 		}
 		elements := strings.Split(colType.GetEnumvalues(), ",")
+		if isSetPlanType(&colType) {
+			elements = types.DecodeSetValues(colType.Enumvalues)
+		}
 		for i := range elements {
 			elements[i] = formatStrLitForSQLMode(elements[i], sqlMode)
 		}
