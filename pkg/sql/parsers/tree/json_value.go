@@ -44,21 +44,22 @@ type JsonValueSpec struct {
 }
 
 // SemanticNormalized returns the clause representation used for expression
-// identity. SQL/JSON's implicit response is NULL for both ON EMPTY and ON
-// ERROR, so spelling an explicit NULL response must not make an otherwise
-// identical expression compare differently in GROUP BY, ORDER BY, or view
-// dependency tracking.
+// identity. Within the clause-bearing contract, implicit responses are NULL.
+// Keep that contract distinct from a bare legacy call, whose path validation,
+// result width, and protocol requirements differ.
 func (s JsonValueSpec) SemanticNormalized() JsonValueSpec {
 	if s.Returning != nil && s.Returning.Charset != "" {
 		returning := *s.Returning
 		returning.Charset = strings.ToLower(returning.Charset)
 		s.Returning = &returning
 	}
-	if s.OnEmpty.Mode == JsonValueNullResponse {
-		s.OnEmpty = JsonValueResponse{}
-	}
-	if s.OnError.Mode == JsonValueNullResponse {
-		s.OnError = JsonValueResponse{}
+	if s.Returning != nil || s.OnEmpty.IsExplicit() || s.OnError.IsExplicit() {
+		if !s.OnEmpty.IsExplicit() {
+			s.OnEmpty = JsonValueResponse{Mode: JsonValueNullResponse}
+		}
+		if !s.OnError.IsExplicit() {
+			s.OnError = JsonValueResponse{Mode: JsonValueNullResponse}
+		}
 	}
 	return s
 }
@@ -81,7 +82,13 @@ func formatJsonValueExpr(ctx *FmtCtx, node *FuncExpr) {
 	// Preserve it when SQL is persisted or reparsed by CTAS/view planning.
 	if node.JsonValue.Returning != nil && node.JsonValue.Returning.Type != nil {
 		ctx.WriteString(" returning ")
-		node.JsonValue.Returning.Type.InternalType.Format(ctx)
+		target := node.JsonValue.Returning.Type.InternalType
+		// mysql_cast_type represents CHAR without a length as VARCHAR. Keep
+		// that internal type, but emit the spelling accepted by RETURNING.
+		if strings.EqualFold(target.FamilyString, "varchar") && target.DisplayWith == -1 {
+			target.FamilyString = "char"
+		}
+		target.Format(ctx)
 		if node.JsonValue.Returning.Charset != "" {
 			ctx.WriteString(" character set ")
 			ctx.WriteString(node.JsonValue.Returning.Charset)

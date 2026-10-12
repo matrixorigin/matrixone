@@ -158,3 +158,35 @@ prepare json_value_bad_default from 'select json_value(''"2024-01-02"'', ''$'' r
 prepare json_value_bad_default from 'select json_value(''"2024-01-02"'', ''$'' returning date default ''2024-01-02 12:34:56'' on error)';
 prepare json_value_bad_default from 'select json_value(''"12:34:56"'', ''$'' returning time(6) default ''2024-01-02 12:34:56'' on empty)';
 prepare json_value_bad_default from 'select json_value(''"12:34:56"'', ''$'' returning time(6) default ''2024-01-02 12:34:56'' on error)';
+
+-- Legacy and clause-bearing calls have different path/width contracts during reuse.
+set @json_value_saved_sql_mode = @@sql_mode;
+set sql_mode = '';
+drop view if exists json_value_reuse_view;
+drop table if exists json_value_reuse;
+create table json_value_reuse (doc json);
+insert into json_value_reuse values (null);
+select json_value(doc, '$[') as legacy_null, count(*) as n from json_value_reuse group by json_value(doc, '$[');
+select json_value(doc, '$[' null on error) as clause_null, count(*) as n from json_value_reuse group by json_value(doc, '$[');
+select count(*) as n from json_value_reuse group by json_value(doc, '$[') having json_value(doc, '$[' null on error) is null;
+delete from json_value_reuse;
+insert into json_value_reuse values (json_quote(repeat('x',512))), (json_quote(repeat('x',513)));
+select length(json_value(doc, '$')) as legacy_length, json_value(doc, '$' null on error) is null as clause_null, count(*) as n from json_value_reuse group by json_value(doc, '$') order by legacy_length;
+select length(json_value(doc, '$')) as legacy_length, count(*) as n from json_value_reuse group by json_value(doc, '$') having json_value(doc, '$' null on error) is null;
+select length(json_value(doc, '$' null on error)) as clause_length, count(*) as n from json_value_reuse group by json_value(doc, '$' null on empty) having json_value(doc, '$' null on empty null on error) is not null;
+create view json_value_reuse_view as select json_value(doc, '$' null on error) is null as clause_null, count(*) as n from json_value_reuse group by json_value(doc, '$');
+select clause_null, n from json_value_reuse_view order by clause_null;
+drop view json_value_reuse_view;
+drop table json_value_reuse;
+set sql_mode = @json_value_saved_sql_mode;
+
+-- Omitted CHAR length remains accepted after default/generated SQL is persisted.
+select json_value('"x"', '$' returning char) as omitted_char, json_value('"x"', '$' returning char(12)) as sized_char, json_value('"7"', '$' returning unsigned) as unsigned_control;
+drop table if exists json_value_char_origin;
+create table json_value_char_origin (id int primary key, doc json, d varchar(32) default (json_value('"seed"', '$' returning char)), g varchar(32) generated always as (json_value(doc, '$' returning char)) stored);
+insert into json_value_char_origin(id, doc) values (1, '"alpha"');
+select id, d, g from json_value_char_origin order by id;
+alter table json_value_char_origin add column extra int default 7, algorithm=copy;
+insert into json_value_char_origin(id, doc) values (2, '"beta"');
+select id, d, g, extra from json_value_char_origin order by id;
+drop table json_value_char_origin;

@@ -1307,6 +1307,8 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 		`create table jv_index (doc json, v bigint generated always as (json_value(doc, '$' returning signed)) stored, key v_idx(v))`,
 		`create view jv_view as select json_value('1', '$' returning signed) as v`,
 		`create view jv_fold as select 1 as v where 1 between json_value('1', '$' returning signed) and 2`,
+		`create view jv_mixed_group as select json_value('1', '$' null on error) as v, count(*) as n group by json_value('1', '$')`,
+		`create view jv_mixed_having as select count(*) as n group by json_value('1', '$') having json_value('1', '$' null on error) is not null`,
 	}
 	for _, state := range []struct {
 		name                string

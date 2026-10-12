@@ -57,13 +57,24 @@ func TestJSONValueClausesParseAndFormat(t *testing.T) {
 func TestJSONValueReturningTypesParse(t *testing.T) {
 	for _, returning := range []string{
 		"signed", "unsigned", "decimal(10,2)", "float", "double", "date",
-		"time(3)", "datetime(6)", "year", "char(12)",
-		"char(12) character set utf8mb4", "binary(12)", "json",
+		"time(3)", "datetime(6)", "year", "char", "char(12)",
+		"char character set utf8mb4", "char(12) character set utf8mb4", "binary(12)", "json",
 	} {
 		t.Run(returning, func(t *testing.T) {
-			_, err := ParseOne(context.Background(),
+			stmt, err := ParseOne(context.Background(),
 				"select json_value(doc, '$' returning "+returning+")", 1)
 			require.NoError(t, err)
+			defer stmt.Free()
+			formatted := tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithQuoteString(true))
+			reparsed, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err, formatted)
+			defer reparsed.Free()
+			require.Equal(t, formatted, tree.StringWithOpts(reparsed, dialect.MYSQL, tree.WithQuoteString(true)))
+			before := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.FuncExpr)
+			after := reparsed.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.FuncExpr)
+			if returning == "char" || returning == "char character set utf8mb4" || returning == "char(12)" || returning == "char(12) character set utf8mb4" {
+				require.Equal(t, before.JsonValue.Returning, after.JsonValue.Returning)
+			}
 		})
 	}
 }

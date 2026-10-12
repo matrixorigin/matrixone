@@ -135,6 +135,23 @@ func TestJSONValueProtocolGatePreservesLegacyPlans(t *testing.T) {
 	contract, err := bind(defines.MORPCVersion110, `select json_value('1', '$' returning unsigned)`)
 	require.NoError(t, err)
 	require.Len(t, contract.GetF().Args, 7)
+
+	for _, sql := range []string{
+		`select json_value('1', '$' null on error), count(*) group by json_value('1', '$')`,
+		`select count(*) group by json_value('1', '$') having json_value('1', '$' null on error) is not null`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
+			_, err = BuildPlan(compilerContext, stmt, false)
+			require.ErrorContains(t, err, "protocol version 110")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
+			_, err = BuildPlan(compilerContext, stmt, false)
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestJSONValueBindingRejectsInvalidUnusedDefault(t *testing.T) {
@@ -157,6 +174,7 @@ func TestJSONValueImplicitTypeSurvivesSQLRoundTrip(t *testing.T) {
 		charset uint8
 	}{
 		{`select json_value('{"a":[12]}', '$.a' default 'empty' on empty)`, types.T_varchar, 512, types.CharsetUTF8MB4Bin},
+		{`select json_value('"x"', '$' returning char)`, types.T_varchar, types.MaxVarcharLen, types.CharsetUTF8},
 		{`select json_value('{"a":[12]}', '$.a' returning char(12) character set utf8mb4 default 'empty' on empty default 'error' on error)`, types.T_char, 12, types.CharsetUTF8},
 	} {
 		sql := tc.sql
@@ -174,6 +192,34 @@ func TestJSONValueImplicitTypeSurvivesSQLRoundTrip(t *testing.T) {
 			sql = tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithQuoteString(true))
 			stmt.Free()
 		}
+	}
+
+	// Exercise the two production OriginString writers, then rebuild their
+	// stored expressions instead of only formatting a SELECT AST.
+	for _, target := range []string{"char", "char(12)", "unsigned"} {
+		t.Run("persisted "+target, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+			sql := `create table jv_origin (doc json, d varchar(32) default (json_value('"7"', '$' returning ` + target + `)), g varchar(32) generated always as (json_value(doc, '$' returning ` + target + `)) stored)`
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			cols := built.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			defaultOrigin := cols[1].GetDefault().GetOriginString()
+			generatedOrigin := cols[2].GetGeneratedCol().GetOriginString()
+			require.Contains(t, defaultOrigin, "returning "+target)
+			require.Contains(t, generatedOrigin, "returning "+target)
+			reparsed, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+				`create table jv_origin_reparsed (doc json, d varchar(32) default `+defaultOrigin+`, g varchar(32) generated always as (`+generatedOrigin+`) stored)`, 1)
+			require.NoError(t, err)
+			defer reparsed.Free()
+			rebound, err := BuildPlan(ctx, reparsed, false)
+			require.NoError(t, err)
+			reboundCols := rebound.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			require.Equal(t, cols[1].GetDefault(), reboundCols[1].GetDefault())
+			require.Equal(t, cols[2].GetGeneratedCol(), reboundCols[2].GetGeneratedCol())
+		})
 	}
 }
 
@@ -443,12 +489,23 @@ func TestJSONValueSemanticNormalizationAndClone(t *testing.T) {
 
 	implicit := parseExpr(`select json_value('1', '$')`)
 	explicitNull := parseExpr(`select json_value('1', '$' null on empty null on error)`)
-	require.Equal(t, semanticAstKey(implicit), semanticAstKey(explicitNull))
+	require.NotEqual(t, semanticAstKey(implicit), semanticAstKey(explicitNull))
+	for _, sql := range []string{
+		`select json_value('1', '$' null on empty)`,
+		`select json_value('1', '$' null on error)`,
+	} {
+		require.Equal(t, semanticAstKey(explicitNull), semanticAstKey(parseExpr(sql)))
+	}
+	returning := parseExpr(`select json_value('1', '$' returning char(12) character set UTF8MB4)`)
+	returningNull := parseExpr(`select json_value('1', '$' returning char(12) character set utf8mb4 null on empty null on error)`)
+	require.Equal(t, semanticAstKey(returning), semanticAstKey(returningNull))
+	defaultNull := parseExpr(`select json_value('1', '$' null on empty default 0 on error)`)
 	require.NotContains(t, tree.String(implicit, dialect.MYSQL), "returning")
 	require.Contains(t, tree.String(explicitNull, dialect.MYSQL), "null on empty null on error")
 
 	withDefault := parseExpr(`select json_value('1', '$' default 0 on error)`)
 	require.NotEqual(t, semanticAstKey(implicit), semanticAstKey(withDefault))
+	require.Equal(t, semanticAstKey(withDefault), semanticAstKey(defaultNull))
 
 	original := withDefault.(*tree.FuncExpr)
 	copyExpr := cloneTreeExpr(original).(*tree.FuncExpr)

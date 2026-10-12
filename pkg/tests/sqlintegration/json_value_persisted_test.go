@@ -240,6 +240,94 @@ func TestJSONValuePersistedPublication(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx, `select v from jv_view`).Scan(&value))
 		require.Equal(t, int64(1), value, "failed ALTER must preserve published view")
 
+		t.Run("legacy and contract expression reuse", func(t *testing.T) {
+			protocol, readFloor, authoring := admission.protocol.Load(), admission.readFloor.Load(), admission.authoring.Load()
+			defer func() {
+				admission.protocol.Store(protocol)
+				admission.readFloor.Store(readFloor)
+				admission.authoring.Store(authoring)
+			}()
+			var sqlMode string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@sql_mode").Scan(&sqlMode))
+			_, err := conn.ExecContext(ctx, "set sql_mode = ''")
+			require.NoError(t, err)
+			defer func() {
+				_, err := conn.ExecContext(ctx, "set sql_mode = ?", sqlMode)
+				require.NoError(t, err)
+			}()
+			_, err = conn.ExecContext(ctx, "create table jv_reuse(doc json)")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "insert into jv_reuse values (null)")
+			require.NoError(t, err)
+			var got sql.NullString
+			var count int64
+			require.NoError(t, conn.QueryRowContext(ctx,
+				`select json_value(doc, '$['), count(*) from jv_reuse group by json_value(doc, '$[')`).Scan(&got, &count))
+			require.False(t, got.Valid)
+			require.Equal(t, int64(1), count)
+			for _, query := range []string{
+				`select json_value(doc, '$[' null on error), count(*) from jv_reuse group by json_value(doc, '$[')`,
+				`select count(*) from jv_reuse group by json_value(doc, '$[') having json_value(doc, '$[' null on error) is null`,
+			} {
+				err := conn.QueryRowContext(ctx, query).Scan(&got, &count)
+				require.ErrorContains(t, err, "invalid path expression", query)
+			}
+			_, err = conn.ExecContext(ctx, "delete from jv_reuse")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "insert into jv_reuse values (json_quote(repeat('x',512))), (json_quote(repeat('x',513)))")
+			require.NoError(t, err)
+			for _, width := range []int{512, 513} {
+				query := fmt.Sprintf(`select json_value(doc, '$' null on error), count(*) from jv_reuse where length(json_value(doc, '$'))=%d group by json_value(doc, '$')`, width)
+				require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&got, &count))
+				require.Equal(t, int64(1), count)
+				require.Equal(t, width == 512, got.Valid)
+				if got.Valid {
+					require.Equal(t, strings.Repeat("x", width), got.String)
+				}
+			}
+			require.NoError(t, conn.QueryRowContext(ctx,
+				`select count(*) from jv_reuse group by json_value(doc, '$') having json_value(doc, '$' null on error) is null`).Scan(&count))
+			require.Equal(t, int64(1), count)
+			// Equivalent clause forms must still reuse a grouped expression.
+			require.NoError(t, conn.QueryRowContext(ctx,
+				`select json_value(doc, '$' null on error), count(*) from jv_reuse where length(json_value(doc, '$'))=512 group by json_value(doc, '$' null on empty) having json_value(doc, '$' null on empty null on error) is not null`).Scan(&got, &count))
+			require.Equal(t, strings.Repeat("x", 512), got.String)
+			require.Equal(t, int64(1), count)
+			views := []string{
+				`create view jv_reuse_projection as select json_value(doc, '$' null on error) as v, count(*) as n from jv_reuse group by json_value(doc, '$')`,
+				`create view jv_reuse_having as select count(*) as n from jv_reuse group by json_value(doc, '$') having json_value(doc, '$' null on error) is null`,
+			}
+			for _, state := range []struct{ protocol, authoring int64 }{
+				{defines.MORPCVersion109, defines.MORPCVersion109},
+				{defines.MORPCVersion110, defines.MORPCVersion109},
+			} {
+				admission.protocol.Store(state.protocol)
+				admission.readFloor.Store(state.protocol)
+				admission.authoring.Store(state.authoring)
+				for _, query := range views {
+					_, err := conn.ExecContext(ctx, query)
+					require.ErrorContains(t, err, "protocol version 110", query)
+					var published int
+					require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='json_value_publication' and relname in ('jv_reuse_projection','jv_reuse_having')").Scan(&published))
+					require.Zero(t, published, "rejected mixed-form views must not be published")
+				}
+			}
+			admission.protocol.Store(defines.MORPCVersion110)
+			admission.readFloor.Store(defines.MORPCVersion110)
+			admission.authoring.Store(defines.MORPCVersion110)
+			for _, query := range views {
+				_, err := conn.ExecContext(ctx, query)
+				require.NoError(t, err, query)
+			}
+			admission.authoring.Store(defines.MORPCVersion109)
+			require.NoError(t, conn.QueryRowContext(ctx, "select n from jv_reuse_projection where v is null").Scan(&count))
+			require.Equal(t, int64(1), count)
+			require.NoError(t, conn.QueryRowContext(ctx, "select n from jv_reuse_having").Scan(&count))
+			require.Equal(t, int64(1), count)
+			admission.protocol.Store(0)
+			admission.readFloor.Store(0)
+		})
+
 		// Restart this fixture's real CN and rebind from catalog metadata. This
 		// remains a single-binary test; mixed binaries and TN restart are QA gates.
 		restore()
@@ -250,17 +338,32 @@ func TestJSONValuePersistedPublication(t *testing.T) {
 		restarted, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/json_value_publication", cn.GetServiceConfig().CN.Frontend.Port))
 		require.NoError(t, err)
 		defer restarted.Close()
+		restartedConn, err := restarted.Conn(ctx)
+		require.NoError(t, err)
+		defer restartedConn.Close()
+		// Mixed legacy/contract grouping uses permissive SQL mode. Rebind the
+		// stored views under the same mode on this new, pinned connection.
+		var restartedSQLMode string
+		require.NoError(t, restartedConn.QueryRowContext(ctx, "select @@sql_mode").Scan(&restartedSQLMode))
+		_, err = restartedConn.ExecContext(ctx, "set sql_mode = ''")
+		require.NoError(t, err)
+		defer func() {
+			_, err := restartedConn.ExecContext(ctx, "set sql_mode = ?", restartedSQLMode)
+			require.NoError(t, err)
+		}()
 		for _, query := range []string{
 			`select v from jv_view`,
 			`select v from jv_fold`,
 			`select v from jv_generated force index(v_idx) where v=1`,
+			`select n from jv_reuse_projection where v is null`,
+			`select n from jv_reuse_having`,
 		} {
-			require.NoError(t, restarted.QueryRowContext(ctx, query).Scan(&value), query)
+			require.NoError(t, restartedConn.QueryRowContext(ctx, query).Scan(&value), query)
 			require.Equal(t, int64(1), value)
 		}
-		_, err = restarted.ExecContext(ctx, `insert into jv_generated(doc) values ('2')`)
+		_, err = restartedConn.ExecContext(ctx, `insert into jv_generated(doc) values ('2')`)
 		require.NoError(t, err)
-		require.NoError(t, restarted.QueryRowContext(ctx, `select v from jv_generated force index(v_idx) where v=2`).Scan(&value))
+		require.NoError(t, restartedConn.QueryRowContext(ctx, `select v from jv_generated force index(v_idx) where v=2`).Scan(&value))
 		require.Equal(t, int64(2), value)
 	})
 }
