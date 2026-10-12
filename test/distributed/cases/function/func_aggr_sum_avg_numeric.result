@@ -198,7 +198,7 @@ invalid input: "12x" is invalid numeric string
 SET @@sql_mode = @sum_avg_saved_mode;
 SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_avg_saved_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT SUM(s), AVG(s) FROM numeric_strings WHERE id = 6;
-SET @@sql_mode = @sum_avg_saved_mode;
 ➤ SUM(s)[8,53,31]  ¦  AVG(s)[8,53,31]  𝄀
 12.0  ¦  12.0
+SET @@sql_mode = @sum_avg_saved_mode;
 DROP DATABASE sum_avg_numeric;
