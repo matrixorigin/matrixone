@@ -40,7 +40,6 @@ func newPersistedPKCheckTable(t *testing.T, oid types.T, tombstone bool) (*txnTa
 	tbl, eng := newPrimaryKeyCheckTableForTest(t)
 	proc := tbl.proc.Load()
 	mp := proc.Mp()
-	t.Cleanup(func() { proc.GetFileService().Close(context.Background()) })
 	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
 	eng.fs, eng.mp = fs, mp

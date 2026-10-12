@@ -1242,7 +1242,7 @@ func TestClientConnHandshakePhases(t *testing.T) {
 			_, _ = remote.Write(response)
 		}()
 
-		require.ErrorContains(t, handleHandshakeRespForTest(client), "get collationName")
+		require.ErrorContains(t, handleHandshakeRespForTest(client), "unsupported handshake character set 0")
 		<-writeDone
 		require.NotNil(t, client.handshakePack)
 		require.False(t, allocator.CheckBalance())

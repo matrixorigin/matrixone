@@ -18,11 +18,13 @@ SELECT SUBSTRING_INDEX('www.mysql.com', '.', '-1');
 SELECT SUBSTRING_INDEX('www.mysql.com', '', '0');
 
 
+-- count 的有符号 INT64 转换先校验范围，越界必须报错，不饱和或回绕。
 select substring_index('xyz', 'abc', 9223372036854775808);
 select substring_index("aaa.bbb.ccc.ddd.eee",'.',18446744073709551613);
 select substring_index("aaa.bbb.ccc.ddd.eee",'.',-18446744073709551613);
-    
 
+
+-- 其它参数为 NULL 不取消 count 转换的范围校验；count 自身为 NULL 则传播 NULL。
 select substring_index(null, 'abc', 9223372036854775808);
 select substring_index('xyz', null, 9223372036854775808);
 select substring_index('xyz', 'abc', null);

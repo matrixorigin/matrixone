@@ -1,3 +1,5 @@
+set @edge_time_zone = @@time_zone;
+set time_zone = '+00:00';
 drop table if exists t_edge_boundary;
 create table t_edge_boundary (
 id int,
@@ -94,3 +96,4 @@ microsecond(timestampadd(microsecond, 999999, '2022-07-01 10:20:30.000000'))
 ;
 microsecond(date_add(2022-07-01 10:20:30.999999, interval 1 microsecond))    microsecond(date_sub(2022-07-01 10:20:30.000000, interval 1 microsecond))    microsecond(timestampadd(microsecond, 999999, 2022-07-01 10:20:30.000000))
 0    999999    999999
+set time_zone = @edge_time_zone;

@@ -1,0 +1,111 @@
+drop database if exists bit_integer_parameter_coercion;
+create database bit_integer_parameter_coercion;
+use bit_integer_parameter_coercion;
+create table sources(id int primary key,d1 decimal(4,1),d2 decimal(5,2),f double,b boolean);
+insert into sources values (1,1.4,1.40,1.4,true),(2,1.5,1.50,1.5,false),(3,1.9,1.90,1.9,null),(4,-1.5,-1.50,-1.5,null),(5,2.5,2.50,2.5,true),(6,null,null,null,null);
+select export_set(cast(1.4 as decimal(4,1)),'Y','N','',4),export_set(cast(1.40 as decimal(4,2)),'Y','N','',4),export_set(cast(1.400 as decimal(5,3)),'Y','N','',4);
+➤ export_set(cast(1.4 as decimal(4, 1)), Y, N, , 4)[12,64,0]  ¦  export_set(cast(1.40 as decimal(4, 2)), Y, N, , 4)[12,64,0]  ¦  export_set(cast(1.400 as decimal(5, 3)), Y, N, , 4)[12,64,0]  𝄀
+YNNN  ¦  YNNN  ¦  YNNN
+select id,export_set(d1,'Y','N','',4),export_set(d2,'Y','N','',4),export_set(f,'Y','N','',4),export_set(b,'Y','N','',4) from sources order by id;
+➤ id[4,32,0]  ¦  export_set(d1, Y, N, , 4)[12,64,0]  ¦  export_set(d2, Y, N, , 4)[12,64,0]  ¦  export_set(f, Y, N, , 4)[12,64,0]  ¦  export_set(b, Y, N, , 4)[12,64,0]  𝄀
+1  ¦  YNNN  ¦  YNNN  ¦  YNNN  ¦  YNNN  𝄀
+2  ¦  NYNN  ¦  NYNN  ¦  NYNN  ¦  NNNN  𝄀
+3  ¦  NYNN  ¦  NYNN  ¦  NYNN  ¦  null  𝄀
+4  ¦  NYYY  ¦  NYYY  ¦  NYYY  ¦  null  𝄀
+5  ¦  YYNN  ¦  YYNN  ¦  NYNN  ¦  YNNN  𝄀
+6  ¦  null  ¦  null  ¦  null  ¦  null
+select id,hex(d1),hex(f),hex(cast(f as double)),make_set(f,'a','b','c'),hex(char(f)),export_set(cast(f as double),'Y','N','',4) from sources order by id;
+➤ id[4,32,0]  ¦  hex(d1)[12,16,0]  ¦  hex(f)[12,16,0]  ¦  hex(cast(f as double))[12,16,0]  ¦  make_set(f, a, b, c)[12,5,0]  ¦  hex(char(f))[12,8,0]  ¦  export_set(cast(f as double), Y, N, , 4)[12,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  a  ¦  01  ¦  YNNN  𝄀
+2  ¦  2  ¦  2  ¦  1  ¦  b  ¦  02  ¦  YNNN  𝄀
+3  ¦  2  ¦  2  ¦  1  ¦  b  ¦  02  ¦  YNNN  𝄀
+4  ¦  FFFFFFFFFFFFFFFE  ¦  FFFFFFFFFFFFFFFE  ¦  FFFFFFFFFFFFFFFF  ¦  b,c  ¦  FFFFFFFE  ¦  YYYY  𝄀
+5  ¦  3  ¦  2  ¦  2  ¦  b  ¦  02  ¦  NYNN  𝄀
+6  ¦  null  ¦  null  ¦  null  ¦  null  ¦    ¦  null
+select id,export_set(if(id=5,d1,f),'Y','N','',4),export_set(case when id=4 then d2 else f end,'Y','N','',4) from sources order by id;
+➤ id[4,32,0]  ¦  export_set(if(id = 5, d1, f), Y, N, , 4)[12,64,0]  ¦  export_set(case when id = 4 then d2 else f end, Y, N, , 4)[12,64,0]  𝄀
+1  ¦  YNNN  ¦  YNNN  𝄀
+2  ¦  NYNN  ¦  NYNN  𝄀
+3  ¦  NYNN  ¦  NYNN  𝄀
+4  ¦  NYYY  ¦  NYYY  𝄀
+5  ¦  YYNN  ¦  NYNN  𝄀
+6  ¦  null  ¦  null
+create table domains(id int,u bigint unsigned,s bigint,bits bit(64),e enum('one','two'),v varchar(32));
+insert into domains values (1,18446744073709551615,-2,0xffffffffffffffff,'two','-2tail'),(2,9223372036854775808,-9223372036854775808,0x8000000000000000,'one','18446744073709551615'),(3,null,null,null,null,null);
+select id,hex(u),hex(s),hex(bits),hex(e),hex(v),hex(char(u)),hex(char(e)),make_set(e,'a','b'),export_set(e,'Y','N','',4),export_set(v,'Y','N','',4) from domains order by id;
+➤ id[4,32,0]  ¦  hex(u)[12,16,0]  ¦  hex(s)[12,16,0]  ¦  hex(bits)[12,16,0]  ¦  hex(e)[12,16,0]  ¦  hex(v)[12,256,0]  ¦  hex(char(u))[12,8,0]  ¦  hex(char(e))[12,8,0]  ¦  make_set(e, a, b)[12,3,0]  ¦  export_set(e, Y, N, , 4)[12,64,0]  ¦  export_set(v, Y, N, , 4)[12,64,0]  𝄀
+1  ¦  FFFFFFFFFFFFFFFF  ¦  FFFFFFFFFFFFFFFE  ¦  FFFFFFFFFFFFFFFF  ¦  2  ¦  2D327461696C  ¦  FFFFFFFF  ¦  02  ¦  b  ¦  NYNN  ¦  NYYY  𝄀
+2  ¦  8000000000000000  ¦  8000000000000000  ¦  8000000000000000  ¦  1  ¦  3138343436373434303733373039353531363135  ¦  00  ¦  01  ¦  a  ¦  YNNN  ¦  YYYY  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦    ¦    ¦  null  ¦  null  ¦  null
+select id,export_set(u,'Y','N','',4),export_set(bits,'Y','N','',4),make_set(s,'a','b','c'),export_set(if(id=1,s,u),'Y','N','',4) from domains order by id;
+➤ id[4,32,0]  ¦  export_set(u, Y, N, , 4)[12,64,0]  ¦  export_set(bits, Y, N, , 4)[12,64,0]  ¦  make_set(s, a, b, c)[12,5,0]  ¦  export_set(if(id = 1, s, u), Y, N, , 4)[12,64,0]  𝄀
+1  ¦  YYYY  ¦  YYYY  ¦  b,c  ¦  NYYY  𝄀
+2  ¦  NNNN  ¦  NNNN  ¦    ¦  NNNN  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null
+select hex(cast('9007199254740993' as decimal(20,0))),export_set(cast('9007199254740993' as decimal(20,0)),'Y','N','',4);
+➤ hex(cast(9007199254740993 as decimal(20)))[12,16,0]  ¦  export_set(cast(9007199254740993 as decimal(20)), Y, N, , 4)[12,64,0]  𝄀
+20000000000001  ¦  YNNN
+select export_set(if(false,cast('9223372036854775808' as decimal(20,0)),1),'Y','N','',4);
+➤ export_set(if(false, cast(9223372036854775808 as decimal(20)), 1), Y, N, , 4)[12,64,0]  𝄀
+YNNN
+select export_set(cast('9223372036854775808' as decimal(20,0)),'Y','N','',4);
+Data truncation: data out of range: data type int64, integer argument
+select make_set('18446744073709551616','a','b');
+Data truncation: data out of range: data type uint64, integer argument
+select hex(char('-9223372036854775809'));
+Data truncation: data out of range: data type int64, integer argument
+select hex(cast('9223372036854775807.5' as decimal(38,1)));
+Data truncation: data out of range: data type int64, integer argument
+select conv('ff',15.5,9.5),conv('1.9',10,16),conv('ffffffffffffffff',16,-10),hex('1.5'),hex(0x41),bin(-1),oct(-1);
+➤ conv(ff, 15.5, 9.5)[12,65,0]  ¦  conv(1.9, 10, 16)[12,65,0]  ¦  conv(ffffffffffffffff, 16, -10)[12,65,0]  ¦  hex(1.5)[12,24,0]  ¦  hex(0x41)[12,8,0]  ¦  bin(-1)[12,65,0]  ¦  oct(-1)[12,65,0]  𝄀
+255  ¦  1  ¦  -1  ¦  312E35  ¦  41  ¦  1111111111111111111111111111111111111111111111111111111111111111  ¦  1777777777777777777777
+select hex(char(65.5e0,'67.9',true)),hex(char(cast(65.5 as double))),export_set(null,'Y','N','',4);
+➤ hex(char(65.5e0, 67.9, true))[12,24,0]  ¦  hex(char(cast(65.5 as double)))[12,8,0]  ¦  export_set(null, Y, N, , 4)[12,64,0]  𝄀
+424301  ¦  41  ¦  null
+prepare bit_source from 'select hex(?),hex(char(?)),make_set(?,"a","b","c"),export_set(?,"Y","N","",4)';
+set @v=null;
+execute bit_source using @v,@v,@v,@v;
+➤ hex(?)[12,16,0]  ¦  hex(char(?))[12,8,0]  ¦  make_set(?, a, b, c)[12,5,0]  ¦  export_set(?, Y, N, , 4)[12,64,0]  𝄀
+null  ¦    ¦  null  ¦  null
+set @v=1.5e0;
+execute bit_source using @v,@v,@v,@v;
+➤ hex(?)[12,16,0]  ¦  hex(char(?))[12,8,0]  ¦  make_set(?, a, b, c)[12,5,0]  ¦  export_set(?, Y, N, , 4)[12,64,0]  𝄀
+2  ¦  02  ¦  b  ¦  NYNN
+set @v=2.5;
+execute bit_source using @v,@v,@v,@v;
+➤ hex(?)[12,16,0]  ¦  hex(char(?))[12,8,0]  ¦  make_set(?, a, b, c)[12,5,0]  ¦  export_set(?, Y, N, , 4)[12,64,0]  𝄀
+3  ¦  03  ¦  a,b  ¦  YYNN
+set @v='1.5';
+execute bit_source using @v,@v,@v,@v;
+➤ hex(?)[-1,16383,0]  ¦  hex(char(?))[12,8,0]  ¦  make_set(?, a, b, c)[12,5,0]  ¦  export_set(?, Y, N, , 4)[12,64,0]  𝄀
+312E35  ¦  01  ¦  a  ¦  YNNN
+set @v=true;
+execute bit_source using @v,@v,@v,@v;
+➤ hex(?)[12,16,0]  ¦  hex(char(?))[12,8,0]  ¦  make_set(?, a, b, c)[12,5,0]  ¦  export_set(?, Y, N, , 4)[12,64,0]  𝄀
+1  ¦  01  ¦  a  ¦  YNNN
+set @v=cast('18446744073709551615' as unsigned);
+execute bit_source using @v,@v,@v,@v;
+➤ hex(?)[12,16,0]  ¦  hex(char(?))[12,8,0]  ¦  make_set(?, a, b, c)[12,5,0]  ¦  export_set(?, Y, N, , 4)[12,64,0]  𝄀
+FFFFFFFFFFFFFFFF  ¦  FFFFFFFF  ¦  a,b,c  ¦  YYYY
+set @v=cast('9223372036854775808' as decimal(20,0));
+execute bit_source using @v,@v,@v,@v;
+Data truncation: data out of range: data type int64, integer argument
+set @v=-1.5e0;
+execute bit_source using @v,@v,@v,@v;
+➤ hex(?)[12,16,0]  ¦  hex(char(?))[12,8,0]  ¦  make_set(?, a, b, c)[12,5,0]  ¦  export_set(?, Y, N, , 4)[12,64,0]  𝄀
+FFFFFFFFFFFFFFFE  ¦  FFFFFFFE  ¦  b,c  ¦  NYYY
+deallocate prepare bit_source;
+prepare radix_source from 'select conv("ff",?,?)';
+set @a=15.5,@b=9.5;
+execute radix_source using @a,@b;
+➤ conv(ff, ?, ?)[12,65,0]  𝄀
+255
+deallocate prepare radix_source;
+create table generated_bits(f double,g varchar(4) generated always as (export_set(f,'Y','N','',4)) stored,h varchar(16) default (hex(cast('9007199254740993' as decimal(20,0)))),check(length(export_set(f,'Y','N','',4))=4));
+insert into generated_bits(f) values (1.5),(2.5),(null);
+select * from generated_bits order by f;
+➤ f[8,53,31]  ¦  g[12,4,0]  ¦  h[12,16,0]  𝄀
+null  ¦  null  ¦  20000000000001  𝄀
+1.5  ¦  NYNN  ¦  20000000000001  𝄀
+2.5  ¦  NYNN  ¦  20000000000001
+drop database bit_integer_parameter_coercion;

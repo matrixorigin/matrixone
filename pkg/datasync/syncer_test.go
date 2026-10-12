@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func createTestDataSync(
@@ -70,6 +71,26 @@ func TestSyncer_Create_OK(t *testing.T) {
 	s := createTestDataSync(t, rt, st, newTestFS())
 	assert.NotNil(t, s)
 	assert.NoError(t, s.Close())
+}
+
+func TestSyncer_Create_StopperUnavailableCleansUp(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	rt := runtime.DefaultRuntime()
+	st := stopper.NewStopper(
+		"test",
+		stopper.WithLogger(rt.Logger().RawLogger()),
+	)
+	st.Stop()
+
+	ds, err := NewDataSync(
+		"",
+		st,
+		rt,
+		logservice.HAKeeperClientConfig{},
+		newTestFS(),
+	)
+	require.ErrorIs(t, err, stopper.ErrUnavailable)
+	require.Nil(t, ds)
 }
 
 func TestSyncer(t *testing.T) {

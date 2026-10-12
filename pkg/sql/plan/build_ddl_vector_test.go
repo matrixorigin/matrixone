@@ -39,13 +39,13 @@ var includeTestSupportedTypes = []types.T{
 }
 
 func TestValidateIncludeColumns_Empty(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	require.NoError(t, validateIncludeColumns(ctx, nil, nil, "v", "id", includeTestSupportedTypes))
 	require.NoError(t, validateIncludeColumns(ctx, []*tree.UnresolvedName{}, nil, "v", "id", includeTestSupportedTypes))
 }
 
 func TestValidateIncludeColumns_OK(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	colMap := map[string]*ColDef{
 		"price": {Typ: plan.Type{Id: int32(types.T_float32)}},
 		"cat":   {Typ: plan.Type{Id: int32(types.T_int64)}},
@@ -56,7 +56,7 @@ func TestValidateIncludeColumns_OK(t *testing.T) {
 }
 
 func TestValidateIncludeColumns_VecColumnRejected(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	colMap := map[string]*ColDef{"v": {Typ: plan.Type{Id: int32(types.T_array_float32)}}}
 	err := validateIncludeColumns(ctx,
 		[]*tree.UnresolvedName{unresolvedCol("v")},
@@ -66,7 +66,7 @@ func TestValidateIncludeColumns_VecColumnRejected(t *testing.T) {
 }
 
 func TestValidateIncludeColumns_PKRejected(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	colMap := map[string]*ColDef{"id": {Typ: plan.Type{Id: int32(types.T_int64)}}}
 	err := validateIncludeColumns(ctx,
 		[]*tree.UnresolvedName{unresolvedCol("id")},
@@ -76,7 +76,7 @@ func TestValidateIncludeColumns_PKRejected(t *testing.T) {
 }
 
 func TestValidateIncludeColumns_Duplicate(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	colMap := map[string]*ColDef{"price": {Typ: plan.Type{Id: int32(types.T_float32)}}}
 	err := validateIncludeColumns(ctx,
 		[]*tree.UnresolvedName{unresolvedCol("price"), unresolvedCol("price")},
@@ -86,7 +86,7 @@ func TestValidateIncludeColumns_Duplicate(t *testing.T) {
 }
 
 func TestValidateIncludeColumns_NotExist(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	colMap := map[string]*ColDef{"price": {Typ: plan.Type{Id: int32(types.T_float32)}}}
 	err := validateIncludeColumns(ctx,
 		[]*tree.UnresolvedName{unresolvedCol("missing")},
@@ -96,7 +96,7 @@ func TestValidateIncludeColumns_NotExist(t *testing.T) {
 }
 
 func TestValidateIncludeColumns_UnsupportedType(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	colMap := map[string]*ColDef{"name": {Typ: plan.Type{Id: int32(types.T_varchar)}}}
 	err := validateIncludeColumns(ctx,
 		[]*tree.UnresolvedName{unresolvedCol("name")},
@@ -106,7 +106,7 @@ func TestValidateIncludeColumns_UnsupportedType(t *testing.T) {
 }
 
 func TestValidateIncludeColumns_AllSupportedNumericTypes(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	colMap := map[string]*ColDef{
 		"a": {Typ: plan.Type{Id: int32(types.T_int32)}},
 		"b": {Typ: plan.Type{Id: int32(types.T_int64)}},

@@ -4,8 +4,8 @@ use db2;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
 insert into t1 values(1, 'ab');
 insert into t1 values(2, 'ac');
 insert into t1 values(3, 'ad');
@@ -17,8 +17,8 @@ a    b
 alter table t1 change a x VARCHAR(20);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-x    VARCHAR(20)    NO    PRI    null        
-b    CHAR(10)    YES        null        
+x    varchar(20)    NO    PRI    null        
+b    char(10)    YES        null        
 select * from t1;
 x    b
 1    ab
@@ -28,9 +28,9 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10), c date);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -42,9 +42,9 @@ a    b    c
 alter table t1 change a x VARCHAR(20) after b;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-b    CHAR(10)    YES        null        
-x    VARCHAR(20)    NO    PRI    null        
-c    DATE(0)    YES        null        
+b    char(10)    YES        null        
+x    varchar(20)    NO    PRI    null        
+c    date    YES        null        
 select * from t1;
 b    x    c
 ab    1    1980-12-17
@@ -54,9 +54,9 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10), c date);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -68,9 +68,9 @@ a    b    c
 alter table t1 change a x VARCHAR(20) after c;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-x    VARCHAR(20)    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
+x    varchar(20)    NO    PRI    null        
 select * from t1;
 b    c    x
 ab    1980-12-17    1
@@ -80,9 +80,9 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER, b CHAR(10), c date, PRIMARY KEY(a));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -94,9 +94,9 @@ a    b    c
 alter table t1 change b x VARCHAR(20) first;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-x    VARCHAR(20)    YES        null        
-a    INT(32)    NO    PRI    null        
-c    DATE(0)    YES        null        
+x    varchar(20)    YES        null        
+a    int    NO    PRI    null        
+c    date    YES        null        
 select * from t1;
 x    a    c
 ab    1    1980-12-17
@@ -106,10 +106,10 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -121,10 +121,10 @@ a    b    c    d
 alter table t1 change b x VARCHAR(20), change d y int unsigned;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-x    VARCHAR(20)    YES        null        
-c    DATE(0)    YES        null        
-y    INT UNSIGNED(32)    YES        null        
+a    int    NO    PRI    null        
+x    varchar(20)    YES        null        
+c    date    YES        null        
+y    int unsigned    YES        null        
 select * from t1;
 a    x    c    y
 1    ab    1980-12-17    800
@@ -134,10 +134,10 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -155,10 +155,10 @@ Unknown column 'b' in 'Columns Set'
 ALTER TABLE t1 CHANGE a a INT NOT NULL;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -167,10 +167,10 @@ a    b    c    d
 alter table t1 change b z VARCHAR(20) first, change d m int unsigned after z;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-z    VARCHAR(20)    YES        null        
-m    INT UNSIGNED(32)    YES        null        
-a    INT(32)    NO    PRI    null        
-c    DATE(0)    YES        null        
+z    varchar(20)    YES        null        
+m    int unsigned    YES        null        
+a    int    NO    PRI    null        
+c    date    YES        null        
 select * from t1;
 z    m    a    c
 ab    800    1    1980-12-17
@@ -180,10 +180,10 @@ drop table if exists t1;
 CREATE TABLE t1(a INTEGER, b CHAR(10), c datetime, d decimal(7,2), PRIMARY KEY(a, b));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    NO    PRI    null        
-c    DATETIME(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    NO    PRI    null        
+c    datetime    YES        null        
+d    decimal(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17 11:34:45', 800);
 insert into t1 values(2, 'ac', '1981-02-20 10:34:45', 1600);
 insert into t1 values(3, 'ad', '1981-02-22 09:34:45', 500);
@@ -195,10 +195,10 @@ a    b    c    d
 alter table t1 change c x datetime default '2023-06-21 12:34:45' on update CURRENT_TIMESTAMP;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    NO    PRI    null        
-x    DATETIME(0)    YES        2023-06-21 12:34:45        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    NO    PRI    null        
+x    datetime    YES        2023-06-21 12:34:45        
+d    decimal(7,2)    YES        null        
 select * from t1;
 a    b    x    d
 1    ab    1980-12-17 11:34:45    800.00
@@ -207,10 +207,10 @@ a    b    x    d
 alter table t1 change x y date;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    NO    PRI    null        
-y    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    NO    PRI    null        
+y    date    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 a    b    y    d
 1    ab    1980-12-17    800.00
@@ -220,9 +220,9 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER, b CHAR(10), c datetime PRIMARY KEY default '2023-06-21' on update CURRENT_TIMESTAMP);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
-b    CHAR(10)    YES        null        
-c    DATETIME(0)    NO    PRI    2023-06-21        
+a    int    YES        null        
+b    char(10)    YES        null        
+c    datetime    NO    PRI    2023-06-21        
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -234,9 +234,9 @@ a    b    c
 alter table t1 change c x date first;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-x    DATE(0)    NO    PRI    null        
-a    INT(32)    YES        null        
-b    CHAR(10)    YES        null        
+x    date    NO    PRI    null        
+a    int    YES        null        
+b    char(10)    YES        null        
 select * from t1;
 x    a    b
 1980-12-17    1    ab
@@ -245,9 +245,9 @@ x    a    b
 alter table t1 change x y datetime default '2023-06-21';
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-y    DATETIME(0)    NO    PRI    2023-06-21        
-a    INT(32)    YES        null        
-b    CHAR(10)    YES        null        
+y    datetime    NO    PRI    2023-06-21        
+a    int    YES        null        
+b    char(10)    YES        null        
 select * from t1;
 y    a    b
 1980-12-17 00:00:00    1    ab
@@ -257,10 +257,10 @@ drop table if exists t1;
 CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -272,15 +272,15 @@ a    b    c    d
 alter table t1 change b x VARCHAR(20);
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    x    A    0    NULL    NULL    YES                    YES    x
+t1    0    PRIMARY    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    2    x    A    0    NULL    NULL    YES    BTREE                YES    x
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-x    VARCHAR(20)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+x    varchar(20)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 a    x    c    d
 1    ab    1980-12-17    800.00
@@ -289,16 +289,16 @@ a    x    c    d
 alter table t1 change x y VARCHAR(20) UNIQUE KEY;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    y    A    0    NULL    NULL    YES                    YES    y
-t1    0    y    1    y    A    0    NULL    NULL    YES                    YES    y
+t1    0    PRIMARY    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    2    y    A    0    NULL    NULL    YES    BTREE                YES    y
+t1    0    y    1    y    A    0    NULL    NULL    YES    BTREE                YES    y
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-y    VARCHAR(20)    YES    UNI    null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+y    varchar(20)    YES    UNI    null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 a    y    c    d
 1    ab    1980-12-17    800.00
@@ -307,17 +307,17 @@ a    y    c    d
 alter table t1 change y z VARCHAR(20) UNIQUE KEY;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    z    A    0    NULL    NULL    YES                    YES    z
-t1    0    y    1    z    A    0    NULL    NULL    YES                    YES    z
-t1    0    z    1    z    A    0    NULL    NULL    YES                    YES    z
+t1    0    PRIMARY    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    2    z    A    0    NULL    NULL    YES    BTREE                YES    z
+t1    0    y    1    z    A    0    NULL    NULL    YES    BTREE                YES    z
+t1    0    z    1    z    A    0    NULL    NULL    YES    BTREE                YES    z
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-z    VARCHAR(20)    YES    UNI    null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+z    varchar(20)    YES    UNI    null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 a    z    c    d
 1    ab    1980-12-17    800.00
@@ -327,10 +327,10 @@ drop table if exists t1;
 CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -342,15 +342,15 @@ a    b    c    d
 alter table t1 rename column a to x;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    x    A    0    NULL    NULL                        YES    x
-t1    0    a    1    x    A    0    NULL    NULL                        YES    x
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    PRIMARY    1    x    A    0    NULL    NULL        BTREE                YES    x
+t1    0    a    1    x    A    0    NULL    NULL        BTREE                YES    x
+t1    0    a    2    b    A    0    NULL    NULL    YES    BTREE                YES    b
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-x    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+x    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 x    b    c    d
 1    ab    1980-12-17    800.00
@@ -359,15 +359,15 @@ x    b    c    d
 alter table t1 rename column b to y;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    x    A    0    NULL    NULL                        YES    x
-t1    0    a    1    x    A    0    NULL    NULL                        YES    x
-t1    0    a    2    y    A    0    NULL    NULL    YES                    YES    y
+t1    0    PRIMARY    1    x    A    0    NULL    NULL        BTREE                YES    x
+t1    0    a    1    x    A    0    NULL    NULL        BTREE                YES    x
+t1    0    a    2    y    A    0    NULL    NULL    YES    BTREE                YES    y
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-x    INT(32)    NO    PRI    null        
-y    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+x    int    NO    PRI    null        
+y    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 x    y    c    d
 1    ab    1980-12-17    800.00
@@ -377,10 +377,10 @@ drop table if exists t1;
 CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), INDEX(a, b), KEY(c));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES    MUL    null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES    MUL    null        
+d    decimal(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -392,16 +392,16 @@ a    b    c    d
 alter table t1 change c x datetime;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
-t1    1    a    1    a    A    0    NULL    NULL                        YES    a
-t1    1    a    2    b    A    0    NULL    NULL    YES                    YES    b
-t1    1    c    1    x    A    0    NULL    NULL    YES                    YES    x
+t1    0    PRIMARY    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    1    a    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    1    a    2    b    A    0    NULL    NULL    YES    BTREE                YES    b
+t1    1    c    1    x    A    0    NULL    NULL    YES    BTREE                YES    x
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-x    DATETIME(0)    YES    MUL    null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+x    datetime    YES    MUL    null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 a    b    x    d
 1    ab    1980-12-17 00:00:00    800.00
@@ -412,17 +412,17 @@ Multiple primary key defined
 alter table t1 change x y VARCHAR(20) UNIQUE KEY;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
-t1    0    y    1    y    A    0    NULL    NULL    YES                    YES    y
-t1    1    a    1    a    A    0    NULL    NULL                        YES    a
-t1    1    a    2    b    A    0    NULL    NULL    YES                    YES    b
-t1    1    c    1    y    A    0    NULL    NULL    YES                    YES    y
+t1    0    PRIMARY    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    y    1    y    A    0    NULL    NULL    YES    BTREE                YES    y
+t1    1    a    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    1    a    2    b    A    0    NULL    NULL    YES    BTREE                YES    b
+t1    1    c    1    y    A    0    NULL    NULL    YES    BTREE                YES    y
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-y    VARCHAR(20)    YES    UNI    null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+y    varchar(20)    YES    UNI    null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 a    b    y    d
 1    ab    1980-12-17 00:00:00    800.00
@@ -432,10 +432,10 @@ drop table if exists t1;
 create table t1(a int unsigned, b varchar(15) NOT NULL, c date, d decimal(7,2), primary key(a));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT UNSIGNED(32)    NO    PRI    null        
-b    VARCHAR(15)    NO        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int unsigned    NO    PRI    null        
+b    varchar(15)    NO        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 insert into t1 values (7369,'SMITH','1980-12-17',800);
 insert into t1 values  (7499,'ALLEN','1981-02-20',1600);
 insert into t1 values (7521,'WARD','1981-02-22',1250);
@@ -451,10 +451,10 @@ a    b    c    d
 alter table t1 change a x int auto_increment;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-x    INT(32)    NO    PRI    null    auto_increment    
-b    VARCHAR(15)    NO        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+x    int    NO    PRI    null    auto_increment    
+b    varchar(15)    NO        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 x    b    c    d
 7369    SMITH    1980-12-17    800.00
@@ -465,10 +465,10 @@ x    b    c    d
 alter table t1 change d y decimal(6,2);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-x    INT(32)    NO    PRI    null    auto_increment    
-b    VARCHAR(15)    NO        null        
-c    DATE(0)    YES        null        
-y    DECIMAL(6,2)    YES        null        
+x    int    NO    PRI    null    auto_increment    
+b    varchar(15)    NO        null        
+c    date    YES        null        
+y    decimal(6,2)    YES        null        
 select * from t1;
 x    b    c    y
 7369    SMITH    1980-12-17    800.00
@@ -480,10 +480,10 @@ drop table if exists t1;
 CREATE TABLE t1(a INTEGER, b CHAR(10), c datetime, d decimal(7,2), PRIMARY KEY(a, b));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    NO    PRI    null        
-c    DATETIME(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    NO    PRI    null        
+c    datetime    YES        null        
+d    decimal(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17 11:34:45', 800);
 insert into t1 values(2, 'ac', '1981-02-20 10:34:45', 1600);
 insert into t1 values(3, 'ad', '1981-02-22 09:34:45', 500);
@@ -495,10 +495,10 @@ a    b    c    d
 alter table t1 change a x decimal(7,2);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-x    DECIMAL(7,2)    NO    PRI    null        
-b    CHAR(10)    NO    PRI    null        
-c    DATETIME(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+x    decimal(7,2)    NO    PRI    null        
+b    char(10)    NO    PRI    null        
+c    datetime    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 x    b    c    d
 1.00    ab    1980-12-17 11:34:45    800.00
@@ -507,10 +507,10 @@ x    b    c    d
 alter table t1 rename column b to y;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-x    DECIMAL(7,2)    NO    PRI    null        
-y    CHAR(10)    NO    PRI    null        
-c    DATETIME(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+x    decimal(7,2)    NO    PRI    null        
+y    char(10)    NO    PRI    null        
+c    datetime    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 x    y    c    d
 1.00    ab    1980-12-17 11:34:45    800.00
@@ -519,10 +519,10 @@ x    y    c    d
 alter table t1 rename column c to z;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-x    DECIMAL(7,2)    NO    PRI    null        
-y    CHAR(10)    NO    PRI    null        
-z    DATETIME(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+x    decimal(7,2)    NO    PRI    null        
+y    char(10)    NO    PRI    null        
+z    datetime    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 x    y    z    d
 1.00    ab    1980-12-17 11:34:45    800.00
@@ -575,14 +575,14 @@ Cannot change column 'deptno': used in a foreign key constraint 'c1'
 alter table emp change deptno deptno varchar(25);
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
-ename    VARCHAR(15)    YES        null        
-job    VARCHAR(10)    YES        null        
-mgr    INT UNSIGNED(32)    YES        null        
-hiredate    DATE(0)    YES        null        
-sal    DECIMAL(7,2)    YES        null        
-comm    DECIMAL(7,2)    YES        null        
-deptno    VARCHAR(25)    YES    MUL    null        
+empno    int unsigned    NO    PRI    null    auto_increment    
+ename    varchar(15)    YES        null        
+job    varchar(10)    YES        null        
+mgr    int unsigned    YES        null        
+hiredate    date    YES        null        
+sal    decimal(7,2)    YES        null        
+comm    decimal(7,2)    YES        null        
+deptno    varchar(25)    YES    MUL    null        
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptno
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
@@ -602,14 +602,14 @@ empno    ename    job    mgr    hiredate    sal    comm    deptno
 alter table emp change deptno deptId varchar(25);
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
-ename    VARCHAR(15)    YES        null        
-job    VARCHAR(10)    YES        null        
-mgr    INT UNSIGNED(32)    YES        null        
-hiredate    DATE(0)    YES        null        
-sal    DECIMAL(7,2)    YES        null        
-comm    DECIMAL(7,2)    YES        null        
-deptId    VARCHAR(25)    YES    MUL    null        
+empno    int unsigned    NO    PRI    null    auto_increment    
+ename    varchar(15)    YES        null        
+job    varchar(10)    YES        null        
+mgr    int unsigned    YES        null        
+hiredate    date    YES        null        
+sal    decimal(7,2)    YES        null        
+comm    decimal(7,2)    YES        null        
+deptId    varchar(25)    YES    MUL    null        
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptid
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
@@ -630,10 +630,10 @@ drop table if exists t1;
 CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -645,15 +645,15 @@ a    b    c    d
 alter table t1 alter column a set default 100;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    PRIMARY    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    2    b    A    0    NULL    NULL    YES    BTREE                YES    b
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    100        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    100        
+b    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -662,15 +662,15 @@ a    b    c    d
 alter table t1 alter column a drop default;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    PRIMARY    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    2    b    A    0    NULL    NULL    YES    BTREE                YES    b
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -679,15 +679,15 @@ a    b    c    d
 alter table t1 alter column b set visible;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    PRIMARY    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    2    b    A    0    NULL    NULL    YES    BTREE                YES    b
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -697,10 +697,10 @@ drop table if exists t1;
 CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date default '1990-12-17', d decimal(7,2), UNIQUE KEY(a, b));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        1990-12-17        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        1990-12-17        
+d    decimal(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -712,15 +712,15 @@ a    b    c    d
 alter table t1 alter column c set default '2003-12-17';
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    PRIMARY    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    2    b    A    0    NULL    NULL    YES    BTREE                YES    b
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        2003-12-17        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        2003-12-17        
+d    decimal(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -729,15 +729,15 @@ a    b    c    d
 alter table t1 alter column c drop default;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    PRIMARY    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    2    b    A    0    NULL    NULL    YES    BTREE                YES    b
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -747,15 +747,15 @@ alter table t1 alter column b set invisible;
 not supported: invisible columns
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
+t1    0    PRIMARY    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    1    a    A    0    NULL    NULL        BTREE                YES    a
+t1    0    a    2    b    A    0    NULL    NULL    YES    BTREE                YES    b
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -765,10 +765,10 @@ drop table if exists t1;
 CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -780,10 +780,10 @@ a    b    c    d
 alter table t1 order by a DESC, b ASC;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -792,10 +792,10 @@ a    b    c    d
 alter table t1 order by a DESC, c;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+b    char(10)    YES        null        
+c    date    YES        null        
+d    decimal(7,2)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -814,13 +814,13 @@ alter table t1 change col1 col1 int primary key;
 Duplicate entry '1' for key 'col1'
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO        null        
-col2    VARCHAR(10)    YES        null        
+col1    int    NO        null        
+col2    varchar(10)    YES        null        
 alter table t1 change col2 col2 varchar(10) primary key;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO        null        
-col2    VARCHAR(10)    NO    PRI    null        
+col1    int    NO        null        
+col2    varchar(10)    NO    PRI    null        
 insert into t1 values (1, 'cdsdsa');
 select * from t1;
 col1    col2
@@ -904,8 +904,8 @@ Table    Create Table
 bool01    CREATE TABLE `bool01` (\n  `col1` int DEFAULT NULL,\n  `col2` char(1) DEFAULT NULL\n)
 show columns from bool01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null        
-col2    CHAR(1)    YES        null        
+col1    int    YES        null        
+col2    char(1)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'bool01' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 bool01    col1    int    YES
@@ -933,8 +933,8 @@ select * from char01;
 col1    col2new
 show columns from char01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null        
-col2New    VARCHAR(20)    YES        null        
+col1    int    YES        null        
+col2New    varchar(20)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'char01' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 char01    col1    int    YES
@@ -976,8 +976,8 @@ col2new    col1
 w43234rfq    100
 show columns from char02;
 Field    Type    Null    Key    Default    Extra    Comment
-col2New    CHAR(20)    YES        null        
-col1    INT(32)    YES        null        
+col2New    char(20)    YES        null        
+col1    int    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'char02' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 char02    col1    int    YES
@@ -1000,8 +1000,8 @@ Table    Create Table
 char03    CREATE TABLE `char03` (\n  `col1` int DEFAULT NULL,\n  `col2` char(10) DEFAULT NULL\n)
 show columns from char03;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null        
-col2    CHAR(10)    YES        null        
+col1    int    YES        null        
+col2    char(10)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'char03' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 char03    col1    int    YES
@@ -1033,8 +1033,8 @@ null    ahu323ew32
 4    eyuiwqewq3
 show columns from char04;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    VARCHAR(200)    YES        null        
-col2    CHAR(10)    YES        null        
+col1    varchar(200)    YES        null        
+col2    char(10)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'char04' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 char04    col1    varchar    YES
@@ -1079,9 +1079,9 @@ e    324214    1
 32143124    42432321    132432
 show columns from alter03;
 Field    Type    Null    Key    Default    Extra    Comment
-col2New    VARBINARY(20)    YES        null        
-col3    DECIMAL(38,0)    YES        null        
-col1New    DECIMAL(38,0)    YES        null        
+col2New    varbinary(20)    YES        null        
+col3    decimal(38,0)    YES        null        
+col1New    decimal(38,0)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'alter03' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 alter03    col1New    decimal    YES
@@ -1122,7 +1122,7 @@ Table    Create Table
 alter05    CREATE TABLE `alter05` (\n  `col1New` int NOT NULL,\n  PRIMARY KEY (`col1New`),\n  UNIQUE KEY `col1new` (`col1New`)\n)
 show columns from alter05;
 Field    Type    Null    Key    Default    Extra    Comment
-col1New    INT(32)    NO    PRI    null        
+col1New    int    NO    PRI    null        
 select * from alter05;
 col1new
 1
@@ -1149,8 +1149,8 @@ col1new    col2
 2378.3242    234242))())_
 show columns from primary01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1New    FLOAT(0)    NO    PRI    null        
-col2    TEXT(0)    YES        null        
+col1New    float    NO    PRI    null        
+col2    text    YES        null        
 update primary01 set col2 = 'whuihedjwqncew' where col1 = 1;
 invalid input: column col1 does not exist
 update primary01 set col2 = 'whuihedjwqncew' where col1New = 1;
@@ -1185,8 +1185,8 @@ Table    Create Table
 primary02    CREATE TABLE `primary02` (\n  `col1New` int NOT NULL,\n  `col2` binary(10) DEFAULT NULL,\n  PRIMARY KEY (`col1New`)\n)
 show columns from primary02;
 Field    Type    Null    Key    Default    Extra    Comment
-col1New    INT(32)    NO    PRI    null        
-col2    BINARY(10)    YES        null        
+col1New    int    NO    PRI    null        
+col2    binary(10)    YES        null        
 insert into primary02 (col1, col2) VALUES (3, 'ehuwu32');
 Unknown column 'col1' in 'primary02'
 delete from primary02 where col1 = 1;
@@ -1221,8 +1221,8 @@ col1new    col2
 3    *         
 show columns from primary03;
 Field    Type    Null    Key    Default    Extra    Comment
-col1New    INT(32)    NO    PRI    null        
-col2    BINARY(10)    YES        null        
+col1New    int    NO    PRI    null        
+col2    binary(10)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary03' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 primary03    col1New    int    NO
@@ -1250,8 +1250,8 @@ col1new    col2new
 3.0    qw
 show columns from primary04;
 Field    Type    Null    Key    Default    Extra    Comment
-col1New    FLOAT(0)    NO    PRI    null        
-col2New    VARBINARY(50)    YES        null        
+col1New    float    NO    PRI    null        
+col2New    varbinary(50)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary04' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 primary04    col1New    float    NO
@@ -1354,14 +1354,14 @@ Table    Create Table
 index01    CREATE TABLE `index01` (\n  `a` int NOT NULL,\n  `bNew` varchar(20) DEFAULT NULL,\n  `c` date DEFAULT NULL,\n  `d` decimal(7,2) DEFAULT NULL,\n  UNIQUE KEY `a` (`a`,`bNew`)\n)
 show index from index01;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index01    0    a    1    a    A    0    NULL    NULL                        YES    a
-index01    0    a    2    bNew    A    0    NULL    NULL    YES                    YES    bNew
+index01    0    a    1    a    A    0    NULL    NULL        BTREE                YES    a
+index01    0    a    2    bNew    A    0    NULL    NULL    YES    BTREE                YES    bNew
 alter table index01 change bNew bNewNew VARCHAR(20) UNIQUE KEY;
 show index from index01;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index01    0    a    1    a    A    0    NULL    NULL                        YES    a
-index01    0    a    2    bNewNew    A    0    NULL    NULL    YES                    YES    bNewNew
-index01    0    bnewnew    1    bNewNew    A    0    NULL    NULL    YES                    YES    bNewNew
+index01    0    a    1    a    A    0    NULL    NULL        BTREE                YES    a
+index01    0    a    2    bNewNew    A    0    NULL    NULL    YES    BTREE                YES    bNewNew
+index01    0    bnewnew    1    bNewNew    A    0    NULL    NULL    YES    BTREE                YES    bNewNew
 show create table index01;
 Table    Create Table
 index01    CREATE TABLE `index01` (\n  `a` int NOT NULL,\n  `bNewNew` varchar(20) DEFAULT NULL,\n  `c` date DEFAULT NULL,\n  `d` decimal(7,2) DEFAULT NULL,\n  UNIQUE KEY `a` (`a`,`bNewNew`),\n  UNIQUE KEY `bnewnew` (`bNewNew`)\n)
@@ -1413,11 +1413,11 @@ index02    CREATE TABLE `index02` (\n  `a` int NOT NULL,\n  `b` char(10) DEFAULT
 alter table index02 change b bnewNew VARCHAR(20) UNIQUE KEY;
 show index from index02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
-index02    0    bnewnew    1    bnewNew    A    0    NULL    NULL    YES                    YES    bnewNew
-index02    1    a    1    a    A    0    NULL    NULL                        YES    a
-index02    1    a    2    bnewNew    A    0    NULL    NULL    YES                    YES    bnewNew
-index02    1    c    1    c    A    0    NULL    NULL    YES                    YES    c
+index02    0    PRIMARY    1    a    A    0    NULL    NULL        BTREE                YES    a
+index02    0    bnewnew    1    bnewNew    A    0    NULL    NULL    YES    BTREE                YES    bnewNew
+index02    1    a    1    a    A    0    NULL    NULL        BTREE                YES    a
+index02    1    a    2    bnewNew    A    0    NULL    NULL    YES    BTREE                YES    bnewNew
+index02    1    c    1    c    A    0    NULL    NULL    YES    BTREE                YES    c
 show create table index02;
 Table    Create Table
 index02    CREATE TABLE `index02` (\n  `a` int NOT NULL,\n  `bnewNew` varchar(20) DEFAULT NULL,\n  `c` date DEFAULT NULL,\n  `d` decimal(7,2) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  UNIQUE KEY `bnewnew` (`bnewNew`),\n  KEY `a` (`a`,`bnewNew`),\n  KEY `c` (`c`)\n)
@@ -1428,10 +1428,10 @@ delete from index02 where bnewnew = 'ab';
 update index02 set bnewnew = 'database' where bnewnEW = 'ad';
 desc index02;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-bnewNew    VARCHAR(20)    YES    UNI    null        
-c    DATE(0)    YES    MUL    null        
-d    DECIMAL(7,2)    YES        null        
+a    int    NO    PRI    null        
+bnewNew    varchar(20)    YES    UNI    null        
+c    date    YES    MUL    null        
+d    decimal(7,2)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 index02    a    int    NO
@@ -1908,18 +1908,17 @@ col1    col2
 alter table abnormal04 change col1 col1NewCOl float;
 invalid argument operator cast, bad value [JSON -> FLOAT]
 alter table abnormal04 change col2 col2NewCOL int;
-invalid argument cast to int, bad value a
 select * from abnormal04;
-col1    col2
-{"x": "red"}    a
-{"x": [3, 5, 7]}    b
+col1    col2newcol
+{"x": "red"}    1
+{"x": [3, 5, 7]}    2
 show create table abnormal04;
 Table    Create Table
-abnormal04    CREATE TABLE `abnormal04` (\n  `col1` json DEFAULT NULL,\n  `col2` enum('a','b') DEFAULT NULL\n)
+abnormal04    CREATE TABLE `abnormal04` (\n  `col1` json DEFAULT NULL,\n  `col2NewCOL` int DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal04' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 abnormal04    col1    json    YES
-abnormal04    col2    enum    YES
+abnormal04    col2NewCOL    int    YES
 drop table abnormal04;
 drop table if exists abnormal05;
 create temporary table abnormal05 (col1 datetime, col2 blob);
@@ -2160,51 +2159,51 @@ Table    Create Table
 t1    CREATE TABLE `t1` (\n  `name` enum('A','B','C','D') DEFAULT NULL,\n  `age` int DEFAULT NULL\n)
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-name    ENUM('A','B','C','D')    YES        null        
-age    INT(32)    YES        null        
+name    enum('A','B','C','D')    YES        null        
+age    int    YES        null        
 drop table t1;
 drop table if exists tb_3;
 create table tb_3 (c1 varchar(25) not null, c2 varchar(25) not null, c3 varchar(25) not null, c4 int , primary key pk1(c1, c2, c3));
 desc tb_3;
 Field    Type    Null    Key    Default    Extra    Comment
-c1    VARCHAR(25)    NO    PRI    null        
-c2    VARCHAR(25)    NO    PRI    null        
-c3    VARCHAR(25)    NO    PRI    null        
-c4    INT(32)    YES        null        
+c1    varchar(25)    NO    PRI    null        
+c2    varchar(25)    NO    PRI    null        
+c3    varchar(25)    NO    PRI    null        
+c4    int    YES        null        
 alter table tb_3 modify c1 VARCHAR(30) not null;
 desc tb_3;
 Field    Type    Null    Key    Default    Extra    Comment
-c1    VARCHAR(30)    NO    PRI    null        
-c2    VARCHAR(25)    NO    PRI    null        
-c3    VARCHAR(25)    NO    PRI    null        
-c4    INT(32)    YES        null        
+c1    varchar(30)    NO    PRI    null        
+c2    varchar(25)    NO    PRI    null        
+c3    varchar(25)    NO    PRI    null        
+c4    int    YES        null        
 alter table tb_3 modify c1 VARCHAR(30);
 desc tb_3;
 Field    Type    Null    Key    Default    Extra    Comment
-c1    VARCHAR(30)    NO    PRI    null        
-c2    VARCHAR(25)    NO    PRI    null        
-c3    VARCHAR(25)    NO    PRI    null        
-c4    INT(32)    YES        null        
+c1    varchar(30)    NO    PRI    null        
+c2    varchar(25)    NO    PRI    null        
+c3    varchar(25)    NO    PRI    null        
+c4    int    YES        null        
 alter table tb_3 modify c1 VARCHAR(40);
 desc tb_3;
 Field    Type    Null    Key    Default    Extra    Comment
-c1    VARCHAR(40)    NO    PRI    null        
-c2    VARCHAR(25)    NO    PRI    null        
-c3    VARCHAR(25)    NO    PRI    null        
-c4    INT(32)    YES        null        
+c1    varchar(40)    NO    PRI    null        
+c2    varchar(25)    NO    PRI    null        
+c3    varchar(25)    NO    PRI    null        
+c4    int    YES        null        
 alter table tb_3 modify c4 VARCHAR(40);
 desc tb_3;
 Field    Type    Null    Key    Default    Extra    Comment
-c1    VARCHAR(40)    NO    PRI    null        
-c2    VARCHAR(25)    NO    PRI    null        
-c3    VARCHAR(25)    NO    PRI    null        
-c4    VARCHAR(40)    YES        null        
+c1    varchar(40)    NO    PRI    null        
+c2    varchar(25)    NO    PRI    null        
+c3    varchar(25)    NO    PRI    null        
+c4    varchar(40)    YES        null        
 alter table tb_3 modify c4 VARCHAR(40) NOT null;
 desc tb_3;
 Field    Type    Null    Key    Default    Extra    Comment
-c1    VARCHAR(40)    NO    PRI    null        
-c2    VARCHAR(25)    NO    PRI    null        
-c3    VARCHAR(25)    NO    PRI    null        
-c4    VARCHAR(40)    NO        null        
+c1    varchar(40)    NO    PRI    null        
+c2    varchar(25)    NO    PRI    null        
+c3    varchar(25)    NO    PRI    null        
+c4    varchar(40)    NO        null        
 drop table tb_3;
 drop database db2;

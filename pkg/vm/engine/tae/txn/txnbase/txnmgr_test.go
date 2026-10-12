@@ -331,6 +331,56 @@ func TestSingleTNCommitAndRollbackLifecycle(t *testing.T) {
 	})
 }
 
+func TestCommitCallbackTracksSuccessUntilDelivery(t *testing.T) {
+	mgr := NewTxnManager(NoopStoreFactory, nil, types.NewMockHLCClock(1))
+	mgr.Start(context.Background())
+	t.Cleanup(mgr.Stop)
+	txn, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	committed := make(chan error, 1)
+	go func() {
+		committed <- txn.CommitWithCallback(context.Background(), func() {
+			close(entered)
+			<-release
+		})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("commit callback did not run")
+	}
+	require.Equal(t, txnif.TxnStateCommitted, txn.GetTxnState(false))
+	require.NotNil(t, mgr.GetTxn(txn.GetID()))
+	close(release)
+	require.NoError(t, <-committed)
+	waitTxnManagerEmpty(t, mgr)
+}
+
+func TestCommitCallbackSkippedOnFailedAttempt(t *testing.T) {
+	for _, cause := range []error{
+		moerr.NewInternalErrorNoCtx("freeze failed"),
+		moerr.NewTAENeedRetryNoCtx(),
+	} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			mgr := NewTxnManager(NoopStoreFactory, nil, types.NewMockHLCClock(1))
+			mgr.Start(context.Background())
+			t.Cleanup(mgr.Stop)
+			txn, err := mgr.StartTxn(nil)
+			require.NoError(t, err)
+			txn.SetFreezeFn(func(txnif.AsyncTxn) error { return cause })
+			called := false
+			require.Error(t, txn.CommitWithCallback(context.Background(), func() {
+				called = true
+			}))
+			require.False(t, called)
+			waitTxnManagerEmpty(t, mgr)
+		})
+	}
+}
+
 func TestSingleTNInvalidStateAndReplayRollback(t *testing.T) {
 	ctx := NewEmptyTxnCtx()
 	require.Error(t, ctx.ToCommittedLocked())

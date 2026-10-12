@@ -39,7 +39,7 @@ type event struct {
 	time  time.Duration
 	ev    stringRef
 	args  []any
-	_args [16]any
+	_args [2]any
 }
 
 func newEventLogger() *eventLogger {

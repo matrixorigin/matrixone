@@ -137,7 +137,7 @@ func TestDecimalStringLiteralComparisonsUseExactCoercion(t *testing.T) {
 }
 
 func TestFoldableDecimalStringComparisonUsesExactCoercion(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	decimalType := types.New(types.T_decimal128, 20, 4)
 	makeConcat := func(parts ...string) *planpb.Expr {
 		args := make([]*planpb.Expr, len(parts))
@@ -331,7 +331,7 @@ func TestDecimalStringMultiInKeepsRealCoercion(t *testing.T) {
 }
 
 func TestDecimalBinaryStringDomainsKeepRealCoercion(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	decimalType := types.New(types.T_decimal128, 20, 4)
 	value := "9007199254740992.0001"
 
@@ -421,7 +421,7 @@ func TestDecimalBinaryStringDomainsKeepRealCoercion(t *testing.T) {
 }
 
 func TestDecimalStringComparisonUsesFinalTextCastValue(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	decimalType := types.New(types.T_decimal128, 20, 4)
 	const finalValue = "9007199254740992.0001"
 	const sourceValue = finalValue + "x"
@@ -496,7 +496,7 @@ func containsExplicitDecimalComparisonStringCast(expr *planpb.Expr) bool {
 }
 
 func TestDecimalStringLiteralCastUsesExactCoercion(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	target := types.T_varchar.ToType()
 	target.Width = 21
 	stringCast, err := appendExplicitCastBeforeExpr(
@@ -741,7 +741,7 @@ func firstPreparedDecimalComparisonLiteral(expr *planpb.Expr) *planpb.Literal {
 }
 
 func TestPreparedDecimalComparisonPlannerReplacementAndReuse(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	decimalType := types.New(types.T_decimal128, 20, 4)
 	mock.ctxt.tables["part"].Cols[7].Typ = makePlan2Type(&decimalType)
 

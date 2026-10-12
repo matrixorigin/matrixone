@@ -149,6 +149,73 @@ func TestIssue28680IgnoreConversionExecutionBoundaries(t *testing.T) {
 			"8/100/1.25/2024-01-07",
 		}, got)
 
+		// Forwarding a marker through SELECT or VALUES is still assignment,
+		// while SUM consumes it numerically before assignment.
+		for caseIndex, source := range []string{
+			"select ?",
+			"select x from (select ? as x) d",
+			"select x from (values row(?)) as d(x)",
+		} {
+			id := 940 + 3*caseIndex
+			for operationIndex, operation := range []struct {
+				name, sql   string
+				existingRow bool
+			}{
+				{"insert", fmt.Sprintf("insert ignore into %s.target(id,d) select %d,x from (%s) as src(x)", dbName, id, source), false},
+				{"update scalar", fmt.Sprintf("update ignore %s.target set d=(%s) where id=%d", dbName, source, id+1), true},
+				{"upsert scalar", fmt.Sprintf("insert ignore into %s.target(id,d) values (%d,0) on duplicate key update d=(%s)", dbName, id+2, source), true},
+			} {
+				t.Run(operation.name+"/"+source, func(t *testing.T) {
+					id := id + operationIndex
+					statement, prepareErr := conn.PrepareContext(ctx, operation.sql)
+					require.NoError(t, prepareErr)
+					defer statement.Close()
+					for _, value := range []string{"abc", "1.25", "abc"} {
+						if operation.existingRow {
+							_, createErr := conn.ExecContext(ctx, fmt.Sprintf("insert into %s.target(id,d) values (%d,0)", dbName, id))
+							require.NoError(t, createErr)
+						}
+						_, execErr := statement.ExecContext(ctx, value)
+						require.NoError(t, execErr)
+						if value == "abc" {
+							requireWarningCodes(t, ctx, conn, map[uint16]int{1366: 1})
+						} else {
+							requireNoWarnings(t, ctx, conn)
+						}
+						var result string
+						require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf("select cast(d as char) from %s.target where id=%d", dbName, id)).Scan(&result))
+						want := "0.00"
+						if value != "abc" {
+							want = "1.25"
+						}
+						require.Equal(t, want, result)
+						_, deleteErr := conn.ExecContext(ctx, fmt.Sprintf("delete from %s.target where id=%d", dbName, id))
+						require.NoError(t, deleteErr)
+					}
+				})
+			}
+		}
+
+		for _, source := range []struct{ sql, want string }{
+			{"select ? + 1", "2.25"},
+			{"select round(?, 1)", "1.30"},
+			{"select sum(x) from (select ? as x) d", "1.25"},
+		} {
+			t.Run(source.sql, func(t *testing.T) {
+				statement, prepareErr := conn.PrepareContext(ctx,
+					"insert ignore into "+dbName+".target(id,d) select 949,x from ("+source.sql+") as src(x)")
+				require.NoError(t, prepareErr)
+				defer statement.Close()
+				_, execErr := statement.ExecContext(ctx, "1.25")
+				require.NoError(t, execErr)
+				requireNoWarnings(t, ctx, conn)
+				var result string
+				require.NoError(t, queryRow("select cast(d as char) from "+dbName+".target where id=949").Scan(&result))
+				require.Equal(t, source.want, result)
+				exec("delete from " + dbName + ".target where id=949")
+			})
+		}
+
 		// UPDATE must convert once for every matching row. Reusing this prepared
 		// statement with a zero-match predicate must not manufacture warnings.
 		exec("update " + dbName + ".target set i=5, d=5.00, dt='2024-01-01' where id=1")

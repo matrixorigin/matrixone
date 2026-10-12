@@ -26,6 +26,40 @@ const MaxSetMembers = 64
 
 var setDescriptorCache sync.Map
 
+// EncodeSetValues keeps an empty member distinct from absent SET metadata.
+// The reserved comma cannot encode a valid legacy domain: members cannot
+// contain commas, and two empty members are rejected as duplicates.
+func EncodeSetValues(values []string) (string, error) {
+	values, err := NormalizeSetValues(values)
+	if err != nil {
+		return "", err
+	}
+	if len(values) == 1 && values[0] == "" {
+		return ",", nil
+	}
+	return strings.Join(values, ","), nil
+}
+
+// DecodeSetValues decodes domain metadata, not a SET row's display value.
+func DecodeSetValues(value string) []string {
+	switch value {
+	case "":
+		return nil
+	case ",":
+		return []string{""}
+	default:
+		return strings.Split(value, ",")
+	}
+}
+
+func SetValidBitmap(definition string) (uint64, error) {
+	descriptor, err := getSetDescriptor(definition)
+	if err != nil {
+		return 0, err
+	}
+	return descriptor.validBitmap, nil
+}
+
 func NormalizeSetValues(values []string) ([]string, error) {
 	if len(values) == 0 {
 		return nil, moerr.NewInvalidInputNoCtx("set type length err")
@@ -72,6 +106,18 @@ func ParseSet(setStr string, name string) (uint64, error) {
 	return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL set failed: item %s is not in set [%s]", name, strings.Join(descriptor.values, ","))
 }
 
+// MatchSetName reports whether name is a list of member names of the SET
+// definition, exactly as ParseSet matches names, without building an error.
+// Numeric bitmap input is not considered.
+func MatchSetName(setStr string, name string) bool {
+	descriptor, err := getSetDescriptor(setStr)
+	if err != nil {
+		return false
+	}
+	_, matched := descriptor.parseName(name)
+	return matched
+}
+
 func ParseSetValue(setStr string, bits uint64) (uint64, error) {
 	descriptor, err := getSetDescriptor(setStr)
 	if err != nil {
@@ -114,7 +160,7 @@ func buildSetDescriptor(setStr string) (*setDescriptor, error) {
 		return nil, moerr.NewInternalErrorNoCtxf("convert to MySQL set failed: set define is empty %v", setStr)
 	}
 
-	values, err := NormalizeSetValues(strings.Split(setStr, ","))
+	values, err := NormalizeSetValues(DecodeSetValues(setStr))
 	if err != nil {
 		return nil, err
 	}
@@ -142,16 +188,22 @@ func (d *setDescriptor) parseName(name string) (uint64, bool) {
 		return 0, true
 	}
 
+	// Walk the comma-separated items in place (same items as strings.Split)
+	// so a member-name lookup does not allocate.
 	setBits := uint64(0)
-	for _, item := range strings.Split(name, ",") {
+	for {
+		item, rest, more := strings.Cut(name, ",")
 		normalized := strings.ToLower(strings.TrimRight(item, " "))
 		origin, ok := d.normalizedToOrigin[normalized]
 		if !ok {
 			return 0, false
 		}
 		setBits |= d.valueToBit[origin]
+		if !more {
+			return setBits, true
+		}
+		name = rest
 	}
-	return setBits, true
 }
 
 func (d *setDescriptor) parseValue(bits uint64) (uint64, error) {

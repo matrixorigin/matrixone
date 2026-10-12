@@ -437,30 +437,44 @@ func drainIndexCdcTaskConsumer(
 		defer cancel()
 	}
 	if txnOp != nil {
-		cleanup := client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
-			lease.Stop()
-			if !event.CostEvent {
+		targets := fencedTargets.Snapshot()
+		var cleanupOnce sync.Once
+		cleanupFences := func() {
+			cleanupOnce.Do(func() {
+				lease.Stop()
+				cleanupCtx, cancel := context.WithTimeoutCause(
+					context.Background(),
+					iscpFenceCleanupTimeout,
+					moerr.NewInternalErrorNoCtx("iscp rollback fence cleanup timeout"),
+				)
+				defer cancel()
+				if cleanupErr := removeISCPDrainTargetFences(
+					cleanupCtx, targets, accountID, tableID, jobName, jobID,
+				); cleanupErr != nil {
+					logutil.Warnf("failed to clean ISCP fences after rollback: %v", cleanupErr)
+				}
+			})
+		}
+		// A failed DROP can roll back only its statement and later COMMIT the
+		// transaction. Its durable job survives, so release this statement's
+		// runtime fence after the workspace has restored the deleted tables.
+		txnOp.AppendEventCallback(client.ClosedEvent, client.TxnEventCallback{
+			StatementScoped: true,
+			Func: func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
+				if event.Aborted() {
+					cleanupFences()
+				} else {
+					lease.Stop()
+				}
 				return nil
-			}
-			cleanupCtx, cancel := context.WithTimeoutCause(
-				context.Background(),
-				iscpFenceCleanupTimeout,
-				moerr.NewInternalErrorNoCtx("iscp rollback fence cleanup timeout"),
-			)
-			defer cancel()
-			if cleanupErr := removeISCPDrainTargetFences(
-				cleanupCtx,
-				fencedTargets.Snapshot(),
-				accountID,
-				tableID,
-				jobName,
-				jobID,
-			); cleanupErr != nil {
-				logutil.Warnf("failed to clean ISCP fences after rollback: %v", cleanupErr)
+			},
+		})
+		txnOp.AppendEventCallback(client.RollbackEvent, client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
+			if event.CostEvent {
+				cleanupFences()
 			}
 			return nil
-		})
-		txnOp.AppendEventCallback(client.RollbackEvent, cleanup)
+		}))
 		txnOp.AppendEventCallback(client.CommitEvent, client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
 			if !event.CostEvent {
 				lease.Stop()

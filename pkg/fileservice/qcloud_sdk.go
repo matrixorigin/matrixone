@@ -359,7 +359,7 @@ func (a *QCloudSDK) Write(
 				sizeHint,
 				expire,
 			)
-		}, maxRetryAttemps, IsRetryableError)
+		}, maxRetryAttemps, isRetryableQCloudPutError)
 		if err != nil {
 			return err
 		}
@@ -392,13 +392,32 @@ func (a *QCloudSDK) Write(
 				sizeHint,
 				expire,
 			)
-		}, maxRetryAttemps, IsRetryableError)
+		}, maxRetryAttemps, isRetryableQCloudPutError)
 		if err != nil {
 			return err
 		}
 	}
 
 	return
+}
+
+// Only Write owns a replayable PUT body. Keep HTTP EOF recovery local to it,
+// without making source-reader EOF or state-creating multipart POST retryable.
+func isRetryableQCloudPutError(err error) bool {
+	if IsRetryableError(err) {
+		return true
+	}
+	var retryErr *cos.RetryError
+	if errors.As(err, &retryErr) {
+		for _, innerErr := range retryErr.Errs {
+			if isRetryableQCloudPutError(innerErr) {
+				return true
+			}
+		}
+		return false
+	}
+	var httpErr *url.Error
+	return errors.As(err, &httpErr) && httpErr.Op == "Put" && errors.Is(httpErr.Err, io.EOF)
 }
 
 func (a *QCloudSDK) SupportsParallelMultipart() bool {
@@ -659,7 +678,11 @@ func (a *QCloudSDK) WriteMultipartParallel(
 				<-getParallelUploadSemaphore()
 				<-uploadSlots
 			}()
-			if ctx.Err() != nil {
+			if options.beforePartUpload != nil {
+				options.beforePartUpload()
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				setErr(ctxErr)
 				releasePartBuffer(job.part)
 				return
 			}
@@ -734,9 +757,6 @@ func (a *QCloudSDK) WriteMultipartParallel(
 	if firstErr != nil {
 		err = firstErr
 		return err
-	}
-	if len(parts) == 0 {
-		return nil
 	}
 	if len(parts) != int(partNum) {
 		return moerr.NewInternalErrorNoCtxf("multipart upload incomplete, expect %d parts got %d", partNum, len(parts))

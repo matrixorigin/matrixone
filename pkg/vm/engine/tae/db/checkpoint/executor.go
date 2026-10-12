@@ -334,7 +334,7 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 		fatal              bool
 		fields             []zap.Field
 		now                = time.Now()
-		files              []string
+		files              = make([]string, 0, 1)
 		tableIDLocation    objectio.LocationSlice
 		metadataPublished  bool
 		rollbackFileCount  int

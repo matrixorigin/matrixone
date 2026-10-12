@@ -239,6 +239,7 @@ func TestParseDateCastComponents(t *testing.T) {
 }
 
 func TestValidCalendarDateYearZero(t *testing.T) {
+	require.Equal(t, 0, WeekFromCalendar(1, 1, 1, 0))
 	require.True(t, ValidCalendarDate(0, 1, 1))
 	require.False(t, ValidCalendarDate(0, 2, 29))
 	require.False(t, ValidDate(0, 1, 1))

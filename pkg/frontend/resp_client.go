@@ -232,10 +232,10 @@ func (resper *MysqlResp) RespPreMeta(execCtx *ExecCtx, meta any) (err error) {
 }
 
 func (resper *MysqlResp) RespResult(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) (err error) {
-	// Output.Reset cannot propagate errors from its terminal nil callback. PERFORM
-	// finalizes saved-result metadata explicitly after runner.Run succeeds, where
-	// the error can still prevent the OK response.
-	if isPerformStatement(execCtx.stmt) && bat == nil {
+	// Output.Reset also invokes nil callbacks on failed attempts and cannot
+	// propagate their errors. PERFORM and deferred SELECT metadata finalize
+	// saved results explicitly after Run succeeds with the final schema.
+	if bat == nil && (isPerformStatement(execCtx.stmt) || execCtx.resultMetadata != nil) {
 		return nil
 	}
 	if bat != nil {
@@ -318,7 +318,7 @@ func (resper *MysqlResp) finalizeQueryResult(execCtx *ExecCtx) error {
 	return resper.binWr.Write(execCtx, nil, nil)
 }
 
-func finalizePerformQueryResult(execCtx *ExecCtx) error {
+func finalizeQueryResult(execCtx *ExecCtx) error {
 	finalizer, ok := execCtx.resper.(queryResultFinalizer)
 	if !ok {
 		return nil

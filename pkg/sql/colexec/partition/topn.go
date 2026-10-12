@@ -118,7 +118,7 @@ func (partition *Partition) prepareTopN(proc *process.Process) (err error) {
 	for i := range partitionExprs {
 		partitionExprs[i] = partition.OrderBySpecs[i].Expr
 	}
-	orderSpecs := partition.OrderBySpecs[partition.PartitionByCount:]
+	orderSpecs := nonLiteralOrderSpecs(partition.OrderBySpecs[partition.PartitionByCount:])
 	orderExprs := make([]*plan.Expr, len(orderSpecs))
 	for i := range orderExprs {
 		orderExprs[i] = orderSpecs[i].Expr
@@ -168,11 +168,14 @@ func (partition *Partition) prepareTopN(proc *process.Process) (err error) {
 		} else if spec.Flag&plan.OrderBySpec_NULLS_LAST != 0 {
 			nullsLast = true
 		}
-		typ := types.NewWithCharset(types.T(spec.Expr.Typ.Id), spec.Expr.Typ.Width, spec.Expr.Typ.Scale, uint8(spec.Expr.Typ.Charset))
+		typ := types.MustTypeFromPlan(spec.Expr.Typ)
 		// Top-N order keys must use the same total order as the window sorter.
 		// In particular, native float comparison is not a strict weak order for
 		// NaNs and can make the heap discard rows from the SQL-order prefix.
 		ctr.compares[i] = compare.NewOrder(typ, desc, nullsLast)
+		if ctr.compares[i] == nil {
+			return moerr.NewNotSupported(proc.Ctx, "unsupported partition Top-N order type "+typ.Oid.String())
+		}
 	}
 	return nil
 }

@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -99,10 +100,20 @@ func New(
 	hakeeper logservice.CNHAKeeperClient,
 	keyRouter client2.KeyRouter[pb.StatsInfoKey],
 	updateWorkerFactor int,
+	publish func(*Engine),
 	options ...EngineOptions,
 ) *Engine {
-	cluster := clusterservice.GetMOCluster(service)
-	services := cluster.GetAllTNServices()
+	if publish == nil {
+		panic("disttae engine requires an owner")
+	}
+	cluster, err := clusterservice.GetMOClusterWithContext(ctx, service)
+	if err != nil {
+		panic(err)
+	}
+	services, err := clusterservice.GetAllTNServicesWithContext(ctx, cluster)
+	if err != nil {
+		panic(err)
+	}
 
 	var tnID string
 	if len(services) > 0 {
@@ -136,6 +147,16 @@ func New(
 			},
 		),
 	}
+	constructed := false
+	defer func() {
+		if constructed {
+			return
+		}
+		if err := e.Close(); err != nil {
+			logutil.Error("failed to retire disttae engine construction", zap.Error(err))
+		}
+	}()
+	publish(e)
 	// Initialize snapshot manager
 	e.snapshotMgr = NewSnapshotManager()
 	e.snapshotMgr.Init()
@@ -147,6 +168,7 @@ func New(
 	e.gcPool = pool
 
 	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
+		func(owner *GlobalStats) { e.globalStats = owner },
 		WithUpdateWorkerFactor(updateWorkerFactor))
 
 	e.messageCenter = &message.MessageCenter{
@@ -209,19 +231,52 @@ func New(
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 
+	constructed = true
 	return e
 }
 
 func (e *Engine) Close() error {
-	if e.gcPool != nil {
-		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
-	}
+	e.closeOnce.Do(func() {
+		// Linearize statistics admission before waiting on any engine-owned
+		// resource. A callback must not start work after engine teardown begins.
+		e.dynamicCtx.closed.Store(true)
 
-	e.dynamicCtx.Close()
-	e.cloneTxnCache = nil
-	e.ccprTxnCache = nil
+		// The scheduler reads pClient and snapshotMgr. Stop and join it before
+		// retiring either dependency so a tick already in flight cannot use a
+		// closed resource.
+		e.gcMu.Lock()
+		cancel := e.gcSchedulerCancel
+		done := e.gcSchedulerDone
+		e.gcMu.Unlock()
+		if cancel != nil {
+			cancel()
+			<-done
+		}
 
-	return nil
+		if err := e.pClient.Close(); err != nil {
+			e.closeErr = err
+		}
+		if e.ccprTxnCache != nil {
+			e.ccprTxnCache.Close()
+		}
+		if e.snapshotMgr != nil {
+			e.snapshotMgr.Close()
+		}
+
+		if e.globalStats != nil {
+			e.globalStats.Close()
+		}
+		if e.gcPool != nil {
+			if err := e.gcPool.ReleaseContext(context.Background()); e.closeErr == nil {
+				e.closeErr = err
+			}
+		}
+		e.dynamicCtx.Close()
+		e.cloneTxnCache = nil
+		e.ccprTxnCache = nil
+	})
+
+	return e.closeErr
 }
 
 func (e *Engine) fillDefaults() {
@@ -306,6 +361,8 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	typ := getTyp(ctx)
 	sql := getSql(ctx)
 	accountId, userId, _, err := getAccessInfo(ctx)
@@ -350,7 +407,7 @@ func (e *Engine) loadDatabaseFromStorage(
 	name string,
 	op client.TxnOperator,
 ) (*cache.DatabaseItem, error) {
-	sql := fmt.Sprintf(catalog.MoDatabaseAllQueryFormat, accountID, name)
+	sql := fmt.Sprintf(catalog.MoDatabaseAllQueryFormat, accountID, sqlquote.String(name))
 	now := time.Now()
 	defer func() {
 		if time.Since(now) > time.Second {
@@ -546,6 +603,7 @@ func loadNameByIdFromStorage(
 	if err != nil {
 		return "", "", err
 	}
+	defer result.Close()
 	for _, b := range result.Batches {
 		for i := 0; i < b.RowCount(); i++ {
 			tblanmes = append(tblanmes, b.Vecs[0].GetStringAt(i))
@@ -591,8 +649,9 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	accountId, _ := defines.GetAccountId(ctx)
 	txn := op.GetWorkspace().(*Transaction)
 	dbName, tableName, deleted := txn.tableOps.queryNameByTid(tableId)
+	latestCatalogFallback := false
 	if tableName == "" && deleted {
-		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %d. Deleted in txn", tableId, accountId)
+		return "", "", nil, moerr.NewNoSuchTablef(ctx, "can not find table by id %d: accountId: %d. Deleted in txn", tableId, accountId)
 	}
 
 	// not found in tableOps, try cache
@@ -601,8 +660,11 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		cacheItem := cache.GetTableByIdAndTime(accountId, 0 /*db is not specified */, tableId, txn.op.SnapshotTS())
 		if cacheItem == nil {
 			latest := cache.GetTableById(accountId, 0, tableId)
-			if latest != nil && latest.Kind == catalog.SystemTemporaryTable && defines.IsTempTableName(latest.Name) {
+			if latest != nil && isSessionTemporaryCatalogItem(
+				cache, latest, accountId, latest.DatabaseId, latest.DatabaseName,
+			) {
 				cacheItem = latest
+				latestCatalogFallback = true
 			}
 		}
 		if cacheItem != nil {
@@ -645,7 +707,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	if tableName == "" {
 		accountId, _ := defines.GetAccountId(ctx)
-		return "", "", nil, moerr.NewInternalErrorf(
+		return "", "", nil, moerr.NewNoSuchTablef(
 			ctx,
 			"can not find table by id %d: accountId: %d",
 			tableId, accountId,
@@ -681,6 +743,19 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		)
 		return "", "", nil, err
 	}
+	if latestCatalogFallback {
+		var resolvedTableID uint64
+		if txnTable != nil {
+			resolvedTableID = txnTable.GetTableID(ctx)
+		}
+		if resolvedTableID != tableId {
+			return "", "", nil, moerr.NewInternalErrorf(
+				ctx,
+				"can not find table by id %d: accountId: %d. latest catalog name resolved to table id %d",
+				tableId, accountId, resolvedTableID,
+			)
+		}
+	}
 
 	return dbName, tableName, txnTable, nil
 }
@@ -699,6 +774,8 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 
 	// Get the database to be deleted
 	toDelDB, err := e.Database(ctx, name, op)
@@ -726,11 +803,12 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 	res, err := execReadSql(
-		ctx, op, fmt.Sprintf(catalog.MoDatabaseRowidQueryFormat, accountId, name), true,
+		ctx, op, fmt.Sprintf(catalog.MoDatabaseRowidQueryFormat, accountId, sqlquote.String(name)), true,
 	)
 	if err != nil {
 		return err
 	}
+	defer res.Close()
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
 		logutil.Error(
 			"engine.delete.relation.bad",
@@ -1161,6 +1239,39 @@ func (e *Engine) BuildBlockReaders(
 	filterHint ...engine.FilterHint) ([]engine.Reader, error) {
 	var rds []engine.Reader
 	proc := p.(*process.Process)
+	if combined, ok := relData.(*CombinedRelData); ok {
+		if num <= 0 {
+			return nil, moerr.NewInvalidInputNoCtx("partition block reader count must be positive")
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if combined.DataCnt() == 0 {
+			return ensureReaders(nil, num), nil
+		}
+		hint := engine.FilterHint{}
+		if len(filterHint) > 0 {
+			hint = filterHint[0]
+		}
+		// Decode once. Recursive ordinary builders borrow this root and give
+		// each reader its own share; only this frame owns the decoded root.
+		hint, filter, owned, err := prepareMembershipFilter(hint, docfilter.AdmissionForService(e.service))
+		if err != nil {
+			return nil, err
+		}
+		if owned {
+			defer filter.Free()
+		}
+		if hint.BF != nil && filter == nil {
+			return nil, moerr.NewInvalidInputNoCtx("partition block readers require a shareable membership filter")
+		}
+		// CombinedRelData is a partition-to-range mapping, not a splittable
+		// block list. Keep each child's shipped tombstones and the caller's
+		// snapshot on the remote reader path, without a local relation reader.
+		return buildPartitionBlockReaders(ctx, combined.tables, num, func(data engine.RelData) ([]engine.Reader, error) {
+			return e.BuildBlockReaders(ctx, proc, ts, expr, def, data, num, hint)
+		})
+	}
 	blkCnt := relData.DataCnt()
 	newNum := num
 	if blkCnt < num {
@@ -1383,8 +1494,37 @@ func (e *Engine) AcquireLogtailReadBarrier(
 	return e.pClient.AcquireLogtailReadBarrier(ctx)
 }
 
-// RunGCScheduler runs all GC tasks in a single goroutine with different intervals
-func (e *Engine) RunGCScheduler(ctx context.Context) {
+// StartGCScheduler starts the engine-owned GC scheduler. The scheduler is
+// started at most once and is joined by Close.
+func (e *Engine) StartGCScheduler(ctx context.Context) error {
+	if ctx == nil {
+		return moerr.NewInvalidInputNoCtx("engine GC scheduler context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	e.gcMu.Lock()
+	defer e.gcMu.Unlock()
+	if e.dynamicCtx.closed.Load() {
+		return moerr.NewInvalidStateNoCtx("engine is closed")
+	}
+	if e.gcSchedulerDone != nil {
+		return nil
+	}
+	schedulerCtx, cancel := context.WithCancel(ctx)
+	e.gcSchedulerCancel = cancel
+	e.gcSchedulerDone = make(chan struct{})
+	done := e.gcSchedulerDone
+	go func() {
+		defer close(done)
+		e.runGCScheduler(schedulerCtx)
+	}()
+	return nil
+}
+
+// runGCScheduler runs all GC tasks in a single goroutine with different intervals.
+func (e *Engine) runGCScheduler(ctx context.Context) {
 	unusedTableTicker := time.NewTicker(unsubscribeProcessTicker)
 	partitionStateTicker := time.NewTicker(gcPartitionStateTicker)
 	snapshotTicker := time.NewTicker(gcSnapshotTicker)

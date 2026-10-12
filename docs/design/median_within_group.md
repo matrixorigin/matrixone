@@ -5,6 +5,10 @@
 **Related:** [#25110](https://github.com/matrixorigin/matrixone/issues/25110),
 PR #27476
 
+The later [`ordered-set window` design](20260919-ordered-set-window-functions.md)
+adds `MEDIAN() WITHIN GROUP (...) OVER (...)`; rejection of that spelling below
+records the boundary of this original revision.
+
 This revision replaces the v1 duplicate-expression proposal. The reviewed
 decision is intentionally narrow: expose one ordered-set spelling for the
 existing `MEDIAN` aggregate without adding a second expression binder,

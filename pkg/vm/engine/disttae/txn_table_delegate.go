@@ -211,6 +211,11 @@ func (tbl *txnTableDelegate) Stats(
 		)
 	}
 
+	if tbl.origin.workspaceInsertRowEstimate() > 0 {
+		// The remote owner cannot observe this CN's uncommitted workspace.
+		return transientTableStats(nil, float64(^uint64(0))), nil
+	}
+
 	var stats pb.StatsInfo
 	has := false
 	err = tbl.forwardRead(
@@ -235,8 +240,12 @@ func (tbl *txnTableDelegate) Stats(
 		return nil, err
 	}
 	if !has {
-		return nil, nil
+		return transientTableStats(nil, float64(^uint64(0))), nil
 	}
+	if stats.TableName == "" && stats.TableCnt > 0 {
+		return transientTableStats(&stats, float64(^uint64(0))), nil
+	}
+
 	return &stats, nil
 }
 

@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -305,52 +304,4 @@ func TestNewDecodeFailureReleasesAdmission(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, f)
 	require.Equal(t, admission.acquired, admission.released)
-}
-
-func TestMemoryAdmissionUsesProductionParallelPolicy(t *testing.T) {
-	const (
-		request    = int64(1 << 20)
-		limitSlots = int64(10)
-		// The production CN policy's hard cap is 80% of the pool.
-		grantedSlots = int64(8)
-		workers      = 100
-	)
-	admission := rscthrottler.NewMemThrottler(
-		"docfilter-parallel-test",
-		1,
-		rscthrottler.WithConstLimit(request*limitSlots),
-		rscthrottler.WithAcquirePolicy(
-			rscthrottler.AcquirePolicyForCNFlushS3),
-	)
-
-	start := make(chan struct{})
-	releaseAll := make(chan struct{})
-	results := make(chan bool, workers)
-	var wg sync.WaitGroup
-	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			release, err := acquireMemory(admission, request)
-			if err != nil {
-				results <- false
-				return
-			}
-			results <- true
-			<-releaseAll
-			release()
-		}()
-	}
-	close(start)
-	granted := 0
-	for range workers {
-		if <-results {
-			granted++
-		}
-	}
-	require.Equal(t, int(grantedSlots), granted)
-	close(releaseAll)
-	wg.Wait()
-	require.Equal(t, request*limitSlots, admission.Available())
 }

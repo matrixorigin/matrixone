@@ -343,11 +343,6 @@ func (tTxnOp *testTxnOperator) Debug(ctx context.Context, ops []txn.TxnRequest) 
 	panic("implement me")
 }
 
-func (tTxnOp *testTxnOperator) NextSequence() uint64 {
-	//TODO implement me
-	panic("implement me")
-}
-
 func (tTxnOp *testTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
 	//TODO implement me
 	return 1

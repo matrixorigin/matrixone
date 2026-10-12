@@ -85,6 +85,7 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 			proc,
 			[]*plan.Expr{loopJoin.NonEqCond},
 			loopJoin.allocationAccount,
+			loopJoin.OwnsConstantFilterDiagnostics,
 		)
 		if err != nil {
 			return err

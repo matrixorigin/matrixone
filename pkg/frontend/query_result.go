@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -382,6 +383,11 @@ func saveQueryResult2(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.
 		} else {
 			if err := saveBatch(newCtx, ses, bat); err != nil {
 				return err
+			}
+			// This inert test point fails a producer only after its batch has
+			// been persisted, before SELECT can publish completion metadata.
+			if _, _, injected := fault.TriggerFaultWithContext(execCtx.reqCtx, "saved-result-after-batch"); injected {
+				return moerr.NewInternalError(execCtx.reqCtx, "injected saved-result batch failure")
 			}
 		}
 	}
@@ -748,9 +754,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	mrs := &MysqlResultSet{}
 	typs := make([]types.Type, columnCount)
 	for i, c := range columnDefs.ResultCols {
-		typs[i] = types.NewWithCharset(
-			types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale, uint8(c.Typ.Charset),
-		)
+		typs[i] = types.MustTypeFromPlan(c.Typ)
 		mcol := &MysqlColumn{}
 		mcol.SetName(c.GetName())
 		err = convertEngineTypeToMysqlType(ctx, typs[i].Oid, mcol)
@@ -984,9 +988,7 @@ func (result *QueryResult) FinishStage(execCtx *ExecCtx) error {
 	}
 	empty := batch.NewWithSize(len(ses.rs.ResultCols))
 	for i, col := range ses.rs.ResultCols {
-		empty.Vecs[i] = vector.NewVec(types.NewWithCharset(
-			types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset),
-		))
+		empty.Vecs[i] = vector.NewVec(types.MustTypeFromPlan(col.Typ))
 	}
 	defer empty.Clean(ses.proc.Mp())
 	empty.SetRowCount(0)

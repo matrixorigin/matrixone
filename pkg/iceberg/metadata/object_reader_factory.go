@@ -83,13 +83,13 @@ func (f VendedObjectReaderFactory) newVendedObjectReader(ctx context.Context, re
 	}
 	credentialHash := api.PathHash(storageCredentialsIdentity(credentials))
 	return icebergio.ProviderObjectReader{
-			Provider:         provider,
-			ScopeForLocation: scopeForLocation,
-		}, ObjectReaderContext{
-			CredentialHash:  credentialHash,
-			CredentialScope: credentialHash,
-			ObjectIORef:     objectIORef,
-		}, nil
+		Provider:         provider,
+		ScopeForLocation: scopeForLocation,
+	}, ObjectReaderContext{
+		CredentialHash:  credentialHash,
+		CredentialScope: credentialHash,
+		ObjectIORef:     objectIORef,
+	}, nil
 }
 
 func (f VendedObjectReaderFactory) newRemoteSigningObjectReader(ctx context.Context, catalog api.CatalogClient, req api.ScanPlanRequest) (api.ObjectReader, ObjectReaderContext, error) {
@@ -149,13 +149,13 @@ func (f VendedObjectReaderFactory) newRemoteSigningObjectReader(ctx context.Cont
 	}
 	scopeHash := api.PathHash(remoteSigningIdentity(table.Config))
 	return icebergio.ProviderObjectReader{
-			Provider:         provider,
-			ScopeForLocation: scopeForLocation,
-		}, ObjectReaderContext{
-			CredentialHash:  scopeHash,
-			CredentialScope: scopeHash,
-			ObjectIORef:     objectIORef,
-		}, nil
+		Provider:         provider,
+		ScopeForLocation: scopeForLocation,
+	}, ObjectReaderContext{
+		CredentialHash:  scopeHash,
+		CredentialScope: scopeHash,
+		ObjectIORef:     objectIORef,
+	}, nil
 }
 
 func objectIORefTTL(credentials []api.StorageCredential, nowFunc func() time.Time) time.Duration {

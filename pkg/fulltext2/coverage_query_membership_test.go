@@ -288,8 +288,8 @@ func TestContainsPkTypes(t *testing.T) {
 }
 
 // TestLoadedContainsPkTypes proves the loaded-docmap fast path probes bytes
-// identical to docfilter.Build's source-vector representation. UUID deliberately
-// uses the typed fallback because its docmap stores the canonical string.
+// identical to docfilter.Build's source-vector representation. UUID decodes its
+// canonical docmap text into the same raw bytes as the source vector.
 func TestLoadedContainsPkTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
 	for _, tc := range loadedPkCases() {
@@ -345,8 +345,8 @@ func TestLoadedContainsPkTypes(t *testing.T) {
 
 			// Byte equality alone would still pass if loaded keys fell back to
 			// decode-plus-reencode. Prove the non-UUID probe is the exact borrowed
-			// docmap view. UUID is the intentional control: its stored 36-byte
-			// canonical text must be converted to an independent raw 16-byte probe.
+			// docmap view. UUID's stored text must be converted to an independent
+			// raw 16-byte probe.
 			stored, err := loaded.pkContent(0)
 			require.NoError(t, err)
 			view := capture.probeViews[0]
@@ -365,19 +365,11 @@ func TestLoadedContainsPkTypes(t *testing.T) {
 }
 
 // TestLoadedContainsPkNoAlloc keeps the allocation contract at the production
-// boundary: after the loaded segment and probe are warm, a non-UUID PK probe
-// must borrow immutable docmap bytes instead of decoding a boxed value and
-// encoding it again.  UUID is intentionally excluded because its loaded
-// representation is canonical text while the runtime-filter source is raw 16
-// bytes and therefore uses the typed fallback.
+// boundary: after the loaded segment and probe are warm, a loaded PK probe must
+// borrow immutable docmap bytes instead of decoding a boxed value and encoding
+// it again. UUID parses canonical text directly into query-owned raw bytes.
 func TestLoadedContainsPkNoAlloc(t *testing.T) {
 	for _, tc := range loadedPkCases() {
-		if tc.typ == types.T_uuid {
-			// UUID is intentionally excluded: the loaded docmap keeps canonical text
-			// while the runtime filter source uses raw 16-byte values, so its typed
-			// fallback necessarily decodes and re-encodes the probe.
-			continue
-		}
 		t.Run(tc.name, func(t *testing.T) {
 			// The int64 fixture uses 1<<40 (rather than a small integer) so a
 			// regression that boxes and decodes the PK cannot accidentally benefit

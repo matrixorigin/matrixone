@@ -53,7 +53,7 @@ func TestIntegerArithmeticNegotiatesWorkerVersionAndFencesSender(t *testing.T) {
 		client.version = defines.MORPCVersion70
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-		require.NoError(t, c.constrainIntegerDomainWorkers(qry))
+		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 		require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 		require.Len(t, c.cnList, 1)
 		require.Equal(t, c.addr, c.cnList[0].Addr)
@@ -68,7 +68,7 @@ func TestIntegerArithmeticNegotiatesWorkerVersionAndFencesSender(t *testing.T) {
 		client.version = defines.MORPCVersion71
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-		require.NoError(t, c.constrainIntegerDomainWorkers(qry))
+		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 		require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 		data, err := encodeRemoteScope(scope, c.proc)
 		require.NoError(t, err)

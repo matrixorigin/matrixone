@@ -1,0 +1,197 @@
+drop database if exists arithmetic_predicate_semantics;
+create database arithmetic_predicate_semantics;
+use arithmetic_predicate_semantics;
+set @saved_transpose_hints=@@optimizer_hints;
+create table fp(id int primary key, v double);
+insert into fp values (1,-1e-17),(2,0),(3,1e-17),(4,null),(5,2);
+select id,v+1e0=1e0 as p from fp order by id;
+id	p
+1	1
+2	1
+3	1
+4	null
+5	0
+select id from fp where v+1e0=1e0 order by id;
+id
+1
+2
+3
+select id from fp where v-1e0=-1e0 order by id;
+id
+1
+2
+3
+select id from fp where 1e0-v=1e0 order by id;
+id
+1
+2
+3
+select id from fp where 1e0=v+1e0 order by id;
+id
+1
+2
+3
+select id from fp where v+1e0=1e0 or v is null order by id;
+id
+1
+2
+3
+4
+select id from fp where id>=2 and v+1e0=1e0 order by id;
+id
+2
+3
+prepare fp_predicate from 'select id from fp where v+cast(? as double)=cast(? as double) order by id';
+set @one=1e0;
+execute fp_predicate using @one,@one;
+id
+1
+2
+3
+set @one=0;
+execute fp_predicate using @one,@one;
+id
+2
+set @one=null;
+execute fp_predicate using @one,@one;
+id
+set @one=1e0;
+execute fp_predicate using @one,@one;
+id
+1
+2
+3
+deallocate prepare fp_predicate;
+select mo_ctl('dn','flush','arithmetic_predicate_semantics.fp');
+mo_ctl(dn, flush, arithmetic_predicate_semantics.fp)
+ignored
+set optimizer_hints='blockFilter=1';
+select id from fp where v+1e0=1e0 order by id;
+id
+1
+2
+3
+select id from fp where v-1e0=-1e0 order by id;
+id
+1
+2
+3
+select id from fp where 1e0<=v order by id;
+id
+5
+create table ov(v bigint);
+insert into ov values (9223372036854775807);
+select v from ov where v+1=9223372036854775807;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 1)
+select mo_ctl('dn','flush','arithmetic_predicate_semantics.ov');
+mo_ctl(dn, flush, arithmetic_predicate_semantics.ov)
+ignored
+select v from ov where v+1=9223372036854775807;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 1)
+set optimizer_hints='blockFilter=2';
+select v from ov where v+1=9223372036854775807;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 1)
+select v,v+1 from ov;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 1)
+truncate table ov;
+insert into ov values (-9223372036854775808);
+select v from ov where v-1=-9223372036854775808;
+Data truncation: data out of range: data type int64, (-9223372036854775808 - 1)
+create table persisted_overflow(v bigint primary key);
+insert into persisted_overflow values (3),(9223372036854775807);
+select v from persisted_overflow where v+2=5;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 2)
+select v from persisted_overflow where round(v,-1)=100;
+-- @regex("data out of range: data type int64, ROUND", true)
+Data truncation: data out of range: data type int64, ROUND
+select mo_ctl('dn','flush','arithmetic_predicate_semantics.persisted_overflow');
+mo_ctl(dn, flush, arithmetic_predicate_semantics.persisted_overflow)
+ignored
+set optimizer_hints='blockFilter=1';
+select v from persisted_overflow where v+2=5;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 2)
+select v from persisted_overflow where round(v,-1)=100;
+-- @regex("data out of range: data type int64, ROUND", true)
+Data truncation: data out of range: data type int64, ROUND
+set optimizer_hints='blockFilter=2';
+select v from persisted_overflow where round(v,-1)=100;
+-- @regex("data out of range: data type int64, ROUND", true)
+Data truncation: data out of range: data type int64, ROUND
+set optimizer_hints='blockFilter=1';
+select v from persisted_overflow where v+v=v;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 9223372036854775807)
+select v from persisted_overflow where v*v=v;
+Data truncation: data out of range: data type int64, (9223372036854775807 * 9223372036854775807)
+select v from persisted_overflow where v-v=v;
+v
+select count(*) as healthy from persisted_overflow;
+healthy
+2
+use arithmetic_predicate_semantics;
+set optimizer_hints='blockFilter=1';
+create table reciprocal(v double);
+insert into reciprocal values(-1),(.1),(1);
+select v from reciprocal where 1/v>2;
+v
+0.1
+select mo_ctl('dn','flush','arithmetic_predicate_semantics.reciprocal');
+mo_ctl(dn, flush, arithmetic_predicate_semantics.reciprocal)
+ignored
+select v from reciprocal where 1/v>2;
+v
+0.1
+explain (analyze true, check '["outputRows=1", "Block Filter Cond"]') select v from reciprocal where 1/v>2;
+-- @regex("Analyze:", true)
+tp query plan  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Table Scan on arithmetic_predicate_semantics.reciprocal  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=3 outputRows=1 (min=1, max=1) InputSize=24 bytes OutputSize=8 bytes ReadSize=59 bytes|0 bytes|0 bytes MemorySize=35 bytes (min=35 bytes, max=35 bytes)  𝄀
+        Filter Cond: ((1 / reciprocal.v) > 2)  𝄀
+        Block Filter Cond: ((1 / reciprocal.v) > 2)
+create table scaled_product(v decimal(16,8));
+insert into scaled_product values(1);
+select v from scaled_product where round(v*cast('0.00000001' as decimal(16,8)),8)=0.00000001;
+v
+1.00000000
+select mo_ctl('dn','flush','arithmetic_predicate_semantics.scaled_product');
+mo_ctl(dn, flush, arithmetic_predicate_semantics.scaled_product)
+ignored
+select v from scaled_product where round(v*cast('0.00000001' as decimal(16,8)),8)=0.00000001;
+v
+1.00000000
+explain (analyze true, check '["outputRows=1", "Block Filter Cond"]') select v from scaled_product where round(v*cast('0.00000001' as decimal(16,8)),8)=0.00000001;
+-- @regex("Analyze:", true)
+tp query plan  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Table Scan on arithmetic_predicate_semantics.scaled_product  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=43 bytes|0 bytes|0 bytes MemorySize=17 bytes (min=17 bytes, max=17 bytes)  𝄀
+        Filter Cond: (round((scaled_product.v * 0.00000001), 8) = 0.00000001)  𝄀
+        Block Filter Cond: (round((scaled_product.v * 0.00000001), 8) = 0.00000001)
+create table correlated(v bigint,w bigint);
+insert into correlated values(9223372036854775707,0),(0,100);
+select w from correlated where round(v+w,-1)=100;
+w
+100
+select mo_ctl('dn','flush','arithmetic_predicate_semantics.correlated');
+mo_ctl(dn, flush, arithmetic_predicate_semantics.correlated)
+ignored
+select w from correlated where round(v+w,-1)=100;
+w
+100
+explain (analyze true, check '["outputRows=1", "Block Filter Cond"]') select w from correlated where round(v+w,-1)=100;
+-- @regex("Analyze:", true)
+tp query plan  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Table Scan on arithmetic_predicate_semantics.correlated  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=2 outputRows=1 (min=1, max=1) InputSize=32 bytes OutputSize=8 bytes ReadSize=104 bytes|0 bytes|0 bytes MemorySize=42 bytes (min=42 bytes, max=42 bytes)  𝄀
+        Filter Cond: (round((correlated.v + correlated.w), -1) = 100)  𝄀
+        Block Filter Cond: (round((correlated.v + correlated.w), -1) = 100)
+set optimizer_hints='blockFilter=2';
+select w from correlated where round(v+w,-1)=100;
+w
+100
+set optimizer_hints=@saved_transpose_hints;
+drop database arithmetic_predicate_semantics;

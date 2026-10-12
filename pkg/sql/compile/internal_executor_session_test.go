@@ -58,7 +58,7 @@ func TestAttachInternalExecutorSessionWithNil(t *testing.T) {
 
 func TestAttachInternalExecutorCompilerContext(t *testing.T) {
 	ctx := context.Background()
-	compilerContext := plan.NewMockCompilerContext(false)
+	compilerContext := &plan.MockCompilerContext{}
 	attached := attachInternalExecutorCompilerContext(ctx, compilerContext)
 	if got := getInternalExecutorCompilerContext(attached); got != compilerContext {
 		t.Fatalf("expected attached compiler context, got %v", got)

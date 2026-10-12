@@ -4,6 +4,10 @@
 -- 2) dropping snapshots frees quota (count is based on existing snapshots)
 -- 3) limits are configured by sys through mo_feature_registry_upsert/mo_feature_limit_upsert
 
+drop snapshot if exists fl_snap_sys_first;
+drop snapshot if exists fl_snap_sys_old;
+drop snapshot if exists fl_snap_sys_disabled;
+drop snapshot if exists fl_snap_sys_second;
 drop account if exists fl_snap_acc;
 create account fl_snap_acc admin_name = 'admin' identified by '111';
 
@@ -71,4 +75,50 @@ drop table t;
 drop database fl_snap_db;
 
 -- @session
+-- ACCOUNT quota belongs to the target across sys and tenant catalogs.
+-- @ignore:0
+select mo_feature_limit_upsert(@fl_snap_id, 'snapshot', 'account', 0);
+create snapshot fl_snap_sys_disabled for account fl_snap_acc;
+select count(*) from mo_catalog.mo_snapshots where sname = 'fl_snap_sys_disabled';
+
+-- @ignore:0
+select mo_feature_limit_upsert(@fl_snap_id, 'snapshot', 'account', 1);
+create snapshot fl_snap_sys_first for account fl_snap_acc;
+select obj_id = @fl_snap_id from mo_catalog.mo_snapshots where sname = 'fl_snap_sys_first';
+
+-- @session:id=1&user=fl_snap_acc:admin&password=111
+create snapshot fl_snap_tenant_second for account;
+select count(*) from mo_catalog.mo_snapshots where sname = 'fl_snap_tenant_second';
+
+-- @session
+drop snapshot fl_snap_sys_first;
+
+-- @session:id=1&user=fl_snap_acc:admin&password=111
+create snapshot fl_snap_tenant_first for account;
+
+-- @session
+create snapshot fl_snap_sys_second for account fl_snap_acc;
+select count(*) from mo_catalog.mo_snapshots where sname = 'fl_snap_sys_second';
+
+-- @session:id=1&user=fl_snap_acc:admin&password=111
+drop snapshot fl_snap_tenant_first;
+
+-- @session
+-- Retained sys snapshots belong to the old physical account incarnation.
+create snapshot fl_snap_sys_old for account fl_snap_acc;
+set @fl_snap_old_id = @fl_snap_id;
+drop account fl_snap_acc;
+create account fl_snap_acc admin_name = 'admin' identified by '111';
+set @fl_snap_id = (select account_id from mo_catalog.mo_account where account_name = 'fl_snap_acc');
+select @fl_snap_id != @fl_snap_old_id;
+-- @ignore:0
+select mo_feature_limit_upsert(@fl_snap_id, 'snapshot', 'account', 1);
+
+-- @session:id=2&user=fl_snap_acc:admin&password=111
+create snapshot fl_snap_new_account for account;
+select count(*) from mo_catalog.mo_snapshots where sname = 'fl_snap_new_account';
+drop snapshot fl_snap_new_account;
+
+-- @session
+drop snapshot fl_snap_sys_old;
 drop account fl_snap_acc;

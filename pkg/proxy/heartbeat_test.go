@@ -151,6 +151,7 @@ func TestServerHeartbeatSendsImmediately(t *testing.T) {
 	runtime.SetupServiceBasedRuntime(t.Name(), rt)
 	sent := make(chan pb.ProxyHeartbeat, 1)
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	client := &testHAClient{succeed: true, sent: sent}
 	ser := &Server{
 		haKeeperClient: client,

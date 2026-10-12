@@ -41,10 +41,11 @@ func newTestCuvsTableDef(pkName, vecColName string, vecWidth int32, includeCols 
 		pkName:     0,
 		vecColName: 1,
 	}
-	cols := []*plan.ColDef{
-		{Name: pkName, Typ: plan.Type{Id: int32(types.T_int64)}},
-		{Name: vecColName, Typ: plan.Type{Id: int32(types.T_array_float32), Width: vecWidth}},
-	}
+	cols := make([]*plan.ColDef, 0, 2+len(includeCols))
+	cols = append(cols,
+		&plan.ColDef{Name: pkName, Typ: plan.Type{Id: int32(types.T_int64)}},
+		&plan.ColDef{Name: vecColName, Typ: plan.Type{Id: int32(types.T_array_float32), Width: vecWidth}},
+	)
 	for i, ic := range includeCols {
 		idx := int32(2 + i)
 		name2col[ic.name] = idx

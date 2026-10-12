@@ -84,7 +84,7 @@ func tempArtifacts(t *testing.T) map[string]bool {
 // own refusal takes the identical path.
 func TestLoadIndexesRemovesFetchedTarsOnError(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	built := buildTestModel(t, "leak-a", nil)
@@ -142,7 +142,7 @@ func TestLoadIndexesRemovesFetchedTarsOnError(t *testing.T) {
 // fetches is the only observable that distinguishes fail-fast from fetch-all.
 func TestLoadIndexesStopsFetchingOnceOverBudget(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	built := buildTestModel(t, "stop-0", nil)

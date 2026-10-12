@@ -39,6 +39,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -471,7 +472,13 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
 		table.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
-		table.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+		var observedStats *pbstats.StatsInfo
+		statsCalls := 0
+		table.EXPECT().Stats(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(context.Context, bool) (*pbstats.StatsInfo, error) {
+				statsCalls++
+				return observedStats, nil
+			}).AnyTimes()
 		table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 		table.EXPECT().GetEngineType().Return(engine.Disttae).AnyTimes()
@@ -513,6 +520,53 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		stats, err := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Snapshot{TS: ts})
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(stats, convey.ShouldBeNil)
+
+		workspace := newTestWorkspace()
+		txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+		ses.proc.Base.TxnOperator = txnOperator
+		tcc.execCtx.proc = ses.proc
+		obj := &plan.ObjectRef{Obj: 10, SchemaName: "abc", ObjName: "t1"}
+		tableDef := &plan.TableDef{Version: 7}
+		current := &pbstats.StatsInfo{TableName: "t1", TableCnt: 5,
+			NdvMap: map[string]float64{"v": 5}, NullCntMap: map[string]uint64{"v": 1}}
+		observedStats = current
+		got, err := tcc.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Same(t, current, got)
+		before := statsCalls
+		got, err = tcc.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Same(t, current, got)
+		require.Equal(t, before, statsCalls, "completed readonly stats retain the 3s fast path")
+		snapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}}
+		for _, count := range []float64{2, 0} {
+			historical := &pbstats.StatsInfo{TableName: "t1", TableCnt: count,
+				NdvMap: map[string]float64{"v": count}, NullCntMap: map[string]uint64{"v": 0}}
+			observedStats = historical
+			got, err = tcc.StatsWithTableDef(obj, tableDef, snapshot)
+			require.NoError(t, err)
+			require.Same(t, historical, got, "snapshot named empty keeps its completed marker")
+			wrapper := ses.GetStatsCache().Get(10)
+			require.Equal(t, historical.NdvMap, wrapper.GetStats().NdvMap, "NDV consumers use this planning pass's snapshot maps")
+			require.Empty(t, wrapper.GetStats().TableName)
+			require.Equal(t, "t1", historical.TableName, "published input is immutable")
+			observedStats = current
+			before = statsCalls
+			got, err = tcc.StatsWithTableDef(obj, tableDef, nil)
+			require.NoError(t, err)
+			require.Same(t, current, got)
+			require.Equal(t, before+1, statsCalls, "snapshot wrapper cannot serve the current 3s fast hit")
+		}
+		workspace.readonly = false
+		observedStats = &pbstats.StatsInfo{TableCnt: 10, AccurateObjectNumber: 1}
+		got, err = tcc.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Same(t, observedStats, got, "own writes bypass old completed stats")
+		workspace.readonly = true
+		before = statsCalls
+		_, err = tcc.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Equal(t, before+1, statsCalls, "anonymous overlay is not cache-complete even with accurate objects")
 	})
 }
 
@@ -701,7 +755,7 @@ func TestSession_Migrate(t *testing.T) {
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
-			txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 			txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
@@ -742,6 +796,7 @@ func TestSession_Migrate(t *testing.T) {
 			Tenant:   GetDefaultTenant(),
 			TenantID: GetSysTenantId(),
 		}
+		session.ruleCache = map[string]string{}
 		session.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, proc: testutil.NewProc(t), ses: session}
 		proto.ses = session
 		session.setRoutineManager(rm)
@@ -766,6 +821,8 @@ func TestSession_Migrate(t *testing.T) {
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
 			DB:                      "d1",
 			LastAffectedRows:        7,
+			LastInsertID:            13,
+			LastInsertIDExported:    true,
 			FoundRows:               11,
 			UserDefinedVarsExported: true,
 			UserDefinedVars: []*query.MigrateUserDefinedVar{
@@ -802,6 +859,8 @@ func TestSession_Migrate(t *testing.T) {
 		}
 		assert.Equal(t, int64(7), s.GetLastAffectedRows())
 		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
+		assert.Equal(t, uint64(13), s.GetLastInsertID())
+		assert.Equal(t, uint64(13), s.GetProc().GetLastInsertID())
 		assert.Equal(t, uint64(11), s.GetLastFoundRows())
 		assert.Equal(t, uint64(11), s.GetProc().GetFoundRows())
 
@@ -821,6 +880,23 @@ func TestSession_Migrate(t *testing.T) {
 		assert.Nil(t, resp)
 		assert.Equal(t, int64(0), s.GetLastAffectedRows())
 		assert.Equal(t, int64(0), s.GetProc().GetAffectedRows())
+	})
+
+	t.Run("rejects missing LAST_INSERT_ID snapshot", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d1", nil)
+		s.SetLastInsertID(9)
+		s.GetProc().SetLastInsertID(9)
+
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{DB: "d1"})
+		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+		require.Equal(t, uint64(9), s.GetLastInsertID())
+		require.Equal(t, uint64(9), s.GetProc().GetLastInsertID())
 	})
 
 	t.Run("typed user variables", func(t *testing.T) {
@@ -851,7 +927,9 @@ func TestSession_Migrate(t *testing.T) {
 		for _, name := range []string{
 			"character_set_client", "character_set_connection", "character_set_results",
 		} {
-			require.NoError(t, source.SetSessionSysVar(context.Background(), name, "latin1"))
+			require.Error(t, source.SetSessionSysVar(context.Background(), name, "latin1"))
+			// Model a snapshot created before the new-request admission policy.
+			require.NoError(t, source.restoreSessionSysVar(context.Background(), name, "latin1"))
 		}
 		require.NoError(t, source.GetTxnHandler().setNextTxnIsolation(
 			context.Background(), txn.TxnIsolation_RC, false))
@@ -866,9 +944,10 @@ func TestSession_Migrate(t *testing.T) {
 
 		target := genSession(ctrl, "d1", nil)
 		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			ConnID:      88,
-			DB:          exported.DB,
-			SetVarStmts: []string{"set sql_mode = @mode"},
+			ConnID:               88,
+			DB:                   exported.DB,
+			LastInsertIDExported: true,
+			SetVarStmts:          []string{"set sql_mode = @mode"},
 			PrepareStmts: append(exported.PrepareStmts, &query.PrepareStmt{
 				Name: "pending_isolation_prepare",
 				SQL:  "select ?",
@@ -905,6 +984,7 @@ func TestSession_Migrate(t *testing.T) {
 		invalidTarget := genSession(ctrl, "d1", nil)
 		err = Migrate(context.Background(), invalidTarget, &query.MigrateConnToRequest{
 			DB:                      "d1",
+			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
 			UserDefinedVars:         []*query.MigrateUserDefinedVar{{Name: "mode", Value: plan2.MakePlan2StringConstExprWithType("PIPES_AS_CONCAT")}},
 			SystemVariablesExported: true,
@@ -941,6 +1021,7 @@ func TestSession_Migrate(t *testing.T) {
 		}()
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
 			DB:                      "d1",
+			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
 			UserDefinedVars: []*query.MigrateUserDefinedVar{{
 				Name:  "ts0",
@@ -954,6 +1035,7 @@ func TestSession_Migrate(t *testing.T) {
 		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion22)
 		err = Migrate(context.Background(), target, &query.MigrateConnToRequest{
 			DB:                      "d1",
+			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
 			UserDefinedVars: []*query.MigrateUserDefinedVar{{
 				Name:  "ts0",
@@ -987,7 +1069,8 @@ func TestSession_Migrate(t *testing.T) {
 		}()
 
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			DB: "d1",
+			DB:                   "d1",
+			LastInsertIDExported: true,
 			TempTables: []*query.MigrateTempTable{{
 				Database: "d1", Alias: "tmp", PhysicalName: "__mo_tmp_source_d1_tmp",
 			}},
@@ -1037,6 +1120,7 @@ func TestSession_Migrate(t *testing.T) {
 
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
 			DB:                        "d1",
+			LastInsertIDExported:      true,
 			SystemVariablesExported:   true,
 			SystemVariablesReplayable: true,
 			SystemVariables: []*query.MigrateSystemVariable{
@@ -1095,6 +1179,7 @@ func TestSession_Migrate(t *testing.T) {
 		// invalidate when restoring either cache-control variable.
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
 			DB:                        "d1",
+			LastInsertIDExported:      true,
 			SystemVariablesExported:   true,
 			SystemVariablesReplayable: true,
 			SystemVariables: []*query.MigrateSystemVariable{
@@ -1153,6 +1238,7 @@ func TestSession_Migrate(t *testing.T) {
 		require.True(t, target.GetTxnHandler().OptionBitsIsSet(OPTION_AUTOCOMMIT))
 
 		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			LastInsertIDExported:    true,
 			SystemVariablesExported: true,
 			SystemVariables:         exported,
 		}))
@@ -1186,8 +1272,9 @@ func TestSession_Migrate(t *testing.T) {
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
-			ConnID: 88,
-			DB:     "d1",
+			ConnID:               88,
+			DB:                   "d1",
+			LastInsertIDExported: true,
 			UserLevelLocks: []*query.UserLevelLock{
 				{Name: "restored_lock", Count: 2},
 			},
@@ -1210,7 +1297,10 @@ func TestSession_Migrate(t *testing.T) {
 		InitServerLevelVars(sid)
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d2", context.Canceled)
-		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{DB: "d2"})
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
+			DB:                   "d2",
+			LastInsertIDExported: true,
+		})
 		assert.Equal(t, "", s.GetDatabaseName())
 		assert.NoError(t, err)
 	})
@@ -1227,7 +1317,11 @@ func TestSession_Migrate(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := Migrate(ctx, s, &query.MigrateConnToRequest{DB: "d3", LastAffectedRows: 3})
+		err := Migrate(ctx, s, &query.MigrateConnToRequest{
+			DB:                   "d3",
+			LastAffectedRows:     3,
+			LastInsertIDExported: true,
+		})
 		assert.ErrorIs(t, err, context.Canceled)
 		assert.Equal(t, int64(9), s.GetLastAffectedRows())
 	})

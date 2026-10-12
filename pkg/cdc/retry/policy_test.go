@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -95,34 +96,39 @@ func TestPolicy_Do_NonRetryableStopsImmediately(t *testing.T) {
 }
 
 func TestPolicy_Do_ContextCancelDuringBackoff(t *testing.T) {
-	backoff := ExponentialBackoff{
-		Base:   time.Hour, // ensure we block on timer
-		Factor: 1.0,
-		Jitter: 0,
-		randFn: func(time.Duration) time.Duration { return 0 },
-	}
-	p := Policy{
-		MaxAttempts: 3,
-		Classifier:  AlwaysRetryClassifier{},
-		Backoff:     backoff,
-	}
+	synctest.Test(t, func(t *testing.T) {
+		backoff := ExponentialBackoff{
+			Base:   time.Hour, // ensure we block on timer
+			Factor: 1.0,
+			Jitter: 0,
+			randFn: func(time.Duration) time.Duration { return 0 },
+		}
+		p := Policy{
+			MaxAttempts: 3,
+			Classifier:  AlwaysRetryClassifier{},
+			Backoff:     backoff,
+		}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		cancel()
-	}()
+		cancelStarted := make(chan struct{})
+		go func() {
+			close(cancelStarted)
+			time.Sleep(10 * time.Millisecond)
+			cancel()
+		}()
 
-	start := time.Now()
-	err := p.Do(ctx, func() error { return moerr.NewInternalErrorNoCtx("retryable") })
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context canceled, got %v", err)
-	}
-	if time.Since(start) > time.Second {
-		t.Fatalf("context cancel should abort quickly")
-	}
+		<-cancelStarted
+		start := time.Now()
+		err := p.Do(ctx, func() error { return moerr.NewInternalErrorNoCtx("retryable") })
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context canceled, got %v", err)
+		}
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Fatalf("context cancel should abort quickly, took %s", elapsed)
+		}
+	})
 }
 
 func TestDefaultClassifier(t *testing.T) {

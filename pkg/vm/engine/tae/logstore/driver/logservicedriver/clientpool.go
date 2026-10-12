@@ -117,6 +117,7 @@ func (rc *writeTokenController) Apply() (token uint64) {
 type wrappedClient struct {
 	wrapped    BackendClient
 	buf        logservice.LogRecord
+	bufSize    int
 	pool       *clientPool
 	writeToken uint64
 }
@@ -128,7 +129,7 @@ func NewClient(
 	retryInterval time.Duration,
 	retryDuration time.Duration,
 ) (client *wrappedClient, err error) {
-	client = new(wrappedClient)
+	client = &wrappedClient{bufSize: bufSize}
 	var wrapped BackendClient
 	startTime := time.Now()
 
@@ -138,7 +139,8 @@ func NewClient(
 		if wrapped, err = factory(); err == nil {
 			// Success
 			client.wrapped = wrapped
-			client.buf = wrapped.GetLogRecord(bufSize)
+			// Read-only and idle pool clients need a connection, not a WAL
+			// payload. Allocate the configured reserve on their first append.
 			return client, nil
 		}
 
@@ -169,7 +171,10 @@ func (c *wrappedClient) Append(
 	e LogEntry,
 	timeoutCause error,
 ) (psn uint64, err error) {
-	if e.Size() > len(c.buf.Payload()) {
+	if c.buf.Data == nil {
+		c.buf = c.wrapped.GetLogRecord(max(c.bufSize, e.Size()))
+		c.buf.ResizePayload(e.Size())
+	} else if e.Size() > len(c.buf.Payload()) {
 		c.buf = c.wrapped.GetLogRecord(e.Size())
 	} else {
 		c.buf.ResizePayload(e.Size())
@@ -358,7 +363,7 @@ func (c *clientPool) Get() (client *wrappedClient, err error) {
 }
 
 func (c *clientPool) Put(client *wrappedClient) {
-	if len(client.buf.Payload()) > DefaultRecordSize {
+	if client.buf.Data != nil && len(client.buf.Payload()) > DefaultRecordSize {
 		client.buf = client.wrapped.GetLogRecord(DefaultRecordSize)
 	}
 	c.cond.L.Lock()

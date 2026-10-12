@@ -222,7 +222,7 @@ func prepareTestCtx(t *testing.T, withFs bool) (context.Context, *gomock.Control
 		counterSet := new(perfcounter.CounterSet)
 		dir := t.TempDir()
 		cacheDir := t.TempDir()
-		fs, _ := fileservice.NewFileService(
+		fs, err := fileservice.NewFileService(
 			context.Background(),
 			fileservice.Config{
 				Name:    defines.SharedFileServiceName,
@@ -242,15 +242,13 @@ func prepareTestCtx(t *testing.T, withFs bool) (context.Context, *gomock.Control
 				counterSet,
 			},
 		)
+		require.NoError(t, err)
+		t.Cleanup(func() { fs.Close(context.Background()) })
 		optFs := testutil.WithFileService(fs)
 		proc = testutil.NewProc(t, optFs)
 	} else {
 		proc = testutil.NewProc(t)
 	}
-	fileService := proc.GetFileService()
-	t.Cleanup(func() {
-		fileService.Close(context.Background())
-	})
 
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx

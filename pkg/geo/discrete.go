@@ -45,11 +45,15 @@ func DirectedHausdorffDistance(a, b Geometry) (float64, bool) {
 }
 
 func directedHausdorff(pa, pb []Coord) float64 {
+	return directedDistance(pa, pb, planarCoordDistance)
+}
+
+func directedDistance(pa, pb []Coord, distance func(Coord, Coord) float64) float64 {
 	maxMin := 0.0
 	for _, a := range pa {
 		minD := math.Inf(1)
 		for _, b := range pb {
-			if d := math.Hypot(a.X-b.X, a.Y-b.Y); d < minD {
+			if d := distance(a, b); d < minD {
 				minD = d
 			}
 		}
@@ -63,30 +67,62 @@ func directedHausdorff(pa, pb []Coord) float64 {
 // FrechetDistance returns the discrete Fréchet distance (planar) between the
 // vertex sequences of two geometries, via the Eiter-Mannila dynamic program.
 func FrechetDistance(a, b Geometry) (float64, bool) {
+	return frechetDistance(coordsOf(a), coordsOf(b), planarCoordDistance)
+}
+
+// GeodeticDirectedHausdorffDistance returns the directed discrete Hausdorff
+// distance in meters between the WGS 84 coordinates of two geometries. It uses
+// only explicitly represented vertices, matching DirectedHausdorffDistance.
+func GeodeticDirectedHausdorffDistance(a, b Geometry) (float64, bool) {
 	pa, pb := coordsOf(a), coordsOf(b)
+	if len(pa) == 0 || len(pb) == 0 {
+		return 0, false
+	}
+	return directedDistance(pa, pb, geodeticCoordDistance), true
+}
+
+// GeodeticFrechetDistance returns the discrete Fréchet distance in meters
+// between the WGS 84 coordinates of two geometries. The vertex-sequence and
+// dynamic-programming semantics are the same as FrechetDistance.
+func GeodeticFrechetDistance(a, b Geometry) (float64, bool) {
+	return frechetDistance(coordsOf(a), coordsOf(b), geodeticCoordDistance)
+}
+
+func frechetDistance(pa, pb []Coord, distance func(Coord, Coord) float64) (float64, bool) {
 	n, m := len(pa), len(pb)
 	if n == 0 || m == 0 {
 		return 0, false
 	}
-	ca := make([][]float64, n)
-	for i := range ca {
-		ca[i] = make([]float64, m)
-	}
+	// The recurrence only reads the previous row and the already-computed
+	// predecessor in the current row. Retain those two rows instead of the
+	// complete n*m matrix; large geometries otherwise turn a bounded query into
+	// an avoidable quadratic allocation while keeping the same O(n*m) work.
+	previous := make([]float64, m)
+	current := make([]float64, m)
 	for i := 0; i < n; i++ {
 		for j := 0; j < m; j++ {
-			d := math.Hypot(pa[i].X-pb[j].X, pa[i].Y-pb[j].Y)
+			d := distance(pa[i], pb[j])
 			switch {
 			case i == 0 && j == 0:
-				ca[i][j] = d
+				current[j] = d
 			case i == 0:
-				ca[i][j] = math.Max(ca[0][j-1], d)
+				current[j] = math.Max(current[j-1], d)
 			case j == 0:
-				ca[i][j] = math.Max(ca[i-1][0], d)
+				current[j] = math.Max(previous[j], d)
 			default:
-				prev := math.Min(ca[i-1][j], math.Min(ca[i-1][j-1], ca[i][j-1]))
-				ca[i][j] = math.Max(prev, d)
+				prev := math.Min(previous[j], math.Min(previous[j-1], current[j-1]))
+				current[j] = math.Max(prev, d)
 			}
 		}
+		previous, current = current, previous
 	}
-	return ca[n-1][m-1], true
+	return previous[m-1], true
+}
+
+func planarCoordDistance(a, b Coord) float64 {
+	return math.Hypot(a.X-b.X, a.Y-b.Y)
+}
+
+func geodeticCoordDistance(a, b Coord) float64 {
+	return s2Point(a).Distance(s2Point(b)).Radians() * EarthRadiusMeters
 }

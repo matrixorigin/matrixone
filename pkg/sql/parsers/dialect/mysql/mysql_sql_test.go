@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 
@@ -4913,10 +4914,10 @@ var (
 			output: "alter table t1 algorithm = COPY",
 		}, {
 			input:  "alter table t1 default CHARACTER SET = a COLLATE = b",
-			output: "alter table t1 charset = a",
+			output: "alter table t1 charset = a collate = b",
 		}, {
 			input:  "alter table t1 CONVERT TO CHARACTER SET a COLLATE b",
-			output: "alter table t1 charset = a",
+			output: "alter table t1 charset = a collate = b",
 		}, {
 			input:  "alter table t1 DISABLE KEYS",
 			output: "alter table t1 charset = DISABLE",
@@ -5507,6 +5508,8 @@ func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
 	for _, sql := range []string{
 		"select group_concat(v) within group (order by k desc) from t",
 		"select group_concat(v) within /* ordered-set */ group (order by k desc) from t",
+		"select listagg(v, '|') within group (order by k desc) from t",
+		"select listagg(distinct v) within group (order by k) from t",
 		"select percentile_cont(0.95) within group (order by v) from t",
 		"select percentile_cont(0.95) within /* ordered-set */ group (order by v) from t",
 		"select percentile_disc(1) within group (order by v desc) from t",
@@ -5528,10 +5531,48 @@ func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestArrayAggCompatibilityDeparseRoundTrip(t *testing.T) {
+	for _, sql := range []string{
+		"select array_agg(v) from t",
+		"select array_agg(distinct v) from t",
+		"select array_agg(v) over (partition by g order by k) from t",
+	} {
+		ast, err := ParseOne(t.Context(), sql, 1)
+		require.NoError(t, err, sql)
+
+		formatted := tree.String(ast, dialect.MYSQL)
+		require.Contains(t, strings.ToLower(formatted), "array_agg(")
+		roundTripped, err := ParseOne(t.Context(), formatted, 1)
+		require.NoError(t, err, formatted)
+		require.Equal(t, formatted, tree.String(roundTripped, dialect.MYSQL))
+	}
+}
+
+func TestOrderedCollectionCompatibilityNamesRemainIdentifiers(t *testing.T) {
+	for _, sql := range []string{
+		"select listagg from t",
+		"select array_agg from t",
+	} {
+		_, err := ParseOne(t.Context(), sql, 1)
+		require.NoError(t, err, sql)
+	}
+}
+
 func TestGroupConcatRejectsDoubleOrderBy(t *testing.T) {
 	_, err := ParseOne(context.Background(),
 		"select group_concat(v order by v) within group (order by k) from t", 1)
 	require.ErrorContains(t, err, "group_concat cannot use both ORDER BY and WITHIN GROUP ORDER BY")
+}
+
+func TestListAggRejectsInvalidShape(t *testing.T) {
+	for _, sql := range []string{
+		"select listagg() from t",
+		"select listagg(a, '|', '!') from t",
+		"select listagg(a, lower('|')) from t",
+	} {
+		_, err := ParseOne(t.Context(), sql, 1)
+		require.Error(t, err, sql)
+	}
 }
 
 func TestWithinRemainsIdentifierCompatible(t *testing.T) {
@@ -5692,6 +5733,40 @@ func TestFullTextMatchDeparseRoundTrip(t *testing.T) {
 		ast2, err := ParseOne(ctx, out, 1)
 		require.NoError(t, err, "deparsed SQL must re-parse: "+out)
 		require.Equal(t, out, tree.String(ast2, dialect.MYSQL), "deparse must be idempotent")
+	}
+}
+
+func TestFullTextRoutineVariablePatternRoundTrip(t *testing.T) {
+	for _, sql := range []string{
+		"select id from docs where match(body) against(q)",
+		"select id from docs where match(body) against(q in boolean mode)",
+		"select id from docs where match(body) against(`QueryTerm` in natural language mode)",
+	} {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		selectStmt := stmt.(*tree.Select).Select.(*tree.SelectClause)
+		match := selectStmt.Where.Expr.(*tree.FullTextMatchExpr)
+		name, ok := match.Pattern.(*tree.UnresolvedName)
+		require.True(t, ok)
+		require.Equal(t, 1, name.NumParts)
+
+		formatted := tree.String(stmt, dialect.MYSQL)
+		stmt.Free()
+		reparsed, err := ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+		require.Equal(t, formatted, tree.String(reparsed, dialect.MYSQL))
+		reparsed.Free()
+	}
+
+	for _, sql := range []string{
+		"select id from docs where match(body) against(t.q)",
+		"select id from docs where match(body) against(@q)",
+		"select id from docs where match(body) against(concat('en', 'gine'))",
+		"select id from docs where match(body) against(sum(id))",
+		"select id from docs where match(body) against(rand())",
+	} {
+		_, err := ParseOne(context.Background(), sql, 1)
+		require.Error(t, err, sql)
 	}
 }
 
@@ -6164,6 +6239,18 @@ var (
 	invalidSQL = []struct {
 		input string
 	}{
+		{
+			input: "alter table t1 alter reindex idx1 ivfflat lists = 2, alter reindex idx1 ivfflat quantization 'float16'",
+		},
+		{
+			input: "alter table t1 alter reindex idx1 ivfflat lists = 2, alter reindex idx2 ivfflat lists = 4",
+		},
+		{
+			input: "alter table t1 alter reindex idx1 ivfflat lists = 2, add column c int",
+		},
+		{
+			input: "alter table t1 add column c int, alter reindex idx1 ivfflat lists = 2",
+		},
 		{
 			input: "alter table t1 add constraint index (col3, col4)",
 		},
@@ -6736,6 +6823,46 @@ func TestNonGeometrySRIDSyntaxRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, ast)
 			require.Equal(t, test.output, tree.String(ast, dialect.MYSQL))
+		})
+	}
+}
+
+func TestLexerErrorUTF8Excerpt(t *testing.T) {
+	for _, tc := range []struct{ name, raw, want string }{
+		{"empty", "", ""}, {"ASCII", "FROM bad", "FROM bad"},
+		{"ASCII exact", strings.Repeat("a", 1024), strings.Repeat("a", 1024)},
+		{"ASCII overflow", strings.Repeat("a", 1025), strings.Repeat("a", 1024)},
+		{"two byte cut", strings.Repeat("a", 1023) + "¢", strings.Repeat("a", 1023)},
+		{"two byte aligned", strings.Repeat("a", 1022) + "¢z", strings.Repeat("a", 1022) + "¢"},
+		{"three byte cut", strings.Repeat("a", 1023) + "你", strings.Repeat("a", 1023)},
+		{"three byte aligned", strings.Repeat("a", 1021) + "你z", strings.Repeat("a", 1021) + "你"},
+		{"four byte cut", strings.Repeat("a", 1022) + "😀", strings.Repeat("a", 1022)},
+		{"four byte aligned", strings.Repeat("a", 1020) + "😀z", strings.Repeat("a", 1020) + "😀"},
+		{"malformed", "FROM \xff\xe4\xbd", "FROM ???"},
+		{"literal replacement", "FROM �", "FROM �"},
+		{"discarded malformed", strings.Repeat("a", 1024) + "\xff", strings.Repeat("a", 1024)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scanner := &Scanner{buf: "prefix" + tc.raw, PrePos: 6, Line: 3, Col: 7}
+			lexer := &Lexer{scanner: scanner}
+			lexer.Error("syntax error")
+			err, ok := scanner.LastError.(PositionedErr)
+			require.True(t, ok)
+			require.Equal(t, tc.want, err.Near)
+			require.True(t, utf8.ValidString(err.Error()))
+			require.LessOrEqual(t, len(err.Near), 1024)
+			require.Equal(t, 3, err.Line)
+			require.Equal(t, 7, err.Col)
+			require.Equal(t, "prefix"+tc.raw, scanner.buf)
+			require.Equal(t, 6, scanner.PrePos)
+			if len(tc.raw) <= 1024 {
+				require.Empty(t, err.LenStr)
+			} else {
+				require.NotEmpty(t, err.LenStr)
+			}
+			if tc.name == "ASCII" {
+				require.Equal(t, `You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 4 column 7 near "FROM bad";`, err.Error())
+			}
 		})
 	}
 }

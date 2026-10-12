@@ -21,7 +21,7 @@ import (
 )
 
 func TestIssue25890DistinctWithOrderByUsesFullTextIndex(t *testing.T) {
-	logicPlan, err := runOneStmt(newIssue24822Optimizer(), t, `
+	logicPlan, err := runOneStmt(newIssue24822Optimizer(t), t, `
 		SELECT DISTINCT base_id
 		FROM ft
 		WHERE MATCH(title, body) AGAINST('+database' IN BOOLEAN MODE)

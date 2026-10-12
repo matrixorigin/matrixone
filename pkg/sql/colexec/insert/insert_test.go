@@ -649,40 +649,78 @@ func TestFlushConcurrencyLimitScalesWithGOMAXPROCS(t *testing.T) {
 }
 
 func TestAcquireFlushSlotWaitsWhenNormalSlotsAreFull(t *testing.T) {
-	oldFlushLimiterState := flushLimiterState
-	oldFlushConcurrencyForAcquire := flushConcurrencyForAcquire
-	oldAcquireTimeout := flushSemaphoreAcquireTimeout
-	oldRefreshInterval := flushConcurrencyRefreshInterval
-	defer func() {
-		flushLimiterState = oldFlushLimiterState
-		flushConcurrencyForAcquire = oldFlushConcurrencyForAcquire
-		flushSemaphoreAcquireTimeout = oldAcquireTimeout
-		flushConcurrencyRefreshInterval = oldRefreshInterval
-	}()
+	for _, tc := range []struct {
+		name    string
+		timeout time.Duration
+		attempt int
+	}{
+		{"initial_wait", time.Hour, 1},
+		{"retry_wait", 0, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldLimiter := flushLimiterState
+			oldConcurrency := flushConcurrencyForAcquire
+			oldTimeout := flushSemaphoreAcquireTimeout
+			oldRefresh := flushConcurrencyRefreshInterval
+			defer func() {
+				flushLimiterState = oldLimiter
+				flushConcurrencyForAcquire = oldConcurrency
+				flushSemaphoreAcquireTimeout = oldTimeout
+				flushConcurrencyRefreshInterval = oldRefresh
+			}()
+			flushLimiterState = newFlushLimiter()
+			flushConcurrencyForAcquire = func() int { return 1 }
+			flushSemaphoreAcquireTimeout = tc.timeout
+			flushConcurrencyRefreshInterval = time.Hour
+			heldRelease, waitCh := flushLimiterState.tryAcquire()
+			require.NotNil(t, heldRelease)
+			require.Nil(t, waitCh)
+			defer heldRelease()
 
-	flushLimiterState = newFlushLimiter()
-	flushConcurrencyForAcquire = func() int { return 1 }
-	flushSemaphoreAcquireTimeout = time.Millisecond
-	flushConcurrencyRefreshInterval = time.Millisecond
-	heldRelease, waitCh := flushLimiterState.tryAcquire()
-	require.NotNil(t, heldRelease)
-	require.Nil(t, waitCh)
-	defer heldRelease()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() {
-		release, err := acquireFlushSlot(ctx)
-		if release != nil {
-			release()
-		}
-		errCh <- err
-	}()
-
-	time.Sleep(5 * time.Millisecond)
-	cancel()
-	require.ErrorIs(t, <-errCh, context.Canceled)
-	require.Equal(t, 1, flushLimiterState.inUseCount())
+			entered := make(chan struct{})
+			proceed := make(chan struct{})
+			attempts := 0
+			flushConcurrencyForAcquire = func() int {
+				attempts++
+				if attempts == tc.attempt {
+					close(entered)
+					<-proceed
+				}
+				return 1
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			errCh := make(chan error, 1)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				release, err := acquireFlushSlot(ctx)
+				if release != nil {
+					release()
+				}
+				errCh <- err
+			}()
+			defer func() {
+				cancel()
+				select {
+				case <-proceed:
+				default:
+					close(proceed)
+				}
+				<-done
+			}()
+			select {
+			case <-entered:
+			case err := <-errCh:
+				t.Fatalf("acquire returned before blocked attempt: %v", err)
+			}
+			cancel()
+			close(proceed)
+			require.ErrorIs(t, <-errCh, context.Canceled)
+			<-done
+			require.Equal(t, tc.attempt, attempts)
+			require.Equal(t, 1, flushLimiterState.inUseCount())
+		})
+	}
 }
 
 func testInsertS3TableDef() *plan.TableDef {

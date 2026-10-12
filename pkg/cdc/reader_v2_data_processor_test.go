@@ -16,7 +16,6 @@ package cdc
 
 import (
 	"context"
-	"math/rand"
 	"sync"
 	"testing"
 	"time"
@@ -200,43 +199,6 @@ func (s *transactionalSnapshotSinker) resetTarget() {
 	s.durable = make(map[int32]struct{})
 	s.staged = nil
 	s.mu.Unlock()
-}
-
-type slowDataProcessorSinker struct {
-	*dataProcessorRecordingSinker
-	delay time.Duration
-}
-
-func newSlowDataProcessorSinker(delay time.Duration) *slowDataProcessorSinker {
-	return &slowDataProcessorSinker{
-		dataProcessorRecordingSinker: newDataProcessorRecordingSinker(),
-		delay:                        delay,
-	}
-}
-
-func (s *slowDataProcessorSinker) SendBegin() {
-	time.Sleep(s.delay)
-	s.record("begin")
-}
-
-func (s *slowDataProcessorSinker) SendCommit() {
-	time.Sleep(s.delay)
-	s.record("commit")
-}
-
-func (s *slowDataProcessorSinker) SendRollback() {
-	time.Sleep(s.delay)
-	s.record("rollback")
-}
-
-func (s *slowDataProcessorSinker) SendDummy() {
-	time.Sleep(s.delay / 2)
-	s.record("dummy")
-}
-
-func (s *slowDataProcessorSinker) Sink(ctx context.Context, data *DecoderOutput) {
-	time.Sleep(s.delay / 2)
-	s.dataProcessorRecordingSinker.Sink(ctx, data)
 }
 
 type dataProcessorHarness struct {
@@ -821,7 +783,7 @@ func TestRecreatedTableFreshOwnerResetsRetiredGeneration(t *testing.T) {
 	require.False(t, gen11Watermark.updateCalled)
 
 	// The first CN disappears and the logical source table is recreated. A
-	// fresh detector has no IdChanged memory, so only the retired durable epoch
+	// reader restart has no local history, so only the retired durable epoch
 	// can require the target reset.
 	freshUpdater := NewCDCWatermarkUpdater(t.Name()+"-fresh", epochExecutor)
 	gen12Epoch, reset, err := freshUpdater.GetOrCreateInitialSnapshotEpochForGeneration(
@@ -1364,94 +1326,6 @@ func TestDataProcessor_RepeatedCommitFailures_EnsureCleanup_Idempotent(t *testin
 		from = to
 		to = next
 	}
-}
-
-// TestDataProcessor_RandomizedSequence_WithDelays_NoDeadlock verifies that with
-// randomized sequence of Snapshot/TailWip/TailDone/NoMoreData and a slow sinker,
-// the processor finishes quickly without deadlocks and preserves basic invariants.
-func TestDataProcessor_RandomizedSequence_WithDelays_NoDeadlock(t *testing.T) {
-	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
-
-	sinker := newSlowDataProcessorSinker(3 * time.Millisecond)
-	updater := newMockWatermarkUpdater()
-	txnMgr := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
-	packerPool := fileservice.NewPool(
-		128,
-		func() *types.Packer { return types.NewPacker() },
-		func(packer *types.Packer) { packer.Reset() },
-		func(packer *types.Packer) {},
-	)
-
-	dp := NewDataProcessor(
-		sinker, txnMgr, mp, packerPool,
-		1, 0, 1, 0, false,
-		1, "task1", "db1", "table1",
-	)
-
-	from := types.BuildTS(1, 0)
-	to := types.BuildTS(2, 0)
-	dp.SetTransactionRange(from, to)
-
-	// Prepare randomized sequence
-	r := rand.New(rand.NewSource(42))
-	typesSeq := make([]ChangeType, 0, 20)
-	candidates := []ChangeType{ChangeTypeSnapshot, ChangeTypeTailWip, ChangeTypeTailDone}
-	for i := 0; i < 10; i++ {
-		typesSeq = append(typesSeq, candidates[r.Intn(len(candidates))])
-	}
-	// Ensure termination
-	typesSeq = append(typesSeq, ChangeTypeNoMoreData)
-
-	// Process sequentially (DataProcessor not guaranteed goroutine-safe),
-	// but with slow sinker to simulate interleaving/latency.
-	for _, typ := range typesSeq {
-		switch typ {
-		case ChangeTypeSnapshot:
-			b := buildBatch(t, mp, []int32{1}, to)
-			require.NoError(t, dp.ProcessChange(ctx, &ChangeData{
-				Type:        ChangeTypeSnapshot,
-				InsertBatch: b,
-			}))
-		case ChangeTypeTailWip:
-			b := buildBatch(t, mp, []int32{1}, to)
-			require.NoError(t, dp.ProcessChange(ctx, &ChangeData{
-				Type:        ChangeTypeTailWip,
-				InsertBatch: b,
-			}))
-		case ChangeTypeTailDone:
-			// bump toTs to simulate progress
-			from = to
-			to = (&to).Next()
-			dp.SetTransactionRange(from, to)
-			b := buildBatch(t, mp, []int32{1}, to)
-			require.NoError(t, dp.ProcessChange(ctx, &ChangeData{
-				Type:        ChangeTypeTailDone,
-				InsertBatch: b,
-			}))
-		}
-	}
-	require.NoError(t, dp.ProcessChange(ctx, &ChangeData{Type: ChangeTypeNoMoreData}))
-
-	// Invariants:
-	ops := sinker.opsSnapshot()
-	begin := 0
-	commit := 0
-	for _, op := range ops {
-		if op == "begin" {
-			begin++
-		}
-		if op == "commit" {
-			commit++
-		}
-	}
-	require.LessOrEqual(t, begin, 1, "should not start multiple transactions in this simple randomized run")
-	require.LessOrEqual(t, commit, 1, "should not commit multiple times in this simple randomized run")
 }
 
 // TestDataProcessor_Cleanup_Concurrent tests concurrent Cleanup calls

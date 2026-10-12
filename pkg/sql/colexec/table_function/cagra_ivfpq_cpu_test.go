@@ -47,7 +47,7 @@ func newStubTableFunction(name string) *TableFunction {
 // ivfpq_create, ivfpq_search). All four share the same skeleton.
 func runStubLifecycle(t *testing.T, prep func(p *process.Process, tf *TableFunction) (tvfState, error), name string) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 
 	tf := newStubTableFunction(name)
 	// retSchema is required by createResultBatch
@@ -97,7 +97,7 @@ func TestTableFunctionPrepareCagraIvfpq(t *testing.T) {
 	for _, n := range names {
 		t.Run(n, func(t *testing.T) {
 			m := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", m)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 			tf := newStubTableFunction(n)
 			err := tf.Prepare(proc)
 			require.NoError(t, err)
@@ -111,7 +111,7 @@ func TestTableFunctionPrepareCagraIvfpq(t *testing.T) {
 // name returns the "not supported" error from the default branch.
 func TestTableFunctionPrepareUnknown(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	tf := newStubTableFunction("this_does_not_exist")
 	err := tf.Prepare(proc)
 	require.Error(t, err)

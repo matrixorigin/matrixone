@@ -403,7 +403,7 @@ func TestCheckExprIsZonemappable(t *testing.T) {
 
 func TestEvalZonemapFilter(t *testing.T) {
 	m := mpool.MustNew(t.Name())
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	type myCase = struct {
 		exprs  []*plan.Expr
 		meta   objectio.BlockObject

@@ -122,7 +122,6 @@ func TestNewSinker(t *testing.T) {
 				},
 				dbTblInfo: &DbTableInfo{
 					SourceCreateSql: "create table t1 (a int, b int, c int)",
-					IdChanged:       true,
 				},
 				watermarkUpdater: nil,
 				tableDef:         mockTableDef(),
@@ -140,7 +139,6 @@ func TestNewSinker(t *testing.T) {
 				},
 				dbTblInfo: &DbTableInfo{
 					SourceCreateSql: "create table t1 (a int, b int, c int)",
-					IdChanged:       true,
 				},
 				watermarkUpdater: nil,
 				tableDef:         mockClusterTableDef(),

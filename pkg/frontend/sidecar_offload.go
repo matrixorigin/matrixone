@@ -540,7 +540,7 @@ func buildGPUResultSet(ctx context.Context, mrs *MysqlResultSet, result *sidecar
 		mc := new(MysqlColumn)
 		mc.SetName(col.Name)
 		if colTypes[i] == defines.MYSQL_TYPE_BLOB {
-			setMysqlBinaryBlobColumnMetadata(mc, sidecarMaxResponseSize)
+			setMysqlOpaqueBinaryBlobColumnMetadata(mc, sidecarMaxResponseSize)
 		} else {
 			mc.SetColumnType(colTypes[i])
 		}

@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,7 +36,7 @@ import (
 )
 
 func TestPartitionTopNMatchesPerGroupSort(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := makeTopNBatch(t, proc,
 		[]int32{1, 2, 1, 2, 1, 2},
 		[]int64{5, 4, 1, 9, 3, 4},
@@ -57,6 +58,104 @@ func TestPartitionTopNMatchesPerGroupSort(t *testing.T) {
 	child.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestPartitionTopNLiteralOrderKeys(t *testing.T) {
+	null := &plan.Expr{Typ: plan.Type{Id: int32(types.T_any)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+	typedNull := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+	one := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}}}
+	for _, tc := range []struct {
+		name                string
+		keys                []*plan.Expr
+		ties, batchConstant bool
+		limit               uint64
+		rows                int
+	}{
+		{"null_only", []*plan.Expr{null}, false, false, 1, 2},
+		{"typed_and_nonnull_literals", []*plan.Expr{typedNull, one}, false, false, 1, 2},
+		{"mixed_prefix", []*plan.Expr{null, topNCol(1, types.T_int64)}, false, false, 1, 2},
+		{"mixed_suffix", []*plan.Expr{topNCol(1, types.T_int64), null}, false, false, 1, 2},
+		{"rank_all_peers", []*plan.Expr{null}, true, false, 1, 4},
+		{"rank_real_key", []*plan.Expr{null, topNCol(1, types.T_int64)}, true, false, 1, 2},
+		{"zero_bound", []*plan.Expr{null}, false, false, 0, 0},
+		{"batch_constants_are_not_literals", []*plan.Expr{topNCol(1, types.T_int64), null}, false, true, 1, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+			t.Cleanup(proc.Free)
+			arg := newTopNArgument(tc.limit)
+			arg.WithTies, arg.PreReduce = tc.ties, tc.ties
+			arg.OrderBySpecs = arg.OrderBySpecs[:1]
+			for _, key := range tc.keys {
+				arg.OrderBySpecs = append(arg.OrderBySpecs, &plan.OrderBySpec{Expr: key})
+			}
+			original := append([]*plan.OrderBySpec(nil), arg.OrderBySpecs...)
+			t.Cleanup(func() { arg.Free(proc, false, nil) })
+			for generation := 0; generation < 2; generation++ {
+				left := makeTopNBatch(t, proc, []int32{1, 2}, []int64{30, 30}, []int64{30, 30}, nil)
+				right := makeTopNBatch(t, proc, []int32{1, 2}, []int64{10, 10}, []int64{10, 10}, nil)
+				if tc.batchConstant {
+					for _, bat := range []*batch.Batch{left, right} {
+						value := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[1])[0]
+						bat.Vecs[1].Free(proc.Mp())
+						var err error
+						bat.Vecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), value, 2, proc.Mp())
+						require.NoError(t, err)
+					}
+				}
+				child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{left, right})
+				t.Cleanup(func() { child.Free(proc, false, nil) })
+				arg.Children = nil
+				arg.AppendChild(child)
+				require.NoError(t, arg.Prepare(proc))
+				require.Equal(t, original, arg.OrderBySpecs)
+				require.Equal(t, int32(1), arg.PartitionByCount)
+				got := collectTopNRows(t, arg, proc)
+				require.Len(t, got, tc.rows)
+				sortTopNRows(got)
+				if len(arg.top.compares) > 0 {
+					require.Equal(t, [][3]int64{{1, 10, 10}, {2, 10, 10}}, got)
+				} else if tc.ties {
+					require.Equal(t, [][3]int64{{1, 10, 10}, {1, 30, 30}, {2, 10, 10}, {2, 30, 30}}, got)
+				} else if tc.limit > 0 {
+					require.Equal(t, int64(1), got[0][0])
+					require.Equal(t, int64(2), got[1][0])
+				}
+				arg.Reset(proc, false, nil)
+			}
+		})
+	}
+}
+
+func TestPartitionTopNRejectsUnsupportedOrderType(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		oid       types.T
+		supported bool
+	}{
+		{"tuple", types.T_tuple, false},
+		{"interval", types.T_interval, false},
+		// ANY is supported for domainless NULL values; it cannot serve as
+		// the unsupported-type counterexample.
+		{"domainless_null", types.T_any, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+			t.Cleanup(proc.Free)
+			arg := newTopNArgument(1)
+			t.Cleanup(func() { arg.Free(proc, true, nil) })
+			arg.OrderBySpecs = arg.OrderBySpecs[:2]
+			arg.OrderBySpecs[1].Expr = topNCol(1, tc.oid)
+			err := arg.Prepare(proc)
+			if tc.supported {
+				require.NoError(t, err)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+			}
+		})
+	}
 }
 
 func TestPartitionTopNSQLOrderFloatNaNs(t *testing.T) {
@@ -115,7 +214,7 @@ func TestPartitionTopNSQLOrderFloatNaNs(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			input := batch.NewWithSize(3)
 			input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1, 1, 1, 1, 1}, nil, proc.Mp())
 			input.Vecs[1] = vector.NewVec(tc.oid.ToType())
@@ -175,7 +274,7 @@ func TestPartitionTopNSQLOrderFloatNaNs(t *testing.T) {
 }
 
 func TestPartitionTopNCompositeNullableKeyAndReset(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := newTopNArgument(1)
 	arg.PartitionByCount = 2
 	arg.OrderBySpecs = []*plan.OrderBySpec{
@@ -212,7 +311,7 @@ func TestPartitionTopNCompositeNullableKeyAndReset(t *testing.T) {
 }
 
 func TestPartitionTopNTwoStageMatchesSingleStage(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	left := makeTopNBatch(t, proc,
 		[]int32{1, 1, 2, 2}, []int64{8, 2, 7, 1}, []int64{80, 20, 70, 10}, nil)
 	right := makeTopNBatch(t, proc,
@@ -221,6 +320,8 @@ func TestPartitionTopNTwoStageMatchesSingleStage(t *testing.T) {
 	localBatches := make([]*batch.Batch, 0, 4)
 	for _, input := range []*batch.Batch{left, right} {
 		local := newTopNArgument(2)
+		literal := &plan.OrderBySpec{Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_any)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}}
+		local.OrderBySpecs = append(local.OrderBySpecs, literal)
 		child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 		local.AppendChild(child)
 		require.NoError(t, local.Prepare(proc))
@@ -239,6 +340,7 @@ func TestPartitionTopNTwoStageMatchesSingleStage(t *testing.T) {
 	}
 
 	global := newTopNArgument(2)
+	global.OrderBySpecs = append(global.OrderBySpecs, &plan.OrderBySpec{Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_any)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}})
 	globalChild := colexec.NewMockOperator().WithBatchs(localBatches)
 	global.AppendChild(globalChild)
 	require.NoError(t, global.Prepare(proc))
@@ -277,7 +379,7 @@ func TestPartitionTopNWithTiesMaintainsExactRankBoundary(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			input := makeTopNBatch(t, proc, make([]int32, len(test.scores)), test.scores, test.payloads, nil)
 			for i := range test.scores {
 				vector.MustFixedColWithTypeCheck[int32](input.Vecs[0])[i] = 1
@@ -301,7 +403,7 @@ func TestPartitionTopNWithTiesMaintainsExactRankBoundary(t *testing.T) {
 }
 
 func TestPartitionTopNWithTiesTwoStageMatchesSingleStage(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	left := makeTopNBatch(t, proc,
 		[]int32{1, 1, 1, 1}, []int64{5, 4, 4, 1}, []int64{50, 40, 41, 10}, nil)
 	right := makeTopNBatch(t, proc,
@@ -347,7 +449,7 @@ func TestPartitionTopNWithTiesTwoStageMatchesSingleStage(t *testing.T) {
 
 func TestPartitionTopNWithTiesChunksUnboundedBoundary(t *testing.T) {
 	rowCount := colexec.DefaultBatchSize + 17
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	groups := make([]int32, rowCount)
 	scores := make([]int64, rowCount)
 	payloads := make([]int64, rowCount)
@@ -385,7 +487,7 @@ func TestPartitionTopNWithTiesChunksUnboundedBoundary(t *testing.T) {
 }
 
 func TestPartitionTopNWithTiesTreatsGroupingSentinelAsPartitionNull(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(3)
 	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{"", ""}, []bool{false, true}, proc.Mp()))
@@ -413,7 +515,7 @@ func TestPartitionTopNWithTiesTreatsGroupingSentinelAsPartitionNull(t *testing.T
 }
 
 func TestPartitionTopNPreReducePacksCandidateGroups(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := makeTopNBatch(t, proc,
 		[]int32{1, 2, 1, 2}, []int64{8, 7, 2, 1}, []int64{80, 70, 20, 10}, nil)
 	arg := newTopNArgument(1)
@@ -441,7 +543,7 @@ func TestPartitionTopNVarlenReplacementMemoryBound(t *testing.T) {
 		rows        = 2048
 		payloadSize = 4096
 	)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(4)
 	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
 	input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
@@ -472,7 +574,7 @@ func TestPartitionTopNVarlenReplacementMemoryBound(t *testing.T) {
 }
 
 func TestPartitionTopNZeroAndCancellation(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := makeTopNBatch(t, proc, []int32{1}, []int64{1}, []int64{1}, nil)
 	arg := newTopNArgument(0)
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
@@ -486,7 +588,7 @@ func TestPartitionTopNZeroAndCancellation(t *testing.T) {
 }
 
 func TestPartitionTopNOutputHonorsCancellation(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := makeTopNBatch(t, proc, []int32{1, 2}, []int64{1, 2}, []int64{1, 2}, nil)
 	arg := newTopNArgument(1)
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
@@ -527,7 +629,7 @@ func BenchmarkPartitionTopN(b *testing.B) {
 		b.Run(fmt.Sprintf("Top%d", limit), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
-				proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+				proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 				input := batch.NewWithSize(3)
 				input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
 				require.NoError(b, vector.AppendFixedList(input.Vecs[0], groupValues, nil, proc.Mp()))

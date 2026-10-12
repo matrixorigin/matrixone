@@ -1,0 +1,142 @@
+drop database if exists vector_result_dimensions;
+create database vector_result_dimensions;
+use vector_result_dimensions;
+create table src(id int primary key, f32 vecf32(2), f64 vecf64(2), f16 vecf16(2), bf16 vecbf16(2), i8 vecint8(2), u8 vecuint8(2));
+insert into src values (1,'[1,4]','[1,4]','[1,4]','[1,4]','[1,4]','[1,4]'),(2,null,null,null,null,null,null);
+create table same_dim as select id,coalesce(null,f32,'[0,0]') f32,coalesce(f64,cast(null as vecf64(2)),'[0,0]') f64,coalesce(f16,'[0,0]') f16,coalesce(bf16,'[0,0]') bf16,coalesce(i8,'[0,0]') i8,coalesce(u8,'[0,0]') u8 from src;
+show create table same_dim;
+➤ Table[12,8,0]  ¦  Create Table[12,218,0]  𝄀
+same_dim  ¦  CREATE TABLE `same_dim` (
+  `id` int NOT NULL,
+  `f32` vecf32(2) NOT NULL,
+  `f64` vecf64(2) NOT NULL,
+  `f16` vecf16(2) NOT NULL,
+  `bf16` vecbf16(2) NOT NULL,
+  `i8` vecint8(2) NOT NULL,
+  `u8` vecuint8(2) NOT NULL
+)
+insert into same_dim values(3,'[3,4]','[3,4]','[3,4]','[3,4]','[3,4]','[3,4]');
+select id,vector_dims(f32),vector_dims(f64),vector_dims(f16),vector_dims(bf16),vector_dims(i8),vector_dims(u8) from same_dim order by id;
+➤ id[4,32,0]  ¦  vector_dims(f32)[-5,64,0]  ¦  vector_dims(f64)[-5,64,0]  ¦  vector_dims(f16)[-5,64,0]  ¦  vector_dims(bf16)[-5,64,0]  ¦  vector_dims(i8)[-5,64,0]  ¦  vector_dims(u8)[-5,64,0]  𝄀
+1  ¦  2  ¦  2  ¦  2  ¦  2  ¦  2  ¦  2  𝄀
+2  ¦  2  ¦  2  ¦  2  ¦  2  ¦  2  ¦  2  𝄀
+3  ¦  2  ¦  2  ¦  2  ¦  2  ¦  2  ¦  2
+select id,least(f32,cast('[2,3]' as vecf32(2))),greatest(f32,cast('[2,3]' as vecf32(2))) from src order by id;
+➤ id[4,32,0]  ¦  least(f32, cast([2,3] as vecf32(2)))[12,2,0]  ¦  greatest(f32, cast([2,3] as vecf32(2)))[12,2,0]  𝄀
+1  ¦  [1, 4]  ¦  [2, 3]  𝄀
+2  ¦  null  ¦  null
+select coalesce(f32,cast('[1,2,3]' as vecf32(3))) from src;
+invalid argument function coalesce, bad value [VECF32 VECF32]
+select coalesce(cast('[1,2,3]' as vecf64(3)),f64) from src;
+invalid argument function coalesce, bad value [VECF64 VECF64]
+select least(f16,cast('[1,2,3]' as vecf16(3))) from src;
+invalid argument function least, bad value [VECF16 VECF16]
+select greatest(cast('[1,2,3]' as vecbf16(3)),bf16) from src;
+invalid argument function greatest, bad value [VECBF16 VECBF16]
+select coalesce(i8,cast('[1,2,3]' as vecint8(3))) from src;
+invalid argument function coalesce, bad value [VECINT8 VECINT8]
+select greatest(u8,cast('[1,2,3]' as vecuint8(3))) from src;
+invalid argument function greatest, bad value [VECUINT8 VECUINT8]
+create table sqrt_dim as select sqrt(f32) a,sqrt(f64) b from src where id=1;
+show create table sqrt_dim;
+➤ Table[12,8,0]  ¦  Create Table[12,86,0]  𝄀
+sqrt_dim  ¦  CREATE TABLE `sqrt_dim` (
+  `a` vecf64(2) DEFAULT NULL,
+  `b` vecf64(2) DEFAULT NULL
+)
+select a,b,vector_dims(a),vector_dims(b) from sqrt_dim;
+➤ a[12,2,0]  ¦  b[12,2,0]  ¦  vector_dims(a)[-5,64,0]  ¦  vector_dims(b)[-5,64,0]  𝄀
+[1, 2]  ¦  [1, 2]  ¦  2  ¦  2
+insert into sqrt_dim values('[3,4]','[5,6]');
+select count(*) from sqrt_dim;
+➤ count(*)[-5,64,0]  𝄀
+2
+create table promoted as select coalesce(cast(null as vecf32(2)),cast('[1e300,1.0000000000000002]' as vecf64(2))) a,coalesce(cast('[1e300,1.0000000000000002]' as vecf64(2)),cast(null as vecf32(2))) b;
+show create table promoted;
+➤ Table[12,8,0]  ¦  Create Table[12,78,0]  𝄀
+promoted  ¦  CREATE TABLE `promoted` (
+  `a` vecf64(2) NOT NULL,
+  `b` vecf64(2) NOT NULL
+)
+select a,b,a=b from promoted;
+➤ a[12,2,0]  ¦  b[12,2,0]  ¦  a = b[-7,1,0]  𝄀
+[1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000, 1.0000000000000002]  ¦  [1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000, 1.0000000000000002]  ¦  1
+create view dim_view as select coalesce(f32,'[0,0]') v from src;
+select v,vector_dims(v) from dim_view order by v;
+➤ v[12,2,0]  ¦  vector_dims(v)[-5,64,0]  𝄀
+[0, 0]  ¦  2  𝄀
+[1, 4]  ¦  2
+prepare dim_stmt from 'select coalesce(cast(? as vecf32(2)),cast(? as vecf64(2))) v';
+set @a=null;
+set @b='[1e300,1.0000000000000002]';
+execute dim_stmt using @a,@b;
+➤ v[12,2,0]  𝄀
+[1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000, 1.0000000000000002]
+set @a='[1,2]';
+execute dim_stmt using @a,@b;
+➤ v[12,2,0]  𝄀
+[1, 2]
+deallocate prepare dim_stmt;
+create table dynamic_dim as select subvector(f32,1,1) f32,vecf64_from_base64(to_base64(f64)) f64,cast(f16 as vecf16) f16,cast(bf16 as vecbf16) bf16,cast(i8 as vecint8) i8,cast(u8 as vecuint8) u8 from src where id=1;
+show create table dynamic_dim;
+➤ Table[12,11,0]  ¦  Create Table[12,248,0]  𝄀
+dynamic_dim  ¦  CREATE TABLE `dynamic_dim` (
+  `f32` vecf32(65535) DEFAULT NULL,
+  `f64` vecf64(65535) DEFAULT NULL,
+  `f16` vecf16(65535) DEFAULT NULL,
+  `bf16` vecbf16(65535) DEFAULT NULL,
+  `i8` vecint8(65535) DEFAULT NULL,
+  `u8` vecuint8(65535) DEFAULT NULL
+)
+insert into dynamic_dim values('[3]','[3,4]','[3,4]','[3,4]','[3,4]','[3,4]');
+prepare dynamic_stmt from 'insert into dynamic_dim(f32,f64) values(?,?)';
+set @a='[5]';
+set @b='[5,6]';
+execute dynamic_stmt using @a,@b;
+deallocate prepare dynamic_stmt;
+create table blob_payload(f32 blob,f64 blob);
+insert into blob_payload values(unhex('0000e040'),unhex('0000000000001c400000000000002040'));
+insert into dynamic_dim(f32,f64) select f32,f64 from blob_payload;
+update blob_payload set f32=unhex('ff');
+insert into dynamic_dim(f32) select f32 from blob_payload;
+invalid input: vector payload is not aligned to its element size
+select f32,f64,vector_dims(f32),vector_dims(f64),vector_dims(f16),vector_dims(bf16),vector_dims(i8),vector_dims(u8) from dynamic_dim order by f32;
+➤ f32[12,65535,0]  ¦  f64[12,65535,0]  ¦  vector_dims(f32)[-5,64,0]  ¦  vector_dims(f64)[-5,64,0]  ¦  vector_dims(f16)[-5,64,0]  ¦  vector_dims(bf16)[-5,64,0]  ¦  vector_dims(i8)[-5,64,0]  ¦  vector_dims(u8)[-5,64,0]  𝄀
+[1]  ¦  [1, 4]  ¦  1  ¦  2  ¦  2  ¦  2  ¦  2  ¦  2  𝄀
+[3]  ¦  [3, 4]  ¦  1  ¦  2  ¦  2  ¦  2  ¦  2  ¦  2  𝄀
+[5]  ¦  [5, 6]  ¦  1  ¦  2  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+[7]  ¦  [7, 8]  ¦  1  ¦  2  ¦  null  ¦  null  ¦  null  ¦  null
+create table fixed_target(id int primary key,v vecf32(2));
+insert into fixed_target select 1,greatest(cast('[1,2]' as vecf32(2)),cast('[3,4,5]' as vecf32(3)));
+invalid argument function greatest, bad value [VECF32 VECF32]
+insert into fixed_target select 2,subvector(f32,1,1) from src where id=1;
+invalid input: expected vector dimension 2 != actual dimension 1.
+select count(*) from fixed_target;
+➤ count(*)[-5,64,0]  𝄀
+0
+insert into fixed_target select id,coalesce(f32,'[0,0]') from src;
+update fixed_target set v=subvector(v,1,1) where id=1;
+invalid input: expected vector dimension 2 != actual dimension 1.
+select id,v,vector_dims(v) from fixed_target order by id;
+➤ id[4,32,0]  ¦  v[12,2,0]  ¦  vector_dims(v)[-5,64,0]  𝄀
+1  ¦  [1, 4]  ¦  2  𝄀
+2  ¦  [0, 0]  ¦  2
+create table generated_dim(id int primary key,a vecf32(2),n int,g vecf32(2) as (subvector(a,1,n)) stored);
+insert into generated_dim(id,a,n) values(1,'[1,2]',2);
+insert into generated_dim(id,a,n) values(2,'[3,4]',2),(3,'[5,6]',1);
+invalid input: expected vector dimension 2 != actual dimension 1.
+update generated_dim set n=1 where id=1;
+invalid input: expected vector dimension 2 != actual dimension 1.
+replace into generated_dim(id,a,n) values(1,'[3,4]',1);
+invalid input: expected vector dimension 2 != actual dimension 1.
+insert into generated_dim(id,a,n) values(1,'[5,6]',2) on duplicate key update n=1;
+invalid input: expected vector dimension 2 != actual dimension 1.
+select id,g,vector_dims(g),l2_distance(g,cast('[1,2]' as vecf32(2))) from generated_dim order by id;
+➤ id[4,32,0]  ¦  g[12,2,0]  ¦  vector_dims(g)[-5,64,0]  ¦  l2_distance(g, cast([1,2] as vecf32(2)))[8,53,31]  𝄀
+1  ¦  [1, 2]  ¦  2  ¦  0.0
+create index dim_ivf using ivfflat on generated_dim(g) lists=1 op_type 'vector_l2_ops';
+select id,g from generated_dim order by l2_distance(g,cast('[1,2]' as vecf32(2))) limit 1;
+➤ id[4,32,0]  ¦  g[12,2,0]  𝄀
+1  ¦  [1, 2]
+drop index dim_ivf on generated_dim;
+drop database vector_result_dimensions;

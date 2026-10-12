@@ -119,8 +119,8 @@ where destination_key = 'keep-secondary';
 1  ¦  keep-secondary  ¦  7
 show index from dst_secondary;
 ➤ Table[12,9,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,48,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,192,0]  ¦  Collation[12,0,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,3,0]  ¦  Packed[12,3,0]  ¦  Null[12,2,0]  ¦  Index_type[12,8,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,1536,0]  ¦  Index_params[12,1536,0]  ¦  Visible[12,2,0]  ¦  Expression[12,192,0]  𝄀
-dst_secondary  ¦  1  ¦  dst_secondary_idx  ¦  1  ¦  destination_key  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  destination_key  𝄀
-dst_secondary  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id
+dst_secondary  ¦  1  ¦  dst_secondary_idx  ¦  1  ¦  destination_key  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  destination_key  𝄀
+dst_secondary  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id
 show create table dst_secondary;
 ➤ Table[12,9,0]  ¦  Create Table[12,156,0]  𝄀
 dst_secondary  ¦  CREATE TABLE `dst_secondary` (

@@ -177,7 +177,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 		bat.Vecs[i] = vector.NewVec(types.New(types.T_enum, 2, 0))
 		v := types.Enum(uint16(1))
 		vector.AppendFixed[types.Enum](bat.Vecs[i], v, false, proc.Mp())
-		res[i] = "'1'"
+		res[i] = "1"
 		i += 1
 	}
 
@@ -216,7 +216,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 func TestRowFromVector(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	ctx := context.Background()
 
 	bat, results := mockUtilVector(t, proc)
@@ -243,7 +243,7 @@ func TestRowFromVector(t *testing.T) {
 // SQL-display string; a non-differing control type (int64) must be identical in both.
 func TestExtractRowNativeRepr(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	ctx := context.Background()
 
 	mk := func(typ types.Type, appendFn func(v *vector.Vector)) *vector.Vector {

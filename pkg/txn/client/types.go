@@ -76,6 +76,9 @@ type TxnClient interface {
 	// be from a CN coordinator txn operator. Before returning, it waits until
 	// the local CN has applied every logtail visible to the snapshot.
 	NewWithSnapshot(ctx context.Context, snapshot txn.CNTxnSnapshot) (TxnOperator, error)
+	// GetLatestSnapshot returns a policy-selected, locally applied exclusive snapshot
+	// without a transaction; an empty timestamp provides no visibility proof.
+	GetLatestSnapshot(ctx context.Context, minimum timestamp.Timestamp) (timestamp.Timestamp, error)
 	// Close closes client.sender
 	Close() error
 	// RefreshExpressionEnabled return true if refresh expression feature enabled
@@ -195,7 +198,6 @@ type TxnOperator interface {
 	// method.
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 
-	NextSequence() uint64
 	// EnterRunSqlWithTokenAndSQL registers one SQL execution. The returned token
 	// is opaque, including zero, and must be passed to ExitRunSqlWithToken. Use
 	// TryEnterRunSqlWithTokenAndSQL when rejection reasons are required. This
@@ -220,6 +222,12 @@ type TxnOperator interface {
 // TxnOperator preserves source compatibility for external implementations.
 type RunSQLAdmissionOperator interface {
 	TryEnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error)
+}
+
+// DeferredTxnRollback seals a doomed operator immediately and uses its existing
+// SQL-drain owner for cleanup. Nested execution must not wait on its own token.
+type DeferredTxnRollback interface {
+	RollbackAfterRunningSQL(error)
 }
 
 // AutoIncrEpochFenceCommitter is an additive transaction capability used by
@@ -373,6 +381,21 @@ type Workspace interface {
 	GetSyncProtectionJobID() string
 }
 
+// TerminalTableDeletionView is an optional workspace capability for services
+// that retire state after a committed physical table deletion. It may only be
+// read synchronously from a committed ClosedEvent, after workspace preparation
+// and before finalization. The implementation must not acquire locks, perform
+// I/O, or call back into the transaction operator.
+type TerminalTableDeletionView interface {
+	IsTableDeletedAtTxnClose(physicalTableID uint64) bool
+}
+
+// TableCreationView exposes the workspace's rollback-aware creation journal.
+// A physical ID remains unpublished only while its creation belongs to this owner.
+type TableCreationView interface {
+	IsTableCreatedInTxn(tableID uint64) bool
+}
+
 // TxnOverview txn overview include meta and status
 type TxnOverview struct {
 	// CreateAt create at
@@ -399,12 +422,10 @@ type Lock struct {
 }
 
 type TxnEvent struct {
-	Event     EventType
-	Txn       txn.TxnMeta
-	TableID   uint64
-	Err       error
-	Sequence  uint64
-	Cost      time.Duration
+	Event EventType
+	Txn   txn.TxnMeta
+	Err   error
+	// CostEvent identifies the completion phase of commit/rollback callbacks.
 	CostEvent bool
 }
 
@@ -417,8 +438,16 @@ func (e TxnEvent) Aborted() bool {
 }
 
 type TxnEventCallback struct {
-	Func  func(context.Context, TxnOperator, TxnEvent, any) error
-	Value any
+	Func            func(context.Context, TxnOperator, TxnEvent, any) error
+	Value           any
+	StatementScoped bool // ClosedEvent action discarded if its statement rolls back.
+}
+
+// StatementCallbackOperator is implemented by operators that can discard
+// transaction-close actions owned by a rolled-back statement.
+type StatementCallbackOperator interface {
+	BeginStatementCallbacks()
+	RollbackStatementCallbacks(context.Context) error
 }
 
 func NewTxnEventCallback(f func(context.Context, TxnOperator, TxnEvent, any) error) TxnEventCallback {

@@ -35,6 +35,8 @@ func TestFieldExactTypeResolution(t *testing.T) {
 		{"mixed integer", []types.Type{types.T_uint64.ToType(), types.T_int64.ToType()}, 13, types.T_any},
 		{"float control", []types.Type{types.T_float64.ToType(), types.New(types.T_decimal128, 38, 0)}, 10, types.T_float64},
 		{"string control", []types.Type{types.T_varchar.ToType(), types.New(types.T_decimal128, 38, 0)}, 10, types.T_float64},
+		{"binary strings", []types.Type{types.T_varbinary.ToType(), types.T_binary.ToType()}, 0, types.T_any},
+		{"mixed string families", []types.Type{types.T_text.ToType(), types.T_blob.ToType()}, 0, types.T_any},
 		{"bit", []types.Type{types.T_bit.ToType(), types.T_bit.ToType()}, 8, types.T_any},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -70,7 +72,7 @@ func TestFieldIntegerRepresentations(t *testing.T) {
 	}
 	fc := NewFunctionTestCase(proc, inputs,
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 7, 0}, nil), FieldInteger)
-	ok, info := fc.Run()
+	ok, info := fc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -83,7 +85,7 @@ func TestFieldDecimalScalesAndNulls(t *testing.T) {
 	}
 	fc := NewFunctionTestCase(proc, inputs,
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 2, 0}, nil), FieldDecimal128)
-	ok, info := fc.Run()
+	ok, info := fc.RunAndFree()
 	require.True(t, ok, info)
 
 	d256Inputs := []FunctionTestInput{
@@ -92,7 +94,7 @@ func TestFieldDecimalScalesAndNulls(t *testing.T) {
 	}
 	fc = NewFunctionTestCase(proc, d256Inputs,
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 0, 0}, nil), FieldDecimal256)
-	ok, info = fc.Run()
+	ok, info = fc.RunAndFree()
 	require.True(t, ok, info)
 	require.True(t, decimal256Equal(types.Decimal256{B0_63: 120}, types.Decimal256{B0_63: 12}, 2, 1))
 	require.True(t, decimal256Equal(types.Decimal256{B0_63: 12}, types.Decimal256{B0_63: 12}, 1, 1))

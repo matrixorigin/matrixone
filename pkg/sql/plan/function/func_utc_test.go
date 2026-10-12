@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -84,23 +85,27 @@ func TestUTCFunctionsHonorFractionalSecondPrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.Base.UnixTime = utcFunctionTestUnixNano
 
-	for _, scale := range []int64{0, 3, 6} {
-		t.Run("utc_time", func(t *testing.T) {
-			input := utcScaleInput(t, proc, scale)
-			defer input.Free(proc.Mp())
-			out := runUTCFunction(t, proc, "utc_time", []*vector.Vector{input})
-			defer out.Free(proc.Mp())
-			require.Equal(t, types.New(types.T_time, 0, int32(scale)), *out.GetType())
-			want, err := types.ParseTime("23:04:05.123456", int32(scale))
-			require.NoError(t, err)
-			require.Equal(t, want, vector.MustFixedColWithTypeCheck[types.Time](out)[0])
-		})
+	for scale := int64(0); scale <= 6; scale++ {
+		if scale == 0 || scale == 3 || scale == 6 {
+			t.Run(fmt.Sprintf("utc_time/%d", scale), func(t *testing.T) {
+				input := utcScaleInput(t, proc, scale)
+				defer input.Free(proc.Mp())
+				out := runUTCFunction(t, proc, "utc_time", []*vector.Vector{input})
+				defer out.Free(proc.Mp())
+				require.Equal(t, types.New(types.T_time, 0, int32(scale)), *out.GetType())
+				want, err := types.ParseTime("23:04:05.123456", int32(scale))
+				require.NoError(t, err)
+				require.Equal(t, want, vector.MustFixedColWithTypeCheck[types.Time](out)[0])
+			})
+		}
 
-		t.Run("utc_timestamp", func(t *testing.T) {
+		t.Run(fmt.Sprintf("utc_timestamp/%d", scale), func(t *testing.T) {
 			input := utcScaleInput(t, proc, scale)
 			defer input.Free(proc.Mp())
 			out := runUTCFunction(t, proc, "utc_timestamp", []*vector.Vector{input})
 			defer out.Free(proc.Mp())
+			require.Equal(t, 1, out.Length())
+			require.False(t, out.GetNulls().Contains(0))
 			require.Equal(t, types.New(types.T_datetime, 0, int32(scale)), *out.GetType())
 			want, err := types.ParseDatetime("2024-01-01 23:04:05.123456", int32(scale))
 			require.NoError(t, err)
@@ -120,15 +125,19 @@ func TestUTCFunctionsRejectInvalidFractionalSecondPrecision(t *testing.T) {
 				fn, err := GetFunctionByName(proc.Ctx, name, []types.Type{types.T_int64.ToType()})
 				require.NoError(t, err)
 				out, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
-				require.Error(t, err)
 				if out != nil {
-					out.Free(proc.Mp())
+					defer out.Free(proc.Mp())
 				}
+				require.Error(t, err)
 				require.Contains(t, err.Error(), name)
 				if scale < 0 {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), err)
 					require.Contains(t, err.Error(), "negative precision -1 specified")
 					require.NotContains(t, err.Error(), "Too-big precision")
 				} else {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrTooBigPrecision), err)
+					require.Equal(t, moerr.ER_TOO_BIG_PRECISION, moerr.DowncastError(err).MySQLCode())
+					require.Contains(t, err.Error(), "Maximum is 6")
 					require.Contains(t, err.Error(), fmt.Sprintf("Too-big precision %d specified", scale))
 					require.NotContains(t, err.Error(), "negative precision")
 				}

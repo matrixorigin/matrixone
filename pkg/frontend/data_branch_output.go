@@ -385,10 +385,8 @@ func mergeDiffs(
 	cancel context.CancelFunc,
 	ses *Session,
 	bh BackgroundExec,
-	stmt *tree.DataBranchMerge,
-	dagInfo branchMetaInfo,
 	tblStuff tableStuff,
-	retCh chan batchWithKind,
+	produce func(emitFunc) error,
 ) (err error) {
 
 	var (
@@ -397,7 +395,6 @@ func mergeDiffs(
 
 		insertIntoVals = acquireBuffer(tblStuff.bufPool)
 		deleteFromVals = acquireBuffer(tblStuff.bufPool)
-		firstErr       error
 		tmpValsBuffer  = acquireBuffer(tblStuff.bufPool)
 	)
 
@@ -424,41 +421,20 @@ func mergeDiffs(
 		}
 	}()
 
-	// conflict option should be pushed down to the hash phase,
-	// so the batch we received is conflict-free.
-	for wrapped := range retCh {
-
-		if firstErr != nil || ctx.Err() != nil {
-			if firstErr == nil {
-				firstErr = ctx.Err()
-			}
-			cancel()
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-			continue
+	// Successful delivery transfers the batch; emitBatch releases failures.
+	if err = produce(func(wrapped batchWithKind) (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return false, err
 		}
-
-		if err = appendBatchRowsAsSQLValues(
-			ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
-		); err != nil {
-			firstErr = err
-			cancel()
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-			continue
+		if err := appendBatchRowsAsSQLValues(ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender); err != nil {
+			return false, err
 		}
-
 		tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+		return false, nil
+	}); err != nil {
+		return err
 	}
-
-	if err = appender.flushAll(); err != nil {
-		if firstErr == nil {
-			firstErr = err
-		}
-	}
-
-	if firstErr != nil {
-		return firstErr
-	}
-	return
+	return appender.flushAll()
 }
 
 // resolveProjectedIdxes resolves the user-specified COLUMNS list to the
@@ -1704,13 +1680,13 @@ func writeCSV(
 				}
 				return
 			}
-			ep.BatchMap[bb.index] = bb.writeByte
+			ep.BatchMap[bb.index] = bb
 			for {
 				value, ok := ep.BatchMap[ep.WriteIndex.Load()+1]
 				if !ok {
 					break
 				}
-				if err2 := writeToCSVFile(ep, value); err2 != nil {
+				if err2 := writeExportBatchToFile(ep, value); err2 != nil {
 					select {
 					case writerErr <- err2:
 					default:
@@ -2162,7 +2138,7 @@ func dataBranchSpecialUpdateColumn(
 		return false
 	}
 	baseCol := dataBranchColumnDefByName(baseDef, tblStuff.def.baseColNames[idx])
-	return baseCol != nil && baseCol.Typ.Enumvalues != ""
+	return baseCol != nil && (baseCol.Typ.Id == int32(types.T_enum) || baseCol.Typ.Enumvalues != "")
 }
 
 func appendOrStageDataBranchApplyRow(

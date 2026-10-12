@@ -102,6 +102,7 @@ select * from composite_pk order by a, b;
 1  ¦  2  ¦  10  𝄀
 1  ¦  3  ¦  12  𝄀
 2  ¦  2  ¦  22
+set session max_error_count = 64;
 create table warning_limit(id int primary key);
 insert into warning_limit values (1);
 insert ignore into warning_limit values
@@ -181,4 +182,5 @@ Warning  ¦  1062  ¦  Duplicate entry '1' for key 'id'
 select count(*) from warning_limit;
 ➤ count(*)[-5,64,0]  𝄀
 1
+set session max_error_count = 1024;
 drop database issue_28254_ignore_warnings;

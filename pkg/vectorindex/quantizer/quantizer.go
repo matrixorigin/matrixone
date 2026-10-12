@@ -29,6 +29,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
@@ -70,6 +71,23 @@ func ToVectorType(q string) (types.T, bool) {
 		return types.T_array_uint8, true
 	}
 	return 0, false
+}
+
+// CheckNoUpcast returns an error when quantization q stores wider elements than the base column
+// type base. algo names the index algorithm in the message. An unknown q is not checked.
+func CheckNoUpcast(algo, q string, base types.T) error {
+	qt, ok := ToVectorType(q)
+	if !ok {
+		return nil
+	}
+	baseSize := types.Type{Oid: base}.GetArrayElementSize()
+	quantSize := types.Type{Oid: qt}.GetArrayElementSize()
+	if quantSize > baseSize {
+		return moerr.NewNotSupportedNoCtxf(
+			"%s QUANTIZATION '%s' (%d bytes/element) cannot upcast base column %s (%d bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type",
+			algo, q, quantSize, base.String(), baseSize)
+	}
+	return nil
 }
 
 // SQLTypeName returns the SQL type name for a vector element type, for use in

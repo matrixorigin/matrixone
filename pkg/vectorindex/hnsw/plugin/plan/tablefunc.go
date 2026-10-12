@@ -63,7 +63,7 @@ var (
 )
 
 func init() {
-	planplugin.RegisterTableFunc(HNSWCreateFuncName, buildHnswCreate)
+	planplugin.RegisterCoordinatorTableFunc(HNSWCreateFuncName, buildHnswCreate)
 	planplugin.RegisterTableFunc(HNSWSearchFuncName, buildHnswSearch)
 }
 

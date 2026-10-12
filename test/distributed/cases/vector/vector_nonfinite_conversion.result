@@ -1,0 +1,68 @@
+drop database if exists vec_nonfinite;
+create database vec_nonfinite;
+use vec_nonfinite;
+select cast('[1e300,-1e300]' as vecf32(2));
+internal error: error while casting 1e300 to FLOAT
+select cast('[inf]' as vecf32(1));
+internal error: vector element cannot be NaN or Inf: +Inf
+select cast('[nan]' as vecf32(1));
+internal error: vector element cannot be NaN or Inf: NaN
+select cast(cast('[1e300,-1e300]' as vecf64(2)) as vecf32(2));
+internal error: vector element cannot be NaN or Inf: +Inf
+select cast(cast('[1e10,-1e10]' as vecf32(2)) as vecf16(2));
+internal error: vector element cannot be NaN or Inf: +Inf
+select cast(cast('[1e300,-1e300]' as vecf64(2)) as vecbf16(2));
+internal error: vector element cannot be NaN or Inf: +Inf
+select vecf32_from_base64('AACAfw==');
+internal error: vector element cannot be NaN or Inf: +Inf
+select vecf32_from_base64('AADAfw==');
+internal error: vector element cannot be NaN or Inf: NaN
+select vecf64_from_base64('AAAAAAAA8H8=');
+internal error: vector element cannot be NaN or Inf: +Inf
+select vecf64_from_base64('AAAAAAAA+H8=');
+internal error: vector element cannot be NaN or Inf: NaN
+select vecf16_from_base64('AHw=');
+internal error: vector element cannot be NaN or Inf: +Inf
+select vecf16_from_base64('AH4=');
+internal error: vector element cannot be NaN or Inf: NaN
+select vecbf16_from_base64('gH8=');
+internal error: vector element cannot be NaN or Inf: +Inf
+select vecbf16_from_base64('wH8=');
+internal error: vector element cannot be NaN or Inf: NaN
+create table src(id bigint primary key, v vecf64(2));
+insert into src values(1,'[1e300,-1e300]'),(2,'[3e38,-3e38]');
+create table inserted(id bigint primary key, v vecf32(2));
+insert into inserted select id, cast(v as vecf32(2)) from src;
+internal error: vector element cannot be NaN or Inf: +Inf
+select count(*) from inserted;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table ctas as select id, cast(v as vecf32(2)) v from src;
+internal error: vector element cannot be NaN or Inf: +Inf
+create table altered like src;
+insert into altered select * from src;
+alter table altered modify column v vecf32(2);
+internal error: vector element cannot be NaN or Inf: +Inf
+create table b64_generated(
+id bigint primary key,
+payload varchar(32),
+v vecf32(1) as (vecf32_from_base64(payload)) stored
+);
+insert into b64_generated(id,payload) values(1,'AAAAQA==');
+update b64_generated set payload='AACAfw==' where id=1;
+internal error: vector element cannot be NaN or Inf: +Inf
+insert into b64_generated(id,payload) values(2,'AADAfw==');
+internal error: vector element cannot be NaN or Inf: NaN
+select id, v from b64_generated order by id;
+➤ id[-5,64,0]  ¦  v[12,1,0]  𝄀
+1  ¦  [2]
+select cast(cast('[3e38,-3e38]' as vecf64(2)) as vecf32(2)) finite_narrow;
+➤ finite_narrow[12,2,0]  𝄀
+[300000000000000000000000000000000000000, -300000000000000000000000000000000000000]
+select vecf32_from_base64('AAAAQA==') finite_b64_f32;
+➤ finite_b64_f32[12,65535,0]  𝄀
+[2]
+select vecf64_from_base64('nHUAiDzkN34=') finite_big_f64;
+➤ finite_big_f64[12,65535,0]  𝄀
+[1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000]
+drop database vec_nonfinite;

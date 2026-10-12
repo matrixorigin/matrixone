@@ -162,7 +162,8 @@ func TestMinMaxJSONMergeAndExtraAdmission(t *testing.T) {
 	}
 }
 
-func TestMinMaxJSONStableAndSpillRoundTrip(t *testing.T) {
+// This tests aggregate spill codec persistence, not operator disk spill/reload.
+func TestMinMaxJSONStableAndSpillCodecRoundTrip(t *testing.T) {
 	for _, aggID := range []int64{AggIdOfMin, AggIdOfMax} {
 		t.Run(fmt.Sprint(aggID), func(t *testing.T) {
 			mp := mpool.MustNewZero()
@@ -1216,5 +1217,32 @@ func TestMinMaxExtraEqualValueFoldsPrepareParamKind(t *testing.T) {
 			input.Free(mp)
 			require.Zero(t, mp.CurrNB())
 		})
+	}
+}
+
+// The unchanged legacy byte executor is the exact factory destination in the
+// inherited pre-fix source for JSON. This establishes its ordering mechanism;
+// it does not run a separate old executable or a remote topology.
+func TestMinMaxJSONLegacyByteExecutorCounterexample(t *testing.T) {
+	for _, id := range []int64{AggIdOfMin, AggIdOfMax} {
+		mp := mpool.MustNewZero()
+		input := vector.NewVec(types.T_json.ToType())
+		for _, value := range []int64{1, 256} {
+			require.NoError(t, vector.AppendBytes(input, minMaxJSONBytes(t, value), false, mp))
+		}
+		legacy := newStrMinMaxExec(mp, id, id == AggIdOfMin, types.T_json.ToType())
+		require.NoError(t, legacy.GroupGrow(1))
+		require.NoError(t, legacy.BulkFill(0, []*vector.Vector{input}))
+		result, err := legacy.Flush()
+		require.NoError(t, err)
+		want := int64(256)
+		if id == AggIdOfMax {
+			want = 1
+		}
+		require.Equal(t, minMaxJSONBytes(t, want), result[0].GetBytesAt(0))
+		result[0].Free(mp)
+		legacy.Free()
+		input.Free(mp)
+		require.Zero(t, mp.CurrNB())
 	}
 }

@@ -104,6 +104,16 @@ func (s *queryService) SetReleaseFunc(resp *pb.Response, f func()) {
 func (s *queryService) initHandleFunc() {
 	s.AddHandleFunc(pb.CmdMethod_GetProtocolVersion, s.handleGetProtocolVersion(), false)
 	s.AddHandleFunc(pb.CmdMethod_SetProtocolVersion, s.handleSetProtocolVersion(), false)
+	s.AddHandleFunc(pb.CmdMethod_SetVectorIndexFreshnessInterval, s.handleSetVectorIndexFreshnessInterval(), false)
+	s.AddHandleFunc(pb.CmdMethod_GetVectorIndexCacheInfo, s.handleGetVectorIndexCacheInfo(), false)
+	// EvictVectorIndexCache is async: its owned teardown (evictEntry/Destroy) completes synchronously
+	// and can wait for an active search or slow native cleanup past the caller's deadline. Running it
+	// inline on the connection's dispatch loop would block goetty's read loop, so unrelated
+	// QueryService requests on the same (default single) connection queue behind a timed-out Evict.
+	// Dispatching it off the loop frees the connection while the response is still written after
+	// cleanup completes (#28985).
+	s.AddHandleFunc(pb.CmdMethod_EvictVectorIndexCache, s.handleEvictVectorIndexCache(), true)
+	s.AddHandleFunc(pb.CmdMethod_GetVectorIndexCacheKeys, s.handleGetVectorIndexCacheKeys(), false)
 	s.AddHandleFunc(pb.CmdMethod_CoreDumpConfig, handleCoreDumpConfig, false)
 }
 

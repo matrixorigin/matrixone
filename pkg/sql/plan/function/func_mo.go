@@ -52,9 +52,6 @@ const (
 // Mo function unit tests are not ported, because it is too heavy and does not test enough cases.
 // Mo functions are better tested with bvt.
 
-var MoTableRowsSizeUseOldImpl atomic.Bool
-var MoTableRowsSizeForceUpdate atomic.Bool
-
 const (
 	MoTableRowsSizeForceUpdateVarName    = "mo_table_stats.force_update"
 	MoTableRowSizeUseOldImplVarName      = "mo_table_stats.use_old_impl"
@@ -140,7 +137,7 @@ func MoTableSize(
 ) (err error) {
 
 	useOldStr := GetUseOldImplVariable(proc)
-	if (MoTableRowsSizeUseOldImpl.Load()) || useOldStr {
+	if useOldStr {
 		// the old implement
 		return MoTableSizeOld(iVecs, result, proc, length, selectList)
 	}
@@ -157,7 +154,7 @@ func MoTableRows(
 ) (err error) {
 
 	useOldStr := GetUseOldImplVariable(proc)
-	if (MoTableRowsSizeUseOldImpl.Load()) || useOldStr {
+	if useOldStr {
 		// the old implement
 		return MoTableRowsOld(iVecs, result, proc, length, selectList)
 	}
@@ -172,9 +169,13 @@ func MoTableRows(
 // some special cases:
 // 1. cluster table
 
-type GetMoTableSizeRowsFuncType = func() func(
-	context.Context, []uint64, []uint64, []uint64,
-	engine.Engine, bool, bool) ([]uint64, error)
+// MoTableStatsResolver is synchronous and must not be retained by the executor.
+type MoTableStatsResolver = func() (accs, dbs, tbls []uint64, err error)
+
+// GetMoTableSizeRowsFuncType dispatches to the caller engine. A nil error
+// with handled=false requests the existing old SQL implementation.
+type GetMoTableSizeRowsFuncType = func(
+	context.Context, engine.Engine, MoTableStatsResolver, bool, bool) (values []uint64, err error, handled bool)
 
 var GetMoTableSizeFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
 var GetMoTableRowsFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
@@ -294,6 +295,7 @@ func MoTableSizeRowsHelper(
 	length int,
 	selectList *FunctionSelectList,
 	executor *atomic.Pointer[GetMoTableSizeRowsFuncType],
+	fallback executeLogicOfOverload,
 ) (err error) {
 
 	var (
@@ -310,6 +312,7 @@ func MoTableSizeRowsHelper(
 		txn client.TxnOperator
 
 		ret                   []uint64
+		positions             []int
 		accIds, dbIds, tblIds []uint64
 
 		forceUpdate     = GetForceUpdateVariable(proc)
@@ -363,68 +366,89 @@ func MoTableSizeRowsHelper(
 
 	txn = proc.GetTxnOperator()
 
-	for i := uint64(0); i < uint64(length); i++ {
-		if dbName, tblName, ok = decodeNames(i); !ok {
-			if err = rs.Append(0, true); err != nil {
-				return err
+	resolve := func() ([]uint64, []uint64, []uint64, error) {
+		positions = make([]int, length)
+
+		for i := uint64(0); i < uint64(length); i++ {
+			if dbName, tblName, ok = decodeNames(i); !ok {
+				positions[i] = -1 // NULL
+				continue
 			}
-			continue
-		}
 
-		if ok, err = specialTableFilterForNonSys(proc.Ctx, dbName, tblName); ok && err == nil {
-			if err = rs.Append(int64(0), false); err != nil {
-				return err
+			if ok, err = specialTableFilterForNonSys(proc.Ctx, dbName, tblName); ok && err == nil {
+				positions[i] = -2 // special table
+				continue
 			}
-			continue
-		}
 
-		if err != nil {
-			return err
-		}
-
-		if db, err = eng.Database(proc.Ctx, dbName, txn); err != nil {
-			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-				return moerr.NewInternalErrorNoCtxf("db not exist: %s(%s)",
-					dbName, "OkExpectedEOB")
+			if err != nil {
+				return nil, nil, nil, err
 			}
-			return err
-		}
 
-		var sub subscription
-		if sub, err = isSubscribedTable(
-			proc, accountId, db, dbName, tblName); err != nil {
-			return err
-		} else if sub.valid {
-			// is subscription
-			accIds = append(accIds, sub.oriAccId)
-			dbIds = append(dbIds, sub.oriDatabaseId)
-			tblIds = append(tblIds, sub.oriTableId)
-		} else {
-			if rel, err = db.Relation(proc.Ctx, tblName, nil); err != nil {
+			if db, err = eng.Database(proc.Ctx, dbName, txn); err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					return moerr.NewInternalErrorNoCtxf("tbl not exist: %s-%s(%s)",
-						dbName, tblName, "OkExpectedEOB")
+					return nil, nil, nil, moerr.NewInternalErrorNoCtxf("db not exist: %s(%s)",
+						dbName, "OkExpectedEOB")
 				}
-				return err
+				return nil, nil, nil, err
 			}
 
-			accIds = append(accIds, uint64(accountId))
-			dbIds = append(dbIds, uint64(rel.GetDBID(proc.Ctx)))
-			tblIds = append(tblIds, uint64(rel.GetTableID(proc.Ctx)))
+			positions[i] = len(tblIds)
+			var sub subscription
+			if sub, err = isSubscribedTable(
+				proc, accountId, db, dbName, tblName); err != nil {
+				return nil, nil, nil, err
+			} else if sub.valid {
+				// is subscription
+				accIds = append(accIds, sub.oriAccId)
+				dbIds = append(dbIds, sub.oriDatabaseId)
+				tblIds = append(tblIds, sub.oriTableId)
+			} else {
+				if rel, err = db.Relation(proc.Ctx, tblName, nil); err != nil {
+					if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+						return nil, nil, nil, moerr.NewInternalErrorNoCtxf("tbl not exist: %s-%s(%s)",
+							dbName, tblName, "OkExpectedEOB")
+					}
+					return nil, nil, nil, err
+				}
+
+				accIds = append(accIds, uint64(accountId))
+				dbIds = append(dbIds, uint64(rel.GetDBID(proc.Ctx)))
+				tblIds = append(tblIds, uint64(rel.GetTableID(proc.Ctx)))
+			}
 		}
+
+		return accIds, dbIds, tblIds, nil
 	}
 
-	ret, err = (*executor.Load())()(
-		proc.Ctx, accIds, dbIds, tblIds, eng,
-		forceUpdate || MoTableRowsSizeForceUpdate.Load(),
+	fn := executor.Load()
+	if fn == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableSizeRows: statistics executor is nil")
+	}
+	var handled bool
+	ret, err, handled = (*fn)(
+		proc.Ctx, eng, resolve,
+		forceUpdate,
 		resetUpdateTime)
 
 	if err != nil {
 		return err
 	}
 
-	for _, val := range ret {
-		if err = rs.Append(int64(val), false); err != nil {
+	if !handled {
+		if err := proc.Ctx.Err(); err != nil {
+			return err
+		}
+		return fallback(iVecs, result, proc, length, selectList)
+	}
+	if len(ret) != len(tblIds) {
+		return moerr.NewInternalError(proc.Ctx, "MoTableSizeRows: invalid statistics cardinality")
+	}
+	for _, position := range positions {
+		var value int64
+		if position >= 0 {
+			value = int64(ret[position])
+		}
+		if err = rs.Append(value, position == -1); err != nil {
 			return err
 		}
 	}
@@ -440,7 +464,7 @@ func MoTableSizeNew(
 	selectList *FunctionSelectList,
 ) (err error) {
 
-	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableSizeFunc)
+	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableSizeFunc, MoTableSizeOld)
 }
 
 func MoTableRowsNew(
@@ -451,7 +475,7 @@ func MoTableRowsNew(
 	selectList *FunctionSelectList,
 ) (err error) {
 
-	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableRowsFunc)
+	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableRowsFunc, MoTableRowsOld)
 }
 
 //#endregion MoTableSizeRows New Implements
@@ -1007,16 +1031,6 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 
 			enumVlaue, err := types.ParseEnumIndex(typeEnumVal, indexVal)
 			if err != nil {
-				// Ordinal zero is MySQL's ENUM error member.  INSERT IGNORE can
-				// store it for an invalid label and it is displayed as the empty
-				// string, regardless of whether the declaration also has an empty
-				// member at a non-zero ordinal.
-				if indexVal == 0 {
-					if err = rs.AppendBytes([]byte{}, false); err != nil {
-						return err
-					}
-					continue
-				}
 				return err
 			}
 
@@ -1141,13 +1155,12 @@ func (index *enumValueIndex) parse(value string) (types.Enum, error) {
 
 	num, err := strconv.ParseUint(value, 0, 64)
 	if err == nil {
-		number := uint16(num)
-		if number == 0 || int(number) > len(index.values) {
+		if num == 0 || num > uint64(len(index.values)) {
 			return 0, moerr.NewInternalErrorNoCtxf(
 				"convert to MySQL enum failed: number %d overflow enum boundary [1, %d]",
-				number, len(index.values))
+				num, len(index.values))
 		}
-		return types.Enum(number), nil
+		return types.Enum(num), nil
 	}
 
 	return 0, moerr.NewInternalErrorNoCtxf(
@@ -1171,9 +1184,13 @@ func enumEqualFoldKey(value string) string {
 // enum("a","b","c") -> CastIndexValueToIndex(1) -> 1
 // CastIndexValueToIndex returns enum type index according to the index value
 func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return castIntegerToEnum[uint16](ivecs, result, proc, length, selectList)
+}
+
+func castIntegerToEnum[T uint16 | uint64 | int64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
-	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
+	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
@@ -1186,7 +1203,12 @@ func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultW
 			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
 			var index types.Enum
 
-			index, err := types.ParseEnumValue(typeEnumVal, enumValueIndex)
+			var err error
+			if enumValueIndex < 0 || uint64(enumValueIndex) > uint64(types.MaxEnumLen) {
+				err = moerr.NewInvalidInputf(proc.Ctx, "invalid ENUM index %v", enumValueIndex)
+			} else {
+				index, err = types.ParseEnumValue(typeEnumVal, uint16(enumValueIndex))
+			}
 			if err != nil {
 				if !statementIgnore(proc) {
 					return err
@@ -1274,21 +1296,19 @@ func statementIgnore(proc *process.Process) bool {
 }
 
 func setMemberBitmap(definition string) uint64 {
-	var bitmap uint64
-	for bit := uint(0); bit < 64; bit++ {
-		member := uint64(1) << bit
-		if _, err := types.ParseSetValue(definition, member); err == nil {
-			bitmap |= member
-		}
-	}
+	bitmap, _ := types.SetValidBitmap(definition)
 	return bitmap
 }
 
 // set("a","b","c") -> CastSetIndexValueToIndex(3) -> 3
 func CastSetIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return castIntegerToSet[uint64](ivecs, result, proc, length, selectList)
+}
+
+func castIntegerToSet[T uint64 | int64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint64](result)
 	typeSets := vector.GenerateFunctionStrParameter(ivecs[0])
-	setIndexValues := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[1])
+	setIndexValues := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		typeSet, typeSetNull := typeSets.GetStrValue(i)
@@ -1300,13 +1320,19 @@ func CastSetIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResu
 			continue
 		}
 
-		index, err := types.ParseSetValue(functionUtil.QuickBytesToStr(typeSet), setIndexValue)
+		var index uint64
+		var err error
+		if setIndexValue < 0 {
+			err = moerr.NewInvalidInputf(proc.Ctx, "invalid SET bitmap %v", setIndexValue)
+		} else {
+			index, err = types.ParseSetValue(functionUtil.QuickBytesToStr(typeSet), uint64(setIndexValue))
+		}
 		if err != nil {
 			if !statementIgnore(proc) {
 				return err
 			}
 			// Numeric SET input keeps only bits represented by declared members.
-			index = setIndexValue & setMemberBitmap(functionUtil.QuickBytesToStr(typeSet))
+			index = uint64(setIndexValue) & setMemberBitmap(functionUtil.QuickBytesToStr(typeSet))
 		}
 		if err = rs.Append(index, false); err != nil {
 			return err

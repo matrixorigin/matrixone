@@ -299,6 +299,7 @@ func TestTrackedPartitions(t *testing.T) {
 func TestSnapshotManager(t *testing.T) {
 	t.Run("NewSnapshotManager", func(t *testing.T) {
 		mgr := NewSnapshotManager()
+		t.Cleanup(mgr.Close)
 
 		assert.NotNil(t, mgr)
 		assert.NotNil(t, mgr.tables)
@@ -308,6 +309,7 @@ func TestSnapshotManager(t *testing.T) {
 
 	t.Run("Init", func(t *testing.T) {
 		mgr := NewSnapshotManager()
+		t.Cleanup(mgr.Close)
 		mgr.Init()
 
 		assert.True(t, mgr.state.lastGCTime.Load() > 0)
@@ -315,6 +317,7 @@ func TestSnapshotManager(t *testing.T) {
 
 	t.Run("GetOrCreate_NewTable", func(t *testing.T) {
 		mgr := NewSnapshotManager()
+		t.Cleanup(mgr.Close)
 		mgr.Init()
 
 		tps := mgr.GetOrCreate(1, 100)
@@ -326,6 +329,7 @@ func TestSnapshotManager(t *testing.T) {
 
 	t.Run("GetOrCreate_ExistingTable", func(t *testing.T) {
 		mgr := NewSnapshotManager()
+		t.Cleanup(mgr.Close)
 		mgr.Init()
 
 		tps1 := mgr.GetOrCreate(1, 100)
@@ -376,6 +380,7 @@ func TestSnapshotManager(t *testing.T) {
 
 	t.Run("MaybeStartGC_FirstTime", func(t *testing.T) {
 		mgr := NewSnapshotManager()
+		t.Cleanup(mgr.Close)
 		mgr.Init()
 
 		// Reset last GC time to trigger GC
@@ -392,6 +397,7 @@ func TestSnapshotManager(t *testing.T) {
 
 	t.Run("MaybeStartGC_TooSoon", func(t *testing.T) {
 		mgr := NewSnapshotManager()
+		t.Cleanup(mgr.Close)
 		mgr.Init()
 
 		// Set last GC time to now
@@ -406,6 +412,7 @@ func TestSnapshotManager(t *testing.T) {
 
 	t.Run("RunGC", func(t *testing.T) {
 		mgr := NewSnapshotManager()
+		t.Cleanup(mgr.Close)
 		mgr.Init()
 
 		now := time.Now()
@@ -436,6 +443,7 @@ func TestSnapshotManager(t *testing.T) {
 
 	t.Run("GetMetrics", func(t *testing.T) {
 		mgr := NewSnapshotManager()
+		t.Cleanup(mgr.Close)
 		mgr.Init()
 
 		metrics := mgr.GetMetrics()
@@ -445,6 +453,7 @@ func TestSnapshotManager(t *testing.T) {
 
 	t.Run("GetConfig", func(t *testing.T) {
 		mgr := NewSnapshotManager()
+		t.Cleanup(mgr.Close)
 		mgr.Init()
 
 		config := mgr.GetConfig()
@@ -454,6 +463,7 @@ func TestSnapshotManager(t *testing.T) {
 
 	t.Run("ConcurrentOperations", func(t *testing.T) {
 		mgr := NewSnapshotManager()
+		t.Cleanup(mgr.Close)
 		mgr.Init()
 
 		var wg sync.WaitGroup
@@ -551,6 +561,31 @@ func TestSnapshotMetrics(t *testing.T) {
 		assert.Equal(t, int64(100), metrics.SnapshotMisses.Load())
 		assert.Equal(t, int64(100), metrics.SnapshotCreates.Load())
 	})
+}
+
+func TestSnapshotManagerGCAdmissionAndClose(t *testing.T) {
+	mgr := NewSnapshotManager()
+	mgr.Init()
+	mgr.state.lastGCTime.Store(0)
+
+	var callers sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		callers.Add(1)
+		go func() {
+			defer callers.Done()
+			mgr.MaybeStartGC()
+		}()
+	}
+	callers.Wait()
+	mgr.Close()
+
+	assert.LessOrEqual(t, mgr.metrics.GCRuns.Load(), int64(1))
+	assert.False(t, mgr.state.gcRunning.Load())
+
+	lastRun := mgr.metrics.GCRuns.Load()
+	mgr.state.lastGCTime.Store(0)
+	mgr.MaybeStartGC()
+	assert.Equal(t, lastRun, mgr.metrics.GCRuns.Load())
 }
 
 // TestSnapshotGCConfig tests the GC configuration

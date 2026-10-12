@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
@@ -37,7 +39,7 @@ type testPhysicalAllocation struct {
 }
 
 func TestExecutionResourceBudgetObserverDimensionsAreFixed(t *testing.T) {
-	components := [...]string{"memory", "spill_disk", "spill_fd"}
+	components := [...]string{"memory", "recovery_memory", "spill_disk", "spill_fd"}
 	events := [...]string{"reserve", "release", "reconcile", "reject"}
 	scopes := [...]string{"query", "cn"}
 	want := len(components) * len(events) * len(scopes)
@@ -485,6 +487,24 @@ func TestClampSpillFDCapBoundaries(t *testing.T) {
 	}
 }
 
+func TestSetExecutionResourceBudgetForTesting(t *testing.T) {
+	var nilProc *Process
+	require.ErrorIs(t, nilProc.SetExecutionResourceBudgetForTesting(nil), ErrExecutionResourceInvalid)
+	proc := &Process{Base: &BaseProcess{}}
+	require.ErrorIs(t, proc.SetExecutionResourceBudgetForTesting(nil), ErrExecutionResourceInvalid)
+	budget := MustNewExecutionResourceBudget(1000, 800)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
+	got, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	require.Same(t, generation, got)
+	require.ErrorIs(t, proc.SetExecutionResourceBudgetForTesting(generation), ErrExecutionResourceInvalid)
+	generation.Close()
+	require.ErrorIs(t, (&Process{Base: &BaseProcess{}}).SetExecutionResourceBudgetForTesting(generation), ErrExecutionResourceInvalid)
+}
+
 func TestGetExecutionResourceBudgetInitializesAndReusesCNAggregate(t *testing.T) {
 	const localService = "__process_local_cn__"
 	executionResourceCNBudgets.Delete(localService)
@@ -539,8 +559,40 @@ func TestResolveExecutionMemoryCeiling(t *testing.T) {
 	if small, smallErr := ResolveExecutionMemoryCeiling(ExecutionMemoryCeilingInputs{
 		HostMemTotal:  3 * gib,
 		FileCacheHint: 3 * gib,
-	}); smallErr != nil || small.CNMemoryCap != 3*gib/20 {
+	}); smallErr != nil || small.CNMemoryCap != 3*gib/20 || small.QueryCap != small.CNMemoryCap {
 		t.Fatalf("small-CN ceiling = %+v, err=%v", small, smallErr)
+	}
+}
+
+func TestExecutionMemoryHeadroomSafety(t *testing.T) {
+	const gib = uint64(1 << 30)
+	tests := []struct {
+		name    string
+		ceiling ExecutionMemoryCeiling
+		want    uint64
+	}{
+		{
+			name:    "minimum runtime margin",
+			ceiling: ExecutionMemoryCeiling{EffectiveCN: 12 * gib, Reserve: 4 * gib},
+			want:    gib,
+		},
+		{
+			name:    "five percent on a large CN",
+			ceiling: ExecutionMemoryCeiling{EffectiveCN: 100 * gib, Reserve: 20 * gib},
+			want:    5 * gib,
+		},
+		{
+			name:    "bounded by the startup reserve",
+			ceiling: ExecutionMemoryCeiling{EffectiveCN: 2 * gib, Reserve: gib / 2},
+			want:    gib / 2,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := executionMemoryHeadroomSafety(test.ceiling); got != test.want {
+				t.Fatalf("safety = %d, want %d", got, test.want)
+			}
+		})
 	}
 }
 

@@ -41,6 +41,9 @@ cgo/*.dylib
 /mo-service
 vendor/
 .proto-vendor/
+build/
+.sirius-sdk/
+optools/gpu/.pixi/
 
 # Keep what we need
 !etc/

@@ -27,11 +27,12 @@ import (
 var _ vm.Operator = new(Filter)
 
 type Filter struct {
-	ctr                container
-	FilterExprs        []*plan.Expr
-	RuntimeFilterExprs []*plan.Expr
-	IsEnd              bool
-	IsAssert           bool
+	ctr                      container
+	FilterExprs              []*plan.Expr
+	RuntimeFilterExprs       []*plan.Expr
+	IsEnd                    bool
+	IsAssert                 bool
+	OwnsConstantCastWarnings bool
 
 	vm.OperatorBase
 }

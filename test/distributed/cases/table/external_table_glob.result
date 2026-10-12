@@ -1,0 +1,85 @@
+drop database if exists ext_glob;
+create database ext_glob;
+use ext_glob;
+drop table if exists eg_csv;
+create external table eg_csv(id int, name varchar(50), v int) infile{"filepath"='$resources/load_data/glob/part_*.csv'} fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select count(*), sum(id), min(id), max(id) from eg_csv;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  min(id)[4,32,0]  ¦  max(id)[4,32,0]  𝄀
+6  ¦  69  ¦  1  ¦  22
+select count(*) from eg_csv where id = 9999;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(distinct __mo_filepath) as files from eg_csv;
+➤ files[-5,64,0]  𝄀
+3
+select id, name, v from eg_csv order by id;
+➤ id[4,32,0]  ¦  name[12,50,0]  ¦  v[4,32,0]  𝄀
+1  ¦  shard0_a  ¦  1  𝄀
+2  ¦  shard0_b  ¦  2  𝄀
+11  ¦  shard1_a  ¦  11  𝄀
+12  ¦  shard1_b  ¦  12  𝄀
+21  ¦  shard2_a  ¦  21  𝄀
+22  ¦  shard2_b  ¦  22
+drop table if exists eg_lz4;
+create external table eg_lz4(id int, name varchar(50), v int) infile{"filepath"='$resources/load_data/glob/zpart_*.csv.lz4'} fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select count(*), sum(id) from eg_lz4;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+6  ¦  69
+select count(*) from eg_lz4 where id = 9999;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(distinct __mo_filepath) as files from eg_lz4;
+➤ files[-5,64,0]  𝄀
+3
+drop table if exists eg_lz4_explicit;
+create external table eg_lz4_explicit(id int, name varchar(50), v int) infile{"filepath"='$resources/load_data/glob/zpart_*.csv.lz4',"compression"='lz4'} fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select count(*), sum(id) from eg_lz4_explicit;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+6  ¦  69
+drop table if exists eg_mixed;
+create external table eg_mixed(id int, name varchar(50), v int) infile{"filepath"='$resources/load_data/glob/mix/m_*'} fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select count(*), sum(id), min(id), max(id) from eg_mixed;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  min(id)[4,32,0]  ¦  max(id)[4,32,0]  𝄀
+6  ¦  69  ¦  1  ¦  22
+select count(*) from eg_mixed where id = 9999;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table if exists eg_noignore;
+create external table eg_noignore(id int, name varchar(50), v int) infile{"filepath"='$resources/load_data/glob/part_*.csv'} fields terminated by ',' lines terminated by '\n';
+select count(*) from eg_noignore;
+➤ count(*)[-5,64,0]  𝄀
+9
+select count(*) from eg_noignore where id = 9999;
+➤ count(*)[-5,64,0]  𝄀
+3
+drop table if exists eg_one;
+create external table eg_one(id int, name varchar(50), v int) infile{"filepath"='$resources/load_data/glob/one/solo_*.csv'} fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select count(*), sum(id), count(distinct __mo_filepath) from eg_one;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  count(distinct __mo_filepath)[-5,64,0]  𝄀
+2  ¦  3  ¦  1
+select count(*) from eg_csv where __mo_filepath like '%part_1%';
+➤ count(*)[-5,64,0]  𝄀
+2
+select sum(id) from eg_csv where __mo_filepath not like '%part_0%';
+➤ sum(id)[-5,64,0]  𝄀
+66
+drop table if exists eg_copy;
+create table eg_copy(id int, name varchar(50), v int);
+insert into eg_copy select id, name, v from eg_csv;
+select count(*), sum(id) from eg_copy;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+6  ¦  69
+drop table if exists eg_copy_pk;
+create table eg_copy_pk(id int primary key, name varchar(50), v int);
+insert into eg_copy_pk select id, name, v from eg_lz4;
+select count(*), sum(id) from eg_copy_pk;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+6  ¦  69
+select count(*) from eg_csv a join eg_lz4 b on a.id = b.id;
+➤ count(*)[-5,64,0]  𝄀
+6
+select v % 10 as bucket, count(*) as n from eg_csv group by bucket order by bucket;
+➤ bucket[-5,64,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  3
+drop database ext_glob;

@@ -23,7 +23,7 @@ import (
 )
 
 func TestTimeWindowRepeatedBoundaryProjectionKeepsType(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.tables["bind_select"].Cols[0].Typ = planpb.Type{
 		Id:          int32(types.T_timestamp),
 		Scale:       3,

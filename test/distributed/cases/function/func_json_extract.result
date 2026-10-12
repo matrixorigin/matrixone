@@ -137,7 +137,7 @@ json_extract({"a":"a1","b":"b1"}, $.*)
 create view v1 as select json_extract('{"a":1}','$.a');
 desc v1;
 Field    Type    Null    Key    Default    Extra    Comment
-json_extract({"a":1}, $.a)    JSON(0)    YES        null
+json_extract({"a":1}, $.a)    json    YES        null
 select json_extract('{"a":1}',null);
 json_extract({"a":1}, null)
 null
@@ -715,6 +715,17 @@ execute json_bool_compare_stmt using @json_bool_compare_param;
 id
 2
 deallocate prepare json_bool_compare_stmt;
+prepare json_null_compare_stmt from 'select id, json_extract(doc, ''$.enabled'') = ? as ordinary_equal, json_extract(doc, ''$.enabled'') <=> ? as null_safe_equal from json_bool_compare_test order by id';
+set @json_null_compare_param = cast(null as signed);
+execute json_null_compare_stmt using @json_null_compare_param, @json_null_compare_param;
+id	ordinary_equal	null_safe_equal
+1	null	0
+2	null	0
+3	null	1
+4	null	1
+5	null	0
+6	null	0
+deallocate prepare json_null_compare_stmt;
 select json_extract('16777217', '$') = cast(16777216 as float) as direct_rounded_equal;
 direct_rounded_equal
 1

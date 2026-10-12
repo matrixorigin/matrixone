@@ -31,7 +31,7 @@ func buildMySQLDMLCompatibilityPlan(t *testing.T, sql string) (*Plan, error) {
 
 func buildMySQLDMLCompatibilityPlanWithPrepare(t *testing.T, sql string, isPrepareStmt bool) (*Plan, error) {
 	t.Helper()
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
@@ -40,7 +40,7 @@ func buildMySQLDMLCompatibilityPlanWithPrepare(t *testing.T, sql string, isPrepa
 
 func buildMySQLDMLCompatibilityPlanWithSQLMode(t *testing.T, sql, sqlMode string) (*Plan, error) {
 	t.Helper()
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	ctx.SetSqlModeOverride(sqlMode)
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
@@ -257,7 +257,7 @@ func TestMissingColumnUsesMySQLBadFieldDiagnostic(t *testing.T) {
 }
 
 func TestLegacyOnDuplicateUpdateMissingValueColumnUsesBadFieldDiagnostic(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(
 		ctx.GetContext(),
 		dialect.MYSQL,
@@ -281,7 +281,7 @@ func TestLegacyOnDuplicateUpdateMissingValueColumnUsesBadFieldDiagnostic(t *test
 
 func requireMySQLUpdateTargetSubqueryCompatible(t *testing.T, sql string) {
 	t.Helper()
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
@@ -445,7 +445,7 @@ func TestMySQLDMLCompatibilityHelpers(t *testing.T) {
 	require.Contains(t, visibleCTEs, "visible")
 	require.Equal(t, inherited, mysqlCTENames(nil, inherited))
 
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	_, ok := findMySQLDMLTargetInLimit(ctx, nil, targets, visibleCTEs)
 	require.False(t, ok)
 

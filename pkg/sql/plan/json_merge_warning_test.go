@@ -50,7 +50,7 @@ func buildJSONMergeWarningTestPlan(
 }
 
 func TestJSONMergeWarningLifecycle(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	sink := new(jsonMergeWarningTestSink)
 
 	buildJSONMergeWarningTestPlan(t, ctx, JSONMergeWarningUser, sink)
@@ -72,6 +72,6 @@ func TestJSONMergeWarningLifecycle(t *testing.T) {
 }
 
 func TestJSONMergeWarningWithoutSinkIsSafe(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	buildJSONMergeWarningTestPlan(t, ctx, JSONMergeWarningUser, nil)
 }

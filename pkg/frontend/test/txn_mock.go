@@ -221,6 +221,21 @@ func (mr *MockTxnClientMockRecorder) GetLatestCommitTS() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLatestCommitTS", reflect.TypeOf((*MockTxnClient)(nil).GetLatestCommitTS))
 }
 
+// GetLatestSnapshot mocks base method.
+func (m *MockTxnClient) GetLatestSnapshot(ctx context.Context, minimum timestamp.Timestamp) (timestamp.Timestamp, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLatestSnapshot", ctx, minimum)
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetLatestSnapshot indicates an expected call of GetLatestSnapshot.
+func (mr *MockTxnClientMockRecorder) GetLatestSnapshot(ctx, minimum interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLatestSnapshot", reflect.TypeOf((*MockTxnClient)(nil).GetLatestSnapshot), ctx, minimum)
+}
+
 // GetState mocks base method.
 func (m *MockTxnClient) GetState() client.TxnState {
 	m.ctrl.T.Helper()
@@ -735,20 +750,6 @@ func (m *MockTxnOperator) LockSkipped(tableID uint64, mode lock.LockMode) bool {
 func (mr *MockTxnOperatorMockRecorder) LockSkipped(tableID, mode interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LockSkipped", reflect.TypeOf((*MockTxnOperator)(nil).LockSkipped), tableID, mode)
-}
-
-// NextSequence mocks base method.
-func (m *MockTxnOperator) NextSequence() uint64 {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NextSequence")
-	ret0, _ := ret[0].(uint64)
-	return ret0
-}
-
-// NextSequence indicates an expected call of NextSequence.
-func (mr *MockTxnOperatorMockRecorder) NextSequence() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NextSequence", reflect.TypeOf((*MockTxnOperator)(nil).NextSequence))
 }
 
 // Read mocks base method.

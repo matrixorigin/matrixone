@@ -386,7 +386,7 @@ func (idx *GoBruteForceIndex[T, R]) SearchFloat32(proc *sqlexec.SqlProcess, _que
 	}
 
 	exec := concurrent.NewThreadPoolExecutor(int(nthreads))
-	return exec.Execute(
+	err = exec.Execute(
 		proc.GetContext(),
 		nqueries,
 		func(ctx context.Context, thread_id int, start, end int) error {
@@ -416,6 +416,12 @@ func (idx *GoBruteForceIndex[T, R]) SearchFloat32(proc *sqlexec.SqlProcess, _que
 							minIdx = j
 						}
 					}
+					if minIdx < 0 {
+						// No candidate was ever closer than MaxFloat: the dataset is empty, or
+						// every distance left the element domain. -1 is not a row index -- callers
+						// feed this straight into UnionOne -- so fail instead of returning it.
+						return moerr.NewInternalErrorNoCtx("brute force: no nearest centroid for query; every candidate distance is out of range")
+					}
 					outKeys[k] = int64(minIdx)
 					outDists[k] = float32(minDist)
 					continue
@@ -444,6 +450,15 @@ func (idx *GoBruteForceIndex[T, R]) SearchFloat32(proc *sqlexec.SqlProcess, _que
 			}
 			return nil
 		})
+	if err != nil {
+		return err
+	}
+	// No finite check here. A distance that left the element domain cannot win a min-comparison,
+	// so it never changes the ranking -- it matters only where one is handed back as a score, and
+	// that is the caller's boundary, not this one. Checking in one entry point but not the other
+	// made the same index validate or not depending on which was called. An
+	// all-candidates-out-of-domain query is still caught by the negative-index guard above.
+	return nil
 }
 
 func (idx *GoBruteForceIndex[T, R]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
@@ -500,6 +515,10 @@ func (idx *GoBruteForceIndex[T, R]) Search(proc *sqlexec.SqlProcess, _queries an
 							minDist = dist
 							minIdx = j
 						}
+					}
+					if minIdx < 0 {
+						// see SearchFloat32: -1 is not a row index
+						return moerr.NewInternalErrorNoCtx("brute force: no nearest centroid for query; every candidate distance is out of range")
 					}
 					retKeys64[k*limit] = int64(minIdx)
 					retDistances[k*limit] = float64(minDist)

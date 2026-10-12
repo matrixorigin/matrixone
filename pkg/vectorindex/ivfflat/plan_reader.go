@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -96,7 +97,7 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 		proc:           proc,
 		partitionCount: req.Identity.PartitionCount,
 		partitionIndex: req.Identity.PartitionIndex,
-		ownsInMemory:   ownsInMemoryPartition(req.Identity.PartitionCount, req.Identity.PartitionIndex),
+		ownsInMemory:   req.Identity.PartitionCount <= 1 || !req.Identity.IsRemote,
 		txnOffset:      req.Identity.TxnOffset,
 		snapshot:       cloneIvfSnapshot(req.Identity.Snapshot),
 		executionStats: r.executionStats,
@@ -106,10 +107,6 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 		r.scanner.accountID = &accountID
 	}
 	return r, nil
-}
-
-func ownsInMemoryPartition(partitionCount, partitionIndex int32) bool {
-	return partitionCount <= 1 || partitionIndex == 0
 }
 
 func cloneIvfSnapshot(snapshot *plan.Snapshot) *plan.Snapshot {
@@ -459,12 +456,16 @@ func searchPlanReader[T types.RealNumbers](
 ) error {
 	cache.Cache.Once()
 	algo := NewIvfflatSearch[T](idxcfg, tblcfg)
+	algo.forceCPURoute = r.req.MembershipFilterRequired && r.req.Identity.PartitionCount > 1
 	key := fmt.Sprintf("%s:%d", tblcfg.IndexTable, idxcfg.Ivfflat.Version)
 	if source := r.spec.SourceTable; source != nil && source.PubInfo != nil {
 		key = fmt.Sprintf("tenant=%d:%s", source.PubInfo.TenantId, key)
 	}
 	if r.req.Identity.PartitionCount > 1 {
 		key = fmt.Sprintf("%s:%d/%d", key, r.req.Identity.PartitionIndex, r.req.Identity.PartitionCount)
+	}
+	if algo.forceCPURoute {
+		key += ":cpu-route-v1"
 	}
 	if prepareOnly {
 		cursor := new(vectorindex.IvfSearchCursor)
@@ -669,6 +670,9 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 		defer req.FilterHint.BF.Free()
 	}
 	ctx := s.proc.Ctx
+	if req.ReadPolicy != 0 {
+		ctx = fileservice.WithFileServicePolicy(ctx, fileservice.GetFileServicePolicy(ctx)|req.ReadPolicy)
+	}
 	if s.accountID != nil {
 		ctx = defines.AttachAccountId(ctx, *s.accountID)
 	}
@@ -940,9 +944,8 @@ func (s *relationScanner) recordRelationExecutionStats(
 }
 
 // relationScanPolicy mirrors the distributed table-scan ownership contract:
-// partition zero owns committed in-memory/appendable rows, while every other
-// partition reads only persisted objects assigned by object ID. The scheduler
-// pins the coordinator-local CN at ordinal zero for VECTOR_INDEX_SCAN queries.
+// the coordinator owns in-memory rows independently of its object partition
+// ordinal. Remote partitions read only persisted objects assigned by object ID.
 // Replicated metadata/centroid requests set partitionCount=1 and therefore
 // read all visible data on every executing CN.
 func relationScanPolicy(partitionCount int32, ownsInMemory bool) engine.DataCollectPolicy {
@@ -975,12 +978,18 @@ func filterRelationBatchRows(
 			sels = append(sels, int64(row))
 		}
 	}
+	return selectRelationBatchRows(bat, sels, loadedColumns), nil
+}
+
+// selectRelationBatchRows preserves unloaded slots when columns were materialized
+// selectively. A nil column list denotes a fully materialized batch.
+func selectRelationBatchRows(bat *batch.Batch, sels []int64, loadedColumns []int) engine.ReaderFilterResult {
 	if len(sels) == bat.RowCount() {
-		return engine.ReaderFilterResult{All: true}, nil
+		return engine.ReaderFilterResult{All: true}
 	}
 	if len(sels) == 0 {
 		bat.CleanOnlyData()
-		return engine.ReaderFilterResult{Sels: sels}, nil
+		return engine.ReaderFilterResult{Sels: sels}
 	}
 	if loadedColumns == nil {
 		bat.Shrink(sels, false)
@@ -990,7 +999,7 @@ func filterRelationBatchRows(
 		}
 		bat.SetRowCount(len(sels))
 	}
-	return engine.ReaderFilterResult{Sels: sels}, nil
+	return engine.ReaderFilterResult{Sels: sels}
 }
 
 // relationFilterEarlyColumns returns the output positions that must be loaded

@@ -1,0 +1,53 @@
+prepare round_value from 'select cast(round(?,1) as double) as v';
+set @v = '1.46';
+execute round_value using @v;
+➤ v[8,53,31]  𝄀
+1.5
+set @v = 2;
+execute round_value using @v;
+➤ v[8,53,31]  𝄀
+2.0
+set @v = '2.5';
+execute round_value using @v;
+➤ v[8,53,31]  𝄀
+2.5
+deallocate prepare round_value;
+prepare round_scalar from 'select cast(round((select ?),0) as double) as v';
+execute round_scalar using @v;
+➤ v[8,53,31]  𝄀
+3.0
+deallocate prepare round_scalar;
+prepare truncate_derived from 'select cast(truncate(x,1) as double) as v from (select ? x limit 1) d';
+set @v = '1.46';
+execute truncate_derived using @v;
+➤ v[8,53,31]  𝄀
+1.4
+deallocate prepare truncate_derived;
+prepare round_truncate_output_cast from 'select cast(round(?,1) as decimal(20,1)) as rounded,cast(truncate(?,1) as decimal(20,1)) as truncated';
+set @v = '1.46';
+execute round_truncate_output_cast using @v,@v;
+➤ rounded[3,20,1]  ¦  truncated[3,20,1]  𝄀
+1.5  ¦  1.4
+set @v = '-1.46';
+execute round_truncate_output_cast using @v,@v;
+➤ rounded[3,20,1]  ¦  truncated[3,20,1]  𝄀
+-1.5  ¦  -1.4
+set @v = 3;
+execute round_truncate_output_cast using @v,@v;
+➤ rounded[3,20,1]  ¦  truncated[3,20,1]  𝄀
+3.0  ¦  3.0
+set @v = null;
+execute round_truncate_output_cast using @v,@v;
+➤ rounded[3,20,1]  ¦  truncated[3,20,1]  𝄀
+null  ¦  null
+set @v = '1.46';
+execute round_truncate_output_cast using @v,@v;
+➤ rounded[3,20,1]  ¦  truncated[3,20,1]  𝄀
+1.5  ¦  1.4
+deallocate prepare round_truncate_output_cast;
+prepare truncate_input_cast from 'select cast(truncate(cast(? as decimal(20,1)),1) as decimal(20,1)) as truncated';
+execute truncate_input_cast using @v;
+➤ truncated[3,20,1]  𝄀
+1.5
+deallocate prepare truncate_input_cast;
+set @v = null;

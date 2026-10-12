@@ -166,7 +166,27 @@ func authenticateDataBranchCreateDatabaseSourceTables(
 		delta statistic.StatsArray
 		err   error
 	)
+	if _, systemDB := sysDatabases[strings.ToLower(source.srcResolveDBName)]; systemDB && ses.GetTenantInfo().IsMoAdminRole() {
+		return stats, nil
+	}
 	for _, tblInfo := range source.cloneableTableInfos() {
+		if tblInfo.typ == view && source.srcResolveDBName != source.srcPrivilegeDBName {
+			if ses.GetTenantInfo().IsAdminRole() {
+				continue
+			}
+			delta, err = requireAllBranchPrivileges(ctx, ses, []branchPrivilegeRequirement{{
+				objType:                       objectTypeView,
+				databaseName:                  source.srcPrivilegeDBName,
+				tableName:                     tblInfo.tblName,
+				privilegeTypes:                []PrivilegeType{PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership},
+				writeDatabaseAndTableDirectly: true,
+			}})
+			stats.Add(&delta)
+			if err != nil {
+				return stats, err
+			}
+			continue
+		}
 		srcName := makeBranchTableName(
 			source.srcPrivilegeDBName,
 			tblInfo.tblName,
@@ -703,23 +723,6 @@ func validateDataBranchDeleteDatabaseTarget(
 	}
 	slices.Sort(tableIDs)
 	return tableIDs, nil
-}
-
-// lockDataBranchDeleteDatabaseTarget establishes the authorization point for a
-// database delete. CREATE/ALTER/DROP object DDL takes the same mo_database row
-// lock, so holding it through validation and the nested DROP makes the marker
-// and complete ordinary-table set stable until the owning transaction ends.
-func lockDataBranchDeleteDatabaseTarget(
-	ctx context.Context,
-	ses *Session,
-	bh BackgroundExec,
-	dbName string,
-) error {
-	accountID, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return err
-	}
-	return lockDatabaseCatalogRow(ctx, ses, bh, accountID, dbName)
 }
 
 func branchDeleteDatabaseTableIDsSQL(accId uint32, dbName string) string {

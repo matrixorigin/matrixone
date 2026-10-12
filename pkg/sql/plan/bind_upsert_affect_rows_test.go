@@ -187,7 +187,7 @@ func noopFilterNotBranch(expr *planpb.Expr) *planpb.Function {
 // weights independently of its final physical-write decision. REPLACE retains
 // the legacy delete+insert count; plain INSERT remains unchanged.
 func TestUpsertAffectRowsPlan(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	t.Run("INSERT IGNORE with ODKU keeps UPDATE action", func(t *testing.T) {
 		p, err := runOneStmt(mock, t,
@@ -269,7 +269,7 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 	})
 
 	t.Run("ODKU unrelated update skips CHECK action stream", func(t *testing.T) {
-		m := NewMockOptimizer(true)
+		m := NewMockOptimizer(true, newPlanTestProcess(t))
 		addPositiveCheck(t, m, "emp", "deptno")
 		p, err := runOneStmt(m, t,
 			"insert into constraint_test.emp(empno, ename, job, deptno) values (1, 'A', 'B', 1) on duplicate key update sal = sal")
@@ -282,7 +282,7 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 	t.Run("ODKU action checks remain independent when FK checks are disabled", func(t *testing.T) {
 		newMock := func(t *testing.T) *MockOptimizer {
 			t.Helper()
-			m := NewMockOptimizer(true)
+			m := NewMockOptimizer(true, newPlanTestProcess(t))
 			m.ctxt.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
 				switch name {
 				case "foreign_key_checks":

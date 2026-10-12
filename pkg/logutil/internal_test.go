@@ -18,6 +18,7 @@ import (
 	"context"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/require"
@@ -205,10 +206,10 @@ func Test_getLoggerEncoder(t *testing.T) {
 				format: "console",
 			},
 			fields: fields{
-				entry:  zapcore.Entry{Level: zapcore.DebugLevel, Message: "console msg"},
+				entry:  zapcore.Entry{Time: time.Unix(0, 0), Level: zapcore.DebugLevel, Message: "console msg"},
 				fields: []zap.Field{},
 			},
-			// like: 0001/01/01 00:00:00.000000 +0000 DEBUG console msg
+			// like: 1970/01/01 00:00:00.000000 +0000 DEBUG console msg
 			wantOutput: regexp.MustCompile(`\d{4}/\d{2}/\d{2} (\d{2}:{0,1}){3}\.\d{6} \+\d{4} DEBUG console msg`),
 			foundCnt:   1,
 		},

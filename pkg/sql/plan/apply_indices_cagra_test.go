@@ -28,51 +28,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// cagraScanNode builds a minimal scan node fixture suitable for the cagra
-// prepare-context tests. Same shape used by hnsw/ivfflat fixtures: vec_col at
-// pos 0, id PK at pos 1.
-func cagraScanNode() *plan.Node {
-	return &plan.Node{
-		TableDef: &plan.TableDef{
-			Name: "test_table",
-			Name2ColIndex: map[string]int32{
-				"vec_col": 0,
-				"id":      1,
-			},
-			Cols: []*plan.ColDef{
-				{Name: "vec_col", Typ: plan.Type{Id: int32(types.T_array_float32)}},
-				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
-			},
-			Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
-		},
-	}
-}
-
-// cagraVecCtx wraps the supplied scanNode in a vectorSortContext with a
-// l2_distance(col, vec_lit) shape — matches what buildVectorSortContext
-// produces in the planner for the prepare* path.
-func cagraVecCtx(scanNode *plan.Node) *vectorSortContext {
-	limit := makePlan2Uint64ConstExprWithType(10)
-	return &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{ObjName: "l2_distance"},
-			Args: []*plan.Expr{
-				{
-					Typ:  plan.Type{Id: int32(types.T_array_float32)},
-					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
-				},
-				{
-					Typ:  plan.Type{Id: int32(types.T_array_float32)},
-					Expr: &plan.Expr_Lit{Lit: &plan.Literal{}},
-				},
-			},
-		},
-		scanNode:    scanNode,
-		limit:       DeepCopyExpr(limit),
-		resultLimit: limit,
-	}
-}
-
 // cagraMTI builds a MultiTableIndex with the given algo params on the
 // metadata def; the storage def carries the part list used by getArgsFromDistFn.
 func cagraMTI(algoParams string) *MultiTableIndex {
@@ -90,28 +45,28 @@ func cagraMTI(algoParams string) *MultiTableIndex {
 }
 
 func TestPrepareCagraIndexContext_NilVecCtx(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	r, err := b.prepareCagraIndexContext(nil, &MultiTableIndex{})
 	assert.NoError(t, err)
 	assert.Nil(t, r)
 }
 
 func TestPrepareCagraIndexContext_NilMultiTableIndex(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	r, err := b.prepareCagraIndexContext(&vectorSortContext{}, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, r)
 }
 
 func TestPrepareCagraIndexContext_NilDistFnExpr(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	r, err := b.prepareCagraIndexContext(&vectorSortContext{distFnExpr: nil}, &MultiTableIndex{})
 	assert.NoError(t, err)
 	assert.Nil(t, r)
 }
 
 func TestPrepareCagraIndexContext_ForceMode(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	v := &vectorSortContext{
 		distFnExpr: &plan.Function{Func: &ObjectRef{ObjName: "l2_distance"}},
 		rankOption: &plan.RankOption{Mode: "force"},
@@ -123,7 +78,7 @@ func TestPrepareCagraIndexContext_ForceMode(t *testing.T) {
 
 func TestPrepareCagraIndexContext_DescBlocksRewrite(t *testing.T) {
 	// validateVectorIndexSortRewrite returns false for DESC.
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	v := &vectorSortContext{
 		distFnExpr:    &plan.Function{Func: &ObjectRef{ObjName: "l2_distance"}},
 		sortDirection: plan.OrderBySpec_DESC,
@@ -134,7 +89,7 @@ func TestPrepareCagraIndexContext_DescBlocksRewrite(t *testing.T) {
 }
 
 func TestPrepareCagraIndexContext_NilMetaDef(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	v := &vectorSortContext{distFnExpr: &plan.Function{Func: &ObjectRef{ObjName: "l2_distance"}}}
 	mti := &MultiTableIndex{
 		IndexDefs: map[string]*plan.IndexDef{
@@ -148,7 +103,7 @@ func TestPrepareCagraIndexContext_NilMetaDef(t *testing.T) {
 }
 
 func TestPrepareCagraIndexContext_NilIdxDef(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	v := &vectorSortContext{distFnExpr: &plan.Function{Func: &ObjectRef{ObjName: "l2_distance"}}}
 	mti := &MultiTableIndex{
 		IndexDefs: map[string]*plan.IndexDef{
@@ -162,7 +117,7 @@ func TestPrepareCagraIndexContext_NilIdxDef(t *testing.T) {
 }
 
 func TestPrepareCagraIndexContext_InvalidAlgoParamsJSON(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	v := &vectorSortContext{distFnExpr: &plan.Function{Func: &ObjectRef{ObjName: "l2_distance"}}}
 	mti := cagraMTI("not valid json")
 	r, err := b.prepareCagraIndexContext(v, mti)
@@ -171,7 +126,7 @@ func TestPrepareCagraIndexContext_InvalidAlgoParamsJSON(t *testing.T) {
 }
 
 func TestPrepareCagraIndexContext_OpTypeMismatch(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	v := &vectorSortContext{distFnExpr: &plan.Function{Func: &ObjectRef{ObjName: "l2_distance"}}}
 	mti := cagraMTI(`{"op_type": "vector_cosine_ops"}`)
 	r, err := b.prepareCagraIndexContext(v, mti)
@@ -182,7 +137,7 @@ func TestPrepareCagraIndexContext_OpTypeMismatch(t *testing.T) {
 // op_type present but not a string → StrictString fails and the function
 // returns (nil, nil).
 func TestPrepareCagraIndexContext_OpTypeNotString(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	v := &vectorSortContext{distFnExpr: &plan.Function{Func: &ObjectRef{ObjName: "l2_distance"}}}
 	mti := cagraMTI(`{"op_type": 123}`)
 	r, err := b.prepareCagraIndexContext(v, mti)
@@ -191,8 +146,8 @@ func TestPrepareCagraIndexContext_OpTypeNotString(t *testing.T) {
 }
 
 func TestPrepareCagraIndexContext_ArgsNotFound(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	scan := cagraScanNode()
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+	scan := vectorProviderScanNode()
 	// Both args are literals → getArgsFromDistFn returns found=false.
 	v := &vectorSortContext{
 		distFnExpr: &plan.Function{
@@ -212,7 +167,7 @@ func TestPrepareCagraIndexContext_ArgsNotFound(t *testing.T) {
 
 func TestPrepareCagraIndexContext_ResolveThreadsError(t *testing.T) {
 	mock := &customMockCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(true),
+		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
 		resolveVarFunc: func(name string, isSys, isGlobal bool) (interface{}, error) {
 			if name == "cagra_threads_search" {
 				return nil, moerr.NewInternalError(context.Background(), "threads error")
@@ -221,7 +176,7 @@ func TestPrepareCagraIndexContext_ResolveThreadsError(t *testing.T) {
 		},
 	}
 	b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
-	r, err := b.prepareCagraIndexContext(cagraVecCtx(cagraScanNode()),
+	r, err := b.prepareCagraIndexContext(vectorProviderVecCtx(vectorProviderScanNode()),
 		cagraMTI(`{"op_type": "`+metric.DistFuncOpTypes["l2_distance"]+`"}`))
 	assert.Error(t, err)
 	assert.Nil(t, r)
@@ -230,7 +185,7 @@ func TestPrepareCagraIndexContext_ResolveThreadsError(t *testing.T) {
 
 func TestPrepareCagraIndexContext_ResolveBatchWindowError(t *testing.T) {
 	mock := &customMockCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(true),
+		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
 		resolveVarFunc: func(name string, isSys, isGlobal bool) (interface{}, error) {
 			if name == "cagra_threads_search" {
 				return int64(4), nil
@@ -242,7 +197,7 @@ func TestPrepareCagraIndexContext_ResolveBatchWindowError(t *testing.T) {
 		},
 	}
 	b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
-	r, err := b.prepareCagraIndexContext(cagraVecCtx(cagraScanNode()),
+	r, err := b.prepareCagraIndexContext(vectorProviderVecCtx(vectorProviderScanNode()),
 		cagraMTI(`{"op_type": "`+metric.DistFuncOpTypes["l2_distance"]+`"}`))
 	assert.Error(t, err)
 	assert.Nil(t, r)
@@ -251,7 +206,7 @@ func TestPrepareCagraIndexContext_ResolveBatchWindowError(t *testing.T) {
 
 func TestPrepareCagraIndexContext_Success(t *testing.T) {
 	mock := &customMockCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(true),
+		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
 		resolveVarFunc: func(name string, isSys, isGlobal bool) (interface{}, error) {
 			switch name {
 			case "cagra_threads_search":
@@ -264,7 +219,7 @@ func TestPrepareCagraIndexContext_Success(t *testing.T) {
 	}
 	b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
 	algo := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "m": 32}`
-	r, err := b.prepareCagraIndexContext(cagraVecCtx(cagraScanNode()), cagraMTI(algo))
+	r, err := b.prepareCagraIndexContext(vectorProviderVecCtx(vectorProviderScanNode()), cagraMTI(algo))
 	require.NoError(t, err)
 	require.NotNil(t, r)
 
@@ -281,7 +236,7 @@ func TestPrepareCagraIndexContext_Success(t *testing.T) {
 // inner sortNode/scanNode are nil; cover those guard paths. The full success
 // path is exercised through the higher-level tests in apply_indices_test.go.
 func TestApplyIndicesForSortUsingCagra_NilGuards(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	got, err := b.applyIndicesForSortUsingCagra(7, nil, &MultiTableIndex{}, nil)
 	assert.NoError(t, err)
@@ -299,13 +254,13 @@ func TestApplyIndicesForSortUsingCagra_NilGuards(t *testing.T) {
 // When prepareCagraIndexContext returns nil (e.g. force mode), the wrapper
 // returns nodeID unchanged with no error.
 func TestApplyIndicesForSortUsingCagra_PrepareReturnsNil(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	// applyIndicesForSortUsingCagra indexes builder.ctxByNode[nodeID] before
 	// calling prepare, so we must seed at least one slot.
 	b.ctxByNode = append(b.ctxByNode, NewBindContext(b, nil))
 
-	scan := cagraScanNode()
-	v := cagraVecCtx(scan)
+	scan := vectorProviderScanNode()
+	v := vectorProviderVecCtx(scan)
 	v.sortNode = &plan.Node{}
 	v.rankOption = &plan.RankOption{Mode: "force"}
 
@@ -319,7 +274,7 @@ func TestApplyIndicesForSortUsingCagra_PrepareReturnsNil(t *testing.T) {
 // chain with the expected node types.
 func TestApplyIndicesForSortUsingCagra_Success(t *testing.T) {
 	mock := &customMockCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		resolveVarFunc: func(name string, isSys, isGlobal bool) (interface{}, error) {
 			switch name {
 			case "cagra_threads_search":
@@ -423,7 +378,7 @@ func TestApplyIndicesForSortUsingCagra_Success(t *testing.T) {
 //   - vecCtx.childNode set so the projMap rewrite runs
 func TestApplyIndicesForSortUsingCagra_RichPushdown(t *testing.T) {
 	mock := &customMockCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		resolveVarFunc: func(name string, isSys, isGlobal bool) (interface{}, error) {
 			switch name {
 			case "cagra_threads_search":
@@ -595,7 +550,7 @@ func TestApplyIndicesForSortUsingCagra_RichPushdown(t *testing.T) {
 // peelAndRewriteDistFnFilters branch.
 func TestApplyIndicesForSortUsingCagra_Success_WithFiltersOverFetch(t *testing.T) {
 	mock := &customMockCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		resolveVarFunc: func(name string, isSys, isGlobal bool) (interface{}, error) {
 			switch name {
 			case "cagra_threads_search":

@@ -16,6 +16,10 @@ package tools
 
 import (
 	"context"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -349,4 +353,29 @@ func Test_projectLimit(t *testing.T) {
 		)
 	err := AssertPlan(context.Background(), "SELECT  1 + l_orderkey FROM lineitem", p)
 	assert.Error(t, err)
+}
+
+func TestAssertPlanPreservesRuntime(t *testing.T) {
+	// Initialize the shared service through its existing fixture owner before capture.
+	testutil.NewProcess(t, testutil.WithMPool(nil), testutil.WithFileService(nil))
+	rt := moruntime.ServiceRuntime("")
+	service := incrservice.GetAutoIncrementService("")
+	require.NotNil(t, service)
+	protocol, hasProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	require.True(t, hasProtocol)
+	executor, hasExecutor := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	t.Cleanup(func() { moruntime.SetupServiceBasedRuntime("", rt) })
+	pattern := TNode(plan2.Node_PROJECT, TNode(plan2.Node_TABLE_SCAN).WithAlias("L_ORDERKEY", TColumnRef("lineitem", "l_orderkey"))).WithOutputs("L_ORDERKEY")
+	for i := 0; i < 2; i++ {
+		require.NoError(t, AssertPlan(context.Background(), "SELECT l_orderkey FROM lineitem", pattern))
+		require.Error(t, AssertPlan(context.Background(), "SELECT (", nil))
+		require.Same(t, rt, moruntime.ServiceRuntime(""))
+		require.Same(t, service, incrservice.GetAutoIncrementService(""))
+		actualProtocol, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+		require.Equal(t, hasProtocol, ok)
+		require.Equal(t, protocol, actualProtocol)
+		actualExecutor, ok := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+		require.Equal(t, hasExecutor, ok)
+		require.Equal(t, executor, actualExecutor)
+	}
 }

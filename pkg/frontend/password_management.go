@@ -342,7 +342,7 @@ func whetherSavePasswordHistory(ses *Session) (bool, error) {
 }
 
 func generateSinglePasswordRecod(pwd string) ([]byte, error) {
-	records := make([]passwordHistoryRecord, 0)
+	records := make([]passwordHistoryRecord, 0, 1)
 	record := passwordHistoryRecord{
 		PasswordTimestamp: types.CurrentTimestamp().String2(time.UTC, 0),
 		Password:          pwd,

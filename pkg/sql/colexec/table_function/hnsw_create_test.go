@@ -612,7 +612,7 @@ func TestHnswCreateEndNoConfigSkips(t *testing.T) {
 		called = true
 		return executor.Result{}, nil
 	}
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	st := &hnswCreateState{} // empty tblcfg
 	require.Nil(t, st.end(&TableFunction{}, proc))
 	require.False(t, called, "no SQL must run without a valid table config")

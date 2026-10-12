@@ -78,7 +78,7 @@ func TestFindFulltext2IndexTables(t *testing.T) {
 }
 
 func TestBuildFulltext2SearchCfg(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	node := ft2ScanNode("ft2idx", "__store", "__meta")
 
 	// positional index, NL mode → cfg JSON with parser.

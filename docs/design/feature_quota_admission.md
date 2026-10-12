@@ -1,6 +1,8 @@
 # Linearizable feature-quota admission
 
-- Status: Review required
+- Status: historical quota-admission design; current DATA BRANCH creation uses
+  the pessimistic-RC component protocol in
+  [the integrated lifecycle design](20260929-rc-lifecycle-protocol.md).
 - Issues: [#27833](https://github.com/matrixorigin/matrixone/issues/27833),
   [#27718](https://github.com/matrixorigin/matrixone/issues/27718), and
   [#26087](https://github.com/matrixorigin/matrixone/issues/26087)
@@ -108,20 +110,12 @@ to the remaining capacity.
 
 ## 6. Fixed-snapshot transactions
 
-Advancing an active SI workspace would violate repeatable-read semantics. When
-DATA BRANCH runs with a fixed caller snapshot, a short independent pessimistic
-RC control transaction performs the barrier and initial quota read:
-
-- disabled rejects the operation;
-- unlimited permits the operation without changing the outer snapshot;
-- finite rejects with an actionable instruction to retry outside the active
-  transaction, because its serialization lock cannot safely be transferred to
-  the outer SI transaction.
-
-The control transaction is request-owned, has one begin/finish lifecycle, and
-is closed after commit or rollback. Cancellation is propagated to transaction
-creation and barrier waits, while background-session cleanup retains an
-independent transaction context for rollback.
+Advancing an active SI workspace would violate repeatable-read semantics.
+Current DATA BRANCH creation rejects an explicit fixed-SI or optimistic owner
+before catalog mutation, then checks quota in its owning pessimistic-RC
+transaction. There is no independent quota control transaction. Snapshot
+admission retains its separate fixed-snapshot handling; it does not use the
+branch quota row.
 
 ## 7. Lock order, ownership, and unhappy paths
 
@@ -144,7 +138,6 @@ There is one owner for each resource:
 | Resource | Owner | Release condition |
 | --- | --- | --- |
 | TN read-barrier admission | barrier request | response, cancellation, send failure, or stream close |
-| independent control transaction | `queryQuotaInIndependentTxn` | commit/rollback followed by executor close |
 | finite branch quota lock | branch background transaction | branch publication commit/rollback |
 | snapshot lineage lock | snapshot background transaction | snapshot publication commit/rollback |
 | copied executor result | feature checker | function return |

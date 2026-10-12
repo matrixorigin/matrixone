@@ -396,6 +396,15 @@ select id as strict_lower from t11 where k_bigint > 97 order by id;
 explain select id from t11 where k_bigint < 97 or k_bigint > 1000;
 select id as unsafe_or from t11 where k_bigint < 97 or k_bigint > 1000 order by id;
 
+-- A runtime CASE lookup remains lazy while preserving the ordinary index path.
+-- @regex("Index Table Scan",true)
+explain select id,payload from t11 force index(idx_bigint) where k_bigint=case when true then 95 else 96 end;
+select id,payload from t11 force index(idx_bigint) where k_bigint=case when true then 95 else 96 end;
+select id,payload from t11 ignore index(idx_bigint) where k_bigint=case when true then 95 else 96 end;
+-- @regex("Index Table Scan",true)
+explain select id,payload from t11 force index(idx_bigint) where k_bigint=case when false then 96 else 95 end;
+select id,payload from t11 force index(idx_bigint) where k_bigint=case when false then 96 else 95 end;
+
 -- UPDATE must select exactly the same rows and maintain the serialized index.
 update t11
 set payload = concat(payload, '-matched'), k_bigint = k_bigint + 100

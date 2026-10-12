@@ -17,6 +17,8 @@ package cdc
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,8 +30,11 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -42,11 +47,80 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetTableScanner(t *testing.T) {
-	gostub.Stub(&getSqlExecutor, func(cnUUID string) executor.SQLExecutor {
-		return &mock_executor.MockSQLExecutor{}
+func newDetectorTestRuntime(t *testing.T, sid string) runtime.Runtime {
+	t.Helper()
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, sid, logutil.GetPanicLogger())
+	runtime.SetupServiceBasedRuntime(sid, rt)
+	rt.SetGlobalVariables(runtime.InternalSQLExecutor, &mock_executor.MockSQLExecutor{})
+	t.Cleanup(func() {
+		if d := TableDetectorFromRuntime(rt); d != nil {
+			d.Close()
+		}
+		runtime.CompareAndDeleteServiceBasedRuntime(sid, rt)
 	})
-	assert.NotNil(t, GetTableDetector("cnUUID"))
+	return rt
+}
+
+func TestGetTableScanner(t *testing.T) {
+	firstRT := newDetectorTestRuntime(t, t.Name()+"-first")
+	secondRT := newDetectorTestRuntime(t, t.Name()+"-second")
+	first := InitTableDetector(firstRT, &mock_executor.MockSQLExecutor{})
+	second := InitTableDetector(secondRT, &mock_executor.MockSQLExecutor{})
+	require.Same(t, first, GetTableDetector(t.Name()+"-first"))
+	require.Same(t, second, GetTableDetector(t.Name()+"-second"))
+	require.NotSame(t, first, second)
+	first.Close()
+	require.NoError(t, second.Context().Err(), "closing one CN must not close another")
+}
+
+func TestTableDetectorResetScanInterval(t *testing.T) {
+	newDetectorTestRuntime(t, "private")
+	newDetectorTestRuntime(t, "next")
+	ResetTableDetectorForTest("private", time.Second)
+	first := GetTableDetector("private")
+	require.Equal(t, time.Second, first.scanInterval)
+	for _, interval := range []time.Duration{0, -time.Second} {
+		ResetTableDetectorForTest("private", interval)
+		require.Equal(t, defaultTableScanInterval, GetTableDetector("private").scanInterval)
+	}
+	require.ErrorIs(t, first.Context().Err(), context.Canceled)
+	ResetTableDetectorForTest("next")
+	require.Equal(t, defaultTableScanInterval, GetTableDetector("next").scanInterval, "private cadence must not leak")
+}
+
+func TestTableDetectorPrivatePeriodicScan(t *testing.T) {
+	stub := gostub.Stub(&cdcScanTableInjected, func() (string, bool) { return "", false })
+	defer stub.Reset()
+	td := newTableDetector(&mock_executor.MockSQLExecutor{})
+	td.scanInterval = 10 * time.Millisecond
+	td.scanTableFn = func(context.Context) error {
+		td.mu.Lock()
+		td.Mp = map[uint32]TblMap{1: {"db.tbl": {SourceDbName: "db", SourceTblName: "tbl"}}}
+		td.mu.Unlock()
+		return nil
+	}
+	defer func() {
+		td.Close()
+		waitUntil(t, func() bool {
+			td.mu.Lock()
+			defer td.mu.Unlock()
+			return !td.loopRunning.Load() && !td.handling
+		}, time.Second, "private detector did not stop")
+	}()
+	observed := make(chan map[uint32]TblMap, 1)
+	require.True(t, td.RegisterIfAbsent("periodic", 1, []string{"db"}, []string{"tbl"}, func(tables map[uint32]TblMap) error {
+		select {
+		case observed <- tables:
+		default:
+		}
+		return nil
+	}))
+	select {
+	case tables := <-observed:
+		require.Equal(t, "tbl", tables[1]["db.tbl"].SourceTblName)
+	case <-time.After(time.Second):
+		t.Fatal("periodic scan did not deliver the registered table without a manual scan")
+	}
 }
 
 func TestApplyTableDetectorOptions(t *testing.T) {
@@ -97,23 +171,23 @@ func makeForeignKeyConstraintSQLValue(t *testing.T) string {
 }
 
 func TestTableHasForeignKeyConstraint(t *testing.T) {
-	hasForeignKey, err := tableHasForeignKeyConstraint(nil)
+	hasForeignKey, err := TableHasForeignKeyConstraint(nil)
 	require.NoError(t, err)
 	assert.False(t, hasForeignKey)
 
 	primaryKeyOnly := makeConstraintSQLValue(t, &engine.PrimaryKeyDef{
 		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
 	})
-	hasForeignKey, err = tableHasForeignKeyConstraint([]byte(primaryKeyOnly))
+	hasForeignKey, err = TableHasForeignKeyConstraint([]byte(primaryKeyOnly))
 	require.NoError(t, err)
 	assert.False(t, hasForeignKey)
 
 	foreignKey := makeForeignKeyConstraintSQLValue(t)
-	hasForeignKey, err = tableHasForeignKeyConstraint([]byte(foreignKey))
+	hasForeignKey, err = TableHasForeignKeyConstraint([]byte(foreignKey))
 	require.NoError(t, err)
 	assert.True(t, hasForeignKey)
 
-	_, err = tableHasForeignKeyConstraint([]byte{byte(engine.ForeignKey)})
+	_, err = TableHasForeignKeyConstraint([]byte{byte(engine.ForeignKey)})
 	require.Error(t, err)
 }
 
@@ -124,7 +198,7 @@ func TestTableScanner1(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "has_pk"})
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"tblName"}, nil, proc.Mp())
 	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
@@ -132,6 +206,7 @@ func TestTableScanner1(t *testing.T) {
 	bat.Vecs[4] = testutil.MakeVarcharVector([]string{"createSql"}, nil, proc.Mp())
 	bat.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
 	bat.Vecs[6] = testutil.MakeVarcharVector([]string{""}, nil, proc.Mp())
+	bat.Vecs[7] = testutil.MakeBoolVector([]bool{true}, nil, proc.Mp())
 	bat.SetRowCount(1)
 	res := executor.Result{
 		Mp:      proc.Mp(),
@@ -187,17 +262,17 @@ func TestTableScanner1(t *testing.T) {
 	assert.Equal(t, 1, len(td.Callbacks))
 	assert.Equal(t, 1, len(td.SubscribedAccountIds))
 
-	err := td.scanTable()
+	err := td.scanTable(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(td.Mp))
 
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'db4'", "'tbl4'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'db4'", "'tbl4'"),
 		executor.Options{}.WithStatementOption(executor.StatementOption{}.WithDisableLog()),
 	).Return(executor.Result{}, moerr.NewInternalErrorNoCtx("mock error")).AnyTimes()
 
-	err = td.scanTable()
+	err = td.scanTable(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, 1, len(td.Mp))
 
@@ -205,7 +280,7 @@ func TestTableScanner1(t *testing.T) {
 	assert.Equal(t, 0, len(td.Callbacks))
 	assert.Equal(t, 0, len(td.SubscribedAccountIds))
 
-	err = td.scanTable()
+	err = td.scanTable(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(td.Mp))
 }
@@ -223,7 +298,7 @@ func TestAuditTableScannerSkipsForeignKeyTable(t *testing.T) {
   FOREIGN KEY (parent_id) REFERENCES parent(id)
 )`
 
-	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "has_pk"})
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"child"}, nil, proc.Mp())
 	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{10}, nil, proc.Mp())
@@ -231,6 +306,7 @@ func TestAuditTableScannerSkipsForeignKeyTable(t *testing.T) {
 	bat.Vecs[4] = testutil.MakeVarcharVector([]string{createSQL}, nil, proc.Mp())
 	bat.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
 	bat.Vecs[6] = testutil.MakeVarcharVector([]string{makeForeignKeyConstraintSQLValue(t)}, nil, proc.Mp())
+	bat.Vecs[7] = testutil.MakeBoolVector([]bool{true}, nil, proc.Mp())
 	bat.SetRowCount(1)
 	res := executor.Result{
 		Mp:      proc.Mp(),
@@ -240,7 +316,7 @@ func TestAuditTableScannerSkipsForeignKeyTable(t *testing.T) {
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'source_db'", "'child'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'source_db'", "'child'"),
 		gomock.Any(),
 	).Return(res, nil)
 
@@ -265,7 +341,7 @@ func TestAuditTableScannerSkipsForeignKeyTable(t *testing.T) {
 	})
 	td.mu.Unlock()
 
-	err := td.scanTable()
+	err := td.scanTable(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, td.Mp)
 }
@@ -279,7 +355,7 @@ func TestTableScannerDoesNotSkipForeignKeyTextLiteral(t *testing.T) {
 
 	createSQL := "CREATE TABLE child (note VARCHAR(32) DEFAULT 'foreign key')"
 
-	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "has_pk"})
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"child"}, nil, proc.Mp())
 	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{10}, nil, proc.Mp())
@@ -287,6 +363,7 @@ func TestTableScannerDoesNotSkipForeignKeyTextLiteral(t *testing.T) {
 	bat.Vecs[4] = testutil.MakeVarcharVector([]string{createSQL}, nil, proc.Mp())
 	bat.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
 	bat.Vecs[6] = testutil.MakeVarcharVector([]string{""}, nil, proc.Mp())
+	bat.Vecs[7] = testutil.MakeBoolVector([]bool{true}, nil, proc.Mp())
 	bat.SetRowCount(1)
 	res := executor.Result{
 		Mp:      proc.Mp(),
@@ -296,7 +373,7 @@ func TestTableScannerDoesNotSkipForeignKeyTextLiteral(t *testing.T) {
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'source_db'", "'child'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'source_db'", "'child'"),
 		gomock.Any(),
 	).Return(res, nil)
 
@@ -321,7 +398,7 @@ func TestTableScannerDoesNotSkipForeignKeyTextLiteral(t *testing.T) {
 	})
 	td.mu.Unlock()
 
-	err := td.scanTable()
+	err := td.scanTable(context.Background())
 	require.NoError(t, err)
 	require.Contains(t, td.Mp, uint32(1))
 	assert.Contains(t, td.Mp[1], "source_db.child")
@@ -336,7 +413,7 @@ func TestTableScannerSkipsForeignKeyMetadataWithoutCreateSQLText(t *testing.T) {
 
 	createSQL := "CREATE TABLE child (id BIGINT PRIMARY KEY, parent_id BIGINT)"
 
-	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "has_pk"})
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"child"}, nil, proc.Mp())
 	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{10}, nil, proc.Mp())
@@ -344,6 +421,7 @@ func TestTableScannerSkipsForeignKeyMetadataWithoutCreateSQLText(t *testing.T) {
 	bat.Vecs[4] = testutil.MakeVarcharVector([]string{createSQL}, nil, proc.Mp())
 	bat.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
 	bat.Vecs[6] = testutil.MakeVarcharVector([]string{makeForeignKeyConstraintSQLValue(t)}, nil, proc.Mp())
+	bat.Vecs[7] = testutil.MakeBoolVector([]bool{true}, nil, proc.Mp())
 	bat.SetRowCount(1)
 	res := executor.Result{
 		Mp:      proc.Mp(),
@@ -353,7 +431,7 @@ func TestTableScannerSkipsForeignKeyMetadataWithoutCreateSQLText(t *testing.T) {
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'source_db'", "'child'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'source_db'", "'child'"),
 		gomock.Any(),
 	).Return(res, nil)
 
@@ -378,7 +456,7 @@ func TestTableScannerSkipsForeignKeyMetadataWithoutCreateSQLText(t *testing.T) {
 	})
 	td.mu.Unlock()
 
-	err := td.scanTable()
+	err := td.scanTable(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, td.Mp)
 }
@@ -390,7 +468,7 @@ func TestTableScannerConstraintDecodeErrorPreservesOldTableMap(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "has_pk"})
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001, 1002}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"child", "broken"}, nil, proc.Mp())
 	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{10, 10}, nil, proc.Mp())
@@ -401,6 +479,7 @@ func TestTableScannerConstraintDecodeErrorPreservesOldTableMap(t *testing.T) {
 	}, nil, proc.Mp())
 	bat.Vecs[5] = testutil.MakeUint32Vector([]uint32{1, 1}, nil, proc.Mp())
 	bat.Vecs[6] = testutil.MakeVarcharVector([]string{"", string([]byte{byte(engine.ForeignKey)})}, nil, proc.Mp())
+	bat.Vecs[7] = testutil.MakeBoolVector([]bool{true, true}, nil, proc.Mp())
 	bat.SetRowCount(2)
 	res := executor.Result{
 		Mp:      proc.Mp(),
@@ -410,7 +489,7 @@ func TestTableScannerConstraintDecodeErrorPreservesOldTableMap(t *testing.T) {
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'source_db'", "*"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'source_db'", "*"),
 		gomock.Any(),
 	).Return(res, nil)
 
@@ -420,7 +499,6 @@ func TestTableScannerConstraintDecodeErrorPreservesOldTableMap(t *testing.T) {
 		SourceTblId:     9001,
 		SourceTblName:   "child",
 		SourceCreateSql: "CREATE TABLE child (old_id BIGINT PRIMARY KEY)",
-		IdChanged:       false,
 	}
 	td := &TableDetector{
 		Mp:                   map[uint32]TblMap{1: {GenDbTblKey("source_db", "child"): oldInfo}},
@@ -443,7 +521,7 @@ func TestTableScannerConstraintDecodeErrorPreservesOldTableMap(t *testing.T) {
 	})
 	td.mu.Unlock()
 
-	err := td.scanTable()
+	err := td.scanTable(context.Background())
 	require.Error(t, err)
 	require.Contains(t, td.Mp, uint32(1))
 	gotInfo := td.Mp[1][GenDbTblKey("source_db", "child")]
@@ -451,7 +529,7 @@ func TestTableScannerConstraintDecodeErrorPreservesOldTableMap(t *testing.T) {
 	assert.Equal(t, uint64(9), gotInfo.SourceDbId)
 	assert.Equal(t, uint64(9001), gotInfo.SourceTblId)
 	assert.Equal(t, "CREATE TABLE child (old_id BIGINT PRIMARY KEY)", gotInfo.SourceCreateSql)
-	assert.False(t, gotInfo.IdChanged)
+
 	assert.NotContains(t, td.Mp[1], GenDbTblKey("source_db", "broken"))
 }
 
@@ -469,7 +547,7 @@ func TestTableDetectorRegisterStartsScanAsync(t *testing.T) {
 		cleanupWarn:          time.Second,
 		nowFn:                time.Now,
 	}
-	td.scanTableFn = func() error { return nil }
+	td.scanTableFn = func(context.Context) error { return nil }
 	defer td.Close()
 
 	errCh := make(chan error, 1)
@@ -527,7 +605,7 @@ func TestTableDetectorScanLoopSingleInstance(t *testing.T) {
 		cleanupWarn:          time.Second,
 		nowFn:                time.Now,
 	}
-	td.scanTableFn = func() error {
+	td.scanTableFn = func(context.Context) error {
 		scanCalls.Add(1)
 		return nil
 	}
@@ -539,10 +617,7 @@ func TestTableDetectorScanLoopSingleInstance(t *testing.T) {
 
 	waitUntil(t, func() bool { return scanCalls.Load() > 0 }, 500*time.Millisecond, "scan loop did not start")
 
-	firstSeq := td.loopSeq.Load()
-	if firstSeq != 1 {
-		t.Fatalf("expected loopSeq 1, got %d", firstSeq)
-	}
+	firstContext := td.Context()
 
 	for i := 1; i < 5; i++ {
 		id := fmt.Sprintf("task-%d", i)
@@ -551,10 +626,7 @@ func TestTableDetectorScanLoopSingleInstance(t *testing.T) {
 		}
 	}
 
-	time.Sleep(50 * time.Millisecond)
-	if td.loopSeq.Load() != firstSeq {
-		t.Fatalf("expected loopSeq to remain %d, got %d", firstSeq, td.loopSeq.Load())
-	}
+	require.Same(t, firstContext, td.Context(), "registrations share one scan lifetime")
 
 	td.Close()
 	waitUntil(t, func() bool { return !td.loopRunning.Load() }, time.Second, "scan loop did not stop after Close")
@@ -617,6 +689,42 @@ func TestTableDetectorProcessCallbackNoReentry(t *testing.T) {
 
 	close(release)
 	wg.Wait()
+}
+
+func TestTableDetectorProcessCallbackUsesIndependentSnapshots(t *testing.T) {
+	td := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		cleanupPeriod:        time.Second,
+		cleanupWarn:          time.Second,
+		nowFn:                time.Now,
+	}
+	defer td.Close()
+
+	var first, second bool
+	consume := func(tables map[uint32]TblMap) error {
+		tables[1]["db.tbl"].SourceTblId = 8
+		first = true
+		return nil
+	}
+	observe := func(tables map[uint32]TblMap) error {
+		second = tables[1]["db.tbl"].SourceTblId == 7
+		return nil
+	}
+	require.True(t, td.RegisterIfAbsent("first", 1, []string{"db"}, []string{"tbl"}, consume))
+	require.True(t, td.RegisterIfAbsent("second", 1, []string{"db"}, []string{"tbl"}, observe))
+
+	td.processCallback(context.Background(), map[uint32]TblMap{
+		1: {"db.tbl": {SourceDbName: "db", SourceTblName: "tbl", SourceTblId: 7}},
+	})
+	require.True(t, first)
+	require.True(t, second, "one subscriber must not mutate another subscriber's source identity")
 }
 
 func TestTableDetectorRegisterDuringCallback(t *testing.T) {
@@ -796,6 +904,8 @@ func TestTableDetectorCloseWhileCallbackRunning(t *testing.T) {
 
 	block := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
 
 	require.True(t, d.RegisterIfAbsent("task", 1, []string{"db"}, []string{"tbl"}, func(map[uint32]TblMap) error {
 		close(block)
@@ -813,9 +923,17 @@ func TestTableDetectorCloseWhileCallbackRunning(t *testing.T) {
 	}()
 
 	<-block
-	d.Close()
-	close(release)
+	closed := make(chan struct{})
+	go func() { d.Close(); close(closed) }()
+	<-d.Context().Done()
+	select {
+	case <-closed:
+		t.Fatal("Close returned before the admitted callback exited")
+	default:
+	}
+	releaseOnce.Do(func() { close(release) })
 	wg.Wait()
+	<-closed
 
 	d.mu.Lock()
 	if d.handling {
@@ -855,55 +973,129 @@ func TestTableDetectorConcurrentRegisterUnregister(t *testing.T) {
 		cleanupWarn:          time.Second,
 		nowFn:                time.Now,
 	}
-	td.scanTableFn = func() error { return nil }
-	defer td.Close()
-
-	const workers = 16
-	var wg sync.WaitGroup
-	wg.Add(workers)
-	errCh := make(chan error, workers)
-
-	for i := 0; i < workers; i++ {
-		go func(idx int) {
-			defer wg.Done()
-			id := fmt.Sprintf("task-%d", idx)
-			if !td.RegisterIfAbsent(id, uint32(idx+1), []string{fmt.Sprintf("db%d", idx)}, []string{fmt.Sprintf("tbl%d", idx)}, func(map[uint32]TblMap) error { return nil }) {
-				errCh <- moerr.NewInternalErrorNoCtx(fmt.Sprintf("register failed for %s", id))
-				return
+	td.scanTableFn = func(context.Context) error { return nil }
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	start := make(chan struct{})
+	startWorkers := sync.OnceFunc(func() { close(start) })
+	var workersDone <-chan struct{}
+	defer func() {
+		cancel()
+		startWorkers()
+		if workersDone != nil {
+			select {
+			case <-workersDone:
+			case <-time.After(time.Second):
+				t.Error("register/unregister workers did not exit")
 			}
-			time.Sleep(time.Duration(idx%4) * 5 * time.Millisecond)
-			td.UnRegister(id)
-		}(i)
-	}
+		}
+		closed := make(chan struct{})
+		go func() {
+			td.Close()
+			close(closed)
+		}()
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+			t.Error("table detector did not close")
+			return
+		}
+		waitUntil(t, func() bool { return !td.loopRunning.Load() }, time.Second, "scan loop did not stop after Close")
+	}()
 
+	register := func(id string) bool {
+		return td.RegisterIfAbsent(id, 1, []string{"db"}, []string{"tbl"}, func(map[uint32]TblMap) error { return nil })
+	}
+	require.True(t, register("anchor"))
+	require.True(t, register("a"))
+
+	// Registration and removal contend on the same subscription indexes. The
+	// registration of c must follow a's removal, regardless of b's ordering.
+	removed := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		td.UnRegister("a")
+		close(removed)
+		results <- nil
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		if !register("b") {
+			results <- moerr.NewInternalErrorNoCtx("register b failed")
+			return
+		}
+		select {
+		case <-removed:
+		case <-ctx.Done():
+			results <- ctx.Err()
+			return
+		}
+		if !register("c") {
+			results <- moerr.NewInternalErrorNoCtx("register c failed")
+			return
+		}
+		results <- nil
+	}()
 	done := make(chan struct{})
+	workersDone = done
 	go func() {
 		wg.Wait()
 		close(done)
 	}()
-
+	startWorkers()
+	for range 2 {
+		select {
+		case err := <-results:
+			require.NoError(t, err)
+		case <-ctx.Done():
+			t.Fatalf("concurrent register/unregister timed out: %v", ctx.Err())
+		}
+	}
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatalf("concurrent register/unregister timed out")
+	case <-ctx.Done():
+		t.Fatal("register/unregister workers did not finish")
 	}
 
-	close(errCh)
-	for err := range errCh {
-		t.Fatalf("unexpected error: %v", err)
+	td.mu.Lock()
+	ids := make([]string, 0, len(td.Callbacks))
+	for id := range td.Callbacks {
+		ids = append(ids, id)
 	}
+	accountByTask := maps.Clone(td.CallBackAccountId)
+	dbByTask := maps.Clone(td.CallBackDbName)
+	tableByTask := maps.Clone(td.CallBackTableName)
+	accountTasks := slices.Clone(td.SubscribedAccountIds[1])
+	dbTasks := slices.Clone(td.SubscribedDbNames["db"])
+	tableTasks := slices.Clone(td.SubscribedTableNames["tbl"])
+	indexCounts := []int{len(td.SubscribedAccountIds), len(td.SubscribedDbNames), len(td.SubscribedTableNames)}
+	td.mu.Unlock()
 
-	waitUntil(t, func() bool {
-		td.mu.Lock()
-		defer td.mu.Unlock()
-		return len(td.Callbacks) == 0 &&
-			len(td.SubscribedAccountIds) == 0 &&
-			len(td.SubscribedDbNames) == 0 &&
-			len(td.SubscribedTableNames) == 0
-	}, 500*time.Millisecond, "callbacks or subscriptions not cleaned up")
+	wantIDs := []string{"anchor", "b", "c"}
+	require.ElementsMatch(t, wantIDs, ids)
+	require.Equal(t, map[string]uint32{"anchor": 1, "b": 1, "c": 1}, accountByTask)
+	require.Equal(t, map[string][]string{"anchor": {"db"}, "b": {"db"}, "c": {"db"}}, dbByTask)
+	require.Equal(t, map[string][]string{"anchor": {"tbl"}, "b": {"tbl"}, "c": {"tbl"}}, tableByTask)
+	require.Equal(t, []int{1, 1, 1}, indexCounts)
+	require.ElementsMatch(t, wantIDs, accountTasks)
+	require.ElementsMatch(t, wantIDs, dbTasks)
+	require.ElementsMatch(t, wantIDs, tableTasks)
 
-	td.Close()
-	waitUntil(t, func() bool { return !td.loopRunning.Load() }, time.Second, "scan loop did not stop after Close")
+	for _, id := range wantIDs {
+		td.UnRegister(id)
+	}
+	td.mu.Lock()
+	counts := []int{
+		len(td.Callbacks), len(td.CallBackAccountId), len(td.SubscribedAccountIds),
+		len(td.CallBackDbName), len(td.SubscribedDbNames),
+		len(td.CallBackTableName), len(td.SubscribedTableNames),
+	}
+	td.mu.Unlock()
+	require.Equal(t, []int{0, 0, 0, 0, 0, 0, 0}, counts)
 }
 
 func waitUntil(t *testing.T, cond func() bool, timeout time.Duration, msg string) {
@@ -934,7 +1126,7 @@ func TestTableDetectorConcurrentRegister(t *testing.T) {
 		cleanupWarn:          time.Second,
 		nowFn:                time.Now,
 	}
-	td.scanTableFn = func() error { return nil }
+	td.scanTableFn = func(context.Context) error { return nil }
 	defer td.Close()
 
 	const concurrency = 8
@@ -984,26 +1176,106 @@ func Test_CollectTableInfoSQL(t *testing.T) {
 	sql := builder.CollectTableInfoSQL("1,2,3", "*", "*")
 	_, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
-	sql = strings.ToUpper(sql)
-	t.Log(sql)
-	expected := "SELECT  TBL.REL_ID,  TBL.RELNAME,  TBL.RELDATABASE_ID,  " +
-		"TBL.RELDATABASE,  TBL.REL_CREATESQL,  TBL.ACCOUNT_ID,  TBL.`CONSTRAINT` " +
-		"FROM `MO_CATALOG`.`MO_TABLES` TBL " +
-		"WHERE  TBL.ACCOUNT_ID IN (1,2,3)  AND TBL.RELKIND = 'R'  " +
-		"AND TBL.RELDATABASE NOT IN ('INFORMATION_SCHEMA','MO_CATALOG','MO_DEBUG','MO_TASK','MYSQL','SYSTEM','SYSTEM_METRICS')"
-	assert.Equal(t, expected, sql)
+	upperSQL := strings.ToUpper(sql)
+	assert.Contains(t, upperSQL, "AS HAS_USER_PK")
+	assert.Contains(t, upperSQL, "PK.ATT_DATABASE_ID = TBL.RELDATABASE_ID")
+	assert.Contains(t, upperSQL, "PK.ATT_RELNAME_ID = TBL.REL_ID")
+	assert.Contains(t, upperSQL, "PK.ATT_CONSTRAINT_TYPE = 'P'")
+	assert.Contains(t, upperSQL, "PK.ATTNAME <> '__MO_FAKE_PK_COL'")
+	assert.NotContains(t, upperSQL, "PK.DB_NAME")
+	assert.NotContains(t, upperSQL, "PK.CONSTRAINT_TYPE")
+	assert.NotContains(t, upperSQL, "AND EXISTS")
 
 	sql = builder.CollectTableInfoSQL("0", "'source_db'", "'orders'")
 	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
-	expected = "SELECT  TBL.REL_ID,  TBL.RELNAME,  TBL.RELDATABASE_ID,  TBL.RELDATABASE,  TBL.REL_CREATESQL,  TBL.ACCOUNT_ID,  TBL.`CONSTRAINT` FROM `MO_CATALOG`.`MO_TABLES` TBL WHERE  TBL.ACCOUNT_ID IN (0)  AND TBL.RELDATABASE IN ('SOURCE_DB')  AND TBL.RELNAME IN ('ORDERS')  AND TBL.RELKIND = 'R'  AND TBL.RELDATABASE NOT IN ('INFORMATION_SCHEMA','MO_CATALOG','MO_DEBUG','MO_TASK','MYSQL','SYSTEM','SYSTEM_METRICS')"
-	assert.Equal(t, strings.ToUpper(expected), strings.ToUpper(sql))
+	assert.Contains(t, strings.ToUpper(sql), "TBL.RELDATABASE IN ('SOURCE_DB')")
+	assert.Contains(t, strings.ToUpper(sql), "TBL.RELNAME IN ('ORDERS')")
+
+	// CDC source identifiers can be legal when quoted even if they contain a
+	// SQL string delimiter. Candidate discovery must keep them inside the
+	// catalog predicate rather than allowing the identifier to alter that SQL.
+	sql = CollectCDCSourceCandidateSQL(1, "source'db", `orders\archive`)
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.Contains(t, sql, "tbl.reldatabase IN ('source''db')")
+	assert.Contains(t, sql, `tbl.relname IN ('orders\\archive')`)
+
+	// Mode 2 keeps the user spelling in persisted task metadata, but catalog
+	// selection must compare it case-insensitively before runtime matching.
+	sql = CollectCDCSourceCandidateSQL(1, "mixedDB", "Orders", 2)
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.Contains(t, sql, "lower(tbl.reldatabase) IN ('mixeddb')")
+	assert.Contains(t, sql, "lower(tbl.relname) IN ('orders')")
+
+	sql = builder.CollectTableInfoSQLCaseInsensitive("1", "'mixeddb'", "'orders'")
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.Contains(t, sql, "lower(tbl.reldatabase) IN ('mixeddb')")
+	assert.Contains(t, sql, "lower(tbl.relname) IN ('orders')")
+
+	// Mode 2 catalog prefilter must use the same parser canonical key as task
+	// matching, not Unicode simple case folding.
+	sql = CollectCDCSourceCandidateSQL(1, "Σdb", "Orders", 2)
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.Contains(t, sql, "lower(tbl.reldatabase) IN ('σdb')")
+
+	// SQL lower() does not preserve malformed UTF-8 bytes while the parser's
+	// mode-2 key does. Fall back to a catalog superset and let local matching
+	// apply the byte-preserving key after scan.
+	malformed := string([]byte{'1', 0xe9, 'A'})
+	sql = CollectCDCSourceCandidateSQL(1, malformed, "Orders", 2)
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.NotContains(t, sql, "lower(tbl.reldatabase)")
+	assert.Contains(t, sql, "lower(tbl.relname) IN ('orders')")
+
+	sql = CollectCDCSourceCandidateSQL(1, "MixedDB", malformed, 2)
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.Contains(t, sql, "lower(tbl.reldatabase) IN ('mixeddb')")
+	assert.NotContains(t, sql, "lower(tbl.relname)")
 }
 
-func TestScanAndProcess(t *testing.T) {
+func TestTableScannerMalformedUTF8UsesCatalogSuperset(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
+	malformed := string([]byte{'1', 0xe9, 'A'})
+	mockSQLExecutor := mock_executor.NewMockSQLExecutor(ctrl)
+	mockSQLExecutor.EXPECT().Exec(
+		gomock.Any(),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "*", "'orders'"),
+		gomock.Any(),
+	).Return(executor.Result{}, nil)
+
+	td := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedAccountIds: make(map[uint32][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		exec:                 mockSQLExecutor,
+		cleanupPeriod:        time.Hour,
+		cleanupWarn:          DefaultCleanupWarnThreshold,
+	}
+	defer td.Close()
+
+	td.mu.Lock()
+	td.registerLocked("malformed", 1, []string{malformed}, []string{"Orders"}, nil)
+	td.mu.Unlock()
+	require.NoError(t, td.scanTable(context.Background()))
+}
+
+func TestScanAndProcessStopsOnScanError(t *testing.T) {
+	const wantErr = "scan failed"
+	var scanCalls atomic.Int32
+	var callbackCalls atomic.Int32
 	td := &TableDetector{
 		Mp:                   make(map[uint32]TblMap),
 		Callbacks:            make(map[string]TableCallback),
@@ -1013,46 +1285,28 @@ func TestScanAndProcess(t *testing.T) {
 		SubscribedDbNames:    make(map[string][]string),
 		CallBackTableName:    make(map[string][]string),
 		SubscribedTableNames: make(map[string][]string),
-		exec:                 nil,
 		cleanupPeriod:        time.Hour,
 		cleanupWarn:          DefaultCleanupWarnThreshold,
 	}
 	defer td.Close()
 
-	tables := map[uint32]TblMap{
-		1: {
-			"db1.tbl1": &DbTableInfo{
-				SourceDbId:      1,
-				SourceDbName:    "db1",
-				SourceTblId:     1001,
-				SourceTblName:   "tbl1",
-				SourceCreateSql: "create table tbl1 (a int)",
-				IdChanged:       false,
-			},
-		},
+	td.scanTableFn = func(context.Context) error {
+		scanCalls.Add(1)
+		return moerr.NewInternalErrorNoCtx(wantErr)
 	}
-	scanCount := 0
-	td.scanTableFn = func() error {
-		td.mu.Lock()
-		if scanCount%5 == 0 {
-			td.lastMp = tables
-		} else {
-			td.lastMp = nil
-		}
-		td.mu.Unlock()
-		scanCount++
+	require.True(t, td.RegisterIfAbsent("scan-error", 1, []string{"db"}, []string{"tbl"}, func(map[uint32]TblMap) error {
+		callbackCalls.Add(1)
 		return nil
-	}
+	}))
 
-	fault.Enable()
-	objectio.SimpleInject(objectio.FJ_CDCScanTableErr)
-	rm, _ := objectio.InjectCDCScanTable("fast scan")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go td.scanTableLoop(ctx)
-	time.Sleep(200 * time.Millisecond)
-	defer rm()
-	fault.Disable()
+	td.scanAndProcess(context.Background())
+
+	require.Equal(t, int32(1), scanCalls.Load())
+	require.Zero(t, callbackCalls.Load())
+	td.mu.Lock()
+	lastMp := td.lastMp
+	td.mu.Unlock()
+	require.Nil(t, lastMp)
 }
 
 func TestProcessCallBack(t *testing.T) {
@@ -1083,7 +1337,6 @@ func TestProcessCallBack(t *testing.T) {
 				SourceTblId:     1001,
 				SourceTblName:   "tbl1",
 				SourceCreateSql: "create table tbl1 (a int)",
-				IdChanged:       false,
 			},
 		},
 	}
@@ -1159,7 +1412,7 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	bat1 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat1 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "hasUserPK"})
 	bat1.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
 	bat1.Vecs[1] = testutil.MakeVarcharVector([]string{"tbl1"}, nil, proc.Mp())
 	bat1.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
@@ -1167,13 +1420,14 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	bat1.Vecs[4] = testutil.MakeVarcharVector([]string{"create table tbl1 (a int)"}, nil, proc.Mp())
 	bat1.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
 	bat1.Vecs[6] = testutil.MakeVarcharVector([]string{""}, nil, proc.Mp())
+	bat1.Vecs[7] = testutil.MakeBoolVector([]bool{true}, nil, proc.Mp())
 	bat1.SetRowCount(1)
 	res1 := executor.Result{
 		Mp:      proc.Mp(),
 		Batches: []*batch.Batch{bat1},
 	}
 
-	bat2 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat2 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "hasUserPK"})
 	bat2.Vecs[0] = testutil.MakeUint64Vector([]uint64{1002}, nil, proc.Mp())
 	bat2.Vecs[1] = testutil.MakeVarcharVector([]string{"tbl1"}, nil, proc.Mp())
 	bat2.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
@@ -1181,6 +1435,7 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	bat2.Vecs[4] = testutil.MakeVarcharVector([]string{"create table tbl1 (a int)"}, nil, proc.Mp())
 	bat2.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
 	bat2.Vecs[6] = testutil.MakeVarcharVector([]string{""}, nil, proc.Mp())
+	bat2.Vecs[7] = testutil.MakeBoolVector([]bool{false}, nil, proc.Mp())
 	bat2.SetRowCount(1)
 	res2 := executor.Result{
 		Mp:      proc.Mp(),
@@ -1191,13 +1446,13 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'db1'", "'tbl1'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'db1'", "'tbl1'"),
 		gomock.Any(),
 	).Return(res1, nil)
 
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'db1'", "'tbl1'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'db1'", "'tbl1'"),
 		gomock.Any(),
 	).Return(res2, nil)
 
@@ -1219,7 +1474,7 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 		return nil
 	}))
 
-	err := td.scanTable()
+	err := td.scanTable(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(td.Mp))
 
@@ -1229,16 +1484,18 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	tblInfo, ok := accountMap["db1.tbl1"]
 	assert.True(t, ok)
 	assert.Equal(t, uint64(1001), tblInfo.SourceTblId)
-	assert.False(t, tblInfo.IdChanged)
 
-	err = td.scanTable()
+	assert.True(t, tblInfo.HasUserPrimaryKey)
+
+	err = td.scanTable(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(td.Mp))
 
 	accountMap = td.Mp[1]
 	tblInfo = accountMap["db1.tbl1"]
 	assert.Equal(t, uint64(1002), tblInfo.SourceTblId)
-	assert.True(t, tblInfo.IdChanged)
+
+	assert.False(t, tblInfo.HasUserPrimaryKey)
 }
 
 func TestTableScanner_PrintActiveRunners(t *testing.T) {
@@ -1249,7 +1506,6 @@ func TestTableScanner_PrintActiveRunners(t *testing.T) {
 		SourceTblId:     1001,
 		SourceTblName:   "tbl1",
 		SourceCreateSql: "create table tbl1 (a int)",
-		IdChanged:       false,
 	}
 	cdcStateManager.AddActiveRunner(tableInfo)
 	cdcStateManager.PrintActiveRunners(0)
@@ -1265,4 +1521,55 @@ func TestTableScanner_PrintActiveRunners_NilReceiver(t *testing.T) {
 	assert.NotPanics(t, func() {
 		cdcStateManager.PrintActiveRunners(0)
 	})
+}
+
+func TestTableDetectorStopCancelsAndJoinsScan(t *testing.T) {
+	d := newTableDetector(&mock_executor.MockSQLExecutor{})
+	d.scanInterval = time.Millisecond
+	entered := make(chan struct{})
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	var once, enteredOnce, canceledOnce sync.Once
+	defer d.Close()
+	defer once.Do(func() { close(release) })
+	d.scanTableFn = func(ctx context.Context) error {
+		enteredOnce.Do(func() { close(entered) })
+		<-ctx.Done()
+		canceledOnce.Do(func() { close(canceled) })
+		<-release // An executor may need additional time to finish cleanup.
+		return ctx.Err()
+	}
+	d.startScanLoop()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("scan not admitted")
+	}
+	d.Stop()
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("SQL scan did not receive cancellation")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, d.CloseAndWait(ctx), context.Canceled)
+	require.False(t, d.RegisterIfAbsent("late", 1, nil, nil, func(map[uint32]TblMap) error { t.Fatal("late callback"); return nil }))
+	once.Do(func() { close(release) })
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, d.CloseAndWait(ctx))
+	require.False(t, d.loopRunning.Load())
+}
+
+func TestTableDetectorReplacementKeepsGenerationOwnership(t *testing.T) {
+	sid := t.Name()
+	oldRT := newDetectorTestRuntime(t, sid)
+	old := InitTableDetector(oldRT, &mock_executor.MockSQLExecutor{})
+	newRT := newDetectorTestRuntime(t, sid)
+	next := InitTableDetector(newRT, &mock_executor.MockSQLExecutor{})
+	old.Close()
+	require.False(t, runtime.CompareAndDeleteServiceBasedRuntime(sid, oldRT))
+	require.Same(t, next, GetTableDetector(sid))
+	require.NoError(t, next.Context().Err())
 }

@@ -292,11 +292,12 @@ func TestPredicatePlanRejectsMissingComparisonValue(t *testing.T) {
 func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing.T) {
 	ctx := t.Context()
 	validOptions := func(extra ...*tree.MongoDBOption) *tree.MongoDBTableParam {
-		options := tree.MongoDBOptions{
+		options := make(tree.MongoDBOptions, 0, 3+len(extra))
+		options = append(options,
 			tree.NewMongoDBOption("connection", "source"),
 			tree.NewMongoDBOption("database", "telemetry"),
 			tree.NewMongoDBOption("collection", "raw"),
-		}
+		)
 		options = append(options, extra...)
 		return tree.NewMongoDBTableParam(options)
 	}

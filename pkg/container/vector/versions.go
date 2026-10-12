@@ -75,8 +75,14 @@ func (v *Vector) MarshalBinaryWithBufferV1(buf *bytes.Buffer) error {
 func (v *Vector) UnmarshalBinaryV1(data []byte) error {
 	// Keep the legacy decoder contract for unrelated types. JSON needs complete
 	// admission before any decoded descriptor can become visible.
-	if len(data) >= 1+types.TSize && types.DecodeType(data[1:1+types.TSize]).Oid != types.T_json {
-		return v.unmarshalBinaryV1(data)
+	if len(data) >= 1+types.TSize {
+		typ, err := types.DecodeTypeChecked(data[1 : 1+types.TSize])
+		if err != nil {
+			return err
+		}
+		if typ.Oid != types.T_json {
+			return v.unmarshalBinaryV1(data)
+		}
 	}
 	if err := validateJSONLegacyWire(data); err != nil {
 		return err
@@ -96,6 +102,13 @@ func (v *Vector) UnmarshalBinaryV1(data []byte) error {
 }
 
 func (v *Vector) unmarshalBinaryV1(data []byte) error {
+	if len(data) < 1+types.TSize {
+		return allocationAccountInvalid("short legacy vector type")
+	}
+	typ, err := types.DecodeTypeChecked(data[1 : 1+types.TSize])
+	if err != nil {
+		return err
+	}
 	v.areaDisjoint = false
 	if v.allocationAccount != nil {
 		return allocationAccountInvalid(
@@ -107,7 +120,7 @@ func (v *Vector) unmarshalBinaryV1(data []byte) error {
 	data = data[1:]
 
 	// read typ
-	v.typ = types.DecodeType(data[:types.TSize])
+	v.typ = typ
 	data = data[types.TSize:]
 
 	// read length

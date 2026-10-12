@@ -462,30 +462,26 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *gl
 			raw[h.ord] = s.scoreTerm(algo, float64(h.tf), idf2, h.ord, avgDocLen)
 		}
 	case clausePrefix:
-		terms, err := s.prefixTerms(c.terms[0])
-		if err != nil {
-			return nil, err
-		}
-		for _, t := range terms { // combined impact = MAX over expanded terms (§6)
-			pl, ok := s.lookup(t)
-			if !ok {
-				continue
-			}
+		err := s.forEachPrefixPosting(c.terms[0], func(t string, pl *termPostings) {
+			// Combined impact = MAX over expanded terms (§6).
 			docs := pl.materializeDocIDs()
 			if !scored {
 				for _, ord := range docs {
 					raw[ord] = 0
 				}
-				continue
+				return
 			}
 			idf2 := gs.idfFor(s, t, pl)
 			tfs := pl.materializeTfs()
 			for i, ord := range docs {
-				sc := s.scoreTerm(algo, float64(tfs[i]), idf2, ord, avgDocLen) // tf-aware (see clauseTerm)
+				sc := s.scoreTerm(algo, float64(tfs[i]), idf2, ord, avgDocLen)
 				if cur, seen := raw[ord]; !seen || sc > cur {
 					raw[ord] = sc
 				}
 			}
+		})
+		if err != nil {
+			return nil, err
 		}
 	case clauseGroup:
 		for _, ch := range c.children { // OR of children, score = MAX (§6)
@@ -510,7 +506,7 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *gl
 
 // forEachTermInRange visits the terms of an inclusive [lo,hi] range one at a
 // time, over the loaded FST when present and the build-side sorted key list
-// otherwise — the same dual representation prefixTerms handles. A loaded segment
+// otherwise. A loaded segment
 // has NO sortedTerms (build-side only), so a range that consulted just that
 // slice would silently return nothing for every persisted segment.
 //
@@ -535,15 +531,6 @@ func (s *Segment) forEachTermInRange(lo, hi string, fn func(term string) (bool, 
 		}
 	}
 	return nil
-}
-
-// prefixTerms expands a word* prefix to its matching terms, over the loaded FST
-// or the build-side sorted key list.
-func (s *Segment) prefixTerms(prefix string) ([]string, error) {
-	if s.dict != nil {
-		return s.dict.prefixTerms(prefix)
-	}
-	return s.PrefixRange(prefix), nil
 }
 
 // SearchBooleanText parses query in boolean mode (tokenizing with tok, the index's

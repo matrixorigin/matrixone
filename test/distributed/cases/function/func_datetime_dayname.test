@@ -44,3 +44,11 @@ SELECT DAYNAME('2001-11-00 12:34:56') AS incomplete_datetime,
        DAYNAME('20011100') AS incomplete_compact,
        DAYNAME('2001-11-0') AS incomplete_variable,
        DAYNAME('0000-00-00 12:34:56') AS zero_datetime;
+
+# Remote-CN regression: locale must survive a table scan without a session resolver.
+SET lc_time_names = 'fr_FR';
+CREATE TABLE locale_t1(d DATE);
+INSERT INTO locale_t1 VALUES ('2024-12-01');
+SELECT DAYNAME(d) AS day_name, DATE_FORMAT(d, '%M') AS month_name FROM locale_t1;
+DROP TABLE locale_t1;
+SET lc_time_names = 'en_US';

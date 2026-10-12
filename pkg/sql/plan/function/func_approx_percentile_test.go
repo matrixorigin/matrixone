@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,6 +39,18 @@ func TestApproxPercentileCheckFn(t *testing.T) {
 	result = check(nil, []types.Type{types.T_any.ToType(), types.T_float64.ToType()})
 	require.Equal(t, succeedWithCast, result.status)
 	require.Equal(t, 0, result.idx)
+	require.Equal(t, aggexec.MedianSupportedType[0], result.finalType[0].Oid)
+	require.Equal(t, types.T_float64, result.finalType[1].Oid)
+
+	// Coercing an untyped value must preserve a supported decimal percentile.
+	decimalPercentile := types.New(types.T_decimal128, 19, 18)
+	result = check(nil, []types.Type{types.T_any.ToType(), decimalPercentile})
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, decimalPercentile, result.finalType[1])
+
+	// An untyped value must not bypass percentile type validation.
+	result = check(nil, []types.Type{types.T_any.ToType(), types.T_varchar.ToType()})
+	require.Equal(t, failedAggParametersWrong, result.status)
 
 	// unsupported type in arg0
 	result = check(nil, []types.Type{types.T_varchar.ToType(), types.T_float64.ToType()})
@@ -46,6 +59,8 @@ func TestApproxPercentileCheckFn(t *testing.T) {
 	// T_any in arg1 should request cast
 	result = check(nil, []types.Type{types.T_int64.ToType(), types.T_any.ToType()})
 	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, types.T_int64, result.finalType[0].Oid)
+	require.Equal(t, types.T_float64, result.finalType[1].Oid)
 
 	// unsupported type in arg1
 	result = check(nil, []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()})

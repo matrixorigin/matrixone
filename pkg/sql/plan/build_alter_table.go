@@ -26,8 +26,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -314,7 +316,10 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 
 		affectedCols             = make([]string, 0, len(tableDef.Cols))
 		affectedIndexes          = make([]string, 0, len(tableDef.Indexes))
+		rebuildIndexNames        = make(map[string]struct{})
+		pendingAddIndexes        = make([]tree.TableDef, 0)
 		generatedDependencySeeds = make(map[string]struct{})
+		pendingForeignKeys       = make([]*tree.ForeignKey, 0)
 		unsupportedErrorFmt      = "unsupported alter option in copy mode: %s"
 		copyFakePKCol            = catalog.IsFakePkName(tableDef.Pkey.PkeyColName)
 	)
@@ -339,14 +344,51 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			case *tree.PrimaryKeyIndex:
 				err = AddPrimaryKey(cctx, alterTablePlan, optionAdd, alterTableCtx)
 				affectedAllIdxCols()
+			case *tree.ForeignKey:
+				// Bind foreign keys after column mutations so the combined
+				// ADD COLUMN/ADD FOREIGN KEY form can resolve either clause order.
+				pendingForeignKeys = append(pendingForeignKeys, optionAdd)
+			case *tree.UniqueIndex, *tree.FullTextIndex, *tree.Index:
+				// Bind secondary indexes only after every COPY schema mutation has
+				// been applied. MySQL resolves an ADD INDEX against the final table
+				// shape, so an earlier index clause may reference a later ADD COLUMN.
+				pendingAddIndexes = append(pendingAddIndexes, optionAdd)
 			default:
 				// column adding is handled in *tree.AlterAddCol
-				// various indexes\fks adding are handled in inplace mode.
 				return nil, moerr.NewInvalidInputf(ctx,
 					unsupportedErrorFmt, formatTreeNode(option))
 			}
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
+			case tree.AlterTableDropIndex, tree.AlterTableDropKey:
+				found := false
+				for i, index := range copyTableDef.Indexes {
+					if !IndexNamesEqual(index.IndexName, string(option.Name)) {
+						continue
+					}
+					cols := functionalIndexColumns(copyTableDef, index)
+					if len(cols) == 0 {
+						return nil, moerr.NewNotSupported(ctx, "combined COPY DROP INDEX requires a functional index")
+					}
+					// A same-statement DROP/ADD can reuse the index name while
+					// changing its key expression. The replacement must be rebuilt
+					// from base rows; cloning the old hidden index table by name
+					// would retain stale keys from the dropped definition.
+					rebuildIndexNames[indexNameKey(index.IndexName)] = struct{}{}
+					copyTableDef.Indexes = append(copyTableDef.Indexes[:i], copyTableDef.Indexes[i+1:]...)
+					for _, col := range cols {
+						if err = handleDropColumnPosition(ctx, copyTableDef, col); err != nil {
+							return nil, err
+						}
+						delete(alterTableCtx.alterColMap, col.Name)
+						delete(alterTableCtx.changColDefMap, col.ColId)
+					}
+					found = true
+					break
+				}
+				if !found {
+					return nil, moerr.NewErrCantDropFieldOrKey(ctx, string(option.Name))
+				}
 			case tree.AlterTableDropColumn:
 				pkAffected, err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx)
 				affectedCols = append(affectedCols, string(option.Name))
@@ -466,6 +508,44 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
+	// Secondary indexes are bound against the final COPY schema. Keep newly
+	// added plugin-index identities separate from affected column/index names:
+	// plugin index names and column names share a string namespace otherwise,
+	// which can spuriously rebuild an unrelated existing plugin index.
+	currentIndexNames := make(map[string]bool, len(copyTableDef.Indexes)+len(pendingAddIndexes))
+	for _, indexDef := range copyTableDef.Indexes {
+		currentIndexNames[indexNameKey(indexDef.IndexName)] = true
+	}
+	newPluginIndexes := make(map[string]bool)
+	for _, definition := range pendingAddIndexes {
+		addIndex, pluginIndexName, buildErr := buildAlterCopyAddIndex(
+			cctx,
+			copyTableDef,
+			currentIndexNames,
+			schemaName,
+			tableName,
+			definition,
+		)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		copyTableDef.Indexes = append(copyTableDef.Indexes, addIndex.IndexInfo.TableDef.Indexes...)
+		alterTablePlan.Actions = append(alterTablePlan.Actions, &plan.AlterTable_Action{
+			Action: &plan.AlterTable_Action_AddIndex{AddIndex: addIndex},
+		})
+		if pluginIndexName != "" {
+			newPluginIndexes[pluginIndexName] = true
+		}
+	}
+	// Foreign keys bind to the final index set. Materialize every pending index
+	// first so a self-reference can use a UNIQUE index added by the same ALTER,
+	// independent of the SQL clause order.
+	if err = addAlterCopyForeignKeys(
+		cctx, alterTablePlan, alterTableCtx, pendingForeignKeys,
+	); err != nil {
+		return nil, err
+	}
+
 	createTmpDdl, _, err := constructCreateTableSQL(
 		cctx, copyTableDef, snapshot, true, nil, true, nil,
 	)
@@ -480,6 +560,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		SkipPkDedup:        skipPkDedup(tableDef, copyTableDef, alterTableCtx.alterColMap),
 		TargetTableName:    copyTableDef.Name,
 		SkipUniqueIdxDedup: skipUniqueIdxDedup(tableDef, copyTableDef, alterTableCtx.alterColMap),
+		NewPluginIndexes:   newPluginIndexes,
 	}
 
 	opt.SkipIndexesCopy = make(map[string]bool)
@@ -495,6 +576,16 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			if slices.Index(affectedCols, idxCol.IndexName) == -1 {
 				opt.SkipIndexesCopy[idxCol.IndexName] = true
 			}
+		}
+	}
+	// DROP INDEX followed by ADD INDEX in the same COPY ALTER creates a new
+	// logical index even when the catalog name is reused. Override the normal
+	// affected-column calculation for those identities so both copy-side
+	// maintenance and cloneUnaffectedIndexes rebuild them instead of reusing
+	// the old hidden index table.
+	for _, idxCol := range tableDef.Indexes {
+		if _, ok := rebuildIndexNames[indexNameKey(idxCol.IndexName)]; ok {
+			opt.SkipIndexesCopy[idxCol.IndexName] = false
 		}
 	}
 
@@ -523,6 +614,245 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			},
 		},
 	}, nil
+}
+
+func addAlterCopyForeignKeys(
+	cctx CompilerContext,
+	alterTablePlan *plan.AlterTable,
+	alterTableCtx *AlterTableContext,
+	foreignKeys []*tree.ForeignKey,
+) error {
+	if len(foreignKeys) == 0 {
+		return nil
+	}
+	ctx := cctx.GetContext()
+	if alterTablePlan.CopyTableDef.GetIsTemporary() {
+		return moerr.NewNotSupported(ctx, "add foreign key for temporary table")
+	}
+
+	// Bind against a planner-owned view of the final schema. Keep the original
+	// relation name so self references are recognized even though the physical
+	// COPY target has a generated temporary name.
+	finalTableDef := DeepCopyTableDef(alterTablePlan.CopyTableDef, true)
+	finalTableDef.Name = alterTablePlan.TableDef.Name
+	finalTableDef.DbName = alterTablePlan.Database
+
+	foreignKeyNames := make(map[string]struct{}, len(finalTableDef.Fkeys)+len(foreignKeys))
+	for _, foreignKey := range finalTableDef.Fkeys {
+		if foreignKey != nil && foreignKey.Name != "" {
+			foreignKeyNames[strings.ToLower(foreignKey.Name)] = struct{}{}
+		}
+	}
+
+	for _, foreignKey := range foreignKeys {
+		if err := adjustConstraintName(ctx, foreignKey); err != nil {
+			return err
+		}
+		nameKey := strings.ToLower(foreignKey.ConstraintSymbol)
+		if _, exists := foreignKeyNames[nameKey]; exists {
+			return moerr.NewErrDuplicateKeyName(ctx, foreignKey.ConstraintSymbol)
+		}
+
+		fkData, err := getForeignKeyData(
+			cctx, alterTablePlan.Database, finalTableDef, foreignKey,
+		)
+		if err != nil {
+			return err
+		}
+		if fkData.IsSelfRefer {
+			if err = checkFkColsAreValid(cctx, fkData, finalTableDef); err != nil {
+				return err
+			}
+			fkData.UpdateSql = getSqlForAddFkWithCatalogLayout(
+				alterTablePlan.Database,
+				alterTablePlan.TableDef.Name,
+				fkData,
+				fkData.catalogLayout,
+			)
+		}
+		// Match the existing ALTER ADD FOREIGN KEY contract: unlike CREATE TABLE,
+		// ALTER does not retain an unresolved parent under foreign_key_checks=0.
+		if fkData.ForwardRefer {
+			return moerr.NewNoSuchTable(
+				ctx, fkData.ParentDbName, fkData.ParentTableName,
+			)
+		}
+
+		foreignKeyNames[nameKey] = struct{}{}
+		finalTableDef.Fkeys = append(finalTableDef.Fkeys, fkData.Def)
+		alterTablePlan.CopyTableDef.Fkeys = append(
+			alterTablePlan.CopyTableDef.Fkeys, fkData.Def,
+		)
+		alterTablePlan.Actions = append(alterTablePlan.Actions, &plan.AlterTable_Action{
+			Action: &plan.AlterTable_Action_AddFk{
+				AddFk: &plan.AlterTableAddFk{
+					DbName:    fkData.ParentDbName,
+					TableName: fkData.ParentTableName,
+					Cols:      slices.Clone(fkData.Cols.Cols),
+					Fkey:      fkData.Def,
+				},
+			},
+		})
+		alterTableCtx.UpdateSqls = append(alterTableCtx.UpdateSqls, fkData.UpdateSql)
+
+		if fkData.IsSelfRefer {
+			detectSQLs, err := genSqlsForCheckFKSelfRefer(
+				ctx,
+				alterTablePlan.Database,
+				alterTablePlan.TableDef.Name,
+				finalTableDef.Cols,
+				[]*plan.ForeignKeyDef{fkData.Def},
+			)
+			if err != nil {
+				return err
+			}
+			alterTablePlan.DetectSqls = append(alterTablePlan.DetectSqls, detectSQLs...)
+			continue
+		}
+
+		_, parentTableDef, err := cctx.Resolve(
+			fkData.ParentDbName, fkData.ParentTableName, nil,
+		)
+		if err != nil {
+			return err
+		}
+		if parentTableDef == nil {
+			return moerr.NewNoSuchTable(
+				ctx, fkData.ParentDbName, fkData.ParentTableName,
+			)
+		}
+		detectSQL, err := genSqlForCheckFKConstraints(
+			ctx,
+			fkData.Def,
+			alterTablePlan.Database,
+			alterTablePlan.TableDef.Name,
+			finalTableDef.Cols,
+			fkData.ParentDbName,
+			fkData.ParentTableName,
+			parentTableDef.Cols,
+		)
+		if err != nil {
+			return err
+		}
+		alterTablePlan.DetectSqls = append(alterTablePlan.DetectSqls, detectSQL)
+	}
+	return nil
+}
+
+// buildAlterCopyAddIndex applies the same index-definition builders used by
+// CREATE/INPLACE ALTER to the final COPY schema. The replacement table is
+// created with these definitions before data is inserted, so regular and
+// UNIQUE hidden tables are populated atomically by that INSERT; plugin indexes
+// are populated exactly once by the post-copy rebuild.
+func buildAlterCopyAddIndex(
+	ctx CompilerContext,
+	copyTableDef *TableDef,
+	currentIndexNames map[string]bool,
+	databaseName string,
+	tableName string,
+	definition tree.TableDef,
+) (*plan.AlterTableAddIndex, string, error) {
+	if err := checkCreateIndexTableType(ctx.GetContext(), copyTableDef); err != nil {
+		return nil, "", err
+	}
+
+	colMap := make(map[string]*ColDef, len(copyTableDef.Cols)+1)
+	for _, col := range copyTableDef.Cols {
+		colMap[col.Name] = col
+	}
+	if copyTableDef.Pkey != nil && copyTableDef.Pkey.CompPkeyCol != nil {
+		colMap[copyTableDef.Pkey.CompPkeyCol.Name] = copyTableDef.Pkey.CompPkeyCol
+	}
+
+	primaryKeyName := getTablePriKeyName(copyTableDef.Pkey)
+	indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
+	var indexName string
+
+	switch index := definition.(type) {
+	case *tree.UniqueIndex:
+		if err := checkIndexKeypartSupportability(ctx.GetContext(), index.KeyParts); err != nil {
+			return nil, "", err
+		}
+		indexName = index.GetIndexName()
+		if err := checkDuplicateConstraint(currentIndexNames, indexName, false, ctx.GetContext()); err != nil {
+			return nil, "", err
+		}
+		if indexName == "" {
+			setEmptyUniqueIndexName(currentIndexNames, index)
+			indexName = index.GetIndexName()
+		}
+		if err := buildUniqueIndexTable(
+			indexInfo, []*tree.UniqueIndex{index}, colMap, primaryKeyName, ctx,
+		); err != nil {
+			return nil, "", err
+		}
+
+	case *tree.FullTextIndex:
+		if err := checkIndexKeypartSupportability(ctx.GetContext(), index.KeyParts); err != nil {
+			return nil, "", err
+		}
+		indexName = index.Name
+		if err := checkDuplicateConstraint(currentIndexNames, indexName, false, ctx.GetContext()); err != nil {
+			return nil, "", err
+		}
+		if indexName == "" {
+			setEmptyFullTextIndexName(currentIndexNames, index)
+			indexName = index.Name
+		}
+		if err := buildFullTextIndexTable(
+			indexInfo, []*tree.FullTextIndex{index}, colMap,
+			copyTableDef.Indexes, primaryKeyName, ctx,
+		); err != nil {
+			return nil, "", err
+		}
+
+	case *tree.Index:
+		lowered, err := lowerFunctionalIndex(ctx, copyTableDef, index)
+		if err != nil {
+			return nil, "", err
+		}
+		index = lowered
+		for _, col := range copyTableDef.Cols {
+			colMap[col.Name] = col
+		}
+		if err := checkIndexKeypartSupportability(ctx.GetContext(), index.KeyParts); err != nil {
+			return nil, "", err
+		}
+		indexName = index.Name
+		if err := checkDuplicateConstraint(currentIndexNames, indexName, false, ctx.GetContext()); err != nil {
+			return nil, "", err
+		}
+		if indexName == "" {
+			setEmptyIndexName(currentIndexNames, index)
+			indexName = index.Name
+		}
+		if err := buildSecondaryIndexDef(
+			indexInfo, []*tree.Index{index}, colMap,
+			copyTableDef.Indexes, primaryKeyName, ctx,
+		); err != nil {
+			return nil, "", err
+		}
+
+	default:
+		return nil, "", moerr.NewInternalErrorf(
+			ctx.GetContext(), "invalid COPY ALTER index definition: %s", formatTreeNode(definition),
+		)
+	}
+
+	pluginIndexName := ""
+	if slices.ContainsFunc(indexInfo.TableDef.Indexes, func(indexDef *plan.IndexDef) bool {
+		return indexDef != nil && indexplugin.IsPluginAlgo(indexDef.IndexAlgo)
+	}) {
+		pluginIndexName = indexName
+	}
+
+	return &plan.AlterTableAddIndex{
+		DbName:                databaseName,
+		TableName:             tableName,
+		OriginTablePrimaryKey: primaryKeyName,
+		IndexInfo:             indexInfo,
+		IndexTableExist:       true,
+	}, pluginIndexName, nil
 }
 
 func appendAffectedAlterColumnNames(affectedCols []string, oldColName, newColName string) []string {
@@ -556,18 +886,18 @@ func buildAlterInsertDataSQL(
 			continue
 		}
 		if isFirst {
-			insertBuffer.WriteString("`" + key + "`")
+			insertBuffer.WriteString(sqlquote.Ident(key))
 			if value.sexprType == exprColumnName {
-				selectBuffer.WriteString("`" + value.sexprStr + "`")
+				selectBuffer.WriteString(sqlquote.Ident(value.sexprStr))
 			} else {
 				selectBuffer.WriteString(value.sexprStr)
 			}
 			isFirst = false
 		} else {
-			insertBuffer.WriteString(", " + "`" + key + "`")
+			insertBuffer.WriteString(", " + sqlquote.Ident(key))
 
 			if value.sexprType == exprColumnName {
-				selectBuffer.WriteString(", " + "`" + value.sexprStr + "`")
+				selectBuffer.WriteString(", " + sqlquote.Ident(value.sexprStr))
 			} else {
 				selectBuffer.WriteString(", " + value.sexprStr)
 			}
@@ -589,14 +919,14 @@ func buildAlterInsertDataSQL(
 		// delete from t1 where a = 2;
 		// fails, cannot find this row by join index table and the primary table.
 		//
-		str := fmt.Sprintf(", `%s`", catalog.FakePrimaryKeyColName)
+		str := ", " + sqlquote.Ident(catalog.FakePrimaryKeyColName)
 		insertBuffer.WriteString(str)
 		selectBuffer.WriteString(str)
 	}
 
-	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (%s) SELECT %s FROM `%s`.`%s`",
-		formatStr(schemaName), formatStr(copyTableName), insertBuffer.String(),
-		selectBuffer.String(), formatStr(schemaName), formatStr(originTableName))
+	insertSQL := fmt.Sprintf("INSERT INTO %s (%s) SELECT %s FROM %s",
+		sqlquote.QualifiedIdent(schemaName, copyTableName), insertBuffer.String(),
+		selectBuffer.String(), sqlquote.QualifiedIdent(schemaName, originTableName))
 
 	return insertSQL, nil
 }
@@ -988,6 +1318,9 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if err := validateAlterTableIdentifierDestinations(ctx.GetContext(), stmt.Options); err != nil {
 		return nil, err
 	}
+	if err := validateAlterTableCharsetOptions(ctx, stmt.Options); err != nil {
+		return nil, err
+	}
 	for _, option := range stmt.Options {
 		if rename, ok := option.(*tree.AlterOptionTableName); ok {
 			if err := rejectCrossDatabaseTableRename(ctx.GetContext(), schemaName, rename); err != nil {
@@ -1071,6 +1404,30 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 }
 
+// Charset options remain compatibility no-ops, not conversions. Admit requests
+// before either ALTER algorithm can ignore, rewrite, or discard their metadata.
+func validateAlterTableCharsetOptions(ctx CompilerContext, options []tree.AlterTableOption) error {
+	var charsetOptions []tree.TableOption
+	for _, option := range options {
+		switch opt := option.(type) {
+		case *tree.TableOptionCharset:
+			if !opt.NonCharsetSyntax {
+				charsetOptions = append(charsetOptions, opt)
+				if opt.Collate != "" {
+					charsetOptions = append(charsetOptions, &tree.TableOptionCollate{Collate: opt.Collate})
+				}
+			}
+		case *tree.TableOptionCollate:
+			charsetOptions = append(charsetOptions, opt)
+		}
+	}
+	if len(charsetOptions) != 0 {
+		_, err := tableDefaultCharset(ctx, charsetOptions)
+		return err
+	}
+	return nil
+}
+
 func validateAlterTableIdentifierDestinations(ctx context.Context, options []tree.AlterTableOption) error {
 	for _, option := range options {
 		switch option := option.(type) {
@@ -1150,6 +1507,31 @@ func ResolveAlterTableAlgorithm(
 	tableDef *TableDef,
 ) (algorithm plan.AlterTable_AlgorithmType, err error) {
 	algorithm = plan.AlterTable_COPY
+	functionalCopy := false
+	for _, spec := range validAlterSpecs {
+		switch spec.(type) {
+		case *tree.AlterTableModifyColumnClause, *tree.AlterTableChangeColumnClause, *tree.AlterTableRenameColumnClause:
+			// Even an in-place source widening changes the functional key's
+			// inferred type. Rebind and rebuild it together with the base rows.
+			for _, index := range tableDef.Indexes {
+				if functionalIndexColumn(tableDef, index) != nil {
+					functionalCopy = true
+				}
+			}
+		}
+		if add, ok := spec.(*tree.AlterOptionAdd); ok {
+			if index, ok := add.Def.(*tree.Index); ok && hasFunctionalKey(index.KeyParts) {
+				functionalCopy = true
+			}
+		}
+		if drop, ok := spec.(*tree.AlterOptionDrop); ok && (drop.Typ == tree.AlterTableDropIndex || drop.Typ == tree.AlterTableDropKey) {
+			for _, index := range tableDef.Indexes {
+				if IndexNamesEqual(index.IndexName, string(drop.Name)) && functionalIndexColumn(tableDef, index) != nil {
+					functionalCopy = true
+				}
+			}
+		}
+	}
 
 	// First pass: resolve algorithm based on operations, skipping ALGORITHM/LOCK hints.
 Loop:
@@ -1241,6 +1623,9 @@ Loop:
 		}
 	}
 
+	if functionalCopy {
+		algorithm = plan.AlterTable_COPY
+	}
 	requiredAlgorithm := algorithm // stable baseline for hint validation; algorithm is mutated below
 
 	// Second pass: apply ALGORITHM hint (takes precedence over operation-based resolution).
@@ -1386,12 +1771,8 @@ func storageAgnosticType(
 	defaultCharset uint32,
 ) (ok bool, err error) {
 
-	nTy, err := getTypeFromAst(ctx, nCol.Type)
+	nTy, err := getColumnTypeFromAst(ctx, nCol, defaultCharset, nil)
 	if err != nil {
-		return
-	}
-	nTy.Charset = uint32(types.CharsetType(types.T(nTy.Id)))
-	if err = applyDefaultAndColumnAttributesToType(ctx, &nTy, defaultCharset, nCol.Attributes); err != nil {
 		return
 	}
 
@@ -1503,7 +1884,7 @@ func buildNotNullColumnVal(col *ColDef) string {
 		defaultValue = "'{}'"
 	} else if isEnumPlanType(&col.Typ) {
 		enumvalues := strings.Split(col.Typ.Enumvalues, ",")
-		defaultValue = enumvalues[0]
+		defaultValue = "'" + formatStrInSingleQuotes(enumvalues[0]) + "'"
 	} else if types.T(col.Typ.Id).IsArrayRelate() {
 		// IsArrayRelate covers all six vector types. Enumerating only f32/f64
 		// here made ALTER TABLE ... ADD v VECF16(n) NOT NULL fall through to

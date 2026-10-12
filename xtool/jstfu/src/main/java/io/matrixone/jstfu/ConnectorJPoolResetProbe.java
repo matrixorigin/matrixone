@@ -25,10 +25,11 @@ import java.sql.SQLException;
 import java.sql.Statement;
 
 /**
- * Black-box Connector/J pool-borrow regression probe. It is launched by the
- * MatrixOne datastream E2E test against a real server; keeping it in the
- * existing Java fixture makes the exact client version and test command part
- * of the checked-in repository rather than an external manual recipe.
+ * Black-box Connector/J session and pool-borrow regression probe. It is
+ * launched by the MatrixOne datastream E2E test against a real server;
+ * keeping it in the existing Java fixture makes the exact client version and
+ * test command part of the checked-in repository rather than an external
+ * manual recipe.
  */
 public final class ConnectorJPoolResetProbe {
     private static final String TEMP_TABLE = "mo_pool_reset_temp";
@@ -59,6 +60,7 @@ public final class ConnectorJPoolResetProbe {
                 connectionId = longValue(first, "SELECT CONNECTION_ID()");
                 requireEquals(database, stringValue(first, "SELECT DATABASE()"), "first borrow database");
                 defaultSqlMode = stringValue(first, "SELECT @@session.sql_mode");
+                verifyReadOnlyConnectionMode(first);
 
                 first.setAutoCommit(false);
                 try (Statement statement = first.createStatement()) {
@@ -101,6 +103,26 @@ public final class ConnectorJPoolResetProbe {
         }
 
         verifyReplacementAfterResetFailure(dataSource, url, user, password, database);
+    }
+
+    private static void verifyReadOnlyConnectionMode(Connection connection) throws SQLException {
+        require(!connection.isReadOnly(), "connection unexpectedly starts read-only");
+
+        connection.setReadOnly(true);
+        require(connection.isReadOnly(), "Connector/J did not retain read-only state");
+        requireEquals("1", stringValue(connection, "SELECT @@session.transaction_read_only"),
+                "session transaction_read_only after setReadOnly(true)");
+        requireEquals("1", stringValue(connection, "SELECT @@session.tx_read_only"),
+                "session tx_read_only after setReadOnly(true)");
+        requireEquals(Long.valueOf(1), Long.valueOf(longValue(connection, "SELECT 1")),
+                "read-only connection query");
+
+        connection.setReadOnly(false);
+        require(!connection.isReadOnly(), "Connector/J did not clear read-only state");
+        requireEquals("0", stringValue(connection, "SELECT @@session.transaction_read_only"),
+                "session transaction_read_only after setReadOnly(false)");
+        requireEquals("0", stringValue(connection, "SELECT @@session.tx_read_only"),
+                "session tx_read_only after setReadOnly(false)");
     }
 
     private static void verifyReplacementAfterResetFailure(

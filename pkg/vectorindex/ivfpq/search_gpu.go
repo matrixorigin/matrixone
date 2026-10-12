@@ -141,6 +141,11 @@ func (s *IvfpqSearch[B, Q]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt
 		))
 	}
 
+	// Checked here, where the native result crosses into Go, so both entry points inherit it --
+	// SearchFloat32 is this function plus a copy.
+	if err := metric.CheckFiniteDists64(resdistances, "vector index search"); err != nil {
+		return nil, nil, err
+	}
 	return reskeys, resdistances, nil
 }
 

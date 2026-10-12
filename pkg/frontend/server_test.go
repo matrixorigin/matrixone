@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -109,6 +110,94 @@ func TestMOServerStopBeforeStartReleasesListener(t *testing.T) {
 	require.NoError(t, rebound.Close())
 }
 
+func TestMOServerStopJoinsConnectionCleanup(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	mo := &MOServer{rm: &RoutineManager{ctx: ctx, cancel: cancel}, running: true}
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() { _ = clientConn.Close() })
+	require.True(t, mo.admitConnection(serverConn), "accepted before session registration")
+	release := make(chan struct{})
+	defer close(release)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		defer mo.releaseConnection(serverConn)
+		<-release // deferred routine cleanup may still use transaction state
+	}()
+	stopped := make(chan error, 2)
+	go func() { stopped <- mo.Stop() }()
+	go func() { stopped <- mo.Stop() }()
+	<-ctx.Done() // Stop has sealed connection admission.
+	late, peer := net.Pipe()
+	defer late.Close()
+	defer peer.Close()
+	require.False(t, mo.admitConnection(late))
+	_, err := clientConn.Read(make([]byte, 1))
+	require.Error(t, err, "Stop interrupts pre-registration socket I/O")
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned before connection cleanup")
+	default:
+	}
+	// Release explicitly, while retaining cleanup if an assertion failed.
+	release <- struct{}{}
+	<-finished
+	require.NoError(t, <-stopped)
+	require.NoError(t, <-stopped)
+	require.NoError(t, mo.Stop())
+	require.Empty(t, mo.connections)
+}
+
+type blockedSessionAllocator struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (a *blockedSessionAllocator) Alloc(int) ([]byte, error) {
+	close(a.entered)
+	<-a.release
+	return nil, errors.New("injected session allocation failure")
+}
+
+func (*blockedSessionAllocator) Free([]byte) {}
+
+func TestMOServerStopJoinsAcceptedSessionInitialization(t *testing.T) {
+	service := t.Name()
+	InitServerLevelVars(service)
+	allocator := &blockedSessionAllocator{entered: make(chan struct{}), release: make(chan struct{})}
+	setSessionAlloc(service, allocator)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	mo := &MOServer{service: service, pu: pu, running: true,
+		rm: &RoutineManager{ctx: ctx, cancel: cancel}, listeners: []net.Listener{listener}}
+	var release sync.Once
+	unblock := func() { release.Do(func() { close(allocator.release) }) }
+	t.Cleanup(func() { unblock(); require.NoError(t, mo.Stop()) })
+	mo.wg.Add(1)
+	go mo.startAccept(ctx, listener)
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	<-allocator.entered // real accept -> handleConn -> NewIOSession, before rm.Created
+	stopped := make(chan error, 1)
+	go func() { stopped <- mo.Stop() }()
+	<-ctx.Done()
+	_, err = conn.Read(make([]byte, 1))
+	require.Error(t, err, "Stop must find even an unregistered connection")
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned while session initialization still owned the connection")
+	default:
+	}
+	unblock()
+	require.NoError(t, <-stopped)
+	require.Empty(t, mo.connections)
+}
+
 func Test_handshake(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -154,7 +243,7 @@ func Test_handshake(t *testing.T) {
 	////SSL handshake
 	data := gIO.AppendUint32(nil, DefaultCapability|CLIENT_SSL) //capability
 	data = gIO.AppendUint32(data, MaxPayloadSize)               //payload size
-	data = gIO.AppendUint8(data, 1)                             //collationid
+	data = gIO.AppendUint8(data, 45)                            // utf8mb4_general_ci protocol ID
 	data = append(data, make([]byte, 23)...)
 	tConn.rbuf = makePacket(data, 1)
 	err = sv.handshake(ioses)
@@ -163,7 +252,7 @@ func Test_handshake(t *testing.T) {
 	////no SSL handshake
 	data = gIO.AppendUint32(nil, DefaultCapability) //capability
 	data = gIO.AppendUint32(data, MaxPayloadSize)   //payload size
-	data = gIO.AppendUint8(data, 1)                 //collationid
+	data = gIO.AppendUint8(data, 45)                // utf8mb4_general_ci protocol ID
 	data = append(data, make([]byte, 23)...)
 	data = append(data, []byte("abc")...) //user name
 	data = append(data, 0)

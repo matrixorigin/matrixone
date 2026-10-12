@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,15 +40,51 @@ func TestAcquireWaiter(t *testing.T) {
 func TestWait(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")}, "", nil)
-		defer w.close("", nil)
-
 		w.setStatus(blocking)
+		entered := make(chan struct{})
+		var enteredOnce sync.Once
+		w.beforeSwapStatusAdjustFunc = func() {
+			enteredOnce.Do(func() { close(entered) })
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		done := make(chan notifyValue, 1)
+		workerExited := make(chan struct{})
+		defer func() {
+			cancel()
+			timer := time.NewTimer(5 * time.Second)
+			defer timer.Stop()
+			select {
+			case <-workerExited:
+				w.close("", nil)
+			case <-timer.C:
+				t.Fatal("TestWait: worker join timed out; waiter not released")
+			}
+		}()
 		go func() {
-			time.Sleep(time.Millisecond * 10)
-			w.notify(notifyValue{}, getLogger(""))
+			defer close(workerExited)
+			done <- w.wait(ctx, getLogger(""))
 		}()
 
-		assert.NoError(t, w.wait(context.Background(), getLogger("")).err)
+		select {
+		case <-entered:
+			require.NoError(t, ctx.Err(), "TestWait: wait entry")
+		case <-ctx.Done():
+			t.Fatalf("TestWait: wait entry: %v", ctx.Err())
+		}
+		notified := w.notify(notifyValue{}, getLogger(""))
+		if !notified {
+			cancel()
+		}
+		var result notifyValue
+		select {
+		case result = <-done:
+			require.NoError(t, ctx.Err(), "TestWait: wait result")
+		case <-ctx.Done():
+			t.Fatalf("TestWait: wait result: %v", ctx.Err())
+		}
+		require.True(t, notified)
+		assert.NoError(t, result.err)
 	})
 }
 

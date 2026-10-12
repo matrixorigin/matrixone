@@ -78,6 +78,11 @@ func constructCreateTableSQL(
 	includeChecks bool,
 	sourceSubscription *SubscriptionMeta,
 ) (string, tree.Statement, error) {
+	// Replaying native metadata through a legacy SQL alias would change its
+	// semantics. Until activation, reject rather than emit a lossy dump.
+	if err := plan.RequireLegacyCollations(tableDef); err != nil {
+		return "", nil, err
+	}
 	var err error
 	var createStr string
 	sqlMode := ""
@@ -176,9 +181,10 @@ func constructCreateTableSQL(
 			buf.WriteString(",\n")
 		}
 
-		typeStr := FormatColType(col.Typ)
-		if strings.HasPrefix(typeStr, "ENUM") {
-			typeStr = strings.ToLower(typeStr[:4]) + typeStr[4:]
+		typeStr := formatColTypeForSQLMode(col.Typ, sqlMode)
+		if strings.HasPrefix(typeStr, "ENUM") || strings.HasPrefix(typeStr, "SET") {
+			prefix := strings.IndexByte(typeStr, '(')
+			typeStr = strings.ToLower(typeStr[:prefix]) + typeStr[prefix:]
 		} else {
 			typeStr = strings.ToLower(typeStr)
 		}
@@ -390,7 +396,7 @@ func constructCreateTableSQL(
 				indexStr += "("
 				rewriteIndexStr += "("
 				i := 0
-				for _, part := range indexdef.Parts {
+				for ordinal, part := range indexdef.Parts {
 					if catalog.IsAlias(part) {
 						continue
 					}
@@ -399,6 +405,16 @@ func constructCreateTableSQL(
 						rewriteIndexStr += ","
 					}
 
+					if col := functionalIndexPartColumn(tableDef, indexdef, ordinal); col != nil {
+						if err := validateFunctionalTable(ctx.GetContext(), tableDef); err != nil {
+							return "", nil, err
+						}
+						expressionPart := "(" + col.GeneratedCol.OriginString + ")"
+						indexStr += expressionPart
+						rewriteIndexStr += expressionPart
+						i++
+						continue
+					}
 					originPart := colNameToOriginName[part]
 					indexStr += sqlquote.Ident(originPart)
 					rewriteIndexStr += sqlquote.Ident(originPart)
@@ -873,6 +889,10 @@ func appendTextCharsetForShowCreate(buf *bytes.Buffer, typ plan.Type, tableChars
 		}
 	case uint32(types.CharsetUTF8MB4Bin):
 		buf.WriteString(" COLLATE utf8mb4_bin")
+	case uint32(types.CharsetUTF8MB3UnicodeCI):
+		buf.WriteString(" COLLATE utf8_unicode_ci")
+	case uint32(types.CharsetUTF8MB4UnicodeCI):
+		buf.WriteString(" COLLATE utf8mb4_unicode_ci")
 	case uint32(types.CharsetBinary):
 		// Packed binary values can deliberately use a VARCHAR container. COLLATE
 		// binary is the lossless MO spelling for that representation; CHARACTER
@@ -931,6 +951,10 @@ func tableCharsetForShowCreate(ctx CompilerContext, charset uint32) string {
 		return " COLLATE=utf8mb4_general_ci"
 	case uint32(types.CharsetUTF8MB4Bin):
 		return " COLLATE=utf8mb4_bin"
+	case uint32(types.CharsetUTF8MB3UnicodeCI):
+		return " COLLATE=utf8_unicode_ci"
+	case uint32(types.CharsetUTF8MB4UnicodeCI):
+		return " COLLATE=utf8mb4_unicode_ci"
 	case uint32(types.CharsetBinary):
 		return " CHARACTER SET=binary"
 	default:
@@ -1208,80 +1232,50 @@ func skipBlockComment(s string, start int) int {
 
 // FormatColType Get the formatted description of the column type.
 func FormatColType(colType plan.Type) string {
+	return formatColTypeForSQLMode(colType, "")
+}
+
+func formatColTypeForSQLMode(colType plan.Type, sqlMode string) string {
 	if arrayType := arrayPlanTypeString(&colType); arrayType != "" {
 		return strings.ToUpper(arrayType[:len("array")]) + arrayType[len("array"):]
 	}
-
-	typ := types.T(colType.Id).ToType()
-
-	ts := typ.String()
-	if typ.Oid == types.T_text {
-		switch colType.Width {
-		case types.MaxTinyTextLen:
-			ts = "TINYTEXT"
-		case types.MaxMediumTextLen:
-			ts = "MEDIUMTEXT"
-		case types.MaxLongTextLen:
-			ts = "LONGTEXT"
-		}
-	}
-	// after decimal fix, remove this
-	if typ.Oid.IsDecimal() {
-		ts = "DECIMAL"
-	}
-	if isSetPlanType(&colType) {
-		ts = "SET"
-	}
-	if subtype := geometrySubtypeName(&colType); subtype != "" {
-		ts = subtype
-		// A GEOMETRY32 subtype column renders with the "32" suffix (e.g.
-		// POINT32) so SHOW CREATE round-trips the float32 family.
-		if types.T(colType.Id) == types.T_geometry32 {
-			ts += "32"
-		}
-	}
-	if srid, ok := geometrySRIDValue(&colType); ok {
-		ts = fmt.Sprintf("%s SRID %d", ts, srid)
-	}
-
-	suffix := ""
-	switch types.T(colType.Id) {
-	case types.T_enum:
-		fallthrough
-	case types.T_uint64:
-		if !isEnumOrSetPlanType(&colType) {
-			break
+	if types.T(colType.Id) == types.T_enum || isSetPlanType(&colType) {
+		name := "ENUM"
+		if isSetPlanType(&colType) {
+			name = "SET"
 		}
 		elements := strings.Split(colType.GetEnumvalues(), ",")
-		// format enum as ENUM ('e1', 'e2')
-		elems := make([]string, 0, len(elements))
-		for _, e := range elements {
-			e = EscapeFormat(e)
-			elems = append(elems, e)
+		if isSetPlanType(&colType) {
+			elements = types.DecodeSetValues(colType.Enumvalues)
 		}
-		suffix = fmt.Sprintf("('%s')", strings.Join(elems, "','"))
-
-	case types.T_timestamp, types.T_datetime, types.T_time:
-		if colType.Width > 0 {
-			suffix = fmt.Sprintf("(%d)", colType.Width)
+		for i := range elements {
+			elements[i] = formatStrLitForSQLMode(elements[i], sqlMode)
 		}
-
-	case types.T_float64, types.T_float32:
-		if colType.Width > 0 && colType.Scale != -1 {
-			suffix = fmt.Sprintf("(%d,%d)", colType.Width, colType.Scale)
-		}
-
-	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
-		suffix = fmt.Sprintf("(%d,%d)", colType.Width, colType.Scale)
-
-	case types.T_bit, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
-		suffix = fmt.Sprintf("(%d)", colType.Width)
-
-	case types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
-		suffix = fmt.Sprintf("(%d)", colType.Width)
-
+		return name + "(" + strings.Join(elements, ",") + ")"
 	}
-	return ts + suffix
+	if types.T(colType.Id) == types.T_geometry || types.T(colType.Id) == types.T_geometry32 {
+		name := types.T(colType.Id).String()
+		if subtype := geometrySubtypeName(&colType); subtype != "" {
+			name = subtype
+			if types.T(colType.Id) == types.T_geometry32 {
+				name += "32"
+			}
+		}
+		if srid, ok := geometrySRIDValue(&colType); ok {
+			name = fmt.Sprintf("%s SRID %d", name, srid)
+		}
+		return name
+	}
+	typ := types.T(colType.Id).ToType()
+	typ.Width, typ.Scale = colType.Width, colType.Scale
+	if formatted, ok := types.FormatSQLColumnType(typ); ok {
+		return formatted
+	}
+	switch typ.Oid {
+	case types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		return fmt.Sprintf("%s(%d)", typ.String(), typ.Width)
+	}
+	return typ.String()
 }
 
 // formatStrInSingleQuotes returns the contents of a default-mode SQL string

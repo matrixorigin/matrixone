@@ -11,9 +11,9 @@ t1  ¦  CREATE TABLE `t1` (
 )
 desc t1;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
 insert into t1(a, b) values (1, 2);
 insert into t1(a, b) values (10, 20), (100, 200);
 select * from t1 order by a;
@@ -145,16 +145,16 @@ select * from t10;
 create table t11 (a int, b int, c int generated always as (a + b) stored, d varchar(100) as (concat(cast(a as varchar), '-', cast(b as varchar))) virtual);
 desc t11;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦    𝄀
-d  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦  VIRTUAL GENERATED  ¦  
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦    𝄀
+d  ¦  varchar(100)  ¦  YES  ¦    ¦  null  ¦  VIRTUAL GENERATED  ¦  
 show full columns from t11;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-b  ¦  INT(32)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-c  ¦  INT(32)  ¦  null  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references  ¦    𝄀
-d  ¦  VARCHAR(100)  ¦  null  ¦  YES  ¦    ¦  null  ¦  VIRTUAL GENERATED  ¦  select,insert,update,references  ¦  
+a  ¦  int  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+b  ¦  int  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+c  ¦  int  ¦  null  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references  ¦    𝄀
+d  ¦  varchar(100)  ¦  null  ¦  YES  ¦    ¦  null  ¦  VIRTUAL GENERATED  ¦  select,insert,update,references  ¦  
 select column_name, extra, generation_expression from information_schema.columns where table_schema = 'test_generated_col' and table_name = 't11' and column_name in ('a','b','c','d') order by ordinal_position;
 ➤ column_name[12,-1,0]  ¦  extra[12,-1,0]  ¦  generation_expression[12,-1,0]  𝄀
 a  ¦    ¦    𝄀
@@ -169,17 +169,17 @@ invalid input: Cannot modify column 'b': generated column 'c' depends on it
 alter table t12 drop column d;
 desc t12;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
 create table t13 (a int, b int);
 insert into t13 values (1,2),(3,4);
 alter table t13 add column c int generated always as (a + b) stored;
 desc t13;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
 select * from t13 order by a;
 ➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
 1  ¦  2  ¦  3  𝄀
@@ -219,15 +219,15 @@ create table t17 (a int, b int, c int, d int generated always as (a + b) stored)
 alter table t17 drop column d;
 desc t17;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 create table t18 (a int, b int, c int not null generated always as (a + b) stored);
 desc t18;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦  STORED GENERATED  ¦  
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  int  ¦  NO  ¦    ¦  null  ¦  STORED GENERATED  ¦  
 insert into t18 (a, b) values (1, 2);
 select * from t18;
 ➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
@@ -241,18 +241,18 @@ invalid input: Cannot modify column 'a': generated column 'c' depends on it
 alter table t20 rename column c to c2;
 desc t20;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c2  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c2  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
 create table t21 (a int, b int, c int generated always as (a + b) stored);
 alter table t21 change column a a2 int;
 invalid input: Cannot modify column 'a': generated column 'c' depends on it
 alter table t21 change column a a bigint;
 desc t21;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
+a  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
 create table t22 (a int, b int generated always as (a + 1) stored);
 alter table t22 change column a a int generated always as (b + 1) stored;
 invalid input: generated column 'a' has a circular dependency
@@ -263,9 +263,9 @@ select * from t23;
 1  ¦  3  ¦  2
 desc t23;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦    𝄀
-b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  int  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦    𝄀
+b  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 create table t24_fail (a int, c int generated always as (d + 1) stored, d int generated always as (a + 1) stored);
 invalid input: generated column 'c' cannot refer to generated column 'd' defined later
 create table t24_self_fail (a int generated always as (a + 1) stored);
@@ -782,4 +782,33 @@ select id, a, g, payload from t45_implicit_values where id = 7;
 ➤ id[4,32,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  ¦  payload[5,64,0]  𝄀
 7  ¦  70  ¦  71  ¦  700
 drop table t45_implicit_values;
+create table t46_partition_generated (
+id int, company_id int, amount decimal(10,2), tax_rate decimal(5,2),
+amount_with_tax decimal(10,2) as (amount * (1 + tax_rate)), created_date date
+) partition by range (year(created_date)) (
+partition p2022 values less than (2023),
+partition p2023 values less than (2024),
+partition pmax values less than maxvalue
+);
+insert into t46_partition_generated (id, company_id, amount, tax_rate, created_date) values
+(1,10,100.00,0.10,'2022-06-01'),
+(2,20,50.00,0.20,'2023-06-01'),
+(3,30,80.00,0.25,'2024-06-01');
+select id, company_id, amount, tax_rate, amount_with_tax, created_date
+from t46_partition_generated order by id;
+➤ id[4,32,0]  ¦  company_id[4,32,0]  ¦  amount[3,10,2]  ¦  tax_rate[3,5,2]  ¦  amount_with_tax[3,10,2]  ¦  created_date[91,64,0]  𝄀
+1  ¦  10  ¦  100.00  ¦  0.10  ¦  110.00  ¦  2022-06-01  𝄀
+2  ¦  20  ¦  50.00  ¦  0.20  ¦  60.00  ¦  2023-06-01  𝄀
+3  ¦  30  ¦  80.00  ¦  0.25  ¦  100.00  ¦  2024-06-01
+update t46_partition_generated set amount = 120.00 where id = 1;
+select id, amount, amount_with_tax from t46_partition_generated where id = 1;
+➤ id[4,32,0]  ¦  amount[3,10,2]  ¦  amount_with_tax[3,10,2]  𝄀
+1  ¦  120.00  ¦  132.00
+update t46_partition_generated set amount = null where id = 3;
+select id, amount, amount_with_tax from t46_partition_generated where id = 3;
+➤ id[4,32,0]  ¦  amount[3,10,2]  ¦  amount_with_tax[3,10,2]  𝄀
+3  ¦  null  ¦  null
+select id, amount_with_tax from t46_partition_generated where created_date < '2020-01-01' order by id;
+➤ id[4,32,0]  ¦  amount_with_tax[3,10,2]  𝄀
+drop table t46_partition_generated;
 drop database test_generated_col;

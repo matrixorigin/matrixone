@@ -74,7 +74,7 @@ func TestLoadQuantizeBounds(t *testing.T) {
 	defer func() { runSql = sqlexec.RunSql }()
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	var tblcfg vectorindex.IndexTableConfig
 
@@ -112,7 +112,7 @@ func TestLoadQuantizeBounds(t *testing.T) {
 
 func TestLoadQuantizeBoundsDirectScanCarriesTypedFilter(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	scanner := &scriptedRelationScanner{t: t}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.Equal(t, int32(1), req.PartitionCount)
@@ -137,7 +137,7 @@ func TestLoadQuantizeBoundsDirectScanCarriesTypedFilter(t *testing.T) {
 
 func TestDirectCentroidLoadFeedsRankAndProbeSearch(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	scanner := &scriptedRelationScanner{t: t}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.Equal(t, "centroids", req.Table)
@@ -163,11 +163,14 @@ func TestDirectCentroidLoadFeedsRankAndProbeSearch(t *testing.T) {
 	idxcfg.Ivfflat.VectorType = int32(types.T_array_float32)
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", IndexTable: "centroids"}
 	idx := &IvfflatSearchIndex[float32]{}
+	require.NoError(t, idx.LoadIndex(sqlproc, idxcfg, tblcfg, 1))
+	idx.Destroy()
+	idx = &IvfflatSearchIndex[float32]{forceCPURoute: true}
 
 	require.NoError(t, idx.LoadIndex(sqlproc, idxcfg, tblcfg, 1))
 	t.Cleanup(idx.Destroy)
 	require.Equal(t, int64(7), idx.Version)
-	require.NotNil(t, idx.Centroids)
+	require.IsType(t, (*brute_force.GoBruteForceIndex[float32, float32])(nil), idx.Centroids)
 	ranked, err := idx.rankCentroids(sqlproc, []float32{0, 0}, idxcfg)
 	require.NoError(t, err)
 	require.Equal(t, []int64{0}, ranked)
@@ -231,7 +234,7 @@ func TestCentroidAndExactSearchHelpersHandleBoundaryStates(t *testing.T) {
 	require.Equal(t, []any{"a", "b"}, data["payload"])
 	require.Equal(t, []bool{true, false}, nulls["payload"])
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	require.Equal(t, uint(3), exactResultLimit(sqlproc, 3))
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{Limit: ivfUint64Expr(9)}
@@ -240,7 +243,7 @@ func TestCentroidAndExactSearchHelpersHandleBoundaryStates(t *testing.T) {
 
 func TestIvfflatSearchLifecycleWrappers(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	scanner := &scriptedRelationScanner{t: t}
 	scanner.run = func(sqlexec.RelationScanRequest) executor.Result {
 		return executor.Result{Mp: mp}
@@ -436,7 +439,7 @@ func TestIncludeExactPkSearchAppliesQueryQuantizerAndRestoresDistance(t *testing
 	var capturedSQL string
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		capturedSQL = sql
 		bat := batch.NewWithSize(3)

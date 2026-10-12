@@ -310,7 +310,7 @@ func GetObjectListFromCKP(
 	}
 
 	// Create checkpoint readers
-	readers := make([]*logtail.CKPReader, 0)
+	readers := make([]*logtail.CKPReader, 0, len(checkpointEntries))
 	for _, entry := range checkpointEntries {
 		reader := logtail.NewCKPReaderWithTableID_V2(entry.GetVersion(), entry.GetLocation(), tid, mp, fs)
 		readers = append(readers, reader)

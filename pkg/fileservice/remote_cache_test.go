@@ -440,10 +440,10 @@ func TestRemoteCacheReadUsesMemoryCacheReservation(t *testing.T) {
 	data := vector.Entries[0].CachedData.(*Bytes)
 	require.Same(t, caches.memory.allocator.owner, data.CacheDataOwner())
 	require.Zero(t, caches.memory.cache.Used())
-	require.Equal(t, int64(caches.memory.BackingSize(request)), caches.memory.reservedBytes)
+	require.Equal(t, int64(caches.memory.BackingSize(request)), caches.memory.reservedBytes.Load())
 	vector.Release()
 	caches.memory.Flush(ctx)
-	require.Zero(t, caches.memory.reservedBytes)
+	require.Zero(t, caches.memory.reservedBytes.Load())
 	require.Equal(t, 1, queryClient.releaseCount)
 }
 

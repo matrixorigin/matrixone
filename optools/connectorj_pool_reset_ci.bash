@@ -53,10 +53,10 @@ generate_mo_config() {
       "$source_dir/$name.toml" >"$config_dir/$name.toml"
   done
   sed -e "s#\./mo-data#$TMP_DIR/mo-data#g" -e "s#\"mo-data/#\"$TMP_DIR/mo-data/#g" \
-    "$source_dir/cn.toml" | awk '
+    "$source_dir/cn.toml" | awk -v frontend_port="$MO_FRONTEND_PORT" '
       /^\[cn\.frontend\.iceberg\]$/ && !inserted {
         print "[cn.frontend]"
-        print "port = 0"
+        print "port = " frontend_port
         print ""
         inserted = 1
       }
@@ -67,6 +67,16 @@ generate_mo_config() {
       -e "s#\./etc/launch/tn.toml#$config_dir/tn.toml#" \
       -e "s#\./etc/launch/cn.toml#$config_dir/cn.toml#" \
       "$source_dir/launch.toml" >"$config_dir/launch.toml"
+}
+
+find_free_port() {
+  python3 - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
 }
 
 build_mo_service() {
@@ -91,8 +101,12 @@ build_mo_service() {
 
 command -v go >/dev/null 2>&1 || die "go is required"
 command -v java >/dev/null 2>&1 || die "java is required"
+command -v python3 >/dev/null 2>&1 || die "python3 is required to choose a free frontend port"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mo-connectorj-pool-reset.XXXXXX")"
 trap cleanup EXIT INT HUP TERM
+
+MO_FRONTEND_PORT="${MO_CONNECTORJ_MO_PORT:-$(find_free_port)}"
+[[ "$MO_FRONTEND_PORT" =~ ^[1-9][0-9]*$ ]] || die "invalid frontend port: $MO_FRONTEND_PORT"
 
 (cd "$ROOT_DIR" && make jstfu)
 build_mo_service

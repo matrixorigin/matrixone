@@ -29,7 +29,7 @@ import (
 const accountedWriterTestSite mpool.AllocationSite = 1
 
 func TestAccountedWriterOwnsAndReleasesBuffer(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(
+	proc := testutil.NewProcessWithOwnedMPool(
 		t,
 		"",
 		mpool.MustNew("accounted-writer-lifecycle"),
@@ -62,7 +62,7 @@ func TestAccountedWriterOwnsAndReleasesBuffer(t *testing.T) {
 }
 
 func TestAccountedWriterFallsBackToDirectWriteOnCapacity(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(
+	proc := testutil.NewProcessWithOwnedMPool(
 		t,
 		"",
 		mpool.MustNew("accounted-writer-fallback"),
@@ -117,7 +117,7 @@ func (w spillWriterResult) Write([]byte) (int, error) {
 }
 
 func TestAccountedWriterFailsClosedOnShortWrite(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(
+	proc := testutil.NewProcessWithOwnedMPool(
 		t,
 		"",
 		mpool.MustNew("accounted-writer-short-write"),
@@ -145,7 +145,7 @@ func TestAccountedWriterFailsClosedOnShortWrite(t *testing.T) {
 }
 
 func TestAccountedWriterHonorsCancellation(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(
+	proc := testutil.NewProcessWithOwnedMPool(
 		t,
 		"",
 		mpool.MustNew("accounted-writer-cancel"),
@@ -212,7 +212,7 @@ func TestSpillWriterBoundarySemantics(t *testing.T) {
 	require.ErrorIs(t, cancelled.Flush(), context.Canceled)
 	cancelled.Free()
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	state := newTestSpillAllocationAccount(t, 1<<20, 16)
 	buffered, err := NewAccountedWriter(
 		context.Background(), proc.Mp(), state.account,
@@ -227,7 +227,7 @@ func TestSpillWriterBoundarySemantics(t *testing.T) {
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 
-	proc = testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc = testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	state = newTestSpillAllocationAccount(t, 1<<20, 16)
 	loopCtx, loopCancel := context.WithCancel(context.Background())
 	buffered, err = NewAccountedWriter(

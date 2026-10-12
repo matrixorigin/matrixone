@@ -131,10 +131,10 @@ func TestGeometrySRIDExpressionClassification(t *testing.T) {
 	require.False(t, geometryExprHasDeferredSRID(&planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "abs"}}}}))
 
 	null := &planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
-	require.True(t, geometrySRIDSourceIsStaticNull(null))
-	require.True(t, geometrySRIDSourceIsStaticNull(geometrySRIDFunctionExpr("cast", null)))
-	require.True(t, geometrySRIDSourceIsStaticNull(geometrySRIDFunctionExpr("st_srid", null, param)))
-	require.False(t, geometrySRIDSourceIsStaticNull(geometrySRIDFunctionExpr("abs", null)))
+	require.True(t, geometrySRIDSourceIsNull(context.Background(), null))
+	require.True(t, geometrySRIDSourceIsNull(context.Background(), geometrySRIDFunctionExpr("cast", null)))
+	require.True(t, geometrySRIDSourceIsNull(context.Background(), geometrySRIDFunctionExpr("st_srid", null, param)))
+	require.False(t, geometrySRIDSourceIsNull(context.Background(), geometrySRIDFunctionExpr("abs", null)))
 }
 
 func TestGeometrySRIDBinderBoundaryCases(t *testing.T) {

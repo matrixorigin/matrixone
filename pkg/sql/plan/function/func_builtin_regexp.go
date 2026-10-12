@@ -804,8 +804,15 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 	if n > 1 {
 		c0, c1 := pat[0], pat[n-1]
 		if !bytes.ContainsAny(pat[1:len(pat)-1], "_%") {
-			if n > 2 && pat[n-2] == DefaultEscapeChar {
-				c1 = DefaultEscapeChar
+			if c1 == '%' || c1 == '_' {
+				escapeCount := 0
+				for i := n - 2; i >= 0 && pat[i] == DefaultEscapeChar; i-- {
+					escapeCount++
+				}
+				// Only an odd-length escape run makes the trailing wildcard literal.
+				if escapeCount%2 != 0 {
+					c1 = DefaultEscapeChar
+				}
 			}
 			switch {
 			case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):

@@ -30,7 +30,7 @@ import (
 )
 
 func TestExpressionDefaultProtocolAdmission(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -56,7 +56,7 @@ func TestExpressionDefaultProtocolAdmission(t *testing.T) {
 }
 
 func TestCTASDefaultRebindAndReplay(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(context.Background(), "create table src(a bigint, b bigint default (a+a))", 1)
 	require.NoError(t, err)
 	p, err := BuildPlan(mock.CurrentContext(), stmt, false)
@@ -97,9 +97,135 @@ func TestCTASDefaultRebindAndReplay(t *testing.T) {
 	require.ErrorContains(t, err, "defined after it", "reject non-replayable physical order before publication")
 }
 
+// A CTAS column inherited from a source row keeps its already-bound DEFAULT.
+// Only a changed operand type or an explicitly authored target DEFAULT should
+// bind under the target session's precision setting.
+func TestCTASInheritedDefaultKeepsBoundDivisionPrecision(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	// Keep the unrelated reverse-FK catalog lookup inside the mock.
+	mock.ctxt.tables["src"] = &planpb.TableDef{Name: "src"}
+	mock.ctxt.tables["dst"] = &planpb.TableDef{Name: "dst"}
+	build := func(tb *testing.T, ctx CompilerContext, sql string) *planpb.TableDef {
+		tb.Helper()
+		stmt, err := mysql.ParseOne(tb.Context(), sql, 1)
+		require.NoError(tb, err)
+		defer stmt.Free()
+		p, err := BuildPlan(ctx, stmt, false)
+		require.NoError(tb, err)
+		return p.GetDdl().GetCreateTable().TableDef
+	}
+	ctx10 := divPrecisionCompilerContext{CompilerContext: mock.CurrentContext(), increment: 10}
+	ctx4 := divPrecisionCompilerContext{CompilerContext: mock.CurrentContext(), increment: 4}
+	source := build(t, ctx10, "create table src(a decimal(10,2), b decimal(10,2), q decimal(30,12) default (a/b))")
+	source.TblId = 29003
+	// Catalog resolution decorates column types with their source table name;
+	// bound DEFAULT expression types have no such lineage marker. Reproduce
+	// that difference instead of testing only freshly created mock types.
+	for _, col := range source.Cols {
+		col.Typ.Table = "src"
+	}
+	mock.ctxt.tables["src"] = source
+	mock.ctxt.objects["src"] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: "src", Obj: 29003}
+
+	division := func(expr *planpb.Expr) *planpb.Expr {
+		var find func(*planpb.Expr) *planpb.Expr
+		find = func(e *planpb.Expr) *planpb.Expr {
+			if e == nil {
+				return nil
+			}
+			if f := e.GetF(); f != nil {
+				fid, _ := function.DecodeOverloadID(f.Func.Obj)
+				if fid == function.DIV {
+					return e
+				}
+				for _, arg := range f.Args {
+					if found := find(arg); found != nil {
+						return found
+					}
+				}
+			}
+			return nil
+		}
+		return find(expr)
+	}
+	sourceDivision := division(source.Cols[2].Default.Expr)
+	require.NotNil(t, sourceDivision)
+	require.Equal(t, int32(12), sourceDivision.Typ.Scale)
+
+	for _, tc := range []struct {
+		name      string
+		sql       string
+		wantScale int32
+	}{
+		{"inherited", "create table dst as select * from src", 12},
+		{"aliased", "create table dst as select a as x,b as y,q from src", 12},
+		{"reordered", "create table dst as select b,a,q from src", 12},
+		{"prepended", "create table dst(note int) as select a,b,q from src", 12},
+		{"changed operand type", "create table dst(a decimal(12,3)) as select a,b,q from src", 7},
+		{"authored default", "create table dst(a decimal(10,2),b decimal(10,2),q decimal(30,12) default (a/b)) as select a,b,q from src", 6},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			table := build(t, ctx4, tc.sql)
+			var q *planpb.ColDef
+			for _, col := range table.Cols {
+				if col.Name == "q" {
+					q = col
+					break
+				}
+			}
+			require.NotNil(t, q)
+			got := division(q.Default.Expr)
+			require.NotNil(t, got)
+			require.Equal(t, tc.wantScale, got.Typ.Scale)
+		})
+	}
+	// Planning a CTAS must not alter the source catalog expression.
+	require.Equal(t, int32(12), division(source.Cols[2].Default.Expr).Typ.Scale)
+
+	// Widening nullability keeps the arithmetic scale but must not leave a
+	// stale non-null claim on the copied ColRef.
+	mock.ctxt.tables["src_nn"] = &planpb.TableDef{Name: "src_nn"}
+	nonnullSource := build(t, ctx10, "create table src_nn(a decimal(10,2) not null, b decimal(10,2) not null, q decimal(30,12) default (a/b))")
+	nonnullSource.TblId = 29004
+	for _, col := range nonnullSource.Cols {
+		col.Typ.Table = "src_nn"
+	}
+	mock.ctxt.tables["src_nn"] = nonnullSource
+	mock.ctxt.objects["src_nn"] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: "src_nn", Obj: 29004}
+	nonnullDefault := DeepCopyDefault(nonnullSource.Cols[2].Default)
+	relaxed := build(t, ctx4, "create table dst(a decimal(10,2) null) as select a,b,q from src_nn")
+	got := division(relaxed.Cols[2].Default.Expr)
+	require.NotNil(t, got)
+	require.Equal(t, int32(12), got.Typ.Scale)
+	ref := expressionDefaultFindLocalCol(got)
+	require.NotNil(t, ref)
+	require.False(t, ref.Typ.NotNullable)
+	require.False(t, got.Typ.NotNullable)
+	require.Equal(t, nonnullDefault, nonnullSource.Cols[2].Default,
+		"CTAS must not alter source default metadata")
+
+	t.Run("reused default still requires protocol admission", func(t *testing.T) {
+		rt := moruntime.ServiceRuntime(ctx4.GetProcess().GetService())
+		oldFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+		t.Cleanup(func() {
+			if hadFloor {
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldFloor)
+			} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+				rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+			}
+		})
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion96)
+		stmt, err := mysql.ParseOne(t.Context(), "create table dst as select * from src", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		_, err = BuildPlan(ctx4, stmt, false)
+		require.ErrorContains(t, err, "protocol version 97")
+	})
+}
+
 func TestLoadDefaultMaterialization(t *testing.T) {
 	for _, parallel := range []bool{false, true} {
-		ctx := NewMockCompilerContext(true)
+		ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 		stmt, err := mysql.ParseOne(context.Background(),
 			"create table t(a bigint, b bigint, c bigint default (a+1), d bigint default (c+1))", 1)
 		require.NoError(t, err)
@@ -204,7 +330,7 @@ func TestExpressionDefaultBindsAgainstCompleteRowSchema(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.Len(t, cols, 4)
@@ -221,7 +347,7 @@ func TestExpressionDefaultAllowsForwardReferenceToBaseColumn(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.GreaterOrEqual(t, len(cols), 2)
@@ -274,7 +400,7 @@ func TestExpressionDefaultRejectsInvalidDependencyGraph(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 			require.ErrorContains(t, err, tt.want)
 		})
 	}
@@ -317,7 +443,7 @@ func TestDefaultExprExpanderRejectsCycle(t *testing.T) {
 }
 
 func TestMaterializedDefaultProjectionKeepsDependencyBoundedAndStable(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	nodeCtx := NewBindContext(builder, nil)
 	intTyp := expressionDefaultIntType()
 	childID := builder.appendNode(&planpb.Node{
@@ -372,7 +498,7 @@ func TestMaterializedDefaultProjectionKeepsDependencyBoundedAndStable(t *testing
 }
 
 func TestMaterializedProjectionStagesVolatileGeneratedDependency(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	nodeCtx := NewBindContext(builder, nil)
 	floatTyp := planpb.Type{Id: int32(types.T_float64), Width: 64}
 	childID := builder.appendNode(&planpb.Node{
@@ -411,7 +537,7 @@ func TestMaterializedProjectionStagesVolatileGeneratedDependency(t *testing.T) {
 }
 
 func TestMaterializedProjectionGroupsIndependentDependencyLevels(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	nodeCtx := NewBindContext(builder, nil)
 	intTyp := expressionDefaultIntType()
 	childID := builder.appendNode(&planpb.Node{
@@ -485,7 +611,7 @@ func TestDefaultExprExpanderHonorsAggregateExpansionBudget(t *testing.T) {
 }
 
 func TestInsertExpressionDefaultReadsMaterializedVolatileDependency(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	const (
 		tableName = "expression_default_dml"
 		tableID   = uint64(29001)
@@ -565,7 +691,7 @@ func TestInsertExpressionDefaultReadsMaterializedVolatileDependency(t *testing.T
 }
 
 func TestSequentialUpdateDefaultReadsCurrentRowImage(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_UPDATE, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_UPDATE, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	nodeCtx := NewBindContext(builder, nil)
 	floatTyp := planpb.Type{Id: int32(types.T_float64), Width: 64}
 	rowIDTyp := planpb.Type{Id: int32(types.T_Rowid), Width: 16}

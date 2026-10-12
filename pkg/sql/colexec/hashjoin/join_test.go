@@ -39,24 +39,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	Rows          = 10     // default rows
-	BenchmarkRows = 100000 // default rows for benchmark
-)
-
 // add unit tests for cases
 type joinTestCase struct {
-	arg         *HashJoin
-	flgs        []bool // flgs[i] == true: nullable
-	types       []types.Type
-	proc        *process.Process
-	cancel      context.CancelFunc
-	barg        *hashbuild.HashBuild
-	resultBatch *batch.Batch
+	arg    *HashJoin
+	proc   *process.Process
+	cancel context.CancelFunc
+	barg   *hashbuild.HashBuild
 }
 
 func TestHashJoinPrepareFailureCanRetry(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	typ := types.T_int32.ToType()
 	valid := newExpr(0, typ)
 	invalid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
@@ -80,7 +72,7 @@ func TestHashJoinPrepareFailureCanRetry(t *testing.T) {
 }
 
 func TestHashMarkJoinRejectsResidualCondition(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := NewArgument()
 	arg.JoinType = plan.Node_MARK
 	arg.NonEqCond = newExpr(0, types.T_int32.ToType())
@@ -92,7 +84,7 @@ func TestHashMarkJoinRejectsResidualCondition(t *testing.T) {
 }
 
 func TestHashMarkJoinRejectsInvalidOperatorContracts(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	key := newExpr(0, types.T_int32.ToType())
 
@@ -141,7 +133,7 @@ var (
 
 func makeTestCases(t *testing.T) []joinTestCase {
 	return []joinTestCase{
-		newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
+		newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.T_int32.ToType()),
@@ -150,7 +142,7 @@ func makeTestCases(t *testing.T) []joinTestCase {
 					newExpr(0, types.T_int32.ToType()),
 				},
 			}),
-		newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
+		newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.T_int32.ToType()),
@@ -163,29 +155,37 @@ func makeTestCases(t *testing.T) []joinTestCase {
 }
 
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
-	}
-
-	for _, test := range []struct {
+	for _, tc := range []struct {
+		name     string
 		joinType plan.Node_JoinType
+		right    bool
 		want     string
 	}{
-		{joinType: plan.Node_ASOF, want: ": asof join "},
-		{joinType: plan.Node_ASOF_LEFT, want: ": asof left join "},
+		{name: "inner", joinType: plan.Node_INNER, want: "hash_join: inner join "},
+		{name: "left", joinType: plan.Node_LEFT, want: "hash_join: left join "},
+		{name: "right", joinType: plan.Node_RIGHT, want: "hash_join: right join "},
+		{name: "semi", joinType: plan.Node_SEMI, want: "hash_join: semi join "},
+		{name: "right semi", joinType: plan.Node_SEMI, right: true, want: "hash_join: right semi join "},
+		{name: "anti", joinType: plan.Node_ANTI, want: "hash_join: anti join "},
+		{name: "right anti", joinType: plan.Node_ANTI, right: true, want: "hash_join: right anti join "},
+		{name: "single", joinType: plan.Node_SINGLE, want: "hash_join: single join "},
+		{name: "mark", joinType: plan.Node_MARK, want: "hash_join: hash mark join "},
+		{name: "outer", joinType: plan.Node_OUTER, want: "hash_join: full outer join "},
+		{name: "asof", joinType: plan.Node_ASOF, want: "hash_join: asof join "},
+		{name: "asof left", joinType: plan.Node_ASOF_LEFT, want: "hash_join: asof left join "},
+		{name: "unknown", joinType: plan.Node_JoinType(-1), want: "hash_join"},
 	} {
-		buf.Reset()
-		arg := NewArgument()
-		arg.JoinType = test.joinType
-		arg.String(buf)
-		require.Contains(t, buf.String(), test.want)
-		arg.Release()
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			arg := &HashJoin{JoinType: tc.joinType, IsRightJoin: tc.right}
+			arg.String(&buf)
+			require.Equal(t, tc.want, buf.String())
+		})
 	}
 }
 
 func TestAsofPhysicalContractValidation(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	arg := NewArgument()
@@ -214,18 +214,20 @@ func TestJoin(t *testing.T) {
 		require.Equal(t, res.Batch == nil, true)
 		res, err = vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
-		require.Equal(t, res.Batch.RowCount(), tc.resultBatch.RowCount())
-		require.Equal(t, len(res.Batch.Vecs), len(tc.resultBatch.Vecs))
-		for i := range res.Batch.Vecs {
-			vec1 := res.Batch.Vecs[i]
-			vec2 := tc.resultBatch.Vecs[i]
-			require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
-			require.Equal(t, bytes.Compare(vec1.GetArea(), vec2.GetArea()), 0)
-			require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
+		require.NotNil(t, res.Batch)
+		require.Equal(t, 2, res.Batch.RowCount())
+		require.Len(t, res.Batch.Vecs, len(tc.arg.ResultCols))
+		for _, vec := range res.Batch.Vecs {
+			require.Equal(t, types.T_int32, vec.GetType().Oid)
+			require.Equal(t, []int32{1, 1000}, vector.MustFixedColNoTypeCheck[int32](vec))
+			require.Empty(t, vec.GetArea())
+			require.False(t, vec.GetNulls().Any())
 		}
 
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.barg.GetChildren(0).Free(tc.proc, false, nil)
 
 		resetChildren(tc.arg, tc.proc.Mp())
 		resetHashBuildChildren(tc.barg, tc.proc.Mp())
@@ -240,22 +242,25 @@ func TestJoin(t *testing.T) {
 		require.Equal(t, res.Batch == nil, true)
 		res, err = vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
-		require.Equal(t, res.Batch.RowCount(), tc.resultBatch.RowCount())
-		require.Equal(t, len(res.Batch.Vecs), len(tc.resultBatch.Vecs))
-		for i := range res.Batch.Vecs {
-			vec1 := res.Batch.Vecs[i]
-			vec2 := tc.resultBatch.Vecs[i]
-			require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
-			require.Equal(t, bytes.Compare(vec1.GetArea(), vec2.GetArea()), 0)
-			require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
+		require.NotNil(t, res.Batch)
+		require.Equal(t, 2, res.Batch.RowCount())
+		require.Len(t, res.Batch.Vecs, len(tc.arg.ResultCols))
+		for _, vec := range res.Batch.Vecs {
+			require.Equal(t, types.T_int32, vec.GetType().Oid)
+			require.Equal(t, []int32{1, 1000}, vector.MustFixedColNoTypeCheck[int32](vec))
+			require.Empty(t, vec.GetArea())
+			require.False(t, vec.GetNulls().Any())
 		}
 
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.barg.GetChildren(0).Free(tc.proc, false, nil)
 
 		tc.arg.Free(tc.proc, false, nil)
 		tc.barg.Free(tc.proc, false, nil)
 		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().OnHeapCurrNB())
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -266,7 +271,7 @@ func TestHashJoinCountOnlyCollapsesDuplicateMatches(t *testing.T) {
 		{newExpr(0, typ)},
 		{newExpr(0, typ)},
 	}
-	tc := newTestCase(t, []bool{false}, []types.Type{typ}, nil, conditions)
+	tc := newTestCase(t, []types.Type{typ}, nil, conditions)
 	tc.arg.JoinType = plan.Node_INNER
 	tc.arg.NonEqCond = nil
 	tc.arg.EmitCompressedRowCount = true
@@ -319,7 +324,7 @@ func TestHashJoinCountOnlyRequiresLoadedMap(t *testing.T) {
 func TestHashJoinEmptyProjectionWithoutCountContractStaysBoundedAndCancelable(t *testing.T) {
 	typ := types.T_int32.ToType()
 	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
-	tc := newTestCase(t, []bool{false}, []types.Type{typ}, nil, conditions)
+	tc := newTestCase(t, []types.Type{typ}, nil, conditions)
 	tc.arg.JoinType = plan.Node_INNER
 	tc.arg.NonEqCond = nil
 	tc.barg.NeedBatches = false
@@ -368,7 +373,7 @@ func (source *recursiveHashJoinProbe) OpType() vm.OpType {
 func TestHashJoinPassesRecursiveMarkerWithEmptyBuild(t *testing.T) {
 	typ := types.T_int32.ToType()
 	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
-	tc := newTestCase(t, []bool{false}, []types.Type{typ}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{typ}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 	}, conditions)
 	marker := colexec.MakeMockBatchs(tc.proc.Mp())
@@ -402,7 +407,7 @@ func TestHashJoinPassesRecursiveMarkerWithEmptyBuild(t *testing.T) {
 func TestHashJoinPrepareRecomputesRecursiveProbeForFastPath(t *testing.T) {
 	typ := types.T_int32.ToType()
 	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
-	tc := newTestCase(t, []bool{false}, []types.Type{typ}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{typ}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 	}, conditions)
 	probeCalls := 0
@@ -441,7 +446,6 @@ func TestHashJoinPropagatesUnmatchedOutputOOM(t *testing.T) {
 	tc := newTestCaseWithMPool(
 		t,
 		limited,
-		[]bool{false},
 		[]types.Type{typ},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}},
@@ -480,7 +484,7 @@ func TestHashJoinPropagatesUnmatchedOutputOOM(t *testing.T) {
 }
 
 func TestHashJoinResetAfterEmptyProbe(t *testing.T) {
-	tc := newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 		colexec.NewResultPos(1, 0),
 	}, [][]*plan.Expr{
@@ -537,7 +541,7 @@ func TestHashJoinResetAfterEmptyProbe(t *testing.T) {
 }
 
 func TestHashJoinConstNullAfterNonEmptyProbe(t *testing.T) {
-	tc := newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 		colexec.NewResultPos(1, 0),
 	}, [][]*plan.Expr{
@@ -650,9 +654,7 @@ func TestHashMarkJoinThreeValuedSemantics(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tc := newTestCase(t,
-				[]bool{true},
-				[]types.Type{types.T_int32.ToType()},
+			tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
 				[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 				[][]*plan.Expr{
 					{newExpr(0, types.T_int32.ToType())},
@@ -720,9 +722,7 @@ func TestHashMarkJoinCompositeNotNullKeys(t *testing.T) {
 		expr.Typ.NotNullable = true
 	}
 
-	tc := newTestCase(t,
-		[]bool{false, false},
-		[]types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{{probeKey0, probeKey1}, {buildKey0, buildKey1}},
 	)
@@ -772,9 +772,7 @@ func TestHashMarkJoinCompositeNotNullKeys(t *testing.T) {
 }
 
 func TestHashMarkJoinResetClearsBuildNullState(t *testing.T) {
-	tc := newTestCase(t,
-		[]bool{true},
-		[]types.Type{types.T_int32.ToType()},
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{
 			{newExpr(0, types.T_int32.ToType())},
@@ -838,9 +836,7 @@ func TestHashMarkJoinResetClearsBuildNullState(t *testing.T) {
 }
 
 func TestHashMarkJoinBatchBoundary(t *testing.T) {
-	tc := newTestCase(t,
-		[]bool{true},
-		[]types.Type{types.T_int32.ToType()},
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{
 			{newExpr(0, types.T_int32.ToType())},
@@ -946,9 +942,7 @@ func TestHashJoinSingleRejectsMultipleRows(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tc := newTestCase(t,
-				[]bool{false},
-				[]types.Type{types.T_int32.ToType()},
+			tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
 				[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 				[][]*plan.Expr{
 					{newExpr(0, types.T_int32.ToType())},
@@ -984,7 +978,7 @@ func TestHashJoinSingleRejectsMultipleRows(t *testing.T) {
 }
 
 func TestHashJoinSingleRejectsDuplicateMatchesAcrossWorkers(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	localMatches := new(bitmap.Bitmap)
 	localMatches.InitWithSize(1)
 	localMatches.Add(0)
@@ -1013,7 +1007,7 @@ func TestHashJoinSingleRejectsDuplicateMatchesAcrossWorkers(t *testing.T) {
 // remaining worker messages so a later run over the same channel does not
 // observe stale bitmaps.
 func TestHashJoinMergerSyncBitmapAborted(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rightBat := makeInt32Batch(proc, []int32{10, 20, 30, 40})
 
 	matched := new(bitmap.Bitmap)
@@ -1090,7 +1084,7 @@ func TestHashJoinMergerSyncBitmapAborted(t *testing.T) {
 }
 
 func TestHashJoinMergerFinalizeEmitsUnmatchedBuildRows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rightBat := makeInt32Batch(proc, []int32{10, 20, 30, 40})
 
 	matched := new(bitmap.Bitmap)
@@ -1159,9 +1153,7 @@ func TestHashJoinTracksBuildMatchesWhenFullOuterIsNotRightOriented(t *testing.T)
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			typ := types.T_int32.ToType()
-			tc := newTestCase(t,
-				[]bool{true},
-				[]types.Type{typ},
+			tc := newTestCase(t, []types.Type{typ},
 				[]colexec.ResultPos{
 					colexec.NewResultPos(0, 0),
 					colexec.NewResultPos(1, 0),
@@ -1235,9 +1227,7 @@ func makeInt32Batch(proc *process.Process, values []int32) *batch.Batch {
 func TestAsofLeftJoinEndToEnd(t *testing.T) {
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
-	tc := newTestCase(t,
-		[]bool{false, true},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 1)},
 		[][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}},
 	)
@@ -1289,9 +1279,7 @@ func TestAsofBuildLeftStreamsRightAndKeepsOneCandidate(t *testing.T) {
 	timeType := types.T_timestamp.ToType()
 	textType := types.T_varchar.ToType()
 	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
-	tc := newTestCase(t,
-		[]bool{false, true},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{
 			colexec.NewResultPos(0, 1),
 			colexec.NewResultPos(1, 1),
@@ -1359,9 +1347,7 @@ func TestAsofBuildLeftEmptyLeftSkipsRightScan(t *testing.T) {
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
 	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
-	tc := newTestCase(t,
-		[]bool{false},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		equality,
 	)
@@ -1409,9 +1395,7 @@ func TestAsofBuildLeftRejectsRecursiveProbeBeforeInput(t *testing.T) {
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
 	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
-	tc := newTestCase(t,
-		[]bool{false},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		equality,
 	)
@@ -1444,9 +1428,7 @@ func TestAsofBuildLeftActualHotGroupUsesBoundedRangeIndex(t *testing.T) {
 	timeType := types.T_timestamp.ToType()
 	textType := types.T_varchar.ToType()
 	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
-	tc := newTestCase(t,
-		[]bool{false, true},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{
 			colexec.NewResultPos(0, 1),
 			colexec.NewResultPos(1, 1),
@@ -1544,9 +1526,7 @@ func TestAsofBuildLeftRangeIndexSharesAndRecyclesPayload(t *testing.T) {
 	timeType := types.T_timestamp.ToType()
 	textType := types.T_varchar.ToType()
 	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
-	tc := newTestCase(t,
-		[]bool{false},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{colexec.NewResultPos(1, 2)},
 		equality,
 	)
@@ -1627,9 +1607,7 @@ func TestAsofBuildLeftStrictPredicateRejectsEqualTimestamp(t *testing.T) {
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
 	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
-	tc := newTestCase(t,
-		[]bool{false},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{colexec.NewResultPos(1, 1)},
 		equality,
 	)
@@ -1677,9 +1655,7 @@ func TestAsofBuildLeftCompactsRepeatedVarlenaReplacement(t *testing.T) {
 	timeType := types.T_timestamp.ToType()
 	textType := types.T_varchar.ToType()
 	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
-	tc := newTestCase(t,
-		[]bool{false},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{colexec.NewResultPos(1, 2)},
 		equality,
 	)
@@ -1831,7 +1807,7 @@ func makeAsofConditionWithRightLowerBound(
 }
 
 func TestFindAsofPredecessor(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
 	arg := &HashJoin{
@@ -1902,7 +1878,7 @@ func TestFindAsofPredecessor(t *testing.T) {
 }
 
 func TestAsofIndexChoosesOrderedOrAdaptiveSearch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
 	arg := &HashJoin{
@@ -2006,7 +1982,7 @@ func TestAsofIndexChoosesOrderedOrAdaptiveSearch(t *testing.T) {
 }
 
 func TestAsofUnorderedIndexPromotesAfterAmortizationAndReusesAllocation(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
 	arg := &HashJoin{
@@ -2137,7 +2113,7 @@ func TestAsofIndexPromotionScansBalancesReuseAndBuildCost(t *testing.T) {
 }
 
 func TestAsofSortedIndexAllocationFailureKeepsLinearState(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
 	require.NoError(t, err)
 	account, err := registry.Open(1)
@@ -2194,7 +2170,7 @@ func BenchmarkAsofUnorderedGroupLookup(b *testing.B) {
 }
 
 func benchmarkAsofUnorderedGroupLookup(b *testing.B, rowCount, stride int) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	arg := &HashJoin{AsofRightCol: 1}
 	installTestAllocation(b, arg)
 
@@ -2248,7 +2224,7 @@ func benchmarkAsofUnorderedGroupLookup(b *testing.B, rowCount, stride int) {
 }
 
 func TestAsofIndexMetadataGrowsAmortizedAndCleans(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
 	arg := &HashJoin{
@@ -2320,7 +2296,7 @@ func TestAsofTemporalMetadataFindsNestedAndCommutedPredicate(t *testing.T) {
 }
 
 func TestAsofPrepareRejectsMismatchedRightTemporalColumn(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
@@ -2344,52 +2320,6 @@ func TestAsofAllocationAccountCannotDetachWithEmptyIndexTable(t *testing.T) {
 	require.NoError(t, arg.ClearAllocationAccount(account))
 }
 
-/*
-	func BenchmarkJoin(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			tcs = []joinTestCase{
-				newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
-					[][]*plan.Expr{
-						{
-							newExpr(0, types.T_int8.ToType()),
-						},
-						{
-							newExpr(0, types.T_int8.ToType()),
-						},
-					}),
-				newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
-					[][]*plan.Expr{
-						{
-							newExpr(0, types.T_int8.ToType()),
-						},
-						{
-							newExpr(0, types.T_int8.ToType()),
-						},
-					}),
-			}
-			t := new(testing.T)
-			for _, tc := range tcs {
-				bats := hashBuild(t, tc)
-				err := tc.arg.Prepare(tc.proc)
-				require.NoError(t, err)
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- nil
-				tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[0])
-				tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[1])
-				for {
-					ok, err := tc.arg.Call(tc.proc)
-					if ok.Status == vm.ExecStop || err != nil {
-						break
-					}
-				}
-			}
-		}
-	}
-*/
 func newExpr(pos int32, typ types.Type) *plan.Expr {
 	return &plan.Expr{
 		Typ: plan.Type{
@@ -2405,14 +2335,13 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
-func newTestCase(t testing.TB, flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*plan.Expr) joinTestCase {
-	return newTestCaseWithMPool(t, mpool.MustNewZero(), flgs, ts, rp, cs)
+func newTestCase(t testing.TB, ts []types.Type, rp []colexec.ResultPos, cs [][]*plan.Expr) joinTestCase {
+	return newTestCaseWithMPool(t, mpool.MustNewZero(), ts, rp, cs)
 }
 
 func newTestCaseWithMPool(
 	t testing.TB,
 	m *mpool.MPool,
-	flgs []bool,
 	ts []types.Type,
 	rp []colexec.ResultPos,
 	cs [][]*plan.Expr,
@@ -2456,16 +2385,8 @@ func newTestCaseWithMPool(
 			},
 		},
 	}
-	resultBatch := batch.NewWithSize(len(rp))
-	resultBatch.SetRowCount(2)
-	for i := range rp {
-		bat := colexec.MakeMockBatchs(proc.Mp())
-		resultBatch.Vecs[i] = bat.Vecs[rp[i].Pos]
-	}
 	tag++
 	tc := joinTestCase{
-		types:  ts,
-		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
 		arg: &HashJoin{
@@ -2476,31 +2397,16 @@ func newTestCaseWithMPool(
 			NumCPU:     1,
 			IsMerger:   true,
 			NonEqCond:  cond,
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
 			JoinMapTag: tag,
 		},
 		barg: &hashbuild.HashBuild{
-			NeedHashMap: true,
-			Conditions:  cs[1],
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
+			NeedHashMap:      true,
+			Conditions:       cs[1],
 			NeedAllocateSels: true,
 			NeedBatches:      true,
 			JoinMapTag:       tag,
 			JoinMapRefCnt:    1,
 		},
-		resultBatch: resultBatch,
 	}
 	installTestAllocation(t, tc.arg, tc.barg)
 	return tc
@@ -2715,7 +2621,7 @@ func TestHashJoinGetOperatorBase(t *testing.T) {
 }
 
 func TestHashJoinExecProjection(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := NewArgument()
 	bat := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, false, 10, proc.Mp())
 	result, err := arg.ExecProjection(proc, bat)

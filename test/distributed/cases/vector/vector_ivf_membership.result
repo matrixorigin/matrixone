@@ -152,6 +152,893 @@ order by l2_distance(c.embedding, '[0.0,0.0]')
 limit 1 by rank with option 'mode=pre';
 ➤ id[4,32,0]  𝄀
 4
+set experimental_fulltext_index = 1;
+create table persisted_match(id bigint primary key, body text, category varchar(8), v vecf32(3));
+insert into persisted_match values (1,'alpha matrix one','A','[0,0,0]'),(2,'alpha vector search','A','[0.1,0,0]'),(3,'beta storage engine','B','[0.2,0,0]'),(4,'alpha transaction','B','[0.3,0,0]'),(5,'alpha analytics','C','[0.4,0,0]');
+create fulltext index body_idx on persisted_match(body) with parser ngram;
+create index vec_idx using ivfflat on persisted_match(v) lists=2 op_type 'vector_l2_ops';
+select id from persisted_match where match(body) against('+alpha' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+4  𝄀
+5
+select id from persisted_match where match(body) against('+alpha' in boolean mode) order by l2_distance(v,'[0.04,0,0]') limit 3 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+4
+select id from persisted_match where match(body) against('+alpha' in boolean mode) order by l2_distance(v,'[0.04,0,0]') limit 3 by rank with option 'mode=post';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+4
+select id from persisted_match where match(body) against('+alpha' in boolean mode) order by l2_distance(v,'[0.04,0,0]') limit 3 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+4
+select id from persisted_match where category='A' order by l2_distance(v,'[0.04,0,0]') limit 3 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+select id from persisted_match where category='A' order by l2_distance(v,'[0.04,0,0]') limit 3 by rank with option 'mode=post';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+select id from persisted_match where category='A' order by l2_distance(v,'[0.04,0,0]') limit 3 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+set @entries = (select distinct i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase=database() and t.relname='persisted_match' and i.name='vec_idx' and i.algo_table_type='entries');
+select mo_ctl('dn','flush',concat(database(),'.',@entries));
+➤ mo_ctl(dn, flush, concat(database(), ., @entries))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+set @stats = concat('select table_cnt, accurate_object_number > 0 as persisted from table_stats("',database(),'.',@entries,'","refresh","full") g');
+prepare entry_stats from @stats;
+execute entry_stats;
+➤ table_cnt[8,53,31]  ¦  persisted[-7,1,0]  𝄀
+5.0  ¦  1
+deallocate prepare entry_stats;
+select id from persisted_match where match(body) against('+alpha' in boolean mode) order by l2_distance(v,'[0.04,0,0]') limit 3 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+4
+select id from persisted_match where match(body) against('+alpha' in boolean mode) order by l2_distance(v,'[0.04,0,0]') limit 3 by rank with option 'mode=post';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+4
+select id from persisted_match where match(body) against('+alpha' in boolean mode) order by l2_distance(v,'[0.04,0,0]') limit 3 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+4
+select id from persisted_match where category='A' order by l2_distance(v,'[0.04,0,0]') limit 3 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+select id from persisted_match where category='A' order by l2_distance(v,'[0.04,0,0]') limit 3 by rank with option 'mode=post';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+select id from persisted_match where category='A' order by l2_distance(v,'[0.04,0,0]') limit 3 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+create table persisted_int(id int primary key, grp int, v vecf32(2));
+insert into persisted_int select result,result,cast(concat('[',result/1000,',0]') as vecf32(2)) from generate_series(1,200) g;
+create index vec_idx using ivfflat on persisted_int(v) lists=1 op_type 'vector_l2_ops';
+select id from persisted_int where grp<=0 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]
+select id from persisted_int where grp<=0 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]
+select id from persisted_int where id<=0 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]
+select id from persisted_int where id<=0 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]
+select id from persisted_int where grp<=1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+1
+select id from persisted_int where grp<=1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+1
+select id from persisted_int where id<=1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+1
+select id from persisted_int where id<=1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+1
+select id from persisted_int where grp<=99 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where grp<=99 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where id<=99 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where id<=99 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where grp<=100 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where grp<=100 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where id<=100 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where id<=100 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where grp<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where grp<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where id<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where id<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+set @entries = (select distinct i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase=database() and t.relname='persisted_int' and i.name='vec_idx' and i.algo_table_type='entries');
+select mo_ctl('dn','flush',concat(database(),'.',@entries));
+➤ mo_ctl(dn, flush, concat(database(), ., @entries))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+set @stats = concat('select table_cnt, accurate_object_number > 0 as persisted from table_stats("',database(),'.',@entries,'","refresh","full") g');
+prepare entry_stats from @stats;
+execute entry_stats;
+➤ table_cnt[8,53,31]  ¦  persisted[-7,1,0]  𝄀
+200.0  ¦  1
+deallocate prepare entry_stats;
+select id from persisted_int where grp<=0 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]
+select id from persisted_int where grp<=0 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]
+select id from persisted_int where id<=0 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]
+select id from persisted_int where id<=0 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]
+select id from persisted_int where grp<=1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+1
+select id from persisted_int where grp<=1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+1
+select id from persisted_int where id<=1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+1
+select id from persisted_int where id<=1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+1
+select id from persisted_int where grp<=99 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where grp<=99 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where id<=99 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where id<=99 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where grp<=100 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where grp<=100 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where id<=100 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where id<=100 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where grp<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where grp<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where id<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_int where id<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+create table persisted_bigint(id bigint primary key, grp int, v vecf32(2));
+insert into persisted_bigint select result,result,cast(concat('[',result/1000,',0]') as vecf32(2)) from generate_series(1,200) g;
+create index vec_idx using ivfflat on persisted_bigint(v) lists=1 op_type 'vector_l2_ops';
+select id from persisted_bigint where grp<=0 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]
+select id from persisted_bigint where grp<=0 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]
+select id from persisted_bigint where id<=0 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]
+select id from persisted_bigint where id<=0 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]
+select id from persisted_bigint where grp<=1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1
+select id from persisted_bigint where grp<=1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1
+select id from persisted_bigint where id<=1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1
+select id from persisted_bigint where id<=1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1
+select id from persisted_bigint where grp<=99 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where grp<=99 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where id<=99 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where id<=99 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where grp<=100 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where grp<=100 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where id<=100 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where id<=100 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where grp<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where grp<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where id<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where id<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+set @entries = (select distinct i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase=database() and t.relname='persisted_bigint' and i.name='vec_idx' and i.algo_table_type='entries');
+select mo_ctl('dn','flush',concat(database(),'.',@entries));
+➤ mo_ctl(dn, flush, concat(database(), ., @entries))[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+set @stats = concat('select table_cnt, accurate_object_number > 0 as persisted from table_stats("',database(),'.',@entries,'","refresh","full") g');
+prepare entry_stats from @stats;
+execute entry_stats;
+➤ table_cnt[8,53,31]  ¦  persisted[-7,1,0]  𝄀
+200.0  ¦  1
+deallocate prepare entry_stats;
+select id from persisted_bigint where grp<=0 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]
+select id from persisted_bigint where grp<=0 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]
+select id from persisted_bigint where id<=0 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]
+select id from persisted_bigint where id<=0 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]
+select id from persisted_bigint where grp<=1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1
+select id from persisted_bigint where grp<=1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1
+select id from persisted_bigint where id<=1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1
+select id from persisted_bigint where id<=1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1
+select id from persisted_bigint where grp<=99 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where grp<=99 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where id<=99 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where id<=99 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where grp<=100 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where grp<=100 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where id<=100 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where id<=100 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where grp<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where grp<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where id<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+select id from persisted_bigint where id<=101 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10
+create table ivf_char_retry(id char(8) primary key, grp int, v vecf32(2));
+insert into ivf_char_retry
+select concat('c', lpad(result, 2, '0')), 0,
+cast(concat('[', result, ',0]') as vecf32(2))
+from generate_series(1,11) g;
+insert into ivf_char_retry values ('hit1', 1, '[20,0]'), ('hit2', 1, '[21,0]');
+create index char_idx using ivfflat on ivf_char_retry(v)
+lists=1 op_type 'vector_l2_ops';
+set probe_limit = 1;
+select id from ivf_char_retry where grp<>0
+order by l2_distance(v,'[0,0]') limit 1 by rank with option 'mode=force';
+➤ id[1,8,0]  𝄀
+hit1
+select id from ivf_char_retry where grp<>0
+order by l2_distance(v,'[0,0]') limit 1 by rank with option 'mode=pre';
+➤ id[1,8,0]  𝄀
+hit1
+select id from ivf_char_retry where grp<>0
+order by l2_distance(v,'[0,0]') limit 1 by rank with option 'mode=auto';
+➤ id[1,8,0]  𝄀
+hit1
+explain analyze verbose select id from ivf_char_retry where grp<>0
+order by l2_distance(v,'[0,0]') limit 1 by rank with option 'mode=auto';
+-- @regex("Adaptive Top[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*inputRows=1 outputRows=1", true)
+-- @regex("->  Project[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*inputRows=0 outputRows=0", true)
+-- @regex("Vector Index Scan[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*inputRows=11 outputRows=11", true)
+-- @regex("Vector Index Scan[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*inputRows=2 outputRows=2[^\n]*\n[^\n]*Runtime Filter Probe", true)
+-- @regex("Table Scan[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Table:[^\n]*\n[^\n]*Analyze:[^\n]*inputBlocks=0 inputRows=0 outputRows=0", true)
+➤ ap query plan on multicn(10 core)[12,-1,0]  𝄀
+Adaptive Top[15] (cost=1.00 outcnt=1.00 selectivity=0.0855 dop=1 blockNum=1 rowsize=100.00)  𝄀
+  Output: #[0,0]  𝄀
+  Analyze: timeConsumed=0ms waitTime=42ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=24 bytes OutputSize=24 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=24 bytes (min=24 bytes, max=24 bytes)  𝄀
+  Limit: 1  𝄀
+  ->  Project[4] (cost=1.00 outcnt=1.00 selectivity=0.1007 dop=1 blockNum=1 rowsize=100.00)  𝄀
+        Output: ivf_char_retry.id  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        ->  Sort[3] (cost=9.93 outcnt=1.00 selectivity=0.1007 dop=1 blockNum=1 rowsize=100.00)  𝄀
+              Output: ivf_char_retry.id  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+              Sort Key: #[0,1] INTERNAL  𝄀
+              Limit: 1  𝄀
+              ->  Join[2] (cost=26.00 outcnt=9.93 selectivity=0.7615 dop=1 blockNum=1 hashmapSize=11.00 rowsize=100.00)  𝄀
+                    Output: ivf_char_retry.id, #[1,1]  𝄀
+                    Analyze: timeConsumed=0ms waitTime=1ms inputRows=13 outputRows=0 (min=0, max=0) InputSize=400 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.56 KiB (min=32.11 KiB, max=32.45 KiB)  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (cast(ivf_char_retry.id AS VARCHAR) = cast(#[1,0] AS VARCHAR))  𝄀
+                    ->  Table Scan[0] on ivf_membership.ivf_char_retry (cost=13.00 outcnt=11.70 selectivity=0.9000 dop=1 blockNum=1 rowsize=33.60)  𝄀
+                          Output: ivf_char_retry.id  𝄀
+                          Table: 'ivf_char_retry' (0:'id', 1:'grp') shuffle: hash(id)  𝄀
+                          Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=13 outputRows=2 (min=2, max=2) InputSize=364 bytes OutputSize=48 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=425 bytes (min=425 bytes, max=425 bytes)  𝄀
+                          Filter Cond: (ivf_char_retry.grp <> 0)  𝄀
+                    ->  Vector Index Scan[1] on char_idx [l2_distance] (cost=13.00 outcnt=11.00 selectivity=0.8462 dop=1 blockNum=1 rowsize=16.00)  𝄀
+                          Output: pkid, score  𝄀
+                          Analyze: timeConsumed=0ms waitTime=1ms inputRows=11 outputRows=11 (min=11, max=11) InputSize=352 bytes OutputSize=352 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=704 bytes (min=704 bytes, max=704 bytes)  𝄀
+                          Vector Index: char_idx, Metric: l2_distance, Candidate Limit: 1, NProbe: 1  𝄀
+  ->  Project[11] (cost=1.00 outcnt=1.00 selectivity=0.1116 dop=1 blockNum=1 rowsize=100.00)  𝄀
+        Output: ivf_char_retry.id  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=0 (min=0, max=0) InputSize=24 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=24 bytes (min=0 bytes, max=24 bytes)  𝄀
+        ->  Sort[10] (cost=8.96 outcnt=1.00 selectivity=0.1116 dop=1 blockNum=1 rowsize=100.00)  𝄀
+              Output: ivf_char_retry.id  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=64 bytes OutputSize=24 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=24 bytes (min=24 bytes, max=24 bytes)  𝄀
+              Sort Key: #[0,1] INTERNAL  𝄀
+              Limit: 1  𝄀
+              ->  Join[9] (cost=39.00 outcnt=8.96 selectivity=0.6854 dop=1 blockNum=1 hashmapSize=9.93 rowsize=100.00)  𝄀
+                    Output: ivf_char_retry.id, #[1,1]  𝄀
+                    Analyze: timeConsumed=0ms waitTime=19ms inputRows=4 outputRows=2 (min=2, max=2) InputSize=112 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.28 KiB (min=32.11 KiB, max=32.17 KiB)  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (cast(ivf_char_retry.id AS VARCHAR) = cast(#[1,0] AS VARCHAR))  𝄀
+                    ->  Table Scan[5] on ivf_membership.ivf_char_retry (cost=13.00 outcnt=11.70 selectivity=0.9000 dop=1 blockNum=1 rowsize=33.60)  𝄀
+                          Output: ivf_char_retry.id  𝄀
+                          Table: 'ivf_char_retry' (0:'id', 1:'grp') shuffle: hash(id)  𝄀
+                          Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=13 outputRows=2 (min=2, max=2) InputSize=364 bytes OutputSize=48 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=425 bytes (min=425 bytes, max=425 bytes)  𝄀
+                          Filter Cond: (ivf_char_retry.grp <> 0)  𝄀
+                    ->  Join[8] (cost=26.00 outcnt=9.93 selectivity=0.7615 dop=1 blockNum=1 hashmapSize=11.70 rowsize=100.00)  𝄀
+                          Output: #[0,0], #[0,1]  𝄀
+                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=2 (min=2, max=2) InputSize=112 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.31 KiB (min=32.11 KiB, max=32.20 KiB)  𝄀
+                          Join Type: SEMI  𝄀
+                          Join Cond: (cast(#[0,0] AS VARCHAR) = cast(ivf_char_retry.id AS VARCHAR))  𝄀
+                          Runtime Filter Build: #[11,0]  𝄀
+                          ->  Vector Index Scan[6] on char_idx [l2_distance] (cost=13.00 outcnt=11.00 selectivity=0.8462 dop=1 blockNum=1 rowsize=16.00)  𝄀
+                                Output: pkid, score  𝄀
+                                Analyze: timeConsumed=0ms waitTime=9ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=64 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=128 bytes (min=128 bytes, max=128 bytes)  𝄀
+                                Runtime Filter Probe: #[9,0]  𝄀
+                                Vector Index: char_idx, Metric: l2_distance, Candidate Limit: 1, NProbe: 1  𝄀
+                          ->  Table Scan[7] on ivf_membership.ivf_char_retry (cost=13.00 outcnt=11.70 selectivity=0.9000 dop=1 blockNum=1 rowsize=33.60)  𝄀
+                                Output: ivf_char_retry.id  𝄀
+                                Table: 'ivf_char_retry' (0:'id', 1:'grp') shuffle: hash(id)  𝄀
+                                Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=13 outputRows=2 (min=2, max=2) InputSize=364 bytes OutputSize=48 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=425 bytes (min=425 bytes, max=425 bytes)  𝄀
+                                Filter Cond: (ivf_char_retry.grp <> 0)  𝄀
+  ->  Project[14] (cost=1.00 outcnt=1.00 selectivity=0.0855 dop=1 blockNum=1 rowsize=100.00)  𝄀
+        Output: ivf_char_retry.id  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        ->  Sort[13] (cost=11.70 outcnt=1.00 selectivity=0.0855 dop=1 blockNum=1 rowsize=100.00)  𝄀
+              Output: ivf_char_retry.id  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+              Sort Key: l2_distance(ivf_char_retry.v, ) INTERNAL, ivf_char_retry.id INTERNAL  𝄀
+              Limit: 1  𝄀
+              ->  Table Scan[12] on ivf_membership.ivf_char_retry (cost=13.00 outcnt=11.70 selectivity=0.9000 dop=1 blockNum=1 rowsize=33.60)  𝄀
+                    Output: ivf_char_retry.id, ivf_char_retry.v  𝄀
+                    Table: 'ivf_char_retry' (0:'id', 1:'grp', 2:'v') shuffle: hash(id)  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+                    Filter Cond: (ivf_char_retry.grp <> 0)  𝄀
+  Vector Index Search Round 1: bucket_window=0:1 row_limit=11 output_rows=2 exhausted=true  𝄀
+  Vector Index Search Summary: search_count=1 round_count=1 buckets_searched=1 bucket_windows=0:1 row_limits=11 empty_rounds=0  𝄀
+  Vector Index Execution: search_count=2 readers=2 metadata_blocks=2 metadata_rows=2 metadata_time_ns=9974417 centroid_blocks=0 centroid_rows=0 centroid_time_ns=0 entry_blocks_selected=2 entry_blocks_read=0 entry_output_rows=13 entry_time_ns=10179500 storage_filter_rows=0:0 vector_rows_scored=15 vector_chunks=0 vector_chunk_cache_hits=0 vector_compressed_bytes=0 vector_decoded_bytes=0 block_topk_rows=13 output_rows=13
+drop table ivf_char_retry;
 set ivf_preload_entries = 0;
 set probe_limit = 5;
 drop database ivf_membership;

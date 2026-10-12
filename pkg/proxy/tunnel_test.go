@@ -1263,6 +1263,280 @@ func makeStmtCommandPacket(cmd frontend.CommandType, statementID uint32, tail ..
 	return msg
 }
 
+func makeBinaryBigIntRow(value uint64) []byte {
+	// A one-column binary row has a 0x00 header, a zero NULL bitmap, and
+	// eight little-endian value bytes. 528384 makes bytes 7:9 look like the
+	// 0x0810 status of an OK packet to the generic parser.
+	msg := make([]byte, mysqlHeadLen+10)
+	msg[0] = 10
+	msg[3] = 1
+	binary.LittleEndian.PutUint64(msg[6:], value)
+	return msg
+}
+
+func makeSplitBinaryStringRow() ([]byte, []byte) {
+	// The one-column binary row has a header, null bitmap and four-byte
+	// length-encoded value length. A 0xfffffe-byte value therefore needs
+	// MaxPayloadSize + 5 payload bytes. Its last five data bytes deliberately
+	// look like a legacy EOF with status 0x0810.
+	first := make([]byte, mysqlHeadLen+int(frontend.MaxPayloadSize))
+	first[0], first[1], first[2], first[3] = 0xff, 0xff, 0xff, 3
+	first[6], first[7], first[8], first[9] = 0xfd, 0xfe, 0xff, 0xff
+	continuation := []byte{5, 0, 0, 4, 0xfe, 0, 0, 0x10, 0x08}
+	return first, continuation
+}
+
+func TestFinalFetchKeepsTransferBlockedUntilTerminator(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		deprecatesEOF  bool
+		makeTerminator func(uint16) []byte
+	}{
+		{"legacy EOF", false, makeLegacyEOFPacket},
+		{"deprecated EOF", true, makeDeprecatedEOFPacket},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tun := newTunnel(context.Background(), runtime.DefaultRuntime().Logger(), newCounterSet())
+			defer tun.ctxCancel()
+			tun.clientDeprecatesEOF = tc.deprecatesEOF
+			tun.transferIntent.Store(true)
+			csp, scp := &pipe{}, &pipe{}
+			tun.mu.started = true
+			tun.mu.csp, tun.mu.scp = csp, scp
+			scp.mu.inTxn = true
+
+			forward := func(msg []byte) {
+				if tun.responseMayCarryTxnStatus(msg) {
+					if inTxn, ok := checkTxnStatus(msg, false); ok {
+						scp.mu.inTxn = inTxn
+					}
+				}
+				tun.trackServerResponse(msg)
+			}
+			tun.trackClientRequest(makeStmtCommandPacket(frontend.COM_STMT_FETCH, 41, 2, 0, 0, 0))
+			firstRow := makeBinaryBigIntRow(528384)
+			status, ok := okPacketStatus(firstRow)
+			require.True(t, ok, "the row must reproduce the misleading OK shape")
+			require.Equal(t, uint16(0x0810), status)
+			for _, row := range [][]byte{firstRow, makeBinaryBigIntRow(1)} {
+				forward(row)
+				require.True(t, tun.hasInFlightClientRequest())
+				require.True(t, scp.mu.inTxn, "binary rows have no transaction status")
+				_, admitted := tun.admitTransfer(false)
+				require.False(t, admitted, "migration must wait for the final FETCH EOF")
+			}
+
+			terminalStatus := frontend.SERVER_QUERY_WAS_SLOW |
+				frontend.SERVER_STATUS_NO_GOOD_INDEX_USED | frontend.SERVER_STATUS_LAST_ROW_SENT
+			forward(tc.makeTerminator(terminalStatus))
+			require.False(t, tun.hasInFlightClientRequest())
+			require.False(t, scp.mu.inTxn)
+			_, admitted := tun.admitTransfer(false)
+			require.True(t, admitted, "migration can begin after the FETCH terminator")
+		})
+	}
+}
+
+func TestFinalFetchExactMaxPayloadNeedsEmptyContinuation(t *testing.T) {
+	tun := newTunnel(context.Background(), runtime.DefaultRuntime().Logger(), newCounterSet())
+	defer tun.ctxCancel()
+	tun.trackClientRequest(makeStmtCommandPacket(frontend.COM_STMT_FETCH, 41, 1, 0, 0, 0))
+	// The response tracker intentionally receives only a prefix of a large
+	// wire packet. An exact MaxPayloadSize packet is followed by an empty
+	// continuation before the real FETCH terminator.
+	fullPrefix := []byte{0xff, 0xff, 0xff, 1, 0}
+	require.False(t, tun.responseMayCarryTxnStatus(fullPrefix))
+	tun.trackServerResponse(fullPrefix)
+	require.True(t, tun.hasInFlightClientRequest())
+	emptyContinuation := []byte{0, 0, 0, 2}
+	require.False(t, tun.responseMayCarryTxnStatus(emptyContinuation))
+	tun.trackServerResponse(emptyContinuation)
+	require.True(t, tun.hasInFlightClientRequest())
+	terminator := makeLegacyEOFPacket(frontend.SERVER_STATUS_LAST_ROW_SENT)
+	terminator[3] = 3
+	require.True(t, tun.responseMayCarryTxnStatus(terminator))
+	tun.trackServerResponse(terminator)
+	require.False(t, tun.hasInFlightClientRequest())
+}
+
+type finalFetchTransferClientConn struct {
+	ClientConn
+	replacement ServerConn
+	buildCalls  atomic.Int32
+	buildCalled chan struct{}
+}
+
+func (c *finalFetchTransferClientConn) BuildConnWithServer(context.Context, string) (ServerConn, error) {
+	c.buildCalls.Add(1)
+	select {
+	case c.buildCalled <- struct{}{}:
+	default:
+	}
+	return c.replacement, nil
+}
+
+// Exercise the real pending-transfer path while FETCH packets pass through
+// both pipes. A binary row that resembles OK must not admit transfer; only
+// the forwarded terminator may cause handleTransferIntent to replace the CN.
+func TestFinalFetchForwardingBeforeBackendReplacement(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		deprecatesEOF  bool
+		makeTerminator func(uint16) []byte
+		splitRow       bool
+	}{
+		{"legacy EOF", false, makeLegacyEOFPacket, false},
+		{"deprecated EOF", true, makeDeprecatedEOFPacket, false},
+		{"legacy EOF split row", false, makeLegacyEOFPacket, true},
+		{"deprecated EOF split row", true, makeDeprecatedEOFPacket, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			clientProxy, client := net.Pipe()
+			oldProxy, oldBackend := net.Pipe()
+			newProxy, newBackend := net.Pipe()
+			defer client.Close()
+			defer oldBackend.Close()
+			defer newBackend.Close()
+
+			runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+			tun := newTunnel(ctx, runtime.DefaultRuntime().Logger(), newCounterSet())
+			defer func() { require.NoError(t, tun.Close()) }()
+			cc := &finalFetchTransferClientConn{
+				ClientConn:  newMockClientConn(clientProxy, "fetch", clientInfo{}, nil, tun),
+				replacement: newMockServerConn(newProxy),
+				buildCalled: make(chan struct{}, 1),
+			}
+			tun.cc = cc
+			tun.mu.sc = newMockServerConn(oldProxy)
+			tun.mu.clientConn = newMySQLConn(connClientName, clientProxy, 0, tun.reqC, tun.respC, false, 1)
+			tun.mu.serverConn = newMySQLConn(connServerName, oldProxy, 0, tun.reqC, tun.respC, false, 2)
+			tun.mu.csp = tun.newPipe(pipeClientToServer, tun.mu.clientConn, tun.mu.serverConn)
+			tun.mu.scp = tun.newPipe(pipeServerToClient, tun.mu.serverConn, tun.mu.clientConn)
+			tun.clientDeprecatesEOF = tc.deprecatesEOF
+			tun.mu.started = true
+			firstAttemptDone := make(chan struct{})
+			secondAttemptDone := make(chan struct{})
+			releaseTerminator := make(chan struct{})
+			var releaseOnce sync.Once
+			defer releaseOnce.Do(func() { close(releaseTerminator) })
+			terminalResponseIndex := int32(3)
+			if tc.splitRow {
+				terminalResponseIndex = 5
+			}
+			var responseIndex atomic.Int32
+			tun.mu.scp.testHelper.beforeSend = func() {
+				switch responseIndex.Add(1) {
+				case 2:
+					// Reaching the second packet means the first row's
+					// handleTransferIntent attempt has completed.
+					close(firstAttemptDone)
+				case terminalResponseIndex:
+					close(secondAttemptDone)
+					<-releaseTerminator
+				}
+			}
+			require.NoError(t, tun.kickoff())
+			for _, conn := range []net.Conn{client, oldBackend, newBackend} {
+				require.NoError(t, conn.SetDeadline(time.Now().Add(30*time.Second)))
+			}
+
+			forwardRequest := func(backend net.Conn, packet []byte) {
+				t.Helper()
+				writeDone := make(chan error, 1)
+				go func() { _, err := client.Write(packet); writeDone <- err }()
+				got := make([]byte, len(packet))
+				_, err := io.ReadFull(backend, got)
+				require.NoError(t, err)
+				require.Equal(t, packet, got)
+				require.NoError(t, <-writeDone)
+			}
+			forwardResponse := func(backend net.Conn, packet []byte) {
+				t.Helper()
+				writeDone := make(chan error, 1)
+				go func() { _, err := backend.Write(packet); writeDone <- err }()
+				got := make([]byte, len(packet))
+				_, err := io.ReadFull(client, got)
+				require.NoError(t, err)
+				require.True(t, bytes.Equal(packet, got), "client must receive every response packet in order")
+				require.NoError(t, <-writeDone)
+			}
+
+			forwardRequest(oldBackend, makeStmtCommandPacket(frontend.COM_STMT_FETCH, 41, 2, 0, 0, 0))
+			tun.setTransferIntent(true)
+			defer tun.setTransferIntent(false)
+			firstRow := makeBinaryBigIntRow(528384)
+			secondRow := makeBinaryBigIntRow(1)
+			secondRow[3] = 2
+			for _, row := range [][]byte{firstRow, secondRow} {
+				forwardResponse(oldBackend, row)
+				require.True(t, tun.hasInFlightClientRequest())
+			}
+			select {
+			case <-firstAttemptDone:
+			case <-ctx.Done():
+				t.Fatal("the first row did not reach pending-transfer admission")
+			}
+			require.Zero(t, cc.buildCalls.Load(), "binary rows must not replace the backend")
+			if tc.splitRow {
+				// Keep an in-transaction status until the real EOF. The fake EOF
+				// continuation must not clear it or admit the pending transfer.
+				tun.mu.scp.mu.Lock()
+				tun.mu.scp.mu.inTxn = true
+				tun.mu.scp.mu.Unlock()
+				first, continuation := makeSplitBinaryStringRow()
+				fakeStatus, looksLikeEOF := legacyEOFPacketStatus(continuation)
+				require.True(t, looksLikeEOF, "the row tail must reproduce the false EOF")
+				require.Equal(t, uint16(0x0810), fakeStatus)
+				forwardResponse(oldBackend, first)
+				forwardResponse(oldBackend, continuation)
+				require.True(t, tun.hasInFlightClientRequest())
+				tun.mu.scp.mu.Lock()
+				require.True(t, tun.mu.scp.mu.inTxn, "a row continuation has no transaction status")
+				tun.mu.scp.mu.Unlock()
+				require.Zero(t, cc.buildCalls.Load(), "a row continuation must not replace the backend")
+			}
+			terminalStatus := frontend.SERVER_QUERY_WAS_SLOW |
+				frontend.SERVER_STATUS_NO_GOOD_INDEX_USED | frontend.SERVER_STATUS_LAST_ROW_SENT
+			terminator := tc.makeTerminator(terminalStatus)
+			terminator[3] = byte(terminalResponseIndex)
+			writeDone := make(chan error, 1)
+			go func() { _, err := oldBackend.Write(terminator); writeDone <- err }()
+			select {
+			case <-secondAttemptDone:
+			case <-ctx.Done():
+				t.Fatal("the second row did not reach pending-transfer admission")
+			}
+			require.Zero(t, cc.buildCalls.Load(), "migration must wait for the FETCH terminator")
+			releaseOnce.Do(func() { close(releaseTerminator) })
+			gotTerminator := make([]byte, len(terminator))
+			_, err := io.ReadFull(client, gotTerminator)
+			require.NoError(t, err)
+			require.Equal(t, terminator, gotTerminator)
+			require.NoError(t, <-writeDone)
+			select {
+			case <-cc.buildCalled:
+			case <-ctx.Done():
+				t.Fatal("pending transfer did not run after the forwarded terminator")
+			}
+			require.Eventually(t, func() bool {
+				tun.mu.Lock()
+				defer tun.mu.Unlock()
+				return tun.mu.serverConn.Conn == newProxy
+			}, time.Second, time.Millisecond)
+			require.EqualValues(t, 1, cc.buildCalls.Load())
+			require.False(t, tun.hasInFlightClientRequest())
+
+			ping := makeSimplePacket("ping")
+			ping[4] = byte(frontend.COM_PING)
+			forwardRequest(newBackend, ping)
+			forwardResponse(newBackend, makeOKPacket(8))
+			require.False(t, tun.hasInFlightClientRequest())
+		})
+	}
+}
+
 func TestTunnelRequestBoundaryTracker(t *testing.T) {
 	t.Run("nil and quit packets", func(t *testing.T) {
 		var nilTunnel *tunnel
@@ -1585,6 +1859,45 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		require.True(t, tun.hasInFlightClientRequest(), "the column EOF is not terminal")
 		tun.trackServerResponse(makeSimplePacket("row"))
 		tun.trackServerResponse(makeLegacyEOFPacket(0))
+		require.False(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("legacy cursor execute has one terminal EOF", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.trackClientRequest(makeStmtCommandPacket(frontend.COM_STMT_EXECUTE, 41))
+		tun.trackServerResponse(makeSimplePacket("column count"))
+		tun.trackServerResponse(makeSimplePacket("column definition"))
+		tun.trackServerResponse(makeLegacyEOFPacket(frontend.SERVER_STATUS_CURSOR_EXISTS))
+		require.False(t, tun.hasInFlightClientRequest())
+		require.False(t, tun.hasUntransferableClientState(),
+			"the authoritative CN cursor check, not Proxy response framing, gates migration")
+
+		ping := makeSimplePacket("ping")
+		ping[4] = byte(frontend.COM_PING)
+		tun.trackClientRequest(ping)
+		tun.trackServerResponse(makeOKPacket(8))
+		require.False(t, tun.hasInFlightClientRequest())
+		require.False(t, tun.hasUntransferableClientState())
+	})
+
+	t.Run("ordinary legacy execute still waits for row EOF", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.trackClientRequest(makeStmtCommandPacket(frontend.COM_STMT_EXECUTE, 41))
+		tun.trackServerResponse(makeSimplePacket("column count"))
+		tun.trackServerResponse(makeSimplePacket("column definition"))
+		tun.trackServerResponse(makeLegacyEOFPacket(0))
+		require.True(t, tun.hasInFlightClientRequest())
+		tun.trackServerResponse(makeSimplePacket("binary row"))
+		tun.trackServerResponse(makeLegacyEOFPacket(0))
+		require.False(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("deprecated EOF cursor execute completes", func(t *testing.T) {
+		tun := &tunnel{clientDeprecatesEOF: true}
+		tun.trackClientRequest(makeStmtCommandPacket(frontend.COM_STMT_EXECUTE, 41))
+		tun.trackServerResponse(makeSimplePacket("column count"))
+		tun.trackServerResponse(makeSimplePacket("column definition"))
+		tun.trackServerResponse(makeDeprecatedEOFPacket(frontend.SERVER_STATUS_CURSOR_EXISTS))
 		require.False(t, tun.hasInFlightClientRequest())
 	})
 

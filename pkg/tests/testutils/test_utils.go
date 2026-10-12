@@ -260,6 +260,9 @@ func ExecSQLWithReadResultAndAccount(
 					if varName == "sql_mode" {
 						return "", nil
 					}
+					if varName == "default_week_format" {
+						return int64(0), nil
+					}
 					return nil, moerr.NewInternalErrorf(ctx, "variable %s not supported", varName)
 				},
 			),

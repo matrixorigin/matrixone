@@ -28,6 +28,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -101,27 +102,10 @@ func GetIOReadCloser(proc *process.Process, param *tree.ExternParam, data string
 	return r, err
 }
 
+// GetCompressType reports how a load source is compressed; see
+// plan.GetCompressType, which planning uses too.
 func GetCompressType(compressType string, filepath string) string {
-	if compressType != "" && compressType != tree.AUTO {
-		return compressType
-	}
-
-	filepath = strings.ToLower(filepath)
-
-	switch {
-	case strings.HasSuffix(filepath, ".tar.gz") || strings.HasSuffix(filepath, ".tar.gzip"):
-		return tree.TAR_GZ
-	case strings.HasSuffix(filepath, ".tar.bz2") || strings.HasSuffix(filepath, ".tar.bzip2"):
-		return tree.TAR_BZ2
-	case strings.HasSuffix(filepath, ".gz") || strings.HasSuffix(filepath, ".gzip"):
-		return tree.GZIP
-	case strings.HasSuffix(filepath, ".bz2") || strings.HasSuffix(filepath, ".bzip2"):
-		return tree.BZIP2
-	case strings.HasSuffix(filepath, ".lz4"):
-		return tree.LZ4
-	default:
-		return tree.NOCOMPRESS
-	}
+	return plan2.GetCompressType(compressType, filepath)
 }
 
 func getTarReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
@@ -142,20 +126,71 @@ func getTarReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
 	return io.NopCloser(tarReader), nil
 }
 
+// decompressReader reads decompressed bytes and owns its source: Close
+// releases the decoder and then the source.  Without it the file or object
+// stream under a compressed load stayed open until the garbage collector ran
+// its finalizer, because the decoders' own Close does not close their input.
+type decompressReader struct {
+	io.Reader
+	closeDecoder func() error
+	src          io.Closer
+}
+
+func (d *decompressReader) Close() error {
+	var err error
+	if d.closeDecoder != nil {
+		err = d.closeDecoder()
+	}
+	if cerr := d.src.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+func decompressed(r io.Reader, closeDecoder func() error, src io.Closer) io.ReadCloser {
+	return &decompressReader{Reader: r, closeDecoder: closeDecoder, src: src}
+}
+
+// getUnCompressReader wraps r in the decompressor for its compression type.
+// On success the returned reader owns r; on error r is still the caller's.
 func getUnCompressReader(ctx context.Context, compType string, filepath string, r io.ReadCloser) (io.ReadCloser, error) {
-	switch strings.ToLower(GetCompressType(compType, filepath)) {
+	switch GetCompressType(compType, filepath) {
 	case tree.NOCOMPRESS:
 		return r, nil
 	case tree.GZIP, tree.GZ:
-		return gzip.NewReader(r)
+		gz, err := gzip.NewReader(r)
+		if err != nil {
+			return nil, err
+		}
+		return decompressed(gz, gz.Close, r), nil
 	case tree.BZIP2, tree.BZ2:
-		return io.NopCloser(bzip2.NewReader(r)), nil
+		return decompressed(bzip2.NewReader(r), nil, r), nil
 	case tree.FLATE:
-		return flate.NewReader(r), nil
+		fl := flate.NewReader(r)
+		return decompressed(fl, fl.Close, r), nil
 	case tree.ZLIB:
-		return zlib.NewReader(r)
+		zl, err := zlib.NewReader(r)
+		if err != nil {
+			return nil, err
+		}
+		return decompressed(zl, zl.Close, r), nil
 	case tree.LZ4:
-		return io.NopCloser(lz4.NewReader(r)), nil
+		return decompressed(lz4.NewReader(r), nil, r), nil
+	case tree.ZSTD:
+		// One decoding goroutine per reader, like lz4's default: a parallel
+		// load already runs one reader per file, and the default would start
+		// GOMAXPROCS decoders for each of them.  Close stops the decoder.
+		zd, err := zstd.NewReader(r, zstd.WithDecoderConcurrency(1))
+		if err != nil {
+			return nil, err
+		}
+		return decompressed(zd, func() error { zd.Close(); return nil }, r), nil
+	case tree.ZIP:
+		zr, closeDecoder, err := getZipReader(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		return decompressed(zr, closeDecoder, r), nil
 	case tree.LZW:
 		return nil, moerr.NewInternalErrorf(ctx, "the compress type '%s' is not support now", compType)
 	case tree.TAR_GZ:
@@ -163,9 +198,17 @@ func getUnCompressReader(ctx context.Context, compType string, filepath string, 
 		if err != nil {
 			return nil, err
 		}
-		return getTarReader(ctx, gzipReader)
+		tr, err := getTarReader(ctx, gzipReader)
+		if err != nil {
+			return nil, err
+		}
+		return decompressed(tr, gzipReader.Close, r), nil
 	case tree.TAR_BZ2:
-		return getTarReader(ctx, bzip2.NewReader(r))
+		tr, err := getTarReader(ctx, bzip2.NewReader(r))
+		if err != nil {
+			return nil, err
+		}
+		return decompressed(tr, nil, r), nil
 	default:
 		return nil, moerr.NewInternalErrorf(ctx, "the compress type '%s' is not support now", compType)
 	}

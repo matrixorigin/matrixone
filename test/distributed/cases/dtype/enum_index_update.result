@@ -87,3 +87,99 @@ id    opts    note
 1    c    updated
 2    b    n2
 drop table set_idx02;
+drop table if exists enum_delete_idx01;
+create table enum_delete_idx01 (id int primary key, status enum('new','paid','shipped'), key idx_status(status));
+insert into enum_delete_idx01 values (1,'new'),(2,'paid'),(3,null);
+delete from enum_delete_idx01 where id=2;
+select row_count();
+row_count()
+1
+select id, status from enum_delete_idx01 order by id;
+id    status
+1    new
+3    NULL
+delete from enum_delete_idx01 where id=2;
+select row_count();
+row_count()
+0
+drop table enum_delete_idx01;
+drop table if exists enum_delete_pk01;
+create table enum_delete_pk01 (status enum('new','paid','shipped') primary key, note varchar(20));
+insert into enum_delete_pk01 values ('new','n1'),('paid','n2'),('shipped','n3');
+delete from enum_delete_pk01 where status='paid';
+select row_count();
+row_count()
+1
+select status, note from enum_delete_pk01 order by status;
+status    note
+new    n1
+shipped    n3
+drop table enum_delete_pk01;
+drop table if exists enum_delete_uk01;
+create table enum_delete_uk01 (id int primary key, status enum('new','paid','shipped'), unique key uk_status(status));
+insert into enum_delete_uk01 values (1,'new'),(2,'paid');
+delete from enum_delete_uk01 where id=1;
+select row_count();
+row_count()
+1
+insert into enum_delete_uk01 values (3,'new');
+select id, status from enum_delete_uk01 order by id;
+id    status
+2    paid
+3    new
+drop table enum_delete_uk01;
+drop table if exists set_delete_idx01;
+create table set_delete_idx01 (id int primary key, opts set('a','b','c'), key idx_opts(opts));
+insert into set_delete_idx01 values (1,'a,c'),(2,'b'),(3,null);
+delete from set_delete_idx01 where id=1;
+select row_count();
+row_count()
+1
+select id, opts from set_delete_idx01 order by id;
+id    opts
+2    b
+3    NULL
+delete from set_delete_idx01 where id=1;
+select row_count();
+row_count()
+0
+drop table set_delete_idx01;
+drop table if exists enum_delete_idx02;
+create table enum_delete_idx02 (id int primary key, status enum('new','paid','shipped'), note varchar(20), key idx_note_status(note, status));
+insert into enum_delete_idx02 values (1,'new','n1'),(2,'paid','n2');
+delete from enum_delete_idx02 where id=1;
+select row_count();
+row_count()
+1
+select id, status, note from enum_delete_idx02 order by id;
+id    status    note
+2    paid    n2
+drop table enum_delete_idx02;
+drop table if exists set_delete_order01;
+create table set_delete_order01 (id int primary key, opts set('', 'a'), key idx_opts(opts));
+insert into set_delete_order01 values (1,1),(2,2);
+delete from set_delete_order01 where id=1 order by id limit 1;
+select row_count();
+row_count()
+1
+select id, opts from set_delete_order01 order by id;
+id    opts
+2    a
+drop table set_delete_order01;
+drop table if exists enum_delete_multi_uk01;
+drop table if exists enum_delete_multi_src01;
+create table enum_delete_multi_uk01 (id int primary key, status enum('new','paid','shipped'), unique key uk_status(status));
+create table enum_delete_multi_src01 (id int primary key);
+insert into enum_delete_multi_uk01 values (1,'new'),(2,'paid');
+insert into enum_delete_multi_src01 values (1),(2);
+delete t,s from enum_delete_multi_uk01 t join enum_delete_multi_src01 s on t.id = s.id where t.id = 1;
+insert into enum_delete_multi_uk01 values (3,'new');
+select id, status from enum_delete_multi_uk01 order by id;
+id    status
+2    paid
+3    new
+select id from enum_delete_multi_src01 order by id;
+id
+2
+drop table enum_delete_multi_uk01;
+drop table enum_delete_multi_src01;

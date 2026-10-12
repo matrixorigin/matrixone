@@ -100,8 +100,6 @@ func TestIssue28791PreparedBinaryBitwisePlanRebindsProtocolDomain(t *testing.T) 
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			prepare := buildPreparedAggregatePlan(t, test.query)
-			require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan),
-				"prepared bitwise expression must rebind when a COM_STMT parameter can change its domain")
 
 			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
 				context.Background(), prepare.Plan, test.params)

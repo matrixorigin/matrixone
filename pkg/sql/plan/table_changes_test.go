@@ -27,7 +27,7 @@ import (
 func TestBuildTableFunctionIncrementalDiscoveryDispatch(t *testing.T) {
 	for _, name := range []string{"change_watermark", "table_changes"} {
 		t.Run(name, func(t *testing.T) {
-			builder := NewQueryBuilder(pbplan.Query_SELECT, NewMockCompilerContext(false), false, true)
+			builder := NewQueryBuilder(pbplan.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, true)
 			ctx := NewBindContext(builder, nil)
 			fn := tree.FuncName2ResolvableFunctionReference(
 				tree.NewUnresolvedName(tree.NewCStr(name, 0)),
@@ -48,7 +48,7 @@ func TestBuildTableFunctionIncrementalDiscoveryDispatch(t *testing.T) {
 }
 
 func TestPreparedTableChangesRecordsSourceSchemaDependency(t *testing.T) {
-	mock := NewMockCompilerContext(false)
+	mock := NewMockCompilerContext(false, newPlanTestProcess(t))
 	mock.objects["source"] = &pbplan.ObjectRef{
 		Db: 10, Obj: 20, SchemaName: "db", ObjName: "source",
 	}
@@ -88,7 +88,7 @@ func TestPreparedTableChangesRecordsSourceSchemaDependency(t *testing.T) {
 }
 
 func TestBuildChangeWatermark(t *testing.T) {
-	builder := NewQueryBuilder(pbplan.Query_SELECT, NewMockCompilerContext(false), false, true)
+	builder := NewQueryBuilder(pbplan.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(builder, nil)
 	nodeID, err := builder.buildChangeWatermark(nil, ctx, nil, nil)
 	require.NoError(t, err)

@@ -42,7 +42,7 @@ func installTestAllocation(t testing.TB, owners ...testAllocationOwner) *mpool.A
 }
 
 func TestHashJoinResultBatchUsesAllocationAccount(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	arg := &HashJoin{
 		ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}},
@@ -64,7 +64,7 @@ func TestHashJoinResultBatchUsesAllocationAccount(t *testing.T) {
 }
 
 func TestHashJoinResultBatchHonorsAllocationCapacity(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
 	require.NoError(t, err)

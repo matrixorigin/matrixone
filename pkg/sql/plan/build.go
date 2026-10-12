@@ -21,7 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -67,7 +66,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	builder.sqlCalcFoundRows = selectHasSQLCalcFoundRows(stmt)
 	builder.persistedViewTarget = persistedViewTarget
 	builder.sessionSelectLimitMayStopEarly = sessionSelectLimitMayStopEarly(
-		ctx, stmt, isPrepareStmt,
+		ctx, stmt, builder.isReusablePlan(),
 	)
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.restoreViewMySQLSpecialTypes = restoreViewMySQLSpecialTypes
@@ -81,6 +80,9 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 
 	rootId, err := builder.bindSelect(stmt, bindCtx, true)
 	if err != nil {
+		return nil, err
+	}
+	if err = builder.bindPreparedPredicateDiagnostics(); err != nil {
 		return nil, err
 	}
 	builder.skipStats = skipStats
@@ -624,7 +626,15 @@ func selectTreeHasExportParam(value reflect.Value) bool {
 	return false
 }
 
-func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
+func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (result *Plan, err error) {
+	defer func() {
+		if err == nil {
+			err = plan.RequireLegacyCollations(result)
+			if err != nil {
+				result = nil
+			}
+		}
+	}()
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildPlanHistogram.Observe(time.Since(start).Seconds())
@@ -1038,8 +1048,21 @@ func findResultColumnSourceAtNode(
 		}
 	}
 
+	if node.NodeType == plan.Node_VECTOR_QUERY_TOP {
+		// The provider is control input. Result provenance belongs to the
+		// preserved relational branch, not its one-column vector schema.
+		if len(node.Children) != 3 {
+			return nil
+		}
+		childRef := resultColumnJoinChildProjectionRef(query, node, 2, ref.ColPos)
+		if childRef == nil {
+			return nil
+		}
+		return findResultColumnSourceAtNode(query, node.Children[2], childRef, visited, false)
+	}
+
 	if node.NodeType == plan.Node_JOIN {
-		return findResultColumnSourceAtJoin(query, node, ref, visited)
+		return findResultColumnSourceAtJoin(query, node, ref, visited, preferLocal)
 	}
 
 	if !isResultColumnTransparentNode(node.NodeType) || len(node.Children) == 0 {
@@ -1058,9 +1081,14 @@ func findResultColumnSourceAtNode(
 	var found *resultColumnSource
 	for _, childID := range node.Children {
 		childPreferLocal := false
-		if node.NodeType == plan.Node_PROJECT && childID >= 0 && int(childID) < len(query.Nodes) {
+		if childID >= 0 && int(childID) < len(query.Nodes) {
 			child := query.Nodes[childID]
-			childPreferLocal = child != nil && isResultColumnTransparentNode(child.NodeType) && child.NodeType != plan.Node_PROJECT
+			// 透明节点的列引用指向 JOIN 输出槽位，不是 JOIN 两侧的
+			// 源列位置；左右两侧重排后这两种编号可能碰撞。
+			if child != nil {
+				childPreferLocal = isResultColumnTransparentNode(child.NodeType) ||
+					(child.NodeType == plan.Node_JOIN && len(child.BindingTags) == 0)
+			}
 		}
 		candidate := findResultColumnSourceAtNode(query, childID, projectedRef, cloneVisitedResultColumnNodes(visited), childPreferLocal)
 		if candidate == nil {
@@ -1081,6 +1109,7 @@ func findResultColumnSourceAtJoin(
 	node *plan.Node,
 	ref *plan.ColRef,
 	visited map[int32]bool,
+	preferLocal bool,
 ) *resultColumnSource {
 	if query == nil || node == nil || ref == nil || len(node.Children) == 0 {
 		return nil
@@ -1088,7 +1117,11 @@ func findResultColumnSourceAtJoin(
 
 	projectedRef := ref
 	childIdx := -1
-	if projected := resultColumnProjectionByIdentity(node, ref); projected != nil {
+	projected := resultColumnProjectionByIdentity(node, ref)
+	if preferLocal && ref.RelPos == 0 && ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
+		projected = node.ProjectList[ref.ColPos]
+	}
+	if projected != nil {
 		if col := projected.GetCol(); col != nil {
 			projectedRef = col
 			// JOIN ProjectList entries use RelPos 0/1 to identify the
@@ -1223,18 +1256,12 @@ func resultColumnProjectionAtNode(node *plan.Node, ref *plan.ColRef, preferLocal
 	if node == nil || ref == nil {
 		return nil
 	}
-	if preferLocal &&
-		node.NodeType != plan.Node_PROJECT &&
-		isResultColumnTransparentNode(node.NodeType) &&
+	if preferLocal && ref.RelPos == 0 && isResultColumnTransparentNode(node.NodeType) &&
 		ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
-		// Transparent nodes expose a local output list to their parent. The
-		// expressions in that list retain child source positions, which can
-		// collide with another local output position after pruning. Resolve the
-		// local slot first for these nodes; PROJECT nodes are handled below by
-		// source identity because their expressions define the result order.
-		if expr := node.ProjectList[ref.ColPos]; expr != nil && expr.GetCol() != nil {
-			return expr
-		}
+		// 从父节点传入的是这个节点的输出槽位；节点自己的投影表达式
+		// 才使用子节点位置。包括中间 PROJECT，且计算列不能再按位置
+		// 回退匹配到碰巧同号的真实表列。
+		return node.ProjectList[ref.ColPos]
 	}
 	return resultColumnProjectionByIdentity(node, ref)
 }
@@ -1371,126 +1398,6 @@ func resultColumnSourceFromTableDef(tableDef *plan.TableDef, colPos int32) *resu
 		notNull:    primary || col.NotNull || col.Typ.NotNullable,
 		autoIncr:   col.Typ.AutoIncr,
 	}
-}
-
-func resultColumnSourceFromVectorIndexScan(scan *plan.VectorIndexScan, vectorTableDef *plan.TableDef, colPos int32) *resultColumnSource {
-	if scan == nil || scan.SourceTableDef == nil || colPos < 0 {
-		return nil
-	}
-
-	// remapAllColRefs compacts VECTOR_INDEX_SCAN.TableDef.Cols to only the
-	// slots still referenced by consumers and rewrites their ColPos values to
-	// local positions. Resolve the synthetic column name first, so a pruned
-	// [score, include] schema cannot be mistaken for the original [pkid, score,
-	// include...] layout.
-	var sourceColPos int32
-	if vectorTableDef != nil {
-		if int(colPos) >= len(vectorTableDef.Cols) {
-			return nil
-		}
-		col := vectorTableDef.Cols[colPos]
-		if col == nil {
-			return nil
-		}
-		switch {
-		case strings.EqualFold(col.Name, "pkid"):
-			sourceColPos = resultColumnPrimaryKeyPosition(scan.SourceTableDef)
-			if sourceColPos < 0 {
-				return nil
-			}
-		case strings.EqualFold(col.Name, "score"):
-			return nil
-		case strings.HasPrefix(col.Name, catalog.SystemSI_IVFFLAT_IncludeColPrefix):
-			includeName := strings.TrimPrefix(col.Name, catalog.SystemSI_IVFFLAT_IncludeColPrefix)
-			if includeName == "" || !resultColumnNameInList(scan.IncludedColumns, includeName) {
-				return nil
-			}
-			var found bool
-			sourceColPos, found = resultColumnPositionByName(scan.SourceTableDef, includeName)
-			if !found {
-				return nil
-			}
-		default:
-			return nil
-		}
-	} else {
-		switch {
-		case colPos == 0:
-			sourceColPos = resultColumnPrimaryKeyPosition(scan.SourceTableDef)
-			if sourceColPos < 0 {
-				return nil
-			}
-		case colPos == 1:
-			// The distance score is computed by the index reader and has no
-			// corresponding source-table column.
-			return nil
-		default:
-			includePos := int(colPos) - 2
-			if includePos < 0 || includePos >= len(scan.IncludedColumns) {
-				return nil
-			}
-			var ok bool
-			sourceColPos, ok = resultColumnPositionByName(scan.SourceTableDef, scan.IncludedColumns[includePos])
-			if !ok {
-				return nil
-			}
-		}
-	}
-
-	source := resultColumnSourceFromTableDef(scan.SourceTableDef, sourceColPos)
-	if source == nil {
-		return nil
-	}
-	// ObjectRef is the authoritative resolved object identity for vector
-	// scans.  Older plans may leave the corresponding names empty on
-	// SourceTableDef, so use it only to complete missing/physical names.
-	if scan.SourceTable != nil {
-		if source.dbName == "" {
-			source.dbName = scan.SourceTable.DbName
-			if source.dbName == "" {
-				source.dbName = scan.SourceTable.SchemaName
-			}
-		}
-		if source.tableName == "" {
-			source.tableName = scan.SourceTable.ObjName
-		}
-	}
-	return source
-}
-
-func resultColumnPrimaryKeyPosition(tableDef *plan.TableDef) int32 {
-	if tableDef == nil || tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == "" {
-		return -1
-	}
-	if pos, ok := resultColumnPositionByName(tableDef, tableDef.Pkey.PkeyColName); ok {
-		return pos
-	}
-	return -1
-}
-
-func resultColumnPositionByName(tableDef *plan.TableDef, name string) (int32, bool) {
-	if tableDef == nil || name == "" {
-		return -1, false
-	}
-	if tableDef.Name2ColIndex != nil {
-		if pos, ok := tableDef.Name2ColIndex[strings.ToLower(name)]; ok &&
-			pos >= 0 && int(pos) < len(tableDef.Cols) && tableDef.Cols[pos] != nil &&
-			strings.EqualFold(tableDef.Cols[pos].GetOriginCaseName(), name) {
-			return pos, true
-		}
-	}
-
-	var found int32 = -1
-	for pos, col := range tableDef.Cols {
-		if col == nil || !strings.EqualFold(col.GetOriginCaseName(), name) {
-			continue
-		}
-		if found >= 0 {
-			return -1, false
-		}
-		found = int32(pos)
-	}
-	return found, found >= 0
 }
 
 func resultColumnNameInList(names []string, name string) bool {

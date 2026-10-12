@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"github.com/matrixorigin/matrixone/pkg/util/protoc"
@@ -870,7 +871,7 @@ func TestMissingSenderWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
-	newTxnOperator("", nil, nil, txn.TxnMeta{})
+	newTxnOperator("", runtime.DefaultRuntime().Logger(), clock.NewHLCClock(func() int64 { return 1 }, 0), nil, txn.TxnMeta{})
 }
 
 func TestMissingTxnIDWillPanic(t *testing.T) {
@@ -881,7 +882,7 @@ func TestMissingTxnIDWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
-	newTxnOperator("", nil, newTestTxnSender(), txn.TxnMeta{})
+	newTxnOperator("", runtime.DefaultRuntime().Logger(), clock.NewHLCClock(func() int64 { return 1 }, 0), newTestTxnSender(), txn.TxnMeta{})
 }
 
 func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
@@ -894,7 +895,8 @@ func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	newTxnOperator(
 		"",
-		nil,
+		runtime.DefaultRuntime().Logger(),
+		clock.NewHLCClock(func() int64 { return 1 }, 0),
 		newTestTxnSender(),
 		txn.TxnMeta{ID: []byte{1}, SnapshotTS: timestamp.Timestamp{PhysicalTime: 1}},
 		WithTxnReadyOnly(),
@@ -1849,7 +1851,7 @@ func txnAdmissionCounts(c TxnClient) (int, int64, int) {
 	client := c.(*txnClient)
 	client.mu.RLock()
 	users := client.mu.users
-	waiting := len(client.mu.waitActiveTxns)
+	waiting := client.mu.waitActiveTxns.size
 	client.mu.RUnlock()
 	return users, client.atomic.activeTxnCount.Load(), waiting
 }
@@ -2838,4 +2840,39 @@ func TestWithTxnLockWaitTimeout(t *testing.T) {
 		},
 		WithTxnLockWaitTimeout(60*time.Second),
 	)
+}
+
+func TestDeferredRollbackCapabilitySealsAndDrainsExistingOwner(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, sender *testTxnSender) {
+		workspace := &trackingWorkspace{}
+		locks := &trackingUnlockLockService{}
+		tc.AddWorkspace(workspace)
+		tc.lockService = locks
+		tc.mu.Lock()
+		tc.mu.txn.TNShards = []metadata.TNShard{{TNShardRecord: metadata.TNShardRecord{ShardID: 1}}}
+		tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+		tc.mu.Unlock()
+		closed := make(chan struct{})
+		tc.AppendEventCallback(ClosedEvent, TxnEventCallback{Func: func(context.Context, TxnOperator, TxnEvent, any) error { close(closed); return nil }})
+		_, cancel := context.WithCancel(ctx)
+		defer cancel()
+		token := mustEnterRunSQL(t, tc, cancel, "borrowed fatal SQL")
+		fatal := moerr.NewLockConflictNoCtx()
+		tc.RollbackAfterRunningSQL(fatal)
+		tc.RollbackAfterRunningSQL(fatal)
+		_, err := tc.TryEnterRunSqlWithTokenAndSQL(cancel, "later SQL")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+		require.Error(t, tc.Commit(ctx))
+		require.Zero(t, workspace.rollbackCount, "cleanup must wait for active SQL to exit")
+		tc.ExitRunSqlWithToken(token)
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+			t.Fatal("deferred cleanup did not finish")
+		}
+		require.Equal(t, 1, workspace.rollbackCount)
+		require.Equal(t, 1, locks.unlockCount)
+		require.Len(t, sender.getLastRequests(), 1)
+		require.Equal(t, txn.TxnMethod_Rollback, sender.getLastRequests()[0].Method)
+	})
 }

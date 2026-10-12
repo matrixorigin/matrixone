@@ -1,0 +1,62 @@
+set experimental_fulltext2_index = 1;
+drop database if exists ft2_join;
+create database ft2_join;
+use ft2_join;
+create table docs (id int primary key, base_id int, title varchar(200), fulltext2 index ft2_idx(title));
+insert into docs values
+(1, 10, 'alpha one'),
+(2, 20, 'beta two'),
+(3, 30, 'alpha three'),
+(5, 50, 'alpha five');
+create table base (id int primary key, name varchar(50));
+insert into base values (10, 'b-ten'), (20, 'b-twenty'), (30, 'b-thirty');
+alter table docs alter reindex ft2_idx fulltext2 force_sync;
+select d.id, b.name from docs d join base b on b.id = d.base_id
+where match(d.title) against('alpha' in boolean mode) order by d.id;
+➤ id[4,32,0]  ¦  name[12,50,0]  𝄀
+1  ¦  b-ten  𝄀
+3  ¦  b-thirty
+select d.id, b.name from docs d left join base b on b.id = d.base_id
+where match(d.title) against('alpha' in boolean mode) order by d.id;
+➤ id[4,32,0]  ¦  name[12,50,0]  𝄀
+1  ¦  b-ten  𝄀
+3  ¦  b-thirty  𝄀
+5  ¦  null
+explain select d.id, b.name from docs d left join base b on b.id = d.base_id
+where match(d.title) against('alpha' in boolean mode) order by d.id;
+-- @regex("fulltext2_search", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: d.id INTERNAL  𝄀
+        ->  Join  𝄀
+              Join Type: LEFT   hashOnPK  𝄀
+              Join Cond: (d.base_id = b.id)  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (d.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft2_join.docs  𝄀
+                          Runtime Filter Probe: d.id  𝄀
+                    ->  Table Function on fulltext2_search  𝄀
+              ->  Table Scan on ft2_join.base
+select d.id, b.name from base b right join docs d on b.id = d.base_id
+where match(d.title) against('alpha' in boolean mode) order by d.id;
+➤ id[4,32,0]  ¦  name[12,50,0]  𝄀
+1  ¦  b-ten  𝄀
+3  ¦  b-thirty  𝄀
+5  ¦  null
+select d.id, (match(d.title) against('alpha' in boolean mode) > 0) as hit, b.name
+from docs d left join base b on b.id = d.base_id
+where match(d.title) against('alpha' in boolean mode) order by d.id;
+➤ id[4,32,0]  ¦  hit[-7,1,0]  ¦  name[12,50,0]  𝄀
+1  ¦  1  ¦  b-ten  𝄀
+3  ¦  1  ¦  b-thirty  𝄀
+5  ¦  1  ¦  null
+select d.id, (select count(*) from base b where b.id = d.base_id) as c
+from docs d where match(d.title) against('alpha' in boolean mode) order by d.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+3  ¦  1  𝄀
+5  ¦  0
+drop database ft2_join;

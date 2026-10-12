@@ -190,7 +190,7 @@ func TestJoinGraphOrdersDimensionsByFactKeyActiveDomain(t *testing.T) {
 	require.InDelta(t, 3282.0/289_000.0, vertices[1].selectivityOnParent, 1e-12)
 	require.InDelta(t, 365.0/1823.0, vertices[2].selectivityOnParent, 1e-12)
 
-	builder.buildSubJoinTree(vertices, 0)
+	builder.buildSubJoinTree(vertices, 0, nil)
 	require.Equal(t, []int32{0, 1}, builder.qry.Nodes[3].Children,
 		"the item restriction must be applied before the one-year date restriction")
 }
@@ -262,7 +262,7 @@ func TestSemiJoinPushdownUsesFactKeyActiveDomain(t *testing.T) {
 }
 
 func TestBoundPlanOrdersDimensionsByFactKeyActiveDomain(t *testing.T) {
-	mock := NewEmptyCompilerContext()
+	mock := NewEmptyCompilerContext(newPlanTestProcess(t))
 	mock.dbs = map[string]bool{"tpch": true}
 	registerTable := func(tableID uint64, name string, columns ...string) *plan.TableDef {
 		defs := make([]*plan.ColDef, len(columns))
@@ -351,4 +351,89 @@ func makeJoinVertices(n int) []*joinVertex {
 		}
 	}
 	return vertices
+}
+
+func TestOrderedJoinInstallsOnlyAvailableCrossingPredicates(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	typ := plan.Type{Id: int32(types.T_int64)}
+	for i := int32(0); i < 3; i++ {
+		builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{NodeId: i, NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{i + 1}, Stats: &plan.Stats{Outcnt: 10, Cost: 10, Selectivity: 1}})
+	}
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		e, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		require.NoError(t, err)
+		return e
+	}
+	a, b, c := GetColExpr(typ, 1, 0), GetColExpr(typ, 2, 0), GetColExpr(typ, 3, 0)
+	first := bind("=", a, b)
+	composite := bind("=", GetColExpr(typ, 1, 1), GetColExpr(typ, 2, 1))
+	nonEqui := bind("<", a, b)
+	three := bind("=", bind("+", a, b), c)
+	leafOnly := bind("=", a, MakePlan2Int64ConstExprWithType(1))
+	pending := []*plan.Expr{three, first, leafOnly, composite, nonEqui}
+	ab, pending := builder.appendOrderedJoin([]int32{0, 1}, pending)
+	require.Equal(t, []*plan.Expr{first, composite, nonEqui}, builder.qry.Nodes[ab].OnList)
+	require.Equal(t, []*plan.Expr{three, leafOnly}, pending)
+	abc, pending := builder.appendOrderedJoin([]int32{ab, 2}, pending)
+	require.Equal(t, []*plan.Expr{three}, builder.qry.Nodes[abc].OnList)
+	require.Equal(t, []*plan.Expr{leafOnly}, pending)
+	require.Equal(t, []*plan.Expr{first, composite, nonEqui}, builder.qry.Nodes[ab].OnList, "pending slice compaction must not overwrite transferred predicates")
+	// A connected three-way predicate cannot constrain the initial two inputs.
+	cross, remaining := builder.appendOrderedJoin([]int32{0, 1}, []*plan.Expr{three})
+	require.Empty(t, builder.qry.Nodes[cross].OnList)
+	require.Equal(t, float64(100), builder.qry.Nodes[cross].Stats.Outcnt)
+	require.Equal(t, []*plan.Expr{three}, remaining)
+}
+
+func TestHasColExprRequiresCompleteInputOwnership(t *testing.T) {
+	col := func(rel int32) *plan.Expr { return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: rel}}} }
+	fn := func(args ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{}, Args: args}}}
+	}
+	literal := makePlan2StringConstExprWithType("change", false)
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+		want int32
+	}{
+		{"left", fn(col(0), literal, col(0)), 0},
+		{"right", fn(literal, col(1)), 1},
+		{"mixed middle", fn(col(0), col(1), col(0)), -1},
+		{"mixed first", fn(col(1), col(0), col(0)), -1},
+		{"mixed last", fn(col(0), col(0), col(1)), -1},
+		{"nested conflict", fn(fn(col(0), col(1)), col(0)), -1},
+		{"mixed list", fn(&plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{col(0), col(1)}}}}, col(0)), -1},
+		{"constant", literal, -1},
+		{"unknown input", fn(col(0), col(2)), -1},
+		{"correlated", fn(col(0), &plan.Expr{Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{RelPos: 0}}}), -1},
+		{"subquery", fn(col(0), &plan.Expr{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{}}}), -1},
+		{"nil child", fn(col(0), nil), -1},
+		{"missing function", &plan.Expr{Expr: &plan.Expr_F{}}, -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, HasColExpr(tc.expr, -1)) })
+	}
+	require.Equal(t, int32(1), HasColExpr(literal, 1))
+	require.Equal(t, int32(-1), HasColExpr(col(0), 1))
+}
+
+func TestEquiJoinConditionChecksAllOperands(t *testing.T) {
+	col := func(rel int32) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: rel}}}
+	}
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(context.Background(), name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	key := bind("=", col(1), col(0))
+	require.True(t, IsEquiJoinCondition(key))
+	require.Equal(t, int32(0), key.GetF().Args[0].GetCol().RelPos)
+	require.Equal(t, int32(1), key.GetF().Args[1].GetCol().RelPos)
+	mixed := bind("=", bind("+", col(0), col(1)), col(1))
+	require.False(t, IsEquiJoinCondition(mixed))
+	require.False(t, isRowCountOnlyInnerEquiJoin(&plan.Node{JoinType: plan.Node_INNER, OnList: []*plan.Expr{key, mixed}}))
+	require.True(t, isRowCountOnlyInnerEquiJoin(&plan.Node{JoinType: plan.Node_INNER, OnList: []*plan.Expr{key}}))
+	require.False(t, IsEquiJoinCondition(bind("=", col(0), col(0))))
+	require.False(t, IsEquiJoinCondition(bind("=", col(0), makePlan2Int64ConstExprWithType(1))))
 }

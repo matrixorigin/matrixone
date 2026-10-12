@@ -1038,6 +1038,41 @@ select id as unsafe_or from t11 where k_bigint < 97 or k_bigint > 1000 order by 
 ➤ unsafe_or[-5,64,0]  𝄀
 3  𝄀
 4
+explain select id,payload from t11 force index(idx_bigint) where k_bigint=case when true then 95 else 96 end;
+-- @regex("Index Table Scan", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (t11.id = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on d1.t11 [ForceOneCN]  𝄀
+              Filter Cond: (t11.k_bigint = CASE WHEN true THEN 95 ELSE 96 END)  𝄀
+              Runtime Filter Probe: t11.id  𝄀
+        ->  Index Table Scan on t11.idx_bigint [ForceOneCN]  𝄀
+              Filter Cond: prefix_eq(__mo_index_idx_col)
+select id,payload from t11 force index(idx_bigint) where k_bigint=case when true then 95 else 96 end;
+➤ id[-5,64,0]  ¦  payload[12,16,0]  𝄀
+3  ¦  below-95
+select id,payload from t11 ignore index(idx_bigint) where k_bigint=case when true then 95 else 96 end;
+➤ id[-5,64,0]  ¦  payload[12,16,0]  𝄀
+3  ¦  below-95
+explain select id,payload from t11 force index(idx_bigint) where k_bigint=case when false then 96 else 95 end;
+-- @regex("Index Table Scan", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (t11.id = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on d1.t11 [ForceOneCN]  𝄀
+              Filter Cond: (t11.k_bigint = CASE WHEN false THEN 96 ELSE 95 END)  𝄀
+              Runtime Filter Probe: t11.id  𝄀
+        ->  Index Table Scan on t11.idx_bigint [ForceOneCN]  𝄀
+              Filter Cond: prefix_eq(__mo_index_idx_col)
+select id,payload from t11 force index(idx_bigint) where k_bigint=case when false then 96 else 95 end;
+➤ id[-5,64,0]  ¦  payload[12,16,0]  𝄀
+3  ¦  below-95
 update t11
 set payload = concat(payload, '-matched'), k_bigint = k_bigint + 100
 where k_bigint < 97;

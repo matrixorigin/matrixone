@@ -45,8 +45,7 @@ select current_role();
 current_role()
 revoked_default_role_reader
 select * from revoked_default_role_db.protected;
-value
-27651
+internal error: do not have privilege to execute the statement
 grant revoked_default_role_reader to revoked_default_role_user;
 select current_role();
 current_role()

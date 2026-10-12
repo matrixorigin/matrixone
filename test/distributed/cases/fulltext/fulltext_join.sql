@@ -93,14 +93,15 @@ join extra e on e.id = b.id
 where match(f.title, f.body) against('hello')
 order by f.id;
 
--- outer joins are intentionally not rewritten in the first phase
+-- outer joins: a WHERE MATCH on the ROW-PRESERVED side is now served (#20687) -- ft is the
+-- preserved child in both shapes below (left of the LEFT join, right of the RIGHT join).
 select f.id, b.name
 from ft f left join base b on b.id = f.base_id
-where match(f.title, f.body) against('hello');
+where match(f.title, f.body) against('hello') order by f.id;
 
 select f.id, b.name
 from base b right join ft f on b.id = f.base_id
-where match(f.title, f.body) against('hello');
+where match(f.title, f.body) against('hello') order by f.id;
 
 -- no matching FULLTEXT INDEX: keep existing unsupported scalar behavior
 select n.id, b.name
@@ -117,5 +118,29 @@ where match(f.title) against('hello');
 select f.id, b.name
 from ft f join base b on b.id = f.base_id
 where match(f.title, b.body) against('hello');
+
+-- #20687 null-extension counterexample: a WHERE MATCH on the preserved side of an outer join keeps
+-- a matcher that has NO join partner, null-extending the other side (it must NOT be dropped -- an
+-- INNER-join filter would drop it). lj_docs id 5 matches 'alpha' but has no lj_side row.
+create table lj_docs (id int primary key, title varchar(200), fulltext index (title));
+insert into lj_docs values (1,'alpha one'),(2,'beta'),(3,'alpha three'),(5,'alpha five');
+create table lj_side (id int primary key, tag varchar(20));
+insert into lj_side values (1,'p1'),(3,'p3');
+-- matchers are 1,3,5; expected (1,p1),(3,p3),(5,NULL).
+select d.id, s.tag from lj_docs d left join lj_side s on d.id = s.id
+where match(d.title) against('alpha' in boolean mode) order by d.id;
+-- the preserved-side MATCH is served by the fulltext index scan, not a full table scan.
+-- @separator:table
+-- @regex("fulltext_index_scan", true)
+explain select d.id, s.tag from lj_docs d left join lj_side s on d.id = s.id
+where match(d.title) against('alpha' in boolean mode) order by d.id;
+-- symmetric RIGHT join: the fulltext (preserved) table is the right child.
+select d.id, s.tag from lj_side s right join lj_docs d on d.id = s.id
+where match(d.title) against('alpha' in boolean mode) order by d.id;
+
+-- #20687 SINGLE join: a scalar subquery decorrelates to a SINGLE join whose PRESERVED (outer) child
+-- carries the WHERE MATCH. The outer matcher with no subquery match keeps count 0 (id 5).
+select d.id, (select count(*) from lj_side s where s.id = d.id) as c
+from lj_docs d where match(d.title) against('alpha' in boolean mode) order by d.id;
 
 drop database ft_join_test;

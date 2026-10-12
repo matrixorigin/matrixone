@@ -1,0 +1,59 @@
+drop database if exists nopk_index_mem_runtime_filter;
+create database nopk_index_mem_runtime_filter;
+use nopk_index_mem_runtime_filter;
+create table t (id int, k int, payload varchar(16), key idx_k(k));
+insert into t values (1,7,'a'),(2,7,'b'),(3,8,'c'),(4,null,'n'),(5,9,'x');
+select id,k,payload from t force index(idx_k) where k in (7,8) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  b  𝄀
+3  ¦  8  ¦  c
+select id,k,payload from t ignore index(idx_k) where k in (7,8) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  b  𝄀
+3  ¦  8  ¦  c
+prepare idx_points from 'select id,k,payload from t force index(idx_k) where k in (?, ?) order by id';
+set @k1='7';
+set @k2='8';
+execute idx_points using @k1,@k2;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  b  𝄀
+3  ¦  8  ¦  c
+set @k1='9';
+execute idx_points using @k1,@k2;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+3  ¦  8  ¦  c  𝄀
+5  ¦  9  ¦  x
+deallocate prepare idx_points;
+update t set payload='updated' where id=2;
+delete from t where id=3;
+select id,k,payload from t force index(idx_k) where k in (7,8) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  updated
+select id,k,payload from t ignore index(idx_k) where k in (7,8) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  updated
+select mo_ctl('dn', 'flush', 'nopk_index_mem_runtime_filter.t');
+➤ mo_ctl(dn, flush, nopk_index_mem_runtime_filter.t)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id,k,payload from t force index(idx_k) where k in (7,8) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  updated
+select id,k,payload from t ignore index(idx_k) where k in (7,8) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  updated
+drop database nopk_index_mem_runtime_filter;

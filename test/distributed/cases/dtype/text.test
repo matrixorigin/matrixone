@@ -144,7 +144,7 @@ create table kb_portal_article_order (
 create table kb_portal_article_item (
   id bigint primary key,
   uniqueCode varchar(64) not null,
-  rtfContent text
+  rtfContent mediumtext
 );
 
 insert into kb_portal_article_order values

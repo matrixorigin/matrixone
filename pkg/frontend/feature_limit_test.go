@@ -70,6 +70,35 @@ func newFeatureLimitTestSession(t *testing.T) *Session {
 	}
 }
 
+func TestSnapshotQuotaUsageCountsPhysicalOwnerAndSysIncarnation(t *testing.T) {
+	ses := newFeatureLimitTestSession(t)
+	bh := &backgroundExecTest{}
+	bh.init()
+	name := "owner's"
+	localSQL := "select count(*) from mo_catalog.mo_snapshots where account_name = 'owner''s' and level = 'account' and kind != 'branch'"
+	sysSQL := localSQL + " and obj_id = 27"
+	bh.sql2result[localSQL] = newMrsForSnapshotCount([][]interface{}{{int64(1)}})
+	bh.sql2result[sysSQL] = newMrsForSnapshotCount([][]interface{}{{int64(2)}})
+
+	usage, err := snapshotQuotaUsage(t.Context(), ses, bh, name, 27, "account")
+	require.NoError(t, err)
+	require.Equal(t, int64(3), usage)
+	require.Equal(t, []string{localSQL, sysSQL}, bh.executedSQLs)
+	require.Equal(t, []uint32{27, sysAccountID}, bh.executionAccountIDs)
+
+	bh.executedSQLs = nil
+	bh.executionAccountIDs = nil
+	usage, err = snapshotQuotaUsage(t.Context(), ses, bh, name, sysAccountID, "account")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), usage)
+	require.Equal(t, []string{localSQL}, bh.executedSQLs)
+	require.Equal(t, []uint32{sysAccountID}, bh.executionAccountIDs)
+
+	bh.sql2err[sysSQL] = moerr.NewInternalErrorNoCtx("sys catalog read failed")
+	_, err = snapshotQuotaUsage(t.Context(), ses, bh, name, 27, "account")
+	require.ErrorContains(t, err, "sys catalog read failed")
+}
+
 func TestAdvanceFeatureLimitTxnSnapshotUsesTNOrderedBarrier(t *testing.T) {
 	ses := newFeatureLimitTestSession(t)
 	rt := moruntime.NewRuntime(metadata.ServiceType_CN, ses.GetService(), nil)
@@ -271,6 +300,7 @@ func TestCheckBranchQuotaLocksFiniteQuota(t *testing.T) {
 	)
 	lockedQuotaSQL := quotaSQL + " for update"
 	countSQL := branchQuotaUsageSQL(accountID)
+	require.NotContains(t, countSQL, "for update")
 
 	bh.sql2result[registrySQL] = newMrsForFeatureRegistry([][]interface{}{{int8(1), nil}})
 	bh.sql2result[quotaSQL] = newMrsForFeatureLimit([][]interface{}{{int64(1)}})

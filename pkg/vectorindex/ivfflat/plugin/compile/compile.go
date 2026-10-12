@@ -97,6 +97,9 @@ func (Hooks) AlterCopyInitSQL(_ compileplugin.CompileContext, _ map[string]*plan
 // inline — that persistence stays at the SQL-layer call site, so this
 // hook only performs the map merge.
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
+	if err := compileplugin.RejectMerge(alter, "ivfflat"); err != nil {
+		return nil, err
+	}
 	// Merge first, then validate the EFFECTIVE quantization via the per-algo
 	// catalog hook (the single home shared with CREATE; the value the reindex
 	// set, or the index's stored value when the statement omitted it — e.g. the
@@ -113,6 +116,17 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 	if err := (ivfflatruntime.CatalogHooks{}).ValidQuantization(
 		merged[catalog.Quantization], merged[catalog.IndexAlgoParamOpType]); err != nil {
 		return nil, err
+	}
+	// QUANTIZATION decides the entries (and, for a vecf64 base, centroids) column types, which
+	// are set when the hidden tables are created; REINDEX rebuilds into the existing tables.
+	if q, changed := compileplugin.ReindexQuantizationChange(old, alter); changed {
+		stored := old[catalog.Quantization]
+		if stored == "" {
+			stored = "none"
+		}
+		return nil, moerr.NewNotSupportedNoCtxf(
+			"ivfflat: ALTER ... REINDEX cannot change QUANTIZATION from '%s' to '%s'; drop and re-create the index",
+			stored, catalog.ToLower(q))
 	}
 	return merged, nil
 }

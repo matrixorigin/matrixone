@@ -16,7 +16,10 @@ package fulltext
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"os"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -520,6 +523,115 @@ func TestPartitionSpill(t *testing.T) {
 		}
 	}
 
+}
+
+type failingSpillFile struct {
+	*os.File
+	writeMode  string
+	writeErr   error
+	closeErr   error
+	closeCalls int
+}
+
+func (f *failingSpillFile) Write(data []byte) (int, error) {
+	if f.writeMode == "normal" {
+		return f.File.Write(data)
+	}
+	n, err := f.File.Write(data[:1])
+	if err != nil {
+		return n, err
+	}
+	if f.writeMode == "error" {
+		return n, f.writeErr
+	}
+	return n, nil
+}
+
+func (f *failingSpillFile) Close() error {
+	f.closeCalls++
+	err := f.File.Close()
+	if f.closeErr != nil {
+		return f.closeErr
+	}
+	return err
+}
+
+func TestPartitionFailedSpillKeepsDataAndRemovesTemp(t *testing.T) {
+	writeFailure := errors.New("spill write failure")
+	closeFailure := errors.New("spill close failure")
+	for _, tc := range []struct {
+		name      string
+		writeMode string
+		writeErr  error
+		closeErr  error
+		wantErr   error
+	}{
+		{name: "write error", writeMode: "error", writeErr: writeFailure, wantErr: writeFailure},
+		{name: "short write", writeMode: "short", wantErr: io.ErrShortWrite},
+		{name: "close error", writeMode: "normal", closeErr: closeFailure, wantErr: closeFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := &process.Process{Base: &process.BaseProcess{}, Ctx: context.Background()}
+			proc.SetMPool(mpool.MustNewZeroNoFixed())
+			part, err := NewPartition(proc, 0, 8, 2)
+			require.NoError(t, err)
+			t.Cleanup(part.Close)
+			addr, item, err := part.NewItem()
+			require.NoError(t, err)
+			copy(item, "ab")
+
+			file, err := os.CreateTemp(t.TempDir(), "fulltext")
+			require.NoError(t, err)
+			staging := &failingSpillFile{
+				File: file, writeMode: tc.writeMode,
+				writeErr: tc.writeErr, closeErr: tc.closeErr,
+			}
+			require.ErrorIs(t, part.spillToFile(staging), tc.wantErr)
+			require.Equal(t, 1, staging.closeCalls)
+			_, err = os.Stat(file.Name())
+			require.True(t, os.IsNotExist(err), "failed spill left staging file: %v", err)
+			require.False(t, part.Spilled())
+			require.Empty(t, part.spill_fpath)
+			item, err = part.GetItem(GetPartitionOffset(addr))
+			require.NoError(t, err)
+			require.Equal(t, []byte("ab"), item)
+
+			require.NoError(t, part.Spill(), "resident data must permit retry")
+			require.NoError(t, part.Unspill())
+			item, err = part.GetItem(GetPartitionOffset(addr))
+			require.NoError(t, err)
+			require.Equal(t, []byte("ab"), item)
+		})
+	}
+}
+
+func TestPoolPartialSpillAccountsSuccessfulPartitions(t *testing.T) {
+	proc := &process.Process{Base: &process.BaseProcess{}, Ctx: context.Background()}
+	proc.SetMPool(mpool.MustNewZeroNoFixed())
+	pool := NewFixedBytePool(proc, 2, 4, 1024)
+	t.Cleanup(pool.Close)
+	for i := 0; i < 6; i++ {
+		_, _, err := pool.NewItem()
+		require.NoError(t, err)
+	}
+	require.Equal(t, uint64(12), pool.mem_in_use)
+	failure := errors.New("one partition failed")
+	err := pool.spillWith(func(part *Partition) error {
+		if part.Id() == 0 {
+			return failure
+		}
+		return part.Spill()
+	})
+	require.ErrorIs(t, err, failure)
+	require.False(t, pool.partitions[0].Spilled())
+	require.True(t, pool.partitions[1].Spilled())
+	require.Equal(t, uint64(8), pool.mem_in_use)
+
+	require.NoError(t, pool.Spill())
+	require.Equal(t, uint64(0), pool.mem_in_use)
+	for _, part := range pool.partitions {
+		require.True(t, part.Spilled())
+	}
 }
 
 func TestPartitionSpillError(t *testing.T) {

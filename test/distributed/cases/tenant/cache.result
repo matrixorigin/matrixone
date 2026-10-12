@@ -25,25 +25,9 @@ show variables like 'enable_privilege_cache';
 Variable_name    Value
 enable_privilege_cache    on
 show databases;
-Database
-cache
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-system
-system_metrics
+internal error: do not have privilege to execute the statement
 show databases;
-Database
-cache
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-system
-system_metrics
+internal error: do not have privilege to execute the statement
 set clear_privilege_cache = on;
 show variables like 'clear_privilege_cache';
 Variable_name    Value

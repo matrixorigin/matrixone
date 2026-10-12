@@ -30,8 +30,8 @@ import (
 // the ivfpq and cagra rewrites resolve. Without them prepare*IndexContext bails out
 // early and produces no search at all, which would make this regression pass
 // vacuously for those two algorithms.
-func newGpuAlgoVectorJoinCtx() *customMockCompilerContext {
-	base := newVectorJoinMockCtx()
+func newGpuAlgoVectorJoinCtx(t testing.TB) *customMockCompilerContext {
+	base := newVectorJoinMockCtx(t)
 	inner := base.resolveVarFunc
 	base.resolveVarFunc = func(varName string, isSystem, isGlobal bool) (interface{}, error) {
 		switch varName {
@@ -148,7 +148,7 @@ func TestProviderChildSearchAlwaysCarriesNodeLimit(t *testing.T) {
 				mainScan.FilterList = append(mainScan.FilterList,
 					newVectorJoinEqFilter(mainScan.BindingTags[0], 0))
 
-				tc.builder.compCtx = newGpuAlgoVectorJoinCtx()
+				tc.builder.compCtx = newGpuAlgoVectorJoinCtx(t)
 
 				vecCtx := tc.builder.buildVectorSortContextThroughJoin(tc.projNode)
 				require.NotNil(t, vecCtx, "test setup: the provider-child context must build")
@@ -223,7 +223,7 @@ func TestProviderChildShapeUnsupportedByIvfpqAndCagra(t *testing.T) {
 				providerSingle:        true,
 				providerVectorNotNull: true,
 			})
-			tc.builder.compCtx = newGpuAlgoVectorJoinCtx()
+			tc.builder.compCtx = newGpuAlgoVectorJoinCtx(t)
 
 			vecCtx := tc.builder.buildVectorSortContextThroughJoin(tc.projNode)
 			require.NotNil(t, vecCtx, "the shared context still builds; only the rewrite declines")

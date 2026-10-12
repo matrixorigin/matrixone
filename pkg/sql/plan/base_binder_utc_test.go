@@ -124,7 +124,7 @@ func TestBuildUTCFunctionReturnTypePrecision(t *testing.T) {
 				"select "+test.function+"(0), "+test.function+"(3), "+test.function+"(6)", 1)
 			require.NoError(t, err)
 
-			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			pl, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 			require.NoError(t, err)
 
 			var results []*planpb.Expr

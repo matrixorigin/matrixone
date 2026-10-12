@@ -769,3 +769,32 @@ func Test_AngularDistance(t *testing.T) {
 		})
 	}
 }
+
+// Test_L2Distance_Float32SquaredOverflow covers #29083: a float32 vector pair whose per-element
+// squared difference overflows float32 (diff*diff > MaxFloat32). The distance itself is
+// representable in float32, but the squared sum that every kernel accumulates is not, so it is
+// rejected rather than returned as the +Inf that sum produces.
+//
+// Accumulating the sum in float64 would return the distance, at the cost of the kernel's AVX-512
+// form and of agreeing with the batch kernel, which stays in float32. See L2FromSquared.
+func Test_L2Distance_Float32SquaredOverflow(t *testing.T) {
+	// diff = 3e19 per element; diff*diff = 9e38 > MaxFloat32 (~3.4e38) -> squared sum overflows.
+	v1 := []float32{3e19, 3e19}
+	v2 := []float32{0, 0}
+
+	// L2DistanceSq passes the raw square through: the scan paths read one distance per candidate,
+	// where an out-of-domain value can never win a min-comparison. The contract is enforced where
+	// a distance is a RESULT -- L2Distance here, and moarray's SQL entry points.
+	sq, err := L2DistanceSq(v1, v2)
+	require.NoError(t, err)
+	require.True(t, math.IsInf(float64(sq), 1), "precondition: float32 squared sum must overflow to +Inf")
+
+	_, err = L2Distance(v1, v2)
+	require.Error(t, err, "L2Distance must not return the +Inf its squared sum produced")
+	require.Contains(t, err.Error(), "overflows the element domain")
+
+	// A pair whose square stays in float32 is unaffected.
+	got, err := L2Distance([]float32{3, 4}, []float32{0, 0})
+	require.Nil(t, err)
+	require.EqualValues(t, 5, got)
+}

@@ -40,7 +40,7 @@ func Test_DivFn_Float32(t *testing.T) {
 				[]float32{5.0, 25.0, 0.0, 5.0}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -58,7 +58,7 @@ func Test_DivFn_Float32(t *testing.T) {
 				[]float32{0.0}, []bool{true}), // NULL
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -76,7 +76,7 @@ func Test_DivFn_Float32(t *testing.T) {
 				[]float32{5.0, 0.0}, []bool{false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -98,7 +98,7 @@ func Test_DivFn_Float64(t *testing.T) {
 				[]float64{5.0, 25.0, 0.0, 5.0, 0.3333333333333333}, []bool{false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -116,7 +116,7 @@ func Test_DivFn_Float64(t *testing.T) {
 				[]float64{0.0}, []bool{true}), // NULL
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -150,7 +150,7 @@ func Test_DivFn_ArrayFloat32(t *testing.T) {
 				[]bool{false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -184,7 +184,7 @@ func Test_DivFn_ArrayFloat64(t *testing.T) {
 				[]bool{false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -207,7 +207,7 @@ func Test_IntegerDivFn(t *testing.T) {
 				[]int64{5, 8, 14, 2}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -225,7 +225,7 @@ func Test_IntegerDivFn(t *testing.T) {
 				[]int64{5, 8, 14, 2}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -243,7 +243,7 @@ func Test_IntegerDivFn(t *testing.T) {
 				[]int64{5, 0}, []bool{false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -266,7 +266,7 @@ func Test_ModFn(t *testing.T) {
 				[]int8{1, 4, 9, -1, 1}, []bool{false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, modFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -285,7 +285,7 @@ func Test_ModFn(t *testing.T) {
 				[]int64{6, 4, 94, -6}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, modFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -304,7 +304,7 @@ func Test_ModFn(t *testing.T) {
 				[]uint64{6, 4, 94}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, modFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -326,7 +326,7 @@ func Test_ModFn(t *testing.T) {
 				}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, modFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -349,7 +349,7 @@ func Test_ModFn(t *testing.T) {
 				}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, modFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -367,7 +367,7 @@ func Test_ModFn(t *testing.T) {
 				[]int64{2, 0}, []bool{false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, modFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }

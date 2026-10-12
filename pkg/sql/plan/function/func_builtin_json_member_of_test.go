@@ -32,7 +32,7 @@ func runJSONMemberOfCase(t *testing.T, inputs []FunctionTestInput, expected Func
 	t.Helper()
 	proc := testutil.NewProcess(t)
 	testCase := NewFunctionTestCase(proc, inputs, expected, jsonMemberOf)
-	succeed, message := testCase.Run()
+	succeed, message := testCase.RunAndFree()
 	require.True(t, succeed, message)
 }
 
@@ -70,6 +70,7 @@ func TestJSONMemberOfPreparedScalarKinds(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1, 0, 1, 1}, nil),
 		jsonMemberOf,
 	)
+	defer testCase.Free()
 	testCase.parameters[0].SetPrepareParamKinds([]vector.PrepareParamKind{
 		vector.PrepareParamInteger,
 		vector.PrepareParamNone,
@@ -91,6 +92,7 @@ func TestJSONMemberOfPreparedConcreteFloat32PreservesWireValue(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil),
 		jsonMemberOf,
 	)
+	defer testCase.Free()
 	testCase.parameters[0].SetPrepareParamKind(vector.PrepareParamFloat)
 	testCase.parameters[0].SetPrepareParamType(types.T_float32)
 	succeed, message := testCase.Run()
@@ -124,6 +126,7 @@ func TestJSONMemberOfPreparedYearUsesNumericJSONDomain(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil),
 		jsonMemberOf,
 	)
+	defer testCase.Free()
 	testCase.parameters[0].SetPrepareParamKind(vector.PrepareParamInteger)
 	testCase.parameters[0].SetPrepareParamType(types.T_year)
 	succeed, message := testCase.Run()
@@ -147,6 +150,7 @@ func TestJSONMemberOfPreparedBinaryStringKeepsOpaqueDomain(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil),
 		jsonMemberOf,
 	)
+	defer testCase.Free()
 	testCase.parameters[0].SetIsBinaryString(true)
 	succeed, message := testCase.Run()
 	require.True(t, succeed, message)
@@ -172,7 +176,7 @@ func TestJSONMemberOfStaticBinaryLeftMatchesBinarySubtype(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil),
 		jsonMemberOf,
 	)
-	succeed, message := testCase.Run()
+	succeed, message := testCase.RunAndFree()
 	require.True(t, succeed, message)
 }
 
@@ -248,6 +252,7 @@ func TestJSONMemberOfConstructorBinaryValuesPreserveDomain(t *testing.T) {
 					},
 					NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil),
 					jsonMemberOf)
+				defer prepared.Free()
 				prepared.parameters[0].SetPrepareParamKind(vector.PrepareParamNone)
 				prepared.parameters[0].SetPrepareParamType(tc.typ.Oid)
 				succeed, message := prepared.Run()
@@ -345,6 +350,7 @@ func TestJSONMemberOfSelectListAndInvalidJSON(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 		jsonMemberOf)
+	defer testCase.Free()
 	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}
 	require.NoError(t, testCase.result.PreExtendAndReset(3))
 	require.NoError(t, testCase.fn(testCase.parameters, testCase.result, proc, 3, selectList))
@@ -376,6 +382,8 @@ func TestJSONMemberOfLargeConstantArrayUsesExactComparator(t *testing.T) {
 }
 
 func TestJSONMemberOfNullLeftSkipsRightValidation(t *testing.T) {
+	// Children are sequential; each case owns its vectors and result.
+	proc := testutil.NewProcess(t)
 	binaryCharset := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary)
 	tests := []struct {
 		name  string
@@ -401,7 +409,6 @@ func TestJSONMemberOfNullLeftSkipsRightValidation(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
 			testCase := NewFunctionTestCase(
 				proc,
 				[]FunctionTestInput{
@@ -411,12 +418,11 @@ func TestJSONMemberOfNullLeftSkipsRightValidation(t *testing.T) {
 				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0, 0}, []bool{true, true, true}),
 				jsonMemberOf,
 			)
-			succeed, message := testCase.Run()
+			succeed, message := testCase.RunAndFree()
 			require.True(t, succeed, message)
 		})
 	}
 
-	proc := testutil.NewProcess(t)
 	prepared := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
@@ -426,6 +432,7 @@ func TestJSONMemberOfNullLeftSkipsRightValidation(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
 		jsonMemberOf,
 	)
+	defer prepared.Free()
 	prepared.parameters[1].SetPrepareParamKind(vector.PrepareParamInteger)
 	prepared.parameters[1].SetPrepareParamType(types.T_int64)
 	succeed, message := prepared.Run()
@@ -443,6 +450,7 @@ func TestJSONMemberOfNullRightSkipsPreparedLeftValidation(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
 		jsonMemberOf,
 	)
+	defer testCase.Free()
 	testCase.parameters[0].SetPrepareParamType(types.T_bit)
 	succeed, message := testCase.Run()
 	require.True(t, succeed, message)
@@ -463,26 +471,31 @@ func TestJSONMemberOfFunctionRegistration(t *testing.T) {
 }
 
 func TestJSONMemberOfRejectsInvalidRightDomainsAtExecution(t *testing.T) {
+	// Children are sequential; each case owns its vectors and result.
+	proc := testutil.NewProcess(t)
 	want := "Cannot create a JSON value from a string with CHARACTER SET 'binary'."
 	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
-		testCase := NewFunctionTestCase(
-			testutil.NewProcess(t),
-			[]FunctionTestInput{
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil),
-				NewFunctionTestInput(oid.ToType(), []string{"[1]"}, nil),
-			},
-			NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
-			jsonMemberOf,
-		)
-		require.NoError(t, testCase.result.PreExtendAndReset(1), oid.String())
-		err := testCase.fn(testCase.parameters, testCase.result, testCase.proc, 1, nil)
-		require.EqualError(t, err, want, oid.String())
-		require.Equal(t, uint16(moerr.ER_INVALID_JSON_CHARSET), err.(*moerr.Error).MySQLCode(), oid.String())
+		func() {
+			testCase := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil),
+					NewFunctionTestInput(oid.ToType(), []string{"[1]"}, nil),
+				},
+				NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
+				jsonMemberOf,
+			)
+			defer testCase.Free()
+			require.NoError(t, testCase.result.PreExtendAndReset(1), oid.String())
+			err := testCase.fn(testCase.parameters, testCase.result, testCase.proc, 1, nil)
+			require.EqualError(t, err, want, oid.String())
+			require.Equal(t, uint16(moerr.ER_INVALID_JSON_CHARSET), err.(*moerr.Error).MySQLCode(), oid.String())
+		}()
 	}
 
 	binaryCharset := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary)
 	testCase := NewFunctionTestCase(
-		testutil.NewProcess(t),
+		proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil),
 			NewFunctionTestInput(binaryCharset, []string{"[1]"}, nil),
@@ -490,6 +503,7 @@ func TestJSONMemberOfRejectsInvalidRightDomainsAtExecution(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 		jsonMemberOf,
 	)
+	defer testCase.Free()
 	require.NoError(t, testCase.result.PreExtendAndReset(1))
 	err := testCase.fn(testCase.parameters, testCase.result, testCase.proc, 1, nil)
 	require.EqualError(t, err, want)
@@ -506,6 +520,7 @@ func TestJSONMemberOfRejectsUnsupportedRightDomainAtExecution(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 		jsonMemberOf,
 	)
+	defer testCase.Free()
 	require.NoError(t, testCase.result.PreExtendAndReset(1))
 	err := testCase.fn(testCase.parameters, testCase.result, testCase.proc, 1, nil)
 	require.EqualError(t, err,
@@ -523,6 +538,7 @@ func TestJSONMemberOfCountEvaluableRows(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 		jsonMemberOf,
 	)
+	defer testCase.Free()
 	require.Equal(t, 2, jsonMemberOfCountEvaluableRows(testCase.parameters[0], 4, nil))
 	require.False(t, jsonOverlapShouldPrepareScalar(512, 2))
 	require.True(t, jsonOverlapShouldPrepareScalar(512, 20))
@@ -539,6 +555,7 @@ func TestJSONMemberOfRejectsBinaryRightRuntimeProvenance(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 		jsonMemberOf,
 	)
+	defer testCase.Free()
 	testCase.parameters[1].SetIsBinaryString(true)
 	require.NoError(t, testCase.result.PreExtendAndReset(1))
 	err := testCase.fn(testCase.parameters, testCase.result, proc, 1, nil)
@@ -579,8 +596,9 @@ func TestJSONMemberOfPreservesSpecialScalarDomains(t *testing.T) {
 
 func TestJSONMemberOfPreparedSpecialDomains(t *testing.T) {
 	const geoJSON = `[{"type":"Point","coordinates":[1,2]}]`
+	proc := testutil.NewProcess(t)
 	preparedGeometry := NewFunctionTestCase(
-		testutil.NewProcess(t),
+		proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_text.ToType(), []string{string(encodeGeometryPayload("POINT(1 2)", 0, false))}, nil),
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{geoJSON}, nil),
@@ -588,13 +606,14 @@ func TestJSONMemberOfPreparedSpecialDomains(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil),
 		jsonMemberOf,
 	)
+	defer preparedGeometry.Free()
 	preparedGeometry.parameters[0].SetPrepareParamType(types.T_geometry)
 	preparedGeometry.parameters[0].SetPrepareParamKind(vector.PrepareParamNone)
 	succeed, message := preparedGeometry.Run()
 	require.True(t, succeed, message)
 
 	preparedEnum := NewFunctionTestCase(
-		testutil.NewProcess(t),
+		proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_text.ToType(), []string{"red"}, nil),
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{`["red"]`}, nil),
@@ -602,6 +621,7 @@ func TestJSONMemberOfPreparedSpecialDomains(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil),
 		jsonMemberOf,
 	)
+	defer preparedEnum.Free()
 	preparedEnum.parameters[0].SetPrepareParamType(types.T_enum)
 	preparedEnum.parameters[0].SetPrepareParamKind(vector.PrepareParamNone)
 	succeed, message = preparedEnum.Run()
@@ -609,6 +629,8 @@ func TestJSONMemberOfPreparedSpecialDomains(t *testing.T) {
 }
 
 func TestJSONMemberOfRejectsLossyPreparedDomains(t *testing.T) {
+	// Children are sequential; each case owns its vectors and result.
+	proc := testutil.NewProcess(t)
 	for _, test := range []struct {
 		name string
 		typ  types.T
@@ -619,7 +641,6 @@ func TestJSONMemberOfRejectsLossyPreparedDomains(t *testing.T) {
 		{name: "vecf64", typ: types.T_array_float64, data: "[1 2]"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
 			testCase := NewFunctionTestCase(
 				proc,
 				[]FunctionTestInput{
@@ -629,6 +650,7 @@ func TestJSONMemberOfRejectsLossyPreparedDomains(t *testing.T) {
 				NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 				jsonMemberOf,
 			)
+			defer testCase.Free()
 			testCase.parameters[0].SetPrepareParamType(test.typ)
 			testCase.parameters[0].SetPrepareParamKind(vector.PrepareParamNone)
 			require.NoError(t, testCase.result.PreExtendAndReset(1))

@@ -653,6 +653,7 @@ type concurrentExecutor struct {
 	stopCh    chan struct{}
 	stopCause atomic.Pointer[concurrentExecutorStop]
 	workers   sync.WaitGroup
+	done      chan struct{}
 
 	// submitMu closes the race between a producer admitting work and shutdown
 	// draining the queue. Shutdown signals stopCh before taking the write lock,
@@ -676,6 +677,7 @@ func newConcurrentExecutor(concurrency int) ConcurrentExecutor {
 		concurrency: concurrency,
 		tasks:       make(chan queuedConcurrentTask, 2048),
 		stopCh:      make(chan struct{}),
+		done:        make(chan struct{}),
 	}
 }
 
@@ -752,6 +754,7 @@ func (e *concurrentExecutor) runWorker() {
 }
 
 func (e *concurrentExecutor) stopWhenDone(ctx context.Context) {
+	defer close(e.done)
 	<-ctx.Done()
 	cause := context.Cause(ctx)
 	if cause == nil {
@@ -778,6 +781,10 @@ func (e *concurrentExecutor) stopWhenDone(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (e *concurrentExecutor) Wait() {
+	<-e.done
 }
 
 func (e *concurrentExecutor) stoppedError() error {

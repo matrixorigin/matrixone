@@ -44,6 +44,8 @@ type Service interface {
 	// BootstrapUpgrade bootstrap upgrade framework
 	BootstrapUpgrade(ctx context.Context) error
 	// MaybeUpgradeTenant used to upgrade tenant metadata if the tenant is old version.
+	// The callback supplies the tenant ID and an optional version hint; the persisted
+	// mo_account.create_version, not the hint, determines whether upgrade is needed.
 	// Return true, nil means tenant upgraded, the call need to load tenant again to get
 	// latest tenant info.
 	MaybeUpgradeTenant(

@@ -70,6 +70,19 @@ func (ctr *container) shouldSpill(incomingBatchSize int64) bool {
 	if ctr.spilling {
 		return true
 	}
+	if ctr.growthParticipant != nil {
+		current := uint64(max(int64(0), ctr.spillMemUsage))
+		limit, err := ctr.growthParticipant.RetainedLimit(current)
+		if err != nil {
+			// The physical allocation path remains authoritative and will return
+			// the precise lifecycle error if spill cannot make progress.
+			return true
+		}
+		incoming := uint64(max(int64(0), incomingBatchSize))
+		if current > limit || incoming > limit-current {
+			return true
+		}
+	}
 	if ctr.spillThreshold <= 0 {
 		return false
 	}
@@ -680,6 +693,7 @@ func (ctr *container) spillCachedRuns(proc *process.Process, analyzer process.An
 	ctr.orderCols = ctr.orderCols[:0]
 	ctr.spilling = true
 	ctr.spillMemUsage = 0
+	ctr.releaseGrowthParticipant()
 	return nil
 }
 

@@ -34,7 +34,7 @@ import (
 // six element types. Queries are typed [][]T to match GoBruteForceIndex.Search.
 func TestNewCpuBruteForceIndexNarrow(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	rt := vectorindex.RuntimeConfig{Limit: 2, NThreads: 1}
 	const dim = uint(3)

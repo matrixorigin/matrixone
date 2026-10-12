@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
@@ -30,6 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	splan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -1773,6 +1776,114 @@ func TestCombinedTxnTable_Stats(t *testing.T) {
 	assert.Equal(t, stats.BlockNumber, result.BlockNumber)
 	assert.Equal(t, stats.ApproxObjectNumber, result.ApproxObjectNumber)
 	assert.Equal(t, stats.TableCnt, result.TableCnt)
+	partial := newCombinedTxnTable(nil, func() ([]engine.Relation, error) {
+		return []engine.Relation{
+			&mockRelation{statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) { return stats, nil }},
+			&mockRelation{statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) { return nil, nil }},
+		}, nil
+	}, nil, nil)
+	result, err = partial.Stats(context.Background(), false)
+	require.NoError(t, err)
+	require.Equal(t, float64(^uint64(0)), result.TableCnt, "missing child cannot publish a partial small bound")
+	require.Empty(t, result.TableName)
+	require.Equal(t, stats.BlockNumber, result.BlockNumber, "known metadata remains available")
+}
+
+// relationStatsContext feeds the actual relation observation to the public planner.
+type relationStatsContext struct {
+	*splan.MockCompilerContext
+	observed *statsinfo.StatsInfo
+}
+
+func (c *relationStatsContext) StatsWithTableDef(*plan.ObjectRef, *plan.TableDef, *plan.Snapshot) (*statsinfo.StatsInfo, error) {
+	return c.observed, nil
+}
+
+func (c *relationStatsContext) Resolve(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	return &plan.ObjectRef{Obj: 42, ObjName: "t"}, &plan.TableDef{TblId: 42, Name: "t", Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(types.T_int64)}}}, Name2ColIndex: map[string]int32{"v": 0}}, nil
+}
+
+func assertRelationScanWidth(t *testing.T, observed *statsinfo.StatsInfo, want float64) {
+	t.Helper()
+	ctx := &relationStatsContext{MockCompilerContext: splan.NewMockCompilerContext(false, newPlanTestProcess(t)), observed: observed}
+
+	stmt, err := mysql.ParseOne(t.Context(), "select v from t where v > 0", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := splan.BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	for _, node := range built.GetQuery().Nodes {
+		if node.NodeType == plan.Node_TABLE_SCAN {
+			require.Equal(t, observed.TableCnt, node.Stats.TableCnt)
+			require.InDelta(t, want, node.Stats.Rowsize, 1e-10)
+			return
+		}
+	}
+	t.Fatal("expected a table scan")
+}
+
+type namedStatsRelation struct {
+	mockRelation
+	name string
+}
+
+func (r *namedStatsRelation) GetTableName() string { return r.name }
+
+func TestCombinedStatsPreserveByteCoverage(t *testing.T) {
+	known := &statsinfo.StatsInfo{TableName: "p0", TableCnt: 5, SizeMap: map[string]uint64{"v": 40}, BlockNumber: 1}
+	for _, tc := range []struct {
+		name     string
+		children []*statsinfo.StatsInfo
+		rows     float64
+		bytes    map[string]uint64
+		width    float64
+	}{
+		{"unknown last", []*statsinfo.StatsInfo{known, nil}, float64(math.MaxUint64), nil, 6.4},
+		{"unknown first", []*statsinfo.StatsInfo{nil, known}, float64(math.MaxUint64), nil, 6.4},
+		{"missing bytes last", []*statsinfo.StatsInfo{known, {TableName: "p1", TableCnt: 5}}, 10, nil, 6.4},
+		{"missing bytes first", []*statsinfo.StatsInfo{{TableName: "p1", TableCnt: 5}, known}, 10, nil, 6.4},
+		{"column overflow", []*statsinfo.StatsInfo{{TableName: "p0", TableCnt: 5, SizeMap: map[string]uint64{"v": math.MaxUint64}}, known, known}, 15, nil, 6.4},
+		{"invalid then complete", []*statsinfo.StatsInfo{known, nil, known}, float64(math.MaxUint64), nil, 6.4},
+		{"complementary columns", []*statsinfo.StatsInfo{known, {TableName: "p1", TableCnt: 5, SizeMap: map[string]uint64{"other": 40}}}, 10, nil, 6.4},
+		{"empty child", []*statsinfo.StatsInfo{{TableName: "empty"}, known}, 5, map[string]uint64{"v": 40}, 8},
+		{"complete", []*statsinfo.StatsInfo{known, known}, 10, map[string]uint64{"v": 80}, 8},
+		{"transient complete", []*statsinfo.StatsInfo{known, {TableCnt: 5, SizeMap: map[string]uint64{"v": 40}}}, 10, map[string]uint64{"v": 80}, 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rels := make([]engine.Relation, len(tc.children))
+			for i, child := range tc.children {
+				name := "p"
+				if child != nil && child.TableName != "" {
+					name = child.TableName
+				}
+				rels[i] = &namedStatsRelation{name: name, mockRelation: mockRelation{statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) { return child, nil }}}
+			}
+			table := newCombinedTxnTable(nil, func() ([]engine.Relation, error) { return rels, nil }, nil, nil)
+			got, err := table.Stats(t.Context(), false)
+			require.NoError(t, err)
+			require.Equal(t, tc.rows, got.TableCnt)
+			cacheable := true
+			for _, child := range tc.children {
+				cacheable = cacheable && splan.StatsInfoUsableForCache(child)
+			}
+			require.Equal(t, cacheable, splan.StatsInfoUsableForCache(got), "byte coverage and cache completion are separate contracts")
+			assert.Equal(t, tc.bytes, got.SizeMap)
+			assertRelationScanWidth(t, got, tc.width)
+			require.Equal(t, map[string]uint64{"v": 40}, known.SizeMap, "published child map stays immutable")
+		})
+	}
+	t.Run("unknown child does not hide later error", func(t *testing.T) {
+		failure := errors.New("partition stats failed")
+		table := newCombinedTxnTable(nil, func() ([]engine.Relation, error) {
+			return []engine.Relation{
+				&mockRelation{statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) { return nil, nil }},
+				&mockRelation{statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) { return nil, failure }},
+			}, nil
+		}, nil, nil)
+		got, err := table.Stats(t.Context(), false)
+		require.Nil(t, got)
+		require.ErrorIs(t, err, failure)
+	})
 }
 
 // Test CombinedRelData panic methods

@@ -202,7 +202,7 @@ func (vs *Vectors[T]) UnmarshalFromReader(
 		}
 		lr := &io.LimitedReader{R: r, N: int64(sz)}
 		vec := vector.NewOffHeapVecWithType(typ)
-		if err := vec.UnmarshalWithReader(lr, mp); err != nil {
+		if err := unmarshalAggregateVector(vec, lr, mp); err != nil {
 			vec.Free(mp)
 			return err
 		}

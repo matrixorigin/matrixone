@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"runtime"
 	"sort"
@@ -127,12 +128,13 @@ type TableColumn struct {
 }
 
 type TableUniqueKey struct {
-	Name       string
-	Columns    []string
-	Unique     bool
-	Algo       string
-	AlgoParams string
-	Comment    string
+	Expressions map[string]string // backing column name to original functional key expression
+	Name        string
+	Columns     []string
+	Unique      bool
+	Algo        string
+	AlgoParams  string
+	Comment     string
 }
 
 type TableForeignKey struct {
@@ -246,14 +248,15 @@ type indexDDLColumn struct {
 }
 
 type indexDDLInfo struct {
-	name       string
-	indexType  string
-	algo       string
-	algoParams string
-	comment    string
-	columns    map[string]indexDDLColumn
-	order      int
-	catalogID  uint64
+	expressions map[string]string
+	name        string
+	indexType   string
+	algo        string
+	algoParams  string
+	comment     string
+	columns     map[string]indexDDLColumn
+	order       int
+	catalogID   uint64
 }
 
 type CSVExportOption func(*CSVExportOptions)
@@ -527,6 +530,11 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 		}
 	}
 	for i, key := range uniqueKeys {
+		for _, part := range key.Columns {
+			if strings.HasPrefix(part, "__mo_fi_") && !hasVisibleColumn(cols, part) && key.Expressions[part] == "" {
+				return "" // Never restore a reference to an absent hidden column.
+			}
+		}
 		if len(key.Columns) == 0 {
 			continue
 		}
@@ -555,7 +563,11 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 			if i > 0 {
 				sb.WriteString(", ")
 			}
-			sb.WriteString(quoteDDLIdent(col))
+			if expression := key.Expressions[col]; expression != "" && !hasVisibleColumn(cols, col) {
+				sb.WriteString("(" + expression + ")")
+			} else {
+				sb.WriteString(quoteDDLIdent(col))
+			}
 		}
 		sb.WriteString(")")
 		if err := appendIndexTrailingOptionsDDL(&sb, fullText, key.AlgoParams, key.Comment); err != nil {
@@ -605,24 +617,19 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 
 func renderColumnSQLType(col TableColumn) string {
 	sqlType := strings.TrimSpace(col.SQLType)
-	upperType := strings.ToUpper(sqlType)
-	enumValues := strings.TrimSpace(col.EnumValues)
-	if enumValues == "" {
-		return sqlType
-	}
-	switch {
-	case upperType == "JSON":
-		if arrayType := renderTypedArraySQLType(enumValues); arrayType != "" {
+	switch strings.ToUpper(sqlType) {
+	case "JSON":
+		if arrayType := renderTypedArraySQLType(col.EnumValues); arrayType != "" {
 			return arrayType
 		}
-		return sqlType
-	case upperType == "ENUM":
-		return renderEnumSetSQLType("ENUM", enumValues)
-	case upperType == "SET", upperType == "BIGINT UNSIGNED":
-		return renderEnumSetSQLType("SET", enumValues)
-	default:
-		return sqlType
+	case "ENUM":
+		return renderEnumSetSQLType("ENUM", strings.Split(col.EnumValues, ","))
+	case "SET", "BIGINT UNSIGNED":
+		if values := types.DecodeSetValues(col.EnumValues); len(values) != 0 {
+			return renderEnumSetSQLType("SET", values)
+		}
 	}
+	return sqlType
 }
 
 func renderTypedArraySQLType(enumValues string) string {
@@ -633,81 +640,14 @@ func renderTypedArraySQLType(enumValues string) string {
 	return "ARRAY" + values[len("array"):]
 }
 
-func renderEnumSetSQLType(kind string, enumValues string) string {
-	values := strings.TrimSpace(enumValues)
-	if values == "" {
-		return kind
+// EnumValues contains raw catalog members, not SQL literals or a type expression.
+// Quote every member without trimming so replay keeps empty members and whitespace.
+func renderEnumSetSQLType(kind string, values []string) string {
+	quoted := make([]string, len(values))
+	for i, value := range values {
+		quoted[i] = quoteDDLString(value)
 	}
-	upper := strings.ToUpper(values)
-	if strings.HasPrefix(upper, kind+"(") {
-		return values
-	}
-	if strings.HasPrefix(values, "(") {
-		return kind + renderEnumSetValueList(values)
-	}
-	return kind + renderEnumSetValueList(values)
-}
-
-func renderEnumSetValueList(values string) string {
-	parts := splitEnumSetValues(stripEnumSetValueParens(values))
-	quoted := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		if isQuotedSQLString(part) {
-			quoted = append(quoted, part)
-			continue
-		}
-		quoted = append(quoted, quoteDDLString(part))
-	}
-	return "(" + strings.Join(quoted, ",") + ")"
-}
-
-func stripEnumSetValueParens(values string) string {
-	values = strings.TrimSpace(values)
-	if len(values) >= 2 && values[0] == '(' && values[len(values)-1] == ')' {
-		return strings.TrimSpace(values[1 : len(values)-1])
-	}
-	return values
-}
-
-func splitEnumSetValues(values string) []string {
-	var parts []string
-	start := 0
-	inString := byte(0)
-	for i := 0; i < len(values); i++ {
-		ch := values[i]
-		if inString != 0 {
-			if ch == '\\' && i+1 < len(values) {
-				i++
-				continue
-			}
-			if ch == inString {
-				if i+1 < len(values) && values[i+1] == inString {
-					i++
-					continue
-				}
-				inString = 0
-			}
-			continue
-		}
-		switch ch {
-		case '\'', '"':
-			inString = ch
-		case ',':
-			parts = append(parts, values[start:i])
-			start = i + 1
-		}
-	}
-	parts = append(parts, values[start:])
-	return parts
-}
-
-func isQuotedSQLString(s string) bool {
-	s = strings.TrimSpace(s)
-	return len(s) >= 2 && ((s[0] == '\'' && s[len(s)-1] == '\'') || (s[0] == '"' && s[len(s)-1] == '"'))
+	return kind + "(" + strings.Join(quoted, ",") + ")"
 }
 
 func appendColumnDDLAttributes(sb *strings.Builder, col TableColumn) {
@@ -806,12 +746,13 @@ func normalizedUniqueKeys(keys []TableUniqueKey) []TableUniqueKey {
 		}
 		seen[signature] = struct{}{}
 		out = append(out, TableUniqueKey{
-			Name:       name,
-			Columns:    cols,
-			Unique:     key.Unique,
-			Algo:       strings.TrimSpace(key.Algo),
-			AlgoParams: strings.TrimSpace(key.AlgoParams),
-			Comment:    strings.TrimSpace(key.Comment),
+			Expressions: maps.Clone(key.Expressions),
+			Name:        name,
+			Columns:     cols,
+			Unique:      key.Unique,
+			Algo:        strings.TrimSpace(key.Algo),
+			AlgoParams:  strings.TrimSpace(key.AlgoParams),
+			Comment:     strings.TrimSpace(key.Comment),
 		})
 	}
 	return out
@@ -1131,6 +1072,7 @@ func buildTableSchemaFromCatalogViews(tableID uint64, moTablesView, moColumnsVie
 		}
 	}
 	if moColumnsView != nil {
+		attachFunctionalIndexExpressions(schema, moColumnsView, tableID)
 		cols := buildColumnsFromMoColumnsRows(moColumnsView, tableID)
 		if len(cols) > 0 {
 			schema.Columns = cols
@@ -1146,6 +1088,64 @@ func buildTableSchemaFromCatalogViews(tableID uint64, moTablesView, moColumnsVie
 		schema = mergeBuiltinSchemaFallback(schema, builtinTableSchemaForLayout(layout, tableID), tableID)
 	}
 	return schema
+}
+
+// Functional backing columns are not exportable row columns. Recover only
+// their generated expression into the owning index's DDL metadata.
+func attachFunctionalIndexExpressions(schema *TableSchema, view *LogicalTableView, tableID uint64) {
+	if schema == nil || view == nil {
+		return
+	}
+	idPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_RelID)
+	namePos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Name)
+	hiddenPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_IsHidden)
+	generatedPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Generated)
+	for _, fullRow := range view.Rows {
+		if len(fullRow) < logicalViewDataOffset(view) {
+			continue
+		}
+		row := fullRow[logicalViewDataOffset(view):]
+		if idPos < 0 || namePos < 0 || hiddenPos < 0 || generatedPos < 0 ||
+			idPos >= len(row) || namePos >= len(row) || hiddenPos >= len(row) || generatedPos >= len(row) ||
+			row[idPos] != strconv.FormatUint(tableID, 10) || !isTruthyCatalogValue(row[hiddenPos]) || !strings.HasPrefix(row[namePos], "__mo_fi_") {
+			continue
+		}
+		expression, stored := decodeMoColumnGenerated(row[generatedPos])
+		if expression == "" || stored || !isPrintableDDLExpression(expression) {
+			continue
+		}
+		for i := range schema.UniqueKeys {
+			key := &schema.UniqueKeys[i]
+			if !key.Unique {
+				for _, part := range key.Columns {
+					if part == row[namePos] {
+						if key.Expressions == nil {
+							key.Expressions = make(map[string]string)
+						}
+						key.Expressions[part] = expression
+					}
+				}
+			}
+		}
+	}
+}
+
+// Columns contains only visible user columns. A name prefix alone cannot
+// distinguish these legacy ordinary columns from hidden index backing values.
+func schemaHasVisibleColumn(schema *TableSchema, name string) bool {
+	if schema == nil {
+		return false
+	}
+	return hasVisibleColumn(schema.Columns, name)
+}
+
+func hasVisibleColumn(cols []TableColumn, name string) bool {
+	for _, col := range cols {
+		if col.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func buildTableSchemasForIDs(
@@ -1483,7 +1483,7 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 			data := result[primaryID]
 			tableIndexesView := logicalViewWithRows(moIndexesView, indexRowsByTableID[primaryID])
 			data.IndexDDLs, err = buildCreateIndexStatementsFromMoIndexes(
-				tableIndexesView, primaryID, data.Schema.TableName,
+				tableIndexesView, primaryID, data.Schema.TableName, data.Schema,
 			)
 			if err != nil {
 				return nil, err
@@ -1628,6 +1628,7 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 	if len(schema.UniqueKeys) > 0 {
 		clone.UniqueKeys = make([]TableUniqueKey, len(schema.UniqueKeys))
 		for i, key := range schema.UniqueKeys {
+			clone.UniqueKeys[i].Expressions = maps.Clone(key.Expressions)
 			clone.UniqueKeys[i].Name = strings.Clone(key.Name)
 			clone.UniqueKeys[i].Unique = key.Unique
 			clone.UniqueKeys[i].Algo = strings.Clone(key.Algo)
@@ -3636,6 +3637,9 @@ func createTableDDLFromCatalogViews(tableID uint64, moTablesView, moColumnsView 
 	}
 	if moColumnsView != nil {
 		clusterBy = buildClusterByFromMoColumnsRows(moColumnsView, tableID)
+		schema := &TableSchema{UniqueKeys: uniqueKeys}
+		attachFunctionalIndexExpressions(schema, moColumnsView, tableID)
+		uniqueKeys = schema.UniqueKeys
 	}
 	if len(partitionMetadataView) > 0 && partitionMetadataView[0] != nil {
 		partition = buildPartitionClauseFromMetadata(partitionMetadataView[0], tableID)
@@ -4193,7 +4197,12 @@ func (r *CheckpointReader) ShowCreateIndexStatements(
 	if err != nil {
 		return nil, err
 	}
-	return buildCreateIndexStatementsFromMoIndexes(view, tableID, tableName)
+	columns, err := r.getTableLogicalView(ctx, moColumnsID, snapshotTS)
+	if err != nil {
+		return nil, err
+	}
+	schema := buildTableSchemaFromCatalogViews(tableID, moTablesView, columns)
+	return buildCreateIndexStatementsFromMoIndexes(view, tableID, tableName, schema)
 }
 
 func (r *CheckpointReader) getPartitionMetadataView(
@@ -4403,6 +4412,7 @@ func buildCreateIndexStatementsFromMoIndexes(
 	view *LogicalTableView,
 	tableID uint64,
 	tableName string,
+	schemas ...*TableSchema,
 ) ([]string, error) {
 	if view == nil {
 		return nil, nil
@@ -4508,6 +4518,35 @@ func buildCreateIndexStatementsFromMoIndexes(
 
 	statements := make([]string, 0, len(names))
 	for _, name := range names {
+		info := byName[name]
+		for column := range info.columns {
+			if !strings.HasPrefix(column, "__mo_fi_") {
+				continue
+			}
+			visible := false
+			for _, schema := range schemas {
+				visible = visible || schemaHasVisibleColumn(schema, column)
+			}
+			if visible {
+				continue
+			}
+			for _, schema := range schemas {
+				if schema == nil {
+					continue
+				}
+				for _, key := range schema.UniqueKeys {
+					if key.Name == name {
+						if info.expressions == nil {
+							info.expressions = make(map[string]string)
+						}
+						info.expressions[column] = key.Expressions[column]
+					}
+				}
+			}
+			if info.expressions[column] == "" || strings.EqualFold(info.indexType, "UNIQUE") {
+				return nil, moerr.NewInternalErrorNoCtxf("invalid functional index metadata for %s.%s", tableName, name)
+			}
+		}
 		stmt, err := renderCreateIndexStatement(tableName, byName[name])
 		if err != nil {
 			return nil, err
@@ -4889,7 +4928,11 @@ func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, e
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		sb.WriteString(quoteDDLIdent(col.name))
+		if expression := info.expressions[col.name]; expression != "" {
+			sb.WriteString("(" + expression + ")")
+		} else {
+			sb.WriteString(quoteDDLIdent(col.name))
+		}
 	}
 	sb.WriteString(")")
 	if err := appendIndexTrailingOptionsDDL(&sb, fullText, info.algoParams, info.comment); err != nil {

@@ -23,7 +23,7 @@ import (
 // still use their global binding tags. Only the relevant window expressions
 // are folded early; the normal optimizer still folds the complete plan later.
 func (builder *QueryBuilder) annotatePartitionTopN(nodeID int32) {
-	if builder.isPrepareStatement || builder.qry.StmtType != planpb.Query_SELECT {
+	if builder.isReusablePlan() || builder.qry.StmtType != planpb.Query_SELECT {
 		return
 	}
 	node := builder.qry.Nodes[nodeID]

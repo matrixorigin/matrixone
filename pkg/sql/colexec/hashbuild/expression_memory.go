@@ -36,13 +36,45 @@ func NewExpressionExecutors(
 	proc *process.Process,
 	exprs []*plan.Expr,
 	account *mpool.AllocationAccount,
+	foldOwnedConstantCasts ...bool,
 ) ([]colexec.ExpressionExecutor, error) {
 	return newExpressionExecutorsWithCapacityClass(
 		proc,
 		exprs,
 		account,
 		mpool.AllocationCapacityClassDefault,
+		foldOwnedConstantCasts...,
 	)
+}
+
+// NewJoinProbeExpressionExecutors returns the probe roots and borrowed
+// constant executors that the JOIN diagnostic owner activates once.
+func NewJoinProbeExpressionExecutors(
+	proc *process.Process,
+	exprs []*plan.Expr,
+	account *mpool.AllocationAccount,
+	owner *colexec.DeferredJoinDiagnostic,
+) ([]colexec.ExpressionExecutor, []colexec.ExpressionExecutor, error) {
+	if len(exprs) == 0 {
+		return nil, nil, process.ErrExecutionResourceInvalid
+	}
+	for _, expr := range exprs {
+		if expr == nil {
+			return nil, nil, process.ErrExecutionResourceInvalid
+		}
+	}
+	selection, err := vector.NewAllocationAccountSelectionWithCapacityClass(
+		account, mpool.AllocationOwnerHashBuild,
+		executionResourceAllocationSiteExpressionData,
+		executionResourceAllocationSiteExpressionArea,
+		executionResourceAllocationSiteExpressionNulls,
+		executionResourceAllocationSiteExpressionGrouping,
+		mpool.AllocationCapacityClassDefault,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return colexec.NewJoinProbeExpressionExecutors(proc, exprs, selection, owner)
 }
 
 func newExpressionExecutorsWithCapacityClass(
@@ -50,6 +82,21 @@ func newExpressionExecutorsWithCapacityClass(
 	exprs []*plan.Expr,
 	account *mpool.AllocationAccount,
 	capacityClass mpool.AllocationCapacityClass,
+	foldOwnedConstantCasts ...bool,
+) ([]colexec.ExpressionExecutor, error) {
+	return newExpressionExecutorsWithCapacityClassAndDiagnostic(
+		proc, exprs, account, capacityClass,
+		len(foldOwnedConstantCasts) > 0 && foldOwnedConstantCasts[0], nil,
+	)
+}
+
+func newExpressionExecutorsWithCapacityClassAndDiagnostic(
+	proc *process.Process,
+	exprs []*plan.Expr,
+	account *mpool.AllocationAccount,
+	capacityClass mpool.AllocationCapacityClass,
+	foldOwnedConstantCasts bool,
+	owner *colexec.DeferredJoinDiagnostic,
 ) ([]colexec.ExpressionExecutor, error) {
 	if len(exprs) == 0 {
 		return nil, process.ErrExecutionResourceInvalid
@@ -71,7 +118,8 @@ func newExpressionExecutorsWithCapacityClass(
 	if err != nil {
 		return nil, err
 	}
-	return colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(
-		proc, exprs, selection,
-	)
+	if owner != nil {
+		return colexec.NewJoinBuildExpressionExecutors(proc, exprs, selection, owner)
+	}
+	return colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, exprs, selection, foldOwnedConstantCasts)
 }

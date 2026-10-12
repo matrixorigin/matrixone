@@ -276,6 +276,33 @@ func increaseNodeTagCnt(node *plan.Node, inc int, tagCnt map[int32]int) {
 
 const maxVectorIndexTopPushdownLimit = uint64(^uint(0) >> 1)
 
+func (builder *QueryBuilder) filterPushdownBarrier(expr *plan.Expr) bool {
+	return ContainsVolatileFunction(expr) ||
+		builder.containsStatementInvariantFilterDiagnostic(expr)
+}
+
+func normalizeScalarReaggFilterRefs(expr *plan.Expr, groupTag int32, aliases map[[2]int32]int32) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col != nil {
+			if groupPos, ok := aliases[[2]int32{e.Col.RelPos, e.Col.ColPos}]; ok {
+				e.Col.RelPos, e.Col.ColPos = groupTag, groupPos
+			}
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			normalizeScalarReaggFilterRefs(arg, groupTag, aliases)
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			normalizeScalarReaggFilterRefs(item, groupTag, aliases)
+		}
+	}
+}
+
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
 	originalNodeID := nodeID
 	if builder.checkPlanningCanceled() != nil {
@@ -294,9 +321,17 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 	}
 
 	var canPushdown, cantPushdown []*plan.Expr
+	if _, expandsGroupingSets := DecodeGroupingSetExpandOption(node.ExtraOptions); expandsGroupingSets {
+		// Expansion synthesizes NULL keys and an empty-input grouping row.
+		// Its output predicates cannot be evaluated against the input domain.
+		cantPushdown = append(cantPushdown, filters...)
+		filters = nil
+	}
 
-	if node.Limit != nil {
-		// can not push down over limit
+	if node.Limit != nil || node.Offset != nil {
+		// can not push down over limit or offset: a predicate above OFFSET filters the
+		// rows that survive pagination, so pushing it below would change which rows OFFSET
+		// skips (e.g. an outer WHERE across an OFFSET-only subquery would run before the skip).
 		cantPushdown = append(cantPushdown, filters...)
 		filters = nil
 	}
@@ -310,9 +345,24 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 		groupTag := node.BindingTags[0]
 		aggregateTag := node.BindingTags[1]
+		// A scalar reaggregation groups earlier scalar outputs under this node's
+		// group tag. Normalize their old tags before deciding whether a filter
+		// belongs below the aggregate or in its HAVING list.
+		if aliases := builder.scalarReaggAliases[nodeID]; len(aliases) > 0 {
+			byRef := make(map[[2]int32]int32, len(aliases))
+			for _, alias := range aliases {
+				byRef[alias.ref] = alias.groupPos
+			}
+			for _, filter := range filters {
+				normalizeScalarReaggFilterRefs(filter, groupTag, byRef)
+			}
+			for _, filter := range node.FilterList {
+				normalizeScalarReaggFilterRefs(filter, groupTag, byRef)
+			}
+		}
 
 		for _, filter := range filters {
-			if ContainsVolatileFunction(filter) {
+			if builder.filterPushdownBarrier(filter) {
 				node.FilterList = append(node.FilterList, filter)
 				continue
 			}
@@ -347,7 +397,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		sampleTag := node.BindingTags[1]
 
 		for _, filter := range filters {
-			if ContainsVolatileFunction(filter) {
+			if builder.filterPushdownBarrier(filter) {
 				node.FilterList = append(node.FilterList, filter)
 			} else if !containsTag(filter, sampleTag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
@@ -390,7 +440,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 		for _, filter := range filters {
-			if ContainsVolatileFunction(filter) {
+			if builder.filterPushdownBarrier(filter) {
 				node.FilterList = append(node.FilterList, filter)
 			} else if containsTag(filter, windowTag) {
 				node.FilterList = append(node.FilterList, filter)
@@ -417,7 +467,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		windowTag := node.BindingTags[0]
 
 		for _, filter := range filters {
-			if ContainsVolatileFunction(filter) {
+			if builder.filterPushdownBarrier(filter) {
 				node.FilterList = append(node.FilterList, filter)
 			} else if !containsTag(filter, windowTag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, windowTag, node.WinSpecList))
@@ -502,6 +552,23 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		cantPushdown = append(cantPushdown, filters...)
 
 	case plan.Node_JOIN:
+		if builder.joinOwnsConstantDiagnostic(node) {
+			// ON diagnostics belong to these two logical inputs. Keep complete
+			// hash keys here, and do not let incoming WHERE predicates or other
+			// ON conjuncts pre-filter an input and erase diagnostic activation.
+			node.OnList = splitPlanConjunctions(node.OnList)
+			cantPushdown = append(cantPushdown, filters...)
+			for i, child := range node.Children {
+				childID, remaining := builder.pushdownFilters(child, nil, separateNonEquiConds)
+				if len(remaining) > 0 {
+					childID = builder.appendNode(&plan.Node{
+						NodeType: plan.Node_FILTER, Children: []int32{childID}, FilterList: remaining,
+					}, nil)
+				}
+				node.Children[i] = childID
+			}
+			break
+		}
 		dedupIgnoreHasReleaseRows := node.JoinType == plan.Node_DEDUP &&
 			node.OnDuplicateAction == plan.Node_IGNORE && node.DedupJoinCtx != nil &&
 			len(node.DedupJoinCtx.OldColList) > 1
@@ -608,7 +675,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				conj := splitPlanConjunction(applyDistributivity(
 					builder.GetContext(), cond, !builder.subqueryPredicatePlanningDisabled()))
 				for _, conjElem := range conj {
-					if ContainsVolatileFunction(conjElem) {
+					if builder.filterPushdownBarrier(conjElem) {
 						newOnList = append(newOnList, conjElem)
 						continue
 					}
@@ -652,7 +719,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 				continue
 			}
-			if ContainsVolatileFunction(filter) {
+			if builder.filterPushdownBarrier(filter) {
 				cantPushdown = append(cantPushdown, filter)
 				continue
 			}
@@ -784,7 +851,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 				for _, cond := range node.OnList {
 					joinSide := getJoinSideForPushdown(cond, leftTags, rightTags, markTag)
-					if joinSide == JoinSideRight && !ContainsVolatileFunction(cond) {
+					if joinSide == JoinSideRight && !builder.filterPushdownBarrier(cond) {
 						rightPushdown = append(rightPushdown, cond)
 					} else {
 						newOnList = append(newOnList, cond)
@@ -819,7 +886,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		if builder.qry.Nodes[node.Children[1]].NodeType == plan.Node_FUNCTION_SCAN {
 
 			for _, filter := range filters {
-				if ContainsVolatileFunction(filter) {
+				if builder.filterPushdownBarrier(filter) {
 					continue
 				}
 				down := false
@@ -869,6 +936,15 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[1] = childID
 
 	case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+		// Physical equality keys can identify distinct visible values (for
+		// example PAD SPACE 'a' and 'a '). An outer byte-sensitive predicate
+		// must not change which rows match, cancel or survive deduplication.
+		// Until equivalence-preservation is proven, keep such predicates above
+		// the set operation, while still optimizing each branch's own filters.
+		if node.NodeType != plan.Node_UNION_ALL && len(node.PhysicalEqualityKeyList) > 0 {
+			cantPushdown = append(cantPushdown, filters...)
+			filters = nil
+		}
 		// Record middle: processing UNION/MINUS/INTERSECT node
 		builder.optimizationHistory = append(builder.optimizationHistory,
 			fmt.Sprintf("pushdownFilters:middle (nodeID: %d, %s, filters: %d)", nodeID, node.NodeType, len(filters)))
@@ -877,7 +953,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		var canPushDownRight []*plan.Expr
 
 		for _, filter := range filters {
-			if ContainsVolatileFunction(filter) {
+			if builder.filterPushdownBarrier(filter) {
 				cantPushdown = append(cantPushdown, filter)
 				continue
 			}
@@ -908,7 +984,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 	case plan.Node_PROJECT:
 		child := builder.qry.Nodes[node.Children[0]]
 		if (child.NodeType == plan.Node_VALUE_SCAN || child.NodeType == plan.Node_EXTERNAL_SCAN) && child.RowsetData == nil {
-			cantPushdown = filters
+			cantPushdown = append(cantPushdown, filters...)
 			break
 		}
 
@@ -972,8 +1048,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 	case plan.Node_APPLY:
+		leftTags := make(map[int32]bool)
+		for _, tag := range builder.enumerateTags(node.Children[0]) {
+			leftTags[tag] = true
+		}
 		for _, filter := range filters {
-			if ContainsVolatileFunction(filter) {
+			if builder.filterPushdownBarrier(filter) || !containsOnlyTags(filter, leftTags) {
 				cantPushdown = append(cantPushdown, filter)
 			} else {
 				canPushdown = append(canPushdown, filter)
@@ -998,7 +1078,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 			node.Children[0] = childID
 		} else {
-			cantPushdown = filters
+			// A leaf (e.g. SINK_SCAN): APPEND rather than overwrite, so filters the
+			// limit/offset guard above already moved into cantPushdown are preserved. A
+			// recursive-CTE consumer SINK_SCAN carries Offset (#29332), so an outer WHERE
+			// blocked by the guard would otherwise be silently dropped here (#29065).
+			cantPushdown = append(cantPushdown, filters...)
 		}
 	}
 
@@ -1454,7 +1538,7 @@ func (builder *QueryBuilder) pushdownTopThroughLeftJoin(nodeID int32) {
 	}
 
 	//before join order, only left join
-	if joinnode.JoinType != plan.Node_LEFT {
+	if joinnode.JoinType != plan.Node_LEFT || builder.joinOwnsConstantDiagnostic(joinnode) {
 		goto END
 	}
 

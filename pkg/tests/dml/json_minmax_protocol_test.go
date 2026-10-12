@@ -29,13 +29,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestJSONMinMaxMixedVersionRemoteTopology executes the protocol counterexample
-// through a real two-CN SQL topology. The coordinator runs the candidate
-// code, while the peer is first made legacy-compatible (v80) and then capable
-// (provisional v87).
-// Draining the coordinator makes the peer the actual remote destination rather
-// than merely inspecting a mocked pipeline or version response.
-func TestJSONMinMaxMixedVersionRemoteTopology(t *testing.T) {
+// TestJSONMinMaxSimulatedVersionRemoteTopology executes two candidate-code CNs
+// with different advertised versions. It proves placement/fallback and real SQL
+// execution, but does not establish compatibility with an old executable.
+func TestJSONMinMaxSimulatedVersionRemoteTopology(t *testing.T) {
 	var fixtureInvalidationErr error
 	defer func() {
 		if fixtureInvalidationErr == nil {
@@ -97,23 +94,23 @@ func TestJSONMinMaxMixedVersionRemoteTopology(t *testing.T) {
 			[]string{cn.ServiceID(), peer.ServiceID()},
 			func(err error) { fixtureInvalidationErr = err },
 			func() {
-				// v86 is the reserved JSON string-consumer predecessor worker. The
+				// Simulated v110 is below this candidate typed MIN/MAX floor. The
 				// coordinator must reject remote JSON partials and fall back to
 				// one-CN execution, while retaining the correct SQL result.
-				peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
+				peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
 				physical, err := testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
 				require.NoError(t, err)
 				require.NotContains(t, physical.Text, peerAddr,
-					"a v86 worker must not receive a JSON MIN/MAX partial")
+					"a simulated v110 worker must not receive a JSON MIN/MAX partial")
 				var minValue, maxValue string
 				require.NoError(t, db.QueryRowContext(ctx, query).Scan(&minValue, &maxValue))
 				require.Equal(t, "1", minValue)
 				require.Equal(t, "256", maxValue)
 
-				// Provisional v87 is the capable remote worker. The same production SQL
+				// Provisional v111 is the capable remote worker. The same production SQL
 				// query must place the JSON aggregate on the peer and preserve
 				// the typed ordering counterexample 1 < 256.
-				peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion87)
+				peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
 				physical, err = testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
 				require.NoError(t, err)
 				require.Contains(t, physical.Text, peerAddr,

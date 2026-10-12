@@ -101,8 +101,21 @@ func EncodeType(p *Type) []byte {
 	return util.UnsafeToBytes(p)
 }
 
+// DecodeType is for trusted fixed-width buffers. External readers must use
+// DecodeTypeChecked to reject truncated or unknown metadata without panicking.
 func DecodeType(v []byte) Type {
 	return *(*Type)(unsafe.Pointer(&v[0]))
+}
+
+func DecodeTypeChecked(v []byte) (Type, error) {
+	if len(v) < TSize {
+		return Type{}, moerr.NewInvalidInputNoCtx("short native type encoding")
+	}
+	typ := DecodeType(v)
+	if err := typ.ValidateCollation(); err != nil {
+		return Type{}, err
+	}
+	return typ, nil
 }
 
 func EncodeFixed[T FixedSizeT](v T) []byte {
@@ -848,7 +861,7 @@ func ReadType(r io.Reader) (Type, error) {
 	if _, err := io.ReadFull(r, buf[:]); err != nil {
 		return Type{}, err
 	}
-	return DecodeType(buf[:]), nil
+	return DecodeTypeChecked(buf[:])
 }
 
 func ReadSizeBytes(r io.Reader) (int32, []byte, error) {

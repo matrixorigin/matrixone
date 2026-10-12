@@ -42,7 +42,7 @@ func wgs84GeometryInputs(left, right []string) []FunctionTestInput {
 func TestWGS84AntimeridianTopologyPredicates(t *testing.T) {
 	cases := []struct {
 		name string
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 		want []bool
 	}{
 		{name: "contains", fn: StContains, want: []bool{true, true}},
@@ -68,7 +68,7 @@ func TestWGS84AntimeridianTopologyPredicates(t *testing.T) {
 				wgs84GeometryInputs(left, right),
 				NewFunctionTestResult(types.T_bool.ToType(), false, tc.want, []bool{false, false}),
 				tc.fn)
-			ok, info := fc.Run()
+			ok, info := fc.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -79,7 +79,7 @@ func TestWGS84AntimeridianOverlay(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 		want string
 	}{
 		// These are independent topology oracles for a small local patch:
@@ -94,6 +94,7 @@ func TestWGS84AntimeridianOverlay(t *testing.T) {
 				wgs84GeometryInputs([]string{antimeridianOuter}, []string{antimeridianInner}),
 				NewFunctionTestResult(types.T_geometry.ToType(), false, []string{tc.want}, []bool{false}),
 				tc.fn)
+			defer fc.Free()
 			ok, info := fc.Run()
 			require.True(t, ok, info)
 			got, err := geo.ReadWKB(fc.GetResultVectorDirectly().GetBytesAt(0))
@@ -107,7 +108,7 @@ func TestWGS84AntimeridianTopologyIsOperandOrderIndependent(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		name string
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 		want bool
 	}{
 		{name: "intersects", fn: StIntersects, want: true},
@@ -120,7 +121,7 @@ func TestWGS84AntimeridianTopologyIsOperandOrderIndependent(t *testing.T) {
 				fc := NewFunctionTestCase(proc,
 					wgs84GeometryInputs([]string{pair[0]}, []string{pair[1]}),
 					NewFunctionTestResult(types.T_bool.ToType(), false, []bool{tc.want}, []bool{false}), tc.fn)
-				ok, info := fc.Run()
+				ok, info := fc.RunAndFree()
 				require.True(t, ok, info)
 			}
 		})
@@ -160,7 +161,7 @@ func TestWGS84AntimeridianGeometry32AndMaskedRows(t *testing.T) {
 			NewFunctionTestInput(geometry32, []string{g32(antimeridianInner)}, []bool{false}),
 		},
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, []bool{false}), StContains)
-	ok, info := contains.Run()
+	ok, info := contains.RunAndFree()
 	require.True(t, ok, info)
 
 	intersection := NewFunctionTestCase(proc,
@@ -169,6 +170,7 @@ func TestWGS84AntimeridianGeometry32AndMaskedRows(t *testing.T) {
 			NewFunctionTestInput(geometry32, []string{g32(antimeridianInner)}, []bool{false}),
 		},
 		NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"POLYGON((179.5 0.5,179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5))"}, []bool{false}), StIntersection)
+	defer intersection.Free()
 	ok, info = intersection.Run()
 	require.True(t, ok, info)
 	_, err := geo.ReadWKBFloat32(intersection.GetResultVectorDirectly().GetBytesAt(0))
@@ -181,7 +183,7 @@ func TestWGS84AntimeridianGeometry32AndMaskedRows(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, true}, []bool{true, false}), StIntersects).
 		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
-	ok, info = masked.Run()
+	ok, info = masked.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -190,6 +192,7 @@ func TestWGS84AntimeridianRejectsOutOfRangeCoordinates(t *testing.T) {
 	fc := NewFunctionTestCase(proc,
 		wgs84GeometryInputs([]string{"POINT(181 0)", "POINT(0 0)"}, []string{"POINT(0 0)", "POINT(0 0)"}),
 		NewFunctionTestResult(types.T_bool.ToType(), true, nil, nil), StIntersects)
+	defer fc.Free()
 	require.NoError(t, fc.result.PreExtendAndReset(2))
 	err := StIntersects(fc.parameters, fc.result, proc, 2, nil)
 	require.Error(t, err)

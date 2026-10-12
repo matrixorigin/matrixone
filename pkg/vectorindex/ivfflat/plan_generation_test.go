@@ -23,6 +23,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -37,7 +38,6 @@ import (
 
 func TestRequiredMembershipStoragePaths(t *testing.T) {
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	for _, tc := range []struct {
 		name                          string
 		integer, residual, full, desc bool
@@ -75,6 +75,7 @@ func TestRequiredMembershipStoragePaths(t *testing.T) {
 			scanner := &scriptedRelationScanner{t: t}
 			p.RelationScanner = scanner
 			scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
+				require.Equal(t, fileservice.Policy(fileservice.SkipFullFilePreloads), req.ReadPolicy)
 				require.Equal(t, tc.desc, req.PostFilterTopOnly)
 				require.Equal(t, !tc.desc && (!tc.integer || tc.residual), req.FilterBeforeTopK)
 				require.Equal(t, tc.integer && !tc.desc, req.FilterHint.BF != nil)
@@ -147,7 +148,6 @@ func (a *generationAdmission) Release(n int64) int64 { a.held -= n; return a.hel
 func TestPlanGenerationFailsClosedBeforeStorage(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	proc.Base.TxnOperator = mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.SessionInfo.StorageEngine = mock_frontend.NewMockEngine(ctrl) // no calls allowed
 	spec := &plan.VectorIndexScan{Index: &plan.IndexDef{IndexAlgoParams: `{"lists":"1","op_type":"vector_l2_ops"}`},
@@ -187,6 +187,30 @@ func TestPlanGenerationFailsClosedBeforeStorage(t *testing.T) {
 		require.True(t, end)
 		require.NoError(t, r.Close())
 	}
+
+	// Empty domains still validate the distributed identity and work before
+	// publishing readers, and never open storage.
+	distributed := empty
+	distributed.Identity.PartitionCount = 2
+	distributed.Identity.PartitionIndex = 1
+	distributed.Identity.IsRemote = true
+	spec.ScanWork = &plan.VectorIndexScanWork{Objects: 2, Rows: 10, Blocks: 2, VectorBytesPerRow: 512}
+	readers, err = NewPlanReaders(proc, spec, distributed, 1)
+	require.NoError(t, err)
+	require.Len(t, readers, 1)
+	require.NoError(t, readers[0].Close())
+	for _, invalid := range []*plan.VectorIndexScanWork{
+		{Objects: 1, Rows: 10, Blocks: 2, VectorBytesPerRow: 512},
+		{Objects: 2, Rows: -1, Blocks: 2, VectorBytesPerRow: 512},
+		{Objects: 2, Rows: 10, Blocks: 0, VectorBytesPerRow: 512},
+		{Objects: 2, Rows: 10, Blocks: 2, VectorBytesPerRow: 0},
+	} {
+		spec.ScanWork = invalid
+		readers, err = NewPlanReaders(proc, spec, distributed, 1)
+		require.Error(t, err)
+		require.Nil(t, readers)
+	}
+	spec.ScanWork = &plan.VectorIndexScanWork{}
 
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, exists := rt.GetGlobalVariables(moruntime.CNMemoryThrottler)

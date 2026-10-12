@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,6 +43,61 @@ import (
 )
 
 const opName = "top"
+
+const (
+	topResidentRecoveryTarget = uint64(evalSpillChunkBytes / 2)
+	topRecoveryMinimum        = uint64(topSpillWriteBufferSize * 2)
+	topSpillRowReferenceSize  = uint64(32)
+)
+
+func topRecoveryAdd(left, right uint64) uint64 {
+	if right > math.MaxUint64-left {
+		return math.MaxUint64
+	}
+	return left + right
+}
+
+func topRecoveryMul(left, right uint64) uint64 {
+	if left != 0 && right > math.MaxUint64/left {
+		return math.MaxUint64
+	}
+	return left * right
+}
+
+// topSpillRecoveryTarget is the bounded resident state needed to choose and
+// later reload winners: order keys, one int64 selector, and one row reference
+// per winner, including replacement overlap. Large limits may exceed the
+// ordinary in-memory window, so cap the up-front floor and let spill keep the
+// remaining payload on disk.
+func topSpillRecoveryTarget(limit uint64, fs []*plan.OrderBySpec) uint64 {
+	width := uint64(8) + topSpillRowReferenceSize
+	for _, spec := range fs {
+		if spec == nil || spec.Expr == nil {
+			continue
+		}
+		size := spec.Expr.Typ.Id
+		typeSize := types.T(size).TypeLen()
+		if typeSize <= 0 {
+			typeSize = types.VarlenaSize
+		}
+		width = topRecoveryAdd(width, uint64(typeSize)+1)
+	}
+	target := topRecoveryMul(topRecoveryMul(limit, width), 2)
+	target = max(target, topRecoveryMinimum)
+	return min(target, topResidentRecoveryTarget)
+}
+
+func (ctr *container) recoveryTargetShare(target uint64) uint64 {
+	if ctr == nil || ctr.budget == nil {
+		return target
+	}
+	workers := max(1, system.GoMaxProcs())
+	share := ctr.budget.Snapshot().Cap / uint64(workers)
+	if share == 0 {
+		share = ctr.budget.Snapshot().Cap
+	}
+	return min(target, share)
+}
 
 func (top *Top) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -103,6 +159,9 @@ func (top *Top) Prepare(proc *process.Process) (err error) {
 		if err != nil {
 			return err
 		}
+		if err = top.ctr.installRecoveryCapacity(); err != nil {
+			return err
+		}
 	}
 
 	// limit executor
@@ -121,6 +180,29 @@ func (top *Top) Prepare(proc *process.Process) (err error) {
 		return err
 	}
 	top.ctr.limit = vector.MustFixedColWithTypeCheck[uint64](vec)[0]
+	top.ctr.spilling = top.ctr.limit > topSpillThreshold
+	if top.ctr.limit > 0 && top.ctr.recoveryCapacity != nil {
+		target := min(topResidentRecoveryTarget,
+			topRecoveryMul(top.ctr.residentWindow(), 2))
+		if top.ctr.spilling {
+			target = topSpillRecoveryTarget(top.ctr.limit, top.Fs)
+		}
+		target = top.ctr.recoveryTargetShare(target)
+		if err = top.ctr.ensureRecoveryCapacity(target); err != nil {
+			// A small resident Top is an optimization. If its complete overlap
+			// window cannot be admitted, switch to the bounded key+row-reference
+			// spill path and reserve only the progress state that path needs.
+			if top.ctr.spilling {
+				return err
+			}
+			top.ctr.spilling = true
+			if err = top.ctr.ensureRecoveryCapacity(
+				top.ctr.recoveryTargetShare(
+					topSpillRecoveryTarget(top.ctr.limit, top.Fs))); err != nil {
+				return err
+			}
+		}
+	}
 
 	initialSelections := int(min(top.ctr.limit, uint64(1024)))
 	if initialSelections > 0 {
@@ -161,19 +243,12 @@ func (top *Top) Prepare(proc *process.Process) (err error) {
 	// OrderedOutput is a topology contract, not a storage policy. Both eval
 	// paths produce sorted rows. Small results use type/actual-byte admission
 	// in build and migrate only under payload pressure; large K still spills.
-	if top.ctr.limit > topSpillThreshold {
-		top.ctr.spilling = true
-	}
-
 	return nil
 }
 
 func (top *Top) Call(
 	proc *process.Process,
-) (callResult vm.CallResult, callErr error) {
-	defer func() {
-		callErr = hashbuild.TerminalBudgetErrorForOperator(proc.Ctx, "top", callErr)
-	}()
+) (vm.CallResult, error) {
 	analyzer := top.OpAnalyzer
 
 	if top.ctr.limit == 0 {
@@ -224,7 +299,8 @@ func (top *Top) Call(
 				if _, canceled := vm.CancelCheck(proc); canceled {
 					return vm.CancelResult, err
 				}
-				return result, err
+				return result, hashbuild.TerminalBudgetErrorForOperator(
+					proc.Ctx, "top", err)
 			}
 			if top.TopValueTag > 0 && top.updateTopValueZM() {
 				message.SendMessage(message.TopValueMessage{TopValueZM: top.ctr.topValueZM, Tag: top.TopValueTag}, proc.GetMessageBoard())
@@ -240,7 +316,12 @@ func (top *Top) Call(
 		}
 		done, err := top.ctr.eval(top.ctr.limit, top.ctr.n, proc, &result)
 		if err != nil {
-			return result, err
+			return result, hashbuild.TerminalBudgetErrorForOperator(
+				proc.Ctx, "top", err)
+		}
+		if err = top.ctr.trimRecoveryCapacity(); err != nil {
+			return result, hashbuild.TerminalBudgetErrorForOperator(
+				proc.Ctx, "top", err)
 		}
 		if done {
 			top.ctr.state = vm.End

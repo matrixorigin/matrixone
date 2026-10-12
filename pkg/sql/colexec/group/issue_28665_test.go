@@ -97,9 +97,9 @@ func TestGroupedGroupConcatWarningRowsUseInputOrdinalAcrossPartialMerge(t *testi
 	}
 	require.Equal(t, map[int32]string{1: "aa|b", 2: "x|yy", 3: "p|q|"}, values)
 	require.Equal(t, []string{
-		"Row 8 was cut by GROUP_CONCAT()",
-		"Row 5 was cut by GROUP_CONCAT()",
 		"Row 2 was cut by GROUP_CONCAT()",
+		"Row 5 was cut by GROUP_CONCAT()",
+		"Row 8 was cut by GROUP_CONCAT()",
 	}, session.messages)
 	merge.Free(proc, false, nil)
 	mergeChild.Free(proc, false, nil)

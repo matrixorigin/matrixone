@@ -8,10 +8,10 @@ insert into issue_28885_hll_nan_equivalence values
 (1.0);
 select count(distinct v) as exact_count,
 approx_count_distinct(v) as approx_count,
-hll_cardinality(hll_add_agg(v)) as legacy_hll_count
+hll_cardinality(hll_add_agg(v)) as hll_count
 from issue_28885_hll_nan_equivalence;
-➤ exact_count[-5,64,0]  ¦  approx_count[-5,64,0]  ¦  legacy_hll_count[-5,64,0]  𝄀
-3  ¦  3  ¦  5
+➤ exact_count[-5,64,0]  ¦  approx_count[-5,64,0]  ¦  hll_count[-5,64,0]  𝄀
+3  ¦  3  ¦  3
 drop table issue_28885_hll_nan_equivalence;
 drop table if exists issue_28885_hll_nan_equivalence_float;
 create table issue_28885_hll_nan_equivalence_float(v float);
@@ -23,8 +23,8 @@ insert into issue_28885_hll_nan_equivalence_float values
 (1.0);
 select count(distinct v) as exact_count,
 approx_count_distinct(v) as approx_count,
-hll_cardinality(hll_add_agg(v)) as legacy_hll_count
+hll_cardinality(hll_add_agg(v)) as hll_count
 from issue_28885_hll_nan_equivalence_float;
-➤ exact_count[-5,64,0]  ¦  approx_count[-5,64,0]  ¦  legacy_hll_count[-5,64,0]  𝄀
-3  ¦  3  ¦  5
+➤ exact_count[-5,64,0]  ¦  approx_count[-5,64,0]  ¦  hll_count[-5,64,0]  𝄀
+3  ¦  3  ¦  3
 drop table issue_28885_hll_nan_equivalence_float;

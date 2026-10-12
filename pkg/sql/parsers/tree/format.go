@@ -43,6 +43,18 @@ type FmtCtx struct {
 	detectDateTimeFormat          bool
 	sawDateTimeFormat             bool
 	stringLiteralPositions        *[]StringLiteralPosition
+	parameterCount                *int
+}
+
+// ParameterCount returns the parser's original parameter slot count. Use the
+// formatter's complete AST traversal so optimizer pruning and duplicated
+// occurrences cannot compact or increase the protocol parameter layout.
+func ParameterCount(node NodeFormatter) int {
+	count := 0
+	ctx := NewFmtCtx(dialect.MYSQL)
+	ctx.parameterCount = &count
+	node.Format(ctx)
+	return count
 }
 
 // StringLiteralPosition identifies the bytes occupied by one string literal
