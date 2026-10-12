@@ -1087,7 +1087,7 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 	require.Equal(t, types.StringSourceSQLPrepare, decodedWithSources.Vecs[0].GetStringSourceAt(1))
 }
 
-func TestMessageReceiverSendBatchRequiresV109ForNumericBinaryLiteralProvenance(t *testing.T) {
+func TestMessageReceiverSendBatchRequiresV110ForNumericBinaryLiteralProvenance(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
 	t.Cleanup(func() {
@@ -1117,14 +1117,17 @@ func TestMessageReceiverSendBatchRequiresV109ForNumericBinaryLiteralProvenance(t
 		maxMessageSize:  1 << 20,
 	}
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, int64(101))
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion109",
-		"the sender must reject a pre-v109 downgrade before writing a batch")
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion110",
+		"the sender must reject a pre-v110 downgrade before writing a batch")
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, int64(102))
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion109",
-		"the sender must reject a pre-v109 downgrade before writing a batch")
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion110",
+		"the sender must reject a pre-v110 downgrade before writing a batch")
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion108)
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion109",
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion110",
 		"the sender must reject a v108 downgrade before writing a batch")
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion109)
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion110",
+		"the sender must reject a v109 downgrade before writing a batch")
 
 	var sent *pipeline.Message
 	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
@@ -1132,7 +1135,7 @@ func TestMessageReceiverSendBatchRequiresV109ForNumericBinaryLiteralProvenance(t
 			sent = message.(*pipeline.Message)
 			return nil
 		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion109)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion110)
 	require.NoError(t, receiver.sendBatch(bat))
 	require.NotNil(t, sent)
 	decoded := batch.NewOffHeapEmpty()
