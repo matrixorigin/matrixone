@@ -129,15 +129,33 @@ func TestPartitionTopNLiteralOrderKeys(t *testing.T) {
 }
 
 func TestPartitionTopNRejectsUnsupportedOrderType(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
-	t.Cleanup(proc.Free)
-	arg := newTopNArgument(1)
-	t.Cleanup(func() { arg.Free(proc, true, nil) })
-	arg.OrderBySpecs = arg.OrderBySpecs[:2]
-	arg.OrderBySpecs[1].Expr = topNCol(1, types.T_tuple)
-	err := arg.Prepare(proc)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+	for _, tc := range []struct {
+		name      string
+		oid       types.T
+		supported bool
+	}{
+		{"tuple", types.T_tuple, false},
+		{"interval", types.T_interval, false},
+		// ANY is supported for domainless NULL values; it cannot serve as
+		// the unsupported-type counterexample.
+		{"domainless_null", types.T_any, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+			t.Cleanup(proc.Free)
+			arg := newTopNArgument(1)
+			t.Cleanup(func() { arg.Free(proc, true, nil) })
+			arg.OrderBySpecs = arg.OrderBySpecs[:2]
+			arg.OrderBySpecs[1].Expr = topNCol(1, tc.oid)
+			err := arg.Prepare(proc)
+			if tc.supported {
+				require.NoError(t, err)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+			}
+		})
+	}
 }
 
 func TestPartitionTopNSQLOrderFloatNaNs(t *testing.T) {

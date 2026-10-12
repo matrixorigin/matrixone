@@ -3872,6 +3872,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 	// TODO(retire-txn-trace, #29249): remove this declaration and its inert-setting
 	// tests once the rollback window excludes collector-bearing versions and
 	// client/session initialization no longer sends this setting.
+	"mo_sirius_campaign_evidence": {
+		Name:              "mo_sirius_campaign_evidence",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("mo_sirius_campaign_evidence"),
+		Default:           int64(0),
+	},
 	"disable_txn_trace": {
 		Name:              "disable_txn_trace",
 		Scope:             ScopeSession,
