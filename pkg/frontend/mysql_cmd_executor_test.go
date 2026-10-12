@@ -5163,23 +5163,32 @@ func TestHandlePrepareStmtNameContainingFrom(t *testing.T) {
 func TestHandlePrepareStmtExecutableCommentDelimiter(t *testing.T) {
 	setSessionAlloc("", NewLeakCheckAllocator())
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
-	const sql = "prepare fromx /*! from */ select 1"
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
-	require.NoError(t, err)
-
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	execCtx := newTestExecCtx(ctx, ctrl)
-
-	runTestHandle("handlePrepareStmt executable comment delimiter", t, func(ses *Session) error {
-		execCtx.resper = ses.respr
-		prepared, err := handlePrepareStmt(ses, execCtx, stmt.(*tree.PrepareStmt), sql)
-		if err != nil {
-			return err
-		}
-		require.Equal(t, "select 1", prepared.Sql)
-		return nil
-	})
+	const inner = "SELECT t.begin, t.rank FROM (SELECT 7 AS `begin`, 9 AS `rank`) t"
+	for _, tc := range []struct{ sql, want string }{
+		{"prepare fromx /*! from */ select 1", "select 1"},
+		{"/*! PREPARE fromx FROM " + inner + " */", inner},
+		{"PREPARE fromx /*! FROM " + inner + " */", inner},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			execCtx := newTestExecCtx(ctx, gomock.NewController(t))
+			runTestHandle("handlePrepareStmt executable comment delimiter", t, func(ses *Session) error {
+				defer ses.Close()
+				execCtx.resper = ses.respr
+				prepared, err := handlePrepareStmt(ses, execCtx, stmt.(*tree.PrepareStmt), tc.sql)
+				if err != nil {
+					return err
+				}
+				require.Equal(t, tc.want, prepared.Sql)
+				stored, err := ses.GetPrepareStmt(ctx, "fromx")
+				require.NoError(t, err)
+				require.Same(t, prepared, stored)
+				return nil
+			})
+		})
+	}
 }
 
 func TestHandlePrepareStmtQuotedCommentTerminator(t *testing.T) {
@@ -5257,6 +5266,48 @@ func TestExtractPrepareStmtSQL(t *testing.T) {
 			sql:  "prepare fromx /*! from */ /* inner */ select 3",
 			want: "/* inner */ select 3",
 		},
+		{
+			name: "qualified BEGIN in complete executable PREPARE",
+			sql:  "/*! PREPARE p FROM SELECT t.begin, t.rank FROM t */",
+			want: "SELECT t.begin, t.rank FROM t",
+		},
+		{
+			name: "qualified BEGIN after executable delimiter",
+			sql:  "PREPARE p /*! FROM SELECT t.begin, t.rank FROM t */",
+			want: "SELECT t.begin, t.rank FROM t",
+		},
+		{
+			name: "ordinary PREPARE control",
+			sql:  "PREPARE p FROM SELECT t.begin, t.rank FROM t",
+			want: "SELECT t.begin, t.rank FROM t",
+		},
+		{
+			name: "quoted BEGIN control",
+			sql:  "/*! PREPARE p FROM SELECT t.`begin`, t.rank FROM t */",
+			want: "SELECT t.`begin`, t.rank FROM t",
+		},
+		{
+			name: "qualification across whitespace and comment",
+			sql:  "/*! PREPARE p FROM SELECT t. /* component */ begin, t.rank FROM t */",
+			want: "SELECT t. /* component */ begin, t.rank FROM t",
+		},
+		{
+			name: "wrapper closes mid-query",
+			sql:  "PREPARE p /*! FROM SELECT t.begin, */ t.rank FROM t",
+			want: "SELECT t.begin, t.rank FROM t",
+		},
+		{
+			name:    "ansi quoted BEGIN",
+			sql:     `/*! PREPARE p FROM SELECT t."begin", t.rank FROM t */`,
+			sqlMode: "ANSI_QUOTES",
+			want:    `SELECT t."begin", t.rank FROM t`,
+		},
+		{
+			name:    "NO_BACKSLASH_ESCAPES quoted terminator",
+			sql:     `/*! PREPARE p FROM SELECT t.begin, 'x\*/y' FROM t */`,
+			sqlMode: "NO_BACKSLASH_ESCAPES",
+			want:    `SELECT t.begin, 'x\*/y' FROM t`,
+		},
 	}
 
 	for _, testCase := range testCases {
@@ -5274,6 +5325,8 @@ func TestExtractPrepareStmtSQLRejectsInvalidInput(t *testing.T) {
 		"prepare",
 		"prepare stmt select 1",
 		"prepare stmt /*! from select 1",
+		"/*! PREPARE p FROM SELECT t.begin, 'unterminated */",
+		"/*! PREPARE p FROM SELECT begin, t.rank FROM t */",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			_, err := extractPrepareStmtSQL(context.Background(), sql, "")

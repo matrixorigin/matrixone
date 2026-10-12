@@ -40,6 +40,19 @@ select * from result_scan(last_query_id()) as saved;
 7  ¦  null
 set save_query_result = @qualified_identifier_saved_result;
 set @qualified_identifier_saved_result = null;
+/*! prepare qualified_keyword_prepare from select t.begin,t.null from qualified_identifier.select t */;
+execute qualified_keyword_prepare;
+➤ begin[4,32,0]  ¦  null[4,32,0]  𝄀
+7  ¦  null
+deallocate prepare qualified_keyword_prepare;
+prepare qualified_keyword_prepare /*! from select t.begin,t.null from qualified_identifier.select t */;
+execute qualified_keyword_prepare;
+➤ begin[4,32,0]  ¦  null[4,32,0]  𝄀
+7  ¦  null
+deallocate prepare qualified_keyword_prepare;
+select t.begin/* ; */ ,t.null from qualified_identifier.select t;
+➤ begin[4,32,0]  ¦  null[4,32,0]  𝄀
+7  ¦  null
 drop database qualified_identifier;
 show databases like 'qualified_identifier';
 ➤ Database[12,5000,0]

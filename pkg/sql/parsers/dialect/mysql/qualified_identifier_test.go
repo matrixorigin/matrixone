@@ -159,7 +159,7 @@ func TestQualifiedIdentifierBoundariesAndReuse(t *testing.T) {
 	t.Run("scanner context is scoped and reset", func(t *testing.T) {
 		scanner := NewScanner(dialect.MYSQL, "rank rank")
 		defer PutScanner(scanner)
-		token, word := scanner.scanAfterDot()
+		token, word := scanner.ScanAfterDot()
 		require.Equal(t, ID, token)
 		require.Equal(t, "rank", word)
 		require.False(t, scanner.identifierAfterDot)

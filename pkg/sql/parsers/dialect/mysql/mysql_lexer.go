@@ -343,7 +343,7 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	var typ int
 	var str string
 	if l.lastToken == int('.') {
-		typ, str = l.scanner.scanAfterDot()
+		typ, str = l.scanner.ScanAfterDot()
 	} else {
 		typ, str = l.scanner.Scan()
 	}
@@ -647,7 +647,7 @@ func executableCommentEndsByFinalSemicolon(sql string, sqlMode string) map[int]i
 		// so accepted names such as t.begin cannot stop this boundary rescan.
 		var typ int
 		if previousToken == int('.') {
-			typ, _ = scanner.scanAfterDot()
+			typ, _ = scanner.ScanAfterDot()
 		} else {
 			typ, _ = scanner.Scan()
 		}

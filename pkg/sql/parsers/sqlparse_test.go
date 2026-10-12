@@ -71,6 +71,15 @@ func TestPostgresql(t *testing.T) {
 }
 
 func TestSplitSqlBySemicolon(t *testing.T) {
+	t.Run("qualified BEGIN before comment semicolon", func(t *testing.T) {
+		for _, name := range []string{"begin", "`begin`"} {
+			t.Run(name, func(t *testing.T) {
+				first := "SELECT t." + name + "/* ; */ FROM t"
+				require.Equal(t, []string{first, "SELECT 2"}, SplitSqlBySemicolon(first+"; SELECT 2"))
+				require.Equal(t, []string{first, "SELECT 2"}, HandleSqlForRecord(first+"; SELECT 2"))
+			})
+		}
+	})
 	ret := SplitSqlBySemicolon("select 1;select 2;select 3;")
 	require.Equal(t, 3, len(ret))
 	require.Equal(t, "select 1", ret[0])
@@ -293,6 +302,28 @@ func TestSplitSqlByStatementExecutableCommentTerminator(t *testing.T) {
 }
 
 func TestHandleSqlForRecord(t *testing.T) {
+	t.Run("qualified BEGIN before quoted comment text", func(t *testing.T) {
+		for _, name := range []string{"begin", "`begin`"} {
+			t.Run(name, func(t *testing.T) {
+				for _, key := range []string{"secret_access_key", "access_key_id"} {
+					t.Run(key, func(t *testing.T) {
+						prefix := "SELECT t." + name + "/* 'comment */ FROM t WHERE " + key + " = "
+						input := prefix + "'recording-test-value'"
+						stmt, err := ParseOne(context.Background(), dialect.MYSQL, input, 1)
+						require.NoError(t, err)
+						defer stmt.Free()
+						require.Equal(t, []string{prefix + "'******'"}, HandleSqlForRecord(input))
+					})
+				}
+			})
+		}
+	})
+	t.Run("qualified recording context resets between fragments", func(t *testing.T) {
+		first := "SELECT t.begin/* 'comment */ FROM t WHERE secret_access_key = "
+		last := "SELECT t.begin/* 'comment */ FROM t WHERE access_key_id = "
+		input := first + "'first-test-value'; CREATE USER u IDENTIFIED BY 'password-test-value'; " + last + "'last-test-value'"
+		require.Equal(t, []string{first + "'******'", "CREATE USER u IDENTIFIED BY '******'", last + "'******'"}, HandleSqlForRecord(input))
+	})
 	// Test remove /* cloud_user */ prefix
 	var ret []string
 	ret = HandleSqlForRecord(" ;   ;  ")

@@ -26,5 +26,14 @@ select t.begin,t.null from qualified_identifier.select t /* save_result */;
 select * from result_scan(last_query_id()) as saved;
 set save_query_result = @qualified_identifier_saved_result;
 set @qualified_identifier_saved_result = null;
+-- PREPARE extraction traverses qualified keywords inside executable comments.
+/*! prepare qualified_keyword_prepare from select t.begin,t.null from qualified_identifier.select t */;
+execute qualified_keyword_prepare;
+deallocate prepare qualified_keyword_prepare;
+prepare qualified_keyword_prepare /*! from select t.begin,t.null from qualified_identifier.select t */;
+execute qualified_keyword_prepare;
+deallocate prepare qualified_keyword_prepare;
+-- Legacy statement recording preserves semicolons inside comments after BEGIN.
+select t.begin/* ; */ ,t.null from qualified_identifier.select t;
 drop database qualified_identifier;
 show databases like 'qualified_identifier';

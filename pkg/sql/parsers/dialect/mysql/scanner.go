@@ -127,9 +127,9 @@ const skippedScannerToken = -1
 
 func (s *Scanner) Scan() (int, string) { return s.scan(false) }
 
-// scanAfterDot classifies identifier words before keyword-specific lookahead.
+// ScanAfterDot classifies identifier words before keyword-specific lookahead.
 // Keep this context scoped so standalone scanner consumers retain their rules.
-func (s *Scanner) scanAfterDot() (int, string) {
+func (s *Scanner) ScanAfterDot() (int, string) {
 	return s.scanQualified(false)
 }
 
