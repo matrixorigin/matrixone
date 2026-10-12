@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -183,6 +184,7 @@ func TestLegacyLoadTimeAndMediumIntAssignmentBeforeDefaults(t *testing.T) {
 		}
 	}
 	require.NotNil(t, assigned)
+	require.Equal(t, int32(types.T_varchar), assigned.ProjectList[table.Name2ColIndex["t"]].GetF().Args[0].Typ.Id)
 	for _, name := range []string{"t", "m", "u"} {
 		pos := table.Name2ColIndex[name]
 		require.Equal(t, "cast_assign", assigned.ProjectList[pos].GetF().GetFunc().GetObjName(), name)
@@ -197,6 +199,64 @@ func TestLegacyLoadTimeAndMediumIntAssignmentBeforeDefaults(t *testing.T) {
 		}
 	}
 	require.True(t, defaultUsesAssigned, "default must consume the assigned child projection")
+}
+
+func TestTextLoadTimeScanTypes(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		for _, explicit := range []bool{false, true} {
+			t.Run(fmt.Sprintf("legacy%v/columnlist%v", legacy, explicit), func(t *testing.T) {
+				proc := newPlanTestProcess(t)
+				setLoadAssignmentProtocol(t, proc)
+				ctx := NewMockCompilerContext(true, proc)
+				create, err := mysql.ParseOne(t.Context(), "create table text_time_load(t time(6), n int)", 1)
+				require.NoError(t, err)
+				defer create.Free()
+				ddl, err := BuildPlan(ctx, create, false)
+				require.NoError(t, err)
+				table := ddl.GetDdl().GetCreateTable().TableDef
+				table.TblId = 990003
+				table.Name2ColIndex = make(map[string]int32, len(table.Cols))
+				for i, col := range table.Cols {
+					table.Name2ColIndex[col.Name] = int32(i)
+				}
+				ctx.tables["text_time_load"] = table
+				ctx.objects["text_time_load"] = &planpb.ObjectRef{Obj: int64(table.TblId), SchemaName: "tpch", ObjName: "text_time_load"}
+				sql := "load data inline format='csv', data='2562047788:00:00,1' into table text_time_load fields terminated by ','"
+				if explicit {
+					sql = "load data inline format='csv', data='1,2562047788:00:00' into table text_time_load fields terminated by ',' (n,t)"
+				}
+				load, err := mysql.ParseOne(t.Context(), sql, 1)
+				require.NoError(t, err)
+				defer load.Free()
+				var result *planpb.Plan
+				if legacy {
+					result, err = buildLoad(load.(*tree.Load), ctx, false)
+				} else {
+					result, err = BuildPlan(ctx, load, false)
+				}
+				require.NoError(t, err)
+				var found bool
+				for _, node := range result.GetQuery().Nodes {
+					if node.NodeType != planpb.Node_EXTERNAL_SCAN {
+						continue
+					}
+					for _, expr := range node.ProjectList {
+						col := expr.GetCol()
+						if col != nil && node.TableDef.Cols[col.ColPos].Name == "t" {
+							found = true
+							require.Equal(t, int32(types.T_time), node.TableDef.Cols[col.ColPos].Typ.Id, "decoder retains target metadata")
+							require.Equal(t, int32(types.T_varchar), expr.Typ.Id, "scan metadata matches its physical text vector")
+						}
+					}
+				}
+				require.True(t, found)
+			})
+		}
+	}
+	for _, format := range []string{tree.PARQUET, tree.ARROW} {
+		typ := planpb.Type{Id: int32(types.T_time), Scale: 6}
+		require.Equal(t, typ, loadTimeInputType(format, typ), "typed columnar sources retain their declared type")
+	}
 }
 
 // Exercise the actual expression executor: metadata alone cannot prove that

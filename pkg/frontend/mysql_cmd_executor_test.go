@@ -3058,7 +3058,11 @@ func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
 	parsed, err = mysql.Parse(ctx, "load data local infile 'data.csv' into table t fields terminated by ',' ignore 1 lines", 1)
 	require.NoError(t, err)
 	require.Len(t, parsed, 1)
-	require.False(t, tree.IsIgnoreStatement(parsed[0]))
+	require.True(t, tree.IsIgnoreStatement(parsed[0]), "LOCAL supplies the error policy; the header count does not")
+	parsed, err = mysql.Parse(ctx, "load data infile 'data.csv' into table t fields terminated by ',' ignore 1 lines", 1)
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
+	require.False(t, tree.IsIgnoreStatement(parsed[0]), "a non-LOCAL header count must not enable IGNORE")
 }
 
 func TestRecordStatementSetsIgnoreForUpdateIgnore(t *testing.T) {
@@ -3095,6 +3099,21 @@ func TestRecordStatementSetsIgnoreForLoadDataIgnore(t *testing.T) {
 	_, err = RecordStatement(ctx, ses, proc, cw, time.Now(), "load data infile 'data.csv' into table t", constant.ExternSql, true)
 	require.NoError(t, err)
 	require.False(t, ses.GetStmtProfile().GetStatementIgnore())
+	for _, tc := range []struct {
+		stmt *tree.Load
+		want bool
+	}{
+		{&tree.Load{Local: true, DuplicateHandling: &tree.DuplicateKeyError{}}, true},
+		{&tree.Load{Local: true, DuplicateHandling: &tree.DuplicateKeyReplace{}}, false},
+		{&tree.Load{DuplicateHandling: &tree.DuplicateKeyError{}}, false},
+	} {
+		cw = InitTxnComputationWrapper(ses, tc.stmt, proc)
+		_, err = RecordStatement(ctx, ses, proc, cw, time.Now(), "load data infile 'data.csv' into table t", constant.ExternSql, true)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, ses.GetStmtProfile().GetStatementIgnore())
+		refreshProcessStmtProfileForPreparedStmt(proc, tc.stmt)
+		require.Equal(t, tc.want, proc.GetStmtProfile().GetStatementIgnore(), "prepared inner LOAD uses the same policy and resets it")
+	}
 }
 
 func TestRefreshProcessStmtProfileForPreparedStmtUsesInnerInsert(t *testing.T) {

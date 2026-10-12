@@ -797,6 +797,12 @@ func isLoadDataIgnore(stmt *Load) bool {
 	if stmt == nil {
 		return false
 	}
-	_, ok := stmt.DuplicateHandling.(*DuplicateKeyIgnore)
-	return ok
+	if _, ignore := stmt.DuplicateHandling.(*DuplicateKeyIgnore); ignore {
+		return true
+	}
+	// LOCAL uses the same conversion policy as IGNORE, unless REPLACE was
+	// explicitly selected. Share this effective policy with the planner and
+	// the runtime statement profile carried to remote LOAD workers.
+	_, replace := stmt.DuplicateHandling.(*DuplicateKeyReplace)
+	return stmt.Local && !replace
 }

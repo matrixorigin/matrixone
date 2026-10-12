@@ -112,7 +112,7 @@ func (builder *QueryBuilder) bindExternalScan(
 							colName, tableDef.Name)
 					}
 					colExpr := &plan.Expr{
-						Typ: tableDef.Cols[tbColIdx].Typ,
+						Typ: loadTimeInputType(stmt.Param.Format, tableDef.Cols[tbColIdx].Typ),
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								RelPos: externalScanTag,
@@ -149,7 +149,7 @@ func (builder *QueryBuilder) bindExternalScan(
 				tbColToDataCol[col.Name] = int32(len(insertColToExpr))
 
 				insertColToExpr[col.Name] = &plan.Expr{
-					Typ: col.Typ,
+					Typ: loadTimeInputType(stmt.Param.Format, col.Typ),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: externalScanTag,
@@ -171,8 +171,8 @@ func (builder *QueryBuilder) bindExternalScan(
 		insertColToExpr[target] = expr
 	}
 
-	// External scans expose target-typed columns. Equal type metadata does not
-	// prove that BLOB/TEXT payloads or internal TIME values fit the target domain.
+	// Textual TIME inputs retain their original value. Typed TIME and BLOB/TEXT
+	// metadata also do not prove that the value fits the target domain.
 	if err = builder.applyLoadAssignmentCasts(tableDef, insertColToExpr, assignmentIgnore); err != nil {
 		return -1, nil, err
 	}
@@ -254,17 +254,7 @@ func (builder *QueryBuilder) bindExternalScan(
 }
 
 func loadAssignmentIgnore(stmt *tree.Load) bool {
-	if stmt == nil {
-		return false
-	}
-	if tree.IsIgnoreStatement(stmt) {
-		return true
-	}
-	if !stmt.Local {
-		return false
-	}
-	_, replace := stmt.DuplicateHandling.(*tree.DuplicateKeyReplace)
-	return !replace
+	return tree.IsIgnoreStatement(stmt)
 }
 
 func (builder *QueryBuilder) applyLoadAssignmentCasts(

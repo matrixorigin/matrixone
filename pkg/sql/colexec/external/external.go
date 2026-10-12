@@ -260,7 +260,8 @@ func (external *External) Prepare(proc *process.Process) error {
 		// from Attrs, so output position and table-column position differ.
 		for i, attr := range param.Attrs {
 			colIndex := int(attr.ColIndex)
-			typ := makeType(&param.Cols[colIndex].Typ, flag)
+			colType := &param.Cols[colIndex].Typ
+			typ := makeType(colType, flag || loadTimeTextInput(param, types.T(colType.Id)))
 			external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 		}
 	}
@@ -1610,19 +1611,10 @@ func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser
 	return nil
 }
 
-// parseExternalTime preserves native assignment precision before the LOAD
-// projection applies the public TIME domain. Normal mode rounds once at the
-// target scale; truncation must discard excess digits before parsing rounds.
-func parseExternalTime(value string, scale int32, truncateFractional bool) (types.Time, error) {
-	if !truncateFractional {
-		return types.ParseTime(value, scale)
-	}
-	value = types.TruncateTemporalFractionForParse(value, 6)
-	parsed, err := types.ParseTime(value, 6)
-	if err != nil {
-		return 0, err
-	}
-	return parsed.TruncateToScaleWithoutRounding(scale), nil
+func loadTimeTextInput(param *ExternalParam, id types.T) bool {
+	return id == types.T_time && param.Extern != nil &&
+		param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
+		param.Extern.Format != tree.PARQUET && param.Extern.Format != tree.ARROW
 }
 
 func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool, attr plan.ExternAttr, proc *process.Process) error {
@@ -1702,7 +1694,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		return moerr.NewInternalErrorf(param.Ctx, "Data too long for column '%s' at row %d", colName, rowIdx+1)
 	}
 
-	if param.ParallelLoad && !isDirectParallelLoadType(id) {
+	if (param.ParallelLoad && !isDirectParallelLoadType(id)) || loadTimeTextInput(param, id) {
 		err := vector.AppendBytes(vec, []byte(field.Val), false, mp)
 		if err != nil {
 			return err
@@ -2074,15 +2066,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_time:
-		truncateFractional := false
-		if param.Extern.ExternType == int32(plan.ExternType_LOAD) {
-			var err error
-			truncateFractional, err = process.ResolveTimeTruncateFractional(proc)
-			if err != nil {
-				return err
-			}
-		}
-		d, err := parseExternalTime(field.Val, vec.GetType().Scale, truncateFractional)
+		d, err := types.ParseTime(field.Val, vec.GetType().Scale)
 		if err != nil {
 			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Time type for column %d", field.Val, colIdx)

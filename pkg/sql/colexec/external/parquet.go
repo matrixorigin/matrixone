@@ -1853,21 +1853,12 @@ func (h *ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapp
 			scale := dt.Scale
 			assignment := h.timeAssignment
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				truncateFractional := false
 				if assignment {
-					var err error
-					truncateFractional, err = process.ResolveTimeTruncateFractional(proc)
-					if err != nil {
-						return err
-					}
+					return processStringToTimeAssignment(mp, page, proc, vec)
 				}
 				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (types.Time, error) {
-						timeVal, err := parseExternalTime(util.UnsafeBytesToString(data), scale, truncateFractional)
-						if err != nil {
-							return 0, err
-						}
-						return timeVal, nil
+						return types.ParseTime(util.UnsafeBytesToString(data), scale)
 					},
 					types.Time(0),
 				)
@@ -2673,6 +2664,40 @@ func processStringToFixed[T any](
 	zeroVal T,
 ) error {
 	return processStringToFixedWithTrim(ctx, mp, page, proc, vec, parseFunc, zeroVal, true)
+}
+
+// A STRING may describe a valid TIME beyond the internal int64 duration range.
+// Preserve its spelling for the same assignment owner used by native DML,
+// while keeping the Parquet scan's declared TIME vector stable. All staging is
+// scoped to this already bounded page slice; typed Parquet sources stay typed.
+func processStringToTimeAssignment(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+	// This is transport staging, not a VARCHAR target. A declared VARCHAR
+	// capacity must not reject a long TIME spelling before assignment sees it.
+	text := vector.NewVec(types.New(types.T_varchar, -1, 0))
+	defer text.Free(proc.Mp())
+	if err := processParquetValuesToBytes(proc.Ctx, mp, page, proc, text, func(v parquet.Value) ([]byte, error) {
+		return bytes.TrimSpace(v.ByteArray()), nil
+	}); err != nil {
+		return err
+	}
+	result := vector.NewFunctionResultWrapper(*vec.GetType(), proc.Mp())
+	defer result.Free()
+	if err := result.PreExtendAndReset(text.Length()); err != nil {
+		return err
+	}
+	cast := function.NewAssignCast
+	if proc.GetStmtProfile().GetStatementIgnore() {
+		cast = function.NewAssignIgnoreCast
+	}
+	if err := cast([]*vector.Vector{text, vec}, result, proc, text.Length(), nil); err != nil {
+		return err
+	}
+	checkpoint := vec.MakeAppendCheckpoint()
+	if err := vec.UnionBatch(result.GetResultVector(), 0, text.Length(), nil, proc.Mp()); err != nil {
+		vec.RollbackAppend(checkpoint, text.Length())
+		return err
+	}
+	return nil
 }
 
 // SET display strings require the original bytes; numeric/date conversions
