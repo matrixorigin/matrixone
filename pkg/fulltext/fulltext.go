@@ -811,7 +811,11 @@ func parsePhraseJieba(pattern string) ([]*Pattern, error) {
 // Parse the search string in boolean mode
 func ParsePatternInBooleanMode(pattern string, parser string) ([]*Pattern, error) {
 
-	if strings.HasPrefix(pattern, "\"") && strings.HasSuffix(pattern, "\"") {
+	// len(pattern) >= 2 is required: a lone `"` satisfies both HasPrefix and
+	// HasSuffix (the same byte), and pattern[1:len(pattern)-1] would be
+	// pattern[1:0] -- a slice-out-of-range panic (#29896). A single `"` is not a
+	// phrase; it falls through to ordinary boolean token handling.
+	if len(pattern) >= 2 && strings.HasPrefix(pattern, "\"") && strings.HasSuffix(pattern, "\"") {
 		// phrase here
 		ss := strings.Trim(pattern[1:len(pattern)-1], " ")
 		if len(ss) == 0 {
