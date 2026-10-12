@@ -60,3 +60,7 @@ execute char_cs_stmt using @char_cs_null, @char_cs_null;
 ➤ hex(cast(? as char(3) character set binary))[12,6,0]  ¦  length(cast(? as char(3) character set binary))[-5,64,0]  𝄀
 null  ¦  null
 deallocate prepare char_cs_stmt;
+select cast('abc' as char(2) character set '');
+invalid input: unsupported character set '' for CHAR cast
+select convert('abc', char(2) character set '');
+invalid input: unsupported character set '' for CHAR cast
