@@ -3172,11 +3172,16 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 	// Confine the binary search to the non-NULL data range within [start, end).
 	// When NULLs sort last, the raw-value array is not monotonically sorted,
 	// so binary search must operate on the non-NULL subrange only.
+	// Trim the suffix first: a narrowed interval containing only trailing
+	// NULLs must retain its left insertion boundary for an empty frame.
+	for end > start && vec.GetNulls().Contains(uint64(end-1)) {
+		end--
+	}
 	for start < end && vec.GetNulls().Contains(uint64(start)) {
 		start++
 	}
-	for end > start && vec.GetNulls().Contains(uint64(end-1)) {
-		end--
+	if start >= end {
+		return start, nil
 	}
 	// See searchLeftWithLocation: resolve scalar storage against one physical
 	// row, then preserve the result's logical interval boundary.
