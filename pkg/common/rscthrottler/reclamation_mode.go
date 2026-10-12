@@ -15,9 +15,10 @@
 package rscthrottler
 
 import (
-	"fmt"
 	"os"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // MemoryPolicyEnv is an opt-in process environment override for the
@@ -52,7 +53,7 @@ func ResolveReclamationMode(configValue string) (ReclamationMode, error) {
 	case string(AccountingAndReclamation), "accounting-and-reclamation":
 		return AccountingAndReclamation, nil
 	default:
-		return "", fmt.Errorf("invalid memory policy %q: expected %q or %q",
+		return "", moerr.NewInvalidInputNoCtxf("invalid memory policy %q: expected %q or %q",
 			value, AccountingOnly, AccountingAndReclamation)
 	}
 }
