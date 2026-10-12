@@ -335,9 +335,11 @@ func TestEmbeddedPrebuiltAdmission(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			script := embeddedSetup + `
 scope=$'github.com/matrixorigin/matrixone/pkg/bootstrap\ngithub.com/matrixorigin/matrixone/pkg/embed\ngithub.com/matrixorigin/matrixone/pkg/tests/arrowload\ngithub.com/matrixorigin/matrixone/pkg/tests/sqlintegration\ngithub.com/matrixorigin/matrixone/pkg/tests/dml'
-mkfifo "$CASE_DIR/release-heavy" "$CASE_DIR/release-light"
-exec 10<>"$CASE_DIR/release-heavy" 11<>"$CASE_DIR/release-light"
-release_children() { printf 'release\nrelease\nrelease\n' >&10; printf 'release\nrelease\n' >&11; }
+# Concurrent Bash readers do not consume FIFO lines atomically. Give each
+# light package its own release channel; heavy packages execute exclusively.
+mkfifo "$CASE_DIR/release-heavy" "$CASE_DIR/release-arrowload" "$CASE_DIR/release-dml"
+exec 10<>"$CASE_DIR/release-heavy" 11<>"$CASE_DIR/release-arrowload" 12<>"$CASE_DIR/release-dml"
+release_children() { printf 'release\nrelease\nrelease\n' >&10; printf 'arrowload\n' >&11; printf 'dml\n' >&12; }
 driver_pid=""
 cleanup_driver() {
  release_children
@@ -363,7 +365,8 @@ artifact_dir=$CLUSTER_PREBUILD_DIR
   [[ "$first $second" == 'arrowload dml' || "$first $second" == 'dml arrowload' ]] || exit 105
   [[ "$first_pid" != "$second_pid" ]] || exit 106
   kill -0 "$first_pid" && kill -0 "$second_pid" || exit 107
-  printf 'release\nrelease\n' >&11
+  printf 'arrowload\n' >&11
+  printf 'dml\n' >&12
   read -r leaf pid <&8 || exit 108
   [[ "$leaf" == sqlintegration ]] || exit 109
   printf 'release\n' >&10
@@ -371,7 +374,11 @@ artifact_dir=$CLUSTER_PREBUILD_DIR
   for next in arrowload sqlintegration dml; do
    read -r leaf pid <&8 || exit 110
    [[ "$leaf" == "$next" ]] || exit 111
-   if [[ "$leaf" == sqlintegration ]]; then printf 'release\n' >&10; else printf 'release\n' >&11; fi
+   case "$leaf" in
+    arrowload) printf 'arrowload\n' >&11 ;;
+    dml) printf 'dml\n' >&12 ;;
+    sqlintegration) printf 'release\n' >&10 ;;
+   esac
   done
  fi
 ) &
@@ -429,7 +436,11 @@ if [[ "$1" == tool && "$2" == test2json ]]; then
  [[ " $* " == *' -test.run=.* '* || "${!#}" == '-test.run=.*' ]] || exit 123
  mkdir "$CASE_DIR/executed-$leaf" || exit 124
  printf '%s %s\n' "$leaf" "$$" >&8
- case "$leaf" in arrowload|dml) read -r _ <&11 ;; *) read -r _ <&10 ;; esac
+ case "$leaf" in
+  arrowload) read -r released <&11; [[ "$released" == "$leaf" ]] || exit 126 ;;
+  dml) read -r released <&12; [[ "$released" == "$leaf" ]] || exit 126 ;;
+  *) read -r _ <&10 ;;
+ esac
  if [[ "$MODE" == heavy-failure && "$leaf" == embed ]]; then
   printf '{"Action":"fail","Package":"%s"}\n' "$package"
   exit 7
