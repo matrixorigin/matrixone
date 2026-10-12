@@ -40,13 +40,24 @@ func TestViewMetadataSenderOrdinaryPayloadNeedsNoProbe(t *testing.T) {
 			{Expr: &planpb.Expr_Fold{Fold: &planpb.FoldVal{Data: []byte{1}}}},
 		}}},
 	}
-	// Main owns the previous VIEWS candidate IDs for hyperbolic functions.
+	// Main owns the previous VIEWS candidate IDs for hyperbolic and format functions.
 	// Those functions must not acquire a VIEWS floor or capability probe.
-	for _, id := range []int32{function.TANH, function.COSH, function.ASINH, function.ACOSH, function.ATANH} {
+	for _, tc := range []struct {
+		id         int32
+		resultType types.T
+	}{
+		{function.TANH, types.T_float64},
+		{function.COSH, types.T_float64},
+		{function.ASINH, types.T_float64},
+		{function.ACOSH, types.T_float64},
+		{function.ATANH, types.T_float64},
+		{function.FORMAT_BYTES, types.T_varchar},
+		{function.FORMAT_PICO_TIME, types.T_varchar},
+	} {
 		p.InstructionList[0].ProjectList = append(p.InstructionList[0].ProjectList, &planpb.Expr{
-			Typ: planpb.Type{Id: int32(types.T_float64)},
+			Typ: planpb.Type{Id: int32(tc.resultType)},
 			Expr: &planpb.Expr_F{F: &planpb.Function{
-				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(id, 0)},
+				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(tc.id, 0)},
 				Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}},
 			}},
 		})
