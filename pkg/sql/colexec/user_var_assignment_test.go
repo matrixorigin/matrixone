@@ -522,6 +522,20 @@ func TestUserVariableAssignmentExecutorLifecycleAndResolverErrors(t *testing.T) 
 	// ResetForNextQuery owns the result vector; Free remains safe afterward.
 	assignment.Free()
 
+	proc.BeginUserVariableAssignment("overlay", 1)
+	proc.StageUserVariableAssignment(process.UserVariableAssignment{
+		Name: "overlay", Value: int64(7), Type: int64Type.PlanType(),
+	}, 0)
+	read, err := NewExpressionExecutor(proc, &plan.Expr{
+		Typ:  int64Type.PlanType(),
+		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "overlay"}},
+	})
+	require.NoError(t, err)
+	_, err = read.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	read.ResetForNextQuery()
+	read.Free()
+
 	masked := &UserVarAssignmentExpressionExecutor{
 		mp: proc.Mp(), name: "masked", typ: int64Type,
 	}
