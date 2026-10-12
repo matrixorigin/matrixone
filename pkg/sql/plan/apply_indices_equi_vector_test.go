@@ -39,8 +39,11 @@ func equiVectorPlanFixture(t *testing.T, sql string, unique, defaultAuto bool) *
 	a.Name, a.TblId = "equi_chunks", 801
 	a.Cols[0].Typ = plan.Type{Id: int32(types.T_varchar), Width: 64, NotNullable: true}
 	a.Cols[1].Typ = plan.Type{Id: int32(types.T_array_float32), Width: 2, NotNullable: true}
-	a.Cols = append(a.Cols, &plan.ColDef{Name: "document_id", Typ: a.Cols[0].Typ})
+	a.Cols = append(a.Cols,
+		&plan.ColDef{Name: "document_id", Typ: a.Cols[0].Typ},
+		&plan.ColDef{Name: "category", Typ: a.Cols[0].Typ})
 	a.Name2ColIndex["document_id"] = 2
+	a.Name2ColIndex["category"] = 3
 	for _, def := range newVectorJoinIvfIndex().IndexDefs {
 		def.TableExist = true
 		def.IndexAlgoParams = `{"op_type":"vector_l2_ops","lists":"1"}`
@@ -124,6 +127,83 @@ func TestEquiVectorTopKPublicPlan(t *testing.T) {
 				require.Len(t, searches[0].RuntimeFilterProbeList, 1)
 				require.True(t, searches[0].RuntimeFilterProbeList[0].MustApply)
 				require.NotEqual(t, ExecTypeAP_MULTICN, GetExecType(q, false, false))
+			})
+		}
+	}
+}
+
+func TestEquiVectorTopKPreservesMixedFilters(t *testing.T) {
+	const lower = "l2_distance(a.v,'[0,0]')>0.15"
+	const upper = "l2_distance(a.v,'[0,0]')<=0.25"
+	const category = "a.category='x'"
+	for _, shape := range []struct{ name, sql string }{
+		{"inner", "select a.id from equi_chunks a join equi_documents b on a.document_id=b.document_id where %s"},
+		{"semi", "select a.id from equi_chunks a where a.document_id in (select document_id from equi_documents) and %s"},
+	} {
+		for _, tc := range []struct {
+			name       string
+			filters    string
+			predicates []string
+		}{
+			{"lower_first", lower + " and " + category, []string{">0.15", "category=x"}},
+			{"lower_last", category + " and " + lower, []string{">0.15", "category=x"}},
+			{"upper_first", upper + " and " + category, []string{"<=0.25", "category=x"}},
+			{"upper_last", category + " and " + upper, []string{"<=0.25", "category=x"}},
+			{"lower_upper_category", lower + " and " + upper + " and " + category, []string{">0.15", "<=0.25", "category=x"}},
+			{"upper_lower_category", upper + " and " + lower + " and " + category, []string{">0.15", "<=0.25", "category=x"}},
+			{"lower_category_upper", lower + " and " + category + " and " + upper, []string{">0.15", "<=0.25", "category=x"}},
+			{"upper_category_lower", upper + " and " + category + " and " + lower, []string{">0.15", "<=0.25", "category=x"}},
+			{"category_lower_upper", category + " and " + lower + " and " + upper, []string{">0.15", "<=0.25", "category=x"}},
+			{"category_upper_lower", category + " and " + upper + " and " + lower, []string{">0.15", "<=0.25", "category=x"}},
+			{"distance_only", lower, []string{">0.15"}},
+			{"category_only", category, []string{"category=x"}},
+		} {
+			t.Run(shape.name+"/"+tc.name, func(t *testing.T) {
+				sql := fmt.Sprintf(shape.sql, tc.filters) + " order by l2_distance(a.v,'[0,0]') limit 1"
+				q := equiVectorPlanFixture(t, sql, false, false)
+				require.Len(t, equiVectorSearchNodes(q), 1)
+				scans := 0
+				var walk func(int32)
+				walk = func(id int32) {
+					node := q.Nodes[id]
+					if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef.Name == "equi_chunks" {
+						scans++
+						var predicates []string
+						var inspect func(*plan.Expr)
+						inspect = func(expr *plan.Expr) {
+							f := expr.GetF()
+							if f == nil {
+								return
+							}
+							if len(f.Args) == 2 {
+								if distance := f.Args[0].GetF(); distance != nil && distance.Func.ObjName == "l2_distance" {
+									bound, ok := plan.GetLiteralFloat64(f.Args[1])
+									require.True(t, ok)
+									predicates = append(predicates, fmt.Sprintf("%s%g", f.Func.ObjName, bound))
+									return
+								}
+								if f.Func.ObjName == "=" && f.Args[0].GetCol() != nil && f.Args[1].GetLit().GetSval() == "x" {
+									predicates = append(predicates, "category=x")
+									return
+								}
+							}
+							for _, arg := range f.Args {
+								inspect(arg)
+							}
+						}
+						for _, filter := range node.FilterList {
+							inspect(filter)
+						}
+						require.ElementsMatch(t, tc.predicates, predicates, "资格域和回表扫描都必须保留完整谓词，不能仅依靠 DistRange")
+					}
+					for _, child := range node.Children {
+						walk(child)
+					}
+				}
+				for _, root := range q.Steps {
+					walk(root)
+				}
+				require.Equal(t, 2, scans)
 			})
 		}
 	}

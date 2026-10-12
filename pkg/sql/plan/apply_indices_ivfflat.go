@@ -1306,7 +1306,12 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		}
 	}
 
-	newFilterList, distRange := builder.getDistRangeFromFilters(scanNode.FilterList, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
+	rangeFilters := scanNode.FilterList
+	if vecCtx.hasMembership {
+		// 距离提取会原地压缩切片；隔离底层数组，避免普通谓词覆盖仍需执行的距离谓词。
+		rangeFilters = append([]*plan.Expr(nil), rangeFilters...)
+	}
+	newFilterList, distRange := builder.getDistRangeFromFilters(rangeFilters, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
 	// 4.2 的 ivf_search 不消费 IndexReaderParam.DistRange；资格域必须
 	// 保留原谓词，不能只留下尚无执行语义的计划注解。
 	if vecCtx.hasMembership && distRange != nil {

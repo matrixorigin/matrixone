@@ -37,6 +37,31 @@ select a.id from chunks a join documents b on a.document_id=b.document_id where 
 -- 下界不能只在 Top-K 后重检，否则近距离的不合格候选会耗尽预算。
 select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 order by l2_distance(a.v,'[0,0]') limit 3;
 select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+-- 距离提取不能让后面的普通谓词覆盖距离条件；复用数据并在本节后恢复。
+update chunks set category='x' where id='c4';
+-- 下界 + 普通谓词的两个顺序都必须先排除 c2，再选到 c4，而不是截断后得到空结果。
+-- @regex("ivf_search",true)
+explain select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where a.category='x' and l2_distance(a.v,'[0,0]')>0.15 order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1 by rank with option 'mode=force';
+-- 上界应只返回 c2 的两条 JOIN 结果，不能混入距离 0.3 的 c4。
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.25 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from chunks a join documents b on a.document_id=b.document_id where a.category='x' and l2_distance(a.v,'[0,0]')<=0.25 order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.25 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+-- 双边界的六个顺序都必须为空：c2 太近，c4 太远，区间内 c3 的 category 不合格。
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and l2_distance(a.v,'[0,0]')<=0.25 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.25 and l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and a.category='x' and l2_distance(a.v,'[0,0]')<=0.25 order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.25 and a.category='x' and l2_distance(a.v,'[0,0]')>0.15 order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where a.category='x' and l2_distance(a.v,'[0,0]')>0.15 and l2_distance(a.v,'[0,0]')<=0.25 order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where a.category='x' and l2_distance(a.v,'[0,0]')<=0.25 and l2_distance(a.v,'[0,0]')>0.15 order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and l2_distance(a.v,'[0,0]')<=0.25 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1 by rank with option 'mode=force';
+-- 直接 IN/SEMI 使用同一 membership 路径，也必须保留下界并返回 c4。
+select a.id from chunks a where a.document_id in (select document_id from documents) and l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1 by rank with option 'mode=pre';
+select a.id from chunks a where a.document_id in (select document_id from documents) and a.category='x' and l2_distance(a.v,'[0,0]')>0.15 order by l2_distance(a.v,'[0,0]') limit 1 by rank with option 'mode=pre';
+select a.id from chunks a where a.document_id in (select document_id from documents) and l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1 by rank with option 'mode=force';
+update chunks set category='y' where id='c4';
 select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.5 order by l2_distance(a.v,'[0,0]') limit 3 offset 1;
 select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.5 order by l2_distance(a.v,'[0,0]') limit 3 offset 1 by rank with option 'mode=force';
 select a.id from chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 2 offset 20;

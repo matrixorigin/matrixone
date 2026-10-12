@@ -156,6 +156,87 @@ select a.id from chunks a join documents b on a.document_id=b.document_id where 
 c3  𝄀
 c4  𝄀
 c4
+update chunks set category='x' where id='c4';
+explain select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1;
+-- @regex("ivf_search", true)
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(chunks.v, ) INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (chunks.document_id = b.document_id)  𝄀
+              ->  Sort  𝄀
+                    Sort Key: mo_ivf_alias_0.score ASC  𝄀
+                    Limit: 1  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER  𝄀
+                          Join Cond: (chunks.id = mo_ivf_alias_0.pkid)  𝄀
+                          Runtime Filter Build: #[-1,0]  𝄀
+                          ->  Table Scan on vector_ivf_equi_join.chunks  𝄀
+                                Filter Cond: (l2_distance(chunks.v, ) > 0.15), (chunks.category = 'x')  𝄀
+                                Runtime Filter Probe: chunks.id  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (mo_ivf_alias_0.pkid = chunks.id)  𝄀
+                                Runtime Filter Build: #[14,0]  𝄀
+                                ->  Table Function on ivf_search  𝄀
+                                      Index Reader Param:  Limit: 1  DistRange: (0.15,Inf)  𝄀
+                                      Runtime Filter Probe: #[12,0]  𝄀
+                                      Limit: 1  𝄀
+                                ->  Join  𝄀
+                                      Join Type: SEMI  𝄀
+                                      Join Cond: (chunks.document_id = documents.document_id)  𝄀
+                                      ->  Table Scan on vector_ivf_equi_join.chunks  𝄀
+                                            Filter Cond: (l2_distance(chunks.v, ) > 0.15), (chunks.category = 'x')  𝄀
+                                      ->  Table Scan on vector_ivf_equi_join.documents  𝄀
+              ->  Table Scan on vector_ivf_equi_join.documents
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1;
+➤ id[12,-1,0]  𝄀
+c4
+select a.id from chunks a join documents b on a.document_id=b.document_id where a.category='x' and l2_distance(a.v,'[0,0]')>0.15 order by l2_distance(a.v,'[0,0]') limit 1;
+➤ id[12,-1,0]  𝄀
+c4
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1 by rank with option 'mode=force';
+➤ id[12,-1,0]  𝄀
+c4
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.25 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
+➤ id[12,-1,0]  𝄀
+c2  𝄀
+c2
+select a.id from chunks a join documents b on a.document_id=b.document_id where a.category='x' and l2_distance(a.v,'[0,0]')<=0.25 order by l2_distance(a.v,'[0,0]') limit 3;
+➤ id[12,-1,0]  𝄀
+c2  𝄀
+c2
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.25 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+➤ id[12,-1,0]  𝄀
+c2  𝄀
+c2
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and l2_distance(a.v,'[0,0]')<=0.25 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1;
+➤ id[12,-1,0]
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.25 and l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1;
+➤ id[12,-1,0]
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and a.category='x' and l2_distance(a.v,'[0,0]')<=0.25 order by l2_distance(a.v,'[0,0]') limit 1;
+➤ id[12,-1,0]
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.25 and a.category='x' and l2_distance(a.v,'[0,0]')>0.15 order by l2_distance(a.v,'[0,0]') limit 1;
+➤ id[12,-1,0]
+select a.id from chunks a join documents b on a.document_id=b.document_id where a.category='x' and l2_distance(a.v,'[0,0]')>0.15 and l2_distance(a.v,'[0,0]')<=0.25 order by l2_distance(a.v,'[0,0]') limit 1;
+➤ id[12,-1,0]
+select a.id from chunks a join documents b on a.document_id=b.document_id where a.category='x' and l2_distance(a.v,'[0,0]')<=0.25 and l2_distance(a.v,'[0,0]')>0.15 order by l2_distance(a.v,'[0,0]') limit 1;
+➤ id[12,-1,0]
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and l2_distance(a.v,'[0,0]')<=0.25 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1 by rank with option 'mode=force';
+➤ id[12,-1,0]
+select a.id from chunks a where a.document_id in (select document_id from documents) and l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1 by rank with option 'mode=pre';
+➤ id[12,-1,0]  𝄀
+c4
+select a.id from chunks a where a.document_id in (select document_id from documents) and a.category='x' and l2_distance(a.v,'[0,0]')>0.15 order by l2_distance(a.v,'[0,0]') limit 1 by rank with option 'mode=pre';
+➤ id[12,-1,0]  𝄀
+c4
+select a.id from chunks a where a.document_id in (select document_id from documents) and l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1 by rank with option 'mode=force';
+➤ id[12,-1,0]  𝄀
+c4
+update chunks set category='y' where id='c4';
 select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.5 order by l2_distance(a.v,'[0,0]') limit 3 offset 1;
 ➤ id[12,-1,0]  𝄀
 c2  𝄀
