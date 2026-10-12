@@ -18,16 +18,12 @@ import (
 	"context"
 	"testing"
 
-	"encoding/json"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -527,14 +523,25 @@ func TestApplyIndicesForSortUsingHnswKeepsFiltersOnScan(t *testing.T) {
 	require.Equal(t, plan.Node_SORT, sortNode.NodeType)
 	tableFuncNode := findHnswTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
-	require.Len(t, tableFuncNode.TblFuncExprList, 2)
+	spec := tableFuncNode.IndexSearchScan
+	require.Equal(t, "[0,1,0]", spec.QueryPayload.GetLit().GetVecVal())
+	require.Equal(t, "l2_distance", spec.DistanceFunction)
+	require.True(t, spec.PostFilterOverFetch, "the residual filter drops candidates after the search")
+	require.False(t, tableFuncNode.Stats.ForceOneCN, "an hnsw search must not keep the rest of the query on one CN")
+	require.False(t, IndexSearchScanPartitioned(spec), "an hnsw search reads its whole index once")
+	require.Equal(t, []*plan.IndexHiddenTableRef{
+		{Role: catalog.Hnsw_TblType_Metadata, Object: &plan.ObjectRef{SchemaName: "db", ObjName: "hnsw_meta"}},
+		{Role: catalog.Hnsw_TblType_Storage, Object: &plan.ObjectRef{SchemaName: "db", ObjName: "hnsw_index"}},
+	}, spec.HiddenTables)
+	opts, err := hnswplan.DecodeScanOptions(spec.AlgoOptions)
+	require.NoError(t, err)
+	require.Equal(t, int64(4), opts.ThreadsSearch)
 	require.Len(t, scanNode.FilterList, 2)
 }
 
-// applyHnswAndGetTableConfig runs the hnsw rewrite for a filtered top-k with the
-// given limit and returns the IndexTableConfig JSON pushed to the search TVF plus
-// the TVF node itself.
-func applyHnswAndGetTableConfig(t *testing.T, limit *plan.Expr) (vectorindex.IndexTableConfig, *plan.Node) {
+// applyHnswAndGetSearchNode runs the hnsw rewrite for a filtered top-k with the
+// given limit and returns the index search node.
+func applyHnswAndGetSearchNode(t *testing.T, limit *plan.Expr) *plan.Node {
 	t.Helper()
 	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
@@ -627,50 +634,30 @@ func applyHnswAndGetTableConfig(t *testing.T, limit *plan.Expr) (vectorindex.Ind
 	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
 	tableFuncNode := findHnswTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
-	require.NotEmpty(t, tableFuncNode.TblFuncExprList)
-	cfgStr := tableFuncNode.TblFuncExprList[0].GetLit().GetSval()
-	require.NotEmpty(t, cfgStr)
-	var cfg vectorindex.IndexTableConfig
-	require.NoError(t, json.Unmarshal([]byte(cfgStr), &cfg))
-	return cfg, tableFuncNode
+	return tableFuncNode
 }
 
-// A prepared (non-literal) LIMIT with a residual filter cannot be over-fetched at
-// plan time, so node.Limit carries an EXPRESSION that computes the over-fetched
-// budget k' at EXECUTE. node.Limit must never be nil here: it is the only
-// candidate-budget channel a pre-change CN reads, and a nil makes that CN default
-// to a single candidate and silently under-return (#26869, and the rolling-upgrade
-// hazard that motivated moving the budget back onto node.Limit).
+// The search node carries the semantic k and the post-filter flag; execution
+// sizes the hnsw candidate budget from them (overfetch.PostFilterLimit, #26869).
+// A prepared k stays an execution-time expression.
 func TestApplyIndicesForSortUsingHnswFlagsPreparedLimitOverFetch(t *testing.T) {
 	paramLimit := &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_uint64)},
 		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
 	}
-	cfg, tf := applyHnswAndGetTableConfig(t, paramLimit)
-	require.False(t, cfg.PostFilterOverFetch,
-		"the budget is baked into node.Limit; a second EXECUTE-time over-fetch would compound the factor")
-	require.NotNil(t, tf.Limit, "an old CN reads node.Limit alone -- a nil there under-returns")
-	require.Nil(t, tf.Limit.GetLit(), "a prepared k resolves to the over-fetch expression, not a plan-time constant")
-	require.NotNil(t, tf.IndexReaderParam.GetLimit(), "raw k must still be carried on IndexReaderParam.Limit")
-	require.Nil(t, tf.IndexReaderParam.GetLimit().GetLit(), "IndexReaderParam.Limit is the raw parameter, not a literal")
-	require.Equal(t, uint64(0), tf.IndexReaderParam.GetOverFetchLimit(), "prepared ? has no plan-time over-fetch to display")
+	tf := applyHnswAndGetSearchNode(t, paramLimit)
+	require.True(t, tf.IndexSearchScan.PostFilterOverFetch)
+	require.NotNil(t, tf.IndexSearchScan.CandidateLimit.GetP(), "a prepared k is bound at execution")
+	require.Nil(t, tf.Limit, "the candidate budget is the reader's, not a node limit")
 }
 
-// A literal LIMIT with a filter takes the SAME path as a prepared one, except the
-// budget folds at plan time: node.Limit is the literal k' rather than an
-// expression. The plan-level top therefore truncates at k', which is the budget
-// the search wants, so no candidate is lost before the post-filter JOIN.
+// A literal LIMIT with a filter keeps the literal k; the budget is sized at
+// execution as for a prepared one.
 func TestApplyIndicesForSortUsingHnswLiteralLimitOverFetch(t *testing.T) {
-	cfg, tf := applyHnswAndGetTableConfig(t, makePlan2Uint64ConstExprWithType(2))
-	require.False(t, cfg.PostFilterOverFetch,
-		"the budget is baked into node.Limit; the TVF must not over-fetch a second time")
-	require.NotNil(t, tf.Limit, "an old CN reads node.Limit alone -- a nil there under-returns")
-	require.Equal(t, overfetch.PostFilterLimit(2), tf.Limit.GetLit().GetU64Val(),
-		"a literal k folds to the over-fetched budget (2 -> 12)")
-	require.NotNil(t, tf.IndexReaderParam.GetLimit(), "raw k carried on IndexReaderParam.Limit")
-	require.Equal(t, uint64(2), tf.IndexReaderParam.GetLimit().GetLit().GetU64Val(), "raw literal k, not over-fetched at plan time")
-	// EXPLAIN-only annotation: the over-fetched budget for a literal k (2 -> 12).
-	require.Equal(t, uint64(12), tf.IndexReaderParam.GetOverFetchLimit(), "literal 2 -> PostFilterLimit 12 for display")
+	tf := applyHnswAndGetSearchNode(t, makePlan2Uint64ConstExprWithType(2))
+	require.True(t, tf.IndexSearchScan.PostFilterOverFetch)
+	require.Equal(t, uint64(2), tf.IndexSearchScan.CandidateLimit.GetLit().GetU64Val(), "k, not the over-fetched budget")
+	require.Nil(t, tf.Limit)
 }
 
 func findHnswTableFunctionNode(builder *QueryBuilder, nodeID int32) *plan.Node {
@@ -678,10 +665,8 @@ func findHnswTableFunctionNode(builder *QueryBuilder, nodeID int32) *plan.Node {
 		return nil
 	}
 	node := builder.qry.Nodes[nodeID]
-	if node.NodeType == plan.Node_FUNCTION_SCAN &&
-		node.TableDef != nil &&
-		node.TableDef.TblFunc != nil &&
-		node.TableDef.TblFunc.Name == hnswplan.HNSWSearchFuncName {
+	if node.NodeType == plan.Node_INDEX_SEARCH_SCAN &&
+		node.IndexSearchScan.GetIndex().GetIndexAlgo() == catalog.MoIndexHnswAlgo.ToString() {
 		return node
 	}
 	for _, childID := range node.Children {

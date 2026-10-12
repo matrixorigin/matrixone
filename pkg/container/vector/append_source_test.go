@@ -207,23 +207,28 @@ func TestAppendWithStringSourceAllocationFailure(t *testing.T) {
 }
 
 func TestConstNullCleanAndUnionBatch(t *testing.T) {
-	for _, oid := range []types.T{types.T_any, types.T_int32, types.T_text} {
+	for _, oid := range []types.T{types.T_any, types.T_int32, types.T_float64, types.T_text} {
 		t.Run(oid.String(), func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			src := NewConstNull(oid.ToType(), 3, mp)
 			dst := NewConstNull(oid.ToType(), 3, mp)
 			defer func() { src.Free(mp); dst.Free(mp); require.Zero(t, mp.CurrNB()) }()
 			for _, source := range []types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt} {
-				require.NoError(t, src.SetStringSource(source))
-				dst.CleanOnlyData()
-				require.Zero(t, dst.Length(), "clean must remove logical rows even without a payload")
-				require.NoError(t, dst.UnionBatch(src, 0, 3, nil, mp))
-				require.Equal(t, 3, dst.Length())
-				for row := 0; row < dst.Length(); row++ {
-					require.True(t, dst.IsNull(uint64(row)))
-					require.Equal(t, source, dst.GetStringSourceAt(row))
+				for _, length := range []int{3, 1, 0, 4} {
+					t.Run(fmt.Sprintf("source_%d/length_%d", source, length), func(t *testing.T) {
+						src.SetLength(length)
+						require.NoError(t, src.SetStringSource(source))
+						dst.CleanOnlyData()
+						require.Zero(t, dst.Length(), "clean must remove logical rows even without a payload")
+						require.NoError(t, dst.UnionBatch(src, 0, length, nil, mp))
+						require.Equal(t, length, dst.Length())
+						for row := 0; row < dst.Length(); row++ {
+							require.True(t, dst.IsNull(uint64(row)))
+							require.Equal(t, source, dst.GetStringSourceAt(row))
+						}
+						require.Nil(t, dst.GetStringSources(), "uniform NULL provenance needs no sidecar")
+					})
 				}
-				require.Nil(t, dst.GetStringSources(), "uniform NULL provenance needs no sidecar")
 			}
 		})
 	}

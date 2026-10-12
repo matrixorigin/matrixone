@@ -215,7 +215,7 @@ func TestApplyIndicesForProjectPreparedIvfIndexOnlyKeepsCatalogDependencies(t *t
 		}
 	}
 	visit(builder.qry.Steps[0])
-	require.True(t, reachableTypes[plan.Node_VECTOR_INDEX_SCAN])
+	require.True(t, reachableTypes[plan.Node_INDEX_SEARCH_SCAN])
 	require.False(t, reachableTypes[plan.Node_TABLE_SCAN])
 	// A successful plugin rewrite returns the original project ID after
 	// changing its child in place. It must not fall through to exact-sort
@@ -327,7 +327,7 @@ func TestApplyIndicesForSortUsingIvfflat_PushdownOptimization(t *testing.T) {
 		require.Equal(t, plan.Node_SORT, sortNode.NodeType)
 
 		childNode := builder.qry.Nodes[sortNode.Children[0]]
-		assert.Equal(t, plan.Node_VECTOR_INDEX_SCAN, childNode.NodeType)
+		assert.Equal(t, plan.Node_INDEX_SEARCH_SCAN, childNode.NodeType)
 	})
 
 	// 2. Case: With filters. Should ENABLE pushdown (nested join)
@@ -364,7 +364,7 @@ func TestApplyIndicesForSortUsingIvfflat_PushdownOptimization(t *testing.T) {
 		sortNodeID := vecCtx.projNode.Children[0]
 		sortNode := builder.qry.Nodes[sortNodeID]
 		childNode := builder.qry.Nodes[sortNode.Children[0]]
-		assert.Equal(t, plan.Node_VECTOR_INDEX_SCAN, childNode.NodeType)
+		assert.Equal(t, plan.Node_INDEX_SEARCH_SCAN, childNode.NodeType)
 	})
 }
 

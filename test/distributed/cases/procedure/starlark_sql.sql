@@ -70,7 +70,7 @@ create table vec_hnsw(id bigint primary key, v vecf32(4));
 insert into vec_hnsw values (1,'[0,0,0,0]'),(2,'[1,1,1,1]'),(3,'[5,5,5,5]'),(4,'[2,2,2,2]');
 create index idx_hnsw using hnsw on vec_hnsw(v) op_type 'vector_l2_ops' m=4 ef_construction=16 ef_search=16;
 -- @separator:table
--- @regex("Table Function on hnsw_search", true)
+-- @regex("Vector Index Scan on idx_hnsw", true)
 explain select id from vec_hnsw order by l2_distance(v,'[0.9,0.9,0.9,0.9]') limit 2;
 select id from vec_hnsw order by l2_distance(v,'[0.9,0.9,0.9,0.9]') limit 2;
 create procedure p_hnsw() 'begin select id from vec_hnsw order by l2_distance(v,''[0.9,0.9,0.9,0.9]'') limit 2; end';
