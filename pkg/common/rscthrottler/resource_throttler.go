@@ -153,6 +153,128 @@ func (s rssPressureState) String() string {
 	}
 }
 
+// rssReclamationWork describes one process-wide reclamation pass.  RSS
+// pressure is observed by several throttlers, but all of them account for the
+// same process and cgroup.  Keeping the work here, instead of on each
+// throttler, prevents concurrent cache eviction and FreeOSMemory calls from
+// competing with the workload.
+type rssReclamationWork struct {
+	targetPercent int64
+	evictor       func(ctx context.Context, targetPercent int64)
+	freeOSMemory  bool
+	freeAction    string
+}
+
+type rssReclamationCoordinator struct {
+	mu      sync.Mutex
+	running bool
+	pending bool
+	work    rssReclamationWork
+
+	lastCacheEvict   int64
+	lastCacheTarget  int64
+	lastFreeOSMemory int64
+}
+
+var processRSSReclamation rssReclamationCoordinator
+
+func (c *rssReclamationCoordinator) request(now int64, work rssReclamationWork) {
+	c.mu.Lock()
+
+	if work.evictor != nil {
+		cacheExpired := c.lastCacheEvict == 0 ||
+			time.Duration(now-c.lastCacheEvict) > rssScavengeInterval
+		cacheEscalated := c.lastCacheTarget == 0 || work.targetPercent < c.lastCacheTarget
+		if !cacheExpired && !cacheEscalated {
+			work.evictor = nil
+			work.targetPercent = 0
+		} else {
+			c.lastCacheEvict = now
+			c.lastCacheTarget = work.targetPercent
+		}
+	}
+
+	if work.freeOSMemory {
+		freeExpired := c.lastFreeOSMemory == 0 ||
+			time.Duration(now-c.lastFreeOSMemory) > rssScavengeInterval
+		if !freeExpired {
+			work.freeOSMemory = false
+		} else {
+			c.lastFreeOSMemory = now
+		}
+	}
+
+	if work.evictor == nil && !work.freeOSMemory {
+		c.mu.Unlock()
+		return
+	}
+
+	if c.running {
+		if !c.pending {
+			c.work = work
+			c.pending = true
+		} else {
+			c.mergePending(work)
+		}
+		c.mu.Unlock()
+		return
+	}
+
+	c.running = true
+	c.mu.Unlock()
+	go c.run(work)
+}
+
+func (c *rssReclamationCoordinator) mergePending(work rssReclamationWork) {
+	if work.evictor != nil &&
+		(c.work.evictor == nil || work.targetPercent < c.work.targetPercent) {
+		c.work.targetPercent = work.targetPercent
+		c.work.evictor = work.evictor
+	}
+	c.work.freeOSMemory = c.work.freeOSMemory || work.freeOSMemory
+	if c.work.freeAction == "" {
+		c.work.freeAction = work.freeAction
+	}
+}
+
+func (c *rssReclamationCoordinator) run(work rssReclamationWork) {
+	for {
+		c.execute(work)
+
+		c.mu.Lock()
+		if !c.pending {
+			c.running = false
+			c.mu.Unlock()
+			return
+		}
+		work = c.work
+		c.work = rssReclamationWork{}
+		c.pending = false
+		c.mu.Unlock()
+	}
+}
+
+func (c *rssReclamationCoordinator) execute(work rssReclamationWork) {
+	if work.evictor != nil {
+		evictCtx, cancel := context.WithTimeout(context.Background(), rssCacheEvictTimeout)
+		started := time.Now()
+		before := readRuntimeMemorySnapshot()
+		work.evictor(evictCtx, work.targetPercent)
+		cancel()
+		logRuntimeReclamation("cache-eviction", before, started)
+	}
+	if work.freeOSMemory {
+		started := time.Now()
+		before := readRuntimeMemorySnapshot()
+		freeOSMemory()
+		action := work.freeAction
+		if action == "" {
+			action = "free-os-memory"
+		}
+		logRuntimeReclamation(action, before, started)
+	}
+}
+
 type RSCThrottler interface {
 	Refresh()
 	PrintUsage()
@@ -251,7 +373,6 @@ type memThrottler struct {
 	lastRSSCacheEvict  atomic.Int64
 	lastRSSCacheTarget atomic.Int64
 	rssPressureState   atomic.Int64
-	rssPressureGen     atomic.Int64
 	rssScavengeMu      sync.Mutex
 
 	mergeAvailDebounce atomic.Int64
@@ -513,7 +634,6 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 		shouldSetCacheTarget   bool
 		resetCacheTargetFirst  bool
 		shouldClearCacheTarget bool
-		generation             int64
 	)
 
 	m.rssScavengeMu.Lock()
@@ -522,10 +642,7 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 	cacheTargetPercent = rssPressureCacheTarget(nextState)
 
 	if nextState != prevState {
-		generation = m.rssPressureGen.Add(1)
 		m.rssPressureState.Store(int64(nextState))
-	} else {
-		generation = m.rssPressureGen.Load()
 	}
 
 	if cacheTargetPercent > 0 && m.options.rssCacheTargetSetter != nil {
@@ -593,29 +710,17 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 		zap.String("detail", m.String()),
 	)
 	if shouldEvictCache {
-		evictor := m.options.rssCacheEvictor
-		free := freeOSMemory
-		go func(targetPercent int64, gen int64) {
-			if m.rssPressureGen.Load() != gen {
-				return
-			}
-			evictCtx, cancel := context.WithTimeout(context.Background(), rssCacheEvictTimeout)
-			defer cancel()
-			started := time.Now()
-			before := readRuntimeMemorySnapshot()
-			evictor(evictCtx, targetPercent)
-			logRuntimeReclamation("cache-eviction", before, started)
-			before = readRuntimeMemorySnapshot()
-			started = time.Now()
-			free()
-			logRuntimeReclamation("cache-eviction-free-os-memory", before, started)
-		}(cacheTargetPercent, generation)
-	}
-	if shouldFreeOSMemory {
-		started := time.Now()
-		before := readRuntimeMemorySnapshot()
-		freeOSMemory()
-		logRuntimeReclamation("free-os-memory", before, started)
+		processRSSReclamation.request(now, rssReclamationWork{
+			targetPercent: cacheTargetPercent,
+			evictor:       m.options.rssCacheEvictor,
+			freeOSMemory:  true,
+			freeAction:    "cache-eviction-free-os-memory",
+		})
+	} else if shouldFreeOSMemory {
+		processRSSReclamation.request(now, rssReclamationWork{
+			freeOSMemory: true,
+			freeAction:   "free-os-memory",
+		})
 	}
 }
 

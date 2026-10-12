@@ -528,8 +528,12 @@ func TestMemThrottlerUsesCgroupHeadroomForAdmission(t *testing.T) {
 }
 
 func TestMemThrottlerPressureUsesCgroupUsage(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
 	oldFreeOSMemory := freeOSMemory
-	defer func() { freeOSMemory = oldFreeOSMemory }()
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
 	freeOSMemory = func() {}
 
 	var target int64
@@ -724,8 +728,12 @@ func TestAcquirePolicyForDataBranch(t *testing.T) {
 }
 
 func TestMemThrottlerRSSScavenging(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
 	oldFreeOSMemory := freeOSMemory
-	defer func() { freeOSMemory = oldFreeOSMemory }()
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
 
 	var calls atomic.Int32
 	freeOSMemory = func() {
@@ -741,15 +749,21 @@ func TestMemThrottlerRSSScavenging(t *testing.T) {
 	throttler.lastRSSScavenge.Store(now - int64(rssScavengeInterval) - int64(time.Second))
 
 	throttler.tryScavengeRSS(now, 900*mpool.GB)
-	require.Equal(t, int32(1), calls.Load())
+	require.Eventually(t, func() bool {
+		return calls.Load() == 1
+	}, time.Second, time.Millisecond)
 
 	throttler.tryScavengeRSS(now+int64(time.Second), 900*mpool.GB)
 	require.Equal(t, int32(1), calls.Load())
 }
 
 func TestMemThrottlerRSSCacheEvictionByRSSRate(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
 	oldFreeOSMemory := freeOSMemory
-	defer func() { freeOSMemory = oldFreeOSMemory }()
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
 
 	var freeCalls atomic.Int32
 	freeOSMemory = func() {
@@ -789,7 +803,7 @@ func TestMemThrottlerRSSCacheEvictionByRSSRate(t *testing.T) {
 		return recvTarget(targets) == rssCacheHardTarget
 	}, time.Second, time.Millisecond)
 	require.Eventually(t, func() bool {
-		return freeCalls.Load() == 2
+		return freeCalls.Load() == 1
 	}, time.Second, time.Millisecond)
 
 	throttler.tryScavengeRSS(now+3*int64(time.Second), 920*mpool.GB)
@@ -802,8 +816,12 @@ func TestMemThrottlerRSSCacheEvictionByRSSRate(t *testing.T) {
 }
 
 func TestMemThrottlerRSSPressureStateTargetLifecycle(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
 	oldFreeOSMemory := freeOSMemory
-	defer func() { freeOSMemory = oldFreeOSMemory }()
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
 	freeOSMemory = func() {}
 
 	var setTargets []int64
@@ -853,9 +871,11 @@ func TestMemThrottlerRSSPressureStateTargetLifecycle(t *testing.T) {
 	throttler.tryScavengeRSS(now+3*int64(time.Second), 920*mpool.GB)
 	require.Equal(t, rssPressureHard, rssPressureState(throttler.rssPressureState.Load()))
 	require.Equal(t, []int64{rssCacheSoftTarget, rssCacheHardTarget, rssCacheSoftTarget, rssCacheHardTarget}, setTargets)
-	require.Eventually(t, func() bool {
-		return recvTarget(evictTargets) == rssCacheHardTarget
-	}, time.Second, time.Millisecond)
+	select {
+	case target := <-evictTargets:
+		t.Fatalf("unexpected cache evict target %d during global cooldown", target)
+	default:
+	}
 
 	throttler.tryScavengeRSS(now+4*int64(time.Second), 800*mpool.GB)
 	require.Equal(t, rssPressureNone, rssPressureState(throttler.rssPressureState.Load()))
@@ -863,8 +883,12 @@ func TestMemThrottlerRSSPressureStateTargetLifecycle(t *testing.T) {
 }
 
 func TestMemThrottlerRSSCacheEvictionConcurrentEscalation(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
 	oldFreeOSMemory := freeOSMemory
-	defer func() { freeOSMemory = oldFreeOSMemory }()
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
 
 	var freeCalls atomic.Int32
 	freeOSMemory = func() {
@@ -925,9 +949,93 @@ func recvTarget(ch <-chan int64) int64 {
 	}
 }
 
-func TestMemThrottlerRSSScavengingDisabled(t *testing.T) {
+func resetRSSReclamationCoordinatorForTest() {
+	for {
+		processRSSReclamation.mu.Lock()
+		if !processRSSReclamation.running {
+			processRSSReclamation.pending = false
+			processRSSReclamation.work = rssReclamationWork{}
+			processRSSReclamation.lastCacheEvict = 0
+			processRSSReclamation.lastCacheTarget = 0
+			processRSSReclamation.lastFreeOSMemory = 0
+			processRSSReclamation.mu.Unlock()
+			return
+		}
+		processRSSReclamation.mu.Unlock()
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestRSSReclamationCoordinatorSerializesAndCoalesces(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
 	oldFreeOSMemory := freeOSMemory
-	defer func() { freeOSMemory = oldFreeOSMemory }()
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
+
+	var active atomic.Int32
+	var maxActive atomic.Int32
+	var freeCalls atomic.Int32
+	targets := make(chan int64, 2)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+
+	freeOSMemory = func() {
+		freeCalls.Add(1)
+	}
+	evictor := func(_ context.Context, targetPercent int64) {
+		current := active.Add(1)
+		for {
+			old := maxActive.Load()
+			if current <= old || maxActive.CompareAndSwap(old, current) {
+				break
+			}
+		}
+		targets <- targetPercent
+		if targetPercent == rssCacheSoftTarget {
+			close(entered)
+			<-release
+		}
+		active.Add(-1)
+	}
+
+	now := time.Now().UnixNano()
+	processRSSReclamation.request(now, rssReclamationWork{
+		targetPercent: rssCacheSoftTarget,
+		evictor:       evictor,
+		freeOSMemory:  true,
+	})
+	<-entered
+	processRSSReclamation.request(now+int64(time.Second), rssReclamationWork{
+		targetPercent: rssCacheHardTarget,
+		evictor:       evictor,
+		freeOSMemory:  true,
+	})
+	close(release)
+	resetRSSReclamationCoordinatorForTest()
+
+	var gotTargets []int64
+	for {
+		select {
+		case target := <-targets:
+			gotTargets = append(gotTargets, target)
+		default:
+			require.Equal(t, []int64{rssCacheSoftTarget, rssCacheHardTarget}, gotTargets)
+			require.Equal(t, int32(1), maxActive.Load())
+			require.Equal(t, int32(1), freeCalls.Load())
+			return
+		}
+	}
+}
+
+func TestMemThrottlerRSSScavengingDisabled(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
+	oldFreeOSMemory := freeOSMemory
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
 
 	var calls atomic.Int32
 	freeOSMemory = func() {
