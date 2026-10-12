@@ -132,6 +132,18 @@ select count(*) from information_schema.check_constraints
     where constraint_schema=database();
 
 -- Generic DROP sees generated UNIQUE names and ordinary-index occupancy.
+create table copy_namespace(id int primary key,v int,w int,key w(v),constraint w_2 check(w>0));
+insert into copy_namespace values (1,1,1);
+alter table copy_namespace drop column v,add unique(w),drop constraint w_2;
+insert into copy_namespace values (2,-1);
+select * from copy_namespace order by id;
+select index_name,non_unique from information_schema.statistics
+    where table_schema=database() and table_name='copy_namespace' order by index_name;
+create table primary_namespace(id int primary key,w int,constraint `PRIMARY` check(w>0));
+insert into primary_namespace values (1,1);
+alter table primary_namespace drop column id,drop constraint `PRIMARY`;
+insert into primary_namespace values (-1);
+select w from primary_namespace order by w;
 create table ordered_indexes(v int,key v(v));
 insert into ordered_indexes values (1);
 alter table ordered_indexes add unique(v), drop constraint v_2;

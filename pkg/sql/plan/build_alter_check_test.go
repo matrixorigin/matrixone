@@ -261,3 +261,55 @@ func TestAlterCheckPreservesFinalCopyIndexNames(t *testing.T) {
 		}
 	}
 }
+
+func TestAlterConstraintUsesFinalCopyNamespace(t *testing.T) {
+	t.Run("dropped primary no longer conflicts with check", func(t *testing.T) {
+		mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,w int,constraint `PRIMARY` check(w>0))")
+		p, err := runOneStmt(mock, t, "alter table check_t drop column id,drop constraint `PRIMARY`")
+		require.NoError(t, err)
+		require.Empty(t, p.GetDdl().GetAlterTable().CopyTableDef.Checks)
+	})
+	t.Run("partially dropped primary still conflicts with check", func(t *testing.T) {
+		mock := newCheckAlterOptimizer(t, "create table check_t(id int,v int,w int,primary key(id,v),constraint `PRIMARY` check(w>0))")
+		_, err := runOneStmt(mock, t, "alter table check_t drop column id,drop constraint `PRIMARY`")
+		require.ErrorContains(t, err, "ambiguous constraint name")
+	})
+	for _, test := range []struct{ index, clause string }{
+		{"key w(v)", "drop column v,add unique(w),drop constraint w_2"},
+		{"unique key w(v)", "drop column v,add unique(w),drop constraint w_2"},
+		{"key w(v)", "add unique(w),drop column v,drop constraint w_2"},
+		{"key w(v)", "rename column v to z,drop column z,add unique(w),drop constraint w_2"},
+		{"key w(v)", "rename column v to v,drop column v,add unique(w),drop constraint w_2"},
+		{"key w((v+1))", "drop index w,add unique(w),drop constraint w_2"},
+		{"key w((v+1))", "add unique(w),drop index w,drop constraint w_2"},
+	} {
+		t.Run(test.index+"/"+test.clause, func(t *testing.T) {
+			mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,v int,w int,"+test.index+",constraint w_2 check(w>0))")
+			source := mock.ctxt.tables["check_t"]
+			before := proto.Clone(source).(*planpb.TableDef)
+			p, err := runOneStmt(mock, t, "alter table check_t "+test.clause)
+			require.NoError(t, err)
+			alter := p.GetDdl().GetAlterTable()
+			require.Empty(t, alter.CopyTableDef.Checks)
+			require.Len(t, alter.CopyTableDef.Indexes, 1)
+			require.True(t, alter.CopyTableDef.Indexes[0].Unique)
+			require.Equal(t, "w", alter.CopyTableDef.Indexes[0].IndexName)
+			require.Equal(t, before, source)
+		})
+	}
+	t.Run("partially dropped unique still occupies name", func(t *testing.T) {
+		mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,v int,w int,unique key w(v,w),constraint w_2 check(w>0))")
+		_, err := runOneStmt(mock, t, "alter table check_t drop column v,add unique(w),drop constraint w_2")
+		require.ErrorContains(t, err, "ambiguous constraint name")
+	})
+	t.Run("copy retains pending names across source index drop", func(t *testing.T) {
+		mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,v int,w int,key w((v+1)),constraint w_3 check(w>0))")
+		p, err := runOneStmt(mock, t, "alter table check_t add unique(w),drop index w,add unique(w),drop constraint w_3")
+		require.NoError(t, err)
+		require.Empty(t, p.GetDdl().GetAlterTable().CopyTableDef.Checks)
+		indexes := p.GetDdl().GetAlterTable().CopyTableDef.Indexes
+		require.Len(t, indexes, 2)
+		require.Equal(t, "w", indexes[0].IndexName)
+		require.Equal(t, "w_2", indexes[1].IndexName)
+	})
+}
