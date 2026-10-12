@@ -145,6 +145,9 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 				}
 			}
 		case "cast":
+			if functionalJSONTextCastEligible(expr, cols, visiting) {
+				return true
+			}
 			if len(e.F.Args) == 2 {
 				from, to := types.T(e.F.Args[0].Typ.Id), types.T(expr.Typ.Id)
 				if from.IsInteger() && to.IsInteger() && from.IsUnsignedInt() == to.IsUnsignedInt() && from.TypeLen() <= to.TypeLen() {
@@ -242,6 +245,11 @@ func lowerFunctionalIndex(ctx CompilerContext, table *TableDef, index *tree.Inde
 		if !functionalExpressionEligible(expr, table.Cols, make(map[int32]bool)) {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "functional index expression must have session-independent semantics")
 		}
+		if functionalExpressionUsesJSON(expr, table.Cols, make(map[int32]bool)) {
+			if err := RequirePersistedProtocolVersionForAuthoring(ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion115); err != nil {
+				return nil, err
+			}
+		}
 		if err := preservePersistedFormatCompatibility(bindCtx, expr); err != nil {
 			return nil, err
 		}
@@ -284,6 +292,9 @@ func validateFunctionalTable(ctx context.Context, table *TableDef) error {
 	for _, index := range table.Indexes {
 		if index == nil {
 			return moerr.NewInvalidInput(ctx, "invalid index metadata")
+		}
+		if err := validateFunctionalJSONIndexSemantics(ctx, table, index); err != nil {
+			return err
 		}
 		functional := false
 		for _, part := range index.Parts {

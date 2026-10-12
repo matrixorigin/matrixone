@@ -98,6 +98,9 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 }
 
 func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
+	if features.JSONFunctionalIndexSemantics {
+		return defines.MORPCVersion115
+	}
 	if features.ODKUStatementResult || features.SessionLastInsertIDBaseline {
 		return defines.MORPCVersion114
 	}

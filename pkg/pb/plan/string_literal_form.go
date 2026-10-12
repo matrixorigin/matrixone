@@ -385,6 +385,7 @@ const (
 // MediumIntAssignmentBounds requires MORPC v110 because older executors treat
 // the shared INT32 storage type as a full-width INT rather than a 24-bit value.
 type RemoteExpressionFeatures struct {
+	JSONFunctionalIndexSemantics    bool
 	SessionLastInsertIDBaseline     bool
 	ODKUStatementResult             bool
 	JSONMinMaxTypedComparison       bool
@@ -423,7 +424,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.ODKUStatementResult || features.SessionLastInsertIDBaseline || features.JSONMinMaxTypedComparison || features.JSONStringConsumerOverload || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.JSONFunctionalIndexSemantics || features.ODKUStatementResult || features.SessionLastInsertIDBaseline || features.JSONMinMaxTypedComparison || features.JSONStringConsumerOverload || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -891,6 +892,7 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 // can retain precise diagnostics, while sharing one owner walk so adding one
 // feature cannot accidentally replace another feature's compatibility gate.
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
+	var metadataErr error
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
 			if literal := current.GetLit(); literal != nil && !literal.Isnull && current.Typ.Id == planJSONTypeID {
@@ -1121,6 +1123,12 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 		// when there are no session-function expressions. Getter interfaces
 		// avoid coupling plan to pipeline, which already imports plan.
 		switch metadata := owner.(type) {
+		case *IndexDef:
+			if metadataErr == nil {
+				var required bool
+				required, metadataErr = JSONFunctionalIndexSemantics(metadata)
+				features.JSONFunctionalIndexSemantics = features.JSONFunctionalIndexSemantics || required
+			}
 		case interface{ GetTrackOdkuResult() bool }:
 			features.ODKUStatementResult = features.ODKUStatementResult || metadata.GetTrackOdkuResult()
 		case interface{ GetOdkuResultTracking() bool }:
@@ -1130,6 +1138,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				(metadata.OdkuOrdinalCol != nil && metadata.OdkuGeneratedCol != nil)
 		}
 	})
+	if err == nil {
+		err = metadataErr
+	}
 	return
 }
 

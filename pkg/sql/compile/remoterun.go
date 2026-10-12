@@ -156,6 +156,9 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	}
 	// Reconfirm this new contract on the very stream that carries the scope,
 	// not only at an earlier inventory/capability observation.
+	if requiredVectorProtocol != nil && features.JSONFunctionalIndexSemantics {
+		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion115)
+	}
 	if requiredVectorProtocol != nil && (features.ODKUStatementResult || features.SessionLastInsertIDBaseline) {
 		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion114)
 	}
@@ -2289,6 +2292,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	protocolVersion, hasProtocolVersion := int64(0), false
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if features.JSONFunctionalIndexSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion115) {
+		return moerr.NewNotSupportedNoCtx("JSON functional index semantics require MORPC protocol version 115")
 	}
 	if features.ODKUStatementResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 		return moerr.NewNotSupportedNoCtx("remote ODKU statement result requires MORPC protocol version 114")

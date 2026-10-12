@@ -5008,6 +5008,9 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		}
 		for _, def := range indexDef {
 			if def != nil {
+				if err = setFunctionalJSONIndexSemantics(ctx.GetContext(), createTable.TableDef, def); err != nil {
+					return err
+				}
 				def.KeyFormat = createTable.TableDef.KeyFormat
 			}
 		}

@@ -99,7 +99,10 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		return 0, moerr.NewNotSupportedNoCtx("persisted legacy interval unit contract requires rebinding")
 	}
 	requiredVersion := int64(0)
-	if features.IPFunctionSemantics {
+	if features.JSONFunctionalIndexSemantics {
+		requiredVersion = defines.MORPCVersion115
+	}
+	if features.IPFunctionSemantics && requiredVersion < defines.MORPCVersion72 {
 		requiredVersion = defines.MORPCVersion72
 	}
 	if features.StringNumericResultContracts && requiredVersion < defines.MORPCVersion80 {
