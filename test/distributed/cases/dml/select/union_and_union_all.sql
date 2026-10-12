@@ -502,3 +502,88 @@ SELECT x FROM (SELECT SUM(total) AS x FROM c LIMIT 0) a
 UNION ALL
 SELECT x FROM (SELECT SUM(total) AS x FROM c LIMIT 0) b;
 DROP TABLE cte_zero_limit;
+-- Narrow unsigned branches and signed BIGINT need an exact common domain.
+DROP TABLE IF EXISTS union_narrow_unsigned_precision;
+DROP TABLE IF EXISTS union_narrow_unsigned_precision_ctas;
+CREATE TABLE union_narrow_unsigned_precision (
+    id INT PRIMARY KEY,
+    u8 TINYINT UNSIGNED,
+    u16 SMALLINT UNSIGNED,
+    s BIGINT,
+    d DATE
+);
+INSERT INTO union_narrow_unsigned_precision VALUES
+    (1, NULL, NULL, 9007199254740993, '2024-01-01'),
+    (2, 255, 65535, -9007199254740993, '2024-01-01');
+
+SELECT id, COALESCE(u8, s) AS v8, COALESCE(u16, s) AS v16
+FROM union_narrow_unsigned_precision ORDER BY id;
+SELECT id, COALESCE(s, u8, u16) AS v
+FROM union_narrow_unsigned_precision ORDER BY id;
+SELECT id, COALESCE(NULL, u8, u16, s, NULL) AS v
+FROM union_narrow_unsigned_precision ORDER BY id;
+SELECT x FROM (
+    SELECT u8 AS x FROM union_narrow_unsigned_precision WHERE id = 2
+    UNION ALL SELECT 9007199254740993
+    UNION ALL SELECT -9007199254740993
+    UNION ALL SELECT 9223372036854775807
+    UNION ALL SELECT -9223372036854775808
+) q ORDER BY x;
+SELECT x FROM (
+    SELECT 9007199254740993 AS x
+    UNION ALL SELECT u16 FROM union_narrow_unsigned_precision WHERE id = 2
+) q ORDER BY x;
+SELECT x FROM (
+    SELECT WEEK(d, 3) AS x FROM union_narrow_unsigned_precision WHERE id = 2
+    UNION ALL SELECT 9007199254740993
+) q ORDER BY x;
+SELECT x FROM (
+    SELECT DAYOFYEAR(d) AS x FROM union_narrow_unsigned_precision WHERE id = 2
+    UNION ALL SELECT 9007199254740993
+) q ORDER BY x;
+SELECT x FROM (
+    SELECT QUARTER(d) AS x FROM union_narrow_unsigned_precision WHERE id = 2
+    UNION ALL SELECT 9007199254740993
+) q ORDER BY x;
+
+-- DISTINCT and GROUP BY must keep adjacent integers above 2^53 separate.
+SELECT x FROM (
+    SELECT u8 AS x FROM union_narrow_unsigned_precision WHERE id = 2
+    UNION SELECT 9007199254740992
+    UNION SELECT 9007199254740993
+) q ORDER BY x;
+SELECT x, COUNT(*) AS n FROM (
+    SELECT u16 AS x FROM union_narrow_unsigned_precision WHERE id = 2
+    UNION ALL SELECT 9007199254740992
+    UNION ALL SELECT 9007199254740993
+) q GROUP BY x ORDER BY x;
+
+-- Untyped NULL is neutral; the all-NULL row remains NULL.
+SELECT id, COALESCE(u8, u16) AS v
+FROM union_narrow_unsigned_precision ORDER BY id;
+SELECT x FROM (
+    SELECT NULL AS x
+    UNION ALL SELECT u8 FROM union_narrow_unsigned_precision WHERE id = 2
+    UNION ALL SELECT s FROM union_narrow_unsigned_precision WHERE id = 1
+) q ORDER BY x;
+
+CREATE TABLE union_narrow_unsigned_precision_ctas AS
+SELECT u8 AS x FROM union_narrow_unsigned_precision WHERE id = 2
+UNION ALL SELECT 9007199254740993;
+SELECT column_type FROM information_schema.columns
+WHERE table_schema = DATABASE()
+  AND table_name = 'union_narrow_unsigned_precision_ctas';
+SELECT x FROM union_narrow_unsigned_precision_ctas ORDER BY x;
+
+PREPARE narrow_union FROM 'SELECT x FROM (SELECT u8 AS x FROM union_narrow_unsigned_precision WHERE id = 2 UNION ALL SELECT 9007199254740993) q ORDER BY x';
+EXECUTE narrow_union;
+DEALLOCATE PREPARE narrow_union;
+PREPARE narrow_coalesce FROM 'SELECT id, COALESCE(u16, s) AS x FROM union_narrow_unsigned_precision ORDER BY id';
+EXECUTE narrow_coalesce;
+DEALLOCATE PREPARE narrow_coalesce;
+
+-- An unsigned BIGINT peer still requires the wider decimal domain.
+SELECT id, COALESCE(u8, s, CAST(18446744073709551615 AS UNSIGNED)) AS x
+FROM union_narrow_unsigned_precision ORDER BY id;
+DROP TABLE union_narrow_unsigned_precision_ctas;
+DROP TABLE union_narrow_unsigned_precision;
