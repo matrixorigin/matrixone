@@ -668,6 +668,12 @@ func setOperationOutputType(
 ) plan.Type {
 	switch nodeType {
 	case plan.Node_UNION, plan.Node_UNION_ALL:
+		if commonType, ok := function.CommonMediumIntType([]types.Type{
+			{Oid: types.T(leftType.Id), Width: leftType.Width, Scale: leftType.Scale},
+			{Oid: types.T(rightType.Id), Width: rightType.Width, Scale: rightType.Scale},
+		}); ok {
+			leftType.Width = commonType.Width
+		}
 		leftType.NotNullable = leftType.NotNullable && rightType.NotNullable
 	}
 	return leftType
@@ -4570,7 +4576,21 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				}
 			}
 			for idx, tmpID := range nodes {
-				if !argsType[idx].Eq(targetArgType) {
+				needsCast := !argsType[idx].Eq(targetArgType)
+				sameMediumIntStorageWidth := argsType[idx].Oid == targetArgType.Oid &&
+					(argsType[idx].IsMediumInt() || targetArgType.IsMediumInt()) &&
+					argsType[idx].Scale == targetArgType.Scale &&
+					argsType[idx].Width != targetArgType.Width
+				if !needsCast && sameMediumIntStorageWidth {
+					// MEDIUMINT and INT share the same physical int32/uint32
+					// vector. Widen the branch metadata without adding a per-row
+					// conversion or mutating an expression shared by another node.
+					projected := builder.qry.Nodes[tmpID].ProjectList[columnIdx]
+					widened := *projected
+					widened.Typ.Width = targetArgType.Width
+					builder.qry.Nodes[tmpID].ProjectList[columnIdx] = &widened
+				}
+				if needsCast {
 					node := builder.qry.Nodes[tmpID]
 					source := node.ProjectList[columnIdx]
 					if argsType[idx].Oid == types.T_any || setBranchPureNull[idx][columnIdx] {
