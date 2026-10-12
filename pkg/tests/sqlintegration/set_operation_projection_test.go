@@ -18,12 +18,100 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSetOperationExternalColumnPruning(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		defer cleanupSQLIntegration(t, cn, "drop database if exists set_external_pruning")
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		for _, q := range []string{"create database set_external_pruning", "use set_external_pruning"} {
+			_, err = conn.ExecContext(ctx, q)
+			require.NoError(t, err)
+		}
+		dir := t.TempDir()
+		for _, tc := range []struct{ name, data string }{
+			{"bad_tail", "1,notanint\n2,notanint\n"},
+			{"bad_head", "notanint,7\n"},
+			{"nullable", "\\N,notanint\n"},
+			{"empty", ""},
+		} {
+			path, err := filepath.Abs(filepath.Join(dir, tc.name+".csv"))
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(path, []byte(tc.data), 0600))
+			_, err = conn.ExecContext(ctx, fmt.Sprintf("create external table %s(a int,b int) infile{'filepath'='%s'} fields terminated by ',' lines terminated by '\\n'", tc.name, strings.ReplaceAll(path, "'", "''")))
+			require.NoError(t, err)
+		}
+		for _, tc := range []struct {
+			name, query string
+			want        []string
+		}{
+			{"direct-control", "select a from bad_tail order by a", []string{"1", "2"}},
+			{"unused-invalid-field", "select a from (select a,b from bad_tail union all select a,b from bad_tail) u order by a", []string{"1", "1", "2", "2"}},
+			{"physical-second-field", "select b from (select a,b from bad_head union all select a,b from bad_head) u", []string{"7", "7"}},
+			{"null", "select a from (select a,b from nullable union all select a,b from nullable) u", []string{"NULL", "NULL"}},
+			{"empty", "select a from (select a,b from empty union all select a,b from empty) u", nil},
+			{"error-record-text", "select e from (select __mo_error_text e from bad_tail union all select __mo_error_text from bad_tail) u order by e", []string{"1,notanint", "1,notanint", "2,notanint", "2,notanint"}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				rows, err := conn.QueryContext(ctx, tc.query)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, readWindowNullRows(t, rows))
+			})
+		}
+		t.Run("error-record-messages", func(t *testing.T) {
+			rows, err := conn.QueryContext(ctx, "select e from (select __mo_error_message e from bad_tail union all select __mo_error_message from bad_tail) u")
+			require.NoError(t, err)
+			defer rows.Close()
+			var count int
+			for rows.Next() {
+				var message sql.NullString
+				require.NoError(t, rows.Scan(&message))
+				require.True(t, message.Valid)
+				require.NotEmpty(t, message.String)
+				count++
+			}
+			require.NoError(t, rows.Err())
+			require.Equal(t, 4, count)
+		})
+		// Expected conversion failures run last on separate connections. Protocol
+		// recovery after an internal error is outside this pruning regression.
+		for _, tc := range []struct{ name, query string }{
+			{"direct-invalid", "select b from set_external_pruning.bad_tail"},
+			{"union-invalid", "select b from (select a,b from set_external_pruning.bad_tail union all select a,b from set_external_pruning.bad_tail) u"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				check, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+				require.NoError(t, err)
+				defer check.Close()
+				rows, queryErr := check.QueryContext(ctx, tc.query)
+				if queryErr == nil {
+					defer rows.Close()
+					for rows.Next() {
+					}
+					queryErr = rows.Err()
+				}
+				require.ErrorContains(t, queryErr, "notanint", tc.query)
+			})
+		}
+	})
+}
 
 func TestFilteredSetOperationProjection(t *testing.T) {
 	runSQLIntegration(t, func(c embed.Cluster) {

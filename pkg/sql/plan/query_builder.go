@@ -1103,7 +1103,9 @@ func (builder *QueryBuilder) setOperationAliasesCanPrune(expr *plan.Expr, memo m
 		}
 		source := builder.qry.Nodes[sourceID]
 		switch source.NodeType {
-		case plan.Node_TABLE_SCAN, plan.Node_VALUE_SCAN:
+		case plan.Node_TABLE_SCAN, plan.Node_VALUE_SCAN, plan.Node_EXTERNAL_SCAN:
+			// Scan owners prune unused columns while retaining their own demands,
+			// including full records needed by external error-reporting outputs.
 			return true
 		case plan.Node_AGG, plan.Node_SAMPLE, plan.Node_TIME_WINDOW:
 			// These owners prune computed slots while retaining effects,

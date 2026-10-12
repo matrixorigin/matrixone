@@ -15,13 +15,89 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSetOperationExternalColumnPruning(t *testing.T) {
+	for _, tc := range []struct {
+		name, query string
+		columns     []string
+	}{
+		{"first", "select a from (select a,b from ext union all select a,b from ext) u", []string{"a"}},
+		{"second", "select b from (select a,b from ext union all select a,b from ext) u", []string{"b"}},
+		{"expression-alias", "select x from (select a+1 x,b from ext union all select a+1,b from ext) u", []string{"a"}},
+		{"filter-demand", "select a from (select a,b from ext where b>0 union all select a,b from ext where b>0) u", []string{"a", "b"}},
+		{"error-record", "select e from (select a,b,__mo_error_message e from ext union all select a,b,__mo_error_message from ext) u", []string{"a", "b", catalog.ExternalErrorMessage}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			mock.ctxt.objects["ext"] = &planpb.ObjectRef{DbName: "tpch", ObjName: "ext", Obj: 4345}
+			mock.ctxt.tables["ext"] = &planpb.TableDef{
+				Name: "ext", TableType: catalog.SystemExternalRel,
+				Createsql: mustMarshalLegacyExternParam(t, &tree.ExternParam{
+					ExParamConst: tree.ExParamConst{ScanType: tree.INFILE, Filepath: "/data/pruning.csv", Format: tree.CSV, Option: []string{"format", "csv"}},
+				}),
+				Cols: []*planpb.ColDef{
+					{ColId: 1, Name: "a", Typ: planpb.Type{Id: int32(types.T_int32), Table: "ext"}, Default: &planpb.Default{NullAbility: true}},
+					{ColId: 2, Name: "b", Typ: planpb.Type{Id: int32(types.T_int32), Table: "ext"}, Default: &planpb.Default{NullAbility: true}},
+				},
+			}
+			p, err := runOneStmt(mock, t, tc.query)
+			require.NoError(t, err)
+			q := p.GetQuery()
+			seen := make(map[int32]bool)
+			var scans, unions int
+			var visit func(int32)
+			visit = func(id int32) {
+				if seen[id] {
+					return
+				}
+				seen[id] = true
+				n := q.Nodes[id]
+				if n.NodeType == planpb.Node_EXTERNAL_SCAN {
+					scans++
+					var columns []string
+					for _, col := range n.TableDef.Cols {
+						columns = append(columns, col.Name)
+						if col.Name == "a" || col.Name == "b" {
+							field := int32(0)
+							if col.Name == "b" {
+								field = 1
+							}
+							got, ok := n.ExternScan.TbColToDataCol[col.Name]
+							require.True(t, ok)
+							require.Equal(t, field, got, "pruning must preserve the original CSV field index")
+						}
+					}
+					require.Equal(t, tc.columns, columns)
+				}
+				if n.NodeType == planpb.Node_UNION_ALL {
+					unions++
+					require.Len(t, n.ProjectList, 1)
+					for _, child := range n.Children {
+						require.Len(t, q.Nodes[child].ProjectList, 1)
+					}
+				}
+				for _, child := range n.Children {
+					visit(child)
+				}
+			}
+			for _, root := range q.Steps {
+				visit(root)
+			}
+			require.Equal(t, 2, scans)
+			require.Equal(t, 1, unions)
+		})
+	}
+}
 
 func TestFilteredSetOperationProjection(t *testing.T) {
 	for _, op := range []string{"union all", "union", "intersect", "intersect all", "except", "except all"} {
