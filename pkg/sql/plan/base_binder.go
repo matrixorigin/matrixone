@@ -8067,8 +8067,11 @@ func bindFuncExprImplByPlanExpr(
 	case "lead", "lag":
 		// For lead/lag window functions, cast the default value (3rd arg)
 		// to match the value type (1st arg).
-		if len(args) >= 3 && !argsType[2].Eq(argsType[0]) {
-			argsCastType = []types.Type{argsType[0], argsType[1], argsType[0]}
+		if len(args) >= 3 && !argsType[2].Eq(returnType) {
+			if len(argsCastType) == 0 {
+				argsCastType = append([]types.Type(nil), argsType...)
+			}
+			argsCastType[2] = returnType
 		}
 	}
 
