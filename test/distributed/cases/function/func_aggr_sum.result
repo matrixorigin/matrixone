@@ -131,10 +131,10 @@ insert into t1 select 21474836471, 12412490231412.124124124124, 1241412312491241
 SET @sum_empty_prefix_saved_mode_28487 = @@sql_mode;
 SET @@sql_mode = CONCAT_WS(',', NULLIF(@sum_empty_prefix_saved_mode_28487, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 select sum(a), sum(b),sum(c),sum(d),sum(e) from t1;
-SET @@sql_mode = @sum_empty_prefix_saved_mode_28487;
-SET @sum_empty_prefix_saved_mode_28487 = NULL;
 ➤ sum(a)[3,38,0]  ¦  sum(b)[8,53,31]  ¦  sum(c)[8,53,31]  ¦  sum(d)[8,53,31]  ¦  sum(e)[8,53,31]  𝄀
 42949672942  ¦  2.4824980176896E13  ¦  2.48282462498248256E17  ¦  2.484302428248248E40  ¦  0.0
+SET @@sql_mode = @sum_empty_prefix_saved_mode_28487;
+SET @sum_empty_prefix_saved_mode_28487 = NULL;
 select sum(a), sum(b),sum(c),sum(d) from t1;
 ➤ sum(a)[3,38,0]  ¦  sum(b)[8,54,0]  ¦  sum(c)[8,54,0]  ¦  sum(d)[8,54,0]  𝄀
 42949672942  ¦  2.4824980176896E13  ¦  2.48282462498248256E17  ¦  2.484302428248248E40
