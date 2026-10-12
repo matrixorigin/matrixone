@@ -180,7 +180,7 @@ func searchedBuildTS(ctx context.Context, req coverage.Request) int64 {
 	// Current read: the loaded generation's build_ts when the cache is warm, else the durable
 	// MAX(build_ts) a fresh load would see. This is a plan-time usability signal (index built,
 	// and the lower bound shown in the EXPLAIN tail SQL); it does NOT bind execution -- the
-	// fulltext2_search operator binds the generation it actually searched at runtime and completes
+	// fulltext2 search reader binds the generation it actually searched at runtime and completes
 	// the (searched, snapshot] gap with a table_changes tail, so a stale/newer read here cannot
 	// drop rows.
 	if buildTS, ok := veccache.Cache.GetBuildTS(req.IndexStorageTable); ok {

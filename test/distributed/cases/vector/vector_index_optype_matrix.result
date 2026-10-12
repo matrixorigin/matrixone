@@ -15,7 +15,7 @@ insert into tc_ref select a, v from tc;
 create index ivf_l2 using ivfflat on t(v) lists=2 op_type 'vector_l2_ops';
 explain select a from t order by l2_distance(v,'[1,1,1,1]') limit 3;
 -- @regex("Vector Index Scan", true)
-➤ AP QUERY PLAN ON MULTICN(12 core)[12,-1,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: #[0,1] INTERNAL  𝄀
@@ -24,7 +24,7 @@ Project  𝄀
               Vector Index: ivf_l2, Metric: l2_distance, Candidate Limit: 3, NProbe: 5
 explain select a from t order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
 -- @regex("Vector Index Scan", true)
-➤ AP QUERY PLAN ON MULTICN(12 core)[12,-1,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: #[0,1] INTERNAL  𝄀
@@ -79,7 +79,7 @@ alter table t drop index ivf_l2;
 create index ivf_l2sq using ivfflat on t(v) lists=2 op_type 'vector_l2sq_ops';
 explain select a from t order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
 -- @regex("Vector Index Scan", true)
-➤ AP QUERY PLAN ON MULTICN(12 core)[12,-1,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: #[0,1] INTERNAL  𝄀
@@ -88,7 +88,7 @@ Project  𝄀
               Vector Index: ivf_l2sq, Metric: l2_distance_sq, Candidate Limit: 3, NProbe: 5
 explain select a from t order by l2_distance(v,'[1,1,1,1]') limit 3;
 -- @regex("Vector Index Scan", true)
-➤ AP QUERY PLAN ON MULTICN(12 core)[12,-1,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: #[0,1] INTERNAL  𝄀
@@ -127,7 +127,7 @@ alter table t drop index ivf_l2sq;
 create index ivf_l1 using ivfflat on t(v) lists=2 op_type 'vector_l1_ops';
 explain select a from t order by l1_distance(v,'[1,1,1,1]') limit 3;
 -- @regex("Vector Index Scan", true)
-➤ AP QUERY PLAN ON MULTICN(12 core)[12,-1,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: #[0,1] INTERNAL  𝄀
@@ -166,7 +166,7 @@ alter table t drop index ivf_l1;
 create index ivf_ip using ivfflat on t(v) lists=2 op_type 'vector_ip_ops';
 explain select a from t order by inner_product(v,'[1,1,1,1]') limit 3;
 -- @regex("Vector Index Scan", true)
-➤ AP QUERY PLAN ON MULTICN(12 core)[12,-1,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: #[0,1] INTERNAL  𝄀
@@ -195,7 +195,7 @@ alter table t drop index ivf_ip;
 create index ivf_cos using ivfflat on tc(v) lists=2 op_type 'vector_cosine_ops';
 explain select a from tc order by cosine_distance(v,'[1,0,0,0]') limit 3;
 -- @regex("Vector Index Scan", true)
-➤ AP QUERY PLAN ON MULTICN(12 core)[12,-1,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: #[0,1] INTERNAL  𝄀
@@ -233,39 +233,37 @@ create index h_l1 using hnsw on h(v) op_type 'vector_l1_ops';
 invalid input: invalid op_type. 'vector_l1_ops'
 create index h_l2 using hnsw on h(v) op_type 'vector_l2_ops';
 explain select a from h order by l2_distance(v,'[1,1,1,1]') limit 3;
--- @regex("hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (h.a = mo_hnsw_alias_0.pkid)  𝄀
+              Join Cond: (h.a = #[1,0])  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on vec_optype_matrix.h  𝄀
                     Runtime Filter Probe: h.a  𝄀
-              ->  Table Function on hnsw_search  𝄀
-                    Index Reader Param:  Limit: 3  𝄀
-                    Limit: 3
+              ->  Vector Index Scan on h_l2 [l2_distance]  𝄀
+                    Vector Index: h_l2, Metric: l2_distance, Candidate Limit: 3
 explain select a from h order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
--- @regex("hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (h.a = mo_hnsw_alias_0.pkid)  𝄀
+              Join Cond: (h.a = #[1,0])  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on vec_optype_matrix.h  𝄀
                     Runtime Filter Probe: h.a  𝄀
-              ->  Table Function on hnsw_search  𝄀
-                    Index Reader Param:  Limit: 3  𝄀
-                    Limit: 3
+              ->  Vector Index Scan on h_l2 [l2_distance_sq]  𝄀
+                    Vector Index: h_l2, Metric: l2_distance_sq, Candidate Limit: 3
 explain select a from h order by cosine_distance(v,'[1,1,1,1]') limit 3;
--- @regex("hnsw_search", false)
+-- @regex("Vector Index Scan on", false)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -292,37 +290,35 @@ from h order by l2_distance(v,'[1,1,1,1]') limit 3;
 alter table h drop index h_l2;
 create index h_l2sq using hnsw on h(v) op_type 'vector_l2sq_ops';
 explain select a from h order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
--- @regex("hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (h.a = mo_hnsw_alias_0.pkid)  𝄀
+              Join Cond: (h.a = #[1,0])  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on vec_optype_matrix.h  𝄀
                     Runtime Filter Probe: h.a  𝄀
-              ->  Table Function on hnsw_search  𝄀
-                    Index Reader Param:  Limit: 3  𝄀
-                    Limit: 3
+              ->  Vector Index Scan on h_l2sq [l2_distance_sq]  𝄀
+                    Vector Index: h_l2sq, Metric: l2_distance_sq, Candidate Limit: 3
 explain select a from h order by l2_distance(v,'[1,1,1,1]') limit 3;
--- @regex("hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (h.a = mo_hnsw_alias_0.pkid)  𝄀
+              Join Cond: (h.a = #[1,0])  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on vec_optype_matrix.h  𝄀
                     Runtime Filter Probe: h.a  𝄀
-              ->  Table Function on hnsw_search  𝄀
-                    Index Reader Param:  Limit: 3  𝄀
-                    Limit: 3
+              ->  Vector Index Scan on h_l2sq [l2_distance]  𝄀
+                    Vector Index: h_l2sq, Metric: l2_distance, Candidate Limit: 3
 select a, l2_distance_sq(v,'[1,1,1,1]') as dsq from h order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
 ➤ a[-5,64,0]  ¦  dsq[8,9,0]  𝄀
 1  ¦  0.0  𝄀
@@ -336,21 +332,20 @@ select a, l2_distance_sq(v,'[1,1,1,1]') as dsq from t_ref order by l2_distance_s
 alter table h drop index h_l2sq;
 create index h_cos using hnsw on hc(v) op_type 'vector_cosine_ops';
 explain select a from hc order by cosine_distance(v,'[1,0,0,0]') limit 3;
--- @regex("hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (hc.a = mo_hnsw_alias_0.pkid)  𝄀
+              Join Cond: (hc.a = #[1,0])  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on vec_optype_matrix.hc  𝄀
                     Runtime Filter Probe: hc.a  𝄀
-              ->  Table Function on hnsw_search  𝄀
-                    Index Reader Param:  Limit: 3  𝄀
-                    Limit: 3
+              ->  Vector Index Scan on h_cos [cosine_distance]  𝄀
+                    Vector Index: h_cos, Metric: cosine_distance, Candidate Limit: 3
 select a, round(cosine_distance(v,'[1,0,0,0]'),4) as d from hc order by cosine_distance(v,'[1,0,0,0]') limit 3;
 ➤ a[-5,64,0]  ¦  d[8,53,31]  𝄀
 1  ¦  0.0  𝄀
@@ -364,21 +359,20 @@ select a, round(cosine_distance(v,'[1,0,0,0]'),4) as d from tc_ref order by cosi
 alter table hc drop index h_cos;
 create index h_ip using hnsw on h(v) op_type 'vector_ip_ops';
 explain select a from h order by inner_product(v,'[1,1,1,1]') limit 3;
--- @regex("hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (h.a = mo_hnsw_alias_0.pkid)  𝄀
+              Join Cond: (h.a = #[1,0])  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on vec_optype_matrix.h  𝄀
                     Runtime Filter Probe: h.a  𝄀
-              ->  Table Function on hnsw_search  𝄀
-                    Index Reader Param:  Limit: 3  𝄀
-                    Limit: 3
+              ->  Vector Index Scan on h_ip [inner_product]  𝄀
+                    Vector Index: h_ip, Metric: inner_product, Candidate Limit: 3
 select a, inner_product(v,'[1,1,1,1]') as d from h order by inner_product(v,'[1,1,1,1]') limit 3;
 ➤ a[-5,64,0]  ¦  d[8,9,0]  𝄀
 6  ¦  -216.0  𝄀
