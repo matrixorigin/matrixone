@@ -36,7 +36,10 @@ import (
 func newStatsLookupEngine(t *testing.T) *Engine {
 	t.Helper()
 	mp := mpool.MustNewZero()
-	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.CurrNB())
+	})
 	eng := &Engine{mp: mp}
 	eng.catalog.Store(cache.NewCatalog())
 	packer := types.NewPacker()
