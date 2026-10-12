@@ -68,6 +68,54 @@ create table lexical_set_copy (id int, tags set(' a', 'a'));
 load data infile {'filepath'='stage://parquet_outfile_stage/lexical_set.parquet', 'format'='parquet'} into table lexical_set_copy;
 select id, cast(tags as unsigned) as bitmap from lexical_set_copy order by id;
 
+-- Spatial metadata, link values, and every vector element type survive typed LOAD.
+create table extended_src (
+    id int,
+    g point srid 4326,
+    g32 point32 srid 4326,
+    line linestring srid 4326,
+    link datalink,
+    bf vecbf16(3),
+    f16 vecf16(3),
+    i8 vecint8(3),
+    u8 vecuint8(3),
+    f32 vecf32(3),
+    f64 vecf64(3),
+    y year
+);
+insert into extended_src values
+(1, st_geomfromtext('POINT(1.0000001192092896 -2.5)',4326),
+    st_geomfromtext('POINT(1.0000001192092896 -2.5)',4326),
+    st_geomfromtext('LINESTRING(1.25 -2.5,3.75 4.5)',4326),
+    'file:///does-not-exist%20file?offset=2&size=3',
+    '[1.5,-2.5,0]', '[1.5,-2.5,65504]', '[-128,0,127]', '[0,128,255]',
+    '[1,-2.5,3]', '[0.5,-1.25,4]', 1901),
+(2, null, null, null, null, null, null, null, null, null, null, null);
+select * from extended_src order by id into outfile 'stage://parquet_outfile_stage/extended.parquet' format 'parquet';
+create table extended_copy like extended_src;
+load data infile {'filepath'='stage://parquet_outfile_stage/extended.parquet', 'format'='parquet'} into table extended_copy;
+select t.id,
+    (st_aswkb(s.g) <=> st_aswkb(t.g)) and (st_srid(s.g) <=> st_srid(t.g))
+    and (st_aswkb(s.g32) <=> st_aswkb(t.g32)) and (st_srid(s.g32) <=> st_srid(t.g32))
+    and (st_aswkb(s.line) <=> st_aswkb(t.line)) and (st_srid(s.line) <=> st_srid(t.line))
+    and (cast(s.link as varchar) <=> cast(t.link as varchar))
+    and (s.bf <=> t.bf) and (s.f16 <=> t.f16) and (s.i8 <=> t.i8) and (s.u8 <=> t.u8)
+    and (s.f32 <=> t.f32) and (s.f64 <=> t.f64) and (s.y <=> t.y) as roundtrip_ok
+from extended_src s join extended_copy t on s.id=t.id order by t.id;
+select id, st_astext(g), st_srid(g), st_astext(g32), st_srid(g32), st_astext(line), cast(link as varchar), bf, f16, i8, u8 from extended_copy order by id;
+
+-- Direct Parquet LOAD must enforce SRID and subtype, then recover on the same session.
+select id,g from extended_src order by id into outfile 'stage://parquet_outfile_stage/point.parquet' format 'parquet';
+create table wrong_srid (id int, g point srid 0);
+load data infile {'filepath'='stage://parquet_outfile_stage/point.parquet', 'format'='parquet'} into table wrong_srid;
+select count(*) from wrong_srid;
+create table wrong_subtype (id int, g linestring srid 4326);
+load data infile {'filepath'='stage://parquet_outfile_stage/point.parquet', 'format'='parquet'} into table wrong_subtype;
+select count(*) from wrong_subtype;
+create table point_copy (id int, g point srid 4326);
+load data infile {'filepath'='stage://parquet_outfile_stage/point.parquet', 'format'='parquet'} into table point_copy;
+select id, st_astext(g), st_srid(g) from point_copy order by id;
+
 -- Duplicate aliases must fail instead of silently dropping a Parquet column.
 select id as duplicate_name, id as duplicate_name from split_src
 into outfile 'stage://parquet_outfile_stage/duplicate.parquet' format 'parquet';
@@ -81,5 +129,10 @@ drop table typed_copy;
 drop table typed_src;
 drop table lexical_set_copy;
 drop table lexical_set_src;
+drop table extended_copy;
+drop table extended_src;
+drop table wrong_srid;
+drop table wrong_subtype;
+drop table point_copy;
 drop stage parquet_outfile_stage;
 drop database parquet_outfile_regression;

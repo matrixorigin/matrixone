@@ -139,7 +139,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion101)
 	}
 	if features.JSONStringConsumerOverload {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion111)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion112)
 	}
 	return requiredVersion, nil
 }
