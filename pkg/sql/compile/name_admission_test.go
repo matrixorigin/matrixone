@@ -71,7 +71,7 @@ func TestMode2CreateAdmissionPinsCompleteDomainBeforePhysicalNames(t *testing.T)
 		require.NoError(t, err)
 		key, err := types.Unpack(outer[0].([]byte))
 		require.NoError(t, err)
-		var names []string
+		names := make([]string, 0, len(key)-1)
 		for _, value := range key[1:] {
 			names = append(names, string(value.([]byte)))
 		}
