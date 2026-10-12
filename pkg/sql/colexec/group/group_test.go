@@ -5073,7 +5073,7 @@ func TestJSONMinMaxGroupAndMergeGroupPhysicalSpillReload(t *testing.T) {
 			}
 			partials = append(partials, cloneBatch(t, proc, result.Batch))
 		}
-		require.Positive(t, g.OpAnalyzer.GetOpStats().SpillRows, "group must physically spill")
+		// Partial groups emit encoded states instead of writing finalized spill files.
 		g.Free(proc, false, nil)
 		child.Free(proc, false, nil)
 	}
@@ -5100,4 +5100,57 @@ func TestJSONMinMaxGroupAndMergeGroupPhysicalSpillReload(t *testing.T) {
 	}
 	require.Len(t, seen, 64)
 	require.Positive(t, mg.OpAnalyzer.GetOpStats().SpillRows, "mergegroup must physically spill")
+}
+
+func TestJSONMinMaxFinalGroupPhysicalSpillReload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	var inputs []*batch.Batch
+	for _, value := range []int64{1, 256} {
+		input := batch.NewWithSize(2)
+		input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		input.Vecs[1] = vector.NewVec(types.T_json.ToType())
+		bj, err := bytejson.CreateByteJSONWithCheck(value)
+		require.NoError(t, err)
+		raw, err := bj.Marshal()
+		require.NoError(t, err)
+		for key := int32(0); key < 64; key++ {
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], key, false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(input.Vecs[1], raw, false, proc.Mp()))
+		}
+		input.SetRowCount(64)
+		inputs = append(inputs, input)
+	}
+	aggs := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(1, types.T_json)}, nil), aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMax, false, []*plan.Expr{colExpr(1, types.T_json)}, nil)}
+	child := colexec.NewMockOperator().WithBatchs(inputs)
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, aggs)
+	g.SpillMem = 2
+	g.AppendChild(child)
+	t.Cleanup(func() {
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	require.NoError(t, g.Prepare(proc))
+	seen := make(map[int32]bool)
+	for {
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+		for row := 0; row < result.Batch.RowCount(); row++ {
+			key := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[row]
+			require.False(t, seen[key])
+			seen[key] = true
+			minJSON, err := types.DecodeJson(result.Batch.Vecs[1].GetBytesAt(row)).MarshalJSON()
+			require.NoError(t, err)
+			require.Equal(t, "1", string(minJSON))
+			maxJSON, err := types.DecodeJson(result.Batch.Vecs[2].GetBytesAt(row)).MarshalJSON()
+			require.NoError(t, err)
+			require.Equal(t, "256", string(maxJSON))
+		}
+	}
+	require.Len(t, seen, 64)
+	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillRows, "final group must physically spill")
 }

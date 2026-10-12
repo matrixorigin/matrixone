@@ -140,7 +140,8 @@ func TestPipelineJSONMinMaxFenceFindsForwardedAggregate(t *testing.T) {
 func TestJSONMinMaxSharedFloorsLocalAndCachedAdmission(t *testing.T) {
 	c, _ := expressionProtocolTestCompile(t)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	for _, id := range []int64{aggexec.AggIdOfMin, aggexec.AggIdOfMax, int64(uint64(aggexec.AggIdOfMin) | uint64(1)<<63)} {
+	minID := int64(aggexec.AggIdOfMin)
+	for _, id := range []int64{aggexec.AggIdOfMin, aggexec.AggIdOfMax, int64(uint64(minID) | uint64(1)<<63)} {
 		expr := jsonMinMaxPlanExpr(id)
 		features, err := plan.RequiredRemoteExpressionFeatures(expr)
 		require.NoError(t, err)
