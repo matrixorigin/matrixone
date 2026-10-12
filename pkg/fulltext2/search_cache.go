@@ -63,7 +63,7 @@ type Fulltext2Query struct {
 // Fulltext2Search adapts a loaded fulltext2 Index to veccache.VectorIndexSearchIf so
 // the positional index shares the VectorIndexCache (load-once, RW-shared, TTL
 // eviction) with bm25 and the vector plugins, keyed by its storage table name.
-// Before this, fulltext2_search reloaded the whole index (LoadAllBases +
+// Before this, fulltext2 search reloaded the whole index (LoadAllBases +
 // LoadTailSegments + NewIndex) on EVERY query — ~1s per query at 50K vs bm25's ~3ms.
 // A loaded base segment's postings (docID/tf blocks + positions) are views into a
 // shared read-only mmap, not the Go heap — reclaimable OS page cache, not GC-scanned;

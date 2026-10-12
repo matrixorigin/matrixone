@@ -757,7 +757,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 		typs[i] = types.MustTypeFromPlan(c.Typ)
 		mcol := &MysqlColumn{}
 		mcol.SetName(c.GetName())
-		err = convertEngineTypeToMysqlType(ctx, typs[i].Oid, mcol)
+		err = convertEngineColumnTypeToMysqlType(ctx, typs[i], mcol)
 		if err != nil {
 			return err
 		}

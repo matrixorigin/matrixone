@@ -1051,6 +1051,24 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
+		if retType, ok := CommonMediumIntType(inputs); ok {
+			for i, over := range overloads {
+				if len(over.args) != 1 || over.args[0] != retType.Oid {
+					continue
+				}
+				castTypes := make([]types.Type, len(inputs))
+				aligned := true
+				for j, input := range inputs {
+					castTypes[j] = retType
+					aligned = aligned && sameMediumIntCommonType(input, retType)
+				}
+				if aligned {
+					return newCheckResultWithSuccess(i)
+				}
+				return newCheckResultWithCast(i, castTypes)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
 		if result, ok := coalesceSignedUnsignedIntegerResult(overloads, inputs); ok {
 			return result
 		}

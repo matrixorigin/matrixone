@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -759,4 +760,66 @@ func collectTopNRowsAt(
 		}
 	}
 	return rows
+}
+
+func TestPartitionTopNNonLiteralAnyNullOrder(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+	t.Cleanup(proc.Free)
+	arg := newTopNArgument(1)
+	arg.OrderBySpecs[1].Expr = topNCol(1, types.T_any)
+	t.Cleanup(func() { arg.Free(proc, false, nil) })
+
+	for generation := 0; generation < 2; generation++ {
+		batches := []*batch.Batch{
+			makeAnyNullTopNBatch(t, proc, []int32{1, 2}, []int64{10, 20}, false),
+			makeAnyNullTopNBatch(t, proc, []int32{1, 2}, []int64{11, 21}, true),
+		}
+		child := colexec.NewMockOperator().WithBatchs(batches)
+		t.Cleanup(func() { child.Free(proc, false, nil) })
+		arg.Children = nil
+		arg.AppendChild(child)
+
+		require.NoError(t, arg.Prepare(proc))
+		require.Len(t, arg.top.compares, 2)
+		require.NotNil(t, arg.top.compares[0])
+
+		counts := make(map[int32]int)
+		validPayload := map[int32][]int64{1: {10, 11}, 2: {20, 21}}
+		for {
+			result, err := arg.Call(proc)
+			require.NoError(t, err)
+			if result.Batch == nil || result.Status == vm.ExecStop {
+				break
+			}
+			groups := vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0])
+			payloads := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2])
+			for row, group := range groups {
+				require.True(t, result.Batch.Vecs[1].IsNull(uint64(row)))
+				require.Contains(t, validPayload[group], payloads[row])
+				counts[group]++
+			}
+		}
+		require.Equal(t, map[int32]int{1: 1, 2: 1}, counts)
+		arg.Reset(proc, false, nil)
+	}
+}
+
+func makeAnyNullTopNBatch(t *testing.T, proc *process.Process, groups []int32, payloads []int64, constant bool) *batch.Batch {
+	t.Helper()
+	require.Len(t, groups, len(payloads))
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], groups, nil, proc.Mp()))
+	if constant {
+		bat.Vecs[1] = vector.NewConstNull(types.T_any.ToType(), len(groups), proc.Mp())
+	} else {
+		bat.Vecs[1] = vector.NewVec(types.T_any.ToType())
+		bat.Vecs[1].SetLength(len(groups))
+		nulls.AddRange(bat.Vecs[1].GetNulls(), 0, uint64(len(groups)))
+	}
+	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[2], payloads, nil, proc.Mp()))
+	bat.SetRowCount(len(groups))
+	return bat
 }
