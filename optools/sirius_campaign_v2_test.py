@@ -50,6 +50,8 @@ def provenance():
             "gdb": "test",
         },
         "config": {
+            "gomaxprocs": 4,
+            "native_host_block_bytes": 65536,
             "gpu_memory_bytes": 6 << 30,
             "native_host_memory_bytes": 16 << 30,
             "input_window_bytes": 64 << 20,
@@ -146,6 +148,29 @@ class CampaignV2Test(unittest.TestCase):
         value["config"]["active_queries"] = 2
         with self.assertRaises(campaign.CampaignError):
             campaign.build_campaign(value)
+
+    def test_execution_profile_requires_explicit_bounded_settings(self):
+        for budget, block in ((4, 1048576), (16, 65536)):
+            value = provenance()
+            value["config"].update(gomaxprocs=budget, native_host_block_bytes=block)
+            frozen = campaign.build_campaign(value)["provenance"]["config"]
+            self.assertEqual(frozen["gomaxprocs"], budget)
+            self.assertEqual(frozen["native_host_block_bytes"], block)
+        for key, values in (
+            ("gomaxprocs", (None, True, 0, -1, "16", 16.0)),
+            ("native_host_block_bytes", (None, True, 0, 32768, 65536.0)),
+        ):
+            for setting in values:
+                value = provenance()
+                value["config"][key] = setting
+                with self.subTest(key=key, setting=setting), self.assertRaises(
+                    campaign.CampaignError
+                ):
+                    campaign.build_campaign(value)
+            value = provenance()
+            del value["config"][key]
+            with self.subTest(missing=key), self.assertRaises(campaign.CampaignError):
+                campaign.build_campaign(value)
 
     def test_schedule_counts_and_sampling_separation(self):
         timing = campaign.build_campaign(provenance())

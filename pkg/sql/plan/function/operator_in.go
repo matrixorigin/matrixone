@@ -118,7 +118,7 @@ func (op *opOperatorStrIn) init(left, tuple *vector.Vector) {
 			return
 		}
 		op.mp = make(map[string]bool, 1)
-		op.mp[op.key(v)] = true
+		op.mp[string(op.keyBytes(v))] = true
 		return
 	}
 
@@ -129,11 +129,11 @@ func (op *opOperatorStrIn) init(left, tuple *vector.Vector) {
 			op.hasNull = true
 			continue
 		}
-		op.mp[op.key(v)] = true
+		op.mp[string(op.keyBytes(v))] = true
 	}
 }
 
-func (op *opOperatorStrIn) key(value []byte) string {
+func (op *opOperatorStrIn) keyBytes(value []byte) []byte {
 	if op.padSpace {
 		value = bytes.TrimRight(value, " ")
 	}
@@ -144,7 +144,14 @@ func (op *opOperatorStrIn) key(value []byte) string {
 		// can collide with a valid UCA weight string.
 		value = types.CollationKeyOrOriginal(op.typ.Charset, value)
 	}
-	return string(value)
+	return value
+}
+
+func (op *opOperatorStrIn) containsKey(value []byte) bool {
+	// A lookup borrows the normalized bytes only for this expression. Map
+	// insertion above retains an owned string; probes need no owned copy.
+	_, ok := op.mp[string(op.keyBytes(value))]
+	return ok
 }
 
 func (op *opOperatorFixedIn[T]) operatorIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -219,7 +226,7 @@ func (op *opOperatorStrIn) operatorIn(parameters []*vector.Vector, result vector
 				return err
 			}
 		} else {
-			_, ok := op.mp[op.key(v)]
+			ok := op.containsKey(v)
 			if !ok && op.hasNull {
 				if err := rs.Append(false, true); err != nil {
 					return err
@@ -248,7 +255,7 @@ func (op *opOperatorStrIn) operatorNotIn(parameters []*vector.Vector, result vec
 				return err
 			}
 		} else {
-			_, ok := op.mp[op.key(v)]
+			ok := op.containsKey(v)
 			if !ok && op.hasNull {
 				if err := rs.Append(false, true); err != nil {
 					return err

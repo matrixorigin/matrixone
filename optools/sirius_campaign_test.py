@@ -36,6 +36,69 @@ from sirius_campaign_v2_test import provenance, output
 
 
 class ControllerTest(unittest.TestCase):
+    def test_execution_environment_replays_frozen_cpu_budget(self):
+        with patch.dict(os.environ, {"GOMAXPROCS": "99"}):
+            environment = controller.execution_environment(16)
+            self.assertEqual(environment["GOMAXPROCS"], "16")
+            self.assertEqual(os.environ["GOMAXPROCS"], "99")
+        for value in (0, -1, True, 1.5, "16", None):
+            with self.subTest(value=value), self.assertRaises(v2.CampaignError):
+                controller.execution_environment(value)
+
+    def test_native_configuration_records_supported_block_size(self):
+        workspace = Path("/tmp/campaign-profile-fixture")
+        self.assertIn("block_size: 65536", controller.native_configuration(workspace))
+        self.assertIn(
+            "block_size: 1048576", controller.native_configuration(workspace, 1048576)
+        )
+        for value in (0, -1, True, 65536.0, 32768, 2097152):
+            with self.subTest(value=value), self.assertRaises(v2.CampaignError):
+                controller.native_configuration(workspace, value)
+
+    def test_frozen_block_drift_rejects_before_service_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            service, runner = root / "service", root / "runner"
+            service.write_text("fixture service")
+            runner.write_text("fixture runner")
+            identity = provenance()
+            identity["service_binary_sha256"] = controller.sha256(service)
+            identity["runner_binary_sha256"] = controller.sha256(runner)
+            identity["controller_sha256"] = controller.controller_sha256()
+            (workspace / "runner.json").write_text(
+                json.dumps(
+                    {
+                        "session": [
+                            "set session mo_sirius_campaign_evidence=1",
+                            "set session div_precision_increment=4",
+                            "set time_zone='+00:00'",
+                        ]
+                    }
+                )
+            )
+            native = workspace / "sirius.yaml"
+            native.write_text(controller.native_configuration(workspace, 1048576))
+            (workspace / "cn-2.toml").write_text(
+                '[cn.sirius]\nenabled=true\nbackend="embedded"\ninput-mode="mo"\n'
+                'max-waiting-queries=16\ncleanup-timeout="30s"\n'
+                + "native-config-path="
+                + json.dumps(str(native))
+                + "\n"
+            )
+            args = argparse.Namespace(
+                workspace=workspace,
+                output=root / "output",
+                service=service,
+                runner=runner,
+                resource=False,
+            )
+            with patch.object(controller, "Service") as launch:
+                with self.assertRaisesRegex(v2.CampaignError, "configuration differs"):
+                    controller.run_complete(args, provenance=identity)
+                launch.assert_not_called()
+
     def test_service_generation_failure_retains_spawn_cleanup(self):
         with tempfile.TemporaryDirectory() as directory:
             child = MagicMock(pid=123)

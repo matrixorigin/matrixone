@@ -854,7 +854,17 @@ def write_timing_tables(output, campaign, records, summary):
     write_private(output / "timings.md", "\n".join(lines) + "\n")
 
 
-def native_configuration(workspace):
+def execution_environment(gomaxprocs):
+    if type(gomaxprocs) is not int or gomaxprocs <= 0:
+        raise v2.CampaignError("campaign Go CPU budget must be a positive integer")
+    environment = os.environ.copy()
+    environment["GOMAXPROCS"] = str(gomaxprocs)
+    return environment
+
+
+def native_configuration(workspace, host_block_bytes=65536):
+    if type(host_block_bytes) is not int or host_block_bytes not in (65536, 1048576):
+        raise v2.CampaignError("unsupported campaign host block size")
     return f"""sirius:
   space:
     gpu:
@@ -863,6 +873,7 @@ def native_configuration(workspace):
     host:
       - numa_id: -1
         memory_capacity: {16 << 30}
+        block_size: {host_block_bytes}
   telemetry:
     output_directory: {json.dumps(str(workspace/'native-telemetry'))}
 """
@@ -1089,6 +1100,14 @@ def run_complete(arguments, *, provenance=None):
     ]
     if base_runner.get("session") != expected_session:
         raise v2.CampaignError("live campaign session differs from frozen provenance")
+    campaign = v2.build_campaign(
+        provenance,
+        resource=arguments.resource,
+        flight_profiles=[
+            {"id": route, "coverage": [], "status": "N/A", "reason": "not-provisioned"}
+            for route in ("flight-mo", "flight-tae")
+        ],
+    )
     sirius = tomllib.loads((workspace / "cn-2.toml").read_text())["cn"]["sirius"]
     if any(
         sirius.get(key) != value
@@ -1100,21 +1119,12 @@ def run_complete(arguments, *, provenance=None):
             "cleanup-timeout": "30s",
         }.items()
     ) or Path(sirius["native-config-path"]).read_text() != native_configuration(
-        workspace
+        workspace, provenance["config"]["native_host_block_bytes"]
     ):
         raise v2.CampaignError(
             "live campaign configuration differs from frozen profile"
         )
-    campaign = v2.build_campaign(
-        provenance,
-        resource=arguments.resource,
-        flight_profiles=[
-            {"id": route, "coverage": [], "status": "N/A", "reason": "not-provisioned"}
-            for route in ("flight-mo", "flight-tae")
-        ],
-    )
-    environment = os.environ.copy()
-    environment["GOMAXPROCS"] = "4"
+    environment = execution_environment(provenance["config"]["gomaxprocs"])
     run_workspace = workspace / f"campaign-{uuid.uuid4().hex}"
     run_workspace.mkdir(mode=0o700)
     (run_workspace / "scratch").mkdir(mode=0o700)
@@ -1521,13 +1531,12 @@ def run_complete(arguments, *, provenance=None):
 
 
 def start_cluster(arguments):
+    environment = execution_environment(arguments.gomaxprocs)
     workspace = arguments.workspace.resolve()
     workspace.mkdir(mode=0o700, parents=True)
     native = workspace / "sirius.yaml"
-    write_private(native, native_configuration(workspace))
+    write_private(native, native_configuration(workspace, arguments.host_block_bytes))
     configs = make_configs(workspace, native, 2, arguments.port_base)
-    environment = os.environ.copy()
-    environment["GOMAXPROCS"] = "4"
     services = []
     previous_subreaper = v2.legacy._enter_exclusive_subreaper()
     try:
@@ -1578,6 +1587,8 @@ def freeze_provenance(arguments):
     """Capture actual binaries, guarded SDK, source data and local toolchain."""
     import sirius_sdk
 
+    execution_environment(arguments.gomaxprocs)
+    native_configuration(arguments.source_root, arguments.host_block_bytes)
     root = arguments.source_root.resolve()
     packaged = json.loads((root / "lib/sirius-provenance.json").read_text())
     if packaged["binary_sha256"] != sha256(arguments.service):
@@ -1668,6 +1679,8 @@ def freeze_provenance(arguments):
             "gdb": command("gdb", "--version").splitlines()[0],
         },
         "config": {
+            "gomaxprocs": arguments.gomaxprocs,
+            "native_host_block_bytes": arguments.host_block_bytes,
             "gpu_memory_bytes": 6 << 30,
             "native_host_memory_bytes": 16 << 30,
             "input_window_bytes": 64 << 20,
@@ -1702,6 +1715,10 @@ def main(argv=None):
     serve.add_argument("--service", type=Path, required=True)
     serve.add_argument("--source-root", type=Path, required=True)
     serve.add_argument("--port-base", type=int, default=36001)
+    serve.add_argument("--gomaxprocs", type=int, required=True)
+    serve.add_argument(
+        "--host-block-bytes", type=int, choices=(65536, 1048576), default=65536
+    )
     run = sub.add_parser("run")
     run.add_argument("--workspace", type=Path, required=True)
     run.add_argument("--service", type=Path, required=True)
@@ -1724,6 +1741,10 @@ def main(argv=None):
     freeze.add_argument("--datasets", type=Path, required=True)
     freeze.add_argument("--loaded", type=Path, nargs=2, required=True)
     freeze.add_argument("--output", type=Path, required=True)
+    freeze.add_argument("--gomaxprocs", type=int, required=True)
+    freeze.add_argument(
+        "--host-block-bytes", type=int, choices=(65536, 1048576), default=65536
+    )
     args = parser.parse_args(argv)
 
     def interrupted(*_):

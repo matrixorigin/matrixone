@@ -147,6 +147,8 @@ def build_campaign(provenance, *, resource=False, flight_profiles=()):
         (
             "config",
             {
+                "gomaxprocs",
+                "native_host_block_bytes",
                 "gpu_memory_bytes",
                 "native_host_memory_bytes",
                 "input_window_bytes",
@@ -173,6 +175,13 @@ def build_campaign(provenance, *, resource=False, flight_profiles=()):
         "time_zone": "+00:00",
     }:
         raise CampaignError("campaign session semantics differ")
+    config = provenance["config"]
+    if type(config["gomaxprocs"]) is not int or config["gomaxprocs"] <= 0:
+        raise CampaignError("invalid campaign Go CPU budget")
+    if type(config["native_host_block_bytes"]) is not int or config[
+        "native_host_block_bytes"
+    ] not in (65536, 1048576):
+        raise CampaignError("invalid campaign host block size")
     expected = {
         "gpu_memory_bytes": 6 << 30,
         "native_host_memory_bytes": 16 << 30,

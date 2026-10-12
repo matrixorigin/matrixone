@@ -225,7 +225,11 @@ the generator; a matching row count alone is insufficient.
 
 Use `sirius_campaign.py freeze` with the source root, packaged service, runner,
 dataset directory and both load reports to capture actual source/binary/SDK,
-hardware and toolchain identities. Credentials remain in private `runner.json`.
+hardware and toolchain identities. Supply `--gomaxprocs 16` to both `serve` and
+`freeze` for the current host. Their `--host-block-bytes` defaults to 65536;
+use 1048576 explicitly for the matched block-size control. `run` replays the
+frozen CPU and block settings, and does not accept ambient overrides.
+Credentials remain in private `runner.json`.
 `run` consumes that frozen provenance and an empty output directory; add
 `--resource` for the separate allocation campaign. Run serially, without
 concurrent builds, GPU tests or dataset writes. The controller owns service
