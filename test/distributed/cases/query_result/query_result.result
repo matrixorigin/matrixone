@@ -205,10 +205,10 @@ variable_name    value
 tx_isolation    REPEATABLE-READ
 /* save_result */show columns from tt;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
+a    int    YES        null        
 select * from result_scan(last_query_id()) as u;
 field    type    null    key    default    extra    comment
-a    INT(32)    YES        null        
+a    int    YES        null        
 /* save_result */show grants;
 Grants for admin@localhost
 GRANT create user ON account  `admin`@`localhost`
@@ -463,7 +463,7 @@ select * from result_scan(last_query_id()) as u;
 no configure: save query result
 /* save_result */show columns from tt;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
+a    int    YES        null        
 select * from result_scan(last_query_id()) as u;
 no configure: save query result
 /* save_result */show grants;

@@ -900,7 +900,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 		return "", nil
 	}
 
-	if param.ScanType == tree.S3 {
+	if param.ScanType == tree.S3 && param.StageFilepath == "" {
 		if err := InitS3Param(param); err != nil {
 			return "", err
 		}

@@ -4742,7 +4742,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		return 0, nil, nil, -1, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
 	}
 
-	if err = builder.addBinding(lastNodeID, tree.AliasClause{Alias: derivedTableName}, bindCtx); err != nil {
+	if err = builder.addBinding(lastNodeID, tree.AliasClause{Alias: derivedTableName}, bindCtx, ""); err != nil {
 		return 0, nil, nil, -1, err
 	}
 
@@ -5049,12 +5049,12 @@ func isPreparedAssignmentParam(builder *QueryBuilder, expr tree.Expr) bool {
 }
 
 func insertProjectionTypes(insertColumns []string, tableDef *plan.TableDef, ignore bool) []Type {
-	// only numeric targets may seed the numeric assignment context; a zero
-	// Type keeps the projection binder on the default binding path
+	// Numeric targets seed numeric context; ENUM targets preserve same-domain
+	// bare columns. A zero Type keeps the default binding path.
 	targets := make([]Type, len(insertColumns))
 	for i, column := range insertColumns {
 		typ := tableDef.Cols[tableDef.Name2ColIndex[column]].Typ
-		if useNumericAssignmentContext(typ, ignore) {
+		if useNumericAssignmentContext(typ, ignore) || isEnumPlanType(&typ) {
 			targets[i] = typ
 		}
 	}
@@ -5740,7 +5740,7 @@ func (builder *QueryBuilder) buildValueScan(
 		Uuid:        nodeId[:],
 	}
 	nodeID := builder.appendNode(scanNode, bindCtx)
-	if err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, bindCtx); err != nil {
+	if err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, bindCtx, ""); err != nil {
 		return 0, nil, err
 	}
 

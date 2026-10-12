@@ -681,7 +681,7 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	// The UUID extractors do so for non-RFC-4122 variants, and
 	// uuid_extract_timestamp also for versions without a time source (e.g. v4).
 	case DIV, INTEGER_DIV, MOD,
-		POW, EXP, COT,
+		POW, EXP, COT, ACOSH, ATANH,
 		JSON_VALUE,
 		JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64,
 		REGEXP_SUBSTR,

@@ -2134,11 +2134,11 @@ Table    Create Table
 geo_srid_show    CREATE TABLE `geo_srid_show` (\n  `id` int NOT NULL,\n  `location` point srid 4326 NOT NULL,\n  PRIMARY KEY (`id`)\n)
 desc geo_srid_show;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO    PRI    null        
+id    int    NO    PRI    null        
 location    POINT SRID 4326    NO        null        
 show columns from geo_srid_show;
 Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO    PRI    null        
+id    int    NO    PRI    null        
 location    POINT SRID 4326    NO        null        
 select data_type, column_type, srs_id
 from information_schema.columns

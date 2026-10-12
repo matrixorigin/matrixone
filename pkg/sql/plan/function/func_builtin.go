@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -617,48 +618,17 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-
-			ts := typ.String()
-			ret := ""
-			// after decimal fix, remove this
-			if typ.Oid.IsDecimal() {
-				ts = "DECIMAL"
-				ret = fmt.Sprintf("%s(%d,%d)", ts, typ.Width, typ.Scale)
+			var ret string
+			// Public metadata queries use this path for ENUM with an empty
+			// attr_enum, which represents the single empty-string member.
+			if typ.Oid == types.T_enum {
+				ret = "enum('')"
+			} else if formatted, ok := types.FormatSQLColumnType(*typ); ok {
+				ret = strings.ToLower(formatted)
 			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
 				ret = geometryShowColumnType(typ)
-			} else if typ.Oid == types.T_text {
-				switch typ.Width {
-				case types.MaxTinyTextLen:
-					ret = "TINYTEXT"
-				case types.MaxMediumTextLen:
-					ret = "MEDIUMTEXT"
-				case types.MaxLongTextLen:
-					ret = "LONGTEXT"
-				case 0, types.MaxStringSize:
-					ret = "TEXT"
-				default:
-					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
-				}
-			} else if typ.Oid == types.T_blob {
-				switch typ.Width {
-				case types.MaxTinyTextLen:
-					ret = "TINYBLOB"
-				case types.MaxMediumTextLen:
-					ret = "MEDIUMBLOB"
-				case types.MaxLongTextLen:
-					ret = "LONGBLOB"
-				case types.MaxStringSize:
-					ret = "BLOB"
-				default:
-					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
-				}
-			} else if typ.IsIntOrUint() && typ.Width == 0 {
-				// Width is the physical type width for stored integer columns, but
-				// expression-only integer types may leave it unset. Do not expose
-				// that internal zero as a MySQL display width.
-				ret = ts
 			} else {
-				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
+				ret = fmt.Sprintf("%s(%d)", typ.String(), typ.Width)
 			}
 
 			return functionUtil.QuickStrToBytes(ret), nil
@@ -759,11 +729,11 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 		if err != nil {
 			return nil, err
 		}
-		typeName := "ENUM"
+		typeName := "enum"
 		if typ.Oid == types.T_json && strings.HasPrefix(strings.ToLower(strings.TrimSpace(enumStr)), "array(") {
 			return functionUtil.QuickStrToBytes(enumStr), nil
 		} else if typ.Oid == types.T_uint64 {
-			typeName = "SET"
+			typeName = "set"
 		} else if typ.Oid == types.T_geometry {
 			subtype := ""
 			sridDefined := false
@@ -796,23 +766,25 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum/set, but got %s", typ.String())
 		}
 
-		// get enum values
-		enums := strings.Split(enumStr, ",")
-		enumVal := ""
-		for i, e := range enums {
-			enumVal += fmt.Sprintf("'%s'", e)
-			if i < len(enums)-1 {
-				enumVal += ","
+		members := strings.Split(enumStr, ",")
+		if typ.Oid == types.T_uint64 {
+			if enumStr == "" {
+				return nil, nil
 			}
+			members = types.DecodeSetValues(enumStr)
 		}
-		ret := fmt.Sprintf("%s(%s)", typeName, enumVal)
+		for i := range members {
+			members[i] = sqlquote.String(members[i])
+		}
+		ret := typeName + "(" + strings.Join(members, ",") + ")"
+
 		return functionUtil.QuickStrToBytes(ret), nil
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
 		enumStr, null2 := enumVal.GetStrValue(i)
-		if null1 || null2 || len(v1) == 0 || len(enumStr) == 0 {
+		if null1 || null2 || len(v1) == 0 {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3318,6 +3290,11 @@ func (op *opSerial) BuiltInPhysicalSerial(parameters []*vector.Vector, result ve
 func (op *opSerial) builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, physicalKey bool) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	var err error
+	if physicalKey {
+		if err = validatePhysicalSerialValues(parameters, length); err != nil {
+			return err
+		}
+	}
 
 	bitMap := new(nulls.Nulls)
 	for _, v := range parameters {
@@ -3380,6 +3357,11 @@ func (op *opSerial) builtInSerialFull(parameters []*vector.Vector, result vector
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	var err error
+	if physicalKey {
+		if err = validatePhysicalSerialValues(parameters, length); err != nil {
+			return err
+		}
+	}
 	if len(op.funcs) == 0 {
 		op.funcs = make([]func(v *vector.Vector, idx int, ps *types.Packer), len(parameters))
 		for i, p := range parameters {
@@ -3403,6 +3385,28 @@ func (op *opSerial) builtInSerialFull(parameters []*vector.Vector, result vector
 		}
 		if err = rs.AppendBytes(op.packer.GetBuf(), false); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// validatePhysicalSerialValues is the abortable admission boundary for the
+// SQL physical_serial and physical_serial_full functions. Their pack closures
+// intentionally share the legacy no-error serializer, so validate every
+// native Unicode value before any output row is published. This keeps invalid
+// UTF-8 and out-of-repertoire values from becoming a second raw-byte identity.
+func validatePhysicalSerialValues(parameters []*vector.Vector, length int) error {
+	for _, v := range parameters {
+		if v == nil || !types.IsUnicodeCollation(v.GetType().Charset) || !v.GetType().Oid.IsMySQLString() {
+			continue
+		}
+		for i := 0; i < length; i++ {
+			if v.IsNull(uint64(i)) {
+				continue
+			}
+			if err := types.ValidateCollationValue(*v.GetType(), v.GetBytesAt(i)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -3565,8 +3569,10 @@ func BuiltInPhysicalCollationKey(parameters []*vector.Vector, result vector.Func
 			}
 			continue
 		}
-		if types.IsUnicodeCollation(typ.Charset) {
-			value = types.CollationKeyOrOriginal(typ.Charset, value)
+		var err error
+		value, err = types.PhysicalCollationKey(typ, value)
+		if err != nil {
+			return err
 		}
 		if err := rs.AppendBytes(value, false); err != nil {
 			return err
@@ -3591,6 +3597,29 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 // the opaque UCA comparison-key domain used for native Unicode index parts.
 func PhysicalSerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull bool) {
 	serialHelper(v, bitMap, ps, isFull, true)
+}
+
+// PhysicalSerialHelperChecked validates native Unicode values before building
+// an index key.  The historical helper has no error return because it is also
+// used by generic planner-only paths; index producers that can abort a batch
+// should use this wrapper so malformed/repertoire-invalid bytes cannot become
+// a tagged raw fallback in a persisted key.
+func PhysicalSerialHelperChecked(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull bool) error {
+	if v == nil || !types.IsUnicodeCollation(v.GetType().Charset) || !v.GetType().Oid.IsMySQLString() {
+		PhysicalSerialHelper(v, bitMap, ps, isFull)
+		return nil
+	}
+	values, area := vector.MustVarlenaRawData(v)
+	for i := range values {
+		if v.IsNull(uint64(i)) {
+			continue
+		}
+		if err := types.ValidateCollationValue(*v.GetType(), values[i].GetByteSlice(area)); err != nil {
+			return err
+		}
+	}
+	PhysicalSerialHelper(v, bitMap, ps, isFull)
+	return nil
 }
 
 func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull, physicalKey bool) {
@@ -4624,6 +4653,47 @@ func builtInSinh(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}
 	}
 	return nil
+}
+
+func builtInTanh(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[float64, float64](parameters, result, proc, length, math.Tanh, selectList)
+}
+
+func builtInCosh(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithErrorCheck[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		r := math.Cosh(v)
+		if math.IsInf(r, 0) && !math.IsInf(v, 0) {
+			// 标准库的 Exp(abs(v))/2 可能提前溢出；先缩放再相乘，保留可表示的 COSH 结果。
+			e := math.Exp(math.Abs(v) / 2)
+			r = (e / 2) * e
+		}
+		if math.IsInf(r, 0) {
+			return 0, moerr.NewOutOfRangeNoCtxf("float64", "DOUBLE value is out of range in 'cosh(%v)'", v)
+		}
+		return r, nil
+	}, selectList)
+}
+
+func builtInASinh(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[float64, float64](parameters, result, proc, length, math.Asinh, selectList)
+}
+
+func builtInACosh(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithNullCheck[float64, float64](parameters, result, length, func(v float64) (float64, bool) {
+		if v < 1 {
+			return 0, true
+		}
+		return math.Acosh(v), false
+	}, selectList)
+}
+
+func builtInATanh(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithNullCheck[float64, float64](parameters, result, length, func(v float64) (float64, bool) {
+		if v <= -1 || v >= 1 {
+			return 0, true
+		}
+		return math.Atanh(v), false
+	}, selectList)
 }
 
 func builtInCos(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

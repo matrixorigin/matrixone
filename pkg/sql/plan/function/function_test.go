@@ -1412,6 +1412,9 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		{name: "power domain or overflow", fid: POW, argCount: 2},
 		{name: "exponential overflow", fid: EXP, argCount: 1},
 		{name: "cotangent zero", fid: COT, argCount: 1},
+		{name: "inverse hyperbolic cosine domain", fid: ACOSH, argCount: 1},
+		{name: "inverse hyperbolic tangent domain", fid: ATANH, argCount: 1},
+		{name: "JSON value missing path", fid: JSON_VALUE, argCount: 2},
 		{name: "missing JSON path", fid: JSON_EXTRACT, argCount: 2},
 		{name: "JSON string extractor", fid: JSON_EXTRACT_STRING, argCount: 2},
 		{name: "JSON float64 extractor", fid: JSON_EXTRACT_FLOAT64, argCount: 2},
@@ -1568,6 +1571,9 @@ func TestDeduceNotNullablePreservesArgumentDependentContracts(t *testing.T) {
 	}{
 		{name: "equality", fid: EQUAL, argCount: 2},
 		{name: "addition", fid: PLUS, argCount: 2},
+		{name: "hyperbolic tangent", fid: TANH, argCount: 1},
+		{name: "hyperbolic cosine", fid: COSH, argCount: 1},
+		{name: "inverse hyperbolic sine", fid: ASINH, argCount: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			args := make([]*plan.Expr, tt.argCount)
