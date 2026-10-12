@@ -12672,16 +12672,17 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		if tableDef == nil {
 			return 0, "", moerr.NewNoSuchTablef(builder.GetContext(), "SQL parser error: table %q does not exist", table)
 		}
-		// Admit the complete catalog schema before pruning unused columns or
-		// replacing scans. The final plan fence cannot see metadata erased by
-		// those rewrites, even when the query only projects a constant.
-		if err = plan.RequireLegacyCollations(tableDef); err != nil {
-			return 0, "", err
-		}
 		if explicitNamedSnapshot {
 			err = ValidateSnapshotScope(snapshot, catalogDatabase, table, tableDef.DbId, SnapshotTableID(tableDef))
 		}
 		if err != nil {
+			return 0, "", err
+		}
+		// Admit the complete catalog schema before pruning unused columns or
+		// replacing scans, after preserving the existing snapshot-scope error.
+		// The final plan fence cannot see metadata erased by those rewrites,
+		// even when the query only projects a constant.
+		if err = plan.RequireLegacyCollations(tableDef); err != nil {
 			return 0, "", err
 		}
 

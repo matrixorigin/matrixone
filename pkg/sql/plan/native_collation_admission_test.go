@@ -19,8 +19,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -135,5 +137,46 @@ func TestCollationCatalogAdmissionPreservesAllowedDomainsAndReuse(t *testing.T) 
 				require.NoError(t, err)
 			})
 		}
+	}
+}
+
+func TestCollationCatalogAdmissionPreservesSnapshotScopeErrors(t *testing.T) {
+	for _, contract := range []struct {
+		name               string
+		identity, revision uint32
+		objectID           uint64
+		errorText          string
+	}{
+		{"valid_legacy", 3, 0, 7, ""},
+		{"valid_unicode", 9, 1, 7, ""},
+		{"valid_scope_native", 4, 1, 7, "disabled"},
+		{"invalid_scope_legacy", 3, 0, 8, "does not belong"},
+		{"invalid_scope_native", 4, 1, 8, "does not belong"},
+	} {
+		t.Run(contract.name, func(t *testing.T) {
+			ctx := &namedSnapshotCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+				snapshot: &Snapshot{
+					TS: &timestamp.Timestamp{PhysicalTime: 42},
+					ExtraInfo: &planpb.SnapshotExtraInfo{
+						Name: "snapshot", Level: tree.SNAPSHOTLEVELTABLE.String(), ObjId: contract.objectID,
+					},
+				},
+			}
+			table := ctx.tables["nation"]
+			table.TblId, table.LogicalId = 7, 7
+			col := FindColumn(table.Cols, "n_name")
+			require.NotNil(t, col)
+			col.Typ.Charset, col.Typ.CollationVersion = contract.identity, contract.revision
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select 1 from nation {snapshot = 'snapshot'}", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = BuildPlan(ctx, stmt, false)
+			if contract.errorText == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, contract.errorText)
+			}
+		})
 	}
 }
