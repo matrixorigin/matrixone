@@ -24,6 +24,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -735,4 +736,62 @@ func TestSQLStoreSetOffsetReturnsExecError(t *testing.T) {
 	}
 
 	require.ErrorIs(t, s.SetOffset(ctx, 10, "auto_col", 99, nil), expected)
+}
+
+func TestSQLStoreGetColumnsMarksInternalFakePK(t *testing.T) {
+	// fake_pk_hidden is a per-table constant the GetColumns subquery projects
+	// onto every row: 1 only when __mo_fake_pk_col exists as a single hidden
+	// catalog column. A column is internal iff it is named __mo_fake_pk_col AND
+	// that flag is set, so a user-visible column with the same name (legacy
+	// CREATE allows it) stays a surfacing auto-increment column (#29903 P2-1).
+	run := func(t *testing.T, fakePKHidden bool) []AutoColumn {
+		ctx := defines.AttachAccountId(context.TODO(), 12)
+		mp := mpool.MustNewZero()
+		var executedSQLs []string
+		sqlExecutor := executor.NewMemExecutor2(
+			func(sql string) (executor.Result, error) {
+				executedSQLs = append(executedSQLs, sql)
+				memRes := executor.NewMemResult(
+					[]types.Type{
+						types.T_varchar.ToType(),
+						types.T_int32.ToType(),
+						types.T_uint64.ToType(),
+						types.T_uint64.ToType(),
+						types.T_bool.ToType(),
+					}, mp)
+				memRes.NewBatchWithRowCount(2)
+				require.NoError(t, executor.AppendStringRows(memRes, 0, []string{"id", catalog.FakePrimaryKeyColName}))
+				require.NoError(t, executor.AppendFixedRows(memRes, 1, []int32{0, 1}))
+				require.NoError(t, executor.AppendFixedRows(memRes, 2, []uint64{0, 0}))
+				require.NoError(t, executor.AppendFixedRows(memRes, 3, []uint64{1, 1}))
+				require.NoError(t, executor.AppendFixedRows(memRes, 4, []bool{fakePKHidden, fakePKHidden}))
+				return memRes.GetResult(), nil
+			},
+			nil,
+		)
+		s := &sqlStore{exec: sqlExecutor}
+		cols, err := s.GetColumns(ctx, 10, nil)
+		require.NoError(t, err)
+		require.Len(t, executedSQLs, 1)
+		require.Contains(t, executedSQLs[0], "att_is_hidden")
+		require.Contains(t, executedSQLs[0], catalog.FakePrimaryKeyColName)
+		mpool.DeleteMPool(mp)
+		return cols
+	}
+
+	// hidden fake primary key present: the __mo_fake_pk_col row is internal,
+	// the user column is not.
+	cols := run(t, true)
+	require.Len(t, cols, 2)
+	require.Equal(t, "id", cols[0].ColName)
+	require.False(t, cols[0].isInternal)
+	require.Equal(t, catalog.FakePrimaryKeyColName, cols[1].ColName)
+	require.True(t, cols[1].isInternal)
+
+	// no hidden fake primary key: a user-visible column named __mo_fake_pk_col
+	// is NOT internal and must still surface (#29903 P2-1).
+	cols = run(t, false)
+	require.Len(t, cols, 2)
+	require.False(t, cols[0].isInternal)
+	require.False(t, cols[1].isInternal)
 }

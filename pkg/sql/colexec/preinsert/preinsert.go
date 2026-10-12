@@ -508,6 +508,15 @@ retryInsertValues:
 		}
 	}
 
-	proc.SetLastInsertID(lastInsertValue)
+	// A zero return means this table generated no user-visible auto-increment
+	// value for the statement -- either nothing was generated, or only the
+	// allocator-owned hidden fake primary key MO appends to a PK-less table
+	// (the hidden fulltext/vector index tables among them) was. Publishing it
+	// would clobber the base table's real key with 0, or, before the
+	// incrservice fix, with the hidden key's own value (#29903). Only a
+	// non-zero, user-visible value becomes LAST_INSERT_ID.
+	if lastInsertValue != 0 {
+		proc.SetLastInsertID(lastInsertValue)
+	}
 	return nil
 }

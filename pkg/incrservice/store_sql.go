@@ -424,7 +424,15 @@ func (s *sqlStore) GetColumns(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator) ([]AutoColumn, error) {
-	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step from %s where table_id = %d order by col_index`,
+	// A column named __mo_fake_pk_col alone does not establish ownership: legacy
+	// CREATE accepts a user-visible column with that name. Confirm, in this same
+	// snapshot, a single hidden catalog column with that name -- only then is it
+	// the allocator-owned internal fake primary key whose value must not surface
+	// as LAST_INSERT_ID (#29903).
+	internalSQL := fmt.Sprintf(`(select count(*) = 1 and max(att_is_hidden) = 1 from mo_columns where att_relname_id = %d and attname = '%s')`,
+		tableID, sqlquote.EscapeString(catalog.FakePrimaryKeyColName))
+	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step, %s as fake_pk_hidden from %s where table_id = %d order by col_index`,
+		internalSQL,
 		incrTableName,
 		tableID)
 	opts := executor.Options{}.
@@ -448,7 +456,21 @@ func (s *sqlStore) GetColumns(
 	var indexes []int32
 	var offsets []uint64
 	var steps []uint64
+	var internalFakePK bool
+	var internalRead bool
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 {
+			return true
+		}
+		if !internalRead {
+			// fake_pk_hidden is constant across the result; read it once. An
+			// unknown/null projection fails closed to "not internal" so it can
+			// never suppress a user-visible column.
+			if len(cols) > 4 && !cols[4].IsNull(0) {
+				internalFakePK = executor.GetFixedRows[bool](cols[4])[0]
+			}
+			internalRead = true
+		}
 		colNames = append(colNames, executor.GetStringRows(cols[0])...)
 		indexes = append(indexes, executor.GetFixedRows[int32](cols[1])...)
 		offsets = append(offsets, executor.GetFixedRows[uint64](cols[2])...)
@@ -459,11 +481,12 @@ func (s *sqlStore) GetColumns(
 	cols := make([]AutoColumn, len(colNames))
 	for idx, colName := range colNames {
 		cols[idx] = AutoColumn{
-			TableID:  tableID,
-			ColName:  colName,
-			ColIndex: int(indexes[idx]),
-			Offset:   offsets[idx],
-			Step:     steps[idx],
+			TableID:    tableID,
+			ColName:    colName,
+			ColIndex:   int(indexes[idx]),
+			Offset:     offsets[idx],
+			Step:       steps[idx],
+			isInternal: colName == catalog.FakePrimaryKeyColName && internalFakePK,
 		}
 	}
 	return cols, nil

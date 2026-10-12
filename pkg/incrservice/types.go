@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -166,6 +167,10 @@ type AutoColumn struct {
 	ColIndex int
 	Offset   uint64
 	Step     uint64
+	// isInternal is authoritative hidden fake-PK ownership from the table
+	// definition, not inferred from a name supplied by a SQL-visible column.
+	// A column named __mo_fake_pk_col that is user-visible is NOT internal.
+	isInternal bool
 }
 
 // ValidateAutoColumnOffset rejects allocator offsets that cannot be represented
@@ -225,11 +230,12 @@ func getAutoColumnsFromDef(def *plan.TableDef, include func(*plan.ColDef) bool) 
 	for i, col := range def.Cols {
 		if col.Typ.AutoIncr && include(col) {
 			cols = append(cols, AutoColumn{
-				ColName:  col.Name,
-				TableID:  def.TblId,
-				Step:     1,
-				Offset:   def.AutoIncrOffset,
-				ColIndex: i,
+				ColName:    col.Name,
+				TableID:    def.TblId,
+				Step:       1,
+				Offset:     def.AutoIncrOffset,
+				ColIndex:   i,
+				isInternal: col.Hidden && col.Name == catalog.FakePrimaryKeyColName,
 			})
 		}
 	}
