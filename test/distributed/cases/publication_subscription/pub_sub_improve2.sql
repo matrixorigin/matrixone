@@ -697,8 +697,6 @@ drop publication if exists pub16;
 drop publication if exists pub17;
 drop publication if exists pub18;
 create publication pub16 database db16 account all comment 'publish to all account';
--- CREATE PUBLICATION IF NOT EXISTS must keep the existing definition unchanged.
-create publication if not exists pub16 database db16 table t1 account acc01 comment 'must not replace existing publication';
 create publication pub17 database db16 table t2, t3 account acc01, acc02 comment '发布给acc01和acc02';
 create publication pub18 database db16 account acc03 comment 'publish all table to acc02';
 
@@ -709,6 +707,20 @@ drop database if exists sub16;
 create database sub16 from sys publication pub16;
 -- @ignore:5,7
 show subscriptions;
+-- @session
+
+-- A repeated create must preserve the definition and an already active subscription.
+create publication if not exists pub16 database db16 table t1 account acc01 comment 'must not replace existing publication';
+select database_name, table_list, account_list, comment from mo_catalog.mo_pubs where account_id = 0 and pub_name = 'pub16';
+-- @session:id=1&user=acc01:test_account&password=111
+-- @ignore:5,7
+show subscriptions;
+-- The source database is owned by sys, but this publication belongs to acc01.
+create publication if not exists pub16 database db16 account sys comment 'account-scoped publication';
+-- @session
+select account_name, pub_name, database_name, comment from mo_catalog.mo_pubs where pub_name = 'pub16' order by account_name;
+-- @session:id=1&user=acc01:test_account&password=111
+drop publication pub16;
 -- @session
 
 drop publication pub16;

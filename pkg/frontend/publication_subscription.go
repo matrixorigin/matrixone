@@ -335,7 +335,9 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 	}
 
 	if cp.IfNotExists {
-		pubInfo, lookupErr := getPubInfo(ctx, bh, pubName)
+		// Database resolution may switch ctx to the source account; the publication
+		// still belongs to the account that issued CREATE.
+		pubInfo, lookupErr := getPubInfo(defines.AttachAccountId(ctx, accountId), bh, pubName)
 		if lookupErr != nil {
 			return lookupErr
 		}
