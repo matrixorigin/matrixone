@@ -1256,17 +1256,56 @@ func TestTransactionRetriesUnpublishedS3CleanupOwners(t *testing.T) {
 	require.Equal(t, 2, attempts)
 }
 
+type rollbackDeleteBarrierFS struct {
+	*failOnceCloneDeleteFS
+	firstStarted chan struct{}
+	firstRelease <-chan struct{}
+	first        sync.Once
+}
+
+func (fs *rollbackDeleteBarrierFS) Delete(ctx context.Context, names ...string) error {
+	var waitErr error
+	fs.first.Do(func() {
+		close(fs.firstStarted)
+		select {
+		case <-fs.firstRelease:
+		case <-ctx.Done():
+			waitErr = ctx.Err()
+		}
+	})
+	if waitErr != nil {
+		return waitErr
+	}
+	return fs.failOnceCloneDeleteFS.Delete(ctx, names...)
+}
+
 func TestRollbackRetriesUnpublishedS3CleanupAfterWorkspaceRemoval(t *testing.T) {
 	server := colexec.NewServer("")
+	firstStarted := make(chan struct{})
+	firstRelease := make(chan struct{})
 	retryStarted := make(chan struct{})
 	retryRelease := make(chan struct{})
+	rollbackDone := make(chan struct{})
+	var rollbackErr error
+	rollbackStarted := false
+	var firstReleaseOnce sync.Once
 	var releaseOnce sync.Once
-	t.Cleanup(func() {
-		releaseOnce.Do(func() { close(retryRelease) })
-		require.NoError(t, server.CloseUnpublishedS3Cleanup(context.Background()))
-	})
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
-	defer txn.proc.Free()
+	t.Cleanup(txn.proc.Free)
+	t.Cleanup(func() {
+		firstReleaseOnce.Do(func() { close(firstRelease) })
+		releaseOnce.Do(func() { close(retryRelease) })
+		if rollbackStarted {
+			select {
+			case <-rollbackDone:
+			case <-time.After(5 * time.Second):
+				t.Error("rollback did not finish after releasing cleanup barriers")
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		require.NoError(t, server.CloseUnpublishedS3Cleanup(ctx))
+	})
 	baseFS, err := colexec.GetSharedFSFromProc(txn.proc)
 	require.NoError(t, err)
 	const name = "rollback-unpublished-retry-object"
@@ -1276,16 +1315,47 @@ func TestRollbackRetriesUnpublishedS3CleanupAfterWorkspaceRemoval(t *testing.T) 
 		Policy:   fileservice.SkipAllCache,
 	}))
 	deleteErr := moerr.NewInternalErrorNoCtx("temporary S3 delete failure")
-	fs := &failOnceCloneDeleteFS{
-		FileService: baseFS, failErr: deleteErr,
-		retryStarted: retryStarted, retryRelease: retryRelease,
+	fs := &rollbackDeleteBarrierFS{
+		failOnceCloneDeleteFS: &failOnceCloneDeleteFS{
+			FileService: baseFS, failErr: deleteErr,
+			retryStarted: retryStarted, retryRelease: retryRelease,
+		},
+		firstStarted: firstStarted, firstRelease: firstRelease,
 	}
 	owner, err := colexec.NewUnpublishedS3ObjectOwner(fs, name)
 	require.NoError(t, err)
 	txn.RetainUnpublishedS3ObjectOwner(owner)
 
-	err = txn.Rollback(context.Background())
-	require.NoError(t, err, "CN retry ownership should not turn rollback into a failure")
+	initialRevision, stable := txn.CatalogVisibility()
+	require.True(t, stable)
+	rollbackStarted = true
+	go func() {
+		rollbackErr = txn.Rollback(context.Background())
+		close(rollbackDone)
+	}()
+	select {
+	case <-firstStarted:
+	case <-rollbackDone:
+		t.Fatal("rollback returned before synchronous unpublished cleanup")
+	case <-time.After(5 * time.Second):
+		t.Fatal("rollback did not reach synchronous unpublished cleanup")
+	}
+	// Observe only the atomic visibility API while the workspace is mutating.
+	cleanupRevision, stable := txn.CatalogVisibility()
+	require.False(t, stable, "catalog reads must be unstable throughout synchronous Delete")
+	require.Greater(t, cleanupRevision, initialRevision)
+	_, err = baseFS.StatFile(context.Background(), name)
+	require.NoError(t, err, "the synchronous Delete is still held")
+	firstReleaseOnce.Do(func() { close(firstRelease) })
+	select {
+	case <-rollbackDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("rollback did not retire the workspace after retry handoff")
+	}
+	require.NoError(t, rollbackErr, "CN retry ownership should not turn rollback into a failure")
+	retiredRevision, stable := txn.CatalogVisibility()
+	require.True(t, stable)
+	require.Greater(t, retiredRevision, cleanupRevision)
 	require.True(t, txn.removed, "terminal rollback must retire the workspace")
 	require.False(t, txn.HasUnpublishedS3ObjectOwners(), "the CN must own detached cleanup records")
 	require.Empty(t, txn.unpublishedS3Cleanup)

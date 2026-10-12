@@ -389,7 +389,7 @@ func TestServiceCloseCompletesAfterTransientS3CleanupFailure(t *testing.T) {
 		t.Cleanup(mc.Close)
 		ctrl := gomock.NewController(t)
 		ls := mock_lock.NewMockLockService(ctrl)
-		ls.EXPECT().Close().Return(nil).Times(2)
+		ls.EXPECT().Close().Return(nil).Times(1)
 		executor := colexec.NewServer(t.Name())
 		var attempts atomic.Int32
 		cleanup := func(context.Context) error {
@@ -414,6 +414,10 @@ func TestServiceCloseCompletesAfterTransientS3CleanupFailure(t *testing.T) {
 		require.True(t, sv.CloseComplete())
 		require.Equal(t, int32(2), attempts.Load())
 		require.Equal(t, 1, hc.closed)
+		require.ErrorIs(t, sv.Close(), withdrawalErr)
+		require.True(t, sv.CloseComplete())
+		require.Equal(t, int32(2), attempts.Load(), "cached close must not replay cleanup")
+		require.Equal(t, 1, hc.closed, "cached close must not replay dependency teardown")
 	})
 }
 
