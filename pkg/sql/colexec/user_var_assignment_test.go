@@ -280,6 +280,55 @@ func TestUserVariableAssignmentExecutorSupportsNestedAssignments(t *testing.T) {
 	require.Equal(t, int64(50), vector.GetFixedAtNoTypeCheck[int64](readResult, 1))
 }
 
+func TestUserVariableAssignmentNestedSelfReferenceResetsRowsBetweenBatches(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithMPool(mpool.MustNewZero()), testutil.WithFileService(nil))
+	proc.Base.IsFrontend = true
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+		require.False(t, system)
+		require.False(t, global)
+		require.Equal(t, "b", name)
+		return int64(0), nil
+	})
+
+	int64Type := types.T_int64.ToType().PlanType()
+	varB := &plan.Expr{Typ: int64Type, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "b"}}}
+	one := &plan.Expr{Typ: int64Type, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_I64Val{I64Val: 1},
+	}}}
+	innerValue := bindTestFunction(t, proc, "+", varB, one)
+	inner := &plan.Expr{Typ: int64Type, Expr: &plan.Expr_UserVarAssignment{
+		UserVarAssignment: &plan.UserVarAssignment{Name: "b", Value: innerValue},
+	}}
+	outer := &plan.Expr{Typ: int64Type, Expr: &plan.Expr_UserVarAssignment{
+		UserVarAssignment: &plan.UserVarAssignment{Name: "a", Value: inner},
+	}}
+	executor, err := NewExpressionExecutor(proc, outer)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	makeInput := func(values ...int64) *batch.Batch {
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		input.SetRowCount(len(values))
+		require.NoError(t, vector.AppendFixedList(input.Vecs[0], values, nil, proc.Mp()))
+		return input
+	}
+	for _, tc := range []struct {
+		values []int64
+		want   []int64
+	}{
+		{values: []int64{10, 20, 30}, want: []int64{1, 2, 3}},
+		{values: []int64{40, 50, 60}, want: []int64{4, 5, 6}},
+		{values: []int64{70, 80}, want: []int64{7, 8}},
+	} {
+		input := makeInput(tc.values...)
+		result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+		input.Clean(proc.Mp())
+		require.NoError(t, err)
+		require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[int64](result))
+	}
+}
+
 func TestUserVariableAssignmentSkippedNestedRowDoesNotPublish(t *testing.T) {
 	proc := testutil.NewProcess(t, testutil.WithMPool(mpool.MustNewZero()), testutil.WithFileService(nil))
 	proc.Base.IsFrontend = true
