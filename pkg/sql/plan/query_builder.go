@@ -4344,6 +4344,11 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	var projectTypList [][]types.Type
 	selectStmtLength := len(selectStmts)
 	setProjectionTypes := builder.numericSetProjectionTypes(ctx, selectStmts)
+	for i := range setProjectionTypes {
+		if isEnumPlanType(&setProjectionTypes[i]) {
+			setProjectionTypes[i] = Type{}
+		}
+	}
 	nodes := make([]int32, selectStmtLength)
 	subCtxList := make([]*BindContext, selectStmtLength)
 	var projectLength int
@@ -5187,7 +5192,7 @@ func (builder *QueryBuilder) numericSetProjectionTypes(ctx *BindContext, stmts [
 	}
 	resolved := append([]Type(nil), ctx.numericProjectionTypes...)
 	for i := 0; i < len(resolved) && i < len(merged); i++ {
-		if resolved[i].Id == 0 || merged[i].incompatible {
+		if !isNumericAssignmentTarget(resolved[i]) || merged[i].incompatible {
 			continue
 		}
 		if typ, ok := numericTypeFromAstScan(merged[i], &resolved[i]); ok {
@@ -6388,7 +6393,7 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 
 	targetPos := 0
 	for _, selectExpr := range clause.Exprs {
-		switch expr := selectExpr.Expr.(type) {
+		switch expr := unwrapParenExpr(selectExpr.Expr).(type) {
 		case tree.UnqualifiedStar:
 			cursor := 0
 			outputs, ok := numericProjectionStarOutputs(clause.From.Tables[0], sources, &cursor)
@@ -6637,7 +6642,7 @@ func numericProjectionExprTarget(
 	expr tree.Expr,
 	outer Type,
 ) (Type, bool) {
-	if outer.Id == 0 {
+	if !isNumericAssignmentTarget(outer) {
 		return Type{}, false
 	}
 	binder := NewProjectionBinder(builder, ctx, nil)
@@ -6846,10 +6851,13 @@ func uniqueNumericStarOutput(outputs []numericProjectionStarOutput, name string)
 }
 
 func sameNumericProjectionTarget(left, right Type) bool {
-	return left.Id == right.Id && left.Width == right.Width && left.Scale == right.Scale
+	return left.Id == right.Id && left.Width == right.Width && left.Scale == right.Scale && left.Enumvalues == right.Enumvalues
 }
 
 func mergeNumericProjectionTargets(left, right Type) (Type, bool) {
+	if !isNumericAssignmentTarget(left) || !isNumericAssignmentTarget(right) {
+		return Type{}, false
+	}
 	resolved, ok := function.InferNumericParameterType(
 		[]types.Type{makeTypeByPlan2Type(left), makeTypeByPlan2Type(right)}, nil,
 	)

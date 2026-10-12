@@ -144,3 +144,28 @@ func TestParseEnumIndex(t *testing.T) {
 		})
 	}
 }
+
+func TestEmptyEnumDomain(t *testing.T) {
+	index, err := ParseEnum("", "")
+	require.NoError(t, err)
+	require.Equal(t, Enum(1), index)
+	index, err = ParseEnumName("", "")
+	require.NoError(t, err)
+	require.Equal(t, Enum(1), index)
+	index, err = ParseEnumValue("", 1)
+	require.NoError(t, err)
+	require.Equal(t, Enum(1), index)
+	label, err := ParseEnumIndex("", 1)
+	require.NoError(t, err)
+	require.Equal(t, "", label)
+	for _, value := range []string{"bad", "0", "2", "65537", "18446744073709551615"} {
+		_, err := ParseEnum("", value)
+		require.Error(t, err, value)
+	}
+	for _, index := range []Enum{0, 2} {
+		_, err := ParseEnumIndex("", index)
+		require.Error(t, err)
+		_, err = ParseEnumValue("", uint16(index))
+		require.Error(t, err)
+	}
+}

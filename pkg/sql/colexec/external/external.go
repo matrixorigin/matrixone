@@ -781,16 +781,21 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 	for idx, col := range cols {
 		field := fields[idx]
 		id := types.T(col.Typ.Id)
+		isSet := id == types.T_uint64 && col.Typ.Enumvalues != ""
+		emptyIsNull := false
 		// T_bit carries raw bytes (parsed byte-by-byte, not as text), so
 		// whitespace bytes are data and must not be trimmed.
-		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
+		if id == types.T_enum || isSet {
+			field.Val, emptyIsNull = normalizeEnumSetCSVValue(id, col.Typ.Enumvalues, field.Val)
+		} else if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
 			id != types.T_bit {
 			field.Val = strings.TrimSpace(field.Val)
 		}
-		isNullOrEmpty := field.IsNull || (getNullFlag(param.NullMap, col.Name, field.Val))
+		isNullOrEmpty := field.IsNull || getNullFlag(param.NullMap, col.Name, field.Val) || emptyIsNull
 		if id != types.T_char && id != types.T_varchar &&
-			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text && id != types.T_datalink {
+			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
+			id != types.T_enum && !isSet {
 			isNullOrEmpty = isNullOrEmpty || len(field.Val) == 0
 		}
 		if isNullOrEmpty {
@@ -1014,22 +1019,8 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 				return false
 			}
 		case types.T_enum:
-			_, err := strconv.ParseUint(field.Val, 10, 16)
-			if err == nil {
-				continue
-			} else if errors.Is(err, strconv.ErrSyntax) {
-				_, err := types.ParseEnum(col.Typ.Enumvalues, field.Val)
-				if err != nil {
-					return false
-				}
-			} else {
-				if errors.Is(err, strconv.ErrRange) {
-					return false
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < 0 || f > math.MaxUint16 {
-					return false
-				}
+			if _, err := types.ParseEnum(col.Typ.Enumvalues, field.Val); err != nil {
+				return false
 			}
 		case types.T_decimal64:
 			_, err := types.ParseDecimal64(field.Val, col.Typ.Width, col.Typ.Scale)
@@ -1168,8 +1159,9 @@ func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 // of the ENUM definition, using the same comma split and case folding as
 // types.ParseEnum.
 func isEnumMember(enumValues, name string) bool {
+	// The ENUM OID distinguishes a single empty member from absent metadata.
 	if len(enumValues) == 0 {
-		return false
+		return name == ""
 	}
 	for {
 		i := strings.IndexByte(enumValues, ',')
@@ -1200,6 +1192,24 @@ func isPaddedSetInput(setValues, val string) bool {
 		return false
 	}
 	return types.MatchSetName(setValues, val)
+}
+
+// normalizeEnumSetCSVValue shares the member-aware trim and empty-to-NULL
+// policy between row conversion and strict parallel-read boundary detection.
+// Callers use it only for ENUM or uint64 with SET domain metadata, and apply
+// explicit NULL markers to the returned text before parsing it.
+func normalizeEnumSetCSVValue(id types.T, definition, val string) (text string, emptyIsNull bool) {
+	if id == types.T_enum {
+		if isEnumMember(definition, val) {
+			return val, false
+		}
+		val = strings.TrimSpace(val)
+		return val, len(val) == 0 && !isEnumMember(definition, "")
+	}
+	if !isPaddedSetInput(definition, val) {
+		val = strings.TrimSpace(val)
+	}
+	return val, false
 }
 
 func shouldLoadEmptyNumericAsZero(param *ExternalParam, id types.T) bool {
@@ -1620,16 +1630,15 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	isSet := id == types.T_uint64 && len(col.Typ.Enumvalues) > 0
 	loadDataNonStrictAdjustments := shouldApplyLoadDataNonStrictAdjustments(param)
 	trimSpace := false
+	emptyIsNull := false
 	// T_bit carries raw bytes (parsed byte-by-byte, not as text), so whitespace
 	// bytes are data and must not be trimmed (a whitespace-only bit value would
 	// otherwise even be converted to NULL below).
-	if id != types.T_char && id != types.T_varchar && id != types.T_json &&
+	if id == types.T_enum || isSet {
+		field.Val, emptyIsNull = normalizeEnumSetCSVValue(id, col.Typ.Enumvalues, field.Val)
+	} else if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 		id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
-		id != types.T_bit &&
-		// A declared ENUM member is kept as written (e.g. ' ' or ''), and so is
-		// valid SET input, which may name a leading-space member (' a').
-		!(id == types.T_enum && isEnumMember(col.Typ.Enumvalues, field.Val)) &&
-		!(isSet && isPaddedSetInput(col.Typ.Enumvalues, field.Val)) {
+		id != types.T_bit {
 		field.Val = strings.TrimSpace(field.Val)
 		trimSpace = true
 	}
@@ -1643,15 +1652,12 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		field.Val = normalizeISO8601Zulu(field.Val, proc.GetSessionInfo().TimeZone)
 	}
 	mappedNull := getNullFlag(param.Extern.NullMap, colName, field.Val)
-	isNullOrEmpty := field.IsNull || mappedNull
+	isNullOrEmpty := field.IsNull || mappedNull || emptyIsNull
 	emptyNumericField := len(field.Val) == 0 && !field.IsNull && !mappedNull && !isSet && shouldLoadEmptyNumericAsZero(param, id)
 	if emptyNumericField {
 		field.Val = "0"
 		isNullOrEmpty = false
-	} else if trimSpace && len(field.Val) == 0 && !isNullOrEmpty && !isSet &&
-		!(id == types.T_enum && isEnumMember(col.Typ.Enumvalues, "")) {
-		// The empty SET and a declared empty ENUM member ('') are valid values
-		// distinct from SQL NULL, so only explicit NULL markers become NULL.
+	} else if trimSpace && len(field.Val) == 0 && !isNullOrEmpty {
 		isNullOrEmpty = true
 	}
 	if isNullOrEmpty {
@@ -2085,34 +2091,11 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_enum:
-		d, err := strconv.ParseUint(field.Val, 10, 16)
-		if err == nil {
-			if err := vector.AppendFixed(vec, types.Enum(d), false, mp); err != nil {
-				return err
-			}
-		} else if errors.Is(err, strconv.ErrSyntax) {
-			v, err := types.ParseEnum(col.Typ.Enumvalues, field.Val)
-			if err != nil {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return err
-			}
-			if err := vector.AppendFixed(vec, types.Enum(v), false, mp); err != nil {
-				return err
-			}
-		} else {
-			if errors.Is(err, strconv.ErrRange) {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
-			}
-			f, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil || f < 0 || f > math.MaxUint16 {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
-			}
-			if err := vector.AppendFixed(vec, types.Enum(f), false, mp); err != nil {
-				return err
-			}
+		v, err := types.ParseEnum(col.Typ.Enumvalues, field.Val)
+		if err != nil {
+			return err
 		}
+		return vector.AppendFixed(vec, v, false, mp)
 	case types.T_decimal64:
 		d, err := types.ParseDecimal64(field.Val, vec.GetType().Width, vec.GetType().Scale)
 		if err != nil {

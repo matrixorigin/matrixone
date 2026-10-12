@@ -8338,7 +8338,7 @@ func findInSetResult[Tr types.FixedSizeTExceptStrType](
 			if memberPositions == nil || cachedDefinition != definition {
 				cachedDefinition = definition
 				memberPositions = make(map[string]uint64)
-				for i, member := range strings.Split(definition, ",") {
+				for i, member := range types.DecodeSetValues(definition) {
 					// Match types.ParseSet: SET definitions are normalized by
 					// trimming trailing ASCII spaces and folding case.
 					key := strings.ToLower(strings.TrimRight(member, " "))

@@ -1115,8 +1115,18 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 		}
 		args[idx] = argExpr
 	}
+	if types.T(sourceExpr.Typ.Id).IsInteger() && sourceExpr.Typ.Id != int32(types.T_int64) && sourceExpr.Typ.Id != int32(types.T_uint64) {
+		numericType := Type{Id: int32(types.T_int64)}
+		if types.T(sourceExpr.Typ.Id).IsUnsignedInt() {
+			numericType.Id = int32(types.T_uint64)
+		}
+		sourceExpr, err = appendCastBeforeExpr(ctx, sourceExpr, numericType)
+		if err != nil {
+			return nil, err
+		}
+	}
 	args[len(args)-1] = sourceExpr
-	if 20 <= sourceExpr.Typ.Id && sourceExpr.Typ.Id <= 29 {
+	if types.T(sourceExpr.Typ.Id).IsInteger() {
 		expr, err = BindFuncExprImplByPlanExpr(ctx, moEnumCastIndexValueToIndexFun, args)
 		if err != nil {
 			return nil, err
@@ -1157,6 +1167,16 @@ func funcCastForSetType(ctx context.Context, expr *Expr, targetType Type) (*Expr
 			return nil, err
 		}
 		args[idx] = argExpr
+	}
+	if types.T(sourceExpr.Typ.Id).IsInteger() && sourceExpr.Typ.Id != int32(types.T_int64) && sourceExpr.Typ.Id != int32(types.T_uint64) {
+		numericType := Type{Id: int32(types.T_int64)}
+		if types.T(sourceExpr.Typ.Id).IsUnsignedInt() {
+			numericType.Id = int32(types.T_uint64)
+		}
+		sourceExpr, err = appendCastBeforeExpr(ctx, sourceExpr, numericType)
+		if err != nil {
+			return nil, err
+		}
 	}
 	args[len(args)-1] = sourceExpr
 	if types.T(sourceExpr.Typ.Id).IsInteger() {

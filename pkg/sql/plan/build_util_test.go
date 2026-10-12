@@ -1484,3 +1484,35 @@ func TestDefaultBlobTextAssignmentPolicy(t *testing.T) {
 		require.True(t, null.GetLit().GetIsnull())
 	}
 }
+
+func TestEmptyDomainTypeReplay(t *testing.T) {
+	for _, tc := range []struct {
+		ddl               string
+		oid               types.T
+		domain, formatted string
+	}{
+		{"enum('')", types.T_enum, "", "ENUM('')"}, {"set('')", types.T_uint64, ",", "SET('')"}, {"set('   ')", types.T_uint64, ",", "SET('')"}, {"bigint unsigned", types.T_uint64, "", "BIGINT UNSIGNED"},
+	} {
+		t.Run(tc.ddl, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t(v "+tc.ddl+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			typ, err := getTypeFromAst(context.Background(), stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(tc.oid), typ.Id)
+			require.Equal(t, tc.domain, typ.Enumvalues)
+			require.Equal(t, tc.formatted, FormatColType(typ))
+			encoded, err := typ.Marshal()
+			require.NoError(t, err)
+			var recovered plan.Type
+			require.NoError(t, recovered.Unmarshal(encoded))
+			require.Equal(t, typ, recovered)
+			replay, err := mysql.ParseOne(context.Background(), "create table replay(v "+FormatColType(recovered)+")", 1)
+			require.NoError(t, err)
+			defer replay.Free()
+			replayType, err := getTypeFromAst(context.Background(), replay.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef).Type)
+			require.NoError(t, err)
+			require.Equal(t, typ, replayType)
+		})
+	}
+}
