@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	stdRuntime "runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -62,6 +63,14 @@ func startGossipFixture(
 				cleanupErr, context.Cause(ctx))
 		}
 		services := make([]*Service, 0, len(configs))
+		ownsCohort := true
+		defer func() {
+			if ownsCohort {
+				if err := cleanup(configs, services); err != nil {
+					t.Logf("gossip fixture deferred rollback attempt %d failed: %v", attempt, err)
+				}
+			}
+		}()
 		var startupErr error
 		if len(configs) == 0 {
 			startupErr = errors.New("gossip fixture requires at least one node")
@@ -88,8 +97,10 @@ func startGossipFixture(
 			startupErr = errors.Join(startupErr, cause)
 		}
 		if startupErr == nil {
+			ownsCohort = false
 			return configs, services, nil // Transfer ownership of the entire cohort.
 		}
+		ownsCohort = false
 		if err := cleanup(configs, services); err != nil {
 			return nil, nil, errors.Join(startupErr, context.Cause(ctx), fmt.Errorf("gossip fixture rollback: %w", err))
 		}
@@ -193,6 +204,125 @@ func closeGossipFixture(rt runtime.Runtime, configs []Config, services []*Servic
 		runtime.CompareAndDeleteServiceBasedRuntime(cfg.UUID, rt)
 	}
 	return closeErr
+}
+
+func TestGossipFixtureStartupConstructorPanic(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		priorNodes     int
+		cleanupFailure bool
+		replaceRuntime bool
+	}{
+		{name: "first node"},
+		{name: "later node", priorNodes: 1},
+		{name: "multiple prior nodes", priorNodes: 2},
+		{name: "cleanup error preserves panic", priorNodes: 1, cleanupFailure: true},
+		{name: "independent runtime survives", priorNodes: 1, replaceRuntime: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := runtime.DefaultRuntime()
+			replacement := runtime.DefaultRuntime()
+			configs := make([]Config, tc.priorNodes+1)
+			for i := range configs {
+				configs[i].UUID = uuid.NewString()
+				runtime.SetupServiceBasedRuntime(configs[i].UUID, rt)
+				t.Cleanup(func() {
+					runtime.CompareAndDeleteServiceBasedRuntime(configs[i].UUID, rt)
+					runtime.CompareAndDeleteServiceBasedRuntime(configs[i].UUID, replacement)
+				})
+			}
+			panicValue := make(chan struct{}) // Equality proves panic identity, not just its text.
+			cleanupErr := errors.New("injected panic rollback failure")
+			builds, starts, rollbacks := 0, 0, 0
+			var started []*Service
+			closed := make(map[*Service]int)
+			transferred := false
+			require.PanicsWithValue(t, panicValue, func() {
+				_, _, _ = startGossipFixture(t, t.Context(),
+					func() ([]Config, error) { builds++; return configs, nil },
+					func(Config) (*Service, error) {
+						starts++
+						if starts == tc.priorNodes+1 {
+							if tc.replaceRuntime {
+								runtime.SetupServiceBasedRuntime(configs[0].UUID, replacement)
+							}
+							panic(panicValue)
+						}
+						service := &Service{}
+						started = append(started, service)
+						return service, nil
+					},
+					func(owned []Config, services []*Service) error {
+						rollbacks++
+						if len(owned) != len(configs) || len(services) != tc.priorNodes {
+							t.Errorf("wrong panic ownership: configs=%d services=%d", len(owned), len(services))
+						}
+						for _, service := range services {
+							closed[service]++
+						}
+						for _, cfg := range owned {
+							runtime.CompareAndDeleteServiceBasedRuntime(cfg.UUID, rt)
+						}
+						if tc.cleanupFailure {
+							return cleanupErr
+						}
+						return nil
+					})
+				transferred = true
+			})
+			require.False(t, transferred)
+			require.Equal(t, 1, builds)
+			require.Equal(t, tc.priorNodes+1, starts)
+			require.Equal(t, 1, rollbacks)
+			for _, service := range started {
+				require.Equal(t, 1, closed[service])
+			}
+			for i, cfg := range configs {
+				if tc.replaceRuntime && i == 0 {
+					require.Same(t, replacement, runtime.ServiceRuntime(cfg.UUID))
+				} else {
+					require.Nil(t, runtime.ServiceRuntime(cfg.UUID))
+				}
+			}
+		})
+	}
+}
+
+func TestGossipFixtureStartupGoexit(t *testing.T) {
+	builds, starts, rollbacks, closed := 0, 0, 0, 0
+	returned := false
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _ = startGossipFixture(t, t.Context(),
+			func() ([]Config, error) { builds++; return []Config{{}, {}}, nil },
+			func(Config) (*Service, error) {
+				starts++
+				if starts == 2 {
+					stdRuntime.Goexit()
+				}
+				return &Service{}, nil
+			},
+			func(configs []Config, services []*Service) error {
+				rollbacks++
+				closed += len(services)
+				if len(configs) != 2 {
+					t.Errorf("lost configured cohort during Goexit")
+				}
+				return nil
+			})
+		returned = true
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Goexit did not finish deferred rollback")
+	}
+	require.Equal(t, 1, builds)
+	require.Equal(t, 2, starts)
+	require.Equal(t, 1, rollbacks)
+	require.Equal(t, 1, closed)
+	require.False(t, returned)
 }
 
 func TestGossipFixtureStartupRecovery(t *testing.T) {
