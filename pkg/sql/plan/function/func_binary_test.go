@@ -5784,11 +5784,11 @@ func TestFindInSetSetDefinitionEmptyMember(t *testing.T) {
 	caseData := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "", "", ""}, nil),
-			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0, 1, 2, 2}, nil),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{",a", ",a", "a,", "a,,b"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "", "", "", "", ""}, nil),
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0, 1, 2, 2, 0, 1}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{",a", ",a", "a,", "a,,b", ",", ","}, nil),
 		},
-		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 1, 2, 2}, nil),
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 1, 2, 2, 0, 1}, nil),
 		FindInSet,
 	)
 	succeed, info := caseData.RunAndFree()

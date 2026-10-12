@@ -494,3 +494,35 @@ func TestCoverage_Constants(t *testing.T) {
 	assert.Equal(t, uint32(0), TenantSysID)
 	assert.Equal(t, "_ModelSchema", ModelSchemaName)
 }
+
+func TestDomainSchemaRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		oid    types.T
+		domain string
+	}{
+		{"empty enum", types.T_enum, ""}, {"empty set", types.T_uint64, ","}, {"enum", types.T_enum, "red,blue"}, {"set", types.T_uint64, "red,blue"}, {"uint64", types.T_uint64, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := NewEmptySchema("domains")
+			require.NoError(t, source.AppendPKCol("id", types.T_int32.ToType(), 0))
+			col := colDefFromPlan(&plan.ColDef{Name: "value", Typ: plan.Type{Id: int32(tc.oid), Enumvalues: tc.domain}, Default: &plan.Default{NullAbility: true}}, 1, 1)
+			require.Equal(t, tc.domain, col.EnumValues)
+			require.NoError(t, source.AppendColDef(col))
+			require.NoError(t, source.Finalize(false))
+			encoded, err := source.Marshal()
+			require.NoError(t, err)
+			recovered := NewEmptySchema("")
+			_, err = recovered.ReadFromWithVersion(bytes.NewReader(encoded), IOET_WALTxnCommand_Table_CurrVer)
+			require.NoError(t, err)
+			for _, schema := range []*Schema{source, source.Clone(), recovered} {
+				defs, err := SchemaToDefs(schema)
+				require.NoError(t, err)
+				restored, err := DefsToSchema("domains", defs)
+				require.NoError(t, err)
+				require.Equal(t, tc.domain, restored.ColDefs[1].EnumValues)
+				require.Equal(t, tc.oid, restored.ColDefs[1].Type.Oid)
+			}
+		})
+	}
+}
