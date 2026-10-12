@@ -24,7 +24,7 @@
 // pkg/sql/plan" mental model. Phase 6 pulled ApplyForSort + CanApply
 // bodies back. Plugins now own:
 //   - BuildSecondaryIndexDefs        (schema.go)        — hidden-table TableDefs
-//   - TableFuncBuilder registrations (tablefunc.go)    — ivf_create / hnsw_search / ...
+//   - TableFuncBuilder registrations (tablefunc.go)    — ivf_create / hnsw_create / ...
 //   - thin ApplyForSort + CanApply   (plan.go, ~10 LoC) — one-line redirect
 //     into the matching method on *plan.QueryBuilder
 //

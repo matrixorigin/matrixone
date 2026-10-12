@@ -18,6 +18,9 @@
 #include "cagra.hpp"
 #include "helper.h"
 #include "test_framework.hpp"
+#include <cmath>
+#include <limits>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
@@ -830,5 +833,73 @@ TEST(GpuCagraTest, MultiQueryKExceedsIndexSize) {
         }
     }
 
+    index.destroy();
+}
+
+// Slots past the allowed rows are (-1, FLT_MAX); only allowed ids appear.
+static void expect_only_allowed_cagra(const std::vector<int64_t>& n, const std::vector<float>& d,
+                                uint32_t limit, const std::vector<int64_t>& allowed) {
+    ASSERT_EQ(n.size(), (size_t)limit);
+    for (uint32_t i = 0; i < limit; ++i) {
+        if (i < allowed.size()) {
+            ASSERT_TRUE(std::find(allowed.begin(), allowed.end(), n[i]) != allowed.end());
+            ASSERT_TRUE(std::isfinite(d[i]));
+        } else {
+            ASSERT_EQ(n[i], (int64_t)-1);
+            ASSERT_EQ(d[i], std::numeric_limits<float>::max());
+        }
+    }
+}
+
+// A filter that admits fewer rows than k returns those rows, then sentinels.
+TEST(GpuCagraTest, FilterAdmittingFewerThanKPadsWithSentinels) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 130;
+    std::vector<float> dataset(count * dimension);
+    for (uint64_t i = 0; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = (float)i;
+    std::vector<int64_t> cats(count, 1);
+    cats[count - 2] = 2;
+    cats[count - 1] = 2;
+
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), nullptr, count);
+    index.build();
+
+    std::vector<float> query(dimension, 0.0f);
+    cagra_search_params_t sp = cagra_search_params_default();
+    const uint32_t limit = 5;
+    auto r = index.search_with_filter(query.data(), 1, dimension, limit, sp,
+                                      "[{\"col\":0,\"op\":\"=\",\"val\":2}]");
+    expect_only_allowed_cagra(r.neighbors, r.distances, limit, {(int64_t)count - 1, (int64_t)count - 2});
+    index.destroy();
+}
+
+// Deleting all but two rows leaves two results, then sentinels.
+TEST(GpuCagraTest, DeletesLeavingFewerThanKPadWithSentinels) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 130;
+    std::vector<float> dataset(count * dimension);
+    for (uint64_t i = 0; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = (float)i;
+
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.build();
+    for (uint64_t i = 0; i + 2 < count; ++i) index.delete_id((int64_t)i);
+
+    std::vector<float> query(dimension, 0.0f);
+    cagra_search_params_t sp = cagra_search_params_default();
+    const uint32_t limit = 5;
+    auto r = index.search(query.data(), 1, dimension, limit, sp);
+    expect_only_allowed_cagra(r.neighbors, r.distances, limit, {(int64_t)count - 1, (int64_t)count - 2});
     index.destroy();
 }

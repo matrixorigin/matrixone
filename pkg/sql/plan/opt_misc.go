@@ -287,7 +287,7 @@ func exprCanRemoveProject(expr *Expr) bool {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_F:
 		// fulltext_match is a planner placeholder: applyIndices replaces it
-		// with the score column produced by fulltext_index_scan.  Inlining a
+		// with the score column produced by the fulltext search scan.  Inlining a
 		// projection that contains it can move the placeholder into a WINDOW
 		// (for example through a multi-CTE query) where the fulltext rewrite
 		// cannot associate it with the source scan anymore.  Keep that PROJECT

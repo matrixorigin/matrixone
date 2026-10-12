@@ -98,7 +98,7 @@ func (idx *IvfflatSearchIndex[T]) LoadCentroids(proc *sqlexec.SqlProcess, idxcfg
 			Filter: filter,
 		})
 	} else {
-		// Legacy table-function path retained only until VECTOR_INDEX_SCAN owns
+		// Legacy table-function path retained only until INDEX_SEARCH_SCAN owns
 		// every IVF query shape.
 		sql := fmt.Sprintf(
 			"SELECT %s, %s FROM %s WHERE %s = %d",

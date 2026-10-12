@@ -216,6 +216,57 @@ func TestUnionSignedUnsignedIntegerColumnCommonType(t *testing.T) {
 	require.False(t, root.ProjectList[0].Typ.NotNullable)
 }
 
+func TestUnionMediumIntColumnMetadata(t *testing.T) {
+	for _, oid := range []types.T{types.T_int32, types.T_uint32} {
+		for _, tc := range []struct {
+			left, right string
+			width       int32
+		}{
+			{"m", "i", 32},
+			{"i", "m", 32},
+			{"m", "m", 24},
+		} {
+			t.Run(oid.String()+"/"+tc.left+"_"+tc.right, func(t *testing.T) {
+				ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+				ctx.dbs["test"] = true
+				ctx.objects["union_medium"] = &planpb.ObjectRef{DbName: "test", ObjName: "union_medium", Obj: 1}
+				medium := types.New(oid, 24, -1).PlanType()
+				ordinary := types.New(oid, 32, -1).PlanType()
+				table := &planpb.TableDef{Name: "union_medium", DbName: "test", Cols: []*planpb.ColDef{
+					{Name: "m", Typ: medium}, {Name: "i", Typ: ordinary},
+				}}
+				ctx.tables["union_medium"] = table
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+					"select "+tc.left+" as x from test.union_medium union all select "+tc.right+" from test.union_medium", 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				built, err := BuildPlan(ctx, stmt, false)
+				require.NoError(t, err)
+				query := built.GetQuery()
+				root := query.Nodes[query.Steps[len(query.Steps)-1]]
+				require.Equal(t, int32(oid), root.ProjectList[0].Typ.Id)
+				require.Equal(t, tc.width, root.ProjectList[0].Typ.Width)
+				var found bool
+				for _, node := range query.Nodes {
+					if node.NodeType != planpb.Node_UNION_ALL {
+						continue
+					}
+					found = true
+					require.Equal(t, tc.width, node.ProjectList[0].Typ.Width)
+					for _, child := range node.Children {
+						projection := query.Nodes[child].ProjectList[0]
+						require.Equal(t, tc.width, projection.Typ.Width)
+						require.NotNil(t, projection.GetCol(), "storage-compatible widening must not add a value cast")
+					}
+				}
+				require.True(t, found)
+				require.Equal(t, medium, table.Cols[0].Typ)
+				require.Equal(t, ordinary, table.Cols[1].Typ)
+			})
+		}
+	}
+}
+
 func TestCTASUnionSignedUnsignedIntegerMetadata(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"create table t_ctas_union_signed_unsigned as select cast(-1 as signed) as x union all select cast(18446744073709551615 as unsigned) as x", 1)
