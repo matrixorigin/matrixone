@@ -6213,6 +6213,8 @@ func TestCharCharsetCastParseFormatParse(t *testing.T) {
 		"select cast('abc' as char(2) character set binary)",
 		"select convert('abc', char(3) character set utf8mb3)",
 		"select convert('abc', char character set utf8)",
+		"select cast('abc' as char(2) character set '')",
+		"select convert('abc', char(2) character set '')",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			stmt, err := ParseOne(context.Background(), sql, 1)

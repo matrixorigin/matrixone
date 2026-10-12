@@ -148,7 +148,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 	if err != nil {
 		return plan.Type{}, err
 	}
-	if astType, ok := typ.(*tree.T); ok && astType.InternalType.CastCharsetName != "" {
+	if astType, ok := typ.(*tree.T); ok && astType.InternalType.CastCharsetSpecified {
 		name := astType.InternalType.CastCharsetName
 		identity, ok := collation.ResolveCharset(name)
 		if !ok || (identity != collation.BinaryIdentity && identity != collation.UTF8MB4GeneralCIIdentity) {

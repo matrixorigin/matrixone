@@ -23,3 +23,5 @@ execute char_cs_stmt using @char_cs_short, @char_cs_short;
 set @char_cs_null=null;
 execute char_cs_stmt using @char_cs_null, @char_cs_null;
 deallocate prepare char_cs_stmt;
+select cast('abc' as char(2) character set '');
+select convert('abc', char(2) character set '');

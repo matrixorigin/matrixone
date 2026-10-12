@@ -1473,7 +1473,7 @@ func (node *CastExpr) Format(ctx *FmtCtx) {
 	node.Expr.Format(ctx)
 	ctx.WriteString(" as ")
 	typ := node.Type.(*T).InternalType
-	if typ.CastCharsetName == "" {
+	if !typ.CastCharsetSpecified {
 		typ.Format(ctx)
 	} else {
 		// CHAR without a length is represented internally as VARCHAR for cast
@@ -1486,7 +1486,11 @@ func (node *CastExpr) Format(ctx *FmtCtx) {
 			ctx.WriteByte(')')
 		}
 		ctx.WriteString(" character set ")
-		ctx.WriteString(typ.CastCharsetName)
+		if typ.CastCharsetName == "" {
+			ctx.WriteString("''")
+		} else {
+			ctx.WriteString(typ.CastCharsetName)
+		}
 	}
 	ctx.WriteByte(')')
 }

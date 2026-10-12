@@ -292,10 +292,14 @@ func TestGetTypeFromAstCharCastCharset(t *testing.T) {
 
 func TestGetTypeFromAstCharCastCharsetRejectsUnsupportedCharsets(t *testing.T) {
 	ctx := context.Background()
-	for _, charset := range []string{"ascii", "latin1", "unknown_charset"} {
+	for _, charset := range []string{"", "ascii", "latin1", "unknown_charset"} {
 		t.Run(charset, func(t *testing.T) {
+			charsetSQL := charset
+			if charsetSQL == "" {
+				charsetSQL = "''"
+			}
 			stmt, err := mysql.ParseOne(ctx,
-				"select cast('abc' as char(3) character set "+charset+")", 1)
+				"select cast('abc' as char(3) character set "+charsetSQL+")", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
 

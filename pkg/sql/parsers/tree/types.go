@@ -149,10 +149,11 @@ type InternalType struct {
 	//type id
 	Oid uint32
 
-	// CastCharsetName preserves CHARACTER SET syntax for expression CHAR casts.
-	// It is not a column attribute; expression binding resolves it through the
-	// same charset admission policy as CONVERT(... USING charset).
-	CastCharsetName string
+	// CastCharsetSpecified distinguishes an omitted CHARACTER SET clause from
+	// an explicitly empty name on expression CHAR casts. CastCharsetName is
+	// resolved through the same admission policy as CONVERT(... USING charset).
+	CastCharsetSpecified bool
+	CastCharsetName      string
 
 	EnumValues []string
 

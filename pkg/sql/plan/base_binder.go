@@ -178,7 +178,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		if err != nil {
 			return
 		}
-		if castType, ok := exprImpl.Type.(*tree.T); ok && castType.InternalType.CastCharsetName != "" {
+		if castType, ok := exprImpl.Type.(*tree.T); ok && castType.InternalType.CastCharsetSpecified {
 			// Reuse the existing CONVERT USING charset owner for conversion and
 			// result metadata, then use the explicit CAST overload to enforce the
 			// requested CHAR width. This keeps conversion separate from assignment

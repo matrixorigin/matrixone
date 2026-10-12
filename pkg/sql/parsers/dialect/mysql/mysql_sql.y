@@ -87,9 +87,10 @@ func makeCharsetCastCharType(width int32, charsetName string) *tree.T {
 		FamilyString:    familyString,
 		DisplayWith:     width,
 		Locale:          &locale,
-		Oid:             oid,
-		CastCharsetName: charsetName,
-	}}
+			Oid:             oid,
+			CastCharsetSpecified: true,
+			CastCharsetName: charsetName,
+		}}
 }
 
 func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.OrderBy, frame *tree.FrameClause) *tree.WindowSpec {
