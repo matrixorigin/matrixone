@@ -91,7 +91,7 @@ func TestViewsDefinitionProbePropagatesCatalogErrors(t *testing.T) {
 func TestViewsUpgradeIsScheduledForCompletedV406Tenants(t *testing.T) {
 	require.Equal(t, "4.0.7", Handler.Metadata().Version)
 	require.Equal(t, "4.0.6", Handler.Metadata().MinUpgradeVersion)
-	require.Equal(t, int64(defines.MORPCVersion110), Handler.Metadata().RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion111), Handler.Metadata().RequiredProtocolVersion)
 	require.Len(t, tenantUpgEntries, 1)
 
 	entry := tenantUpgEntries[0]
@@ -99,11 +99,11 @@ func TestViewsUpgradeIsScheduledForCompletedV406Tenants(t *testing.T) {
 	require.Equal(t, "VIEWS", entry.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
 	require.Equal(t, sysview.InformationSchemaViewsDDL, entry.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion110), entry.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion111), entry.RequiredProtocolVersion)
 }
 
 func TestViewsUpgradeBlocksBeforeDropOnOldCN(t *testing.T) {
-	for _, peer := range []int64{defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110} {
+	for _, peer := range []int64{defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111} {
 		t.Run(fmt.Sprintf("peer-%d", peer), func(t *testing.T) {
 			var executed []string
 			txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
@@ -120,8 +120,8 @@ func TestViewsUpgradeBlocksBeforeDropOnOldCN(t *testing.T) {
 				return false, nil
 			}
 			err := entry.Upgrade(txn, 0)
-			if peer < defines.MORPCVersion110 {
-				require.ErrorContains(t, err, "requires all CNs to support protocol version 110")
+			if peer < defines.MORPCVersion111 {
+				require.ErrorContains(t, err, "requires all CNs to support protocol version 111")
 				require.Empty(t, executed)
 			} else {
 				require.NoError(t, err)
@@ -149,6 +149,6 @@ func TestViewsUpgradeAuthoringProtocolGate(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(0))
 	require.False(t, InformationSchemaViewsAuthoringProtocolReady(txn))
 
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion110))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion111))
 	require.True(t, InformationSchemaViewsAuthoringProtocolReady(txn))
 }

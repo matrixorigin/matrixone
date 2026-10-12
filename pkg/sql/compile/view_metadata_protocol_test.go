@@ -97,20 +97,20 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 					require.NoError(t, err)
 					require.True(t, features.ViewMetadataFunctions, "shared analysis must match the actual registry IDs")
 					require.Equal(t, mode == "mixed", features.DecimalDivisionSemantics)
-					require.Equal(t, defines.MORPCVersion110, remoteExpressionProtocolVersion(features))
+					require.Equal(t, defines.MORPCVersion111, remoteExpressionProtocolVersion(features))
 					// No capability observation survives a send, including after
 					// success followed by rollback of the very same endpoint.
-					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion109, 0} {
+					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion110, 0} {
 						client.version = version
 						calls, releases := client.calls, client.releases
 						data, err := encodeRemoteScope(scope, c.proc)
-						if version == defines.MORPCVersion110 {
+						if version == defines.MORPCVersion111 {
 							require.NoError(t, err)
 							require.NotEmpty(t, data)
 						} else if version == 0 && mode == "mixed" {
 							require.ErrorContains(t, err, "remote destination does not support decimal division")
 						} else {
-							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 110)")
+							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 111)")
 						}
 						require.Equal(t, 1, client.calls-calls)
 						require.Equal(t, 1, client.releases-releases)
