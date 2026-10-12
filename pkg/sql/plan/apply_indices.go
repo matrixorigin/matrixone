@@ -353,6 +353,9 @@ func (builder *QueryBuilder) collectSpecialIndexGuards(nodeID int32) {
 		if scanIDs := builder.detectVectorGuard(node); len(scanIDs) > 0 {
 			builder.registerProjectGuard(node.NodeId, specialIndexKindVector, scanIDs)
 		}
+		if scanIDs := builder.detectScalarVectorGuard(node); len(scanIDs) > 0 {
+			builder.registerProjectGuard(node.NodeId, specialIndexKindVector, scanIDs)
+		}
 	}
 
 	for _, childID := range node.Children {
@@ -643,6 +646,10 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		}
 	}
 END_FULLTEXT:
+
+	if rewritten, err := builder.applyScalarVectorIndex(nodeID); rewritten != nodeID || err != nil {
+		return rewritten, err
+	}
 
 	// 1. Vector Index Check
 	// Handle Queries like

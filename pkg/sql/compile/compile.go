@@ -1062,7 +1062,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare)
+	c.execType = vectorQueryExecType(plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry)
 
 	c.cnList, err = c.scheduleQueryWorkers()
 	if err != nil {
@@ -1570,6 +1570,10 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		}
 		ss = c.compileProjection(node, ss)
 		return ss, nil
+	case plan.Node_VECTOR_QUERY_TOP:
+		return c.compileVectorQueryTop(step, node, nodes, curNodeIdx)
+	case plan.Node_VECTOR_QUERY_SOURCE:
+		return c.compileVectorQuerySource(node)
 	case plan.Node_FUNCTION_SCAN:
 		if len(node.Children) != 0 {
 			ss, err = c.compilePlanScope(step, node.Children[0], nodes)

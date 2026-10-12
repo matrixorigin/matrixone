@@ -29,6 +29,7 @@ type container struct {
 	receiver             *process.PipelineSignalReceiver
 	materializedPosition int
 	materializedReleased bool
+	materializedBatch    *batch.Batch
 }
 
 type Merge struct {
@@ -40,6 +41,9 @@ type Merge struct {
 
 	MaterializedSource   *materialized.Source
 	MaterializedReaderID int
+	// 标量 source 至多一批；本算子持有输出副本直到 Reset，TVF 只借用。
+	// 普通 CTE reader 仍保留既有的批所有权转移契约。
+	MaterializedSingleBatch bool
 	vm.OperatorBase
 }
 
@@ -88,6 +92,10 @@ func (merge *Merge) Release() {
 
 func (merge *Merge) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if merge.MaterializedSource != nil {
+		if merge.ctr.materializedBatch != nil {
+			merge.ctr.materializedBatch.Clean(proc.Mp())
+			merge.ctr.materializedBatch = nil
+		}
 		if !merge.ctr.materializedReleased {
 			merge.MaterializedSource.ReleaseReader(merge.MaterializedReaderID)
 			merge.ctr.materializedReleased = true
@@ -114,6 +122,10 @@ func (merge *Merge) Reset(proc *process.Process, pipelineFailed bool, err error)
 }
 
 func (merge *Merge) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if merge.ctr.materializedBatch != nil {
+		merge.ctr.materializedBatch.Clean(proc.Mp())
+		merge.ctr.materializedBatch = nil
+	}
 }
 
 func (merge *Merge) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

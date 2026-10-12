@@ -191,6 +191,8 @@ type Scope struct {
 	DataSource *Source
 	// PreScopes contains children of this scope will inherit and execute.
 	PreScopes []*Scope
+	// 固定三分支的本地标量向量执行域，不进入通用 eager 启动路径。
+	VectorQueryScope bool
 	// parallelGenerations are execution-created scope trees retained only so
 	// post-run physical-plan analysis can observe their real DOP and stats.
 	// Compile.Reset releases the previous execution's trees before the template
@@ -238,6 +240,9 @@ func (s *Scope) ipAddrMatch(local string) bool {
 // so we do a quick check here.
 // If more operators need to be rejected in the future, please use recursion honestly to check each operator.
 func (s *Scope) holdAnyCannotRemoteOperator() error {
+	if s.VectorQueryScope {
+		return moerr.NewInternalErrorNoCtx("scalar vector query must run on its coordinator")
+	}
 	if _, isCTE := pipeline2.IsCtePipelineAtLoop(s.RootOp); isCTE {
 		return moerr.NewInternalErrorNoCtx("remote running of cyclic CTE is not supported.")
 	}

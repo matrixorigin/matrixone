@@ -394,6 +394,9 @@ func (s *Scope) FreeOperator(c *Compile) {
 }
 
 func (s *Scope) InitAllDataSource(c *Compile) error {
+	if s.VectorQueryScope {
+		return nil // provider/候选 reader 在实际选择并启动时才初始化。
+	}
 	err := s.initDataSource(c)
 	if err != nil {
 		return err
@@ -440,6 +443,10 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	}
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
+
+	if s.VectorQueryScope {
+		return s.runVectorQueryScope(c)
+	}
 
 	// specific case.
 	if c.IsTpQuery() && !c.hasMergeOp {

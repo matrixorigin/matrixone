@@ -107,9 +107,15 @@ const (
 	IcebergWrite
 	TableClone
 	MongoScan
+	_ // 63–66 保留给本分支尚未引入的主线算子，禁止复用。
+	_
+	_
+	_
+	// 与主线保持编码一致，不重排已有算子。
+	VectorQuery OpType = 67
 	// OpTypeEnd is the exclusive upper bound for executable operator types.
 	// New operator types must be added before it.
-	OpTypeEnd
+	OpTypeEnd OpType = 68
 )
 
 var OperatorToStrMap map[OpType]string
@@ -141,6 +147,7 @@ func init() {
 		RightDedupJoin:          "RightDedupJoin",
 		IndexBuild:              "IndexBuild",
 		Merge:                   "Merge",
+		VectorQuery:             "VectorQuery",
 		MergeTop:                "MergeTop",
 		MergeLimit:              "MergeLimit",
 		MergeOrder:              "MergeOrder",
