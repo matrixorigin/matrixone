@@ -5065,6 +5065,27 @@ func (h *ParquetHandler) fillIcebergDMLMetadataColumns(
 	return nil
 }
 
+// Parquet TIME assignment emits diagnostics while mapping a candidate page
+// slice. Keep them local until the same slice passes byte-budget admission.
+// The accumulator bounds retained payload while preserving count-only warnings.
+type parquetAssignmentWarnings struct {
+	process.WarningAccumulator
+}
+
+func (w *parquetAssignmentWarnings) AppendWarningDiagnostic(code uint16, message string) {
+	w.Add(code, message)
+}
+
+func (w *parquetAssignmentWarnings) mappingProcess(proc *process.Process) *process.Process {
+	w.SetWarningRetentionForProcess(proc)
+	// Borrow immutable execution state without replacing the caller's attempt
+	// sink or creating a new context/cancellation owner.
+	child := proc.NewNoContextChildProc(0)
+	child.Ctx = proc.Ctx
+	child.WarningSink = w
+	return child
+}
+
 func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
 	length := 0
 	finish := false
@@ -5075,6 +5096,12 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 	}
 	if len(h.dataColIndices) == 0 {
 		return moerr.NewInternalError(param.Ctx, "parquet page mode has no physical data columns")
+	}
+	var warnings parquetAssignmentWarnings
+	mappingProc := proc
+	if h.timeAssignment {
+		mappingProc = warnings.mappingProcess(proc)
+		defer warnings.Reset()
 	}
 
 	for length < batchLimit && !h.parquetBatchAtByteBudget(bat, length, param) {
@@ -5114,7 +5141,7 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 		}
 
 		batchBytesBefore := h.physicalBatchSize(bat)
-		checkpoints, err := h.mapCurrentPageRows(bat, param, proc, toRead)
+		checkpoints, err := h.mapCurrentPageRows(bat, param, mappingProc, toRead)
 		if err != nil {
 			return h.closePagesOnError(param.Ctx, err)
 		}
@@ -5125,10 +5152,11 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 			accepted = int64(acceptedRows - length)
 			if accepted < toRead {
 				h.rollbackPageAppend(bat, checkpoints, int(toRead))
+				warnings.Reset()
 				if accepted == 0 {
 					break
 				}
-				if _, err = h.mapCurrentPageRows(bat, param, proc, accepted); err != nil {
+				if _, err = h.mapCurrentPageRows(bat, param, mappingProc, accepted); err != nil {
 					return h.closePagesOnError(param.Ctx, err)
 				}
 			}
@@ -5136,6 +5164,7 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 
 		h.advanceCurrentPages(accepted)
 		length += int(accepted)
+		warnings.Flush(proc)
 	}
 
 	bat.SetRowCount(length)
