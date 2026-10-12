@@ -1056,10 +1056,8 @@ func TestGuardTargetLocalExprKeepsEnumAssignmentType(t *testing.T) {
 	}
 	selected := col(0, plan.Type{Id: int32(types.T_bool)})
 
-	// JOIN UPDATE guards each target assignment with IF(selected, new, old).
-	// IF evaluates ENUM branches as uint16 indexes; the guarded value must be
-	// converted back so consumers reading it as the column's ENUM type
-	// (changed-row <=>, MultiUpdate) do not see a uint16 vector.
+	// Same-domain ENUM branches keep ENUM args/result on IF (iffFn already
+	// supports T_enum at runtime). No CastIndexValueToIndex revalidation.
 	var builder *QueryBuilder
 	got, err := builder.guardTargetLocalExpr(selected, col(1, enumType), col(2, enumType))
 	require.NoError(t, err)
@@ -1067,10 +1065,10 @@ func TestGuardTargetLocalExprKeepsEnumAssignmentType(t *testing.T) {
 	require.Equal(t, enumType.Enumvalues, got.Typ.Enumvalues)
 	fn := got.GetF()
 	require.NotNil(t, fn)
-	require.Equal(t, moEnumCastIndexValueToIndexFun, fn.Func.GetObjName())
-	require.Equal(t, "if", fn.Args[1].GetF().Func.GetObjName())
+	require.Equal(t, "if", fn.Func.GetObjName())
+	require.Equal(t, int32(types.T_enum), fn.Args[1].Typ.Id)
+	require.Equal(t, int32(types.T_enum), fn.Args[2].Typ.Id)
 
-	// Non-ENUM assignments keep the plain IF.
 	intType := plan.Type{Id: int32(types.T_int64)}
 	got, err = builder.guardTargetLocalExpr(selected, col(1, intType), col(2, intType))
 	require.NoError(t, err)

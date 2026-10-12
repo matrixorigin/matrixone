@@ -694,7 +694,16 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	// have already been materialized by their shared normalization owner.
 	castStoredValue := func(expr *plan.Expr, typ plan.Type) (*plan.Expr, error) {
 		if isEnumPlanType(&typ) {
-			return funcCastForEnumType(builder.GetContext(), expr, typ)
+			// Scan-time ENUM projections may already be VARCHAR displays. The
+			// error member (ordinal 0) displays as "", which CastValueToIndex
+			// rejects; makeMySQLSpecialNumericValue restores ordinal 0 for that
+			// empty display. Same-domain ENUM vectors are left as an identity.
+			if isEnumPlanType(&expr.Typ) && expr.Typ.Enumvalues == typ.Enumvalues {
+				out := DeepCopyExpr(expr)
+				out.Typ = typ
+				return out, nil
+			}
+			return makeMySQLSpecialNumericValue(builder.GetContext(), expr, &typ)
 		}
 		if isSetPlanType(&typ) {
 			return funcCastForSetType(builder.GetContext(), expr, typ)
@@ -4643,14 +4652,27 @@ func (builder *QueryBuilder) guardTargetLocalExpr(
 	if err != nil {
 		return nil, err
 	}
-	// IF has no ENUM overload, so it evaluates ENUM branches as their uint16
-	// indexes. Later consumers (changed-row <=>, MultiUpdate) read this
-	// position as the column's ENUM type, so convert the index back.
-	if isEnumPlanType(&newExpr.Typ) && !isEnumPlanType(&guarded.Typ) {
+	// JOIN/multi-target UPDATE guards with IF(selected, new, old). Same-domain
+	// ENUM branches keep T_enum via the IF overload (ordinal bits including
+	// stored error member 0). types.Type cannot carry Enumvalues, so restore
+	// that metadata from the column without CastIndexValueToIndex.
+	if isEnumPlanType(&newExpr.Typ) &&
+		isEnumPlanType(&oldExpr.Typ) &&
+		oldExpr.Typ.Enumvalues == newExpr.Typ.Enumvalues &&
+		types.T(guarded.Typ.Id) == types.T_enum {
+		restored := newExpr.Typ
+		restored.NotNullable = guarded.Typ.NotNullable
+		guarded.Typ = restored
+		return guarded, nil
+	}
+	if isEnumPlanType(&newExpr.Typ) && !isEnumPlanType(&guarded.Typ) &&
+		types.T(guarded.Typ.Id) != types.T_enum {
 		return funcCastForEnumType(builder.GetContext(), guarded, newExpr.Typ)
 	}
 	return guarded, nil
 }
+
+
 
 func (builder *QueryBuilder) appendSelectedTargetNotNullAssertions(
 	bindCtx *BindContext,
