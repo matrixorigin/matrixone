@@ -4,8 +4,8 @@ This probe reproduces the Spark JDBC write-isolation compatibility boundary
 with Spark 3.5.3 and MySQL Connector/J 8.0.33. It verifies that a writer with
 Spark's default isolation fails with MatrixOne's explicit unsupported-level
 error and inserts no rows, then writes the same two rows with
-`isolationLevel=READ_COMMITTED` across two partitions and reads them back
-through Spark and a separate JDBC connection. The probe creates uniquely named
+`isolationLevel=READ_COMMITTED` across two non-empty writer partitions and reads
+them back through Spark and a separate JDBC connection. The probe creates uniquely named
 tables and removes them when it exits.
 
 Use an isolated MatrixOne instance and a dedicated database. Set the connection

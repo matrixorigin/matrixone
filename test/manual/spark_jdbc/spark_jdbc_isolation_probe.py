@@ -200,7 +200,18 @@ def main() -> None:
             "password": password,
             "isolationLevel": "READ_COMMITTED",
         }
-        frame.repartition(2).write.jdbc(
+        writer_rdd = spark.sparkContext.parallelize(EXPECTED_ROWS, 2)
+        partition_row_counts = writer_rdd.mapPartitions(
+            lambda rows: [sum(1 for _ in rows)]
+        ).collect()
+        if partition_row_counts != [1, 1]:
+            raise AssertionError(
+                "expected one row in each of two writer partitions, got "
+                f"{partition_row_counts}"
+            )
+        writer_frame = spark.createDataFrame(writer_rdd, "id long, value double")
+        print(f"Spark READ_COMMITTED writer partition row counts: {partition_row_counts}")
+        writer_frame.write.jdbc(
             url=url,
             table=rc_table,
             mode="append",
@@ -239,18 +250,22 @@ def main() -> None:
         primary_error = exc
         raise
     finally:
+        cleanup_error = None
         try:
             drop_owned_tables(spark, tables)
-        except Exception as cleanup_error:
-            if primary_error is None:
-                raise
-            print(f"cleanup also failed: {cleanup_error}", file=sys.stderr)
+        except BaseException as exc:
+            cleanup_error = exc
         try:
             spark.stop()
-        except Exception as stop_error:
+        except BaseException as exc:
+            if cleanup_error is None:
+                cleanup_error = exc
+            else:
+                print(f"Spark shutdown also failed: {exc}", file=sys.stderr)
+        if cleanup_error is not None:
             if primary_error is None:
-                raise
-            print(f"Spark shutdown also failed: {stop_error}", file=sys.stderr)
+                raise cleanup_error
+            print(f"cleanup also failed: {cleanup_error}", file=sys.stderr)
 
 
 if __name__ == "__main__":

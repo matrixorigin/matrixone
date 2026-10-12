@@ -44,7 +44,8 @@ readback = spark.read.jdbc(
 
 The repository includes a runnable compatibility probe that checks the default
 failure, the explicit `READ_COMMITTED` write across two writer partitions, and
-readback through both a fresh Spark JDBC read and a separate SQL connection:
+readback through both a fresh Spark JDBC read and a separate SQL connection. It
+places one row in each writer partition to exercise both JDBC writer tasks:
 [`test/manual/spark_jdbc/README.md`](../../test/manual/spark_jdbc/README.md).
 
 This option selects a supported isolation level for each Spark write. It does
