@@ -1200,13 +1200,6 @@ type RelationCreatedInCurrentTxn interface {
 	CreatedInCurrentTxn(context.Context) (bool, error)
 }
 
-// RelationHasTransactionLocalWrites reports whether the relation bound to the
-// current transaction has uncommitted workspace writes. Unlike the committed
-// SourceCommitTS frontier, these writes are already visible to the transaction.
-type RelationHasTransactionLocalWrites interface {
-	HasTransactionLocalWrites(context.Context) (bool, error)
-}
-
 // SourceCommitTSProvider is an optional relation capability used by async
 // indexes that must prove their source-table coverage.  It is intentionally not
 // part of Relation: engines without a logtail partition state simply do not

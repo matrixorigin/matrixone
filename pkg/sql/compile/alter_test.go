@@ -2507,12 +2507,6 @@ func (rel *alterCopyTransactionLocalWritesRelation) SourceCommitTSAfterCopy(
 	return mustExceed.Next(), nil
 }
 
-func (rel *alterCopyTransactionLocalWritesRelation) HasTransactionLocalWrites(
-	context.Context,
-) (bool, error) {
-	return true, nil
-}
-
 type alterCopySourceCommitTSRelation struct {
 	engine.Relation
 	sourceCommitTS func(context.Context, types.TS) (types.TS, error)

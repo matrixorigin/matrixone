@@ -152,10 +152,11 @@ func (s SourceCommitTS) Max() types.TS {
 // SourceCommitTSAt returns the partition-state retention boundary and source
 // commit timestamp candidates for a snapshot. Appendable objects are scanned on
 // disk because their ObjectEntry DeleteTime is a lifecycle timestamp and cannot
-// be used as a source DML timestamp. Persisted tombstone objects contribute
-// their CreateTime, which is the user DELETE commit. Any I/O uncertainty is
-// returned to the caller, which must fail closed before using an asynchronous
-// index.
+// be used as a source DML timestamp. Retained tombstone objects, including
+// soft-deleted ones, contribute their row-level user DELETE commits; logical
+// tombstone deletion is not partition-state retention truncation. Any I/O
+// uncertainty is returned to the caller, which must fail closed before using an
+// asynchronous index.
 //
 // mustExceed short-circuits: the only consumer compares Max() against an index
 // build_ts, so once the terms gathered so far already exceed mustExceed the exact
@@ -242,21 +243,41 @@ func (p *PartitionState) SourceCommitTSAt(
 	if exceeded() {
 		return ret, nil
 	}
-	tombstoneIter, err := p.NewObjectsIter(snapshot, true, true)
-	if err != nil {
-		return SourceCommitTS{}, err
-	}
-	defer tombstoneIter.Close()
-	for tombstoneIter.Next() {
+	tombstoneIter := p.tombstoneObjectsNameIndex.Iter()
+	defer tombstoneIter.Release()
+	for ok := tombstoneIter.First(); ok; ok = tombstoneIter.Next() {
 		if exceeded() {
 			return ret, nil
 		}
-		obj := tombstoneIter.Entry()
-		if obj.CreateTime.GT(&ret.Tombstone) {
-			ret.Tombstone = obj.CreateTime
+		obj := tombstoneIter.Item()
+		if obj.CreateTime.GT(&snapshot) {
+			continue
+		}
+		ts, err := maxCommitTSInTombstoneObject(ctx, snapshot, fs, obj, mp)
+		if err != nil {
+			return SourceCommitTS{}, err
+		}
+		if ts.GT(&ret.Tombstone) {
+			ret.Tombstone = ts
 		}
 	}
 	return ret, nil
+}
+
+func maxCommitTSInTombstoneObject(
+	ctx context.Context,
+	snapshot types.TS,
+	fs fileservice.FileService,
+	obj objectio.ObjectEntry,
+	mp *mpool.MPool,
+) (types.TS, error) {
+	if obj.GetCNCreated() {
+		return obj.CreateTime, nil
+	}
+	if obj.GetAppendable() {
+		return maxCommitTSInAppendableObject(ctx, snapshot, fs, obj, mp)
+	}
+	return maxCommitTSFromZonemap(ctx, fs, obj)
 }
 
 // maxCommitTSFromZonemap returns the maximum user commit_ts of a non-appendable

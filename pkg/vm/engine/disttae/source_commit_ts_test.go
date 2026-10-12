@@ -36,12 +36,6 @@ type sourceCommitTSStub struct {
 	calls *int
 }
 
-type localWritesStub struct {
-	engine.Relation
-	has   bool
-	calls *int
-}
-
 type sourceCommitTSAfterCopyStub struct {
 	engine.Relation
 	ts    types.TS
@@ -54,11 +48,6 @@ func (rel *sourceCommitTSStub) SourceCommitTS(
 ) (types.TS, error) {
 	*rel.calls++
 	return rel.ts, rel.err
-}
-
-func (rel *localWritesStub) HasTransactionLocalWrites(context.Context) (bool, error) {
-	*rel.calls++
-	return rel.has, nil
 }
 
 func (rel *sourceCommitTSAfterCopyStub) SourceCommitTSAfterCopy(
@@ -88,12 +77,6 @@ func failClosedTxnTable(t *testing.T) *txnTable {
 func TestSourceCommitTSFailsClosedOnLocalWrite(t *testing.T) {
 	_, err := failClosedTxnTable(t).SourceCommitTS(context.Background(), types.TS{})
 	require.Error(t, err)
-}
-
-func TestTxnTableHasTransactionLocalWrites(t *testing.T) {
-	has, err := failClosedTxnTable(t).HasTransactionLocalWrites(context.Background())
-	require.NoError(t, err)
-	require.True(t, has)
 }
 
 func TestSourceCommitTSAfterCopyIncludesCommittedStateDespiteLocalWrites(t *testing.T) {
@@ -189,21 +172,6 @@ func TestCombinedTxnTableSourceCommitTSAfterCopyChecksEveryMember(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, types.BuildTS(40, 0), sourceTS)
 	require.Equal(t, 2, calls)
-}
-
-func TestCombinedTxnTableHasTransactionLocalWritesShortCircuits(t *testing.T) {
-	calls := 0
-	table := &combinedTxnTable{tablesFunc: func() ([]engine.Relation, error) {
-		return []engine.Relation{
-			&localWritesStub{has: true, calls: &calls},
-			&localWritesStub{has: false, calls: &calls},
-		}, nil
-	}}
-
-	has, err := table.HasTransactionLocalWrites(context.Background())
-	require.NoError(t, err)
-	require.True(t, has)
-	require.Equal(t, 1, calls)
 }
 
 func TestCombinedTxnTableSourceCommitTSShortCircuits(t *testing.T) {

@@ -71,7 +71,9 @@ For a relation that existed before the current transaction, publication calls `S
 - current-transaction workspace writes were visible to the copy and are excluded from ALTER's committed-change comparison;
 - each partition member supplies its source commit frontier and fails closed on unavailable state;
 - a combined relation aggregates member maxima and short-circuits as soon as one member exceeds the copy timestamp;
-- in-memory rows, visible data objects, and visible persisted tombstone objects all contribute their user-data commit timestamps;
+- in-memory rows and visible data objects contribute their user-data commit timestamps;
+- retained tombstone entries contribute row-level non-aborted DELETE commit timestamps. Appendable tombstones read commit-ts and abort columns with the same snapshot semantics as the delete reader; non-appendable tombstones read their commit-ts zonemaps. Soft-deleted tombstones remain proof because logical pruning is not retention truncation, while actual partition-state truncation is represented by the state-start floor;
+- unavailable tombstone files or commit-ts metadata fail closed;
 - a result greater than the copy timestamp means the copy is stale.
 
 Transaction-local relations are detected through `RelationCreatedInCurrentTxn` and skip the committed-source probe because their whole life is owned by this transaction. The original `SourceCommitTS` capability continues to fail closed for local writes so its async-index callers do not mistake transaction-visible state for a committed coverage frontier; ALTER's after-copy capability shares the partition-state reader but bypasses only that local-write failure.
@@ -91,11 +93,11 @@ The serialized source probe costs `O(P)` `SourceCommitTS` calls for a partitione
 - no workspace scan is needed to exclude writes owned by the copying transaction; the original frontier method still fails closed for async-index callers;
 - one in-memory replay-row scan, `R` entries;
 - one data-object index iteration, `O` visible data objects;
-- one tombstone-object index iteration, `T` visible persisted tombstone objects;
-- appendable objects may read commit-ts and abort columns for each visible block;
-- non-appendable objects may read per-block commit-ts zonemaps.
+- one tombstone-object index iteration, `T` retained tombstone objects (including soft-deleted entries);
+- appendable data and tombstone objects may read commit-ts and abort columns for each block visible at the snapshot;
+- non-appendable data and tombstone objects may read per-block commit-ts zonemaps.
 
-The copy timestamp is a short-circuit threshold, not an upper bound on rows or objects. A state-start boundary, in-memory row, or object candidate greater than the threshold stops that member before later object I/O. An unchanged large source can still scan in-memory rows and object metadata; this is not a changes-only cost.
+The copy timestamp is a short-circuit threshold, not an upper bound on rows or objects. A state-start boundary, in-memory row, or object candidate greater than the threshold stops that member before later object I/O. An unchanged large source can still scan in-memory rows and retained data/tombstone object metadata; this is not a changes-only cost.
 
 The remaining gate-held budget is therefore bounded by visible partition state and storage I/O, not by copy size. The focused unchanged benchmark `BenchmarkSourceCommitTSAtUnchanged250KObject` models one 250,000-row non-appendable object with a threshold after all row commits. On Apple M5 (`darwin/arm64`, 10 GOMAXPROCS), 20 iterations measured `44075 ns/op`, `1125 B/op`, and `4 allocs/op` through the commit-ts zonemap path. This is object-layout evidence, not a full multi-object production benchmark; additional storage layouts should be measured if reviewers require a broader envelope.
 
@@ -116,7 +118,7 @@ This is an internal lifecycle refinement, not a persistence or wire-protocol cha
 - Unit tests prove the temporary CREATE options disable nested locking.
 - Unit tests prove unchanged, changed, provider-failure, current-transaction, and committed-change-despite-local-write source behavior.
 - Unit tests prove partitioned frontiers return the exact maximum, short-circuit, check every member after copy, and fail closed for missing member providers.
-- Unit tests prove in-memory and persisted tombstone delete frontiers both detect a post-copy source change.
+- Unit tests prove in-memory, persisted appendable, and pruned persisted tombstone delete frontiers detect a post-copy source change, and that unavailable tombstone proof fails closed.
 - Unit tests prove post-physical replacement, definition, data, admission-retry, and source-lock-retry races return a terminal write conflict and are not classified as RC statement retries.
 - Frontend tests prove `ErrTxnWriteConflict` is classified as a whole-transaction rollback error.
 - A 500-session one-row workload proves independent ALTERs complete without lock-wait or connection-loss failures.
