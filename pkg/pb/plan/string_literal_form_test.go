@@ -986,6 +986,43 @@ func TestTemporalConversionProtocolSourceMatrix(t *testing.T) {
 	}
 }
 
+func TestRequiresMORPCVersion112JSONStringConsumerOverload(t *testing.T) {
+	consumer := func(functionID, overloadID int32) *Expr {
+		return &Expr{
+			Typ: Type{Id: 61},
+			Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(functionID)<<32 | int64(overloadID)},
+			}},
+		}
+	}
+
+	for _, functionID := range []int32{remoteJSONStringConsumerELTFunctionID} {
+		t.Run(fmt.Sprintf("function_%d", functionID), func(t *testing.T) {
+			required, err := RequiresMORPCVersion112JSONStringConsumerOverload(consumer(functionID, 1))
+			require.NoError(t, err)
+			require.True(t, required)
+			for _, overloadID := range []int32{0, 2} {
+				required, err = RequiresMORPCVersion112JSONStringConsumerOverload(consumer(functionID, overloadID))
+				require.NoError(t, err)
+				require.False(t, required)
+			}
+		})
+	}
+
+	for _, control := range []*Expr{consumer(17, 1), consumer(16, 0)} {
+		required, err := RequiresMORPCVersion112JSONStringConsumerOverload(control)
+		require.NoError(t, err)
+		require.False(t, required)
+	}
+
+	features, err := RequiredRemoteExpressionFeatures(&struct{ Expressions []*Expr }{
+		Expressions: []*Expr{consumer(remoteJSONStringConsumerELTFunctionID, 1)},
+	})
+	require.NoError(t, err)
+	require.True(t, features.JSONStringConsumerOverload)
+	require.True(t, features.Any())
+}
+
 func TestRequiredRemoteExpressionFeaturesMediumIntAssignmentBounds(t *testing.T) {
 	cast := func(functionID int32, functionName string, target Type) *Expr {
 		return &Expr{Typ: target, Expr: &Expr_F{F: &Function{
@@ -1037,4 +1074,22 @@ func TestRequiredRemoteExpressionFeaturesMediumIntAssignmentBounds(t *testing.T)
 			require.Equal(t, tc.want, features.Any())
 		})
 	}
+}
+
+func TestRequiredRemoteExpressionFeaturesODKUOwnerMetadata(t *testing.T) {
+	for _, owner := range []any{
+		&Query{Nodes: []*Node{{PreInsertCtx: &PreInsertCtx{TrackOdkuResult: true}}}},
+		&Plan{Plan: &Plan_Query{Query: &Query{Nodes: []*Node{{DedupJoinCtx: &DedupJoinCtx{
+			OdkuOrdinalCol: &ColRef{}, OdkuGeneratedCol: &ColRef{},
+		}}}}}},
+	} {
+		features, err := RequiredRemoteExpressionFeatures(owner)
+		require.NoError(t, err)
+		require.True(t, features.ODKUStatementResult)
+		require.True(t, features.Any())
+		require.False(t, features.SessionLastInsertIDBaseline, "tracking metadata needs a floor without any LAST_INSERT_ID expression")
+	}
+	features, err := RequiredRemoteExpressionFeatures(&PreInsertCtx{})
+	require.NoError(t, err)
+	require.False(t, features.ODKUStatementResult)
 }
