@@ -2214,6 +2214,168 @@ func Test_BuiltIn_LikeUTF8Underscore(t *testing.T) {
 	}
 }
 
+func Test_BuiltIn_LikeTrailingEscapeParity(t *testing.T) {
+	testCases := []struct {
+		name     string
+		pattern  string
+		values   []string
+		expected []bool
+	}{
+		{
+			name:     "contains escaped backslash",
+			pattern:  `%ab\\%`,
+			values:   []string{`path ab\ here`, `ab\`, `path abX here`, `ab\%`},
+			expected: []bool{true, true, false, true},
+		},
+		{
+			name:     "contains two escaped backslashes",
+			pattern:  `%ab\\\\%`,
+			values:   []string{`path ab\\ here`, `ab\\`, `path ab\ here`, `ab\\%`},
+			expected: []bool{true, true, false, true},
+		},
+		{
+			name:     "prefix escaped backslash",
+			pattern:  `ab\\%`,
+			values:   []string{`ab\tail`, `ab\`, `xab\`, `abX`},
+			expected: []bool{true, true, false, false},
+		},
+		{
+			name:     "leading underscore escaped backslash",
+			pattern:  `_ab\\%`,
+			values:   []string{`xab\tail`, `xab\`, `ab\`, `xabX`},
+			expected: []bool{true, true, false, false},
+		},
+		{
+			name:     "trailing underscore escaped backslash",
+			pattern:  `ab\\_`,
+			values:   []string{`ab\X`, `ab\中`, `ab\`, `ab\XX`},
+			expected: []bool{true, true, false, false},
+		},
+		{
+			name:     "leading percent trailing underscore escaped backslash",
+			pattern:  `%ab\\_`,
+			values:   []string{`path ab\X`, `ab\中`, `path ab\`, `ab\XX`},
+			expected: []bool{true, true, false, false},
+		},
+		{
+			name:     "literal percent after one escape",
+			pattern:  `%ab\%`,
+			values:   []string{`path ab%`, `ab%`, `path ab`, `ab%tail`},
+			expected: []bool{true, true, false, false},
+		},
+		{
+			name:     "literal percent after three escapes",
+			pattern:  `%ab\\\%`,
+			values:   []string{`path ab\%`, `ab\%`, `path ab\`, `ab\%tail`},
+			expected: []bool{true, true, false, false},
+		},
+		{
+			name:     "literal underscore after one escape",
+			pattern:  `%ab\_`,
+			values:   []string{`path ab_`, `ab_`, `path abX`, `ab_tail`},
+			expected: []bool{true, true, false, false},
+		},
+		{
+			name:     "literal underscore after three escapes",
+			pattern:  `%ab\\\_`,
+			values:   []string{`path ab\_`, `ab\_`, `path ab\X`, `ab\_tail`},
+			expected: []bool{true, true, false, false},
+		},
+		{
+			name:     "two byte escaped percent",
+			pattern:  `\%`,
+			values:   []string{"%", `\`, `\tail`, ""},
+			expected: []bool{true, false, false, false},
+		},
+		{
+			name:     "two byte escaped underscore",
+			pattern:  `\_`,
+			values:   []string{"_", `\X`, "X", ""},
+			expected: []bool{true, false, false, false},
+		},
+		{
+			name:     "escape run starts at first byte",
+			pattern:  `\\%`,
+			values:   []string{`\`, `\tail`, "%", ""},
+			expected: []bool{true, true, false, false},
+		},
+		{
+			name:     "ordinary character after escaped backslash",
+			pattern:  `%ab\\c%`,
+			values:   []string{`path ab\c here`, `ab\c`, `ab\`, `abc`},
+			expected: []bool{true, true, false, false},
+		},
+		{
+			name:     "escaped middle underscore uses general matcher",
+			pattern:  `%a\_b\\%`,
+			values:   []string{`path a_b\ here`, `a_b\`, `path aXb\ here`, `a_bX`},
+			expected: []bool{true, true, false, false},
+		},
+		{
+			name:     "unescaped trailing percent",
+			pattern:  `%ab%`,
+			values:   []string{"path ab here", "ab", "path aX here", ""},
+			expected: []bool{true, true, false, false},
+		},
+		{
+			name:     "empty pattern",
+			pattern:  "",
+			values:   []string{"", `\`, "%", "ab"},
+			expected: []bool{true, false, false, false},
+		},
+	}
+
+	for _, evaluator := range []struct {
+		name string
+		fn   executeLogicOfOverload
+	}{
+		{name: "like", fn: newOpBuiltInRegexp().likeFn},
+		{name: "ilike", fn: newOpBuiltInRegexp().iLikeFn},
+	} {
+		t.Run(evaluator.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			for _, tc := range testCases {
+				t.Run(tc.name, func(t *testing.T) {
+					values := append([]string(nil), tc.values...)
+					if evaluator.name == "ilike" {
+						for i := range values {
+							values[i] = strings.ToUpper(values[i])
+						}
+					}
+					values = append(values, "")
+					nullList := make([]bool, len(values))
+					nullList[len(values)-1] = true
+					expected := append(append([]bool(nil), tc.expected...), false)
+
+					for _, constantPattern := range []bool{true, false} {
+						t.Run(fmt.Sprintf("constant_pattern=%t", constantPattern), func(t *testing.T) {
+							patterns := make([]string, len(values))
+							for i := range patterns {
+								patterns[i] = tc.pattern
+							}
+							pattern := NewFunctionTestInput(types.T_varchar.ToType(), patterns, nil)
+							if constantPattern {
+								pattern = NewFunctionTestConstInput(types.T_varchar.ToType(), patterns, nil)
+							}
+							tcc := NewFunctionTestCase(
+								proc,
+								[]FunctionTestInput{
+									NewFunctionTestInput(types.T_varchar.ToType(), values, nullList),
+									pattern,
+								},
+								NewFunctionTestResult(types.T_bool.ToType(), false, expected, nullList),
+								evaluator.fn,
+							)
+							succeed, errInfo := tcc.RunAndFree()
+							require.True(t, succeed, errInfo)
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
 func Test_BuiltIn_RegularMatchForLikeOp(t *testing.T) {
 	op := newOpBuiltInRegexp()
 

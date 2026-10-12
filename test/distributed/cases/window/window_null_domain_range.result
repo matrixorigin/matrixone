@@ -1,0 +1,32 @@
+drop database if exists window_null_domain_range;
+create database window_null_domain_range;
+use window_null_domain_range;
+create table src(id int primary key,k int,v int);
+insert into src values(1,NULL,100),(2,0,10),(3,1,20);
+select id,first_value(NULL) over(order by id) as fv,
+last_value(NULL) over(order by id) as lv,nth_value(NULL,2) over(order by id) as nv,
+lag(NULL,1,7) over(order by id) as lagv,lead(NULL,1,7) over(order by id) as leadv
+from src order by id;
+➤ id[4,32,0]  ¦  fv[-1,16383,0]  ¦  lv[-1,16383,0]  ¦  nv[-1,16383,0]  ¦  lagv[-1,16383,0]  ¦  leadv[-1,16383,0]  𝄀
+1  ¦  null  ¦  null  ¦  null  ¦  7  ¦  null  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  7
+select id,count(*) over(order by k desc range between 1 following and 2 following) as n,
+sum(v) over(order by k desc range between 1 following and 2 following) as total,
+first_value(v) over(order by k desc range between 1 following and 2 following) as fv
+from src order by id;
+➤ id[4,32,0]  ¦  n[-5,64,0]  ¦  total[-5,64,0]  ¦  fv[4,32,0]  𝄀
+1  ¦  1  ¦  100  ¦  100  𝄀
+2  ¦  0  ¦  null  ¦  null  𝄀
+3  ¦  1  ¦  10  ¦  10
+create table materialized as select id,first_value(NULL) over(order by id) as fv from src;
+select data_type from information_schema.columns
+where table_schema='window_null_domain_range' and table_name='materialized' and column_name='fv';
+➤ data_type[12,65535,0]  𝄀
+text
+select id,fv from materialized order by id;
+➤ id[4,32,0]  ¦  fv[-1,16383,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+drop database window_null_domain_range;

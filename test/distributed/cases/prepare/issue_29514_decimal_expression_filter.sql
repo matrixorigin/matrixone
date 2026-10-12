@@ -5,9 +5,9 @@
 drop database if exists issue_29514_decimal_expr;
 create database issue_29514_decimal_expr;
 use issue_29514_decimal_expr;
-create table t(d decimal(12,2));
+create table t(d decimal(12,2), d18 decimal(18,2));
 -- Keep the sorted 13-block fixture; 0.10 exposes unsafe rounding of 0.104.
-insert into t select case when result = 1 then 0.10 else result end from generate_series(1, 100000) g;
+insert into t select case when result = 1 then 0.10 else result end, result from generate_series(1, 100000) g;
 
 explain select count(*) from t where d = (select cast(54321 as double));
 -- @ignore:0
@@ -339,6 +339,22 @@ execute integer_cast_peer using @v;
 set @v = 54321;
 execute integer_cast_peer using @v;
 deallocate prepare integer_cast_peer;
+
+-- #29661 residual: an exact TEXT peer must not narrow the native carrier.
+prepare native_text_peer from 'select count(*), min(d18) from t where d18 = ?';
+set @v = '54321';
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute native_text_peer using @v;
+execute native_text_peer using @v;
+set @v = '10000000000000000000';
+execute native_text_peer using @v;
+set @v = null;
+execute native_text_peer using @v;
+set @v = '54322';
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute native_text_peer using @v;
+execute native_text_peer using @v;
+deallocate prepare native_text_peer;
 -- Adjacent DECIMAL keys above 2^53 must still both match the DOUBLE peer.
 set @v = 9007199254740992;
 prepare integer_collision_peer from 'select count(*) from wide where d = cast(? as double)';
