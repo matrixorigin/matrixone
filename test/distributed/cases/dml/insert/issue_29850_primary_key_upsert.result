@@ -1,0 +1,88 @@
+drop table if exists t_issue_29850_pk;
+create table t_issue_29850_pk (id int primary key, payload varchar(40));
+insert into t_issue_29850_pk values (1, 'seed');
+insert into t_issue_29850_pk values (1, 'values-control')
+on duplicate key update id = values(id), payload = values(payload);
+select * from t_issue_29850_pk order by id;
+➤ id[4,32,0]  ¦  payload[12,40,0]  𝄀
+1  ¦  values-control
+insert into t_issue_29850_pk values (1, 'literal-equal')
+on duplicate key update id = (1), payload = values(payload);
+select * from t_issue_29850_pk order by id;
+➤ id[4,32,0]  ¦  payload[12,40,0]  𝄀
+1  ¦  literal-equal
+insert into t_issue_29850_pk values (2, 'fresh')
+on duplicate key update id = 99, payload = values(payload);
+select * from t_issue_29850_pk order by id;
+➤ id[4,32,0]  ¦  payload[12,40,0]  𝄀
+1  ¦  literal-equal  𝄀
+2  ¦  fresh
+insert into t_issue_29850_pk values (10, 'first'), (10, 'second')
+on duplicate key update id = 10, payload = values(payload);
+select * from t_issue_29850_pk order by id;
+➤ id[4,32,0]  ¦  payload[12,40,0]  𝄀
+1  ¦  literal-equal  𝄀
+2  ¦  fresh  𝄀
+10  ¦  second
+insert into t_issue_29850_pk values (3, 'would-insert'), (1, 'would-update')
+on duplicate key update payload = values(payload), id = 99;
+unsupported DML: update primary key on duplicate
+select * from t_issue_29850_pk order by id;
+➤ id[4,32,0]  ¦  payload[12,40,0]  𝄀
+1  ¦  literal-equal  𝄀
+2  ¦  fresh  𝄀
+10  ¦  second
+insert into t_issue_29850_pk values (1, 'repeated-would-update')
+on duplicate key update id = 2, id = 1, payload = values(payload);
+unsupported DML: update primary key on duplicate
+select * from t_issue_29850_pk order by id;
+➤ id[4,32,0]  ¦  payload[12,40,0]  𝄀
+1  ¦  literal-equal  𝄀
+2  ¦  fresh  𝄀
+10  ¦  second
+drop table if exists t_issue_29850_composite;
+create table t_issue_29850_composite (a int, b int, payload varchar(40), primary key (a, b));
+insert into t_issue_29850_composite values (1, 2, 'seed');
+insert into t_issue_29850_composite values (1, 2, 'equal')
+on duplicate key update a = 1, b = 2, payload = values(payload);
+select * from t_issue_29850_composite order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  payload[12,40,0]  𝄀
+1  ¦  2  ¦  equal
+insert into t_issue_29850_composite values (1, 2, 'would-update')
+on duplicate key update a = 1, b = 3, payload = values(payload);
+unsupported DML: update primary key on duplicate
+select * from t_issue_29850_composite order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  payload[12,40,0]  𝄀
+1  ¦  2  ¦  equal
+drop table if exists t_issue_29850_secondary;
+create table t_issue_29850_secondary (id int primary key, uk int unique, payload varchar(40));
+insert into t_issue_29850_secondary values (1, 10, 'seed');
+insert into t_issue_29850_secondary values (2, 10, 'ambiguous')
+on duplicate key update id = values(id), payload = values(payload);
+unsupported DML: update primary key on duplicate
+select * from t_issue_29850_secondary order by id;
+➤ id[4,32,0]  ¦  uk[4,32,0]  ¦  payload[12,40,0]  𝄀
+1  ¦  10  ¦  seed
+drop table if exists t_issue_29850_timestamp;
+create table t_issue_29850_timestamp (
+id int primary key,
+payload int,
+updated_at timestamp default '2000-01-01 00:00:00' on update current_timestamp
+);
+insert into t_issue_29850_timestamp(id, payload) values (1, 10);
+insert into t_issue_29850_timestamp(id, payload) values (1, 10)
+on duplicate key update id = 1;
+select payload, updated_at = '2000-01-01 00:00:00' as timestamp_unchanged
+from t_issue_29850_timestamp where id = 1;
+➤ payload[4,32,0]  ¦  timestamp_unchanged[-7,1,0]  𝄀
+10  ¦  1
+insert into t_issue_29850_timestamp(id, payload) values (1, 20)
+on duplicate key update id = 1, payload = values(payload);
+select payload, updated_at > '2000-01-01 00:00:00' as timestamp_advanced
+from t_issue_29850_timestamp where id = 1;
+➤ payload[4,32,0]  ¦  timestamp_advanced[-7,1,0]  𝄀
+20  ¦  1
+drop table if exists t_issue_29850_timestamp;
+drop table if exists t_issue_29850_secondary;
+drop table if exists t_issue_29850_composite;
+drop table if exists t_issue_29850_pk;
