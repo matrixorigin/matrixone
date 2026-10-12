@@ -95,6 +95,10 @@ func TestFilteredSetOperationProjection(t *testing.T) {
 				"create table saved(v bigint)",
 				"insert into saved select sum(v) from (select 1 k,10 v union all select 2,20) u where k>0",
 				"create table copied as select v from (select 1 k,10 v union all select 2,20) u where k>0",
+				"create table sample_values(a bigint not null,b bigint not null)",
+				"insert into sample_values values (1,10),(2,20),(3,30)",
+				"create table nullable_sample(a bigint,b bigint)",
+				"insert into nullable_sample values (1,NULL),(NULL,20),(3,30)",
 			} {
 				_, err := conn.ExecContext(ctx, q)
 				require.NoError(t, err, q)
@@ -119,6 +123,13 @@ func TestFilteredSetOperationProjection(t *testing.T) {
 				{"select 1 from (select count(*) c,sum(v) s from saved where v<0 union all select count(*),sum(v) from copied where v<0) u", []string{"1", "1"}},
 				{"select c from (select count(*) c,avg(v) a,sum(v) s from saved group by v having sum(v)>15 union all select count(*),avg(v),sum(v) from copied group by v having sum(v)>15) u order by c", []string{"1", "1"}},
 				{"select c from (select count(*) c,sum(v) s from saved union select count(*),sum(v) from copied where v=10) u order by c", []string{"1", "1"}},
+				{"select v from (select v,sum(v) over() w from saved union all select v,sum(v) over() from copied) u order by v", []string{"10", "20", "30"}},
+				{"select v,w from (select v,sum(v) over() w from saved union all select v,sum(v) over() from copied) u order by v", []string{"10:30", "20:30", "30:30"}},
+				{"select v from (select v,sum(v) over(partition by v order by v) w from saved union all select v,sum(v) over(partition by v order by v) from copied) u order by v", []string{"10", "20", "30"}},
+				{"select v from (select v,sum(v) over() w from saved union all select v,sum(v) over() from copied) u where w>15 order by v", []string{"10", "20", "30"}},
+				{"select count(*) from (select sample(a,b,2 rows) from sample_values union all select sample(a,b,2 rows) from sample_values) u", []string{"4"}},
+				{"select count(*) from (select sample(a,b,10 rows) from nullable_sample union all select sample(a,b,10 rows) from nullable_sample) u", []string{"6"}},
+				{"select count(*) from (select sample(a,b,10 rows) from nullable_sample union all select sample(a,b,10 rows) from nullable_sample) u where a is null", []string{"2"}},
 				{"select v from saved", []string{"30"}},
 				{"select v from copied order by v", []string{"10", "20"}},
 				{"select sum(v) from (select 1 k,10 v union all select 2,v from copied where v=20) u where k>0", []string{"30"}},
@@ -134,6 +145,20 @@ func TestFilteredSetOperationProjection(t *testing.T) {
 			require.Equal(t, []string{"1", "2"}, readWindowNullRows(t, rows))
 			require.NoError(t, conn.QueryRowContext(ctx, "select currval('aggregate_effect_seq')").Scan(&effects))
 			require.Equal(t, "3", effects, "unused aggregate arguments must evaluate once per input row")
+			_, err = conn.ExecContext(ctx, "create sequence window_effect_seq start with 1")
+			require.NoError(t, err)
+			rows, err = conn.QueryContext(ctx, "select v from (select v,sum(cast(nextval('window_effect_seq') as bigint)) over() w from saved union all select v,sum(cast(nextval('window_effect_seq') as bigint)) over() from copied) u order by v")
+			require.NoError(t, err)
+			require.Equal(t, []string{"10", "20", "30"}, readWindowNullRows(t, rows))
+			require.NoError(t, conn.QueryRowContext(ctx, "select currval('window_effect_seq')").Scan(&effects))
+			require.Equal(t, "3", effects, "unused window arguments must evaluate once per input row")
+			_, err = conn.ExecContext(ctx, "create sequence sample_effect_seq start with 1")
+			require.NoError(t, err)
+			rows, err = conn.QueryContext(ctx, "select count(*) from (select sample(a,cast(nextval('sample_effect_seq') as bigint),10 rows) from sample_values union all select sample(a,cast(nextval('sample_effect_seq') as bigint),10 rows) from sample_values) u")
+			require.NoError(t, err)
+			require.Equal(t, []string{"6"}, readWindowNullRows(t, rows))
+			require.NoError(t, conn.QueryRowContext(ctx, "select currval('sample_effect_seq')").Scan(&effects))
+			require.Equal(t, "6", effects, "unused sample arguments must evaluate once per input row")
 		})
 		var one int
 		require.NoError(t, conn.QueryRowContext(ctx, "select 1").Scan(&one))

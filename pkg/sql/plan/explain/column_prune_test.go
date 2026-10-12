@@ -862,6 +862,60 @@ func TestUnionAllAggregateOutputPruning(t *testing.T) {
 	}
 }
 
+func TestUnionAllComputedOutputPruning(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql             string
+		width, windows, slots int
+		prunedInputs          bool
+	}{
+		{"unused window", "select v from (select n_nationkey v,sum(n_regionkey) over() w from nation union all select r_regionkey,sum(r_regionkey) over() from region) u", 1, 0, 0, true},
+		{"unused partitioned window", "select v from (select n_nationkey v,sum(n_regionkey) over(partition by n_name order by n_regionkey) w from nation union all select r_regionkey,sum(r_regionkey) over(partition by r_name order by r_regionkey) from region) u", 1, 0, 0, true},
+		{"referenced window", "select v,w from (select n_nationkey v,sum(n_regionkey) over() w from nation union all select r_regionkey,sum(r_regionkey) over() from region) u", 2, 2, 0, false},
+		{"window filter consumes hidden result", "select v from (select n_nationkey v,sum(n_regionkey) over() w from nation union all select r_regionkey,sum(r_regionkey) over() from region) u where w>0", 1, 2, 0, false},
+		{"effectful window", "select v from (select n_nationkey v,sum(sleep(0)) over() w from nation union all select r_regionkey,sum(sleep(0)) over() from region) u", 1, 2, 0, false},
+		{"unused sample", "select n_name from (select sample(n_name,n_regionkey,2 rows) from nation union all select sample(r_name,r_regionkey,2 rows) from region) u", 1, 0, 2, true},
+		{"referenced sample", "select * from (select sample(n_name,n_regionkey,2 rows) from nation union all select sample(r_name,r_regionkey,2 rows) from region) u", 2, 0, 4, false},
+		{"nullable sample retains row set", "select n_name from (select sample(n_name,nullif(n_regionkey,0),2 rows) from nation union all select sample(r_name,nullif(r_regionkey,0),2 rows) from region) u", 1, 0, 4, false},
+		{"effectful sample", "select n_regionkey from (select sample(sleep(0),n_regionkey,2 rows) from nation union all select sample(sleep(0),r_regionkey,2 rows) from region) u", 1, 0, 4, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := buildOneStmt(plan2.NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			width, windows, slots, unions := 0, 0, 0, 0
+			for _, n := range reachablePlanNodes(p.GetQuery()) {
+				switch n.NodeType {
+				case plan.Node_UNION_ALL:
+					width = len(n.ProjectList)
+					unions++
+				case plan.Node_WINDOW:
+					windows++
+				case plan.Node_SAMPLE:
+					slots += len(n.AggList)
+				}
+			}
+			require.Equal(t, 1, unions)
+			require.Equal(t, tc.width, width)
+			require.Equal(t, tc.windows, windows)
+			require.Equal(t, tc.slots, slots)
+			if tc.prunedInputs {
+				columns, err := getPrunedTableColumns(p)
+				require.NoError(t, err)
+				if tc.slots == 0 {
+					require.ElementsMatch(t, []Entry[string, []string]{
+						{tableName: "nation", colNames: []string{"n_nationkey"}},
+						{tableName: "region", colNames: []string{"r_regionkey"}},
+					}, columns)
+				} else {
+					require.ElementsMatch(t, []Entry[string, []string]{
+						{tableName: "nation", colNames: []string{"n_name"}},
+						{tableName: "region", colNames: []string{"r_name"}},
+					}, columns)
+				}
+			}
+		})
+	}
+}
+
 func TestColumnPruneOperatorShape(t *testing.T) {
 	t.Run("scan chooses deterministic row carrier", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
