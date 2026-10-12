@@ -14615,6 +14615,7 @@ name_confict:
 |   MINUTE
 |   MONTH
 |   QUARTER
+|   POINT
 |   REPEAT
 |   REPLACE
 |   REVERSE
