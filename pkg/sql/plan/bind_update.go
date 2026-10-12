@@ -4499,11 +4499,21 @@ func (builder *QueryBuilder) guardTargetLocalExpr(
 	newExpr *plan.Expr,
 	oldExpr *plan.Expr,
 ) (*plan.Expr, error) {
-	return BindFuncExprImplByPlanExpr(
+	guarded, err := BindFuncExprImplByPlanExpr(
 		builder.GetContext(),
 		"if",
 		[]*plan.Expr{DeepCopyExpr(targetSelected), newExpr, DeepCopyExpr(oldExpr)},
 	)
+	if err != nil {
+		return nil, err
+	}
+	// IF has no ENUM overload, so it evaluates ENUM branches as their uint16
+	// indexes. Later consumers (changed-row <=>, MultiUpdate) read this
+	// position as the column's ENUM type, so convert the index back.
+	if isEnumPlanType(&newExpr.Typ) && !isEnumPlanType(&guarded.Typ) {
+		return funcCastForEnumType(builder.GetContext(), guarded, newExpr.Typ)
+	}
+	return guarded, nil
 }
 
 func (builder *QueryBuilder) appendSelectedTargetNotNullAssertions(

@@ -1086,7 +1086,13 @@ func wrapAstExprForMySQLSpecialType(ctx context.Context, targetType plan.Type, a
 	binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
 	boundExpr, err := binder.BindExpr(astExpr, 0, false)
 	if err != nil {
-		return nil, err
+		// This binder has no query context, so it cannot resolve column
+		// references (e.g. UPDATE t JOIN s ... SET t.e = s.e, or SET e = col).
+		// Leave such expressions unwrapped: they are bound against the real
+		// UPDATE context later and normalizeUpdateAssignment converts them
+		// with funcCastForEnumType/funcCastForSetType. Genuine errors (unknown
+		// columns, bad syntax) are still reported by that real bind.
+		return astExpr, nil
 	}
 
 	_, valueToIndex, indexValueToIndex, err := mysqlSpecialTypeFuncNames(&targetType)

@@ -961,3 +961,64 @@ func TestGeometrySRIDNullShortCircuit(t *testing.T) {
 		})
 	}
 }
+
+func TestWrapAstExprForMySQLSpecialTypeLeavesColumnRefsToQueryBind(t *testing.T) {
+	ctx := context.Background()
+	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: ",red,blue"}
+	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,b"}
+
+	for _, target := range []plan.Type{enumType, setType} {
+		// Qualified and unqualified column references cannot be bound without
+		// a query context; they must not be rejected as ambiguous here.
+		for _, colRef := range []tree.Expr{
+			tree.NewUnresolvedName(tree.NewCStr("incoming", 1), tree.NewCStr("v", 1)),
+			tree.NewUnresolvedColName("s"),
+		} {
+			got, err := wrapAstExprForMySQLSpecialType(ctx, target, colRef)
+			require.NoError(t, err)
+			require.Same(t, colRef, got)
+
+			castExpr := &tree.CastExpr{Expr: colRef, Type: tree.TYPE_VARCHAR}
+			got, err = wrapAstExprForMySQLSpecialType(ctx, target, castExpr)
+			require.NoError(t, err)
+			require.Same(t, tree.Expr(castExpr), got)
+		}
+
+		// Context-free literals are still converted at the AST boundary.
+		lit := tree.NewNumVal("red", "red", false, tree.P_char)
+		got, err := wrapAstExprForMySQLSpecialType(ctx, target, lit)
+		require.NoError(t, err)
+		fn, ok := got.(*tree.FuncExpr)
+		require.True(t, ok)
+		require.Len(t, fn.Exprs, 2)
+		require.Same(t, tree.Expr(lit), fn.Exprs[1])
+	}
+}
+
+func TestGuardTargetLocalExprKeepsEnumAssignmentType(t *testing.T) {
+	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: ",red,blue"}
+	col := func(pos int32, typ plan.Type) *plan.Expr {
+		return &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: pos}}}
+	}
+	selected := col(0, plan.Type{Id: int32(types.T_bool)})
+
+	// JOIN UPDATE guards each target assignment with IF(selected, new, old).
+	// IF evaluates ENUM branches as uint16 indexes; the guarded value must be
+	// converted back so consumers reading it as the column's ENUM type
+	// (changed-row <=>, MultiUpdate) do not see a uint16 vector.
+	var builder *QueryBuilder
+	got, err := builder.guardTargetLocalExpr(selected, col(1, enumType), col(2, enumType))
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_enum), got.Typ.Id)
+	require.Equal(t, enumType.Enumvalues, got.Typ.Enumvalues)
+	fn := got.GetF()
+	require.NotNil(t, fn)
+	require.Equal(t, moEnumCastIndexValueToIndexFun, fn.Func.GetObjName())
+	require.Equal(t, "if", fn.Args[1].GetF().Func.GetObjName())
+
+	// Non-ENUM assignments keep the plain IF.
+	intType := plan.Type{Id: int32(types.T_int64)}
+	got, err = builder.guardTargetLocalExpr(selected, col(1, intType), col(2, intType))
+	require.NoError(t, err)
+	require.Equal(t, "if", got.GetF().Func.GetObjName())
+}
