@@ -1,8 +1,8 @@
 drop database if exists issue_29514_decimal_expr;
 create database issue_29514_decimal_expr;
 use issue_29514_decimal_expr;
-create table t(d decimal(12,2));
-insert into t select case when result = 1 then 0.10 else result end from generate_series(1, 100000) g;
+create table t(d decimal(12,2), d18 decimal(18,2));
+insert into t select case when result = 1 then 0.10 else result end, result from generate_series(1, 100000) g;
 explain select count(*) from t where d = (select cast(54321 as double));
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
@@ -724,6 +724,28 @@ execute integer_cast_peer using @v;
 ➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
 1  ¦  54321.00
 deallocate prepare integer_cast_peer;
+prepare native_text_peer from 'select count(*), min(d18) from t where d18 = ?';
+set @v = '54321';
+explain analyze force execute native_text_peer using @v;
+➤ tp query plan[12,-1,0]  𝄀
+execute native_text_peer using @v;
+➤ count(*)[-5,64,0]  ¦  min(t.d18)[3,18,2]  𝄀
+1  ¦  54321.00
+set @v = '10000000000000000000';
+execute native_text_peer using @v;
+➤ count(*)[-5,64,0]  ¦  min(t.d18)[3,18,2]  𝄀
+0  ¦  null
+set @v = null;
+execute native_text_peer using @v;
+➤ count(*)[-5,64,0]  ¦  min(t.d18)[3,18,2]  𝄀
+0  ¦  null
+set @v = '54322';
+explain analyze force execute native_text_peer using @v;
+➤ tp query plan[12,-1,0]  𝄀
+execute native_text_peer using @v;
+➤ count(*)[-5,64,0]  ¦  min(t.d18)[3,18,2]  𝄀
+1  ¦  54322.00
+deallocate prepare native_text_peer;
 set @v = 9007199254740992;
 prepare integer_collision_peer from 'select count(*) from wide where d = cast(? as double)';
 execute integer_collision_peer using @v;
