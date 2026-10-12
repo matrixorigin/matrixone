@@ -4822,6 +4822,50 @@ func TestModernMultiTargetGeneratedColumnChainBuildsCompleteContexts(t *testing.
 	}), "the generated-column chain must feed the physical MULTI_UPDATE")
 }
 
+func TestDeleteCascadeIndexPreservesActionRows(t *testing.T) {
+	for _, parts := range [][]string{{"deptno"}, {"deptno", "ename"}} {
+		t.Run(strings.Join(parts, "_"), func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_CASCADE, plan.ForeignKeyDef_RESTRICT)
+			emp := mock.ctxt.tables["emp"]
+			index := emp.Indexes[1]
+			index.Parts = append(slices.Clone(parts), catalog.CreateAlias("empno"))
+			emp.Indexes = []*plan.IndexDef{index}
+
+			logicPlan, err := runOneStmt(mock, t, "delete from dept where deptno = 1")
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			lookups := 0
+			for _, node := range query.Nodes {
+				if node.NodeType != plan.Node_JOIN || len(node.Children) != 2 {
+					continue
+				}
+				for side, childID := range node.Children {
+					child := query.Nodes[childID]
+					if child.NodeType != plan.Node_TABLE_SCAN || child.TableDef.Name != index.IndexTableName {
+						continue
+					}
+					lookups++
+					// An empty action source has no hidden rows to delete. This
+					// post-createQuery branch must use local input positions.
+					require.Equal(t, plan.Node_INNER, node.JoinType)
+					require.Equal(t, 0, side)
+					require.False(t, node.IsRightJoin)
+					require.Empty(t, child.BindingTags)
+					require.Empty(t, child.RuntimeFilterProbeList)
+					require.Empty(t, node.RuntimeFilterBuildList)
+					require.NotEmpty(t, node.ProjectList)
+					for _, expr := range node.ProjectList {
+						require.NotNil(t, expr.GetCol())
+						require.Contains(t, []int32{0, 1}, expr.GetCol().RelPos)
+					}
+				}
+			}
+			require.Equal(t, 1, lookups)
+		})
+	}
+}
+
 func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
 	t.Run("ordinary child update marks prepare uncacheable", func(t *testing.T) {
 		mock := NewMockOptimizer(true, newPlanTestProcess(t))

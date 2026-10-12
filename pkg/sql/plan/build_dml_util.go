@@ -6558,6 +6558,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	Else IVFFLAT index would fail
 	********/
 	isUpdate := delCtx.updateColLength > 0
+	localCascadeDelete := !isUpdate && delCtx.isFkRecursionCall && delCtx.sourceTag == 0
 
 	var isUk = indexdef.Unique
 	var isSK = !isUk && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo)
@@ -6601,6 +6602,14 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		preserveIndexProjection := delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection
 		preserveActionRows := delCtx.isFkRecursionCall &&
 			(delCtx.sourceTag != 0 || delCtx.preserveUpdateSourceProjection)
+		// Direct DELETE appends its positional CASCADE branches after createQuery.
+		// Only matched hidden rows need deletion; an outer join can emit unrelated
+		// index rows when the action source is empty, and planner tags cannot be
+		// remapped here. Use the local two-input JOIN ABI for the entire branch.
+		if localCascadeDelete {
+			preserveIndexProjection = false
+			preserveActionRows = false
+		}
 		if rebuildCompositeSetNullIndex {
 			// The replacement insert has its own action stream, so this branch only
 			// needs the positional old-row image plus the matched hidden row.
@@ -6624,8 +6633,8 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		}
 		lastNodeId, err = appendDeleteIndexTablePlan(
 			builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap,
-			lastNodeId, isUk, preserveIndexProjection, preserveActionRows, rebuildCompositeSetNullIndex,
-			delCtx.isPostCreateQueryFkSetNullAction,
+			lastNodeId, isUk, preserveIndexProjection, preserveActionRows, rebuildCompositeSetNullIndex || localCascadeDelete,
+			delCtx.isPostCreateQueryFkSetNullAction || localCascadeDelete,
 		)
 		uniqueDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
 		uniqueTblPkPos = uniqueDeleteIdx + 1
@@ -6780,7 +6789,8 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	} else {
 		// it's more simple for delete hidden unique table .so we append nodes after the plan. not recursive call buildDeletePlans
 		delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
-		delNodeInfo.preserveProjection = delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection
+		delNodeInfo.preserveProjection = !localCascadeDelete &&
+			(delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection)
 		lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK, false)
 		putDeleteNodeInfo(delNodeInfo)
 		if err != nil {
