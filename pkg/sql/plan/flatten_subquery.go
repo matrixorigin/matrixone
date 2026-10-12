@@ -1404,6 +1404,43 @@ func (builder *QueryBuilder) casePreservesType(expr *plan.Expr) bool {
 	return err == nil && caseFn.GetReturnType().Eq(sourceType)
 }
 
+// Proof must inspect computed key origins: a comparison's total widening
+// cast does not make a fallible expression hidden behind a Project column total.
+// Inline only the forwarding Project/Filter spine in a private proof copy.
+func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*plan.Expr, inputs ...int32) bool {
+	if !areTruncationSafePredicates(predicates) {
+		return false
+	}
+	var proof []*plan.Expr
+	for _, id := range inputs {
+		for depth := 0; depth < len(builder.qry.Nodes); depth++ {
+			if id < 0 || int(id) >= len(builder.qry.Nodes) {
+				return false
+			}
+			node := builder.qry.Nodes[id]
+			if node.NodeType != plan.Node_PROJECT && node.NodeType != plan.Node_FILTER {
+				break
+			}
+			if node.NodeType == plan.Node_PROJECT {
+				if proof == nil {
+					proof = DeepCopyExprList(predicates)
+				}
+				if len(node.BindingTags) != 1 {
+					return false
+				}
+				for i, predicate := range proof {
+					proof[i] = replaceColRefs(predicate, node.BindingTags[0], node.ProjectList)
+				}
+			}
+			if len(node.Children) != 1 {
+				return false
+			}
+			id = node.Children[0]
+		}
+	}
+	return proof == nil || areTruncationSafePredicates(proof)
+}
+
 func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan.Expr, outerPred *plan.Expr, negate bool, ctx *BindContext) (nodeID int32, markExpr *plan.Expr, err error) {
 	markTag := builder.genNewBindTag()
 	existential := outerPred == nil
@@ -1416,7 +1453,7 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 	// during hash-key lowering. Keep the historical IS TRUE wrapper unless the
 	// predicate is proven total and side-effect-free.
 	keepRawExistential := existential && !builder.subqueryPredicatePlanningDisabled() &&
-		areTruncationSafePredicates(joinPreds)
+		builder.existentialJoinPredicatesAreTotal(joinPreds, left, right)
 	if !keepRawExistential {
 		for i, pred := range joinPreds {
 			if !pred.Typ.NotNullable {
