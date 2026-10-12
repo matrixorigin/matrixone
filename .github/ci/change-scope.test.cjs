@@ -300,9 +300,10 @@ test('entrypoint routes each scope through one required check', () => {
   assert.deepEqual(gateNeeds.slice().sort(), Object.keys(results()).sort());
   for (const job of ['matrixone-ci', 'matrixone-ut-coverage', 'matrixone-compose-ci',
     'matrixone-standalone-ci', 'matrixone-coverage-merge']) {
-    assert.match(blocks[job], /name: .* execution\n/);
     assert.ok(gates.match(/^    needs: (.*)$/m)[1].includes(job));
   }
+  assert.match(blocks['matrixone-ut-coverage'], /^    name: Matrixone UT Coverage execution$/m);
+  assert.match(blocks['matrixone-utils-ci'], /^    name: Matrixone Utils CI$/m);
   for (const job of ['preflight', 'ci-required']) {
     assert.match(blocks[job], /repository: \$\{\{ github.repository \}\}/);
     assert.match(blocks[job], /ref: \$\{\{ github.workflow_sha \}\}/);
@@ -320,6 +321,26 @@ test('entrypoint routes each scope through one required check', () => {
     assert.match(provenanceBlock, /echo "- Workflow SHA: \$\{WORKFLOW_SHA\}"/);
     assert.match(provenanceBlock, /echo "- PR base SHA: \$\{PR_BASE_SHA\}"/);
     assert.match(provenanceBlock, /echo "- PR head SHA: \$\{PR_HEAD_SHA\}"/);
+  }
+});
+
+test('legacy 4.2-dev component check names are scoped to that base', () => {
+  const blocks = entrypointJobs();
+  const names = {
+    'matrixone-ci': ['Matrixone CI execution', 'Matrixone CI'],
+    'matrixone-compose-ci': ['Matrixone Compose CI execution', 'Matrixone Compose CI'],
+    'matrixone-standalone-ci': ['Matrixone Standlone CI execution', 'Matrixone Standlone CI'],
+    'matrixone-coverage-merge': ['Matrixone Coverage execution', 'Matrixone Utils CI'],
+  };
+  const otherBases = [undefined, '', 'main', '4.0-dev', '4.1-dev', '3.0-dev', 'release'];
+  for (const [job, [currentName, legacyName]] of Object.entries(names)) {
+    const expression = blocks[job].match(/^    name: \$\{\{ (.*) \}\}$/m)?.[1];
+    assert.ok(expression, `${job} chooses its display name by target base`);
+    const resolveName = baseRef => runInNewContext(expression, { github: { base_ref: baseRef } });
+    assert.equal(resolveName('4.2-dev'), legacyName, `${job} restores the protected 4.2-dev prefix`);
+    for (const baseRef of otherBases) {
+      assert.equal(resolveName(baseRef), currentName, `${job} keeps its existing name for ${baseRef ?? 'missing'} base`);
+    }
   }
 });
 

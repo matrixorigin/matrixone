@@ -29,9 +29,13 @@ One `CI Required` summary job checks the existing required prerequisites for the
 selected scope, including classification and PR validation. A skipped,
 cancelled, failed or absent required job is not a pass. Its summary explicitly
 states the scope and intentional omissions. Actual test results remain visible
-under the reusable workflow calls named `... execution`. This replaces six
-identical summary jobs with one runner allocation and gives the aggregate result
-a distinct name rather than labeling it as an individual test's result.
+under the reusable workflow calls. Their caller names retain the `... execution`
+suffix on every target except `4.2-dev`, which still requires five legacy nested
+check contexts. For that base, the CI, Compose, Standlone and coverage-merge
+callers use the historical prefixes required by branch protection. The Utils
+caller already uses `Matrixone Utils CI` and is unchanged. This only selects the
+display prefix; job IDs, test selection, prerequisites and the `CI Required`
+gate are unchanged. The aggregate gate remains distinct from each test result.
 
 Preflight publishes the original `pr_valid` and `scope` outputs plus both BVT
 groups and their run/attempt generation. All BVT and coverage consumers take the
@@ -49,14 +53,16 @@ tests can still reduce coverage, so test-only exemptions do not establish that
 coverage has stayed constant. Use a full run when reviewing that risk.
 Existing 3.0-dev routing is unchanged.
 
-Branch protection must require `CI Required` from GitHub Actions in place of the
-six former aggregate check names. Preserve the existing strict/up-to-date setting
-and unrelated protection rules. Because the entrypoint uses `pull_request_target`,
-the new check appears on runs triggered after this change lands in the target
-branch. Verify a new run emits `CI Required`, then switch protection; until the
-switch, the old required names can remain pending. Old workflow runs do not emit
-the new name and need a new PR event after rollout. No CI-repository change is
-required. Test selection and prerequisite validation are unchanged.
+Main branch protection requires `CI Required` from GitHub Actions in place of the
+six former aggregate check names. The protected `4.2-dev` branch still requires
+its five historical nested test contexts. Because `pull_request_target` takes
+the workflow file from the repository's default branch, this compatibility rule
+must land on the default branch; a change only to `4.2-dev` would not affect its
+PR runs. After the default-branch rollout, a new PR event targeting `4.2-dev`
+will emit the restored prefixes when those reusable test jobs run. Existing
+scope routing is unchanged, so this name mapping does not make a skipped suite
+run or create a nested test context. No branch-protection settings, CI-repository
+files, test selection or prerequisite validation are changed.
 
 ## Cancellation and superseded runs
 

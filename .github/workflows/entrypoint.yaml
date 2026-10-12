@@ -117,8 +117,11 @@ jobs:
     uses: matrixorigin/CI/.github/workflows/build-mo.yaml@main
 
   # ============ 非 3.0-dev 分支使用 @main ============
+  # pull_request_target uses the default-branch workflow for every base. The
+  # protected 4.2-dev branch still requires the legacy nested check names, so
+  # keep those prefixes for that base without changing names on other bases.
   matrixone-ci:
-    name: Matrixone CI execution
+    name: ${{ github.base_ref == '4.2-dev' && 'Matrixone CI' || 'Matrixone CI execution' }}
     needs: [preflight]
     if: ${{ needs.preflight.outputs.pr_valid == 'true' && contains(fromJSON('["full","ut"]'), needs.preflight.outputs.scope) && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/ci.yaml@main
@@ -152,7 +155,7 @@ jobs:
   # genuine compile failure therefore costs two duplicate failures instead of
   # silently skipping both BVT suites.
   matrixone-compose-ci:
-    name: Matrixone Compose CI execution
+    name: ${{ github.base_ref == '4.2-dev' && 'Matrixone Compose CI' || 'Matrixone Compose CI execution' }}
     needs: [preflight, matrixone-shared-build]
     if: ${{ !cancelled() && needs.preflight.outputs.pr_valid == 'true' && contains(fromJSON('["full","bvt"]'), needs.preflight.outputs.scope) && needs.preflight.result == 'success' && needs.matrixone-shared-build.result != 'cancelled' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/e2e-compose-parallel.yaml@main
@@ -163,7 +166,7 @@ jobs:
     secrets: inherit
 
   matrixone-standalone-ci:
-    name: Matrixone Standlone CI execution
+    name: ${{ github.base_ref == '4.2-dev' && 'Matrixone Standlone CI' || 'Matrixone Standlone CI execution' }}
     needs: [preflight, matrixone-shared-build]
     if: ${{ !cancelled() && needs.preflight.outputs.pr_valid == 'true' && contains(fromJSON('["full","bvt"]'), needs.preflight.outputs.scope) && needs.preflight.result == 'success' && needs.matrixone-shared-build.result != 'cancelled' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/e2e-standalone-parallel.yaml@main
@@ -181,7 +184,7 @@ jobs:
     secrets: inherit
 
   matrixone-coverage-merge:
-    name: Matrixone Coverage execution
+    name: ${{ github.base_ref == '4.2-dev' && 'Matrixone Utils CI' || 'Matrixone Coverage execution' }}
     needs: [preflight, matrixone-ut-coverage, matrixone-compose-ci, matrixone-standalone-ci]
     if: ${{ !cancelled() && needs.preflight.outputs.pr_valid == 'true' && needs.preflight.outputs.scope == 'full' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/coverage-merge.yaml@main
