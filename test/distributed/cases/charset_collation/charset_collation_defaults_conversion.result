@@ -168,6 +168,27 @@ select v,hex(v) from repertoire_conversion;
 select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='repertoire_conversion' and column_name='v';
 ➤ collation_name[12,18,0]  𝄀
 utf8mb4_bin
+alter table repertoire_conversion default collate=utf8mb4_bin, modify v varchar(8);
+select v,hex(v) from repertoire_conversion;
+➤ v[12,8,0]  ¦  hex(v)[12,64,0]  𝄀
+😀  ¦  F09F9880
+select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='repertoire_conversion' and column_name='v';
+➤ collation_name[12,18,0]  𝄀
+utf8mb4_bin
+select table_collation from information_schema.tables where table_schema='charset_defaults_contract' and table_name='repertoire_conversion';
+➤ table_collation[12,64,0]  𝄀
+utf8mb4_bin
+alter table repertoire_conversion default collate=utf8_unicode_ci;
+alter table repertoire_conversion change v v varchar(8), default collate=utf8mb4_bin;
+select v,hex(v) from repertoire_conversion;
+➤ v[12,8,0]  ¦  hex(v)[12,64,0]  𝄀
+😀  ¦  F09F9880
+select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='repertoire_conversion' and column_name='v';
+➤ collation_name[12,18,0]  𝄀
+utf8mb4_bin
+select table_collation from information_schema.tables where table_schema='charset_defaults_contract' and table_name='repertoire_conversion';
+➤ table_collation[12,64,0]  𝄀
+utf8mb4_bin
 alter table defaults_target default collate=utf8_unicode_ci, modify v varchar(8);
 select v from defaults_target order by n;
 ➤ v[12,8,0]  𝄀

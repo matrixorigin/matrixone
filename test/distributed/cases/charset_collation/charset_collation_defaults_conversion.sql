@@ -78,6 +78,16 @@ alter table repertoire_conversion default collate=utf8_unicode_ci;
 alter table repertoire_conversion modify v varchar(8) collate utf8mb4_bin;
 select v,hex(v) from repertoire_conversion;
 select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='repertoire_conversion' and column_name='v';
+-- 最终default回到旧列域时，MODIFY/同名CHANGE无需转换并保留emoji。
+alter table repertoire_conversion default collate=utf8mb4_bin, modify v varchar(8);
+select v,hex(v) from repertoire_conversion;
+select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='repertoire_conversion' and column_name='v';
+select table_collation from information_schema.tables where table_schema='charset_defaults_contract' and table_name='repertoire_conversion';
+alter table repertoire_conversion default collate=utf8_unicode_ci;
+alter table repertoire_conversion change v v varchar(8), default collate=utf8mb4_bin;
+select v,hex(v) from repertoire_conversion;
+select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='repertoire_conversion' and column_name='v';
+select table_collation from information_schema.tables where table_schema='charset_defaults_contract' and table_name='repertoire_conversion';
 alter table defaults_target default collate=utf8_unicode_ci, modify v varchar(8);
 select v from defaults_target order by n;
 select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='defaults_target' and column_name='v';

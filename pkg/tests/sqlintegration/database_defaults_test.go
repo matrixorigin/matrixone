@@ -211,6 +211,26 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 			require.Equal(t, 1, count(t, "select count(*) from combined_default_only where v='😀'"))
 			exec(t, first, "alter table combined_default_only modify v varchar(8) collate utf8mb4_bin")
 			require.Equal(t, 1, count(t, "select count(*) from combined_default_only where v='😀'"))
+			// Returning the final default to the stored domain is metadata-only,
+			// even when the old table default differs from its existing column.
+			for _, option := range []string{
+				"default collate=utf8mb4_bin, modify v varchar(8)",
+				"modify v varchar(8), default collate=utf8mb4_bin",
+				"default collate=utf8mb4_bin, change v v varchar(8)",
+				"change v v varchar(8), default collate=utf8mb4_bin",
+				"default collate=utf8mb4_bin, modify v varchar(8), algorithm=inplace",
+				"default collate=utf8mb4_bin, modify v varchar(8), algorithm=copy",
+			} {
+				t.Run(option, func(t *testing.T) {
+					exec(t, first, "alter table combined_default_only default collate=utf8_unicode_ci")
+					exec(t, first, "alter table combined_default_only "+option)
+					require.Equal(t, "utf8mb4_bin", collation(t, "combined_default_only", "v"))
+					var tableDefault string
+					require.NoError(t, first.QueryRowContext(ctx, "select table_collation from information_schema.tables where table_schema=? and table_name='combined_default_only'", schema).Scan(&tableDefault))
+					require.Equal(t, "utf8mb4_bin", tableDefault)
+					require.Equal(t, 1, count(t, "select count(*) from combined_default_only where v='😀'"))
+				})
+			}
 			// Compatible bytes are still admitted, with the new domain published.
 			exec(t, first, "create table combined_ascii(v varchar(8)) collate utf8mb4_bin")
 			exec(t, first, "insert into combined_ascii values ('ascii')")

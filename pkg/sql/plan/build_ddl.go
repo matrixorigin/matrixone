@@ -7199,8 +7199,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			continue
 
 		case *tree.AlterTableModifyColumnClause:
-			// defensively check again
-			ok, _ := isInplaceModifyColumn(ctx.GetContext(), opt, tableDef)
+			// Recheck against the same final default used by algorithm admission
+			// and column binding, not the source table's future default.
+			ok, _ := isInplaceModifyColumn(ctx.GetContext(), opt, currentTableDef)
 			if !ok {
 				return nil, moerr.NewInvalidInputf(
 					ctx.GetContext(),
@@ -7227,7 +7228,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterTableChangeColumnClause:
 			// A same-name CHANGE with an unchanged storage layout has the same
 			// execution semantics as MODIFY, but historically took the COPY path.
-			ok, _ := isInplaceChangeColumn(ctx.GetContext(), opt, tableDef)
+			// Its defensive check must also use the final inherited domain.
+			ok, _ := isInplaceChangeColumn(ctx.GetContext(), opt, currentTableDef)
 			if !ok {
 				return nil, moerr.NewInvalidInputf(
 					ctx.GetContext(),
