@@ -380,6 +380,18 @@ The artifact acceptance command reports local completion, with required CI and
 reviewer approval remaining. Generated captures and raw repetitions stay outside
 Git; the original D archive below retains its original measurements.
 
+The delivery sync includes authoritative main `11914526ba` (MEDIUMINT,
+prepared-parameter, SHOW GRANTS, window and Parquet fixes). Canonical SQL,
+native bridge/lowering, reader ownership, public campaign evidence and
+collectors are unchanged. The new type/protocol branches concern MEDIUMINT or
+prepared parameters; the immutable campaign uses ordinary column domains and
+text-protocol queries. All eight affected SQL owning suites and all 22 actual
+native preparations pass after this sync. The distributed-IVF protocol fixture
+now explicitly selects its required centroid route through `gpu_mode=0`,
+preserving all supported/old/unknown/cancellation assertions. Its earlier
+GPU-default failure reproduced on the old-native baseline. This test correction
+changes no production dispatch or captured measurement.
+
 ## Release validation record
 
 The generated development and release captures are preserved in contributor-fork

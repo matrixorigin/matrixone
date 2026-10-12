@@ -282,6 +282,14 @@ func TestRequiredIVFWorkersFallbackAsWholeQuery(t *testing.T) {
 	for _, mode := range []string{"supported", "old", "unknown", "canceled"} {
 		t.Run(mode, func(t *testing.T) {
 			c, client := vectorPlacementCompile(t, engine.Nodes{{Id: "a", Addr: "a:6001"}, {Id: "b", Addr: "b:6001"}})
+			// This protocol fixture requires the CPU centroid route on every
+			// worker, including when the binary's default enables GPU dispatch.
+			c.proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+				if name == "gpu_mode" {
+					return int8(0), nil
+				}
+				return nil, nil
+			})
 			moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion103)
 			client.version = defines.MORPCVersion103
 			typ := plan.Type{Id: int32(types.T_int64)}
