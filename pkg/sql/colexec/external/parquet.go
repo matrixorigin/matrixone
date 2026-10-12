@@ -3169,7 +3169,8 @@ func appendParquetVarlenValue(
 	width := int(typ.Width)
 	switch typ.Oid {
 	case types.T_char, types.T_varchar:
-		if width > 0 {
+		// Zero is a declared capacity; only negative internal widths are unbounded.
+		if width >= 0 {
 			if !utf8.Valid(value) {
 				return moerr.NewInvalidInputf(ctx, "invalid UTF-8 value for %s", typ.Oid.String())
 			}
