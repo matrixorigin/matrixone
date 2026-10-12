@@ -1,4 +1,4 @@
-- Status: proposed — independent architectural assessment recorded; allocation corrected; pending approval of the corrected revision
+- Status: in progress — independently accepted design; implementation under review
 - Start Date: 2026-09-03
 - Authors: MatrixOne maintainers
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/27716
@@ -28,10 +28,14 @@ The remaining non-blocking duplicate persisted-expression walk is removed by
 consuming the existing `ViewMetadataFunctions` result; the persisted marker and
 read/authoring admission remain separate consumers of that shared detection.
 
-This records the independent assessment and its concrete correction. It does
-not turn the REQUEST_CHANGES decision on the earlier revision into a blanket
-approval of the corrected implementation. Approval of that revision remains an
-external review state.
+[Independent review 5496922722](https://github.com/matrixorigin/matrixone/pull/27716#pullrequestreview-5496922722)
+records a distinct design **PASS** for the corrected revision
+`a766542fb6083e3198e0f7bc5eece33fa20193a6` on 2026-10-12. It confirms the
+function allocation and shared persisted-feature detection, accepts the
+documented tradeoffs above, and reports no additional actionable code defect.
+Its remaining requirement is to record that acceptance and advance this RFC
+to the accepted `in progress` state. This status follows that independent
+decision; implementation approval remains a separate GitHub review state.
 
 ## Summary
 
@@ -291,6 +295,6 @@ unchanged by this compatibility-check optimization.
 
 ## Unresolved questions
 
-None. The independent architectural assessment and allocation correction are
-recorded above. This RFC remains proposed pending approval of the corrected
-revision; it does not self-approve the implementation.
+None. The independent design PASS for the corrected revision is recorded above,
+and the RFC is accepted and in progress. Implementation approval remains a
+separate GitHub review state.
