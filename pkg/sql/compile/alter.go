@@ -886,7 +886,7 @@ func isAlterAffectedColumnName(affected []string, name string) bool {
 }
 
 func alterCopyStatementOption(alterOpt *plan.AlterCopyOpt) executor.StatementOption {
-	opt := executor.StatementOption{}
+	opt := executor.StatementOption{}.WithDisableLock()
 	if alterOpt != nil &&
 		(alterOpt.SkipPkDedup || len(alterOpt.SkipUniqueIdxDedup) > 0 || len(alterOpt.NewPluginIndexes) > 0) {
 		opt = opt.WithAlterCopyOpt(alterOpt)
@@ -1407,20 +1407,6 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	if err = validateAlterDataBranchLineageColumnReplacement(qry, lineagePlan); err != nil {
 		return err
 	}
-	if !isTemp && c.isLifecycleRC() {
-		var added []*plan.AlterTableAddFk
-		for _, action := range qry.Actions {
-			if fk := action.GetAddFk(); fk != nil {
-				added = append(added, fk)
-			}
-		}
-		replacementAdmission.createNames, err = c.admitReplacementNames(
-			dbName, tblName, qry.CopyTableDef.Name, originRel, added,
-		)
-		if err != nil {
-			return err
-		}
-	}
 	if initialSnapshotAdvanced {
 		lineagePlan.cloneTS = lineageCloneTS
 	} else {
@@ -1473,6 +1459,13 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			c, qry, sourceTableDef, sourceForeignKeys,
 			sourceRefChildTbls, oldId, dbName, tblName,
 		); err != nil {
+			return err
+		}
+	}
+
+	var preparationLockBaseline map[uint64]struct{}
+	if !isTemp && c.isLifecycleRC() {
+		if preparationLockBaseline, err = c.retainedLockTableIDs(); err != nil {
 			return err
 		}
 	}
@@ -1609,12 +1602,30 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	if !isTemp {
 		var publicationRel engine.Relation
 		if c.isLifecycleRC() {
-			dbSource, publicationRel, err = c.admitBroadTableLifecycleRC(dbName, tblName, oldId)
+			privatePreparationLockTables, err := c.privatePreparationLockTables(preparationLockBaseline)
+			if err != nil {
+				return err
+			}
+			dbSource, publicationRel, err = c.admitBroadTableLifecycleRC(
+				dbName, tblName, oldId, privatePreparationLockTables...,
+			)
 			if err != nil {
 				return c.alterCopyPostPublicationRetryConflict(err)
 			}
 			if plannedID := qry.TableDef.GetTblId(); plannedID != 0 && plannedID != oldId {
 				return c.alterCopyPostPublicationConflict("planned relation id changed")
+			}
+			var added []*plan.AlterTableAddFk
+			for _, action := range qry.Actions {
+				if fk := action.GetAddFk(); fk != nil {
+					added = append(added, fk)
+				}
+			}
+			replacementAdmission.createNames, err = c.admitReplacementNames(
+				dbName, tblName, qry.CopyTableDef.Name, originRel, added, lock.WaitPolicy_Wait,
+			)
+			if err != nil {
+				return c.alterCopyPostPublicationRetryConflict(err)
 			}
 		} else if lineageTxnOp.Txn().IsPessimistic() {
 			if err = c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {

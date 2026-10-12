@@ -842,6 +842,216 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 	})
 }
 
+func TestIssue29400IndependentCopyAltersProgressInPessimisticRC(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		cn0, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		cn1, err := cluster.GetCNService(1)
+		require.NoError(t, err)
+		db0, err := sql.Open("mysql", issue27487DSN(cn0.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db0.Close()
+		db1, err := sql.Open("mysql", issue27487DSN(cn1.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db1.Close()
+		conn0, err := db0.Conn(ctx)
+		require.NoError(t, err)
+		defer conn0.Close()
+		conn1, err := db1.Conn(ctx)
+		require.NoError(t, err)
+		defer conn1.Close()
+		conn2, err := db1.Conn(ctx)
+		require.NoError(t, err)
+		defer conn2.Close()
+		for _, conn := range []*sql.Conn{conn0, conn1, conn2} {
+			_, err = conn.ExecContext(ctx, "set session transaction_isolation='READ-COMMITTED'")
+			require.NoError(t, err)
+			var isolation string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@transaction_isolation").Scan(&isolation))
+			require.Equal(t, "READ-COMMITTED", isolation)
+		}
+		var registryID uint64
+		require.NoError(t, conn0.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_feature_registry'").Scan(&registryID))
+
+		t.Run("held_explicit_transaction", func(t *testing.T) {
+			const database = "issue_29400_rc_held_publisher"
+			execSQLRequire(t, ctx, db0, "create database "+database)
+			defer func() {
+				cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
+				defer done()
+				_, _ = conn0.ExecContext(cleanupCtx, "drop database if exists "+database)
+			}()
+			for _, query := range []string{
+				"create table " + database + ".t1(id int primary key, v int)",
+				"create table " + database + ".t2(id int primary key, v int)",
+				"insert into " + database + ".t1 values(1, 1)",
+				"insert into " + database + ".t2 values(1, 1)",
+			} {
+				execSQLRequire(t, ctx, db0, query)
+			}
+
+			holder, err := conn0.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			defer holder.Rollback()
+			_, err = holder.ExecContext(ctx,
+				"alter table "+database+".t1 algorithm=copy, add column extra int")
+			require.NoError(t, err, "the explicit COPY ALTER must complete while retaining publication admission")
+
+			waitingAtGate := make(chan struct{}, 1)
+			restoreHook := lockservice.SetWaiterEnqueuedHookForTest(func(tableID uint64, _ []byte, _ [][]byte) {
+				if tableID == registryID {
+					select {
+					case waitingAtGate <- struct{}{}:
+					default:
+					}
+				}
+			})
+			defer restoreHook()
+			otherCtx, cancelOther := context.WithTimeout(ctx, 30*time.Second)
+			defer cancelOther()
+			otherDone := make(chan error, 1)
+			go func() {
+				_, otherErr := conn1.ExecContext(otherCtx,
+					"alter table "+database+".t2 algorithm=copy, add column extra int")
+				otherDone <- otherErr
+			}()
+			select {
+			case <-waitingAtGate:
+			case otherErr := <-otherDone:
+				t.Fatalf("independent COPY ALTER finished before the holder committed: %v", otherErr)
+			case <-time.After(15 * time.Second):
+				t.Fatal("independent COPY ALTER never waited at the publication gate")
+			}
+			select {
+			case otherErr := <-otherDone:
+				t.Fatalf("independent COPY ALTER failed while the holder retained the gate: %v", otherErr)
+			default:
+			}
+			require.NoError(t, holder.Commit())
+			select {
+			case otherErr := <-otherDone:
+				require.NoError(t, otherErr)
+			case <-time.After(15 * time.Second):
+				t.Fatal("independent COPY ALTER did not finish after the holder committed")
+			}
+			for _, table := range []string{"t1", "t2"} {
+				execSQLRequire(t, ctx, db0,
+					"insert into "+database+"."+table+" values(2, 2, 2)")
+			}
+		})
+
+		t.Run("overlapping_autocommit_publishers", func(t *testing.T) {
+			const database = "issue_29400_rc_autocommit_publishers"
+			execSQLRequire(t, ctx, db0, "create database "+database)
+			defer func() {
+				cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
+				defer done()
+				_, _ = conn0.ExecContext(cleanupCtx, "drop database if exists "+database)
+			}()
+			for _, query := range []string{
+				"create table " + database + ".t1(id int primary key, v int)",
+				"create table " + database + ".t2(id int primary key, v int)",
+				"insert into " + database + ".t1 values(1, 1)",
+				"insert into " + database + ".t2 values(1, 1)",
+			} {
+				execSQLRequire(t, ctx, db0, query)
+			}
+
+			holder, err := conn0.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			defer holder.Rollback()
+			_, err = holder.ExecContext(ctx, "update "+database+".t1 set v=2 where id=1")
+			require.NoError(t, err)
+
+			waitingForSource := make(chan struct{}, 1)
+			waitingAtGate := make(chan struct{}, 1)
+			restoreHook := lockservice.SetWaiterEnqueuedHookForTest(func(tableID uint64, _ []byte, _ [][]byte) {
+				switch tableID {
+				case catalog.MO_TABLES_ID:
+					select {
+					case waitingForSource <- struct{}{}:
+					default:
+					}
+				case registryID:
+					select {
+					case waitingAtGate <- struct{}{}:
+					default:
+					}
+				}
+			})
+			defer restoreHook()
+			firstCtx, cancelFirst := context.WithTimeout(ctx, 30*time.Second)
+			defer cancelFirst()
+			firstDone := make(chan error, 1)
+			go func() {
+				_, firstErr := conn1.ExecContext(firstCtx,
+					"alter table "+database+".t1 algorithm=copy, add column extra int")
+				firstDone <- firstErr
+			}()
+			select {
+			case <-waitingForSource:
+			case firstErr := <-firstDone:
+				t.Fatalf("source COPY ALTER bypassed the UPDATE holder: %v", firstErr)
+			case <-time.After(15 * time.Second):
+				t.Fatal("source COPY ALTER never waited for the UPDATE holder")
+			}
+			select {
+			case firstErr := <-firstDone:
+				t.Fatalf("source COPY ALTER failed before the UPDATE holder released: %v", firstErr)
+			default:
+			}
+
+			secondCtx, cancelSecond := context.WithTimeout(ctx, 30*time.Second)
+			defer cancelSecond()
+			secondDone := make(chan error, 1)
+			go func() {
+				_, secondErr := conn2.ExecContext(secondCtx,
+					"alter table "+database+".t2 algorithm=copy, add column extra int")
+				secondDone <- secondErr
+			}()
+			select {
+			case <-waitingAtGate:
+			case secondErr := <-secondDone:
+				t.Fatalf("independent COPY ALTER finished before the source waiter released: %v", secondErr)
+			case <-time.After(15 * time.Second):
+				t.Fatal("independent COPY ALTER never waited at the publication gate")
+			}
+			select {
+			case secondErr := <-secondDone:
+				t.Fatalf("independent COPY ALTER failed while the source waiter retained the gate: %v", secondErr)
+			default:
+			}
+
+			require.NoError(t, holder.Rollback())
+			for _, result := range []struct {
+				name string
+				done chan error
+			}{
+				{name: "source", done: firstDone},
+				{name: "independent", done: secondDone},
+			} {
+				select {
+				case err := <-result.done:
+					require.NoError(t, err, result.name+" COPY ALTER must finish after the holder rolls back")
+				case <-time.After(15 * time.Second):
+					t.Fatal(result.name + " COPY ALTER did not finish after the holder rolled back")
+				}
+			}
+			var value int
+			require.NoError(t, conn0.QueryRowContext(ctx,
+				"select v from "+database+".t1 where id=1").Scan(&value))
+			require.Equal(t, 1, value, "the blocking UPDATE must roll back")
+			for _, table := range []string{"t1", "t2"} {
+				execSQLRequire(t, ctx, db0,
+					"insert into "+database+"."+table+" values(2, 2, 2)")
+			}
+		})
+	})
+}
+
 func TestIssue29400DropDatabaseDoesNotHoldBranchDAGAfterTable(t *testing.T) {
 	faultEnabledHere := fault.Enable()
 	if faultEnabledHere {

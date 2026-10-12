@@ -3402,6 +3402,19 @@ func TestAlterCopyCreateOptionsDisablesNestedCreateLock(t *testing.T) {
 	require.Equal(t, "rel", kind)
 }
 
+func TestAlterCopyStatementOptionsDisableNestedStatementLock(t *testing.T) {
+	require.True(t, alterCopyStatementOption(nil).DisableLock())
+	require.True(t, alterCopyStatementOption(&plan2.AlterCopyOpt{}).DisableLock())
+}
+
+func TestCompileInternalStatementOptionInheritsDisableLock(t *testing.T) {
+	require.False(t, (&Compile{}).internalStatementOption(executor.StatementOption{}).DisableLock())
+	require.True(t, (&Compile{disableLock: true}).internalStatementOption(executor.StatementOption{}).DisableLock())
+	require.True(t, (&Compile{disableLock: true}).internalStatementOption(
+		executor.StatementOption{}.WithDisableLog(),
+	).DisableLog())
+}
+
 func TestAlterCopySourceChangedSinceCopyUsesSourceCommitTS(t *testing.T) {
 	compile := &Compile{proc: testutil.NewProcess(t)}
 	cases := []struct {
