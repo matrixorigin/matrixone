@@ -13,7 +13,15 @@
 # limitations under the License.
 
 import copy
+import contextlib
+import hashlib
+import io
+import json
+from pathlib import Path
+import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 
 import sirius_acceptance as acceptance
 import sirius_campaign_v2 as campaign
@@ -220,6 +228,131 @@ def evidence():
 
 
 class AcceptanceTest(unittest.TestCase):
+    def test_cli_binds_consumed_inputs_to_archive_checksums(self):
+        inputs = evidence()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            names = [
+                "timing/campaign.json",
+                "timing/runs.jsonl",
+                "resource/campaign.json",
+                "resource/runs.jsonl",
+                "allocations.json",
+                "lifecycle.json",
+                "sanitizer.json",
+                "baselines.json",
+            ]
+            for name, value in zip(names, inputs):
+                file = root / name
+                file.parent.mkdir(parents=True, exist_ok=True)
+                if name.endswith("jsonl"):
+                    file.write_text("".join(json.dumps(row) + "\n" for row in value))
+                else:
+                    file.write_text(json.dumps(value))
+            hashes = {
+                name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+                for name in names
+            }
+            manifest = root / "checksums.json"
+            manifest.write_text(json.dumps(hashes))
+            arguments = [
+                "sirius_acceptance",
+                "--timing",
+                str(root / "timing"),
+                "--resource",
+                str(root / "resource"),
+            ]
+            for option in ("allocations", "lifecycle", "sanitizer", "baselines"):
+                arguments += ["--" + option, str(root / (option + ".json"))]
+            with patch.object(sys, "argv", arguments), contextlib.redirect_stdout(
+                io.StringIO()
+            ) as output:
+                acceptance.main()
+            self.assertTrue(json.loads(output.getvalue())["local_acceptance_complete"])
+            rows = inputs[1]
+            native = next(row for row in rows if row["route"] == "mo-native")
+            native["row_count"] = 5
+            target = root / "timing/runs.jsonl"
+            target.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            with patch.object(sys, "argv", arguments):
+                with self.assertRaisesRegex(
+                    campaign.CampaignError, "checksum mismatch"
+                ):
+                    acceptance.main()
+            # Rehashing a contradictory archive cannot replace cross-route validation.
+            hashes["timing/runs.jsonl"] = hashlib.sha256(
+                target.read_bytes()
+            ).hexdigest()
+            manifest.write_text(json.dumps(hashes))
+            with patch.object(sys, "argv", arguments):
+                with self.assertRaisesRegex(
+                    campaign.CampaignError, "cardinality mismatch"
+                ):
+                    acceptance.main()
+            del hashes["timing/runs.jsonl"]
+            manifest.write_text(json.dumps(hashes))
+            with patch.object(sys, "argv", arguments):
+                with self.assertRaisesRegex(
+                    campaign.CampaignError, "lacks an archive checksum"
+                ):
+                    acceptance.main()
+
+    def test_declared_flight_retained_pairs_use_the_native_oracle(self):
+        inputs = evidence()
+        profile = {
+            "id": "flight-mo",
+            "coverage": [1],
+            "provenance": {
+                "matrixone_revision": "a" * 40,
+                "sirius_revision": "b" * 40,
+                "launcher_sha256": "1" * 64,
+                "configuration_sha256": "2" * 64,
+                "server_binary_sha256": "3" * 64,
+                "tn_no_gc_verified": False,
+            },
+        }
+        manifest = campaign.build_campaign(
+            inputs[0]["provenance"], flight_profiles=[profile]
+        )
+        original = {
+            (campaign.legacy._oracle_cell(row), row["route"]): row for row in inputs[1]
+        }
+        rows = []
+        for spec in manifest["schedule"]:
+            route = "mo-native" if spec["route"] == "flight-mo" else spec["route"]
+            row = copy.deepcopy(original[(campaign.legacy._oracle_cell(spec), route)])
+            row.update(spec, query_id=f"{50000+spec['sequence']:032x}")
+            rows.append(row)
+        campaign.summarize(manifest, rows)
+        peer = next(row for row in rows if row["route"] == "flight-mo")
+        peer["row_count"] = 5
+        with self.assertRaisesRegex(campaign.CampaignError, "cardinality mismatch"):
+            campaign.summarize(manifest, rows)
+
+    def test_retained_oracle_pairs_reject_count_schema_and_identity_drift(self):
+        for records_index in (1, 3):
+            for mutation in (
+                lambda row: row.update(row_count=5),
+                lambda row: row["output_schema"][0].update(oid=24),
+                lambda row: row.update(output_schema_sha256="c" * 64),
+            ):
+                with self.subTest(records=records_index, mutation=mutation):
+                    inputs = evidence()
+                    native = next(
+                        row
+                        for row in inputs[records_index]
+                        if row["route"] == "mo-native"
+                    )
+                    mutation(native)
+                    with self.assertRaises(campaign.CampaignError):
+                        acceptance.validate(*inputs)
+
+    def test_retained_pair_does_not_require_equal_ordered_spool_hashes(self):
+        inputs = evidence()
+        native = next(row for row in inputs[1] if row["route"] == "mo-native")
+        native["result_sha256"] = "f" * 64
+        self.assertTrue(acceptance.validate(*inputs)["local_acceptance_complete"])
+
     def test_matched_sanitizer_controls_preserve_raw_nonzero_status(self):
         inputs = evidence()
         report = inputs[6]

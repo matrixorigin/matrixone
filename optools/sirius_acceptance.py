@@ -15,6 +15,7 @@
 
 """Fail-closed final acceptance of complete, source-matched v2 evidence."""
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -539,6 +540,53 @@ def validate(
     return timing_summary
 
 
+def checked_artifacts(manifest, paths):
+    """Check the archive, and parse exactly the consumed bytes that were hashed."""
+    root = manifest.parent.resolve()
+    try:
+        with manifest.open("rb") as file:
+            raw = file.read((1 << 20) + 1)
+    except OSError as error:
+        raise campaign.CampaignError(
+            "archive checksum manifest is unreadable"
+        ) from error
+    if len(raw) > 1 << 20:
+        raise campaign.CampaignError("archive checksum manifest exceeds bound")
+    hashes = json.loads(raw)
+    if not isinstance(hashes, dict) or not hashes:
+        raise campaign.CampaignError("archive checksum manifest is empty or invalid")
+    wanted, data = {path.resolve() for path in paths}, {}
+    if any(not path.is_relative_to(root) for path in wanted):
+        raise campaign.CampaignError("acceptance input is outside the archive")
+    for name, expected in hashes.items():
+        if (
+            not isinstance(name, str)
+            or not 0 < len(name) <= 512
+            or Path(name).is_absolute()
+            or Path(name).as_posix() != name
+            or ".." in Path(name).parts
+            or not campaign.legacy._is_sha256(expected)
+        ):
+            raise campaign.CampaignError("invalid archive checksum entry")
+        path = root / name
+        if path.resolve() != path or not path.is_file():
+            raise campaign.CampaignError("archive artifact is missing or redirected")
+        digest = hashlib.sha256()
+        with path.open("rb") as file:
+            if path in wanted:
+                value = file.read()
+                digest.update(value)
+                data[path] = value
+            else:
+                for chunk in iter(lambda: file.read(64 << 10), b""):
+                    digest.update(chunk)
+        if digest.hexdigest() != expected:
+            raise campaign.CampaignError("archive artifact checksum mismatch")
+    if wanted != set(data):
+        raise campaign.CampaignError("acceptance input lacks an archive checksum")
+    return data
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in (
@@ -550,14 +598,31 @@ def main():
         "baselines",
     ):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument(
+        "--checksums", type=Path, help="Archive checksums.json (default: timing parent)"
+    )
     args = parser.parse_args()
+    paths = [
+        args.timing / "campaign.json",
+        args.timing / "runs.jsonl",
+        args.resource / "campaign.json",
+        args.resource / "runs.jsonl",
+        args.allocations,
+        args.lifecycle,
+        args.sanitizer,
+        args.baselines,
+    ]
+    data = checked_artifacts(
+        args.checksums or args.timing.parent / "checksums.json", paths
+    )
 
     def load(path):
-        return json.loads(path.read_text())
+        return json.loads(data[path.resolve()])
 
     def records(root):
         return [
-            json.loads(line) for line in (root / "runs.jsonl").read_text().splitlines()
+            json.loads(line)
+            for line in data[(root / "runs.jsonl").resolve()].splitlines()
         ]
 
     result = validate(

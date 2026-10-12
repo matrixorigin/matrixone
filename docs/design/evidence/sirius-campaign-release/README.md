@@ -116,3 +116,21 @@ python3 optools/sirius_acceptance.py \
 captured records and proof relationships; it does not rerun GPU executions or
 infer GitHub CI/reviewer approval. Raw source-owned test log hashes remain in the
 reports; private raw logs and traces are retained outside the repository.
+
+The final CLI verifies this manifest before acceptance, including all consumed
+files, and parses the same input bytes it hashed. Its default manifest is the
+timing directory's parent `checksums.json`; `--checksums` selects one explicitly.
+Retained native/embedded and declared Flight pairs must agree on cardinality,
+physical descriptors and schema identity. Spool hashes may differ for unordered
+rows and ordered peers; the original full-row comparator remains the value oracle.
+
+`review-fixes.json` records the review counterexamples and closure. The untouched
+archive still passes; changing native Q1 count 4 to 5 or its first OID 61 to 62
+fails, including after the altered record is rehashed. All 82 owning Linux Python
+tests pass. Real controller probes keep a 1 MiB writer alive against a 512 KiB
+workspace quota during finalization/export: the new owner detects growth, kills
+and joins it, skips parsing and prevents complete publication. A 1 KiB export
+reaches parsing after join. These are small owner regressions, without GPU work.
+Continuous quota checks now cover readiness, finalization, owned export and
+shutdown. Original captures retain their actual collector source and metrics;
+they do not retrospectively certify this new continuous-monitoring behavior.

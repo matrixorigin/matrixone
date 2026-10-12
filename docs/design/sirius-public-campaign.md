@@ -300,6 +300,24 @@ and checks unique, ordered CUDA spans. Matched sanitizer classifications retain
 raw exit status 99 and the exact candidate/control error and leak counts; extra
 findings or duplicate controls fail acceptance.
 
+Retained summaries reconnect each mandatory and declared optional route with its
+native-MO oracle cell. Cardinality, physical descriptors and schema identity must
+agree after spools retire. Raw spool hashes need not agree for unordered rows or
+ordered peers; the live full-row comparator remains the value oracle. The final
+artifact command checks the archive's recorded `checksums.json`, including every
+consumed input, and parses the same bytes it hashed. A missing, changed or
+redirected artifact fails before acceptance. `--checksums` can select the manifest
+explicitly; its default is the timing directory's parent.
+
+The controller also checks the whole workspace during target/readiness waits,
+profiler finalization, export and shutdown. The exporter uses the existing owned
+Service process abstraction, with the same three-hour finalization/export bound
+and regular quota checks. A quota or deadline failure kills and joins that owner;
+adopted descendants still join through the outer controller. Failed cleanup does
+not restore admission or publish complete evidence. Small live-writer tests
+exercise quota growth during finalization/export and preserve the original
+reduced-quota counterexamples.
+
 ## Release validation record
 
 The complete release evidence is in

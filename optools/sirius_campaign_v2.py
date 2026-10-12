@@ -1106,13 +1106,39 @@ def summarize(campaign, records):
         raise CampaignError("summary rejects a partial or modified acceptance schedule")
     if len(records) != len(campaign["schedule"]):
         raise CampaignError("summary requires complete ordered evidence")
-    identities = set()
+    identities, pending = set(), {}
     for spec, record in zip(campaign["schedule"], records):
         validate_record(spec, record)
         identity = query_uuid(record["query_id"])
         if identity in identities:
             raise CampaignError("summary contains duplicate query identity")
         identities.add(identity)
+        key = legacy._oracle_cell(spec)
+        cell = pending.setdefault(key, {})
+        if record["route"] in cell:
+            raise CampaignError("summary contains duplicate oracle route")
+        cell[record["route"]] = record
+        required = {route["id"] for route in ROUTES} | {
+            profile["id"]
+            for profile in campaign["flight_profiles"]
+            if spec["query"] in profile["coverage"]
+        }
+        if set(cell) == required:
+            oracle = cell["mo-native"]
+            for peer in cell.values():
+                if peer["row_count"] != oracle["row_count"]:
+                    raise CampaignError("retained oracle result cardinality mismatch")
+                if any(
+                    peer[field] != oracle[field]
+                    for field in ("output_schema", "output_schema_sha256")
+                ):
+                    raise CampaignError("retained oracle result schema mismatch")
+            # Raw spool hashes may differ for unordered rows and ordered peers.
+            # The live full-row comparator supplies the value oracle; archive
+            # checksums bind its retained observations after those spools retire.
+            del pending[key]
+    if pending:
+        raise CampaignError("summary requires complete retained oracle pairs")
     scales = {}
     for scale in (1, 10):
         routes = {}

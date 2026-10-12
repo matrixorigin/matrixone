@@ -1,0 +1,89 @@
+{
+  "archive_counterexamples": [
+    {
+      "case": "untouched-control",
+      "diagnostic": null,
+      "exit_status": 0,
+      "local_acceptance_complete": true
+    },
+    {
+      "case": "native-count-original-checksum",
+      "diagnostic": "sirius_parity.CampaignError: archive artifact checksum mismatch",
+      "exit_status": 1,
+      "local_acceptance_complete": false
+    },
+    {
+      "case": "native-count-rehash",
+      "diagnostic": "sirius_parity.CampaignError: retained oracle result cardinality mismatch",
+      "exit_status": 1,
+      "local_acceptance_complete": false
+    },
+    {
+      "case": "native-oid-original-checksum",
+      "diagnostic": "sirius_parity.CampaignError: archive artifact checksum mismatch",
+      "exit_status": 1,
+      "local_acceptance_complete": false
+    },
+    {
+      "case": "native-oid-rehash",
+      "diagnostic": "sirius_parity.CampaignError: retained oracle result schema mismatch",
+      "exit_status": 1,
+      "local_acceptance_complete": false
+    }
+  ],
+  "capture_provenance_preserved": true,
+  "capture_scope": "Original measured GPU/timing/resource/native inputs and contexts are preserved. Existing captures do not certify the newly continuous disk-quota monitor; focused live-writer regressions prove that owner change. No measurement is relabeled or sanitized into a new capture.",
+  "findings": [
+    {
+      "closure": "reconnect mandatory/declared optional retained oracle cells; compare cardinality, physical schema and schema identity; verify recorded archive checksums and parse the exact consumed bytes hashed; retain full-row live comparator for values",
+      "owner": "summarize / final acceptance archive loader",
+      "thread": "https://github.com/matrixorigin/matrixone/pull/29862#discussion_r4243688741"
+    },
+    {
+      "closure": "check whole workspace during readiness, worker wait, profiling finalization, owned export and cleanup; quota/deadline failure kills and joins the existing owner; outer controller joins descendants; incomplete/poisoned cleanup cannot publish",
+      "owner": "controller Service / run_complete",
+      "thread": "https://github.com/matrixorigin/matrixone/pull/29862#discussion_r4243688745"
+    }
+  ],
+  "live_quota_regression": {
+    "complete_artifact_not_published_on_quota": true,
+    "entry": "real run_complete with injected service/export boundaries",
+    "parser_not_entered_on_quota": true,
+    "phases": [
+      "profiler-finalization",
+      "sqlite-export"
+    ],
+    "small_control_reaches_parser_after_join": true,
+    "small_export_control_bytes": 1024,
+    "workspace_limit_bytes": 524288,
+    "writer_bytes": 1048576,
+    "writer_killed_and_joined": true,
+    "writer_still_running_when_cancelled": true
+  },
+  "original_archive_acceptance_unchanged": true,
+  "owning_tests": {
+    "command": "cd optools && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s . -p sirius*_test.py",
+    "log_sha256": "88defb88163d961347b9878fa3721fc9f42fb739aa510e68ae25e59ad6dfce30",
+    "passed": 82,
+    "terminal_status": "OK"
+  },
+  "red_proofs": {
+    "live_workspace_quota": {
+      "failed_cases_before_fix": 2,
+      "log_sha256": "a90047bcc26774980b9194a42d7d91ecc1b3bf102e5bfcb9439d3a80cdfd37dd",
+      "reviewed_source_revision": "eba41acd678a8043fd5ff2d73d7908e3a94a4afc"
+    },
+    "retained_pairs": {
+      "failed_cases_before_fix": 6,
+      "log_sha256": "12ba8450a84675e8cb3781d5d25ccac095058e24a1f01e2f4600186508598796"
+    }
+  },
+  "reviewed_revision": "eba41acd678a8043fd5ff2d73d7908e3a94a4afc",
+  "source_sha256": {
+    "optools/sirius_acceptance.py": "6987fdeacb972b031e249e6c0d17b8acc210aff8530b8b5749d1324c7d8a5767",
+    "optools/sirius_acceptance_test.py": "c6585e95450e090f64fe7d6916c6e483d8cddf8a47a8c95f0553436145d67b3f",
+    "optools/sirius_campaign.py": "974ec9bec8b6eef1157f47a9ff6db97bb6fea68ff55111091933d36bee657c9c",
+    "optools/sirius_campaign_test.py": "c1b7e209fdfe9d84d7f6f9e6168d46b21bbbf0909e870abe02ab889233d9e972",
+    "optools/sirius_campaign_v2.py": "074673e2fee38d92ab3326b0fe7d8f91a6c1b46d4e70c66237e963ea178ba38a"
+  }
+}

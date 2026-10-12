@@ -129,9 +129,11 @@ def launch_target(arguments):
     )
 
 
-def wait_target(service, path, timeout=120):
+def wait_target(service, path, timeout=120, monitor=None):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if monitor is not None:
+            monitor()
         if path.exists():
             descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
             with os.fdopen(descriptor, "r") as file:
@@ -673,6 +675,7 @@ class Service:
             self.log, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
         )
         self.file = os.fdopen(descriptor, "wb")
+        self.process = None
         try:
             self.process = subprocess.Popen(
                 command,
@@ -685,14 +688,58 @@ class Service:
             self.generation = pid_identity(self.process.pid)
             self.targets = {}
         except BaseException:
-            self.file.close()
+            try:
+                if self.process is not None:
+                    # Popen's unreaped child owns this fresh process group even
+                    # if publishing its start generation failed.
+                    try:
+                        os.killpg(self.process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    self.process.wait(timeout=5)
+            finally:
+                self.file.close()
             raise
 
     def track_target(self, pid):
         self.targets[pid] = pid_identity(pid)
 
-    def close(self):
+    def wait(self, timeout, monitor=None):
+        if monitor is None:
+            return self.process.wait(timeout=timeout)
+        deadline = time.monotonic() + timeout
+        while True:
+            monitor()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired("owned service", timeout)
+            try:
+                status = self.process.wait(timeout=min(0.5, remaining))
+                monitor()
+                return status
+            except subprocess.TimeoutExpired:
+                continue
+
+    def kill_and_wait(self):
+        for pid, generation in self.targets.items():
+            try:
+                if pid_identity(pid) == generation:
+                    os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, FileNotFoundError):
+                pass
+        if self.process.poll() is None:
+            if pid_identity(self.process.pid) != self.generation:
+                raise v2.CampaignError("service identity changed before kill")
+            try:
+                os.killpg(self.process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        self.process.wait(timeout=5)
+
+    def close(self, monitor=None):
         try:
+            if monitor is not None:
+                monitor()
             for pid, generation in self.targets.items():
                 try:
                     if pid_identity(pid) != generation:
@@ -710,18 +757,11 @@ class Service:
                 if not self.targets:
                     os.killpg(self.process.pid, signal.SIGTERM)
                 try:
-                    self.process.wait(
-                        timeout=PROFILE_FINALIZE_SECONDS if self.targets else 30
+                    self.wait(
+                        PROFILE_FINALIZE_SECONDS if self.targets else 30,
+                        monitor,
                     )
                 except subprocess.TimeoutExpired:
-                    for pid, generation in self.targets.items():
-                        try:
-                            if pid_identity(pid) == generation:
-                                os.kill(pid, signal.SIGKILL)
-                        except (ProcessLookupError, FileNotFoundError):
-                            pass
-                    os.killpg(self.process.pid, signal.SIGKILL)
-                    self.process.wait(timeout=5)
                     raise v2.CampaignError("owned service shutdown deadline exceeded")
             if self.targets and self.process.returncode != 0:
                 raise v2.CampaignError("profile launcher exited unsuccessfully")
@@ -731,15 +771,20 @@ class Service:
                         raise v2.CampaignError("profile target did not quiesce")
                 except (ProcessLookupError, FileNotFoundError):
                     pass
+        except BaseException:
+            # Quota, timeout and cancellation all retain this process owner
+            # until it is killed and joined. Descendants join at the controller.
+            self.kill_and_wait()
+            raise
         finally:
             self.file.close()
 
 
-def close_services(services, previous_subreaper):
+def close_services(services, previous_subreaper, monitor=None):
     failures = []
     for service in reversed(services):
         try:
-            service.close()
+            service.close(monitor=monitor)
         except BaseException as error:
             failures.append(error)
     # The controller entered exclusive ownership before launching any role.
@@ -901,9 +946,11 @@ disableTrace = true
     return output
 
 
-def wait_ready(service, port, timeout=120):
+def wait_ready(service, port, timeout=120, monitor=None):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if monitor is not None:
+            monitor()
         if service.process.poll() is not None:
             raise v2.CampaignError("service exited before readiness")
         try:
@@ -1079,6 +1126,13 @@ def run_complete(arguments, *, provenance=None):
     worker_location = None
     stage = "service-startup"
     profile_workspace_peak = 0
+
+    def check_workspace():
+        nonlocal profile_workspace_peak
+        profile_workspace_peak = max(
+            profile_workspace_peak, profile_workspace_bytes(run_workspace)
+        )
+
     previous_subreaper = v2.legacy._enter_exclusive_subreaper()
     try:
         for role in ("log", "tn"):
@@ -1101,7 +1155,7 @@ def run_complete(arguments, *, provenance=None):
             if selected and phase_number not in selected:
                 continue
             if cn is not None:
-                cn.close()
+                cn.close(monitor=check_workspace)
                 services.remove(cn)
                 cn = None
             cn_template = (workspace / "cn-2.toml").read_text()
@@ -1178,13 +1232,16 @@ def run_complete(arguments, *, provenance=None):
             services.append(cn)
             stage = "profile-launch" if arguments.resource else "cn-readiness"
             pid = (
-                wait_target(cn, identity_path) if arguments.resource else cn.process.pid
+                wait_target(cn, identity_path, monitor=check_workspace)
+                if arguments.resource
+                else cn.process.pid
             )
             stage = "cn-readiness"
             wait_ready(
                 cn,
                 arguments.port_base + 300,
                 timeout=300 if arguments.resource else 120,
+                monitor=check_workspace,
             )
             phase = list(specs)
             runner_cfg = json.loads((workspace / "runner.json").read_text())
@@ -1256,12 +1313,7 @@ def run_complete(arguments, *, provenance=None):
                 )
                 while worker.process.poll() is None:
                     # Bound all private trace/log material independently of row scratch.
-                    profile_workspace_peak = max(
-                        profile_workspace_peak,
-                        profile_workspace_bytes(run_workspace),
-                    )
-                    if profile_workspace_peak > PROFILE_WORKSPACE_BYTES:
-                        raise v2.CampaignError("profile/log workspace quota exceeded")
+                    check_workspace()
                     if any(service.process.poll() is not None for service in services):
                         raise v2.CampaignError("owned CN exited during campaign")
                     remaining = deadline - time.monotonic()
@@ -1300,7 +1352,7 @@ def run_complete(arguments, *, provenance=None):
                             worker_location = location
                     raise v2.CampaignError("public campaign worker failed")
             finally:
-                worker.close()
+                worker.close(monitor=check_workspace)
             envelope = json.loads(records_path.read_text())
             if (
                 envelope.get("partial") is not True
@@ -1312,14 +1364,12 @@ def run_complete(arguments, *, provenance=None):
             attempted += len(phase)
             if arguments.resource:
                 stage = "profile-export"
-                cn.close()
+                cn.close(monitor=check_workspace)
                 services.remove(cn)
                 cn = None
-                profile_workspace_peak = max(
-                    profile_workspace_peak, profile_workspace_bytes(run_workspace)
-                )
+                check_workspace()
                 exported = phase_workspace / "resource.sqlite"
-                subprocess.run(
+                exporter = Service(
                     [
                         "nsys",
                         "export",
@@ -1329,20 +1379,24 @@ def run_complete(arguments, *, provenance=None):
                         str(exported),
                         str(prefix) + ".nsys-rep",
                     ],
-                    check=True,
-                    timeout=PROFILE_FINALIZE_SECONDS,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    workspace,
+                    phase_workspace / "export.log",
+                    environment,
                 )
+                services.append(exporter)
+                try:
+                    if exporter.wait(PROFILE_FINALIZE_SECONDS, check_workspace) != 0:
+                        raise v2.CampaignError("owned profile export failed")
+                finally:
+                    exporter.close(monitor=check_workspace)
+                services.remove(exporter)
                 from sirius_resource import (
                     allocation_summary,
                     MAX_LEDGER_BYTES,
                     MAX_SORT_FILE_BYTES,
                 )
 
-                profile_workspace_peak = max(
-                    profile_workspace_peak, profile_workspace_bytes(run_workspace)
-                )
+                check_workspace()
                 if profile_workspace_bytes(run_workspace) > (
                     PROFILE_WORKSPACE_BYTES - MAX_LEDGER_BYTES - 2 * MAX_SORT_FILE_BYTES
                 ):
@@ -1434,7 +1488,7 @@ def run_complete(arguments, *, provenance=None):
         raise
     finally:
         try:
-            close_services(services, previous_subreaper)
+            close_services(services, previous_subreaper, monitor=check_workspace)
         except BaseException as error:
             target = output / "failure.json"
             if not target.exists():
