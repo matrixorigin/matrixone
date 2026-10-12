@@ -13,15 +13,15 @@ create table QaMode2Consumer29422.SecretPublic(id int);
 insert into QaMode2Consumer29422.FinalMix values (1, 10);
 show full columns from qamode2consumer29422.finalmix;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  null  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-v  ¦  INT(32)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
+id  ¦  int  ¦  null  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+v  ¦  int  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
 show index from qamode2consumer29422.finalmix;
 ➤ Table[12,8,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,4,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,256,0]  𝄀
 finalmix  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id
 describe qamode2consumer29422.finalmix;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-v  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+v  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 show create table qamode2consumer29422.finalmix;
 ➤ Table[12,8,0]  ¦  Create Table[12,93,0]  𝄀
 finalmix  ¦  CREATE TABLE `FinalMix` (

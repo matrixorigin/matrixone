@@ -181,6 +181,10 @@ var GetMoTableRowsFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
 
 type subscription struct {
 	valid bool
+	// Borrowed transaction handles keep old-function fallback on the same
+	// physical publisher identity without repeating catalog resolution.
+	database engine.Database
+	relation engine.Relation
 
 	oriAccId      uint64
 	oriDatabaseId uint64
@@ -256,6 +260,7 @@ func isSubscribedTable(
 		}
 
 		sub.valid = true
+		sub.database, sub.relation = publisherDB, relation
 		sub.oriAccId = uint64(meta.AccountId)
 		sub.oriDatabaseId = uint64(relation.GetDBID(publisherCtx))
 		sub.oriTableId = relation.GetTableID(publisherCtx)
@@ -536,17 +541,13 @@ func MoTableRowsOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 					zap.Error(err))
 				return err
 			} else if sub.valid {
-				// subscription
 				foolCtx = defines.AttachAccountId(foolCtx, uint32(sub.oriAccId))
-				dbo, err = e.Database(foolCtx, sub.oriDatabaseName, txn)
+				rel = sub.relation
+			} else {
+				rel, err = dbo.Relation(foolCtx, tblStr, nil)
 				if err != nil {
 					return err
 				}
-			}
-
-			rel, err = dbo.Relation(foolCtx, tblStr, nil)
-			if err != nil {
-				return err
 			}
 
 			var rows uint64
@@ -639,17 +640,13 @@ func MoTableSizeOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 					zap.Error(err))
 				return err
 			} else if sub.valid {
-				// subscription
 				foolCtx = defines.AttachAccountId(foolCtx, uint32(sub.oriAccId))
-				dbo, err = e.Database(foolCtx, sub.oriDatabaseName, txn)
+				dbo, rel = sub.database, sub.relation
+			} else {
+				rel, err = dbo.Relation(foolCtx, tblStr, nil)
 				if err != nil {
 					return err
 				}
-			}
-
-			rel, err = dbo.Relation(foolCtx, tblStr, nil)
-			if err != nil {
-				return err
 			}
 
 			var oSize, iSize uint64

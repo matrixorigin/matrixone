@@ -28,30 +28,41 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+// backgroundCatalogTxn validates the borrowed background owner once for the
+// current and historical wrappers. Physical/logical identity remains explicit
+// at each caller; this helper does not start, commit or replace its transaction.
+func backgroundCatalogTxn(ctx context.Context, bh BackgroundExec) (engine.Engine, client.TxnOperator, error) {
+	back, ok := bh.(*backExec)
+	if !ok || back.backSes == nil || back.backSes.GetTxnHandler() == nil || back.backSes.GetTxnHandler().GetTxn() == nil {
+		return nil, nil, moerr.NewInternalError(ctx, "catalog resolution requires a background transaction")
+	}
+	return back.backSes.GetStorage(), back.backSes.GetTxnHandler().GetTxn(), nil
+}
+
 // resolveCatalogObjectInBackgroundTxn keeps a data-branch catalog name and ID
 // from the same tenant and transaction snapshot. The caller has already
 // checked privileges and must still reject protected physical objects.
 func resolveCatalogObjectInBackgroundTxn(
 	ctx context.Context, bh BackgroundExec, databaseName, tableName string,
 ) (physicalDatabase, physicalTable string, objectID uint64, err error) {
-	back, ok := bh.(*backExec)
-	if !ok || back.backSes == nil || back.backSes.GetTxnHandler() == nil || back.backSes.GetTxnHandler().GetTxn() == nil {
-		return "", "", 0, moerr.NewInternalError(ctx, "catalog resolution requires a background transaction")
+	storage, txn, err := backgroundCatalogTxn(ctx, bh)
+	if err != nil {
+		return "", "", 0, err
 	}
-	return resolveCatalogObjectWithTxn(ctx, back.backSes.GetStorage(),
-		back.backSes.GetTxnHandler().GetTxn(), databaseName, tableName, false)
+	return resolveCatalogObjectWithTxn(ctx, storage,
+		txn, databaseName, tableName, false)
 }
 
 // Table snapshots use the stable logical ID across copy-table ALTERs.
 func resolveSnapshotObjectInBackgroundTxn(
 	ctx context.Context, bh BackgroundExec, databaseName, tableName string,
 ) (physicalDatabase, physicalTable string, objectID uint64, err error) {
-	back, ok := bh.(*backExec)
-	if !ok || back.backSes == nil || back.backSes.GetTxnHandler() == nil || back.backSes.GetTxnHandler().GetTxn() == nil {
-		return "", "", 0, moerr.NewInternalError(ctx, "catalog resolution requires a background transaction")
+	storage, txn, err := backgroundCatalogTxn(ctx, bh)
+	if err != nil {
+		return "", "", 0, err
 	}
-	return resolveCatalogObjectWithTxn(ctx, back.backSes.GetStorage(),
-		back.backSes.GetTxnHandler().GetTxn(), databaseName, tableName, true)
+	return resolveCatalogObjectWithTxn(ctx, storage,
+		txn, databaseName, tableName, true)
 }
 
 // resolveCatalogObjectAtSnapshot uses the engine's mode-2 historical resolver.
@@ -61,26 +72,26 @@ func resolveCatalogObjectAtSnapshot(
 	ctx context.Context, bh BackgroundExec, accountID uint32, physicalTime int64,
 	databaseName, tableName string,
 ) (physicalDatabase, physicalTable string, objectID uint64, err error) {
-	back, ok := bh.(*backExec)
-	if !ok || back.backSes == nil || back.backSes.GetTxnHandler() == nil || back.backSes.GetTxnHandler().GetTxn() == nil {
-		return "", "", 0, moerr.NewInternalError(ctx, "historical catalog resolution requires a background transaction")
+	storage, owner, err := backgroundCatalogTxn(ctx, bh)
+	if err != nil {
+		return "", "", 0, err
 	}
 	ownerCtx := defines.AttachAccountId(ctx, accountID)
-	txn := back.backSes.GetTxnHandler().GetTxn().CloneSnapshotOp(timestamp.Timestamp{PhysicalTime: physicalTime})
-	return resolveCatalogObjectWithTxn(ownerCtx, back.backSes.GetStorage(), txn, databaseName, tableName, false)
+	txn := owner.CloneSnapshotOp(timestamp.Timestamp{PhysicalTime: physicalTime})
+	return resolveCatalogObjectWithTxn(ownerCtx, storage, txn, databaseName, tableName, false)
 }
 
 func resolveSnapshotObjectAtSnapshot(
 	ctx context.Context, bh BackgroundExec, accountID uint32, physicalTime int64,
 	databaseName, tableName string,
 ) (physicalDatabase, physicalTable string, objectID uint64, err error) {
-	back, ok := bh.(*backExec)
-	if !ok || back.backSes == nil || back.backSes.GetTxnHandler() == nil || back.backSes.GetTxnHandler().GetTxn() == nil {
-		return "", "", 0, moerr.NewInternalError(ctx, "historical catalog resolution requires a background transaction")
+	storage, owner, err := backgroundCatalogTxn(ctx, bh)
+	if err != nil {
+		return "", "", 0, err
 	}
 	ownerCtx := defines.AttachAccountId(ctx, accountID)
-	txn := back.backSes.GetTxnHandler().GetTxn().CloneSnapshotOp(timestamp.Timestamp{PhysicalTime: physicalTime})
-	return resolveCatalogObjectWithTxn(ownerCtx, back.backSes.GetStorage(), txn, databaseName, tableName, true)
+	txn := owner.CloneSnapshotOp(timestamp.Timestamp{PhysicalTime: physicalTime})
+	return resolveCatalogObjectWithTxn(ownerCtx, storage, txn, databaseName, tableName, true)
 }
 
 // Older table PITRs stored the logical ID; newer ones store the physical ID.

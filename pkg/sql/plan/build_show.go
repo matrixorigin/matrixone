@@ -110,6 +110,9 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, err
 	}
 	if sub != nil {
+		if !defines.Mode2NameResolutionEnabled(ctx.GetContext()) && !pubsub.InSubMetaTables(sub, tblName) {
+			return nil, moerr.NewInternalErrorNoCtxf("table %s not found in publication %s", tblName, sub.Name)
+		}
 		ctx.SetQueryingSubscription(sub)
 		defer func() {
 			ctx.SetQueryingSubscription(nil)

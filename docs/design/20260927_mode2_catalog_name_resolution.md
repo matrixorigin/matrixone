@@ -1,158 +1,133 @@
-# Case preserving catalog name resolution
+# Case-preserving catalog name resolution
 
-Revision 9. Owner: issue #29418; implementation: PR #29422.
-This revision follows the rebase onto main `37ba071297` and replaces the
-previous implementation-specific design narrative. Deployment uses a stopped
-cluster upgrade: CNs and Proxy run the same version. Mixed-version operation
-is outside the contract, as confirmed by the operator.
+Revision 10. Owner: issue #29418; implementation: PR #29422.
+The accepted native design is recorded in the coordinator's design-8 artifact.
+The integration target is main `cd8d5abf9665a97d13e50b04840fb74b877fd339`.
 
-## Contract
+## Scope and contract
 
-`lower_case_table_names=0` preserves and compares physical spelling exactly;
-mode 1 lowercases names; mode 2 preserves spelling and compares
-`identifier.Fold(name)`. The fold is shared with parser `CStr.Compare()`:
-Unicode lowercase for valid UTF-8, ASCII-only lowercase for malformed bytes.
-The dynamic variable's existing scope and persistence are unchanged.
+Mode 0 preserves and compares exact spelling. Mode 1 lowercases names. Mode 2
+preserves stored spelling and compares the shared `identifier.Fold`: Unicode
+lowercase for valid UTF-8 and ASCII-only lowercase for malformed input bytes.
+At one tenant and transaction snapshot, lookup returns absence, one physical
+name/generation ID, or ambiguity for every spelling in a collision group.
+Transaction-local inserts/deletes override committed versions before deciding
+uniqueness. IF EXISTS suppresses only typed absence; it never hides ambiguity,
+cancellation or storage failures.
 
-At a tenant, database and transaction snapshot, resolution returns zero, one,
-or multiple visible physical objects. Zero preserves the typed absent error;
-one returns physical name and immutable ID together; multiple returns ambiguity
-for **every** spelling, including an exact spelling. Transaction-local inserts
-and deletes override committed versions before uniqueness is decided.
-`IF EXISTS` / `IF NOT EXISTS` suppress absence / duplicates respectively,
-never ambiguity, cancellation, or storage errors. Physical generation IDs and
-logical privilege IDs have different owners and must not be interchanged.
+Preserving an AST spelling repairs the narrow DROP grammar bug, but cannot make
+an exact-keyed catalog/workspace find a case variant. The common engine resolver
+and its physical-identity consumers therefore remain in scope. Physical
+generation IDs and logical privilege/lineage IDs have distinct owners.
 
-Database/table SQL, temporary tables, publications, SHOW, privilege checks,
-Snapshot/PITR and recovery consume the same identity. Column, alias, index,
-publication and routine comparison semantics are not changed. Public consumers
-must not reconstruct an exact catalog predicate from the original alias after
-resolution. Reserved system names are canonicalized before tenant routing.
+This fixes production with a fixed naming mode. Runtime SET GLOBAL remains
+available; arbitrary default drift during connection migration is a separate
+capability. Remove the independent ModeAtSource/ModeAtSourceExported extension,
+its mandatory marker and mode installer. Retain the target migration protocol,
+LAST_INSERT_ID/FOUND_ROWS, temporary replay, prepared-state and cancellation
+safety gates. There is no additional rollout exception or new wire format.
 
-## Ownership and implementation
+## Visibility, ownership and resources
 
-| Responsibility | Owner and rule |
-|---|---|
-| Effective mode | The session system-variable snapshot; statement admission attaches the mode to context. No session mode means exact internal lookup. Do not maintain a second cached mode and initialization flag. |
-| Committed visibility | disttae catalog cache, its existing version order, logtail watermark and GC. No separate visibility state machine. |
-| Transaction visibility | Existing database/table operation chains. A lazily built folded membership index follows the same create/delete/rollback mutations. |
-| Temporary aliases | Existing session alias map, mutation journal and mutex. One folded membership map; derive zero/one/ambiguity from that group instead of caching a second summary map. |
-| Database locking | `openDDLDatabaseWithLock`: resolve physical name, acquire existing DB lock, refresh RC visibility, and verify the generation. Share it across DDL consumers. |
-| Snapshot freshness | Reuse main's `advanceLifecycleAdmissionSnapshot` and engine TN-ordered logtail barrier. A local CN clock does not establish the ordering of a preceding owner's commit. |
-| DROP / COPY / TRUNCATE lifecycle | Main's complete-domain or broad admission owns ordering and identity revalidation. Do not repeat its DB lock, snapshot refresh and generation check in a mode-2 branch. |
-| Uniqueness | Existing transaction lock service with folded namespace keys; no separate lock manager or cleanup protocol. |
-| Session migration | Existing migration RPC and lifecycle; carry effective mode before USE, temporary replay and PREPARE. A global-only setting is not an ordinary `SET SESSION` variable, so retain the small dedicated payload rather than changing variable replay semantics. |
+* The existing session system-variable snapshot supplies the statement mode.
+  Internal callers without the mode context retain exact lookup.
+* The catalog cache owns MVCC, logtail watermarks and GC. Retain the exact index
+  and a sparse folded index containing the same noncanonical version objects.
+  Insert/delete/GC update both under the existing owner, not a second visibility
+  state machine. Exact lookups do not allocate additional index state.
+* Database/table operation chains own a lazy folded membership map under their
+  existing mutex. Its size is bounded by transaction-touched names; rollback and
+  terminal transaction cleanup remain in that owner.
+* Session temporary aliases retain their mutex and mutation journal. Folded
+  membership follows publication, replacement, rollback and retirement. No
+  second cached mode or uniqueness summary is maintained.
+* Check cache snapshot completeness before and after visits. If GC invalidates
+  the answer, discard it entirely and use the scoped fixed-snapshot historical
+  stream. Its existing owner cancels, drains/releases batches and joins the
+  producer on every terminal path.
 
-### Catalog index decision
+Consumers carry resolved names and IDs into later catalog predicates. Preserve
+pre-plan authorization, publisher membership and unpublished-table rejection,
+reserved-system tenant routing, private-View tenant ownership, historical
+Snapshot/PITR identity and exact-AST account teardown. Caller temporary aliases
+cannot shadow foreign publisher or private-View relations. Background current
+and historical wrappers share one transaction-owner validator while explicitly
+choosing physical or logical identity.
 
-Keep the exact name trees and sparse folded trees. Canonical physical names
-live only in the exact tree; other spellings additionally enter the folded
-tree. Mode 2 merges the canonical candidate with noncanonical variants in
-physical-name order. Within each name, the first snapshot-visible version is
-authoritative; a tombstone hides older live versions. Existing insert/GC owners
-maintain both indexes before their corresponding visibility boundaries.
+## Namespace and lifecycle admission
 
-A prototype with one tree ordered by `(tenant, database ID, fold, physical
-name, version)` passed the catalog UTs, but failed the default-path cost gate.
-Three serial, alternating benchmark runs on the same rebased source/toolchain,
-GOMAXPROCS=2, 10,000 names, produced these medians:
+Synthetic keys represent a folded name, not a catalog row. They must not use
+row-version probes as their freshness proof. A narrow name-admission result API
+shares lockop's validated keys, binding checks, exact-row capacity handling and
+transaction-owned cleanup. The existing RC-only lifecycle API remains RC-only.
+No second lock manager, manual unlock protocol or background owner is added.
 
-| Operation | Sparse trees | Unified tree prototype |
-|---|---:|---:|
-| Exact mixed-case table lookup | 159.6 ns, 1 allocation | 262.8 ns, 2 allocations |
-| Unique mode-2 table lookup | 302.9 ns, 0 allocations | 180.8 ns, 0 allocations |
-| Lowercase table version update | 233.8 ns | 263.4 ns |
-| Mixed-case table version update | 441.9 ns | 318.3 ns |
-| Retained bytes per mixed-case name | 425.5 | 407.0 |
+The CREATE owner pins sorted database names, all required hidden-prefix gates,
+sorted/deduplicated folded namespaces, then the target exact-name domain. Include
+positive and negative FK dependencies and known hidden-index names. Missing FK
+databases retain a negative database-creation namespace dependency. Folded grants
+contribute to the existing refresh decision. A grant timestamp invalidates facts;
+it is not a TN read frontier. Use the target TN-ordered barrier and pre-effect
+plan/domain revalidation. Retained locks and FK publication preserve FastFail.
+`createNamePinsAdmitted` is set only after target and folded obligations succeed.
+Execution must not reacquire those pins or refresh an admitted CREATE again.
 
-The extra fold on every exact query and comparator work outweigh the code and
-heap reduction for default workloads. These are microbenchmarks on a shared
-machine, not SQL throughput claims. Keep a zero-new-allocation exact path and
-one tree update for canonical names. The final serial comparison against main `37ba071297` measured 226.5 ns/op
-for main and 229.2 ns/op here (three-run medians, +1.2%); both allocated
-352 B/op once. This meets the preselected 20% median-increase budget.
-Do not introduce a custom Unicode comparator to rescue the prototype.
+COPY/TRUNCATE collect the target endpoint/FK/partition domain once under the
+outer lifecycle admission. Prefix/folded and exact-name pins precede physical
+table locks. The same bounded domain becomes the replacement receipt. Dynamic
+hidden-index naming retains its prefix gate. A nested CREATE borrows the checked
+actor/transaction/domain and frontier; it does not refresh after DROP or silently
+expand the receipt. Temporary and non-RC paths retain their existing ownership.
 
-### Historical resolution
+Pessimistic SI keeps its fixed snapshot. A namespace grant with an empty/unusable
+watermark or a watermark/definition newer than that snapshot is a typed WW
+conflict before effects, even for a nonwaiting late locker. It never refreshes SI.
+Fresh grants and validated reentry can succeed. Binding/capacity/cancellation
+failures propagate; capacity failure never widens to a whole-catalog lock.
 
-Cache completeness must hold both before and after visiting candidates because
-GC publishes its new start watermark before removing versions. If completeness
-is lost, discard the partial result and scan storage at the fixed transaction
-snapshot. One streaming catalog query is scoped by tenant and database ID;
-filter with the common fold in Go. Database and table scans share their
-stream-consumption and snapshot-validation code. No whole-result buffering,
-SQL collation approximation, repeated pagination scan, or extra persistent key.
-The existing stream owner cancels, drains/closes result batches, and joins the
-producer on all terminal paths. Early uniqueness failure must still finish
-cleanup. Only the historical fallback scans the scoped catalog.
+## Validation and performance acceptance
 
-### DDL ordering and identity
+Required evidence is tied to the complete final delta and build inputs, not an
+old commit SHA or historical PR-body claim. Current target requires Go 1.27.1.
+Use matching native artifacts, bounded owning-package normal and race tests,
+go vet, configured molint/golangci/license checks and named terminal results.
+The source export/native build must have an exact manifest; no stale artifacts
+or fabricated provenance stamps are accepted.
 
-Mode-2 creators serialize the absence-to-create transition on
-`serial(account, reservedTag, foldedDatabase)` or
-`serial(account, reservedTag, databaseID, foldedTable)` before rechecking.
-Physical catalog row locks still use the resolved spelling, shared with
-publication and ordinary DDL. A positive CREATE existence check needs no new
-namespace wait. Internal callers that disable locking must still receive the
-physical database name.
+Regressions cover modes 0/1 controls, case variants, Unicode/malformed bytes,
+ambiguity/IF EXISTS boundaries, same-transaction create/read/drop/rollback,
+physical name and ID, temporary cleanup, authorization, FK positive/negative
+parents and self-reference, SHOW/publication membership, system routing,
+private Views, historical recovery and tenant cleanup. Namespace tests cover
+complete lock order/domain, retained FastFail, borrowed scope/frontier, fresh SI,
+waiting and nonwaiting stale SI, abort, reentry, binding, capacity and cancellation.
+Two controlled creators and replacement/hidden-index competitors must prove one
+physical winner or a typed conflict, progress and unrelated-name independence.
 
-Known hidden-index names take the existing prefix gate in shared mode before
-sorted per-name exclusive locks. COPY ALTER and TRUNCATE take the prefix gate
-exclusively before table locks because nested CREATE generates fresh names.
-The tuple arity separates the prefix gate from physical and namespace keys.
-Retain this gate until a common lifecycle owner proves it redundant for every
-creator, including user names with the internal prefix and SI/internal paths.
-Ordinary unrelated names must not serialize on it.
+Public SQL validation includes all three mode-2 suites, mode controls and changed
+CREATE LIKE/FK/publication/view/recovery/tenant cases. Retain RC inter-CN visibility,
+namespace contention and SI fresh/stale controls on isolated existing fixtures.
+Assertions include catalog IDs/names and cleanup, not merely absence of panic.
 
-Physical database generation must survive locking; table generation must match
-the plan before mutation. Public RC destructive paths reuse main's admission;
-SI keeps its fixed snapshot. Propagate lookup errors; only a demonstrated
-generation change becomes a definition-change retry. A dropped/recreated name
-must not inherit an old publication, privilege, temporary alias, or PITR target.
-Publication database and table locks precede publication-row writes and are
-ordered by tenant and physical name across multiple databases.
+Matched serial cache controls require no added exact-lookup allocation and no
+more than a 20% median canonical-update increase; declare three alternating
+samples per version in advance. State scales with catalog GC, transaction and
+session lifetime. Historical scans are scoped. Forward-FK discovery remains
+O(tenant FK-name cardinality), cancellable and measured on representative data;
+cache microbenchmarks do not prove universal SQL throughput.
 
-### Migration and recovery
+## Maintenance and review boundary
 
-The effective mode is captured from the source session, not the current global
-value. Install it into a private target session-variable snapshot before any
-name-dependent replay. Missing or invalid payload fails before replay; target
-global defaults remain unchanged. Reuse ordinary migration cancellation and
-target cleanup. No additional mixed-version negotiation or compatibility path.
+The reviewer requested a redesign and suggested no more than 1,000 lines. Report
+production, tests, generated code, SQL/goldens and documentation separately over
+the entire pinned-target delta. Remove the independent migration extension,
+superseded FK persistence and duplicated admission/recovery ownership rather than
+compressing syntax or deleting distinct oracles. The numerical suggestion is a
+review objective, not an operator hard cutoff; external CHANGES_REQUESTED remains
+outstanding. Snapshot/workspace uniqueness, namespace/generation admission,
+tenant/authorization safety and historical recovery require real owners.
 
-Historical Snapshot/PITR resolution uses historical names and physical IDs,
-not today's same-named object. Legacy folded PITR names may match only the same
-folded identity and tenant; physical generation still decides lineage.
-Subscription membership is checked after resolving the publisher's physical
-table and cannot be shadowed by a session temporary table. SHOW and direct
-catalog consumers use physical database/table names returned by resolution.
-
-Account teardown consumes the physical database names returned by its catalog
-scan as ASTs through the existing background executor. It must not stringify and
-reparse them using the operator's naming mode, or silently skip mixed-case names
-under `IF EXISTS`. The synchronous AST API borrows its input and uses the same
-transaction checks, compiler and execution cleanup as ordinary background SQL.
-Account deletion selects exact physical identities even when a SYS session uses
-mode 2 and the target tenant contains legacy folded-name collisions.
-
-## Validation and delivery
-
-Implementation, tests and documentation are reviewed separately. A new helper
-must replace repeated responsibility, not add a parallel execution path.
-Remove replaced branches, summaries and assertions about index internals in
-the same change. Preserve distinct behavioral oracles and reuse fixture owners.
-No review report is committed with production changes.
-
-- Cache UTs: exact controls; zero/one/ambiguity; Unicode and malformed bytes;
-  physical ordering and visitor stop; tombstones, reincarnation and GC boundaries.
-- Workspace / temporary UTs: create/drop/rollback/replacement and concurrent
-  lookup/mutation under `-race`; migration with different defaults and bad payload.
-- DDL UTs: physical lock key, generation change, lookup/cancellation/barrier error,
-  disabled locks, SI, and reuse of already admitted RC paths.
-- Public SQL BVT: modes 0/1 controls and all three mode-2 suites, including
-  publications, temporary names, SHOW, recovery and transaction rollback.
-  Compare real results and rerun on the same service to verify cleanup.
-- Incremental gofmt/vet/lint cover all changed packages and affected consumers.
-  Use bounded local builds/tests; no simultaneous performance contenders.
-- Final review requires terminal UT/race/SCA/BVT evidence. A successful build or
-  a prior revision's report is not a pass for a changed semantic boundary.
+Implementation and validation records belong to the coordinator's task ledger.
+Formatting, a successful native build, historical UT or pending CI are not final
+approval. Applicable runtime/SCA/race/SQL/resource checks and a separate native
+final review of the exact corrected committed candidate remain required.

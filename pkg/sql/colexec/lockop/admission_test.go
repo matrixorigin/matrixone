@@ -283,3 +283,93 @@ func TestLockRowsAdmissionCancellation(t *testing.T) {
 		require.Empty(t, op.GetOverview().WaitLocks)
 	}, client.WithTimestampWaiter(immediateLockTimestampWaiter{}))
 }
+
+// A synthetic name is not a catalog row. Use actual transaction bookkeeping
+// and lock bindings, but control the grant watermark independently of rows.
+func TestNameAdmissionFixedSIFreshness(t *testing.T) {
+	for _, tc := range []struct {
+		name                                                        string
+		late, waiting, empty, definition, cancel, capacity, binding bool
+	}{
+		{name: "fresh"}, {name: "reentrant fresh"},
+		{name: "nonwaiting late locker", late: true},
+		{name: "waiter after commit", late: true, waiting: true},
+		{name: "aborted competitor", waiting: true},
+		{name: "missing witness", empty: true},
+		{name: "new definition", definition: true},
+		{name: "cancellation", cancel: true},
+		{name: "capacity cannot widen", capacity: true},
+		{name: "invalid binding", binding: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runLockOpTest(t, func(proc *process.Process) {
+				bat := admissionKeys(t, proc)
+				defer bat.Clean(proc.Mp())
+				op := proc.GetTxnOperator()
+				defer func() { require.NoError(t, op.Rollback(proc.Ctx)) }()
+				op.TxnRef().Isolation = txnpb.TxnIsolation_SI
+				snapshot := op.SnapshotTS()
+				newer := snapshot
+				newer.PhysicalTime++
+				ls := proc.GetLockService()
+				calls := 0
+				proc.Base.LockService = admissionLockService{LockService: ls, lockFn: func(ctx context.Context, table uint64, rows [][]byte, id []byte, opts lock.LockOptions) (lock.Result, error) {
+					calls++
+					require.Equal(t, lock.Granularity_Row, opts.Granularity)
+					require.True(t, opts.KeepRows)
+					if tc.capacity {
+						return lock.Result{}, moerr.NewLockNeedUpgradeNoCtx()
+					}
+					if tc.binding {
+						return lock.Result{}, nil
+					}
+					result, err := ls.Lock(ctx, table, rows, id, opts)
+					result.Timestamp = snapshot
+					result.HasConflict, result.HasPrevCommit = tc.waiting, tc.waiting && tc.late
+					if tc.late {
+						result.Timestamp = newer
+					}
+					if tc.empty {
+						result.Timestamp = timestamp.Timestamp{}
+					}
+					if tc.definition {
+						result.TableDefChangedAt = &newer
+					}
+					return result, err
+				}}
+				ctx, cancel := context.WithCancel(proc.Ctx)
+				defer cancel()
+				if tc.cancel {
+					cancel()
+				}
+				admit := func() error {
+					_, err := LockRowsForNameAdmissionResult(ctx, nil, proc, 71, bat, 0,
+						*bat.Vecs[0].GetType(), lock.LockMode_Exclusive, 0)
+					return err
+				}
+				err := admit()
+				switch {
+				case tc.cancel:
+					require.ErrorIs(t, err, context.Canceled)
+					require.Zero(t, calls)
+				case tc.capacity:
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade))
+					require.Equal(t, 1, calls)
+				case tc.binding:
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+				case tc.late || tc.empty || tc.definition:
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), "%v", err)
+				default:
+					require.NoError(t, err)
+					if tc.name == "reentrant fresh" {
+						require.NoError(t, admit())
+						require.Equal(t, 2, calls)
+					}
+					require.True(t, op.HasLockTable(71))
+				}
+				require.Equal(t, snapshot, op.SnapshotTS(), "SI never refreshes")
+				require.Empty(t, op.GetOverview().WaitLocks)
+			}, client.WithTimestampWaiter(immediateLockTimestampWaiter{}))
+		})
+	}
+}

@@ -820,8 +820,6 @@ func TestSession_Migrate(t *testing.T) {
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
-			ModeAtSource:            1,
-			ModeAtSourceExported:    true,
 			DB:                      "d1",
 			LastAffectedRows:        7,
 			LastInsertID:            13,
@@ -896,11 +894,7 @@ func TestSession_Migrate(t *testing.T) {
 		s.SetLastInsertID(9)
 		s.GetProc().SetLastInsertID(9)
 
-		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
-			ModeAtSource:         1,
-			ModeAtSourceExported: true,
-			DB:                   "d1",
-		})
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{DB: "d1"})
 		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
 		require.Equal(t, uint64(9), s.GetLastInsertID())
 		require.Equal(t, uint64(9), s.GetProc().GetLastInsertID())
@@ -951,8 +945,6 @@ func TestSession_Migrate(t *testing.T) {
 
 		target := genSession(ctrl, "d1", nil)
 		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			ModeAtSource:         1,
-			ModeAtSourceExported: true,
 			ConnID:               88,
 			DB:                   exported.DB,
 			LastInsertIDExported: true,
@@ -992,8 +984,6 @@ func TestSession_Migrate(t *testing.T) {
 
 		invalidTarget := genSession(ctrl, "d1", nil)
 		err = Migrate(context.Background(), invalidTarget, &query.MigrateConnToRequest{
-			ModeAtSource:            1,
-			ModeAtSourceExported:    true,
 			DB:                      "d1",
 			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
@@ -1031,8 +1021,6 @@ func TestSession_Migrate(t *testing.T) {
 			}
 		}()
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			ModeAtSource:            1,
-			ModeAtSourceExported:    true,
 			DB:                      "d1",
 			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
@@ -1047,8 +1035,6 @@ func TestSession_Migrate(t *testing.T) {
 
 		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion22)
 		err = Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			ModeAtSource:            1,
-			ModeAtSourceExported:    true,
 			DB:                      "d1",
 			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
@@ -1084,8 +1070,6 @@ func TestSession_Migrate(t *testing.T) {
 		}()
 
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			ModeAtSource:         1,
-			ModeAtSourceExported: true,
 			DB:                   "d1",
 			LastInsertIDExported: true,
 			TempTables: []*query.MigrateTempTable{{
@@ -1136,8 +1120,6 @@ func TestSession_Migrate(t *testing.T) {
 		}()
 
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			ModeAtSource:              1,
-			ModeAtSourceExported:      true,
 			DB:                        "d1",
 			LastInsertIDExported:      true,
 			SystemVariablesExported:   true,
@@ -1197,8 +1179,6 @@ func TestSession_Migrate(t *testing.T) {
 		// Typed migration carries only final values, so the target must
 		// invalidate when restoring either cache-control variable.
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			ModeAtSource:              1,
-			ModeAtSourceExported:      true,
 			DB:                        "d1",
 			LastInsertIDExported:      true,
 			SystemVariablesExported:   true,
@@ -1259,8 +1239,6 @@ func TestSession_Migrate(t *testing.T) {
 		require.True(t, target.GetTxnHandler().OptionBitsIsSet(OPTION_AUTOCOMMIT))
 
 		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			ModeAtSource:            1,
-			ModeAtSourceExported:    true,
 			LastInsertIDExported:    true,
 			SystemVariablesExported: true,
 			SystemVariables:         exported,
@@ -1295,8 +1273,6 @@ func TestSession_Migrate(t *testing.T) {
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
-			ModeAtSource:         1,
-			ModeAtSourceExported: true,
 			ConnID:               88,
 			DB:                   "d1",
 			LastInsertIDExported: true,
@@ -1323,8 +1299,6 @@ func TestSession_Migrate(t *testing.T) {
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d2", context.Canceled)
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
-			ModeAtSource:         1,
-			ModeAtSourceExported: true,
 			DB:                   "d2",
 			LastInsertIDExported: true,
 		})
@@ -1345,8 +1319,6 @@ func TestSession_Migrate(t *testing.T) {
 		cancel()
 
 		err := Migrate(ctx, s, &query.MigrateConnToRequest{
-			ModeAtSource:         1,
-			ModeAtSourceExported: true,
 			DB:                   "d3",
 			LastAffectedRows:     3,
 			LastInsertIDExported: true,
@@ -1354,52 +1326,6 @@ func TestSession_Migrate(t *testing.T) {
 		assert.ErrorIs(t, err, context.Canceled)
 		assert.Equal(t, int64(9), s.GetLastAffectedRows())
 	})
-
-	for _, sourceMode := range []int64{0, 1, 2} {
-		t.Run(fmt.Sprintf("mode %d snapshot survives a different target default", sourceMode), func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			defer ctrl.Finish()
-			runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
-			InitServerLevelVars(sid)
-			SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
-			target := genSession(ctrl, "", nil)
-			globals := &SystemVariables{mp: map[string]interface{}{"lower_case_table_names": (sourceMode + 1) % 3}}
-			target.gSysVars = globals
-			target.sesSysVars = globals
-			globalBefore := target.gSysVars.Get("lower_case_table_names")
-			require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
-				LastInsertIDExported: true,
-				ModeAtSource:         int32(sourceMode),
-				ModeAtSourceExported: true,
-			}))
-			mode, err := target.GetSessionSysVar("lower_case_table_names")
-			require.NoError(t, err)
-			require.Equal(t, sourceMode, mode)
-			require.Equal(t, globalBefore, target.gSysVars.Get("lower_case_table_names"))
-		})
-	}
-
-	t.Run("missing mode snapshot is rejected", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
-		InitServerLevelVars(sid)
-		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
-		target := genSession(ctrl, "", nil)
-		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			LastInsertIDExported: true,
-		})
-		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
-		for _, invalidMode := range []int32{-1, 3} {
-			err = Migrate(context.Background(), target, &query.MigrateConnToRequest{
-				LastInsertIDExported: true,
-				ModeAtSourceExported: true,
-				ModeAtSource:         invalidMode,
-			})
-			require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
-		}
-	})
-
 }
 
 func Test_connectionid(t *testing.T) {

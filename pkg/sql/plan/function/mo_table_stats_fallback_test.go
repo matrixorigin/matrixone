@@ -79,17 +79,18 @@ func TestMoTableStatsFallbackResolvesMetadataOnce(t *testing.T) {
 					})
 					counter := &fallbackSubscriptionSQL{}
 					proc.Base.SessionInfo.SqlHelper = counter
-					databases, relations := 0, 0
+					databases, relations, publishers := 0, 0, 0
 					eng.EXPECT().Database(gomock.Any(), "app", txn).DoAndReturn(func(context.Context, string, any) (engine.Database, error) { databases++; return db, nil }).AnyTimes()
 					db.EXPECT().IsSubscription(gomock.Any()).Return(sub).AnyTimes()
 					if sub {
-						eng.EXPECT().Database(gomock.Any(), "origin", txn).Return(origin, nil).AnyTimes()
+						eng.EXPECT().Database(gomock.Any(), "origin", txn).DoAndReturn(func(context.Context, string, any) (engine.Database, error) { publishers++; return origin, nil }).AnyTimes()
 						origin.EXPECT().Relation(gomock.Any(), "table", nil).DoAndReturn(func(context.Context, string, any) (engine.Relation, error) { relations++; return rel, nil }).AnyTimes()
 					} else {
 						db.EXPECT().Relation(gomock.Any(), "table", nil).DoAndReturn(func(context.Context, string, any) (engine.Relation, error) { relations++; return rel, nil }).AnyTimes()
-						rel.EXPECT().GetDBID(gomock.Any()).Return(uint64(10)).AnyTimes()
-						rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(20)).AnyTimes()
 					}
+					rel.EXPECT().GetTableName().Return("table").AnyTimes()
+					rel.EXPECT().GetDBID(gomock.Any()).Return(uint64(10)).AnyTimes()
+					rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(20)).AnyTimes()
 					if size {
 						rel.EXPECT().Size(gomock.Any(), AllColumns).Return(uint64(37), nil).Times(1)
 						rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).Times(1)
@@ -122,7 +123,8 @@ func TestMoTableStatsFallbackResolvesMetadataOnce(t *testing.T) {
 					require.Equal(t, 1, relations)
 					if sub {
 						require.Equal(t, 1, counter.meta)
-						require.Equal(t, 1, counter.queries)
+						require.Zero(t, counter.queries, "physical publisher resolution uses the engine, not a second SQL scan")
+						require.Equal(t, 1, publishers)
 					}
 				})
 			}

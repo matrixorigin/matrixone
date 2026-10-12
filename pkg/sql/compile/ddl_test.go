@@ -1010,6 +1010,7 @@ func TestCreateIndexLockProtocol(t *testing.T) {
 
 	t.Run("metadata conflict rebuilds the plan", func(t *testing.T) {
 		eng := newStubEngine()
+		eng.dbs["db1"] = newStubDatabase("db1")
 		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error { return nil })
 		defer lockMoDb.Reset()
 		lockMoTbl := gostub.Stub(&lockMoTable, func(_ *Compile, _ string, _ string, _ lock.LockMode) error {

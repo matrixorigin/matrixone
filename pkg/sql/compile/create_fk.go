@@ -76,7 +76,11 @@ func (c *Compile) bindCreateForwardForeignKeys(q *plan.CreateTable, database str
 	if err != nil {
 		return nil, nil, err
 	}
-	declarations, extended, err := plan2.ReadForeignKeysReferredTo(catalogRel.CopyTableDef(c.proc.Ctx), database, q.TableDef.Name,
+	readDeclarations := plan2.ReadForeignKeysReferredTo
+	if defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
+		readDeclarations = plan2.ReadMode2ForeignKeysReferredTo
+	}
+	declarations, extended, err := readDeclarations(catalogRel.CopyTableDef(c.proc.Ctx), database, q.TableDef.Name,
 		func(sql string) (executor.Result, error) {
 			return c.runSqlWithResultAndOptions(sql, int32(actor), executor.StatementOption{}.WithDisableLog())
 		})

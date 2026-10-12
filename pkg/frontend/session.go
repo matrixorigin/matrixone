@@ -4448,12 +4448,6 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		// target session.
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
-	if !req.ModeAtSourceExported || req.ModeAtSource < 0 || req.ModeAtSource > 2 {
-		return moerr.GetOkExpectedNotSafeToStartTransfer()
-	}
-	if err := ses.installMigratedIdentifierMode(int64(req.ModeAtSource)); err != nil {
-		return err
-	}
 	parameters := getPu(ses.GetService()).SV
 	// USE and PREPARE are replayed as internal statements and update ROW_COUNT().
 	// Restore the source session values after all replay work has finished.
@@ -4656,23 +4650,6 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	if cause := context.Cause(migrationCtx); cause != nil {
 		return cause
 	}
-	return nil
-}
-
-func (ses *Session) installMigratedIdentifierMode(mode int64) error {
-	if mode < 0 || mode > 2 {
-		return moerr.NewInternalErrorNoCtx("invalid lower_case_table_names during migration")
-	}
-	if ses.sesSysVars == nil {
-		if ses.gSysVars != nil {
-			ses.sesSysVars = ses.gSysVars.Clone()
-		} else {
-			ses.sesSysVars = &SystemVariables{mp: make(map[string]interface{})}
-		}
-	} else if ses.sesSysVars == ses.gSysVars {
-		ses.sesSysVars = ses.gSysVars.Clone()
-	}
-	ses.sesSysVars.Set("lower_case_table_names", mode)
 	return nil
 }
 

@@ -2090,7 +2090,7 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		}
 		return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
 	}
-	if mode2DDL && !c.disableLock {
+	if mode2DDL && !c.disableLock && !c.createNamePinsAdmitted {
 		creationNames := make([]string, 0, 1+len(qry.IndexTables))
 		creationNames = append(creationNames, tblName)
 		for _, indexTable := range qry.IndexTables {
@@ -4340,6 +4340,18 @@ func (s *Scope) TruncateTable(c *Compile) error {
 			dbSource, rel = admittedDB, admittedRel
 		}
 	}
+	replacementAdmission := dropLifecycleAdmission{}
+	if scalarAdmission != nil {
+		replacementAdmission = *scalarAdmission
+		if mode2DDL {
+			replacementAdmission.createNames, err = c.admitReplacementNames(db, table, table, rel, nil)
+			if err != nil {
+				return err
+			}
+		} else {
+			replacementAdmission.createNames = map[plan2.FkReferKey]struct{}{{Db: db, Tbl: table}: {}}
+		}
+	}
 	if !isTemp && scalarAdmission == nil && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		if c.isLifecycleRC() {
 			// Public TRUNCATE and unfiltered DELETE share transaction-owned
@@ -4353,11 +4365,15 @@ func (s *Scope) TruncateTable(c *Compile) error {
 				return err
 			}
 		}
-		if mode2DDL {
-			if !c.isLifecycleRC() {
-				if err := lockMoDatabase(c, db, lock.LockMode_Shared); err != nil {
-					return err
-				}
+		if mode2DDL && c.isLifecycleRC() {
+			replacementAdmission.createNames, err = c.admitReplacementNames(db, table, table, rel, nil)
+			if err != nil {
+				return err
+			}
+		}
+		if mode2DDL && !c.isLifecycleRC() {
+			if err := lockMoDatabase(c, db, lock.LockMode_Shared); err != nil {
+				return err
 			}
 			// The index set can change between the first lookup and table X.
 			// TRUNCATE replans CREATE after that X, so reserve the prefix even
@@ -4404,11 +4420,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
-	replacementAdmission := dropLifecycleAdmission{}
-	if scalarAdmission != nil {
-		replacementAdmission = *scalarAdmission
-		replacementAdmission.createNames = map[plan2.FkReferKey]struct{}{{Db: db, Tbl: table}: {}}
-	} else if !isTemp && c.isLifecycleRC() {
+	if scalarAdmission == nil && !isTemp && c.isLifecycleRC() && !mode2DDL {
 		replacementAdmission.createNames, err = c.admitReplacementNames(db, table, table, rel, nil)
 		if err != nil {
 			return err
@@ -6849,7 +6861,13 @@ func openDDLDatabaseWithLock(c *Compile, input string, takeLock bool) (engine.Da
 const foldedNamespaceLockTag = "\x00mode2-name-namespace"
 
 func lockMoDatabaseNamespace(c *Compile, dbName string) error {
-	if !defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
+	if !defines.Mode2NameResolutionEnabled(c.proc.Ctx) || c.disableLock {
+		return nil
+	}
+	if c.proc.GetTxnOperator() == nil {
+		return moerr.NewInternalError(c.proc.Ctx, "missing namespace transaction")
+	}
+	if !c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		return nil
 	}
 	relation, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
@@ -6866,8 +6884,13 @@ func lockMoDatabaseNamespace(c *Compile, dbName string) error {
 		return err
 	}
 	defer bat.GetVector(0).Free(c.proc.Mp())
-	return lockRows(c.e, c.proc, relation, bat, 0,
-		lock.LockMode_Exclusive, lock.Sharding_None, accountID)
+	policy, err := c.namespaceWaitPolicy()
+	if err != nil {
+		return err
+	}
+	_, err = lockop.LockRowsForNameAdmissionResult(c.proc.Ctx, c.e, c.proc,
+		relation.GetTableID(c.proc.Ctx), bat, 0, *bat.GetVector(0).GetType(), lock.LockMode_Exclusive, accountID, policy)
+	return err
 }
 
 func lockTableCreationNamespaces(c *Compile, db engine.Database, names []string) error {
@@ -6908,6 +6931,9 @@ func lockTableCreationNamespaces(c *Compile, db engine.Database, names []string)
 }
 
 func lockHiddenIndexNamespace(c *Compile, databaseID uint64, mode lock.LockMode) error {
+	if c.disableLock || !c.proc.GetTxnOperator().Txn().IsPessimistic() {
+		return nil
+	}
 	relation, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
 	if err != nil {
 		return err
@@ -6924,11 +6950,19 @@ func lockHiddenIndexNamespace(c *Compile, databaseID uint64, mode lock.LockMode)
 		return err
 	}
 	defer bat.GetVector(0).Free(c.proc.Mp())
-	return lockRows(c.e, c.proc, relation, bat, 0,
-		mode, lock.Sharding_None, accountID)
+	policy, err := c.namespaceWaitPolicy()
+	if err != nil {
+		return err
+	}
+	_, err = lockop.LockRowsForNameAdmissionResult(c.proc.Ctx, c.e, c.proc,
+		relation.GetTableID(c.proc.Ctx), bat, 0, *bat.GetVector(0).GetType(), mode, accountID, policy)
+	return err
 }
 
 func lockMoTableNamespace(c *Compile, databaseID uint64, foldedName string) error {
+	if c.disableLock || !c.proc.GetTxnOperator().Txn().IsPessimistic() {
+		return nil
+	}
 	relation, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
 	if err != nil {
 		return err
@@ -6943,8 +6977,13 @@ func lockMoTableNamespace(c *Compile, databaseID uint64, foldedName string) erro
 		return err
 	}
 	defer bat.GetVector(0).Free(c.proc.Mp())
-	return lockRows(c.e, c.proc, relation, bat, 0,
-		lock.LockMode_Exclusive, lock.Sharding_None, accountID)
+	policy, err := c.namespaceWaitPolicy()
+	if err != nil {
+		return err
+	}
+	_, err = lockop.LockRowsForNameAdmissionResult(c.proc.Ctx, c.e, c.proc,
+		relation.GetTableID(c.proc.Ctx), bat, 0, *bat.GetVector(0).GetType(), lock.LockMode_Exclusive, accountID, policy)
+	return err
 }
 
 var lockMoTable = func(

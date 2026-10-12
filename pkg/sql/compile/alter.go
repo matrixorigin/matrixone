@@ -1222,7 +1222,19 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 				}
 			}
 		}
-		if defines.Mode2NameResolutionEnabled(c.proc.Ctx) && !c.disableLock {
+		if !isTemp && c.isLifecycleRC() && defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
+			var added []*plan.AlterTableAddFk
+			for _, action := range qry.Actions {
+				if fk := action.GetAddFk(); fk != nil {
+					added = append(added, fk)
+				}
+			}
+			replacementAdmission.createNames, err = c.admitReplacementNames(dbName, tblName, qry.CopyTableDef.Name, originRel, added)
+			if err != nil {
+				return err
+			}
+		}
+		if defines.Mode2NameResolutionEnabled(c.proc.Ctx) && !c.disableLock && (isTemp || !c.isLifecycleRC()) {
 			if qry.CopyTableDef == nil || qry.CopyTableDef.Name == "" {
 				return moerr.NewInternalError(c.proc.Ctx, "missing COPY table name for mode-2 namespace lock")
 			}
@@ -1315,7 +1327,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		if retryErr != nil {
 			return retryErr
 		}
-		if !isTemp && c.isLifecycleRC() {
+		if !isTemp && c.isLifecycleRC() && !defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
 			var added []*plan.AlterTableAddFk
 			for _, action := range qry.Actions {
 				if fk := action.GetAddFk(); fk != nil {

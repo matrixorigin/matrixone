@@ -120,14 +120,3 @@ func TestMode2TemporaryAliasConcurrentMutationAndResolution(t *testing.T) {
 	close(start)
 	wg.Wait()
 }
-
-func TestInstallMigratedIdentifierModeKeepsGlobalValue(t *testing.T) {
-	globals := &SystemVariables{mp: map[string]interface{}{"lower_case_table_names": int64(1)}}
-	ses := &Session{feSessionImpl: feSessionImpl{gSysVars: globals, sesSysVars: globals}}
-	require.NoError(t, ses.installMigratedIdentifierMode(2))
-	value, err := ses.GetSessionSysVar("lower_case_table_names")
-	require.NoError(t, err)
-	require.Equal(t, int64(2), value)
-	require.Equal(t, int64(1), globals.Get("lower_case_table_names"))
-	require.Error(t, ses.installMigratedIdentifierMode(3))
-}

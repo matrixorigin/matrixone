@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,7 +25,6 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-	"golang.org/x/exp/slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/identifier"
@@ -752,7 +752,7 @@ func appendRecursiveCascadeLockNode(
 	} else {
 		rowProject = getProjectionByLastNode(builder, sourceNodeID)
 	}
-	lockProject := slices.Clone(rowProject) //nolint:govet // inline: cannot inline generic call (type-param inference unsupported)
+	lockProject := slices.Clone(rowProject)
 	lockTargets := []*plan.LockTarget{{
 		TableId: delCtx.tableDef.TblId, ObjRef: delCtx.objRef,
 		PrimaryColIdxInBat: int32(pkPos), PrimaryColRelPos: lockTag,
@@ -929,7 +929,7 @@ func appendRecursiveCascadeLockNode(
 		}
 		lockedNodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PROJECT, Children: []int32{lockedNodeID},
-			ProjectList: slices.Clone(lockedProject[:len(rowProject)]), BindingTags: func() []int32 { //nolint:govet // inline: cannot inline generic call (type-param inference unsupported)
+			ProjectList: slices.Clone(lockedProject[:len(rowProject)]), BindingTags: func() []int32 {
 				if lockTag == 0 {
 					return nil
 				}
@@ -3103,7 +3103,7 @@ func makeOneDeletePlan(
 
 		// For the hidden table of the secondary index, there will be no null situation, only unique key hidden table need this filter
 		if isUK {
-			inputTags := slices.Clone(builder.qry.Nodes[lastNodeId].BindingTags) //nolint:govet // inline: cannot inline generic call (type-param inference unsupported)
+			inputTags := slices.Clone(builder.qry.Nodes[lastNodeId].BindingTags)
 			// append filter
 			rowIdTyp := types.T_Rowid.ToType()
 			rowIDRelPos := int32(0)
@@ -3128,7 +3128,7 @@ func makeOneDeletePlan(
 				Children:    []int32{lastNodeId},
 				FilterList:  []*plan.Expr{filterExpr},
 				ProjectList: getProjectionByLastNode(builder, lastNodeId),
-				BindingTags: slices.Clone(inputTags), //nolint:govet // inline: cannot inline generic call (type-param inference unsupported)
+				BindingTags: slices.Clone(inputTags),
 			}
 			lastNodeId = builder.appendNode(filterNode, bindCtx)
 			if delNodeInfo.preserveProjection {
@@ -5516,7 +5516,7 @@ func reduceSinkSinkScanNodes(qry *Query) {
 		for key := range stepMaps {
 			keys = append(keys, key)
 		}
-		slices.Sort(keys) //nolint:govet // inline: cannot inline generic call (type-param inference unsupported)
+		slices.Sort(keys)
 		for _, key := range keys {
 			nodeId := stepMaps[key]
 			newStepIdx := len(newSteps)
@@ -5795,6 +5795,33 @@ func ReadForeignKeysReferredTo(tableDef *plan.TableDef, db, table string,
 	return ret, layout == foreignKeyCatalogExtended, err
 }
 
+// ReadMode2ForeignKeysReferredTo reads declarations under every matching input
+// spelling from the current catalog snapshot, before names are canonicalized.
+func ReadMode2ForeignKeysReferredTo(tableDef *plan.TableDef, db, table string,
+	query func(string) (executor.Result, error)) (map[FkReferKey]map[string][]*FkReferDef, bool, error) {
+	layout := foreignKeyCatalogLayoutForDef(tableDef)
+	names, err := mode2ForwardFKReferenceNames(db, table, query)
+	if err != nil {
+		return nil, layout == foreignKeyCatalogExtended, err
+	}
+	ret := make(map[FkReferKey]map[string][]*FkReferDef)
+	for _, name := range names {
+		declarations, err := readForeignKeysReferredTo(name.database, name.table, layout, query)
+		if err != nil {
+			return nil, layout == foreignKeyCatalogExtended, err
+		}
+		for key, constraints := range declarations {
+			if ret[key] == nil {
+				ret[key] = make(map[string][]*FkReferDef)
+			}
+			for constraint, columns := range constraints {
+				ret[key][constraint] = append(ret[key][constraint], columns...)
+			}
+		}
+	}
+	return ret, layout == foreignKeyCatalogExtended, nil
+}
+
 func readForeignKeysReferredTo(db, table string, layout foreignKeyCatalogLayout,
 	query func(string) (executor.Result, error)) (map[FkReferKey]map[string][]*FkReferDef, error) {
 	sql := getSqlForFkReferredToWithCatalogLayout(db, table, layout)
@@ -5862,8 +5889,12 @@ type forwardFKReferenceName struct {
 // the physical database name would lose references to a future database alias.
 // This runs only while creating a new parent table in mode 2.
 func getMode2ForwardFKReferenceNames(ctx CompilerContext, db, table string) ([]forwardFKReferenceName, error) {
+	return mode2ForwardFKReferenceNames(db, table, func(sql string) (executor.Result, error) { return runSql(ctx, sql) })
+}
+
+func mode2ForwardFKReferenceNames(db, table string, query func(string) (executor.Result, error)) ([]forwardFKReferenceName, error) {
 	sql := "select distinct refer_db_name, refer_table_name from `mo_catalog`.`mo_foreign_keys`"
-	res, err := runSql(ctx, sql)
+	res, err := query(sql)
 	if err != nil {
 		return nil, err
 	}
