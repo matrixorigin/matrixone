@@ -384,23 +384,27 @@ func TestGossipFixtureStartupCancellation(t *testing.T) {
 }
 
 func TestGossipFixtureStartupRealBindCollision(t *testing.T) {
-	for _, earlierCollision := range []bool{false, true} {
-		name := "late node collision"
-		if earlierCollision {
-			name = "earlier collision before late node injection"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		earlierCollision  bool
+		occupiedInjection bool
+	}{
+		{name: "late node collision"},
+		{name: "earlier collision before late node injection", earlierCollision: true},
+		{name: "earlier injection endpoint occupied", earlierCollision: true, occupiedInjection: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			runtime.RunTest("", func(rt runtime.Runtime) {
 				defer leaktest.AfterTest(t)()
 				attempts := 0
 				injectedAttempt := 0
 				var currentConfigs, injectedConfigs []Config
 				var failedConfigs [][]Config
-				var occupied, earlierOccupied net.Listener
+				var occupied, earlierOccupied, competitor net.Listener
 				var collisionErr, earlierErr error
 				reopenedNode := false
 				t.Cleanup(func() {
-					for _, listener := range []net.Listener{occupied, earlierOccupied} {
+					for _, listener := range []net.Listener{occupied, earlierOccupied, competitor} {
 						if listener != nil {
 							require.NoError(t, listener.Close())
 						}
@@ -414,11 +418,20 @@ func TestGossipFixtureStartupRealBindCollision(t *testing.T) {
 						return configs, err
 					},
 					func(cfg Config) (*Service, error) {
-						if earlierCollision && attempts == 1 && cfg.UUID == currentConfigs[0].UUID {
+						if tc.earlierCollision && attempts == 1 && cfg.UUID == currentConfigs[0].UUID {
 							var err error
+							if tc.occupiedInjection {
+								// Model an independent listener winning the probe-to-injection race.
+								competitor, err = net.Listen("tcp4", cfg.GossipListenAddr())
+								if err != nil {
+									earlierErr = fmt.Errorf("earlier competitor bind failed: %w", err)
+									return nil, earlierErr
+								}
+							}
 							earlierOccupied, err = net.Listen("tcp4", cfg.GossipListenAddr())
 							if err != nil {
-								return nil, fmt.Errorf("earlier collision injection failed: %w", err)
+								earlierErr = fmt.Errorf("earlier collision injection failed: %w", err)
+								return nil, earlierErr
 							}
 							service, err := newGossipFixtureService(cfg)
 							earlierErr = err
@@ -470,10 +483,13 @@ func TestGossipFixtureStartupRealBindCollision(t *testing.T) {
 				require.Error(t, collisionErr)
 				require.True(t, isGossipFixtureBindCollision(collisionErr), "%v", collisionErr)
 				require.True(t, reopenedNode)
-				if earlierCollision {
+				if tc.earlierCollision {
 					require.Error(t, earlierErr)
 					require.True(t, isGossipFixtureBindCollision(earlierErr), "%v", earlierErr)
 					require.Greater(t, injectedAttempt, 1)
+				}
+				if tc.occupiedInjection {
+					require.Nil(t, earlierOccupied)
 				}
 				t.Logf("real memberlist collision on attempt %d, recovered on attempt %d: %v", injectedAttempt, attempts, collisionErr)
 				require.Len(t, services, 2)
