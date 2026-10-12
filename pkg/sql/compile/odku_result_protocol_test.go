@@ -16,15 +16,19 @@ package compile
 
 import (
 	"context"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 	"testing"
+	"time"
 )
 
 // These component tests use capability replies and wire decoding; they do not
@@ -73,4 +77,45 @@ func TestODKUTrackingRechecksReplacementOnActualStream(t *testing.T) {
 		}
 		require.Equal(t, defines.MORPCVersion114, stream.sent[0].(*pipeline.Message).ProtocolVersion)
 	}
+}
+
+func TestLASTInsertIDBaselineUsesActualSerializedOwner(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	client.version = defines.MORPCVersion114
+	op := projection.NewArgument()
+	defer op.Release()
+	expr := &plan.Expr{Typ: plan.Type{Id: 28}, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: int64(function.LAST_INSERT_ID) << 32}}}}
+	op.ProjectList = []*plan.Expr{expr}
+	actual := c.proc.NewNoContextChildProc(0)
+	actual.Ctx = defines.AttachAccountId(context.Background(), 0)
+	actual.Base.TxnOperator = fakeTxnOperator{}
+	actual.Base.SessionInfo.TimeZone = time.UTC
+	actual.SetResolveVariableFunc(nil)
+	actual.Base.SessionInfo.LastInsertIDSet = false
+	scope := &Scope{Magic: Remote, Proc: actual, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+	for _, baseline := range []uint64{0, 700} {
+		actual.SetLastInsertID(baseline)
+		minimum := int64(0)
+		_, _, data, _, err := prepareRemoteRunSendingDataWithVectorProtocol("", scope, c.proc, nil, uuid.Nil, &minimum)
+		require.NoError(t, err, "a real owned default0 is capturable without resolver/wire presence")
+		require.Equal(t, defines.MORPCVersion114, minimum)
+		info := new(pipeline.ProcessInfo)
+		require.NoError(t, info.Unmarshal(data))
+		require.True(t, info.SessionInfo.LastInsertIdSet)
+		require.Equal(t, baseline, info.SessionInfo.LastInsertId)
+	}
+	// The capability/root Process must not lend an owner to the unrelated
+	// Process actually serialized by prepareRemoteRunSendingData.
+	other := NewMockCompile(t).proc
+	other.Ctx = defines.AttachAccountId(context.Background(), 0)
+	other.Base.LastInsertID = nil
+	scope.Proc = other
+	_, _, _, _, err := prepareRemoteRunSendingDataWithVectorProtocol("", scope, c.proc, nil, uuid.Nil, new(int64))
+	require.ErrorContains(t, err, "baseline owner")
+	wire := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*plan.Expr{expr}}}}
+	actual.Base.SessionInfo.LastInsertIDSet = false
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(actual, wire), "explicit session baseline")
+	actual.Base.SessionInfo.LastInsertIDSet = true
+	actual.SetLastInsertID(0)
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(actual, wire))
 }

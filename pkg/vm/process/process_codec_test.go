@@ -1118,3 +1118,18 @@ func TestGetCodecServicePanicsWhenMissing(t *testing.T) {
 		_ = GetCodecService(rtSvc)
 	})
 }
+
+func TestBuildProcessInfoBaselinePresenceRequiresActualOwner(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	proc.SetResolveVariableFunc(nil)
+	proc.Base.SessionInfo.LastInsertIDSet = false
+	proc.SetLastInsertID(0)
+	info, err := proc.BuildProcessInfo("select last_insert_id()")
+	require.NoError(t, err)
+	require.True(t, info.SessionInfo.LastInsertIdSet)
+	require.Zero(t, info.SessionInfo.LastInsertId)
+	proc.Base.LastInsertID = nil
+	info, err = proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.False(t, info.SessionInfo.LastInsertIdSet, "a missing owner cannot be advertised as authoritative0")
+}

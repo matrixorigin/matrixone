@@ -180,7 +180,7 @@ func (proc *Process) BuildProcessInfo(
 			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
 			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
 			LastInsertId:           proc.GetLastInsertID(),
-			LastInsertIdSet:        true,
+			LastInsertIdSet:        proc.Base.LastInsertID != nil,
 			MaxErrorCount:          uint32(maxErrorCount),
 			MaxErrorCountSet:       maxErrorCountSet,
 		}

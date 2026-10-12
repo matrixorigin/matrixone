@@ -140,6 +140,14 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err != nil {
 		return nil, err
 	}
+	// Scope cloning/folding preserves this Process, and the sender serializes
+	// this exact owner's ProcessInfo. The capability/root Process cannot lend
+	// a baseline to an unrelated scope with a missing state owner.
+	if features.ODKUStatementResult || features.SessionLastInsertIDBaseline {
+		if s.Proc == nil || s.Proc.Base == nil || s.Proc.Base.LastInsertID == nil {
+			return nil, moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID baseline owner is missing")
+		}
+	}
 	if err = validateRemoteExpressionFeatures(proc, features); err != nil {
 		return nil, err
 	}
@@ -2250,7 +2258,16 @@ func validateRemoteExpressionPipelineProtocol(
 	if err != nil {
 		return err
 	}
-	return validateRemoteExpressionFeatures(proc, features)
+	if err := validateRemoteExpressionFeatures(proc, features); err != nil {
+		return err
+	}
+	// Decoding must prove wire presence even for expression-only consumers;
+	// a receiver-local default pointer or resolver is not sender provenance.
+	if features.SessionLastInsertIDBaseline && (proc == nil || proc.Base == nil ||
+		proc.Base.LastInsertID == nil || !proc.GetSessionInfo().LastInsertIDSet) {
+		return moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID requires an explicit session baseline")
+	}
+	return nil
 }
 
 // The sender reuses analysis of its current pipeline; the receiver computes
@@ -2279,9 +2296,6 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if features.SessionLastInsertIDBaseline {
 		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion114 {
 			return moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID baseline requires MORPC protocol version 114")
-		}
-		if proc == nil || (proc.GetResolveVariableFunc() == nil && !proc.GetSessionInfo().LastInsertIDSet) {
-			return moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID requires an explicit session baseline")
 		}
 	}
 	if features.JSONMinMaxTypedComparison && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
@@ -2528,7 +2542,7 @@ func validateRemoteODKUBaselinePresence(proc *process.Process, p *pipeline.Pipel
 	for _, instruction := range p.InstructionList {
 		tracked := instruction.GetPreInsert() != nil && instruction.GetPreInsert().TrackOdkuResult ||
 			instruction.GetDedupJoin() != nil && instruction.GetDedupJoin().OdkuResultTracking
-		if tracked && (proc == nil || proc.Base == nil || !proc.GetSessionInfo().LastInsertIDSet) {
+		if tracked && (proc == nil || proc.Base == nil || proc.Base.LastInsertID == nil || !proc.GetSessionInfo().LastInsertIDSet) {
 			return moerr.NewNotSupportedNoCtx("remote ODKU result tracking requires an explicit session LAST_INSERT_ID baseline")
 		}
 	}
