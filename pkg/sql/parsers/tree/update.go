@@ -251,10 +251,13 @@ type ExternParam struct {
 }
 
 type ExParamConst struct {
-	ScanType       int
-	FileSize       int64
-	FileStartOff   int64
-	Filepath       string
+	ScanType     int
+	FileSize     int64
+	FileStartOff int64
+	Filepath     string
+	// StageFilepath preserves the original dependency after binding resolves
+	// Filepath to a backing source. Prepared LOAD must revalidate it on execution.
+	StageFilepath  string `json:",omitempty"`
 	CompressType   string
 	Format         string
 	ArrowContainer string

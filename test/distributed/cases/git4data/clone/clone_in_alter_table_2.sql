@@ -10,7 +10,7 @@ use db;
 DROP TABLE IF EXISTS stress_alter_table;
 CREATE TABLE `stress_alter_table` (
     `md5_id` int NOT NULL,
-    `b` varchar(65535) DEFAULT NULL,
+    `b` varchar(16383) DEFAULT NULL,
     `delete_flag` int DEFAULT NULL,
     PRIMARY KEY (`md5_id`),
     FULLTEXT `fb`(`b`) WITH PARSER ngram,

@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"time"
@@ -23,8 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	moerrpb "github.com/matrixorigin/matrixone/pkg/pb/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
 
@@ -139,7 +142,9 @@ var remoteAllocationStatementGroups = struct {
 }
 
 type remoteAllocationStatementTombstone struct {
-	timer *time.Timer
+	timer    *time.Timer
+	cause    *moerr.Error
+	expected uint32
 }
 
 // remoteAllocationStatementGroup is the terminal owner for all pipeline RPCs
@@ -159,6 +164,7 @@ type remoteAllocationStatementGroup struct {
 	expired      bool
 	finalized    bool
 	err          error
+	cause        *moerr.Error
 }
 
 type remoteAllocationStatementParticipant struct {
@@ -179,64 +185,96 @@ type remoteAllocationStatementTerminal struct {
 	complete   bool
 }
 
+// Freeze only the wire error, never the original error graph or statement
+// resources. The existing generation capacity also bounds diagnostic retention.
+func snapshotRemoteStatementError(cause error) *moerr.Error {
+	var native *moerr.Error
+	if !errors.As(process.UnwrapPipelineFailure(cause), &native) {
+		native = moerr.ConvertGoError(context.Background(), cause).(*moerr.Error)
+	}
+	message := native.Error()
+	const messageLimit = 4096
+	if len(message) > messageLimit {
+		message = message[:messageLimit]
+	}
+	wire := moerrpb.Error{Code: native.ErrorCode(), MysqlCode: native.MySQLCode(), SqlState: native.SqlState(), Message: message}
+	data, err := wire.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	result := new(moerr.Error)
+	if err := result.UnmarshalBinary(data); err != nil {
+		panic(err)
+	}
+	return result
+}
+
+// Seal against new admission under the existing owner lock. Destruction can
+// invoke resource cleanup, so it must happen after releasing that lock.
+func sealUnownedRemoteAllocationStatementBoard(board *message.MessageBoard) bool {
+	if board == nil {
+		return false
+	}
+	remoteAllocationStatementGroups.Lock()
+	if remoteAllocationStatementGroups.byBoard[board] != nil {
+		remoteAllocationStatementGroups.Unlock()
+		return false
+	}
+	// Another rejected fragment may already be draining this board. Its
+	// destruction holds the board lock; never wait for it with admission locked.
+	if !board.IsClosed() {
+		board.Close()
+	}
+	remoteAllocationStatementGroups.Unlock()
+	return true
+}
+
 func acquireRemoteAllocationStatementParticipant(
 	key string,
 	board *message.MessageBoard,
 	expected uint32,
 	cancel func(error),
-) (*remoteAllocationStatementParticipant, error) {
-	if key == "" || board == nil {
-		return nil, mpool.ErrAllocationAccountInvariant
-	}
-	if expected == 0 {
-		return nil, mpool.ErrAllocationAccountInvariant
-	}
-
+) (*remoteAllocationStatementParticipant, bool, error) {
 	remoteAllocationStatementGroups.Lock()
 	defer remoteAllocationStatementGroups.Unlock()
-	if remoteAllocationStatementGroups.tombstones[key] != nil {
-		return nil, errors.Join(
-			mpool.ErrAllocationAccountInvariant,
-			moerr.NewInternalErrorNoCtx("remote allocation statement group already aborted"),
-		)
-	}
 	group := remoteAllocationStatementGroups.byBoard[board]
+	owned := group != nil
+	if key == "" || board == nil || expected == 0 {
+		return nil, owned, mpool.ErrAllocationAccountInvariant
+	}
+	if tombstone := remoteAllocationStatementGroups.tombstones[key]; tombstone != nil {
+		if (group == nil || (group.key == key && group.expected == expected)) &&
+			tombstone.expected == expected && tombstone.cause != nil {
+			return nil, owned, tombstone.cause
+		}
+		return nil, owned, errors.Join(mpool.ErrAllocationAccountInvariant,
+			moerr.NewInternalErrorNoCtx("invalid aborted remote statement registration"))
+	}
+	if active := remoteAllocationStatementGroups.byKey[key]; active != nil && active.expired &&
+		(group == nil || group == active) && active.expected == expected && active.cause != nil {
+		return nil, owned, active.cause
+	}
 	if group == nil {
+		if board.IsClosed() {
+			return nil, owned, mpool.ErrAllocationAccountInvariant
+		}
 		if remoteAllocationStatementGroups.byKey[key] != nil {
-			return nil, errors.Join(
-				mpool.ErrAllocationAccountInvariant,
-				moerr.NewInternalErrorNoCtx("remote allocation statement group key already registered"),
-			)
+			return nil, owned, errors.Join(mpool.ErrAllocationAccountInvariant,
+				moerr.NewInternalErrorNoCtx("remote allocation statement group key already registered"))
 		}
-		if len(remoteAllocationStatementGroups.byKey)+
-			len(remoteAllocationStatementGroups.tombstones) >=
-			remoteAllocationStatementGenerationLimit {
-			return nil, errors.Join(
-				mpool.ErrAllocationAccountInvariant,
-				moerr.NewInternalErrorNoCtx(
-					"remote allocation statement generation capacity reached",
-				),
-			)
+		if len(remoteAllocationStatementGroups.byKey)+len(remoteAllocationStatementGroups.tombstones) >= remoteAllocationStatementGenerationLimit {
+			return nil, owned, errors.Join(mpool.ErrAllocationAccountInvariant,
+				moerr.NewInternalErrorNoCtx("remote allocation statement generation capacity reached"))
 		}
-		group = &remoteAllocationStatementGroup{
-			key:      key,
-			board:    board,
-			expected: expected,
-		}
+		group = &remoteAllocationStatementGroup{key: key, board: board, expected: expected}
 		remoteAllocationStatementGroups.byBoard[board] = group
 		remoteAllocationStatementGroups.byKey[key] = group
 	}
-	if group.key != key || group.expected != expected || group.finalized ||
-		group.expired || group.registered >= group.expected {
-		return nil, errors.Join(
-			mpool.ErrAllocationAccountInvariant,
-			moerr.NewInternalErrorNoCtx("invalid remote allocation statement group registration"),
-		)
+	if group.key != key || group.expected != expected || group.finalized || group.expired || group.registered >= group.expected {
+		return nil, owned, errors.Join(mpool.ErrAllocationAccountInvariant,
+			moerr.NewInternalErrorNoCtx("invalid remote allocation statement group registration"))
 	}
-	participant := &remoteAllocationStatementParticipant{
-		group:  group,
-		cancel: cancel,
-	}
+	participant := &remoteAllocationStatementParticipant{group: group, cancel: cancel}
 	group.registered++
 	group.participants = append(group.participants, participant)
 	if group.registered == group.expected {
@@ -245,12 +283,31 @@ func acquireRemoteAllocationStatementParticipant(
 			group.timer = nil
 		}
 	} else if group.timer == nil {
-		group.timer = time.AfterFunc(
-			remoteAllocationStatementRegistrationTimeout,
-			func() { expireRemoteAllocationStatementGroup(group) },
-		)
+		group.timer = time.AfterFunc(remoteAllocationStatementRegistrationTimeout,
+			func() { expireRemoteAllocationStatementGroup(group) })
 	}
-	return participant, nil
+	return participant, true, nil
+}
+
+// Capture execution failure before fragment cleanup can add diagnostics.
+func (p *remoteAllocationStatementParticipant) recordFailure(cause error) {
+	if p == nil || p.group == nil || cause == nil {
+		return
+	}
+	remoteAllocationStatementGroups.Lock()
+	defer remoteAllocationStatementGroups.Unlock()
+	if p.group.cause == nil && !p.group.finalized {
+		p.group.cause = snapshotRemoteStatementError(cause)
+	}
+}
+
+func (p *remoteAllocationStatementParticipant) failureCause() *moerr.Error {
+	if p == nil || p.group == nil {
+		return nil
+	}
+	remoteAllocationStatementGroups.Lock()
+	defer remoteAllocationStatementGroups.Unlock()
+	return p.group.cause
 }
 
 // stage clears fragment-local operators while they are still reachable and
@@ -304,6 +361,7 @@ func (p *remoteAllocationStatementParticipant) finish(cause error) (
 	if p == nil || p.group == nil {
 		return remoteAllocationStatementTerminal{}, nil
 	}
+	p.recordFailure(cause)
 	p.stage(nil, nil)
 	p.finishOnce.Do(func() {
 		remoteAllocationStatementGroups.Lock()
@@ -420,7 +478,7 @@ func takeRemoteAllocationStatementGroupLocked(
 ) ([]*statementAllocationAttempt, []*mpool.MPool) {
 	group.finalized = true
 	if group.expired && group.registered < group.expected {
-		installRemoteAllocationStatementTombstoneLocked(group.key)
+		installRemoteAllocationStatementTombstoneLocked(group.key, group.cause, group.expected)
 	}
 	if group.timer != nil {
 		group.timer.Stop()
@@ -433,11 +491,11 @@ func takeRemoteAllocationStatementGroupLocked(
 	return attempts, pools
 }
 
-func installRemoteAllocationStatementTombstoneLocked(key string) {
+func installRemoteAllocationStatementTombstoneLocked(key string, cause *moerr.Error, expected uint32) {
 	if remoteAllocationStatementGroups.tombstones[key] != nil {
 		return
 	}
-	tombstone := &remoteAllocationStatementTombstone{}
+	tombstone := &remoteAllocationStatementTombstone{cause: cause, expected: expected}
 	remoteAllocationStatementGroups.tombstones[key] = tombstone
 	tombstone.timer = time.AfterFunc(
 		remoteAllocationStatementTombstoneTimeout,
@@ -506,6 +564,9 @@ func expireRemoteAllocationStatementGroup(
 	timeoutErr := moerr.NewInternalErrorNoCtx(
 		"remote allocation statement group registration timed out",
 	)
+	if group.cause == nil {
+		group.cause = snapshotRemoteStatementError(timeoutErr)
+	}
 	group.err = joinAllocationLifecycleErrors(group.err, timeoutErr)
 	expected, registered, finished := group.expected, group.registered, group.finished
 	cancels := activeRemoteAllocationStatementCancelsLocked(group)

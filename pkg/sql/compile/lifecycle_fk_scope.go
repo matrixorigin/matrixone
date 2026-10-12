@@ -16,22 +16,31 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type dropLifecycleIdentity struct {
 	database, table   string
 	databaseID        uint64
+	logicalID         uint64
 	parents, children []uint64
 }
 
@@ -53,31 +62,100 @@ func sortedFKIDs(ids []uint64) []uint64 {
 	return slices.Sorted(maps.Keys(fkIDSet(ids)))
 }
 
-// Only TRUNCATE's synchronous nested DROP may borrow its already-held broad
-// gate. The receipt cannot outlive the callback or authorize another owner.
-type broadDropLifecycleKey struct{}
-type broadDropLifecycle struct {
-	owner  client.TxnOperator
-	closed bool
+// A root ID authorizes only the certified scalar DROP. Zero retains the broad
+// capability, passed only by callers that have successfully acquired G X.
+type replacementForeignKeyCatalog struct {
+	target       plan2.FkReferKey
+	materialized []*plan.ForeignKeyDef
 }
 
-func (c *Compile) withBroadDropLifecycle(run func() error) error {
+type dropLifecycleAdmission struct {
+	rootID            uint64
+	accountID         uint32
+	root              dropLifecycleIdentity
+	createNames       map[plan2.FkReferKey]struct{}
+	foreignKeyCatalog *replacementForeignKeyCatalog
+}
+
+type dropLifecycleKey struct{}
+type dropLifecycleReceipt struct {
+	owner     client.TxnOperator
+	admission dropLifecycleAdmission
+	closed    bool
+}
+
+func (c *Compile) withDropLifecycle(admission dropLifecycleAdmission, run func() error) error {
 	old := c.proc.Ctx
-	receipt := &broadDropLifecycle{owner: c.proc.GetTxnOperator()}
-	c.proc.Ctx = context.WithValue(old, broadDropLifecycleKey{}, receipt)
+	actor, err := defines.GetAccountId(old)
+	if err != nil {
+		return err
+	}
+	admission.accountID = actor
+	receipt := &dropLifecycleReceipt{owner: c.proc.GetTxnOperator(), admission: admission}
+	c.proc.Ctx = context.WithValue(old, dropLifecycleKey{}, receipt)
 	defer func() { receipt.closed = true; c.proc.Ctx = old }()
 	return run()
 }
 
-func (c *Compile) borrowedDropLifecycle() (bool, error) {
-	r, ok := c.proc.Ctx.Value(broadDropLifecycleKey{}).(*broadDropLifecycle)
+func (c *Compile) borrowedDropLifecycle(targets ...*plan.DropTable) (bool, error) {
+	r, ok := c.proc.Ctx.Value(dropLifecycleKey{}).(*dropLifecycleReceipt)
 	if !ok {
 		return false, nil
 	}
 	if r.closed || r.owner == nil || r.owner != c.proc.GetTxnOperator() {
 		return false, moerr.NewInternalError(c.proc.Ctx, "expired DROP lifecycle owner")
 	}
+	if !r.owner.Txn().IsPessimistic() {
+		return false, nil
+	}
+	a := r.admission
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return false, err
+	}
+	if accountID != a.accountID {
+		return false, moerr.NewInternalError(c.proc.Ctx, "invalid DROP lifecycle actor")
+	}
+	if a.rootID == 0 {
+		return true, nil
+	}
+	if len(targets) != 1 || targets[0] == nil {
+		return false, moerr.NewInternalError(c.proc.Ctx, "invalid scalar DROP lifecycle target")
+	}
+	q := targets[0]
+	if q.Database != a.root.database || q.Table != a.root.table || q.TableId != a.rootID ||
+		q.TableDef == nil || plan2.SnapshotTableID(q.TableDef) != a.root.logicalID {
+		return false, moerr.NewInternalError(c.proc.Ctx, "scalar DROP exceeds its admitted root")
+	}
+	db, err := c.e.Database(c.proc.Ctx, q.Database, r.owner)
+	if err != nil {
+		return false, err
+	}
+	rel, err := db.Relation(c.proc.Ctx, q.Table, nil)
+	if err != nil {
+		return false, err
+	}
+	if rel.GetTableID(c.proc.Ctx) != a.rootID || rel.GetDBID(c.proc.Ctx) != a.root.databaseID ||
+		plan2.SnapshotTableID(rel.GetTableDef(c.proc.Ctx)) != a.root.logicalID {
+		return false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	}
 	return true, nil
+}
+
+func (c *Compile) scalarDropLifecycle() bool {
+	r, ok := c.proc.Ctx.Value(dropLifecycleKey{}).(*dropLifecycleReceipt)
+	return ok && r.admission.rootID != 0
+}
+
+func (c *Compile) borrowedBroadLifecycle() (bool, error) {
+	r, ok := c.proc.Ctx.Value(dropLifecycleKey{}).(*dropLifecycleReceipt)
+	if !ok {
+		return false, nil
+	}
+	if r.admission.rootID != 0 {
+		return false, nil
+	}
+	return c.borrowedDropLifecycle()
 }
 
 func (c *Compile) isLifecycleRC() bool {
@@ -273,7 +351,7 @@ func (c *Compile) admitDropLifecycleRCWithDomain(tables []*plan.DropTable, datab
 	if err != nil {
 		return nil, false, err
 	}
-	if err = c.admitLifecycleRC(names, needsExclusiveGate, false); err != nil {
+	if err = c.admitLifecycleRC(names, needsExclusiveGate); err != nil {
 		return nil, false, err
 	}
 	_, after, err := c.loadDropLifecycleDomain(tables, database)
@@ -294,7 +372,7 @@ func (c *Compile) admitDropLifecycleRCWithDomain(tables []*plan.DropTable, datab
 			return nil, false, err
 		}
 		if participates {
-			if err := c.admitLifecycleRC(nil, true, false); err != nil {
+			if err := c.admitLifecycleRC(nil, true); err != nil {
 				return nil, false, err
 			}
 			return nil, false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
@@ -337,4 +415,376 @@ func dropLifecycleBranchRoots(domain map[uint64]dropLifecycleIdentity, tables []
 	}
 	slices.Sort(ids)
 	return slices.Compact(ids)
+}
+
+func createTablePublishesForeignKeys(q *plan.CreateTable) bool {
+	return len(q.GetUpdateFkSqls()) != 0 || len(q.GetTableDef().GetFkeys()) != 0 ||
+		len(q.GetFkDbs()) != 0 || len(q.GetFkTables()) != 0 || len(q.GetFksReferToMe()) != 0
+}
+
+func (c *Compile) admitForeignKeyCreate() error {
+	borrowed, err := c.borrowedBroadLifecycle()
+	if err != nil || borrowed {
+		return err
+	}
+	op := c.proc.GetTxnOperator()
+	if op == nil || !op.Txn().IsPessimistic() {
+		return nil
+	}
+	if c.isLifecycleRC() {
+		return c.admitLifecycleRC(nil, true)
+	}
+	return c.lockDataBranchLineageOwnerLifecyclePessimistic()
+}
+
+func (c *Compile) validateForeignKeyParentGeneration(database, table string, expectedID uint64) error {
+	db, err := c.e.Database(c.proc.Ctx, database, c.proc.GetTxnOperator())
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			if expectedID == 0 {
+				return nil
+			}
+			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+		return err
+	}
+	parent, err := db.Relation(c.proc.Ctx, table, nil)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			if expectedID == 0 {
+				return nil
+			}
+			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+		return err
+	}
+	if expectedID == 0 || parent.GetTableID(c.proc.Ctx) != expectedID {
+		return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	}
+	return nil
+}
+
+func (c *Compile) validateCreateForeignKeyParents(q *plan.CreateTable, database string) error {
+	if q.GetTemporary() {
+		return nil
+	}
+	names, databases := q.GetFkTables(), q.GetFkDbs()
+	fkeys := q.GetTableDef().GetFkeys()
+	if len(names) != len(databases) || len(names) != len(fkeys) {
+		return moerr.NewInternalError(c.proc.Ctx, "inconsistent CREATE foreign-key parents")
+	}
+	for i, name := range names {
+		if databases[i] == database && name == q.GetTableDef().GetName() {
+			continue
+		}
+		if fkeys[i] == nil {
+			return moerr.NewInternalError(c.proc.Ctx, "missing CREATE foreign-key parent")
+		}
+		if err := c.validateForeignKeyParentGeneration(databases[i], name, fkeys[i].ForeignTbl); err != nil {
+			return err
+		}
+	}
+
+	for _, parent := range q.UnresolvedFkParents {
+		if parent == nil {
+			return moerr.NewInternalError(c.proc.Ctx, "missing unresolved CREATE foreign-key parent")
+		}
+		if err := c.validateForeignKeyParentGeneration(parent.DbName, parent.ObjName, 0); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// createNameDomain includes negative dependencies: a declared absent parent
+// owns the same name boundary as a materialized parent.
+func createNameDomain(q *plan.CreateTable, database string) map[plan2.FkReferKey]struct{} {
+	domain := make(map[plan2.FkReferKey]struct{})
+	if q == nil {
+		return domain
+	}
+	if q.Database != "" {
+		database = q.Database
+	}
+	domain[plan2.FkReferKey{Db: database, Tbl: q.GetTableDef().GetName()}] = struct{}{}
+	for i, name := range q.FkTables {
+		if i < len(q.FkDbs) {
+			domain[plan2.FkReferKey{Db: q.FkDbs[i], Tbl: name}] = struct{}{}
+		}
+	}
+	for _, parent := range q.UnresolvedFkParents {
+		if parent != nil {
+			domain[plan2.FkReferKey{Db: parent.DbName, Tbl: parent.ObjName}] = struct{}{}
+		}
+	}
+	return domain
+}
+
+func createTableForNameAdmission(p *plan.Plan) *plan.CreateTable {
+	ddl := p.GetDdl()
+	if create := ddl.GetCreateTable(); create != nil {
+		return create
+	}
+	return ddl.GetCloneTable().GetCreateTable().GetDdl().GetCreateTable()
+}
+
+func sameCreateNameDomain(a, b *plan.CreateTable) bool {
+	return a != nil && b != nil && a.Database == b.Database && a.GetTableDef().GetName() == b.GetTableDef().GetName() &&
+		maps.Equal(createNameDomain(a, a.Database), createNameDomain(b, b.Database))
+}
+
+func sameCreateNameBinding(a *lock.LockTable, b lock.LockTable) bool {
+	return a != nil && a.Valid && b.Valid && a.AllocatorID != "" && a.AllocatorID == b.AllocatorID &&
+		a.Group == b.Group && a.Table == b.Table && a.OriginTable == b.OriginTable &&
+		a.Sharding == b.Sharding && a.ServiceID == b.ServiceID && a.Version == b.Version
+}
+
+func (c *Compile) lockCatalogName(rel engine.Relation, actor uint32, names []string,
+	mode lock.LockMode, policy lock.WaitPolicy) (lock.Result, error) {
+	keys, err := getLockBatch(c.proc, actor, names)
+	if err != nil {
+		return lock.Result{}, err
+	}
+	defer keys.GetVector(0).Free(c.proc.Mp())
+	if !c.proc.GetTxnOperator().Txn().IsRCIsolation() {
+		return lock.Result{}, lockop.LockRowsWithWaitPolicy(c.e, c.proc, rel, rel.GetTableID(c.proc.Ctx), keys, 0, *keys.GetVector(0).GetType(), mode, lock.Sharding_None, actor, policy)
+	}
+	return lockop.LockRowsForAdmissionResult(c.proc.Ctx, c.e, c.proc, rel.GetTableID(c.proc.Ctx),
+		keys, 0, *keys.GetVector(0).GetType(), mode, actor, policy)
+}
+
+func (c *Compile) admitCreateNames(q *plan.CreateTable, database string) error {
+	rebuild, err := c.pinCreateNames(q, database)
+	if err != nil {
+		return err
+	}
+	if rebuild {
+		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
+	return nil
+}
+
+// pinCreateNames reports a pre-effect plan refresh separately from execution retry.
+func (c *Compile) pinCreateNames(q *plan.CreateTable, database string) (bool, error) {
+	if c.disableLock || q.Temporary || plan2.IsFkBannedDatabase(database) || !c.isLifecycleRC() || c.createNamePinsAdmitted {
+		return false, nil
+	}
+	// Internal replacement must borrow its outer frontier, never advance after DROP.
+	if receipt, ok := c.proc.Ctx.Value(dropLifecycleKey{}).(*dropLifecycleReceipt); ok {
+		actor, err := defines.GetAccountId(c.proc.Ctx)
+		if err != nil {
+			return false, err
+		}
+		if receipt.closed || receipt.owner != c.proc.GetTxnOperator() || actor != receipt.admission.accountID {
+			return false, moerr.NewInternalError(c.proc.Ctx, "invalid CREATE lifecycle owner")
+		}
+		for name := range createNameDomain(q, database) {
+			if _, ok := receipt.admission.createNames[name]; !ok {
+				return false, moerr.NewInternalError(c.proc.Ctx, "CREATE exceeds admitted replacement names")
+			}
+		}
+		c.createNamePinsAdmitted = true
+		return false, nil
+	}
+	actor, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return false, err
+	}
+	snapshot, err := c.proc.GetTxnOperator().Snapshot()
+	if err != nil {
+		return false, err
+	}
+	policy := lock.WaitPolicy_Wait
+	if len(snapshot.LockTables) > 0 || createTablePublishesForeignKeys(q) {
+		policy = lock.WaitPolicy_FastFail
+	}
+	dbNames := make(map[string]struct{})
+	domain := createNameDomain(q, database)
+	for name := range domain {
+		dbNames[name.Db] = struct{}{}
+	}
+	databases := slices.Sorted(maps.Keys(dbNames))
+	dbRel, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
+	if err != nil {
+		return false, err
+	}
+	for _, dbName := range databases {
+		if _, err = c.lockCatalogName(dbRel, actor, []string{dbName}, lock.LockMode_Shared, policy); err != nil {
+			return false, err
+		}
+	}
+	tableRel, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
+	if err != nil {
+		return false, err
+	}
+	names := slices.Collect(maps.Keys(domain))
+	slices.SortFunc(names, func(a, b plan2.FkReferKey) int {
+		if a.Db < b.Db {
+			return -1
+		}
+		if a.Db > b.Db {
+			return 1
+		}
+		if a.Tbl < b.Tbl {
+			return -1
+		}
+		if a.Tbl > b.Tbl {
+			return 1
+		}
+		return 0
+	})
+	planSnapshot, hasPlanSnapshot := c.PlanSnapshotTS()
+	if !hasPlanSnapshot {
+		planSnapshot = c.proc.GetTxnOperator().SnapshotTS()
+	}
+	refresh := false
+	for _, name := range names {
+		result, err := c.lockCatalogName(tableRel, actor, []string{name.Db, name.Tbl}, lock.LockMode_Exclusive, policy)
+		if err != nil {
+			return false, err
+		}
+		refresh = refresh || !sameCreateNameBinding(q.FkNameBinding, result.LockedOn) || result.Timestamp.IsEmpty() || !result.Timestamp.Less(planSnapshot)
+	}
+	if refresh {
+		if err = c.advanceLifecycleAdmissionSnapshot(); err != nil {
+			return false, err
+		}
+		c.createNamePinsAdmitted = true
+		return true, nil
+	}
+	c.createNamePinsAdmitted = true
+	return false, nil
+}
+
+// prepareCreateNamePlan uses the existing planner before a borrowed statement
+// acquires execution resources. Later execution retries still belong to its caller.
+func (c *Compile) prepareCreateNamePlan(p *plan.Plan) (*plan.Plan, error) {
+	q := createTableForNameAdmission(p)
+	if q == nil || q.Temporary || c.disableLock || !c.isLifecycleRC() {
+		return p, nil
+	}
+	database := q.Database
+	if database == "" {
+		database = c.db
+	}
+	if plan2.IsFkBannedDatabase(database) {
+		return p, nil
+	}
+	c.capturePlanSnapshot()
+	if createTablePublishesForeignKeys(q) {
+		if err := c.admitForeignKeyCreate(); err != nil {
+			return nil, err
+		}
+	}
+	rebuild, err := c.pinCreateNames(q, database)
+	if err != nil {
+		return nil, err
+	}
+	if !rebuild {
+		return p, nil
+	}
+	rebuilt, err := c.buildPlanFunc(c.proc.Ctx)
+	if err != nil {
+		return nil, err
+	}
+	next := createTableForNameAdmission(rebuilt)
+	if !sameCreateNameDomain(q, next) {
+		return nil, moerr.NewLockConflict(c.proc.Ctx)
+	}
+	if createTablePublishesForeignKeys(next) {
+		if err := c.admitForeignKeyCreate(); err != nil {
+			return nil, err
+		}
+	}
+	c.capturePlanSnapshot()
+	return rebuilt, nil
+}
+
+// Pin replacement endpoints before any DROP/COPY effects. G excludes FK
+// publication, while endpoint name pins also exclude index-definition writers.
+func (c *Compile) admitReplacementNames(database, source, target string, rel engine.Relation, added []*plan.AlterTableAddFk) (map[plan2.FkReferKey]struct{}, error) {
+	domain := map[plan2.FkReferKey]struct{}{{Db: database, Tbl: target}: {}, {Db: database, Tbl: source}: {}}
+	actor, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return nil, err
+	}
+	def := rel.CopyTableDef(c.proc.Ctx)
+	if def.Partition != nil {
+		metadata, err := c.proc.GetPartitionService().GetPartitionMetadata(c.proc.Ctx, rel.GetTableID(c.proc.Ctx), c.proc.GetTxnOperator())
+		if err != nil {
+			return nil, err
+		}
+		for _, partition := range metadata.Partitions {
+			domain[plan2.FkReferKey{Db: database, Tbl: partition.PartitionTableName}] = struct{}{}
+			domain[plan2.FkReferKey{Db: database, Tbl: partitionservice.GetPartitionTableName(target, partition.Name)}] = struct{}{}
+		}
+	}
+	ids := append([]uint64(nil), def.RefChildTbls...)
+	for _, fk := range def.Fkeys {
+		ids = append(ids, fk.ForeignTbl)
+	}
+	for _, id := range sortedFKIDs(ids) {
+		if id == 0 || id == rel.GetTableID(c.proc.Ctx) {
+			continue
+		}
+		db, table, _, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), id)
+		if err != nil {
+			return nil, err
+		}
+		domain[plan2.FkReferKey{Db: db, Tbl: table}] = struct{}{}
+	}
+	for _, fk := range added {
+		if fk != nil {
+			domain[plan2.FkReferKey{Db: fk.DbName, Tbl: fk.TableName}] = struct{}{}
+		}
+	}
+	if !plan2.IsFkBannedDatabase(database) {
+		res, err := c.runSqlWithResultAndOptions(fmt.Sprintf("select distinct refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys where db_name=%s and table_name=%s", sqlquote.String(database), sqlquote.String(source)), int32(actor), executor.StatementOption{}.WithDisableLog())
+		if err != nil {
+			return nil, err
+		}
+		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			for i := 0; i < rows; i++ {
+				domain[plan2.FkReferKey{Db: string(cols[0].GetBytesAt(i)), Tbl: string(cols[1].GetBytesAt(i))}] = struct{}{}
+			}
+			return true
+		})
+		res.Close()
+	}
+	keys := slices.Collect(maps.Keys(domain))
+	slices.SortFunc(keys, func(a, b plan2.FkReferKey) int {
+		if a.Db != b.Db {
+			if a.Db < b.Db {
+				return -1
+			}
+			return 1
+		}
+		if a.Tbl < b.Tbl {
+			return -1
+		}
+		if a.Tbl > b.Tbl {
+			return 1
+		}
+		return 0
+	})
+	dbs, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
+	if err != nil {
+		return nil, err
+	}
+	tables, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
+	if err != nil {
+		return nil, err
+	}
+	for _, key := range keys {
+		if _, err := c.lockCatalogName(dbs, actor, []string{key.Db}, lock.LockMode_Shared, lock.WaitPolicy_FastFail); err != nil {
+			return nil, err
+		}
+		if _, err := c.lockCatalogName(tables, actor, []string{key.Db, key.Tbl}, lock.LockMode_Exclusive, lock.WaitPolicy_FastFail); err != nil {
+			return nil, err
+		}
+	}
+	// The caller's existing replacement frontier follows these pins, before
+	// any effects. Do not add another frontier or refresh inside nested CREATE.
+	return domain, nil
 }

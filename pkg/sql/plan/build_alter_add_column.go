@@ -56,12 +56,8 @@ func AddColumn(
 			"column name %s is reserved for external table scans", newColName)
 	}
 
-	colType, err := getTypeFromAst(ctx.GetContext(), specNewColumn.Type)
+	colType, err := getColumnTypeFromAst(ctx.GetContext(), specNewColumn, tableDef.DefaultCharset, nil)
 	if err != nil {
-		return false, err
-	}
-	colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
-	if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableDef.DefaultCharset, specNewColumn.Attributes); err != nil {
 		return false, err
 	}
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {

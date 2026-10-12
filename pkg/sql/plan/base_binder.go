@@ -58,6 +58,11 @@ var kAlwaysFalseExpr = &plan.Expr{
 }
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
+	leaveBinding, bindErr := enterViewSchemaBinding(b.GetContext())
+	if bindErr != nil {
+		return nil, bindErr
+	}
+	defer leaveBinding()
 	if b.numericParamType != nil && !b.isNumericContextNode(astExpr, depth) {
 		paramType := b.numericParamType
 		b.numericParamType = nil
@@ -648,19 +653,8 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			err = moerr.NewBadFieldErrorf(localErrCtx, "invalid input: column %s does not exist", name)
 		}
 	} else {
-		var binding *Binding
-		var ok bool
-		// try resolve table in current context
-		if binding, ok = b.ctx.bindingByTable[table]; !ok {
-			// if remap option exists, try with db-qualified name
-			if b.ctx.remapOption != nil {
-				if len(db) == 0 {
-					db = b.builder.compCtx.DefaultDatabase()
-				}
-				binding, ok = b.ctx.bindingByTable[db+"."+table]
-			}
-		}
-		if ok {
+		binding := b.resolveTableBinding(b.ctx, db, table)
+		if binding != nil {
 			colPos = binding.FindColumn(col)
 			if colPos == AmbiguousName {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
@@ -676,7 +670,8 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		}
 	}
 
-	if groupPos, ok := b.correlatedGroupByColPos(depth, name, table, col); ok {
+	// A grouped spelling cannot override a failed explicit namespace lookup.
+	if groupPos, ok := b.correlatedGroupByColPos(depth, name, table, col); ok && (db == "" || colPos != NotFound) {
 		expr = &plan.Expr{
 			Typ: b.ctx.groupOutputType(groupPos),
 			Expr: &plan.Expr_Corr{
@@ -2402,19 +2397,22 @@ func (b *baseBinder) numericColumnTypeInContext(
 		return Type{}, false, false
 	}
 
-	binding, ok := ctx.bindingByTable[table]
-	if !ok && ctx.remapOption != nil {
-		db := astExpr.DbName()
-		if db == "" && b.builder != nil {
-			db = b.builder.compCtx.DefaultDatabase()
-		}
-		binding, ok = ctx.bindingByTable[db+"."+table]
-	}
-	if !ok {
+	binding := b.resolveTableBinding(ctx, astExpr.DbName(), table)
+	if binding == nil {
 		return Type{}, false, false
 	}
 	typ, found = bindingColumnType(binding, col)
 	return typ, found, false
+}
+
+// resolveTableBinding preserves the lazy default-database lookup for rewritten
+// tables. Qualified namespace matching belongs to BindContext.
+func (b *baseBinder) resolveTableBinding(ctx *BindContext, db, table string) *Binding {
+	binding := ctx.resolveTableBinding(db, table)
+	if binding == nil && db == "" && ctx.remapOption != nil && b.builder != nil {
+		binding = ctx.resolveTableBinding(b.builder.compCtx.DefaultDatabase(), table)
+	}
+	return binding
 }
 
 func bindingColumnType(binding *Binding, col string) (Type, bool) {
@@ -6734,6 +6732,18 @@ func bindFuncExprImplByPlanExpr(
 		(!containsVolatileFunction(args[0]) || args[0].AuxId < 0) {
 		return bindBetweenAsComparisons(ctx, args)
 	}
+	// HEX/BIT literals have a VARCHAR-shaped type but an exact unsigned numeric
+	// domain. Preserve their provenance before either prepared consumers or the
+	// type-only SUM/AVG fallback converts strings to DOUBLE. Ordinary binary
+	// strings retain their string-prefix semantics.
+	if isPreparedNumericAggregate(name, len(args)) && isBinaryNumericLiteral(args[0]) {
+		unsigned := types.T_uint64.ToType()
+		arg, err := appendCastBeforeExpr(ctx, args[0], makePlan2Type(&unsigned))
+		if err != nil {
+			return nil, err
+		}
+		args = []*Expr{arg}
+	}
 	args, err = bindPreparedConsumerArguments(ctx, name, args)
 	if err != nil {
 		return nil, err
@@ -8136,6 +8146,12 @@ func bindFuncExprImplByPlanExpr(
 
 	// return new expr
 	Typ := makePlan2Type(&returnType)
+	if name == "serial_extract" && returnType.Oid == types.T_enum {
+		// The runtime type omits ENUM members. Preserve the declared result
+		// domain so assignment restores the stored ordinal without converting
+		// it through a different (or empty) domain.
+		Typ.Enumvalues = args[2].Typ.Enumvalues
+	}
 	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
 	if returnType.Oid == types.T_varchar || returnType.Oid == types.T_text {
 		for _, idx := range padSpaceValueArgumentIndexes(name, len(args)) {
@@ -11024,8 +11040,8 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 	if !hasSpecialArg {
 		return args
 	}
-	// SUM/AVG have a numeric operand contract even though their VARCHAR
-	// overload is deliberately rejected. Resolve storage before that lookup.
+	// SUM/AVG must aggregate ENUM ordinals and SET bitmaps, not their display
+	// labels. Resolve storage before the generic string-numeric conversion.
 	if (name == "sum" || name == "avg") && len(args) == 1 {
 		return rawArgs
 	}

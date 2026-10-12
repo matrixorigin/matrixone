@@ -3,6 +3,8 @@ ARG NATIVE_IMAGE=matrixorigin/golang:1.27.0-ubuntu22.04-matrixone-native-1
 ARG GO_CACHE_IMAGE=matrixorigin/golang:1.27.0-ubuntu22.04
 ARG RUNTIME_IMAGE=matrixorigin/ubuntu:22.04
 
+FROM golang:1.27.1-bookworm AS go-toolchain
+
 FROM ${BUILDER_IMAGE} AS native
 
 ARG GOPROXY="https://proxy.golang.org,direct"
@@ -20,9 +22,12 @@ RUN mkdir -p /root/.cache/go-build /go/pkg/mod
 FROM ${GO_CACHE_IMAGE} AS go-cache
 FROM ${NATIVE_IMAGE} AS builder
 
+# Module compilation must not inherit an older Go from the native SDK image.
+RUN rm -rf /usr/local/go
+COPY --from=go-toolchain /usr/local/go /usr/local/go
+
 ARG GOPROXY="https://proxy.golang.org,direct"
-ENV GOWORK=off
-ENV GOTOOLCHAIN=auto
+ENV GOWORK=off GOTOOLCHAIN=local
 RUN go env -w GOPROXY="${GOPROXY}"
 
 WORKDIR /go/src/github.com/matrixorigin/matrixone

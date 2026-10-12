@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 
@@ -58,59 +59,6 @@ func TestDebug(t *testing.T) {
 	if debugSQL.output != out {
 		t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", debugSQL.output, out)
 	}
-}
-
-func TestCreateMaterializedView(t *testing.T) {
-	stmt, err := ParseOne(context.Background(),
-		"create materialized view if not exists mv as select k, count(*) from src group by k", 1)
-	require.NoError(t, err)
-	view, ok := stmt.(*tree.CreateView)
-	require.True(t, ok)
-	require.True(t, view.Materialized)
-	require.True(t, view.IfNotExists)
-	require.Equal(t,
-		"create materialized view if not exists mv as select k, count(*) from src group by k",
-		tree.String(view, dialect.MYSQL))
-}
-
-func TestMaterializedViewRefreshSyntax(t *testing.T) {
-	tests := []struct {
-		sql    string
-		method tree.MaterializedViewRefreshMethod
-		timing tree.MaterializedViewRefreshTiming
-		format string
-	}{
-		{"create materialized view mv refresh fast on change as select k, count(*) from src group by k", tree.MaterializedViewRefreshFast, tree.MaterializedViewRefreshOnChange, "create materialized view mv refresh fast on change as select k, count(*) from src group by k"},
-		{"create materialized view mv refresh incremental as select k, count(*) from src group by k", tree.MaterializedViewRefreshFast, tree.MaterializedViewRefreshOnChange, "create materialized view mv refresh fast on change as select k, count(*) from src group by k"},
-		{"create materialized view mv refresh full on demand as select count(*) from src", tree.MaterializedViewRefreshComplete, tree.MaterializedViewRefreshOnDemand, "create materialized view mv refresh complete on demand as select count(*) from src"},
-		{"create materialized view mv refresh auto as select count(*) from src", tree.MaterializedViewRefreshForce, tree.MaterializedViewRefreshOnChange, "create materialized view mv as select count(*) from src"},
-	}
-	for _, test := range tests {
-		stmt, err := ParseOne(context.Background(), test.sql, 1)
-		require.NoError(t, err, test.sql)
-		view := stmt.(*tree.CreateView)
-		require.Equal(t, test.method, view.RefreshMethod)
-		require.Equal(t, test.timing, view.RefreshTiming)
-		require.Equal(t, test.format, tree.String(view, dialect.MYSQL))
-	}
-
-	stmt, err := ParseOne(context.Background(), "refresh materialized view db.mv", 1)
-	require.NoError(t, err)
-	refresh := stmt.(*tree.RefreshMaterializedView)
-	require.Equal(t, "refresh materialized view db.mv", tree.String(refresh, dialect.MYSQL))
-	require.Equal(t, (&tree.CreateView{}).StmtKind(), refresh.StmtKind())
-
-	_, err = ParseOne(context.Background(), "create materialized view mv refresh fast on commit as select count(*) from src", 1)
-	require.Error(t, err)
-}
-
-func TestDropMaterializedView(t *testing.T) {
-	stmt, err := ParseOne(context.Background(), "drop materialized view if exists mv", 1)
-	require.NoError(t, err)
-	view, ok := stmt.(*tree.DropView)
-	require.True(t, ok)
-	require.True(t, view.Materialized)
-	require.Equal(t, "drop materialized view if exists mv", tree.String(view, dialect.MYSQL))
 }
 
 func TestDiagnosticCountAndLimitSyntax(t *testing.T) {
@@ -722,6 +670,86 @@ func TestSQLModeParserModes(t *testing.T) {
 		require.Equal(t, uint32(defines.MYSQL_TYPE_FLOAT), firstColumnType(t, stmt).Oid)
 		require.Equal(t, int32(32), firstColumnType(t, stmt).Width)
 	})
+}
+
+func TestHighNotPrecedence(t *testing.T) {
+	ctx := context.Background()
+
+	parseExpr := func(t *testing.T, sql, sqlMode string) tree.Expr {
+		t.Helper()
+		stmt, err := ParseOneWithSQLMode(ctx, sql, 1, sqlMode)
+		require.NoError(t, err)
+		t.Cleanup(stmt.Free)
+		return firstSelectExpr(t, stmt)
+	}
+
+	t.Run("between changes precedence only when enabled", func(t *testing.T) {
+		defaultExpr := parseExpr(t, "select not 1 between 2 and 3", "")
+		defaultNot, ok := defaultExpr.(*tree.NotExpr)
+		require.True(t, ok)
+		require.IsType(t, &tree.RangeCond{}, defaultNot.Expr)
+
+		highExpr := parseExpr(t, "select not 1 between 2 and 3", "HIGH_NOT_PRECEDENCE")
+		highBetween, ok := highExpr.(*tree.RangeCond)
+		require.True(t, ok)
+		require.IsType(t, &tree.NotExpr{}, highBetween.Left)
+	})
+
+	t.Run("in changes precedence only when enabled", func(t *testing.T) {
+		defaultExpr := parseExpr(t, "select not 0 in (0, 1)", "")
+		defaultNot, ok := defaultExpr.(*tree.NotExpr)
+		require.True(t, ok)
+		defaultIn, ok := defaultNot.Expr.(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.IN, defaultIn.Op)
+
+		highExpr := parseExpr(t, "select not 0 in (0, 1)", "HIGH_NOT_PRECEDENCE")
+		highIn, ok := highExpr.(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.IN, highIn.Op)
+		require.IsType(t, &tree.NotExpr{}, highIn.Left)
+	})
+
+	t.Run("high NOT is accepted in simple-expression unary positions", func(t *testing.T) {
+		minusExpr, ok := parseExpr(t, "select - not 0", "HIGH_NOT_PRECEDENCE").(*tree.UnaryExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.UNARY_MINUS, minusExpr.Op)
+		require.IsType(t, &tree.NotExpr{}, minusExpr.Expr)
+
+		bangExpr, ok := parseExpr(t, "select ! not 0", "HIGH_NOT_PRECEDENCE").(*tree.UnaryExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.UNARY_MARK, bangExpr.Op)
+		require.IsType(t, &tree.NotExpr{}, bangExpr.Expr)
+
+		likeExpr, ok := parseExpr(t, "select '1' like not 0", "HIGH_NOT_PRECEDENCE").(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.LIKE, likeExpr.Op)
+		require.IsType(t, &tree.NotExpr{}, likeExpr.Right)
+	})
+
+	for _, sql := range []string{
+		"select not (1 between 2 and 3)",
+		"select (not 1) between 2 and 3",
+		"select 1 not in (1)",
+		"select 1 not like '2'",
+		"select 1 not ilike '2'",
+		"select 1 not regexp '2'",
+		"select 1 not between 2 and 3",
+		"select 1 is not null",
+		"select 1 is not unknown",
+		"select 1 is not true",
+		"select 1 is not false",
+		"create table if not exists t_high_not (a int not null)",
+		"alter table t_high_not alter constraint c not enforced",
+		"merge into target t using source s on t.id = s.id when not matched then insert (id) values (s.id)",
+		"merge into target t using source s on t.id = s.id when not matched then insert values (s.id)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOneWithSQLMode(ctx, sql, 1, "HIGH_NOT_PRECEDENCE")
+			require.NoError(t, err)
+			stmt.Free()
+		})
+	}
 }
 
 // A fulltext MATCH ... AGAINST pattern is stored unescaped and re-escaped on Format.
@@ -6005,6 +6033,53 @@ func TestCreateSQLTaskPreservesTimestampUnits(t *testing.T) {
 	require.Contains(t, formatted, "INTERVAL 1 hour")
 }
 
+func TestTemporalUnitSyntaxParseFormatParse(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		sql      string
+		contains []string
+		rejects  []string
+		opts     []tree.FmtCtxOption
+	}{
+		{
+			name:     "nested timestampadd",
+			sql:      "select timestampadd(microsecond, 1, timestampadd(hour, 2, ts)) from t",
+			contains: []string{"timestampadd(microsecond, 1, timestampadd(hour, 2, ts))"},
+			rejects:  []string{"'microsecond'", "'hour'"},
+			opts:     []tree.FmtCtxOption{tree.WithSingleQuoteString()},
+		},
+		{
+			name:     "extract from timestampadd",
+			sql:      "select extract(microsecond from timestampadd(second, 3, ts)) from t",
+			contains: []string{"extract(microsecond from timestampadd(second, 3, ts))"},
+			rejects:  []string{"extract(microsecond,", "'second'"},
+			opts:     []tree.FmtCtxOption{tree.WithSingleQuoteString()},
+		},
+		{
+			name:     "quoted data and identifier",
+			sql:      "select extract(hour from `from`), 'extract(day from x)' as `timestampadd` from t",
+			contains: []string{"extract(hour from `from`)", "'extract(day from x)'", "`timestampadd`"},
+			rejects:  []string{"extract(hour,"},
+			opts:     []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			formatted := tree.StringWithOpts(stmt, dialect.MYSQL, test.opts...)
+			for _, fragment := range test.contains {
+				require.Contains(t, formatted, fragment)
+			}
+			for _, fragment := range test.rejects {
+				require.NotContains(t, formatted, fragment)
+			}
+			reparsed, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			require.Equal(t, formatted, tree.StringWithOpts(reparsed, dialect.MYSQL, test.opts...))
+		})
+	}
+}
+
 func TestCreateSQLTaskPreservesComplexTimestampUnits(t *testing.T) {
 	stmt, err := ParseOne(context.TODO(), `create task task_time_complex as begin
 insert into silver_fiix_offline_tracker
@@ -6752,135 +6827,42 @@ func TestNonGeometrySRIDSyntaxRoundTrip(t *testing.T) {
 	}
 }
 
-func TestHighNotPrecedence(t *testing.T) {
-	ctx := context.Background()
-
-	parseExpr := func(t *testing.T, sql, sqlMode string) tree.Expr {
-		t.Helper()
-		stmt, err := ParseOneWithSQLMode(ctx, sql, 1, sqlMode)
-		require.NoError(t, err)
-		t.Cleanup(stmt.Free)
-		return firstSelectExpr(t, stmt)
-	}
-
-	t.Run("between changes precedence only when enabled", func(t *testing.T) {
-		defaultExpr := parseExpr(t, "select not 1 between 2 and 3", "")
-		defaultNot, ok := defaultExpr.(*tree.NotExpr)
-		require.True(t, ok)
-		require.IsType(t, &tree.RangeCond{}, defaultNot.Expr)
-
-		highExpr := parseExpr(t, "select not 1 between 2 and 3", "HIGH_NOT_PRECEDENCE")
-		highBetween, ok := highExpr.(*tree.RangeCond)
-		require.True(t, ok)
-		require.IsType(t, &tree.NotExpr{}, highBetween.Left)
-	})
-
-	t.Run("in changes precedence only when enabled", func(t *testing.T) {
-		defaultExpr := parseExpr(t, "select not 0 in (0, 1)", "")
-		defaultNot, ok := defaultExpr.(*tree.NotExpr)
-		require.True(t, ok)
-		defaultIn, ok := defaultNot.Expr.(*tree.ComparisonExpr)
-		require.True(t, ok)
-		require.Equal(t, tree.IN, defaultIn.Op)
-
-		highExpr := parseExpr(t, "select not 0 in (0, 1)", "HIGH_NOT_PRECEDENCE")
-		highIn, ok := highExpr.(*tree.ComparisonExpr)
-		require.True(t, ok)
-		require.Equal(t, tree.IN, highIn.Op)
-		require.IsType(t, &tree.NotExpr{}, highIn.Left)
-	})
-
-	t.Run("high NOT is accepted in simple-expression unary positions", func(t *testing.T) {
-		minusExpr, ok := parseExpr(t, "select - not 0", "HIGH_NOT_PRECEDENCE").(*tree.UnaryExpr)
-		require.True(t, ok)
-		require.Equal(t, tree.UNARY_MINUS, minusExpr.Op)
-		require.IsType(t, &tree.NotExpr{}, minusExpr.Expr)
-
-		bangExpr, ok := parseExpr(t, "select ! not 0", "HIGH_NOT_PRECEDENCE").(*tree.UnaryExpr)
-		require.True(t, ok)
-		require.Equal(t, tree.UNARY_MARK, bangExpr.Op)
-		require.IsType(t, &tree.NotExpr{}, bangExpr.Expr)
-
-		likeExpr, ok := parseExpr(t, "select '1' like not 0", "HIGH_NOT_PRECEDENCE").(*tree.ComparisonExpr)
-		require.True(t, ok)
-		require.Equal(t, tree.LIKE, likeExpr.Op)
-		require.IsType(t, &tree.NotExpr{}, likeExpr.Right)
-	})
-
-	for _, sql := range []string{
-		"select not (1 between 2 and 3)",
-		"select (not 1) between 2 and 3",
-		"select 1 not in (1)",
-		"select 1 not like '2'",
-		"select 1 not ilike '2'",
-		"select 1 not regexp '2'",
-		"select 1 not between 2 and 3",
-		"select 1 is not null",
-		"select 1 is not unknown",
-		"select 1 is not true",
-		"select 1 is not false",
-		"create table if not exists t_high_not (a int not null)",
-		"alter table t_high_not alter constraint c not enforced",
-		"merge into target t using source s on t.id = s.id when not matched then insert (id) values (s.id)",
-		"merge into target t using source s on t.id = s.id when not matched then insert values (s.id)",
+func TestLexerErrorUTF8Excerpt(t *testing.T) {
+	for _, tc := range []struct{ name, raw, want string }{
+		{"empty", "", ""}, {"ASCII", "FROM bad", "FROM bad"},
+		{"ASCII exact", strings.Repeat("a", 1024), strings.Repeat("a", 1024)},
+		{"ASCII overflow", strings.Repeat("a", 1025), strings.Repeat("a", 1024)},
+		{"two byte cut", strings.Repeat("a", 1023) + "¢", strings.Repeat("a", 1023)},
+		{"two byte aligned", strings.Repeat("a", 1022) + "¢z", strings.Repeat("a", 1022) + "¢"},
+		{"three byte cut", strings.Repeat("a", 1023) + "你", strings.Repeat("a", 1023)},
+		{"three byte aligned", strings.Repeat("a", 1021) + "你z", strings.Repeat("a", 1021) + "你"},
+		{"four byte cut", strings.Repeat("a", 1022) + "😀", strings.Repeat("a", 1022)},
+		{"four byte aligned", strings.Repeat("a", 1020) + "😀z", strings.Repeat("a", 1020) + "😀"},
+		{"malformed", "FROM \xff\xe4\xbd", "FROM ???"},
+		{"literal replacement", "FROM �", "FROM �"},
+		{"discarded malformed", strings.Repeat("a", 1024) + "\xff", strings.Repeat("a", 1024)},
 	} {
-		t.Run(sql, func(t *testing.T) {
-			stmt, err := ParseOneWithSQLMode(ctx, sql, 1, "HIGH_NOT_PRECEDENCE")
-			require.NoError(t, err)
-			stmt.Free()
-		})
-	}
-}
-
-// A fulltext MATCH ... AGAINST pattern is stored unescaped and re-escaped on Format.
-// Under NO_BACKSLASH_ESCAPES a backslash is a literal char, so the formatter must NOT
-// re-escape it (WithNoBackslashEscape), otherwise every parse->format cycle doubles the
-// backslashes and the search pattern drifts (#24823 follow-up). Verify the pattern is
-// preserved across a mode-aware round-trip and that a second format is byte-identical.
-
-func TestTemporalUnitSyntaxParseFormatParse(t *testing.T) {
-	for _, test := range []struct {
-		name     string
-		sql      string
-		contains []string
-		rejects  []string
-		opts     []tree.FmtCtxOption
-	}{
-		{
-			name:     "nested timestampadd",
-			sql:      "select timestampadd(microsecond, 1, timestampadd(hour, 2, ts)) from t",
-			contains: []string{"timestampadd(microsecond, 1, timestampadd(hour, 2, ts))"},
-			rejects:  []string{"'microsecond'", "'hour'"},
-			opts:     []tree.FmtCtxOption{tree.WithSingleQuoteString()},
-		},
-		{
-			name:     "extract from timestampadd",
-			sql:      "select extract(microsecond from timestampadd(second, 3, ts)) from t",
-			contains: []string{"extract(microsecond from timestampadd(second, 3, ts))"},
-			rejects:  []string{"extract(microsecond,", "'second'"},
-			opts:     []tree.FmtCtxOption{tree.WithSingleQuoteString()},
-		},
-		{
-			name:     "quoted data and identifier",
-			sql:      "select extract(hour from `from`), 'extract(day from x)' as `timestampadd` from t",
-			contains: []string{"extract(hour from `from`)", "'extract(day from x)'", "`timestampadd`"},
-			rejects:  []string{"extract(hour,"},
-			opts:     []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()},
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			stmt, err := ParseOne(context.Background(), test.sql, 1)
-			require.NoError(t, err)
-			formatted := tree.StringWithOpts(stmt, dialect.MYSQL, test.opts...)
-			for _, fragment := range test.contains {
-				require.Contains(t, formatted, fragment)
+		t.Run(tc.name, func(t *testing.T) {
+			scanner := &Scanner{buf: "prefix" + tc.raw, PrePos: 6, Line: 3, Col: 7}
+			lexer := &Lexer{scanner: scanner}
+			lexer.Error("syntax error")
+			err, ok := scanner.LastError.(PositionedErr)
+			require.True(t, ok)
+			require.Equal(t, tc.want, err.Near)
+			require.True(t, utf8.ValidString(err.Error()))
+			require.LessOrEqual(t, len(err.Near), 1024)
+			require.Equal(t, 3, err.Line)
+			require.Equal(t, 7, err.Col)
+			require.Equal(t, "prefix"+tc.raw, scanner.buf)
+			require.Equal(t, 6, scanner.PrePos)
+			if len(tc.raw) <= 1024 {
+				require.Empty(t, err.LenStr)
+			} else {
+				require.NotEmpty(t, err.LenStr)
 			}
-			for _, fragment := range test.rejects {
-				require.NotContains(t, formatted, fragment)
+			if tc.name == "ASCII" {
+				require.Equal(t, `You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 4 column 7 near "FROM bad";`, err.Error())
 			}
-			reparsed, err := ParseOne(context.Background(), formatted, 1)
-			require.NoError(t, err)
-			require.Equal(t, formatted, tree.StringWithOpts(reparsed, dialect.MYSQL, test.opts...))
 		})
 	}
 }

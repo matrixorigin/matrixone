@@ -132,6 +132,31 @@ func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
 	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error) (err error) {
+	// statistical information record and trace.
+	compileStart := time.Now()
+	hasUnresolvedFullTextPlan := false
+	hasUnresolvedIndexHintPlan := false
+	_, task := gotrace.NewTask(context.TODO(), "pipeline.Compile")
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.ConvertPanicError(execTopContext, e)
+			c.proc.Error(execTopContext, "panic in compile",
+				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
+				zap.String("error", err.Error()))
+		}
+		task.End()
+		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(compileStart).Seconds())
+	}()
+
+	// Refresh borrowed CREATE plans before effects without advancing or
+	// rolling back the caller's workspace statement. This also covers
+	// frontend background execution and reused Compile instances.
+	if c.proc != nil && c.proc.IncrStatementDisabled() {
+		queryPlan, err = c.prepareCreateNamePlan(queryPlan)
+		if err != nil {
+			return err
+		}
+	}
 	if err = plan.RequireLegacyCollations(queryPlan); err != nil {
 		return err
 	}
@@ -141,6 +166,7 @@ func (c *Compile) Compile(
 	if err = validateHexMySQLNumericProtocol(c.proc, queryPlan); err != nil {
 		return err
 	}
+
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.beginSchedulingTraceAttempt()
 
@@ -157,22 +183,6 @@ func (c *Compile) Compile(
 	// Freeze the owner mapping before any Shuffle is constructed. A retry
 	// inherits this execution value even if the deployment gate changes.
 	c.bindStringShuffleHashAlgorithmForCompile()
-
-	// statistical information record and trace.
-	compileStart := time.Now()
-	hasUnresolvedFullTextPlan := false
-	hasUnresolvedIndexHintPlan := false
-	_, task := gotrace.NewTask(context.TODO(), "pipeline.Compile")
-	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.ConvertPanicError(execTopContext, e)
-			c.proc.Error(execTopContext, "panic in compile",
-				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
-				zap.String("error", err.Error()))
-		}
-		task.End()
-		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(compileStart).Seconds())
-	}()
 
 	// Check whether a pessimistic transaction needs to lock the metadata table.
 	if txnOperator := c.proc.GetTxnOperator(); txnOperator != nil && txnOperator.Txn().IsPessimistic() {
@@ -434,12 +444,17 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	c.InitPipelineContextToExecuteQuery()
 
 	// record this query to compile service.
-	if err = TryMarkQueryRunning(c, txnOperator); err != nil {
-		return nil, err
+	if c.runSqlToken == 0 {
+		if err = TryMarkQueryRunning(c, txnOperator); err != nil {
+			return nil, err
+		}
+		defer MarkQueryDone(c, txnOperator)
+	} else {
+		// The internal executor admitted this same statement before workspace
+		// preparation. Its owner exits after all statement cleanup.
+		c.proc.SetBaseProcessRunningStatus(true)
+		defer c.proc.SetBaseProcessRunningStatus(false)
 	}
-	defer func() {
-		MarkQueryDone(c, txnOperator)
-	}()
 
 	// the runC is the final object for executing the query, it's not always the same as c because of retry.
 	var runC = c
@@ -787,6 +802,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		runC = nextRunC
 		warnings.bindScopes(runC.scopes)
 		runC.executionGeneration = c.executionGeneration
+		runC.createNamePinsAdmitted = c.createNamePinsAdmitted
 		attemptScopes = runC.scopes
 		attemptAnal = runC.anal
 		if c.resultSink != nil {
@@ -1169,6 +1185,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	c.bindLoadUniqueIndexPromotionSnapshot(runC, rebuildPlan)
 	runC.resultSink = c.resultSink
 	runC.executionGeneration = c.executionGeneration
+	runC.createNamePinsAdmitted = c.createNamePinsAdmitted
 	c.copyAllocationAccountLifecycleTo(runC)
 	runC.SetQuerySchedulingIntent(c.querySchedulingIntent)
 	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
@@ -1198,6 +1215,10 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 				return nil, e
 			}
 		}
+	}
+	if c.createNamePinsAdmitted && !sameCreateNameDomain(createTableForNameAdmission(c.pn), createTableForNameAdmission(planForRetry)) {
+		e = moerr.NewLockConflictNoCtx()
+		return nil, e
 	}
 	if e = runC.Compile(topContext, planForRetry, c.fill); e != nil {
 		return nil, e

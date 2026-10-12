@@ -99,6 +99,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -311,6 +312,8 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	// are deliberately ineligible for LOAD unique-index promotion.
 	c.clearLoadUniqueIndexPromotion()
 	c.executionGeneration = 0
+	c.runSqlToken = 0
+	c.createNamePinsAdmitted = false
 	c.retryTimes = 0
 	c.resultMetadataFrozen.Store(false)
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
@@ -499,6 +502,8 @@ func (c *Compile) clear() {
 	c.preparedJoinDiagnosticFree = false
 	c.resultSink = nil
 	c.executionGeneration = 0
+	c.runSqlToken = 0
+	c.createNamePinsAdmitted = false
 	c.retryTimes = 0
 	c.affectRows.Store(0)
 	c.addr = ""
@@ -848,7 +853,7 @@ func (c *Compile) preferPrimaryScopeResult(current, candidate scopeRunResult) sc
 }
 
 func (c *Compile) canRetry(err error) bool {
-	if c.disableRetry {
+	if c.disableRetry || c.proc.IncrStatementDisabled() {
 		return false
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode) {
@@ -2576,6 +2581,14 @@ func (c *Compile) getExternParam(proc *process.Process, externScan *plan.ExternS
 	param.ExternType = externScan.Type
 	param.FileService = c.proc.Base.FileService
 	param.Ctx = c.proc.Ctx
+
+	if externScan.Type == int32(plan.ExternType_LOAD) && param.StageFilepath != "" {
+		// Keep the prepared plan's bound source and derived file metadata, but
+		// authorize its original stage dependency against this execution's catalog.
+		if _, err := stageutil.UrlToStageDef(param.StageFilepath, proc); err != nil {
+			return nil, err
+		}
+	}
 
 	if externScan.Type == int32(plan.ExternType_EXTERNAL_TB) || externScan.Type == int32(plan.ExternType_RESULT_SCAN) {
 		switch param.ScanType {
@@ -5310,7 +5323,9 @@ func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, 
 			return c.compileSingleTableFunction(node)
 		}
 	}
-	if planplugin.TableFuncRequiresCoordinator(node.TableDef.TblFunc.Name) {
+	if name := node.TableDef.GetTblFunc().GetName(); name == "json_table" || planplugin.TableFuncRequiresCoordinator(name) {
+		// G2 has no distributed keyed-once warning transport. Execute this
+		// consumer once on the coordinator; input scans may remain remote.
 		ss = []*Scope{c.newMergeScope(ss)}
 	}
 	for i := range ss {
@@ -7482,10 +7497,11 @@ func hasMultiScopeGroup(groups [][]*Scope) bool {
 
 func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	name := right.GetTableDef().GetTblFunc().GetName()
-	if name == "mo_view_columns" || planplugin.TableFuncRequiresCoordinator(name) {
+	if name == "mo_view_columns" || name == "json_table" || planplugin.TableFuncRequiresCoordinator(name) {
 		// Session-bound functions and index writers must use the origin process:
 		// a remote mirror workspace cannot publish writes in its transaction.
 		// Gather inputs here without changing the source scans' placement.
+		// JSON_TABLE stays local until its keyed-once warning transport exists.
 		rs = []*Scope{c.newMergeScope(rs)}
 	}
 
@@ -8722,7 +8738,7 @@ func supportsMultiSourceISCP(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion109
+	return ok && protocolVersion >= defines.MORPCVersion110
 }
 
 func (c *Compile) supportsRemotePartitionTopNWithTies() bool {
