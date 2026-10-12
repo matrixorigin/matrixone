@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -2651,6 +2652,127 @@ func TestParquetTimestampMillisOverflowInFastPath(t *testing.T) {
 			require.ErrorContains(t, err, "overflows microseconds")
 			require.Zero(t, vec.Length())
 		})
+	}
+}
+
+func TestParquetGeometryAndDatalinkMapping(t *testing.T) {
+	point := geo.Point{X: 1.0000001192092896, Y: -2.5}
+	point32, err := geo.WriteWKBFloat32(point)
+	require.NoError(t, err)
+	line, err := geo.ParseWKT("LINESTRING(1.25 -2.5,3.75 4.5)")
+	require.NoError(t, err)
+	empty, err := geo.ParseWKT("POINT EMPTY")
+	require.NoError(t, err)
+	link := "file:///does-not-exist%20file?offset=2&size=3"
+	pointType := types.New(types.T_geometry, 4327, int32(geo.POINT))
+	type testCase struct {
+		name, text string
+		typ        types.Type
+		want       []byte
+		wantErr    string
+	}
+	tests := []testCase{
+		{"point", "SRID=4326;POINT(1.0000001192092896 -2.5)", pointType, geo.WriteWKB(point), ""},
+		{"point32", "srid=4326;POINT(1.0000001192092896 -2.5)", types.New(types.T_geometry32, 4327, int32(geo.POINT)), point32, ""},
+		{"unconstrained SRID", "SRID=4326;POINT(1.0000001192092896 -2.5)", types.T_geometry.ToType(), geo.WriteWKB(point), ""},
+		{"plain WKT", "POINT(1.0000001192092896 -2.5)", types.New(types.T_geometry, 1, int32(geo.POINT)), geo.WriteWKB(point), ""},
+		{"explicit zero", "SRID=0;POINT(1.0000001192092896 -2.5)", types.New(types.T_geometry, 1, int32(geo.POINT)), geo.WriteWKB(point), ""},
+		{"max SRID", fmt.Sprintf("SRID=%d;POINT(1.0000001192092896 -2.5)", geo.MaxSRID), types.New(types.T_geometry, int32(geo.MaxSRID)+1, int32(geo.POINT)), geo.WriteWKB(point), ""},
+		{"line", "SRID=4326;LINESTRING(1.25 -2.5,3.75 4.5)", types.New(types.T_geometry, 4327, int32(geo.LINESTRING)), geo.WriteWKB(line), ""},
+		{"empty", "POINT EMPTY", types.T_geometry.ToType(), geo.WriteWKB(empty), ""},
+		{"link value without content read", link, types.T_datalink.ToType(), []byte(link), ""},
+		{"nested SRID", "SRID=4326;SRID=0;POINT(1 2)", pointType, nil, "invalid geometry SRID"},
+		{"SRID mismatch", "SRID=0;POINT(1 2)", pointType, nil, "does not match column SRID"},
+		{"plain WKT mismatch", "POINT(1 2)", pointType, nil, "does not match column SRID"},
+		{"subtype mismatch", "SRID=4326;LINESTRING(1 2,3 4)", pointType, nil, "cannot store LINESTRING in POINT"},
+		{"invalid WKT", "SRID=4326;POINT(bad)", pointType, nil, "invalid"},
+		{"float32 overflow", "POINT(3.5e38 0)", types.T_geometry32.ToType(), nil, "coordinate is not finite"},
+		{"invalid link scheme", "https://example.com/value", types.T_datalink.ToType(), nil, "unsupported url scheme"},
+		{"invalid link offset", "file:///missing?offset=-1", types.T_datalink.ToType(), nil, "offset cannot be negative"},
+		{"invalid link size", "file:///missing?size=-2", types.T_datalink.ToType(), nil, "size cannot be less than -1"},
+		{"missing SRID", "SRID=;POINT(1 2)", pointType, nil, "invalid geometry SRID"},
+		{"negative SRID", "SRID=-1;POINT(1 2)", pointType, nil, "invalid geometry SRID"},
+		{"nonnumeric SRID", "SRID=abc;POINT(1 2)", pointType, nil, "invalid geometry SRID"},
+		{"overflowing SRID", "SRID=4294967296;POINT(1 2)", pointType, nil, "invalid geometry SRID"},
+		{"SRID exceeds type width", fmt.Sprintf("SRID=%d;POINT(1 2)", int64(geo.MaxSRID)+1), pointType, nil, "invalid geometry SRID"},
+		{"missing SRID separator", "SRID=4326POINT(1 2)", pointType, nil, "invalid geometry SRID"},
+	}
+	for _, dictionary := range []bool{false, true} {
+		for _, tc := range tests {
+			t.Run(fmt.Sprintf("%s/dictionary=%v", tc.name, dictionary), func(t *testing.T) {
+				proc := testutil.NewProc(t)
+				t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+				node := parquet.String()
+				if dictionary {
+					node = parquet.Encoded(node, &parquet.RLEDictionary)
+				}
+				f, page := writeColumnAndGetPage(t, parquet.Optional(node), []parquet.Row{
+					{parquet.ByteArrayValue([]byte(tc.text)).Level(0, 1, 0)},
+					{parquet.NullValue().Level(0, 0, 0)},
+				})
+				var h ParquetHandler
+				mapper := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(tc.typ.Oid), Width: tc.typ.Width, Scale: tc.typ.Scale})
+				require.NotNil(t, mapper)
+				vec := vector.NewVec(tc.typ)
+				t.Cleanup(func() { vec.Free(proc.Mp()) })
+				err := mapper.mapping(page, proc, vec)
+				if tc.wantErr != "" {
+					require.ErrorContains(t, err, tc.wantErr)
+					require.Zero(t, vec.Length())
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, 2, vec.Length())
+				require.Equal(t, tc.want, vec.GetBytesAt(0))
+				require.False(t, vec.GetNulls().Contains(0))
+				require.True(t, vec.GetNulls().Contains(1))
+			})
+		}
+	}
+}
+
+func TestParquetGeometryAndDatalinkRollback(t *testing.T) {
+	for _, oid := range []types.T{types.T_geometry, types.T_geometry32, types.T_datalink} {
+		for _, notNull := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/notNull=%v", oid, notNull), func(t *testing.T) {
+				proc := testutil.NewProc(t)
+				t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+				proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+					if name == "max_points_in_geometry" {
+						return int64(1), nil
+					}
+					return nil, nil
+				})
+				valid, invalid := "POINT(1 2)", "LINESTRING(1 2,3 4)"
+				if oid == types.T_datalink {
+					valid, invalid = "file:///missing", "file:///missing?offset=-1"
+				}
+				f, page := writeColumnAndGetPage(t, parquet.Optional(parquet.String()), []parquet.Row{
+					{parquet.ByteArrayValue([]byte(valid)).Level(0, 1, 0)},
+					{parquet.NullValue().Level(0, 0, 0)},
+					{parquet.ByteArrayValue([]byte(invalid)).Level(0, 1, 0)},
+				})
+				var h ParquetHandler
+				mapper := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(oid), NotNullable: notNull})
+				require.NotNil(t, mapper)
+				vec := vector.NewVec(oid.ToType())
+				t.Cleanup(func() { vec.Free(proc.Mp()) })
+				require.NoError(t, vector.AppendBytes(vec, []byte("seed"), false, proc.Mp()))
+				require.NoError(t, vector.AppendBytes(vec, nil, true, proc.Mp()))
+				err := mapper.mapping(page, proc, vec)
+				if notNull {
+					require.ErrorContains(t, err, "NOT NULL")
+				} else if oid == types.T_datalink {
+					require.ErrorContains(t, err, "offset cannot be negative")
+				} else {
+					require.ErrorContains(t, err, "max_points_in_geometry=1")
+				}
+				require.Equal(t, 2, vec.Length())
+				require.Equal(t, []byte("seed"), vec.GetBytesAt(0))
+				require.Equal(t, 1, vec.GetNulls().Count())
+				require.True(t, vec.GetNulls().Contains(1))
+			})
+		}
 	}
 }
 
