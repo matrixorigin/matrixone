@@ -15,11 +15,13 @@
 package types
 
 import (
+	"fmt"
 	"math/big"
 	"math/rand"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -125,6 +127,30 @@ func TestParse256LeadingZerosDoNotConsumePrecision(t *testing.T) {
 	require.Equal(t, in, got.Format(scale))
 }
 
+func TestParseDecimal256ValidatesDroppedTail(t *testing.T) {
+	for _, width := range []int32{39, 65} {
+		for _, digits := range []int{76, 77, 80} {
+			for _, sign := range []string{"", "-"} {
+				in := sign + "0." + strings.Repeat("1", digits)
+				for _, tail := range []string{"z", ".1", "e+", "e-", "e1z", "e1.0", " +z"} {
+					t.Run(fmt.Sprintf("width%d/digits%d/%s%s", width, digits, sign, tail), func(t *testing.T) {
+						_, err := ParseDecimal256(in+tail, width, 2)
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "input %q: %v", in+tail, err)
+					})
+				}
+				for _, tail := range []string{"", "e1", "E-1", " +"} {
+					t.Run(fmt.Sprintf("width%d/digits%d/%svalid%q", width, digits, sign, tail), func(t *testing.T) {
+						got, err := ParseDecimal256(in+tail, width, 2)
+						require.NoError(t, err)
+						canonical := in + strings.TrimRight(tail, " +")
+						require.Equal(t, exactDecimalRound(t, canonical, 2), got.Format(2))
+					})
+				}
+			}
+		}
+	}
+}
+
 // The deciding digit can be the first digit parse256 dropped at the 76-digit
 // limit, exactly at the column scale; it is applied once, away from zero.
 func TestParseDecimal256RoundsDroppedDigitAtColumnScale(t *testing.T) {
@@ -134,11 +160,16 @@ func TestParseDecimal256RoundsDroppedDigitAtColumnScale(t *testing.T) {
 		{"-" + intPart + "." + frac + "5", "-" + intPart + "." + strings.Repeat("2", 9) + "3"},
 		{intPart + "." + frac + "49", intPart + "." + frac},
 		{"-" + intPart + "." + frac + "4", "-" + intPart + "." + frac},
+		{intPart + "." + frac + "4 9", intPart + "." + frac},
+		{"-" + intPart + "." + frac + "4+9", "-" + intPart + "." + frac},
+		{intPart + "." + frac + "5+0", intPart + "." + strings.Repeat("2", 9) + "3"},
+		{"-" + intPart + "." + frac + "5 0", "-" + intPart + "." + strings.Repeat("2", 9) + "3"},
 	} {
 		got, err := ParseDecimal256(tc.in, 76, 10)
 		require.NoError(t, err, tc.in)
 		require.Equal(t, tc.want, got.Format(10), tc.in)
-		require.Equal(t, exactDecimalRound(t, tc.in, 10), got.Format(10), tc.in)
+		canonical := strings.NewReplacer(" ", "", "+", "").Replace(tc.in)
+		require.Equal(t, exactDecimalRound(t, canonical, 10), got.Format(10), tc.in)
 	}
 }
 
@@ -162,6 +193,15 @@ func TestParse256RoundsAtDigitLimit(t *testing.T) {
 	got, scale, err := Parse256("1." + strings.Repeat("2", 75) + "5e1")
 	require.NoError(t, err)
 	require.Equal(t, "12."+strings.Repeat("2", 73)+"3", got.Format(scale))
+
+	// Legacy Parse256 retains its existing permissive tail handling; strict
+	// fixed-column conversion uses ParseDecimal256's exact mode instead.
+	for _, tail := range []string{"z", ".1"} {
+		got, scale, err := Parse256("0." + strings.Repeat("1", 77) + tail)
+		require.NoError(t, err)
+		require.Equal(t, int32(76), scale)
+		require.Equal(t, "0."+strings.Repeat("1", 76), got.Format(scale))
+	}
 
 	_, _, err = Parse256("")
 	require.Error(t, err)

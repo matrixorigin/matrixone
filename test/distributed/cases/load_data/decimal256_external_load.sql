@@ -65,4 +65,26 @@ select count(*) as invalid_rows from decimal256_bad_load;
 load data inline format='csv', data='1,9999999999999999999999999999999999999999\n' into table decimal256_bad_load fields terminated by ',';
 select count(*) as overflow_rows from decimal256_bad_load;
 
+-- Strict fixed-column conversion must validate the tail after retained digits.
+set @decimal256_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_ALL_TABLES';
+create table decimal256_tail_load(id int, p39 decimal(39,2), p65 decimal(65,2));
+
+-- 76-digit rejection control, then the first dropped digit with a valid row
+-- before the malformed row: the failed statement must insert neither row.
+load data inline format='csv', data='1,0.1111111111111111111111111111111111111111111111111111111111111111111111111111z,0.5\n' into table decimal256_tail_load fields terminated by ',';
+select count(*) as boundary_rows from decimal256_tail_load;
+load data inline format='csv', data='1,0.25,0.5\n2,0.11111111111111111111111111111111111111111111111111111111111111111111111111111z,0.5\n' into table decimal256_tail_load fields terminated by ',';
+select count(*) as malformed_csv_rows from decimal256_tail_load;
+
+-- JSONLINE reaches the same parser, including a repeated decimal point.
+load data inline format='jsonline', data='{"id":1,"p39":"0.25","p65":"0.5"}\n{"id":2,"p39":"0.25","p65":"0.11111111111111111111111111111111111111111111111111111111111111111111111111111111.1"}\n', jsontype='object' into table decimal256_tail_load;
+select count(*) as malformed_json_rows from decimal256_tail_load;
+
+-- Valid long fractions and exponents still round to the final column scale.
+load data inline format='csv', data='1,0.11111111111111111111111111111111111111111111111111111111111111111111111111111111,0.11111111111111111111111111111111111111111111111111111111111111111111111111111e1\n' into table decimal256_tail_load fields terminated by ',';
+load data inline format='jsonline', data='{"id":2,"p39":"-0.11111111111111111111111111111111111111111111111111111111111111111111111111111","p65":"-0.11111111111111111111111111111111111111111111111111111111111111111111111111111111E-1"}\n', jsontype='object' into table decimal256_tail_load;
+select id, concat('d=',p39) as p39_text, concat('d=',p65) as p65_text from decimal256_tail_load order by id;
+set session sql_mode = @decimal256_saved_sql_mode;
+
 drop database decimal256_external_load;
