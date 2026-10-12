@@ -1,0 +1,15 @@
+DROP DATABASE IF EXISTS issue_29900_config;
+CREATE DATABASE issue_29900_config;
+USE issue_29900_config;
+CREATE TABLE config_probe(id INT,config JSON);
+INSERT INTO config_probe VALUES (1, '{"source":"mysql-migration"}');
+SELECT id, config FROM config_probe;
+➤ id[4,32,0]  ¦  config[-1,2147483647,0]  𝄀
+1  ¦  {"source": "mysql-migration"}
+SELECT column_name, data_type FROM information_schema.columns
+WHERE table_schema = DATABASE() AND table_name = 'config_probe'
+AND column_name = 'config'
+ORDER BY ordinal_position;
+➤ column_name[12,-1,0]  ¦  data_type[12,-1,0]  𝄀
+config  ¦  JSON
+DROP DATABASE issue_29900_config;
