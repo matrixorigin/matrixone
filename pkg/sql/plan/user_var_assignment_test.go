@@ -101,3 +101,21 @@ func TestUserVariableAssignmentRejectsAmbiguousOrderAndLimit(t *testing.T) {
 		})
 	}
 }
+
+func TestUserVariableAssignmentRejectsMultipleProjectionAssignments(t *testing.T) {
+	for _, sql := range []string{
+		"select @a := 1, @b := 2",
+		"select @a := 1, @a := 2",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(ctx.GetContext(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(ctx, stmt, false)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "multiple user-variable assignment projections")
+		})
+	}
+}

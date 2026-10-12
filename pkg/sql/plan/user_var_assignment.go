@@ -98,12 +98,14 @@ func validateUserVarAssignmentScope(
 		return nil
 	}
 	hasAssignment := false
+	assignmentProjections := 0
 	for _, selectExpr := range clause.Exprs {
 		if containsUserVarAssignment(selectExpr.Expr) {
 			hasAssignment = true
 			if !isUserVarAssignmentRoot(selectExpr.Expr) {
 				return userVarAssignmentNotSupported(ctx, "a nested projection expression")
 			}
+			assignmentProjections++
 		}
 	}
 	if clause.Where != nil && containsUserVarAssignment(clause.Where.Expr) {
@@ -151,6 +153,15 @@ func validateUserVarAssignmentScope(
 	}
 	if !hasAssignment {
 		return nil
+	}
+	// Assignment executors evaluate one projection row at a time, while the
+	// ordinary projection operator evaluates sibling expressions over a whole
+	// batch. Until those two boundaries share an explicit ordering contract,
+	// accepting multiple assignment projections would make results depend on
+	// the executor's batch partitioning. Reject the ambiguous form rather than
+	// silently changing the value history when the physical plan is repartitioned.
+	if assignmentProjections > 1 {
+		return userVarAssignmentNotSupported(ctx, "multiple user-variable assignment projections")
 	}
 	if clause.Distinct {
 		return userVarAssignmentNotSupported(ctx, "DISTINCT")
