@@ -183,3 +183,29 @@ func TestJSONMinMaxActualPrefixKeepsELT112AndTyped113(t *testing.T) {
 		require.Equal(t, defines.MORPCVersion113, floor)
 	}
 }
+
+// The internal shuffle decision must use the same typed floor as the outer
+// expression fence. This is a component test, not an old-binary execution.
+func TestJSONMinMaxShuffleUsesSharedTypedFloor(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	node, _ := newShuffleGroupTestNodes(16)
+	node.AggList = []*plan.Expr{jsonMinMaxPlanExpr(aggexec.AggIdOfMin)}
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
+		}
+	})
+	for _, version := range []int64{defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		require.Equal(t, version >= defines.MORPCVersion113, c.canCompileShuffleGroup(node))
+	}
+	// Ordinary string MIN is governed by its existing contracts, not typed JSON.
+	node.AggList[0].GetF().Args[0].Typ.Id = int32(types.T_varchar)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+	require.False(t, hasJSONMinMaxAggregate(node))
+	require.True(t, c.canCompileShuffleGroup(node))
+}
