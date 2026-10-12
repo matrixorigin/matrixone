@@ -50,7 +50,7 @@ func functionalJSONTextCastEligible(expr *Expr, cols []*ColDef, visiting map[int
 	}
 	fn := expr.GetF()
 	if len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1] == nil || fn.Args[1].GetT() == nil ||
-		!sameFunctionalValueType(expr.Typ, fn.Args[1].GetT().Typ) {
+		!sameFunctionalValueType(expr.Typ, fn.Args[1].Typ) {
 		return false
 	}
 	unquote := fn.Args[0]
@@ -99,7 +99,7 @@ func functionalJSONInputEligible(expr *Expr, cols []*ColDef, visiting map[int32]
 	}
 	fn := expr.GetF()
 	if fn.Args[0] == nil || fn.Args[1] == nil || fn.Args[1].GetT() == nil ||
-		!sameFunctionalValueType(expr.Typ, fn.Args[1].GetT().Typ) {
+		!sameFunctionalValueType(expr.Typ, fn.Args[1].Typ) {
 		return false
 	}
 	if fn.Args[0].Typ.Id == int32(types.T_json) {
