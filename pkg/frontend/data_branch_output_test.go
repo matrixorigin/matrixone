@@ -2952,3 +2952,89 @@ func buildFakePKInsertBatchWithoutFakePKValue(t *testing.T, mp *mpool.MPool, row
 	bat.SetRowCount(len(rows))
 	return bat
 }
+
+func TestOnlineBranchApplyOrdersPreparationProductionAndCleanup(t *testing.T) {
+	for _, pick := range []bool{false, true} {
+		for _, failure := range []string{"", "init", "producer", "apply", "cancel"} {
+			t.Run(fmt.Sprintf("pick=%v/%s", pick, failure), func(t *testing.T) {
+				ses := newValidateSession(t)
+				ctrl := gomock.NewController(t)
+				tblStuff := newTestBranchTableStuff(ctrl)
+				tblStuff.def.baseColNames = append([]string(nil), tblStuff.def.colNames...)
+				defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				injected := errors.New("injected " + failure)
+				var events []string
+				creates, applies := 0, 0
+				produced := false
+				bh := mock_frontend.NewMockBackgroundExec(ctrl)
+				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+					events = append(events, sql)
+					if strings.HasPrefix(sql, "create table") {
+						require.False(t, produced, "stage refresh/drain precedes producer SQL")
+						creates++
+						if failure == "init" {
+							return injected
+						}
+					}
+					if strings.HasPrefix(sql, "insert into") {
+						applies++
+						if failure == "apply" {
+							return injected
+						}
+					}
+					return nil
+				}).AnyTimes()
+				bh.EXPECT().GetExecResultSet().Return(nil).AnyTimes()
+				bh.EXPECT().ClearExecResultSet().AnyTimes()
+				produce := func(emit emitFunc) error {
+					produced = true
+					require.Equal(t, 3, creates)
+					for _, fromUpdate := range []bool{false, true} {
+						bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+						require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, ses.proc.Mp()))
+						for _, vec := range bat.Vecs[1:] {
+							require.NoError(t, vector.AppendBytes(vec, []byte("row"), false, ses.proc.Mp()))
+						}
+						bat.SetRowCount(1)
+						if _, err := emitBatch(emit, batchWithKind{kind: diffInsert, fromUpdate: fromUpdate, side: diffSideTarget, name: "target", batch: bat}, false, tblStuff.retPool); err != nil {
+							return err
+						}
+						if failure == "producer" {
+							return injected
+						}
+						if failure == "cancel" {
+							cancel()
+						}
+					}
+					// Starting an update flushes inserts inline, before the next probe.
+					require.Positive(t, applies)
+					return nil
+				}
+				var err error
+				if pick {
+					err = pickMergeDiffs(ctx, cancel, ses, bh, &tree.DataBranchPick{ConflictOpt: &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT}}, tblStuff, produce)
+				} else {
+					err = mergeDiffs(ctx, cancel, ses, bh, tblStuff, produce)
+				}
+				switch failure {
+				case "":
+					require.NoError(t, err)
+				case "cancel":
+					require.ErrorIs(t, err, context.Canceled)
+				default:
+					require.ErrorIs(t, err, injected)
+				}
+				if failure == "init" {
+					require.False(t, produced)
+				} else {
+					require.True(t, strings.HasPrefix(events[len(events)-1], "drop table if exists"), "cleanup runs after production returns")
+				}
+				if failure == "producer" || failure == "cancel" {
+					require.Zero(t, applies, "failed production must not flush buffered rows")
+				}
+			})
+		}
+	}
+}

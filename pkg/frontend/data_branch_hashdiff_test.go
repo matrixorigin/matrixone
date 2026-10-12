@@ -3719,3 +3719,91 @@ func TestCompareRowInWrappedBatches_WithCommonIdxes(t *testing.T) {
 	bat2.Clean(mp)
 	bat3.Clean(mp)
 }
+
+func TestHashDiffOnlineApplyOrdersLCAChunks(t *testing.T) {
+	for _, failApply := range []bool{false, true} {
+		t.Run(fmt.Sprintf("apply_failure_%t", failApply), func(t *testing.T) {
+			wantProbes := 3
+			if failApply {
+				wantProbes = 1
+			}
+			sentinel := moerr.NewInternalErrorNoCtx("inline apply failed")
+			ses := newValidateSession(t)
+			ctrl := gomock.NewController(t)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(20, 0).ToTimestamp()).AnyTimes()
+			ses.txnHandler = &TxnHandler{txnOp: txnOp}
+			tblStuff := newTestBranchTableStuff(ctrl)
+			defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+			worker, err := ants.NewPool(1)
+			require.NoError(t, err)
+			defer worker.Release()
+			tblStuff.worker = worker
+			tblStuff.maxTombstoneBatchCnt = 1
+			tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+			lcaRel := mock_frontend.NewMockRelation(ctrl)
+			lcaRel.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef("lca_tbl", "name")).AnyTimes()
+			lcaRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
+			tblStuff.lcaRel = lcaRel
+			var active atomic.Bool
+			var key atomic.Int64
+			var probes atomic.Int32
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+				require.True(t, active.CompareAndSwap(false, true), "no overlapping probe/apply SQL")
+				var id int64
+				_, err := fmt.Sscanf(sql[strings.Index(sql, "values row(0,"):], "values row(0,%d)", &id)
+				require.NoError(t, err)
+				key.Store(id)
+				return nil
+			}).Times(wantProbes)
+			bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+				return []interface{}{buildLCAProbeResultSetWithRows([]interface{}{int64(0), key.Load(), "old", "h"})}
+			}).Times(wantProbes)
+			bh.EXPECT().ClearExecResultSet().Do(func() {
+				probes.Add(1)
+				active.Store(false)
+			}).Times(wantProbes)
+			var dataRows, tombRows [][]any
+			var oldIDs, newIDs []types.Rowid
+			for i := 1; i <= 3; i++ {
+				dataRows = append(dataRows, []any{int64(i), "new", "h", commitTSBytes(types.BuildTS(15, 0))})
+				tombRows = append(tombRows, []any{int64(i), commitTSBytes(types.BuildTS(15, 0))})
+				oldIDs = append(oldIDs, buildHashDiffRowID(t, i))
+				newIDs = append(newIDs, buildHashDiffRowID(t, i+10))
+			}
+			tarData := buildHashDiffDataBatchWithRowIDs(t, ses.proc.Mp(), newIDs, dataRows)
+			tarTombstone := buildHashDiffTombstoneBatchWithRowIDs(t, ses.proc.Mp(), oldIDs, tombRows)
+			var updates int
+			var failedBatch *batch.Batch
+			var earlyApply bool
+			err = hashDiff(t.Context(), ses, bh, tblStuff, branchMetaInfo{
+				lcaTableId: 77, pathFromLCAToTar: []uint64{77, 88}, pathFromLCAToTarTS: []types.TS{{}, types.BuildTS(10, 0)},
+				pathFromLCAToBase: []uint64{77}, pathFromLCAToBaseTS: []types.TS{{}},
+			}, compositeOption{onlineApply: true, expandUpdate: true, conflictOpt: &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT}}, func(w batchWithKind) (bool, error) {
+				if failApply && probes.Load() > 0 {
+					failedBatch = w.batch
+					return false, sentinel
+				}
+				require.True(t, active.CompareAndSwap(false, true), "probe must exit before inline apply/flush")
+				if w.kind == diffInsert && w.fromUpdate {
+					updates += w.batch.RowCount()
+					earlyApply = earlyApply || probes.Load() < 3
+				}
+				tblStuff.retPool.releaseRetBatch(w.batch, false)
+				active.Store(false)
+				return false, nil
+			}, []engine.ChangesHandle{&stubEngineChangesHandle{responses: []stubEngineChangesHandleResponse{{data: tarData, tombstone: tarTombstone}}}}, nil, nil)
+			if failApply {
+				require.ErrorIs(t, err, sentinel)
+				require.NotNil(t, failedBatch)
+				require.Zero(t, failedBatch.RowCount(), "emitBatch releases rejected output")
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, 3, updates)
+				require.True(t, earlyApply, "multiple chunks interleave ordered probe/apply instead of retaining all results")
+			}
+			require.Equal(t, int32(wantProbes), probes.Load())
+		})
+	}
+}
