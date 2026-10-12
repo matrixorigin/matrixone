@@ -583,7 +583,7 @@ func TestSharedRoutineRevisionProtocolGatesMixedVersionSQLUdfWrites(t *testing.T
 		wantError           string
 	}{
 		{name: "legacy_zero_head"},
-		{name: "revision_head", revision: 1, namespace: 1, wantError: "SQL UDF revision replacement requires MORPC protocol version 111"},
+		{name: "revision_head", revision: 1, namespace: 1, wantError: "SQL UDF revision replacement requires MORPC protocol version 112"},
 		{name: "half_zero_revision", namespace: 1, wantError: "invalid revision head"},
 		{name: "half_zero_namespace", revision: 1, wantError: "invalid revision head"},
 	} {
@@ -642,12 +642,12 @@ func TestReadSQLRevisionUsesLegacyBodyBeforeRevisionProtocol(t *testing.T) {
 }
 
 func TestPythonUdfRevisionProtocolRejectsImmediatePredecessor(t *testing.T) {
-	setSharedRoutineRevisionProtocolForTest(t, defines.MORPCVersion110)
+	setSharedRoutineRevisionProtocolForTest(t, defines.MORPCVersion111)
 
 	background := &backgroundExecTestWithHistory{}
 	background.init()
 	err := ensurePythonUdfCatalogReady(context.Background(), background)
-	require.ErrorContains(t, err, "Python UDF catalog contract requires MORPC protocol version 111")
+	require.ErrorContains(t, err, "Python UDF catalog contract requires MORPC protocol version 112")
 	require.Empty(t, background.executedSqls)
 }
 

@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r8-2026-10-12`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r9-2026-10-13`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -148,3 +148,21 @@ rollout scope. The immutable r7 maintenance record above remains historical;
 this addendum records the new implementation baseline only. Independent
 Architecture and SQL/Planner approval remains pending, and validation does not
 supply that approval.
+
+## r9 rebase maintenance addendum (2026-10-13)
+
+Official main `0a4db0e6a6517e489a333ad9073dfcdc5d26aff4` allocates
+MORPC 111 to IndexSearchScan. Python's single new capability moves to 112,
+with 111 as its immediate predecessor rejection case. The main IndexSearchScan
+plan and pipeline contract remains at 111; MEDIUMINT remains at 110. The merged
+plan protobuf retains both IndexSearchScan and typed routine metadata, including
+routine dependency envelopes and deep-copy ownership. Python catalog reads,
+publication, Prepare reuse, physical/remote execution, repair scheduling/direct
+replay, and status RPC admission all use the new Python floor. Tests reject
+predecessor-only and mixed 112/111 CNs before catalog mutation.
+
+The published catalog 4.0.14 handler remains unchanged, and the separate 4.0.15
+repair retains the nine idempotent shared-function entries. The current Python
+ABI and opt-in, unisolated test/development scope are unchanged. Historical r8
+records remain immutable. Independent Architecture and SQL/Planner approval of
+this current revision remains pending; rebase and validation do not supply it.
