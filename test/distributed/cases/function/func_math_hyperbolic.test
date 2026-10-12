@@ -1,0 +1,51 @@
+-- 五个函数的常量结果与 DOUBLE 元数据。
+-- @metacmp(true)
+SELECT TANH(0) AS tanh_zero, COSH(0) AS cosh_zero, ASINH(0) AS asinh_zero, ACOSH(1) AS acosh_one, ATANH(0) AS atanh_zero;
+SELECT ROUND(TANH(1),12) AS tanh_one, ROUND(TANH(-2),12) AS tanh_negative_two, ROUND(COSH(-1),12) AS cosh_negative_one, ROUND(ASINH(2),12) AS asinh_two, ROUND(ACOSH(2),12) AS acosh_two, ROUND(ATANH(-0.5),12) AS atanh_negative_half;
+SELECT TANH(NULL) AS tanh_null, COSH(NULL) AS cosh_null, ASINH(NULL) AS asinh_null, ACOSH(NULL) AS acosh_null, ATANH(NULL) AS atanh_null;
+
+-- 微小非零值、大有限值及接近定义域端点的合法值。
+SELECT ABS(TANH(CAST('1e-20' AS DOUBLE))/CAST('1e-20' AS DOUBLE)-1)<1e-15 AS tanh_tiny, ABS(TANH(CAST('-1e-20' AS DOUBLE))/CAST('-1e-20' AS DOUBLE)-1)<1e-15 AS tanh_negative_tiny, ABS(ASINH(CAST('1e-20' AS DOUBLE))/CAST('1e-20' AS DOUBLE)-1)<1e-15 AS asinh_tiny, ABS(ATANH(CAST('1e-20' AS DOUBLE))/CAST('1e-20' AS DOUBLE)-1)<1e-15 AS atanh_tiny;
+SELECT TANH(CAST('1e308' AS DOUBLE)) AS tanh_large, TANH(CAST('-1e308' AS DOUBLE)) AS tanh_negative_large, ABS(ASINH(CAST('1e308' AS DOUBLE))-709.889355822726)<1e-12 AS asinh_large, ABS(ACOSH(CAST('1e308' AS DOUBLE))-709.889355822726)<1e-12 AS acosh_large;
+SELECT ABS(COSH(710)/CAST('1.1169973830808555e308' AS DOUBLE)-1)<1e-14 AS cosh_large_finite, ABS(COSH(-710)/CAST('1.1169973830808555e308' AS DOUBLE)-1)<1e-14 AS cosh_negative_large_finite;
+SELECT ABS(ACOSH(CAST('1.0000000000000002' AS DOUBLE))-CAST('2.1073424255447017e-8' AS DOUBLE))<1e-22 AS acosh_near_one, ABS(ATANH(CAST('0.9999999999999999' AS DOUBLE))-18.714973875118524)<1e-13 AS atanh_near_one;
+
+-- 定义域失败返回 NULL；真正的 COSH 溢出返回范围错误。
+SELECT ACOSH(-1) IS NULL AS acosh_negative_invalid, ACOSH(0) IS NULL AS acosh_zero_invalid, ACOSH(CAST('0.9999999999999999' AS DOUBLE)) IS NULL AS acosh_near_invalid, ATANH(-1) IS NULL AS atanh_negative_boundary, ATANH(1) IS NULL AS atanh_positive_boundary, ATANH(-2) IS NULL AS atanh_negative_invalid, ATANH(2) IS NULL AS atanh_positive_invalid;
+SELECT COSH(711);
+SELECT COSH(-711);
+
+-- 复用既有整数、decimal、字符串和布尔数值转换规则。
+SELECT ROUND(TANH(TRUE),12) AS tanh_bool, COSH(FALSE) AS cosh_bool, ROUND(ASINH(CAST(1 AS DECIMAL(10,3))),12) AS asinh_decimal, ACOSH('1') AS acosh_string, ROUND(ATANH(CAST('0.5' AS FLOAT)),12) AS atanh_float;
+
+-- 所有函数共用最小向量 fixture。
+DROP TABLE IF EXISTS hyperbolic_input;
+CREATE TABLE hyperbolic_input(id INT PRIMARY KEY, x DOUBLE);
+INSERT INTO hyperbolic_input VALUES (1,-2),(2,-1),(3,-0.5),(4,0),(5,0.5),(6,1),(7,2),(8,NULL);
+SELECT id, ROUND(TANH(x),12) AS tanh_x, ROUND(COSH(x),12) AS cosh_x, ROUND(ASINH(x),12) AS asinh_x, ROUND(ACOSH(x),12) AS acosh_x, ROUND(ATANH(x),12) AS atanh_x FROM hyperbolic_input ORDER BY id;
+SELECT COUNT(TANH(x)) AS tanh_count, COUNT(COSH(x)) AS cosh_count, COUNT(ASINH(x)) AS asinh_count, COUNT(ACOSH(x)) AS acosh_count, COUNT(ATANH(x)) AS atanh_count, ABS(AVG(TANH(x)))<1e-15 AS tanh_balanced, ABS(AVG(ASINH(x)))<1e-15 AS asinh_balanced, ABS(AVG(ATANH(x)))<1e-15 AS atanh_balanced FROM hyperbolic_input;
+
+-- NOT NULL 输入仍可产生定义域 NULL，COUNT 和谓词不能按输入属性折叠。
+SELECT COUNT(ACOSH(id-2)) AS acosh_not_null_input_count, COUNT(ATANH(id-4)) AS atanh_not_null_input_count FROM hyperbolic_input;
+SELECT id FROM hyperbolic_input WHERE ACOSH(id-2) IS NULL ORDER BY id;
+SELECT id FROM hyperbolic_input WHERE ATANH(id-4) IS NOT NULL ORDER BY id;
+
+-- CASE 掩码应阻止未选择的 COSH 溢出计算。
+SELECT id, ROUND(CASE WHEN x=0 THEN COSH(x*1000) ELSE TANH(x) END,12) AS selected_value FROM hyperbolic_input ORDER BY id;
+SELECT COSH(id*1000) FROM hyperbolic_input WHERE id=1;
+
+-- 参数标记绑定保持 DOUBLE 类型，并保留布尔数值与定义域行为。
+PREPARE hyperbolic_stmt FROM 'SELECT TANH(?), COSH(?), ASINH(?), ACOSH(?), ATANH(?)';
+SET @hyperbolic_param=TRUE;
+EXECUTE hyperbolic_stmt USING @hyperbolic_param, @hyperbolic_param, @hyperbolic_param, @hyperbolic_param, @hyperbolic_param;
+SET @hyperbolic_param=FALSE;
+EXECUTE hyperbolic_stmt USING @hyperbolic_param, @hyperbolic_param, @hyperbolic_param, @hyperbolic_param, @hyperbolic_param;
+DEALLOCATE PREPARE hyperbolic_stmt;
+
+-- 参数个数及不支持的参数类型必须由现有重载解析拒绝。
+SELECT TANH();
+SELECT COSH(1,2);
+SELECT ASINH(CAST('2026-01-01' AS DATE));
+SELECT ACOSH(1,2);
+SELECT ATANH();
+DROP TABLE hyperbolic_input;

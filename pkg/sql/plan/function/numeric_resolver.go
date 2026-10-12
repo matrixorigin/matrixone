@@ -37,6 +37,55 @@ type numericTypeResolution struct {
 	result types.Type
 }
 
+// CommonMediumIntType resolves only same-signed 32-bit integer branches that
+// include MEDIUMINT. The physical OID stays int32/uint32, while Width preserves
+// the narrower domain only when every value-bearing branch has it.
+func CommonMediumIntType(source []types.Type) (types.Type, bool) {
+	var result types.Type
+	hasType := false
+	hasMediumInt := false
+	hasOrdinaryInt := false
+	for _, typ := range source {
+		if typ.Oid == types.T_any {
+			continue
+		}
+		if typ.Oid != types.T_int32 && typ.Oid != types.T_uint32 {
+			return types.Type{}, false
+		}
+		if hasType && typ.Oid != result.Oid {
+			return types.Type{}, false
+		}
+		if !hasType {
+			result = typ
+			hasType = true
+		}
+		if typ.IsMediumInt() {
+			hasMediumInt = true
+		} else {
+			hasOrdinaryInt = true
+		}
+	}
+	if !hasType || !hasMediumInt {
+		return types.Type{}, false
+	}
+	if hasOrdinaryInt {
+		result.Width = 32
+	} else {
+		result.Width = 24
+	}
+	return result, true
+}
+
+func sameMediumIntCommonType(left, right types.Type) bool {
+	if left.Oid != right.Oid {
+		return false
+	}
+	if left.Oid == types.T_int32 || left.Oid == types.T_uint32 {
+		return left.Width == right.Width && left.Scale == right.Scale
+	}
+	return left.Eq(right)
+}
+
 // InferNumericParameterType selects the computation type for unresolved
 // numeric parameters. known may contain operands from any depth in one
 // arithmetic subtree. Approximate operands dominate exact operands, followed
