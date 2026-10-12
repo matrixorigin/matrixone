@@ -334,7 +334,20 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 		return
 	}
 
+	if cp.IfNotExists {
+		pubInfo, lookupErr := getPubInfo(ctx, bh, pubName)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if pubInfo != nil {
+			return nil
+		}
+	}
+
 	if err = bh.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql); err != nil {
+		if cp.IfNotExists && moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+			return nil
+		}
 		return
 	}
 

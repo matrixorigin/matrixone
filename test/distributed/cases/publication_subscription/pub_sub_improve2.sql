@@ -697,6 +697,8 @@ drop publication if exists pub16;
 drop publication if exists pub17;
 drop publication if exists pub18;
 create publication pub16 database db16 account all comment 'publish to all account';
+-- CREATE PUBLICATION IF NOT EXISTS must keep the existing definition unchanged.
+create publication if not exists pub16 database db16 table t1 account acc01 comment 'must not replace existing publication';
 create publication pub17 database db16 table t2, t3 account acc01, acc02 comment '发布给acc01和acc02';
 create publication pub18 database db16 account acc03 comment 'publish all table to acc02';
 

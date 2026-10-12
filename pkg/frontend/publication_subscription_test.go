@@ -202,6 +202,104 @@ func TestCreatePublicationRejectsMissingContextAccount(t *testing.T) {
 	require.ErrorContains(t, err, "account 99 does not exist")
 }
 
+func newCreatePublicationIfNotExistsTest(
+	t *testing.T,
+	ifNotExists bool,
+	existing bool,
+) (*backgroundExecTest, context.Context, *tree.CreatePublication) {
+	t.Helper()
+	lockStub := gostub.StubFunc(&lockPublicationDatabase, catalog.SystemDBTypeDataBranch, nil)
+	t.Cleanup(lockStub.Reset)
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+	ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[getAccountIdNamesSql] = newMrsForGetAllAccounts([][]interface{}{
+		{int64(sysAccountID), sysAccountName, "open", uint64(1), nil},
+		{int64(1), "acc1", "open", uint64(1), nil},
+	})
+	dbSQL, err := getSqlForGetDbIdAndType(ctx, "db1", true, uint64(sysAccountID))
+	require.NoError(t, err)
+	bh.sql2result[dbSQL] = newMrsForRestoreStringRows(
+		[]string{"dat_id", "dat_type"},
+		[][]interface{}{{uint64(7), catalog.SystemDBTypeDataBranch}},
+	)
+	bh.sql2result["show tables from `db1`"] = newMrsForRestoreStringRows(
+		[]string{"Tables_in_db1"},
+		[][]interface{}{{"t1"}},
+	)
+
+	columnCheckSQL := "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_pubs' and attname = 'account_name'"
+	bh.sql2result[columnCheckSQL] = newMrsForRestoreStringRows(
+		[]string{"exists"}, [][]interface{}{{1}},
+	)
+	pubSQL := fmt.Sprintf(getPubInfoSql, sysAccountID) + " and pub_name = 'pub1'"
+	if existing {
+		bh.sql2result[pubSQL] = newMrsForRestoreStringRows(
+			[]string{"account_id", "account_name", "pub_name", "database_name", "database_id", "table_list", "account_list", "created_time", "update_time", "owner", "creator", "comment"},
+			[][]interface{}{{int64(sysAccountID), sysAccountName, "pub1", "db1", uint64(7), "t1", pubsub.AccountAll, "", nil, uint64(0), uint64(0), "original"}},
+		)
+	} else {
+		bh.sql2result[pubSQL] = newMrsForRestoreStringRows(
+			[]string{"account_id", "account_name", "pub_name", "database_name", "database_id", "table_list", "account_list", "created_time", "update_time", "owner", "creator", "comment"},
+			nil,
+		)
+	}
+
+	createSQL := "create publication "
+	if ifNotExists {
+		createSQL += "if not exists "
+	}
+	createSQL += "pub1 database db1 table t1 account all"
+	statements, err := mysql.Parse(ctx, createSQL, 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+	t.Cleanup(func() { freeStatements(statements) })
+	return bh, ctx, statements[0].(*tree.CreatePublication)
+}
+
+func TestCreatePublicationIfNotExistsSkipsExistingPublication(t *testing.T) {
+	bh, ctx, stmt := newCreatePublicationIfNotExistsTest(t, true, true)
+
+	require.NoError(t, createPublication(ctx, bh, stmt))
+	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, sql, "insert into mo_catalog.mo_pubs")
+		require.NotContains(t, sql, "mo_catalog.mo_subs")
+	}
+}
+
+func TestCreatePublicationIfNotExistsIgnoresConcurrentDuplicate(t *testing.T) {
+	bh, ctx, stmt := newCreatePublicationIfNotExistsTest(t, true, false)
+	duplicateErr := moerr.NewDuplicateEntry(ctx, "(0,pub1)", "(account_id,pub_name)")
+	bh.beforeExec = func(sql string) {
+		if strings.HasPrefix(sql, "insert into mo_catalog.mo_pubs") {
+			bh.sql2err[sql] = duplicateErr
+		}
+	}
+
+	require.NoError(t, createPublication(ctx, bh, stmt))
+	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, sql, "mo_catalog.mo_subs")
+	}
+}
+
+func TestCreatePublicationStillRejectsDuplicateWithoutIfNotExists(t *testing.T) {
+	bh, ctx, stmt := newCreatePublicationIfNotExistsTest(t, false, false)
+	duplicateErr := moerr.NewDuplicateEntry(ctx, "(0,pub1)", "(account_id,pub_name)")
+	bh.beforeExec = func(sql string) {
+		if strings.HasPrefix(sql, "insert into mo_catalog.mo_pubs") {
+			bh.sql2err[sql] = duplicateErr
+		}
+	}
+
+	require.ErrorIs(t, createPublication(ctx, bh, stmt), duplicateErr)
+}
+
 func Test_showTablesFromDbQuotesDatabaseName(t *testing.T) {
 	testCases := []struct {
 		name        string
