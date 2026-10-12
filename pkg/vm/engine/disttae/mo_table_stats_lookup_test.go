@@ -137,7 +137,7 @@ func TestGetChangedTableListBatchLookupConsumer(t *testing.T) {
 				if typ == cmd_util.CheckChanged {
 					wantIDs = append([]int64{101}, wantIDs...)
 				}
-				var gotIDs []int64
+				gotIDs := make([]int64, 0, len(pairs))
 				for _, pair := range pairs {
 					gotIDs = append(gotIDs, pair.tbl)
 					require.Equal(t, to, pair.snapshot)
