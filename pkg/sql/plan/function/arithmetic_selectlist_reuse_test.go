@@ -68,7 +68,7 @@ func runWithStaleSelectList(
 	procMode int32,
 	inputs []FunctionTestInput,
 	resultType types.Type,
-	fn fEvalFn,
+	fn executeLogicOfOverload,
 ) (*vector.Vector, error) {
 	t.Helper()
 	proc := testutil.NewProcess(t)
@@ -79,6 +79,8 @@ func runWithStaleSelectList(
 	})
 
 	tcc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(resultType, false, nil, nil), fn)
+	// Each caller owns one borrowed result through its existing subtest.
+	t.Cleanup(tcc.Free)
 	require.NoError(t, tcc.result.PreExtendAndReset(2))
 	err := tcc.fn(tcc.parameters, tcc.result, proc, 2, staleSelectList())
 	return tcc.GetResultVectorDirectly(), err
@@ -103,7 +105,7 @@ func TestArithmeticStaleSelectListOutsideLength(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		id   int
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 	}{
 		{name: "divide", id: DIV, fn: divFn},
 		{name: "integer divide", id: INTEGER_DIV, fn: integerDivFn},
@@ -177,7 +179,7 @@ func testDecimalStaleSelectList[T templateDec](t *testing.T, decType types.Type,
 	for _, tc := range []struct {
 		name string
 		id   int
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 	}{
 		{name: "divide", id: DIV, fn: divFn},
 		{name: "integer divide", id: INTEGER_DIV, fn: integerDivFn},
@@ -233,7 +235,7 @@ type arithmeticMatrixInput interface {
 type arithmeticMatrixOperation struct {
 	name string
 	id   int
-	fn   fEvalFn
+	fn   executeLogicOfOverload
 }
 
 func TestArithmeticDivisionByZeroMatrix(t *testing.T) {
@@ -348,6 +350,7 @@ func runArithmeticMatrixType[T arithmeticMatrixInput](
 						}
 						tcc := NewFunctionTestCase(proc, inputs,
 							NewFunctionTestResult(resultType, false, nil, nil), op.fn)
+						defer tcc.Free()
 						require.NoError(t, tcc.result.PreExtendAndReset(2))
 						err := tcc.fn(tcc.parameters, tcc.result, proc, 2, selectList)
 
@@ -392,7 +395,7 @@ func TestMaskedVectorConstFloatOverflow(t *testing.T) {
 	maskOverflowRow := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
 	for _, tc := range []struct {
 		name   string
-		fn     fEvalFn
+		fn     executeLogicOfOverload
 		left   []float64
 		right  float64
 		wanted float64
@@ -409,6 +412,7 @@ func TestMaskedVectorConstFloatOverflow(t *testing.T) {
 			}
 			tcc := NewFunctionTestCase(proc, inputs,
 				NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil), tc.fn)
+			defer tcc.Free()
 			require.NoError(t, tcc.result.PreExtendAndReset(2))
 			require.NoError(t, tcc.fn(tcc.parameters, tcc.result, proc, 2, maskOverflowRow))
 			rsVec := tcc.GetResultVectorDirectly()

@@ -137,11 +137,13 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 	retSchema := make([]types.Type, len(tblArg.Rets))
 	for i := range tblArg.Rets {
 		typ := tblArg.Rets[i].Typ
-		retSchema[i] = types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
+		retSchema[i] = types.MustTypeFromPlan(typ)
 	}
 	tblArg.ctr.retSchema = retSchema
 
 	switch tblArg.FuncName {
+	case "json_table":
+		tblArg.ctr.state, err = jsonTablePrepare(proc, tblArg)
 	case "unnest":
 		tblArg.ctr.state, err = unnestPrepare(proc, tblArg)
 	case "generate_series":

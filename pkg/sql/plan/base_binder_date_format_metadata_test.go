@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -102,7 +103,7 @@ func TestBindDateFormatMetadata(t *testing.T) {
 }
 
 func TestBuildCTASDateFormatMetadataAndHeading(t *testing.T) {
-	ctx := newDateFormatCompilerContext()
+	ctx := newDateFormatCompilerContext(t)
 
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"create table time02 as select date_format(col2, '%W %M %Y') from time01", 1)
@@ -156,13 +157,13 @@ func TestBuildCTASPreservesBinaryDateTimeFormatHeadings(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			requireCTASColumnName(t, newDateFormatCompilerContext(), test.sql, test.want)
+			requireCTASColumnName(t, newDateFormatCompilerContext(t), test.sql, test.want)
 		})
 	}
 }
 
 func TestBuildCTASPreservesNestedDateFormatHeading(t *testing.T) {
-	ctx := newDateFormatCompilerContext()
+	ctx := newDateFormatCompilerContext(t)
 
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"create table time02 as select concat(date_format(col2, '%M'), 'X'), concat(date_format(col2, '%m'), 'X') from time01", 1)
@@ -184,7 +185,7 @@ func TestBuildCTASPreservesNestedDateFormatHeading(t *testing.T) {
 }
 
 func TestBuildCTASDateFormatHeadingWithIntervalOperand(t *testing.T) {
-	ctx := newDateFormatCompilerContext()
+	ctx := newDateFormatCompilerContext(t)
 	requireCTASColumnName(t, ctx,
 		"create table time02 as select date_format(col2 + interval 1 day, '%M') from time01",
 		"date_format(col2 + interval 1 day, '%M')")
@@ -254,7 +255,7 @@ func parseSelectHeadingExpr(t *testing.T, sql string) tree.Expr {
 }
 
 func TestBuildCTASLowercasesApostropheInQuotedAlias(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"create table t as select 1 as `A'B`", 1)
 	require.NoError(t, err)
@@ -273,8 +274,8 @@ func TestBuildCTASLowercasesApostropheInQuotedAlias(t *testing.T) {
 	require.Equal(t, "a'b", visible[0].Name)
 }
 
-func newDateFormatCompilerContext() *MockCompilerContext {
-	ctx := NewMockCompilerContext(false)
+func newDateFormatCompilerContext(t testing.TB) *MockCompilerContext {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	datetime := planpb.Type{Id: int32(types.T_datetime)}
 	ctx.tables["time01"] = &planpb.TableDef{
 		TblId:     1001,
@@ -336,27 +337,27 @@ func TestBuildCTASPreservesDateFormatHeadingThroughDerivedStars(t *testing.T) {
 		"create table time02 as select * from (select date_format(col2, '%M') from time01) c",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			requireCTASColumnName(t, newDateFormatCompilerContext(), sql,
+			requireCTASColumnName(t, newDateFormatCompilerContext(t), sql,
 				"date_format(col2, '%M')")
 		})
 	}
 }
 
 func TestBuildCTASPreservesDateFormatHeadingThroughScalarSubquery(t *testing.T) {
-	requireCTASColumnName(t, newDateFormatCompilerContext(),
+	requireCTASColumnName(t, newDateFormatCompilerContext(t),
 		"create table time02 as select (select date_format(col2, '%M') from time01 limit 1)",
 		"(select date_format(col2, '%M') from time01 limit 1)")
 }
 
 func TestBuildCTASPreservesDateFormatHeadingThroughJoinUsingStar(t *testing.T) {
-	requireCTASColumnName(t, newDateFormatCompilerContext(),
+	requireCTASColumnName(t, newDateFormatCompilerContext(t),
 		"create table time02 as select * from (select date_format(col2, '%M') from time01) a "+
 			"join (select date_format(col2, '%M') from time01) b using (`date_format(col2, '%M')`)",
 		"date_format(col2, '%M')")
 }
 
 func TestBuildCTASUsesSafeHeadingForMismatchedFullJoinUsing(t *testing.T) {
-	requireCTASColumnName(t, newDateFormatCompilerContext(),
+	requireCTASColumnName(t, newDateFormatCompilerContext(t),
 		"create table time02 as select * from (select date_format(col2, '%M') from time01) a "+
 			"full outer join (select date_format(col2, '%m') from time01) b "+
 			"using (`date_format(col2, '%M')`)",
@@ -364,7 +365,7 @@ func TestBuildCTASUsesSafeHeadingForMismatchedFullJoinUsing(t *testing.T) {
 }
 
 func TestBuildCTASPreservesDateFormatHeadingThroughRollupWindowRewrite(t *testing.T) {
-	ctx := newDateFormatCompilerContext()
+	ctx := newDateFormatCompilerContext(t)
 	sql := "create table time02 as select date_format(col2, '%M'), date_format(col2, '%m'), row_number() over () from time01 group by col2 with rollup"
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
@@ -384,13 +385,13 @@ func TestBuildCTASPreservesDateFormatHeadingThroughRollupWindowRewrite(t *testin
 }
 
 func TestBuildCTASDynamicDateFormatLowercasesIdentifiers(t *testing.T) {
-	requireCTASColumnName(t, newDateFormatCompilerContext(),
+	requireCTASColumnName(t, newDateFormatCompilerContext(t),
 		"create table time02 as select date_format(`D'X`, fmt_col) from time01",
 		"date_format(d'x, fmt_col)")
 }
 
 func TestBuildCTASLowercasesApostropheInSourceIdentifier(t *testing.T) {
-	requireCTASColumnName(t, newDateFormatCompilerContext(),
+	requireCTASColumnName(t, newDateFormatCompilerContext(t),
 		"create table time02 as select date_format(`D'X`, '%M') from time01",
 		"date_format(d'x, '%M')")
 }
@@ -399,7 +400,7 @@ func TestHeadingProvenanceIsLazyAndSparse(t *testing.T) {
 	ctx := NewBindContext(nil, nil)
 	require.Nil(t, ctx.headingProvenance)
 	require.Nil(t, ctx.generatedHeadingProvenance)
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, false)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, false)
 	require.Nil(t, builder.headingProvenanceByNode)
 
 	for i := 0; i < 1000; i++ {
@@ -444,4 +445,85 @@ func BenchmarkHeadingProvenanceStorage(b *testing.B) {
 			ctx.appendHeading("date_format(col2, '%M')", provenance)
 		}
 	})
+}
+
+func TestCTASRepeatedPlanningPreservesSource(t *testing.T) {
+	for _, tc := range []struct{ source, want string }{
+		{"date_format(col2, '%W %M %Y') from time01", "date_format(col2, '%W %M %Y')"},
+		{"date_format(time01.col2, '%W %M %Y') from time01", "date_format(time01.col2, '%W %M %Y')"},
+		{"date_format(col2, '%W %M %Y') as formatted from time01", "formatted"},
+		{"concat(date_format(col2, '%M'), 'X') from time01", "concat(date_format(col2, '%M'), 'X')"},
+		{"time_format(time_col, '%H') from time01", "time_format(time_col, '%H')"},
+		{"year(col2) + 1 from time01", "year(col2) + 1"},
+		{"* from (select date_format(col2, '%M') from time01) q", "date_format(col2, '%M')"},
+		{"(select date_format(col2, '%M') from time01 limit 1)", "(select date_format(col2, '%M') from time01 limit 1)"},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			ctx := newDateFormatCompilerContext(t)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table time02 as select "+tc.source, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			source := tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL)
+			var first *Plan
+			for i := 0; i < 3; i++ {
+				got, err := BuildPlan(ctx, stmt, false)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, got.GetDdl().GetCreateTable().TableDef.Cols[0].Name)
+				require.Equal(t, source, tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL))
+				if first == nil {
+					first = got
+				} else {
+					require.Equal(t, first.GetDdl().GetCreateTable().TableDef.Cols, got.GetDdl().GetCreateTable().TableDef.Cols)
+					require.Equal(t, first.GetDdl().GetCreateTable().CreateAsSelectSql, got.GetDdl().GetCreateTable().CreateAsSelectSql)
+				}
+			}
+		})
+	}
+}
+
+func TestCTASFailedPlanningAndSourceReplacement(t *testing.T) {
+	ctx := newDateFormatCompilerContext(t)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table time02 as select date_format(col2, '%M'), missing from time01", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	original := tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL)
+	_, err = BuildPlan(ctx, stmt, false)
+	require.Error(t, err)
+	require.Equal(t, original, tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL))
+	replacement, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select time_format(time_col, '%H') from time01", 1)
+	require.NoError(t, err)
+	defer replacement.Free()
+	ctas := stmt.(*tree.CreateTable)
+	oldSource := ctas.AsSource
+	ctas.AsSource = replacement.(*tree.Select)
+	defer func() { ctas.AsSource = oldSource }()
+	got, err := BuildPlan(ctx, ctas, false)
+	require.NoError(t, err)
+	require.Equal(t, "time_format(time_col, '%H')", got.GetDdl().GetCreateTable().TableDef.Cols[0].Name)
+}
+
+func TestTreeCloneIsolatesMapsAndSampleColumns(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select sample(col2, 1 rows) from time01", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	source := stmt.(*tree.Select)
+	source.RankOption = &tree.RankOption{Option: map[string]string{"mode": "original"}}
+	copied := DeepCopySelect(source)
+	require.Equal(t, tree.String(source, dialect.MYSQL), tree.String(copied, dialect.MYSQL))
+	copied.RankOption.Option["mode"] = "changed"
+	require.Equal(t, "original", source.RankOption.Option["mode"])
+	sample := copied.Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.SampleExpr)
+	columns, star := sample.GetColumns()
+	require.False(t, star)
+	columns[0].(*tree.UnresolvedName).CStrParts[0] = tree.NewCStr("changed", 1)
+	require.NotEqual(t, tree.String(source, dialect.MYSQL), tree.String(copied, dialect.MYSQL))
+	originalColumns, _ := source.Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.SampleExpr).GetColumns()
+	require.Equal(t, "col2", originalColumns[0].(*tree.UnresolvedName).ColName())
+	// The memo preserves shared maps and prevents cycles from recursing forever.
+	graph := map[string]any{}
+	graph["self"] = graph
+	clone := cloneTreeValue(reflect.ValueOf(graph), make(map[treeClonePointer]reflect.Value)).Interface().(map[string]any)
+	clone["new"] = 1
+	require.Equal(t, 1, clone["self"].(map[string]any)["new"])
+	require.NotContains(t, graph, "new")
 }

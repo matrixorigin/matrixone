@@ -74,6 +74,14 @@ func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 		sessionRollsBackTxnOnError(ses, execErr)
 	txnErr := ses.GetTxnHandler().Rollback(execCtx)
 	if txnErr != nil {
+		// A nested fatal error may already have sealed the cleanup owner. Keep
+		// the original typed failure for the client instead of masking it with
+		// that owner's terminal rejection (or a secondary cleanup failure).
+		if moerr.MustRollbackTxn(execErr) {
+			ses.Error(execCtx.reqCtx, txnErr.Error())
+			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, execErr)
+			return execErr
+		}
 		logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, txnErr)
 		return txnErr
 	}
@@ -708,6 +716,14 @@ func requiresPessimisticObjectLifecycleTxn(
 	defaultDatabase string,
 ) bool {
 	switch st := stmt.(type) {
+	case *tree.CreateTable:
+		// An explicit optimistic transaction must not publish a persistent
+		// catalog mapping outside the CDC lifecycle guard.  Autocommit CREATE
+		// TABLE statements already get their own transaction and must retain
+		// the normal DDL path; forcing every such statement through the CDC
+		// target protocol would also serialize unrelated DDL.  The admission
+		// check in TxnHandler.Create rejects an active non-pessimistic txn.
+		return !st.Temporary && ses != nil && ses.GetTxnHandler().InActiveTxn()
 	case *tree.TruncateTable, *tree.CreatePitr, *tree.DropPitr, *tree.AlterPitr,
 		*tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
 		*tree.AlterSequence, *tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase,

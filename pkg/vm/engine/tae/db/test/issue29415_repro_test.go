@@ -16,6 +16,7 @@ package test
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"testing"
 	"time"
@@ -79,7 +80,7 @@ func TestIssue29415ReplayPromotionLateTableAndSettings(t *testing.T) {
 		{name: "settings row deleted", createSettings: true, settingsJSON: setting.String(), deleteSettingsRow: true},
 		{name: "invalid setting", createSettings: true, settingsJSON: `{"bad_settings":100}`, expectError: "probable corrupted merge settings"},
 		{name: "short decay points", createSettings: true, settingsJSON: shortPoints.String(), expectError: "invalid merge settings decay points"},
-		{name: "extra decay points", createSettings: true, settingsJSON: extraPoints.String(), expectError: "invalid merge settings decay points"},
+		{name: "extra decay points", createSettings: true, settingsJSON: extraPoints.String(), expectTrigger: true},
 		{name: "optional replay lock merge job", preexistingLockMerge: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -238,8 +239,8 @@ func runReplayPromotionLateSettings(t *testing.T, tc replayPromotionCase) {
 	require.NoError(t, err)
 	require.False(t, answer.NotExists, "scheduler missed a table committed by WAL replay")
 	if tc.expectTrigger {
-		expected := merge.DefaultMergeSettings.Clone()
-		expected.VacuumTopK++
+		var expected merge.MergeSettings
+		require.NoError(t, json.Unmarshal([]byte(tc.settingsJSON), &expected))
 		trigger, err := expected.ToMMsgTaskTrigger()
 		require.NoError(t, err)
 		require.Equal(t, trigger.String(), answer.BaseTrigger, "scheduler must recover the exact nondefault settings")

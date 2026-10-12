@@ -52,7 +52,7 @@ func TestShouldCachePrepareCompileForeignKeyActions(t *testing.T) {
 
 	subscriptionMetadataPlan := makePlan(plan.Query_SELECT, false)
 	subscriptionMetadataPlan.GetQuery().Nodes = []*plan.Node{{
-		OriginViews: []string{"information_schema#statistics"},
+		ViewPath: []*plan.ViewStep{{DatabaseName: "information_schema", ViewName: "statistics", Snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{}}}},
 	}}
 	require.True(t, shouldRebuildPreparePlan(false, subscriptionMetadataPlan))
 	require.False(t, checkNodeCanCache(subscriptionMetadataPlan))

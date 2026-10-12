@@ -1,6 +1,7 @@
 - Status: in-progress
 - Start Date: 2026-09-01
 - Design revision: v11 (2026-09-14)
+- Follow-up amendment: integration-v1 (2026-10-06), pending review in [#29646](https://github.com/matrixorigin/matrixone/pull/29646)
 - Authors: MatrixOne optimizer team
 - Implementation PRs: [#27914](https://github.com/matrixorigin/matrixone/pull/27914), [#27915](https://github.com/matrixorigin/matrixone/pull/27915), [#27934](https://github.com/matrixorigin/matrixone/pull/27934), [#28752](https://github.com/matrixorigin/matrixone/pull/28752)
 - Issue for this RFC: [#26768](https://github.com/matrixorigin/matrixone/issues/26768)
@@ -33,6 +34,93 @@ this revision is `in-progress`.  Design and implementation are reviewed
 together: a GitHub `APPROVE` on the exact candidate head accepts the RFC,
 implementation, and evidence together.  No separate design-only approval or PR
 is required.
+
+## PR #29646 amendment: integration closures
+
+Revision: integration-v1, proposed against implementation
+`0a647334ea9e6ab5270cac0fe70e4e8c1596ab09`. The prior series' design/approval
+record does not approve this follow-up. Its design decision is **pending in
+[#29646](https://github.com/matrixorigin/matrixone/pull/29646)**; the same PR
+can review the design and implementation together. Adaptive default memory
+policy, participation, physical sampling and recovery/terminal contracts belong
+to the [memory-design amendment](../design/query_memory_control_and_attribution_impl.md#pr-29646-amendment-adaptive-execution-policy),
+not a duplicate planner ledger or a new RFC.
+
+### Grouping-set output and costing
+
+The existing raw-input expansion/aggregation remains the semantic foundation:
+no partial `SUM(SUM(...))`, changed numeric error behavior, or statistics-based
+equivalence proof is introduced. This revision adds two guarded choices:
+
+- Direct streaming replaces generated UNION ALL fanout only when every legacy
+  branch must drain, no fixed hash-build marker is needed, and all branch
+  projects are deterministic, rewritable and identical after typed rebinding.
+  Filters/LIMIT/order/branch-specific work keep the materialized path.
+  `GROUPING()` may make branch projections different; the public fanout test
+  deliberately retains that real two-reader path rather than weakening its
+  cleanup assertions to accept direct streaming.
+- For eligible prefix ROLLUP, separate the finest level from the coarser levels
+  when the general size/cardinality opportunity guard admits it. Coarse levels
+  omit the inactive final key, restore its SQL NULL output, and preserve set ID,
+  empty-input and NULL-sentinel behavior. This is a cost choice, not a semantic
+  use of NDV; a bad estimate can choose a slower equivalent plan.
+
+Producer joins are normalized and predicates pushed down before estimating
+sharing cost. Costing an unnormalized comma join as a Cartesian product inflated
+admission after rebase. The correct Cartesian cardinality formula is unchanged;
+there is no query/table exception or invented NDV fix. Nested grouping/sentinel
+ancestors, volatility, missing full-drain witnesses, inherited build-side
+contracts, unknown byte bounds and the existing protocol fence remain guarded.
+The existing bounded materialized source and spill resource owner are reused.
+
+Revision-pinned [grouping-set tests][integration-grouping-tests] cover protocol
+gating, direct-stream admission/refusal, split admission, decimal raw-input
+semantics, volatile projects, drain/build markers, inherited sentinels and
+output-filter placement. [The public fanout test][integration-fanout-tests]
+retains independent readers and early-close assertions.
+
+### Independent execution closures
+
+| Closure | Contract retained | Revision-pinned validation |
+| --- | --- | --- |
+| UNION ALL consumer parallelism | Pure concatenation may retain parallel input; LIMIT demand stays lazy, scalar branch evaluation stays ordered, and blocking operators/SINGLE build contracts stay intact. | [Compiler topology and lazy-consumption tests][integration-union-tests] |
+| Distinct-set work consolidation | One final owner removes duplicates across workers; INTERSECT ALL/MINUS ALL retain one multiplicity owner, not replicated broadcast counters. | [Compiler set-merge tests][integration-set-tests] |
+| Set iterators and join/vector projection | Retain duplicate/NULL/membership semantics and immutable allocation provenance. Unsupported types/layouts keep fallback; semantic expression errors keep their public code/message. | [Membership projection tests][integration-join-tests], [public expression-error test][integration-error-tests] |
+| Window prefix reuse | Reuse only supported cumulative states/frame shapes; preserve peer, NULL, boundary and checked-error behavior. Unsupported frames keep ordinary evaluation. | [Window tests][integration-window-tests] |
+| Pipeline wake-up and terminal cleanup | Bounded hints never reserve channel slots; borrower batches drain after producer quiescence and before recovery owners retire. Cancel/reuse/terminal accounting use the existing attempt. | Memory-design amendment's ownership/lock/evidence map; [real multi-CN SQL][integration-multicn-tests] |
+
+These are separate validation closures, not reasons to add a common execution
+framework. They change neither SQL syntax nor the previously assigned grouping
+protocol fence. Reverting an executor fast path is separate from disabling
+shared-computation planning; do not undo borrower cleanup while retaining the
+owner migration that needs it.
+
+### Evidence and review decision
+
+[CI run 37427131266][integration-ci] is successful at the implementation revision
+above, including SCA, UT, coverage and multi-CN BVT. The accessible tests below
+cover positive and refused paths; full local planner/compile tests and public
+fanout/semantic-error/multi-CN tests also passed. The memory amendment records
+normal/race repetition counts and remaining contention/spill-cost controls.
+Historical TPC-DS improvements remain qualified in the PR body; they are not a
+fresh latest-head runtime A/B. TPCH 100G previously preserved 22/22 plans and
+results versus the immediate integration control, not latest main. A requested
+TPCH 1T-only auto-test run is additional regression evidence, pending completion.
+
+No reviewer design approval is recorded for integration-v1 as of 2026-10-06.
+The exact document commit and eventual review decision are linked from #29646;
+the existing v11 decision log below remains historical, not automatic acceptance
+of this amendment.
+
+[integration-grouping-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/sql/plan/grouping_set_input_test.go
+[integration-fanout-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/tests/issues/grouping_set_materialized_fanout_test.go
+[integration-union-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/sql/compile/union_all_lazy_test.go
+[integration-set-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/sql/compile/distinct_set_merge_test.go
+[integration-join-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/sql/colexec/hashjoin/membership_projection_test.go
+[integration-error-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/tests/issues/order_expression_error_test.go
+[integration-window-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/sql/colexec/window/window_test.go
+[integration-multicn-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/tests/issues/shuffle_multicn_test.go
+[integration-ci]: https://github.com/matrixorigin/matrixone/actions/runs/37427131266
 
 ## Motivation
 

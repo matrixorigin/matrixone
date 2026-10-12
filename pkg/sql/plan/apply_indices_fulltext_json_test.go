@@ -95,7 +95,7 @@ func jpExtractFloat(col int32, path string) *plan.Expr {
 // process/txn: an AlwaysAsync json index NEVER reports covered (it self-completes or fails closed),
 // so indexCoversSnapshot is false. The point is exercising the full reachable path safely (#27926).
 func TestIndexCoversSnapshotReachesCoverageHook(t *testing.T) {
-	mockCtx := NewMockCompilerContext(false)
+	mockCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := mockCtx.GetProcess()
 	proc.Base.TxnOperator = fakeCoverageTxn{} // the mock proc has no txn otherwise
 	b := &QueryBuilder{compCtx: mockCtx}
@@ -592,7 +592,7 @@ func TestPreparedPlanDependsOnIndexCoverage(t *testing.T) {
 // EXPLAIN. The display SQL names the source db/table, the pk projection, the plan-time build_ts lower
 // bound, the change_type='insert' filter, and the pushed json predicate.
 func TestRecordJSONProbeTail(t *testing.T) {
-	mockCtx := newFullTextJoinMockCompilerContext()
+	mockCtx := newFullTextJoinMockCompilerContext(t)
 	mockCtx.GetProcess().Base.TxnOperator = fakeCoverageTxn{}
 	b := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 	scanNode := &plan.Node{
@@ -635,7 +635,7 @@ func TestRecordJSONProbeTail(t *testing.T) {
 // i.e. every pk, degrading the mandatory join to a full self-join. Returning false makes
 // addJSONFulltextProbes skip the probe so the query runs as a plain Table Scan instead.
 func TestRecordJSONProbeTailDeclines(t *testing.T) {
-	mockCtx := newFullTextJoinMockCompilerContext()
+	mockCtx := newFullTextJoinMockCompilerContext(t)
 	b := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 	scanNode := &plan.Node{
 		NodeId: 9,
@@ -715,7 +715,7 @@ func (e recordingSourceEngine) GetRelationById(ctx context.Context, _ client.Txn
 // decideJSONProbe binds that account onto the context before GetRelationById; assert it arrives.
 func TestDecideJSONProbeBindsSnapshotAccount(t *testing.T) {
 	idx := jpJSONIndex("j", `{"parser":"json"}`)
-	mockCtx := NewMockCompilerContext(false)
+	mockCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := mockCtx.GetProcess()
 	proc.Base.TxnOperator = fakeCoverageTxn{}
 	var seen uint32
@@ -756,7 +756,7 @@ func TestDecideJSONProbeBindsSnapshotAccount(t *testing.T) {
 func TestDecideJSONProbeMatrix(t *testing.T) {
 	idx := jpJSONIndex("j", `{"parser":"json"}`)
 	newCase := func(eng engine.Engine) (*QueryBuilder, *plan.Node) {
-		mockCtx := NewMockCompilerContext(false)
+		mockCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 		proc := mockCtx.GetProcess()
 		proc.Base.TxnOperator = fakeCoverageTxn{}
 		proc.Base.SessionInfo.StorageEngine = eng
@@ -832,7 +832,7 @@ func TestDecideJSONProbeMatrix(t *testing.T) {
 // a CN predating the probe_tail contract mishandles it and loses rows. addJSONFulltextProbes must
 // decline the probe (plain Table Scan) until MOProtocolVersion reaches the gate (#28917 review).
 func TestSelfCompletingJSONProbeGate(t *testing.T) {
-	mockCtx := NewMockCompilerContext(false)
+	mockCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	b := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 	rt := moruntime.ServiceRuntime(b.compCtx.GetProcess().GetService())
 	require.NotNil(t, rt)

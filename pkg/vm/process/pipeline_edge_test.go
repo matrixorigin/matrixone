@@ -16,8 +16,10 @@ package process
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -182,28 +184,68 @@ func TestPipelineEdgeSendDataNilContextDoesNotPanic(t *testing.T) {
 }
 
 func TestWaitPipelineSignalCapacityWaitsUntilChannelDrains(t *testing.T) {
-	edge := NewPipelineEdge(1, 1)
-	edge.Ch2 <- NewPipelineSignalToDirectly(nil, nil, nil)
-
-	done := make(chan bool, 1)
-	go func() {
-		done <- WaitPipelineSignalCapacity(context.Background(), edge)
-	}()
-
-	select {
-	case got := <-done:
-		t.Fatalf("WaitPipelineSignalCapacity returned before channel drained: %v", got)
-	case <-time.After(10 * time.Millisecond):
+	for _, senders := range []int{1, 4} {
+		t.Run(fmt.Sprintf("senders=%d", senders), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				edge := NewPipelineEdge(1, senders)
+				input := batch.NewWithSize(0)
+				input.SetRowCount(1)
+				edge.Ch2 <- NewPipelineSignalToDirectly(input, nil, nil)
+				receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{edge})
+				defer receiver.releaseCurrent()
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				done := make(chan bool, senders)
+				for range senders {
+					go func() { done <- WaitPipelineSignalCapacity(ctx, edge) }()
+				}
+				// Every sender is durably blocked on a full channel, not merely
+				// launched. No sleep or scheduler-dependent subscribe race.
+				synctest.Wait()
+				require.Empty(t, done)
+				_, err := receiver.GetNextBatch(nil)
+				require.NoError(t, err)
+				synctest.Wait()
+				// A capacity hint does not reserve a slot. All senders must be
+				// able to pull upstream: the first may wait for those peers at
+				// a shared shuffle's EOF instead of sending another signal.
+				require.Len(t, done, senders)
+				for range senders {
+					require.True(t, <-done)
+				}
+			})
+		})
 	}
+}
 
-	<-edge.Ch2
-	select {
-	case got := <-done:
-		if !got {
-			t.Fatal("WaitPipelineSignalCapacity returned false after channel drained")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("WaitPipelineSignalCapacity did not return after channel drained")
+func TestPipelineSignalReceiveNotifiesCapacity(t *testing.T) {
+	for _, inputCount := range []int{1, 9} {
+		t.Run(fmt.Sprintf("inputs=%d", inputCount), func(t *testing.T) {
+			regs := make([]*WaitRegister, inputCount)
+			for i := range regs {
+				regs[i] = NewPipelineEdge(1, 1)
+			}
+			edge := regs[inputCount-1]
+			edge.Ch2 <- NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
+			capacityReady := edge.capacityNotification()
+
+			select {
+			case <-capacityReady:
+				t.Fatal("capacity notification was ready before a receive")
+			default:
+			}
+
+			receiver := InitPipelineSignalReceiver(context.Background(), regs)
+			got, err := receiver.GetNextBatch(nil)
+			if err != nil || got != batch.EmptyBatch {
+				t.Fatalf("receiver got batch=%v err=%v", got, err)
+			}
+			select {
+			case <-capacityReady:
+			default:
+				t.Fatal("receive did not publish a capacity notification")
+			}
+		})
 	}
 }
 
@@ -220,19 +262,44 @@ func TestWaitPipelineSignalCapacityReturnsOnContextCancel(t *testing.T) {
 	edge := NewPipelineEdge(1, 1)
 	edge.Ch2 <- NewPipelineSignalToDirectly(nil, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan bool, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		done <- WaitPipelineSignalCapacity(ctx, edge)
+	}()
+	<-started
 	cancel()
 
-	if WaitPipelineSignalCapacity(ctx, edge) {
-		t.Fatal("WaitPipelineSignalCapacity returned true with cancelled context")
+	select {
+	case got := <-done:
+		if got {
+			t.Fatal("WaitPipelineSignalCapacity returned true with cancelled context")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitPipelineSignalCapacity did not return after context cancellation")
 	}
 }
 
 func TestWaitPipelineSignalCapacityReturnsOnTerminalEdge(t *testing.T) {
 	edge := NewPipelineEdge(1, 1)
+	edge.Ch2 <- NewPipelineSignalToDirectly(nil, nil, nil)
+	done := make(chan bool, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		done <- WaitPipelineSignalCapacity(context.Background(), edge)
+	}()
+	<-started
 	edge.Abort(moerr.NewInternalErrorNoCtx("abort"))
 
-	if WaitPipelineSignalCapacity(context.Background(), edge) {
-		t.Fatal("WaitPipelineSignalCapacity returned true for a terminal edge with spare capacity")
+	select {
+	case got := <-done:
+		if got {
+			t.Fatal("WaitPipelineSignalCapacity returned true for a terminal edge")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitPipelineSignalCapacity did not return after terminal edge")
 	}
 }
 
@@ -909,6 +976,7 @@ func TestPipelineEdgeTerminalRetryAfterFullChannelUsesFirstTerminal(t *testing.T
 
 func TestPipelineEdgeResetForReuseClearsTerminalState(t *testing.T) {
 	edge := NewPipelineEdge(1, 0)
+	oldCapacityNotification := edge.capacityNotification()
 	if !edge.SendEnd() {
 		t.Fatal("initial SendEnd failed")
 	}
@@ -919,6 +987,9 @@ func TestPipelineEdgeResetForReuseClearsTerminalState(t *testing.T) {
 	}
 
 	edge.ResetForReuse(3, 3)
+	if edge.capacityNotification() == oldCapacityNotification {
+		t.Fatal("ResetForReuse retained the old capacity notification")
+	}
 	if cap(edge.Ch2) != 3 {
 		t.Fatalf("channel cap after reset = %d, want 3", cap(edge.Ch2))
 	}
@@ -951,11 +1022,15 @@ func TestPipelineEdgeResetForReuseClearsTerminalState(t *testing.T) {
 func TestPipelineEdgeSetNilBatchCntForReusePreservesChannel(t *testing.T) {
 	edge := NewPipelineEdge(2, 1)
 	originalCh := edge.Ch2
+	oldCapacityNotification := edge.capacityNotification()
 	if !edge.SendEnd() {
 		t.Fatal("initial SendEnd failed")
 	}
 
 	edge.SetNilBatchCntForReuse(4)
+	if edge.capacityNotification() == oldCapacityNotification {
+		t.Fatal("SetNilBatchCntForReuse retained stale capacity notifications")
+	}
 	if edge.Ch2 != originalCh {
 		t.Fatal("SetNilBatchCntForReuse should not recreate Ch2")
 	}

@@ -62,7 +62,7 @@ func comparisonCastSource(expr *plan.Expr) *plan.Expr {
 // executable expression intact, and keep value-dependent plans out of the
 // type-only prepared cache.
 func (builder *QueryBuilder) decimalFloatPeerValue(expr *plan.Expr) (float64, bool) {
-	if value, ok := decimalFloatComparisonConstant(expr); ok {
+	if value, ok := floatingComparisonConstant(expr); ok {
 		return value, true
 	}
 	state := preparedBindingState(builder.GetContext())
@@ -115,7 +115,7 @@ func (builder *QueryBuilder) decimalFloatPeerValue(expr *plan.Expr) (float64, bo
 	if err != nil {
 		return 0, false
 	}
-	return decimalFloatComparisonConstant(folded)
+	return floatingComparisonConstant(folded)
 }
 
 // Resolve only actual expressions from the executor's one-row dummy input.
@@ -188,7 +188,7 @@ func (builder *QueryBuilder) singletonProjectedFloatValue(node *plan.Node, expr 
 	if err != nil {
 		return 0, false
 	}
-	return decimalFloatComparisonConstant(folded)
+	return floatingComparisonConstant(folded)
 }
 
 func (builder *QueryBuilder) preparedIntegerPeerWitness(node *plan.Node, peer *plan.Expr) (*plan.Expr, bool) {
@@ -1103,10 +1103,11 @@ func blockFilterConstantVectorSet(literalVec *plan.LiteralVec) (ret map[string]s
 		return nil, false
 	}
 	typ := plan.Type{
-		Id:      int32(vec.GetType().Oid),
-		Scale:   vec.GetType().Scale,
-		Width:   vec.GetType().Width,
-		Charset: uint32(vec.GetType().Charset),
+		Id:               int32(vec.GetType().Oid),
+		Scale:            vec.GetType().Scale,
+		Width:            vec.GetType().Width,
+		Charset:          uint32(vec.GetType().Charset),
+		CollationVersion: uint32(vec.GetType().CollationVersion),
 	}
 	if physicalLength == 0 {
 		return make(map[string]struct{}), true
@@ -2654,6 +2655,16 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		Parts = util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 		numParts = len(Parts)
 	}
+	// The serialized composite-key shortcut is byte-oriented.  It is not a
+	// valid replacement for predicates over native Unicode collations, whose
+	// equality domain is defined by the UCA key rather than the source bytes.
+	// Keep the original component predicates so the normal collation-aware
+	// expression path remains responsible for filtering rows.  Treat missing
+	// metadata as unsafe as well; this path must never optimize on an unknown
+	// key definition.
+	if tableDefHasNativeUnicodeKeyPart(tableDef, Parts) {
+		return filters
+	}
 
 	for i, expr := range filters {
 		if expr == nil {
@@ -3251,6 +3262,22 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 	}
 
 	return newFilterList
+}
+
+func tableDefHasNativeUnicodeKeyPart(tableDef *plan.TableDef, parts []string) bool {
+	if tableDef == nil || len(parts) == 0 {
+		return true
+	}
+	for _, part := range parts {
+		idx, ok := tableDef.Name2ColIndex[part]
+		if !ok || idx < 0 || int(idx) >= len(tableDef.Cols) || tableDef.Cols[idx] == nil {
+			return true
+		}
+		if types.IsUnicodeCollation(uint8(tableDef.Cols[idx].Typ.GetCharset())) {
+			return true
+		}
+	}
+	return false
 }
 
 func flattenLogicalExpressions(expr *plan.Expr, opName string, args *[]*plan.Expr) {

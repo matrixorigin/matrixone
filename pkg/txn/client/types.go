@@ -76,6 +76,9 @@ type TxnClient interface {
 	// be from a CN coordinator txn operator. Before returning, it waits until
 	// the local CN has applied every logtail visible to the snapshot.
 	NewWithSnapshot(ctx context.Context, snapshot txn.CNTxnSnapshot) (TxnOperator, error)
+	// GetLatestSnapshot returns a policy-selected, locally applied exclusive snapshot
+	// without a transaction; an empty timestamp provides no visibility proof.
+	GetLatestSnapshot(ctx context.Context, minimum timestamp.Timestamp) (timestamp.Timestamp, error)
 	// Close closes client.sender
 	Close() error
 	// RefreshExpressionEnabled return true if refresh expression feature enabled
@@ -219,6 +222,12 @@ type TxnOperator interface {
 // TxnOperator preserves source compatibility for external implementations.
 type RunSQLAdmissionOperator interface {
 	TryEnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error)
+}
+
+// DeferredTxnRollback seals a doomed operator immediately and uses its existing
+// SQL-drain owner for cleanup. Nested execution must not wait on its own token.
+type DeferredTxnRollback interface {
+	RollbackAfterRunningSQL(error)
 }
 
 // AutoIncrEpochFenceCommitter is an additive transaction capability used by
@@ -379,6 +388,12 @@ type Workspace interface {
 // I/O, or call back into the transaction operator.
 type TerminalTableDeletionView interface {
 	IsTableDeletedAtTxnClose(physicalTableID uint64) bool
+}
+
+// TableCreationView exposes the workspace's rollback-aware creation journal.
+// A physical ID remains unpublished only while its creation belongs to this owner.
+type TableCreationView interface {
+	IsTableCreatedInTxn(tableID uint64) bool
 }
 
 // TxnOverview txn overview include meta and status

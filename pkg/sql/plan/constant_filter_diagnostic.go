@@ -95,7 +95,7 @@ func containsStatementInvariantFilterDiagnostic(proc *process.Process, expr *pla
 	if expr == nil {
 		return false
 	}
-	if function.MayDiagnoseStatementParameter(expr) && !provenFree {
+	if !provenFree && function.MayDiagnoseStatementParameter(expr) {
 		return true
 	}
 	if fn := expr.GetF(); fn != nil {
@@ -325,7 +325,11 @@ func PreparedDirectImplicitIntegerCastParam(expr *plan.Expr) (int32, types.T, bo
 		return 0, types.T_any, false
 	}
 	id, _ := function.DecodeOverloadID(fn.Func.Obj)
-	if id != function.CAST || !types.T(fn.Args[0].Typ.Id).IsMySQLString() {
+	source, target := types.T(fn.Args[0].Typ.Id), types.T(expr.Typ.Id)
+	// A target-domain proof must also certify the inner semantic parameter
+	// conversion. Only a strictly narrower signed domain implies that proof.
+	typedNarrowing := source.IsSignedInt() && target.IsSignedInt() && target.TypeLen() < source.TypeLen()
+	if id != function.CAST || (!source.IsMySQLString() && !typedNarrowing) {
 		return 0, types.T_any, false
 	}
 	param := fn.Args[0].GetP()

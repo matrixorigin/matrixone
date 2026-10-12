@@ -36,7 +36,7 @@ func TestOperatorInNullableListUsesThreeValuedLogic(t *testing.T) {
 		newOpOperatorStrIn().operatorIn,
 	)
 
-	ok, errInfo := tc.Run()
+	ok, errInfo := tc.RunAndFree()
 	require.True(t, ok, errInfo)
 }
 
@@ -53,7 +53,7 @@ func TestOperatorNotInNullableListUsesThreeValuedLogic(t *testing.T) {
 		newOpOperatorStrIn().operatorNotIn,
 	)
 
-	ok, errInfo := tc.Run()
+	ok, errInfo := tc.RunAndFree()
 	require.True(t, ok, errInfo)
 }
 
@@ -63,7 +63,7 @@ func TestOperatorCharInUsesPadSpaceKeys(t *testing.T) {
 
 	for _, test := range []struct {
 		name string
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 		want []bool
 	}{
 		{name: "in", fn: newOpOperatorStrIn().operatorIn, want: []bool{true, false}},
@@ -80,10 +80,57 @@ func TestOperatorCharInUsesPadSpaceKeys(t *testing.T) {
 				test.fn,
 			)
 
-			ok, errInfo := tc.Run()
+			ok, errInfo := tc.RunAndFree()
 			require.True(t, ok, errInfo)
 		})
 	}
+}
+
+func TestOperatorUnicodeInUsesCollationKeys(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	unicodeType := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+
+	for _, test := range []struct {
+		name string
+		fn   executeLogicOfOverload
+		want []bool
+	}{
+		{name: "in", fn: newOpOperatorStrIn().operatorIn, want: []bool{true, true, false}},
+		{name: "not in", fn: newOpOperatorStrIn().operatorNotIn, want: []bool{false, false, true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(unicodeType, []string{"A", "ß", "b"}, nil),
+					NewFunctionTestInput(unicodeType, []string{"a", "ss"}, nil),
+				},
+				NewFunctionTestResult(types.T_bool.ToType(), false, test.want, nil),
+				test.fn,
+			)
+			ok, errInfo := tc.RunAndFree()
+			require.True(t, ok, errInfo)
+		})
+	}
+}
+
+func TestOperatorUnicodeInUsesLeftComparisonDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	leftType := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	// Prepared/literal list vectors can carry the transport charset even when
+	// the left column owns a native Unicode collation.
+	listType := types.T_varchar.ToType()
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(leftType, []string{"A", "ß", "b"}, nil),
+			NewFunctionTestInput(listType, []string{"a", "ss"}, nil),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, false}, nil),
+		newOpOperatorStrIn().operatorIn,
+	)
+	ok, errInfo := tc.RunAndFree()
+	require.True(t, ok, errInfo)
 }
 
 func TestOperatorCharBetweenUsesPadSpaceOrdering(t *testing.T) {
@@ -100,7 +147,7 @@ func TestOperatorCharBetweenUsesPadSpaceOrdering(t *testing.T) {
 		betweenImpl,
 	)
 
-	ok, errInfo := tc.Run()
+	ok, errInfo := tc.RunAndFree()
 	require.True(t, ok, errInfo)
 }
 
@@ -117,7 +164,7 @@ func TestOperatorFixedInConstListUsesThreeValuedLogic(t *testing.T) {
 		newOpOperatorFixedIn[int32]().operatorIn,
 	)
 
-	ok, errInfo := tc.Run()
+	ok, errInfo := tc.RunAndFree()
 	require.True(t, ok, errInfo)
 }
 
@@ -134,7 +181,7 @@ func TestOperatorFixedInConstNullListUsesThreeValuedLogic(t *testing.T) {
 		newOpOperatorFixedIn[int32]().operatorIn,
 	)
 
-	ok, errInfo := tc.Run()
+	ok, errInfo := tc.RunAndFree()
 	require.True(t, ok, errInfo)
 }
 
@@ -184,6 +231,7 @@ func TestOperatorBitInAndNotInUseUnsignedThreeValuedLogic(t *testing.T) {
 				NewFunctionTestResult(types.T_bool.ToType(), false, test.inValues, test.inNulls),
 				newOpOperatorFixedIn[uint64]().operatorIn,
 			)
+			defer inCase.Free()
 			ok, errInfo := inCase.Run()
 			require.True(t, ok, errInfo)
 
@@ -195,28 +243,30 @@ func TestOperatorBitInAndNotInUseUnsignedThreeValuedLogic(t *testing.T) {
 				{name: InFunctionName, values: test.inValues, nulls: test.inNulls},
 				{name: "not_in", values: test.notValues, nulls: test.notNulls},
 			} {
-				resolved, err := GetFunctionByName(
-					proc.Ctx,
-					registered.name,
-					[]types.Type{bitType, bitType},
-				)
-				require.NoError(t, err, registered.name)
-				_, shouldCast := resolved.ShouldDoImplicitTypeCast()
-				require.False(t, shouldCast, registered.name)
+				func() {
+					resolved, err := GetFunctionByName(
+						proc.Ctx,
+						registered.name,
+						[]types.Type{bitType, bitType},
+					)
+					require.NoError(t, err, registered.name)
+					_, shouldCast := resolved.ShouldDoImplicitTypeCast()
+					require.False(t, shouldCast, registered.name)
 
-				out, err := RunFunctionDirectly(
-					proc,
-					resolved.GetEncodedOverloadID(),
-					inCase.parameters,
-					len(left),
-				)
-				require.NoError(t, err, registered.name)
-				require.NotNil(t, out, registered.name)
-				defer out.Free(proc.Mp())
-				require.Equal(t, registered.values, vector.MustFixedColWithTypeCheck[bool](out), registered.name)
-				for row, wantNull := range registered.nulls {
-					require.Equal(t, wantNull, out.GetNulls().Contains(uint64(row)), registered.name)
-				}
+					out, err := RunFunctionDirectly(
+						proc,
+						resolved.GetEncodedOverloadID(),
+						inCase.parameters,
+						len(left),
+					)
+					require.NoError(t, err, registered.name)
+					require.NotNil(t, out, registered.name)
+					defer out.Free(proc.Mp())
+					require.Equal(t, registered.values, vector.MustFixedColWithTypeCheck[bool](out), registered.name)
+					for row, wantNull := range registered.nulls {
+						require.Equal(t, wantNull, out.GetNulls().Contains(uint64(row)), registered.name)
+					}
+				}()
 			}
 
 			notInCase := NewFunctionTestCase(
@@ -225,7 +275,7 @@ func TestOperatorBitInAndNotInUseUnsignedThreeValuedLogic(t *testing.T) {
 				NewFunctionTestResult(types.T_bool.ToType(), false, test.notValues, test.notNulls),
 				newOpOperatorFixedIn[uint64]().operatorNotIn,
 			)
-			ok, errInfo = notInCase.Run()
+			ok, errInfo = notInCase.RunAndFree()
 			require.True(t, ok, errInfo)
 		})
 	}
@@ -239,7 +289,7 @@ func TestOperatorBitInAndNotInUseUnsignedThreeValuedLogic(t *testing.T) {
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false}, []bool{true, true, true}),
 		newOpOperatorFixedIn[uint64]().operatorIn,
 	)
-	ok, errInfo := constNullIn.Run()
+	ok, errInfo := constNullIn.RunAndFree()
 	require.True(t, ok, errInfo)
 }
 
@@ -266,7 +316,7 @@ func TestOperatorEnumInUsesOrdinalEquality(t *testing.T) {
 		newOpOperatorFixedIn[types.Enum]().operatorIn,
 	)
 
-	ok, errInfo := tc.Run()
+	ok, errInfo := tc.RunAndFree()
 	require.True(t, ok, errInfo)
 }
 
@@ -283,7 +333,7 @@ func TestOperatorFixedNotInNullableListUsesThreeValuedLogic(t *testing.T) {
 		newOpOperatorFixedIn[int32]().operatorNotIn,
 	)
 
-	ok, errInfo := tc.Run()
+	ok, errInfo := tc.RunAndFree()
 	require.True(t, ok, errInfo)
 }
 
@@ -300,7 +350,7 @@ func TestOperatorStrInConstListUsesThreeValuedLogic(t *testing.T) {
 		newOpOperatorStrIn().operatorIn,
 	)
 
-	ok, errInfo := tc.Run()
+	ok, errInfo := tc.RunAndFree()
 	require.True(t, ok, errInfo)
 }
 
@@ -317,6 +367,6 @@ func TestOperatorStrInConstNullListUsesThreeValuedLogic(t *testing.T) {
 		newOpOperatorStrIn().operatorIn,
 	)
 
-	ok, errInfo := tc.Run()
+	ok, errInfo := tc.RunAndFree()
 	require.True(t, ok, errInfo)
 }

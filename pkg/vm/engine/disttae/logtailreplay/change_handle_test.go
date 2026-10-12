@@ -18,6 +18,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -3579,4 +3580,281 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 		out.Clean(mp)
 		src.Clean(mp)
 	})
+}
+
+// pkOp is one operation on an int32 primary key inside a CollectChanges range.
+type pkOp struct {
+	pk  int32
+	ts  int64
+	del bool
+}
+
+// newPKBatch builds a [pk int32, commitTS] batch, the layout filterBatch reads
+// for both the data side (primarySeqnum=0, TS last) and the tombstone side
+// (pk at 0, TS at 1).
+func newPKBatch(t *testing.T, mp *mpool.MPool, ops []pkOp) *batch.Batch {
+	t.Helper()
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	for _, op := range ops {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], op.pk, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.BuildTS(op.ts, 0), false, mp))
+	}
+	bat.SetRowCount(len(ops))
+	return bat
+}
+
+// splitPKOps runs filterBatch over one range of mixed operations and returns the
+// surviving primary keys of each side, sorted for a stable assertion.
+func splitPKOps(t *testing.T, mp *mpool.MPool, ops []pkOp, skipDeletes, keepTrailingDeletes bool) (data, tombstone []int32) {
+	t.Helper()
+	var inserts, deletes []pkOp
+	for _, op := range ops {
+		if op.del {
+			deletes = append(deletes, op)
+		} else {
+			inserts = append(inserts, op)
+		}
+	}
+	dataBat := newPKBatch(t, mp, inserts)
+	tombBat := newPKBatch(t, mp, deletes)
+	defer dataBat.Clean(mp)
+	defer tombBat.Clean(mp)
+
+	require.NoError(t, filterBatch(dataBat, tombBat, 0, skipDeletes, keepTrailingDeletes))
+	return remainingPKs(t, dataBat), remainingPKs(t, tombBat)
+}
+
+func remainingPKs(t *testing.T, bat *batch.Batch) []int32 {
+	t.Helper()
+	if bat == nil || bat.RowCount() == 0 {
+		return nil
+	}
+	col := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
+	out := append([]int32(nil), col...)
+	slices.Sort(out)
+	return out
+}
+
+// branchCloneRange is the exact change range a DATA BRANCH of a synced special
+// index produces (#28847): RestoreTable copies the built index and re-registers
+// CDC from a pre-commit timestamp, so the clone's own copy of every inherited
+// row falls INSIDE the first maintained range together with the user's DML.
+//
+//	pk1 inherited row: copied by the clone at ts=10, deleted by the branch at ts=30
+//	pk2 inherited row: copied by the clone at ts=11, retained
+//	pk3 branch row:    inserted at ts=40
+func branchCloneRange() []pkOp {
+	return []pkOp{
+		{pk: 1, ts: 10},
+		{pk: 2, ts: 11},
+		{pk: 1, ts: 30, del: true},
+		{pk: 3, ts: 40},
+	}
+}
+
+// TestFilterBatchKeepsTrailingDeleteForCopiedIndexBase is the engine-side proof
+// for #28847. The copied index already holds pk1 from the previous generation,
+// so the branch DELETE of pk1 must survive the range's net-effect filtering even
+// though pk1 is both inserted and deleted inside the range. Dropping the pair
+// (the default net effect) leaves the copied posting queryable forever, and the
+// covered full-text path has no base-table join to mask it.
+func TestFilterBatchKeepsTrailingDeleteForCopiedIndexBase(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	// Default net effect: the insert+delete pair cancels, so a consumer seeded
+	// from an EARLIER generation never learns pk1 died. This is the bug.
+	data, tomb := splitPKOps(t, mp, branchCloneRange(), false, false)
+	require.Equal(t, []int32{2, 3}, data)
+	require.Empty(t, tomb, "without the knob the trailing delete is coalesced away")
+
+	// Opted-in consumer (iscp.CollectChanges for a copied index): the trailing
+	// delete is delivered, pk2 and pk3 are untouched.
+	data, tomb = splitPKOps(t, mp, branchCloneRange(), false, true)
+	require.Equal(t, []int32{2, 3}, data, "the clone's insert of a deleted key stays dropped")
+	require.Equal(t, []int32{1}, tomb, "the branch delete must shadow the copied posting")
+}
+
+// TestFilterBatchKeepTrailingDeletesIsScopedToInsertThenDelete proves the knob is
+// narrow: it changes ONLY Case 2.2 (a key whose first op in the range is an
+// insert and whose last is a delete). Every other net-effect shape is identical
+// with the knob on and off, so the fix cannot resurrect rows or drop updates
+// elsewhere. These are the counterexamples that would still pass if the knob had
+// been implemented coarsely as "always keep deletes" or "always keep the last
+// operation".
+func TestFilterBatchKeepTrailingDeletesIsScopedToInsertThenDelete(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	cases := []struct {
+		name        string
+		ops         []pkOp
+		skipDeletes bool
+		// wantData is shared: the knob never changes which inserts survive.
+		wantData []int32
+		// wantTombOff / wantTombOn are the tombstone side in each mode. Equal
+		// values mean the case is knob-insensitive.
+		wantTombOff []int32
+		wantTombOn  []int32
+	}{
+		{
+			// Case 1 (delete, insert): keep both — the delete is the row's prior
+			// version, the insert its new one.
+			name:        "delete then insert keeps both",
+			ops:         []pkOp{{pk: 4, ts: 5, del: true}, {pk: 4, ts: 50}},
+			wantData:    []int32{4},
+			wantTombOff: []int32{4},
+			wantTombOn:  []int32{4},
+		},
+		{
+			name:        "delete then insert with skipDeletes keeps only the insert",
+			ops:         []pkOp{{pk: 4, ts: 5, del: true}, {pk: 4, ts: 50}},
+			skipDeletes: true,
+			wantData:    []int32{4},
+			wantTombOff: nil,
+			wantTombOn:  nil,
+		},
+		{
+			// Case 1 (delete, delete): keep only the last delete.
+			name:        "delete then delete keeps only the last",
+			ops:         []pkOp{{pk: 9, ts: 5, del: true}, {pk: 9, ts: 50, del: true}},
+			wantData:    nil,
+			wantTombOff: []int32{9},
+			wantTombOn:  []int32{9},
+		},
+		{
+			// Case 2 (insert, insert): keep only the latest insert.
+			name:        "reinsert keeps only the latest insert",
+			ops:         []pkOp{{pk: 5, ts: 10}, {pk: 5, ts: 20}},
+			wantData:    []int32{5},
+			wantTombOff: nil,
+			wantTombOn:  nil,
+		},
+		{
+			name:        "lone insert is kept",
+			ops:         []pkOp{{pk: 6, ts: 10}},
+			wantData:    []int32{6},
+			wantTombOff: nil,
+			wantTombOn:  nil,
+		},
+		{
+			// A single delete has len(rowInfos)==1, so it is never coalesced.
+			name:        "lone delete is kept",
+			ops:         []pkOp{{pk: 7, ts: 10, del: true}},
+			wantData:    nil,
+			wantTombOff: []int32{7},
+			wantTombOn:  []int32{7},
+		},
+		{
+			// Case 2.2: an UPDATE (delete+insert) followed by a DELETE starts and
+			// ends on the same shapes as a plain insert+delete, so it diverges
+			// too — and correctly: a consumer seeded from an earlier generation
+			// still holds the pre-update version and needs the tombstone.
+			name:        "update then delete keeps only the delete when opted in",
+			ops:         []pkOp{{pk: 8, ts: 10}, {pk: 8, ts: 20}, {pk: 8, ts: 30, del: true}},
+			wantData:    nil,
+			wantTombOff: nil,
+			wantTombOn:  []int32{8},
+		},
+		{
+			// Case 2.2 for one key must not disturb its neighbours.
+			name: "independent keys are filtered per key",
+			ops: []pkOp{
+				{pk: 10, ts: 10},
+				{pk: 11, ts: 11, del: true},
+				{pk: 12, ts: 12}, {pk: 12, ts: 13},
+				{pk: 13, ts: 14}, {pk: 13, ts: 15, del: true},
+			},
+			wantData:    []int32{10, 12},
+			wantTombOff: []int32{11},
+			wantTombOn:  []int32{11, 13},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, tomb := splitPKOps(t, mp, tc.ops, tc.skipDeletes, false)
+			require.Equal(t, tc.wantData, data, "keepTrailingDeletes=false data")
+			require.Equal(t, tc.wantTombOff, tomb, "keepTrailingDeletes=false tombstone")
+
+			data, tomb = splitPKOps(t, mp, tc.ops, tc.skipDeletes, true)
+			require.Equal(t, tc.wantData, data, "keepTrailingDeletes=true data")
+			require.Equal(t, tc.wantTombOn, tomb, "keepTrailingDeletes=true tombstone")
+		})
+	}
+
+	// The #28847 branch range: only the tombstone side diverges.
+	offData, offTomb := splitPKOps(t, mp, branchCloneRange(), false, false)
+	onData, onTomb := splitPKOps(t, mp, branchCloneRange(), false, true)
+	require.Equal(t, offData, onData, "the knob must not change the surviving inserts")
+	require.Equal(t, []int32{2, 3}, onData)
+	require.Empty(t, offTomb)
+	require.Equal(t, []int32{1}, onTomb)
+}
+
+// TestSelectRangeNetEffectRowsKeepsTrailingDeleteInRecovery pins spill-path
+// parity: a range too large to coalesce in memory goes through
+// selectRangeNetEffectRows instead of filterBatch, and must apply the same
+// insert-then-delete rule, so a copied index cannot be correct in memory and
+// stale once the range spills.
+func TestSelectRangeNetEffectRowsKeepsTrailingDeleteInRecovery(t *testing.T) {
+	// Each row must be a DISTINCT value: selectRangeNetEffectRows treats
+	// first == last as the single-operation shortcut.
+	newRow := func(isDelete bool) *rangeNetEffectRow {
+		return &rangeNetEffectRow{isDelete: isDelete}
+	}
+
+	// Case 2.2 (first insert, last delete) is the only recovery-sensitive shape.
+	keepFirst, keepLast := selectRangeNetEffectRows(newRow(false), newRow(true), false, false)
+	require.False(t, keepFirst)
+	require.False(t, keepLast, "default net effect cancels the pair")
+
+	keepFirst, keepLast = selectRangeNetEffectRows(newRow(false), newRow(true), false, true)
+	require.False(t, keepFirst, "the copied insert is still redundant")
+	require.True(t, keepLast, "recovery/opted-in keeps the trailing delete")
+
+	// skipDeletes does not change Case 2.2: the first op is an insert.
+	keepFirst, keepLast = selectRangeNetEffectRows(newRow(false), newRow(true), true, true)
+	require.False(t, keepFirst)
+	require.True(t, keepLast)
+
+	// Every other shape ignores the recovery flag.
+	for _, recovery := range []bool{false, true} {
+		// Case 2 (insert, insert): keep only the latest insert.
+		keepFirst, keepLast = selectRangeNetEffectRows(newRow(false), newRow(false), false, recovery)
+		require.False(t, keepFirst)
+		require.True(t, keepLast)
+
+		// Case 1 (delete, insert): keep both, unless deletes are skipped.
+		keepFirst, keepLast = selectRangeNetEffectRows(newRow(true), newRow(false), false, recovery)
+		require.True(t, keepFirst)
+		require.True(t, keepLast)
+
+		keepFirst, keepLast = selectRangeNetEffectRows(newRow(true), newRow(false), true, recovery)
+		require.False(t, keepFirst, "skipDeletes drops the leading delete")
+		require.True(t, keepLast)
+
+		// Case 1 (delete, delete): keep only the last delete.
+		keepFirst, keepLast = selectRangeNetEffectRows(newRow(true), newRow(true), false, recovery)
+		require.False(t, keepFirst)
+		require.True(t, keepLast)
+
+		// Single operation (first == last): always kept, delete or insert.
+		keepFirst, keepLast = selectRangeNetEffectRows(newRow(false), nil, false, recovery)
+		require.False(t, keepFirst, "a nil last is not a row")
+		require.False(t, keepLast)
+	}
+
+	// Degenerate inputs select nothing rather than panicking.
+	keepFirst, keepLast = selectRangeNetEffectRows(nil, nil, false, true)
+	require.False(t, keepFirst)
+	require.False(t, keepLast)
+
+	// Same-pointer shortcut: one operation in the group is kept as-is.
+	single := newRow(true)
+	keepFirst, keepLast = selectRangeNetEffectRows(single, single, false, false)
+	require.True(t, keepFirst)
+	require.False(t, keepLast)
 }

@@ -96,7 +96,7 @@ func TestCompileFilterExprDecimalScaleMatchesPublicPlan(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := &decimalZoneMapCompilerContext{MockCompilerContext: plan2.NewMockCompilerContext(true)}
+			ctx := &decimalZoneMapCompilerContext{MockCompilerContext: plan2.NewMockCompilerContext(true, newPlanTestProcess(t))}
 			ctx.SetContext(context.Background())
 			stmt, err := mysql.ParseOne(ctx.GetContext(), "select count(*) from "+test.table+" where amount < 2000", 1)
 			require.NoError(t, err)
@@ -1127,12 +1127,13 @@ func decimalTableDef(typ plan.Type, primary bool) *plan.TableDef {
 
 func decimalFoldedFilter(t *testing.T, colType plan.Type, op string, bounds ...decimalBound) *plan.Expr {
 	t.Helper()
-	args := []*plan.Expr{{
+	args := make([]*plan.Expr, 0, 1+len(bounds))
+	args = append(args, &plan.Expr{
 		Typ: colType,
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{
 			RelPos: 0, ColPos: 0, Name: "amount",
 		}},
-	}}
+	})
 	for _, bound := range bounds {
 		boundType := colType
 		boundType.Scale = bound.scale
@@ -1165,12 +1166,13 @@ func decimalInRangeFoldedFilter(
 }
 
 func int64FoldedFilter(op string, bounds ...int64) *plan.Expr {
-	args := []*plan.Expr{{
+	args := make([]*plan.Expr, 0, 1+len(bounds))
+	args = append(args, &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_int64)},
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{
 			RelPos: 0, ColPos: 0, Name: "amount",
 		}},
-	}}
+	})
 	for _, value := range bounds {
 		args = append(args, &plan.Expr{
 			Typ:  plan.Type{Id: int32(types.T_int64)},

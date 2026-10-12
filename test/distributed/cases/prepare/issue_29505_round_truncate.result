@@ -23,3 +23,31 @@ execute truncate_derived using @v;
 ➤ v[8,53,31]  𝄀
 1.4
 deallocate prepare truncate_derived;
+prepare round_truncate_output_cast from 'select cast(round(?,1) as decimal(20,1)) as rounded,cast(truncate(?,1) as decimal(20,1)) as truncated';
+set @v = '1.46';
+execute round_truncate_output_cast using @v,@v;
+➤ rounded[3,20,1]  ¦  truncated[3,20,1]  𝄀
+1.5  ¦  1.4
+set @v = '-1.46';
+execute round_truncate_output_cast using @v,@v;
+➤ rounded[3,20,1]  ¦  truncated[3,20,1]  𝄀
+-1.5  ¦  -1.4
+set @v = 3;
+execute round_truncate_output_cast using @v,@v;
+➤ rounded[3,20,1]  ¦  truncated[3,20,1]  𝄀
+3.0  ¦  3.0
+set @v = null;
+execute round_truncate_output_cast using @v,@v;
+➤ rounded[3,20,1]  ¦  truncated[3,20,1]  𝄀
+null  ¦  null
+set @v = '1.46';
+execute round_truncate_output_cast using @v,@v;
+➤ rounded[3,20,1]  ¦  truncated[3,20,1]  𝄀
+1.5  ¦  1.4
+deallocate prepare round_truncate_output_cast;
+prepare truncate_input_cast from 'select cast(truncate(cast(? as decimal(20,1)),1) as decimal(20,1)) as truncated';
+execute truncate_input_cast using @v;
+➤ truncated[3,20,1]  𝄀
+1.5
+deallocate prepare truncate_input_cast;
+set @v = null;

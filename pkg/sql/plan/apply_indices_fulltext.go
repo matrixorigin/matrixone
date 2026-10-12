@@ -785,6 +785,10 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		curr_ftnode.TableDef.Cols[0].Typ.Width = pkType.Width
 		curr_ftnode.TableDef.Cols[0].Typ.Scale = pkType.Scale
 		curr_ftnode.TableDef.Cols[0].Typ.Charset = pkType.Charset
+		curr_ftnode.TableDef.Cols[0].Typ.CollationVersion = pkType.CollationVersion
+		curr_ftnode.TableDef.Cols[0].Typ.CollationCoercibility = pkType.CollationCoercibility
+		curr_ftnode.TableDef.Cols[0].Typ.CollationCoercibilitySet = pkType.CollationCoercibilitySet
+		curr_ftnode.TableDef.Cols[0].Typ.CollationMergeConflict = pkType.CollationMergeConflict
 
 		// A json probe walks its terms one at a time rather than merging them
 		// (fulltext2/jsonprobe.go explains why: a range covers most of a key's

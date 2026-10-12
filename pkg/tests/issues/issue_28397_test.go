@@ -760,7 +760,8 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 				runs         []fieldBoundaryRun
 				preparedWant []int64
 			}
-			cases := []fieldBoundaryCase{
+			cases := make([]fieldBoundaryCase, 0, 36)
+			cases = append(cases, []fieldBoundaryCase{
 				{
 					name: "explicit char peer", expr: "field(?, cast(9007199254740993 as char))",
 					runs: []fieldBoundaryRun{
@@ -928,7 +929,7 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 					name: "extra text null candidate", expr: "field(?, ?, abs(" + first + "), abs(" + second + "))",
 					runs: []fieldBoundaryRun{{"exact search", []string{second, "null"}, []int64{2}}},
 				},
-			}
+			}...)
 			// One fixture, with one witness for each relational ownership boundary.
 			for _, relation := range []string{
 				"(select ? as x limit 1) d",

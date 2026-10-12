@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -552,6 +553,15 @@ func getLineageOwnerMutationExecutor(
 	}
 	if featureLimited {
 		err = admitFeatureLimitedLineageOwnerMutation(ctx, ses, bh)
+	} else if op := backgroundExecTxnOperator(bh); op != nil && op.Txn().IsPessimistic() && op.Txn().IsRCIsolation() {
+		// Private writers acquire C then G/X without a shared-to-exclusive upgrade.
+		var admission *lifecycleRCAdmission
+		admission, err = beginLifecycleRCAdmission(ctx, ses, bh, lock.LockMode_Exclusive)
+		if err == nil {
+			admission.proc.Free()
+			// Keep the existing lineage publication write after acquiring identity.
+			err = lockDataBranchLineageOwnerLifecycle(ctx, bh)
+		}
 	} else {
 		err = lockDataBranchLineageOwnerLifecycle(ctx, bh)
 	}
@@ -819,9 +829,6 @@ func dataBranchDeleteTable(
 	}
 
 	defer finishDataBranchComponent(execCtx.reqCtx, deferred, &err)
-	if err = admission.finish(execCtx.reqCtx, ses, bh); err != nil {
-		return err
-	}
 	var (
 		dbName  string
 		tblName string
@@ -835,6 +842,17 @@ func dataBranchDeleteTable(
 
 	if accId, err = defines.GetAccountId(execCtx.reqCtx); err != nil {
 		return
+	}
+
+	keys, err := cloneCatalogLockBatch(admission.proc, accId, dbName)
+	if err != nil {
+		return err
+	}
+	if err = admission.lockKey(catalog.MO_DATABASE, execCtx.reqCtx, keys, lock.LockMode_Shared, accId); err != nil {
+		return err
+	}
+	if err = admission.finish(execCtx.reqCtx, ses, bh); err != nil {
+		return err
 	}
 
 	if tblID, err = validateDataBranchDeleteTableTarget(execCtx.reqCtx, ses, bh, dbName, tblName); err != nil {
@@ -883,9 +901,6 @@ func dataBranchDeleteDatabase(
 	}
 
 	defer finishDataBranchComponent(execCtx.reqCtx, deferred, &err)
-	if err = admission.finish(execCtx.reqCtx, ses, bh); err != nil {
-		return err
-	}
 	var (
 		dbName   = stmt.DatabaseName
 		accId    uint32
@@ -894,6 +909,17 @@ func dataBranchDeleteDatabase(
 
 	if accId, err = defines.GetAccountId(execCtx.reqCtx); err != nil {
 		return
+	}
+
+	keys, err := cloneCatalogLockBatch(admission.proc, accId, dbName.String())
+	if err != nil {
+		return err
+	}
+	if err = admission.lockKey(catalog.MO_DATABASE, execCtx.reqCtx, keys, lock.LockMode_Exclusive, accId); err != nil {
+		return err
+	}
+	if err = admission.finish(execCtx.reqCtx, ses, bh); err != nil {
+		return err
 	}
 
 	db, err := ses.proc.GetSessionInfo().StorageEngine.Database(execCtx.reqCtx, dbName.String(), backgroundExecTxnOperator(bh))
@@ -977,11 +1003,9 @@ func diffMergeAgency(
 	if err != nil {
 		return
 	}
-	defer func() {
-		if deferred != nil {
-			err = deferred(err)
-		}
-	}()
+	if deferred != nil {
+		defer finishDataBranchComponent(execCtx.reqCtx, deferred, &err)
+	}
 
 	ctx, cancel := context.WithCancel(execCtx.reqCtx)
 	defer cancel()
@@ -1039,8 +1063,8 @@ func diffMergeAgency(
 		done        bool
 		wg          = new(sync.WaitGroup)
 		outputErr   atomic.Value
-		retBatCh    = make(chan batchWithKind, 10)
-		stopCh      = make(chan struct{})
+		retBatCh    chan batchWithKind
+		stopCh      chan struct{}
 		stopOnce    sync.Once
 		emit        emitFunc
 		stop        func()
@@ -1059,13 +1083,6 @@ func diffMergeAgency(
 			tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 		}
 	}()
-
-	emit = newEmitter(ctx, stopCh, retBatCh)
-	stop = func() {
-		stopOnce.Do(func() {
-			close(stopCh)
-		})
-	}
 
 	if diffStmt != nil {
 		if err = buildOutputSchema(ctx, ses, diffStmt, tblStuff); err != nil {
@@ -1125,41 +1142,50 @@ func diffMergeAgency(
 		}
 	}
 
+	if diffStmt == nil {
+		// The apply owner prepares stages before production and consumes each
+		// batch inline. A retry must never cancel a concurrent LCA probe.
+		copt.onlineApply = true
+		produce := func(emit emitFunc) error {
+			wg.Add(1)
+			return diffOnBase(ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit,
+				pkFilter, pickKeyHashmap, betweenFrom, betweenTo)
+		}
+		if pickStmt != nil {
+			return pickMergeDiffs(ctx, cancel, ses, bh, pickStmt, tblStuff, produce)
+		}
+		return mergeDiffs(ctx, cancel, ses, bh, tblStuff, produce)
+	}
+
+	retBatCh = make(chan batchWithKind, 10)
+	stopCh = make(chan struct{})
+	emit = newEmitter(ctx, stopCh, retBatCh)
+	stop = func() {
+		stopOnce.Do(func() {
+			close(stopCh)
+		})
+	}
 	wg.Add(2)
 	outputCh := retBatCh
 
 	go func() {
 		defer wg.Done()
-		if diffStmt != nil {
-			// 1. all rows
-			// 2. limit rows
-			// 3. count
-			// 4. as table
-			// 5. as file
+		// 1. all rows
+		// 2. limit rows
+		// 3. count
+		// 4. as table
+		// 5. as file
 
-			var err2 error
-			if outputPhase != nil {
-				err2 = outputPhase.drain(ctx, cancel, tblStuff.retPool, outputCh)
-			} else {
-				err2 = satisfyDiffOutputOpt(
-					ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, outputCh,
-				)
-			}
-			if err2 != nil {
-				outputErr.Store(err2)
-			}
-		} else if pickStmt != nil {
-			if err2 := pickMergeDiffs(
-				ctx, cancel, ses, bh, pickStmt, dagInfo, tblStuff, outputCh,
-			); err2 != nil {
-				outputErr.Store(err2)
-			}
+		var err2 error
+		if outputPhase != nil {
+			err2 = outputPhase.drain(ctx, cancel, tblStuff.retPool, outputCh)
 		} else {
-			if err2 := mergeDiffs(
-				ctx, cancel, ses, bh, mergeStmt, dagInfo, tblStuff, outputCh,
-			); err2 != nil {
-				outputErr.Store(err2)
-			}
+			err2 = satisfyDiffOutputOpt(
+				ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, outputCh,
+			)
+		}
+		if err2 != nil {
+			outputErr.Store(err2)
 		}
 	}()
 
@@ -1167,7 +1193,7 @@ func diffMergeAgency(
 		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit, pkFilter, pickKeyHashmap,
 		betweenFrom, betweenTo,
 	); err != nil {
-		// If the consumer cancelled the context (e.g., PICK conflict FAIL),
+		// If the DIFF consumer cancelled the context (e.g., an output failure),
 		// wait for it to finish and prefer its real error over context.Canceled.
 		if retBatCh != nil {
 			close(retBatCh)
@@ -1306,9 +1332,7 @@ func getTableStuff(
 			continue
 		}
 
-		t := types.NewWithCharset(
-			types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset),
-		)
+		t := types.MustTypeFromPlan(col.Typ)
 
 		tblStuff.def.colNames = append(tblStuff.def.colNames, col.Name)
 		tblStuff.def.colTypes = append(tblStuff.def.colTypes, t)
@@ -1832,7 +1856,7 @@ func isDataBranchLogicalTypeEquivalent(left, right plan.Type) bool {
 		left.Width == right.Width &&
 		left.Scale == right.Scale &&
 		left.Enumvalues == right.Enumvalues &&
-		left.Charset == right.Charset &&
+		left.SameCollation(right) &&
 		left.NotNullable == right.NotNullable &&
 		left.AutoIncr == right.AutoIncr
 }

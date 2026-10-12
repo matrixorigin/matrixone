@@ -17,173 +17,275 @@ package function
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
-func TestDecimalCastChecksNarrowedPrecision(t *testing.T) {
+func TestDecimalCastPrecisionContract(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	defer proc.Free()
 	decimal256Overflow, err := types.ParseDecimal256("100000000000000000000000000000000000000.00", 41, 2)
 	require.NoError(t, err)
-	require.Equal(t, "100000000000000000000000000000000000000.00", decimal256Overflow.Format(2))
-
-	for _, test := range []struct {
-		name   string
-		source types.Type
-		target types.Type
-		values any
+	small256, err := types.ParseDecimal256("99.99", 4, 2)
+	require.NoError(t, err)
+	max64 := types.Decimal64(999999999999999999)
+	max128, err := types.ParseDecimal128("9999999999999999.9900", 20, 4)
+	require.NoError(t, err)
+	max256, err := types.ParseDecimal256("9999999999999999.9900", 20, 4)
+	require.NoError(t, err)
+	wide128, err := types.ParseDecimal128("999999999999999999999999999999999999.99", 38, 2)
+	require.NoError(t, err)
+	wide256, err := types.ParseDecimal256("999999999999999999999999999999999999.9900", 40, 4)
+	require.NoError(t, err)
+	largeScale, err := types.ParseDecimal256("12.34", 66, 30)
+	require.NoError(t, err)
+	// Exact coefficient cutoffs for reductions across the 19-digit chunk.
+	// 1.499999999999999999999 / 1.500000000000000000000 at scale 21.
+	below21 := types.Decimal128{B0_63: 0x50ae84a8cdefffff, B64_127: 0x51}
+	half21 := types.Decimal128{B0_63: 0x50ae84a8cdf00000, B64_127: 0x51}
+	below21Wide := types.Decimal256{B0_63: below21.B0_63, B64_127: below21.B64_127}
+	half21Wide := types.Decimal256{B0_63: half21.B0_63, B64_127: half21.B64_127}
+	// 0.49999999999999999999999999999999999999 / 0.5 at scale 38.
+	below38 := types.Decimal128{B0_63: 0x4c5111fffffffff, B64_127: 0x259da6542d43623d}
+	half38 := types.Decimal128{B0_63: 0x4c5112000000000, B64_127: 0x259da6542d43623d}
+	for _, tc := range []struct {
+		name           string
+		source, target types.Type
+		values, want   any
+		nulls          []bool
+		constant       bool
+		wantErr        string
 	}{
-		{
-			name:   "decimal64",
-			source: types.New(types.T_decimal64, 6, 2),
-			target: types.New(types.T_decimal64, 5, 2),
-			values: []types.Decimal64{99999, 100000, types.Decimal64(99999).Minus(), types.Decimal64(100000).Minus()},
-		},
-		{
-			name:   "decimal128",
+		{name: "narrow_decimal64",
+			source:  types.New(types.T_decimal64, 6, 2),
+			target:  types.New(types.T_decimal64, 5, 2),
+			values:  []types.Decimal64{99999, 100000, types.Decimal64(99999).Minus(), types.Decimal64(100000).Minus()},
+			wantErr: "Decimal64(5,2)"},
+		{name: "narrow_decimal128",
 			source: types.New(types.T_decimal128, 20, 2),
 			target: types.New(types.T_decimal128, 19, 2),
 			values: []types.Decimal128{
 				{B0_63: 9999999999999999999},
 				{B0_63: 10000000000000000000},
 			},
-		},
-		{
-			name:   "decimal256",
-			source: types.New(types.T_decimal256, 41, 2),
-			target: types.New(types.T_decimal256, 40, 2),
-			values: []types.Decimal256{decimal256Overflow},
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			input := NewFunctionTestInput(test.source, test.values, nil)
-			target := NewFunctionTestInput(test.target, test.values, nil)
-			testCase := NewFunctionTestCase(proc, []FunctionTestInput{input, target},
-				NewFunctionTestResult(test.target, true, nil, nil), NewCast)
-			succeed, info := testCase.Run()
-			require.True(t, succeed, info)
-		})
-	}
-}
-
-func TestDecimalCastChecksScaleGrowthAgainstTargetPrecision(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	decimal256Overflow, err := types.ParseDecimal256("99.99", 4, 2)
-	require.NoError(t, err)
-
-	for _, test := range []struct {
-		name   string
-		source types.Type
-		target types.Type
-		values any
-	}{
-		{
-			name:   "decimal64",
-			source: types.New(types.T_decimal64, 4, 2),
+			wantErr: "Decimal128(19,2)"},
+		{name: "narrow_decimal256",
+			source:  types.New(types.T_decimal256, 41, 2),
+			target:  types.New(types.T_decimal256, 40, 2),
+			values:  []types.Decimal256{decimal256Overflow},
+			wantErr: "Decimal256(40,2)"},
+		{name: "growth_reject_decimal64",
+			source:  types.New(types.T_decimal64, 4, 2),
+			target:  types.New(types.T_decimal64, 5, 4),
+			values:  []types.Decimal64{9999},
+			wantErr: "Decimal64(5,4)"},
+		{name: "growth_reject_decimal128",
+			source:  types.New(types.T_decimal128, 4, 2),
+			target:  types.New(types.T_decimal128, 5, 4),
+			values:  []types.Decimal128{{B0_63: 9999}},
+			wantErr: "Decimal128(5,4)"},
+		{name: "growth_reject_decimal256",
+			source:  types.New(types.T_decimal256, 4, 2),
+			target:  types.New(types.T_decimal256, 5, 4),
+			values:  []types.Decimal256{small256},
+			wantErr: "Decimal256(5,4)"},
+		{name: "growth_reject_decimal64_to_decimal128",
+			source:  types.New(types.T_decimal64, 4, 2),
+			target:  types.New(types.T_decimal128, 5, 4),
+			values:  []types.Decimal64{9999},
+			wantErr: "Decimal128(5,4)"},
+		{name: "growth_reject_decimal64_to_decimal256",
+			source:  types.New(types.T_decimal64, 4, 2),
+			target:  types.New(types.T_decimal256, 5, 4),
+			values:  []types.Decimal64{9999},
+			wantErr: "Decimal256(5,4)"},
+		{name: "growth_reject_decimal128_to_decimal256",
+			source:  types.New(types.T_decimal128, 4, 2),
+			target:  types.New(types.T_decimal256, 5, 4),
+			values:  []types.Decimal128{{B0_63: 9999}},
+			wantErr: "Decimal256(5,4)"},
+		{name: "growth_boundary_NULL",
+			source: types.New(types.T_decimal64, 3, 2),
 			target: types.New(types.T_decimal64, 5, 4),
-			values: []types.Decimal64{9999},
-		},
-		{
-			name:   "decimal128",
-			source: types.New(types.T_decimal128, 4, 2),
-			target: types.New(types.T_decimal128, 5, 4),
-			values: []types.Decimal128{{B0_63: 9999}},
-		},
-		{
-			name:   "decimal256",
-			source: types.New(types.T_decimal256, 4, 2),
-			target: types.New(types.T_decimal256, 5, 4),
-			values: []types.Decimal256{decimal256Overflow},
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			testCase := NewFunctionTestCase(proc,
-				[]FunctionTestInput{
-					NewFunctionTestInput(test.source, test.values, nil),
-					NewFunctionTestInput(test.target, test.values, nil),
-				},
-				NewFunctionTestResult(test.target, true, nil, nil), NewCast)
-			succeed, info := testCase.Run()
-			require.True(t, succeed, info)
-		})
-	}
+			values: []types.Decimal64{999, 0},
+			want:   []types.Decimal64{99900, 0},
+			nulls:  []bool{false, true}},
+		{name: "safe_decimal64",
+			source: types.New(types.T_decimal64, 12, 2),
+			target: types.New(types.T_decimal64, 14, 4),
+			values: []types.Decimal64{1234, types.Decimal64(1234).Minus(), 0, 0},
+			want:   []types.Decimal64{123400, types.Decimal64(123400).Minus(), 0, 0},
+			nulls:  []bool{false, false, false, true}},
+		{name: "safe_decimal128",
+			source: types.New(types.T_decimal128, 20, 2),
+			target: types.New(types.T_decimal128, 22, 4),
+			values: []types.Decimal128{{B0_63: 1234}, (types.Decimal128{B0_63: 1234}).Minus(), {}, {}},
+			want:   []types.Decimal128{{B0_63: 123400}, (types.Decimal128{B0_63: 123400}).Minus(), {}, {}},
+			nulls:  []bool{false, false, false, true}},
+		{name: "safe_decimal256",
+			source: types.New(types.T_decimal256, 40, 2),
+			target: types.New(types.T_decimal256, 42, 4),
+			values: []types.Decimal256{{B0_63: 1234}, (types.Decimal256{B0_63: 1234}).Minus(), {}, {}},
+			want:   []types.Decimal256{{B0_63: 123400}, (types.Decimal256{B0_63: 123400}).Minus(), {}, {}},
+			nulls:  []bool{false, false, false, true}},
+		{name: "cross_64-to-128",
+			source: types.New(types.T_decimal64, 18, 2),
+			target: types.New(types.T_decimal128, 20, 4),
+			values: []types.Decimal64{1234, types.Decimal64(1234).Minus(), max64, 0},
+			want:   []types.Decimal128{{B0_63: 123400}, (types.Decimal128{B0_63: 123400}).Minus(), max128, {}},
+			nulls:  []bool{false, false, false, true}},
+		{name: "cross_64-to-256",
+			source: types.New(types.T_decimal64, 18, 2),
+			target: types.New(types.T_decimal256, 20, 4),
+			values: []types.Decimal64{1234, types.Decimal64(1234).Minus(), max64, 0},
+			want: []types.Decimal256{{B0_63: 123400}, (types.Decimal256{B0_63: 123400}).Minus(),
+				max256, {}},
+			nulls: []bool{false, false, false, true}},
+		{name: "cross_128-to-256",
+			source: types.New(types.T_decimal128, 38, 2),
+			target: types.New(types.T_decimal256, 40, 4),
+			values: []types.Decimal128{{B0_63: 1234}, (types.Decimal128{B0_63: 1234}).Minus(), wide128, {}},
+			want:   []types.Decimal256{{B0_63: 123400}, (types.Decimal256{B0_63: 123400}).Minus(), wide256, {}},
+			nulls:  []bool{false, false, false, true}},
+		{name: "cross_64-to-256-large-scale",
+			source: types.New(types.T_decimal64, 18, 2),
+			target: types.New(types.T_decimal256, 66, 30),
+			values: []types.Decimal64{1234, 0, 0, 0},
+			want:   []types.Decimal256{largeScale, {}, {}, {}},
+			nulls:  []bool{false, false, false, true}},
+		{name: "cross_128-to-256-large-scale",
+			source: types.New(types.T_decimal128, 38, 2),
+			target: types.New(types.T_decimal256, 66, 30),
+			values: []types.Decimal128{{B0_63: 1234}, {}, {}, {}},
+			want:   []types.Decimal256{largeScale, {}, {}, {}},
+			nulls:  []bool{false, false, false, true}},
+		{name: "reduce_decimal128",
+			source: types.New(types.T_decimal128, 38, 38),
+			target: types.New(types.T_decimal128, 38, 36),
+			values: []types.Decimal128{{B0_63: 49}, (types.Decimal128{B0_63: 49}).Minus(), {B0_63: 50}, (types.Decimal128{B0_63: 50}).Minus(), (types.Decimal128{B0_63: 149}), (types.Decimal128{B0_63: 150}), (types.Decimal128{B0_63: 149}).Minus(), (types.Decimal128{B0_63: 150}).Minus(), {}},
+			want:   []types.Decimal128{{}, {}, {B0_63: 1}, (types.Decimal128{B0_63: 1}).Minus(), {B0_63: 1}, {B0_63: 2}, {B0_63: ^uint64(0), B64_127: ^uint64(0)}, {B0_63: ^uint64(1), B64_127: ^uint64(0)}, {}},
+			nulls:  []bool{false, false, false, false, false, false, false, false, true}},
+		{name: "reduce_decimal128 long scale reduction",
+			source: types.New(types.T_decimal128, 38, 38),
+			target: types.New(types.T_decimal128, 5, 0),
+			values: []types.Decimal128{{B0_63: 49}, (types.Decimal128{B0_63: 49}).Minus(), below38, half38, below38.Minus(), half38.Minus(), {}},
+			want:   []types.Decimal128{{}, {}, {}, {B0_63: 1}, {}, {B0_63: ^uint64(0), B64_127: ^uint64(0)}, {}},
+			nulls:  []bool{false, false, false, false, false, false, true}},
+		{name: "reduce_decimal128 to decimal64",
+			source: types.New(types.T_decimal128, 38, 38),
+			target: types.New(types.T_decimal64, 18, 17),
+			values: []types.Decimal128{{B0_63: 49}, (types.Decimal128{B0_63: 49}).Minus(), below21, half21, below21.Minus(), half21.Minus(), {}},
+			want:   []types.Decimal64{0, 0, 1, 2, types.Decimal64(^uint64(0)), types.Decimal64(^uint64(1)), 0},
+			nulls:  []bool{false, false, false, false, false, false, true}},
+		{name: "reduce_decimal128 to decimal256",
+			source: types.New(types.T_decimal128, 38, 38),
+			target: types.New(types.T_decimal256, 40, 36),
+			values: []types.Decimal128{{B0_63: 49}, (types.Decimal128{B0_63: 49}).Minus(), (types.Decimal128{B0_63: 149}), (types.Decimal128{B0_63: 150}), (types.Decimal128{B0_63: 149}).Minus(), (types.Decimal128{B0_63: 150}).Minus(), {}},
+			want:   []types.Decimal256{{}, {}, {B0_63: 1}, {B0_63: 2}, {B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0)}, {B0_63: ^uint64(1), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0)}, {}},
+			nulls:  []bool{false, false, false, false, false, false, true}},
+		{name: "reduce_decimal256",
+			source: types.New(types.T_decimal256, 38, 38),
+			target: types.New(types.T_decimal256, 38, 36),
+			values: []types.Decimal256{{B0_63: 49}, (types.Decimal256{B0_63: 49}).Minus(), {B0_63: 50}, (types.Decimal256{B0_63: 50}).Minus(), (types.Decimal256{B0_63: 149}), (types.Decimal256{B0_63: 150}), (types.Decimal256{B0_63: 149}).Minus(), (types.Decimal256{B0_63: 150}).Minus(), {}},
+			want:   []types.Decimal256{{}, {}, {B0_63: 1}, (types.Decimal256{B0_63: 1}).Minus(), {B0_63: 1}, {B0_63: 2}, {B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0)}, {B0_63: ^uint64(1), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0)}, {}},
+			nulls:  []bool{false, false, false, false, false, false, false, false, true}},
+		{name: "reduce_decimal256 to decimal128",
+			source: types.New(types.T_decimal256, 38, 38),
+			target: types.New(types.T_decimal128, 38, 36),
+			values: []types.Decimal256{{B0_63: 49}, (types.Decimal256{B0_63: 49}).Minus(), (types.Decimal256{B0_63: 149}), (types.Decimal256{B0_63: 150}), (types.Decimal256{B0_63: 149}).Minus(), (types.Decimal256{B0_63: 150}).Minus(), {}},
+			want:   []types.Decimal128{{}, {}, {B0_63: 1}, {B0_63: 2}, {B0_63: ^uint64(0), B64_127: ^uint64(0)}, {B0_63: ^uint64(1), B64_127: ^uint64(0)}, {}},
+			nulls:  []bool{false, false, false, false, false, false, true}},
+		{name: "reduce_decimal256 to decimal64",
+			source: types.New(types.T_decimal256, 38, 38),
+			target: types.New(types.T_decimal64, 18, 17),
+			values: []types.Decimal256{{B0_63: 49}, (types.Decimal256{B0_63: 49}).Minus(), below21Wide, half21Wide, below21Wide.Minus(), half21Wide.Minus(), {}},
+			want:   []types.Decimal64{0, 0, 1, 2, types.Decimal64(^uint64(0)), types.Decimal64(^uint64(1)), 0},
+			nulls:  []bool{false, false, false, false, false, false, true}},
+		{name: "constant64_to128_positive",
+			source:   types.New(types.T_decimal64, 18, 2),
+			target:   types.New(types.T_decimal128, 20, 4),
+			values:   []types.Decimal64{1234},
+			want:     []types.Decimal128{{B0_63: 123400}},
+			constant: true},
+		{name: "constant64_to128_negative",
+			source:   types.New(types.T_decimal64, 18, 2),
+			target:   types.New(types.T_decimal128, 20, 4),
+			values:   []types.Decimal64{types.Decimal64(1234).Minus()},
+			want:     []types.Decimal128{{B0_63: ^uint64(123399), B64_127: ^uint64(0)}},
+			constant: true},
 
-	for _, test := range []struct {
-		name   string
-		source FunctionTestInput
-		target types.Type
-		zero   any
-	}{
-		{
-			name:   "decimal64_to_decimal128",
-			source: NewFunctionTestInput(types.New(types.T_decimal64, 4, 2), []types.Decimal64{9999}, nil),
-			target: types.New(types.T_decimal128, 5, 4),
-			zero:   []types.Decimal128{},
-		},
-		{
-			name:   "decimal64_to_decimal256",
-			source: NewFunctionTestInput(types.New(types.T_decimal64, 4, 2), []types.Decimal64{9999}, nil),
-			target: types.New(types.T_decimal256, 5, 4),
-			zero:   []types.Decimal256{},
-		},
-		{
-			name: "decimal128_to_decimal256",
-			source: NewFunctionTestInput(types.New(types.T_decimal128, 4, 2),
-				[]types.Decimal128{{B0_63: 9999}}, nil),
-			target: types.New(types.T_decimal256, 5, 4),
-			zero:   []types.Decimal256{},
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			testCase := NewFunctionTestCase(proc,
-				[]FunctionTestInput{test.source, NewFunctionTestInput(test.target, test.zero, nil)},
-				NewFunctionTestResult(test.target, true, nil, nil), NewCast)
-			succeed, info := testCase.Run()
-			require.True(t, succeed, info)
-		})
-	}
-
-	legal := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.New(types.T_decimal64, 3, 2), []types.Decimal64{999, 0}, []bool{false, true}),
-			NewFunctionTestInput(types.New(types.T_decimal64, 5, 4), []types.Decimal64{}, nil),
-		},
-		NewFunctionTestResult(types.New(types.T_decimal64, 5, 4), false,
-			[]types.Decimal64{99900, 0}, []bool{false, true}), NewCast)
-	succeed, info := legal.Run()
-	require.True(t, succeed, info)
-}
-
-func TestDecimalCastSafeScaleGrowth(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	for _, tc := range []struct {
-		name   string
-		source types.Type
-		target types.Type
-		values any
-		want   any
-	}{
-		{"decimal64", types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal64, 14, 4),
-			[]types.Decimal64{1234, types.Decimal64(1234).Minus(), 0, 0},
-			[]types.Decimal64{123400, types.Decimal64(123400).Minus(), 0, 0}},
-		{"decimal128", types.New(types.T_decimal128, 20, 2), types.New(types.T_decimal128, 22, 4),
-			[]types.Decimal128{{B0_63: 1234}, (types.Decimal128{B0_63: 1234}).Minus(), {}, {}},
-			[]types.Decimal128{{B0_63: 123400}, (types.Decimal128{B0_63: 123400}).Minus(), {}, {}}},
-		{"decimal256", types.New(types.T_decimal256, 40, 2), types.New(types.T_decimal256, 42, 4),
-			[]types.Decimal256{{B0_63: 1234}, (types.Decimal256{B0_63: 1234}).Minus(), {}, {}},
-			[]types.Decimal256{{B0_63: 123400}, (types.Decimal256{B0_63: 123400}).Minus(), {}, {}}},
+		{name: "widen64_same_nullable", source: types.New(types.T_decimal64, 18, 2), target: types.New(types.T_decimal128, 38, 2),
+			values: []types.Decimal64{100, 200, 300, 400}, want: []types.Decimal128{{B0_63: 100}, {}, {B0_63: 300}, {}}, nulls: []bool{false, true, false, true}},
+		{name: "widen64_same_signed", source: types.New(types.T_decimal64, 18, 4), target: types.New(types.T_decimal128, 38, 4),
+			values: []types.Decimal64{types.Decimal64(^uint64(99)), 50}, want: []types.Decimal128{{B0_63: ^uint64(99), B64_127: ^uint64(0)}, {B0_63: 50}}, nulls: []bool{false, false}},
+		{name: "widen64_growth_nonnull", source: types.New(types.T_decimal64, 18, 2), target: types.New(types.T_decimal128, 38, 4),
+			values: []types.Decimal64{12345}, want: []types.Decimal128{{B0_63: 1234500}}},
+		{name: "widen64_growth_nullable", source: types.New(types.T_decimal64, 18, 2), target: types.New(types.T_decimal128, 38, 4),
+			values: []types.Decimal64{12345, 67890}, want: []types.Decimal128{{}, {B0_63: 6789000}}, nulls: []bool{true, false}},
+		{name: "widen64_narrow_nonnull", source: types.New(types.T_decimal64, 18, 4), target: types.New(types.T_decimal128, 10, 4),
+			values: []types.Decimal64{123456789}, want: []types.Decimal128{{B0_63: 123456789}}},
+		{name: "widen64_narrow_nullable", source: types.New(types.T_decimal64, 18, 4), target: types.New(types.T_decimal128, 10, 4),
+			values: []types.Decimal64{123456789, 987654321}, want: []types.Decimal128{{B0_63: 123456789}, {}}, nulls: []bool{false, true}},
+		{name: "widen64_empty_same", source: types.New(types.T_decimal64, 18, 2), target: types.New(types.T_decimal128, 38, 2),
+			values: []types.Decimal64{}, want: []types.Decimal128{}},
+		{name: "widen64_empty_growth", source: types.New(types.T_decimal64, 18, 2), target: types.New(types.T_decimal128, 38, 4),
+			values: []types.Decimal64{}, want: []types.Decimal128{}},
+		{name: "widen64_empty_narrow", source: types.New(types.T_decimal64, 18, 2), target: types.New(types.T_decimal128, 10, 2),
+			values: []types.Decimal64{}, want: []types.Decimal128{}},
+		{name: "round_carry_neighbor",
+			source: types.New(types.T_decimal256, 4, 3),
+			target: types.New(types.T_decimal256, 3, 2),
+			values: []types.Decimal256{{B0_63: 9994}},
+			want:   []types.Decimal256{{B0_63: 999}}},
+		{name: "round_positive_carry_reject",
+			source:  types.New(types.T_decimal128, 4, 3),
+			target:  types.New(types.T_decimal64, 3, 2),
+			values:  []types.Decimal128{{B0_63: 9995}},
+			wantErr: "Decimal64(3,0)"},
+		{name: "round_negative_carry_reject",
+			source:  types.New(types.T_decimal256, 4, 3),
+			target:  types.New(types.T_decimal128, 3, 2),
+			values:  []types.Decimal256{(types.Decimal256{B0_63: 9995}).Minus()},
+			wantErr: "Decimal128(3,0)"},
+		{name: "narrow_negative64",
+			source:  types.New(types.T_decimal64, 6, 2),
+			target:  types.New(types.T_decimal64, 5, 2),
+			values:  []types.Decimal64{types.Decimal64(100000).Minus()},
+			wantErr: "Decimal64(5,2)"},
+		{name: "narrow_negative128",
+			source:  types.New(types.T_decimal128, 20, 2),
+			target:  types.New(types.T_decimal128, 19, 2),
+			values:  []types.Decimal128{(types.Decimal128{B0_63: 10000000000000000000}).Minus()},
+			wantErr: "Decimal128(19,2)"},
+		{name: "narrow_negative256",
+			source:  types.New(types.T_decimal256, 41, 2),
+			target:  types.New(types.T_decimal256, 40, 2),
+			values:  []types.Decimal256{decimal256Overflow.Minus()},
+			wantErr: "Decimal256(40,2)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			testCase := NewFunctionTestCase(proc, []FunctionTestInput{
-				NewFunctionTestInput(tc.source, tc.values, []bool{false, false, false, true}),
-				NewFunctionTestInput(tc.target, tc.want, nil),
-			}, NewFunctionTestResult(tc.target, false, tc.want, []bool{false, false, false, true}), NewCast)
-			succeed, info := testCase.Run()
-			require.True(t, succeed, info)
+			input := NewFunctionTestInput(tc.source, tc.values, tc.nulls)
+			input.isConst = tc.constant
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{input, NewFunctionTestInput(tc.target, emptyCastTargetValues(tc.target), nil)}, NewFunctionTestResult(tc.target, tc.wantErr != "", tc.want, tc.nulls), NewCast)
+			defer fc.Free()
+			if tc.wantErr != "" {
+				_, err := fc.DebugRun()
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "error %v", err)
+				require.ErrorContains(t, err, tc.wantErr)
+			} else {
+				ok, info := fc.Run()
+				require.True(t, ok, info)
+			}
+			require.True(t, tc.source == *fc.parameters[0].GetType(), "source metadata changed")
+			require.True(t, tc.target == *fc.GetResultVectorDirectly().GetType(), "target metadata changed")
 		})
 	}
+}
+
+func TestDecimalCastScaleGrowthAdmission(t *testing.T) {
 	for _, tc := range []struct {
 		from, to types.Type
 		want     bool
@@ -195,57 +297,6 @@ func TestDecimalCastSafeScaleGrowth(t *testing.T) {
 		{types.New(types.T_decimal256, 76, 0), types.New(types.T_decimal256, 76, 1), false},
 		{types.New(types.T_decimal64, 0, 2), types.New(types.T_decimal64, 14, 4), false},
 		{types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal64, 19, 4), false},
-	} {
-		require.Equal(t, tc.want, canWidenDecimalScale(tc.from, tc.to), "%v -> %v", tc.from, tc.to)
-	}
-}
-
-func TestDecimalCastCrossWidthSafeScaleGrowth(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	max64 := types.Decimal64(999999999999999999)
-	max128, err := types.ParseDecimal128("9999999999999999.9900", 20, 4)
-	require.NoError(t, err)
-	wide128, err := types.ParseDecimal128("999999999999999999999999999999999999.99", 38, 2)
-	require.NoError(t, err)
-	wide256, err := types.ParseDecimal256("999999999999999999999999999999999999.9900", 40, 4)
-	require.NoError(t, err)
-	largeScale, err := types.ParseDecimal256("12.34", 66, 30)
-	require.NoError(t, err)
-	for _, tc := range []struct {
-		name   string
-		source types.Type
-		target types.Type
-		values any
-		want   any
-	}{
-		{"64-to-128", types.New(types.T_decimal64, 18, 2), types.New(types.T_decimal128, 20, 4),
-			[]types.Decimal64{1234, types.Decimal64(1234).Minus(), max64, 0},
-			[]types.Decimal128{{B0_63: 123400}, (types.Decimal128{B0_63: 123400}).Minus(), max128, {}}},
-		{"64-to-256", types.New(types.T_decimal64, 18, 2), types.New(types.T_decimal256, 20, 4),
-			[]types.Decimal64{1234, types.Decimal64(1234).Minus(), max64, 0},
-			[]types.Decimal256{{B0_63: 123400}, (types.Decimal256{B0_63: 123400}).Minus(),
-				types.Decimal256FromDecimal128(max128), {}}},
-		{"128-to-256", types.New(types.T_decimal128, 38, 2), types.New(types.T_decimal256, 40, 4),
-			[]types.Decimal128{{B0_63: 1234}, (types.Decimal128{B0_63: 1234}).Minus(), wide128, {}},
-			[]types.Decimal256{{B0_63: 123400}, (types.Decimal256{B0_63: 123400}).Minus(), wide256, {}}},
-		{"64-to-256-large-scale", types.New(types.T_decimal64, 18, 2), types.New(types.T_decimal256, 66, 30),
-			[]types.Decimal64{1234, 0, 0, 0}, []types.Decimal256{largeScale, {}, {}, {}}},
-		{"128-to-256-large-scale", types.New(types.T_decimal128, 38, 2), types.New(types.T_decimal256, 66, 30),
-			[]types.Decimal128{{B0_63: 1234}, {}, {}, {}}, []types.Decimal256{largeScale, {}, {}, {}}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			fc := NewFunctionTestCase(proc, []FunctionTestInput{
-				NewFunctionTestInput(tc.source, tc.values, []bool{false, false, false, true}),
-				NewFunctionTestInput(tc.target, tc.want, nil),
-			}, NewFunctionTestResult(tc.target, false, tc.want, []bool{false, false, false, true}), NewCast)
-			ok, info := fc.Run()
-			require.True(t, ok, info)
-		})
-	}
-	for _, tc := range []struct {
-		from, to types.Type
-		want     bool
-	}{
 		{types.New(types.T_decimal64, 18, 2), types.New(types.T_decimal128, 20, 4), true},
 		{types.New(types.T_decimal64, 18, 2), types.New(types.T_decimal256, 20, 4), true},
 		{types.New(types.T_decimal128, 38, 2), types.New(types.T_decimal256, 40, 4), true},
@@ -255,106 +306,56 @@ func TestDecimalCastCrossWidthSafeScaleGrowth(t *testing.T) {
 	} {
 		require.Equal(t, tc.want, canWidenDecimalScale(tc.from, tc.to), "%v -> %v", tc.from, tc.to)
 	}
-	// The 64->128 implementation also has a dedicated constant-vector branch.
-	for _, value := range []types.Decimal64{1234, types.Decimal64(1234).Minus()} {
-		want, err := (types.Decimal128{B0_63: uint64(value), B64_127: uint64(int64(value) >> 63)}).Scale(2)
-		require.NoError(t, err)
-		fc := NewFunctionTestCase(proc, []FunctionTestInput{
-			NewFunctionTestConstInput(types.New(types.T_decimal64, 18, 2), []types.Decimal64{value}, nil),
-			NewFunctionTestInput(types.New(types.T_decimal128, 20, 4), []types.Decimal128{want}, nil),
-		}, NewFunctionTestResult(types.New(types.T_decimal128, 20, 4), false, []types.Decimal128{want}, nil), NewCast)
-		ok, info := fc.Run()
-		require.True(t, ok, info)
-	}
 }
 
 func BenchmarkDecimalSafeScaleGrowth(b *testing.B) {
 	proc := testutil.NewProcess(b)
+	defer proc.Free()
 	values64 := make([]types.Decimal64, 256)
 	values128 := make([]types.Decimal128, 256)
 	values256 := make([]types.Decimal256, 256)
+	wanted64 := make([]types.Decimal64, 256)
+	wanted128 := make([]types.Decimal128, 256)
+	wanted256 := make([]types.Decimal256, 256)
 	for i := range values64 {
 		values64[i] = 1234
 		values128[i] = types.Decimal128{B0_63: 1234}
 		values256[i] = types.Decimal256{B0_63: 1234}
+		// 12.34 represented at scale four has the literal coefficient 123400.
+		wanted64[i] = 123400
+		wanted128[i] = types.Decimal128{B0_63: 123400}
+		wanted256[i] = types.Decimal256{B0_63: 123400}
 	}
-	for _, tc := range []struct {
-		name         string
-		source       types.Type
-		target       types.Type
-		values       any
-		targetValues any
-	}{
-		{"decimal64", types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal64, 14, 4), values64, values64},
-		{"decimal128", types.New(types.T_decimal128, 20, 2), types.New(types.T_decimal128, 22, 4), values128, values128},
-		{"decimal256", types.New(types.T_decimal256, 40, 2), types.New(types.T_decimal256, 42, 4), values256, values256},
-		{"64-to-128", types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal128, 14, 4), values64, values128},
-		{"64-to-256", types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal256, 14, 4), values64, values256},
-		{"128-to-256", types.New(types.T_decimal128, 20, 2), types.New(types.T_decimal256, 22, 4), values128, values256},
-	} {
-		b.Run(tc.name, func(b *testing.B) {
-			fc := NewFunctionTestCase(proc, []FunctionTestInput{
-				NewFunctionTestInput(tc.source, tc.values, nil),
-				NewFunctionTestInput(tc.target, tc.targetValues, nil),
-			}, NewFunctionTestResult(tc.target, false, nil, nil), NewCast)
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				if err := fc.result.PreExtendAndReset(fc.fnLength); err != nil {
-					b.Fatal(err)
-				}
-				if _, err := fc.DebugRun(); err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-	}
-}
-
-func TestDecimalScaleReductionRoundsOnce(t *testing.T) {
-	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		name   string
 		source types.Type
 		target types.Type
 		values any
-		want   any
+		wanted any
 	}{
-		{"decimal128", types.New(types.T_decimal128, 38, 38), types.New(types.T_decimal128, 38, 36),
-			[]types.Decimal128{{B0_63: 49}, (types.Decimal128{B0_63: 49}).Minus(), {B0_63: 50}, (types.Decimal128{B0_63: 50}).Minus()},
-			[]types.Decimal128{{}, {}, {B0_63: 1}, (types.Decimal128{B0_63: 1}).Minus()}},
-		{"decimal128 long scale reduction", types.New(types.T_decimal128, 38, 38), types.New(types.T_decimal128, 5, 0),
-			[]types.Decimal128{{B0_63: 49}, (types.Decimal128{B0_63: 49}).Minus()},
-			[]types.Decimal128{{}, {}}},
-		{"decimal128 to decimal64", types.New(types.T_decimal128, 38, 38), types.New(types.T_decimal64, 18, 17),
-			[]types.Decimal128{{B0_63: 49}, (types.Decimal128{B0_63: 49}).Minus()},
-			[]types.Decimal64{0, 0}},
-		{"decimal128 to decimal256", types.New(types.T_decimal128, 38, 38), types.New(types.T_decimal256, 40, 36),
-			[]types.Decimal128{{B0_63: 49}, (types.Decimal128{B0_63: 49}).Minus()},
-			[]types.Decimal256{{}, {}}},
-		{"decimal256", types.New(types.T_decimal256, 38, 38), types.New(types.T_decimal256, 38, 36),
-			[]types.Decimal256{{B0_63: 49}, (types.Decimal256{B0_63: 49}).Minus(), {B0_63: 50}, (types.Decimal256{B0_63: 50}).Minus()},
-			[]types.Decimal256{{}, {}, {B0_63: 1}, (types.Decimal256{B0_63: 1}).Minus()}},
-		{"decimal256 to decimal128", types.New(types.T_decimal256, 38, 38), types.New(types.T_decimal128, 38, 36),
-			[]types.Decimal256{{B0_63: 49}, (types.Decimal256{B0_63: 49}).Minus()},
-			[]types.Decimal128{{}, {}}},
-		{"decimal256 to decimal64", types.New(types.T_decimal256, 38, 38), types.New(types.T_decimal64, 18, 17),
-			[]types.Decimal256{{B0_63: 49}, (types.Decimal256{B0_63: 49}).Minus()},
-			[]types.Decimal64{0, 0}},
+		{"decimal64", types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal64, 14, 4), values64, wanted64},
+		{"decimal128", types.New(types.T_decimal128, 20, 2), types.New(types.T_decimal128, 22, 4), values128, wanted128},
+		{"decimal256", types.New(types.T_decimal256, 40, 2), types.New(types.T_decimal256, 42, 4), values256, wanted256},
+		{"64-to-128", types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal128, 14, 4), values64, wanted128},
+		{"64-to-256", types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal256, 14, 4), values64, wanted256},
+		{"128-to-256", types.New(types.T_decimal128, 20, 2), types.New(types.T_decimal256, 22, 4), values128, wanted256},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			caseRun := NewFunctionTestCase(proc, []FunctionTestInput{
+		b.Run(tc.name, func(b *testing.B) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
 				NewFunctionTestInput(tc.source, tc.values, nil),
-				NewFunctionTestInput(tc.target, tc.want, nil),
-			}, NewFunctionTestResult(tc.target, false, tc.want, nil), NewCast)
-			succeed, info := caseRun.Run()
-			require.True(t, succeed, info)
+				NewFunctionTestInput(tc.target, emptyCastTargetValues(tc.target), nil),
+			}, NewFunctionTestResult(tc.target, false, tc.wanted, nil), NewCast)
+			defer fc.Free()
+			fc.Benchmark(b)
+			require.Equal(b, tc.source, *fc.parameters[0].GetType())
+			require.Equal(b, tc.target, *fc.GetResultVectorDirectly().GetType())
 		})
 	}
 }
 
 func TestDecimal128WideningCastDoesNotRetypeSource(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	defer proc.Free()
 	sourceType := types.New(types.T_decimal128, 19, 2)
 	targetType := types.New(types.T_decimal128, 20, 2)
 	value := types.Decimal128{B0_63: 12345}
@@ -365,10 +366,58 @@ func TestDecimal128WideningCastDoesNotRetypeSource(t *testing.T) {
 			NewFunctionTestInput(targetType, []types.Decimal128{}, nil),
 		},
 		NewFunctionTestResult(targetType, false, []types.Decimal128{value, {}}, []bool{false, true}), NewCast)
-	require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+	defer testCase.Free()
 	result, err := testCase.DebugRun()
 	require.NoError(t, err)
 	require.Equal(t, sourceType, *testCase.parameters[0].GetType())
 	require.Equal(t, targetType, *result.GetType())
 	require.Equal(t, []types.Decimal128{value, {}}, vector.MustFixedColWithTypeCheck[types.Decimal128](result))
+}
+
+func TestDecimalWideningConstBatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	sourceType := types.New(types.T_decimal64, 18, 2)
+	for _, tc := range []struct {
+		name    string
+		target  types.Type
+		value   types.Decimal64
+		want    types.Decimal128
+		wantErr bool
+	}{
+		{"same scale positive", types.New(types.T_decimal128, 38, 2), 800, types.Decimal128{B0_63: 800}, false},
+		{"same scale negative", types.New(types.T_decimal128, 38, 2), types.Decimal64(^uint64(799)), types.Decimal128{B0_63: ^uint64(799), B64_127: ^uint64(0)}, false},
+		{"different scale", types.New(types.T_decimal128, 38, 4), 800, types.Decimal128{B0_63: 80000}, false},
+		{"narrower width", types.New(types.T_decimal128, 10, 2), 800, types.Decimal128{B0_63: 800}, false},
+		{"empty skips narrowing overflow", types.New(types.T_decimal128, 10, 2), 10000000000, types.Decimal128{}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input, err := vector.NewConstFixed(sourceType, tc.value, 3, proc.Mp())
+			require.NoError(t, err)
+			defer input.Free(proc.Mp())
+			require.True(t, input.IsConst())
+			require.Len(t, vector.MustFixedColWithTypeCheck[types.Decimal64](input), 1)
+			result := vector.NewFunctionResultWrapper(tc.target, proc.Mp()).(*vector.FunctionResult[types.Decimal128])
+			defer result.Free()
+			source := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](input)
+			for _, size := range []int{0, 3, 0} {
+				require.NoError(t, result.PreExtendAndReset(size))
+				err = decimal64ToDecimal128Array(source, result, size, nil)
+				if size > 0 && tc.wantErr {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+					require.ErrorContains(t, err, "Decimal128(10,2)")
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, size, result.GetResultVector().Length())
+					if size > 0 {
+						require.Equal(t, []types.Decimal128{tc.want, tc.want, tc.want}, vector.MustFixedColWithTypeCheck[types.Decimal128](result.GetResultVector()))
+					}
+					require.True(t, result.GetResultVector().GetNulls().IsEmpty())
+				}
+				require.True(t, sourceType == *input.GetType(), "source metadata changed")
+				require.True(t, tc.target == *result.GetResultVector().GetType(), "target metadata changed")
+			}
+		})
+		require.Zero(t, proc.Mp().CurrNB())
+	}
 }

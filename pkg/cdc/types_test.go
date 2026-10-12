@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -327,7 +328,6 @@ func TestDbTableInfo_String(t *testing.T) {
 		SourceTblId   uint64
 		SinkDbName    string
 		SinkTblName   string
-		IdChanged     bool
 	}
 	tests := []struct {
 		name   string
@@ -342,9 +342,8 @@ func TestDbTableInfo_String(t *testing.T) {
 				SourceTblId:   1,
 				SinkDbName:    "sink_db",
 				SinkTblName:   "sink_tbl",
-				IdChanged:     false,
 			},
-			want: "source_db(1).source_tbl(1) -> sink_db.sink_tbl, false",
+			want: "source_db(1).source_tbl(1) -> sink_db.sink_tbl",
 		},
 	}
 	for _, tt := range tests {
@@ -356,7 +355,6 @@ func TestDbTableInfo_String(t *testing.T) {
 				SourceTblId:   tt.fields.SourceTblId,
 				SinkDbName:    tt.fields.SinkDbName,
 				SinkTblName:   tt.fields.SinkTblName,
-				IdChanged:     tt.fields.IdChanged,
 			}
 			assert.Equalf(t, tt.want, info.String(), "String()")
 		})
@@ -415,71 +413,6 @@ func TestDbTableInfo_Clone(t *testing.T) {
 	}
 }
 
-func TestDbTableInfo_OnlyDiffinTblId(t *testing.T) {
-	type fields struct {
-		SourceDbName  string
-		SourceTblName string
-		SourceDbId    uint64
-		SourceTblId   uint64
-		SinkDbName    string
-		SinkTblName   string
-		IdChanged     bool
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		want   bool
-	}{
-		{
-			fields: fields{
-				SourceDbName:  "source_db",
-				SourceDbId:    2,
-				SourceTblName: "source_tbl",
-				SourceTblId:   1,
-				SinkDbName:    "sink_db",
-				SinkTblName:   "sink_tbl",
-				IdChanged:     false,
-			},
-			want: false,
-		},
-		{
-			fields: fields{
-				SourceDbName:  "source_db",
-				SourceDbId:    1,
-				SourceTblName: "source_tbl",
-				SourceTblId:   2,
-				SinkDbName:    "sink_db",
-				SinkTblName:   "sink_tbl",
-				IdChanged:     false,
-			},
-			want: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			base := DbTableInfo{
-				SourceDbName:  tt.fields.SourceDbName,
-				SourceTblName: tt.fields.SourceTblName,
-				SourceDbId:    1,
-				SourceTblId:   1,
-				SinkDbName:    tt.fields.SinkDbName,
-				SinkTblName:   tt.fields.SinkTblName,
-				IdChanged:     tt.fields.IdChanged,
-			}
-			info := DbTableInfo{
-				SourceDbName:  tt.fields.SourceDbName,
-				SourceTblName: tt.fields.SourceTblName,
-				SourceDbId:    tt.fields.SourceDbId,
-				SourceTblId:   tt.fields.SourceTblId,
-				SinkDbName:    tt.fields.SinkDbName,
-				SinkTblName:   tt.fields.SinkTblName,
-				IdChanged:     tt.fields.IdChanged,
-			}
-			assert.Equalf(t, tt.want, base.OnlyDiffinTblId(&info), "OnlyDiffinTblId()")
-		})
-	}
-}
-
 func TestJsonDecode(t *testing.T) {
 	var got map[string]int
 	assert.NoError(t, JsonDecode("7b2261223a317d", &got))
@@ -514,6 +447,37 @@ func TestJsonEncode(t *testing.T) {
 			assert.Equalf(t, tt.want, got, "JsonEncode(%v)", tt.args.value)
 		})
 	}
+}
+
+func TestPatternTableJSONPreservesMalformedIdentifierBytes(t *testing.T) {
+	original := PatternTuples{SourceCaseMode: 2, Pts: []*PatternTuple{{
+		Source: PatternTable{
+			Database: string([]byte{'d', 0xe9, 'B'}),
+			Table:    string([]byte{'t', 0xe9, 'A'}),
+		},
+		Sink: PatternTable{Database: "sink", Table: "target"},
+	}}}
+
+	encoded, err := JsonEncode(original)
+	require.NoError(t, err)
+	var restored PatternTuples
+	require.NoError(t, JsonDecode(encoded, &restored))
+	require.Equal(t, original, restored)
+	require.True(t, CDCSourceNameMatches(
+		string([]byte{'d', 0xe9, 'b'}), restored.Pts[0].Source.Database, 2))
+	require.True(t, CDCSourceNameMatches(
+		string([]byte{'t', 0xe9, 'a'}), restored.Pts[0].Source.Table, 2))
+
+	t.Run("legacy plain fields", func(t *testing.T) {
+		var legacy PatternTable
+		require.NoError(t, json.Unmarshal([]byte(`{"database":"db","table":"table"}`), &legacy))
+		require.Equal(t, PatternTable{Database: "db", Table: "table"}, legacy)
+	})
+
+	t.Run("invalid byte encoding", func(t *testing.T) {
+		var invalid PatternTable
+		require.Error(t, json.Unmarshal([]byte(`{"database":"","table":"table","database_bytes":"!"}`), &invalid))
+	})
 }
 
 func TestOutputType_String(t *testing.T) {
@@ -650,6 +614,70 @@ func TestPatternTuples_Append(t *testing.T) {
 			pts.Append(tt.args.pt)
 		})
 	}
+}
+
+func TestNormalizeCDCSourcePatternCase(t *testing.T) {
+	pts := &PatternTuples{Pts: []*PatternTuple{
+		{
+			Source: PatternTable{Database: "SourceDB", Table: "SourceTable"},
+			Sink:   PatternTable{Database: "SinkDB", Table: "SinkTable"},
+		},
+		{
+			Source: PatternTable{Database: CDCPitrGranularity_All, Table: CDCPitrGranularity_All},
+			Sink:   PatternTable{Database: CDCPitrGranularity_All, Table: CDCPitrGranularity_All},
+		},
+	}}
+
+	require.NoError(t, NormalizeCDCSourcePatternCase(pts, 0))
+	assert.Equal(t, int64(0), pts.SourceCaseMode)
+	assert.Equal(t, "SourceDB", pts.Pts[0].Source.Database)
+	assert.Equal(t, "SourceTable", pts.Pts[0].Source.Table)
+
+	require.NoError(t, NormalizeCDCSourcePatternCase(pts, 1))
+	assert.Equal(t, int64(1), pts.SourceCaseMode)
+	assert.Equal(t, "sourcedb", pts.Pts[0].Source.Database)
+	assert.Equal(t, "sourcetable", pts.Pts[0].Source.Table)
+	assert.Equal(t, "SinkDB", pts.Pts[0].Sink.Database)
+	assert.Equal(t, "SinkTable", pts.Pts[0].Sink.Table)
+	assert.Equal(t, CDCPitrGranularity_All, pts.Pts[1].Source.Database)
+	assert.Equal(t, CDCPitrGranularity_All, pts.Pts[1].Source.Table)
+
+	modeTwo := &PatternTuples{Pts: []*PatternTuple{{
+		Source: PatternTable{Database: "SourceDB", Table: "SourceTable"},
+	}}}
+	require.NoError(t, NormalizeCDCSourcePatternCase(modeTwo, 2))
+	assert.Equal(t, int64(2), modeTwo.SourceCaseMode)
+	assert.Equal(t, "SourceDB", modeTwo.Pts[0].Source.Database)
+	assert.Equal(t, "SourceTable", modeTwo.Pts[0].Source.Table)
+	assert.NotEqual(t,
+		CDCSourceIdentifierKey("Σdb", 2),
+		CDCSourceIdentifierKey("ςdb", 2),
+		"mode-2 identifier keys must not use Unicode simple case folding")
+
+	malformed := string([]byte{'1', 0xe9, 'A'})
+	assert.Equal(t, string([]byte{'1', 0xe9, 'a'}), CDCSourceIdentifierKey(malformed, 2))
+	assert.True(t, CDCSourceNameNeedsCatalogSuperset(malformed, 2))
+	assert.False(t, CDCSourceNameNeedsCatalogSuperset(malformed, 1))
+	assert.True(t, CDCSourceNameMatches(string([]byte{'1', 0xe9, 'a'}), malformed, 2))
+	assert.False(t, CDCSourceNameMatches("ςdb", "Σdb", 2))
+}
+
+func TestNormalizeCDCSourcePatternCaseRejectsDuplicateNormalizedSources(t *testing.T) {
+	pts := &PatternTuples{Pts: []*PatternTuple{
+		{Source: PatternTable{Database: "SourceDB", Table: "Orders"}},
+		{Source: PatternTable{Database: "sourcedb", Table: "orders"}},
+	}}
+	err := NormalizeCDCSourcePatternCase(pts, 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sourcedb.orders")
+
+	pts = &PatternTuples{Pts: []*PatternTuple{
+		{Source: PatternTable{Database: "SourceDB", Table: "Orders"}},
+		{Source: PatternTable{Database: "sourcedb", Table: "orders"}},
+	}}
+	err = NormalizeCDCSourcePatternCase(pts, 2)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sourcedb.orders")
 }
 
 func TestPatternTuples_String(t *testing.T) {
@@ -897,14 +925,52 @@ func TestUsesLosslessNoFullStart(t *testing.T) {
 	require.False(t, UsesLosslessNoFullStart(`not-json`))
 }
 
+func TestSourcePatternProtocolCompatibility(t *testing.T) {
+	valid := &PatternTuples{SourceCaseMode: 0, Pts: []*PatternTuple{{
+		Source: PatternTable{Database: "db", Table: "table"},
+	}}}
+	encoded, err := JsonEncode(valid)
+	require.NoError(t, err)
+	assert.False(t, RequiresSourcePatternProtocol(encoded))
+
+	modeTwo := &PatternTuples{SourceCaseMode: 2, Pts: valid.Pts}
+	encoded, err = JsonEncode(modeTwo)
+	require.NoError(t, err)
+	assert.True(t, RequiresSourcePatternProtocol(encoded))
+
+	malformed := &PatternTuples{Pts: []*PatternTuple{{
+		Source: PatternTable{Database: string([]byte{'d', 0xe9, 'b'}), Table: "table"},
+	}}}
+	encoded, err = JsonEncode(malformed)
+	require.NoError(t, err)
+	assert.True(t, RequiresSourcePatternProtocol(encoded))
+
+	malformedSink := &PatternTuples{Pts: []*PatternTuple{{
+		Source: PatternTable{Database: "db", Table: "table"},
+		Sink:   PatternTable{Database: string([]byte{'s', 0xe9, 'n', 'k'}), Table: "table"},
+	}}}
+	encoded, err = JsonEncode(malformedSink)
+	require.NoError(t, err)
+	assert.True(t, RequiresSourcePatternProtocol(encoded))
+
+	assert.True(t, UsesSourcePatternProtocol(fmt.Sprintf(
+		`{"%s":"%s"}`,
+		CDCTaskExtraOptions_SourcePatternProtocol,
+		CDCSourcePatternProtocolV1,
+	)))
+	assert.False(t, UsesSourcePatternProtocol(`{"_SourcePatternProtocol":"future"}`))
+}
+
 func TestValidateStableInitialSnapshotProtocol(t *testing.T) {
 	require.NoError(t, ValidateStableInitialSnapshotProtocol(
 		context.Background(), false, defines.MORPCVersion47))
 	require.NoError(t, ValidateStableInitialSnapshotProtocol(
-		context.Background(), true, defines.MORPCVersion48))
+		context.Background(), true, defines.MORPCVersion58))
 	err := ValidateStableInitialSnapshotProtocol(
-		context.Background(), true, defines.MORPCVersion47)
-	require.ErrorContains(t, err, "protocol version 48")
+		context.Background(), true, defines.MORPCVersion57)
+	require.ErrorContains(t, err, "protocol version 58")
+	require.Error(t, ValidateStableInitialSnapshotProtocol(
+		context.Background(), true, defines.MORPCVersion48))
 }
 
 func TestValidateLosslessNoFullStartProtocolBoundary(t *testing.T) {

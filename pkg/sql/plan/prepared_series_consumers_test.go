@@ -37,7 +37,7 @@ func TestPreparedSeriesConsumers(t *testing.T) {
 		"create table gs_review as select result from generate_series(?,?,?) g",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare review_probe from '"+sql+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare review_probe from '"+sql+"'")
 			if err != nil {
 				t.Errorf("prepare: %v", err)
 				return
@@ -76,7 +76,7 @@ func TestPreparedSeriesConsumers(t *testing.T) {
 }
 
 func TestPreparedUnnestLargeJSON(t *testing.T) {
-	p, err := runOneStmt(NewMockOptimizer(false), t, "prepare long_json from 'select value from unnest(?) u'")
+	p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare long_json from 'select value from unnest(?) u'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestPreparedSeriesCTASColumnOrderAndExplicitType(t *testing.T) {
 		{"explicit override", "create table gs_explicit (result varchar(40)) as select result from generate_series(?,?,?) g", 0, 40, types.T_varchar},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare gs_ctas from '"+tc.sql+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare gs_ctas from '"+tc.sql+"'")
 			require.NoError(t, err)
 			original := prepared.GetDcl().GetPrepare().Plan
 			values := []any{

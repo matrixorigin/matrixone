@@ -106,7 +106,7 @@ func TestPersistedDecimalDivisionRequiresV97(t *testing.T) {
 }
 
 func TestPersistedDecimalDivisionViewAdmissionBeforeFold(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -203,7 +203,7 @@ func TestPersistedDecimalLiteralProtocolAdmission(t *testing.T) {
 }
 
 func TestPersistedDecimalLiteralTargetTypedDefaultAdmission(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -379,7 +379,7 @@ func TestPersistedDecimalLiteralMarkerSurvivesConstantFold(t *testing.T) {
 }
 
 func TestPersistedIPFunctionProtocolAdmission(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -594,7 +594,7 @@ func TestPersistedProtocolVersionAdmissionSeparatesReadAndAuthoringFloors(t *tes
 }
 
 func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -695,7 +695,7 @@ func TestPersistedStringNumericResultProtocolAdmission(t *testing.T) {
 }
 
 func TestPersistedDynamicIPViewProtocolSurvivesConstantFolding(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -739,7 +739,7 @@ func TestPersistedDynamicIPViewProtocolSurvivesConstantFolding(t *testing.T) {
 }
 
 func TestPersistedViewProtocolAdmissionCapturesBindTimeBetweenFold(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -782,7 +782,7 @@ func TestPersistedViewProtocolAdmissionCapturesBindTimeBetweenFold(t *testing.T)
 }
 
 func TestPersistedMixedTemporalViewProtocolAdmission(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)

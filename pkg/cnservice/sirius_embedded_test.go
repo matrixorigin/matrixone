@@ -40,6 +40,8 @@ type embeddedRuntimeTestRecorder struct {
 
 func (*embeddedRuntimeTestRecorder) Accepting() bool { return true }
 
+func (*embeddedRuntimeTestRecorder) Capabilities() uint64 { return 0 }
+
 func (r *embeddedRuntimeTestRecorder) Close(context.Context) error {
 	r.closed = true
 	return nil
@@ -219,7 +221,6 @@ func TestEmbeddedSiriusExecutionOutputAndTerminalCleanup(t *testing.T) {
 	for _, outcome := range []string{"success", "output error", "invalid output", "cleanup error", "fatal", "not terminal", "zero first-row latency", "empty result"} {
 		t.Run(outcome, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			t.Cleanup(proc.Free)
 			data := make([]byte, 8)
 			binary.LittleEndian.PutUint64(data, 42)
 			q := &embeddedPreparedRecorder{results: []siriusbridge.Result{{Rows: 1, Backing: data, Vectors: []siriusbridge.Vector{{Data: data}}}}, ready: outcome != "not terminal", stats: siriusbridge.ExecutionStats{Terminal: true, SourceMask: 1, Fatal: outcome == "fatal"}}

@@ -31,8 +31,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func persistedIntegerResultString(result *vector.Vector, row int) string {
+	if result.GetType().Oid == types.T_date {
+		return vector.GetFixedAtWithTypeCheck[types.Date](result, row).String()
+	}
+	return result.GetStringAt(row)
+}
+
 func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		name, sqlType, argument string
@@ -143,7 +150,7 @@ func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
 						if candidate.check {
 							require.True(t, vector.GetFixedAtWithTypeCheck[bool](result, i))
 						} else {
-							require.Equal(t, want, result.GetStringAt(i))
+							require.Equal(t, want, persistedIntegerResultString(result, i))
 						}
 					}
 				})
@@ -153,7 +160,7 @@ func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
 }
 
 func TestPersistedIntegerArgumentDefaultOrigin(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct{ source, want string }{
 		{"1.5e0", "a.b"}, {"cast(1.5 as double)", "a"}, {"2.5", "a.b.c"},

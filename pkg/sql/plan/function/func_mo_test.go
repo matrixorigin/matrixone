@@ -37,7 +37,7 @@ func TestCastIndexToValueDisplaysEnumErrorMemberAsEmptyString(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "a", ""}, nil),
 		CastIndexToValue,
 	)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -74,7 +74,7 @@ func TestCastGeometryToSubtype(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.info, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastGeometryToSubtype)
-			succeed, info := tcc.Run()
+			succeed, info := tcc.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -100,7 +100,7 @@ func TestCastValueToIndexConstDefinition(t *testing.T) {
 	expect := NewFunctionTestResult(types.T_enum.ToType(), false, expected, nil)
 
 	tcc := NewFunctionTestCase(proc, inputs, expect, CastValueToIndex)
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -113,7 +113,7 @@ func TestInsertIgnoreAdjustsMySQLSpecialTypeValues(t *testing.T) {
 		t.Helper()
 		t.Run(name, func(t *testing.T) {
 			tcc := NewFunctionTestCase(ignoreProc, inputs, expect, fn)
-			succeed, info := tcc.Run()
+			succeed, info := tcc.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -227,7 +227,7 @@ func TestCastGeometryToSubtypeRejectMismatch(t *testing.T) {
 	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
 
 	tcc := NewFunctionTestCase(proc, inputs, expect, CastGeometryToSubtype)
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.False(t, succeed)
 	require.Contains(t, info, "cannot store LINESTRING in POINT column")
 }
@@ -245,7 +245,7 @@ func TestCastGeometryToSubtypeRejectNonFinite(t *testing.T) {
 	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
 
 	tcc := NewFunctionTestCase(proc, inputs, expect, CastGeometryToSubtype)
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.False(t, succeed)
 	require.Contains(t, info, "invalid geometry payload")
 }
@@ -259,7 +259,7 @@ func TestCastGeometryToSubtypeRejectMalformedStructure(t *testing.T) {
 	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
 
 	tcc := NewFunctionTestCase(proc, inputs, expect, CastGeometryToSubtype)
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.False(t, succeed)
 	require.Contains(t, info, "invalid geometry payload")
 }
@@ -279,7 +279,7 @@ func TestCastGeometryToSubtypeRejectTooManyPoints(t *testing.T) {
 	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
 
 	tcc := NewFunctionTestCase(proc, inputs, expect, CastGeometryToSubtype)
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.False(t, succeed)
 	require.Contains(t, info, "max_points_in_geometry=3")
 }
@@ -319,7 +319,7 @@ func TestCastJsonToArray(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.info, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastJsonToArray)
-			succeed, info := tcc.Run()
+			succeed, info := tcc.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -335,7 +335,7 @@ func TestCastJsonToArrayRejectsNonArray(t *testing.T) {
 	expect := NewFunctionTestResult(types.T_json.ToType(), false, []string{""}, []bool{false})
 
 	tcc := NewFunctionTestCase(proc, inputs, expect, CastJsonToArray)
-	succeed, info := tcc.Run()
+	succeed, info := tcc.RunAndFree()
 	require.False(t, succeed)
 	require.Contains(t, info, "cannot store JSON OBJECT in array(varchar(20)) column")
 }
@@ -364,7 +364,7 @@ func TestCastJsonToArrayRejectsIncompatibleElement(t *testing.T) {
 			expect := NewFunctionTestResult(types.T_json.ToType(), false, []string{""}, []bool{false})
 
 			tcc := NewFunctionTestCase(proc, inputs, expect, CastJsonToArray)
-			succeed, info := tcc.Run()
+			succeed, info := tcc.RunAndFree()
 			require.False(t, succeed)
 			require.Contains(t, info, "cannot store JSON value with incompatible element type in "+tc.arrayType+" column")
 		})

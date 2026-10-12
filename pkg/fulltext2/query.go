@@ -504,11 +504,11 @@ func ngramPhraseSlots(pattern string) []phraseSlot {
 			for j < n && !isBreakerRune(runes[j]) && isLatinRune(runes[j]) {
 				j++
 			}
-			// Cap the Latin token at the stored-token byte limit exactly as SimpleTokenizer.outputLatin
-			// does when indexing (truncate the raw bytes on a rune boundary, then lowercase), so NL /
-			// quoted-boolean / BM25 look up the truncated token the index actually stored rather than the
-			// raw run (#29276).
-			term := strings.ToLower(string(tokenizer.TruncateToken([]byte(string(runes[i:j])))))
+			// Normalize the Latin run with SimpleTokenizer.outputLatin's FULL contract -- cap the raw
+			// bytes on a rune boundary, lowercase, then re-cap the folded bytes (case folding can
+			// EXPAND, e.g. U+023A -> U+2C65 is 2->3 bytes) -- so NL / quoted-boolean / BM25 look up the
+			// exact token the index stored, not the raw or merely-lowercased run (#29271 P2 / #29276).
+			term := string(tokenizer.NormalizeLatinToken([]byte(string(runes[i:j]))))
 			slots = append(slots, phraseSlot{term: term, off: bpos[i]})
 			i = j
 			continue

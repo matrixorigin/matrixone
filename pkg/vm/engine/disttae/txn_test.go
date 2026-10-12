@@ -2423,3 +2423,16 @@ func TestForEachTableWrites_StaleOffsetBeyondLengthIsSafe(t *testing.T) {
 	})
 	require.Equal(t, 1, seen)
 }
+
+func TestTableCreationViewExpiresWithStatementRollback(t *testing.T) {
+	txn := &Transaction{tableOps: newTableOps()}
+	require.False(t, txn.IsTableCreatedInTxn(11))
+	txn.tableOps.addCreatedInTxn(11, 1)
+	txn.tableOps.addCreatedInTxn(12, 2)
+	require.True(t, txn.IsTableCreatedInTxn(12))
+	txn.tableOps.rollbackLastStatement(2)
+	require.False(t, txn.IsTableCreatedInTxn(12), "aborted generation loses its certificate")
+	require.True(t, txn.IsTableCreatedInTxn(11), "earlier logical generation remains owned")
+	txn.tableOps.rollbackLastStatement(1)
+	require.False(t, txn.IsTableCreatedInTxn(11))
+}

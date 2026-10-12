@@ -262,7 +262,7 @@ func TestSemiJoinPushdownUsesFactKeyActiveDomain(t *testing.T) {
 }
 
 func TestBoundPlanOrdersDimensionsByFactKeyActiveDomain(t *testing.T) {
-	mock := NewEmptyCompilerContext()
+	mock := NewEmptyCompilerContext(newPlanTestProcess(t))
 	mock.dbs = map[string]bool{"tpch": true}
 	registerTable := func(tableID uint64, name string, columns ...string) *plan.TableDef {
 		defs := make([]*plan.ColDef, len(columns))
@@ -354,7 +354,7 @@ func makeJoinVertices(n int) []*joinVertex {
 }
 
 func TestOrderedJoinInstallsOnlyAvailableCrossingPredicates(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 	typ := plan.Type{Id: int32(types.T_int64)}
 	for i := int32(0); i < 3; i++ {

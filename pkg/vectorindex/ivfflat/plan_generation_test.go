@@ -38,7 +38,6 @@ import (
 
 func TestRequiredMembershipStoragePaths(t *testing.T) {
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	for _, tc := range []struct {
 		name                          string
 		integer, residual, full, desc bool
@@ -149,7 +148,6 @@ func (a *generationAdmission) Release(n int64) int64 { a.held -= n; return a.hel
 func TestPlanGenerationFailsClosedBeforeStorage(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	proc.Base.TxnOperator = mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.SessionInfo.StorageEngine = mock_frontend.NewMockEngine(ctrl) // no calls allowed
 	spec := &plan.VectorIndexScan{Index: &plan.IndexDef{IndexAlgoParams: `{"lists":"1","op_type":"vector_l2_ops"}`},

@@ -806,7 +806,8 @@ END:
 }
 
 func dedupJoinMetadataCols(ctx *plan.DedupJoinCtx) []*plan.ColRef {
-	cols := []*plan.ColRef{ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol}
+	cols := make([]*plan.ColRef, 0, 3+len(ctx.ForeignKeyChecks))
+	cols = append(cols, ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol)
 	for i := range ctx.ForeignKeyChecks {
 		cols = append(cols, ctx.ForeignKeyChecks[i].EligibilityCol)
 	}
@@ -1938,7 +1939,7 @@ func singleRowCastIsTotal(source, target plan.Type) bool {
 	// source, that cast cannot reject or truncate any source value.
 	if targetID == types.T_char &&
 		(sourceID == types.T_char || sourceID == types.T_varchar) &&
-		source.Charset == target.Charset && source.Width > 0 &&
+		source.SameCollation(target) && source.Width > 0 &&
 		target.Width >= source.Width {
 		return true
 	}

@@ -29,7 +29,6 @@ import (
 
 func TestEmbeddedSiriusResultBorrowsCheckedFixedAndVarlena(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	data := make([]byte, 16+2*types.VarlenaSize+25)
 	binary.LittleEndian.PutUint64(data, 42)
 	strings := data[16 : 16+2*types.VarlenaSize]
@@ -56,7 +55,6 @@ func TestEmbeddedSiriusResultBorrowsCheckedFixedAndVarlena(t *testing.T) {
 
 func TestEmbeddedSiriusResultRejectsMalformedLayoutBeforeBorrowing(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	request := compile.SiriusPrepareRequest{Headings: []string{"s"}, OutputTypes: []planpb.Type{{Id: int32(types.T_varchar), NotNullable: true}}}
 	for _, mutate := range []func(*siriusbridge.Vector){
 		func(v *siriusbridge.Vector) { v.Class = 1 },

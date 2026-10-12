@@ -2102,17 +2102,10 @@ func (m *regexp2Matcher) release() {
 		return
 	}
 	m.mu.Lock()
-	re := m.re
 	releaseBudget := m.releaseBudget
 	m.re = nil
 	m.releaseBudget = nil
 	m.mu.Unlock()
-	if re != nil {
-		// The last matching call clears its input. Run one final nil-input
-		// search for early-return paths, then let the local regexp and all of
-		// its retained runner storage become unreachable together.
-		_, _ = re.FindRunesMatch(nil)
-	}
 	if releaseBudget != nil {
 		releaseBudget()
 	}
@@ -2231,11 +2224,8 @@ func (input *regexp2Input) byteOffsetAtRune(runeOffset int) int {
 func (m *regexp2Matcher) findAtOrAfter(input *regexp2Input, startRune int) (*regexp2.Match, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	defer func() {
-		// regexp2's runner cache retains its last input. Clear that reference
-		// before returning so a cached matcher cannot pin a large SQL value.
-		_, _ = m.re.FindRunesMatch(nil)
-	}()
+	// Executable regexps belong to this evaluation, so runner reuse retains
+	// input only until the evaluation matcher is released.
 	if startRune <= 0 {
 		match, err := m.re.FindRunesMatch(input.runes)
 		return match, regexp2MatchError(err)

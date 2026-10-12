@@ -24,13 +24,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
 func buildPreparedAggregatePlan(t *testing.T, sql string) *planpb.Prepare {
 	t.Helper()
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
 	require.NoError(t, err)
 	prepare := logicPlan.GetDcl().GetPrepare()
@@ -84,7 +86,7 @@ func TestPreparedPercentileParameters(t *testing.T) {
 		"select percentile_disc(0.5) within group (order by n_name) from nation")
 	require.False(t, PreparedPlanHasPercentileParams(literal.Plan))
 
-	_, err := runOneStmt(NewMockOptimizer(false), t,
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"select percentile_disc(n_regionkey) within group (order by n_name) from nation")
 	require.ErrorContains(t, err, "non-null constant or parameter")
 }
@@ -167,7 +169,7 @@ func TestPreparedPercentileParameterExpressionsRejectRowDependentOrArbitraryFunc
 		"prepare stmt_string_cast from 'select percentile_cont(cast(? as char) / 100.0) within group (order by n_nationkey) from nation'",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			require.ErrorContains(t, err, "non-null constant or parameter")
 		})
 	}
@@ -765,7 +767,7 @@ func TestPreparedBitwiseAggregateProjectionRefreshPreservesPrivateCast(t *testin
 }
 
 func TestPreparedRuntimeSpecializationCoversBinaryStringSemantics(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare binary_domains from 'select charset(left(?, 1)), char_length(?), ord(?)'")
 	require.NoError(t, err)
 	preparedPlan := prepared.GetDcl().GetPrepare().Plan
@@ -852,8 +854,8 @@ func TestPreparedDMLRuntimeSpecializationPreservesWriteParameters(t *testing.T) 
 }
 
 func TestPreparedNtileParameter(t *testing.T) {
-	prepare := buildPreparedAggregatePlan(t,
-		"select n_nationkey, ntile(?) over (partition by n_regionkey order by n_nationkey) from nation")
+	const sql = "select n_nationkey, ntile(?) over (partition by n_regionkey order by n_nationkey) from nation"
+	prepare := buildPreparedAggregatePlan(t, sql)
 	require.Equal(t, []int32{int32(types.T_any)}, prepare.ParamTypes)
 	require.Equal(t, []int32{0}, preparedParamPositions(prepare))
 
@@ -867,6 +869,51 @@ func TestPreparedNtileParameter(t *testing.T) {
 	require.NotSame(t, first, second)
 	require.Equal(t, []int32{0}, preparedParamPositions(prepare))
 	require.Equal(t, originalTypes, preparedEffectiveParamTypes(t, prepare))
+
+	// EXECUTE now binds the current source type before optimization instead
+	// of merely filling the PREPARE template. Its integer consumer must keep
+	// the string ParamRef and perform a strict conversion at execution time.
+	template := prepare.Plan.String()
+	for _, source := range []types.T{types.T_text, types.T_varchar} {
+		t.Run("runtime_source/"+source.String(), func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			proc := mock.ctxt.GetProcess()
+			params := vector.NewVec(types.T_text.ToType())
+			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+			require.NoError(t, vector.AppendBytes(params, []byte("2"), false, proc.Mp()))
+			proc.SetPrepareParams(params)
+			sourceType := source.ToType()
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+				[]PreparedSourceBinding{{Position: 0, Type: sourceType}},
+				[]any{ParamValue{Value: "2", SourceType: sourceType, HasSourceType: true, IsBinaryProtocol: true}})
+			require.NoError(t, err)
+			var argument *planpb.Expr
+			require.NoError(t, planpb.VisitExpressionsInOwner(bound.Plan, func(root *planpb.Expr) error {
+				return planpb.VisitExprTree(root, func(expr *planpb.Expr) error {
+					if fn := expr.GetF(); fn != nil && fn.Func.GetObjName() == "ntile" {
+						require.Len(t, fn.Args, 1)
+						argument = fn.Args[0]
+					}
+					return nil
+				})
+			}))
+			require.NotNil(t, argument, "execution plan must contain NTILE")
+			require.Equal(t, int32(types.T_int64), argument.Typ.Id)
+			cast := argument.GetF()
+			require.NotNil(t, cast)
+			require.Equal(t, "cast", cast.Func.GetObjName())
+			require.False(t, cast.GetSyntaxExplicitCast(), "implicit bucket conversion must not use explicit CAST prefix semantics")
+			require.Len(t, cast.Args, 2)
+			require.Equal(t, int32(source), cast.Args[0].Typ.Id)
+			require.NotNil(t, cast.Args[0].GetP(), "a cached plan must read each EXECUTE's current parameter")
+			require.Zero(t, cast.Args[0].GetP().Pos)
+			require.False(t, bound.ValueDependent, "bucket conversion must not depend on the current string value")
+			require.Equal(t, template, prepare.Plan.String(), "EXECUTE must not mutate the PREPARE template")
+		})
+	}
 }
 
 func TestPreparedLagLeadOffsetParameter(t *testing.T) {
@@ -922,27 +969,48 @@ func TestNtileRequiresIntegerArgument(t *testing.T) {
 		"select ntile(cast(? as char)) over (order by n_nationkey) from nation",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			_, err := runOneStmt(mock, t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
 			require.ErrorContains(t, err, "invalid argument function ntile")
 		})
 	}
 }
 
-func TestPreparedNumericAggregateDoesNotCoerceStrings(t *testing.T) {
-	tests := []string{
-		"select sum(n_name) from nation",
-		"select avg(n_name) over () from nation",
-		"select sum(cast(? as char)) from nation",
-		"with recursive r(n) as (select \"x\" union all select n from r where n = \"never\") select sum(n) from r",
-		"with recursive r(n) as (select cast(? as char) union all select n from r where n = \"never\") select sum(n) from r",
-	}
-	for _, sql := range tests {
-		t.Run(sql, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
-			_, err := runOneStmt(mock, t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
-			require.ErrorContains(t, err, "invalid argument aggregate function")
-		})
+func TestPreparedNumericAggregateCoercesStringsWithoutChangingSourceDomain(t *testing.T) {
+	for _, name := range []string{"sum", "avg"} {
+		for _, sql := range []string{
+			"select " + name + "(n_name) from nation",
+			"select " + name + "(n_name) over () from nation",
+			"select " + name + "(cast(? as char)) from nation",
+			"with recursive r(n) as (select \"x\" union all select n from r where n = \"never\") select " + name + "(n) from r",
+			"with recursive r(n) as (select cast(? as char) union all select n from r where n = \"never\") select " + name + "(n) from r",
+		} {
+			t.Run(sql, func(t *testing.T) {
+				prepare := buildPreparedAggregatePlan(t, sql)
+				agg := sumAvgTestExpression(t, prepare.Plan, name)
+				require.Equal(t, int32(types.T_float64), agg.Typ.Id)
+				arg := agg.GetF().Args[0]
+				require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+				require.True(t, isCastOverload(arg, 0))
+				require.True(t, types.T(arg.GetF().Args[0].Typ.Id).IsMySQLString(),
+					"aggregate coercion must not retype the column, recursive CTE, or explicit CHAR cast")
+				if len(prepare.ParamTypes) == 0 {
+					return
+				}
+				require.Equal(t, []int32{0}, preparedParamPositions(prepare))
+				require.True(t, types.T(preparedEffectiveParamTypes(t, prepare)[0].Id).IsMySQLString(),
+					"the explicit CHAR cast must keep its parameter in the string domain")
+				snapshot := prepare.Plan.String()
+				for _, value := range []any{int64(2), float64(2.5), nil} {
+					filled, err := FillValuesOfParamsInPlan(t.Context(), prepare.Plan, []any{value})
+					require.NoError(t, err)
+					require.Equal(t, snapshot, prepare.Plan.String(), "EXECUTE must not mutate the cached plan")
+					filledAgg := sumAvgTestExpression(t, filled, name)
+					require.Equal(t, int32(types.T_float64), filledAgg.Typ.Id)
+					require.Equal(t, int32(types.T_float64), filledAgg.GetF().Args[0].Typ.Id)
+				}
+			})
+		}
 	}
 }
 

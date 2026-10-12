@@ -70,8 +70,10 @@ type LogService interface {
 // The main purpose of this structure is to maintain status
 type logService struct {
 	sync.Mutex
-	status ServiceStatus
-	svc    *logservice.WrappedService
+	status    ServiceStatus
+	svc       *logservice.WrappedService
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (ls *logService) Start() error {
@@ -93,15 +95,15 @@ func (ls *logService) Close() error {
 	ls.Lock()
 	defer ls.Unlock()
 
-	if ls.status == ServiceStarted {
-		err := ls.svc.Close()
-		if err != nil {
-			return err
+	ls.closeOnce.Do(func() {
+		if ls.svc != nil {
+			ls.closeErr = ls.svc.Close()
 		}
-		ls.status = ServiceClosed
-	}
-
-	return nil
+		if ls.closeErr == nil {
+			ls.status = ServiceClosed
+		}
+	})
+	return ls.closeErr
 }
 
 func (ls *logService) Status() ServiceStatus {

@@ -20,6 +20,7 @@ import (
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -207,12 +208,14 @@ func (r *groupSpillReader) Free() {
 // storage uses ordinary statement capacity and falls back to direct writes
 // under pressure, leaving the mandatory recovery floor to spill scratch.
 type groupSpillWriter struct {
-	ctr      *container
-	target   io.Writer
-	ctx      context.Context
-	buffer   reusableSpillBuffer
-	disabled bool
-	failed   error
+	ctr       *container
+	target    io.Writer
+	file      *os.File
+	pageCache spillio.SequentialWriteCache
+	ctx       context.Context
+	buffer    reusableSpillBuffer
+	disabled  bool
+	failed    error
 }
 
 func newGroupSpillWriter(
@@ -224,9 +227,11 @@ func newGroupSpillWriter(
 	if ctr == nil || ctr.mp == nil || target == nil || ctx == nil {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
+	file, _ := target.(*os.File)
 	return &groupSpillWriter{
 		ctr:    ctr,
 		target: spillutil.NewDiskReservationWriter(target, disk),
+		file:   file,
 		ctx:    ctx,
 	}, nil
 }
@@ -405,9 +410,11 @@ func (w *groupSpillWriter) Free() {
 	if w.buffer != nil {
 		w.buffer.Free()
 	}
+	w.pageCache.Finish(w.file)
 	w.buffer = nil
 	w.ctr = nil
 	w.target = nil
+	w.file = nil
 	w.ctx = nil
 	w.disabled = true
 	w.failed = nil
@@ -417,7 +424,11 @@ func (w *groupSpillWriter) Free() {
 // Codec writes are coalesced above this boundary so accounting does not
 // serialize every small logical fragment on the shared execution budget.
 func (w *groupSpillWriter) writePhysical(value []byte) (int, error) {
-	return writeGroupSpillBytes(w.target, value)
+	n, err := writeGroupSpillBytes(w.target, value)
+	if err == nil && w.file != nil {
+		err = w.pageCache.RecordWrite(w.file, n)
+	}
+	return n, err
 }
 
 func writeGroupSpillBytes(target io.Writer, value []byte) (int, error) {

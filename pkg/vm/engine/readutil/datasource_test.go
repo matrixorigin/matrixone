@@ -563,7 +563,6 @@ func (ts *prefetchCountingTombstones) PrefetchTombstones(_ context.Context, _ st
 }
 func TestRemoteDataSourceFilteredPrefetchRetainsTombstones(t *testing.T) {
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	for _, skip := range []bool{false, true} {
 		t.Run(fmt.Sprint(skip), func(t *testing.T) {
 			fs := &prefetchCountingFS{done: make(chan struct{}, 4)}

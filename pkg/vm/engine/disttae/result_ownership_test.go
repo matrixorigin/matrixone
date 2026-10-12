@@ -27,8 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
@@ -207,7 +211,6 @@ func newResultOwnershipFixture(
 	procMP := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { mpool.DeleteMPool(procMP) })
 	proc := testutil.NewProcessWithMPool(t, "", procMP)
-	t.Cleanup(proc.Free)
 
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
@@ -312,4 +315,51 @@ func requireCatalogDeleteRowIDs(
 	require.Equal(t, tableRowID, vector.GetFixedAtNoTypeCheck[types.Rowid](txn.writes[0].bat.Vecs[0], 0))
 	require.Equal(t, uint64(catalog.MO_COLUMNS_ID), txn.writes[1].tableId)
 	require.Equal(t, columnRowID, vector.GetFixedAtNoTypeCheck[types.Rowid](txn.writes[1].bat.Vecs[0], 0))
+}
+
+// Capture queries at the executor boundary and decode them with the real scanner.
+// Read failures must preserve their error while keeping each legacy key verbatim.
+func TestCatalogStorageQueriesPreserveLegacyNames(t *testing.T) {
+	const name = "legacy_\xe3g'\\tail"
+	readErr := errors.New("catalog read failed")
+	for _, operation := range []string{"database", "relations", "table"} {
+		t.Run(operation, func(t *testing.T) {
+			var values []string
+			calls := 0
+			exec := executor.NewMemExecutor(func(query string) (executor.Result, error) {
+				calls++
+				scanner := mysqlparser.NewScanner(dialect.MYSQL, query)
+				defer mysqlparser.PutScanner(scanner)
+				for {
+					token, value := scanner.Scan()
+					if token == 0 {
+						break
+					}
+					if token == mysqlparser.STRING {
+						values = append(values, value)
+					}
+				}
+				return executor.Result{}, readErr
+			})
+			eng, db, _, ctx := newResultOwnershipFixture(t, exec, false)
+			db.databaseName = name
+			var err error
+			switch operation {
+			case "database":
+				_, err = eng.loadDatabaseFromStorage(ctx, 1, name, db.op)
+			case "relations":
+				_, err = db.Relations(ctx)
+			case "table":
+				db.op.(*mock_frontend.MockTxnOperator).EXPECT().SnapshotTS().Return(timestamp.Timestamp{})
+				_, err = db.loadTableFromStorage(ctx, 1, name)
+			}
+			require.ErrorIs(t, err, readErr)
+			require.Equal(t, 1, calls)
+			expected := []string{name}
+			if operation == "table" {
+				expected = append(expected, name)
+			}
+			require.Equal(t, expected, values)
+		})
+	}
 }

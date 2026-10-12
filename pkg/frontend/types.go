@@ -417,6 +417,7 @@ type PrepareStmt struct {
 	runtimeSpecializationKey    string
 	runtimePlan                 *plan.Plan
 	runtimeDiagnosticCandidates []*plan.Expr
+	runtimeColDefData           [][]byte
 	runtimeCompile              *compile.Compile
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
@@ -828,6 +829,7 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	runtimePlan *plan.Plan,
 	runtimeCompile *compile.Compile,
 	diagnosticCandidates []*plan.Expr,
+	colDefData [][]byte,
 ) *compile.Compile {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
 	// AP scopes contain execution-specific placement and scan state. Cache only
@@ -841,6 +843,7 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	prepareStmt.runtimeSpecializationKey = key
 	prepareStmt.runtimePlan = runtimePlan
 	prepareStmt.runtimeDiagnosticCandidates = diagnosticCandidates
+	prepareStmt.runtimeColDefData = colDefData
 	prepareStmt.runtimeCompile = runtimeCompile
 	if oldRuntimeCompile == runtimeCompile {
 		return nil
@@ -856,6 +859,7 @@ func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
 	prepareStmt.runtimeSpecializationKey = ""
 	prepareStmt.runtimePlan = nil
 	prepareStmt.runtimeDiagnosticCandidates = nil
+	prepareStmt.runtimeColDefData = nil
 	prepareStmt.runtimeCompile = nil
 	prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
 }
@@ -1182,6 +1186,7 @@ type ExecCtx struct {
 	results           []ExecResult
 	prepareColDef     [][]byte
 	cursorResultSaver StagedBinaryWriter
+	resultMetadata    *deferredResultMetadata
 	returning         *returningState
 	selectInto        *selectIntoUserVariables
 	isIssue3482       bool
@@ -1199,6 +1204,7 @@ type ExecCtx struct {
 }
 
 func (execCtx *ExecCtx) beginStatementGeneration(input *UserInput) {
+	execCtx.resultMetadata = nil
 	execCtx.effectiveTxnDefaultDatabase = ""
 	execCtx.effectiveTxnStatement = nil
 	execCtx.implicitCommitBefore = false
@@ -1285,6 +1291,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.resper = nil
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
+	execCtx.resultMetadata = nil
 	execCtx.selectInto = nil
 	execCtx.rewriteEnabled = false
 }
@@ -1754,6 +1761,9 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	if val, err = def.GetType().Convert(val); err != nil {
 		return err
 	}
+	if err = validateCharsetSystemVariable(name, val); err != nil {
+		return err
+	}
 	if isTransactionIsolationSystemVariable(name) {
 		if _, err = txnIsolationFromSystemValue(ctx, val); err != nil {
 			return err
@@ -1846,27 +1856,23 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	return gSysVarsDefs[canonicalSystemVariableName(name)].Default, nil
 }
 
-func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
+func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) error {
+	return ses.setSessionSysVar(ctx, name, val, false)
+}
+
+// restoreSessionSysVar preserves an already-decoded historical session snapshot.
+// A stored charset spelling is not a new charset request or permission to enable
+// a native collation. All normal variable validation and runtime hooks still run.
+func (ses *Session) restoreSessionSysVar(ctx context.Context, name string, val interface{}) error {
+	return ses.setSessionSysVar(ctx, name, val, true)
+}
+
+func (ses *Session) setSessionSysVar(ctx context.Context, name string, val interface{}, restoring bool) (err error) {
 	name = strings.ToLower(name)
 	groupConcatMaxLenOriginalValue := val
 	groupConcatMaxLenWasTruncated := false
-	oldMatrixOneNative := false
-	oldOnlyFullGroupBy := false
-	oldBoolSumAvg := false
-	oldHighNotPrecedence := false
-	oldNoUnsignedSubtraction := false
-	oldParserFlags := mysql.SQLModeFlags(0)
-	oldIgnoreSpace := false
 	oldDivPrecisionIncrement := int64(function.DefaultDivPrecisionIncrement)
-	if name == "sql_mode" {
-		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
-		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
-		oldBoolSumAvg = ses.sqlModeHasEnableBoolSumAvg()
-		oldHighNotPrecedence = ses.sqlModeHasHighNotPrecedence()
-		oldNoUnsignedSubtraction = ses.sqlModeHasNoUnsignedSubtraction()
-		oldParserFlags = ses.sqlModeParserFlags()
-		oldIgnoreSpace = ses.sqlModeHasIgnoreSpace()
-	} else if name == "div_precision_increment" {
+	if name == "div_precision_increment" {
 		oldDivPrecisionIncrement = ses.currentDivPrecisionIncrement()
 	}
 
@@ -1888,6 +1894,26 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 
 	if val, err = def.GetType().Convert(val); err != nil {
 		return
+	}
+	if !restoring {
+		if err = validateCharsetSystemVariable(name, val); err != nil {
+			return err
+		}
+	}
+	// These values shape bound defaults or constant-folded expressions.
+	// Compare converted values so equivalent SET spellings retain warm plans.
+	planDependencyVariable := name == "sql_mode" || name == "lc_time_names" || name == "explicit_defaults_for_timestamp"
+	var oldPlanDependency interface{}
+	if planDependencyVariable {
+		oldValue, getErr := ses.GetSessionSysVar(name)
+		if getErr != nil {
+			return getErr
+		}
+		oldValue, getErr = def.GetType().Convert(oldValue)
+		if getErr != nil {
+			return getErr
+		}
+		oldPlanDependency = oldValue
 	}
 
 	// Both defaults affect the physical vector plan. Compare normalized values
@@ -1944,7 +1970,20 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(canonicalName, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldNoUnsignedSubtraction, oldParserFlags, oldIgnoreSpace, val)
+		ses.updateSqlModeNoAutoValueOnZero(val)
+	}
+	if err == nil && planDependencyVariable {
+		newValue, getErr := ses.GetSessionSysVar(name)
+		if getErr != nil {
+			return getErr
+		}
+		newValue, getErr = def.GetType().Convert(newValue)
+		if getErr != nil {
+			return getErr
+		}
+		if oldPlanDependency != newValue {
+			ses.invalidateCachedPlans(true)
+		}
 	}
 	if err == nil && name == "div_precision_increment" {
 		if increment, ok := val.(int64); ok && increment != oldDivPrecisionIncrement {
@@ -1954,14 +1993,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	if err == nil && vectorModeVariable {
 		// val has already passed the BOOL variable conversion.
 		if (val.(int8) != 0) != oldVectorMode {
-			ses.cleanCache()
-			// Preserve prepared handles and runtime buffers; EXECUTE owns rebuilding
-			// their existing plan through the established needsRebuild path.
-			ses.mu.Lock()
-			for _, prepared := range ses.prepareStmts {
-				prepared.needsRebuild = true
-			}
-			ses.mu.Unlock()
+			ses.invalidateCachedPlans(true)
 		}
 	}
 	if err == nil && setTxnIsolation {

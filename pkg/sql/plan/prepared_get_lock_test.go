@@ -26,7 +26,7 @@ import (
 
 func TestPreparedGetLockTimeoutPreservesRuntimeType(t *testing.T) {
 	ctx := context.Background()
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_get_lock_timeout from 'select get_lock(''prepared_lock'', ?)'")
 	require.NoError(t, err)
 	preparePlan := prepared.GetDcl().GetPrepare().Plan
@@ -93,7 +93,7 @@ func TestPreparedGetLockExplicitTimeoutCastKeepsItsDomain(t *testing.T) {
 		{name: "double", typeName: "DOUBLE", wantArgType: types.T_float64, wantOverload: 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare stmt_get_lock_explicit from 'select get_lock(''prepared_lock'', cast(? as "+test.typeName+"))'")
 			require.NoError(t, err)
 			preparePlan := prepared.GetDcl().GetPrepare().Plan

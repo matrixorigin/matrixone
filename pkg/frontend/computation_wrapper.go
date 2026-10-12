@@ -19,6 +19,7 @@ import (
 	"context"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -95,6 +96,7 @@ type TxnComputationWrapper struct {
 	runtimeCacheKey             string
 	runtimeCachePlan            *plan.Plan
 	runtimeCacheDiagnostics     []*plan.Expr
+	runtimeCacheColDefData      [][]byte
 	runtimeCacheRetiredCompiles []retiredRuntimeCompile
 
 	explainBuffer *bytes.Buffer
@@ -679,19 +681,27 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
-	if stm := cwft.ses.GetStmtInfo(); stm != nil {
-		waitActiveCost := time.Duration(0)
-		if handler := cwft.ses.GetTxnHandler(); handler.InActiveTxn() {
-			txn := handler.GetTxn()
-			if txn != nil {
-				waitActiveCost = txn.GetWaitActiveCost()
-			}
+	return cwft.recordExecPlan(ctx, phyPlan, nil)
+}
+
+// statementWaitActiveCost copies the admission measurement before transaction
+// release. A missing measurement is distinct from a measured zero.
+func (cwft *TxnComputationWrapper) statementWaitActiveCost() time.Duration {
+	if handler := cwft.ses.GetTxnHandler(); handler != nil && handler.InActiveTxn() {
+		if txn := handler.GetTxn(); txn != nil {
+			return txn.GetWaitActiveCost()
 		}
+	}
+	return -1
+}
+
+func (cwft *TxnComputationWrapper) recordExecPlan(ctx context.Context, phyPlan *models.PhyPlan, runErr error) error {
+	if stm := cwft.ses.GetStmtInfo(); stm != nil {
 		opts := []marshalPlanOptions{
-			WithWaitActiveCost(waitActiveCost),
+			WithWaitActiveCost(cwft.statementWaitActiveCost()),
 			withSchedulingTraceRecorder(&cwft.schedulingTrace),
 		}
-		handler := NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, opts...)
+		handler := newJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, runErr, opts...)
 		if handler.persistSchedulingTrace {
 			stm.DisableAgg()
 		}
@@ -714,7 +724,7 @@ func (cwft *TxnComputationWrapper) recordSchedulingTraceOnCompileError(ctx conte
 	}
 	if stm := cwft.ses.GetStmtInfo(); stm != nil {
 		stm.DisableAgg()
-		stm.SetSerializableExecPlan(newSchedulingTracePlanHandler(ctx, traceSnapshot))
+		stm.SetSerializableExecPlan(newSchedulingTracePlanHandler(ctx, traceSnapshot, cwft.statementWaitActiveCost()))
 	}
 }
 
@@ -812,7 +822,8 @@ func (cwft *TxnComputationWrapper) completeCompileExecution(
 }
 
 func (cwft *TxnComputationWrapper) syncCompileExecution(runningCompile Compile) {
-	// Sync the latest plan generation after Run (it may have changed on retry).
+	// Sync the latest plan generation before publishing metadata or after Run
+	// (it may have changed on retry).
 	cwft.plan = runningCompile.GetPlan()
 	cwft.planSnapshotTS, cwft.hasPlanSnapshotTS = runningCompile.PlanSnapshotTS()
 }
@@ -970,7 +981,8 @@ func preparedBinaryIntegerCastDiagnosticFree(
 
 // ParseExecuteData has already decoded the integer packet and normalized its
 // bytes. Long data is excluded because it bypasses that decoder. Width and sign
-// therefore suffice to prove this widening conversion, including typed NULL.
+// suffice for widening; signed narrowing also checks the current decoded value.
+// Unsupported provenance or a range miss stays with the isolated probe.
 func preparedDirectBinaryIntegerCastDiagnosticFree(
 	prepareStmt *PrepareStmt, expr *plan.Expr, binaryExecute bool,
 ) bool {
@@ -996,7 +1008,20 @@ func preparedDirectBinaryIntegerCastDiagnosticFree(
 		return false
 	}
 	sourceUnsigned := prepareStmt.ParamTypes[int(position)*2+1]&0x80 != 0
-	return target.IsInteger() && sourceUnsigned == target.IsUnsignedInt() && target.TypeLen() >= sourceBytes
+	if !target.IsInteger() || sourceUnsigned != target.IsUnsignedInt() {
+		return false
+	}
+	if target.TypeLen() >= sourceBytes {
+		return true
+	}
+	if !target.IsSignedInt() {
+		return false
+	}
+	if prepareStmt.params.GetNulls().Contains(uint64(position)) {
+		return true
+	}
+	_, err := strconv.ParseInt(string(prepareStmt.params.GetBytesAt(int(position))), 10, target.TypeLen()*8)
+	return err == nil
 }
 
 // binaryProtocolPrepareParamConcreteType retains the protocol's SQL domain
@@ -1304,10 +1329,11 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 	previousGroupConcatMaxLenFloor := prepareStmt.groupConcatMaxLenFloor
-	currentNativeMode := owner.sqlModeHasMatrixOneNative()
-	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
-	currentBoolSumAvg := owner.sqlModeHasEnableBoolSumAvg()
-	currentNoUnsignedSubtraction := owner.sqlModeHasNoUnsignedSubtraction()
+	currentSQLMode := sessionSQLMode(owner)
+	currentNativeMode := mysql.HasMatrixOneNativeSQLMode(currentSQLMode)
+	currentOnlyFullGroupBy := mysql.HasSQLMode(currentSQLMode, "ONLY_FULL_GROUP_BY")
+	currentBoolSumAvg := mysql.HasEnableBoolSumAvgSQLMode(currentSQLMode)
+	currentNoUnsignedSubtraction := mysql.HasSQLMode(currentSQLMode, "NO_UNSIGNED_SUBTRACTION")
 	currentDivPrecisionIncrement := owner.currentDivPrecisionIncrement()
 	reqCtx = function.WithNoUnsignedSubtraction(reqCtx, currentNoUnsignedSubtraction)
 	reqCtx = function.WithDivPrecisionIncrement(reqCtx, int32(currentDivPrecisionIncrement))
@@ -1330,6 +1356,13 @@ func initExecuteStmtParamWithResolverInSession(
 		preparePlan.GetSchemas(), preparedMetadataTS, prepareStmt.Ts, prepareStmt.preparedMetadataCheckTS)
 	if validateNamedSnapshots {
 		change = true
+	}
+	// A prepared EXPLAIN EXECUTE embeds another mutable prepared handle. Its
+	// cached query alone cannot prove the current AST/plan binding or grants.
+	if inner := unwrapExecutableExplainStatement(prepareStmt.PrepareStmt); inner != prepareStmt.PrepareStmt {
+		if _, execute := inner.(*tree.Execute); execute {
+			change = true
+		}
 	}
 	rebuildEveryExecute := shouldRebuildPreparePlan(false, executionPlan)
 	schemaChanged, schemasValidated, err := validateCapturedPrepareSchemas(
@@ -1706,6 +1739,7 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	runtimePlanApplied := false
 	var cachedRuntimeCompile *compile.Compile
+	var runtimeColDefData [][]byte
 	if sourceBindingQuery {
 		prepareStmt.rememberBitCountSourceTypes(cwft.paramVals)
 		cwft.paramBindings, err = preparedExecutionBindings(reqCtx, cwft.paramVals, prepareStmt.ParamTypes, prepareStmt.bitCountNumericParamTypes)
@@ -1727,6 +1761,9 @@ func initExecuteStmtParamWithResolverInSession(
 				cachedRuntimeCompile = prepareStmt.runtimeCompile
 				cwft.preparedJoinDiagnosticFree = true
 				runtimePlanApplied = true
+				if binaryExecute && !hasPreparedGroupConcat {
+					runtimeColDefData = prepareStmt.runtimeColDefData
+				}
 			}
 		}
 		if !runtimePlanApplied {
@@ -1770,7 +1807,7 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		runtimePlanApplied = true
 	}
-	if binaryExecute && runtimePlanApplied {
+	if binaryExecute && runtimePlanApplied && runtimeColDefData == nil {
 		columns := getPreparedResultColumnsForWithGroupConcatMaxLen(
 			prepareStmt.PrepareStmt, executionPlan, sessionTxnHaveDDL(executionSes),
 			groupConcatMaxLenFloor)
@@ -1782,7 +1819,13 @@ func initExecuteStmtParamWithResolverInSession(
 		if metadataErr != nil {
 			return nil, nil, nil, originSQL, false, metadataErr
 		}
-		execCtx.prepareColDef = colDefData
+		runtimeColDefData = colDefData
+		if cwft.runtimeCacheTarget != nil && !hasPreparedGroupConcat {
+			cwft.runtimeCacheColDefData = colDefData
+		}
+	}
+	if binaryExecute && runtimePlanApplied {
+		execCtx.prepareColDef = runtimeColDefData
 	}
 
 	// A cached prepared Compile already owns a materialized worker topology.
@@ -1844,6 +1887,7 @@ func (cwft *TxnComputationWrapper) discardRuntimeCacheCandidate() {
 	cwft.runtimeCacheKey = ""
 	cwft.runtimeCachePlan = nil
 	cwft.runtimeCacheDiagnostics = nil
+	cwft.runtimeCacheColDefData = nil
 }
 
 func (cwft *TxnComputationWrapper) completeRuntimeCacheCandidate(
@@ -1863,7 +1907,7 @@ func (cwft *TxnComputationWrapper) installRuntimeCacheCandidate(runtimeCompile *
 		return false
 	}
 	retiredCompile := cwft.runtimeCacheTarget.installRuntimeSpecializationCache(
-		cwft.runtimeCacheKey, cwft.runtimeCachePlan, runtimeCompile, cwft.runtimeCacheDiagnostics)
+		cwft.runtimeCacheKey, cwft.runtimeCachePlan, runtimeCompile, cwft.runtimeCacheDiagnostics, cwft.runtimeCacheColDefData)
 	if retiredCompile != nil {
 		// NewCompile has already installed runtimeCompile's execution state on the
 		// shared session Process. Releasing the displaced compile here would call
@@ -2606,7 +2650,8 @@ func executeArgumentSourceType(typ plan.Type) types.Type {
 			sourceOID = types.T_blob
 		}
 	}
-	return types.NewWithCharset(sourceOID, typ.Width, typ.Scale, uint8(typ.Charset))
+	typ.Id = int32(sourceOID)
+	return types.MustTypeFromPlan(typ)
 }
 
 func shouldCachePrepareCompile(p *plan.Plan) bool {
@@ -2826,6 +2871,13 @@ func buildPlanForCompileRetry(
 	forcePrepare bool,
 	preparedRetry *preparedExecutionRetry,
 ) (*plan2.Plan, error) {
+	originalContext := compilerContext.GetContext()
+	planningContext := originalContext
+	if planningContext == nil {
+		planningContext = ctx
+	}
+	compilerContext.SetContext(plan2.WithJSONMergeWarningOrigin(planningContext, plan2.JSONMergeWarningInternalReprepare))
+	defer compilerContext.SetContext(originalContext)
 	if ses != nil {
 		ctx = function.WithNoUnsignedSubtraction(ctx, mysql.HasSQLMode(sessionSQLMode(ses), "NO_UNSIGNED_SUBTRACTION"))
 		ctx = function.WithDivPrecisionIncrement(ctx, sessionDivPrecisionIncrement(ses))

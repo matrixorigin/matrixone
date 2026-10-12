@@ -80,7 +80,6 @@ func (r *siriusBatchRecorder) Publish(_ context.Context, rows uint32, vs []Siriu
 
 func TestSiriusBatchPublicationLayoutAndOwnership(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	bat := batch.NewWithSize(3)
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
@@ -125,7 +124,6 @@ func TestSiriusBatchPublicationLayoutAndOwnership(t *testing.T) {
 
 func TestSiriusSlicesBoundLogicalExpansion(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 9, proc.Mp())
 	bat.SetRowCount(9)
@@ -140,9 +138,43 @@ func TestSiriusSlicesBoundLogicalExpansion(t *testing.T) {
 	require.Equal(t, 6, end)
 }
 
+func TestSiriusDecimal256PublicationPreservesFixedWidthAndConstants(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ := types.New(types.T_decimal256, 65, 4)
+	value := types.Decimal256{B0_63: 9007199254740993, B192_255: 1}
+	bat := batch.NewWithSize(2)
+	t.Cleanup(func() { bat.Clean(proc.Mp()) })
+	bat.Vecs[0] = vector.NewVec(typ)
+	for row := 0; row < 3; row++ {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, row == 2, proc.Mp()))
+	}
+	constant, err := vector.NewConstFixed(typ, value, 3, proc.Mp())
+	require.NoError(t, err)
+	bat.Vecs[1] = constant
+	bat.SetRowCount(3)
+	columns := []SiriusReadColumn{{Type: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 4}}, {Type: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 4, NotNullable: true}}}
+	recorder := &siriusBatchRecorder{}
+	require.NoError(t, publishSiriusBatch(t.Context(), recorder, bat, columns))
+	require.Len(t, recorder.vectors[0].Data, 96)
+	require.Len(t, recorder.vectors[1].Data, 32)
+	require.Equal(t, uint32(1), recorder.vectors[1].Class)
+	require.Equal(t, byte(4), recorder.vectors[0].Nulls[0])
+	for _, payload := range [][]byte{recorder.vectors[0].Data[:32], recorder.vectors[1].Data} {
+		require.Equal(t, value.B0_63, binary.LittleEndian.Uint64(payload))
+		require.Equal(t, value.B192_255, binary.LittleEndian.Uint64(payload[24:]))
+	}
+	require.Equal(t, 1, recorder.acquired)
+	require.Equal(t, 1, recorder.released)
+	end, err := siriusSliceEnd(bat, columns, 0, 16+2*66)
+	require.NoError(t, err)
+	require.Equal(t, 2, end, "wide constants count at their expanded logical width")
+	columns[0].Type.Scale++
+	require.ErrorContains(t, publishSiriusBatch(t.Context(), recorder, bat, columns), "decimal type")
+	require.Equal(t, 1, recorder.acquired, "schema rejection precedes credit acquisition")
+}
+
 func TestSiriusSplitAndConstantVarlenaPublication(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	columns := []SiriusReadColumn{{Type: planpb.Type{Id: int32(types.T_varchar)}}}
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
@@ -179,6 +211,7 @@ func TestSiriusNativeElementSizesAndBatchRejections(t *testing.T) {
 		{4, []types.T{types.T_int32, types.T_uint32, types.T_float32, types.T_date}},
 		{8, []types.T{types.T_int64, types.T_uint64, types.T_float64, types.T_decimal64, types.T_timestamp}},
 		{16, []types.T{types.T_decimal128}},
+		{32, []types.T{types.T_decimal256}},
 		{24, []types.T{types.T_char, types.T_varchar, types.T_binary, types.T_varbinary}},
 	} {
 		for _, oid := range group.oids {
@@ -187,10 +220,9 @@ func TestSiriusNativeElementSizesAndBatchRejections(t *testing.T) {
 			require.Equal(t, group.width, width)
 		}
 	}
-	_, err := siriusElementSize(types.T_decimal256)
-	require.Error(t, err, "wide types stay declined until numeric support is delivered")
+	_, err := siriusElementSize(types.T_uuid)
+	require.Error(t, err, "unsupported native types stay declined")
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	bat := batch.NewWithSize(1)
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
 	bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
@@ -303,7 +335,6 @@ func (r *siriusSpecRelation) BuildReaders(_ context.Context, _ any, _ *planpb.Ex
 
 func TestEmbeddedSiriusReaderReusesScanFilterProjectionAndFetch(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	ctrl := gomock.NewController(t)
 	tx := mock_frontend.NewMockTxnOperator(ctrl)
 	tx.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
@@ -339,7 +370,6 @@ func TestEmbeddedSiriusReaderPreservesParallelScanAndCleanup(t *testing.T) {
 	for _, dop := range []int{1, 2} {
 		t.Run(fmt.Sprintf("DOP%d_without_fetch", dop), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			t.Cleanup(proc.Free)
 			ctrl := gomock.NewController(t)
 			tx := mock_frontend.NewMockTxnOperator(ctrl)
 			tx.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()

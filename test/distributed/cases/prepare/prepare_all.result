@@ -208,7 +208,7 @@ execute s3 using @max_date;
 execute s3 using @min_date;
 ➤ time1[91,64,0]  ¦  time2[93,64,0]  ¦  time3[93,64,0]
 execute s3 using @max_datetime;
-invalid argument parse timestamp, bad value 9999-12-31 23:59:59.999999
+invalid input: invalid datetime value 9999-12-31 23:59:59.999999
 execute s3 using @min_datetime;
 ➤ time1[91,64,0]  ¦  time2[93,64,0]  ¦  time3[93,64,0]
 execute s3 using @max_timestamp;

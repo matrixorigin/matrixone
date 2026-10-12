@@ -150,8 +150,9 @@ func (c *tableCache) insertAutoValues(
 
 		if estimate > int64(cc.cfg.CountPerAllocate) {
 			// Planner bounds are speculative and may be billions of rows.
-			// Reserve only the configured cache range; actual batch demand
-			// remains owned by columnCache.insertAutoValues/allocateLocked.
+			// Do not size reservations from the estimate. The column cache
+			// applies configured policy and bounded observed internal-key
+			// demand; actual batches still reserve on demand.
 			cc.preAllocate(ctx, tableID, cc.cfg.CountPerAllocate, txnOp)
 		}
 

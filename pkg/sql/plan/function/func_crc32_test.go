@@ -68,6 +68,6 @@ func TestCRC32Uint64ResultWrapper(t *testing.T) {
 	result := NewFunctionTestResult(types.T_uint64.ToType(), false,
 		[]uint64{907060870, 0}, []bool{false, false})
 	caseData := NewFunctionTestCase(proc, []FunctionTestInput{input}, result, newCrc32ExecContext().builtInCrc32)
-	succeed, info := caseData.Run()
+	succeed, info := caseData.RunAndFree()
 	require.True(t, succeed, info)
 }

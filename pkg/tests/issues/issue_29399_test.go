@@ -386,17 +386,36 @@ func TestIssue29399AccountRestoreRollsBackInvalidPrivileges(t *testing.T) {
 		)
 		// Register before setup so a partially constructed fixture is cleaned too.
 		defer func() {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cleanupCancel()
 			for _, statement := range []string{
 				"drop snapshot if exists " + badSnapshot,
 				"drop snapshot if exists " + goodSnapshot,
 				"drop account if exists " + target,
 				"drop account if exists " + source,
 			} {
-				if _, err := sysDB.ExecContext(cleanupCtx, statement); err != nil {
-					t.Errorf("cleanup %q: %v", statement, err)
-				}
+				func() {
+					// Each independent drop owns its full bounded cleanup budget;
+					// preceding drops must not consume the next operation's deadline.
+					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cleanupCancel()
+					if _, err := sysDB.ExecContext(cleanupCtx, statement); err != nil {
+						t.Errorf("cleanup %q: %v", statement, err)
+					}
+				}()
+			}
+			for _, query := range []string{
+				"select count(*) from mo_catalog.mo_snapshots where sname in ('" + badSnapshot + "', '" + goodSnapshot + "')",
+				"select count(*) from mo_catalog.mo_account where account_name in ('" + target + "', '" + source + "')",
+			} {
+				func() {
+					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cleanupCancel()
+					var remaining int
+					if err := sysDB.QueryRowContext(cleanupCtx, query).Scan(&remaining); err != nil {
+						t.Errorf("verify cleanup %q: %v", query, err)
+					} else if remaining != 0 {
+						t.Errorf("cleanup left %d fixture objects: %s", remaining, query)
+					}
+				}()
 			}
 		}()
 		admins := make(map[string]*sql.DB)

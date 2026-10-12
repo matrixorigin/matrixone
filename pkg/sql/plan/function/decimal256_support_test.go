@@ -120,8 +120,8 @@ func TestDecimal256CompareFns(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ftc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_bool.ToType(), false, tc.expect, tc.nulls), fEvalFn(tc.fn))
-			ok, info := ftc.Run()
+			ftc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_bool.ToType(), false, tc.expect, tc.nulls), executeLogicOfOverload(tc.fn))
+			ok, info := ftc.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -134,7 +134,7 @@ func TestDecimal256CompareFns(t *testing.T) {
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, true}, []bool{false, false, false}),
 		nullSafeEqualFn,
 	)
-	ok, info := nullSafe.Run()
+	ok, info := nullSafe.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -159,7 +159,7 @@ func TestDecimal256CompareScaleOverflowReturnsError(t *testing.T) {
 		NewFunctionTestResult(types.T_bool.ToType(), true, []bool{}, []bool{}),
 		equalFn,
 	)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -184,7 +184,7 @@ func TestDecimal256RangeAndInOperators(t *testing.T) {
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, true, false, false}, []bool{false, false, false, true}),
 		betweenImpl,
 	)
-	ok, info := betweenTC.Run()
+	ok, info := betweenTC.RunAndFree()
 	require.True(t, ok, info)
 
 	inRangeTC := NewFunctionTestCase(proc,
@@ -197,7 +197,7 @@ func TestDecimal256RangeAndInOperators(t *testing.T) {
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, true, false, false}, []bool{false, false, false, true}),
 		inRangeImpl,
 	)
-	ok, info = inRangeTC.Run()
+	ok, info = inRangeTC.RunAndFree()
 	require.True(t, ok, info)
 
 	inTC := NewFunctionTestCase(proc,
@@ -208,7 +208,7 @@ func TestDecimal256RangeAndInOperators(t *testing.T) {
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, true, true, false}, []bool{false, false, false, true}),
 		newOpOperatorFixedIn[types.Decimal256]().operatorIn,
 	)
-	ok, info = inTC.Run()
+	ok, info = inTC.RunAndFree()
 	require.True(t, ok, info)
 
 	notInTC := NewFunctionTestCase(proc,
@@ -219,7 +219,7 @@ func TestDecimal256RangeAndInOperators(t *testing.T) {
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false, false}, []bool{false, false, false, true}),
 		newOpOperatorFixedIn[types.Decimal256]().operatorNotIn,
 	)
-	ok, info = notInTC.Run()
+	ok, info = notInTC.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -242,7 +242,7 @@ func TestDecimal256ConditionalOperators(t *testing.T) {
 		NewFunctionTestResult(decType, false, []types.Decimal256{v1, v2, v1}, []bool{false, false, false}),
 		caseFn,
 	)
-	ok, info := caseTC.Run()
+	ok, info := caseTC.RunAndFree()
 	require.True(t, ok, info)
 
 	iffTC := NewFunctionTestCase(proc,
@@ -254,7 +254,7 @@ func TestDecimal256ConditionalOperators(t *testing.T) {
 		NewFunctionTestResult(decType, false, []types.Decimal256{v1, v2, v1}, []bool{false, false, false}),
 		iffFn,
 	)
-	ok, info = iffTC.Run()
+	ok, info = iffTC.RunAndFree()
 	require.True(t, ok, info)
 
 	coalesceTC := NewFunctionTestCase(proc,
@@ -266,7 +266,7 @@ func TestDecimal256ConditionalOperators(t *testing.T) {
 		NewFunctionTestResult(decType, false, []types.Decimal256{v2, v1, {}}, []bool{false, false, true}),
 		CoalesceGeneral[types.Decimal256],
 	)
-	ok, info = coalesceTC.Run()
+	ok, info = coalesceTC.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -316,7 +316,7 @@ func TestDecimal256ArithmeticFns(t *testing.T) {
 		NewFunctionTestResult(dec4, false, []types.Decimal256{mustParseDecimal256(t, "7.2500", 4)}, []bool{false}),
 		plusFn,
 	)
-	ok, info := plusTC.Run()
+	ok, info := plusTC.RunAndFree()
 	require.True(t, ok, info)
 
 	minusTC := NewFunctionTestCase(proc,
@@ -327,7 +327,7 @@ func TestDecimal256ArithmeticFns(t *testing.T) {
 		NewFunctionTestResult(dec4, false, []types.Decimal256{mustParseDecimal256(t, "3.2500", 4)}, []bool{false}),
 		minusFn,
 	)
-	ok, info = minusTC.Run()
+	ok, info = minusTC.RunAndFree()
 	require.True(t, ok, info)
 
 	multiTC := NewFunctionTestCase(proc,
@@ -338,7 +338,7 @@ func TestDecimal256ArithmeticFns(t *testing.T) {
 		NewFunctionTestResult(dec6, false, []types.Decimal256{mustParseDecimal256(t, "10.500000", 6)}, []bool{false}),
 		multiFn,
 	)
-	ok, info = multiTC.Run()
+	ok, info = multiTC.RunAndFree()
 	require.True(t, ok, info)
 
 	divTC := NewFunctionTestCase(proc,
@@ -349,7 +349,7 @@ func TestDecimal256ArithmeticFns(t *testing.T) {
 		NewFunctionTestResult(dec10, false, []types.Decimal256{mustParseDecimal256(t, "2.6250000000", 10)}, []bool{false}),
 		divFn,
 	)
-	ok, info = divTC.Run()
+	ok, info = divTC.RunAndFree()
 	require.True(t, ok, info)
 
 	modTC := NewFunctionTestCase(proc,
@@ -360,7 +360,7 @@ func TestDecimal256ArithmeticFns(t *testing.T) {
 		NewFunctionTestResult(dec4, false, []types.Decimal256{mustParseDecimal256(t, "1.2500", 4)}, []bool{false}),
 		modFn,
 	)
-	ok, info = modTC.Run()
+	ok, info = modTC.RunAndFree()
 	require.True(t, ok, info)
 
 	intDivTC := NewFunctionTestCase(proc,
@@ -371,7 +371,7 @@ func TestDecimal256ArithmeticFns(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2}, []bool{false}),
 		integerDivFn,
 	)
-	ok, info = intDivTC.Run()
+	ok, info = intDivTC.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -388,7 +388,7 @@ func TestDecimal256UnaryOperators(t *testing.T) {
 		NewFunctionTestResult(dec4, false, []types.Decimal256{negative}, []bool{false}),
 		operatorUnaryPlus[types.Decimal256],
 	)
-	ok, info := unaryPlusTC.Run()
+	ok, info := unaryPlusTC.RunAndFree()
 	require.True(t, ok, info)
 
 	unaryMinusTC := NewFunctionTestCase(proc,
@@ -398,7 +398,7 @@ func TestDecimal256UnaryOperators(t *testing.T) {
 		NewFunctionTestResult(dec4, false, []types.Decimal256{negative}, []bool{false}),
 		operatorUnaryMinusDecimal256,
 	)
-	ok, info = unaryMinusTC.Run()
+	ok, info = unaryMinusTC.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -457,7 +457,7 @@ func TestDecimal256MathFunctions(t *testing.T) {
 		NewFunctionTestResult(dec4, false, []types.Decimal256{positive, positive, zero}, []bool{false, false, false}),
 		AbsDecimal256,
 	)
-	ok, info := absTC.Run()
+	ok, info := absTC.RunAndFree()
 	require.True(t, ok, info)
 
 	signTC := NewFunctionTestCase(proc,
@@ -467,7 +467,7 @@ func TestDecimal256MathFunctions(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1, 0, -1}, []bool{false, false, false}),
 		SignDecimal256,
 	)
-	ok, info = signTC.Run()
+	ok, info = signTC.RunAndFree()
 	require.True(t, ok, info)
 
 	digitsInput := []FunctionTestInput{
@@ -485,7 +485,7 @@ func TestDecimal256MathFunctions(t *testing.T) {
 			[]bool{false, false}),
 		CeilDecimal256,
 	)
-	ok, info = ceilTC.Run()
+	ok, info = ceilTC.RunAndFree()
 	require.True(t, ok, info)
 
 	floorTC := NewFunctionTestCase(proc,
@@ -498,7 +498,7 @@ func TestDecimal256MathFunctions(t *testing.T) {
 			[]bool{false, false}),
 		FloorDecimal256,
 	)
-	ok, info = floorTC.Run()
+	ok, info = floorTC.RunAndFree()
 	require.True(t, ok, info)
 
 	roundTC := NewFunctionTestCase(proc,
@@ -511,7 +511,7 @@ func TestDecimal256MathFunctions(t *testing.T) {
 			[]bool{false, false}),
 		RoundDecimal256,
 	)
-	ok, info = roundTC.Run()
+	ok, info = roundTC.RunAndFree()
 	require.True(t, ok, info)
 
 	truncateTC := NewFunctionTestCase(proc,
@@ -524,7 +524,7 @@ func TestDecimal256MathFunctions(t *testing.T) {
 			[]bool{false, false}),
 		TruncateDecimal256,
 	)
-	ok, info = truncateTC.Run()
+	ok, info = truncateTC.RunAndFree()
 	require.True(t, ok, info)
 }
 

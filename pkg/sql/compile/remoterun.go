@@ -1978,12 +1978,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 func convertToPlanTypes(ts []types.Type) []plan.Type {
 	result := make([]plan.Type, len(ts))
 	for i, t := range ts {
-		result[i] = plan.Type{
-			Id:      int32(t.Oid),
-			Width:   t.Width,
-			Scale:   t.Scale,
-			Charset: uint32(t.Charset),
-		}
+		result[i] = t.PlanType()
 	}
 	return result
 }
@@ -1992,7 +1987,7 @@ func convertToPlanTypes(ts []types.Type) []plan.Type {
 func convertToTypes(ts []plan.Type) []types.Type {
 	result := make([]types.Type, len(ts))
 	for i, t := range ts {
-		result[i] = types.NewWithCharset(types.T(t.Id), t.Width, t.Scale, uint8(t.Charset))
+		result[i] = types.MustTypeFromPlan(t)
 	}
 	return result
 }
@@ -2226,6 +2221,9 @@ func validateRemoteExpressionPipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
 ) error {
+	if err := plan.RequireLegacyCollations(p); err != nil {
+		return err
+	}
 	features, err := plan.RequiredRemoteExpressionFeatures(p)
 	if err != nil {
 		return err
@@ -2911,6 +2909,16 @@ func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	if err := bat.UnmarshalBinaryForPipeline(data, mp); err != nil {
 		bat.Clean(mp)
 		return nil, err
+	}
+	// Transport codecs preserve known metadata, but the received batch is
+	// about to enter execution. Its opaque vectors need their own admission.
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			if err := plan.RequireLegacyCollations(vec.GetType().PlanType()); err != nil {
+				bat.Clean(mp)
+				return nil, err
+			}
+		}
 	}
 	return bat, nil
 }

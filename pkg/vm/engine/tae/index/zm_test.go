@@ -204,7 +204,7 @@ func makeZM(t types.T, scale int32, minv, maxv any) ZM {
 }
 
 func runCompare(tc *testCase) [][2]bool {
-	r := make([][2]bool, 0)
+	r := make([][2]bool, 0, 7)
 
 	res, ok := tc.v1.AnyGT(tc.v2)
 	r = append(r, [2]bool{res, ok})
@@ -225,7 +225,7 @@ func runCompare(tc *testCase) [][2]bool {
 }
 
 func runArith(tc *testCase) []*testArithRes {
-	r := make([]*testArithRes, 0)
+	r := make([]*testArithRes, 0, 3)
 	res := ZMPlus(tc.v1, tc.v2, nil)
 	r = append(r, &testArithRes{res, res.IsInited()})
 	res = ZMMinus(tc.v1, tc.v2, nil)

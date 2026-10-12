@@ -284,6 +284,11 @@ type scopeContext struct {
 // Compile contains all the information needed for compilation.
 type Compile struct {
 	scopes []*Scope
+	// Shared broadcast HashBuild producers are attached after downstream placement.
+	pendingProductBuilds []*pendingProductBuild
+	// Non-owning producer regions: true marks an independent auxiliary job;
+	// false marks its result owner for original-error arbitration.
+	auxiliaryProductScopes map[*Scope]bool
 	// siriusRead is the single terminal owner for a hinted offload. It remains
 	// nil for every native statement.
 	siriusRead *siriusReadOwner
@@ -328,6 +333,8 @@ type Compile struct {
 	// retaining the physical plan built at this timestamp.
 	planSnapshotTS    timestamp.Timestamp
 	hasPlanSnapshotTS bool
+	// Fixed CREATE target/declared-parent pins survive only this statement retry.
+	createNamePinsAdmitted bool
 	// planGenerationReused is true only when this execution admitted an
 	// existing session/prepared generation. A definition rebuild clears it;
 	// data-only retries retain it with the same logical generation.
@@ -340,7 +347,7 @@ type Compile struct {
 	// resultMetadataFrozen is set once a streaming consumer has materialized or
 	// sent the current result schema. A definition retry may continue only when
 	// the rebuilt logical plan exposes identical result metadata.
-	resultMetadataFrozen bool
+	resultMetadataFrozen atomic.Bool
 	// planGenerationRebuilt is sticky for this Compile. Once a retry rebuilds
 	// its logical plan, any frontend-owned prepared plan or physical topology
 	// from the previous generation must not be reused.
@@ -391,6 +398,9 @@ type Compile struct {
 
 	lockMeta   *LockMeta
 	lockTables map[uint64]*plan.LockTarget
+	// prePipelineLockTableID requests normal table-lock admission for one newly
+	// created target of an internal INSERT. It is not a proof of a held lock.
+	prePipelineLockTableID uint64
 	// loadUniqueIndexPromotion is coordinator-local execution state shared only
 	// with physical retry compiles. It is never serialized into a remote scope or
 	// written back into the canonical logical plan.

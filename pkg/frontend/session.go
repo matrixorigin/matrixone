@@ -643,14 +643,33 @@ func (ses *Session) setUserDefinedVarWithTypeAndKindAndReplayability(
 	}
 	ses.mu.Lock()
 	key := strings.ToLower(name)
-	if previous := ses.userDefinedVars[key]; previous != nil && !previous.Replayable {
+	previous := ses.userDefinedVars[key]
+	if previous != nil && !previous.Replayable {
 		replayable = false
+	}
+	regexpStringResult := userVariableRegexpStringResult(typ)
+	if value == nil && types.T(typ.Id) == types.T_any {
+		// MySQL retains result-category history for literal NULL, but that
+		// history must not become the current SQL conversion/parameter type.
+		regexpStringResult = true // First assignment starts as STRING_RESULT.
+		if previous != nil {
+			regexpStringResult = previous.RegexpStringResult || userVariableRegexpStringResult(previous.Type)
+			if previous.Type.Id == 0 && previous.Value != nil {
+				regexpStringResult = userVariableRegexpStringResult(inferUserDefinedVarType(previous.Value))
+			}
+		}
+		// Final SET NULL replay on a fresh session loses non-string history.
+		// Snapshot migration transports it independently and remains allowed.
+		if !regexpStringResult {
+			replayable = false
+		}
 	}
 	ses.userDefinedVars[key] = &UserDefinedVar{
 		Value:               value,
 		Sql:                 sql,
 		IsBin:               isBin,
 		Type:                typ,
+		RegexpStringResult:  regexpStringResult,
 		PrepareParamKind:    kind,
 		RuntimeStringDomain: runtimeDomain,
 		Replayable:          replayable,
@@ -1449,18 +1468,6 @@ func sessionDivPrecisionIncrement(ses FeSession) int32 {
 	return int32(increment)
 }
 
-func (ses *Session) sqlModeHasIgnoreSpace() bool {
-	if ses == nil {
-		return false
-	}
-	value, err := ses.GetSessionSysVar("sql_mode")
-	if err != nil {
-		return false
-	}
-	has, ok := sqlModeHasIgnoreSpaceValue(value)
-	return ok && has
-}
-
 func (ses *Session) sqlModeParserFlags() mysql.SQLModeFlags {
 	if ses == nil {
 		return 0
@@ -1474,43 +1481,6 @@ func (ses *Session) sqlModeParserFlags() mysql.SQLModeFlags {
 		return 0
 	}
 	return flags
-}
-
-// updateSqlModeCaches evicts cached plans when a sql_mode token that shapes
-// the plan or parser output changes membership. Every token the planner or
-// parser reads at bind time must be compared here: the cache is keyed by SQL
-// text alone.
-func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldNoUnsignedSubtraction bool, oldParserFlags mysql.SQLModeFlags, oldIgnoreSpace bool, val interface{}) {
-	ses.updateSqlModeNoAutoValueOnZero(val)
-	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
-	if !ok {
-		return
-	}
-	newOnlyFullGroupBy, ok := sqlModeHasOnlyFullGroupByValue(val)
-	if !ok {
-		return
-	}
-	newBoolSumAvg, ok := sqlModeHasEnableBoolSumAvgValue(val)
-	if !ok {
-		return
-	}
-	newHighNotPrecedence, ok := sqlModeHasHighNotPrecedenceValue(val)
-	if !ok {
-		return
-	}
-	newParserFlags, ok := sqlModeParserFlagsValue(val)
-	if !ok {
-		return
-	}
-	newIgnoreSpace, ok := sqlModeHasIgnoreSpaceValue(val)
-	if !ok {
-		return
-	}
-	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy ||
-		oldBoolSumAvg != newBoolSumAvg || oldHighNotPrecedence != newHighNotPrecedence ||
-		oldParserFlags != newParserFlags || oldIgnoreSpace != newIgnoreSpace || oldNoUnsignedSubtraction != ses.sqlModeHasNoUnsignedSubtraction() {
-		ses.cleanCache()
-	}
 }
 
 func parseNoAutoValueOnZero(val interface{}) (bool, bool) {
@@ -2479,10 +2449,21 @@ func (ses *Session) invalidateCachedPlanGeneration(
 }
 
 func (ses *Session) cleanCache() {
+	ses.invalidateCachedPlans(false)
+}
+
+// EXECUTE owns replacement and cleanup; invalidation preserves prepared
+// handles, parameters and buffers until their existing rebuild path runs.
+func (ses *Session) invalidateCachedPlans(prepared bool) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if ses.planCache != nil {
 		ses.planCache.clean()
+	}
+	if prepared {
+		for _, statement := range ses.prepareStmts {
+			statement.needsRebuild = true
+		}
 	}
 }
 
@@ -2658,6 +2639,11 @@ func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perf
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
+		if execCtx != nil && execCtx.resultMetadata != nil && bat != nil && bat.RowCount() > 0 {
+			if err := execCtx.resultMetadata.publish(); err != nil {
+				return err
+			}
+		}
 		if execCtx != nil && execCtx.input != nil && execCtx.input.isCursorExecute {
 			if err := capturePreparedCursorBatch(ses, execCtx, bat); err != nil {
 				return err
@@ -4449,7 +4435,7 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 					return moerr.AttachCause(migrationCtx, err)
 				}
 			}
-			if err := ses.SetSessionSysVar(migrationCtx, variable.name, variable.value); err != nil {
+			if err := ses.restoreSessionSysVar(migrationCtx, variable.name, variable.value); err != nil {
 				return moerr.AttachCause(migrationCtx, err)
 			}
 			ses.markMigrationSystemVarReplayable(variable.name, req.SystemVariablesReplayable)

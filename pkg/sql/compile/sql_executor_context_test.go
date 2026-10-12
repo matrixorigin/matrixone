@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -250,7 +252,7 @@ func TestCompilerContextDelegatesSnapshotAndSubscriptionBinding(t *testing.T) {
 	snapshot := &plan.Snapshot{}
 	subscription := &plan.SubscriptionMeta{Name: "pub", SubName: "sub"}
 	delegate := &recordingSessionCompilerContext{
-		MockCompilerContext: plan.NewMockCompilerContext(false),
+		MockCompilerContext: plan.NewMockCompilerContext(false, nil),
 		snapshot:            snapshot, subscription: subscription,
 		resolvedTableDef: &plan.TableDef{Name: "physical_source"},
 	}
@@ -304,10 +306,10 @@ func TestInternalExecutorViewChildDoesNotMutateParent(t *testing.T) {
 	parentSubscription := &plan.SubscriptionMeta{Name: "parent"}
 	delegate := &isolatedViewTestDelegate{
 		recordingSessionCompilerContext: &recordingSessionCompilerContext{
-			MockCompilerContext:  plan.NewMockCompilerContext(false),
+			MockCompilerContext:  plan.NewMockCompilerContext(false, nil),
 			queryingSubscription: parentSubscription,
 		},
-		child: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)},
+		child: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false, nil)},
 	}
 	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
 	childContext := context.WithValue(original, struct{}{}, "child")
@@ -336,9 +338,9 @@ func TestInternalExecutorViewChildUsesDelegateProcess(t *testing.T) {
 	separate := proc.NewViewBindingProcess(original)
 	defer separate.Free()
 	delegate := &isolatedViewTestDelegate{
-		recordingSessionCompilerContext: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)},
+		recordingSessionCompilerContext: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false, nil)},
 		child: &recordingSessionCompilerContext{
-			MockCompilerContext: plan.NewMockCompilerContext(false), proc: separate,
+			MockCompilerContext: plan.NewMockCompilerContext(false, nil), proc: separate,
 		},
 	}
 	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
@@ -356,7 +358,7 @@ func TestInternalExecutorViewChildPropagatesDelegateFailure(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	original := proc.GetTopContext()
 	delegate := &isolatedViewTestDelegate{
-		recordingSessionCompilerContext: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)},
+		recordingSessionCompilerContext: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false, nil)},
 		err:                             errors.New("cannot create child"),
 	}
 	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
@@ -370,7 +372,7 @@ func TestInternalExecutorViewChildPropagatesDelegateFailure(t *testing.T) {
 func TestInternalExecutorViewChildRejectsUnisolatedDelegate(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	original := proc.GetTopContext()
-	delegate := &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)}
+	delegate := &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false, nil)}
 	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
 	binding, cleanup, err := parent.NewViewDescriptionCompilerContext(original)
 	require.ErrorContains(t, err, "cannot isolate view binding")
@@ -399,7 +401,7 @@ func TestInternalExecutorViewChildWithoutDelegateIsIsolated(t *testing.T) {
 
 func TestInternalExecutorSubscriptionViewWithoutFrontendDelegate(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	relation := mock_frontend.NewMockRelation(ctrl)
 	relation.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{Name: "v"})
 	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42))
@@ -430,7 +432,7 @@ func TestCompilerContext_Database(t *testing.T) {
 	engine.EXPECT().Database(gomock.Any(), "", nil).Return(database, nil).Times(2)
 
 	c := &compilerContext{
-		proc:   testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+		proc:   testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 		engine: engine,
 	}
 
@@ -446,7 +448,7 @@ func TestCompilerContext_Database(t *testing.T) {
 
 func TestCompilerContextBuildTableDefByMoColumns(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	tableDef := &plan.TableDef{
 		Name: "src",
 		Cols: []*plan.ColDef{
@@ -475,7 +477,7 @@ func TestCompilerContextBuildTableDefByMoColumns(t *testing.T) {
 
 func TestCompilerContextBuildTableDefByMoColumnsPropagatesRelationError(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	relationErr := moerr.NewInternalErrorNoCtx("relation failed")
 
 	database := mock_frontend.NewMockDatabase(ctrl)
@@ -495,7 +497,7 @@ func TestCompilerContextBuildTableDefByMoColumnsPropagatesRelationError(t *testi
 
 func TestCompilerContextBuildTableDefByMoColumnsNoSuchTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	database := mock_frontend.NewMockDatabase(ctrl)
 	database.EXPECT().Relation(gomock.Any(), "src", nil).Return(nil, nil)
@@ -531,7 +533,7 @@ func TestCompilerContextResolveDatabaseErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			eng := mock_frontend.NewMockEngine(ctrl)
 			eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(nil, tc.databaseErr)
 
@@ -556,7 +558,7 @@ func TestCompilerContextResolveDatabaseErrors(t *testing.T) {
 
 func TestInternalCompilerContextDropTableIfExistsExpectedEOBNoop(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().Database(gomock.Any(), "gone", gomock.Any()).
 		Return(nil, moerr.GetOkExpectedEOB())
@@ -583,7 +585,7 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 		isSystem, isGlobal bool
 	}
 	var seen []resolved
-	delegate := plan.NewMockCompilerContext(false)
+	delegate := plan.NewMockCompilerContext(false, nil)
 	delegate.ResolveVariableFunc = func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		seen = append(seen, resolved{name, isSystemVar, isGlobalVar})
 		if name == "sql_mode" {
@@ -672,6 +674,30 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	require.Equal(t, plan.Type{}, declared)
 }
 
+func TestCompilerContextDelegatesRegexpNullHistory(t *testing.T) {
+	delegate := plan.NewMockCompilerContext(false, testutil.NewProcess(t))
+	delegate.ResolveVariableRegexpStringResultFunc = func(name string) (bool, error) {
+		if name == "history" {
+			return true, nil
+		}
+		return false, moerr.NewInternalErrorNoCtx("history resolver failed")
+	}
+	attached := &compilerContext{ctx: attachInternalExecutorCompilerContext(context.Background(), delegate)}
+	stringResult, err := attached.ResolveVariableRegexpStringResult("history")
+	require.NoError(t, err)
+	require.True(t, stringResult)
+	_, err = attached.ResolveVariableRegexpStringResult("other")
+	require.ErrorContains(t, err, "history resolver failed")
+	detached := &compilerContext{ctx: context.Background()}
+	stringResult, err = detached.ResolveVariableRegexpStringResult("history")
+	require.NoError(t, err)
+	require.False(t, stringResult)
+	detached.ctx = attachInternalExecutorCompilerContext(context.Background(), detached)
+	stringResult, err = detached.ResolveVariableRegexpStringResult("history")
+	require.NoError(t, err)
+	require.False(t, stringResult)
+}
+
 func TestInternalCompilerPlanConsumesScopedDOP(t *testing.T) {
 	ctx := defines.AttachAccountId(t.Context(), 0)
 	proc := testutil.NewProcess(t)
@@ -743,7 +769,7 @@ func TestInternalCompilerPlanConsumesScopedDOP(t *testing.T) {
 	_, err = compiler.ResolveVariable("max_dop", true, false)
 	require.ErrorContains(t, err, "resolver failed")
 	// An attached frontend delegate controls replay even when the process disagrees.
-	delegate := plan.NewMockCompilerContext(false)
+	delegate := plan.NewMockCompilerContext(false, nil)
 	delegate.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
 		if name == "max_dop" {
 			return int64(2), nil
@@ -821,4 +847,65 @@ func TestInternalCompilerStatsCacheObservations(t *testing.T) {
 	_, err = ctx.StatsWithTableDef(obj, tableDef, nil)
 	require.NoError(t, err)
 	require.Equal(t, before+1, calls, "anonymous overlays cannot retain the 3s fast hit")
+}
+
+type failingStatementWorkspace struct {
+	Ws
+	err      error
+	prepared int
+}
+
+func (w *failingStatementWorkspace) IncrStatementID(context.Context, bool) error {
+	w.prepared++
+	return w.err
+}
+
+type deferredRollbackTxn struct {
+	client.TxnOperator
+	sealed error
+}
+
+func (op *deferredRollbackTxn) RollbackAfterRunningSQL(err error) { op.sealed = err }
+
+func (op *deferredRollbackTxn) TryEnterRunSqlWithTokenAndSQL(context.CancelFunc, string) (uint64, error) {
+	if op.sealed != nil {
+		return 0, moerr.NewTxnClosedNoCtx(nil)
+	}
+	return 1, nil
+}
+func (op *deferredRollbackTxn) ExitRunSqlWithToken(uint64) {}
+
+func TestBorrowedExecutorSealsFatalErrorBeforeCallbackCanSuppressIt(t *testing.T) {
+	for _, fatal := range []bool{false, true} {
+		t.Run(map[bool]string{false: "statement error", true: "joined fatal error"}[fatal], func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mock := mock_frontend.NewMockTxnOperator(ctrl)
+			failure := error(moerr.NewInternalErrorNoCtx("statement failed"))
+			if fatal {
+				failure = errors.Join(failure, fmt.Errorf("lock owner: %w", moerr.NewLockConflictNoCtx()))
+			}
+			mock.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic}).AnyTimes()
+			workspace := &failingStatementWorkspace{err: failure}
+			mock.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+			owner := &deferredRollbackTxn{TxnOperator: mock}
+			exec := &txnExecutor{ctx: context.Background(), opts: executor.Options{}.WithTxn(owner)}
+			// Simulate a callback that catches Exec's error and returns success.
+			callback := func() error {
+				_, err := exec.Exec("select 1", executor.StatementOption{})
+				require.ErrorIs(t, err, failure)
+				if fatal {
+					require.ErrorIs(t, owner.sealed, failure)
+				} else {
+					require.NoError(t, owner.sealed)
+				}
+				if fatal {
+					_, nextErr := exec.Exec("select 2", executor.StatementOption{})
+					require.True(t, moerr.IsMoErrCode(nextErr, moerr.ErrTxnClosed))
+					require.Equal(t, 1, workspace.prepared, "sealed transaction cannot prepare another statement")
+				}
+				return nil
+			}
+			require.NoError(t, callback())
+		})
+	}
 }

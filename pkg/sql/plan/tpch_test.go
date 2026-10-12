@@ -42,7 +42,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 		t.Errorf("DDL Parser failed, error %v", err)
 	}
 
-	mock := NewEmptyMockOptimizer()
+	mock := NewEmptyMockOptimizer(newPlanTestProcess(t))
 	for _, ast := range ddls {
 		_, err := mock.Optimize(ast)
 		if err != nil {
@@ -50,7 +50,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 		}
 	}
 
-	mock = NewMockOptimizer(false)
+	mock = NewMockOptimizer(false, newPlanTestProcess(t))
 	// test simple sql
 	qf, err := os.ReadFile(dir + "/tpch/simple.sql")
 	if err != nil {

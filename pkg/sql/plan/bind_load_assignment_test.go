@@ -39,7 +39,7 @@ func TestLoadAssignmentIgnorePolicy(t *testing.T) {
 }
 
 func TestApplyLoadAssignmentCasts(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	tinyText := planpb.Type{Id: int32(types.T_text), Width: types.MaxTinyTextLen}
 	tinyBlob := planpb.Type{Id: int32(types.T_blob), Width: types.MaxTinyTextLen}
 	intType := planpb.Type{Id: int32(types.T_int32)}

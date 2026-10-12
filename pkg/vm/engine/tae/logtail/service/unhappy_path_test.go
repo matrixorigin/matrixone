@@ -626,15 +626,10 @@ func TestTransportProbePreservesSubscriptionProgress(t *testing.T) {
 	subscribedAt := timestamp.Timestamp{PhysicalTime: 20}
 	session, transport := newTransportProbeTestSession(t, from, from)
 
-	response := session.responses.Acquire()
-	response.Response = newSubscritpionResponse(
-		mockLogtail(mockTable(1, 1, 1), subscribedAt),
-	)
-	session.sendChan <- message{
-		createAt: time.Now(),
-		timeout:  time.Second,
-		response: response,
-	}
+	require.NoError(t, session.SendSubscriptionResponse(
+		t.Context(), mockLogtail(mockTable(1, 1, 1), subscribedAt), nil,
+	))
+	require.Equal(t, from, session.sentThrough, "enqueue must not certify a successful transport write")
 
 	result, err := session.sendProbeOrPending(0)
 	require.NoError(t, err)
@@ -656,6 +651,17 @@ func TestTransportProbePreservesSubscriptionProgress(t *testing.T) {
 	require.NotNil(t, heartbeat.To)
 	require.Equal(t, subscribedAt, *heartbeat.From)
 	require.Equal(t, subscribedAt, *heartbeat.To)
+	// The first subscription must initialize admission too, so a subsequent
+	// barrier cannot mistake its newer target for already applied progress.
+	newer := timestamp.Timestamp{PhysicalTime: 30}
+	require.NoError(t, session.TrySendProgressResponse(t.Context(), newer))
+	result, err = session.sendProbeOrPending(2)
+	require.NoError(t, err)
+	require.Equal(t, probeWroteQueuedResponse, result)
+	progress := receiveCapturedLogtailResponse(t, transport).GetUpdateResponse()
+	require.NotNil(t, progress)
+	require.Equal(t, subscribedAt, *progress.From)
+	require.Equal(t, newer, *progress.To)
 }
 
 func TestFailedQueuedUpdateDoesNotAdvanceSentProgress(t *testing.T) {
@@ -964,6 +970,8 @@ func TestCompleteSubscriptionDoesNotWaitForFullSessionQueue(t *testing.T) {
 		progressTimer:    time.NewTimer(time.Hour),
 	}
 	t.Cleanup(session.PostClean)
+	initial := timestamp.Timestamp{PhysicalTime: 10}
+	session.publishInit.Do(func() { session.exactFrom = initial })
 
 	// Keep the queue full without a sender goroutine. The completion path must
 	// reject this session synchronously instead of waiting for poisonTime.
@@ -977,7 +985,7 @@ func TestCompleteSubscriptionDoesNotWaitForFullSessionQueue(t *testing.T) {
 	go func() {
 		completed, err := session.CompleteSubscription(
 			context.Background(), id, 1,
-			mockLogtail(table, timestamp.Timestamp{PhysicalTime: 1}),
+			mockLogtail(table, timestamp.Timestamp{PhysicalTime: 20}),
 			func() { released.Add(1) },
 		)
 		done <- result{completed: completed, err: err}
@@ -994,6 +1002,8 @@ func TestCompleteSubscriptionDoesNotWaitForFullSessionQueue(t *testing.T) {
 	}
 	require.Equal(t, int32(1), released.Load())
 	require.Zero(t, session.Active())
+	require.Equal(t, initial, session.exactFrom,
+		"failed subscription admission must not certify unapplied progress")
 	require.Equal(t, TableNotFound, session.Unregister(id),
 		"failed response hand-off must roll back the subscription generation")
 	require.ErrorIs(t, transport.ctx.Err(), context.Canceled,

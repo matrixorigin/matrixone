@@ -69,7 +69,7 @@ func evalConstUint64(t *testing.T, cc *MockCompilerContext, expr *planpb.Expr) u
 // function, since a wrong comparison operator (< vs <=) only shows up exactly there.
 func TestOverFetchLimitExprMatchesGoFormula(t *testing.T) {
 	ctx := context.Background()
-	cc := NewMockCompilerContext(true)
+	cc := NewMockCompilerContext(true, newPlanTestProcess(t))
 
 	// Sweep every k up to past the last bucket, then a few large ones. The dense
 	// sweep matters: the float-truncation divergence between Go and SQL CAST only
@@ -124,7 +124,7 @@ func TestOverFetchLimitExprMatchesGoFormula(t *testing.T) {
 func TestPreparedOverFetchKeepsUnsignedLimitDomain(t *testing.T) {
 	ctx := context.Background()
 	astLimit := parseLimit(t, "SELECT 1 LIMIT ?")
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	builder.isPrepareStatement = true
 	limit, err := NewLimitBinder(builder, bindCtx, false).BindExpr(astLimit.Count, 0, true)
 	require.NoError(t, err)
@@ -150,7 +150,7 @@ func TestPreparedOverFetchKeepsUnsignedLimitDomain(t *testing.T) {
 			rebound, err := rule.ApplyExpr(DeepCopyExpr(budget))
 			require.NoError(t, err)
 			require.Equal(t, types.T_uint64, types.T(rebound.Typ.Id))
-			require.Equal(t, overfetch.PostFilterLimit(2), evalConstUint64(t, NewMockCompilerContext(true), rebound))
+			require.Equal(t, overfetch.PostFilterLimit(2), evalConstUint64(t, NewMockCompilerContext(true, newPlanTestProcess(t)), rebound))
 		})
 	}
 }
@@ -171,7 +171,7 @@ func TestPreparedOverFetchKeepsUnsignedLimitDomain(t *testing.T) {
 // evaluating node.Limit would disagree with a new CN computing it in Go.
 func TestOverFetchLimitExprSaturationBoundaries(t *testing.T) {
 	ctx := context.Background()
-	cc := NewMockCompilerContext(true)
+	cc := NewMockCompilerContext(true, newPlanTestProcess(t))
 
 	cases := []struct {
 		k    uint64

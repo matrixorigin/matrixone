@@ -44,7 +44,7 @@ type fixture struct {
 
 func newFixture(t *testing.T, limit uint64) *fixture {
 	t.Helper()
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<16)
 	require.NoError(t, err)

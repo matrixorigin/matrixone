@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
@@ -152,6 +153,86 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 	return ret, nil
 }
 
+// getColumnTypeFromAst resolves a DDL declaration before applying its charset's
+// byte budget. Expression and CAST types deliberately keep their wider domain.
+func getColumnTypeFromAst(
+	ctx context.Context,
+	column *tree.ColumnTableDef,
+	tableCharset uint32,
+	replay *persistedDDLReplay,
+) (plan.Type, error) {
+	astType, isVarchar := column.Type.(*tree.T)
+	isVarchar = isVarchar && strings.EqualFold(astType.InternalType.FamilyString, "varchar")
+	internal := defines.IsInternalExecutor(ctx)
+	parseType := column.Type
+	if isVarchar && !internal && astType.InternalType.DisplayWith > types.MaxVarcharLen {
+		// Resolve all other type properties through the common parser, but leave
+		// DDL VARCHAR capacity errors to the final charset-aware admission rule.
+		// Copy the AST so CAST/expression consumers and reconstruction are untouched.
+		bounded := *astType
+		bounded.InternalType.DisplayWith = types.MaxVarcharLen
+		parseType = &bounded
+	}
+	typ, err := getTypeFromAst(ctx, parseType)
+	if err != nil {
+		return plan.Type{}, err
+	}
+	if isVarchar && astType.InternalType.DisplayWith > types.MaxVarcharLen {
+		typ.Width = astType.InternalType.DisplayWith
+	}
+	if err = applyDefaultAndColumnAttributesToType(ctx, &typ, tableCharset, column.Attributes); err != nil {
+		return plan.Type{}, err
+	}
+	if internal {
+		// Trusted internal DDL includes bootstrap and versioned catalog upgrades.
+		// Preserve those schemas and their historical omitted-length defaults.
+		return typ, nil
+	}
+	maxWidth := int32(types.MaxVarcharLen)
+	switch types.T(typ.Id) {
+	case types.T_varchar:
+		charset := typ.Charset
+		if charset == uint32(types.CharsetLegacy) {
+			// Legacy catalogs lack a charset identity, but text is still UTF-8.
+			charset = uint32(types.CharsetUTF8)
+		}
+		definition, err := collation.EffectiveDefinition(charset, typ.CollationVersion)
+		if err != nil {
+			return plan.Type{}, err
+		}
+		maxWidth /= definition.Charset.MaxBytes()
+	case types.T_varbinary:
+		if !isVarchar {
+			return typ, nil
+		}
+	default:
+		return typ, nil
+	}
+	if astType, ok := column.Type.(*tree.T); ok && astType.InternalType.DisplayWith == -1 {
+		// Preserve MO's omitted-length syntax without publishing an oversized
+		// default column. This must happen after binary charset conversion.
+		typ.Width = maxWidth
+	}
+	if typ.Width > maxWidth {
+		if replay != nil && typ.Width <= types.MaxVarcharLen {
+			if preserved := replay.columns[strings.ToLower(column.Name.ColName())]; preserved != nil {
+				old := preserved.columnType
+				// Internal LIKE/COPY reconstruction may retain a pre-existing
+				// oversized column, never a new or changed declaration. LIKE
+				// renders legacy bytewise text as explicit utf8mb4_bin.
+				if old.Id == typ.Id && old.Width == typ.Width &&
+					old.CollationVersion == typ.CollationVersion &&
+					(old.Charset == typ.Charset || old.Charset == uint32(types.CharsetLegacy) &&
+						typ.Charset == uint32(types.CharsetUTF8MB4Bin)) {
+					return typ, nil
+				}
+			}
+		}
+		return plan.Type{}, moerr.NewTooBigFieldLength(ctx, column.Name.ColNameOrigin(), maxWidth)
+	}
+	return typ, nil
+}
+
 func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeReference) (plan.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
 		switch defines.MysqlType(n.InternalType.Oid) {
@@ -167,7 +248,7 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 				return plan.Type{Id: int32(types.T_uint16), Width: n.InternalType.Width, Scale: -1}, nil
 			}
 			return plan.Type{Id: int32(types.T_int16), Width: n.InternalType.Width, Scale: -1}, nil
-		case defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_INT24:
+		case defines.MYSQL_TYPE_LONG:
 			if n.InternalType.Unsigned {
 				return plan.Type{Id: int32(types.T_uint32), Width: n.InternalType.Width, Scale: -1}, nil
 			}
@@ -481,6 +562,9 @@ func applyTextCharsetToPlanType(typ *plan.Type, charset uint32) {
 	switch types.T(typ.Id) {
 	case types.T_char, types.T_varchar, types.T_text:
 		typ.Charset = charset
+		if types.IsUnicodeCollation(uint8(charset)) {
+			typ.CollationVersion = uint32(types.CollationVersionV1)
+		}
 	}
 }
 
@@ -506,36 +590,20 @@ func applyCharsetToPlanType(typ *plan.Type, charset uint32) {
 }
 
 func charsetForName(name string) (uint32, bool) {
-	switch strings.ToLower(name) {
-	case "binary":
-		return uint32(types.CharsetBinary), true
-	case "utf8", "utf8mb3", "utf8mb4", "latin1", "ascii":
-		// MatrixOne stores text as UTF-8. Accept MySQL's single-byte charset
-		// spellings for DDL compatibility and normalize them to the supported
-		// general-ci text identity rather than pretending to preserve encoding.
-		return uint32(types.CharsetUTF8), true
-	default:
-		return 0, false
-	}
+	identity, ok := collation.ResolveDDLCharset(name)
+	return uint32(identity), ok
 }
 
 func collationForName(name string) (uint32, bool) {
-	switch strings.ToLower(name) {
-	case "binary":
-		return uint32(types.CharsetBinary), true
-	case "utf8_bin", "utf8mb3_bin", "utf8mb4_bin":
-		return uint32(types.CharsetUTF8MB4Bin), true
-	case "utf8_general_ci", "utf8mb3_general_ci", "utf8mb4_general_ci", "utf8mb4_0900_ai_ci",
-		"latin1_swedish_ci", "ascii_general_ci":
-		// MySQL 8 uses utf8mb4_0900_ai_ci by default. Accept that exact spelling
-		// as a DDL compatibility alias, but normalize it to MatrixOne's existing
-		// general-ci identity instead of claiming native UCA 9.0 semantics.
-		return uint32(types.CharsetUTF8), true
-	default:
-		// Do not silently alias other advertised UCA/0900 collations to either
-		// legacy general_ci or byte ordering. Their weight and padding contracts differ.
-		return 0, false
+	// Native Unicode collations are executable only through their versioned
+	// identity. Resolve them directly instead of the legacy SQL admission path,
+	// which intentionally maps compatible spellings such as utf8mb4_0900_ai_ci
+	// to general_ci.
+	if definition, ok := collation.Lookup(name); ok && definition.Semantics == collation.UCA400 {
+		return uint32(definition.Identity), true
 	}
+	identity, ok := collation.ResolveDDLCollation(name)
+	return uint32(identity), ok
 }
 
 func unsupportedCollationError(ctx context.Context, name string) error {
@@ -545,10 +613,7 @@ func unsupportedCollationError(ctx context.Context, name string) error {
 	// keeping the rejected spelling would falsely promise MySQL UCA semantics.
 	var replacement string
 	switch strings.ToLower(name) {
-	case "utf8_unicode_ci", "utf8mb3_unicode_ci":
-		replacement = "utf8_general_ci"
-	case "utf8mb4_unicode_ci",
-		"utf8mb4_de_pb_0900_ai_ci", "utf8mb4_is_0900_ai_ci", "utf8mb4_lv_0900_ai_ci":
+	case "utf8mb4_de_pb_0900_ai_ci", "utf8mb4_is_0900_ai_ci", "utf8mb4_lv_0900_ai_ci":
 		replacement = "utf8mb4_general_ci"
 	case "utf8mb4_0900_bin":
 		replacement = "utf8mb4_bin"
@@ -566,11 +631,26 @@ func applyTableDefaultCharsetToPlanType(typ *plan.Type, charset uint32) {
 }
 
 func charsetAndCollationCompatible(charset, collation string) bool {
-	charset = canonicalCharsetName(charset)
+	rawCharset := strings.ToLower(charset)
 	collation = strings.ToLower(collation)
-	if charset == "binary" || collation == "binary" {
-		return charset == collation
+	if rawCharset == "binary" || collation == "binary" {
+		return rawCharset == collation
 	}
+	// The native UCA 4.0.0 identities retain MySQL's distinct utf8mb3 and
+	// utf8mb4 repertoire contracts. Do not let the compatibility canonicalizer
+	// collapse them into one general_ci family.
+	if separator := strings.IndexByte(collation, '_'); separator > 0 {
+		collationCharset := collation[:separator]
+		if strings.HasSuffix(collation, "_unicode_ci") {
+			switch collationCharset {
+			case "utf8", "utf8mb3":
+				return rawCharset == "utf8" || rawCharset == "utf8mb3"
+			case "utf8mb4":
+				return rawCharset == "utf8mb4"
+			}
+		}
+	}
+	charset = canonicalCharsetName(rawCharset)
 	if separator := strings.IndexByte(collation, '_'); separator > 0 {
 		return canonicalCharsetName(collation[:separator]) == charset
 	}
@@ -578,14 +658,11 @@ func charsetAndCollationCompatible(charset, collation string) bool {
 }
 
 func canonicalCharsetName(name string) string {
-	switch strings.ToLower(name) {
-	case "utf8", "utf8mb3", "utf8mb4":
-		// MatrixOne implements the accepted utf8/utf8mb3/utf8mb4 general_ci
-		// and _bin spellings with the same internal collation identities.
-		return "utf8mb4"
-	default:
-		return strings.ToLower(name)
+	if identity, ok := collation.ResolveDDLCharset(name); ok {
+		d, _ := collation.EffectiveDefinition(uint32(identity), 0)
+		return d.Charset.Name()
 	}
+	return collation.CanonicalCharsetName(name)
 }
 
 func tableDefaultCharset(ctx CompilerContext, options []tree.TableOption) (uint32, error) {
@@ -648,6 +725,130 @@ func tableDefaultCharset(ctx CompilerContext, options []tree.TableOption) (uint3
 
 func buildDefaultExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {
 	return buildDefaultExprWithColumns(bindCtx, col, typ, proc, nil)
+}
+
+func legacyImplicitTimestampDefaults(ctx CompilerContext) bool {
+	if ctx == nil {
+		return false
+	}
+	value, err := ctx.ResolveVariable("explicit_defaults_for_timestamp", true, false)
+	if err != nil {
+		return false
+	}
+	switch value := value.(type) {
+	case int:
+		return value == 0
+	case int8:
+		return value == 0
+	case int32:
+		return value == 0
+	case int64:
+		return value == 0
+	case uint:
+		return value == 0
+	case uint8:
+		return value == 0
+	case uint32:
+		return value == 0
+	case uint64:
+		return value == 0
+	case bool:
+		return !value
+	default:
+		return false
+	}
+}
+
+func hasExplicitNullableAttribute(col *tree.ColumnTableDef) bool {
+	for _, attr := range col.Attributes {
+		if nullAttr, ok := attr.(*tree.AttributeNull); ok && nullAttr.Is {
+			return true
+		}
+	}
+	return false
+}
+
+func hasExplicitDefaultAttribute(col *tree.ColumnTableDef) bool {
+	for _, attr := range col.Attributes {
+		if defaultAttr, ok := attr.(*tree.AttributeDefault); ok && defaultAttr.Expr != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func buildImplicitCurrentTimestampExpr(typ plan.Type, proc *process.Process) (*plan.Expr, error) {
+	ast := &tree.FuncExpr{
+		Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("current_timestamp")),
+		Exprs: tree.Exprs{tree.NewNumVal(int64(typ.Scale), fmt.Sprint(typ.Scale), false, tree.P_int64)},
+	}
+	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
+	bound, err := binder.BindExpr(ast, 0, false)
+	if err != nil {
+		return nil, err
+	}
+	return makePlan2AssignmentCastExpr(proc.Ctx, bound, typ)
+}
+
+func buildImplicitCurrentTimestampDefault(typ plan.Type, proc *process.Process) (*plan.Default, error) {
+	expr, err := buildImplicitCurrentTimestampExpr(typ, proc)
+	if err != nil {
+		return nil, err
+	}
+	return &plan.Default{NullAbility: false, Expr: expr, OriginString: "CURRENT_TIMESTAMP()"}, nil
+}
+
+// isLegacyImplicitTimestampColumn identifies a non-nullable TIMESTAMP under
+// the legacy explicit_defaults_for_timestamp=OFF assignment rule. The rule is
+// about the effective column policy, not the exact CURRENT_TIMESTAMP strings
+// produced by one DDL path; persisted and explicitly-defaulted definitions
+// must follow the same NULL assignment semantics.
+func isLegacyImplicitTimestampColumn(ctx CompilerContext, col *plan.ColDef) bool {
+	return legacyImplicitTimestampDefaults(ctx) && col != nil &&
+		types.T(col.Typ.Id) == types.T_timestamp &&
+		col.Default != nil && !col.Default.NullAbility
+}
+
+// buildLegacyTimestampNullAssignment implements the legacy MySQL assignment
+// rule. NULL assigned to a non-nullable TIMESTAMP is the current timestamp;
+// it is not the column's literal DEFAULT value. Keep this policy at the DML
+// assignment boundary so INSERT, UPDATE and duplicate-key UPDATE agree.
+func buildLegacyTimestampNullAssignment(ctx CompilerContext, col *plan.ColDef) (*plan.Expr, error) {
+	if !isLegacyImplicitTimestampColumn(ctx, col) {
+		return nil, nil
+	}
+	return buildImplicitCurrentTimestampExpr(col.Typ, ctx.GetProcess())
+}
+
+// wrapLegacyTimestampAssignment applies the same rule to runtime NULLs (for
+// example a source-column or prepared parameter), which cannot be recognized
+// from the AST. Repeated volatile operands share the existing expression-local
+// memo owner; deterministic column/literal operands need no additional state.
+func (builder *QueryBuilder) wrapLegacyTimestampAssignment(col *plan.ColDef, expr *plan.Expr) (*plan.Expr, error) {
+	ctx := builder.compCtx
+	if !isLegacyImplicitTimestampColumn(ctx, col) || expr == nil {
+		return expr, nil
+	}
+	source := DeepCopyExpr(expr)
+	if containsVolatileFunction(source) {
+		binder := &baseBinder{builder: builder, sysCtx: ctx.GetContext()}
+		memoID, err := binder.allocateVolatileExprMemoID()
+		if err != nil {
+			return nil, err
+		}
+		source.AuxId = memoID
+	}
+	nullExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(source)})
+	if err != nil {
+		return nil, err
+	}
+	currentExpr, err := buildImplicitCurrentTimestampExpr(col.Typ, ctx.GetProcess())
+	if err != nil {
+		return nil, err
+	}
+	return BindFuncExprImplByPlanExpr(ctx.GetContext(), "if", []*plan.Expr{
+		nullExpr, currentExpr, source,
+	})
 }
 
 // buildDefaultExprWithColumns is the scoped form of buildDefaultExpr.  The
@@ -744,6 +945,19 @@ func buildDefaultExprWithColumns(
 	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
 	if err != nil {
 		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
+	}
+	if typ.Id == int32(types.T_timestamp) && newExpr.GetLit() != nil &&
+		!newExpr.GetLit().Isnull && newExpr.GetLit().GetTimestampval() == int64(types.ZeroTimestamp) {
+		var mode interface{} = proc.GetSessionInfo().SqlMode
+		if resolve := proc.GetResolveVariableFunc(); resolve != nil {
+			mode, err = resolve("sql_mode", true, false)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if process.IsStrictNoZeroDateMode(mode) {
+			return nil, moerr.NewErrInvalidDefault(bindCtx, colNameOrigin)
+		}
 	}
 
 	if lit := newExpr.GetLit(); lit != nil && exprContainsHexOverload(defaultExpr, 0) {
@@ -2441,7 +2655,7 @@ func hasParamExprReflectively(value reflect.Value, visited map[paramExprVisit]st
 		}
 		return hasParamExprReflectively(value.Elem(), visited)
 
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if value.IsNil() {
 			return false
 		}

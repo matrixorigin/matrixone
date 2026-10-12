@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -174,7 +175,7 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := buildTestShowCreateTable(tt.sql)
+			got, err := buildTestShowCreateTable(t, tt.sql)
 			if err != nil {
 				t.Fatalf("test name:%v, err: %+v, sql=%v", tt.name, err, tt.sql)
 			}
@@ -187,7 +188,7 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 }
 
 func Test_buildShowCreateTableSpatialIndex(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE spatial_src (
 		id INT NOT NULL,
 		g POINT NOT NULL,
@@ -211,7 +212,7 @@ func Test_buildShowCreateTableSpatialIndex(t *testing.T) {
 }
 
 func TestShowCreateTablePreservesInvisibleIndexes(t *testing.T) {
-	got, err := buildTestShowCreateTable(`CREATE TABLE invisible_show_src (
+	got, err := buildTestShowCreateTable(t, `CREATE TABLE invisible_show_src (
 		id INT PRIMARY KEY,
 		name VARCHAR(191),
 		body TEXT,
@@ -224,7 +225,7 @@ func TestShowCreateTablePreservesInvisibleIndexes(t *testing.T) {
 }
 
 func TestShowCreateTableUsesVisibleSystemIndexWithoutCatalogRow(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE legacy_mo_tables (
 		id INT PRIMARY KEY,
 		rel_logical_id BIGINT,
@@ -247,7 +248,7 @@ func TestShowCreateTableUsesVisibleSystemIndexWithoutCatalogRow(t *testing.T) {
 }
 
 func TestShowCreateTablePreservesIndexPrefixLengths(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE prefix_show_src (
 		id INT PRIMARY KEY,
 		name VARCHAR(191),
@@ -268,7 +269,7 @@ func TestShowCreateTablePreservesIndexPrefixLengths(t *testing.T) {
 }
 
 func TestCreateAndAlterCopyTablePreserveIndexVisibility(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE visibility_src (
 		id INT PRIMARY KEY,
 		a INT,
@@ -297,7 +298,7 @@ func TestCreateAndAlterCopyTablePreserveIndexVisibility(t *testing.T) {
 }
 
 func TestConstructCreateTableSQLDefaultsAmbiguousIndexVisibilityToVisible(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE legacy_visibility_src (
 		id INT PRIMARY KEY,
 		a INT,
@@ -321,7 +322,7 @@ func TestConstructCreateTableSQLDefaultsAmbiguousIndexVisibilityToVisible(t *tes
 }
 
 func TestConstructCreateTableSQLDoesNotMutateIndexComments(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE comment_src (
 		id INT PRIMARY KEY,
 		KEY idx_id (id)
@@ -341,7 +342,7 @@ func TestConstructCreateTableSQLDoesNotMutateIndexComments(t *testing.T) {
 }
 
 func TestConstructCreateTableSQLRoundTripsIndexCommentEscaping(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	const comment = `index's comment\with unicode 维度`
 	// The doubled backslash is the SQL spelling that the MySQL scanner reads as
 	// one semantic backslash on the inline CREATE path.
@@ -365,7 +366,7 @@ func TestConstructCreateTableSQLRoundTripsIndexCommentEscaping(t *testing.T) {
 }
 
 func TestShowCreateTableTransportPreservesIndexCommentBackslash(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	const comment = `index's comment\with unicode 维度`
 	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE show_transport_comment (
 		id INT PRIMARY KEY,
@@ -396,7 +397,7 @@ func TestShowCreateTableTransportPreservesIndexCommentBackslash(t *testing.T) {
 }
 
 func TestShowCreateTableTransportPreservesBackslashControls(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	for _, tc := range []struct {
 		name    string
 		comment string
@@ -425,7 +426,7 @@ func TestShowCreateTableTransportPreservesBackslashControls(t *testing.T) {
 }
 
 func TestAlterAddIndexCommentParserPreservesBackslash(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	statements, err := mysql.Parse(mock.ctxt.GetContext(), `ALTER TABLE comment_roundtrip ADD KEY idx_note(note) COMMENT 'index''s comment\\with unicode 维度'`, 1)
 	require.NoError(t, err)
 	require.Len(t, statements, 1)
@@ -441,7 +442,7 @@ func TestAlterAddIndexCommentParserPreservesBackslash(t *testing.T) {
 }
 
 func Test_ShowCreateTableUsesIncludedColumnsFromIndexDef(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE vector_src (
 		id INT NOT NULL,
 		embedding VECF32(3),
@@ -465,7 +466,7 @@ func Test_ShowCreateTableUsesIncludedColumnsFromIndexDef(t *testing.T) {
 }
 
 func Test_ShowCreateTableQuotesIncludedColumns(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE vector_src_reserved (
 		id INT NOT NULL,
 		embedding VECF32(3),
@@ -496,7 +497,7 @@ func Test_ShowCreateTableRendersSingleIncludeWhenAlgoParamsAlsoCarryIncludeColum
 		{name: "ivfpq", algo: catalog.MoIndexIvfpqAlgo.ToString()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE vector_src_gpu (
 				id INT NOT NULL,
 				embedding VECF32(3),
@@ -531,7 +532,7 @@ func Test_ShowCreateTableRendersLegacyAlgoParamsIncludeColumns(t *testing.T) {
 		{name: "ivfpq", algo: catalog.MoIndexIvfpqAlgo.ToString()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE vector_src_gpu (
 				id INT NOT NULL,
 				embedding VECF32(3),
@@ -566,7 +567,7 @@ func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
 		CONSTRAINT chk_score CHECK (c_score IS NULL OR (c_score >= 0 AND c_score <= 100))
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
 
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef, err := buildTestCreateTableStmt(mock, sql)
 	if err != nil {
 		t.Fatalf("build create table failed: %+v", err)
@@ -589,7 +590,7 @@ func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
 }
 
 func TestConstructCreateTableSQLUsesStructuredColumnCheck(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef, err := buildTestCreateTableStmt(
 		mock,
 		"create table t(a int constraint positive_a check (a > 0))",
@@ -609,7 +610,7 @@ func TestConstructCreateTableSQLUsesStructuredColumnCheck(t *testing.T) {
 
 func TestConstructCreateTableSQLPreservesCheckAcrossSQLModes(t *testing.T) {
 	build := func(sql, sqlMode string) *plan.TableDef {
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		mock.ctxt.SetSqlModeOverride(sqlMode)
 		stmt, err := parsers.ParseOneWithSQLMode(
 			context.Background(),
@@ -767,7 +768,7 @@ func Test_SingleShowCreateTable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := buildTestShowCreateTable(tt.sql)
+			got, err := buildTestShowCreateTable(t, tt.sql)
 			if err != nil {
 				t.Fatalf("test name:%v, err: %+v, sql=%v", tt.name, err, tt.sql)
 			}
@@ -780,7 +781,7 @@ func Test_SingleShowCreateTable(t *testing.T) {
 }
 
 func TestConstructCreateTableSQLPreservesPropertyQuotes(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	const sourceSQL = `create table property_source (id int) properties('key"with''quote\\slash' = 'value"with''quote\\slash')`
 
 	sourceDef, err := buildTestCreateTableStmt(mock, sourceSQL)
@@ -814,7 +815,7 @@ func TestConstructCreateTableSQLPreservesPropertiesAcrossSQLModes(t *testing.T) 
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.SetSqlModeOverride(tc.mode)
 			sourceStmt, err := mysql.ParseOneWithSQLMode(t.Context(), tc.sourceSQL, 1, tc.mode)
 			require.NoError(t, err)
@@ -878,8 +879,8 @@ func buildTestCreateTableStmt(opt Optimizer, sql string) (*TableDef, error) {
 	return definition.CreateTable.TableDef, err
 }
 
-func buildTestShowCreateTable(sql string) (string, error) {
-	mock := NewMockOptimizer(false)
+func buildTestShowCreateTable(t testing.TB, sql string) (string, error) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef, err := buildTestCreateTableStmt(mock, sql)
 	if err != nil {
 		return "", err
@@ -895,7 +896,7 @@ func buildTestShowCreateTable(sql string) (string, error) {
 
 func buildTestShowCreateExternalTable(t *testing.T, tableName string, param *tree.ExternParam) string {
 	t.Helper()
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	jsonBytes, err := json.Marshal(param)
 	require.NoError(t, err)
 
@@ -923,7 +924,7 @@ func buildTestShowCreateExternalTable(t *testing.T, tableName string, param *tre
 }
 
 func TestShowCreateIcebergExternalTable(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef := &plan.TableDef{
 		Name:      "gold_orders",
 		TableType: catalog.SystemExternalRel,
@@ -949,7 +950,7 @@ func TestShowCreateIcebergExternalTable(t *testing.T) {
 }
 
 func TestShowCreateMongoDBExternalTable(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef := &plan.TableDef{
 		Name:        "events",
 		TableType:   catalog.SystemExternalRel,
@@ -1219,7 +1220,7 @@ func TestConstructCreateTableSQLPreservesExternalOptionsAcrossSQLModes(t *testin
 		{name: "no backslash escapes", sqlMode: "NO_BACKSLASH_ESCAPES"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.SetSqlModeOverride(tc.sqlMode)
 			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
 				ScanType: tree.INFILE,
@@ -1285,7 +1286,7 @@ func TestConstructCreateTableSQLPreservesS3OptionsAcrossSQLModes(t *testing.T) {
 		{name: "no backslash escapes", sqlMode: "NO_BACKSLASH_ESCAPES"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.SetSqlModeOverride(tc.sqlMode)
 			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
 				ScanType: tree.S3,
@@ -1337,7 +1338,7 @@ func TestConstructCreateTableSQLPreservesMongoOptionsAcrossSQLModes(t *testing.T
 		{name: "no backslash escapes", sqlMode: "NO_BACKSLASH_ESCAPES"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.SetSqlModeOverride(tc.sqlMode)
 			createSQL := sqlmongodb.BuildCreateSQLEnvelope(sqlmongodb.TableMapping{
 				Connection:     connection,
@@ -1423,7 +1424,7 @@ func TestConstructCreateTableSQLPreservesIcebergOptionsAcrossSQLModes(t *testing
 		{name: "no backslash escapes", sqlMode: "NO_BACKSLASH_ESCAPES"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.SetSqlModeOverride(tc.sqlMode)
 			tableDef := &plan.TableDef{
 				Name:      "iceberg_options_" + strings.ReplaceAll(tc.name, " ", "_"),
@@ -1536,7 +1537,7 @@ func TestConstructCreateTableSQLPreservesExternalLineTerminators(t *testing.T) {
 		{name: "crlf", value: "\r\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
 				ScanType: tree.INFILE,
 				Option:   []string{"filepath", "/data/source.csv", "format", tree.CSV},
@@ -1576,7 +1577,7 @@ func TestConstructCreateTableSQLPreservesExternalLineTerminators(t *testing.T) {
 }
 
 func TestShowCreatePreservesTextCollationMetadata(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef, err := buildTestCreateTableStmt(mock, `create table collated_show(
 		bin_text varchar(10),
 		general_text varchar(10) collate utf8mb4_general_ci,
@@ -1594,7 +1595,7 @@ func TestShowCreatePreservesTextCollationMetadata(t *testing.T) {
 }
 
 func TestShowCreateSerializesGeneralCIDefault(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.ResolveVariableFunc = func(name string, isSystem, isGlobal bool) (interface{}, error) {
 		if name == "collation_server" && isSystem && !isGlobal {
 			return "utf8mb4_bin", nil
@@ -1611,7 +1612,7 @@ func TestShowCreateSerializesGeneralCIDefault(t *testing.T) {
 }
 
 func TestCreateSQLWithoutContextSerializesGeneralCIDefault(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef, err := buildTestCreateTableStmt(mock,
 		"create table general_replay(v varchar(10)) collate utf8mb4_general_ci")
 	require.NoError(t, err)
@@ -1622,7 +1623,7 @@ func TestCreateSQLWithoutContextSerializesGeneralCIDefault(t *testing.T) {
 }
 
 func TestShowCreateKeepsLegacyDefaultOutputStable(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef, err := buildTestCreateTableStmt(mock,
 		"create table legacy_show(general_text varchar(10))")
 	require.NoError(t, err)
@@ -1635,7 +1636,7 @@ func TestShowCreateKeepsLegacyDefaultOutputStable(t *testing.T) {
 }
 
 func TestShowCreateRoundTripsMigratedGeneralCIColumnWithLegacyDefault(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.ResolveVariableFunc = func(name string, isSystem, isGlobal bool) (interface{}, error) {
 		if name == "collation_server" && isSystem && !isGlobal {
 			return "utf8mb4_bin", nil
@@ -1659,7 +1660,7 @@ func TestShowCreateRoundTripsMigratedGeneralCIColumnWithLegacyDefault(t *testing
 }
 
 func TestShowCreateDistinguishesMixedLegacyAndGeneralCIColumns(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef, err := buildTestCreateTableStmt(mock,
 		"create table legacy_show(legacy_text varchar(10), general_text varchar(10))")
 	require.NoError(t, err)
@@ -1687,7 +1688,7 @@ func TestShowCreateDistinguishesMixedLegacyAndGeneralCIColumns(t *testing.T) {
 }
 
 func TestShowCreateRoundTripsFullyLegacyBytewiseText(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.ResolveVariableFunc = func(name string, isSystem, isGlobal bool) (interface{}, error) {
 		if name == "collation_server" && isSystem && !isGlobal {
 			return "utf8mb4_general_ci", nil
@@ -1716,7 +1717,7 @@ func TestShowCreateRoundTripsFullyLegacyBytewiseText(t *testing.T) {
 }
 
 func TestShowCreateRoundTripsLegacyColumnWithGeneralDefault(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef, err := buildTestCreateTableStmt(mock,
 		"create table migrated_default(legacy_text varchar(10)) collate utf8mb4_general_ci")
 	require.NoError(t, err)
@@ -1757,4 +1758,72 @@ func textMinForShowCreateTest(t *testing.T, typ plan.Type) string {
 	require.Len(t, results, 1)
 	defer results[0].Free(mp)
 	return string(results[0].GetBytesAt(0))
+}
+
+func TestFormatColTypeBoolean(t *testing.T) {
+	require.Equal(t, "BOOL", types.T_bool.String())
+	for _, width := range []int32{0, 1, 64, -1} {
+		require.Equal(t, "BOOLEAN", FormatColType(plan.Type{Id: int32(types.T_bool), Width: width, Scale: 3}))
+	}
+}
+
+func TestConstructCreateTableSQLScalarRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, members string
+	}{
+		{"default", "", `'UP','Down','O''Brien','Back\\slash','Back\\''quote'`},
+		{"no_backslash_escapes", "NO_BACKSLASH_ESCAPES", `'UP','Down','O''Brien','Back\slash','Back\''quote'`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+			ctx.SetSqlModeOverride(tc.mode)
+			stmt, err := mysql.ParseOneWithSQLMode(t.Context(), fmt.Sprintf(`create table scalar_roundtrip (
+				id int primary key, flag bool default null,
+				enabled boolean not null default true, disabled bool default false,
+				n int unsigned, amount decimal(10,2), integer_flag tinyint(1),
+				empty_enum enum(''), enum_flag enum(%s), set_flag set(%s))`, tc.members, tc.members), 1, tc.mode)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			original := p.GetDdl().GetCreateTable().GetTableDef()
+			for _, name := range []string{"enum_flag", "set_flag"} {
+				require.Equal(t, `UP,Down,O'Brien,Back\slash,Back\'quote`, FindColumn(original.Cols, name).Typ.Enumvalues)
+			}
+			for _, compilerCtx := range []CompilerContext{ctx, nil} {
+				replayMode := tc.mode
+				if compilerCtx == nil {
+					// Background consumers deliberately emit default-mode SQL.
+					replayMode = ""
+				}
+				sql, rewritten, err := ConstructCreateTableSQL(compilerCtx, original, nil, false, nil)
+				require.NoError(t, err)
+				if rewritten != nil {
+					t.Cleanup(rewritten.Free)
+				}
+				require.Contains(t, sql, "`flag` boolean DEFAULT NULL")
+				require.Contains(t, sql, "`empty_enum` enum('')")
+				parsed, err := mysql.ParseOneWithSQLMode(t.Context(), sql, 1, replayMode)
+				require.NoError(t, err)
+				func() {
+					defer parsed.Free()
+					replayed, err := BuildPlan(ctx, parsed, false)
+					require.NoError(t, err)
+					cols := replayed.GetDdl().GetCreateTable().GetTableDef().Cols
+					for _, name := range []string{"flag", "enabled", "disabled", "n", "amount", "integer_flag", "empty_enum", "enum_flag", "set_flag"} {
+						before, after := FindColumn(original.Cols, name), FindColumn(cols, name)
+						require.NotNil(t, after, name)
+						require.Equal(t, before.Typ, after.Typ, name)
+						require.Equal(t, before.Default.NullAbility, after.Default.NullAbility, name)
+						if types.T(before.Typ.Id) == types.T_bool {
+							require.Equal(t, before.Default.Expr, after.Default.Expr, name)
+						}
+					}
+					for _, name := range []string{"flag", "enabled", "disabled"} {
+						require.Equal(t, int32(types.T_bool), FindColumn(cols, name).Typ.Id)
+					}
+				}()
+			}
+		})
+	}
 }

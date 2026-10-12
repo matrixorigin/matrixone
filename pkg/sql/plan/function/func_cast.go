@@ -334,16 +334,9 @@ func floatToUint64Explicit[T constraints.Float](
 			continue
 		}
 		floatValue := float64(value)
-		rounded := math.RoundToEven(floatValue)
-		if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
-			rounded < -math.Exp2(63) || rounded >= math.Exp2(64) {
-			return moerr.NewOutOfRangeNoCtxf("uint64", "value '%s'", strconv.FormatFloat(floatValue, 'g', -1, 64))
-		}
-		var converted uint64
-		if rounded < 0 {
-			converted = uint64(int64(rounded))
-		} else {
-			converted = uint64(rounded)
+		converted, err := explicitFloatToUint64(floatValue)
+		if err != nil {
+			return err
 		}
 		if err := to.Append(converted, false); err != nil {
 			return err
@@ -366,16 +359,72 @@ func floatToInt64Explicit[T constraints.Float](
 			continue
 		}
 		floatValue := float64(value)
-		rounded := math.RoundToEven(floatValue)
-		if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
-			rounded < -math.Exp2(63) || rounded >= math.Exp2(63) {
-			return moerr.NewOutOfRangeNoCtxf("int64", "value '%s'", strconv.FormatFloat(floatValue, 'g', -1, 64))
+		converted, err := explicitFloatToInt64(floatValue)
+		if err != nil {
+			return err
 		}
-		if err := to.Append(int64(rounded), false); err != nil {
+		if err := to.Append(converted, false); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func explicitFloatToUint64(value float64) (uint64, error) {
+	rounded := math.RoundToEven(value)
+	if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
+		rounded < -math.Exp2(63) || rounded >= math.Exp2(64) {
+		return 0, moerr.NewOutOfRangeNoCtxf("uint64", "value '%s'", strconv.FormatFloat(value, 'g', -1, 64))
+	}
+	if rounded < 0 {
+		return uint64(int64(rounded)), nil
+	}
+	return uint64(rounded), nil
+}
+
+func explicitFloatToInt64(value float64) (int64, error) {
+	rounded := math.RoundToEven(value)
+	if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
+		rounded < -math.Exp2(63) || rounded >= math.Exp2(63) {
+		return 0, moerr.NewOutOfRangeNoCtxf("int64", "value '%s'", strconv.FormatFloat(value, 'g', -1, 64))
+	}
+	return int64(rounded), nil
+}
+
+func preparedFloatToUint64(input string) (uint64, error) {
+	value, err := strconv.ParseFloat(input, 64)
+	if err != nil {
+		return 0, err
+	}
+	return explicitFloatToUint64(value)
+}
+
+func preparedFloatToInt64(input string) (int64, error) {
+	value, err := strconv.ParseFloat(input, 64)
+	if err != nil {
+		return 0, err
+	}
+	return explicitFloatToInt64(value)
+}
+
+func isPreparedNumericCastOutOfRange(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrOutOfRange) || errors.Is(err, strconv.ErrRange)
+}
+
+func preparedDecimalToUint64(input string) (uint64, error) {
+	rounded, err := roundPreparedDecimalIntegerString(input)
+	if err != nil {
+		return 0, err
+	}
+	return explicitUint64FromIntegerString(rounded)
+}
+
+func preparedDecimalToInt64(input string) (int64, error) {
+	rounded, err := roundPreparedDecimalIntegerString(input)
+	if err != nil {
+		return 0, err
+	}
+	return decimalInt64Explicit(rounded)
 }
 
 func decimalToUint64Explicit[T types.FixedSizeTExceptStrType](
@@ -2200,16 +2249,16 @@ func datetimeToOthers(proc *process.Process,
 			zone = proc.GetSessionInfo().TimeZone
 		}
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return datetimeToTimestamp(source, rs, length, zone, toType.Scale)
+		return datetimeToTimestamp(proc, source, rs, length, zone, toType.Scale)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
 		return datetimeToDate(source, rs, length, selectList)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
-		return datetimeToDatetime(proc.Ctx, source, rs, length, toType.Scale)
+		return datetimeToDatetime(proc, source, rs, length, toType.Scale)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return datetimeToTime(source, rs, length, selectList)
+		return datetimeToTime(proc, source, rs, length, selectList)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
 		return datetimeToYear(source, rs, length, selectList)
@@ -2247,13 +2296,13 @@ func timestampToOthers(proc *process.Process,
 		return timestampToDate(proc.Ctx, source, rs, length, zone)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
-		return timestampToDatetime(proc.Ctx, source, rs, length, zone)
+		return timestampToDatetime(proc, source, rs, length, zone)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		return timestampToTime(source, rs, length, zone)
+		return timestampToTime(proc, source, rs, length, zone)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return timestampToTimestamp(proc.Ctx, source, rs, length, toType.Scale)
+		return timestampToTimestamp(proc, source, rs, length, toType.Scale)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
 		return timestampToYear(source, rs, length, zone, selectList)
@@ -2391,10 +2440,10 @@ func decimal64ToOthers(proc *process.Process,
 			zone = proc.GetSessionInfo().TimeZone
 		}
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return decimal64ToTimestamp(source, rs, length, zone, selectList)
+		return decimalToTimestamp(proc, source, rs, length, zone, selectList)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
-		return decimal64ToDatetime(source, rs, length, selectList)
+		return decimalToDatetime(proc, source, rs, length, selectList)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return decimal64ToTime(proc, source, rs, length, selectList, mode)
@@ -2469,14 +2518,14 @@ func decimal128ToOthers(proc *process.Process,
 		return decimal128ToTime(proc, source, rs, length, selectList, mode)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
-		return decimal128ToDatetime(source, rs, length, selectList)
+		return decimalToDatetime(proc, source, rs, length, selectList)
 	case types.T_timestamp:
 		zone := time.Local
 		if proc != nil {
 			zone = proc.GetSessionInfo().TimeZone
 		}
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return decimal128ToTimestamp(source, rs, length, zone, selectList)
+		return decimalToTimestamp(proc, source, rs, length, zone, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -3458,6 +3507,15 @@ func integerToFixFloat[T1, T2 constraints.Integer | constraints.Float](
 	return nil
 }
 
+// ConvertToFixedFloat applies the bounded floating CAST's rounding and range
+// check. Callers prepare the scale factor and maximum once per vector; the
+// planner also uses this primitive to prove that a constant CAST is harmless.
+func ConvertToFixedFloat(value, factor, maxValue float64) (rounded float64, outOfRange bool) {
+	floor := math.Floor(value)
+	rounded = floor + math.Round((value-floor)*factor)/factor
+	return rounded, rounded < -maxValue || rounded > maxValue
+}
+
 func floatToFixFloat[T1, T2 constraints.Float](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2], length int, selectList *FunctionSelectList) error {
@@ -3474,10 +3532,8 @@ func floatToFixFloat[T1, T2 constraints.Float](
 				return err
 			}
 		} else {
-			v2 := float64(v)
-			tmp := math.Round((v2-math.Floor(v2))*pow) / pow
-			v2 = math.Floor(v2) + tmp
-			if v2 < -max_value || v2 > max_value {
+			v2, outOfRange := ConvertToFixedFloat(float64(v), pow, max_value)
+			if outOfRange {
 				return moerr.NewOutOfRangef(ctx, "float", "value '%v'", v)
 			}
 			if err := to.Append(T2(v2), false); err != nil {
@@ -3495,9 +3551,8 @@ func floatNumToFixFloat[T1 constraints.Float](
 	max_value := math.Pow10(int(to.GetType().Width - to.GetType().Scale))
 	max_value -= 1.0 / pow
 
-	tmp := math.Round((from-math.Floor(from))*pow) / pow
-	v := math.Floor(from) + tmp
-	if v < -max_value || v > max_value {
+	v, outOfRange := ConvertToFixedFloat(from, pow, max_value)
+	if outOfRange {
 		if originStr == "" {
 			return 0, moerr.NewOutOfRangef(ctx, "float", "value '%v'", from)
 		} else {
@@ -4324,6 +4379,10 @@ func integerToTime[T constraints.Integer](
 	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList, mode castMode) error {
 	ctx := proc.Ctx
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	var i uint64
 	l := uint64(length)
 	var dft types.Time
@@ -4350,9 +4409,16 @@ func integerToTime[T constraints.Integer](
 				}
 				return moerr.NewOutOfRangef(ctx, "time", "value %d", v)
 			}
-			result, err := types.ParseInt64ToTime(vI64, toType.Scale)
+			parseScale := toType.Scale
+			if truncate && parseScale < 6 {
+				parseScale = 6
+			}
+			result, err := types.ParseInt64ToTime(vI64, parseScale)
 			if err != nil {
 				return err
+			}
+			if truncate {
+				result = result.TruncateToScaleWithoutRounding(toType.Scale)
 			}
 			result, err = mysqlTimeForCast(ctx, proc, result, mode, toType.Scale, i)
 			if err != nil {
@@ -4556,11 +4622,16 @@ func dateToTime(
 }
 
 func datetimeToTime(
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Datetime],
 	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	totype := to.GetType()
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4568,7 +4639,11 @@ func datetimeToTime(
 				return err
 			}
 		} else {
-			if err := to.Append(v.ToTime(totype.Scale), false); err != nil {
+			value := v.ToTime(totype.Scale)
+			if truncate {
+				value = v.ToTime(6).TruncateToScaleWithoutRounding(totype.Scale)
+			}
+			if err := to.Append(value, false); err != nil {
 				return err
 			}
 		}
@@ -4577,17 +4652,30 @@ func datetimeToTime(
 }
 
 func timestampToTime(
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Timestamp],
 	to *vector.FunctionResult[types.Time], length int, zone *time.Location) error {
 	var i uint64
 	l := uint64(length)
 	totype := to.GetType()
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
 			to.AppendMustNull()
 		} else {
-			to.AppendMustValue(timestampToSessionClockTime(v, zone, totype.Scale))
+			value := timestampToSessionClockTime(v, zone, totype.Scale)
+			if truncate {
+				dtValue := v.ToDatetime(zone)
+				if dtValue != types.ZeroDatetime {
+					timeOfDay := int64(dtValue) - int64(dtValue.ToDate().ToDatetime())
+					value = types.Time(timeOfDay).TruncateToScaleWithoutRounding(totype.Scale)
+				}
+			}
+			to.AppendMustValue(value)
 		}
 	}
 	return nil
@@ -4722,12 +4810,17 @@ func datetimeToDecimal128(
 }
 
 func datetimeToTimestamp(
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Datetime],
 	to *vector.FunctionResult[types.Timestamp], length int,
 	zone *time.Location,
 	targetScale int32) error {
 	var i uint64
 	l := uint64(length)
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4735,10 +4828,20 @@ func datetimeToTimestamp(
 				return err
 			}
 		} else {
-			result := v.ToTimestamp(zone)
+			result, nonexistent := v.ToTimestampWithLocalTimeStatus(zone)
+			if nonexistent {
+				if isStrictSqlMode(proc) && !statementIgnore(proc) {
+					return moerr.NewInvalidInputNoCtxf("nonexistent local time: %s", v.String2(6))
+				}
+				appendTemporalAssignmentConversionWarning(proc, "timestamp", v.String2(6))
+			}
 			// Truncate to target scale if needed
 			if targetScale < 6 {
-				result = result.TruncateToScale(targetScale)
+				if truncate {
+					result = result.TruncateToScaleWithoutRounding(targetScale)
+				} else {
+					result = result.TruncateToScale(targetScale)
+				}
 			}
 			if err := to.Append(result, false); err != nil {
 				return err
@@ -4769,12 +4872,16 @@ func dateToDatetime(
 }
 
 func timestampToTimestamp(
-	ctx context.Context,
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Timestamp],
 	to *vector.FunctionResult[types.Timestamp], length int,
 	targetScale int32) error {
 	var i uint64
 	l := uint64(length)
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4785,7 +4892,11 @@ func timestampToTimestamp(
 			result := v
 			// Truncate to target scale if needed
 			if targetScale < 6 {
-				result = result.TruncateToScale(targetScale)
+				if truncate {
+					result = result.TruncateToScaleWithoutRounding(targetScale)
+				} else {
+					result = result.TruncateToScale(targetScale)
+				}
 			}
 			if err := to.Append(result, false); err != nil {
 				return err
@@ -4801,6 +4912,10 @@ func timeToTime(
 	to *vector.FunctionResult[types.Time], length int,
 	targetScale int32, mode castMode) error {
 	ctx := proc.Ctx
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -4813,7 +4928,11 @@ func timeToTime(
 			result := v
 			// Truncate to target scale if needed
 			if targetScale < 6 {
-				result = result.TruncateToScale(targetScale)
+				if truncate {
+					result = result.TruncateToScaleWithoutRounding(targetScale)
+				} else {
+					result = result.TruncateToScale(targetScale)
+				}
 			}
 			result, err := mysqlTimeForCast(ctx, proc, result, mode, targetScale, i)
 			if err != nil {
@@ -4892,12 +5011,16 @@ func mysqlInvalidTimeForCast(
 }
 
 func datetimeToDatetime(
-	ctx context.Context,
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Datetime],
 	to *vector.FunctionResult[types.Datetime], length int,
 	targetScale int32) error {
 	var i uint64
 	l := uint64(length)
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4908,7 +5031,11 @@ func datetimeToDatetime(
 			result := v
 			// Truncate to target scale if needed
 			if targetScale < 6 {
-				result = result.TruncateToScale(targetScale)
+				if truncate {
+					result = result.TruncateToScaleWithoutRounding(targetScale)
+				} else {
+					result = result.TruncateToScale(targetScale)
+				}
 			}
 			if err := to.Append(result, false); err != nil {
 				return err
@@ -4919,13 +5046,17 @@ func datetimeToDatetime(
 }
 
 func timestampToDatetime(
-	ctx context.Context,
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Timestamp],
 	to *vector.FunctionResult[types.Datetime], length int,
 	zone *time.Location) error {
 	var i uint64
 	l := uint64(length)
 	targetScale := to.GetType().Scale
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4936,7 +5067,11 @@ func timestampToDatetime(
 			result := v.ToDatetime(zone)
 			// Truncate to target scale if needed
 			if targetScale < 6 {
-				result = result.TruncateToScale(targetScale)
+				if truncate {
+					result = result.TruncateToScaleWithoutRounding(targetScale)
+				} else {
+					result = result.TruncateToScale(targetScale)
+				}
 			}
 			if err := to.Append(result, false); err != nil {
 				return err
@@ -5752,167 +5887,121 @@ func decimal256ToUnsigned[T constraints.Unsigned](
 	return nil
 }
 
-func decimal64ToTime(
-	proc *process.Process, from vector.FunctionParameterWrapper[types.Decimal64],
+func decimal64ToTime(proc *process.Process, from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList, mode castMode) error {
-	ctx := proc.Ctx
-	var i uint64
-	l := uint64(length)
-	fromtype := from.GetType()
-	totype := to.GetType()
-	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
-		if null {
-			if err := to.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			result, err := types.ParseDecimal64ToTime(v, fromtype.Scale, totype.Scale)
-			if err != nil {
-				return err
-			}
-			result, err = mysqlTimeForCast(ctx, proc, result, mode, totype.Scale, i)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(result, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return decimalToTime(proc, from, to, length, selectList, mode, types.ParseDecimal64ToTime)
 }
 
-func decimal128ToTime(
-	proc *process.Process, from vector.FunctionParameterWrapper[types.Decimal128],
+func decimal128ToTime(proc *process.Process, from vector.FunctionParameterWrapper[types.Decimal128],
 	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList, mode castMode) error {
-	ctx := proc.Ctx
-	var i uint64
-	l := uint64(length)
-	fromtype := from.GetType()
-	totype := to.GetType()
-	for i = 0; i < l; i++ {
+	return decimalToTime(proc, from, to, length, selectList, mode, types.ParseDecimal128ToTime)
+}
+
+// Keep numeric parsing/diagnostic ownership while sharing exact pre-rounding
+// policy across both physical decimal representations.
+func decimalToTime[T interface {
+	types.Decimal64 | types.Decimal128
+	Format(int32) string
+}](proc *process.Process,
+	from vector.FunctionParameterWrapper[T], to *vector.FunctionResult[types.Time],
+	length int, selectList *FunctionSelectList, mode castMode,
+	parseRounded func(T, int32, int32) (types.Time, error)) error {
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
+	fromType, toType := from.GetType(), to.GetType()
+	for i := uint64(0); i < uint64(length); i++ {
 		v, null := from.GetValue(i)
-		if null {
+		if functionRowSkipped(selectList, i) || null {
 			if err := to.Append(0, true); err != nil {
 				return err
 			}
+			continue
+		}
+		var result types.Time
+		if truncate {
+			result, err = types.ParseTime(truncateTemporalFractionForParse(v.Format(fromType.Scale), toType.Scale), toType.Scale)
 		} else {
-			result, err := types.ParseDecimal128ToTime(v, fromtype.Scale, totype.Scale)
-			if err != nil {
-				return err
-			}
-			result, err = mysqlTimeForCast(ctx, proc, result, mode, totype.Scale, i)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(result, false); err != nil {
-				return err
-			}
+			result, err = parseRounded(v, fromType.Scale, toType.Scale)
+		}
+		if err != nil {
+			return err
+		}
+		result, err = mysqlTimeForCast(proc.Ctx, proc, result, mode, toType.Scale, i)
+		if err != nil {
+			return err
+		}
+		if err = to.Append(result, false); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func decimal64ToDatetime(
-	from vector.FunctionParameterWrapper[types.Decimal64],
-	to *vector.FunctionResult[types.Datetime], length int, selectList *FunctionSelectList) error {
-	var i uint64
-	l := uint64(length)
-	fromtype := from.GetType()
-	totype := to.GetType()
-	for i = 0; i < l; i++ {
+func decimalToDatetime[T interface {
+	types.Decimal64 | types.Decimal128
+	Format(int32) string
+}](proc *process.Process,
+	from vector.FunctionParameterWrapper[T], to *vector.FunctionResult[types.Datetime],
+	length int, selectList *FunctionSelectList) error {
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
+	fromType, toType := from.GetType(), to.GetType()
+	for i := uint64(0); i < uint64(length); i++ {
 		v, null := from.GetValue(i)
-		if null {
+		if functionRowSkipped(selectList, i) || null {
 			if err := to.Append(0, true); err != nil {
 				return err
 			}
-		} else {
-			result, err := types.ParseDatetime(v.Format(fromtype.Scale), totype.Scale)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(result, false); err != nil {
-				return err
-			}
+			continue
+		}
+		text := v.Format(fromType.Scale)
+		if truncate {
+			text = truncateTemporalFractionForParse(text, toType.Scale)
+		}
+		result, err := types.ParseDatetime(text, toType.Scale)
+		if err != nil {
+			return err
+		}
+		if err := to.Append(result, false); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func decimal128ToDatetime(
-	from vector.FunctionParameterWrapper[types.Decimal128],
-	to *vector.FunctionResult[types.Datetime], length int, selectList *FunctionSelectList) error {
-	var i uint64
-	l := uint64(length)
-	fromtype := from.GetType()
-	totype := to.GetType()
-	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
-		if null {
-			if err := to.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			result, err := types.ParseDatetime(v.Format(fromtype.Scale), totype.Scale)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(result, false); err != nil {
-				return err
-			}
-		}
+func decimalToTimestamp[T interface {
+	types.Decimal64 | types.Decimal128
+	Format(int32) string
+}](proc *process.Process,
+	from vector.FunctionParameterWrapper[T], to *vector.FunctionResult[types.Timestamp],
+	length int, zone *time.Location, selectList *FunctionSelectList) error {
+	truncate, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
 	}
-	return nil
-}
-
-func decimal64ToTimestamp(
-	from vector.FunctionParameterWrapper[types.Decimal64],
-	to *vector.FunctionResult[types.Timestamp], length int, zone *time.Location, selectList *FunctionSelectList) error {
-	var i uint64
-	l := uint64(length)
-	fromType := from.GetType()
-	toType := to.GetType()
-	for i = 0; i < l; i++ {
+	fromType, toType := from.GetType(), to.GetType()
+	for i := uint64(0); i < uint64(length); i++ {
 		v, null := from.GetValue(i)
-		if null {
+		if functionRowSkipped(selectList, i) || null {
 			if err := to.Append(0, true); err != nil {
 				return err
 			}
-		} else {
-			ts, err := types.ParseTimestamp(zone, v.Format(fromType.Scale), toType.Scale)
-			if err != nil {
-				return err
-			}
-			if err := to.Append(ts, false); err != nil {
-				return err
-			}
+			continue
 		}
-	}
-	return nil
-}
-
-func decimal128ToTimestamp(
-	from vector.FunctionParameterWrapper[types.Decimal128],
-	to *vector.FunctionResult[types.Timestamp], length int, zone *time.Location, selectList *FunctionSelectList) error {
-	var i uint64
-	l := uint64(length)
-	fromType := from.GetType()
-	toType := to.GetType()
-	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
-		if null {
-			if err := to.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			ts, err := types.ParseTimestamp(zone, v.Format(fromType.Scale), toType.Scale)
-			if err != nil {
-				return err
-			}
-			if err := to.Append(ts, false); err != nil {
-				return err
-			}
+		text := v.Format(fromType.Scale)
+		if truncate {
+			text = truncateTemporalFractionForParse(text, toType.Scale)
+		}
+		result, err := types.ParseTimestamp(zone, text, toType.Scale)
+		if err != nil {
+			return err
+		}
+		if err := to.Append(result, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -6047,6 +6136,10 @@ func decimal64ToDecimal64(
 func decimal64ToDecimal128Array(
 	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
+
 	fromtype := from.GetType()
 	totype := to.GetType()
 	safeGrowth := canWidenDecimalScale(fromtype, totype)
@@ -6249,8 +6342,6 @@ func decimal64ToDecimal256Array(
 	return nil
 }
 
-// the scale of decimal128 is guaranteed to be less than 18
-// this cast function is too slow, and therefore only temporary, rewrite needed
 func decimal128ToDecimal64(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal128],
@@ -6267,9 +6358,16 @@ func decimal128ToDecimal64(
 				return err
 			}
 		} else {
-			dec, scale := v.Format(fromtype.Scale), totype.Scale
+			var dec string
+			scale := totype.Scale
 			if totype.Scale < fromtype.Scale {
-				dec, scale = roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), 0
+				scaled, err := v.Scale(totype.Scale - fromtype.Scale)
+				if err != nil {
+					return err
+				}
+				dec, scale = scaled.Format(0), 0
+			} else {
+				dec = v.Format(fromtype.Scale)
 			}
 			result, err := types.ParseDecimal64(dec, totype.Width, scale)
 			if err != nil {
@@ -6281,24 +6379,6 @@ func decimal128ToDecimal64(
 		}
 	}
 	return nil
-}
-
-// roundDecimalCoefficient divides the exact unscaled coefficient only once.
-// Formatting a fractional Decimal128 before rounding can round a discarded
-// digit while extracting it, and then ParseDecimal128 rounds it a second time.
-func roundDecimalCoefficient(coefficient string, scaleDifference int32) string {
-	value, _ := new(big.Int).SetString(coefficient, 10)
-	negative := value.Sign() < 0
-	value.Abs(value)
-	divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDifference)), nil)
-	quotient, remainder := new(big.Int).QuoRem(value, divisor, new(big.Int))
-	if remainder.Mul(remainder, big.NewInt(2)).Cmp(divisor) >= 0 {
-		quotient.Add(quotient, big.NewInt(1))
-	}
-	if negative {
-		quotient.Neg(quotient)
-	}
-	return quotient.String()
 }
 
 func decimal128ToDecimal128(
@@ -6321,8 +6401,11 @@ func decimal128ToDecimal128(
 			if canWidenDecimalScale(fromtype, totype) {
 				result, err = v.Scale(totype.Scale - fromtype.Scale)
 			} else if totype.Scale < fromtype.Scale {
-				result, err = types.ParseDecimal128(
-					roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), totype.Width, 0)
+				var scaled types.Decimal128
+				scaled, err = v.Scale(totype.Scale - fromtype.Scale)
+				if err == nil {
+					result, err = types.ParseDecimal128(scaled.Format(0), totype.Width, 0)
+				}
 			} else {
 				result, err = types.ParseDecimal128(v.Format(fromtype.Scale), totype.Width, totype.Scale)
 			}
@@ -6371,9 +6454,16 @@ func decimal128ToDecimal256(
 				return err
 			}
 		} else if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
-			dec, scale := result.Format(fromtype.Scale), totype.Scale
+			var dec string
+			scale := totype.Scale
 			if totype.Scale < fromtype.Scale {
-				dec, scale = roundDecimalCoefficient(result.Format(0), fromtype.Scale-totype.Scale), 0
+				scaled, err := v.Scale(totype.Scale - fromtype.Scale)
+				if err != nil {
+					return err
+				}
+				dec, scale = scaled.Format(0), 0
+			} else {
+				dec = result.Format(fromtype.Scale)
 			}
 			parsed, err := types.ParseDecimal256(dec, totype.Width, scale)
 			if err != nil {
@@ -6405,9 +6495,16 @@ func decimal256ToDecimal64(
 			}
 			continue
 		}
-		dec, scale := v.Format(fromtype.Scale), totype.Scale
+		var dec string
+		scale := totype.Scale
 		if totype.Scale < fromtype.Scale {
-			dec, scale = roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), 0
+			scaled, err := v.Scale(totype.Scale - fromtype.Scale)
+			if err != nil {
+				return err
+			}
+			dec, scale = scaled.Format(0), 0
+		} else {
+			dec = v.Format(fromtype.Scale)
 		}
 		result, err := types.ParseDecimal64(dec, totype.Width, scale)
 		if err != nil {
@@ -6436,9 +6533,16 @@ func decimal256ToDecimal128(
 			}
 			continue
 		}
-		dec, scale := v.Format(fromtype.Scale), totype.Scale
+		var dec string
+		scale := totype.Scale
 		if totype.Scale < fromtype.Scale {
-			dec, scale = roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), 0
+			scaled, err := v.Scale(totype.Scale - fromtype.Scale)
+			if err != nil {
+				return err
+			}
+			dec, scale = scaled.Format(0), 0
+		} else {
+			dec = v.Format(fromtype.Scale)
 		}
 		result, err := types.ParseDecimal128(dec, totype.Width, scale)
 		if err != nil {
@@ -6472,8 +6576,11 @@ func decimal256ToDecimal256(
 		if canWidenDecimalScale(fromtype, totype) {
 			result, err = v.Scale(totype.Scale - fromtype.Scale)
 		} else if totype.Scale < fromtype.Scale {
-			result, err = types.ParseDecimal256(
-				roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), totype.Width, 0)
+			var scaled types.Decimal256
+			scaled, err = v.Scale(totype.Scale - fromtype.Scale)
+			if err == nil {
+				result, err = types.ParseDecimal256(scaled.Format(0), totype.Width, 0)
+			}
 		} else {
 			result, err = types.ParseDecimal256(v.Format(fromtype.Scale), totype.Width, totype.Scale)
 		}
@@ -6709,13 +6816,6 @@ func decimal128ToBitWithIgnore(
 	return nil
 }
 
-func decimal256ToBit(
-	ctx context.Context,
-	from vector.FunctionParameterWrapper[types.Decimal256],
-	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
-	return decimal256ToBitWithIgnore(ctx, nil, from, to, bitSize, length, selectList)
-}
-
 func decimal256ToBitWithIgnore(
 	ctx context.Context, proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Decimal256],
@@ -6805,6 +6905,27 @@ func strToSignedWithProc[T constraints.Signed](
 				result = T(r)
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
+				kind := from.GetSourceVector().GetPrepareParamKindAt(int(i))
+				if len(explicit) > 0 && explicit[0] && bitSize == 64 &&
+					(kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal) {
+					var r int64
+					var err error
+					if kind == vector.PrepareParamFloat {
+						r, err = preparedFloatToInt64(s)
+					} else {
+						r, err = preparedDecimalToInt64(s)
+					}
+					if err != nil {
+						if isPreparedNumericCastOutOfRange(err) {
+							return moerr.NewOutOfRangef(ctx, "int64", "value '%s'", s)
+						}
+						return moerr.NewInvalidArg(ctx, "cast to int", s)
+					}
+					if err = to.Append(T(r), false); err != nil {
+						return err
+					}
+					continue
+				}
 				var r int64
 				var err error
 				var integerPrefix string
@@ -7769,6 +7890,26 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 				}
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
+				kind := from.GetSourceVector().GetPrepareParamKindAt(int(i))
+				if len(explicit) > 0 && explicit[0] && bitSize == 64 &&
+					(kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal) {
+					var value uint64
+					if kind == vector.PrepareParamFloat {
+						value, tErr = preparedFloatToUint64(s)
+					} else {
+						value, tErr = preparedDecimalToUint64(s)
+					}
+					if tErr != nil {
+						if isPreparedNumericCastOutOfRange(tErr) {
+							return moerr.NewOutOfRangef(ctx, "uint64", "value '%s'", s)
+						}
+						return moerr.NewInvalidArg(ctx, "cast to uint64", s)
+					}
+					if tErr = to.Append(T(value), false); tErr != nil {
+						return tErr
+					}
+					continue
+				}
 				res = &s
 				if len(explicit) > 1 && explicit[1] {
 					val, integerPrefix, integerHasPrefix, integerOutOfRange, tErr =
@@ -7916,22 +8057,11 @@ func strToDecimal64(
 	var dft types.Decimal64
 	totype := to.GetType()
 	isb := from.GetSourceVector().GetIsBin()
-	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
-		v, null := from.GetStrValue(0)
-		var result types.Decimal64
-		var err error
-		if !null {
-			result, err = parseMySQLDecimal64Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
-			if err != nil {
-				return err
-			}
-		}
-		for i = 0; i < l; i++ {
-			if err = to.Append(result, null); err != nil {
-				return err
-			}
-		}
-		return nil
+	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
+		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
+			func(s string) (types.Decimal64, error) {
+				return parseMySQLDecimal64Prefix(s, totype.Width, totype.Scale)
+			}, selectList)
 	}
 	for i = 0; i < l; i++ {
 		if functionRowSkipped(selectList, i) {
@@ -7951,9 +8081,7 @@ func strToDecimal64(
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal64
 				var err error
-				if totype.Charset == 255 {
-					result, err = parseMySQLDecimal64Prefix(s, totype.Width, totype.Scale)
-				} else if isExplicit {
+				if isExplicit {
 					result, err = ParseExplicitDecimal64CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal64CastString(s, totype.Width, totype.Scale)
@@ -8248,22 +8376,11 @@ func strToDecimal128(
 	var dft types.Decimal128
 	totype := to.GetType()
 	isb := from.GetSourceVector().GetIsBin()
-	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
-		v, null := from.GetStrValue(0)
-		var result types.Decimal128
-		var err error
-		if !null {
-			result, err = parseMySQLDecimal128Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
-			if err != nil {
-				return err
-			}
-		}
-		for i = 0; i < l; i++ {
-			if err = to.Append(result, null); err != nil {
-				return err
-			}
-		}
-		return nil
+	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
+		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
+			func(s string) (types.Decimal128, error) {
+				return parseMySQLDecimal128Prefix(s, totype.Width, totype.Scale)
+			}, selectList)
 	}
 	for i = 0; i < l; i++ {
 		if functionRowSkipped(selectList, i) {
@@ -8283,9 +8400,7 @@ func strToDecimal128(
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal128
 				var err error
-				if totype.Charset == 255 {
-					result, err = parseMySQLDecimal128Prefix(s, totype.Width, totype.Scale)
-				} else if isExplicit {
+				if isExplicit {
 					result, err = ParseExplicitDecimal128CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal128CastString(s, totype.Width, totype.Scale)
@@ -8353,22 +8468,11 @@ func strToDecimal256(
 	var dft types.Decimal256
 	totype := to.GetType()
 	isb := from.GetSourceVector().GetIsBin()
-	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
-		v, null := from.GetStrValue(0)
-		var result types.Decimal256
-		var err error
-		if !null {
-			result, err = parseMySQLDecimal256Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
-			if err != nil {
-				return err
-			}
-		}
-		for i = 0; i < l; i++ {
-			if err = to.Append(result, null); err != nil {
-				return err
-			}
-		}
-		return nil
+	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
+		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
+			func(s string) (types.Decimal256, error) {
+				return parseMySQLDecimal256Prefix(s, totype.Width, totype.Scale)
+			}, selectList)
 	}
 	for i = 0; i < l; i++ {
 		if functionRowSkipped(selectList, i) {
@@ -8388,9 +8492,7 @@ func strToDecimal256(
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal256
 				var err error
-				if totype.Charset == 255 {
-					result, err = parseMySQLDecimal256Prefix(s, totype.Width, totype.Scale)
-				} else if isExplicit {
+				if isExplicit {
 					result, err = ParseExplicitDecimal256CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal256CastString(s, totype.Width, totype.Scale)
@@ -8739,6 +8841,33 @@ func strToDate(proc *process.Process,
 	return nil
 }
 
+// truncateTemporalFractionForParse removes digits beyond the engine's
+// microsecond representation before parsing. Invalid syntax is returned
+// unchanged so the shared temporal parser remains the owner of grammar and
+// assignment/IGNORE diagnostics. Trimming here preserves ParseDatetime's
+// accepted trailing whitespace while still preventing scale-6 rounding.
+func truncateTemporalFractionForParse(s string, scale int32) string {
+	s = strings.TrimSpace(s)
+	dot := strings.LastIndexByte(s, '.')
+	if dot < 0 {
+		return s
+	}
+	end := dot + 1
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+		end++
+	}
+	if end == dot+1 || end != len(s) {
+		return s
+	}
+	if end-dot-1 <= int(scale) {
+		return s
+	}
+	if scale == 0 {
+		return s[:dot]
+	}
+	return s[:dot+1+int(scale)]
+}
+
 func strToTime(
 	proc *process.Process, from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList, mode castMode) error {
@@ -8748,6 +8877,10 @@ func strToTime(
 	var l = uint64(length)
 	var dft types.Time
 	totype := to.GetType()
+	truncateFractional, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	for i = 0; i < l; i++ {
 		if functionRowSkipped(selectList, i) {
 			if err := to.Append(dft, true); err != nil {
@@ -8776,7 +8909,14 @@ func strToTime(
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			val, err := types.ParseTime(s, totype.Scale)
+			parseScale := totype.Scale
+			if truncateFractional {
+				if parseScale < 6 {
+					parseScale = 6
+				}
+				s = truncateTemporalFractionForParse(s, 6)
+			}
+			val, err := types.ParseTime(s, parseScale)
 			if err != nil {
 				if mode.isAssignment() {
 					if isCompactTimeText(s) {
@@ -8804,7 +8944,10 @@ func strToTime(
 				// converts the remainder to a warning.  A completely malformed
 				// expression becomes NULL; an assignment stores zero TIME.
 				if (mode == castModeAssignmentIgnore || !isStrictSqlMode(proc)) && !isBinary {
-					if prefix, ok := parseTimePrefix(s, totype.Scale); ok {
+					if prefix, ok := parseTimePrefix(s, parseScale, truncateFractional); ok {
+						if truncateFractional {
+							prefix = prefix.TruncateToScaleWithoutRounding(totype.Scale)
+						}
 						appendTimeConversionWarning(proc, s, mode, true)
 						prefix, err = mysqlTimeForCast(ctx, proc, prefix, mode, totype.Scale, i)
 						if err != nil {
@@ -8826,6 +8969,9 @@ func strToTime(
 				}
 				return err
 			}
+			if truncateFractional {
+				val = val.TruncateToScaleWithoutRounding(totype.Scale)
+			}
 			val, err = mysqlTimeForCast(ctx, proc, val, mode, totype.Scale, i)
 			if err != nil {
 				return err
@@ -8841,7 +8987,7 @@ func strToTime(
 // parseTimePrefix recovers a valid TIME followed by non-time text. Never trim
 // inside a numeric field: an invalid minute/second must not become valid by
 // dropping digits from its end.
-func parseTimePrefix(value string, scale int32) (types.Time, bool) {
+func parseTimePrefix(value string, scale int32, truncateFractional bool) (types.Time, bool) {
 	value = strings.TrimSpace(value)
 	for i := 0; i < len(value); i++ {
 		switch value[i] {
@@ -8849,6 +8995,9 @@ func parseTimePrefix(value string, scale int32) (types.Time, bool) {
 			continue
 		}
 		candidate := strings.TrimRight(value[:i], " .:+-")
+		if truncateFractional {
+			candidate = truncateTemporalFractionForParse(candidate, 6)
+		}
 		if candidate != "" {
 			if parsed, err := types.ParseTime(candidate, scale); err == nil {
 				return parsed, true
@@ -8887,6 +9036,10 @@ func strToDatetime(proc *process.Process,
 	isBinary := from.GetSourceVector().GetIsBin()
 	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
 	totype := to.GetType()
+	truncateFractional, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	modeChecked := false
 	nullifyZero := false
 	for i = 0; i < l; i++ {
@@ -8912,7 +9065,14 @@ func strToDatetime(proc *process.Process,
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			val, err := types.ParseDatetime(s, totype.Scale)
+			parseScale := totype.Scale
+			if truncateFractional {
+				if parseScale < 6 {
+					parseScale = 6
+				}
+				s = truncateTemporalFractionForParse(s, 6)
+			}
+			val, err := types.ParseDatetime(s, parseScale)
 			if err != nil {
 				if mode == castModeAssignmentIgnore && !isBinary && isTemporalLexicalConversionError(err) {
 					appendTemporalAssignmentConversionWarning(proc, "datetime", s)
@@ -8922,6 +9082,9 @@ func strToDatetime(proc *process.Process,
 					continue
 				}
 				return err
+			}
+			if truncateFractional {
+				val = val.TruncateToScaleWithoutRounding(totype.Scale)
 			}
 			if val == types.ZeroDatetime && !assignmentCast {
 				if !modeChecked {
@@ -8956,6 +9119,10 @@ func strToTimestamp(proc *process.Process,
 	isBinary := from.GetSourceVector().GetIsBin()
 	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
 	totype := to.GetType()
+	truncateFractional, err := process.ResolveTimeTruncateFractional(proc)
+	if err != nil {
+		return err
+	}
 	modeChecked := false
 	nullifyZero := false
 	for i = 0; i < l; i++ {
@@ -8981,7 +9148,14 @@ func strToTimestamp(proc *process.Process,
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			val, err := types.ParseTimestamp(zone, s, totype.Scale)
+			parseScale := totype.Scale
+			if truncateFractional {
+				if parseScale < 6 {
+					parseScale = 6
+				}
+				s = truncateTemporalFractionForParse(s, 6)
+			}
+			parsed, err := types.ParseDatetime(s, parseScale)
 			if err != nil {
 				if mode == castModeAssignmentIgnore && !isBinary && isTemporalLexicalConversionError(err) {
 					appendTemporalAssignmentConversionWarning(proc, "timestamp", s)
@@ -8991,6 +9165,16 @@ func strToTimestamp(proc *process.Process,
 					continue
 				}
 				return err
+			}
+			if truncateFractional {
+				parsed = parsed.TruncateToScaleWithoutRounding(totype.Scale)
+			}
+			val, nonexistent := parsed.ToTimestampWithLocalTimeStatus(zone)
+			if nonexistent {
+				if isStrictSqlMode(proc) && mode != castModeAssignmentIgnore && !statementIgnore(proc) {
+					return moerr.NewInvalidInputNoCtxf("nonexistent local time: %s", s)
+				}
+				appendTemporalAssignmentConversionWarning(proc, "timestamp", s)
 			}
 			if val == types.ZeroTimestamp && !assignmentCast {
 				if !modeChecked {
@@ -9212,6 +9396,11 @@ func strToStr(
 			if padSetOperationChar {
 				v = padVarlenaToRuneWidth(v, destLen)
 			}
+			if mode.isAssignment() {
+				if err := types.ValidateCollationValue(toType, v); err != nil {
+					return err
+				}
+			}
 			if err := to.AppendBytes(v, false); err != nil {
 				return err
 			}
@@ -9227,6 +9416,11 @@ func strToStr(
 			}
 			if trimComparisonKey || trimSetOperationKey {
 				v = bytes.TrimRight(v, " ")
+			}
+			if mode.isAssignment() {
+				if err := types.ValidateCollationValue(toType, v); err != nil {
+					return err
+				}
 			}
 			if err := to.AppendBytes(v, false); err != nil {
 				return err

@@ -54,7 +54,7 @@ func TestIssue28390NumericPrefixBitwiseResults(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.sql, func(t *testing.T) {
-			pl, err := runOneExprStmt(NewMockOptimizer(false), t, test.sql)
+			pl, err := runOneExprStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			proc := testutil.NewProc(t)
 			defer proc.Free()
@@ -91,7 +91,7 @@ func TestIssue28390BitwisePlannerCastsTextOnly(t *testing.T) {
 		"select ~n_name from nation",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			_, err := runOneExprStmt(NewMockOptimizer(false), t, sql)
+			_, err := runOneExprStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			require.NoError(t, err)
 		})
 	}

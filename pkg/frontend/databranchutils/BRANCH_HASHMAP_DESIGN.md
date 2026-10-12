@@ -33,7 +33,7 @@ branchHashmap
 
 ### 2.1 Sharding
 
-- Default shard count: `runtime.NumCPU() * 4`
+- Default shard count: `clamp(min(runtime.NumCPU()/2, system.GoMaxProcs()), 4, 128)`
 - Clamped range: `[4, 128]`
 - Shard index: `hash(key) % shardCount`
 - Each shard serializes operations via shard mutex.
@@ -151,7 +151,7 @@ Per record:
 ### 7.1 ForEachShardParallel
 
 - Runs one task per shard via `ants` worker pool.
-- `parallelism <= 0` => defaults to `runtime.NumCPU()`, then clamped to `[1, shardCount]`.
+- `parallelism <= 0` => defaults to `system.GoMaxProcs()`, then clamped to `[1, shardCount]`.
 - Per shard:
   - `beginIteration` sets `iterating=true`
   - normal lock-based operations wait until iteration ends
@@ -204,7 +204,7 @@ Edge behavior:
 
 | Parameter | Current Default | Notes |
 |---|---:|---|
-| shard count | `clamp(runtime.NumCPU()*4, 4, 128)` | configurable by option |
+| shard count | `clamp(min(runtime.NumCPU()/2, system.GoMaxProcs()), 4, 128)` | configurable by option |
 | spill bucket count | `1024` | normalized to power-of-two |
 | spill segment max bytes | `128MB` | configurable by option |
 | put batch size | `8192` | internal constant |

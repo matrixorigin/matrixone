@@ -40,8 +40,8 @@ func (o *issue24822Optimizer) Optimize(stmt tree.Statement) (*Query, error) {
 	return logicPlan.GetQuery(), nil
 }
 
-func newIssue24822Optimizer() *issue24822Optimizer {
-	ctx := newFullTextJoinMockCompilerContext()
+func newIssue24822Optimizer(t testing.TB) *issue24822Optimizer {
+	ctx := newFullTextJoinMockCompilerContext(t)
 
 	ftDef := makeFullTextJoinTestTableDef("ft", true)
 	ftDef.TblId = 24822
@@ -88,8 +88,8 @@ func newIssue24822Optimizer() *issue24822Optimizer {
 	return &issue24822Optimizer{ctx: ctx}
 }
 
-func newIssue24822FullText2Optimizer() *issue24822Optimizer {
-	optimizer := newIssue24822Optimizer()
+func newIssue24822FullText2Optimizer(t testing.TB) *issue24822Optimizer {
+	optimizer := newIssue24822Optimizer(t)
 	ftDef := optimizer.ctx.tables["ft"]
 	logical := ftDef.Indexes[0]
 	store := *logical
@@ -320,7 +320,7 @@ func TestIssue24822FullTextComposesWithNestedQueries(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(newIssue24822Optimizer(), t, test.sql)
+			logicPlan, err := runOneStmt(newIssue24822Optimizer(t), t, test.sql)
 			require.NoError(t, err)
 			query := logicPlan.GetQuery()
 			require.GreaterOrEqual(t, countReachableFullTextScans(query), 1)
@@ -369,7 +369,7 @@ func TestFullTextGroupedAggregateWithOrderByUsesIndex(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(newIssue24822Optimizer(), t, test.sql)
+			logicPlan, err := runOneStmt(newIssue24822Optimizer(t), t, test.sql)
 			require.NoError(t, err)
 			query := logicPlan.GetQuery()
 			require.Equal(t, test.sortAboveAggregate, hasReachableSortAboveAggregate(query))
@@ -380,7 +380,7 @@ func TestFullTextGroupedAggregateWithOrderByUsesIndex(t *testing.T) {
 }
 
 func TestFullTextWrappedPassengerUsesBareMatchStream(t *testing.T) {
-	logicPlan, err := runOneStmt(newIssue24822Optimizer(), t, `
+	logicPlan, err := runOneStmt(newIssue24822Optimizer(t), t, `
 		SELECT id
 		FROM ft
 		WHERE MATCH(title, body) AGAINST('hello')
@@ -446,7 +446,7 @@ func TestFullText2WrappedPassengerUsesBareMatchStream(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(newIssue24822FullText2Optimizer(), t, test.sql)
+			logicPlan, err := runOneStmt(newIssue24822FullText2Optimizer(t), t, test.sql)
 			require.NoError(t, err)
 			query := logicPlan.GetQuery()
 			require.Zero(t, countReachableFullTextMatches(query),

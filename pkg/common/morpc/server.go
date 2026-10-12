@@ -226,12 +226,21 @@ func (s *server) adjust() {
 
 func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) error {
 	s.metrics.receiveCounter.Inc()
+	request := value.(RPCMessage)
+	// Until delegation, this callback owns every decoded context, including
+	// internal messages and failures to acquire/validate a session. Async
+	// handlers take cancellation ownership only when actually called.
+	cancelHere := true
+	defer func() {
+		if cancelHere && request.Cancel != nil {
+			request.Cancel()
+		}
+	}()
 
 	cs, err := s.getSession(rs)
 	if err != nil {
 		return err
 	}
-	request := value.(RPCMessage)
 	s.metrics.inputBytesCounter.Add(float64(request.Message.ProtoSize()))
 	if ce := s.logger.Check(zap.DebugLevel, "received request"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
@@ -240,13 +249,6 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 			zap.String("request", request.Message.DebugString()))
 	}
 
-	// Can't be sure that the Context is properly consumed if disableAutoCancelContext is set to
-	// true. So we use the pessimistic wait for the context to time out automatically be canceled
-	// behavior here, which may cause some resources to be released more slowly.
-	// FIXME: Use the CancelFunc pass to let the handler decide to cancel itself
-	if !s.options.disableAutoCancelContext && request.Cancel != nil {
-		defer request.Cancel()
-	}
 	// get requestID here to avoid data race, because the request maybe released in handler
 	requestID := request.Message.GetID()
 
@@ -295,6 +297,7 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 		}
 	}
 
+	cancelHere = !s.options.disableAutoCancelContext
 	if err := s.handler(request.Ctx, request, sequence, cs); err != nil {
 		s.logger.Error("handle request failed",
 			zap.Uint64("sequence", sequence),
@@ -399,7 +402,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					}
 				}
 				for idx, f := range responses {
-					s.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
+					s.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.createAt).Seconds())
 					if f.oneWay {
 						needClose = append(needClose, f)
 					}

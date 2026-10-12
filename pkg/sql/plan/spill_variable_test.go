@@ -33,7 +33,7 @@ func TestNewQueryBuilderCapturesSpillThresholdBoundaries(t *testing.T) {
 				"max_dop":        int64(8),
 			}
 			seen := make(map[string]int)
-			ctx := NewMockCompilerContext(true)
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 			ctx.ResolveVariableFunc = func(name string, system, global bool) (any, error) {
 				require.True(t, system)
 				require.False(t, global)
@@ -64,7 +64,7 @@ func TestNewQueryBuilderRejectsNonInt64SpillThresholds(t *testing.T) {
 		"sort_spill_mem": float64(65_536),
 		"max_dop":        int(8),
 	}
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	ctx.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
 		return values[name], nil
 	}

@@ -281,10 +281,14 @@ func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 }
 
 func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
+	typ, err := types.TypeFromPlan(vec.Type)
+	if err != nil {
+		return nil, err
+	}
 	rvec := NewVecFromReuse()
 	rvec.area = vec.Area
 	rvec.length = int(vec.Len)
-	rvec.typ = ProtoTypeToType(vec.Type)
+	rvec.typ = typ
 	rvec.cantFreeData = true
 	rvec.cantFreeArea = true
 
@@ -304,16 +308,11 @@ func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 }
 
 func TypeToProtoType(typ types.Type) plan.Type {
-	return plan.Type{
-		Id:      int32(typ.Oid),
-		Width:   typ.Width,
-		Scale:   typ.Scale,
-		Charset: uint32(typ.Charset),
-	}
+	return typ.PlanType()
 }
 
 func ProtoTypeToType(typ plan.Type) types.Type {
-	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
+	return types.MustTypeFromPlan(typ)
 }
 
 func appendBytesToFixSized[T types.FixedSizeT](vec *Vector) func([]byte, bool, *mpool.MPool) error {

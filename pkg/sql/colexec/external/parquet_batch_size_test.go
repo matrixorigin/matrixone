@@ -37,7 +37,8 @@ import (
 // Page.Slice and parquetDecodedPageSize. Include nulls, empty dictionary values,
 // skewed lengths, nonzero page offsets, and exact budget boundaries.
 func TestParquetDictionarySourceBudgetBoundaries(t *testing.T) {
-	values := []*string{nil}
+	values := make([]*string, 0, 7)
+	values = append(values, nil)
 	for _, s := range []string{"", "a", strings.Repeat("b", 127), "a", ""} {
 		values = append(values, &s)
 	}

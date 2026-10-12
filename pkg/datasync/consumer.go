@@ -347,10 +347,16 @@ func (c *consumer) completeData(ctx context.Context) error {
 
 func (c *consumer) cleanState(ctx context.Context, interval time.Duration) {
 	var count int
-	for {
+	for ctx.Err() == nil {
 		count++
 		if count > 1 {
-			time.Sleep(interval)
+			timer := time.NewTimer(interval)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 		}
 		c.log.Info("start to clean state", zap.Int("count", count))
 

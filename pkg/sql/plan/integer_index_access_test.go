@@ -76,7 +76,7 @@ func TestExactDecimalNativeIntegerFilters(t *testing.T) {
 		"id in (1.0,(select 3.0))", "id not in (1.0,(select 3.0))", "id between (select 1.0) and (select 3.0)",
 		"id=(select 2147483647.0)", "id=(select 3.0000000000000000000000000000000000000000)"} {
 		t.Run(predicate, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			addIndexHintChoiceTableForTest(mock)
 			query, err := runOneStmt(mock, t, "select id from index_hint_t use index() where "+predicate)
 			require.NoError(t, err)
@@ -114,14 +114,14 @@ func TestNullableUniqueHintCompleteness(t *testing.T) {
 		{"select id,a,b from index_hint_t force index(idx_ab) order by id", true},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			addIndexHintChoiceTableForTest(mock)
 			query, err := runOneStmt(mock, t, tc.sql)
 			require.NoError(t, err)
 			require.Equal(t, tc.usesIndex, findFirstIndexScanName(query) != "")
 		})
 	}
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addIndexHintChoiceTableForTest(mock)
 	for _, c := range mock.ctxt.tables["index_hint_t"].Cols {
 		c.Typ.NotNullable = true
@@ -133,7 +133,7 @@ func TestNullableUniqueHintCompleteness(t *testing.T) {
 }
 
 func TestSparseUniqueRejectionIsAtomic(t *testing.T) {
-	builder := NewQueryBuilder(pb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(pb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	tag := builder.genNewBindTag()
 	node := &pb.Node{BindingTags: []int32{tag}, TableDef: &pb.TableDef{Cols: []*pb.ColDef{{Name: "k", Typ: pb.Type{Id: int32(types.T_int32)}}}, Name2ColIndex: map[string]int32{"k": 0}, Pkey: &pb.PrimaryKeyDef{PkeyColName: "k"}}}
 	index := &pb.IndexDef{Unique: true, Parts: []string{"k"}, IndexName: "uq", IndexTableName: "missing", TableExist: true}
@@ -154,7 +154,7 @@ func TestExactDecimalPreservesOtherDomains(t *testing.T) {
 	for _, predicate := range []string{"id=3.1", "id=2147483648.0", "id=3e0", "cast(id as decimal(12,1))=3.0",
 		"id=(select 3.1)", "id=(select 2147483648.0)", "id=(select 3e0)", "cast(id as decimal(12,1))=(select 3.0)"} {
 		t.Run(predicate, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			addIndexHintChoiceTableForTest(mock)
 			query, err := runOneStmt(mock, t, "select id from index_hint_t use index() where "+predicate)
 			require.NoError(t, err)
@@ -193,7 +193,7 @@ func TestNativeIntegerNormalizationSafety(t *testing.T) {
 		{"approximate", types.T_int32, pb.Type{Id: int32(types.T_float64)}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			builder := NewQueryBuilder(pb.Query_SELECT, NewMockCompilerContext(true), false, true)
+			builder := NewQueryBuilder(pb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 			column := GetColExpr(pb.Type{Id: int32(tc.source)}, 0, 0)
 			cast, err := appendCastBeforeExpr(ctx, column, tc.target)
 			require.NoError(t, err)
@@ -210,7 +210,7 @@ func TestNativeIntegerNormalizationSafety(t *testing.T) {
 		})
 	}
 
-	builder := NewQueryBuilder(pb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(pb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	column := GetColExpr(pb.Type{Id: int32(types.T_int32)}, 0, 0)
 	cast, err := appendCastBeforeExpr(ctx, column, pb.Type{Id: int32(types.T_decimal128), Width: 11, Scale: 1})
 	require.NoError(t, err)
@@ -286,7 +286,7 @@ func TestNativeIntegerNormalizationSafety(t *testing.T) {
 func TestNumericDomainProofCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	compiler := NewMockCompilerContext(false)
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
 	compiler.SetContext(ctx)
 	b := NewQueryBuilder(pb.Query_SELECT, compiler, false, false)
 	require.ErrorIs(t, b.rewriteNumericDomainFilters(0, pb.Node_JOIN), context.Canceled)

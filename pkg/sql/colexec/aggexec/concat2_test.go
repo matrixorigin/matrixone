@@ -649,6 +649,10 @@ func TestGroupConcatDistinctAndHelpers(t *testing.T) {
 
 	require.Equal(t, types.T_blob.ToType(), GroupConcatReturnType([]types.Type{types.T_blob.ToType()}))
 	require.Equal(t, types.T_text.ToType(), GroupConcatReturnType([]types.Type{types.T_int64.ToType()}))
+	nativeText := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	groupConcatType := GroupConcatReturnType([]types.Type{nativeText})
+	require.Equal(t, types.CharsetUTF8MB4UnicodeCI, groupConcatType.Charset)
+	require.Equal(t, uint8(types.CollationVersionV1), groupConcatType.CollationVersion)
 	for _, oid := range []types.T{
 		types.T_varchar, types.T_decimal256, types.T_year, types.T_uuid,
 		types.T_geometry, types.T_geometry32, types.T_array_uint8,

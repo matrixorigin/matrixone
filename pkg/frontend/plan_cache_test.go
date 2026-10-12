@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -489,6 +490,7 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 		"NO_BACKSLASH_ESCAPES",
 		"REAL_AS_FLOAT",
 		"NO_UNSIGNED_SUBTRACTION",
+		"TIME_TRUNCATE_FRACTIONAL",
 	} {
 		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
 		stmt = &trackedStatement{}
@@ -521,6 +523,48 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
 	require.False(t, ses.isCached("cached-sql"))
 	require.Equal(t, 1, stmt.freed)
+}
+
+func TestTemporalSessionChangesInvalidatePreparedAndCachedPlans(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	for _, tc := range []struct {
+		name string
+		a, b interface{}
+	}{
+		{"lc_time_names", "en_US", "fr_FR"},
+		{"explicit_defaults_for_timestamp", int64(1), int64(0)},
+		{"sql_mode", "STRICT_TRANS_TABLES", "STRICT_TRANS_TABLES,TIME_TRUNCATE_FRACTIONAL"},
+		{"sql_mode", "", "STRICT_TRANS_TABLES"},
+	} {
+		t.Run(fmt.Sprintf("%s/%v", tc.name, tc.b), func(t *testing.T) {
+			ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+			require.NoError(t, ses.SetSessionSysVar(ctx, tc.name, tc.a))
+			prepared := &PrepareStmt{}
+			ses.prepareStmts["temporal"] = prepared
+			for _, value := range []interface{}{tc.b, tc.a} {
+				prepared.needsRebuild = false // represent a freshly installed plan
+				stmt := &trackedStatement{}
+				ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+				require.NoError(t, ses.SetSessionSysVar(ctx, tc.name, value))
+				require.False(t, ses.isCached("cached-sql"))
+				require.Equal(t, 1, stmt.freed)
+				require.True(t, prepared.needsRebuild)
+				prepared.needsRebuild = false
+				stmt = &trackedStatement{}
+				ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+				require.NoError(t, ses.SetSessionSysVar(ctx, tc.name, value))
+				require.True(t, ses.isCached("cached-sql"), "unchanged SET retains warm plans")
+				require.Zero(t, stmt.freed)
+				require.False(t, prepared.needsRebuild)
+				require.Error(t, ses.SetSessionSysVar(ctx, tc.name, "invalid"))
+				require.True(t, ses.isCached("cached-sql"), "failed SET preserves the installed plan")
+				require.Zero(t, stmt.freed)
+				require.False(t, prepared.needsRebuild)
+			}
+			ses.cleanCache()
+		})
+	}
 }
 
 func TestSessionDivPrecisionIncrementChangeClearsPlanCache(t *testing.T) {

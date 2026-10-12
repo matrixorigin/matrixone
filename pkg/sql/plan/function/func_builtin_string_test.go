@@ -40,7 +40,7 @@ func Test_BuiltInToUpper(t *testing.T) {
 				[]bool{false, false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInToUpper)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -58,7 +58,7 @@ func Test_BuiltInToUpper(t *testing.T) {
 				[]bool{false, true, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInToUpper)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -76,7 +76,7 @@ func Test_BuiltInToUpper(t *testing.T) {
 				[]bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInToUpper)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -98,7 +98,7 @@ func Test_BuiltInToLower(t *testing.T) {
 				[]bool{false, false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInToLower)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -116,7 +116,7 @@ func Test_BuiltInToLower(t *testing.T) {
 				[]bool{false, true, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInToLower)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -134,7 +134,7 @@ func Test_BuiltInToLower(t *testing.T) {
 				[]bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInToLower)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -156,7 +156,7 @@ func Test_AbsUInt64(t *testing.T) {
 				[]bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsUInt64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -178,7 +178,7 @@ func Test_AbsFloat64(t *testing.T) {
 				[]bool{false, false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsFloat64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -196,7 +196,7 @@ func Test_AbsFloat64(t *testing.T) {
 				[]bool{false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsFloat64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -228,7 +228,7 @@ func Test_AbsDecimal64(t *testing.T) {
 				[]bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsDecimal64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -260,7 +260,7 @@ func Test_AbsDecimal128(t *testing.T) {
 				[]bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsDecimal128)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }

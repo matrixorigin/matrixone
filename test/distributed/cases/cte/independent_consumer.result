@@ -1,0 +1,59 @@
+drop database if exists cte_independent_consumer;
+create database cte_independent_consumer;
+use cte_independent_consumer;
+create table suppliers(id int primary key);
+create table sales(supplier_id int, amount decimal(10,2));
+insert into suppliers values (1), (2), (3), (4);
+insert into sales values (1,10), (1,20), (2,30), (3,null), (4,5);
+with revenue as (
+select supplier_id, sum(amount) as total from sales group by supplier_id
+)
+select s.id, r.total
+from suppliers s, revenue r
+where s.id = r.supplier_id
+and r.total = (select max(total) from revenue)
+order by s.id;
+➤ id[4,32,0]  ¦  total[3,32,2]  𝄀
+1  ¦  30.00  𝄀
+2  ¦  30.00
+with revenue as (
+select supplier_id, sum(amount) as total from sales group by supplier_id
+)
+select s.id, r.total
+from suppliers s join revenue r on s.id = r.supplier_id
+where r.total = (select max(total) from revenue)
+order by s.id;
+➤ id[4,32,0]  ¦  total[3,32,2]  𝄀
+1  ¦  30.00  𝄀
+2  ¦  30.00
+select s.id from suppliers s
+where s.id > 1 and (
+with local_sales as (
+select amount from sales where supplier_id = s.id
+)
+select max(amount) from local_sales
+) = 30
+order by s.id;
+➤ id[4,32,0]  𝄀
+2
+delete from sales where amount is not null;
+with revenue as (
+select supplier_id, sum(amount) as total from sales group by supplier_id
+)
+select s.id, r.total
+from suppliers s, revenue r
+where s.id = r.supplier_id
+and r.total = (select max(total) from revenue)
+order by s.id;
+➤ id[4,32,0]  ¦  total[3,32,2]
+delete from sales;
+with revenue as (
+select supplier_id, sum(amount) as total from sales group by supplier_id
+)
+select s.id, r.total
+from suppliers s, revenue r
+where s.id = r.supplier_id
+and r.total = (select max(total) from revenue)
+order by s.id;
+➤ id[4,32,0]  ¦  total[3,32,2]
+drop database cte_independent_consumer;

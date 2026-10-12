@@ -1733,14 +1733,15 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 					Name:       name,
 					OriginName: attr.Attr.Name,
 					Typ: plan.Type{
-						Id:          int32(attr.Attr.Type.Oid),
-						Width:       attr.Attr.Type.Width,
-						Scale:       attr.Attr.Type.Scale,
-						AutoIncr:    attr.Attr.AutoIncrement,
-						Table:       tbl.tableName,
-						NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-						Enumvalues:  attr.Attr.EnumVlaues,
-						Charset:     uint32(attr.Attr.Type.Charset),
+						Id:               int32(attr.Attr.Type.Oid),
+						Width:            attr.Attr.Type.Width,
+						Scale:            attr.Attr.Type.Scale,
+						AutoIncr:         attr.Attr.AutoIncrement,
+						Table:            tbl.tableName,
+						NotNullable:      attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+						Enumvalues:       attr.Attr.EnumVlaues,
+						Charset:          uint32(attr.Attr.Type.Charset),
+						CollationVersion: uint32(attr.Attr.Type.CollationVersion),
 					},
 					Primary:      attr.Attr.Primary,
 					Default:      attr.Attr.Default,
@@ -1873,6 +1874,8 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.AutoIdCache = tbl.extraInfo.AutoIdCache
 			tbl.tableDef.Checks = tbl.extraInfo.Checks
 			tbl.tableDef.DefaultCharset = tbl.extraInfo.DefaultCharset
+			tbl.tableDef.CollationVersion = tbl.extraInfo.CollationVersion
+			tbl.tableDef.KeyFormat = tbl.extraInfo.KeyFormat
 		}
 	}
 	return tbl.tableDef
@@ -1931,6 +1934,8 @@ func validateReplaceDefVersion(current uint32, replaceDef *api.AlterTableReplace
 }
 
 func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
+	tbl.getTxn().beginCatalogMutation()
+	defer tbl.getTxn().endCatalogMutation()
 	// AlterTale Inplace do not touch columns, we don't use NextSeqNum at the moment.
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("cannot alter table in snapshot operation")

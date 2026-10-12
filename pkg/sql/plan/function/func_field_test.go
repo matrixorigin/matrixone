@@ -72,7 +72,7 @@ func TestFieldIntegerRepresentations(t *testing.T) {
 	}
 	fc := NewFunctionTestCase(proc, inputs,
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 7, 0}, nil), FieldInteger)
-	ok, info := fc.Run()
+	ok, info := fc.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -85,7 +85,7 @@ func TestFieldDecimalScalesAndNulls(t *testing.T) {
 	}
 	fc := NewFunctionTestCase(proc, inputs,
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 2, 0}, nil), FieldDecimal128)
-	ok, info := fc.Run()
+	ok, info := fc.RunAndFree()
 	require.True(t, ok, info)
 
 	d256Inputs := []FunctionTestInput{
@@ -94,7 +94,7 @@ func TestFieldDecimalScalesAndNulls(t *testing.T) {
 	}
 	fc = NewFunctionTestCase(proc, d256Inputs,
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 0, 0}, nil), FieldDecimal256)
-	ok, info = fc.Run()
+	ok, info = fc.RunAndFree()
 	require.True(t, ok, info)
 	require.True(t, decimal256Equal(types.Decimal256{B0_63: 120}, types.Decimal256{B0_63: 12}, 2, 1))
 	require.True(t, decimal256Equal(types.Decimal256{B0_63: 12}, types.Decimal256{B0_63: 12}, 1, 1))

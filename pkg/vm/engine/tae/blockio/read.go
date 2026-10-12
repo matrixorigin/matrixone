@@ -394,6 +394,7 @@ func blockDataRead(
 			filterSeqnums,
 			filterColTypes,
 			searchFunc,
+			filter.CachedMembership,
 			orderByLimit,
 			policy,
 			bat,
@@ -520,6 +521,7 @@ func blockDataReadWithExactMembershipTopK(
 	filterColumns []uint16,
 	filterTypes []types.Type,
 	searchFunc objectio.ReadFilterSearchFuncType,
+	cachedMembership *objectio.ReadFilterMembership,
 	top *objectio.IndexReaderTopOp,
 	policy fileservice.Policy,
 	output *batch.Batch,
@@ -553,50 +555,55 @@ func blockDataReadWithExactMembershipTopK(
 		materializePositions = append(materializePositions, position)
 	}
 
-	topRows, distances, _, err := objectio.ReadBlockBySearchAndTopN(
-		ctx,
-		filterColumns,
-		filterTypes,
-		materializeColumns,
-		materializeTypes,
-		materializeDestinations,
-		columns[topColumnPos],
-		colTypes[topColumnPos],
-		func(filterVectors []vector.Vector) ([]int64, error) {
-			if top.Stats != nil && len(filterVectors) > 0 {
-				top.Stats.StorageFilterInputRows += uint64(filterVectors[0].Length())
-			}
-			selected := searchFunc(containers.Vectors(filterVectors))
-			if len(selected) == 0 {
-				if filterRows != nil {
-					*filterRows = 0
-				}
-				return []int64{}, nil
-			}
-			selected, err := ds.ApplyTombstones(ctx, &info.BlockID, selected, engine.Policy_CheckAll)
-			if err != nil {
-				return nil, err
-			}
-			if top.Stats != nil {
-				top.Stats.StorageFilterOutputRows += uint64(len(selected))
-			}
-			if len(selected) == 0 {
-				if filterRows != nil {
-					*filterRows = 0
-				}
-				return []int64{}, nil
-			}
+	finalize := func(selected []int64, inputRows int) ([]int64, error) {
+		if top.Stats != nil {
+			top.Stats.StorageFilterInputRows += uint64(inputRows)
+		}
+		if len(selected) == 0 {
 			if filterRows != nil {
-				*filterRows = len(selected)
+				*filterRows = 0
 			}
-			return selected, nil
-		},
-		top,
-		fs,
-		info.MetaLocation(),
-		mp,
-		policy,
+			return []int64{}, nil
+		}
+		selected, err := ds.ApplyTombstones(ctx, &info.BlockID, selected, engine.Policy_CheckAll)
+		if err != nil {
+			return nil, err
+		}
+		if top.Stats != nil {
+			top.Stats.StorageFilterOutputRows += uint64(len(selected))
+		}
+		if filterRows != nil {
+			*filterRows = len(selected)
+		}
+		if len(selected) == 0 {
+			return []int64{}, nil
+		}
+		return selected, nil
+	}
+	var (
+		topRows   []int64
+		distances []float64
+		err       error
 	)
+	// Only varlen filter columns benefit from skipping a cache snapshot.
+	// Fixed-width membership-only reads already avoid that copy and reuse
+	// reader-owned offsets in searchFunc; keep them on that existing path.
+	// Inspect the actual filter types, not the (varlen) Top-K output column.
+	if cachedMembership != nil && slices.ContainsFunc(filterTypes, func(typ types.Type) bool { return typ.IsVarlen() }) {
+		topRows, distances, _, err = objectio.ReadBlockByMembershipAndTopN(
+			ctx, filterColumns, filterTypes, materializeColumns, materializeTypes,
+			materializeDestinations, columns[topColumnPos], colTypes[topColumnPos],
+			cachedMembership, info.IsSorted(), finalize, top, fs, info.MetaLocation(), mp, policy,
+		)
+	} else {
+		topRows, distances, _, err = objectio.ReadBlockBySearchAndTopN(
+			ctx, filterColumns, filterTypes, materializeColumns, materializeTypes,
+			materializeDestinations, columns[topColumnPos], colTypes[topColumnPos],
+			func(filterVectors []vector.Vector) ([]int64, error) {
+				return finalize(searchFunc(containers.Vectors(filterVectors)), filterVectors[0].Length())
+			}, top, fs, info.MetaLocation(), mp, policy,
+		)
+	}
 	if err != nil {
 		return err
 	}

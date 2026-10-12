@@ -2150,13 +2150,13 @@ func (builder *QueryBuilder) insertIgnoreAutoIncrementReorderable(
 	if !hasOtherUnique || builder.canSkipDedup(tableDef) {
 		return 0, false
 	}
-	visibleWidth := 0
+	materializedWidth := 0
 	for _, col := range tableDef.Cols {
-		if col != nil && (!col.Hidden || col.Name == catalog.FakePrimaryKeyColName) {
-			visibleWidth++
+		if col != nil && (!col.Hidden || col.GeneratedCol != nil || col.Name == catalog.FakePrimaryKeyColName) {
+			materializedWidth++
 		}
 	}
-	return int32(visibleWidth), true
+	return int32(materializedWidth), true
 }
 
 func hasAutoIncrementDependentConstraint(tableDef *plan.TableDef, autoColPos int32) bool {
@@ -2739,7 +2739,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				// missing input column.
 				replaceColRefTag(updateExpr, 0, scanTag)
 			} else {
-				updateExpr, err = binder.BindAssignmentExpr(astExpr, colDef.Typ)
+				if isNullAstExpr(astExpr) {
+					updateExpr, err = buildLegacyTimestampNullAssignment(builder.compCtx, colDef)
+					if updateExpr == nil && err == nil {
+						updateExpr, err = binder.BindAssignmentExpr(astExpr, colDef.Typ)
+					}
+				} else {
+					updateExpr, err = binder.BindAssignmentExpr(astExpr, colDef.Typ)
+				}
 				if err != nil {
 					return 0, err
 				}
@@ -2758,6 +2765,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				continue
 			}
 
+			updateExpr, err = builder.wrapLegacyTimestampAssignment(colDef, updateExpr)
+			if err != nil {
+				return 0, err
+			}
 			updateExpr, err = builder.forceAssignmentCastExpr(updateExpr, colDef.Typ, builder.isInsertIgnore)
 			if err != nil {
 				return 0, err
@@ -4452,6 +4463,9 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 			if !ok {
 				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
+			if isFunctionalColumn(tableDef.Cols[idx]) {
+				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
+			}
 			if tableDef.Cols[idx].GeneratedCol != nil {
 				return nil, moerr.NewInvalidInputf(builder.GetContext(), "the value specified for generated column '%s' in table '%s' is not allowed", colName, tableDef.Name)
 			}
@@ -4533,6 +4547,9 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	for i, col := range astCols {
 		colName := strings.ToLower(string(col))
 		if idx, ok := tableDef.Name2ColIndex[colName]; ok {
+			if isFunctionalColumn(tableDef.Cols[idx]) {
+				return nil, nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
+			}
 			if tableDef.Cols[idx].GeneratedCol != nil {
 				genPositions[i] = true
 				generatedColumnCount++
@@ -4725,7 +4742,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		return 0, nil, nil, -1, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
 	}
 
-	if err = builder.addBinding(lastNodeID, tree.AliasClause{Alias: derivedTableName}, bindCtx); err != nil {
+	if err = builder.addBinding(lastNodeID, tree.AliasClause{Alias: derivedTableName}, bindCtx, ""); err != nil {
 		return 0, nil, nil, -1, err
 	}
 
@@ -4737,6 +4754,15 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 // the projection the column came from, used to recognize display-value
 // projections of MySQL special types.
 func (builder *QueryBuilder) castInsertSourceColumn(projExpr, sourceExpr *plan.Expr, colDef *plan.ColDef) (*plan.Expr, error) {
+	var err error
+	projExpr, err = builder.wrapLegacyTimestampAssignment(colDef, projExpr)
+	if err != nil {
+		return nil, err
+	}
+	if sourceExpr != nil && sourceExpr.GetLit() != nil && sourceExpr.GetLit().Isnull &&
+		isLegacyImplicitTimestampColumn(builder.compCtx, colDef) {
+		return buildImplicitCurrentTimestampExpr(colDef.Typ, builder.compCtx.GetProcess())
+	}
 	typ := colDef.Typ
 	switch {
 	case isEnumPlanType(&typ):
@@ -5325,6 +5351,8 @@ func valuesExprIsFuncCall(e tree.Expr) bool {
 			e = v.Expr
 		case *tree.CastExpr:
 			e = v.Expr
+		case *tree.SerialExtractExpr:
+			return true
 		case *tree.FuncExpr:
 			// mod() is arithmetic and shares the numeric-context binder with the
 			// binary operators (see numericAstFunctionName); every other function
@@ -5474,6 +5502,21 @@ func (builder *QueryBuilder) buildValueScan(
 				funcBinder = defaultFuncBinder
 			}
 			for _, r := range stmt.Rows {
+				// With explicit_defaults_for_timestamp=OFF, an explicit NULL
+				// assignment to the legacy implicit TIMESTAMP column has the same
+				// semantics as DEFAULT. Handle it before the literal fast path,
+				// which otherwise materializes a NULL expression and lets the
+				// NOT NULL assignment cast reject it.
+				if isNullAstExpr(r[i]) {
+					defExpr, err = buildLegacyTimestampNullAssignment(builder.compCtx, col)
+					if err != nil {
+						return 0, nil, err
+					}
+					if defExpr != nil {
+						appendValueExpr(i, defExpr)
+						continue
+					}
+				}
 				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {
 					expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(builder.GetContext(), nv, col.Typ)
 					if err != nil {
@@ -5571,6 +5614,10 @@ func (builder *QueryBuilder) buildValueScan(
 							return 0, nil, err
 						}
 					}
+				}
+				defExpr, err = builder.wrapLegacyTimestampAssignment(col, defExpr)
+				if err != nil {
+					return 0, nil, err
 				}
 				defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 				if err != nil {
@@ -5693,7 +5740,7 @@ func (builder *QueryBuilder) buildValueScan(
 		Uuid:        nodeId[:],
 	}
 	nodeID := builder.appendNode(scanNode, bindCtx)
-	if err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, bindCtx); err != nil {
+	if err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, bindCtx, ""); err != nil {
 		return 0, nil, err
 	}
 

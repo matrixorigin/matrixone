@@ -135,6 +135,10 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
+	if c.scalarDropLifecycle() {
+		return moerr.NewInternalError(c.proc.Ctx, "scalar lifecycle cannot authorize DROP DATABASE")
+	}
+
 	c.setAffectedRows(0)
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
@@ -534,6 +538,7 @@ func (c *Compile) dropDatabaseRelations(
 			nil,
 			nil,
 			nil,
+			true,
 		); err != nil {
 			return err
 		}
@@ -954,15 +959,23 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			return err
 		}
 
-		// 1. lock origin table metadata in catalog
-		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return err
+		// A rename changes both name-to-ID mappings. Lock them in the same
+		// order for opposing rename attempts and CDC identity guards.
+		metadataNames := []string{tblName}
+		for _, action := range qry.Actions {
+			if rename := action.GetAlterName(); rename != nil && rename.NewName != "" && rename.NewName != tblName {
+				metadataNames = append(metadataNames, rename.NewName)
 			}
-			// The changes recorded in the data dictionary table imply a change in the structure of the corresponding entity table,
-			// therefore it is necessary to rebuild the logical plan and redirect err to ErrTxnNeedRetryWithDefChanged
-			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
+		sort.Strings(metadataNames)
+		for _, name := range metadataNames {
+			if err = lockMoTable(c, dbName, name, lock.LockMode_Exclusive); err != nil {
+				if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+					!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+					return err
+				}
+				retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+			}
 		}
 
 		// 2. lock origin table. ADD FOREIGN KEY validates existing child rows,
@@ -1063,6 +1076,11 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					}
 					retryErr = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 				}
+				if retryErr == nil {
+					if err := c.validateForeignKeyParentGeneration(parentDB, parentTable, act.AddFk.Fkey.ForeignTbl); err != nil {
+						return err
+					}
+				}
 				// FOREIGN_KEY_CHECKS=0 permits a forward reference whose parent
 				// does not exist yet. Its catalog key is still serialized above,
 				// but there is no parent data keyspace to lock.
@@ -1147,7 +1165,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 								return err
 							}
 						}
-						deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, oTableDef.TblId, indexdef.IndexName)
+						deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, oTableDef.TblId, sqlquote.String(indexdef.IndexName))
 						if err = c.runSqlWithOptions(
 							deleteSql, executor.StatementOption{}.WithDisableLog(),
 						); err != nil {
@@ -1746,6 +1764,12 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateTable()
+	if !qry.GetTemporary() && createTablePublishesForeignKeys(qry) {
+		if err := c.admitForeignKeyCreate(); err != nil {
+			return err
+		}
+	}
+
 	if err := incrservice.CheckAutoIDCache(c.proc.Ctx, c.proc.GetService(), qry.GetTableDef().GetAutoIdCache()); err != nil {
 		return err
 	}
@@ -1835,6 +1859,13 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			return moerr.NewNotSupported(c.proc.Ctx, "add foreign key for temporary table")
 		}
 	}
+	preservedCatalog, err := c.replacementForeignKeyCatalog(dbName, qry.TableDef.Name)
+	if err != nil {
+		return err
+	}
+	if err := c.applyReplacementForeignKeyHints(qry, dbName); err != nil {
+		return err
+	}
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := engine.PlanColsToExeCols(planCols)
@@ -1858,7 +1889,10 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 
 	tblName := qry.GetTableDef().GetName()
 
-	if !c.disableLock {
+	if err := c.admitCreateNames(qry, dbName); err != nil {
+		return err
+	}
+	if !c.disableLock && !c.createNamePinsAdmitted {
 		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
 			return err
 		}
@@ -1888,7 +1922,7 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
 	}
 
-	if !c.disableLock {
+	if !c.disableLock && !c.createNamePinsAdmitted {
 		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
@@ -1897,6 +1931,15 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			)
 			return err
 		}
+	}
+
+	if err := c.validateCreateForeignKeyParents(qry, dbName); err != nil {
+		return err
+	}
+
+	forwardChildren, forwardBackfills, err := c.bindCreateForwardForeignKeys(qry, dbName)
+	if err != nil {
+		return err
 	}
 
 	if len(qry.IndexTables) > 0 {
@@ -1938,12 +1981,15 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	}
 
 	//update mo_foreign_keys
-	for _, sql := range qry.UpdateFkSqls {
-		if err = c.runSqlWithOptions(
-			sql, executor.StatementOption{}.WithDisableLog(),
-		); err != nil {
-			return err
+	if preservedCatalog == nil {
+		for _, sql := range qry.UpdateFkSqls {
+			if err = c.runSqlWithOptions(
+				sql, executor.StatementOption{}.WithDisableLog(),
+			); err != nil {
+				return err
+			}
 		}
+
 	}
 
 	// handle fk that refers to others tables
@@ -2115,108 +2161,16 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		}
 	}
 
-	// handle fk forward reference
-	fkRefersToMe := qry.GetFksReferToMe()
-	if len(fkRefersToMe) > 0 {
-		//1. get the relation of created table above again.
-		//get the relation of created table above again.
-		//due to the colId may be changed.
-		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
+	if len(forwardChildren) > 0 {
+		parent, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.Error(err),
-			)
 			return err
 		}
-		tblId := newRelation.GetTableID(c.proc.Ctx)
-
-		newTableDef, err := newRelation.TableDefs(c.proc.Ctx)
-		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.Error(err),
-			)
+		if err := c.publishCreateForwardForeignKeys(parent, forwardChildren); err != nil {
 			return err
 		}
-		//get the columnId of the column from newTableDef
-		var colNameToId = make(map[string]uint64)
-		for _, def := range newTableDef {
-			if attr, ok := def.(*engine.AttributeDef); ok {
-				colNameToId[strings.ToLower(attr.Attr.Name)] = attr.Attr.ID
-			}
-		}
-		//1.1 update the column id of the column names in this table.
-		//2. update fk info in the child table.
-		for _, info := range fkRefersToMe {
-			//update foreignCols in fk
-			newDef := &plan.ForeignKeyDef{
-				Name:                info.Def.Name,
-				Cols:                make([]uint64, len(info.Def.Cols)),
-				ForeignTbl:          tblId,
-				ForeignCols:         make([]uint64, len(info.Def.ForeignCols)),
-				OnDelete:            info.Def.OnDelete,
-				OnUpdate:            info.Def.OnUpdate,
-				ReferencedIndexName: info.Def.ReferencedIndexName,
-				OnDeleteOrigin:      info.Def.OnDeleteOrigin,
-				OnUpdateOrigin:      info.Def.OnUpdateOrigin,
-			}
-			//child table column ids of the child table
-			copy(newDef.Cols, info.Def.Cols)
-			//parent table column ids of the parent table
-			for j, colReferred := range info.ColsReferred.Cols {
-				//colName -> new colId
-				if id, has := colNameToId[colReferred]; has {
-					newDef.ForeignCols[j] = id
-				} else {
-					err := moerr.NewInternalErrorf(c.proc.Ctx, "no column %s", colReferred)
-					c.proc.Info(c.proc.Ctx, "createTable",
-						zap.String("databaseName", c.db),
-						zap.String("tableName", qry.GetTableDef().GetName()),
-						zap.Error(err),
-					)
-					return err
-				}
-			}
-
-			// add the fk def into the child table
-			childDb, err := c.e.Database(c.proc.Ctx, info.Db, c.proc.GetTxnOperator())
-			if err != nil {
-				c.proc.Info(c.proc.Ctx, "createTable",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.Error(err),
-				)
-				return err
-			}
-			childTable, err := childDb.Relation(c.proc.Ctx, info.Table, nil)
-			if err != nil {
-				c.proc.Info(c.proc.Ctx, "createTable",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.Error(err),
-				)
-				return err
-			}
-			err = AddFkeyToRelation(c.proc.Ctx, childTable, newDef)
-			if err != nil {
-				c.proc.Info(c.proc.Ctx, "createTable",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.Error(err),
-				)
-				return err
-			}
-			// add the child table id -- tblId into the current table -- refChildDef
-			err = AddChildTblIdToParentTable(c.proc.Ctx, newRelation, childTable.GetTableID(c.proc.Ctx))
-			if err != nil {
-				c.proc.Info(c.proc.Ctx, "createTable",
-					zap.String("databaseName", c.db),
-					zap.String("tableName", qry.GetTableDef().GetName()),
-					zap.Error(err),
-				)
+		for _, sql := range forwardBackfills {
+			if err := c.runSqlWithOptions(sql, executor.StatementOption{}.WithDisableLog()); err != nil {
 				return err
 			}
 		}
@@ -3157,7 +3111,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		return err
 	}
 	if !qry.GetTableDef().GetIsTemporary() {
-		if err = c.advanceCreateIndexSnapshot(); err != nil {
+		if err = c.advanceIndexDDLSnapshot(); err != nil {
 			return err
 		}
 	}
@@ -3197,11 +3151,11 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	return nil
 }
 
-// advanceCreateIndexSnapshot closes the gap between CREATE INDEX planning and
+// advanceIndexDDLSnapshot closes the gap between CREATE INDEX planning and
 // its base-table scan. The caller holds both the catalog-owner lock and the
 // base-table definition lock, so the barrier includes every DML commit that
 // preceded those locks while later DML must rebuild against the new index.
-func (c *Compile) advanceCreateIndexSnapshot() error {
+func (c *Compile) advanceIndexDDLSnapshot() error {
 	txnOp := c.proc.GetTxnOperator()
 	if txnOp == nil || !txnOp.Txn().IsPessimistic() || !txnOp.Txn().IsRCIsolation() {
 		return nil
@@ -3470,9 +3424,6 @@ func (s *Scope) DropIndex(c *Compile) error {
 		}
 	}
 
-	if err := lockMoDatabase(c, qry.Database, lock.LockMode_Shared); err != nil {
-		return err
-	}
 	d, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
 	if err != nil {
 		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, qry.Database, qry.Table)
@@ -3482,8 +3433,80 @@ func (s *Scope) DropIndex(c *Compile) error {
 		return err
 	}
 
+	if !c.disableLock && c.proc.GetTxnOperator().Txn().IsPessimistic() {
+		retained, err := c.proc.GetTxnOperator().Snapshot()
+		if err != nil {
+			return err
+		}
+		policy := lock.WaitPolicy_Wait
+		if len(retained.LockTables) > 0 {
+			policy = lock.WaitPolicy_FastFail
+		}
+		keys, err := r.GetPrimaryKeys(c.proc.Ctx)
+		if err != nil {
+			return err
+		}
+		if len(keys) != 1 {
+			return moerr.NewInternalError(c.proc.Ctx, "DROP INDEX requires a physical primary key")
+		}
+		physicalID := r.GetTableID(c.proc.Ctx)
+		if err := lockop.LockTableWithWaitPolicy(c.proc.Ctx, c.e, c.proc, physicalID, keys[0].Type, true, policy); err != nil {
+			return err
+		}
+		actor, err := defines.GetAccountId(c.proc.Ctx)
+		if err != nil {
+			return err
+		}
+		for _, target := range []struct {
+			catalog string
+			names   []string
+			mode    lock.LockMode
+		}{
+			{catalog.MO_DATABASE, []string{qry.Database}, lock.LockMode_Shared},
+			{catalog.MO_TABLES, []string{qry.Database, qry.Table}, lock.LockMode_Exclusive},
+		} {
+			owner, err := getRelFromMoCatalog(c, target.catalog)
+			if err != nil {
+				return err
+			}
+			_, err = c.lockCatalogName(owner, actor, target.names, target.mode, lock.WaitPolicy_FastFail)
+			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+					return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+				}
+				return err
+			}
+		}
+		if !r.GetTableDef(c.proc.Ctx).IsTemporary {
+			if err := c.advanceIndexDDLSnapshot(); err != nil {
+				return err
+			}
+		}
+		d, err = c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
+		if err != nil {
+			return err
+		}
+		r, err = d.Relation(c.proc.Ctx, qry.Table, nil)
+		if err != nil {
+			return err
+		}
+		if r.GetTableID(c.proc.Ctx) != physicalID {
+			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
+	}
+
 	// old tabledef
-	oldTableDef := r.GetTableDef(c.proc.Ctx)
+	oldTableDef := r.CopyTableDef(c.proc.Ctx)
+	if err := plan2.CheckDropReferencedKeyForeignKeyDependency(c.proc.Ctx, oldTableDef, qry.IndexName, nil,
+		func(id uint64) (*plan.TableDef, error) {
+			_, _, child, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), id)
+			if err != nil {
+				return nil, err
+			}
+			return child.CopyTableDef(c.proc.Ctx), nil
+		}); err != nil {
+		return err
+	}
 
 	//1. build and update constraint def
 	oldCt, err := GetConstraintDef(c.proc.Ctx, r)
@@ -3528,7 +3551,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 	}
 
 	// 4. delete index object from mo_catalog.mo_indexes
-	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.proc.Ctx), qry.IndexName)
+	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.proc.Ctx), sqlquote.String(qry.IndexName))
 	err = c.runSqlWithOptions(
 		deleteSql, executor.StatementOption{}.WithDisableLog(),
 	)
@@ -3980,12 +4003,23 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return nil
 	}
 
-	if !isTemp && c.proc.GetTxnOperator().Txn().IsPessimistic() {
+	var scalarAdmission *dropLifecycleAdmission
+	if !isTemp && c.isLifecycleRC() && (!truncate.GetIsDelete() || c.transactionLocalReplacement(rel)) {
+		var admittedDB engine.Database
+		var admittedRel engine.Relation
+		admittedDB, admittedRel, scalarAdmission, err = c.admitScalarReplacementRC(db, relationName, rel)
+		if err != nil {
+			return err
+		}
+		if scalarAdmission != nil {
+			dbSource, rel = admittedDB, admittedRel
+		}
+	}
+	if !isTemp && scalarAdmission == nil && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		if c.isLifecycleRC() {
-			// Unfiltered DELETE shares this physical path. Its ordinary DML
-			// cleanup must wait on a fresh gate; public TRUNCATE keeps the
-			// prompt-conflict contract.
-			if dbSource, rel, err = c.admitBroadTableLifecycleRC(db, relationName, oldID, !truncate.GetIsDelete()); err != nil {
+			// Public TRUNCATE and unfiltered DELETE share transaction-owned
+			// admission: fresh owners wait; retained gate upgrades fast-fail.
+			if dbSource, rel, err = c.admitBroadTableLifecycleRC(db, relationName, oldID); err != nil {
 				return err
 			}
 		} else {
@@ -4015,6 +4049,17 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
+	replacementAdmission := dropLifecycleAdmission{}
+	if scalarAdmission != nil {
+		replacementAdmission = *scalarAdmission
+		replacementAdmission.createNames = map[plan2.FkReferKey]struct{}{{Db: db, Tbl: table}: {}}
+	} else if !isTemp && c.isLifecycleRC() {
+		replacementAdmission.createNames, err = c.admitReplacementNames(db, table, table, rel, nil)
+		if err != nil {
+			return err
+		}
+	}
+
 	// TRUNCATE is a copy-and-swap rebuild: it creates a replacement relation
 	// before the ordinary DROP path retires the old physical generation. Reuse
 	// ALTER's lineage publication protocol so the replacement remains the live
@@ -4023,7 +4068,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	lineageTxnOp := c.proc.GetTxnOperator()
 	lineageSnapshotAdvanced := false
 	lineageCloneTS := int64(0)
-	if !isTemp {
+	if !isTemp && scalarAdmission == nil {
 		if shouldAdvanceAlterDataBranchLineageSnapshot(
 			lineageTxnOp.Txn().IsPessimistic(), lineageTxnOp.Txn().IsRCIsolation(),
 		) {
@@ -4088,6 +4133,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		dropOpts = dropOpts.WithDisableDropIncrStatement()
 		createOpts = createOpts.WithKeepAutoIncrement(oldID)
 	}
+	if scalarAdmission != nil {
+		dropOpts = dropOpts.WithSkipDataBranchReclaim()
+	}
 	if lineagePlan.enabled {
 		// The successor edge is published after CREATE obtains its physical ID.
 		// Keep the old edge until then; the shared reclaim below retires it.
@@ -4112,31 +4160,39 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		},
 	)
 
-	// drop table
-	dropSQL := fmt.Sprintf("drop table `%s`.`%s`", db, table)
-	if isTemp {
-		dropSQL = fmt.Sprintf("drop temporary table `%s`.`%s`", db, table)
+	if !isTemp {
+		complete, err := GetConstraintDef(c.proc.Ctx, rel)
+		if err != nil {
+			return err
+		}
+		preserved := &replacementForeignKeyCatalog{target: plan2.FkReferKey{Db: db, Tbl: table}}
+		for _, constraint := range complete.Cts {
+			if fks, ok := constraint.(*engine.ForeignKeyDef); ok {
+				for _, fk := range fks.Fkeys {
+					preserved.materialized = append(preserved.materialized, plan2.DeepCopyFkey(fk))
+				}
+			}
+		}
+		replacementAdmission.foreignKeyCatalog = preserved
 	}
-	drop := func() error {
-		return c.runSqlWithAccountIdAndOptions(dropSQL, int32(accountID), dropOpts)
+	// A single synchronous owner preserves logical declarations across both
+	// physical operations, including declarations for an absent parent.
+	replace := func() error {
+		dropSQL := fmt.Sprintf("drop table `%s`.`%s`", db, table)
+		if isTemp {
+			dropSQL = fmt.Sprintf("drop temporary table `%s`.`%s`", db, table)
+		}
+		if err := c.runSqlWithAccountIdAndOptions(dropSQL, int32(accountID), dropOpts); err != nil {
+			return err
+		}
+		return c.runSqlWithAccountIdAndOptions(createSQL, int32(accountID), createOpts)
 	}
-	if !isTemp && c.isLifecycleRC() {
-		// G-X is still held. Nested DROP must not reacquire C/D or advance the
-		// snapshot after this owner has already locked the target relation.
-		err = c.withBroadDropLifecycle(drop)
+	if !isTemp {
+		err = c.withDropLifecycle(replacementAdmission, replace)
 	} else {
-		err = drop()
+		err = replace()
 	}
 	if err != nil {
-		return err
-	}
-
-	// create table
-	if err = c.runSqlWithAccountIdAndOptions(
-		createSQL,
-		int32(accountID),
-		createOpts,
-	); err != nil {
 		return err
 	}
 
@@ -4417,7 +4473,37 @@ func (c *Compile) finishTemporaryDropRetry() {
 	c.temporaryDropRetryActive = false
 }
 
-func (s *Scope) DropTable(c *Compile) (retErr error) {
+func (s *Scope) DropTable(c *Compile) error {
+	// Unpublished scalar cleanup uses the same proof as local replacement.
+	// Protected, multi-target and already-certified DROP retain their owners.
+	if _, borrowed := c.proc.Ctx.Value(dropLifecycleKey{}).(*dropLifecycleReceipt); !borrowed && c.isLifecycleRC() {
+		q := s.Plan.GetDdl().GetDropTable()
+		tables := q.GetTables()
+		if len(tables) == 0 {
+			tables = []*plan.DropTable{q}
+		}
+		if len(tables) == 1 && tables[0] != nil && tables[0].TableId != 0 && !tables[0].GetTableDef().GetIsTemporary() &&
+			c.transactionLocalTableIDs(tables[0].TableId, plan2.SnapshotTableID(tables[0].GetTableDef())) {
+			target := tables[0]
+			db, err := c.e.Database(c.proc.Ctx, target.Database, c.proc.GetTxnOperator())
+			if err == nil {
+				rel, err := db.Relation(c.proc.Ctx, target.Table, nil)
+				if err == nil && rel.GetTableID(c.proc.Ctx) == target.TableId && c.transactionLocalReplacement(rel) {
+					_, _, admission, err := c.admitScalarReplacementRC(target.Database, target.Table, rel)
+					if err != nil {
+						return err
+					}
+					if admission != nil {
+						return c.withDropLifecycle(*admission, func() error { return s.dropTable(c) })
+					}
+				}
+			}
+		}
+	}
+	return s.dropTable(c)
+}
+
+func (s *Scope) dropTable(c *Compile) (retErr error) {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
@@ -4429,7 +4515,7 @@ func (s *Scope) DropTable(c *Compile) (retErr error) {
 	if len(tables) == 0 {
 		tables = []*plan.DropTable{qry}
 	}
-	lifecycleAdmitted, err := c.borrowedDropLifecycle()
+	lifecycleAdmitted, err := c.borrowedDropLifecycle(tables...)
 	if err != nil {
 		return err
 	}
@@ -4505,7 +4591,7 @@ func (s *Scope) DropTable(c *Compile) (retErr error) {
 		}
 		if err := s.dropTableSingleResolved(
 			c, plan2.DeepCopyDropTable(entry), &lifecycleAdmitted,
-			lifecycleAdmitted, nil, nil, admitPersistent, temporaryRetire, reclaimPersistent,
+			lifecycleAdmitted, nil, nil, admitPersistent, temporaryRetire, reclaimPersistent, false,
 		); err != nil {
 			return err
 		}
@@ -4523,6 +4609,9 @@ func (s *Scope) dropTableSingleResolved(
 	admitPersistent func() error,
 	temporaryRetire *temporaryDropRetireStage,
 	reclaimPersistent func(uint64) error,
+	// The database caller deletes all of its index catalog rows in this same
+	// transaction after retiring the relations.
+	databaseOwnsIndexCatalogCleanup bool,
 ) error {
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
@@ -4653,8 +4742,10 @@ func (s *Scope) dropTableSingleResolved(
 	if !c.disableLock &&
 		!isTemp &&
 		c.proc.GetTxnOperator().Txn().IsPessimistic() {
-		if err = lockDroppedRelation(c, dbName, tblName, rel, !isView && !isSource); err != nil {
-			return err
+		if !c.scalarDropLifecycle() {
+			if err = lockDroppedRelation(c, dbName, tblName, rel, !isView && !isSource); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -4665,7 +4756,11 @@ func (s *Scope) dropTableSingleResolved(
 		}
 	}
 
-	if len(qry.UpdateFkSqls) > 0 {
+	preservedCatalog, err := c.replacementForeignKeyCatalog(dbName, tblName)
+	if err != nil {
+		return err
+	}
+	if preservedCatalog == nil && len(qry.UpdateFkSqls) > 0 {
 		for _, sql := range qry.UpdateFkSqls {
 			if err = c.runSqlWithOptions(
 				sql, executor.StatementOption{}.WithDisableLog(),
@@ -4759,7 +4854,7 @@ func (s *Scope) dropTableSingleResolved(
 	dispatchPluginDropIndexes(s, c, dbSource, dbName, tblName, rel.GetTableDef(c.proc.Ctx), "")
 
 	// delete all index objects record of the table in mo_catalog.mo_indexes
-	if !qry.IsView && qry.Database != catalog.MO_CATALOG && qry.Table != catalog.MO_INDEXES {
+	if !databaseOwnsIndexCatalogCleanup && !qry.IsView && qry.Database != catalog.MO_CATALOG && qry.Table != catalog.MO_INDEXES {
 		if qry.GetTableDef().Pkey != nil || len(qry.GetTableDef().Indexes) > 0 {
 			deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, qry.GetTableDef().TblId)
 			if err = c.runSqlWithOptions(
@@ -6234,19 +6329,19 @@ func getLockBatch(proc *process.Process, accountId uint32, names []string) (*bat
 
 	// append account_id
 	accountIdVec := vector.NewVec(types.T_uint32.ToType())
+	vecs[0] = accountIdVec
 	err := vector.AppendFixed(accountIdVec, accountId, false, proc.GetMPool())
 	if err != nil {
 		return nil, err
 	}
-	vecs[0] = accountIdVec
 	// append names
 	for i, name := range names {
 		nameVec := vector.NewVec(types.T_varchar.ToType())
+		vecs[i+1] = nameVec
 		err := vector.AppendBytes(nameVec, []byte(name), false, proc.GetMPool())
 		if err != nil {
 			return nil, err
 		}
-		vecs[i+1] = nameVec
 	}
 
 	vec, err := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID, vecs, 1)
@@ -6794,6 +6889,9 @@ func (s *Scope) CreateCDC(c *Compile) error {
 				}
 			}
 		}
+		if err = validateCDCTargetIdentityCatalog(ctx, tx); err != nil {
+			return 0, err
+		}
 
 		var (
 			insertSql    string
@@ -7050,6 +7148,10 @@ const (
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 	executor := task.TaskCode_InitCdc
 	switch {
+	case cdc.UsesGenerationAwareProtocol(opts.ExtraOpts):
+		executor = task.TaskCode_InitCdcSourcePatternV1
+	case cdc.UsesSourcePatternProtocol(opts.ExtraOpts):
+		executor = task.TaskCode_InitCdcSourcePatternV1
 	case opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts):
 		executor = task.TaskCode_InitCdcLosslessStart
 	case !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts):
@@ -7237,6 +7339,7 @@ type CDCCreateTaskOptions struct {
 	TaskId              string
 	UserInfo            *CDCUserInfo
 	Exclude             string
+	ExcludePattern      string
 	StartTs             string
 	EndTs               string
 	MaxSqlLength        int64
@@ -7284,6 +7387,12 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		key := planCDC.Option[i]
 		value := planCDC.Option[i+1]
 		tmpOpts[key] = value
+	}
+	// Make the raw exclude expression available to level validation, which runs
+	// before the option switch reaches the Exclude case.
+	if exclude := tmpOpts[cdc.CDCRequestOptions_Exclude]; exclude != "" {
+		opts.Exclude = exclude
+		opts.ExcludePattern = exclude
 	}
 
 	// extract source uri and check connection
@@ -7439,13 +7548,24 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if opts.NoFull && opts.startTsFromSnapshot {
 		extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol] = cdc.CDCInitialSnapshotProtocolNoFullHLC
 	}
+	// Every new task uses generation-aware catalog state, including atomic full
+	// and explicit-start tasks that do not carry the split-snapshot marker.
 	if !opts.NoFull {
 		cdc.FinalizeInitialSnapshotOptions(extraOpts)
-		_, stable := extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
-		if err = validateStableInitialSnapshotCompileProtocol(ctx, c, stable); err != nil {
-			return
-		}
-	} else if opts.startTsFromSnapshot {
+	}
+	sourcePattern := cdc.RequiresSourcePatternProtocol(opts.PitrTables)
+	if sourcePattern {
+		extraOpts[cdc.CDCTaskExtraOptions_SourcePatternProtocol] = cdc.CDCSourcePatternProtocolV1
+	}
+	if compileProtocolVersion(c) < defines.MORPCVersion106 {
+		return moerr.NewNotSupportedf(ctx,
+			"CDC target identity requires all CNs to support protocol version %d", defines.MORPCVersion106)
+	}
+	extraOpts[cdc.CDCTaskExtraOptions_GenerationProtocol] = cdc.CDCGenerationAwareProtocolV2
+	if err = validateStableInitialSnapshotCompileProtocol(ctx, c, true); err != nil {
+		return
+	}
+	if opts.startTsFromSnapshot {
 		if err = validateLosslessNoFullStartCompileProtocol(ctx, c); err != nil {
 			return
 		}
@@ -7459,6 +7579,37 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	opts.ExtraOpts = string(extraOptsBytes)
 
 	return
+}
+
+func compileProtocolVersion(c *Compile) int64 {
+	if c == nil || c.proc == nil {
+		return defines.MORPCLatestVersion
+	}
+	if rt := moruntime.ServiceRuntime(c.proc.GetService()); rt != nil {
+		if value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+			if version, valid := value.(int64); valid {
+				return version
+			}
+		}
+	}
+	return defines.MORPCVersion4
+}
+
+func validateCDCTargetIdentityCatalog(ctx context.Context, tx taskservice.SqlExecutor) error {
+	rows, err := tx.QueryContext(ctx,
+		"SELECT pending_source_table_id, target_identity FROM mo_catalog.mo_cdc_watermark LIMIT 0")
+	if err != nil {
+		return moerr.NewNotSupportedf(ctx,
+			"CDC target identity catalog columns are not available: %v", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return moerr.NewInternalError(ctx, "CDC target identity catalog probe unexpectedly returned a row")
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateStableInitialSnapshotCompileProtocol(
@@ -7526,10 +7677,13 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 	); err != nil {
 		return
 	}
+	if err = cdc.NormalizeCDCSourcePatternCase(patterTupples, c.getLower()); err != nil {
+		return
+	}
 
 	// ensure PITR checks run with the target tenant account id
 	ctx = defines.AttachAccountId(ctx, opts.UserInfo.AccountId)
-	if err = c.checkPitrGranularity(ctx, patterTupples); err != nil {
+	if err = c.checkPitrGranularity(ctx, patterTupples, opts.ExcludePattern); err != nil {
 		return
 	}
 
@@ -7589,8 +7743,124 @@ func transformIntoHours(freq string) int64 {
 func (c *Compile) checkPitrGranularity(
 	ctx context.Context,
 	pts *cdc.PatternTuples,
+	exclude string,
 	minLength ...int64,
 ) error {
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	// Validate concrete CDC sources before persisting the task. The sink needs
+	// a user-visible primary key for UPDATE/DELETE identity; the engine-only
+	// fake key used by no-PK tables is deliberately not accepted.
+	for _, pt := range pts.Pts {
+		if pt == nil {
+			continue
+		}
+		if pt.Source.Database == cdc.CDCPitrGranularity_All || pt.Source.Table == cdc.CDCPitrGranularity_All {
+			// Use the runtime scanner's catalog predicate, then apply Exclude and
+			// the foreign-key rule to real names. In particular, do not match a
+			// regexp against the synthetic "db.*" tuple.
+			res, err := c.runSqlWithResultAndOptions(
+				cdc.CollectCDCSourceCandidateSQL(accountId, pt.Source.Database, pt.Source.Table, pts.SourceCaseMode),
+				int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+			if err != nil {
+				return err
+			}
+			var validationErr error
+			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				for i := 0; i < rows; i++ {
+					dbName := cols[3].GetStringAt(i)
+					tableName := cols[1].GetStringAt(i)
+					if !cdc.CDCSourceNameMatches(dbName, pt.Source.Database, pts.SourceCaseMode) ||
+						!cdc.CDCSourceNameMatches(tableName, pt.Source.Table, pts.SourceCaseMode) {
+						continue
+					}
+					if exclude != "" {
+						matched, matchErr := regexp.MatchString(exclude, dbName+"."+tableName)
+						if matchErr != nil {
+							validationErr = matchErr
+							return false
+						}
+						if matched {
+							continue
+						}
+					}
+					hasForeignKey, decodeErr := cdc.TableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
+					if decodeErr != nil {
+						validationErr = decodeErr
+						return false
+					}
+					if hasForeignKey {
+						continue
+					}
+					if !vector.MustFixedColNoTypeCheck[bool](cols[7])[i] {
+						validationErr = moerr.NewInternalErrorf(ctx, "CDC source scope %s contains table %s.%s without a primary key", pt.Source, dbName, tableName)
+						return false
+					}
+				}
+				return true
+			})
+			res.Close()
+			if validationErr != nil {
+				return validationErr
+			}
+			// The shared candidate query retains every runtime table and returns its
+			// user-primary-key status. That avoids N+1 catalog queries while both
+			// admission and runtime can fail closed for a no-PK table.
+			continue
+		}
+		res, err := c.runSqlWithResultAndOptions(
+			cdc.CollectCDCSourceCandidateSQL(accountId, pt.Source.Database, pt.Source.Table, pts.SourceCaseMode),
+			int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+		if err != nil {
+			return err
+		}
+		valid := false
+		var validationErr error
+		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			for i := 0; i < rows; i++ {
+				if !cdc.CDCSourceNameMatches(cols[3].GetStringAt(i), pt.Source.Database, pts.SourceCaseMode) ||
+					!cdc.CDCSourceNameMatches(cols[1].GetStringAt(i), pt.Source.Table, pts.SourceCaseMode) {
+					continue
+				}
+				dbName := cols[3].GetStringAt(i)
+				tableName := cols[1].GetStringAt(i)
+				if exclude != "" {
+					matched, matchErr := regexp.MatchString(exclude, dbName+"."+tableName)
+					if matchErr != nil {
+						validationErr = matchErr
+						return false
+					}
+					if matched {
+						valid = true
+						continue
+					}
+				}
+				hasForeignKey, decodeErr := cdc.TableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
+				if decodeErr != nil {
+					validationErr = decodeErr
+					return false
+				}
+				if hasForeignKey {
+					valid = true
+					continue
+				}
+				if !vector.MustFixedColNoTypeCheck[bool](cols[7])[i] {
+					return true
+				}
+				valid = true
+			}
+			return true
+		})
+		res.Close()
+		if validationErr != nil {
+			return validationErr
+		}
+		if !valid {
+			return moerr.NewInternalErrorf(ctx, "source table %s has no primary key; CDC does not support tables without a user-visible primary key", pt.Source)
+		}
+	}
 	var minPitrLen int64 = 2
 	if len(minLength) > 1 {
 		return moerr.NewInternalErrorf(ctx, "only one length parameter allowed")
@@ -7598,11 +7868,6 @@ func (c *Compile) checkPitrGranularity(
 	if len(minLength) > 0 {
 		minPitrLen = max(minLength[0]+1, minPitrLen)
 	}
-	accountId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return err
-	}
-
 	sqlCluster := fmt.Sprintf(`SELECT pitr_length,pitr_unit FROM %s.%s WHERE level='cluster' AND account_id = %d`,
 		catalog.MO_CATALOG, catalog.MO_PITR, accountId)
 	if res, err := c.runSqlWithResultAndOptions(sqlCluster, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog()); err == nil {
@@ -7745,8 +8010,11 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 	); err != nil {
 		return
 	}
+	if err = cdc.NormalizeCDCSourcePatternCase(patterTupples, c.getLower()); err != nil {
+		return
+	}
 
-	if err = c.checkPitrGranularity(ctx, patterTupples, normalized); err != nil {
+	if err = c.checkPitrGranularity(ctx, patterTupples, opts.ExcludePattern, normalized); err != nil {
 		return err
 	}
 	return nil

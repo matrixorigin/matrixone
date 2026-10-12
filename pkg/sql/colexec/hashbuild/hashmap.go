@@ -387,6 +387,10 @@ func (hb *HashmapBuilder) abortExpressionEval(proc *process.Process) {
 // explicit key domains; an IntHashMap cannot represent a sentinel outside the
 // complete uint64 raw-value domain without collisions.
 func (hb *HashmapBuilder) hasGroupingKey() bool {
+	return hb.hasGroupingKeyInBatches(hb.Batches.Buf)
+}
+
+func (hb *HashmapBuilder) hasGroupingKeyInBatches(batches []*batch.Batch) bool {
 	for _, executor := range hb.executors {
 		if !executor.IsColumnExpr() {
 			continue
@@ -402,10 +406,10 @@ func (hb *HashmapBuilder) hasGroupingKey() bool {
 		// same physical column here; filtering on RelPos would miss GROUPING
 		// sentinels for DedupJoin and RightDedupJoin.
 		position := column.GetColIndex()
-		for _, bat := range hb.Batches.Buf {
+		for _, bat := range batches {
 			if bat != nil && position >= 0 && position < len(bat.Vecs) &&
 				bat.Vecs[position] != nil &&
-				bat.Vecs[position].GetGrouping().GetBitmap().CountRange(
+				bat.Vecs[position].GetGrouping().CountRange(
 					0, uint64(bat.Vecs[position].Length()),
 				) > 0 {
 				return true

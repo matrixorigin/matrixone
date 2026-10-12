@@ -1544,12 +1544,21 @@ func (builder *QueryBuilder) validateModernUpdateParentMutation(
 		)
 	}
 
-	updatedChildCols := make(map[uint64]struct{}, len(affectedFK.fk.Cols))
+	updatedChildNames := make(map[string]struct{}, len(affectedFK.fk.Cols))
 	for _, childColID := range affectedFK.fk.Cols {
-		updatedChildCols[childColID] = struct{}{}
+		for _, col := range childTableDef.Cols {
+			if col.ColId == childColID {
+				updatedChildNames[col.Name] = struct{}{}
+			}
+		}
 	}
+	changed, err := collectGeneratedColumnDependents(builder.GetContext(), childTableDef, updatedChildNames)
+	if err != nil {
+		return err
+	}
+	updatedChildCols := make(map[uint64]struct{}, len(changed))
 	for _, col := range childTableDef.Cols {
-		if col.GeneratedCol != nil {
+		if _, ok := changed[col.Name]; ok {
 			updatedChildCols[col.ColId] = struct{}{}
 		}
 	}
@@ -1574,12 +1583,15 @@ func (builder *QueryBuilder) validateModernUpdateParentRowClosure(
 	affectedFK updateParentForeignKey,
 ) error {
 	childTableDef := affectedFK.childTableDef
+	if err := validateFunctionalTable(builder.GetContext(), childTableDef); err != nil {
+		return err
+	}
 	childColByID := make(map[uint64]*plan.ColDef, len(childTableDef.Cols))
 	parentColByID := make(map[uint64]*plan.ColDef, len(parentTableDef.Cols))
 	updatedChildNames := make(map[string]struct{}, len(affectedFK.fk.Cols))
 	for _, col := range childTableDef.Cols {
 		childColByID[col.ColId] = col
-		if col.GeneratedCol != nil || col.OnUpdate != nil {
+		if (col.GeneratedCol != nil && !isFunctionalColumn(col)) || col.OnUpdate != nil {
 			return builder.newUnsupportedUpdateParentRowClosureError()
 		}
 	}
@@ -1590,6 +1602,9 @@ func (builder *QueryBuilder) validateModernUpdateParentRowClosure(
 		childCol := childColByID[childColID]
 		if childCol == nil || i >= len(affectedFK.fk.ForeignCols) {
 			return moerr.NewInternalError(builder.GetContext(), "invalid parent foreign key action columns")
+		}
+		if isFunctionalColumn(childCol) {
+			return builder.newUnsupportedUpdateParentRowClosureError()
 		}
 		updatedChildNames[childCol.Name] = struct{}{}
 		if affectedFK.fk.OnUpdate != plan.ForeignKeyDef_CASCADE {
@@ -1613,6 +1628,54 @@ func (builder *QueryBuilder) validateModernUpdateParentRowClosure(
 				return builder.newUnsupportedUpdateParentRowClosureError()
 			}
 		}
+	}
+	return nil
+}
+
+func (builder *QueryBuilder) recomputeForeignKeyFunctionalColumns(
+	table *plan.TableDef, tag int32, replacements map[int32]*plan.Expr,
+) error {
+	hasFunctional := false
+	for _, col := range table.Cols {
+		if isFunctionalColumn(col) {
+			hasFunctional = true
+			break
+		}
+	}
+	if !hasFunctional {
+		return nil
+	}
+	seed := make(map[string]struct{}, len(replacements))
+	inputs := make([]*plan.Expr, len(table.Cols))
+	for i, col := range table.Cols {
+		if replacement, ok := replacements[int32(i)]; ok {
+			inputs[i] = replacement
+			// Self-cascade merges may include the old generated image; select
+			// dependencies using the final ordinary-column image instead.
+			if col.GeneratedCol == nil {
+				seed[col.Name] = struct{}{}
+			}
+		} else {
+			inputs[i] = &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: int32(i)}}}
+		}
+	}
+	changed, err := collectGeneratedColumnDependents(builder.GetContext(), table, seed)
+	if err != nil {
+		return err
+	}
+	for i, col := range table.Cols {
+		if !isFunctionalColumn(col) {
+			continue
+		}
+		if _, affected := changed[col.Name]; !affected {
+			continue
+		}
+		expr, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(col.GeneratedCol.Expr), false)
+		if err != nil {
+			return err
+		}
+		inputs[i] = substituteColRefsInExpr(expr, inputs, 0)
+		replacements[int32(i)] = inputs[i]
 	}
 	return nil
 }
@@ -1973,6 +2036,11 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 			return buildErr
 		}
 		newChildExprs[childTableDef.Name2ColIndex[childTableDef.Pkey.PkeyColName]] = compositePrimary
+	}
+	// Complete the generated part of the final child image before mapping,
+	// recursive actions and secondary-index maintenance consume replacements.
+	if err := builder.recomputeForeignKeyFunctionalColumns(childTableDef, childTag, newChildExprs); err != nil {
+		return err
 	}
 	if !uniqueReference {
 		mappingTag := builder.genNewBindTag()

@@ -34,7 +34,7 @@ func scalarVectorPlanFixture(t *testing.T, sql string) *plan.Query {
 
 func scalarVectorPlanFixtureForIndex(t *testing.T, sql string, hnsw bool) *plan.Query {
 	t.Helper()
-	ctx := newVectorJoinMockCtx()
+	ctx := newVectorJoinMockCtx(t)
 	table := newVectorJoinTableDef(false, false)
 	table.Name = "scalar_vector_items"
 	table.TblId = 901

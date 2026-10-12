@@ -629,7 +629,7 @@ func TestHandlePipelineStopSendingAbortsOutstandingBatchFlow(t *testing.T) {
 
 	select {
 	case err = <-drainDone:
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+		require.ErrorIs(t, err, process.ErrPipelineStopped)
 	case <-time.After(time.Second):
 		t.Fatal("StopSending did not release the terminal-response drain barrier")
 	}
@@ -678,16 +678,15 @@ func TestPipelineStopBeforeLifecycleRegistrationIsReconciled(t *testing.T) {
 	pipelineReceiver.abortBatchFlowForPendingStop()
 
 	err = flow.waitUntilDrained(context.Background(), context.Background(), nil)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+	require.ErrorIs(t, err, process.ErrPipelineStopped)
 	_, err = flow.reserve(context.Background(), context.Background(), 1)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+	require.ErrorIs(t, err, process.ErrPipelineStopped)
 	require.NoError(t, flow.acknowledge(seq), "a late ACK must be harmless after reconciliation")
 
 	dispatchReceiver := &process.WrapCs{
 		MsgId: streamID,
 		Uid:   uuid.Must(uuid.NewV7()),
 		Cs:    session,
-		Err:   make(chan error, 1),
 	}
 	server.RecordDispatchPipeline(session, streamID, dispatchReceiver)
 	require.False(t, dispatchReceiver.ReceiverDone,
@@ -881,8 +880,6 @@ func TestRemoteNotifyCancellationReleasesCreditWaitAndRegistration(t *testing.T)
 			case <-time.After(5 * time.Second):
 				t.Fatal("notify did not attach")
 			}
-			require.True(t, info.TerminalBacked)
-			require.Nil(t, info.Err)
 			_, err := info.ReserveBatch(proc.Ctx, 1)
 			require.NoError(t, err)
 			observed := &observedDoneContext{Context: proc.Ctx, entered: make(chan struct{})}
@@ -945,8 +942,9 @@ func TestRemoteNotifyCancellationReleasesCreditWaitAndRegistration(t *testing.T)
 			}
 			require.ErrorIs(t, terminal.Err(), cause)
 			require.ErrorIs(t, context.Cause(proc.Ctx), cause)
-			_, _, registered = server.GetProcByUuid(uid, false)
-			require.False(t, registered)
+			_, _, state, lookupWaiter, _ := server.AttachProcByUuidOrWait(uid)
+			lookupWaiter.Close()
+			require.Equal(t, colexec.RemoteReceiverMissing, state)
 			require.NoError(t, handlePipelineBatchAck(&pipeline.Message{Id: id, BatchAckSequence: 1}, session))
 		})
 	}

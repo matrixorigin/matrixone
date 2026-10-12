@@ -140,7 +140,7 @@ func TestBuildPlanRejectsStandaloneIntervalAtScalarBoundaries(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := NewMockCompilerContext(true)
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
@@ -170,7 +170,7 @@ func TestBuildPlanAllowsConsumedIntervalExpressions(t *testing.T) {
 
 	for _, sql := range tests {
 		t.Run(sql, func(t *testing.T) {
-			ctx := NewMockCompilerContext(true)
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			_, err = BuildPlan(ctx, stmt, false)
@@ -224,7 +224,7 @@ func TestBuildPlanPreservesInvalidIntervalFunctionDiagnostics(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := NewMockCompilerContext(true)
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 

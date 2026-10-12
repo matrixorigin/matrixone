@@ -40,7 +40,7 @@ func (c *viewMetadataConsumerContext) BuildTableDefByMoColumns(db, name string) 
 
 func newViewMetadataConsumerContext(t *testing.T) *viewMetadataConsumerContext {
 	t.Helper()
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 0, nil }
 	ctx.tables["nation"].DbId = 10
 	ctx.tables["nation"].Cols[1].Typ.Width = 60

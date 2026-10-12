@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -84,17 +85,27 @@ var (
 	metaCachePressureDeadline      atomic.Int64
 )
 
-// metaLoadGroup deduplicates concurrent loads for the same cache key,
+// metaLoadCalls deduplicates concurrent loads for the same cache key,
 // preventing cache stampede when many goroutines miss the same entry simultaneously.
 // Uses mutex+map instead of sync.Map so entries are fully reclaimed after deletion.
 var metaLoadMu sync.Mutex
-var metaLoadCalls = make(map[mataCacheKey]*loadCall)
+var metaLoadCalls = make(map[mataCacheKey]*loadGroup)
+
+// A group keeps its latest generation reachable by all admitted callers, even
+// after completion removes it from metaLoadCalls. Both fields use metaLoadMu.
+// It holds no history chain: abandoned generations can be reclaimed as their
+// waiters advance. users bounds the lifetime of an abandoned map entry.
+type loadGroup struct {
+	current *loadCall
+	users   int
+}
 
 type loadCall struct {
 	done      chan struct{}
 	val       []byte
 	err       error
 	completed bool
+	abandoned bool
 }
 
 func metaCacheSize() int64 {
@@ -345,40 +356,87 @@ func LoadBFWithMeta(
 // share the result. This prevents cache stampede under high concurrency.
 //
 // Uses mutex+map (not sync.Map) so the map shrinks naturally when keys are
-// deleted. Waiters read through metaCache after the load finishes so they do
-// not keep per-call copies of large metadata buffers.
+// deleted. Waiters share the group's latest result even if cache admission fails.
+// A caller executes its I/O closure at most once; owner errors are not retried.
 func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error)) ([]byte, error) {
-	metaLoadMu.Lock()
-	if call, ok := metaLoadCalls[key]; ok {
-		metaLoadMu.Unlock()
-		select {
-		case <-call.done:
-			if v, ok := metaCache.Get(ctx, key); ok {
-				return v, nil
+	var group *loadGroup
+	var call, abandoned *loadCall
+	defer func() {
+		if group != nil {
+			metaLoadMu.Lock()
+			group.users--
+			if group.users == 0 && metaLoadCalls[key] == group {
+				delete(metaLoadCalls, key)
 			}
-			if call.err != nil {
-				return nil, call.err
-			}
-			if !call.completed {
-				return nil, moerr.NewInternalErrorNoCtx("dedup load did not complete")
-			}
-			return call.val, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
+			metaLoadMu.Unlock()
 		}
+	}()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		metaLoadMu.Lock()
+		// A previous miss may predate a completed load. Serialize this check
+		// with election so it cannot grant ownership after that publication.
+		if v, ok := metaCache.Get(ctx, key); ok {
+			metaLoadMu.Unlock()
+			return v, nil
+		}
+		if group == nil {
+			group = metaLoadCalls[key]
+			if group == nil {
+				group = &loadGroup{}
+				metaLoadCalls[key] = group
+			}
+			group.users++
+		}
+		if pending := group.current; pending != abandoned {
+			metaLoadMu.Unlock()
+			select {
+			case <-pending.done:
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				if v, ok := metaCache.Get(ctx, key); ok {
+					return v, nil
+				}
+				if pending.abandoned {
+					// Cancellation belongs to the loader, not to its live waiters.
+					// Replace only the generation we observed as abandoned. A
+					// peer may already have completed its replacement uncached.
+					abandoned = pending
+					continue
+				}
+				if pending.err != nil {
+					return nil, pending.err
+				}
+				if !pending.completed {
+					return nil, moerr.NewInternalErrorNoCtx("dedup load did not complete")
+				}
+				return pending.val, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		call = &loadCall{done: make(chan struct{})}
+		group.current = call
+		metaLoadMu.Unlock()
+		break
 	}
-	call := &loadCall{done: make(chan struct{})}
-	metaLoadCalls[key] = call
-	metaLoadMu.Unlock()
 
 	defer func() {
 		metaLoadMu.Lock()
 		close(call.done)
-		delete(metaLoadCalls, key)
+		if !call.abandoned {
+			// New callers may start a separate load after a terminal result;
+			// existing callers retain this group's result, not the new one's.
+			delete(metaLoadCalls, key)
+		}
 		metaLoadMu.Unlock()
 	}()
 
 	call.val, call.err = load()
+	call.abandoned = isMetadataLoadCancellation(call.err, ctx.Err())
 	call.completed = true
 	if call.err == nil {
 		if target, ok := metaCachePressureTarget(metaCache.Capacity()); ok &&
@@ -389,6 +447,33 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 		metaCache.Set(ctx, key, call.val, int64(len(call.val)))
 	}
 	return call.val, call.err
+}
+
+// isMetadataLoadCancellation requires every error leaf to belong to the
+// loader's cancellation. A joined storage failure or independent deadline
+// must not be discarded when that loader also happens to be canceled.
+func isMetadataLoadCancellation(err, contextErr error) bool {
+	if err == nil || contextErr == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isMetadataLoadCancellation(child, contextErr) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return isMetadataLoadCancellation(child, contextErr)
+		}
+	}
+	return errors.Is(err, contextErr)
 }
 
 func FastLoadObjectMeta(

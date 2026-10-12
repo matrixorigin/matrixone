@@ -60,7 +60,7 @@ func lastProjectedCol(t *testing.T, node *plan.Node) *plan.ColRef {
 
 // Regression coverage for issue #23882.
 func TestStackedWindowFilterKeepsPriorWindowSlot(t *testing.T) {
-	opt := NewMockOptimizer(false)
+	opt := NewMockOptimizer(false, newPlanTestProcess(t))
 	sql := `
 SELECT x.o_custkey, x.second_cum_totalprice
 FROM (
@@ -100,7 +100,7 @@ WHERE x.rn = 2;
 
 // Regression coverage for issue #23882.
 func TestCurrentWindowFilterUsesProjectedSlot(t *testing.T) {
-	opt := NewMockOptimizer(false)
+	opt := NewMockOptimizer(false, newPlanTestProcess(t))
 	sql := `
 SELECT x.o_custkey, x.second_cum_totalprice
 FROM (

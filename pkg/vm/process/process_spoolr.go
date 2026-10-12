@@ -152,7 +152,7 @@ func NewErrorSignal(err error) PipelineSignal {
 	return PipelineSignal{
 		typ:         GetDirectly,
 		EventType:   EventError,
-		terminalErr: err,
+		terminalErr: MarkPipelineFailure(err),
 	}
 }
 
@@ -165,7 +165,7 @@ func NewAbortSignal(err error) PipelineSignal {
 	return PipelineSignal{
 		typ:         GetDirectly,
 		EventType:   EventAbort,
-		terminalErr: err,
+		terminalErr: MarkPipelineFailure(err),
 	}
 }
 
@@ -200,7 +200,7 @@ func ResolvePipelineSpoolAbortError(regs ...*WaitRegister) error {
 // fallout rather than a substantive execution failure. A joined error is
 // cancellation-only only when all of its children are cancellation-shaped.
 func IsPipelineCancellationError(err error) bool {
-	if err == nil {
+	if err == nil || IsPipelineFailure(err) {
 		return false
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
@@ -221,8 +221,7 @@ func IsPipelineCancellationError(err error) bool {
 		}
 	}
 	return errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded) ||
-		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrPipelineStopped)
 }
 
 // BuildCleanupSignal returns the appropriate terminal signal for pipeline cleanup.
@@ -318,24 +317,28 @@ func WaitPipelineSignalCapacity(ctx context.Context, reg *WaitRegister) bool {
 	if cap(reg.Ch2) == 0 {
 		return true
 	}
-	if ctx != nil && ctx.Err() != nil {
-		return false
-	}
-	select {
-	case <-reg.Done():
-		return false
-	default:
-	}
-	if len(reg.Ch2) < cap(reg.Ch2) {
-		return true
-	}
 	if ctx == nil {
 		ctx = context.TODO()
 	}
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
 	for {
+		if ctx.Err() != nil {
+			return false
+		}
+		select {
+		case <-reg.Done():
+			return false
+		default:
+		}
 		if len(reg.Ch2) < cap(reg.Ch2) {
+			reg.notifyCapacityAvailable()
+			return true
+		}
+		capacityReady := reg.capacityNotification()
+		// Close the receive-before-subscribe race: if a receiver drained Ch2
+		// before capacityNotification was initialized, observe that capacity
+		// here instead of waiting for another receive.
+		if len(reg.Ch2) < cap(reg.Ch2) {
+			reg.notifyCapacityAvailable()
 			return true
 		}
 		select {
@@ -343,7 +346,14 @@ func WaitPipelineSignalCapacity(ctx context.Context, reg *WaitRegister) bool {
 			return false
 		case <-reg.Done():
 			return false
-		case <-ticker.C:
+		case <-capacityReady:
+			// This is a hint, not a reserved channel slot. Pass it on while
+			// capacity remains: pulling upstream can itself wait for other
+			// producers (e.g. shuffle EOF). Also forward before rechecking
+			// cancellation so a departing waiter cannot consume the last hint.
+			if len(reg.Ch2) < cap(reg.Ch2) {
+				reg.notifyCapacityAvailable()
+			}
 		}
 	}
 }
@@ -534,7 +544,7 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 // receiver while a producer has already recorded a more specific failure but
 // could not enqueue every Error signal behind buffered data.
 //
-// A plain context.Canceled remains the intentional StopSending/early-stop path.
+// Only ErrPipelineStopped certifies intentional consumer retirement.
 // Query deadlines retain their classifiable sentinel even when
 // WithTimeoutCause carries a different diagnostic cause.
 func (receiver *PipelineSignalReceiver) contextDoneError() error {
@@ -548,28 +558,39 @@ func (receiver *PipelineSignalReceiver) contextDoneError() error {
 		return context.DeadlineExceeded
 	}
 	cause := context.Cause(receiver.usrCtx)
-	if cause != nil && !IsPipelineCancellationError(cause) {
-		return cause
+	if cause != nil && !isPipelineInterruption(cause) {
+		return MarkPipelineFailure(cause)
 	}
-	var cancellationErr error
+	// A durable Error is execution evidence even when successful stopping won
+	// the context cancellation first. Inspect edges before accepting that stop.
+	var edgeErr error
 	for _, reg := range receiver.srcReg {
 		if err := reg.Err(); err != nil {
-			if !IsPipelineCancellationError(err) {
-				return err
+			if edgeErr == nil {
+				edgeErr = err
 			}
-			if cancellationErr == nil {
-				cancellationErr = err
+			if !isPipelineInterruption(err) {
+				return MarkPipelineFailure(err)
 			}
 		}
 	}
-	return cancellationErr
+	if edgeErr != nil {
+		return MarkPipelineFailure(edgeErr)
+	}
+	if cause == ErrPipelineStopped {
+		return nil
+	}
+	if cause != nil {
+		return MarkPipelineFailure(cause)
+	}
+	return MarkPipelineFailure(receiver.usrCtx.Err())
 }
 
 func (receiver *PipelineSignalReceiver) resolveTerminalError(err error) error {
 	if queryErr := receiver.queryContextError(); queryErr != nil {
 		return queryErr
 	}
-	return err
+	return MarkPipelineFailure(err)
 }
 
 func (receiver *PipelineSignalReceiver) queryContextError() error {
@@ -620,24 +641,33 @@ func (receiver *PipelineSignalReceiver) State() PipelineSignalReceiverState {
 }
 
 func (receiver *PipelineSignalReceiver) listenToAll() (int, PipelineSignal) {
+	var chosen int
+	var signal PipelineSignal
+
 	// hard codes for less interface convert and less reflect.
 	switch len(receiver.srcReg) {
 	case 1:
-		return receiver.listenToSingleEntry()
+		chosen, signal = receiver.listenToSingleEntry()
 	case 2:
-		return receiver.listenToTwoEntry()
+		chosen, signal = receiver.listenToTwoEntry()
 	case 3:
-		return receiver.listenToThreeEntry()
+		chosen, signal = receiver.listenToThreeEntry()
 	case 4:
-		return receiver.listenToFourEntry()
+		chosen, signal = receiver.listenToFourEntry()
 	case 5:
-		return receiver.listenToFiveEntry()
+		chosen, signal = receiver.listenToFiveEntry()
 	case 6:
-		return receiver.listenToSixEntry()
+		chosen, signal = receiver.listenToSixEntry()
 	case 7:
-		return receiver.listenToSevenEntry()
+		chosen, signal = receiver.listenToSevenEntry()
 	case 8:
-		return receiver.listenToEightEntry()
+		chosen, signal = receiver.listenToEightEntry()
+	}
+	if len(receiver.srcReg) <= 8 {
+		if chosen > 0 {
+			receiver.srcReg[chosen-1].notifyCapacityAvailable()
+		}
+		return chosen, signal
 	}
 
 	// common case.
@@ -652,9 +682,12 @@ func (receiver *PipelineSignalReceiver) listenToAll() (int, PipelineSignal) {
 		if !ok {
 			panic("unexpected sender close during GetNextBatch")
 		}
+		receiver.srcReg[idx].notifyCapacityAvailable()
 		return idx + 1, value.Interface().(PipelineSignal)
 	}
-	return receiver.receiveSignalOrTerminal(idx)
+	chosen, signal = receiver.receiveSignalOrTerminal(idx)
+	receiver.srcReg[idx].notifyCapacityAvailable()
+	return chosen, signal
 }
 
 // receiveSignalOrTerminal handles an edge whose Done channel is ready. Ch2

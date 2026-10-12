@@ -43,7 +43,7 @@ func TestDirectInsertSetOperationSources(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			stmt, err := parsers.ParseOne(
 				context.Background(),
 				dialect.MYSQL,
@@ -65,7 +65,7 @@ func TestDirectInsertSetOperationSources(t *testing.T) {
 }
 
 func TestParenthesizedInsertSetOperationSourceRemainsSupported(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(
 		context.Background(),
 		dialect.MYSQL,
@@ -85,7 +85,7 @@ func TestParenthesizedInsertSetOperationSourceRemainsSupported(t *testing.T) {
 }
 
 func TestLegacyDirectInsertSetOperationSource(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(
 		context.Background(),
 		dialect.MYSQL,
@@ -101,7 +101,7 @@ func TestLegacyDirectInsertSetOperationSource(t *testing.T) {
 }
 
 func TestDirectInsertSetOperationReportsBranchWidthError(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(
 		context.Background(),
 		dialect.MYSQL,

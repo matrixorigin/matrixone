@@ -338,13 +338,12 @@ func TestOrder(t *testing.T) {
 }
 
 func TestMergeOrderFloatNaNLastAndPeerTieBreak(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &MergeOrder{
 		OrderBySpecs: []*plan.OrderBySpec{
 			{Expr: newExpression(0, types.T_float64)},
 			{Expr: newExpression(1, types.T_int64)},
 		},
-		OperatorBase: vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	makeBatch := func(values []float64, ids []int64) *batch.Batch {
 		bat := batch.NewWithSize(2)
@@ -381,11 +380,10 @@ func TestMergeOrderFloatNaNLastAndPeerTieBreak(t *testing.T) {
 }
 
 func TestOrderSpill(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &MergeOrder{
 		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	bats := []*batch.Batch{
 		newValuesBatch(proc, []int8{1, 4, 7}),
@@ -407,11 +405,10 @@ func TestOrderSpill(t *testing.T) {
 }
 
 func TestOrderSpillFinalMergeHonorsCancellationAfterInput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &MergeOrder{
 		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	baseCtx := proc.Ctx
 	ctx, cancel := context.WithCancel(proc.Ctx)
@@ -455,11 +452,10 @@ func TestOrderSpillFinalMergeHonorsCancellationAfterInput(t *testing.T) {
 }
 
 func TestOrderSpillWriteHonorsCancellationAfterInputBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &MergeOrder{
 		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	baseCtx := proc.Ctx
 	ctx, cancel := context.WithCancel(baseCtx)
@@ -486,7 +482,7 @@ func TestOrderSpillWriteHonorsCancellationAfterInputBatch(t *testing.T) {
 }
 
 func TestWriteSpillBatchStopsAtBatchBoundary(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseCtx := proc.Ctx
 	ctx, cancel := context.WithCancel(baseCtx)
 	proc.Ctx = ctx
@@ -518,7 +514,7 @@ func TestWriteSpillBatchStopsAtBatchBoundary(t *testing.T) {
 }
 
 func TestCleanupSpillDiscardsUncommittedActiveRun(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	file, err := os.CreateTemp(t.TempDir(), "mergeorder-uncommitted-*")
 	require.NoError(t, err)
 	cleaned := false
@@ -554,7 +550,7 @@ func TestCleanupSpillDiscardsUncommittedActiveRun(t *testing.T) {
 }
 
 func TestSpillCancellationEntryCheckpoints(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseCtx := proc.Ctx
 	analyzer := process.NewAnalyzer(0, false, false, "mergeorder-cancel-entry")
 	t.Cleanup(func() {
@@ -673,7 +669,7 @@ func TestMergeRunsToSpillCancellationCheckpoints(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			ctr := &container{
 				compares:        []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
 				executors:       make([]colexec.ExpressionExecutor, 1),
@@ -707,7 +703,7 @@ func TestMergeRunsToSpillCancellationCheckpoints(t *testing.T) {
 }
 
 func TestMergeRunsToSpillStopsAtChunkBoundary(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseCtx := proc.Ctx
 	baseFS, err := proc.GetSpillFileService()
 	require.NoError(t, err)
@@ -754,7 +750,7 @@ func TestMergeRunsToSpillStopsAtChunkBoundary(t *testing.T) {
 }
 
 func TestOpenSpillReadersCancellationPreservesOwnership(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	ctr := &container{
 		compares:        []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
 		executors:       make([]colexec.ExpressionExecutor, 1),
@@ -802,7 +798,7 @@ func TestOpenSpillReadersCancellationPreservesOwnership(t *testing.T) {
 
 func TestSpillReaderRolloverCancellationBoundaries(t *testing.T) {
 	t.Run("before multi-batch refill", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		baseCtx := proc.Ctx
 		accountOwner := newAccountedMergeOrder()
 		accountState := installMergeOrderTestAllocation(
@@ -865,7 +861,7 @@ func TestSpillReaderRolloverCancellationBoundaries(t *testing.T) {
 	})
 
 	t.Run("during refill IO", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		baseCtx := proc.Ctx
 		ctr := &container{
 			executors:       make([]colexec.ExpressionExecutor, 1),
@@ -921,7 +917,7 @@ func TestReduceSpillRunsCleansCompletedRuns(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			baseCtx := proc.Ctx
 			baseFS, err := proc.GetSpillFileService()
 			require.NoError(t, err)
@@ -986,7 +982,7 @@ func TestReduceSpillRunsCleansCompletedRuns(t *testing.T) {
 }
 
 func TestSendSpillResultHonorsCancellationBeforePublish(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	ctr := &container{
 		compares:        []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
 		executors:       make([]colexec.ExpressionExecutor, 1),
@@ -1020,7 +1016,7 @@ func TestSendSpillResultHonorsCancellationBeforePublish(t *testing.T) {
 }
 
 func TestSendSpillResultStopsAtChunkBoundary(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseCtx := proc.Ctx
 	ctx, cancel := context.WithCancel(baseCtx)
 	proc.Ctx = ctx
@@ -1074,11 +1070,10 @@ func TestSendSpillResultStopsAtChunkBoundary(t *testing.T) {
 }
 
 func TestOrderSpillMultiPass(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &MergeOrder{
 		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	bats := make([]*batch.Batch, 0, spillMergeFanIn+8)
 	for i := spillMergeFanIn + 8; i >= 1; i-- {
@@ -1102,12 +1097,11 @@ func TestOrderSpillMultiPass(t *testing.T) {
 }
 
 func TestOrderSpillSkipsColumnKeys(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	exec := &countingColumnExecutor{col: 0}
 	arg := &MergeOrder{
 		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	arg.ctr.executors = []colexec.ExpressionExecutor{exec}
 
@@ -1134,12 +1128,11 @@ func TestOrderSpillSkipsColumnKeys(t *testing.T) {
 }
 
 func TestOrderSpillPersistsComputedKeys(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	exec := &negatingInt8Executor{col: 0}
 	arg := &MergeOrder{
 		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	arg.ctr.executors = []colexec.ExpressionExecutor{exec}
 
@@ -1163,11 +1156,10 @@ func TestOrderSpillPersistsComputedKeys(t *testing.T) {
 }
 
 func TestOrderSpillDesc(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &MergeOrder{
 		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: plan.OrderBySpec_DESC}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	bats := []*batch.Batch{
 		newValuesBatch(proc, []int8{9, 6, 3}),
@@ -1188,14 +1180,13 @@ func TestOrderSpillDesc(t *testing.T) {
 }
 
 func TestOrderSpillMultiKey(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &MergeOrder{
 		OrderBySpecs: []*plan.OrderBySpec{
 			{Expr: newExpression(0, types.T_int8), Flag: 0},
 			{Expr: newExpression(1, types.T_int64), Flag: plan.OrderBySpec_DESC},
 		},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	bats := []*batch.Batch{
 		newPairBatch(proc, []int8{1, 2, 3}, []int64{10, 9, 8}),
@@ -1226,11 +1217,10 @@ func TestOrderSpillMultiKey(t *testing.T) {
 }
 
 func TestOrderSpillNullsLast(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &MergeOrder{
 		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: plan.OrderBySpec_NULLS_LAST}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	bats := []*batch.Batch{
 		newNullableValuesBatch(proc, []int8{1, 4, 0}, []uint64{2}),
@@ -1261,14 +1251,13 @@ func TestOrderSpillNullsLast(t *testing.T) {
 }
 
 func TestOrderSpillDescNullsFirst(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &MergeOrder{
 		OrderBySpecs: []*plan.OrderBySpec{{
 			Expr: newExpression(0, types.T_int8),
 			Flag: plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_FIRST,
 		}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	bats := []*batch.Batch{
 		newNullableValuesBatch(proc, []int8{0, 9, 6}, []uint64{0}),
@@ -1315,7 +1304,7 @@ func TestSpillAppendPolicy(t *testing.T) {
 }
 
 func TestCanAppendToActiveRun(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	ctr := &container{
 		compares:  []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
 		executors: make([]colexec.ExpressionExecutor, 1),
@@ -1346,7 +1335,7 @@ func TestCanAppendToActiveRun(t *testing.T) {
 }
 
 func TestComputeDrainChunkFixedWidth(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1369,7 +1358,7 @@ func TestComputeDrainChunkFixedWidth(t *testing.T) {
 }
 
 func TestComputeDrainChunkVarlen(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1393,7 +1382,7 @@ func TestComputeDrainChunkVarlen(t *testing.T) {
 }
 
 func TestComputeWinnerChunkDominant(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1419,7 +1408,7 @@ func TestComputeWinnerChunkDominant(t *testing.T) {
 }
 
 func TestComputeWinnerChunkBudgetLimited(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1445,7 +1434,7 @@ func TestComputeWinnerChunkBudgetLimited(t *testing.T) {
 }
 
 func TestComputeWinnerChunkFallbackToOne(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1471,7 +1460,7 @@ func TestComputeWinnerChunkFallbackToOne(t *testing.T) {
 }
 
 func TestComputeBatchDrainChunkFixedWidth(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1491,7 +1480,7 @@ func TestComputeBatchDrainChunkFixedWidth(t *testing.T) {
 }
 
 func TestComputeBatchDrainChunkVarlen(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1512,7 +1501,7 @@ func TestComputeBatchDrainChunkVarlen(t *testing.T) {
 }
 
 func TestComputeInMemoryWinnerChunkThreeRuns(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1541,7 +1530,7 @@ func TestComputeInMemoryWinnerChunkThreeRuns(t *testing.T) {
 }
 
 func TestComputeInMemoryWinnerChunkDominant(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1567,7 +1556,7 @@ func TestComputeInMemoryWinnerChunkDominant(t *testing.T) {
 }
 
 func TestComputeInMemoryWinnerChunkFallbackToOne(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1592,7 +1581,7 @@ func TestComputeInMemoryWinnerChunkFallbackToOne(t *testing.T) {
 }
 
 func TestInMemoryHeapAdvance(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1627,7 +1616,7 @@ func TestInMemoryHeapAdvance(t *testing.T) {
 }
 
 func TestPickAndSendAfterFirstBatchReleased(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	remaining := newValuesBatch(proc, []int8{7})
 	output, err := proc.NewBatchFromSrc(remaining, 0)
 	require.NoError(t, err)
@@ -1654,7 +1643,7 @@ func TestPickAndSendAfterFirstBatchReleased(t *testing.T) {
 }
 
 func TestAppendContiguousOrderRows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1677,7 +1666,7 @@ func TestAppendContiguousOrderRows(t *testing.T) {
 }
 
 func TestSpillAppendPathAndSendResult(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1728,7 +1717,7 @@ func TestSpillAppendPathAndSendResult(t *testing.T) {
 }
 
 func TestMergeRunsToSpillWithStoredKeys(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1802,7 +1791,7 @@ func TestMergeRunsToSpillWithStoredKeys(t *testing.T) {
 }
 
 func TestFinalizeActiveSpillRunError(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1819,7 +1808,7 @@ func TestFinalizeActiveSpillRunError(t *testing.T) {
 }
 
 func TestFixSpillHeapAfterAdvanceTwoReaders(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1857,7 +1846,7 @@ func TestSpillHeapPush(t *testing.T) {
 }
 
 func TestMergeOrderResetAndOpType(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1884,7 +1873,7 @@ func TestMergeOrderResetAndOpType(t *testing.T) {
 }
 
 func TestMergeOrderResetReleasesAccountedResult(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
@@ -1913,7 +1902,7 @@ func TestMergeOrderResetReleasesAccountedResult(t *testing.T) {
 }
 
 func TestRemoveInMemoryBatchReleasesAccountedBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
@@ -1937,7 +1926,7 @@ func TestRemoveInMemoryBatchReleasesAccountedBatch(t *testing.T) {
 		batchList:     []*batch.Batch{input},
 		orderCols:     [][]*vector.Vector{{input.Vecs[0]}},
 		indexList:     []int64{17},
-		spillMemUsage: int64(input.Size()),
+		spillMemUsage: int64(input.Allocated()),
 	}
 	require.NoError(t, ctr.removeInMemoryBatch(proc, 0))
 	require.Nil(t, ctr.batchList[0])
@@ -1952,7 +1941,7 @@ func TestRemoveInMemoryBatchReleasesAccountedBatch(t *testing.T) {
 }
 
 func TestSpillHelperBranches(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -2044,7 +2033,7 @@ func TestSpillHelperBranches(t *testing.T) {
 }
 
 func TestInMemoryHeapPushAndSingleInit(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -2068,7 +2057,7 @@ func TestInMemoryHeapPushAndSingleInit(t *testing.T) {
 }
 
 func TestSpillReaderLifecycleAndCleanup(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -2146,7 +2135,7 @@ func TestSpillReaderLifecycleAndCleanup(t *testing.T) {
 }
 
 func TestAdditionalCoverageBranches(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -2190,7 +2179,7 @@ func TestAdditionalCoverageBranches(t *testing.T) {
 }
 
 func TestPrepareInMemoryMergeAndHeapEdgeBranches(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -2215,41 +2204,57 @@ func TestPrepareInMemoryMergeAndHeapEdgeBranches(t *testing.T) {
 }
 
 func BenchmarkOrder(b *testing.B) {
+	tcs := []orderTestCase{
+		newTestCase(b, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}}),
+		newTestCase(b, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 2}}),
+	}
+	for _, tc := range tcs {
+		b.Cleanup(func() {
+			tc.arg.Free(tc.proc, false, nil)
+			require.Zero(b, tc.proc.Mp().CurrNB())
+			require.Zero(b, tc.proc.Mp().OnHeapCurrNB())
+		})
+	}
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		tcs := []orderTestCase{
-			newTestCase(b, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}}),
-			newTestCase(b, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 2}}),
-		}
-		t := new(testing.T)
 		for _, tc := range tcs {
-			bats := []*batch.Batch{newRandomBatch(tc.types, tc.proc, BenchmarkRows), batch.EmptyBatch, newRandomBatch(tc.types, tc.proc, BenchmarkRows)}
-			resetChildren(tc.arg, bats)
-			err := tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
-			for {
-				ok, err := vm.Exec(tc.arg, tc.proc)
-				if ok.Status == vm.ExecStop || err != nil {
-					break
+			func() {
+				bats := []*batch.Batch{
+					newRandomBatch(tc.types, tc.proc, BenchmarkRows),
+					batch.EmptyBatch,
+					newRandomBatch(tc.types, tc.proc, BenchmarkRows),
 				}
-			}
+				resetChildren(tc.arg, bats)
+				child := tc.arg.GetChildren(0)
+				defer func() {
+					tc.arg.Reset(tc.proc, false, nil)
+					child.Free(tc.proc, false, nil)
+				}()
+				require.NoError(b, tc.arg.Prepare(tc.proc))
+				rows := 0
+				for {
+					result, err := vm.Exec(tc.arg, tc.proc)
+					require.NoError(b, err)
+					if result.Batch != nil {
+						rows += result.Batch.RowCount()
+					}
+					if result.Status == vm.ExecStop {
+						break
+					}
+				}
+				require.Equal(b, 2*BenchmarkRows, rows)
+			}()
 		}
 	}
 }
 
 func newTestCase(t testing.TB, ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcess(t)
 	return orderTestCase{
 		types: ts,
 		proc:  proc,
 		arg: &MergeOrder{
 			OrderBySpecs: fs,
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
 		},
 	}
 }

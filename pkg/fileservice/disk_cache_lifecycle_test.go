@@ -226,8 +226,9 @@ func TestDiskCacheReadSharesWaitBudgetAcrossEntries(t *testing.T) {
 					entries[i] = IOEntry{Offset: int64(i), Size: 1}
 				}
 
-				var releases []func()
-				for _, path := range tc.holdPaths(cache, entries) {
+				holdPaths := tc.holdPaths(cache, entries)
+				releases := make([]func(), 0, len(holdPaths))
+				for _, path := range holdPaths {
 					releases = append(releases, cache.startUpdate(path))
 				}
 				releaseAll := sync.OnceFunc(func() {

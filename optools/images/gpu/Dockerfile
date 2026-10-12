@@ -1,4 +1,4 @@
-FROM golang:1.26.4-bookworm AS builder
+FROM golang:1.27.0-bookworm AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \

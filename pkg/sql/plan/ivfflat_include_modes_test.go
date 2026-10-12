@@ -28,7 +28,7 @@ import (
 )
 
 func newIvfIncludeModeTestBuilder(t *testing.T) (*QueryBuilder, *BindContext, *plan.Node, int32, *MultiTableIndex) {
-	baseMockCtx := NewMockCompilerContext(false)
+	baseMockCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {

@@ -1568,7 +1568,7 @@ func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 		}
 		switch value.Kind() {
 		case reflect.Struct:
-			for field := 0; field < value.NumField(); field++ {
+			for field, fieldCount := 0, value.NumField(); field < fieldCount; field++ {
 				child := value.Field(field)
 				// Only exported containers can hold expression roots. Checking
 				// the value avoids copying field metadata for every plan column.

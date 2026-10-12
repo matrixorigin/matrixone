@@ -15,6 +15,8 @@
 package hashbuild
 
 import (
+	"context"
+	"io"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -30,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillio"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -104,14 +107,22 @@ type container struct {
 	runtimeFilterDone bool
 	diagnosticsLogged bool
 	hashmapBuilder    HashmapBuilder
-	spilledFds        []*os.File // anonymous build-side spill fds (ownership transferred to JoinMap)
-	// spillBundle keeps the resource reservations associated with spilledFds.
-	// Build owns the bundle until the JoinMap publication wins; after that the
-	// JoinMap/SpillEngine handoff owns it and invokes release exactly once.
+	// Build owns the dormant named-file bundle until JoinMap publication wins;
+	// after that JoinMap/SpillEngine owns it and invokes release exactly once.
 	spillBundle    *spillFileBundle
 	spillFS        fileservice.MutableFileService
-	spillUUID      string // unique prefix for anonymous file paths
+	spillUUID      string // unique prefix for named spill paths
 	spillThreshold int64
+	// A zero configured threshold uses the statement/CN budget which remains
+	// after admitted allocations and exact recovery floors. The participant is
+	// live only while build() can still choose to retain another input batch.
+	autoSpill               bool
+	memoryGrowthParticipant *process.ExecutionMemoryGrowthParticipant
+	autoSpillTriggered      bool
+	autoSpillLimitAtTrigger uint64
+	// Monotone while ingress can retain batches; Prepare starts a new generation.
+	// Only the spill projection uses this bit, not the final hashmap selection.
+	autoSpillHasGrouping bool
 
 	// reusable buffers for spill operations
 	spillHashValues []uint64
@@ -139,23 +150,28 @@ type container struct {
 	spillConditions []*plan.Expr
 }
 
-// spillFileBundle is deliberately owned by hashbuild.  Build converts each
-// entry to message.SpillFile only after every file has been rewound; the
-// resulting file object carries its token release closure through JoinMap and
-// the SpillEngine. Keeping all tokens together prevents a file from becoming
-// an unaccounted orphan on partial failures.
+// spillFileBundle is deliberately owned by hashbuild. A bucket retains its
+// durable name and disk reservation, but owns an FD only around one physical
+// read/write. Build converts each dormant entry to message.SpillFile at
+// handoff. Keeping all tokens together prevents a file from becoming an
+// unaccounted orphan on partial failures.
 type spillFileBundle struct {
 	mu       sync.Mutex
-	entries  map[*os.File]*spillFileEntry
+	entries  map[int]*spillFileEntry
 	released bool
 }
 
 type spillFileEntry struct {
-	fdToken   *process.ExecutionSpillFDReservation
-	diskToken *process.ExecutionSpillDiskReservation
-	rows      int64
-	bytes     uint64
-	bucket    int
+	file       *os.File
+	fdToken    *process.ExecutionSpillFDReservation
+	diskToken  *process.ExecutionSpillDiskReservation
+	fs         fileservice.MutableFileService
+	name       string
+	created    bool
+	rows       int64
+	bytes      uint64
+	bucket     int
+	writeCache spillio.SequentialWriteCache
 }
 
 func (b *spillFileBundle) release() {
@@ -172,6 +188,15 @@ func (b *spillFileBundle) release() {
 	b.entries = nil
 	b.mu.Unlock()
 	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
+		if entry.file != nil {
+			_ = entry.file.Close()
+		}
+		if entry.fs != nil && entry.name != "" {
+			_ = entry.fs.RemoveFile(context.Background(), entry.name)
+		}
 		if entry.fdToken != nil {
 			entry.fdToken.Release()
 		}
@@ -181,32 +206,81 @@ func (b *spillFileBundle) release() {
 	}
 }
 
-func (b *spillFileBundle) addFD(file *os.File, bucket int, token *process.ExecutionSpillFDReservation) {
-	if b == nil || file == nil {
-		return
+func (b *spillFileBundle) openFile(
+	ctx context.Context,
+	budget *process.ExecutionResourceGeneration,
+	bucket int,
+	fs fileservice.MutableFileService,
+	name string,
+) (*os.File, error) {
+	if b == nil || budget == nil || fs == nil || name == "" ||
+		bucket < 0 || bucket >= spillNumBuckets {
+		return nil, process.ErrExecutionResourceInvalid
 	}
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.released {
-		b.mu.Unlock()
-		if token != nil {
-			token.Release()
-		}
-		return
+		return nil, process.ErrExecutionSpillReservationInactive
 	}
 	if b.entries == nil {
-		b.entries = make(map[*os.File]*spillFileEntry)
+		b.entries = make(map[int]*spillFileEntry)
 	}
-	entry := b.entries[file]
+	entry := b.entries[bucket]
 	if entry == nil {
-		entry = &spillFileEntry{bucket: bucket}
-		b.entries[file] = entry
+		entry = &spillFileEntry{bucket: bucket, fs: fs, name: name}
+		b.entries[bucket] = entry
 	}
+	if entry.file != nil || entry.fdToken != nil || entry.name != name {
+		return nil, process.ErrExecutionResourceInvalid
+	}
+	token, err := budget.ReserveSpillFD(1)
+	if err != nil {
+		return nil, err
+	}
+	var file *os.File
+	if entry.created {
+		file, err = fs.OpenFile(ctx, name)
+		if err == nil {
+			_, err = file.Seek(0, io.SeekEnd)
+		}
+	} else {
+		file, err = fs.CreateFile(ctx, name)
+	}
+	if err != nil {
+		if file != nil {
+			_ = file.Close()
+		}
+		token.Release()
+		return nil, err
+	}
+	entry.file = file
 	entry.fdToken = token
-	b.mu.Unlock()
+	entry.created = true
+	return file, nil
 }
 
-func (b *spillFileBundle) growDisk(file *os.File, budget *process.ExecutionResourceGeneration, bytes uint64) (uint64, bool, error) {
-	if b == nil || file == nil || budget == nil {
+func (b *spillFileBundle) closeFile(bucket int) error {
+	if b == nil || bucket < 0 || bucket >= spillNumBuckets {
+		return process.ErrExecutionResourceInvalid
+	}
+	b.mu.Lock()
+	entry := b.entries[bucket]
+	if entry == nil || entry.file == nil || entry.fdToken == nil {
+		b.mu.Unlock()
+		return process.ErrExecutionResourceInvalid
+	}
+	file := entry.file
+	token := entry.fdToken
+	entry.file = nil
+	entry.fdToken = nil
+	b.mu.Unlock()
+	err := file.Close()
+	token.Release()
+	return err
+}
+
+func (b *spillFileBundle) growDisk(bucket int, budget *process.ExecutionResourceGeneration, bytes uint64) (uint64, bool, error) {
+	if b == nil || budget == nil || bucket < 0 || bucket >= spillNumBuckets {
 		return 0, false, process.ErrExecutionResourceInvalid
 	}
 	b.mu.Lock()
@@ -214,13 +288,9 @@ func (b *spillFileBundle) growDisk(file *os.File, budget *process.ExecutionResou
 	if b.released {
 		return 0, false, process.ErrExecutionSpillReservationInactive
 	}
-	if b.entries == nil {
-		b.entries = make(map[*os.File]*spillFileEntry)
-	}
-	entry := b.entries[file]
+	entry := b.entries[bucket]
 	if entry == nil {
-		entry = &spillFileEntry{bucket: -1}
-		b.entries[file] = entry
+		return 0, false, process.ErrExecutionResourceInvalid
 	}
 	if entry.diskToken == nil {
 		token, err := budget.ReserveSpillDisk(bytes)
@@ -237,15 +307,23 @@ func (b *spillFileBundle) growDisk(file *os.File, budget *process.ExecutionResou
 	return old, false, nil
 }
 
-func (b *spillFileBundle) recordDiskWrite(file *os.File, rows int64, bytes uint64) {
-	if b == nil || file == nil {
-		return
+func (b *spillFileBundle) recordDiskWrite(
+	bucket int,
+	file *os.File,
+	rows int64,
+	bytes uint64,
+) error {
+	if b == nil || bucket < 0 || bucket >= spillNumBuckets {
+		return process.ErrExecutionResourceInvalid
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	entry := b.entries[file]
-	if entry == nil {
-		return
+	entry := b.entries[bucket]
+	if entry == nil || entry.file != file || bytes > uint64(^uint(0)>>1) {
+		return process.ErrExecutionResourceInvalid
+	}
+	if err := entry.writeCache.RecordWrite(file, int(bytes)); err != nil {
+		return err
 	}
 	entry.rows += rows
 	if ^uint64(0)-entry.bytes >= bytes {
@@ -253,30 +331,91 @@ func (b *spillFileBundle) recordDiskWrite(file *os.File, rows int64, bytes uint6
 	} else {
 		entry.bytes = ^uint64(0)
 	}
+	return nil
 }
 
-func (b *spillFileBundle) accountedFiles() []*message.SpillFile {
+func (b *spillFileBundle) accountedFiles(
+	ctx context.Context,
+	budget *process.ExecutionResourceGeneration,
+) ([]*message.SpillFile, error) {
 	if b == nil {
-		return nil
+		return nil, nil
+	}
+	if budget == nil {
+		return nil, process.ErrExecutionResourceInvalid
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	files := make([]*message.SpillFile, spillNumBuckets)
-	for file, entry := range b.entries {
-		f, e := file, entry
-		accounted := message.NewSpillFile(f, e.rows, e.bytes, func() {
-			if e.fdToken != nil {
-				e.fdToken.Release()
-			}
-			if e.diskToken != nil {
-				e.diskToken.Release()
-			}
-		})
-		if e.bucket >= 0 && e.bucket < len(files) {
-			files[e.bucket] = accounted
+	for bucket, entry := range b.entries {
+		if entry == nil || entry.fs == nil || entry.name == "" ||
+			entry.file != nil || entry.fdToken != nil || !entry.created ||
+			entry.bucket != bucket {
+			return nil, process.ErrExecutionResourceInvalid
 		}
+		fdToken, err := budget.ReserveSpillFD(1)
+		if err != nil {
+			return nil, err
+		}
+		file, err := entry.fs.OpenFile(ctx, entry.name)
+		if err != nil {
+			fdToken.Release()
+			return nil, err
+		}
+		if err := validateSpillFileSize(file, entry.bytes); err != nil {
+			_ = file.Close()
+			fdToken.Release()
+			return nil, err
+		}
+		entry.writeCache.Finish(file)
+		if err := file.Close(); err != nil {
+			fdToken.Release()
+			return nil, err
+		}
+		fdToken.Release()
+		e := entry
+		fs := entry.fs
+		name := entry.name
+		accounted := message.NewReopenableSpillFile(
+			func(ctx context.Context) (*os.File, error) {
+				return fs.OpenFile(ctx, name)
+			},
+			func() error {
+				return fs.RemoveFile(context.Background(), name)
+			},
+			e.rows,
+			e.bytes,
+			func() {
+				if e.diskToken != nil {
+					e.diskToken.Release()
+					e.diskToken = nil
+				}
+			},
+		)
+		files[bucket] = accounted
 	}
-	return files
+	b.entries = nil
+	b.released = true
+	return files, nil
+}
+
+func validateSpillFileSize(file *os.File, expected uint64) error {
+	if file == nil || expected == 0 {
+		return process.ErrExecutionResourceInvalid
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() < 0 || uint64(info.Size()) != expected {
+		return moerr.NewInternalErrorf(
+			context.Background(),
+			"corrupted spill file size: expected=%d actual=%d",
+			expected,
+			info.Size(),
+		)
+	}
+	return nil
 }
 
 type HashBuild struct {
@@ -384,9 +523,9 @@ func (hashBuild *HashBuild) installRecoveryCapacity(
 	return nil
 }
 
-// releaseRecoveryCapacity returns recovery headroom after retained spill state
-// has been drained or build reaches a terminal result. restoreDefault keeps
-// later direct/test/reuse allocations on the statement's ordinary controller;
+// releaseRecoveryCapacity returns recovery headroom at a terminal build result,
+// after all scratch borrowers have been dropped. restoreDefault keeps later
+// test/reuse allocations on the statement's ordinary controller;
 // statement teardown passes false and drops the selection immediately afterward.
 func (hashBuild *HashBuild) releaseRecoveryCapacity(
 	account *mpool.AllocationAccount,
@@ -588,6 +727,7 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	hashBuild.ctr.terminalMu.Lock()
 	defer hashBuild.ctr.terminalMu.Unlock()
 	hashBuild.logDiagnostics(proc, pipelineFailed, err)
+	hashBuild.ctr.releaseMemoryGrowthParticipant()
 	runtimeSucceed := hashBuild.ctr.state > HandleRuntimeFilter
 	mapSucceed := hashBuild.ctr.state == SendSucceed
 
@@ -614,7 +754,6 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	if !mapSucceed {
 		hashBuild.cleanupSpillFiles(proc)
 	}
-	hashBuild.ctr.spilledFds = nil
 	hashBuild.ctr.spillFS = nil
 	hashBuild.ctr.state = BuildHashMap
 	hashBuild.ctr.runtimeFilterIn = false
@@ -637,6 +776,7 @@ func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err
 	hashBuild.ctr.terminalMu.Lock()
 	defer hashBuild.ctr.terminalMu.Unlock()
 	hashBuild.logDiagnostics(proc, pipelineFailed, err)
+	hashBuild.ctr.releaseMemoryGrowthParticipant()
 	// Normally Reset runs before Free.  Keep Free as a safe fallback for
 	// cancellation/error cleanup paths that bypass Reset, while preserving the
 	// exactly-once generation gate.
@@ -678,6 +818,7 @@ func (hashBuild *HashBuild) logDiagnostics(proc *process.Process, pipelineFailed
 
 func hasHashBuildDiagnosticStats(extra map[string]int64) bool {
 	return extra["HashBuildSpillStarts"] != 0 ||
+		extra["HashBuildAdaptiveSpillStarts"] != 0 ||
 		extra["QueryHashBudgetRejects"] != 0 ||
 		extra["HashBuildRuntimeFilterCollectionFallbacks"] != 0 ||
 		extra["HashBuildRuntimeFilterBudgetFallbacks"] != 0 ||
@@ -720,15 +861,8 @@ func (hashBuild *HashBuild) publishBuildError(proc *process.Process, err error) 
 }
 
 func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {
-	for i, fd := range hashBuild.ctr.spilledFds {
-		if fd != nil {
-			fd.Close()
-			hashBuild.ctr.spilledFds[i] = nil
-		}
-	}
-	hashBuild.ctr.spilledFds = nil
-	// Release FD and disk charges only after the physical descriptors have
-	// closed. This preserves the ledger invariant even during cancellation.
+	// Release physical descriptors before their FD tokens, then remove durable
+	// names and return disk ownership.
 	if hashBuild.ctr.spillBundle != nil {
 		hashBuild.ctr.spillBundle.release()
 		hashBuild.ctr.spillBundle = nil
@@ -797,5 +931,14 @@ func (hashBuild *HashBuild) ExecProjection(proc *process.Process, input *batch.B
 }
 
 func (ctr *container) setSpillThreshold(threshold int64) {
+	ctr.autoSpill = threshold == 0
 	ctr.spillThreshold = colexec.ResolveSpillThreshold(threshold)
+}
+
+func (ctr *container) releaseMemoryGrowthParticipant() {
+	if ctr == nil || ctr.memoryGrowthParticipant == nil {
+		return
+	}
+	ctr.memoryGrowthParticipant.Release()
+	ctr.memoryGrowthParticipant = nil
 }

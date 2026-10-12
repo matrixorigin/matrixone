@@ -34,7 +34,7 @@ func TestInsertIgnoreIrregularMaintenanceReadsAcceptedRows(t *testing.T) {
 		{"no_irregular_index", "insert ignore into docs_ft(id,body,payload) values (1,'alpha',1),(1,'beta',2)", false, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			table := mock.ctxt.tables["docs_ft"]
 			if !tc.irregular {
 				table.Indexes = nil
@@ -104,7 +104,7 @@ func TestInsertIgnoreIrregularMaintenanceReadsAcceptedRows(t *testing.T) {
 }
 
 func TestInsertImageSinkScanRetainsAuxiliaryColumns(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_INSERT, mock.CurrentContext(), false, true)
 	ctx := NewBindContext(builder, nil)
 	baseType := planpb.Type{Id: int32(types.T_int64)}

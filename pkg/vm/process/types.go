@@ -138,6 +138,9 @@ type SessionInfo struct {
 	// Captured per execution for one-argument WEEK on remote/forwarded CNs.
 	DefaultWeekFormat    uint8
 	DefaultWeekFormatSet bool
+	// Effective lc_time_names captured on the initiating CN and used when a
+	// remote process has no session-variable resolver.
+	LCTimeNames string
 	// AutoIncrementIncrement and AutoIncrementOffset are captured on the
 	// initiating CN and used by remote PRE_INSERT operators.  They are
 	// statement-scoped; zero means the default value one for compatibility with
@@ -485,6 +488,7 @@ type BaseProcess struct {
 	UdfService                          udf.Service
 	WaitPolicy                          lock.WaitPolicy
 	messageBoard                        *message.MessageBoard
+	executionResourceBudgetBorrowed     bool
 	executionResourceBudgetMu           sync.Mutex
 	executionResourceBudget             *ExecutionResourceGeneration
 	warningDiagnosticBudgetMu           sync.Mutex
@@ -520,7 +524,8 @@ type BaseProcess struct {
 	groupConcatSourceRowProvenanceUntrusted bool
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
-	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
+	// (frontend derived execution or executor.Options.WithDisableIncrStatement).
+	// Compiles on such a process
 	// must not advance the workspace snapshot write offset: that is a
 	// statement-boundary action, and moving the boundary mid-statement breaks
 	// the positional visibility of the caller's workspace entries.
@@ -614,18 +619,13 @@ type WrapCs struct {
 	// ReceiverStopped certifies an explicit StopSending while the registration
 	// connection and message remain live. It does not imply query success.
 	ReceiverStopped func() bool
-	// TerminalBacked marks registrations whose immutable terminal owns the
-	// generation result. Such registrations must not use Err for a second,
-	// competing terminal notification; Err is nil for that path.
-	TerminalBacked bool
-	MsgId          uint64
-	Uid            uuid.UUID
-	Cs             morpc.ClientSession
-	Err            chan error
-	ReserveBatch   func(context.Context, uint64) (uint64, error)
-	RollbackBatch  func(uint64)
-	BatchCredits   uint32
-	ByteCredits    uint64
+	MsgId           uint64
+	Uid             uuid.UUID
+	Cs              morpc.ClientSession
+	ReserveBatch    func(context.Context, uint64) (uint64, error)
+	RollbackBatch   func(uint64)
+	BatchCredits    uint32
+	ByteCredits     uint64
 }
 
 // RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.
@@ -648,8 +648,11 @@ func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
 	proc.Base.executionResourceBudgetMu.Lock()
 	if proc.Base.executionResourceBudget != nil {
-		proc.Base.executionResourceBudget.Close()
+		if !proc.Base.executionResourceBudgetBorrowed {
+			proc.Base.executionResourceBudget.Close()
+		}
 		proc.Base.executionResourceBudget = nil
+		proc.Base.executionResourceBudgetBorrowed = false
 	}
 	proc.Base.executionResourceBudgetMu.Unlock()
 	proc.Base.warningDiagnosticBudgetMu.Lock()

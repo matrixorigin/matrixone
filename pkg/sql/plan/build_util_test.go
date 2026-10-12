@@ -204,7 +204,7 @@ func TestConvertCharBinaryTypeResolution(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.sql, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			require.NotNil(t, logicPlan.GetQuery())
 
@@ -251,6 +251,57 @@ func TestGetTypeFromAstAssignsExplicitStringCharset(t *testing.T) {
 			require.Equal(t, testCase.wantCharset, typ.Charset)
 		})
 	}
+}
+
+func TestGetTypeFromAstRejectsMediumIntAliases(t *testing.T) {
+	testCases := []struct {
+		definition string
+		wantError  string
+	}{
+		{definition: "mediumint", wantError: "mediumint"},
+		{definition: "mediumint unsigned", wantError: "mediumint unsigned"},
+		{definition: "int3", wantError: "int3"},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.definition, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(),
+				"create table t (v "+testCase.definition+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			_, err = getTypeFromAst(context.Background(), column.Type)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI), err)
+			require.Contains(t, strings.ToLower(err.Error()), testCase.wantError)
+		})
+	}
+
+	for _, definition := range []string{"int", "int unsigned"} {
+		t.Run(definition+" remains supported", func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(),
+				"create table t (v "+definition+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), column.Type)
+			require.NoError(t, err)
+			if strings.Contains(definition, "unsigned") {
+				require.Equal(t, int32(types.T_uint32), typ.Id)
+			} else {
+				require.Equal(t, int32(types.T_int32), typ.Id)
+			}
+		})
+	}
+}
+
+func TestBuildCastToMediumIntIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "SELECT CAST(1 AS MEDIUMINT)")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI), err)
+	require.Contains(t, strings.ToLower(err.Error()), "mediumint")
 }
 
 func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
@@ -784,7 +835,7 @@ func TestBuildDefaultExprFitsVarchar(t *testing.T) {
 }
 
 func TestBuildPlanFencesHexDefaultBeforeConstantFold(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	proc := mock.CurrentContext().GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
@@ -1197,7 +1248,7 @@ func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
 }
 
 func TestApplyGeneratedColumnAssignmentCastCompatibility(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	proc := builder.compCtx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion5)
@@ -1399,7 +1450,7 @@ func TestSubstituteColRefsInExprPreservesAggregateConfig(t *testing.T) {
 }
 
 func TestDefaultBlobTextAssignmentPolicy(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	proc := builder.compCtx.GetProcess()
 	for _, oid := range []types.T{types.T_blob, types.T_text} {
 		target := plan.Type{Id: int32(oid), Width: types.MaxTinyTextLen}

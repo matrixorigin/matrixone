@@ -82,6 +82,16 @@ set enable_remap_hint = 0;
 select * from db1.t1;
 -- @session
 
+-- Ordinary views must preserve the base-table row rule.
+create view db1.v_t1 as select * from db1.t1;
+grant select on view db1.v_t1 to test_rule_role;
+-- @session:id=1&user=sys:test_rule_user:test_rule_role&password=123456
+set enable_remap_hint = 1;
+select * from db1.v_t1;
+set enable_remap_hint = 0;
+select * from db1.v_t1;
+-- @session
+
 -- 11. SET SECONDARY ROLE ALL merges select * rewrite rules from all active roles
 create database db2;
 create table db2.t2(a int, age int);

@@ -519,6 +519,19 @@ func (dt Datetime) TruncateToScale(scale int32) Datetime {
 	return secPart + base*divisor
 }
 
+// TruncateToScaleWithoutRounding discards fractional digits without carrying
+// into the next second/day. It is used for TIME_TRUNCATE_FRACTIONAL casts.
+func (dt Datetime) TruncateToScaleWithoutRounding(scale int32) Datetime {
+	if dt == ZeroDatetime || scale >= 6 {
+		return dt
+	}
+	if scale < 0 {
+		scale = 0
+	}
+	divisor := scaleVal[scale]
+	return (dt/MicroSecsPerSec)*MicroSecsPerSec + (dt%MicroSecsPerSec)/divisor*divisor
+}
+
 func (dt Datetime) Clock() (hour, minute, sec int8) {
 	if dt == ZeroDatetime {
 		return 0, 0, 0
@@ -552,10 +565,71 @@ func DatetimeFromClock(year int32, month, day, hour, minute, sec uint8, msec uin
 }
 
 func (dt Datetime) ConvertToGoTime(loc *time.Location) time.Time {
+	value, _ := dt.convertToGoTime(loc)
+	return value
+}
+
+func (dt Datetime) convertToGoTime(loc *time.Location) (time.Time, bool) {
+	if loc == nil {
+		loc = time.UTC
+	}
 	year, mon, day, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
 	nsec := dt.MicroSec() * 1000
-	return time.Date(int(year), time.Month(mon), int(day), int(hour), int(minute), int(sec), int(nsec), loc)
+	candidate := time.Date(int(year), time.Month(mon), int(day), int(hour), int(minute), int(sec), int(nsec), loc)
+	if loc == time.UTC || dt == ZeroDatetime {
+		return candidate, false
+	}
+	_, offset := candidate.Zone()
+	if candidate.UnixMicro()+int64(offset)*MicroSecsPerSec+unixEpochMicroSecs == int64(dt) {
+		return candidate, false
+	}
+	if boundary, ok := dt.nonexistentLocalTimeBoundary(loc, candidate); ok {
+		// Preserve the input fractional seconds while moving a nonexistent wall
+		// time to the first representable wall time after the DST gap.
+		return boundary.Truncate(time.Second).Add(time.Duration(dt.MicroSec()) * time.Microsecond), true
+	}
+	return candidate, false
+}
+
+// IsNonexistentLocalTime reports whether dt is a wall-clock value in a
+// forward timezone transition gap. Go's time.Date silently normalizes such
+// values according to an implementation-specific rule; SQL timestamp casts
+// need to distinguish this case so strict mode can reject it.
+func (dt Datetime) IsNonexistentLocalTime(loc *time.Location) bool {
+	if dt == ZeroDatetime || loc == nil {
+		return false
+	}
+	_, ok := dt.convertToGoTime(loc)
+	return ok
+}
+
+func (dt Datetime) nonexistentLocalTimeBoundary(loc *time.Location, candidate time.Time) (time.Time, bool) {
+	// Search the transitions around the normalized candidate. ZoneBounds is
+	// public and also covers locations with recurring DST extension rules.
+	probe := candidate.Add(-48 * time.Hour)
+	limit := candidate.Add(48 * time.Hour)
+	for n := 0; n < 16; n++ {
+		_, end := probe.ZoneBounds()
+		if end.IsZero() || end.After(limit) {
+			break
+		}
+		before := end.Add(-time.Microsecond).In(loc)
+		after := end.In(loc)
+		_, beforeOffset := before.Zone()
+		_, afterOffset := after.Zone()
+		if afterOffset > beforeOffset {
+			beforeWall := DatetimeFromClock(int32(before.Year()), uint8(before.Month()), uint8(before.Day()),
+				uint8(before.Hour()), uint8(before.Minute()), uint8(before.Second()), uint32(before.Nanosecond()/1000))
+			afterWall := DatetimeFromClock(int32(after.Year()), uint8(after.Month()), uint8(after.Day()),
+				uint8(after.Hour()), uint8(after.Minute()), uint8(after.Second()), uint32(after.Nanosecond()/1000))
+			if dt >= beforeWall && dt < afterWall {
+				return after, true
+			}
+		}
+		probe = end.Add(time.Microsecond)
+	}
+	return time.Time{}, false
 }
 
 func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Datetime, bool) {
@@ -765,10 +839,18 @@ func (dt Datetime) YearWeek(mode int) (year int, week int) {
 }
 
 func (dt Datetime) ToTimestamp(loc *time.Location) Timestamp {
+	value, _ := dt.ToTimestampWithLocalTimeStatus(loc)
+	return value
+}
+
+// ToTimestampWithLocalTimeStatus converts once and reports a forward-transition
+// gap so SQL casts can apply their statement policy to the normalized result.
+func (dt Datetime) ToTimestampWithLocalTimeStatus(loc *time.Location) (Timestamp, bool) {
 	if dt == ZeroDatetime {
-		return ZeroTimestamp
+		return ZeroTimestamp, false
 	}
-	return Timestamp(dt.ConvertToGoTime(loc).UnixMicro() + unixEpochMicroSecs)
+	value, nonexistent := dt.convertToGoTime(loc)
+	return Timestamp(value.UnixMicro() + unixEpochMicroSecs), nonexistent
 }
 
 func (dt Datetime) SecondMicrosecondStr() string {

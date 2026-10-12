@@ -243,7 +243,7 @@ func Test_handshake(t *testing.T) {
 	////SSL handshake
 	data := gIO.AppendUint32(nil, DefaultCapability|CLIENT_SSL) //capability
 	data = gIO.AppendUint32(data, MaxPayloadSize)               //payload size
-	data = gIO.AppendUint8(data, 1)                             //collationid
+	data = gIO.AppendUint8(data, 45)                            // utf8mb4_general_ci protocol ID
 	data = append(data, make([]byte, 23)...)
 	tConn.rbuf = makePacket(data, 1)
 	err = sv.handshake(ioses)
@@ -252,7 +252,7 @@ func Test_handshake(t *testing.T) {
 	////no SSL handshake
 	data = gIO.AppendUint32(nil, DefaultCapability) //capability
 	data = gIO.AppendUint32(data, MaxPayloadSize)   //payload size
-	data = gIO.AppendUint8(data, 1)                 //collationid
+	data = gIO.AppendUint8(data, 45)                // utf8mb4_general_ci protocol ID
 	data = append(data, make([]byte, 23)...)
 	data = append(data, []byte("abc")...) //user name
 	data = append(data, 0)

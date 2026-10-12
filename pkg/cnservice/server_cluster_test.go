@@ -226,7 +226,7 @@ func TestServiceStartDoesNotBootstrapBeforeClusterSelfReady(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ls := mock_lock.NewMockLockService(ctrl)
-		ls.EXPECT().Close().Return(nil).Times(2)
+		ls.EXPECT().Close().Return(nil).Times(1)
 		cfg := &Config{
 			UUID:           t.Name(),
 			ServiceAddress: address,
@@ -375,11 +375,15 @@ func (f *readinessFrontend) Stop() error {
 
 type readinessPipeline struct {
 	closeOnlyRPCServer
-	starts atomic.Int32
-	closes atomic.Int32
+	starts      atomic.Int32
+	closes      atomic.Int32
+	beforeStart func()
 }
 
 func (p *readinessPipeline) Start() error {
+	if p.beforeStart != nil {
+		p.beforeStart()
+	}
 	p.starts.Add(1)
 	return nil
 }
@@ -432,6 +436,17 @@ func TestServiceStartRequiresQuerySnapshot(t *testing.T) {
 			s.mo = frontend
 			s.server = pipeline
 			s.heartbeatWakeup = make(chan struct{}, 1)
+			// Discard earlier catalog-fence notifications before ingress handoff;
+			// the later assertion must observe the ingress publication itself.
+			pipeline.beforeStart = func() {
+				for {
+					select {
+					case <-s.heartbeatWakeup:
+					default:
+						return
+					}
+				}
+			}
 			s.hakeeperConnected = make(chan struct{})
 			close(s.hakeeperConnected)
 			self := logpb.CNStore{UUID: s.cfg.UUID, ServiceAddress: s.pipelineServiceServiceAddr(), CommitID: version.CommitID, ViewMetadataAdmissionGeneration: 11}

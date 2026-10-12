@@ -60,8 +60,10 @@ func TestHistoricalViewColumnsSQL(t *testing.T) {
 		{name: "unrelated View", otherView: true},
 		{name: "already current", definition: sysview.InformationSchemaColumnsDDL},
 		{name: "before migration", current: legacy, wantResolve: true},
+		{name: "protocol100 migration remains active before protocol109", current: sysview.InformationSchemaColumnsV100DDL(), wantResolve: true, wantAdapt: true},
 		{name: "after migration", current: sysview.InformationSchemaColumnsDDL, wantResolve: true, wantAdapt: true},
 		{name: "cross tenant", current: sysview.InformationSchemaColumnsDDL, crossTenant: true, wantResolve: true, wantAdapt: true},
+		{name: "cross tenant protocol100 migration", current: sysview.InformationSchemaColumnsV100DDL(), crossTenant: true, wantResolve: true, wantAdapt: true},
 		{name: "unknown historical template", current: sysview.InformationSchemaColumnsDDL, definition: "create view columns as select 1", wantResolve: true, wantError: true},
 		{name: "permission failure", resolveErr: denied, wantResolve: true, wantError: true},
 		{name: "cross tenant failure restores context", crossTenant: true, resolveErr: denied, wantResolve: true, wantError: true},
@@ -71,7 +73,7 @@ func TestHistoricalViewColumnsSQL(t *testing.T) {
 		{name: "protocol not ready", current: sysview.InformationSchemaColumnsDDL, oldProtocol: true, wantResolve: true, wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockCompilerContext(true)
+			mock := NewMockCompilerContext(true, newPlanTestProcess(t))
 			mock.GetAccountIdFunc = func() (uint32, error) {
 				if tc.accountErr {
 					return 0, denied
@@ -138,7 +140,9 @@ func TestHistoricalViewColumnsSQL(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				if tc.wantAdapt {
-					require.Equal(t, sysview.InformationSchemaColumnsDDL, got)
+					expected, ok := sysview.AdaptLegacyInformationSchemaColumnsDDL(definition)
+					require.True(t, ok)
+					require.Equal(t, expected, got)
 				} else {
 					require.Equal(t, definition, got)
 				}

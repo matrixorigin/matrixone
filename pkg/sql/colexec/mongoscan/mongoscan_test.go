@@ -227,7 +227,7 @@ func TestMongoScanExplicitFilterUsesFindAndPopulatesQueryColumn(t *testing.T) {
 	collection := &recordingCollection{cursor: cursor}
 	deps, client := testScanDependencies(cursor)
 	client.collection = collection
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 	spec := testScanPlan()
 	applyTestUserQueryPlan(t, spec, source, true)
@@ -271,7 +271,7 @@ func TestMongoScanExplicitQueryRejectsRolledBackProtocolBeforeMongoCall(t *testi
 	collection := &recordingCollection{cursor: cursor}
 	deps, client := testScanDependencies(cursor)
 	client.collection = collection
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -305,7 +305,7 @@ func TestMongoScanExplicitPipelineUsesAggregateAndMappedOutput(t *testing.T) {
 	collection := &recordingCollection{cursor: cursor}
 	deps, client := testScanDependencies(cursor)
 	client.collection = collection
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 	spec := testScanPlan()
 	applyTestUserQueryPlan(t, spec, source, false)
@@ -345,7 +345,7 @@ func TestMongoScanExplicitQuerySupportsZeroColumnRowCarrier(t *testing.T) {
 	collection := &recordingCollection{cursor: cursor}
 	deps, client := testScanDependencies(cursor)
 	client.collection = collection
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 	spec := testScanPlan()
 	spec.Columns = nil
@@ -387,7 +387,7 @@ func TestMongoScanZeroColumnQueryProjectsMinimalCarrier(t *testing.T) {
 			deps, client := testScanDependencies(&testCursor{})
 			deps.Config.MaxValueBytes = 128
 			client.collection = collection
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 			spec := testScanPlan()
 			spec.Columns = nil
@@ -425,7 +425,7 @@ func TestMongoScanEmptyUserQueryResultAvoidsRemoteOperation(t *testing.T) {
 	collection := &recordingCollection{cursor: &testCursor{}}
 	deps, client := testScanDependencies(collection.cursor)
 	client.collection = collection
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 	spec := testScanPlan()
 	spec.EmptyResult = true
@@ -448,7 +448,7 @@ func TestMongoScanRejectsUnsafeSerializedPipelineBeforeRemoteOperation(t *testin
 	collection := &recordingCollection{cursor: &testCursor{}}
 	deps, client := testScanDependencies(collection.cursor)
 	client.collection = collection
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 	spec := testScanPlan()
 	applyTestUserQueryPlan(t, spec, `{"pipeline":[{"$match":{}}]}`, false)
@@ -471,7 +471,7 @@ func TestMongoScanAggregateFailureReleasesSourceAndClientLeases(t *testing.T) {
 	collection := &recordingCollection{aggregateErr: errors.New("injected aggregate error")}
 	deps, client := testScanDependencies(nil)
 	client.collection = collection
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 	spec := testScanPlan()
 	applyTestUserQueryPlan(t, spec, `{"pipeline":[{"$match":{}}]}`, false)
@@ -497,7 +497,7 @@ func TestMongoScanMultiBatchLifecycleAndReuse(t *testing.T) {
 	require.NoError(t, err)
 	cursor := &testCursor{docs: [][]byte{doc1, doc2}}
 	deps, client := testScanDependencies(cursor)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 	scan := NewArgument().WithScan(testScanPlan())
 	scan.Dependencies = deps
@@ -529,7 +529,7 @@ func TestMongoScanRejectsMappingSnapshotDriftBeforeConnecting(t *testing.T) {
 	resolver := deps.Mappings.(testMappingResolver)
 	resolver.mapping.Collection = "redirected"
 	deps.Mappings = resolver
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 	scan := NewArgument().WithScan(testScanPlan())
 	scan.Dependencies = deps
@@ -542,7 +542,7 @@ func TestMongoScanRejectsMappingSnapshotDriftBeforeConnecting(t *testing.T) {
 
 func TestMongoScanRejectsUnimplementedSplitBeforeConnecting(t *testing.T) {
 	deps, client := testScanDependencies(&testCursor{})
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 	spec := testScanPlan()
 	spec.Split = &plan.MongoSplit{KeyPath: "ts"}
@@ -558,7 +558,7 @@ func TestMongoScanRejectsUnimplementedSplitBeforeConnecting(t *testing.T) {
 func TestMongoScanCancelBlockedGetMore(t *testing.T) {
 	cursor := &testCursor{blocked: true}
 	deps, _ := testScanDependencies(cursor)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	ctx, cancel := context.WithCancel(defines.AttachAccountId(proc.Ctx, 7))
 	proc.Ctx = ctx
 	spec := testScanPlan()
@@ -582,7 +582,7 @@ func TestMongoScanExplicitQueryDeadlineRejectsBufferedDocument(t *testing.T) {
 	cursor := &testCursor{docs: [][]byte{doc}}
 	deps, _ := testScanDependencies(cursor)
 	deps.Config.SocketTimeout = time.Nanosecond
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -622,7 +622,7 @@ func TestMongoScanPrepareRejectsV44SemanticsOnV43(t *testing.T) {
 		"pruned empty result":  {MaxParallelism: 1, EmptyResult: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 			rt := moruntime.ServiceRuntime(proc.GetService())
 			previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -658,7 +658,7 @@ func TestMongoScanEmptyAndFindFailureReleaseResources(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
 		cursor := &testCursor{}
 		deps, client := testScanDependencies(cursor)
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 		scan := NewArgument().WithScan(testScanPlan())
 		scan.Dependencies = deps
@@ -679,7 +679,7 @@ func TestMongoScanEmptyAndFindFailureReleaseResources(t *testing.T) {
 	t.Run("find-error", func(t *testing.T) {
 		deps, client := testScanDependencies(nil)
 		client.collection = testCollection{err: errors.New("injected find error")}
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 		scan := NewArgument().WithScan(testScanPlan())
 		scan.Dependencies = deps
@@ -703,7 +703,7 @@ func TestMongoScanCursorErrorAndGenerationReuse(t *testing.T) {
 	require.NoError(t, err)
 	firstCursor := &testCursor{docs: [][]byte{doc1}, err: errors.New("injected getMore error")}
 	deps, client := testScanDependencies(firstCursor)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 	spec := testScanPlan()
 	applyTestUserQueryPlan(t, spec, querySource, true)
@@ -744,7 +744,7 @@ func TestMongoScanCursorErrorAndGenerationReuse(t *testing.T) {
 func TestMongoScanPartialPrepareFailureReleasesLease(t *testing.T) {
 	cursor := &testCursor{}
 	deps, client := testScanDependencies(cursor)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 	invalid := testScanPlan()
 	invalid.Columns[0].MoType.Id = int32(types.T_array_float32)
@@ -776,7 +776,7 @@ func TestMongoScanBatchAndStatementLimits(t *testing.T) {
 		deps, _ := testScanDependencies(cursor)
 		deps.Config.BatchRows = 10
 		deps.Config.MaxBatchBytes = int64(len(doc1) + 1)
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 		scan := NewArgument().WithScan(testScanPlan())
 		scan.Dependencies = deps
@@ -801,7 +801,7 @@ func TestMongoScanBatchAndStatementLimits(t *testing.T) {
 		cursor := &testCursor{docs: [][]byte{doc1}}
 		deps, _ := testScanDependencies(cursor)
 		deps.Config.MaxBatchBytes = int64(len(doc1) - 1)
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 		scan := NewArgument().WithScan(testScanPlan())
 		scan.Dependencies = deps
@@ -839,7 +839,7 @@ func TestMongoScanBatchAndStatementLimits(t *testing.T) {
 			})
 		}
 		deps.Mappings = mapping
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 		scan := NewArgument().WithScan(spec)
 		scan.Dependencies = deps
@@ -862,7 +862,7 @@ func TestMongoScanBatchAndStatementLimits(t *testing.T) {
 		deps, _ := testScanDependencies(cursor)
 		deps.Config.BatchRows = 10
 		deps.Config.MaxScanRows = 1
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 		scan := NewArgument().WithScan(testScanPlan())
 		scan.Dependencies = deps

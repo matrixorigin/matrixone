@@ -30,6 +30,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -195,6 +197,95 @@ func TestPitrCases(t *testing.T) {
 	)
 }
 
+// TestCDCNoPrimaryKeyRejected exercises the public CREATE CDC SQL path. It is
+// intentionally independent of the external sink used by TestCDCCases: a
+// source without a user-visible primary key must be rejected before a task is
+// persisted or any sink connection is attempted.
+func TestCDCNoPrimaryKeyRejected(t *testing.T) {
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, _, _, _ string, _ int, _ string) (*sql.DB, error) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		mock.ExpectClose()
+		return db, nil
+	})
+	defer stubOpenDbConn.Reset()
+
+	runSQLIntegration(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		exec := testutils.GetSQLExecutor(cn)
+		db := testutils.GetDatabaseName(t)
+		defer cleanupSQLIntegration(t, cn, "drop database if exists "+db)
+
+		res, err := exec.Exec(ctx, "create database "+db, executor.Options{})
+		require.NoError(t, err)
+		res.Close()
+
+		execSQL := func(sql string) {
+			res, execErr := exec.Exec(ctx, sql, executor.Options{}.WithDatabase(db))
+			require.NoError(t, execErr)
+			res.Close()
+		}
+		execSQL("create pitr if not exists cdc_pitr for account range 3 'h' internal")
+		execSQL("create table with_pk (id int primary key, value int)")
+		execSQL("create table composite_pk (id1 int, id2 int, value int, primary key (id1, id2))")
+
+		conn := "mysql://user:password@127.0.0.1:1"
+		execCDC := func(sql string) {
+			res, execErr := exec.Exec(ctx, sql, executor.Options{}.WithDatabase(db))
+			require.NoError(t, execErr)
+			res.Close()
+		}
+		verifyTask := func(name string, want bool) {
+			res, queryErr := exec.Exec(ctx,
+				"select count(*) from mo_catalog.mo_cdc_task where task_name='"+name+"'",
+				executor.Options{}.WithDatabase(db))
+			require.NoError(t, queryErr)
+			defer res.Close()
+			require.Equal(t, want, testutils.ReadCount(res) > 0)
+		}
+
+		execCDC(
+			"create cdc accepted_table '" + conn + "' 'matrixone' '" + conn + "' '" + db + ".with_pk' {'Level'='table'}",
+		)
+		verifyTask("accepted_table", true)
+		execCDC(
+			"create cdc accepted_composite '" + conn + "' 'matrixone' '" + conn + "' '" + db + ".composite_pk' {'Level'='table'}",
+		)
+		verifyTask("accepted_composite", true)
+		execCDC(
+			"create cdc accepted_database '" + conn + "' 'matrixone' '" + conn + "' '" + db + "' {'Level'='database'}",
+		)
+		verifyTask("accepted_database", true)
+
+		badDB := db + "_bad"
+		res, err = exec.Exec(ctx, "create database "+badDB, executor.Options{})
+		require.NoError(t, err)
+		res.Close()
+		defer cleanupSQLIntegration(t, cn, "drop database if exists "+badDB)
+		res, err = exec.Exec(ctx, "create table no_pk (value int)", executor.Options{}.WithDatabase(badDB))
+		require.NoError(t, err)
+		res.Close()
+		_, err = exec.Exec(ctx,
+			"create cdc rejected_no_pk '"+conn+"' 'matrixone' '"+conn+"' '"+badDB+"' {'Level'='database'}",
+			executor.Options{}.WithDatabase(badDB))
+		require.Error(t, err)
+
+		res, err = exec.Exec(ctx,
+			"select count(*) from mo_catalog.mo_cdc_task where task_name='rejected_no_pk'",
+			executor.Options{}.WithDatabase(db))
+		require.NoError(t, err)
+		defer res.Close()
+		require.Equal(t, 0, testutils.ReadCount(res))
+		res, err = exec.Exec(ctx, "drop cdc all internal", executor.Options{})
+		require.NoError(t, err)
+		res.Close()
+	})
+}
+
 func TestCDCCases(t *testing.T) {
 	if os.Getenv("GITHUB_ACTIONS") == "true" {
 		t.Skip("skipping CDC integration test on GitHub Actions; it requires an external MySQL endpoint")
@@ -230,9 +321,11 @@ func TestCDCCases(t *testing.T) {
 			db := testutils.GetDatabaseName(t)
 			defer cleanupSQLIntegration(t, cn1, "drop database if exists "+db)
 			table := "table01"
+			noPKTable := "table_no_pk"
 			cdcTaskDB := "cdc_task_db"
 			cdcTaskTbl := "cdc_task_tbl"
 			cdcTaskAcc := "cdc_task_acc"
+			cdcTaskNoPK := "cdc_task_no_pk"
 			port := fmt.Sprintf("%d", c.ID()+199)
 
 			conn := "mysql://dump:#admin:111@127.0.0.1:" + port
@@ -252,7 +345,7 @@ func TestCDCCases(t *testing.T) {
 
 			// setup schema
 			mustExec("", "create database "+db)
-			mustExec(db, "create table "+table+" (col1 int)")
+			mustExec(db, "create table "+table+" (col1 int primary key)")
 
 			// ensure PITR for CDC precondition
 			mustExec(db, "create pitr if not exists pitr_db for database "+db+" range 3 'h' internal")
@@ -400,6 +493,13 @@ func TestCDCCases(t *testing.T) {
 			_, err = exec.Exec(ctx, "create cdc "+cdcTaskDB+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database'} internal", executor.Options{}.WithDatabase(db))
 			require.Error(t, err)
 
+			// A source without a user-visible primary key is not supported: reject
+			// it on the normal frontend SQL path before a CDC task is persisted.
+			mustExec(db, "create table "+noPKTable+" (col1 int)")
+			_, err = exec.Exec(ctx, "create cdc "+cdcTaskNoPK+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"."+noPKTable+"' {'Level'='table'}", executor.Options{}.WithDatabase(db))
+			require.Error(t, err)
+			verifyTaskPresent(cdcTaskNoPK, false)
+
 			// Validation selects for presence
 			require.Greater(t, rows("", "select * from mo_catalog.mo_cdc_task"), 0)
 
@@ -499,7 +599,6 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
-			cdc.ResetTableDetectorForTest(cn.ServiceID())
 			exec := testutils.GetSQLExecutor(cn)
 			// Catalog CDC matching compares the persisted database identifier in
 			// the scanner query. Keep this integration fixture lowercase so the
@@ -692,7 +791,6 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 			phase.Store(2)
 			require.NoError(t, cn.Close())
 			require.NoError(t, cn.Start())
-			cdc.ResetTableDetectorForTest(cn.ServiceID())
 			exec = testutils.GetSQLExecutor(cn)
 			var secondScanDone chan error
 			secondScanAttempts := 0
@@ -722,15 +820,16 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 			persistedAfterRestart, found, err := readWatermark()
 			require.NoError(t, err)
 			require.True(t, found, "replacement reader must observe the durable watermark")
-			require.Equal(t, checkpointBeforeRestart, persistedAfterRestart,
-				"replacement reader must start from the persisted pre-restart checkpoint")
+			require.True(t, persistedAfterRestart.GE(&checkpointBeforeRestart),
+				"final durable checkpoint must not regress from the pre-close sample")
+			require.True(t, persistedAfterRestart.GE(&boundary), "final checkpoint must include row2")
 			mustExec(dbName, "insert into "+tableName+" values (3, 'after_restart')")
 			captureReplacementBoundary.Store(true)
 			releaseSecond()
 			require.NoError(t, <-secondScanDone)
 			select {
 			case actualStart := <-replacementBoundary:
-				require.Equal(t, checkpointBeforeRestart, actualStart,
+				require.Equal(t, persistedAfterRestart, actualStart,
 					"replacement reader must collect from the durable checkpoint")
 			case <-ctx.Done():
 				t.Fatal("replacement reader did not reach CollectChanges")
@@ -755,13 +854,11 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 	// This scenario adds CNs to the shared fixture. Give each run a fresh
 	// generation, including the updater's internal executor bound to CN A.
 	require.NoError(t, embed.CloseSingleCNBaseClusterTests())
-	cdc.ResetCDCWatermarkUpdaterForTest()
 	t.Cleanup(func() {
 		if err := embed.CloseSingleCNBaseClusterTests(); err != nil {
 			t.Errorf("close CDC takeover fixture: %v", err)
 			return
 		}
-		cdc.ResetCDCWatermarkUpdaterForTest()
 	})
 	runSQLIntegration(t,
 		func(c embed.Cluster) {
@@ -770,6 +867,9 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 
 			cnA, err := c.GetCNService(0)
 			require.NoError(t, err)
+			// Admission barriers below belong to synchronous catalog scans. Keep
+			// periodic callbacks from claiming them before the corresponding scan.
+			cdc.ResetTableDetectorForTest(cnA.ServiceID(), time.Hour)
 			if w, ok := any(c).(interface {
 				WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
 			}); ok {
@@ -886,7 +986,6 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			defer releaseSecond()
 			defer releaseFresh()
 			defer releaseCancel()
-			cdc.ResetTableDetectorForTest(cnA.ServiceID())
 
 			mustExec := func(database, statement string) {
 				res, execErr := sqlExec.Exec(ctx, statement, executor.Options{}.WithDatabase(database))
@@ -934,7 +1033,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 				t.Helper()
 				flushCtx, flushCancel := context.WithTimeout(ctx, 30*time.Second)
 				defer flushCancel()
-				require.NoError(t, cdc.GetCDCWatermarkUpdater(cnID, nil).ForceFlush(flushCtx))
+				require.NoError(t, cdc.CDCWatermarkUpdaterFromRuntime(runtime.ServiceRuntime(cnID)).ForceFlush(flushCtx))
 			}
 			waitWatermarkVisible := func(reader executor.SQLExecutor, expected types.TS, generation uint64, cn string) {
 				t.Helper()
@@ -1047,6 +1146,8 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			require.NoError(t, c.StartNewCNService(1))
 			cnB, err := c.GetCNService(1)
 			require.NoError(t, err)
+			// B is driven by its periodic scanner; A and C use explicit scans.
+			cdc.ResetTableDetectorForTest(cnB.ServiceID(), 100*time.Millisecond)
 			if w, ok := any(c).(interface {
 				WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
 			}); ok {
@@ -1054,6 +1155,12 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			}
 			sqlExec = testutils.GetSQLExecutor(cnB)
 			cleanupCN = cnB
+
+			// Restrict real daemon claiming to B. An expired heartbeat alone lets
+			// A reclaim the row, which cannot prove cross-CN takeover.
+			clusterView := clusterservice.GetMOCluster(cnA.ServiceID())
+			require.NoError(t, clusterView.DebugUpdateCNLabel(cnB.ServiceID(), map[string][]string{"account": {"sys"}}))
+			defer func() { require.NoError(t, clusterView.DebugUpdateCNLabel(cnB.ServiceID(), map[string][]string{})) }()
 
 			// Move the live daemon claim to CN B in the real task table and make
 			// A's heartbeat stale. This is the deterministic equivalent of a newer
@@ -1098,6 +1205,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			// transfer, while B's task service observes and claims it.
 			select {
 			case <-secondEntered:
+				require.Equal(t, 1, countRows(fmt.Sprintf("select count(*) from mo_task.sys_daemon_task where task_id=%d and task_runner='%s'", daemonID, cnB.ServiceID())), "takeover admission must belong to B")
 			case <-ctx.Done():
 				t.Fatal("CN B did not reach replacement admission")
 			}
@@ -1179,11 +1287,15 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			require.NoError(t, c.StartNewCNService(1))
 			cnC, err := c.GetCNService(2)
 			require.NoError(t, err)
+			cdc.ResetTableDetectorForTest(cnC.ServiceID(), time.Hour)
 			if w, ok := any(c).(interface {
 				WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
 			}); ok {
 				w.WaitCNStoreTaskServiceCreatedIndexed(ctx, 2)
 			}
+			require.NoError(t, clusterView.DebugUpdateCNLabel(cnC.ServiceID(), map[string][]string{"account": {"sys"}}))
+			defer func() { require.NoError(t, clusterView.DebugUpdateCNLabel(cnC.ServiceID(), map[string][]string{})) }()
+			require.NoError(t, clusterView.DebugUpdateCNLabel(cnB.ServiceID(), map[string][]string{}))
 			sqlExec = testutils.GetSQLExecutor(cnC)
 			cleanupCN = cnC
 			mustExec("", fmt.Sprintf("update mo_task.sys_daemon_task set task_status=%d, task_runner='%s', last_heartbeat='2000-01-01 00:00:00' where task_id=%d", taskpb.TaskStatus_Running, cnC.ServiceID(), daemonID))
@@ -1223,6 +1335,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 				}
 			}
 		freshAdmissionEntered:
+			require.Equal(t, 1, countRows(fmt.Sprintf("select count(*) from mo_task.sys_daemon_task where task_id=%d and task_runner='%s'", daemonID, cnC.ServiceID())), "fresh admission must belong to C")
 			select {
 			case <-bCancelDone:
 				bCancelErrMu.Lock()

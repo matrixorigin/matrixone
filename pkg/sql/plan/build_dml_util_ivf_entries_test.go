@@ -99,7 +99,7 @@ func ivfDMLFixture(entryTyp Type) (*TableDef, []*TableDef, []*ObjectRef, *MultiT
 // "vector dimension not matched" (#27732).
 func TestAppendPreInsertSkVectorPlanQuantizesEntry(t *testing.T) {
 	run := func(t *testing.T, entryTyp Type) *Expr {
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		base, defs, refs, mti := ivfDMLFixture(entryTyp)
 
@@ -146,7 +146,7 @@ func TestAppendPreInsertSkVectorPlanQuantizesEntry(t *testing.T) {
 	t.Run("a same-width float entry is left alone", func(t *testing.T) {
 		// No QUANTIZATION: the verbatim projection already matches the column, and the
 		// plan must not grow a metadata scan or a bounds join for nothing.
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		base, defs, refs, mti := ivfDMLFixture(Type{Id: int32(types.T_array_float32), Width: 4})
 		src := builder.appendNode(&plan.Node{

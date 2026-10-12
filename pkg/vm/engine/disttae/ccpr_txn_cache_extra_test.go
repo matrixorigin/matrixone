@@ -420,10 +420,9 @@ func TestCCPRTxnCacheCommitMarkerCleanupDoesNotBlock(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("marker deletion did not start")
 	}
+	cache.Close()
+	require.False(t, cache.markerCleanupRunning.Load())
 	release()
-	require.Eventually(t, func() bool {
-		return !cache.markerCleanupRunning.Load()
-	}, 5*time.Second, time.Millisecond)
 }
 
 func TestCCPRTxnCacheUnknownResultRetainsDurableOwner(t *testing.T) {

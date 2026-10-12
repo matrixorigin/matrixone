@@ -296,7 +296,7 @@ func newPreparedExecuteEnv(t testing.TB, stmtID uint32) (*Session, *PrepareStmt,
 
 func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
 	return newPreparedExecuteEnvForSQLWithCompilerContext(
-		t, stmtID, sql, plan2.NewEmptyCompilerContext())
+		t, stmtID, sql, plan2.NewEmptyCompilerContext(newPlanTestProcess(t)))
 }
 
 func newPreparedExecuteEnvForSQLWithCompilerContext(
@@ -1101,12 +1101,37 @@ func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
 		"select regexp_substr(_binary'abc123', '[0-9]+')",
 		"select regexp_replace(_binary'abc123', _binary'[0-9]+', 'X')",
 		"select regexp_replace('abc123', '[0-9]+', _binary'X')",
+		"select cast(null as binary) regexp 'a'",
+		"select 'a' not regexp cast(null as binary(3))",
+		"select regexp_like(cast(null as binary), 'a')",
+		"select regexp_instr('abc', cast(null as binary))",
+		"select regexp_substr(cast(null as binary), 'a')",
+		"select regexp_replace('abc', 'a', cast(null as binary))",
+		"select cast('abc' as binary) regexp 'a'",
+		"select 'abc' regexp cast('a' as binary(1))",
+		"select regexp_like(cast('abc' as binary(3)), 'a')",
+		"select regexp_instr('abc', cast('b' as binary))",
+		"select regexp_substr(cast('abc' as binary), 'a')",
+		"select regexp_replace(cast('abc' as binary), 'a', 'X')",
+		"select regexp_like(cast(@v as binary(3)), 'a')",
+		"select regexp_like(cast(@int_var as binary), 'a')",
+		"select regexp_like(cast(@unset_var as binary), 'a')",
+		"select regexp_like(cast(@v as binary(0)), 'a')",
+		"select regexp_like((select cast('a' as binary)), 'a')",
+		"select regexp_like(v, 'a') from (select cast('a' as binary) v) s",
+		"select regexp_like((select cast(null as binary)), 'a')",
+		"select regexp_like(v, 'a') from (select cast(null as binary) v) s",
+		"select regexp_like(v, 'a') from (select cast(@v as binary(3)) v) s",
+		"select regexp_like(v, 'a') from (select v from (select cast('a' as binary) v) s) t",
+		"select regexp_instr('abc', (select cast('a' as binary)))",
+		"select regexp_instr(regexp_substr((select 'a'), 'a'), _binary'a')",
+		"select regexp_replace('abc', 'a', (select cast(null as binary)))",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			statements, err := mysql.Parse(ctx, sql, 1)
 			require.NoError(t, err)
 			require.Len(t, statements, 1)
-			_, err = buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(), statements[0])
+			_, err = buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(newPlanTestProcess(t)), statements[0])
 			require.Error(t, err)
 			var moErr *moerr.Error
 			require.ErrorAs(t, err, &moErr)
@@ -1118,14 +1143,114 @@ func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
 		"select _binary'abc' regexp _binary'a'",
 		"select regexp_like(null, 'a')",
 		"select regexp_instr(123, _binary'2')",
-		"select cast(null as binary) regexp 'a'",
+		"select cast(null as binary) regexp _binary'a'",
+		"select cast('abc' as binary(3)) regexp _binary'a'",
+		"select regexp_substr(_binary'abc', cast('a' as binary))",
+		"select regexp_replace(cast('abc' as binary), _binary'a', _binary'X')",
+		"select regexp_like(cast(@v as binary), 'a')",
+		"select regexp_like((select cast(@v as binary)), 'a')",
+		"select regexp_like(v, 'a') from (select cast(@v as binary) v) s",
+		"select regexp_like(v, 'a') from (select v from (select cast(@v as binary) v) s) t",
+		"select regexp_like((select cast('a' as binary)), _binary'a')",
+		"select regexp_like(v, _binary'a') from (select cast('a' as binary) v) s",
 	} {
 		t.Run("accepted_"+sql, func(t *testing.T) {
 			statements, err := mysql.Parse(ctx, sql, 1)
 			require.NoError(t, err)
-			_, err = buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(), statements[0])
+			compiler := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
+			compiler.ResolveVariableTypeFunc = func(name string, _, _ bool) (plan2.Type, error) {
+				if name == "v" {
+					return plan2.Type{Id: int32(types.T_text)}, nil
+				}
+				return plan2.Type{}, nil
+			}
+			_, err = buildPlan(ctx, nil, compiler, statements[0])
 			require.NoError(t, err)
 		})
+	}
+}
+
+func TestBuildPlanRegexpUserVariableNullHistory(t *testing.T) {
+	ctx := defines.AttachAccount(context.Background(), sysAccountID, rootID, moAdminRoleID)
+	for _, tc := range []struct {
+		name     string
+		assigned bool
+		previous any
+		wantErr  bool
+	}{
+		{"unassigned", false, nil, true},
+		{"first NULL assignment", true, nil, false},
+		{"string then NULL", true, "abc", false},
+		{"numeric then NULL", true, int64(123), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+			if tc.previous != nil {
+				require.NoError(t, ses.SetUserDefinedVar("history", tc.previous, ""))
+			}
+			if tc.assigned {
+				require.NoError(t, ses.SetUserDefinedVar("history", nil, ""))
+			}
+			resolver := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: ctx, ses: ses}}
+			compiler := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
+			compiler.ResolveVariableTypeFunc = resolver.ResolveVariableType
+			compiler.ResolveVariableRegexpStringResultFunc = resolver.ResolveVariableRegexpStringResult
+			for migration := 0; migration < 2; migration++ {
+				if migration != 0 {
+					snapshot, err := ses.snapshotUserDefinedVars(ctx)
+					require.NoError(t, err)
+					restored, err := decodeUserDefinedVars(ctx, snapshot, false)
+					require.NoError(t, err)
+					ses.installUserDefinedVars(restored)
+				}
+				for _, sql := range []string{
+					"select regexp_like(cast(@history as binary), 'a')",
+					"select regexp_like(cast((select @history) as binary), 'a')",
+					"select regexp_like(cast(v as binary), 'a') from (select @history v) s",
+					"select regexp_like(cast(v as binary), 'a') from (select v from (select @history v) s) t",
+				} {
+					for _, prepare := range []bool{false, true} {
+						statements, err := mysql.Parse(ctx, sql, 1)
+						require.NoError(t, err)
+						var stmt tree.Statement = statements[0]
+						if prepare {
+							stmt = tree.NewPrepareString(tree.Identifier("history_cast"), sql)
+						}
+						_, err = buildPlan(ctx, nil, compiler, stmt)
+						if prepare {
+							stmt.Free()
+						}
+						statements[0].Free()
+						if tc.wantErr {
+							require.True(t, moerr.IsMoErrCode(err, moerr.ErrCharacterSetMismatch), err, sql)
+						} else {
+							require.NoError(t, err, sql)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestUserVariableNullTypeDoesNotLeakHistoryToExecuteParams(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 106)
+	defer prepareStmt.Close()
+	for _, previous := range []any{int64(1), "abc", nil} {
+		if previous != nil {
+			require.NoError(t, ses.SetUserDefinedVar("parameter", previous, ""))
+		}
+		require.NoError(t, ses.SetUserDefinedVar("parameter", nil, ""))
+		func() {
+			params, values, _, _, _, _, err := buildExecuteUserParamsWithMemberOfPositions(cw.proc,
+				[]*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "parameter"}}}}, nil, nil)
+			require.NoError(t, err)
+			defer params.Free(cw.proc.Mp())
+			value := values[0].(plan2.ParamValue)
+			require.Nil(t, value.Value)
+			require.False(t, value.HasSourceType, "literal NULL has no current conversion type, regardless of history")
+			require.Equal(t, vector.PrepareParamNone, value.PrepareParamKind)
+		}()
 	}
 }
 
@@ -1142,12 +1267,19 @@ func TestBuildPlanRegexpDefersOnlyRuntimeStringDomains(t *testing.T) {
 	} {
 		t.Run("accepted_"+sql, func(t *testing.T) {
 			prepare := tree.NewPrepareString(tree.Identifier("regexp_dynamic"), sql)
-			_, err := buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(), prepare)
+			_, err := buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(newPlanTestProcess(t)), prepare)
 			require.NoError(t, err)
 		})
 	}
 
 	for _, sql := range []string{
+		"select regexp_instr(cast(? as binary), 'a')",
+		"select regexp_like((select cast('a' as binary)), 'a')",
+		"select regexp_like((select cast(null as binary)), 'a')",
+		"select regexp_like((select cast(? as binary)), 'a')",
+		"select regexp_like(v, 'a') from (select cast(? as binary) v) s",
+		"select regexp_instr('abc', cast(? as binary(1)))",
+		"select regexp_replace('abc', 'a', cast(? as binary))",
 		"select regexp_instr(cast(? as char), cast(_binary'中' as varbinary(3)), 2)",
 		"select regexp_instr(hex(?), cast(_binary'中' as varbinary(3)), 2)",
 		"select regexp_instr(concat(hex(?), ''), cast(_binary'中' as varbinary(3)), 2)",
@@ -1159,7 +1291,7 @@ func TestBuildPlanRegexpDefersOnlyRuntimeStringDomains(t *testing.T) {
 	} {
 		t.Run("rejected_"+sql, func(t *testing.T) {
 			prepare := tree.NewPrepareString(tree.Identifier("regexp_static"), sql)
-			_, err := buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(), prepare)
+			_, err := buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(newPlanTestProcess(t)), prepare)
 			require.Error(t, err)
 			var moErr *moerr.Error
 			require.ErrorAs(t, err, &moErr)
@@ -1269,9 +1401,10 @@ func TestPreparedRegexpTypedNullRetainsStaticDomainAtExecuteRebind(t *testing.T)
 			value: plan2.ParamValue{Value: "a", IsBinaryProtocol: true},
 		},
 		{
-			name:  "binary null with text direct marker",
-			query: "select regexp_instr(cast(NULL as binary), ?)",
-			value: plan2.ParamValue{Value: "a", IsBinaryProtocol: true},
+			name:    "binary null with text direct marker",
+			query:   "select regexp_instr(cast(NULL as binary), ?)",
+			value:   plan2.ParamValue{Value: "a", IsBinaryProtocol: true},
+			wantErr: true,
 		},
 		{
 			name:  "binary null with binary direct marker",
@@ -1435,10 +1568,11 @@ func TestInitExecuteStmtParamDirectResultSpecializationUsesBoundedCache(t *testi
 
 	var metadataTypes []plan.Type
 	writer := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
-	writer.makeColumnDefDataFunc = func(_ context.Context, columns []*plan.ColDef) ([][]byte, error) {
+	protocol := &MysqlProtocolImpl{io: gIO}
+	writer.makeColumnDefDataFunc = func(ctx context.Context, columns []*plan.ColDef) ([][]byte, error) {
 		require.Len(t, columns, 1)
 		metadataTypes = append(metadataTypes, columns[0].Typ)
-		return [][]byte{[]byte(fmt.Sprintf("%d:%d:%d", columns[0].Typ.Id, columns[0].Typ.Width, columns[0].Typ.Scale))}, nil
+		return protocol.MakeColumnDefData(ctx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
 	}
 
 	install := func(value string, mysqlType defines.MysqlType, isNull bool) {
@@ -1473,6 +1607,12 @@ func TestInitExecuteStmtParamDirectResultSpecializationUsesBoundedCache(t *testi
 	require.NoError(t, err)
 	require.Same(t, runtimeCompile, retComp)
 	require.Same(t, runtimePlan, reusedPlan)
+	require.Len(t, metadataTypes, 1, "an admitted generation must reuse its result metadata")
+	require.Equal(t, prepareStmt.runtimeColDefData, execCtx.prepareColDef)
+	freshColumns := getPreparedResultColumnsForWithGroupConcatMaxLen(prepareStmt.PrepareStmt, reusedPlan, false, prepareStmt.groupConcatMaxLenFloor)
+	freshMetadata, metadataErr := protocol.MakeColumnDefData(execCtx.reqCtx, freshColumns, directIntegerResultLengths(prepareStmt.PrepareStmt, freshColumns)...)
+	require.NoError(t, metadataErr)
+	require.Equal(t, freshMetadata, execCtx.prepareColDef, "cached payload must match the uncached protocol builder")
 
 	executor, err := colexec.NewExpressionExecutor(cw.proc, resultExpr(reusedPlan))
 	require.NoError(t, err)
@@ -1486,6 +1626,20 @@ func TestInitExecuteStmtParamDirectResultSpecializationUsesBoundedCache(t *testi
 		"cached direct-result plan must read the current parameter value")
 
 	decimalText := "-12345678901234567890.123456789"
+	install(decimalText, defines.MYSQL_TYPE_NEWDECIMAL, false)
+	metadataFactory := writer.makeColumnDefDataFunc
+	writer.makeColumnDefDataFunc = func(context.Context, []*plan.ColDef) ([][]byte, error) {
+		return nil, assert.AnError
+	}
+	oldMetadata := prepareStmt.runtimeColDefData
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.ErrorIs(t, err, assert.AnError)
+	require.Same(t, runtimePlan, prepareStmt.runtimePlan)
+	require.Same(t, runtimeCompile, prepareStmt.runtimeCompile)
+	require.Equal(t, oldMetadata, prepareStmt.runtimeColDefData)
+	require.Nil(t, cw.runtimeCacheColDefData)
+	cw.discardRuntimeCacheCandidate()
+	writer.makeColumnDefDataFunc = metadataFactory
 	install(decimalText, defines.MYSQL_TYPE_NEWDECIMAL, false)
 	retComp, decimalPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
@@ -2906,6 +3060,7 @@ func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *tes
 	require.Nil(t, retComp)
 	require.NotSame(t, manualPlan, firstPlan)
 	require.Empty(t, prepareStmt.runtimeSpecializationKey)
+	require.Nil(t, prepareStmt.runtimeColDefData)
 	require.Nil(t, prepareStmt.runtimePlan)
 	require.Same(t, firstPlan, cw.runtimeCachePlan)
 	require.NotNil(t, cw.paramVals)
@@ -3432,7 +3587,7 @@ func TestPreparedDiagnosticFreeFilterReusesPlan(t *testing.T) {
 }
 
 func TestPreparedArithmeticDMLReusesStableRuntimeCategory(t *testing.T) {
-	optimizer := plan2.NewMockOptimizer(false)
+	optimizer := plan2.NewMockOptimizer(false, newPlanTestProcess(t))
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
 		t,
 		216,
@@ -3566,7 +3721,7 @@ func TestPreparedArithmeticDMLReusesStableRuntimeCategory(t *testing.T) {
 	require.NotNil(t, cw.runtimeCachePlan)
 }
 
-func TestPreparedSignedNarrowingDMLCacheGuard(t *testing.T) {
+func TestPreparedSignedNarrowingCacheGuard(t *testing.T) {
 	for _, tc := range []struct {
 		name, sql string
 		values    []string
@@ -3575,9 +3730,18 @@ func TestPreparedSignedNarrowingDMLCacheGuard(t *testing.T) {
 		{"update", "update nation set n_regionkey = ? where n_nationkey = ?", []string{"1", "7"}, []int{1}},
 		{"delete", "delete from nation where n_nationkey = ?", []string{"7"}, []int{0}},
 		{"multiple predicates", "update nation set n_name = 'updated' where n_nationkey = ? and n_regionkey = ?", []string{"7", "1"}, []int{0, 1}},
+		{"SELECT comparison", "select n_name from nation where n_nationkey=?", []string{"7"}, []int{0}},
+		{"BETWEEN", "select n_name from nation where n_nationkey between ? and ?", []string{"1", "127"}, []int{0, 1}},
+		{"OR BETWEEN", "select n_name from nation where n_nationkey between ? and ? or n_nationkey between ? and ?", []string{"1", "127", "8", "9"}, []int{0, 1, 2, 3}},
+		{"IN", "select n_name from nation where n_nationkey in (?,?)", []string{"127", "1"}, []int{0, 1}},
+		{"NOT IN", "select n_name from nation where n_nationkey not in (?,?)", []string{"127", "1"}, []int{0, 1}},
+		{"no narrowing", "select ?", []string{"127"}, nil},
+		{"unrelated projection", "select ?, n_name from nation where n_nationkey in (?,?)", []string{"127", "7", "8"}, []int{1, 2}},
+		{"projected IN", "select n_nationkey in (?,?) from nation", []string{"127", "1"}, []int{0, 1}},
+		{"unused projection", "select n_name from (select n_name, n_nationkey in (?,?) as unused from nation) derived", []string{"127", "1"}, []int{0, 1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			optimizer := plan2.NewMockOptimizer(false)
+			optimizer := plan2.NewMockOptimizer(false, newPlanTestProcess(t))
 			ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
 				t, 231, tc.sql, optimizer.CurrentContext())
 			t.Cleanup(func() {
@@ -3634,6 +3798,17 @@ func TestPreparedSignedNarrowingDMLCacheGuard(t *testing.T) {
 			for _, pos := range tc.keys {
 				require.True(t, guards[int32(pos)], "parameter %d needs its complete narrowing guard", pos)
 			}
+			if tc.name == "unused projection" {
+				q := narrowPlan.GetQuery()
+				pending := append([]int32(nil), q.Steps...)
+				for len(pending) > 0 {
+					node := q.Nodes[pending[0]]
+					pending = append(pending[1:], node.Children...)
+					for _, expr := range append(append([]*plan.Expr(nil), node.FilterList...), node.ProjectList...) {
+						require.False(t, function.ContainsParameter(expr), "unused IN consumer must be removed")
+					}
+				}
+			}
 			cached := compile.NewCompile("", "", prepared.Sql, "", "", nil,
 				cw.proc, prepared.PrepareStmt, false, nil, time.Now())
 			installed := false
@@ -3653,44 +3828,73 @@ func TestPreparedSignedNarrowingDMLCacheGuard(t *testing.T) {
 				require.Nil(t, cw.runtimeCacheTarget)
 			}
 			for _, pos := range tc.keys {
-				for _, value := range []string{"8", "-2147483648", "2147483647"} {
-					values := append([]string(nil), tc.values...)
+				// Planner tests own the limits. Here every ordinal must observe
+				// a new safe packet and recover after a guard miss.
+				values := append([]string(nil), tc.values...)
+				for _, value := range []string{"128", "32768", "2147483647"} {
 					values[pos] = value
 					bind(values, -1, -1)
 					assertReused()
 				}
-				for _, value := range []string{"-2147483649", "2147483648"} {
-					values := append([]string(nil), tc.values...)
-					values[pos] = value
-					bind(values, -1, -1)
-					gotCompile, fallback := execute()
-					require.Nil(t, gotCompile, "out-of-domain keys cannot reuse a narrow compile")
-					require.NotSame(t, narrowPlan, fallback)
-					require.Nil(t, cw.runtimeCacheTarget, "a value-dependent fallback must not replace the good cache")
-					require.Same(t, narrowPlan, prepared.runtimePlan)
-					require.Same(t, cached, prepared.runtimeCompile)
-					bind(tc.values, -1, -1)
-					assertReused()
-				}
+				values[pos] = "2147483648"
+				bind(values, -1, -1)
+				gotCompile, fallback := execute()
+				require.Nil(t, gotCompile, "out-of-domain keys cannot reuse a narrow compile")
+				require.NotSame(t, narrowPlan, fallback)
+				require.Nil(t, cw.runtimeCacheTarget, "a value-dependent fallback must not replace the good cache")
+				require.Same(t, narrowPlan, prepared.runtimePlan)
+				require.Same(t, cached, prepared.runtimeCompile)
+				bind(tc.values, -1, -1)
+				assertReused()
 			}
-			// NULL and a different binary source width are different categories.
-			// A category miss must not evict the live plan before compile succeeds.
-			for _, nullBinding := range []bool{true, false} {
-				nullAt, longAt := -1, tc.keys[0]
-				if nullBinding {
-					nullAt, longAt = tc.keys[0], -1
-				}
-				bind(tc.values, nullAt, longAt)
+			if tc.name == "unrelated projection" || tc.name == "no narrowing" {
+				values := append([]string(nil), tc.values...)
+				values[0] = "2147483648"
+				bind(values, -1, -1)
+				assertReused()
+			}
+			if tc.name == "IN" {
+				bind(tc.values, -1, -1)
+				prepared.ParamTypes[1] = 0x80
 				gotCompile, other := execute()
-				require.Nil(t, gotCompile)
+				require.Nil(t, gotCompile, "signedness changes the semantic cache category")
 				require.NotSame(t, narrowPlan, other)
 				require.Same(t, narrowPlan, prepared.runtimePlan)
 				bind(tc.values, -1, -1)
 				assertReused()
 			}
 			if tc.name == "update" {
+				// The preceding recovery established a safe cache hit. Cover
+				// negative overflow once at the cached admission boundary.
+				values := append([]string(nil), tc.values...)
+				values[tc.keys[0]] = "-2147483649"
+				bind(values, -1, -1)
+				gotCompile, fallback := execute()
+				require.Nil(t, gotCompile, "negative overflow cannot reuse a narrow compile")
+				require.NotSame(t, narrowPlan, fallback)
+				require.Nil(t, cw.runtimeCacheTarget, "a value-dependent fallback must not replace the good cache")
+				require.Same(t, narrowPlan, prepared.runtimePlan)
+				require.Same(t, cached, prepared.runtimeCompile)
+				bind(tc.values, -1, -1)
+				assertReused()
+
+				// NULL and a different binary source width are different categories.
+				// A category miss must not evict the live plan before compile succeeds.
+				for _, nullBinding := range []bool{true, false} {
+					nullAt, longAt := -1, tc.keys[0]
+					if nullBinding {
+						nullAt, longAt = tc.keys[0], -1
+					}
+					bind(tc.values, nullAt, longAt)
+					gotCompile, other := execute()
+					require.Nil(t, gotCompile)
+					require.NotSame(t, narrowPlan, other)
+					require.Same(t, narrowPlan, prepared.runtimePlan)
+					bind(tc.values, -1, -1)
+					assertReused()
+				}
 				// The key guard must not erase the independent assignment cast.
-				// Its overflow remains an execution error, even on a cache hit.
+				// Public protocol tests own the error, unchanged data and recovery.
 				bind([]string{"2147483648", "7"}, -1, -1)
 				assertReused()
 				var assignment *plan.Expr
@@ -3714,18 +3918,110 @@ func TestPreparedSignedNarrowingDMLCacheGuard(t *testing.T) {
 					})
 				}))
 				require.NotNil(t, assignment, "assignment plan: %s", narrowPlan.GetQuery().String())
-				_, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, assignment, []*batch.Batch{batch.EmptyForConstFoldBatch})
-				if free != nil {
-					defer free()
+			}
+		})
+	}
+}
+
+func TestPreparedDecimalIntegerConsumerCacheGuard(t *testing.T) {
+	for _, predicate := range []string{
+		"n_nationkey in (?, ?)",
+		"n_nationkey between ? and ?",
+		"n_nationkey = cast(? as signed)",
+	} {
+		t.Run(predicate, func(t *testing.T) {
+			base := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
+			_, table, err := base.Resolve("tpch", "nation", nil)
+			require.NoError(t, err)
+			for _, col := range table.Cols {
+				if col.Name == "n_nationkey" {
+					col.Typ.Id, col.Typ.Width, col.Typ.Scale = int32(types.T_decimal64), 12, 2
 				}
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "assignment overflow was lost: %v", err)
+			}
+			ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, table: table}
+			ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
+				t, 233, "select n_name from nation where "+predicate, ctx)
+			ctx.proc = cw.proc
+			t.Cleanup(func() {
+				cw.proc.SetPrepareParams(nil)
+				cw.releaseRuntimeCacheRetiredCompiles()
+				prepared.Close()
+			})
+			bind := func(values []string, nullAt int) {
+				t.Helper()
+				cw.proc.SetPrepareParams(nil)
+				if prepared.params != nil {
+					prepared.params.Free(cw.proc.Mp())
+				}
+				prepared.params = vector.NewVec(types.T_text.ToType())
+				prepared.ParamTypes = nil
+				for i, value := range values {
+					require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), i == nullAt, cw.proc.Mp()))
+					prepared.ParamTypes = append(prepared.ParamTypes, byte(defines.MYSQL_TYPE_LONGLONG), 0)
+				}
+			}
+			execute := func() (*compile.Compile, *plan.Plan) {
+				t.Helper()
+				cw.discardRuntimeCacheCandidate()
+				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(
+					execCtx, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx)
+				if owned && stmt != nil {
+					stmt.Free()
+				}
+				require.NoError(t, err)
+				return comp, p
+			}
+			values := []string{"7"}
+			if strings.Count(predicate, "?") == 2 {
+				values = append(values, "8")
+			}
+			bind(values, -1)
+			_, nativePlan := execute()
+			require.Same(t, nativePlan, cw.runtimeCachePlan)
+			require.NotEmpty(t, cw.runtimeCacheDiagnostics)
+			cached := compile.NewCompile("", "", prepared.Sql, "", "", nil,
+				cw.proc, prepared.PrepareStmt, false, nil, time.Now())
+			installed := false
+			t.Cleanup(func() {
+				if !installed {
+					cached.FreeOperator()
+					cached.Release()
+				}
+			})
+			installed = cw.installRuntimeCacheCandidate(cached)
+			require.True(t, installed)
+			for pos := range values {
+				for _, value := range []string{"9", "10000000000", "-10000000000", "7"} {
+					current := append([]string(nil), values...)
+					current[pos] = value
+					bind(current, -1)
+					comp, p := execute()
+					if len(value) < 10 {
+						require.Same(t, cached, comp)
+						require.Same(t, nativePlan, p)
+					} else {
+						require.Nil(t, comp)
+						require.NotSame(t, nativePlan, p)
+						require.Nil(t, cw.runtimeCacheTarget, "wide values must not replace an admitted domain")
+					}
+					require.Same(t, cached, prepared.runtimeCompile)
+					require.Same(t, nativePlan, prepared.runtimePlan)
+				}
+				bind(values, pos)
+				comp, _ := execute()
+				require.Nil(t, comp, "NULL is a different source category")
+				require.Same(t, nativePlan, prepared.runtimePlan)
+				bind(values, -1)
+				comp, p := execute()
+				require.Same(t, cached, comp)
+				require.Same(t, nativePlan, p)
 			}
 		})
 	}
 }
 
 func BenchmarkInitExecuteStmtParamRepeatedTPCCArithmeticUpdate(b *testing.B) {
-	optimizer := plan2.NewMockOptimizer(false)
+	optimizer := plan2.NewMockOptimizer(false, newPlanTestProcess(b))
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
 		b,
 		217,
@@ -3777,23 +4073,38 @@ func BenchmarkInitExecuteStmtParamRepeatedTPCCArithmeticUpdate(b *testing.B) {
 
 func BenchmarkPreparedNarrowingCacheAdmission(b *testing.B) {
 	for _, tc := range []struct {
-		name      string
+		name, sql string
 		mysqlType defines.MysqlType
 	}{
-		{"same_width", defines.MYSQL_TYPE_LONG},
-		{"guarded_narrowing", defines.MYSQL_TYPE_LONGLONG},
+		{"point_select_LONG", "select n_name from nation where n_nationkey=?", defines.MYSQL_TYPE_LONG},
+		{"point_select_LONGLONG", "select n_name from nation where n_nationkey=?", defines.MYSQL_TYPE_LONGLONG},
+		{"direct_result", "select ?", defines.MYSQL_TYPE_LONG},
+		{"same_width", "update nation set n_regionkey=1 where n_nationkey=?", defines.MYSQL_TYPE_LONG},
+		{"guarded_narrowing", "update nation set n_regionkey=1 where n_nationkey=?", defines.MYSQL_TYPE_LONGLONG},
+		{"IN_same_width", "select n_name from nation where n_nationkey in (?,?)", defines.MYSQL_TYPE_LONG},
+		{"IN_guarded_narrowing", "select n_name from nation where n_nationkey in (?,?)", defines.MYSQL_TYPE_LONGLONG},
+		{"ranges_guarded_narrowing", "select count(n_nationkey) from nation where " + strings.TrimSuffix(strings.Repeat("n_nationkey between ? and ? or ", 10), " or "), defines.MYSQL_TYPE_LONGLONG},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
-			optimizer := plan2.NewMockOptimizer(false)
+			optimizer := plan2.NewMockOptimizer(false, newPlanTestProcess(b))
 			ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
-				b, 232, "update nation set n_regionkey=1 where n_nationkey=?", optimizer.CurrentContext())
+				b, 232, tc.sql, optimizer.CurrentContext())
 			b.Cleanup(func() {
 				cw.proc.SetPrepareParams(nil)
 				prepared.Close()
 			})
+			if strings.HasPrefix(tc.name, "point_select") {
+				writer := ses.GetResponser().MysqlRrWr().(*testMysqlWriter)
+				protocol := &MysqlProtocolImpl{io: gIO}
+				writer.makeColumnDefDataFunc = func(ctx context.Context, cols []*plan.ColDef) ([][]byte, error) {
+					return protocol.MakeColumnDefData(ctx, cols)
+				}
+			}
 			prepared.params = vector.NewVec(types.T_text.ToType())
-			require.NoError(b, vector.AppendBytes(prepared.params, []byte("7"), false, cw.proc.Mp()))
-			prepared.ParamTypes = []byte{byte(tc.mysqlType), 0}
+			for range strings.Count(tc.sql, "?") {
+				require.NoError(b, vector.AppendBytes(prepared.params, []byte("7"), false, cw.proc.Mp()))
+				prepared.ParamTypes = append(prepared.ParamTypes, byte(tc.mysqlType), 0)
+			}
 			compiler := &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}
 			execute := func() (*compile.Compile, *plan.Plan) {
 				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(
@@ -3845,7 +4156,7 @@ func TestPreparedIntegerAssignmentReusesBoundCompile(t *testing.T) {
 		{"insert into nation(n_regionkey,n_nationkey,n_name,n_comment) values (?,?,'','')", true, false, true},
 	} {
 		t.Run(fmt.Sprintf("%s/long_data=%t", query.sql, query.longData), func(t *testing.T) {
-			optimizer := plan2.NewMockOptimizer(false)
+			optimizer := plan2.NewMockOptimizer(false, newPlanTestProcess(t))
 			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
 				t, 222, query.sql, optimizer.CurrentContext())
 			defer func() {
@@ -3925,7 +4236,7 @@ func BenchmarkInitExecuteStmtParamRepeatedIntegerAssignment(b *testing.B) {
 		{"insert", "insert into nation(n_nationkey,n_name,n_regionkey,n_comment) values (?,'',?,'')", []string{"7", "1"}},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
-			optimizer := plan2.NewMockOptimizer(false)
+			optimizer := plan2.NewMockOptimizer(false, newPlanTestProcess(b))
 			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
 				b, 221, tc.sql, optimizer.CurrentContext())
 			defer func() {
@@ -3968,7 +4279,7 @@ func BenchmarkInitExecuteStmtParamRepeatedIntegerAssignment(b *testing.B) {
 }
 
 func BenchmarkInitExecuteStmtParamRepeatedNonConsumerDecimal(b *testing.B) {
-	optimizer := plan2.NewMockOptimizer(false)
+	optimizer := plan2.NewMockOptimizer(false, newPlanTestProcess(b))
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
 		b, 220, "update nation set n_name = ? where n_nationkey = 1", optimizer.CurrentContext())
 	defer func() {
@@ -4114,6 +4425,46 @@ func TestCOMStmtCharRuntimeCacheReusesTextSourceAcrossSignedness(t *testing.T) {
 	}
 }
 
+func TestPreparedExecutionBindingKeyPreservesIdentity(t *testing.T) {
+	bindings := []plan2.PreparedSourceBinding{
+		{Position: 0, Type: types.T_int32.ToType(), NumericType: types.New(types.T_decimal128, 38, 9)},
+		{Position: 12, Type: types.New(types.T_varchar, 123, -1), BitCountType: types.T_uint64.ToType()},
+	}
+	bindings[1].Type.Charset = 255
+	for flags := range 32 {
+		param := plan2.ParamValue{
+			Value: "17", PrepareParamKind: vector.PrepareParamInteger,
+			IsBinaryProtocol: flags&1 != 0, IsBin: flags&2 != 0,
+			IsBinaryString: flags&4 != 0, EnableNumericPrefix: flags&8 != 0,
+			RuntimeStringDomain: types.RuntimeStringDomain(flags % 3),
+		}
+		if flags&16 != 0 {
+			param.Value = nil
+		}
+		values := []any{param, "ordinary value"}
+		// The legacy framing is a compatibility oracle independent of the new encoder.
+		var expected strings.Builder
+		for i, binding := range bindings {
+			fmt.Fprintf(&expected, "%d;", binding.Position)
+			for _, typ := range []types.Type{binding.Type, binding.NumericType, binding.BitCountType} {
+				fmt.Fprintf(&expected, "%d:%d:%d:%d;", typ.Oid, typ.Charset, typ.Width, typ.Scale)
+			}
+			if p, ok := values[i].(plan2.ParamValue); ok {
+				fmt.Fprintf(&expected, "%d:%t:%t:%t:%d:%t:%t;", p.PrepareParamKind,
+					p.IsBinaryProtocol, p.IsBin, p.IsBinaryString, p.RuntimeStringDomain,
+					p.EnableNumericPrefix, p.Value == nil)
+			}
+		}
+		key := preparedExecutionBindingKey(bindings, values)
+		require.Equal(t, expected.String(), key)
+		if param.Value != nil {
+			param.Value = "18"
+			values[0] = param
+			require.Equal(t, key, preparedExecutionBindingKey(bindings, values), "values do not identify a generation")
+		}
+	}
+}
+
 func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testing.T) {
 	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 208, "select ?")
 	defer prepareStmt.Close()
@@ -4122,20 +4473,29 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 	oldCompile := compile.NewCompile(
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
-	prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, nil)
-	require.Nil(t, prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, nil),
+	oldMetadata := [][]byte{[]byte("old column payload")}
+	oldDiagnostics := []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}}
+	prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, oldMetadata)
+	require.Nil(t, prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, oldMetadata),
 		"reinstalling the live compile must not retire it")
 
-	failedPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}}}
-	cw.runtimeCacheTarget = prepareStmt
-	cw.runtimeCacheKey = "failed"
-	cw.runtimeCachePlan = failedPlan
-	require.False(t, cw.completeRuntimeCacheCandidate(nil, assert.AnError))
-	require.Equal(t, "old", prepareStmt.runtimeSpecializationKey)
-	require.Same(t, oldPlan, prepareStmt.runtimePlan)
-	require.Same(t, oldCompile, prepareStmt.runtimeCompile)
-	require.Nil(t, cw.runtimeCacheTarget)
-	require.Nil(t, cw.runtimeCachePlan)
+	for _, compileErr := range []error{assert.AnError, context.Canceled} {
+		failedPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}}}
+		cw.runtimeCacheTarget = prepareStmt
+		cw.runtimeCacheKey = "failed"
+		cw.runtimeCachePlan = failedPlan
+		cw.runtimeCacheColDefData = [][]byte{[]byte("unpublished payload")}
+		require.False(t, cw.completeRuntimeCacheCandidate(nil, compileErr))
+		require.Equal(t, "old", prepareStmt.runtimeSpecializationKey)
+		require.Same(t, oldPlan, prepareStmt.runtimePlan)
+		require.Same(t, oldCompile, prepareStmt.runtimeCompile)
+		require.Same(t, oldDiagnostics[0], prepareStmt.runtimeDiagnosticCandidates[0])
+		require.Equal(t, oldMetadata, prepareStmt.runtimeColDefData)
+		require.Nil(t, cw.runtimeCacheColDefData)
+		require.Nil(t, cw.runtimeCacheTarget)
+		require.Nil(t, cw.runtimeCachePlan)
+
+	}
 
 	newPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}}}
 	newCompile := compile.NewCompile(
@@ -4146,10 +4506,14 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 	cw.runtimeCacheTarget = prepareStmt
 	cw.runtimeCacheKey = "new"
 	cw.runtimeCachePlan = newPlan
+	newMetadata := [][]byte{[]byte("new column payload")}
+	cw.runtimeCacheColDefData = newMetadata
 	require.True(t, cw.completeRuntimeCacheCandidate(newCompile, nil))
 	require.Equal(t, "new", prepareStmt.runtimeSpecializationKey)
 	require.Same(t, newPlan, prepareStmt.runtimePlan)
 	require.Same(t, newCompile, prepareStmt.runtimeCompile)
+	require.Equal(t, newMetadata, prepareStmt.runtimeColDefData)
+	require.Nil(t, cw.runtimeCacheColDefData)
 	require.Nil(t, cw.runtimeCacheTarget)
 	require.Nil(t, cw.runtimeCachePlan)
 	require.Same(t, newMessageBoard, cw.proc.GetMessageBoard(),
@@ -4788,7 +5152,7 @@ func TestValidateCapturedPrepareSchemasSkipsPlansRebuiltEveryExecute(t *testing.
 		PubInfo:          &plan.PubInfo{TenantId: 11},
 	}}
 	metadataPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{
-		OriginViews: []string{"information_schema#statistics"},
+		ViewPath: []*plan.ViewStep{{DatabaseName: "information_schema", ViewName: "statistics", Snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{}}}},
 	}}}}}
 	rebuildEveryExecute := shouldRebuildPreparePlan(false, metadataPlan)
 	require.True(t, rebuildEveryExecute)
@@ -6125,7 +6489,7 @@ func TestInitExecuteStmtParamBinaryConstructorMemberOf(t *testing.T) {
 }
 
 func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
-	for _, constructor := range []string{"json_array(?)", "json_object('k', ?)", "json_set('{}', '$.k', ?)", "json_insert('{}', '$.k', ?)", "json_replace('{\"k\":0}', '$.k', ?)", "json_array_append('[]', '$', ?)"} {
+	for _, constructor := range []string{"json_array(?)", "json_object('k', ?)", "json_set('{}', '$.k', ?)", "json_insert('{}', '$.k', ?)", "json_replace('{\"k\":0}', '$.k', ?)", "json_array_append('[]', '$', ?)", "json_array_insert('[0]', '$[0]', ?)"} {
 		t.Run(constructor, func(t *testing.T) {
 			for _, version := range []int64{defines.MORPCVersion51, defines.MORPCVersion52} {
 				t.Run(fmt.Sprint(version), func(t *testing.T) {
@@ -6170,6 +6534,7 @@ func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
 								prepared.clearBinaryParamState(cw.proc)
 								continue
 							}
+							require.False(t, result.IsNull(0))
 							want := "[\"base64:type252:YWI=\"]"
 							if input.value == "cd" {
 								want = "[\"base64:type252:Y2Q=\"]"
@@ -6177,7 +6542,11 @@ func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
 							if input.null {
 								want = "[null]"
 							}
-							if constructor != "json_array(?)" && constructor != "json_array_append('[]', '$', ?)" {
+							if constructor == "json_array_insert('[0]', '$[0]', ?)" {
+								want = want[:len(want)-1] + ", 0]"
+							}
+							if constructor != "json_array(?)" && constructor != "json_array_append('[]', '$', ?)" &&
+								constructor != "json_array_insert('[0]', '$[0]', ?)" {
 								want = "{\"k\": " + want[1:len(want)-1] + "}"
 							}
 							require.Equal(t, want, types.DecodeJson(result.GetBytesAt(0)).String())
@@ -6518,7 +6887,6 @@ func TestBuildExecuteUserParamsPreservesExplicitTextOverride(t *testing.T) {
 
 func TestPreparedBinaryIntegerCastDiagnosticProofBoundary(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	for _, tc := range []struct {
 		name      string
 		value     string
@@ -6537,7 +6905,15 @@ func TestPreparedBinaryIntegerCastDiagnosticProofBoundary(t *testing.T) {
 		{"unsigned long widening", "4294967295", defines.MYSQL_TYPE_LONG, true, types.T_uint64, false, false, true, true},
 		{"unsigned long long max", "18446744073709551615", defines.MYSQL_TYPE_LONGLONG, true, types.T_uint64, false, false, true, true},
 		{"sign mismatch", "1", defines.MYSQL_TYPE_LONG, false, types.T_uint32, false, false, true, false},
-		{"narrowing", "1", defines.MYSQL_TYPE_LONG, false, types.T_int16, false, false, true, false},
+		{"narrowing", "1", defines.MYSQL_TYPE_LONG, false, types.T_int16, false, false, true, true},
+		{"narrow min", "-2147483648", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, false, true, true},
+		{"narrow max", "2147483647", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, false, true, true},
+		{"narrow underflow", "-2147483649", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, false, true, false},
+		{"narrow overflow", "2147483648", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, false, true, false},
+		{"narrow invalid bytes", "invalid", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, false, true, false},
+		{"narrow NULL", "", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, true, false, true, true},
+		{"narrow long data", "1", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, true, true, false},
+		{"unsigned narrow stays probed", "1", defines.MYSQL_TYPE_LONGLONG, true, types.T_uint32, false, false, true, false},
 		{"tiny bool heuristic", "1", defines.MYSQL_TYPE_TINY, false, types.T_int32, false, false, true, false},
 		{"long data", "1", defines.MYSQL_TYPE_LONG, false, types.T_int32, false, true, true, false},
 		{"sql prepare", "1", defines.MYSQL_TYPE_LONG, false, types.T_int32, false, false, false, false},
@@ -6562,13 +6938,28 @@ func TestPreparedBinaryIntegerCastDiagnosticProofBoundary(t *testing.T) {
 				prepared.getFromSendLongData = map[int]struct{}{0: {}}
 			}
 			require.Equal(t, tc.want, preparedBinaryIntegerCastDiagnosticFree(prepared, cast, tc.binary))
+			if tc.mysqlType == defines.MYSQL_TYPE_LONGLONG && !tc.unsigned && tc.target == types.T_int32 {
+				// This is the actual signed admission shape: a semantic BIGINT
+				// marker cast to INT, not just the text transport conversion.
+				param.Typ.Id = int32(types.T_int64)
+				typed, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{param, target})
+				require.NoError(t, err)
+				require.Equal(t, tc.want, preparedBinaryIntegerCastDiagnosticFree(prepared, typed, tc.binary))
+				typed.GetF().SyntaxExplicitCast = true
+				require.False(t, preparedBinaryIntegerCastDiagnosticFree(prepared, typed, tc.binary))
+				// Certifying the outer INT must never hide an inner TINYINT
+				// conversion: its smaller source domain remains independently probed.
+				param.Typ.Id = int32(types.T_int8)
+				inner, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{param, target})
+				require.NoError(t, err)
+				require.False(t, preparedBinaryIntegerCastDiagnosticFree(prepared, inner, tc.binary))
+			}
 		})
 	}
 }
 
 func TestPreparedBinaryIntegerSerialDiagnosticProofBoundary(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("2"), false, proc.Mp()))
@@ -6624,7 +7015,7 @@ func TestPreparedBinaryIntegerSerialDiagnosticProofBoundary(t *testing.T) {
 			serial.GetF().Args[0] = first.GetF().Args[0]
 			check(false)
 			serial.GetF().Args[0] = castAt(0, types.T_int16)
-			check(false)
+			check(true)
 			serial.GetF().Args[0] = first
 			serial.GetF().Args[0].GetF().SyntaxExplicitCast = false
 			check(true)
@@ -6732,7 +7123,7 @@ func (c *preparedStatsTestCompiler) Resolve(dbName, tableName string, snapshot *
 }
 
 func TestPreparedStatsAdmissionPreservesStableCompileAndRejectsError(t *testing.T) {
-	base := plan2.NewMockCompilerContext(false)
+	base := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()},
 		stats: &pbstats.StatsInfo{TableCnt: 5}}
 	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(t, 225, "select n_nationkey from nation", ctx)
@@ -6778,7 +7169,7 @@ func installStatsAdmissionStorage(t testing.TB, ses *Session, table *plan.TableD
 }
 
 func TestPreparedStatsGrowthRebuildsExecutionStrategy(t *testing.T) {
-	base := plan2.NewMockCompilerContext(false)
+	base := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 5, BlockNumber: 1}}
 	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(t, 227, "select n_name from nation", ctx)
 	defer prepared.Close()
@@ -6849,7 +7240,7 @@ func TestPreparedGenerationSurvivesSmallStatsDrift(t *testing.T) {
 		{"composite", "update partsupp set ps_availqty=ps_availqty+1 where ps_partkey=? and ps_suppkey=?", 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			base := plan2.NewMockCompilerContext(true)
+			base := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
 			ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 128}}
 			if tc.params == 2 {
 				_, table, err := base.Resolve("tpch", "partsupp", nil)
@@ -6949,7 +7340,7 @@ func BenchmarkPreparedStatsDrift(b *testing.B) {
 		{"range_aggregate", "select sum(n_regionkey) from nation where n_nationkey>?"},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
-			base := plan2.NewMockCompilerContext(true)
+			base := plan2.NewMockCompilerContext(true, newPlanTestProcess(b))
 			ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 128}}
 			ses, prepared, cw, ec := newPreparedExecuteEnvForSQLWithCompilerContext(b, 230, tc.sql, ctx)
 			defer prepared.Close()

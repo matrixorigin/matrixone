@@ -257,7 +257,9 @@ func (l *store) getCheckerStateFromLeader() (*pb.CheckerState, uint64) {
 		l.taskScheduler.StopScheduleSQLTask()
 		return nil, term
 	}
-	state, err := l.getCheckerState()
+	ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseGetCheckerState)
+	defer cancel()
+	state, err := l.readCheckerState(ctx, &hakeeper.StateQuery{Scheduling: true})
 	if err != nil {
 		// TODO: check whether this is temp error
 		l.runtime.Logger().Error("failed to get checker state", zap.Error(err))
@@ -381,7 +383,9 @@ func (l *store) hakeeperCheck() *pb.CheckerState {
 }
 
 func (l *store) assertHAKeeperState(s pb.HAKeeperState) {
-	state, err := l.getCheckerState()
+	ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseGetCheckerState)
+	defer cancel()
+	state, err := l.readCheckerState(ctx, &hakeeper.StateQuery{StateOnly: true})
 	if err != nil {
 		// TODO: check whether this is temp error
 		l.runtime.Logger().Error("failed to get checker state", zap.Error(err))
@@ -609,7 +613,11 @@ func (l *store) getCheckerState() (*pb.CheckerState, error) {
 }
 
 func (l *store) getCheckerStateWithContext(ctx context.Context) (*pb.CheckerState, error) {
-	s, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID, &hakeeper.StateQuery{})
+	return l.readCheckerState(ctx, &hakeeper.StateQuery{})
+}
+
+func (l *store) readCheckerState(ctx context.Context, query *hakeeper.StateQuery) (*pb.CheckerState, error) {
+	s, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID, query)
 	if err != nil {
 		return &pb.CheckerState{}, moerr.AttachCause(ctx, err)
 	}

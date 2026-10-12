@@ -78,6 +78,12 @@ var causeArray = []error{
 	CauseIcebergResidency,
 	CauseIcebergInternal,
 
+	CauseISCPIterationTimeout,
+	CauseISCPFlushJobStatusTimeout,
+	CauseISCPFlushPermanentErrorMessageTimeout,
+	CauseISCPTransactionFinishTimeout,
+	CauseISCPGetTaskRunnerTimeout,
+
 	CauseWorkspaceRSSCacheEvict,
 
 	CauseRegisterCdc,

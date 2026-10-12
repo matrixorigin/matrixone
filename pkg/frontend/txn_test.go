@@ -162,8 +162,8 @@ func (txn *testWorkspace) RollbackLastStatement(ctx context.Context) error {
 }
 
 func (t *testWorkspace) WriteOffset() uint64 {
-	//TODO implement me
-	panic("implement me")
+	// This fixture has no data writes; derived execution reads the empty workspace.
+	return 0
 }
 
 func (t *testWorkspace) Adjust(writeOffset uint64) error {
@@ -2371,6 +2371,8 @@ func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
 	} {
 		require.True(t, requiresPessimisticObjectLifecycleTxn(nil, stmt, ""))
 	}
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateTable{}, ""))
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateTable{Temporary: true}, ""))
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateView{}, ""))
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.DropTable{Temporary: true}, ""))
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.Select{}, ""))

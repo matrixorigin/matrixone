@@ -140,7 +140,7 @@ func TestClassifyUpdatePlannerError(t *testing.T) {
 }
 
 func TestClassifyUpdateTableResolutionError(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(
 		ctx.GetContext(),
 		dialect.MYSQL,
@@ -265,7 +265,7 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			if test.prepare != nil {
 				test.prepare(mock)
 			}
@@ -348,7 +348,7 @@ func TestModernUpdatePlansAvoidPreInsertKeyStaging(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			if test.prepare != nil {
 				test.prepare(mock)
 			}
@@ -401,7 +401,7 @@ func TestModernUpdateAllowsReadOnlyTableListSources(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			logicPlan, err := runOneStmt(mock, t, test.sql)
 			require.NoError(t, err)
 			query := logicPlan.GetQuery()
@@ -413,7 +413,7 @@ func TestModernUpdateAllowsReadOnlyTableListSources(t *testing.T) {
 }
 
 func TestReadOnlyUpdateSourcesStayOutsideGenericDMLTargets(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(
 		mock.CurrentContext().GetContext(), dialect.MYSQL,
 		"UPDATE nation, (SELECT deptno FROM dept) src SET nation.n_comment = 'x'", 1,
@@ -459,7 +459,7 @@ func TestBindUpdateRejectsOverlappingForeignKeyMutationTargets(t *testing.T) {
 		planpb.ForeignKeyDef_SET_NULL,
 	} {
 		t.Run(action.String()+" overlaps explicit child target", func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			setMockEmpDeptForeignKeyAction(
 				t, mock, planpb.ForeignKeyDef_RESTRICT, action)
 			err := bindDirect(
@@ -473,7 +473,7 @@ func TestBindUpdateRejectsOverlappingForeignKeyMutationTargets(t *testing.T) {
 	}
 
 	t.Run("two parent targets cascade to one child", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		setMockEmpDeptForeignKeyAction(
 			t, mock, planpb.ForeignKeyDef_RESTRICT, planpb.ForeignKeyDef_CASCADE)
 
@@ -500,7 +500,7 @@ func TestBindUpdateRejectsOverlappingForeignKeyMutationTargets(t *testing.T) {
 	})
 
 	t.Run("diamond cascade rejects duplicate grandchild writer", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		setMockEmpDeptForeignKeyAction(
 			t, mock, planpb.ForeignKeyDef_RESTRICT, planpb.ForeignKeyDef_CASCADE)
 
@@ -565,7 +565,7 @@ func TestUpdateIrregularIndexLocksBeforeMaintenanceFanout(t *testing.T) {
 		{name: "master", algo: catalog.MOIndexMasterAlgo.ToString()},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			baseTable := mock.ctxt.tables["nation"]
 			baseTable.Indexes = []*planpb.IndexDef{{
 				IndexName:          "idx_irregular",
@@ -670,7 +670,7 @@ func TestUpdateIrregularIndexLocksBeforeMaintenanceFanout(t *testing.T) {
 }
 
 func TestUpdateIrregularIndexLockPreservesMultiTargetSelectors(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	mock.ctxt.tables["nation"].Indexes = []*planpb.IndexDef{{
 		IndexName:      "idx_master",
 		IndexTableName: "idx_master_entries",
@@ -737,7 +737,7 @@ func TestUpdateIrregularIndexLockPreservesMultiTargetSelectors(t *testing.T) {
 }
 
 func TestUpdateWithoutIrregularIndexKeepsLockAtDMLInput(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	baseTable := mock.ctxt.tables["nation"]
 	stmt, err := parsers.ParseOne(
 		mock.CurrentContext().GetContext(),
@@ -781,7 +781,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 	}
 
 	t.Run("unrelated child column uses multi update without parent probe", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock)
 		logicPlan, err := runOneStmt(mock, t, "UPDATE emp SET sal = 1")
 		require.NoError(t, err)
@@ -801,7 +801,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 	})
 
 	t.Run("nullable unique update on child table avoids separate preinsert", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock)
 		logicPlan, err := runOneStmt(mock, t, "UPDATE emp SET ename = 'x'")
 		require.NoError(t, err)
@@ -813,7 +813,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 	})
 
 	t.Run("affected child column uses multi update with parent mark join", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock)
 		logicPlan, err := runOneStmt(mock, t, "UPDATE emp SET deptno = 2")
 		require.NoError(t, err)
@@ -848,7 +848,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 	})
 
 	t.Run("irregular index child foreign key update keeps typed error", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock)
 		mock.ctxt.tables["emp"].Indexes = []*planpb.IndexDef{{
 			IndexName: "idx",
@@ -869,7 +869,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 	})
 
 	t.Run("auto increment child key uses modern final row validation", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock)
 		emp := mock.ctxt.tables["emp"]
 		for _, col := range emp.Cols {
@@ -895,7 +895,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 	})
 
 	t.Run("disabled checks keep auto increment child key on modern route", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock)
 		disableForeignKeyChecks(mock)
 		emp := mock.ctxt.tables["emp"]
@@ -920,7 +920,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 	})
 
 	t.Run("multi target auto increment child key stays modern", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock)
 		for _, col := range mock.ctxt.tables["emp"].Cols {
 			if col.Name == "deptno" {
@@ -952,7 +952,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 	})
 
 	t.Run("affected restricted parent key stays modern with child probe", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock)
 
 		logicPlan, err := runOneStmt(mock, t, "UPDATE dept SET deptno = 2")
@@ -969,7 +969,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 	})
 
 	t.Run("set default preserves restrict compatibility on modern path", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock)
 		mock.ctxt.tables["emp"].Fkeys[0].OnUpdate = planpb.ForeignKeyDef_SET_DEFAULT
 
@@ -989,7 +989,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		{name: "set null parent key builds child multi update", action: planpb.ForeignKeyDef_SET_NULL},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			prepareEmpDept(mock)
 			emp := mock.ctxt.tables["emp"]
 			emp.Fkeys[0].OnUpdate = test.action
@@ -1062,7 +1062,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			prepareEmpDept(mock)
 			mock.ctxt.tables["emp"].Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
 			test.prepare(mock)
@@ -1086,7 +1086,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 	}
 
 	t.Run("disabled checks skip child probe and parent fallback", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock)
 		mock.ctxt.SetContext(context.WithValue(
 			mock.ctxt.GetContext(),
@@ -1106,7 +1106,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 	})
 
 	t.Run("unrelated referenced parent column stays modern", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock)
 
 		logicPlan, err := runOneStmt(mock, t, "UPDATE dept SET loc = 'x'")
@@ -1116,7 +1116,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 	})
 
 	t.Run("only affected constraint is probed", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock)
 		emp := mock.ctxt.tables["emp"]
 		emp.Fkeys = append(emp.Fkeys, &planpb.ForeignKeyDef{
@@ -1138,7 +1138,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 	})
 
 	t.Run("parent cascade changing another child foreign key is rejected", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock)
 		emp := mock.ctxt.tables["emp"]
 		emp.Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
@@ -1178,7 +1178,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 		planpb.ForeignKeyDef_SET_NULL,
 	} {
 		t.Run("optimistic "+action.String(), func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			prepareEmpDept(mock, action)
 			setMockTxnMode(mock, txnpb.TxnMode_Optimistic)
 
@@ -1198,7 +1198,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 	}
 
 	t.Run("cascade changing child primary key uses modern multi update", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock, planpb.ForeignKeyDef_CASCADE)
 		emp := mock.ctxt.tables["emp"]
 		emp.Pkey = &planpb.PrimaryKeyDef{
@@ -1231,7 +1231,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 	})
 
 	t.Run("child primary key cascade preserves rows missing nullable secondary index entries", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock, planpb.ForeignKeyDef_CASCADE)
 		emp := mock.ctxt.tables["emp"]
 		emp.Pkey = &planpb.PrimaryKeyDef{Names: []string{"deptno"}, PkeyColName: "deptno"}
@@ -1289,7 +1289,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 	})
 
 	t.Run("child primary key cascade keeps RTree geometry payload", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock, planpb.ForeignKeyDef_CASCADE)
 		emp := mock.ctxt.tables["emp"]
 		emp.Pkey = &planpb.PrimaryKeyDef{
@@ -1376,7 +1376,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 	})
 
 	t.Run("child primary key cascade validates child check constraint", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock, planpb.ForeignKeyDef_CASCADE)
 		emp := mock.ctxt.tables["emp"]
 		emp.Pkey = &planpb.PrimaryKeyDef{
@@ -1413,7 +1413,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 	})
 
 	t.Run("multiple actions targeting one child are rejected", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock, planpb.ForeignKeyDef_CASCADE)
 		emp := mock.ctxt.tables["emp"]
 		duplicate := *emp.Fkeys[0]
@@ -1445,7 +1445,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 		{name: "set null only deduplicates child identity", action: planpb.ForeignKeyDef_SET_NULL, windowCount: 1},
 	} {
 		t.Run("non unique referenced prefix "+test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			prepareEmpDept(mock, test.action)
 			dept := mock.ctxt.tables["dept"]
 			dept.Pkey = &planpb.PrimaryKeyDef{
@@ -1477,7 +1477,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 func TestBindUpdateForeignKeySensitivityIncludesImplicitFinalRowChanges(t *testing.T) {
 	for _, checksDisabled := range []bool{false, true} {
 		t.Run(map[bool]string{false: "checks enabled", true: "checks disabled"}[checksDisabled], func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			setMockEmpDeptForeignKeyAction(
 				t, mock, planpb.ForeignKeyDef_RESTRICT, planpb.ForeignKeyDef_RESTRICT)
 			setMockOnUpdateExpr(t, mock, "emp", "deptno", "2")
@@ -1505,7 +1505,7 @@ func TestSortForeignKeyLockTargetsUsesBaseBeforeHiddenTables(t *testing.T) {
 }
 
 func TestUpdateParentForeignKeyLocksPrecedeChildConsumers(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	setMockEmpDeptForeignKeyAction(t, mock, planpb.ForeignKeyDef_RESTRICT, planpb.ForeignKeyDef_CASCADE)
 	child := mock.ctxt.tables["emp"]
 	child.Indexes = append(child.Indexes, &planpb.IndexDef{
@@ -1614,7 +1614,7 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 	}
 
 	t.Run("unrelated column stays modern without probe", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareSelfRef(mock)
 		logicPlan, err := runOneStmt(mock, t, "UPDATE self_ref SET name = 'x'")
 		require.NoError(t, err)
@@ -1623,7 +1623,7 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 	})
 
 	t.Run("child key uses self mark probe", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareSelfRef(mock)
 		logicPlan, err := runOneStmt(mock, t, "UPDATE self_ref SET parent_id = 2")
 		require.NoError(t, err)
@@ -1634,7 +1634,7 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 	})
 
 	t.Run("restricted referenced key uses final self validation", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareSelfRef(mock)
 		logicPlan, err := runOneStmt(mock, t, "UPDATE self_ref SET id = 2")
 		require.NoError(t, err)
@@ -1647,7 +1647,7 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 	})
 
 	t.Run("self cascade uses modern single-writer plan", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareSelfRef(mock)
 		mock.ctxt.tables["self_ref"].Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
 		logicPlan, err := runOneStmt(mock, t, "UPDATE self_ref SET id = 2")
@@ -1670,7 +1670,7 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 	})
 
 	t.Run("self cascade returning filters implicit action rows", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareSelfRef(mock)
 		mock.ctxt.tables["self_ref"].Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
 
@@ -1691,7 +1691,7 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 	})
 
 	t.Run("repeated physical aliases preserve independent self action selectors", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareSelfRef(mock)
 		selfRef := mock.ctxt.tables["self_ref"]
 		selfRef.Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
@@ -1732,7 +1732,7 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 	})
 
 	t.Run("second repeated alias can independently schedule self action", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareSelfRef(mock)
 		selfRef := mock.ctxt.tables["self_ref"]
 		selfRef.Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
@@ -1751,7 +1751,7 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 	})
 
 	t.Run("multi target self cascade preserves physical and semantic selectors", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareSelfRef(mock)
 		selfRef := mock.ctxt.tables["self_ref"]
 		selfRef.Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
@@ -1795,7 +1795,7 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 	})
 
 	t.Run("multi target self cascade shares downstream mutation writer", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareSelfRef(mock)
 		selfRef := mock.ctxt.tables["self_ref"]
 		selfRef.Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
@@ -1850,7 +1850,7 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 	})
 
 	t.Run("self cascade still checks other outgoing parent edges", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareSelfRef(mock)
 		selfRef := mock.ctxt.tables["self_ref"]
 		selfRef.Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
@@ -1879,7 +1879,7 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 	})
 
 	t.Run("disabled checks omit self detect sql", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareSelfRef(mock)
 		mock.ctxt.SetContext(context.WithValue(
 			mock.ctxt.GetContext(),
@@ -1923,7 +1923,7 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 	}
 
 	t.Run("child generated key uses modern final row validation", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock)
 		for _, col := range mock.ctxt.tables["emp"].Cols {
 			if col.Name == "deptno" {
@@ -1947,7 +1947,7 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 	})
 
 	t.Run("parent action on generated key uses modern planner", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock)
 		mock.ctxt.tables["dept"].Cols[0].Typ.AutoIncr = true
 		mock.ctxt.tables["emp"].Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
@@ -1971,7 +1971,7 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 	})
 
 	t.Run("disabled checks preserve pre-insert input schema", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		prepareEmpDept(mock)
 		mock.ctxt.tables["emp"].Cols[0].Typ.AutoIncr = true
 		mock.ctxt.SetContext(context.WithValue(
@@ -1989,7 +1989,7 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 }
 
 func TestBindUpdateSupportsMultipleAutoIncrementTargets(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	for tableName, colName := range map[string]string{"nation": "n_regionkey", "nation2": "r_regionkey"} {
 		for _, col := range mock.ctxt.tables[tableName].Cols {
 			if col.Name == colName {
@@ -2017,7 +2017,7 @@ func TestBindUpdateSupportsMultipleAutoIncrementTargets(t *testing.T) {
 }
 
 func TestRepeatedPhysicalTargetPrimaryKeyUpdateIsRejected(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	_, err := runOneStmt(
 		mock,
 		t,
@@ -2068,7 +2068,7 @@ func TestRepeatedPhysicalTargetPartitionKeyUpdateIsRejected(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			tableDef := mock.ctxt.tables["nation"]
 			tableDef.FeatureFlag |= features.Partitioned
 			tableDef.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{{Def: partitionExpr}}}
@@ -2085,7 +2085,7 @@ func TestRepeatedPhysicalTargetPartitionKeyUpdateIsRejected(t *testing.T) {
 }
 
 func TestLegacyInsertForeignKeyKeepsGenericAssert(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	emp := mock.ctxt.tables["emp"]
 	dept := mock.ctxt.tables["dept"]
 	emp.TblId = 88887
@@ -2110,7 +2110,7 @@ func TestLegacyInsertForeignKeyKeepsGenericAssert(t *testing.T) {
 }
 
 func TestResolveSingleTablePreservesForeignKeyPolicy(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(
 		mock.CurrentContext().GetContext(),
 		dialect.MYSQL,

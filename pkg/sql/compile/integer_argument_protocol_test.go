@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -56,6 +57,17 @@ func TestIntegerArgumentProtocolBoundaries(t *testing.T) {
 	for id := int32(0); id <= function.TemporalIntegerArgumentCastOverload; id++ {
 		t.Run(fmt.Sprint(id), func(t *testing.T) {
 			expr := integerProtocolExpr(id)
+			var executors []colexec.ExpressionExecutor
+			t.Cleanup(func() {
+				for _, executor := range executors {
+					executor.Free()
+				}
+			})
+			canFold, err := plan2.ReplaceFoldExpr(c.proc, expr, &executors)
+			require.NoError(t, err)
+			require.False(t, canFold, "a column-dependent CAST cannot fold as a whole")
+			require.NotNil(t, expr.GetF().Args[1].GetT(), "scan folding must preserve every CAST target")
+			require.Empty(t, executors, "a type marker must not acquire an executor")
 			p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
 			features, err := planpb.RequiredRemoteExpressionFeatures(p)
 			require.NoError(t, err)
@@ -127,6 +139,13 @@ func TestIntegerArgumentReceiverRejectsInvalidSignatures(t *testing.T) {
 			name: "target marker",
 			mutate: func(expr *planpb.Expr) {
 				expr.GetF().Args[1].Expr = &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}
+			},
+			want: "target marker",
+		},
+		{
+			name: "folded target marker",
+			mutate: func(expr *planpb.Expr) {
+				expr.GetF().Args[1].Expr = &planpb.Expr_Fold{Fold: &planpb.FoldVal{IsConst: true}}
 			},
 			want: "target marker",
 		},

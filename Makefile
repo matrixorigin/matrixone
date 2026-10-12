@@ -42,7 +42,7 @@
 # in optools/gpu/README.md. CPU-only builds do not require Pixi.
 
 # Go toolchain (override with `make GO=/path/to/go ...`); defaults to `go`.
-# Requires Go 1.26+ for the arch-specific SIMD kernels (built by default on x86_64).
+# Requires Go 1.27+ for the arch-specific SIMD kernels (built by default on x86_64 and arm64).
 ifeq ($(GO),)
 	GO=go
 endif
@@ -239,22 +239,38 @@ NATIVE_PROVENANCE_ACCELERATOR = $(if $(filter 1,$(MO_CL_CUDA)),gpu,cpu)
 NATIVE_PROVENANCE_OPTIMIZATION = $(if $(filter debug,$(CGO_DEBUG_OPT)),debug,release)
 NATIVE_PROVENANCE_SIMSIMD = $(if $(filter 1,$(MO_CL_SIMSIMD)),1,0)
 
-# Env-var prefix for the build command. On x86_64 the arch-specific SIMD kernels in
-# pkg/vectorindex/metric are compiled by default (ARCHSIMD=1): GOAMD64 defaults to v3
-# (Haswell baseline -- AVX2/FMA/BMI, required by the Go simd experiment) and
-# GOEXPERIMENT defaults to simd (enables the goexperiment.simd build tag on Go 1.26+).
+# Env-var prefix for the build command. The arch-specific SIMD kernels in
+# pkg/vectorindex/metric are compiled by default (ARCHSIMD=1) on both x86_64 and
+# arm64; GOEXPERIMENT defaults to simd, which enables the goexperiment.simd build
+# tag. On x86_64 GOAMD64 additionally defaults to v3 (Haswell baseline --
+# AVX2/FMA/BMI, required by the Go simd experiment); arm64 needs no equivalent
+# knob because NEON is ARMv8 baseline.
 # Disable the SIMD kernels with:
-#   make ARCHSIMD=0 build                       # plain x86 build, no SIMD kernels
+#   make ARCHSIMD=0 build                       # plain build, no SIMD kernels
 # Either default can still be overridden individually, e.g. `make GOAMD64=v4 build`.
+#
+# NOTE the kernels require Go 1.27+: simd/archsimd gained arm64 (NEON) types in
+# 1.27, and the same release renamed the amd64 slice loaders, so the build tags
+# on those files are `go1.27`, not `go1.26`.
 GOEXPERIMENT_OPT ?=
+ARCHSIMD_ARCH :=
 ifeq ("$(UNAME_M)", "x86_64")
+  ARCHSIMD_ARCH := amd64
+endif
+ifneq ($(filter arm64 aarch64,$(UNAME_M)),)
+  ARCHSIMD_ARCH := arm64
+endif
+
+ifneq ($(ARCHSIMD_ARCH),)
   ARCHSIMD ?= 1
   ifeq ($(ARCHSIMD),1)
-	# DECISION (owner: cpegeric): raising the default x86 baseline to v3 (Haswell:
-	# AVX2/FMA/BMI) is intentional. The narrow-vector (bf16/f16/int8/uint8) SIMD
-	# kernels in pkg/vectorindex/metric require it, and the Go simd experiment
-	# mandates a v3 baseline. Pre-Haswell CPUs must build with `make ARCHSIMD=0`.
-	GOAMD64 ?= v3
+	ifeq ($(ARCHSIMD_ARCH),amd64)
+	  # DECISION (owner: cpegeric): raising the default x86 baseline to v3 (Haswell:
+	  # AVX2/FMA/BMI) is intentional. The narrow-vector (bf16/f16/int8/uint8) SIMD
+	  # kernels in pkg/vectorindex/metric require it, and the Go simd experiment
+	  # mandates a v3 baseline. Pre-Haswell CPUs must build with `make ARCHSIMD=0`.
+	  GOAMD64 ?= v3
+	endif
 	GOEXPERIMENT_SIMD ?= simd
   endif
   ifneq ($(GOAMD64),)
@@ -583,11 +599,19 @@ UT_HARD_TIMEOUT ?= 120m
 # Emit one bounded progress heartbeat per interval while UT is running.
 UT_HEARTBEAT_INTERVAL ?= 60
 # Build embedded race binaries with one compiler while the exclusive issues
-# fixture runs, then execute those exact binaries serially. Build or admission
-# failures fall back before any prebuilt binary executes.
+# fixture runs, then execute those exact binaries through the bounded embedded
+# pool. High-footprint packages remain exclusive; build or admission failures
+# fall back before any prebuilt binary executes.
 UT_PREBUILD_EMBEDDED ?= 1
 UT_PREBUILD_MIN_FREE_KB ?= 6291456
 UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
+# Split issues roots into four batches under one shared package deadline.
+# Pools remain opt-in until matched full-wave CPU and memory evidence passes.
+# Each admitted process owns a complete cluster. Serial mode keeps contiguous
+# batches; explicit two-process mode uses round-robin roots.
+UT_ISSUES_BATCHES ?= 4
+UT_ISSUES_BATCH_PARALLEL ?= 1
+UT_EMBEDDED_PACKAGE_PARALLEL ?= 1
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1
@@ -599,7 +623,7 @@ UT_OVERLAP_LIGHT_PARALLEL ?= 2
 # Parent cancellation waits long enough for helper-owned child process groups
 # to receive TERM and bounded KILL cleanup in sequence.
 UT_HELPER_TERM_GRACE_TICKS ?= 60
-export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
+export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_ISSUES_BATCHES UT_ISSUES_BATCH_PARALLEL UT_EMBEDDED_PACKAGE_PARALLEL UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays
@@ -1495,7 +1519,7 @@ fmt:
 
 .PHONY: install-static-check-tools
 install-static-check-tools:
-	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2
+	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20260602145143-222a0b8adf07
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 

@@ -30,7 +30,7 @@ import (
 // prepared marker gets a numeric context and that execution-time source
 // metadata is allowed to rebind it.
 func TestIssue28454To28456CharPreparedBinding(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare issue_28454 from 'select char(?)'")
 	require.NoError(t, err)
 	charExpr := findPlanFunctionExpr(prepared.GetDcl().GetPrepare().Plan, "char")
@@ -137,7 +137,7 @@ func TestIssue28454To28456CharPreparedBinding(t *testing.T) {
 }
 
 func TestIssue28454CharPreparedCOMStmtTextKeepsStringSemantics(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare issue_28454_com_stmt from 'select char(?)'")
 	require.NoError(t, err)
 	preparePlan := prepared.GetDcl().GetPrepare().Plan
@@ -181,7 +181,7 @@ func TestIssue28454CharPreparedCOMStmtTextKeepsStringSemantics(t *testing.T) {
 }
 
 func TestIssue28454CharPreparedNumericSourceRetainsRuntimeProvenance(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare issue_28454_retain from 'select char(?)'")
 	require.NoError(t, err)
 

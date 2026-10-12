@@ -196,3 +196,45 @@ func makeDateInteger(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	}
 	return nil
 }
+
+// makeDateIntegerDate is the SQL-bound integer MAKEDATE path. The legacy
+// integer overload remains VARCHAR for persisted expression compatibility;
+// this overload consumes the already-coerced INT64 vectors and returns DATE.
+func makeDateIntegerDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	years := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+	days := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[types.Date](result)
+	last := types.DateFromCalendar(9999, 12, 31)
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.Append(types.ZeroDate, true); err != nil {
+				return err
+			}
+			continue
+		}
+		year, nullYear := years.GetValue(i)
+		day, nullDay := days.GetValue(i)
+		if nullYear || nullDay || year < 0 || year > 9999 || day <= 0 {
+			if err := rs.Append(types.ZeroDate, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if year < 70 {
+			year += 2000
+		} else if year < 100 {
+			year += 1900
+		}
+		first := types.DateFromCalendar(int32(year), 1, 1)
+		if day > int64(last-first)+1 {
+			if err := rs.Append(types.ZeroDate, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.Append(first+types.Date(day-1), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}

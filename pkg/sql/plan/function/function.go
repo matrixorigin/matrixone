@@ -206,6 +206,16 @@ func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose
 // the persisted raw-byte min/max and bloom metadata do not represent.
 func CanUseZoneMapComparison(overloadID int64, args []*plan.Expr) bool {
 	fid, _ := DecodeOverloadID(overloadID)
+	// Persisted zone maps and bloom filters still store the original bytes.
+	// Native Unicode collations compare UCA keys instead, so admitting these
+	// predicates would allow a bytewise metadata probe to prune a matching row.
+	// Keep the admission owner conservative until the persisted summary domain
+	// carries the same collation identity and probe encoding.
+	for _, arg := range args {
+		if arg != nil && types.IsUnicodeCollation(uint8(arg.Typ.Charset)) {
+			return false
+		}
+	}
 	switch fid {
 	case IN, NOT_IN:
 		if len(args) != 2 || args[1] == nil {
@@ -215,7 +225,15 @@ func CanUseZoneMapComparison(overloadID int64, args []*plan.Expr) bool {
 		// the outer T_tuple declaration, so encoded vectors own their type.
 		switch tuple := args[1].Expr.(type) {
 		case *plan.Expr_List:
-			return tuple.List != nil && len(tuple.List.List) > 0 && tuple.List.List[0] != nil && types.T(tuple.List.List[0].Typ.Id) != types.T_char
+			if tuple.List == nil || len(tuple.List.List) == 0 {
+				return false
+			}
+			for _, item := range tuple.List.List {
+				if item == nil || types.T(item.Typ.Id) == types.T_char || types.IsUnicodeCollation(uint8(item.Typ.Charset)) {
+					return false
+				}
+			}
+			return true
 		case *plan.Expr_Vec:
 			// The actual consumer validates and decodes the carrier once. Its
 			// outer tuple declaration cannot prove physical membership order.
@@ -307,6 +325,12 @@ const (
 	StringDomainCheckParamMarker
 	// StringDomainCheckDomainless omits a bare, untyped NULL literal.
 	StringDomainCheckDomainless
+	// StringDomainCheckBinaryCast makes CAST AS BINARY a static binary VARCHAR
+	// trigger, unlike a physical BINARY column. Its execution type is unchanged.
+	StringDomainCheckBinaryCast
+	// StringDomainCheckBinaryBlob keeps an expression's logical BLOB domain
+	// compatible without turning its execution type into a VARCHAR trigger.
+	StringDomainCheckBinaryBlob
 )
 
 // GetFunctionByNameWithStringDomainCheckModes resolves a function while

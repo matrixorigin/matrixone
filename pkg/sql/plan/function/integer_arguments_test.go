@@ -164,7 +164,7 @@ func TestIntegerArgumentTextBits(t *testing.T) {
 		{input: NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, nil), wantErr: true},
 	} {
 		test := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(target, []uint64{}, nil)}, NewFunctionTestResult(target, tc.wantErr, tc.want, tc.nulls), NewTextIntegerBitsCast).WithSelectList(tc.mask)
-		ok, info := test.Run()
+		ok, info := test.RunAndFree()
 		require.True(t, ok, info)
 	}
 }
@@ -175,7 +175,7 @@ func TestIntegerArgumentYear(t *testing.T) {
 		NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{0, 1901, 2155, 0}, []bool{false, false, false, true}),
 		NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
 	}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 1901, 2155, 0}, []bool{false, false, false, true}), NewIntegerArgumentCast)
-	ok, info := test.Run()
+	ok, info := test.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -183,7 +183,7 @@ func TestIntegerArgumentRealEvaluation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		name string
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 		want []int64
 	}{
 		{"nearest even", NewIntegerArgumentCast, []int64{-2, -2, -2, 0, 0, 2, 2, 2}},
@@ -194,7 +194,7 @@ func TestIntegerArgumentRealEvaluation(t *testing.T) {
 				NewFunctionTestInput(types.T_float64.ToType(), []float64{-2.5, -1.9, -1.5, -0.5, 0.5, 1.5, 1.9, 2.5}, nil),
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
 			}, NewFunctionTestResult(types.T_int64.ToType(), false, tc.want, nil), tc.fn)
-			ok, info := test.Run()
+			ok, info := test.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -272,7 +272,7 @@ func TestIntegerArgumentExactDomains(t *testing.T) {
 				NewFunctionTestInput(types.New(types.T_decimal256, 40, 1), []types.Decimal256{d256}, nil),
 			} {
 				test := NewFunctionTestCase(proc, []FunctionTestInput{input, NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{expected}, nil), NewIntegerArgumentCast)
-				ok, info := test.Run()
+				ok, info := test.RunAndFree()
 				require.True(t, ok, info)
 			}
 		})
@@ -321,7 +321,7 @@ func TestIntegerArgumentVectorSourcesAndMasks(t *testing.T) {
 	} {
 		t.Run(input.typ.Oid.String(), func(t *testing.T) {
 			test := NewFunctionTestCase(proc, []FunctionTestInput{input, NewFunctionTestInput(types.T_uint64.ToType(), []uint64{}, nil)}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 2}, nil), NewIntegerArgumentCast)
-			ok, info := test.Run()
+			ok, info := test.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -338,7 +338,7 @@ func TestIntegerArgumentVectorSourcesAndMasks(t *testing.T) {
 		{NewFunctionTestInput(types.T_float64.ToType(), []float64{math.Inf(1)}, nil), &FunctionSelectList{AllNull: true}, []int64{0}, []bool{true}},
 	} {
 		test := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), false, tc.want, tc.nulls), NewIntegerArgumentCast).WithSelectList(tc.mask)
-		ok, info := test.Run()
+		ok, info := test.RunAndFree()
 		require.True(t, ok, info)
 	}
 	large, err := types.ParseDecimal256("10000000000000000000000000000000000000000000000000000000000000000000000", 76, 0)
@@ -347,7 +347,7 @@ func TestIntegerArgumentVectorSourcesAndMasks(t *testing.T) {
 		NewFunctionTestInput(types.New(types.T_decimal256, 76, 0), []types.Decimal256{large, {B0_63: 2}}, nil),
 		NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
 	}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 2}, []bool{true, false}), NewIntegerArgumentCast).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
-	ok, info := test.Run()
+	ok, info := test.RunAndFree()
 	require.True(t, ok, info)
 	value, err := decimal256IntegerArgument(large, 0)
 	require.NoError(t, err)

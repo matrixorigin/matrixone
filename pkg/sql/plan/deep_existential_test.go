@@ -35,7 +35,7 @@ func TestDeepExistentialPublicPlans(t *testing.T) {
 		{"outer_gate_anti", `not exists(select 1 from nation i where exists(select 1 from nation j where j.n_nationkey=i.n_nationkey and j.n_regionkey=o.n_regionkey and o.n_nationkey=1))`, 1, 1, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := runOneStmt(NewMockOptimizer(false), t, "select o.n_nationkey from nation o where "+tc.condition)
+			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select o.n_nationkey from nation o where "+tc.condition)
 			require.NoError(t, err)
 			q := p.GetQuery()
 			require.NotNil(t, q)
@@ -115,7 +115,10 @@ func TestDeepExistentialAdmission(t *testing.T) {
 		{"non_equality", "select 1 from nation o where exists(select 1 from nation i where exists(select 1 from nation j where j.n_nationkey=i.n_nationkey and j.n_regionkey>o.n_regionkey))"},
 		{"two_pending", "select 1 from nation o where exists(select 1 from nation i where " + deep + " and " + deep + ")"},
 	} {
-		t.Run(tc.name, func(t *testing.T) { _, err := runOneStmt(NewMockOptimizer(false), t, tc.sql); require.Error(t, err) })
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
+			require.Error(t, err)
+		})
 	}
 	for _, n := range []int{8, 9} {
 		t.Run(fmt.Sprint("arms_", n), func(t *testing.T) {
@@ -124,7 +127,7 @@ func TestDeepExistentialAdmission(t *testing.T) {
 				arms[i] = fmt.Sprintf("(j.n_regionkey=o.n_regionkey and j.n_nationkey=i.n_nationkey and j.n_nationkey=%d)", i)
 			}
 			sql := "select 1 from nation o where exists(select 1 from nation i where exists(select 1 from nation j where " + strings.Join(arms, " or ") + "))"
-			_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			if n <= maxExistentialArms {
 				require.NoError(t, err)
 			} else {
@@ -179,7 +182,7 @@ func TestDeepExistentialFilterPreservesMemo(t *testing.T) {
 }
 
 func TestDeepExistentialGateProjectionSurvivesCopy(t *testing.T) {
-	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(false), false, false)
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, false)
 	ctx := NewBindContext(b, nil)
 	scan := b.appendNode(&plan.Node{NodeType: plan.Node_VALUE_SCAN, RowsetData: &plan.RowsetData{RowCount: 1}}, ctx)
 	project := b.appendNode(&plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{scan}, BindingTags: []int32{b.genNewBindTag()}, ProjectList: []*plan.Expr{newSubqueryBoolConst(true)}}, ctx)

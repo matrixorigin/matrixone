@@ -68,7 +68,7 @@ func TestExplicitCastProvenanceUsesLegacyOverload(t *testing.T) {
 func TestTypedDateExplicitCastRetainsProtocolAndNullabilityAfterSerialization(t *testing.T) {
 	for _, sourceType := range []types.T{types.T_date, types.T_datetime} {
 		t.Run(sourceType.String(), func(t *testing.T) {
-			opt := NewMockOptimizer(false)
+			opt := NewMockOptimizer(false, newPlanTestProcess(t))
 			ctx := opt.CurrentContext().(*MockCompilerContext)
 			source := ctx.tables["lineitem"].Cols[ctx.tables["lineitem"].Name2ColIndex["l_shipdate"]]
 			source.Typ.Id = int32(sourceType)

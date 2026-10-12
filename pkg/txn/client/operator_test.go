@@ -1849,7 +1849,7 @@ func txnAdmissionCounts(c TxnClient) (int, int64, int) {
 	client := c.(*txnClient)
 	client.mu.RLock()
 	users := client.mu.users
-	waiting := len(client.mu.waitActiveTxns)
+	waiting := client.mu.waitActiveTxns.size
 	client.mu.RUnlock()
 	return users, client.atomic.activeTxnCount.Load(), waiting
 }
@@ -2838,4 +2838,39 @@ func TestWithTxnLockWaitTimeout(t *testing.T) {
 		},
 		WithTxnLockWaitTimeout(60*time.Second),
 	)
+}
+
+func TestDeferredRollbackCapabilitySealsAndDrainsExistingOwner(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, sender *testTxnSender) {
+		workspace := &trackingWorkspace{}
+		locks := &trackingUnlockLockService{}
+		tc.AddWorkspace(workspace)
+		tc.lockService = locks
+		tc.mu.Lock()
+		tc.mu.txn.TNShards = []metadata.TNShard{{TNShardRecord: metadata.TNShardRecord{ShardID: 1}}}
+		tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+		tc.mu.Unlock()
+		closed := make(chan struct{})
+		tc.AppendEventCallback(ClosedEvent, TxnEventCallback{Func: func(context.Context, TxnOperator, TxnEvent, any) error { close(closed); return nil }})
+		_, cancel := context.WithCancel(ctx)
+		defer cancel()
+		token := mustEnterRunSQL(t, tc, cancel, "borrowed fatal SQL")
+		fatal := moerr.NewLockConflictNoCtx()
+		tc.RollbackAfterRunningSQL(fatal)
+		tc.RollbackAfterRunningSQL(fatal)
+		_, err := tc.TryEnterRunSqlWithTokenAndSQL(cancel, "later SQL")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+		require.Error(t, tc.Commit(ctx))
+		require.Zero(t, workspace.rollbackCount, "cleanup must wait for active SQL to exit")
+		tc.ExitRunSqlWithToken(token)
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+			t.Fatal("deferred cleanup did not finish")
+		}
+		require.Equal(t, 1, workspace.rollbackCount)
+		require.Equal(t, 1, locks.unlockCount)
+		require.Len(t, sender.getLastRequests(), 1)
+		require.Equal(t, txn.TxnMethod_Rollback, sender.getLastRequests()[0].Method)
+	})
 }

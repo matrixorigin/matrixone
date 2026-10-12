@@ -612,7 +612,7 @@ func TestAggregateDependsOnInputOrder(t *testing.T) {
 }
 
 func TestBuildWindowFilterOnNonProjectedColumns(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		`WITH ranked AS (

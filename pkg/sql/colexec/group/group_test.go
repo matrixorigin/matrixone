@@ -2459,9 +2459,11 @@ func TestDistinctGroupConcatUsesConfiguredSpillThreshold(t *testing.T) {
 	var ctr container
 	ctr.setSpillMem(123)
 	require.Equal(t, int64(123), ctr.spillMem)
+	require.False(t, ctr.autoSpill)
 
-	ctr.setSpillMem(123)
-	require.Equal(t, int64(123), ctr.spillMem)
+	ctr.setSpillMem(0)
+	require.Positive(t, ctr.spillMem)
+	require.True(t, ctr.autoSpill)
 }
 
 func TestGroupSpillPreservesPerGroupPrepareParamKind(t *testing.T) {

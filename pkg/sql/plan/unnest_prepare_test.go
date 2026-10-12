@@ -23,7 +23,7 @@ import (
 )
 
 func TestPreparedUnnestArgumentDomains(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare unnest_args from 'select u.seq,u.path,u.value from unnest(?,?,?) u'")
 	require.NoError(t, err)
 	var args []*planpb.Expr

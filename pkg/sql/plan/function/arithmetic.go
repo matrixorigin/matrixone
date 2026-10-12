@@ -129,7 +129,9 @@ func decimal256BatchArith(parameters []*vector.Vector, result vector.FunctionRes
 		}
 		magnitude := value
 		d256Abs(&magnitude)
-		if !magnitude.Less(limit) {
+		// Abs(MinInt256) is the unsigned magnitude 2^255. It retains
+		// the sign bit and exceeds every constrained precision limit.
+		if magnitude.Sign() || !magnitude.Less(limit) {
 			return moerr.NewOutOfRangef(proc.Ctx, "decimal256",
 				"value '%s' exceeds DECIMAL(%d,%d)",
 				value.Format(resultType.Scale), resultType.Width, resultType.Scale)

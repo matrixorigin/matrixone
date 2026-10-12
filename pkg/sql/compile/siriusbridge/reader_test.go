@@ -82,7 +82,6 @@ func TestRunArbitratesReaderRetirementAtEOF(t *testing.T) {
 			ctx, cancelCaller := context.WithCancelCause(guard)
 			t.Cleanup(func() { cancelCaller(nil) })
 			proc := testutil.NewProcess(t)
-			t.Cleanup(proc.Free)
 			r, d := testRuntime()
 			t.Cleanup(func() {
 				cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)

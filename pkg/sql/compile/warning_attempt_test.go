@@ -140,7 +140,7 @@ func TestGroupConcatWarningAttemptOutcomes(t *testing.T) {
 				}
 				return "STRICT_TRANS_TABLES", nil
 			})
-			compilerCtx := plan2.NewEmptyCompilerContext()
+			compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
 			compilerCtx.SetContext(ctx)
 			sql := "select group_concat(s order by s separator '') from (select 'abc' s union all select 'def') t"
 			stmts, err := mysql.Parse(ctx, sql, 1)
@@ -371,7 +371,7 @@ func TestPreparedGroupConcatFloorFreshAndRetryCompile(t *testing.T) {
 		}
 		return "STRICT_TRANS_TABLES", nil
 	})
-	compilerCtx := plan2.NewEmptyCompilerContext()
+	compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
 	compilerCtx.SetContext(ctx)
 	sql := "select group_concat(s order by s separator '') from (select 'abc' s union all select 'def') t"
 	stmts, err := mysql.Parse(ctx, sql, 1)

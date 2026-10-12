@@ -30,14 +30,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -307,7 +311,77 @@ func foldExpressionForTest(t *testing.T, proc *process.Process, expr *plan.Expr)
 
 func Test_ConstructBasePKFilter(t *testing.T) {
 	m := mpool.MustNew(t.Name())
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
+	var needFreeVecs []*vector.Vector
+	var exes []colexec.ExpressionExecutor
+	t.Cleanup(func() {
+		for _, exe := range exes {
+			exe.Free()
+		}
+		for _, vec := range needFreeVecs {
+			vec.Free(m)
+		}
+		proc.GetFileService().Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, m.CurrNB())
+	})
+	t.Run("folded scalar admission", func(t *testing.T) {
+		for _, tc := range []struct {
+			name                                     string
+			oid                                      types.T
+			data                                     []byte
+			rawLiteral, nonConstant, nullDisjunction bool
+			valid                                    bool
+		}{
+			{"char with non-pk conjunct", types.T_char, []byte("abc"), false, false, false, true},
+			{"empty varchar", types.T_varchar, []byte{}, false, false, false, true},
+			{"folded null", types.T_int64, nil, false, false, false, false},
+			{"unfolded literal", types.T_int64, nil, true, false, false, false},
+			{"nonconstant scalar", types.T_int64, []byte{1}, false, true, false, false},
+			{"null branch in or", types.T_int64, nil, false, false, true, false},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				typ := tc.oid.ToType()
+				value := &plan.Expr{Typ: plan2.MakePlan2Type(&typ), Expr: &plan.Expr_Fold{
+					Fold: &plan.FoldVal{IsConst: !tc.nonConstant, Data: tc.data},
+				}}
+				if tc.rawLiteral {
+					value = plan2.MakePlan2Int64ConstExprWithType(100)
+				}
+				expr := MakeFunctionExprForTest("=", []*plan.Expr{MakeColExprForTest(0, tc.oid), value})
+				if tc.oid == types.T_char {
+					expr = MakeFunctionExprForTest("and", []*plan.Expr{
+						MakeFunctionExprForTest(">", []*plan.Expr{MakeColExprForTest(1, types.T_int64), plan2.MakePlan2Int64ConstExprWithType(10)}), expr,
+					})
+				}
+				if tc.nullDisjunction {
+					expr = MakeFunctionExprForTest("or", []*plan.Expr{expr,
+						MakeFunctionExprForTest("=", []*plan.Expr{MakeColExprForTest(0, tc.oid),
+							{Typ: plan2.MakePlan2Type(&typ), Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: []byte{1, 0, 0, 0, 0, 0, 0, 0}}}},
+						}),
+					})
+				}
+				table := &plan.TableDef{
+					Name2ColIndex: map[string]int32{"a": 0, "b": 1},
+					Pkey:          &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+					Cols:          []*plan.ColDef{{Name: "a", Typ: plan2.MakePlan2Type(&typ)}, {Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}}},
+				}
+				filter, err := ConstructBasePKFilter(expr, table, m)
+				defer filter.Cleanup()
+				require.NoError(t, err)
+				require.Equal(t, tc.valid, filter.Valid)
+				if tc.valid {
+					require.Equal(t, tc.oid, filter.Oid)
+					require.Equal(t, function.EQUAL, filter.Op)
+					require.Equal(t, string(tc.data), string(filter.LB))
+					require.Nil(t, filter.UB)
+				} else {
+					require.Nil(t, filter.Vec)
+					require.Empty(t, filter.Disjuncts)
+				}
+			})
+		}
+	})
 	exprStrings := []string{
 		"a=10",
 		"a=20 and a=10",
@@ -371,8 +445,6 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		"a>99", // 51
 		"a>=99",
 	}
-
-	var needFreeVecs []*vector.Vector
 
 	encodeVal := func(val int64) []byte {
 		return types.EncodeInt64(&val)
@@ -1000,15 +1072,15 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 	})
 
 	tableDef.Pkey.PkeyColName = "a"
-	var exes []colexec.ExpressionExecutor
-
 	for _, expr := range exprs {
-		plan2.ReplaceFoldExpr(proc, expr, &exes)
+		_, err := plan2.ReplaceFoldExpr(proc, expr, &exes)
+		require.NoError(t, err)
 	}
 	for i, expr := range exprs {
-		plan2.EvalFoldExpr(proc, expr, &exes)
+		require.NoError(t, plan2.EvalFoldExpr(proc, expr, &exes))
 
 		BasePKFilter, err := ConstructBasePKFilter(expr, tableDef, proc.Mp())
+		t.Cleanup(BasePKFilter.Cleanup)
 		require.NoError(t, err)
 		if strings.Contains(exprStrings[i], " or ") {
 			continue
@@ -1018,17 +1090,15 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 			require.Equal(t, filters[i].Op, BasePKFilter.Op, exprStrings[i])
 			require.Equal(t, filters[i].LB, BasePKFilter.LB, exprStrings[i])
 			require.Equal(t, filters[i].UB, BasePKFilter.UB, exprStrings[i])
+			if filters[i].Vec != nil {
+				require.NotNil(t, BasePKFilter.Vec, exprStrings[i])
+				require.Equal(t, *filters[i].Vec.GetType(), *BasePKFilter.Vec.GetType(), exprStrings[i])
+				require.Equal(t, vector.MustFixedColWithTypeCheck[int64](filters[i].Vec),
+					vector.MustFixedColWithTypeCheck[int64](BasePKFilter.Vec), exprStrings[i])
+			}
 		}
 	}
 
-	for _, exe := range exes {
-		exe.Free()
-	}
-	for i := range needFreeVecs {
-		needFreeVecs[i].Free(m)
-	}
-
-	require.Zero(t, m.CurrNB())
 }
 
 func encodeIntToUUID(x int32) types.Uuid {
@@ -1044,7 +1114,7 @@ func encodeIntToUUID(x int32) types.Uuid {
 
 func TestConstructBasePKFilterWithOr(t *testing.T) {
 	m := mpool.MustNew(t.Name())
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 
 	tableDef := &plan.TableDef{
 		Name: "test",
@@ -1086,6 +1156,18 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 	}
 
 	var needFreeVecs []*vector.Vector
+	var exes []colexec.ExpressionExecutor
+	t.Cleanup(func() {
+		for _, exe := range exes {
+			exe.Free()
+		}
+		for _, vec := range needFreeVecs {
+			vec.Free(m)
+		}
+		proc.GetFileService().Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, m.CurrNB())
+	})
 	makeIn := func(vals []int64) *plan.Expr {
 		vec := vector.NewVec(types.T_int64.ToType())
 		for _, v := range vals {
@@ -1105,11 +1187,12 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 		allowMore bool
 	}
 
-	testCases := []struct {
+	type testCase struct {
 		name   string
 		expr   *plan.Expr
 		expect expect
-	}{
+	}
+	testCases := append(make([]testCase, 0, 10), []testCase{
 		{
 			name: "eq or eq",
 			expr: MakeFunctionExprForTest("or", []*plan.Expr{
@@ -1226,16 +1309,42 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 				allowMore: true,
 			},
 		},
+	}...)
+	otherEq := func(v int64) *plan.Expr {
+		return MakeFunctionExprForTest("=", []*plan.Expr{
+			MakeColExprForTest(1, types.T_int64), plan2.MakePlan2Int64ConstExprWithType(v),
+		})
 	}
+	unsupportedOr := func() *plan.Expr {
+		return MakeFunctionExprForTest("or", []*plan.Expr{makeEq(10), otherEq(20)})
+	}
+	testCases = append(testCases,
+		testCase{
+			"nested unsupported or", MakeFunctionExprForTest("or", []*plan.Expr{unsupportedOr(), makeEq(30)}), expect{},
+		},
+		testCase{
+			"nested unsupported or and pk", MakeFunctionExprForTest("and", []*plan.Expr{unsupportedOr(), makeEq(30)}),
+			expect{valid: true, op: function.EQUAL, lb: encodeVal(30)},
+		},
+		testCase{
+			"supported conjunct inside or", MakeFunctionExprForTest("or", []*plan.Expr{
+				MakeFunctionExprForTest("and", []*plan.Expr{otherEq(10), makeEq(20)}), makeEq(30),
+			}), expect{valid: true, disjuncts: []BasePKFilter{
+				{Valid: true, Op: function.EQUAL, LB: encodeVal(20), Oid: types.T_int64},
+				{Valid: true, Op: function.EQUAL, LB: encodeVal(30), Oid: types.T_int64},
+			}},
+		},
+	)
 
-	var exes []colexec.ExpressionExecutor
 	for i := range testCases {
-		plan2.ReplaceFoldExpr(proc, testCases[i].expr, &exes)
+		_, err := plan2.ReplaceFoldExpr(proc, testCases[i].expr, &exes)
+		require.NoError(t, err, testCases[i].name)
 	}
 	for i := range testCases {
-		plan2.EvalFoldExpr(proc, testCases[i].expr, &exes)
+		require.NoError(t, plan2.EvalFoldExpr(proc, testCases[i].expr, &exes), testCases[i].name)
 
 		basePKFilter, err := ConstructBasePKFilter(testCases[i].expr, tableDef, proc.Mp())
+		t.Cleanup(basePKFilter.Cleanup)
 		require.NoError(t, err, testCases[i].name)
 		require.Equal(t, testCases[i].expect.valid, basePKFilter.Valid, testCases[i].name)
 
@@ -1274,16 +1383,26 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 			require.Equal(t, testCases[i].expect.op, basePKFilter.Op, testCases[i].name)
 			require.Equal(t, testCases[i].expect.lb, basePKFilter.LB, testCases[i].name)
 			require.Equal(t, testCases[i].expect.ub, basePKFilter.UB, testCases[i].name)
+
 		}
 	}
 
-	for _, exe := range exes {
-		exe.Free()
+	// These inputs are already hydrated by a list executor; do not fold them again.
+	for _, values := range [][]int64{{1}, {1, 2}} {
+		expr := makeIn(values)
+		data := expr.GetF().Args[1].GetVec().Data
+		expr.GetF().Args[1].Expr = &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: false, Data: data}}
+		base, err := ConstructBasePKFilter(expr, tableDef, m)
+		t.Cleanup(base.Cleanup)
+		require.NoError(t, err)
+		require.True(t, base.Valid)
+		require.Equal(t, function.IN, base.Op)
+		require.Equal(t, types.T_int64, base.Oid)
+		require.NotNil(t, base.Vec)
+		require.Equal(t, types.T_int64.ToType(), *base.Vec.GetType())
+		require.Equal(t, values, vector.MustFixedColWithTypeCheck[int64](base.Vec))
 	}
-	for i := range needFreeVecs {
-		needFreeVecs[i].Free(m)
-	}
-	require.Zero(t, m.CurrNB())
+
 }
 
 func TestConstructBlockPKFilter(t *testing.T) {
@@ -1947,8 +2066,8 @@ func TestConstructBlockPKFilterWithOr(t *testing.T) {
 		sortedVec, unsortedVec *vector.Vector,
 	) {
 		var (
-			singleSorted []objectio.ReadFilterSearchFuncType
-			singleUnsort []objectio.ReadFilterSearchFuncType
+			singleSorted = make([]objectio.ReadFilterSearchFuncType, 0, len(disjuncts))
+			singleUnsort = make([]objectio.ReadFilterSearchFuncType, 0, len(disjuncts))
 		)
 		for i := range disjuncts {
 			disjuncts[i].Valid = true
@@ -1972,7 +2091,7 @@ func TestConstructBlockPKFilterWithOr(t *testing.T) {
 		require.NotNil(t, combined.SortedSearchFunc, ty.String())
 		require.NotNil(t, combined.UnSortedSearchFunc, ty.String())
 
-		var sortedResults [][]int64
+		sortedResults := make([][]int64, 0, len(singleSorted))
 		sortedCache := containers.Vectors{*sortedVec}
 		for _, fn := range singleSorted {
 			sortedResults = append(sortedResults, fn(sortedCache))
@@ -1980,7 +2099,7 @@ func TestConstructBlockPKFilterWithOr(t *testing.T) {
 		expectedSorted := unionOffsets(sortedResults)
 		require.Equal(t, expectedSorted, combined.SortedSearchFunc(sortedCache), ty.String())
 
-		var unsortedResults [][]int64
+		unsortedResults := make([][]int64, 0, len(singleUnsort))
 		unsortedCache := containers.Vectors{*unsortedVec}
 		for _, fn := range singleUnsort {
 			unsortedResults = append(unsortedResults, fn(unsortedCache))
@@ -2240,6 +2359,83 @@ func TestConstructBasePKFilterMalformedInFailsOpen(t *testing.T) {
 	}
 
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestConstructBasePKFilterUnicodeFailsOpen(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer func() {
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI)
+	tableDef := &plan.TableDef{
+		Name:          "unicode_pk",
+		Name2ColIndex: map[string]int32{"a": 0},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{{
+			Name: "a",
+			Typ:  plan2.MakePlan2Type(&typ),
+		}},
+	}
+	value := &plan.Expr{
+		Typ: plan2.MakePlan2Type(&typ),
+		Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+			IsConst: true,
+			Data:    []byte("a"),
+		}},
+	}
+	expr := MakeFunctionExprForTest("=", []*plan.Expr{MakeColExprForTest(0, types.T_varchar), value})
+	expr.GetF().Args[0].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+
+	filter, err := ConstructBasePKFilter(expr, tableDef, mp)
+	require.NoError(t, err)
+	require.False(t, filter.Valid)
+	filter.Cleanup()
+}
+
+func TestConstructBasePKFilterUnicodeFailsOpenWithoutColumnIndex(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+
+	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI)
+	tableDef := &plan.TableDef{
+		Name: "unicode_pk_without_name_index",
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{{Name: "a", Typ: plan2.MakePlan2Type(&typ)}},
+	}
+	value := &plan.Expr{
+		Typ:  plan2.MakePlan2Type(&typ),
+		Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: []byte("a")}},
+	}
+	expr := MakeFunctionExprForTest("=", []*plan.Expr{MakeColExprForTest(0, types.T_varchar), value})
+	expr.GetF().Args[0].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+
+	filter, err := ConstructBasePKFilter(expr, tableDef, mp)
+	require.NoError(t, err)
+	require.False(t, filter.Valid)
+	filter.Cleanup()
+}
+
+func TestCompileFilterExprUnicodeFailsOpen(t *testing.T) {
+	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI)
+	tableDef := &plan.TableDef{
+		Name:          "unicode_filter",
+		Name2ColIndex: map[string]int32{"a": 0},
+		Cols:          []*plan.ColDef{{Name: "a", Typ: plan2.MakePlan2Type(&typ)}},
+	}
+	expr := MakeFunctionExprForTest("=", []*plan.Expr{
+		MakeColExprForTest(0, types.T_varchar),
+		{
+			Typ: plan2.MakePlan2Type(&typ),
+			Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+				IsConst: true,
+				Data:    []byte("a"),
+			}},
+		},
+	})
+	expr.GetF().Args[0].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+	_, _, _, _, _, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+	require.False(t, canCompile)
 }
 
 func TestUnmarshalPKInVectorValidatesConstPhysicalValueOnce(t *testing.T) {
@@ -3609,8 +3805,80 @@ func TestConstructBlockPKFilterMarksOnlyExactMembership(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.Equal(t, test.exact, filter.ExactMembership)
+			require.Nil(t, filter.CachedMembership, "unknown implementations must keep snapshot isolation")
 		})
 	}
+}
+
+func TestConstructBlockPKFilterScopedMembership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	vec := vector.NewVec(types.T_int64.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(vec, []int64{1, 2, 3}, nil, mp))
+	data, err := docfilter.Build(vec)
+	require.NoError(t, err)
+	member, err := docfilter.New(data)
+	require.NoError(t, err)
+	defer member.Free()
+	fs := testutil.NewSharedFS()
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	input.Vecs[1], err = vec.Dup(mp)
+	require.NoError(t, err)
+	input.Vecs[2] = vector.NewVec(types.T_array_float32.ToType())
+	defer input.Clean(mp)
+	for i, key := range []string{"a0", "b0", "b1"} {
+		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(key), false, mp))
+		require.NoError(t, vector.AppendArray(input.Vecs[2], []float32{float32(i), 0}, false, mp))
+	}
+	input.SetRowCount(3)
+	id := objectio.NewObjectid()
+	name := objectio.BuildObjectNameWithObjectID(&id)
+	writer, err := objectio.NewObjectWriter(name, fs, 0, []uint16{0, 1, 2}, nil)
+	require.NoError(t, err)
+	_, err = writer.Write(input)
+	require.NoError(t, err)
+	blocks, err := writer.WriteEnd(t.Context())
+	require.NoError(t, err)
+	location := objectio.BuildLocation(name, blocks[0].GetExtent(), 3, 0)
+	for _, tc := range []struct {
+		name string
+		fake bool
+		base BasePKFilter
+		want bool
+		rows []int64
+	}{
+		{name: "membership only", want: true, rows: []int64{0, 1, 2}},
+		{name: "invalid varchar base must not become empty equality", base: BasePKFilter{Oid: types.T_varchar}, want: true, rows: []int64{0, 1, 2}},
+		{name: "compound prefix", base: BasePKFilter{Valid: true, Op: function.PREFIX_EQ, Oid: types.T_varchar, LB: []byte("a")}, want: true, rows: []int64{0}},
+		{name: "fixed PK stays owned", base: BasePKFilter{Valid: true, Op: function.EQUAL, Oid: types.T_int64, LB: types.EncodeFixed(int64(1))}},
+		{name: "fake PK stays owned", fake: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filter, err := ConstructBlockPKFilter(tc.fake, tc.base, member)
+			require.NoError(t, err)
+			if filter.Cleanup != nil {
+				defer filter.Cleanup()
+			}
+			require.Equal(t, tc.want, filter.CachedMembership != nil)
+			require.True(t, filter.ExactMembership)
+			if filter.CachedMembership != nil {
+				top := &objectio.IndexReaderTopOp{Typ: types.T_array_float32,
+					NumVec: types.ArrayToBytes([]float32{0, 0}), Limit: 3,
+					MetricType: metric.Metric_L2Distance, DistHeap: make(objectio.Float64Heap, 0, 3)}
+				rows, _, _, err := objectio.ReadBlockByMembershipAndTopN(t.Context(),
+					[]uint16{0, 1}, []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
+					nil, nil, nil, 2, types.T_array_float32.ToType(), filter.CachedMembership, false,
+					func(rows []int64, _ int) ([]int64, error) { return rows, nil },
+					top, fs, location, mp, fileservice.SkipFullFilePreloads)
+				require.NoError(t, err)
+				require.Equal(t, tc.rows, rows)
+			}
+		})
+	}
+	require.True(t, member.Valid())
 }
 
 func TestConstructBlockPKFilterIntersectsPrimaryKeyAndBloomFilter(t *testing.T) {
@@ -3706,46 +3974,82 @@ func TestMergedInFilterCleanupHandoff(t *testing.T) {
 
 func TestConstructBasePKFilterOrFallbackRetainsMergedDisjunct(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	t.Cleanup(func() {
+		proc.GetFileService().Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+		require.Zero(t, mp.OnHeapCurrNB())
+	})
 	tableDef := &plan.TableDef{
-		Name:          "test",
-		Name2ColIndex: map[string]int32{"a": 0},
+		Name2ColIndex: map[string]int32{"a": 0, "b": 1},
 		Pkey:          &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
-		Cols: []*plan.ColDef{{
-			Name: "a",
-			Typ:  plan.Type{Id: int32(types.T_int64)},
-		}},
+		Cols: []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}}},
 	}
-	column := func() *plan.Expr { return MakeColExprForTest(0, types.T_int64) }
-	left := MakeFunctionExprForTest("and", []*plan.Expr{
-		MakeInExprForTest(column(), []int64{1, 2, 3}, types.T_int64, mp),
-		MakeInExprForTest(column(), []int64{2, 3, 4}, types.T_int64, mp),
-	})
-	right := MakeFunctionExprForTest("=", []*plan.Expr{
-		column(),
-		plan2.MakePlan2Int64ConstExprWithType(10),
-	})
-	expr := MakeFunctionExprForTest("or", []*plan.Expr{left, right})
-	proc := testutil.NewProcessWithMPool(t, "", mp)
-	var executors []colexec.ExpressionExecutor
-	plan2.ReplaceFoldExpr(proc, expr, &executors)
-	plan2.EvalFoldExpr(proc, expr, &executors)
-	for _, executor := range executors {
-		defer executor.Free()
+	for _, unsupported := range []bool{false, true} {
+		name := "retained until block cleanup"
+		if unsupported {
+			name = "unsupported nested or releases partial merge"
+		}
+		t.Run(name, func(t *testing.T) {
+			column := func() *plan.Expr { return MakeColExprForTest(0, types.T_int64) }
+			left := MakeFunctionExprForTest("and", []*plan.Expr{
+				MakeInExprForTest(column(), []int64{1, 2, 3}, types.T_int64, mp),
+				MakeInExprForTest(column(), []int64{2, 3, 4}, types.T_int64, mp),
+			})
+			right := MakeFunctionExprForTest("=", []*plan.Expr{column(), plan2.MakePlan2Int64ConstExprWithType(10)})
+			if unsupported {
+				right = MakeFunctionExprForTest("or", []*plan.Expr{right,
+					MakeFunctionExprForTest("=", []*plan.Expr{MakeColExprForTest(1, types.T_int64), plan2.MakePlan2Int64ConstExprWithType(20)}),
+				})
+			}
+			expr := MakeFunctionExprForTest("or", []*plan.Expr{left, right})
+			var executors []colexec.ExpressionExecutor
+			t.Cleanup(func() {
+				for _, executor := range executors {
+					executor.Free()
+				}
+			})
+			plan2.ReplaceFoldExpr(proc, expr, &executors)
+			plan2.EvalFoldExpr(proc, expr, &executors)
+			baseline, heapBaseline := mp.CurrNB(), mp.OnHeapCurrNB()
+			base, err := ConstructBasePKFilter(expr, tableDef, mp)
+			t.Cleanup(base.Cleanup)
+			require.NoError(t, err)
+			if unsupported {
+				require.False(t, base.Valid)
+				require.Nil(t, base.Vec)
+				require.Empty(t, base.Disjuncts)
+			} else {
+				require.True(t, base.Valid)
+				require.Len(t, base.Disjuncts, 2)
+				require.Equal(t, []int64{2, 3}, vector.MustFixedColWithTypeCheck[int64](base.Disjuncts[0].Vec))
+				filter, err := ConstructBlockPKFilter(false, base, nil)
+				if filter.Cleanup != nil {
+					t.Cleanup(filter.Cleanup)
+				}
+				require.NoError(t, err)
+				pk := vector.NewVec(types.T_int64.ToType())
+				t.Cleanup(func() { pk.Free(mp) })
+				require.NoError(t, vector.AppendFixedList(pk, []int64{1, 2, 3, 10}, nil, mp))
+				require.Equal(t, []int64{1, 2, 3}, filter.UnSortedSearchFunc(containers.Vectors{*pk}))
+				pk.Free(mp)
+				require.NotNil(t, filter.Cleanup)
+				filter.Cleanup()
+				require.Equal(t, baseline, mp.CurrNB())
+				require.Equal(t, heapBaseline, mp.OnHeapCurrNB())
+				filter.Cleanup()
+			}
+			// Invalid construction must release its partial merge before caller cleanup.
+			require.Equal(t, baseline, mp.CurrNB())
+			require.Equal(t, heapBaseline, mp.OnHeapCurrNB())
+			base.Cleanup()
+			base.Cleanup()
+			require.Equal(t, baseline, mp.CurrNB())
+			require.Equal(t, heapBaseline, mp.OnHeapCurrNB())
+		})
 	}
-
-	base, err := ConstructBasePKFilter(expr, tableDef, mp)
-	require.NoError(t, err)
-	require.True(t, base.Valid)
-	require.Len(t, base.Disjuncts, 2)
-	require.Equal(t, []int64{2, 3}, vector.MustFixedColNoTypeCheck[int64](base.Disjuncts[0].Vec))
-
-	filter, err := ConstructBlockPKFilter(false, base, nil)
-	require.NoError(t, err)
-	defer filter.Cleanup()
-	pk := vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixedList(pk, []int64{1, 2, 3, 10}, nil, mp))
-	defer pk.Free(mp)
-	require.Equal(t, []int64{1, 2, 3}, filter.UnSortedSearchFunc(containers.Vectors{*pk}))
 }
 
 func TestBuildBlockPKSearchFuncsAdditionalPrimaryKeyTypes(t *testing.T) {
@@ -3949,7 +4253,13 @@ func TestCompileFilterExpr_PrefixInRangeAllFlags(t *testing.T) {
 		},
 	}
 
-	m := mpool.MustNew(t.Name())
+	poolTag := t.Name()
+	t.Cleanup(func() { require.Equal(t, "[]", mpool.ReportMemUsage(poolTag)) })
+	m := mpool.MustNew(poolTag)
+	t.Cleanup(func() { mpool.DeleteMPool(m) })
+	t.Cleanup(func() {
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "shared pool must survive process and file-service cleanup")
+	})
 
 	flags := []struct {
 		flag uint8
@@ -4142,7 +4452,7 @@ func TestCompileFilterExprsPreservesSupportedConjuncts(t *testing.T) {
 		MakeColExprForTest(0, types.T_int64, "id"),
 	})
 	mp := mpool.MustNew(t.Name())
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	var executors []colexec.ExpressionExecutor
 	plan2.ReplaceFoldExpr(proc, supported, &executors)
 	plan2.EvalFoldExpr(proc, supported, &executors)
@@ -4211,7 +4521,7 @@ func TestCompileFilterExpr_Between(t *testing.T) {
 	})
 
 	m := mpool.MustNew(t.Name())
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	var exes []colexec.ExpressionExecutor
 	plan2.ReplaceFoldExpr(proc, expr, &exes)
 	plan2.EvalFoldExpr(proc, expr, &exes)
@@ -4262,7 +4572,13 @@ func TestCompileFilterExpr_InRange(t *testing.T) {
 		{3, RangeBothOpen},
 	}
 
-	m := mpool.MustNew(t.Name())
+	poolTag := t.Name()
+	t.Cleanup(func() { require.Equal(t, "[]", mpool.ReportMemUsage(poolTag)) })
+	m := mpool.MustNew(poolTag)
+	t.Cleanup(func() { mpool.DeleteMPool(m) })
+	t.Cleanup(func() {
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "shared pool must survive process and file-service cleanup")
+	})
 
 	for _, tc := range flags {
 		expr := MakeFunctionExprForTest("in_range", []*plan.Expr{
@@ -4299,10 +4615,17 @@ func TestCompileFilterExpr_InRange(t *testing.T) {
 // bare `return` in the switch default leave Valid=true,Op=0 (= EQUAL), which
 // would corrupt range ops into equality filters.
 func TestConstructBasePKFilter_InvalidRangeFlagNotValid(t *testing.T) {
-	m := mpool.MustNew(t.Name())
+	poolTag := t.Name()
+	t.Cleanup(func() { require.Equal(t, "[]", mpool.ReportMemUsage(poolTag)) })
+	m := mpool.MustNew(poolTag)
+	t.Cleanup(func() { mpool.DeleteMPool(m) })
+	t.Cleanup(func() {
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "shared pool must survive process and file-service cleanup")
+	})
 
 	for _, fn := range []string{"in_range", "prefix_in_range"} {
 		t.Run(fn, func(t *testing.T) {
+			require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "parent pool must survive sibling cleanup")
 			tableDef := &plan.TableDef{
 				Name:          "test_idx",
 				Name2ColIndex: map[string]int32{"k": 0},
@@ -4334,6 +4657,7 @@ func TestConstructBasePKFilter_InvalidRangeFlagNotValid(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, basePKFilter.Valid, "invalid flag must produce Valid=false")
 		})
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "child cleanup must not delete the parent pool")
 	}
 }
 
@@ -4356,7 +4680,13 @@ func TestCompileFilterExpr_PrefixSortedSeekOps(t *testing.T) {
 		},
 	}
 
-	m := mpool.MustNew(t.Name())
+	poolTag := t.Name()
+	t.Cleanup(func() { require.Equal(t, "[]", mpool.ReportMemUsage(poolTag)) })
+	m := mpool.MustNew(poolTag)
+	t.Cleanup(func() { mpool.DeleteMPool(m) })
+	t.Cleanup(func() {
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "shared pool must survive process and file-service cleanup")
+	})
 
 	exprs := map[string]*plan.Expr{
 		"prefix_eq": MakeFunctionExprForTest("prefix_eq", []*plan.Expr{
@@ -4372,6 +4702,7 @@ func TestCompileFilterExpr_PrefixSortedSeekOps(t *testing.T) {
 
 	for name, expr := range exprs {
 		t.Run(name, func(t *testing.T) {
+			require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "parent pool must survive sibling cleanup")
 			proc := testutil.NewProcessWithMPool(t, "", m)
 			var exes []colexec.ExpressionExecutor
 			plan2.ReplaceFoldExpr(proc, expr, &exes)
@@ -4386,6 +4717,7 @@ func TestCompileFilterExpr_PrefixSortedSeekOps(t *testing.T) {
 			require.NotNil(t, blockFilterOp)
 			require.NotNil(t, seekOp, "seekOp should be set for sorted %s", name)
 		})
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "child cleanup must not delete the parent pool")
 	}
 }
 

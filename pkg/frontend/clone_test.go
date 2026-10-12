@@ -155,7 +155,7 @@ func TestGetOpAndToAccountIDNormalizesMissingNamedSnapshot(t *testing.T) {
 	ctx := context.Background()
 
 	resolverContext := &cloneSnapshotResolutionCompilerContext{
-		MockCompilerContext: plan2.NewMockCompilerContext(false),
+		MockCompilerContext: plan2.NewMockCompilerContext(false, newPlanTestProcess(t)),
 		ctx:                 ctx,
 		resolveErr:          moerr.NewInternalErrorf(ctx, "find 0 snapshot records by name(%s), expect only 1", snapshotName),
 	}

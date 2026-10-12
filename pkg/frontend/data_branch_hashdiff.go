@@ -221,9 +221,7 @@ func lcaProbeColumnLayout(
 			)
 		}
 		layout.attrs = append(layout.attrs, lcaAttrName)
-		layout.types = append(layout.types, types.NewWithCharset(
-			types.T(lcaCol.Typ.Id), lcaCol.Typ.Width, lcaCol.Typ.Scale, uint8(lcaCol.Typ.Charset),
-		))
+		layout.types = append(layout.types, types.MustTypeFromPlan(lcaCol.Typ))
 		layout.targetIdxes = append(layout.targetIdxes, targetIdx)
 		layout.enumValues = append(layout.enumValues, lcaCol.Typ.Enumvalues)
 	}
@@ -659,8 +657,10 @@ func lcaProbeJoinCastType(typ types.Type) (string, bool) {
 		return "VARBINARY", true
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return typ.DescString(), true
-	case types.T_date, types.T_datetime, types.T_time, types.T_timestamp, types.T_year:
+	case types.T_date, types.T_year:
 		return typ.String(), true
+	case types.T_datetime, types.T_time, types.T_timestamp:
+		return fmt.Sprintf("%s(%d)", typ.String(), typ.Scale), true
 	default:
 		return "", false
 	}
@@ -1299,27 +1299,17 @@ func hashDiffIfHasLCA(
 						j++
 					} else {
 						// copt.conflictOpt == tree.CONFLICT_FAIL
-						tarRow := make([]any, 1)
-						if err3 = extractRowFromVector(
-							ctx, ses, tarVec, 0, tarRow, i, false,
-						); err3 != nil {
-							return
-						}
-
-						buf := acquireBuffer(tblStuff.bufPool)
-						if err3 = formatValIntoString(
-							ses, tarRow[0], tblStuff.def.colTypes[tblStuff.def.pkColIdx], buf,
-						); err3 != nil {
-							releaseBuffer(tblStuff.bufPool, buf)
+						key, keyErr := extractPKAsString(ses, tblStuff, tarWrapped.batch, i)
+						if keyErr != nil {
+							err3 = keyErr
 							return
 						}
 
 						err3 = moerr.NewInternalErrorNoCtxf(
 							"conflict: %s %s and %s %s on pk(%v) with different values",
 							tarWrapped.name, tarWrapped.kind,
-							baseWrapped.name, baseWrapped.kind, buf.String(),
+							baseWrapped.name, baseWrapped.kind, key,
 						)
-						releaseBuffer(tblStuff.bufPool, buf)
 						return
 					}
 				} else if cmp < 0 {
@@ -1468,7 +1458,15 @@ func hashDiffIfHasLCA(
 					}
 					return diffSideTarget
 				}(),
-				tmpCh, branchTS, copt.expandUpdate, hashmap1, hashmap2,
+				func(wrapped batchWithKind) error {
+					select {
+					case <-newCtx.Done():
+						tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+						return newCtx.Err()
+					case tmpCh <- wrapped:
+						return nil
+					}
+				}, branchTS, copt.expandUpdate, hashmap1, hashmap2, -1,
 			); err3 != nil {
 				atomicErr.Store(err3)
 			}
@@ -1480,6 +1478,19 @@ func hashDiffIfHasLCA(
 	}
 
 	stepHandler := func(forBase bool) (err2 error) {
+		if copt.onlineApply {
+			name, side, branchTS := tblStuff.baseRel.GetTableName(), diffSideBase, baseLCAProbe
+			hashmap1, hashmap2, handle := baseDataHashmap, baseTombstoneHashmap, handleBaseDeleteAndUpdates
+			if !forBase {
+				name, side, branchTS = tblStuff.tarRel.GetTableName(), diffSideTarget, tarLCAProbe
+				hashmap1, hashmap2, handle = tarDataHashmap, tarTombstoneHashmap, handleTarDeleteAndUpdates
+			}
+			// Delivery owns the batch even on failure. Held batches remain in
+			// retPool until the agency unwinds; handlers release emitted failures.
+			return findDeleteAndUpdateBat(ctx, ses, bh, tblStuff, name, side,
+				handle, branchTS, copt.expandUpdate, hashmap1, hashmap2, 1)
+		}
+
 		var (
 			tmpCh = make(chan batchWithKind, 1)
 			first error
@@ -1776,9 +1787,10 @@ func dataBranchUpdateRequiresNativeUpdateFromTuples(
 
 func findDeleteAndUpdateBat(
 	ctx context.Context, ses *Session, bh BackgroundExec,
-	tblStuff tableStuff, tblName string, side int, tmpCh chan batchWithKind, branchTS types.TS,
+	tblStuff tableStuff, tblName string, side int, deliver func(batchWithKind) error, branchTS types.TS,
 	expandUpdate bool,
 	dataHashmap, tombstoneHashmap databranchutils.BranchHashmap,
+	parallelism int,
 ) (err error) {
 
 	maxTombstoneBatchCnt := tblStuff.maxTombstoneBatchCnt
@@ -1792,16 +1804,6 @@ func findDeleteAndUpdateBat(
 			tuple types.Tuple
 			tBat1 = tblStuff.retPool.acquireRetBatch(tblStuff, true)
 		)
-
-		send := func(bwk batchWithKind) error {
-			select {
-			case <-ctx.Done():
-				tblStuff.retPool.releaseRetBatch(bwk.batch, false)
-				return ctx.Err()
-			case tmpCh <- bwk:
-				return nil
-			}
-		}
 
 		processBatch := func(tombBat *batch.Batch) error {
 			if tombBat.RowCount() == 0 {
@@ -1982,7 +1984,7 @@ func findDeleteAndUpdateBat(
 				if stagedUpdateBat != nil || nativeUpdateBat != nil {
 					if expandUpdate {
 						updateDeleteBat.SetRowCount(updateDeleteBat.Vecs[0].Length())
-						if err2 = send(batchWithKind{
+						if err2 = deliver(batchWithKind{
 							name:       tblName,
 							side:       side,
 							fromUpdate: true,
@@ -2002,7 +2004,7 @@ func findDeleteAndUpdateBat(
 								continue
 							}
 							update.bat.SetRowCount(update.bat.Vecs[0].Length())
-							if err2 = send(batchWithKind{
+							if err2 = deliver(batchWithKind{
 								name:                 tblName,
 								side:                 side,
 								batch:                update.bat,
@@ -2018,7 +2020,7 @@ func findDeleteAndUpdateBat(
 							stagedUpdateBat = nativeUpdateBat
 						}
 						stagedUpdateBat.SetRowCount(stagedUpdateBat.Vecs[0].Length())
-						if err2 = send(batchWithKind{
+						if err2 = deliver(batchWithKind{
 							name:  tblName,
 							side:  side,
 							batch: stagedUpdateBat,
@@ -2029,7 +2031,7 @@ func findDeleteAndUpdateBat(
 					}
 				}
 
-				if err2 = send(batchWithKind{
+				if err2 = deliver(batchWithKind{
 					name:  tblName,
 					side:  side,
 					batch: tBat2,
@@ -2095,7 +2097,7 @@ func findDeleteAndUpdateBat(
 		}
 		return nil
 
-	}, -1); err != nil {
+	}, parallelism); err != nil {
 		return
 	}
 
@@ -2345,6 +2347,12 @@ func diffDataHelper(
 	baseDataHashmap databranchutils.BranchHashmap,
 ) (err error) {
 
+	parallelism := -1
+	if copt.onlineApply {
+		// The inline appender and its transaction have one execution owner.
+		parallelism = 1
+	}
+
 	// if no pk, we cannot use the fake pk to probe.
 	// must probe with full columns
 	var migratedHashmaps []databranchutils.BranchHashmap
@@ -2589,7 +2597,7 @@ func diffDataHelper(
 		}
 
 		return nil
-	}, -1); err != nil {
+	}, parallelism); err != nil {
 		return
 	}
 
@@ -2645,7 +2653,7 @@ func diffDataHelper(
 			return nil
 		}
 		return nil
-	}, -1); err != nil {
+	}, parallelism); err != nil {
 		return
 	}
 

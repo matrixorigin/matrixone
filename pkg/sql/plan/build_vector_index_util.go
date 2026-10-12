@@ -106,8 +106,9 @@ func makeCrossJoinCentroidsMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 }
 
 func makeTblCrossJoinL2Centroids(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, currVersionCentroids int32, typeOriginPk Type, posOriginPk int, typeOriginVecColumn Type, posOriginVecColumn int, includeSourceCols []ivfIncludeSourceCol, optype string) int32 {
-	projectList := []*Expr{
-		{ // centroids.version
+	projectList := make([]*Expr, 0, 4+len(includeSourceCols))
+	projectList = append(projectList,
+		&Expr{ // centroids.version
 			Typ: makePlan2TypeValue(&bigIntType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -117,7 +118,7 @@ func makeTblCrossJoinL2Centroids(builder *QueryBuilder, bindCtx *BindContext, ta
 				},
 			},
 		},
-		{ // centroids.centroid_id
+		&Expr{ // centroids.centroid_id
 			Typ: makePlan2TypeValue(&bigIntType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -127,7 +128,7 @@ func makeTblCrossJoinL2Centroids(builder *QueryBuilder, bindCtx *BindContext, ta
 				},
 			},
 		},
-		{ // tbl.pk
+		&Expr{ // tbl.pk
 			Typ: *DeepCopyType(&typeOriginPk),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -137,7 +138,7 @@ func makeTblCrossJoinL2Centroids(builder *QueryBuilder, bindCtx *BindContext, ta
 				},
 			},
 		},
-		{ // tbl.embedding
+		&Expr{ // tbl.embedding
 			Typ: *DeepCopyType(&typeOriginVecColumn),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -147,7 +148,7 @@ func makeTblCrossJoinL2Centroids(builder *QueryBuilder, bindCtx *BindContext, ta
 				},
 			},
 		},
-	}
+	)
 	for _, includeCol := range includeSourceCols {
 		projectList = append(projectList, &plan.Expr{
 			Typ: *DeepCopyType(&includeCol.typ),

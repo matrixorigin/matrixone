@@ -67,7 +67,7 @@ func TestTruncation_Start(t *testing.T) {
 
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			go tr.Start(ctx)
+			tr.Start(ctx)
 		}
 		logservice.RunClientTest(t, false, nil, fn)
 	})
@@ -80,12 +80,28 @@ func TestTruncation_Start(t *testing.T) {
 				&syncedLsn,
 				withTruncateInterval(time.Millisecond),
 			)
-			defer tr.Close()
 
 			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			go tr.Start(ctx)
-			time.Sleep(time.Millisecond * 50)
+			done := make(chan struct{})
+			go func() {
+				tr.Start(ctx)
+				close(done)
+			}()
+			defer func() {
+				cancel()
+				select {
+				case <-done:
+					tr.Close()
+				case <-time.After(time.Second):
+					t.Error("truncation did not stop")
+				}
+			}()
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("truncation worker did not stop after cancellation")
+			}
 		}
 		logservice.RunClientTest(t, false, nil, fn)
 	})
@@ -103,10 +119,12 @@ func TestTruncation_Start(t *testing.T) {
 			trun := tr.(*truncation)
 			trun.syncedLSN.Store(10)
 
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			go tr.Start(ctx)
-			time.Sleep(time.Millisecond * 50)
+			ctx := context.Background()
+			assert.NoError(t, trun.truncate(ctx))
+			assert.Equal(t, uint64(10), trun.lastTruncateLsn)
+			truncated, err := trun.client.getTruncatedLsn(ctx)
+			assert.NoError(t, err)
+			assert.Equal(t, uint64(10), truncated)
 		}
 		logservice.RunClientTest(t, false, nil, fn)
 	})

@@ -94,7 +94,7 @@ func TestPreparedPlansPreserveWorkspaceVisibility(t *testing.T) {
 					seed[i] = fmt.Sprintf("(%d,'%d')", i+1, (i+1)*10)
 				}
 				exec("insert into " + tc.name + "(id,v) values " + strings.Join(seed, ","))
-				stmt, err := conn.PrepareContext(ctx, "update "+tc.name+" set v=? where id=?")
+				stmt, err := conn.PrepareContext(ctx, "update "+tc.name+" set v=? where id=?") //nolint:sqlclosecheck // closed by the deferred Close below; the updateOne closure captures stmt, which defeats the analyzer's tracking
 				require.NoError(t, err)
 				defer stmt.Close()
 				bind := func(v int) any {
@@ -153,7 +153,7 @@ func TestPreparedPlansPreserveWorkspaceVisibility(t *testing.T) {
 				require.Equal(t, 1, nulls)
 			})
 		}
-		read, err := conn.PrepareContext(ctx, "select v from t where id=?")
+		read, err := conn.PrepareContext(ctx, "select v from t where id=?") //nolint:sqlclosecheck // closed by the deferred Close below; the checkRead closure captures read, which defeats the analyzer's tracking
 		require.NoError(t, err)
 		defer read.Close()
 		update, err := conn.PrepareContext(ctx, "update t set v=v+1 where id=?")

@@ -36,6 +36,7 @@ type persistedDDLReplay struct {
 }
 
 type replayedColumnExpressions struct {
+	columnType  planpb.Type
 	defaultExpr *planpb.Default
 	onUpdate    *planpb.OnUpdate
 	generated   *planpb.GeneratedCol
@@ -110,7 +111,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 			oldCol.Typ.Width == newCol.Typ.Width && oldCol.Typ.Scale == newCol.Typ.Scale &&
 			oldCol.Typ.AutoIncr == newCol.Typ.AutoIncr &&
 			oldCol.Typ.Enumvalues == newCol.Typ.Enumvalues &&
-			oldCol.Typ.Charset == newCol.Typ.Charset &&
+			oldCol.Typ.SameCollation(newCol.Typ) &&
 			oldCol.Typ.PadSpace == newCol.Typ.PadSpace
 	}
 	copyExpr := func(expr *planpb.Expr, positions map[int32]int32) *planpb.Expr {
@@ -161,9 +162,12 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		if newCol == nil {
 			continue
 		}
-		entry := &replayedColumnExpressions{}
-		if oldCol.Default != nil && oldCol.Default.Expr != nil && newCol.Default != nil {
-			if expr := copyExpr(oldCol.Default.Expr, rawPositions); expr != nil && proto.Equal(expr, newCol.Default.Expr) {
+		entry := &replayedColumnExpressions{columnType: oldCol.Typ}
+		if oldCol.Default != nil && newCol.Default != nil {
+			expr := copyExpr(oldCol.Default.Expr, rawPositions)
+			unchangedAbsentDefault := oldCol.Default.Expr == nil && newCol.Default.Expr == nil &&
+				proto.Equal(&oldCol.Typ, &newCol.Typ) && proto.Equal(oldCol.Default, newCol.Default)
+			if unchangedAbsentDefault || expr != nil && proto.Equal(expr, newCol.Default.Expr) {
 				entry.defaultExpr = proto.Clone(newCol.Default).(*planpb.Default)
 				entry.defaultExpr.Expr = copyExpr(oldCol.Default.Expr, visiblePositions)
 			}

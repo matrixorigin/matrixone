@@ -16,11 +16,15 @@ package iscp
 
 import (
 	"context"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,11 +40,12 @@ func newTestIvfflatTableDef(pkName string, pkType types.T, vecColName string, ve
 		vecColName: 1,
 		"dummy":    2, // Add another col to make sure pk/vec col indices are used
 	}
-	cols := []*plan.ColDef{
-		{Name: pkName, Typ: plan.Type{Id: int32(pkType)}},
-		{Name: vecColName, Typ: plan.Type{Id: int32(vecType), Width: vecWidth}},
-		{Name: "dummy", Typ: plan.Type{Id: int32(types.T_int32)}},
-	}
+	cols := make([]*plan.ColDef, 0, 3+len(includeCols))
+	cols = append(cols,
+		&plan.ColDef{Name: pkName, Typ: plan.Type{Id: int32(pkType)}},
+		&plan.ColDef{Name: vecColName, Typ: plan.Type{Id: int32(vecType), Width: vecWidth}},
+		&plan.ColDef{Name: "dummy", Typ: plan.Type{Id: int32(types.T_int32)}},
+	)
 	includedColumns := make([]string, 0, len(includeCols))
 	for _, includeCol := range includeCols {
 		name2ColIndex[includeCol.name] = int32(len(cols))
@@ -435,4 +440,66 @@ func TestNewIvfflatSqlWriterDelete(t *testing.T) {
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
 	require.Equal(t, "DELETE FROM `test_db`.`entries_tbl` WHERE `__mo_index_pri_col` IN (1000,2000,3000)", string(bytes))
+}
+
+func TestIvfflatSqlWriterEnumReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name, pkMembers, includeMembers string
+	}{
+		{"distinct domains", "cold,hot,warm", "warm,cold,hot"},
+		{"numeric and escaped labels", "2,1", "a'b,c\\d"},
+		{"empty and numeric labels", ",2,1", ",2,1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tabledef := newTestIvfflatTableDef("pk", types.T_enum, "vec", types.T_array_float32, 2,
+				ivfflatIncludeColSpec{name: "status", typ: types.T_enum})
+			tabledef.Cols[0].Typ.Enumvalues = tc.pkMembers
+			tabledef.Cols[3].Typ.Enumvalues = tc.includeMembers
+			// Exercise the catalog reload path, without runtime INCLUDE metadata.
+			for _, idx := range tabledef.Indexes {
+				idx.IncludedColumns = nil
+				idx.IndexAlgoParams = `{"included_columns":"status","lists":"1","op_type":"vector_l2_ops"}`
+			}
+			writer, err := NewIvfflatSqlWriter("ivfflat", newTestJobID(), newTestConsumerInfo(), tabledef, tabledef.Indexes)
+			require.NoError(t, err)
+			for _, upsert := range []bool{false, true} {
+				writer.Reset()
+				write := writer.Insert
+				if upsert {
+					write = writer.Upsert
+				}
+				require.NoError(t, write(t.Context(), []any{types.Enum(1), []float32{0, 0}, nil, types.Enum(2)}))
+				require.NoError(t, write(t.Context(), []any{types.Enum(2), []float32{1, 0}, nil, nil}))
+				require.NoError(t, write(t.Context(), []any{types.Enum(0), []float32{2, 0}, nil, types.Enum(0)}))
+				generated, err := writer.ToSql()
+				require.NoError(t, err)
+				sql := string(generated)
+				require.Contains(t, sql, "VALUES ROW(x'503d1501',CAST('[0, 0]' as VECF32(2)),x'503d1502'),ROW(x'503d1502',CAST('[1, 0]' as VECF32(2)),x'00'),ROW(x'503d14',CAST('[2, 0]' as VECF32(2)),x'503d14')")
+				stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+				require.NoError(t, err)
+				stmt.Free()
+				// Inspect parsed domains from the actual generated tuple decoders.
+				for _, col := range []struct {
+					pattern, members string
+				}{
+					{`(SERIAL_EXTRACT\(src0, 0 as ENUM\(.*?\)\))`, tc.pkMembers},
+					{`(SERIAL_EXTRACT\(src2, 0 as ENUM\(.*?\)\))`, tc.includeMembers},
+				} {
+					match := regexp.MustCompile(col.pattern).FindStringSubmatch(sql)
+					require.Len(t, match, 2)
+					parsed, err := mysql.ParseOne(t.Context(), "SELECT "+match[1], 1)
+					require.NoError(t, err)
+					decode := parsed.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.SerialExtractExpr)
+					require.Equal(t, strings.Split(col.members, ","), decode.ResultType.(*tree.T).InternalType.EnumValues)
+					parsed.Free()
+				}
+			}
+			writer.Reset()
+			require.NoError(t, writer.Delete(t.Context(), []any{types.Enum(1)}))
+			require.NoError(t, writer.Delete(t.Context(), []any{types.Enum(0)}))
+			deleted, err := writer.ToSql()
+			require.NoError(t, err)
+			require.Equal(t, "DELETE FROM `test_db`.`entries_tbl` WHERE `__mo_index_pri_col` IN (1,0)", string(deleted))
+		})
+	}
 }

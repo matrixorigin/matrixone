@@ -453,7 +453,7 @@ func TestAnalyzeLoadUniqueIndexPromotionMatchesPlannerShape(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	qry, err := plan2.NewMockOptimizer(true).Optimize(stmt)
+	qry, err := plan2.NewMockOptimizer(true, newPlanTestProcess(t)).Optimize(stmt)
 	require.NoError(t, err)
 	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}
 	require.False(t, qry.LoadWriteS3,

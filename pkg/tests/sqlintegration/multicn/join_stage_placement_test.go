@@ -148,4 +148,70 @@ func TestJoinCoordinatorStage(t *testing.T) {
 		})
 	}
 	require.Equal(t, "", query(t, `select d.id from (select id,k,row_number() over(order by id) rn from a where id<0) d left join c on d.k=c.k`))
+	// Reuse the same cluster with both workers admitted. Product probes remain
+	// distributed while their broadcast producers have a common result owner.
+	require.NoError(t, updater.DebugUpdateCNWorkStateWithContext(ctx, cn.ServiceID(), int(metadata.WorkState_Working)))
+	waitWorkers(ctx, 2)
+	exec("set max_dop=2")
+	for _, tc := range []struct{ name, statement, want string }{
+		{"broadcast product", `select count(*),sum(a.id*100+c.rid) from a cross join c`, "16\t4200\n"},
+		{"empty broadcast product", `select count(*) from a cross join c where a.id<0`, "0\n"},
+		{"nested product early stop", `select count(*) from (select a.id from a cross join c) d join a z on d.id=z.id where z.id<0`, "0\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for range 2 {
+				require.Equal(t, tc.want, query(t, tc.statement))
+			}
+		})
+	}
+	physical := query(t, "explain phyplan analyze select a.id,c.rid from a cross join c")
+	require.Contains(t, strings.ToLower(physical), "product")
+	require.Contains(t, physical, peer, "must retain remote probe work")
+
+	// Scale the Cartesian output without growing the cluster fixture. The result
+	// receiver must consume aggregate states, not all 65,536 Product rows.
+	exec("create table product_left(id int)")
+	exec("create table product_right(id int)")
+	values := make([]string, 256)
+	for i := range values {
+		values[i] = fmt.Sprintf("(%d)", i+1)
+	}
+	exec("insert into product_left values " + strings.Join(values, ","))
+	exec("insert into product_right select id from product_left")
+	for _, table := range []string{"product_left", "product_right"} {
+		exec("select mo_ctl('dn','flush','" + schema + "." + table + "')")
+	}
+	aggregateSQL := "select count(*),sum(l.id+r.id) from product_left l cross join product_right r"
+	require.Equal(t, "65536\t16842752\n", query(t, aggregateSQL))
+	aggregatePlan := query(t, "explain phyplan analyze "+aggregateSQL)
+	require.Regexp(t, `merge group CallNum:[^\n]*InRows:2 OutRows:1`, aggregatePlan,
+		"global aggregation must merge one local state per probe CN")
+	require.Regexp(t, `└── merge CallNum:[^\n]*InRows:2 OutRows:2`, aggregatePlan,
+		"raw Cartesian rows must not cross the result merge")
+	require.Equal(t, "7\n", query(t, "select 7 union all select l.id from product_left l cross join product_right r limit 1"))
+	exec("create table product_written(id int)")
+	written, err := conn.ExecContext(ctx, "insert into product_written select l.id+r.id from product_left l cross join product_right r")
+	require.NoError(t, err)
+	affected, err := written.RowsAffected()
+	require.NoError(t, err)
+	require.EqualValues(t, 65536, affected, "parallel writers must retain affected-row accounting")
+	require.Equal(t, "65536\t16842752\n", query(t, "select count(*),sum(id) from product_written"))
+
+	stmt, err := conn.PrepareContext(ctx, `select count(*),sum(a.id*100+c.rid) from a cross join c where a.id>?`)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, stmt.Close()) })
+	for _, threshold := range []int{0, 99, 0} {
+		var count int64
+		var sum sql.NullInt64
+		require.NoError(t, stmt.QueryRowContext(ctx, threshold).Scan(&count, &sum))
+		if threshold == 0 {
+			require.EqualValues(t, 16, count)
+			require.True(t, sum.Valid)
+			require.EqualValues(t, 4200, sum.Int64)
+		} else {
+			require.Zero(t, count)
+			require.False(t, sum.Valid)
+		}
+	}
+
 }

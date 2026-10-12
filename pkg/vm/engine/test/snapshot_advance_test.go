@@ -656,3 +656,46 @@ func TestRCMemoryTransferWidePKBoundary(t *testing.T) {
 	h.txn, h.rel = txn, rel
 	require.Zero(t, h.countRows(txn, rel))
 }
+
+// A later rollback must not replay a transfer retained from a successful
+// statement. A rollback of the transferring statement must recover its removed
+// replacements, including when the rewritten object is merged again first.
+func TestRCSnapshotRollbackAcrossMerge(t *testing.T) {
+	for _, mode := range []snapshotAdvanceTombstoneMode{snapshotAdvanceInMemoryTombstone, snapshotAdvancePersistedTombstone, snapshotAdvanceMixedTombstones} {
+		for _, boundary := range []string{"no rollback", "following statement", "transferring statement"} {
+			t.Run(fmt.Sprintf("%d/%s", mode, boundary), func(t *testing.T) {
+				h := newSnapshotAdvanceHarness(t, mode)
+				defer h.close()
+				ws := h.txn.GetWorkspace()
+				ws.StartStatement()
+				require.NoError(t, ws.IncrStatementID(h.ctx, false))
+				h.flushAndAdvance()
+				if boundary == "transferring statement" {
+					require.NoError(t, ws.RollbackLastStatement(h.ctx))
+				}
+				ws.EndStatement()
+				ws.UpdateSnapshotWriteOffset()
+				if boundary == "following statement" {
+					// Retry repeatedly to challenge the retained replacement boundary.
+					for range 2 {
+						ws.StartStatement()
+						require.NoError(t, ws.IncrStatementID(h.ctx, false))
+						require.NoError(t, ws.RollbackLastStatement(h.ctx))
+						ws.EndStatement()
+					}
+				}
+				require.NoError(t, h.pack.T.GetDB().FlushTable(h.ctx, catalog.System_Account, h.rel.GetDBID(h.ctx), h.rel.GetTableID(h.ctx), types.TimestampToTS(h.pack.D.Now())))
+				testutil2.MergeBlocks(t, 0, h.pack.T.GetDB(), "db1", h.schema, false)
+				h.transferAtStatementBoundary()
+				require.Zero(t, h.countRows(h.txn, h.rel))
+				require.NoError(t, h.txn.Commit(h.ctx))
+				h.txn = nil
+				_, rel, txn, err := h.pack.D.GetTable(h.ctx, "db1", "test1")
+				require.NoError(t, err)
+				defer txn.Rollback(h.ctx)
+				require.Zero(t, h.countRows(txn, rel))
+				require.NoError(t, txn.Commit(h.ctx))
+			})
+		}
+	}
+}

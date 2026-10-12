@@ -20,7 +20,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -78,6 +80,7 @@ func TestCompileParallelDistinctSetMergesWorkerResults(t *testing.T) {
 		t.Run(nodeType.String(), func(t *testing.T) {
 			c := newDistinctSetTestCompile(t)
 			node := newParallelDistinctSetTestNode(nodeType)
+			node.Stats.HashmapStats.Shuffle = true
 
 			result := c.compileMinusAndIntersect(
 				node,
@@ -131,6 +134,46 @@ func TestCompileSingleScopeMultisetAvoidsConsolidation(t *testing.T) {
 				require.False(t, c.anal.isFirst)
 			})
 		}
+	}
+}
+
+func TestCompileBroadcastDistinctSetHasSingleOwner(t *testing.T) {
+	for _, nodeType := range []plan.Node_NodeType{plan.Node_INTERSECT, plan.Node_MINUS} {
+		t.Run(nodeType.String(), func(t *testing.T) {
+			c := newDistinctSetTestCompile(t)
+			node := newParallelDistinctSetTestNode(nodeType)
+			left := newDistinctSetTestScopes(c, 2)
+			right := newDistinctSetTestScopes(c, 2)
+			node.PhysicalEqualityKeyList = []*plan.Expr{{
+				Typ:  node.ProjectList[0].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+			}}
+			result := c.compileMinusAndIntersect(node, left, right, nodeType)
+			t.Cleanup(func() {
+				for _, scope := range result {
+					scope.FreeOperator(c)
+					scope.release()
+				}
+				c.proc.Free()
+			})
+			require.Len(t, result, 1)
+			require.Len(t, result[0].PreScopes, 2, "one owner must consume both complete inputs")
+			switch nodeType {
+			case plan.Node_INTERSECT:
+				require.IsType(t, &intersect.Intersect{}, result[0].RootOp)
+				require.Equal(t, node.PhysicalEqualityKeyList, result[0].RootOp.(*intersect.Intersect).KeyExprs)
+			case plan.Node_MINUS:
+				require.IsType(t, &minus.Minus{}, result[0].RootOp)
+				require.Equal(t, node.PhysicalEqualityKeyList, result[0].RootOp.(*minus.Minus).KeyExprs)
+			}
+			for i, scopes := range [][]*Scope{left, right} {
+				require.Len(t, result[0].PreScopes[i].PreScopes, len(scopes))
+				for j, scope := range scopes {
+					require.Same(t, scope, result[0].PreScopes[i].PreScopes[j], "keep every upstream scope")
+				}
+			}
+			require.False(t, c.anal.isFirst)
+		})
 	}
 }
 

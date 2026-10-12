@@ -80,6 +80,7 @@ func TestRandomBytesCoercesBoolTextFloatAndDecimalLengths(t *testing.T) {
 			inputs := []FunctionTestInput{NewFunctionTestInput(tt.typ, tt.values, tt.nulls)}
 			caseTest := NewFunctionTestCase(proc, inputs,
 				NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil), RandomBytes)
+			defer caseTest.Free()
 			require.NoError(t, caseTest.result.PreExtendAndReset(caseTest.fnLength))
 			require.NoError(t, RandomBytes(caseTest.parameters, caseTest.result, proc, caseTest.fnLength, nil))
 
@@ -117,6 +118,7 @@ func TestRandomBytesUsesPreparedSourceKindForTextTransport(t *testing.T) {
 					NewFunctionTestInput(types.T_text.ToType(), []string{tc.value}, nil),
 				},
 				NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil), RandomBytes)
+			defer caseTest.Free()
 			caseTest.parameters[0].SetPrepareParamKind(tc.kind)
 
 			require.NoError(t, caseTest.result.PreExtendAndReset(1))
@@ -133,6 +135,7 @@ func TestRandomBytesDecimalUsesExactSQLRounding(t *testing.T) {
 		caseTest := NewFunctionTestCase(proc,
 			[]FunctionTestInput{NewFunctionTestInput(typ, values, nil)},
 			NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil), RandomBytes)
+		defer caseTest.Free()
 		require.NoError(t, caseTest.result.PreExtendAndReset(caseTest.fnLength))
 		require.NoError(t, RandomBytes(caseTest.parameters, caseTest.result, proc, caseTest.fnLength, nil))
 		result := caseTest.GetResultVectorDirectly()
@@ -146,6 +149,7 @@ func TestRandomBytesDecimalUsesExactSQLRounding(t *testing.T) {
 		caseTest := NewFunctionTestCase(proc,
 			[]FunctionTestInput{NewFunctionTestInput(typ, value, nil)},
 			NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), RandomBytes)
+		defer caseTest.Free()
 		require.NoError(t, caseTest.result.PreExtendAndReset(1))
 		err := RandomBytes(caseTest.parameters, caseTest.result, proc, 1, nil)
 		require.Error(t, err)
@@ -279,6 +283,7 @@ func TestRandomBytesDecimalHighScalePathsAgree(t *testing.T) {
 		t.Helper()
 		caseTest := NewFunctionTestCase(proc, []FunctionTestInput{input},
 			NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil), RandomBytes)
+		defer caseTest.Free()
 		require.NoError(t, caseTest.result.PreExtendAndReset(caseTest.fnLength))
 		require.NoError(t, RandomBytes(caseTest.parameters, caseTest.result, proc, caseTest.fnLength, nil))
 		return len(caseTest.GetResultVectorDirectly().GetBytesAt(0))
@@ -290,6 +295,7 @@ func TestRandomBytesDecimalHighScalePathsAgree(t *testing.T) {
 	prepared := NewFunctionTestCase(proc,
 		[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(), []string{"2.49"}, nil)},
 		NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil), RandomBytes)
+	defer prepared.Free()
 	prepared.parameters[0].SetPrepareParamKind(vector.PrepareParamDecimal)
 	require.NoError(t, prepared.result.PreExtendAndReset(1))
 	require.NoError(t, RandomBytes(prepared.parameters, prepared.result, proc, 1, nil))
@@ -369,6 +375,7 @@ func TestRandomBytesCoversAllAcceptedScalarGetterTypes(t *testing.T) {
 			caseTest := NewFunctionTestCase(proc,
 				[]FunctionTestInput{NewFunctionTestInput(tt.typ, tt.values, nil)},
 				NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil), RandomBytes)
+			defer caseTest.Free()
 			require.NoError(t, caseTest.result.PreExtendAndReset(1))
 			err := RandomBytes(caseTest.parameters, caseTest.result, proc, 1, nil)
 			if tt.wantErr {
@@ -395,6 +402,7 @@ func TestRandomBytesRejectsInvalidBinaryLengths(t *testing.T) {
 			caseTest := NewFunctionTestCase(proc,
 				[]FunctionTestInput{NewFunctionTestInput(types.T_binary.ToType(), []string{tc.value}, nil)},
 				NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), RandomBytes)
+			defer caseTest.Free()
 			require.NoError(t, caseTest.result.PreExtendAndReset(1))
 			err := RandomBytes(caseTest.parameters, caseTest.result, proc, 1, nil)
 			require.Error(t, err)
@@ -429,6 +437,7 @@ func TestRandomBytesTreatsInvalidNumericTextAsRangeError(t *testing.T) {
 					NewFunctionTestInput(types.T_varchar.ToType(), []string{value}, nil),
 				},
 				NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), RandomBytes)
+			defer caseTest.Free()
 
 			require.NoError(t, caseTest.result.PreExtendAndReset(1))
 			err := RandomBytes(caseTest.parameters, caseTest.result, proc, 1, nil)
@@ -447,6 +456,7 @@ func TestRandomBytesTreatsInvalidPreparedDecimalAsRangeError(t *testing.T) {
 					NewFunctionTestInput(types.T_text.ToType(), []string{value}, nil),
 				},
 				NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), RandomBytes)
+			defer caseTest.Free()
 			caseTest.parameters[0].SetPrepareParamKind(vector.PrepareParamDecimal)
 
 			require.NoError(t, caseTest.result.PreExtendAndReset(1))
@@ -466,6 +476,7 @@ func TestRandomBytesRejectsInvalidFloatLengths(t *testing.T) {
 					NewFunctionTestInput(types.T_float64.ToType(), []float64{value}, nil),
 				},
 				NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), RandomBytes)
+			defer caseTest.Free()
 
 			require.NoError(t, caseTest.result.PreExtendAndReset(1))
 			err := RandomBytes(caseTest.parameters, caseTest.result, proc, 1, nil)
@@ -491,6 +502,7 @@ func TestRandomBytesPreservesUntypedNullAndSkipsMaskedRows(t *testing.T) {
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{"2", "not-a-number"}, nil),
 		},
 		NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil), RandomBytes)
+	defer caseTest.Free()
 	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
 	require.NoError(t, caseTest.result.PreExtendAndReset(2))
 	require.NoError(t, RandomBytes(caseTest.parameters, caseTest.result, proc, 2, selectList))
@@ -512,6 +524,7 @@ func TestRandomBytesAcceptsBoundsAndNull(t *testing.T) {
 		NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil),
 		RandomBytes,
 	)
+	defer testCase.Free()
 
 	require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
 	require.NoError(t, RandomBytes(testCase.parameters, testCase.result, proc, testCase.fnLength, nil))
@@ -537,6 +550,7 @@ func TestRandomBytesRejectsOutOfRangeSignedLengths(t *testing.T) {
 				NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil),
 				RandomBytes,
 			)
+			defer testCase.Free()
 
 			require.NoError(t, testCase.result.PreExtendAndReset(1))
 			err := RandomBytes(testCase.parameters, testCase.result, proc, 1, nil)
@@ -559,6 +573,7 @@ func TestRandomBytesRejectsOutOfRangeUnsignedLengths(t *testing.T) {
 				NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil),
 				RandomBytes,
 			)
+			defer testCase.Free()
 
 			require.NoError(t, testCase.result.PreExtendAndReset(1))
 			err := RandomBytes(testCase.parameters, testCase.result, proc, 1, nil)
@@ -579,6 +594,7 @@ func TestRandomBytesSkipsMaskedOutOfRangeRows(t *testing.T) {
 		NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil),
 		RandomBytes,
 	)
+	defer testCase.Free()
 	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
 
 	require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
@@ -601,6 +617,7 @@ func TestRandomBytesReportsEntropySourceFailure(t *testing.T) {
 		NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil),
 		RandomBytes,
 	)
+	defer testCase.Free()
 
 	require.NoError(t, testCase.result.PreExtendAndReset(1))
 	err := randomBytesWithReader(

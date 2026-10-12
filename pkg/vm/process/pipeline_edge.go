@@ -17,12 +17,17 @@ package process
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 )
+
+type pipelineCapacityNotification struct {
+	ready chan struct{}
+}
 
 // PipelineEdge is an explicit pipeline edge abstraction with typed lifecycle events.
 // It owns both the signal channel and the idempotent terminal state.
@@ -34,6 +39,8 @@ import (
 //  3. Done() provides an observable whole-edge terminal signal.
 //  4. Every send/receive is cancelable via context, or bounded by the edge
 //     timeout configuration.
+//  5. A full data channel wakes blocked producers from bounded receive-side
+//     notifications; Ch2 state remains the authority for actual capacity.
 type PipelineEdge struct {
 	// Ch2 is the underlying data+terminal signal channel.
 	// Exposed for direct select compatibility with PipelineSignalReceiver.
@@ -64,6 +71,12 @@ type PipelineEdge struct {
 	endRecorded    int
 	doneClosed     bool
 	abortClosed    bool
+
+	// capacityReady is a receive-side notification used by producers that wait
+	// before pulling another upstream batch. It is deliberately separate from
+	// Ch2: Ch2 remains the data protocol, while this channel only replaces
+	// timer-based polling when a receive creates buffer capacity.
+	capacityReady atomic.Pointer[pipelineCapacityNotification]
 }
 
 // NewPipelineEdge creates a new PipelineEdge.
@@ -110,6 +123,7 @@ done:
 	e.Ch2 = make(chan PipelineSignal, channelBufferSize)
 	e.NilBatchCnt = nilBatchCnt
 	e.OrderedStream = false
+	e.resetCapacityNotification()
 	e.resetTerminalStateLocked()
 }
 
@@ -127,7 +141,44 @@ func (e *PipelineEdge) SetNilBatchCntForReuse(nilBatchCnt int) {
 
 	e.NilBatchCnt = nilBatchCnt
 	e.drainChannelLocked()
+	e.resetCapacityNotification()
 	e.resetTerminalStateLocked()
+}
+
+func (e *PipelineEdge) capacityNotification() <-chan struct{} {
+	for {
+		if notification := e.capacityReady.Load(); notification != nil {
+			return notification.ready
+		}
+		size := cap(e.Ch2)
+		if size < 1 {
+			size = 1
+		}
+		created := &pipelineCapacityNotification{ready: make(chan struct{}, size)}
+		if e.capacityReady.CompareAndSwap(nil, created) {
+			return created.ready
+		}
+	}
+}
+
+// notifyCapacityAvailable publishes one receive-side progress event. The
+// notification is only a wake-up hint: waiters always recheck Ch2, so a stale
+// or coalesced event cannot admit data into a full channel.
+func (e *PipelineEdge) notifyCapacityAvailable() {
+	notification := e.capacityReady.Load()
+	if notification == nil {
+		return
+	}
+	select {
+	case notification.ready <- struct{}{}:
+	default:
+	}
+}
+
+// resetCapacityNotification is only called while an edge is being prepared
+// for reuse, when no live sender or receiver may still access it.
+func (e *PipelineEdge) resetCapacityNotification() {
+	e.capacityReady.Store(nil)
 }
 
 // ResetTerminalStateForReuse drains buffered stale signals and clears the

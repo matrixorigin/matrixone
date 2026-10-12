@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,18 +32,6 @@ func aesHex(t *testing.T, value string) []byte {
 	b, err := hex.DecodeString(value)
 	require.NoError(t, err)
 	return b
-}
-
-func aesCase(t *testing.T, proc *process.Process, inputs []FunctionTestInput, expected FunctionTestResult, fn fEvalFn) FunctionTestCase {
-	t.Helper()
-	c := NewFunctionTestCase(proc, inputs, expected, fn)
-	t.Cleanup(func() {
-		c.result.Free()
-		for _, p := range c.parameters {
-			p.Free(proc.Mp())
-		}
-	})
-	return c
 }
 
 // Oracle: OpenSSL 3.6.3 (9 Jun 2026), matching MySQL 8.0.45 EVP mode
@@ -85,20 +72,23 @@ func TestAESModeKnownAnswers(t *testing.T) {
 			key := "0123456789abcdef0123456789abcdef"[:mode.keyLen]
 			plain, ciphertext := "MatrixOne AES\x00\xffstream-mode", string(aesHex(t, tc.ciphertext))
 			for _, decrypt := range []bool{false, true} {
-				input, want, fn := plain, ciphertext, fEvalFn(AESEncrypt)
+				input, want, fn := plain, ciphertext, executeLogicOfOverload(AESEncrypt)
 				if decrypt {
 					input, want, fn = ciphertext, plain, AESDecrypt
 				}
-				c := aesCase(t, proc, []FunctionTestInput{
-					NewFunctionTestInput(types.T_blob.ToType(), []string{input, input}, nil),
-					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{key}, nil),
-					NewFunctionTestInput(types.T_varchar.ToType(), []string{"0123456789abcdef", "0123456789abcdefignored"}, nil),
-				}, NewFunctionTestResult(types.T_blob.ToType(), false, []string{want, want}, nil), fn)
-				ok, info := c.Run()
-				require.True(t, ok, info)
-				// Re-evaluation must reset feedback and not modify any borrowed argument.
-				ok, info = c.Run()
-				require.True(t, ok, info)
+				func() {
+					c := NewFunctionTestCase(proc, []FunctionTestInput{
+						NewFunctionTestInput(types.T_blob.ToType(), []string{input, input}, nil),
+						NewFunctionTestConstInput(types.T_varchar.ToType(), []string{key}, nil),
+						NewFunctionTestInput(types.T_varchar.ToType(), []string{"0123456789abcdef", "0123456789abcdefignored"}, nil),
+					}, NewFunctionTestResult(types.T_blob.ToType(), false, []string{want, want}, nil), fn)
+					defer c.Free()
+					ok, info := c.Run()
+					require.True(t, ok, info)
+					// Re-evaluation must reset feedback and not modify any borrowed argument.
+					ok, info = c.Run()
+					require.True(t, ok, info)
+				}()
 			}
 		})
 	}
@@ -243,7 +233,7 @@ func TestAESKDFVectorContract(t *testing.T) {
 		{[]string{"pbkdf2_hmac", "salt", "1000x"}, "8d7ee6aaba97089a79d01672f0afb145"},
 	} {
 		for _, decrypt := range []bool{false, true} {
-			data, want, fn := "hello", string(aesHex(t, tc.hex)), fEvalFn(AESEncrypt)
+			data, want, fn := "hello", string(aesHex(t, tc.hex)), executeLogicOfOverload(AESEncrypt)
 			if decrypt {
 				data, want, fn = want, data, AESDecrypt
 			}
@@ -253,21 +243,21 @@ func TestAESKDFVectorContract(t *testing.T) {
 			for _, arg := range args {
 				inputs = append(inputs, NewFunctionTestInput(types.T_varchar.ToType(), []string{arg}, nil))
 			}
-			c := aesCase(t, newAESProcess(t, "aes-128-ecb"), inputs, NewFunctionTestResult(types.T_blob.ToType(), false, []string{want}, nil), fn)
-			ok, info := c.Run()
+			c := NewFunctionTestCase(newAESProcess(t, "aes-128-ecb"), inputs, NewFunctionTestResult(types.T_blob.ToType(), false, []string{want}, nil), fn)
+			ok, info := c.RunAndFree()
 			require.True(t, ok, info)
 		}
 	}
 	// Bad options in masked rows must not be validated. NULL data/key wins over
 	// missing/short IV and NULL KDF options. The active row uses a fixed oracle.
-	for _, fn := range []fEvalFn{AESEncrypt, AESDecrypt} {
+	for _, fn := range []executeLogicOfOverload{AESEncrypt, AESDecrypt} {
 		for nullAt := 3; nullAt <= 5; nullAt++ {
 			inputs := make([]FunctionTestInput, 6)
 			for i, arg := range []string{"hello", "password", "", "hkdf", "salt", "info"} {
 				inputs[i] = NewFunctionTestInput(types.T_varchar.ToType(), []string{arg}, []bool{i == nullAt})
 			}
-			c := aesCase(t, newAESProcess(t, "aes-128-ecb"), inputs, NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), fn)
-			ok, info := c.Run()
+			c := NewFunctionTestCase(newAESProcess(t, "aes-128-ecb"), inputs, NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), fn)
+			ok, info := c.RunAndFree()
 			require.True(t, ok, info)
 		}
 	}
@@ -277,10 +267,10 @@ func TestAESKDFVectorContract(t *testing.T) {
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "", ""}, nil),
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{"bad", "hkdf", "bad"}, nil),
 	}
-	c := aesCase(t, newAESProcess(t, "aes-128-ecb"), inputs, NewFunctionTestResult(types.T_blob.ToType(), false,
+	c := NewFunctionTestCase(newAESProcess(t, "aes-128-ecb"), inputs, NewFunctionTestResult(types.T_blob.ToType(), false,
 		[]string{"", string(aesHex(t, "7d0cfc63f883519e5b8f78de8933dee6")), ""}, []bool{true, false, true}), AESEncrypt).
 		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true}})
-	ok, info := c.Run()
+	ok, info := c.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -346,8 +336,9 @@ func TestAESRuntimeModeAndInvalidPadding(t *testing.T) {
 	ov, err := GetFunctionById(t.Context(), bound.GetEncodedOverloadID())
 	require.NoError(t, err)
 	fn, _, _, _ := ov.GetExecuteMethod()
-	c := aesCase(t, proc, inputs, NewFunctionTestResult(types.T_blob.ToType(), false,
-		[]string{string(aesHex(t, "5badfd1415739b9107e0c81ac459e8109e00e6f9ee9976749bc724dec474eed2"))}, nil), fEvalFn(fn))
+	c := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_blob.ToType(), false,
+		[]string{string(aesHex(t, "5badfd1415739b9107e0c81ac459e8109e00e6f9ee9976749bc724dec474eed2"))}, nil), executeLogicOfOverload(fn))
+	defer c.Free()
 	ok, info := c.Run()
 	require.True(t, ok, info)
 	mode = "aes-128-cfb1"
@@ -358,11 +349,11 @@ func TestAESRuntimeModeAndInvalidPadding(t *testing.T) {
 	// OpenSSL enc -aes-128-ecb -nopad -K 30313233343536373839616263646566
 	// on 32 ASCII spaces: decrypts to an invalid 32-byte padding run.
 	bad := string(aesHex(t, "92f3e260a3927b6043f3e17f0db5413292f3e260a3927b6043f3e17f0db54132"))
-	d := aesCase(t, newAESProcess(t, "aes-128-ecb"), []FunctionTestInput{
+	d := NewFunctionTestCase(newAESProcess(t, "aes-128-ecb"), []FunctionTestInput{
 		NewFunctionTestInput(types.T_blob.ToType(), []string{bad, "", "short"}, nil),
 		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"0123456789abcdef"}, nil),
 	}, NewFunctionTestResult(types.T_blob.ToType(), false, []string{"", "", ""}, []bool{true, true, true}), AESDecrypt)
-	ok, info = d.Run()
+	ok, info = d.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -394,30 +385,31 @@ func TestAESCancellation(t *testing.T) {
 	}
 	proc := newAESProcess(t, "aes-128-ecb")
 	proc.Ctx = ctx
-	c := aesCase(t, proc, []FunctionTestInput{
+	c := NewFunctionTestCase(proc, []FunctionTestInput{
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{"hello"}, nil),
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{"password"}, nil),
 	}, NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), AESEncrypt)
+	defer c.Free()
 	require.NoError(t, c.result.PreExtendAndReset(1))
 	require.ErrorIs(t, c.fn(c.parameters, c.result, proc, 1, nil), context.Canceled)
 }
 
 func TestAESAllMaskedSkipsWork(t *testing.T) {
-	for _, fn := range []fEvalFn{AESEncrypt, AESDecrypt} {
+	for _, fn := range []executeLogicOfOverload{AESEncrypt, AESDecrypt} {
 		proc := newAESProcess(t, "aes-192-cfb1")
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		proc.Ctx = ctx
 		// AllNull intentionally carries no bitmap. Even cancellation, invalid
 		// IV and invalid KDF must not be evaluated for a wholly masked input.
-		var inputs []FunctionTestInput
+		inputs := make([]FunctionTestInput, 0, 4)
 		for _, arg := range []string{"hello", "password", "short", "bad"} {
 			inputs = append(inputs, NewFunctionTestInput(types.T_varchar.ToType(), []string{arg, arg}, nil))
 		}
-		c := aesCase(t, proc, inputs, NewFunctionTestResult(types.T_blob.ToType(), false,
+		c := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_blob.ToType(), false,
 			[]string{"", ""}, []bool{true, true}), fn).
 			WithSelectList(&FunctionSelectList{AllNull: true, AnyNull: true})
-		ok, info := c.Run()
+		ok, info := c.RunAndFree()
 		require.True(t, ok, info)
 	}
 }

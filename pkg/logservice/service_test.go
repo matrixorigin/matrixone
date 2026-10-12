@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	hapkg "github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -44,6 +45,31 @@ type failOpenFS struct {
 	vfs.FS
 	path string
 	err  error
+}
+
+type closeOrderDataSync struct {
+	closed bool
+}
+
+func (d *closeOrderDataSync) Append(context.Context, uint64, []byte)     {}
+func (d *closeOrderDataSync) NotifyReplicaID(uint64, uint64, ChangeType) {}
+func (d *closeOrderDataSync) Close() error {
+	d.closed = true
+	return nil
+}
+
+type closeOrderRPCServer struct {
+	dataSync *closeOrderDataSync
+}
+
+func (s *closeOrderRPCServer) Start() error { return nil }
+func (s *closeOrderRPCServer) Close() error {
+	if s.dataSync.closed {
+		return errors.New("data sync closed before rpc ingress")
+	}
+	return nil
+}
+func (s *closeOrderRPCServer) RegisterRequestHandler(func(context.Context, morpc.RPCMessage, uint64, morpc.ClientSession) error) {
 }
 
 func (f *failOpenFS) Open(name string, opts ...vfs.OpenOption) (vfs.File, error) {
@@ -119,6 +145,20 @@ func TestNewService(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.NoError(t, service.Close())
+	assert.NoError(t, service.Close())
+}
+
+func TestServiceCloseStopsRPCBeforeDataSync(t *testing.T) {
+	ds := &closeOrderDataSync{}
+	service := &Service{
+		stopper:  stopper.NewStopper(t.Name()),
+		server:   &closeOrderRPCServer{dataSync: ds},
+		dataSync: ds,
+	}
+
+	require.NoError(t, service.Close())
+	require.True(t, ds.closed)
+	require.NoError(t, service.Close())
 }
 
 func TestNewServiceClosesStoreOnMetadataFailure(t *testing.T) {

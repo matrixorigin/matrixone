@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -81,10 +80,8 @@ const (
 	checkSnapshotTsFormat = `select snapshot_id from mo_catalog.mo_snapshots where ts = %d order by snapshot_id;`
 
 	restoreTableDataByTsFmt = "create table %s clone %s {MO_TS = %d }"
-	//restoreTableDataByTsFmt = "insert into %s SELECT * FROM %s {MO_TS = %d }"
 
 	restoreTableDataByNameFmt = "create table %s clone %s {SNAPSHOT = %s}"
-	//restoreTableDataByNameFmt = "insert into %s SELECT * FROM %s {SNAPSHOT = %s}"
 
 	getPastAccountsFmt = "select account_id, account_name, admin_name, comments from mo_catalog.mo_account {MO_TS = %d } ORDER BY account_id ASC;"
 
@@ -98,8 +95,6 @@ const (
 )
 
 var (
-	isRestoreByCloneSql = regexp.MustCompile("create table.*clone")
-
 	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", moCatalog}
 
 	// systemCatalogRestorePolicies is the ownership boundary for mo_catalog
@@ -1712,9 +1707,12 @@ func restoreSystemDatabase(
 		}
 
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
-		tblInfo.createSql, err = getCreateTableSql(ctx, bh, tempSnap, dbName, tblInfo.tblName)
-		if err != nil {
-			return err
+		// Sequences use their CREATE definition; table schemas belong to CLONE.
+		if isSequence(tblInfo) {
+			tblInfo.createSql, err = getCreateTableSql(ctx, bh, tempSnap, dbName, tblInfo.tblName)
+			if err != nil {
+				return err
+			}
 		}
 
 		// checks if the given context has been canceled.
@@ -1775,7 +1773,7 @@ func dropClusterTable(
 	getLogger(sid).Debug("start to drop exists cluster table")
 
 	// get all tables in mo_catalog
-	tableInfos, err := getTableInfos(ctx, sid, bh, nil, moCatalog, "")
+	tableInfos, err := showFullTables(ctx, sid, bh, nil, moCatalog, "")
 	if err != nil {
 		return
 	}
@@ -2156,25 +2154,13 @@ func recreateTable(
 		return
 	}
 
-	if !isRestoreByCloneSql.MatchString(restoreTableDataByTsFmt) {
-		// create table
-		getLogger(sid).Debug(fmt.Sprintf("[%s] start to create table: %v, create table sql: %s", snapshotName, tblInfo.tblName, tblInfo.createSql))
-		if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
-			if strings.Contains(err.Error(), "no such table") {
-				getLogger(sid).Debug(fmt.Sprintf("[%s] foreign key table %v referenced table not exists, skip restore", snapshotName, tblInfo.tblName))
-				err = nil
-			}
-			return
-		}
-	}
-
 	if curAccountId == toAccountId {
 		// insert data
 		insertIntoSql := restoreTableDataByTsSQL(tblInfo.dbName, tblInfo.tblName, snapshotTs)
 		beginTime := time.Now()
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", snapshotName, tblInfo.tblName, insertIntoSql))
 		if err = bh.Exec(ctx, insertIntoSql); err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) && !strings.Contains(err.Error(), tblInfo.tblName) {
+			if tblInfo.dbName != moCatalog && moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) && !strings.Contains(err.Error(), tblInfo.tblName) {
 				err = nil
 			} else {
 				return err

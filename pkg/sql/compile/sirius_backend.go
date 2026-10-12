@@ -30,15 +30,17 @@ import (
 // may call Release only after its consumer has quiesced. The deadline includes
 // neither a new transaction nor permission to replay an externally visible query.
 type SiriusPrepareRequest struct {
-	AccountID   uint64
-	QueryID     []byte
-	Plan        []byte
-	OutputTypes []planpb.Type
-	Headings    []string
-	Deadline    time.Time
-	Release     func(context.Context) error
-	Snapshot    [12]byte
-	Reads       []SiriusReadDescriptor
+	AccountID          uint64
+	QueryID            []byte
+	Plan               []byte
+	OutputTypes        []planpb.Type
+	Headings           []string
+	Deadline           time.Time
+	Release            func(context.Context) error
+	Snapshot           [12]byte
+	Reads              []SiriusReadDescriptor
+	NativeCapabilities uint64
+	NumericProfile     string
 }
 
 // SiriusInput reserves native credit before a producer materializes its outgoing
@@ -92,11 +94,14 @@ type SiriusExecution interface {
 // Reconcile retains cleanup ownership by statement identity until the previous
 // consumer is quiescent. Close stops admission and drains that ownership.
 type SiriusBackend interface {
+	Capabilities() uint64
 	Prepare(context.Context, SiriusPrepareRequest) (SiriusExecution, error)
 	Reconcile(uint64, []byte, func(context.Context) error) error
 	Close(context.Context) error
 	CanFallbackBeforeVisibility(error) bool
 }
+
+func (*siriusFlightBackend) Capabilities() uint64 { return 0 }
 
 type siriusFlightBackend struct {
 	*sidecarflight.Runtime

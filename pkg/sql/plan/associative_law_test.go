@@ -19,7 +19,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -28,7 +27,7 @@ import (
 
 func TestOuterJoinAssociativityIsReachableFromSQL(t *testing.T) {
 	t.Run("preserved side", func(t *testing.T) {
-		logicalPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+		logicalPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 			select n.n_nationkey, o.o_orderkey
 			from nation n
 			left join orders o on n.n_nationkey = o.o_custkey
@@ -45,7 +44,7 @@ func TestOuterJoinAssociativityIsReachableFromSQL(t *testing.T) {
 	})
 
 	t.Run("nullable side", func(t *testing.T) {
-		logicalPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+		logicalPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 			select n.n_nationkey, c.c_custkey, o.o_orderkey
 			from nation n
 			left join customer c on n.n_nationkey = c.c_nationkey
@@ -63,11 +62,10 @@ func TestOuterJoinAssociativityIsReachableFromSQL(t *testing.T) {
 	})
 
 	t.Run("rollback hint preserves legacy outer shapes", func(t *testing.T) {
-		rt := runtime.ServiceRuntime("")
-		rt.SetGlobalVariables("optimizer_hints", "outerAntiPlanning=1")
-		defer rt.SetGlobalVariables("optimizer_hints", "")
 
-		preservedPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+		setPlanTestGlobalVariable(t, "", "optimizer_hints", "outerAntiPlanning=1")
+
+		preservedPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 			select n.n_nationkey, o.o_orderkey
 			from nation n
 			left join orders o on n.n_nationkey = o.o_custkey
@@ -80,7 +78,7 @@ func TestOuterJoinAssociativityIsReachableFromSQL(t *testing.T) {
 			[]string{"region"},
 		), preservedPlan.GetQuery().String())
 
-		nullablePlan, err := runOneStmt(NewMockOptimizer(false), t, `
+		nullablePlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 			select n.n_nationkey, c.c_custkey, o.o_orderkey
 			from nation n
 			left join customer c on n.n_nationkey = c.c_nationkey
@@ -99,7 +97,7 @@ func TestOuterJoinAssociativityIsReachableFromSQL(t *testing.T) {
 
 func TestOuterJoinPreservedSideAssociativity(t *testing.T) {
 	t.Run("moves unique inner join below left join", func(t *testing.T) {
-		builder := newOuterJoinAssociativityBuilder(true, false)
+		builder := newOuterJoinAssociativityBuilder(t, true, false)
 
 		root, changed := builder.applyOuterJoinPreservedSideRule(4)
 
@@ -110,7 +108,7 @@ func TestOuterJoinPreservedSideAssociativity(t *testing.T) {
 	})
 
 	t.Run("handles commuted upper inner join", func(t *testing.T) {
-		builder := newOuterJoinAssociativityBuilder(true, true)
+		builder := newOuterJoinAssociativityBuilder(t, true, true)
 
 		root, changed := builder.applyOuterJoinPreservedSideRule(4)
 
@@ -121,7 +119,7 @@ func TestOuterJoinPreservedSideAssociativity(t *testing.T) {
 	})
 
 	t.Run("keeps non unique inner input above left join", func(t *testing.T) {
-		builder := newOuterJoinAssociativityBuilder(false, false)
+		builder := newOuterJoinAssociativityBuilder(t, false, false)
 
 		root, changed := builder.applyOuterJoinPreservedSideRule(4)
 
@@ -132,7 +130,7 @@ func TestOuterJoinPreservedSideAssociativity(t *testing.T) {
 	})
 
 	t.Run("keeps condition that references nullable side", func(t *testing.T) {
-		builder := newOuterJoinAssociativityBuilder(true, false)
+		builder := newOuterJoinAssociativityBuilder(t, true, false)
 		builder.qry.Nodes[4].OnList = []*planpb.Expr{associativityEqExpr(1, 2)}
 
 		root, changed := builder.applyOuterJoinPreservedSideRule(4)
@@ -143,7 +141,7 @@ func TestOuterJoinPreservedSideAssociativity(t *testing.T) {
 	})
 
 	t.Run("keeps local limit boundary", func(t *testing.T) {
-		builder := newOuterJoinAssociativityBuilder(true, false)
+		builder := newOuterJoinAssociativityBuilder(t, true, false)
 		builder.qry.Nodes[3].Limit = &planpb.Expr{
 			Typ:  planpb.Type{Id: int32(types.T_uint64)},
 			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 1}}},
@@ -157,7 +155,7 @@ func TestOuterJoinPreservedSideAssociativity(t *testing.T) {
 	})
 
 	t.Run("keeps deterministic condition that can fail", func(t *testing.T) {
-		builder := newOuterJoinAssociativityBuilder(true, false)
+		builder := newOuterJoinAssociativityBuilder(t, true, false)
 		builder.qry.Nodes[3].OnList = append(builder.qry.Nodes[3].OnList,
 			associativityUnsafeCastEqExpr(t, builder, 1, 2))
 
@@ -172,7 +170,7 @@ func TestOuterJoinPreservedSideAssociativity(t *testing.T) {
 
 func TestOuterJoinNullableSideAssociativity(t *testing.T) {
 	t.Run("moves null rejecting inner join below left join", func(t *testing.T) {
-		builder := newOuterJoinAssociativityBuilder(false, false)
+		builder := newOuterJoinAssociativityBuilder(t, false, false)
 		builder.qry.Nodes[4].OnList = []*planpb.Expr{associativityEqExpr(2, 3)}
 
 		root, changed := builder.applyOuterJoinNullableSideRule(4)
@@ -185,7 +183,7 @@ func TestOuterJoinNullableSideAssociativity(t *testing.T) {
 	})
 
 	t.Run("handles commuted upper inner join", func(t *testing.T) {
-		builder := newOuterJoinAssociativityBuilder(false, true)
+		builder := newOuterJoinAssociativityBuilder(t, false, true)
 		builder.qry.Nodes[4].OnList = []*planpb.Expr{associativityEqExpr(2, 3)}
 
 		root, changed := builder.applyOuterJoinNullableSideRule(4)
@@ -198,7 +196,7 @@ func TestOuterJoinNullableSideAssociativity(t *testing.T) {
 	})
 
 	t.Run("keeps condition that references preserved side", func(t *testing.T) {
-		builder := newOuterJoinAssociativityBuilder(false, false)
+		builder := newOuterJoinAssociativityBuilder(t, false, false)
 
 		root, changed := builder.applyOuterJoinNullableSideRule(4)
 
@@ -209,7 +207,7 @@ func TestOuterJoinNullableSideAssociativity(t *testing.T) {
 	})
 
 	t.Run("keeps mixed nullable and preserved-side conditions", func(t *testing.T) {
-		builder := newOuterJoinAssociativityBuilder(false, false)
+		builder := newOuterJoinAssociativityBuilder(t, false, false)
 		builder.qry.Nodes[4].OnList = []*planpb.Expr{
 			associativityEqExpr(2, 3),
 			associativityEqExpr(1, 3),
@@ -223,7 +221,7 @@ func TestOuterJoinNullableSideAssociativity(t *testing.T) {
 	})
 
 	t.Run("keeps upper join without null rejecting nullable column", func(t *testing.T) {
-		builder := newOuterJoinAssociativityBuilder(false, false)
+		builder := newOuterJoinAssociativityBuilder(t, false, false)
 		builder.qry.Nodes[4].OnList = []*planpb.Expr{associativityEqExpr(3, 3)}
 
 		root, changed := builder.applyOuterJoinNullableSideRule(4)
@@ -234,7 +232,7 @@ func TestOuterJoinNullableSideAssociativity(t *testing.T) {
 	})
 
 	t.Run("keeps local limit boundary", func(t *testing.T) {
-		builder := newOuterJoinAssociativityBuilder(false, false)
+		builder := newOuterJoinAssociativityBuilder(t, false, false)
 		builder.qry.Nodes[4].OnList = []*planpb.Expr{associativityEqExpr(2, 3)}
 		builder.qry.Nodes[3].Limit = &planpb.Expr{
 			Typ:  planpb.Type{Id: int32(types.T_uint64)},
@@ -249,7 +247,7 @@ func TestOuterJoinNullableSideAssociativity(t *testing.T) {
 	})
 
 	t.Run("keeps deterministic condition that can fail", func(t *testing.T) {
-		builder := newOuterJoinAssociativityBuilder(false, false)
+		builder := newOuterJoinAssociativityBuilder(t, false, false)
 		builder.qry.Nodes[4].OnList = []*planpb.Expr{
 			associativityEqExpr(2, 3),
 			associativityUnsafeCastEqExpr(t, builder, 2, 3),
@@ -265,7 +263,7 @@ func TestOuterJoinNullableSideAssociativity(t *testing.T) {
 }
 
 func TestOuterJoinAssociativityReportsNoChangeForInnerOnlyTree(t *testing.T) {
-	builder := newOuterJoinAssociativityBuilder(true, false)
+	builder := newOuterJoinAssociativityBuilder(t, true, false)
 	builder.qry.Nodes[3].JoinType = planpb.Node_INNER
 
 	root, changed := builder.applyOuterJoinPreservedSideRule(4)
@@ -277,7 +275,7 @@ func TestOuterJoinAssociativityReportsNoChangeForInnerOnlyTree(t *testing.T) {
 	require.Equal(t, int32(4), root)
 }
 
-func newOuterJoinAssociativityBuilder(uniqueInner, commuteUpper bool) *QueryBuilder {
+func newOuterJoinAssociativityBuilder(t testing.TB, uniqueInner, commuteUpper bool) *QueryBuilder {
 	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
 	scan := func(id, tag int32, name string) *planpb.Node {
 		return &planpb.Node{
@@ -323,7 +321,7 @@ func newOuterJoinAssociativityBuilder(uniqueInner, commuteUpper bool) *QueryBuil
 
 	return &QueryBuilder{
 		qry:     &planpb.Query{Nodes: nodes},
-		compCtx: NewMockCompilerContext(true),
+		compCtx: NewMockCompilerContext(true, newPlanTestProcess(t)),
 	}
 }
 
@@ -378,7 +376,7 @@ func TestJoinRewritesPreserveDiagnosticInputs(t *testing.T) {
 	for _, rule := range []string{"associate-right", "associate-left", "semi", "anti"} {
 		for _, diagnostic := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/diagnostic=%t", rule, diagnostic), func(t *testing.T) {
-				builder := newOuterJoinAssociativityBuilder(true, false)
+				builder := newOuterJoinAssociativityBuilder(t, true, false)
 				builder.qry.Nodes[3].JoinType = planpb.Node_INNER
 				builder.qry.Nodes[2].Stats.Selectivity = 0.1
 				builder.qry.Nodes[4].OnList = []*planpb.Expr{associativityEqExpr(2, 3)}
@@ -439,7 +437,7 @@ func TestDiagnosticJoinKeepsFilterAndLifetimeBoundaries(t *testing.T) {
 	for _, diagnostic := range []bool{false, true} {
 		for _, rule := range []string{"filter-inner", "filter-left", "remove-left", "remove-subtree", "top-left"} {
 			t.Run(fmt.Sprintf("%s/diagnostic=%t", rule, diagnostic), func(t *testing.T) {
-				builder := newOuterJoinAssociativityBuilder(true, false)
+				builder := newOuterJoinAssociativityBuilder(t, true, false)
 				if diagnostic {
 					addStatementDiagnosticToJoin(t, builder, 3)
 				}

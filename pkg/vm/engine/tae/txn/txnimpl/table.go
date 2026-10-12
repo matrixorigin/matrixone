@@ -127,8 +127,6 @@ type txnTable struct {
 	transferredTombstoneRollback      bool
 	transferredTombstoneCleanupLogged bool
 
-	dedupTS types.TS
-
 	idx int
 
 	// expectedAutoIncrEpochs are the known CN allocator epochs this
@@ -1414,7 +1412,7 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phas
 		return err
 	}
 	pkVec.Close()
-	tbl.dedupTS = ts
+	baseTable.dedupTS = ts
 	return
 }
 
@@ -1572,19 +1570,20 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 	phase string,
 	ts types.TS,
 ) (err error) {
+	base := tbl.getBaseTable(isTombstone)
 	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
 		now := tbl.store.rt.Now()
-		if tbl.dedupTS.IsEmpty() {
-			tbl.dedupTS = tbl.store.txn.GetStartTS()
+		if base.dedupTS.IsEmpty() {
+			base.dedupTS = tbl.store.txn.GetStartTS()
 		}
 		var rowIDs containers.Vector
-		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(tbl.store.ctx, pks, tbl.dedupTS.Next(), ts, phase == txnif.PrePreparePhase)
+		rowIDs, err = base.incrementalGetRowsByPK(tbl.store.ctx, pks, base.dedupTS.Next(), ts, phase == txnif.PrePreparePhase)
 		if err != nil {
 			return
 		}
 		defer rowIDs.Close()
 		if !isTombstone {
-			err = tbl.findDeletes(tbl.store.ctx, rowIDs, tbl.dedupTS.Next(), now)
+			err = tbl.findDeletes(tbl.store.ctx, rowIDs, base.dedupTS.Next(), now)
 			if err != nil {
 				return
 			}
@@ -1601,7 +1600,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 					zap.String("table", tbl.dataTable.schema.Name),
 					zap.Bool("is tombstone", isTombstone),
 					zap.String("phase", phase),
-					zap.String("from", tbl.dedupTS.Next().ToString()),
+					zap.String("from", base.dedupTS.Next().ToString()),
 					zap.String("to", ts.ToString()),
 				)
 				entry := common.TypeStringValue(*pks.GetType(), pks.Get(i), false)
@@ -1620,7 +1619,8 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.
 	metaLocs := make([]objectio.Location, 0)
 	blkCount := stats.BlkCnt()
 	totalRow := stats.Rows()
-	schema := tbl.getBaseTable(isTombstone).schema
+	base := tbl.getBaseTable(isTombstone)
+	schema := base.schema
 	blkMaxRows := schema.Extra.BlockMaxRows
 	for i := uint16(0); i < uint16(blkCount); i++ {
 		var blkRow uint32
@@ -1656,16 +1656,16 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.
 		defer pks.Close()
 		var rowIDs containers.Vector
 		now := tbl.store.rt.Now()
-		if tbl.dedupTS.IsEmpty() {
-			tbl.dedupTS = tbl.store.txn.GetStartTS()
+		if base.dedupTS.IsEmpty() {
+			base.dedupTS = tbl.store.txn.GetStartTS()
 		}
-		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(ctx, pks, tbl.dedupTS.Next(), now, true)
+		rowIDs, err = base.incrementalGetRowsByPK(ctx, pks, base.dedupTS.Next(), now, true)
 		if err != nil {
 			return
 		}
 		defer rowIDs.Close()
 		if !isTombstone {
-			err = tbl.findDeletes(ctx, rowIDs, tbl.dedupTS, now)
+			err = tbl.findDeletes(ctx, rowIDs, base.dedupTS, now)
 		}
 		if err != nil {
 			return

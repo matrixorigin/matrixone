@@ -256,16 +256,23 @@ func BenchmarkGroupSpillSelectedFixedRows(b *testing.B) {
 	})
 
 	for _, test := range []struct {
-		name string
-		fast bool
+		name     string
+		fast     bool
+		nullable bool
 	}{
 		{name: "reference"},
 		{name: "coalesced", fast: true},
+		{name: "nullable", fast: true, nullable: true},
 	} {
 		b.Run(test.name, func(b *testing.B) {
+			if test.nullable {
+				source.SetNull(32)
+				b.Cleanup(func() { source.GetNulls().Del(32) })
+			}
 			writer, err := newGroupSpillWriter(
 				&container{mp: pool}, io.Discard, context.Background(), nil)
 			require.NoError(b, err)
+			b.Cleanup(writer.Free)
 			record := spillRecordWriter{target: writer}
 			var target io.Writer = &record
 			if !test.fast {
@@ -281,7 +288,6 @@ func BenchmarkGroupSpillSelectedFixedRows(b *testing.B) {
 			}
 			b.StopTimer()
 			require.NoError(b, writer.Flush())
-			writer.Free()
 		})
 	}
 }

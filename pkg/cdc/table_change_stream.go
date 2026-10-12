@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -88,7 +87,11 @@ type TableChangeStream struct {
 	// initialSnapshotEpoch is non-zero only for tasks whose persisted protocol
 	// guarantees that every partial-snapshot retry uses the same source image.
 	initialSnapshotEpoch types.TS
+	epochBoundedSnapshot bool
+	recoverySnapshot     bool
+	recoveryStart        types.TS
 	ownerFence           *OwnerFence
+	tableDetector        *TableDetector
 
 	// Column indices (for AtomicBatch)
 	insTsColIdx           int
@@ -178,7 +181,11 @@ type tableChangeStreamOptions struct {
 	initialSnapshotLimiter    *InitialSnapshotLimiter
 	initialSnapshotEpoch      types.TS
 	initialSnapshotPending    *bool
+	epochBoundedSnapshot      bool
+	recoverySnapshot          bool
+	recoveryStart             types.TS
 	ownerFence                *OwnerFence
+	tableDetector             *TableDetector
 }
 
 const (
@@ -264,6 +271,24 @@ func WithInitialSnapshotEpoch(epoch types.TS) TableChangeStreamOption {
 	}
 }
 
+// WithEpochBoundedSnapshot keeps a fixed source image even when the selected
+// initial snapshot mode uses one atomic target transaction.
+func WithEpochBoundedSnapshot(enabled bool) TableChangeStreamOption {
+	return func(opts *tableChangeStreamOptions) {
+		opts.epochBoundedSnapshot = enabled
+	}
+}
+
+// WithRecoverySnapshot selects the lower bound for a replacement generation.
+// NoFull uses zero because the new table is entirely post-admission; an
+// explicit StartTs preserves the caller's requested lower bound.
+func WithRecoverySnapshot(enabled bool, start types.TS) TableChangeStreamOption {
+	return func(opts *tableChangeStreamOptions) {
+		opts.recoverySnapshot = enabled
+		opts.recoveryStart = start
+	}
+}
+
 // WithInitialSnapshotPending supplies the durable startup classification. It
 // prevents completed streams from entering the CN-global initial-snapshot
 // limiter and makes an incomplete recreated generation read from an empty,
@@ -272,6 +297,11 @@ func WithInitialSnapshotPending(pending bool) TableChangeStreamOption {
 	return func(opts *tableChangeStreamOptions) {
 		opts.initialSnapshotPending = &pending
 	}
+}
+
+// WithTableDetector binds stream accounting to its owning CN generation.
+func WithTableDetector(detector *TableDetector) TableChangeStreamOption {
+	return func(opts *tableChangeStreamOptions) { opts.tableDetector = detector }
 }
 
 // WithOwnerFence checks that this stream still owns the exact daemon-task
@@ -356,7 +386,8 @@ var NewTableChangeStream = func(
 	// Splitting is safe only when all retries have a durable, stable source
 	// epoch. Legacy tasks lack the protocol marker and stay atomic.
 	retrySafeSnapshotSplit := initSnapshotSplitTxn &&
-		!noFull && startTs.IsEmpty() && !opts.initialSnapshotEpoch.IsEmpty()
+		(!noFull && startTs.IsEmpty() || opts.recoverySnapshot) &&
+		!opts.initialSnapshotEpoch.IsEmpty()
 	// Create data processor
 	dataProcessor := NewDataProcessor(
 		sinker,
@@ -410,7 +441,11 @@ var NewTableChangeStream = func(
 		noFull:                    noFull,
 		initialSnapshotLimiter:    opts.initialSnapshotLimiter,
 		initialSnapshotEpoch:      opts.initialSnapshotEpoch,
+		epochBoundedSnapshot:      opts.epochBoundedSnapshot || retrySafeSnapshotSplit,
+		recoverySnapshot:          opts.recoverySnapshot,
+		recoveryStart:             opts.recoveryStart,
 		ownerFence:                opts.ownerFence,
+		tableDetector:             opts.tableDetector,
 		registered:                make(chan struct{}),
 		insTsColIdx:               insTsColIdx,
 		insCompositedPkColIdx:     insCompositedPkColIdx,
@@ -477,7 +512,7 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 	)
 
 	// 2. Register with CDC detector
-	if detector != nil && detector.cdcStateManager != nil {
+	if detector := s.tableDetector; detector != nil && detector.cdcStateManager != nil {
 		detector.cdcStateManager.AddActiveRunner(s.tableInfo)
 	}
 
@@ -787,7 +822,7 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 	)
 
 	// Unregister from CDC detector
-	if detector != nil && detector.cdcStateManager != nil {
+	if detector := s.tableDetector; detector != nil && detector.cdcStateManager != nil {
 		detector.cdcStateManager.RemoveActiveRunner(s.tableInfo)
 	}
 
@@ -1085,39 +1120,13 @@ func (s *TableChangeStream) isAuxiliaryError(err error, errType string) bool {
 
 // determineRetryable determines if an error is retryable based on error type and context
 func (s *TableChangeStream) determineRetryable(err error) bool {
-	if err == nil {
-		return false
+	if retryable, classified := ClassifyRetryableError(err); classified {
+		return retryable
 	}
-	if IsRetryableOwnerFenceError(err) {
-		return true
-	}
-	if IsRetryableTargetLockError(err) {
-		return true
-	}
-	if IsRetryableConnectionError(err) {
-		return true
-	}
-	if IsOwnerFenceLostError(err) {
-		return false
-	}
-
 	errMsg := err.Error()
-
-	// Control signals (pause/cancel) are not retryable
 	if IsPauseOrCancelError(errMsg) {
 		return false
 	}
-
-	// Check for MatrixOne system/network errors first (before string matching)
-	// Use morpc.GetStatusCategory for unified error classification
-	status := morpc.GetStatusCategory(err)
-	if status == morpc.StatusTransient || status == morpc.StatusUnavailable {
-		return true
-	}
-	if status == morpc.StatusCancelled {
-		return false // Client closing/closed should not retry
-	}
-	// StatusUnknown: continue to check other error types below
 
 	// StaleRead/FileNotFound errors are retryable if recovery is possible
 	if moerr.IsMoErrCode(err, moerr.ErrStaleRead) || moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
@@ -1343,11 +1352,14 @@ func (s *TableChangeStream) processWithTxn(
 	if err != nil {
 		return err
 	}
-	if s.initSnapshotSplitTxn && s.initialSyncPending.Load() {
+	if s.epochBoundedSnapshot && s.initialSyncPending.Load() {
 		// The cached value may belong to a retired source table ID. The durable
 		// frontend classification is authoritative until this generation has
 		// published its first complete snapshot watermark.
 		fromTs = types.TS{}
+		if s.recoverySnapshot {
+			fromTs = s.recoveryStart
+		}
 	}
 
 	// Check if reached end time
@@ -1368,7 +1380,7 @@ func (s *TableChangeStream) processWithTxn(
 	currentSnapshotTs := types.TimestampToTS(GetSnapshotTS(txnOp))
 	toTs := currentSnapshotTs
 	tsCapped := false
-	if fromTs.IsEmpty() && s.initSnapshotSplitTxn {
+	if s.epochBoundedSnapshot && s.initialSyncPending.Load() {
 		toTs = s.initialSnapshotEpoch
 		if !s.endTs.IsEmpty() && toTs.GT(&s.endTs) {
 			toTs = s.endTs
@@ -1391,6 +1403,16 @@ func (s *TableChangeStream) processWithTxn(
 	if !s.endTs.IsEmpty() && toTs.GT(&s.endTs) {
 		toTs = s.endTs
 		tsCapped = true
+	}
+	if s.epochBoundedSnapshot && s.initialSyncPending.Load() &&
+		s.recoverySnapshot && fromTs.Equal(&toTs) {
+		if err := s.watermarkUpdater.UpdateWatermarkOnly(
+			WithWatermarkOwnerFence(ctx, s.ownerFence, s.tableInfo.SourceTblId),
+			s.watermarkKey, &toTs); err != nil {
+			return err
+		}
+		s.initialSyncPending.Store(false)
+		return nil
 	}
 
 	// Consolidated debug log for time range (avoid excessive INFO logging in hot path)
@@ -1421,7 +1443,7 @@ func (s *TableChangeStream) processWithTxn(
 	s.progressTracker.SetTargetWatermark(toTs)
 
 	// Update CDC detector
-	if detector != nil && detector.cdcStateManager != nil {
+	if detector := s.tableDetector; detector != nil && detector.cdcStateManager != nil {
 		detector.cdcStateManager.UpdateActiveRunner(s.tableInfo, fromTs, toTs, true)
 		defer detector.cdcStateManager.UpdateActiveRunner(s.tableInfo, fromTs, toTs, false)
 	}
@@ -1726,7 +1748,7 @@ func (s *TableChangeStream) onWatermarkAdvanced() {
 // handleStaleRead handles StaleRead error by resetting watermark
 // Returns error with retryable flag determined by recoverability
 func (s *TableChangeStream) handleStaleRead(ctx context.Context, txnOp client.TxnOperator) error {
-	if s.initSnapshotSplitTxn {
+	if s.epochBoundedSnapshot {
 		// A partially committed snapshot is correct only for its persisted epoch.
 		// Resetting either an initial or already caught-up stream to a newer
 		// timestamp would leave deleted or changed source primary keys stranded

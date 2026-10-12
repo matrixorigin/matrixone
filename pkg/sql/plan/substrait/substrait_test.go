@@ -46,6 +46,49 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestCollationMetadataSubstraitBoundaries(t *testing.T) {
+	for _, mutate := range []func(*planpb.TableDef){
+		func(table *planpb.TableDef) { table.KeyFormat = 1 },
+		func(table *planpb.TableDef) { table.Indexes = []*planpb.IndexDef{{KeyFormat: 1}} },
+		func(table *planpb.TableDef) {
+			table.Cols[0].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 32, Charset: 3, CollationVersion: 1}
+		},
+	} {
+		q := scanQuery()
+		candidate, err := Export(q)
+		require.NoError(t, err)
+		table := q.Nodes[0].TableDef
+		mutate(table)
+		_, err = Export(q)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		// Revalidate a candidate whose caller-owned plan changed after admission.
+		_, err = candidate.Build(nil)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		_, err = CanonicalSchema(table)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+
+		q = embeddedProjectedScanQuery()
+		embedded, err := ExportEmbeddedMO(q, EmbeddedExportProfile{})
+		require.NoError(t, err)
+		reads, err := embedded.EmbeddedMOReads()
+		require.NoError(t, err)
+		require.Len(t, reads, 1)
+		bindings := map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: EmbeddedReadMO}}
+		wire, err := embedded.BuildEmbedded(bindings)
+		require.NoError(t, err)
+		require.NotEmpty(t, wire)
+		mutate(q.Nodes[0].TableDef)
+		_, err = ExportEmbeddedMO(q, EmbeddedExportProfile{})
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		reads, err = embedded.EmbeddedMOReads()
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		require.Nil(t, reads)
+		wire, err = embedded.BuildEmbedded(bindings)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		require.Nil(t, wire)
+	}
+}
+
 func TestExportBuildSupportedSubset(t *testing.T) {
 	q := scanQuery()
 	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_FILTER, Children: []int32{0}, FilterList: []*planpb.Expr{fn(">", boolType(), col(0), i64(7))}})
@@ -2390,9 +2433,34 @@ func TestBoundCharacterSubstringResultWidths(t *testing.T) {
 }
 
 func TestCharacterSubstringExportDomainProof(t *testing.T) {
-	query := boundSQLQuery(t, "select substring(substring(c_phone, 1, 5), 1, 2) as prefix from tpch.customer")
-	buildSubstraitPlan(t, query)
-	query = boundSQLQuery(t, "select substring(case when c_custkey > 1 then c_phone else c_phone end, 1, 2) as prefix from tpch.customer")
+	for _, tc := range []struct {
+		name     string
+		source   string
+		eligible bool
+	}{
+		{"column", "c_phone", true},
+		{"nested", "substring(c_phone, 1, 5)", true},
+		{"three slices", "substring(substring(c_phone, 1, 8), 1, 5)", true},
+		// Full cast admission still requires the exact overload result width;
+		// the non-narrowing type predicate alone is not an export proof.
+		{"undeclared widening cast", "cast(substring(c_phone, 1, 5) as varchar(15))", false},
+		{"text case", "case when c_custkey > 1 then substring(c_phone, 1, 5) else substring(c_phone, 1, 5) end", true},
+		{"binary", "substring(cast(c_phone as binary), 1, 5)", false},
+		{"mixed case", "case when c_custkey > 1 then c_phone else cast(c_phone as binary) end", false},
+		{"truncating cast", "substring(cast(c_phone as varchar(3)), 1, 2)", false},
+		{"truncating after slice", "cast(substring(c_phone, 1, 5) as varchar(3))", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			query := boundSQLQuery(t, "select substring("+tc.source+", 1, 2) as prefix from tpch.customer")
+			if tc.eligible {
+				buildSubstraitPlan(t, query)
+			} else {
+				_, err := Export(query)
+				require.True(t, IsNotEligible(err), err)
+			}
+		})
+	}
+	query := boundSQLQuery(t, "select substring(case when c_custkey > 1 then c_phone else c_phone end, 1, 2) as prefix from tpch.customer")
 	buildSubstraitPlan(t, query)
 	caseSource := boundNode(t, query, planpb.Node_PROJECT).ProjectList[0].GetF().Args[0]
 	require.True(t, tpchCharacterSliceSourceIsText(caseSource))
@@ -2414,6 +2482,21 @@ func TestCharacterSubstringExportDomainProof(t *testing.T) {
 	bound, err := planbuilder.BindFuncExprImplByPlanExpr(context.Background(), "substring", []*planpb.Expr{source, i64(1), i64(2)})
 	require.NoError(t, err)
 	binary := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varbinary), Width: 15}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+	for _, tc := range []struct {
+		name   string
+		source *planpb.Expr
+		text   bool
+	}{
+		{"retained text", source, true},
+		{"retained binary", binary, false},
+		{"declaration without value", &planpb.Expr{Typ: source.Typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			boundary := planbuilder.DeepCopyExpr(source)
+			boundary.PreparedNumeric = &planpb.PreparedNumericMetadata{StringDomainSource: tc.source}
+			require.Equal(t, tc.text, tpchCharacterSliceSourceIsText(boundary), "columns still require retained input provenance")
+		})
+	}
 	for _, mutate := range []func(*planpb.Expr){
 		func(e *planpb.Expr) { e.Typ.Charset = uint32(types.CharsetBinary) },
 		func(e *planpb.Expr) { e.Typ.Charset = 256 },
@@ -2701,7 +2784,7 @@ func boundSQLQuery(t *testing.T, sql string) *planpb.Query {
 	t.Helper()
 	statement, err := mysql.ParseOne(context.Background(), sql, 1)
 	require.NoError(t, err)
-	built, err := planbuilder.BuildPlan(planbuilder.NewMockCompilerContext(false), statement, false)
+	built, err := planbuilder.BuildPlan(planbuilder.NewMockCompilerContext(false, newPlanTestProcess(t)), statement, false)
 	require.NoError(t, err)
 	query := built.GetQuery()
 	require.NotNil(t, query)

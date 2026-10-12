@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -841,15 +842,22 @@ func Test_openDbConn(t *testing.T) {
 }
 
 func Test_openDbConnFailed(t *testing.T) {
-	stub := gostub.Stub(&tryConn, func(_ context.Context, _ *mysql.Config) (*sql.DB, error) {
-		return nil, moerr.NewInternalErrorNoCtx("")
-	})
-	defer stub.Reset()
+	synctest.Test(t, func(t *testing.T) {
+		var attempts int
+		failure := errors.New("connection failed")
+		stub := gostub.Stub(&tryConn, func(_ context.Context, _ *mysql.Config) (*sql.DB, error) {
+			attempts++
+			return nil, failure
+		})
+		t.Cleanup(stub.Reset)
 
-	conn, err := OpenDbConn(context.Background(), "user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
-	assert.Error(t, err)
-	assert.True(t, IsRetryableConnectionError(err))
-	assert.Nil(t, conn)
+		conn, err := OpenDbConn(context.Background(), "user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+		require.Error(t, err)
+		require.ErrorIs(t, err, failure)
+		require.True(t, IsRetryableConnectionError(err))
+		require.Nil(t, conn)
+		require.Equal(t, 3, attempts)
+	})
 }
 
 func TestOpenDbConnConfigurationErrorIsNotRetryable(t *testing.T) {

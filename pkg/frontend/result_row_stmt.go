@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -31,6 +32,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
 func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColDef, []interface{}, error) {
@@ -321,6 +323,40 @@ func freezeResultMetadata(runner ComputationRunner) {
 	}
 }
 
+// deferredResultMetadata belongs to one statement. A definition retry may
+// replace its plan before output starts; once metadata is published, the
+// existing compiler guard prevents a retry from changing that visible schema.
+type deferredResultMetadata struct {
+	once       sync.Once
+	initialize func() error
+	err        error
+}
+
+func (metadata *deferredResultMetadata) publish() error {
+	metadata.once.Do(func() { metadata.err = metadata.initialize() })
+	return metadata.err
+}
+
+func publishSelectResultMetadata(ses *Session, execCtx *ExecCtx) error {
+	if txnCW, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+		if runningCompile, ok := execCtx.runner.(Compile); ok {
+			txnCW.syncCompileExecution(runningCompile)
+			if runningCompile.PlanGenerationRebuilt() {
+				// Binary execution may retain column packets from the original
+				// prepared generation. Derive fresh packets from the current plan.
+				execCtx.prepareColDef = nil
+			}
+		}
+	}
+	columns, colDefs, err := getSelectColumnsAndResultColumns(execCtx.reqCtx, execCtx.cw)
+	if err != nil {
+		return err
+	}
+	ses.rs = &plan.ResultColDef{ResultCols: colDefs}
+	freezeResultMetadata(execCtx.runner)
+	return execCtx.resper.RespPreMeta(execCtx, columns)
+}
+
 // executeResultRowStmt run the statemet that responses result rows
 func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var columns []interface{}
@@ -373,22 +409,30 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	}
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
-
-		columns, colDefs, err = getSelectColumnsAndResultColumns(execCtx.reqCtx, execCtx.cw)
-		if err != nil {
-			ses.Error(execCtx.reqCtx,
-				"Failed to get columns from computation handler",
-				zap.Error(err))
-			return
-		}
-
-		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
-
 		ses.EnterFPrint(FPResultRowStmtSelect1)
 		defer ses.ExitFPrint(FPResultRowStmtSelect1)
-		freezeResultMetadata(execCtx.runner)
+		if txnCW, ok := execCtx.cw.(*TxnComputationWrapper); ok && txnCW.preparedStmt != nil {
+			// Hold a prepared execution after binding but before any result
+			// metadata is retained or published for deterministic DDL races.
+			fault.TriggerFaultWithContext(execCtx.reqCtx, "prepared-result-metadata-bound")
+		}
 		cursorExecute := execCtx.input != nil && execCtx.input.isCursorExecute
+		queryResultFinalized := false
+		defer func() {
+			// A producer or terminal step can fail after batches were saved.
+			// Cursor staging has its own abort owner; ordinary SELECT must clear
+			// its session state before another statement can save a result.
+			if !cursorExecute && !queryResultFinalized {
+				resetQueryResultState(ses)
+			}
+		}()
 		if cursorExecute {
+			columns, colDefs, err = getSelectColumnsAndResultColumns(execCtx.reqCtx, execCtx.cw)
+			if err != nil {
+				return err
+			}
+			ses.rs = &plan.ResultColDef{ResultCols: colDefs}
+			freezeResultMetadata(execCtx.runner)
 			// A cursor must retain its metadata before the pipeline starts so
 			// captured batches can be decoded, but its execute terminator must
 			// not be sent until all batches have materialized successfully.
@@ -398,9 +442,8 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				return moerr.NewInternalError(execCtx.reqCtx, "prepared cursor requires MySQL response writer")
 			}
 		} else {
-			err = execCtx.resper.RespPreMeta(execCtx, columns)
-			if err != nil {
-				return
+			execCtx.resultMetadata = &deferredResultMetadata{
+				initialize: func() error { return publishSelectResultMetadata(ses, execCtx) },
 			}
 		}
 
@@ -414,6 +457,19 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		// todo: add trace
 		if _, err = execCtx.runner.Run(0); err != nil {
 			return
+		}
+		if !cursorExecute {
+			// Empty results never invoke a positive-row output callback. Publish
+			// their metadata only after the successful final plan is known.
+			if err = execCtx.resultMetadata.publish(); err != nil {
+				return err
+			}
+			// Pipeline reset callbacks also run on failed attempts. Finalize a
+			// saved result only after Run succeeds with its final schema.
+			if err = finalizeQueryResult(execCtx); err != nil {
+				return err
+			}
+			queryResultFinalized = true
 		}
 		// Cursor metadata is retained above for decoding, but its wire response
 		// is emitted by respStreamResultRow after transaction finalization. This

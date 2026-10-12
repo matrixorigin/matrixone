@@ -102,7 +102,7 @@ func TestMySQLWireMalformedExecuteKeepsPreparedTypesAndConnection(t *testing.T) 
 		name := getPrepareStmtName(id)
 		parsed, err := mysql.Parse(ctx, sql, 1)
 		require.NoError(t, err)
-		prepared, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(),
+		prepared, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)),
 			tree.NewPrepareString(tree.Identifier(name), sql))
 		require.NoError(t, err)
 		stmt := &PrepareStmt{

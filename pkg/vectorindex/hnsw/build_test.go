@@ -49,7 +49,7 @@ func indexCapacityForBuildTest() int {
 
 func TestBuildMulti(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	ndim := 32
@@ -223,7 +223,7 @@ func TestBuildSingleThreadF64(t *testing.T) {
 
 func runBuildSingleThread[T types.RealNumbers](t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	ndim := 32
@@ -376,7 +376,7 @@ func runBuildSingleThread[T types.RealNumbers](t *testing.T) {
 // (the multi-database-worker branch) rather than the single-worker path.
 func TestBuildMultiWorker(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	ndim := 8
@@ -418,7 +418,7 @@ func TestBuildMultiWorker(t *testing.T) {
 // that error instead of finalizing the build as if it had succeeded.
 func TestBuildMultiWorkerLastItemError(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	ndim := 8
@@ -465,7 +465,7 @@ func TestBuildMultiWorkerLastItemError(t *testing.T) {
 // keys survive and finalization succeeds. Run with -race to exercise the race directly.
 func TestBuildMultiWorkerRollover(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	ndim := 8

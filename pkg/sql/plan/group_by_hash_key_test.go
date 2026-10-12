@@ -236,7 +236,7 @@ func TestDetermineGroupByHashKeys(t *testing.T) {
 
 func TestBuildPlanUsesPrimaryKeyAsPhysicalGroupKey(t *testing.T) {
 	logicPlan, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"select empno, ename, sum(sal) from constraint_test.emp group by empno, ename",
 	)
@@ -264,7 +264,7 @@ func TestBuildPlanKeepsAllPhysicalGroupKeysForIncompatiblePrimaryKey(t *testing.
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]
 			require.NotNil(t, table)
 			require.NotNil(t, table.Pkey)
@@ -564,7 +564,7 @@ func TestBuildPlanAnnotatesDistinctRewriteAggregate(t *testing.T) {
 	for _, aggregate := range []string{"count", "sum", "avg"} {
 		t.Run(aggregate, func(t *testing.T) {
 			logicPlan, err := runOneStmt(
-				NewMockOptimizer(false),
+				NewMockOptimizer(false, newPlanTestProcess(t)),
 				t,
 				fmt.Sprintf(
 					"select empno, ename, %s(distinct deptno) from constraint_test.emp group by empno, ename",
@@ -598,7 +598,7 @@ func TestBuildPlanAnnotatesDistinctRewriteAggregate(t *testing.T) {
 
 func TestBuildPlanKeepsMixedCountDistinctParallelMergeable(t *testing.T) {
 	logicPlan, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"select e.deptno, count(d.deptno), count(distinct d.loc) "+
 			"from constraint_test.emp e left join constraint_test.dept d on e.deptno = d.deptno "+
@@ -627,7 +627,7 @@ func TestBuildPlanKeepsMixedCountDistinctParallelMergeable(t *testing.T) {
 
 func TestBuildPlanAnnotatesJoinDistinctRewriteAggregate(t *testing.T) {
 	logicPlan, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"select e.empno, e.ename, count(distinct d.loc) "+
 			"from constraint_test.emp e left join constraint_test.dept d on e.deptno = d.deptno "+
@@ -648,7 +648,7 @@ func TestBuildPlanAnnotatesJoinDistinctRewriteAggregate(t *testing.T) {
 
 func TestBuildPlanAnnotatesJoinPromotedCharDistinctRewriteAggregate(t *testing.T) {
 	logicPlan, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"select e.empno, e.ename, count(distinct "+
 			"coalesce(cast(d.dname as char(8)), cast(d.loc as varchar(8)))) "+

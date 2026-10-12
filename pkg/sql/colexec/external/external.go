@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1067,7 +1068,7 @@ func makeType(typ *plan.Type, flag bool) types.Type {
 	if flag && !isDirectParallelLoadType(types.T(typ.Id)) {
 		return types.New(types.T_varchar, 0, 0)
 	}
-	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
+	return types.MustTypeFromPlan(*typ)
 }
 
 // isDirectParallelLoadType identifies types that must be decoded by the
@@ -1149,6 +1150,44 @@ func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 		}
 	}
 	return false
+}
+
+// isEnumMember reports, without allocating, whether name is a declared member
+// of the ENUM definition, using the same comma split and case folding as
+// types.ParseEnum.
+func isEnumMember(enumValues, name string) bool {
+	if len(enumValues) == 0 {
+		return false
+	}
+	for {
+		i := strings.IndexByte(enumValues, ',')
+		if i < 0 {
+			return strings.EqualFold(enumValues, name)
+		}
+		if strings.EqualFold(enumValues[:i], name) {
+			return true
+		}
+		enumValues = enumValues[i+1:]
+	}
+}
+
+// isPaddedSetInput reports whether val has outer whitespace, as
+// strings.TrimSpace (unicode.IsSpace) would remove it, and is already valid
+// input for the SET definition, as native INSERT parses it. Trimming such a
+// value could select a different member (' a' or '\u00a0a' vs 'a'); padded
+// non-member input keeps being trimmed. Padded input can only be member names
+// (a numeric bitmap never has whitespace), so the non-throwing name match of
+// the SET parser decides. Unpadded values return early without parsing.
+func isPaddedSetInput(setValues, val string) bool {
+	if len(val) == 0 {
+		return false
+	}
+	first, _ := utf8.DecodeRuneInString(val)
+	last, _ := utf8.DecodeLastRuneInString(val)
+	if !unicode.IsSpace(first) && !unicode.IsSpace(last) {
+		return false
+	}
+	return types.MatchSetName(setValues, val)
 }
 
 func shouldLoadEmptyNumericAsZero(param *ExternalParam, id types.T) bool {
@@ -1563,6 +1602,10 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	}
 	field := getFieldFromLine(line, colName, colId, param, fieldIdx)
 	id := types.T(col.Typ.Id)
+	// SET is stored as uint64 but is a logical string type: it must not get
+	// the numeric empty-to-zero fill or numeric-prefix rewriting ("0" may be a
+	// member name).
+	isSet := id == types.T_uint64 && len(col.Typ.Enumvalues) > 0
 	loadDataNonStrictAdjustments := shouldApplyLoadDataNonStrictAdjustments(param)
 	trimSpace := false
 	// T_bit carries raw bytes (parsed byte-by-byte, not as text), so whitespace
@@ -1570,7 +1613,11 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	// otherwise even be converted to NULL below).
 	if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 		id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
-		id != types.T_bit {
+		id != types.T_bit &&
+		// A declared ENUM member is kept as written (e.g. ' ' or ''), and so is
+		// valid SET input, which may name a leading-space member (' a').
+		!(id == types.T_enum && isEnumMember(col.Typ.Enumvalues, field.Val)) &&
+		!(isSet && isPaddedSetInput(col.Typ.Enumvalues, field.Val)) {
 		field.Val = strings.TrimSpace(field.Val)
 		trimSpace = true
 	}
@@ -1585,11 +1632,14 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	}
 	mappedNull := getNullFlag(param.Extern.NullMap, colName, field.Val)
 	isNullOrEmpty := field.IsNull || mappedNull
-	emptyNumericField := len(field.Val) == 0 && !mappedNull && shouldLoadEmptyNumericAsZero(param, id)
+	emptyNumericField := len(field.Val) == 0 && !field.IsNull && !mappedNull && !isSet && shouldLoadEmptyNumericAsZero(param, id)
 	if emptyNumericField {
 		field.Val = "0"
 		isNullOrEmpty = false
-	} else if trimSpace && len(field.Val) == 0 && !isNullOrEmpty {
+	} else if trimSpace && len(field.Val) == 0 && !isNullOrEmpty && !isSet &&
+		!(id == types.T_enum && isEnumMember(col.Typ.Enumvalues, "")) {
+		// The empty SET and a declared empty ENUM member ('') are valid values
+		// distinct from SQL NULL, so only explicit NULL markers become NULL.
 		isNullOrEmpty = true
 	}
 	if isNullOrEmpty {
@@ -1599,7 +1649,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	var temporalValue loadDataTemporalValue
 	if loadDataNonStrictAdjustments {
 		switch {
-		case isLoadNumericAdjustedValueType(id):
+		case isLoadNumericAdjustedValueType(id) && !isSet:
 			if !field.HasStringQuote {
 				field.Val = loadDataNonStrictNumericPrefix(field.Val)
 			}

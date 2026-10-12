@@ -44,7 +44,7 @@ type physicalOwnerViewContext struct {
 }
 
 func TestPersistedDecimalLiteralViewProtocolLifecycle(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -165,7 +165,7 @@ func (c *namedSnapshotViewContext) ResolveSnapshotWithSnapshotName(
 func TestAuthoritativeViewGenerationCapturesDirectDependency(t *testing.T) {
 	const rootSQL = "create view v as select n_nationkey from nation"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
@@ -202,7 +202,7 @@ func TestViewDependencyPhysicalOwnerSurvivesRegeneration(t *testing.T) {
 	const rootSQL = "create view v as select n_nationkey from nation"
 	ctx := &physicalOwnerViewContext{
 		rootSQLCompilerContext: &rootSQLCompilerContext{
-			MockCompilerContext: NewMockCompilerContext(false),
+			MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 			rootSQL:             rootSQL,
 		},
 		accountID: 0,
@@ -230,7 +230,7 @@ func TestViewDependencyPhysicalOwnerSurvivesRegeneration(t *testing.T) {
 func TestAuthoritativeViewGenerationCapturesViewNotItsSources(t *testing.T) {
 	const rootSQL = "create view v2 as select n_nationkey from v1"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
@@ -271,7 +271,7 @@ func TestAuthoritativeViewGenerationCapturesSnapshotBinding(t *testing.T) {
 	snapshot := &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 123}}
 	ctx := &namedSnapshotViewContext{
 		rootSQLCompilerContext: &rootSQLCompilerContext{
-			MockCompilerContext: NewMockCompilerContext(false), rootSQL: rootSQL,
+			MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)), rootSQL: rootSQL,
 		},
 		snapshot: snapshot,
 	}
@@ -292,7 +292,7 @@ func TestAuthoritativeViewGenerationCapturesSnapshotBinding(t *testing.T) {
 }
 
 func TestRegenerateViewDefinitionUsesAuthoritativeGeneratorAndPreservesJSON(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
 	ctx.tables["nation"].DbId = 7
 	ctx.tables["nation"].TblId = 11
@@ -319,7 +319,7 @@ func TestRegenerateViewDefinitionUsesAuthoritativeGeneratorAndPreservesJSON(t *t
 }
 
 func TestRegenerateViewDefinitionUsesReadFloorDuringAuthoringBarrier(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -367,7 +367,7 @@ func TestRegenerateViewDefinitionUsesReadFloorDuringAuthoringBarrier(t *testing.
 }
 
 func TestPersistedStringNumericViewProtocolLifecycle(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -462,7 +462,7 @@ func TestPersistedStringNumericViewProtocolLifecycle(t *testing.T) {
 }
 
 func TestPersistedBinarySliceViewProtocolAdmission(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	table := ctx.tables["nation"]
 	name2col := make(map[string]int32, len(table.Cols)+1)
 	for pos, col := range table.Cols {
@@ -553,7 +553,7 @@ func TestPersistedBinarySliceViewProtocolAdmission(t *testing.T) {
 }
 
 func TestPersistedSpatialDistanceViewProtocolLifecycle(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -625,7 +625,7 @@ func TestPersistedSpatialDistanceViewProtocolLifecycle(t *testing.T) {
 }
 
 func TestPersistedIPFunctionRequirementSurvivesViewFilterFold(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -681,7 +681,7 @@ where inet_ntoa(cast('"2"' as json)) = '0.0.0.2'`
 }
 
 func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.tables["decimal_view_source"] = &planpb.TableDef{
 		Name:      "decimal_view_source",
 		DbName:    "tpch",
@@ -853,7 +853,7 @@ func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
 }
 
 func TestPersistedDecimalZeroTailComparisonViewProtocolLifecycle(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.tables["decimal_zero_tail_source"] = &planpb.TableDef{
 		Name:      "decimal_zero_tail_source",
 		DbName:    "tpch",
@@ -988,7 +988,7 @@ func TestRegenerateViewDefinitionPersistsExpandedStar(t *testing.T) {
 		"create view v (k, name, rkey, comment) as select * from nation",
 	} {
 		t.Run(rootSQL, func(t *testing.T) {
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
 			persisted, err := json.Marshal(map[string]any{
 				"Stmt": rootSQL, "DefaultDatabase": "tpch", "future_field": map[string]bool{"keep": true},
@@ -1021,7 +1021,7 @@ func TestRegenerateViewDefinitionPersistsExpandedStar(t *testing.T) {
 func TestAuthoritativeViewGenerationCapturesLimitZeroStarDependency(t *testing.T) {
 	const rootSQL = "create view v as select * from nation limit 0"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
@@ -1088,7 +1088,7 @@ func TestViewDependencyIdentityKeepsDistinctBindingEnvironments(t *testing.T) {
 }
 
 func TestViewDependencyCaptureScopeAndIdentityFallbacks(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 7, nil }
 	capture := newViewDependencyCaptureContext(ctx)
 
@@ -1129,21 +1129,21 @@ func TestViewDependencyCaptureScopeAndIdentityFallbacks(t *testing.T) {
 }
 
 func TestViewMetadataNestedExpansionBudget(t *testing.T) {
-	capture := newViewDependencyCaptureContext(NewMockCompilerContext(false))
+	capture := newViewDependencyCaptureContext(NewMockCompilerContext(false, newPlanTestProcess(t)))
 	for i := 0; i < MaxViewMetadataColumns; i++ {
 		require.NoError(t, capture.enterNestedView())
 		capture.leaveNestedView()
 	}
 	require.ErrorContains(t, capture.enterNestedView(), "binding budget")
 	require.Zero(t, capture.depth, "rejected expansions must not enter the binding scope")
-	columns := newViewDependencyCaptureContext(NewMockCompilerContext(false))
+	columns := newViewDependencyCaptureContext(NewMockCompilerContext(false, newPlanTestProcess(t)))
 	require.NoError(t, columns.chargeViewColumns(MaxViewMetadataColumns-1))
 	require.NoError(t, columns.chargeViewColumns(1))
 	require.ErrorContains(t, columns.chargeViewColumns(1), "column budget")
 }
 
 func TestViewDependencyCaptureResolveByID(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 7, nil }
 	capture := newViewDependencyCaptureContext(ctx)
 	tableID := ctx.tables["nation"].TblId
@@ -1155,7 +1155,7 @@ func TestViewDependencyCaptureResolveByID(t *testing.T) {
 }
 
 func TestRegenerateViewDefinitionRejectsInvalidPersistedDefinitions(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 
 	_, err := RegenerateViewDefinition(ctx, `{`)
 	require.Error(t, err)
@@ -1186,7 +1186,7 @@ func TestRegenerateViewDefinitionRejectsInvalidPersistedDefinitions(t *testing.T
 }
 
 func TestRegenerateAlterViewUsesPersistedParserEnvironment(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
 	mode := ""
 	lowerCaseTableNames := int64(0)

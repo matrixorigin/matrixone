@@ -34,7 +34,7 @@ func TestCorrelatedLocalCTEImplicitAggregateSpine(t *testing.T) {
 		{"triple nesting", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY), x AS (SELECT COUNT(m) AS c FROM a), y AS (SELECT SUM(c) AS s FROM x) SELECT s FROM y) FROM NATION o`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			query := p.GetQuery()
 			assertReachablePlanHasNoCorrelatedExpr(t, query)
@@ -61,7 +61,7 @@ func TestCorrelatedLocalCTEImplicitAggregateSpineRowRemoval(t *testing.T) {
 		{"grouped nullif count", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY GROUP BY i.N_NATIONKEY) SELECT NULLIF(COUNT(*), 0) FROM a) FROM NATION o`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			assertReachablePlanHasNoCorrelatedExpr(t, p.GetQuery())
 		})
@@ -81,7 +81,7 @@ func TestCorrelatedLocalCTEImplicitAggregateSpineRowRemoval(t *testing.T) {
 		{"volatile filter", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY) SELECT m FROM x WHERE RAND() > 0.5) FROM NATION o`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			want := "correlated aggregate spine"
 			switch tc.name {
 			case "non equality", "or equalities", "like":
@@ -90,7 +90,7 @@ func TestCorrelatedLocalCTEImplicitAggregateSpineRowRemoval(t *testing.T) {
 			require.ErrorContains(t, err, want)
 		})
 	}
-	_, err := runOneStmt(NewMockOptimizer(true), t,
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		`SELECT o.N_NATIONKEY, (WITH x AS (SELECT COUNT(*) AS c FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY) SELECT AVG(c) FROM x) FROM NATION o`)
 	require.ErrorContains(t, err, "unsupported singleton aggregate")
 }
@@ -103,7 +103,7 @@ func TestCorrelatedLocalCTENonEqualityMaxUsesRawRows(t *testing.T) {
 		 WHERE i.N_NATIONKEY = o.N_NATIONKEY OR i.N_NATIONKEY = o.N_NATIONKEY + 1)
 		 SELECT m FROM x) FROM NATION o`,
 	} {
-		p, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
 		require.NoError(t, err)
 		assertReachablePlanHasNoCorrelatedExpr(t, p.GetQuery())
 	}
@@ -128,7 +128,7 @@ func TestCorrelatedLocalCTEPreservesExistingScalarBoundaries(t *testing.T) {
 		{"independent count with correlated filter", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT COUNT(*) AS c FROM NATION i) SELECT c FROM x WHERE c = o.N_NATIONKEY) FROM NATION o`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			assertReachablePlanHasNoCorrelatedExpr(t, p.GetQuery())
 		})
@@ -140,7 +140,7 @@ func TestCorrelatedLocalCTEPreparedNullableFilter(t *testing.T) {
 		`PREPARE ps_max_filter FROM 'SELECT o.N_NATIONKEY, (WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY) SELECT m FROM x WHERE m > ?) FROM NATION o'`,
 		`PREPARE ps_max_having FROM 'SELECT o.N_NATIONKEY, (WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY HAVING MAX(i.N_NATIONKEY) IS NULL OR ? = 1) SELECT m FROM x) FROM NATION o'`,
 	} {
-		_, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
 		require.NoError(t, err)
 	}
 }

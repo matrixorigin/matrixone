@@ -1008,7 +1008,7 @@ func handleCloneTable(
 		}
 	}
 
-	ctx = defines.AttachAccountId(reqCtx, toAccountId)
+	ctx = cloneTargetContext(reqCtx, ses.GetTenantInfo().GetTenantID(), toAccountId)
 
 	var sql string
 	var dstTableExistedBeforeRestore bool
@@ -1297,7 +1297,7 @@ func handleCloneDatabaseWithSource(
 		}()
 	}
 
-	ctx1 = defines.AttachAccountId(reqCtx, source.toAccountId)
+	ctx1 = cloneTargetContext(reqCtx, ses.GetTenantInfo().GetTenantID(), source.toAccountId)
 	if err = bh.Exec(ctx1,
 		fmt.Sprintf("create database %s", quoteIdentifierForSQL(stmt.DstDatabase.String())),
 	); err != nil {
@@ -1524,7 +1524,7 @@ func handleCloneDatabaseWithSource(
 		// The function metadata above is intentionally still uncommitted: the
 		// clone must remain atomic. Mark view restoration so ResolveUdf uses the
 		// same clone transaction and can bind newly restored functions.
-		if err = restoreViews(withResolveUdfInCallerTxn(reqCtx), ses, bh, "", rewrittenViewMap, source.toAccountId, rewrittenViews, true); err != nil {
+		if err = restoreViews(withResolveUdfInCallerTxn(ctx1), ses, bh, "", rewrittenViewMap, source.toAccountId, rewrittenViews, true); err != nil {
 			return
 		}
 	}

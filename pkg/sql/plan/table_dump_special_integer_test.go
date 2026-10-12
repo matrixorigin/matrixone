@@ -43,7 +43,7 @@ func TestTableDumpExactBaseSpecialIntegerBindings(t *testing.T) {
 	var fixtures map[string][]byte
 	require.NoError(t, json.Unmarshal(data, &fixtures))
 	require.Len(t, fixtures, 8)
-	compiler := NewMockCompilerContext(false)
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
 	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
 	ctx := divPrecisionCompilerContext{CompilerContext: compiler, increment: 4}
 	for name, sql := range map[string]string{
@@ -92,7 +92,7 @@ func TestTableDumpLegacyTimeWidthCompatibility(t *testing.T) {
 }
 
 func TestTableDumpLegacySpecialIntegerBindings(t *testing.T) {
-	compiler := NewMockCompilerContext(false)
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
 	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
 	rt := moruntime.ServiceRuntime(compiler.GetProcess().GetService())
 	old, exists := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)

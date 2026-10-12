@@ -28,12 +28,58 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
+
+type testRscController struct {
+	limit    atomic.Int64
+	reserved atomic.Int64
+}
+
+func newTestRscController(initLimit int64) *testRscController {
+	c := &testRscController{}
+	c.limit.Store(initLimit)
+	return c
+}
+
+func (c *testRscController) Refresh() {}
+
+func (c *testRscController) PrintUsage() {}
+
+func (c *testRscController) Acquire(estMem int64) (int64, bool) {
+	c.reserved.Add(estMem)
+	return c.Available(), true
+}
+
+func (c *testRscController) Release(estMem int64) int64 {
+	for {
+		reserved := c.reserved.Load()
+		next := reserved - estMem
+		if next < 0 {
+			next = 0
+		}
+		if c.reserved.CompareAndSwap(reserved, next) {
+			if reserved < estMem {
+				logutil.Warnf("testRscController: releaseResources: %d", estMem)
+			}
+			break
+		}
+	}
+	return c.Available()
+}
+
+func (c *testRscController) Available() int64 {
+	avail := c.limit.Load() - c.reserved.Load()
+	if avail < 0 {
+		return 0
+	}
+	return avail
+}
 
 type dummyExecutor struct{}
 
@@ -243,7 +289,7 @@ func TestScheduler(t *testing.T) {
 	// Admission is part of scheduler behavior, but host memory pressure is not
 	// an input to this unit test. A deterministic controller keeps the test from
 	// silently changing meaning with the CI runner's cgroup state.
-	sched.PatchTestRscController(newSimRscController(16 * common.Const1GBytes))
+	sched.PatchTestRscController(newTestRscController(16 * common.Const1GBytes))
 
 	sched.Start()
 	defer sched.Stop()
@@ -433,6 +479,24 @@ func TestScheduler(t *testing.T) {
 
 }
 
+func TestSchedulerQueryDeadlineUsesInjectedClock(t *testing.T) {
+	clock := newFakeClock()
+	db := catalog.MockDBEntryWithAccInfo(1, 1001)
+	table := catalog.ToMergeTable(catalog.MockTableEntryWithDB(db, 1001))
+	sched := NewMergeScheduler(time.Hour, &dummyCatalogSource{}, &dummyExecutor{}, clock)
+	sched.handleAddTable(table)
+	answer := make(chan *QueryAnswer, 1)
+	for _, remaining := range []time.Duration{time.Hour, 0, -time.Second} {
+		sched.handleQuery(MMsgQuery{Table: table, Answer: answer})
+		require.Equal(t, remaining, (<-answer).NextCheckDue)
+		if remaining == time.Hour {
+			clock.Advance(time.Hour)
+		} else {
+			clock.Advance(time.Second)
+		}
+	}
+}
+
 func TestVacuumRecheckArmsOnFullHollowTopKUsingInjectedClock(t *testing.T) {
 	clock := newFakeClock()
 	db := catalog.MockDBEntryWithAccInfo(1, 1001)
@@ -499,7 +563,7 @@ func TestSchedulerPolicyPatchExpirationUsesInjectedClock(t *testing.T) {
 		&dummyExecutor{},
 		clock,
 	)
-	sched.PatchTestRscController(newSimRscController(16 * common.Const1GBytes))
+	sched.PatchTestRscController(newTestRscController(16 * common.Const1GBytes))
 
 	expiresAt := clock.Now().Add(time.Minute)
 	sched.handleTaskTrigger(nil, NewMMsgTaskTrigger(table).
@@ -797,7 +861,7 @@ func TestMergeCompletionAccountingSurvivesRestart(t *testing.T) {
 	table := catalog.ToMergeTable(catalog.MockTableEntryWithDB(db, 1001))
 	source := &dummyCatalogSource{initTables: []catalog.MergeTable{table}}
 	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}
-	rc := newSimRscController(common.Const1GBytes)
+	rc := newTestRscController(common.Const1GBytes)
 	sched := NewMergeScheduler(time.Hour, source, executor, NewStdClock())
 	sched.PatchTestRscController(rc)
 	sched.Start()

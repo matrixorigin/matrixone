@@ -111,6 +111,7 @@ func initMemMetrics() {
 	registry.MustRegister(MallocCounter)
 	registry.MustRegister(MallocGauge)
 	registry.MustRegister(OffHeapInuseGauge)
+	registry.MustRegister(CAllocatorTrimCounter)
 }
 
 func initTaskMetrics() {
@@ -330,7 +331,6 @@ func initPipelineMetrics() {
 	registry.MustRegister(PipelineStreamLifecycleGauge)
 	registry.MustRegister(PipelineStreamFinishDurationHistogram)
 	registry.MustRegister(PipelineRemoteReceiverWaitDurationHistogram)
-	registry.MustRegister(PipelineRemoteNotifyRetryCounter)
 }
 
 func initMongoDBMetrics() {

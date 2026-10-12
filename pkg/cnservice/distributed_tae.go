@@ -75,6 +75,7 @@ func (s *service) initDistributedTAE(
 		hakeeper,
 		s.gossipNode.StatsKeyRouter(),
 		s.cfg.LogtailUpdateWorkerFactor,
+		func(owner *disttae.Engine) { s.storeEngine = owner },
 
 		disttae.WithCNTransferTxnLifespanThreshold(
 			s.cfg.Engine.CNTransferTxnLifespanThreshold,
@@ -105,8 +106,11 @@ func (s *service) initDistributedTAE(
 		return err
 	}
 
-	// Start unified GC scheduler
-	go cnEngine.RunGCScheduler(ctx)
+	// Start the engine-owned GC scheduler. Engine.Close joins it before
+	// releasing engine dependencies.
+	if err = cnEngine.StartGCScheduler(ctx); err != nil {
+		return err
+	}
 
 	ss, ok := runtime.ServiceRuntime(s.cfg.UUID).GetGlobalVariables(runtime.StatusServer)
 	if ok {

@@ -240,7 +240,7 @@ func makeRightDedupEquality(typ types.T) *planpb.Expr {
 // One extra estimated target key can cross a resident-map allocation step even
 // though its relative drift is small. Admission must reach the real optimizer.
 func TestCachedRightDedupGrowthReplansAtMapBoundary(t *testing.T) {
-	mock := NewMockCompilerContext(true)
+	mock := NewMockCompilerContext(true, newPlanTestProcess(t))
 	cache := NewStatsCache()
 	ctx := &fixedStatsCompilerContext{statsCacheCompilerContext: &statsCacheCompilerContext{MockCompilerContext: mock, statsCache: cache}}
 	ctx.GetProcess().Base.Lim.Size = int64(2 * hashtable.EstimateInt64HashMapSize(2048))

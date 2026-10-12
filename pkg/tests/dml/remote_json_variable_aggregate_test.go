@@ -30,15 +30,6 @@ import (
 
 func TestRemoteJSONVariableAggregateTypes(t *testing.T) {
 	var fixtureInvalidationErr error
-	defer func() {
-		if fixtureInvalidationErr != nil {
-			t.Errorf("discarding shared two-CN fixture after an unverified work-state transition: %v", fixtureInvalidationErr)
-			if err := embed.CloseBaseClusterTests(); err != nil {
-				t.Errorf("failed to discard shared two-CN fixture: %v", err)
-			}
-		}
-	}()
-
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()

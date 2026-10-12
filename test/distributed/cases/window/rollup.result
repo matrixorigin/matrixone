@@ -1396,6 +1396,9 @@ b	YES
 select count(*) from grouping_extension_rollup_v where a is null or b is null;
 count(*)
 3
+select count(*) from grouping_extension_rollup_v where b = 10;
+count(*)
+2
 create view grouping_extension_cube_v as select a, b, sum(v) as s from grouping_extension_metadata_src group by cube(a, b);
 select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_cube_v' and column_name in ('a', 'b') order by ordinal_position;
 column_name	is_nullable
@@ -1521,4 +1524,7 @@ a	b	c	s	g
 null	null	null	null	7
 set optimizer_hints = @saved_optimizer_hints;
 drop table grouping_set_decimal_sum_order;
+select count(*) from (select 1 as k, count(*) as n from dual group by rollup(1)) d where k is null;
+count(*)
+1
 drop database rollup_test;

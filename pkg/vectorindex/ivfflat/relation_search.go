@@ -509,12 +509,13 @@ func ivfCentroidPrefixFilter(
 }
 
 func entryScanColumns(includeColumns []string) []string {
-	columns := []string{
+	columns := make([]string, 0, 4+len(includeColumns))
+	columns = append(columns,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
-	}
+	)
 	for _, col := range includeColumns {
 		columns = append(columns, catalog.SystemSI_IVFFLAT_IncludeColPrefix+col)
 	}

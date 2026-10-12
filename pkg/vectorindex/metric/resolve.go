@@ -15,7 +15,7 @@
 // NOTE: This file is intentionally UNTAGGED (no //go:build constraint).
 // The distance KERNELS live in build-tag alternatives — distance_func.go
 // (scalar, !(amd64 && goexperiment.simd)) and distance_func_amd64.go (SIMD,
-// amd64 && go1.26 && goexperiment.simd) — so only one compiles per build. The
+// amd64 && go1.27 && goexperiment.simd) — so only one compiles per build. The
 // resolver / orchestration helpers below are build-tag-independent (they just
 // pick and call a kernel), so they must NOT live in a tagged file, or they
 // would vanish on the SIMD build and break every caller (kmeans / brute_force /

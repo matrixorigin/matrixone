@@ -132,8 +132,14 @@ insert into t1 values(5.3111,2);
 insert into t1 values(177.171,3);
 select count(*) from t1
 where id>=5.3111 and id <=177.171;
+-- Decimal constants use the FLOAT column's comparison domain for both forms.
 select count(*) from t1 
 where id between 5.3111 and 177.171;
+-- Scientific and explicit DOUBLE peers retain the wider comparison domain.
+select count(*) from t1
+where id>=5.3111e0 and id<=177.171e0;
+select count(*) from t1
+where id between cast(5.3111 as double) and cast(177.171 as double);
 drop table t1;
 SELECT (1234.0 BETWEEN 0 AND 1234);
 SELECT 0.000 >= 0;

@@ -465,8 +465,8 @@ func PreserveFoldedLiteralStringDomain(expr *plan.Expr, literal *plan.Literal) {
 		return
 	}
 
-	sourceDomain := types.StaticStringDomain(types.NewWithCharset(
-		types.T(source.Typ.Id), source.Typ.Width, source.Typ.Scale, uint8(source.Typ.Charset)))
+	sourceDomain := types.StaticStringDomain(types.MustTypeFromPlan(
+		source.Typ))
 	if sourceLiteral := source.GetLit(); sourceLiteral != nil {
 		switch sourceLiteral.LiteralForm {
 		case plan.StringLiteralForm_STRING_LITERAL_TEXT:
@@ -477,8 +477,8 @@ func PreserveFoldedLiteralStringDomain(expr *plan.Expr, literal *plan.Literal) {
 			sourceDomain = types.StringDomainBinary
 		}
 	}
-	targetDomain := types.StaticStringDomain(types.NewWithCharset(
-		types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset)))
+	targetDomain := types.StaticStringDomain(types.MustTypeFromPlan(
+		expr.Typ))
 	if sourceDomain == targetDomain {
 		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_NONE
 	} else if sourceDomain == types.StringDomainBinary {

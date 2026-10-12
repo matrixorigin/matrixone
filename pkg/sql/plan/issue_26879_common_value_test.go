@@ -39,7 +39,7 @@ func TestPreparedCommonValueAggregatesPeerDomains(t *testing.T) {
 	} {
 		for _, binary := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/binary=%t", expression, binary), func(t *testing.T) {
-				mock := NewMockOptimizer(false)
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
 				proc := mock.ctxt.GetProcess()
 				params := vector.NewVec(types.T_text.ToType())
 				defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
@@ -89,7 +89,7 @@ func TestPreparedCommonValueRootStringBoundary(t *testing.T) {
 		for _, child := range []string{"coalesce(?,?)", "ifnull(?,?)", "coalesce(?,coalesce(?,?))", "coalesce(?,?),coalesce(?,?)"} {
 			for _, binary := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/%s/binary=%t", name, child, binary), func(t *testing.T) {
-					mock := NewMockOptimizer(false)
+					mock := NewMockOptimizer(false, newPlanTestProcess(t))
 					proc := mock.ctxt.GetProcess()
 					expression := name + "(cast(1 as decimal(38,0)),?," + child + ")"
 					count := strings.Count(expression, "?")
@@ -170,7 +170,7 @@ func TestPreparedCommonValueJointMarkerDomains(t *testing.T) {
 		for _, binary := range []bool{false, true} {
 			for _, reversed := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/binary=%t/reversed=%t", tc.name, binary, reversed), func(t *testing.T) {
-					mock := NewMockOptimizer(false)
+					mock := NewMockOptimizer(false, newPlanTestProcess(t))
 					proc := mock.ctxt.GetProcess()
 					params := vector.NewVec(types.T_text.ToType())
 					defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
@@ -266,39 +266,42 @@ func TestIssue26879PreparedExecutionCommonValue(t *testing.T) {
 			for _, binary := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/%s/binary=%t", domain.name, tc.name, binary), func(t *testing.T) {
 					for row := 0; row < 3; row++ {
-						mock := NewMockOptimizer(false)
-						proc := mock.ctxt.GetProcess()
-						params := vector.NewVec(types.T_text.ToType())
-						defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
-						count := strings.Count(tc.expression, "?")
-						bindings := make([]PreparedSourceBinding, count)
-						values := make([]any, count)
-						for i := range bindings {
-							bindings[i] = PreparedSourceBinding{Position: int32(i), Type: types.T_varchar.ToType()}
-							values[i] = ParamValue{Value: domain.prefix + "2", SourceType: types.T_varchar.ToType(),
-								HasSourceType: true, EnableNumericPrefix: true, IsBinaryProtocol: binary}
-							require.NoError(t, vector.AppendBytes(params, []byte(domain.prefix+"2"), false, proc.Mp()))
-						}
-						proc.SetPrepareParams(params)
-						decimal := fmt.Sprintf("cast(%s%d as decimal(%d,%d))", domain.prefix, row+1, domain.width, domain.scale)
-						sql := "select " + strings.ReplaceAll(tc.expression, "@peer@", decimal) + "=" + decimal
-						stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
-						require.NoError(t, err)
-						defer stmt.Free()
-						bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
-						require.NoError(t, err)
-						if tc.name == "marker-derived peer" {
-							require.True(t, bound.ValueDependent, "runtime-derived DECIMAL must not enter the type-only cache")
-						}
-						q := bound.Plan.GetQuery()
-						expr := q.Nodes[q.Steps[0]].ProjectList[0]
-						result, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
-						if free != nil {
-							defer free()
-						}
-						require.NoError(t, err)
-						require.False(t, result.IsNull(0))
-						require.Equal(t, tc.want[row], vector.GetFixedAtWithTypeCheck[bool](result, 0), "row %d: %s", row+1, expr.String())
+						t.Run(fmt.Sprintf("row_%d", row), func(t *testing.T) {
+							mock := NewMockOptimizer(false, newPlanTestProcess(t))
+							proc := mock.ctxt.GetProcess()
+							params := vector.NewVec(types.T_text.ToType())
+							defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+							count := strings.Count(tc.expression, "?")
+							bindings := make([]PreparedSourceBinding, count)
+							values := make([]any, count)
+							for i := range bindings {
+								bindings[i] = PreparedSourceBinding{Position: int32(i), Type: types.T_varchar.ToType()}
+								values[i] = ParamValue{Value: domain.prefix + "2", SourceType: types.T_varchar.ToType(),
+									HasSourceType: true, EnableNumericPrefix: true, IsBinaryProtocol: binary}
+								require.NoError(t, vector.AppendBytes(params, []byte(domain.prefix+"2"), false, proc.Mp()))
+							}
+							proc.SetPrepareParams(params)
+							decimal := fmt.Sprintf("cast(%s%d as decimal(%d,%d))", domain.prefix, row+1, domain.width, domain.scale)
+							sql := "select " + strings.ReplaceAll(tc.expression, "@peer@", decimal) + "=" + decimal
+							stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+							require.NoError(t, err)
+							defer stmt.Free()
+							bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+							require.NoError(t, err)
+							if tc.name == "marker-derived peer" {
+								require.True(t, bound.ValueDependent, "runtime-derived DECIMAL must not enter the type-only cache")
+							}
+							q := bound.Plan.GetQuery()
+							expr := q.Nodes[q.Steps[0]].ProjectList[0]
+							result, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+							if free != nil {
+								defer free()
+							}
+							require.NoError(t, err)
+							require.False(t, result.IsNull(0))
+							require.Equal(t, tc.want[row], vector.GetFixedAtWithTypeCheck[bool](result, 0), "row %d: %s", row+1, expr.String())
+
+						})
 					}
 				})
 			}

@@ -25,7 +25,7 @@ import (
 )
 
 func TestBuildFullTextIndexScanBuildsSqlForLiteralPattern(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 	fn := makeFullTextIndexScanTestFunc(
 		"",
@@ -54,7 +54,7 @@ func TestBuildFullTextIndexScanBuildsSqlForLiteralPattern(t *testing.T) {
 }
 
 func TestGetFullTextSqlSkipsPreparedPattern(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	fn := makeFullTextIndexScanTestFunc(
 		"",
 		"`test`.`src`",
@@ -69,7 +69,7 @@ func TestGetFullTextSqlSkipsPreparedPattern(t *testing.T) {
 }
 
 func TestGetFullTextSqlRequiresConstantModeForLiteralPattern(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	fn := makeFullTextIndexScanTestFunc(
 		"",
 		"`test`.`src`",
@@ -83,7 +83,7 @@ func TestGetFullTextSqlRequiresConstantModeForLiteralPattern(t *testing.T) {
 }
 
 func TestGetFullTextIndexScanSqlRejectsInvalidParams(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 
 	sql, err := builder.getFullTextIndexScanSql("{", "`test`.`__mo_fts_idx`", "Matrix", int64(tree.FULLTEXT_BOOLEAN))
 	require.Error(t, err)

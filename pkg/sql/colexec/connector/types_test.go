@@ -445,8 +445,10 @@ func TestConnectorAllocationAccountContract(t *testing.T) {
 	require.ErrorIs(t, conn.SetAllocationAccount(nil), mpool.ErrAllocationAccountInvalid)
 	require.NoError(t, conn.SetAllocationAccount(first))
 	require.ErrorIs(t, conn.SetAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
+	require.ErrorIs(t, conn.DrainAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
 	require.ErrorIs(t, conn.ClearAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
 	conn.ctr.sp = &pSpool.PipelineSpool{}
+	require.ErrorIs(t, conn.DrainAllocationAccount(first), mpool.ErrAllocationAccountInvariant)
 	require.ErrorIs(t, conn.ClearAllocationAccount(first), mpool.ErrAllocationAccountInvariant)
 	conn.ctr.sp = nil
 	require.NoError(t, conn.ClearAllocationAccount(first))
@@ -506,6 +508,10 @@ func testConnectorAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 	}
 	conn.CleanupDeferredSpool()
 	require.Same(t, sp, conn.cleanupSpool)
+	require.NoError(t, conn.DrainAllocationAccount(account))
+	require.Nil(t, conn.cleanupSpool)
+	require.Same(t, account, conn.allocationAccount)
+	require.NoError(t, conn.DrainAllocationAccount(account))
 	require.NoError(t, conn.ClearAllocationAccount(account))
 	require.Nil(t, conn.cleanupSpool)
 	src.Clean(mp)

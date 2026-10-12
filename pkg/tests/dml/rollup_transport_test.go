@@ -30,14 +30,6 @@ import (
 // NULL from a ROLLUP sentinel through a real remote sender and receiver.
 func TestRollupRemoteGroupingProvenance(t *testing.T) {
 	var invalidationErr error
-	defer func() {
-		if invalidationErr != nil {
-			t.Errorf("discarding shared fixture: %v", invalidationErr)
-			if err := embed.CloseBaseClusterTests(); err != nil {
-				t.Errorf("close invalid fixture: %v", err)
-			}
-		}
-	}()
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()

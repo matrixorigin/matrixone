@@ -135,7 +135,23 @@ func newSumDecimal64LegacyStateExec(
 }
 
 func (exec *sumDecimal64FastExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	if exec.IsDistinct() {
+		return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	}
+	vec := vectors[0]
+	if groupIndex == -1 || vec.IsNull(uint64(row)) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	x, y := groupIndex>>aggBatchSizeShift, uint64(groupIndex)&aggBatchSizeMask
+	raw := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[row]
+	value := types.Decimal128{B0_63: uint64(raw), B64_127: uint64(int64(raw) >> 63)}
+	sums := chunkArr[types.Decimal128](exec.state[x].vecs[0])
+	sums[y] = sums[y].Add128Unchecked(value)
+	vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])[y]++
+	return nil
 }
 
 func (exec *sumDecimal64FastExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -522,7 +538,29 @@ func newSumDecimal128LegacyStateExec(
 }
 
 func (exec *sumDecimal128FastExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	if exec.IsDistinct() {
+		return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	}
+	vec := vectors[0]
+	if groupIndex == -1 || vec.IsNull(uint64(row)) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	x, y := groupIndex>>aggBatchSizeShift, uint64(groupIndex)&aggBatchSizeMask
+	value := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row]
+	sums := chunkArr[types.Decimal128](exec.state[x].vecs[0])
+	if exec.overflowCheck {
+		var err error
+		if sums[y], err = sums[y].Add128(value); err != nil {
+			return err
+		}
+	} else {
+		sums[y] = sums[y].Add128Unchecked(value)
+	}
+	vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])[y]++
+	return nil
 }
 
 func (exec *sumDecimal128FastExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {

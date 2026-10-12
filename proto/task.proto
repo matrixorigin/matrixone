@@ -88,7 +88,9 @@ option (gogoproto.protosizer_all) = true;
    // a distinct code prevents older CNs from claiming protocol-marked tasks.
    InitCdcStableEpoch = 14;
    InitCdcLosslessStart = 15;
-}
+   // CDC source patterns with lossless identifier encoding.
+   InitCdcSourcePatternV1 = 16;
+ }
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.
  message TaskMetadata {

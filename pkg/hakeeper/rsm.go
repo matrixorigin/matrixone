@@ -62,7 +62,13 @@ const (
 )
 
 type IndexQuery struct{}
-type StateQuery struct{}
+type StateQuery struct {
+	// StateOnly omits the cluster snapshot for assertions that only consume State.
+	// The zero value retains the complete independent checker snapshot.
+	StateOnly bool
+	// Scheduling omits display-only configuration while retaining WAL recovery status.
+	Scheduling bool
+}
 type ScheduleCommandQuery struct{ UUID string }
 type CommandDeliveryStateQuery struct{}
 type ClusterDetailsQuery struct{ Cfg Config }
@@ -499,19 +505,6 @@ func NewStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
 
 func (s *stateMachine) Close() error {
 	return nil
-}
-
-func (s *stateMachine) assignID() uint64 {
-	s.state.NextID++
-	return s.state.NextID
-}
-
-func (s *stateMachine) assignIDByKey(key string) uint64 {
-	if _, ok := s.state.NextIDByKey[key]; !ok {
-		s.state.NextIDByKey[key] = 0
-	}
-	s.state.NextIDByKey[key]++
-	return s.state.NextIDByKey[key]
 }
 
 const bootstrapAllocationRequestPrefix = "\x00bootstrap-allocation-request/"
@@ -1291,35 +1284,33 @@ func (s *stateMachine) resetCommandDeliveryBarrier() {
 }
 
 func (s *stateMachine) handleGetIDCmd(cmd []byte) sm.Result {
-	allocIDCmd := parseAllocateIDCmd(cmd)
-	// Empty key means it is a shared ID.
-	if len(allocIDCmd.Key) == 0 {
-		s.state.NextID++
-		v := s.state.NextID
-		s.state.NextID += allocIDCmd.Batch - 1
-		return sm.Result{Value: v}
-	}
-
-	if allocIDCmd.RequestID != "" {
-		requestKey := bootstrapAllocationRequestKey(allocIDCmd.Key, allocIDCmd.RequestID)
+	request := parseAllocateIDCmd(cmd)
+	// Successful idempotent reservations remain replayable after exhaustion.
+	if request.Key != "" && request.RequestID != "" {
+		requestKey := bootstrapAllocationRequestKey(request.Key, request.RequestID)
 		if id, ok := s.state.NextIDByKey[requestKey]; ok {
 			return sm.Result{Value: id}
 		}
-
-		v := s.assignIDByKey(allocIDCmd.Key)
-		s.state.NextIDByKey[allocIDCmd.Key] += allocIDCmd.Batch - 1
-		s.state.NextIDByKey[requestKey] = v
-		return sm.Result{Value: v}
 	}
-
-	_, ok := s.state.NextIDByKey[allocIDCmd.Key]
-	if !ok {
-		s.state.NextIDByKey[allocIDCmd.Key] = 0
+	current := s.state.NextID
+	if request.Key != "" {
+		current = s.state.NextIDByKey[request.Key]
 	}
-	s.state.NextIDByKey[allocIDCmd.Key]++
-	v := s.state.NextIDByKey[allocIDCmd.Key]
-	s.state.NextIDByKey[allocIDCmd.Key] += allocIDCmd.Batch - 1
-	return sm.Result{Value: v}
+	// Value zero is the existing failed-allocation sentinel. Reject the entire
+	// reservation before mutation so a retry cannot wrap and reuse old IDs.
+	if request.Batch == 0 || request.Batch > math.MaxUint64-current {
+		return sm.Result{}
+	}
+	first := current + 1
+	if request.Key == "" {
+		s.state.NextID = current + request.Batch
+	} else {
+		s.state.NextIDByKey[request.Key] = current + request.Batch
+		if request.RequestID != "" {
+			s.state.NextIDByKey[bootstrapAllocationRequestKey(request.Key, request.RequestID)] = first
+		}
+	}
+	return sm.Result{Value: first}
 }
 
 func (s *stateMachine) handleSetStateCmd(cmd []byte) sm.Result {
@@ -1733,7 +1724,7 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	}
 }
 
-func (s *stateMachine) handleStateQuery() interface{} {
+func (s *stateMachine) handleStateQuery(scheduling bool) interface{} {
 	internal := &pb.CheckerState{
 		Tick:                         s.state.Tick,
 		ClusterInfo:                  s.state.ClusterInfo,
@@ -1752,6 +1743,47 @@ func (s *stateMachine) handleStateQuery() interface{} {
 		IDWatermarkRestoreGeneration: s.state.IDWatermarkRestoreGeneration,
 		LogServiceRecoveryPrepared:   s.state.LogServiceRecoveryPrepared,
 		LogServiceRecoveryCompleted:  s.state.LogServiceRecoveryCompleted,
+	}
+	if scheduling {
+		// Copy records before projecting: the replicated authority and full
+		// configuration queries must remain unchanged. DeepCopy below detaches
+		// all remaining maps, items and protobuf unknown fields.
+		if len(s.state.CNState.Stores) != 0 {
+			internal.CNState.Stores = make(map[string]pb.CNStoreInfo, len(s.state.CNState.Stores))
+			for id, info := range s.state.CNState.Stores {
+				info.ConfigData = nil
+				internal.CNState.Stores[id] = info
+			}
+		}
+		if len(s.state.TNState.Stores) != 0 {
+			internal.TNState.Stores = make(map[string]pb.TNStoreInfo, len(s.state.TNState.Stores))
+			for id, info := range s.state.TNState.Stores {
+				info.ConfigData = nil
+				internal.TNState.Stores[id] = info
+			}
+		}
+		if len(s.state.ProxyState.Stores) != 0 {
+			internal.ProxyState.Stores = make(map[string]pb.ProxyStore, len(s.state.ProxyState.Stores))
+			for id, info := range s.state.ProxyState.Stores {
+				info.ConfigData = nil
+				internal.ProxyState.Stores[id] = info
+			}
+		}
+		if len(s.state.LogState.Stores) != 0 {
+			internal.LogState.Stores = make(map[string]pb.LogStoreInfo, len(s.state.LogState.Stores))
+			for id, info := range s.state.LogState.Stores {
+				config := info.ConfigData
+				info.ConfigData = nil
+				if config != nil {
+					if item, ok := config.Content[pb.WALRecoveryStatusConfigKey]; ok {
+						info.ConfigData = &pb.ConfigData{Content: map[string]*pb.ConfigItem{
+							pb.WALRecoveryStatusConfigKey: item,
+						}}
+					}
+				}
+				internal.LogState.Stores[id] = info
+			}
+		}
 	}
 	copied := deepcopy.Copy(internal)
 	result, ok := copied.(*pb.CheckerState)
@@ -1793,10 +1825,12 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 		}
 	}
 	for uuid, info := range s.state.CNState.Stores {
+		// Capability acknowledgements are reset by an admission barrier, not
+		// the registered CN generation. Keep that internal owner
+		// discoverable while public SQL routing remains gated by readiness.
 		if s.viewMetadataAdmissionActive() &&
 			!info.ViewMetadataAdmissionReady &&
-			(!info.ViewMetadataAdmissionSupported ||
-				info.ViewMetadataAdmissionGeneration == 0) {
+			info.ViewMetadataAdmissionGeneration == 0 {
 			continue
 		}
 		state := pb.NormalState
@@ -1920,8 +1954,11 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 		}
 		return &result, nil
 	}
-	if _, ok := query.(*StateQuery); ok {
-		return s.handleStateQuery(), nil
+	if q, ok := query.(*StateQuery); ok {
+		if q != nil && q.StateOnly {
+			return &pb.CheckerState{State: s.state.State}, nil
+		}
+		return s.handleStateQuery(q != nil && q.Scheduling), nil
 	} else if q, ok := query.(*ScheduleCommandQuery); ok {
 		return s.handleScheduleCommandQuery(q.UUID), nil
 	} else if _, ok := query.(*CommandDeliveryStateQuery); ok {

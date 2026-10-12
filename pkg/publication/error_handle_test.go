@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	gomysql "github.com/go-sql-driver/mysql"
@@ -756,6 +757,48 @@ func TestPolicyDo_BackoffZeroWait(t *testing.T) {
 	assert.Equal(t, 2, calls)
 }
 
+func TestPolicyDo_MaxDurationStopsBeforeBackoff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		calls := 0
+		p := Policy{
+			MaxAttempts: 3,
+			MaxDuration: time.Second,
+			Backoff:     ExponentialBackoff{Base: time.Hour},
+			Classifier:  &mockClassifier{retryable: true},
+		}
+		err := p.Do(context.Background(), func() error {
+			calls++
+			return errors.New("retry me")
+		})
+
+		assert.ErrorIs(t, err, ErrNonRetryable)
+		assert.Equal(t, 1, calls)
+		assert.LessOrEqual(t, time.Since(start), time.Second)
+	})
+}
+
+func TestPolicyDo_MaxDurationPreservesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	calls := 0
+	p := Policy{
+		MaxAttempts: 3,
+		MaxDuration: time.Nanosecond,
+		Backoff:     ExponentialBackoff{Base: time.Hour},
+		Classifier:  &mockClassifier{retryable: true},
+	}
+	err := p.Do(ctx, func() error {
+		calls++
+		cancel()
+		return errors.New("retry me")
+	})
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, calls)
+}
+
 // --- Round 4 additions ---
 
 func TestBuildErrorMetadata_NilOld_Retryable(t *testing.T) {
@@ -842,12 +885,6 @@ func (e *netTempErr) Error() string   { return "temp" }
 func (e *netTempErr) Timeout() bool   { return false }
 func (e *netTempErr) Temporary() bool { return true }
 
-func TestMySQLErrorClassifier_RetryableCode1205(t *testing.T) {
-	c := MySQLErrorClassifier{}
-	err := &gomysql.MySQLError{Number: 1205, Message: "Lock wait timeout"}
-	assert.True(t, c.IsRetryable(err))
-}
-
 func TestPolicyDo_TimerContextCancel(t *testing.T) {
 	// Test the timer + context cancel path (L536-538)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -857,18 +894,16 @@ func TestPolicyDo_TimerContextCancel(t *testing.T) {
 		Classifier:  &mockClassifier{retryable: true},
 		Backoff:     &ExponentialBackoff{Base: 5 * time.Second, Factor: 1},
 	}
-	// Cancel after first call to hit the timer cancel path
+	// Cancel before the backoff timer is created to hit its cancellation path.
 	err := p.Do(ctx, func() error {
 		calls++
 		if calls == 1 {
-			go func() {
-				time.Sleep(10 * time.Millisecond)
-				cancel()
-			}()
+			cancel()
 		}
 		return errors.New("retry me")
 	})
 	assert.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestBuildErrorMetadata_ErrorTypeChanged_RetryableToRetryable(t *testing.T) {
