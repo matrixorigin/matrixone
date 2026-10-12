@@ -57,9 +57,9 @@ func TestViewDefinitionFunctionsPersistAndEnforceProtocol(t *testing.T) {
 	})
 
 	buildView := func(rootSQL string, authoringFloor int64) (*TableDef, error) {
-		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
 		runtime.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor,
-			int64(defines.MORPCVersion111))
+			int64(defines.MORPCVersion112))
 		runtime.SetGlobalVariables(
 			moruntime.PersistedExpressionProtocolAuthoringFloor, authoringFloor)
 		ctx := &rootSQLCompilerContext{
@@ -78,18 +78,18 @@ func TestViewDefinitionFunctionsPersistAndEnforceProtocol(t *testing.T) {
 		return built.GetDdl().GetCreateView().GetTableDef(), nil
 	}
 
-	for _, authoringFloor := range []int64{0, defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110} {
+	for _, authoringFloor := range []int64{0, defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111} {
 		_, err := buildView(rootSQL, authoringFloor)
-		require.ErrorContains(t, err, "protocol version 111")
+		require.ErrorContains(t, err, "protocol version 112")
 	}
 
-	generated, err := buildView(rootSQL, defines.MORPCVersion111)
+	generated, err := buildView(rootSQL, defines.MORPCVersion112)
 	require.NoError(t, err)
 	require.NotNil(t, generated.GetViewSql())
 	var data ViewData
 	require.NoError(t, json.Unmarshal([]byte(generated.GetViewSql().GetView()), &data))
 	require.NotNil(t, data.RequiredProtocolVersion)
-	require.Equal(t, int64(defines.MORPCVersion111), *data.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion112), *data.RequiredProtocolVersion)
 
 	plain, err := buildView("create view plain as select 1", 0)
 	require.NoError(t, err)
@@ -101,7 +101,7 @@ func TestViewDefinitionFunctionsPersistAndEnforceProtocol(t *testing.T) {
 		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, protocol)
 		runtime.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, readFloor)
 		runtime.SetGlobalVariables(
-			moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion111))
+			moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion112))
 		bindCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 		builder := NewQueryBuilder(planpb.Query_SELECT, bindCtx, true, false)
 		_, err := builder.bindView(
@@ -122,24 +122,26 @@ func TestViewDefinitionFunctionsPersistAndEnforceProtocol(t *testing.T) {
 		floor   int64
 		wantErr bool
 	}{
-		{name: "read floor zero rejects", version: defines.MORPCVersion111, floor: 0, wantErr: true},
-		{name: "read floor v104 rejects", version: defines.MORPCVersion111, floor: defines.MORPCVersion104, wantErr: true},
-		{name: "read floor v105 rejects", version: defines.MORPCVersion111, floor: defines.MORPCVersion105, wantErr: true},
-		{name: "read floor v106 rejects", version: defines.MORPCVersion111, floor: defines.MORPCVersion106, wantErr: true},
-		{name: "read floor v108 rejects", version: defines.MORPCVersion111, floor: defines.MORPCVersion108, wantErr: true},
-		{name: "read floor v110 rejects", version: defines.MORPCVersion111, floor: defines.MORPCVersion110, wantErr: true},
-		{name: "immediate predecessor v104 rejects", version: defines.MORPCVersion104, floor: defines.MORPCVersion104, wantErr: true},
-		{name: "immediate predecessor v105 rejects", version: defines.MORPCVersion105, floor: defines.MORPCVersion105, wantErr: true},
-		{name: "immediate predecessor v106 rejects", version: defines.MORPCVersion106, floor: defines.MORPCVersion106, wantErr: true},
-		{name: "immediate predecessor v108 rejects", version: defines.MORPCVersion108, floor: defines.MORPCVersion108, wantErr: true},
-		{name: "immediate predecessor v109 rejects", version: defines.MORPCVersion109, floor: defines.MORPCVersion109, wantErr: true},
-		{name: "immediate predecessor v110 rejects", version: defines.MORPCVersion110, floor: defines.MORPCVersion110, wantErr: true},
-		{name: "current protocol accepts", version: defines.MORPCVersion111, floor: defines.MORPCVersion111},
+		{name: "read floor zero rejects", version: defines.MORPCVersion112, floor: 0, wantErr: true},
+		{name: "read floor v104 rejects", version: defines.MORPCVersion112, floor: defines.MORPCVersion104, wantErr: true},
+		{name: "read floor v105 rejects", version: defines.MORPCVersion112, floor: defines.MORPCVersion105, wantErr: true},
+		{name: "read floor v106 rejects", version: defines.MORPCVersion112, floor: defines.MORPCVersion106, wantErr: true},
+		{name: "read floor v108 rejects", version: defines.MORPCVersion112, floor: defines.MORPCVersion108, wantErr: true},
+		{name: "read floor v110 rejects", version: defines.MORPCVersion112, floor: defines.MORPCVersion110, wantErr: true},
+		{name: "read floor v111 rejects", version: defines.MORPCVersion112, floor: defines.MORPCVersion111, wantErr: true},
+		{name: "predecessor v104 rejects", version: defines.MORPCVersion104, floor: defines.MORPCVersion104, wantErr: true},
+		{name: "predecessor v105 rejects", version: defines.MORPCVersion105, floor: defines.MORPCVersion105, wantErr: true},
+		{name: "predecessor v106 rejects", version: defines.MORPCVersion106, floor: defines.MORPCVersion106, wantErr: true},
+		{name: "predecessor v108 rejects", version: defines.MORPCVersion108, floor: defines.MORPCVersion108, wantErr: true},
+		{name: "predecessor v109 rejects", version: defines.MORPCVersion109, floor: defines.MORPCVersion109, wantErr: true},
+		{name: "predecessor v110 rejects", version: defines.MORPCVersion110, floor: defines.MORPCVersion110, wantErr: true},
+		{name: "immediate predecessor v111 rejects", version: defines.MORPCVersion111, floor: defines.MORPCVersion111, wantErr: true},
+		{name: "current protocol accepts", version: defines.MORPCVersion112, floor: defines.MORPCVersion112},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			bindErr := bindView(test.version, test.floor)
 			if test.wantErr {
-				require.ErrorContains(t, bindErr, "protocol version 111")
+				require.ErrorContains(t, bindErr, "protocol version 112")
 			} else {
 				require.NoError(t, bindErr)
 			}
@@ -176,9 +178,9 @@ func TestViewDefinitionProtocolSurvivesConstantFolding(t *testing.T) {
 	})
 
 	buildView := func(rootSQL string, authoringFloor int64) (*TableDef, error) {
-		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
 		runtime.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor,
-			int64(defines.MORPCVersion111))
+			int64(defines.MORPCVersion112))
 		runtime.SetGlobalVariables(
 			moruntime.PersistedExpressionProtocolAuthoringFloor, authoringFloor)
 		ctx := &rootSQLCompilerContext{
@@ -217,17 +219,17 @@ func TestViewDefinitionProtocolSurvivesConstantFolding(t *testing.T) {
 
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			for _, authoringFloor := range []int64{0, defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110} {
+			for _, authoringFloor := range []int64{0, defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111} {
 				_, err := buildView(test.sql, authoringFloor)
-				require.ErrorContains(t, err, "protocol version 111")
+				require.ErrorContains(t, err, "protocol version 112")
 			}
 
-			created, err := buildView(test.sql, defines.MORPCVersion111)
+			created, err := buildView(test.sql, defines.MORPCVersion112)
 			require.NoError(t, err)
 			var data ViewData
 			require.NoError(t, json.Unmarshal([]byte(created.GetViewSql().GetView()), &data))
 			require.NotNil(t, data.RequiredProtocolVersion)
-			require.Equal(t, int64(defines.MORPCVersion111), *data.RequiredProtocolVersion)
+			require.Equal(t, int64(defines.MORPCVersion112), *data.RequiredProtocolVersion)
 		})
 	}
 }
