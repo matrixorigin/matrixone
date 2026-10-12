@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"context"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -45,7 +46,7 @@ func (expr *UserVarAssignmentExpressionExecutor) Eval(
 	proc *process.Process, batches []*batch.Batch, selectList []bool,
 ) (*vector.Vector, error) {
 	if proc == nil || proc.Base == nil || !proc.Base.IsFrontend {
-		return nil, moerr.NewNotSupported(nil,
+		return nil, moerr.NewNotSupported(context.TODO(),
 			"user-variable assignment is supported only in frontend SELECT projections")
 	}
 	rowCount := expressionRowCount(batches)
