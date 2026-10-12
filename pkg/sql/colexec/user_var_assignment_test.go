@@ -99,6 +99,68 @@ func TestUserVariableAssignmentExecutorPreservesRowReadAfterWrite(t *testing.T) 
 	require.Equal(t, int64(20), committed[0].Value)
 }
 
+func TestUserVariableAssignmentDoesNotShadowSystemVariableReads(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithMPool(mpool.MustNewZero()), testutil.WithFileService(nil))
+	proc.Base.IsFrontend = true
+
+	int64Type := types.T_int64.ToType().PlanType()
+	input := batch.New(nil)
+	input.SetRowCount(1)
+	defer input.Clean(proc.Mp())
+
+	var calls [][2]bool
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+		require.Equal(t, "autocommit", name)
+		calls = append(calls, [2]bool{system, global})
+		return int64(1), nil
+	})
+
+	// Stage a user-variable value with the same name as the system variable.
+	// User-variable reads may see this overlay, but @@autocommit and
+	// @@global.autocommit must still use the resolver.
+	proc.BeginUserVariableAssignment("autocommit", 1)
+	proc.SetUserVariableAssignmentCurrentRow(0)
+	proc.StageUserVariableAssignment(process.UserVariableAssignment{
+		Name:  "autocommit",
+		Type:  int64Type,
+		Value: int64(0),
+	}, 0)
+	proc.SetUserVariableAssignmentCurrentRow(-1)
+
+	newVarExecutor := func(system, global bool) ExpressionExecutor {
+		executor, err := NewExpressionExecutor(proc, &plan.Expr{
+			Typ: int64Type,
+			Expr: &plan.Expr_V{V: &plan.VarRef{
+				Name:   "autocommit",
+				System: system,
+				Global: global,
+			}},
+		})
+		require.NoError(t, err)
+		return executor
+	}
+
+	userExecutor := newVarExecutor(false, false)
+	userResult, err := userExecutor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](userResult, 0))
+	userExecutor.Free()
+
+	sessionExecutor := newVarExecutor(true, false)
+	sessionResult, err := sessionExecutor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](sessionResult, 0))
+	sessionExecutor.Free()
+
+	globalExecutor := newVarExecutor(true, true)
+	globalResult, err := globalExecutor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](globalResult, 0))
+	globalExecutor.Free()
+
+	require.Equal(t, [][2]bool{{true, false}, {true, true}}, calls)
+}
+
 func TestUserVariableAssignmentExecutorEvaluatesOneInputRowAtATime(t *testing.T) {
 	proc := testutil.NewProcess(t, testutil.WithMPool(mpool.MustNewZero()), testutil.WithFileService(nil))
 	proc.Base.IsFrontend = true

@@ -876,7 +876,10 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		expr.maskedNull.SetLength(rowCount)
 		return expr.maskedNull, nil
 	}
-	if proc != nil {
+	// Statement-local overlays belong only to user variables. System-variable
+	// references (including @@global.*) must always go through the session
+	// resolver, even when a user variable has the same name.
+	if proc != nil && !expr.system {
 		if row := proc.GetUserVariableAssignmentCurrentRow(); row >= 0 {
 			if value, ok := proc.ResolveUserVariableAssignment(expr.name, row); ok {
 				if expr.vec != nil {
