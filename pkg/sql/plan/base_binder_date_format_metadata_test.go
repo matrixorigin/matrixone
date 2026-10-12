@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -444,4 +445,85 @@ func BenchmarkHeadingProvenanceStorage(b *testing.B) {
 			ctx.appendHeading("date_format(col2, '%M')", provenance)
 		}
 	})
+}
+
+func TestCTASRepeatedPlanningPreservesSource(t *testing.T) {
+	for _, tc := range []struct{ source, want string }{
+		{"date_format(col2, '%W %M %Y') from time01", "date_format(col2, '%W %M %Y')"},
+		{"date_format(time01.col2, '%W %M %Y') from time01", "date_format(time01.col2, '%W %M %Y')"},
+		{"date_format(col2, '%W %M %Y') as formatted from time01", "formatted"},
+		{"concat(date_format(col2, '%M'), 'X') from time01", "concat(date_format(col2, '%M'), 'X')"},
+		{"time_format(time_col, '%H') from time01", "time_format(time_col, '%H')"},
+		{"year(col2) + 1 from time01", "year(col2) + 1"},
+		{"* from (select date_format(col2, '%M') from time01) q", "date_format(col2, '%M')"},
+		{"(select date_format(col2, '%M') from time01 limit 1)", "(select date_format(col2, '%M') from time01 limit 1)"},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			ctx := newDateFormatCompilerContext(t)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table time02 as select "+tc.source, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			source := tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL)
+			var first *Plan
+			for i := 0; i < 3; i++ {
+				got, err := BuildPlan(ctx, stmt, false)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, got.GetDdl().GetCreateTable().TableDef.Cols[0].Name)
+				require.Equal(t, source, tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL))
+				if first == nil {
+					first = got
+				} else {
+					require.Equal(t, first.GetDdl().GetCreateTable().TableDef.Cols, got.GetDdl().GetCreateTable().TableDef.Cols)
+					require.Equal(t, first.GetDdl().GetCreateTable().CreateAsSelectSql, got.GetDdl().GetCreateTable().CreateAsSelectSql)
+				}
+			}
+		})
+	}
+}
+
+func TestCTASFailedPlanningAndSourceReplacement(t *testing.T) {
+	ctx := newDateFormatCompilerContext(t)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table time02 as select date_format(col2, '%M'), missing from time01", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	original := tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL)
+	_, err = BuildPlan(ctx, stmt, false)
+	require.Error(t, err)
+	require.Equal(t, original, tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL))
+	replacement, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select time_format(time_col, '%H') from time01", 1)
+	require.NoError(t, err)
+	defer replacement.Free()
+	ctas := stmt.(*tree.CreateTable)
+	oldSource := ctas.AsSource
+	ctas.AsSource = replacement.(*tree.Select)
+	defer func() { ctas.AsSource = oldSource }()
+	got, err := BuildPlan(ctx, ctas, false)
+	require.NoError(t, err)
+	require.Equal(t, "time_format(time_col, '%H')", got.GetDdl().GetCreateTable().TableDef.Cols[0].Name)
+}
+
+func TestTreeCloneIsolatesMapsAndSampleColumns(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select sample(col2, 1 rows) from time01", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	source := stmt.(*tree.Select)
+	source.RankOption = &tree.RankOption{Option: map[string]string{"mode": "original"}}
+	copied := DeepCopySelect(source)
+	require.Equal(t, tree.String(source, dialect.MYSQL), tree.String(copied, dialect.MYSQL))
+	copied.RankOption.Option["mode"] = "changed"
+	require.Equal(t, "original", source.RankOption.Option["mode"])
+	sample := copied.Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.SampleExpr)
+	columns, star := sample.GetColumns()
+	require.False(t, star)
+	columns[0].(*tree.UnresolvedName).CStrParts[0] = tree.NewCStr("changed", 1)
+	require.NotEqual(t, tree.String(source, dialect.MYSQL), tree.String(copied, dialect.MYSQL))
+	originalColumns, _ := source.Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.SampleExpr).GetColumns()
+	require.Equal(t, "col2", originalColumns[0].(*tree.UnresolvedName).ColName())
+	// The memo preserves shared maps and prevents cycles from recursing forever.
+	graph := map[string]any{}
+	graph["self"] = graph
+	clone := cloneTreeValue(reflect.ValueOf(graph), make(map[treeClonePointer]reflect.Value)).Interface().(map[string]any)
+	clone["new"] = 1
+	require.Equal(t, 1, clone["self"].(map[string]any)["new"])
+	require.NotContains(t, graph, "new")
 }

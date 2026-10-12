@@ -295,22 +295,19 @@ func TestPartitionAccumulatesDiffs(t *testing.T) {
 		require.Equal(t, []int64{0, 2}, ps, "const second key must not collapse partitions")
 	})
 
-	t.Run("fixed_width_const_null_preserves_prior_boundary", func(t *testing.T) {
-		k1 := vector.NewVec(types.T_int32.ToType())
-		require.NoError(t, vector.AppendFixedList(k1, []int32{1, 1, 2, 2}, nil, mp))
-
-		k2 := vector.NewConstNull(types.T_int32.ToType(), 4, mp)
-
-		sels := []int64{0, 1, 2, 3}
-		ds := make([]bool, len(sels))
-		ps := make([]int64, 0, 4)
-
-		ps = Partition(sels, ds, ps, k1)
-		require.Equal(t, []int64{0, 2}, ps)
-		ps = Partition(sels, ds, ps, k2)
-		require.Equal(t, []int64{0, 2}, ps,
-			"const-NULL second key must not collapse partitions")
-	})
+	for _, typ := range []types.T{types.T_any, types.T_int32} {
+		t.Run(typ.String()+"_const_null_preserves_boundaries", func(t *testing.T) {
+			k := vector.NewConstNull(typ.ToType(), 4, mp)
+			defer k.Free(mp)
+			sels := []int64{3, 0, 2, 1}
+			diffs := []bool{false, false, true, false, true}
+			require.Equal(t, []int64{0, 2}, Partition(sels, diffs, nil, k))
+			require.Equal(t, []bool{true, false, true, false, true}, diffs)
+			require.Equal(t, []int64{0, 2}, PartitionForOrder(sels, diffs, nil, k))
+			require.Empty(t, Partition(nil, nil, []int64{7}, k))
+			require.Equal(t, []int64{0}, PartitionForOrder(sels, make([]bool, 4), nil, k))
+		})
+	}
 
 	t.Run("bytes_null_null_preserves_prior_boundary", func(t *testing.T) {
 		k1 := vector.NewVec(types.T_int32.ToType())

@@ -941,6 +941,24 @@ func (bh *branchHashmap) ForEachShardParallel(fn func(cursor ShardCursor) error,
 		parallelism = shardCount
 	}
 
+	// A serial caller may apply writes inline. Stop at the first error instead
+	// of starting later shards after the transaction's failure is known.
+	if parallelism == 1 {
+		for _, shard := range bh.shards {
+			if shard == nil {
+				continue
+			}
+			if err := func() error {
+				shard.beginIteration()
+				defer shard.endIteration()
+				return fn(&shardCursor{shard: shard})
+			}(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	pool, err := ants.NewPool(parallelism)
 	if err != nil {
 		return err

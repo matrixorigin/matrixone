@@ -312,6 +312,8 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	// are deliberately ineligible for LOAD unique-index promotion.
 	c.clearLoadUniqueIndexPromotion()
 	c.executionGeneration = 0
+	c.runSqlToken = 0
+	c.createNamePinsAdmitted = false
 	c.retryTimes = 0
 	c.resultMetadataFrozen.Store(false)
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
@@ -500,6 +502,8 @@ func (c *Compile) clear() {
 	c.preparedJoinDiagnosticFree = false
 	c.resultSink = nil
 	c.executionGeneration = 0
+	c.runSqlToken = 0
+	c.createNamePinsAdmitted = false
 	c.retryTimes = 0
 	c.affectRows.Store(0)
 	c.addr = ""
@@ -847,7 +851,7 @@ func (c *Compile) preferPrimaryScopeResult(current, candidate scopeRunResult) sc
 }
 
 func (c *Compile) canRetry(err error) bool {
-	if c.disableRetry {
+	if c.disableRetry || c.proc.IncrStatementDisabled() {
 		return false
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode) {
