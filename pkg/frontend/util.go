@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/rand"
 	"os"
 	"strconv"
 	"strings"
@@ -2235,28 +2234,11 @@ func mysqlStringColumnLength(width int32, maxBytesPerCharacter uint32) uint32 {
 	return uint32(length)
 }
 
-// errCodeRollbackWholeTxn denotes that the error code
-// that should rollback the whole txn
-var errCodeRollbackWholeTxn = map[uint16]bool{
-	moerr.ErrRetryForCNRollingRestart: false,
-	moerr.ErrDeadLockDetected:         false,
-	moerr.ErrLockTableBindChanged:     false,
-	moerr.ErrLockTableNotFound:        false,
-	moerr.ErrDeadlockCheckBusy:        false,
-	moerr.ErrLockConflict:             false,
-	moerr.ErrRemoteLockWaitTimeout:    false,
-	moerr.ErrLockWaitTimeout:          false,
-	moerr.ErrTxnUnknown:               false,
-	moerr.ErrBackendClosed:            false,
-	moerr.ErrNoAvailableBackend:       false,
-	moerr.ErrBackendCannotConnect:     false,
-}
-
 // sessionRollsBackTxnOnError reports whether the session has opted into
 // treating this error as fatal to the whole transaction rather than to the
 // statement alone.
 //
-// The static errCodeRollbackWholeTxn set above is infrastructure -- deadlock,
+// The shared moerr.MustRollbackTxn policy covers infrastructure -- deadlock,
 // lock timeout, a backend that went away -- failures after which the
 // transaction genuinely cannot continue, and it is only twelve of the ~240
 // error codes MO defines. Every other error, from a syntax error to a
@@ -2294,61 +2276,7 @@ func sessionRollsBackTxnOnError(ses FeSession, inputErr error) bool {
 }
 
 func isErrorRollbackWholeTxn(inputErr error) bool {
-	if inputErr == nil {
-		return false
-	}
-	me, ok := inputErr.(*moerr.Error)
-	if !ok {
-		// This is not a moerr
-		return false
-	}
-	if _, has := errCodeRollbackWholeTxn[me.ErrorCode()]; has {
-		return true
-	}
-	return false
-}
-
-func getRandomErrorRollbackWholeTxn() error {
-	x := rand.Intn(len(errCodeRollbackWholeTxn))
-	arr := make([]uint16, 0, len(errCodeRollbackWholeTxn))
-	for k := range errCodeRollbackWholeTxn {
-		arr = append(arr, k)
-	}
-	return newErrorRollbackWholeTxn(arr[x])
-}
-
-// newErrorRollbackWholeTxn keeps the test error factory in sync with
-// errCodeRollbackWholeTxn. Its deterministic input lets tests cover every map
-// entry instead of relying on getRandomErrorRollbackWholeTxn to select it.
-func newErrorRollbackWholeTxn(code uint16) error {
-	switch code {
-	case moerr.ErrRetryForCNRollingRestart:
-		return moerr.NewRetryForCNRollingRestart()
-	case moerr.ErrDeadLockDetected:
-		return moerr.NewDeadLockDetectedNoCtx()
-	case moerr.ErrLockTableBindChanged:
-		return moerr.NewLockTableBindChangedNoCtx()
-	case moerr.ErrLockTableNotFound:
-		return moerr.NewLockTableNotFoundNoCtx()
-	case moerr.ErrDeadlockCheckBusy:
-		return moerr.NewDeadlockCheckBusyNoCtx()
-	case moerr.ErrLockConflict:
-		return moerr.NewLockConflictNoCtx()
-	case moerr.ErrRemoteLockWaitTimeout:
-		return moerr.NewRemoteLockWaitTimeoutNoCtx()
-	case moerr.ErrLockWaitTimeout:
-		return moerr.NewLockWaitTimeoutNoCtx()
-	case moerr.ErrTxnUnknown:
-		return moerr.NewTxnUnknown(context.Background(), "test")
-	case moerr.ErrBackendClosed:
-		return moerr.NewBackendClosedNoCtx()
-	case moerr.ErrNoAvailableBackend:
-		return moerr.NewNoAvailableBackendNoCtx()
-	case moerr.ErrBackendCannotConnect:
-		return moerr.NewBackendCannotConnectNoCtx("test")
-	default:
-		panic(fmt.Sprintf("unsupported error code %d", code))
-	}
+	return moerr.MustRollbackTxn(inputErr)
 }
 
 func skipClientQuit(info string) bool {
