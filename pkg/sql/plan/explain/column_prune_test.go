@@ -784,6 +784,84 @@ func TestColumnPruneSemanticBoundaries(t *testing.T) {
 	}
 }
 
+func TestUnionAllAggregateOutputPruning(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		sql    string
+		aggs   []string
+		width  int
+		having bool
+	}{
+		{
+			name: "unused sum",
+			sql: "select c from (select count(*) c, sum(n_nationkey) s from nation union all " +
+				"select count(*), sum(r_regionkey) from region) u",
+			aggs: []string{"starcount"}, width: 1,
+		},
+		{
+			name: "referenced sum at nonzero ordinal",
+			sql: "select s from (select count(*) c, sum(n_nationkey) s from nation union all " +
+				"select count(*), sum(r_regionkey) from region) u",
+			aggs: []string{"sum"}, width: 1,
+		},
+		{
+			name: "both results referenced",
+			sql: "select c,s from (select count(*) c, sum(n_nationkey) s from nation union all " +
+				"select count(*), sum(r_regionkey) from region) u",
+			aggs: []string{"starcount", "sum"}, width: 2,
+		},
+		{
+			name: "hidden grouping and having consumers",
+			sql: "select c from (select count(*) c, avg(n_nationkey) unused, sum(n_regionkey) s " +
+				"from nation group by n_nationkey having sum(n_regionkey)>0 union all " +
+				"select count(*), avg(r_regionkey), sum(r_regionkey) from region " +
+				"group by r_regionkey having sum(r_regionkey)>0) u",
+			aggs: []string{"starcount", "sum"}, width: 1, having: true,
+		},
+		{
+			name: "unused effectful aggregate remains owned",
+			sql: "select c from (select count(*) c, sum(sleep(0)) s from nation union all " +
+				"select count(*), sum(sleep(0)) from region) u",
+			aggs: []string{"starcount", "sum"}, width: 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := buildOneStmt(plan2.NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			aggregates, unions := 0, 0
+			for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+				switch node.NodeType {
+				case plan.Node_UNION_ALL:
+					unions++
+					require.Len(t, node.ProjectList, tc.width)
+				case plan.Node_AGG:
+					aggregates++
+					names := make([]string, 0, len(node.AggList))
+					sumPos := -1
+					for i, expr := range node.AggList {
+						require.NotNil(t, expr.GetF())
+						names = append(names, expr.GetF().Func.ObjName)
+						if expr.GetF().Func.ObjName == "sum" {
+							sumPos = i
+						}
+					}
+					require.ElementsMatch(t, tc.aggs, names)
+					if tc.having {
+						require.Len(t, node.GroupBy, 1)
+						require.Len(t, node.FilterList, 1)
+						col := node.FilterList[0].GetF().Args[0].GetCol()
+						require.NotNil(t, col)
+						require.Equal(t, int32(-2), col.RelPos)
+						require.Equal(t, int32(len(node.GroupBy)+sumPos), col.ColPos, "HAVING must reference the retained SUM slot")
+					}
+				}
+			}
+			require.Equal(t, 2, aggregates)
+			require.Equal(t, 1, unions)
+		})
+	}
+}
+
 func TestColumnPruneOperatorShape(t *testing.T) {
 	t.Run("scan chooses deterministic row carrier", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(

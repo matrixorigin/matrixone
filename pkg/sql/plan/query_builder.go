@@ -1105,6 +1105,10 @@ func (builder *QueryBuilder) setOperationAliasesCanPrune(expr *plan.Expr, memo m
 		switch source.NodeType {
 		case plan.Node_TABLE_SCAN, plan.Node_VALUE_SCAN:
 			return true
+		case plan.Node_AGG:
+			// Regular aggregates own pruning of computed slots, including effects,
+			// grouping/HAVING consumers and scalar row carriers.
+			return len(source.BindingTags) >= 2
 		case plan.Node_PROJECT, plan.Node_MATERIAL:
 			return builder.setOperationOutputCanPrune(source, int(col.ColPos), memo)
 		default:

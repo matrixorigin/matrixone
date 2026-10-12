@@ -111,6 +111,14 @@ func TestFilteredSetOperationProjection(t *testing.T) {
 				query string
 				want  []string
 			}{
+				{"select c from (select count(*) c,sum(v) s from saved union all select count(*),sum(v) from copied) u order by c", []string{"1", "2"}},
+				{"select s from (select count(*) c,sum(v) s from saved union all select count(*),sum(v) from copied) u order by s", []string{"30", "30"}},
+				{"select c,s from (select count(*) c,sum(v) s from saved union all select count(*),sum(v) from copied) u order by c", []string{"1:30", "2:30"}},
+				{"select c from (select count(*) c,sum(v) s from saved where v<0 union all select count(*),sum(v) from copied where v<0) u", []string{"0", "0"}},
+				{"select s from (select count(*) c,sum(v) s from saved where v<0 union all select count(*),sum(v) from copied where v<0) u", []string{"NULL", "NULL"}},
+				{"select 1 from (select count(*) c,sum(v) s from saved where v<0 union all select count(*),sum(v) from copied where v<0) u", []string{"1", "1"}},
+				{"select c from (select count(*) c,avg(v) a,sum(v) s from saved group by v having sum(v)>15 union all select count(*),avg(v),sum(v) from copied group by v having sum(v)>15) u order by c", []string{"1", "1"}},
+				{"select c from (select count(*) c,sum(v) s from saved union select count(*),sum(v) from copied where v=10) u order by c", []string{"1", "1"}},
 				{"select v from saved", []string{"30"}},
 				{"select v from copied order by v", []string{"10", "20"}},
 				{"select sum(v) from (select 1 k,10 v union all select 2,v from copied where v=20) u where k>0", []string{"30"}},
@@ -119,6 +127,13 @@ func TestFilteredSetOperationProjection(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, tc.want, readWindowNullRows(t, rows))
 			}
+			_, err = conn.ExecContext(ctx, "create sequence aggregate_effect_seq start with 1")
+			require.NoError(t, err)
+			rows, err = conn.QueryContext(ctx, "select c from (select count(*) c,sum(cast(nextval('aggregate_effect_seq') as bigint)) s from saved union all select count(*),sum(cast(nextval('aggregate_effect_seq') as bigint)) from copied) u order by c")
+			require.NoError(t, err)
+			require.Equal(t, []string{"1", "2"}, readWindowNullRows(t, rows))
+			require.NoError(t, conn.QueryRowContext(ctx, "select currval('aggregate_effect_seq')").Scan(&effects))
+			require.Equal(t, "3", effects, "unused aggregate arguments must evaluate once per input row")
 		})
 		var one int
 		require.NoError(t, conn.QueryRowContext(ctx, "select 1").Scan(&one))
