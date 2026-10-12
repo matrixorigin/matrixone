@@ -482,7 +482,7 @@ func restoreDatabaseFromTS(
 
 		return
 	} else {
-		createDbSql = createDatabaseIfNotExistsSQL(dbName)
+		createDbSql = appendDatabaseDefaultsSQL(createDatabaseIfNotExistsSQL(dbName), definition.defaults)
 		// create db
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create db: %v, create db sql: %s", restoreAccount, snapshotTs, dbName, createDbSql))
 		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
@@ -557,7 +557,12 @@ func getCreateDatabaseSqlFromTS(ctx context.Context,
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
 		return logicalRestoreDatabaseDefinition{}, moerr.NewBadDB(newCtx, dbName)
 	}
-	return newLogicalRestoreDatabaseDefinition(newCtx, dbName, colsList[0])
+	definition, err := newLogicalRestoreDatabaseDefinition(newCtx, dbName, colsList[0])
+	if err != nil {
+		return logicalRestoreDatabaseDefinition{}, err
+	}
+	definition.defaults, err = readDatabaseDefaultsForRestore(newCtx, bh, dbName, from, ts)
+	return definition, err
 }
 
 func recreateTableFromTS(

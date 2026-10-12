@@ -1408,7 +1408,14 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return buildAlterTableInplace(stmt, ctx)
 	}
 
-	algorithm, err := ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options, tableDef)
+	// MODIFY/CHANGE inherit the statement's final default, just as COPY and
+	// INPLACE binding do. Admit metadata-only changes against that same domain,
+	// without rewriting the resolved source columns or catalog definition.
+	effectiveTableDef := *tableDef
+	if err := applyAlterTableCharsetDefault(ctx, &effectiveTableDef, stmt.Options); err != nil {
+		return nil, err
+	}
+	algorithm, err := ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options, &effectiveTableDef)
 	if err != nil {
 		return nil, err
 	}
@@ -1802,7 +1809,8 @@ func storageAgnosticType(
 		oTy.Scale != nTy.Scale ||
 		oTy.Enumvalues != nTy.Enumvalues ||
 		oTy.AutoIncr != nTy.AutoIncr ||
-		oTy.Charset != nTy.Charset {
+		oTy.Charset != nTy.Charset ||
+		oTy.CollationVersion != nTy.CollationVersion {
 		return
 	}
 

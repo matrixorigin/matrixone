@@ -88,19 +88,16 @@ func prepareLogicalRestoreDatabase(
 	return context.WithValue(ctx, defines.DatTypKey{}, catalog.SystemDBTypeDataBranch), nil
 }
 
-// preflightLogicalRestoreDatabases checks every restorable database identity
-// before account-level restore starts replacing the current catalog. Once the
-// common protocol owns data-branch identity, the per-database restore path
-// still reads and propagates the marker immediately before CREATE DATABASE.
+// preflightLogicalRestoreDatabases checks every restorable source definition
+// before account-level restore starts replacing the current catalog. Protocol
+// capability does not prove persisted metadata is readable or valid; in
+// particular account removal can terminate sessions irreversibly.
 func preflightLogicalRestoreDatabases(
 	ctx context.Context,
 	dbNames []string,
 	protocolVersion int64,
 	load logicalRestoreDatabaseDefinitionLoader,
 ) error {
-	if protocolVersion >= defines.MORPCVersion110 {
-		return nil
-	}
 	for _, dbName := range dbNames {
 		if needSkipDb(dbName) {
 			continue

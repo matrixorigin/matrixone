@@ -185,5 +185,28 @@ func TestDatabaseDefaultsFailureAndRecovery(t *testing.T) {
 			require.NoError(t, target.QueryRowContext(ctx, "select count(*) from "+schema+".t force index(iv) where v='ss'").Scan(&matched))
 			require.Equal(t, 2, matched)
 		})
+
+		// Destructive cluster restore runs last; the existing fixture owns every
+		// account and database and closes earlier tenant connections beforehand.
+		t.Run("cluster snapshot TS restores source defaults", func(t *testing.T) {
+			const snapshot = "c03_cluster_defaults"
+			defer cleanupSQLIntegration(t, cn, "drop snapshot if exists "+snapshot)
+			exec(t, db, "alter database "+schema+" collate utf8mb4_bin")
+			exec(t, db, "create snapshot "+snapshot+" for cluster")
+			exec(t, db, "alter database "+schema+" collate utf8mb4_general_ci")
+			exec(t, db, "restore cluster {snapshot='"+snapshot+"'}")
+			var restored string
+			require.NoError(t, db.QueryRowContext(ctx, "select default_collation_name from information_schema.schemata where schema_name=?", schema).Scan(&restored))
+			require.Equal(t, "utf8mb4_bin", restored)
+			exec(t, db, "create table "+schema+".cluster_inherited(v varchar(8))")
+			column(t, db, "cluster_inherited", "utf8mb4_bin")
+			conn, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+			_, err = conn.ExecContext(ctx, "use "+schema)
+			require.NoError(t, err)
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@collation_database").Scan(&restored))
+			require.Equal(t, "utf8mb4_bin", restored)
+		})
 	})
 }

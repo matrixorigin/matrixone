@@ -37,6 +37,14 @@ func TestAlterTableCharsetContract(t *testing.T) {
 		{name: "default with drop index", source: "create table charset_target(v varchar(8), index iv(v)) collate=utf8mb4_bin", option: "default collate=utf8mb4_general_ci, drop index iv", algorithm: plan.AlterTable_INPLACE, defaultIdentity: 3, columns: map[string]uint32{"v": 2}, indexes: []string{}},
 		{name: "default with add index", option: "add index iv(v), default collate=utf8mb4_general_ci", algorithm: plan.AlterTable_INPLACE, defaultIdentity: 3, columns: map[string]uint32{"v": 2}, indexes: []string{"iv"}},
 		{name: "default before add", option: "default collate=utf8mb4_general_ci, add column added varchar(8)", algorithm: plan.AlterTable_COPY, defaultIdentity: 3, columns: map[string]uint32{"v": 2, "added": 3}},
+		{name: "default before modify requires domain validation", option: "default collate=utf8_unicode_ci, modify v varchar(8)", algorithm: plan.AlterTable_COPY, defaultIdentity: 9, columns: map[string]uint32{"v": 9}},
+		{name: "default after modify requires domain validation", option: "modify v varchar(8), default collate=utf8_unicode_ci", algorithm: plan.AlterTable_COPY, defaultIdentity: 9, columns: map[string]uint32{"v": 9}},
+		{name: "default before change requires domain validation", option: "default collate=utf8_unicode_ci, change v v varchar(8)", algorithm: plan.AlterTable_COPY, defaultIdentity: 9, columns: map[string]uint32{"v": 9}},
+		{name: "default after change requires domain validation", option: "change v v varchar(8), default collate=utf8_unicode_ci", algorithm: plan.AlterTable_COPY, defaultIdentity: 9, columns: map[string]uint32{"v": 9}},
+		{name: "explicit unchanged column domain overrides inheritance", option: "default collate=utf8_unicode_ci, modify v varchar(8) collate utf8mb4_bin", algorithm: plan.AlterTable_COPY, defaultIdentity: 9, columns: map[string]uint32{"v": 2}},
+		{name: "domain change cannot force inplace", option: "default collate=utf8_unicode_ci, modify v varchar(8), algorithm=inplace", failure: "requires ALGORITHM=COPY"},
+		{name: "domain change cannot force instant", option: "change v v varchar(8), default collate=utf8_unicode_ci, algorithm=instant", failure: "requires ALGORITHM=COPY"},
+		{name: "domain change cannot use lock none", option: "modify v varchar(8), default collate=utf8_unicode_ci, lock=none", failure: "COPY algorithm"},
 		{name: "native conversion carries revision", option: "convert to character set utf8mb4 collate utf8mb4_unicode_ci", algorithm: plan.AlterTable_COPY, defaultIdentity: 10, columns: map[string]uint32{"v": 10}},
 		{name: "conversion owns new columns but not final default", option: "convert to character set utf8mb4 collate utf8mb4_unicode_ci, default collate=utf8mb4_general_ci, add column added varchar(8)", algorithm: plan.AlterTable_COPY, defaultIdentity: 3, columns: map[string]uint32{"v": 10, "added": 10}},
 		{name: "binary conversion", option: "convert to character set binary", algorithm: plan.AlterTable_COPY, defaultIdentity: 1, columns: map[string]uint32{"v": 1}},
@@ -84,7 +92,7 @@ func TestAlterTableCharsetContract(t *testing.T) {
 				column := FindColumn(alter.CopyTableDef.Cols, name)
 				require.NotNil(t, column, name)
 				require.Equal(t, identity, column.Typ.Charset, name)
-				if identity == 10 {
+				if identity == 9 || identity == 10 {
 					require.Equal(t, uint32(1), column.Typ.CollationVersion, name)
 				}
 			}

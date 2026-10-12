@@ -179,6 +179,46 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 			require.NoError(t, rows.Err())
 		})
 
+		t.Run("combined default and redeclaration validate stored repertoire", func(t *testing.T) {
+			for i, option := range []string{
+				"default collate=utf8_unicode_ci, modify v varchar(8)",
+				"modify v varchar(8), default collate=utf8_unicode_ci",
+				"default collate=utf8_unicode_ci, change v v varchar(8)",
+				"change v v varchar(8), default collate=utf8_unicode_ci",
+				"default collate=utf8_unicode_ci, modify v varchar(8), algorithm=copy",
+				"modify v varchar(8) collate utf8_unicode_ci",
+			} {
+				t.Run(option, func(t *testing.T) {
+					table := fmt.Sprintf("combined_repertoire_%d", i)
+					exec(t, first, "create table "+table+"(v varchar(8)) collate utf8mb4_bin")
+					exec(t, first, "insert into "+table+" values ('😀')")
+					_, err := first.ExecContext(ctx, "alter table "+table+" "+option)
+					require.Error(t, err, "a narrower inherited domain must reject stored emoji before publication")
+					require.Equal(t, "utf8mb4_bin", collation(t, table, "v"))
+					var original, tableDefault string
+					require.NoError(t, first.QueryRowContext(ctx, "select v from "+table).Scan(&original))
+					require.Equal(t, "😀", original)
+					require.NoError(t, first.QueryRowContext(ctx, "select table_collation from information_schema.tables where table_schema=? and table_name=?", schema, table).Scan(&tableDefault))
+					require.Equal(t, "utf8mb4_bin", tableDefault)
+					require.Zero(t, count(t, "select count(*) from information_schema.tables where table_schema='"+schema+"' and table_name like '"+table+"_copy_%'"))
+				})
+			}
+			// DEFAULT alone changes inheritance, not the repertoire of old bytes.
+			exec(t, first, "create table combined_default_only(v varchar(8)) collate utf8mb4_bin")
+			exec(t, first, "insert into combined_default_only values ('😀')")
+			exec(t, first, "alter table combined_default_only default collate=utf8_unicode_ci")
+			require.Equal(t, "utf8mb4_bin", collation(t, "combined_default_only", "v"))
+			require.Equal(t, 1, count(t, "select count(*) from combined_default_only where v='😀'"))
+			exec(t, first, "alter table combined_default_only modify v varchar(8) collate utf8mb4_bin")
+			require.Equal(t, 1, count(t, "select count(*) from combined_default_only where v='😀'"))
+			// Compatible bytes are still admitted, with the new domain published.
+			exec(t, first, "create table combined_ascii(v varchar(8)) collate utf8mb4_bin")
+			exec(t, first, "insert into combined_ascii values ('ascii')")
+			exec(t, first, "alter table combined_ascii change v v varchar(8), default collate=utf8_unicode_ci")
+			require.Equal(t, "utf8_unicode_ci", collation(t, "combined_ascii", "v"))
+			require.Equal(t, 1, count(t, "select count(*) from combined_ascii where v='ascii'"))
+		})
+
 		t.Run("failed repertoire and unique conversion preserve source", func(t *testing.T) {
 			exec(t, first, "create table repertoire_conversion(v varchar(8)) collate utf8mb4_bin")
 			exec(t, first, "insert into repertoire_conversion values ('😀')")

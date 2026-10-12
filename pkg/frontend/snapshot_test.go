@@ -1551,6 +1551,12 @@ func TestRestoreTableRejectsReferencedTableBeforeMutation(t *testing.T) {
 		tblName,
 		0,
 	)
+	// Source metadata validation precedes destructive work at every protocol;
+	// this legacy snapshot has no durable-default relation yet.
+	const sourceSQL = "select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = 100} where datname = 'db1' and account_id = 0"
+	const defaultsSQL = "select relname from mo_catalog.mo_tables {MO_TS = 100} where account_id = 0 and reldatabase = 'mo_catalog' and relname = 'mo_database_defaults'"
+	bh.sql2result[sourceSQL] = newMrsForRestoreStringRows([]string{"datname", "dat_createsql", "dat_type"}, [][]interface{}{{dbName, "create database db1", ""}})
+	bh.sql2result[defaultsSQL] = newMrsForSqlForShowDatabases(nil)
 	bh.sql2result[masterSQL] = newMrsForRestoreStringRows(
 		[]string{"db_name"},
 		[][]interface{}{{dbName}},
@@ -1575,6 +1581,8 @@ func TestRestoreTableRejectsReferencedTableBeforeMutation(t *testing.T) {
 		catalog.SnapshotLifecycleGateSQL,
 		catalog.ViewMetadataLifecycleGateSQL,
 		snapshotSQL,
+		sourceSQL,
+		defaultsSQL,
 		masterSQL,
 		"rollback;",
 	}, bh.executedSQLs)

@@ -62,6 +62,26 @@ alter table repertoire_conversion convert to character set utf8 collate utf8_uni
 select count(*),hex(min(v)) from repertoire_conversion;
 select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='repertoire_conversion' and column_name='v';
 
+-- 组合DEFAULT与重新声明列必须校验最终继承域，拒绝后数据/schema/default不变。
+alter table repertoire_conversion default collate=utf8_unicode_ci, modify v varchar(8);
+select v,hex(v) from repertoire_conversion;
+alter table repertoire_conversion modify v varchar(8), default collate=utf8_unicode_ci;
+select v,hex(v) from repertoire_conversion;
+alter table repertoire_conversion default collate=utf8_unicode_ci, change v v varchar(8);
+select v,hex(v) from repertoire_conversion;
+alter table repertoire_conversion change v v varchar(8), default collate=utf8_unicode_ci;
+select v,hex(v) from repertoire_conversion;
+select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='repertoire_conversion' and column_name='v';
+select table_collation from information_schema.tables where table_schema='charset_defaults_contract' and table_name='repertoire_conversion';
+-- DEFAULT-only保留旧列；显式列域覆盖继承；兼容ASCII仍可成功转换。
+alter table repertoire_conversion default collate=utf8_unicode_ci;
+alter table repertoire_conversion modify v varchar(8) collate utf8mb4_bin;
+select v,hex(v) from repertoire_conversion;
+select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='repertoire_conversion' and column_name='v';
+alter table defaults_target default collate=utf8_unicode_ci, modify v varchar(8);
+select v from defaults_target order by n;
+select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='defaults_target' and column_name='v';
+
 -- Byte capacity, fixed padding, and computed target values are validated before publication.
 create table binary_conversion(v varchar(1),c char(1),t tinytext) collate=utf8mb4_bin;
 insert into binary_conversion values ('😀','😀','😀');

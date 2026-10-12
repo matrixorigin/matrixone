@@ -407,11 +407,13 @@ select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
 operation_role_id    operation_user_id
 2    2
 2    2
+alter database db02 collate utf8mb4_bin;
 drop snapshot if exists cluster_level_snapshot;
 create snapshot cluster_level_snapshot for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 cluster_level_snapshot    2025-11-24 15:26:50.660701999    cluster            
+alter database db02 collate utf8mb4_general_ci;
 use db02;
 alter table departments add column newcolumn int after department_id;
 show create table departments;
@@ -542,13 +544,23 @@ select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
 operation_role_id    operation_user_id
 restore cluster{snapshot="cluster_level_snapshot"};
 use db02;
+select default_collation_name from information_schema.schemata where schema_name='db02';
+➤ default_collation_name[12,18,0]  𝄀
+utf8mb4_bin
+select @@character_set_database,@@collation_database;
+➤ @@character_set_database[-1,16383,0]  ¦  @@collation_database[-1,16383,0]  𝄀
+utf8mb4  ¦  utf8mb4_bin
+create table ts_inherited(v varchar(8));
+select collation_name from information_schema.columns where table_schema='db02' and table_name='ts_inherited' and column_name='v';
+➤ collation_name[12,18,0]  𝄀
+utf8mb4_bin
 select * from departments;
 department_id    department_name
 1    HR
 2    Engineering
 show create table departments;
 Table    Create Table
-departments    CREATE TABLE `departments` (\n  `department_id` int NOT NULL AUTO_INCREMENT,\n  `department_name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`department_id`)\n)
+departments    CREATE TABLE `departments` (\n  `department_id` int NOT NULL AUTO_INCREMENT,\n  `department_name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`department_id`)\n) COLLATE=utf8mb4_general_ci
 select * from employee_view;
 employee_id    first_name    last_name    department_id
 1    John    Doe    1

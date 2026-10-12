@@ -220,3 +220,10 @@ MySQL oracle：实际连接并记录版本/digest/config，再固定默认值 AL
 2026-10-10 用户批准本设计 r1，进入 merge、实现与验证阶段。审批前仅创建本文与 TODO；审批不代表功能或测试已经通过，也不授权虚构完成状态。
 
 本文保留批准时的基线、事实与待验证项。2026-10-11 交付合并上游后按已批准顺延规则采用 protocol110 / 4.0.15；实际实现、自审和最终成功/失败证据以 `CLAUDE_VALIDATION_28998_C03.md` 为准，不把本文的批准或历史建议编号当作验收结果。
+
+## 2026-10-12 review反例闭包补充（既有r1合同，不新增feature）
+
+- **最终列域决定算法**：同一ALTER里的DEFAULT与MODIFY/CHANGE组合，算法admission与实际binding必须共享effective final table default。原schema只读，私有浅拷贝只改default/revision字段；已有COPY继续拥有字节校验、约束/索引及原子发布。仅DEFAULT仍不重写旧列；显式列域覆盖继承。域/修订变化不得接受metadata-only INPLACE/INSTANT或LOCK=NONE。
+- **TS恢复定义包含durable defaults**：cluster快照的TS loader与account/PITR loader一致，从同一source tenant/TS读取database identity与defaults；普通CREATE重放携带合法identity/revision的声明，由目标CREATE分配新DB ID。legacy缺关系/缺行保持既有fallback；坏generation、读取失败与cancel不被伪装成无default。
+- **能力不是数据有效性**：protocol110不能跳过source preflight。所有可恢复定义必须在account等不可逆操作前校验；TABLE-only仍遵循原能力检查与不覆盖DB default的边界。复用已有context/BackgroundExec/transaction owner，不增加cache/state/worker、row scan或生产retry；额外metadata读取按DB数量有界。
+- 原批准设计/历史验收不自动覆盖这些组合。新增typed UT、真实emoji/cluster恢复反例与公开case保留原fixture、正负oracle、teardown和普通比较，具体失败→修复结果见验证记录。
