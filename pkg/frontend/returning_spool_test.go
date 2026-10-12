@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type returningProtocolRecorder struct {
@@ -165,20 +166,100 @@ func (r *returningStageRecorder) Abort(*ExecCtx) error {
 	return nil
 }
 
+func newReturningSpoolSession(t *testing.T, diskCap uint64) *Session {
+	t.Helper()
+	const memoryCap = 1 << 20
+	ledger := process.MustNewExecutionResourceBudget(memoryCap, memoryCap)
+	t.Cleanup(ledger.Close)
+	require.NoError(t, ledger.SetSpillCaps(diskCap, 1))
+	generation, err := ledger.OpenGenerationWithSpillCaps(1, memoryCap, diskCap, 1)
+	require.NoError(t, err)
+	t.Cleanup(generation.Close)
+
+	ses := newValidateSession(t)
+	require.NoError(t, ses.proc.SetExecutionResourceBudgetForTesting(generation))
+	return ses
+}
+
 func returningTestBatch(t *testing.T, ses *Session, values ...int64) *batch.Batch {
 	t.Helper()
 	bat := batch.NewWithSize(1)
+	complete := false
+	defer func() {
+		if !complete {
+			bat.Clean(ses.proc.Mp())
+		}
+	}()
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 	for _, value := range values {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, ses.proc.Mp()))
 	}
 	bat.SetRowCount(len(values))
+	complete = true
 	return bat
+}
+
+func TestReturningSpoolBudgetsAreFixtureLocal(t *testing.T) {
+	first := newReturningSpoolSession(t, 1<<20)
+	firstBudget, err := first.proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	reservation, err := firstBudget.ReserveSpillDisk(firstBudget.SpillDiskCap())
+	require.NoError(t, err)
+	t.Cleanup(func() { reservation.Release() })
+	overflow, err := firstBudget.ReserveSpillDisk(1)
+	if overflow != nil {
+		t.Cleanup(func() { overflow.Release() })
+	}
+	require.ErrorIs(t, err, process.ErrExecutionResourceAdmission)
+
+	second := newReturningSpoolSession(t, 1<<20)
+	secondBudget, err := second.proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	spool := &returningSpool{}
+	defer func() { require.NoError(t, spool.Close()) }()
+	bat := returningTestBatch(t, second, 7)
+	defer bat.Clean(second.proc.Mp())
+	require.NoError(t, spool.BeginAttempt(context.Background(), 0, second.proc))
+	require.NoError(t, spool.Write(0, bat, nil))
+	require.Equal(t, uint64(1), spool.RowCount())
+	require.Positive(t, secondBudget.SpillDiskUsed())
+	require.Equal(t, firstBudget.SpillDiskCap(), firstBudget.SpillDiskUsed())
+	require.NoError(t, spool.Close())
+	require.Zero(t, secondBudget.SpillDiskUsed())
+	require.Zero(t, secondBudget.SpillFDUsed())
+	require.True(t, reservation.Release())
+	require.Zero(t, firstBudget.SpillDiskUsed())
+}
+
+func TestReturningSpoolDiskAdmissionFailureReleasesReservations(t *testing.T) {
+	ses := newReturningSpoolSession(t, 1)
+	budget, err := ses.proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	spool := &returningSpool{}
+	defer func() { require.NoError(t, spool.Close()) }()
+	bat := returningTestBatch(t, ses, 7)
+	defer bat.Clean(ses.proc.Mp())
+	require.NoError(t, spool.BeginAttempt(context.Background(), 0, ses.proc))
+	err = spool.Write(0, bat, nil)
+	require.ErrorIs(t, err, process.ErrExecutionResourceAdmission)
+	var budgetErr *process.ExecutionResourceError
+	require.ErrorAs(t, err, &budgetErr)
+	require.Equal(t, process.ExecutionResourceComponentSpillDisk, budgetErr.Component)
+	require.Equal(t, uint64(1), budgetErr.Cap)
+	require.Greater(t, budgetErr.Requested, budgetErr.Cap)
+	require.Zero(t, spool.RowCount())
+	require.Zero(t, budget.Used())
+	require.Zero(t, budget.SpillDiskUsed())
+	require.Equal(t, uint64(1), budget.SpillFDUsed())
+	require.NoError(t, spool.Close())
+	require.NoError(t, spool.Close())
+	require.Zero(t, budget.SpillDiskUsed())
+	require.Zero(t, budget.SpillFDUsed())
 }
 
 func TestReturningSpoolGenerationAndReplay(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t, 1<<20)
 	spool := &returningSpool{}
 	budget, err := ses.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
@@ -200,13 +281,13 @@ func TestReturningSpoolGenerationAndReplay(t *testing.T) {
 	require.Zero(t, budget.SpillFDUsed())
 
 	final := returningTestBatch(t, ses, 7, 8, 9)
+	defer final.Clean(ses.proc.Mp())
 	binaryValues := vector.NewVec(types.T_text.ToType())
+	final.Vecs = append(final.Vecs, binaryValues)
 	for _, value := range []string{"a", "b", "c"} {
 		require.NoError(t, vector.AppendBytes(binaryValues, []byte(value), false, ses.proc.Mp()))
 	}
 	require.NoError(t, binaryValues.SetBinaryStringRowsWithMP([]bool{true, false, true}, ses.proc.Mp()))
-	final.Vecs = append(final.Vecs, binaryValues)
-	defer final.Clean(ses.proc.Mp())
 	require.NoError(t, spool.BeginAttempt(ctx, 1, ses.proc))
 	require.NoError(t, spool.Write(1, final, nil))
 	require.NoError(t, spool.SealAttempt(1))
@@ -232,7 +313,7 @@ func TestReturningSpoolGenerationAndReplay(t *testing.T) {
 
 func TestDeferredReturningResponseStartsAfterPublish(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t, 1<<20)
 	ses.txnHandler = &TxnHandler{}
 	ses.SetMysqlResultSet(&MysqlResultSet{})
 
@@ -275,7 +356,7 @@ func TestDeferredReturningResponseStartsAfterPublish(t *testing.T) {
 
 func TestDeferredReturningReplayOutputWaitStaysRootOwned(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t, 1<<20)
 	ses.txnHandler = &TxnHandler{}
 	ses.SetMysqlResultSet(&MysqlResultSet{})
 
@@ -318,7 +399,7 @@ func TestDeferredReturningReplayOutputWaitStaysRootOwned(t *testing.T) {
 
 func TestDeferredReturningZeroRowsStillSendsMetadata(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t, 1<<20)
 	ses.txnHandler = &TxnHandler{}
 	ses.SetMysqlResultSet(&MysqlResultSet{})
 
@@ -349,7 +430,7 @@ func TestDeferredReturningZeroRowsStillSendsMetadata(t *testing.T) {
 
 func TestDeferredReturningPublishFailureDoesNotHideCommittedRows(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t, 1<<20)
 	ses.txnHandler = &TxnHandler{}
 	ses.SetMysqlResultSet(&MysqlResultSet{})
 
@@ -405,13 +486,14 @@ func TestReturningCommitFailureAbortsStageBeforeProtocol(t *testing.T) {
 
 func TestDeferredReturningClientDisconnectCleansSpool(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t, 1<<20)
 	ses.txnHandler = &TxnHandler{}
 	ses.SetMysqlResultSet(&MysqlResultSet{})
 	budget, err := ses.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 
 	spool := &returningSpool{}
+	defer func() { require.NoError(t, spool.Close()) }()
 	bat := returningTestBatch(t, ses, 42)
 	defer bat.Clean(ses.proc.Mp())
 	require.NoError(t, spool.BeginAttempt(ctx, 0, ses.proc))
@@ -599,7 +681,7 @@ func TestReturningQueryResultAbortRetryAccountsEveryAttempt(t *testing.T) {
 
 func TestReturningSpoolRejectsTruncatedRecord(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t, 1<<20)
 	spool := &returningSpool{}
 	defer func() { require.NoError(t, spool.Close()) }()
 	bat := returningTestBatch(t, ses, 1, 2)
@@ -616,7 +698,7 @@ func TestReturningSpoolRejectsTruncatedRecord(t *testing.T) {
 
 func TestReturningSpoolRejectsCorruptMagic(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t, 1<<20)
 	spool := &returningSpool{}
 	defer func() { require.NoError(t, spool.Close()) }()
 	bat := returningTestBatch(t, ses, 1)
@@ -644,10 +726,12 @@ func TestReturningSpoolRejectsCorruptMagic(t *testing.T) {
 
 func TestReturningSpoolReplayCancellationReleasesDecodeBudget(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	ses := newValidateSession(t)
+	defer cancel()
+	ses := newReturningSpoolSession(t, 1<<20)
 	budget, err := ses.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	spool := &returningSpool{}
+	defer func() { require.NoError(t, spool.Close()) }()
 	bat := returningTestBatch(t, ses, 1)
 	defer bat.Clean(ses.proc.Mp())
 	require.NoError(t, spool.BeginAttempt(ctx, 0, ses.proc))
@@ -664,32 +748,35 @@ func TestReturningSpoolReplayCancellationReleasesDecodeBudget(t *testing.T) {
 
 func TestReturningSpoolConcurrentTerminalTransitions(t *testing.T) {
 	ctx := context.Background()
-	ses := newValidateSession(t)
+	ses := newReturningSpoolSession(t, 1<<20)
 	budget, err := ses.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	for i := 0; i < 16; i++ {
-		spool := &returningSpool{}
-		bat := returningTestBatch(t, ses, int64(i))
-		require.NoError(t, spool.BeginAttempt(ctx, uint64(i), ses.proc))
-		var wg sync.WaitGroup
-		wg.Add(3)
-		go func() {
-			defer wg.Done()
-			_ = spool.Write(uint64(i), bat, nil)
+		func() {
+			spool := &returningSpool{}
+			defer func() { require.NoError(t, spool.Close()) }()
+			bat := returningTestBatch(t, ses, int64(i))
+			defer bat.Clean(ses.proc.Mp())
+			require.NoError(t, spool.BeginAttempt(ctx, uint64(i), ses.proc))
+			var wg sync.WaitGroup
+			wg.Add(3)
+			go func() {
+				defer wg.Done()
+				_ = spool.Write(uint64(i), bat, nil)
+			}()
+			go func() {
+				defer wg.Done()
+				_ = spool.AbortAttempt(uint64(i), context.Canceled)
+			}()
+			go func() {
+				defer wg.Done()
+				_ = spool.Close()
+			}()
+			wg.Wait()
+			require.NoError(t, spool.Close())
+			require.Zero(t, budget.Used())
+			require.Zero(t, budget.SpillDiskUsed())
+			require.Zero(t, budget.SpillFDUsed())
 		}()
-		go func() {
-			defer wg.Done()
-			_ = spool.AbortAttempt(uint64(i), context.Canceled)
-		}()
-		go func() {
-			defer wg.Done()
-			_ = spool.Close()
-		}()
-		wg.Wait()
-		require.NoError(t, spool.Close())
-		bat.Clean(ses.proc.Mp())
-		require.Zero(t, budget.Used())
-		require.Zero(t, budget.SpillDiskUsed())
-		require.Zero(t, budget.SpillFDUsed())
 	}
 }
