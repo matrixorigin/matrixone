@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -389,6 +390,18 @@ func (c *bufferedNetConn) Read(p []byte) (int, error) {
 	n := copy(p, c.prefix)
 	c.prefix = c.prefix[n:]
 	return n, nil
+}
+
+// SyscallConn forwards access to the underlying socket so the routine
+// manager can continue probing client disconnects after TLS takes ownership
+// of this buffered connection.
+func (c *bufferedNetConn) SyscallConn() (syscall.RawConn, error) {
+	syscallConn, ok := c.Conn.(syscall.Conn)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"buffered connection does not expose syscall connection")
+	}
+	return syscallConn.SyscallConn()
 }
 
 // GetSequenceID returns the sequence expected for the next MySQL packet.
