@@ -228,6 +228,65 @@ func ensureReaders(readers []engine.Reader, num int) []engine.Reader {
 	return readers
 }
 
+// buildPartitionBlockReaders takes ownership of every reader returned by build,
+// including partial results returned with an error. Sources and tombstones are
+// borrowed; closing readers releases their filter shares, not shared ranges.
+func buildPartitionBlockReaders(
+	ctx context.Context,
+	parts []engine.RelData,
+	num int,
+	build func(engine.RelData) ([]engine.Reader, error),
+) (_ []engine.Reader, err error) {
+	if num <= 0 {
+		return nil, moerr.NewInvalidInputNoCtx("partition block reader count must be positive")
+	}
+	var readers []engine.Reader
+	defer func() {
+		if err != nil {
+			for _, reader := range readers {
+				if reader != nil {
+					_ = reader.Close()
+				}
+			}
+		}
+	}()
+	for _, part := range parts {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		child, buildErr := build(part)
+		readers = append(readers, child...)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if len(child) != num {
+			return nil, moerr.NewInternalErrorNoCtx("partition block reader count mismatch")
+		}
+		for _, reader := range child {
+			if reader == nil {
+				return nil, moerr.NewInternalErrorNoCtx("nil partition block reader")
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(readers) == 0 {
+		return ensureReaders(nil, num), nil
+	}
+	// Every child contributes num readers. Contiguous groups match the
+	// existing partition reader consolidation and always yield exactly num.
+	step := len(readers) / num
+	merged := make([]engine.Reader, num)
+	for i := range merged {
+		merged[i] = readutil.NewMergeReader(readers[i*step : (i+1)*step])
+	}
+	return merged, nil
+}
+
 func (t *combinedTxnTable) BuildShardingReaders(
 	ctx context.Context,
 	proc any,
@@ -271,13 +330,51 @@ func (t *combinedTxnTable) Stats(
 	}
 
 	value := splan.NewStatsInfo()
+	complete := len(tables) > 0
+	sizeComplete := true
 	for _, rel := range tables {
 		v, err := rel.Stats(ctx, sync)
 		if err != nil {
 			return nil, err
 		}
 
+		if !splan.StatsInfoUsable(v) {
+			value.TableCnt = float64(^uint64(0))
+			complete = false
+			sizeComplete = false
+			continue
+		}
+		complete = complete && splan.StatsInfoUsableForCache(v)
+		// A positive child must cover the same columns as previous positive
+		// children. Merge's union and unchecked additions cannot prove byte coverage.
+		if v.TableCnt > 0 && sizeComplete {
+			if value.TableCnt > 0 {
+				sizeComplete = len(value.SizeMap) == len(v.SizeMap)
+				for name, size := range v.SizeMap {
+					previous, exists := value.SizeMap[name]
+					if !exists || ^uint64(0)-previous < size {
+						sizeComplete = false
+						break
+					}
+				}
+			} else {
+				sizeComplete = len(v.SizeMap) > 0
+			}
+		}
+		sizes := value.SizeMap
 		value.Merge(v)
+		if v.TableCnt == 0 {
+			// An observed empty child contributes metadata, but no column bytes.
+			value.SizeMap = sizes
+		}
+	}
+	if !sizeComplete {
+		// Invalidate after all merges so a later child cannot restore partial totals.
+		value.SizeMap = nil
+	}
+	value.TableCnt = min(value.TableCnt, float64(^uint64(0)))
+	if complete {
+		value.TableName = tables[0].GetTableName()
 	}
 	return value, nil
 }

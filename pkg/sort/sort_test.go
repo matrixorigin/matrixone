@@ -22,7 +22,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -172,34 +171,42 @@ func TestSortByVectors(t *testing.T) {
 	require.Equal(t, []int64{2, 0, 1, 3, 4, 5}, selectors)
 }
 
-func TestSortForSQLOrderNative0900UsesCollation(t *testing.T) {
-	values := [][]byte{[]byte("z"), []byte("Å"), []byte("a"), []byte("😀")}
-	for _, tc := range []struct {
-		name    string
-		charset uint8
-		compare func([]byte, []byte) int
-	}{
-		{name: "ai", charset: types.CharsetUTF8MB40900AI, compare: collation.UCA0900AICollate},
-		{name: "bin", charset: types.CharsetUTF8MB40900Bin, compare: collation.UCA0900BinCollate},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mp := mpool.MustNewZero()
-			typ := types.NewWithCharset(types.T_varchar, 32, 0, tc.charset)
-			vec := vector.NewVec(typ)
-			defer vec.Free(mp)
-			for _, value := range values {
-				require.NoError(t, vector.AppendBytes(vec, value, false, mp))
-			}
-			selectors := []int64{0, 1, 2, 3}
-			SortForSQLOrder(false, false, false, selectors, vec)
-			for i := 1; i < len(selectors); i++ {
-				left := vec.GetBytesAt(int(selectors[i-1]))
-				right := vec.GetBytesAt(int(selectors[i]))
-				require.LessOrEqual(t, tc.compare(left, right), 0)
-			}
-			require.NotEqual(t, []int64{0, 1, 2, 3}, selectors)
-		})
-	}
+func TestSortByVectorsUnicodeCollationUsesSecondaryKey(t *testing.T) {
+	mp := mpool.MustNewZero()
+	first := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI))
+	second := vector.NewVec(types.T_int64.ToType())
+	defer first.Free(mp)
+	defer second.Free(mp)
+
+	require.NoError(t, vector.AppendStringList(first, []string{"Z", "a", "A", "b"}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(second, []int64{1, 2, 3, 4}, nil, mp))
+
+	selectors := []int64{0, 1, 2, 3}
+	SortByVectors(selectors, []*vector.Vector{first, second}, []bool{false, false}, []bool{false, false})
+	require.Equal(t, []int64{1, 2, 3, 0}, selectors)
+}
+
+func TestSortByVectorsUsesSemanticUnicodeTypeWhenVectorMetadataIsPhysical(t *testing.T) {
+	mp := mpool.MustNewZero()
+	physical := vector.NewVec(types.T_varchar.ToType())
+	second := vector.NewVec(types.T_int64.ToType())
+	defer physical.Free(mp)
+	defer second.Free(mp)
+
+	require.NoError(t, vector.AppendStringList(physical, []string{"Z", "a", "A", "b"}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(second, []int64{1, 2, 3, 4}, nil, mp))
+	semantic := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	selectors := []int64{0, 1, 2, 3}
+	SortByVectorsWithTypes(
+		selectors,
+		[]*vector.Vector{physical, second},
+		[]bool{false, false},
+		[]bool{false, false},
+		[]types.Type{semantic, types.T_int64.ToType()},
+	)
+	require.Equal(t, []int64{1, 2, 3, 0}, selectors)
+	// The metadata view must not mutate the physical vector.
+	require.Equal(t, types.CharsetUTF8, physical.GetType().Charset)
 }
 
 func TestSortByVectorsSortsNonNullPartitionWhenVectorHasNullElsewhere(t *testing.T) {
@@ -372,6 +379,26 @@ func TestSortByVectorsWithScratchMatchesConveniencePath(t *testing.T) {
 	require.Equal(t, want, got)
 	require.LessOrEqual(t, len(scratch.Partitions), len(got))
 	require.Len(t, scratch.Diffs, len(got))
+}
+
+func TestSortByVectorsConstantNullKey(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	constant := vector.NewConstNull(types.T_any.ToType(), 4, mp)
+	defer constant.Free(mp)
+	key := vector.NewVec(types.T_int64.ToType())
+	defer key.Free(mp)
+	require.NoError(t, vector.AppendFixedList(key, []int64{2, 1, 2, 1}, nil, mp))
+	for _, keys := range [][]*vector.Vector{{constant, key}, {key, constant}} {
+		selectors := []int64{0, 1, 2, 3}
+		SortByVectorsWithScratch(selectors, keys, []bool{false, false}, []bool{false, false}, &ByVectorsScratch{Partitions: make([]int64, 0, 4), Diffs: make([]bool, 4)})
+		values := vector.MustFixedColWithTypeCheck[int64](key)
+		got := make([]int64, len(selectors))
+		for i, sel := range selectors {
+			got[i] = values[sel]
+		}
+		require.Equal(t, []int64{1, 1, 2, 2}, got)
+	}
 }
 
 func BenchmarkSortInt(b *testing.B) {

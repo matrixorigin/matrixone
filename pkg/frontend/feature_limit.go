@@ -50,10 +50,12 @@ func checkSnapshotQuota(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
+	accountName string,
+	accountID uint32,
 	increment int64,
 	level string,
 ) (err error) {
-	return featureLimitChecker(ctx, ses, bh, featureCodeSnapshot, level, increment)
+	return featureLimitCheckerForAccount(ctx, ses, bh, featureCodeSnapshot, level, accountName, accountID, increment)
 }
 
 func checkBranchQuotaForAccount(
@@ -69,35 +71,18 @@ func checkBranchQuotaForAccount(
 	)
 }
 
+// The account quota row serializes publishers. Locking every counted branch
+// here would invert K -> Q when another component waits for the same quota.
+// Deletion only reduces usage; whole-catalog restore is excluded by G.
 func branchQuotaUsageSQL(accountID uint32) string {
 	return fmt.Sprintf(
-		"select count(*) from %s.%s b join %s.%s t on b.table_id = t.rel_id where t.account_id = %d and b.table_deleted = false and b.level != '%s' for update",
+		"select count(*) from %s.%s b join %s.%s t on b.table_id = t.rel_id where t.account_id = %d and b.table_deleted = false and b.level != '%s'",
 		catalog.MO_CATALOG,
 		catalog.MO_BRANCH_METADATA,
 		catalog.MO_CATALOG,
 		catalog.MO_TABLES,
 		accountID,
 		databranchutils.AlterLineageLevel,
-	)
-}
-
-func featureLimitChecker(
-	ctx context.Context,
-	ses *Session,
-	bh BackgroundExec,
-	featureCode string,
-	featureScope string,
-	increment int64,
-) (err error) {
-	return featureLimitCheckerForAccount(
-		ctx,
-		ses,
-		bh,
-		featureCode,
-		featureScope,
-		ses.GetTenantInfo().Tenant,
-		ses.GetTenantInfo().TenantID,
-		increment,
 	)
 }
 
@@ -112,10 +97,8 @@ func featureLimitCheckerForAccount(
 	increment int64,
 ) (err error) {
 	var (
-		limitQuota  int64
-		sql         string
-		sqlRet      executor.Result
-		lockingRead bool
+		limitQuota int64
+		sqlRet     executor.Result
 	)
 
 	defer func() {
@@ -127,17 +110,8 @@ func featureLimitCheckerForAccount(
 
 	// Feature limits are admission-control state. The owning mutation installs
 	// its TN-ordered catalog frontier before writing the shared lifecycle gate;
-	// do not advance that transaction snapshot again after the write. A branch
-	// running inside an explicit SI transaction instead uses an independent short
-	// RC transaction for this control-plane read, because advancing the caller's
-	// fixed snapshot would violate its isolation.
-	if featureCode == featureCodeBranch && featureLimitTxnUsesFixedSnapshot(bh) {
-		limitQuota, err = queryQuotaInIndependentTxn(
-			ctx, ses, accId, featureCode, featureScope,
-		)
-	} else {
-		limitQuota, err = queryQuota(ctx, ses, bh, accId, featureCode, featureScope)
-	}
+	// do not advance that transaction snapshot again after the write.
+	limitQuota, err = queryQuota(ctx, ses, bh, accId, featureCode, featureScope)
 	if err != nil {
 		return err
 	}
@@ -146,6 +120,11 @@ func featureLimitCheckerForAccount(
 	if featureCode == featureCodeBranch && limitQuota > 0 {
 		if err = checkBranchQuotaTxn(bh); err != nil {
 			return err
+		}
+		if _, realOwner := bh.(*backExec); realOwner {
+			if err = lockBranchQuotaAdmission(ctx, ses, bh, accId); err != nil {
+				return err
+			}
 		}
 		if limitQuota, err = lockFeatureQuota(ctx, ses, bh, accId, featureCode, featureScope); err != nil {
 			return err
@@ -171,28 +150,25 @@ func featureLimitCheckerForAccount(
 	}
 
 	if featureCode == featureCodeSnapshot {
-		// Exclude branch-managed rows from the per-account snapshot
-		// quota — those are internal protection entries inserted by
-		// `DATA BRANCH CREATE` and must not count against user quota
-		// (design §7.3 / review PR#24313 blocking issue #2).
-		sql = fmt.Sprintf(
-			"select count(*) from %s.%s where account_name = '%s' and level = '%s' and kind != '%s'",
-			catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, accName, featureScope,
-			databranchutils.BranchSnapshotKind,
-		)
+		pinned, countErr := snapshotQuotaUsage(ctx, ses, bh, accName, accId, featureScope)
+		if countErr != nil {
+			return countErr
+		}
+		if pinned+increment > limitQuota {
+			return moerr.NewInternalErrorNoCtxf(
+				"feature %s with scope %s has reached the limit of %d",
+				featureCode, featureScope, limitQuota,
+			)
+		}
+		return nil
 	} else if featureCode == featureCodeBranch {
 		ctx = defines.AttachAccountId(ctx, sysAccountID)
-		lockingRead = true
-		sql = branchQuotaUsageSQL(accId)
+		sql := branchQuotaUsageSQL(accId)
+		sqlRet, err = runSqlWithBackExec(ctx, ses, bh, sql)
 	} else {
 		return moerr.NewInternalErrorNoCtxf("no such feature %s with scope %s", featureCode, featureScope)
 	}
 
-	if lockingRead {
-		sqlRet, err = runSqlWithBackExec(ctx, ses, bh, sql)
-	} else {
-		sqlRet, err = runSql(ctx, ses, bh, sql, nil, nil)
-	}
 	if err != nil {
 		return err
 	}
@@ -211,6 +187,46 @@ func featureLimitCheckerForAccount(
 	}
 
 	return nil
+}
+
+// snapshotQuotaUsage charges ACCOUNT snapshots to their target even when sys
+// stores an on-behalf row in its own physical catalog. Local rows are matched
+// by name so historical publication snapshots with a wrong obj_id still count.
+func snapshotQuotaUsage(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	accountName string,
+	accountID uint32,
+	level string,
+) (int64, error) {
+	count := func(storageID uint32, sysOnBehalf bool) (int64, error) {
+		predicate := fmt.Sprintf(
+			"account_name = '%s' and level = '%s' and kind != '%s'",
+			strings.ReplaceAll(accountName, "'", "''"), level, databranchutils.BranchSnapshotKind,
+		)
+		if sysOnBehalf {
+			predicate += fmt.Sprintf(" and obj_id = %d", accountID)
+		}
+		sql := fmt.Sprintf("select count(*) from %s.%s where %s", catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, predicate)
+		result, err := runSql(defines.AttachAccountId(ctx, storageID), ses, bh, sql, nil, nil)
+		if err != nil {
+			result.Close()
+			return 0, err
+		}
+		defer result.Close()
+		if len(result.Batches) == 0 || result.Batches[0].RowCount() == 0 {
+			return 0, nil
+		}
+		return vector.GetFixedAtNoTypeCheck[int64](result.Batches[0].Vecs[0], 0), nil
+	}
+
+	local, err := count(accountID, false)
+	if err != nil || accountID == sysAccountID || level != "account" {
+		return local, err
+	}
+	sysHeld, err := count(sysAccountID, true)
+	return local + sysHeld, err
 }
 
 func checkBranchQuotaTxn(bh BackgroundExec) error {
@@ -233,32 +249,6 @@ func checkBranchQuotaTxn(bh BackgroundExec) error {
 func featureLimitTxnUsesFixedSnapshot(bh BackgroundExec) bool {
 	txnOp := backgroundExecTxnOperator(bh)
 	return txnOp != nil && !txnOp.Txn().IsRCIsolation()
-}
-
-func queryQuotaInIndependentTxn(
-	ctx context.Context,
-	ses *Session,
-	accID uint32,
-	featureCode string,
-	featureScope string,
-) (quota int64, err error) {
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{
-		forcePessimisticRC:         true,
-		cancelTxnCreateWithRequest: true,
-	})
-	defer bh.Close()
-
-	if err = bh.Exec(ctx, "begin"); err != nil {
-		return 0, err
-	}
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-
-	if err = advanceFeatureLimitSnapshot(ctx, ses, bh); err != nil {
-		return 0, err
-	}
-	return queryQuota(ctx, ses, bh, accID, featureCode, featureScope)
 }
 
 func advanceFeatureLimitSnapshot(
@@ -417,6 +407,8 @@ func queryQuota(
 
 	if len(sqlRet.Batches) == 0 || sqlRet.Batches[0].RowCount() == 0 {
 		// no record for this account, init
+		sqlRet.Close()
+		sqlRet = executor.Result{}
 		if code == featureCodeSnapshot {
 			quota = defaultSnapshotLimit
 		} else {
@@ -433,9 +425,9 @@ func queryQuota(
 		)
 
 		if code == featureCodeBranch {
-			_, err = runSqlWithBackExec(ctx, ses, bh, sql)
+			sqlRet, err = runSqlWithBackExec(ctx, ses, bh, sql)
 		} else {
-			_, err = runSql(ctx, ses, bh, sql, nil, nil)
+			sqlRet, err = runSql(ctx, ses, bh, sql, nil, nil)
 		}
 		if err != nil {
 			return 0, err

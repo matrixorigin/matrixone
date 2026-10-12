@@ -121,9 +121,6 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		return nil
 	}
 	for _, vec := range vecs {
-		if err := validateCollationHashValues(vec, start, count); err != nil {
-			return err
-		}
 		withDomain := itr.mp.hasNull || itr.mp.groupingAware
 		prefix := 0
 		if withDomain {
@@ -388,7 +385,12 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 }
 
 func appendVarlenaHashKey(dst []byte, typ types.Type, value []byte) []byte {
-	value = canonicalVarlenaHashValueForType(typ, value)
+	// MySQL string vectors use fillStringGroupStr/fillGroupingAwareVarlena,
+	// which carry the resolved type into canonicalVarlenaHashValueForType.
+	// This helper is retained for JSON/array varlena encodings only; keeping a
+	// second Unicode branch here would be unreachable and would make the two
+	// string hash paths drift.
+	value = canonicalVarlenaHashValue(typ.Oid, value)
 	switch typ.Oid {
 	case types.T_json:
 		return keycodec.AppendCanonicalJSON(dst, value)
@@ -414,83 +416,10 @@ func canonicalVarlenaHashValue(oid types.T, value []byte) []byte {
 }
 
 func canonicalVarlenaHashValueForType(typ types.Type, value []byte) []byte {
-	if !typ.Oid.IsMySQLString() {
-		return canonicalVarlenaHashValue(typ.Oid, value)
+	if types.IsUnicodeCollation(typ.Charset) && typ.Oid.IsMySQLString() {
+		return types.CollationKeyOrOriginal(typ.Charset, value)
 	}
-	// Versioned text identities hash the same opaque comparison key used by
-	// tuple/index writers. Legacy text identities retain the historical raw
-	// byte contract (including CHAR's existing trailing-space canonicalization).
-	if !types.NeedsCollationKey(typ, types.PADSpaceKeyV1) {
-		return canonicalVarlenaHashValue(typ.Oid, value)
-	}
-	part, err := types.ResolveStringKeyPart(typ, types.PADSpaceKeyV1)
-	if err != nil || !part.Transformed() {
-		return value
-	}
-	key, err := part.Key(nil, value)
-	if err != nil {
-		// prepareHashKeys validates every transformed value before this encoder
-		// runs. Keep the fallback defensive for callers that use the helper in
-		// tests or future non-iterator paths.
-		return value
-	}
-	return key
-}
-
-func validateCollationHashValues(vec *vector.Vector, start, count int) error {
-	if vec == nil || !vec.GetType().Oid.IsMySQLString() {
-		return nil
-	}
-	if !types.NeedsCollationKey(*vec.GetType(), types.PADSpaceKeyV1) {
-		// Legacy identities keep the historical raw-byte hash path. Do not
-		// validate or allocate a comparison key for them; doing so would change
-		// error behavior for old malformed-byte inputs and their grouping
-		// identity.
-		return nil
-	}
-	part, err := types.ResolveStringKeyPart(*vec.GetType(), types.PADSpaceKeyV1)
-	if err != nil {
-		return err
-	}
-	if !part.Transformed() || vec.IsConstNull() {
-		return nil
-	}
-	check := func(value []byte) error {
-		_, err := part.Key(nil, value)
-		return err
-	}
-	if vec.IsConst() {
-		return check(vec.GetBytesAt(0))
-	}
-	if !vec.GetNulls().Any() {
-		values, area := vector.MustVarlenaRawData(vec)
-		for i := 0; i < count; i++ {
-			row := start + i
-			value := values[row].ByteSlice()
-			if area != nil {
-				value = values[row].GetByteSlice(area)
-			}
-			if err := check(value); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	values, area := vector.MustVarlenaRawData(vec)
-	for i := 0; i < count; i++ {
-		row := start + i
-		if vec.GetNulls().Contains(uint64(row)) {
-			continue
-		}
-		value := values[row].ByteSlice()
-		if area != nil {
-			value = values[row].GetByteSlice(area)
-		}
-		if err := check(value); err != nil {
-			return err
-		}
-	}
-	return nil
+	return canonicalVarlenaHashValue(typ.Oid, value)
 }
 
 func appendFramedVarlenaHashKey(dst []byte, typ types.Type, value []byte) []byte {

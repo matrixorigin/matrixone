@@ -852,7 +852,7 @@ func setupHandlerTestSession(
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOperator).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)

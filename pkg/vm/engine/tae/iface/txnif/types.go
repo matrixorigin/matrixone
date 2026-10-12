@@ -112,6 +112,7 @@ type TxnChanger interface {
 	ToRollbackingLocked(ts types.TS) error
 	ToUnknownLocked()
 	Commit(ctx context.Context) error
+	CommitWithCallback(ctx context.Context, onCommit func()) error
 	Rollback(ctx context.Context) error
 	SetCommitTS(cts types.TS) error
 	SetDedupType(skip DedupPolicy)

@@ -124,18 +124,16 @@ func ctasViewDefaultPolicy(metadata SourceColumnMetadata) CTASDefaultPolicy {
 	return CTASDefaultNone
 }
 
-func (bc *BindContext) markViewCTASDefaultBoundary(viewCols []*plan.ColDef) {
+func (bc *BindContext) markViewCTASDefaultBoundary() {
 	for i := 0; i < min(len(bc.headings), len(bc.projects)); i++ {
 		provenance := bc.outputColumnProvenanceForProject(int32(i))
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
 			// The authoritative View schema has already applied outer-join
 			// null-extension. Preserve source identity/default policy, but take
 			// nullability from that boundary instead of the pre-join base column.
-			if i < len(viewCols) {
-				source := *provenance.Source
-				source.Metadata.NullAbility = snapshotSourceColumnMetadata(viewCols[i]).NullAbility
-				provenance.Source = &source
-			}
+			source := *provenance.Source
+			source.Metadata.NullAbility = !bc.projects[i].Typ.NotNullable
+			provenance.Source = &source
 			provenance.CTASDefaultPolicy = ctasViewDefaultPolicy(provenance.Source.Metadata)
 		}
 		bc.setOutputColumnProvenance(int32(i), provenance)

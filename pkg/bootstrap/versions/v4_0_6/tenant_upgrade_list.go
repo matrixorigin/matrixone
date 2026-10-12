@@ -373,18 +373,7 @@ func populateInformationSchemaCharacterSets() versions.UpgradeEntry {
 }
 
 func informationSchemaCharacterSetsCheckSQL() string {
-	return fmt.Sprintf(
-		"SELECT 1 FROM information_schema.CHARACTER_SETS "+
-			"WHERE CHARACTER_SET_NAME = 'binary' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = 1 "+
-			"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
-			"WHERE CHARACTER_SET_NAME = 'utf8' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = 3) "+
-			"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
-			"WHERE CHARACTER_SET_NAME = 'utf8mb4' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = 4) "+
-			"LIMIT 1",
-		sysview.DefaultCollationForCharset("binary"),
-		sysview.DefaultCollationForCharset("utf8"),
-		sysview.DefaultCollationForCharset("utf8mb4"),
-	)
+	return sysview.InformationSchemaCharacterSetsCheckSQL()
 }
 
 func upgradeInformationSchemaColumnsBinaryStrings() versions.UpgradeEntry {
@@ -393,8 +382,8 @@ func upgradeInformationSchemaColumnsBinaryStrings() versions.UpgradeEntry {
 		TableName:               "COLUMNS",
 		UpgType:                 versions.MODIFY_VIEW,
 		PreSql:                  "DROP VIEW IF EXISTS information_schema.COLUMNS;",
-		UpgSql:                  sysview.InformationSchemaColumnsDDL,
-		CheckFunc:               checkViewDefinition("COLUMNS", sysview.InformationSchemaColumnsDDL),
+		UpgSql:                  sysview.InformationSchemaColumnsV58DDL(),
+		CheckFunc:               checkViewDefinition("COLUMNS", sysview.InformationSchemaColumnsV58DDL()),
 		RequiredProtocolVersion: defines.MORPCVersion58,
 	}
 }

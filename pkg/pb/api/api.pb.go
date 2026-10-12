@@ -1954,12 +1954,8 @@ type SchemaExtra struct {
 	DefaultCharset uint32 `protobuf:"varint,19,opt,name=default_charset,json=defaultCharset,proto3" json:"default_charset,omitempty"`
 	// Table-owned AUTO_INCREMENT reservation policy. Zero inherits the service default.
 	AutoIdCache uint64 `protobuf:"varint,20,opt,name=auto_id_cache,json=autoIdCache,proto3" json:"auto_id_cache,omitempty"`
-	// Physical tuple/key encoding used by this relation. Zero identifies
-	// legacy catalog rows; native 0900 definitions use the registered format.
-	KeyFormat uint32 `protobuf:"varint,21,opt,name=key_format,json=keyFormat,proto3" json:"key_format,omitempty"`
-	// Semantic collation contract used by textual columns inherited from the
-	// table default. Zero preserves the legacy interpretation; column-level
-	// identities are carried by each plan column independently.
+	// Zero retains legacy physical keys and text semantics.
+	KeyFormat            uint32   `protobuf:"varint,21,opt,name=key_format,json=keyFormat,proto3" json:"key_format,omitempty"`
 	CollationVersion     uint32   `protobuf:"varint,22,opt,name=collation_version,json=collationVersion,proto3" json:"collation_version,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
@@ -10146,7 +10142,7 @@ func (m *SchemaExtra) Unmarshal(dAtA []byte) error {
 	if iNdEx > l {
 		return io.ErrUnexpectedEOF
 	}
-	return nil
+	return m.ValidateCollation()
 }
 func (m *Int64Map) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)

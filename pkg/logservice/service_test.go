@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	hapkg "github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -44,6 +45,31 @@ type failOpenFS struct {
 	vfs.FS
 	path string
 	err  error
+}
+
+type closeOrderDataSync struct {
+	closed bool
+}
+
+func (d *closeOrderDataSync) Append(context.Context, uint64, []byte)     {}
+func (d *closeOrderDataSync) NotifyReplicaID(uint64, uint64, ChangeType) {}
+func (d *closeOrderDataSync) Close() error {
+	d.closed = true
+	return nil
+}
+
+type closeOrderRPCServer struct {
+	dataSync *closeOrderDataSync
+}
+
+func (s *closeOrderRPCServer) Start() error { return nil }
+func (s *closeOrderRPCServer) Close() error {
+	if s.dataSync.closed {
+		return errors.New("data sync closed before rpc ingress")
+	}
+	return nil
+}
+func (s *closeOrderRPCServer) RegisterRequestHandler(func(context.Context, morpc.RPCMessage, uint64, morpc.ClientSession) error) {
 }
 
 func (f *failOpenFS) Open(name string, opts ...vfs.OpenOption) (vfs.File, error) {
@@ -119,6 +145,20 @@ func TestNewService(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.NoError(t, service.Close())
+	assert.NoError(t, service.Close())
+}
+
+func TestServiceCloseStopsRPCBeforeDataSync(t *testing.T) {
+	ds := &closeOrderDataSync{}
+	service := &Service{
+		stopper:  stopper.NewStopper(t.Name()),
+		server:   &closeOrderRPCServer{dataSync: ds},
+		dataSync: ds,
+	}
+
+	require.NoError(t, service.Close())
+	require.True(t, ds.closed)
+	require.NoError(t, service.Close())
 }
 
 func TestNewServiceClosesStoreOnMetadataFailure(t *testing.T) {
@@ -155,6 +195,11 @@ func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 	var cfg Config
 	generate := func() Config {
 		cfg = genCfg()
+		// This fixture tests duplicate-replica startup cleanup, not remote
+		// membership discovery. An unrelated service at the default 32001
+		// address could classify the injected replica as a zombie and bypass
+		// the intended StartReplica failure. Self is excluded from that probe.
+		cfg.HAKeeperClientConfig.ServiceAddresses = []string{cfg.LogServiceServiceAddr()}
 		return cfg
 	}
 	defer vfs.ReportLeakedFD(fs, t)
@@ -176,6 +221,10 @@ func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, cfg.FS))
 
 	service, err = NewServiceWithRetry(generate, newFS(), nil)
+	if service != nil {
+		unexpected := service
+		t.Cleanup(func() { require.NoError(t, unexpected.Close()) })
+	}
 	require.Nil(t, service)
 	require.ErrorIs(t, err, dragonboat.ErrShardAlreadyExist)
 
@@ -356,6 +405,12 @@ func TestServiceHandleLogHeartbeat(t *testing.T) {
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
 		resp := s.handleLogHeartbeat(ctx, req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleLogHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -374,6 +429,12 @@ func TestServiceHandleCNHeartbeat(t *testing.T) {
 		resp := s.handleCNHeartbeat(ctx, req)
 		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleCNHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -417,6 +478,12 @@ func TestServiceHandleTNHeartbeat(t *testing.T) {
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
 		resp := s.handleTNHeartbeat(ctx, req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleTNHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
 }

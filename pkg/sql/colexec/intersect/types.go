@@ -81,6 +81,7 @@ type container struct {
 
 	// Hash table for checking duplicate data
 	hashTable *hashmap.StrHashMap
+	iterator  hashmap.Iterator
 
 	// Result batch of intersec column execute operator
 	buf *batch.Batch
@@ -115,6 +116,8 @@ func (intersect *Intersect) ExecProjection(proc *process.Process, input *batch.B
 }
 
 func (ctr *container) cleanHashMap() {
+	hashmap.IteratorClearOwner(ctr.iterator)
+	ctr.iterator = nil
 	if ctr.hashTable != nil {
 		ctr.hashTable.Free()
 		ctr.hashTable = nil

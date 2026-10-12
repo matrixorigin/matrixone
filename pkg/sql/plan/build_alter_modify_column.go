@@ -34,12 +34,11 @@ func updateNewColumnInTableDef(
 ) (bool, error) {
 	ctx := cctx.GetContext()
 
-	nTy, err := getTypeFromAst(ctx, nColSpec.Type)
+	nTy, err := getColumnTypeFromAst(ctx, nColSpec, tableDef.DefaultCharset, nil)
 	if err != nil {
 		return false, err
 	}
-	nTy.Charset = uint32(types.CharsetType(types.T(nTy.Id)))
-	if err = applyDefaultAndColumnAttributesToType(ctx, &nTy, tableDef.DefaultCharset, nColSpec.Attributes); err != nil {
+	if err = requireMediumIntProtocolForAuthoring(ctx, cctx.GetProcess(), nTy); err != nil {
 		return false, err
 	}
 
@@ -270,7 +269,7 @@ func checkColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef, orig
 		newCol.Typ.GetWidth() == originalCol.Typ.GetWidth() &&
 		newCol.Typ.GetScale() == originalCol.Typ.GetScale() &&
 		newCol.Typ.GetEnumvalues() == originalCol.Typ.GetEnumvalues() &&
-		newCol.Typ.GetCharset() == originalCol.Typ.GetCharset() &&
+		newCol.Typ.SameCollation(originalCol.Typ) &&
 		newCol.Typ.GetPadSpace() == originalCol.Typ.GetPadSpace() &&
 		newCol.Typ.GetAutoIncr() == originalCol.Typ.GetAutoIncr() {
 		return nil

@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1629,6 +1630,149 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		require.ErrorIs(t, err, wantErr)
 	})
 
+	t.Run("temporal primary key probe preserves fractional precision", func(t *testing.T) {
+		ses.timeZone = time.UTC
+		tests := []struct {
+			name    string
+			typ     types.Type
+			literal string
+			cast    string
+			value   any
+		}{
+			{
+				name:    "datetime(6)",
+				typ:     types.New(types.T_datetime, 0, 6),
+				literal: "2024-01-01 00:00:00.000001",
+				cast:    "DATETIME(6)",
+			},
+			{
+				name:    "timestamp(6)",
+				typ:     types.New(types.T_timestamp, 0, 6),
+				literal: "2024-01-01 00:00:00.000001",
+				cast:    "TIMESTAMP(6)",
+			},
+			{
+				name:    "time(6)",
+				typ:     types.New(types.T_time, 0, 6),
+				literal: "00:00:00.000001",
+				cast:    "TIME(6)",
+			},
+		}
+		for i := range tests {
+			tc := &tests[i]
+			var err error
+			switch tc.typ.Oid {
+			case types.T_datetime:
+				tc.value, err = types.ParseDatetime(tc.literal, tc.typ.Scale)
+			case types.T_timestamp:
+				tc.value, err = types.ParseTimestamp(ses.timeZone, tc.literal, tc.typ.Scale)
+			case types.T_time:
+				tc.value, err = types.ParseTime(tc.literal, tc.typ.Scale)
+			}
+			require.NoError(t, err)
+		}
+
+		runProbe := func(t *testing.T, tc struct {
+			name    string
+			typ     types.Type
+			literal string
+			cast    string
+			value   any
+		}, composite bool) {
+			t.Helper()
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			tblStuff := newTestBranchTableStuff(ctrl)
+			tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+			tblStuff.def.colTypes[0] = tc.typ
+			if composite {
+				tblStuff.def.pkKind = compositeKind
+				tblStuff.def.pkColIdxes = []int{0, 1}
+				tblStuff.def.colTypes = []types.Type{
+					tc.typ,
+					types.T_int64.ToType(),
+					types.T_varchar.ToType(),
+				}
+			}
+
+			targetDef := tblStuff.tarRel.GetTableDef(context.Background())
+			targetDef.Cols[0].Typ = plan.Type{Id: int32(tc.typ.Oid), Scale: tc.typ.Scale}
+			lcaDef := newTestBranchTableDef("lca_tbl", "name")
+			lcaDef.Cols[0].Typ = targetDef.Cols[0].Typ
+			if composite {
+				targetDef.Cols[1].Typ = plan.Type{Id: int32(types.T_int64)}
+				lcaDef.Cols[1].Typ = targetDef.Cols[1].Typ
+			}
+			tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().
+				GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+			tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().
+				GetTableID(gomock.Any()).Return(uint64(82)).AnyTimes()
+
+			wantErr := moerr.NewInternalErrorNoCtx("stop after sql capture")
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+				expectedCast := tc.cast
+				if composite {
+					require.Contains(t, sql, "values row(0,'"+tc.literal+"', 7)")
+					require.Contains(t, sql,
+						"lca.`id` = cast(pks.`__mo_data_branch_pk_0` as "+expectedCast+")")
+					require.Contains(t, sql,
+						"lca.`name` = cast(pks.`__mo_data_branch_pk_1` as BIGINT)")
+				} else {
+					require.Contains(t, sql, "values row(0,'"+tc.literal+"')")
+					require.Contains(t, sql,
+						"lca.`id` = cast(pks.`__mo_data_branch_pk_0` as "+expectedCast+")")
+				}
+				return wantErr
+			}).Times(1)
+
+			tBat := batch.NewWithSize(1)
+			if composite {
+				tBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+				packer := types.NewPacker()
+				defer packer.Close()
+				switch value := tc.value.(type) {
+				case types.Datetime:
+					packer.EncodeDatetime(value)
+				case types.Timestamp:
+					packer.EncodeTimestamp(value)
+				case types.Time:
+					packer.EncodeTime(value)
+				}
+				packer.EncodeInt64(7)
+				require.NoError(t, vector.AppendBytes(tBat.Vecs[0], packer.GetBuf(), false, ses.proc.Mp()))
+			} else {
+				tBat.Vecs[0] = vector.NewVec(tc.typ)
+				switch value := tc.value.(type) {
+				case types.Datetime:
+					require.NoError(t, vector.AppendFixed(tBat.Vecs[0], value, false, ses.proc.Mp()))
+				case types.Timestamp:
+					require.NoError(t, vector.AppendFixed(tBat.Vecs[0], value, false, ses.proc.Mp()))
+				case types.Time:
+					require.NoError(t, vector.AppendFixed(tBat.Vecs[0], value, false, ses.proc.Mp()))
+				}
+			}
+			tBat.SetRowCount(1)
+			defer tBat.Clean(ses.proc.Mp())
+
+			_, err := handleDelsOnLCA(
+				context.Background(), ses, bh, tBat, tblStuff,
+				types.BuildTS(10, 0).ToTimestamp(),
+			)
+			require.ErrorIs(t, err, wantErr)
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				runProbe(t, tc, false)
+			})
+		}
+		t.Run("datetime(6) first column of composite primary key", func(t *testing.T) {
+			runProbe(t, tests[0], true)
+		})
+	})
+
 	t.Run("internal aliases do not collide with user primary key", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -2768,8 +2912,32 @@ func TestLCAProbeJoinCastType(t *testing.T) {
 		{name: "varbinary", typ: types.T_varbinary.ToType(), want: "VARBINARY", ok: true},
 		{name: "decimal64", typ: types.New(types.T_decimal64, 12, 2), want: types.New(types.T_decimal64, 12, 2).DescString(), ok: true},
 		{name: "decimal256", typ: types.New(types.T_decimal256, 39, 4), want: types.New(types.T_decimal256, 39, 4).DescString(), ok: true},
-		{name: "timestamp", typ: types.New(types.T_timestamp, 0, 6), want: types.New(types.T_timestamp, 0, 6).String(), ok: true},
+		{name: "date", typ: types.T_date.ToType(), want: "DATE", ok: true},
+		{name: "year", typ: types.T_year.ToType(), want: "YEAR", ok: true},
 		{name: "unsupported", typ: types.T_bool.ToType(), want: "", ok: false},
+	}
+	for _, tc := range []struct {
+		oid  types.T
+		name string
+	}{
+		{oid: types.T_datetime, name: "DATETIME"},
+		{oid: types.T_time, name: "TIME"},
+		{oid: types.T_timestamp, name: "TIMESTAMP"},
+	} {
+		for scale := int32(0); scale <= 6; scale++ {
+			typ := types.New(tc.oid, 0, scale)
+			tests = append(tests, struct {
+				name string
+				typ  types.Type
+				want string
+				ok   bool
+			}{
+				name: fmt.Sprintf("%s(%d)", tc.name, scale),
+				typ:  typ,
+				want: fmt.Sprintf("%s(%d)", tc.name, scale),
+				ok:   true,
+			})
+		}
 	}
 
 	for _, tt := range tests {
@@ -3550,4 +3718,92 @@ func TestCompareRowInWrappedBatches_WithCommonIdxes(t *testing.T) {
 	bat1.Clean(mp)
 	bat2.Clean(mp)
 	bat3.Clean(mp)
+}
+
+func TestHashDiffOnlineApplyOrdersLCAChunks(t *testing.T) {
+	for _, failApply := range []bool{false, true} {
+		t.Run(fmt.Sprintf("apply_failure_%t", failApply), func(t *testing.T) {
+			wantProbes := 3
+			if failApply {
+				wantProbes = 1
+			}
+			sentinel := moerr.NewInternalErrorNoCtx("inline apply failed")
+			ses := newValidateSession(t)
+			ctrl := gomock.NewController(t)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(20, 0).ToTimestamp()).AnyTimes()
+			ses.txnHandler = &TxnHandler{txnOp: txnOp}
+			tblStuff := newTestBranchTableStuff(ctrl)
+			defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+			worker, err := ants.NewPool(1)
+			require.NoError(t, err)
+			defer worker.Release()
+			tblStuff.worker = worker
+			tblStuff.maxTombstoneBatchCnt = 1
+			tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+			lcaRel := mock_frontend.NewMockRelation(ctrl)
+			lcaRel.EXPECT().GetTableDef(gomock.Any()).Return(newTestBranchTableDef("lca_tbl", "name")).AnyTimes()
+			lcaRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
+			tblStuff.lcaRel = lcaRel
+			var active atomic.Bool
+			var key atomic.Int64
+			var probes atomic.Int32
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+				require.True(t, active.CompareAndSwap(false, true), "no overlapping probe/apply SQL")
+				var id int64
+				_, err := fmt.Sscanf(sql[strings.Index(sql, "values row(0,"):], "values row(0,%d)", &id)
+				require.NoError(t, err)
+				key.Store(id)
+				return nil
+			}).Times(wantProbes)
+			bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+				return []interface{}{buildLCAProbeResultSetWithRows([]interface{}{int64(0), key.Load(), "old", "h"})}
+			}).Times(wantProbes)
+			bh.EXPECT().ClearExecResultSet().Do(func() {
+				probes.Add(1)
+				active.Store(false)
+			}).Times(wantProbes)
+			var dataRows, tombRows [][]any
+			var oldIDs, newIDs []types.Rowid
+			for i := 1; i <= 3; i++ {
+				dataRows = append(dataRows, []any{int64(i), "new", "h", commitTSBytes(types.BuildTS(15, 0))})
+				tombRows = append(tombRows, []any{int64(i), commitTSBytes(types.BuildTS(15, 0))})
+				oldIDs = append(oldIDs, buildHashDiffRowID(t, i))
+				newIDs = append(newIDs, buildHashDiffRowID(t, i+10))
+			}
+			tarData := buildHashDiffDataBatchWithRowIDs(t, ses.proc.Mp(), newIDs, dataRows)
+			tarTombstone := buildHashDiffTombstoneBatchWithRowIDs(t, ses.proc.Mp(), oldIDs, tombRows)
+			var updates int
+			var failedBatch *batch.Batch
+			var earlyApply bool
+			err = hashDiff(t.Context(), ses, bh, tblStuff, branchMetaInfo{
+				lcaTableId: 77, pathFromLCAToTar: []uint64{77, 88}, pathFromLCAToTarTS: []types.TS{{}, types.BuildTS(10, 0)},
+				pathFromLCAToBase: []uint64{77}, pathFromLCAToBaseTS: []types.TS{{}},
+			}, compositeOption{onlineApply: true, expandUpdate: true, conflictOpt: &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT}}, func(w batchWithKind) (bool, error) {
+				if failApply && probes.Load() > 0 {
+					failedBatch = w.batch
+					return false, sentinel
+				}
+				require.True(t, active.CompareAndSwap(false, true), "probe must exit before inline apply/flush")
+				if w.kind == diffInsert && w.fromUpdate {
+					updates += w.batch.RowCount()
+					earlyApply = earlyApply || probes.Load() < 3
+				}
+				tblStuff.retPool.releaseRetBatch(w.batch, false)
+				active.Store(false)
+				return false, nil
+			}, []engine.ChangesHandle{&stubEngineChangesHandle{responses: []stubEngineChangesHandleResponse{{data: tarData, tombstone: tarTombstone}}}}, nil, nil)
+			if failApply {
+				require.ErrorIs(t, err, sentinel)
+				require.NotNil(t, failedBatch)
+				require.Zero(t, failedBatch.RowCount(), "emitBatch releases rejected output")
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, 3, updates)
+				require.True(t, earlyApply, "multiple chunks interleave ordered probe/apply instead of retaining all results")
+			}
+			require.Equal(t, int32(wantProbes), probes.Load())
+		})
+	}
 }

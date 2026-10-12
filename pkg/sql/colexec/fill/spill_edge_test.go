@@ -62,7 +62,7 @@ func TestFillSpillFileAndPartitionSnapshotBoundaries(t *testing.T) {
 }
 
 func TestFillAllocationAccountBindingBoundaries(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	registry, err := mpool.NewAllocationAccountRegistry(2, 64)
 	require.NoError(t, err)
 	first, err := registry.Open(1 << 20)

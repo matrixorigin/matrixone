@@ -18,11 +18,11 @@ begin;
 alter table t1 add column col5 int default 0;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
-col3    VARCHAR(16)    NO        null        
-col4    INT(32)    NO        null        
-col5    INT(32)    YES        0        
+col1    int    NO    PRI    null        
+col2    date    NO        null        
+col3    varchar(16)    NO        null        
+col4    int    NO        null        
+col5    int    YES        0        
 select * from t1;
 col1    col2    col3    col4    col5
 1    1980-12-17    Abby    21    0
@@ -46,11 +46,11 @@ col1    col2    col3    col4    col5
 alter table t1 modify col5 VARCHAR(20);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
-col3    VARCHAR(16)    NO        null        
-col4    INT(32)    NO        null        
-col5    VARCHAR(20)    YES        null        
+col1    int    NO    PRI    null        
+col2    date    NO        null        
+col3    varchar(16)    NO        null        
+col4    int    NO        null        
+col5    varchar(20)    YES        null        
 select * from t1;
 col1    col2    col3    col4    col5
 1    1980-12-17    Abby    21    0
@@ -67,11 +67,11 @@ t1
 commit;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
-col3    VARCHAR(16)    NO        null        
-col4    INT(32)    NO        null        
-col5    VARCHAR(20)    YES        null        
+col1    int    NO    PRI    null        
+col2    date    NO        null        
+col3    varchar(16)    NO        null        
+col4    int    NO        null        
+col5    varchar(20)    YES        null        
 select * from t1;
 col1    col2    col3    col4    col5
 1    1980-12-17    Abby    21    0
@@ -100,11 +100,11 @@ begin;
 alter table t1 add column col5 int default 0;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
-col3    VARCHAR(16)    NO        null        
-col4    INT(32)    NO        null        
-col5    INT(32)    YES        0        
+col1    int    NO    PRI    null        
+col2    date    NO        null        
+col3    varchar(16)    NO        null        
+col4    int    NO        null        
+col5    int    YES        0        
 select * from t1;
 col1    col2    col3    col4    col5
 1    1980-12-17    Abby    21    0
@@ -128,10 +128,10 @@ col1    col2    col3    col4    col5
 alter table t1 drop column col3;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
-col4    INT(32)    NO        null        
-col5    INT(32)    YES        0        
+col1    int    NO    PRI    null        
+col2    date    NO        null        
+col4    int    NO        null        
+col5    int    YES        0        
 select * from t1;
 col1    col2    col4    col5
 1    1980-12-17    21    0
@@ -148,10 +148,10 @@ t1
 commit;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
-col4    INT(32)    NO        null        
-col5    INT(32)    YES        0        
+col1    int    NO    PRI    null        
+col2    date    NO        null        
+col4    int    NO        null        
+col5    int    YES        0        
 select * from t1;
 col1    col2    col4    col5
 1    1980-12-17    21    0
@@ -180,11 +180,11 @@ begin;
 alter table t1 add column col5 int default 0;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
-col3    VARCHAR(16)    NO        null        
-col4    INT(32)    NO        null        
-col5    INT(32)    YES        0        
+col1    int    NO    PRI    null        
+col2    date    NO        null        
+col3    varchar(16)    NO        null        
+col4    int    NO        null        
+col5    int    YES        0        
 select * from t1;
 col1    col2    col3    col4    col5
 1    1980-12-17    Abby    21    0
@@ -198,11 +198,11 @@ insert into t1 values(8, '1991-05-01','fgreen', 26, 8);
 alter table t1 modify col5 VARCHAR(20);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
-col3    VARCHAR(16)    NO        null        
-col4    INT(32)    NO        null        
-col5    VARCHAR(20)    YES        null        
+col1    int    NO    PRI    null        
+col2    date    NO        null        
+col3    varchar(16)    NO        null        
+col4    int    NO        null        
+col5    varchar(20)    YES        null        
 select * from t1;
 col1    col2    col3    col4    col5
 1    1980-12-17    Abby    21    0
@@ -216,14 +216,14 @@ col1    col2    col3    col4    col5
 alter table t1 rename column col3 to colx;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    col1
+t1    0    PRIMARY    1    col1    A    0    NULL    NULL        BTREE                YES    col1
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
-colx    VARCHAR(16)    NO        null        
-col4    INT(32)    NO        null        
-col5    VARCHAR(20)    YES        null        
+col1    int    NO    PRI    null        
+col2    date    NO        null        
+colx    varchar(16)    NO        null        
+col4    int    NO        null        
+col5    varchar(20)    YES        null        
 select * from t1;
 col1    col2    colx    col4    col5
 1    1980-12-17    Abby    21    0
@@ -237,11 +237,11 @@ col1    col2    colx    col4    col5
 commit;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
-colx    VARCHAR(16)    NO        null        
-col4    INT(32)    NO        null        
-col5    VARCHAR(20)    YES        null        
+col1    int    NO    PRI    null        
+col2    date    NO        null        
+colx    varchar(16)    NO        null        
+col4    int    NO        null        
+col5    varchar(20)    YES        null        
 select * from t1;
 col1    col2    colx    col4    col5
 1    1980-12-17    Abby    21    0
@@ -270,11 +270,11 @@ begin;
 alter table t1 add column col5 int default 0;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
-col3    VARCHAR(16)    NO        null        
-col4    INT(32)    NO        null        
-col5    INT(32)    YES        0        
+col1    int    NO    PRI    null        
+col2    date    NO        null        
+col3    varchar(16)    NO        null        
+col4    int    NO        null        
+col5    int    YES        0        
 insert into t1 values(7, '1989-09-28','bcvdfx', 25, 7);
 insert into t1 values(8, '1991-05-01','fgreen', 26, 8);
 select * from t1;
@@ -290,11 +290,11 @@ col1    col2    col3    col4    col5
 alter table t1 modify col5 VARCHAR(20);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col2    DATE(0)    NO        null        
-col3    VARCHAR(16)    NO        null        
-col4    INT(32)    NO        null        
-col5    VARCHAR(20)    YES        null        
+col1    int    NO    PRI    null        
+col2    date    NO        null        
+col3    varchar(16)    NO        null        
+col4    int    NO        null        
+col5    varchar(20)    YES        null        
 select * from t1;
 col1    col2    col3    col4    col5
 1    1980-12-17    Abby    21    0
@@ -308,14 +308,14 @@ col1    col2    col3    col4    col5
 alter table t1 change col2 colx datetime;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    col1
+t1    0    PRIMARY    1    col1    A    0    NULL    NULL        BTREE                YES    col1
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-colx    DATETIME(0)    YES        null        
-col3    VARCHAR(16)    NO        null        
-col4    INT(32)    NO        null        
-col5    VARCHAR(20)    YES        null        
+col1    int    NO    PRI    null        
+colx    datetime    YES        null        
+col3    varchar(16)    NO        null        
+col4    int    NO        null        
+col5    varchar(20)    YES        null        
 select * from t1;
 col1    colx    col3    col4    col5
 1    1980-12-17 00:00:00    Abby    21    0
@@ -329,11 +329,11 @@ col1    colx    col3    col4    col5
 commit;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-colx    DATETIME(0)    YES        null        
-col3    VARCHAR(16)    NO        null        
-col4    INT(32)    NO        null        
-col5    VARCHAR(20)    YES        null        
+col1    int    NO    PRI    null        
+colx    datetime    YES        null        
+col3    varchar(16)    NO        null        
+col4    int    NO        null        
+col5    varchar(20)    YES        null        
 select * from t1;
 col1    colx    col3    col4    col5
 1    1980-12-17 00:00:00    Abby    21    0

@@ -109,13 +109,19 @@ and table_name = 'vec'
 and index_name = 'vidx';
 logical_ivf_rows
 1
-select index_name, seq_in_index, column_name, non_unique
+select index_name, seq_in_index, column_name, non_unique, index_type
 from information_schema.statistics
 where table_schema = 'information_schema_constraint_index_contract'
 and table_name = 'abmoxindexyfoo'
+and index_type = 'BTREE'
 order by lower(index_name), index_name, seq_in_index;
-index_name    seq_in_index    column_name    non_unique
-idx_collision_v    1    v    1
-PRIMARY    1    id    0
-uq_collision_code    1    code    0
+index_name    seq_in_index    column_name    non_unique    index_type
+idx_collision_v    1    v    1    BTREE
+PRIMARY    1    id    0    BTREE
+uq_collision_code    1    code    0    BTREE
+show index from abmoxindexyfoo where Index_type = 'BTREE';
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+abmoxindexyfoo    0    PRIMARY    1    id    A    0    NULL    NULL        BTREE                YES    id
+abmoxindexyfoo    0    uq_collision_code    1    code    A    0    NULL    NULL    YES    BTREE                YES    code
+abmoxindexyfoo    1    idx_collision_v    1    v    A    0    NULL    NULL    YES    BTREE                YES    v
 drop database information_schema_constraint_index_contract;

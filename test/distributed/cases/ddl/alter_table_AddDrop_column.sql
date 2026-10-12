@@ -560,13 +560,13 @@ grant connect on account * to role_r1;
 grant select on table * to role_r1;
 grant show tables on database * to role_r1;
 
--- @session:id=2&user=sys:role_u1:role_r1&password=111
+-- @session:id=3&user=sys:role_u1:role_r1&password=111
 use test;
 alter table rename01 rename to newRename;
 -- @session
 grant alter table on database * to role_r1;
 
--- @session:id=2&user=sys:role_u1:role_r1&password=111
+-- @session:id=3&user=sys:role_u1:role_r1&password=111
 use test;
 alter table rename01 rename to newRename;
 alter table newRename rename to `newRename`;

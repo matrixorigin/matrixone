@@ -18,11 +18,11 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -127,7 +127,10 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v11)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v12 := testutil.NewVector(5, types.T_bit.ToType(), mp, false, []uint64{3, 4, 5, 6, 7, 8})
+	// Keep this vector-only package independent of process/service test fixtures.
+	v12 := vector.NewVec(types.T_bit.ToType())
+	defer v12.Free(mp)
+	require.NoError(t, vector.AppendFixedList(v12, []uint64{3, 4, 5, 6, 7, 8}, nil, mp))
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v12)
 	require.Equal(t, []int64{0, 1}, partitions)
 	nulls.Add(v12.GetNulls(), 1)
@@ -154,6 +157,45 @@ func TestPartition(t *testing.T) {
 
 }
 
+func TestPartitionConstantKeys(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	untyped := vector.NewConstNull(types.T_any.ToType(), 4, mp)
+	defer untyped.Free(mp)
+	typed := vector.NewConstNull(types.T_int32.ToType(), 4, mp)
+	defer typed.Free(mp)
+	value, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 4, mp)
+	require.NoError(t, err)
+	defer value.Free(mp)
+
+	for _, partition := range []struct {
+		name string
+		run  func([]int64, []bool, []int64, *vector.Vector) []int64
+	}{{"group", Partition}, {"order", PartitionForOrder}} {
+		t.Run(partition.name, func(t *testing.T) {
+			for _, vec := range []*vector.Vector{untyped, typed, value} {
+				require.Empty(t, partition.run(nil, nil, []int64{99}, vec))
+				require.Equal(t, []int64{0}, partition.run([]int64{0}, []bool{false, true}, nil, vec))
+				sels := []int64{3, 1, 0, 2}
+				diffs := []bool{false, true, false, true}
+				require.Equal(t, []int64{0, 1, 3}, partition.run(sels, diffs, []int64{99}, vec))
+				require.Equal(t, []bool{true, true, false, true}, diffs)
+			}
+			unsupported := vector.NewVec(types.T_any.ToType())
+			defer unsupported.Free(mp)
+			unsupported.SetLength(1)
+			func() {
+				defer func() {
+					err, ok := recover().(error)
+					require.True(t, ok)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+				}()
+				partition.run([]int64{0}, []bool{false}, nil, unsupported)
+			}()
+		})
+	}
+}
+
 func TestPartitionForOrderTreatsNaNPayloadsAsPeers(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_float64.ToType())
@@ -170,6 +212,17 @@ func TestPartitionForOrderTreatsNaNPayloadsAsPeers(t *testing.T) {
 
 	orderDiffs := make([]bool, len(sels))
 	require.Equal(t, []int64{0, 2}, PartitionForOrder(sels, orderDiffs, nil, vec))
+}
+
+func TestPartitionForOrderUnicodeCollationPeers(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI))
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendStringList(vec, []string{"Z", "a", "A", "b"}, nil, mp))
+
+	sels := []int64{1, 2, 3, 0}
+	diffs := make([]bool, len(sels))
+	require.Equal(t, []int64{0, 2, 3}, PartitionForOrder(sels, diffs, nil, vec))
 }
 
 func TestPartitionForOrderJSONNumericPeers(t *testing.T) {
@@ -242,22 +295,19 @@ func TestPartitionAccumulatesDiffs(t *testing.T) {
 		require.Equal(t, []int64{0, 2}, ps, "const second key must not collapse partitions")
 	})
 
-	t.Run("fixed_width_const_null_preserves_prior_boundary", func(t *testing.T) {
-		k1 := vector.NewVec(types.T_int32.ToType())
-		require.NoError(t, vector.AppendFixedList(k1, []int32{1, 1, 2, 2}, nil, mp))
-
-		k2 := vector.NewConstNull(types.T_int32.ToType(), 4, mp)
-
-		sels := []int64{0, 1, 2, 3}
-		ds := make([]bool, len(sels))
-		ps := make([]int64, 0, 4)
-
-		ps = Partition(sels, ds, ps, k1)
-		require.Equal(t, []int64{0, 2}, ps)
-		ps = Partition(sels, ds, ps, k2)
-		require.Equal(t, []int64{0, 2}, ps,
-			"const-NULL second key must not collapse partitions")
-	})
+	for _, typ := range []types.T{types.T_any, types.T_int32} {
+		t.Run(typ.String()+"_const_null_preserves_boundaries", func(t *testing.T) {
+			k := vector.NewConstNull(typ.ToType(), 4, mp)
+			defer k.Free(mp)
+			sels := []int64{3, 0, 2, 1}
+			diffs := []bool{false, false, true, false, true}
+			require.Equal(t, []int64{0, 2}, Partition(sels, diffs, nil, k))
+			require.Equal(t, []bool{true, false, true, false, true}, diffs)
+			require.Equal(t, []int64{0, 2}, PartitionForOrder(sels, diffs, nil, k))
+			require.Empty(t, Partition(nil, nil, []int64{7}, k))
+			require.Equal(t, []int64{0}, PartitionForOrder(sels, make([]bool, 4), nil, k))
+		})
+	}
 
 	t.Run("bytes_null_null_preserves_prior_boundary", func(t *testing.T) {
 		k1 := vector.NewVec(types.T_int32.ToType())

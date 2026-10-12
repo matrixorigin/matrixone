@@ -248,6 +248,14 @@ where id>=5.3111 and id <=177.171;
 select count(*) from t1
 where id between 5.3111 and 177.171;
 ➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from t1
+where id>=5.3111e0 and id<=177.171e0;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from t1
+where id between cast(5.3111 as double) and cast(177.171 as double);
+➤ count(*)[-5,64,0]  𝄀
 1
 drop table t1;
 SELECT (1234.0 BETWEEN 0 AND 1234);

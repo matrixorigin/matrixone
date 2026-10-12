@@ -242,7 +242,11 @@ func readLegacyColumnLayout(source io.ReaderAt, originSize int64) (legacyColumnL
 	layout.version = header.Version
 	layout.class = prefix[offset]
 	offset++
-	layout.typ = types.DecodeType(prefix[offset : offset+types.TSize])
+	var err error
+	layout.typ, err = types.DecodeTypeChecked(prefix[offset : offset+types.TSize])
+	if err != nil {
+		return layout, err
+	}
 	offset += types.TSize
 	layout.rows = int(types.DecodeUint32(prefix[offset : offset+4]))
 	offset += 4

@@ -95,6 +95,7 @@ func TestBitOpsInt64(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, results, 1)
 				require.Equal(t, tc.expect, vector.MustFixedColNoTypeCheck[uint64](results[0])[0])
+				require.False(t, results[0].HasNull(), "unused aggregate capacity must not escape as NULL")
 
 				exec.Free()
 				for _, r := range results {
@@ -123,6 +124,7 @@ func TestBitOpsInt64(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, results, 1)
 				require.Equal(t, tc.expect, vector.MustFixedColNoTypeCheck[uint64](results[0])[0])
+				require.False(t, results[0].HasNull(), "empty group must materialize the non-NULL identity")
 
 				exec.Free()
 				for _, r := range results {
@@ -154,6 +156,7 @@ func TestBitOpsInt64(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, results, 1)
 				require.Equal(t, tc.expect, vector.MustFixedColNoTypeCheck[uint64](results[0])[0])
+				require.False(t, results[0].HasNull(), "all-NULL group must materialize the non-NULL identity")
 
 				exec.Free()
 				for _, r := range results {
@@ -245,6 +248,7 @@ func TestBitOpsMultipleGroups(t *testing.T) {
 				require.Equal(t, tc.expectGroup1, aggs[0])
 				require.Equal(t, tc.expectGroup2, aggs[1])
 				require.Equal(t, tc.expectGroup3, aggs[2])
+				require.False(t, results[0].HasNull(), "unused aggregate capacity must not escape as NULL")
 
 				exec.Free()
 				for _, r := range results {
@@ -332,6 +336,7 @@ func TestBitOpsBytes(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, results, 1)
 				require.False(t, results[0].IsNull(0))
+				require.False(t, results[0].HasNull(), "unused aggregate capacity must not escape as NULL")
 				require.Equal(t, tc.expect, results[0].GetBytesAt(0))
 
 				exec.Free()
@@ -352,6 +357,7 @@ func TestBitOpsBytes(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, results, 1)
 				require.False(t, results[0].IsNull(0))
+				require.False(t, results[0].HasNull(), "unused aggregate capacity must not escape as NULL")
 				require.Equal(t, tc.expect, results[0].GetBytesAt(0))
 
 				exec.Free()
@@ -378,6 +384,7 @@ func TestBitOpsBytes(t *testing.T) {
 		require.Len(t, results, 1)
 		require.Equal(t, []byte{0x0F, 0x0F, 0x0F}, results[0].GetBytesAt(0))
 		require.False(t, results[0].IsNull(1))
+		require.False(t, results[0].HasNull(), "unused aggregate capacity must not escape as NULL")
 		require.Equal(t, bytesN(0x00, 3), results[0].GetBytesAt(1))
 		require.Equal(t, []byte{0xF0, 0xF0, 0xF0}, results[0].GetBytesAt(2))
 

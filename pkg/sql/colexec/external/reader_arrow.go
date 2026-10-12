@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/arrowbridge"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -730,6 +731,9 @@ func BuildArrowTargets(
 			NotNull:  col.Typ.NotNullable,
 			MOIndex:  outputIndex,
 			AttrName: attr.ColName,
+		}
+		if col.Typ.Id == int32(types.T_uint64) {
+			targets[sourceIndex].SetValues = col.Typ.Enumvalues
 		}
 	}
 	return targets, nil

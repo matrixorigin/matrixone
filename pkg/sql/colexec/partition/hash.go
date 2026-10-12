@@ -373,7 +373,7 @@ func (ctr *hashContainer) finalizeSortFallback(proc *process.Process, analyzer p
 		} else if spec.Flag&plan.OrderBySpec_NULLS_LAST != 0 {
 			nullsLast = true
 		}
-		typ := types.NewWithCharsetVersion(types.T(spec.Expr.Typ.Id), spec.Expr.Typ.Width, spec.Expr.Typ.Scale, uint8(spec.Expr.Typ.Charset), uint8(spec.Expr.Typ.CollationVersion))
+		typ := types.MustTypeFromPlan(spec.Expr.Typ)
 		compares[i] = compare.New(typ, desc, nullsLast)
 		if compares[i] == nil {
 			return moerr.NewInternalErrorNoCtx("unsupported sort fallback partition key")

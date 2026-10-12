@@ -92,7 +92,7 @@ func unwrapAffineResultCast(expr *planpb.Expr) *planpb.Expr {
 
 func TestRewriteAffineSumFamilies(t *testing.T) {
 	builder := NewQueryBuilder(
-		planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
+		planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, true)
 
 	t.Run("compact and rewrite every direct consumer", func(t *testing.T) {
 		aggregates := []*planpb.Expr{
@@ -483,7 +483,7 @@ func TestCheckedAffineInt64Arithmetic(t *testing.T) {
 
 func TestExactAffineIntegerRangeProof(t *testing.T) {
 	builder := NewQueryBuilder(
-		planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
+		planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, true)
 
 	literalTests := []struct {
 		name string
@@ -617,7 +617,7 @@ func TestCombineAffineIntegerRanges(t *testing.T) {
 
 func TestRewriteAffineSumFamiliesMaximumSafeDomain(t *testing.T) {
 	builder := NewQueryBuilder(
-		planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
+		planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, true)
 	maxShift := maxExactAffineSumInput - int64(math.MaxUint32)
 	ctx := affineTestContext([]*planpb.Expr{
 		makeAffineSumForTest(t, builder, types.T_uint32, 0, maxShift-2),
@@ -658,7 +658,7 @@ func TestRewriteAffineSumFamiliesMaximumSafeDomain(t *testing.T) {
 
 func TestRewriteAffineSumFamiliesIsAtomic(t *testing.T) {
 	builder := NewQueryBuilder(
-		planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
+		planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, true)
 	aggregates := []*planpb.Expr{
 		makeAffineSumForTest(t, builder, types.T_uint16, 0, 1),
 		makeAffineSumForTest(t, builder, types.T_uint16, 0, 2),
@@ -721,7 +721,7 @@ func TestRewriteAffineSumFamiliesIsAtomic(t *testing.T) {
 
 func TestRewriteAffineSumFamiliesNestedConsumers(t *testing.T) {
 	builder := NewQueryBuilder(
-		planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
+		planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, true)
 	aggregates := []*planpb.Expr{
 		makeAffineSumForTest(t, builder, types.T_uint16, 0, 1),
 		makeAffineSumForTest(t, builder, types.T_uint16, 0, 2),
@@ -826,7 +826,7 @@ func TestRewriteAffineSumFamiliesNestedConsumers(t *testing.T) {
 func TestAffineSumFamilyPlanShape(t *testing.T) {
 	physicalAggregateCount := func(t *testing.T, sql string) int {
 		t.Helper()
-		logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+		logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 		require.NoError(t, err)
 		query := logicPlan.GetQuery()
 		require.NotNil(t, query)
@@ -906,7 +906,7 @@ func TestAffineSumFamilyPlanShape(t *testing.T) {
 	})
 
 	t.Run("time-window and fill consumers", func(t *testing.T) {
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		mockTimeWindowScaleTable(t, mock, types.T_datetime.ToType())
 		logicPlan, err := runOneStmt(mock, t,
 			"select _wstart, sum(v + 1), sum(v + 2), sum(v + 3) "+

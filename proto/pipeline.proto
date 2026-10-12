@@ -36,6 +36,8 @@ enum Method {
   PipelineStreamFinish = 5;
   PipelineStreamFinishAck = 6;
   PipelineBatchAck = 7;
+  // Admission on the execution stream before sending a vector partition-zero pipeline.
+  PipelineProtocolCheck = 8;
 }
 
 // StreamTeardownMode negotiates whether a completed logical pipeline stream can
@@ -73,6 +75,8 @@ message Message {
   uint64 accepted_batch_credit_bytes = 16;
   uint64 batch_sequence = 17;
   uint64 batch_ack_sequence = 18;
+  // Request: minimum required version. Response: actual receiver version.
+  int64 protocol_version = 19;
 }
 
 message Connector {
@@ -401,10 +405,8 @@ message TableFunction {
   bytes params = 4;
   string name = 5;
   bool is_single = 6;
-  plan.IndexReaderParam index_reader_param = 7;
-  repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 8;
-  plan.ObjectRef fulltext_source_ref = 9;
-  plan.ObjectRef fulltext_index_ref = 10;
+  reserved 7, 8, 9, 10;
+  reserved "index_reader_param", "runtime_filter_probe_list", "fulltext_source_ref", "fulltext_index_ref";
 }
 
 message ExternalName2ColIndex {
@@ -787,6 +789,16 @@ message SessionInfo {
   // IANA identity preserves historical and DST rules. Empty means the legacy
   // time_zone bytes describe a fixed-offset location.
   string time_zone_name = 17;
+  // Statement-scoped diagnostic retention capacity. The explicit-set bit
+  // distinguishes a configured zero from an absent field on older CNs.
+  uint32 max_error_count = 18;
+  bool max_error_count_set = 19;
+  // Effective value captured for this execution; presence distinguishes zero
+  // from a process sent by an older coordinator.
+  uint32 default_week_format = 20;
+  bool default_week_format_set = 21;
+  // Effective locale captured for locale-sensitive temporal functions.
+  string lc_time_names = 22;
 }
 
 message SessionLoggerInfo {
@@ -851,7 +863,7 @@ message Apply {
   repeated int32 rel_list = 2;
   repeated int32 col_list = 3;
   repeated plan.Type types = 4 [(gogoproto.nullable) = false];
-  plan.VectorIndexScan vector_index_scan = 5;
+  plan.IndexSearchScan index_search_scan = 5;
   repeated string vector_attrs = 6;
   int64 txn_offset = 7;
 }

@@ -603,7 +603,7 @@ func TestRunCreateOrReindex_BuildFailureAborts(t *testing.T) {
 func TestValidateReindexParams_EmptyOpTypeIsUnchanged(t *testing.T) {
 	for _, quant := range []string{"int8", "uint8"} {
 		got, err := Hooks{}.ValidateReindexParams(
-			map[string]string{catalog.IndexAlgoParamLists: "16"},
+			map[string]string{catalog.IndexAlgoParamLists: "16", catalog.Quantization: quant},
 			compileplugin.ReindexParamUpdate{Params: map[string]string{catalog.Quantization: quant}},
 		)
 		require.NoError(t, err, "empty op_type must mean unchanged, not invalid")
@@ -625,3 +625,6 @@ func TestValidateReindexParams_EmptyOpTypeIsUnchanged(t *testing.T) {
 func (f *fakeCachedIndex) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
 	return nil
 }
+
+// BuildTS stubs (fulltext2 async-freshness interface method).
+func (f *fakeCachedIndex) BuildTS() int64 { return 0 }

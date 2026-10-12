@@ -28,7 +28,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 
-	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -61,9 +60,6 @@ func newOpBuiltInRegexp() *opBuiltInRegexp {
 func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if len(parameters) == 3 {
 		return op.likeFnWithEscape(parameters, result, proc, length, selectList, false)
-	}
-	if len(parameters) == 2 && parameters[0].GetType().Charset == types.CharsetUTF8MB40900AI {
-		return op.likeNative0900AI(parameters, result, length, selectList, '\\', true)
 	}
 
 	uniformBinary, perRow := stringDomainMode(parameters[0])
@@ -151,19 +147,6 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 	if !escapeIsNull && (!utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1) {
 		return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
 	}
-	if len(parameters) >= 2 && parameters[0].GetType().Charset == types.CharsetUTF8MB40900AI {
-		var escape rune
-		if escapeIsNull {
-			// MySQL treats a NULL ESCAPE clause as the default backslash.
-			// Keep native text on the UCA matcher; the legacy matcher retains
-			// its existing NULL ESCAPE behavior below.
-			escape = '\\'
-			escapeEnabled = true
-		} else if escapeEnabled {
-			escape, _ = utf8.DecodeRune(escapeBytes)
-		}
-		return op.likeNative0900AI(parameters[:2], result, length, selectList, escape, escapeEnabled)
-	}
 	var escape rune
 	if escapeEnabled {
 		escape, _ = utf8.DecodeRune(escapeBytes)
@@ -171,64 +154,6 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters[:2], result, proc, length, func(value, pattern []byte) (bool, error) {
 		return op.regMap.regularMatchForLikeOpWithEscape(pattern, value, escape, escapeEnabled, caseInsensitive)
 	}, selectList)
-}
-
-// likeNative0900AI keeps wildcard parsing in character space and delegates
-// literal matching to the UCA 9.0 implementation. Weight bytes cannot be
-// searched directly because '%' and '_' are pattern operators and UCA may
-// expand or contract a sequence of characters.
-func (op *opBuiltInRegexp) likeNative0900AI(
-	parameters []*vector.Vector,
-	result vector.FunctionResultWrapper,
-	length int,
-	selectList *FunctionSelectList,
-	escape rune,
-	escapeEnabled bool,
-) error {
-	values := vector.GenerateFunctionStrParameter(parameters[0])
-	patterns := vector.GenerateFunctionStrParameter(parameters[1])
-	rs := vector.MustFunctionResult[bool](result)
-	uniformBinary, perRow := stringDomainMode(parameters[0])
-	constantPattern := parameters[1].IsConst()
-	var cachedPattern []byte
-	var cachedMatch func([]byte) bool
-	for row := uint64(0); row < uint64(length); row++ {
-		if functionRowSkipped(selectList, row) {
-			if err := rs.Append(false, true); err != nil {
-				return err
-			}
-			continue
-		}
-		value, valueNull := values.GetStrValue(row)
-		pattern, patternNull := patterns.GetStrValue(row)
-		if valueNull || patternNull {
-			if err := rs.Append(false, true); err != nil {
-				return err
-			}
-			continue
-		}
-		binary := binaryStringAt(parameters[0], int(row), uniformBinary, perRow)
-		matched := false
-		if binary {
-			var err error
-			matched, err = op.regMap.regularMatchForLikeOpWithEscape(pattern, value, escape, escapeEnabled, false)
-			if err != nil {
-				return err
-			}
-		} else {
-			if !constantPattern || cachedMatch == nil || !bytes.Equal(cachedPattern, pattern) {
-				cachedPattern = append(cachedPattern[:0], pattern...)
-				cachedMatch = func(input []byte) bool {
-					return collation.UCA0900AIMatch(cachedPattern, input, escape, escapeEnabled)
-				}
-			}
-			matched = cachedMatch(value)
-		}
-		if err := rs.Append(matched, false); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (op *opBuiltInRegexp) likeByStringDomain(
@@ -879,8 +804,15 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 	if n > 1 {
 		c0, c1 := pat[0], pat[n-1]
 		if !bytes.ContainsAny(pat[1:len(pat)-1], "_%") {
-			if n > 2 && pat[n-2] == DefaultEscapeChar {
-				c1 = DefaultEscapeChar
+			if c1 == '%' || c1 == '_' {
+				escapeCount := 0
+				for i := n - 2; i >= 0 && pat[i] == DefaultEscapeChar; i-- {
+					escapeCount++
+				}
+				// Only an odd-length escape run makes the trailing wildcard literal.
+				if escapeCount%2 != 0 {
+					c1 = DefaultEscapeChar
+				}
 			}
 			switch {
 			case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):

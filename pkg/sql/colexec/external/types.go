@@ -541,8 +541,9 @@ type ParquetHandler struct {
 	icebergNullFill []bool
 
 	// for nested types support
-	hasNestedCols bool
-	rowReader     parquet.Rows
+	hasNestedCols    bool
+	nestedColIndices []int
+	rowReader        parquet.Rows
 
 	// virtual column support (hive partitions + __mo_filepath)
 	partitionColIndices            []int
@@ -566,5 +567,7 @@ type columnMapper struct {
 	listElemCanBeNull  bool
 	listElemNullLevel  byte
 
-	mapper func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
+	mapper           func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
+	listValuesMapper func(mp *columnMapper, values []parquet.Value, numRows int, proc *process.Process, vec *vector.Vector) error
+	rowBuffer        *parquet.Buffer
 }

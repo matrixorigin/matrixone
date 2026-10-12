@@ -96,7 +96,7 @@ func TestPrefixEq(t *testing.T) {
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, PrefixEq)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 }
@@ -186,7 +186,7 @@ func TestPrefixIn(t *testing.T) {
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, newImplPrefixIn().doPrefixIn)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 }
@@ -264,7 +264,7 @@ func TestPrefixBetween(t *testing.T) {
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, PrefixBetween)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 }
@@ -382,7 +382,7 @@ func TestPrefixInRange(t *testing.T) {
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, PrefixInRange)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 }
@@ -406,7 +406,7 @@ func TestPrefixEqEmptyInput(t *testing.T) {
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, PrefixEq)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 }
@@ -452,7 +452,7 @@ func TestPrefixInAdvanced(t *testing.T) {
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, newImplPrefixIn().doPrefixIn)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 }
@@ -478,7 +478,7 @@ func TestPrefixBetweenReversed(t *testing.T) {
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, PrefixBetween)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 }
@@ -536,7 +536,7 @@ func TestPrefixInRangeAdvanced(t *testing.T) {
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, PrefixInRange)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info, tc.info)
 	}
 }

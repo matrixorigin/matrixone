@@ -31,6 +31,33 @@ func NewProtoType(oid T) plan.Type {
 	}
 }
 
+// TypeFromPlan is the checked conversion at the wire/runtime boundary.
+func TypeFromPlan(typ plan.Type) (Type, error) {
+	if err := typ.ValidateCollation(); err != nil {
+		return Type{}, err
+	}
+	result := NewWithCharset(T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
+	result.CollationVersion = uint8(typ.CollationVersion)
+	return result, nil
+}
+
+// MustTypeFromPlan is for value-only internal interfaces after the plan's
+// admission check. Invalid metadata must never be narrowed into a legacy type.
+func MustTypeFromPlan(typ plan.Type) Type {
+	result, err := TypeFromPlan(typ)
+	if err != nil {
+		panic(err)
+	}
+	return result
+}
+
+// PlanType carries runtime identity/revision; expression provenance remains
+// owned by the source plan and must be copied with that plan, not invented here.
+func (t Type) PlanType() plan.Type {
+	return plan.Type{Id: int32(t.Oid), Width: t.Width, Scale: t.Scale,
+		Charset: uint32(t.Charset), CollationVersion: uint32(t.CollationVersion)}
+}
+
 func ParseBool(s string) (bool, error) {
 	// try to parse as a bool, we treat TuRe as true, therefore ToLower.
 	v, err := strconv.ParseBool(strings.ToLower(s))

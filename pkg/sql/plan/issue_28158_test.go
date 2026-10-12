@@ -22,7 +22,7 @@ import (
 )
 
 func TestIssue28158CorrelatedScalarAggregateUsesOuterKeyDomain(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
 		SELECT o.o_orderkey,
 		       CASE WHEN o.o_orderstatus IN ('O', 'F') THEN
 		         (SELECT MAX(l.l_quantity)
@@ -85,7 +85,7 @@ func TestIssue28158PointPushdownIsOrderIndependent(t *testing.T) {
 		"o.o_custkey = 2 AND o.o_orderkey = 1",
 	}
 	for _, where := range whereClauses {
-		logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+		logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
 			SELECT o.o_orderkey,
 			       (SELECT MAX(l.l_quantity)
 			          FROM lineitem l
@@ -116,7 +116,7 @@ func TestIssue28158WhereScalarPredicateOrderIsIndependent(t *testing.T) {
 		      WHERE l.l_orderkey = o.o_orderkey) > 0`,
 	}
 	for _, where := range whereClauses {
-		logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+		logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
 			SELECT o.o_orderkey
 			  FROM orders o
 			 WHERE `+where)
@@ -135,7 +135,7 @@ func TestIssue28158WhereScalarPredicateOrderIsIndependent(t *testing.T) {
 }
 
 func TestIssue28158SkipsNonPointOuterDomains(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
 		SELECT n.n_nationkey,
 		       (SELECT MAX(l.l_quantity)
 		          FROM lineitem l
@@ -160,7 +160,7 @@ func TestIssue28158SkipsNonPointOuterDomains(t *testing.T) {
 }
 
 func TestIssue28158SkipsCompositeNonPointDomain(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
 		SELECT ps.ps_partkey,
 		       (SELECT MAX(l.l_quantity)
 		          FROM lineitem l
@@ -255,7 +255,7 @@ func TestIssue28158KeepsUnsafeOrUnfilteredShapesUnchanged(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, test.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			agg := issue28158FindAggregate(logicPlan.GetQuery(), "max")
 			require.NotNil(t, agg)
@@ -269,7 +269,7 @@ func TestIssue28158KeepsUnsafeOrUnfilteredShapesUnchanged(t *testing.T) {
 }
 
 func TestIssue28158CopiesOnlyDeterministicOuterConjunct(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
 		SELECT o.o_orderkey,
 		       (SELECT MAX(l.l_quantity)
 		          FROM lineitem l

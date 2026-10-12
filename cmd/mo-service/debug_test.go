@@ -68,6 +68,12 @@ func Test_saveProfile4(t *testing.T) {
 }
 
 func Test_saveMallocProfile5(t *testing.T) {
-	globalEtlFS = testutil.NewFS(t)
+	previous := globalEtlFS
+	fs := testutil.NewFS(t)
+	t.Cleanup(func() {
+		globalEtlFS = previous
+		fs.Close(context.Background())
+	})
+	globalEtlFS = fs
 	saveMallocProfile()
 }

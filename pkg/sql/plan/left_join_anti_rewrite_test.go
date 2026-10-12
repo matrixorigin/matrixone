@@ -17,13 +17,12 @@ package plan
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
 func TestLeftJoinNullFilterRewritesToAnti(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicalPlan, err := runOneStmt(mock, t, `
 		select n.n_nationkey
 		from nation n
@@ -37,11 +36,10 @@ func TestLeftJoinNullFilterRewritesToAnti(t *testing.T) {
 }
 
 func TestLeftJoinNullFilterRollbackHintKeepsLeftJoin(t *testing.T) {
-	rt := runtime.ServiceRuntime("")
-	rt.SetGlobalVariables("optimizer_hints", "outerAntiPlanning=1")
-	defer rt.SetGlobalVariables("optimizer_hints", "")
 
-	logicalPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+	setPlanTestGlobalVariable(t, "", "optimizer_hints", "outerAntiPlanning=1")
+
+	logicalPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 		select n.n_nationkey
 		from nation n
 		left join region r on n.n_regionkey = r.r_regionkey
@@ -107,7 +105,7 @@ func TestLeftJoinNullFilterAntiRewriteFailsClosed(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			logicalPlan, err := runOneStmt(mock, t, test.sql)
 			require.NoError(t, err)
 

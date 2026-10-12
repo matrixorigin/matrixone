@@ -45,7 +45,11 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(filter.ctr.executors) == 0 && filter.FilterExprs != nil {
-		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filter.FilterExprs)
+		if filter.OwnsConstantCastWarnings {
+			filter.ctr.executors, err = colexec.NewOwnedConstantFilterExecutors(proc, filter.FilterExprs)
+		} else {
+			filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filter.FilterExprs)
+		}
 		if err != nil {
 			return
 		}

@@ -140,6 +140,9 @@ var upg_mo_role_privs = versions.UpgradeEntry{
 	},
 }
 
+// Retired collector catalog entries below retain the historical schema only.
+// Remove their clusterUpgEntries registrations with pkg/txn/trace when its
+// rollback gate closes; this is not permission to drop historical data.
 var upg_mo_debug_eventTxnTable = versions.UpgradeEntry{
 	Schema:    trace.DebugDB,
 	TableName: trace.EventTxnTable,

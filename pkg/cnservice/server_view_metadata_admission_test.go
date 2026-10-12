@@ -24,6 +24,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+
 	"go.uber.org/zap"
 
 	"github.com/stretchr/testify/require"
@@ -39,7 +42,9 @@ import (
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type admissionRevocationMOServer struct {
@@ -150,7 +155,6 @@ func newViewMetadataAdmissionStartService(
 	runtime.SetupServiceBasedRuntime(serviceID, runtime.DefaultRuntime())
 	cfg := &Config{UUID: serviceID, AutomaticUpgrade: true}
 	cfg.HAKeeper.DiscoveryTimeout.Duration = discoveryTimeout
-	cfg.Txn.Trace.BufferSize = 1
 	s := &service{
 		cfg:                             cfg,
 		logger:                          zap.NewNop(),
@@ -159,14 +163,13 @@ func newViewMetadataAdmissionStartService(
 		cancelMoServerFunc:              func() {},
 		lockService:                     &admissionStartLockService{},
 		queryService:                    &admissionStartQueryService{},
-		sqlExecutor:                     sqlExecutor,
+		sqlExecutor:                     existingSystemViewsExecutor{sqlExecutor},
 		bootstrapService:                boot,
 		stopper:                         stopper.NewStopper("view-metadata-admission-start"),
 		viewMetadataAdmissionGeneration: 11,
 		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
 		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
 	}
-	s.options.traceDataPath = t.TempDir()
 	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{
 		Enabled:              true,
 		Epoch:                5,
@@ -254,8 +257,10 @@ func TestCNViewMetadataAdmissionFencesCatalogBeforeReady(t *testing.T) {
 		viewMetadataAdmissionGeneration: 7,
 		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
 		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+		heartbeatWakeup:                 make(chan struct{}, 1),
 	}
 	s.sqlExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		require.Empty(t, s.heartbeatWakeup, "catalog work must complete before its success notification")
 		statements.Add(1)
 		if sql == catalog.ViewMetadataLifecycleGateSQL {
 			return viewMetadataLifecycleGateTestResult(), nil
@@ -277,6 +282,7 @@ func TestCNViewMetadataAdmissionFencesCatalogBeforeReady(t *testing.T) {
 	require.Equal(t, uint64(3), s.viewMetadataEpochFence.Epoch())
 	require.Equal(t, uint64(3), s.viewMetadataCatalogFencedEpoch.Load())
 	require.Positive(t, statements.Load())
+	require.Len(t, s.heartbeatWakeup, 1)
 }
 
 func TestCNViewMetadataCatalogFenceShortcuts(t *testing.T) {
@@ -286,17 +292,24 @@ func TestCNViewMetadataCatalogFenceShortcuts(t *testing.T) {
 	}
 
 	t.Run("authority already fenced", func(t *testing.T) {
-		s := &service{}
+		s := &service{heartbeatWakeup: make(chan struct{}, 1)}
 		copy := *snapshot
 		copy.CatalogFencedEpoch = copy.Epoch
 		require.NoError(t, s.fenceViewMetadataCatalog(context.Background(), &copy))
 		require.Equal(t, copy.Epoch, s.viewMetadataCatalogFencedEpoch.Load())
+		require.Len(t, s.heartbeatWakeup, 1, "publish the newly observed epoch without waiting for the periodic heartbeat")
+		<-s.heartbeatWakeup
+		require.NoError(t, s.fenceViewMetadataCatalog(context.Background(), &copy))
+		copy.Epoch--
+		require.NoError(t, s.fenceViewMetadataCatalog(context.Background(), &copy))
+		require.Empty(t, s.heartbeatWakeup, "unchanged or older snapshots must not create a heartbeat loop")
 	})
 
 	t.Run("executor not ready", func(t *testing.T) {
-		s := &service{}
+		s := &service{heartbeatWakeup: make(chan struct{}, 1)}
 		require.NoError(t, s.fenceViewMetadataCatalog(context.Background(), snapshot))
 		require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
+		require.Empty(t, s.heartbeatWakeup)
 	})
 }
 
@@ -316,7 +329,7 @@ func TestCNViewMetadataAdmissionRejectsUnknownPersistedExpressionProtocol(t *tes
 			Generation: 9,
 			Admitted:   true,
 			PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCLatestVersion + 1),
-		}, false, false, nil)
+		}, false, false, nil, 0)
 	require.False(t, ok)
 	require.ErrorContains(t, err, "requires persisted expression protocol version")
 
@@ -325,7 +338,7 @@ func TestCNViewMetadataAdmissionRejectsUnknownPersistedExpressionProtocol(t *tes
 			Generation: 9,
 			Admitted:   true,
 			PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCLatestVersion),
-		}, false, false, nil)
+		}, false, false, nil, 0)
 	require.True(t, ok)
 	require.NoError(t, err)
 }
@@ -393,6 +406,7 @@ func TestCNApplyViewMetadataAdmissionPublishesDurableFloorBeforeFence(t *testing
 	}
 	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), &logservicepb.ViewMetadataAdmission{
 		Enabled:    true,
+		Preparing:  true,
 		Epoch:      2,
 		Generation: 9,
 		Admitted:   true,
@@ -454,7 +468,7 @@ func TestCNViewMetadataAdmissionSeparatesReadAndAuthoringFloors(t *testing.T) {
 	// catalog-fenced. Only then may it author the new protocol's metadata.
 	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), &logservicepb.ViewMetadataAdmission{
 		Enabled:              true,
-		Ready:                true,
+		Ready:                false,
 		Admitted:             true,
 		Epoch:                1,
 		Generation:           9,
@@ -572,6 +586,8 @@ func TestViewMetadataCatalogFenceRetryable(t *testing.T) {
 			upgradeOwnerActive: true,
 			want:               true,
 		},
+		{name: "unknown commit without owner", err: moerr.NewTxnUnknown(context.Background(), "fence"), want: false},
+		{name: "unknown commit with owner", err: moerr.NewTxnUnknown(context.Background(), "fence"), upgradeOwnerActive: true, want: false},
 		{name: "owner cancellation", err: context.Canceled, upgradeOwnerActive: true, want: false},
 		{name: "other failure", err: errors.New("executor failed"), upgradeOwnerActive: true, want: false},
 		{
@@ -1434,6 +1450,20 @@ func TestCNViewMetadataAdmissionWaitsForAuthoritativeResponse(t *testing.T) {
 }
 
 func TestCNViewMetadataAdmissionDoesNotAckFailedCatalogFence(t *testing.T) {
+	rt := runtime.ServiceRuntime("")
+	for _, key := range []string{runtime.MOProtocolVersion, runtime.PersistedExpressionProtocolFloor, runtime.PersistedExpressionProtocolAuthoringFloor} {
+		old, present := rt.GetGlobalVariables(key)
+		t.Cleanup(func() {
+			if present {
+				rt.SetGlobalVariables(key, old)
+			} else if current, ok := rt.GetGlobalVariables(key); ok {
+				rt.CompareAndDeleteGlobalVariables(key, current)
+			}
+		})
+	}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolFloor, int64(0))
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor, int64(0))
 	fenceErr := errors.New("catalog fence failed")
 	s := &service{
 		cfg:                             &Config{},
@@ -1441,20 +1471,200 @@ func TestCNViewMetadataAdmissionDoesNotAckFailedCatalogFence(t *testing.T) {
 		viewMetadataAdmissionGeneration: 13,
 		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
 		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+		heartbeatWakeup:                 make(chan struct{}, 1),
 	}
-	s.sqlExecutor = executor.NewMemExecutor(func(string) (executor.Result, error) {
-		return executor.Result{}, fenceErr
+	t.Cleanup(s.viewMetadataEpochFence.Close)
+	var statements int
+	s.sqlExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		statements++
+		if fenceErr != nil {
+			return executor.Result{}, fenceErr
+		}
+		if sql == catalog.ViewMetadataLifecycleGateSQL {
+			return viewMetadataLifecycleGateTestResult(), nil
+		}
+		return executor.Result{}, nil
 	})
 	s.viewMetadataCatalogFenceReady.Store(true)
 
-	err := s.applyViewMetadataAdmission(context.Background(),
-		&logservicepb.ViewMetadataAdmission{
-			Enabled:              true,
-			Epoch:                6,
-			RevalidationRequired: true,
-			Generation:           13,
-		})
+	snapshot := &logservicepb.ViewMetadataAdmission{
+		Preparing:            true,
+		Epoch:                6,
+		RevalidationRequired: true,
+		Generation:           13,
+		PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCLatestVersion),
+	}
+	err := s.applyViewMetadataAdmission(context.Background(), snapshot)
 	require.ErrorIs(t, err, fenceErr)
+	require.Equal(t, 1, statements)
 	require.Equal(t, uint64(6), s.viewMetadataEpochFence.Epoch())
 	require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
+	require.Empty(t, s.heartbeatWakeup, "failed catalog repair must not request a success heartbeat")
+	proc := &process.Process{Base: &process.BaseProcess{}}
+	require.NoError(t, plan.RequirePersistedProtocolVersion(nil, proc, defines.MORPCVersion72), "durable read floor is independent of authoring")
+	err = plan.RequirePersistedProtocolVersionForAuthoring(nil, proc, defines.MORPCVersion72)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	require.ErrorContains(t, err, fmt.Sprintf("local protocol=%d, authoring floor=0", defines.MORPCLatestVersion))
+
+	// Recover the dependency, without restarting or advancing the epoch. Local
+	// catalog repair alone must not bypass the global phase-two barrier.
+	fenceErr = nil
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), snapshot))
+	require.Greater(t, statements, 1)
+	require.Equal(t, uint64(6), s.viewMetadataCatalogFencedEpoch.Load())
+	require.Len(t, s.heartbeatWakeup, 1)
+	<-s.heartbeatWakeup
+	require.True(t, moerr.IsMoErrCode(plan.RequirePersistedProtocolVersionForAuthoring(nil, proc, defines.MORPCVersion72), moerr.ErrNotSupported))
+
+	snapshot.Preparing = false
+	snapshot.Enabled = true
+	snapshot.Admitted = true
+	snapshot.CatalogFencedEpoch = 6
+	before := statements
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), snapshot))
+	require.Equal(t, before, statements, "the successful catalog fence is not executed twice")
+	require.Empty(t, s.heartbeatWakeup, "the unchanged epoch must not schedule another heartbeat")
+	require.False(t, snapshot.Ready, "authoring does not depend on public routing readiness")
+	require.NoError(t, plan.RequirePersistedProtocolVersionForAuthoring(nil, proc, defines.MORPCLatestVersion))
+	require.Equal(t, uint64(6), s.viewMetadataEpochFence.Epoch())
+}
+
+func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			failure := errors.New("derived view creation failed")
+			var s *service
+			var creates int
+			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				if sql == catalog.ViewMetadataLifecycleGateSQL {
+					return viewMetadataLifecycleGateTestResult(), nil
+				}
+				if strings.HasPrefix(sql, "CREATE VIEW") {
+					require.Equal(t, uint64(5), s.viewMetadataCatalogFencedEpoch.Load())
+					require.False(t, s.viewMetadataIngressReady.Load())
+					creates++
+					if fail {
+						return executor.Result{}, failure
+					}
+				}
+				return executor.Result{}, nil
+			})
+			s = newViewMetadataAdmissionStartService(t, &testBootService{}, exec, time.Second)
+			s.sqlExecutor = exec
+			snapshot := *s.viewMetadataAdmission.Load()
+			snapshot.Ready = false
+			snapshot.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCVersion98)
+			snapshot.CatalogFencedEpoch = 5
+			s.viewMetadataAdmission.Store(&snapshot)
+			t.Cleanup(func() { _ = s.Close() })
+			err := s.Start()
+			if fail {
+				require.ErrorIs(t, err, failure)
+				require.Equal(t, serviceClosed, s.lifecycle)
+				require.False(t, s.viewMetadataIngressReady.Load())
+				require.Equal(t, 1, creates)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, 4, creates)
+				require.True(t, s.viewMetadataIngressReady.Load())
+			}
+		})
+	}
+}
+
+func TestCNDerivedViewsWaitForAuthoringProtocol(t *testing.T) {
+	s := newViewMetadataAdmissionStartService(t, &testBootService{}, executor.NewMemExecutor(func(string) (executor.Result, error) { return executor.Result{}, nil }), 20*time.Millisecond)
+	t.Cleanup(func() { _ = s.Close() })
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{Generation: 11})
+	require.NoError(t, s.waitForViewMetadataAdmission())
+	require.Error(t, s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion98)), "disabled admission cannot authorize new derived definitions")
+	require.False(t, s.viewMetadataIngressReady.Load())
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{Generation: 12})
+	require.ErrorContains(t, s.waitForViewMetadataAdmissionHandoff(false, 98), "generation was superseded")
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{Generation: 11, PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCLatestVersion + 1)})
+	require.ErrorContains(t, s.waitForViewMetadataAdmissionHandoff(false, 98), "newer protocol")
+	s.viewMetadataGenerationRevoked.Store(true)
+	require.ErrorContains(t, s.waitForViewMetadataAdmissionHandoff(false, 98), "generation revoked")
+	s.viewMetadataGenerationRevoked.Store(false)
+	require.NoError(t, s.viewMetadataEpochFence.Advance(t.Context(), 5))
+	s.viewMetadataCatalogFencedEpoch.Store(5)
+	ready := &logservicepb.ViewMetadataAdmission{Generation: 11, Epoch: 5, Enabled: true, Ready: false, Admitted: true, CatalogFencedEpoch: 5, RevalidationRequired: true, PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCVersion98)}
+	for _, tc := range []struct {
+		name    string
+		floor   uint64
+		pending bool
+		want    bool
+	}{
+		{"lower floor", 97, false, false}, {"activation pending", 98, true, false}, {"ready", 98, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current := *ready
+			current.PersistedExpressionRequiredProtocolVersion = tc.floor
+			current.PersistedExpressionProtocolActivationPending = tc.pending
+			s.viewMetadataAdmission.Store(&current)
+			accepted, _, err := s.acceptViewMetadataAdmissionSnapshot(ready, false, false, nil, 98)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, accepted, "check current authority, not the older fenced snapshot")
+			current.Preparing = true
+			s.viewMetadataAdmission.Store(&current)
+			accepted, _, err = s.acceptViewMetadataAdmissionSnapshot(ready, false, false, nil, 98)
+			require.NoError(t, err)
+			require.False(t, accepted, "a preparing epoch cannot authorize writes")
+		})
+	}
+}
+
+func TestCNDisabledAdmissionWaitsForActiveBootstrapOwner(t *testing.T) {
+	upgradeErr := errors.New("bootstrap owner failed after discovery deadline")
+	upgradeCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	upgradeResult := make(chan error, 1)
+	s := &service{
+		cfg:                             &Config{UUID: "disabled-admission-upgrade-owner"},
+		logger:                          zap.NewNop(),
+		viewMetadataAdmissionGeneration: 11,
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+		bootstrapUpgradeContext:         upgradeCtx,
+		bootstrapUpgradeResult:          upgradeResult,
+	}
+	s.cfg.HAKeeper.DiscoveryTimeout.Duration = 10 * time.Millisecond
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{Generation: 11})
+	done := make(chan error, 1)
+	go func() {
+		done <- s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion98))
+	}()
+	require.Eventually(t, s.viewMetadataCatalogFenceStartupWaiting.Load, time.Second, time.Millisecond)
+	time.Sleep(30 * time.Millisecond)
+	select {
+	case err := <-done:
+		t.Fatalf("active bootstrap owner was preempted by discovery: %v", err)
+	default:
+	}
+	upgradeResult <- upgradeErr
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, upgradeErr)
+	case <-time.After(time.Second):
+		t.Fatal("disabled admission did not report bootstrap failure")
+	}
+}
+
+// These startup fixtures model an already bootstrapped catalog. Preserve their
+// custom fence/rollback executor while answering the new read-only preflight.
+type existingSystemViewsExecutor struct{ executor.SQLExecutor }
+
+func (e existingSystemViewsExecutor) ExecTxn(ctx context.Context, fn func(executor.TxnExecutor) error, opts executor.Options) error {
+	return e.SQLExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error { return fn(existingSystemViewsTxn{txn}) }, opts)
+}
+
+type existingSystemViewsTxn struct{ executor.TxnExecutor }
+
+func (e existingSystemViewsTxn) Exec(sql string, opts executor.StatementOption) (executor.Result, error) {
+	if strings.HasPrefix(sql, "select relkind from mo_catalog.mo_tables") {
+		result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mpool.MustNewZero())
+		result.NewBatchWithRowCount(1)
+		executor.AppendStringRows(result, 0, []string{catalog.SystemViewRel})
+		return result.GetResult(), nil
+	}
+	return e.TxnExecutor.Exec(sql, opts)
 }

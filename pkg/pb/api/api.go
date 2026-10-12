@@ -87,8 +87,9 @@ func CloneExtra(info *SchemaExtra) *SchemaExtra {
 		AutoIncrEpoch:     info.AutoIncrEpoch,
 		AutoIdCache:       info.AutoIdCache,
 		DefaultCharset:    info.DefaultCharset,
-		KeyFormat:         info.KeyFormat,
 		CollationVersion:  info.CollationVersion,
+		KeyFormat:         info.KeyFormat,
+		XXX_unrecognized:  append([]byte(nil), info.XXX_unrecognized...),
 		Checks:            checks,
 	}
 }

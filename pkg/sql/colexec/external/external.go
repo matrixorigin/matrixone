@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -780,16 +781,21 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 	for idx, col := range cols {
 		field := fields[idx]
 		id := types.T(col.Typ.Id)
+		isSet := id == types.T_uint64 && col.Typ.Enumvalues != ""
+		emptyIsNull := false
 		// T_bit carries raw bytes (parsed byte-by-byte, not as text), so
 		// whitespace bytes are data and must not be trimmed.
-		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
+		if id == types.T_enum || isSet {
+			field.Val, emptyIsNull = normalizeEnumSetCSVValue(id, col.Typ.Enumvalues, field.Val)
+		} else if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
 			id != types.T_bit {
 			field.Val = strings.TrimSpace(field.Val)
 		}
-		isNullOrEmpty := field.IsNull || (getNullFlag(param.NullMap, col.Name, field.Val))
+		isNullOrEmpty := field.IsNull || getNullFlag(param.NullMap, col.Name, field.Val) || emptyIsNull
 		if id != types.T_char && id != types.T_varchar &&
-			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text && id != types.T_datalink {
+			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
+			id != types.T_enum && !isSet {
 			isNullOrEmpty = isNullOrEmpty || len(field.Val) == 0
 		}
 		if isNullOrEmpty {
@@ -837,13 +843,19 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 				}
 			}
 		case types.T_int32:
-			_, err := strconv.ParseInt(field.Val, 10, 32)
+			bits := 32
+			min, max := float64(math.MinInt32), float64(math.MaxInt32)
+			if (types.Type{Oid: types.T_int32, Width: col.Typ.Width}).IsMediumInt() {
+				bits = 24
+				min, max = -(1 << 23), (1<<23)-1
+			}
+			_, err := strconv.ParseInt(field.Val, 10, bits)
 			if err != nil {
 				if errors.Is(err, strconv.ErrRange) {
 					return false
 				}
 				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < math.MinInt32 || f > math.MaxInt32 {
+				if err != nil || f < min || f > max {
 					return false
 				}
 			}
@@ -881,13 +893,19 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 				}
 			}
 		case types.T_uint32:
-			_, err := strconv.ParseUint(field.Val, 10, 32)
+			bits := 32
+			max := float64(math.MaxUint32)
+			if (types.Type{Oid: types.T_uint32, Width: col.Typ.Width}).IsMediumInt() {
+				bits = 24
+				max = (1 << 24) - 1
+			}
+			_, err := strconv.ParseUint(field.Val, 10, bits)
 			if err != nil {
 				if errors.Is(err, strconv.ErrRange) {
 					return false
 				}
 				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < 0 || f > math.MaxUint32 {
+				if err != nil || f < 0 || f > max {
 					return false
 				}
 			}
@@ -1001,22 +1019,8 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 				return false
 			}
 		case types.T_enum:
-			_, err := strconv.ParseUint(field.Val, 10, 16)
-			if err == nil {
-				continue
-			} else if errors.Is(err, strconv.ErrSyntax) {
-				_, err := types.ParseEnum(col.Typ.Enumvalues, field.Val)
-				if err != nil {
-					return false
-				}
-			} else {
-				if errors.Is(err, strconv.ErrRange) {
-					return false
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < 0 || f > math.MaxUint16 {
-					return false
-				}
+			if _, err := types.ParseEnum(col.Typ.Enumvalues, field.Val); err != nil {
+				return false
 			}
 		case types.T_decimal64:
 			_, err := types.ParseDecimal64(field.Val, col.Typ.Width, col.Typ.Scale)
@@ -1067,7 +1071,7 @@ func makeType(typ *plan.Type, flag bool) types.Type {
 	if flag && !isDirectParallelLoadType(types.T(typ.Id)) {
 		return types.New(types.T_varchar, 0, 0)
 	}
-	return types.NewWithCharsetVersion(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset), uint8(typ.CollationVersion))
+	return types.MustTypeFromPlan(*typ)
 }
 
 // isDirectParallelLoadType identifies types that must be decoded by the
@@ -1149,6 +1153,63 @@ func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 		}
 	}
 	return false
+}
+
+// isEnumMember reports, without allocating, whether name is a declared member
+// of the ENUM definition, using the same comma split and case folding as
+// types.ParseEnum.
+func isEnumMember(enumValues, name string) bool {
+	// The ENUM OID distinguishes a single empty member from absent metadata.
+	if len(enumValues) == 0 {
+		return name == ""
+	}
+	for {
+		i := strings.IndexByte(enumValues, ',')
+		if i < 0 {
+			return strings.EqualFold(enumValues, name)
+		}
+		if strings.EqualFold(enumValues[:i], name) {
+			return true
+		}
+		enumValues = enumValues[i+1:]
+	}
+}
+
+// isPaddedSetInput reports whether val has outer whitespace, as
+// strings.TrimSpace (unicode.IsSpace) would remove it, and is already valid
+// input for the SET definition, as native INSERT parses it. Trimming such a
+// value could select a different member (' a' or '\u00a0a' vs 'a'); padded
+// non-member input keeps being trimmed. Padded input can only be member names
+// (a numeric bitmap never has whitespace), so the non-throwing name match of
+// the SET parser decides. Unpadded values return early without parsing.
+func isPaddedSetInput(setValues, val string) bool {
+	if len(val) == 0 {
+		return false
+	}
+	first, _ := utf8.DecodeRuneInString(val)
+	last, _ := utf8.DecodeLastRuneInString(val)
+	if !unicode.IsSpace(first) && !unicode.IsSpace(last) {
+		return false
+	}
+	return types.MatchSetName(setValues, val)
+}
+
+// normalizeEnumSetCSVValue shares the member-aware trim and empty-to-NULL
+// policy between row conversion and strict parallel-read boundary detection.
+// Callers use it only for ENUM or uint64 with SET domain metadata, and apply
+// explicit NULL markers to the returned text before parsing it.
+func normalizeEnumSetCSVValue(id types.T, definition, val string) (text string, emptyIsNull bool) {
+	if id == types.T_enum {
+		if isEnumMember(definition, val) {
+			return val, false
+		}
+		val = strings.TrimSpace(val)
+		return val, len(val) == 0 && !isEnumMember(definition, "")
+	}
+	if !isPaddedSetInput(definition, val) {
+		val = strings.TrimSpace(val)
+	}
+	return val, false
 }
 
 func shouldLoadEmptyNumericAsZero(param *ExternalParam, id types.T) bool {
@@ -1542,7 +1603,9 @@ func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser
 			continue
 		}
 		vec := bat.Vecs[attr.ColIndex]
-		vector.AppendBytes(vec, nil, true, mp)
+		if err := vector.AppendBytes(vec, nil, true, mp); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1561,12 +1624,19 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	}
 	field := getFieldFromLine(line, colName, colId, param, fieldIdx)
 	id := types.T(col.Typ.Id)
+	// SET is stored as uint64 but is a logical string type: it must not get
+	// the numeric empty-to-zero fill or numeric-prefix rewriting ("0" may be a
+	// member name).
+	isSet := id == types.T_uint64 && len(col.Typ.Enumvalues) > 0
 	loadDataNonStrictAdjustments := shouldApplyLoadDataNonStrictAdjustments(param)
 	trimSpace := false
+	emptyIsNull := false
 	// T_bit carries raw bytes (parsed byte-by-byte, not as text), so whitespace
 	// bytes are data and must not be trimmed (a whitespace-only bit value would
 	// otherwise even be converted to NULL below).
-	if id != types.T_char && id != types.T_varchar && id != types.T_json &&
+	if id == types.T_enum || isSet {
+		field.Val, emptyIsNull = normalizeEnumSetCSVValue(id, col.Typ.Enumvalues, field.Val)
+	} else if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 		id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
 		id != types.T_bit {
 		field.Val = strings.TrimSpace(field.Val)
@@ -1582,8 +1652,8 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		field.Val = normalizeISO8601Zulu(field.Val, proc.GetSessionInfo().TimeZone)
 	}
 	mappedNull := getNullFlag(param.Extern.NullMap, colName, field.Val)
-	isNullOrEmpty := field.IsNull || mappedNull
-	emptyNumericField := len(field.Val) == 0 && !mappedNull && shouldLoadEmptyNumericAsZero(param, id)
+	isNullOrEmpty := field.IsNull || mappedNull || emptyIsNull
+	emptyNumericField := len(field.Val) == 0 && !field.IsNull && !mappedNull && !isSet && shouldLoadEmptyNumericAsZero(param, id)
 	if emptyNumericField {
 		field.Val = "0"
 		isNullOrEmpty = false
@@ -1591,14 +1661,13 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		isNullOrEmpty = true
 	}
 	if isNullOrEmpty {
-		vector.AppendBytes(vec, nil, true, mp)
-		return nil
+		return vector.AppendBytes(vec, nil, true, mp)
 	}
 
 	var temporalValue loadDataTemporalValue
 	if loadDataNonStrictAdjustments {
 		switch {
-		case isLoadNumericAdjustedValueType(id):
+		case isLoadNumericAdjustedValueType(id) && !isSet:
 			if !field.HasStringQuote {
 				field.Val = loadDataNonStrictNumericPrefix(field.Val)
 			}
@@ -1694,7 +1763,15 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_int32:
-		d, err := strconv.ParseInt(field.Val, 10, 32)
+		bits := 32
+		min, max := float64(math.MinInt32), float64(math.MaxInt32)
+		valueType := "int32"
+		if (types.Type{Oid: types.T_int32, Width: col.Typ.Width}).IsMediumInt() {
+			bits = 24
+			min, max = -(1 << 23), (1<<23)-1
+			valueType = "mediumint"
+		}
+		d, err := strconv.ParseInt(field.Val, 10, bits)
 		if err == nil {
 			if err := vector.AppendFixed(vec, int32(d), false, mp); err != nil {
 				return err
@@ -1702,12 +1779,12 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		} else {
 			if errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not int32 type for column %d", field.Val, colIdx)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, valueType, colIdx)
 			}
 			f, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil || f < math.MinInt32 || f > math.MaxInt32 {
+			if err != nil || f < min || f > max {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not int32 type for column %d", field.Val, colIdx)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, valueType, colIdx)
 			}
 			if err := vector.AppendFixed(vec, int32(f), false, mp); err != nil {
 				return err
@@ -1774,7 +1851,15 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_uint32:
-		d, err := strconv.ParseUint(field.Val, 10, 32)
+		bits := 32
+		max := float64(math.MaxUint32)
+		valueType := "uint32"
+		if (types.Type{Oid: types.T_uint32, Width: col.Typ.Width}).IsMediumInt() {
+			bits = 24
+			max = (1 << 24) - 1
+			valueType = "mediumint unsigned"
+		}
+		d, err := strconv.ParseUint(field.Val, 10, bits)
 		if err == nil {
 			if err := vector.AppendFixed(vec, uint32(d), false, mp); err != nil {
 				return err
@@ -1782,12 +1867,12 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		} else {
 			if errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint32 type for column %d", field.Val, colIdx)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, valueType, colIdx)
 			}
 			f, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil || f < 0 || f > math.MaxUint32 {
+			if err != nil || f < 0 || f > max {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint32 type for column %d", field.Val, colIdx)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, valueType, colIdx)
 			}
 			if err := vector.AppendFixed(vec, uint32(f), false, mp); err != nil {
 				return err
@@ -2006,34 +2091,11 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_enum:
-		d, err := strconv.ParseUint(field.Val, 10, 16)
-		if err == nil {
-			if err := vector.AppendFixed(vec, types.Enum(d), false, mp); err != nil {
-				return err
-			}
-		} else if errors.Is(err, strconv.ErrSyntax) {
-			v, err := types.ParseEnum(col.Typ.Enumvalues, field.Val)
-			if err != nil {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return err
-			}
-			if err := vector.AppendFixed(vec, types.Enum(v), false, mp); err != nil {
-				return err
-			}
-		} else {
-			if errors.Is(err, strconv.ErrRange) {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
-			}
-			f, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil || f < 0 || f > math.MaxUint16 {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
-			}
-			if err := vector.AppendFixed(vec, types.Enum(f), false, mp); err != nil {
-				return err
-			}
+		v, err := types.ParseEnum(col.Typ.Enumvalues, field.Val)
+		if err != nil {
+			return err
 		}
+		return vector.AppendFixed(vec, v, false, mp)
 	case types.T_decimal64:
 		d, err := types.ParseDecimal64(field.Val, vec.GetType().Width, vec.GetType().Scale)
 		if err != nil {

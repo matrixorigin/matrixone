@@ -23,6 +23,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
+// Include construction: steady-state benchmarks below intentionally exclude
+// the empty index cost paid by every service and short-lived test cache.
+func BenchmarkCacheConstruction(b *testing.B) {
+	for _, entries := range []int{0, 64, 2048} {
+		for _, collide := range []bool{false, true} {
+			b.Run(fmt.Sprintf("entries=%d/collide=%t", entries, collide), func(b *testing.B) {
+				shard := ShardInt[int]
+				if collide {
+					shard = func(int) uint64 { return 0 }
+				}
+				ctx := context.Background()
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					cache := New[int, int](fscache.ConstCapacity(1<<20), shard, nil, nil, nil)
+					for key := 0; key < entries; key++ {
+						cache.Set(ctx, key, key, 1)
+					}
+					if entries > 0 {
+						if value, ok := cache.Get(ctx, entries-1); !ok || value != entries-1 {
+							b.Fatal("missing inserted value")
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkSequentialSet(b *testing.B) {
 	ctx := context.Background()
 	size := 65536

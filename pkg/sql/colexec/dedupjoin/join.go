@@ -231,6 +231,7 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 	} else {
 		dedupJoin.OpAnalyzer.Reset()
 	}
+	dedupJoin.ctr.autoSpill = dedupJoin.SpillThreshold == 0
 	dedupJoin.ctr.spillThreshold = colexec.ResolveSpillThreshold(dedupJoin.SpillThreshold)
 	newEvalVectors := len(dedupJoin.ctr.vecs) == 0
 	newUpdateExecs := len(dedupJoin.ctr.exprExecs) == 0 && len(dedupJoin.UpdateColExprList) > 0
@@ -432,6 +433,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				BuildKeyExprs:             dedupJoin.Conditions[1],
 				ProbeKeyExprs:             dedupJoin.Conditions[0],
 				SpillThreshold:            ctr.spillThreshold,
+				AdaptiveMemory:            ctr.autoSpill,
 				NeedsBuildForEmptyProbe:   true,
 				NeedAllocateSels:          dedupJoin.OnDuplicateAction == plan.Node_UPDATE,
 				NeedBatches:               true,
@@ -1361,14 +1363,6 @@ func odkuValuesEqual(left, right *vector.Vector) bool {
 	if left.GetType().Oid != right.GetType().Oid {
 		return false
 	}
-	if left.GetType().Oid.IsMySQLString() &&
-		types.NeedsCollationKey(*left.GetType(), types.PADSpaceKeyV1) {
-		// ODKU is comparing the stored row image after an assignment, not
-		// deciding whether two values conflict on a collation-aware key.
-		// Native key equality may fold case or accents while the assigned
-		// spelling still needs to be written.
-		return bytes.Equal(left.GetBytesAt(0), right.GetBytesAt(0))
-	}
 
 	switch left.GetType().Oid {
 	case types.T_char:
@@ -1882,6 +1876,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 	warningsEnabled := proc != nil && proc.GetStmtProfile() != nil &&
 		proc.GetStmtProfile().GetStatementIgnore() && ap.OnDuplicateAction == plan.Node_IGNORE
 	var duplicateWarnings process.WarningAccumulator
+	duplicateWarnings.SetWarningRetentionForProcess(proc)
+	defer duplicateWarnings.Reset()
 	recordDuplicateWarning := func(row int) {
 		if !warningsEnabled {
 			return

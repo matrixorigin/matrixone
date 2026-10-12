@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -199,7 +200,7 @@ func TestPipelineBatchFlowDrainClassifiesReceiverStop(t *testing.T) {
 		flow := newOutstandingFlow(t)
 		started, done := waitAsync(flow, context.Background(), context.Background())
 		<-started
-		flow.stop(moerr.NewQueryInterrupted(context.Background()))
+		flow.stop(process.ErrPipelineStopped)
 		flow.abort(errors.New("later abort"))
 		require.True(t, flow.wasStoppedByReceiver(),
 			"a late abort must not reclassify the receiver stop")
@@ -219,7 +220,7 @@ func TestPipelineBatchFlowDrainClassifiesReceiverStop(t *testing.T) {
 
 	t.Run("query cancellation wins a recorded receiver stop", func(t *testing.T) {
 		flow := newOutstandingFlow(t)
-		flow.stop(moerr.NewQueryInterrupted(context.Background()))
+		flow.stop(process.ErrPipelineStopped)
 		queryCtx, cancelQuery := context.WithCancelCause(context.Background())
 		cancelQuery(context.Canceled)
 

@@ -445,3 +445,15 @@ func TestEntrySQLParamNarrowedToFloat32(t *testing.T) {
 		entryUint8(xu, float64(parseF32(umulLit)), float64(parseF32(uaddLit))),
 		"uint8: build and search must encode the boundary component to the same bucket")
 }
+
+func TestCheckNoUpcast(t *testing.T) {
+	err := CheckNoUpcast("ivfflat", "float32", types.T_array_float16)
+	require.Error(t, err)
+	require.Contains(t, err.Error(),
+		"ivfflat QUANTIZATION 'float32' (4 bytes/element) cannot upcast base column VECF16 (2 bytes/element)")
+
+	require.NoError(t, CheckNoUpcast("ivfflat", "int8", types.T_array_float16))
+	require.NoError(t, CheckNoUpcast("ivfflat", "float16", types.T_array_float16))
+	require.NoError(t, CheckNoUpcast("ivfflat", "float32", types.T_array_float64))
+	require.NoError(t, CheckNoUpcast("ivfflat", "garbage", types.T_array_int8))
+}

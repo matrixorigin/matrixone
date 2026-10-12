@@ -18,7 +18,6 @@ Package hakeeper implements MO's hakeeper component.
 package hakeeper
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -45,11 +44,6 @@ var (
 	binaryEnc = binary.BigEndian
 )
 
-// hakeeperSnapshotMagic is an intentionally invalid protobuf prefix.  A
-// pre-floor HAKeeper decoder therefore rejects a post-floor snapshot instead
-// of silently ignoring the additive fields and rejoining with unsafe state.
-var hakeeperSnapshotMagic = []byte{0x0f, 'M', 'O', 'H', '2'}
-
 const (
 	// When bootstrapping, k8s will first bootstrap the HAKeeper by starting some
 	// Log stores with command line options specifying that those stores will be hosting
@@ -68,7 +62,13 @@ const (
 )
 
 type IndexQuery struct{}
-type StateQuery struct{}
+type StateQuery struct {
+	// StateOnly omits the cluster snapshot for assertions that only consume State.
+	// The zero value retains the complete independent checker snapshot.
+	StateOnly bool
+	// Scheduling omits display-only configuration while retaining WAL recovery status.
+	Scheduling bool
+}
 type ScheduleCommandQuery struct{ UUID string }
 type CommandDeliveryStateQuery struct{}
 type ClusterDetailsQuery struct{ Cfg Config }
@@ -507,19 +507,6 @@ func (s *stateMachine) Close() error {
 	return nil
 }
 
-func (s *stateMachine) assignID() uint64 {
-	s.state.NextID++
-	return s.state.NextID
-}
-
-func (s *stateMachine) assignIDByKey(key string) uint64 {
-	if _, ok := s.state.NextIDByKey[key]; !ok {
-		s.state.NextIDByKey[key] = 0
-	}
-	s.state.NextIDByKey[key]++
-	return s.state.NextIDByKey[key]
-}
-
 const bootstrapAllocationRequestPrefix = "\x00bootstrap-allocation-request/"
 
 func bootstrapAllocationRequestKey(key, requestID string) string {
@@ -561,6 +548,12 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 		s.state.ScheduleCommands = make(map[string]pb.CommandBatch)
 	}
 	for _, c := range b.Commands {
+		// Reject terminally obsolete work at its only admission boundary.
+		// Cleanup and recovery remain defense in depth for commands accepted
+		// by an older binary or made stale while already queued.
+		if s.catalogScheduleObsolete(c) {
+			continue
+		}
 		if c.Bootstrapping {
 			s.handleSetStateCmd(GetSetStateCmd(pb.HAKeeperBootstrapCommandsReceived))
 		}
@@ -811,15 +804,18 @@ func (s *stateMachine) getCommandBatchFiltered(
 			pendingIDs = make([]pb.ScheduleCommandID, 0, len(batch.CommandIDs))
 		}
 		for i, cmd := range batch.Commands {
-			if filterHAKeeperAdmissions && !s.logScheduleCommandDeliverable(cmd) {
-				pending = append(pending, cmd)
-				if pendingIDs != nil {
-					pendingIDs = append(pendingIDs, batch.CommandIDs[i])
-				}
+			if s.catalogScheduleObsolete(cmd) {
 				continue
 			}
 			retryable, applied := s.bootstrapReplicaCommandStatus(cmd)
 			if applied {
+				continue
+			}
+			if (filterHAKeeperAdmissions && !s.logScheduleCommandDeliverable(cmd)) || !s.prepareCatalogSchedule(&cmd) {
+				pending = append(pending, cmd)
+				if pendingIDs != nil {
+					pendingIDs = append(pendingIDs, batch.CommandIDs[i])
+				}
 				continue
 			}
 			deliver = append(deliver, cmd)
@@ -1005,16 +1001,40 @@ func (s *stateMachine) bootstrapReplicaCommandStatus(
 	}
 }
 
-func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
+// HeartbeatCheckNeeded is a local proposal result hint, never a wire field or
+// durable state. Older stores ignore it and periodic checks remain the fallback.
+const HeartbeatCheckNeeded uint64 = 1
+
+func (s *stateMachine) handleCNHeartbeat(cmd []byte) (result sm.Result) {
 	data := parseHeartbeatCmd(cmd)
 	var hb pb.CNStoreHeartbeat
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
+	previous, registered := s.state.CNState.Stores[hb.UUID]
+	deliveryReady := s.state.CommandDeliveryCNReady[hb.UUID]
+	admissionReady := s.state.ViewMetadataAdmissionCNReady[hb.UUID]
+	defer func() {
+		current := s.state.CNState.Stores[hb.UUID]
+		// Compare accepted state, including withdrawal by an obsolete heartbeat.
+		// Tick, load, configuration and ordinary receipts are not readiness events.
+		if !registered ||
+			deliveryReady != s.state.CommandDeliveryCNReady[hb.UUID] ||
+			admissionReady != s.state.ViewMetadataAdmissionCNReady[hb.UUID] ||
+			previous.CommandDeliveryAckSupported != current.CommandDeliveryAckSupported ||
+			previous.ViewMetadataAdmissionSupported != current.ViewMetadataAdmissionSupported ||
+			previous.ViewMetadataAdmissionGeneration != current.ViewMetadataAdmissionGeneration ||
+			previous.ViewMetadataObservedEpoch != current.ViewMetadataObservedEpoch ||
+			previous.ViewMetadataCatalogFencedEpoch != current.ViewMetadataCatalogFencedEpoch ||
+			previous.ViewMetadataAdmissionReady != current.ViewMetadataAdmissionReady ||
+			previous.ViewMetadataIngressReady != current.ViewMetadataIngressReady ||
+			previous.PersistedExpressionProtocolVersion != current.PersistedExpressionProtocolVersion {
+			result.Value = HeartbeatCheckNeeded
+		}
+	}()
 	if !s.updateCNViewMetadataAdmission(hb) {
 		return s.attachViewMetadataAdmission(sm.Result{}, hb.UUID, false)
 	}
-	var result sm.Result
 	if s.state.CommandDeliveryPreparing {
 		if s.state.CommandDeliveryCNReady == nil {
 			s.state.CommandDeliveryCNReady = make(map[string]bool)
@@ -1038,13 +1058,23 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 	return s.attachViewMetadataAdmission(result, hb.UUID, false)
 }
 
-func (s *stateMachine) handleTNHeartbeat(cmd []byte) sm.Result {
+func (s *stateMachine) handleTNHeartbeat(cmd []byte) (result sm.Result) {
 	data := parseHeartbeatCmd(cmd)
 	var hb pb.TNStoreHeartbeat
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
+	previous, registered := s.state.TNState.Stores[hb.UUID]
+	deliveryReady := s.state.CommandDeliveryTNReady[hb.UUID]
 	s.state.TNState.Update(hb, s.state.Tick)
+	defer func() {
+		if !registered ||
+			deliveryReady != s.state.CommandDeliveryTNReady[hb.UUID] ||
+			(len(previous.Shards) > 0) != (len(hb.Shards) > 0) ||
+			previous.CommandDeliveryAckSupported != hb.CommandDeliveryAckSupported {
+			result.Value = HeartbeatCheckNeeded
+		}
+	}()
 	if s.state.CommandDeliveryPreparing {
 		if s.state.CommandDeliveryTNReady == nil {
 			s.state.CommandDeliveryTNReady = make(map[string]bool)
@@ -1063,13 +1093,28 @@ func (s *stateMachine) handleTNHeartbeat(cmd []byte) sm.Result {
 	return s.getCommandBatch(hb.UUID)
 }
 
-func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
+func (s *stateMachine) handleLogHeartbeat(cmd []byte) (result sm.Result) {
 	data := parseHeartbeatCmd(cmd)
 	var hb pb.LogStoreHeartbeat
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
+	previous, registered := s.state.LogState.Stores[hb.UUID]
+	deliveryReady := s.state.CommandDeliveryReady[hb.UUID]
+	admissionReady := s.state.ViewMetadataAdmissionLogReady[hb.UUID]
 	s.state.LogState.Update(hb, s.state.Tick)
+	defer func() {
+		if !registered ||
+			deliveryReady != s.state.CommandDeliveryReady[hb.UUID] ||
+			admissionReady != s.state.ViewMetadataAdmissionLogReady[hb.UUID] ||
+			len(previous.Replicas) != len(hb.Replicas) ||
+			previous.CommandDeliverySupported != hb.CommandDeliverySupported ||
+			previous.ViewMetadataAdmissionSupported != hb.ViewMetadataAdmissionSupported ||
+			previous.ViewMetadataAdmissionProtocolV3Supported != hb.ViewMetadataAdmissionProtocolV3Supported {
+			result.Value = HeartbeatCheckNeeded
+		}
+	}()
+	s.observeCatalogStartResult(hb)
 	if s.state.ViewMetadataAdmissionPreparing {
 		if s.state.ViewMetadataAdmissionLogReady == nil {
 			s.state.ViewMetadataAdmissionLogReady = make(map[string]bool)
@@ -1090,7 +1135,7 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 			delete(s.state.CommandDeliveryReady, hb.UUID)
 		}
 	}
-	return s.getCommandBatchFiltered(hb.UUID, true)
+	return s.attachPendingCatalogStart(s.getCommandBatchFiltered(hb.UUID, true), hb)
 }
 
 func (s *stateMachine) handleTick(cmd []byte) sm.Result {
@@ -1239,35 +1284,33 @@ func (s *stateMachine) resetCommandDeliveryBarrier() {
 }
 
 func (s *stateMachine) handleGetIDCmd(cmd []byte) sm.Result {
-	allocIDCmd := parseAllocateIDCmd(cmd)
-	// Empty key means it is a shared ID.
-	if len(allocIDCmd.Key) == 0 {
-		s.state.NextID++
-		v := s.state.NextID
-		s.state.NextID += allocIDCmd.Batch - 1
-		return sm.Result{Value: v}
-	}
-
-	if allocIDCmd.RequestID != "" {
-		requestKey := bootstrapAllocationRequestKey(allocIDCmd.Key, allocIDCmd.RequestID)
+	request := parseAllocateIDCmd(cmd)
+	// Successful idempotent reservations remain replayable after exhaustion.
+	if request.Key != "" && request.RequestID != "" {
+		requestKey := bootstrapAllocationRequestKey(request.Key, request.RequestID)
 		if id, ok := s.state.NextIDByKey[requestKey]; ok {
 			return sm.Result{Value: id}
 		}
-
-		v := s.assignIDByKey(allocIDCmd.Key)
-		s.state.NextIDByKey[allocIDCmd.Key] += allocIDCmd.Batch - 1
-		s.state.NextIDByKey[requestKey] = v
-		return sm.Result{Value: v}
 	}
-
-	_, ok := s.state.NextIDByKey[allocIDCmd.Key]
-	if !ok {
-		s.state.NextIDByKey[allocIDCmd.Key] = 0
+	current := s.state.NextID
+	if request.Key != "" {
+		current = s.state.NextIDByKey[request.Key]
 	}
-	s.state.NextIDByKey[allocIDCmd.Key]++
-	v := s.state.NextIDByKey[allocIDCmd.Key]
-	s.state.NextIDByKey[allocIDCmd.Key] += allocIDCmd.Batch - 1
-	return sm.Result{Value: v}
+	// Value zero is the existing failed-allocation sentinel. Reject the entire
+	// reservation before mutation so a retry cannot wrap and reuse old IDs.
+	if request.Batch == 0 || request.Batch > math.MaxUint64-current {
+		return sm.Result{}
+	}
+	first := current + 1
+	if request.Key == "" {
+		s.state.NextID = current + request.Batch
+	} else {
+		s.state.NextIDByKey[request.Key] = current + request.Batch
+		if request.RequestID != "" {
+			s.state.NextIDByKey[bootstrapAllocationRequestKey(request.Key, request.RequestID)] = first
+		}
+	}
+	return sm.Result{Value: first}
 }
 
 func (s *stateMachine) handleSetStateCmd(cmd []byte) sm.Result {
@@ -1655,6 +1698,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleEnableViewMetadataAdmission(cmd), nil
 	case pb.ActivatePersistedExpressionProtocolUpdate:
 		return s.handleActivatePersistedExpressionProtocol(cmd), nil
+	case pb.CatalogMetadataBarrierUpdate:
+		return s.handleCatalogMetadataRequest(cmd), nil
 	case pb.SetTaskTableUserUpdate:
 		s.assertState()
 		return s.handleTaskTableUserCmd(cmd), nil
@@ -1679,7 +1724,7 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	}
 }
 
-func (s *stateMachine) handleStateQuery() interface{} {
+func (s *stateMachine) handleStateQuery(scheduling bool) interface{} {
 	internal := &pb.CheckerState{
 		Tick:                         s.state.Tick,
 		ClusterInfo:                  s.state.ClusterInfo,
@@ -1698,6 +1743,47 @@ func (s *stateMachine) handleStateQuery() interface{} {
 		IDWatermarkRestoreGeneration: s.state.IDWatermarkRestoreGeneration,
 		LogServiceRecoveryPrepared:   s.state.LogServiceRecoveryPrepared,
 		LogServiceRecoveryCompleted:  s.state.LogServiceRecoveryCompleted,
+	}
+	if scheduling {
+		// Copy records before projecting: the replicated authority and full
+		// configuration queries must remain unchanged. DeepCopy below detaches
+		// all remaining maps, items and protobuf unknown fields.
+		if len(s.state.CNState.Stores) != 0 {
+			internal.CNState.Stores = make(map[string]pb.CNStoreInfo, len(s.state.CNState.Stores))
+			for id, info := range s.state.CNState.Stores {
+				info.ConfigData = nil
+				internal.CNState.Stores[id] = info
+			}
+		}
+		if len(s.state.TNState.Stores) != 0 {
+			internal.TNState.Stores = make(map[string]pb.TNStoreInfo, len(s.state.TNState.Stores))
+			for id, info := range s.state.TNState.Stores {
+				info.ConfigData = nil
+				internal.TNState.Stores[id] = info
+			}
+		}
+		if len(s.state.ProxyState.Stores) != 0 {
+			internal.ProxyState.Stores = make(map[string]pb.ProxyStore, len(s.state.ProxyState.Stores))
+			for id, info := range s.state.ProxyState.Stores {
+				info.ConfigData = nil
+				internal.ProxyState.Stores[id] = info
+			}
+		}
+		if len(s.state.LogState.Stores) != 0 {
+			internal.LogState.Stores = make(map[string]pb.LogStoreInfo, len(s.state.LogState.Stores))
+			for id, info := range s.state.LogState.Stores {
+				config := info.ConfigData
+				info.ConfigData = nil
+				if config != nil {
+					if item, ok := config.Content[pb.WALRecoveryStatusConfigKey]; ok {
+						info.ConfigData = &pb.ConfigData{Content: map[string]*pb.ConfigItem{
+							pb.WALRecoveryStatusConfigKey: item,
+						}}
+					}
+				}
+				internal.LogState.Stores[id] = info
+			}
+		}
 	}
 	copied := deepcopy.Copy(internal)
 	result, ok := copied.(*pb.CheckerState)
@@ -1739,10 +1825,12 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 		}
 	}
 	for uuid, info := range s.state.CNState.Stores {
+		// Capability acknowledgements are reset by an admission barrier, not
+		// the registered CN generation. Keep that internal owner
+		// discoverable while public SQL routing remains gated by readiness.
 		if s.viewMetadataAdmissionActive() &&
 			!info.ViewMetadataAdmissionReady &&
-			(!info.ViewMetadataAdmissionSupported ||
-				info.ViewMetadataAdmissionGeneration == 0) {
+			info.ViewMetadataAdmissionGeneration == 0 {
 			continue
 		}
 		state := pb.NormalState
@@ -1853,8 +1941,24 @@ func (s *stateMachine) handlePatchCNStore(cmd []byte) sm.Result {
 }
 
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
-	if _, ok := query.(*StateQuery); ok {
-		return s.handleStateQuery(), nil
+	if _, ok := query.(*CatalogMetadataStateQuery); ok {
+		var result pb.CatalogMetadataBarrierState
+		if s.state.CatalogMetadataBarrier != nil {
+			data, err := s.state.CatalogMetadataBarrier.Marshal()
+			if err != nil {
+				return nil, err
+			}
+			if err := result.Unmarshal(data); err != nil {
+				return nil, err
+			}
+		}
+		return &result, nil
+	}
+	if q, ok := query.(*StateQuery); ok {
+		if q != nil && q.StateOnly {
+			return &pb.CheckerState{State: s.state.State}, nil
+		}
+		return s.handleStateQuery(q != nil && q.Scheduling), nil
 	} else if q, ok := query.(*ScheduleCommandQuery); ok {
 		return s.handleScheduleCommandQuery(q.UUID), nil
 	} else if _, ok := query.(*CommandDeliveryStateQuery); ok {
@@ -1931,20 +2035,11 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 
 func (s *stateMachine) SaveSnapshot(w io.Writer,
 	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
-	// FIXME: memory recycling when necessary
-	data := make([]byte, s.state.ProtoSize())
-	n, err := s.state.MarshalToSizedBuffer(data)
+	data, err := marshalHAKeeperSnapshot(&s.state, false)
 	if err != nil {
 		return err
 	}
-	if s.state.PersistedExpressionRequiredProtocolVersion == 0 {
-		_, err = w.Write(data[:n])
-		return err
-	}
-	output := make([]byte, len(hakeeperSnapshotMagic)+n)
-	copy(output, hakeeperSnapshotMagic)
-	copy(output[len(hakeeperSnapshotMagic):], data[:n])
-	_, err = w.Write(output)
+	_, err = w.Write(data)
 	return err
 }
 
@@ -1954,17 +2049,9 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	if err != nil {
 		return err
 	}
-	enveloped := bytes.HasPrefix(data, hakeeperSnapshotMagic)
-	if enveloped {
-		data = data[len(hakeeperSnapshotMagic):]
-	}
-	decoded := pb.NewRSMState()
-	if err := decoded.Unmarshal(data); err != nil {
+	decoded, err := unmarshalHAKeeperSnapshot(data)
+	if err != nil {
 		return err
-	}
-	if enveloped && decoded.PersistedExpressionRequiredProtocolVersion == 0 {
-		return moerr.NewInvalidInputNoCtx(
-			"persisted HAKeeper snapshot envelope is missing its protocol floor")
 	}
 	// Keep the legacy omitted-map shape for the command-delivery barrier.  The
 	// zero-value is meaningful to the recovery code (it rebuilds these maps on
@@ -1977,5 +2064,9 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 		decoded.CommandDeliveryTNReady = nil
 	}
 	s.state = decoded
+	// Older binaries could snapshot tokenless membership commands after a
+	// later configuration had already been confirmed. They can never become
+	// valid again; reclaim them during publication of the recovered owner.
+	s.pruneObsoleteCatalogSchedule()
 	return nil
 }

@@ -2,6 +2,7 @@
 -- @case
 -- @desc:type conversion from time types to int / decimal
 -- @label:bvt
+--- @metacmp(true)
 
 drop database if exists test;
 create database test;

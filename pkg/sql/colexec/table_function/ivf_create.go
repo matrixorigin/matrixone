@@ -241,9 +241,12 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 	if !u.inited {
 		if len(tf.Params) > 0 {
-			err = sonic.Unmarshal([]byte(tf.Params), &u.param)
-			if err != nil {
-				return err
+			// Wrap the JSON decode error in a stable message: sonic's error text is
+			// arch-dependent (its native amd64 path reports "Syntax error" while the
+			// encoding/json fallback reports "unexpected EOF"), so a raw return makes the
+			// message and any assertion on it non-deterministic across platforms.
+			if err = sonic.Unmarshal([]byte(tf.Params), &u.param); err != nil {
+				return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("invalid ivf index params json: %v", err))
 			}
 		}
 

@@ -16,6 +16,7 @@ package compare
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -41,9 +42,9 @@ type compare[T any] struct {
 type strCompare struct {
 	desc        bool
 	nullsLast   bool
+	typ         types.Type
 	vs          []*vector.Vector
 	isConstNull []bool
-	cmp         func([]byte, []byte) int
 }
 
 type arrayCompare struct {

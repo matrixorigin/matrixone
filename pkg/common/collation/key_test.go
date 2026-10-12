@@ -131,7 +131,7 @@ func TestPADKeyExhaustive(t *testing.T) {
 	words := []string{""}
 	level := []string{""}
 	for n := 0; n < 4; n++ {
-		next := []string{}
+		next := make([]string, 0, 5*len(level))
 		for _, s := range level {
 			for _, r := range []rune{0, 31, 32, 33, 0xffff} {
 				next = append(next, s+string(r))

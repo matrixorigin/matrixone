@@ -1,0 +1,21 @@
+set experimental_fulltext2_index = 1;
+drop database if exists ft2_json_cpk;
+create database ft2_json_cpk;
+use ft2_json_cpk;
+create table t (a bigint, b bigint, j json, primary key(a, b));
+create fulltext2 index ftj on t(j) with parser json;
+insert into t values
+(1, 1, '{"foo":"needle"}'),
+(2, 2, '{"foo":"hay"}'),
+(3, 3, '{"foo":"needle"}');
+select a from t where json_extract_string(j,'$.foo') = 'needle' order by a;
+➤ a[-5,64,0]  𝄀
+1  𝄀
+3
+insert into t values (4, 4, '{"foo":"needle"}');
+select a from t where json_extract_string(j,'$.foo') = 'needle' order by a;
+➤ a[-5,64,0]  𝄀
+1  𝄀
+3  𝄀
+4
+drop database ft2_json_cpk;

@@ -38,10 +38,59 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
+
+func newTestGlobalStats(
+	ctx context.Context,
+	e *Engine,
+	keyRouter qclient.KeyRouter[statsinfo.StatsInfoKey],
+	opts ...GlobalStatsOption,
+) *GlobalStats {
+	var owner *GlobalStats
+	owner = NewGlobalStats(ctx, e, keyRouter, func(value *GlobalStats) {
+		owner = value
+	}, opts...)
+	return owner
+}
+
+func TestGlobalStatsCloseJoinsOwnedRoots(t *testing.T) {
+	gs := newTestGlobalStats(context.Background(), nil, nil)
+	ex := gs.concurrentExecutor.(*concurrentExecutor)
+
+	gs.Close()
+	gs.Close()
+
+	select {
+	case <-gs.lifecycleDone():
+	default:
+		t.Fatal("global stats owner context is still active")
+	}
+	select {
+	case <-ex.done:
+	default:
+		t.Fatal("concurrent stats executor has not reached terminal completion")
+	}
+}
+
+func TestGlobalStatsPublishesBeforeOptionFailure(t *testing.T) {
+	var owner *GlobalStats
+	sentinel := "stats option failed"
+	require.PanicsWithValue(t, sentinel, func() {
+		NewGlobalStats(
+			context.Background(),
+			nil,
+			nil,
+			func(value *GlobalStats) { owner = value },
+			func(*GlobalStats) { panic(sentinel) },
+		)
+	})
+	require.NotNil(t, owner)
+	owner.Close()
+}
 
 type mockStatsKeyRouter struct {
 	target string
@@ -158,7 +207,8 @@ func runTest(
 	mp, err := mpool.NewMPool(sid, 1024*1024, mpool.NoFixed)
 	catalog.SetupDefines(sid)
 	assert.NoError(t, err)
-	e := New(
+	var e *Engine
+	e = New(
 		ctx,
 		sid,
 		mp,
@@ -167,6 +217,7 @@ func runTest(
 		nil,
 		nil,
 		4,
+		func(owner *Engine) { e = owner },
 	)
 	for _, opt := range opts {
 		opt(e.globalStats)
@@ -280,7 +331,7 @@ func TestGlobalStats_ShouldUpdate(t *testing.T) {
 		MinUpdateInterval = time.Millisecond * 10
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 		assert.NotNil(t, gs)
 		k1 := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -306,7 +357,7 @@ func TestGlobalStats_ShouldUpdate(t *testing.T) {
 		MinUpdateInterval = time.Second * 10
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 		assert.NotNil(t, gs)
 		k1 := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -748,7 +799,7 @@ func TestGlobalStatsConcurrency_ActualCreation(t *testing.T) {
 			runtime.SetupServiceBasedRuntime(sid, rt)
 
 			// Create GlobalStats with the specified factor
-			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
+			gs := newTestGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
 			require.NotNil(t, gs)
 
 			// Verify concurrentExecutor concurrency
@@ -826,7 +877,7 @@ func TestGlobalStatsConcurrency_WorkerRatio(t *testing.T) {
 			rt := runtime.DefaultRuntime()
 			runtime.SetupServiceBasedRuntime(sid, rt)
 
-			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
+			gs := newTestGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
 			require.NotNil(t, gs)
 
 			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
@@ -945,7 +996,7 @@ func TestGlobalStatsConcurrency_EdgeCases(t *testing.T) {
 			rt := runtime.DefaultRuntime()
 			runtime.SetupServiceBasedRuntime(sid, rt)
 
-			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tt.updateWorkerFactor))
+			gs := newTestGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tt.updateWorkerFactor))
 			require.NotNil(t, gs)
 
 			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
@@ -1000,7 +1051,7 @@ func TestGlobalStatsConcurrency_ConcurrentCreation(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(4))
+			gs := newTestGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(4))
 			if gs == nil {
 				errors <- fmt.Errorf("goroutine %d: GlobalStats creation failed", id)
 				return
@@ -1077,7 +1128,7 @@ func TestGlobalStatsConcurrency_ReductionVerification(t *testing.T) {
 			rt := runtime.DefaultRuntime()
 			runtime.SetupServiceBasedRuntime(sid, rt)
 
-			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
+			gs := newTestGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
 			require.NotNil(t, gs)
 
 			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
@@ -1340,7 +1391,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("first_time_enqueue", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 		assert.NotNil(t, gs)
 
 		key := statsinfo.StatsInfoKey{
@@ -1362,7 +1413,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("checkpoint_always_enqueue_large_table", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1386,7 +1437,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("checkpoint_with_changes_large_table", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1408,7 +1459,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("small_table_checkpoint", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1425,7 +1476,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("small_table_any_change", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key1 := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1454,7 +1505,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("small_table_no_change", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1471,7 +1522,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("large_table_below_threshold", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1498,7 +1549,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("large_table_at_threshold", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1520,7 +1571,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("large_table_above_threshold", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1542,7 +1593,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("large_table_accumulated_changes", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1586,7 +1637,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1608,7 +1659,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("large_table_recent_update_no_timeout", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1630,7 +1681,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("boundary_large_table_threshold", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1654,7 +1705,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("boundary_small_table_threshold", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1672,7 +1723,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("zero_base_object_count", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,
@@ -1694,7 +1745,7 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 	t.Run("concurrent_enqueue_checks", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		gs := NewGlobalStats(ctx, nil, nil)
+		gs := newTestGlobalStats(ctx, nil, nil)
 
 		key := statsinfo.StatsInfoKey{
 			DatabaseID: 100,

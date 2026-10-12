@@ -36,7 +36,7 @@ func TestAutoIDCachePlanAndPersistence(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 			require.Contains(t, tree.String(stmt, dialect.MYSQL), fmt.Sprintf("auto_id_cache = %d", size))
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			p, err := BuildPlan(ctx, stmt, false)
 			require.NoError(t, err)
 			def := p.GetDdl().GetCreateTable().GetTableDef()
@@ -75,7 +75,7 @@ func TestAutoIDCacheAlterFinalDefinition(t *testing.T) {
 		{"modify id bigint, modify v int auto_increment", 1},
 	} {
 		t.Run(tc.options, func(t *testing.T) {
-			mock := newAutoIncrementAlterOptimizer()
+			mock := newAutoIncrementAlterOptimizer(t)
 			source := mock.ctxt.tables["auto_incr_t"]
 			source.AutoIdCache = 1
 			p, err := buildSingleStmt(mock, t, "alter table constraint_test.auto_incr_t "+tc.options+", algorithm=copy")
@@ -97,7 +97,7 @@ func TestAutoIDCacheZeroWithoutAutoColumn(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table t(id bigint) auto_id_cache=0", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 	require.Zero(t, p.GetDdl().GetCreateTable().GetTableDef().AutoIdCache)
 }
@@ -113,7 +113,7 @@ func TestAutoIDCachePlanRejectsInvalidOptions(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 			require.ErrorContains(t, err, "AUTO_ID_CACHE")
 		})
 	}

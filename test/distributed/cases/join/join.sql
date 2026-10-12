@@ -173,7 +173,7 @@ drop table if exists t2;
 create table t1(a int, b int primary key);
 create table t2(a int, b int,primary key(a,b));
 insert into t1 select result%50,result from generate_series(1,10000,1) g;
-insert into t2 select result/100,result%100 from generate_series(1,10000,1) g;
+insert into t2 select result div 100,result%100 from generate_series(1,10000,1) g;
 select t1.a,t1.b from t1 join t2 on t1.b=t2.a and t1.b=t2.b order by t1.a desc limit 4;
 select t2.a,t2.b from t2 join t1 on t2.a=t1.b and t2.b=t1.a order by t2.a desc limit 4;
 drop table t1;

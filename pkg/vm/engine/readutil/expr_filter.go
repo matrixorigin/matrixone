@@ -17,6 +17,7 @@ package readutil
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -854,10 +856,23 @@ func compileFilterExpr(
 	if expr == nil {
 		return
 	}
+	// Zone maps persist the original byte order. A native Unicode collation
+	// compares UCA weights instead, so applying a raw byte zone-map bound can
+	// discard a matching block before the residual SQL comparator runs. Keep
+	// this optional pruning path disabled for expressions that read a Unicode
+	// string column until the persisted zone-map domain is versioned as well.
+	if exprUsesUnicodeCollationColumn(expr, tableDef) {
+		canCompile = false
+		return
+	}
 	switch exprImpl := expr.Expr.(type) {
 	// case *plan.Expr_Lit:
 	// case *plan.Expr_Col:
 	case *plan.Expr_F:
+		if function.GetZoneMapEvaluation(exprImpl.F) == function.ZoneMapUnsupported {
+			canCompile = false
+			return
+		}
 		if op1, op2, op3, op4, op5, can, hsh, handled := compileTemporalFilterExpr(
 			expr, exprImpl, tableDef, fs, zone,
 		); handled {
@@ -1561,45 +1576,29 @@ func compileFilterExpr(
 				}
 			}
 			// ok
-		case "isnull", "is_null":
-			colExpr, _, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
-			if !ok {
+		case "isnull", "is_null", "isnotnull", "is_not_null":
+			if len(exprImpl.F.Args) != 1 || exprImpl.F.Args[0].GetCol() == nil {
 				canCompile = false
 				return
 			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colExpr := exprImpl.F.Args[0].GetCol()
+			colDef := getColDefByName(expr, colExpr.Name, colExpr.ColPos, tableDef)
+			fid, _ := function.DecodeOverloadID(exprImpl.F.Func.GetObj())
+			matches := func(nulls, rows uint32) bool {
+				if fid == function.ISNULL {
+					return nulls != 0
+				}
+				return nulls < rows
+			}
 			fastFilterOp = nil
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).NullCnt() != 0, nil
+				return matches(dataMeta.MustGetColumn(uint16(seqNum)).NullCnt(), dataMeta.BlockHeader().Rows()), nil
 			}
-			blockFilterOp = func(
-				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
-			) (bool, bool, error) {
-				return false, blkMeta.MustGetColumn(uint16(seqNum)).NullCnt() != 0, nil
-			}
-
-			// ok
-		case "isnotnull", "is_not_null":
-			colExpr, _, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
-			if !ok {
-				canCompile = false
-				return
-			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
-			fastFilterOp = nil
-			loadOp = loadMetadataOnlyOpFactory(fs)
-			seqNum := colDef.Seqnum
-			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
-				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).NullCnt() < dataMeta.BlockHeader().Rows(), nil
-			}
-			blockFilterOp = func(
-				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
-			) (bool, bool, error) {
-				return false, blkMeta.MustGetColumn(uint16(seqNum)).NullCnt() < blkMeta.GetRows(), nil
+			blockFilterOp = func(_ int, blkMeta objectio.BlockObject, _ objectio.BloomFilter) (bool, bool, error) {
+				return false, matches(blkMeta.MustGetColumn(uint16(seqNum)).NullCnt(), blkMeta.GetRows()), nil
 			}
 
 		case "in":
@@ -1610,6 +1609,10 @@ func compileFilterExpr(
 			}
 			vec := vector.NewVec(types.T_any.ToType())
 			if err := vec.UnmarshalBinary(val); err != nil {
+				canCompile = false
+				return
+			}
+			if vec.GetType().Oid == types.T_char {
 				canCompile = false
 				return
 			}
@@ -1783,4 +1786,47 @@ func compileFilterExpr(
 		canCompile = false
 	}
 	return
+}
+
+func exprUsesUnicodeCollationColumn(expr *plan.Expr, tableDef *plan.TableDef) bool {
+	if expr == nil || tableDef == nil {
+		return false
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if impl.Col == nil {
+			return false
+		}
+		name := impl.Col.Name
+		if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
+			name = name[dot+1:]
+		}
+		pos, ok := tableDef.Name2ColIndex[name]
+		if !ok && impl.Col.ColPos >= 0 && int(impl.Col.ColPos) < len(tableDef.Cols) {
+			pos, ok = impl.Col.ColPos, true
+		}
+		if !ok || pos < 0 || int(pos) >= len(tableDef.Cols) || tableDef.Cols[pos] == nil {
+			return false
+		}
+		return types.IsUnicodeCollation(uint8(tableDef.Cols[pos].Typ.Charset))
+	case *plan.Expr_F:
+		if impl.F == nil {
+			return false
+		}
+		for _, arg := range impl.F.Args {
+			if exprUsesUnicodeCollationColumn(arg, tableDef) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		if impl.List == nil {
+			return false
+		}
+		for _, item := range impl.List.List {
+			if exprUsesUnicodeCollationColumn(item, tableDef) {
+				return true
+			}
+		}
+	}
+	return false
 }

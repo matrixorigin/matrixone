@@ -92,7 +92,7 @@ func (c *ExecutionRecoveryCapacity) EnsureCapacity(target uint64) error {
 		return nil
 	}
 	delta := target - c.capacity
-	if err := c.generation.acquireMemory(delta); err != nil {
+	if err := c.generation.acquireRecoveryCapacity(delta); err != nil {
 		return errors.Join(mpool.ErrAllocationAccountCapacity, err)
 	}
 	c.capacity = target
@@ -119,10 +119,16 @@ func (c *ExecutionRecoveryCapacity) AcquireAllocationCapacity(size uint64) error
 		if c.borrowed <= c.capacity {
 			delta = size - (c.capacity - c.borrowed)
 		}
-		if err := c.generation.acquireMemory(delta); err != nil {
+		if err := c.generation.acquireRecoveryCapacity(delta); err != nil {
 			return errors.Join(mpool.ErrAllocationAccountCapacity, err)
 		}
 		c.capacity += delta
+	}
+	if err := c.generation.borrowRecoveryCapacity(size); err != nil {
+		if errors.Is(err, ErrExecutionResourceClosed) {
+			return errors.Join(mpool.ErrAllocationAccountSealed, err)
+		}
+		return errors.Join(mpool.ErrAllocationAccountInvariant, err)
 	}
 	c.borrowed += size
 	return nil
@@ -141,6 +147,7 @@ func (c *ExecutionRecoveryCapacity) ReleaseAllocationCapacity(size uint64) {
 		panic("execution recovery capacity release underflow")
 	}
 	c.borrowed -= size
+	c.generation.returnRecoveryCapacity(size)
 }
 
 func (c *ExecutionRecoveryCapacity) Snapshot() (capacity, borrowed uint64) {
@@ -150,6 +157,31 @@ func (c *ExecutionRecoveryCapacity) Snapshot() (capacity, borrowed uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.capacity, c.borrowed
+}
+
+// TrimUnusedCapacity releases the part of the pre-admitted floor which is not
+// currently backing a physical allocation. Operators call this after a
+// recovery/finalization phase completes so conservative peak headroom does not
+// remain unavailable to downstream operators. Borrowed physical allocations
+// keep their exact charge and may return it to this floor later.
+func (c *ExecutionRecoveryCapacity) TrimUnusedCapacity() (uint64, error) {
+	if c == nil {
+		return 0, ErrExecutionResourceInvalid
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || c.generation == nil {
+		return 0, ErrExecutionSpillReservationInactive
+	}
+	if c.borrowed > c.capacity {
+		return 0, mpool.ErrAllocationAccountInvariant
+	}
+	unused := c.capacity - c.borrowed
+	if unused != 0 {
+		c.generation.releaseRecoveryCapacity(unused)
+		c.capacity = c.borrowed
+	}
+	return c.capacity, nil
 }
 
 // Close releases the recovery floor only after all physical borrowers have
@@ -167,7 +199,7 @@ func (c *ExecutionRecoveryCapacity) Close() error {
 		return mpool.ErrAllocationAccountLive
 	}
 	if c.capacity != 0 {
-		c.generation.ReleaseAllocationCapacity(c.capacity)
+		c.generation.releaseRecoveryCapacity(c.capacity)
 	}
 	c.capacity = 0
 	c.generation = nil

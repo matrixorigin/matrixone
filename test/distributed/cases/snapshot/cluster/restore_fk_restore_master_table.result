@@ -248,7 +248,9 @@ performancereviewid    employeeid    reviewdate    reviewerid
 4    4    2020-04-04    5
 5    5    2020-05-05    6
 6    6    2020-06-06    1
+-- @regex("not supported: can not restore table .* referenced by some foreign key constraint", true)
 restore table Company.Departments{snapshot="sys_sp"};
+not supported: can not restore table 'company.departments' referenced by some foreign key constraint
 select * from Departments;
 departmentid    name    managerid
 1    Research and Development    null

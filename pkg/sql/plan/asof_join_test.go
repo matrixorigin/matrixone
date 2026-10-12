@@ -22,7 +22,7 @@ import (
 )
 
 func TestBuildAsofJoin(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"select l.k, r.ts from "+
 			"(select 1 k, cast('2026-01-01 10:00:00' as timestamp) ts) l "+
 			"asof left join "+
@@ -42,7 +42,7 @@ func TestBuildAsofJoin(t *testing.T) {
 	// equality key, temporal predecessor predicate, and tolerance lower bound
 	require.Len(t, join.OnList, 3)
 
-	commuted, err := runOneStmt(NewMockOptimizer(false), t,
+	commuted, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"select * from "+
 			"(select 1 k, cast('2026-01-01' as timestamp) ts) AS l "+
 			"asof join (select 1 k, cast('2026-01-01' as timestamp) ts) r "+
@@ -52,7 +52,7 @@ func TestBuildAsofJoin(t *testing.T) {
 }
 
 func TestBuildAsofJoinAfterDerivedAliasColumnList(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"select l.k, r.ts from "+
 			"(select 1 source_k, cast('2026-01-01 10:00:00' as timestamp) source_ts) l(k, ts) "+
 			"asof join "+
@@ -72,7 +72,7 @@ func TestBuildAsofJoinAfterDerivedAliasColumnList(t *testing.T) {
 }
 
 func TestBuildAsofPreservesLegacyImplicitAliasJoin(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"select asof.k from "+
 			"(select 1 k, cast('2026-01-01' as timestamp) ts) asof "+
 			"join (select 1 k, cast('2026-01-02' as timestamp) ts) u "+
@@ -159,7 +159,7 @@ func TestBuildAsofJoinRejectsInvalidContracts(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.ErrorContains(t, err, test.want)
 		})
 	}

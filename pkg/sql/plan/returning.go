@@ -400,7 +400,7 @@ func (builder *QueryBuilder) appendReturningProjection(exprs tree.SelectExprs, b
 	if bindName == "" {
 		bindName = builder.returningTableName
 	}
-	if err := builder.addBinding(scanID, tree.AliasClause{Alias: tree.Identifier(bindName)}, returnCtx); err != nil {
+	if err := builder.addBinding(scanID, tree.AliasClause{Alias: tree.Identifier(bindName)}, returnCtx, builder.returningTableDef.DbName); err != nil {
 		return err
 	}
 	if len(returnCtx.bindings) != 1 {

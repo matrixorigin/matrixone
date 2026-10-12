@@ -20,8 +20,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -54,6 +54,7 @@ func TestSerialEncodedTypeSizeBound(t *testing.T) {
 		{name: "enum", typ: types.T_enum.ToType(), want: 5, supported: true},
 		{name: "decimal64", typ: types.T_decimal64.ToType(), want: 9, supported: true},
 		{name: "decimal128", typ: types.T_decimal128.ToType(), want: 17, supported: true},
+		{name: "decimal256", typ: types.T_decimal256.ToType(), want: 33, supported: true},
 		{name: "uuid", typ: types.T_uuid.ToType(), want: 17, supported: true},
 		{
 			name:      "declared varchar",
@@ -79,20 +80,12 @@ func TestSerialEncodedTypeSizeBound(t *testing.T) {
 			want:      2*types.MaxBlobLen + 3,
 			supported: true,
 		},
-		{
-			name: "versioned general-ci varchar",
-			typ: types.NewWithCharsetVersion(
-				types.T_varchar, 128, 0, types.CharsetUTF8,
-				types.CollationVersionV1),
-			want:      2*(4*(128*utf8.UTFMax)+1) + 3,
-			supported: true,
-		},
-		{name: "unsupported", typ: types.T_decimal256.ToType()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := SerialEncodedTypeSizeBound(tc.typ)
 			require.Equal(t, tc.supported, ok)
 			require.Equal(t, tc.want, got)
+			require.Equal(t, tc.supported, SerialTypeSupported(tc.typ.Oid))
 		})
 	}
 }
@@ -131,13 +124,11 @@ func TestSerialEncodedTypeSizeBoundCoversRuntimeValue(t *testing.T) {
 			}(),
 		},
 		{
-			name: "versioned key expansion",
+			name: "decimal256 encoding",
 			vec: func() *vector.Vector {
-				typ := types.NewWithCharsetVersion(
-					types.T_varchar, 32, 0, types.CharsetUTF8MB40900AI,
-					types.CollationVersionV1)
-				vec := vector.NewVec(typ)
-				require.NoError(t, vector.AppendBytes(vec, []byte("𐍈é\x00"), false, mp))
+				vec := vector.NewVec(types.New(types.T_decimal256, 65, 2))
+				require.NoError(t, vector.AppendFixed(
+					vec, mustParseDecimal256(t, "123.45", 2), false, mp))
 				return vec
 			}(),
 		},
@@ -164,15 +155,77 @@ func TestSerialEncodedTypeSizeBoundCoversRuntimeValue(t *testing.T) {
 	}
 }
 
-func TestNewSerialValueEncoderRejectsInvalidVersionedUTF8(t *testing.T) {
+func TestSerialDecimal256Encoding(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	typ := types.NewWithCharsetVersion(
-		types.T_varchar, 16, 0, types.CharsetUTF8MB40900AI,
-		types.CollationVersionV1)
+
+	typ := types.New(types.T_decimal256, 65, 2)
+	values := []types.Decimal256{
+		mustParseDecimal256(t, "-123.45", 2),
+		mustParseDecimal256(t, "678.90", 2),
+	}
 	vec := vector.NewVec(typ)
 	defer vec.Free(mp)
-	require.NoError(t, vector.AppendBytes(vec, []byte{0xff}, false, mp))
-	_, err := NewSerialValueEncoder(vec)
-	require.ErrorIs(t, err, collation.ErrUTF8)
+	require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+
+	want := make([][]byte, len(values))
+	for i, value := range values {
+		packer := types.NewPacker()
+		packer.EncodeDecimal256(value)
+		want[i] = packer.Bytes()
+		packer.Close()
+	}
+
+	encoder, err := NewSerialValueEncoder(vec)
+	require.NoError(t, err)
+	for i := range values {
+		packer := types.NewPacker()
+		encoder(vec, i, packer)
+		require.Equal(t, want[i], packer.GetBuf())
+		packer.Close()
+	}
+
+	packers := types.NewPackerArray(len(values))
+	defer func() {
+		for _, packer := range packers {
+			packer.Close()
+		}
+	}()
+	SerialHelper(vec, nil, packers, true)
+	for i := range values {
+		require.Equal(t, want[i], packers[i].GetBuf())
+	}
+
+	t.Run("nulls use both serial contracts", func(t *testing.T) {
+		nullVec := vector.NewVec(typ)
+		defer nullVec.Free(mp)
+		require.NoError(t, vector.AppendFixedList(
+			nullVec, values, []bool{false, true}, mp))
+
+		fullPackers := types.NewPackerArray(len(values))
+		defer func() {
+			for _, packer := range fullPackers {
+				packer.Close()
+			}
+		}()
+		SerialHelper(nullVec, nil, fullPackers, true)
+		require.Equal(t, want[0], fullPackers[0].GetBuf())
+		nullPacker := types.NewPacker()
+		nullPacker.EncodeNull()
+		require.Equal(t, nullPacker.GetBuf(), fullPackers[1].GetBuf())
+		nullPacker.Close()
+
+		bitmap := nulls.NewWithSize(len(values))
+		compactPackers := types.NewPackerArray(len(values))
+		defer func() {
+			for _, packer := range compactPackers {
+				packer.Close()
+			}
+		}()
+		SerialHelper(nullVec, bitmap, compactPackers, false)
+		require.Equal(t, want[0], compactPackers[0].GetBuf())
+		require.True(t, bitmap.Contains(1))
+		require.False(t, bitmap.Contains(0))
+		require.Empty(t, compactPackers[1].GetBuf())
+	})
 }

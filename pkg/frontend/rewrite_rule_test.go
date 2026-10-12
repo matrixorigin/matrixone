@@ -30,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -547,6 +548,62 @@ func TestRewriteSQLPropagatesRuleCacheLoadError(t *testing.T) {
 	require.Equal(t, sql, rewritten)
 }
 
+func TestRewriteSQLStatementInputPreservesSource(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	ctx := context.Background()
+	role := &rewritePolicySnapshot{enabled: true, lowerCaseTableNames: 1,
+		roleRules: map[string]string{"db.t": "select id from db.t where id = 1"}}
+	tests := []struct {
+		name, sql                                  string
+		policy                                     *rewritePolicySnapshot
+		internal, materialized, changed, wantError bool
+	}{
+		{name: "mandatory role", sql: "/* save_result */ select * from db.t", policy: role, changed: true},
+		{name: "cloud user", sql: "/* cloud_user */ select * from db.t", policy: role, changed: true},
+		{name: "cloud nonuser", sql: "/* cloud_nonuser */ select * from db.t", policy: role, changed: true},
+		{name: "external", sql: "select * from db.t", policy: role, changed: true},
+		{name: "internal", sql: "/* save_result */ select * from db.t", policy: role, internal: true, changed: true},
+		{name: "session rule", sql: "/* save_result */ select * from db.t", changed: true,
+			policy: &rewritePolicySnapshot{enabled: true, sessionEnabled: true, lowerCaseTableNames: 1,
+				sessionRules: map[string]string{"db.t": "select * from db.t where id = 1"}}},
+		{name: "remap", sql: "/* save_result */ select * from db.t", changed: true,
+			policy: &rewritePolicySnapshot{enabled: true, sessionEnabled: true, lowerCaseTableNames: 1,
+				sessionRemapDb: map[string]string{"db": "target"}}},
+		{name: "no policy", sql: "/* save_result */ select 1"},
+		{name: "disabled", sql: "/* save_result */ select 1", policy: &rewritePolicySnapshot{}},
+		{name: "empty", sql: "/* save_result */ select 1", policy: &rewritePolicySnapshot{enabled: true}},
+		{name: "materialized", sql: "/* save_result */ select 1", policy: role, materialized: true},
+		{name: "parse error", sql: "/* save_result */ select '", policy: role, wantError: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input := &UserInput{sql: tc.sql, rewritePolicy: tc.policy,
+				isInternalInput: tc.internal, rewritePolicyMaterialized: tc.materialized}
+			input.genHash()
+			input.genSqlSourceType(ses)
+			before := *input
+			wantSources := append([]string(nil), input.sqlSourceType...)
+			got, err := rewriteSQLStatementInput(ctx, ses, input)
+			if tc.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, before, *input, "rewriting must not mutate the request")
+			require.Equal(t, wantSources, got.sqlSourceType)
+			if tc.changed {
+				require.NotSame(t, input, got)
+				require.NotEqual(t, input.sql, got.sql)
+				require.Equal(t, hashString(got.sql), got.getHash())
+				require.NotEqual(t, input.getHash(), got.getHash())
+			} else {
+				require.Same(t, input, got)
+			}
+		})
+	}
+}
+
 func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
 	ctx := context.Background()
 	newSession := func(t *testing.T, roleRule, sessionRule string) *Session {
@@ -572,6 +629,33 @@ func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
 		require.NoError(t, err)
 		return chains["db.t"]
 	}
+	t.Run("source indexes survive materialization", func(t *testing.T) {
+		ses := newSession(t, "select id from db.t where id = 1", "")
+		defer ses.Close()
+		policy, err := captureRewritePolicy(ctx, ses)
+		require.NoError(t, err)
+		input := &UserInput{sql: "/* save_result */ select * from db.t; /* cloud_nonuser */ select * from db.t", rewritePolicy: policy}
+		input.genHash()
+		got, err := rewriteSQLStatementInput(ctx, ses, input)
+		require.NoError(t, err)
+		ec := newTestExecCtx(ctx, gomock.NewController(t))
+		ec.ses, ec.input = ses, got
+		cws, err := GetComputationWrapper(ec, "db", "dump", nil, ses.GetProc(), ses)
+		require.NoError(t, err)
+		defer func() {
+			for _, cw := range cws {
+				cw.Free()
+			}
+		}()
+		require.Nil(t, input.sqlSourceType)
+		require.Equal(t, constant.CloudUserSql, got.getSqlSourceType(0))
+		require.Equal(t, constant.CloudNoUserSql, got.getSqlSourceType(1))
+		fragments := parsers.SplitSqlBySemicolon(got.sql)
+		require.Len(t, fragments, 2)
+		for _, fragment := range fragments {
+			require.Equal(t, []string{"select id from db.t where id = 1"}, decodeChain(t, fragment))
+		}
+	})
 
 	t.Run("parser boundary errors keep parse classification", func(t *testing.T) {
 		ses := newSession(t, "", "")
@@ -709,6 +793,55 @@ func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
 		require.Contains(t, records[0], "insert into gate_sink")
 		require.Contains(t, records[0], "select case when")
 	})
+}
+
+func TestRewritePolicyKeepsRoleRulesWhenRemapHintIsDisabled(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.rewriteEnabled.Store(false)
+	ses.ruleCache = map[string]string{
+		"db.t": "select * from db.t where role_keep = 1",
+	}
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites",
+		`{"rewrites":{"db.t":"select * from db.t where session_keep = 1"},`+
+			`"remapdb":{"db":"session_db"}}`))
+
+	policy, err := captureRewritePolicy(ctx, ses)
+	require.NoError(t, err)
+	require.True(t, policy.enabled)
+	require.False(t, policy.sessionEnabled)
+	require.Equal(t, ses.ruleCache, policy.roleRules)
+	require.Nil(t, policy.sessionRules)
+	require.Nil(t, policy.sessionRemapDb)
+
+	rewritten, err := policy.rewrite(ctx,
+		`/*+ {"rewrites":{"db.t":"select * from db.t where inline_keep = 1"},`+
+			`"remapdb":{"db":"inline_db"}} */ select * from db.t`, "")
+	require.NoError(t, err)
+	content, ok := leadingHintContent(rewritten)
+	require.True(t, ok)
+	chains, remapDb, err := parsers.DecodeRewriteHint(ctx, content)
+	require.NoError(t, err)
+	require.Equal(t, []string{"select * from db.t where role_keep = 1"}, chains["db.t"])
+	require.Empty(t, remapDb)
+}
+
+func TestRewriteSQLFromMaterializedPolicyHonorsDisabledRemapHint(t *testing.T) {
+	ctx := context.Background()
+	outer := `/*+ {"rewrites":{"db.t":"select * from db.t where role_keep = 1"}} */ prepare s from 'select 1'`
+	inner := `/*+ {"rewrites":{"db.t":"select * from db.t where inline_keep = 1"},` +
+		`"remapdb":{"db":"inline_db"}} */ select * from db.t`
+
+	rewritten, err := rewriteSQLFromMaterializedPolicyWithSQLModeAndSessionEnabled(
+		ctx, outer, inner, "", false)
+	require.NoError(t, err)
+	content, ok := leadingHintContent(rewritten)
+	require.True(t, ok)
+	chains, remapDb, err := parsers.DecodeRewriteHint(ctx, content)
+	require.NoError(t, err)
+	require.Equal(t, []string{"select * from db.t where role_keep = 1"}, chains["db.t"])
+	require.Empty(t, remapDb)
 }
 
 func TestRewritePolicySnapshotUsesCurrentSQLModeAndFrozenEnablement(t *testing.T) {
@@ -872,7 +1005,7 @@ func BenchmarkRewriteSingleSQLPersistentMultiRulePolicy(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		if _, err := rewriteSingleSQL(ctx, "select * from policy_db.t0", rules, nil, nil, 1, ""); err != nil {
+		if _, err := rewriteSingleSQL(ctx, "select * from policy_db.t0", rules, nil, nil, true, 1, ""); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -910,7 +1043,7 @@ func TestSelectedRewriteWinnerValidatedForNonConsumerStatements(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			rewritten, err := rewriteSingleSQL(ctx, test.input, nil, nil, nil, 1, "")
+			rewritten, err := rewriteSingleSQL(ctx, test.input, nil, nil, nil, true, 1, "")
 			require.NoError(t, err)
 			assertAttachRejects(t, rewritten, test.want)
 		})

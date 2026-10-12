@@ -226,5 +226,5 @@ func (projection *Projection) emitGroupingSet(proc *process.Process) (vm.CallRes
 }
 
 func planTypeToType(typ plan.Type) types.Type {
-	return types.NewWithCharsetVersion(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset), uint8(typ.CollationVersion))
+	return types.MustTypeFromPlan(typ)
 }

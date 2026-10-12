@@ -51,7 +51,7 @@ func TestBuildPreparedAnalyze(t *testing.T) {
 	t.Run("frontend carrier and deduplicated dependencies", func(t *testing.T) {
 		prepared, err := buildPrepare(tree.NewPrepareString("analyze_stmt",
 			"analyze table nation(n_nationkey), tpch.nation(n_name), nation"),
-			NewMockCompilerContext(true))
+			NewMockCompilerContext(true, newPlanTestProcess(t)))
 		require.NoError(t, err)
 		prepare := prepared.GetDcl().GetPrepare()
 		require.NotNil(t, prepare)
@@ -65,7 +65,7 @@ func TestBuildPreparedAnalyze(t *testing.T) {
 	})
 
 	t.Run("prepare time default database", func(t *testing.T) {
-		base := NewMockCompilerContext(true)
+		base := NewMockCompilerContext(true, newPlanTestProcess(t))
 		var resolvedDatabase string
 		ctx := &preparedAnalyzeCompilerContext{
 			CompilerContext: base,
@@ -83,7 +83,7 @@ func TestBuildPreparedAnalyze(t *testing.T) {
 	})
 
 	t.Run("snapshot dependency", func(t *testing.T) {
-		base := NewMockCompilerContext(true)
+		base := NewMockCompilerContext(true, newPlanTestProcess(t))
 		snapshot := &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
 		ctx := &preparedAnalyzeCompilerContext{
 			CompilerContext: base,
@@ -111,21 +111,21 @@ func TestBuildPreparedAnalyzeRejectsInvalidDependencies(t *testing.T) {
 		{
 			name: "no database", sql: "analyze table nation",
 			ctx: &preparedAnalyzeCompilerContext{
-				CompilerContext: NewMockCompilerContext(true), defaultDatabase: "",
+				CompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)), defaultDatabase: "",
 			},
 			match: "No database selected",
 		},
 		{
 			name: "missing table", sql: "analyze table missing_table",
-			ctx: NewMockCompilerContext(true), match: "no such table tpch.missing_table",
+			ctx: NewMockCompilerContext(true, newPlanTestProcess(t)), match: "no such table tpch.missing_table",
 		},
 		{
 			name: "missing column", sql: "analyze table nation(missing_column)",
-			ctx: NewMockCompilerContext(true), match: "invalid input: column missing_column does not exist",
+			ctx: NewMockCompilerContext(true, newPlanTestProcess(t)), match: "invalid input: column missing_column does not exist",
 		},
 		{
 			name: "hidden column", sql: "analyze table nation(__mo_rowid)",
-			ctx: NewMockCompilerContext(true), match: "invalid input: column __mo_rowid does not exist",
+			ctx: NewMockCompilerContext(true, newPlanTestProcess(t)), match: "invalid input: column __mo_rowid does not exist",
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -135,7 +135,7 @@ func TestBuildPreparedAnalyzeRejectsInvalidDependencies(t *testing.T) {
 	}
 
 	t.Run("implicit list requires a visible column", func(t *testing.T) {
-		base := NewMockCompilerContext(true)
+		base := NewMockCompilerContext(true, newPlanTestProcess(t))
 		ctx := &preparedAnalyzeCompilerContext{
 			CompilerContext: base,
 			defaultDatabase: "tpch",

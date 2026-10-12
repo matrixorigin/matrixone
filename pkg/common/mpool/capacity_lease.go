@@ -106,6 +106,7 @@ func (r *CapacityReservation) Commit(actualCapacity uint64) (*CapacityLease, err
 	if !r.state.CompareAndSwap(capacityReservationOpen, capacityReservationCommitted) {
 		return nil, ErrAllocationAccountMismatch
 	}
+	r.account.registry.addCommittedCapacity(actualCapacity)
 	if unused := r.upperBound - actualCapacity; unused > 0 {
 		r.account.releaseWithCapacityClass(unused, r.capacityClass, r.owner)
 	}
@@ -151,5 +152,6 @@ func (l *CapacityLease) Release() {
 	if l == nil || l.account == nil || !l.released.CompareAndSwap(false, true) {
 		return
 	}
+	l.account.registry.releaseCommittedCapacity(l.capacity)
 	l.account.releaseWithCapacityClass(l.capacity, l.capacityClass, l.owner)
 }

@@ -1,0 +1,43 @@
+drop snapshot if exists fl_snap_pub_sys_second;
+drop account if exists fl_snap_pub_sub;
+drop account if exists fl_snap_pub_other;
+drop account if exists fl_snap_pub_owner;
+create account fl_snap_pub_owner admin_name = 'admin' identified by '111';
+create account fl_snap_pub_sub admin_name = 'admin' identified by '111';
+create account fl_snap_pub_other admin_name = 'admin' identified by '111';
+set @fl_snap_pub_id = (select account_id from mo_catalog.mo_account where account_name = 'fl_snap_pub_owner');
+create database fl_snap_pub_db;
+create publication fl_snap_pub database fl_snap_pub_db account fl_snap_pub_sub;
+select mo_feature_limit_upsert(@fl_snap_pub_id, 'snapshot', 'account', 0);
+mo_feature_limit_upsert(@fl_snap_pub_id, snapshot, account, 0)
+{\n  "now": {\n    "account_id": 20001,\n    "feature_code": "SNAPSHOT",\n    "scope": "account",\n    "quota": 0\n  },\n  "old": null\n}
+alter publication fl_snap_pub account fl_snap_pub_other;
+create snapshot fl_snap_pub_revoked for account from fl_snap_pub_owner publication fl_snap_pub;
+internal error: account fl_snap_pub_sub does not have permission to access publication fl_snap_pub_owner.fl_snap_pub
+select count(*) from mo_catalog.mo_snapshots where sname = 'fl_snap_pub_revoked';
+count(*)
+0
+alter publication fl_snap_pub account fl_snap_pub_sub;
+create snapshot fl_snap_pub_disabled for account from fl_snap_pub_owner publication fl_snap_pub;
+internal error: feature SNAPSHOT with scope account has disabled for account fl_snap_pub_owner
+select count(*) from mo_catalog.mo_snapshots where sname = 'fl_snap_pub_disabled';
+count(*)
+0
+select mo_feature_limit_upsert(@fl_snap_pub_id, 'snapshot', 'account', 1);
+mo_feature_limit_upsert(@fl_snap_pub_id, snapshot, account, 1)
+{\n  "now": {\n    "account_id": 20001,\n    "feature_code": "SNAPSHOT",\n    "scope": "account",\n    "quota": 1\n  },\n  "old": {\n    "account_id": 20001,\n    "feature_code": "SNAPSHOT",\n    "scope": "account",\n    "quota": 0\n  }\n}
+create snapshot fl_snap_pub_first for account from fl_snap_pub_owner publication fl_snap_pub;
+select obj_id = current_account_id() from mo_catalog.mo_snapshots where sname = 'fl_snap_pub_first';
+obj_id = current_account_id()
+1
+create snapshot fl_snap_pub_sys_second for account fl_snap_pub_owner;
+internal error: feature SNAPSHOT with scope account has reached the limit of 1
+select count(*) from mo_catalog.mo_snapshots where sname = 'fl_snap_pub_sys_second';
+count(*)
+0
+drop snapshot fl_snap_pub_first;
+drop publication fl_snap_pub;
+drop database fl_snap_pub_db;
+drop account fl_snap_pub_sub;
+drop account fl_snap_pub_other;
+drop account fl_snap_pub_owner;

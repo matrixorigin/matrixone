@@ -47,17 +47,22 @@ func stringCharsetAndCollationName(typ types.Type) (charset, collation string) {
 	switch typ.Charset {
 	case types.CharsetUTF8:
 		return "utf8mb4", "utf8mb4_general_ci"
+	case types.CharsetUTF8MB3UnicodeCI:
+		return "utf8", "utf8_unicode_ci"
+	case types.CharsetUTF8MB4UnicodeCI:
+		return "utf8mb4", "utf8mb4_unicode_ci"
 	case types.CharsetUTF8MB4Bin:
 		return "utf8mb4", "utf8mb4_bin"
-	case types.CharsetUTF8MB40900AI:
-		return "utf8mb4", "utf8mb4_0900_ai_ci"
-	case types.CharsetUTF8MB40900Bin:
-		return "utf8mb4", "utf8mb4_0900_bin"
 	default:
 		// CharsetLegacy and unknown text identities retain the protocol's
 		// compatibility fallback rather than inventing a new public identity.
 		return "utf8", "utf8_general_ci"
 	}
+}
+
+func isExplicitUTF8Charset(charset uint8) bool {
+	return charset == types.CharsetUTF8 || charset == types.CharsetUTF8MB4Bin ||
+		types.IsUnicodeCollation(charset)
 }
 
 func charsetAndCollationTypeMatch(_ []overload, inputs []types.Type) checkResult {

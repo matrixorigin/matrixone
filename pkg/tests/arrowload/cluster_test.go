@@ -84,43 +84,16 @@ func startArrowLoadClusterWithOptions(t testing.TB, options arrowLoadClusterOpti
 	return c
 }
 
-// startArrowLoadClusterWithForceModes provisions one CN for each ownership
-// policy in the fallback test. Both CNs use the same storage and fixture, so
-// the policy comparison pays for one cluster lifecycle while still compiling
-// and executing each mode through an independent public frontend.
-func startArrowLoadClusterWithForceModes(t testing.TB) embed.Cluster {
+// startArrowLoadStaticPolicyCluster combines only the two static policy
+// matrices. Both scenarios exercise independent CN frontends and disjoint
+// databases; neither owns a restart or a mutable process-wide fault boundary.
+// The caller owns this one lifecycle and closes it before another test in the
+// package starts an exclusive fixture.
+func startArrowLoadStaticPolicyCluster(t testing.TB) embed.Cluster {
 	t.Helper()
 	nextCN := 0
 	c, err := embed.StartTestCluster(
-		embed.WithCNCount(2),
-		embed.WithPreStart(func(svc embed.ServiceOperator) {
-			if svc.ServiceType() != metadata.ServiceType_CN {
-				return
-			}
-			forceMaterialize := nextCN == 1
-			nextCN++
-			svc.Adjust(func(cfg *embed.ServiceConfig) {
-				cfg.CN.Frontend.ArrowLoad.Enabled = true
-				cfg.CN.Frontend.ArrowLoad.S3Enabled = true
-				cfg.CN.Frontend.ArrowLoad.DistributedEnabled = true
-				cfg.CN.Frontend.ArrowLoad.ForceMaterialize = forceMaterialize
-			})
-		}))
-	if c != nil {
-		t.Cleanup(func() { require.NoError(t, c.Close()) })
-	}
-	require.NoError(t, err)
-	return c
-}
-
-// startArrowLoadClusterWithGateModes provisions the two static gate policies
-// in one test-owned cluster. The tests use different CNs, so each policy keeps
-// its own frontend configuration while sharing the expensive cluster lifecycle.
-func startArrowLoadClusterWithGateModes(t testing.TB) embed.Cluster {
-	t.Helper()
-	nextCN := 0
-	c, err := embed.StartTestCluster(
-		embed.WithCNCount(2),
+		embed.WithCNCount(4),
 		embed.WithPreStart(func(svc embed.ServiceOperator) {
 			if svc.ServiceType() != metadata.ServiceType_CN {
 				return
@@ -128,9 +101,10 @@ func startArrowLoadClusterWithGateModes(t testing.TB) embed.Cluster {
 			cnIndex := nextCN
 			nextCN++
 			svc.Adjust(func(cfg *embed.ServiceConfig) {
-				cfg.CN.Frontend.ArrowLoad.Enabled = cnIndex != 0
+				cfg.CN.Frontend.ArrowLoad.Enabled = cnIndex != 2
 				cfg.CN.Frontend.ArrowLoad.S3Enabled = true
-				cfg.CN.Frontend.ArrowLoad.DistributedEnabled = cnIndex == 0
+				cfg.CN.Frontend.ArrowLoad.DistributedEnabled = cnIndex != 3
+				cfg.CN.Frontend.ArrowLoad.ForceMaterialize = cnIndex == 1
 			})
 		}))
 	if c != nil {

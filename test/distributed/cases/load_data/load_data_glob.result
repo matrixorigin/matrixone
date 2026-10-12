@@ -1,0 +1,111 @@
+drop database if exists load_glob;
+create database load_glob;
+use load_glob;
+drop table if exists g_csv;
+create table g_csv(id int, name varchar(50), v int);
+load data infile {'filepath'='$resources/load_data/glob/part_*.csv'} into table g_csv fields terminated by ',' lines terminated by '\n' ignore 1 lines parallel 'true';
+select count(*), sum(id), min(id), max(id) from g_csv;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  min(id)[4,32,0]  ¦  max(id)[4,32,0]  𝄀
+6  ¦  69  ¦  1  ¦  22
+select count(*) from g_csv where id = 9999;
+➤ count(*)[-5,64,0]  𝄀
+0
+select id, name, v from g_csv order by id;
+➤ id[4,32,0]  ¦  name[12,50,0]  ¦  v[4,32,0]  𝄀
+1  ¦  shard0_a  ¦  1  𝄀
+2  ¦  shard0_b  ¦  2  𝄀
+11  ¦  shard1_a  ¦  11  𝄀
+12  ¦  shard1_b  ¦  12  𝄀
+21  ¦  shard2_a  ¦  21  𝄀
+22  ¦  shard2_b  ¦  22
+drop table if exists g_lz4;
+create table g_lz4(id int, name varchar(50), v int);
+load data infile {'filepath'='$resources/load_data/glob/zpart_*.csv.lz4'} into table g_lz4 fields terminated by ',' lines terminated by '\n' ignore 1 lines parallel 'true';
+select count(*), sum(id), min(id), max(id) from g_lz4;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  min(id)[4,32,0]  ¦  max(id)[4,32,0]  𝄀
+6  ¦  69  ¦  1  ¦  22
+select count(*) from g_lz4 where id = 9999;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table if exists g_lz4_explicit;
+create table g_lz4_explicit(id int, name varchar(50), v int);
+load data infile {'filepath'='$resources/load_data/glob/zpart_*.csv.lz4', 'compression'='lz4'} into table g_lz4_explicit fields terminated by ',' lines terminated by '\n' ignore 1 lines parallel 'true';
+select count(*), sum(id) from g_lz4_explicit;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+6  ¦  69
+drop table if exists g_mixed;
+create table g_mixed(id int, name varchar(50), v int);
+load data infile {'filepath'='$resources/load_data/glob/mix/m_*'} into table g_mixed fields terminated by ',' lines terminated by '\n' ignore 1 lines parallel 'true';
+select count(*), sum(id), min(id), max(id) from g_mixed;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  min(id)[4,32,0]  ¦  max(id)[4,32,0]  𝄀
+6  ¦  69  ¦  1  ¦  22
+select count(*) from g_mixed where id = 9999;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table if exists g_serial;
+create table g_serial(id int, name varchar(50), v int);
+load data infile {'filepath'='$resources/load_data/glob/part_*.csv'} into table g_serial fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select count(*), sum(id) from g_serial;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+6  ¦  69
+select count(*) from g_serial where id = 9999;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table if exists g_one;
+create table g_one(id int, name varchar(50), v int);
+load data infile {'filepath'='$resources/load_data/glob/one/solo_*.csv'} into table g_one fields terminated by ',' lines terminated by '\n' ignore 1 lines parallel 'true';
+select count(*), sum(id) from g_one;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+2  ¦  3
+select count(*) from g_one where id = 9999;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table if exists g_noignore;
+create table g_noignore(id int, name varchar(50), v int);
+load data infile {'filepath'='$resources/load_data/glob/part_*.csv'} into table g_noignore fields terminated by ',' lines terminated by '\n' parallel 'true';
+select count(*) from g_noignore;
+➤ count(*)[-5,64,0]  𝄀
+9
+select count(*) from g_noignore where id = 9999;
+➤ count(*)[-5,64,0]  𝄀
+3
+load data infile {'filepath'='$resources/load_data/glob/part_*.csv'} into table g_csv fields terminated by ',' lines terminated by '\n' ignore 1 lines parallel 'true';
+select count(*), sum(id) from g_csv;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+12  ¦  138
+drop table if exists g_empty;
+create table g_empty(id int, name varchar(50), v int);
+load data infile {'filepath'='$resources/load_data/glob/nosuch_*.csv'} into table g_empty fields terminated by ',' lines terminated by '\n' parallel 'true';
+invalid input: the file does not exist in load flow
+select count(*) from g_empty;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table if exists g_rollback;
+create table g_rollback(id int, name varchar(50), v int);
+insert into g_rollback values(-1, 'seed', -1);
+begin;
+load data infile {'filepath'='$resources/load_data/glob/part_*.csv'} into table g_rollback fields terminated by ',' lines terminated by '\n' ignore 1 lines parallel 'true';
+select count(*) from g_rollback;
+➤ count(*)[-5,64,0]  𝄀
+7
+rollback;
+select count(*), min(id) from g_rollback;
+➤ count(*)[-5,64,0]  ¦  min(id)[4,32,0]  𝄀
+1  ¦  -1
+drop table if exists g_pk;
+create table g_pk(id int primary key, name varchar(50), v int);
+load data infile {'filepath'='$resources/load_data/glob/part_*.csv'} into table g_pk fields terminated by ',' lines terminated by '\n' ignore 1 lines parallel 'true';
+select count(*), sum(id) from g_pk;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+6  ¦  69
+set experimental_fulltext_index=1;
+drop table if exists g_ft;
+create table g_ft(id int primary key, name varchar(50), v int, fulltext(name));
+load data infile {'filepath'='$resources/load_data/glob/part_*.csv'} into table g_ft fields terminated by ',' lines terminated by '\n' ignore 1 lines parallel 'true';
+select count(*), sum(id) from g_ft;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+6  ¦  69
+select count(*) from g_ft where id = 9999;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop database load_glob;

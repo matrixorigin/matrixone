@@ -81,6 +81,7 @@ type compiledIncludePred struct {
 	col        int
 	kind       includeCmpKind
 	isStr      bool
+	charTrim   bool     // CHAR column: compare with MO's CHAR semantics (trailing ASCII spaces trimmed)
 	isUnsigned bool     // uint64/bit column: compare as uint64 (int64 wraps values above MaxInt64)
 	ints       []int64  // signed integer-column operands (all int types + uint8/16/32, which fit int64)
 	uints      []uint64 // unsigned-64 column operands
@@ -126,7 +127,15 @@ func compileIncludePredicates(specJSON []byte, includeTypes []int32, pkType int3
 		// silently exclude a matching row. All other integer types (int8..64, uint8..32) fit
 		// in int64. isStr takes precedence (varchar/char).
 		unsigned := colType == int32(types.T_uint64) || colType == int32(types.T_bit)
-		cp := compiledIncludePred{col: p.Col, kind: kind, isStr: isVarlenaIncludeType(colType), isUnsigned: unsigned}
+		cp := compiledIncludePred{
+			col: p.Col, kind: kind, isStr: isVarlenaIncludeType(colType), isUnsigned: unsigned,
+			// A CHAR INCLUDE column compares with MO's CHAR semantics (trailing ASCII spaces
+			// trimmed), matching the base table's regular-column comparators. The primary key is
+			// EXCLUDED: MO's base pk lookup is byte-exact for CHAR (a serialized-key compare), so a
+			// CHAR pk predicate must stay byte-exact here too to return the same rows. varchar is
+			// byte-exact.
+			charTrim: colType == int32(types.T_char) && p.Col != IncludePredPkCol,
+		}
 		// Gather the op's operands from the shape-appropriate field(s).
 		var operands []any
 		switch kind {
@@ -203,6 +212,20 @@ func isVarlenaIncludeType(t int32) bool {
 	default:
 		return false
 	}
+}
+
+// charTrimCompare compares a and b with MatrixOne's CHAR semantics: trailing ASCII spaces are
+// trimmed from each operand, then the bytes are compared. It matches the ordinary T_char comparators
+// EXACTLY -- func_compare.go and operator_between.go both do bytes.Compare(bytes.TrimRight(x, " "),
+// bytes.TrimRight(y, " ")) -- so a pushed CHAR predicate admits precisely the rows the base table
+// would. NOTE: MO trims, it does NOT virtually space-pad; a trailing byte below space (e.g. a tab)
+// therefore sorts AFTER a plain value ('a\t' > 'a'), which a padding comparator would get wrong.
+func charTrimCompare(a, b []byte) int {
+	return bytes.Compare(bytes.TrimRight(a, " "), bytes.TrimRight(b, " "))
+}
+
+func charTrimEqual(a, b []byte) bool {
+	return bytes.Equal(bytes.TrimRight(a, " "), bytes.TrimRight(b, " "))
 }
 
 // includeOperandUint64 extracts a uint64 operand from a decoded JSON value, for uint64/bit
@@ -297,26 +320,35 @@ func (p *compiledIncludePred) test(v any, isNull bool) bool {
 	}
 	if p.isStr {
 		b := includeBytes(v)
+		// CHAR compares with MO's semantics (trailing ASCII spaces trimmed from both operands, then
+		// bytes.Compare -- matching func_compare.go / operator_between.go so the pushed predicate
+		// agrees with the base table); varchar is byte-exact. Prefix is byte HasPrefix for both.
+		strEqual := bytes.Equal
+		strCompare := bytes.Compare
+		if p.charTrim {
+			strEqual = charTrimEqual
+			strCompare = charTrimCompare
+		}
 		switch p.kind {
 		case incEq:
-			return bytes.Equal(b, p.strs[0])
+			return strEqual(b, p.strs[0])
 		case incNe:
-			return !bytes.Equal(b, p.strs[0])
+			return !strEqual(b, p.strs[0])
 		case incLt:
-			return bytes.Compare(b, p.strs[0]) < 0
+			return strCompare(b, p.strs[0]) < 0
 		case incLe:
-			return bytes.Compare(b, p.strs[0]) <= 0
+			return strCompare(b, p.strs[0]) <= 0
 		case incGt:
-			return bytes.Compare(b, p.strs[0]) > 0
+			return strCompare(b, p.strs[0]) > 0
 		case incGe:
-			return bytes.Compare(b, p.strs[0]) >= 0
+			return strCompare(b, p.strs[0]) >= 0
 		case incBetween:
-			return bytes.Compare(b, p.strs[0]) >= 0 && bytes.Compare(b, p.strs[1]) <= 0
+			return strCompare(b, p.strs[0]) >= 0 && strCompare(b, p.strs[1]) <= 0
 		case incPrefix:
 			return bytes.HasPrefix(b, p.strs[0])
 		case incIn:
 			for _, s := range p.strs {
-				if bytes.Equal(b, s) {
+				if strEqual(b, s) {
 					return true
 				}
 			}

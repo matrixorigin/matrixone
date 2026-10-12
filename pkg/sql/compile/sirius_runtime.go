@@ -59,6 +59,8 @@ func siriusPlanEligible(queryPlan *planpb.Plan) bool {
 // exception is the explicit local-CN benchmark mode, where TN GC is disabled,
 // and each CN owns one process-local manager and one sidecar pairing.
 type SiriusRuntime struct {
+	// EmbeddedMO has no external resolver or direct-TAE lease dependency.
+	EmbeddedMO               bool
 	Backend                  SiriusBackend
 	Leases                   *substrait.LeaseManager
 	Resolver                 *substrait.ResolverServer
@@ -66,6 +68,7 @@ type SiriusRuntime struct {
 	DataDir                  string
 	LeaseTTL                 time.Duration
 	CleanupTimeout           time.Duration
+	RequestTimeout           time.Duration
 	// BenchmarkNoGC is set only by the CN launcher after it verifies that the
 	// paired TN has disabled GC. It permits the explicitly non-durable,
 	// process-local lease manager used by the local-CN benchmark profile.
@@ -73,6 +76,15 @@ type SiriusRuntime struct {
 }
 
 func (r *SiriusRuntime) Validate() error {
+	if r != nil && r.EmbeddedMO {
+		if r.Backend == nil || r.CleanupTimeout <= 0 {
+			return moerr.NewInternalErrorNoCtx("substrait: incomplete embedded Sirius runtime")
+		}
+		if health, ok := r.Backend.(interface{ Accepting() bool }); ok && !health.Accepting() {
+			return moerr.NewInvalidStateNoCtx("substrait: embedded Sirius admission is sealed")
+		}
+		return nil
+	}
 	if r == nil || r.Backend == nil || r.Leases == nil ||
 		r.Resolver == nil || len(r.AuthorizedClientSPKIHash) != 32 || r.DataDir == "" ||
 		r.LeaseTTL <= 0 || r.LeaseTTL > substrait.MaxLeaseTTL || r.CleanupTimeout <= 0 {
@@ -110,6 +122,9 @@ func (r *SiriusRuntime) Close(ctx context.Context) error {
 func (r *SiriusRuntime) ReconcileReplay() error {
 	if err := r.Validate(); err != nil {
 		return err
+	}
+	if r.EmbeddedMO {
+		return nil
 	}
 	var result error
 	for _, pending := range r.Leases.PendingExecutions() {
@@ -158,16 +173,24 @@ func (o *siriusReadOwner) finish(ctx context.Context, succeeded bool) error {
 }
 
 func (c *Compile) tryCompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan) (bool, error) {
-	if c == nil || !siriusOffloadRequested(ctx) || c.isPrepare || c.isInternal || !siriusStatementEligible(c.stmt) {
+	if c == nil || c.proc == nil || !siriusOffloadRequested(ctx) || c.isPrepare || c.isInternal || !siriusStatementEligible(c.stmt) {
+		return false, nil
+	}
+	runtime, ok := lookupSiriusRuntime(c.proc.GetService())
+	if runtime != nil && runtime.EmbeddedMO {
+		// An explicitly selected embedded runtime must not turn failed
+		// admission into an invisible CPU fallback.
+		if err := runtime.Validate(); err != nil {
+			return false, err
+		}
+		return c.compileEmbeddedSiriusRead(ctx, queryPlan, runtime)
+	}
+	if !ok {
 		return false, nil
 	}
 	if !siriusPlanEligible(queryPlan) {
 		// Normal compilation owns the metadata-lock/retry boundary for a stale
 		// index hint. An offloaded plan cannot bypass that validation.
-		return false, nil
-	}
-	runtime, ok := lookupSiriusRuntime(c.proc.GetService())
-	if !ok {
 		return false, nil
 	}
 	accountID, err := defines.GetAccountId(ctx)

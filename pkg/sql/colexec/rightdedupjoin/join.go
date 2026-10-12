@@ -54,6 +54,7 @@ func (rightDedupJoin *RightDedupJoin) Prepare(proc *process.Process) (err error)
 	} else {
 		rightDedupJoin.OpAnalyzer.Reset()
 	}
+	rightDedupJoin.ctr.autoSpill = rightDedupJoin.SpillThreshold == 0
 	rightDedupJoin.ctr.spillThreshold = colexec.ResolveSpillThreshold(rightDedupJoin.SpillThreshold)
 
 	newEvalVectors := len(rightDedupJoin.ctr.vecs) == 0
@@ -238,6 +239,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				BuildKeyExprs:           rightDedupJoin.Conditions[1],
 				ProbeKeyExprs:           rightDedupJoin.Conditions[0],
 				SpillThreshold:          ctr.spillThreshold,
+				AdaptiveMemory:          ctr.autoSpill,
 				NeedsProbeForEmptyBuild: true,
 				MergeProbeBatches:       !rightDedupJoin.InputKeysUnique,
 				Budget:                  budget,

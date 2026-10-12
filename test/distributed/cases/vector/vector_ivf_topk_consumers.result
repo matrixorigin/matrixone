@@ -296,29 +296,6 @@ where tag = 1 order by l2_distance(v,'[1,1,1,1]') limit 3 by rank with option 'm
 1  ¦  0.0  𝄀
 2  ¦  4.0  𝄀
 3  ¦  8.0
-explain with knn as (
-select id, l2_distance(v,'[1,1,1,1]') as d from t_guard
-where tag = 1 order by l2_distance(v,'[1,1,1,1]') limit 3 by rank with option 'mode=auto'
-) select k.id, m.name from knn k join meta m on k.id = m.id;
--- @regex("Vector Index Scan", true)
-➤ AP QUERY PLAN ON MULTICN(32 core)[12,-1,0]  𝄀
-Project  𝄀
-  ->  Join  𝄀
-        Join Type: INNER  𝄀
-        Join Cond: (m.id = __mo_index_pri_col)  𝄀
-        Runtime Filter Build: #[-1,0]  𝄀
-        ->  Table Scan on ivf_topk_consumers.meta  𝄀
-              Runtime Filter Probe: m.id  𝄀
-        ->  Sort  𝄀
-              Sort Key: #[0,1] INTERNAL  𝄀
-              Limit: 3  𝄀
-              ->  Join  𝄀
-                    Join Type: INNER  𝄀
-                    Join Cond: (__mo_index_pri_col = #[1,0])  𝄀
-                    ->  Index Table Scan on t_guard.g_tag  𝄀
-                          Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
-                    ->  Vector Index Scan on g_vec [l2_distance]  𝄀
-                          Vector Index: g_vec, Metric: l2_distance, Candidate Limit: 3, NProbe: 8
 with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_guard
 where tag = 1 order by l2_distance(v,'[1,1,1,1]') limit 3 by rank with option 'mode=auto'

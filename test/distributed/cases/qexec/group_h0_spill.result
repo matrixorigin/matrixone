@@ -53,6 +53,45 @@ group by g order by g;
 1  ¦  75  ¦  11175  ¦  11  𝄀
 2  ¦  75  ¦  11250  ¦  11  𝄀
 3  ¦  75  ¦  11325  ¦  11
+set @group_concat_spill_saved_max_len = @@group_concat_max_len;
+set @group_concat_spill_saved_dop = @@max_dop;
+set session group_concat_max_len = 1048576;
+set @@max_dop = 1;
+set @@agg_spill_mem = 65536;
+select length(gc) as gc_len, sha2(gc, 256) as gc_sha
+from (
+select group_concat(concat(result, '-', repeat('x', 256))
+order by result separator '|') as gc
+from generate_series(1, 512) g
+) ordered_spill;
+➤ gc_len[-5,64,0]  ¦  gc_sha[12,128,0]  𝄀
+133523  ¦  1c929303b74f3a07de0c9e97146ee08102d537dad033f6a005ad89f564e621b3
+set @@agg_spill_mem = 536870912;
+select length(gc) as gc_len, sha2(gc, 256) as gc_sha
+from (
+select group_concat(concat(result, '-', repeat('x', 256))
+order by result separator '|') as gc
+from generate_series(1, 512) g
+) ordered_resident;
+➤ gc_len[-5,64,0]  ¦  gc_sha[12,128,0]  𝄀
+133523  ¦  1c929303b74f3a07de0c9e97146ee08102d537dad033f6a005ad89f564e621b3
+set @@agg_spill_mem = 65536;
+explain (analyze true)
+select group_concat(concat(result, '-', repeat('x', 256))
+order by result separator '|') as gc
+from generate_series(1, 512) g;
+-- @regex("SpillRows=[1-9][0-9]*", true)
+-- @regex("SpillSize=[1-9][0-9.]* [KMGT]iB", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=130.42 KiB OutputSize=130.42 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=130.42 KiB (min=130.42 KiB, max=130.42 KiB)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=2ms waitTime=0ms inputRows=512 outputRows=1 (min=1, max=1) InputSize=4.00 KiB OutputSize=130.42 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=532.27 KiB (min=532.27 KiB, max=532.27 KiB) SpillRows=512 SpillSize=149.39 KiB (min=149.39 KiB, max=149.39 KiB)  𝄀
+        Aggregate Functions: group_concat(concat(cast(g.result AS VARCHAR), '-', 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx') ORDER BY g.result ASC SEPARATOR '|')  𝄀
+        ->  Table Function on generate_series  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=0 outputRows=512 (min=512, max=512) InputSize=0 bytes OutputSize=4.00 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=4.00 KiB (min=4.00 KiB, max=4.00 KiB)
+set session group_concat_max_len = @group_concat_spill_saved_max_len;
+set @@max_dop = @group_concat_spill_saved_dop;
 set @@agg_spill_mem = 536870912;
 select count(*) from tiny_scalar;
 ➤ count(*)[-5,64,0]  𝄀

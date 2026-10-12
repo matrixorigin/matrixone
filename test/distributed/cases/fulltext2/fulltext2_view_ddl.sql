@@ -85,17 +85,26 @@ select id from v_good_score order by id;
 -- served by fulltext2_search, NOT the classic fulltext_index_scan -- asserting the wrong one
 -- here is what first proved this file covers ground the classic case cannot.
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from v_good_filter;
 
--- a MATCH combined with a window function stays refused even WITH the index: the rewrite
--- does not reach through a Window node, so the direct query fails the same way and the view
--- could never run.
+-- A MATCH that appears ONLY inside the window's OVER spec, with no WHERE clause to seed an index
+-- scan, stays refused even WITH the matching index: there is no filter for the rewrite to build the
+-- fulltext2 scan from, so fulltext_match survives and the view cannot run. The direct query fails
+-- identically (ERROR 20105), so nothing is lost by refusing.
 create view v_window_idx as
 select id, row_number() over (order by match(body) against('hello')) as rn from docs;
 
+-- A WHERE MATCH alongside a window function IS served now (#28974): the rewrite descends the WINDOW
+-- (and the PARTITION node that OVER(PARTITION BY ...) inserts) to reach the scan, so these views are
+-- accepted and run. The plain and partitioned forms are both pinned.
 create view v_window_where as
 select id, row_number() over (order by id) as rn from docs where match(body) against('hello');
+select id, rn from v_window_where order by id;
+
+create view v_window_part as
+select id, row_number() over (partition by title order by id) as rn from docs where match(body) against('hello');
+select id, rn from v_window_part order by id;
 
 -- ---------------- a filter on the projected score, above the view ---------------
 -- `WHERE sc > 0` on a view's score column is a predicate that WRAPS the MATCH rather than
@@ -107,7 +116,7 @@ select id, row_number() over (order by id) as rn from docs where match(body) aga
 -- MATCH returns a FLOAT relevance score in MatrixOne (DESC on such a view reports FLOAT),
 -- as in MySQL, so comparing it is meaningful rather than a bool coercion.
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from v_good_score where score > 0;
 
 select id from v_good_score where score > 0 order by id;

@@ -1,0 +1,72 @@
+drop database if exists unique_group_limit_bvt;
+create database unique_group_limit_bvt;
+use unique_group_limit_bvt;
+create table unique_values (
+id int,
+a bigint not null,
+b bigint not null,
+v decimal(10, 2),
+unique key uk_ab(a, b)
+);
+insert into unique_values values
+(1, 10, 100, 1.25),
+(2, 20, 200, null),
+(3, 30, 300, 3.50);
+select a, b, count(*), count(v), sum(v), avg(v), min(v), max(v)
+from unique_values
+group by a, b
+order by a, b
+limit 100;
+➤ a[-5,64,0]  ¦  b[-5,64,0]  ¦  count(*)[-5,64,0]  ¦  count(v)[-5,64,0]  ¦  sum(v)[3,32,2]  ¦  avg(v)[3,14,6]  ¦  min(v)[3,10,2]  ¦  max(v)[3,10,2]  𝄀
+10  ¦  100  ¦  1  ¦  1  ¦  1.25  ¦  1.250000  ¦  1.25  ¦  1.25  𝄀
+20  ¦  200  ¦  1  ¦  0  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+30  ¦  300  ¦  1  ¦  1  ¦  3.50  ¦  3.500000  ¦  3.50  ¦  3.50
+create table nullable_unique_values (
+a bigint,
+b bigint,
+unique key uk_ab(a, b)
+);
+insert into nullable_unique_values values (null, 1), (null, 1), (2, 2);
+select a, b, count(*)
+from nullable_unique_values
+group by a, b
+order by a, b
+limit 100;
+➤ a[-5,64,0]  ¦  b[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  1  ¦  2  𝄀
+2  ¦  2  ¦  1
+prepare unique_group from
+'select a, b, count(*) c from unique_values group by a, b order by a, b limit 100';
+execute unique_group;
+➤ a[-5,64,0]  ¦  b[-5,64,0]  ¦  c[-5,64,0]  𝄀
+10  ¦  100  ¦  1  𝄀
+20  ¦  200  ¦  1  𝄀
+30  ¦  300  ¦  1
+alter table unique_values drop index uk_ab;
+insert into unique_values values (4, 10, 100, 9.00);
+execute unique_group;
+➤ a[-5,64,0]  ¦  b[-5,64,0]  ¦  c[-5,64,0]  𝄀
+10  ¦  100  ¦  2  𝄀
+20  ¦  200  ¦  1  𝄀
+30  ¦  300  ¦  1
+delete from unique_values where id = 4;
+alter table unique_values add unique key uk_ab(a, b);
+execute unique_group;
+➤ a[-5,64,0]  ¦  b[-5,64,0]  ¦  c[-5,64,0]  𝄀
+10  ¦  100  ¦  1  𝄀
+20  ¦  200  ¦  1  𝄀
+30  ¦  300  ¦  1
+drop table unique_values;
+create table unique_values (
+id int,
+a bigint not null,
+b bigint not null,
+v decimal(10, 2),
+unique key uk_ab(a, b)
+);
+insert into unique_values values (5, 50, 500, 5.00);
+execute unique_group;
+➤ a[-5,64,0]  ¦  b[-5,64,0]  ¦  c[-5,64,0]  𝄀
+50  ¦  500  ¦  1
+deallocate prepare unique_group;
+drop database unique_group_limit_bvt;

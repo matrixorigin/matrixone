@@ -166,7 +166,7 @@ func buildTestModel(t *testing.T, id string, ids []int64) *CagraModel[float32, f
 // TestModelStreamError verifies that a streaming SQL error is propagated correctly.
 func TestModelStreamError(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// Inject streaming error mock.
@@ -199,7 +199,7 @@ func TestModelStreamError(t *testing.T) {
 // TestModelBuildAndLoad tests the full build → save → load → search → unload cycle.
 func TestModelBuildAndLoad(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := testIdxcfg()
@@ -295,7 +295,7 @@ func TestModelBuildAndLoad(t *testing.T) {
 // TestModelLoadFromDB tests LoadIndex when the tar is downloaded from a mock DB (streaming SQL).
 func TestModelLoadFromDB(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := testIdxcfg()
@@ -424,7 +424,7 @@ func TestModelNil(t *testing.T) {
 // TestModelEmptyBuild verifies that building with zero vectors produces no file.
 func TestModelEmptyBuild(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	_ = proc
 	_ = sqlproc

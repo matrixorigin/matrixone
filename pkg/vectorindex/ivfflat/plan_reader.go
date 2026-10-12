@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -48,8 +50,9 @@ import (
 // index scan. It owns one execution generation and its direct relation scanner.
 type planReader struct {
 	proc        *process.Process
-	spec        *plan.VectorIndexScan
+	spec        *plan.IndexSearchScan
 	req         searchplugin.Request
+	opts        ivfflatplan.ScanOptions
 	scanner     *relationScanner
 	closed      bool
 	generation  *planSearchGeneration
@@ -70,7 +73,7 @@ type planReader struct {
 var _ engine.Reader = (*planReader)(nil)
 var _ engine.ExplainDiagnosticReader = (*planReader)(nil)
 
-func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req searchplugin.Request) (engine.Reader, error) {
+func NewPlanReader(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (engine.Reader, error) {
 	if proc == nil || proc.GetTxnOperator() == nil || proc.GetSessionInfo() == nil || proc.GetSessionInfo().StorageEngine == nil {
 		return nil, moerr.NewInvalidStateNoCtx("ivfflat vector scan requires a process, transaction, and storage engine")
 	}
@@ -83,10 +86,15 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 	if req.CandidateBudget < req.ResultLimit {
 		return nil, moerr.NewInvalidInputNoCtx("ivfflat candidate budget is smaller than the result limit")
 	}
+	opts, err := ivfflatplan.DecodeScanOptions(spec.AlgoOptions)
+	if err != nil {
+		return nil, err
+	}
 	r := &planReader{
 		proc:                     proc,
 		spec:                     spec,
 		req:                      req,
+		opts:                     opts,
 		recordExplainDiagnostics: req.CollectExplainDiagnostics,
 	}
 	if req.CollectExplainDiagnostics {
@@ -96,7 +104,7 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 		proc:           proc,
 		partitionCount: req.Identity.PartitionCount,
 		partitionIndex: req.Identity.PartitionIndex,
-		ownsInMemory:   ownsInMemoryPartition(req.Identity.PartitionCount, req.Identity.PartitionIndex),
+		ownsInMemory:   req.Identity.PartitionCount <= 1 || !req.Identity.IsRemote,
 		txnOffset:      req.Identity.TxnOffset,
 		snapshot:       cloneIvfSnapshot(req.Identity.Snapshot),
 		executionStats: r.executionStats,
@@ -106,10 +114,6 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 		r.scanner.accountID = &accountID
 	}
 	return r, nil
-}
-
-func ownsInMemoryPartition(partitionCount, partitionIndex int32) bool {
-	return partitionCount <= 1 || partitionIndex == 0
 }
 
 func cloneIvfSnapshot(snapshot *plan.Snapshot) *plan.Snapshot {
@@ -329,8 +333,8 @@ func (r *planReader) prepareSearch(prepareOnly bool) error {
 		MetadataTable:      metaTable,
 		IndexTable:         centroidTable,
 		EntriesTable:       entriesTable,
-		ThreadsSearch:      r.spec.ThreadsSearch,
-		Nprobe:             uint(max(uint32(1), r.spec.InitialProbeCount)),
+		ThreadsSearch:      r.opts.ThreadsSearch,
+		Nprobe:             uint(max(uint32(1), r.opts.InitialProbeCount)),
 		PKeyType:           r.spec.SourceTableDef.Cols[pkPos].Typ.Id,
 		PKey:               pkName,
 		KeyPart:            partName,
@@ -422,28 +426,28 @@ func (r *planReader) queryFloat64() ([]float64, error) {
 	if types.T(r.req.QueryType.Id) != types.T_array_float64 {
 		return nil, moerr.NewInvalidInputNoCtx("f64 IVF centroids require a VECF64 query")
 	}
-	return types.BytesToArray[float64](r.req.QueryVector), nil
+	return types.BytesToArray[float64](r.req.QueryPayload), nil
 }
 
 func (r *planReader) queryFloat32() ([]float32, error) {
 	switch types.T(r.req.QueryType.Id) {
 	case types.T_array_float32:
-		return types.BytesToArray[float32](r.req.QueryVector), nil
+		return types.BytesToArray[float32](r.req.QueryPayload), nil
 	case types.T_array_float64:
-		values := types.BytesToArray[float64](r.req.QueryVector)
+		values := types.BytesToArray[float64](r.req.QueryPayload)
 		out := make([]float32, len(values))
 		for i, value := range values {
 			out[i] = float32(value)
 		}
 		return out, nil
 	case types.T_array_bf16:
-		return types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](r.req.QueryVector)), nil
+		return types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](r.req.QueryPayload)), nil
 	case types.T_array_float16:
-		return types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](r.req.QueryVector)), nil
+		return types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](r.req.QueryPayload)), nil
 	case types.T_array_int8:
-		return types.Int8ToFloat32Slice(types.BytesToArray[int8](r.req.QueryVector)), nil
+		return types.Int8ToFloat32Slice(types.BytesToArray[int8](r.req.QueryPayload)), nil
 	case types.T_array_uint8:
-		return types.Uint8ToFloat32Slice(types.BytesToArray[uint8](r.req.QueryVector)), nil
+		return types.Uint8ToFloat32Slice(types.BytesToArray[uint8](r.req.QueryPayload)), nil
 	default:
 		return nil, moerr.NewInvalidInputNoCtxf("unsupported IVF query type %s", types.T(r.req.QueryType.Id))
 	}
@@ -459,6 +463,7 @@ func searchPlanReader[T types.RealNumbers](
 ) error {
 	cache.Cache.Once()
 	algo := NewIvfflatSearch[T](idxcfg, tblcfg)
+	algo.forceCPURoute = r.req.MembershipFilterRequired && r.req.Identity.PartitionCount > 1
 	key := fmt.Sprintf("%s:%d", tblcfg.IndexTable, idxcfg.Ivfflat.Version)
 	if source := r.spec.SourceTable; source != nil && source.PubInfo != nil {
 		key = fmt.Sprintf("tenant=%d:%s", source.PubInfo.TenantId, key)
@@ -466,10 +471,13 @@ func searchPlanReader[T types.RealNumbers](
 	if r.req.Identity.PartitionCount > 1 {
 		key = fmt.Sprintf("%s:%d/%d", key, r.req.Identity.PartitionIndex, r.req.Identity.PartitionCount)
 	}
+	if algo.forceCPURoute {
+		key += ":cpu-route-v1"
+	}
 	if prepareOnly {
 		cursor := new(vectorindex.IvfSearchCursor)
 		_, _, err := cache.Cache.Search(sqlproc, key, algo, query, vectorindex.RuntimeConfig{
-			Probe: uint(max(uint32(1), r.spec.InitialProbeCount)), SearchCursor: cursor, IvfPrepareRouteOnly: true,
+			Probe: uint(max(uint32(1), r.opts.InitialProbeCount)), SearchCursor: cursor, IvfPrepareRouteOnly: true,
 		})
 		if err == nil {
 			r.generation.route = append([]int64(nil), cursor.RankedCentroidIDs...)
@@ -477,7 +485,11 @@ func searchPlanReader[T types.RealNumbers](
 		return err
 	}
 
-	multiRound := r.req.HasFirstRound || r.spec.BucketExpandStep > 0
+	firstRound, hasFirstRound, err := ivfflatplan.FirstRoundLimit(r.req)
+	if err != nil {
+		return err
+	}
+	multiRound := hasFirstRound || r.opts.BucketExpandStep > 0
 	var cursor *vectorindex.IvfSearchCursor
 	if multiRound {
 		cursor = &vectorindex.IvfSearchCursor{}
@@ -492,11 +504,11 @@ func searchPlanReader[T types.RealNumbers](
 		return nil
 	}
 	firstRoundLimit := uint(0)
-	if r.req.HasFirstRound {
-		if r.req.FirstRoundLimit > uint64(^uint(0)>>1) {
+	if hasFirstRound {
+		if firstRound > uint64(^uint(0)>>1) {
 			return moerr.NewInvalidInputNoCtx("IVF first-round limit is not a platform uint")
 		}
-		firstRoundLimit = uint(r.req.FirstRoundLimit)
+		firstRoundLimit = uint(firstRound)
 	}
 	r.includeData = make(map[string][]any, len(r.spec.IncludedColumns))
 	r.includeNulls = make(map[string][]bool, len(r.spec.IncludedColumns))
@@ -509,14 +521,14 @@ func searchPlanReader[T types.RealNumbers](
 		includeResult := &vectorindex.IvfIncludeResult{}
 		rt := vectorindex.RuntimeConfig{
 			Limit:                   limit,
-			Probe:                   uint(max(uint32(1), r.spec.InitialProbeCount)),
+			Probe:                   uint(max(uint32(1), r.opts.InitialProbeCount)),
 			OrigFuncName:            r.spec.DistanceFunction,
 			RuntimeFilterData:       r.req.MembershipFilter,
 			RequestedIncludeColumns: r.spec.IncludedColumns,
 			PushdownFilters:         r.req.PreFilters,
 			IncludeResult:           includeResult,
 			SearchRoundLimit:        firstRoundLimit,
-			BucketExpandStep:        uint(r.spec.BucketExpandStep),
+			BucketExpandStep:        uint(r.opts.BucketExpandStep),
 			SearchCursor:            cursor,
 			IvfRoutePrepared:        r.generation != nil && !multiRound,
 		}
@@ -669,6 +681,9 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 		defer req.FilterHint.BF.Free()
 	}
 	ctx := s.proc.Ctx
+	if req.ReadPolicy != 0 {
+		ctx = fileservice.WithFileServicePolicy(ctx, fileservice.GetFileServicePolicy(ctx)|req.ReadPolicy)
+	}
 	if s.accountID != nil {
 		ctx = defines.AttachAccountId(ctx, *s.accountID)
 	}
@@ -940,9 +955,8 @@ func (s *relationScanner) recordRelationExecutionStats(
 }
 
 // relationScanPolicy mirrors the distributed table-scan ownership contract:
-// partition zero owns committed in-memory/appendable rows, while every other
-// partition reads only persisted objects assigned by object ID. The scheduler
-// pins the coordinator-local CN at ordinal zero for VECTOR_INDEX_SCAN queries.
+// the coordinator owns in-memory rows independently of its object partition
+// ordinal. Remote partitions read only persisted objects assigned by object ID.
 // Replicated metadata/centroid requests set partitionCount=1 and therefore
 // read all visible data on every executing CN.
 func relationScanPolicy(partitionCount int32, ownsInMemory bool) engine.DataCollectPolicy {
@@ -975,12 +989,18 @@ func filterRelationBatchRows(
 			sels = append(sels, int64(row))
 		}
 	}
+	return selectRelationBatchRows(bat, sels, loadedColumns), nil
+}
+
+// selectRelationBatchRows preserves unloaded slots when columns were materialized
+// selectively. A nil column list denotes a fully materialized batch.
+func selectRelationBatchRows(bat *batch.Batch, sels []int64, loadedColumns []int) engine.ReaderFilterResult {
 	if len(sels) == bat.RowCount() {
-		return engine.ReaderFilterResult{All: true}, nil
+		return engine.ReaderFilterResult{All: true}
 	}
 	if len(sels) == 0 {
 		bat.CleanOnlyData()
-		return engine.ReaderFilterResult{Sels: sels}, nil
+		return engine.ReaderFilterResult{Sels: sels}
 	}
 	if loadedColumns == nil {
 		bat.Shrink(sels, false)
@@ -990,7 +1010,7 @@ func filterRelationBatchRows(
 		}
 		bat.SetRowCount(len(sels))
 	}
-	return engine.ReaderFilterResult{Sels: sels}, nil
+	return engine.ReaderFilterResult{Sels: sels}
 }
 
 // relationFilterEarlyColumns returns the output positions that must be loaded
@@ -1210,13 +1230,7 @@ func makeRelationScanBatch(tableDef *plan.TableDef, columns []string) (*batch.Ba
 			return nil, moerr.NewInternalErrorNoCtxf("ivfflat hidden column %q not found in %s", name, tableDef.Name)
 		}
 		colType := tableDef.Cols[pos].Typ
-		bat.Vecs[i] = vector.NewVec(types.NewWithCharsetVersion(
-			types.T(colType.Id),
-			colType.Width,
-			colType.Scale,
-			uint8(colType.Charset),
-			uint8(colType.CollationVersion),
-		))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T(colType.Id), colType.Width, colType.Scale))
 	}
 	return bat, nil
 }

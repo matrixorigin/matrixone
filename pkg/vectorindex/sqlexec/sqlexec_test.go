@@ -125,7 +125,7 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 	key := contextKey{}
 	subscriberCtx := context.WithValue(context.Background(), key, "subscriber")
 	subscriberCtx = defines.AttachAccountId(subscriberCtx, 7)
-	proc := testutil.NewProcessWithMPool(t, uuid, mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, uuid, mpool.MustNewZero())
 	proc.Base.LockService = lockService
 	proc.Ctx = subscriberCtx
 	proc.ReplaceTopCtx(subscriberCtx)
@@ -181,7 +181,7 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 func TestSqlTxnError(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := NewSqlProcess(proc)
 	assert.Panics(t, func() {
 		RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
@@ -202,7 +202,7 @@ func TestSqlTxn(t *testing.T) {
 	moruntime.SetupServiceBasedRuntime(uuid, rt)
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Ctx = context.Background()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
@@ -275,7 +275,7 @@ func TestFinishTxnWithCleanupContextCommitsWithFreshContext(t *testing.T) {
 // cache freshness check (captured at load to re-query in the background).
 func TestSqlProcessServiceAndAccount(t *testing.T) {
 	// Proc-backed: just exercise the branch (values depend on the test proc).
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sp := NewSqlProcess(proc)
 	_ = sp.GetService()
 	_, _ = sp.GetAccountID()
@@ -287,4 +287,39 @@ func TestSqlProcessServiceAndAccount(t *testing.T) {
 	acc, err := sp2.GetAccountID()
 	require.NoError(t, err)
 	require.Equal(t, uint32(42), acc)
+}
+
+// The *WithOptimizerHints run variants thread a per-statement optimizer_hints string into the
+// executor's StatementOption (StatementOption.WithOptimizerHints), scoped to that one call. The
+// fulltext2 json probe uses the streaming variant to pass applyIndices=1 to its fallback/tail SQL.
+func TestRunSqlWithOptimizerHints(t *testing.T) {
+	uuid := "optimizer-hints-identity"
+	spy := &identityCapturingSQLExecutor{}
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spy)
+	t.Cleanup(func() { rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, spy) })
+	moruntime.SetupServiceBasedRuntime(uuid, rt)
+
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	sqlproc := NewSqlProcessWithContext(NewSqlContext(ctx, uuid, nil, 7, nil))
+
+	// Batch variant carries the hint; plain RunSql does not.
+	_, err := RunSqlWithOptimizerHints(sqlproc, "select 1", "applyIndices=1")
+	require.NoError(t, err)
+	require.Equal(t, "applyIndices=1", spy.opts.StatementOption().OptimizerHints())
+
+	_, err = RunSql(sqlproc, "select 1")
+	require.NoError(t, err)
+	require.Equal(t, "", spy.opts.StatementOption().OptimizerHints(), "plain RunSql carries no hint")
+
+	// Streaming variant carries the hint; empty hint is a no-op.
+	streamCh := make(chan executor.Result, 1)
+	errCh := make(chan error, 1)
+	_, err = RunStreamingSqlWithOptimizerHints(ctx, sqlproc, "select 1", "applyIndices=1", streamCh, errCh)
+	require.NoError(t, err)
+	require.Equal(t, "applyIndices=1", spy.opts.StatementOption().OptimizerHints())
+
+	_, err = RunStreamingSqlWithOptimizerHints(ctx, sqlproc, "select 1", "", streamCh, errCh)
+	require.NoError(t, err)
+	require.Equal(t, "", spy.opts.StatementOption().OptimizerHints(), "empty hint is a no-op")
 }

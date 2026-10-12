@@ -19,7 +19,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -32,7 +31,6 @@ func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResul
 	strVs := vector.GenerateFunctionStrParameter(parameters[1])
 	uniformBinary, perRow := stringDomainMode(parameters[1])
 	caseInsensitive := types.IsCaseInsensitiveCollation(parameters[1].GetType().Charset)
-	native0900AI := parameters[1].GetType().Charset == types.CharsetUTF8MB40900AI
 
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
@@ -50,11 +48,7 @@ func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResul
 			continue
 		}
 		binary := binaryStringAt(parameters[1], int(row), uniformBinary, perRow)
-		if native0900AI && !binary {
-			rs.AppendMustValue(locateNative0900AI(substr, str, 1))
-		} else {
-			rs.AppendMustValue(locateString(substr, str, 1, binary, caseInsensitive))
-		}
+		rs.AppendMustValue(locateString(substr, str, 1, binary, caseInsensitive))
 	}
 	return nil
 }
@@ -67,7 +61,6 @@ func buildInLocate3Args(parameters []*vector.Vector, result vector.FunctionResul
 	posVs := vector.GenerateFunctionFixedTypeParameter[int64](parameters[2])
 	uniformBinary, perRow := stringDomainMode(parameters[1])
 	caseInsensitive := types.IsCaseInsensitiveCollation(parameters[1].GetType().Charset)
-	native0900AI := parameters[1].GetType().Charset == types.CharsetUTF8MB40900AI
 
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
@@ -86,11 +79,7 @@ func buildInLocate3Args(parameters []*vector.Vector, result vector.FunctionResul
 			continue
 		}
 		binary := binaryStringAt(parameters[1], int(row), uniformBinary, perRow)
-		if native0900AI && !binary {
-			rs.AppendMustValue(locateNative0900AI(substr, str, position))
-		} else {
-			rs.AppendMustValue(locateString(substr, str, position, binary, caseInsensitive))
-		}
+		rs.AppendMustValue(locateString(substr, str, position, binary, caseInsensitive))
 	}
 	return nil
 }
@@ -130,38 +119,6 @@ func locateString(needle, haystack []byte, position int64, binary, caseInsensiti
 		return 0
 	}
 	return position + int64(utf8.RuneCountInString(str[start:start+idx]))
-}
-
-// locateNative0900AI follows the UCA comparator for each character-aligned
-// candidate. A weight string cannot be searched with bytes.Index: UCA 9.0
-// has contractions, expansions, and multi-level weights, so a substring's
-// weight sequence is not generally a byte substring of the haystack key.
-func locateNative0900AI(needle, haystack []byte, position int64) int64 {
-	if position < 1 || !utf8.Valid(needle) || !utf8.Valid(haystack) {
-		return 0
-	}
-	if len(needle) == 0 {
-		return position
-	}
-	start, ok := runeByteOffset(string(haystack), position-1)
-	if !ok {
-		return 0
-	}
-	for candidate := start; candidate < len(haystack); {
-		for end := candidate; end <= len(haystack); {
-			if end > candidate && collation.UCA0900AICollate(needle, haystack[candidate:end]) == 0 {
-				return position + int64(utf8.RuneCount(haystack[start:candidate]))
-			}
-			if end == len(haystack) {
-				break
-			}
-			_, size := utf8.DecodeRune(haystack[end:])
-			end += size
-		}
-		_, size := utf8.DecodeRune(haystack[candidate:])
-		candidate += size
-	}
-	return 0
 }
 
 func runeByteOffset(value string, runeIndex int64) (int, bool) {

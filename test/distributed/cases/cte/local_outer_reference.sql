@@ -1,0 +1,751 @@
+drop database if exists cte_outer_reference;
+create database cte_outer_reference;
+use cte_outer_reference;
+create table pages(id int primary key, parent_id int, active tinyint);
+insert into pages values (1,null,1),(2,1,0),(3,2,1),(4,3,1),(5,1,1);
+
+-- Local projection preserves NULL and repeated outer parameter values.
+select p.id,
+       (with q(n) as (select p.parent_id) select n from q) as parent
+from pages p order by p.id;
+
+-- A NULL seed is one row, not an empty recursive relation.
+select p.id,
+       (with recursive r(n) as (
+          select p.parent_id
+          union all
+          select n-1 from r where n>1
+        ) select count(*) from r) as depth
+from pages p order by p.id;
+
+-- Each row checks only its own ancestors when every row consumes the CTE.
+select p.id from pages p where not exists (
+  with recursive ancestors as (
+    select a.* from pages a where a.id=p.parent_id
+    union all
+    select a.* from pages a join ancestors on ancestors.parent_id=a.id
+  ) select * from ancestors where active=0
+) order by p.id;
+-- The independent active predicate must constrain the replay domain first.
+-- This is the original issue's third query, with result (1),(5).
+select p.id from pages p where not exists (
+  with recursive ancestors as (
+    select a.* from pages a where a.id=p.parent_id
+    union all
+    select a.* from pages a join ancestors on ancestors.parent_id=a.id
+  ) select * from ancestors where active=0
+) and active=1 order by p.id;
+
+-- Empty anchors must produce zero, not a fabricated seed row.
+select p.id,
+       (with recursive r(n) as (
+          select a.id from pages a where a.id=p.parent_id
+          union all
+          select n-1 from r where n>1
+        ) select count(*) from r) as depth
+from pages p order by p.id;
+
+-- Outer parameters used in a recursive member stay fixed across iterations.
+select p.id,
+       (with recursive r(n) as (
+          select 1
+          union all
+          select n+1 from r where n<p.parent_id
+        ) select count(*) from r) as depth
+from pages p order by p.id;
+
+-- DISTINCT is local to an outer row, including repeated parameter values.
+select p.id,
+       (with recursive r(n) as (
+          select p.parent_id
+          union distinct
+          select n from r where n is not null
+        ) select count(*) from r) as depth
+from pages p order by p.id;
+
+-- Multiple references retain only the declared output columns.
+select p.id,
+       (with q(n) as (select p.parent_id)
+        select a.n+b.n from q a join q b on a.n=b.n) as doubled
+from pages p order by p.id;
+
+-- Scalar cardinality violations must not become an ordinary LEFT JOIN.
+select (with q(n) as (select p.parent_id from pages a where a.id<=2)
+        select n from q) from pages p;
+
+-- The recursion limit applies to the longest nonempty parameter partition.
+set @saved_cte_depth=@@cte_max_recursion_depth;
+set cte_max_recursion_depth=2;
+select p.id,
+       (with recursive r(n) as (
+          select p.parent_id union all select n-1 from r where n>1
+        ) select count(*) from r) as depth
+from pages p order by p.id;
+set cte_max_recursion_depth=1;
+select (with recursive r(n) as (
+          select p.parent_id union all select n-1 from r where n>1
+        ) select count(*) from r) from pages p;
+set cte_max_recursion_depth=@saved_cte_depth;
+
+-- Hidden parameters remain subject to the existing recursive memory quota.
+set @saved_cte_memory=@@cte_max_memory_bytes;
+set cte_max_memory_bytes=1;
+-- @regex("recursive CTE memory quota exceeded",true)
+select (with recursive r(n) as (
+          select p.parent_id union all select n-1 from r where n>1
+        ) select count(*) from r) from pages p;
+set cte_max_memory_bytes=@saved_cte_memory;
+
+-- Reexecution observes the current parameter, without retaining prior seeds.
+prepare local_cte_stmt from 'select p.id, (with recursive r(n) as (select p.parent_id union all select n-1 from r where n>1) select count(*) from r) as depth from pages p where p.id=? order by p.id';
+set @page_id=4;
+execute local_cte_stmt using @page_id;
+set @page_id=1;
+execute local_cte_stmt using @page_id;
+deallocate prepare local_cte_stmt;
+
+-- A window must restart for each outer identity, even for repeated parameters.
+select p.id,
+       (with q(n) as (select p.parent_id)
+        select row_number() over (order by n) from q) as rn
+from pages p where p.id in (2, 5) order by p.id;
+select p.id,
+       (with q(n) as (select p.parent_id from pages a where a.id in (2, 5))
+        select max(rn) from (select row_number() over (order by n) as rn from q) w) as max_rn
+from pages p where p.id in (2, 5) order by p.id;
+
+-- HAVING drops a nonempty scalar aggregate row; missing input still yields COUNT=0.
+select p.id,
+       (with q(n) as (select p.parent_id)
+        select count(*) from q having count(*)=0) as filtered_count
+from pages p where p.id in (2, 5) order by p.id;
+select p.id,
+       (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.active=0)
+        select count(*) from q having count(*)=0) as filtered_count
+from pages p where p.id in (2, 5) order by p.id;
+
+-- Both UNION ALL arms export the same hidden identity column, not a visible column.
+select p.id from pages p where exists (
+  with q(n) as (select p.parent_id)
+  select n from q union all select n from q
+) and p.id in (2, 5) order by p.id;
+
+-- A UNION ALL scalar still observes both rows, not an extra visible identity column.
+select (with q(n) as (select p.parent_id)
+        select n from q union all select n from q)
+from pages p where p.id=2;
+
+-- A branch without a replay identity is rejected rather than mismatching schemas.
+select p.id from pages p where exists (
+  with q(n) as (select p.parent_id)
+  select n from q union all select 7
+) and p.id=2;
+
+-- HAVING cannot move past pagination or split across set-operation branches.
+select p.id, (with q(n) as (select p.parent_id)
+              select count(*) from q having count(*)=0 limit 0) as c
+from pages p where p.id=2;
+select p.id, (with q(n) as (select p.parent_id)
+              select count(*) from q having count(*)=0 limit 1 offset 1) as c
+from pages p where p.id=2;
+select p.id from pages p where exists (
+  with q(n) as (select p.parent_id from pages a where a.id=-1)
+  select count(*) from q having count(*)=0
+  union all select count(*) from q having count(*)=0
+) and p.id=2;
+
+-- A consumer LEFT JOIN must retain its unmatched left rows.
+select p.id, (with q(n) as (select p.parent_id)
+              select count(*) from pages a left join q on a.id=q.n) as c
+from pages p where p.id=2;
+
+-- The projected window slot cannot be substituted with the COUNT HAVING result.
+select p.id, (with q(n) as (select p.parent_id)
+              select row_number() over (order by count(*)) from q having count(*)=1) as rn
+from pages p where p.id=2;
+
+-- Non-equality WHERE cannot lose HAVING in the non-equality aggregate path.
+select p.id, (with q(n) as (select p.parent_id)
+              select count(n) from q where n<=p.id having count(n)=0) as c
+from pages p where p.id=2;
+
+-- An ungrouped aggregate on empty input still returns a row to EXISTS and IN.
+select p.id from pages p where exists (
+  with q(n) as (select p.parent_id from pages a where a.id=-1)
+  select count(*) from q
+) and p.id=2;
+select p.id from pages p where 0 in (
+  with q(n) as (select p.parent_id from pages a where a.id=-1)
+  select count(*) from q
+) and p.id=2;
+select p.id from pages p where exists (
+  with q(n) as (select p.parent_id from pages a where a.id=-1)
+  select count(*) from q union all select count(*) from q
+) and p.id=2;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=-1)
+              select sum(c) from (select count(*) as c from q) s) as total
+from pages p where p.id=2;
+
+-- User WHERE filters before window numbering, not after.
+select p.id, (with q(n) as (select a.id+p.parent_id-1 from pages a where a.id in (2, 5))
+              select row_number() over (order by n desc) from q where n<=p.id) as rn
+from pages p where p.id=2;
+
+-- Pagination can delete an aggregate result row without HAVING.
+select p.id, (with q(n) as (select p.parent_id)
+              select count(*) from q limit 0) as c from pages p where p.id=2;
+select p.id, (with q(n) as (select p.parent_id)
+              select count(*) from q limit 1 offset 1) as c from pages p where p.id=2;
+
+-- A non-COUNT window projection cannot inherit COUNT empty-group fallback.
+select p.id, (with q(n) as (select p.parent_id)
+              select row_number() over (order by count(*)) from q) as rn
+from pages p where p.id=2;
+
+-- Explicit grouping on empty input produces no COUNT result row, not zero.
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=-1)
+              select count(*) from q group by n) as c
+from pages p where p.id=2;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=-1)
+              select count(*) from q group by n limit 1 offset 1) as c
+from pages p where p.id=2;
+select p.id, (with q(n) as (select p.parent_id)
+              select count(*) from q group by n) as c
+from pages p where p.id in (2, 5) order by p.id;
+
+-- An aggregate window must not inherit COUNT's empty-input fallback.
+select p.id, (with q(n) as (select p.parent_id)
+              select row_number() over (order by count(*)) from q group by n) as rn
+from pages p where p.id=2;
+
+-- Consumer JOIN ON references to the outer row must not reach the executor.
+select p.id, (with q(n) as (select p.parent_id)
+              select count(*) from q join pages b on n=b.id and n=p.id) as c
+from pages p where p.id=2;
+
+-- ORDER BY and DISTINCT wrappers cannot turn an ungrouped COUNT empty input into NULL.
+select p.id, (select count(*) from pages a
+              where a.id=p.id and a.id<2 order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select count(*) from q order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id from pages p where (
+  with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+  select count(*) from q order by count(*)
+)=0 and p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select distinct count(*) from q) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id)
+              select distinct count(*)+1 from q) as c
+from pages p where p.id in (2, 5) order by p.id;
+select p.id, (select count(*)+1 from pages a
+              where a.id=p.id and a.id<2 order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select count(*)+1 from q order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*)+1 from pages a
+              where a.id=p.id and a.id<2 order by count(*) limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*)+1 from pages a
+              where a.id=p.id and a.id<2 order by count(*) limit 0) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*)+1 from pages a
+              where a.id=p.id and a.id<2 order by count(*) limit 1 offset 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*) from pages a where a.id=p.id and a.id<2
+              having count(*)=0 order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*)+1 from pages a where a.id=p.id and a.id<2
+              having count(*)=0 order by count(*) limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select count(*)+1 from q having count(*)=0 order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+
+-- HAVING must see restored raw COUNT, not COUNT+1; LIMIT 1 retains
+-- the aggregate row, whereas a real group still disappears when empty.
+select p.id, (select count(*)+1 from pages a where a.id=p.id and a.id<2
+              having count(*)=1 limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select count(*)+1 from q having count(*)=1 limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*)*2 from pages a where a.id=p.id and a.id<2 limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select count(*)*2 from q limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*)+count(a.id) from pages a
+              where a.id=p.id and a.id<2 order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select count(*)+count(n) from q order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*) from pages a where a.id=p.id and a.id<2
+              group by a.id having count(*)=1) as c
+from pages p where p.id in (1, 2) order by p.id;
+prepare count_having_stmt from 'select p.id, (with q(n) as
+  (select p.parent_id from pages a where a.id=p.id and a.id<2)
+  select count(*) from q having count(*)>=?) as c
+  from pages p where p.id in (1,2) order by p.id';
+set @count_threshold=0;
+execute count_having_stmt using @count_threshold;
+set @count_threshold=2;
+execute count_having_stmt using @count_threshold;
+deallocate prepare count_having_stmt;
+
+-- Pagination deletes the one aggregate result row, regardless of its
+-- empty-input identity. HAVING must not turn the deleted row into an error.
+select p.id, (select bit_or(a.id) from pages a where a.id=p.id
+              limit 1 offset 1) as v
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select bit_and(a.id) from pages a where a.id=p.id
+              limit 1 offset 1) as v
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*)+1 from pages a where a.id=p.id and a.id<2
+              having count(*)>=0 limit 0) as v
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*)+1 from pages a where a.id=p.id and a.id<2
+              having count(*)>=0 limit 1 offset 1) as v
+from pages p where p.id in (1, 2) order by p.id;
+
+-- Multi-conjunct and IN COUNT HAVING retain the ordinary correlated
+-- subquery domain; empty input either deletes the row or admits COUNT 0.
+select p.id, (select count(*) from pages a where a.id=p.id and a.id<2
+              having count(*)>0 and count(*)<2) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*) from pages a where a.id=p.id and a.id<2
+              having count(*) in (0,1)) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select count(*) from q having count(*)>0 and count(*)<2) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select count(*) from q having count(*) in (0,1)) as c
+from pages p where p.id in (1, 2) order by p.id;
+
+-- A producer cast over skipped CASE rows must fail during planning, not
+-- evaluate 'bad' before the consumer chooses the inactive branch.
+create table guarded_values(id int primary key, val varchar(10));
+insert into guarded_values values (1,'bad'),(2,'2');
+select p.id, case when p.id=1 then 0 else
+  (with q(n) as (select cast(p.val as signed)) select n from q) end as c
+from guarded_values p order by p.id;
+-- Ordinary scalar subqueries preserve the same inactive/active CASE domain.
+select p.id, case when p.id=1 then 0 else (select cast(p.val as signed)) end as c
+from guarded_values p order by p.id;
+-- A filtered, unguarded consumer evaluates only surviving rows;
+-- the same producer is safe when all evaluated values are valid.
+select p.id, (with q(n) as (select cast(p.val as signed)) select n from q) as c
+from guarded_values p where p.id=2;
+select p.id, (with q(n) as (select cast(p.id as signed)) select n from q) as c
+from guarded_values p where p.id=2;
+select p.id, (with q(n) as (select cast(p.val as signed))
+  select n from q where p.id=2) as c from guarded_values p order by p.id;
+select p.id, (with q(n) as (select p.val)
+  select cast(n as signed) from q where p.id=2) as c from guarded_values p order by p.id;
+select p.id, (with q(n) as (select p.val)
+  select cast(n as signed) from q where p.id=1) as c from guarded_values p order by p.id;
+-- DISTINCT and pagination must not lift WHERE above the CAST projection.
+select p.id, (with q(n) as (select p.val)
+  select cast(n as signed) from (select distinct n from q) d where p.id=2) as c
+from guarded_values p order by p.id;
+select p.id, (with q(n) as (select p.val)
+  select cast(n as signed) from (select n from q limit 1) d where p.id=2) as c
+from guarded_values p order by p.id;
+-- An outer WHERE selects whole window partitions before CAST executes.
+select p.id, (with q(n) as (select p.val)
+  select cast(n as signed) from (select n,row_number() over(order by n) rn from q) d
+  where p.id=2) as c from guarded_values p order by p.id;
+prepare wrapped_cast from 'select p.id,(with q(n) as (select cast(p.val as signed)) select n from (select distinct n from q) d where p.id=?) as c from guarded_values p order by p.id';
+set @wrapped_demand=2;
+execute wrapped_cast using @wrapped_demand;
+set @wrapped_demand=1;
+execute wrapped_cast using @wrapped_demand;
+set @wrapped_demand=2;
+execute wrapped_cast using @wrapped_demand;
+deallocate prepare wrapped_cast;
+set @wrapped_demand=null;
+drop table guarded_values;
+
+-- Outer columns in ordinary COUNT HAVING must be rebound above the
+-- aggregate's LEFT JOIN, including empty input and HAVING-deleted rows.
+create table having_keys(id int primary key, k int);
+insert into having_keys values (1,1),(2,1),(3,0);
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
+              having count(*)=p.k) as c
+from having_keys p order by p.id;
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
+              having count(*) in (p.k,2)) as c
+from having_keys p order by p.id;
+-- Ordinary correlated COUNT HAVING preserves bound user and system variables,
+-- including the empty input and HAVING-deleted result row.
+set @having_limit=1;
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
+              having count(*)=@having_limit) as c
+from having_keys p order by p.id;
+set @having_limit=0;
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
+              having count(*)=@having_limit) as c
+from having_keys p order by p.id;
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
+              having count(*) in (@having_limit,2)) as c
+from having_keys p order by p.id;
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
+              having count(*) < @@session.cte_max_recursion_depth) as c
+from having_keys p order by p.id;
+set @having_limit=null;
+drop table having_keys;
+
+-- Non-total functions cannot run over outer rows whose CASE arm skips the
+-- CTE producer. The ordinary scalar controls must still produce (1,0),(2,2).
+create table guarded_abs(id int primary key, v bigint);
+insert into guarded_abs values (1,-9223372036854775808),(2,2);
+select p.id, case when p.id=1 then 0 else
+  (with q(n) as (select abs(p.v)) select n from q) end as c
+from guarded_abs p order by p.id;
+select p.id, case when p.id=1 then 0 else (select abs(p.v)) end as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
+from guarded_abs p where p.id=2;
+-- With no skipped consumer branch, both forms must expose the active error.
+select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
+from guarded_abs p where p.id=1;
+select abs(p.v) from guarded_abs p where p.id=1;
+-- COUNT's empty group still emits a row before IN/CASE or HAVING runs.
+select p.id, (with q(n) as (select p.id where p.id<2)
+  select count(*) in (0,1) from q) as c from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.id where p.id<2)
+  select case when count(*) in (0,1) then 7 else 8 end from q) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.id where p.id<2)
+  select count(*) from q having count(*) in (0,1)) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.id where p.id<2)
+  select count(*) in (count(n),0) from q) as c
+from guarded_abs p order by p.id;
+-- LIMIT 0 removes the scalar aggregate's result row and is safely rejected
+-- for this local CTE shape; explicit GROUP BY has no empty-input row.
+select p.id, (with q(n) as (select p.id where p.id<2)
+  select count(*) in (0,1) from q limit 0) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.id where p.id<2)
+  select count(*) in (0,1) from q group by n) as c
+from guarded_abs p order by p.id;
+-- CASE remains separately guarded; a safe independent WHERE conjunct
+-- must filter the outer domain before producer or consumer ABS evaluation.
+select p.id, case when p.id=1 then 0 else
+  (with q(n) as (select p.v) select abs(n) from q) end as c
+from guarded_abs p order by p.id;
+select p.id from guarded_abs p where p.id=2 and
+  (with q(n) as (select abs(p.v)) select n from q)>0;
+select p.id from guarded_abs p where
+  (with q(n) as (select abs(p.v)) select n from q)>0 and p.id=2;
+select p.id from guarded_abs p where p.id=2 and
+  (with q(n) as (select p.v) select abs(n) from q)>0;
+-- A safe producer is still available after the same WHERE split.
+select p.id from guarded_abs p where p.id=2 and
+  (with q(n) as (select p.v) select n from q)>0;
+-- A LEFT JOIN ON CASE may skip a correlated scalar subquery. The replay
+-- domain cannot evaluate either a throwing producer or consumer eagerly.
+select p.id, b.id from guarded_abs p left join guarded_abs b on
+  case when p.id=1 then false else
+    (with q(n) as (select abs(p.v)) select n from q)>0 end
+order by p.id, b.id;
+select p.id, b.id from guarded_abs p left join guarded_abs b on
+  case when p.id=1 then false else
+    (with q(n) as (select p.v) select abs(n) from q)>0 end
+order by p.id, b.id;
+select p.id, b.id from guarded_abs p left join guarded_abs b on
+  case when p.id=1 then false else
+    (with q(n) as (select p.v) select n from q)>0 end
+order by p.id, b.id;
+select p.id, b.id from guarded_abs p left join guarded_abs b on
+  case when p.id=1 then false else (select abs(p.v))>0 end
+order by p.id, b.id;
+-- The outer Top is not yet attached when projection subqueries are flattened.
+-- Unsafe CTEs must be rejected, not evaluated for rows pagination skips.
+select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
+from guarded_abs p order by p.id desc limit 1;
+select p.id, (with q(n) as (select p.v) select abs(n) from q) as c
+from guarded_abs p order by p.id limit 1 offset 1;
+select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
+from guarded_abs p order by p.id limit 0;
+select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
+from guarded_abs p where p.id=2 order by p.id desc limit 1;
+select p.id, (with q(n) as (select p.v) select n from q) as c
+from guarded_abs p where p.id=2 order by p.id desc limit 1;
+select p.id, (with q(n) as (select p.v) select n from q) as c
+from guarded_abs p order by p.id desc limit 1;
+-- Consumer WHERE constrains replay before either producer or consumer ABS.
+select p.id, (with q(n) as (select abs(p.v))
+  select n from q where p.id=2) as c from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from q where p.id=2) as c from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from q where p.id=1) as c from guarded_abs p order by p.id;
+-- COUNT retains its empty group even when no producer partition is demanded.
+select p.id, (with q(n) as (select abs(p.v))
+  select count(*) from q where p.id=2) as c from guarded_abs p order by p.id;
+-- Wrappers preserve the WHERE/projection order and per-row identity.
+select p.id, (with q(n) as (select p.v from guarded_abs a)
+  select abs(n) from (select distinct n from q) d where p.id=2) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from (select n from q limit 1) d where p.id=2) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from (select distinct n from q) d where p.id=2 or n>0) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from (select n from q limit 1) d where p.id=2 or n>0) as c
+from guarded_abs p order by p.id;
+-- Equal text and duplicate source rows must not merge different outer rows
+-- through DISTINCT's PAD SPACE physical equality keys.
+select p.id, (with q(n) as (select cast(2 as char(5)) from guarded_abs a where p.id>0)
+  select cast(n as signed) from (select distinct n from q) d where p.id>0) as c
+from guarded_abs p order by p.id;
+-- LIMIT removes rows before a CTE-dependent WHERE; do not push that WHERE
+-- below pagination. An offset beyond the single row yields scalar NULL.
+select p.id, (with q(n) as (select a.id from guarded_abs a where p.id>0)
+  select abs(n) from (select n from q order by n limit 1) d where p.id=2 or n=2) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from (select n from q limit 1 offset 1) d where p.id=2) as c
+from guarded_abs p order by p.id;
+-- Window input columns carry the same identity payload; the outer WHERE
+-- must not move above ABS, and CTE-dependent predicates must not move below
+-- window ranking. Selecting n=2 keeps its original rn=2 (not rn=1).
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from (select n,row_number() over(order by n) rn from q) d where p.id=2) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select abs(p.v))
+  select n from (select n,row_number() over(order by n) rn from q) d where p.id=2) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select a.id from guarded_abs a where p.id>0)
+  select rn from (select n,row_number() over(order by n) rn from q) d where p.id=2 and n=2) as c
+from guarded_abs p order by p.id;
+select p.id, (with recursive q(n) as (select p.id union all select n from q where n=1)
+  select n from (select n,row_number() over(order by n) rn from q) d where p.id=2) as c
+from guarded_abs p order by p.id;
+-- PREPARE cannot require a parameter cast to be total for every possible
+-- value. Binding 2 filters first; NULL skips all; binding 1 exposes the error.
+prepare wrapped_abs from 'select p.id,(with q(n) as (select abs(p.v)) select n from (select distinct n from q) d where p.id=?) as c from guarded_abs p order by p.id';
+set @wrapped_demand=2;
+execute wrapped_abs using @wrapped_demand;
+set @wrapped_demand=null;
+execute wrapped_abs using @wrapped_demand;
+set @wrapped_demand=1;
+execute wrapped_abs using @wrapped_demand;
+set @wrapped_demand='bad';
+execute wrapped_abs using @wrapped_demand;
+set @wrapped_demand=2;
+execute wrapped_abs using @wrapped_demand;
+deallocate prepare wrapped_abs;
+set @wrapped_demand=null;
+-- NULL demand removes every partition, but does not remove COUNT's empty row.
+select p.id, (with q(n) as (select abs(p.v))
+  select count(*) from q where p.id=null) as c from guarded_abs p order by p.id;
+-- A predicate reading CTE data is not an outer-only demand predicate.
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from q where n>0) as c from guarded_abs p order by p.id;
+-- Mixed outer/CTE predicates remain below the throwing consumer projection.
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from q where p.id=2 or n>0) as c from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from q where p.id=2 and n>0) as c from guarded_abs p order by p.id;
+-- OR must retain the demanded error rather than extract its safe disjunct.
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from q where p.id=2 or n<0) as c from guarded_abs p order by p.id;
+-- An outer WHERE excludes the nonterminating partition before replay starts.
+select p.id from guarded_abs p where
+  (with recursive q(n) as (select p.id union all select n from q where n=1)
+   select count(*) from q)>0 and p.id=2;
+-- ABS(INT) widens to BIGINT, so its complete type domain is safe. The
+-- demand predicate must prevent id=1 from starting an infinite partition.
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where abs(p.id)=2) as c
+from guarded_abs p order by p.id;
+-- Empty seeds still own COUNT=0, independently of the demand predicate.
+select p.id, (with recursive q(n) as (
+  select p.id where p.id<0 union all select n from q where n=1
+) select count(*) from q where abs(p.id)=2) as c
+from guarded_abs p order by p.id;
+-- Selecting the nonterminating partition must still hit the depth cap.
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where abs(p.id)=1) as c
+from guarded_abs p order by p.id;
+-- ABS(BIGINT) lacks the widening proof. It must not silently fall back to
+-- recursive replay of all partitions when no demand filter can be produced.
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where abs(p.v)=2) as c
+from guarded_abs p order by p.id;
+-- Consumer demand also prevents an unused recursive partition from starting.
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where p.id=2) as c
+from guarded_abs p order by p.id;
+-- Recursive operator failure is not an expression-level error. An unused
+-- partition (id=1) would hit the depth cap before the CASE is evaluated.
+select p.id, case when p.id=2 then
+  (with recursive q(n) as (
+    select p.id union all select n from q where n=1
+  ) select count(*) from q) else 0 end as c
+from guarded_abs p order by p.id;
+-- The same CTE terminates when the real outer domain contains only id=2.
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q) as c
+from guarded_abs p where p.id=2;
+-- A demanded id=1 must still raise the recursion limit error.
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q) as c
+from guarded_abs p where p.id=1;
+-- The active error must not poison the next query.
+select p.id from guarded_abs p where p.id=2;
+select p.id, case when p.id=2 then
+  (select count(*) from guarded_abs a where a.id=p.id) else 0 end as c
+from guarded_abs p order by p.id;
+-- Variables are runtime demand inputs, not a reason to skip domain admission.
+set @cte_demand=2;
+select p.id, (with q(n) as (select abs(p.v))
+select n from q where p.id=@cte_demand) as c from guarded_abs p order by p.id;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+set @cte_demand=null;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+set @cte_demand=1;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+set @cte_demand=2;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select n from (select distinct n from q) d where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select n from (select n,row_number() over(order by n) rn from q) d where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+-- Runtime conversion is not demanded for an empty seed.
+set @cte_demand='bad';
+select p.id, (with recursive q(n) as (
+  select p.id where p.id<0 union all select n from q where n=1
+) select count(*) from q where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+set @cte_demand=2;
+-- Reuse one plan: the variable must not be frozen at PREPARE time.
+prepare variable_demand from 'select p.id, (with recursive q(n) as (select p.id union all select n from q where n=1) select count(*) from q where p.id=@cte_demand) as c from guarded_abs p order by p.id';
+execute variable_demand;
+set @cte_demand=null;
+execute variable_demand;
+set @cte_demand=1;
+execute variable_demand;
+set @cte_demand=2;
+execute variable_demand;
+deallocate prepare variable_demand;
+set @saved_increment=@@session.auto_increment_increment;
+set session auto_increment_increment=2;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where p.id=@@session.auto_increment_increment) as c
+from guarded_abs p order by p.id;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select n from (select distinct n from q) d where p.id=@@session.auto_increment_increment) as c
+from guarded_abs p order by p.id;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select n from (select n,row_number() over(order by n) rn from q) d where p.id=@@session.auto_increment_increment) as c
+from guarded_abs p order by p.id;
+set session auto_increment_increment=@saved_increment;
+set @saved_increment=null;
+set @cte_demand=null;
+-- Runtime demand must not execute after pagination/filters delete its input.
+set @cte_demand='bad';
+select p.id, (with q(n) as (select p.id)
+select n from (select n from q limit 1 offset 1) d where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.id)
+select count(*) from q where n<0 and p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.id)
+select count(*) from q where n>0 and p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+prepare empty_runtime_seed from 'select p.id, (with recursive q(n) as (select p.id where p.id<0 union all select n from q where n=1) select count(*) from q where p.id=cast(? as signed)) as c from guarded_abs p order by p.id';
+execute empty_runtime_seed using @cte_demand;
+set @cte_demand=null;
+execute empty_runtime_seed using @cte_demand;
+set @cte_demand=2;
+execute empty_runtime_seed using @cte_demand;
+deallocate prepare empty_runtime_seed;
+prepare active_runtime_seed from 'select p.id, (with recursive q(n) as (select p.id union all select n from q where n=1) select count(*) from q where p.id=cast(? as signed)) as c from guarded_abs p order by p.id';
+execute active_runtime_seed using @cte_demand;
+set @cte_demand='bad';
+execute active_runtime_seed using @cte_demand;
+set @cte_demand=2;
+execute active_runtime_seed using @cte_demand;
+deallocate prepare active_runtime_seed;
+set @cte_demand=null;
+-- An outer runtime-only FILTER must retain the derived input's empty boundary.
+set @cte_demand='bad';
+select p.id, (with q(n) as (select p.id)
+select n from (select n from q where n<0) d where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.id)
+select count(*) from (select n from q where n<0) d where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.id)
+select n from (select n from q where n<0) d where p.id=cast(@cte_demand as signed)) as c
+from guarded_abs p order by p.id;
+prepare derived_variable_demand from 'select p.id, (with q(n) as (select p.id) select n from (select n from q where n<0) d where p.id=@cte_demand) as c from guarded_abs p order by p.id';
+execute derived_variable_demand;
+set @cte_demand=2;
+execute derived_variable_demand;
+set @cte_demand=null;
+execute derived_variable_demand;
+set @cte_demand='bad';
+execute derived_variable_demand;
+deallocate prepare derived_variable_demand;
+-- A nonempty derived input must still evaluate the conversion.
+select p.id, (with q(n) as (select p.id)
+select n from (select n from q where n>0) d where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+set @cte_demand=2;
+select p.id, (with q(n) as (select p.id)
+select n from (select n from q where n>0) d where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+set @cte_demand=null;
+-- INT32_MIN is representable after the ABS widening.
+insert into guarded_abs values (-2147483648,0);
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where abs(p.id)=2147483648) as c
+from guarded_abs p order by p.id;
+drop table guarded_abs;
+
+-- Empty outer input starts no parameter partitions.
+select p.id,
+       (with recursive r(n) as (
+          select p.parent_id union all select n-1 from r where n>1
+        ) select count(*) from r) as depth
+from pages p where p.id=99;
+
+drop database cte_outer_reference;

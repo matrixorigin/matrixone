@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -33,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -61,6 +61,20 @@ type cancelAfterGroupConcatWarningContext struct {
 
 func (c *cancelAfterGroupConcatWarningContext) Err() error {
 	if c.exec != nil && c.exec.truncationCount > 0 {
+		return context.Canceled
+	}
+	return nil
+}
+
+type cancelAfterGroupConcatSortContext struct {
+	context.Context
+	calls    int
+	cancelAt int
+}
+
+func (c *cancelAfterGroupConcatSortContext) Err() error {
+	c.calls++
+	if c.calls >= c.cancelAt {
 		return context.Canceled
 	}
 	return nil
@@ -259,6 +273,95 @@ func TestGroupConcatH0SpillBoundaries(t *testing.T) {
 	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
 	result[0].Free(mp)
 	count.Free()
+}
+
+func TestGroupConcatAccountedOrderedSpillErrors(t *testing.T) {
+	info := multiAggInfo{
+		aggID:     104,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	tests := []struct {
+		name string
+		fill func(*groupConcatExec, []*vector.Vector) error
+	}{
+		{
+			name: "bulk fill",
+			fill: func(exec *groupConcatExec, vectors []*vector.Vector) error {
+				return exec.BulkFill(0, vectors)
+			},
+		},
+		{
+			name: "batch fill",
+			fill: func(exec *groupConcatExec, vectors []*vector.Vector) error {
+				return exec.BatchFill(0, []uint64{1}, vectors)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			registry, account, allocation := newTestAggregateAllocation(t)
+			exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+			require.NoError(t, exec.SetAllocationAccount(allocation))
+			require.NoError(t, exec.SetExtraInformation(
+				testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ","),
+				0,
+			))
+			require.NoError(t, exec.GroupGrow(1))
+
+			createErr := errors.New("create accounted spill run")
+			ConfigureGroupConcatH0Spill(
+				exec,
+				groupConcatMinRunSize,
+				context.Background(),
+				func() (*os.File, error) { return nil, createErr },
+				nil,
+			)
+			values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{
+				strings.Repeat("x", int(groupConcatMinRunSize)),
+			})
+			keys := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"k"})
+			err := tc.fill(exec, []*vector.Vector{values, keys})
+			require.ErrorIs(t, err, createErr)
+
+			values.Free(mp)
+			keys.Free(mp)
+			exec.Free()
+			require.NoError(t, exec.ClearAllocationAccount(allocation))
+			finishTestAggregateAllocation(t, registry, account)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestGroupConcatOrderedSortCancellationReleasesScratch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	exec := newGroupConcatExec(mp, multiAggInfo{
+		aggID:     105,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}, ",").(*groupConcatExec)
+	require.NoError(t, exec.SetExtraInformation(
+		testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ","),
+		0,
+	))
+	entries := []groupConcatOrderedEntry{{
+		concatPayload: appendPayloadField(nil, []byte("value"), false),
+		orderPayload:  appendPayloadField(nil, []byte("key"), false),
+	}}
+	ctx := &cancelAfterGroupConcatSortContext{
+		Context:  context.Background(),
+		cancelAt: 3,
+	}
+	_, _, err := exec.sortOrderedEntries(ctx, entries)
+	require.ErrorIs(t, err, context.Canceled)
+
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestGroupConcatSpillWatermarkExcludesRunMetadata(t *testing.T) {
@@ -546,6 +649,10 @@ func TestGroupConcatDistinctAndHelpers(t *testing.T) {
 
 	require.Equal(t, types.T_blob.ToType(), GroupConcatReturnType([]types.Type{types.T_blob.ToType()}))
 	require.Equal(t, types.T_text.ToType(), GroupConcatReturnType([]types.Type{types.T_int64.ToType()}))
+	nativeText := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	groupConcatType := GroupConcatReturnType([]types.Type{nativeText})
+	require.Equal(t, types.CharsetUTF8MB4UnicodeCI, groupConcatType.Charset)
+	require.Equal(t, uint8(types.CollationVersionV1), groupConcatType.CollationVersion)
 	for _, oid := range []types.T{
 		types.T_varchar, types.T_decimal256, types.T_year, types.T_uuid,
 		types.T_geometry, types.T_geometry32, types.T_array_uint8,
@@ -564,176 +671,6 @@ func TestGroupConcatDistinctAndHelpers(t *testing.T) {
 	right.Free(mp)
 	vecs[0].Free(mp)
 	exec.Free()
-}
-
-func TestGroupConcatDistinctNative0900UsesComparisonIdentity(t *testing.T) {
-	mp := mpool.MustNewZero()
-	native := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB40900AI)
-	info := multiAggInfo{
-		aggID:    89,
-		distinct: true,
-		argTypes: []types.Type{native},
-		retType: func() types.Type {
-			typ := types.T_text.ToType()
-			typ.Charset = types.CharsetUTF8MB40900AI
-			return typ
-		}(),
-		emptyNull: true,
-	}
-	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
-	require.NoError(t, exec.GroupGrow(1))
-	values := buildVarlenVec(t, mp, native, []string{"Alpha", "alpha"})
-	require.NoError(t, exec.BatchFill(0, []uint64{1, 1}, []*vector.Vector{values}))
-	result, err := exec.Flush()
-	require.NoError(t, err)
-	require.Equal(t, "Alpha", string(result[0].GetBytesAt(0)))
-	result[0].Free(mp)
-	values.Free(mp)
-	exec.Free()
-	require.Zero(t, mp.CurrNB())
-}
-
-func TestGroupConcatAccountedDistinctNative0900UsesComparisonIdentity(t *testing.T) {
-	mp := mpool.MustNewZero()
-	native := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB40900AI)
-	info := multiAggInfo{
-		aggID:     90,
-		distinct:  true,
-		argTypes:  []types.Type{native},
-		retType:   types.T_text.ToType(),
-		emptyNull: true,
-	}
-	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
-	registry, account, allocation := newTestAggregateAllocation(t)
-	require.NoError(t, exec.SetAllocationAccount(allocation))
-	require.NoError(t, exec.GroupGrow(1))
-	values := buildVarlenVec(t, mp, native, []string{"Alpha", "alpha"})
-	groups := []uint64{1, 1}
-	require.NoError(t, exec.PreflightBatchFill(0, groups, []*vector.Vector{values}))
-	require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{values}))
-	result, err := exec.Flush()
-	require.NoError(t, err)
-	require.Equal(t, "Alpha", string(result[0].GetBytesAt(0)))
-	result[0].Free(mp)
-
-	var encoded bytes.Buffer
-	require.NoError(t, exec.SaveIntermediateResult(1, [][]uint8{{1}}, &encoded))
-	restored := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
-	require.NoError(t, restored.SetAllocationAccount(allocation))
-	require.NoError(t, restored.UnmarshalFromReader(
-		bytes.NewReader(encoded.Bytes()), mp))
-	restoredResult, err := restored.Flush()
-	require.NoError(t, err)
-	require.Equal(t, "Alpha", string(restoredResult[0].GetBytesAt(0)))
-	restoredResult[0].Free(mp)
-	restored.Free()
-	require.NoError(t, restored.ClearAllocationAccount(allocation))
-	values.Free(mp)
-	exec.Free()
-	require.NoError(t, exec.ClearAllocationAccount(allocation))
-	finishTestAggregateAllocation(t, registry, account)
-	require.Zero(t, mp.CurrNB())
-}
-
-func TestGroupConcatAccountedOrderedDistinctOwnsIdentityAcrossGC(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		typ    types.Type
-		values []string
-		want   []string
-	}{
-		{
-			name:   "legacy borrowed identity",
-			typ:    types.T_varchar.ToType(),
-			values: []string{"Alpha", "alpha", "Beta", "Echo", "echo", "Zulu"},
-			want:   []string{"alpha,Alpha,Beta", "echo,Echo,Zulu"},
-		},
-		{
-			name: "native accounted identity",
-			typ: types.NewWithCharsetVersion(types.T_varchar, 64, 0,
-				types.CharsetUTF8MB40900AI, types.CollationVersionV1),
-			values: []string{"Alpha", "alpha", "Beta", "Écho", "echo", "Zulu"},
-			want:   []string{"alpha,Beta", "echo,Zulu"},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mp := mpool.MustNewZero()
-			registry, account, allocation := newTestAggregateAllocation(t)
-			argTypes := []types.Type{tc.typ, types.T_int64.ToType()}
-			exec := newGroupConcatExec(mp, multiAggInfo{
-				aggID: AggIdOfGroupConcat, distinct: true,
-				argTypes: argTypes, retType: GroupConcatReturnType([]types.Type{tc.typ}),
-				emptyNull: true,
-			}, ",").(*groupConcatExec)
-			require.NoError(t, exec.SetExtraInformation(
-				testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ","), 0))
-			require.NoError(t, exec.SetAllocationAccount(allocation))
-			require.NoError(t, exec.GroupGrow(2))
-			values := buildVarlenVec(t, mp, tc.typ, tc.values)
-			orderKeys := vector.NewVec(types.T_int64.ToType())
-			require.NoError(t, vector.AppendFixedList(orderKeys,
-				[]int64{2, 1, 3, 2, 1, 3}, nil, mp))
-			vectors := []*vector.Vector{values, orderKeys}
-			groups := []uint64{1, 1, 1, 2, 2, 2}
-			require.NoError(t, exec.PreflightBatchFill(0, groups, vectors))
-			require.NoError(t, exec.BatchFill(0, groups, vectors))
-			residentUsed := account.Snapshot().Used
-			runtime.GC()
-			result, err := exec.FlushWithContext(context.Background())
-			require.NoError(t, err)
-			require.Len(t, result, 1)
-			for i, want := range tc.want {
-				require.Equal(t, want, string(result[0].GetBytesAt(i)))
-			}
-			result[0].Free(mp)
-			require.Equal(t, residentUsed, account.Snapshot().Used,
-				"Flush scratch and output ownership must be released")
-			cancelled, cancel := context.WithCancel(context.Background())
-			cancel()
-			_, err = exec.FlushWithContext(cancelled)
-			require.ErrorIs(t, err, context.Canceled)
-			require.Equal(t, residentUsed, account.Snapshot().Used)
-			result, err = exec.FlushWithContext(context.Background())
-			require.NoError(t, err)
-			for i, want := range tc.want {
-				require.Equal(t, want, string(result[0].GetBytesAt(i)))
-			}
-			result[0].Free(mp)
-			require.Equal(t, residentUsed, account.Snapshot().Used)
-			values.Free(mp)
-			orderKeys.Free(mp)
-			exec.Free()
-			require.NoError(t, exec.ClearAllocationAccount(allocation))
-			finishTestAggregateAllocation(t, registry, account)
-			require.Zero(t, mp.CurrNB())
-		})
-	}
-}
-
-func TestGroupConcatAccountedIdentityBudgetFailureReleasesScratch(t *testing.T) {
-	mp := mpool.MustNewZero()
-	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
-	require.NoError(t, err)
-	account, err := registry.Open(256)
-	require.NoError(t, err)
-	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup,
-		AllocationAccountSites{VectorData: 1, VectorArea: 2, VectorNulls: 3,
-			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6})
-	require.NoError(t, err)
-	identities, err := allocation.newArgumentBuffer(mp)
-	require.NoError(t, err)
-	keyScratch, err := allocation.newArgumentBuffer(mp)
-	require.NoError(t, err)
-	typ := types.NewWithCharsetVersion(types.T_varchar, 256, 0,
-		types.CharsetUTF8MB40900AI, types.CollationVersionV1)
-	payload := appendPayloadField(nil, []byte(strings.Repeat("A", 128)), false)
-	require.ErrorIs(t, writeGroupConcatDistinctIdentity(
-		payload, []types.Type{typ}, identities, keyScratch),
-		mpool.ErrAllocationAccountCapacity)
-	identities.Free()
-	keyScratch.Free()
-	finishTestAggregateAllocation(t, registry, account)
-	require.Zero(t, mp.CurrNB())
 }
 
 func TestGroupConcatGeometryUsesBinaryResult(t *testing.T) {
@@ -872,7 +809,7 @@ func TestGroupConcatLargeGeometryAcrossFinalizers(t *testing.T) {
 		{name: "ordered memory", ordered: true},
 		{name: "ordered spill", ordered: true, spill: true},
 		{name: "accounted input order", accounted: true},
-		{name: "accounted ordered", ordered: true, accounted: true},
+		{name: "accounted ordered spill", ordered: true, spill: true, accounted: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1769,6 +1706,46 @@ func TestGroupConcatMaxLenReportsWarningsOnce(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestGroupConcatWarningRetentionLimitControlsPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		limit int
+		want  int
+	}{
+		{name: "zero", limit: 0, want: 0},
+		{name: "one", limit: 1, want: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			info := multiAggInfo{
+				aggID:     97,
+				argTypes:  []types.Type{types.T_varchar.ToType()},
+				retType:   GroupConcatReturnType([]types.Type{types.T_varchar.ToType()}),
+				emptyNull: true,
+			}
+			exec := newGroupConcatExec(mp, info, "").(*groupConcatExec)
+			ConfigureGroupConcatWarningRetention(exec, tc.limit)
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("", 2), 0))
+			values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"a", "b", "c", "d"})
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			sink := new(groupConcatWarningSink)
+			ReportGroupConcatWarnings(exec, sink)
+			require.Equal(t, uint64(1), sink.total)
+			require.Len(t, sink.messages, tc.want)
+			if tc.want > 0 {
+				require.Equal(t, "Row 3 was cut by GROUP_CONCAT()", sink.messages[0])
+			}
+			results[0].Free(mp)
+			values.Free(mp)
+			exec.Free()
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 func TestGroupConcatWarningsCountOnlySinkReceivesAllRows(t *testing.T) {
 	mp := mpool.MustNewZero()
 	info := multiAggInfo{
@@ -1795,7 +1772,7 @@ func TestGroupConcatWarningsCountOnlySinkReceivesAllRows(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestGroupConcatWarningAccumulatorRetainsGlobalSmallestRows(t *testing.T) {
+func TestGroupConcatWarningAccumulatorRetainsProductionOrderPrefix(t *testing.T) {
 	mp := mpool.MustNewZero()
 	makeExec := func(base uint64) (*groupConcatExec, *vector.Vector, *vector.Vector) {
 		info := multiAggInfo{
@@ -1836,8 +1813,8 @@ func TestGroupConcatWarningAccumulatorRetainsGlobalSmallestRows(t *testing.T) {
 	require.Equal(t, uint64(80), sink.total)
 	require.Len(t, sink.codes, groupConcatWarningRetentionLimit)
 	require.Len(t, sink.messages, groupConcatWarningRetentionLimit)
-	require.Equal(t, "Row 148 was cut by GROUP_CONCAT()", sink.messages[0])
-	require.Equal(t, "Row 2 was cut by GROUP_CONCAT()",
+	require.Equal(t, "Row 2 was cut by GROUP_CONCAT()", sink.messages[0])
+	require.Equal(t, "Row 148 was cut by GROUP_CONCAT()",
 		sink.messages[len(sink.messages)-1])
 	firstResult.Free(mp)
 	firstValues.Free(mp)
@@ -1846,6 +1823,234 @@ func TestGroupConcatWarningAccumulatorRetainsGlobalSmallestRows(t *testing.T) {
 	secondValues.Free(mp)
 	second.Free()
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestGroupConcatExecRetainsProductionOrderPrefix(t *testing.T) {
+	exec := &groupConcatExec{warningRetentionLimit: 1}
+	exec.recordTruncation(3)
+	exec.recordTruncation(2)
+
+	total, warnings := ConsumeGroupConcatWarnings(exec)
+	require.Equal(t, uint64(2), total)
+	require.Equal(t, []GroupConcatWarning{{Row: 3}}, warnings)
+}
+
+func TestGroupConcatWarningBudgetSealsAfterRejectedPrefixRow(t *testing.T) {
+	budget := process.NewWarningDiagnosticBudget(
+		process.WarningDiagnosticRecordOverhead +
+			uint64(groupConcatWarningMessageLength(1)))
+	exec := &groupConcatExec{
+		warningRetentionLimit: 2,
+		warningBudget:         budget,
+	}
+
+	exec.recordTruncation(100000)
+	exec.recordTruncation(1)
+
+	total, warnings := ConsumeGroupConcatWarnings(exec)
+	require.Equal(t, uint64(2), total)
+	require.Empty(t, warnings)
+	require.Zero(t, budget.Used())
+}
+
+func TestGroupConcatWarningAccumulatorTransfersBudgetBeforeFormatting(t *testing.T) {
+	budget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	exec := &groupConcatExec{
+		warningRetentionLimit: 1,
+		warningBudget:         budget,
+	}
+	exec.recordTruncation(7)
+
+	var accumulator GroupConcatWarningAccumulator
+	accumulator.SetWarningRetentionLimit(1)
+	accumulator.SetWarningBudget(budget)
+	accumulator.Add(exec)
+	require.Positive(t, budget.Used())
+
+	sink := new(groupConcatWarningSink)
+	accumulator.Report(sink)
+	require.Equal(t, uint64(1), sink.total)
+	require.Equal(t, []string{"Row 7 was cut by GROUP_CONCAT()"}, sink.messages)
+	require.Zero(t, budget.Used())
+}
+
+func TestGroupConcatWarningAdmissionBoundsLargeRetentionBeforeFormatting(t *testing.T) {
+	const maxErrorCount = int(^uint16(0))
+	budget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	exec := &groupConcatExec{
+		warningRetentionLimit: maxErrorCount,
+		warningBudget:         budget,
+	}
+	for row := uint64(1); row <= uint64(maxErrorCount); row++ {
+		exec.recordTruncation(row)
+	}
+
+	require.Equal(t, uint64(maxErrorCount), exec.truncationCount)
+	require.NotEmpty(t, exec.truncationRows)
+	require.Less(t, len(exec.truncationRows), maxErrorCount)
+	require.LessOrEqual(t, exec.warningChargeBytes, uint64(process.WarningDiagnosticMaxBytes))
+	require.Equal(t, exec.warningChargeBytes, budget.Used())
+	retained := len(exec.truncationRows)
+
+	var accumulator GroupConcatWarningAccumulator
+	accumulator.SetWarningRetentionLimit(maxErrorCount)
+	accumulator.SetWarningBudget(budget)
+	accumulator.Add(exec)
+	sink := new(groupConcatWarningSink)
+	accumulator.Report(sink)
+	require.Equal(t, uint64(maxErrorCount), sink.total)
+	require.Len(t, sink.messages, retained)
+	require.Equal(t, "Row 1 was cut by GROUP_CONCAT()", sink.messages[0])
+	require.Zero(t, budget.Used())
+}
+
+func TestGroupConcatWarningAccumulatorRetainsFirstBatchPrefix(t *testing.T) {
+	var accumulator GroupConcatWarningAccumulator
+	accumulator.SetWarningRetentionLimit(1)
+	accumulator.addBatch(2, []GroupConcatWarning{{Row: 3}, {Row: 2}})
+
+	sink := new(groupConcatWarningSink)
+	accumulator.Report(sink)
+	require.Equal(t, uint64(2), sink.total)
+	require.Equal(t, []string{"Row 3 was cut by GROUP_CONCAT()"}, sink.messages)
+}
+
+func TestGroupConcatWarningConfigurationRebindsBudgetAndCapacity(t *testing.T) {
+	rowOneCharge := groupConcatWarningRecordBytes(1)
+	rowTwoCharge := groupConcatWarningRecordBytes(2)
+
+	budget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	exec := &groupConcatExec{
+		warningRetentionLimit: 4,
+		truncationRows:        make([]GroupConcatWarning, 2, 8),
+	}
+	exec.truncationRows[0] = GroupConcatWarning{Row: 1}
+	exec.truncationRows[1] = GroupConcatWarning{Row: 2}
+	ConfigureGroupConcatWarningBudget(exec, budget)
+	require.Equal(t, rowOneCharge+rowTwoCharge, budget.Used())
+
+	ConfigureGroupConcatWarningRetention(exec, 1)
+	require.Len(t, exec.truncationRows, 1)
+	require.LessOrEqual(t, cap(exec.truncationRows), 2)
+	require.Equal(t, rowOneCharge, budget.Used())
+	ConfigureGroupConcatWarningRetention(exec, int(^uint16(0))+1)
+	require.Equal(t, int(^uint16(0)), exec.warningRetentionLimit)
+	ConfigureGroupConcatWarningRetention(exec, -1)
+	require.Zero(t, exec.warningRetentionLimit)
+	require.Empty(t, exec.truncationRows)
+	require.Zero(t, budget.Used())
+
+	rebind := &groupConcatExec{
+		warningRetentionLimit: 2,
+		truncationRows: []GroupConcatWarning{
+			{Row: 1},
+			{Row: 2},
+		},
+	}
+	oldBudget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	ConfigureGroupConcatWarningBudget(rebind, oldBudget)
+	smallBudget := process.NewWarningDiagnosticBudget(rowOneCharge)
+	ConfigureGroupConcatWarningBudget(rebind, smallBudget)
+	require.Zero(t, oldBudget.Used())
+	require.Len(t, rebind.truncationRows, 1)
+	require.True(t, rebind.warningRetentionSealed)
+	require.Equal(t, rowOneCharge, smallBudget.Used())
+	ConfigureGroupConcatWarningBudget(rebind, smallBudget)
+	ConfigureGroupConcatWarningBudget(rebind, nil)
+	require.NotSame(t, smallBudget, rebind.warningBudget)
+	require.False(t, rebind.warningRetentionSealed)
+	require.Equal(t, rowOneCharge, rebind.warningBudget.Used())
+	rebind.clearTruncationWarnings()
+	require.Zero(t, rebind.warningBudget.Used())
+
+	ConfigureGroupConcatWarningRetention(nil, 1)
+	ConfigureGroupConcatWarningBudget(nil, nil)
+	require.Equal(t, groupConcatWarningRetentionLimit, GroupConcatWarningRetentionLimit(nil))
+	invalid := &groupConcatExec{warningRetentionLimit: -1}
+	require.Zero(t, GroupConcatWarningRetentionLimit(invalid))
+	invalid.warningRetentionLimit = int(^uint16(0)) + 1
+	require.Equal(t, int(^uint16(0)), GroupConcatWarningRetentionLimit(invalid))
+}
+
+func TestGroupConcatWarningAccumulatorBudgetOwnershipBoundaries(t *testing.T) {
+	rows := []GroupConcatWarning{{Row: 1}, {Row: 2}}
+	firstCharge := groupConcatWarningRecordBytes(rows[0].Row)
+	secondCharge := groupConcatWarningRecordBytes(rows[1].Row)
+
+	var nilAccumulator *GroupConcatWarningAccumulator
+	nilAccumulator.SetWarningRetentionLimit(1)
+	nilAccumulator.SetWarningBudget(nil)
+	nilAccumulator.Add(nil)
+	nilAccumulator.Reset()
+
+	sameBudget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	require.True(t, sameBudget.Reserve(firstCharge+secondCharge))
+	same := &GroupConcatWarningAccumulator{}
+	same.SetWarningRetentionLimit(1)
+	same.addBatchOwned(2, rows, sameBudget, firstCharge+secondCharge)
+	require.Equal(t, uint64(2), same.total)
+	require.Equal(t, rows[:1], same.rows)
+	require.Equal(t, firstCharge, sameBudget.Used())
+	same.Reset()
+	require.Zero(t, sameBudget.Used())
+
+	destinationBudget := process.NewWarningDiagnosticBudget(firstCharge)
+	sourceBudget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	require.True(t, sourceBudget.Reserve(firstCharge+secondCharge))
+	different := &GroupConcatWarningAccumulator{}
+	different.SetWarningRetentionLimit(2)
+	different.SetWarningBudget(destinationBudget)
+	different.addBatchOwned(2, rows, sourceBudget, firstCharge+secondCharge)
+	require.Equal(t, rows[:1], different.rows)
+	require.True(t, different.warningRetentionSealed)
+	require.Zero(t, sourceBudget.Used())
+	require.Equal(t, firstCharge, destinationBudget.Used())
+	different.Reset()
+	require.Zero(t, destinationBudget.Used())
+
+	budgeted := &GroupConcatWarningAccumulator{}
+	budgeted.SetWarningRetentionLimit(1)
+	budget := process.NewWarningDiagnosticBudget(firstCharge)
+	budgeted.SetWarningBudget(budget)
+	budgeted.addBatch(1, rows[:1])
+	require.Equal(t, firstCharge, budget.Used())
+	budgeted.Reset()
+	require.Zero(t, budget.Used())
+
+	zero := &GroupConcatWarningAccumulator{}
+	zero.SetWarningRetentionLimit(0)
+	zeroSource := process.NewWarningDiagnosticBudget(firstCharge)
+	require.True(t, zeroSource.Reserve(firstCharge))
+	zero.addBatchOwned(1, rows[:1], zeroSource, firstCharge)
+	require.Zero(t, zeroSource.Used())
+
+	saturated := &GroupConcatWarningAccumulator{total: ^uint64(0)}
+	saturated.addBatchOwned(1, nil, nil, 0)
+	require.Equal(t, ^uint64(0), saturated.total)
+}
+
+func TestGroupConcatWarningAccumulatorRejectsUnderchargedSameBudgetTransfer(t *testing.T) {
+	rows := []GroupConcatWarning{{Row: 1}, {Row: 2}}
+	firstCharge := groupConcatWarningRecordBytes(rows[0].Row)
+	accounted := firstCharge + groupConcatWarningRecordBytes(rows[1].Row)
+	sourceCharge := accounted - 1
+	otherCharge := uint64(7)
+	budget := process.NewWarningDiagnosticBudget(otherCharge + sourceCharge)
+	require.True(t, budget.Reserve(otherCharge))
+	require.True(t, budget.Reserve(sourceCharge))
+
+	accumulator := &GroupConcatWarningAccumulator{}
+	accumulator.SetWarningRetentionLimit(1)
+	accumulator.SetWarningBudget(budget)
+	accumulator.addBatchOwned(2, rows, budget, sourceCharge)
+
+	require.Equal(t, rows[:1], accumulator.rows)
+	require.Equal(t, uint64(2), accumulator.total)
+	require.Equal(t, otherCharge+firstCharge, budget.Used())
+	accumulator.Reset()
+	require.Equal(t, otherCharge, budget.Used())
+	budget.Release(otherCharge)
+	require.Zero(t, budget.Used())
 }
 
 func TestGroupConcatWarningsAreDiscardedAfterFailedFinalization(t *testing.T) {

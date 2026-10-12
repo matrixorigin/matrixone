@@ -23,6 +23,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
@@ -37,7 +39,6 @@ import (
 
 func TestRequiredMembershipStoragePaths(t *testing.T) {
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	for _, tc := range []struct {
 		name                          string
 		integer, residual, full, desc bool
@@ -75,6 +76,7 @@ func TestRequiredMembershipStoragePaths(t *testing.T) {
 			scanner := &scriptedRelationScanner{t: t}
 			p.RelationScanner = scanner
 			scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
+				require.Equal(t, fileservice.Policy(fileservice.SkipFullFilePreloads), req.ReadPolicy)
 				require.Equal(t, tc.desc, req.PostFilterTopOnly)
 				require.Equal(t, !tc.desc && (!tc.integer || tc.residual), req.FilterBeforeTopK)
 				require.Equal(t, tc.integer && !tc.desc, req.FilterHint.BF != nil)
@@ -147,12 +149,11 @@ func (a *generationAdmission) Release(n int64) int64 { a.held -= n; return a.hel
 func TestPlanGenerationFailsClosedBeforeStorage(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	proc.Base.TxnOperator = mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.SessionInfo.StorageEngine = mock_frontend.NewMockEngine(ctrl) // no calls allowed
-	spec := &plan.VectorIndexScan{Index: &plan.IndexDef{IndexAlgoParams: `{"lists":"1","op_type":"vector_l2_ops"}`},
+	spec := &plan.IndexSearchScan{Index: &plan.IndexDef{IndexAlgoParams: `{"lists":"1","op_type":"vector_l2_ops"}`},
 		SourceTable: &plan.ObjectRef{}, SourceTableDef: &plan.TableDef{Cols: []*plan.ColDef{{Name: "pk", Typ: plan.Type{Id: int32(types.T_int64)}}},
-			Pkey: &plan.PrimaryKeyDef{PkeyColName: "pk"}, Name2ColIndex: map[string]int32{"pk": 0}}, ScanWork: &plan.VectorIndexScanWork{}}
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: "pk"}, Name2ColIndex: map[string]int32{"pk": 0}}, ScanWork: &plan.IndexSearchScanWork{}}
 	keys := vector.NewVec(types.T_int64.ToType())
 	defer keys.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(keys, int64(7), false, proc.Mp()))
@@ -168,11 +169,24 @@ func TestPlanGenerationFailsClosedBeforeStorage(t *testing.T) {
 		func(r *searchplugin.Request) { r.HasMembershipFilter = false },
 		func(r *searchplugin.Request) { r.Identity.PartitionCount = 2 },
 		func(r *searchplugin.Request) { r.MembershipFilter = []byte{1, 2} },
-		func(r *searchplugin.Request) { r.HasFirstRound = true },
 	} {
 		bad := req
 		change(&bad)
 		readers, err := NewPlanReaders(proc, spec, bad, 2)
+		require.Error(t, err)
+		require.Nil(t, readers)
+	}
+	for _, multiRound := range []func(*plan.IndexSearchScan){
+		func(s *plan.IndexSearchScan) {
+			s.AlgoExprs = []*plan.Expr{{}}
+			s.AlgoExprNames = []string{ivfflatplan.FirstRoundLimitExpr}
+		},
+		func(s *plan.IndexSearchScan) { s.AlgoOptions = []byte(`{"bucket_expand_step":2}`) },
+		func(s *plan.IndexSearchScan) { s.AlgoOptions = []byte(`{`) },
+	} {
+		bad := *spec
+		multiRound(&bad)
+		readers, err := NewPlanReaders(proc, &bad, req, 2)
 		require.Error(t, err)
 		require.Nil(t, readers)
 	}
@@ -187,6 +201,30 @@ func TestPlanGenerationFailsClosedBeforeStorage(t *testing.T) {
 		require.True(t, end)
 		require.NoError(t, r.Close())
 	}
+
+	// Empty domains still validate the distributed identity and work before
+	// publishing readers, and never open storage.
+	distributed := empty
+	distributed.Identity.PartitionCount = 2
+	distributed.Identity.PartitionIndex = 1
+	distributed.Identity.IsRemote = true
+	spec.ScanWork = &plan.IndexSearchScanWork{Objects: 2, Rows: 10, Blocks: 2, VectorBytesPerRow: 512}
+	readers, err = NewPlanReaders(proc, spec, distributed, 1)
+	require.NoError(t, err)
+	require.Len(t, readers, 1)
+	require.NoError(t, readers[0].Close())
+	for _, invalid := range []*plan.IndexSearchScanWork{
+		{Objects: 1, Rows: 10, Blocks: 2, VectorBytesPerRow: 512},
+		{Objects: 2, Rows: -1, Blocks: 2, VectorBytesPerRow: 512},
+		{Objects: 2, Rows: 10, Blocks: 0, VectorBytesPerRow: 512},
+		{Objects: 2, Rows: 10, Blocks: 2, VectorBytesPerRow: 0},
+	} {
+		spec.ScanWork = invalid
+		readers, err = NewPlanReaders(proc, spec, distributed, 1)
+		require.Error(t, err)
+		require.Nil(t, readers)
+	}
+	spec.ScanWork = &plan.IndexSearchScanWork{}
 
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, exists := rt.GetGlobalVariables(moruntime.CNMemoryThrottler)

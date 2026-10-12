@@ -260,8 +260,43 @@ func TestPercentileArithmeticScratchDoesNotAllocatePerGroup(t *testing.T) {
 	}
 	oneGroup := measure(1)
 	manyGroups := measure(AggBatchSize)
-	require.LessOrEqual(t, manyGroups, oneGroup+1,
-		"percentile finalization arithmetic must not allocate per group")
+
+	// Each group runs a fixed THREE big.Int divisions: the rank QuoRem, the
+	// numeric-interpolation QuoRem (via rationalToFloat64), and the decimal
+	// QuoRem. The scratch reuses every big.Int it owns, so on go1.26 and earlier
+	// big.Int.QuoRem allocated nothing and the per-group floor was 0. Go 1.27's
+	// math/big no longer recycles the temporaries QuoRem allocates internally, so
+	// each division now costs a fixed number of allocations no caller-side reuse
+	// can remove. Measure that per-division floor at runtime so the bound tracks
+	// the toolchain, then assert the finalization allocates nothing per group
+	// BEYOND its three divisions -- a stray new(big.Int) or a fourth division in
+	// the group loop still fails.
+	const divisionsPerGroup = 3
+	floor := quoRemAllocFloor()
+	allowed := oneGroup + float64(AggBatchSize-1)*divisionsPerGroup*floor
+	require.LessOrEqualf(t, manyGroups, allowed+1,
+		"percentile finalization arithmetic must not allocate per group beyond its %d big.Int divisions (measured floor %.0f allocs/division)",
+		divisionsPerGroup, floor)
+}
+
+// quoRemAllocFloor reports how many heap allocations a single big.Int.QuoRem
+// performs on the running toolchain, with the quotient and remainder
+// preallocated and reused exactly as percentileArithmeticScratch does. It is 0
+// on go1.26 and earlier and 2 on go1.27 (which stopped recycling QuoRem's
+// internal division temporaries); measuring it keeps the per-group allocation
+// bound above toolchain-agnostic rather than assuming a zero floor.
+func quoRemAllocFloor() float64 {
+	numerator := new(big.Int).Lsh(big.NewInt(1), 256)
+	numerator.Add(numerator, big.NewInt(1))
+	denominator := new(big.Int).Lsh(big.NewInt(1), 128)
+	denominator.Add(denominator, big.NewInt(3))
+	var quotient, remainder big.Int
+	for range 4 {
+		quotient.QuoRem(numerator, denominator, &remainder)
+	}
+	return testing.AllocsPerRun(100, func() {
+		quotient.QuoRem(numerator, denominator, &remainder)
+	})
 }
 
 func TestPercentileArithmeticScratchExactRanks(t *testing.T) {
