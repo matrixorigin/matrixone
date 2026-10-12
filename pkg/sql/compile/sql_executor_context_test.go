@@ -162,6 +162,46 @@ func TestInternalStatementContextSuppressesInheritedJSONMergeWarning(t *testing.
 	require.Equal(t, plan.JSONMergeWarningInternalReprepare, origin)
 }
 
+func TestInternalExecutorSessionModeSnapshot(t *testing.T) {
+	t.Run("absent snapshot keeps strict defaults", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		applyInternalExecutorSessionModeSnapshot(context.Background(), proc)
+		require.False(t, proc.GetSessionInfo().MatrixOneNativeMode)
+		require.False(t, proc.GetSessionInfo().MySQLNumericCompatibilityMode)
+	})
+
+	for _, tc := range []struct {
+		name       string
+		nativeMode bool
+		mysqlMode  bool
+	}{
+		{name: "explicit strict mode"},
+		{name: "compatibility only", mysqlMode: true},
+		{name: "native only", nativeMode: true},
+		{name: "native precedence flags remain exact", nativeMode: true, mysqlMode: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := testutil.NewProcess(t)
+			parentInfo := parent.GetSessionInfo()
+			parentInfo.MatrixOneNativeMode = tc.nativeMode
+			parentInfo.MySQLNumericCompatibilityMode = tc.mysqlMode
+
+			ctx := withInternalExecutorSessionModeSnapshot(
+				context.Background(), parentInfo)
+			// A later session mutation must not change this statement's snapshot.
+			parentInfo.MatrixOneNativeMode = !tc.nativeMode
+			parentInfo.MySQLNumericCompatibilityMode = !tc.mysqlMode
+
+			child := testutil.NewProcess(t)
+			child.GetSessionInfo().MatrixOneNativeMode = !tc.nativeMode
+			child.GetSessionInfo().MySQLNumericCompatibilityMode = !tc.mysqlMode
+			applyInternalExecutorSessionModeSnapshot(ctx, child)
+			require.Equal(t, tc.nativeMode, child.GetSessionInfo().MatrixOneNativeMode)
+			require.Equal(t, tc.mysqlMode, child.GetSessionInfo().MySQLNumericCompatibilityMode)
+		})
+	}
+}
+
 func TestCompilerContextUnsupportedOperations(t *testing.T) {
 	r := func() {
 		err := recover()
