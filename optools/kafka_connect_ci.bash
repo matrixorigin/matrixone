@@ -20,6 +20,7 @@ CONNECT_PORT=""
 COMPOSE_PROJECT_NAME=""
 CURRENT_STAGE="preflight"
 SOURCE_SHA=""
+CLEANUP_ERRORS=()
 
 readonly PORT_BLOCK_WIDTH=80
 
@@ -28,6 +29,10 @@ source "$ROOT_DIR/optools/mo_e2e_common.bash"
 log() { printf '[kafka-connect-ci] %s\n' "$*"; }
 die() { printf '[kafka-connect-ci] ERROR: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
+record_cleanup_error() {
+  CLEANUP_ERRORS+=("$1")
+  log "cleanup failed: $1"
+}
 
 e2e_tmp_root() {
   if [[ "$(uname -s)" == Darwin ]]; then
@@ -68,7 +73,10 @@ allocate_ports() {
   else
     while IFS= read -r candidate; do
       PORT_BLOCK_BASE="$candidate"
-      acquire_port_lease "$PORT_BLOCK_BASE" || continue
+      if ! acquire_port_lease "$PORT_BLOCK_BASE"; then
+        PORT_BLOCK_BASE=""
+        continue
+      fi
       if mo_port_block_is_available "$PORT_BLOCK_BASE" "$PORT_BLOCK_WIDTH"; then
         break
       fi
@@ -90,7 +98,7 @@ collect_artifacts() {
   if [[ -f "$TMP_DIR/mo-service.log" ]]; then
     cp "$TMP_DIR/mo-service.log" "$REPORT_DIR/mo-service.log" || return 1
   fi
-  compose logs --no-color >"$TMP_DIR/connect-compose.raw.log" 2>&1 || true
+  compose logs --no-color >"$TMP_DIR/connect-compose.raw.log" 2>&1 || return 1
   python3 - "$TMP_DIR/connect-compose.raw.log" "$REPORT_DIR/connect-compose.log" <<'PY'
 import re
 import sys
@@ -106,37 +114,72 @@ with open(source, encoding="utf-8", errors="replace") as input_file, open(destin
             line = pattern.sub(r"\1<redacted>", line)
         output_file.write(line)
 PY
-  compose ps --all --format json >"$REPORT_DIR/connect-compose-ps.json" 2>&1 || true
+  compose ps --all --format json >"$REPORT_DIR/connect-compose-ps.json" 2>&1 || return 1
 }
 
 cleanup() {
   local status=$?
+  local service_pid="$MO_PID"
   set +e
-  mo_e2e_stop_service "$MO_PID"
+  if ! mo_e2e_stop_service "$service_pid"; then
+    record_cleanup_error "could not stop the owned MatrixOne process"
+  fi
+  if [[ -n "$service_pid" ]] && kill -0 "$service_pid" >/dev/null 2>&1; then
+    record_cleanup_error "owned MatrixOne process remains after shutdown"
+  fi
   MO_PID=""
-  collect_artifacts
+  if ! collect_artifacts; then
+    record_cleanup_error "could not collect run artifacts"
+  fi
   if [[ -n "$TMP_DIR" ]]; then
-    compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+    if ! compose down --volumes --remove-orphans >/dev/null 2>&1; then
+      record_cleanup_error "docker compose down failed for owned project $COMPOSE_PROJECT_NAME"
+    fi
     if [[ -d "$TMP_DIR" && "$(basename "$TMP_DIR")" == mo-kafka-connect-e2e.* ]]; then
-      rm -rf -- "$TMP_DIR"
+      if ! rm -rf -- "$TMP_DIR"; then
+        record_cleanup_error "could not remove owned temporary directory $TMP_DIR"
+      fi
     else
-      log "refusing to remove unexpected temporary path: $TMP_DIR"
+      record_cleanup_error "refusing to remove unexpected temporary path: $TMP_DIR"
     fi
   fi
   mo_port_block_release_lease
-  if (( status != 0 )) && [[ -n "$REPORT_DIR" && ! -f "$REPORT_DIR/report.json" ]]; then
-    mkdir -p "$REPORT_DIR"
-    python3 - "$REPORT_DIR/setup-failure.json" "$CURRENT_STAGE" "$SOURCE_SHA" "$status" <<'PY'
+  if ((${#CLEANUP_ERRORS[@]} > 0)); then
+    (( status != 0 )) || status=1
+    if [[ -n "$REPORT_DIR" && -f "$REPORT_DIR/report.json" ]]; then
+      python3 - "$REPORT_DIR/report.json" "${CLEANUP_ERRORS[@]}" <<'PY'
 import json
 import sys
 
-path, stage, sha, status = sys.argv[1:]
+path, *cleanup_errors = sys.argv[1:]
+with open(path, encoding="utf-8") as report_file:
+    report = json.load(report_file)
+report["cleanup_status"] = "failed"
+report["cleanup_errors"] = cleanup_errors
+if report.get("status") == "passed":
+    report["status"] = "failed"
+message = "cleanup failed: " + "; ".join(cleanup_errors)
+report["error"] = "; ".join(value for value in (report.get("error"), message) if value)
+with open(path, "w", encoding="utf-8") as report_file:
+    json.dump(report, report_file, indent=2)
+    report_file.write("\n")
+PY
+    fi
+  fi
+  if (( status != 0 )) && [[ -n "$REPORT_DIR" && ! -f "$REPORT_DIR/report.json" ]]; then
+    mkdir -p "$REPORT_DIR"
+    python3 - "$REPORT_DIR/setup-failure.json" "$CURRENT_STAGE" "$SOURCE_SHA" "$status" "${CLEANUP_ERRORS[@]}" <<'PY'
+import json
+import sys
+
+path, stage, sha, status, *cleanup_errors = sys.argv[1:]
 with open(path, "w") as report:
-    json.dump({"status": "failed", "stage": stage, "source_sha": sha, "exit_status": int(status)}, report, indent=2)
+    json.dump({"status": "failed", "stage": stage, "source_sha": sha, "exit_status": int(status), "cleanup_errors": cleanup_errors}, report, indent=2)
     report.write("\n")
 PY
   fi
-  return "$status"
+  trap - EXIT
+  exit "$status"
 }
 
 run_e2e() {

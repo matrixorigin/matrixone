@@ -9,7 +9,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -107,6 +112,113 @@ func TestRunResultMarksFailedReport(t *testing.T) {
 	if got.Status != "failed" || got.Error != "sink offset did not reach the expected value" {
 		t.Fatalf("failed run report = %+v, want failed status and error", got)
 	}
+}
+
+func TestKafkaConnectRunnerFailsWhenOnlyPortBlockIsLeased(t *testing.T) {
+	allocatePorts := kafkaConnectRunnerFunction(t, "allocate_ports", "collect_artifacts()")
+	script := strings.Join([]string{
+		"set -euo pipefail",
+		"PORT_BLOCK_WIDTH=80",
+		"PORT_BLOCK_BASE=''",
+		"MO_PORT='' STATUS_PORT='' KAFKA_PORT='' CONNECT_PORT=''",
+		"die() { echo \"$*\" >&2; exit 1; }",
+		"log() { :; }",
+		"acquire_port_lease() { return 1; }",
+		"mo_port_block_candidates() { echo 36000; }",
+		"mo_port_block_is_available() { return 0; }",
+		"mo_port_block_release_lease() { :; }",
+		allocatePorts,
+		"allocate_ports",
+	}, "\n")
+	cmd := exec.Command("bash", "-c", script)
+	output, runErr := cmd.CombinedOutput()
+	if runErr == nil {
+		t.Fatalf("runner succeeded despite the only port block being leased:\n%s", output)
+	}
+	if !strings.Contains(string(output), "could not find an available 80-port range") {
+		t.Fatalf("runner did not report exhausted port candidates (error %v):\n%s", runErr, output)
+	}
+}
+
+func TestKafkaConnectRunnerMarksCleanupFailureInReport(t *testing.T) {
+	cleanup := kafkaConnectRunnerFunction(t, "cleanup", "run_e2e()")
+	root := t.TempDir()
+	reportDir := filepath.Join(root, "reports")
+	if err := os.Mkdir(reportDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tmpDir := filepath.Join(root, "mo-kafka-connect-e2e.test")
+	if err := os.Mkdir(tmpDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(reportDir, "report.json"), []byte(`{"status":"passed"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := strings.Join([]string{
+		"set -u",
+		"CLEANUP_ERRORS=()",
+		"log() { :; }",
+		"record_cleanup_error() { CLEANUP_ERRORS+=(\"$1\"); }",
+		"mo_e2e_stop_service() { return 0; }",
+		"collect_artifacts() { return 0; }",
+		"compose() { return 19; }",
+		"mo_port_block_release_lease() { return 0; }",
+		cleanup,
+		"cleanup",
+	}, "\n")
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(),
+		"REPORT_DIR="+reportDir,
+		"TMP_DIR="+tmpDir,
+		"MO_PID=",
+		"CURRENT_STAGE=run_recovery_driver",
+		"COMPOSE_PROJECT_NAME=mo-kc-test",
+		"SOURCE_SHA=test-revision",
+	)
+	output, runErr := cmd.CombinedOutput()
+	if runErr == nil {
+		t.Fatalf("cleanup returned success when Compose cleanup failed:\n%s", output)
+	}
+	var report struct {
+		Status        string   `json:"status"`
+		CleanupStatus string   `json:"cleanup_status"`
+		CleanupErrors []string `json:"cleanup_errors"`
+		Error         string   `json:"error"`
+	}
+	data, err := os.ReadFile(filepath.Join(reportDir, "report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Status != "failed" || report.CleanupStatus != "failed" || len(report.CleanupErrors) == 0 || !strings.Contains(report.Error, "docker compose down failed") {
+		t.Fatalf("cleanup failure report = %+v, want failed status and Compose cleanup error; runner output: %s", report, output)
+	}
+}
+
+func kafkaConnectRunnerFunction(t *testing.T, name, next string) string {
+	t.Helper()
+	_, testFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("could not locate test source")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(testFile), "..", ".."))
+	runner, err := os.ReadFile(filepath.Join(repoRoot, "optools", "kafka_connect_ci.bash"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startToken := name + "() {"
+	start := strings.Index(string(runner), startToken)
+	if start < 0 {
+		t.Fatalf("could not find %s in Kafka Connect runner", startToken)
+	}
+	endToken := "\n}\n\n" + next
+	end := strings.Index(string(runner)[start:], endToken)
+	if end < 0 {
+		t.Fatalf("could not find end marker %q for %s", next, name)
+	}
+	return string(runner[start : start+end+2])
 }
 
 func TestExpectedFinalRowsHaveUniqueIDsAndCoverRecoveryContract(t *testing.T) {

@@ -19,7 +19,9 @@ Connect/plugin versions, exact rows, and offsets under
 The driver limits the full run to 10 minutes and each readiness or drain wait
 to 90 seconds by default; `--timeout` and `--phase-timeout` can adjust those
 limits. It atomically updates `report.json` after each stage so an interrupted
-run retains its current stage and completed phase receipts.
+run retains its current stage and completed phase receipts. Artifact collection
+or service-cleanup failures change the overall report to `failed` and make the
+runner exit nonzero.
 
 This harness qualifies only this Kafka Connect JDBC sink recovery path. It does
 not certify Airbyte, NiFi generic CDC, large-volume recovery, or cross-system
