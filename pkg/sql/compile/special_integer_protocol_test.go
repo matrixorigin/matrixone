@@ -85,11 +85,11 @@ func TestSpecialIntegerProtocolPlacementAndSend(t *testing.T) {
 func TestMediumIntAssignmentProtocolPlacementAndSend(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
 	expr := &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_int32), Width: 24},
 		Expr: &planpb.Expr_F{F: &planpb.Function{
-			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, 0), ObjName: "cast_assign"},
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CAST_ASSIGN, 0), ObjName: "cast_assign"},
 			Args: []*planpb.Expr{
 				{Typ: planpb.Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
 				{Typ: planpb.Type{Id: int32(types.T_int32), Width: 24}, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}},
@@ -101,31 +101,31 @@ func TestMediumIntAssignmentProtocolPlacementAndSend(t *testing.T) {
 	require.True(t, features.MediumIntAssignmentBounds)
 	version, err := plan2.RequiredPersistedExpressionProtocolVersion(expr)
 	require.NoError(t, err)
-	require.Equal(t, int64(defines.MORPCVersion109), version)
+	require.Equal(t, int64(defines.MORPCVersion110), version)
 
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
 	op := projection.NewArgument()
 	defer op.Release()
 	op.ProjectList = []*planpb.Expr{expr}
 	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-	client.version = defines.MORPCVersion108
+	client.version = defines.MORPCVersion109
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 109")
+	require.ErrorContains(t, err, "version 110")
 	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, nil, features), "versioned remote destination")
 	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion108)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 109")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 110")
 	data, err := p.Marshal()
 	require.NoError(t, err)
 	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "version 109")
+	require.ErrorContains(t, err, "version 110")
 
-	client.version = defines.MORPCVersion109
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
+	client.version = defines.MORPCVersion110
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))

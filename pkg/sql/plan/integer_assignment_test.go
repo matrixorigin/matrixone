@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -96,25 +97,25 @@ func TestMediumIntAssignmentRequiresClusterProtocolFence(t *testing.T) {
 	}
 	builder := NewQueryBuilder(pb.Query_SELECT, NewMockCompilerContext(true, proc), false, true)
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion108)
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion109)
-	_, err := forceAssignmentCastExprWithProcess(t.Context(), source, mediumPlanType, false, proc)
-	require.ErrorContains(t, err, "protocol version 109")
-	_, err = forceCastExpr2WithProcess(t.Context(), source, mediumType, targetExpr, false, proc)
-	require.ErrorContains(t, err, "protocol version 109")
-	_, err = builder.forceProjectedAssignmentCastExpr(preparedMedium, preparedMedium, mediumPlanType, false)
-	require.ErrorContains(t, err, "protocol version 109")
-
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion108)
-	_, err = forceAssignmentCastExprWithProcess(t.Context(), source, mediumPlanType, false, proc)
-	require.ErrorContains(t, err, "authoring floor=108")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion110)
+	_, err := forceAssignmentCastExprWithProcess(t.Context(), source, mediumPlanType, false, proc)
+	require.ErrorContains(t, err, "protocol version 110")
 	_, err = forceCastExpr2WithProcess(t.Context(), source, mediumType, targetExpr, false, proc)
-	require.ErrorContains(t, err, "authoring floor=108")
+	require.ErrorContains(t, err, "protocol version 110")
 	_, err = builder.forceProjectedAssignmentCastExpr(preparedMedium, preparedMedium, mediumPlanType, false)
-	require.ErrorContains(t, err, "authoring floor=108")
+	require.ErrorContains(t, err, "protocol version 110")
 
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion109)
+	_, err = forceAssignmentCastExprWithProcess(t.Context(), source, mediumPlanType, false, proc)
+	require.ErrorContains(t, err, "authoring floor=109")
+	_, err = forceCastExpr2WithProcess(t.Context(), source, mediumType, targetExpr, false, proc)
+	require.ErrorContains(t, err, "authoring floor=109")
+	_, err = builder.forceProjectedAssignmentCastExpr(preparedMedium, preparedMedium, mediumPlanType, false)
+	require.ErrorContains(t, err, "authoring floor=109")
+
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion110)
 	_, err = forceAssignmentCastExprWithProcess(t.Context(), source, mediumPlanType, false, proc)
 	require.NoError(t, err)
 	_, err = forceCastExpr2WithProcess(t.Context(), source, mediumType, targetExpr, false, proc)
@@ -122,4 +123,42 @@ func TestMediumIntAssignmentRequiresClusterProtocolFence(t *testing.T) {
 	preparedCast, err := builder.forceProjectedAssignmentCastExpr(preparedMedium, preparedMedium, mediumPlanType, false)
 	require.NoError(t, err)
 	require.Equal(t, "cast_assign", preparedCast.GetF().GetFunc().GetObjName())
+
+	ignoreCast, err := forceAssignmentCastExprWithProcess(t.Context(), preparedMedium, mediumPlanType, true, proc)
+	require.NoError(t, err)
+	strictCast, err := forceAssignmentCastExprWithName(t.Context(), source, mediumPlanType, "cast_strict")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name string
+		id   int32
+		expr *Expr
+	}{
+		{name: "cast_strict", id: function.CAST_STRICT, expr: strictCast},
+		{name: "cast_assign", id: function.CAST_ASSIGN, expr: preparedCast},
+		{name: "cast_ignore", id: function.CAST_IGNORE, expr: ignoreCast},
+	} {
+		resolved := tc.expr
+		require.Equal(t, tc.id, int32(resolved.GetF().GetFunc().GetObj()>>32))
+		features, err := pb.RequiredRemoteExpressionFeatures(resolved)
+		require.NoError(t, err)
+		require.True(t, features.MediumIntAssignmentBounds, tc.name)
+		version, err := RequiredPersistedExpressionProtocolVersion(resolved)
+		require.NoError(t, err)
+		require.Equal(t, int64(defines.MORPCVersion110), version, tc.name)
+	}
+
+	ordinaryIntType := types.T_int32.ToType()
+	ordinaryInt := makePlan2Type(&ordinaryIntType)
+	ordinaryCast, err := forceAssignmentCastExprWithName(
+		t.Context(), MakePlan2Int64ConstExprWithType(1), ordinaryInt, "cast_assign")
+	require.NoError(t, err)
+	features, err := pb.RequiredRemoteExpressionFeatures(ordinaryCast)
+	require.NoError(t, err)
+	require.False(t, features.MediumIntAssignmentBounds, "ordinary INT assignments keep the existing protocol floor")
+
+	genericCast, err := forceCastExprWithName(t.Context(), source, mediumPlanType, "cast")
+	require.NoError(t, err)
+	features, err = pb.RequiredRemoteExpressionFeatures(genericCast)
+	require.NoError(t, err)
+	require.False(t, features.MediumIntAssignmentBounds, "generic CAST does not enforce assignment bounds")
 }

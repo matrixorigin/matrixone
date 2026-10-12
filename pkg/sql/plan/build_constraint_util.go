@@ -1510,7 +1510,7 @@ func requireMediumIntProtocolForAuthoring(ctx context.Context, proc *process.Pro
 	if proc == nil || (!isMediumIntPlanType(targetType) && !typedArrayTypeHasMediumInt(&targetType)) {
 		return nil
 	}
-	return RequirePersistedProtocolVersionForAuthoring(ctx, proc, defines.MORPCVersion109)
+	return RequirePersistedProtocolVersionForAuthoring(ctx, proc, defines.MORPCVersion110)
 }
 
 func assignmentCastFunctionNameForSource(expr *Expr, targetType Type, isIgnore bool, proc *process.Process) string {

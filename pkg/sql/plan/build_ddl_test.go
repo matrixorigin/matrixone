@@ -5385,20 +5385,20 @@ func TestMediumIntCatalogAuthoringProtocolFence(t *testing.T) {
 		}
 	})
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion108)
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion109)
-	_, err := runOneStmt(mock, t, "CREATE TABLE mediumint_protocol_fence (m MEDIUMINT)")
-	require.ErrorContains(t, err, "protocol version 109")
-
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion110)
+	_, err := runOneStmt(mock, t, "CREATE TABLE mediumint_protocol_fence (m MEDIUMINT)")
+	require.ErrorContains(t, err, "protocol version 110")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
 	_, err = runOneStmt(mock, t, "CREATE TABLE mediumint_protocol_fence (m MEDIUMINT)")
 	require.NoError(t, err)
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion108)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
 	_, err = runOneStmt(mock, t, "ALTER TABLE nation ADD COLUMN mu MEDIUMINT UNSIGNED")
-	require.ErrorContains(t, err, "protocol version 109")
+	require.ErrorContains(t, err, "protocol version 110")
 	_, err = runOneStmt(mock, t, "ALTER TABLE nation MODIFY COLUMN n_nationkey MEDIUMINT UNSIGNED")
-	require.ErrorContains(t, err, "protocol version 109")
+	require.ErrorContains(t, err, "protocol version 110")
 }
 
 func TestBuildCompositeIndexMarksEncodedKeyBinary(t *testing.T) {

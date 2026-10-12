@@ -48,7 +48,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.IntegerParameterCoercion || features.SpecialIntegerConsumers, integerArgumentsVersion,
 			"integer parameter coercion requires a versioned remote destination",
 			"remote destination does not support integer parameter execution (MORPC version %d)"},
-		{features.MediumIntAssignmentBounds, defines.MORPCVersion109,
+		{features.MediumIntAssignmentBounds, defines.MORPCVersion110,
 			"MEDIUMINT assignment bounds require a versioned remote destination",
 			"remote destination does not support MEDIUMINT assignment bounds (MORPC version %d)"},
 		{features.PreparedPrecisionScalar, defines.MORPCVersion95,

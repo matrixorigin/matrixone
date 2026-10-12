@@ -92,7 +92,7 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 		required = max(required, defines.MORPCVersion89)
 	}
 	if features.MediumIntAssignmentBounds {
-		required = max(required, defines.MORPCVersion109)
+		required = max(required, defines.MORPCVersion110)
 	}
 	return required
 }

@@ -98,7 +98,7 @@ func TestPersistedMediumIntRequirementCombinesWithJSONInput(t *testing.T) {
 	mediumIntCast := &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_int32), Width: 24},
 		Expr: &planpb.Expr_F{F: &planpb.Function{
-			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, 0), ObjName: "cast_assign"},
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CAST_ASSIGN, 0), ObjName: "cast_assign"},
 			Args: []*planpb.Expr{
 				{Typ: planpb.Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
 				{Typ: planpb.Type{Id: int32(types.T_int32), Width: 24}, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}},
@@ -126,7 +126,7 @@ func TestPersistedMediumIntRequirementCombinesWithJSONInput(t *testing.T) {
 		require.True(t, features.JSONInputContracts)
 		version, err := RequiredPersistedExpressionProtocolVersion(owner)
 		require.NoError(t, err)
-		require.Equal(t, int64(defines.MORPCVersion109), version)
+		require.Equal(t, int64(defines.MORPCVersion110), version)
 	}
 }
 

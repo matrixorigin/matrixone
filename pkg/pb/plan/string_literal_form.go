@@ -299,41 +299,46 @@ const (
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
 	planInt32TypeID                  int32 = 22
-	mediumIntCastFunctionID          int32 = 21
-	castJSONToArrayFunctionID        int32 = 513
-	binFunctionID                    int32 = 270
-	convFunctionID                   int32 = 367
-	asciiFunctionID                  int32 = 52
-	asciiInt32ResultTypeID           int32 = 22
-	findInSetFunctionID              int32 = 101
-	lengthUTF8FunctionID             int32 = 125
-	strCmpFunctionID                 int32 = 344
-	uncompressedLengthFunctionID     int32 = 389
-	crc32FunctionID                  int32 = 81
-	coalesceFunctionID               int32 = 74
-	caseFunctionID                   int32 = 71
-	iffFunctionID                    int32 = 113
-	leftFunctionID                   int32 = 123
-	rightFunctionID                  int32 = 166
-	substringFunctionID              int32 = 210
-	stringNumericInt32ResultTypeID   int32 = 22
-	stringNumericInt64ResultTypeID   int32 = 23
-	stringNumericUint64ResultTypeID  int32 = 28
-	planVarcharTypeID                int32 = 61
-	planBinaryTypeID                 int32 = 64
-	planVarbinaryTypeID              int32 = 65
-	planBlobTypeID                   int32 = 70
-	planTextTypeID                   int32 = 71
-	ipInt32ResultTypeID              int32 = 22
-	planCharTypeID                   int32 = 60
-	planDateTypeID                   int32 = 50
-	planTimeTypeID                   int32 = 51
-	planDatetimeTypeID               int32 = 52
-	planTimestampTypeID              int32 = 53
-	planInt64TypeID                  int32 = 23
-	planUint32TypeID                 int32 = 27
-	planAnyTypeID                    int32 = 0
-	maxVarcharWidth                  int32 = 65535
+	// These stable function IDs are mirrored from pkg/sql/plan/function to
+	// avoid a dependency cycle. The generic CAST operator is not an assignment
+	// bounds check; these three internal assignment casts are.
+	mediumIntStrictCastFunctionID     int32 = 541
+	mediumIntAssignmentCastFunctionID int32 = 554
+	mediumIntIgnoreCastFunctionID     int32 = 555
+	castJSONToArrayFunctionID         int32 = 513
+	binFunctionID                     int32 = 270
+	convFunctionID                    int32 = 367
+	asciiFunctionID                   int32 = 52
+	asciiInt32ResultTypeID            int32 = 22
+	findInSetFunctionID               int32 = 101
+	lengthUTF8FunctionID              int32 = 125
+	strCmpFunctionID                  int32 = 344
+	uncompressedLengthFunctionID      int32 = 389
+	crc32FunctionID                   int32 = 81
+	coalesceFunctionID                int32 = 74
+	caseFunctionID                    int32 = 71
+	iffFunctionID                     int32 = 113
+	leftFunctionID                    int32 = 123
+	rightFunctionID                   int32 = 166
+	substringFunctionID               int32 = 210
+	stringNumericInt32ResultTypeID    int32 = 22
+	stringNumericInt64ResultTypeID    int32 = 23
+	stringNumericUint64ResultTypeID   int32 = 28
+	planVarcharTypeID                 int32 = 61
+	planBinaryTypeID                  int32 = 64
+	planVarbinaryTypeID               int32 = 65
+	planBlobTypeID                    int32 = 70
+	planTextTypeID                    int32 = 71
+	ipInt32ResultTypeID               int32 = 22
+	planCharTypeID                    int32 = 60
+	planDateTypeID                    int32 = 50
+	planTimeTypeID                    int32 = 51
+	planDatetimeTypeID                int32 = 52
+	planTimestampTypeID               int32 = 53
+	planInt64TypeID                   int32 = 23
+	planUint32TypeID                  int32 = 27
+	planAnyTypeID                     int32 = 0
+	maxVarcharWidth                   int32 = 65535
 )
 
 // RemoteExpressionFeatures is the complete set of versioned expression
@@ -377,7 +382,7 @@ const (
 // execution contracts.
 // JSONScalarLiteralContracts requires MORPC v104 because older executors
 // decode JSON-typed Sval literals as VARCHAR rather than encoded JSON.
-// MediumIntAssignmentBounds requires MORPC v109 because older executors treat
+// MediumIntAssignmentBounds requires MORPC v110 because older executors treat
 // the shared INT32 storage type as a full-width INT rather than a 24-bit value.
 type RemoteExpressionFeatures struct {
 	JSONScalarLiteralContracts      bool
@@ -899,7 +904,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
-				if id == mediumIntCastFunctionID && isPlanMediumIntType(current.Typ) {
+				if (id == mediumIntStrictCastFunctionID ||
+					id == mediumIntAssignmentCastFunctionID ||
+					id == mediumIntIgnoreCastFunctionID) && isPlanMediumIntType(current.Typ) {
 					features.MediumIntAssignmentBounds = true
 				}
 				if id == castJSONToArrayFunctionID && isMediumIntArrayCast(current, fn) {

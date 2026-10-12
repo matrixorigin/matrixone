@@ -50,19 +50,19 @@ This is not a claim of full MySQL sql_mode compatibility. Dedicated MEDIUMINT re
 
 ## Distributed execution and rollout
 
-The bound check changes the meaning of assignment expressions sent to remote CNs. `MORPCVersion109` is the minimum protocol version for this behavior:
+The bound check changes the meaning of assignment expressions sent to remote CNs. `MORPCVersion110` is the minimum protocol version for this behavior. Version 109 is already used by native Unicode collation identities in persisted `information_schema.COLUMNS` metadata on the updated base:
 
 | Boundary | Existing owner reused | Required behavior |
 |---|---|---|
-| Authoring CREATE/ALTER and assignment expressions | `requireMediumIntProtocolForAuthoring` and `RequirePersistedProtocolVersionForAuthoring` | In production, require both the local `MOProtocolVersion` and the installed `PersistedExpressionProtocolAuthoringFloor` to be at least v109 before authoring MEDIUMINT semantics. Standalone test runtimes retain the existing missing-floor fallback. |
-| Remote expression analysis and placement | `RequiredRemoteExpressionFeatures` recognizes scalar assignment CAST and typed-array JSON-to-array CAST; existing expression destination/send/receive checks enforce the version floor. | Do not send an expression containing the new bounds check to a destination below v109 or with unknown protocol. |
-| Persisted expression owners | `RequiredPersistedExpressionProtocolVersion` adds v109 when the expression-feature analyzer finds MEDIUMINT assignment bounds; existing persisted-expression readers reapply that floor. | Preserve the expression compatibility floor across restart/rebind for catalog-bound expressions that contain the feature. This does not create a new catalog column format. |
+| Authoring CREATE/ALTER and assignment expressions | `requireMediumIntProtocolForAuthoring` and `RequirePersistedProtocolVersionForAuthoring` | In production, require both the local `MOProtocolVersion` and the installed `PersistedExpressionProtocolAuthoringFloor` to be at least v110 before authoring MEDIUMINT semantics. Standalone test runtimes retain the existing missing-floor fallback. |
+| Remote expression analysis and placement | `RequiredRemoteExpressionFeatures` recognizes scalar assignment CAST and typed-array JSON-to-array CAST; existing expression destination/send/receive checks enforce the version floor. | Do not send an expression containing the new bounds check to a destination below v110 or with unknown protocol. |
+| Persisted expression owners | `RequiredPersistedExpressionProtocolVersion` adds v110 when the expression-feature analyzer finds MEDIUMINT assignment bounds; existing persisted-expression readers reapply that floor. | Preserve the expression compatibility floor across restart/rebind for catalog-bound expressions that contain the feature. This does not create a new catalog column format. |
 
 Tests exercise authoring rejection below the floor, remote placement/send behavior, persisted feature aggregation, and combination with an existing JSON feature floor: `TestMediumIntCatalogAuthoringProtocolFence`, `TestMediumIntAssignmentRequiresClusterProtocolFence`, `TestMediumIntAssignmentProtocolPlacementAndSend`, `TestRequiredRemoteExpressionFeaturesMediumIntAssignmentBounds`, and `TestPersistedMediumIntRequirementCombinesWithJSONInput`.
 
-The fence is specific to authoring and executing the new assignment semantics. A plain scan or MySQL metadata response still uses 32-bit values, so the design does not add a blanket v109 read gate for existing table rows. Upgrades should bring all CNs to v109-capable code before creating MEDIUMINT schemas or running assignments. A cluster restart on the current code preserves the identity and the bounds, as covered by the integration test.
+The fence is specific to authoring and executing the new assignment semantics. A plain scan or MySQL metadata response still uses 32-bit values, so the design does not add a blanket v110 read gate for existing table rows. Upgrades should bring all CNs to v110-capable code before creating MEDIUMINT schemas or running assignments. A cluster restart on the current code preserves the identity and the bounds, as covered by the integration test.
 
-Downgrading or rolling back to a binary below v109 after MEDIUMINT columns have been created is not safe: that binary may treat width-24 int32/uint32 values as ordinary 32-bit integers and accept out-of-range writes. The protocol floor is not an automatic downgrade migration. A rollback plan must keep v109-capable execution or explicitly convert affected columns to ordinary INT and resolve any out-of-range values before pre-v109 CNs resume.
+Downgrading or rolling back to a binary below v110 after MEDIUMINT columns have been created is not safe: that binary may treat width-24 int32/uint32 values as ordinary 32-bit integers and accept out-of-range writes. The protocol floor is not an automatic downgrade migration. A rollback plan must keep v110-capable execution or explicitly convert affected columns to ordinary INT and resolve any out-of-range values before pre-v110 CNs resume.
 
 For legacy width-24 columns, reads return the stored 32-bit value unchanged. A later assignment to the same MEDIUMINT target checks the target range even when the source and target OIDs match. Widening the column to ordinary INT preserves its value. No automatic data rewrite or repair is performed at upgrade.
 
@@ -100,7 +100,7 @@ This map responds to the design obligations in [review 5478435322](https://githu
 |---|---|---|
 | Identity, bounds, INT(24), and reuse of current owners | Contract; Ownership and write path | Parser alias tests and the OID-plus-width type predicate; four-byte storage is deliberate. Arbitrary historical raw width-24 values have no provenance bit and are not migrated. |
 | DML, metadata, import, auto-increment, arrays, mode behavior | Ownership and write path; Mode and failure behavior | Exact unit and issue integration tests listed above. Arrow has a focused bridge test but no full SQL-to-Arrow LOAD e2e; complete IGNORE and warning parity are not claimed. |
-| v109 authoring, execution, persisted expressions, upgrade/restart/downgrade | Distributed execution and rollout | Existing feature analyzer/protocol owners and named tests; plain legacy scans remain readable. Rollback below v109 after feature use is unsafe without conversion. |
+| v110 authoring, execution, persisted expressions, upgrade/restart/downgrade | Distributed execution and rollout | Existing feature analyzer/protocol owners and named tests; plain legacy scans remain readable. Rollback below v110 after feature use is unsafe without conversion. |
 | Representation alternatives and performance/acceptance evidence | Alternatives and trade-offs; Validation and measured cost | Focused ordinary-INT microbenchmark is within noise; broad TP/import throughput was not measured. |
 
 ## Review provenance

@@ -987,9 +987,9 @@ func TestTemporalConversionProtocolSourceMatrix(t *testing.T) {
 }
 
 func TestRequiredRemoteExpressionFeaturesMediumIntAssignmentBounds(t *testing.T) {
-	cast := func(target Type) *Expr {
+	cast := func(functionID int32, functionName string, target Type) *Expr {
 		return &Expr{Typ: target, Expr: &Expr_F{F: &Function{
-			Func: &ObjectRef{Obj: int64(mediumIntCastFunctionID) << 32, ObjName: "cast_assign"},
+			Func: &ObjectRef{Obj: int64(functionID) << 32, ObjName: functionName},
 			Args: []*Expr{
 				{Typ: Type{Id: planInt32TypeID}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}},
 				{Typ: target, Expr: &Expr_T{T: &TargetType{}}},
@@ -1010,9 +1010,12 @@ func TestRequiredRemoteExpressionFeaturesMediumIntAssignmentBounds(t *testing.T)
 		expr *Expr
 		want bool
 	}{
-		{name: "signed MEDIUMINT cast", expr: cast(Type{Id: planInt32TypeID, Width: 24}), want: true},
-		{name: "unsigned MEDIUMINT cast", expr: cast(Type{Id: planUint32TypeID, Width: 24}), want: true},
-		{name: "ordinary INT display width 24", expr: cast(Type{Id: planInt32TypeID, Width: 32})},
+		{name: "strict signed MEDIUMINT assignment", expr: cast(541, "cast_strict", Type{Id: planInt32TypeID, Width: 24}), want: true},
+		{name: "signed MEDIUMINT assignment", expr: cast(554, "cast_assign", Type{Id: planInt32TypeID, Width: 24}), want: true},
+		{name: "ignored signed MEDIUMINT assignment", expr: cast(555, "cast_ignore", Type{Id: planInt32TypeID, Width: 24}), want: true},
+		{name: "unsigned MEDIUMINT assignment", expr: cast(554, "cast_assign", Type{Id: planUint32TypeID, Width: 24}), want: true},
+		{name: "ordinary INT assignment", expr: cast(554, "cast_assign", Type{Id: planInt32TypeID, Width: 32})},
+		{name: "generic CAST to MEDIUMINT", expr: cast(21, "cast", Type{Id: planInt32TypeID, Width: 24})},
 		{name: "signed typed array", expr: arrayCast("array(mediumint)"), want: true},
 		{name: "unsigned nested typed array", expr: arrayCast("array(array(mediumint unsigned))"), want: true},
 		{name: "ordinary INT typed array", expr: arrayCast("array(int)")},
