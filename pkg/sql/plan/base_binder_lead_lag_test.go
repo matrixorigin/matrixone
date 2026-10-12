@@ -317,3 +317,15 @@ func TestBindFuncExprImplByPlanExpr_LeadLagDefaultCastDifferentDecimalScale(t *t
 		require.Equal(t, int32(4), arg2.Typ.Scale, "default scale should match value scale (4)")
 	})
 }
+
+func TestLeadLagDomainlessNullDefault(t *testing.T) {
+	for _, name := range []string{"lag", "lead"} {
+		for _, defaultExpr := range []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_any)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}, makeInt64ConstPlanExpr(7), MakePlan2NullTextConstExprWithType("")} {
+			result, err := BindFuncExprImplByPlanExpr(t.Context(), name, []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_any)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}, makeInt64ConstPlanExpr(1), defaultExpr})
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_text), result.Typ.Id)
+			require.Equal(t, result.Typ.Id, result.GetF().Args[0].Typ.Id)
+			require.Equal(t, result.Typ.Id, result.GetF().Args[2].Typ.Id)
+		}
+	}
+}
