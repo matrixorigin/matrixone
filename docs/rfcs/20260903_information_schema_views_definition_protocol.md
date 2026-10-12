@@ -11,7 +11,7 @@
 `information_schema.VIEWS.VIEW_DEFINITION` must expose the defining SELECT,
 not the original CREATE statement. New views persist a parser-derived definition
 and legacy rows are read through parser-aware metadata functions. The functions
-are new distributed plan functions (IDs 591 and 592), so the catalog contract is fenced by MORPC
+are new distributed plan functions (IDs 596 and 597), so the catalog contract is fenced by MORPC
 v110.
 
 ## Problem and invariant
@@ -96,10 +96,11 @@ public catalog contract from being reported as fully successful, while the
 bounded VIEWS page remains independently rollback-safe.
 
 MORPC v110 is allocated as `MORPCLatestVersion + 1` from official main v109 at
-`4022729da24d71b082c22b52aaed3faba2b77ea5`, which owns the current protocol
-floor for native Unicode collation identities in persisted information_schema.COLUMNS metadata. The current main function end marker is 591 after its JSON_ARRAY_INSERT
-and physical serializer additions; the two VIEWS function IDs are 591 and 592, and the end
-marker advances to 593. These IDs are allocated from the rebased official main and are
+`080365f0134798026fadf162e01e1a78d56be09d`, which owns the current protocol
+floor for native Unicode collation identities in persisted information_schema.COLUMNS metadata.
+Main's hyperbolic functions retain IDs 591–595. The current main function end
+marker is 596; the two VIEWS function IDs are 596 and 597, and the end
+marker advances to 598. These IDs are allocated from the rebased official main and are
 distinct from all existing function registrations.
 The capability is specific to these functions and the persisted VIEWS definition.
 A sender probes the selected destination CN as well as its local runtime before

@@ -40,6 +40,17 @@ func TestViewMetadataSenderOrdinaryPayloadNeedsNoProbe(t *testing.T) {
 			{Expr: &planpb.Expr_Fold{Fold: &planpb.FoldVal{Data: []byte{1}}}},
 		}}},
 	}
+	// Main owns the previous VIEWS candidate IDs for hyperbolic functions.
+	// Those functions must not acquire a VIEWS floor or capability probe.
+	for _, id := range []int32{function.TANH, function.COSH, function.ASINH, function.ACOSH, function.ATANH} {
+		p.InstructionList[0].ProjectList = append(p.InstructionList[0].ProjectList, &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_float64)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(id, 0)},
+				Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}},
+			}},
+		})
+	}
 	features, err := planpb.RequiredRemoteExpressionFeatures(p)
 	require.NoError(t, err)
 	require.False(t, features.Any())

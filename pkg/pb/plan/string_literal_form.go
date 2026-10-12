@@ -985,7 +985,7 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 				// The planner depends on this package, so registry IDs cannot be
 				// imported here. Compile tests bind these IDs to the registry.
-				if id == 591 || id == 592 { // MO_VIEW_DEFINITION / MO_VIEW_CHECK_OPTION
+				if id == 596 || id == 597 { // MO_VIEW_DEFINITION / MO_VIEW_CHECK_OPTION
 					features.ViewMetadataFunctions = true
 				}
 				if id == 21 && current.Typ.Id == 11 && len(fn.Args) > 0 &&
