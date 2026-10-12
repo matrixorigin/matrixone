@@ -781,17 +781,21 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 	for idx, col := range cols {
 		field := fields[idx]
 		id := types.T(col.Typ.Id)
+		isSet := id == types.T_uint64 && col.Typ.Enumvalues != ""
+		emptyIsNull := false
 		// T_bit carries raw bytes (parsed byte-by-byte, not as text), so
 		// whitespace bytes are data and must not be trimmed.
-		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
+		if id == types.T_enum || isSet {
+			field.Val, emptyIsNull = normalizeEnumSetCSVValue(id, col.Typ.Enumvalues, field.Val)
+		} else if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
-			id != types.T_bit && id != types.T_enum && !(id == types.T_uint64 && col.Typ.Enumvalues != "") {
+			id != types.T_bit {
 			field.Val = strings.TrimSpace(field.Val)
 		}
-		isNullOrEmpty := field.IsNull || (getNullFlag(param.NullMap, col.Name, field.Val))
+		isNullOrEmpty := field.IsNull || getNullFlag(param.NullMap, col.Name, field.Val) || emptyIsNull
 		if id != types.T_char && id != types.T_varchar &&
 			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
-			id != types.T_enum && !(id == types.T_uint64 && col.Typ.Enumvalues != "") {
+			id != types.T_enum && !isSet {
 			isNullOrEmpty = isNullOrEmpty || len(field.Val) == 0
 		}
 		if isNullOrEmpty {
@@ -1176,6 +1180,24 @@ func isPaddedSetInput(setValues, val string) bool {
 		return false
 	}
 	return types.MatchSetName(setValues, val)
+}
+
+// normalizeEnumSetCSVValue shares the member-aware trim and empty-to-NULL
+// policy between row conversion and strict parallel-read boundary detection.
+// Callers use it only for ENUM or uint64 with SET domain metadata, and apply
+// explicit NULL markers to the returned text before parsing it.
+func normalizeEnumSetCSVValue(id types.T, definition, val string) (text string, emptyIsNull bool) {
+	if id == types.T_enum {
+		if isEnumMember(definition, val) {
+			return val, false
+		}
+		val = strings.TrimSpace(val)
+		return val, len(val) == 0 && !isEnumMember(definition, "")
+	}
+	if !isPaddedSetInput(definition, val) {
+		val = strings.TrimSpace(val)
+	}
+	return val, false
 }
 
 func shouldLoadEmptyNumericAsZero(param *ExternalParam, id types.T) bool {
@@ -1596,16 +1618,15 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	isSet := id == types.T_uint64 && len(col.Typ.Enumvalues) > 0
 	loadDataNonStrictAdjustments := shouldApplyLoadDataNonStrictAdjustments(param)
 	trimSpace := false
+	emptyIsNull := false
 	// T_bit carries raw bytes (parsed byte-by-byte, not as text), so whitespace
 	// bytes are data and must not be trimmed (a whitespace-only bit value would
 	// otherwise even be converted to NULL below).
-	if id != types.T_char && id != types.T_varchar && id != types.T_json &&
+	if id == types.T_enum || isSet {
+		field.Val, emptyIsNull = normalizeEnumSetCSVValue(id, col.Typ.Enumvalues, field.Val)
+	} else if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 		id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
-		id != types.T_bit &&
-		// A declared ENUM member is kept as written (e.g. ' ' or ''), and so is
-		// valid SET input, which may name a leading-space member (' a').
-		!(id == types.T_enum && isEnumMember(col.Typ.Enumvalues, field.Val)) &&
-		!(isSet && isPaddedSetInput(col.Typ.Enumvalues, field.Val)) {
+		id != types.T_bit {
 		field.Val = strings.TrimSpace(field.Val)
 		trimSpace = true
 	}
@@ -1619,15 +1640,12 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		field.Val = normalizeISO8601Zulu(field.Val, proc.GetSessionInfo().TimeZone)
 	}
 	mappedNull := getNullFlag(param.Extern.NullMap, colName, field.Val)
-	isNullOrEmpty := field.IsNull || mappedNull
+	isNullOrEmpty := field.IsNull || mappedNull || emptyIsNull
 	emptyNumericField := len(field.Val) == 0 && !field.IsNull && !mappedNull && !isSet && shouldLoadEmptyNumericAsZero(param, id)
 	if emptyNumericField {
 		field.Val = "0"
 		isNullOrEmpty = false
-	} else if trimSpace && len(field.Val) == 0 && !isNullOrEmpty && !isSet &&
-		!(id == types.T_enum && isEnumMember(col.Typ.Enumvalues, "")) {
-		// The empty SET and a declared empty ENUM member ('') are valid values
-		// distinct from SQL NULL, so only explicit NULL markers become NULL.
+	} else if trimSpace && len(field.Val) == 0 && !isNullOrEmpty {
 		isNullOrEmpty = true
 	}
 	if isNullOrEmpty {
