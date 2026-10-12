@@ -11,7 +11,7 @@
 `information_schema.VIEWS.VIEW_DEFINITION` must expose the defining SELECT,
 not the original CREATE statement. New views persist a parser-derived definition
 and legacy rows are read through parser-aware metadata functions. The functions
-are new distributed plan functions (IDs 596 and 597), so the catalog contract is fenced by MORPC
+are new distributed plan functions (IDs 598 and 599), so the catalog contract is fenced by MORPC
 v112.
 
 ## Problem and invariant
@@ -96,11 +96,12 @@ public catalog contract from being reported as fully successful, while the
 bounded VIEWS page remains independently rollback-safe.
 
 MORPC v112 is allocated as `MORPCLatestVersion + 1` from official main v111 at
-`0a4db0e6a6517e489a333ad9073dfcdc5d26aff4`, which owns the IndexSearchScan
+`fa7cc1d9b38e3324572a4efc5617033522de0cbf`, which owns the IndexSearchScan
 contract. The independent v110 MEDIUMINT and v109 COLUMNS contracts remain unchanged.
-Main's hyperbolic functions retain IDs 591–595. The current main function end
-marker is 596; the two VIEWS function IDs are 596 and 597, and the end
-marker advances to 598. These IDs are allocated from the rebased official main and are
+Main's hyperbolic functions retain IDs 591–595, and FORMAT_BYTES and
+FORMAT_PICO_TIME retain IDs 596 and 597. The current main function end
+marker is 598; the two VIEWS function IDs are 598 and 599, and the end
+marker advances to 600. These IDs are allocated from the rebased official main and are
 distinct from all existing function registrations.
 The capability is specific to these functions and the persisted VIEWS definition.
 A sender probes the selected destination CN as well as its local runtime before
