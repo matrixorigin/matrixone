@@ -96,7 +96,7 @@ public catalog contract from being reported as fully successful, while the
 bounded VIEWS page remains independently rollback-safe.
 
 MORPC v110 is allocated as `MORPCLatestVersion + 1` from official main v109 at
-`080365f0134798026fadf162e01e1a78d56be09d`, which owns the current protocol
+`d865e549cd743aa6d74d68b57212ee9d43169204`, which owns the current protocol
 floor for native Unicode collation identities in persisted information_schema.COLUMNS metadata.
 Main's hyperbolic functions retain IDs 591–595. The current main function end
 marker is 596; the two VIEWS function IDs are 596 and 597, and the end
