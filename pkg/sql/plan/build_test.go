@@ -6168,12 +6168,42 @@ func TestReplaceSelfRefFKTable(t *testing.T) {
 }
 
 func TestReplaceSelfRefFKCascade(t *testing.T) {
-	mock := NewMockOptimizer(true, newPlanTestProcess(t))
-	// REPLACE on self-referencing FK table with CASCADE should NOT produce assert checks
-	sqls := []string{
-		"REPLACE INTO self_ref_cascade VALUES (1, NULL)",
+	for _, indexKind := range []string{"no_index", "secondary", "unique"} {
+		t.Run(indexKind, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			table := mock.ctxt.tables["self_ref_cascade"]
+			var index *plan.IndexDef
+			if indexKind != "no_index" {
+				// Reuse the fixture's integer index table: both the FK and PK
+				// have the same physical types as single_idx_t.
+				index = &plan.IndexDef{
+					IndexName:      "idx_parent",
+					Parts:          []string{"parent_id"},
+					Unique:         indexKind == "unique",
+					IndexTableName: mock.ctxt.tables["single_idx_t"].Indexes[0].IndexTableName,
+					TableExist:     true,
+				}
+				if !index.Unique {
+					index.Parts = append(index.Parts, catalog.CreateAlias("id"))
+				}
+				table.Indexes = []*plan.IndexDef{index}
+			}
+
+			logicPlan, err := runOneStmt(mock, t, "REPLACE INTO self_ref_cascade VALUES (1, NULL)")
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.True(t, queryHasNodeType(query, plan.Node_RECURSIVE_CTE))
+			require.True(t, queryDeletesTable(query, table.Name))
+			for _, sql := range query.DetectSqls {
+				require.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_CHK:"),
+					"CASCADE must use the descendant action rather than a RESTRICT check")
+			}
+			if index != nil {
+				require.True(t, queryDeletesTable(query, index.IndexTableName),
+					"the recursive delete must also maintain the hidden index")
+			}
+		})
 	}
-	runTestShouldPass(mock, t, sqls, false, false)
 }
 
 func TestReplacePlanStructure(t *testing.T) {

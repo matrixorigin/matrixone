@@ -106,6 +106,38 @@ select id,pid from c_unique order by id;
 drop table c_unique;
 drop table p_unique;
 
+-- Self-referencing secondary index: REPLACE cascades, empty actions and key reuse.
+create table self_secondary(id int primary key,parent_id int,key idx_parent(parent_id),
+    foreign key(parent_id) references self_secondary(id) on delete cascade);
+insert into self_secondary values (1,null),(2,1),(3,2),(4,null),(5,4);
+replace into self_secondary values (1,null);
+select id,parent_id from self_secondary order by id;
+select id,parent_id from self_secondary force index(idx_parent) where parent_id=4 order by id;
+replace into self_secondary values (1,null);
+select id,parent_id from self_secondary order by id;
+insert into self_secondary values (2,1);
+select id,parent_id from self_secondary force index(idx_parent) where parent_id=1 order by id;
+delete from self_secondary where id=1;
+select id,parent_id from self_secondary order by id;
+select id,parent_id from self_secondary force index(idx_parent) where parent_id=4 order by id;
+drop table self_secondary;
+
+-- Self-referencing unique index: REPLACE cascades, empty actions and key reuse.
+create table self_unique(id int primary key,parent_id int,unique key idx_parent(parent_id),
+    foreign key(parent_id) references self_unique(id) on delete cascade);
+insert into self_unique values (1,null),(2,1),(3,2),(4,null),(5,4);
+replace into self_unique values (1,null);
+select id,parent_id from self_unique order by id;
+select id,parent_id from self_unique force index(idx_parent) where parent_id=4 order by id;
+replace into self_unique values (1,null);
+select id,parent_id from self_unique order by id;
+insert into self_unique values (2,1);
+select id,parent_id from self_unique force index(idx_parent) where parent_id=1 order by id;
+delete from self_unique where id=1;
+select id,parent_id from self_unique order by id;
+select id,parent_id from self_unique force index(idx_parent) where parent_id=4 order by id;
+drop table self_unique;
+
 -- Indexed RESTRICT permits an empty match and still rejects a live child.
 create table p_restrict(id varchar(255) primary key);
 create table c_restrict(id int primary key,pid varchar(255),key idx_pid(pid),

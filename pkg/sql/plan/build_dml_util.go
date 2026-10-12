@@ -1823,6 +1823,12 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					upPlanCtx.tableDef = childTableDef
 					upPlanCtx.rowIdPos = childRowIdPos
 					upPlanCtx.sourceStep = newSourceStep
+					if cascadeRootTag != 0 {
+						// The pre-createQuery self-cascade source owns a fresh tag.
+						// Carry it into the recursive context so index maintenance,
+						// locks and DELETE retain the same tagged row image.
+						upPlanCtx.sourceTag = builder.qry.Nodes[lastNodeId].BindingTags[0]
+					}
 					upPlanCtx.allDelTableIDs = allDelTableIDs
 					upPlanCtx.isFkRecursionCall = true
 					// The root self-referential DELETE already registered its direct

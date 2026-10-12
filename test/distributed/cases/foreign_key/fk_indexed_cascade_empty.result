@@ -168,6 +168,68 @@ id    pid
 2    null
 drop table c_unique;
 drop table p_unique;
+create table self_secondary(id int primary key,parent_id int,key idx_parent(parent_id),
+foreign key(parent_id) references self_secondary(id) on delete cascade);
+insert into self_secondary values (1,null),(2,1),(3,2),(4,null),(5,4);
+replace into self_secondary values (1,null);
+select id,parent_id from self_secondary order by id;
+id    parent_id
+1    null
+4    null
+5    4
+select id,parent_id from self_secondary force index(idx_parent) where parent_id=4 order by id;
+id    parent_id
+5    4
+replace into self_secondary values (1,null);
+select id,parent_id from self_secondary order by id;
+id    parent_id
+1    null
+4    null
+5    4
+insert into self_secondary values (2,1);
+select id,parent_id from self_secondary force index(idx_parent) where parent_id=1 order by id;
+id    parent_id
+2    1
+delete from self_secondary where id=1;
+select id,parent_id from self_secondary order by id;
+id    parent_id
+4    null
+5    4
+select id,parent_id from self_secondary force index(idx_parent) where parent_id=4 order by id;
+id    parent_id
+5    4
+drop table self_secondary;
+create table self_unique(id int primary key,parent_id int,unique key idx_parent(parent_id),
+foreign key(parent_id) references self_unique(id) on delete cascade);
+insert into self_unique values (1,null),(2,1),(3,2),(4,null),(5,4);
+replace into self_unique values (1,null);
+select id,parent_id from self_unique order by id;
+id    parent_id
+1    null
+4    null
+5    4
+select id,parent_id from self_unique force index(idx_parent) where parent_id=4 order by id;
+id    parent_id
+5    4
+replace into self_unique values (1,null);
+select id,parent_id from self_unique order by id;
+id    parent_id
+1    null
+4    null
+5    4
+insert into self_unique values (2,1);
+select id,parent_id from self_unique force index(idx_parent) where parent_id=1 order by id;
+id    parent_id
+2    1
+delete from self_unique where id=1;
+select id,parent_id from self_unique order by id;
+id    parent_id
+4    null
+5    4
+select id,parent_id from self_unique force index(idx_parent) where parent_id=4 order by id;
+id    parent_id
+5    4
+drop table self_unique;
 create table p_restrict(id varchar(255) primary key);
 create table c_restrict(id int primary key,pid varchar(255),key idx_pid(pid),
 foreign key(pid) references p_restrict(id) on delete restrict);
