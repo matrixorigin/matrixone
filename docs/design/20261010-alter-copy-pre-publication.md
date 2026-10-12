@@ -49,11 +49,11 @@ The transaction resolves the source and records the copy timestamp, then perform
 3. reconcile auto-increment state;
 4. clone unaffected indexes.
 
-The temporary CREATE uses `WithDisableLock`. It therefore does not acquire the source database shared lock or temporary target table exclusive lock. Row copy, allocator reconciliation, and index cloning operate through the current transaction and can consume engine/workspace resources, but do not retain source database/catalog locks. No global lineage gate is held.
+The temporary CREATE and row copy use `WithDisableLock`, so nested execution acquires neither pre-pipeline metadata/table locks nor row-lock operators. Row copy, allocator reconciliation, and index cloning operate through the current transaction and can consume engine/workspace resources; they may retain table locks on transaction-created replacement or index tables, but not source database/catalog/name locks. No global lineage gate is held.
 
 ### Publication phase
 
-The transaction acquires mode-specific lifecycle admission, locks the source relation, and re-resolves the authoritative source. Before publication it rejects:
+The transaction acquires mode-specific lifecycle admission, pins replacement endpoint names, locks the source relation, and re-resolves the authoritative source. In pessimistic RC the broad SNAPSHOT gate is therefore acquired before the source and temporary-target catalog-name pins. ALTER records the retained lock-table set before preparation and permits gate waiting only when every retained lock table was acquired after that baseline and is certified by the workspace as transaction-created private preparation. Any pre-existing, source, catalog, or otherwise unprovable lock keeps the fast-fail gate policy. Post-gate replacement-name admission waits, but cannot form a `G -> name -> G` cycle: a transaction that already retained those name locks is required to fast-fail rather than wait for `G`. Independent ALTERs on different tables can therefore physically prepare and wait at that gate without creating a reverse edge. Before publication it rejects:
 
 - planned or resolved source relation replacement;
 - same-ID table-definition version changes;
@@ -80,8 +80,8 @@ Transaction-local relations are detected through `RelationCreatedInCurrentTxn` a
 
 ## Lock and retry model
 
-- Pre-publication holds no source database lock, source catalog lock, source physical-table lock, temporary-target catalog lock, or global lineage gate.
-- Publication order remains mode-specific lifecycle admission, source locks, then final lineage publication. It preserves existing `G -> D` ownership for genuinely conflicting owners.
+- Pre-publication holds no source database lock, source catalog lock, source physical-table lock, temporary-target catalog lock, or global lineage gate. It may retain only locks on transaction-created replacement or index tables.
+- Publication order remains mode-specific lifecycle admission, replacement-name admission, source locks, then final lineage publication. It preserves existing `G -> D` ownership for genuinely conflicting owners.
 - The speculative CREATE no longer owns `D S`, so it cannot participate in the prior `ALTER(D S) waits for G X` versus `DROP DATABASE(G S) waits for D X` reciprocal wait.
 - Nested errors, cancellation, or a terminal conflict return through the existing frontend transaction cleanup owner. A terminal write conflict rolls back the whole transaction in both autocommit and explicit-transaction mode.
 - A terminal post-physical conflict is deliberately not statement-retryable, preventing a second physical copy under retained locks.
@@ -115,6 +115,7 @@ This is an internal lifecycle refinement, not a persistence or wire-protocol cha
 ## Verification
 
 - Deterministic barrier tests prove independent physical work starts while the global gate is held elsewhere.
+- Pessimistic-RC integration tests prove both a held explicit publisher and an overlapping autocommit publisher let an independent table wait at the gate and finish after release.
 - Unit tests prove the temporary CREATE options disable nested locking.
 - Unit tests prove unchanged, changed, provider-failure, current-transaction, and committed-change-despite-local-write source behavior.
 - Unit tests prove partitioned frontiers return the exact maximum, short-circuit, check every member after copy, and fail closed for missing member providers.

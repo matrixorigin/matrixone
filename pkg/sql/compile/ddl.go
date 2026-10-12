@@ -4115,7 +4115,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		replacementAdmission = *scalarAdmission
 		replacementAdmission.createNames = map[plan2.FkReferKey]struct{}{{Db: db, Tbl: table}: {}}
 	} else if !isTemp && c.isLifecycleRC() {
-		replacementAdmission.createNames, err = c.admitReplacementNames(db, table, table, rel, nil)
+		replacementAdmission.createNames, err = c.admitReplacementNames(db, table, table, rel, nil, lock.WaitPolicy_FastFail)
 		if err != nil {
 			return err
 		}
