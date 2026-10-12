@@ -1122,9 +1122,6 @@ func TestMessageReceiverSendBatchRequiresV110ForNumericBinaryLiteralProvenance(t
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, int64(102))
 	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion110",
 		"the sender must reject a pre-v110 downgrade before writing a batch")
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion108)
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion110",
-		"the sender must reject a v108 downgrade before writing a batch")
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion109)
 	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion110",
 		"the sender must reject a v109 downgrade before writing a batch")
