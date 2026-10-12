@@ -290,6 +290,8 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 
 func exprCanRemoveProject(expr *Expr) bool {
 	switch ne := expr.Expr.(type) {
+	case *plan.Expr_UserVarAssignment:
+		return false
 	case *plan.Expr_F:
 		// fulltext_match is a planner placeholder: applyIndices replaces it
 		// with the score column produced by the fulltext search scan.  Inlining a

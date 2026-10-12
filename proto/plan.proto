@@ -318,6 +318,7 @@ message Expr {
     FoldVal fold = 15;
     DependentExpr dependent = 24;
     CorrelationSlot slot = 25;
+    UserVarAssignment user_var_assignment = 26;
   }
 
   int32 aux_id = 16;
@@ -2506,4 +2507,13 @@ message DatabaseDefaults {
   uint64 version = 4;
   uint32 collation_id = 5;
   uint32 collation_revision = 6;
+}
+
+// Assign a value to a MySQL user variable as part of expression evaluation.
+// This is deliberately separate from VarRef (a read) and SetVariables (the
+// SET statement path): the executor must preserve expression ordering and
+// publish the completed prefix once statement execution reaches its boundary.
+message UserVarAssignment {
+  string name = 1;
+  Expr value = 2;
 }

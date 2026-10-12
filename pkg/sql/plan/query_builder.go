@@ -5970,6 +5970,9 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+	if !isRoot && selectContainsUserVarAssignment(stmt) {
+		return 0, userVarAssignmentNotSupported(builder.GetContext(), "a derived, CTE, or set-operation query")
+	}
 	leaveBinding, bindErr := enterViewSchemaBinding(builder.GetContext())
 	if bindErr != nil {
 		return 0, bindErr
@@ -6262,8 +6265,14 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			rollupFilter = selectClause.Having.RollupHaving
 		}
 	case *tree.UnionClause:
+		if selectContainsUserVarAssignment(stmt) {
+			return 0, userVarAssignmentNotSupported(builder.GetContext(), "UNION")
+		}
 		return builder.buildUnion(selectClause, astOrderBy, astLimit, astRankOption, ctx, isRoot)
 	case *tree.ValuesClause:
+		if selectContainsUserVarAssignment(stmt) {
+			return 0, userVarAssignmentNotSupported(builder.GetContext(), "VALUES")
+		}
 		if nodeID, selectList, err = builder.bindValues(ctx, selectClause); err != nil {
 			return
 		}
@@ -8892,6 +8901,16 @@ func (builder *QueryBuilder) bindSelectClause(
 	boundHavingList []*plan.Expr,
 	err error,
 ) {
+	if err = validateUserVarAssignmentScope(builder.GetContext(), clause, astOrderBy, astLimit); err != nil {
+		return
+	}
+	// The catalog-only shortcut belongs to this SELECT, not to its siblings
+	// or its nested View/CTE bodies. In particular, an inner LIMIT 0 must not
+	// let a later ordinary SELECT bypass semantic binding.
+	previousSkipResolve := builder.isSkipResolveTableDef
+	builder.isSkipResolveTableDef = false
+	defer func() { builder.isSkipResolveTableDef = previousSkipResolve }()
+
 	if ctx.bindingRecurStmt() && clause.Distinct {
 		err = moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
 		return

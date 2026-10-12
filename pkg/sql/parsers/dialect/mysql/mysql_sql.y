@@ -487,6 +487,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %nonassoc <str> OFFSET
 %token <str> FOR OF CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
+// SELECT user-variable assignment has lower precedence than every ordinary
+// expression operator and is right-associative ("@a := @b := 1").
+%right <str> ASSIGNMENT
 %nonassoc <str> SET
 %token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC
 %nonassoc <str> INTO
@@ -517,7 +520,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %right <str> NOT '!'
 %left <str> BETWEEN CASE WHEN THEN ELSE END ELSEIF
 %nonassoc LOWER_THAN_EQ
-%left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT ILIKE
+%left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ILIKE
 %left <str> '|'
 %left <str> '&'
 %left <str> SHIFT_LEFT SHIFT_RIGHT ARROW LONG_ARROW
@@ -14849,6 +14852,10 @@ expression:
 |   NOT expression %prec NOT
     {
         $$ = tree.NewNotExpr($2)
+    }
+|   user_variable ASSIGNMENT expression
+    {
+        $$ = tree.NewUserVarAssignmentExpr($1.Name, $3)
     }
 |   boolean_primary
     {

@@ -1611,6 +1611,9 @@ func VisitExprTree(expr *Expr, visitor func(*Expr) error) error {
 		if sub := current.GetSub(); sub != nil {
 			pending = append(pending, sub.Child)
 		}
+		if assignment := current.GetUserVarAssignment(); assignment != nil {
+			pending = append(pending, assignment.Value)
+		}
 		if list := current.GetList(); list != nil {
 			for i := len(list.List) - 1; i >= 0; i-- {
 				pending = append(pending, list.List[i])
