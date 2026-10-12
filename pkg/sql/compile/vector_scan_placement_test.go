@@ -15,15 +15,16 @@
 package compile
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"slices"
 	"testing"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -46,18 +47,18 @@ func vectorPlacementCompile(t *testing.T, workers engine.Nodes) (*Compile, *expr
 			ServiceID: worker.Id, PipelineServiceAddress: worker.Addr, QueryAddress: worker.Addr,
 		})
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion96)
-	client.version = defines.MORPCVersion96
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, vectorscan.IndexSearchScanProtocolVersion)
+	client.version = vectorscan.IndexSearchScanProtocolVersion
 	return c, client
 }
 
 func vectorPlacementNode() *plan.Node {
 	return &plan.Node{
-		NodeType:        plan.Node_VECTOR_INDEX_SCAN,
+		NodeType:        plan.Node_INDEX_SEARCH_SCAN,
 		ObjRef:          &plan.ObjectRef{SchemaName: "db", ObjName: "docs"},
 		TableDef:        &plan.TableDef{Name: "docs"},
 		Stats:           &plan.Stats{Outcnt: 10},
-		VectorIndexScan: &plan.VectorIndexScan{},
+		IndexSearchScan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()}, AlgoOptions: []byte(`{}`)},
 	}
 }
 
@@ -73,7 +74,7 @@ func TestVectorScanPlacementKeepsObjectOwnersAcrossIngress(t *testing.T) {
 			selected := slices.Clone(workers[:count])
 			selected[0], selected[ingress] = selected[ingress], selected[0]
 			c, _ := vectorPlacementCompile(t, selected)
-			scopes, err := c.compileVectorIndexScan(vectorPlacementNode())
+			scopes, err := c.compileIndexSearchScan(vectorPlacementNode())
 			require.NoError(t, err)
 			t.Cleanup(func() { ReleaseScopes(scopes) })
 			require.Equal(t, selected, c.cnList, "scan numbering must not mutate query placement")
@@ -111,7 +112,7 @@ func TestVectorScanPlacementKeepsObjectOwnersAcrossIngress(t *testing.T) {
 func TestVectorScanPlacementUsesAddressOnlyForMissingIdentity(t *testing.T) {
 	workers := engine.Nodes{{Addr: "z:6001"}, {Id: "b", Addr: "b:6001"}, {Addr: "a:6001"}}
 	c, client := vectorPlacementCompile(t, workers)
-	scopes, err := c.compileVectorIndexScan(vectorPlacementNode())
+	scopes, err := c.compileIndexSearchScan(vectorPlacementNode())
 	require.NoError(t, err)
 	t.Cleanup(func() { ReleaseScopes(scopes) })
 	addresses := make([]string, 0, len(scopes))

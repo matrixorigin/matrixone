@@ -546,6 +546,7 @@ func (client *txnClient) New(
 	}
 	op := newTxnOperator(
 		client.sid,
+		client.logger,
 		client.clock,
 		client.sender,
 		meta,

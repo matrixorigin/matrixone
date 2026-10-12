@@ -18,7 +18,7 @@ insert into t values (1, '{"foo":"needle"}'), (2, '{"foo":"hay"}');
 begin;
 insert into t values (3, '{"foo":"needle"}');
 -- @separator:table
--- @regex("Table Function on fulltext2_search", false)
+-- @regex("Fulltext Index Scan on", false)
 explain select id from t where json_extract_string(j,'$.foo') = 'needle';
 select id from t where json_extract_string(j,'$.foo') = 'needle' order by id;
 commit;

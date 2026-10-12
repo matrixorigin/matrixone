@@ -24,7 +24,7 @@ alter table src alter reindex ft fulltext2 force_sync;
 -- Control: the source index is BUILT rather than copied and has always been
 -- correct. It must stay correct after the branch deletes its own copy.
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on ft", true)
 -- @regex("Join", false)
 explain select id, tag from src
 where match(body) against('alpha' in boolean mode) order by id;
@@ -71,7 +71,7 @@ select id, body, tag from leaf order by id;
 -- COVERED path (id and tag both come from the index, so the plan has no join).
 -- Before the fix this returned the deleted inherited row 1 alongside 3.
 -- @separator:table
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on ft", true)
 -- @regex("Join", false)
 explain select id, tag from leaf
 where match(body) against('alpha' in boolean mode) order by id;

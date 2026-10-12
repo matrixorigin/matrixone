@@ -121,7 +121,7 @@ invalid argument operator cast, bad value [TINYINT DATALINK]
 select cast(cast('file://xxx' as smallint) as datalink);
 invalid argument operator cast, bad value [SMALLINT DATALINK]
 select cast(cast('file://xxx' as mediumint) as datalink);
-data type: 'mediumint' is not yet implemented
+CAST to MEDIUMINT is not supported is not yet implemented
 select cast(cast('file://xxx' as bigint unsigned) as datalink);
 invalid argument operator cast, bad value [BIGINT UNSIGNED DATALINK]
 select cast(cast('file://xxx' as float(10,2)) as datalink);
