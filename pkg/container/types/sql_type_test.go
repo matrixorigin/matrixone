@@ -30,6 +30,8 @@ func TestFormatSQLColumnType(t *testing.T) {
 		{New(T_binary, 8, 0), "BINARY(8)"}, {New(T_varbinary, 32, 0), "VARBINARY(32)"},
 		{New(T_decimal64, 10, 2), "DECIMAL(10,2)"}, {New(T_decimal128, 38, 0), "DECIMAL(38,0)"},
 		{New(T_decimal256, 76, 18), "DECIMAL(76,18)"},
+		{New(T_int32, 24, -1), "MEDIUMINT"},
+		{New(T_uint32, 24, -1), "MEDIUMINT UNSIGNED"},
 		{New(T_float32, 0, -1), "FLOAT"}, {New(T_float32, 5, 0), "FLOAT(5,0)"},
 		{New(T_float64, 8, 2), "DOUBLE(8,2)"}, {New(T_float64, 8, -1), "DOUBLE"},
 		{New(T_date, 0, 0), "DATE"}, {New(T_year, 4, 0), "YEAR"}, {New(T_json, 0, 0), "JSON"},
