@@ -36,12 +36,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/encoding"
@@ -1852,6 +1855,23 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				}
 			}
 		}
+	case types.T_geometry, types.T_geometry32, types.T_datalink:
+		if !isPlainStringLikeType(st) {
+			break
+		}
+		targetType := types.MustTypeFromPlan(dt)
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToBytes(proc.Ctx, mp, page, proc, vec, func(v parquet.Value) ([]byte, error) {
+				data := v.ByteArray()
+				if targetType.Oid == types.T_datalink {
+					if _, _, err := datalink.ParseDatalink(util.UnsafeBytesToString(data), proc); err != nil {
+						return nil, err
+					}
+					return data, nil
+				}
+				return parquetGeometryToStorage(proc, data, targetType)
+			})
+		}
 	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
 		if isParquetValueStringConvertibleSource(st) {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
@@ -3148,6 +3168,39 @@ func processParquetValuesToBytes(
 		}
 	}
 	return nil
+}
+
+// parquetGeometryToStorage restores textual geometry while enforcing the
+// assignment constraints that a direct target-typed Parquet vector bypasses.
+func parquetGeometryToStorage(proc *process.Process, data []byte, typ types.Type) ([]byte, error) {
+	text := strings.TrimSpace(util.UnsafeBytesToString(data))
+	var srid uint64 // Plain WKT has the same effective SRID 0 as a SQL literal.
+	if len(text) >= len("SRID=") && strings.EqualFold(text[:len("SRID=")], "SRID=") {
+		id, wkt, ok := strings.Cut(text[len("SRID="):], ";")
+		if !ok {
+			return nil, moerr.NewInvalidInput(proc.Ctx, "invalid geometry SRID in parquet value")
+		}
+		var err error
+		srid, err = strconv.ParseUint(strings.TrimSpace(id), 10, 32)
+		if err != nil || srid > uint64(geo.MaxSRID) {
+			return nil, moerr.NewInvalidInput(proc.Ctx, "invalid geometry SRID in parquet value")
+		}
+		text = strings.TrimSpace(wkt)
+		// The shared legacy decoder strips EWKT too. Reject a second prefix
+		// before normalization so it cannot bypass this boundary's SRID check.
+		if len(text) >= len("SRID=") && strings.EqualFold(text[:len("SRID=")], "SRID=") {
+			return nil, moerr.NewInvalidInput(proc.Ctx, "invalid geometry SRID in parquet value")
+		}
+	}
+	if typ.Width > 0 && srid != uint64(typ.Width-1) {
+		return nil, moerr.NewInvalidInputf(proc.Ctx,
+			"parquet geometry SRID %d does not match column SRID %d", srid, typ.Width-1)
+	}
+	subtype := ""
+	if s := geo.Subtype(typ.Scale); s != geo.GENERIC {
+		subtype = strings.ToUpper(s.String())
+	}
+	return function.NormalizeGeometryForStorage(proc, []byte(text), subtype, typ.Oid == types.T_geometry32)
 }
 
 // appendParquetVarlenValue applies the target column's string semantics at the
