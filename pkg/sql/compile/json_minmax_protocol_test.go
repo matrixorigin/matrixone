@@ -151,7 +151,7 @@ func TestJSONMinMaxSharedFloorsLocalAndCachedAdmission(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, defines.MORPCVersion112, floor)
 		queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{AggList: []*plan.Expr{expr}}}}}}
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
 		require.ErrorContains(t, validateJSONStringConsumerProtocol(c.proc, queryPlan), "protocol version 112")
 		cached := &Compile{proc: c.proc, pn: queryPlan}
 		require.ErrorContains(t, cached.Compile(context.Background(), queryPlan, nil), "protocol version 112")
@@ -159,5 +159,27 @@ func TestJSONMinMaxSharedFloorsLocalAndCachedAdmission(t *testing.T) {
 		require.ErrorContains(t, err, "protocol version 112")
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
 		require.NoError(t, validateJSONStringConsumerProtocol(c.proc, queryPlan))
+	}
+}
+
+func TestJSONMinMaxActualPrefixKeepsELT111AndTyped112(t *testing.T) {
+	elt := bindJSONStringConsumerExpr(t, "elt")
+	eltFeatures, err := plan.RequiredRemoteExpressionFeatures(elt)
+	require.NoError(t, err)
+	require.True(t, eltFeatures.JSONStringConsumerOverload)
+	require.False(t, eltFeatures.JSONMinMaxTypedComparison)
+	require.Equal(t, defines.MORPCVersion111, requiredExpressionContractProtocolVersion(eltFeatures))
+	minNode := &plan.Node{AggList: []*plan.Expr{jsonMinMaxPlanExpr(aggexec.AggIdOfMin)}}
+	eltNode := &plan.Node{ProjectList: []*plan.Expr{elt}}
+	for _, nodes := range [][]*plan.Node{{minNode, eltNode}, {eltNode, minNode}} {
+		owner := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: nodes}}}
+		features, err := plan.RequiredRemoteExpressionFeatures(owner)
+		require.NoError(t, err)
+		require.True(t, features.JSONStringConsumerOverload)
+		require.True(t, features.JSONMinMaxTypedComparison)
+		require.Equal(t, defines.MORPCVersion112, requiredExpressionContractProtocolVersion(features))
+		floor, err := planbuilder.RequiredPersistedExpressionProtocolVersion(owner)
+		require.NoError(t, err)
+		require.Equal(t, defines.MORPCVersion112, floor)
 	}
 }

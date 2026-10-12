@@ -110,7 +110,7 @@ func TestJSONMinMaxSimulatedVersionRemoteTopology(t *testing.T) {
 				// Provisional v111 is the capable remote worker. The same production SQL
 				// query must place the JSON aggregate on the peer and preserve
 				// the typed ordering counterexample 1 < 256.
-				peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+				peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
 				physical, err = testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
 				require.NoError(t, err)
 				require.Contains(t, physical.Text, peerAddr,

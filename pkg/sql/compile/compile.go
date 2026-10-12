@@ -8953,7 +8953,7 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		(!hasLegacyFloatDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates()) &&
 		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum()) &&
-		(!hasJSONMinMaxAggregate(node) || c.remoteProtocolVersion() >= defines.MORPCVersion111)
+		(!hasJSONMinMaxAggregate(node) || c.remoteProtocolVersion() >= defines.MORPCVersion112)
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
