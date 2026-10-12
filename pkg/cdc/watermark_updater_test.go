@@ -466,7 +466,7 @@ func TestWatermarkUpdater_BoundedBatchPartialFailureRetriesWithoutRegression(t *
 func TestWatermarkUpdater_DeleteTaskWatermarksDrainsAndFencesCache(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	updater := NewCDCWatermarkUpdater("delete-task", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -585,7 +585,7 @@ func TestWatermarkUpdater_EvictTaskLocalStateForOwnerPreservesReplacement(t *tes
 			return nil
 		}),
 	)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -631,7 +631,7 @@ func TestWatermarkUpdater_EvictTaskLocalStateForOwnerRetainsCommittedProgress(t 
 			return nil
 		}),
 	)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -665,7 +665,7 @@ func TestWatermarkUpdater_EvictTaskLocalStateForOwnerRetainsCommittedProgress(t 
 func TestWatermarkUpdater_DeleteTaskWatermarksRetriesAfterFlushFailure(t *testing.T) {
 	exec := &retryableMockExecutor{failRemaining: 1}
 	updater := NewCDCWatermarkUpdater("delete-task-flush-failure", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -781,7 +781,7 @@ func TestWatermarkUpdater_DeleteTaskWatermarksReturnsDeleteFailureAndKeepsTombst
 	// DELETE specifically so this test remains distinct from flush failures.
 	exec := &retryableMockExecutor{failOnCall: 2}
 	updater := NewCDCWatermarkUpdater("delete-task-retry", exec, WithCronJobInterval(time.Hour))
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -807,7 +807,7 @@ func TestWatermarkUpdater_DeleteTaskWatermarksReturnsDeleteFailureAndKeepsTombst
 func TestWatermarkUpdater_GetOrAddCommittedRejectsDeletedTask(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	updater := NewCDCWatermarkUpdater("get-or-add-deleted", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 	key := &WatermarkKey{AccountId: 4, TaskId: "deleted-task", DBName: "db", TableName: "table"}
 	updater.MarkTaskDeleted(key.TaskId)
@@ -903,7 +903,7 @@ func TestWatermarkUpdater_ForceFlushWaitsForEarlierGuardedProgressWrite(t *testi
 		}
 		return err
 	}
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(exec.releaseWrite) }) }
@@ -1176,7 +1176,7 @@ func TestWatermarkUpdater_RemoveCachedWM_NoExisting(t *testing.T) {
 func TestWatermarkUpdater_RemoveCachedWM_AfterStopUsesFallback(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	updater := NewCDCWatermarkUpdater("remove-after-stop", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	updater.Stop()
 
 	ctx := context.Background()
@@ -1228,7 +1228,7 @@ func TestWatermarkUpdater_RemoveCachedWM_AfterStopUsesFallback(t *testing.T) {
 
 func TestWatermarkUpdater_RemoveCachedWM_AfterStopRetainsOwnedDiagnostic(t *testing.T) {
 	updater := NewCDCWatermarkUpdater(t.Name(), &retryableMockExecutor{})
-	updater.Start()
+	updater.Start(context.Background())
 	updater.Stop()
 
 	key := WatermarkKey{
@@ -1272,7 +1272,7 @@ func TestWatermarkUpdater_RemoveCachedWM_AfterStopRetainsOwnedDiagnostic(t *test
 func TestWatermarkUpdater_UpdateErrMsg_AfterStopUsesFallback(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	updater := NewCDCWatermarkUpdater("update-errmsg-after-stop", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	updater.Stop()
 
 	ctx := context.Background()
@@ -1303,7 +1303,7 @@ func TestWatermarkUpdater_UpdateErrMsg_AfterStopUsesFallback(t *testing.T) {
 func TestWatermarkUpdater_GetOrAddCommitted_AfterStopUsesFallback(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	updater := NewCDCWatermarkUpdater("get-or-add-after-stop", exec)
-	updater.Start()
+	updater.Start(context.Background())
 	updater.Stop()
 
 	ctx := context.Background()
@@ -1340,7 +1340,7 @@ func TestWatermarkUpdater_CircuitBreakerHelpers(t *testing.T) {
 		u.customized.cronJob = func(ctx context.Context) {}
 	}
 	updater := NewCDCWatermarkUpdater("helper-circuit", exec, syncOption)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	ctx := context.Background()
@@ -1603,7 +1603,7 @@ func TestCDCWatermarkUpdater_Basic1(t *testing.T) {
 		WithExportStatsInterval(time.Hour),
 	)
 	u.stats.lastExportTime = time.Now()
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 	wg1.Wait()
 	assert.GreaterOrEqual(t, cronJobExecNum.Load(), int32(3))
@@ -2037,7 +2037,7 @@ func TestCDCWatermarkUpdaterLegacyReadMaintainsProgressTupleInvariant(t *testing
 
 	t.Run("closed queue preserves owned progress", func(t *testing.T) {
 		updater := NewCDCWatermarkUpdater(t.Name(), &retryableMockExecutor{})
-		updater.Start()
+		updater.Start(context.Background())
 		updater.Stop()
 		replay, later := types.BuildTS(20, 0), types.BuildTS(50, 0)
 		updater.cacheCommitted[*key] = replay
@@ -2314,7 +2314,7 @@ func TestCDCWatermarkUpdaterRejectsOwnerErrorWithoutDurableGeneration(t *testing
 func TestCDCWatermarkUpdaterOwnedErrorDoesNotReadMissingProgress(t *testing.T) {
 	exec := &retryableMockExecutor{}
 	u := NewCDCWatermarkUpdater(t.Name(), exec, WithCronJobInterval(time.Hour))
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 	key := &WatermarkKey{AccountId: 7, TaskId: "stable", DBName: "db", TableName: "tbl"}
 	fence := NewOwnerFenceForGeneration(
@@ -2443,7 +2443,7 @@ func TestCDCWatermarkUpdaterReplacementDropsPreviousErrorRetryState(t *testing.T
 func TestCDCWatermarkUpdaterFailedStreamRetirementPreservesRetryState(t *testing.T) {
 	u := NewCDCWatermarkUpdater(
 		t.Name(), &retryableMockExecutor{}, WithCronJobInterval(time.Hour))
-	u.Start()
+	u.Start(context.Background())
 	t.Cleanup(u.Stop)
 
 	key := &WatermarkKey{
@@ -2502,7 +2502,7 @@ func TestCDCWatermarkUpdaterFailedStreamRetirementPreservesRetryState(t *testing
 
 func TestCDCWatermarkUpdaterErrorMetricClassificationIsExclusive(t *testing.T) {
 	u := NewCDCWatermarkUpdater(t.Name(), &retryableMockExecutor{}, WithCronJobInterval(time.Hour))
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 	key := &WatermarkKey{AccountId: 7, TaskId: t.Name(), DBName: "db", TableName: "tbl"}
 	fence := NewOwnerFenceForGeneration(
@@ -2581,7 +2581,7 @@ func TestCDCWatermarkUpdater_GuardedWatermarkSQLSplitsOnBytes(t *testing.T) {
 func TestCDCWatermarkUpdater_ErrorMessageRespectsCatalogBound(t *testing.T) {
 	executor := &retryableMockExecutor{}
 	u := NewCDCWatermarkUpdater(t.Name(), executor, WithCronJobInterval(time.Hour))
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 	key := &WatermarkKey{AccountId: 1, TaskId: "task", DBName: "db", TableName: "table"}
 	u.cacheCommitted[*key] = types.BuildTS(1, 1)
@@ -2809,7 +2809,7 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 	)
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(ie.releaseWrite) }) }
-	u.Start()
+	u.Start(context.Background())
 	defer func() {
 		// Release a blocked persistence before waiting for the queue worker. This
 		// keeps timeout/failure cleanup from waiting on its own test barrier.
@@ -2990,7 +2990,7 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 
 func TestCDCWatermarkUpdater_UpdateWatermarkErrMsg(t *testing.T) {
 	u, ie := InitCDCWatermarkUpdaterForTest(t)
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 
 	key := &WatermarkKey{
@@ -3053,7 +3053,7 @@ func TestCDCWatermarkUpdater_UpdateWatermarkErrMsg(t *testing.T) {
 func TestCDCWatermarkUpdater_RemoveThenUpdateErrMsg(t *testing.T) {
 	ctx := context.Background()
 	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	key := &WatermarkKey{
@@ -3076,7 +3076,7 @@ func TestCDCWatermarkUpdater_RemoveThenUpdateErrMsg(t *testing.T) {
 // TestCDCWatermarkUpdater_MarkUnmarkTaskPaused tests pause state management
 func TestCDCWatermarkUpdater_MarkUnmarkTaskPaused(t *testing.T) {
 	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	taskId := "test-task-pause"
@@ -3111,7 +3111,7 @@ func TestCDCWatermarkUpdater_DeletedTaskDominatesConcurrentPause(t *testing.T) {
 func TestCDCWatermarkUpdater_PauseBlocksWatermarkUpdate(t *testing.T) {
 	ctx := context.Background()
 	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	taskId := "test-task-block"
@@ -3164,7 +3164,7 @@ func TestCDCWatermarkUpdater_PauseBlocksWatermarkUpdate(t *testing.T) {
 func TestCDCWatermarkUpdater_MultipleTasksPauseIndependently(t *testing.T) {
 	ctx := context.Background()
 	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	task1 := "task-1"
@@ -3213,7 +3213,7 @@ func TestCDCWatermarkUpdater_MultipleTasksPauseIndependently(t *testing.T) {
 func TestCDCWatermarkUpdater_PauseRestartCycle(t *testing.T) {
 	ctx := context.Background()
 	updater, _ := InitCDCWatermarkUpdaterForTest(t)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	taskId := "lifecycle-task"

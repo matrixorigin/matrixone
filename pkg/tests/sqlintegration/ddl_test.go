@@ -30,6 +30,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -597,7 +599,6 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
-			cdc.ResetTableDetectorForTest(cn.ServiceID())
 			exec := testutils.GetSQLExecutor(cn)
 			// Catalog CDC matching compares the persisted database identifier in
 			// the scanner query. Keep this integration fixture lowercase so the
@@ -790,7 +791,6 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 			phase.Store(2)
 			require.NoError(t, cn.Close())
 			require.NoError(t, cn.Start())
-			cdc.ResetTableDetectorForTest(cn.ServiceID())
 			exec = testutils.GetSQLExecutor(cn)
 			var secondScanDone chan error
 			secondScanAttempts := 0
@@ -820,15 +820,16 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 			persistedAfterRestart, found, err := readWatermark()
 			require.NoError(t, err)
 			require.True(t, found, "replacement reader must observe the durable watermark")
-			require.Equal(t, checkpointBeforeRestart, persistedAfterRestart,
-				"replacement reader must start from the persisted pre-restart checkpoint")
+			require.True(t, persistedAfterRestart.GE(&checkpointBeforeRestart),
+				"final durable checkpoint must not regress from the pre-close sample")
+			require.True(t, persistedAfterRestart.GE(&boundary), "final checkpoint must include row2")
 			mustExec(dbName, "insert into "+tableName+" values (3, 'after_restart')")
 			captureReplacementBoundary.Store(true)
 			releaseSecond()
 			require.NoError(t, <-secondScanDone)
 			select {
 			case actualStart := <-replacementBoundary:
-				require.Equal(t, checkpointBeforeRestart, actualStart,
+				require.Equal(t, persistedAfterRestart, actualStart,
 					"replacement reader must collect from the durable checkpoint")
 			case <-ctx.Done():
 				t.Fatal("replacement reader did not reach CollectChanges")
@@ -853,13 +854,11 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 	// This scenario adds CNs to the shared fixture. Give each run a fresh
 	// generation, including the updater's internal executor bound to CN A.
 	require.NoError(t, embed.CloseSingleCNBaseClusterTests())
-	cdc.ResetCDCWatermarkUpdaterForTest()
 	t.Cleanup(func() {
 		if err := embed.CloseSingleCNBaseClusterTests(); err != nil {
 			t.Errorf("close CDC takeover fixture: %v", err)
 			return
 		}
-		cdc.ResetCDCWatermarkUpdaterForTest()
 	})
 	runSQLIntegration(t,
 		func(c embed.Cluster) {
@@ -868,6 +867,9 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 
 			cnA, err := c.GetCNService(0)
 			require.NoError(t, err)
+			// Admission barriers below belong to synchronous catalog scans. Keep
+			// periodic callbacks from claiming them before the corresponding scan.
+			cdc.ResetTableDetectorForTest(cnA.ServiceID(), time.Hour)
 			if w, ok := any(c).(interface {
 				WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
 			}); ok {
@@ -984,7 +986,6 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			defer releaseSecond()
 			defer releaseFresh()
 			defer releaseCancel()
-			cdc.ResetTableDetectorForTest(cnA.ServiceID())
 
 			mustExec := func(database, statement string) {
 				res, execErr := sqlExec.Exec(ctx, statement, executor.Options{}.WithDatabase(database))
@@ -1032,7 +1033,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 				t.Helper()
 				flushCtx, flushCancel := context.WithTimeout(ctx, 30*time.Second)
 				defer flushCancel()
-				require.NoError(t, cdc.GetCDCWatermarkUpdater(cnID, nil).ForceFlush(flushCtx))
+				require.NoError(t, cdc.CDCWatermarkUpdaterFromRuntime(runtime.ServiceRuntime(cnID)).ForceFlush(flushCtx))
 			}
 			waitWatermarkVisible := func(reader executor.SQLExecutor, expected types.TS, generation uint64, cn string) {
 				t.Helper()
@@ -1145,6 +1146,8 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			require.NoError(t, c.StartNewCNService(1))
 			cnB, err := c.GetCNService(1)
 			require.NoError(t, err)
+			// B is driven by its periodic scanner; A and C use explicit scans.
+			cdc.ResetTableDetectorForTest(cnB.ServiceID(), 100*time.Millisecond)
 			if w, ok := any(c).(interface {
 				WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
 			}); ok {
@@ -1152,6 +1155,12 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			}
 			sqlExec = testutils.GetSQLExecutor(cnB)
 			cleanupCN = cnB
+
+			// Restrict real daemon claiming to B. An expired heartbeat alone lets
+			// A reclaim the row, which cannot prove cross-CN takeover.
+			clusterView := clusterservice.GetMOCluster(cnA.ServiceID())
+			require.NoError(t, clusterView.DebugUpdateCNLabel(cnB.ServiceID(), map[string][]string{"account": {"sys"}}))
+			defer func() { require.NoError(t, clusterView.DebugUpdateCNLabel(cnB.ServiceID(), map[string][]string{})) }()
 
 			// Move the live daemon claim to CN B in the real task table and make
 			// A's heartbeat stale. This is the deterministic equivalent of a newer
@@ -1196,6 +1205,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			// transfer, while B's task service observes and claims it.
 			select {
 			case <-secondEntered:
+				require.Equal(t, 1, countRows(fmt.Sprintf("select count(*) from mo_task.sys_daemon_task where task_id=%d and task_runner='%s'", daemonID, cnB.ServiceID())), "takeover admission must belong to B")
 			case <-ctx.Done():
 				t.Fatal("CN B did not reach replacement admission")
 			}
@@ -1277,11 +1287,15 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			require.NoError(t, c.StartNewCNService(1))
 			cnC, err := c.GetCNService(2)
 			require.NoError(t, err)
+			cdc.ResetTableDetectorForTest(cnC.ServiceID(), time.Hour)
 			if w, ok := any(c).(interface {
 				WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
 			}); ok {
 				w.WaitCNStoreTaskServiceCreatedIndexed(ctx, 2)
 			}
+			require.NoError(t, clusterView.DebugUpdateCNLabel(cnC.ServiceID(), map[string][]string{"account": {"sys"}}))
+			defer func() { require.NoError(t, clusterView.DebugUpdateCNLabel(cnC.ServiceID(), map[string][]string{})) }()
+			require.NoError(t, clusterView.DebugUpdateCNLabel(cnB.ServiceID(), map[string][]string{}))
 			sqlExec = testutils.GetSQLExecutor(cnC)
 			cleanupCN = cnC
 			mustExec("", fmt.Sprintf("update mo_task.sys_daemon_task set task_status=%d, task_runner='%s', last_heartbeat='2000-01-01 00:00:00' where task_id=%d", taskpb.TaskStatus_Running, cnC.ServiceID(), daemonID))
@@ -1321,6 +1335,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 				}
 			}
 		freshAdmissionEntered:
+			require.Equal(t, 1, countRows(fmt.Sprintf("select count(*) from mo_task.sys_daemon_task where task_id=%d and task_runner='%s'", daemonID, cnC.ServiceID())), "fresh admission must belong to C")
 			select {
 			case <-bCancelDone:
 				bCancelErrMu.Lock()

@@ -814,7 +814,7 @@ WHERE table_schema = database()
 AND table_name = 'union_signed_unsigned_28233_ctas'
 ORDER BY ordinal_position;
 ➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  𝄀
-v  ¦  DECIMAL(20,0)  ¦  YES  ¦  20  ¦  0
+v  ¦  decimal(20,0)  ¦  YES  ¦  20  ¦  0
 SELECT v FROM union_signed_unsigned_28233_ctas ORDER BY v;
 v
 -1
@@ -833,7 +833,7 @@ WHERE table_schema = database()
 AND table_name = 'union_signed_unsigned_28233_empty'
 ORDER BY ordinal_position;
 ➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  𝄀
-v  ¦  DECIMAL(20,0)  ¦  YES  ¦  20  ¦  0
+v  ¦  decimal(20,0)  ¦  YES  ¦  20  ¦  0
 SELECT v FROM union_signed_unsigned_28233_empty;
 v
 DROP TABLE union_signed_unsigned_28233_empty;

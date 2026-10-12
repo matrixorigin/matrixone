@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	rt "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -39,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -308,6 +310,117 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, outBatch.RowCount())
 	require.Equal(t, 1, outBatch.Vecs[0].Length())
+}
+
+// Membership must not change which workspace vector ordinary centroid pruning
+// reads: workspace batches prepend rowid to the physical column sequence.
+func TestIvfWorkspaceReaderPreservesPhysicalPK(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		membership  bool
+		memberStart int32
+		centroid    int64
+		wantRows    int
+	}{
+		{"without_membership", false, 1, 0, 1},
+		{"matching_membership", true, 1, 0, 1},
+		{"excluded_source_key", true, 100, 0, 0},
+		{"excluded_centroid", true, 1, 1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mp := mpool.MustNewZero()
+			defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+			txnOp, closeTxn := client.NewTestTxnOperator(ctx)
+			defer closeTxn()
+			tableDef := &plan.TableDef{
+				Name:      "__mo_index_ivf_workspace_entries",
+				TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName,
+					Names: []string{"version", "centroid", catalog.IndexTablePrimaryColName}},
+				Name2ColIndex: make(map[string]int32),
+				Cols: []*plan.ColDef{
+					{Name: "version", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+					{Name: "centroid", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+					{Name: catalog.IndexTablePrimaryColName, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_int32)}},
+					{Name: "entry", Seqnum: 3, Typ: plan.Type{Id: int32(types.T_array_float32)}},
+					{Name: catalog.CPrimaryKeyColName, Seqnum: 4, Typ: plan.Type{Id: int32(types.T_varchar)}},
+				},
+			}
+			cols := make([]string, len(tableDef.Cols))
+			in := batch.NewWithSize(len(cols) + 1)
+			defer in.Clean(mp)
+			out := batch.NewWithSize(len(cols))
+			defer out.Clean(mp)
+			in.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+			require.NoError(t, vector.AppendFixed(in.Vecs[0], types.Rowid{}, false, mp))
+			for i, col := range tableDef.Cols {
+				cols[i] = col.Name
+				tableDef.Name2ColIndex[col.Name] = int32(i)
+				typ := plan2.ExprType2Type(&col.Typ)
+				in.Vecs[i+1] = vector.NewVec(typ)
+				out.Vecs[i] = vector.NewVec(typ)
+			}
+			in.SetAttributes(append([]string{catalog.Row_ID}, cols...))
+			require.NoError(t, vector.AppendFixed(in.Vecs[1], int64(0), false, mp))
+			require.NoError(t, vector.AppendFixed(in.Vecs[2], int64(0), false, mp))
+			require.NoError(t, vector.AppendFixed(in.Vecs[3], int32(42), false, mp))
+			require.NoError(t, vector.AppendBytes(in.Vecs[4], types.ArrayToBytes([]float32{1, 0}), false, mp))
+			packer := types.NewPacker()
+			defer packer.Close()
+			packer.EncodeInt64(0)
+			packer.EncodeInt64(0)
+			packer.EncodeInt32(42)
+			require.NoError(t, vector.AppendBytes(in.Vecs[5], packer.GetBuf(), false, mp))
+			in.SetRowCount(1)
+			packer.Reset()
+			packer.EncodeInt64(0)
+			packer.EncodeInt64(tc.centroid)
+			prefixes := vector.NewVec(types.T_varchar.ToType())
+			defer prefixes.Free(mp)
+			require.NoError(t, vector.AppendBytes(prefixes, packer.GetBuf(), false, mp))
+			data, err := prefixes.MarshalBinary()
+			require.NoError(t, err)
+			expr := plan2.MakeInExpr(ctx, &plan.Expr{
+				Typ:  tableDef.Cols[4].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 4, Name: catalog.CPrimaryKeyColName}},
+			}, 1, data, true)
+			pool := fileservice.NewPool(1, func() *types.Packer { return packer },
+				func(p *types.Packer) { p.Reset() }, func(*types.Packer) {})
+			txn := &Transaction{op: txnOp, engine: &Engine{packerPool: pool},
+				writes: []Entry{{typ: INSERT, databaseId: 11, tableId: 22, bat: in}}}
+			txnOp.AddWorkspace(txn)
+			source := &LocalDisttaeDataSource{ctx: ctx, txnOffset: len(txn.writes),
+				table:    &txnTable{db: &txnDatabase{op: txnOp, databaseId: 11}, tableId: 22},
+				category: engine.ShardingLocalDataSource, iteratePhase: engine.InMem,
+				tombstonePolicy: engine.Policy_SkipAll,
+				rangeSlice:      readutil.NewBlockListRelationData(0).GetBlockInfoSlice()}
+			hint := engine.FilterHint{}
+			if tc.membership {
+				keys := vector.NewVec(types.T_int32.ToType())
+				defer keys.Free(mp)
+				for i := int32(0); i < 101; i++ {
+					require.NoError(t, vector.AppendFixed(keys, tc.memberStart+i, false, mp))
+				}
+				payload, err := docfilter.Build(keys)
+				require.NoError(t, err)
+				hint.BF, err = docfilter.New(payload)
+				require.NoError(t, err)
+			}
+			// NewReader consumes source and the membership filter on all paths.
+			r, err := readutil.NewReader(ctx, mp, pool, nil, tableDef,
+				types.MaxTs().ToTimestamp(), expr, source, 0, hint)
+			require.NoError(t, err)
+			defer r.Close()
+			end, err := r.Read(ctx, cols, nil, mp, out)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantRows == 0, end)
+			require.Equal(t, tc.wantRows, out.RowCount())
+			if tc.wantRows > 0 {
+				require.Equal(t, []int32{42}, vector.MustFixedColWithTypeCheck[int32](out.Vecs[2]))
+			}
+		})
+	}
 }
 
 func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testing.T) {

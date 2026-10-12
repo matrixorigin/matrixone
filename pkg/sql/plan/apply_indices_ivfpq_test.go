@@ -631,3 +631,77 @@ func TestApplyIndicesForSortUsingIvfpq_Success_WithFiltersOverFetch(t *testing.T
 	_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti, nil)
 	require.NoError(t, err)
 }
+
+// Exercise the actual GPU context builders: nil settings use their defaults,
+// while procedure-local values and resolver errors cannot cause an assertion panic.
+func TestPrepareIvfpqAndCagraIndexContext_Variables(t *testing.T) {
+	resolverErr := moerr.NewInternalError(context.Background(), "probe resolver failed")
+	for _, tc := range []struct {
+		name       string
+		probe      any
+		resolveErr error
+		nonzero    bool
+		wantProbe  int64
+		wantErr    bool
+	}{
+		{"nil defaults", nil, nil, false, 20, false},
+		{"explicit settings", int64(7), nil, true, 7, false},
+		{"string procedure variable", "7", nil, false, 0, true},
+		{"boolean procedure variable", true, nil, false, 0, true},
+		{"resolver error", nil, resolverErr, false, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			settings := map[string]int64{}
+			if tc.nonzero {
+				settings = map[string]int64{"ivfpq_threads_search": 3, "ivfpq_batch_window": 5,
+					"cagra_threads_search": 7, "cagra_batch_window": 11, "gpu_multi_simulation": 4}
+			}
+			mock := &customMockCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
+				resolveVarFunc: func(name string, _, _ bool) (interface{}, error) {
+					if name == "probe_limit" {
+						return tc.probe, tc.resolveErr
+					}
+					if value, ok := settings[name]; ok {
+						return value, nil
+					}
+					return nil, nil
+				},
+			}
+			b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
+			var err error
+			var pq *ivfpqIndexContext
+			algo := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": "100", "m": "8"}`
+			require.NotPanics(t, func() {
+				pq, err = b.prepareIvfpqIndexContext(vectorProviderVecCtx(vectorProviderScanNode()), ivfpqMTI(algo))
+			})
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Nil(t, pq)
+				if tc.resolveErr != nil {
+					require.ErrorIs(t, err, tc.resolveErr)
+				} else {
+					require.Contains(t, err.Error(), "probe_limit")
+				}
+				return
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, pq)
+				assert.Equal(t, settings["ivfpq_threads_search"], pq.nThread)
+				assert.Equal(t, settings["ivfpq_batch_window"], pq.batchWindow)
+				assert.Equal(t, settings["gpu_multi_simulation"], pq.gpuMultiSim)
+				assert.Equal(t, tc.wantProbe, pq.nProbe)
+			}
+			var cg *cagraIndexContext
+			algo = `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "m": 32}`
+			require.NotPanics(t, func() {
+				cg, err = b.prepareCagraIndexContext(vectorProviderVecCtx(vectorProviderScanNode()), cagraMTI(algo))
+			})
+			require.NoError(t, err)
+			require.NotNil(t, cg)
+			assert.Equal(t, settings["cagra_threads_search"], cg.nThread)
+			assert.Equal(t, settings["cagra_batch_window"], cg.batchWindow)
+			assert.Equal(t, settings["gpu_multi_simulation"], cg.gpuMultiSim)
+		})
+	}
+}

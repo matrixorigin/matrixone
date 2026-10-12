@@ -1246,16 +1246,21 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			enumValues := dt.Enumvalues
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+				return processStringToFixedWithTrim(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (uint64, error) {
-						intVal, err := strconv.ParseUint(util.UnsafeBytesToString(data), 10, 64)
-						if err != nil {
-							return 0, err
+						text := util.UnsafeBytesToString(data)
+						if enumValues != "" {
+							// SET columns are stored as T_uint64 with their member
+							// definition in Enumvalues. Exported SET display strings
+							// must be converted back to the bitmap before insertion.
+							return types.ParseSet(enumValues, text)
 						}
-						return intVal, nil
+						return strconv.ParseUint(text, 10, 64)
 					},
 					uint64(0),
+					enumValues == "", // SET member names preserve lexical whitespace.
 				)
 			}
 			break
@@ -1704,6 +1709,27 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Datetime(0), func(v parquet.Value) (types.Datetime, error) {
 				return parquetTimestampValueToDatetime(proc.Ctx, st, v, loc)
 			})
+		}
+	case types.T_year:
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+					func(data []byte) (types.MoYear, error) {
+						return types.ParseMoYear(util.UnsafeBytesToString(data))
+					},
+					types.MoYear(0),
+				)
+			}
+		} else if isParquetIntegerSource(st, false) {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.MoYear(0), func(v parquet.Value) (types.MoYear, error) {
+					value, err := parquetValueToInt64(proc.Ctx, st, v)
+					if err != nil {
+						return 0, err
+					}
+					return types.ParseMoYearFromInt(value)
+				})
+			}
 		}
 	case types.T_time:
 		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
@@ -2499,6 +2525,22 @@ func processStringToFixed[T any](
 	parseFunc func(data []byte) (T, error),
 	zeroVal T,
 ) error {
+	return processStringToFixedWithTrim(ctx, mp, page, proc, vec, parseFunc, zeroVal, true)
+}
+
+// SET display strings require the original bytes; numeric/date conversions
+// retain their existing trimming policy. Both use the same validated loader
+// and rollback path.
+func processStringToFixedWithTrim[T any](
+	ctx context.Context,
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+	parseFunc func(data []byte) (T, error),
+	zeroVal T,
+	trimSpace bool,
+) error {
 	numRows, err := parquetPageCount(ctx, "NumRows()", page.NumRows())
 	if err != nil {
 		return err
@@ -2583,8 +2625,9 @@ func processStringToFixed[T any](
 			data = loader.loadAt(idx)
 		}
 
-		// Use bytes.TrimSpace to avoid string allocation
-		data = bytes.TrimSpace(data)
+		if trimSpace {
+			data = bytes.TrimSpace(data)
+		}
 
 		// Parse and write
 		val, parseErr := parseFunc(data)
