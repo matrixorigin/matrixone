@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	limitop "github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	offsetop "github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
@@ -1145,4 +1147,65 @@ func TestRewriteAutoModeInTableExpr_ApplyTableExpr(t *testing.T) {
 	right := applyExpr.Right.(*tree.AliasedTableExpr).Expr.(*tree.Subquery).Select.(*tree.Select)
 	assert.Equal(t, "pre", left.RankOption.Option["mode"])
 	assert.Equal(t, "pre", right.RankOption.Option["mode"])
+}
+
+func TestPreparedOuterLimitZeroMaterialization(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	c.isPrepare = false
+	params := vector.NewVec(types.T_text.ToType())
+	defer func() { c.proc.SetPrepareParams(nil); params.Free(c.proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("0"), false, c.proc.Mp()))
+	c.proc.SetPrepareParams(params)
+	stmt, err := mysql.Parse(c.proc.Ctx, "select 1 limit ?", 1)
+	require.NoError(t, err)
+	defer stmt[0].Free()
+	c.stmt = stmt[0]
+	source := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_uint64)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+	limit, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "cast", []*plan.Expr{source, target})
+	require.NoError(t, err)
+	limited := &plan.Node{NodeType: plan.Node_SORT, Limit: limit}
+	root := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{0}}
+	q := &plan.Query{StmtType: plan.Query_SELECT, Nodes: []*plan.Node{limited, root}, Steps: []int32{0, 1}}
+	pn := &plan.Plan{IsPrepare: true, Plan: &plan.Plan_Query{Query: q}}
+	for _, value := range []string{"2", "0", "1", "0"} {
+		params.Reset(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, c.proc.Mp()))
+		restore, err := c.materializePreparedLimitZero(pn)
+		require.NoError(t, err)
+		if value == "0" {
+			require.NotNil(t, restore)
+			require.Equal(t, 1, c.firstStepToCompile(q))
+			require.True(t, c.canUseLiteralLimitZeroFastPath(root))
+			restore()
+		} else {
+			require.Nil(t, restore)
+			require.Zero(t, c.firstStepToCompile(q))
+		}
+		require.Nil(t, root.Limit)
+		require.Same(t, limit, limited.Limit)
+	}
+	params.Reset(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("0"), false, c.proc.Mp()))
+	c.isPrepare = true
+	restore, err := c.materializePreparedLimitZero(pn)
+	require.NoError(t, err)
+	require.Nil(t, restore)
+	c.isPrepare = false
+	c.stmt = sqlCalcFoundRowsTestStatement()
+	restore, err = c.materializePreparedLimitZero(pn)
+	require.NoError(t, err)
+	require.Nil(t, restore)
+	c.stmt = stmt[0]
+	limited.NodeType = plan.Node_RECURSIVE_CTE
+	restore, err = c.materializePreparedLimitZero(pn)
+	require.NoError(t, err)
+	require.Nil(t, restore)
+	limited.NodeType = plan.Node_SORT
+	params.Reset(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("-1"), false, c.proc.Mp()))
+	restore, err = c.materializePreparedLimitZero(pn)
+	require.Error(t, err)
+	require.Nil(t, restore)
+	require.Nil(t, root.Limit)
 }
