@@ -4,7 +4,7 @@ use vecu8db;
 create table u8t(a int, v vecuint8(4));
 desc u8t;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
+a    int    YES        null        
 v    VECUINT8(4)    YES        null        
 show create table u8t;
 Table    Create Table

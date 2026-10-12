@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 
@@ -2944,4 +2945,66 @@ func newTransparentDerivedEquality(corr *plan.CorrColRef, localTag int32) *plan.
 			},
 		},
 	}
+}
+
+func TestPullupPreservesFoldableScalars(t *testing.T) {
+	target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+	constant, err := BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{makePlan2StringConstExprWithType("change", false), target})
+	require.NoError(t, err)
+	volatile, err := BindFuncExprImplByPlanExpr(context.Background(), "rand", nil)
+	require.NoError(t, err)
+	inner := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 7}}}
+	computed, err := BindFuncExprImplByPlanExpr(context.Background(), "abs", []*plan.Expr{inner})
+	require.NoError(t, err)
+	for _, agg := range []bool{false, true} {
+		for _, tc := range []struct {
+			name   string
+			expr   *plan.Expr
+			inline bool
+		}{
+			{"literal cast", constant, true}, {"inner function", computed, false}, {"volatile", volatile, false},
+		} {
+			t.Run(fmt.Sprintf("agg=%t/%s", agg, tc.name), func(t *testing.T) {
+				builder := &QueryBuilder{nameByColRef: make(map[[2]int32]string)}
+				node := &plan.Node{}
+				var got *plan.Expr
+				if agg {
+					got = builder.pullupThroughAgg(nil, node, 9, tc.expr)
+				} else {
+					got = builder.pullupThroughProj(nil, node, 9, tc.expr)
+				}
+				if tc.inline {
+					require.Same(t, tc.expr, got)
+					require.Empty(t, node.GroupBy)
+					require.Empty(t, node.ProjectList)
+				} else {
+					require.Equal(t, int32(9), got.GetCol().RelPos)
+					require.Equal(t, 1, len(node.GroupBy)+len(node.ProjectList))
+				}
+			})
+		}
+	}
+}
+
+func TestCorrelatedCaseLimitKeepsConstantOwnership(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
+		SELECT n1.N_NATIONKEY,
+		       (SELECT n2.N_NATIONKEY FROM NATION n2
+		         WHERE n2.N_NAME = concat_ws('', CASE WHEN n1.N_NAME = 'edit'
+		                                      THEN 'change' ELSE n1.N_NAME END, '_page')
+		         ORDER BY n2.N_NAME LIMIT 1)
+		FROM NATION n1`)
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	partitioned := false
+	for _, node := range reachableFlattenSubqueryNodes(query) {
+		require.Nil(t, node.Limit)
+		for _, expr := range node.WinSpecList {
+			if window := expr.GetW(); window != nil && window.Name == "row_number" && len(window.PartitionBy) > 0 {
+				partitioned = true
+			}
+		}
+	}
+	require.True(t, partitioned)
+	assertReachablePlanHasNoCorrelatedExpr(t, query)
 }

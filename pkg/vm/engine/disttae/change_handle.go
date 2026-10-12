@@ -127,6 +127,7 @@ type PartitionChangesHandle struct {
 	primarySeqnum       int
 	snapshotReadPolicy  engine.SnapshotReadPolicy
 	preserveAllVersions bool
+	keepTrailingDeletes bool
 	mp                  *mpool.MPool
 	fs                  fileservice.FileService
 
@@ -162,6 +163,7 @@ func NewPartitionChangesHandle(
 		primarySeqnum:       tbl.primarySeqnum,
 		snapshotReadPolicy:  snapshotReadPolicy,
 		preserveAllVersions: engine.CollectChangesPreserveAllVersionsFromContext(ctx),
+		keepTrailingDeletes: engine.CollectChangesKeepTrailingDeletesFromContext(ctx),
 		mp:                  mp,
 		fs:                  tbl.getTxn().engine.fs,
 	}
@@ -190,9 +192,15 @@ func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (dat
 	return h.nextReplay(ctx, mp)
 }
 
+// collectChangesContext re-attaches the CollectChanges options captured at
+// construction, so a range split into successive sub-handles keeps the caller's
+// policy even when Next is called with a context that does not carry it.
 func (h *PartitionChangesHandle) collectChangesContext(ctx context.Context) context.Context {
 	if h.preserveAllVersions {
-		return engine.WithCollectChangesPreserveAllVersions(ctx)
+		ctx = engine.WithCollectChangesPreserveAllVersions(ctx)
+	}
+	if h.keepTrailingDeletes {
+		ctx = engine.WithCollectChangesKeepTrailingDeletes(ctx)
 	}
 	return ctx
 }
@@ -370,6 +378,7 @@ func (h *PartitionChangesHandle) loadCheckpointEntries(
 }
 
 func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end bool, err error) {
+	ctx = h.collectChangesContext(ctx)
 	if h.currentPSTo.EQ(&h.toTs) {
 		return true, nil
 	}
@@ -572,6 +581,7 @@ func (h *PartitionChangesHandle) installSnapshotStateRangeHandle(
 	debugLabel := engine.CollectChangesDebugLabelFromContext(ctx)
 	retainRowID := engine.RetainRowIDFromContext(ctx)
 	preserveAllVersions := h.preserveAllVersions
+	keepTrailingDeletes := h.keepTrailingDeletes
 	rangeFrom, rangeTo := h.currentPSFrom, h.currentPSTo
 	skipDeletes, primarySeqnum, primaryIdx := h.skipDeletes, snapshotTbl.primarySeqnum, snapshotTbl.primaryIdx
 	logicalSeqnums := append([]uint16(nil), snapshotTbl.seqnums...)
@@ -585,6 +595,9 @@ func (h *PartitionChangesHandle) installSnapshotStateRangeHandle(
 			nextCtx = engine.WithRetainRowID(nextCtx, retainRowID)
 			if preserveAllVersions {
 				nextCtx = engine.WithCollectChangesPreserveAllVersions(nextCtx)
+			}
+			if keepTrailingDeletes {
+				nextCtx = engine.WithCollectChangesKeepTrailingDeletes(nextCtx)
 			}
 			return logtailreplay.NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
 				nextCtx,

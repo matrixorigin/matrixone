@@ -16,7 +16,9 @@ package compile
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -980,4 +982,19 @@ func TestApplyOpStatsToNode_ReadSize(t *testing.T) {
 
 	// Verify node 0 stats are unchanged
 	require.Equal(t, int64(3072*1024), qry.Nodes[0].AnalyzeInfo.ReadSize, "Node 0 ReadSize should remain unchanged")
+}
+
+func TestPreparedAnalyzeResetDropsPreviousRequestResource(t *testing.T) {
+	for _, tp := range []bool{false, true} {
+		phy := &models.PhyPlan{Resource: &resource.StatementResourceSummary{Memory: resource.MemoryTotals{MaxDomainPeakLiveBytes: 1 << 30}}}
+		anal := &AnalyzeModule{phyPlan: phy, qry: &plan.Query{Nodes: []*plan.Node{{AnalyzeInfo: &plan.AnalyzeInfo{TimeConsumed: 99}}}}}
+		anal.Reset(true, tp)
+		require.Same(t, phy, anal.GetPhyPlan())
+		require.Nil(t, anal.GetPhyPlan().Resource)
+		require.Zero(t, anal.qry.Nodes[0].AnalyzeInfo.TimeConsumed)
+		// Simulate a short failure before AnalyzeExecPlan refreshes this generation.
+		level, reasons := models.SelectStatementDiagnosticLevel(time.Millisecond, time.Second, anal.GetPhyPlan().Resource, true, false)
+		require.Equal(t, 2, level)
+		require.Equal(t, uint64(1<<6), reasons)
+	}
 }

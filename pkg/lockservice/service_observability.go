@@ -156,10 +156,9 @@ func (s *service) ForceRefreshLockTableBinds(
 func (s *service) GetLockTableBind(
 	group uint32,
 	tableID uint64) (pb.LockTable, error) {
-	l, err := s.getLockTable(context.Background(), group, tableID)
-	if err != nil {
-		return pb.LockTable{}, err
-	}
+	// Observation must not allocate a lock table or wait for its owner. A
+	// missing route is an unknown binding, not proof of a stable watermark.
+	l := s.tableGroups.get(group, tableID)
 	if l == nil {
 		return pb.LockTable{}, nil
 	}
@@ -231,6 +230,7 @@ func (s *service) CloseRemoteLockTable(
 	removed := false
 	s.tableGroups.removeWithFilter(func(id uint64, lt lockTable) bool {
 		ok := id == tableID &&
+			lt.getBind().ServiceID != s.serviceID &&
 			lt.getBind().Version == version &&
 			lt.getBind().Group == group
 		if ok {

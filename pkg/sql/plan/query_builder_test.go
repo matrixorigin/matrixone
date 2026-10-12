@@ -557,7 +557,7 @@ func TestBuildTable_AlterView(t *testing.T) {
 	tb.SchemaName = "db"
 	tb.ObjectName = "v"
 	bc := NewBindContext(qb, nil)
-	_, err = qb.buildTable(tb, bc, nil)
+	_, _, err = qb.buildTable(tb, bc, nil)
 	assert.Error(t, err)
 }
 
@@ -590,7 +590,7 @@ func TestBuildTableRejectsOutOfScopeSnapshot(t *testing.T) {
 		Type: tree.ATTIMESTAMPSNAPSHOT,
 		Expr: tree.NewNumVal("snapshot", "snapshot", false, tree.P_char),
 	}
-	_, err := builder.buildTable(table, bindCtx, nil)
+	_, _, err := builder.buildTable(table, bindCtx, nil)
 	require.EqualError(t, err, "internal error: table-level snapshot(snapshot) does not belong to the table(db-other_table)")
 }
 
@@ -812,7 +812,7 @@ func buildViewsForLowerCaseTest(
 	tableName := &tree.TableName{}
 	tableName.SchemaName = "db"
 	tableName.ObjectName = tree.Identifier(target)
-	nodeID, err := builder.buildTable(tableName, bindCtx, nil)
+	nodeID, _, err := builder.buildTable(tableName, bindCtx, nil)
 	require.NoError(t, err)
 	return builder, nodeID
 }
@@ -880,7 +880,7 @@ func buildViewForSQLModeTest(t *testing.T, viewName string, viewData ViewData) (
 	tableName := &tree.TableName{}
 	tableName.SchemaName = "db"
 	tableName.ObjectName = tree.Identifier(viewName)
-	nodeID, err := builder.buildTable(tableName, bindCtx, nil)
+	nodeID, _, err := builder.buildTable(tableName, bindCtx, nil)
 	require.NoError(t, err)
 	require.Equal(t, plan.Node_PROJECT, builder.qry.Nodes[nodeID].NodeType)
 	require.Len(t, builder.qry.Nodes[nodeID].ProjectList, 1)
@@ -953,7 +953,7 @@ func TestTempTableAliasBindingUsesOriginName(t *testing.T) {
 	tb := &tree.TableName{}
 	tb.SchemaName = "db"
 	tb.ObjectName = "t1"
-	nodeID, err := qb.buildTable(&tree.AliasedTableExpr{Expr: tb}, bc, nil)
+	nodeID, _, err := qb.buildTable(&tree.AliasedTableExpr{Expr: tb}, bc, nil)
 	require.NoError(t, err)
 
 	_, ok := bc.bindingByTable["t1"]

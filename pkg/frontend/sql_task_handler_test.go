@@ -108,6 +108,18 @@ func TestGetSQLTaskServiceConcurrentPublication(t *testing.T) {
 	}
 }
 
+// Observe the public handler's completion/fence ordering using the existing
+// task store and query-client fixtures.
+type sqlTaskFenceQueryClient struct {
+	*mockQueryClient
+	beforeSend func(context.Context)
+}
+
+func (c *sqlTaskFenceQueryClient) SendMessage(ctx context.Context, address string, req *querypb.Request) (*querypb.Response, error) {
+	c.beforeSend(ctx)
+	return c.mockQueryClient.SendMessage(ctx, address, req)
+}
+
 func TestHandleSQLTaskCreateAlterDrop(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -477,7 +489,7 @@ func TestHandleSQLTaskMutationsSyncCommitTimestamp(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	ses, ts, _ := newSQLTaskHandlerTestSession(t, ctrl)
+	ses, ts, store := newSQLTaskHandlerTestSession(t, ctrl)
 	defer ses.Close()
 	defer func() {
 		require.NoError(t, ts.Close())
@@ -526,6 +538,45 @@ func TestHandleSQLTaskMutationsSyncCommitTimestamp(t *testing.T) {
 	require.Equal(t, ts2, mockTC.syncCalledWith)
 	require.Equal(t, 3, mockQC.sendCalls)
 	require.Equal(t, 3, mockQC.releaseCalls)
+	// A body parse failure still commits the run's terminal state before the
+	// handler returns. Its error must survive the same cross-CN fence.
+	task, err := getSQLTaskByName(ctx, store, "task_sync_commit", ses.GetAccountId())
+	require.NoError(t, err)
+	task.SQLBody = "select ("
+	_, err = store.UpdateSQLTask(ctx, []taskservice.SQLTask{task}, taskservice.WithTaskIDCond(taskservice.EQ, task.TaskID))
+	require.NoError(t, err)
+	mockTC.syncCalled = false
+	mockQC.sendCalls = 0
+	mockQC.releaseCalls = 0
+	requestCtx, cancelRequest := context.WithCancel(ctx)
+	defer cancelRequest()
+	ses.proc.Base.QueryClient = &sqlTaskFenceQueryClient{
+		mockQueryClient: mockQC,
+		beforeSend: func(rpcCtx context.Context) {
+			runs, queryErr := store.QuerySQLTaskRun(ctx, taskservice.WithTaskIDCond(taskservice.EQ, task.TaskID))
+			require.NoError(t, queryErr)
+			require.Len(t, runs, 2)
+			require.Equal(t, taskservice.SQLTaskStatusFailed, runs[0].Status)
+			// Cancel after completion: the already-owned execution still needs
+			// a live, bounded visibility RPC to publish its final metadata.
+			cancelRequest()
+			require.NoError(t, rpcCtx.Err())
+			_, bounded := rpcCtx.Deadline()
+			require.True(t, bounded)
+		},
+	}
+	err = handleExecuteSQLTask(requestCtx, ses, &tree.ExecuteSQLTask{Name: tree.Identifier("task_sync_commit")})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "syntax")
+	runs, queryErr := store.QuerySQLTaskRun(ctx, taskservice.WithTaskIDCond(taskservice.EQ, task.TaskID))
+	require.NoError(t, queryErr)
+	require.Len(t, runs, 2)
+	require.Equal(t, taskservice.SQLTaskStatusFailed, runs[0].Status)
+	require.True(t, mockTC.syncCalled)
+	require.Equal(t, ts2, mockTC.syncCalledWith)
+	require.Equal(t, 3, mockQC.sendCalls)
+	require.Equal(t, 3, mockQC.releaseCalls)
+
 }
 
 func TestExecInFrontendSQLTaskStatements(t *testing.T) {

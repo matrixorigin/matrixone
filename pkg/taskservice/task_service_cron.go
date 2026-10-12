@@ -115,7 +115,7 @@ func (s *taskService) fetchCronTasksOnce(ctx context.Context) {
 	for _, v := range tasks {
 		currentTasks[v.ID] = struct{}{}
 		if job, ok := s.crons.jobs[v.ID]; !ok {
-			s.addCronTask(v)
+			s.addCronTask(ctx, v)
 		} else {
 			if job.state.canUpdate() {
 				if job.task.TriggerTimes != v.TriggerTimes {
@@ -124,14 +124,14 @@ func (s *taskService) fetchCronTasksOnce(ctx context.Context) {
 						zap.Uint64("old-trigger-times", job.task.TriggerTimes),
 						zap.Uint64("new-trigger-times", v.TriggerTimes),
 						zap.String("task", v.DebugString()))
-					s.replaceCronTask(v)
+					s.replaceCronTask(ctx, v)
 				} else if job.task.CronExpr != v.CronExpr {
 					s.rt.Logger().Info("cron task updated",
 						zap.String("cause", "cron expr changed"),
 						zap.String("old-cron-expr", job.task.CronExpr),
 						zap.String("new-cron-expr", v.CronExpr),
 						zap.String("task", v.DebugString()))
-					s.replaceCronTask(v)
+					s.replaceCronTask(ctx, v)
 				}
 				job.state.endUpdate()
 			}
@@ -146,8 +146,8 @@ func (s *taskService) fetchCronTasksOnce(ctx context.Context) {
 	}
 }
 
-func (s *taskService) addCronTask(task task.CronTask) {
-	job, err := newCronJob(task, s)
+func (s *taskService) addCronTask(ctx context.Context, task task.CronTask) {
+	job, err := newCronJob(ctx, task, s)
 	if err != nil {
 		s.rt.Logger().Error("failed to parse cron expr",
 			zap.String("cron expr", task.CronExpr),
@@ -177,10 +177,10 @@ func (s *taskService) removeCronTask(id uint64) {
 	delete(s.crons.entries, id)
 }
 
-func (s *taskService) replaceCronTask(v task.CronTask) {
+func (s *taskService) replaceCronTask(ctx context.Context, v task.CronTask) {
 	s.crons.cron.Remove(s.crons.entries[v.ID])
 
-	job, err := newCronJob(v, s)
+	job, err := newCronJob(ctx, v, s)
 	if err != nil {
 		s.rt.Logger().Error("failed to parse cron expr",
 			zap.String("cron expr", v.CronExpr),
@@ -204,18 +204,20 @@ func newTaskFromMetadata(metadata task.TaskMetadata) task.AsyncTask {
 }
 
 type cronJob struct {
+	ctx      context.Context // Borrowed lifecycle context from discovery.
 	state    cronJobState
 	s        *taskService
 	schedule cron.Schedule
 	task     task.CronTask
 }
 
-func newCronJob(task task.CronTask, s *taskService) (*cronJob, error) {
+func newCronJob(ctx context.Context, task task.CronTask, s *taskService) (*cronJob, error) {
 	schedule, err := s.cronParser.Parse(task.CronExpr)
 	if err != nil {
 		return nil, err
 	}
 	return &cronJob{
+		ctx:      ctx,
 		schedule: schedule,
 		task:     task,
 		s:        s,
@@ -223,7 +225,7 @@ func newCronJob(task task.CronTask, s *taskService) (*cronJob, error) {
 }
 
 func (j *cronJob) Run() {
-	if !j.state.canRun() {
+	if j.ctx.Err() != nil || !j.state.canRun() {
 		return
 	}
 	defer func() {
@@ -250,8 +252,14 @@ func (j *cronJob) doRun() {
 }
 
 func (j *cronJob) doRunWithRetryBackoff(retryBackoff time.Duration) {
+	if j.ctx.Err() != nil {
+		return
+	}
 	now := time.Now()
-	cronTasks, err := j.s.QueryCronTask(context.Background(), WithCronTaskId(EQ, j.task.ID))
+	cronTasks, err := j.s.QueryCronTask(j.ctx, WithCronTaskId(EQ, j.task.ID))
+	if j.ctx.Err() != nil {
+		return
+	}
 	if err != nil {
 		j.s.rt.Logger().Error("failed to query cron task", zap.Error(err))
 		return
@@ -275,23 +283,36 @@ func (j *cronJob) doRunWithRetryBackoff(retryBackoff time.Duration) {
 
 	// Retry with exponential backoff when database is temporarily unavailable
 	for attempt := 1; attempt <= cronTaskTriggerMaxRetries; attempt++ {
-		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseDoRun)
+		if j.ctx.Err() != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeoutCause(j.ctx, time.Second*10, moerr.CauseDoRun)
 		_, err = j.s.store.UpdateCronTask(ctx, cronTask, asyncTask)
-		cancel()
 
 		if err == nil {
+			cancel()
 			j.task = cronTask
 			return
 		}
 
 		err = moerr.AttachCause(ctx, err)
+		cancel()
+		if j.ctx.Err() != nil {
+			return
+		}
 		if attempt < cronTaskTriggerMaxRetries {
 			j.s.rt.Logger().Warn("trigger cron task failed, retrying",
 				zap.String("cron-task", j.task.DebugString()),
 				zap.Int("attempt", attempt),
 				zap.Int("max-retries", cronTaskTriggerMaxRetries),
 				zap.Error(err))
-			time.Sleep(retryBackoff * time.Duration(attempt))
+			timer := time.NewTimer(retryBackoff * time.Duration(attempt))
+			select {
+			case <-j.ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 		} else {
 			j.s.rt.Logger().Error("trigger cron task failed after retries",
 				zap.String("cron-task", j.task.DebugString()),
@@ -302,12 +323,15 @@ func (j *cronJob) doRunWithRetryBackoff(retryBackoff time.Duration) {
 }
 
 func (j *cronJob) checkConcurrency() bool {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseCheckConcurrency)
+	ctx, cancel := context.WithTimeoutCause(j.ctx, time.Second*10, moerr.CauseCheckConcurrency)
 	defer cancel()
 
 	queryTask, err := j.s.QueryAsyncTask(ctx,
 		WithTaskStatusCond(task.TaskStatus_Running, task.TaskStatus_Created),
 		WithTaskExecutorCond(EQ, j.task.Metadata.Executor))
+	if j.ctx.Err() != nil {
+		return false
+	}
 	if err != nil ||
 		uint32(len(queryTask)) >= j.task.Metadata.Options.Concurrency {
 		err = moerr.AttachCause(ctx, err)

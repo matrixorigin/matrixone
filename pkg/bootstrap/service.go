@@ -247,7 +247,7 @@ func (s *service) execBootstrapWithRetry(ctx context.Context) error {
 		// The transaction body returned before Commit was attempted. Retrying the
 		// complete transaction is safe and retains the already-acquired owner
 		// privilege.
-		if err := waitBootstrapRetry(ctx); err != nil {
+		if err := waitBootstrapRetry(ctx, bootstrapRetryInterval); err != nil {
 			return err
 		}
 	}
@@ -286,7 +286,7 @@ func (s *service) reconcileUncertainBootstrapTxn(ctx context.Context) error {
 			s.completeBootstrap()
 			return nil
 		}
-		if err := waitBootstrapRetry(ctx); err != nil {
+		if err := waitBootstrapRetry(ctx, bootstrapRetryInterval); err != nil {
 			return err
 		}
 	}
@@ -298,14 +298,14 @@ func (s *service) checkAlreadyBootstrappedWithRetry(ctx context.Context) (bool, 
 		if err == nil || !isBootstrapRetryableError(err) {
 			return ok, err
 		}
-		if err := waitBootstrapRetry(ctx); err != nil {
+		if err := waitBootstrapRetry(ctx, bootstrapRetryInterval); err != nil {
 			return false, err
 		}
 	}
 }
 
-func waitBootstrapRetry(ctx context.Context) error {
-	timer := time.NewTimer(bootstrapRetryInterval)
+func waitBootstrapRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
@@ -486,7 +486,7 @@ func InitSystemViews(ctx context.Context, exec executor.SQLExecutor) error {
 		}
 		// An uncertain commit is safe to reconcile: the next transaction reads the
 		// actual object set before issuing any idempotent CREATE IF NOT EXISTS.
-		if err := waitBootstrapRetry(ctx); err != nil {
+		if err := waitBootstrapRetry(ctx, bootstrapRetryInterval); err != nil {
 			return err
 		}
 	}

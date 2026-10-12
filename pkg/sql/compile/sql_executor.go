@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -349,7 +350,39 @@ func (exec *txnExecutor) Use(db string) {
 func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption,
-) (executor.Result, error) {
+) (execResult executor.Result, retErr error) {
+	// Seal before returning to an owned or borrowed callback, even if it
+	// suppresses this error. Cleanup waits on the existing SQL-drain owner.
+	ownerTxn := exec.opts.Txn()
+	if exec.opts.ExistsTxn() && ownerTxn != nil && ownerTxn.Txn().IsPessimistic() {
+		if _, ok := ownerTxn.(client.DeferredTxnRollback); !ok {
+			return executor.Result{}, moerr.NewInternalError(exec.ctx, "borrowed pessimistic executor lacks deferred rollback ownership")
+		}
+	}
+	var sqlToken uint64
+	if ownerTxn != nil {
+		statementCtx, cancel := context.WithCancel(exec.ctx)
+		var err error
+		sqlToken, err = client.TryEnterRunSqlWithTokenAndSQL(ownerTxn, cancel, sql)
+		if err != nil {
+			cancel()
+			return executor.Result{}, err
+		}
+		originalCtx := exec.ctx
+		exec.ctx = statementCtx
+		defer func() { cancel(); exec.ctx = originalCtx }()
+	}
+	defer func() {
+		if moerr.MustRollbackTxn(retErr) && ownerTxn != nil {
+			if owner, ok := ownerTxn.(client.DeferredTxnRollback); ok {
+				owner.RollbackAfterRunningSQL(retErr)
+			}
+		}
+		if ownerTxn != nil {
+			ownerTxn.ExitRunSqlWithToken(sqlToken)
+		}
+	}()
+
 	parentCtx := exec.ctx
 	exec.ctx = markInternalJSONMergeWarningContext(
 		newInternalStatementContext(parentCtx))
@@ -572,12 +605,12 @@ func (exec *txnExecutor) Exec(
 	}
 
 	c := exec.newCompile(proc, stmts[0], sql, receiveAt)
+	c.runSqlToken = sqlToken
 	c.SetOriginSQL(sql)
 	c.adjustTableExtraFunc = exec.opts.AdjustTableExtraFunc()
 	c.disableDropAutoIncrement = statementOption.DisableDropIncrStatement()
 	c.skipDataBranchReclaim = statementOption.SkipDataBranchReclaim()
 	c.keepAutoIncrement = statementOption.KeepAutoIncrement()
-	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.ignorePublish = statementOption.IgnorePublish()
 	c.ignoreCheckExperimental = statementOption.IgnoreCheckExperimental()
 	c.disableLock = statementOption.DisableLock()

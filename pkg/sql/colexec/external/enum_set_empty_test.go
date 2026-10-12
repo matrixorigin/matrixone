@@ -1,0 +1,206 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package external
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
+)
+
+func enumSetLoadParam(typ plan.Type, mode string) *ExternalParam {
+	param := decimal256ExternalParam(tree.CSV, "", typ)
+	param.Extern.ExternType = int32(plan.ExternType_LOAD)
+	switch mode {
+	case "parallel":
+		param.ParallelLoad = true
+	case "local-nonstrict":
+		param.Extern.Local = true
+		param.StrictSqlMode = false
+	}
+	return param
+}
+
+// An empty ENUM member and an empty SET are valid values that must not be
+// loaded as NULL (issue #29840); explicit NULL markers still load as NULL.
+// SET is stored as uint64 but must not be zero-filled or numeric-prefixed, and
+// a declared whitespace ENUM member must not be trimmed into another member.
+func TestGetColDataKeepsEmptyEnumAndSetDistinctFromNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	enumTyp := plan.Type{Id: int32(types.T_enum), Enumvalues: " ,red,"}
+	setTyp := plan.Type{Id: int32(types.T_uint64), Enumvalues: "0,a"}
+	for _, mode := range []string{"strict", "parallel", "local-nonstrict"} {
+		for _, tc := range []struct {
+			typ  plan.Type
+			val  string
+			want any // Enum / uint64, or the raw text under parallel load
+		}{
+			{enumTyp, " ", types.Enum(1)},
+			{enumTyp, "", types.Enum(3)},
+			{enumTyp, " red ", types.Enum(2)},
+			{setTyp, "", uint64(0)},
+			{setTyp, " ", uint64(0)},
+			{setTyp, "a", uint64(2)},
+			{setTyp, "0", uint64(1)},
+		} {
+			param := enumSetLoadParam(tc.typ, mode)
+			vecTyp := types.T(tc.typ.Id).ToType()
+			if mode == "parallel" {
+				vecTyp = types.T_varchar.ToType()
+			}
+			for _, input := range []struct {
+				field  csvparser.Field
+				mapped bool
+			}{{field: csvparser.Field{Val: tc.val}}, {field: csvparser.Field{IsNull: true}}, {field: csvparser.Field{Val: tc.val}, mapped: true}} {
+				func() {
+					field := input.field
+					param.Extern.NullMap = nil
+					if input.mapped {
+						param.Extern.NullMap = map[string][]string{param.Attrs[0].ColName: {tc.val, strings.TrimSpace(tc.val)}}
+					}
+					bat := batch.NewWithSize(1)
+					bat.Vecs[0] = vector.NewVec(vecTyp)
+					defer bat.Clean(proc.Mp())
+					require.NoError(t, getColData(bat, []csvparser.Field{field}, 0, param, proc.Mp(), param.Attrs[0], proc))
+					vec := bat.Vecs[0]
+					name := mode + "/" + tc.typ.Enumvalues + "/" + tc.val
+					if field.IsNull || input.mapped {
+						require.True(t, vec.GetNulls().Contains(0), name)
+					} else {
+						require.False(t, vec.GetNulls().Contains(0), name)
+						switch {
+						case mode == "parallel":
+							// the text is cast by the type parser later; it must
+							// reach it unchanged except for non-member trimming
+							got := vec.GetStringAt(0)
+							_, isSet := tc.want.(uint64)
+							if isSet {
+								require.Equal(t, strings.TrimSpace(tc.val), got, name)
+							} else if tc.val == " red " {
+								require.Equal(t, "red", got, name)
+							} else {
+								require.Equal(t, tc.val, got, name)
+							}
+						case tc.typ.Id == int32(types.T_enum):
+							require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[types.Enum](vec)[0], name)
+						default:
+							require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[uint64](vec)[0], name)
+						}
+					}
+				}()
+			}
+		}
+	}
+
+	// A declared leading-space SET member is not trimmed into another member;
+	// LOAD stores what native INSERT (types.ParseSet) stores. Padded input that
+	// is not valid as written keeps the trimming compatibility.
+	// Unicode whitespace (NBSP, ideographic space) is guarded like ASCII
+	// space, since strings.TrimSpace would remove it too.
+	type padCase struct {
+		val, text string // input, text expected under parallel load
+		want      uint64
+	}
+	for _, pad := range []struct {
+		typ   plan.Type
+		cases []padCase
+	}{
+		{plan.Type{Id: int32(types.T_uint64), Enumvalues: " a,a,中文"}, []padCase{
+			{" a", " a", 1}, {"a", "a", 2}, {"中文", "中文", 4}, {" a,a", " a,a", 3},
+			{"a ", "a ", 2}, {" 中文", "中文", 4}, {" 4 ", "4", 4},
+		}},
+		{plan.Type{Id: int32(types.T_uint64), Enumvalues: " a,\u00a0a,\u3000a,a\u00a0, a\u00a0,a"}, []padCase{
+			{" a", " a", 1}, {"\u00a0a", "\u00a0a", 2}, {"\u3000a", "\u3000a", 4},
+			{"a\u00a0", "a\u00a0", 8}, {" a\u00a0", " a\u00a0", 16}, {"a", "a", 32},
+			{"\u3000 a", "a", 32}, {"\u00a0a,a\u00a0", "\u00a0a,a\u00a0", 10},
+		}},
+	} {
+		padTyp := pad.typ
+		for _, mode := range []string{"strict", "parallel", "local-nonstrict"} {
+			for _, tc := range pad.cases {
+				native, err := types.ParseSet(padTyp.Enumvalues, tc.text)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, native, tc.val)
+				param := enumSetLoadParam(padTyp, mode)
+				vecTyp := types.T_uint64.ToType()
+				if mode == "parallel" {
+					vecTyp = types.T_varchar.ToType()
+				}
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(vecTyp)
+				require.NoError(t, getColData(bat, []csvparser.Field{{Val: tc.val}}, 0, param, proc.Mp(), param.Attrs[0], proc))
+				name := mode + "/" + tc.val
+				require.False(t, bat.Vecs[0].GetNulls().Contains(0), name)
+				if mode == "parallel" {
+					require.Equal(t, tc.text, bat.Vecs[0].GetStringAt(0), name)
+				} else {
+					require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0])[0], name)
+				}
+				bat.Clean(proc.Mp())
+			}
+		}
+	}
+
+	// ENUM without a declared '' member keeps the previous behavior (NULL).
+	param := enumSetLoadParam(plan.Type{Id: int32(types.T_enum), Enumvalues: "red,blue"}, "strict")
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_enum.ToType())
+	defer bat.Clean(proc.Mp())
+	require.NoError(t, getColData(bat, []csvparser.Field{{Val: ""}}, 0, param, proc.Mp(), param.Attrs[0], proc))
+	require.True(t, bat.Vecs[0].GetNulls().Contains(0))
+}
+
+func TestIsPaddedSetInput(t *testing.T) {
+	for _, tc := range []struct {
+		def, val string
+		want     bool
+	}{
+		{" a,a", " a", true}, {" a,a", "a", false}, {" a,a", " a,a", true},
+		{"a,b", " a", false}, {"a,b", "a ", true}, {"a,b", " 1", false}, {"a,b", "", false},
+		{"\u00a0a,a", "\u00a0a", true}, {"\u3000a,a", "\u3000a", true}, {"a\u00a0,a", "a\u00a0", true},
+		{"a,b", "\u00a0a", false}, {"a,b", "a\u3000", false}, {"a,b", "\xa0a", false},
+	} {
+		require.Equal(t, tc.want, isPaddedSetInput(tc.def, tc.val), "%q in %q", tc.val, tc.def)
+	}
+	// unpadded values, the common case, are not parsed here; padded input,
+	// accepted member or trimmed fallback, is checked without building errors
+	for _, tc := range [][2]string{{"a,b", "a,b"}, {"a,b", " a "}, {" a,a", " a"}, {"\u00a0a,a", "\u00a0a"}} {
+		require.Zero(t, testing.AllocsPerRun(100, func() { isPaddedSetInput(tc[0], tc[1]) }), "%q in %q", tc[1], tc[0])
+	}
+}
+
+func TestIsEnumMember(t *testing.T) {
+	for _, tc := range []struct {
+		def, name string
+		want      bool
+	}{
+		{" ,red,", " ", true}, {" ,red,", "", true}, {" ,red,", "RED", true},
+		{"red,blue", "", false}, {"red,blue", "blue", true}, {"red,blue", " red", false},
+		{"", "", false}, {",", "", true},
+	} {
+		require.Equal(t, tc.want, isEnumMember(tc.def, tc.name), "%q in %q", tc.name, tc.def)
+	}
+	// the empty-to-NULL decision runs per row and must not allocate
+	require.Zero(t, testing.AllocsPerRun(100, func() { isEnumMember("red,green,blue", "") }))
+}

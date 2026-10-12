@@ -687,7 +687,7 @@ func appendLeafValue(
 		return vector.AppendFixed(vec, value, false, proc.Mp())
 	case types.T_char, types.T_varchar, types.T_text, types.T_blob,
 		types.T_binary, types.T_varbinary:
-		return vector.AppendBytes(vec, v.ByteArray(), false, proc.Mp())
+		return appendParquetVarlenValue(proc.Ctx, vec, v.ByteArray(), false, proc, types.MustTypeFromPlan(def.Typ))
 	default:
 		return moerr.NewNYIf(proc.Ctx, "row mode convert to %s", targetType.String())
 	}
@@ -734,8 +734,7 @@ func (h *ParquetHandler) processNestedValue(
 			"failed to reconstruct nested column %s: %v", col.Name(), err)
 	}
 
-	targetType := types.T(def.Typ.Id)
-	return writeNestedToVector(nested, targetType, vec, proc)
+	return writeNestedToVector(nested, types.MustTypeFromPlan(def.Typ), vec, proc)
 }
 
 func validateParquetNestedValues(ctx context.Context, col *parquet.Column, values []parquet.Value) error {
@@ -1415,13 +1414,13 @@ func parquetValueToGo(v parquet.Value) any {
 }
 
 // writeNestedToVector writes nested structure to vector
-func writeNestedToVector(nested any, targetType types.T, vec *vector.Vector, proc *process.Process) error {
+func writeNestedToVector(nested any, targetType types.Type, vec *vector.Vector, proc *process.Process) error {
 	bj, err := bytejson.CreateByteJSON(nested)
 	if err != nil {
 		return moerr.NewInternalErrorf(proc.Ctx, "failed to create JSON: %v", err)
 	}
 
-	switch targetType {
+	switch targetType.Oid {
 	case types.T_json:
 		jsonBytes, err := types.EncodeJson(bj)
 		if err != nil {
@@ -1430,8 +1429,8 @@ func writeNestedToVector(nested any, targetType types.T, vec *vector.Vector, pro
 		return vector.AppendBytes(vec, jsonBytes, false, proc.Mp())
 	case types.T_text, types.T_varchar, types.T_char:
 		jsonStr := bj.String()
-		return vector.AppendBytes(vec, []byte(jsonStr), false, proc.Mp())
+		return appendParquetVarlenValue(proc.Ctx, vec, []byte(jsonStr), false, proc, targetType)
 	default:
-		return moerr.NewInternalErrorf(proc.Ctx, "unsupported target type: %s", targetType.String())
+		return moerr.NewInternalErrorf(proc.Ctx, "unsupported target type: %s", targetType.Oid.String())
 	}
 }

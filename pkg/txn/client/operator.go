@@ -250,13 +250,14 @@ func WithFootPrints(fp *footPrints) TxnOption {
 }
 
 type txnOperator struct {
-	sid             string
-	logger          *log.MOLogger
-	sender          rpc.TxnSender
-	clock           clock.Clock
-	lockService     lockservice.LockService
-	timestampWaiter TimestampWaiter
-	terminalCall    atomic.Uint32
+	sid                 string
+	logger              *log.MOLogger
+	sender              rpc.TxnSender
+	clock               clock.Clock
+	lockService         lockservice.LockService
+	timestampWaiter     TimestampWaiter
+	terminalCall        atomic.Uint32
+	catalogReadRevision atomic.Uint64
 
 	mu struct {
 		sync.RWMutex
@@ -698,6 +699,7 @@ func (tc *txnOperator) initWithRunSQLGate(
 
 	tc.initReset(sealRunSQL)
 	tc.initProtectedFields(sealRunSQL)
+	tc.catalogReadRevision.Add(1)
 
 	tc.mu.txn = txnMeta
 	tc.reset.txnID = txnMeta.ID
@@ -861,7 +863,10 @@ func (tc *txnOperator) notifyActive() {
 }
 
 func (tc *txnOperator) AddWorkspace(workspace Workspace) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
 	tc.reset.workspace = workspace
+	tc.catalogReadRevision.Add(1)
 }
 
 func (tc *txnOperator) GetWorkspace() Workspace {
@@ -899,6 +904,7 @@ func (tc *txnOperator) SnapshotTS() timestamp.Timestamp {
 func (tc *txnOperator) SetSnapshotTS(ts timestamp.Timestamp) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
+	tc.catalogReadRevision.Add(1)
 	tc.mu.txn.SnapshotTS = ts
 }
 
@@ -975,6 +981,7 @@ func (tc *txnOperator) updateSnapshot(
 	if err != nil {
 		return err
 	}
+	tc.catalogReadRevision.Add(1)
 	tc.mu.txn.SnapshotTS = next
 	return nil
 }
@@ -1021,6 +1028,7 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 		}
 	}
 	if tc.mu.txn.SnapshotTS.Less(snapshot.Txn.SnapshotTS) {
+		tc.catalogReadRevision.Add(1)
 		tc.mu.txn.SnapshotTS = snapshot.Txn.SnapshotTS
 	}
 	if snapshot.Txn.RequireAutoIncrEpochFenceCommit {
@@ -2095,6 +2103,12 @@ func (tc *txnOperator) closeUnadmitted(err error) {
 // cleaning concurrently is unsafe because the running SQL still owns the
 // workspace. Sealing rejects new SQL before the final exit performs one
 // detached, bounded rollback.
+// RollbackAfterRunningSQL shares the existing terminal owner with SQL callers
+// that borrow a transaction and may otherwise catch a fatal statement error.
+func (tc *txnOperator) RollbackAfterRunningSQL(err error) {
+	tc.scheduleRollbackAfterRunningSQL(err)
+}
+
 func (tc *txnOperator) scheduleRollbackAfterRunningSQL(waitErr error) {
 	tc.mu.Lock()
 	if tc.mu.closed || tc.mu.terminalAction != txnTerminalActionNone {

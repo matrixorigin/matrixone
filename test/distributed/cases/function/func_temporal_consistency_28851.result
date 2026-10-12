@@ -723,9 +723,9 @@ select column_name, column_type, datetime_precision from information_schema.colu
 where table_schema = database() and table_name = 'time_fsp_materialized_28851'
 order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  datetime_precision[-5,64,0]  𝄀
-typed_time  ¦  TIME(6)  ¦  6  𝄀
-wide_decimal_time  ¦  TIME(6)  ¦  6  𝄀
-literal_time  ¦  TIME(4)  ¦  4
+typed_time  ¦  time(6)  ¦  6  𝄀
+wide_decimal_time  ¦  time(6)  ¦  6  𝄀
+literal_time  ¦  time(4)  ¦  4
 select microsecond(typed_time), microsecond(wide_decimal_time), microsecond(literal_time)
 from time_fsp_materialized_28851;
 ➤ microsecond(typed_time)[-5,64,0]  ¦  microsecond(wide_decimal_time)[-5,64,0]  ¦  microsecond(literal_time)[-5,64,0]  𝄀
