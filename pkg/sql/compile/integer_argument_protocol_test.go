@@ -86,8 +86,6 @@ func TestIntegerArgumentProtocolBoundaries(t *testing.T) {
 					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 110")
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(102))
 					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 110")
-					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion108)
-					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 110")
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
 					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 110")
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)

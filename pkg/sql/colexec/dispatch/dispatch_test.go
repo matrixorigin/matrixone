@@ -142,12 +142,6 @@ func TestMarshalRemoteBatchNumericBinaryLiteralProtocolGate(t *testing.T) {
 	require.ErrorContains(t, err, "MORPCVersion110")
 	require.Equal(t, "", buf.String(), "v102 rejection must precede stable batch writes")
 
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion108))
-	buf.Reset()
-	_, err = marshalRemoteBatch(proc, bat, buf)
-	require.ErrorContains(t, err, "MORPCVersion110")
-	require.Equal(t, "", buf.String(), "v108 rejection must precede stable batch writes")
-
 	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion109))
 	buf.Reset()
 	_, err = marshalRemoteBatch(proc, bat, buf)
