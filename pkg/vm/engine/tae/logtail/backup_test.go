@@ -471,6 +471,22 @@ func TestRewriteCheckpointCanonicalizesBackupTombstone(t *testing.T) {
 	require.NotEmpty(t, failingDstFS.persisted)
 	_, statErr := failingDstBase.StatFile(ctx, failingDstFS.persisted)
 	require.True(t, moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound), statErr)
+	secondWriteDstBase, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	secondWriteDstFS := &persistThenErrorBackupFileService{FileService: secondWriteDstBase, failOn: 3}
+	_, _, _, err = ReWriteCheckpointAndBlockFromKey(
+		ctx,
+		"backup-test",
+		srcFS,
+		secondWriteDstFS,
+		checkpointLocation,
+		lastReader,
+		CheckpointCurrentVersion,
+		backupTS,
+	)
+	require.ErrorContains(t, err, "injected post-persist write failure")
+	require.NotEmpty(t, secondWriteDstFS.persisted)
 	softDeletes := make(map[string]bool)
 	baseTS := types.TS{}
 	_, _, err = LoadCheckpointEntriesFromKey(
