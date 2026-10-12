@@ -189,7 +189,7 @@ func newCompareFor(typ types.Type, desc, nullsLast, sqlOrder bool) Compare {
 			vs:          make([]*vector.Vector, 2),
 			isConstNull: make([]bool, 2),
 		}
-	case types.T_char, types.T_varchar, types.T_blob,
+	case types.T_any, types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink, types.T_geometry:
 		return &strCompare{
 			desc:        desc,

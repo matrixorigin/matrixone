@@ -268,6 +268,124 @@ func TestDoComQueryStageCatalogErrorOverridesStaleCache(t *testing.T) {
 	require.Equal(t, 2, lookups)
 }
 
+func TestFrontendStatementBoundaryBeforeDispatch(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		outer      tree.Statement
+		effective  tree.Statement
+		binary     bool
+		derived    bool
+		failIncr   bool
+		panicIncr  bool
+		wantUpdate bool
+	}{
+		{"direct", &tree.DataBranchMerge{}, &tree.DataBranchMerge{}, false, false, false, false, true},
+		{"text_execute", &tree.Execute{}, &tree.DataBranchMerge{}, false, false, false, false, true},
+		{"binary_execute", &tree.PrepareStmt{}, &tree.DataBranchMerge{}, true, false, false, false, true},
+		{"engine", &tree.Select{}, &tree.Select{}, false, false, false, false, false},
+		{"derived", &tree.DataBranchMerge{}, &tree.DataBranchMerge{}, false, true, false, false, false},
+		{"increment_error", &tree.DataBranchMerge{}, &tree.DataBranchMerge{}, false, false, true, false, false},
+		{"increment_panic", &tree.DataBranchMerge{}, &tree.DataBranchMerge{}, false, false, false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.ReplaceDerivedStmt(tc.derived)
+			ctx := statistic.ContextWithStatsInfo(t.Context(), statistic.NewStatsInfo())
+			op := mock_frontend.NewMockTxnOperator(ctrl)
+			workspace := mock_frontend.NewMockWorkspace(ctrl)
+			op.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+			op.EXPECT().Status().Return(txn.TxnStatus_Active)
+			var events []string
+			cause := errors.New("boundary increment failed")
+			if !tc.derived {
+				workspace.EXPECT().IncrStatementID(gomock.Any(), false).DoAndReturn(func(context.Context, bool) error {
+					events = append(events, "increment")
+					if tc.panicIncr {
+						panic(cause)
+					}
+					if tc.failIncr {
+						return cause
+					}
+					return nil
+				})
+			}
+			if tc.wantUpdate {
+				workspace.EXPECT().UpdateSnapshotWriteOffset().Do(func() { events = append(events, "boundary") })
+			}
+			cw := mock_frontend.NewMockComputationWrapper(ctrl)
+			stop := errors.New("reached dispatch")
+			if !tc.derived && !tc.failIncr && !tc.panicIncr {
+				if tc.binary {
+					cw.EXPECT().Compile(gomock.Any(), gomock.Any()).DoAndReturn(func(any, func(*batch.Batch, *perfcounter.CounterSet) error) (interface{}, error) {
+						events = append(events, "dispatch")
+						return nil, stop
+					})
+				} else {
+					cw.EXPECT().Plan().DoAndReturn(func() *plan0.Plan {
+						events = append(events, "dispatch")
+						panic(stop)
+					})
+				}
+			}
+			execCtx := &ExecCtx{reqCtx: ctx, ses: ses, proc: ses.GetProc(), stmt: tc.outer,
+				effectiveTxnStatement: tc.effective, input: &UserInput{isBinaryProtExecute: tc.binary}, cw: cw}
+			if tc.derived {
+				require.NoError(t, executeStmtWithIncrStmt(ses, nil, execCtx, op))
+				require.Empty(t, events)
+			} else if tc.failIncr || tc.panicIncr {
+				require.ErrorContains(t, executeStmtWithIncrStmt(ses, nil, execCtx, op), cause.Error())
+				require.Equal(t, []string{"increment"}, events)
+			} else {
+				if tc.binary {
+					require.ErrorIs(t, executeStmtWithIncrStmt(ses, nil, execCtx, op), stop)
+				} else {
+					require.PanicsWithValue(t, stop, func() { _ = executeStmtWithIncrStmt(ses, nil, execCtx, op) })
+				}
+				want := []string{"increment", "dispatch"}
+				if tc.wantUpdate {
+					want = []string{"increment", "boundary", "dispatch"}
+				}
+				require.Equal(t, want, events)
+			}
+		})
+	}
+}
+
+func TestDerivedExecutionRestoresBorrowedStatementOwnership(t *testing.T) {
+	for _, alreadyBorrowed := range []bool{false, true} {
+		for _, panics := range []bool{false, true} {
+			t.Run(fmt.Sprintf("borrowed=%v/panic=%v", alreadyBorrowed, panics), func(t *testing.T) {
+				ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+				ctrl := gomock.NewController(t)
+				ses := newTestSession(t, ctrl)
+				defer ses.Close()
+				ses.ReplaceDerivedStmt(true)
+				proc := ses.GetProc()
+				proc.SetIncrStatementDisabled(alreadyBorrowed)
+				cause := moerr.NewTxnNeedRetryNoCtx()
+				cw := mock_frontend.NewMockComputationWrapper(ctrl)
+				cw.EXPECT().Plan().Return(nil).AnyTimes()
+				cw.EXPECT().Compile(gomock.Any(), gomock.Any()).DoAndReturn(func(any, func(*batch.Batch, *perfcounter.CounterSet) error) (interface{}, error) {
+					require.True(t, proc.IncrStatementDisabled(), "dispatch must preserve the caller's statement")
+					if panics {
+						panic(cause)
+					}
+					return nil, cause
+				})
+				execCtx := &ExecCtx{reqCtx: ctx, proc: proc, ses: ses, input: &UserInput{}, cw: cw, stmt: &tree.Select{}}
+				if panics {
+					require.PanicsWithValue(t, cause, func() { _ = executeStmtWithTxn(ses, nil, execCtx) })
+				} else {
+					require.ErrorIs(t, executeStmtWithTxn(ses, nil, execCtx), cause)
+				}
+				require.Equal(t, alreadyBorrowed, proc.IncrStatementDisabled(), "restore ownership for the next statement")
+			})
+		}
+	}
+}
+
 func TestExecuteStmtDoesNotCreateLoadLocalPipeBeforeCompileSucceeds(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 	ctrl := gomock.NewController(t)
@@ -12083,5 +12201,36 @@ func TestRecordStatementUTF8(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPreparedCTASCompileRetryPreservesNamesAndParameters(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), catalog.System_Account)
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	ses.SetSql("execute ctas_retry")
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "create table tpch.ctas_retry as select a + ? as value, a + 1 from select_test.bind_select", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	compiler := plan.NewMockCompilerContext(true, newPlanTestProcess(t))
+	compiler.SetContext(ctx)
+	params := vector.NewVec(types.T_text.ToType())
+	proc := compiler.GetProcess()
+	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("2"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	originalSource := tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL)
+	for _, value := range []int64{2, 7, 2} {
+		require.NoError(t, vector.SetStringAt(params, 0, fmt.Sprint(value), proc.Mp()))
+		retry := newPreparedExecutionRetry([]any{plan.ParamValue{Value: value}})
+		got, err := buildPlanForCompileRetry(ctx, ses, compiler, stmt, false, retry)
+		require.NoError(t, err)
+		require.Empty(t, queryParamPositions(got.GetDdl().Query))
+		cols := got.GetDdl().GetCreateTable().TableDef.Cols
+		require.Equal(t, "value", cols[0].Name)
+		require.Equal(t, "a + 1", cols[1].Name)
+		require.Equal(t, originalSource, tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL))
+		// Specialization retains each supplied value, rather than freezing the first retry.
+		require.Contains(t, got.GetDdl().Query.String(), fmt.Sprintf("sval:%q", fmt.Sprint(value)))
 	}
 }
