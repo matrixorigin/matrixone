@@ -1,6 +1,6 @@
 # FORMAT_BYTES and FORMAT_PICO_TIME design
 
-Revision: D1, 2026-10-13. Owning issue: matrixorigin/matrixone#29998. Implementation PR: parent to fill when created.
+Revision: D1, 2026-10-13. Owning issue: matrixorigin/matrixone#29998. Implementation PR: [#30036](https://github.com/matrixorigin/matrixone/pull/30036).
 Reviewer/designer: actual `gpt-6-astra`, reasoning effort `medium`, selected for this design session. Exposed session/agent identifier: `/root/design` (no UUID is exposed by the tool).
 Inspected source revision: `0a4db0e6a6517e489a333ad9073dfcdc5d26aff4`. No production or test code modified by this design session.
 Decision: **PASS**, for this D1 design, with delivery bookkeeping and implementation validation below required before delivery. No unresolved design question.
