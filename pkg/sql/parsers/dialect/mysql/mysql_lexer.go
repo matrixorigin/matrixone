@@ -340,7 +340,13 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if l.stopLexing {
 		return 0
 	}
-	typ, str := l.scanner.Scan()
+	var typ int
+	var str string
+	if l.lastToken == int('.') {
+		typ, str = l.scanner.scanAfterDot()
+	} else {
+		typ, str = l.scanner.Scan()
+	}
 	lval.pos = l.scanner.Pos
 	l.scanner.LastToken = str
 	// yacc precedence is static, so HIGH_NOT_PRECEDENCE uses a distinct token
@@ -399,7 +405,7 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	// native join or whether ASOF still occupies the current table's alias slot.
 	// This preserves legacy `t asof JOIN u`, while an already completed alias or
 	// table-factor suffix makes the same phrase a native ASOF JOIN.
-	if typ == ID && strings.EqualFold(str, "asof") && l.asofJoinPhraseAhead() {
+	if typ == ID && l.lastToken != int('.') && strings.EqualFold(str, "asof") && l.asofJoinPhraseAhead() {
 		typ = ASOF
 	}
 

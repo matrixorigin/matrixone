@@ -57,6 +57,7 @@ type Scanner struct {
 	strBuilder             bytes.Buffer
 	parseControl           *parseControl
 	aliasFollowerLookahead bool
+	identifierAfterDot     bool
 }
 
 func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
@@ -74,6 +75,7 @@ func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
 	s.sqlMode = 0
 	s.parseControl = nil
 	s.aliasFollowerLookahead = false
+	s.identifierAfterDot = false
 
 	if clearLargeOnly {
 		if oversized {
@@ -124,6 +126,14 @@ func PutScanner(scanner *Scanner) {
 const skippedScannerToken = -1
 
 func (s *Scanner) Scan() (int, string) { return s.scan(false) }
+
+// scanAfterDot classifies identifier words before keyword-specific lookahead.
+// Keep this context scoped so standalone scanner consumers retain their rules.
+func (s *Scanner) scanAfterDot() (int, string) {
+	s.identifierAfterDot = true
+	defer func() { s.identifierAfterDot = false }()
+	return s.Scan()
+}
 
 // ScanWithComments retains the authoritative lexer rules while exposing ordinary comments.
 func (s *Scanner) ScanWithComments() (int, string) { return s.scan(true) }
@@ -940,6 +950,11 @@ func (s *Scanner) scanIdentifierToken(isVariable bool) (int, string) {
 		s.inc()
 	}
 	keywordName := s.buf[start:s.Pos]
+	// MySQL permits even reserved words as unquoted qualified name components.
+	// Classify here so BEGIN and other contextual keywords cannot look ahead.
+	if s.identifierAfterDot && !isVariable {
+		return ID, keywordName
+	}
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
 		if isSQLModeSensitiveFunctionName(lower) && !s.sqlMode.Has(SQLModeIgnoreSpace) {
