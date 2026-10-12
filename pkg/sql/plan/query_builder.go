@@ -10025,6 +10025,15 @@ type treeClonePointer struct {
 	ptr uintptr
 }
 
+// DeepCopySelect gives binding a private AST, including mutable nested sources.
+// The copy is GC-owned; it must not be returned to the parser's pools with Free.
+func DeepCopySelect(source *tree.Select) *tree.Select {
+	if source == nil {
+		return nil
+	}
+	return cloneTreeValue(reflect.ValueOf(source), make(map[treeClonePointer]reflect.Value)).Interface().(*tree.Select)
+}
+
 func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Value) reflect.Value {
 	if !value.IsValid() {
 		return value
@@ -10052,6 +10061,11 @@ func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Va
 		if value.Elem().Kind() == reflect.Struct {
 			result.Elem().Set(value.Elem())
 			cloneTreeStructFields(result.Elem(), value.Elem(), visited)
+			if sample, ok := value.Interface().(*tree.SampleExpr); ok {
+				columns, star := sample.GetColumns()
+				result.Interface().(*tree.SampleExpr).SetColumns(
+					cloneTreeValue(reflect.ValueOf(columns), visited).Interface().(tree.Exprs), star)
+			}
 		} else {
 			result.Elem().Set(cloneTreeValue(value.Elem(), visited))
 		}
@@ -10068,6 +10082,20 @@ func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Va
 		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
 		for i := 0; i < value.Len(); i++ {
 			result.Index(i).Set(cloneTreeValue(value.Index(i), visited))
+		}
+		return result
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		key := treeClonePointer{typ: value.Type(), ptr: uintptr(value.UnsafePointer())}
+		if cloned, ok := visited[key]; ok {
+			return cloned
+		}
+		result := reflect.MakeMapWithSize(value.Type(), value.Len())
+		visited[key] = result
+		for iter := value.MapRange(); iter.Next(); {
+			result.SetMapIndex(cloneTreeValue(iter.Key(), visited), cloneTreeValue(iter.Value(), visited))
 		}
 		return result
 	case reflect.Array:
@@ -10815,6 +10843,15 @@ func (builder *QueryBuilder) appendWindowNode(
 	if ctx.bindingRecurStmt() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support window function in recursive cte")
 		return
+	}
+
+	// Materialize every window's scalar producers over the post-aggregation
+	// input before adding any window operator. Later windows must not introduce
+	// joins that change an earlier window's input or column layout.
+	for i, w := range ctx.windows {
+		if nodeID, ctx.windows[i], err = builder.flattenSubqueries(nodeID, w, ctx); err != nil {
+			return
+		}
 	}
 
 	for i, w := range ctx.windows {

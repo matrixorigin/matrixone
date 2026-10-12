@@ -2811,3 +2811,35 @@ func TestLockOpExclusiveTargetsStayRowLocked(t *testing.T) {
 		arg.Free(proc, false, nil)
 	})
 }
+
+func TestClassifyLockRetryMemoryPressure(t *testing.T) {
+	cases := []struct {
+		name                    string
+		host, cgroup, available uint64
+		measured                bool
+		want                    lockRetryMemoryPressureLevel
+	}{
+		{"unmeasured", 1000, 0, 0, false, lockRetryMemoryPressureNormal},
+		{"unknown", 0, ^uint64(0), 0, true, lockRetryMemoryPressureNormal},
+		{"normal", 1000, 0, 201, true, lockRetryMemoryPressureNormal},
+		{"high boundary", 1000, 0, 200, true, lockRetryMemoryPressureHigh},
+		{"below critical", 1000, 0, 101, true, lockRetryMemoryPressureHigh},
+		{"critical boundary", 1000, 0, 100, true, lockRetryMemoryPressureCritical},
+		{"exhausted", 1000, 0, 0, true, lockRetryMemoryPressureCritical},
+		{"cgroup headroom", 32000, 1000, 800, true, lockRetryMemoryPressureNormal},
+		{"cgroup critical", 32000, 1000, 100, true, lockRetryMemoryPressureCritical},
+		{"cgroup only", 0, 1000, 100, true, lockRetryMemoryPressureCritical},
+		{"clamped", 1000, 0, 2000, true, lockRetryMemoryPressureNormal},
+		{"unlimited", 1000, ^uint64(0), 100, true, lockRetryMemoryPressureCritical},
+		{"rounded high", 1001, 0, 201, true, lockRetryMemoryPressureHigh},
+		{"rounded normal", 1001, 0, 202, true, lockRetryMemoryPressureNormal},
+		{"large", uint64(1) << 60, 0, uint64(1) << 60, true, lockRetryMemoryPressureNormal},
+		{"large exhausted", uint64(1) << 60, 0, 0, true, lockRetryMemoryPressureCritical},
+		{"cache heavy host", 33368911872, 0, 26068365312, true, lockRetryMemoryPressureNormal},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, classifyLockRetryMemoryPressure(tc.host, tc.cgroup, tc.available, tc.measured))
+		})
+	}
+}
