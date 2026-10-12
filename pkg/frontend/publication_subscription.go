@@ -334,7 +334,22 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 		return
 	}
 
+	if cp.IfNotExists {
+		// Database resolution may switch ctx to the source account; the publication
+		// still belongs to the account that issued CREATE.
+		pubInfo, lookupErr := getPubInfo(defines.AttachAccountId(ctx, accountId), bh, pubName)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if pubInfo != nil {
+			return nil
+		}
+	}
+
 	if err = bh.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql); err != nil {
+		if cp.IfNotExists && moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+			return nil
+		}
 		return
 	}
 
