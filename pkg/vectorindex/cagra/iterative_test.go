@@ -21,8 +21,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAdvancedSearchRounds(t *testing.T) {
-	p := AdvancedSearch{}
+func TestIterativeSearchRounds(t *testing.T) {
+	p := IterativeSearch{}
 	req := searchplugin.Request{ResultLimit: 10, CandidateBudget: 20}
 	stats := searchplugin.SearchStats{IndexRows: 1000}
 
@@ -48,5 +48,5 @@ func TestAdvancedSearchRounds(t *testing.T) {
 	capped.MaxInternalTopK = 5
 	require.Equal(t, uint64(20), p.StartRound(nil, capped, stats).ITopK)
 	require.Equal(t, uint64(8), p.StartRound(nil, req, searchplugin.SearchStats{IndexRows: 8}).ITopK)
-	require.Equal(t, uint64(DefaultMaxInternalTopK), advancedCap(req, searchplugin.SearchStats{}))
+	require.Equal(t, uint64(DefaultMaxInternalTopK), iterativeCap(req, searchplugin.SearchStats{}))
 }

@@ -91,7 +91,7 @@ func (s *IvfpqSearch[B, Q]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt
 		cardinality = vectorindex.SaturatingAddUint64(cardinality, s.Overflow.Len())
 	}
 	if rt.Iterative {
-		return s.searchAdvanced(anyquery, rt, cardinality)
+		return s.searchIterative(anyquery, rt, cardinality)
 	}
 	return s.searchOnce(anyquery, rt, cardinality)
 }
@@ -821,9 +821,9 @@ func (s *IvfpqSearch[B, Q]) DeviceResidency() map[int]int64 {
 	return perCard
 }
 
-// searchAdvanced answers a mode=iterative search in the rounds of AdvancedSearch,
+// searchIterative answers a mode=iterative search in the rounds of IterativeSearch,
 // each one a searchOnce probing the round's NProbe lists.
-func (s *IvfpqSearch[B, Q]) searchAdvanced(anyquery any, rt vectorindex.RuntimeConfig, cardinality uint64) ([]int64, []float64, error) {
+func (s *IvfpqSearch[B, Q]) searchIterative(anyquery any, rt vectorindex.RuntimeConfig, cardinality uint64) ([]int64, []float64, error) {
 	algoOptions, err := ivfpqplan.EncodeScanOptions(ivfpqplan.ScanOptions{Nprobe: rt.Probe})
 	if err != nil {
 		return nil, nil, err
@@ -835,7 +835,7 @@ func (s *IvfpqSearch[B, Q]) searchAdvanced(anyquery any, rt vectorindex.RuntimeC
 		MaxNprobe:       uint64(rt.MaxProbe),
 	}
 	stats := searchplugin.SearchStats{IndexRows: cardinality, Lists: uint64(s.Idxcfg.CuvsIvfpq.Lists)}
-	policy := AdvancedSearch{}
+	policy := IterativeSearch{}
 	round := policy.StartRound(spec, req, stats)
 	for {
 		rt.Limit, rt.Probe = uint(round.ITopK), uint(round.NProbe)

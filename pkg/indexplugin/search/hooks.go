@@ -147,7 +147,7 @@ type ProbeKnobsHooks interface {
 	SupportsProbeKnobs() bool
 }
 
-// Round is one search round of an advanced search: the internal top-k it requests and,
+// Round is one search round of an iterative search: the internal top-k it requests and,
 // for an IVF index, the lists it probes after those of earlier rounds (0 for a graph
 // index).
 type Round struct {
@@ -155,7 +155,7 @@ type Round struct {
 	NProbe uint64
 }
 
-// SearchStats is what the caller of an advanced-search policy knows about the search; a
+// SearchStats is what the caller of an iterative-search policy knows about the search; a
 // zero field is unknown.
 type SearchStats struct {
 	// IndexRows is the number of indexed rows.
@@ -168,11 +168,11 @@ type SearchStats struct {
 	Probed uint64
 }
 
-// AdvancedSearchHooks optionally describes the widening policy of an algorithm: the round
+// IterativeSearchHooks optionally describes the widening policy of an algorithm: the round
 // a search starts with and the round after one that returned too few rows. The
 // algorithm's membership (pre) search runs these rounds itself. The search of each round
 // is the algorithm's regular search.
-type AdvancedSearchHooks interface {
+type IterativeSearchHooks interface {
 	StartRound(spec *plan.IndexSearchScan, req Request, stats SearchStats) Round
 	// NextRound returns the round after prev and false when the search stops: got reached
 	// its target, or the caps or the index are exhausted. got is the rows of prev for a

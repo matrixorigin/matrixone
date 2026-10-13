@@ -28,43 +28,43 @@ const DefaultMaxInternalTopK = 20000
 // predictionSafety multiplies the requested count predicted from the selectivity.
 const predictionSafety = 2
 
-// AdvancedSearch is the HNSW widening policy. A round requests ITopK keys from usearch,
+// IterativeSearch is the HNSW widening policy. A round requests ITopK keys from usearch,
 // which searches with max(ITopK, ef_search). The first round requests the larger of the
 // candidate budget and, when the selectivity is known, k·N/|S| times predictionSafety;
 // each further round doubles it. A round that returns min(k, |S|) rows, or requests the
 // cap or every indexed row, is the last. usearch cannot resume a search, so every round
 // searches again.
-type AdvancedSearch struct{}
+type IterativeSearch struct{}
 
-var _ searchplugin.AdvancedSearchHooks = AdvancedSearch{}
+var _ searchplugin.IterativeSearchHooks = IterativeSearch{}
 
 // StartRound returns the first round of req.
-func (AdvancedSearch) StartRound(_ *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats) searchplugin.Round {
+func (IterativeSearch) StartRound(_ *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats) searchplugin.Round {
 	k := max(req.ResultLimit, 1)
 	start := max(req.CandidateBudget, k)
 	if stats.Members != 0 && stats.IndexRows != 0 {
 		predicted := (k*stats.IndexRows + stats.Members - 1) / stats.Members * predictionSafety
 		start = max(start, min(predicted, stats.IndexRows))
 	}
-	return searchplugin.Round{ITopK: min(start, advancedCap(req, stats))}
+	return searchplugin.Round{ITopK: min(start, iterativeCap(req, stats))}
 }
 
 // NextRound returns the round after prev, which returned got rows.
-func (AdvancedSearch) NextRound(_ *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats, prev searchplugin.Round, got uint64) (searchplugin.Round, bool) {
+func (IterativeSearch) NextRound(_ *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats, prev searchplugin.Round, got uint64) (searchplugin.Round, bool) {
 	target := max(req.ResultLimit, 1)
 	if stats.Members != 0 {
 		target = min(target, stats.Members)
 	}
-	capITopK := advancedCap(req, stats)
+	capITopK := iterativeCap(req, stats)
 	if got >= target || prev.ITopK >= capITopK {
 		return prev, false
 	}
 	return searchplugin.Round{ITopK: min(prev.ITopK*2, capITopK)}, true
 }
 
-// advancedCap is the largest ITopK of a round: max_itopk (DefaultMaxInternalTopK when
+// iterativeCap is the largest ITopK of a round: max_itopk (DefaultMaxInternalTopK when
 // unset), never below the candidate budget, at most the indexed rows when known.
-func advancedCap(req searchplugin.Request, stats searchplugin.SearchStats) uint64 {
+func iterativeCap(req searchplugin.Request, stats searchplugin.SearchStats) uint64 {
 	capITopK := req.MaxInternalTopK
 	if capITopK == 0 {
 		capITopK = DefaultMaxInternalTopK
@@ -76,9 +76,9 @@ func advancedCap(req searchplugin.Request, stats searchplugin.SearchStats) uint6
 	return capITopK
 }
 
-// searchAdvanced answers a membership-filtered search in the rounds of AdvancedSearch,
+// searchIterative answers a membership-filtered search in the rounds of IterativeSearch,
 // each one a searchOnce.
-func (s *HnswSearch[T]) searchAdvanced(
+func (s *HnswSearch[T]) searchIterative(
 	sqlproc *sqlexec.SqlProcess,
 	query []T,
 	indexCounts []uint,
@@ -97,7 +97,7 @@ func (s *HnswSearch[T]) searchAdvanced(
 		MaxInternalTopK: uint64(rt.MaxLimit),
 	}
 	stats := searchplugin.SearchStats{IndexRows: total, Members: rt.MembershipCount}
-	policy := AdvancedSearch{}
+	policy := IterativeSearch{}
 	round := policy.StartRound(nil, req, stats)
 	for {
 		keys, distances, err := s.searchOnce(sqlproc, query, indexCounts, uint(round.ITopK), rt.Membership, rt.OrigFuncName)

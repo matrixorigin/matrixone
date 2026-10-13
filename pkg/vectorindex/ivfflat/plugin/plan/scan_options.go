@@ -31,7 +31,7 @@ type ScanOptions struct {
 	// InitialProbeCount is the number of centroid buckets of the first round.
 	InitialProbeCount uint32 `json:"initial_probe_count,omitempty"`
 	// BucketExpandStep is nonzero for a search that widens in rounds
-	// (ivfflat.AdvancedSearch); zero means one round.
+	// (ivfflat.IterativeSearch); zero means one round.
 	BucketExpandStep uint32 `json:"bucket_expand_step,omitempty"`
 	// Iterative is set for mode=iterative: a membership search on a reader that holds
 	// the whole search widens in rounds.

@@ -51,16 +51,16 @@ var _ searchplugin.MembershipHooks = Hooks{}
 // sub-index search.
 func (Hooks) SupportsMembership() bool { return true }
 
-var _ searchplugin.AdvancedSearchHooks = Hooks{}
+var _ searchplugin.IterativeSearchHooks = Hooks{}
 
-// StartRound is the first round of the HNSW widening policy (hnsw.AdvancedSearch).
+// StartRound is the first round of the HNSW widening policy (hnsw.IterativeSearch).
 func (Hooks) StartRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats) searchplugin.Round {
-	return hnsw.AdvancedSearch{}.StartRound(spec, req, stats)
+	return hnsw.IterativeSearch{}.StartRound(spec, req, stats)
 }
 
-// NextRound is the round after prev of the HNSW widening policy (hnsw.AdvancedSearch).
+// NextRound is the round after prev of the HNSW widening policy (hnsw.IterativeSearch).
 func (Hooks) NextRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats, prev searchplugin.Round, got uint64) (searchplugin.Round, bool) {
-	return hnsw.AdvancedSearch{}.NextRound(spec, req, stats, prev, got)
+	return hnsw.IterativeSearch{}.NextRound(spec, req, stats, prev, got)
 }
 
 // ExplainSettings preserves compact text and exposes static settings on detailed output.

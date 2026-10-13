@@ -40,16 +40,16 @@ var _ searchplugin.Hooks = Hooks{}
 var _ searchplugin.ExplainHooks = Hooks{}
 var _ searchplugin.CandidateBudgetHooks = Hooks{}
 var _ searchplugin.IndexFilterHooks = Hooks{}
-var _ searchplugin.AdvancedSearchHooks = Hooks{}
+var _ searchplugin.IterativeSearchHooks = Hooks{}
 
-// StartRound is the first round of the CAGRA widening policy (cagra.AdvancedSearch).
+// StartRound is the first round of the CAGRA widening policy (cagra.IterativeSearch).
 func (Hooks) StartRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats) searchplugin.Round {
-	return cagraPkg.AdvancedSearch{}.StartRound(spec, req, stats)
+	return cagraPkg.IterativeSearch{}.StartRound(spec, req, stats)
 }
 
-// NextRound is the round after prev of the CAGRA widening policy (cagra.AdvancedSearch).
+// NextRound is the round after prev of the CAGRA widening policy (cagra.IterativeSearch).
 func (Hooks) NextRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats, prev searchplugin.Round, got uint64) (searchplugin.Round, bool) {
-	return cagraPkg.AdvancedSearch{}.NextRound(spec, req, stats, prev, got)
+	return cagraPkg.IterativeSearch{}.NextRound(spec, req, stats, prev, got)
 }
 
 // SupportsIndexFilter reports true: the search applies the INCLUDE and

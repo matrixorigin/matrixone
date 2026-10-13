@@ -91,7 +91,7 @@ func (s *CagraSearch[B, Q]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt
 		cardinality = vectorindex.SaturatingAddUint64(cardinality, s.Overflow.Len())
 	}
 	if rt.Iterative {
-		return s.searchAdvanced(anyquery, rt, cardinality)
+		return s.searchIterative(anyquery, rt, cardinality)
 	}
 	return s.searchOnce(anyquery, rt, cardinality)
 }
@@ -845,16 +845,16 @@ func (s *CagraSearch[B, Q]) DeviceResidency() map[int]int64 {
 	return perCard
 }
 
-// searchAdvanced answers a mode=iterative search in the rounds of AdvancedSearch,
+// searchIterative answers a mode=iterative search in the rounds of IterativeSearch,
 // each one a searchOnce requesting the round's ITopK keys.
-func (s *CagraSearch[B, Q]) searchAdvanced(anyquery any, rt vectorindex.RuntimeConfig, cardinality uint64) ([]int64, []float64, error) {
+func (s *CagraSearch[B, Q]) searchIterative(anyquery any, rt vectorindex.RuntimeConfig, cardinality uint64) ([]int64, []float64, error) {
 	req := searchplugin.Request{
 		ResultLimit:     uint64(rt.ResultLimit),
 		CandidateBudget: uint64(rt.Limit),
 		MaxInternalTopK: uint64(rt.MaxLimit),
 	}
 	stats := searchplugin.SearchStats{IndexRows: cardinality}
-	policy := AdvancedSearch{}
+	policy := IterativeSearch{}
 	round := policy.StartRound(nil, req, stats)
 	for {
 		rt.Limit = uint(round.ITopK)

@@ -171,7 +171,7 @@ indexed rows (hnsw) or `n_lists` lists (ivfflat).
 - Knob mapping: usearch searches with `max(itopk, ef_search)`, so a larger count widens the beam
   for that call without changing the shared index's `ExpansionSearch`.
 - `pre`: one membership search with the candidate budget.
-- `iterative`: `hnsw.AdvancedSearch` (`pkg/vectorindex/hnsw/advsearch.go`) restarts with
+- `iterative`: `hnsw.IterativeSearch` (`pkg/vectorindex/hnsw/iterative.go`) restarts with
   `itopk × 2` up to `max_itopk`, bounded by the indexed rows, until `LIMIT` rows (at most `|S|`)
   are found. An exact empty key set returns no rows without searching.
 - Plan: `pre`, `iterative`, a membership join or a fulltext `MATCH` filter build the PRE shape. A
@@ -191,7 +191,7 @@ indexed rows (hnsw) or `n_lists` lists (ivfflat).
   applies no membership set and needs no C ABI change.
 - Knob mapping: `itopk_size = max(itopk, LIMIT)`; `filtering_rate` stays auto.
 - `iterative` (`ScanOptions.Iterative`, set when `FilterJSON` holds every filter):
-  `cagra.AdvancedSearch` (`pkg/vectorindex/cagra/advsearch.go`) restarts with `itopk × 2` up to
+  `cagra.IterativeSearch` (`pkg/vectorindex/cagra/iterative.go`) restarts with `itopk × 2` up to
   `max_itopk`, bounded by the indexed rows. With another filter it searches once.
 - `auto`: `ADAPTIVE_TOP [post, pre, force]`; the pre branch only when a filter reads an INCLUDE
   column, since `pre` equals `post` otherwise.
@@ -209,7 +209,7 @@ indexed rows (hnsw) or `n_lists` lists (ivfflat).
   (`apply_host_post_filter_locked`) replaces each of them with a sentinel whenever a filter is
   present, so a filter the probed lists do not hold returns no row instead of an error.
 - Knob mapping: `n_probes = nprobe`; `k` = the candidate budget.
-- `iterative` (set as for cagra): `ivfpq.AdvancedSearch` (`pkg/vectorindex/ivfpq/advsearch.go`)
+- `iterative` (set as for cagra): `ivfpq.IterativeSearch` (`pkg/vectorindex/ivfpq/iterative.go`)
   restarts with `nprobe × 2` up to `max_nprobe` (every list when unset). `ivf_pq::search` has no
   list-subset or resume API, so each round re-scans the earlier lists; with doubling, all rounds
   cost at most about twice the final round. `max_nprobe = n_lists` probes every list.
@@ -230,7 +230,7 @@ indexed rows (hnsw) or `n_lists` lists (ivfflat).
 - `pre`, `post` and the default mode search one round of `nprobe` lists. `post` with a filter on
   an INCLUDE column builds `ADAPTIVE_TOP [post, force]` where a non-empty `post` page wins, so an
   empty page runs the exact sort.
-- `iterative`: `ivfflat.AdvancedSearch` (`pkg/vectorindex/ivfflat/advsearch.go`) runs in the
+- `iterative`: `ivfflat.IterativeSearch` (`pkg/vectorindex/ivfflat/iterative.go`) runs in the
   reader (`plan_reader.go`). Each further round continues the cursor with twice the previous
   round's lists (at most 4096 per round) until the reader holds the candidate budget (at most
   `|S|` for an exact set), all lists are probed, or the lists probed reach `max_nprobe`. A
@@ -272,11 +272,11 @@ indexed rows (hnsw) or `n_lists` lists (ivfflat).
 
 - **Regular search**: the algorithm's single search call (Go reader, plus the C++ engine for
   cagra and ivfpq): query, knobs and filter in, candidates out.
-- **Advanced search**: one Go file per algorithm, `pkg/vectorindex/<algo>/advsearch.go`. It owns
+- **Iterative search**: one Go file per algorithm, `pkg/vectorindex/<algo>/iterative.go`. It owns
   the start, the rounds and the caps; each round is the regular search (for cagra and ivfpq a cgo
   call into cuVS). It computes no distances. A scan that is not `iterative` calls the regular
   search directly.
-- Each policy implements `searchplugin.AdvancedSearchHooks` (`pkg/indexplugin/search/hooks.go`):
+- Each policy implements `searchplugin.IterativeSearchHooks` (`pkg/indexplugin/search/hooks.go`):
   `StartRound` returns the first `Round{ITopK, NProbe}` from the request and the `SearchStats`
   known to the caller (indexed rows, members, lists, lists probed); `NextRound` returns the next
   round after one that returned too few rows, or stops.
@@ -338,7 +338,7 @@ ivfflat, `host_ids` on cagra and ivfpq). A short `post` page is filled by `itera
 
 1. The planner serializes the filters on INCLUDE columns and the primary key to `FilterJSON`
    and sets `Iterative` when no other filter remains on the scan.
-2. `CagraSearch.Search` runs the rounds of `cagra/advsearch.go`, each the regular search
+2. `CagraSearch.Search` runs the rounds of `cagra/iterative.go`, each the regular search
    through cgo.
 3. C++ builds the per-query bitset (filter AND not-deleted) under the shared lock and uploads
    it; cuVS searches with no MatrixOne lock held.
@@ -390,7 +390,7 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
 |---|---|
 | A fixed over-fetch multiplier only | Rejected: the issue's 0/10 and recall 0.18 come from it. The over-fetch stays the budget when `itopk` is unset. |
 | An exact tier inside `pre` for small qualifying sets, or an `exact` option | Rejected: `pre` is a filtered ANN; `mode=force` is the exact path. |
-| One generic advanced search for all algorithms | Rejected: knobs and widening differ (restart vs continue, beam vs probes); one policy per algorithm. |
+| One generic iterative search for all algorithms | Rejected: knobs and widening differ (restart vs continue, beam vs probes); one policy per algorithm. |
 | The widening loop in C++ | Rejected: the loop is policy, kept in Go next to the other algorithms'; C++ keeps the single search. |
 | Membership key sets in the cagra/ivfpq C++ mask | Rejected: a per-row binary search over `|S|` keys costs O(rows · log `|S|`) per query and a C ABI change; `pre` runs on the existing GPU filter. |
 | ivfpq exact ranking (decode codes, or read raw vectors) | Rejected: decoded PQ codes are approximate; raw vectors need a table read inside the index path. |
@@ -441,7 +441,7 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
 - Knobs by family, set in SQL options and session variables, the SQL option first. `probe_limit`
   stays `nprobe`'s session default. The over-fetch tables stay the budget when `itopk` is unset.
 - The `iterative` `max_itopk` default is 20000 (pgvector's `hnsw.max_scan_tuples` default).
-- One Go advanced search per algorithm on top of the regular search, including the GPU indexes;
+- One Go iterative search per algorithm on top of the regular search, including the GPU indexes;
   hnsw, cagra and ivfpq restart, ivfflat continues its cursor; cagra leaves `filtering_rate` on
   auto; ivfpq's end state is `n_probes = n_lists` with PQ ranking.
 - An `auto` region with more than one output column runs `force`, as before this design:

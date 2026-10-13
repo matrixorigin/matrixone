@@ -505,10 +505,10 @@ func searchPlanReader[T types.RealNumbers](
 		firstRoundLimit = uint(firstRound)
 	}
 	// A multi-round scan, and an iterative membership search on one reader, widen in the
-	// rounds of AdvancedSearch; readers that share a generation across partitions search
+	// rounds of IterativeSearch; readers that share a generation across partitions search
 	// once.
 	widen := hasFirstRound || r.opts.BucketExpandStep > 0 || (r.opts.Iterative && r.widensMembership())
-	policy := AdvancedSearch{}
+	policy := IterativeSearch{}
 	stats := searchplugin.SearchStats{Lists: uint64(idxcfg.Ivfflat.Lists)}
 	round := searchplugin.Round{ITopK: uint64(limit), NProbe: uint64(max(uint32(1), r.opts.InitialProbeCount))}
 	if hasFirstRound {

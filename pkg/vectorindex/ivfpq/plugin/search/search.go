@@ -43,16 +43,16 @@ var _ searchplugin.ExplainHooks = Hooks{}
 var _ searchplugin.CandidateBudgetHooks = Hooks{}
 var _ searchplugin.ProbeKnobsHooks = Hooks{}
 var _ searchplugin.IndexFilterHooks = Hooks{}
-var _ searchplugin.AdvancedSearchHooks = Hooks{}
+var _ searchplugin.IterativeSearchHooks = Hooks{}
 
-// StartRound is the first round of the IVF-PQ widening policy (ivfpq.AdvancedSearch).
+// StartRound is the first round of the IVF-PQ widening policy (ivfpq.IterativeSearch).
 func (Hooks) StartRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats) searchplugin.Round {
-	return ivfpqPkg.AdvancedSearch{}.StartRound(spec, req, stats)
+	return ivfpqPkg.IterativeSearch{}.StartRound(spec, req, stats)
 }
 
-// NextRound is the round after prev of the IVF-PQ widening policy (ivfpq.AdvancedSearch).
+// NextRound is the round after prev of the IVF-PQ widening policy (ivfpq.IterativeSearch).
 func (Hooks) NextRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats, prev searchplugin.Round, got uint64) (searchplugin.Round, bool) {
-	return ivfpqPkg.AdvancedSearch{}.NextRound(spec, req, stats, prev, got)
+	return ivfpqPkg.IterativeSearch{}.NextRound(spec, req, stats, prev, got)
 }
 
 // SupportsProbeKnobs reports true: the search probes IVF lists.

@@ -32,8 +32,8 @@ func advSpec(t *testing.T, nprobe uint32) *plan.IndexSearchScan {
 	return &plan.IndexSearchScan{AlgoOptions: opts}
 }
 
-func TestAdvancedSearchStartRound(t *testing.T) {
-	p := AdvancedSearch{}
+func TestIterativeSearchStartRound(t *testing.T) {
+	p := IterativeSearch{}
 	spec := advSpec(t, 2)
 	req := searchplugin.Request{ResultLimit: 10, CandidateBudget: 15}
 
@@ -57,8 +57,8 @@ func TestAdvancedSearchStartRound(t *testing.T) {
 	require.Equal(t, searchplugin.Round{ITopK: 3, NProbe: 1}, r)
 }
 
-func TestAdvancedSearchNextRound(t *testing.T) {
-	p := AdvancedSearch{}
+func TestIterativeSearchNextRound(t *testing.T) {
+	p := IterativeSearch{}
 	spec := advSpec(t, 2)
 	req := searchplugin.Request{ResultLimit: 10, CandidateBudget: 10}
 	prev := searchplugin.Round{ITopK: 10, NProbe: 2}

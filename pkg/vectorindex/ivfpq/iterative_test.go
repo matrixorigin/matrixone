@@ -23,11 +23,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAdvancedSearchRounds(t *testing.T) {
+func TestIterativeSearchRounds(t *testing.T) {
 	opts, err := ivfpqplan.EncodeScanOptions(ivfpqplan.ScanOptions{Nprobe: 3})
 	require.NoError(t, err)
 	spec := &plan.IndexSearchScan{AlgoOptions: opts}
-	p := AdvancedSearch{}
+	p := IterativeSearch{}
 	req := searchplugin.Request{ResultLimit: 10, CandidateBudget: 20}
 	stats := searchplugin.SearchStats{Lists: 16}
 
@@ -60,7 +60,7 @@ func TestAdvancedSearchRounds(t *testing.T) {
 	require.Equal(t, uint64(2), p.StartRound(spec, capped, stats).NProbe)
 
 	// unknown lists: max_nprobe alone caps, else rounds double
-	require.Equal(t, uint64(5), advancedListCap(searchplugin.Request{MaxNprobe: 5}, searchplugin.SearchStats{}))
+	require.Equal(t, uint64(5), iterativeListCap(searchplugin.Request{MaxNprobe: 5}, searchplugin.SearchStats{}))
 	r, more = p.NextRound(spec, req, searchplugin.SearchStats{}, searchplugin.Round{NProbe: 3}, 2)
 	require.True(t, more)
 	require.Equal(t, uint64(6), r.NProbe)
