@@ -17,7 +17,6 @@ package explain
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"math"
 	"strconv"
@@ -424,9 +423,6 @@ func (b *sqlJSONPlanBuilder) addNodeDetails(item *sqlJSONNode, node *plan.Node) 
 			return moerr.NewInvalidInput(b.ctx, "index search scan metadata is missing")
 		}
 		item.TableName = sqlJSONTableName(node)
-		if item.TableName == "" {
-			item.TableName = sqlJSONObjectRefName(node.IndexSearchScan.SourceTable)
-		}
 		item.Expressions, err = sqlJSONIndexSearchExpressions(b.ctx, node.IndexSearchScan, &b.textOpts)
 		if err != nil {
 			return err
@@ -637,7 +633,7 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 	direction := spec.Direction.String()
 	switch spec.Direction {
 	case plan.OrderBySpec_INTERNAL, plan.OrderBySpec_ASC, plan.OrderBySpec_DESC:
-		// valid index scan directions
+		// valid vector scan directions
 	default:
 		return nil, moerr.NewInvalidInputf(ctx, "index search scan has unknown direction %d", spec.Direction)
 	}
@@ -645,27 +641,23 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 		"direction="+direction,
 		"post_filter_over_fetch="+strconv.FormatBool(spec.PostFilterOverFetch),
 	)
-	// Algorithm settings belong to the plugin's wire contract. Preserve every
-	// byte without assuming a JSON format or inventing fields on the shared
-	// protobuf. Use its existing EXPLAIN hook for human-readable settings.
-	if len(spec.AlgoOptions) != 0 {
-		values = append(values, "algo_options_base64="+base64.StdEncoding.EncodeToString(spec.AlgoOptions))
-	}
-	settings, err := indexSearchScanSettings(spec)
+	settings, err := indexSearchScanSettings(spec, true)
 	if err != nil {
 		return nil, err
 	}
-	for i, setting := range settings {
-		values = append(values, "algo_setting["+strconv.Itoa(i)+"]="+setting)
-	}
+	values = append(values, settings...)
 	for i, column := range spec.IncludedColumns {
 		values = append(values, "included_column["+strconv.Itoa(i)+"]="+column)
+	}
+	payloadName := "query_vector"
+	if isFulltextIndexSearchScan(spec) {
+		payloadName = "query_payload"
 	}
 	for _, field := range []struct {
 		name string
 		expr *plan.Expr
 	}{
-		{name: "query_payload", expr: spec.QueryPayload},
+		{name: payloadName, expr: spec.QueryPayload},
 		{name: "candidate_limit", expr: spec.CandidateLimit},
 	} {
 		value, err := sqlJSONExpr(ctx, field.expr, options)
@@ -679,17 +671,15 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 	if len(spec.AlgoExprNames) != len(spec.AlgoExprs) {
 		return nil, moerr.NewInvalidInput(ctx, "index search scan algorithm expression names do not match expressions")
 	}
-	seen := make(map[string]struct{}, len(spec.AlgoExprNames))
-	for i, name := range spec.AlgoExprNames {
-		if _, duplicate := seen[name]; name == "" || duplicate || spec.AlgoExprs[i] == nil {
-			return nil, moerr.NewInvalidInput(ctx, "index search scan algorithm expression is missing or ambiguous")
+	for i, expr := range spec.AlgoExprs {
+		if spec.AlgoExprNames[i] == "" || expr == nil {
+			return nil, moerr.NewInvalidInput(ctx, "index search scan algorithm expression metadata is missing")
 		}
-		seen[name] = struct{}{}
-		value, err := sqlJSONExpr(ctx, spec.AlgoExprs[i], options)
+		value, err := sqlJSONExpr(ctx, expr, options)
 		if err != nil {
 			return nil, err
 		}
-		values = append(values, "algo_expr["+strconv.Quote(name)+"]="+value)
+		values = append(values, spec.AlgoExprNames[i]+"="+value)
 	}
 	if spec.DistanceRange != nil {
 		for _, bound := range []struct {
@@ -707,7 +697,9 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 				return nil, moerr.NewInvalidInputf(ctx, "index search scan %s expression is missing", bound.name)
 			}
 			boundType := bound.boundType.String()
-			if boundType == "" {
+			switch bound.boundType {
+			case plan.BoundType_UNBOUNDED, plan.BoundType_INCLUSIVE, plan.BoundType_EXCLUSIVE:
+			default:
 				return nil, moerr.NewInvalidInputf(ctx, "index search scan %s has unknown bound type %d", bound.name, bound.boundType)
 			}
 			value, err := sqlJSONExpr(ctx, bound.expr, options)

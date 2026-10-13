@@ -50,13 +50,25 @@ create table vectors(id bigint primary key, v vecf32(3));
 insert into vectors values (1,'[0,0,0]'),(2,'[1,1,1]'),(3,'[2,2,2]');
 create index ix using ivfflat on vectors(v) lists=1 op_type 'vector_l2_ops';
 set probe_limit=1;
--- @regex("(?s)Vector Index Scan.*query_payload=0x0000803F0000803F0000803F",true)
+-- @regex("(?s)Vector Index Scan.*query_vector=0x0000803F0000803F0000803F",true)
 explain format=json select id from vectors order by l2_distance(v,'[1,1,1]') limit 2;
--- @regex("(?s)Vector Index Scan.*query_payload=0x000000400000004000000040",true)
+-- @regex("(?s)Vector Index Scan.*query_vector=0x000000400000004000000040",true)
 explain format=json select id from vectors order by l2_distance(v,'[2,2,2]') limit 2;
 set probe_limit=16;
--- @regex("(?s)Vector Index Scan.*algo_setting[^=]*=NProbe: 16([^0-9]|$)",true)
+-- @regex("(?s)Vector Index Scan.*NProbe: 16",true)
 explain format=json select id from vectors order by l2_distance(v,'[1,1,1]') limit 2;
+
+-- Search concurrency is a distinct static option, including when NProbe is unchanged.
+set ivf_threads_search=1;
+-- @regex("(?s)Vector Index Scan.*ThreadsSearch: 1[^0-9]",true)
+explain format=json select id from vectors order by l2_distance(v,'[1,1,1]') limit 2;
+set ivf_threads_search=8;
+-- @regex("(?s)Vector Index Scan.*ThreadsSearch: 8[^0-9]",true)
+explain format=json select id from vectors order by l2_distance(v,'[1,1,1]') limit 2;
+-- @regex("(?s)Vector Index: ix.*NProbe: 16.*BucketExpandStep: 0.*ThreadsSearch: 8",true)
+explain verbose select id from vectors order by l2_distance(v,'[1,1,1]') limit 2;
+set ivf_threads_search=default;
+
 -- @regex("(?s)Vector Index Scan.*distance_upper_bound_type=EXCLUSIVE.*distance_upper_bound=5[^0-9]",true)
 explain format=json select id from vectors where l2_distance(v,'[1,1,1]') < 5 order by l2_distance(v,'[1,1,1]') limit 2;
 -- @regex("(?s)Vector Index Scan.*distance_upper_bound_type=EXCLUSIVE.*distance_upper_bound=50[^0-9]",true)
@@ -75,12 +87,74 @@ explain format=json select id from vectors where l2_distance(v,'[1,1,1]') > 1 or
 create table vectors_include(id bigint primary key, v vecf32(3), tag varchar(10));
 insert into vectors_include values (1,'[0,0,0]','zero'),(2,'[1,1,1]','one'),(3,'[2,2,2]','two');
 create index ix_include using ivfflat on vectors_include(v) lists=1 op_type 'vector_l2_ops' include(tag);
--- @regex("(?s)Vector Index Scan.*algo_expr[^=]*first_round_limit[^=]*=2([^0-9]|$)",true)
+-- @regex("(?s)Vector Index Scan.*BucketExpandStep: 16.*first_round_limit=2",true)
 explain format=json select id, tag from vectors_include order by l2_distance(v,'[1,1,1]') limit 2 by rank with option 'mode=include';
--- @regex("(?s)Vector Index Scan.*algo_expr[^=]*first_round_limit[^=]*=3([^0-9]|$)",true)
+-- @regex("(?s)Vector Index Scan.*BucketExpandStep: 16.*first_round_limit=3",true)
 explain format=json select id, tag from vectors_include order by l2_distance(v,'[1,1,1]') limit 3 by rank with option 'mode=include';
 drop table vectors_include;
 set probe_limit=default;
+
+-- HNSW also carries search concurrency in the shared algorithm options.
+set experimental_hnsw_index=1;
+create table json_hnsw(id bigint primary key, v vecf32(3) not null);
+insert into json_hnsw values (1,'[0,0,0]'),(2,'[1,1,1]'),(3,'[2,2,2]');
+create index json_hx using hnsw on json_hnsw(v) op_type 'vector_l2_ops' M 4 EF_CONSTRUCTION 16 EF_SEARCH 16;
+set hnsw_threads_search=1;
+-- @regex("(?s)Vector Index Scan.*index=json_hx.*ThreadsSearch: 1[^0-9]",true)
+explain format=json select id from json_hnsw order by l2_distance(v,'[1,1,1]') limit 1;
+set hnsw_threads_search=8;
+-- @regex("(?s)Vector Index Scan.*index=json_hx.*ThreadsSearch: 8[^0-9]",true)
+explain format=json select id from json_hnsw order by l2_distance(v,'[1,1,1]') limit 1;
+-- @regex("(?s)Vector Index: json_hx.*ThreadsSearch: 8",true)
+explain verbose select id from json_hnsw order by l2_distance(v,'[1,1,1]') limit 1;
+select id from json_hnsw order by l2_distance(v,'[1,1,1]') limit 1;
+set hnsw_threads_search=default;
+set experimental_hnsw_index=default;
+drop table json_hnsw;
+
+-- Shared fulltext scans must expose the semantics carried in algorithm options.
+set experimental_fulltext2_index=1;
+create table json_docs(id bigint primary key, body text, status int);
+insert into json_docs values (1,'ready token',1),(2,'ready steady',0),(3,'other word',1);
+create fulltext2 index json_ft on json_docs(body) include(status);
+-- Explicit VERBOSE text shares the detailed metadata, while plain text remains compact.
+-- @regex("(?s)Fulltext Index: json_ft.*Match Mode: 0.*Include Column.*status.*Include Predicates:",true)
+explain verbose select id,status from json_docs where match(body) against('ready') and status=1 order by id;
+-- Covered predicates are removed from the base scan: both the column mapping and value must remain visible.
+-- @regex("(?s)Fulltext Index Scan.*Include Column.*status.*Include Predicates:.*val[^0-9]*1",true)
+explain format=json select id,status from json_docs where match(body) against('ready') and status=1 order by id;
+select id,status from json_docs where match(body) against('ready') and status=1 order by id;
+-- @regex("(?s)Fulltext Index Scan.*Include Predicates:.*val[^0-9]*0",true)
+explain format=json select id,status from json_docs where match(body) against('ready') and status=0 order by id;
+select id,status from json_docs where match(body) against('ready') and status=0 order by id;
+-- Equal payloads with distinct search modes must produce distinct diagnostics.
+-- @regex("(?s)Fulltext Index Scan.*Match Mode: 1.*query_payload=.*ready",true)
+explain format=json select id from json_docs where match(body) against('ready -other' in natural language mode) order by id;
+select id from json_docs where match(body) against('ready -other' in natural language mode) order by id;
+-- @regex("(?s)Fulltext Index Scan.*Match Mode: 3.*query_payload=.*ready",true)
+explain format=json select id from json_docs where match(body) against('ready -other' in boolean mode) order by id;
+select id from json_docs where match(body) against('ready -other' in boolean mode) order by id;
+-- @regex("(?s)Fulltext Index Scan.*Match Mode: 5.*Score Range:.*has_min",true)
+explain format=json select id from json_docs where match(body) against('ready' in bm25 mode)>cast(0 as float) order by id;
+prepare json_ft_prepared from 'explain format=json select id from json_docs where match(body) against(? in bm25 mode)>? order by id';
+set @json_term='ready', @json_threshold=0;
+-- @regex("(?s)Fulltext Index Scan.*Match Mode: 5.*zero_relevance_guard",true)
+execute json_ft_prepared using @json_term,@json_threshold;
+set @json_threshold=100;
+-- @regex("(?s)Fulltext Index Scan.*Match Mode: 5.*zero_relevance_guard",true)
+execute json_ft_prepared using @json_term,@json_threshold;
+deallocate prepare json_ft_prepared;
+drop table json_docs;
+set experimental_fulltext2_index=default;
+-- Classic fulltext uses the same shared plan contract and must retain its mode too.
+create table json_classic_docs(id bigint primary key, body text);
+insert into json_classic_docs values (1,'ready token'),(2,'other word');
+create fulltext index json_classic_ft on json_classic_docs(body);
+-- @regex("(?s)Fulltext Index Scan.*Match Mode: 1.*query_payload=.*ready",true)
+explain format=json select id from json_classic_docs where match(body) against('ready' in natural language mode);
+-- @regex("(?s)Fulltext Index Scan.*Match Mode: 3.*query_payload=.*ready",true)
+explain format=json select id from json_classic_docs where match(body) against('ready' in boolean mode);
+drop table json_classic_docs;
 
 -- FILL preserves mode and the targets remaining after projection pruning.
 create table fill_values(ts timestamp, v int);

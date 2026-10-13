@@ -159,13 +159,6 @@ The following mappings are normative for schema version 1:
   `fill_value[i]=<expression>` from `FillVal`, in their original order.
   Empty target/value lists add no entries. Unknown modes and missing required
   expressions are errors; the renderer never rebuilds pre-pruning targets.
-- An `INDEX_SEARCH_SCAN` uses the current typed `IndexSearchScan` contract.
-  Its query expression is `query_payload`, and named algorithm expressions
-  use `algo_expr["name"]`. Algorithm-owned option bytes are retained as
-  `algo_options_base64`; the existing plugin EXPLAIN hooks add readable
-  `algo_setting[i]` entries. The name and expression arrays must match, with
-  nonempty, unique names and nonnil expressions. Vector and fulltext scans
-  share this contract; algorithm options stay opaque to the SQL layer.
 - Serialized scalar bytes use
   `serialized(type=<oid>,width=<width>,scale=<scale>,value=0x<HEX>)`.
   Serialized literal vectors use
