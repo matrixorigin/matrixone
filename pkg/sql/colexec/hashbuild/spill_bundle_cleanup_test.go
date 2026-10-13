@@ -29,14 +29,54 @@ import (
 
 type blockedBundleRemoveFS struct {
 	fileservice.MutableFileService
-	blocked bool
+	blocked       bool
+	failRemaining int
+	removeCalls   int
 }
 
 func (fs *blockedBundleRemoveFS) RemoveFile(ctx context.Context, name string) error {
-	if fs.blocked {
+	fs.removeCalls++
+	if fs.blocked || fs.failRemaining > 0 {
+		if fs.failRemaining > 0 {
+			fs.failRemaining--
+		}
 		return errors.New("injected bundle remove failure")
 	}
 	return fs.MutableFileService.RemoveFile(ctx, name)
+}
+
+func TestHashBuildHandedOffFileRetriesTransientRemoval(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer budget.Close()
+	defer generation.Close()
+	baseFS, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	name := "hashbuild_handoff_cleanup_" + uuid.NewString()
+	fd, err := baseFS.CreateFile(context.Background(), name)
+	require.NoError(t, err)
+	_, err = fd.Write([]byte{1})
+	require.NoError(t, err)
+	require.NoError(t, fd.Close())
+	defer func() { _ = baseFS.RemoveFile(context.Background(), name) }()
+	token, err := generation.ReserveSpillDisk(1)
+	require.NoError(t, err)
+	fault := &blockedBundleRemoveFS{MutableFileService: baseFS, failRemaining: 2}
+	bundle := &spillFileBundle{entries: map[int]*spillFileEntry{
+		0: {fs: fault, name: name, created: true, rows: 1, bytes: 1, diskToken: token},
+	}}
+	defer bundle.release()
+	files, err := bundle.accountedFiles(context.Background(), generation)
+	require.NoError(t, err)
+	require.NotNil(t, files[0])
+	require.NoError(t, files[0].Close())
+	require.Equal(t, 3, fault.removeCalls)
+	require.Zero(t, generation.SpillDiskUsed())
+	_, err = baseFS.OpenFile(context.Background(), name)
+	require.Error(t, err)
 }
 
 func TestSpillBundleReleaseRetainsFailedRemoval(t *testing.T) {

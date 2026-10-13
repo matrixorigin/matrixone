@@ -397,7 +397,7 @@ func (b *spillFileBundle) accountedFiles(
 				return fs.OpenFile(ctx, name)
 			},
 			func() error {
-				return fs.RemoveFile(context.Background(), name)
+				return spillio.RemoveFileWithRetry(fs, name)
 			},
 			e.rows,
 			e.bytes,
