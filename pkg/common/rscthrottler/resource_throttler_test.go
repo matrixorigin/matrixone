@@ -953,8 +953,7 @@ func resetRSSReclamationCoordinatorForTest() {
 	for {
 		processRSSReclamation.mu.Lock()
 		if !processRSSReclamation.running {
-			processRSSReclamation.pending = false
-			processRSSReclamation.work = rssReclamationWork{}
+			processRSSReclamation.pending = nil
 			processRSSReclamation.lastCacheEvict = 0
 			processRSSReclamation.lastCacheTarget = 0
 			processRSSReclamation.lastFreeOSMemory = 0
@@ -963,6 +962,127 @@ func resetRSSReclamationCoordinatorForTest() {
 		}
 		processRSSReclamation.mu.Unlock()
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestRSSReclamationCoordinatorDropsRecoveredPendingWork(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
+	oldFreeOSMemory := freeOSMemory
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
+	freeOSMemory = func() {}
+
+	owner := &memThrottler{}
+	owner.rssPressureState.Store(int64(rssPressureSoft))
+	owner.rssPressureGen.Store(1)
+	targets := make(chan int64, 2)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	evictor := func(_ context.Context, targetPercent int64) {
+		targets <- targetPercent
+		if targetPercent == rssCacheSoftTarget {
+			close(entered)
+			<-release
+		}
+	}
+
+	now := time.Now().UnixNano()
+	processRSSReclamation.request(now, rssReclamationWork{
+		owner:         owner,
+		generation:    1,
+		targetPercent: rssCacheSoftTarget,
+		evictor:       evictor,
+		freeOSMemory:  true,
+	})
+	<-entered
+
+	owner.rssPressureState.Store(int64(rssPressureHard))
+	owner.rssPressureGen.Store(2)
+	processRSSReclamation.request(now+int64(time.Second), rssReclamationWork{
+		owner:         owner,
+		generation:    2,
+		targetPercent: rssCacheHardTarget,
+		evictor:       evictor,
+		freeOSMemory:  true,
+	})
+
+	// The hard-pressure request is now stale: recovery invalidates this
+	// owner's generation before the coordinator gets to its pending work.
+	owner.rssPressureState.Store(int64(rssPressureNone))
+	owner.rssPressureGen.Store(3)
+	close(release)
+	resetRSSReclamationCoordinatorForTest()
+
+	select {
+	case target := <-targets:
+		require.Equal(t, rssCacheSoftTarget, target)
+	default:
+		t.Fatal("expected the in-flight soft-pressure eviction")
+	}
+	select {
+	case target := <-targets:
+		t.Fatalf("stale eviction target %d was executed after pressure recovery", target)
+	default:
+	}
+}
+
+func TestRSSReclamationCoordinatorKeepsOtherOwnerPendingWork(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
+	oldFreeOSMemory := freeOSMemory
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
+	freeOSMemory = func() {}
+
+	first := &memThrottler{}
+	first.rssPressureState.Store(int64(rssPressureSoft))
+	first.rssPressureGen.Store(1)
+	second := &memThrottler{}
+	second.rssPressureState.Store(int64(rssPressureHard))
+	second.rssPressureGen.Store(1)
+	targets := make(chan int64, 2)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	evictor := func(_ context.Context, targetPercent int64) {
+		targets <- targetPercent
+		if targetPercent == rssCacheSoftTarget {
+			close(entered)
+			<-release
+		}
+	}
+
+	now := time.Now().UnixNano()
+	processRSSReclamation.request(now, rssReclamationWork{
+		owner:         first,
+		generation:    1,
+		targetPercent: rssCacheSoftTarget,
+		evictor:       evictor,
+	})
+	<-entered
+	processRSSReclamation.request(now+int64(time.Second), rssReclamationWork{
+		owner:         second,
+		generation:    1,
+		targetPercent: rssCacheHardTarget,
+		evictor:       evictor,
+	})
+
+	first.rssPressureState.Store(int64(rssPressureNone))
+	first.rssPressureGen.Store(2)
+	close(release)
+	resetRSSReclamationCoordinatorForTest()
+
+	var got []int64
+	for {
+		select {
+		case target := <-targets:
+			got = append(got, target)
+		default:
+			require.Equal(t, []int64{rssCacheSoftTarget, rssCacheHardTarget}, got)
+			return
+		}
 	}
 }
 
