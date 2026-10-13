@@ -801,7 +801,7 @@ func buildAlterCopyAddIndex(
 		}
 		if err := buildFullTextIndexTable(
 			indexInfo, []*tree.FullTextIndex{index}, colMap,
-			copyTableDef.Indexes, primaryKeyName, ctx, copyTableDef,
+			copyTableDef.Indexes, primaryKeyName, ctx,
 		); err != nil {
 			return nil, "", err
 		}

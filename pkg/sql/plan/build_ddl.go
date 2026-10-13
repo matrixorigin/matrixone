@@ -6936,7 +6936,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					currentTableDef.Indexes,
 					oriPriKeyName,
 					ctx,
-					currentTableDef,
 				); err != nil {
 					return nil, err
 				}
@@ -6990,6 +6989,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					currentTableDef.Indexes,
 					oriPriKeyName,
 					ctx,
+					currentTableDef,
 				); err != nil {
 					return nil, err
 				}
