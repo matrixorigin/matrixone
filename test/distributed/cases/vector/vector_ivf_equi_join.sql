@@ -154,5 +154,27 @@ explain select a.id from chunks a ignore index for join(idx_category_document) j
 -- FORCE INDEX FOR JOIN 的两个方向都须保留正确列绑定及重复行。
 select a.id from chunks a force index for join(idx_category_document) join documents b on a.document_id=b.document_id where a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
 select a.id from documents b join chunks a force index for join(idx_category_document) on b.document_id=a.document_id where a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- 显式 JOIN 访问优先于可选 ANN，普通/PRE 模式与 JOIN 顺序不能改变该契约。
+create index idx_document on chunks(document_id);
+create index idx_document on documents(document_id);
+-- @regex("ivf_search",true)
+explain select a.id,b.label from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("chunks.idx_document",true)
+-- @regex("ivf_search",false)
+explain select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("chunks.idx_document",true)
+-- @regex("ivf_search",false)
+explain select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=pre';
+-- @regex("chunks.idx_document",true)
+-- @regex("ivf_search",false)
+explain select a.id,b.label from documents b join chunks a force index for join(idx_document) on b.document_id=a.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("documents.idx_document",true)
+-- @regex("ivf_search",false)
+explain select a.id,b.label from documents b force index for join(idx_document) join chunks a on b.document_id=a.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=pre';
+select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+select a.id,b.label from documents b force index for join(idx_document) join chunks a on b.document_id=a.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 2 offset 1;
 drop database vector_ivf_equi_join;
 set experimental_ivf_index=@saved_experimental_ivf_index;

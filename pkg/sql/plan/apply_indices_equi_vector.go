@@ -52,6 +52,12 @@ func (builder *QueryBuilder) buildVectorEquiJoinContext(proj *plan.Node) *vector
 		!vectorEquiJoinOn(join.OnList, left.BindingTags[0], right.BindingTags[0]) {
 		return nil
 	}
+	// ANN replaces a JOIN input with a limited candidate subtree; the ordinary
+	// JOIN index owner can no longer honor a forced access on that raw input.
+	// Keep explicit JOIN access ahead of this optional rewrite on either side.
+	if builder.scanForcesJoinIndex(left.NodeId) || builder.scanForcesJoinIndex(right.NodeId) {
+		return nil
+	}
 	distance := sort.OrderBy[0].Expr
 	if child != nil && distance.GetCol() != nil {
 		col := distance.GetCol()

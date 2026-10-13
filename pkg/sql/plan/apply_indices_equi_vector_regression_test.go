@@ -209,6 +209,65 @@ func TestEquiVectorDeclinedRewriteRestoresScalarIndexes(t *testing.T) {
 	require.ElementsMatch(t, []string{"idx_category", "idx_label_document"}, indexes)
 }
 
+func equiVectorDocumentIndexFixture(ctx *customMockCompilerContext, tableName string) {
+	table := ctx.tables[tableName]
+	indexTable := "__mo_index_" + tableName + "_document"
+	pk := table.Pkey.PkeyColName
+	table.Indexes = append(table.Indexes, &plan.IndexDef{IndexName: "idx_document", IndexAlgo: "btree",
+		IndexTableName: indexTable, TableExist: true, Parts: []string{"document_id", catalog.CreateAlias(pk)}})
+	ctx.tables[indexTable] = &plan.TableDef{Name: indexTable, TblId: table.TblId + 100,
+		Cols: []*plan.ColDef{
+			{Name: catalog.IndexTableIndexColName, Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: catalog.IndexTablePrimaryColName, Typ: table.Cols[table.Name2ColIndex[pk]].Typ},
+		}, Name2ColIndex: map[string]int32{catalog.IndexTableIndexColName: 0, catalog.IndexTablePrimaryColName: 1},
+	}
+	ctx.objects[indexTable] = &plan.ObjectRef{SchemaName: "tpch", ObjName: indexTable, Obj: int64(table.TblId + 100)}
+}
+
+func TestEquiVectorForcedJoinAccessTakesPrecedence(t *testing.T) {
+	const left = "select a.id,b.label from equi_chunks a %s join equi_documents b %s on a.document_id=b.document_id"
+	const right = "select a.id,b.label from equi_documents b %[2]s join equi_chunks a %[1]s on b.document_id=a.document_id"
+	const forceJoin = "force index for join(idx_document)"
+	for _, tc := range []struct {
+		name, shape, aHint, bHint, mode string
+		forcedTables                    []string
+	}{
+		{"a_default", left, forceJoin, "", "", []string{"equi_chunks"}},
+		{"a_pre", left, forceJoin, "", " by rank with option 'mode=pre'", []string{"equi_chunks"}},
+		{"a_reversed", right, forceJoin, "", "", []string{"equi_chunks"}},
+		{"a_vector_force_control", left, forceJoin, "", " by rank with option 'mode=force'", []string{"equi_chunks"}},
+		{"b_default", left, "", forceJoin, "", []string{"equi_documents"}},
+		{"b_reversed", right, "", forceJoin, "", []string{"equi_documents"}},
+		{"both", left, forceJoin, forceJoin, "", []string{"equi_chunks", "equi_documents"}},
+		{"no_hint_default", left, "", "", "", nil},
+		{"no_hint_pre", left, "", "", " by rank with option 'mode=pre'", nil},
+		{"use_join_not_force", left, "use index for join(idx_document)", "", "", nil},
+		{"ignore_join_not_force", left, "ignore index for join(idx_document)", "", "", nil},
+		{"force_order_not_join", left, "force index for order by(idx_document)", "", "", nil},
+		{"force_group_not_join", left, "force index for group by(idx_document)", "", "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sql := fmt.Sprintf(tc.shape, tc.aHint, tc.bHint) + " where b.label='allowed' order by l2_distance(a.v,'[0,0]') limit 2" + tc.mode
+			q := equiVectorPlanFixture(t, sql, false, false, func(ctx *customMockCompilerContext) {
+				equiVectorDocumentIndexFixture(ctx, "equi_chunks")
+				equiVectorDocumentIndexFixture(ctx, "equi_documents")
+			})
+			var indexedTables []string
+			for id := range reachableVectorJoinNodeIDs(q, q.Steps[0]) {
+				if info := q.Nodes[id].IndexScanInfo; info.IndexName == "idx_document" {
+					indexedTables = append(indexedTables, info.BelongToTable)
+				}
+			}
+			require.ElementsMatch(t, tc.forcedTables, indexedTables, "explicit JOIN access must survive on the requested input")
+			if len(tc.forcedTables) > 0 {
+				require.Empty(t, equiVectorSearchNodes(q), "decline ANN rather than discard a forced JOIN access")
+			} else {
+				require.Len(t, equiVectorSearchNodes(q), 1, "only FORCE JOIN, not other scopes or advisory hints, blocks ANN")
+			}
+		})
+	}
+}
+
 func TestEquiVectorDeclinedRewriteRestoresJoinIndexes(t *testing.T) {
 	const left = "select a.id,b.label from equi_chunks a %s join equi_documents b on a.document_id=b.document_id where b.label='allowed'"
 	const right = "select a.id,b.label from equi_documents b join equi_chunks a %s on b.document_id=a.document_id where b.label='allowed'"
@@ -231,12 +290,7 @@ func TestEquiVectorDeclinedRewriteRestoresJoinIndexes(t *testing.T) {
 				a := ctx.tables["equi_chunks"]
 				a.Cols[0].Typ = plan.Type{Id: int32(types.T_int64), NotNullable: true}
 				equiVectorInputIndexFixture(ctx)
-				const table = "__mo_index_equi_document"
-				a.Indexes = append(a.Indexes, &plan.IndexDef{IndexName: "idx_document", IndexAlgo: "btree",
-					IndexTableName: table, TableExist: true, Parts: []string{"document_id", catalog.CreateAlias("id")}})
-				ctx.tables[table] = DeepCopyTableDef(ctx.tables["__mo_index_equi_chunks_category"], true)
-				ctx.tables[table].Name, ctx.tables[table].TblId = table, 897
-				ctx.objects[table] = &plan.ObjectRef{SchemaName: "tpch", ObjName: table, Obj: 897}
+				equiVectorDocumentIndexFixture(ctx, "equi_chunks")
 				rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
 				original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 				t.Cleanup(func() {

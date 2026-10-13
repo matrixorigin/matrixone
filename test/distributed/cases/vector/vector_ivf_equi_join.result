@@ -572,7 +572,7 @@ create index idx_category_document on chunks(category,document_id);
 explain select a.id from chunks a join documents b on a.document_id=b.document_id where a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
 -- @regex("chunks.idx_category_document", true)
 -- @regex("ivf_search", true)
-➤ AP QUERY PLAN ON ONE CN(2 core)[12,0,0]  𝄀
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: l2_distance(chunks.v, ) INTERNAL  𝄀
@@ -614,7 +614,7 @@ Project  𝄀
 explain select a.id from chunks a ignore index(idx_category_document) join documents b on a.document_id=b.document_id where a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
 -- @regex("chunks.idx_category_document", false)
 -- @regex("ivf_search", true)
-➤ AP QUERY PLAN ON ONE CN(2 core)[12,0,0]  𝄀
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: l2_distance(chunks.v, ) INTERNAL  𝄀
@@ -650,7 +650,7 @@ Project  𝄀
 explain select a.id from chunks a use index(chunks_ivf) join documents b on a.document_id=b.document_id where a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
 -- @regex("chunks.idx_category_document", false)
 -- @regex("ivf_search", true)
-➤ AP QUERY PLAN ON ONE CN(2 core)[12,0,0]  𝄀
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: l2_distance(chunks.v, ) INTERNAL  𝄀
@@ -686,7 +686,7 @@ Project  𝄀
 explain select a.id from documents b join chunks a ignore index(idx_category_document) on b.document_id=a.document_id where a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
 -- @regex("chunks.idx_category_document", false)
 -- @regex("ivf_search", true)
-➤ AP QUERY PLAN ON ONE CN(2 core)[12,0,0]  𝄀
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: l2_distance(chunks.v, ) INTERNAL  𝄀
@@ -724,7 +724,7 @@ Project  𝄀
 explain select a.id from chunks a ignore index(idx_category_document) where a.document_id in(select document_id from documents) and a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
 -- @regex("chunks.idx_category_document", false)
 -- @regex("ivf_search", true)
-➤ AP QUERY PLAN ON ONE CN(2 core)[12,0,0]  𝄀
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
@@ -767,7 +767,7 @@ c2  𝄀
 c2
 explain select a.id from chunks a ignore index for join(idx_category_document) join documents b on a.document_id=b.document_id where a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
 -- @regex("chunks.idx_category_document", true)
-➤ AP QUERY PLAN ON ONE CN(2 core)[12,0,0]  𝄀
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: l2_distance(chunks.v, ) INTERNAL  𝄀
@@ -816,5 +816,152 @@ select a.id from documents b join chunks a force index for join(idx_category_doc
 c2  𝄀
 c2  𝄀
 c2
+create index idx_document on chunks(document_id);
+create index idx_document on documents(document_id);
+explain select a.id,b.label from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("ivf_search", true)
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(chunks.v, ) INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (chunks.document_id = serial_extract(__mo_index_idx_col, 1, VARCHAR)))  𝄀
+              ->  Sort  𝄀
+                    Sort Key: mo_ivf_alias_0.score ASC  𝄀
+                    Limit: 3  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER  𝄀
+                          Join Cond: (chunks.id = mo_ivf_alias_0.pkid)  𝄀
+                          Runtime Filter Build: #[-1,0]  𝄀
+                          ->  Table Scan on vector_ivf_equi_join.chunks  𝄀
+                                Runtime Filter Probe: chunks.id  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (mo_ivf_alias_0.pkid = chunks.id)  𝄀
+                                Runtime Filter Build: #[14,0]  𝄀
+                                ->  Table Function on ivf_search  𝄀
+                                      Index Reader Param:  Limit: 3  𝄀
+                                      Runtime Filter Probe: #[12,0]  𝄀
+                                      Limit: 3  𝄀
+                                ->  Join  𝄀
+                                      Join Type: SEMI  𝄀
+                                      Join Cond: (chunks.document_id = serial_extract(__mo_index_idx_col, 1, VARCHAR)))  𝄀
+                                      ->  Table Scan on vector_ivf_equi_join.chunks  𝄀
+                                      ->  Index Table Scan on documents.idx_label_document  𝄀
+                                            Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+              ->  Index Table Scan on documents.idx_label_document  𝄀
+                    Filter Cond: prefix_eq(__mo_index_idx_col)
+explain select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("chunks.idx_document", true)
+-- @regex("ivf_search", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(a.v, ) INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (a.document_id = serial_extract(__mo_index_idx_col, 1, VARCHAR)))  𝄀
+              Runtime Filter Build: serial_full(#[-1,0])  𝄀
+              ->  Join  𝄀
+                    Join Type: INDEX  𝄀
+                    Join Cond: (a.id = __mo_index_pri_col)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on vector_ivf_equi_join.chunks [ForceOneCN]  𝄀
+                          Runtime Filter Probe: a.id  𝄀
+                    ->  Index Table Scan on chunks.idx_document [ForceOneCN]  𝄀
+                          Runtime Filter Probe: __mo_index_idx_col Match Prefix  𝄀
+              ->  Index Table Scan on documents.idx_label_document  𝄀
+                    Filter Cond: prefix_eq(__mo_index_idx_col)
+explain select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=pre';
+-- @regex("chunks.idx_document", true)
+-- @regex("ivf_search", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(a.v, ) INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (a.document_id = serial_extract(__mo_index_idx_col, 1, VARCHAR)))  𝄀
+              Runtime Filter Build: serial_full(#[-1,0])  𝄀
+              ->  Join  𝄀
+                    Join Type: INDEX  𝄀
+                    Join Cond: (a.id = __mo_index_pri_col)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on vector_ivf_equi_join.chunks [ForceOneCN]  𝄀
+                          Runtime Filter Probe: a.id  𝄀
+                    ->  Index Table Scan on chunks.idx_document [ForceOneCN]  𝄀
+                          Runtime Filter Probe: __mo_index_idx_col Match Prefix  𝄀
+              ->  Index Table Scan on documents.idx_label_document  𝄀
+                    Filter Cond: prefix_eq(__mo_index_idx_col)
+explain select a.id,b.label from documents b join chunks a force index for join(idx_document) on b.document_id=a.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("chunks.idx_document", true)
+-- @regex("ivf_search", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(a.v, ) INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (serial_extract(__mo_index_idx_col, 1, VARCHAR)) = a.document_id)  𝄀
+              ->  Index Table Scan on documents.idx_label_document  𝄀
+                    Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+              ->  Join  𝄀
+                    Join Type: INDEX  𝄀
+                    Join Cond: (a.id = __mo_index_pri_col)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on vector_ivf_equi_join.chunks [ForceOneCN]  𝄀
+                          Runtime Filter Probe: a.id  𝄀
+                    ->  Index Table Scan on chunks.idx_document [ForceOneCN]
+explain select a.id,b.label from documents b force index for join(idx_document) join chunks a on b.document_id=a.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("documents.idx_document", true)
+-- @regex("ivf_search", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(a.v, ) INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (b.document_id = a.document_id)  𝄀
+              Runtime Filter Build: serial_full(#[-1,0])  𝄀
+              ->  Join  𝄀
+                    Join Type: INDEX  𝄀
+                    Join Cond: (b.row_id = __mo_index_pri_col)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on vector_ivf_equi_join.documents [ForceOneCN]  𝄀
+                          Filter Cond: (b.label = 'x')  𝄀
+                          Runtime Filter Probe: b.row_id  𝄀
+                    ->  Index Table Scan on documents.idx_document [ForceOneCN]  𝄀
+                          Runtime Filter Probe: __mo_index_idx_col Match Prefix  𝄀
+              ->  Table Scan on vector_ivf_equi_join.chunks
+select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+➤ id[12,-1,0]  ¦  label[12,-1,0]  𝄀
+c2  ¦  x  𝄀
+c2  ¦  x  𝄀
+c4  ¦  x
+select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=pre';
+➤ id[12,-1,0]  ¦  label[12,-1,0]  𝄀
+c2  ¦  x  𝄀
+c2  ¦  x  𝄀
+c4  ¦  x
+select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+➤ id[12,-1,0]  ¦  label[12,-1,0]  𝄀
+c2  ¦  x  𝄀
+c2  ¦  x  𝄀
+c4  ¦  x
+select a.id,b.label from documents b force index for join(idx_document) join chunks a on b.document_id=a.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+➤ id[12,-1,0]  ¦  label[12,-1,0]  𝄀
+c2  ¦  x  𝄀
+c2  ¦  x  𝄀
+c4  ¦  x
+select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 2 offset 1;
+➤ id[12,-1,0]  ¦  label[12,-1,0]  𝄀
+c2  ¦  x  𝄀
+c4  ¦  x
 drop database vector_ivf_equi_join;
 set experimental_ivf_index=@saved_experimental_ivf_index;
