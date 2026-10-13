@@ -13423,3 +13423,38 @@ func TestGeometryStandardWKBPreservesStoredStructure(t *testing.T) {
 	_, _, err = GeometryPayloadToStandardWKB(compact, types.T_geometry.ToType())
 	require.Error(t, err)
 }
+
+func TestGeometryStandardWKBPreservesHistoricalText(t *testing.T) {
+	ring := []geo.Coord{{X: 0, Y: 0}, {X: 1, Y: 0}, {X: 1, Y: 1}}
+	polygon := geo.Polygon{Rings: [][]geo.Coord{ring}}
+	for _, g := range []geo.Geometry{polygon, geo.GeometryCollection{Geometries: []geo.Geometry{geo.Point{IsEmpty: true}, geo.MultiPolygon{Polygons: []geo.Polygon{{}, polygon}}}}} {
+		for _, oid := range []types.T{types.T_geometry, types.T_geometry32} {
+			for _, srid := range []int32{0, 4326} {
+				typ := oid.ToType()
+				typ.Width = srid + 1
+				wkb := geo.WriteWKB(g)
+				if oid == types.T_geometry32 {
+					var err error
+					wkb, err = geo.WriteWKBFloat32(g)
+					require.NoError(t, err)
+				}
+				for _, payload := range [][]byte{wkb, []byte(geo.WriteWKT(g)), []byte("SRID=999;" + geo.WriteWKT(g))} {
+					original := bytes.Clone(payload)
+					standard, gotSRID, err := GeometryPayloadToStandardWKB(payload, typ)
+					require.NoError(t, err)
+					require.Equal(t, uint32(srid), gotSRID)
+					decoded, err := geo.ReadWKB(standard)
+					require.NoError(t, err)
+					require.Equal(t, g, decoded)
+					require.Equal(t, original, payload)
+					_, _, _, _, err = validateGeometryPayload(payload, defaultMaxPointsInGeometry)
+					require.Error(t, err, "re-admission stays strict")
+				}
+			}
+		}
+	}
+	for _, text := range []string{"POLYGON((0 0,1 0,1))", "POINT(1 2) trailing", "POINT(1 2 3)", "LINESTRING(0 0,)"} {
+		_, _, err := GeometryPayloadToStandardWKB([]byte(text), types.T_geometry.ToType())
+		require.Error(t, err)
+	}
+}

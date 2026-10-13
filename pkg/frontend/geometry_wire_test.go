@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -126,4 +127,93 @@ func TestGeometryWireConversionBoundaries(t *testing.T) {
 	}
 	_, err := encodeMySQLGeometry([]byte("POINT(1 2)"), types.Type{})
 	require.ErrorContains(t, err, "missing geometry source type")
+}
+
+func TestHistoricalGeometryCursorCaptureAndFetch(t *testing.T) {
+	// Independent little-endian WKB for the four-position historical ring.
+	historical, err := hex.DecodeString("01030000000100000004000000" +
+		"00000000000000000000000000000000" +
+		"000000000000f03f0000000000000000" +
+		"000000000000f03f000000000000f03f" +
+		"0000000000000000000000000000f03f")
+	require.NoError(t, err)
+	closed := append([]byte(nil), historical...)
+	closed[9] = 5
+	closed = append(closed, make([]byte, 16)...)
+	for _, oid := range []types.T{types.T_geometry, types.T_geometry32} {
+		for _, srid := range []int32{0, 4326} {
+			t.Run(fmt.Sprintf("%s/srid=%d", oid, srid), func(t *testing.T) {
+				ctx := context.Background()
+				conn := &prepareResponseCaptureConn{}
+				proto, proc, stmt := newBinaryPrepareProtocolTestCaseWithConn(t, "select 1", conn)
+				t.Cleanup(proto.Close)
+				defer proc.Free()
+				defer stmt.Close()
+				ses := proto.GetSession()
+				ses.proc = proc
+				ses.respr = NewMysqlResp(proto)
+				ses.SetCmd(COM_STMT_FETCH)
+				ses.prepareStmts = map[string]*PrepareStmt{stmt.Name: stmt}
+				typ := oid.ToType()
+				typ.Width = srid + 1
+				col := new(MysqlColumn)
+				require.NoError(t, setMysqlColumnTypeInfo(ctx, typ, col))
+				stmt.cursor = &preparedStmtCursor{result: &MysqlResultSet{Columns: []Column{col}}, maxRows: 3, maxBytes: 4096}
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(typ)
+				defer bat.Clean(proc.Mp())
+				for _, standard := range [][]byte{historical, closed} {
+					payload := standard
+					if oid == types.T_geometry32 {
+						g, err := geo.ReadWKB(standard)
+						require.NoError(t, err)
+						payload, err = geo.WriteWKBFloat32(g)
+						require.NoError(t, err)
+					}
+					require.NoError(t, vector.AppendBytes(bat.Vecs[0], payload, false, proc.Mp()))
+				}
+				require.NoError(t, vector.AppendBytes(bat.Vecs[0], nil, true, proc.Mp()))
+				bat.SetRowCount(3)
+				require.NoError(t, capturePreparedCursorBatch(ses, &ExecCtx{reqCtx: ctx, prepareStmt: stmt}, bat))
+				require.Equal(t, []byte("POLYGON((0 0,1 0,1 1,0 1))"), stmt.cursor.result.Data[0][0])
+				require.Positive(t, ses.preparedCursorBytes.Load())
+				// Retained WKT owns its bytes independently of the input vectors.
+				bat.Vecs[0].GetBytesAt(0)[0] = 9
+				request := make([]byte, 8)
+				binary.LittleEndian.PutUint32(request[:4], 1)
+				binary.LittleEndian.PutUint32(request[4:], 2)
+				response, err := executeStmtFetch(ctx, ses, request)
+				require.NoError(t, err)
+				require.Nil(t, response)
+				require.NotNil(t, stmt.cursor)
+				require.Equal(t, uint64(2), stmt.cursor.offset)
+				require.NoError(t, proto.flush())
+				packets := splitProtocolPackets(t, conn.writes)
+				require.Len(t, packets, 3)
+				for i, wkb := range [][]byte{historical, closed} {
+					prefix := []byte{0, 0, 0, 0}
+					binary.LittleEndian.PutUint32(prefix, uint32(srid))
+					wire := append(prefix, wkb...)
+					want := append([]byte{0, 0, byte(len(wire))}, wire...)
+					require.Equal(t, want, packets[i])
+				}
+				require.Equal(t, byte(defines.EOFHeader), packets[2][0])
+				require.NotZero(t, binary.LittleEndian.Uint16(packets[2][3:5])&SERVER_STATUS_CURSOR_EXISTS)
+				conn.writes = nil
+				response, err = executeStmtFetch(ctx, ses, request)
+				require.NoError(t, err)
+				require.Nil(t, response)
+				require.NoError(t, proto.flush())
+				packets = splitProtocolPackets(t, conn.writes)
+				require.Len(t, packets, 2)
+				require.Equal(t, []byte{0, 4}, packets[0])
+				require.Equal(t, byte(defines.EOFHeader), packets[1][0])
+				status := binary.LittleEndian.Uint16(packets[1][3:5])
+				require.NotZero(t, status&SERVER_STATUS_LAST_ROW_SENT)
+				require.Zero(t, status&SERVER_STATUS_CURSOR_EXISTS)
+				require.Nil(t, stmt.cursor)
+				require.Zero(t, ses.preparedCursorBytes.Load())
+			})
+		}
+	}
 }

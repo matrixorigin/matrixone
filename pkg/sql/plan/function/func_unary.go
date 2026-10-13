@@ -2343,7 +2343,7 @@ func GeometryPayloadToStandardWKB(payload []byte, typ types.Type) ([]byte, uint3
 		}
 	} else {
 		wkt, _, _ := stripEWKTSRID(strings.TrimSpace(functionUtil.QuickBytesToStr(payload)))
-		g, err = geo.ParseWKT(wkt)
+		g, err = geo.ParseWKTForSerialization(wkt)
 	}
 	if err != nil {
 		return nil, 0, err

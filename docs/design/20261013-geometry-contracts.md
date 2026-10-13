@@ -55,7 +55,11 @@ Finite-coordinate, point-limit, SRID, subtype and selection-mask owners remain.
 WKB readers remain codecs: historical malformed stored WKB stays inspectable
 through text and export. Re-admission rejects its malformed structure. Standard
 WKB export decodes directly, avoiding accidental application of new WKT admission
-rules to stored WKB. No automatic repair or migration is performed.
+rules to stored WKB. Legacy textual payloads and materialized cursor WKT use
+the same parser through an explicit serialization-only entry point: grammar and
+nesting limits remain enforced, while historical ring coordinates/counts are
+preserved without admission checks. Constructors retain strict parsing. No
+automatic repair or migration is performed.
 
 ## MySQL output
 
