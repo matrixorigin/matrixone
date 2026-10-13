@@ -7355,7 +7355,8 @@ rank_opt:
             } else if strVal, ok := expr.(*tree.StrVal); ok {
                 str = strVal.String()
             } else {
-                continue
+                yylex.Error("rank options must be string literals containing key=value")
+                return 1
             }
             
             // Remove quotes if present
@@ -7365,11 +7366,13 @@ rank_opt:
             
             // Parse key=value pairs
             parts := strings.Split(str, "=")
-            if len(parts) == 2 {
-                key := strings.TrimSpace(strings.ToLower(parts[0]))
-                value := strings.TrimSpace(parts[1])
-                optionMap[key] = value
+            if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+                yylex.Error("rank options must contain a nonempty key=value pair")
+                return 1
             }
+            key := strings.TrimSpace(strings.ToLower(parts[0]))
+            value := strings.TrimSpace(parts[1])
+            optionMap[key] = value
         }
         
         $$ = &tree.RankOption{
