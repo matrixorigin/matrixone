@@ -4342,7 +4342,7 @@ func appendPreInsertPlan(
 		// after the rowid.  INSERT streams have no trailing rowid and retain the
 		// ordinary append-at-end layout.
 		lastProjectionLen := len(lastProject)
-		keyPos := int32(lastProjectionLen)
+		var keyPos int32
 		projection := make([]*Expr, 0, lastProjectionLen+1)
 		if isUpddate && lastProjectionLen > 0 {
 			lastRowIDPos := lastProjectionLen - 1
