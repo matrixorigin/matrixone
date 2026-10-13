@@ -197,7 +197,7 @@ func TestIsEnumMember(t *testing.T) {
 	}{
 		{" ,red,", " ", true}, {" ,red,", "", true}, {" ,red,", "RED", true},
 		{"red,blue", "", false}, {"red,blue", "blue", true}, {"red,blue", " red", false},
-		{"", "", false}, {",", "", true},
+		{"", "", true}, {"", "red", false}, {",", "", true},
 	} {
 		require.Equal(t, tc.want, isEnumMember(tc.def, tc.name), "%q in %q", tc.name, tc.def)
 	}

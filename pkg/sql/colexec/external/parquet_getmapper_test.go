@@ -617,9 +617,10 @@ func TestGetMapper_RemainingTypes(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_char, 0, 0))
+		vec := vector.NewVec(types.New(types.T_char, 3, 0))
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
-		mp := h.getMapper(col, plan.Type{Id: int32(types.T_char), NotNullable: true})
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_char), Width: 3, NotNullable: true})
 		require.NotNil(t, mp)
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, 2, vec.Length())

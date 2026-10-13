@@ -5359,8 +5359,8 @@ func TestFullTextJoinRewriteLeftChild(t *testing.T) {
 	require.Equal(t, planpb.Node_JOIN, builder.qry.Nodes[joinNode.Children[0]].NodeType)
 	require.Equal(t, 1, countFullTextFunctionScans(builder, joinNode.Children[0]))
 	functionScan := collectFullTextFunctionScans(builder, joinNode.Children[0])[0]
-	require.Nil(t, functionScan.TableDef.TblFunc.FulltextSourceRef)
-	require.Nil(t, functionScan.TableDef.TblFunc.FulltextIndexRef)
+	require.Nil(t, functionScan.IndexSearchScan.SourceTable.GetPubInfo())
+	require.Nil(t, functionScan.IndexSearchScan.HiddenTables[0].GetObject().GetPubInfo())
 	require.False(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[leftScanID]))
 	require.Len(t, joinNode.OnList, 1)
 }
@@ -5443,12 +5443,14 @@ func TestFullTextJoinRewriteCarriesPublisherReferences(t *testing.T) {
 	functionScans := collectFullTextFunctionScans(builder, builder.qry.Nodes[joinID].Children[0])
 	require.Len(t, functionScans, 1)
 	functionScan := functionScans[0]
-	require.Equal(t, "`pub``db`.`source``table`", functionScan.TblFuncExprList[0].GetLit().GetSval())
-	require.Equal(t, "`pub``db`.`index``table`", functionScan.TblFuncExprList[1].GetLit().GetSval())
-	require.Equal(t, scan.ObjRef, functionScan.TableDef.TblFunc.FulltextSourceRef)
-	require.Equal(t, indexRef, functionScan.TableDef.TblFunc.FulltextIndexRef)
-	require.NotSame(t, scan.ObjRef, functionScan.TableDef.TblFunc.FulltextSourceRef)
-	require.NotSame(t, indexRef, functionScan.TableDef.TblFunc.FulltextIndexRef)
+	opts := fullTextScanOptions(t, functionScan)
+	require.Equal(t, "`pub``db`.`source``table`", opts.SourceTable)
+	require.Equal(t, "`pub``db`.`index``table`", opts.IndexTable)
+	spec := functionScan.IndexSearchScan
+	require.Equal(t, scan.ObjRef, spec.SourceTable)
+	require.Equal(t, indexRef, spec.HiddenTables[0].Object)
+	require.NotSame(t, scan.ObjRef, spec.SourceTable)
+	require.NotSame(t, indexRef, spec.HiddenTables[0].Object)
 }
 
 func TestFullTextJoinRewriteBothChildren(t *testing.T) {
@@ -5539,7 +5541,7 @@ func TestFullTextCandidateLimitIncludesOffset(t *testing.T) {
 	require.True(t, changed)
 	functions := collectFullTextFunctionScans(builder, newID)
 	require.Len(t, functions, 1)
-	require.Equal(t, uint64(15), functions[0].Limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(15), fulltextScanLimit(functions[0]).GetLit().GetU64Val())
 	require.Equal(t, uint64(10), builder.qry.Nodes[newID].Limit.GetLit().GetU64Val())
 	require.Equal(t, uint64(5), builder.qry.Nodes[newID].Offset.GetLit().GetU64Val())
 	require.Nil(t, scan.Limit)
@@ -5561,8 +5563,8 @@ func TestFullTextCandidateLimitWithoutResidualFilterKeepsDynamicLimit(t *testing
 	require.True(t, changed)
 	functions := collectFullTextFunctionScans(builder, newID)
 	require.Len(t, functions, 1)
-	require.NotNil(t, functions[0].Limit.GetP())
-	require.Equal(t, int32(0), functions[0].Limit.GetP().Pos)
+	require.NotNil(t, fulltextScanLimit(functions[0]).GetP())
+	require.Equal(t, int32(0), fulltextScanLimit(functions[0]).GetP().Pos)
 }
 
 func TestFullTextCandidateLimitSQLCalcFoundRowsKeepsCompleteStream(t *testing.T) {
@@ -5582,7 +5584,7 @@ func TestFullTextCandidateLimitSQLCalcFoundRowsKeepsCompleteStream(t *testing.T)
 	require.True(t, changed)
 	functions := collectFullTextFunctionScans(builder, newID)
 	require.Len(t, functions, 1)
-	require.Nil(t, functions[0].Limit,
+	require.Nil(t, fulltextScanLimit(functions[0]),
 		"the full-text TVF must not truncate candidates before FOUND_ROWS counting")
 	require.Equal(t, uint64(10), builder.qry.Nodes[newID].Limit.GetLit().GetU64Val())
 	require.Equal(t, uint64(5), builder.qry.Nodes[newID].Offset.GetLit().GetU64Val())
@@ -5675,14 +5677,14 @@ func TestFullTextCandidateLimitWithResidualFilterRequiresExactPrefilter(t *testi
 			functions := collectFullTextFunctionScans(builder, newID)
 			require.Len(t, functions, 1)
 			if tc.classicIndex {
-				require.Equal(t, fulltext_index_scan_func_name, functions[0].TableDef.TblFunc.Name)
+				require.True(t, isFullTextSearchScan(functions[0]))
 			} else {
-				require.Equal(t, fulltext2_search_func_name, functions[0].TableDef.TblFunc.Name)
+				require.True(t, isFulltext2SearchScan(functions[0]))
 			}
 			if tc.wantCandidateK {
-				require.Equal(t, uint64(15), functions[0].Limit.GetLit().GetU64Val())
+				require.Equal(t, uint64(15), fulltextScanLimit(functions[0]).GetLit().GetU64Val())
 			} else {
-				require.Nil(t, functions[0].Limit)
+				require.Nil(t, fulltextScanLimit(functions[0]))
 			}
 		})
 	}
@@ -5717,7 +5719,7 @@ func TestFullTextCandidateLimitRejectsVolatileResidualFilter(t *testing.T) {
 	require.True(t, changed)
 	functions := collectFullTextFunctionScans(builder, newID)
 	require.Len(t, functions, 1)
-	require.Nil(t, functions[0].Limit,
+	require.Nil(t, fulltextScanLimit(functions[0]),
 		"a volatile residual must not receive a filter-dependent candidate bound")
 
 	var volatileScanNodes int
@@ -5781,8 +5783,8 @@ func TestFullTextDoesNotLimitIndependentIntersectionInputs(t *testing.T) {
 	functions := collectFullTextFunctionScans(builder, newID)
 	require.Len(t, functions, 2)
 	for _, functionNode := range functions {
-		require.Equal(t, fulltext2_search_func_name, functionNode.TableDef.TblFunc.Name)
-		require.Nil(t, functionNode.Limit)
+		require.True(t, isFulltext2SearchScan(functionNode))
+		require.Nil(t, fulltextScanLimit(functionNode))
 	}
 }
 
@@ -6170,12 +6172,8 @@ func collectFullTextFunctionScans(builder *QueryBuilder, nodeID int32) []*planpb
 	}
 
 	var nodes []*planpb.Node
-	if node.NodeType == planpb.Node_FUNCTION_SCAN &&
-		node.TableDef != nil && node.TableDef.TblFunc != nil {
-		name := node.TableDef.TblFunc.Name
-		if name == fulltext_index_scan_func_name || name == fulltext2_search_func_name {
-			nodes = append(nodes, node)
-		}
+	if isFullTextSearchScan(node) || isFulltext2SearchScan(node) {
+		nodes = append(nodes, node)
 	}
 	for _, childID := range node.Children {
 		nodes = append(nodes, collectFullTextFunctionScans(builder, childID)...)
