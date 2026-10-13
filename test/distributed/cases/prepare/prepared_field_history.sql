@@ -2,6 +2,8 @@
 -- @desc: FIELD keeps prepared CASE return types across executions and relational consumers
 -- @label:bvt
 
+DROP DATABASE IF EXISTS field_history_unrelated_ddl;
+
 -- Text first execution.
 PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f';
 SET @field_condition = 1;
@@ -191,6 +193,60 @@ SET @field_value = 'a';
 EXECUTE p_field_history USING @field_condition, @field_value;
 DEALLOCATE PREPARE p_field_history;
 
+-- A composite scalar projection must not inherit the bare marker declaration.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN (SELECT COALESCE(?, NULL) LIMIT 1) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+
+-- A bare parameter column has the same declaration through a CTE or derived table.
+PREPARE p_field_history FROM 'WITH d AS (SELECT ? x) SELECT FIELD(CASE WHEN ? THEN x ELSE NULL END, ''A'', ''a'') AS f FROM d';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_value, @field_condition;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_value, @field_condition;
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN x ELSE NULL END, ''A'', ''a'') AS f FROM (SELECT ? x LIMIT 1) d';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+
+-- Function dependencies do not depend on the return-domain inference whitelist.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ELT(1, ?) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+
+-- Until reprepare, a string function uses its parameter declaration, not payload type.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ELT(1, ?) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = '1', @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_condition = 1;
+EXECUTE p_field_history USING @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+
+-- NULLIF's NULL marker keeps its declaration; a NULL composite keeps its own domain.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN NULLIF(?, ''x'') ELSE NULL END, ''A'', ''a'') AS direct_f, FIELD(CASE WHEN ? THEN NULLIF(COALESCE(?, NULL), ''x'') ELSE NULL END, ''A'', ''a'') AS composite_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+
+-- NULLIF resolves its return operand again when the statement is reprepared.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN NULLIF(?, ''x'') ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = '1', @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_condition = 1, @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+
 -- Plan invalidation preserves type history; restore the session settings.
 SET @field_old_locale = @@lc_time_names;
 SET @field_old_prefilter = @@enable_vector_prefilter_by_default;
@@ -208,6 +264,12 @@ EXECUTE p_field_history USING @field_condition, @field_value;
 SET enable_vector_prefilter_by_default = 1;
 EXECUTE p_field_history USING @field_condition, @field_value;
 SET enable_vector_auto_mode_by_default = 1;
+EXECUTE p_field_history USING @field_condition, @field_value;
+-- This statement has no table dependency. Unrelated DDL cannot reset its types.
+CREATE DATABASE field_history_unrelated_ddl;
+CREATE TABLE field_history_unrelated_ddl.t(i INT);
+EXECUTE p_field_history USING @field_condition, @field_value;
+DROP DATABASE field_history_unrelated_ddl;
 EXECUTE p_field_history USING @field_condition, @field_value;
 DEALLOCATE PREPARE p_field_history;
 SET lc_time_names = @field_old_locale;

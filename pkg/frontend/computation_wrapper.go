@@ -1418,8 +1418,11 @@ func initExecuteStmtParamWithResolverInSession(
 	cwft.planGenerationReused = !needRebuild
 	fieldTypes := prepareStmt.fieldTypes
 	// Plan invalidation (including locale/vector defaults and compile retries)
-	// does not by itself change the statement's resolved SQL types.
-	resetFieldTypes := change || modeMismatch || protocolMismatch || prepareStmt.fieldTypesResetPending
+	// does not by itself change the statement's resolved SQL types. Session DDL
+	// and temporary-table revisions conservatively invalidate plans, but cannot
+	// change a statement's SQL types when it has no captured table dependencies.
+	resetFieldTypes := change && len(preparePlan.GetSchemas()) != 0 ||
+		modeMismatch || protocolMismatch || prepareStmt.fieldTypesResetPending
 	if resetFieldTypes {
 		fieldTypes = nil
 	}
