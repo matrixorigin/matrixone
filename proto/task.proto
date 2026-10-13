@@ -90,6 +90,8 @@ option (gogoproto.protosizer_all) = true;
    InitCdcLosslessStart = 15;
    // CDC source patterns with lossless identifier encoding.
    InitCdcSourcePatternV1 = 16;
+   // Coordinates bounded table data lifecycle discovery and retirement.
+   LifecycleCoordinator = 17;
  }
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.

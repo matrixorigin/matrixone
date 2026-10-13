@@ -1532,10 +1532,15 @@ func TestRestoreTableRejectsReferencedTableBeforeMutation(t *testing.T) {
 	bh.init()
 	const (
 		snapshotName = "snapshot"
+		snapshotTS   = int64(100)
 		dbName       = "db1"
 		tblName      = "parent"
 	)
 	snapshotSQL := fmt.Sprintf("%s where sname = '%s'", getSnapshotFormat, snapshotName)
+	accountSQL := fmt.Sprintf(
+		"select account_id from mo_catalog.mo_account {MO_TS = %d} where account_name = '%s'",
+		snapshotTS, sysAccountName,
+	)
 	masterSQL := fmt.Sprintf(
 		checkTableIsMasterFormat,
 		quoteSQLStringLiteral(dbName),
@@ -1544,13 +1549,32 @@ func TestRestoreTableRejectsReferencedTableBeforeMutation(t *testing.T) {
 	bh.sql2result[snapshotSQL] = newMrsForSnapshotRecord(
 		"snapshot-id",
 		snapshotName,
-		100,
+		snapshotTS,
 		tree.SNAPSHOTLEVELTABLE.String(),
 		sysAccountName,
 		dbName,
 		tblName,
 		0,
 	)
+	bh.sql2result[accountSQL] = newMrsForRestoreStringRows(
+		[]string{"account_id"}, [][]interface{}{{int64(sysAccountID)}},
+	)
+	var lifecycleSQLs []string
+	for _, ts := range []int64{snapshotTS, 0} {
+		probes, err := lifecycleArchiveRestoreProbes(lifecycleArchiveRestoreScope{
+			level:        tree.RESTORELEVELTABLE,
+			accountID:    uint32(sysAccountID),
+			databaseName: dbName,
+			tableName:    tblName,
+			snapshotTS:   ts,
+		})
+		require.NoError(t, err)
+		require.Len(t, probes, 3)
+		for _, probe := range probes {
+			bh.sql2result[probe.sql] = newMrsForRestoreStringRows([]string{"id"}, nil)
+			lifecycleSQLs = append(lifecycleSQLs, probe.sql)
+		}
+	}
 	bh.sql2result[masterSQL] = newMrsForRestoreStringRows(
 		[]string{"db_name"},
 		[][]interface{}{{dbName}},
@@ -1570,14 +1594,16 @@ func TestRestoreTableRejectsReferencedTableBeforeMutation(t *testing.T) {
 		SnapShotName: snapshotName,
 	})
 	require.EqualError(t, err, "not supported: can not restore table 'db1.parent' referenced by some foreign key constraint")
-	require.Equal(t, []string{
+	wantSQLs := []string{
 		"begin;",
 		catalog.SnapshotLifecycleGateSQL,
 		catalog.ViewMetadataLifecycleGateSQL,
 		snapshotSQL,
-		masterSQL,
-		"rollback;",
-	}, bh.executedSQLs)
+		accountSQL,
+	}
+	wantSQLs = append(wantSQLs, lifecycleSQLs...)
+	wantSQLs = append(wantSQLs, masterSQL, "rollback;")
+	require.Equal(t, wantSQLs, bh.executedSQLs)
 }
 
 func TestBuildTableInfoListSQLEscapesLiterals(t *testing.T) {

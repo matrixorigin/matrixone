@@ -1,0 +1,605 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package frontend
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	lifecyclepkg "github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/lifecycle"
+)
+
+const (
+	lifecycleMaxRestoreStagingBytesPerAccount = uint64(12) << 40
+	lifecycleArchiveCloseTimeout              = 30 * time.Second
+	lifecycleMaxConcurrentRestoresPerCN       = 1
+	lifecycleRangeRestoreBaseDeadline         = 24 * time.Hour
+	lifecycleRangeRestoreMaxDeadline          = 7 * 24 * time.Hour
+	lifecycleRangeRestoreBytesPerSecond       = uint64(32) << 20
+)
+
+var lifecycleRestoreSlots = make(
+	chan struct{},
+	lifecycleMaxConcurrentRestoresPerCN,
+)
+
+func handleRestoreArchiveDataset(
+	ctx context.Context,
+	ses *Session,
+	statement *tree.RestoreArchiveDataset,
+) error {
+	if statement == nil || statement.Target == nil {
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore target is required")
+	}
+	releaseRestore, err := acquireLifecycleRestoreSlot(
+		ctx,
+		lifecycleRestoreSlots,
+	)
+	if err != nil {
+		return err
+	}
+	defer releaseRestore()
+	background := ses.GetBackgroundExec(ctx)
+	defer background.Close()
+	if err := ensureLifecycleFeatureEnabled(ctx, ses, background); err != nil {
+		return err
+	}
+	sqlExecutor, err := lifecycleSQLExecutor(ses.GetService())
+	if err != nil {
+		return err
+	}
+	accountID := ses.GetTenantInfo().GetTenantID()
+	datasetReader := lifecyclepkg.SQLDatasetReader{
+		Executor: sqlExecutor,
+	}
+	dataset, err := datasetReader.GetRestoreDataset(
+		ctx,
+		accountID,
+		statement.DatasetID,
+	)
+	if err != nil {
+		return err
+	}
+	databaseName := string(statement.Target.Schema())
+	if databaseName == "" {
+		databaseName = ses.GetDatabaseName()
+	}
+	tableName := string(statement.Target.Name())
+	if databaseName == "" || tableName == "" {
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore target database and table are required")
+	}
+	if err := validateLifecycleRestoreTargetName(tableName); err != nil {
+		return err
+	}
+	databaseID, err := lifecycleDatabaseID(
+		ctx,
+		sqlExecutor,
+		accountID,
+		databaseName,
+	)
+	if err != nil {
+		return err
+	}
+	repository := disttae.SQLRestoreRepository{
+		AccountID:          accountID,
+		TargetDatabaseName: databaseName,
+		Executor:           sqlExecutor,
+		Engine:             getPu(ses.GetService()).StorageEngine,
+		MPool:              ses.proc.Mp(),
+		AutoIncrement: incrservice.GetAutoIncrementService(
+			ses.GetService(),
+		),
+		Roots: lifecyclepkg.SQLCleanupRootRepository{
+			Executor: sqlExecutor,
+		},
+		MaxRestoreStagingBytesPerAccount: lifecycleMaxRestoreStagingBytesPerAccount,
+	}
+	restoreAttempt, resumed, err := repository.FindResumable(
+		ctx,
+		dataset.DatasetID,
+		databaseID,
+		tableName,
+	)
+	if err != nil {
+		return err
+	}
+	if lifecycleRestoreAlreadyPublished(resumed, restoreAttempt.State) {
+		return nil
+	}
+	if err = rejectExistingLifecycleRestoreTarget(
+		ctx,
+		background,
+		databaseName,
+		tableName,
+		accountID,
+	); err != nil {
+		return err
+	}
+	if !resumed {
+		restoreID := uuid.NewString()
+		restoreAttempt = lifecyclepkg.RestoreAttempt{
+			RestoreID:         restoreID,
+			LeaseID:           uuid.NewString(),
+			Deadline:          time.Now().Add(24 * time.Hour),
+			StagingDatabaseID: databaseID,
+			HiddenName: catalog.LifecycleRestoreTableNamePrefix +
+				strings.ReplaceAll(restoreID, "-", ""),
+			TargetDatabaseID:   databaseID,
+			TargetDatabaseName: databaseName,
+			TargetName:         tableName,
+		}
+	}
+	target, err := lifecyclepkg.ParseFrozenArchiveTarget(dataset.StageIdentity)
+	if err != nil {
+		return err
+	}
+	if target.StageID != dataset.StageID {
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Dataset Stage identity mismatch")
+	}
+	archiveFS, err := lifecyclepkg.NewArchiveFileService(ctx, target)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		closeCtx, cancelClose := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			lifecycleArchiveCloseTimeout,
+		)
+		defer cancelClose()
+		archiveFS.Close(closeCtx)
+	}()
+
+	coordinator := newLifecycleRestoreCoordinator(
+		lifecyclepkg.FileServiceArchiveStore{
+			FileService:    archiveFS,
+			MaxListEntries: 100_000,
+		},
+		repository,
+	)
+	return coordinator.Restore(
+		ctx,
+		dataset,
+		restoreAttempt,
+	)
+}
+
+func handleRestoreArchiveRange(
+	ctx context.Context,
+	ses *Session,
+	statement *tree.RestoreArchiveRange,
+) error {
+	if statement == nil || statement.Source == nil || statement.Target == nil ||
+		statement.From == "" || statement.To == "" {
+		return moerr.NewInternalErrorNoCtxf("Lifecycle range Restore input is required")
+	}
+	releaseRestore, err := acquireLifecycleRestoreSlot(ctx, lifecycleRestoreSlots)
+	if err != nil {
+		return err
+	}
+	defer releaseRestore()
+	background := ses.GetBackgroundExec(ctx)
+	defer background.Close()
+	if err = ensureLifecycleFeatureEnabled(ctx, ses, background); err != nil {
+		return err
+	}
+	sqlExecutor, err := lifecycleSQLExecutor(ses.GetService())
+	if err != nil {
+		return err
+	}
+	accountID := ses.GetTenantInfo().GetTenantID()
+	tableDef, err := resolveLifecycleShowTable(ctx, ses, statement.Source)
+	if err != nil {
+		return err
+	}
+	logicalTableID := tableDef.LogicalId
+	if logicalTableID == 0 {
+		logicalTableID = tableDef.TblId
+	}
+	databaseName := string(statement.Target.Schema())
+	if databaseName == "" {
+		databaseName = ses.GetDatabaseName()
+	}
+	tableName := string(statement.Target.Name())
+	if databaseName == "" || tableName == "" {
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore target database and table are required")
+	}
+	if err = validateLifecycleRestoreTargetName(tableName); err != nil {
+		return err
+	}
+	databaseID, err := lifecycleDatabaseID(ctx, sqlExecutor, accountID, databaseName)
+	if err != nil {
+		return err
+	}
+	repository := disttae.SQLRestoreRepository{
+		AccountID:          accountID,
+		TargetDatabaseName: databaseName,
+		Executor:           sqlExecutor,
+		Engine:             getPu(ses.GetService()).StorageEngine,
+		MPool:              ses.proc.Mp(),
+		AutoIncrement: incrservice.GetAutoIncrementService(
+			ses.GetService(),
+		),
+		Roots:                            lifecyclepkg.SQLCleanupRootRepository{Executor: sqlExecutor},
+		MaxRestoreStagingBytesPerAccount: lifecycleMaxRestoreStagingBytesPerAccount,
+	}
+	attempt, resumed, err := repository.FindRangeResumable(
+		ctx,
+		logicalTableID,
+		databaseID,
+		tableName,
+	)
+	if err != nil {
+		return err
+	}
+	var start int64
+	var end int64
+	if resumed {
+		start, end, err = lifecycleRangeRestoreResumeBounds(
+			ctx,
+			attempt,
+			statement.From,
+			statement.To,
+		)
+		if err != nil {
+			return err
+		}
+		if lifecycleRestoreAlreadyPublished(true, attempt.State) {
+			return nil
+		}
+	}
+	if err = rejectExistingLifecycleRestoreTarget(
+		ctx,
+		background,
+		databaseName,
+		tableName,
+		accountID,
+	); err != nil {
+		return err
+	}
+	datasetReader := lifecyclepkg.SQLDatasetReader{Executor: sqlExecutor}
+	var selected []lifecyclepkg.RestoreDataset
+	if resumed {
+		selected, err = datasetReader.GetRestoreDatasets(ctx, accountID, attempt.DatasetIDs)
+		if err != nil {
+			return err
+		}
+	} else {
+		candidates, listErr := datasetReader.ListRestoreDatasets(
+			ctx,
+			accountID,
+			logicalTableID,
+			statement.From,
+			statement.To,
+		)
+		if listErr != nil {
+			return listErr
+		}
+		if len(candidates) == 0 {
+			return moerr.NewInvalidInput(
+				ctx,
+				"Lifecycle Archive has no Dataset overlapping the requested range",
+			)
+		}
+		selected, start, end, err = lifecyclepkg.SelectRestoreDatasetsForRange(
+			ctx,
+			candidates,
+			statement.From,
+			statement.To,
+		)
+		if err != nil {
+			return err
+		}
+		deadline, deadlineErr := lifecycleRangeRestoreDeadline(time.Now(), selected)
+		if deadlineErr != nil {
+			return deadlineErr
+		}
+		restoreID := uuid.NewString()
+		attempt = lifecyclepkg.RestoreAttempt{
+			RestoreID:         restoreID,
+			LeaseID:           uuid.NewString(),
+			Deadline:          deadline,
+			StagingDatabaseID: databaseID,
+			HiddenName: catalog.LifecycleRestoreTableNamePrefix +
+				strings.ReplaceAll(restoreID, "-", ""),
+			TargetDatabaseID:   databaseID,
+			TargetDatabaseName: databaseName,
+			TargetName:         tableName,
+		}
+	}
+	first := selected[0]
+	for _, dataset := range selected[1:] {
+		if dataset.StageID != first.StageID ||
+			!bytes.Equal(dataset.StageIdentity, first.StageIdentity) {
+			return moerr.NewNotSupportedNoCtx(
+				"Lifecycle range Restore across Stage generations",
+			)
+		}
+	}
+	target, err := lifecyclepkg.ParseFrozenArchiveTarget(first.StageIdentity)
+	if err != nil {
+		return err
+	}
+	if target.StageID != first.StageID {
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Dataset Stage identity mismatch")
+	}
+	archiveFS, err := lifecyclepkg.NewArchiveFileService(ctx, target)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		closeCtx, cancelClose := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			lifecycleArchiveCloseTimeout,
+		)
+		defer cancelClose()
+		archiveFS.Close(closeCtx)
+	}()
+	coordinator := newLifecycleRestoreCoordinator(
+		lifecyclepkg.FileServiceArchiveStore{
+			FileService:    archiveFS,
+			MaxListEntries: 100_000,
+		},
+		repository,
+	)
+	return coordinator.RestoreRange(ctx, selected, attempt, start, end)
+}
+
+func lifecycleRangeRestoreResumeBounds(
+	ctx context.Context,
+	attempt lifecyclepkg.RestoreAttempt,
+	from string,
+	to string,
+) (int64, int64, error) {
+	if attempt.Scope != lifecyclepkg.RestoreScopeRange {
+		return 0, 0, moerr.NewInternalErrorNoCtxf(
+			"Lifecycle resumable Attempt is not a range Restore",
+		)
+	}
+	oid := types.T(attempt.LifecycleRange.TypeID)
+	start, err := lifecyclepkg.ParseLifecycleRestoreBoundary(ctx, from, oid)
+	if err != nil {
+		return 0, 0, err
+	}
+	end, err := lifecyclepkg.ParseLifecycleRestoreBoundary(ctx, to, oid)
+	if err != nil {
+		return 0, 0, err
+	}
+	if start != attempt.RangeStart || end != attempt.RangeEnd {
+		return 0, 0, moerr.NewInvalidInput(
+			ctx,
+			"Lifecycle Restore range does not match the resumable Attempt for this target",
+		)
+	}
+	return start, end, nil
+}
+
+func lifecycleRangeRestoreDeadline(
+	now time.Time,
+	datasets []lifecyclepkg.RestoreDataset,
+) (time.Time, error) {
+	var logicalBytes uint64
+	for _, dataset := range datasets {
+		if dataset.LogicalBytes == 0 || ^uint64(0)-logicalBytes < dataset.LogicalBytes {
+			return time.Time{}, moerr.NewInternalErrorNoCtxf(
+				"Lifecycle Restore Dataset logical bytes are invalid",
+			)
+		}
+		logicalBytes += dataset.LogicalBytes
+	}
+	if logicalBytes == 0 {
+		return time.Time{}, moerr.NewInternalErrorNoCtxf(
+			"Lifecycle Restore Dataset selection is empty",
+		)
+	}
+	seconds := logicalBytes / lifecycleRangeRestoreBytesPerSecond
+	if logicalBytes%lifecycleRangeRestoreBytesPerSecond != 0 {
+		seconds++
+	}
+	maxTransferSeconds := uint64(
+		(lifecycleRangeRestoreMaxDeadline - lifecycleRangeRestoreBaseDeadline) /
+			time.Second,
+	)
+	if seconds > maxTransferSeconds {
+		seconds = maxTransferSeconds
+	}
+	duration := lifecycleRangeRestoreBaseDeadline + time.Duration(seconds)*time.Second
+	return now.Add(duration), nil
+}
+
+func tryAcquireLifecycleRestoreSlot(
+	slots chan struct{},
+) (func(), bool) {
+	select {
+	case slots <- struct{}{}:
+		metricv2.LifecycleActiveRestoreGauge.Inc()
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				<-slots
+				metricv2.LifecycleActiveRestoreGauge.Dec()
+			})
+		}, true
+	default:
+		return nil, false
+	}
+}
+
+func acquireLifecycleRestoreSlot(
+	ctx context.Context,
+	slots chan struct{},
+) (func(), error) {
+	release, acquired := tryAcquireLifecycleRestoreSlot(slots)
+	if acquired {
+		return release, nil
+	}
+	metricv2.LifecycleResourceRejectionCounter.WithLabelValues(
+		"restore_cn_concurrency",
+	).Inc()
+	return nil, moerr.NewServiceUnavailable(
+		ctx,
+		"Lifecycle Restore CN concurrency limit reached; retry later",
+	)
+}
+
+func newLifecycleRestoreCoordinator(
+	store lifecyclepkg.ArchiveStore,
+	repository lifecyclepkg.RestoreRepository,
+) lifecyclepkg.RestoreCoordinator {
+	return lifecyclepkg.RestoreCoordinator{
+		Store:      store,
+		Repository: repository,
+		Config: lifecyclepkg.RestoreConfig{
+			MaxChunkRows:         65_536,
+			MaxChunkLogicalBytes: 64 << 20,
+			Deadline:             24 * time.Hour,
+		},
+		Faults: lifecyclepkg.MOFaultInjector{},
+	}
+}
+
+func validateLifecycleRestoreTargetName(tableName string) error {
+	if catalog.IsLifecycleRestoreStagingTable(tableName) {
+		return moerr.NewInternalErrorNoCtxf(
+			"Lifecycle Restore target cannot use the reserved canonical staging name %s",
+			tableName,
+		)
+	}
+	return nil
+}
+
+func rejectExistingLifecycleRestoreTarget(
+	ctx context.Context,
+	background BackgroundExec,
+	databaseName string,
+	tableName string,
+	accountID uint32,
+) error {
+	exists, err := cloneTargetTableExists(
+		ctx,
+		background,
+		databaseName,
+		tableName,
+		accountID,
+	)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return moerr.NewTableAlreadyExists(ctx, tableName)
+	}
+	return nil
+}
+
+func lifecycleRestoreAlreadyPublished(resumed bool, state string) bool {
+	return resumed && state == "DONE"
+}
+
+func handlePurgeArchiveDataset(
+	ctx context.Context,
+	ses *Session,
+	statement *tree.PurgeArchiveDataset,
+) error {
+	if statement == nil {
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Purge input is required")
+	}
+	sqlExecutor, err := lifecycleSQLExecutor(ses.GetService())
+	if err != nil {
+		return err
+	}
+	accountID := ses.GetTenantInfo().GetTenantID()
+	dataset, err := (lifecyclepkg.SQLDatasetReader{
+		Executor: sqlExecutor,
+	}).GetRestoreDataset(ctx, accountID, statement.DatasetID)
+	if err != nil {
+		return err
+	}
+	repository := disttae.SQLRestoreRepository{
+		AccountID: accountID,
+		Executor:  sqlExecutor,
+		Roots: lifecyclepkg.SQLCleanupRootRepository{
+			Executor: sqlExecutor,
+		},
+	}
+	return (lifecyclepkg.RestoreCoordinator{
+		Repository: repository,
+	}).Purge(ctx, dataset, time.Now())
+}
+
+func lifecycleSQLExecutor(service string) (executor.SQLExecutor, error) {
+	value, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+	)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle internal SQL executor is unavailable")
+	}
+	sqlExecutor, ok := value.(executor.SQLExecutor)
+	if !ok || sqlExecutor == nil {
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle internal SQL executor has invalid type")
+	}
+	return sqlExecutor, nil
+}
+
+func lifecycleDatabaseID(
+	ctx context.Context,
+	sqlExecutor executor.SQLExecutor,
+	accountID uint32,
+	databaseName string,
+) (uint64, error) {
+	result, err := sqlExecutor.Exec(
+		ctx,
+		fmt.Sprintf(
+			"select dat_id from mo_catalog.mo_database where datname=%s",
+			quoteSQLStringLiteral(databaseName),
+		),
+		executor.Options{}.WithAccountID(accountID),
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer result.Close()
+	var databaseID uint64
+	rowsRead := 0
+	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
+		if len(columns) != 1 || rowsRead+rows != 1 {
+			return false
+		}
+		databaseID = vector.GetFixedAtNoTypeCheck[uint64](columns[0], 0)
+		rowsRead += rows
+		return true
+	})
+	if rowsRead != 1 || databaseID == 0 {
+		return 0, moerr.NewInternalErrorNoCtxf(
+			"Lifecycle Restore target database %s does not exist",
+			databaseName,
+		)
+	}
+	return databaseID, nil
+}

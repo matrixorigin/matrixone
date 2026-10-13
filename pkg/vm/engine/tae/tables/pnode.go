@@ -234,6 +234,7 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 	bat **containers.Batch,
 	mp *mpool.MPool,
 	vpool *containers.VectorPool,
+	maxRows uint64,
 ) (err error) {
 	if !node.object.meta.Load().IsTombstone {
 		panic("not support")
@@ -276,6 +277,9 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 	persistedByCN := objectio.ResolveSpecialColumnLayout(firstBlock).CommitTS ==
 		objectio.InvalidSpecialColumnPosition
 	for blkID := 0; blkID < node.object.meta.Load().BlockCnt(); blkID++ {
+		if maxRows != 0 && *bat != nil && uint64((*bat).Length()) >= maxRows {
+			return nil
+		}
 		buf := bf.GetBloomFilter(uint32(blkID))
 		bfIndex := index.NewEmptyBloomFilterWithType(index.HBF)
 		if err = index.DecodeBloomFilter(bfIndex, buf); err != nil {
@@ -313,6 +317,9 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 				if aborts != nil && aborts[i] {
 					continue
 				}
+				if maxRows != 0 && *bat != nil && uint64((*bat).Length()) >= maxRows {
+					break
+				}
 				commitTS := commitTSs[i]
 				if commitTS.GE(&start) && commitTS.LE(&end) &&
 					types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
@@ -329,6 +336,9 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		} else {
 			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
 			for i := 0; i < len(rowIDs); i++ {
+				if maxRows != 0 && *bat != nil && uint64((*bat).Length()) >= maxRows {
+					break
+				}
 				if types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
 					if *bat == nil {
 						pkIdx := readSchema.GetColIdx(objectio.TombstoneAttr_PK_Attr)

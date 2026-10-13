@@ -39,6 +39,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	baseTenantUpgradeEntries        = 36
+	baseClusterUpgradeEntries       = 11
+	lifecycleInformationSchemaViews = 4
+)
+
 func TestColumnsUpgradeProtocolGenerations(t *testing.T) {
 	for _, entry := range []versions.UpgradeEntry{
 		upgradeInformationSchemaColumns(),
@@ -77,8 +83,9 @@ func TestColumnsUpgradeProtocolGenerations(t *testing.T) {
 }
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 36)
-	require.Len(t, clusterUpgEntries, 11)
+	require.Len(t, tenantUpgEntries, baseTenantUpgradeEntries+len(catalog.LifecycleTenantTableDefinitions)+lifecycleInformationSchemaViews)
+	require.Len(t, clusterUpgEntries, baseClusterUpgradeEntries+len(catalog.LifecycleClusterTableDefinitions)+2)
+	require.Equal(t, baseTenantUpgradeEntries, lifecycleTenantUpgradeEntriesStart(t))
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
 	require.Equal(t, catalog.MO_VIEW_REFRESH, clusterUpgEntries[2].TableName)
@@ -274,13 +281,13 @@ func TestUpgradeEntries(t *testing.T) {
 		"drop view if exists information_schema.table_privileges")
 	require.Equal(t, sysview.InformationSchemaTablePrivilegesDDL, tablePrivileges.PostSql)
 
-	columnsBinaryStrings := tenantUpgEntries[len(tenantUpgEntries)-2]
+	columnsBinaryStrings := tenantUpgEntries[baseTenantUpgradeEntries-2]
 	require.Equal(t, "COLUMNS", columnsBinaryStrings.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, columnsBinaryStrings.UpgType)
 	require.Equal(t, sysview.InformationSchemaColumnsV58DDL(), columnsBinaryStrings.UpgSql)
 	require.NotContains(t, columnsBinaryStrings.UpgSql, "mo_subscription_view_columns")
 	require.Equal(t, int64(defines.MORPCVersion58), columnsBinaryStrings.RequiredProtocolVersion)
-	characterSetsUTF8Maxlen := tenantUpgEntries[len(tenantUpgEntries)-1]
+	characterSetsUTF8Maxlen := tenantUpgEntries[baseTenantUpgradeEntries-1]
 	require.Equal(t, "CHARACTER_SETS", characterSetsUTF8Maxlen.TableName)
 	require.Equal(t, versions.MODIFY_METADATA, characterSetsUTF8Maxlen.UpgType)
 	require.Equal(t, sysview.InformationSchemaCharacterSetsData, characterSetsUTF8Maxlen.UpgSql)
@@ -648,7 +655,7 @@ func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *te
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 36)
+	require.Len(t, tenantUpgEntries, baseTenantUpgradeEntries+len(catalog.LifecycleTenantTableDefinitions)+lifecycleInformationSchemaViews)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -1076,35 +1083,26 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 		})
 		defer tableStub.Reset()
 
+		views := map[string]string{
+			"KEY_COLUMN_USAGE":                      sysview.InformationSchemaKeyColumnUsageDDL,
+			"REFERENTIAL_CONSTRAINTS":               sysview.InformationSchemaReferentialConstraintsDDL,
+			"TABLES":                                sysview.InformationSchemaTablesDDL,
+			"COLUMNS":                               sysview.InformationSchemaColumnsV46UpgradeDDL,
+			"STATISTICS":                            sysview.InformationSchemaStatisticsDDL,
+			"CHECK_CONSTRAINTS":                     sysview.InformationSchemaCheckConstraintsDDL,
+			"TABLE_CONSTRAINTS":                     sysview.InformationSchemaTableConstraintsDDL,
+			"COLLATION_CHARACTER_SET_APPLICABILITY": sysview.InformationSchemaCollationCharacterSetApplicabilityDDL,
+			"VIEWS":                                 sysview.InformationSchemaViewsDDL,
+			"PARTITIONS":                            sysview.InformationSchemaPartitionsDDL,
+			"SCHEMATA":                              sysview.InformationSchemaSchemataDDL,
+			"table_privileges":                      sysview.InformationSchemaTablePrivilegesDDL,
+		}
 		stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, _ uint32, _ string, viewName string) (bool, string, error) {
-			switch viewName {
-			case "KEY_COLUMN_USAGE":
-				return true, sysview.InformationSchemaKeyColumnUsageDDL, nil
-			case "REFERENTIAL_CONSTRAINTS":
-				return true, sysview.InformationSchemaReferentialConstraintsDDL, nil
-			case "CHECK_CONSTRAINTS":
-				return true, sysview.InformationSchemaCheckConstraintsDDL, nil
-			case "COLLATION_CHARACTER_SET_APPLICABILITY":
-				return true, sysview.InformationSchemaCollationCharacterSetApplicabilityDDL, nil
-			case "TABLE_CONSTRAINTS":
-				return true, sysview.InformationSchemaTableConstraintsDDL, nil
-			case "COLUMNS":
-				return true, sysview.InformationSchemaColumnsV46UpgradeDDL, nil
-			case "TABLES":
-				return true, sysview.InformationSchemaTablesDDL, nil
-			case "STATISTICS":
-				return true, sysview.InformationSchemaStatisticsDDL, nil
-			case "VIEWS":
-				return true, sysview.InformationSchemaViewsDDL, nil
-			case "PARTITIONS":
-				return true, sysview.InformationSchemaPartitionsDDL, nil
-			case "SCHEMATA":
-				return true, sysview.InformationSchemaSchemataDDL, nil
-			case "table_privileges":
-				return true, sysview.InformationSchemaTablePrivilegesDDL, nil
-			default:
+			definition, ok := views[viewName]
+			if !ok {
 				return false, "", errors.New("unexpected view")
 			}
+			return true, definition, nil
 		})
 		defer stub.Reset()
 
@@ -2015,6 +2013,104 @@ func TestPopulateInformationSchemaCharacterSetsIsIdempotent(t *testing.T) {
 	require.NoError(t, entry.Upgrade(txn, 42))
 	require.Len(t, executed, 1)
 	require.Equal(t, checkSQL, executed[0])
+}
+
+func TestLifecycleInformationSchemaUpgradeEntries(t *testing.T) {
+	requiredProtocols := map[string]int64{
+		"TABLES":            defines.MORPCVersion46,
+		"COLUMNS":           defines.MORPCVersion100,
+		"STATISTICS":        defines.MORPCVersion41,
+		"TABLE_CONSTRAINTS": defines.MORPCVersion41,
+	}
+	start := lifecycleTenantUpgradeEntriesStart(t) + len(catalog.LifecycleTenantTableDefinitions)
+	for _, entry := range tenantUpgEntries[start:] {
+		require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
+		require.Contains(t, entry.UpgSql, catalog.LifecycleRestoreTableSQLRegexpPattern)
+		requiredProtocol, ok := requiredProtocols[entry.TableName]
+		require.True(t, ok, "unexpected Lifecycle information schema view %s", entry.TableName)
+		require.Equal(t, requiredProtocol, entry.RequiredProtocolVersion)
+	}
+}
+
+func TestLifecycleCatalogUpgradeEntries(t *testing.T) {
+	existingTenantEntries := lifecycleTenantUpgradeEntriesStart(t)
+	for i, definition := range catalog.LifecycleTenantTableDefinitions {
+		entry := tenantUpgEntries[existingTenantEntries+i]
+		require.Equal(t, definition.Schema, entry.Schema)
+		require.Equal(t, definition.Name, entry.TableName)
+		require.Equal(t, versions.CREATE_NEW_TABLE, entry.UpgType)
+		lower := strings.ToLower(entry.UpgSql)
+		require.Contains(t, lower, "create table")
+		require.Contains(t, lower, "primary key")
+		require.NotContains(t, lower, "alter table mo_catalog.mo_tables")
+		require.NotContains(t, lower, "alter table mo_catalog.mo_columns")
+		require.NotContains(t, lower, "alter table mo_catalog.mo_stages")
+	}
+
+	lifecycleClusterEntries := clusterUpgEntries[baseClusterUpgradeEntries:]
+	require.Len(t, lifecycleClusterEntries, len(catalog.LifecycleClusterTableDefinitions)+2)
+	root := lifecycleClusterEntries[0]
+	require.Equal(t, catalog.MO_CATALOG, root.Schema)
+	require.Equal(t, catalog.MO_LIFECYCLE_CLEANUP_ROOTS, root.TableName)
+	require.Equal(t, versions.CREATE_NEW_TABLE, root.UpgType)
+	rootDDL := strings.ToLower(root.UpgSql)
+	for _, required := range []string{"create cluster table", "primary key", "root_id", "attempt_id", "state_version"} {
+		require.Contains(t, rootDDL, required)
+	}
+
+	activation := lifecycleClusterEntries[1]
+	require.Equal(t, catalog.MO_FEATURE_REGISTRY, activation.TableName)
+	require.Equal(t, versions.MODIFY_METADATA, activation.UpgType)
+	for _, required := range []string{"lifecycle", "false", "archive_stages", "on duplicate key"} {
+		require.Contains(t, strings.ToLower(activation.UpgSql), required)
+	}
+
+	coordinator := lifecycleClusterEntries[2]
+	require.Equal(t, catalog.MOTaskDB, coordinator.Schema)
+	require.Equal(t, "sys_cron_task", coordinator.TableName)
+	require.Equal(t, versions.MODIFY_METADATA, coordinator.UpgType)
+	for _, required := range []string{"tae_object_lifecycle", "sys_cron_task", "on duplicate key"} {
+		require.Contains(t, strings.ToLower(coordinator.UpgSql), required)
+	}
+}
+
+func lifecycleTenantUpgradeEntriesStart(t *testing.T) int {
+	t.Helper()
+	require.NotEmpty(t, catalog.LifecycleTenantTableDefinitions)
+	first := catalog.LifecycleTenantTableDefinitions[0]
+	for index, entry := range tenantUpgEntries {
+		if entry.Schema == first.Schema && entry.TableName == first.Name {
+			return index
+		}
+	}
+	t.Fatalf("missing Lifecycle tenant upgrade for %s.%s", first.Schema, first.Name)
+	return 0
+}
+
+func TestLifecycleCatalogRollingUpgradeCompatibility(t *testing.T) {
+	for _, tableName := range []string{
+		catalog.MO_LIFECYCLE_RESTORE_ATTEMPTS,
+		catalog.MO_LIFECYCLE_RESTORE_CHUNKS,
+	} {
+		var ddl string
+		for _, entry := range tenantUpgEntries {
+			if entry.TableName == tableName {
+				ddl = strings.ToLower(entry.UpgSql)
+				break
+			}
+		}
+		require.NotEmpty(t, ddl, "missing Lifecycle tenant upgrade for %s", tableName)
+		require.Contains(t, ddl, "account_id int unsigned not null default 0")
+	}
+
+	var cleanupDDL string
+	for _, entry := range clusterUpgEntries {
+		if entry.TableName == catalog.MO_LIFECYCLE_CLEANUP_ROOTS {
+			cleanupDDL = strings.ToLower(entry.UpgSql)
+			break
+		}
+	}
+	require.Contains(t, cleanupDDL, "create cluster table")
 }
 
 func TestRetireKafkaSinkDaemonTasks(t *testing.T) {

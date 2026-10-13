@@ -29,3 +29,10 @@ func TestGenInitCronTaskSQLIncludesDataBranchLineageGC(t *testing.T) {
 	require.Contains(t, sql, databranchutils.LineageGCTaskID)
 	require.Contains(t, sql, databranchutils.LineageGCTaskCronExpr)
 }
+
+func TestGenInitCronTaskSQLIncludesLifecycleCoordinator(t *testing.T) {
+	sql, err := GenInitCronTaskSQL(int32(task.TaskCode_LifecycleCoordinator))
+	require.NoError(t, err)
+	require.Contains(t, sql, "tae_object_lifecycle")
+	require.Contains(t, sql, "15 * * * * *")
+}

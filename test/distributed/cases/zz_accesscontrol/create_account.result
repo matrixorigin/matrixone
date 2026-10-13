@@ -178,6 +178,11 @@ mo_iceberg_refs
 mo_iceberg_residency_policy
 mo_iceberg_tables
 mo_indexes
+mo_lifecycle_bindings
+mo_lifecycle_datasets
+mo_lifecycle_restore_attempts
+mo_lifecycle_restore_chunks
+mo_lifecycle_ttl_receipts
 mo_locks
 mo_mongodb_connections
 mo_mongodb_tables

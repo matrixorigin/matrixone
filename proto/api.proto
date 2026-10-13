@@ -125,6 +125,35 @@ message PrecommitWriteCmd {
     string sync_protection_job_id = 2;
 };
 
+message LifecycleCommitEntry {
+    enum RetireMode {
+        Whole = 0;
+        Rewrite = 1;
+    }
+    uint32 protocol_version = 1;
+    RetireMode retire_mode = 2;
+    string root_id = 3;
+    string attempt_id = 4;
+    string dataset_id = 5;
+    string receipt_id = 6;
+    uint64 database_id = 7;
+    uint64 logical_table_id = 8;
+    uint64 physical_table_id = 9;
+    uint64 binding_generation = 10;
+    bytes schema_digest = 11;
+    timestamp.Timestamp source_snapshot_ts = 12;
+    bytes source_set_digest = 13;
+    repeated bytes data_source_object_stats = 14;
+    repeated bytes created_object_stats = 15;
+    repeated string transfer_booking_locations = 16;
+    bytes transfer_mapping_digest = 17;
+    int64 final_prepare_deadline_unix_nano = 18;
+    uint64 max_delta_rows = 19;
+    uint64 max_delta_bytes = 20;
+    uint32 max_delta_blocks = 21;
+    int32 merge_level = 22;
+}
+
 // CN--->TN, DDL
 // create database test:
 //      Entry {
@@ -234,6 +263,7 @@ message Entry {
         SpecialDelete = 4;
         DataObject = 5;
         TombstoneObject = 6;
+        LifecycleCommit = 7;
     }
     EntryType entry_type = 1;
     uint64 table_id      = 2;
@@ -249,6 +279,7 @@ message Entry {
     uint32 auto_incr_epoch = 9;
     // whether auto_incr_epoch was supplied by an epoch-aware CN.
     bool auto_incr_epoch_known = 10;
+    LifecycleCommitEntry lifecycle_commit = 11;
 };
 
 // There are two kinds of checkpoint: delta checkpoint and base checkpoint,

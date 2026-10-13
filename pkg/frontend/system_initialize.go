@@ -66,6 +66,9 @@ func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, fina
 	for _, sql := range createSqls {
 		addSqlIntoSet(sql)
 	}
+	for _, sql := range lifecycleSystemBootstrapSQLs() {
+		addSqlIntoSet(sql)
+	}
 	// Fresh bootstrap starts at the final catalog version and does not replay
 	// upgrade entries. Only sys needs the cross-catalog snapshot quota index.
 	addSqlIntoSet(MoCatalogSysSnapshotQuotaIndexDDL)
@@ -135,6 +138,18 @@ func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, fina
 		res.Close()
 	}
 	return nil
+}
+
+// lifecycleSystemBootstrapSQLs returns the Lifecycle metadata that belongs to
+// SYS rather than every tenant. Cleanup Roots own provider and TAE staging that
+// must survive tenant deletion, and the release row keeps retirement disabled
+// until an operator explicitly enables it.
+func lifecycleSystemBootstrapSQLs() []string {
+	sqls := make([]string, 0, len(catalog.LifecycleClusterTableDefinitions)+1)
+	for _, definition := range catalog.LifecycleClusterTableDefinitions {
+		sqls = append(sqls, definition.DDL)
+	}
+	return append(sqls, MoCatalogLifecycleFeatureRegistryInitData)
 }
 
 // checkSysExistsOrNot checks the SYS tenant exists or not.

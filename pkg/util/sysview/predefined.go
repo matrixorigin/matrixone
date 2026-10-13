@@ -292,19 +292,37 @@ func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
 	// V100 already contains the subscription-derived branches. Keep it byte
 	// stable when binding historical snapshots; re-deriving it would duplicate
 	// those branches and could change the persisted legacy projection.
-	if definition == InformationSchemaColumnsV100DDL() {
+	protocol100 := InformationSchemaColumnsV100DDL()
+	if definition == protocol100 || definition == informationSchemaColumnsBeforeLifecycleDDL(protocol100) {
 		return definition, true
 	}
 	for _, legacy := range []string{InformationSchemaColumnsV41DDL, InformationSchemaColumnsV46DDL, InformationSchemaColumnsV46UpgradeDDL, InformationSchemaColumnsV58DDL()} {
 		if definition == legacy {
 			return informationSchemaDerivedColumnsDDL(legacy), true
 		}
+		beforeLifecycle := informationSchemaColumnsBeforeLifecycleDDL(legacy)
+		if definition == beforeLifecycle {
+			return informationSchemaDerivedColumnsDDL(beforeLifecycle), true
+		}
 	}
 	return "", false
 }
 
 func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
-	return canonicalColumnsViewName(definition) == InformationSchemaColumnsDDL
+	definition = canonicalColumnsViewName(definition)
+	return definition == InformationSchemaColumnsDDL ||
+		definition == informationSchemaColumnsBeforeLifecycleDDL(InformationSchemaColumnsDDL)
+}
+
+// informationSchemaColumnsBeforeLifecycleDDL reconstructs the exact templates
+// persisted before Lifecycle added its staging-name filter. Apply it only to
+// our known templates, never to the supplied definition: historical reads must
+// continue rejecting arbitrary lookalike SQL.
+func informationSchemaColumnsBeforeLifecycleDDL(template string) string {
+	return strings.NewReplacer(
+		" and not regexp_like(lower(mt.relname), '"+catalog.LifecycleRestoreTableSQLRegexpPattern+"')", "",
+		" and not regexp_like(lower(mc.att_relname), '"+catalog.LifecycleRestoreTableSQLRegexpPattern+"')", "",
+	).Replace(template)
 }
 
 // IsInformationSchemaColumnsMigrationDDL reports whether a persisted COLUMNS
@@ -314,8 +332,10 @@ func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
 // native Unicode selectors; both definitions are safe migration gates.
 func IsInformationSchemaColumnsMigrationDDL(definition string) bool {
 	definition = canonicalColumnsViewName(definition)
-	return definition == InformationSchemaColumnsV100DDL() ||
-		definition == InformationSchemaColumnsDDL
+	protocol100 := InformationSchemaColumnsV100DDL()
+	return definition == protocol100 ||
+		definition == informationSchemaColumnsBeforeLifecycleDDL(protocol100) ||
+		IsCurrentInformationSchemaColumnsDDL(definition)
 }
 
 func canonicalColumnsViewName(definition string) string {
@@ -532,8 +552,8 @@ var (
 		"where (ki.type = 'PRIMARY' or ki.ordinal_position = 1) and ki.type in ('PRIMARY', 'UNIQUE', 'MULTIPLE', 'FULLTEXT', 'SPATIAL') "+
 		"group by ki.table_id, ki.column_name) mk ON mk.table_id = mt.rel_id AND mk.column_name = mc.attname "+
 		"where mc.account_id = current_account_id() "+
-		"and mc.att_is_hidden = 0 and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s' and not startswith(mc.att_relname, '%s') and %s",
-		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK, catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate("mt"))
+		"and mc.att_is_hidden = 0 and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s' and not startswith(mc.att_relname, '%s') and not regexp_like(lower(mt.relname), '%s') and %s",
+		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK, catalog.IndexTableNamePrefix, catalog.LifecycleRestoreTableSQLRegexpPattern, catalog.NonTemporaryTableSQLPredicate("mt"))
 
 	InformationSchemaColumnsV46DDL = informationSchemaSubscriptionColumnsDDL()
 	// Historical upgrade entries retain their original definition, independently
@@ -648,8 +668,8 @@ var (
 		"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,"+
 		"cast(rel_comment as text) AS TABLE_COMMENT "+
 		"FROM __mo_visible_tables tbl "+
-		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and %s and tbl.relname != '%s' and tbl.relkind != '%s'",
-		catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate("tbl"), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
+		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and not regexp_like(lower(tbl.relname), '%s') and %s and tbl.relname != '%s' and tbl.relkind != '%s'",
+		catalog.IndexTableNamePrefix+"%", catalog.LifecycleRestoreTableSQLRegexpPattern, catalog.NonTemporaryTableSQLPredicate("tbl"), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
 
 	InformationSchemaTablesDDL = informationSchemaSubscriptionTablesDDL()
 
@@ -750,11 +770,11 @@ var (
 		"join `__mo_visible_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)) "+
 		"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname` "+
 		"and `tcl`.`account_id` = `tbl`.`account_id` and `tcl`.`att_database` = `tbl`.`reldatabase` and `tcl`.`att_relname` = `tbl`.`relname`) "+
-		"where `tbl`.`account_id` = current_account_id() and not startswith(`tbl`.`relname`, '%s') and %s "+
+		"where `tbl`.`account_id` = current_account_id() and not startswith(`tbl`.`relname`, '%s') and not regexp_like(lower(`tbl`.`relname`), '%s') and %s "+
 		"group by `tbl`.`reldatabase`, `tbl`.`relname`, `idx`.`type`, `idx`.`name`, "+
 		"`idx`.`ordinal_position`, `idx`.`column_name`, `tcl`.`attnotnull`, `idx`.`algo`, "+
 		"`idx`.`comment`, `idx`.`is_visible`, `tcl`.`att_is_hidden`, `tcl`.`attr_has_generated`, `tcl`.`attr_generated`",
-		catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate("tbl"))
+		catalog.IndexTableNamePrefix, catalog.LifecycleRestoreTableSQLRegexpPattern, catalog.NonTemporaryTableSQLPredicate("tbl"))
 
 	InformationSchemaReferentialConstraintsDDL = "CREATE VIEW information_schema.REFERENTIAL_CONSTRAINTS AS " +
 		informationSchemaMetadataVisibilityCTE() + "SELECT " +
@@ -950,7 +970,7 @@ var (
 		"'YES' AS ENFORCED "+
 		"FROM mo_catalog.mo_indexes idx "+
 		"join __mo_visible_tables tbl on idx.table_id = tbl.rel_id "+
-		"where tbl.account_id = current_account_id() and idx.type in ('PRIMARY', 'UNIQUE') and not startswith(tbl.relname, '%s') and %s "+
+		"where tbl.account_id = current_account_id() and idx.type in ('PRIMARY', 'UNIQUE') and not startswith(tbl.relname, '%s') and not regexp_like(lower(tbl.relname), '%s') and %s "+
 		"group by tbl.reldatabase, idx.name, tbl.relname, idx.type UNION ALL "+
 		"SELECT 'def' AS CONSTRAINT_CATALOG, "+
 		"fk.db_name AS CONSTRAINT_SCHEMA, "+
@@ -970,7 +990,7 @@ var (
 		"cc.constraint_type AS CONSTRAINT_TYPE, "+
 		"cc.enforced AS ENFORCED "+
 		"FROM mo_check_constraints() cc "+
-		"join __mo_visible_tables check_tbl on cc.constraint_schema = check_tbl.reldatabase and cc.table_name = check_tbl.relname", catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate("tbl"))
+		"join __mo_visible_tables check_tbl on cc.constraint_schema = check_tbl.reldatabase and cc.table_name = check_tbl.relname", catalog.IndexTableNamePrefix, catalog.LifecycleRestoreTableSQLRegexpPattern, catalog.NonTemporaryTableSQLPredicate("tbl"))
 
 	InformationSchemaTableConstraintsLegacyDDL = fmt.Sprintf("CREATE VIEW information_schema.TABLE_CONSTRAINTS AS "+informationSchemaMetadataVisibilityCTE()+"SELECT "+
 		"'def' AS CONSTRAINT_CATALOG, "+
@@ -982,7 +1002,7 @@ var (
 		"'YES' AS ENFORCED "+
 		"FROM mo_catalog.mo_indexes idx "+
 		"join __mo_visible_tables tbl on idx.table_id = tbl.rel_id "+
-		"where tbl.account_id = current_account_id() and idx.type in ('PRIMARY', 'UNIQUE') and not startswith(tbl.relname, '%s') and %s "+
+		"where tbl.account_id = current_account_id() and idx.type in ('PRIMARY', 'UNIQUE') and not startswith(tbl.relname, '%s') and not regexp_like(lower(tbl.relname), '%s') and %s "+
 		"group by tbl.reldatabase, idx.name, tbl.relname, idx.type UNION ALL "+
 		"SELECT 'def' AS CONSTRAINT_CATALOG, "+
 		"fk.db_name AS CONSTRAINT_SCHEMA, "+
@@ -994,7 +1014,7 @@ var (
 		"FROM mo_catalog.mo_foreign_keys fk "+
 		"join __mo_visible_tables fk_tbl on fk.db_name = fk_tbl.reldatabase and fk.table_name = fk_tbl.relname "+
 		"group by fk.db_name, fk.constraint_name, fk.table_name",
-		catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate("tbl"))
+		catalog.IndexTableNamePrefix, catalog.LifecycleRestoreTableSQLRegexpPattern, catalog.NonTemporaryTableSQLPredicate("tbl"))
 
 	InformationSchemaEventsDDL = "CREATE TABLE information_schema.EVENTS (" +
 		"EVENT_CATALOG varchar(64)," +

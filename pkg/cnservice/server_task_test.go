@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -195,6 +196,7 @@ func TestStopTaskStopsRunnerAfterHolderCloseFailure(t *testing.T) {
 var _ taskservice.TaskService = new(testTS)
 
 type testTS struct {
+	mu        sync.Mutex
 	cronTasks []task.TaskMetadata
 	cronExprs []string
 	created   chan struct{}
@@ -210,12 +212,16 @@ func (ts *controlledCronTaskService) CreateCronTask(ctx context.Context, metadat
 }
 
 func TestLineageGCCronRegistrationDoesNotBlockCNClose(t *testing.T) {
-	entered := make(chan context.Context, 1)
+	type registration struct {
+		ctx      context.Context
+		executor task.TaskCode
+	}
+	entered := make(chan registration, 2)
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	ts := &controlledCronTaskService{testTS: &testTS{}}
-	ts.create = func(ctx context.Context, _ task.TaskMetadata, _ string) error {
-		entered <- ctx
+	ts.create = func(ctx context.Context, metadata task.TaskMetadata, _ string) error {
+		entered <- registration{ctx: ctx, executor: metadata.Executor}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -231,14 +237,22 @@ func TestLineageGCCronRegistrationDoesNotBlockCNClose(t *testing.T) {
 	// storage while Start holds lifecycleMu.
 	registered := make(chan struct{})
 	go func() { s.registerExecutorsLocked(); close(registered) }()
-	select {
-	case ctx := <-entered:
-		account, err := defines.GetAccountId(ctx)
-		require.NoError(t, err)
-		require.Equal(t, catalog.System_Account, account)
-	case <-time.After(2 * time.Second):
-		t.Fatal("cron registration did not start")
+	started := make(map[task.TaskCode]context.Context, 2)
+	for range 2 {
+		select {
+		case entry := <-entered:
+			account, err := defines.GetAccountId(entry.ctx)
+			require.NoError(t, err)
+			require.Equal(t, catalog.System_Account, account)
+			_, hasDeadline := entry.ctx.Deadline()
+			require.True(t, hasDeadline)
+			started[entry.executor] = entry.ctx
+		case <-time.After(2 * time.Second):
+			t.Fatal("cron registrations did not start")
+		}
 	}
+	require.Contains(t, started, task.TaskCode_DataBranchLineageGC)
+	require.Contains(t, started, task.TaskCode_LifecycleCoordinator)
 	select {
 	case <-registered:
 	case <-time.After(2 * time.Second):
@@ -250,6 +264,9 @@ func TestLineageGCCronRegistrationDoesNotBlockCNClose(t *testing.T) {
 	case <-closed:
 	case <-time.After(2 * time.Second):
 		t.Fatal("CN close did not cancel cron registration")
+	}
+	for _, ctx := range started {
+		require.ErrorIs(t, ctx.Err(), context.Canceled)
 	}
 }
 
@@ -333,6 +350,8 @@ func (ts *testTS) CreateBatch(ctx context.Context, metadata []task.TaskMetadata)
 }
 
 func (ts *testTS) CreateCronTask(ctx context.Context, metadata task.TaskMetadata, cronExpr string) error {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
 	ts.cronTasks = append(ts.cronTasks, metadata)
 	ts.cronExprs = append(ts.cronExprs, cronExpr)
 	if ts.created != nil {
@@ -479,21 +498,27 @@ func Test_registerExecutorsLocked(t *testing.T) {
 	sv.task.runnerReady.Store(true)
 	t.Cleanup(sv.stopper.Stop)
 
-	ts := &testTS{created: make(chan struct{}, 1)}
+	ts := &testTS{created: make(chan struct{}, 2)}
 
 	sv.task.holder = &testHolder{
 		ts: ts,
 	}
 
 	sv.registerExecutorsLocked()
-	select {
-	case <-ts.created:
-	case <-time.After(2 * time.Second):
-		t.Fatal("lineage GC cron was not registered")
+	for range 2 {
+		select {
+		case <-ts.created:
+		case <-time.After(2 * time.Second):
+			t.Fatal("background cron tasks were not registered")
+		}
 	}
 	require.NotNil(t, run.GetExecutor(task.TaskCode_DataBranchLineageGC))
-	require.Len(t, ts.cronTasks, 1)
-	assert.Equal(t, task.TaskCode_DataBranchLineageGC, ts.cronTasks[0].Executor)
-	assert.Equal(t, "data_branch_lineage_gc", ts.cronTasks[0].ID)
-	assert.Equal(t, "0 */5 * * * *", ts.cronExprs[0])
+	require.NotNil(t, run.GetExecutor(task.TaskCode_LifecycleCoordinator))
+	require.Len(t, ts.cronTasks, 2)
+	registered := make(map[task.TaskCode]string, 2)
+	for i, metadata := range ts.cronTasks {
+		registered[metadata.Executor] = metadata.ID + ":" + ts.cronExprs[i]
+	}
+	assert.Equal(t, "data_branch_lineage_gc:0 */5 * * * *", registered[task.TaskCode_DataBranchLineageGC])
+	assert.Equal(t, "tae_object_lifecycle:15 * * * * *", registered[task.TaskCode_LifecycleCoordinator])
 }

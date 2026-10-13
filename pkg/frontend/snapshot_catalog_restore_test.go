@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -362,6 +363,34 @@ func TestSystemCatalogRestorePoliciesCoverPredefinedTables(t *testing.T) {
 		_, ok := systemCatalogRestorePolicies[tableName]
 		require.Truef(t, ok, "missing restore policy for sys table %s", tableName)
 	}
+}
+
+func TestSystemCatalogRestoreSkipsLifecycleControlPlaneMetadata(t *testing.T) {
+	for _, tableName := range []string{
+		catalog.MO_LIFECYCLE_BINDINGS,
+		catalog.MO_LIFECYCLE_DATASETS,
+		catalog.MO_LIFECYCLE_TTL_RECEIPTS,
+		catalog.MO_LIFECYCLE_RESTORE_ATTEMPTS,
+		catalog.MO_LIFECYCLE_RESTORE_CHUNKS,
+		catalog.MO_LIFECYCLE_CLEANUP_ROOTS,
+	} {
+		require.Equal(t, systemCatalogRestoreSkip, systemCatalogRestorePolicies[tableName])
+		require.True(t, needSkipTable(sysAccountID, moCatalog, tableName))
+	}
+}
+
+func TestLifecycleClusterRestoreRecreatesOnlyEmptyCleanupRootSchema(t *testing.T) {
+	sqls := lifecycleClusterRestoreBootstrapSQLs()
+	require.Len(t, sqls, len(catalog.LifecycleClusterTableDefinitions))
+	require.True(t, strings.HasPrefix(strings.ToLower(sqls[0]),
+		"create cluster table if not exists mo_catalog.mo_lifecycle_cleanup_roots"))
+	_, err := mysql.Parse(t.Context(), sqls[0], 1)
+	require.NoError(t, err)
+
+	background := &backgroundExecTest{}
+	background.init()
+	require.NoError(t, ensureLifecycleClusterTablesAfterRestore(t.Context(), background))
+	require.Equal(t, sqls, background.executedSQLs)
 }
 
 func TestUnregisteredSystemCatalogRestorePolicyPreservesExistingDefaults(t *testing.T) {

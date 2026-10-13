@@ -60,6 +60,7 @@ func init() {
 	initCCPRMetrics()
 	initExecutionResourceMetrics()
 	initHashBuildMetrics()
+	initLifecycleMetrics()
 	initArrowLoadMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)

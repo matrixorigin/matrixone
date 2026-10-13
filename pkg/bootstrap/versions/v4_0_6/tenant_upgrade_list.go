@@ -376,6 +376,62 @@ func informationSchemaCharacterSetsCheckSQL() string {
 	return sysview.InformationSchemaCharacterSetsCheckSQL()
 }
 
+func init() {
+	for _, table := range catalog.LifecycleTenantTableDefinitions {
+		tenantUpgEntries = append(tenantUpgEntries, versions.UpgradeEntry{
+			Schema:    table.Schema,
+			TableName: table.Name,
+			UpgType:   versions.CREATE_NEW_TABLE,
+			UpgSql:    table.DDL,
+			CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+				return versions.CheckTableDefinition(txn, accountID, table.Schema, table.Name)
+			},
+		})
+	}
+	for _, view := range []struct {
+		name string
+		ddl  string
+	}{
+		{name: "TABLES", ddl: sysview.InformationSchemaTablesDDL},
+		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsDDL},
+		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
+		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL},
+	} {
+		tenantUpgEntries = append(tenantUpgEntries, lifecycleInformationSchemaView(view.name, view.ddl))
+	}
+}
+
+func lifecycleInformationSchemaView(viewName, viewDDL string) versions.UpgradeEntry {
+	requiredProtocol := defines.MORPCVersion41
+	switch viewName {
+	case "TABLES":
+		requiredProtocol = defines.MORPCVersion46
+	case "COLUMNS":
+		requiredProtocol = defines.MORPCVersion100
+	}
+	return versions.UpgradeEntry{
+		Schema:                  sysview.InformationDBConst,
+		TableName:               viewName,
+		UpgType:                 versions.MODIFY_VIEW,
+		UpgSql:                  viewDDL,
+		RequiredProtocolVersion: requiredProtocol,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			exists, definition, err := versions.CheckViewDefinition(
+				txn,
+				accountID,
+				sysview.InformationDBConst,
+				viewName,
+			)
+			return exists && definition == viewDDL, err
+		},
+		PreSql: fmt.Sprintf(
+			"DROP VIEW IF EXISTS %s.%s;",
+			sysview.InformationDBConst,
+			viewName,
+		),
+	}
+}
+
 func upgradeInformationSchemaColumnsBinaryStrings() versions.UpgradeEntry {
 	return versions.UpgradeEntry{
 		Schema:                  sysview.InformationDBConst,
