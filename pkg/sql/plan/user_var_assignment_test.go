@@ -126,6 +126,47 @@ func TestUserVariableAssignmentRejectsMultipleProjectionAssignments(t *testing.T
 	}
 }
 
+func TestUserVariableAssignmentRejectsDMLBeforeBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "insert values",
+			sql:  "insert into constraint_test.t_on_update values (@dml_scope := 42, 1, default)",
+			want: "INSERT",
+		},
+		{
+			name: "replace values",
+			sql:  "replace into constraint_test.t_on_update values (@dml_scope := 42, 1, default)",
+			want: "REPLACE",
+		},
+		{
+			name: "update assignment",
+			sql:  "update constraint_test.t_on_update set val = @dml_scope := 42",
+			want: "UPDATE",
+		},
+		{
+			name: "delete filter",
+			sql:  "delete from constraint_test.t_on_update where @dml_scope := 42",
+			want: "DELETE",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(ctx.GetContext(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(ctx, stmt, false)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "top-level SELECT projection")
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
 func TestUserVariableAssignmentScopeValidationBranches(t *testing.T) {
 	ctx := context.Background()
 	value := tree.NewNumVal(int64(1), "1", false, tree.P_int64)

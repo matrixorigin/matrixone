@@ -88,6 +88,20 @@ func userVarAssignmentNotSupported(ctx context.Context, scope string) error {
 		"user-variable assignment is supported only as a top-level SELECT projection; "+scope+" is not supported")
 }
 
+// rejectUserVarAssignmentInDML is the statement-level admission fence for the
+// side-effecting expression.  INSERT VALUES (and the other DML binders) do not
+// pass through bindSelect's SELECT-clause scope validator: they bind value
+// expressions directly with DefaultBinder/UpdateBinder.  Keep the fence at
+// the public BuildPlan boundary as well, so a later DML fallback cannot turn a
+// rejected assignment back into an executable plan or bypass retry
+// classification.
+func rejectUserVarAssignmentInDML(ctx context.Context, stmt tree.Statement, scope string) error {
+	if stmt == nil || !containsUserVarAssignmentValue(reflect.ValueOf(stmt), make(map[assignmentVisit]struct{})) {
+		return nil
+	}
+	return userVarAssignmentNotSupported(ctx, scope)
+}
+
 func validateUserVarAssignmentScope(
 	ctx context.Context,
 	clause *tree.SelectClause,
