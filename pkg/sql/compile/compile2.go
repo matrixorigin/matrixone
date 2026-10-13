@@ -229,6 +229,13 @@ func (c *Compile) Compile(
 	if materialization.query != nil {
 		defer materialization.restore()
 	}
+	restorePreparedLimit, limitErr := c.materializePreparedLimitZero(queryPlan)
+	if limitErr != nil {
+		return limitErr
+	}
+	if restorePreparedLimit != nil {
+		defer restorePreparedLimit()
+	}
 	if offloaded, offloadErr := c.tryCompileSiriusRead(execTopContext, queryPlan); offloadErr != nil {
 		return offloadErr
 	} else if offloaded {
