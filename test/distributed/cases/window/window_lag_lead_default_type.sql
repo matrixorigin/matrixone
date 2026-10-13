@@ -85,4 +85,36 @@ select lag(cast(1 as decimal(38,30)), 1, 999999999999) over () as lg,
        lead(cast(1 as decimal(38,30)), 1, 999999999999) over () as ld;
 select lag(cast(1 as decimal(38,30)), 0, 999999999999) over () as source_value;
 
+-- 二进制大对象不得变为超宽 VARCHAR，导出的列定义必须可重建。
+create table wblob (v mediumblob);
+insert into wblob values (unhex('610062ff'));
+create table wblob_copy as select lag(v,0,0) over () as lg, lead(v,0,0) over () as ld from wblob;
+show create table wblob_copy;
+select hex(lg) as lg, hex(ld) as ld from wblob_copy;
+select hex(lag(v,1,0) over ()) as lg, hex(lead(v,1,0) over ()) as ld from wblob;
+create view wblob_view as select lag(v,0,0) over () as v from wblob;
+show columns from wblob_view;
+select hex(v) as v from wblob_view;
+
+-- 默认零无需新增整数位；无默认值与同型默认值是持久化类型的控制查询。
+create table wdecimal_max_zero as select lag(cast(0.1 as decimal(65,65)),0,0) over () as v;
+show create table wdecimal_max_zero;
+select v from wdecimal_max_zero;
+select lag(cast(0.1 as decimal(65,65)),1,0) over () as lg,
+       lead(cast(0.1 as decimal(65,65)),1,0) over () as ld;
+create table wdecimal_max_control as
+select lag(cast(0.1 as decimal(65,65)),0) over () as no_default,
+       lag(cast(0.1 as decimal(65,65)),0,cast(0 as decimal(65,65))) over () as same_default;
+show create table wdecimal_max_control;
+select * from wdecimal_max_control;
+create view wdecimal_max_view as select lead(cast(0.1 as decimal(65,65)),0,0) over () as v;
+show columns from wdecimal_max_view;
+select * from wdecimal_max_view;
+
+-- 无损公共域超过 SQL 精度上限时拒绝绑定，不留下无法导出的目录类型。
+create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
+show tables like 'wdecimal_rejected';
+create table wdecimal_rejected as select lead(cast(0.1 as decimal(65,64)),0,cast(10 as decimal(3,1))) over () as v;
+show tables like 'wdecimal_rejected';
+
 drop database window_lag_lead_default_type;

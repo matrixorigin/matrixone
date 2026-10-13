@@ -40,6 +40,15 @@ func TestBindLagLeadDefaultCapacity(t *testing.T) {
 				{"mediumtext", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 16777215}}, makePlan2Int64ConstExprWithType(0), types.T_text, 16777215, 0},
 				{"unbounded text", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text)}}, makePlan2Int64ConstExprWithType(0), types.T_text, 0, 0},
 				{"text default", makePlan2Int64ConstExprWithType(0), &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 16777215}}, types.T_text, 16777215, 0},
+				{"mediumblob", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: 16777215}}, makePlan2Int64ConstExprWithType(0), types.T_blob, 16777215, 0},
+				{"unbounded blob", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob)}}, makePlan2Int64ConstExprWithType(0), types.T_blob, 0, 0},
+				{"blob default", makePlan2Int64ConstExprWithType(0), &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: 16777215}}, types.T_blob, 16777215, 0},
+				{"blob text", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: 16777215}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 65535}}, types.T_blob, 16777215, 0},
+				{"text blob", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 65535}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: 16777215}}, types.T_blob, 0, 0},
+				{"decimal signed zero", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, makePlan2Int64ConstExprWithType(0), types.T_decimal256, 65, 65},
+				{"decimal unsigned zero", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, makePlan2Uint64ConstExprWithType(0), types.T_decimal256, 65, 65},
+				{"decimal typed null", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}, types.T_decimal256, 65, 65},
+				{"decimal public boundary", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 64, Scale: 63}}, makePlan2Int64ConstExprWithType(10), types.T_decimal256, 65, 63},
 				{"varchar numeric", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 10}}, makePlan2Int64ConstExprWithType(0), types.T_varchar, 10, 0},
 				{"decimal integer literal", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 2, Scale: 1}}, makePlan2Int64ConstExprWithType(1000), types.T_decimal64, 5, 1},
 				{"decimal negative literal", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 2, Scale: 1}}, makePlan2Int64ConstExprWithType(-1000), types.T_decimal64, 5, 1},
@@ -53,9 +62,9 @@ func TestBindLagLeadDefaultCapacity(t *testing.T) {
 					for i, typ := range []planpb.Type{expr.Typ, expr.GetF().Args[0].Typ, expr.GetF().Args[2].Typ} {
 						require.Equal(t, int32(tc.oid), typ.Id)
 						require.Equal(t, tc.scale, typ.Scale)
-						// A same-family/same-scale decimal needs no runtime cast;
-						// its original argument metadata can remain narrower.
-						if !tc.oid.IsDecimal() || i == 0 {
+						// Same-family decimals and BLOBs need no metadata-only
+						// cast when their original capacity fits the result.
+						if i == 0 || (!tc.oid.IsDecimal() && tc.oid != types.T_blob) {
 							require.Equal(t, tc.width, typ.Width)
 						}
 					}
@@ -66,7 +75,63 @@ func TestBindLagLeadDefaultCapacity(t *testing.T) {
 				makePlan2Int64ConstExprWithType(1), makePlan2Int64ConstExprWithType(999999999999),
 			})
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
+			for _, tc := range []struct {
+				name       string
+				value, def *planpb.Expr
+			}{
+				{"nonzero integer precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, makePlan2Int64ConstExprWithType(1)},
+				{"integer domain precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}}},
+				{"aligned decimal SQL precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 64}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 3, Scale: 1}}},
+				{"aligned decimal physical precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 0}}},
+				{"integer value decimal default precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					_, err := BindFuncExprImplByPlanExpr(context.Background(), name, []*planpb.Expr{tc.value, makePlan2Int64ConstExprWithType(1), tc.def})
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
+				})
+			}
 		})
+	}
+}
+
+func TestLagLeadPersistedDDLRebuild(t *testing.T) {
+	for _, name := range []string{"lag", "lead"} {
+		for _, tc := range []struct {
+			sourceType   string
+			oid          types.T
+			width, scale int32
+		}{
+			{"mediumblob", types.T_blob, 16777215, 0},
+			{"decimal(65,65)", types.T_decimal256, 65, 65},
+		} {
+			t.Run(name+tc.sourceType, func(t *testing.T) {
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
+				source, err := buildTestCreateTableStmt(mock, "create table lag_lead_source(v "+tc.sourceType+")")
+				require.NoError(t, err)
+				mock.ctxt.tables["lag_lead_source"] = source
+				mock.ctxt.objects["lag_lead_source"] = &ObjectRef{DbName: mock.ctxt.DefaultDatabase(), ObjName: "lag_lead_source"}
+				p, err := runOneStmt(mock, t, "create table lag_lead_persisted as select "+name+"(v,0,0) over () as v from lag_lead_source")
+				require.NoError(t, err)
+				persisted := p.GetDdl().GetCreateTable().GetTableDef()
+				require.NotNil(t, persisted)
+				require.Equal(t, int32(tc.oid), persisted.Cols[0].Typ.Id)
+				require.Equal(t, tc.width, persisted.Cols[0].Typ.Width)
+				require.Equal(t, tc.scale, persisted.Cols[0].Typ.Scale)
+				// Use the same exporter as SHOW CREATE TABLE, then bind its
+				// actual output rather than a hand-written equivalent schema.
+				persisted.Name = "lag_lead_rebuilt"
+				ddl, _, err := ConstructCreateTableSQL(&mock.ctxt, persisted, nil, false, nil)
+				require.NoError(t, err)
+				p, err = runOneStmt(mock, t, ddl)
+				require.NoError(t, err, ddl)
+				rebuilt := p.GetDdl().GetCreateTable().GetTableDef()
+				require.NotNil(t, rebuilt)
+				require.Equal(t, persisted.Cols[0].Typ.Id, rebuilt.Cols[0].Typ.Id)
+				require.Equal(t, persisted.Cols[0].Typ.Width, rebuilt.Cols[0].Typ.Width)
+				require.Equal(t, persisted.Cols[0].Typ.Scale, rebuilt.Cols[0].Typ.Scale)
+				require.Equal(t, persisted.Cols[0].Typ.Charset, rebuilt.Cols[0].Typ.Charset)
+			})
+		}
 	}
 }
 

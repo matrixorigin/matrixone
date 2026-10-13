@@ -8110,13 +8110,17 @@ func bindFuncExprImplByPlanExpr(
 			if ok {
 				// COALESCE's mixed string/numeric overload starts with a generic
 				// VARCHAR capacity. Refine known display bounds, but never shrink
-				// TEXT (including its width-zero/unbounded domain) to VARCHAR.
+				// TEXT/BLOB (including their width-zero/unknown domains) to VARCHAR.
 				if commonType.Oid == types.T_varchar || commonType.Oid == types.T_text {
 					adjustControlFlowVarcharMetadata(args, argsType, []int{0, 2}, &commonType)
 					unbounded := false
 					for _, idx := range []int{0, 2} {
-						if argsType[idx].Oid == types.T_text {
+						if argsType[idx].Oid == types.T_blob {
+							commonType.Oid = types.T_blob
+						} else if argsType[idx].Oid == types.T_text && commonType.Oid != types.T_blob {
 							commonType.Oid = types.T_text
+						}
+						if argsType[idx].Oid == types.T_text || argsType[idx].Oid == types.T_blob {
 							unbounded = unbounded || argsType[idx].Width == 0
 						}
 						if argsType[idx].Oid.IsMySQLString() {
@@ -8278,15 +8282,24 @@ func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueAr
 		return types.Type{}, false, nil
 	}
 	if valueArg.Oid.IsDecimal() && defaultArg.Oid.IsInteger() {
-		digits, _ := decimalIntegerWidth(defaultExpr, defaultArg)
+		// Zero fits even DECIMAL(M,M); it needs no extra integer digit.
+		digits, _ := decimalIntegerWidth(defaultExpr, defaultArg, true)
+		if lit := defaultExpr.GetLit(); lit != nil && lit.Isnull {
+			digits = 0
+		}
 		common, ok := mergeExactDecimalComparisonType(makePlan2Type(&valueArg), plan.Type{Width: digits})
-		if !ok {
-			return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds decimal256 capacity")
+		// The shared exact-arithmetic helper permits 76 internal digits, but
+		// this public result must remain expressible in persisted SQL DDL.
+		if !ok || common.Width > 65 {
+			return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds SQL limit 65")
 		}
 		return types.New(types.T(common.Id), common.Width, common.Scale), true, nil
 	}
 	resolved, err := function.GetFunctionByName(ctx, "coalesce", []types.Type{valueArg, defaultArg})
 	if err != nil {
+		if defaultArg.Oid.IsDecimal() && (valueArg.Oid.IsDecimal() || valueArg.Oid.IsInteger()) {
+			return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds SQL limit 65")
+		}
 		return types.Type{}, false, nil
 	}
 	// Cast targets carry the aligned decimal scale and string capacity.
@@ -8296,6 +8309,9 @@ func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueAr
 	}
 	if ret.Oid == types.T_any {
 		return types.Type{}, false, nil
+	}
+	if ret.Oid.IsDecimal() && ret.Width > 65 {
+		return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds SQL limit 65")
 	}
 	return ret, true, nil
 }
@@ -9585,7 +9601,9 @@ func adjustControlFlowDecimalLiteralMetadata(args []*Expr, argTypes []types.Type
 	return changed
 }
 
-func decimalIntegerWidth(expr *Expr, typ types.Type) (int32, bool) {
+// zeroWithoutIntegerDigit is used when testing whether a default fits a
+// declared decimal domain. Other consumers retain zero's display precision.
+func decimalIntegerWidth(expr *Expr, typ types.Type, zeroWithoutIntegerDigit ...bool) (int32, bool) {
 	lit := expr.GetLit()
 	if lit == nil || lit.Isnull {
 		return integerMetadataWidth(typ.Oid), false
@@ -9593,6 +9611,9 @@ func decimalIntegerWidth(expr *Expr, typ types.Type) (int32, bool) {
 
 	decimalDigits := func(value string) int32 {
 		value = strings.TrimPrefix(value, "-")
+		if value == "0" && len(zeroWithoutIntegerDigit) > 0 && zeroWithoutIntegerDigit[0] {
+			return 0
+		}
 		return int32(len(value))
 	}
 	switch value := lit.Value.(type) {
@@ -9605,13 +9626,13 @@ func decimalIntegerWidth(expr *Expr, typ types.Type) (int32, bool) {
 	case *plan.Literal_I64Val:
 		return decimalDigits(strconv.FormatInt(value.I64Val, 10)), true
 	case *plan.Literal_U8Val:
-		return int32(len(strconv.FormatUint(uint64(value.U8Val), 10))), true
+		return decimalDigits(strconv.FormatUint(uint64(value.U8Val), 10)), true
 	case *plan.Literal_U16Val:
-		return int32(len(strconv.FormatUint(uint64(value.U16Val), 10))), true
+		return decimalDigits(strconv.FormatUint(uint64(value.U16Val), 10)), true
 	case *plan.Literal_U32Val:
-		return int32(len(strconv.FormatUint(uint64(value.U32Val), 10))), true
+		return decimalDigits(strconv.FormatUint(uint64(value.U32Val), 10)), true
 	case *plan.Literal_U64Val:
-		return int32(len(strconv.FormatUint(value.U64Val, 10))), true
+		return decimalDigits(strconv.FormatUint(value.U64Val, 10)), true
 	default:
 		return integerMetadataWidth(typ.Oid), false
 	}
