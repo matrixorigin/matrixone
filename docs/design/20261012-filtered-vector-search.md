@@ -357,9 +357,10 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
 ## Compatibility
 
 - **Wire**: `IndexSearchScan.internal_topk`, `max_internal_topk` and `max_nprobe` (`nprobe` is the
-  IVF algorithms' existing `algo_options` probe count) with MORPC version 112, alias
+  IVF algorithms' existing `algo_options` probe count) with a dedicated MORPC version,
   `vectorscan.SearchKnobsProtocolVersion`. A scan carrying any of them, from the SQL option or a
-  session variable, requires 112 on every CN that runs it; a scan without them requires 111.
+  session variable, requires that version on every CN that runs it; a scan without them requires
+  `vectorscan.IndexSearchScanProtocolVersion`.
 - **Membership**: no version change; an older hnsw, cagra or ivfpq reader refuses
   `MembershipFilterRequired`, so a CN of an older build fails a PRE plan instead of ignoring the
   filter.
@@ -448,7 +449,7 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
   `ADAPTIVE_TOP` pins the same output positions in every branch.
 - With `gpu_mode` on, cagra and ivfpq never fall back to a CPU search.
 - A session knob is written only into a scan of an algorithm that uses it, so a fulltext search
-  does not require MORPC 112.
+  does not require `vectorscan.SearchKnobsProtocolVersion`.
 - Accepted costs: members without an index entry (NULL vectors, rows not yet indexed) make an
   hnsw `iterative` search widen to its cap; the first ivfflat round is not capped at 4096 lists;
   session knobs are resolved per row in a correlated APPLY.
