@@ -61,13 +61,13 @@ func (stats *StatsInfo) Snapshot() StatsInfo {
 	return snapshot
 }
 
-func (request *S3Request) snapshot() S3Request {
+func (s *S3Request) snapshot() S3Request {
 	return S3Request{
-		List:      atomic.LoadInt64(&request.List),
-		Head:      atomic.LoadInt64(&request.Head),
-		Put:       atomic.LoadInt64(&request.Put),
-		Get:       atomic.LoadInt64(&request.Get),
-		Delete:    atomic.LoadInt64(&request.Delete),
-		DeleteMul: atomic.LoadInt64(&request.DeleteMul),
+		List:      atomic.LoadInt64(&s.List),
+		Head:      atomic.LoadInt64(&s.Head),
+		Put:       atomic.LoadInt64(&s.Put),
+		Get:       atomic.LoadInt64(&s.Get),
+		Delete:    atomic.LoadInt64(&s.Delete),
+		DeleteMul: atomic.LoadInt64(&s.DeleteMul),
 	}
 }
