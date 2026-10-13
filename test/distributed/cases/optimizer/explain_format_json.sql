@@ -94,6 +94,24 @@ explain format=json select id, tag from vectors_include order by l2_distance(v,'
 drop table vectors_include;
 set probe_limit=default;
 
+-- HNSW also carries search concurrency in the shared algorithm options.
+set experimental_hnsw_index=1;
+create table json_hnsw(id bigint primary key, v vecf32(3) not null);
+insert into json_hnsw values (1,'[0,0,0]'),(2,'[1,1,1]'),(3,'[2,2,2]');
+create index json_hx using hnsw on json_hnsw(v) op_type 'vector_l2_ops' M 4 EF_CONSTRUCTION 16 EF_SEARCH 16;
+set hnsw_threads_search=1;
+-- @regex("(?s)Vector Index Scan.*index=json_hx.*ThreadsSearch: 1[^0-9]",true)
+explain format=json select id from json_hnsw order by l2_distance(v,'[1,1,1]') limit 1;
+set hnsw_threads_search=8;
+-- @regex("(?s)Vector Index Scan.*index=json_hx.*ThreadsSearch: 8[^0-9]",true)
+explain format=json select id from json_hnsw order by l2_distance(v,'[1,1,1]') limit 1;
+-- @regex("(?s)Vector Index: json_hx.*ThreadsSearch: 8",true)
+explain verbose select id from json_hnsw order by l2_distance(v,'[1,1,1]') limit 1;
+select id from json_hnsw order by l2_distance(v,'[1,1,1]') limit 1;
+set hnsw_threads_search=default;
+set experimental_hnsw_index=default;
+drop table json_hnsw;
+
 -- Shared fulltext scans must expose the semantics carried in algorithm options.
 set experimental_fulltext2_index=1;
 create table json_docs(id bigint primary key, body text, status int);

@@ -140,3 +140,28 @@ func TestFulltextIndexSearchScanMarshal(t *testing.T) {
 	_, err = broken.GetNodeLabels(ctx, &ExplainOptions{})
 	require.Error(t, err)
 }
+
+func TestHnswDetailedSettingsAndCompactCompatibility(t *testing.T) {
+	node := &plan.Node{NodeId: 0, NodeType: plan.Node_INDEX_SEARCH_SCAN, IndexSearchScan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "hx", IndexAlgo: "hnsw"}, DistanceFunction: "l2_distance"}}
+	for _, threads := range []string{"1", "8"} {
+		node.IndexSearchScan.AlgoOptions = []byte(`{"threads_search":` + threads + `}`)
+		got, err := sqlJSONIndexSearchExpressions(t.Context(), node.IndexSearchScan, &ExplainOptions{})
+		require.NoError(t, err)
+		require.Contains(t, got, "ThreadsSearch: "+threads)
+		desc := &NodeDescribeImpl{Node: node}
+		text, err := desc.GetIndexSearchScanInfo(t.Context(), &ExplainOptions{Verbose: true})
+		require.NoError(t, err)
+		require.Equal(t, "Vector Index: hx, Metric: l2_distance, ThreadsSearch: "+threads, text)
+		text, err = desc.GetIndexSearchScanInfo(t.Context(), &ExplainOptions{})
+		require.NoError(t, err)
+		require.Equal(t, "Vector Index: hx, Metric: l2_distance", text)
+	}
+	node.IndexSearchScan.AlgoOptions = []byte(`{`)
+	_, err := sqlJSONIndexSearchExpressions(t.Context(), node.IndexSearchScan, &ExplainOptions{})
+	require.Error(t, err)
+	_, err = (&NodeDescribeImpl{Node: node}).GetIndexSearchScanInfo(t.Context(), &ExplainOptions{Verbose: true})
+	require.Error(t, err)
+	text, err := (&NodeDescribeImpl{Node: node}).GetIndexSearchScanInfo(t.Context(), &ExplainOptions{})
+	require.NoError(t, err)
+	require.Equal(t, "Vector Index: hx, Metric: l2_distance", text)
+}
