@@ -7,6 +7,7 @@ null
 SELECT crc32('123456');
 crc32(123456)
 158520161
+drop table if exists crc32test;
 CREATE TABLE crc32test(col1 varchar(100));
 INSERT INTO crc32test VALUES ('123'),(NULL),('123456');
 SELECT crc32(col1) FROM crc32test;
@@ -14,6 +15,7 @@ crc32(col1)
 2286445522
 null
 158520161
+drop table crc32test;
 SELECT CRC32('Hello, World!') AS crc32_hello_world;
 crc32_hello_world
 3964322768
@@ -165,6 +167,46 @@ select count(*) as row_count from crc32_generated;
 row_count
 2
 drop table crc32_generated;
+
+drop table if exists crc32_generated_auto_input;
+create table crc32_generated_auto_input(id bigint unsigned not null primary key,val json,g bigint unsigned generated always as (crc32(val)+id) stored);
+insert into crc32_generated_auto_input(id,val) values(1,'1');
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+id    val_text    g
+1    1    2212294584
+alter table crc32_generated_auto_input modify column id bigint unsigned not null,algorithm=copy;
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+id    val_text    g
+1    1    2212294584
+alter table crc32_generated_auto_input modify column id bigint unsigned not null auto_increment,algorithm=copy;
+invalid input: generated column 'g' cannot refer to auto-increment column
+select count(*) as ordinary_id_columns from information_schema.columns where table_schema=database() and table_name='crc32_generated_auto_input' and column_name='id' and data_type='bigint' and lower(column_type) like '%unsigned%' and is_nullable='NO' and column_key='PRI' and extra='';
+ordinary_id_columns
+1
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+id    val_text    g
+1    1    2212294584
+update crc32_generated_auto_input set id=3 where id=1;
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+id    val_text    g
+3    1    2212294586
+alter table crc32_generated_auto_input change column id id bigint unsigned not null auto_increment,algorithm=copy;
+invalid input: generated column 'g' cannot refer to auto-increment column
+select count(*) as ordinary_id_columns from information_schema.columns where table_schema=database() and table_name='crc32_generated_auto_input' and column_name='id' and data_type='bigint' and lower(column_type) like '%unsigned%' and is_nullable='NO' and column_key='PRI' and extra='';
+ordinary_id_columns
+1
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+id    val_text    g
+3    1    2212294586
+insert into crc32_generated_auto_input(id,val) values(2,'1');
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+id    val_text    g
+2    1    2212294585
+3    1    2212294586
+drop table crc32_generated_auto_input;
+select count(*) as remaining_auto_input_tables from information_schema.tables where table_schema=database() and (table_name='crc32_generated_auto_input' or table_name like 'crc32_generated_auto_input_copy_%');
+➤ remaining_auto_input_tables[-5,64,0]  𝄀
+0
 
 drop table if exists crc32_generated_convert;
 create table crc32_generated_convert(id int primary key, j json, c bigint unsigned generated always as (crc32(j)) stored, key idx_c(c));

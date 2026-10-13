@@ -1,9 +1,11 @@
 SELECT crc32('123');
 SELECT crc32(null);
 SELECT crc32('123456');
+drop table if exists crc32test;
 CREATE TABLE crc32test(col1 varchar(100));
 INSERT INTO crc32test VALUES ('123'),(NULL),('123456');
 SELECT crc32(col1) FROM crc32test;
+drop table crc32test;
 SELECT CRC32('Hello, World!') AS crc32_hello_world;
 
 -- null string
@@ -102,6 +104,28 @@ create unique index uk_c on crc32_generated(c);
 insert ignore into crc32_generated(id,j) values (3,'{"t1":"a"}');
 select count(*) as row_count from crc32_generated;
 drop table crc32_generated;
+
+-- Composite CRC32 generated input: ordinary integer COPY remains legal.
+-- Fresh JSON DDL binds CRC1; this is not a legacy CRC0 catalog regression.
+drop table if exists crc32_generated_auto_input;
+create table crc32_generated_auto_input(id bigint unsigned not null primary key,val json,g bigint unsigned generated always as (crc32(val)+id) stored);
+insert into crc32_generated_auto_input(id,val) values(1,'1');
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+alter table crc32_generated_auto_input modify column id bigint unsigned not null,algorithm=copy;
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+-- Reject AUTO_INCREMENT on an input, not on the generated column itself.
+alter table crc32_generated_auto_input modify column id bigint unsigned not null auto_increment,algorithm=copy;
+select count(*) as ordinary_id_columns from information_schema.columns where table_schema=database() and table_name='crc32_generated_auto_input' and column_name='id' and data_type='bigint' and lower(column_type) like '%unsigned%' and is_nullable='NO' and column_key='PRI' and extra='';
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+update crc32_generated_auto_input set id=3 where id=1;
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+alter table crc32_generated_auto_input change column id id bigint unsigned not null auto_increment,algorithm=copy;
+select count(*) as ordinary_id_columns from information_schema.columns where table_schema=database() and table_name='crc32_generated_auto_input' and column_name='id' and data_type='bigint' and lower(column_type) like '%unsigned%' and is_nullable='NO' and column_key='PRI' and extra='';
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+insert into crc32_generated_auto_input(id,val) values(2,'1');
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+drop table crc32_generated_auto_input;
+select count(*) as remaining_auto_input_tables from information_schema.tables where table_schema=database() and (table_name='crc32_generated_auto_input' or table_name like 'crc32_generated_auto_input_copy_%');
 
 drop table if exists crc32_generated_convert;
 create table crc32_generated_convert(id int primary key, j json, c bigint unsigned generated always as (crc32(j)) stored, key idx_c(c));
