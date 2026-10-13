@@ -551,8 +551,12 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 		go func() { defer close(done); result <- root.MergeRun(c) }()
 		select {
 		case <-retired:
-		case err := <-result:
-			t.Fatalf("reused scheduler stopped before consumer retirement: %v", err)
+		case <-done:
+			select {
+			case <-retired:
+			default:
+				t.Fatal("reused scheduler stopped before consumer retirement")
+			}
 		case <-time.After(10 * time.Second):
 			t.Fatal("reused consumer did not retire")
 		}
