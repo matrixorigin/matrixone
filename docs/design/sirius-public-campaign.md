@@ -89,9 +89,8 @@ Measured captures retain their actual identities; no source or binary is
 relabeled. Public writer/compiler normal/race cleanup, owning function/compiler,
 actual GPU bridge and same-process cuVS checks, all 86 tooling tests and full
 SCA pass. Fail-closed artifact acceptance reports local completion, with CI and
-reviewer approval remaining. Generated evidence is prepared separately from
-this source change in the local evidence branch described below. Publication
-remains pending explicit approval.
+reviewer approval remaining. Generated evidence is published separately from
+this source change in the contributor-fork evidence branch described below.
 
 The deep delivery review rejects CPU budgets beyond Go's signed 32-bit range:
 the runtime silently ignores those values, so accepting them would misreport
@@ -109,11 +108,10 @@ archive passes the tightened acceptance validator; raw runs are not relabeled.
 
 ## Optimization evidence preservation
 
-The matched optimization archive and merged #34 qualification are prepared at
-local commit `56a5c86936fbda06d4c41dbf2ccbcb717e82901d`,
-on local branch `evidence/sirius-perf-30021-c5b77a2594`. Publication to
-`aunjgr/matrixone` is pending explicit authorization; the branch and archive
-are not yet available for remote review. The prepared qualification ledger
+The matched optimization archive and merged #34 qualification are published at
+immutable commit `56a5c86936fbda06d4c41dbf2ccbcb717e82901d`,
+on [evidence branch `evidence/sirius-perf-30021-c5b77a2594`](https://github.com/aunjgr/matrixone/tree/evidence/sirius-perf-30021-c5b77a2594).
+The [qualification ledger](https://github.com/aunjgr/matrixone/blob/7a241f4138dcc01872636e2e55f3fadeaf828310/docs/design/evidence/sirius-perf-30021/qualification.json)
 records the original baseline/candidate identities, all captured artifact
 checksums, and the source/build/provider equivalence through merged `06400cf4`.
 The bundle retains the 744-run candidate and matched baseline, 264 resource runs,
@@ -129,17 +127,18 @@ nor optimized measurements are relabeled as a new benchmark run. CI and
 reviewer approval remain external gates.
 
 Current delivery qualification for MO `195457c2fd` and main `8586fa0871` is
-prepared separately at local evidence commit
+published separately at immutable evidence commit
 `7a241f4138dcc01872636e2e55f3fadeaf828310`. Owning function/EXPLAIN suites,
 string/collation ownership controls under race, all 22 native preparations,
 GPU bridge/cancellation/cuVS checks, the source/SDK guarded service build and
 full SCA pass. The current EXPLAIN BVT passes 115/115 twice with teardown.
 These delivery checks preserve the original performance-capture identities;
 they do not claim a new benchmark or passing remote coverage result. The
-review's required evidence-access gate remains open until publication.
+remote fetch verifies all three archive hashes and all 133 recorded file
+checksums. The downloaded benchmark archive passes acceptance with
+`local_acceptance_complete=true`; the evidence-access review thread is resolved.
 
-After the evidence branch is published, export and verify the immutable bundle
-from the review-fixed source checkout:
+From the source checkout, export and verify the immutable bundle:
 
 ```sh
 git fetch https://github.com/aunjgr/matrixone.git \
