@@ -1373,7 +1373,7 @@ class AsyncClient(BaseMatrixOneClient):
                     # Fallback for testing or older SQLAlchemy versions
                     from sqlalchemy import text
 
-                    result = await conn.execute(text(final_sql))
+                    result = await conn.execute(text(final_sql.replace(':', r'\:')))
 
                 execution_time = time.time() - start_time
 
@@ -1407,34 +1407,11 @@ class AsyncClient(BaseMatrixOneClient):
 
             raise _classify_db_error(e, sql_or_stmt) from None
 
-    def _substitute_parameters(self, sql: str, params: Optional[Tuple] = None) -> str:
-        """
-        Substitute ? placeholders with actual values since MatrixOne doesn't support prepared statements
+    def _substitute_parameters(self, sql: str, params=None) -> str:
+        """Render legacy parameters outside SQL literals, identifiers and comments."""
+        from ._sql_literals import substitute_parameters
 
-        Args::
-
-            sql: SQL query string with ? placeholders
-            params: Tuple of parameter values
-
-        Returns::
-
-            SQL string with parameters substituted
-        """
-        if not params:
-            return sql
-
-        final_sql = sql
-        for param in params:
-            if isinstance(param, str):
-                # Escape single quotes in string values
-                escaped_param = param.replace("'", "''")
-                final_sql = final_sql.replace("?", f"'{escaped_param}'", 1)
-            elif param is None:
-                final_sql = final_sql.replace("?", "NULL", 1)
-            else:
-                final_sql = final_sql.replace("?", str(param), 1)
-
-        return final_sql
+        return substitute_parameters(sql, params)
 
     def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> tuple[str, dict]:
         """
