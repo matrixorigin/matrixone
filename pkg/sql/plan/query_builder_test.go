@@ -6925,27 +6925,44 @@ func TestParseRankOption(t *testing.T) {
 		require.Nil(t, rankOption)
 	})
 
-	t.Run("options without mode", func(t *testing.T) {
-		options := map[string]string{
-			"fudge_factor": "3.0",
-			"nprobe":       "10",
+	for _, mode := range []string{"", "pre"} {
+		t.Run("nprobe with mode="+mode, func(t *testing.T) {
+			options := map[string]string{"NPROBE": " 10 "}
+			if mode != "" {
+				options["mode"] = mode
+			}
+			rankOption, err := parseRankOption(options, ctx)
+			require.NoError(t, err)
+			require.Equal(t, &plan.RankOption{Mode: mode, Nprobe: 10}, rankOption)
+		})
+	}
+	for _, value := range []string{"1", "80000"} {
+		t.Run("nprobe boundary="+value, func(t *testing.T) {
+			option, err := parseRankOption(map[string]string{"nprobe": value}, ctx)
+			require.NoError(t, err)
+			require.NotNil(t, option)
+		})
+	}
+	for _, value := range []string{"", "0", "-1", "80001", "9223372036854775808", "1.5", "1e2", "not-a-number"} {
+		t.Run("invalid nprobe="+value, func(t *testing.T) {
+			_, err := parseRankOption(map[string]string{"nprobe": value}, ctx)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+			require.Contains(t, err.Error(), "nprobe")
+		})
+	}
+	for _, key := range []string{"fudge_factor", "nproeb"} {
+		for _, mode := range []string{"", "post"} {
+			t.Run("unsupported="+key+" mode="+mode, func(t *testing.T) {
+				options := map[string]string{key: "100"}
+				if mode != "" {
+					options["mode"] = mode
+				}
+				_, err := parseRankOption(options, ctx)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+				require.Contains(t, err.Error(), key)
+			})
 		}
-		rankOption, err := parseRankOption(options, ctx)
-		require.NoError(t, err)
-		require.Nil(t, rankOption)
-	})
-
-	t.Run("options with mode and other options", func(t *testing.T) {
-		options := map[string]string{
-			"mode":         "pre",
-			"fudge_factor": "3.0",
-			"nprobe":       "10",
-		}
-		rankOption, err := parseRankOption(options, ctx)
-		require.NoError(t, err)
-		require.NotNil(t, rankOption)
-		require.Equal(t, "pre", rankOption.Mode)
-	})
+	}
 
 	t.Run("case insensitive key matching", func(t *testing.T) {
 		options := map[string]string{
