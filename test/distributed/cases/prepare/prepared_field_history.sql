@@ -3,6 +3,7 @@
 -- @label:bvt
 
 DROP DATABASE IF EXISTS field_history_unrelated_ddl;
+DROP DATABASE IF EXISTS field_history_dependencies;
 
 -- Text first execution.
 PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f';
@@ -246,6 +247,64 @@ EXECUTE p_field_history USING @field_condition, @field_value;
 SET @field_condition = 1, @field_value = _binary 'a';
 EXECUTE p_field_history USING @field_condition, @field_value;
 DEALLOCATE PREPARE p_field_history;
+
+-- Aggregate marker declarations survive scalar materialization, including NULL first.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN (SELECT MAX(?) LIMIT 1) ELSE NULL END, ''A'', ''a'') AS max_f, FIELD(CASE WHEN ? THEN (SELECT MIN(?) LIMIT 1) ELSE NULL END, ''A'', ''a'') AS min_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+
+-- UNION resolves each branch's declaration before merging output domains.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN x ELSE NULL END, ''A'', ''a'') AS f FROM (SELECT ? x UNION ALL SELECT NULL) d ORDER BY f';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+
+-- String functions consume the declared domain of nested composite expressions.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ELT(1, COALESCE(?, NULL)) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+
+-- A table dependency does not make an unrelated DDL a type reprepare.
+CREATE DATABASE field_history_dependencies;
+CREATE TABLE field_history_dependencies.t(i INT);
+INSERT INTO field_history_dependencies.t VALUES(1);
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f FROM field_history_dependencies.t';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+CREATE TABLE field_history_dependencies.unrelated(i INT);
+EXECUTE p_field_history USING @field_condition, @field_value;
+DROP TABLE field_history_dependencies.unrelated;
+EXECUTE p_field_history USING @field_condition, @field_value;
+-- A real captured-table schema change still starts a fresh type generation.
+ALTER TABLE field_history_dependencies.t ADD COLUMN j INT;
+EXECUTE p_field_history USING @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+-- Rebinding to a temporary shadow changes dependency identity even though the
+-- original persistent table's schema version did not change.
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f FROM field_history_dependencies.t';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+CREATE TEMPORARY TABLE field_history_dependencies.t(i INT);
+INSERT INTO field_history_dependencies.t VALUES(2);
+EXECUTE p_field_history USING @field_condition, @field_value;
+DROP TEMPORARY TABLE field_history_dependencies.t;
+EXECUTE p_field_history USING @field_condition, @field_value;
+DEALLOCATE PREPARE p_field_history;
+DROP DATABASE field_history_dependencies;
 
 -- Plan invalidation preserves type history; restore the session settings.
 SET @field_old_locale = @@lc_time_names;

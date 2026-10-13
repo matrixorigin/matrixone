@@ -1,4 +1,5 @@
 DROP DATABASE IF EXISTS field_history_unrelated_ddl;
+DROP DATABASE IF EXISTS field_history_dependencies;
 PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f';
 SET @field_condition = 1;
 SET @field_value = 'a';
@@ -334,6 +335,87 @@ EXECUTE p_field_history USING @field_condition, @field_value;
 ➤ f[-5,64,0]  𝄀
 2
 DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN (SELECT MAX(?) LIMIT 1) ELSE NULL END, ''A'', ''a'') AS max_f, FIELD(CASE WHEN ? THEN (SELECT MIN(?) LIMIT 1) ELSE NULL END, ''A'', ''a'') AS min_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+➤ max_f[-5,64,0]  ¦  min_f[-5,64,0]  𝄀
+0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+➤ max_f[-5,64,0]  ¦  min_f[-5,64,0]  𝄀
+1  ¦  1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN x ELSE NULL END, ''A'', ''a'') AS f FROM (SELECT ? x UNION ALL SELECT NULL) d ORDER BY f';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ELT(1, COALESCE(?, NULL)) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+DEALLOCATE PREPARE p_field_history;
+CREATE DATABASE field_history_dependencies;
+CREATE TABLE field_history_dependencies.t(i INT);
+INSERT INTO field_history_dependencies.t VALUES(1);
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f FROM field_history_dependencies.t';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+CREATE TABLE field_history_dependencies.unrelated(i INT);
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+DROP TABLE field_history_dependencies.unrelated;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+ALTER TABLE field_history_dependencies.t ADD COLUMN j INT;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f FROM field_history_dependencies.t';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+CREATE TEMPORARY TABLE field_history_dependencies.t(i INT);
+INSERT INTO field_history_dependencies.t VALUES(2);
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+DROP TEMPORARY TABLE field_history_dependencies.t;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+DROP DATABASE field_history_dependencies;
 SET @field_old_locale = @@lc_time_names;
 SET @field_old_prefilter = @@enable_vector_prefilter_by_default;
 SET @field_old_auto_mode = @@enable_vector_auto_mode_by_default;

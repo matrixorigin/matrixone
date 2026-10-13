@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/mohae/deepcopy"
 
@@ -851,6 +852,30 @@ func CheckTableDefChange(catalogCache *cache.CatalogCache, tblKey *cache.TableCh
 	return catalogCache.HasNewerVersion(tblKey)
 }
 
+// Compare dependency identities, versions and snapshots, not session-wide DDL
+// counters. Reoptimization can reorder dependencies; neither order nor pointer
+// identity changes the SQL type contract. This runs only when a plan is rebuilt.
+func preparedFieldDependenciesChanged(previous, current []*plan.ObjectRef) bool {
+	if len(previous) != len(current) {
+		return true
+	}
+	matched := make([]bool, len(current))
+	for _, before := range previous {
+		found := false
+		for i, after := range current {
+			if !matched[i] && proto.Equal(before, after) {
+				matched[i] = true
+				found = true
+				break
+			}
+		}
+		if !found {
+			return true
+		}
+	}
+	return false
+}
+
 func preparePlanNeedsRebuild(schemaChanged, modeMismatch, protocolMismatch bool) bool {
 	return schemaChanged || modeMismatch || protocolMismatch
 }
@@ -1417,12 +1442,11 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	cwft.planGenerationReused = !needRebuild
 	fieldTypes := prepareStmt.fieldTypes
-	// Plan invalidation (including locale/vector defaults and compile retries)
-	// does not by itself change the statement's resolved SQL types. Session DDL
-	// and temporary-table revisions conservatively invalidate plans, but cannot
-	// change a statement's SQL types when it has no captured table dependencies.
-	resetFieldTypes := change && len(preparePlan.GetSchemas()) != 0 ||
-		modeMismatch || protocolMismatch || prepareStmt.fieldTypesResetPending
+	// Session DDL and temporary-table revisions conservatively invalidate plans,
+	// not SQL type history. Reset only for changed captured dependencies or
+	// type-affecting mode/protocol changes. Rebinding may discover a different
+	// dependency (e.g. a temporary table shadow), checked before publication.
+	resetFieldTypes := schemaChanged || modeMismatch || protocolMismatch || prepareStmt.fieldTypesResetPending
 	if resetFieldTypes {
 		fieldTypes = nil
 	}
@@ -1455,6 +1479,10 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		prepareTs := currentTxnSnapshotTSForProcess(cwft.proc)
 		newPreparePlan := newPlan.GetDcl().GetPrepare()
+		if preparedFieldDependenciesChanged(preparePlan.GetSchemas(), newPreparePlan.GetSchemas()) {
+			resetFieldTypes = true
+			fieldTypes = nil
+		}
 		var txnHaveDDL bool
 		switch prepareStmt.PrepareStmt.(type) {
 		case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:

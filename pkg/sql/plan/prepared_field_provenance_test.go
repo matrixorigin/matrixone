@@ -31,6 +31,16 @@ func TestPreparedFieldProducerProvenance(t *testing.T) {
 		first, want   types.T
 		textCondition bool
 	}{
+		{"scalar MAX marker", "select field(case when ? then (select max(?) limit 1) else null end,'A','a')", false, types.T_any, types.T_text, false},
+		{"scalar MIN marker", "select field(case when ? then (select min(?) limit 1) else null end,'A','a')", false, types.T_any, types.T_text, false},
+		{"scalar MAX compound", "select field(case when ? then (select max(coalesce(?,null)) limit 1) else null end,'A','a')", false, types.T_any, types.T_any, false},
+		{"UNION marker", "select field(case when ? then x else null end,'A','a') from (select ? x union all select null) d", false, types.T_any, types.T_text, false},
+		{"UNION compound", "select field(case when ? then x else null end,'A','a') from (select coalesce(?,null) x union all select null) d", false, types.T_any, types.T_any, false},
+		{"ELT literal NULL peer", "select field(case when ? then elt(1,?,null) else null end,'A','a')", false, types.T_any, types.T_text, false},
+		{"ELT literal NULL before marker", "select field(case when ? then elt(2,null,?) else null end,'A','a')", false, types.T_any, types.T_text, false},
+		{"ELT compound and literal NULL", "select field(case when ? then elt(1,coalesce(?,null),null) else null end,'A','a')", false, types.T_varchar, types.T_text, false},
+		{"ELT compound", "select field(case when ? then elt(1,coalesce(?,null)) else null end,'A','a')", false, types.T_any, types.T_blob, false},
+		{"ELT compound declaration", "select field(case when ? then elt(1,coalesce(?,null)) else null end,'A','a')", false, types.T_any, types.T_blob, true},
 		{"scalar compound", "select field(case when ? then (select coalesce(?,null) limit 1) else null end,'A','a')", false, types.T_any, types.T_any, false},
 		{"scalar marker", "select field(case when ? then (select ? limit 1) else null end,'A','a')", false, types.T_any, types.T_text, false},
 		{"derived marker", "select field(case when ? then x else null end,'A','a') from (select ? x limit 1) d", false, types.T_any, types.T_text, false},
