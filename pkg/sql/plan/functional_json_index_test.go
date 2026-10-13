@@ -130,6 +130,10 @@ func TestFunctionalJSONReplayAndEqualityPlan(t *testing.T) {
 			}
 		}
 	}
+	if !physical {
+		t.Log("persisted JSON key", functionalIndexColumn(table, table.Indexes[0]).GeneratedCol.Expr.String())
+		t.Log("actual query plan", qp.String())
+	}
 	require.True(t, physical, "identical typed JSON predicate must select its physical index")
 	require.True(t, residual, "the base-row predicate must remain as a residual")
 	ddl, _, err := constructCreateTableSQL(ctx, table, nil, false, nil, false, nil)
