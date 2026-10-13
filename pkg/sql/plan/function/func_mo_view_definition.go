@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -290,5 +291,5 @@ func checkOptionOrNone(checkOption string) string {
 	if checkOption == "" {
 		return "NONE"
 	}
-	return checkOption
+	return strings.ToUpper(checkOption)
 }
