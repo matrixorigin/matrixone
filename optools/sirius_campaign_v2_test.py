@@ -184,6 +184,43 @@ class CampaignV2Test(unittest.TestCase):
         )
         self.assertEqual((0, 2, 1, 3), campaign.ORDER_KEYS[2])
 
+    def test_historical_profile_cannot_launch_an_executor(self):
+        manifest = campaign.build_campaign(provenance())
+        for key in ("gomaxprocs", "native_host_block_bytes"):
+            del manifest["provenance"]["config"][key]
+        with self.assertRaises(campaign.CampaignError):
+            campaign.build_campaign(manifest["provenance"])
+        calls = []
+
+        def executor(spec):
+            calls.append(spec)
+            return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            with self.assertRaises(campaign.CampaignError):
+                campaign.execute_campaign(manifest, executor, campaign.Scratch(root))
+            self.assertEqual([], calls, "historical verification cannot admit execution")
+            self.assertEqual([], list(root.iterdir()))
+
+    def test_archive_verification_rejects_partial_or_invalid_profiles(self):
+        for key, values in (
+            ("gomaxprocs", (None, True, 0, 1 << 31)),
+            ("native_host_block_bytes", (None, True, 32768, 65536.0)),
+        ):
+            for setting in values:
+                manifest = campaign.build_campaign(provenance())
+                manifest["provenance"]["config"][key] = setting
+                with self.subTest(key=key, setting=setting), self.assertRaises(
+                    campaign.CampaignError
+                ):
+                    campaign.summarize(manifest, [])
+            manifest = campaign.build_campaign(provenance())
+            del manifest["provenance"]["config"][key]
+            with self.subTest(missing=key), self.assertRaises(campaign.CampaignError):
+                campaign.summarize(manifest, [])
+
     def test_full_value_duplicate_and_empty_comparison(self):
         for a, b, keys, ok in (
             ([], [], [], True),
