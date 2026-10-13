@@ -2720,10 +2720,10 @@ func TestDerivedGeometryRejectsMalformedCollectionMember(t *testing.T) {
 		{name: "is_simple", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0))", errText: "invalid linestring payload"},
 		{name: "envelope", fn: StEnvelope, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0))", errText: "invalid linestring payload"},
 		{name: "centroid", fn: StCentroid, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0))", errText: "invalid linestring payload"},
-		{name: "is_simple_malformed_polygon_after_false", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0)))", errText: "invalid polygon payload"},
-		{name: "is_simple_malformed_polygon_first", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(POLYGON((0 0,1 0,0 0)),MULTIPOINT(0 0,0 0))", errText: "invalid polygon payload"},
-		{name: "is_simple_malformed_polygon_nested", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0))))", errText: "invalid polygon payload"},
-		{name: "envelope_malformed_polygon_after_false", fn: StEnvelope, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0)))", errText: "invalid polygon payload"},
+		{name: "is_simple_malformed_polygon_after_false", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0)))", errText: "invalid geometry payload"},
+		{name: "is_simple_malformed_polygon_first", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(POLYGON((0 0,1 0,0 0)),MULTIPOINT(0 0,0 0))", errText: "invalid geometry payload"},
+		{name: "is_simple_malformed_polygon_nested", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0))))", errText: "invalid geometry payload"},
+		{name: "envelope_malformed_polygon_after_false", fn: StEnvelope, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0)))", errText: "invalid geometry payload"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -13386,4 +13386,40 @@ func TestCalendarNumericMaskedResults(t *testing.T) {
 			require.True(t, ok, info)
 		})
 	}
+}
+
+func TestStIsValidRepeatedVertices(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, oid := range []types.T{types.T_geometry, types.T_geometry32} {
+		inputs := []FunctionTestInput{NewFunctionTestInput(oid.ToType(), []string{"LINESTRING(0 0,0 0,1 0,1 0)", "LINESTRING(0 0,1 0,0 0)", "LINESTRING(0 0,0 0)", "LINESTRING(0 0,0.0000000001 0)", "LINESTRING(0 0,1 0)"}, []bool{false, false, false, false, true})}
+		fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, false, true, false}, []bool{false, false, false, false, true}), StIsValid)
+		ok, info := fc.RunAndFree()
+		require.True(t, ok, info)
+	}
+}
+
+func TestGeometryStandardWKBPreservesStoredStructure(t *testing.T) {
+	// Previously admitted malformed WKB remains exportable. Constructors must
+	// reject re-admission, rather than silently repairing the historical ring.
+	malformed := geo.Polygon{Rings: [][]geo.Coord{{{X: 0, Y: 0}, {X: 1, Y: 0}, {X: 1, Y: 1}}}}
+	payload := geo.WriteWKB(malformed)
+	standard, srid, err := GeometryPayloadToStandardWKB(payload, types.T_geometry.ToType())
+	require.NoError(t, err)
+	require.Zero(t, srid)
+	require.Equal(t, payload, standard)
+	require.Error(t, validateGeometryTextForStorage(geo.WriteWKT(malformed), defaultMaxPointsInGeometry))
+	// An empty child does not justify trying the wrong coordinate codec first.
+	g := geo.GeometryCollection{Geometries: []geo.Geometry{geo.Point{IsEmpty: true}, geo.Point{X: 1.0000001192092896, Y: -2.5}}}
+	compact, err := geo.WriteWKBFloat32(g)
+	require.NoError(t, err)
+	typ := types.T_geometry32.ToType()
+	typ.Width = 4327
+	standard, srid, err = GeometryPayloadToStandardWKB(compact, typ)
+	require.NoError(t, err)
+	require.Equal(t, uint32(4326), srid)
+	decoded, err := geo.ReadWKB(standard)
+	require.NoError(t, err)
+	require.Equal(t, g, decoded)
+	_, _, err = GeometryPayloadToStandardWKB(compact, types.T_geometry.ToType())
+	require.Error(t, err)
 }

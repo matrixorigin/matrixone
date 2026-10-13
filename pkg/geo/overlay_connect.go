@@ -271,6 +271,13 @@ func exactCross(u, v Coord) *big.Float {
 	return left
 }
 
+const (
+	intersectionSubject uint8 = 1 << iota
+	intersectionClipping
+	intersectionArea
+	intersectionLine
+)
+
 type overlayBoundaryVertex struct {
 	firstRay  int
 	secondRay int
@@ -432,7 +439,7 @@ func splitRepeatedRingWithRepeatedVertices(ring []Coord) ([][]Coord, error) {
 // left, then follows the clockwise predecessor at each vertex to preserve the
 // filled result sector. sweptEdges contains the canonical left event for every
 // noded segment emitted by run.
-func connectEdges(sweptEdges []*ovEvent, op BoolOp) ([][]Coord, error) {
+func connectEdges(sweptEdges []*ovEvent, op BoolOp) (Geometry, error) {
 	edges := make([]*ovEvent, 0, len(sweptEdges))
 	forwardEdges := make([]bool, 0, len(sweptEdges))
 	for _, e := range sweptEdges {
@@ -456,20 +463,48 @@ func connectEdges(sweptEdges []*ovEvent, op BoolOp) ([][]Coord, error) {
 		edges = append(edges, e)
 		forwardEdges = append(forwardEdges, forward)
 	}
-	if len(edges) == 0 {
-		return nil, nil
-	}
-
 	vertexIDs := make(map[Coord]int, len(edges))
 	vertices := make([]overlayBoundaryVertex, 0, len(edges))
 	var branchRaysByVertex map[int][]int
-	appendRay := func(vertex Coord, edge int, outgoing bool) {
-		vertexID, ok := vertexIDs[vertex]
+	var contactFlags []uint8
+	var contactEdges []*ovEvent
+	vertexIDFor := func(vertex Coord) int {
+		id, ok := vertexIDs[vertex]
 		if !ok {
-			vertexID = len(vertices)
-			vertexIDs[vertex] = vertexID
+			id = len(vertices)
+			vertexIDs[vertex] = id
 			vertices = append(vertices, overlayBoundaryVertex{})
+			if op == OpIntersection {
+				contactFlags = append(contactFlags, 0)
+			}
 		}
+		return id
+	}
+	// The area connector and contact connector share this endpoint index. Every
+	// noded event participates, including the noncontributing overlap partner.
+	if op == OpIntersection {
+		for _, e := range sweptEdges {
+			mask := intersectionSubject
+			if !e.subject {
+				mask = intersectionClipping
+			}
+			if e.inResult {
+				mask |= intersectionArea
+			}
+			if e.kind == edgeDifferentTransition {
+				contactEdges = append(contactEdges, e)
+				mask |= intersectionLine
+			}
+			first, last := vertexIDFor(e.p), vertexIDFor(e.other.p)
+			contactFlags[first] |= mask
+			contactFlags[last] |= mask
+		}
+	}
+	if len(edges) == 0 {
+		return assembleIntersection(nil, contactEdges, vertexIDs, contactFlags), nil
+	}
+	appendRay := func(vertex Coord, edge int, outgoing bool) {
+		vertexID := vertexIDFor(vertex)
 		state := &vertices[vertexID]
 		ray := overlayBoundaryRayCode(edge, outgoing)
 		switch state.degree {
@@ -504,6 +539,9 @@ func connectEdges(sweptEdges []*ovEvent, op BoolOp) ([][]Coord, error) {
 	var branchVertices map[Coord]struct{}
 	for vertex, vertexID := range vertexIDs {
 		state := vertices[vertexID]
+		if state.degree == 0 {
+			continue
+		}
 		if state.degree > 2 {
 			if branchVertices == nil {
 				branchVertices = make(map[Coord]struct{})
@@ -653,7 +691,10 @@ func connectEdges(sweptEdges []*ovEvent, op BoolOp) ([][]Coord, error) {
 			return nil, overlayGraphError("boundary edge %d was not consumed", i)
 		}
 	}
-	return result, nil
+	if op == OpIntersection {
+		return assembleIntersection(result, contactEdges, vertexIDs, contactFlags), nil
+	}
+	return assembleResult(result), nil
 }
 
 // ringContainsStrict reports whether p is strictly inside the closed ring.
@@ -840,11 +881,7 @@ func overlayWithOptions(a, b Geometry, op BoolOp, scale float64, allowSnapError 
 	}
 
 	sweptEdges := o.run()
-	rings, err := connectEdges(sweptEdges, op)
-	if err != nil {
-		return nil, err
-	}
-	return assembleResult(rings), nil
+	return connectEdges(sweptEdges, op)
 }
 
 // subtypeName is a small helper for error messages.
@@ -858,4 +895,170 @@ func subtypeName(s Subtype) string {
 		return n
 	}
 	return "GEOMETRY"
+}
+
+// assembleIntersection preserves the exposed lower-dimensional parts of the
+// same noded arrangement. For valid polygonal inputs, covered contact vertices
+// have selected area-boundary or contact-line incidence, so no spatial rescan
+// of candidates against polygons is needed.
+func assembleIntersection(rings [][]Coord, edges []*ovEvent, ids map[Coord]int, flags []uint8) Geometry {
+	area := assembleResult(rings)
+	var polygons []Polygon
+	switch v := area.(type) {
+	case Polygon:
+		if !v.Empty() {
+			polygons = append(polygons, v)
+		}
+	case MultiPolygon:
+		polygons = v.Polygons
+	}
+	for i := range polygons {
+		for j := range polygons[i].Rings {
+			polygons[i].Rings[j] = canonicalIntersectionRing(polygons[i].Rings[j], false)
+		}
+		sort.Slice(polygons[i].Rings[1:], func(a, b int) bool { return intersectionCoordsLess(polygons[i].Rings[a+1], polygons[i].Rings[b+1]) })
+	}
+	sort.Slice(polygons, func(i, j int) bool { return intersectionCoordsLess(polygons[i].Rings[0], polygons[j].Rings[0]) })
+	lines := connectIntersectionLines(edges, ids)
+	var points []Point
+	for c, id := range ids {
+		if flags[id] == intersectionSubject|intersectionClipping {
+			points = append(points, Point{X: c.X, Y: c.Y})
+		}
+	}
+	sort.Slice(points, func(i, j int) bool { return intersectionCoordLess(points[i].Coord(), points[j].Coord()) })
+	var components []Geometry
+	if len(polygons) == 1 {
+		components = append(components, polygons[0])
+	} else if len(polygons) > 1 {
+		components = append(components, MultiPolygon{Polygons: polygons})
+	}
+	if len(lines) == 1 {
+		components = append(components, lines[0])
+	} else if len(lines) > 1 {
+		components = append(components, MultiLineString{Lines: lines})
+	}
+	if len(points) == 1 {
+		components = append(components, points[0])
+	} else if len(points) > 1 {
+		components = append(components, MultiPoint{Points: points})
+	}
+	if len(components) == 0 {
+		return Polygon{}
+	}
+	if len(components) == 1 {
+		return components[0]
+	}
+	return GeometryCollection{Geometries: components}
+}
+
+func intersectionCoordLess(a, b Coord) bool { return a.X < b.X || (a.X == b.X && a.Y < b.Y) }
+func intersectionCoordsLess(a, b []Coord) bool {
+	for i := 0; i < len(a) && i < len(b); i++ {
+		if a[i] != b[i] {
+			return intersectionCoordLess(a[i], b[i])
+		}
+	}
+	return len(a) < len(b)
+}
+
+func canonicalIntersectionRing(ring []Coord, reversible bool) []Coord {
+	n := len(ring) - 1
+	if n <= 0 {
+		return ring
+	}
+	start := 0
+	for i := 1; i < n; i++ {
+		if intersectionCoordLess(ring[i], ring[start]) {
+			start = i
+		}
+	}
+	out := make([]Coord, n+1)
+	for i := 0; i < n; i++ {
+		out[i] = ring[(start+i)%n]
+	}
+	out[n] = out[0]
+	if reversible {
+		reverse := make([]Coord, n+1)
+		for i := 0; i < n; i++ {
+			reverse[i] = ring[(start-i+n)%n]
+		}
+		reverse[n] = reverse[0]
+		if intersectionCoordsLess(reverse, out) {
+			return reverse
+		}
+	}
+	return out
+}
+
+// Walk each contact segment once, stopping at branches and joining through
+// degree-two vertices. The endpoint IDs come from the area connector's index.
+func connectIntersectionLines(edges []*ovEvent, ids map[Coord]int) []LineString {
+	if len(edges) == 0 {
+		return nil
+	}
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].p != edges[j].p {
+			return intersectionCoordLess(edges[i].p, edges[j].p)
+		}
+		return intersectionCoordLess(edges[i].other.p, edges[j].other.p)
+	})
+	adjacency := make(map[int][]int)
+	unique := edges[:0]
+	for _, e := range edges {
+		if len(unique) > 0 && unique[len(unique)-1].p == e.p && unique[len(unique)-1].other.p == e.other.p {
+			continue
+		}
+		i := len(unique)
+		unique = append(unique, e)
+		adjacency[ids[e.p]] = append(adjacency[ids[e.p]], i)
+		adjacency[ids[e.other.p]] = append(adjacency[ids[e.other.p]], i)
+	}
+	visited := make([]bool, len(unique))
+	var lines []LineString
+	walk := func(start Coord, edge int) {
+		path := []Coord{start}
+		current := start
+		for !visited[edge] {
+			visited[edge] = true
+			e := unique[edge]
+			next := e.p
+			if current == next {
+				next = e.other.p
+			}
+			path = append(path, next)
+			current = next
+			incident := adjacency[ids[current]]
+			if len(incident) != 2 {
+				break
+			}
+			if incident[0] == edge {
+				edge = incident[1]
+			} else {
+				edge = incident[0]
+			}
+		}
+		if path[0] == path[len(path)-1] {
+			path = canonicalIntersectionRing(path, true)
+		} else if intersectionCoordLess(path[len(path)-1], path[0]) {
+			for a, b := 0, len(path)-1; a < b; a, b = a+1, b-1 {
+				path[a], path[b] = path[b], path[a]
+			}
+		}
+		lines = append(lines, LineString{Points: path})
+	}
+	for i, e := range unique {
+		for _, c := range []Coord{e.p, e.other.p} {
+			if len(adjacency[ids[c]]) != 2 && !visited[i] {
+				walk(c, i)
+			}
+		}
+	}
+	for i, e := range unique {
+		if !visited[i] {
+			walk(e.p, i)
+		}
+	}
+	sort.Slice(lines, func(i, j int) bool { return intersectionCoordsLess(lines[i].Points, lines[j].Points) })
+	return lines
 }

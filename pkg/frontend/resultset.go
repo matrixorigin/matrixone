@@ -107,6 +107,9 @@ type ResultSet interface {
 type MysqlColumn struct {
 	ColumnImpl
 
+	// Immutable source metadata retained for geometry wire encoding, including cursors.
+	geometryType types.Type
+
 	//schema name
 	schema string
 

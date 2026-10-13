@@ -272,6 +272,12 @@ func (p *wktParser) parseRingSeq() ([][]Coord, error) {
 		if err != nil {
 			return nil, err
 		}
+		if len(ring) == 0 {
+			return nil, ValidateLinearRingStructure(0, Coord{}, Coord{})
+		}
+		if err := ValidateLinearRingStructure(len(ring), ring[0], ring[len(ring)-1]); err != nil {
+			return nil, err
+		}
 		rings = append(rings, ring)
 		if p.consumeByte(',') {
 			continue

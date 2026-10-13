@@ -155,3 +155,32 @@ func TestParseWKTInvalid(t *testing.T) {
 		})
 	}
 }
+
+func TestPolygonRingAdmissionStructure(t *testing.T) {
+	for _, tc := range []struct{ wkt, json string }{
+		{"POLYGON((0 0,1 0,1 1))", `{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1]]]}`},
+		{"POLYGON((0 0,1 0,0 0))", `{"type":"Polygon","coordinates":[[[0,0],[1,0],[0,0]]]}`},
+		{"POLYGON((0 0,1 0,1 1,0 0.0000000001))", `{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0.0000000001]]]}`},
+		{"MULTIPOLYGON(((0 0,1 0,1 1)))", `{"type":"MultiPolygon","coordinates":[[[[0,0],[1,0],[1,1]]]]}`},
+		{"GEOMETRYCOLLECTION(POLYGON((0 0,1 0,1 1)))", `{"type":"GeometryCollection","geometries":[{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1]]]}]}`},
+	} {
+		_, err := ParseWKT(tc.wkt)
+		require.Error(t, err, tc.wkt)
+		_, err = ParseGeoJSON([]byte(tc.json))
+		require.Error(t, err, tc.json)
+	}
+	for _, text := range []string{"POLYGON EMPTY", "MULTIPOLYGON(EMPTY,((0 0,1 0,0 1,0 0)))", "POLYGON((0 0,1 1,1 0,0 1,0 0))"} {
+		_, err := ParseWKT(text)
+		require.NoError(t, err, text)
+	}
+	_, err := ParseGeoJSON([]byte(`{"type":"Polygon","coordinates":[[]]}`))
+	require.Error(t, err)
+	_, err = ParseGeoJSON([]byte(`{"type":"Polygon","coordinates":[]}`))
+	require.NoError(t, err)
+	// Codecs still expose old malformed WKB for inspection/export. Admission is
+	// the constructor's responsibility, not a new stored-data reader policy.
+	historical := Polygon{Rings: [][]Coord{{{0, 0}, {1, 0}, {1, 1}}}}
+	g, err := ReadWKB(WriteWKB(historical))
+	require.NoError(t, err)
+	require.Equal(t, historical, g)
+}
