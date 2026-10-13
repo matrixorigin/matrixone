@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -85,10 +86,18 @@ func TestBackgroundRestoreClassificationUsesParsedStatement(t *testing.T) {
 	t.Cleanup(func() { GetComputationWrapperInBack = original })
 	calls := 0
 	gotRestore := false
-	GetComputationWrapperInBack = func(_ *ExecCtx, _ string, input *UserInput, _ string, _ engine.Engine, _ *process.Process, _ FeSession) ([]ComputationWrapper, error) {
+	var injectedErr error
+	GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserInput, user string, eng engine.Engine, proc *process.Process, ses FeSession) ([]ComputationWrapper, error) {
 		calls++
 		gotRestore = input.isRestore
-		return nil, nil
+		if input.getStmt() != nil {
+			wrappers, err := original(execCtx, db, input, user, eng, proc, ses)
+			require.NoError(t, err)
+			require.Len(t, wrappers, 1)
+			require.Same(t, input.getStmt(), wrappers[0].GetAst())
+			wrappers[0].Free()
+		}
+		return nil, injectedErr
 	}
 	// The first parser and classification run through the real background owner.
 	// Capture the downstream input without opening an unrelated transaction.
@@ -127,6 +136,22 @@ func TestBackgroundRestoreClassificationUsesParsedStatement(t *testing.T) {
 		require.Error(t, back.Exec(ctx, sql))
 		require.Equal(t, before, calls)
 	}
+	// Physical ASTs bypass parsing and stay caller-owned on success, downstream
+	// failure and early rejection. An unquoted hyphen exposes any reparse.
+	for _, wantErr := range []error{nil, moerr.NewInternalErrorNoCtx("compile rejected")} {
+		injectedErr = wantErr
+		stmt := tree.NewDropDatabase(tree.Identifier("MiXeD-Name"), true)
+		before := calls
+		require.ErrorIs(t, back.ExecStmt(ctx, stmt), wantErr)
+		require.Equal(t, before+1, calls)
+		require.Equal(t, tree.Identifier("MiXeD-Name"), stmt.Name)
+		require.Error(t, back.ExecStmt(nil, stmt))
+		require.Error(t, back.ExecStmt(context.Background(), stmt))
+		require.Equal(t, tree.Identifier("MiXeD-Name"), stmt.Name)
+		stmt.Free()
+	}
+	injectedErr = nil
+	require.Error(t, back.ExecStmt(ctx, nil))
 	txn := mock_frontend.NewMockTxnOperator(ctrl)
 	txn.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
 	back.backSes.GetTxnHandler().SetShareTxn(txn)
@@ -140,6 +165,10 @@ func TestBackgroundRestoreClassificationUsesParsedStatement(t *testing.T) {
 		require.ErrorContains(t, back.Exec(ctx, sql), "share transaction")
 		require.Equal(t, before, calls)
 	}
+	stmt := &tree.BeginTransaction{}
+	before := calls
+	require.ErrorContains(t, back.ExecStmt(ctx, stmt), "share transaction")
+	require.Equal(t, before, calls)
 	// The mock shared transaction has no live resource to roll back on Close.
 	back.backSes.GetTxnHandler().SetShareTxn(nil)
 }

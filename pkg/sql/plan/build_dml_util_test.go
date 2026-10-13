@@ -21,7 +21,9 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -1184,4 +1186,39 @@ func TestIndexNeedsRewriteForUpdateIvfColumns(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestMode2ForwardForeignKeysReadDeclaredAliases(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	result := func(rows [][]string) executor.Result {
+		if len(rows) == 0 {
+			return executor.Result{}
+		}
+		b := batch.NewWithSize(len(rows[0]))
+		for col := range b.Vecs {
+			b.Vecs[col] = vector.NewVec(types.T_varchar.ToType())
+			for _, row := range rows {
+				require.NoError(t, vector.AppendBytes(b.Vecs[col], []byte(row[col]), false, proc.Mp()))
+			}
+		}
+		b.SetRowCount(len(rows))
+		return executor.Result{Batches: []*batch.Batch{b}, Mp: proc.Mp()}
+	}
+	var queries []string
+	read := func(sql string) (executor.Result, error) {
+		queries = append(queries, sql)
+		if strings.HasPrefix(sql, "select distinct") {
+			return result([][]string{{"parentdb", "parent"}, {"OtherDB", "parent"}}), nil
+		}
+		require.Contains(t, sql, "refer_db_name = 'parentdb'")
+		require.Contains(t, sql, "refer_table_name = 'parent'")
+		return result([][]string{{"ChildDB", "Child", "fk", "parent_id", "id", "RESTRICT", "CASCADE"}}), nil
+	}
+	declarations, extended, err := ReadMode2ForeignKeysReferredTo(&plan.TableDef{}, "ParentDB", "Parent", read)
+	require.NoError(t, err)
+	require.False(t, extended)
+	require.Len(t, queries, 2)
+	require.Len(t, declarations, 1)
+	require.Equal(t, "parent_id", declarations[FkReferKey{Db: "ChildDB", Tbl: "Child"}]["fk"][0].Col)
+	require.Zero(t, proc.Mp().CurrNB(), "catalog results must be released")
 }

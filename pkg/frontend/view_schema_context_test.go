@@ -302,6 +302,7 @@ func TestViewSchemaSubscriptionSourceResolveUsesPublisherAccount(t *testing.T) {
 					})
 			}
 			if !tc.failure && !tc.cancel {
+				relation.EXPECT().GetTableName().Return(physicalName).AnyTimes()
 				relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)).AnyTimes()
 				relation.EXPECT().GetTableDef(gomock.Any()).DoAndReturn(func(got context.Context) *pb.TableDef {
 					account, err := defines.GetAccountId(got)

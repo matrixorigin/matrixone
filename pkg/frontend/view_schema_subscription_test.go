@@ -104,6 +104,7 @@ func TestViewSchemaSubscriptionCrossDatabaseDescribe(t *testing.T) {
 							}
 							relation := mock_frontend.NewMockRelation(ctrl)
 							database.EXPECT().Relation(gomock.Any(), def.Name, gomock.Any()).Return(relation, nil).AnyTimes()
+							relation.EXPECT().GetTableName().Return(def.Name).AnyTimes()
 							relation.EXPECT().GetTableID(gomock.Any()).Return(def.TblId).AnyTimes()
 							relation.EXPECT().GetTableDef(gomock.Any()).DoAndReturn(func(ctx context.Context) *pb.TableDef {
 								if key == "other.source" {

@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
-	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -182,6 +181,10 @@ var GetMoTableRowsFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
 
 type subscription struct {
 	valid bool
+	// Borrowed transaction handles keep old-function fallback on the same
+	// physical publisher identity without repeating catalog resolution.
+	database engine.Database
+	relation engine.Relation
 
 	oriAccId      uint64
 	oriDatabaseId uint64
@@ -203,16 +206,13 @@ func (s subscription) String() string {
 
 func isSubscribedTable(
 	proc *process.Process,
+	eng engine.Engine,
 	reqAcc uint32,
 	db engine.Database,
 	dbName, tblName string,
 ) (sub subscription, err error) {
 
-	var (
-		sql  string
-		ret  [][]interface{}
-		meta *plan.SubscriptionMeta
-	)
+	var meta *plan.SubscriptionMeta
 
 	if db.IsSubscription(proc.Ctx) {
 		defer func() {
@@ -233,7 +233,6 @@ func isSubscribedTable(
 					zap.String("db name", dbName),
 					zap.String("tbl name", tblName),
 					zap.String("subscription", sub.String()),
-					zap.String("sql", commonutil.Abbreviate(sql, 500)),
 				)
 			}
 		}()
@@ -244,41 +243,28 @@ func isSubscribedTable(
 				moerr.NewInternalErrorNoCtx(fmt.Sprintf("get subscription meta failed, err: %v", err))
 		}
 
-		if meta.Tables != pubsub.TableAll && !strings.Contains(meta.Tables, tblName) {
+		if meta == nil {
+			return sub, moerr.NewInternalErrorNoCtx("subscription metadata is unavailable")
+		}
+		publisherCtx := defines.AttachAccountId(proc.Ctx, uint32(meta.AccountId))
+		publisherDB, err := eng.Database(publisherCtx, meta.DbName, proc.GetTxnOperator())
+		if err != nil {
+			return sub, err
+		}
+		relation, err := publisherDB.Relation(publisherCtx, tblName, nil)
+		if err != nil {
+			return sub, err
+		}
+		if relation == nil || !pubsub.InSubMetaTables(meta, relation.GetTableName()) {
 			return sub, moerr.NewInternalErrorNoCtx("no such subscribed table")
 		}
 
-		// check passed, get acc, db, tbl info
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		ctx = defines.AttachAccountId(ctx, uint32(sysAccountID))
-		defer cancel()
-
-		sql = fmt.Sprintf(`
-					select 
-    					reldatabase_id, rel_id 
-					from 
-					    mo_catalog.mo_tables 
-					where 
-					    account_id = %d and reldatabase = '%s' and relname = '%s';`,
-			meta.AccountId, meta.DbName, tblName)
-
-		ctx = process.ContextWithWarningSink(ctx, proc.WarningSink)
-		ret, err = proc.GetSessionInfo().SqlHelper.ExecSqlWithCtx(ctx, sql)
-		if err != nil {
-			return sub,
-				moerr.NewInternalErrorNoCtx(fmt.Sprintf("exec get subscribed tbl info sql failed, err: %v", err))
-		}
-
-		if len(ret) != 1 {
-			return sub,
-				moerr.NewInternalErrorNoCtx(fmt.Sprintf("get the subscribed tbl info empty: %s", tblName))
-		}
-
 		sub.valid = true
+		sub.database, sub.relation = publisherDB, relation
 		sub.oriAccId = uint64(meta.AccountId)
-		sub.oriDatabaseId = ret[0][0].(uint64)
-		sub.oriTableId = ret[0][1].(uint64)
-		sub.oriTableName = tblName
+		sub.oriDatabaseId = uint64(relation.GetDBID(publisherCtx))
+		sub.oriTableId = relation.GetTableID(publisherCtx)
+		sub.oriTableName = relation.GetTableName()
 		sub.oriDatabaseName = meta.DbName
 
 		return sub, nil
@@ -395,7 +381,7 @@ func MoTableSizeRowsHelper(
 			positions[i] = len(tblIds)
 			var sub subscription
 			if sub, err = isSubscribedTable(
-				proc, accountId, db, dbName, tblName); err != nil {
+				proc, eng, accountId, db, dbName, tblName); err != nil {
 				return nil, nil, nil, err
 			} else if sub.valid {
 				// is subscription
@@ -549,23 +535,19 @@ func MoTableRowsOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 
 			var sub subscription
 			if sub, err = isSubscribedTable(
-				proc, accId, dbo, dbStr, tblStr); err != nil {
+				proc, e, accId, dbo, dbStr, tblStr); err != nil {
 				logutil.Error("MoTableRowsOld",
 					zap.String("source", "isSubscribeTable"),
 					zap.Error(err))
 				return err
 			} else if sub.valid {
-				// subscription
 				foolCtx = defines.AttachAccountId(foolCtx, uint32(sub.oriAccId))
-				dbo, err = e.Database(foolCtx, sub.oriDatabaseName, txn)
+				rel = sub.relation
+			} else {
+				rel, err = dbo.Relation(foolCtx, tblStr, nil)
 				if err != nil {
 					return err
 				}
-			}
-
-			rel, err = dbo.Relation(foolCtx, tblStr, nil)
-			if err != nil {
-				return err
 			}
 
 			var rows uint64
@@ -652,23 +634,19 @@ func MoTableSizeOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 
 			var sub subscription
 			if sub, err = isSubscribedTable(
-				proc, accId, dbo, dbStr, tblStr); err != nil {
+				proc, e, accId, dbo, dbStr, tblStr); err != nil {
 				logutil.Error("MoTableSizeOld",
 					zap.String("source", "isSubscribeTable"),
 					zap.Error(err))
 				return err
 			} else if sub.valid {
-				// subscription
 				foolCtx = defines.AttachAccountId(foolCtx, uint32(sub.oriAccId))
-				dbo, err = e.Database(foolCtx, sub.oriDatabaseName, txn)
+				dbo, rel = sub.database, sub.relation
+			} else {
+				rel, err = dbo.Relation(foolCtx, tblStr, nil)
 				if err != nil {
 					return err
 				}
-			}
-
-			rel, err = dbo.Relation(foolCtx, tblStr, nil)
-			if err != nil {
-				return err
 			}
 
 			var oSize, iSize uint64
@@ -739,6 +717,7 @@ func specialTableFilterForNonSys(ctx context.Context, dbStr, tblStr string) (boo
 	if err != nil {
 		return false, err
 	}
+	dbStr, tblStr = functionRoutingNames(ctx, dbStr, tblStr)
 
 	if accountId == sysAccountID || dbStr != catalog.MO_CATALOG {
 		return false, nil
@@ -749,6 +728,13 @@ func specialTableFilterForNonSys(ctx context.Context, dbStr, tblStr string) (boo
 	}
 
 	return false, nil
+}
+
+func functionRoutingNames(ctx context.Context, dbName, tableName string) (string, string) {
+	if defines.Mode2NameResolutionEnabled(ctx) {
+		return strings.ToLower(dbName), strings.ToLower(tableName)
+	}
+	return dbName, tableName
 }
 
 // MoTableColMax return the max value of the column
@@ -797,9 +783,10 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 			}
 		} else {
 			dbStr, tableStr, columnStr := string(db), string(table), string(column)
+			routeDB, routeTable := functionRoutingNames(proc.Ctx, dbStr, tableStr)
 
 			// Magic code. too confused.
-			if tableStr == "mo_database" || tableStr == "mo_tables" || tableStr == "mo_columns" || tableStr == "sys_async_task" {
+			if routeTable == "mo_database" || routeTable == "mo_tables" || routeTable == "mo_columns" || routeTable == "sys_async_task" {
 				return moerr.NewInvalidInputf(proc.Ctx, "%s has bad input table %s", fnName, tableStr)
 			}
 			if columnStr == "__mo_rowid" {
@@ -807,7 +794,8 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 			}
 
 			ctx := proc.Ctx
-			if isClusterTable(dbStr, tableStr) {
+			var sub *plan.SubscriptionMeta
+			if isClusterTable(routeDB, routeTable) {
 				//if it is the cluster table in the general account, switch into the sys account
 				ctx = sysAccountCtx
 			}
@@ -819,14 +807,12 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 
 			if db.IsSubscription(ctx) {
 				// get sub info
-				var sub *plan.SubscriptionMeta
 				if sub, err = proc.GetSessionInfo().SqlHelper.GetSubscriptionMeta(dbStr); err != nil {
 					return err
 				}
-				if sub != nil && !pubsub.InSubMetaTables(sub, tableStr) {
-					return moerr.NewInternalErrorf(ctx, "table %s not found in publication %s", tableStr, sub.Name)
+				if sub == nil {
+					return moerr.NewInternalErrorf(ctx, "subscription %s is unavailable", dbStr)
 				}
-
 				// replace with pub account id
 				ctx = defines.AttachAccountId(ctx, uint32(sub.AccountId))
 				// replace with real dbname(sub.DbName)
@@ -838,6 +824,12 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 			rel, err := db.Relation(ctx, tableStr, nil)
 			if err != nil {
 				return err
+			}
+			if rel == nil {
+				return moerr.NewNoSuchTable(ctx, dbStr, tableStr)
+			}
+			if sub != nil && !pubsub.InSubMetaTables(sub, rel.GetTableName()) {
+				return moerr.NewInternalErrorf(ctx, "table %s not found in publication %s", tableStr, sub.Name)
 			}
 			tableColumns, err := rel.TableColumns(ctx)
 			if err != nil {

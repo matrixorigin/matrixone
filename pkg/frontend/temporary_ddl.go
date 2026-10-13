@@ -68,11 +68,13 @@ func (ses *Session) PublishTemporaryTable(db, alias, physical string) {
 		ses.tempTableIdentities = make(map[string]tempTableIdentity)
 	}
 	if old, ok := ses.tempTables[key]; ok {
+		ses.updateTempTableFoldedLocked(key, ses.tempTableIdentityLocked(key), old, false)
 		delete(ses.tempTablesRev, old)
 	}
 	ses.tempTables[key] = physical
 	ses.tempTablesRev[physical] = key
 	ses.tempTableIdentities[key] = tempTableIdentity{dbName: db, alias: alias}
+	ses.updateTempTableFoldedLocked(key, ses.tempTableIdentities[key], physical, true)
 	ses.tempTableVersion++
 }
 
@@ -85,6 +87,7 @@ func (ses *Session) RetireTemporaryTable(db, alias, physical string, indexes []s
 			return
 		}
 		ses.forgetTemporaryTableUndoLocked(key)
+		ses.updateTempTableFoldedLocked(key, ses.tempTableIdentityLocked(key), name, false)
 		delete(ses.tempTables, key)
 		delete(ses.tempTablesRev, name)
 		delete(ses.tempTableIdentities, key)

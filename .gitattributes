@@ -1,0 +1,3 @@
+# mo-tester prints empty result columns with significant trailing spaces.
+test/distributed/cases/database/lower_case_table_names_2_consumers.result whitespace=-trailing-space
+test/distributed/cases/ddl/alter_table_add_drop_primary_key.result whitespace=-trailing-space

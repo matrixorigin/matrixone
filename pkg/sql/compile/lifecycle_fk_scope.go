@@ -22,6 +22,7 @@ import (
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/identifier"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -579,8 +580,19 @@ func (c *Compile) pinCreateNames(q *plan.CreateTable, database string) (bool, er
 		if receipt.closed || receipt.owner != c.proc.GetTxnOperator() || actor != receipt.admission.accountID {
 			return false, moerr.NewInternalError(c.proc.Ctx, "invalid CREATE lifecycle owner")
 		}
+		admittedNames := receipt.admission.createNames
+		mode2 := defines.Mode2NameResolutionEnabled(c.proc.Ctx)
+		if mode2 {
+			admittedNames = make(map[plan2.FkReferKey]struct{}, len(admittedNames))
+			for name := range receipt.admission.createNames {
+				admittedNames[plan2.FkReferKey{Db: identifier.Fold(name.Db), Tbl: identifier.Fold(name.Tbl)}] = struct{}{}
+			}
+		}
 		for name := range createNameDomain(q, database) {
-			if _, ok := receipt.admission.createNames[name]; !ok {
+			if mode2 {
+				name = plan2.FkReferKey{Db: identifier.Fold(name.Db), Tbl: identifier.Fold(name.Tbl)}
+			}
+			if _, ok := admittedNames[name]; !ok {
 				return false, moerr.NewInternalError(c.proc.Ctx, "CREATE exceeds admitted replacement names")
 			}
 		}
@@ -634,11 +646,22 @@ func (c *Compile) pinCreateNames(q *plan.CreateTable, database string) (bool, er
 		}
 		return 0
 	})
+	namespaceDomain := maps.Clone(domain)
+	for _, index := range q.IndexTables {
+		namespaceDomain[plan2.FkReferKey{Db: database, Tbl: index.Name}] = struct{}{}
+	}
+	namespaceResults, err := c.pinMode2NameDomain(namespaceDomain, policy)
+	if err != nil {
+		return false, err
+	}
 	planSnapshot, hasPlanSnapshot := c.PlanSnapshotTS()
 	if !hasPlanSnapshot {
 		planSnapshot = c.proc.GetTxnOperator().SnapshotTS()
 	}
 	refresh := false
+	for _, result := range namespaceResults {
+		refresh = refresh || result.Timestamp.IsEmpty() || !result.Timestamp.Less(planSnapshot)
+	}
 	for _, name := range names {
 		result, err := c.lockCatalogName(tableRel, actor, []string{name.Db, name.Tbl}, lock.LockMode_Exclusive, policy)
 		if err != nil {
@@ -703,7 +726,7 @@ func (c *Compile) prepareCreateNamePlan(p *plan.Plan) (*plan.Plan, error) {
 
 // Pin replacement endpoints before any DROP/COPY effects. G excludes FK
 // publication, while endpoint name pins also exclude index-definition writers.
-func (c *Compile) admitReplacementNames(database, source, target string, rel engine.Relation, added []*plan.AlterTableAddFk) (map[plan2.FkReferKey]struct{}, error) {
+func (c *Compile) collectReplacementNames(database, source, target string, rel engine.Relation, added []*plan.AlterTableAddFk) (map[plan2.FkReferKey]struct{}, error) {
 	domain := map[plan2.FkReferKey]struct{}{{Db: database, Tbl: target}: {}, {Db: database, Tbl: source}: {}}
 	actor, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
@@ -752,6 +775,14 @@ func (c *Compile) admitReplacementNames(database, source, target string, rel eng
 		})
 		res.Close()
 	}
+	return domain, nil
+}
+
+func (c *Compile) pinReplacementNames(domain map[plan2.FkReferKey]struct{}, prefixDatabase string) error {
+	actor, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
 	keys := slices.Collect(maps.Keys(domain))
 	slices.SortFunc(keys, func(a, b plan2.FkReferKey) int {
 		if a.Db != b.Db {
@@ -770,21 +801,56 @@ func (c *Compile) admitReplacementNames(database, source, target string, rel eng
 	})
 	dbs, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	tables, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
 	if err != nil {
-		return nil, err
+		return err
+	}
+	dbNames := make(map[string]struct{})
+	for _, key := range keys {
+		dbNames[key.Db] = struct{}{}
+	}
+	for _, name := range slices.Sorted(maps.Keys(dbNames)) {
+		if _, err := c.lockCatalogName(dbs, actor, []string{name}, lock.LockMode_Shared, lock.WaitPolicy_FastFail); err != nil {
+			return err
+		}
+	}
+	if prefixDatabase != "" && defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
+		db, err := c.e.Database(c.proc.Ctx, prefixDatabase, c.proc.GetTxnOperator())
+		if err != nil {
+			return err
+		}
+		id, err := strconv.ParseUint(db.GetDatabaseId(c.proc.Ctx), 10, 64)
+		if err != nil {
+			return err
+		}
+		if err := lockHiddenIndexNamespace(c, id, lock.LockMode_Exclusive); err != nil {
+			return err
+		}
+	}
+	if _, err := c.pinMode2NameDomain(domain, lock.WaitPolicy_FastFail); err != nil {
+		return err
 	}
 	for _, key := range keys {
-		if _, err := c.lockCatalogName(dbs, actor, []string{key.Db}, lock.LockMode_Shared, lock.WaitPolicy_FastFail); err != nil {
-			return nil, err
-		}
 		if _, err := c.lockCatalogName(tables, actor, []string{key.Db, key.Tbl}, lock.LockMode_Exclusive, lock.WaitPolicy_FastFail); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	// The caller's existing replacement frontier follows these pins, before
 	// any effects. Do not add another frontier or refresh inside nested CREATE.
+	return nil
+}
+
+// Collect once under the outer lifecycle frontier, then pin the same bounded
+// domain before any physical-table locks. Its receipt is borrowed by CREATE.
+func (c *Compile) admitReplacementNames(database, source, target string, rel engine.Relation, added []*plan.AlterTableAddFk) (map[plan2.FkReferKey]struct{}, error) {
+	domain, err := c.collectReplacementNames(database, source, target, rel, added)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.pinReplacementNames(domain, database); err != nil {
+		return nil, err
+	}
 	return domain, nil
 }

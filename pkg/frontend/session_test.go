@@ -481,6 +481,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 			}).AnyTimes()
 		table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
+		table.EXPECT().GetTableName().Return("t1").AnyTimes()
 		table.EXPECT().GetEngineType().Return(engine.Disttae).AnyTimes()
 		table.EXPECT().ApproxObjectsNum(gomock.Any()).Return(0).AnyTimes()
 		db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
@@ -500,7 +501,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		convey.So(defDBName, convey.ShouldEqual, "")
 		convey.So(tcc.DatabaseExists("abc", &plan2.Snapshot{TS: ts}), convey.ShouldBeTrue)
 
-		_, _, err := tcc.getRelation("abc", "t1", nil, &plan2.Snapshot{TS: ts})
+		_, _, _, err := tcc.getRelation("abc", "t1", nil, &plan2.Snapshot{TS: ts})
 		convey.So(err, convey.ShouldBeNil)
 
 		object, tableRef, _ := tcc.Resolve("abc", "t1", &plan2.Snapshot{TS: ts})

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -69,6 +70,38 @@ func LockRowsForAdmissionResult(
 	mode lock.LockMode, group uint32,
 	waitPolicy ...lock.WaitPolicy,
 ) (lock.Result, error) {
+	return lockRowsForAdmissionResult(ctx, eng, proc, tableID, bat, idx, pkType, mode, group, false, waitPolicy...)
+}
+
+// LockRowsForNameAdmissionResult certifies synthetic namespace keys without
+// probing catalog rows or advancing the transaction snapshot. Unlike the
+// existing RC lifecycle API, pessimistic SI is allowed with a usable grant
+// watermark no newer than its fixed snapshot. Both APIs share key validation,
+// exact-row capacity handling, binding checks and transaction-owned cleanup.
+func LockRowsForNameAdmissionResult(
+	ctx context.Context, eng engine.Engine, proc *process.Process,
+	tableID uint64, bat *batch.Batch, idx int32, pkType types.Type,
+	mode lock.LockMode, group uint32, waitPolicy ...lock.WaitPolicy,
+) (lock.Result, error) {
+	result, err := lockRowsForAdmissionResult(ctx, eng, proc, tableID, bat, idx, pkType, mode, group, true, waitPolicy...)
+	if err != nil {
+		return lock.Result{}, err
+	}
+	if !proc.GetTxnOperator().Txn().IsRCIsolation() {
+		snapshot := proc.GetTxnOperator().SnapshotTS()
+		if result.Timestamp.IsEmpty() || snapshot.Less(result.Timestamp) ||
+			(result.TableDefChangedAt != nil && snapshot.Less(*result.TableDefChangedAt)) {
+			return lock.Result{}, moerr.NewTxnWWConflict(ctx, tableID, "namespace snapshot is stale or unproven")
+		}
+	}
+	return result, nil
+}
+
+func lockRowsForAdmissionResult(
+	ctx context.Context, eng engine.Engine, proc *process.Process,
+	tableID uint64, bat *batch.Batch, idx int32, pkType types.Type,
+	mode lock.LockMode, group uint32, allowSI bool, waitPolicy ...lock.WaitPolicy,
+) (lock.Result, error) {
 	if len(waitPolicy) > 1 {
 		return lock.Result{}, moerr.NewInternalError(ctx, "invalid lifecycle lock wait policy")
 	}
@@ -78,7 +111,7 @@ func LockRowsForAdmissionResult(
 		return lock.Result{}, moerr.NewInternalError(ctx, "invalid lifecycle admission keys")
 	}
 	if proc == nil || proc.GetTxnOperator() == nil || !proc.GetTxnOperator().Txn().IsPessimistic() ||
-		!proc.GetTxnOperator().Txn().IsRCIsolation() ||
+		(!proc.GetTxnOperator().Txn().IsRCIsolation() && (!allowSI || proc.GetTxnOperator().Txn().Isolation != txnpb.TxnIsolation_SI)) ||
 		tableID == 0 || (mode != lock.LockMode_Shared && mode != lock.LockMode_Exclusive) ||
 		getFetchRowsFunc(pkType) == nil {
 		return lock.Result{}, moerr.NewInternalError(ctx, "invalid lifecycle lock admission")

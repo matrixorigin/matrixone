@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -12644,7 +12645,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 
 		var subMeta *SubscriptionMeta
 		subMeta, err = builder.compCtx.GetSubscriptionMeta(catalogDatabase, snapshot)
-		if err == nil && builder.isSkipResolveTableDef && len(ctx.viewPath) == 0 && snapshot == nil && subMeta == nil {
+		if err == nil && builder.isSkipResolveTableDef && len(ctx.viewPath) == 0 && snapshot == nil && subMeta == nil &&
+			!defines.Mode2NameResolutionEnabled(builder.GetContext()) {
 			var tableDef *TableDef
 			tableDef, err = builder.compCtx.BuildTableDefByMoColumns(catalogDatabase, table)
 			if err != nil {
