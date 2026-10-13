@@ -1176,7 +1176,9 @@ func alterCopyCreateOptions(qry *plan.AlterTable) executor.StatementOption {
 	// The temporary relation is not externally visible. Its parent backrefs are
 	// reconciled after the original relation is replaced, so avoid materializing
 	// an intermediate parent->temporary-table relationship here.
-	opts := executor.StatementOption{}.WithIgnoreForeignKey()
+	opts := executor.StatementOption{}.
+		WithIgnoreForeignKey().
+		WithSkipIndexTaskRegistration()
 	opts = opts.WithDisableLock()
 	if oldLogicalId := qry.GetTableDef().GetLogicalId(); oldLogicalId != 0 {
 		opts = opts.WithKeepLogicalId(oldLogicalId)
@@ -1525,18 +1527,20 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		return err
 	}
 
-	//5. ISCP: temp table already created pitr and iscp job with temp table name
-	// and we don't want iscp to run with temp table so drop pitr and iscp job with the temp table here
-	newTmpTableDef := newRel.CopyTableDef(c.proc.Ctx)
-	err = DropAllIndexCdcTasks(c, newTmpTableDef, dbName, copyTblName)
-	if err != nil {
-		return err
-	}
+	//5. Private preparation suppresses transient index tasks; preserve this
+	// cleanup only for callers that did not opt out of registration.
+	if !createTmpOpts.SkipIndexTaskRegistration() {
+		newTmpTableDef := newRel.CopyTableDef(c.proc.Ctx)
+		err = DropAllIndexCdcTasks(c, newTmpTableDef, dbName, copyTblName)
+		if err != nil {
+			return err
+		}
 
-	// Idxcron: remove index update tasks with temp table id
-	err = DropAllIndexUpdateTasks(c, newTmpTableDef, dbName, copyTblName)
-	if err != nil {
-		return err
+		// Idxcron: remove index update tasks with temp table id
+		err = DropAllIndexUpdateTasks(c, newTmpTableDef, dbName, copyTblName)
+		if err != nil {
+			return err
+		}
 	}
 
 	// 6. copy the original table data to the temporary replica table
@@ -3380,7 +3384,10 @@ func cloneUnaffectedIndexes(
 			if cloneBehavior.ContainsDelete(oriIdxTblName.AlgoTableType) {
 				// delete all content but avoid truncate table with WHERE TRUE
 				sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE TRUE", dbName, newIdxTblName.IndexTableName)
-				if err := c.runSql(sql); err != nil {
+				if err := c.runSqlWithOptions(
+					sql,
+					executor.StatementOption{}.WithDisableLock(),
+				); err != nil {
 					return err
 				}
 			}

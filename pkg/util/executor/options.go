@@ -640,6 +640,15 @@ func (opts StatementOption) WithKeepRelKind(kind string) StatementOption {
 	return opts
 }
 
+func (opts StatementOption) WithSkipIndexTaskRegistration() StatementOption {
+	opts.skipIndexTaskRegistration = true
+	return opts
+}
+
+func (opts StatementOption) SkipIndexTaskRegistration() bool {
+	return opts.skipIndexTaskRegistration
+}
+
 func (opts StatementOption) WithIgnorePublish() StatementOption {
 	opts.ignorePublish = true
 	return opts
