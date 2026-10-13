@@ -4,7 +4,7 @@
 
 任务：[#28998](https://github.com/matrixorigin/matrixone/issues/28998)，承接 [C03/#29482](https://github.com/matrixorigin/matrixone/issues/29482) 的全部范围；上位任务 [#29479](https://github.com/matrixorigin/matrixone/issues/29479)。接续既有 PR [#29374](https://github.com/matrixorigin/matrixone/pull/29374)，批准时为draft，当前ready状态保持不变，不另做重复 no-op 修复。
 
-当前维护编号（2026-10-13，冻结main `21f19ae063`）：C03协议能力 **112**、独立迁移 **4.0.15**、`CreateTable.database_defaults#18`、`INTERNAL_TABLE_COLLATION=598`、`FUNCTION_END_NUMBER=599`。下文r1批准时事实及各历史补充保留各自时间范围，不代表当前分配。
+当前维护编号（2026-10-13，冻结main `35c8dd5854`）：C03协议能力 **112**、独立迁移 **4.0.15**、`CreateTable.database_defaults#18`、`INTERNAL_TABLE_COLLATION=598`、`FUNCTION_END_NUMBER=599`。下文r1批准时事实及各历史补充保留各自时间范围，不代表当前分配。
 
 开发基线：`e5dd4724f782067e1c76c38c9d2f55cebceda4a9`，已经在独立 worktree pull `mo/main`。旧 PR 的设计批准仅覆盖其原有范围，不自动批准此次 C03 扩展。本文批准后记录内容 SHA-256，并在交付 revision 中保留可追溯设计。
 
@@ -240,3 +240,11 @@ MySQL oracle：实际连接并记录版本/digest/config，再固定默认值 AL
 - SHOW FULL COLUMNS的上游投影已不再使用null占位符，因此不能沿用末端字符串替换。建query前按C03能力选择既有ColumnCollationSQL或上游selector，两种账户路径共享投影；112下binary classifier2仍展示binary，低版本保持上游合同。复用现有binary转换fixture作真实SQL正控并加一条公开SHOW，零新增fixture/数据，既有失败/显式CAST/清理控制保留。
 - 21f19的qualified-identifier scanner上下文由单次调用defer/reset拥有，DEFAULT/CONVERT及CURRENT_USER grammar不改；mixed整数comparison域与assignment域分离；prepared LIMIT=0 materialization仅对SELECT顶层参数limit生效，Compile退出恢复borrowed plan，不覆盖C03 CREATE/ALTER freshness admission。相关新owner/真实消费者在当前验证中单独定界。
 - 本轮不新增持久状态、cache、worker、goroutine、锁序、retry或数据扫描；协议检查、ID lookup及常数规模SQL投影构造由原owner持有。历史race/restart证据只维持已证明不变的合同，不冒称本轮全部重跑；当前验证状态见配套验证记录。
+
+## 2026-10-13 EXPLAIN JSON主干交互（冻结35c8dd5854）
+
+- 延续r1和既有ready PR，正常合并EXPLAIN JSON及SDK CI两提交。唯一文本冲突是生成parser；grammar保留双方规则后经仓库goyacc正常生成并两次hash复现，不手改生成代码。EXPLAIN JSON/CURRENT_USER与DEFAULT/CONVERT在已有三行零fixture UT中前后交替解析，AST类型、format选项、转换意图及format/reparse保持。
+- 新JSON上游代码仍引用旧VectorIndexScan，fresh完整explain编译证明与已发布111不兼容。只把新JSON消费端对齐现行INDEX_SEARCH_SCAN/IndexSearchScan及QueryPayload、AlgoOptions、AlgoExprs；不恢复旧字段、不改proto/generated/wire、111或C03的112/4.0.15/598/END599。
+- 诊断输出使用既有indexSearchScanSettings/SearchPlugin ExplainHooks获取说明并传播codec错误，完整hex保留算法opaque bytes，按当前names/values渲染表达式并拒绝缺项/空名/重复/空表达式；query payload、candidate k、方向、range、prefilter与include列仍typed。没有在SQL/catalog加入算法分支、复制IVF decoder、改hook/registry、GPU/ISCP/CDC或执行reader。
+- 旧NProbe/first-round语义由当前plugin payload拥有，不把已移除的fields当零值。公开既有JSON脚本只同步两个payload标签及NProbe说明标签，bytes/16/first-round2与3/界限/control assertions和result不变。复用原16完整C03闭包加完整JSON，普通同实例双轮与清理的资格见验证记录。
+- JSON说明仍走原authorization与query-only检查，不执行DML；ANALYZE/PHYPLAN/CHECK不支持在原owner提前拒绝。新增renderer/UT state仅本次调用局部且按输入规模有界，不新增生产生命周期或持久状态；历史race/restart/upgrade保留历史范围。

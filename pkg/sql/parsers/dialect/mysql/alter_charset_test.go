@@ -15,6 +15,7 @@
 package mysql
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -32,6 +33,17 @@ func TestAlterCharsetConversionIntentRoundTrip(t *testing.T) {
 		{"alter table t convert to character set utf8mb4 collate=utf8mb4_bin", true},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
+			assertExplainJSON := func() {
+				stmt, err := ParseOne(t.Context(), "explain format=json select current_user()", 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				require.IsType(t, &tree.ExplainStmt{}, stmt)
+				options := stmt.(*tree.ExplainStmt).Options
+				require.Len(t, options, 1)
+				require.Equal(t, tree.FormatOption, options[0].Name)
+				require.Equal(t, "json", strings.ToLower(options[0].Value))
+			}
+			assertExplainJSON()
 			statement, err := ParseOne(t.Context(), tc.sql, 1)
 			require.NoError(t, err)
 			defer statement.Free()
@@ -43,6 +55,7 @@ func TestAlterCharsetConversionIntentRoundTrip(t *testing.T) {
 			defer replayed.Free()
 			require.Equal(t, tc.convert, replayed.(*tree.AlterTable).Options[0].(*tree.TableOptionCharset).Convert)
 			require.Equal(t, option.Collate, replayed.(*tree.AlterTable).Options[0].(*tree.TableOptionCharset).Collate)
+			assertExplainJSON()
 		})
 	}
 }
