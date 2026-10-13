@@ -489,13 +489,6 @@ func searchPlanReader[T types.RealNumbers](
 	if err != nil {
 		return err
 	}
-	multiRound := hasFirstRound || r.opts.BucketExpandStep > 0
-	var cursor *vectorindex.IvfSearchCursor
-	if multiRound {
-		cursor = &vectorindex.IvfSearchCursor{}
-	} else if r.generation != nil {
-		cursor = &vectorindex.IvfSearchCursor{RankedCentroidIDs: r.generation.route}
-	}
 	limit := uint(r.req.CandidateBudget)
 	if uint64(limit) != r.req.CandidateBudget {
 		return moerr.NewInvalidInputNoCtx("IVF candidate limit exceeds platform uint")
@@ -510,6 +503,29 @@ func searchPlanReader[T types.RealNumbers](
 		}
 		firstRoundLimit = uint(firstRound)
 	}
+	// An INCLUDE scan and a membership search on one reader widen in the rounds of
+	// AdvancedSearch; readers that share a generation across partitions search once.
+	widen := hasFirstRound || r.opts.BucketExpandStep > 0 || r.widensMembership()
+	policy := AdvancedSearch{}
+	stats := searchplugin.SearchStats{Lists: uint64(idxcfg.Ivfflat.Lists)}
+	round := searchplugin.Round{ITopK: uint64(limit), NProbe: uint64(max(uint32(1), r.opts.InitialProbeCount))}
+	if hasFirstRound {
+		round.ITopK = uint64(firstRoundLimit)
+	}
+	if widen {
+		if r.req.HasMembershipFilter {
+			if stats.Members, err = membershipKeyCount(r.req.MembershipFilter); err != nil {
+				return err
+			}
+		}
+		round = policy.StartRound(r.spec, r.req, stats)
+	}
+	var cursor *vectorindex.IvfSearchCursor
+	if r.generation != nil {
+		cursor = &vectorindex.IvfSearchCursor{RankedCentroidIDs: r.generation.route}
+	} else if widen {
+		cursor = &vectorindex.IvfSearchCursor{}
+	}
 	r.includeData = make(map[string][]any, len(r.spec.IncludedColumns))
 	r.includeNulls = make(map[string][]bool, len(r.spec.IncludedColumns))
 	for _, name := range r.spec.IncludedColumns {
@@ -521,16 +537,15 @@ func searchPlanReader[T types.RealNumbers](
 		includeResult := &vectorindex.IvfIncludeResult{}
 		rt := vectorindex.RuntimeConfig{
 			Limit:                   limit,
-			Probe:                   uint(max(uint32(1), r.opts.InitialProbeCount)),
+			Probe:                   uint(round.NProbe),
 			OrigFuncName:            r.spec.DistanceFunction,
 			RuntimeFilterData:       r.req.MembershipFilter,
 			RequestedIncludeColumns: r.spec.IncludedColumns,
 			PushdownFilters:         r.req.PreFilters,
 			IncludeResult:           includeResult,
-			SearchRoundLimit:        firstRoundLimit,
-			BucketExpandStep:        uint(r.opts.BucketExpandStep),
+			SearchRoundLimit:        uint(round.ITopK),
 			SearchCursor:            cursor,
-			IvfRoutePrepared:        r.generation != nil && !multiRound,
+			IvfRoutePrepared:        r.generation != nil,
 		}
 		keys, distances, err := cache.Cache.Search(sqlproc, key, algo, query, rt)
 		if err != nil {
@@ -548,13 +563,42 @@ func searchPlanReader[T types.RealNumbers](
 			r.includeNulls[name] = append(r.includeNulls[name], includeResult.Nulls[name]...)
 		}
 
-		if !multiRound || cursor == nil || cursor.Exhausted || uint64(len(r.keys)) >= uint64(limit) {
+		if !widen || cursor == nil || cursor.Round == 0 || cursor.Exhausted {
 			break
 		}
-		advancePlanCursor(cursor)
+		stats.Lists = uint64(len(cursor.RankedCentroidIDs))
+		stats.Probed = uint64(cursor.NextBucketOffset + cursor.CurrentBucketCount)
+		next, more := policy.NextRound(r.spec, r.req, stats, round, uint64(len(r.keys)))
+		if !more {
+			break
+		}
+		advancePlanCursor(cursor, uint(next.NProbe))
+		round = next
 	}
 	r.sortAndLimit(uint64(limit))
 	return nil
+}
+
+// widensMembership reports whether the membership search of r widens: a membership
+// filter on the only reader of the search, neither one partition of it nor one of the
+// local readers of a generation.
+func (r *planReader) widensMembership() bool {
+	if !r.req.HasMembershipFilter || r.req.Identity.PartitionCount > 1 {
+		return false
+	}
+	return r.generation == nil || r.generation.parallelism == 1
+}
+
+// membershipKeyCount returns the number of keys of a membership filter payload.
+func membershipKeyCount(payload []byte) (uint64, error) {
+	if len(payload) == 0 {
+		return 0, nil
+	}
+	var keys vector.Vector
+	if err := keys.UnmarshalBinary(payload); err != nil {
+		return 0, err
+	}
+	return uint64(keys.Length()), nil
 }
 
 func (r *planReader) recordSearchRoundDiagnostic(
@@ -592,31 +636,22 @@ func (r *planReader) recordSearchRoundDiagnostic(
 		}))
 }
 
-func advancePlanCursor(cursor *vectorindex.IvfSearchCursor) {
+// advancePlanCursor moves cursor past the lists it probed to the next lists, or marks
+// it exhausted when none remain.
+func advancePlanCursor(cursor *vectorindex.IvfSearchCursor, lists uint) {
 	if cursor == nil || cursor.Round == 0 || cursor.Exhausted {
 		return
 	}
 	next := cursor.NextBucketOffset + cursor.CurrentBucketCount
 	total := uint(len(cursor.RankedCentroidIDs))
-	if next >= total {
-		cursor.NextBucketOffset = total
+	if next >= total || lists == 0 {
+		cursor.NextBucketOffset = min(next, total)
 		cursor.CurrentBucketCount = 0
 		cursor.Exhausted = true
 		return
 	}
-	remaining := total - next
-	count := cursor.CurrentBucketCount * 2
-	if count < cursor.CurrentBucketCount {
-		count = remaining
-	}
-	if count > 4096 {
-		count = 4096
-	}
-	if count > remaining {
-		count = remaining
-	}
 	cursor.NextBucketOffset = next
-	cursor.CurrentBucketCount = count
+	cursor.CurrentBucketCount = min(lists, total-next)
 }
 
 func (r *planReader) sortAndLimit(candidateLimit uint64) {

@@ -355,7 +355,7 @@ type RuntimeConfig struct {
 	//
 	// RuntimeConfig is passed to Search by value. Pointer fields such as
 	// IncludeResult and SearchCursor can be mutated by Search and observed by
-	// the caller. Value fields such as SearchRoundLimit and BucketExpandStep are
+	// the caller. Value fields such as SearchRoundLimit are
 	// copied into Search and do not propagate caller-visible mutations back out.
 	RequestedIncludeColumns []string
 	PushdownFilterSQL       string
@@ -366,7 +366,6 @@ type RuntimeConfig struct {
 	IncludeResult    *IvfIncludeResult
 	TargetRows       uint
 	SearchRoundLimit uint
-	BucketExpandStep uint
 	SearchCursor     *IvfSearchCursor
 	// IvfPrepareRouteOnly seals centroid routing without opening entry readers.
 	IvfPrepareRouteOnly bool

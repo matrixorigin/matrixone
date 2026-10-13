@@ -109,8 +109,8 @@ func TestRelationScanPolicyAssignsInMemoryRowsOnlyToCoordinator(t *testing.T) {
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), relationScanPolicy(1, false))
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), relationScanPolicy(2, true))
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), relationScanPolicy(2, false))
-	advancePlanCursor(nil)
-	advancePlanCursor(&vectorindex.IvfSearchCursor{Exhausted: true})
+	advancePlanCursor(nil, 1)
+	advancePlanCursor(&vectorindex.IvfSearchCursor{Exhausted: true}, 1)
 }
 
 func TestValidateIvfQueryDimensions(t *testing.T) {
@@ -831,18 +831,18 @@ func TestAdvancePlanCursorExpandsDisjointCentroidWindows(t *testing.T) {
 		NextBucketOffset:   0,
 		CurrentBucketCount: 2,
 	}
-	advancePlanCursor(cursor)
+	advancePlanCursor(cursor, 4)
 	require.Equal(t, uint(2), cursor.NextBucketOffset)
 	require.Equal(t, uint(4), cursor.CurrentBucketCount)
 	require.False(t, cursor.Exhausted)
 
 	cursor.Round++
-	advancePlanCursor(cursor)
+	advancePlanCursor(cursor, 8)
 	require.Equal(t, uint(6), cursor.NextBucketOffset)
 	require.Equal(t, uint(4), cursor.CurrentBucketCount)
 
 	cursor.Round++
-	advancePlanCursor(cursor)
+	advancePlanCursor(cursor, 8)
 	require.True(t, cursor.Exhausted)
 	require.Equal(t, uint(10), cursor.NextBucketOffset)
 }

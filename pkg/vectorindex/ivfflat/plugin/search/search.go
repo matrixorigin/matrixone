@@ -32,6 +32,7 @@ var _ searchplugin.ParallelHooks = Hooks{}
 var _ searchplugin.ExplainHooks = Hooks{}
 var _ searchplugin.MembershipHooks = Hooks{}
 var _ searchplugin.ProbeKnobsHooks = Hooks{}
+var _ searchplugin.AdvancedSearchHooks = Hooks{}
 
 // SupportsMembership reports true: the reader applies Request.MembershipFilter
 // to the entries scan.
@@ -39,6 +40,16 @@ func (Hooks) SupportsMembership() bool { return true }
 
 // SupportsProbeKnobs reports true: the search probes centroid lists.
 func (Hooks) SupportsProbeKnobs() bool { return true }
+
+// StartRound returns the first round of the ivfflat widening policy.
+func (Hooks) StartRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats) searchplugin.Round {
+	return ivfflat.AdvancedSearch{}.StartRound(spec, req, stats)
+}
+
+// NextRound returns the round after prev of the ivfflat widening policy.
+func (Hooks) NextRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats, prev searchplugin.Round, got uint64) (searchplugin.Round, bool) {
+	return ivfflat.AdvancedSearch{}.NextRound(spec, req, stats, prev, got)
+}
 
 func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (engine.Reader, error) {
 	return ivfflat.NewPlanReader(proc, spec, req)

@@ -826,6 +826,11 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 			bucketExpandStep = 1
 		}
 	}
+	// mode=pre whose every filter runs in the index search widens in rounds.
+	if bucketExpandStep == 0 && vectorRankMode(vecCtx) == "pre" && !vecCtx.hasMembership &&
+		len(typedPushdownFilters) > 0 && len(remainingFilters) == 0 {
+		bucketExpandStep = uint64(max(ivfCtx.nProbe, 1))
+	}
 	typedPreFilters := rebindIvfPreFilters(typedPushdownFilters, scanNode, includeColumns)
 	algoOptions, err := ivfflatplan.EncodeScanOptions(ivfflatplan.ScanOptions{
 		InitialProbeCount: uint32(ivfCtx.nProbe),

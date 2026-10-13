@@ -30,8 +30,8 @@ const FirstRoundLimitExpr = "first_round_limit"
 type ScanOptions struct {
 	// InitialProbeCount is the number of centroid buckets of the first round.
 	InitialProbeCount uint32 `json:"initial_probe_count,omitempty"`
-	// BucketExpandStep is the number of buckets each further round adds; zero
-	// means one round.
+	// BucketExpandStep is nonzero for a search that widens in rounds
+	// (ivfflat.AdvancedSearch); zero means one round.
 	BucketExpandStep uint32 `json:"bucket_expand_step,omitempty"`
 	ThreadsSearch    int64  `json:"threads_search,omitempty"`
 }

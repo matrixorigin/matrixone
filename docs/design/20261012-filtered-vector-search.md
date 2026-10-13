@@ -153,7 +153,8 @@ A knob with no effect in the chosen mode is accepted, so the same SQL works acro
 In `pre`, the selectivity is exact: `|S|` qualifying keys over `N` indexed rows.
 
 - hnsw starts at `itopk ≈ k · N / |S|` (times a safety factor), clamped to `[itopk, max_itopk]`.
-- ivfflat and ivfpq scale `nprobe` the same way, clamped to `[nprobe, max_nprobe]`.
+- ivfflat and ivfpq scale `nprobe` the same way, clamped to `[nprobe, max_nprobe]`. ivfflat
+  readers that split one search across partitions do not.
 - cagra passes the plain start and leaves cuVS `filtering_rate` on auto, so the filter rate is
   applied once, by cuVS. `max_itopk` caps what MatrixOne passes; cuVS may scale its internal list
   above it.
@@ -226,12 +227,30 @@ fixture: every near neighbor fails the filter).
 
 ### ivfflat (CPU and GPU centroids)
 
-- Regular search: the existing ivfflat reader (`pkg/vectorindex/ivfflat/plan_reader.go`,
-  `search.go`), with membership through the PRE shape and INCLUDE predicates as pre-filters.
-- Knob mapping: `nprobe` lists per round; candidate count `itopk`.
-- Widening (`pre`): incremental. The `IvfSearchCursor` (`ivfflat/search.go`) ranks the centroids once and
-  each round scans only the next lists, merging with earlier rounds.
-- Short page when (`pre`): the caps are reached with `max_nprobe < n_lists`.
+- Regular search: one round of `IvfflatSearchIndex.Search` (`pkg/vectorindex/ivfflat/search.go`):
+  the `IvfSearchCursor` ranks the centroids once, and a round scans the next lists' entries with
+  the membership set and the filters evaluated in the index search (INCLUDE columns and the
+  primary key), up to its row limit.
+- Pre-filters: a membership set (the PRE shape, when a filter needs the table), or filters the
+  index search evaluates itself (when every filter reads only INCLUDE columns or the primary
+  key; no membership join is built). A membership set of 100 keys or fewer
+  (`exactPkFilterThreshold`) scans those keys in every list.
+- Knob mapping: `nprobe` lists in the first round; candidate count `itopk`.
+- Widening: `ivfflat.AdvancedSearch` (`pkg/vectorindex/ivfflat/advsearch.go`) runs in the reader
+  (`searchPlanReader`, `plan_reader.go`). The first round probes `nprobe` lists; under a
+  membership set, at least `n_lists · budget / |S| × 2`. Each further round continues the cursor
+  with twice the previous round's lists (at most 4096), until the reader holds the candidate
+  budget (at most `|S|`), all lists are probed, or the lists probed reach `max_nprobe`. It runs
+  for `mode=pre` on one reader (membership set or index-evaluated filters) and for `include`
+  mode, whose loop it replaces. A PRE search split across readers (local DOP or one reader per
+  CN, for large entries tables) shares one route and searches one round, as before: no reader
+  holds the merged row count.
+- `post` and the default mode search one round, also when the index search evaluates the
+  filter.
+- Short page when (`pre`): a membership set over 100 keys, or index-evaluated filters, and the
+  lists probed reach `max_nprobe < n_lists`; or the search is split across readers and the
+  `nprobe` lists hold too few qualifying rows. A membership set of 100 keys or fewer is never
+  short.
 - Ranking: exact on the stored entries; quantized entries (`quantization` option) rank by the
   quantized values.
 
@@ -253,7 +272,7 @@ A cell reads "short when ..." under the default and configured caps. Every cell 
 | hnsw | the residual filter rejects more candidates than the one search returned (`itopk`, or the over-fetch) | `max_itopk` reached before the qualifying nearest rows are found (not reached by the tested fixtures) | never: a short `post` and `pre` fall through to `force` | never |
 | cagra | as hnsw | `max_itopk` / cuVS limit reached | as hnsw | never |
 | ivfpq | as hnsw, with the candidates of `nprobe` lists | `max_nprobe < n_lists` reached | as hnsw | never |
-| ivfflat | as ivfpq | `max_nprobe < n_lists` reached | as hnsw | never |
+| ivfflat | as ivfpq | over 100 keys or index-evaluated filters: `max_nprobe < n_lists` reached, or the search split across readers; 100 keys or fewer: never | as hnsw | never |
 
 "Short" here means fewer than min(`LIMIT`, qualifying rows).
 
@@ -291,7 +310,7 @@ type MembershipHooks interface {
 
 It replaces the algorithm-name checks in `vectorIndexSupportsContext`
 (`pkg/sql/plan/apply_indices.go`) and `hasIvfFlatIndex` (`pkg/sql/plan/apply_indices_vector.go`).
-PR1 declares it for ivfflat only, which keeps every plan unchanged; PR3 and PR4 declare it for
+PR1 declares it for ivfflat only, which keeps every plan unchanged; PR3 and PR6 declare it for
 hnsw, cagra and ivfpq.
 
 ### PRE plan shape
@@ -322,7 +341,7 @@ A `MATCH` in the scan's filters is one more filter the PRE shape evaluates in th
 With the capability declared, the `MATCH` gate in `vectorIndexSupportsContext` admits the
 algorithm. hnsw (PR3) builds the PRE shape for a `MATCH` filter by default, so its hybrid top-k
 uses both the fulltext index and the vector index and returns the exact matching rows; ivfflat
-keeps its post-filtered behavior. cagra and ivfpq follow in PR5.
+keeps its post-filtered behavior. cagra and ivfpq follow in PR6.
 
 The PRE shape is built by one function for every capable algorithm,
 `buildVectorPreFilterJoin` (`pkg/sql/plan/apply_indices_vector_pre.go`), extracted from the
@@ -412,8 +431,8 @@ the CPU (`ivfflat/plan_reader.go`); ivfflat is outside the GPU policy in this de
 | PR2 | knobs, session variables, wire fields and MORPC version, `EXPLAIN`; single search, no widening |
 | PR3 | hnsw `pre` + `hnsw/advsearch.go`; hybrid fulltext on hnsw |
 | PR4 | hnsw `auto`: the `ADAPTIVE_TOP [post, pre, force]` builder for every capable algorithm; remove the unused `rewriteAutoModeToPre` path |
-| PR5 | cagra and ivfpq `pre` and `auto` (C++ membership mask) + their `advsearch.go`; hybrid fulltext on both |
-| PR6 | ivfflat `pre` widening through its cursor + `ivfflat/advsearch.go` |
+| PR5 | ivfflat onto the two layers: `ivfflat/advsearch.go` drives `pre` and `include` rounds in the reader |
+| PR6 | cagra and ivfpq `pre` and `auto` (C++ membership mask) + their `advsearch.go`; hybrid fulltext on both |
 | PR7 | `force` under `gpu_mode` through the `vector_matmul` engine (after #29554 is on main) |
 
 ## Claims
@@ -430,11 +449,11 @@ the CPU (`ivfflat/plan_reader.go`); ivfflat is outside the GPU policy in this de
 | 5a | With a single search, `itopk` covering the index returns a full page on the issue fixture where the default budget returns none, on hnsw, ivfflat, cagra and ivfpq (ids 501..510 on all but cagra, whose graph build is not deterministic); `max_itopk` lowers `itopk`. | `cases/vector/vector_filtered_search_knobs.sql` (hnsw, ivfflat), `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` (cagra, ivfpq) |
 | 6 | The issue fixture returns ids 501..510 in `pre` through the hnsw index, for l2 on a five-sub-index table and cosine, where the default post returns none. | `cases/vector/vector_filtered_search_hnsw.sql`, `cases/vector/vector_filtered_search_modes.sql` |
 | 7 | The issue fixture returns ids 501..510 in `pre` through the cagra and the ivfpq index. | `gpu_cases/vector/vector_filtered_search_gpu.sql` |
-| 8 | `pre` returns zero rows for zero qualifying rows, all qualifying rows when fewer than `LIMIT` qualify, and `LIMIT` rows when exactly or more than `LIMIT` qualify, with periodic, combined and `NULL` filters, `OFFSET` and a prepared `LIMIT`, equal to `mode=force`. | `cases/vector/vector_filtered_search_hnsw.sql` (hnsw); `gpu_cases/vector/vector_filtered_search_gpu.sql` (cagra, ivfpq, PR5); `cases/vector/vector_filtered_search_ivfflat.sql` (ivfflat) |
+| 8 | `pre` returns zero rows for zero qualifying rows, all qualifying rows when fewer than `LIMIT` qualify, and `LIMIT` rows when exactly or more than `LIMIT` qualify, with periodic, combined and `NULL` filters, `OFFSET` and a prepared `LIMIT`, equal to `mode=force`. | `cases/vector/vector_filtered_search_hnsw.sql` (hnsw); `gpu_cases/vector/vector_filtered_search_gpu.sql` (cagra, ivfpq, PR6); `cases/vector/vector_filtered_search_ivfflat.sql` (ivfflat) |
 | 9 | Each "short when" cell of the short-page matrix that a fixture reaches: with a cap set below what the filter needs, the page is short; with the cap raised, it fills. hnsw `pre` fills at `max_itopk` = k on the tested fixtures. | the three files of claim 8 |
 | 10 | `post` runs one search: `max_itopk` and `max_nprobe` without `itopk` do not change its rows. | `cases/vector/vector_filtered_search_knobs.sql` (hnsw, ivfflat), `gpu_cases/vector/vector_filtered_search_knobs_gpu.sql` (cagra, ivfpq) |
-| 11 | `auto` on hnsw, cagra and ivfpq builds `ADAPTIVE_TOP` over `post`, `pre` and `force` (`post` and `force` without a filter) and returns the `force` rows where `post` is short and where it fills, with a prepared `LIMIT`. | `cases/vector/vector_filtered_search_hnsw.sql` (hnsw); `gpu_cases/vector/vector_filtered_search_gpu.sql` (cagra, ivfpq, PR5) |
-| 12 | A hybrid `MATCH` + vector top-k on hnsw, cagra and ivfpq uses the fulltext index and the vector index through the PRE shape and returns the same rows as the table without a vector index; with a query vector from a provider row it keeps the exact sort. | `cases/vector/vector_hybrid_fulltext.sql` (hnsw), `gpu_cases/vector/vector_hybrid_fulltext_gpu.sql` (cagra, ivfpq, PR5) |
+| 11 | `auto` on hnsw, cagra and ivfpq builds `ADAPTIVE_TOP` over `post`, `pre` and `force` (`post` and `force` without a filter) and returns the `force` rows where `post` is short and where it fills, with a prepared `LIMIT`. | `cases/vector/vector_filtered_search_hnsw.sql` (hnsw); `gpu_cases/vector/vector_filtered_search_gpu.sql` (cagra, ivfpq, PR6) |
+| 12 | A hybrid `MATCH` + vector top-k on hnsw, cagra and ivfpq uses the fulltext index and the vector index through the PRE shape and returns the same rows as the table without a vector index; with a query vector from a provider row it keeps the exact sort. | `cases/vector/vector_hybrid_fulltext.sql` (hnsw), `gpu_cases/vector/vector_hybrid_fulltext_gpu.sql` (cagra, ivfpq, PR6) |
 | 13 | ivfpq with `max_nprobe = n_lists` returns min(`LIMIT`, qualifying) rows in `pre`. | `gpu_cases/vector/vector_filtered_search_gpu.sql` |
 | 14 | Literal and prepared `LIMIT` give the same rows under the same knobs. | the three files of claim 8 |
 | 15 | With `gpu_mode` on, `force` on a cagra or ivfpq table runs on the GPU and returns the exact rows. | `gpu_cases/vector/vector_filtered_search_gpu.sql` (PR7) |
@@ -487,3 +506,11 @@ the CPU (`ivfflat/plan_reader.go`); ivfflat is outside the GPU policy in this de
   `mode=auto` selects it on hnsw.
 - The statement-level auto retry (`ErrVectorNeedRetryWithPreMode`, `Output.IsAdaptive`,
   `rewriteAutoModeToPre`) is removed: no plan set `IsAdaptive`, so it never ran.
+
+2026-10-13 (PR5, Eric):
+
+- ivfflat runs its rounds through `ivfflat.AdvancedSearch`; the reader's include-mode loop is
+  replaced, with the same round sizes.
+- A PRE search split across readers keeps one shared round and its `nprobe`, as before.
+- `mode=pre` also widens when the index search evaluates every filter itself (no membership
+  join); `post` and the default mode keep one round there.
