@@ -125,6 +125,13 @@ func preparedExecutionBindingKey(bindings []plan2.PreparedSourceBinding, values 
 	return key.String()
 }
 
+func preparedFieldBindingKey(key string, state *plan2.PreparedFieldTypes) string {
+	if state == nil {
+		return key
+	}
+	return key + "field:" + strconv.FormatUint(state.Revision(), 10)
+}
+
 func (prepareStmt *PrepareStmt) rememberBitCountSourceTypes(values []any) {
 	if len(prepareStmt.bitCountOverloadParamPositions) == 0 {
 		prepareStmt.bitCountNumericParamTypes = nil
@@ -175,10 +182,15 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 		return nil
 	}
 	var preparedPlan *plan2.Plan
+	var fieldTypes *plan2.PreparedFieldTypes
+	if cwft.preparedStmt != nil {
+		fieldTypes = cwft.preparedStmt.fieldTypes
+	}
 	if cwft.preparedStmt != nil && strings.IndexByte(cwft.preparedStmt.Sql, '@') >= 0 {
 		preparedPlan = cwft.preparedStmt.PreparePlan.GetDcl().GetPrepare().Plan
 	}
 	return &preparedExecutionRetry{
+		fieldTypes:         fieldTypes,
 		paramVals:          append([]any(nil), cwft.paramVals...),
 		bindings:           append([]plan2.PreparedSourceBinding(nil), cwft.paramBindings...),
 		preparedPlan:       preparedPlan,

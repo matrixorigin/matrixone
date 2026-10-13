@@ -89,6 +89,8 @@ func preparedUserVariable(ctx context.Context, name string) (preparedUserVariabl
 // value to determine schema/configuration mark the result value-dependent;
 // such a plan must not enter the type-only cache.
 type preparedSourceBindingState struct {
+	fieldReturnDomains   map[*Expr]preparedFieldStringDomain
+	fieldTypes           *preparedFieldTypeBinding
 	bindings             []PreparedSourceBinding
 	values               []any
 	valueDependent       bool
@@ -983,6 +985,7 @@ func preparedCharSourceCast(ctx context.Context, source *Expr, value string) (*E
 // predicate candidates that must be proved again for every cache hit.
 type PreparedExecutionPlan struct {
 	Plan                 *Plan
+	FieldTypes           *PreparedFieldTypes
 	DiagnosticCandidates []*Expr
 	DiagnosticFree       bool
 	ValueDependent       bool
@@ -1016,6 +1019,11 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 		return nil, moerr.NewInvalidInput(previous, "Incorrect arguments to EXECUTE")
 	}
 	planning := withPreparedSourceBindings(previous, bindings, values)
+	fieldTypes := newPreparedFieldTypeBinding(previous, stmt)
+	preparedBindingState(planning).fieldTypes = fieldTypes
+	if fieldTypes != nil && fieldTypes.current != nil {
+		fieldTypes.reprepare(preparedBindingState(planning))
+	}
 	preparedBindingState(planning).selectStatement = preparedUnderlyingSelect(stmt)
 	ctx.SetContext(planning)
 	defer ctx.SetContext(previous)
@@ -1023,13 +1031,25 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 	if err != nil {
 		return nil, err
 	}
+	if fieldTypes != nil && fieldTypes.current != nil && !fieldTypes.apply {
+		fieldTypes.beginApplication()
+		fieldTypes.reprepare(preparedBindingState(planning))
+		planning = withPreparedSourceBindings(previous, bindings, values)
+		preparedBindingState(planning).fieldTypes = fieldTypes
+		preparedBindingState(planning).selectStatement = preparedUnderlyingSelect(stmt)
+		ctx.SetContext(planning)
+		query, err = NewPrepareOptimizer(ctx).Optimize(stmt, false)
+		if err != nil {
+			return nil, err
+		}
+	}
 	p := &Plan{Plan: &plan.Plan_Query{Query: query}, IsPrepare: true}
 	presentPreparedSQLResults(planning, query)
 	if err = lowerPreparedSourceTransports(planning, p); err != nil {
 		return nil, err
 	}
 	state := preparedBindingState(planning)
-	return &PreparedExecutionPlan{Plan: p, DiagnosticCandidates: state.diagnosticCandidates,
+	return &PreparedExecutionPlan{Plan: p, FieldTypes: state.fieldTypes.result(), DiagnosticCandidates: state.diagnosticCandidates,
 		DiagnosticFree: state.diagnosticFree, ValueDependent: state.valueDependent}, nil
 }
 

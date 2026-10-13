@@ -1416,6 +1416,11 @@ func initExecuteStmtParamWithResolverInSession(
 		needRebuild = statsChanged
 	}
 	cwft.planGenerationReused = !needRebuild
+	fieldTypes := prepareStmt.fieldTypes
+	// Statistics and compile-only refreshes do not start a new SQL type generation.
+	if prepareStmt.needsRebuild || change || modeMismatch || protocolMismatch {
+		fieldTypes = nil
+	}
 	var pendingGroupConcatColDefData [][]byte
 	pendingGroupConcatColDefDataSet := false
 	rebuildCommitted := false
@@ -1746,12 +1751,14 @@ func initExecuteStmtParamWithResolverInSession(
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		key := preparedExecutionBindingKey(cwft.paramBindings, cwft.paramVals)
+		bindingKey := preparedExecutionBindingKey(cwft.paramBindings, cwft.paramVals)
+		key := preparedFieldBindingKey(bindingKey, fieldTypes)
 		var proof func(*plan.Expr) bool
 		if binaryExecute {
 			proof = func(expr *plan.Expr) bool { return preparedBinaryIntegerCastDiagnosticFree(prepareStmt, expr, true) }
 		}
-		if key == prepareStmt.runtimeSpecializationKey && prepareStmt.runtimePlan != nil {
+		if key == prepareStmt.runtimeSpecializationKey && prepareStmt.runtimePlan != nil &&
+			!fieldTypes.NeedsReprepare(cwft.paramBindings, cwft.paramVals) {
 			safe, probeErr := plan2.ProbePreparedDiagnosticCandidatesWithProof(cwft.proc, prepareStmt.runtimeDiagnosticCandidates, proof)
 			if probeErr != nil {
 				return nil, nil, nil, originSQL, false, probeErr
@@ -1778,6 +1785,7 @@ func initExecuteStmtParamWithResolverInSession(
 				if strings.IndexByte(originSQL, '@') >= 0 {
 					planningCtx = plan2.WithPreparedUserVariableBindings(reqCtx, preparePlan.Plan)
 				}
+				planningCtx = plan2.WithPreparedFieldTypes(planningCtx, fieldTypes, preparePlan.Plan)
 				bound, buildErr = buildPreparedBoundQuery(planningCtx, executionSes, planningContext, prepareStmt.PrepareStmt, cwft.paramBindings, cwft.paramVals)
 				return buildErr
 			})
@@ -1785,6 +1793,8 @@ func initExecuteStmtParamWithResolverInSession(
 				return nil, nil, nil, originSQL, false, err
 			}
 			executionPlan = bound.Plan
+			fieldTypes = bound.FieldTypes
+			key = preparedFieldBindingKey(bindingKey, fieldTypes)
 			runtimePlanApplied = true
 			cwft.preparedJoinDiagnosticFree = bound.DiagnosticFree
 			cacheable := bound.DiagnosticFree && !bound.ValueDependent && !prepareStmt.hasPaginationParams && !prepareStmt.hasPercentileParams
@@ -1877,6 +1887,9 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	if sourceBindingQuery {
 		prepareStmt.compileNeedsRebuild = false
+		// Publish only after binding, diagnostics, metadata, and AST cloning
+		// succeed. A rejected execution leaves the previous snapshot intact.
+		prepareStmt.fieldTypes = fieldTypes
 	}
 	rebuildPublished = true
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil
@@ -1933,6 +1946,7 @@ func (cwft *TxnComputationWrapper) releaseRuntimeCacheRetiredCompiles() {
 // slice must not alias TxnComputationWrapper.paramVals because that field is
 // replaced on the next execution of the cached prepared statement.
 type preparedExecutionRetry struct {
+	fieldTypes         *plan2.PreparedFieldTypes
 	bindings           []plan2.PreparedSourceBinding
 	paramVals          []any
 	preparedPlan       *plan2.Plan
@@ -2891,6 +2905,7 @@ func buildPlanForCompileRetry(
 	}
 	if preparedRetry != nil && preparedRetry.bindings != nil && !forcePrepare {
 		ctx = plan2.WithPreparedUserVariableBindings(ctx, preparedRetry.preparedPlan)
+		ctx = plan2.WithPreparedFieldTypes(ctx, preparedRetry.fieldTypes)
 		bound, err := buildPreparedBoundQuery(ctx, ses, compilerContext, stmt, preparedRetry.bindings, preparedRetry.paramVals)
 		if err != nil {
 			return nil, err
