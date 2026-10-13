@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -40,6 +41,9 @@ func TestMaterializedViewDefinitionPersistence(t *testing.T) {
 	for _, raw := range []string{"", "invalid", `{"format_version":2,"query":"select * from t","sources":[{}]}`, `{"format_version":1,"query":"select 1"}`} {
 		_, err := MaterializedViewDefinition(&plan.TableDef{TableType: SystemMaterializedViewRel, Props: []*plan.PropertyDef{{Key: MaterializedViewProperty, Value: raw}}})
 		require.Error(t, err)
+		if raw != "invalid" {
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal), "stored definition failures must use the engine error contract")
+		}
 	}
 	decoded, err := MaterializedViewDefinition(&plan.TableDef{TableType: SystemOrdinaryRel})
 	require.NoError(t, err)

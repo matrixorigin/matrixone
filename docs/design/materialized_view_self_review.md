@@ -168,3 +168,10 @@ statements); 67 main MV checks and nine cross-CN checks passed. New full CI must
 be reported separately at the corrected head. Draft status and the previously documented production-release
 proof gaps remain in force; no CI green or new speedup is inferred from local
 checks.
+
+
+The follow-up SCA failure at `7b0d6f04a7` was the Makefile's independent error
+constructor policy, after the complete license check passed. Catalog metadata
+errors now use `moerr`, with a typed error-class oracle. The full catalog suite,
+`make err-check`, and configured catalog lint passed. Earlier success-path,
+restore/admission, and cron evidence is unchanged; the new full CI is pending.

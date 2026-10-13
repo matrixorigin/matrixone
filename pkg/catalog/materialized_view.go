@@ -16,8 +16,8 @@ package catalog
 
 import (
 	"encoding/json"
-	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -90,13 +90,13 @@ func MaterializedViewDefinition(def *plan.TableDef) (*MVDefinition, error) {
 func DecodeMaterializedViewDefinition(value string) (*MVDefinition, error) {
 	var result MVDefinition
 	if value == "" {
-		return nil, fmt.Errorf("materialized view definition is missing")
+		return nil, moerr.NewInternalErrorNoCtx("materialized view definition is missing")
 	}
 	if err := json.Unmarshal([]byte(value), &result); err != nil {
 		return nil, err
 	}
 	if result.FormatVersion != 1 || result.Query == "" || len(result.Sources) == 0 {
-		return nil, fmt.Errorf("unsupported materialized view definition")
+		return nil, moerr.NewInternalErrorNoCtx("unsupported materialized view definition")
 	}
 	return &result, nil
 }

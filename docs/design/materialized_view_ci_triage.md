@@ -89,3 +89,20 @@ for per-case counts, source fingerprints, and evidence modes.
 Fresh full CI results must be checked at the correction commit. A local pass,
 skipped job, or queued check is not a full CI pass. This correction makes no new
 performance claim and does not relabel the earlier benchmark evidence.
+
+
+## Follow-up SCA policy gate
+
+[Run 38370142556](https://github.com/matrixorigin/matrixone/actions/runs/38370142556)
+checked `7b0d6f04a72a060bd6a1b739e0a9b5dbc9f7f8dd`. Its complete header check
+passed (6,097 valid files, zero invalid), then `make err-check` rejected the two
+`fmt.Errorf` calls in the MV metadata decoder before lint could run. This policy
+is separate from golangci-lint. Missing/unsupported persisted definitions now
+return `moerr.NewInternalErrorNoCtx`, matching the other catalog decoders; the
+existing invalid-definition test asserts the engine error class. Valid metadata
+and its admission, refresh, and restore paths are unchanged.
+
+The follow-up passed `make err-check`, the complete catalog suite, and configured
+catalog lint. Earlier native BVT, race, and owning-package results are reused
+only for their unchanged successful-metadata and lifecycle behavior. Full CI
+must still be assessed at the follow-up head.
