@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/ci/**'
       - '.github/workflows/entrypoint.yaml'
+      - '.github/workflows/python-sdk.yml'
       - '.github/workflows/ci-scope-check.yml'
       - '.github/workflows/ci-cancellation.yml'
 
