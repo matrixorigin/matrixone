@@ -1,6 +1,6 @@
 # Exact JSON parsing and Parquet VARIANT interoperability
 
-- Status: implemented for review; native automatic subcolumns remain future work.
+- Status: implemented for review; automatic persisted path subcolumns and local instance tests are covered in the [storage extension](20261013-automatic-json-subcolumns.md).
 - Feature issues: [exact JSON #30057](https://github.com/matrixorigin/matrixone/issues/30057), [Parquet VARIANT #30058](https://github.com/matrixorigin/matrixone/issues/30058).
 - Original development baseline: `dd38098853ea197699ed3fac3e69dc53975ac061`.
 - Integration base: `3e50e1b32d8da61bbbf70c89989fb08b671809de`.
@@ -145,15 +145,15 @@ go test ./pkg/util/parquetvariant -run '^$' -fuzz '^FuzzDecodeVariant$' -fuzztim
 go test ./pkg/sql/colexec/external -run '^$' -fuzz '^FuzzParquetVariantShreddedRows$' -fuzztime=30s -parallel=1
 ```
 
-The single excluded JSON Schema test starts a local HTTP server, which the development sandbox prohibits. It must run normally in socket-capable CI. Finite fuzz duration and coverage percentages do not certify all inputs.
+The previously excluded JSON Schema local HTTP test now also passes with explicitly enabled socket access. Finite fuzz duration and coverage percentages do not certify all inputs.
 
 ## Follow-up integration and scope
 
 Server BVT should execute the SQL examples, insert exact JSON into a table, verify exact DECIMAL costs and generated projections, export/reload plain and VARIANT files with SQL NULL/JSON null, and repeat with split output, prepared statements, rollback and multiple CNs. Independent DuckDB/Doris fixtures should test supported scalar identities, partial objects, arrays and intentionally unsupported types with pinned engine versions.
 
-These server/distributed and independent-engine runs have not been executed here. Dependency installation was interrupted at the network permission request; no engine benchmark or compatibility certification is claimed. DuckDB's referenced 2.0 commit is a development version, not an assumed stable 2.0 release.
+Local server and independent DuckDB/Doris runs are now recorded in the [storage extension](20261013-automatic-json-subcolumns.md). Multi-CN testing and engine benchmarks remain unexecuted; Doris native VARIANT compatibility failed content-level checks. DuckDB's referenced 2.0 commit is a development version, not an assumed stable 2.0 release.
 
-Automatic native JSON subcolumns, checkpoint shredding, typed path scan pushdown/statistics, extended UTC/nanosecond/UUID JSON identities, and Iceberg VARIANT support are separate storage/type projects. Their transaction, backfill, compaction, replication and recovery contracts are outlined in the [source research and remaining design](../rfcs/20261012_json_variant_interop.md). This PR does not mark those capabilities implemented.
+Bounded automatic native JSON path fragments are now implemented. Checkpoint shredding, native scalar path vectors and predicate statistics, extended UTC/nanosecond/UUID JSON identities, and Iceberg VARIANT support are separate storage/type projects. Their transaction, backfill, compaction, replication and recovery contracts are outlined in the [source research and remaining design](../rfcs/20261012_json_variant_interop.md). The storage extension states exactly which capabilities and tests are implemented.
 
 ## References
 

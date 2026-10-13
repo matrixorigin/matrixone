@@ -195,6 +195,8 @@ type objectWriterV1 struct {
 	sortKeySeqnum       uint16
 	appendable          bool
 	chunkedColumnPolicy ChunkedColumnPolicy
+	jsonSubcolumns      bool
+	jsonBlocks          []blockData
 	originSize          uint32
 	size                uint32
 }
@@ -252,6 +254,7 @@ func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.Fil
 		lastId:        0,
 		sortKeySeqnum: math.MaxUint16,
 	}
+	writer.jsonSubcolumns = wt == WriterNormal
 	writer.blocks[SchemaData] = make([]blockData, 0)
 	writer.blocks[SchemaTombstone] = make([]blockData, 0)
 	return writer, nil
@@ -272,6 +275,7 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 		lastId:        0,
 		sortKeySeqnum: math.MaxUint16,
 	}
+	writer.jsonSubcolumns = true
 	writer.blocks[SchemaData] = make([]blockData, 0)
 	writer.blocks[SchemaTombstone] = make([]blockData, 0)
 	return writer, nil
@@ -418,7 +422,7 @@ func (w *objectWriterV1) WriteObjectMeta(ctx context.Context, totalrow uint32, m
 	w.colmeta = metas
 }
 
-func (w *objectWriterV1) prepareDataMeta(objectMeta objectDataMetaV1, blocks []blockData, offset uint32, offsetId uint16) ([]byte, Extent, error) {
+func (w *objectWriterV1) prepareDataMeta(objectMeta objectDataMetaV1, blocks []blockData, offset uint32, offsetId uint16, skipColumnMeta ...bool) ([]byte, Extent, error) {
 	var columnCount uint16
 	columnCount = 0
 	metaColCnt := uint16(0)
@@ -435,14 +439,14 @@ func (w *objectWriterV1) prepareDataMeta(objectMeta objectDataMetaV1, blocks []b
 	objectMeta.BlockHeader().SetMaxSeqnum(maxSeqnum)
 
 	// prepare object meta and block index
-	meta, extent, err := w.prepareObjectMeta(blocks, objectMeta, offset, seqnums, offsetId)
+	meta, extent, err := w.prepareObjectMeta(blocks, objectMeta, offset, seqnums, offsetId, skipColumnMeta...)
 	if err != nil {
 		return nil, nil, err
 	}
 	return meta, extent, err
 }
 
-func (w *objectWriterV1) prepareObjectMeta(blocks []blockData, objectMeta objectDataMetaV1, offset uint32, seqnums *Seqnums, offsetId uint16) ([]byte, Extent, error) {
+func (w *objectWriterV1) prepareObjectMeta(blocks []blockData, objectMeta objectDataMetaV1, offset uint32, seqnums *Seqnums, offsetId uint16, skipColumnMeta ...bool) ([]byte, Extent, error) {
 	length := uint32(0)
 	blockCount := uint32(len(blocks))
 	sid := w.name.SegmentId()
@@ -452,7 +456,7 @@ func (w *objectWriterV1) prepareObjectMeta(blocks []blockData, objectMeta object
 	objectMeta.BlockHeader().SetStartID(offsetId)
 	objectMeta.BlockHeader().SetRows(w.totalRow)
 	// write column meta
-	if seqnums != nil && len(seqnums.Seqs) > 0 {
+	if seqnums != nil && len(seqnums.Seqs) > 0 && (len(skipColumnMeta) == 0 || !skipColumnMeta[0]) {
 		for i, colMeta := range w.colmeta {
 			if i >= len(seqnums.Seqs) {
 				break
@@ -605,9 +609,21 @@ func (w *objectWriterV1) writerBlocks(blocks []blockData) error {
 
 func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([]BlockObject, error) {
 	var err error
-	w.RLock()
-	defer w.RUnlock()
+	w.Lock()
+	defer w.Unlock()
 
+	if len(w.jsonBlocks) > 0 {
+		if len(w.jsonBlocks) != len(w.blocks[SchemaData]) {
+			return nil, moerr.NewInvalidInput(ctx, "JSON subcolumn block alignment mismatch")
+		}
+		for len(w.blocks) <= int(SchemaJSONSubcolumns) {
+			w.blocks = append(w.blocks, nil)
+		}
+		w.blocks[SchemaJSONSubcolumns] = w.jsonBlocks
+		for i := range w.jsonBlocks {
+			w.jsonBlocks[i].meta.BlockHeader().SetSequence(uint16(len(w.blocks[SchemaData]) + i))
+		}
+	}
 	objectHeader := BuildHeader()
 	objectHeader.SetSchemaVersion(w.schemaVer)
 	offset := uint32(HeaderSize)
@@ -663,7 +679,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	idxStart := metaHeader.HeaderLength() + subMetachIndex.Length()
 	for i := range w.blocks {
 		// prepare object meta and block index
-		metas[i], metaExtents[i], err = w.prepareDataMeta(objectMetas[i], w.blocks[i], offset, startID)
+		metas[i], metaExtents[i], err = w.prepareDataMeta(objectMetas[i], w.blocks[i], offset, startID, i == int(SchemaJSONSubcolumns))
 		if err != nil {
 			return nil, err
 		}
@@ -741,7 +757,9 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 		for j := range w.blocks[i] {
 			header := w.blocks[i][j].meta.BlockHeader()
 			header.SetMetaLocation(objectHeader.Extent())
-			blockObjects = append(blockObjects, w.blocks[i][j].meta)
+			if i != int(SchemaJSONSubcolumns) {
+				blockObjects = append(blockObjects, w.blocks[i][j].meta)
+			}
 		}
 	}
 	err = w.Sync(ctx, items...)
@@ -910,7 +928,39 @@ func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch, seqnu
 	w.Lock()
 	defer w.Unlock()
 
-	return w.addBlock(&w.blocks[SchemaData], blockMeta, bat, seqnums)
+	if !w.jsonSubcolumns {
+		return w.addBlock(&w.blocks[SchemaData], blockMeta, bat, seqnums)
+	}
+	aux, err := buildJSONSubcolumns(bat, seqnums, uint16(len(w.blocks[SchemaData])))
+	if err != nil {
+		return 0, err
+	}
+	if aux == nil && len(w.jsonBlocks) > 0 {
+		return 0, moerr.NewInvalidInputNoCtx("JSON source schema changed within an object")
+	}
+	originalID, originalSize := w.lastId, w.originSize
+	var prepared []blockData
+	if aux != nil {
+		defer aux.Clean(nil)
+		if len(w.jsonBlocks) != len(w.blocks[SchemaData]) {
+			return 0, moerr.NewInvalidInputNoCtx("JSON source schema changed within an object")
+		}
+		dense := NewSeqnums(nil)
+		dense.InitWithColCnt(len(aux.Vecs))
+		meta := NewBlock(dense)
+		if _, err = w.addBlock(&prepared, meta, aux, dense); err != nil {
+			w.lastId, w.originSize = originalID, originalSize
+			return 0, err
+		}
+		w.lastId = originalID
+	}
+	size, err := w.addBlock(&w.blocks[SchemaData], blockMeta, bat, seqnums)
+	if err != nil {
+		w.lastId, w.originSize = originalID, originalSize
+		return 0, err
+	}
+	w.jsonBlocks = append(w.jsonBlocks, prepared...)
+	return size, nil
 }
 
 func (w *objectWriterV1) AddSubBlock(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums, dataType DataMetaType) (int, error) {

@@ -1071,6 +1071,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *table_scan.TableScan:
 		in.TableScan = &pipeline.TableScan{}
 		in.TableScan.Types = t.Types
+		in.TableScan.JsonProjection = t.JSONProjection
 		in.TableScan.FilterExprs = t.FilterExprs
 		in.ProjectList = t.ProjectList
 	case *value_scan.ValueScan:
@@ -1736,6 +1737,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.TableScan:
 		ts := table_scan.NewArgument().WithTypes(opr.TableScan.Types)
 		ts.FilterExprs = opr.TableScan.FilterExprs
+		ts.JSONProjection = opr.TableScan.JsonProjection
 		ts.ProjectList = opr.ProjectList
 		op = ts
 	case vm.ValueScan:

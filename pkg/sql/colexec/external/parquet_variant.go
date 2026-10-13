@@ -41,12 +41,12 @@ func validateParquetVariantSchema(ctx context.Context, col *parquet.Column) erro
 			return moerr.NewInvalidInput(ctx, "Parquet schema exceeds VARIANT validation limit")
 		}
 		if c.Leaf() {
-			if lt := c.Type().LogicalType(); lt != nil && lt.Variant != nil {
+			if lt := parquetLogicalType(ctx, c); lt != nil && lt.Variant != nil {
 				return variantSchemaError(ctx, "VARIANT must annotate a group")
 			}
 			return nil
 		}
-		if lt := c.Type().LogicalType(); lt != nil && lt.Variant != nil {
+		if lt := parquetLogicalType(ctx, c); lt != nil && lt.Variant != nil {
 			return validateVariantGroup(ctx, c, true, 0, &count)
 		}
 		for _, child := range c.Columns() {
@@ -126,17 +126,17 @@ func validateVariantGroup(ctx context.Context, col *parquet.Column, root bool, d
 	if depth >= bytejson.JSONDocumentMaxNestingDepth {
 		return variantSchemaError(ctx, "nesting exceeds 100 containers")
 	}
-	lt := typed.Type().LogicalType()
+	lt := parquetLogicalType(ctx, typed)
 	if lt != nil {
 		if lt.List == nil || len(typed.Columns()) != 1 {
 			return variantSchemaError(ctx, "typed group must be an object or three-level LIST")
 		}
 		list := typed.Columns()[0]
-		if list.Name() != "list" || !list.Repeated() || list.Leaf() || list.Type().LogicalType() != nil || len(list.Columns()) != 1 {
+		if list.Name() != "list" || !list.Repeated() || list.Leaf() || parquetLogicalType(ctx, list) != nil || len(list.Columns()) != 1 {
 			return variantSchemaError(ctx, "invalid LIST repeated group")
 		}
 		elem := list.Columns()[0]
-		if elem.Name() != "element" || !elem.Required() || elem.Leaf() || elem.Type().LogicalType() != nil {
+		if elem.Name() != "element" || !elem.Required() || elem.Leaf() || parquetLogicalType(ctx, elem) != nil {
 			return variantSchemaError(ctx, "LIST element must be a required VARIANT field group")
 		}
 		return validateVariantGroup(ctx, elem, false, depth+1, count)
@@ -145,8 +145,8 @@ func validateVariantGroup(ctx context.Context, col *parquet.Column, root bool, d
 		return variantSchemaError(ctx, "invalid typed object field count")
 	}
 	for _, field := range typed.Columns() {
-		if !field.Required() || field.Leaf() || field.Type().LogicalType() != nil || !utf8.ValidString(field.Name()) || len(field.Name()) > math.MaxUint16 {
-			return variantSchemaError(ctx, "invalid typed object field")
+		if !field.Required() || field.Leaf() || parquetLogicalType(ctx, field) != nil || !utf8.ValidString(field.Name()) || len(field.Name()) > math.MaxUint16 {
+			return variantSchemaError(ctx, fmt.Sprintf("invalid typed object field %s required=%v leaf=%v logical=%v", field.Name(), field.Required(), field.Leaf(), parquetLogicalType(ctx, field)))
 		}
 		if err := validateVariantGroup(ctx, field, false, depth+1, count); err != nil {
 			return err
@@ -155,13 +155,9 @@ func validateVariantGroup(ctx context.Context, col *parquet.Column, root bool, d
 	return nil
 }
 
-func variantBinary(c *parquet.Column) bool {
-	return c.Leaf() && c.Type().Kind() == parquet.ByteArray && c.Type().LogicalType() == nil
-}
-
 func validateVariantScalar(ctx context.Context, c *parquet.Column) error {
 	k := c.Type().Kind()
-	lt := c.Type().LogicalType()
+	lt := parquetLogicalType(ctx, c)
 	if lt == nil {
 		switch k {
 		case parquet.Boolean, parquet.Int32, parquet.Int64, parquet.Float, parquet.Double, parquet.ByteArray:
@@ -232,7 +228,7 @@ func reconstructParquetVariant(ctx context.Context, col *parquet.Column, values 
 		err = d.Reserve(len(values) * 32)
 	}
 	if err == nil {
-		err = validateVariantDictionary(d, col)
+		err = validateVariantDictionary(ctx, d, col)
 	}
 	var bj bytejson.ByteJson
 	if err == nil {
@@ -268,7 +264,7 @@ func variantLeafValue(col *parquet.Column, values []parquet.Value) (parquet.Valu
 	return result, nil
 }
 
-func validateVariantDictionary(d *parquetvariant.Document, col *parquet.Column) error {
+func validateVariantDictionary(ctx context.Context, d *parquetvariant.Document, col *parquet.Column) error {
 	if err := d.Reserve(0); err != nil {
 		return err
 	}
@@ -276,8 +272,8 @@ func validateVariantDictionary(d *parquetvariant.Document, col *parquet.Column) 
 	if typed == nil || typed.Leaf() {
 		return nil
 	}
-	if lt := typed.Type().LogicalType(); lt != nil && lt.List != nil {
-		return validateVariantDictionary(d, typed.Columns()[0].Columns()[0])
+	if lt := parquetLogicalType(ctx, typed); lt != nil && lt.List != nil {
+		return validateVariantDictionary(ctx, d, typed.Columns()[0].Columns()[0])
 	}
 	for _, field := range typed.Columns() {
 		ok, err := d.HasField(field.Name())
@@ -287,7 +283,7 @@ func validateVariantDictionary(d *parquetvariant.Document, col *parquet.Column) 
 		if !ok {
 			return fmt.Errorf("typed field %q missing from metadata dictionary", field.Name())
 		}
-		if err := validateVariantDictionary(d, field); err != nil {
+		if err := validateVariantDictionary(ctx, d, field); err != nil {
 			return err
 		}
 	}
@@ -373,12 +369,12 @@ func readVariantGroup(ctx context.Context, d *parquetvariant.Document, col *parq
 			return bytejson.Null, false, nil
 		}
 		bj, err := d.DecodeValue(raw.ByteArray(), depth)
-		if err == nil && bj.Type == bytejson.TpCodeObject && typed != nil && !typed.Leaf() && typed.Type().LogicalType() == nil {
+		if err == nil && bj.Type == bytejson.TpCodeObject && typed != nil && !typed.Leaf() && parquetLogicalType(ctx, typed) == nil {
 			err = fmt.Errorf("residual object requires a present typed object")
 		}
 		return bj, true, err
 	}
-	object := !typed.Leaf() && typed.Type().LogicalType() == nil
+	object := !typed.Leaf() && parquetLogicalType(ctx, typed) == nil
 	if rawPresent && !object {
 		return bytejson.ByteJson{}, false, fmt.Errorf("both value and typed_value populated for a non-object")
 	}
@@ -487,7 +483,7 @@ func readVariantArray(ctx context.Context, d *parquetvariant.Document, col *parq
 // Convert physical typed leaves to the same primitive wire representation as
 // residual leaves, so both paths use identical range/UTF-8/finite/type checks.
 func readVariantScalar(ctx context.Context, d *parquetvariant.Document, col *parquet.Column, v parquet.Value, depth int) (bytejson.ByteJson, error) {
-	lt := col.Type().LogicalType()
+	lt := parquetLogicalType(ctx, col)
 	kind := col.Type().Kind()
 	var wire []byte
 	switch {
@@ -573,4 +569,8 @@ func readVariantScalar(ctx context.Context, d *parquetvariant.Document, col *par
 		return bytejson.ByteJson{}, fmt.Errorf("unsupported typed VARIANT leaf")
 	}
 	return d.DecodeValue(wire, depth)
+}
+
+func variantBinary(c *parquet.Column) bool {
+	return c.Leaf() && c.Type().Kind() == parquet.ByteArray && c.Type().LogicalType() == nil
 }

@@ -250,6 +250,9 @@ func (h *ParquetHandler) openFile(param *ExternalParam, prefetchS3 bool) error {
 	}
 	var err error
 	h.file, err = parquet.OpenFile(r, fileSize, parquetLoadFileOptions(param)...)
+	if err == nil {
+		h.annotations = parquetGroupAnnotations(h.file)
+	}
 	return moerr.ConvertGoError(param.Ctx, err)
 }
 
@@ -466,7 +469,7 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			continue
 		}
 		h.hasPhysicalCol = true
-		if err := validateParquetVariantSchema(param.Ctx, col); err != nil {
+		if err := validateParquetVariantSchema(withParquetAnnotations(param.Ctx, h.annotations), col); err != nil {
 			return err
 		}
 		// The row reader is only needed for nested columns.  Keeping scalar

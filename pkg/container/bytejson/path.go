@@ -402,3 +402,19 @@ func (pe subPathRangeExpr) matchesIndex(index, cnt int) bool {
 	end, _, _ := pe.end.genIndex(cnt)
 	return start <= end && start <= index && index <= end
 }
+
+// ObjectKeys exposes the canonical key-only path for storage projection.
+// Root, array steps and wildcard/range steps require the original document.
+func (p Path) ObjectKeys() ([]string, bool) {
+	if len(p.paths) == 0 {
+		return nil, false
+	}
+	keys := make([]string, 0, len(p.paths))
+	for _, sub := range p.paths {
+		if sub.tp != subPathKey {
+			return nil, false
+		}
+		keys = append(keys, sub.key)
+	}
+	return keys, true
+}
