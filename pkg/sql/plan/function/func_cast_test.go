@@ -4550,7 +4550,7 @@ func TestCastToJSONPreservesSourceCategories(t *testing.T) {
 	})
 	t.Run("binary remains opaque including its payload", func(t *testing.T) {
 		run(t, types.T_blob.ToType(), []string{`{"a":1}`}, nil,
-			[]string{encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeOpaque, `{"a":1}`))})
+			[]string{encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeBlob, `base64:type252:eyJhIjoxfQ==`))})
 	})
 	t.Run("signed and unsigned keep their numeric representation", func(t *testing.T) {
 		run(t, types.T_int64.ToType(), []int64{-1}, nil,
