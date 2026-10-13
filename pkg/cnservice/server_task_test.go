@@ -479,7 +479,7 @@ func Test_registerExecutorsLocked(t *testing.T) {
 	sv.task.runnerReady.Store(true)
 	t.Cleanup(sv.stopper.Stop)
 
-	ts := &testTS{created: make(chan struct{}, 1)}
+	ts := &testTS{created: make(chan struct{}, 2)}
 
 	sv.task.holder = &testHolder{
 		ts: ts,
@@ -492,7 +492,16 @@ func Test_registerExecutorsLocked(t *testing.T) {
 		t.Fatal("lineage GC cron was not registered")
 	}
 	require.NotNil(t, run.GetExecutor(task.TaskCode_DataBranchLineageGC))
-	require.Len(t, ts.cronTasks, 1)
+	select {
+	case <-ts.created:
+	case <-time.After(2 * time.Second):
+		t.Fatal("TTL cron was not registered")
+	}
+	require.NotNil(t, run.GetExecutor(task.TaskCode_TableTTL))
+	require.Len(t, ts.cronTasks, 2)
+	assert.Equal(t, task.TaskCode_TableTTL, ts.cronTasks[1].Executor)
+	assert.Equal(t, "table_ttl", ts.cronTasks[1].ID)
+	assert.Equal(t, "0 * * * * *", ts.cronExprs[1])
 	assert.Equal(t, task.TaskCode_DataBranchLineageGC, ts.cronTasks[0].Executor)
 	assert.Equal(t, "data_branch_lineage_gc", ts.cronTasks[0].ID)
 	assert.Equal(t, "0 */5 * * * *", ts.cronExprs[0])

@@ -1312,6 +1312,9 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
+	if err := validateTTLAlter(ctx, tableDef, stmt); err != nil {
+		return nil, err
+	}
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return nil, err
 	}
@@ -1573,7 +1576,7 @@ Loop:
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.AlterOptionAlterAutoUpdate:
 			algorithm = plan.AlterTable_INPLACE
-		case *tree.TableOptionComment:
+		case *tree.TableOptionTTL, *tree.TableOptionComment:
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.AlterOptionTableName:
 			algorithm = plan.AlterTable_INPLACE

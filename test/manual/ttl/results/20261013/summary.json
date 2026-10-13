@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "implementation_base_commit": "87ade1b8fb80a5667b278743f3c3f68740dce90f",
+  "tested_checkout_commit": "87ade1b8fb80a5667b278743f3c3f68740dce90f",
+  "recorded_at_utc": "2026-10-13T02:01:40.017194+00:00",
+  "environment": {
+    "os": "linux",
+    "arch": "x86_64",
+    "go": "go version go1.27.1 linux/amd64",
+    "gcc": "14.2.0",
+    "deployment": "embedded single CN/TN/LogService; real storage and SQL clients"
+  },
+  "suites": {
+    "unit": {
+      "passed_test_entries_including_subtests": 15677,
+      "package_results": [
+        {
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql",
+          "Action": "pass",
+          "Elapsed": 0.134
+        },
+        {
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/ttl",
+          "Action": "pass",
+          "Elapsed": 0.241
+        },
+        {
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/plan",
+          "Action": "pass",
+          "Elapsed": 13.617
+        }
+      ],
+      "failures": []
+    },
+    "registration": {
+      "passed_test_entries_including_subtests": 3,
+      "package_results": [
+        {
+          "Package": "github.com/matrixorigin/matrixone/pkg/cnservice",
+          "Action": "pass",
+          "Elapsed": 0.066
+        }
+      ],
+      "failures": []
+    },
+    "integration": {
+      "passed_test_entries_including_subtests": 33,
+      "package_results": [
+        {
+          "Package": "github.com/matrixorigin/matrixone/pkg/tests/sqlintegration",
+          "Action": "pass",
+          "Elapsed": 80.562
+        }
+      ],
+      "failures": [],
+      "scenarios": [
+        "TestTTLTemporalMatrix",
+        "TestTTLPolicyLifecycleAndStaleDiscovery",
+        "TestTTLRandomizedRowsRollbackAndConcurrentWorkers",
+        "TestTTLTenantIsolation",
+        "TestTTLBackgroundCronAndRestart",
+        "TestTTLConcurrentForegroundWrites",
+        "TestTTLPolicyRemovalWhileWorkerWaits",
+        "TestTTLPrivilegesAndReferencedParent"
+      ]
+    }
+  },
+  "raw_log_sha256": {
+    "unit.jsonl": "bbb462a3f5112075c567d4bce2595a89de7dce526b1ea39f623c3ecfa52afc16",
+    "registration.jsonl": "700651f9a751890eb263c532ccfb797f8fa47f1006e7ec740344d7e705dbdfa5",
+    "integration.jsonl": "e42568e0c43cedea713d8ad7799025ef6176886712e5cb453f87c3ccd60a81a2"
+  },
+  "deterministic_validation": {
+    "random_cutoff_oracle_cases": 20000,
+    "malformed_constraint_cases": 10000,
+    "random_database_rows": 1500,
+    "concurrent_foreground_insert_rows": 800
+  },
+  "limitations": [
+    "Multi-CN fault injection, mixed-version rollout and large-backlog throughput were not verified.",
+    "Only fixed-length row deletion TTL for permanent ordinary non-partitioned user tables is implemented.",
+    "Asynchronous deletion and physical reclamation follow existing MVCC/PITR/GC.",
+    "There is no independent cluster protocol fence; use homogeneous TTL-capable CNs."
+  ],
+  "fuzz": {
+    "duration_seconds": 15,
+    "executions": 50682,
+    "passed": true
+  },
+  "build": {
+    "target": "./cmd/mo-service",
+    "passed": true,
+    "binary_bytes": 273678216,
+    "binary_sha256": "dd1db8c11458caa72f862cb59170d47fb5c5b558cf99df8b9dacf1f2c7f7332e"
+  },
+  "all_checks_passed": true,
+  "evidence_filter": "test-events.jsonl retains all run/pass/fail/skip entries for TTL and registration tests; unrelated full-regression test entries are counted in summary.json. Verbose runtime output is omitted; raw-log checksums are retained."
+}

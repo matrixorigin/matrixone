@@ -64,6 +64,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/ttl"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -1574,6 +1575,17 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			))
 
 		case *plan.AlterTable_Action_AlterReplaceDef:
+			before, err := ttl.Get(qry.TableDef)
+			if err != nil {
+				return err
+			}
+			after, err := ttl.Get(qry.CopyTableDef)
+			if err != nil {
+				return err
+			}
+			if (before == nil) != (after == nil) || (before != nil && after != nil && *before != *after) {
+				hasUpdateConstraints = true
+			}
 			hasDefReplace = true
 		default:
 			return moerr.NewInternalErrorNoCtxf(

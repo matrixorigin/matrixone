@@ -1,0 +1,11 @@
+WARNING: sonic/ast only supports (go1.17~1.26 and amd64 CPU) or (go1.20~1.26 and arm64 CPU), but your environment is not suitable and will fallback to encoding/json
+fuzz: elapsed: 0s, gathering baseline coverage: 0/14 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 14/14 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 10208 (3402/sec), new interesting: 1 (total: 15)
+fuzz: elapsed: 6s, execs: 19145 (2979/sec), new interesting: 2 (total: 16)
+fuzz: elapsed: 9s, execs: 30286 (3714/sec), new interesting: 5 (total: 19)
+fuzz: elapsed: 12s, execs: 40885 (3532/sec), new interesting: 7 (total: 21)
+fuzz: elapsed: 15s, execs: 50682 (3266/sec), new interesting: 7 (total: 21)
+fuzz: elapsed: 15s, execs: 50682 (0/sec), new interesting: 7 (total: 21)
+PASS
+ok  	github.com/matrixorigin/matrixone/pkg/sql/ttl	15.142s
