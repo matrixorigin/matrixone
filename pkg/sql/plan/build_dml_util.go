@@ -2326,7 +2326,11 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						upPlanCtx.insertColPos = insertColPos
 						upPlanCtx.isFkRecursionCall = true
 						upPlanCtx.updatePkCol = updatePk
-						upPlanCtx.preserveUpdateSourceProjection = delCtx.skipTargetDelete
+						// Single and combined direct-DELETE actions are both appended after
+						// createQuery. Their index flow must use the same local ABI;
+						// REPLACE retains its existing tagged action stream.
+						upPlanCtx.isPostCreateQueryFkSetNullAction = !delCtx.skipTargetDelete && delCtx.sourceTag == 0
+						upPlanCtx.preserveUpdateSourceProjection = delCtx.skipTargetDelete || upPlanCtx.isPostCreateQueryFkSetNullAction
 						upPlanCtx.fkSetNullColumns = make(map[string]struct{}, len(fk.Cols))
 						for _, childColID := range fk.Cols {
 							upPlanCtx.fkSetNullColumns[childId2name[childColID]] = struct{}{}
@@ -6673,7 +6677,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 			preserveActionRows = false
 		}
 		if delCtx.isPostCreateQueryFkSetNullAction {
-			// The combined SET NULL source is a post-createQuery maintenance
+			// The SET NULL source is a post-createQuery maintenance
 			// stream. It may retain non-NULL keys for rows matched by a sibling
 			// FK, so it still needs the full delete/reinsert index flow, but that
 			// flow must use the local two-input JOIN ABI rather than planner tags.
