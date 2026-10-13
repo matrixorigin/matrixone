@@ -75,6 +75,10 @@
     "branch": "feat/materialized-views-p1-20261013",
     "base_freshness": "origin/main fetched and verified on 2026-10-13",
     "protocol_floor": 112,
-    "prototype_protocol_floor": 110
+    "prototype_protocol_floor": 110,
+    "head_repository": "dengn/matrixone",
+    "pull_request": 30085,
+    "source_commit": "f9cf6f1bd638d482e4361d7272cde94488fe98d2",
+    "state": "draft"
   }
 }

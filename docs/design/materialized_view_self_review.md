@@ -126,3 +126,20 @@ P1 scope. The production release gates listed above remain pending; draft
 publication is not production approval, a full CI pass or closure of P1.1/P2/P3.
 The initial review's statements about an unpublished worktree and unavailable
 lint refer to that earlier review; this section supersedes them for publication.
+
+Published implementation source commit:
+`f9cf6f1bd638d482e4361d7272cde94488fe98d2`. Draft implementation PR:
+[#30085](https://github.com/matrixorigin/matrixone/pull/30085), linked to project
+tracker [#30079](https://github.com/matrixorigin/matrixone/issues/30079).
+Head repository is `dengn/matrixone`, branch
+`feat/materialized-views-p1-20261013`; base is `matrixorigin/matrixone:main`.
+The upstream repository rejected direct ref creation under its repository rules,
+so publication follows CONTRIBUTING.md through the existing user fork.
+The local link/provenance update changes documentation only. After PR creation,
+the remote branch merged newer main commits `175a645a85` and `e5111936b9` via
+`e2ba50650e`; this upstream integration is preserved. Original runtime/lint/race
+evidence remains pinned to the verified implementation source above. Current-head
+integration/CI evidence is separate and is not inferred from those earlier runs.
+Post-merge focused MV tests passed in the parser, planner, frontend and compiler
+packages (`post-merge-focused.log`). This verifies the affected local integration
+closure; it is not a rerun of the earlier complete native SQL/performance matrix.

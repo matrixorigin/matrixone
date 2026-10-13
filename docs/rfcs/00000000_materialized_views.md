@@ -3,7 +3,7 @@
 - Authors: Codex, at the user's request
 - Design revision: 2 (Git4Data and validation scope added)
 - User approval: 2026-10-12, "去实现吧"; P1 implementation and validation authorized.
-- Implementation PR: none; implementation is in the local task worktree
+- Implementation PR: [#30085](https://github.com/matrixorigin/matrixone/pull/30085) (Draft, experimental P1)
 - Issue for this RFC: [#30079](https://github.com/matrixorigin/matrixone/issues/30079)
 - Code baseline: `dd38098853ea197699ed3fac3e69dc53975ac061`
 - Publication baseline: `3e50e1b32d8da61bbbf70c89989fb08b671809de` (fresh main)
