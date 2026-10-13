@@ -15,9 +15,8 @@
 package plan
 
 import (
-	"fmt"
-
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const CorrelationVersion uint32 = 1
@@ -45,7 +44,7 @@ func WalkQueryNodes(q *Query, visit func(int32, *Node) error) error {
 	if q.Correlation != nil {
 		for _, program := range q.Correlation.Programs {
 			if program == nil {
-				return fmt.Errorf("nil correlation program")
+				return moerr.NewInternalErrorNoCtx("nil correlation program")
 			}
 			pending = append(pending, program.RootNode)
 		}
@@ -55,7 +54,7 @@ func WalkQueryNodes(q *Query, visit func(int32, *Node) error) error {
 		id := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
 		if id < 0 || int(id) >= len(q.Nodes) || q.Nodes[id] == nil {
-			return fmt.Errorf("invalid query node %d", id)
+			return moerr.NewInternalErrorNoCtxf("invalid query node %d", id)
 		}
 		if seen[id] {
 			continue
@@ -68,7 +67,7 @@ func WalkQueryNodes(q *Query, visit func(int32, *Node) error) error {
 		pending = append(pending, n.Children...)
 		for _, step := range n.SourceStep {
 			if step < 0 || int(step) >= len(q.Steps) {
-				return fmt.Errorf("invalid source step %d", step)
+				return moerr.NewInternalErrorNoCtxf("invalid source step %d", step)
 			}
 			pending = append(pending, q.Steps[step])
 		}
@@ -89,14 +88,16 @@ func (q *Query) ValidateCorrelation() error {
 			return VisitExpressionsInOwner(n, func(e *Expr) error {
 				return VisitExprTree(e, func(e *Expr) error {
 					if e.GetDependent() != nil || e.GetSlot() != nil {
-						return fmt.Errorf("correlation expression without descriptor")
+						return moerr.NewInternalErrorNoCtx("correlation expression without descriptor")
 					}
 					return nil
 				})
 			})
 		})
 	}
-	invalid := func(s string, args ...any) error { return fmt.Errorf("invalid correlation plan: "+s, args...) }
+	invalid := func(s string, args ...any) error {
+		return moerr.NewInternalErrorNoCtxf("invalid correlation plan: "+s, args...)
+	}
 	if spec.Version != CorrelationVersion {
 		return invalid("version %d", spec.Version)
 	}

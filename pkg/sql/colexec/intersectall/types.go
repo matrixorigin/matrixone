@@ -87,6 +87,11 @@ func (intersectAll *IntersectAll) Release() {
 func (intersectAll *IntersectAll) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &intersectAll.ctr
 	ctr.state = Build
+	// Account-bound batches and key evaluators cannot survive EXECUTE reset.
+	if intersectAll.ExpressionAllocation() != nil {
+		intersectAll.Free(proc, pipelineFailed, err)
+		return
+	}
 	ctr.cleanHashMap()
 	ctr.keyEvaluator.Reset()
 	if ctr.buf != nil {
