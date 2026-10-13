@@ -39,8 +39,50 @@ SUM/AVG/COUNT. Checked global merge, final precision and AVG rounding retain
 their existing implementation. Fresh guarded release qualification compares
 against merged #31 on the same MO main base and frozen 16-CPU/64-KiB profile;
 historical captures below retain their actual identities. Final optimization
-acceptance remains pending the complete matched timing, resource, numeric and
-lifecycle gates.
+acceptance requires the complete matched timing, resource, numeric and lifecycle
+gates recorded below, plus CI and reviewer approval.
+
+The fresh optimization release capture uses MO `8fafa3ae3e`, Sirius `0cc6e484`
+and guarded SDK `1de3ab8b`; its matched pre-optimization baseline uses MO
+`8539955f9f`, Sirius `b953bb5a` and SDK `f65b21f4`. Both use MO main `3e50e1b32d`,
+the same canonical SQL/datasets/provider, 16 Go CPUs and 64 KiB host blocks.
+All 744 timing/correctness executions and 264 separate resource executions pass;
+six warmed SF1/SF10 stream 1/2/4 profiles show zero unexplained growth.
+
+| GPU median | Matched baseline | Optimized release |
+| --- | ---: | ---: |
+| SF1 full suite | 1.686514 s | 1.395820 s |
+| SF10 full suite | 15.091929 s | 12.556484 s |
+| SF1 Q20 | 0.116503 s | 0.066711 s |
+| SF10 Q20 | 1.235098 s | 0.857208 s |
+
+Both full-suite metrics pass the 5% regression limit; Q20 improves 42.7% and
+30.6%, passing the 15% target at both scales. Q19 improves 37% at SF10. Q15 is
+12% slower in this capture; shared-CTE reuse remains separate work.
+All ten numeric controls pass the 10% limit on 42 retained samples per case.
+One bounded balanced follow-up resolves a bimodal scalar result without
+discarding the initial samples or changing inputs, timing boundaries or limits.
+
+Fresh merged-source GPU checks pass 39 cases/35,107 assertions; production
+numeric ABI checks pass ten cases/1,964 assertions. The 96 MiB result tests
+close ordered/unordered output, full-window cancellation/deadline and borrowed
+lifetime. Native control normal/ASan+UBSan/TSan checks pass 93 cases/877
+assertions using unchanged merged production and the accounting-only fixture
+correction in Sirius #34. Four raw sanitizer statuses remain 99, reconciled
+against the exact Native A CUB and same-profile no-GPU-work pinned-pool
+controls plus all six zero-growth profiles. The conversion CUDA source is
+unchanged; the C++ pool-constructor change is separately identified.
+
+The delivery also merges main `175a645a85`: its set-operation remapping and
+row-error-only changes do not affect successful canonical TPC-H paths. The
+new error branch passes its targeted frontend regression. A six-line
+test-only gossip allocator repair closes the inherited main compile error and
+preserves the shared ephemeral-port exclusion and failure propagation.
+Measured captures retain their actual identities; no source or binary is
+relabeled. Public writer/compiler normal/race cleanup, owning function/compiler,
+actual GPU bridge and same-process cuVS checks, all 86 tooling tests and full
+SCA pass. Fail-closed artifact acceptance reports local completion, with CI and
+reviewer approval remaining. Generated evidence remains outside Git.
 
 ## Contract and choice
 
