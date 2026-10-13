@@ -159,15 +159,6 @@ The following mappings are normative for schema version 1:
   `fill_value[i]=<expression>` from `FillVal`, in their original order.
   Empty target/value lists add no entries. Unknown modes and missing required
   expressions are errors; the renderer never rebuilds pre-pruning targets.
-- An `INDEX_SEARCH_SCAN` uses the current typed `IndexSearchScan` contract
-  for vector and fulltext indexes. It retains the query payload, candidate
-  limit, distance bounds, included columns and pre-filters. Algorithm-owned
-  option bytes are preserved as `algo_options_base64`; existing plugin
-  EXPLAIN hooks add readable `algo_setting[i]` entries. Named algorithm
-  expressions (including IVF first-round limits) use `algo_expr["name"]`,
-  with quoted names and matching ordered name/expression arrays. Missing,
-  empty or duplicate expression names are errors. No protobuf fields are
-  invented and no options are decoded using another algorithm's schema.
 - Serialized scalar bytes use
   `serialized(type=<oid>,width=<width>,scale=<scale>,value=0x<HEX>)`.
   Serialized literal vectors use

@@ -57,20 +57,6 @@ explain format=json select id, tag from vectors_include order by l2_distance(v,'
 EXPLAIN
 drop table vectors_include;
 set probe_limit=default;
-set experimental_fulltext_index=1;
-set experimental_fulltext2_index=1;
-create table documents(id bigint primary key, body text);
-create fulltext index ix_text on documents(body);
-explain format=json select id from documents where match(body) against('needle') > 0;
-EXPLAIN
-drop table documents;
-create table documents(id bigint primary key, body text);
-create fulltext2 index ix_text on documents(body) with parser ngram;
-explain format=json select id from documents where match(body) against('needle') > 0;
-EXPLAIN
-drop table documents;
-set experimental_fulltext_index=default;
-set experimental_fulltext2_index=default;
 create table fill_values(ts timestamp, v int);
 insert into fill_values values ('2024-01-01 00:00:00',1),('2024-01-01 00:00:10',3);
 explain format=json select c from (select _wstart as a, max(v) as b, min(v) as c from fill_values interval(ts, 5, second) fill(prev)) x;
