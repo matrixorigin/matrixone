@@ -166,18 +166,11 @@ func (builder *QueryBuilder) hnswUsesPreFilter(vecCtx *vectorSortContext) bool {
 // MATCH filter, under which post already searches the matching keys. A region that is
 // small, not replay-safe or not supported by ADAPTIVE_TOP runs force.
 func (builder *QueryBuilder) buildAdaptiveHnswTop(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
-	if builder.shouldUseForceMode(vecCtx) || !builder.adaptiveVectorReplaySafe(nodeID) {
-		builder.forceAdaptiveVectorRegion(vecCtx)
-		return nodeID, nil
-	}
 	branch := func(root int32, branchCtx *vectorSortContext, branchMap map[[2]int32]*plan.Expr) (int32, error) {
 		return builder.applyIndicesForSortUsingHnswWithColRefCnt(root, branchCtx, multiTableIndex, colRefCnt, branchMap)
 	}
-	branches := adaptiveVectorBranches{post: branch}
-	if len(vecCtx.scanNode.FilterList) > 0 && !builder.scanHasMatchedFullTextFilter(vecCtx.scanNode) {
-		branches.pre = branch
-	}
-	return builder.buildAdaptiveVectorTop(nodeID, vecCtx, idxColMap, branches, false)
+	withPre := len(vecCtx.scanNode.FilterList) > 0 && !builder.scanHasMatchedFullTextFilter(vecCtx.scanNode)
+	return builder.buildAdaptiveModeTop(nodeID, vecCtx, idxColMap, branch, withPre)
 }
 
 func (builder *QueryBuilder) applyIndicesForSortUsingHnswWithColRefCnt(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {

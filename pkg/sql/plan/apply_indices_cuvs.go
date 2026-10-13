@@ -34,8 +34,9 @@ type cuvsSearchScan struct {
 	partPos      int32
 	pkPos        int32
 	pkType       plan.Type
-	// algoOptions returns the algo_options bytes carrying filterJSON.
-	algoOptions func(filterJSON string) ([]byte, error)
+	// algoOptions returns the algo_options bytes carrying filterJSON and the
+	// iterative flag.
+	algoOptions func(filterJSON string, iterative bool) ([]byte, error)
 }
 
 // applyCuvsIndexSearchScan rewrites the vector sort of vecCtx into
@@ -61,6 +62,11 @@ func (builder *QueryBuilder) applyCuvsIndexSearchScan(nodeID int32, vecCtx *vect
 	if scanNode.TableDef.Pkey != nil {
 		pkColName = scanNode.TableDef.Pkey.PkeyColName
 	}
+	// mode=post does not use INCLUDE columns: only primary-key predicates run in the
+	// search, as for ivfflat.
+	if vectorRankMode(vecCtx) == "post" {
+		includeCols = nil
+	}
 	predsJSON, peeled, residualFilters, err := buildFilterPredicateJSON(
 		scanNode.FilterList, scanNode, includeCols, pkColName, false)
 	if err != nil {
@@ -72,7 +78,10 @@ func (builder *QueryBuilder) applyCuvsIndexSearchScan(nodeID int32, vecCtx *vect
 		scanNode.FilterList = residualFilters
 	}
 
-	algoOptions, err := s.algoOptions(predsJSON)
+	// mode=iterative widens the search only when the search evaluates every filter:
+	// a residual filter drops rows the search cannot count.
+	iterative := vectorRankMode(vecCtx) == "iterative" && len(scanNode.FilterList) == 0
+	algoOptions, err := s.algoOptions(predsJSON, iterative)
 	if err != nil {
 		return 0, err
 	}

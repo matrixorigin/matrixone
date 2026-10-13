@@ -106,6 +106,9 @@ func (s *gpuSearcher) Next(ctx context.Context) (planreader.Chunk, bool, error) 
 		Probe:        uint(s.tblcfg.Nprobe),
 		OrigFuncName: s.tblcfg.OrigFuncName,
 		FilterJSON:   s.filterJSON,
+		Iterative:    s.iterative,
+		ResultLimit:  uint(s.resultLimit),
+		MaxProbe:     uint(s.maxProbe),
 	}
 	keys, distances, err := veccache.Cache.Search(sp, cacheKey, newAlgo(s.idxcfg, s.tblcfg), query, rt)
 	if err != nil {

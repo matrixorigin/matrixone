@@ -125,3 +125,47 @@ func TestPostFilterBudgetIsPostFilterLimit(t *testing.T) {
 		require.Equal(t, overfetch.PostFilterLimit(k), Hooks{}.PostFilterCandidateBudget(k))
 	}
 }
+
+func TestNewSearchIterative(t *testing.T) {
+	proc := testutil.NewProc(t)
+	req := ivfpqRequest(types.T_array_float32, 3)
+	req.ResultLimit, req.MaxNprobe = 4, 9
+	s, err := newSearch(proc, ivfpqSpec(t, types.T_array_float32, `{"op_type":"vector_l2_ops"}`), req)
+	require.NoError(t, err)
+	require.False(t, s.iterative)
+
+	spec := ivfpqSpec(t, types.T_array_float32, `{"op_type":"vector_l2_ops"}`)
+	spec.AlgoOptions, err = ivfpqplan.EncodeScanOptions(ivfpqplan.ScanOptions{KeyPartType: int32(types.T_array_float32), Iterative: true})
+	require.NoError(t, err)
+	s, err = newSearch(proc, spec, req)
+	require.NoError(t, err)
+	require.True(t, s.iterative)
+	require.Equal(t, uint64(4), s.resultLimit)
+	require.Equal(t, uint64(9), s.maxProbe)
+	require.True(t, Hooks{}.SupportsIndexFilter())
+}
+
+func TestExplainSettingsDescribesIndexFilter(t *testing.T) {
+	opts, err := ivfpqplan.EncodeScanOptions(ivfpqplan.ScanOptions{FilterJSON: `[{"col":-1,"op":"between","lo":501,"hi":1000},{"col":1,"op":"=","val":2}]`})
+	require.NoError(t, err)
+	spec := &plan.IndexSearchScan{
+		AlgoOptions:    opts,
+		Index:          &plan.IndexDef{IndexAlgoParams: `{"op_type":"vector_l2_ops","included_columns":"category,note"}`},
+		SourceTableDef: &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"}},
+	}
+	settings, err := Hooks{}.ExplainSettings(spec)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Index Filter: id BETWEEN 501 AND 1000 AND note = 2"}, settings)
+
+	spec.AlgoOptions, err = ivfpqplan.EncodeScanOptions(ivfpqplan.ScanOptions{})
+	require.NoError(t, err)
+	settings, err = Hooks{}.ExplainSettings(spec)
+	require.NoError(t, err)
+	require.Empty(t, settings)
+
+	spec.Index.IndexAlgoParams = "{"
+	spec.AlgoOptions, err = ivfpqplan.EncodeScanOptions(ivfpqplan.ScanOptions{FilterJSON: `[{"col":-1,"op":"=","val":1}]`})
+	require.NoError(t, err)
+	_, err = Hooks{}.ExplainSettings(spec)
+	require.Error(t, err)
+}

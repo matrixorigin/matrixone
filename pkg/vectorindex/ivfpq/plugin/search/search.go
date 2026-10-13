@@ -25,6 +25,7 @@ import (
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	ivfpqPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq"
 	ivfpqplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/plan"
 	ivfpqruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -38,9 +39,44 @@ type Hooks struct{}
 var _ searchplugin.Hooks = Hooks{}
 var _ searchplugin.CandidateBudgetHooks = Hooks{}
 var _ searchplugin.ProbeKnobsHooks = Hooks{}
+var _ searchplugin.IndexFilterHooks = Hooks{}
+var _ searchplugin.AdvancedSearchHooks = Hooks{}
+var _ searchplugin.ExplainHooks = Hooks{}
+
+// ExplainSettings returns the filter the search applies on the device, as SQL.
+func (Hooks) ExplainSettings(spec *plan.IndexSearchScan) ([]string, error) {
+	opts, err := ivfpqplan.DecodeScanOptions(spec.GetAlgoOptions())
+	if err != nil {
+		return nil, err
+	}
+	include, err := catalog.IncludeColumnsFromIndexParams(spec.GetIndex().GetIndexAlgoParams())
+	if err != nil {
+		return nil, err
+	}
+	filter, err := vectorindex.DescribeIndexFilter(opts.FilterJSON, include,
+		spec.GetSourceTableDef().GetPkey().GetPkeyColName())
+	if err != nil || filter == "" {
+		return nil, err
+	}
+	return []string{"Index Filter: " + filter}, nil
+}
+
+// StartRound is the first round of the IVF-PQ widening policy (ivfpq.AdvancedSearch).
+func (Hooks) StartRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats) searchplugin.Round {
+	return ivfpqPkg.AdvancedSearch{}.StartRound(spec, req, stats)
+}
+
+// NextRound is the round after prev of the IVF-PQ widening policy (ivfpq.AdvancedSearch).
+func (Hooks) NextRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats, prev searchplugin.Round, got uint64) (searchplugin.Round, bool) {
+	return ivfpqPkg.AdvancedSearch{}.NextRound(spec, req, stats, prev, got)
+}
 
 // SupportsProbeKnobs reports true: the search probes IVF lists.
 func (Hooks) SupportsProbeKnobs() bool { return true }
+
+// SupportsIndexFilter reports true: the search applies the INCLUDE and
+// primary-key predicates of its filter inside the index search.
+func (Hooks) SupportsIndexFilter() bool { return true }
 
 // PostFilterCandidateBudget is the ivfpq post-filter over-fetch of resultLimit.
 func (Hooks) PostFilterCandidateBudget(resultLimit uint64) uint64 {
@@ -71,6 +107,12 @@ type search struct {
 	limit      uint64
 	filterJSON string
 	snapshot   *plan.Snapshot
+	// iterative is set for mode=iterative: the search widens in rounds up to
+	// maxLimit (max_itopk) or maxProbe (max_nprobe) until resultLimit rows qualify.
+	iterative   bool
+	resultLimit uint64
+	maxLimit    uint64
+	maxProbe    uint64
 }
 
 func newSearch(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (*search, error) {
@@ -125,13 +167,17 @@ func newSearch(proc *process.Process, spec *plan.IndexSearchScan, req searchplug
 		return nil, moerr.NewInvalidInputNoCtx("ivfpq index search is missing its hidden tables")
 	}
 	return &search{
-		proc:       proc,
-		idxcfg:     idxcfg,
-		tblcfg:     tblcfg,
-		query:      req.QueryPayload,
-		queryType:  queryType,
-		limit:      max(req.CandidateBudget, 1),
-		filterJSON: opts.FilterJSON,
-		snapshot:   spec.ScanSnapshot,
+		proc:        proc,
+		idxcfg:      idxcfg,
+		tblcfg:      tblcfg,
+		query:       req.QueryPayload,
+		queryType:   queryType,
+		limit:       max(req.CandidateBudget, 1),
+		filterJSON:  opts.FilterJSON,
+		snapshot:    spec.ScanSnapshot,
+		iterative:   opts.Iterative,
+		resultLimit: req.ResultLimit,
+		maxLimit:    req.MaxInternalTopK,
+		maxProbe:    req.MaxNprobe,
 	}, nil
 }

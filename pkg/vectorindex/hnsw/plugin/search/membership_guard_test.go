@@ -105,11 +105,11 @@ func TestNewReaderMembership(t *testing.T) {
 	r = f32Request([]float32{1, 2}, 10)
 	s, err = newSearcher(proc, membershipSpec(), r)
 	require.NoError(t, err)
-	require.False(t, s.widen)
+	require.False(t, s.iterative)
 	spec = membershipSpec()
 	spec.AlgoOptions, err = hnswplan.EncodeScanOptions(hnswplan.ScanOptions{Iterative: true})
 	require.NoError(t, err)
 	s, err = newSearcher(proc, spec, r)
 	require.NoError(t, err)
-	require.True(t, s.widen)
+	require.True(t, s.iterative)
 }

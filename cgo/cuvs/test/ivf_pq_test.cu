@@ -1284,6 +1284,46 @@ TEST(GpuIvfPqTest, FilterAdmittingFewerThanKPadsWithSentinels) {
     index.destroy();
 }
 
+// The filter admits half the rows, none of them in the one probed list: every
+// slot is a sentinel, not a filter-excluded row.
+TEST(GpuIvfPqTest, FilterEmptyInProbedListsPadsWithSentinels) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 200;
+    std::vector<float> dataset(count * dimension);
+    for (uint64_t i = 0; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = (float)i;
+    std::vector<int64_t> cats(count);
+    for (uint64_t i = 0; i < count; ++i) cats[i] = i < count / 2 ? 1 : 2;
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 4;
+    bp.m = 4;
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), nullptr, count);
+    index.build();
+
+    std::vector<float> query(dimension, 0.0f);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 1;
+    const uint32_t limit = 5;
+    auto r = index.search_with_filter(query.data(), 1, dimension, limit, sp,
+                                      "[{\"col\":0,\"op\":\"=\",\"val\":2}]");
+    ASSERT_EQ(r.neighbors.size(), (size_t)limit);
+    for (uint32_t i = 0; i < limit; ++i) {
+        if (r.neighbors[i] == -1) {
+            ASSERT_EQ(r.distances[i], std::numeric_limits<float>::max());
+        } else {
+            ASSERT_GE(r.neighbors[i], (int64_t)(count / 2));
+            ASSERT_TRUE(std::isfinite(r.distances[i]));
+        }
+    }
+    index.destroy();
+}
+
 // Deleting all but two rows leaves two results, then sentinels.
 TEST(GpuIvfPqTest, DeletesLeavingFewerThanKPadWithSentinels) {
     const uint32_t dimension = 8;

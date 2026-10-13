@@ -133,6 +133,13 @@ type MembershipHooks interface {
 	SupportsMembership() bool
 }
 
+// IndexFilterHooks optionally reports that the search evaluates filters on
+// INCLUDE columns and the primary key itself, inside the index search, so
+// mode=pre and mode=iterative apply to it without a membership key set.
+type IndexFilterHooks interface {
+	SupportsIndexFilter() bool
+}
+
 // ProbeKnobsHooks optionally reports that the search probes inverted lists, so
 // the BY RANK options nprobe and max_nprobe apply to it.
 type ProbeKnobsHooks interface {

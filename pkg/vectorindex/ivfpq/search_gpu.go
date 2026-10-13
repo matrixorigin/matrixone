@@ -26,9 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cachegen"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	ivfpqplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -87,6 +90,14 @@ func (s *IvfpqSearch[B, Q]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt
 	if s.Overflow != nil {
 		cardinality = vectorindex.SaturatingAddUint64(cardinality, s.Overflow.Len())
 	}
+	if rt.Iterative {
+		return s.searchAdvanced(anyquery, rt, cardinality)
+	}
+	return s.searchOnce(anyquery, rt, cardinality)
+}
+
+// searchOnce runs one search of rt over an index of cardinality rows.
+func (s *IvfpqSearch[B, Q]) searchOnce(anyquery any, rt vectorindex.RuntimeConfig, cardinality uint64) (keys []int64, distances []float64, err error) {
 	limit := vectorindex.ClampSearchLimit(rt.Limit, cardinality, math.MaxUint32)
 	if limit == 0 {
 		return []int64{}, []float64{}, nil
@@ -808,4 +819,34 @@ func (s *IvfpqSearch[B, Q]) DeviceResidency() map[int]int64 {
 		perCard[participants[0]] += overflow
 	}
 	return perCard
+}
+
+// searchAdvanced answers a mode=iterative search in the rounds of AdvancedSearch,
+// each one a searchOnce probing the round's NProbe lists.
+func (s *IvfpqSearch[B, Q]) searchAdvanced(anyquery any, rt vectorindex.RuntimeConfig, cardinality uint64) ([]int64, []float64, error) {
+	algoOptions, err := ivfpqplan.EncodeScanOptions(ivfpqplan.ScanOptions{Nprobe: rt.Probe})
+	if err != nil {
+		return nil, nil, err
+	}
+	spec := &plan.IndexSearchScan{AlgoOptions: algoOptions}
+	req := searchplugin.Request{
+		ResultLimit:     uint64(rt.ResultLimit),
+		CandidateBudget: uint64(rt.Limit),
+		MaxNprobe:       uint64(rt.MaxProbe),
+	}
+	stats := searchplugin.SearchStats{IndexRows: cardinality, Lists: uint64(s.Idxcfg.CuvsIvfpq.Lists)}
+	policy := AdvancedSearch{}
+	round := policy.StartRound(spec, req, stats)
+	for {
+		rt.Limit, rt.Probe = uint(round.ITopK), uint(round.NProbe)
+		keys, distances, err := s.searchOnce(anyquery, rt, cardinality)
+		if err != nil {
+			return nil, nil, err
+		}
+		next, more := policy.NextRound(spec, req, stats, round, uint64(len(keys)))
+		if !more {
+			return keys, distances, nil
+		}
+		round = next
+	}
 }

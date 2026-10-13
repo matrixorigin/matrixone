@@ -141,6 +141,23 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 	if err != nil || ivfpqCtx == nil {
 		return nodeID, err
 	}
+	if vectorRankMode(vecCtx) == "auto" {
+		// pre differs from post only through filters on INCLUDE columns.
+		includeCols, err := parseIncludedColumnsFromParams(ivfpqCtx.idxDef.IndexAlgoParams)
+		if err != nil {
+			return nodeID, err
+		}
+		branch := func(root int32, branchCtx *vectorSortContext, branchMap map[[2]int32]*plan.Expr) (int32, error) {
+			return builder.applyIndicesForSortUsingIvfpq(root, branchCtx, multiTableIndex, branchMap)
+		}
+		includePreds, _, _, err := buildFilterPredicateJSON(
+			vecCtx.scanNode.FilterList, vecCtx.scanNode, includeCols, "", false)
+		if err != nil {
+			return nodeID, err
+		}
+		withPre := includePreds != ""
+		return builder.buildAdaptiveModeTop(nodeID, vecCtx, idxColMap, branch, withPre)
+	}
 
 	return builder.applyCuvsIndexSearchScan(nodeID, vecCtx, idxColMap, cuvsSearchScan{
 		algo:         "IVF-PQ",
@@ -155,7 +172,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		partPos:      ivfpqCtx.partPos,
 		pkPos:        ivfpqCtx.pkPos,
 		pkType:       ivfpqCtx.pkType,
-		algoOptions: func(filterJSON string) ([]byte, error) {
+		algoOptions: func(filterJSON string, iterative bool) ([]byte, error) {
 			return ivfpqplan.EncodeScanOptions(ivfpqplan.ScanOptions{
 				ThreadsSearch:      ivfpqCtx.nThread,
 				BatchWindow:        ivfpqCtx.batchWindow,
@@ -163,6 +180,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 				Nprobe:             uint(ivfpqCtx.nProbe),
 				KeyPartType:        ivfpqCtx.partType.Id,
 				FilterJSON:         filterJSON,
+				Iterative:          iterative,
 			})
 		},
 	})

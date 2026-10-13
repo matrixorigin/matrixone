@@ -184,6 +184,22 @@ func SupportsMembership(algo string) bool {
 	return ok && h.SupportsMembership()
 }
 
+// SupportsIndexFilter reports whether algo's search evaluates filters on INCLUDE
+// columns and the primary key inside the index search (searchplugin.IndexFilterHooks).
+// An unregistered algo, one without a SearchPlugin, or one without the hook reports false.
+func SupportsIndexFilter(algo string) bool {
+	p, ok := Get(algo)
+	if !ok {
+		return false
+	}
+	sp, ok := p.(SearchPlugin)
+	if !ok {
+		return false
+	}
+	h, ok := sp.Search().(searchplugin.IndexFilterHooks)
+	return ok && h.SupportsIndexFilter()
+}
+
 // SupportsProbeKnobs reports whether algo's search probes inverted lists
 // (searchplugin.ProbeKnobsHooks), so nprobe and max_nprobe apply to it. An
 // unregistered algo, one without a SearchPlugin, or one without the hook reports false.

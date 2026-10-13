@@ -32,6 +32,7 @@ var _ searchplugin.ParallelHooks = Hooks{}
 var _ searchplugin.ExplainHooks = Hooks{}
 var _ searchplugin.MembershipHooks = Hooks{}
 var _ searchplugin.ProbeKnobsHooks = Hooks{}
+var _ searchplugin.IndexFilterHooks = Hooks{}
 var _ searchplugin.AdvancedSearchHooks = Hooks{}
 
 // SupportsMembership reports true: the reader applies Request.MembershipFilter
@@ -40,6 +41,10 @@ func (Hooks) SupportsMembership() bool { return true }
 
 // SupportsProbeKnobs reports true: the search probes centroid lists.
 func (Hooks) SupportsProbeKnobs() bool { return true }
+
+// SupportsIndexFilter reports true: the search applies the INCLUDE and
+// primary-key predicates of its filter inside the index search.
+func (Hooks) SupportsIndexFilter() bool { return true }
 
 // StartRound returns the first round of the ivfflat widening policy.
 func (Hooks) StartRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats) searchplugin.Round {

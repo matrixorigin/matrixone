@@ -76,12 +76,9 @@ func TestCheckVectorSearchMode(t *testing.T) {
 	for _, algo := range []string{
 		catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString(),
 	} {
-		for _, mode := range []string{"pre", "auto", "iterative"} {
-			err := checkVectorSearchMode(ctx, &vectorSortContext{rankOption: &planpb.RankOption{Mode: mode}}, algo)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%s %s", algo, mode)
-			require.ErrorContains(t, err, "mode="+mode+" on index type "+algo)
-		}
-		for _, mode := range []string{"post", "force", ""} {
+		// cagra and ivfpq evaluate INCLUDE and primary-key filters in the search but
+		// apply no membership key set: pre, iterative and auto apply.
+		for _, mode := range []string{"pre", "iterative", "auto", "post", "force", ""} {
 			require.NoError(t, checkVectorSearchMode(ctx, &vectorSortContext{rankOption: &planpb.RankOption{Mode: mode}}, algo), "%s %s", algo, mode)
 		}
 		require.NoError(t, checkVectorSearchMode(ctx, &vectorSortContext{}, algo))

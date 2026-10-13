@@ -311,14 +311,16 @@ type RuntimeConfig struct {
 	BackgroundQueries []*plan.Query
 
 	// Membership, when non-nil, restricts an HNSW search to the primary keys it
-	// holds; MembershipCount is the number of keys. With Widen the search widens in
-	// rounds: ResultLimit is the number of rows the query returns and MaxLimit caps
-	// Limit (0 = DefaultMaxInternalTopK). Other algorithms ignore these fields.
+	// holds; MembershipCount is the number of keys. With Iterative (mode=iterative)
+	// an HNSW membership search, or a CAGRA / IVF-PQ search, widens in rounds: ResultLimit is the
+	// number of rows the query returns, MaxLimit caps Limit (0 = the algorithm's
+	// default) and MaxProbe caps Probe (0 = every list).
 	Membership      docfilter.MembershipFilter
 	MembershipCount uint64
-	Widen           bool
+	Iterative       bool
 	ResultLimit     uint
 	MaxLimit        uint
+	MaxProbe        uint
 
 	// FilterJSON is a JSON predicate array forwarded verbatim to CGo
 	// (gpu_<idx>_search_with_filter). Empty → unfiltered search path.

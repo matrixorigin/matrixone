@@ -122,3 +122,28 @@ func TestPostFilterBudgetIsPostFilterLimit(t *testing.T) {
 		require.Equal(t, overfetch.PostFilterLimit(k), Hooks{}.PostFilterCandidateBudget(k))
 	}
 }
+
+func TestExplainSettingsDescribesIndexFilter(t *testing.T) {
+	opts, err := cagraplan.EncodeScanOptions(cagraplan.ScanOptions{FilterJSON: `[{"col":-1,"op":"between","lo":501,"hi":1000},{"col":1,"op":"=","val":2}]`})
+	require.NoError(t, err)
+	spec := &plan.IndexSearchScan{
+		AlgoOptions:    opts,
+		Index:          &plan.IndexDef{IndexAlgoParams: `{"op_type":"vector_l2_ops","included_columns":"category,note"}`},
+		SourceTableDef: &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"}},
+	}
+	settings, err := Hooks{}.ExplainSettings(spec)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Index Filter: id BETWEEN 501 AND 1000 AND note = 2"}, settings)
+
+	spec.AlgoOptions, err = cagraplan.EncodeScanOptions(cagraplan.ScanOptions{})
+	require.NoError(t, err)
+	settings, err = Hooks{}.ExplainSettings(spec)
+	require.NoError(t, err)
+	require.Empty(t, settings)
+
+	spec.Index.IndexAlgoParams = "{"
+	spec.AlgoOptions, err = cagraplan.EncodeScanOptions(cagraplan.ScanOptions{FilterJSON: `[{"col":-1,"op":"=","val":1}]`})
+	require.NoError(t, err)
+	_, err = Hooks{}.ExplainSettings(spec)
+	require.Error(t, err)
+}

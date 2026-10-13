@@ -522,7 +522,7 @@ func TestApplyIndicesForSortUsingCagra_RichPushdown(t *testing.T) {
 		// numeric branch (lines that scale the limit by an over-fetch factor).
 		limit:       &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 5}}}},
 		resultLimit: makePlan2Uint64ConstExprWithType(5),
-		rankOption:  &plan.RankOption{Mode: "post"},
+		rankOption:  &plan.RankOption{Mode: "pre"},
 	}
 
 	// IndexAlgoParams declares "price" as INCLUDE; ensure both metaDef and

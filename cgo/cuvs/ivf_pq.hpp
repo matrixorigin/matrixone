@@ -966,10 +966,9 @@ public:
     }
 
     // Filtered results are re-tested on the host by
-    // apply_host_post_filter_locked (index_base.hpp): cuVS fills slots past
-    // popcount(user_filter AND NOT deleted) with excluded rows. The pass is
-    // skipped when that popcount is at least
-    //   num_queries * limit * kPqPostFilterSkipFactor.
+    // apply_host_post_filter_locked (index_base.hpp): cuVS fills the slots the
+    // probed lists cannot fill with rows (user_filter AND NOT deleted) excludes,
+    // however many rows the filter admits in the whole index.
 
     // `prebuilt`, when non-null, supplies a host_mask_bundle_t computed off the
     // worker thread (see search_with_filter below). On that path we skip the
@@ -1033,7 +1032,6 @@ public:
         //  - legacy path:   `local_user_mask` lives until function return
         const std::vector<uint32_t>* user_host_mask_ptr = nullptr;
         std::vector<uint32_t> local_user_mask;
-        uint64_t user_filter_popcount = 0;     // popcount(user_filter ∧ ¬deleted); see apply_host_post_filter_locked
 
         if (local_index) {
             // Reuse per-thread grow-only workspace buffers (Step C). Allocated
@@ -1094,12 +1092,11 @@ public:
                     if (prebuilt->has_filter) {
                         bs_ptr = this->upload_host_mask(handle, prebuilt->mask, shard_sz);
                         user_host_mask_ptr    = &prebuilt->mask;
-                        user_filter_popcount  = prebuilt->popcount;
                     } else if (prebuilt->deletes_only) {
                         bs_ptr = this->acquire_delete_bitset_device(handle, start_row, shard_sz);
                     }
                 } else {
-                    bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz, &local_user_mask, &user_filter_popcount);
+                    bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz, &local_user_mask);
                     if (!local_user_mask.empty()) user_host_mask_ptr = &local_user_mask;
                 }
 
@@ -1153,26 +1150,13 @@ public:
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
 
-            // Skip the post-filter pass when popcount(user ∧ ¬deleted) is
-            // comfortably above num_queries * limit — the cuVS bitset_filter
-            // leak quirk cannot trigger in that regime (see the post-filter note above for
-            // kPqPostFilterSkipFactor rationale). Deletes-only and unfiltered
-            // paths leave user_host_mask_ptr null and fall through to the
-            // existing function (which is itself a no-op there).
-            constexpr uint64_t kPqPostFilterSkipFactor = 4;
-            const bool skip_pq_post_filter =
-                user_host_mask_ptr != nullptr &&
-                user_filter_popcount >=
-                    static_cast<uint64_t>(num_queries) *
-                    static_cast<uint64_t>(limit) *
-                    kPqPostFilterSkipFactor;
-            if (!skip_pq_post_filter) {
-                // Empty vec on the deletes-only / unfiltered paths — the
-                // function looks each returned row up in deleted_bitset_ there.
-                static const std::vector<uint32_t> kEmptyMask;
-                this->apply_host_post_filter_locked(search_res, start_row, shard_sz,
-                    user_host_mask_ptr ? *user_host_mask_ptr : kEmptyMask);
-            }
+            // Re-test every returned row against the filter (see the post-filter
+            // note above). Deletes-only and unfiltered paths leave
+            // user_host_mask_ptr null; the function looks each returned row up in
+            // deleted_bitset_ there.
+            static const std::vector<uint32_t> kEmptyMask;
+            this->apply_host_post_filter_locked(search_res, start_row, shard_sz,
+                user_host_mask_ptr ? *user_host_mask_ptr : kEmptyMask);
 
             int64_t offset = 0;
             int64_t data_size = static_cast<int64_t>(this->count);
@@ -1400,7 +1384,6 @@ public:
         uint64_t start_row = 0, shard_sz = this->count;
         const std::vector<uint32_t>* user_host_mask_ptr = nullptr;
         std::vector<uint32_t> local_user_mask;  // legacy fallback storage
-        uint64_t user_filter_popcount = 0;      // popcount(user_filter ∧ ¬deleted); see apply_host_post_filter_locked
 
         if (local_index) {
             if (this->dist_mode == DistributionMode_SHARDED) {
@@ -1434,12 +1417,11 @@ public:
                     if (prebuilt->has_filter) {
                         bs_ptr = this->upload_host_mask(handle, prebuilt->mask, shard_sz);
                         user_host_mask_ptr   = &prebuilt->mask;
-                        user_filter_popcount = prebuilt->popcount;
                     } else if (prebuilt->deletes_only) {
                         bs_ptr = this->acquire_delete_bitset_device(handle, start_row, shard_sz);
                     }
                 } else {
-                    bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz, &local_user_mask, &user_filter_popcount);
+                    bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz, &local_user_mask);
                     if (!local_user_mask.empty()) user_host_mask_ptr = &local_user_mask;
                 }
 
@@ -1491,26 +1473,13 @@ public:
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
 
-            // Skip the post-filter pass when popcount(user ∧ ¬deleted) is
-            // comfortably above num_queries * limit — the cuVS bitset_filter
-            // leak quirk cannot trigger in that regime (see the post-filter note above for
-            // kPqPostFilterSkipFactor rationale). Deletes-only and unfiltered
-            // paths leave user_host_mask_ptr null and fall through to the
-            // existing function (which is a no-op there).
-            constexpr uint64_t kPqPostFilterSkipFactor = 4;
-            const bool skip_pq_post_filter =
-                user_host_mask_ptr != nullptr &&
-                user_filter_popcount >=
-                    static_cast<uint64_t>(num_queries) *
-                    static_cast<uint64_t>(limit) *
-                    kPqPostFilterSkipFactor;
-            if (!skip_pq_post_filter) {
-                std::vector<uint32_t> empty_mask;
-                std::vector<uint32_t>& mask_ref =
-                    user_host_mask_ptr ? const_cast<std::vector<uint32_t>&>(*user_host_mask_ptr)
-                                       : empty_mask;
-                this->apply_host_post_filter_locked(search_res, start_row, shard_sz, mask_ref);
-            }
+            // Re-test every returned row against the filter (see the post-filter
+            // note above). Deletes-only and unfiltered paths leave
+            // user_host_mask_ptr null; the function looks each returned row up in
+            // deleted_bitset_ there.
+            static const std::vector<uint32_t> kEmptyMask;
+            this->apply_host_post_filter_locked(search_res, start_row, shard_sz,
+                user_host_mask_ptr ? *user_host_mask_ptr : kEmptyMask);
 
             int64_t offset = 0;
             int64_t data_size = static_cast<int64_t>(this->count);

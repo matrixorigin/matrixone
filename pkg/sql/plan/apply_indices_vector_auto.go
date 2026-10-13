@@ -198,3 +198,25 @@ func (builder *QueryBuilder) buildAdaptiveVectorTop(
 	}
 	return builder.appendNode(adaptive, ctx), nil
 }
+
+// buildAdaptiveModeTop builds mode=auto for an algorithm whose plan rewrite is branch:
+// ADAPTIVE_TOP [post, pre, force], or [post, force] without withPre, where pre would
+// equal post. A region that is small, not replay-safe or not supported by
+// ADAPTIVE_TOP runs force.
+func (builder *QueryBuilder) buildAdaptiveModeTop(
+	nodeID int32,
+	vecCtx *vectorSortContext,
+	idxColMap map[[2]int32]*plan.Expr,
+	branch func(root int32, vecCtx *vectorSortContext, idxColMap map[[2]int32]*plan.Expr) (int32, error),
+	withPre bool,
+) (int32, error) {
+	if builder.shouldUseForceMode(vecCtx) || !builder.adaptiveVectorReplaySafe(nodeID) {
+		builder.forceAdaptiveVectorRegion(vecCtx)
+		return nodeID, nil
+	}
+	branches := adaptiveVectorBranches{post: branch}
+	if withPre {
+		branches.pre = branch
+	}
+	return builder.buildAdaptiveVectorTop(nodeID, vecCtx, idxColMap, branches, false)
+}

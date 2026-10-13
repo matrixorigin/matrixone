@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cachegen"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
@@ -89,6 +90,14 @@ func (s *CagraSearch[B, Q]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt
 	if s.Overflow != nil {
 		cardinality = vectorindex.SaturatingAddUint64(cardinality, s.Overflow.Len())
 	}
+	if rt.Iterative {
+		return s.searchAdvanced(anyquery, rt, cardinality)
+	}
+	return s.searchOnce(anyquery, rt, cardinality)
+}
+
+// searchOnce runs one search of rt over an index of cardinality rows.
+func (s *CagraSearch[B, Q]) searchOnce(anyquery any, rt vectorindex.RuntimeConfig, cardinality uint64) (keys []int64, distances []float64, err error) {
 	limit := vectorindex.ClampSearchLimit(rt.Limit, cardinality, math.MaxUint32)
 	if limit == 0 {
 		return []int64{}, []float64{}, nil
@@ -834,4 +843,29 @@ func (s *CagraSearch[B, Q]) DeviceResidency() map[int]int64 {
 		perCard[participants[0]] += overflow
 	}
 	return perCard
+}
+
+// searchAdvanced answers a mode=iterative search in the rounds of AdvancedSearch,
+// each one a searchOnce requesting the round's ITopK keys.
+func (s *CagraSearch[B, Q]) searchAdvanced(anyquery any, rt vectorindex.RuntimeConfig, cardinality uint64) ([]int64, []float64, error) {
+	req := searchplugin.Request{
+		ResultLimit:     uint64(rt.ResultLimit),
+		CandidateBudget: uint64(rt.Limit),
+		MaxInternalTopK: uint64(rt.MaxLimit),
+	}
+	stats := searchplugin.SearchStats{IndexRows: cardinality}
+	policy := AdvancedSearch{}
+	round := policy.StartRound(nil, req, stats)
+	for {
+		rt.Limit = uint(round.ITopK)
+		keys, distances, err := s.searchOnce(anyquery, rt, cardinality)
+		if err != nil {
+			return nil, nil, err
+		}
+		next, more := policy.NextRound(nil, req, stats, round, uint64(len(keys)))
+		if !more {
+			return keys, distances, nil
+		}
+		round = next
+	}
 }

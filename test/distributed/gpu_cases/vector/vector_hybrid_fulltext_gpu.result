@@ -823,10 +823,14 @@ select d.id from t_ref_ft d join query_vectors q on q.name = 'hi' where match(d.
 100  𝄀
 99  𝄀
 102
-select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
-not supported: mode=pre on index type cagra
+select (select group_concat(id order by id) from (select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) = (select group_concat(id order by id) from (select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_pre;
+➤ same_pre[-7,1,0]  𝄀
+1
 select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=auto';
-not supported: mode=auto on index type cagra
+➤ id[-5,64,0]  𝄀
+1  𝄀
+8  𝄀
+15
 explain select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post';
 -- @regex("Join Type: SEMI", false)
 -- @regex("Vector Index Scan on", true)
@@ -955,10 +959,14 @@ select d.id from t_ref_ft d join query_vectors q on q.name = 'hi' where match(d.
 100  𝄀
 99  𝄀
 102
-select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
-not supported: mode=pre on index type ivfpq
+select (select group_concat(id order by id) from (select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) = (select group_concat(id order by id) from (select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_pre;
+➤ same_pre[-7,1,0]  𝄀
+1
 select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=auto';
-not supported: mode=auto on index type ivfpq
+➤ id[-5,64,0]  𝄀
+1  𝄀
+8  𝄀
+15
 explain select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post';
 -- @regex("Join Type: SEMI", false)
 -- @regex("Vector Index Scan on", true)

@@ -134,6 +134,23 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 	if err != nil || cagraCtx == nil {
 		return nodeID, err
 	}
+	if vectorRankMode(vecCtx) == "auto" {
+		// pre differs from post only through filters on INCLUDE columns.
+		includeCols, err := parseIncludedColumnsFromParams(cagraCtx.idxDef.IndexAlgoParams)
+		if err != nil {
+			return nodeID, err
+		}
+		branch := func(root int32, branchCtx *vectorSortContext, branchMap map[[2]int32]*plan.Expr) (int32, error) {
+			return builder.applyIndicesForSortUsingCagra(root, branchCtx, multiTableIndex, branchMap)
+		}
+		includePreds, _, _, err := buildFilterPredicateJSON(
+			vecCtx.scanNode.FilterList, vecCtx.scanNode, includeCols, "", false)
+		if err != nil {
+			return nodeID, err
+		}
+		withPre := includePreds != ""
+		return builder.buildAdaptiveModeTop(nodeID, vecCtx, idxColMap, branch, withPre)
+	}
 
 	return builder.applyCuvsIndexSearchScan(nodeID, vecCtx, idxColMap, cuvsSearchScan{
 		algo:         "CAGRA",
@@ -148,13 +165,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 		partPos:      cagraCtx.partPos,
 		pkPos:        cagraCtx.pkPos,
 		pkType:       cagraCtx.pkType,
-		algoOptions: func(filterJSON string) ([]byte, error) {
+		algoOptions: func(filterJSON string, iterative bool) ([]byte, error) {
 			return cagraplan.EncodeScanOptions(cagraplan.ScanOptions{
 				ThreadsSearch:      cagraCtx.nThread,
 				BatchWindow:        cagraCtx.batchWindow,
 				GpuMultiSimulation: cagraCtx.gpuMultiSim,
 				KeyPartType:        cagraCtx.partType.Id,
 				FilterJSON:         filterJSON,
+				Iterative:          iterative,
 			})
 		},
 	})

@@ -136,7 +136,7 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 			return nil, nil, err
 		}
 	}
-	if rt.Membership != nil && rt.Widen {
+	if rt.Membership != nil && rt.Iterative {
 		return s.searchAdvanced(sqlproc, query, indexCounts, rt)
 	}
 	return s.searchOnce(sqlproc, query, indexCounts, limit, rt.Membership, rt.OrigFuncName)
