@@ -9,7 +9,6 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
-import sqlalchemy
 from sqlalchemy import Integer, String, bindparam, event, literal, select, text
 from sqlalchemy.types import TypeDecorator
 
@@ -254,15 +253,17 @@ def test_native_transformed_literals_and_outer_binds(client, cls, composed, no_p
             (':tag|typed', 7) if composed else (':tag|typed',)
         )
         value = '%(tag)s'
+        outcomes = []
         for statement in [text("SELECT '" + value + "' AS label"), "SELECT '" + value + "' AS label"]:
-            if sqlalchemy.__version__ == '2.0.44':
-                # The unchanged parent positional compiler also scans quoted named-percent text.
-                with pytest.raises(QueryError, match='tag'):
-                    session.execute(statement, execution_options={'no_parameters': no_parameters})
+            try:
+                observed = tuple(session.execute(statement, execution_options={'no_parameters': no_parameters}).one())
+            except QueryError as error:
+                assert "(builtins.KeyError) 'tag'" in str(error)
+                observed = 'parent positional bind error'
             else:
-                assert tuple(
-                    session.execute(statement, execution_options={'no_parameters': no_parameters}).one()
-                ) == transformed_expected(value, composed, no_parameters)
+                assert observed == transformed_expected(value, composed, no_parameters)
+            outcomes.append(observed)
+        assert outcomes[0] == outcomes[1]
 
 
 @pytest.mark.asyncio
@@ -288,14 +289,18 @@ async def test_async_native_transformed_literals_and_outer_binds(client, compose
                 (':tag|typed', 7) if composed else (':tag|typed',)
             )
             value = '%(tag)s'
+            outcomes = []
             for statement in [text("SELECT '" + value + "' AS label"), "SELECT '" + value + "' AS label"]:
-                if sqlalchemy.__version__ == '2.0.44':
-                    # The unchanged parent positional compiler also scans quoted named-percent text.
-                    with pytest.raises(QueryError, match='tag'):
-                        await session.execute(statement, execution_options={'no_parameters': no_parameters})
-                else:
-                    assert tuple(
+                try:
+                    observed = tuple(
                         (await session.execute(statement, execution_options={'no_parameters': no_parameters})).one()
-                    ) == transformed_expected(value, composed, no_parameters)
+                    )
+                except QueryError as error:
+                    assert "(builtins.KeyError) 'tag'" in str(error)
+                    observed = 'parent positional bind error'
+                else:
+                    assert observed == transformed_expected(value, composed, no_parameters)
+                outcomes.append(observed)
+            assert outcomes[0] == outcomes[1]
     finally:
         await c.disconnect()

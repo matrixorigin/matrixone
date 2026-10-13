@@ -489,11 +489,13 @@ def assert_parent_named_percent_error(error):
     assert error.orig.args == ('tag',)
 
 
-def parent_named_percent_error(engine, composed):
+def parent_named_percent_error(engine, composed, no_parameters):
     with ParentSession(bind=engine) as session:
         event.listen(session, 'do_orm_execute', lambda state: transform_literal(state, composed))
         try:
-            result = session.execute(text(transformed_query('%(tag)s')))
+            result = session.execute(
+                text(transformed_query('%(tag)s')), execution_options={'no_parameters': no_parameters}
+            )
         except StatementError as error:
             assert_parent_named_percent_error(error)
             return True
@@ -501,11 +503,13 @@ def parent_named_percent_error(engine, composed):
         return False
 
 
-async def async_parent_named_percent_error(engine, composed):
+async def async_parent_named_percent_error(engine, composed, no_parameters):
     async with ParentAsyncSession(bind=engine) as session:
         event.listen(session.sync_session, 'do_orm_execute', lambda state: transform_literal(state, composed))
         try:
-            result = await session.execute(text(transformed_query('%(tag)s')))
+            result = await session.execute(
+                text(transformed_query('%(tag)s')), execution_options={'no_parameters': no_parameters}
+            )
         except StatementError as error:
             assert_parent_named_percent_error(error)
             return True
@@ -517,7 +521,7 @@ async def async_parent_named_percent_error(engine, composed):
 @pytest.mark.parametrize('composed', [False, True])
 @pytest.mark.parametrize('no_parameters', [False, True])
 def test_transformed_literals_and_outer_binds(client, cls, composed, no_parameters):
-    parent_error = parent_named_percent_error(client._engine, composed)
+    parent_error = parent_named_percent_error(client._engine, composed, no_parameters)
     with session_for(client, cls) as session:
         event.listen(session, 'do_orm_execute', lambda state: transform_literal(state, composed))
         for value in ['ordinary', '100%', '%s']:
@@ -528,17 +532,19 @@ def test_transformed_literals_and_outer_binds(client, cls, composed, no_paramete
         assert tuple(session.execute(transformed_query(':tag')).one()) == transformed_expected(':tag', composed)
         for statement in [text(transformed_query('%(tag)s')), transformed_query('%(tag)s')]:
             if parent_error:
-                with pytest.raises(QueryError, match=r"\(builtins.KeyError\) 'tag'"):
-                    session.execute(statement)
+                with pytest.raises(QueryError, match=r"\(builtins\.KeyError\) 'tag'"):
+                    session.execute(statement, execution_options={'no_parameters': no_parameters})
             else:
-                assert tuple(session.execute(statement).one()) == transformed_expected('%(tag)s', composed)
+                assert tuple(
+                    session.execute(statement, execution_options={'no_parameters': no_parameters}).one()
+                ) == transformed_expected('%(tag)s', composed)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('composed', [False, True])
 @pytest.mark.parametrize('no_parameters', [False, True])
 async def test_async_transformed_literals_and_outer_binds(async_client, composed, no_parameters):
-    parent_error = await async_parent_named_percent_error(async_client._engine, composed)
+    parent_error = await async_parent_named_percent_error(async_client._engine, composed, no_parameters)
     async with async_client.session() as session:
         event.listen(session.sync_session, 'do_orm_execute', lambda state: transform_literal(state, composed))
         for value in ['ordinary', '100%', '%s']:
@@ -549,10 +555,12 @@ async def test_async_transformed_literals_and_outer_binds(async_client, composed
         assert tuple((await session.execute(transformed_query(':tag'))).one()) == transformed_expected(':tag', composed)
         for statement in [text(transformed_query('%(tag)s')), transformed_query('%(tag)s')]:
             if parent_error:
-                with pytest.raises(QueryError, match=r"\(builtins.KeyError\) 'tag'"):
-                    await session.execute(statement)
+                with pytest.raises(QueryError, match=r"\(builtins\.KeyError\) 'tag'"):
+                    await session.execute(statement, execution_options={'no_parameters': no_parameters})
             else:
-                assert tuple((await session.execute(statement)).one()) == transformed_expected('%(tag)s', composed)
+                assert tuple(
+                    (await session.execute(statement, execution_options={'no_parameters': no_parameters})).one()
+                ) == transformed_expected('%(tag)s', composed)
 
 
 def record_literal_hooks(session, engine):
