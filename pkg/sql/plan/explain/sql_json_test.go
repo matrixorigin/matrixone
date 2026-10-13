@@ -17,6 +17,7 @@ package explain
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -577,15 +578,17 @@ func TestBuildSQLJSONPlanPreservesVectorIndexPayload(t *testing.T) {
 		Steps:    []int32{0},
 		Nodes: []*plan.Node{{
 			NodeId:   0,
-			NodeType: plan.Node_VECTOR_INDEX_SCAN,
+			NodeType: plan.Node_INDEX_SEARCH_SCAN,
 			ObjRef:   &plan.ObjectRef{SchemaName: "db", ObjName: "items"},
 			TableDef: &plan.TableDef{Name: "items"},
-			VectorIndexScan: &plan.VectorIndexScan{
-				Index:            &plan.IndexDef{IndexName: "idx_embedding"},
+			IndexSearchScan: &plan.IndexSearchScan{
+				Index:            &plan.IndexDef{IndexName: "idx_embedding", IndexAlgo: "ivfflat"},
 				DistanceFunction: "l2_distance",
-				QueryVector:      sqlJSONTestInt32(1),
+				QueryPayload:     sqlJSONTestInt32(1),
 				CandidateLimit:   sqlJSONTestInt32(10),
-				FirstRoundLimit:  sqlJSONTestInt32(4),
+				AlgoOptions:      []byte(`{"threads_search":2,"initial_probe_count":5}`),
+				AlgoExprs:        []*plan.Expr{sqlJSONTestInt32(4)},
+				AlgoExprNames:    []string{"first_round_limit"},
 				PreFilters:       []*plan.Expr{sqlJSONTestInt32(2)},
 			},
 		}},
@@ -601,12 +604,13 @@ func TestBuildSQLJSONPlanPreservesVectorIndexPayload(t *testing.T) {
 	require.Equal(t, "db.items", decoded.MatrixOne.Nodes[0].TableName)
 	require.Equal(t, []string{
 		"index=idx_embedding",
+		"algo=ivfflat",
 		"metric=l2_distance",
 		"direction=INTERNAL",
-		"initial_probe_count=0",
-		"bucket_expand_step=0",
 		"post_filter_over_fetch=false",
-		"query_vector=1",
+		"initial_probe_count=5",
+		"threads_search=2",
+		"query_payload=1",
 		"candidate_limit=10",
 		"first_round_limit=4",
 		"pre_filter[0]=2",
@@ -619,11 +623,11 @@ func TestBuildSQLJSONPlanPreservesLiteralVectorQuery(t *testing.T) {
 		Steps:    []int32{0},
 		Nodes: []*plan.Node{{
 			NodeId:   0,
-			NodeType: plan.Node_VECTOR_INDEX_SCAN,
+			NodeType: plan.Node_INDEX_SEARCH_SCAN,
 			TableDef: &plan.TableDef{Name: "items"},
-			VectorIndexScan: &plan.VectorIndexScan{
-				Index:       &plan.IndexDef{IndexName: "idx_embedding"},
-				QueryVector: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[1,2]"}}}},
+			IndexSearchScan: &plan.IndexSearchScan{
+				Index:        &plan.IndexDef{IndexName: "idx_embedding"},
+				QueryPayload: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[1,2]"}}}},
 			},
 		}},
 	})
@@ -637,10 +641,8 @@ func TestBuildSQLJSONPlanPreservesLiteralVectorQuery(t *testing.T) {
 	require.Equal(t, []string{
 		"index=idx_embedding",
 		"direction=INTERNAL",
-		"initial_probe_count=0",
-		"bucket_expand_step=0",
 		"post_filter_over_fetch=false",
-		"query_vector=[1,2]",
+		"query_payload=[1,2]",
 	}, decoded.MatrixOne.Nodes[0].Expressions)
 }
 
@@ -732,12 +734,11 @@ func TestBuildSQLJSONPlanPreservesVectorExecutionSettings(t *testing.T) {
 			Steps:    []int32{0},
 			Nodes: []*plan.Node{{
 				NodeId:   0,
-				NodeType: plan.Node_VECTOR_INDEX_SCAN,
-				VectorIndexScan: &plan.VectorIndexScan{
+				NodeType: plan.Node_INDEX_SEARCH_SCAN,
+				IndexSearchScan: &plan.IndexSearchScan{
 					Index:               &plan.IndexDef{IndexName: "idx_embedding"},
 					Direction:           direction,
-					InitialProbeCount:   probe,
-					BucketExpandStep:    expand,
+					AlgoOptions:         []byte(fmt.Sprintf(`{"initial_probe_count":%d,"bucket_expand_step":%d}`, probe, expand)),
 					PostFilterOverFetch: overfetch,
 				},
 			}},
@@ -770,8 +771,8 @@ func TestBuildSQLJSONPlanPreservesVectorIndexDistanceRange(t *testing.T) {
 			Steps:    []int32{0},
 			Nodes: []*plan.Node{{
 				NodeId:   0,
-				NodeType: plan.Node_VECTOR_INDEX_SCAN,
-				VectorIndexScan: &plan.VectorIndexScan{
+				NodeType: plan.Node_INDEX_SEARCH_SCAN,
+				IndexSearchScan: &plan.IndexSearchScan{
 					Index: &plan.IndexDef{IndexName: "idx_embedding"},
 					DistanceRange: &plan.DistRange{
 						UpperBoundType: plan.BoundType_INCLUSIVE,
@@ -797,8 +798,6 @@ func TestBuildSQLJSONPlanPreservesVectorIndexDistanceRange(t *testing.T) {
 	require.Equal(t, []string{
 		"index=idx_embedding",
 		"direction=INTERNAL",
-		"initial_probe_count=0",
-		"bucket_expand_step=0",
 		"post_filter_over_fetch=false",
 		"distance_upper_bound_type=INCLUSIVE",
 		"distance_upper_bound=5",
@@ -806,8 +805,6 @@ func TestBuildSQLJSONPlanPreservesVectorIndexDistanceRange(t *testing.T) {
 	require.Equal(t, []string{
 		"index=idx_embedding",
 		"direction=INTERNAL",
-		"initial_probe_count=0",
-		"bucket_expand_step=0",
 		"post_filter_over_fetch=false",
 		"distance_upper_bound_type=INCLUSIVE",
 		"distance_upper_bound=50",
@@ -872,14 +869,25 @@ func TestSQLJSONHelpersRejectMalformedInputsAndPreserveStatistics(t *testing.T) 
 		Steps:    []int32{0},
 		Nodes: []*plan.Node{{
 			NodeId:   1,
-			NodeType: plan.Node_VECTOR_INDEX_SCAN,
-			VectorIndexScan: &plan.VectorIndexScan{
-				Index:       &plan.IndexDef{IndexName: "idx_embedding"},
-				QueryVector: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Jsonval{Jsonval: "{}"}}}},
+			NodeType: plan.Node_INDEX_SEARCH_SCAN,
+			IndexSearchScan: &plan.IndexSearchScan{
+				Index:        &plan.IndexDef{IndexName: "idx_embedding"},
+				QueryPayload: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Jsonval{Jsonval: "{}"}}}},
 			},
 		}},
 	})
 	require.Error(t, err)
+	for _, spec := range []*plan.IndexSearchScan{
+		{Index: &plan.IndexDef{IndexName: "idx_embedding"}, AlgoOptions: []byte(`[1]`)},
+		{Index: &plan.IndexDef{IndexName: "idx_embedding"}, AlgoExprs: []*plan.Expr{sqlJSONTestInt32(1)}},
+	} {
+		_, err = BuildSQLJSONPlan(context.Background(), &plan.Query{
+			StmtType: plan.Query_SELECT,
+			Steps:    []int32{0},
+			Nodes:    []*plan.Node{{NodeId: 1, NodeType: plan.Node_INDEX_SEARCH_SCAN, IndexSearchScan: spec}},
+		})
+		require.Error(t, err)
+	}
 	_, err = BuildSQLJSONPlan(context.Background(), &plan.Query{
 		StmtType: plan.Query_SELECT,
 		Steps:    []int32{0},
