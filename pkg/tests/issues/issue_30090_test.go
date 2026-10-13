@@ -41,6 +41,17 @@ func TestIssue30090ReplaceViewLifecycleOrder(t *testing.T) {
 		db1, err := sql.Open("mysql", issue27487DSN(cn1.GetServiceConfig().CN.Frontend.Port))
 		require.NoError(t, err)
 		defer db1.Close()
+		t.Run("no_default_database", func(t *testing.T) {
+			for _, statement := range []string{
+				"create view issue30090_no_db as select 1 as id",
+				"create or replace view issue30090_no_db as select 1 as id",
+			} {
+				_, err := db0.ExecContext(ctx, statement)
+				var mysqlErr *mysql.MySQLError
+				require.ErrorAs(t, err, &mysqlErr)
+				require.Equal(t, uint16(1046), mysqlErr.Number, statement)
+			}
+		})
 		const database = "issue30090_replace_view"
 		execSQLRequire(t, ctx, db0, "create database "+database)
 		defer func() {
@@ -63,6 +74,7 @@ func TestIssue30090ReplaceViewLifecycleOrder(t *testing.T) {
 				execSQLRequire(t, ctx, db0, "create or replace view "+database+".v as select id from "+database+".t")
 				holder, err := db1.BeginTx(ctx, nil)
 				require.NoError(t, err)
+				defer holder.Rollback()
 				var feature string
 				require.NoError(t, holder.QueryRowContext(ctx,
 					"select feature_code from mo_catalog.mo_feature_registry where feature_code='SNAPSHOT' for update").Scan(&feature))

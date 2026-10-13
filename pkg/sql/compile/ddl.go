@@ -2927,6 +2927,9 @@ func (s *Scope) CreateView(c *Compile) error {
 		dbName = qry.GetDatabase()
 	}
 	if qry.GetReplace() && c.isLifecycleRC() {
+		if dbName == "" {
+			return moerr.NewNoDB(c.proc.Ctx)
+		}
 		// The nested DROP VIEW participates in lifecycle admission. Enter C/G/D
 		// before taking the database lock; otherwise a fresh replacement appears
 		// to be a retained-lock transaction and spuriously FastFails on G.

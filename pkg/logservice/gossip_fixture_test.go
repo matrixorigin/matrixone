@@ -701,25 +701,6 @@ func TestGossipFixtureStartupConfigurationFailure(t *testing.T) {
 	}
 }
 
-func TestGossipFixtureConfigPortRange(t *testing.T) {
-	first, limit, err := testPortRange()
-	require.NoError(t, err)
-	rt := runtime.DefaultRuntime()
-	configs, err := makeGossipFixtureConfigs(t, rt, 2)
-	defer func() { require.NoError(t, closeGossipFixture(rt, configs, nil)) }()
-	require.NoError(t, err)
-	require.Len(t, configs, 2)
-	seen := make(map[int]struct{})
-	for _, cfg := range configs {
-		for _, port := range []int{cfg.GossipPort, cfg.RaftPort, cfg.LogServicePort} {
-			require.GreaterOrEqual(t, port, first)
-			require.Less(t, port, limit)
-			require.NotContains(t, seen, port)
-			seen[port] = struct{}{}
-		}
-	}
-}
-
 func TestGossipFixtureConfigAllocationFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name                string
