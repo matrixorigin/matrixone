@@ -287,6 +287,12 @@ func lowerFunctionalIndex(ctx CompilerContext, table *TableDef, index *tree.Inde
 	return &copy, nil
 }
 
+// ValidateFunctionalIndexMetadata applies the same typed ownership and eligibility
+// contract to checkpoint catalog reconstruction before SQL can re-author keys.
+func ValidateFunctionalIndexMetadata(ctx context.Context, table *TableDef) error {
+	return validateFunctionalTable(ctx, table)
+}
+
 func validateFunctionalTable(ctx context.Context, table *TableDef) error {
 	owners := make(map[string]int)
 	for _, index := range table.Indexes {

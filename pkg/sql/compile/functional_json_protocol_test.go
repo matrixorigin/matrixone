@@ -99,3 +99,19 @@ func TestFunctionalJSON116ComposesInheritedFloors(t *testing.T) {
 	features.JSONFunctionalIndexSemantics = false
 	require.Equal(t, defines.MORPCVersion115, remoteExpressionProtocolVersion(features))
 }
+
+func TestFunctionalJSONMetadataOnlyLocalCompileRunAdmission(t *testing.T) {
+	c, _ := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{TableDef: &plan.TableDef{Indexes: []*plan.IndexDef{{IndexName: "j", IndexAlgoParams: `{"functional_json_semantics":"1"}`}}}}}}}}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
+	cached := &Compile{proc: c.proc, pn: queryPlan}
+	require.ErrorContains(t, cached.Compile(context.Background(), queryPlan, nil), "protocol version 116")
+	_, err := cached.Run(0)
+	require.ErrorContains(t, err, "protocol version 116")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
+	require.NoError(t, validateJSONStringConsumerProtocol(c.proc, queryPlan))
+	queryPlan.GetQuery().Nodes[0].TableDef.Indexes[0].IndexAlgoParams = ""
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion107)
+	require.NoError(t, validateJSONStringConsumerProtocol(c.proc, queryPlan), "ordinary functional index retains its existing admission")
+}

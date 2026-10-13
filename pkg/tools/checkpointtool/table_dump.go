@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	planbuilder "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -129,14 +130,15 @@ type TableColumn struct {
 }
 
 type TableUniqueKey struct {
-	requiresJSONSemantics bool              // derived from actual typed catalog generated dependencies
-	Expressions           map[string]string // backing column name to original functional key expression
-	Name                  string
-	Columns               []string
-	Unique                bool
-	Algo                  string
-	AlgoParams            string
-	Comment               string
+	invalidFunctionalMetadata bool
+	requiresJSONSemantics     bool              // derived from actual typed catalog generated dependencies
+	Expressions               map[string]string // backing column name to original functional key expression
+	Name                      string
+	Columns                   []string
+	Unique                    bool
+	Algo                      string
+	AlgoParams                string
+	Comment                   string
 }
 
 type TableForeignKey struct {
@@ -151,17 +153,18 @@ type TableForeignKey struct {
 
 // TableSchema holds the decoded schema for one user table.
 type TableSchema struct {
-	TableName    string
-	DatabaseName string
-	AccountID    uint32
-	Columns      []TableColumn // sorted by Position
-	CreateSQL    string        // raw CREATE TABLE from mo_tables.rel_createsql
-	Comment      string
-	UniqueKeys   []TableUniqueKey
-	PrimaryKey   []string
-	ForeignKeys  []TableForeignKey
-	Partition    string
-	ClusterBy    []string
+	invalidFunctionalMetadata bool
+	TableName                 string
+	DatabaseName              string
+	AccountID                 uint32
+	Columns                   []TableColumn // sorted by Position
+	CreateSQL                 string        // raw CREATE TABLE from mo_tables.rel_createsql
+	Comment                   string
+	UniqueKeys                []TableUniqueKey
+	PrimaryKey                []string
+	ForeignKeys               []TableForeignKey
+	Partition                 string
+	ClusterBy                 []string
 }
 
 type TableCatalogEntry struct {
@@ -250,16 +253,17 @@ type indexDDLColumn struct {
 }
 
 type indexDDLInfo struct {
-	requiresJSONSemantics bool
-	expressions           map[string]string
-	name                  string
-	indexType             string
-	algo                  string
-	algoParams            string
-	comment               string
-	columns               map[string]indexDDLColumn
-	order                 int
-	catalogID             uint64
+	invalidFunctionalMetadata bool
+	requiresJSONSemantics     bool
+	expressions               map[string]string
+	name                      string
+	indexType                 string
+	algo                      string
+	algoParams                string
+	comment                   string
+	columns                   map[string]indexDDLColumn
+	order                     int
+	catalogID                 uint64
 }
 
 type CSVExportOption func(*CSVExportOptions)
@@ -535,7 +539,7 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 	for i, key := range uniqueKeys {
 		// Restored SQL rederives the current semantic marker. Reject an
 		// unsupported source revision before that identity could be erased.
-		if err := validateExportedJSONFunctionalSemantics(key.AlgoParams, key.requiresJSONSemantics); err != nil {
+		if err := validateExportedJSONFunctionalSemantics(key.AlgoParams, key.requiresJSONSemantics); err != nil || key.invalidFunctionalMetadata {
 			return ""
 		}
 		for _, part := range key.Columns {
@@ -754,14 +758,15 @@ func normalizedUniqueKeys(keys []TableUniqueKey) []TableUniqueKey {
 		}
 		seen[signature] = struct{}{}
 		out = append(out, TableUniqueKey{
-			Expressions:           maps.Clone(key.Expressions),
-			requiresJSONSemantics: key.requiresJSONSemantics,
-			Name:                  name,
-			Columns:               cols,
-			Unique:                key.Unique,
-			Algo:                  strings.TrimSpace(key.Algo),
-			AlgoParams:            strings.TrimSpace(key.AlgoParams),
-			Comment:               strings.TrimSpace(key.Comment),
+			Expressions:               maps.Clone(key.Expressions),
+			requiresJSONSemantics:     key.requiresJSONSemantics,
+			invalidFunctionalMetadata: key.invalidFunctionalMetadata,
+			Name:                      name,
+			Columns:                   cols,
+			Unique:                    key.Unique,
+			Algo:                      strings.TrimSpace(key.Algo),
+			AlgoParams:                strings.TrimSpace(key.AlgoParams),
+			Comment:                   strings.TrimSpace(key.Comment),
 		})
 	}
 	return out
@@ -892,7 +897,7 @@ func formatDDLDefault(defaultExpr string) string {
 // RenderCreateTableDDLFromSchema renders a CREATE TABLE statement from resolved
 // checkpoint column metadata.
 func RenderCreateTableDDLFromSchema(schema *TableSchema) string {
-	if schema == nil {
+	if schema == nil || schema.invalidFunctionalMetadata {
 		return ""
 	}
 	if schema.TableName == "" || len(schema.Columns) == 0 {
@@ -1104,52 +1109,75 @@ func validateExportedJSONFunctionalSemantics(params string, required bool) error
 	if err != nil {
 		return err
 	}
-	if required && !present {
-		return moerr.NewInvalidInputNoCtx("missing JSON functional index semantics metadata")
+	if required != present {
+		return moerr.NewInvalidInputNoCtx("inconsistent JSON functional index semantics metadata")
 	}
 	return nil
 }
 
 // ColRef positions address the current table column order, including hidden
 // backing columns. Catalog rows need not arrive in that order.
-func catalogGeneratedColumnGraph(view *LogicalTableView, tableID uint64) ([]*plan.ColDef, map[string]int) {
+func catalogGeneratedColumnGraph(view *LogicalTableView, tableID uint64) ([]*plan.ColDef, map[string]int, error) {
 	idPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_RelID)
 	namePos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Name)
 	numPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Num)
 	genPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Generated)
-	type entry struct {
-		ordinal int
-		col     *plan.ColDef
+	typePos := fallbackCatalogColIndex(view, moColumnsID, "atttyp")
+	hiddenPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_IsHidden)
+	hasGenPos := view.columnDataIndex("attr_has_generated")
+	autoPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_IsAutoIncrement)
+	byOrdinal := make(map[int]*plan.ColDef)
+	names := make(map[string]int)
+	invalid := func() ([]*plan.ColDef, map[string]int, error) {
+		return nil, nil, moerr.NewInvalidInputNoCtx("invalid functional index catalog column graph")
 	}
-	entries := make([]entry, 0)
 	for _, fullRow := range view.Rows {
 		off := logicalViewDataOffset(view)
 		if len(fullRow) < off {
 			continue
 		}
 		row := fullRow[off:]
-		if idPos < 0 || namePos < 0 || numPos < 0 || genPos < 0 || idPos >= len(row) || namePos >= len(row) || numPos >= len(row) || genPos >= len(row) || row[idPos] != strconv.FormatUint(tableID, 10) {
+		if cellAt(row, idPos) != strconv.FormatUint(tableID, 10) {
 			continue
 		}
-		ordinal, err := strconv.Atoi(row[numPos])
-		if err != nil || ordinal <= 0 {
-			continue
+		ordinal, err := strconv.Atoi(cellAt(row, numPos))
+		name := cellAt(row, namePos)
+		if err != nil || ordinal <= 0 || name == "" {
+			return invalid()
 		}
-		col := &plan.ColDef{Name: row[namePos]}
-		var generated plan.GeneratedCol
-		if row[genPos] != "" && types.Decode([]byte(row[genPos]), &generated) == nil {
-			col.GeneratedCol = &generated
+		if _, ok := byOrdinal[ordinal]; ok {
+			return invalid()
 		}
-		entries = append(entries, entry{ordinal: ordinal, col: col})
+		if _, ok := names[name]; ok {
+			return invalid()
+		}
+		col := &plan.ColDef{Name: name, Hidden: isTruthyCatalogValue(cellAt(row, hiddenPos))}
+		var typ types.Type
+		if raw := cellAt(row, typePos); raw == "" || types.Decode([]byte(raw), &typ) != nil || typ.Oid == types.T_any || strings.HasPrefix(typ.Oid.String(), "unexpected type:") {
+			return invalid()
+		}
+		col.Typ = typ.PlanType()
+		col.Typ.AutoIncr = isTruthyCatalogValue(cellAt(row, autoPos))
+		raw := cellAt(row, genPos)
+		if raw != "" || isTruthyCatalogValue(cellAt(row, hasGenPos)) {
+			col.GeneratedCol = &plan.GeneratedCol{}
+			// Failed decoding remains an invalid generated dependency, never a base column.
+			if types.Decode([]byte(raw), col.GeneratedCol) != nil {
+				col.GeneratedCol = &plan.GeneratedCol{}
+			}
+		}
+		byOrdinal[ordinal] = col
+		names[name] = ordinal - 1
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].ordinal < entries[j].ordinal })
-	cols := make([]*plan.ColDef, len(entries))
-	positions := make(map[string]int, len(entries))
-	for i, e := range entries {
-		cols[i] = e.col
-		positions[e.col.Name] = i
+	cols := make([]*plan.ColDef, len(byOrdinal))
+	for i := range cols {
+		col, ok := byOrdinal[i+1]
+		if !ok {
+			return invalid()
+		}
+		cols[i] = col
 	}
-	return cols, positions
+	return cols, names, nil
 }
 
 // Functional backing columns are not exportable row columns. Recover only
@@ -1162,7 +1190,45 @@ func attachFunctionalIndexExpressions(schema *TableSchema, view *LogicalTableVie
 	namePos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Name)
 	hiddenPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_IsHidden)
 	generatedPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Generated)
-	cols, positions := catalogGeneratedColumnGraph(view, tableID)
+	// Only tables with owned functional keys need strict typed reconstruction.
+	hasFunctional := false
+	for _, key := range schema.UniqueKeys {
+		for _, part := range key.Columns {
+			if strings.HasPrefix(part, "__mo_fi_") && !schemaHasVisibleColumn(schema, part) {
+				hasFunctional = true
+			}
+		}
+	}
+	// Orphaned hidden backing columns must also enter canonical ownership validation.
+	for _, fullRow := range view.Rows {
+		off := logicalViewDataOffset(view)
+		if len(fullRow) < off {
+			continue
+		}
+		row := fullRow[off:]
+		if cellAt(row, idPos) == strconv.FormatUint(tableID, 10) && isTruthyCatalogValue(cellAt(row, hiddenPos)) && strings.HasPrefix(cellAt(row, namePos), "__mo_fi_") {
+			hasFunctional = true
+		}
+	}
+	if !hasFunctional {
+		return
+	}
+	cols, positions, graphErr := catalogGeneratedColumnGraph(view, tableID)
+	table := &plan.TableDef{Cols: cols}
+	for _, key := range schema.UniqueKeys {
+		table.Indexes = append(table.Indexes, &plan.IndexDef{IndexName: key.Name, Parts: key.Columns, Unique: key.Unique, IndexAlgo: key.Algo, IndexAlgoParams: key.AlgoParams})
+	}
+	if graphErr == nil {
+		graphErr = planbuilder.ValidateFunctionalIndexMetadata(context.Background(), table)
+	}
+	if graphErr != nil {
+		schema.invalidFunctionalMetadata = true
+		for i := range schema.UniqueKeys {
+			schema.UniqueKeys[i].invalidFunctionalMetadata = true
+			schema.UniqueKeys[i].Expressions = nil
+		}
+		return
+	}
 	for _, fullRow := range view.Rows {
 		if len(fullRow) < logicalViewDataOffset(view) {
 			continue
@@ -1649,12 +1715,13 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 		return nil
 	}
 	clone := &TableSchema{
-		TableName:    strings.Clone(schema.TableName),
-		DatabaseName: strings.Clone(schema.DatabaseName),
-		AccountID:    schema.AccountID,
-		CreateSQL:    strings.Clone(schema.CreateSQL),
-		Comment:      strings.Clone(schema.Comment),
-		Partition:    strings.Clone(schema.Partition),
+		invalidFunctionalMetadata: schema.invalidFunctionalMetadata,
+		TableName:                 strings.Clone(schema.TableName),
+		DatabaseName:              strings.Clone(schema.DatabaseName),
+		AccountID:                 schema.AccountID,
+		CreateSQL:                 strings.Clone(schema.CreateSQL),
+		Comment:                   strings.Clone(schema.Comment),
+		Partition:                 strings.Clone(schema.Partition),
 	}
 	if len(schema.PrimaryKey) > 0 {
 		clone.PrimaryKey = make([]string, len(schema.PrimaryKey))
@@ -1696,6 +1763,7 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 		for i, key := range schema.UniqueKeys {
 			clone.UniqueKeys[i].Expressions = maps.Clone(key.Expressions)
 			clone.UniqueKeys[i].requiresJSONSemantics = key.requiresJSONSemantics
+			clone.UniqueKeys[i].invalidFunctionalMetadata = key.invalidFunctionalMetadata
 			clone.UniqueKeys[i].Name = strings.Clone(key.Name)
 			clone.UniqueKeys[i].Unique = key.Unique
 			clone.UniqueKeys[i].Algo = strings.Clone(key.Algo)
@@ -3706,6 +3774,9 @@ func createTableDDLFromCatalogViews(tableID uint64, moTablesView, moColumnsView 
 		clusterBy = buildClusterByFromMoColumnsRows(moColumnsView, tableID)
 		schema := &TableSchema{UniqueKeys: uniqueKeys}
 		attachFunctionalIndexExpressions(schema, moColumnsView, tableID)
+		if schema.invalidFunctionalMetadata {
+			return ""
+		}
 		uniqueKeys = schema.UniqueKeys
 	}
 	if len(partitionMetadataView) > 0 && partitionMetadataView[0] != nil {
@@ -4481,6 +4552,11 @@ func buildCreateIndexStatementsFromMoIndexes(
 	tableName string,
 	schemas ...*TableSchema,
 ) ([]string, error) {
+	for _, schema := range schemas {
+		if schema != nil && schema.invalidFunctionalMetadata {
+			return nil, moerr.NewInvalidInputNoCtx("invalid functional index typed metadata")
+		}
+	}
 	if view == nil {
 		return nil, nil
 	}
@@ -4608,6 +4684,7 @@ func buildCreateIndexStatementsFromMoIndexes(
 						}
 						info.expressions[column] = key.Expressions[column]
 						info.requiresJSONSemantics = info.requiresJSONSemantics || key.requiresJSONSemantics
+						info.invalidFunctionalMetadata = info.invalidFunctionalMetadata || key.invalidFunctionalMetadata
 					}
 				}
 			}
@@ -4951,6 +5028,9 @@ func needsExplicitPartitionDefinitions(method string) bool {
 
 func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, error) {
 	if info != nil {
+		if info.invalidFunctionalMetadata {
+			return "", moerr.NewInvalidInputNoCtx("invalid functional index typed metadata")
+		}
 		if err := validateExportedJSONFunctionalSemantics(info.algoParams, info.requiresJSONSemantics); err != nil {
 			return "", err
 		}

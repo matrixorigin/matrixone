@@ -21,11 +21,11 @@ import (
 
 // validateJSONStringConsumerProtocol applies the shared expression source fence
 // to local and cached plans containing JSON-aware ELT, subtype-preserving
-// binary CAST, corrected opaque text rendering, typed JSON MIN/MAX, or ODKU/session result contracts. CONCAT/WS keep overload 0
+// binary CAST, corrected opaque text rendering, typed JSON MIN/MAX, ODKU/session result contracts, or JSON functional-index metadata. CONCAT/WS keep overload 0
 // while their JSON text rendering requires the independently detected floor.
 func validateJSONStringConsumerProtocol(proc *process.Process, owner any) error {
 	features, err := plan.RequiredRemoteExpressionFeatures(owner)
-	if err != nil || !(features.ODKUStatementResult || features.SessionLastInsertIDBaseline || features.JSONMinMaxTypedComparison || features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
+	if err != nil || !(features.JSONFunctionalIndexSemantics || features.ODKUStatementResult || features.SessionLastInsertIDBaseline || features.JSONMinMaxTypedComparison || features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
 		return err
 	}
 	return validateRemoteExpressionFeatures(proc, features)
