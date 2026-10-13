@@ -129,4 +129,33 @@ select id,v from prepared_case order by id;
 select last_insert_id();
 deallocate prepare check_stmt;
 
+-- Current candidates may satisfy their own FK, without publishing rejected rows.
+create table self_auto(id int auto_increment primary key, p int, v int check(v>0),
+foreign key(p) references self_auto(id));
+insert ignore into self_auto values (1,1,1),(2,1,1),(3,999,1);
+select id,p from self_auto order by id;
+truncate table self_auto;
+insert ignore into self_auto values (NULL,1,1),(NULL,1,1);
+select id,p from self_auto order by id;
+truncate table self_auto;
+insert ignore into self_auto values (1,1,-1),(2,1,1),(3,3,1),(4,3,1);
+select id,p from self_auto order by id;
+
+-- LOAD must enforce self references even when the table has no AUTO_INCREMENT.
+create table self_load(id int primary key, p int, foreign key(p) references self_load(id));
+load data inline format='csv', data='1,999' into table self_load fields terminated by ',';
+select count(*) from self_load;
+load data inline format='csv', data='1,999' ignore into table self_load fields terminated by ',';
+select count(*) from self_load;
+load data inline format='csv', data='1,1' ignore into table self_load fields terminated by ',';
+insert ignore into self_load values (2,1),(3,999),(4,3);
+select id,p from self_load order by id;
+
+-- Changing FK checks must not make IGNORE scan unrelated existing orphan rows.
+set foreign_key_checks=0;
+load data inline format='csv', data='9,999' into table self_load fields terminated by ',';
+set foreign_key_checks=1;
+insert ignore into self_load values (5,5),(6,5);
+select id,p from self_load order by id;
+
 drop database auto_increment_ignore_constraints;

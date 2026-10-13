@@ -2100,6 +2100,32 @@ func TestInsertIgnoreEligibilityRemoteProtocol(t *testing.T) {
 	require.NoError(t, validateRemoteInsertIgnoreEligibilityProtocol(proc, false))
 	require.Error(t, validateRemoteInsertIgnoreEligibilityProtocol(nil, true))
 
+	arg.PreInsertCtx = &planpb.PreInsertUkCtx{
+		InsertIgnoreMultiDedup: true,
+		OrderedForeignKeys: []*planpb.OrderedForeignKey{{
+			ChildColumns:      []*planpb.ColRef{{ColPos: 1}},
+			SelfParentColumns: []*planpb.ColRef{{ColPos: 0}},
+		}},
+	}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+	data, err = encodeRemoteScope(scope, proc)
+	require.NoError(t, err)
+	decoded, err := decodeScope(data, proc, true, nil)
+	require.NoError(t, err)
+	decodedArg := decoded.RootOp.(*preinsertunique.PreInsertUnique)
+	t.Cleanup(func() {
+		decodedArg.Free(proc, false, nil)
+		decodedArg.Release()
+	})
+	require.Equal(t, arg.PreInsertCtx.OrderedForeignKeys, decodedArg.PreInsertCtx.OrderedForeignKeys)
+	destination.version = defines.MORPCVersion111
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "protocol version 112")
+	destination.version = defines.MORPCVersion112
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+	_, err = decodeScope(data, proc, true, nil)
+	require.ErrorContains(t, err, "protocol version 112")
+
 	pre := preinsert.NewArgument()
 	t.Cleanup(func() {
 		pre.Free(proc, false, nil)

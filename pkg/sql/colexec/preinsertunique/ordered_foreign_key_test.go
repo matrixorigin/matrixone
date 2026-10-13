@@ -52,8 +52,9 @@ func TestOrderedForeignKeyProbe(t *testing.T) {
 			txn.EXPECT().Txn().Return(txnpb.TxnMeta{}).AnyTimes()
 			ws.EXPECT().GetSnapshotWriteOffset().Return(7).AnyTimes()
 			typ := types.T_int32.ToType().PlanType()
-			input := batch.NewWithSize(1)
+			input := batch.NewWithSize(2)
 			input.Vecs[0] = testutil.MakeInt32Vector([]int32{9}, nil, proc.Mp())
+			input.Vecs[1] = testutil.MakeInt32Vector([]int32{9}, nil, proc.Mp())
 			input.SetRowCount(1)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			if mode == "null" {
@@ -69,7 +70,7 @@ func TestOrderedForeignKeyProbe(t *testing.T) {
 			require.NoError(t, err)
 			check := &plan.OrderedForeignKey{TableDef: &plan.TableDef{TblId: 99, Cols: []*plan.ColDef{{Name: "other", Typ: typ}, {Name: "unused", Typ: typ}, {Name: "id", Typ: typ}}}, ChildColumns: []*plan.ColRef{{ColPos: 0}}, ParentColumns: []int32{2}, Predicate: predicate}
 			if mode == "self" {
-				check.SelfParentColumns = []*plan.ColRef{{ColPos: 0}}
+				check.SelfParentColumns = []*plan.ColRef{{ColPos: 1}}
 			}
 			arg := &PreInsertUnique{PreInsertCtx: &plan.PreInsertUkCtx{AutoIncrementColumn: 0, OrderedAutoIncrement: &plan.OrderedAutoIncrement{ForeignKeys: []*plan.OrderedForeignKey{check}}}}
 			t.Cleanup(func() { arg.freeAcceptedState(proc) })
@@ -122,9 +123,10 @@ func TestOrderedForeignKeyProbe(t *testing.T) {
 				require.NoError(t, err)
 				require.True(t, ok)
 				require.NoError(t, arg.recordOrderedForeignKeyParents(proc, input, 0, true, 6))
-				next, err := arg.checkOrderedForeignKeys(proc, input, 0, true, 6)
+				require.NoError(t, vector.SetFixedAtNoTypeCheck(input.Vecs[1], 0, int32(10)))
+				next, err := arg.checkOrderedForeignKeys(proc, input, 0, true, 9)
 				require.NoError(t, err)
-				require.True(t, next, "later rows see the accepted final generated parent key")
+				require.True(t, next, "later rows see an accepted parent even when their own parent key differs")
 			default:
 				require.NoError(t, err)
 				require.Equal(t, mode != "absent", ok)

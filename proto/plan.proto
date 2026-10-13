@@ -1566,6 +1566,8 @@ message PreInsertUkCtx {
   ColRef row_eligibility = 19;
   // Ordered allocation defers explicit high-water marks until row acceptance.
   OrderedAutoIncrement ordered_auto_increment = 20;
+  // Row-ordered self-reference checks also apply without AUTO_INCREMENT.
+  repeated OrderedForeignKey ordered_foreign_keys = 21;
 }
 
 message OrderedAutoIncrement {

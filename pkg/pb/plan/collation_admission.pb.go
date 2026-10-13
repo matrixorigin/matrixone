@@ -1341,6 +1341,11 @@ func (v *legacyCollationVisitor) walkPreInsertUkCtx(p *PreInsertUkCtx) error {
 	if err := v.walkOrderedAutoIncrement(p.OrderedAutoIncrement); err != nil {
 		return err
 	}
+	for _, item0 := range p.OrderedForeignKeys {
+		if err := v.walkOrderedForeignKey(item0); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 func (v *legacyCollationVisitor) walkPrepare(p *Prepare) error {

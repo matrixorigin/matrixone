@@ -600,7 +600,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 			continue
 		}
 
-		if orderedAllocation {
+		if len(preInsertUnique.orderedForeignKeys()) > 0 {
 			ok, err := preInsertUnique.checkOrderedForeignKeys(proc, inputBat, row, generated, autoValue)
 			if err != nil {
 				return vm.CancelResult, err
@@ -675,7 +675,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 				return vm.CancelResult, err
 			}
 		}
-		if orderedAllocation {
+		if len(preInsertUnique.orderedForeignKeys()) > 0 {
 			if err := preInsertUnique.recordOrderedForeignKeyParents(proc, inputBat, row, generated, autoValue); err != nil {
 				return vm.CancelResult, err
 			}

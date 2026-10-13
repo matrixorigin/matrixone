@@ -3790,13 +3790,15 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			colRefCnt[eligibilityRef]++
 		}
 		var orderedForeignKeyRefs [][2]int32
+		orderedForeignKeys := node.PreInsertUkCtx.OrderedForeignKeys
 		if spec := node.PreInsertUkCtx.OrderedAutoIncrement; spec != nil {
-			for _, fk := range spec.ForeignKeys {
-				for _, col := range append(slices.Clone(fk.ChildColumns), fk.SelfParentColumns...) {
-					ref := [2]int32{childTag, col.ColPos}
-					orderedForeignKeyRefs = append(orderedForeignKeyRefs, ref)
-					colRefCnt[ref]++
-				}
+			orderedForeignKeys = spec.ForeignKeys
+		}
+		for _, fk := range orderedForeignKeys {
+			for _, col := range append(slices.Clone(fk.ChildColumns), fk.SelfParentColumns...) {
+				ref := [2]int32{childTag, col.ColPos}
+				orderedForeignKeyRefs = append(orderedForeignKeyRefs, ref)
+				colRefCnt[ref]++
 			}
 		}
 		var autoIncrementRef, autoIncrementGeneratedRef [2]int32
@@ -3858,19 +3860,17 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			}
 			node.PreInsertUkCtx.RowEligibility.ColPos = pos[1]
 		}
-		if spec := node.PreInsertUkCtx.OrderedAutoIncrement; spec != nil {
-			i := 0
-			for _, fk := range spec.ForeignKeys {
-				for _, col := range append(slices.Clone(fk.ChildColumns), fk.SelfParentColumns...) {
-					ref := orderedForeignKeyRefs[i]
-					i++
-					colRefCnt[ref]--
-					pos, ok := childRemapping.globalToLocal[ref]
-					if !ok {
-						return nil, moerr.NewInternalError(builder.GetContext(), "missing ordered foreign-key column")
-					}
-					col.ColPos = pos[1]
+		orderedForeignKeyRefIndex := 0
+		for _, fk := range orderedForeignKeys {
+			for _, col := range append(slices.Clone(fk.ChildColumns), fk.SelfParentColumns...) {
+				ref := orderedForeignKeyRefs[orderedForeignKeyRefIndex]
+				orderedForeignKeyRefIndex++
+				colRefCnt[ref]--
+				pos, ok := childRemapping.globalToLocal[ref]
+				if !ok {
+					return nil, moerr.NewInternalError(builder.GetContext(), "missing ordered foreign-key column")
 				}
+				col.ColPos = pos[1]
 			}
 		}
 		if node.PreInsertUkCtx.OdkuTargetArbitration {

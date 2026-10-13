@@ -2396,7 +2396,7 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 		conflictExprs = append(conflictExprs, markExpr)
 	}
 
-	if len(keyExprs) == 0 || (len(keyExprs) < 2 && !autoIncrementReorder) {
+	if len(keyExprs) == 0 || (len(keyExprs) < 2 && !autoIncrementReorder && !hasSelfReferencingForeignKeys(tableDef)) {
 		return 0, 0, nil, moerr.NewInternalError(builder.GetContext(),
 			"INSERT IGNORE arbitration requires a primary key or multiple unique constraints")
 	}
@@ -2504,7 +2504,7 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 			TableDef:    DeepCopyTableDef(tableDef, true),
 			ColumnIndex: tableDef.Name2ColIndex[pkName], ValuesRows: builder.insertValuesRows,
 		}
-		foreignKeys, err := builder.orderedAutoIncrementForeignKeys(bindCtx, tableDef, objRef, colName2Idx)
+		foreignKeys, err := builder.orderedAutoIncrementForeignKeys(bindCtx, tableDef, objRef, colName2Idx, true)
 		if err != nil {
 			return 0, 0, nil, err
 		}
@@ -2514,6 +2514,12 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 		arbiterNode.PreInsertUkCtx.AutoIncrementGeneratedColumn = int32(outputWidth)
 		arbiterNode.PreInsertUkCtx.AutoIncrementKeyIndex = 0
 		arbiterNode.PreInsertUkCtx.AutoIncrementOutputColumn = autoColumn
+	} else {
+		foreignKeys, err := builder.orderedAutoIncrementForeignKeys(bindCtx, tableDef, objRef, colName2Idx, false)
+		if err != nil {
+			return 0, 0, nil, err
+		}
+		arbiterNode.PreInsertUkCtx.OrderedForeignKeys = foreignKeys
 	}
 	lastNodeID = builder.appendNode(arbiterNode, bindCtx)
 	if autoIncrementReorder {
@@ -3361,8 +3367,15 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			uniqueConstraintCount++
 		}
 	}
+	selfForeignKeyChecks := false
+	if onDupAction == plan.Node_IGNORE && hasSelfReferencingForeignKeys(tableDef) {
+		selfForeignKeyChecks, err = IsForeignKeyChecksEnabled(builder.compCtx)
+		if err != nil {
+			return 0, err
+		}
+	}
 	useInsertIgnoreMultiDedup := onDupAction == plan.Node_IGNORE &&
-		(uniqueConstraintCount > 1 || autoIncrementGeneratedColumn >= 0) && !builder.canSkipDedup(tableDef)
+		(uniqueConstraintCount > 1 || autoIncrementGeneratedColumn >= 0 || selfForeignKeyChecks) && !builder.canSkipDedup(tableDef)
 	if useInsertIgnoreMultiDedup {
 		oldSelectTag := selectTag
 		lastNodeID, selectTag, selectNode, err = builder.appendInsertIgnoreMultiDedup(

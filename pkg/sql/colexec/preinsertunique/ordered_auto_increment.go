@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -35,6 +36,8 @@ type orderedForeignKeyResult struct {
 	parents       *hashmap.StrHashMap
 	iterator      hashmap.Iterator
 	tuple         []*vector.Vector
+	selfTuple     []*vector.Vector
+	selfExecutor  colexec.ExpressionExecutor
 }
 
 type orderedAutoIncrementState struct {
@@ -225,21 +228,23 @@ func (preInsertUnique *PreInsertUnique) ensureOrderedWorkspace(proc *process.Pro
 func (preInsertUnique *PreInsertUnique) validateOrderedAutoIncrement(proc *process.Process) error {
 	ctx := preInsertUnique.PreInsertCtx
 	spec := ctx.OrderedAutoIncrement
-	if spec == nil {
-		return nil
+	if spec != nil {
+		if !ctx.InsertIgnoreMultiDedup || !ctx.AutoIncrementReorder || spec.TableDef == nil || spec.ColumnIndex < 0 || int(spec.ColumnIndex) >= len(spec.TableDef.Cols) {
+			return moerr.NewInvalidInput(proc.Ctx, "invalid ordered AUTO_INCREMENT context")
+		}
+		col := spec.TableDef.Cols[spec.ColumnIndex]
+		if col == nil || !col.Typ.AutoIncr || !types.T(col.Typ.Id).ToType().IsIntOrUint() {
+			return moerr.NewInvalidInput(proc.Ctx, "invalid ordered AUTO_INCREMENT column")
+		}
 	}
-	if !ctx.InsertIgnoreMultiDedup || !ctx.AutoIncrementReorder || spec.TableDef == nil || spec.ColumnIndex < 0 || int(spec.ColumnIndex) >= len(spec.TableDef.Cols) {
-		return moerr.NewInvalidInput(proc.Ctx, "invalid ordered AUTO_INCREMENT context")
+	if len(ctx.OrderedForeignKeys) > 0 && (!ctx.InsertIgnoreMultiDedup || spec != nil) {
+		return moerr.NewInvalidInput(proc.Ctx, "invalid independent ordered foreign-key context")
 	}
-	col := spec.TableDef.Cols[spec.ColumnIndex]
-	if col == nil || !col.Typ.AutoIncr || !types.T(col.Typ.Id).ToType().IsIntOrUint() {
-		return moerr.NewInvalidInput(proc.Ctx, "invalid ordered AUTO_INCREMENT column")
-	}
-	for _, fk := range spec.ForeignKeys {
+	for _, fk := range preInsertUnique.orderedForeignKeys() {
 		if fk == nil || fk.TableDef == nil || fk.TableDef.Pkey == nil || fk.Predicate == nil || len(fk.ChildColumns) == 0 || len(fk.ParentColumns) < len(fk.ChildColumns) {
 			return moerr.NewInvalidInput(proc.Ctx, "invalid ordered foreign-key context")
 		}
-		if len(fk.SelfParentColumns) > 0 && len(fk.SelfParentColumns) != len(fk.ChildColumns) {
+		if (spec == nil || len(fk.SelfParentColumns) > 0) && len(fk.SelfParentColumns) != len(fk.ChildColumns) {
 			return moerr.NewInvalidInput(proc.Ctx, "invalid self-referencing foreign-key context")
 		}
 		for _, child := range append(fk.ChildColumns[:len(fk.ChildColumns):len(fk.ChildColumns)], fk.SelfParentColumns...) {

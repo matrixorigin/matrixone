@@ -814,7 +814,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Targets: t.CopyToPipelineTarget(),
 		}
 	case *preinsertunique.PreInsertUnique:
-		if err := validateRemoteInsertIgnoreEligibilityProtocol(proc, t.PreInsertCtx.GetRowEligibility() != nil || t.PreInsertCtx.GetOrderedAutoIncrement() != nil); err != nil {
+		if err := validateRemoteInsertIgnoreEligibilityProtocol(proc, t.PreInsertCtx.GetRowEligibility() != nil || t.PreInsertCtx.GetOrderedAutoIncrement() != nil || len(t.PreInsertCtx.GetOrderedForeignKeys()) > 0); err != nil {
 			return ctxId, nil, err
 		}
 		if err := validateRemoteAutoIncrementSessionOptionsProtocol(
@@ -2492,7 +2492,7 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 			}
 		}
 		if preInsertUnique := instruction.GetPreInsertUnique(); preInsertUnique != nil {
-			if err := validateRemoteInsertIgnoreEligibilityProtocol(proc, preInsertUnique.PreInsertUkCtx.GetRowEligibility() != nil || preInsertUnique.PreInsertUkCtx.GetOrderedAutoIncrement() != nil); err != nil {
+			if err := validateRemoteInsertIgnoreEligibilityProtocol(proc, preInsertUnique.PreInsertUkCtx.GetRowEligibility() != nil || preInsertUnique.PreInsertUkCtx.GetOrderedAutoIncrement() != nil || len(preInsertUnique.PreInsertUkCtx.GetOrderedForeignKeys()) > 0); err != nil {
 				return err
 			}
 			if err := validateRemoteAutoIncrementSessionOptionsProtocol(
@@ -2527,7 +2527,7 @@ func pipelineRequiresInsertIgnoreEligibility(p *pipeline.Pipeline) bool {
 	}
 	for _, instruction := range p.InstructionList {
 		if instruction.GetPreInsert().GetCheckEligibility() != nil || instruction.GetPreInsert().GetDeferAutoIncrement() ||
-			(instruction.GetPreInsertUnique().GetPreInsertUkCtx().GetRowEligibility() != nil || instruction.GetPreInsertUnique().GetPreInsertUkCtx().GetOrderedAutoIncrement() != nil) {
+			(instruction.GetPreInsertUnique().GetPreInsertUkCtx().GetRowEligibility() != nil || instruction.GetPreInsertUnique().GetPreInsertUkCtx().GetOrderedAutoIncrement() != nil || len(instruction.GetPreInsertUnique().GetPreInsertUkCtx().GetOrderedForeignKeys()) > 0) {
 			return true
 		}
 	}

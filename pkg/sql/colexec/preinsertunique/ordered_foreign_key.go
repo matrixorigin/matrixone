@@ -38,12 +38,18 @@ import (
 // remain stable while final IDs are selected, rather than locking a provisional
 // value. Shared table locks are statement/transaction owned and acquired once
 // in table-ID order. Ordinary foreign keys retain the vectorized join path.
+func (preInsertUnique *PreInsertUnique) orderedForeignKeys() []*plan.OrderedForeignKey {
+	if spec := preInsertUnique.PreInsertCtx.OrderedAutoIncrement; spec != nil {
+		return spec.ForeignKeys
+	}
+	return preInsertUnique.PreInsertCtx.OrderedForeignKeys
+}
+
 func (preInsertUnique *PreInsertUnique) lockOrderedForeignKeys(proc *process.Process) error {
 	if preInsertUnique.ctr.ordered.foreignKeysLocked {
 		return nil
 	}
-	spec := preInsertUnique.PreInsertCtx.OrderedAutoIncrement
-	checks := slices.Clone(spec.ForeignKeys)
+	checks := slices.Clone(preInsertUnique.orderedForeignKeys())
 	slices.SortFunc(checks, func(a, b *plan.OrderedForeignKey) int { return cmp.Compare(a.TableDef.TblId, b.TableDef.TblId) })
 	var previous uint64
 	for _, check := range checks {
@@ -68,8 +74,8 @@ func (preInsertUnique *PreInsertUnique) lockOrderedForeignKeys(proc *process.Pro
 }
 
 func (preInsertUnique *PreInsertUnique) checkOrderedForeignKeys(proc *process.Process, input *batch.Batch, row int, generated bool, value uint64) (bool, error) {
-	spec := preInsertUnique.PreInsertCtx.OrderedAutoIncrement
-	if len(spec.ForeignKeys) == 0 {
+	foreignKeys := preInsertUnique.orderedForeignKeys()
+	if len(foreignKeys) == 0 {
 		return true, nil
 	}
 	if err := preInsertUnique.ensureOrderedWorkspace(proc); err != nil {
@@ -79,19 +85,29 @@ func (preInsertUnique *PreInsertUnique) checkOrderedForeignKeys(proc *process.Pr
 		return false, err
 	}
 	if preInsertUnique.ctr.ordered.foreignKeyResults == nil {
-		preInsertUnique.ctr.ordered.foreignKeyResults = make([]orderedForeignKeyResult, len(spec.ForeignKeys))
+		preInsertUnique.ctr.ordered.foreignKeyResults = make([]orderedForeignKeyResult, len(foreignKeys))
 	}
-	for i, check := range spec.ForeignKeys {
+	for i, check := range foreignKeys {
 		// A rejected generated value can recur arbitrarily often. For a
 		// single-column auto-ID FK retain just its last point lookup, bounded
 		// by the number of constraints and discarded on Reset.
 		cached := &preInsertUnique.ctr.ordered.foreignKeyResults[i]
-		if len(check.SelfParentColumns) > 0 && cached.parents != nil {
+		if len(check.SelfParentColumns) > 0 {
 			valid, err := preInsertUnique.fillOrderedForeignKeyTuple(proc, cached, check.ChildColumns, input, row, generated, value)
 			if err != nil {
 				return false, err
 			}
-			if valid {
+			if !valid {
+				continue // MATCH SIMPLE: a NULL child tuple needs no parent.
+			}
+			matches, err := preInsertUnique.currentRowSatisfiesForeignKey(proc, cached, check, input, row, generated, value)
+			if err != nil {
+				return false, err
+			}
+			if matches {
+				continue
+			}
+			if cached.parents != nil {
 				ids, zs, err := cached.iterator.Find(0, 1, cached.tuple)
 				if err != nil {
 					return false, err
@@ -252,6 +268,48 @@ func (preInsertUnique *PreInsertUnique) checkOrderedForeignKey(proc *process.Pro
 	return false, nil
 }
 
+func (preInsertUnique *PreInsertUnique) currentRowSatisfiesForeignKey(proc *process.Process, state *orderedForeignKeyResult, check *plan.OrderedForeignKey, input *batch.Batch, row int, generated bool, value uint64) (bool, error) {
+	parentState := orderedForeignKeyResult{tuple: state.selfTuple}
+	valid, err := preInsertUnique.fillOrderedForeignKeyTuple(proc, &parentState, check.SelfParentColumns, input, row, generated, value)
+	state.selfTuple = parentState.tuple // Keep partial allocations owned on failure too.
+	if err != nil || !valid {
+		return false, err
+	}
+	if state.selfExecutor == nil {
+		var predicate *plan.Expr
+		for i := range state.tuple {
+			equal, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{
+				{Typ: state.selfTuple[i].GetType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(i)}}},
+				{Typ: state.tuple[i].GetType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: int32(i)}}},
+			})
+			if err != nil {
+				return false, err
+			}
+			if predicate == nil {
+				predicate = equal
+			} else {
+				predicate, err = plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "and", []*plan.Expr{predicate, equal})
+				if err != nil {
+					return false, err
+				}
+			}
+		}
+		state.selfExecutor, err = colexec.NewExpressionExecutor(proc, predicate)
+		if err != nil {
+			return false, err
+		}
+	}
+	parent := batch.Batch{Vecs: state.selfTuple}
+	child := batch.Batch{Vecs: state.tuple}
+	parent.SetRowCount(1)
+	child.SetRowCount(1)
+	result, err := state.selfExecutor.Eval(proc, []*batch.Batch{&parent, &child}, nil)
+	if err != nil {
+		return false, err
+	}
+	return !result.IsNull(0) && vector.GetFixedAtNoTypeCheck[bool](result, 0), nil
+}
+
 func generatedAutoIncrementLiteral(typ types.T, value uint64) *plan.Literal {
 	switch typ {
 	case types.T_int8:
@@ -275,17 +333,17 @@ func generatedAutoIncrementLiteral(typ types.T, value uint64) *plan.Literal {
 	}
 }
 
-// Keep only referenced parent keys accepted earlier in this statement. A self
-// reference cannot see the current row before its constraints have passed.
+// Publish referenced parent keys only after every constraint has passed.
+// Current-row self matching is local and never publishes a speculative key.
 func (preInsertUnique *PreInsertUnique) recordOrderedForeignKeyParents(proc *process.Process, input *batch.Batch, row int, generated bool, value uint64) error {
-	spec := preInsertUnique.PreInsertCtx.OrderedAutoIncrement
-	if spec == nil || len(spec.ForeignKeys) == 0 {
+	foreignKeys := preInsertUnique.orderedForeignKeys()
+	if len(foreignKeys) == 0 {
 		return nil
 	}
 	if preInsertUnique.ctr.ordered.foreignKeyResults == nil {
-		preInsertUnique.ctr.ordered.foreignKeyResults = make([]orderedForeignKeyResult, len(spec.ForeignKeys))
+		preInsertUnique.ctr.ordered.foreignKeyResults = make([]orderedForeignKeyResult, len(foreignKeys))
 	}
-	for i, check := range spec.ForeignKeys {
+	for i, check := range foreignKeys {
 		if len(check.SelfParentColumns) == 0 {
 			continue
 		}

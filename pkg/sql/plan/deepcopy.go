@@ -227,6 +227,9 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 	if ctx.OrderedAutoIncrement != nil {
 		newCtx.OrderedAutoIncrement = proto.Clone(ctx.OrderedAutoIncrement).(*plan.OrderedAutoIncrement)
 	}
+	for _, fk := range ctx.OrderedForeignKeys {
+		newCtx.OrderedForeignKeys = append(newCtx.OrderedForeignKeys, proto.Clone(fk).(*plan.OrderedForeignKey))
+	}
 	if ctx.RowEligibility != nil {
 		copied := *ctx.RowEligibility
 		newCtx.RowEligibility = &copied

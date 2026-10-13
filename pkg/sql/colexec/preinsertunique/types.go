@@ -232,10 +232,15 @@ func (preInsertUnique *PreInsertUnique) freeAcceptedState(proc *process.Process)
 		if state.parents != nil {
 			state.parents.Free()
 		}
-		for _, vec := range state.tuple {
-			if vec != nil {
-				vec.Free(proc.Mp())
+		for _, vectors := range [][]*vector.Vector{state.tuple, state.selfTuple} {
+			for _, vec := range vectors {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
 			}
+		}
+		if state.selfExecutor != nil {
+			state.selfExecutor.Free()
 		}
 	}
 	preInsertUnique.ctr.ordered = orderedAutoIncrementState{}

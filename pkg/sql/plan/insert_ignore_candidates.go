@@ -56,6 +56,15 @@ func (builder *QueryBuilder) retainInsertIgnoreCandidates(
 	return tag, nil
 }
 
+func hasSelfReferencingForeignKeys(table *plan.TableDef) bool {
+	for _, fk := range table.Fkeys {
+		if fk.ForeignTbl == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func autoIncrementForeignKey(table *plan.TableDef, fk *plan.ForeignKeyDef) bool {
 	for _, col := range table.Cols {
 		if col != nil && col.Typ.AutoIncr {
@@ -80,7 +89,7 @@ func independentAutoIncrementForeignKeys(table *plan.TableDef) *plan.TableDef {
 	return &result
 }
 
-func (builder *QueryBuilder) orderedAutoIncrementForeignKeys(bindCtx *BindContext, table *plan.TableDef, objRef *plan.ObjectRef, columns map[string]int32) ([]*plan.OrderedForeignKey, error) {
+func (builder *QueryBuilder) orderedAutoIncrementForeignKeys(bindCtx *BindContext, table *plan.TableDef, objRef *plan.ObjectRef, columns map[string]int32, includeAutoIncrement bool) ([]*plan.OrderedForeignKey, error) {
 	if len(table.Fkeys) == 0 {
 		return nil, nil
 	}
@@ -90,7 +99,7 @@ func (builder *QueryBuilder) orderedAutoIncrementForeignKeys(bindCtx *BindContex
 	}
 	var result []*plan.OrderedForeignKey
 	for _, fk := range table.Fkeys {
-		if !autoIncrementForeignKey(table, fk) && fk.ForeignTbl != 0 {
+		if fk.ForeignTbl != 0 && (!includeAutoIncrement || !autoIncrementForeignKey(table, fk)) {
 			continue
 		}
 		ref, parent := objRef, table
