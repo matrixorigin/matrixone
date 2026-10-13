@@ -94,6 +94,11 @@ type container struct {
 func (intersect *Intersect) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &intersect.ctr
 	ctr.state = build
+	// Account-bound batches and key evaluators cannot survive EXECUTE reset.
+	if intersect.ExpressionAllocation() != nil {
+		intersect.Free(proc, pipelineFailed, err)
+		return
+	}
 	ctr.cleanHashMap()
 	ctr.keyEvaluator.Reset()
 	if cap(ctr.unmatched) > 0 {

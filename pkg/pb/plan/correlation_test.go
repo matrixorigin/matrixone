@@ -17,6 +17,7 @@ package plan
 import (
 	"errors"
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
@@ -99,7 +100,27 @@ func TestCorrelationPlanRejectsInvalidOwnership(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			q := correlationTestQuery()
 			c.change(q)
-			require.ErrorContains(t, q.ValidateCorrelation(), c.want)
+			err := q.ValidateCorrelation()
+			require.ErrorContains(t, err, c.want)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+		})
+	}
+}
+
+func TestWalkQueryNodesRejectsInvalidGraph(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		query *Query
+		want  string
+	}{
+		{"nil_program", &Query{Correlation: &CorrelationSpec{Programs: []*CorrelationProgram{nil}}}, "nil correlation program"},
+		{"invalid_node", &Query{Steps: []int32{-1}}, "invalid query node -1"},
+		{"invalid_source", &Query{Steps: []int32{0}, Nodes: []*Node{{SourceStep: []int32{1}}}}, "invalid source step 1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := WalkQueryNodes(tc.query, func(int32, *Node) error { return nil })
+			require.ErrorContains(t, err, tc.want)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 		})
 	}
 }

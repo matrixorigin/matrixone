@@ -75,6 +75,11 @@ func (minusAll *MinusAll) Release() {
 func (minusAll *MinusAll) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &minusAll.ctr
 	ctr.state = buildingHashMap
+	// Account-bound batches and key evaluators cannot survive EXECUTE reset.
+	if minusAll.ExpressionAllocation() != nil {
+		minusAll.Free(proc, pipelineFailed, err)
+		return
+	}
 	ctr.cleanHashMap()
 	ctr.cleanRemaining(proc.Mp())
 	ctr.keyEvaluator.Reset()
