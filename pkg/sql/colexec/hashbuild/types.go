@@ -16,7 +16,6 @@ package hashbuild
 
 import (
 	"context"
-	"errors"
 	"io"
 	"os"
 	"sync"
@@ -744,7 +743,7 @@ func (hashBuild *HashBuild) Release() {
 				spillcleanup.Enqueue(func() error {
 					bundle.release()
 					if bundle.cleanupPending() {
-						return errors.New("hash build spill cleanup pending")
+						return moerr.NewInternalErrorNoCtx("hash build spill cleanup pending")
 					}
 					return nil
 				})
