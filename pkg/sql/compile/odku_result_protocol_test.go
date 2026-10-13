@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -118,4 +119,66 @@ func TestLASTInsertIDBaselineUsesActualSerializedOwner(t *testing.T) {
 	actual.Base.SessionInfo.LastInsertIDSet = true
 	actual.SetLastInsertID(0)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(actual, wire))
+}
+
+// A decoded remote process owns a bounded ODKU range even for a SELECT.
+// Ordinary child sends must not consume it or prevent a sibling from running.
+func TestRemoteReadChildrenDoNotConsumeODKUOrdinals(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	client.version = defines.MORPCLatestVersion
+	c.proc.Ctx = defines.AttachAccountId(context.Background(), 0)
+	c.proc.Base.TxnOperator = fakeTxnOperator{}
+	c.proc.Base.SessionInfo.TimeZone = time.UTC
+	require.NoError(t, c.proc.SetODKUInputOrdinalBase(0))
+	op := projection.NewArgument()
+	defer op.Release()
+	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+	for child := 0; child < 2; child++ {
+		_, _, data, _, err := prepareRemoteRunSendingDataWithVectorProtocol("select", scope, c.proc, nil, uuid.Nil, new(int64))
+		require.NoError(t, err, "ordinary remote child %d must not exhaust ODKU range", child)
+		info := new(pipeline.ProcessInfo)
+		require.NoError(t, info.Unmarshal(data))
+		require.Zero(t, info.OdkuOrdinalBase)
+	}
+	ordinal, err := c.proc.NextODKUInputOrdinal(1)
+	require.NoError(t, err)
+	require.Zero(t, ordinal, "ordinary sends do not advance the producer's input ordinal")
+}
+
+func TestRemoteODKUProducerReservationIncludesForwardedSubtrees(t *testing.T) {
+	for _, shape := range []string{"root", "operator-child", "remote-descendant"} {
+		t.Run(shape, func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			client.version = defines.MORPCLatestVersion
+			c.proc.Ctx = defines.AttachAccountId(context.Background(), 0)
+			c.proc.Base.TxnOperator = fakeTxnOperator{}
+			c.proc.Base.SessionInfo.TimeZone = time.UTC
+			require.NoError(t, c.proc.SetODKUInputOrdinalBase(0))
+			producer := preinsert.NewArgument()
+			defer producer.Release()
+			producer.TrackODKUResult = true
+			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: producer}
+			if shape != "root" {
+				parent := projection.NewArgument()
+				defer parent.Release()
+				scope.RootOp = parent
+				if shape == "operator-child" {
+					parent.AppendChild(producer)
+				} else {
+					scope.PreScopes = []*Scope{{Magic: Remote, Proc: c.proc, NodeInfo: scope.NodeInfo, RootOp: producer}}
+				}
+			}
+			_, _, data, _, err := prepareRemoteRunSendingDataWithVectorProtocol("insert", scope, c.proc, nil, uuid.Nil, new(int64))
+			require.NoError(t, err)
+			info := new(pipeline.ProcessInfo)
+			require.NoError(t, info.Unmarshal(data))
+			require.Zero(t, info.OdkuOrdinalBase)
+			_, err = c.proc.NextODKUInputOrdinal(1)
+			require.ErrorContains(t, err, "range exhausted", "the genuine producer reserved the entire bounded range")
+			before := *c.proc.Base.ODKUInputOrdinal
+			_, _, _, _, err = prepareRemoteRunSendingDataWithVectorProtocol("insert", scope, c.proc, nil, uuid.Nil, new(int64))
+			require.ErrorContains(t, err, "range exhausted")
+			require.Equal(t, before, *c.proc.Base.ODKUInputOrdinal, "a rejected producer cannot wrap or advance its range")
+		})
+	}
 }
