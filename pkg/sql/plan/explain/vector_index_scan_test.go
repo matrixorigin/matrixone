@@ -33,7 +33,7 @@ func TestIndexSearchScanInfoIsTypedAndVisible(t *testing.T) {
 			Index:            &plan.IndexDef{IndexName: "idx_v", IndexAlgo: "ivfflat"},
 			DistanceFunction: "l2_distance",
 			CandidateLimit:   plan2.MakePlan2Uint64ConstExprWithType(12),
-			AlgoOptions:      []byte(`{"initial_probe_count":4}`),
+			AlgoOptions:      []byte(`{"initial_probe_count":4,"bucket_expand_step":8,"threads_search":3}`),
 			PreFilters: []*plan.Expr{{
 				Typ:  plan.Type{Id: int32(types.T_bool)},
 				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: true}}},
@@ -49,6 +49,22 @@ func TestIndexSearchScanInfoIsTypedAndVisible(t *testing.T) {
 	require.Contains(t, info[0], "NProbe: 4")
 	require.Contains(t, info[0], "Index Filter: true")
 	require.NotContains(t, info[0], "Estimated Scan Rows")
+	desc := &NodeDescribeImpl{Node: node}
+	compact := "Vector Index: idx_v, Metric: l2_distance, Candidate Limit: 12, NProbe: 4, Index Filter: true"
+	require.Equal(t, compact, info[0])
+	filters := node.IndexSearchScan.PreFilters
+	node.IndexSearchScan.PreFilters = nil
+	nilOptions, err := desc.GetIndexSearchScanInfo(t.Context(), nil)
+	require.NoError(t, err)
+	require.Equal(t, "Vector Index: idx_v, Metric: l2_distance, Candidate Limit: 12, NProbe: 4", nilOptions)
+	node.IndexSearchScan.PreFilters = filters
+	verbose, err := desc.GetIndexSearchScanInfo(t.Context(), &ExplainOptions{Verbose: true})
+	require.NoError(t, err)
+	require.Equal(t, "Vector Index: idx_v, Metric: l2_distance, Candidate Limit: 12, NProbe: 4, BucketExpandStep: 8, ThreadsSearch: 3, Index Filter: true", verbose)
+	again, err := desc.GetIndexSearchScanInfo(t.Context(), &ExplainOptions{})
+	require.NoError(t, err)
+	require.Equal(t, compact, again)
+
 	node.IndexSearchScan.ScanWork = &plan.IndexSearchScanWork{Rows: 100, Blocks: 2, VectorBytesPerRow: 128, Objects: 2}
 	node.Stats.Dop = 2
 	basic, err := (&NodeDescribeImpl{Node: node}).GetNodeBasicInfo(context.Background(), &ExplainOptions{})

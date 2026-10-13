@@ -69,7 +69,7 @@ var _ searchplugin.EmptyScanHooks = Hooks{}
 var _ searchplugin.ExplainHooks = Hooks{}
 
 // ExplainSettings describes the static semantics using the same options as the reader.
-func (Hooks) ExplainSettings(spec *plan.IndexSearchScan) ([]string, error) {
+func (Hooks) ExplainSettings(spec *plan.IndexSearchScan, _ bool) ([]string, error) {
 	opts, err := ft2plan.DecodeScanOptions(spec.GetAlgoOptions())
 	if err != nil {
 		return nil, err

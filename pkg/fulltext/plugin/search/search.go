@@ -41,7 +41,7 @@ var _ searchplugin.EmptyScanHooks = Hooks{}
 var _ searchplugin.ExplainHooks = Hooks{}
 
 // ExplainSettings preserves the MATCH mode carried by the reader's options.
-func (Hooks) ExplainSettings(spec *plan.IndexSearchScan) ([]string, error) {
+func (Hooks) ExplainSettings(spec *plan.IndexSearchScan, _ bool) ([]string, error) {
 	opts, err := ftplan.DecodeScanOptions(spec.GetAlgoOptions())
 	if err != nil {
 		return nil, err

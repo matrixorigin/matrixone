@@ -641,7 +641,7 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 		"direction="+direction,
 		"post_filter_over_fetch="+strconv.FormatBool(spec.PostFilterOverFetch),
 	)
-	settings, err := indexSearchScanSettings(spec)
+	settings, err := indexSearchScanSettings(spec, true)
 	if err != nil {
 		return nil, err
 	}

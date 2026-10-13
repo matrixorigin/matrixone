@@ -725,8 +725,8 @@ func buildPlannerSQLJSONNodes(t *testing.T, sql string) []sqlJSONNode {
 }
 
 func TestBuildSQLJSONPlanPreservesVectorExecutionSettings(t *testing.T) {
-	buildExpressions := func(probe uint32, direction plan.OrderBySpec_OrderByFlag, overfetch bool) []string {
-		settings, err := ivfflatplan.EncodeScanOptions(ivfflatplan.ScanOptions{InitialProbeCount: probe})
+	buildExpressions := func(opts ivfflatplan.ScanOptions, direction plan.OrderBySpec_OrderByFlag, overfetch bool) []string {
+		settings, err := ivfflatplan.EncodeScanOptions(opts)
 		require.NoError(t, err)
 		data, err := BuildSQLJSONPlan(context.Background(), &plan.Query{
 			StmtType: plan.Query_SELECT,
@@ -752,14 +752,24 @@ func TestBuildSQLJSONPlanPreservesVectorExecutionSettings(t *testing.T) {
 		return decoded.MatrixOne.Nodes[0].Expressions
 	}
 
-	low := buildExpressions(1, plan.OrderBySpec_ASC, false)
-	high := buildExpressions(16, plan.OrderBySpec_DESC, true)
+	low := buildExpressions(ivfflatplan.ScanOptions{InitialProbeCount: 1}, plan.OrderBySpec_ASC, false)
+	high := buildExpressions(ivfflatplan.ScanOptions{InitialProbeCount: 16}, plan.OrderBySpec_DESC, true)
 	require.NotEqual(t, low, high)
 	require.Contains(t, low, "NProbe: 1")
 	require.Contains(t, low, "direction=ASC")
 	require.Contains(t, high, "NProbe: 16")
 	require.Contains(t, high, "direction=DESC")
 	require.Contains(t, high, "post_filter_over_fetch=true")
+	base := buildExpressions(ivfflatplan.ScanOptions{InitialProbeCount: 1}, plan.OrderBySpec_ASC, false)
+	expanded := buildExpressions(ivfflatplan.ScanOptions{InitialProbeCount: 1, BucketExpandStep: 8}, plan.OrderBySpec_ASC, false)
+	threaded := buildExpressions(ivfflatplan.ScanOptions{InitialProbeCount: 1, ThreadsSearch: 8}, plan.OrderBySpec_ASC, false)
+	require.Contains(t, base, "BucketExpandStep: 0")
+	require.Contains(t, base, "ThreadsSearch: 0")
+	require.Contains(t, expanded, "BucketExpandStep: 8")
+	require.Contains(t, threaded, "ThreadsSearch: 8")
+	require.NotEqual(t, base, expanded)
+	require.NotEqual(t, base, threaded)
+
 }
 
 func TestBuildSQLJSONPlanPreservesVectorIndexDistanceRange(t *testing.T) {

@@ -89,7 +89,7 @@ func TestExplainSettingsPreservesStaticSemantics(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			spec := scanSpec(t, tc.opts)
 			before := append([]byte(nil), spec.AlgoOptions...)
-			settings, err := Hooks{}.ExplainSettings(spec)
+			settings, err := Hooks{}.ExplainSettings(spec, true)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, settings)
 			require.Equal(t, before, spec.AlgoOptions)
@@ -104,7 +104,7 @@ func TestExplainSettingsRejectsMalformedOptions(t *testing.T) {
 		{AlgoOptions: []byte("{")},
 		scanSpec(t, ft2plan.ScanOptions{Config: "{"}),
 	} {
-		settings, err := Hooks{}.ExplainSettings(spec)
+		settings, err := Hooks{}.ExplainSettings(spec, true)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		require.Nil(t, settings)
 	}

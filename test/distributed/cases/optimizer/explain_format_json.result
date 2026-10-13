@@ -38,6 +38,15 @@ EXPLAIN
 set probe_limit=16;
 explain format=json select id from vectors order by l2_distance(v,'[1,1,1]') limit 2;
 EXPLAIN
+set ivf_threads_search=1;
+explain format=json select id from vectors order by l2_distance(v,'[1,1,1]') limit 2;
+EXPLAIN
+set ivf_threads_search=8;
+explain format=json select id from vectors order by l2_distance(v,'[1,1,1]') limit 2;
+EXPLAIN
+explain verbose select id from vectors order by l2_distance(v,'[1,1,1]') limit 2;
+TP QUERY PLAN
+set ivf_threads_search=default;
 explain format=json select id from vectors where l2_distance(v,'[1,1,1]') < 5 order by l2_distance(v,'[1,1,1]') limit 2;
 EXPLAIN
 explain format=json select id from vectors where l2_distance(v,'[1,1,1]') < 50 order by l2_distance(v,'[1,1,1]') limit 2;

@@ -53,13 +53,13 @@ func TestClassicExplainSettingsPreservesMode(t *testing.T) {
 	}{{0, "Match Mode: 0"}, {1, "Match Mode: 1"}, {3, "Match Mode: 3"}} {
 		spec := classicSpec(t, ftplan.ScanOptions{Mode: tc.mode})
 		before := append([]byte(nil), spec.AlgoOptions...)
-		settings, err := Hooks{}.ExplainSettings(spec)
+		settings, err := Hooks{}.ExplainSettings(spec, true)
 		require.NoError(t, err)
 		require.Equal(t, []string{tc.want}, settings)
 		require.Equal(t, before, spec.AlgoOptions)
 	}
 	for _, spec := range []*plan.IndexSearchScan{nil, {}, {AlgoOptions: []byte("{")}} {
-		settings, err := Hooks{}.ExplainSettings(spec)
+		settings, err := Hooks{}.ExplainSettings(spec, true)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		require.Nil(t, settings)
 	}
