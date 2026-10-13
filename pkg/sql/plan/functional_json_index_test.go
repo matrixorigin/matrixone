@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"strings"
 	"testing"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -166,6 +168,19 @@ func TestFunctionalJSONReplayAndEqualityPlan(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, marked)
 	require.True(t, sameFunctionalValueType(functionalIndexColumn(table, table.Indexes[0]).Typ, functionalIndexColumn(replayTable, replayTable.Indexes[0]).Typ))
+	// A dynamically created mock table has no persisted mo_indexes row. Supply
+	// its real visibility lookup instead of bypassing the canonical COPY guard.
+	previousExecutor := ctx.internalSQLExecutor
+	ctx.internalSQLExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		if strings.Contains(sql, "SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 0") {
+			result := executor.NewMemResult([]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp())
+			result.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(result, 0, []string{"idx_kind"}))
+			require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1}))
+			return result.GetResult(), nil
+		}
+		return previousExecutor.Exec(t.Context(), sql, executor.Options{})
+	})
 	for _, sql := range []string{"create index idx_more on docs ((cast(doc ->> '$.other' as char(20))))", "alter table docs add index idx_more ((cast(doc ->> '$.other' as char(20)))), algorithm=copy"} {
 		ap, err := build(sql)
 		require.NoError(t, err, sql)
