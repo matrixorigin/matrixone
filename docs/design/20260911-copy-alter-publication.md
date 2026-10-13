@@ -4,8 +4,8 @@
 - Implementation PR: [#28418](https://github.com/matrixorigin/matrixone/pull/28418)
 - Revision: 3 (2026-09-16)
 - Status: implementation and acceptance-scope revision for maintainer
-  decision; the linked PR is Ready for review, but this document is not itself
-  an approval.
+  decision; the linked PR is currently Draft. The historical Ready wording is
+  superseded; this document is not itself an approval.
 - Target branch: `main`
 
 This document is the versioned design artifact for the COPY ALTER lock
