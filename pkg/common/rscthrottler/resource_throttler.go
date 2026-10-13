@@ -187,31 +187,8 @@ type rssReclamationCoordinator struct {
 
 var processRSSReclamation rssReclamationCoordinator
 
-func (c *rssReclamationCoordinator) request(now int64, work rssReclamationWork) {
+func (c *rssReclamationCoordinator) request(_ int64, work rssReclamationWork) {
 	c.mu.Lock()
-
-	if work.evictor != nil {
-		cacheExpired := c.lastCacheEvict == 0 ||
-			time.Duration(now-c.lastCacheEvict) > rssScavengeInterval
-		cacheEscalated := c.lastCacheTarget == 0 || work.targetPercent < c.lastCacheTarget
-		if !cacheExpired && !cacheEscalated {
-			work.evictor = nil
-			work.targetPercent = 0
-		} else {
-			c.lastCacheEvict = now
-			c.lastCacheTarget = work.targetPercent
-		}
-	}
-
-	if work.freeOSMemory {
-		freeExpired := c.lastFreeOSMemory == 0 ||
-			time.Duration(now-c.lastFreeOSMemory) > rssScavengeInterval
-		if !freeExpired {
-			work.freeOSMemory = false
-		} else {
-			c.lastFreeOSMemory = now
-		}
-	}
 
 	if work.evictor == nil && !work.freeOSMemory {
 		c.mu.Unlock()
@@ -259,7 +236,10 @@ func (c *rssReclamationCoordinator) enqueuePending(work rssReclamationWork) {
 func (c *rssReclamationCoordinator) run(work rssReclamationWork) {
 	for {
 		if work.valid() {
-			c.execute(work)
+			c.prepare(&work)
+			if work.valid() {
+				c.execute(work)
+			}
 		}
 
 		c.mu.Lock()
@@ -280,6 +260,39 @@ func (c *rssReclamationCoordinator) run(work rssReclamationWork) {
 		copy(c.pending[next:], c.pending[next+1:])
 		c.pending = c.pending[:len(c.pending)-1]
 		c.mu.Unlock()
+	}
+}
+
+// prepare applies process-wide cooldowns immediately before execution.  A
+// request can become stale while it is pending; reserving a cooldown when it
+// is enqueued would allow that stale request to suppress the newer request
+// that actually needs to run.
+func (c *rssReclamationCoordinator) prepare(work *rssReclamationWork) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := time.Now().UnixNano()
+	if work.evictor != nil {
+		cacheExpired := c.lastCacheEvict == 0 ||
+			time.Duration(now-c.lastCacheEvict) > rssScavengeInterval
+		cacheEscalated := c.lastCacheTarget == 0 || work.targetPercent < c.lastCacheTarget
+		if !cacheExpired && !cacheEscalated {
+			work.evictor = nil
+			work.targetPercent = 0
+		} else {
+			c.lastCacheEvict = now
+			c.lastCacheTarget = work.targetPercent
+		}
+	}
+
+	if work.freeOSMemory {
+		freeExpired := c.lastFreeOSMemory == 0 ||
+			time.Duration(now-c.lastFreeOSMemory) > rssScavengeInterval
+		if !freeExpired {
+			work.freeOSMemory = false
+		} else {
+			c.lastFreeOSMemory = now
+		}
 	}
 }
 
