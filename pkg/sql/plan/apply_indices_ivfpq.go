@@ -98,7 +98,7 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 		return nil, err
 	}
 
-	nProbe, err := builder.resolveInt64Variable("probe_limit", 20)
+	nProbe, err := builder.resolveVectorNprobe(vecCtx.rankOption, 20)
 	if err != nil {
 		return nil, err
 	}
