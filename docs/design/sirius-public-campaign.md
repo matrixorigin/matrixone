@@ -32,6 +32,16 @@ pinned-pool controls at the new block size, retain the 5% full-suite regression
 and 10% numeric gates, and do not infer acceptance from the targeted diagnostics.
 Q15 shared-CTE reuse, Q13 join changes and default cutover require separate work.
 
+Sirius #32 merged as `87aaaa24137d20e5022e41d2b67c867b608883c7` and #33
+merged as `0cc6e484e0ee9dae3aa41919598116625d1abec8`. The consumer pins the
+latter for logical input/result initialization and eligible Decimal64 grouped
+SUM/AVG/COUNT. Checked global merge, final precision and AVG rounding retain
+their existing implementation. Fresh guarded release qualification compares
+against merged #31 on the same MO main base and frozen 16-CPU/64-KiB profile;
+historical captures below retain their actual identities. Final optimization
+acceptance remains pending the complete matched timing, resource, numeric and
+lifecycle gates.
+
 ## Contract and choice
 
 For every admitted campaign cell, the immutable dataset, canonical SQL, public
