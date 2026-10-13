@@ -127,3 +127,46 @@ only result fixtures and evidence documentation. Code-level SCA, coverage UT,
 PROXY BVT, and local lifecycle/race evidence remain valid for unchanged source;
 the new full-group CI status must be tracked separately. Ordinary UT was still
 queued for an `amd64-mo-shanghai-8c16g` runner when this evidence was captured.
+
+
+## Main merge conflict resolution (2026-10-13)
+
+Merge inputs are feature head `a321a75afce2ebc4cdd875c345ece7aef32cc038` and
+main `35c8dd5854750ef96f52f9dd298a70acd031d5e4`. The generated MySQL parser
+conflicted with the new JSON EXPLAIN grammar. It was regenerated from the merged
+`mysql_sql.y`, without yacc conflicts, preserving both MV and JSON EXPLAIN syntax.
+The gossip fixture uses main's once-per-cohort `testPortRange` admission and its
+new listener-range test; the redundant inner range lookup was removed.
+
+The integration also exposed a main-side build failure: JSON EXPLAIN still used
+`Node_VECTOR_INDEX_SCAN`, `VectorIndexScan` and removed scan fields. An isolated
+worktree at the exact main SHA reproduced the same four production compiler
+errors with unchanged tracked source and matching native libraries. The renderer
+and its tests now use the current `IndexSearchScan` protocol, existing plugin
+explain hooks, named algorithm expressions, and lossless opaque options. Existing
+vector payload, literal, settings, range and malformed-expression oracles remain;
+new cases cover missing metadata, unpaired/empty expression names, malformed
+plugin options, fulltext, and binary options from an unregistered plugin.
+
+Review scope is the merge resolution and interacting source closures. Grammar
+and generated output are R2; the test port fixture is R1; the read-only renderer
+and its plan/frontend consumers are R2. MV creation dispatch, scan/write guards
+and single-CN refresh routing were checked against the merged main side. No
+MV persistence, refresh state, lock ordering, task ownership, or native dependency
+changed, so previous concurrency and restart evidence remains applicable to those
+unchanged contracts. Original performance measurements keep their recorded SHA.
+
+Linux/amd64, Go 1.27.1, the repository CGo wrapper, `-mod=readonly -p=1
+-count=1 -short -tags matrixone_test`: the complete parser, plan, JSON EXPLAIN,
+frontend, compile and function suites passed, as did all 11 focused gossip fixture
+tests. Initial network-restricted runs could not bind local test sockets; the
+network-enabled final runs passed without skips or product workarounds. The
+Makefile error-constructor check passed. Full GitHub CI at the new merge head must
+be reported independently; these local results do not claim full CI completion.
+
+Configured golangci-lint (including govet) passed the seven-package integration
+closure with zero new issues; standalone `go vet` passed the same closure.
+`go vet -vettool=molint` exited 0 for the renderer and reported two advisory
+recover diagnostics in unchanged main-side serialization helpers. Their bodies
+match main exactly: vector cleanup is deferred, and malformed serialization is
+converted into an error. No diagnostic was suppressed or cleanup removed.

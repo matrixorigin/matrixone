@@ -184,3 +184,20 @@ the two corrected files passed complete isolated mo-tester runs. This is an
 R0 fixture/documentation follow-up with unchanged source behavior. Prior code
 and concurrency evidence is reused; full fixture-head CI and the still-queued
 ordinary UT remain explicitly pending.
+
+
+Main merge review: `a321a75afc` + `35c8dd5854` (2026-10-13). Both text conflicts
+were resolved from their owning contracts: regenerate the parser from combined
+grammar; retain main's cohort port-range admission. Auto-merged frontend, planner
+and compile hooks preserve MV dispatch, authorization and single-CN refresh.
+The main-side JSON EXPLAIN protocol mismatch was reproduced at the clean source
+baseline and fixed through the existing typed index-search/plugin boundary.
+All prior distinct renderer oracles are retained using current protocol fields,
+with additional malformed metadata, fulltext and opaque-options controls. Six
+owning suites, 11 gossip fixture tests, seven-package configured lint and vet,
+and the error-constructor policy passed. Molint exited 0 with two advisory
+recover diagnostics on unchanged, checked main-side helper bodies. No new shared
+state, wait, persistence format or native dependency was introduced; prior MV
+race/restart proof remains valid for its unchanged contracts. Delivery review
+has no unresolved blockers for this merge correction. Complete merge-head CI
+and the previously recorded Draft production-release gaps remain separate.

@@ -1,0 +1,167 @@
+name: Python SDK
+
+on:
+  workflow_call:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'clients/python/**'
+      - '.github/workflows/python-sdk.yml'
+  workflow_dispatch:
+    inputs:
+      online:
+        description: 'Run against the configured isolated SDK integration runner'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-sdk/${{ github.workflow }}/${{ github.event.pull_request.head.repo.full_name || github.repository }}/${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.12']
+        sqlalchemy: ['>=1.4,<1.5', '>=2.0,<2.1', '>=2.1,<3']
+        exclude:
+          - python: '3.10'
+            sqlalchemy: '>=2.1,<3'
+        include:
+          # SQLAlchemy 2.1 requires Python >=3.11.
+          - python: '3.11'
+            sqlalchemy: '>=2.1,<3'
+    defaults:
+      run:
+        working-directory: clients/python
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          # Fork code runs only on this read-only, secret-free hosted runner.
+          allow-unsafe-pr-checkout: ${{ github.event_name == 'pull_request_target' }}
+      - name: Record SDK provenance
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          {
+            echo '### SDK provenance'
+            echo "- Workflow SHA: ${WORKFLOW_SHA}"
+            echo "- PR base SHA: ${PR_BASE_SHA}"
+            echo "- Checkout SHA: ${CHECKOUT_SHA}"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install package, dialect entry points and test dependencies
+        env:
+          SQLALCHEMY_RANGE: ${{ matrix.sqlalchemy }}
+        run: |
+          python -m pip install -e '.[test]' "SQLAlchemy[asyncio]${SQLALCHEMY_RANGE}" pytest-asyncio pytest-subtests
+      - name: Check fatal Python errors
+        if: ${{ matrix.python == '3.12' && matrix.sqlalchemy == '>=2.0,<2.1' }}
+        run: |
+          python -m pip install 'flake8>=4.0'
+          python -m flake8 matrixone --select=E9,F63,F7,F82 --show-source --statistics
+      - name: Run SDK offline suite
+        run: |
+          if test -d tests/analytics; then
+            python -m pip install -e '.[analytics]' duckdb pandas polars 'moto[server]' boto3
+            python -m pytest tests/offline tests/analytics -o addopts='' -q --tb=short --junitxml=offline.xml
+          else
+            python -m pytest tests/offline -o addopts='' -q --tb=short --junitxml=offline.xml
+          fi
+      - name: Build and validate distributions
+        run: |
+          python -m pip install build twine
+          python -m build --outdir dist
+          python -m twine check dist/*
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: python-sdk-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
+          path: |
+            clients/python/offline.xml
+            clients/python/dist/*
+
+  online:
+    if: github.event_name == 'workflow_dispatch' && inputs.online
+    runs-on: [self-hosted, matrixone-sdk-test]
+    environment: matrixone-sdk-integration
+    defaults:
+      run:
+        working-directory: clients/python
+    env:
+      MATRIXONE_HOST: ${{ vars.MATRIXONE_HOST }}
+      MATRIXONE_PORT: ${{ vars.MATRIXONE_PORT }}
+      MATRIXONE_USER: ${{ vars.MATRIXONE_USER }}
+      MATRIXONE_PASSWORD: ${{ secrets.MATRIXONE_PASSWORD }}
+      MATRIXONE_DATABASE: ${{ vars.MATRIXONE_DATABASE }}
+      MO_HOST: ${{ vars.MATRIXONE_HOST }}
+      MO_PORT: ${{ vars.MATRIXONE_PORT }}
+      MO_USER: ${{ vars.MATRIXONE_USER }}
+      MO_PASSWORD: ${{ secrets.MATRIXONE_PASSWORD }}
+      MO_DATABASE: ${{ vars.MATRIXONE_DATABASE }}
+      MO_ANALYTICS_ONLINE: '1'
+      MO_SDK_ONLINE: '1'
+      MO_SECOND_CN_PORT: ${{ vars.MO_SECOND_CN_PORT }}
+      MO_ANALYTICS_S3_ENDPOINT: ${{ vars.MO_ANALYTICS_S3_ENDPOINT }}
+      MO_TLS_CA: ${{ vars.MO_TLS_CA }}
+      MO_TLS_PORT: ${{ vars.MO_TLS_PORT }}
+      MO_PLAIN_PORT: ${{ vars.MO_PLAIN_PORT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate deliberately configured deployment
+        run: |
+          test -n "$MATRIXONE_HOST"
+          test -n "$MATRIXONE_PORT"
+          test -n "$MATRIXONE_USER"
+          test -n "$MATRIXONE_PASSWORD"
+          test -n "$MATRIXONE_DATABASE"
+      - name: Install SDK and integration dependencies
+        run: python -m pip install -e '.[test]' 'SQLAlchemy[asyncio]>=2,<3' pytest-asyncio duckdb pandas polars 'moto[server]' boto3
+      - name: Run online tests and expose all failures
+        run: |
+          if test -d tests/analytics; then
+            python -m pip install -e '.[analytics]'
+            python -m pytest tests/online tests/analytics -o addopts='' -q --tb=short --junitxml=online.xml
+          else
+            python -m pytest tests/online -o addopts='' -q --tb=short --junitxml=online.xml
+          fi
+      - name: Report actual integration coverage
+        if: always()
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import xml.etree.ElementTree as ET
+          path = pathlib.Path('online.xml')
+          if path.exists():
+              suites = ET.parse(path).getroot().iter('testsuite')
+              counts = {k: 0 for k in ('tests', 'failures', 'errors', 'skipped')}
+              for suite in suites:
+                  for key in counts:
+                      counts[key] += int(suite.get(key, 0))
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as report:
+                  report.write('SDK integration counts: ' + str(counts) + '\n')
+                  if counts['skipped']:
+                      report.write('Skipped cases were not validated; this is not a complete online matrix.\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-sdk-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-online
+          path: clients/python/online.xml

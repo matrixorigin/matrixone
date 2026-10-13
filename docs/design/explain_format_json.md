@@ -1,6 +1,7 @@
 # EXPLAIN FORMAT=JSON compatibility contract
 
-- Status: draft; implementation and QA remain pending
+- Status: accepted design; implementation validation and QA remain separate gates
+- Design acceptance: [PR #28415](https://github.com/matrixorigin/matrixone/pull/28415), merged 2026-09-11 as `b922526ecb40f70e02f59e68b83ba3996a7325e5`
 - Tracking issue: [matrixorigin/matrixone#28301](https://github.com/matrixorigin/matrixone/issues/28301)
 - Target: MatrixOne main
 - Design revision: explain-format-json-2026-09-09-r2
@@ -149,6 +150,26 @@ The following mappings are normative for schema version 1:
   is emitted as an `assignments` entry, so a plan for `SET v = 2` includes a
   value of `2`; unchanged columns remain visible as their row-image
   expressions. An unresolved required row-image reference is an SQL error.
+- A `RECURSIVE_CTE` node records `recursive_union_mode=DISTINCT` or
+  `recursive_union_mode=ALL` in `node.expressions`, directly from
+  `RecursiveUnionDistinct`. Both values are explicit; a missing boolean does
+  not stand in for ALL. Ordinary CTE and UNION nodes retain their mappings.
+- A `FILL` node records `fill_type=<NONE|PREV|NEXT|NULL|VALUE|LINEAR>`,
+  followed by `fill_target[i]=<expression>` from its optimized `AggList` and
+  `fill_value[i]=<expression>` from `FillVal`, in their original order.
+  Empty target/value lists add no entries. Unknown modes and missing required
+  expressions are errors; the renderer never rebuilds pre-pruning targets.
+- Serialized scalar bytes use
+  `serialized(type=<oid>,width=<width>,scale=<scale>,value=0x<HEX>)`.
+  Serialized literal vectors use
+  `serialized_vec(type=<oid>,width=<width>,scale=<scale>,values=[0x<HEX>,NULL,...])`.
+  Type/width/scale come from the scalar type or decoded vector type. Hex is
+  uppercase, empty bytes are `0x`, and one-element vectors retain brackets.
+  The vector marker means at least one element was serialized; it does not
+  invent per-element provenance. JSON retains every byte-valued element and
+  function argument, while text EXPLAIN keeps its existing diagnostic
+  redaction. Unsupported serialized vector types and malformed complete
+  vector payloads are errors, not successful opaque/invalid placeholders.
 - Statistics are copied only when finite. The source `Stats` object is never
   cleaned or rewritten as part of serialization.
 
@@ -363,3 +384,15 @@ MySQL optimizer choices. Run focused UT, package regression, a single-CN
 protocol/BVT pass, and local scale fixtures. CGo package runs and a fixed
 MySQL 8.0.45 capture remain explicit QA evidence; they are not replaced by a
 successful text EXPLAIN comparison.
+
+
+### Index search protocol compatibility
+
+The renderer consumes `INDEX_SEARCH_SCAN` / `IndexSearchScan`, including the
+common `query_payload` and named `algo_exprs`. Algorithm descriptions come from
+the existing search plugin `ExplainHooks`; the SQL layer does not decode
+algorithm-specific options. The optional node field `algorithm_options` carries
+opaque option bytes as a base64 JSON string, preserving settings not described
+by the hook and options belonging to unregistered plugins. Expression names and
+values must have matching lengths and nonempty names; malformed metadata or
+plugin options produce an error instead of partial output.
