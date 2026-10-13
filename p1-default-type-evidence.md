@@ -97,3 +97,18 @@ Existing CRC32 DEFAULT/generated/CHECK/AUTO_INCREMENT regressions remain green
   planner only, per mission). The COPY-rebuild and preserve-path tests prove
   the bad metadata cannot be published.
 - Full BVT / mixed-CN / cross-version upgrade not re-run for this delta.
+
+## BVT decision (publication gate)
+
+**BVT: N/A** for this delta.
+
+- Production path that exposes the defect is a **legacy CRC0 catalog DEFAULT** whose
+  JSON input is later type-converted. Fresh DDL binds new CRC32 semantics
+  (overload 1); existing `func_crc32.sql` already states "Legacy CRC0 catalog
+  identity is covered by the planner regression, not manufactured by this BVT."
+- Equivalent regression: `pkg/sql/plan/crc32_default_input_type_test.go`
+  (5 roots) — `TestCRC32DefaultPreserveRejectsConvertedInput`,
+  `TestCRC32DefaultAlterRejectsConvertedInput`, and siblings; asserted terminal
+  is `not supported: changing a legacy CRC32 JSON default expression requires an
+  explicit table rebuild` (or the matching subject for ON UPDATE / COPY rebuild),
+  with catalog left unchanged on rejection.
