@@ -30,17 +30,21 @@ def params():
 @pytest.fixture
 def client():
     c = Client(**params(), logger=Mock())
-    yield c
-    assert c._engine.pool.checkedout() == 0
-    c.disconnect()
+    try:
+        yield c
+        assert c._engine.pool.checkedout() == 0
+    finally:
+        c.disconnect()
 
 
 @pytest.fixture
 def table(client):
     name = 'sdk_batch_' + uuid.uuid4().hex[:12]
     client.execute('CREATE TABLE ' + name + '(id INT PRIMARY KEY, embedding VECF32(2))')
-    yield name
-    client.execute('DROP TABLE ' + name)
+    try:
+        yield name
+    finally:
+        client.execute('DROP TABLE ' + name)
 
 
 def rows(n):
@@ -89,5 +93,22 @@ async def test_async_native_batch_and_late_rollback(client, table):
         with pytest.raises(QueryError):
             await manager.batch_insert(table, rows(10) + [{'id': 1, 'embedding': [1, 2]}], batch_size=3)
         assert (await c.execute('SELECT count(*) FROM ' + table)).rows == [(0,)]
+    finally:
+        await c.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_native_literal_payloads_sync_and_async(client, table):
+    client.execute('ALTER TABLE ' + table + ' ADD COLUMN label VARCHAR(200)')
+    labels = [':tag', 'prefix :tag', '{"a":1,"b":":tag"}', '% %% %s %(tag)s', "it's 雪"]
+    data = [dict(row, label=label) for row, label in zip(rows(len(labels)), labels)]
+    VectorManager(client).batch_insert(table, data, batch_size=2)
+    assert client.execute('SELECT label FROM ' + table + ' ORDER BY id').rows == [(label,) for label in labels]
+    client.execute('DELETE FROM ' + table)
+    c = AsyncClient(logger=Mock())
+    await c.connect(**params(), on_connect=[])
+    try:
+        await AsyncVectorManager(c).batch_insert(table, data, batch_size=2)
+        assert (await c.execute('SELECT label FROM ' + table + ' ORDER BY id')).rows == [(label,) for label in labels]
     finally:
         await c.disconnect()

@@ -54,7 +54,7 @@ class _VectorManagerBase:
 
         builder = BaseMatrixOneClient()
         for offset in range(0, len(data_list), batch_size):
-            yield builder._build_batch_insert_sql(table_name, data_list[offset:offset + batch_size])
+            yield builder._build_batch_insert_sql(table_name, data_list[offset : offset + batch_size])
 
     @staticmethod
     def _build_create_ivf_sql(table_name: str, name: str, column: str, lists: int, op_type: "VectorOpType") -> tuple:

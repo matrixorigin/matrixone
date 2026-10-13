@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from matrixone.vector_manager import AsyncVectorManager, VectorManager
 from matrixone.exceptions import QueryError
+from matrixone.vector_manager import AsyncVectorManager, VectorManager
 
 ROWS = [{'id': i, 'embedding': [i, i + 1]} for i in range(7)]
 
