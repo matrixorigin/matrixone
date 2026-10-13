@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Design revision | `python-udf-current-stage-r11-2026-10-13` |
+| Design revision | `python-udf-current-stage-r12-2026-10-14` |
 | Applies to | MatrixOne PR #29152, test/development-stage Python UDF |
-| Upstream repair baseline | `fa7cc1d9b38e3324572a4efc5617033522de0cbf` (MORPC 111 for IndexSearchScan; the native COLUMNS repair remains catalog 4.0.14) |
-| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r11 contract preserves the upstream catalog 4.0.14 handler unchanged, adds a separate Python revision repair in catalog 4.0.15, and uses protocol 112 admission, including prepared reuse and physical/remote execution. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
+| Upstream repair baseline | `1b66ff135c64ef1c642a297105bf599cd3173dee` (MORPC 112 for signed WEEK/DAYOFYEAR results; the native COLUMNS repair remains catalog 4.0.14) |
+| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r12 contract preserves the upstream catalog 4.0.14 handler unchanged, adds a separate Python revision repair in catalog 4.0.15, and uses protocol 113 admission, including prepared reuse and physical/remote execution. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
 | Not covered | Production tenant isolation, sandbox, Operator rollout, or cross-version rollback/restore |
 
 This is the versioned governing proposal for the current PR stage. The owner
@@ -82,7 +82,7 @@ binary creates ordinary SQL UDFs in the legacy row only, and readers explicitly
 use that row so an old writer and a new reader observe the same body. Replacing
 a function that already has a non-zero shared revision head is rejected below
 the floor; this prevents a legacy-only write from leaving a stale immutable
-revision that would become authoritative later. At protocol 112 and above,
+revision that would become authoritative later. At protocol 113 and above,
 writers publish the compatibility row, immutable revision, and active head in
 the same caller-owned transaction, and readers use the selected revision.
 A non-zero head with a missing or malformed revision is a catalog error; it is
@@ -100,7 +100,7 @@ Thus a tenant already at upstream final `4.0.14`, including one lacking revision
 tables, still
 receives the repair; earlier tenants traverse the normal chain first. Missing,
 partial and complete schemas converge through idempotent checks. Repair metadata
-requires protocol 112 before tenant tasks are created, and the repair handler
+requires protocol 113 before tenant tasks are created, and the repair handler
 rechecks every CN before catalog access on login compensation or direct replay; `Prepare` only selects
 `mo_catalog` and performs no DDL.
 
@@ -113,7 +113,7 @@ Below the floor, revision-bearing SQL plans invalidate and rebind to the legacy
 row. Sender admission also probes the actual remote CN endpoint, and the receiver
 checks its own active protocol; coordinator state alone cannot admit an old
 receiver. Missing or malformed protocol state fails closed. The read-only
-`GetPythonUdfStatus` method uses wire capability 112. Worker capability negotiation
+`GetPythonUdfStatus` method uses wire capability 113. Worker capability negotiation
 remains a separate exact-contract check.
 
 The migration has no down handler. Do not manually remove the revision table,
@@ -253,7 +253,7 @@ test/development correctness and backpressure, not hostile-code containment.
 
 | Contract | Evidence on the reviewed branch/head | Status |
 | --- | --- | --- |
-| Shared revision schema, protocol-112 admission, and SQL legacy fallback | `pkg/bootstrap/versions/v4_0_15/upgrade_test.go`; `pkg/bootstrap/service_statistics_upgrade_test.go`; `pkg/frontend/python_udf_catalog_test.go`; prepared, evaluator and remote protocol regression tests | Current repair and admission cases present; framework scheduling and idempotent DDL replay have unit cases. `pkg/tests/upgrade/upgrade_v4_0_15_routine_test.go` verifies real login repair from tenant versions 4.0.12/4.0.13/4.0.14, rejection at protocol 111 before mutation, legacy SQL UDF results, and two idempotent replays. This does not verify cross-binary downgrade. Historical upgrade-compatibility CI was skipped. |
+| Shared revision schema, protocol-113 admission, and SQL legacy fallback | `pkg/bootstrap/versions/v4_0_15/upgrade_test.go`; `pkg/bootstrap/service_statistics_upgrade_test.go`; `pkg/frontend/python_udf_catalog_test.go`; prepared, evaluator and remote protocol regression tests | Current repair and admission cases present; framework scheduling and idempotent DDL replay have unit cases. `pkg/tests/upgrade/upgrade_v4_0_15_routine_test.go` verifies real login repair from tenant versions 4.0.12/4.0.13/4.0.14, rejection at protocol 112 before mutation, legacy SQL UDF results, and two idempotent replays. This does not verify cross-binary downgrade. Historical upgrade-compatibility CI was skipped. |
 | Exact FunctionRef and overload invalidation | `pkg/frontend/routine_plan_validation_test.go`; `pkg/frontend/routine_namespace_test.go`; `test/distributed/cases/udf_python/overload_namespace.sql` | Unit and SQL prepared-plan cases present. |
 | SQL expression placement and result semantics | `pkg/sql/colexec/external_routine_eval.go`; `test/distributed/cases/udf_python/relational_positions.sql`, `dml_positions.sql`, `vector_mode.sql` | Physical evaluator and ordinary BVT cases present. |
 | Current-contract restore | `pkg/frontend/clone_database_source.go`; `pkg/frontend/snapshot_catalog_restore.go`; `snapshot_restore.sql` | Same-contract account restore case present; cross-version restore not verified. |
