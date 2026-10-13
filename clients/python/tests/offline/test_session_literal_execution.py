@@ -10,11 +10,13 @@ import pymysql
 import pytest
 import pytest_asyncio
 import sqlalchemy
-from sqlalchemy import Column, Integer, String, create_engine, event, select, text
+from sqlalchemy import Column, Integer, String, bindparam, create_engine, event, literal, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.orm import Session as ParentSession
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.pool import QueuePool
+from sqlalchemy.types import TypeDecorator
 
 from matrixone import Client
 from matrixone._session_execution import _LiteralSQL
@@ -449,6 +451,77 @@ def test_bindless_numeric_compilation(paramstyle):
     assert compiled.construct_params() == {}
 
 
+class TypedLabel(TypeDecorator):
+    impl = String
+    cache_ok = True
+
+    def process_result_value(self, value, dialect):
+        return value + '|typed'
+
+
+def transform_literal(state, composed):
+    typed = state.statement.columns(label=TypedLabel())
+    if not composed:
+        state.statement = typed
+        return
+    source = typed.subquery()
+    state.statement = (
+        select(source.c.label, literal(7).label('bound_value'))
+        .where(literal(2).in_(bindparam('allowed', [1, 2], expanding=True)))
+        .where(literal(3) == bindparam('guard', 3, type_=Integer, literal_execute=True))
+    )
+
+
+def transformed_query(value):
+    return "SELECT '" + value + "' AS label"
+
+
+def transformed_expected(value, composed):
+    return (value + '|typed', 7) if composed else (value + '|typed',)
+
+
+@pytest.mark.parametrize('cls', [ClientSession, ExportedSession])
+@pytest.mark.parametrize('composed', [False, True])
+@pytest.mark.parametrize('no_parameters', [False, True])
+def test_transformed_literals_and_outer_binds(client, cls, composed, no_parameters):
+    with session_for(client, cls) as session:
+        event.listen(session, 'do_orm_execute', lambda state: transform_literal(state, composed))
+        for value in ['ordinary', '100%', '%s']:
+            sql = transformed_query(value)
+            for statement in [text(sql), sql]:
+                result = session.execute(statement, execution_options={'no_parameters': no_parameters})
+                assert tuple(result.one()) == transformed_expected(value, composed)
+        assert tuple(session.execute(transformed_query(':tag')).one()) == transformed_expected(':tag', composed)
+        # 2.0.44's positional scan mistakes literal named-percent syntax for a
+        # bind even with unchanged text(). Keep an executed parent control.
+        for statement in [text(transformed_query('%(tag)s')), transformed_query('%(tag)s')]:
+            if sqlalchemy.__version__ == '2.0.44':
+                with pytest.raises(QueryError, match="tag"):
+                    session.execute(statement)
+            else:
+                assert tuple(session.execute(statement).one()) == transformed_expected('%(tag)s', composed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('composed', [False, True])
+@pytest.mark.parametrize('no_parameters', [False, True])
+async def test_async_transformed_literals_and_outer_binds(async_client, composed, no_parameters):
+    async with async_client.session() as session:
+        event.listen(session.sync_session, 'do_orm_execute', lambda state: transform_literal(state, composed))
+        for value in ['ordinary', '100%', '%s']:
+            sql = transformed_query(value)
+            for statement in [text(sql), sql]:
+                result = await session.execute(statement, execution_options={'no_parameters': no_parameters})
+                assert tuple(result.one()) == transformed_expected(value, composed)
+        assert tuple((await session.execute(transformed_query(':tag'))).one()) == transformed_expected(':tag', composed)
+        for statement in [text(transformed_query('%(tag)s')), transformed_query('%(tag)s')]:
+            if sqlalchemy.__version__ == '2.0.44':
+                with pytest.raises(QueryError, match="tag"):
+                    await session.execute(statement)
+            else:
+                assert tuple((await session.execute(statement)).one()) == transformed_expected('%(tag)s', composed)
+
+
 def record_literal_hooks(session, engine):
     statements, markers = [], []
 
@@ -616,8 +689,9 @@ async def test_async_options_routing_and_orm_delegation(async_client, tmp_path):
 
 
 @pytest.mark.parametrize('cls', [ClientSession, ExportedSession])
+@pytest.mark.parametrize('transformed', [False, True])
 @pytest.mark.parametrize('autocommit', [False, True] if sqlalchemy.__version__.startswith('1.4.') else [False])
-def test_row_semantics_and_single_connection_reuse(cls, autocommit, tmp_path):
+def test_row_semantics_and_single_connection_reuse(cls, autocommit, transformed, tmp_path):
     c = Client(logger=Mock())
     c._engine = create_engine(
         'sqlite:///' + str(tmp_path / 'single.sqlite'),
@@ -627,10 +701,20 @@ def test_row_semantics_and_single_connection_reuse(cls, autocommit, tmp_path):
         pool_timeout=0.1,
     )
     kwargs = {'autocommit': True} if autocommit else {}
+
+    def result_types(state):
+        if transformed:
+            state.statement = state.statement.columns(id=Integer())
+
+    def new_session():
+        session = cls(bind=c._engine, client=c, **kwargs)
+        event.listen(session, 'do_orm_execute', result_types)
+        return session
+
     try:
         # Compare the SDK string path to its unchanged SQLAlchemy statement path.
         for statement in [text('SELECT 7 AS id'), 'SELECT 7 AS id']:
-            with cls(bind=c._engine, client=c, **kwargs) as session:
+            with new_session() as session:
                 for _ in range(2):
                     result = session.execute(statement, execution_options={'future_result': False})
                     row = result.one()
@@ -641,7 +725,7 @@ def test_row_semantics_and_single_connection_reuse(cls, autocommit, tmp_path):
                     if autocommit:
                         assert c._engine.pool.checkedout() == 0
             assert c._engine.pool.checkedout() == 0
-        with cls(bind=c._engine, client=c, **kwargs) as session:
+        with new_session() as session:
             with pytest.raises(QueryError):
                 session.execute('SELECT * FROM missing_table')
             if autocommit:
@@ -652,31 +736,80 @@ def test_row_semantics_and_single_connection_reuse(cls, autocommit, tmp_path):
             if autocommit:
                 assert c._engine.pool.checkedout() == 0
 
-        # Fail after checkout but before cursor/driver execution. Session now
-        # rejects invalid option containers before it acquires a connection.
-        def reject_execution(conn, *args):
-            assert c._engine.pool.checkedout() == 1
-            raise RuntimeError('pre-driver hook failure')
+        if autocommit and transformed:
+            legacy_transformed_rejection_matches_parent(c, cls)
+        else:
+            # Fail after checkout but before cursor/driver execution. Session now
+            # rejects invalid option containers before it acquires a connection.
+            def reject_execution(conn, *args):
+                assert c._engine.pool.checkedout() == 1
+                raise RuntimeError('pre-driver hook failure')
 
-        completed = []
+            completed = []
 
-        def record_completed(conn, cur, sql, *args):
-            completed.append(sql)
+            def record_completed(conn, cur, sql, *args):
+                completed.append(sql)
 
-        event.listen(c._engine, 'before_cursor_execute', reject_execution)
-        event.listen(c._engine, 'after_cursor_execute', record_completed)
-        try:
-            with cls(bind=c._engine, client=c, **kwargs) as session:
-                with pytest.raises(QueryError, match='pre-driver hook failure'):
-                    session.execute('SELECT 7')
-                if autocommit:
-                    assert c._engine.pool.checkedout() == 0
-        finally:
-            event.remove(c._engine, 'before_cursor_execute', reject_execution)
-            event.remove(c._engine, 'after_cursor_execute', record_completed)
-        assert completed == []
-        assert c._engine.pool.checkedout() == 0
-        with cls(bind=c._engine, client=c, **kwargs) as session:
+            event.listen(c._engine, 'before_cursor_execute', reject_execution)
+            event.listen(c._engine, 'after_cursor_execute', record_completed)
+            try:
+                with new_session() as session:
+                    with pytest.raises(QueryError, match='pre-driver hook failure'):
+                        session.execute('SELECT 7')
+                    if autocommit:
+                        assert c._engine.pool.checkedout() == 0
+            finally:
+                event.remove(c._engine, 'before_cursor_execute', reject_execution)
+                event.remove(c._engine, 'after_cursor_execute', record_completed)
+            assert completed == []
+            assert c._engine.pool.checkedout() == 0
+        with new_session() as session:
             assert session.execute('SELECT 8').scalar() == 8
     finally:
         c.disconnect()
+
+
+def legacy_transformed_rejection_matches_parent(client, cls):
+    # 1.4 autocommit + compiled before_cursor_execute rejection leaks in the
+    # unmodified parent too. Fixture cleanup below is not product cleanup.
+    engine = client._engine
+    for owner in [ParentSession, cls]:
+        captured, completed = [], []
+
+        def reject(conn, cursor, *args):
+            captured.append((conn, cursor))
+            raise RuntimeError('pre-driver hook failure')
+
+        def record_completed(*args):
+            completed.append(1)
+
+        event.listen(engine, 'before_cursor_execute', reject)
+        event.listen(engine, 'after_cursor_execute', record_completed)
+        try:
+            options = {} if owner is ParentSession else {'client': client}
+            with owner(bind=engine, autocommit=True, **options) as session:
+                event.listen(
+                    session,
+                    'do_orm_execute',
+                    lambda state: setattr(state, 'statement', state.statement.columns(id=Integer())),
+                )
+                statement = text('SELECT 7 AS id') if owner is ParentSession else 'SELECT 7 AS id'
+                error = RuntimeError if owner is ParentSession else QueryError
+                with pytest.raises(error, match='pre-driver hook failure'):
+                    session.execute(statement)
+                assert len(captured) == 1
+                assert completed == []
+                assert engine.pool.checkedout() == 1
+            assert engine.pool.checkedout() == 1
+        finally:
+            event.remove(engine, 'before_cursor_execute', reject)
+            event.remove(engine, 'after_cursor_execute', record_completed)
+            for connection, cursor in captured:
+                try:
+                    cursor.close()
+                finally:
+                    connection.close()
+            assert engine.pool.checkedout() == 0
+        with engine.connect() as connection:
+            assert connection.exec_driver_sql('SELECT 8').scalar() == 8
+        assert engine.pool.checkedout() == 0

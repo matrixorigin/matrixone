@@ -33,14 +33,14 @@ class _LiteralSQL(TextClause):
 
 @compiles(_LiteralSQL)
 def _compile_literal_sql(statement, compiler, **kwargs):
-    # Session hooks and bind routing may inspect/compile the statement. Actual
-    # execution uses the parent-supplied connection without compilation.
-    compiler.isplaintext = True
-    # There are no binds: positional postprocessing must not reinterpret
-    # literal %(name)s, postcompile markers, or numeric-position tokens.
-    compiler.positional = False
-    compiler._numeric_binds = False
-    return statement.text
+    # Hooks can wrap this literal in a compiled statement. Protect standalone
+    # bind-free representation without changing the outer compiler's binds or
+    # result processing when this is a child expression.
+    if compiler.statement is statement:
+        compiler.isplaintext = True
+        compiler.positional = False
+        compiler._numeric_binds = False
+    return compiler.post_process_text(statement.text)
 
 
 def execute_session_sql(parent_execute, sql, *, bind_arguments=None, execution_options=None, **kwargs):

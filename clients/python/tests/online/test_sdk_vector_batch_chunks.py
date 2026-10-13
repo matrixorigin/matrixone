@@ -9,11 +9,15 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
-from sqlalchemy import event
+import sqlalchemy
+from sqlalchemy import Integer, String, bindparam, event, literal, select, text
+from sqlalchemy.types import TypeDecorator
 
 from matrixone import Client
 from matrixone.async_client import AsyncClient
+from matrixone.client import Session as ClientSession
 from matrixone.exceptions import QueryError
+from matrixone.session import Session as ExportedSession
 from matrixone.vector_manager import AsyncVectorManager, VectorManager
 
 pytestmark = pytest.mark.skipif(os.environ.get('MO_SDK_ONLINE') != '1', reason='isolated server required')
@@ -200,5 +204,98 @@ async def test_native_literal_payloads_sync_and_async(client, table):
                 assert tuple(
                     (await session.execute(literal_query(), execution_options={'no_parameters': no_parameters})).one()
                 ) == (':tag', '% %% %s %(tag)s')
+    finally:
+        await c.disconnect()
+
+
+class TypedLabel(TypeDecorator):
+    impl = String
+    cache_ok = True
+
+    def process_result_value(self, value, dialect):
+        return value + '|typed'
+
+
+def transform_literal(state, composed):
+    typed = state.statement.columns(label=TypedLabel())
+    if not composed:
+        state.statement = typed
+        return
+    source = typed.subquery()
+    state.statement = (
+        select(source.c.label, literal(7).label('bound_value'))
+        .where(literal(2).in_(bindparam('allowed', [1, 2], expanding=True)))
+        .where(literal(3) == bindparam('guard', 3, type_=Integer, literal_execute=True))
+    )
+
+
+def transformed_expected(value, composed, no_parameters):
+    # Parent compilation escapes percent before bind-free no_parameters dispatch.
+    if no_parameters and not composed:
+        value = value.replace('%', '%%')
+    return (value + '|typed', 7) if composed else (value + '|typed',)
+
+
+@pytest.mark.parametrize('cls', [ClientSession, ExportedSession])
+@pytest.mark.parametrize('composed', [False, True])
+@pytest.mark.parametrize('no_parameters', [False, True])
+def test_native_transformed_literals_and_outer_binds(client, cls, composed, no_parameters):
+    with cls(bind=client._engine, client=client) as session:
+        event.listen(session, 'do_orm_execute', lambda state: transform_literal(state, composed))
+        for value in ['ordinary', '100%', '%s']:
+            sql = "SELECT '" + value + "' AS label"
+            expected = transformed_expected(value, composed, no_parameters)
+            for statement in [text(sql), sql]:
+                assert (
+                    tuple(session.execute(statement, execution_options={'no_parameters': no_parameters}).one())
+                    == expected
+                )
+        assert tuple(session.execute("SELECT ':tag' AS label").one()) == (
+            (':tag|typed', 7) if composed else (':tag|typed',)
+        )
+        value = '%(tag)s'
+        for statement in [text("SELECT '" + value + "' AS label"), "SELECT '" + value + "' AS label"]:
+            if sqlalchemy.__version__ == '2.0.44':
+                # The unchanged parent positional compiler also scans quoted named-percent text.
+                with pytest.raises(QueryError, match='tag'):
+                    session.execute(statement, execution_options={'no_parameters': no_parameters})
+            else:
+                assert tuple(
+                    session.execute(statement, execution_options={'no_parameters': no_parameters}).one()
+                ) == transformed_expected(value, composed, no_parameters)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('composed', [False, True])
+@pytest.mark.parametrize('no_parameters', [False, True])
+async def test_async_native_transformed_literals_and_outer_binds(client, composed, no_parameters):
+    c = AsyncClient(logger=Mock())
+    await c.connect(**params(), on_connect=[])
+    try:
+        async with c.session() as session:
+            event.listen(session.sync_session, 'do_orm_execute', lambda state: transform_literal(state, composed))
+            for value in ['ordinary', '100%', '%s']:
+                sql = "SELECT '" + value + "' AS label"
+                expected = transformed_expected(value, composed, no_parameters)
+                for statement in [text(sql), sql]:
+                    assert (
+                        tuple(
+                            (await session.execute(statement, execution_options={'no_parameters': no_parameters})).one()
+                        )
+                        == expected
+                    )
+            assert tuple((await session.execute("SELECT ':tag' AS label")).one()) == (
+                (':tag|typed', 7) if composed else (':tag|typed',)
+            )
+            value = '%(tag)s'
+            for statement in [text("SELECT '" + value + "' AS label"), "SELECT '" + value + "' AS label"]:
+                if sqlalchemy.__version__ == '2.0.44':
+                    # The unchanged parent positional compiler also scans quoted named-percent text.
+                    with pytest.raises(QueryError, match='tag'):
+                        await session.execute(statement, execution_options={'no_parameters': no_parameters})
+                else:
+                    assert tuple(
+                        (await session.execute(statement, execution_options={'no_parameters': no_parameters})).one()
+                    ) == transformed_expected(value, composed, no_parameters)
     finally:
         await c.disconnect()
