@@ -3180,3 +3180,37 @@ func TestParseCSVRowOrder(t *testing.T) {
 	_, err = ParseCSVRowOrder("unknown")
 	require.Error(t, err)
 }
+
+// The SQL exporter must not erase an unsupported semantic revision and thereby
+// let fresh authoring silently reinterpret it as the current JSON key family.
+func TestJSONFunctionalIndexCheckpointSemanticRevision(t *testing.T) {
+	const backing = "__mo_fi_json"
+	const expression = "cast(json_unquote(json_extract(`doc`, '$.kind')) as char(20))"
+	for _, tc := range []struct {
+		params string
+		valid  bool
+	}{
+		{`{"functional_json_semantics":"1"}`, true},
+		{`{"functional_json_semantics":"2"}`, false},
+		{`{"functional_json_semantics":1}`, false},
+		{`{"functional_json_semantics":`, false},
+	} {
+		t.Run(tc.params, func(t *testing.T) {
+			schema := &TableSchema{TableName: "docs", Columns: []TableColumn{{Name: "doc", SQLType: "JSON", Position: 1}}, UniqueKeys: []TableUniqueKey{{Name: "idx_kind", Columns: []string{backing}, Expressions: map[string]string{backing: expression}, AlgoParams: tc.params}}}
+			ddl := RenderCreateTableDDLFromSchema(schema)
+			view := &LogicalTableView{Headers: []string{"object", "block", "row", "table_id", "name", "column_name", "type", "ordinal_position", catalog.IndexAlgoParams}, Rows: [][]string{{"o", "0", "0", "42", "idx_kind", backing, "INDEX", "1", tc.params}}}
+			stmts, err := buildCreateIndexStatementsFromMoIndexes(view, 42, "docs", schema)
+			if tc.valid {
+				require.Contains(t, ddl, expression)
+				require.NoError(t, err)
+				require.Len(t, stmts, 1)
+				require.Contains(t, stmts[0], expression)
+				require.NotContains(t, ddl, plan.FunctionalJSONSemanticsKey)
+			} else {
+				require.Empty(t, ddl, "constraint SQL must not erase unsupported revision")
+				require.Error(t, err, "mo_indexes SQL must not erase unsupported revision")
+				require.Empty(t, stmts)
+			}
+		})
+	}
+}
