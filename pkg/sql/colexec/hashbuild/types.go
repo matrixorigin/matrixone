@@ -179,31 +179,44 @@ func (b *spillFileBundle) release() {
 		return
 	}
 	b.mu.Lock()
-	if b.released {
-		b.mu.Unlock()
-		return
-	}
+	defer b.mu.Unlock()
 	b.released = true
-	entries := b.entries
-	b.entries = nil
-	b.mu.Unlock()
-	for _, entry := range entries {
+	for bucket, entry := range b.entries {
 		if entry == nil {
+			delete(b.entries, bucket)
 			continue
 		}
 		if entry.file != nil {
 			_ = entry.file.Close()
-		}
-		if entry.fs != nil && entry.name != "" {
-			_ = entry.fs.RemoveFile(context.Background(), entry.name)
+			entry.file = nil
 		}
 		if entry.fdToken != nil {
 			entry.fdToken.Release()
+			entry.fdToken = nil
+		}
+		if entry.created && entry.fs != nil && entry.name != "" {
+			if err := spillio.RemoveFileWithRetry(entry.fs, entry.name); err != nil {
+				logutil.Errorf("hash build spill cleanup failed: %v", err)
+				continue
+			}
 		}
 		if entry.diskToken != nil {
 			entry.diskToken.Release()
+			entry.diskToken = nil
 		}
+		delete(b.entries, bucket)
 	}
+}
+
+// cleanupPending is checked only after release. A failed remove keeps the
+// entry and its disk reservation until a later release can retry it.
+func (b *spillFileBundle) cleanupPending() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.entries) > 0
 }
 
 func (b *spillFileBundle) openFile(
@@ -346,6 +359,9 @@ func (b *spillFileBundle) accountedFiles(
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.released {
+		return nil, process.ErrExecutionSpillReservationInactive
+	}
 	files := make([]*message.SpillFile, spillNumBuckets)
 	for bucket, entry := range b.entries {
 		if entry == nil || entry.fs == nil || entry.name == "" ||
@@ -865,7 +881,9 @@ func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {
 	// names and return disk ownership.
 	if hashBuild.ctr.spillBundle != nil {
 		hashBuild.ctr.spillBundle.release()
-		hashBuild.ctr.spillBundle = nil
+		if !hashBuild.ctr.spillBundle.cleanupPending() {
+			hashBuild.ctr.spillBundle = nil
+		}
 	}
 }
 
