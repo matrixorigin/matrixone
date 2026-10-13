@@ -716,13 +716,6 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				batchMembership = false
 				break
 			}
-			source := ctr.leftBat.Vecs[column.Pos]
-			// Union's constant path broadcasts uniform grouping only. Retain
-			// scalar copying for constants with logical-row grouping metadata.
-			if source.IsConst() && source.HasGrouping() {
-				batchMembership = false
-				break
-			}
 		}
 	}
 
@@ -1766,7 +1759,7 @@ func (ctr *container) appendUniqueMatches(hashJoin *HashJoin, proc *process.Proc
 	}
 	for j, rp := range hashJoin.ResultCols {
 		if rp.Rel == 0 {
-			if err := appendUniqueProjection(ctr.resBat.Vecs[j], ctr.leftBat.Vecs[rp.Pos], leftRows[:matched], proc.Mp()); err != nil {
+			if err := ctr.resBat.Vecs[j].Union(ctr.leftBat.Vecs[rp.Pos], leftRows[:matched], proc.Mp()); err != nil {
 				return 0, err
 			}
 		}
@@ -1783,7 +1776,13 @@ func (ctr *container) appendUniqueMatches(hashJoin *HashJoin, proc *process.Proc
 		for j, rp := range hashJoin.ResultCols {
 			if rp.Rel != 0 {
 				src := ctr.rightBats[batchIdx].Vecs[rp.Pos]
-				if err := appendUniqueProjection(ctr.resBat.Vecs[j], src, rightRows[start:end], proc.Mp()); err != nil {
+				var err error
+				if end-start == 1 {
+					err = ctr.resBat.Vecs[j].UnionOne(src, rightRows[start], proc.Mp())
+				} else {
+					err = ctr.resBat.Vecs[j].Union(src, rightRows[start:end], proc.Mp())
+				}
+				if err != nil {
 					return 0, err
 				}
 			}
@@ -1791,21 +1790,6 @@ func (ctr *container) appendUniqueMatches(hashJoin *HashJoin, proc *process.Proc
 		start = end
 	}
 	return matched, nil
-}
-
-// A constant payload can carry grouping bits at logical row positions. Union's
-// constant path broadcasts row zero's grouping state, so preserve selections
-// with UnionOne for this shape while retaining bulk copies for ordinary data.
-func appendUniqueProjection(dst, src *vector.Vector, rows []int64, mp *mpool.MPool) error {
-	if len(rows) == 1 || (src.IsConst() && src.HasGrouping()) {
-		for _, row := range rows {
-			if err := dst.UnionOne(src, row, mp); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	return dst.Union(src, rows, mp)
 }
 
 func (ctr *container) appendOneMatch(hashJoin *HashJoin, proc *process.Process, leftRow, rIdx1, rIdx2 int64) error {
