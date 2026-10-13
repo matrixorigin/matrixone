@@ -20,6 +20,7 @@ import (
 	"os"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -30,6 +31,40 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHashJoinFreeReleaseRetriesAfterFilesystemRecovery(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	fd, err := os.CreateTemp(t.TempDir(), "terminal-hashjoin-*")
+	require.NoError(t, err)
+	name := fd.Name()
+	require.NoError(t, fd.Close())
+	var blocked atomic.Bool
+	blocked.Store(true)
+	var released atomic.Int32
+	file := message.NewReopenableSpillFile(
+		func(context.Context) (*os.File, error) { return os.Open(name) },
+		func() error {
+			if blocked.Load() {
+				return errors.New("injected terminal removal failure")
+			}
+			return os.Remove(name)
+		}, 1, 1, func() { released.Add(1) },
+	)
+	engine := newAccountedTestSpillEngine(t, spillutil.SpillEngineConfig{})
+	engine.InitFromSpilledFiles([]*message.SpillFile{file})
+	join := NewArgument()
+	join.ctr.spillEngine = engine
+	join.Free(proc, true, errors.New("terminal query error"))
+	require.True(t, engine.CleanupPending())
+	join.Release()
+	require.False(t, engine.CleanupPending())
+	require.FileExists(t, name)
+	require.Zero(t, released.Load())
+	blocked.Store(false)
+	require.Eventually(t, func() bool { return released.Load() == 1 }, 3*time.Second, 10*time.Millisecond)
+	require.NoFileExists(t, name)
+}
 
 func TestHashJoinSpillConstructorFailureRetainsCleanup(t *testing.T) {
 	for _, failFirstRemove := range []bool{false, true} {

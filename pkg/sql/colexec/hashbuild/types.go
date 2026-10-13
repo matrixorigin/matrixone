@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -735,6 +737,19 @@ func NewArgument() *HashBuild {
 
 func (hashBuild *HashBuild) Release() {
 	if hashBuild != nil {
+		if bundle := hashBuild.ctr.spillBundle; bundle != nil {
+			hashBuild.ctr.spillBundle = nil
+			bundle.release()
+			if bundle.cleanupPending() {
+				spillcleanup.Enqueue(func() error {
+					bundle.release()
+					if bundle.cleanupPending() {
+						return errors.New("hash build spill cleanup pending")
+					}
+					return nil
+				})
+			}
+		}
 		reuse.Free[HashBuild](hashBuild, nil)
 	}
 }

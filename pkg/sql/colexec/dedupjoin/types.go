@@ -458,6 +458,7 @@ func NewArgument() *DedupJoin {
 
 func (dedupJoin *DedupJoin) Release() {
 	if dedupJoin != nil {
+		dedupJoin.ctr.spillEngine.DeferCleanup()
 		reuse.Free[DedupJoin](dedupJoin, nil)
 	}
 }

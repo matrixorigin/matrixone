@@ -391,6 +391,7 @@ func NewArgument() *HashJoin {
 
 func (hashJoin *HashJoin) Release() {
 	if hashJoin != nil {
+		hashJoin.ctr.spillEngine.DeferCleanup()
 		reuse.Free[HashJoin](hashJoin, nil)
 	}
 }

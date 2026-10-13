@@ -184,6 +184,7 @@ func NewArgument() *RightDedupJoin {
 
 func (rightDedupJoin *RightDedupJoin) Release() {
 	if rightDedupJoin != nil {
+		rightDedupJoin.ctr.spillEngine.DeferCleanup()
 		reuse.Free[RightDedupJoin](rightDedupJoin, nil)
 	}
 }

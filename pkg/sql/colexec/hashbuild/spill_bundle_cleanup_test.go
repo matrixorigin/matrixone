@@ -17,7 +17,9 @@ package hashbuild
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -26,6 +28,50 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+type terminalBundleRemoveFS struct {
+	fileservice.MutableFileService
+	blocked atomic.Bool
+}
+
+func (fs *terminalBundleRemoveFS) RemoveFile(ctx context.Context, name string) error {
+	if fs.blocked.Load() {
+		return errors.New("injected terminal bundle remove failure")
+	}
+	return fs.MutableFileService.RemoveFile(ctx, name)
+}
+
+func TestHashBuildReleaseRetriesAfterFilesystemRecovery(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer budget.Close()
+	baseFS, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	name := "terminal_hashbuild_" + uuid.NewString()
+	fd, err := baseFS.CreateFile(context.Background(), name)
+	require.NoError(t, err)
+	require.NoError(t, fd.Close())
+	token, err := generation.ReserveSpillDisk(1)
+	require.NoError(t, err)
+	fault := &terminalBundleRemoveFS{MutableFileService: baseFS}
+	fault.blocked.Store(true)
+	op := NewArgument()
+	op.ctr.spillBundle = &spillFileBundle{entries: map[int]*spillFileEntry{
+		0: {fs: fault, name: name, created: true, diskToken: token},
+	}}
+	op.cleanupSpillFiles(proc) // the Free path
+	require.True(t, op.ctr.spillBundle.cleanupPending())
+	op.Release()
+	generation.Close() // reservations must remain releasable after query teardown
+	require.Positive(t, generation.SpillDiskUsed())
+	fault.blocked.Store(false)
+	require.Eventually(t, func() bool { return generation.SpillDiskUsed() == 0 }, 3*time.Second, 10*time.Millisecond)
+	_, err = baseFS.OpenFile(context.Background(), name)
+	require.Error(t, err)
+}
 
 type blockedBundleRemoveFS struct {
 	fileservice.MutableFileService
