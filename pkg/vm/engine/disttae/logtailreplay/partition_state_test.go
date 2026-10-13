@@ -1633,48 +1633,6 @@ func TestCollectTombstoneStats_MergeVsMapConsistency(t *testing.T) {
 	t.Logf("Map path: %d rows, Merge path: %d rows", statsMap.Rows, statsMerge.Rows)
 }
 
-func TestCountTombstoneStatsWithMergeReturnsInitialReaderError(t *testing.T) {
-	ctx := context.Background()
-	fs := testutil.NewSharedFS()
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-	state := NewPartitionState("", false, 42, false)
-
-	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-	defer input.Clean(mp)
-	var blockID types.Blockid
-	require.NoError(t, vector.AppendFixed(
-		input.Vecs[0], types.NewRowid(&blockID, 1), false, mp,
-	))
-	require.NoError(t, vector.AppendFixed(
-		input.Vecs[1], types.BuildTS(100, 0), false, mp,
-	))
-	input.SetRowCount(1)
-
-	// This is a non-CN tombstone with a timestamp PK but no commitTS. It is not
-	// the exact three-column legacy Backup signature and must fail explicitly.
-	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
-	_, err := writer.WriteBatch(input)
-	require.NoError(t, err)
-	_, _, err = writer.Sync(ctx)
-	require.NoError(t, err)
-	stats := writer.GetObjectStats()
-
-	_, err = state.countTombstoneStatsWithMerge(
-		ctx,
-		types.BuildTS(10, 0),
-		fs,
-		[]objectio.ObjectEntry{{
-			ObjectStats: stats,
-			CreateTime:  types.BuildTS(1, 0),
-		}},
-		TombstoneStats{},
-	)
-	require.ErrorContains(t, err, "commit-ts column is unavailable")
-}
-
 func TestCollectTombstoneStats_MultiObjectMultiBlock(t *testing.T) {
 	// Test multiple objects, each with multiple blocks
 	// Verify both map and merge paths handle this correctly

@@ -556,9 +556,6 @@ func materializeValuesUnified(
 	// Build ZoneMap segments from the sorted Vec.
 	if canBuildSegments {
 		pkFilter = buildPKFilterFromVec(vec, pkType, tblStuff.def.pkSeqnum)
-		if pkFilter != nil {
-			pkFilter.ObjectZMIsPK = tblStuff.def.pkIsSortKey
-		}
 	}
 	vec.Free(mp)
 	return pkFilter, nil
@@ -638,9 +635,6 @@ func materializeCompositeValuesUnified(
 	// Build ZoneMap segments.
 	if canBuildSegments {
 		pkFilter = buildPKFilterFromVec(encodedVec, pkType, tblStuff.def.pkSeqnum)
-		if pkFilter != nil {
-			pkFilter.ObjectZMIsPK = tblStuff.def.pkIsSortKey
-		}
 	}
 	return pkFilter, nil
 }
@@ -973,7 +967,6 @@ func materializeSubqueryUnified(
 			pkFilter = &engine.PKFilter{
 				Segments:      segments,
 				PrimarySeqnum: tblStuff.def.pkSeqnum,
-				ObjectZMIsPK:  tblStuff.def.pkIsSortKey,
 			}
 		}
 	}

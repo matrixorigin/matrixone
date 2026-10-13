@@ -101,7 +101,7 @@ func addIssueTable(ctx *MockCompilerContext, name string, cols []struct {
 }
 
 func TestIssue29907AirflowJoinColumnRemapping(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	addIssueTable(ctx, "task_instance", []struct {
 		name string
 		typ  types.T

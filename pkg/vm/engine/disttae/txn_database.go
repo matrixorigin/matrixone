@@ -510,7 +510,7 @@ func (db *txnDatabase) createWithID(
 		for i, col := range cols {
 			if col.ConstraintType == catalog.SystemColPKConstraint {
 				tbl.primaryIdx = i
-				tbl.primarySeqnum = int(col.Seqnum)
+				tbl.primarySeqnum = i
 			}
 			if col.IsClusterBy == 1 {
 				tbl.clusterByIdx = i

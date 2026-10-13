@@ -1377,7 +1377,6 @@ func getTableStuff(
 		return
 	}
 	tblStuff.def.pkSeqnum = int(tarTblDef.Cols[tarTblDef.Name2ColIndex[tarTblDef.Pkey.PkeyColName]].Seqnum)
-	tblStuff.def.pkIsSortKey = tblStuff.def.pkKind != fakeKind && tarTblDef.ClusterBy == nil
 	if tblStuff.def.pkKind == fakeKind {
 		tblStuff.def.pkColIdxes = dataBranchFakePKColIdxes(tarTblDef)
 	}
