@@ -110,12 +110,16 @@ var (
 		"mo_indexes":          systemCatalogRestoreSkip,
 		"mo_account":          systemCatalogRestoreSkip,
 
-		catalog.MOVersionTable:       systemCatalogRestoreSkip,
-		catalog.MOUpgradeTable:       systemCatalogRestoreSkip,
-		catalog.MOUpgradeTenantTable: systemCatalogRestoreSkip,
-		catalog.MOAutoIncrTable:      systemCatalogRestoreSkip,
-		catalog.MO_VIEW_DEPENDENCIES: systemCatalogRestoreSkip,
-		catalog.MO_VIEW_REFRESH:      systemCatalogRestoreSkip,
+		catalog.MOVersionTable:        systemCatalogRestoreSkip,
+		catalog.MOUpgradeTable:        systemCatalogRestoreSkip,
+		catalog.MOUpgradeTenantTable:  systemCatalogRestoreSkip,
+		catalog.MOAutoIncrTable:       systemCatalogRestoreSkip,
+		catalog.MO_VIEW_DEPENDENCIES:  systemCatalogRestoreSkip,
+		catalog.MO_VIEW_REFRESH:       systemCatalogRestoreSkip,
+		catalog.MO_MATERIALIZED_VIEWS: systemCatalogRestoreSkip,
+		catalog.MO_MV_DEPENDENCIES:    systemCatalogRestoreSkip,
+		catalog.MO_MV_REFRESH_RUNS:    systemCatalogRestoreSkip,
+		catalog.MO_MV_ACCOUNT_STATE:   systemCatalogRestoreSkip,
 
 		"mo_user":                       systemCatalogRestoreCopy,
 		"mo_role":                       systemCatalogRestoreCopy,
@@ -1784,6 +1788,11 @@ func dropClusterTable(
 				if err = bh.Exec(ctx, fmt.Sprintf("delete from %s.%s", moCatalog, tblInfo.tblName)); err != nil {
 					return
 				}
+				continue
+			}
+			// Subsystem-owned cluster catalogs must retain the current schema.
+			// Their bulk-restore policy also governs this destructive cleanup.
+			if needSkipSystemTable(toAccountId, tblInfo) {
 				continue
 			}
 			getLogger(sid).Debug(fmt.Sprintf("[%s] start to drop system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))

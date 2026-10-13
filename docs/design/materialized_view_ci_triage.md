@@ -1,0 +1,91 @@
+# Materialized view CI integration corrections
+
+Tracking: [feature #30079](https://github.com/matrixorigin/matrixone/issues/30079),
+[draft PR #30085](https://github.com/matrixorigin/matrixone/pull/30085).
+
+## Observed failures
+
+The reviewed run was [38345343672, attempt 1](https://github.com/matrixorigin/matrixone/actions/runs/38345343672),
+checking `417811f5949dc04c9bd6d74d624bce2b852506c2`.
+The reusable CI workflow was `matrixorigin/CI@b0f959479893a3ab54ff3d9422e135ae2e9c67b2`.
+SCA ran on Linux/arm64; UT and the two BVT configurations ran on Linux/x86.
+The Go toolchain was 1.27.1. These were concrete source, policy, and test failures,
+not a reason to skip checks or retry unchanged code.
+
+| Failure | Root cause and correction |
+| --- | --- |
+| SCA, Static Code Analysis | 18 new Go files used abbreviated Apache headers. Replace them with the complete repository header. |
+| UT and coverage UT, bootstrap | The expected migration chain jumped from 4.0.13 to the new final version, omitting the existing 4.0.14 tenant migration. Include that hop and test both 4.0.14 and current 4.0.15 inputs. |
+| UT and coverage UT, CN service | MV cron creation was coupled to lineage GC registration. A successful lineage retry still failed the MV-specific call. Register each task independently through the same bounded, stopper-owned retry mechanism; preserve cancellation and readiness checks. |
+| UT and coverage UT, logservice build | The gossip fixture called the old port allocator signature. Resolve the OS-specific range outside ephemeral client ports and pass both bounds to the allocator. |
+| Frontend UT and account/cluster restore BVT | The four global MV catalogs had no restore policy. Generic restore could recreate their schemas, and cluster-table cleanup could delete them even after bulk copy was skipped. Register skip policies and apply the common policy in destructive cluster cleanup. Preserve the existing view-metadata clear/rebuild behavior and ordinary user cluster-table deletion. |
+| Git4Data, COPY ALTER, database DROP, DROP INDEX, cluster restore UT | A new account-wide MV write happened before native pessimistic lifecycle admission. Its retained locks changed wait policy and serialized unrelated operations. Pessimistic creation now pins all source and target names in the existing admission domain; source DDL checks dependencies after its native locks and snapshot are ready. Optimistic SI retains its commit-time write/write fence. |
+| Both BVT groups, catalog inventories | Four new visible cluster catalogs changed exact table listings. Update seven result fixtures, including clone, tenant, and cluster-restore inventories; preserve complete row comparison. |
+| Coverage aggregation | The job failed its UT/BVT prerequisites. It has no independent product fix; it must rerun after those checks pass. |
+
+The proxy group reported 18 failed statements. The pessimistic group reported
+153 failed statements, mostly cascading from catalog loss during restore.
+Counts of failed statements are not counts of independent bugs.
+
+## Admission and restore invariants
+
+Pessimistic MV publication and source DDL share the same database/table-name
+locks. RC creation includes every source in `createNameDomain`, checks that a
+replanned domain has not expanded, and uses the existing applied-snapshot
+frontier. Pessimistic SI pins the sorted source/target name set. These locks are
+held through catalog publication; source DDL reads dependency rows after native
+admission. Ordinary pessimistic DDL adds no MV catalog writes or account-wide
+locks. Optimistic SI cannot borrow pessimistic name locks and continues to use
+the durable account revision conflict, as does MV count admission.
+
+Snapshot/PITR cleanup must preserve the current schema and lifetime of
+subsystem-owned cluster catalogs. MV objects remain unsupported for logical
+restore; preserving empty global catalogs does not enable restoring MV data or
+identity-qualified definitions. User-created cluster tables still follow the
+normal destructive restore path, and ordinary view metadata is still cleared
+for reconstruction.
+
+## Verification
+
+The correction was checked with the repository CGo wrapper and Go 1.27.1.
+Focused tests used CI's `-short -tags matrixone_test` and coverage instrumentation
+(`-covermode=set`); this is focused reproduction, not the complete CI
+`-coverpkg` graph. The five owning suites (bootstrap, CN service, frontend,
+compile, MV) passed in normal short-test mode with those same tags.
+
+New typed oracles cover source-domain completeness and replan changes,
+pessimistic dependency rejection without account-fence writes, independent MV
+cron retry, and cluster cleanup preserving all four MV catalogs while clearing
+view metadata and dropping a user cluster table.
+
+Native embedded-cluster reproductions passed for the CI failures in
+`TestIssue26121DatabaseOperationsKeepOrdinaryInternalLookingTables`,
+`TestIssue26404MixedDataBranchLifecycleDoesNotDeadlock`,
+`TestIssue29400CopyAlterRetainedGatePromotionFastFails`,
+`TestIssue29400DropDatabaseDoesNotHoldBranchDAGAfterTable`,
+`TestDropIndexAdmissionDoesNotHoldNamesWhileWaiting`,
+`TestDataBranchDiffAsFile`, and
+`TestIssue26640ClusterRestoreRebindsSubscriptionPrivileges`.
+The account-restore reproduction was rerun after the cluster-cleanup fix.
+
+The two existing lineage cancellation/retry tests and the new MV cron retry
+test each passed 20 race-enabled repetitions: 60 top-level passes, no data races.
+
+License-eye 0.4.0 checked 60 changed files: 54 valid, six ignored, zero invalid.
+Configured golangci-lint 2.14.0 reported zero new issues in the 17-package closure;
+the configured molint command exited successfully. These local checks run on
+Linux/amd64 and do not replace CI's arm64 SCA.
+
+The rebuilt native service and CI's exact mo-tester revision
+`309a0ca650e0c55e90292767fd61e4976818d66d` are used for targeted BVT verification.
+All 12 originally failing BVT files passed as isolated invocations: 2,741
+executed statements, 22 existing ignored statements, zero failures or abnormal
+results. Resource paths use the repository's `test/distributed/resources`.
+The main MV harness passed 67 native checks (including scheduled refresh) on
+10,000 source rows; the second-CN harness passed nine checks. See
+[the machine-readable correction results](materialized_view_ci_results.json)
+for per-case counts, source fingerprints, and evidence modes.
+
+Fresh full CI results must be checked at the correction commit. A local pass,
+skipped job, or queued check is not a full CI pass. This correction makes no new
+performance claim and does not relabel the earlier benchmark evidence.

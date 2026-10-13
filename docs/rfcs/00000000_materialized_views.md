@@ -828,3 +828,17 @@ only persisted source statements inherit authoring SQL mode and timezone. This
 avoids backslash-name mismatches under NO_BACKSLASH_ESCAPES without relaxing any
 source identity check. Configured incremental lint now passes. The issue and
 Draft PR retain explicit remaining release gates and later-phase scope.
+
+### CI integration correction — 2026-10-13
+
+Full CI exposed interactions absent from the initial focused MV validation.
+Pessimistic MV creation now participates in the existing source/target name
+admission domain, and generic DDL checks MV dependencies after native lifecycle
+admission and snapshot refresh. Optimistic SI retains the durable write/write
+fence. The global MV catalogs are explicitly skipped by logical restore,
+including its destructive cluster-table cleanup. MV cron registration has an
+independent retry lifetime from lineage GC registration. The implementation
+scope and release gates remain unchanged.
+
+See [CI triage and regression verification](../design/materialized_view_ci_triage.md)
+for exact failure evidence, root causes, test cases, and validation boundaries.

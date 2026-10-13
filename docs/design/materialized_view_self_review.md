@@ -143,3 +143,28 @@ integration/CI evidence is separate and is not inferred from those earlier runs.
 Post-merge focused MV tests passed in the parser, planner, frontend and compiler
 packages (`post-merge-focused.log`). This verifies the affected local integration
 closure; it is not a rerun of the earlier complete native SQL/performance matrix.
+
+## CI correction review — 2026-10-13
+
+The original full CI failed at commit `417811f5949dc04c9bd6d74d624bce2b852506c2`.
+Its failures are covered by [the CI triage record](materialized_view_ci_triage.md).
+The review closure is restore ownership (R3), pessimistic source publication
+and DDL admission (R3), cron lifecycle/retry (R2), upgrade/port fixture consumers
+(R2), and license/exact catalog result fixtures (R0/R1).
+
+Native pessimistic source-name locks are retained through MV publication.
+Dependencies are checked after the existing DDL admission frontier, preserving
+Git4Data and index waiting policies. Optimistic publication still uses its
+conflict fence. Cluster restore now consumes the same explicit catalog skip
+policy as bulk copy; the typed negative control still drops a user cluster
+table. MV and lineage registration have independent stopper-owned retries.
+Existing cancellation tests exercise their shared retry implementation.
+
+Focused coverage reproductions, embedded cluster counterexamples, five owning
+package suites, license headers, configured incremental lint and molint passed.
+The three cron cancellation/retry tests each passed 20 race-enabled repeats
+(60 top-level passes, no data races). The targeted native BVT run passed all 12 failed files (2,741 executed
+statements); 67 main MV checks and nine cross-CN checks passed. New full CI must
+be reported separately at the corrected head. Draft status and the previously documented production-release
+proof gaps remain in force; no CI green or new speedup is inferred from local
+checks.

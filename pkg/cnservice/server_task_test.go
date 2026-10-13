@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/mv"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -496,4 +497,47 @@ func Test_registerExecutorsLocked(t *testing.T) {
 	assert.Equal(t, task.TaskCode_DataBranchLineageGC, ts.cronTasks[0].Executor)
 	assert.Equal(t, "data_branch_lineage_gc", ts.cronTasks[0].ID)
 	assert.Equal(t, "0 */5 * * * *", ts.cronExprs[0])
+}
+
+func TestMaterializedViewCronRegistrationOwnsRetry(t *testing.T) {
+	metadata := mv.CronMetadata()
+	attempts := make(chan struct{}, 1)
+	calls := 0
+	ts := &controlledCronTaskService{testTS: &testTS{}}
+	ts.create = func(ctx context.Context, got task.TaskMetadata, expression string) error {
+		account, err := defines.GetAccountId(ctx)
+		require.NoError(t, err)
+		require.Equal(t, catalog.System_Account, account)
+		require.Equal(t, metadata, got)
+		require.Equal(t, mv.CronExpression, expression)
+		calls++
+		if calls == 1 {
+			attempts <- struct{}{}
+			return errors.New("temporary MV task-store failure")
+		}
+		return nil
+	}
+	s := &service{logger: zap.NewNop()}
+	s.task.runnerReady.Store(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ticks := make(chan time.Time)
+	done := make(chan struct{})
+	go func() { defer close(done); s.registerCronTask(ctx, ts, metadata, mv.CronExpression, ticks) }()
+	select {
+	case <-attempts:
+	case <-time.After(2 * time.Second):
+		t.Fatal("MV registration did not attempt")
+	}
+	select {
+	case ticks <- time.Now():
+	case <-time.After(2 * time.Second):
+		t.Fatal("MV registration did not enter its own retry wait")
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("MV retry did not complete")
+	}
+	require.Equal(t, 2, calls)
 }

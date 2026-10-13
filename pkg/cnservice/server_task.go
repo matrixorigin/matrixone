@@ -402,6 +402,13 @@ func (s *service) registerExecutorsLocked() {
 	)
 	if service, ok := runtime.ServiceRuntime(s.cfg.UUID).GetGlobalVariables(mv.RuntimeKey); ok {
 		s.task.runner.RegisterExecutor(task.TaskCode_MaterializedView, service.(*mv.Service).TaskExecutor(ts, ieFactory))
+		if err := s.stopper.RunNamedTask("register materialized view cron", func(ctx context.Context) {
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
+			s.registerCronTask(ctx, ts, mv.CronMetadata(), mv.CronExpression, ticker.C)
+		}); err != nil {
+			s.logger.Error("failed to start materialized view cron registration", zap.Error(err))
+		}
 	}
 	// Register outside task.Lock and the heartbeat/startup command paths. The
 	// stopper owns both retries and cancellation before task storage is closed.
@@ -417,23 +424,22 @@ func (s *service) registerExecutorsLocked() {
 }
 
 func (s *service) registerLineageGCCron(ctx context.Context, ts taskservice.TaskService, retry <-chan time.Time) {
+	s.registerCronTask(ctx, ts, databranchutils.LineageGCTaskMetadata(), databranchutils.LineageGCTaskCronExpr, retry)
+}
+
+func (s *service) registerCronTask(ctx context.Context, ts taskservice.TaskService, metadata task.TaskMetadata, expression string, retry <-chan time.Time) {
 	for {
 		if ctx.Err() != nil || !s.task.runnerReady.Load() || s.viewMetadataGenerationRevoked.Load() {
 			return
 		}
 		attempt, cancel := context.WithTimeout(ctx, 30*time.Second)
 		attempt = defines.AttachAccount(attempt, catalog.System_Account, catalog.System_User, catalog.System_Role)
-		err := ts.CreateCronTask(attempt, databranchutils.LineageGCTaskMetadata(), databranchutils.LineageGCTaskCronExpr)
+		err := ts.CreateCronTask(attempt, metadata, expression)
 		cancel()
-		if err == nil {
-			attempt, cancel = context.WithTimeout(ctx, 30*time.Second)
-			err = ts.CreateCronTask(attempt, mv.CronMetadata(), mv.CronExpression)
-			cancel()
-		}
 		if err == nil || ctx.Err() != nil {
 			return
 		}
-		s.logger.Warn("failed to register lineage GC cron; retrying", zap.Error(err))
+		s.logger.Warn("failed to register cron task; retrying", zap.String("task", metadata.ID), zap.Error(err))
 		select {
 		case <-ctx.Done():
 			return

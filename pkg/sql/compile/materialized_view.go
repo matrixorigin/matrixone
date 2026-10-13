@@ -1,14 +1,22 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package compile
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -18,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/mv"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -88,8 +97,10 @@ func (c *Compile) validateMaterializedViewScan(def *plan.TableDef) error {
 	})
 }
 
-// Guard all relevant source DDL and the MV itself through durable dependencies.
-// The caller must enter before acquiring the target object metadata lock.
+// Guard source DDL and the MV through durable dependencies after existing
+// lifecycle/name admission has acquired the target locks and refreshed RC state.
+// Pessimistic CREATE MV pins those source names through publication. Optimistic
+// SI has no name locks and retains a write/write fence through commit.
 func (c *Compile) guardMaterializedViewDDL(dbName, name string, allowMV bool) error {
 	if dbName == "" {
 		dbName = c.db
@@ -122,8 +133,10 @@ func (c *Compile) guardMaterializedViewDDL(dbName, name string, allowMV bool) er
 		return moerr.NewInvalidInput(c.proc.Ctx, "materialized view is read only; use DROP/ALTER MATERIALIZED VIEW")
 	}
 	return c.mvTxn(func(tx executor.TxnExecutor) error {
-		if err := mv.DependencyGuard(tx, account); err != nil {
-			return err
+		if !c.proc.GetTxnOperator().Txn().IsPessimistic() {
+			if err := mv.DependencyGuard(tx, account); err != nil {
+				return err
+			}
 		}
 		res, err := tx.Exec(fmt.Sprintf("select mv_id from mo_catalog.mo_mv_dependencies where account_id=%d and source_table_id=%d limit 1", account, def.TblId), executor.StatementOption{}.WithAccountID(catalog.System_Account))
 		if err != nil {
@@ -167,8 +180,10 @@ func (c *Compile) guardMaterializedViewDatabaseDDL(dbName string) error {
 		return err
 	}
 	return c.mvTxn(func(tx executor.TxnExecutor) error {
-		if err := mv.DependencyGuard(tx, account); err != nil {
-			return err
+		if !c.proc.GetTxnOperator().Txn().IsPessimistic() {
+			if err := mv.DependencyGuard(tx, account); err != nil {
+				return err
+			}
 		}
 		r, err := tx.Exec(fmt.Sprintf("select mv_id from mo_catalog.mo_materialized_views where account_id=%d and database_name='%s' limit 1", account, sqlquote.EscapeString(dbName)), executor.StatementOption{}.WithAccountID(catalog.System_Account))
 		if err != nil {
@@ -182,4 +197,40 @@ func (c *Compile) guardMaterializedViewDatabaseDDL(dbName string) error {
 		}
 		return nil
 	})
+}
+
+// SI creation pins the complete source/target name domain before publication.
+// RC uses pinCreateNames, including source names, and its TN-ordered snapshot.
+func (c *Compile) pinMaterializedViewSourceNames(q *plan.CreateTable, database string) error {
+	definition, err := catalog.MaterializedViewDefinition(q.TableDef)
+	if err != nil || definition == nil {
+		return err
+	}
+	if !c.proc.GetTxnOperator().Txn().IsPessimistic() {
+		return nil
+	}
+	if c.disableLock {
+		return moerr.NewInternalError(c.proc.Ctx, "materialized view creation requires lifecycle name locks")
+	}
+	if c.isLifecycleRC() {
+		return nil
+	}
+	if err := lockMoDatabase(c, database, lock.LockMode_Shared); err != nil {
+		return err
+	}
+	names := make([]string, 0, len(definition.Sources)+1)
+	names = append(names, q.TableDef.Name)
+	for _, source := range definition.Sources {
+		names = append(names, source.Table)
+	}
+	sort.Strings(names)
+	for i, name := range names {
+		if i > 0 && name == names[i-1] {
+			continue
+		}
+		if err := lockMoTable(c, database, name, lock.LockMode_Exclusive); err != nil {
+			return err
+		}
+	}
+	return nil
 }
