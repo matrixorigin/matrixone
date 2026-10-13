@@ -20,12 +20,15 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -92,6 +95,46 @@ func (s *dependentFixtureSource) Read(context.Context) (*batch.Batch, error) {
 }
 func (s *dependentFixtureSource) Close() error { s.close(); return nil }
 
+func TestDependentUnionEqualityKeys(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	typ := types.T_varchar.ToType().PlanType()
+	for _, kind := range []plan.Node_NodeType{plan.Node_UNION, plan.Node_UNION_ALL} {
+		for _, physical := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/physical=%v", kind, physical), func(t *testing.T) {
+				n := &plan.Node{NodeType: kind, ProjectList: []*plan.Expr{plan2.GetColExpr(typ, 0, 0)}}
+				if physical {
+					n.PhysicalEqualityKeyList = []*plan.Expr{plan2.GetColExpr(typ, 0, 0)}
+				}
+				c := &Compile{proc: proc}
+				factory, _, err := c.compileDependentKernel(n, []*plan.Node{{}, {}})
+				require.NoError(t, err)
+				op, err := factory(proc, nil)
+				require.NoError(t, err)
+				if kind == plan.Node_UNION_ALL {
+					concat := op.(*unionall.UnionAll)
+					defer concat.Release()
+					return
+				}
+				distinct := op.(*group.Group)
+				defer distinct.Release()
+				defer distinct.GetChildren(0).(*unionall.UnionAll).Release()
+				if physical {
+					require.Len(t, distinct.GroupBy, 2)
+					require.Equal(t, []int32{1}, distinct.GroupByHashKey)
+					require.True(t, proto.Equal(n.PhysicalEqualityKeyList[0], distinct.GroupBy[1]))
+					require.Len(t, distinct.ProjectList, 1)
+					require.Zero(t, distinct.ProjectList[0].GetCol().ColPos)
+				} else {
+					require.Len(t, distinct.GroupBy, 1)
+					require.Empty(t, distinct.GroupByHashKey)
+					require.Empty(t, distinct.ProjectList)
+				}
+			})
+		}
+	}
+}
+
 func TestDependentNativeStages(t *testing.T) {
 	cases := []struct {
 		name, sql string
@@ -149,6 +192,9 @@ func TestDependentNativeStages(t *testing.T) {
 		{"ordered_offset", `SELECT (SELECT n2.N_REGIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY >= (SELECT n1.N_NATIONKEY) ORDER BY n2.N_REGIONKEY DESC LIMIT 1 OFFSET 1) FROM NATION n1`, []string{"20", "20", "NULL"}},
 		{"window", `SELECT (SELECT (SELECT ROW_NUMBER() OVER (ORDER BY n3.N_NATIONKEY) FROM NATION n3 WHERE n3.N_NATIONKEY=n1.N_NATIONKEY) FROM NATION n2 WHERE n2.N_NATIONKEY=n1.N_NATIONKEY) FROM NATION n1`, []string{"1", "1", "1"}},
 		{"window_argument", `SELECT (SELECT SUM((SELECT n1.N_NATIONKEY)) OVER (ORDER BY n2.N_NATIONKEY ROWS BETWEEN CURRENT ROW AND CURRENT ROW) FROM NATION n2 WHERE n2.N_NATIONKEY=n1.N_NATIONKEY) FROM NATION n1`, []string{"1", "2", "3"}},
+		{"union_pad_space", `SELECT (SELECT COUNT(*) FROM (SELECT CAST('a' AS CHAR(2)) k WHERE (SELECT n1.N_NATIONKEY)>0 UNION SELECT CAST('a ' AS VARCHAR(2))) u) FROM NATION n1`, []string{"1", "1", "1"}},
+		{"union_all_pad_space", `SELECT (SELECT COUNT(*) FROM (SELECT CAST('a' AS CHAR(2)) k WHERE (SELECT n1.N_NATIONKEY)>0 UNION ALL SELECT CAST('a ' AS VARCHAR(2))) u) FROM NATION n1`, []string{"2", "2", "2"}},
+		{"window_partition_capture", `SELECT (SELECT SUM(n2.N_NATIONKEY) OVER (PARTITION BY (SELECT n1.N_NATIONKEY)) FROM NATION n2 LIMIT 1) FROM NATION n1`, []string{"6", "6", "6"}},
 		{"union_all", `SELECT (SELECT COUNT(*) FROM (SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY=(SELECT n1.N_NATIONKEY) UNION ALL SELECT n3.N_NATIONKEY FROM NATION n3 WHERE n3.N_NATIONKEY=(SELECT n1.N_NATIONKEY)) u) FROM NATION n1`, []string{"2", "2", "2"}},
 		{"union_distinct", `SELECT (SELECT COUNT(*) FROM (SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY=(SELECT n1.N_NATIONKEY) UNION SELECT n3.N_NATIONKEY FROM NATION n3 WHERE n3.N_NATIONKEY=(SELECT n1.N_NATIONKEY)) u) FROM NATION n1`, []string{"1", "1", "1"}},
 		{"except_distinct", `SELECT (SELECT COUNT(*) FROM (SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY>=(SELECT n1.N_NATIONKEY) EXCEPT SELECT n3.N_NATIONKEY FROM NATION n3 WHERE n3.N_NATIONKEY=(SELECT n1.N_NATIONKEY)) u) FROM NATION n1`, []string{"2", "1", "0"}},

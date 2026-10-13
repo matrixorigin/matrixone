@@ -134,6 +134,17 @@ func (c *Compile) compileDependentKernel(node *plan.Node, children []*plan.Node)
 			for i, e := range n.ProjectList {
 				distinct.GroupBy[i] = plan2.GetColExpr(e.Typ, 0, int32(i))
 			}
+			if len(n.PhysicalEqualityKeyList) > 0 {
+				visibleCount := len(distinct.GroupBy)
+				for i, key := range n.PhysicalEqualityKeyList {
+					distinct.GroupBy = append(distinct.GroupBy, key)
+					distinct.GroupByHashKey = append(distinct.GroupByHashKey, int32(visibleCount+i))
+				}
+				distinct.ProjectList = make([]*plan.Expr, visibleCount)
+				for i, e := range n.ProjectList {
+					distinct.ProjectList[i] = plan2.GetColExpr(e.Typ, 0, int32(i))
+				}
+			}
 			distinct.SetAnalyzeControl(int(n.NodeId), false)
 			distinct.AppendChild(concat)
 			return distinct, nil

@@ -57,6 +57,7 @@ func TestDependentPreparedTypeEdges(t *testing.T) {
 func TestDependentPublicPlan(t *testing.T) {
 	for _, sql := range []string{
 		`SELECT n1.N_NATIONKEY, (SELECT (SELECT n3.N_REGIONKEY FROM NATION n3 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY) FROM NATION n2 WHERE n2.N_NATIONKEY = n1.N_NATIONKEY) FROM NATION n1`,
+		`SELECT n1.N_NATIONKEY, (SELECT SUM(n2.N_NATIONKEY) OVER (PARTITION BY (SELECT n1.N_NATIONKEY)) FROM NATION n2 LIMIT 1) FROM NATION n1`,
 		`SELECT n1.N_NATIONKEY, (SELECT MAX(n2.N_REGIONKEY) FROM NATION n2 WHERE n2.N_REGIONKEY = (SELECT COUNT(*) FROM NATION n3 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY)) FROM NATION n1`,
 		`SELECT n1.N_NATIONKEY, (SELECT (SELECT n1.N_NATIONKEY + n2.N_REGIONKEY FROM NATION n3 WHERE n3.N_NATIONKEY = n2.N_NATIONKEY) FROM NATION n2 WHERE n2.N_NATIONKEY = n1.N_NATIONKEY) FROM NATION n1`,
 	} {
@@ -187,6 +188,29 @@ func TestDependentBindingDoesNotMergeSemanticOwners(t *testing.T) {
 	require.NotEqual(t, refs[0].GetSlot().Ordinal, refs[2].GetSlot().Ordinal)
 	require.NotEqual(t, refs[0].GetSlot().Ordinal, refs[3].GetSlot().Ordinal)
 	require.True(t, builder.qry.Correlation.Programs[0].InputTypes[0].PadSpace)
+}
+
+func TestDependentStagesIsolateSharedOwners(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+	shared := &plan.Expr{Expr: &plan.Expr_Dependent{Dependent: &plan.DependentExpr{ProgramId: 1}}}
+	partition := &plan.Node{NodeId: 0, NodeType: plan.Node_PARTITION, OrderBy: []*plan.OrderBySpec{{Expr: shared}}}
+	window := &plan.Node{NodeId: 1, NodeType: plan.Node_WINDOW, Children: []int32{0}, ProjectList: []*plan.Expr{shared}}
+	builder.qry.Nodes = []*plan.Node{partition, window}
+	builder.qry.Steps = []int32{1}
+	builder.qry.Correlation = &plan.CorrelationSpec{}
+	for range 2 {
+		require.NoError(t, builder.assignCorrelationStages())
+		left := partition.OrderBy[0].Expr.GetDependent()
+		right := window.ProjectList[0].GetDependent()
+		require.NotSame(t, left, right)
+		require.NotEqual(t, left.OccurrenceId, right.OccurrenceId)
+		require.NotEqual(t, left.StageId, right.StageId)
+		require.Equal(t, int32(0), builder.qry.Correlation.Stages[left.StageId-1].OwnerNode)
+		require.Equal(t, plan.CorrelationStage_INPUT, builder.qry.Correlation.Stages[left.StageId-1].Kind)
+		require.Equal(t, int32(1), builder.qry.Correlation.Stages[right.StageId-1].OwnerNode)
+		require.Equal(t, plan.CorrelationStage_WINDOW_ROW, builder.qry.Correlation.Stages[right.StageId-1].Kind)
+	}
+	require.Zero(t, shared.GetDependent().OccurrenceId)
 }
 
 func TestDependentBindingFailureDoesNotPublishPartialSlots(t *testing.T) {
