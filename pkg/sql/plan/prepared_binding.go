@@ -86,7 +86,7 @@ func preparedUserVariable(ctx context.Context, name string) (preparedUserVariabl
 // value to determine schema/configuration mark the result value-dependent;
 // such a plan must not enter the type-only cache.
 type preparedSourceBindingState struct {
-	fieldReturnDomains   map[*Expr]preparedFieldStringDomain
+	fieldReturnSources   map[*Expr]preparedFieldReturnSource
 	fieldTypes           *preparedFieldTypeBinding
 	bindings             []PreparedSourceBinding
 	values               []any

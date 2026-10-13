@@ -331,15 +331,18 @@ func TestPreparedFieldPlanInvalidationKeepsHistory(t *testing.T) {
 		{"lc_time_names", "en_US", "fr_FR"},
 		{"enable_vector_prefilter_by_default", int64(0), int64(1)},
 		{"enable_vector_auto_mode_by_default", int64(0), int64(1)},
+		{"unrelated DDL", nil, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 25304, "select field(case when ? then ? else null end,'A','a')")
 			prepared.proc = cw.proc
 			t.Cleanup(func() { cw.proc.SetPrepareParams(nil); ses.Close() })
-			original, err := ses.GetSessionSysVar(tc.name)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, ses.SetSessionSysVar(ec.reqCtx, tc.name, original)) })
-			require.NoError(t, ses.SetSessionSysVar(ec.reqCtx, tc.name, tc.before))
+			if tc.before != nil {
+				original, err := ses.GetSessionSysVar(tc.name)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, ses.SetSessionSysVar(ec.reqCtx, tc.name, original)) })
+				require.NoError(t, ses.SetSessionSysVar(ec.reqCtx, tc.name, tc.before))
+			}
 			execute := func(null bool, want uint64, fail bool) {
 				cw.discardRuntimeCacheCandidate()
 				prepared.clearBinaryParamState(cw.proc)
@@ -371,8 +374,14 @@ func TestPreparedFieldPlanInvalidationKeepsHistory(t *testing.T) {
 			snapshot := prepared.fieldTypes
 			oldPlan := prepared.PreparePlan
 			require.NotNil(t, snapshot)
-			require.NoError(t, ses.SetSessionSysVar(ec.reqCtx, tc.name, tc.after))
-			require.True(t, prepared.needsRebuild, "the public setter must actually invalidate the prepared plan")
+			if tc.after == nil {
+				require.Empty(t, prepared.PreparePlan.GetDcl().GetPrepare().GetSchemas())
+				ses.advanceDDLVersion()
+				require.NotEqual(t, prepared.ddlVersion, ses.getDDLVersion())
+			} else {
+				require.NoError(t, ses.SetSessionSysVar(ec.reqCtx, tc.name, tc.after))
+				require.True(t, prepared.needsRebuild, "the public setter must actually invalidate the prepared plan")
+			}
 			writer := ec.resper.MysqlRrWr().(*testMysqlWriter)
 			metadataCalls := 0
 			writer.makeColumnDefDataFunc = func(context.Context, []*plan.ColDef) ([][]byte, error) {

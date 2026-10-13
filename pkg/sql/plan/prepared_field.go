@@ -35,8 +35,11 @@ const (
 type preparedFieldStringDomain struct {
 	kind      preparedFieldStringKind
 	parameter bool
-	history   bool
-	resolved  types.Type
+	// Only a bare marker (through implicit casts) gets the materialized
+	// parameter declaration. A parameter-dependent function is not a marker.
+	directParameter bool
+	history         bool
+	resolved        types.Type
 }
 
 // This resolver runs while logical binding tags still identify their owners.
@@ -69,14 +72,14 @@ func fieldStringStaticDomain(expr *Expr) preparedFieldStringDomain {
 	return preparedFieldStringDomain{kind: kind}
 }
 
-func (r *preparedFieldStringResolver) expr(expr *Expr) preparedFieldStringDomain {
+func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStringDomain) {
 	if expr == nil {
 		return preparedFieldStringDomain{}
 	}
 	if result, ok := r.memo[expr]; ok {
 		return result
 	}
-	result := fieldStringStaticDomain(expr)
+	result = fieldStringStaticDomain(expr)
 	r.memo[expr] = result
 	defer func() { r.memo[expr] = result }()
 	if state := preparedBindingState(r.binder.GetContext()); state != nil {
@@ -86,12 +89,25 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) preparedFieldStringDomain
 				return result
 			}
 		}
-		if owned, ok := state.fieldReturnDomains[expr]; ok {
-			result = owned
+		if source, ok := state.fieldReturnSources[expr]; ok {
+			// NULLIF owns its first operand's domain, but that domain must be
+			// resolved in this pass's parameter environment, not the earlier bind.
+			result = r.expr(source.value)
+			if result.kind == fieldStringMarker || result.kind == fieldStringNull && result.directParameter {
+				// A NULL value does not erase NULLIF's bare operand declaration.
+				// A composite operand still owns its own (possibly NULL) domain.
+				result.kind = fieldStringText
+				if r.expr(source.peer).kind == fieldStringBinary {
+					result.kind = fieldStringBinary
+				}
+			}
+			result.directParameter = false
 			return result
 		}
 	}
 	if param := expr.GetP(); param != nil {
+		result.directParameter = true
+		result.parameter = true
 		if typ, ok := r.parameterTypes[param.Pos]; ok {
 			result = fieldStringStaticDomain(&Expr{Typ: makePlan2Type(&typ)})
 			result.resolved = typ
@@ -99,10 +115,11 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) preparedFieldStringDomain
 				result.kind = fieldStringNull
 			}
 			result.parameter = true
+			result.directParameter = true
 			return result
 		}
 		if r.unresolvedParameters || types.T(expr.Typ.Id).IsMySQLString() || expr.Typ.Id == int32(types.T_any) {
-			result = preparedFieldStringDomain{kind: fieldStringMarker, parameter: true}
+			result = preparedFieldStringDomain{kind: fieldStringMarker, parameter: true, directParameter: true}
 		}
 		return result
 	}
@@ -126,19 +143,12 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) preparedFieldStringDomain
 				result = r.output(node, col.RelPos, col.ColPos, result)
 			}
 		}
-		if result.kind == fieldStringMarker {
-			result.kind = fieldStringText
-		}
+		result = materializedFieldStringDomain(result)
 		return result
 	}
 	if sub := expr.GetSub(); sub != nil && sub.Typ == planpb.SubqueryRef_SCALAR {
 		result = r.output(sub.NodeId, -1, 0, result)
-		// A scalar marker has a materialized TEXT declaration even when its
-		// first value is NULL. A resolved CASE inside that projection keeps its
-		// own history instead of being reinterpreted as an unresolved marker.
-		if result.kind == fieldStringMarker || result.kind == fieldStringNull && result.parameter && !result.history {
-			result.kind = fieldStringText
-		}
+		result = materializedFieldStringDomain(result)
 		return result
 	}
 	fn := expr.GetF()
@@ -150,6 +160,15 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) preparedFieldStringDomain
 		result = r.expr(fn.Args[0])
 		return result
 	}
+	// Dependency is independent of return-domain inference. Walk every bound
+	// argument, including selectors/conditions, even for functions with a fixed
+	// result type. Do not assign their parameter contracts the return type.
+	defer func() {
+		result.directParameter = false
+		for _, arg := range fn.Args {
+			result.parameter = r.expr(arg).parameter || result.parameter
+		}
+	}()
 	var values []*Expr
 	switch name {
 	case "case":
@@ -200,11 +219,37 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) preparedFieldStringDomain
 			}
 			return result
 		}
+		// Use the registered return-type contract for other functions rather
+		// than a FIELD-specific function whitelist or this execution's payload
+		// type. Unresolved markers have their declaration, not their wire type.
+		if r.unresolvedParameters || r.parameterTypes != nil {
+			inputs := make([]types.Type, len(fn.Args))
+			dependent := false
+			for i, arg := range fn.Args {
+				domain := r.expr(arg)
+				dependent = dependent || domain.parameter
+				inputs[i] = fieldDomainType(domain, makeTypeByPlan2Expr(arg))
+			}
+			if dependent {
+				if resolved, err := function.GetFunctionByName(r.binder.GetContext(), name, inputs); err == nil {
+					typ := resolved.GetReturnType()
+					result = fieldStringStaticDomain(&Expr{Typ: makePlan2Type(&typ)})
+				}
+			}
+		}
 	}
 	if len(values) != 0 {
 		result = r.common(values)
 	}
 	return result
+}
+
+func materializedFieldStringDomain(domain preparedFieldStringDomain) preparedFieldStringDomain {
+	if domain.directParameter && (domain.kind == fieldStringMarker || domain.kind == fieldStringNull) {
+		domain.kind = fieldStringText
+	}
+	domain.directParameter = false
+	return domain
 }
 
 func (r *preparedFieldStringResolver) common(args []*Expr) preparedFieldStringDomain {
@@ -413,30 +458,25 @@ func (b *baseBinder) bindFieldStringArguments(args []*Expr) ([]*Expr, error) {
 	return result, nil
 }
 
+type preparedFieldReturnSource struct {
+	value *Expr
+	peer  *Expr
+}
+
 // NULLIF is lowered to CASE, but only its first operand owns the returned
-// domain. Retain the already-resolved summary for this binding, not a copied
-// expression tree or any execution-history state.
+// domain. Keep its sources for this binding only so initial resolution and
+// statement-wide reprepare use the same rule with their own parameter types.
 func (b *baseBinder) rememberPreparedFieldNullIfDomain(expr *Expr, args []*Expr) {
 	state := preparedBindingState(b.GetContext())
 	if state == nil || len(args) != 3 || !types.T(expr.Typ.Id).IsMySQLString() {
 		return
 	}
-	r := newPreparedFieldStringResolver(b)
-	domain := r.expr(args[2])
-	if !domain.parameter {
-		return
+	source := preparedFieldReturnSource{value: args[2]}
+	if cmp := args[0].GetF(); cmp != nil && len(cmp.Args) == 2 {
+		source.peer = cmp.Args[1]
 	}
-	if domain.kind == fieldStringMarker {
-		domain.kind = fieldStringText
-		if cmp := args[0].GetF(); cmp != nil && len(cmp.Args) == 2 {
-			peer := r.expr(cmp.Args[1])
-			if peer.kind == fieldStringBinary {
-				domain.kind = fieldStringBinary
-			}
-		}
+	if state.fieldReturnSources == nil {
+		state.fieldReturnSources = make(map[*Expr]preparedFieldReturnSource)
 	}
-	if state.fieldReturnDomains == nil {
-		state.fieldReturnDomains = make(map[*Expr]preparedFieldStringDomain)
-	}
-	state.fieldReturnDomains[expr] = domain
+	state.fieldReturnSources[expr] = source
 }
