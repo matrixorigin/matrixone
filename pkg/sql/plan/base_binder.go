@@ -8095,13 +8095,23 @@ func bindFuncExprImplByPlanExpr(
 		}
 
 	case "lead", "lag":
-		// For lead/lag window functions, cast the default value (3rd arg)
-		// to match the value type (1st arg).
+		// For lead/lag window functions, the value argument (1st arg) and the
+		// default value (3rd arg) must share one common result type, mirroring
+		// MySQL: narrowing the default to the value type truncates longer
+		// string defaults and rounds decimal ones (issue #29974).
 		if len(args) >= 3 && !argsType[2].Eq(returnType) {
 			if len(argsCastType) == 0 {
 				argsCastType = append([]types.Type(nil), argsType...)
 			}
-			argsCastType[2] = returnType
+			if commonType, ok := reconcileLagLeadDefaultType(ctx, argsType[0], argsType[2]); ok {
+				returnType = commonType
+				argsCastType[0] = commonType
+				argsCastType[2] = commonType
+			} else {
+				// Fallback for the domainless NULL default and irreconcilable
+				// types: keep the historical narrowing of the default value.
+				argsCastType[2] = returnType
+			}
 		}
 	}
 
@@ -8233,6 +8243,43 @@ func isXMLXPathConstant(expr *Expr) bool {
 		}
 	}
 	return true
+}
+
+// reconcileLagLeadDefaultType returns the common type able to represent both
+// the value argument and the default value of LAG/LEAD. It mirrors MySQL's
+// type aggregation for window functions: a decimal value keeps its declared
+// precision when the default is an integer, and the remaining combinations
+// follow the COALESCE type reconciliation. It reports false when either side
+// is the domainless NULL pseudo-type or the two types cannot be reconciled;
+// callers keep their historical behavior then.
+func reconcileLagLeadDefaultType(ctx context.Context, valueArg, defaultArg types.Type) (types.Type, bool) {
+	if valueArg.Oid == types.T_any || defaultArg.Oid == types.T_any {
+		return types.Type{}, false
+	}
+	// A decimal value keeps its declared precision when the default value is
+	// an integer: MySQL preserves the decimal branch of the pair (e.g.
+	// LAG(decimal(10,4), 1, -1) stays decimal(10,4)) because the integer is
+	// always representable there, and widening it to the integer's full
+	// decimal representation would change established result metadata
+	// without protecting any value. The default is cast into the decimal at
+	// bind time, keeping the scaled-literal semantics fixed by #24402.
+	if valueArg.Oid.IsDecimal() && defaultArg.Oid.IsInteger() {
+		return valueArg, true
+	}
+	resolved, err := function.GetFunctionByName(ctx, "coalesce", []types.Type{valueArg, defaultArg})
+	if err != nil {
+		return types.Type{}, false
+	}
+	// The cast targets, not the plain return type, carry the aligned width and
+	// scale (decimal scale alignment, string max width) of both branches.
+	if targets, shouldCast := resolved.ShouldDoImplicitTypeCast(); shouldCast && len(targets) == 2 {
+		return targets[0], true
+	}
+	ret := resolved.GetReturnType()
+	if ret.Oid == types.T_any {
+		return types.Type{}, false
+	}
+	return ret, true
 }
 
 func sameFunctionArgumentTypes(left, right []types.Type) bool {
