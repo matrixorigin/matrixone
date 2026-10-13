@@ -157,16 +157,16 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	// Reconfirm these contracts on the very stream that carries the scope,
 	// not only at an earlier inventory/capability observation.
 	if requiredVectorProtocol != nil && features.JSONFunctionalIndexSemantics {
-		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion115)
+		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion116)
 	}
 	if requiredVectorProtocol != nil && (features.ODKUStatementResult || features.SessionLastInsertIDBaseline) {
-		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion114)
+		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion115)
 	}
 	if requiredVectorProtocol != nil && features.JSONMinMaxTypedComparison {
-		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion113)
+		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion114)
 	}
-	if requiredVectorProtocol != nil && features.JSONStringConsumerOverload {
-		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion112)
+	if requiredVectorProtocol != nil && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
+		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion113)
 	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
@@ -813,7 +813,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		if t.TrackODKUResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 			return ctxId, nil, moerr.NewNotSupportedNoCtx(
-				"remote ODKU result tracking requires MORPC protocol version 114")
+				"remote ODKU result tracking requires MORPC protocol version 115")
 		}
 		in.PreInsert = &pipeline.PreInsert{
 			SchemaName:                   t.SchemaName,
@@ -1161,7 +1161,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		if t.ODKUResultTracking && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 			return ctxId, nil, moerr.NewNotSupportedNoCtx(
-				"remote ODKU result tracking requires MORPC protocol version 114")
+				"remote ODKU result tracking requires MORPC protocol version 115")
 		}
 		relList, colList := getRelColList(t.Result)
 		in.DedupJoin = &pipeline.DedupJoin{
@@ -2299,22 +2299,22 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
-	if features.JSONFunctionalIndexSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion115) {
-		return moerr.NewNotSupportedNoCtx("JSON functional index semantics require MORPC protocol version 115")
+	if features.JSONFunctionalIndexSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
+		return moerr.NewNotSupportedNoCtx("JSON functional index semantics require MORPC protocol version 116")
 	}
 	if features.ODKUStatementResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
-		return moerr.NewNotSupportedNoCtx("remote ODKU statement result requires MORPC protocol version 114")
+		return moerr.NewNotSupportedNoCtx("remote ODKU statement result requires MORPC protocol version 115")
 	}
 	if features.SessionLastInsertIDBaseline {
-		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion114 {
-			return moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID baseline requires MORPC protocol version 114")
+		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion115 {
+			return moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID baseline requires MORPC protocol version 115")
 		}
 	}
-	if features.JSONMinMaxTypedComparison && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
-		return moerr.NewNotSupportedNoCtx("typed JSON MIN/MAX requires MORPC protocol version 113")
+	if features.JSONMinMaxTypedComparison && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion114) {
+		return moerr.NewNotSupportedNoCtx("typed JSON MIN/MAX requires MORPC protocol version 114")
 	}
-	if features.JSONStringConsumerOverload && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion112) {
-		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 112")
+	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
+		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 113")
 	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")
@@ -2584,13 +2584,13 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 			}
 			if preInsert.TrackOdkuResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 				return moerr.NewNotSupportedNoCtx(
-					"remote ODKU result tracking requires MORPC protocol version 114")
+					"remote ODKU result tracking requires MORPC protocol version 115")
 			}
 		}
 		if dedup := instruction.GetDedupJoin(); dedup != nil && dedup.OdkuResultTracking &&
 			(proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
 			return moerr.NewNotSupportedNoCtx(
-				"remote ODKU result tracking requires MORPC protocol version 114")
+				"remote ODKU result tracking requires MORPC protocol version 115")
 		}
 		if preInsertUnique := instruction.GetPreInsertUnique(); preInsertUnique != nil {
 			if err := validateRemoteAutoIncrementSessionOptionsProtocol(

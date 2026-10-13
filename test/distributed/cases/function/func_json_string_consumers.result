@@ -121,4 +121,15 @@ select id, elt(n, js, cast(txt as json)) as selected_value from lazy_src order b
 ➤ id[4,32,0]  ¦  selected_value[-1,16383,0]  𝄀
 1  ¦  {"p": 1}  𝄀
 2  ¦  [2]
+select elt(1, cast(cast('a' as binary(1)) as json)) = '"base64:type254:YQ=="' as binary_subtype;
+➤ binary_subtype[-7,1,0]  𝄀
+1
+create table opaque_stored(j json);
+insert into opaque_stored values (cast(cast(repeat('a',58) as blob) as json));
+select elt(1,j) = concat('"base64:type252:',repeat('YWFh',19),char(92),'nYQ=="') as wrapped_elt, concat('',j) = concat('"base64:type252:',repeat('YWFh',19),char(92),'nYQ=="') as wrapped_stored from opaque_stored;
+➤ wrapped_elt[-7,1,0]  ¦  wrapped_stored[-7,1,0]  𝄀
+1  ¦  1
+select json_schema_valid('{"type":"string","maxLength":95}',j) as rejects_compact_length, json_schema_valid('{"type":"string","maxLength":96}',j) as accepts_visible_length from opaque_stored;
+➤ rejects_compact_length[-7,1,0]  ¦  accepts_visible_length[-7,1,0]  𝄀
+0  ¦  1
 drop database issue28905_json_string_consumers;

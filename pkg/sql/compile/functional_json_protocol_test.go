@@ -33,11 +33,11 @@ func TestFunctionalJSONMetadataOnlyDestinationAndReceiver(t *testing.T) {
 	table := &plan.TableDef{Indexes: []*plan.IndexDef{{IndexName: "j", IndexAlgoParams: `{"functional_json_semantics":"1"}`}}}
 	qry := &plan.Query{Nodes: []*plan.Node{{TableDef: table}}, Steps: []int32{0}}
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}
-	client.version = defines.MORPCVersion114
+	client.version = defines.MORPCVersion115
 	c.execType = plan2.ExecTypeAP_MULTICN
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-	client.version = defines.MORPCVersion115
+	client.version = defines.MORPCVersion116
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
@@ -47,21 +47,21 @@ func TestFunctionalJSONMetadataOnlyDestinationAndReceiver(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, features.JSONFunctionalIndexSemantics)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion114)
-	require.Error(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
+	require.Error(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 	op := projection.NewArgument()
 	defer op.Release()
 	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op, DataSource: &Source{TableDef: table}}
-	client.version = defines.MORPCVersion114
+	client.version = defines.MORPCVersion115
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.Error(t, err)
-	client.version = defines.MORPCVersion115
+	client.version = defines.MORPCVersion116
 	minimum := int64(0)
 	data, err := encodeRemoteScopeWithVectorProtocol(scope, c.proc, &minimum)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion115, minimum)
+	require.Equal(t, defines.MORPCVersion116, minimum)
 	var decoded pipeline.Pipeline
 	require.NoError(t, decoded.Unmarshal(data))
 	features, err = pipelineExpressionFeatures(&decoded)
@@ -73,16 +73,29 @@ func TestFunctionalJSONMetadataOnlyDestinationAndReceiver(t *testing.T) {
 }
 
 func TestFunctionalJSONRechecksActualStream(t *testing.T) {
-	for _, version := range []int64{defines.MORPCVersion114, defines.MORPCVersion115} {
+	for _, version := range []int64{defines.MORPCVersion115, defines.MORPCVersion116} {
 		stream := &fakeStreamSender{}
 		replies := make(chan morpc.Message, 1)
 		replies <- &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck, Sid: pipeline.Status_Last, ProtocolVersion: version}
 		sender := &messageSenderOnClient{ctx: context.Background(), streamSender: stream, receiveCh: replies}
-		err := sender.confirmProtocolOnStream(defines.MORPCVersion115)
-		if version < defines.MORPCVersion115 {
+		err := sender.confirmProtocolOnStream(defines.MORPCVersion116)
+		if version < defines.MORPCVersion116 {
 			require.Error(t, err)
 		} else {
 			require.NoError(t, err)
 		}
 	}
+}
+
+// A combined plan must preserve the highest capability rather than letting a
+// subsequently visited inherited consumer overwrite its metadata-only floor.
+func TestFunctionalJSON116ComposesInheritedFloors(t *testing.T) {
+	features := plan.RemoteExpressionFeatures{JSONFunctionalIndexSemantics: true, ODKUStatementResult: true, SessionLastInsertIDBaseline: true, JSONMinMaxTypedComparison: true, JSONOpaqueTextContracts: true, JSONStringConsumerOverload: true, DateNumericResultContracts: true}
+	require.Equal(t, defines.MORPCVersion116, remoteExpressionProtocolVersion(features))
+	table := &plan.TableDef{Indexes: []*plan.IndexDef{{IndexName: "j", IndexAlgoParams: `{"functional_json_semantics":"1"}`}}}
+	floor, err := plan2.RequiredPersistedExpressionProtocolVersion(table)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion116, floor)
+	features.JSONFunctionalIndexSemantics = false
+	require.Equal(t, defines.MORPCVersion115, remoteExpressionProtocolVersion(features))
 }

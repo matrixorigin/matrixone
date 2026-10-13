@@ -34,12 +34,12 @@ func TestFunctionalJSONTypedKeyDDLAndMetadata(t *testing.T) {
 	proc := newPlanTestProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, had := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
 	t.Cleanup(func() {
 		if had {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
 		}
 	})
 	ctx := NewMockCompilerContext(false, proc)
@@ -64,7 +64,7 @@ func TestFunctionalJSONTypedKeyDDLAndMetadata(t *testing.T) {
 	require.NoError(t, validateFunctionalTable(t.Context(), table))
 	floor, err := RequiredPersistedExpressionProtocolVersion(table)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion115, floor)
+	require.Equal(t, defines.MORPCVersion116, floor)
 	bad := DeepCopyTableDef(table, true)
 	bad.Indexes[0].IndexAlgoParams = ""
 	require.Error(t, validateFunctionalTable(t.Context(), bad))
@@ -79,12 +79,12 @@ func TestFunctionalJSONTypedKeyDDLAndMetadata(t *testing.T) {
 		_, err = build(sql)
 		require.Error(t, err, sql)
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion114)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
 	_, err = build("create table old_json(id int primary key,doc json,index j((cast(doc ->> '$.kind' as char(20)))))")
 	require.Error(t, err)
 	_, err = build("create table old_ordinary(id int primary key,name varchar(20),index j((lower(name))))")
 	require.NoError(t, err)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
 	_, err = build("create table child(id int primary key,pid int,index j((cast(json_unquote(json_extract(cast(pid as json),'$')) as char(20)))))")
 	require.NoError(t, err)
 }
@@ -96,12 +96,12 @@ func TestFunctionalJSONReplayAndEqualityPlan(t *testing.T) {
 	proc := newPlanTestProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, had := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
 	t.Cleanup(func() {
 		if had {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
 		}
 	})
 	ctx := NewMockCompilerContext(false, proc)
@@ -195,12 +195,12 @@ func TestFunctionalJSONForeignKeyFinalRowImage(t *testing.T) {
 	ctx := NewMockCompilerContext(false, proc)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, had := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
 	t.Cleanup(func() {
 		if had {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion116)
 		}
 	})
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table child(id int primary key,pid int,doc json,index dep((cast(json_unquote(json_extract(cast(pid as json),'$')) as char(20)))),index doc_key((cast(doc ->> '$.kind' as char(20)))))", 1)

@@ -138,10 +138,10 @@ revision metadata is rejected. Public SQL reconstruction continues to render
 expression syntax and rederive the marker; it does not expose a new SQL option.
 Ordinary functional indexes retain their existing protocol-107 semantics.
 
-This extension requires protocol 115 for authoring and for the existing shared
+This extension requires protocol 116 for authoring and for the existing shared
 placement, actual destination stream and receiver checks. The allocation is
-provisional until the real cumulative predecessor code (main111, ELT112, typed
-JSON MIN/MAX113 and ODKU114) is integrated in order; a high version alone must
+provisional until the real cumulative predecessor code (main112, ELT/opaque113, typed
+JSON MIN/MAX114 and ODKU115) is integrated in order; a high version alone must
 never stand in for missing predecessor implementations.
 
 Equality matching retains the complete base-row predicate. Only the known

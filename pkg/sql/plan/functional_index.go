@@ -246,7 +246,7 @@ func lowerFunctionalIndex(ctx CompilerContext, table *TableDef, index *tree.Inde
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "functional index expression must have session-independent semantics")
 		}
 		if functionalExpressionUsesJSON(expr, table.Cols, make(map[int32]bool)) {
-			if err := RequirePersistedProtocolVersionForAuthoring(ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion115); err != nil {
+			if err := RequirePersistedProtocolVersionForAuthoring(ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion116); err != nil {
 				return nil, err
 			}
 		}

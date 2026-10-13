@@ -1143,12 +1143,12 @@ func TestRemoteODKUResultTrackingProtocolValidation(t *testing.T) {
 		}},
 	}}}
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion114)
 	_, _, err := convertToPipelineInstruction(pre, proc, ctx, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 114")
+	require.ErrorContains(t, err, "requires MORPC protocol version 115")
 	require.ErrorContains(t,
 		validateRemoteStatementLastInsertIDPipelineProtocol(proc, pipelinePre),
-		"requires MORPC protocol version 114")
+		"requires MORPC protocol version 115")
 	dedup := &dedupjoin.DedupJoin{
 		ODKUResultTracking: true,
 		Conditions:         [][]*planpb.Expr{{}, {}},
@@ -1160,10 +1160,10 @@ func TestRemoteODKUResultTrackingProtocolValidation(t *testing.T) {
 		}},
 	}}}
 	_, _, err = convertToPipelineInstruction(dedup, proc, ctx, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 114")
+	require.ErrorContains(t, err, "requires MORPC protocol version 115")
 	require.ErrorContains(t,
 		validateRemoteStatementLastInsertIDPipelineProtocol(proc, dedupPipeline),
-		"requires MORPC protocol version 114")
+		"requires MORPC protocol version 115")
 
 	// Presence is independently checked on the receiver, including zero.
 	require.ErrorContains(t, validateRemoteODKUBaselinePresence(proc, pipelinePre), "baseline")
@@ -1172,7 +1172,7 @@ func TestRemoteODKUResultTrackingProtocolValidation(t *testing.T) {
 	require.NoError(t, validateRemoteODKUBaselinePresence(proc, pipelinePre))
 	require.NoError(t, validateRemoteODKUBaselinePresence(proc, dedupPipeline))
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion114)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
 	_, instruction, err := convertToPipelineInstruction(pre, proc, ctx, 1)
 	require.NoError(t, err)
 	require.True(t, instruction.PreInsert.TrackOdkuResult)
