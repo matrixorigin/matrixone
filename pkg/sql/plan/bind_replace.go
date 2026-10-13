@@ -789,12 +789,27 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}
 		if useMergedMainScan {
 			// Merged-scan mode: only capture the old columns that downstream
-			// actually needs (RowID, PK, and index-key columns), not every
-			// main-table column. The remaining NULL placeholders in fullProjList
-			// stay as-is — they are never read by MULTI_UPDATE.
+			// actually needs (RowID, PK, index-key columns, and partition-route
+			// keys), not every main-table column. The remaining NULL placeholders
+			// in fullProjList stay as-is — they are never read by MULTI_UPDATE.
 			requiredOldCols := make(map[string]struct{}, 2+len(tableDef.Indexes))
 			requiredOldCols[catalog.Row_ID] = struct{}{}
 			requiredOldCols[tableDef.Pkey.PkeyColName] = struct{}{}
+			if partitionedFulltext {
+				// deleteKey/insertKey and the irregular-index old route read the
+				// old partition key through these placeholders. Capturing only
+				// Row_ID/PK leaves that key as a NULL literal, so REPLACE cannot
+				// route the old-row delete to the partition it lived in.
+				partitionExprCols := make(map[string]struct{})
+				for _, partitionDef := range tableDef.Partition.PartitionDefs {
+					if partitionDef != nil {
+						collectPartitionExprColumnNames(partitionDef.Def, tableDef, partitionExprCols)
+					}
+				}
+				for name := range partitionExprCols {
+					requiredOldCols[name] = struct{}{}
+				}
+			}
 			for i, idxDef := range tableDef.Indexes {
 				if skipUniqueIdx[i] && !needsOldIndexMaintenance {
 					continue

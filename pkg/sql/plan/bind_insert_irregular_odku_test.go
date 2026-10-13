@@ -477,6 +477,139 @@ func TestPartitionedFulltextConflictDMLKeepsOldAndNewPartitionKeys(t *testing.T)
 	}
 }
 
+// TestReplaceMergedScanCapturesPartitionDependency pins the merged-main-scan
+// REPLACE path: when the parent is partitioned and carries classic FULLTEXT,
+// the old partition-key column must be present in OldColCaptureList. Without
+// that capture the old-key placeholder stays a NULL literal, so REPLACE cannot
+// route the old FULLTEXT delete to the physical partition the old row lived in
+// (same-partition and cross-partition alike).
+//
+// docs_ft has only a real PK + FULLTEXT (no unique secondary), so REPLACE takes
+// useMergedMainScan. Partition key is payload (not the PK).
+func TestReplaceMergedScanCapturesPartitionDependency(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	base := mock.ctxt.tables["docs_ft"]
+	base.FeatureFlag |= features.Partitioned
+	cond, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), ">=", []*Expr{
+		{Typ: base.Cols[2].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "payload", ColPos: 2}}},
+		makePlan2Int32ConstExprWithType(0),
+	})
+	require.NoError(t, err)
+	base.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{
+		{Def: cond}, {Def: makePlan2BoolConstExprWithType(false)},
+	}}
+
+	// Same plan serves same-partition (old payload stays put) and cross-partition
+	// (old payload moves) REPLACE: both need the captured old partition key.
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "same_partition_payload_stays",
+			sql:  "replace into constraint_test.docs_ft(id, body, payload, embedding) values (1, 'incoming', 1, '[1,2,3]')",
+		},
+		{
+			name: "cross_partition_payload_moves",
+			sql:  "replace into constraint_test.docs_ft(id, body, payload, embedding) values (1, 'incoming', -5, '[1,2,3]')",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.NotNil(t, query)
+
+			captureList := findDedupJoinCaptureList(t, query)
+			require.NotNil(t, captureList,
+				"no-UNIQUE partitioned FULLTEXT REPLACE must take the merged-main-scan capture path")
+
+			capturedNames := make([]string, 0, len(captureList))
+			for _, c := range captureList {
+				capturedNames = append(capturedNames, c.ProbeSource.Name)
+			}
+
+			// ProbeSource.Name is filled by column remapping to the qualified
+			// main-table column. The old partition key (payload) must appear.
+			var sawPayload bool
+			var sawRowID bool
+			var sawPK bool
+			for _, name := range capturedNames {
+				switch {
+				case strings.HasSuffix(name, ".payload"):
+					sawPayload = true
+				case strings.HasSuffix(name, "."+catalog.Row_ID):
+					sawRowID = true
+				case strings.HasSuffix(name, ".id"):
+					sawPK = true
+				}
+			}
+			require.True(t, sawPK, "capture list must keep the old PK, got %v", capturedNames)
+			require.True(t, sawRowID, "capture list must keep the old Row_ID, got %v", capturedNames)
+			require.True(t, sawPayload,
+				"merged REPLACE scan must capture the old partition key (payload); capture names=%v", capturedNames)
+
+			// The parent UpdateCtx.PartitionCols carry deleteKey = if(..., oldKey)
+			// and insertKey = if(..., oldKey). The oldKey branches reference the
+			// captured old-payload placeholder; prove at least one PartitionCols
+			// source expression touches a captured placeholder.
+			var parent *planpb.UpdateCtx
+			for _, node := range query.Nodes {
+				if node == nil || node.NodeType != planpb.Node_MULTI_UPDATE {
+					continue
+				}
+				for _, ctx := range node.UpdateCtxList {
+					if ctx.TableDef.TblId != base.TblId || ctx.PartitionIndexCtx != nil {
+						continue
+					}
+					parent = ctx
+				}
+			}
+			require.NotNil(t, parent, "REPLACE must emit the parent MULTI_UPDATE")
+			require.Len(t, parent.PartitionCols, 2,
+				"conflict DML must delete from the old partition and insert into the new partition")
+
+			// Walk every PROJECT expression that feeds the shared sink; the
+			// deleteKey/insertKey trees live there and must reference a captured
+			// old-col placeholder (not a bare NULL literal). After join remapping
+			// the expression uses the join-output RelPos while the capture keeps
+			// the build-side RelPos; ColPos still identifies the same slot.
+			capturedColPos := make(map[int32]bool, len(captureList))
+			for _, c := range captureList {
+				capturedColPos[c.BuildPlaceholder.ColPos] = true
+			}
+			var sawCapturedRef bool
+			var collect func(*planpb.Expr)
+			collect = func(e *planpb.Expr) {
+				if e == nil {
+					return
+				}
+				if col := e.GetCol(); col != nil {
+					if capturedColPos[col.ColPos] {
+						sawCapturedRef = true
+					}
+					return
+				}
+				if f := e.GetF(); f != nil {
+					for _, arg := range f.Args {
+						collect(arg)
+					}
+				}
+			}
+			for _, node := range query.Nodes {
+				if node == nil || node.NodeType != planpb.Node_PROJECT {
+					continue
+				}
+				for _, e := range node.ProjectList {
+					collect(e)
+				}
+			}
+			require.True(t, sawCapturedRef,
+				"partition-key expressions must reference captured old-col placeholders")
+		})
+	}
+}
+
 func TestPartitionedFulltextKeyMovesKeepRegularIndexes(t *testing.T) {
 	for _, sql := range []string{
 		"update constraint_test.docs_ft_dual set summary = 'new' where id = 1",
