@@ -53,6 +53,16 @@ deallocate prepare qualified_keyword_prepare;
 select t.begin/* ; */ ,t.null from qualified_identifier.select t;
 ➤ begin[4,32,0]  ¦  null[4,32,0]  𝄀
 7  ¦  null
+create function qualified_keyword_udf(x int) returns int language sql as 'select t.begin + $1 from qualified_identifier.select t';
+select cast(qualified_keyword_udf(5) as bigint) as udf_sum;
+➤ udf_sum[-5,64,0]  𝄀
+12
+drop function qualified_keyword_udf(int);
+create function qualified_keyword_udf_comment(x int) returns int language sql as 'select t. /* component */ begin + $1 from qualified_identifier.select t';
+select cast(qualified_keyword_udf_comment(9) as bigint) as udf_sum;
+➤ udf_sum[-5,64,0]  𝄀
+16
+drop function qualified_keyword_udf_comment(int);
 drop database qualified_identifier;
 show databases like 'qualified_identifier';
 ➤ Database[12,5000,0]

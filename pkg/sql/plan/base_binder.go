@@ -5171,8 +5171,9 @@ func replaceSQLUdfArgMarkers(sql string, argCount int, sqlMode string, markerFor
 	var result strings.Builder
 	result.Grow(len(sql))
 	written := 0
+	previousToken := 0
 	for {
-		token, value := scanner.Scan()
+		token, value := scanSQLToken(scanner, &previousToken)
 		if token == 0 || token == mysqlparser.LEX_ERROR {
 			break
 		}
@@ -5195,6 +5196,19 @@ func replaceSQLUdfArgMarkers(sql string, argCount int, sqlMode string, markerFor
 
 	result.WriteString(sql[written:])
 	return result.String()
+}
+
+// scanSQLToken keeps secondary SQL scans consistent with qualified identifiers.
+func scanSQLToken(scanner *mysqlparser.Scanner, previousToken *int) (int, string) {
+	var token int
+	var value string
+	if *previousToken == int('.') {
+		token, value = scanner.ScanAfterDot()
+	} else {
+		token, value = scanner.Scan()
+	}
+	*previousToken = token
+	return token, value
 }
 
 func (b *baseBinder) pushSQLUdfArguments(args map[string]*plan.Expr) func() {

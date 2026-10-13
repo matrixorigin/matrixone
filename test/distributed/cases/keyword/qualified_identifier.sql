@@ -35,5 +35,12 @@ execute qualified_keyword_prepare;
 deallocate prepare qualified_keyword_prepare;
 -- Legacy statement recording preserves semicolons inside comments after BEGIN.
 select t.begin/* ; */ ,t.null from qualified_identifier.select t;
+-- SQL UDF argument rewriting must traverse qualified BEGIN before the marker.
+create function qualified_keyword_udf(x int) returns int language sql as 'select t.begin + $1 from qualified_identifier.select t';
+select cast(qualified_keyword_udf(5) as bigint) as udf_sum;
+drop function qualified_keyword_udf(int);
+create function qualified_keyword_udf_comment(x int) returns int language sql as 'select t. /* component */ begin + $1 from qualified_identifier.select t';
+select cast(qualified_keyword_udf_comment(9) as bigint) as udf_sum;
+drop function qualified_keyword_udf_comment(int);
 drop database qualified_identifier;
 show databases like 'qualified_identifier';
