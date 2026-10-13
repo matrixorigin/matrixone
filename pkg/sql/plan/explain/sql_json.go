@@ -17,7 +17,6 @@ package explain
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"math"
 	"strconv"
@@ -421,10 +420,10 @@ func (b *sqlJSONPlanBuilder) addNodeDetails(item *sqlJSONNode, node *plan.Node) 
 		}
 	case plan.Node_INDEX_SEARCH_SCAN:
 		if node.IndexSearchScan == nil || node.IndexSearchScan.Index == nil || node.IndexSearchScan.Index.IndexName == "" {
-			return moerr.NewInvalidInput(b.ctx, "vector index scan metadata is missing")
+			return moerr.NewInvalidInput(b.ctx, "index search scan metadata is missing")
 		}
 		item.TableName = sqlJSONTableName(node)
-		item.Expressions, err = sqlJSONVectorIndexExpressions(b.ctx, node.IndexSearchScan, &b.textOpts)
+		item.Expressions, err = sqlJSONIndexSearchExpressions(b.ctx, node.IndexSearchScan, &b.textOpts)
 		if err != nil {
 			return err
 		}
@@ -622,9 +621,9 @@ func sqlJSONSampleExpressions(ctx context.Context, spec *plan.SampleFuncSpec) ([
 	}, nil
 }
 
-func sqlJSONVectorIndexExpressions(ctx context.Context, spec *plan.IndexSearchScan, options *ExplainOptions) ([]string, error) {
+func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchScan, options *ExplainOptions) ([]string, error) {
 	if spec == nil || spec.Index == nil {
-		return nil, moerr.NewInvalidInput(ctx, "vector index scan metadata is missing")
+		return nil, moerr.NewInvalidInput(ctx, "index search scan metadata is missing")
 	}
 	values := make([]string, 0, 16+len(spec.PreFilters)+len(spec.IncludedColumns))
 	values = append(values, "index="+spec.Index.IndexName)
@@ -636,29 +635,29 @@ func sqlJSONVectorIndexExpressions(ctx context.Context, spec *plan.IndexSearchSc
 	case plan.OrderBySpec_INTERNAL, plan.OrderBySpec_ASC, plan.OrderBySpec_DESC:
 		// valid vector scan directions
 	default:
-		return nil, moerr.NewInvalidInputf(ctx, "vector index scan has unknown direction %d", spec.Direction)
+		return nil, moerr.NewInvalidInputf(ctx, "index search scan has unknown direction %d", spec.Direction)
 	}
 	values = append(values,
 		"direction="+direction,
 		"post_filter_over_fetch="+strconv.FormatBool(spec.PostFilterOverFetch),
 	)
-	if len(spec.AlgoOptions) > 0 {
-		var encoded string
-		if json.Valid(spec.AlgoOptions) {
-			encoded = string(spec.AlgoOptions)
-		} else {
-			encoded = "0x" + hex.EncodeToString(spec.AlgoOptions)
-		}
-		values = append(values, "algorithm_options="+encoded)
+	settings, err := indexSearchScanSettings(spec, true)
+	if err != nil {
+		return nil, err
 	}
+	values = append(values, settings...)
 	for i, column := range spec.IncludedColumns {
 		values = append(values, "included_column["+strconv.Itoa(i)+"]="+column)
+	}
+	payloadName := "query_vector"
+	if isFulltextIndexSearchScan(spec) {
+		payloadName = "query_payload"
 	}
 	for _, field := range []struct {
 		name string
 		expr *plan.Expr
 	}{
-		{name: "query_vector", expr: spec.QueryPayload},
+		{name: payloadName, expr: spec.QueryPayload},
 		{name: "candidate_limit", expr: spec.CandidateLimit},
 	} {
 		value, err := sqlJSONExpr(ctx, field.expr, options)
@@ -670,16 +669,17 @@ func sqlJSONVectorIndexExpressions(ctx context.Context, spec *plan.IndexSearchSc
 		}
 	}
 	if len(spec.AlgoExprNames) != len(spec.AlgoExprs) {
-		return nil, moerr.NewInvalidInput(ctx, "index search algorithm expression names and values do not match")
+		return nil, moerr.NewInvalidInput(ctx, "index search scan algorithm expression names do not match expressions")
 	}
 	for i, expr := range spec.AlgoExprs {
+		if spec.AlgoExprNames[i] == "" || expr == nil {
+			return nil, moerr.NewInvalidInput(ctx, "index search scan algorithm expression metadata is missing")
+		}
 		value, err := sqlJSONExpr(ctx, expr, options)
 		if err != nil {
 			return nil, err
 		}
-		if value != "" {
-			values = append(values, spec.AlgoExprNames[i]+"="+value)
-		}
+		values = append(values, spec.AlgoExprNames[i]+"="+value)
 	}
 	if spec.DistanceRange != nil {
 		for _, bound := range []struct {
@@ -694,18 +694,20 @@ func sqlJSONVectorIndexExpressions(ctx context.Context, spec *plan.IndexSearchSc
 				continue
 			}
 			if bound.expr == nil {
-				return nil, moerr.NewInvalidInputf(ctx, "vector index scan %s expression is missing", bound.name)
+				return nil, moerr.NewInvalidInputf(ctx, "index search scan %s expression is missing", bound.name)
 			}
 			boundType := bound.boundType.String()
-			if boundType == "" {
-				return nil, moerr.NewInvalidInputf(ctx, "vector index scan %s has unknown bound type %d", bound.name, bound.boundType)
+			switch bound.boundType {
+			case plan.BoundType_UNBOUNDED, plan.BoundType_INCLUSIVE, plan.BoundType_EXCLUSIVE:
+			default:
+				return nil, moerr.NewInvalidInputf(ctx, "index search scan %s has unknown bound type %d", bound.name, bound.boundType)
 			}
 			value, err := sqlJSONExpr(ctx, bound.expr, options)
 			if err != nil {
 				return nil, err
 			}
 			if value == "" {
-				return nil, moerr.NewInvalidInputf(ctx, "vector index scan %s expression is empty", bound.name)
+				return nil, moerr.NewInvalidInputf(ctx, "index search scan %s expression is empty", bound.name)
 			}
 			values = append(values, bound.name+"_type="+boundType, bound.name+"="+value)
 		}
