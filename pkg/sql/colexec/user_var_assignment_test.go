@@ -646,9 +646,9 @@ func TestUserVariableAssignmentExecutorLifecycleAndResolverErrors(t *testing.T) 
 	masked := &UserVarAssignmentExpressionExecutor{
 		mp: proc.Mp(), name: "masked", typ: int64Type,
 	}
-	vec, err := masked.Eval(proc, []*batch.Batch{input}, []bool{false})
+	_, err = masked.Eval(proc, []*batch.Batch{input}, []bool{false})
 	require.NoError(t, err)
-	vec, err = masked.EvalWithoutResultReusing(proc, []*batch.Batch{input}, []bool{false})
+	vec, err := masked.EvalWithoutResultReusing(proc, []*batch.Batch{input}, []bool{false})
 	require.NoError(t, err)
 	vec.Free(proc.Mp())
 	masked.Free()
