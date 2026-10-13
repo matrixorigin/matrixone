@@ -100,11 +100,36 @@ func convertFromStarlarkValue(ctx context.Context, v starlark.Value) (any, error
 	return nil, moerr.NewInvalidInputf(ctx, "type %s is not a supported starlark type", v.Type())
 }
 
-func (interpreter *Interpreter) ExecuteStarlark(spBody string, dbName string, bg bool) error {
+// starlarkOutputExpr preserves the source literal until SQL assignment coercion.
+// In particular, Starlark integers may exceed both int64 and uint64.
+func starlarkOutputExpr(ctx context.Context, value starlark.Value) (tree.Expr, error) {
+	switch value := value.(type) {
+	case starlark.NoneType:
+		return tree.NewNumVal("", "", false, tree.P_null), nil
+	case starlark.Bool:
+		return tree.NewNumVal(bool(value), value.String(), false, tree.P_bool), nil
+	case starlark.Int:
+		if v, ok := value.Int64(); ok {
+			return tree.NewNumVal(v, value.String(), false, tree.P_int64), nil
+		}
+		if v, ok := value.Uint64(); ok {
+			return tree.NewNumVal(v, value.String(), false, tree.P_uint64), nil
+		}
+		return tree.NewNumVal(value.String(), value.String(), false, tree.P_decimal), nil
+	case starlark.Float:
+		return tree.NewNumVal(float64(value), value.String(), false, tree.P_float64), nil
+	case starlark.String:
+		return tree.NewNumVal(string(value), string(value), false, tree.P_char), nil
+	default:
+		return nil, moerr.NewInvalidInputf(ctx, "type %s is not a supported SQL parameter value", value.Type())
+	}
+}
+
+func (interpreter *Interpreter) ExecuteStarlark(spBody string, dbName string, bg bool) (err error) {
 	// preamble
 	interpreter.bh.ClearExecResultSet()
 	// use current database
-	err := interpreter.bh.Exec(interpreter.ctx, "use "+dbName)
+	err = interpreter.bh.Exec(interpreter.ctx, "use "+dbName)
 	if err != nil {
 		return err
 	}
@@ -185,20 +210,35 @@ func (interpreter *Interpreter) ExecuteStarlark(spBody string, dbName string, bg
 		return err
 	}
 
-	// bind out variables
+	// Validate every declaration before publishing any caller variables, including
+	// parameters that alias the same @variable. Missing out_ globals keep their
+	// historical behavior of leaving the caller value unchanged.
+	type outputValue struct {
+		name  string
+		value any
+	}
+	outputs := make([]outputValue, 0, len(interpreter.outParamMap))
 	for k := range interpreter.outParamMap {
 		gv := globals[k]
 		if gv != nil {
-			av, err := convertFromStarlarkValue(interpreter.ctx, gv)
+			expr, err := starlarkOutputExpr(interpreter.ctx, gv)
 			if err != nil {
 				return err
 			}
-
-			varName := interpreter.outParamMap[k].(string)
-			err = interpreter.ses.SetUserDefinedVar(varName, av, "")
+			declaredType, ok := interpreter.argsType[k[len("out_"):]]
+			if !ok {
+				return moerr.NewInternalErrorf(interpreter.ctx, "missing declared type for parameter %s", k)
+			}
+			av, err := interpreter.evaluateExprInContext(interpreter.ctx, expr, &declaredType)
 			if err != nil {
 				return err
 			}
+			outputs = append(outputs, outputValue{interpreter.outParamMap[k].(string), av})
+		}
+	}
+	for _, output := range outputs {
+		if err = interpreter.ses.SetUserDefinedVar(output.name, output.value, ""); err != nil {
+			return err
 		}
 	}
 

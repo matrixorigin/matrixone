@@ -1,0 +1,762 @@
+drop database if exists starlark_parameter_types;
+create database starlark_parameter_types;
+use starlark_parameter_types;
+create procedure original_out(out oi int, out ov varchar(3), inout io int) language 'starlark' $$
+out_oi = "not-an-int"
+out_ov = "too-long"
+out_io = "also-not-int"
+$$;
+set @oi=null, @ov=null, @io=7;
+call original_out(@oi,@ov,@io);
+invalid argument cast to int, bad value not-an-int
+select @oi is null and @ov is null and @io=7 as preserved;
+preserved
+1
+create or replace procedure typed_value(out v tinyint) language 'starlark' $$out_v = 127$$;
+set @v=99;
+call typed_value(@v);
+select @v=127 as matches;
+matches
+1
+create or replace procedure typed_value(out v tinyint) language 'starlark' $$out_v = -128$$;
+set @v=99;
+call typed_value(@v);
+select @v=-128 as matches;
+matches
+1
+create or replace procedure typed_value(out v tinyint) language 'starlark' $$out_v = 128$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type int8, value '128'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v tinyint unsigned) language 'starlark' $$out_v = 255$$;
+set @v=99;
+call typed_value(@v);
+select @v=255 as matches;
+matches
+1
+create or replace procedure typed_value(out v tinyint unsigned) language 'starlark' $$out_v = 256$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint8, value '256'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v tinyint unsigned) language 'starlark' $$out_v = -1$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint8, value '-1'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v smallint) language 'starlark' $$out_v = 32767$$;
+set @v=99;
+call typed_value(@v);
+select @v=32767 as matches;
+matches
+1
+create or replace procedure typed_value(out v smallint) language 'starlark' $$out_v = 32768$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type int16, value '32768'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v smallint unsigned) language 'starlark' $$out_v = 65535$$;
+set @v=99;
+call typed_value(@v);
+select @v=65535 as matches;
+matches
+1
+create or replace procedure typed_value(out v smallint unsigned) language 'starlark' $$out_v = 65536$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint16, value '65536'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v smallint unsigned) language 'starlark' $$out_v = -1$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint16, value '-1'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v mediumint) language 'starlark' $$out_v = 8388607$$;
+set @v=99;
+call typed_value(@v);
+select @v=8388607 as matches;
+matches
+1
+create or replace procedure typed_value(out v mediumint) language 'starlark' $$out_v = 8388608$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type mediumint, value '8388608'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v mediumint unsigned) language 'starlark' $$out_v = 16777215$$;
+set @v=99;
+call typed_value(@v);
+select @v=16777215 as matches;
+matches
+1
+create or replace procedure typed_value(out v mediumint unsigned) language 'starlark' $$out_v = 16777216$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type mediumint unsigned, value '16777216'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v mediumint unsigned) language 'starlark' $$out_v = -1$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint32, value '-1'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v int) language 'starlark' $$out_v = 2147483647$$;
+set @v=99;
+call typed_value(@v);
+select @v=2147483647 as matches;
+matches
+1
+create or replace procedure typed_value(out v int) language 'starlark' $$out_v = 2147483648$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type int32, value '2147483648'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v int unsigned) language 'starlark' $$out_v = 4294967295$$;
+set @v=99;
+call typed_value(@v);
+select @v=4294967295 as matches;
+matches
+1
+create or replace procedure typed_value(out v int unsigned) language 'starlark' $$out_v = 4294967296$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint32, value '4294967296'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v int unsigned) language 'starlark' $$out_v = -1$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint32, value '-1'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v bigint) language 'starlark' $$out_v = 9223372036854775807$$;
+set @v=99;
+call typed_value(@v);
+select @v=9223372036854775807 as matches;
+matches
+1
+create or replace procedure typed_value(out v bigint) language 'starlark' $$out_v = 9223372036854775808$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type int64, value '9223372036854775808'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v bigint unsigned) language 'starlark' $$out_v = 18446744073709551615$$;
+set @v=99;
+call typed_value(@v);
+select @v=18446744073709551615 as matches;
+matches
+1
+create or replace procedure typed_value(out v bigint unsigned) language 'starlark' $$out_v = 1 << 64$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint64, value '18446744073709551616'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v bigint unsigned) language 'starlark' $$out_v = -1$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint64, value '-1'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v decimal(30,0)) language 'starlark' $$out_v = 18446744073709551615$$;
+set @v=99;
+call typed_value(@v);
+select @v='18446744073709551615' as matches;
+matches
+1
+create or replace procedure typed_value(out v decimal(30,0)) language 'starlark' $$out_v = 1 << 64$$;
+set @v=99;
+call typed_value(@v);
+select @v='18446744073709551616' as matches;
+matches
+1
+create or replace procedure typed_value(out v decimal(30,0)) language 'starlark' $$out_v = -(1 << 64)$$;
+set @v=99;
+call typed_value(@v);
+select @v='-18446744073709551616' as matches;
+matches
+1
+create or replace procedure typed_value(out v decimal(30,0)) language 'starlark' $$out_v = 1000000000000000000000000000000$$;
+set @v=99;
+call typed_value(@v);
+invalid input: 1000000000000000000000000000000 beyond the range, can't be converted to Decimal128(30,0).
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v decimal(5,2)) language 'starlark' $$out_v = "12.345"$$;
+set @v=99;
+call typed_value(@v);
+select @v='12.35' as matches;
+matches
+1
+create or replace procedure typed_value(out v decimal(5,2)) language 'starlark' $$out_v = "1000"$$;
+set @v=99;
+call typed_value(@v);
+invalid input: 1000 beyond the range, can't be converted to Decimal64(5,2).
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v float) language 'starlark' $$out_v = 1.25$$;
+set @v=99;
+call typed_value(@v);
+select @v=1.25 as matches;
+matches
+1
+create or replace procedure typed_value(out v double) language 'starlark' $$out_v = 1.25$$;
+set @v=99;
+call typed_value(@v);
+select @v=1.25 as matches;
+matches
+1
+create or replace procedure typed_value(out v bool) language 'starlark' $$out_v = True$$;
+set @v=99;
+call typed_value(@v);
+select @v=true as matches;
+matches
+1
+create or replace procedure typed_value(out v varchar(3)) language 'starlark' $$out_v = "abc"$$;
+set @v=99;
+call typed_value(@v);
+select @v='abc' as matches;
+matches
+1
+create or replace procedure typed_value(out v varchar(3)) language 'starlark' $$out_v = "too-long"$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: Can't cast 'too-long' to VARCHAR type. Src length 8 is larger than Dest length 3
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v date) language 'starlark' $$out_v = "2026-02-28"$$;
+set @v=99;
+call typed_value(@v);
+select @v='2026-02-28' as matches;
+matches
+1
+create or replace procedure typed_value(out v date) language 'starlark' $$out_v = "bad"$$;
+set @v=99;
+call typed_value(@v);
+invalid argument parsedate, bad value bad
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v time(3)) language 'starlark' $$out_v = "12:34:56.1234"$$;
+set @v=99;
+call typed_value(@v);
+select @v='12:34:56.123' as matches;
+matches
+1
+create or replace procedure typed_value(out v time) language 'starlark' $$out_v = "bad"$$;
+set @v=99;
+call typed_value(@v);
+invalid input: invalid time value bad
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v datetime(3)) language 'starlark' $$out_v = "2026-02-28 12:34:56.1234"$$;
+set @v=99;
+call typed_value(@v);
+select @v='2026-02-28 12:34:56.123' as matches;
+matches
+1
+create or replace procedure typed_value(out v datetime) language 'starlark' $$out_v = "bad"$$;
+set @v=99;
+call typed_value(@v);
+invalid input: invalid datetime value bad
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v timestamp(3)) language 'starlark' $$out_v = "2026-02-28 12:34:56.1234"$$;
+set @v=99;
+call typed_value(@v);
+select @v='2026-02-28 12:34:56.123' as matches;
+matches
+1
+create or replace procedure typed_value(out v timestamp) language 'starlark' $$out_v = "bad"$$;
+set @v=99;
+call typed_value(@v);
+invalid input: invalid datetime value bad
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v binary(3)) language 'starlark' $$out_v = "a"$$;
+set @v=99;
+call typed_value(@v);
+select hex(@v)='610000' as matches;
+matches
+1
+create or replace procedure typed_value(out v binary(3)) language 'starlark' $$out_v = "abcd"$$;
+set @v=99;
+call typed_value(@v);
+internal error: Can't cast 'abcd' from VARCHAR type to BINARY type. Src length 4 is larger than Dest length 3
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v varbinary(3)) language 'starlark' $$out_v = "abc"$$;
+set @v=99;
+call typed_value(@v);
+select hex(@v)='616263' as matches;
+matches
+1
+create or replace procedure typed_value(out v varbinary(3)) language 'starlark' $$out_v = "abcd"$$;
+set @v=99;
+call typed_value(@v);
+internal error: Can't cast 'abcd' from VARCHAR type to VARBINARY type. Src length 4 is larger than Dest length 3
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v vecf32(2)) language 'starlark' $$out_v = "[1,2]"$$;
+set @v=99;
+call typed_value(@v);
+select @v=cast('[1,2]' as vecf32(2)) as matches;
+matches
+1
+create or replace procedure typed_value(out v vecf64(2)) language 'starlark' $$out_v = "[1,2]"$$;
+set @v=99;
+call typed_value(@v);
+select @v=cast('[1,2]' as vecf64(2)) as matches;
+matches
+1
+create or replace procedure typed_value(out v vecf32(2)) language 'starlark' $$out_v = "[1,2,3]"$$;
+set @v=99;
+call typed_value(@v);
+invalid input: expected vector dimension 2 != actual dimension 3.
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(out v vecf32(2)) language 'starlark' $$out_v = "bad"$$;
+set @v=99;
+call typed_value(@v);
+internal error: malformed vector input: bad
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v tinyint) language 'starlark' $$out_v = 127$$;
+set @v=99;
+call typed_value(@v);
+select @v=127 as matches;
+matches
+1
+create or replace procedure typed_value(inout v tinyint) language 'starlark' $$out_v = -128$$;
+set @v=99;
+call typed_value(@v);
+select @v=-128 as matches;
+matches
+1
+create or replace procedure typed_value(inout v tinyint) language 'starlark' $$out_v = 128$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type int8, value '128'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v tinyint unsigned) language 'starlark' $$out_v = 255$$;
+set @v=99;
+call typed_value(@v);
+select @v=255 as matches;
+matches
+1
+create or replace procedure typed_value(inout v tinyint unsigned) language 'starlark' $$out_v = 256$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint8, value '256'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v tinyint unsigned) language 'starlark' $$out_v = -1$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint8, value '-1'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v smallint) language 'starlark' $$out_v = 32767$$;
+set @v=99;
+call typed_value(@v);
+select @v=32767 as matches;
+matches
+1
+create or replace procedure typed_value(inout v smallint) language 'starlark' $$out_v = 32768$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type int16, value '32768'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v smallint unsigned) language 'starlark' $$out_v = 65535$$;
+set @v=99;
+call typed_value(@v);
+select @v=65535 as matches;
+matches
+1
+create or replace procedure typed_value(inout v smallint unsigned) language 'starlark' $$out_v = 65536$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint16, value '65536'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v smallint unsigned) language 'starlark' $$out_v = -1$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint16, value '-1'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v mediumint) language 'starlark' $$out_v = 8388607$$;
+set @v=99;
+call typed_value(@v);
+select @v=8388607 as matches;
+matches
+1
+create or replace procedure typed_value(inout v mediumint) language 'starlark' $$out_v = 8388608$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type mediumint, value '8388608'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v mediumint unsigned) language 'starlark' $$out_v = 16777215$$;
+set @v=99;
+call typed_value(@v);
+select @v=16777215 as matches;
+matches
+1
+create or replace procedure typed_value(inout v mediumint unsigned) language 'starlark' $$out_v = 16777216$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type mediumint unsigned, value '16777216'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v mediumint unsigned) language 'starlark' $$out_v = -1$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint32, value '-1'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v int) language 'starlark' $$out_v = 2147483647$$;
+set @v=99;
+call typed_value(@v);
+select @v=2147483647 as matches;
+matches
+1
+create or replace procedure typed_value(inout v int) language 'starlark' $$out_v = 2147483648$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type int32, value '2147483648'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v int unsigned) language 'starlark' $$out_v = 4294967295$$;
+set @v=99;
+call typed_value(@v);
+select @v=4294967295 as matches;
+matches
+1
+create or replace procedure typed_value(inout v int unsigned) language 'starlark' $$out_v = 4294967296$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint32, value '4294967296'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v int unsigned) language 'starlark' $$out_v = -1$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint32, value '-1'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v bigint) language 'starlark' $$out_v = 9223372036854775807$$;
+set @v=99;
+call typed_value(@v);
+select @v=9223372036854775807 as matches;
+matches
+1
+create or replace procedure typed_value(inout v bigint) language 'starlark' $$out_v = 9223372036854775808$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type int64, value '9223372036854775808'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v bigint unsigned) language 'starlark' $$out_v = 18446744073709551615$$;
+set @v=99;
+call typed_value(@v);
+select @v=18446744073709551615 as matches;
+matches
+1
+create or replace procedure typed_value(inout v bigint unsigned) language 'starlark' $$out_v = 1 << 64$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint64, value '18446744073709551616'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v bigint unsigned) language 'starlark' $$out_v = -1$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: data out of range: data type uint64, value '-1'
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v decimal(30,0)) language 'starlark' $$out_v = 18446744073709551615$$;
+set @v=99;
+call typed_value(@v);
+select @v='18446744073709551615' as matches;
+matches
+1
+create or replace procedure typed_value(inout v decimal(30,0)) language 'starlark' $$out_v = 1 << 64$$;
+set @v=99;
+call typed_value(@v);
+select @v='18446744073709551616' as matches;
+matches
+1
+create or replace procedure typed_value(inout v decimal(30,0)) language 'starlark' $$out_v = -(1 << 64)$$;
+set @v=99;
+call typed_value(@v);
+select @v='-18446744073709551616' as matches;
+matches
+1
+create or replace procedure typed_value(inout v decimal(30,0)) language 'starlark' $$out_v = 1000000000000000000000000000000$$;
+set @v=99;
+call typed_value(@v);
+invalid input: 1000000000000000000000000000000 beyond the range, can't be converted to Decimal128(30,0).
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v decimal(5,2)) language 'starlark' $$out_v = "12.345"$$;
+set @v=99;
+call typed_value(@v);
+select @v='12.35' as matches;
+matches
+1
+create or replace procedure typed_value(inout v decimal(5,2)) language 'starlark' $$out_v = "1000"$$;
+set @v=99;
+call typed_value(@v);
+invalid input: 1000 beyond the range, can't be converted to Decimal64(5,2).
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v float) language 'starlark' $$out_v = 1.25$$;
+set @v=99;
+call typed_value(@v);
+select @v=1.25 as matches;
+matches
+1
+create or replace procedure typed_value(inout v double) language 'starlark' $$out_v = 1.25$$;
+set @v=99;
+call typed_value(@v);
+select @v=1.25 as matches;
+matches
+1
+create or replace procedure typed_value(inout v bool) language 'starlark' $$out_v = True$$;
+set @v=99;
+call typed_value(@v);
+select @v=true as matches;
+matches
+1
+create or replace procedure typed_value(inout v varchar(3)) language 'starlark' $$out_v = "abc"$$;
+set @v=99;
+call typed_value(@v);
+select @v='abc' as matches;
+matches
+1
+create or replace procedure typed_value(inout v varchar(3)) language 'starlark' $$out_v = "too-long"$$;
+set @v=99;
+call typed_value(@v);
+Data truncation: Can't cast 'too-long' to VARCHAR type. Src length 8 is larger than Dest length 3
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v date) language 'starlark' $$out_v = "2026-02-28"$$;
+set @v=99;
+call typed_value(@v);
+select @v='2026-02-28' as matches;
+matches
+1
+create or replace procedure typed_value(inout v date) language 'starlark' $$out_v = "bad"$$;
+set @v=99;
+call typed_value(@v);
+invalid argument parsedate, bad value bad
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v time(3)) language 'starlark' $$out_v = "12:34:56.1234"$$;
+set @v=99;
+call typed_value(@v);
+select @v='12:34:56.123' as matches;
+matches
+1
+create or replace procedure typed_value(inout v time) language 'starlark' $$out_v = "bad"$$;
+set @v=99;
+call typed_value(@v);
+invalid input: invalid time value bad
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v datetime(3)) language 'starlark' $$out_v = "2026-02-28 12:34:56.1234"$$;
+set @v=99;
+call typed_value(@v);
+select @v='2026-02-28 12:34:56.123' as matches;
+matches
+1
+create or replace procedure typed_value(inout v datetime) language 'starlark' $$out_v = "bad"$$;
+set @v=99;
+call typed_value(@v);
+invalid input: invalid datetime value bad
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v timestamp(3)) language 'starlark' $$out_v = "2026-02-28 12:34:56.1234"$$;
+set @v=99;
+call typed_value(@v);
+select @v='2026-02-28 12:34:56.123' as matches;
+matches
+1
+create or replace procedure typed_value(inout v timestamp) language 'starlark' $$out_v = "bad"$$;
+set @v=99;
+call typed_value(@v);
+invalid input: invalid datetime value bad
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v binary(3)) language 'starlark' $$out_v = "a"$$;
+set @v=99;
+call typed_value(@v);
+select hex(@v)='610000' as matches;
+matches
+1
+create or replace procedure typed_value(inout v binary(3)) language 'starlark' $$out_v = "abcd"$$;
+set @v=99;
+call typed_value(@v);
+internal error: Can't cast 'abcd' from VARCHAR type to BINARY type. Src length 4 is larger than Dest length 3
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v varbinary(3)) language 'starlark' $$out_v = "abc"$$;
+set @v=99;
+call typed_value(@v);
+select hex(@v)='616263' as matches;
+matches
+1
+create or replace procedure typed_value(inout v varbinary(3)) language 'starlark' $$out_v = "abcd"$$;
+set @v=99;
+call typed_value(@v);
+internal error: Can't cast 'abcd' from VARCHAR type to VARBINARY type. Src length 4 is larger than Dest length 3
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v vecf32(2)) language 'starlark' $$out_v = "[1,2]"$$;
+set @v=99;
+call typed_value(@v);
+select @v=cast('[1,2]' as vecf32(2)) as matches;
+matches
+1
+create or replace procedure typed_value(inout v vecf64(2)) language 'starlark' $$out_v = "[1,2]"$$;
+set @v=99;
+call typed_value(@v);
+select @v=cast('[1,2]' as vecf64(2)) as matches;
+matches
+1
+create or replace procedure typed_value(inout v vecf32(2)) language 'starlark' $$out_v = "[1,2,3]"$$;
+set @v=99;
+call typed_value(@v);
+invalid input: expected vector dimension 2 != actual dimension 3.
+select @v=99 as matches;
+matches
+1
+create or replace procedure typed_value(inout v vecf32(2)) language 'starlark' $$out_v = "bad"$$;
+set @v=99;
+call typed_value(@v);
+internal error: malformed vector input: bad
+select @v=99 as matches;
+matches
+1
+create procedure out_null(out v int) language 'starlark' $$out_v = None$$;
+set @v=99;
+call out_null(@v);
+select @v is null as matches;
+matches
+1
+create procedure missing_outputs(out a int, inout b int) language 'starlark' $$pass$$;
+set @a=3,@b=4;
+call missing_outputs(@a,@b);
+select @a=3 and @b=4 as preserved;
+preserved
+1
+create procedure atomic_outputs(out a int, out b varchar(3), inout c int) language 'starlark' $$out_a = 12
+out_b = 'too-long'
+out_c = 13$$;
+set @a=7,@b=7,@c=7;
+call atomic_outputs(@a,@b,@c);
+Data truncation: Can't cast 'too-long' to VARCHAR type. Src length 8 is larger than Dest length 3
+select @a=7 and @b=7 and @c=7 as preserved;
+preserved
+1
+set @a=7,@b=7,@c=7;
+call atomic_outputs(@a,@a,@a);
+Data truncation: Can't cast 'too-long' to VARCHAR type. Src length 8 is larger than Dest length 3
+select @a=7 and @b=7 and @c=7 as preserved;
+preserved
+1
+create procedure alias_valid(out a int, out b int) language 'starlark' $$out_a = 12
+out_b = 13$$;
+call alias_valid(@a,@a);
+select @a in (12,13) as matches;
+matches
+1
+create table effects(n int);
+create procedure effect_failure(out v int) language 'starlark' $$rs, err = mo.sql('insert into effects values(1)')
+out_v = 'not-an-int'$$;
+set @v=99;
+call effect_failure(@v);
+invalid argument cast to int, bad value not-an-int
+select @v=99 as preserved;
+preserved
+1
+select count(*) as n from effects;
+n
+0
+create procedure after_error(inout v int) language 'starlark' $$out_v = v + 1$$;
+call after_error(@v);
+select @v=100 as matches;
+matches
+1
+set @vector=cast('[1,2]' as vecf32(2));
+select @vector=cast('[1,2]' as vecf32(2)) as matches;
+matches
+1
+create procedure sql_vector(out v vecf64(2)) 'begin set v=''[1,2]''; end';
+call sql_vector(@vector);
+select @vector=cast('[1,2]' as vecf64(2)) as matches;
+matches
+1
+drop database starlark_parameter_types;
