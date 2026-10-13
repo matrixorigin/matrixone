@@ -25,6 +25,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1315,6 +1316,9 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return nil, err
 	}
+	if tableDef.KeyFormat == collation.KeyFormatV1 && hasVersionedIndexMutation(stmt.Options) {
+		return nil, rejectVersionedIndexMutation(ctx.GetContext(), tableDef)
+	}
 	if err := validateAlterTableIdentifierDestinations(ctx.GetContext(), stmt.Options); err != nil {
 		return nil, err
 	}
@@ -1402,6 +1406,66 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	} else {
 		return buildAlterTableInplace(stmt, ctx)
 	}
+}
+
+func hasVersionedIndexMutation(options []tree.AlterTableOption) bool {
+	for _, option := range options {
+		switch option := option.(type) {
+		case *tree.AlterOptionAlterIndex, *tree.AlterOptionAlterReIndex:
+			return true
+		case *tree.AlterOptionDrop:
+			if option.Typ == tree.AlterTableDropIndex ||
+				option.Typ == tree.AlterTableDropKey ||
+				option.Typ == tree.AlterTableDropPrimaryKey ||
+				option.Typ == tree.AlterTableDropColumn {
+				return true
+			}
+		case *tree.AlterOptionAdd:
+			switch option.Def.(type) {
+			case *tree.PrimaryKeyIndex, *tree.Index, *tree.UniqueIndex, *tree.FullTextIndex:
+				return true
+			case *tree.ColumnTableDef:
+				if columnDefHasIndexAttribute(option.Def.(*tree.ColumnTableDef)) {
+					return true
+				}
+			}
+		case *tree.AlterAddCol:
+			if columnDefHasIndexAttribute(option.Column) {
+				return true
+			}
+		case *tree.AlterTableAddColumnClause:
+			for _, column := range option.NewColumns {
+				if columnDefHasIndexAttribute(column) {
+					return true
+				}
+			}
+		case *tree.AlterTableModifyColumnClause,
+			*tree.AlterTableChangeColumnClause,
+			*tree.AlterTableRenameColumnClause:
+			// The current in-place column mutation code does not prove that an
+			// indexed source column retains the V1 physical-key contract.  Keep
+			// every such mutation fail-closed until it can rebind and validate
+			// the affected index definitions atomically.
+			return true
+		case *tree.AlterTableAlterColumnClause:
+			return true
+		}
+	}
+	return false
+}
+
+func columnDefHasIndexAttribute(column *tree.ColumnTableDef) bool {
+	if column == nil {
+		return false
+	}
+	for _, attr := range column.Attributes {
+		switch attr.(type) {
+		case *tree.AttributePrimaryKey, *tree.AttributeKey,
+			*tree.AttributeUnique, *tree.AttributeUniqueKey:
+			return true
+		}
+	}
+	return false
 }
 
 // Charset options remain compatibility no-ops, not conversions. Admit requests

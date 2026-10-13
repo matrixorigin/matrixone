@@ -27,6 +27,7 @@ import (
 	"golang.org/x/exp/slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -870,7 +871,12 @@ func appendRecursiveCascadeLockNode(
 				}
 			}
 			var keyExpr *plan.Expr
-			if indexTableStoresSerializedKey(matchedIndex) {
+			if matchedIndex.KeyFormat == collation.KeyFormatV1 && matchedIndex.Unique {
+				keyExpr, err = bindIndexKeyExpr(builder.GetContext(), matchedIndex, keyParts)
+				if err != nil {
+					return 0, err
+				}
+			} else if indexTableStoresSerializedKey(matchedIndex) {
 				keyExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", keyParts)
 				if err != nil {
 					return 0, err
@@ -4313,7 +4319,32 @@ func appendPreInsertPlan(
 	if err != nil {
 		return -1, err
 	}
-
+	if idxDef.KeyFormat == collation.KeyFormatV1 && isUK {
+		lastProject := builder.qry.Nodes[lastNodeId].ProjectList
+		parts := make([]*Expr, len(keyParts))
+		for i, part := range keyParts {
+			part = catalog.ResolveAlias(part)
+			pos := useColumns[i]
+			partExpr := &Expr{Typ: lastProject[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: pos, Name: part}}}
+			partExpr, err = appendCastBeforeExpr(builder.GetContext(), partExpr, tableDef.Cols[colsMap[part]].Typ)
+			if err != nil {
+				return -1, err
+			}
+			parts[i] = partExpr
+		}
+		keyExpr, err := bindIndexKeyExpr(builder.GetContext(), idxDef, parts)
+		if err != nil {
+			return -1, err
+		}
+		projection := make([]*Expr, len(lastProject), len(lastProject)+1)
+		for i, expr := range lastProject {
+			projection[i] = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(i)}}}
+		}
+		keyPos := int32(len(projection))
+		projection = append(projection, keyExpr)
+		lastNodeId = builder.appendNode(&plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{lastNodeId}, ProjectList: projection}, bindCtx)
+		useColumns = []int32{keyPos}
+	}
 	var ukType Type
 	if len(idxDef.Parts) == 1 || isSpatialIndexDef(idxDef) {
 		ukType = builder.qry.Nodes[lastNodeId].ProjectList[useColumns[0]].Typ
@@ -4535,7 +4566,7 @@ func appendDeleteIndexTablePlan(
 		return -1, err
 	}
 	partsLength := len(indexdef.Parts)
-	usePhysicalKey := false
+	usePhysicalKey := indexdef.KeyFormat == collation.KeyFormatV1
 	for _, part := range indexdef.Parts {
 		partType, ok := typMap[catalog.ResolveAlias(part)]
 		if ok {
@@ -4580,7 +4611,9 @@ func appendDeleteIndexTablePlan(
 				return -1, err
 			}
 		}
-		if isUK {
+		if isUK && indexdef.KeyFormat == collation.KeyFormatV1 {
+			leftExpr, err = bindIndexKeyExpr(builder.GetContext(), indexdef, args)
+		} else if isUK {
 			// use for UK
 			// 0: serial(part1, part2) <----
 			// 1: serial(pk1, pk2)
