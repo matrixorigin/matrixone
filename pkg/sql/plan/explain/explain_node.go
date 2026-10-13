@@ -718,7 +718,8 @@ func (ndesc *NodeDescribeImpl) GetIndexSearchScanInfo(ctx context.Context, optio
 		return "", nil
 	}
 	buf := bytes.NewBuffer(make([]byte, 0, 192))
-	if !isFulltextIndexSearchScan(spec) {
+	isFulltext := isFulltextIndexSearchScan(spec)
+	if !isFulltext {
 		buf.WriteString("Vector Index: ")
 		buf.WriteString(spec.GetIndex().GetIndexName())
 		buf.WriteString(", Metric: ")
@@ -733,13 +734,17 @@ func (ndesc *NodeDescribeImpl) GetIndexSearchScanInfo(ctx context.Context, optio
 			return "", err
 		}
 	}
-	settings, err := indexSearchScanSettings(spec)
-	if err != nil {
-		return "", err
-	}
-	for _, setting := range settings {
-		buf.WriteString(", ")
-		buf.WriteString(setting)
+	// Keep the compact fulltext summary stable; explicit VERBOSE includes its
+	// static semantics. SQL JSON requests the complete settings separately.
+	if !isFulltext || options != nil && options.Verbose {
+		settings, err := indexSearchScanSettings(spec)
+		if err != nil {
+			return "", err
+		}
+		for _, setting := range settings {
+			buf.WriteString(", ")
+			buf.WriteString(setting)
+		}
 	}
 	if len(spec.GetPreFilters()) > 0 {
 		buf.WriteString(", Index Filter: ")

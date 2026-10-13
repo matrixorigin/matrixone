@@ -82,6 +82,50 @@ explain format=json select id, tag from vectors_include order by l2_distance(v,'
 drop table vectors_include;
 set probe_limit=default;
 
+-- Shared fulltext scans must expose the semantics carried in algorithm options.
+set experimental_fulltext2_index=1;
+create table json_docs(id bigint primary key, body text, status int);
+insert into json_docs values (1,'ready token',1),(2,'ready steady',0),(3,'other word',1);
+create fulltext2 index json_ft on json_docs(body) include(status);
+-- Explicit VERBOSE text shares the detailed metadata, while plain text remains compact.
+-- @regex("(?s)Fulltext Index: json_ft.*Match Mode: 0.*Include Column.*status.*Include Predicates:",true)
+explain verbose select id,status from json_docs where match(body) against('ready') and status=1 order by id;
+-- Covered predicates are removed from the base scan: both the column mapping and value must remain visible.
+-- @regex("(?s)Fulltext Index Scan.*Include Column.*status.*Include Predicates:.*val[^0-9]*1",true)
+explain format=json select id,status from json_docs where match(body) against('ready') and status=1 order by id;
+select id,status from json_docs where match(body) against('ready') and status=1 order by id;
+-- @regex("(?s)Fulltext Index Scan.*Include Predicates:.*val[^0-9]*0",true)
+explain format=json select id,status from json_docs where match(body) against('ready') and status=0 order by id;
+select id,status from json_docs where match(body) against('ready') and status=0 order by id;
+-- Equal payloads with distinct search modes must produce distinct diagnostics.
+-- @regex("(?s)Fulltext Index Scan.*Match Mode: 1.*query_payload=.*ready",true)
+explain format=json select id from json_docs where match(body) against('ready -other' in natural language mode) order by id;
+select id from json_docs where match(body) against('ready -other' in natural language mode) order by id;
+-- @regex("(?s)Fulltext Index Scan.*Match Mode: 3.*query_payload=.*ready",true)
+explain format=json select id from json_docs where match(body) against('ready -other' in boolean mode) order by id;
+select id from json_docs where match(body) against('ready -other' in boolean mode) order by id;
+-- @regex("(?s)Fulltext Index Scan.*Match Mode: 5.*Score Range:.*has_min",true)
+explain format=json select id from json_docs where match(body) against('ready' in bm25 mode)>cast(0 as float) order by id;
+prepare json_ft_prepared from 'explain format=json select id from json_docs where match(body) against(? in bm25 mode)>? order by id';
+set @json_term='ready', @json_threshold=0;
+-- @regex("(?s)Fulltext Index Scan.*Match Mode: 5.*zero_relevance_guard",true)
+execute json_ft_prepared using @json_term,@json_threshold;
+set @json_threshold=100;
+-- @regex("(?s)Fulltext Index Scan.*Match Mode: 5.*zero_relevance_guard",true)
+execute json_ft_prepared using @json_term,@json_threshold;
+deallocate prepare json_ft_prepared;
+drop table json_docs;
+set experimental_fulltext2_index=default;
+-- Classic fulltext uses the same shared plan contract and must retain its mode too.
+create table json_classic_docs(id bigint primary key, body text);
+insert into json_classic_docs values (1,'ready token'),(2,'other word');
+create fulltext index json_classic_ft on json_classic_docs(body);
+-- @regex("(?s)Fulltext Index Scan.*Match Mode: 1.*query_payload=.*ready",true)
+explain format=json select id from json_classic_docs where match(body) against('ready' in natural language mode);
+-- @regex("(?s)Fulltext Index Scan.*Match Mode: 3.*query_payload=.*ready",true)
+explain format=json select id from json_classic_docs where match(body) against('ready' in boolean mode);
+drop table json_classic_docs;
+
 -- FILL preserves mode and the targets remaining after projection pruning.
 create table fill_values(ts timestamp, v int);
 insert into fill_values values ('2024-01-01 00:00:00',1),('2024-01-01 00:00:10',3);

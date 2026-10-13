@@ -18,6 +18,7 @@ package search
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -37,6 +38,16 @@ type Hooks struct{}
 
 var _ searchplugin.Hooks = Hooks{}
 var _ searchplugin.EmptyScanHooks = Hooks{}
+var _ searchplugin.ExplainHooks = Hooks{}
+
+// ExplainSettings preserves the MATCH mode carried by the reader's options.
+func (Hooks) ExplainSettings(spec *plan.IndexSearchScan) ([]string, error) {
+	opts, err := ftplan.DecodeScanOptions(spec.GetAlgoOptions())
+	if err != nil {
+		return nil, err
+	}
+	return []string{"Match Mode: " + strconv.FormatInt(opts.Mode, 10)}, nil
+}
 
 // NewReader returns the reader of one classic fulltext MATCH search.
 func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (engine.Reader, error) {

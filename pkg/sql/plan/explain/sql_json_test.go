@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	ft2plan "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	planpkg "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -902,11 +903,17 @@ func TestSQLJSONTableAndTargetNameFallbacks(t *testing.T) {
 }
 
 func TestBuildSQLJSONPlanPreservesFulltextIndexPayload(t *testing.T) {
-	node := fulltextSearchScanNode()
+	node := fulltextSearchScanNode(t)
 	node.NodeId = 0
+	opts, err := ft2plan.EncodeScanOptions(ft2plan.ScanOptions{
+		Config: `{"include_columns":["status"]}`, Mode: 3,
+		IncludePreds: `[{"col":0,"op":"=","val":1}]`, ScoreRange: `{"has_min":true,"min":0}`,
+	})
+	require.NoError(t, err)
+	node.IndexSearchScan.AlgoOptions = opts
 	node.IndexSearchScan.QueryPayload = &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "search terms"}}}}
 	node.IndexSearchScan.AlgoExprNames = []string{"zero_relevance_guard"}
-	node.IndexSearchScan.AlgoExprs = []*plan.Expr{sqlJSONTestInt32(1)}
+	node.IndexSearchScan.AlgoExprs = []*plan.Expr{{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: true}}}}}
 	before, err := json.Marshal(node.IndexSearchScan)
 	require.NoError(t, err)
 	data, err := BuildSQLJSONPlan(t.Context(), &plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{node}})
@@ -917,7 +924,11 @@ func TestBuildSQLJSONPlanPreservesFulltextIndexPayload(t *testing.T) {
 	scan := decoded.MatrixOne.Nodes[0]
 	require.Equal(t, "Fulltext Index Scan", scan.Operator)
 	require.Contains(t, scan.Expressions, "index=ft_body")
-	require.Contains(t, scan.Expressions, "zero_relevance_guard=1")
+	require.Contains(t, scan.Expressions, "zero_relevance_guard=true")
+	require.Contains(t, scan.Expressions, "Match Mode: 3")
+	require.Contains(t, scan.Expressions, "Include Column[0]: status")
+	require.Contains(t, scan.Expressions, `Include Predicates: [{"col":0,"op":"=","val":1}]`)
+	require.Contains(t, scan.Expressions, `Score Range: {"has_min":true,"min":0}`)
 	require.Contains(t, strings.Join(scan.Expressions, " "), "query_payload=")
 	require.Contains(t, strings.Join(scan.Expressions, " "), "search terms")
 	require.NotContains(t, strings.Join(scan.Expressions, " "), "query_vector=")
@@ -936,6 +947,10 @@ func TestBuildSQLJSONPlanRejectsMalformedIndexSearchMetadata(t *testing.T) {
 		{name: "missing index", scan: &plan.IndexSearchScan{}},
 		{name: "missing index name", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{}}},
 		{name: "invalid algorithm options", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ix", IndexAlgo: "ivfflat"}, AlgoOptions: []byte("{")}},
+		{name: "invalid fulltext options", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ft", IndexAlgo: "fulltext"}, AlgoOptions: []byte("{")}},
+		{name: "missing fulltext2 options", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ft", IndexAlgo: "fulltext2"}}},
+		{name: "invalid fulltext2 options", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ft", IndexAlgo: "fulltext2"}, AlgoOptions: []byte("{")}},
+		{name: "invalid fulltext2 config", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ft", IndexAlgo: "fulltext2"}, AlgoOptions: []byte(`{"config":"{"}`)}},
 		{name: "expression without name", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ix"}, AlgoExprs: []*plan.Expr{sqlJSONTestInt32(1)}}},
 		{name: "name without expression", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ix"}, AlgoExprNames: []string{"budget"}}},
 		{name: "empty expression name", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ix"}, AlgoExprNames: []string{""}, AlgoExprs: []*plan.Expr{sqlJSONTestInt32(1)}}},

@@ -57,6 +57,52 @@ explain format=json select id, tag from vectors_include order by l2_distance(v,'
 EXPLAIN
 drop table vectors_include;
 set probe_limit=default;
+set experimental_fulltext2_index=1;
+create table json_docs(id bigint primary key, body text, status int);
+insert into json_docs values (1,'ready token',1),(2,'ready steady',0),(3,'other word',1);
+create fulltext2 index json_ft on json_docs(body) include(status);
+explain verbose select id,status from json_docs where match(body) against('ready') and status=1 order by id;
+TP QUERY PLAN
+explain format=json select id,status from json_docs where match(body) against('ready') and status=1 order by id;
+EXPLAIN
+select id,status from json_docs where match(body) against('ready') and status=1 order by id;
+id	status
+1	1
+explain format=json select id,status from json_docs where match(body) against('ready') and status=0 order by id;
+EXPLAIN
+select id,status from json_docs where match(body) against('ready') and status=0 order by id;
+id	status
+2	0
+explain format=json select id from json_docs where match(body) against('ready -other' in natural language mode) order by id;
+EXPLAIN
+select id from json_docs where match(body) against('ready -other' in natural language mode) order by id;
+id
+explain format=json select id from json_docs where match(body) against('ready -other' in boolean mode) order by id;
+EXPLAIN
+select id from json_docs where match(body) against('ready -other' in boolean mode) order by id;
+id
+1
+2
+explain format=json select id from json_docs where match(body) against('ready' in bm25 mode)>cast(0 as float) order by id;
+EXPLAIN
+prepare json_ft_prepared from 'explain format=json select id from json_docs where match(body) against(? in bm25 mode)>? order by id';
+set @json_term='ready', @json_threshold=0;
+execute json_ft_prepared using @json_term,@json_threshold;
+EXPLAIN
+set @json_threshold=100;
+execute json_ft_prepared using @json_term,@json_threshold;
+EXPLAIN
+deallocate prepare json_ft_prepared;
+drop table json_docs;
+set experimental_fulltext2_index=default;
+create table json_classic_docs(id bigint primary key, body text);
+insert into json_classic_docs values (1,'ready token'),(2,'other word');
+create fulltext index json_classic_ft on json_classic_docs(body);
+explain format=json select id from json_classic_docs where match(body) against('ready' in natural language mode);
+EXPLAIN
+explain format=json select id from json_classic_docs where match(body) against('ready' in boolean mode);
+EXPLAIN
+drop table json_classic_docs;
 create table fill_values(ts timestamp, v int);
 insert into fill_values values ('2024-01-01 00:00:00',1),('2024-01-01 00:00:10',3);
 explain format=json select c from (select _wstart as a, max(v) as b, min(v) as c from fill_values interval(ts, 5, second) fill(prev)) x;

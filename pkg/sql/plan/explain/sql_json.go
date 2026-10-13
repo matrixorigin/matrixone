@@ -679,9 +679,6 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 		if err != nil {
 			return nil, err
 		}
-		if value == "" {
-			return nil, moerr.NewInvalidInput(ctx, "index search scan algorithm expression is empty")
-		}
 		values = append(values, spec.AlgoExprNames[i]+"="+value)
 	}
 	if spec.DistanceRange != nil {

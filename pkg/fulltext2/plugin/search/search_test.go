@@ -67,6 +67,49 @@ func scanSpec(t *testing.T, opts ft2plan.ScanOptions) *plan.IndexSearchScan {
 	}
 }
 
+func TestExplainSettingsPreservesStaticSemantics(t *testing.T) {
+	const predicates = `[{"col":0,"op":"=","val":9007199254740993}]`
+	const scoreRange = `{"has_min":true,"min":1.5,"min_inc":true}`
+	for _, tc := range []struct {
+		name string
+		opts ft2plan.ScanOptions
+		want []string
+	}{
+		{"default mode", ft2plan.ScanOptions{Config: "{}"}, []string{"Match Mode: 0"}},
+		{"natural language mode", ft2plan.ScanOptions{Mode: 1}, []string{"Match Mode: 1"}},
+		{"boolean mode", ft2plan.ScanOptions{Mode: 3}, []string{"Match Mode: 3"}},
+		{"JSON probe", ft2plan.ScanOptions{Mode: fulltext2.JSONProbeMode}, []string{"Match Mode: 1000"}},
+		{"unknown mode remains lossless", ft2plan.ScanOptions{Mode: 9223372036854775807}, []string{"Match Mode: 9223372036854775807"}},
+		{"zero predicate remains present", ft2plan.ScanOptions{IncludePreds: `[{"col":-1,"op":"=","val":0}]`}, []string{"Match Mode: 0", `Include Predicates: [{"col":-1,"op":"=","val":0}]`}},
+		{"exclusive zero upper bound", ft2plan.ScanOptions{ScoreRange: `{"has_max":true,"max":0,"max_inc":false}`}, []string{"Match Mode: 0", `Score Range: {"has_max":true,"max":0,"max_inc":false}`}},
+		{"covered filter and score", ft2plan.ScanOptions{
+			Config: `{"include_columns":["status","tag"]}`, Mode: 5, IncludePreds: predicates, ScoreRange: scoreRange,
+		}, []string{"Match Mode: 5", "Include Column[0]: status", "Include Column[1]: tag", "Include Predicates: " + predicates, "Score Range: " + scoreRange}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := scanSpec(t, tc.opts)
+			before := append([]byte(nil), spec.AlgoOptions...)
+			settings, err := Hooks{}.ExplainSettings(spec)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, settings)
+			require.Equal(t, before, spec.AlgoOptions)
+		})
+	}
+}
+
+func TestExplainSettingsRejectsMalformedOptions(t *testing.T) {
+	for _, spec := range []*plan.IndexSearchScan{
+		nil,
+		{},
+		{AlgoOptions: []byte("{")},
+		scanSpec(t, ft2plan.ScanOptions{Config: "{"}),
+	} {
+		settings, err := Hooks{}.ExplainSettings(spec)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		require.Nil(t, settings)
+	}
+}
+
 func guardRequest(guard *plan.Literal) searchplugin.Request {
 	return searchplugin.Request{AlgoValues: []searchplugin.AlgoValue{{Name: fulltext.ZeroRelevanceGuardExpr, Value: guard}}}
 }

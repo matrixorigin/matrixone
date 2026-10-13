@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	ft2plan "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
@@ -55,13 +56,17 @@ func TestIndexSearchScanInfoIsTypedAndVisible(t *testing.T) {
 	require.Contains(t, basic, "Estimated Scan Rows: 100, Blocks: 2, Vector Bytes/Row: 128, Objects: 2, Planned DOP: 2")
 }
 
-func fulltextSearchScanNode() *plan.Node {
+func fulltextSearchScanNode(t *testing.T) *plan.Node {
+	t.Helper()
+	data, err := ft2plan.EncodeScanOptions(ft2plan.ScanOptions{Config: "{}"})
+	require.NoError(t, err)
 	return &plan.Node{
 		NodeType: plan.Node_INDEX_SEARCH_SCAN,
 		Stats:    &plan.Stats{Sql: "SELECT doc_id FROM idx"},
 		TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Name: "doc_id"}, {Name: "score"}}},
 		IndexSearchScan: &plan.IndexSearchScan{
-			Index: &plan.IndexDef{IndexName: "ft_body", IndexAlgo: "fulltext2"},
+			Index:       &plan.IndexDef{IndexName: "ft_body", IndexAlgo: "fulltext2"},
+			AlgoOptions: data,
 		},
 	}
 }
@@ -70,7 +75,7 @@ func fulltextSearchScanNode() *plan.Node {
 // shows its candidate limit only when one is pushed.
 func TestFulltextIndexSearchScanExplain(t *testing.T) {
 	ctx := context.Background()
-	node := fulltextSearchScanNode()
+	node := fulltextSearchScanNode(t)
 	desc := &NodeDescribeImpl{Node: node}
 
 	basic, err := desc.GetNodeBasicInfo(ctx, &ExplainOptions{Format: EXPLAIN_FORMAT_TEXT})
@@ -81,12 +86,18 @@ func TestFulltextIndexSearchScanExplain(t *testing.T) {
 	info, err := desc.GetExtraInfo(ctx, &ExplainOptions{})
 	require.NoError(t, err)
 	require.Equal(t, []string{"Fulltext Index: ft_body"}, info)
+	compact, err := desc.GetIndexSearchScanInfo(ctx, nil)
+	require.NoError(t, err)
+	require.Equal(t, "Fulltext Index: ft_body", compact)
 
 	node.IndexSearchScan.CandidateLimit = plan2.MakePlan2Uint64ConstExprWithType(15)
 	info, err = desc.GetExtraInfo(ctx, &ExplainOptions{Verbose: true})
 	require.NoError(t, err)
 	require.Contains(t, info, "Sql: SELECT doc_id FROM idx")
-	require.Contains(t, info, "Fulltext Index: ft_body, Candidate Limit: 15")
+	require.Contains(t, info, "Fulltext Index: ft_body, Candidate Limit: 15, Match Mode: 0")
+	info, err = desc.GetExtraInfo(ctx, &ExplainOptions{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"Fulltext Index: ft_body, Candidate Limit: 15"}, info)
 
 	require.Equal(t, "Vector Index Scan", IndexSearchScanLabel(&plan.IndexSearchScan{
 		Index: &plan.IndexDef{IndexAlgo: "not_registered"},
@@ -96,7 +107,7 @@ func TestFulltextIndexSearchScanExplain(t *testing.T) {
 
 func TestFulltextIndexSearchScanMarshal(t *testing.T) {
 	ctx := context.Background()
-	m := NewMarshalNodeImpl(fulltextSearchScanNode())
+	m := NewMarshalNodeImpl(fulltextSearchScanNode(t))
 	name, err := m.GetNodeName(ctx)
 	require.NoError(t, err)
 	require.Equal(t, "Fulltext Index Scan", name)
