@@ -42,7 +42,8 @@ rename table t_tmp to t_shadow;
 select * from t_live;
 select * from t_shadow;
 
--- A late failure must roll back the earlier pair after repeated reuse.
+-- Planning rejection preserves committed state; no rename pair executes.
+-- Real admission/abort coverage is in TestHistoricalRenameRollback.
 rename table t_live to t_tmp, missing_source to t_live;
 select * from t_live;
 select * from t_shadow;
