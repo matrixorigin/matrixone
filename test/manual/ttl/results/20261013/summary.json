@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "implementation_base_commit": "87ade1b8fb80a5667b278743f3c3f68740dce90f",
-  "tested_checkout_commit": "87ade1b8fb80a5667b278743f3c3f68740dce90f",
-  "recorded_at_utc": "2026-10-13T02:01:40.017194+00:00",
+  "tested_checkout_commit": "aaf0d8372cecf18e019444dc46ae5bef6c8c92e8",
+  "recorded_at_utc": "2026-10-13T02:09:09.134934+00:00",
   "environment": {
     "os": "linux",
     "arch": "x86_64",
@@ -17,17 +17,17 @@
         {
           "Package": "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql",
           "Action": "pass",
-          "Elapsed": 0.134
+          "Elapsed": 0.202
         },
         {
           "Package": "github.com/matrixorigin/matrixone/pkg/sql/ttl",
           "Action": "pass",
-          "Elapsed": 0.241
+          "Elapsed": 0.255
         },
         {
           "Package": "github.com/matrixorigin/matrixone/pkg/sql/plan",
           "Action": "pass",
-          "Elapsed": 13.617
+          "Elapsed": 12.918
         }
       ],
       "failures": []
@@ -38,7 +38,7 @@
         {
           "Package": "github.com/matrixorigin/matrixone/pkg/cnservice",
           "Action": "pass",
-          "Elapsed": 0.066
+          "Elapsed": 0.069
         }
       ],
       "failures": []
@@ -49,7 +49,7 @@
         {
           "Package": "github.com/matrixorigin/matrixone/pkg/tests/sqlintegration",
           "Action": "pass",
-          "Elapsed": 80.562
+          "Elapsed": 40.691
         }
       ],
       "failures": [],
@@ -66,9 +66,9 @@
     }
   },
   "raw_log_sha256": {
-    "unit.jsonl": "bbb462a3f5112075c567d4bce2595a89de7dce526b1ea39f623c3ecfa52afc16",
-    "registration.jsonl": "700651f9a751890eb263c532ccfb797f8fa47f1006e7ec740344d7e705dbdfa5",
-    "integration.jsonl": "e42568e0c43cedea713d8ad7799025ef6176886712e5cb453f87c3ccd60a81a2"
+    "unit.jsonl": "e8f3707244136cb74060d09b052d16061443f17f993bc55082cfb6dfbd8615cd",
+    "registration.jsonl": "180a50abb2b2b21cd91cd72e0a99d85a6ed98cc5d96e1547faa54f37426279dd",
+    "integration.jsonl": "5e4496044e88f8029498447b90370d6f40f96a5a29eea0645bdd33cbadac975e"
   },
   "deterministic_validation": {
     "random_cutoff_oracle_cases": 20000,
@@ -84,14 +84,14 @@
   ],
   "fuzz": {
     "duration_seconds": 15,
-    "executions": 50682,
+    "executions": 49223,
     "passed": true
   },
   "build": {
     "target": "./cmd/mo-service",
     "passed": true,
-    "binary_bytes": 273678216,
-    "binary_sha256": "dd1db8c11458caa72f862cb59170d47fb5c5b558cf99df8b9dacf1f2c7f7332e"
+    "binary_bytes": 273678872,
+    "binary_sha256": "fc82c1c239fa2f1898827dedc6c8c1690b1f48eefa015762193f27dbcec68a1d"
   },
   "all_checks_passed": true,
   "evidence_filter": "test-events.jsonl retains all run/pass/fail/skip entries for TTL and registration tests; unrelated full-regression test entries are counted in summary.json. Verbose runtime output is omitted; raw-log checksums are retained."
