@@ -306,6 +306,16 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 	assert.NotContains(t, strings.Join(InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion100), "\n"),
 		InformationSchemaColumnsDDL)
 	assert.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion109), InformationSchemaColumnsDDL)
+	for _, protocol := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111} {
+		definitions := InitInformationSchemaSysTablesForProtocol(protocol)
+		require.Contains(t, definitions, InformationSchemaSchemataLegacyDDL)
+		require.Contains(t, definitions, InformationSchemaTablesDDL)
+		require.NotContains(t, strings.Join(definitions, "\n"), "mo_database_defaults")
+		require.NotContains(t, definitions, InformationSchemaTablesV112DDL)
+	}
+	definitions := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion112)
+	require.Contains(t, definitions, InformationSchemaSchemataDDL)
+	require.Contains(t, definitions, InformationSchemaTablesV112DDL)
 }
 
 func assertInformationSchemaInitSQLParses(t *testing.T, sql string) {

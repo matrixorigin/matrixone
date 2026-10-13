@@ -80,21 +80,20 @@ create table vec_hnsw(id bigint primary key, v vecf32(4));
 insert into vec_hnsw values (1,'[0,0,0,0]'),(2,'[1,1,1,1]'),(3,'[5,5,5,5]'),(4,'[2,2,2,2]');
 create index idx_hnsw using hnsw on vec_hnsw(v) op_type 'vector_l2_ops' m=4 ef_construction=16 ef_search=16;
 explain select id from vec_hnsw order by l2_distance(v,'[0.9,0.9,0.9,0.9]') limit 2;
--- @regex("Table Function on hnsw_search", true)
+-- @regex("Vector Index Scan on idx_hnsw", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 2  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (vec_hnsw.id = mo_hnsw_alias_0.pkid)  𝄀
+              Join Cond: (vec_hnsw.id = #[1,0])  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on procedure_test.vec_hnsw  𝄀
                     Runtime Filter Probe: vec_hnsw.id  𝄀
-              ->  Table Function on hnsw_search  𝄀
-                    Index Reader Param:  Limit: 2  𝄀
-                    Limit: 2
+              ->  Vector Index Scan on idx_hnsw [l2_distance]  𝄀
+                    Vector Index: idx_hnsw, Metric: l2_distance, Candidate Limit: 2
 select id from vec_hnsw order by l2_distance(v,'[0.9,0.9,0.9,0.9]') limit 2;
 ➤ id[-5,64,0]  𝄀
 2  𝄀

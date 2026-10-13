@@ -52,7 +52,7 @@ var (
 		InformationSchemaCharacterSetsDDL,
 		InformationSchemaCharacterSetsData,
 		InformationSchemaTriggersDDL,
-		InformationSchemaTablesV110DDL,
+		InformationSchemaTablesV112DDL,
 		InformationSchemaPartitionsDDL,
 		InformationSchemaViewsDDL,
 		InformationSchemaStatisticsDDL,
@@ -76,7 +76,7 @@ var (
 )
 
 func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
-	if protocol >= defines.MORPCVersion110 {
+	if protocol >= defines.MORPCVersion112 {
 		return InitInformationSchemaSysTables
 	}
 
@@ -86,10 +86,10 @@ func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
 	for _, sql := range InitInformationSchemaSysTables {
 		switch sql {
 		case InformationSchemaSchemataDDL:
-			if protocol < defines.MORPCVersion110 {
+			if protocol < defines.MORPCVersion112 {
 				sql = InformationSchemaSchemataLegacyDDL
 			}
-		case InformationSchemaTablesV110DDL:
+		case InformationSchemaTablesV112DDL:
 			if protocol < defines.MORPCVersion46 {
 				sql = InformationSchemaTablesV41DDL
 			} else {

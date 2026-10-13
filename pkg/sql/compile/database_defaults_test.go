@@ -103,7 +103,7 @@ func TestAlterDatabaseDefaultsExecution(t *testing.T) {
 		{name: "storage error", dbErr: injected, wantError: "catalog failure"},
 		{name: "subscription", subscription: true, wantError: "subscription"},
 		{name: "system", dbName: "mo_catalog", wantError: "system database"},
-		{name: "old protocol", oldProtocol: true, wantError: "protocol version 110"},
+		{name: "old protocol", oldProtocol: true, wantError: "protocol version 112"},
 		{name: "invalid database ID", id: "bad", wantError: "invalid syntax"},
 		{name: "missing defaults", missingDefaults: true, wantError: "missing database defaults"},
 		{name: "version exhausted", current: "utf8mb4_general_ci", version: math.MaxUint64, wantError: "version exhausted"},
@@ -163,7 +163,7 @@ func TestAlterDatabaseDefaultsExecution(t *testing.T) {
 				require.Equal(t, fmt.Sprintf("insert into mo_catalog.mo_database_defaults (account_id,database_id,collation_id,collation_revision,version) values (7,42,2,0,%d)", tc.version+1), sql)
 				return executor.Result{}, tc.insertErr
 			}}
-			protocol := defines.MORPCVersion110
+			protocol := defines.MORPCVersion112
 			if tc.oldProtocol {
 				protocol = defines.MORPCVersion109
 			}
@@ -221,7 +221,7 @@ func TestDatabaseDefaultsPlanGenerationFence(t *testing.T) {
 				}
 				return compileDefaultsResult(t, proc, tc.collation, tc.version), nil
 			})
-			installDatabaseDefaultsExecutor(t, proc, exec, defines.MORPCVersion110)
+			installDatabaseDefaultsExecutor(t, proc, exec, defines.MORPCVersion112)
 			before := proc.Mp().CurrNB()
 			err := (&Compile{proc: proc}).validateDatabaseDefaults(db, tc.expected)
 			if tc.fail {
@@ -263,7 +263,7 @@ func TestDatabaseDefaultsCreateRebuildsAfterConcurrentAlter(t *testing.T) {
 		require.Greater(t, locks, reads, "read must follow catalog lock")
 		reads++
 		return compileDefaultsResult(t, proc, "utf8mb4_bin", 2), nil
-	}), defines.MORPCVersion110)
+	}), defines.MORPCVersion112)
 	makePlan := func(charset uint32, version uint64, collation string) *planpb.Plan {
 		return &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{DdlType: planpb.DataDefinition_CREATE_TABLE, Definition: &planpb.DataDefinition_CreateTable{CreateTable: &planpb.CreateTable{
 			Database: "d", IfNotExists: true, DatabaseDefaults: &planpb.DatabaseDefaults{DatabaseId: 42, CharacterSet: "utf8mb4", Collation: collation, Version: version, CollationId: charset},

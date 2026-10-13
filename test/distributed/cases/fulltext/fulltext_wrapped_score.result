@@ -31,7 +31,7 @@ select id, round(match(body) against('hello'), 3) as r from docs where match(bod
 3  ¦  0.062  𝄀
 1  ¦  0.031
 explain select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello');
--- @regex("Table Function on fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -42,7 +42,8 @@ Project  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on ft_wrapped.docs  𝄀
                     Runtime Filter Probe: docs.id  𝄀
-              ->  Table Function on fulltext_index_scan
+              ->  Fulltext Index Scan on ft  𝄀
+                    Fulltext Index: ft
 create view v as select id, match(body) against('hello') as sc from docs where match(body) against('hello');
 select id from v where sc > 0 order by id;              -- baseline: every match
 ➤ id[4,32,0]  𝄀
@@ -67,7 +68,7 @@ select id from v where round(cast(sc as double) * 2, 3) > 0.1 order by id;
 ➤ id[4,32,0]  𝄀
 3
 explain select id from v where round(sc, 4) > 0;
--- @regex("Table Function on fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -80,7 +81,8 @@ Project  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on ft_wrapped.docs  𝄀
                           Runtime Filter Probe: docs.id  𝄀
-                    ->  Table Function on fulltext_index_scan
+                    ->  Fulltext Index Scan on ft  𝄀
+                          Fulltext Index: ft
 select id from v where sc > 0.05 order by id;      -- only the higher-scoring row
 ➤ id[4,32,0]  𝄀
 3
@@ -176,7 +178,7 @@ select id from two where match(body) against('hello');
 5  𝄀
 1
 explain select id from two where match(body) against('hello') > 0.015;
--- @regex("Table Function on fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -190,7 +192,8 @@ Project  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on ft_wrapped.two  𝄀
                           Runtime Filter Probe: two.id  𝄀
-                    ->  Table Function on fulltext_index_scan
+                    ->  Fulltext Index Scan on ft_two  𝄀
+                          Fulltext Index: ft_two
 create table nodx(id int primary key, txt text);
 insert into nodx values (1,'hello');
 select id from nodx where match(txt) against('hello') > 0.1;

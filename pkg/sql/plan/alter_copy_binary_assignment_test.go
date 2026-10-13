@@ -81,6 +81,21 @@ func TestAlterCopyBinaryAssignmentBoundary(t *testing.T) {
 		require.False(t, alterCopyBinaryAssignment(ctx, target))
 	}
 	require.False(t, alterCopyBinaryAssignment(copyContext, Type{Id: int32(types.T_varchar), Width: 4}))
+	t.Run("mediumint COPY keeps assignment bounds", func(t *testing.T) {
+		compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+		compiler.SetContext(copyContext)
+		builder := NewQueryBuilder(pbplan.Query_SELECT, compiler, false, false)
+		physicalType := types.New(types.T_int32, 24, -1)
+		target := makePlan2Type(&physicalType)
+		stored := &pbplan.Expr{Typ: target, Expr: &pbplan.Expr_Col{Col: &pbplan.ColRef{RelPos: 1}}}
+		expression, err := builder.forceProjectedAssignmentCastExpr(DeepCopyExpr(stored), stored, target, false)
+		require.NoError(t, err)
+		require.NotNil(t, expression.GetF(), "MEDIUMINT must not take the unchanged binary COPY bypass")
+		require.Equal(t, "cast_assign", expression.GetF().Func.ObjName)
+		features, err := pbplan.RequiredRemoteExpressionFeatures(expression)
+		require.NoError(t, err)
+		require.True(t, features.MediumIntAssignmentBounds)
+	})
 }
 
 func TestAlterCopyUnchangedBinaryProjection(t *testing.T) {
