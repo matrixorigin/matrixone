@@ -638,6 +638,7 @@ func (builder *QueryBuilder) copyNode(ctx *BindContext, nodeId int32) int32 {
 		newNode.Children = append(newNode.Children, builder.copyNode(ctx, child))
 	}
 	newNodeId := builder.appendNode(newNode, ctx)
+	builder.inheritIndexHints(newNodeId, nodeId)
 	return newNodeId
 }
 
@@ -6632,6 +6633,9 @@ func (builder *QueryBuilder) bindSelectClause(
 	boundHavingList []*plan.Expr,
 	err error,
 ) {
+	if clause.Option&tree.QuerySpecOptionSqlCalcFoundRows != 0 {
+		builder.sqlCalcFoundRows = true
+	}
 	if ctx.bindingRecurStmt() && clause.Distinct {
 		err = moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
 		return

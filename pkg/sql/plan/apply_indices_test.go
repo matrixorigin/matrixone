@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"reflect"
 	"slices"
@@ -4706,5 +4707,44 @@ func TestIsRangeOp(t *testing.T) {
 	for _, tt := range tests {
 		fn := &planpb.Function{Func: &planpb.ObjectRef{ObjName: tt.op}}
 		assert.Equal(t, tt.expected, isRangeOp(fn), "isRangeOp(%q)", tt.op)
+	}
+}
+
+func TestCopyNodePreservesScopedIndexRestrictions(t *testing.T) {
+	for _, scope := range []tree.IndexHintScope{tree.HintForScan, tree.HintForJoin, tree.HintForOrderBy, tree.HintForGroupBy} {
+		for _, kind := range []tree.IndexHintType{tree.HintIgnore, tree.HintForce} {
+			t.Run(fmt.Sprintf("scope=%d/kind=%d", scope, kind), func(t *testing.T) {
+				builder, root, scanID, table := makeIndexHintJoinBuilder(t)
+				require.NoError(t, builder.recordIndexHints(scanID, table, []*tree.IndexHint{{
+					HintType: kind, HintScope: scope, IndexNames: []string{"idx_a"},
+				}}))
+				copyID := builder.copyNode(builder.ctxByNode[root], root)
+				copiedScan := builder.qry.Nodes[builder.qry.Nodes[copyID].Children[0]]
+				builder.rebindScanNode(copiedScan)
+				secondID := builder.copyNode(builder.ctxByNode[root], copiedScan.NodeId)
+				secondScan := builder.qry.Nodes[secondID]
+				indexes := builder.filterRegularIndexesByHints(secondScan, table.Indexes, func(hints *indexHintSet) indexHintScopeSet {
+					switch scope {
+					case tree.HintForJoin:
+						return hints.join
+					case tree.HintForOrderBy:
+						return hints.order
+					case tree.HintForGroupBy:
+						return hints.group
+					default:
+						return hints.scan
+					}
+				})
+				require.Len(t, indexes, 1)
+				if kind == tree.HintIgnore {
+					require.Equal(t, "idx_b", indexes[0].IndexName)
+				} else {
+					require.Equal(t, "idx_a", indexes[0].IndexName)
+				}
+				require.Same(t, builder.qry.Nodes[scanID], builder.indexHintOwnerScan(secondID), "copies retain the logical hint owner")
+				right := builder.qry.Nodes[copyID].Children[1]
+				require.Nil(t, builder.indexHintsByScan[right], "an unrelated scan must not inherit its sibling's hint")
+			})
+		}
 	}
 }

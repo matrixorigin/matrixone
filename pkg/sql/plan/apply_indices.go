@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
-	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -71,6 +70,7 @@ type specialIndexKind uint8
 const (
 	specialIndexKindFullText specialIndexKind = 1 << iota
 	specialIndexKindVector
+	specialIndexKindEquiVector
 )
 
 type specialIndexGuard struct {
@@ -312,6 +312,7 @@ func exprUsesOnlyMappedCols(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) bo
 }
 
 func (builder *QueryBuilder) prepareSpecialIndexGuards(rootID int32) {
+	builder.vectorCandidateAuto = nil
 	if builder.protectedScans == nil {
 		builder.protectedScans = make(map[int32]int)
 	} else {
@@ -332,6 +333,7 @@ func (builder *QueryBuilder) prepareSpecialIndexGuards(rootID int32) {
 }
 
 func (builder *QueryBuilder) resetSpecialIndexGuards() {
+	builder.vectorCandidateAuto = nil
 	if builder.protectedScans != nil {
 		for k := range builder.protectedScans {
 			delete(builder.protectedScans, k)
@@ -352,6 +354,9 @@ func (builder *QueryBuilder) collectSpecialIndexGuards(nodeID int32) {
 		}
 		if scanIDs := builder.detectVectorGuard(node); len(scanIDs) > 0 {
 			builder.registerProjectGuard(node.NodeId, specialIndexKindVector, scanIDs)
+		}
+		if scanIDs := builder.detectEquiVectorJoinGuard(node); len(scanIDs) > 0 {
+			builder.registerProjectGuard(node.NodeId, specialIndexKindEquiVector, scanIDs)
 		}
 	}
 
@@ -578,8 +583,14 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 	return fmt.Sprintf("%d", tblCol.GetSeqnum())
 }
 
-func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
-	defer builder.clearProjectGuard(projNode.NodeId)
+func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (rootID int32, err error) {
+	rootID = -1 // A planning panic must only release protection, not start another rewrite.
+	defer func() {
+		defer builder.clearProjectGuard(projNode.NodeId)
+		if guard := builder.projectSpecialGuards[projNode.NodeId]; err == nil && rootID >= 0 && guard != nil && guard.kinds&specialIndexKindEquiVector != 0 {
+			rootID = builder.applyDeferredEquiJoinIndexes(rootID, guard.scanNodeIDs, colRefCnt, idxColMap)
+		}
+	}()
 	var vecCtx *vectorSortContext
 	// FullText
 	{
@@ -644,6 +655,10 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 	}
 END_FULLTEXT:
 
+	if rewritten, applied, err := builder.applyVectorIndexForEquiJoin(nodeID); applied || err != nil {
+		return rewritten, err
+	}
+
 	// 1. Vector Index Check
 	// Handle Queries like
 	// SELECT id,embedding FROM tbl ORDER BY l2_distance(embedding, "[1,2,3]") LIMIT 10;
@@ -652,61 +667,23 @@ END_FULLTEXT:
 		vecCtx = builder.buildVectorSortContextThroughJoin(projNode)
 	}
 	if vecCtx != nil {
-		multiTableIndexes, err := builder.collectVectorIndexes(vecCtx.scanNode)
-		if err != nil {
-			return nodeID, err
+		if rewritten, applied, err := builder.applyVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap); applied || err != nil {
+			return rewritten, err
 		}
-		if len(multiTableIndexes) == 0 {
-			return nodeID, nil
-		}
-		// Preserve the dependency closure before a plugin is allowed to rewrite
-		// away the owning TABLE_SCAN. The final plan shape cannot be used as the
-		// source of truth after an index-only rewrite.
-		if err := builder.recordPreparedPluginDependencies(vecCtx.scanNode); err != nil {
-			return nodeID, err
-		}
-
-		var multiTableIndexKeys []string
-		for key := range multiTableIndexes {
-			multiTableIndexKeys = append(multiTableIndexKeys, key)
-		}
-
-		// Plugin-mediated dispatch — every plugin-registered vector
-		// index exposes Hooks.ApplyForSort, which routes back into the
-		// builder's per-algo redirect (plugin_builder.go) and then into
-		// the real body in apply_indices_<algo>.go. The pluginless
-		// hardcoded switch was the bug surface that let CAGRA / IVF-PQ
-		// drift behind HNSW / IVF-FLAT; one loop here keeps the algo
-		// set canonical.
-		opts := planplugin.ApplyForSortOpts{ColRefCnt: colRefCnt, IdxColMap: idxColMap}
-		for _, multiTableIndexKey := range multiTableIndexKeys {
-			multiTableIndex := multiTableIndexes[multiTableIndexKey]
-			// Defence in depth: collectVectorIndexes already filters
-			// via IsVectorIndexAlgo, but the dispatch site re-checks so
-			// a future change that loosens collectVectorIndexes can't
-			// silently route fulltext (or any other non-vector
-			// plugin-registered algo) through the vector ANN rewrite
-			// path. indexplugin.Get alone is not sufficient — fulltext
-			// is plugin-registered too.
-			if !indexplugin.IsVectorIndexAlgo(multiTableIndex.IndexAlgo) ||
-				!vectorIndexSupportsContext(vecCtx, multiTableIndex.IndexAlgo) {
-				continue
-			}
-			p, ok := indexplugin.Get(multiTableIndex.IndexAlgo)
-			if !ok {
-				continue
-			}
-			vctxExt, mtiExt := toPlanplugin(vecCtx, multiTableIndex)
-			newNodeID, applied, err := p.Plan().ApplyForSort(builder, vctxExt, mtiExt, nodeID, opts)
-			if err != nil {
-				return newNodeID, err
-			}
-			if applied {
-				return newNodeID, nil
-			}
-		}
-
 		builder.stabilizeExactVectorSort(vecCtx)
+	}
+	if guard := builder.projectSpecialGuards[nodeID]; guard != nil && guard.kinds&specialIndexKindEquiVector != 0 {
+		// No special rewrite was adopted. Return the original subtree to the
+		// ordinary index owner, including its FORCE JOIN-before-filter ordering
+		// and error propagation. Do not revisit this PROJECT or an adopted ANN plan.
+		builder.clearProjectGuard(nodeID)
+		for i, childID := range projNode.Children {
+			projNode.Children[i], err = builder.applyIndices(childID, colRefCnt, idxColMap)
+			if err != nil {
+				return -1, err
+			}
+		}
+		replaceColumnsForNode(projNode, idxColMap)
 	}
 	// 2. Regular Index Check
 	{
