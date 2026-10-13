@@ -11,7 +11,8 @@ import pytest
 import pytest_asyncio
 import sqlalchemy
 from sqlalchemy import Column, Integer, String, bindparam, create_engine, event, literal, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, StatementError
+from sqlalchemy.ext.asyncio import AsyncSession as ParentAsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import Session as ParentSession
 from sqlalchemy.orm import declarative_base
@@ -480,10 +481,43 @@ def transformed_expected(value, composed):
     return (value + '|typed', 7) if composed else (value + '|typed',)
 
 
+def assert_parent_named_percent_error(error):
+    # Some SQLAlchemy releases mistake quoted named-percent syntax for a
+    # positional bind. Qualify this exact inherited failure with a real parent
+    # Session, rather than assuming it affects only one patch release.
+    assert isinstance(error.orig, KeyError)
+    assert error.orig.args == ('tag',)
+
+
+def parent_named_percent_error(engine, composed):
+    with ParentSession(bind=engine) as session:
+        event.listen(session, 'do_orm_execute', lambda state: transform_literal(state, composed))
+        try:
+            result = session.execute(text(transformed_query('%(tag)s')))
+        except StatementError as error:
+            assert_parent_named_percent_error(error)
+            return True
+        assert tuple(result.one()) == transformed_expected('%(tag)s', composed)
+        return False
+
+
+async def async_parent_named_percent_error(engine, composed):
+    async with ParentAsyncSession(bind=engine) as session:
+        event.listen(session.sync_session, 'do_orm_execute', lambda state: transform_literal(state, composed))
+        try:
+            result = await session.execute(text(transformed_query('%(tag)s')))
+        except StatementError as error:
+            assert_parent_named_percent_error(error)
+            return True
+        assert tuple(result.one()) == transformed_expected('%(tag)s', composed)
+        return False
+
+
 @pytest.mark.parametrize('cls', [ClientSession, ExportedSession])
 @pytest.mark.parametrize('composed', [False, True])
 @pytest.mark.parametrize('no_parameters', [False, True])
 def test_transformed_literals_and_outer_binds(client, cls, composed, no_parameters):
+    parent_error = parent_named_percent_error(client._engine, composed)
     with session_for(client, cls) as session:
         event.listen(session, 'do_orm_execute', lambda state: transform_literal(state, composed))
         for value in ['ordinary', '100%', '%s']:
@@ -492,11 +526,9 @@ def test_transformed_literals_and_outer_binds(client, cls, composed, no_paramete
                 result = session.execute(statement, execution_options={'no_parameters': no_parameters})
                 assert tuple(result.one()) == transformed_expected(value, composed)
         assert tuple(session.execute(transformed_query(':tag')).one()) == transformed_expected(':tag', composed)
-        # 2.0.44's positional scan mistakes literal named-percent syntax for a
-        # bind even with unchanged text(). Keep an executed parent control.
         for statement in [text(transformed_query('%(tag)s')), transformed_query('%(tag)s')]:
-            if sqlalchemy.__version__ == '2.0.44':
-                with pytest.raises(QueryError, match="tag"):
+            if parent_error:
+                with pytest.raises(QueryError, match=r"\(builtins.KeyError\) 'tag'"):
                     session.execute(statement)
             else:
                 assert tuple(session.execute(statement).one()) == transformed_expected('%(tag)s', composed)
@@ -506,6 +538,7 @@ def test_transformed_literals_and_outer_binds(client, cls, composed, no_paramete
 @pytest.mark.parametrize('composed', [False, True])
 @pytest.mark.parametrize('no_parameters', [False, True])
 async def test_async_transformed_literals_and_outer_binds(async_client, composed, no_parameters):
+    parent_error = await async_parent_named_percent_error(async_client._engine, composed)
     async with async_client.session() as session:
         event.listen(session.sync_session, 'do_orm_execute', lambda state: transform_literal(state, composed))
         for value in ['ordinary', '100%', '%s']:
@@ -515,8 +548,8 @@ async def test_async_transformed_literals_and_outer_binds(async_client, composed
                 assert tuple(result.one()) == transformed_expected(value, composed)
         assert tuple((await session.execute(transformed_query(':tag'))).one()) == transformed_expected(':tag', composed)
         for statement in [text(transformed_query('%(tag)s')), transformed_query('%(tag)s')]:
-            if sqlalchemy.__version__ == '2.0.44':
-                with pytest.raises(QueryError, match="tag"):
+            if parent_error:
+                with pytest.raises(QueryError, match=r"\(builtins.KeyError\) 'tag'"):
                     await session.execute(statement)
             else:
                 assert tuple((await session.execute(statement)).one()) == transformed_expected('%(tag)s', composed)
