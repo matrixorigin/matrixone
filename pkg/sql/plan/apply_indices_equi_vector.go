@@ -208,8 +208,8 @@ func (builder *QueryBuilder) applyVectorIndexForEquiJoin(nodeID int32) (int32, b
 	return nodeID, true, nil
 }
 
-// Complete only the scalar-index work deferred by this equi-join guard. This
-// runs after all special-index attempts, including their declined-rewrite path.
+// Complete the filter-index work deferred by this equi-join guard after an
+// adopted special rewrite. Declined rewrites resume the ordinary index traversal.
 func (builder *QueryBuilder) applyDeferredEquiJoinIndexes(
 	rootID int32, scanIDs []int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr,
 ) int32 {

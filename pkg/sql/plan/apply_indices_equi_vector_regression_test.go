@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -206,6 +207,97 @@ func TestEquiVectorDeclinedRewriteRestoresScalarIndexes(t *testing.T) {
 		}
 	}
 	require.ElementsMatch(t, []string{"idx_category", "idx_label_document"}, indexes)
+}
+
+func TestEquiVectorDeclinedRewriteRestoresJoinIndexes(t *testing.T) {
+	const left = "select a.id,b.label from equi_chunks a %s join equi_documents b on a.document_id=b.document_id where b.label='allowed'"
+	const right = "select a.id,b.label from equi_documents b join equi_chunks a %s on b.document_id=a.document_id where b.label='allowed'"
+	for _, tc := range []struct {
+		name, shape, hint, filter, mode string
+		indexes                         int
+	}{
+		{"force_join", left, "force index for join(idx_document)", "", "", 1},
+		{"unforced_cost_control", left, "", "", "", 0},
+		{"unforced_vector_force_control", left, "", "", " by rank with option 'mode=force'", 0},
+		{"reversed_control", right, "force index for join(idx_document)", "", "", 1},
+		{"vector_force_control", left, "force index for join(idx_document)", "", " by rank with option 'mode=force'", 1},
+		{"force_precedes_filter", left, "force index for join(idx_document)", " and a.category='x'", "", 1},
+		{"ignore_join", left, "ignore index for join(idx_document)", "", "", 0},
+		{"use_other_join_index", left, "use index for join(idx_category_document)", "", "", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sql := fmt.Sprintf(tc.shape, tc.hint) + tc.filter + " order by l2_distance(a.v,'[0,0]') limit 2" + tc.mode
+			q := equiVectorPlanFixture(t, sql, false, false, func(ctx *customMockCompilerContext) {
+				a := ctx.tables["equi_chunks"]
+				a.Cols[0].Typ = plan.Type{Id: int32(types.T_int64), NotNullable: true}
+				equiVectorInputIndexFixture(ctx)
+				const table = "__mo_index_equi_document"
+				a.Indexes = append(a.Indexes, &plan.IndexDef{IndexName: "idx_document", IndexAlgo: "btree",
+					IndexTableName: table, TableExist: true, Parts: []string{"document_id", catalog.CreateAlias("id")}})
+				ctx.tables[table] = DeepCopyTableDef(ctx.tables["__mo_index_equi_chunks_category"], true)
+				ctx.tables[table].Name, ctx.tables[table].TblId = table, 897
+				ctx.objects[table] = &plan.ObjectRef{SchemaName: "tpch", ObjName: table, Obj: 897}
+				rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
+				original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+				t.Cleanup(func() {
+					if hadOriginal {
+						rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+					} else {
+						rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+					}
+				})
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion9)
+			})
+			require.Empty(t, equiVectorSearchNodes(q), "membership must decline below its protocol gate")
+			var indexes []string
+			for id := range reachableVectorJoinNodeIDs(q, q.Steps[0]) {
+				if name := q.Nodes[id].IndexScanInfo.IndexName; name != "" {
+					indexes = append(indexes, name)
+				}
+			}
+			if tc.indexes == 1 {
+				require.Equal(t, []string{"idx_document"}, indexes, "JOIN selection must precede competing filter access for FORCE JOIN")
+			} else {
+				require.Empty(t, indexes, "fallback must retain ordinary JOIN eligibility and hint restrictions")
+			}
+		})
+	}
+}
+
+func TestEquiVectorFallbackRestoresCostBasedJoinIndex(t *testing.T) {
+	builder, joinID, scanID, _ := makeIndexHintJoinBuilder(t)
+	ctx := builder.ctxByNode[joinID]
+	projectID := builder.appendNode(&plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{joinID}}, ctx)
+	builder.registerProjectGuard(projectID, specialIndexKindEquiVector, []int32{scanID})
+	root, err := builder.applyIndicesForProject(projectID, builder.qry.Nodes[projectID], map[[2]int32]int{}, map[[2]int32]*plan.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, projectID, root)
+	var indexes []string
+	for id := range reachableVectorJoinNodeIDs(builder.qry, root) {
+		if name := builder.qry.Nodes[id].IndexScanInfo.IndexName; name != "" {
+			indexes = append(indexes, name)
+		}
+	}
+	require.Equal(t, []string{"idx_a"}, indexes, "selective JOIN inputs must retain cost-based access without FORCE")
+	require.Empty(t, builder.projectSpecialGuards)
+	require.Empty(t, builder.protectedScans)
+}
+
+func TestEquiVectorFallbackPropagatesJoinIndexError(t *testing.T) {
+	builder, joinID, scanID, table := makeIndexHintJoinBuilder(t)
+	ctx := builder.ctxByNode[joinID]
+	projectID := builder.appendNode(&plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{joinID}}, ctx)
+	require.NoError(t, builder.recordIndexHints(scanID, table, []*tree.IndexHint{{
+		HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"idx_a"},
+	}}))
+	// Exercise completion after an earlier guard's shape is no longer eligible.
+	builder.registerProjectGuard(projectID, specialIndexKindEquiVector, []int32{scanID})
+	builder.compCtx.(*fullTextJoinMockCompilerContext).tables["idx_join_a_table"].Cols = nil
+	root, err := builder.applyIndicesForProject(projectID, builder.qry.Nodes[projectID], map[[2]int32]int{}, map[[2]int32]*plan.Expr{})
+	require.ErrorContains(t, err, "invalid metadata for index idx_a")
+	require.Equal(t, int32(-1), root)
+	require.Empty(t, builder.projectSpecialGuards)
+	require.Empty(t, builder.protectedScans)
 }
 
 func TestEquiVectorGuardCleanupOnPlanningPanic(t *testing.T) {

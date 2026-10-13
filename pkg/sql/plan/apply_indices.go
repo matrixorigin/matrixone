@@ -672,6 +672,19 @@ END_FULLTEXT:
 		}
 		builder.stabilizeExactVectorSort(vecCtx)
 	}
+	if guard := builder.projectSpecialGuards[nodeID]; guard != nil && guard.kinds&specialIndexKindEquiVector != 0 {
+		// No special rewrite was adopted. Return the original subtree to the
+		// ordinary index owner, including its FORCE JOIN-before-filter ordering
+		// and error propagation. Do not revisit this PROJECT or an adopted ANN plan.
+		builder.clearProjectGuard(nodeID)
+		for i, childID := range projNode.Children {
+			projNode.Children[i], err = builder.applyIndices(childID, colRefCnt, idxColMap)
+			if err != nil {
+				return -1, err
+			}
+		}
+		replaceColumnsForNode(projNode, idxColMap)
+	}
 	// 2. Regular Index Check
 	{
 		if ctx := builder.buildRegularIndexTopSortContext(projNode); ctx != nil {
