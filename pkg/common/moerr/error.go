@@ -232,7 +232,8 @@ const (
 	ErrTooBigFieldLength            uint16 = 20480
 	// ErrNeedReprepare is returned when a prepared statement depends on
 	// session state that has been invalidated and must not be executed again.
-	ErrNeedReprepare uint16 = 20481
+	ErrNeedReprepare    uint16 = 20481
+	ErrSPRecursionLimit uint16 = 20482
 
 	// Group 5: rpc errors
 	//
@@ -538,6 +539,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTableAlreadyExists:                       {ER_TABLE_EXISTS_ERROR, []string{"42S01"}, "table %s already exists"},
 	ErrFunctionAlreadyExists:                    {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "function %s already exists"},
 	ErrProcedureAlreadyExists:                   {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "procedure %s already exists"},
+	ErrSPRecursionLimit:                         {ER_SP_RECURSION_LIMIT, []string{MySQLDefaultSqlState}, "Recursive limit %d (as set by the max_sp_recursion_depth variable) was exceeded for routine %.192s"},
 	ErrDropNonExistsFunction:                    {ER_CANT_FIND_UDF, []string{MySQLDefaultSqlState}, "function %s doesn't exist"},
 	ErrNoService:                                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "service %s not found"},
 	ErrDupServiceName:                           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicate service name %s"},
@@ -1947,6 +1949,10 @@ func NewErrForeignKeyOnPartitioned(ctx context.Context) *Error {
 }
 func NewCheckRecursiveLevel(ctx context.Context) *Error {
 	return newError(ctx, ErrCheckRecursiveLevel)
+}
+
+func NewSPRecursionLimit(ctx context.Context, limit int64, routine string) *Error {
+	return newError(ctx, ErrSPRecursionLimit, limit, routine)
 }
 
 func NewCteMemoryQuotaExceeded(ctx context.Context, projected, limit uint64) *Error {

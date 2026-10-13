@@ -166,6 +166,14 @@ func TestWrongArgumentsMySQLError(t *testing.T) {
 	require.Equal(t, "Incorrect arguments to nth_value", err.Error())
 }
 
+func TestSPRecursionLimitMySQLError(t *testing.T) {
+	err := NewSPRecursionLimit(context.Background(), 1, "self_rec")
+	require.Equal(t, ErrSPRecursionLimit, err.ErrorCode())
+	require.Equal(t, uint16(1456), err.MySQLCode())
+	require.Equal(t, "HY000", err.SqlState())
+	require.Equal(t, "Recursive limit 1 (as set by the max_sp_recursion_depth variable) was exceeded for routine self_rec", err.Error())
+}
+
 func TestWindowInvalidUseMySQLError(t *testing.T) {
 	err := NewWindowInvalidUse(context.Background(), "row_number")
 	require.Equal(t, ErrWindowInvalidUse, err.ErrorCode())

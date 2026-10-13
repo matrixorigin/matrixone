@@ -12396,6 +12396,10 @@ func doInterpretCall(
 		}
 		defer freeStatements(stmt)
 
+		interpreter.ctx, err = enterSQLProcedure(ctx, ses, dbName, string(call.Name.Name.ObjectName))
+		if err != nil {
+			return nil, err
+		}
 		err = interpreter.ExecuteSp(stmt[0], dbName, bg)
 		if err != nil {
 			return nil, err
