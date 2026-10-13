@@ -4254,7 +4254,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 	if len(secondaryIndexInfos) != 0 {
-		err = buildSecondaryIndexDef(createTable, secondaryIndexInfos, colMap, nil, pkeyName, ctx)
+		err = buildSecondaryIndexDef(createTable, secondaryIndexInfos, colMap, nil, pkeyName, ctx, createTable.TableDef)
 		if err != nil {
 			return err
 		}
@@ -4971,7 +4971,7 @@ func addIndexPrefixLengthsToParams(ctx CompilerContext, indexParams string, keyP
 	return catalog.AddIndexPrefixLengthsToParams(indexParams, keyParts)
 }
 
-func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) (err error) {
+func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext, bindingTable *TableDef) (err error) {
 	if len(pkeyName) == 0 {
 		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for secondary index")
 	}
@@ -5008,7 +5008,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		}
 		for _, def := range indexDef {
 			if def != nil {
-				if err = setFunctionalJSONIndexSemantics(ctx.GetContext(), createTable.TableDef, def); err != nil {
+				if err = setFunctionalJSONIndexSemantics(ctx.GetContext(), bindingTable, def); err != nil {
 					return err
 				}
 				def.KeyFormat = createTable.TableDef.KeyFormat
@@ -6150,7 +6150,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		createIndex.TableExist = true
 	}
 	if sIdx != nil {
-		if err := buildSecondaryIndexDef(indexInfo, []*tree.Index{sIdx}, colMap, tableDef.Indexes, oriPriKeyName, ctx); err != nil {
+		if err := buildSecondaryIndexDef(indexInfo, []*tree.Index{sIdx}, colMap, tableDef.Indexes, oriPriKeyName, ctx, tableDef); err != nil {
 			return nil, err
 		}
 		createIndex.TableExist = true
@@ -6936,6 +6936,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					currentTableDef.Indexes,
 					oriPriKeyName,
 					ctx,
+					currentTableDef,
 				); err != nil {
 					return nil, err
 				}

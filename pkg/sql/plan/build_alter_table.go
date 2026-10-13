@@ -801,7 +801,7 @@ func buildAlterCopyAddIndex(
 		}
 		if err := buildFullTextIndexTable(
 			indexInfo, []*tree.FullTextIndex{index}, colMap,
-			copyTableDef.Indexes, primaryKeyName, ctx,
+			copyTableDef.Indexes, primaryKeyName, ctx, copyTableDef,
 		); err != nil {
 			return nil, "", err
 		}
@@ -828,7 +828,7 @@ func buildAlterCopyAddIndex(
 		}
 		if err := buildSecondaryIndexDef(
 			indexInfo, []*tree.Index{index}, colMap,
-			copyTableDef.Indexes, primaryKeyName, ctx,
+			copyTableDef.Indexes, primaryKeyName, ctx, copyTableDef,
 		); err != nil {
 			return nil, "", err
 		}
