@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	limitop "github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -2946,14 +2947,12 @@ func TestLockOpSkipLockedFiltersRowsAndContinuesAfterAllSkippedBatch(t *testing.
 		require.Equal(t, []int32{10, 30}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[1]))
 		require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColWithTypeCheck[int32](first.Vecs[0]),
 			"the candidate source batch must remain unchanged")
-		result.Batch.Clean(proc.Mp())
 
 		// The second source batch has no admissible row. The operator must keep
 		// pulling instead of returning a false EOF, then expose the next free row.
 		result, err = vm.Exec(arg, proc)
 		require.NoError(t, err)
 		require.Equal(t, []int32{5}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
-		result.Batch.Clean(proc.Mp())
 
 		result, err = vm.Exec(arg, proc)
 		require.NoError(t, err)
@@ -3080,10 +3079,16 @@ func TestLockOpSkipLockedAllowsCompatibleSharedHolder(t *testing.T) {
 		require.NoError(t, arg.Prepare(proc))
 		arg.ctr.hasNewVersionInRange = testFunc
 
-		result, err := vm.Exec(arg, proc)
+		limit := limitop.NewArgument().WithLimit(plan2.MakePlan2Uint64ConstExprWithType(1))
+		defer limit.Free(proc, false, nil)
+		limit.AppendChild(arg)
+		require.NoError(t, limit.Prepare(proc))
+
+		// Exercise the actual LIMIT consumer: it must receive the row-refresh
+		// retry from LockOp before it can publish the valid-looking prefix.
+		result, err := vm.Exec(limit, proc)
 		require.NoError(t, err)
 		require.Equal(t, []int32{9}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
-		result.Batch.Clean(proc.Mp())
 
 		// The result's Shared grant is compatible with another Shared owner but
 		// blocks an Exclusive request, matching FOR SHARE rather than a queue claim.
@@ -3114,6 +3119,126 @@ func TestLockOpSkipLockedAllowsCompatibleSharedHolder(t *testing.T) {
 		)
 		require.ErrorIs(t, err, lockservice.ErrLockConflict)
 		require.NoError(t, service.Unlock(proc.Ctx, []byte("skip-locked-exclusive-probe"), timestamp.Timestamp{}))
+	})
+}
+
+func TestLockOpSkipLockedRetryIsReturnedBeforePublishingPrefix(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		const tableID = uint64(756)
+		runtime.SetupServiceRuntimeTestingContext(proc.GetService())
+		testingContext := runtime.MustGetTestingContext(proc.GetService())
+		testingContext.SetBeforeLockFunc(func(_ []byte, _ uint64) {})
+		defer testingContext.SetBeforeLockFunc(nil)
+		statementSnapshot := proc.GetTxnOperator().Txn().SnapshotTS
+		testingContext.SetAdjustLockResultFunc(func(_ []byte, _ uint64, result *lock.Result) {
+			result.NewLockAdd = true
+			result.HasConflict = false
+			result.Timestamp = statementSnapshot.Next()
+		})
+		defer testingContext.SetAdjustLockResultFunc(nil)
+
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+		input.SetRowCount(2)
+		defer input.Clean(proc.Mp())
+
+		arg := NewArgumentByEngine(nil)
+		defer arg.Free(proc, false, nil)
+		arg.AddLockTargetWithPolicy(
+			tableID, nil, lock.LockMode_Shared, 0, types.T_int32.ToType(),
+			-1, -1, nil, false, false, true,
+		)
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = func(
+			_ *process.Process,
+			_ engine.Relation,
+			_ process.Analyzer,
+			_ uint64,
+			_ engine.Engine,
+			bat *batch.Batch,
+			_ int32,
+			_ int32,
+			_, _ timestamp.Timestamp,
+		) (bool, error) {
+			// The first row is a valid prefix; the second simulates a newer RC
+			// version discovered during the same pull. A downstream LIMIT 1 must
+			// not make that prefix observable before the retry bubbles up.
+			return vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])[0] == 2, nil
+		}
+
+		result, err := vm.Exec(arg, proc)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry), "%v", err)
+		require.Nil(t, result.Batch, "retrying rows must not be returned to a consumer")
+		require.True(t, moerr.IsMoErrCode(arg.ctr.retryError, moerr.ErrTxnNeedRetry))
+	}, client.WithTimestampWaiter(immediateLockTimestampWaiter{}))
+}
+
+func TestLockOpSkipLockedResetReleasesBorrowedOutput(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+		input.SetRowCount(1)
+		defer input.Clean(proc.Mp())
+		inputOwnedBytes := proc.Mp().CurrNB() + proc.Mp().OnHeapCurrNB()
+
+		arg := NewArgumentByEngine(nil)
+		defer arg.Free(proc, false, nil)
+		arg.AddLockTargetWithPolicy(
+			uint64(758), nil, lock.LockMode_Shared, 0, types.T_int32.ToType(),
+			-1, -1, nil, false, false, true,
+		)
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Equal(t, []int32{1}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+		outputOwnedBytes := proc.Mp().CurrNB() + proc.Mp().OnHeapCurrNB()
+		require.Greater(t, outputOwnedBytes, inputOwnedBytes,
+			"the returned copy stays owned while a consumer borrows it")
+
+		arg.Reset(proc, false, nil)
+		require.Equal(t, inputOwnedBytes,
+			proc.Mp().CurrNB()+proc.Mp().OnHeapCurrNB(),
+			"Reset must reclaim the output without requiring consumer Clean")
+	})
+}
+
+func TestLockOpSkipLockedFreeReleasesBorrowedOutput(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+		input.SetRowCount(1)
+		defer input.Clean(proc.Mp())
+		inputOwnedBytes := proc.Mp().CurrNB() + proc.Mp().OnHeapCurrNB()
+
+		arg := NewArgumentByEngine(nil)
+		freed := false
+		defer func() {
+			if !freed {
+				arg.Free(proc, false, nil)
+			}
+		}()
+		arg.AddLockTargetWithPolicy(
+			uint64(759), nil, lock.LockMode_Shared, 0, types.T_int32.ToType(),
+			-1, -1, nil, false, false, true,
+		)
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Equal(t, []int32{1}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+		require.Greater(t, proc.Mp().CurrNB()+proc.Mp().OnHeapCurrNB(), inputOwnedBytes)
+
+		arg.Free(proc, false, nil)
+		freed = true
+		require.Equal(t, inputOwnedBytes, proc.Mp().CurrNB()+proc.Mp().OnHeapCurrNB(),
+			"Free must reclaim the output without requiring consumer Clean")
 	})
 }
 

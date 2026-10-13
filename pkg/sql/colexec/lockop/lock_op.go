@@ -190,16 +190,27 @@ func (lockOp *LockOp) validateSkipLockedTargets() error {
 func callSkipLocked(
 	proc *process.Process,
 	lockOp *LockOp) (vm.CallResult, error) {
+	// CallResult batches are borrowed by downstream operators. A new Call means
+	// the previous result has been consumed, so this operator can reclaim its
+	// copy before reading another child batch.
+	lockOp.cleanSkipLockedOutput(proc)
 	analyzer := lockOp.OpAnalyzer
 	for {
 		result, err := vm.ChildrenCall(lockOp.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
 		}
+		if lockOp.ctr.retryError != nil {
+			// Row refreshes may be discovered while filtering a batch. Surface the
+			// retry before publishing any accepted prefix, including when a
+			// downstream LIMIT would otherwise stop before the next EOF call.
+			result.Batch = nil
+			return result, lockOp.ctr.retryError
+		}
 		if result.Batch == nil {
 			// Unlike ordinary LockOp EOF, SKIP LOCKED has no synthetic lockRows
 			// or absent-key/table grant to perform here.
-			return result, nil
+			return result, lockOp.ctr.retryError
 		}
 
 		input := result.Batch
@@ -236,6 +247,12 @@ func callSkipLocked(
 			if err != nil {
 				return result, err
 			}
+			if lockOp.ctr.retryError != nil {
+				// accepted contains only an unpublished row-index prefix. Return the
+				// retry now instead of creating a batch that a LIMIT could expose.
+				result.Batch = nil
+				return result, lockOp.ctr.retryError
+			}
 			accepted = append(accepted, int64(rowIdx))
 		}
 
@@ -251,7 +268,15 @@ func callSkipLocked(
 			// downstream operator. Pull another candidate batch instead.
 			continue
 		}
+		lockOp.ctr.skipLockedOutput = output
 		return result, nil
+	}
+}
+
+func (lockOp *LockOp) cleanSkipLockedOutput(proc *process.Process) {
+	if lockOp.ctr.skipLockedOutput != nil {
+		lockOp.ctr.skipLockedOutput.Clean(proc.Mp())
+		lockOp.ctr.skipLockedOutput = nil
 	}
 }
 
@@ -2056,6 +2081,7 @@ func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 }
 
 func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	lockOp.cleanSkipLockedOutput(proc)
 	lockOp.resetParker()
 	lockOp.ctr.retryError = nil
 	lockOp.ctr.defChanged = false
@@ -2064,6 +2090,7 @@ func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err erro
 
 // Free free mem
 func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error) {
+	lockOp.cleanSkipLockedOutput(proc)
 	lockOp.cleanParker()
 	lockOp.ctr.relations = nil
 }

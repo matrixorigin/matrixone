@@ -142,7 +142,11 @@ type hasNewVersionInRangeFunc func(
 	from, to timestamp.Timestamp) (bool, error)
 
 type state struct {
-	parker               *types.Packer
+	parker *types.Packer
+	// skipLockedOutput is the operator-owned copy returned to downstream
+	// consumers. It remains live until the next Call or operator cleanup so a
+	// consumer may finish using the borrowed batch before it is reclaimed.
+	skipLockedOutput     *batch.Batch
 	retryError           error
 	defChanged           bool
 	fetchers             []FetchLockRowsFunc

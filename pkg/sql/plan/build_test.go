@@ -8358,6 +8358,8 @@ func TestDeepCopyPreservesSharedLockMode(t *testing.T) {
 		TableId:              42,
 		ObjRef:               &plan.ObjectRef{Obj: 42, ObjName: "parent"},
 		Mode:                 lockpb.LockMode_Shared,
+		NoWait:               true,
+		SkipLocked:           true,
 		PrimaryColRelPos:     11,
 		FilterColRelPos:      12,
 		PartitionColIdxInBat: 13,
@@ -8367,6 +8369,8 @@ func TestDeepCopyPreservesSharedLockMode(t *testing.T) {
 	assertScalarFields := func(t *testing.T, copied *plan.LockTarget) {
 		t.Helper()
 		assert.Equal(t, lockpb.LockMode_Shared, copied.Mode)
+		assert.True(t, copied.NoWait)
+		assert.True(t, copied.SkipLocked)
 		assert.Equal(t, int32(11), copied.PrimaryColRelPos)
 		assert.Equal(t, int32(12), copied.FilterColRelPos)
 		assert.Equal(t, int32(13), copied.PartitionColIdxInBat)
