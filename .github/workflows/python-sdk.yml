@@ -1,10 +1,7 @@
 name: Python SDK
 
 on:
-  pull_request:
-    paths:
-      - 'clients/python/**'
-      - '.github/workflows/python-sdk.yml'
+  workflow_call:
   push:
     branches: [main, develop]
     paths:
@@ -21,11 +18,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: python-sdk-${{ github.workflow }}-${{ github.ref }}
+  group: python-sdk/${{ github.workflow }}/${{ github.event.pull_request.head.repo.full_name || github.repository }}/${{ github.event.pull_request.head.ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
   offline:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -43,7 +41,25 @@ jobs:
       run:
         working-directory: clients/python
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          # Fork code runs only on this read-only, secret-free hosted runner.
+          allow-unsafe-pr-checkout: ${{ github.event_name == 'pull_request_target' }}
+      - name: Record SDK provenance
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          {
+            echo '### SDK provenance'
+            echo "- Workflow SHA: ${WORKFLOW_SHA}"
+            echo "- PR base SHA: ${PR_BASE_SHA}"
+            echo "- Checkout SHA: ${CHECKOUT_SHA}"
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
@@ -52,6 +68,11 @@ jobs:
           SQLALCHEMY_RANGE: ${{ matrix.sqlalchemy }}
         run: |
           python -m pip install -e '.[test]' "SQLAlchemy[asyncio]${SQLALCHEMY_RANGE}" pytest-asyncio pytest-subtests
+      - name: Check fatal Python errors
+        if: ${{ matrix.python == '3.12' && matrix.sqlalchemy == '>=2.0,<2.1' }}
+        run: |
+          python -m pip install 'flake8>=4.0'
+          python -m flake8 matrixone --select=E9,F63,F7,F82 --show-source --statistics
       - name: Run SDK offline suite
         run: |
           if test -d tests/analytics; then
@@ -66,9 +87,9 @@ jobs:
           python -m build --outdir dist
           python -m twine check dist/*
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ !cancelled() }}
         with:
-          name: python-sdk-${{ strategy.job-index }}
+          name: python-sdk-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
           path: |
             clients/python/offline.xml
             clients/python/dist/*
@@ -142,5 +163,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: python-sdk-online
+          name: python-sdk-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-online
           path: clients/python/online.xml

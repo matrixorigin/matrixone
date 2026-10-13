@@ -13,10 +13,17 @@
 // limitations under the License.
 'use strict';
 
-// This allowlist is deliberately narrow: test helpers, fixtures, configuration,
-// dependencies, CI code and unknown paths all retain the complete test suite.
+// Kernel exemptions remain narrow. SDK changes have their own complete suite;
+// shared helpers, build/CI configuration and unknown paths retain kernel CI.
+function validPath(path) {
+  return typeof path === 'string' && !path.split('/').some(p => !p || p === '.' || p === '..');
+}
+
+const sdkControlPaths = ['.github/workflows/python-sdk.yml',
+  '.github/ci/change-scope.cjs', '.github/workflows/entrypoint.yaml'];
 function category(path) {
-  if (typeof path !== 'string' || path.split('/').some(p => !p || p === '.' || p === '..')) return 'full';
+  if (!validPath(path)) return 'full';
+  if (path.startsWith('clients/python/')) return 'sdk';
   if (/^(README(?:_CN)?|CONTRIBUTING|CHANGELOG)\.md$/.test(path) ||
       /^docs\/.*\.(md|png|jpg|jpeg|gif|svg)$/.test(path)) return 'docs';
   if (/^pkg\/.*_test\.go$/.test(path)) return 'ut';
@@ -26,24 +33,30 @@ function category(path) {
 
 function classify(files, expectedCount, forceFull = false) {
   if (forceFull || !Array.isArray(files) || files.length === 0 ||
-      files.length !== expectedCount || files.length >= 3000) return 'full';
+      files.length !== expectedCount || files.length >= 3000) return { scope: 'full', sdk_required: true };
   const kinds = new Set();
   const names = new Set();
+  let sdkRequired = false;
   for (const file of files) {
     if (!file || !['added', 'modified', 'removed', 'renamed'].includes(file.status) ||
-        typeof file.filename !== 'string' || names.has(file.filename)) return 'full';
+        !validPath(file.filename) || names.has(file.filename)) return { scope: 'full', sdk_required: true };
     names.add(file.filename);
-    kinds.add(category(file.filename));
-    // Moving production code into a test/document path must still run full CI.
+    const paths = [file.filename];
+    // Both kernel scope and SDK impact follow both sides of a rename.
     if (file.status === 'renamed') {
-      if (!file.previous_filename) return 'full';
-      kinds.add(category(file.previous_filename));
+      if (!validPath(file.previous_filename)) return { scope: 'full', sdk_required: true };
+      paths.push(file.previous_filename);
+    }
+    for (const path of paths) {
+      const kind = category(path);
+      kinds.add(kind);
+      sdkRequired ||= kind === 'sdk' || sdkControlPaths.includes(path);
     }
   }
-  if (kinds.has('full')) return 'full';
   kinds.delete('docs');
-  if (kinds.size === 0) return 'docs';
-  return kinds.size === 1 ? [...kinds][0] : 'full';
+  const scope = kinds.size === 0 ? 'docs' :
+    kinds.size === 1 ? [...kinds][0] : 'full';
+  return { scope, sdk_required: sdkRequired };
 }
 
 async function resolveScope({ github, context, forceFull }) {
@@ -53,17 +66,17 @@ async function resolveScope({ github, context, forceFull }) {
   const sameRevision = pr => pr.head.sha === eventPR.head.sha && pr.base.sha === eventPR.base.sha;
   const before = (await github.rest.pulls.get(params)).data;
   if (!sameRevision(before)) throw new Error('PR revision changed; use the newer CI run');
-  let scope = 'full';
+  let plan = { scope: 'full', sdk_required: true };
   try {
     const files = await github.paginate(github.rest.pulls.listFiles, { ...params, per_page: 100 });
-    scope = classify(files, before.changed_files, forceFull);
+    plan = classify(files, before.changed_files, forceFull);
   } catch {
     // An unavailable or incomplete file list must never grant a test exemption.
-    scope = 'full';
+    plan = { scope: 'full', sdk_required: true };
   }
   const after = (await github.rest.pulls.get(params)).data;
   if (!sameRevision(after)) throw new Error('PR revision changed while classifying');
-  return scope;
+  return plan;
 }
 
 function verifyResults(scope, needs) {
@@ -71,13 +84,21 @@ function verifyResults(scope, needs) {
       needs.preflight?.outputs?.pr_valid !== 'true') {
     throw new Error('PR validation or scope planning did not succeed');
   }
+  const sdkRequired = needs.preflight.outputs.sdk_required;
+  if (!['true', 'false'].includes(sdkRequired) ||
+      (scope === 'sdk' && sdkRequired !== 'true') ||
+      (['docs', 'ut', 'bvt'].includes(scope) && sdkRequired !== 'false')) {
+    throw new Error('Missing or inconsistent SDK requirement');
+  }
   const required = {
     docs: ['docs-check'],
+    sdk: ['python-sdk'],
     ut: ['matrixone-ci'],
     bvt: ['matrixone-compose-ci', 'matrixone-standalone-ci'],
     full: ['matrixone-ci', 'matrixone-ut-coverage',
       'matrixone-compose-ci', 'matrixone-standalone-ci', 'matrixone-coverage-merge'],
   }[scope];
+  if (sdkRequired === 'true' && scope === 'full') required.push('python-sdk');
   if (!required) throw new Error(`Invalid CI scope: ${scope}`);
   if (scope === 'full' || scope === 'bvt') {
     const { compose_group, launch_group, generation } = needs.preflight.outputs;
@@ -94,7 +115,9 @@ function verifyResults(scope, needs) {
     throw new Error('UT coverage was not eligible to execute');
   }
   return `CI scope ${scope}: all required jobs passed; other suites intentionally omitted.` +
-    (scope === 'full' ? '' : ' Coverage was not evaluated for this test/document-only change.');
+    (scope === 'full' ? '' : scope === 'sdk' ?
+      ' Kernel coverage was intentionally not evaluated for this SDK-only change.' :
+      ' Coverage was not evaluated for this test/document-only change.');
 }
 
 module.exports = { category, classify, resolveScope, verifyResults };
