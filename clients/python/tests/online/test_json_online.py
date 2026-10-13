@@ -25,6 +25,8 @@ from matrixone.sqlalchemy_ext import (
     json_set,
 )
 
+from .test_config import online_config
+
 Base = declarative_base()
 
 
@@ -41,7 +43,7 @@ class Product(Base):
 def client():
     """Create and connect client for tests."""
     c = Client()
-    c.connect(database='test')
+    c.connect(**online_config.get_connection_kwargs())
     yield c
     c.disconnect()
 
