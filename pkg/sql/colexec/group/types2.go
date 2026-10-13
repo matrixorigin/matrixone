@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -234,8 +236,11 @@ func (bkt *spillBucket) free() error {
 	}
 	if bkt.fileFS != nil {
 		// Cancellation must not prevent deletion of a bucket owned by the query.
-		if removeErr := bkt.fileFS.RemoveFile(context.Background(), bkt.name); err == nil {
-			err = removeErr
+		removeErr := spillio.RemoveFileWithRetry(bkt.fileFS, bkt.name)
+		if removeErr != nil {
+			// Keep the file name, service, and disk reservation so a later
+			// cleanup can retry and accounting still reflects the physical file.
+			return errors.Join(err, removeErr)
 		}
 		bkt.fileFS = nil
 	}
@@ -345,6 +350,7 @@ type container struct {
 	spillAggList            []aggexec.GroupAggFuncExec
 	spillBkts               list.Deque[*spillBucket]
 	currentSpillBkt         []*spillBucket
+	spillCleanupPending     []*spillBucket
 
 	// reusable buffers for spill to avoid per-call allocations
 	spillFlagFlat   []uint8           // scratch 0/1 flags for one batch's rows during spill
@@ -686,17 +692,30 @@ func (ctr *container) freeSpillReloadStaging() {
 }
 
 func (ctr *container) freeSpillBkts() {
+	cleanup := func(bkt *spillBucket) {
+		if err := bkt.free(); err != nil {
+			logutil.Errorf("group spill file cleanup failed: %v", err)
+			if bkt.fileFS != nil {
+				ctr.spillCleanupPending = append(ctr.spillCleanupPending, bkt)
+			}
+		}
+	}
+	pending := ctr.spillCleanupPending
+	ctr.spillCleanupPending = nil
+	for _, bkt := range pending {
+		cleanup(bkt)
+	}
 	// free all spill buckets.
 	if ctr.spillBkts != nil {
 		ctr.spillBkts.Iter(0, func(bkt *spillBucket) bool {
-			bkt.free()
+			cleanup(bkt)
 			return true
 		})
 		ctr.spillBkts.Clear()
 	}
 
 	for _, bkt := range ctr.currentSpillBkt {
-		bkt.free()
+		cleanup(bkt)
 	}
 	ctr.currentSpillBkt = nil
 }
@@ -756,6 +775,7 @@ func (ctr *container) free() {
 	if ctr.distinctSpill != nil {
 		ctr.distinctSpill.close()
 		ctr.distinctSpill = nil
+		ctr.freeSpillBkts()
 	}
 	ctr.distinctFinalized = false
 	ctr.distinctGroupReset = false

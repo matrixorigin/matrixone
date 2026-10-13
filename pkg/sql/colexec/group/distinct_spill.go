@@ -131,14 +131,14 @@ func (c *distinctSpillController) close() {
 	c.closed = true
 	for bucket := range c.root {
 		if c.root[bucket] != nil {
-			_ = c.root[bucket].free()
+			c.freeOwnedBucket(c.root[bucket])
 			c.root[bucket] = nil
 		}
 	}
 	for level := range c.result {
 		for bucket := range c.result[level] {
 			if c.result[level][bucket] != nil {
-				_ = c.result[level][bucket].free()
+				c.freeOwnedBucket(c.result[level][bucket])
 				c.result[level][bucket] = nil
 			}
 		}
@@ -147,12 +147,12 @@ func (c *distinctSpillController) close() {
 	for c.partialPendingCount > 0 {
 		c.partialPendingCount--
 		if c.partialPending[c.partialPendingCount] != nil {
-			_ = c.partialPending[c.partialPendingCount].free()
+			c.freeOwnedBucket(c.partialPending[c.partialPendingCount])
 			c.partialPending[c.partialPendingCount] = nil
 		}
 	}
 	if c.partialActive != nil {
-		_ = c.partialActive.free()
+		c.freeOwnedBucket(c.partialActive)
 		c.partialActive = nil
 	}
 	c.partialActiveOffset = 0
@@ -185,6 +185,14 @@ func (c *distinctSpillController) close() {
 	clear(c.appliedLevel3[:])
 	for level := range c.resultSplit {
 		c.resultSplit[level] = nil
+	}
+}
+
+func (c *distinctSpillController) freeOwnedBucket(bucket *spillBucket) {
+	if err := bucket.free(); err != nil && c.ctr != nil && bucket.fileFS != nil {
+		// The controller is about to discard its bucket arrays. Transfer
+		// ownership to the outer Group so a later cleanup can retry.
+		c.ctr.spillCleanupPending = append(c.ctr.spillCleanupPending, bucket)
 	}
 }
 

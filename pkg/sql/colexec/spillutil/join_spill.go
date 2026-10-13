@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -448,9 +449,12 @@ func (w *BucketWriter) getSpillFileService(proc *process.Process) (fileservice.M
 
 func (w *BucketWriter) Created() bool { return w.created }
 
-func (w *BucketWriter) Close() {
+func (w *BucketWriter) Close() error {
 	if w.created && w.fileFS != nil && w.Name != "" {
-		_ = w.fileFS.RemoveFile(context.Background(), w.Name)
+		if err := spillio.RemoveFileWithRetry(w.fileFS, w.Name); err != nil {
+			// Retain the file's owner and disk reservation for a later retry.
+			return err
+		}
 	}
 	w.created = false
 	w.fileFS = nil
@@ -458,6 +462,7 @@ func (w *BucketWriter) Close() {
 		w.diskReservation.Release()
 		w.diskReservation = nil
 	}
+	return nil
 }
 
 func (w *BucketWriter) handOffSpillFile(
@@ -497,7 +502,7 @@ func (w *BucketWriter) handOffSpillFile(
 	}
 	return message.NewReopenableSpillFile(
 		func(ctx context.Context) (*os.File, error) { return fs.OpenFile(ctx, name) },
-		func() error { return fs.RemoveFile(context.Background(), name) },
+		func() error { return spillio.RemoveFileWithRetry(fs, name) },
 		w.Rows, w.Bytes, release,
 	), nil
 }
@@ -1526,6 +1531,9 @@ type SpillEngine struct {
 	spillFS      spillFileServiceCache
 	allocation   *SpillAllocationAccount
 	allocationMP *mpool.MPool
+	// Writers whose named files could not be removed remain owned by the
+	// engine until Cleanup retries them.
+	orphanWriters []BucketWriter
 
 	// Current bucket state
 	buildReader      BucketReader
@@ -1691,7 +1699,7 @@ func (e *SpillEngine) ScatterProbeTable(
 	children func() (*batch.Batch, error),
 	analyzer process.Analyzer,
 	evalKeysFn func(bat *batch.Batch) ([]*vector.Vector, error),
-) error {
+) (retErr error) {
 	bucketCount := len(e.buckets)
 	if bucketCount == 0 ||
 		bucketCount > SpillNumBuckets ||
@@ -1717,7 +1725,10 @@ func (e *SpillEngine) ScatterProbeTable(
 	defer func() {
 		e.discardScatterBuffers()
 		for i := range writers {
-			writers[i].Close()
+			if err := writers[i].Close(); err != nil {
+				e.orphanWriters = append(e.orphanWriters, writers[i])
+				retErr = errors.Join(retErr, err)
+			}
 		}
 	}()
 	defer e.releaseScatterScratch()
@@ -2229,7 +2240,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	return jm, BucketReady, nil
 }
 
-func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Analyzer, bucket SpillBucket, builder *hashbuild.HashmapBuilder, reader *BucketReader, pending *batch.Batch) ([]SpillBucket, error) {
+func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Analyzer, bucket SpillBucket, builder *hashbuild.HashmapBuilder, reader *BucketReader, pending *batch.Batch) (_ []SpillBucket, retErr error) {
 	if err := checkSpillCanceled(proc); err != nil {
 		return nil, err
 	}
@@ -2249,10 +2260,16 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 			e.discardScatterBuffers()
 		}
 		for i := range buildWriters {
-			buildWriters[i].Close()
+			if err := buildWriters[i].Close(); err != nil {
+				e.orphanWriters = append(e.orphanWriters, buildWriters[i])
+				retErr = errors.Join(retErr, err)
+			}
 		}
 		for i := range probeWriters {
-			probeWriters[i].Close()
+			if err := probeWriters[i].Close(); err != nil {
+				e.orphanWriters = append(e.orphanWriters, probeWriters[i])
+				retErr = errors.Join(retErr, err)
+			}
 		}
 		if !probeFdConsumed && bucket.ProbeFd != nil {
 			bucket.ProbeFd.Close()
@@ -2638,6 +2655,16 @@ func noProgressError(proc *process.Process, depth int) error {
 
 // Cleanup releases all engine resources.
 func (e *SpillEngine) Cleanup(proc *process.Process) {
+	if len(e.orphanWriters) > 0 {
+		pending := e.orphanWriters
+		e.orphanWriters = nil
+		for i := range pending {
+			if err := pending[i].Close(); err != nil {
+				logutil.Errorf("join spill file cleanup failed: %v", err)
+				e.orphanWriters = append(e.orphanWriters, pending[i])
+			}
+		}
+	}
 	for i := range e.buckets {
 		if e.buckets[i].BuildFd != nil {
 			_ = e.buckets[i].BuildFd.Close()
