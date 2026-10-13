@@ -3135,3 +3135,123 @@ func TestRemoteLockWaitTimeout_ReturnsLockTimeout(t *testing.T) {
 		},
 	)
 }
+
+func TestNoWaitFatalBindFenceRetainsReadOnlyCleanupRoute(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, services []*service) {
+			origin, owner := services[0], services[1]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			ownerRuntime := moruntime.ServiceRuntime(owner.cfg.ServiceID)
+			require.NotNil(t, ownerRuntime)
+			oldVersion, ok := ownerRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+			require.True(t, ok)
+			ownerRuntime.SetGlobalVariables(
+				moruntime.MOProtocolVersion,
+				defines.MORPCVersion112,
+			)
+			defer ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+
+			const tableID = uint64(2510701)
+			ownerBind := alloc.Get(
+				owner.serviceID,
+				0,
+				tableID,
+				tableID,
+				pb.Sharding_None,
+			)
+			require.True(t, ownerBind.Valid)
+			require.Equal(t, owner.serviceID, ownerBind.ServiceID)
+
+			holderTxn := []byte("fatal-nowait-owner")
+			probeTxn := []byte("fatal-nowait-readonly-probe")
+			_, err := owner.Lock(
+				ctx,
+				tableID,
+				newTestRows(2),
+				holderTxn,
+				newTestRowExclusiveOptions(),
+			)
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, owner.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+			}()
+
+			before, err := origin.GetLockTableBind(0, tableID)
+			require.NoError(t, err)
+			require.False(t, before.Valid, "the first request must start with an unknown origin route")
+
+			var downgraded atomic.Bool
+			owner.option.beforeRemoteLockBindCheck = func() {
+				if downgraded.CompareAndSwap(false, true) {
+					// The method admission check has accepted V112. Downgrade after
+					// admission but before row 1 is granted and row 2 conflicts.
+					ownerRuntime.SetGlobalVariables(
+						moruntime.MOProtocolVersion,
+						defines.MORPCVersion112-1,
+					)
+				}
+			}
+			defer func() { owner.option.beforeRemoteLockBindCheck = nil }()
+
+			noWait := newTestRowExclusiveOptions()
+			noWait.NoWait = true
+			noWait.Policy = pb.WaitPolicy_FastFail
+			result, err := origin.Lock(
+				ctx,
+				tableID,
+				newTestRows(1, 2),
+				probeTxn,
+				noWait,
+			)
+			require.True(t, downgraded.Load(), "request must pass method admission before version change")
+			require.ErrorIs(t, err, ErrLockTableBindChanged,
+				"late capability loss must remain fatal, never become a direct conflict")
+			require.True(t, result.LockedOn.Valid,
+				"fatal result must retain the selected route for cleanup")
+			require.Equal(t, ownerBind, result.LockedOn)
+			require.False(t, result.HasConflict)
+			require.False(t, result.HasPrevCommit)
+			require.True(t, result.Timestamp.IsEmpty())
+			require.False(t, result.TableDefChanged)
+			require.False(t, result.NewLockAdd)
+			require.Nil(t, result.TableDefChangedAt)
+
+			require.NotNil(t, origin.activeTxnHolder.getActiveTxn(probeTxn, false, ""),
+				"origin cleanup witness must remain until Unlock")
+			require.NotNil(t, owner.activeTxnHolder.getActiveTxn(probeTxn, false, ""),
+				"owner prefix must remain tracked until Unlock")
+			prefix, found, err := owner.GetLockHolder(
+				ctx,
+				tableID,
+				newTestRows(1)[0],
+				newTestRowExclusiveOptions(),
+			)
+			require.NoError(t, err)
+			require.True(t, found)
+			require.Equal(t, probeTxn, prefix.TxnID)
+
+			// The caller uses LockedOn only to register an unlock route. Unlock
+			// removes the partial owner prefix and retires both active transactions.
+			ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+			require.NoError(t, origin.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
+			_, found, err = owner.GetLockHolder(
+				ctx,
+				tableID,
+				newTestRows(1)[0],
+				newTestRowExclusiveOptions(),
+			)
+			require.NoError(t, err)
+			require.False(t, found, "the cleanup route must release the acquired prefix")
+			require.Nil(t, origin.activeTxnHolder.getActiveTxn(probeTxn, false, ""))
+			require.Nil(t, owner.activeTxnHolder.getActiveTxn(probeTxn, false, ""))
+			origin.mu.RLock()
+			_, refRetained := origin.mu.remoteBindRefs[makeRemoteBindKey(ownerBind)]
+			origin.mu.RUnlock()
+			require.False(t, refRetained, "successful Unlock must retire the binding reference")
+		},
+	)
+}

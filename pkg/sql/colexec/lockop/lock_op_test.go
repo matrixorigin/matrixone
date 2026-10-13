@@ -3079,14 +3079,7 @@ func TestLockOpSkipLockedAllowsCompatibleSharedHolder(t *testing.T) {
 		require.NoError(t, arg.Prepare(proc))
 		arg.ctr.hasNewVersionInRange = testFunc
 
-		limit := limitop.NewArgument().WithLimit(plan2.MakePlan2Uint64ConstExprWithType(1))
-		defer limit.Free(proc, false, nil)
-		limit.AppendChild(arg)
-		require.NoError(t, limit.Prepare(proc))
-
-		// Exercise the actual LIMIT consumer: it must receive the row-refresh
-		// retry from LockOp before it can publish the valid-looking prefix.
-		result, err := vm.Exec(limit, proc)
+		result, err := vm.Exec(arg, proc)
 		require.NoError(t, err)
 		require.Equal(t, []int32{9}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
 
@@ -3167,7 +3160,14 @@ func TestLockOpSkipLockedRetryIsReturnedBeforePublishingPrefix(t *testing.T) {
 			return vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])[0] == 2, nil
 		}
 
-		result, err := vm.Exec(arg, proc)
+		limit := limitop.NewArgument().WithLimit(plan2.MakePlan2Uint64ConstExprWithType(1))
+		defer limit.Free(proc, false, nil)
+		limit.AppendChild(arg)
+		require.NoError(t, limit.Prepare(proc))
+
+		// Exercise production LIMIT over a two-row batch: the second row requests
+		// an RC refresh, so LockOp must return retry before LIMIT can publish row 1.
+		result, err := vm.Exec(limit, proc)
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry), "%v", err)
 		require.Nil(t, result.Batch, "retrying rows must not be returned to a consumer")
