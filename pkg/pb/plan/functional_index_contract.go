@@ -16,7 +16,6 @@ package plan
 
 import (
 	"encoding/json"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -29,7 +28,7 @@ const FunctionalJSONSemanticsKey = "functional_json_semantics"
 // JSONFunctionalIndexSemantics validates the known semantic revision without
 // treating ordinary JSON expressions as a new functional-index capability.
 func JSONFunctionalIndexSemantics(index *IndexDef) (bool, error) {
-	if index == nil || !strings.Contains(index.IndexAlgoParams, FunctionalJSONSemanticsKey) {
+	if index == nil || index.IndexAlgoParams == "" {
 		return false, nil
 	}
 	var values map[string]json.RawMessage

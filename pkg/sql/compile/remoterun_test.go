@@ -5512,3 +5512,35 @@ func TestRemoteStatementSendErrorPreservesCauseWithoutMaskingInvariant(t *testin
 		})
 	}
 }
+
+func TestRemoteTableScanStorageVisibilityUsesSourceMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	char := planpb.Type{Id: int32(types.T_char), Width: 20}
+	scan := table_scan.NewArgument().WithTypes([]planpb.Type{char, char})
+	scope := &Scope{Magic: Remote, Proc: proc.NewNoContextChildProc(0), RootOp: scan, DataSource: &Source{
+		Attributes: []string{"__mo_fi_user", "key"}, TableDef: &planpb.TableDef{TblId: 42, Cols: []*planpb.ColDef{
+			{Name: "key", Typ: char, Hidden: true}, {Name: "__mo_fi_user", Typ: char},
+		}},
+	}}
+	scope.bindTableScanColumnVisibility()
+	require.Equal(t, []bool{false, true}, scan.HiddenColumns)
+	duplicated := dupOperator(scan, 0, 1).(*table_scan.TableScan)
+	require.Equal(t, scan.HiddenColumns, duplicated.HiddenColumns)
+	duplicated.HiddenColumns[0] = true
+	require.False(t, scan.HiddenColumns[0], "parallel operators do not share mutable visibility slices")
+	duplicated.Release()
+	encoded, err := encodeRemoteScope(scope, proc)
+	require.NoError(t, err)
+	decoded, err := decodeScope(encoded, proc, true, nil)
+	require.NoError(t, err)
+	// The existing Source.TableDef, not a new operator wire flag, owns visibility.
+	decoded.bindTableScanColumnVisibility()
+	restored := decoded.RootOp.(*table_scan.TableScan)
+	require.Equal(t, []bool{false, true}, restored.HiddenColumns)
+	decoded.DataSource.Attributes = []string{"key"}
+	decoded.bindTableScanColumnVisibility()
+	require.Equal(t, []bool{true}, restored.HiddenColumns)
+	decoded.release()
+	scope.release()
+	proc.Free()
+}

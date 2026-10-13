@@ -388,6 +388,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 		if s.DataSource.TableDef != nil {
 			id = s.DataSource.TableDef.TblId
 		}
+		s.bindTableScanColumnVisibility()
 		p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
 		if s.DataSource.isConst {
 			s.ScopeAnalyzer.Stop()
@@ -1868,6 +1869,18 @@ func findMergeGroup(op vm.Operator) *group.MergeGroup {
 		}
 	}
 	return findMergeGroup(base.GetChildren(0))
+}
+
+// The Source TableDef is already carried by the canonical remote pipeline wire.
+// Rebind on every execution so prepared reuse and decoded scopes use their own
+// source visibility rather than an operator-local or sender-only assumption.
+func (s *Scope) bindTableScanColumnVisibility() {
+	if s.DataSource == nil || s.DataSource.TableDef == nil || s.RootOp == nil {
+		return
+	}
+	if scan, ok := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan); ok {
+		scan.WithColumnDefs(s.DataSource.Attributes, s.DataSource.TableDef.Cols)
+	}
 }
 
 func (s *Scope) readerContext(c *Compile) context.Context {

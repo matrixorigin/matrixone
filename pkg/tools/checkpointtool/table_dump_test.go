@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -3212,5 +3213,44 @@ func TestJSONFunctionalIndexCheckpointSemanticRevision(t *testing.T) {
 				require.Empty(t, stmts)
 			}
 		})
+	}
+}
+
+func TestJSONFunctionalIndexTypedCheckpointRequiresMarker(t *testing.T) {
+	const backing = "__mo_fi_json"
+	const expression = "cast(json_unquote(json_extract(`doc`, '$.kind')) as char(20))"
+	jsonAccess := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.JSON_EXTRACT, 0)}}}}
+	for _, transitive := range []bool{false, true} {
+		for _, params := range []string{"", `{"functional_json_\u0073emantics":"1"}`, `{"functional_json_\u0073emantics":"2"}`} {
+			schema := &TableSchema{TableName: "docs", Columns: []TableColumn{{Name: "doc", SQLType: "JSON", Position: 1}}, UniqueKeys: []TableUniqueKey{{Name: "idx_kind", Columns: []string{backing}, AlgoParams: params}}}
+			expr := jsonAccess
+			if transitive {
+				expr = &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+			}
+			generated, err := types.Encode(&plan.GeneratedCol{OriginString: expression, Expr: expr})
+			require.NoError(t, err)
+			dependency, err := types.Encode(&plan.GeneratedCol{OriginString: "json_extract(`doc`, '$.kind')", Expr: jsonAccess})
+			require.NoError(t, err)
+			// Intentionally unordered catalog rows, including one visible dependency.
+			columns := &LogicalTableView{Headers: []string{"object", "block", "row", "att_relname_id", "attname", "attnum", "att_is_hidden", "attr_generated"}, Rows: [][]string{
+				{"o", "0", "0", "42", backing, "3", "1", string(generated)},
+				{"o", "0", "0", "42", "doc", "1", "0", ""},
+				{"o", "0", "0", "42", "g", "2", "0", string(dependency)},
+			}}
+			attachFunctionalIndexExpressions(schema, columns, 42)
+			clone := cloneTableSchema(schema)
+			indexes := &LogicalTableView{Headers: []string{"object", "block", "row", "table_id", "name", "column_name", "type", "ordinal_position", catalog.IndexAlgoParams}, Rows: [][]string{{"o", "0", "0", "42", "idx_kind", backing, "INDEX", "1", params}}}
+			ddl := RenderCreateTableDDLFromSchema(clone)
+			statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "docs", clone)
+			if params == `{"functional_json_\u0073emantics":"1"}` {
+				require.NotEmpty(t, ddl)
+				require.NoError(t, err)
+				require.Len(t, statements, 1)
+			} else {
+				require.Empty(t, ddl)
+				require.Error(t, err)
+				require.Empty(t, statements)
+			}
+		}
 	}
 }

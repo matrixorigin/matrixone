@@ -625,6 +625,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 	case vm.TableScan:
 		t := sourceOp.(*table_scan.TableScan)
 		op := table_scan.NewArgument().WithTypes(t.Types)
+		op.HiddenColumns = append([]bool(nil), t.HiddenColumns...)
 		op.ProjectList = t.ProjectList
 		op.FilterExprs = t.FilterExprs
 		op.RuntimeFilterExprs = t.RuntimeFilterExprs
@@ -2840,7 +2841,11 @@ func constructTableScan(node *plan.Node) *table_scan.TableScan {
 	for j, col := range node.TableDef.Cols {
 		types[j] = col.Typ
 	}
-	return table_scan.NewArgument().WithTypes(types)
+	attrs := make([]string, len(node.TableDef.Cols))
+	for i, col := range node.TableDef.Cols {
+		attrs[i] = col.GetOriginCaseName()
+	}
+	return table_scan.NewArgument().WithTypes(types).WithColumnDefs(attrs, node.TableDef.Cols)
 }
 
 func constructValueScan(proc *process.Process, node *plan.Node) (*value_scan.ValueScan, error) {

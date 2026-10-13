@@ -137,29 +137,7 @@ func functionalJSONIntegerInputEligible(expr *Expr, cols []*ColDef, visiting map
 // Following generated dependencies is necessary for a key such as lower(g)
 // when g's independently bound expression produces a bounded JSON text value.
 func functionalExpressionUsesJSON(expr *Expr, cols []*ColDef, visiting map[int32]bool) bool {
-	if expr == nil {
-		return false
-	}
-	if fn := expr.GetF(); fn != nil {
-		if functionalKnownFunction(expr, function.JSON_EXTRACT, 0) || functionalKnownFunction(expr, function.JSON_UNQUOTE, 0) {
-			return true
-		}
-		for _, arg := range fn.Args {
-			if functionalExpressionUsesJSON(arg, cols, visiting) {
-				return true
-			}
-		}
-	}
-	if ref := expr.GetCol(); ref != nil && ref.RelPos == 0 && ref.ColPos >= 0 && int(ref.ColPos) < len(cols) && !visiting[ref.ColPos] {
-		col := cols[ref.ColPos]
-		if col != nil && col.GeneratedCol != nil {
-			visiting[ref.ColPos] = true
-			found := functionalExpressionUsesJSON(col.GeneratedCol.Expr, cols, visiting)
-			delete(visiting, ref.ColPos)
-			return found
-		}
-	}
-	return false
+	return function.ExpressionUsesJSONAccess(expr, cols, visiting)
 }
 
 func functionalIndexUsesJSON(table *TableDef, index *pb.IndexDef) bool {

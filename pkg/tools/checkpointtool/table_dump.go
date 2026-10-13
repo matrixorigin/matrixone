@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -128,13 +129,14 @@ type TableColumn struct {
 }
 
 type TableUniqueKey struct {
-	Expressions map[string]string // backing column name to original functional key expression
-	Name        string
-	Columns     []string
-	Unique      bool
-	Algo        string
-	AlgoParams  string
-	Comment     string
+	requiresJSONSemantics bool              // derived from actual typed catalog generated dependencies
+	Expressions           map[string]string // backing column name to original functional key expression
+	Name                  string
+	Columns               []string
+	Unique                bool
+	Algo                  string
+	AlgoParams            string
+	Comment               string
 }
 
 type TableForeignKey struct {
@@ -248,15 +250,16 @@ type indexDDLColumn struct {
 }
 
 type indexDDLInfo struct {
-	expressions map[string]string
-	name        string
-	indexType   string
-	algo        string
-	algoParams  string
-	comment     string
-	columns     map[string]indexDDLColumn
-	order       int
-	catalogID   uint64
+	requiresJSONSemantics bool
+	expressions           map[string]string
+	name                  string
+	indexType             string
+	algo                  string
+	algoParams            string
+	comment               string
+	columns               map[string]indexDDLColumn
+	order                 int
+	catalogID             uint64
 }
 
 type CSVExportOption func(*CSVExportOptions)
@@ -532,7 +535,7 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 	for i, key := range uniqueKeys {
 		// Restored SQL rederives the current semantic marker. Reject an
 		// unsupported source revision before that identity could be erased.
-		if _, err := plan.JSONFunctionalIndexSemantics(&plan.IndexDef{IndexAlgoParams: key.AlgoParams}); err != nil {
+		if err := validateExportedJSONFunctionalSemantics(key.AlgoParams, key.requiresJSONSemantics); err != nil {
 			return ""
 		}
 		for _, part := range key.Columns {
@@ -751,13 +754,14 @@ func normalizedUniqueKeys(keys []TableUniqueKey) []TableUniqueKey {
 		}
 		seen[signature] = struct{}{}
 		out = append(out, TableUniqueKey{
-			Expressions: maps.Clone(key.Expressions),
-			Name:        name,
-			Columns:     cols,
-			Unique:      key.Unique,
-			Algo:        strings.TrimSpace(key.Algo),
-			AlgoParams:  strings.TrimSpace(key.AlgoParams),
-			Comment:     strings.TrimSpace(key.Comment),
+			Expressions:           maps.Clone(key.Expressions),
+			requiresJSONSemantics: key.requiresJSONSemantics,
+			Name:                  name,
+			Columns:               cols,
+			Unique:                key.Unique,
+			Algo:                  strings.TrimSpace(key.Algo),
+			AlgoParams:            strings.TrimSpace(key.AlgoParams),
+			Comment:               strings.TrimSpace(key.Comment),
 		})
 	}
 	return out
@@ -1095,6 +1099,59 @@ func buildTableSchemaFromCatalogViews(tableID uint64, moTablesView, moColumnsVie
 	return schema
 }
 
+func validateExportedJSONFunctionalSemantics(params string, required bool) error {
+	present, err := plan.JSONFunctionalIndexSemantics(&plan.IndexDef{IndexAlgoParams: params})
+	if err != nil {
+		return err
+	}
+	if required && !present {
+		return moerr.NewInvalidInputNoCtx("missing JSON functional index semantics metadata")
+	}
+	return nil
+}
+
+// ColRef positions address the current table column order, including hidden
+// backing columns. Catalog rows need not arrive in that order.
+func catalogGeneratedColumnGraph(view *LogicalTableView, tableID uint64) ([]*plan.ColDef, map[string]int) {
+	idPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_RelID)
+	namePos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Name)
+	numPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Num)
+	genPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Generated)
+	type entry struct {
+		ordinal int
+		col     *plan.ColDef
+	}
+	entries := make([]entry, 0)
+	for _, fullRow := range view.Rows {
+		off := logicalViewDataOffset(view)
+		if len(fullRow) < off {
+			continue
+		}
+		row := fullRow[off:]
+		if idPos < 0 || namePos < 0 || numPos < 0 || genPos < 0 || idPos >= len(row) || namePos >= len(row) || numPos >= len(row) || genPos >= len(row) || row[idPos] != strconv.FormatUint(tableID, 10) {
+			continue
+		}
+		ordinal, err := strconv.Atoi(row[numPos])
+		if err != nil || ordinal <= 0 {
+			continue
+		}
+		col := &plan.ColDef{Name: row[namePos]}
+		var generated plan.GeneratedCol
+		if row[genPos] != "" && types.Decode([]byte(row[genPos]), &generated) == nil {
+			col.GeneratedCol = &generated
+		}
+		entries = append(entries, entry{ordinal: ordinal, col: col})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ordinal < entries[j].ordinal })
+	cols := make([]*plan.ColDef, len(entries))
+	positions := make(map[string]int, len(entries))
+	for i, e := range entries {
+		cols[i] = e.col
+		positions[e.col.Name] = i
+	}
+	return cols, positions
+}
+
 // Functional backing columns are not exportable row columns. Recover only
 // their generated expression into the owning index's DDL metadata.
 func attachFunctionalIndexExpressions(schema *TableSchema, view *LogicalTableView, tableID uint64) {
@@ -1105,6 +1162,7 @@ func attachFunctionalIndexExpressions(schema *TableSchema, view *LogicalTableVie
 	namePos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Name)
 	hiddenPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_IsHidden)
 	generatedPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Generated)
+	cols, positions := catalogGeneratedColumnGraph(view, tableID)
 	for _, fullRow := range view.Rows {
 		if len(fullRow) < logicalViewDataOffset(view) {
 			continue
@@ -1128,6 +1186,9 @@ func attachFunctionalIndexExpressions(schema *TableSchema, view *LogicalTableVie
 							key.Expressions = make(map[string]string)
 						}
 						key.Expressions[part] = expression
+						if pos, ok := positions[part]; ok && cols[pos].GeneratedCol != nil {
+							key.requiresJSONSemantics = key.requiresJSONSemantics || function.ExpressionUsesJSONAccess(cols[pos].GeneratedCol.Expr, cols, make(map[int32]bool))
+						}
 					}
 				}
 			}
@@ -4545,6 +4606,7 @@ func buildCreateIndexStatementsFromMoIndexes(
 							info.expressions = make(map[string]string)
 						}
 						info.expressions[column] = key.Expressions[column]
+						info.requiresJSONSemantics = info.requiresJSONSemantics || key.requiresJSONSemantics
 					}
 				}
 			}
@@ -4888,7 +4950,7 @@ func needsExplicitPartitionDefinitions(method string) bool {
 
 func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, error) {
 	if info != nil {
-		if _, err := plan.JSONFunctionalIndexSemantics(&plan.IndexDef{IndexAlgoParams: info.algoParams}); err != nil {
+		if err := validateExportedJSONFunctionalSemantics(info.algoParams, info.requiresJSONSemantics); err != nil {
 			return "", err
 		}
 	}

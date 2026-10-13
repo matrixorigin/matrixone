@@ -191,7 +191,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		if tableScan.ctr.padCharToFullLength {
-			if err = padCharColumnsToFullLength(tableScan.ctr.buf, proc); err != nil {
+			if err = padCharColumnsToFullLength(tableScan.ctr.buf, proc, tableScan.HiddenColumns); err != nil {
 				return vm.CancelResult, err
 			}
 		}
@@ -204,8 +204,12 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	return vm.CallResult{Batch: retBatch, Status: vm.ExecNext}, nil
 }
 
-func padCharColumnsToFullLength(bat *batch.Batch, proc *process.Process) error {
-	for _, vec := range bat.Vecs {
+func padCharColumnsToFullLength(bat *batch.Batch, proc *process.Process, hiddenColumns []bool) error {
+	for col, vec := range bat.Vecs {
+		// Display padding must never rewrite a stored hidden index key.
+		if col < len(hiddenColumns) && hiddenColumns[col] {
+			continue
+		}
 		if vec == nil || vec.GetType().Oid != types.T_char || vec.IsConstNull() {
 			continue
 		}
@@ -288,7 +292,7 @@ func (tableScan *TableScan) evalFilter(
 	loadedColumns []int,
 ) (engine.ReaderFilterResult, error) {
 	if tableScan.ctr.padCharToFullLength {
-		if err := padCharColumnsToFullLength(bat, proc); err != nil {
+		if err := padCharColumnsToFullLength(bat, proc, tableScan.HiddenColumns); err != nil {
 			return engine.ReaderFilterResult{}, err
 		}
 	}

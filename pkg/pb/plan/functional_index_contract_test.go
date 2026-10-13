@@ -48,3 +48,20 @@ func TestJSONFunctionalIndexUnknownRevisionFailsClosed(t *testing.T) {
 		require.False(t, features.JSONFunctionalIndexSemantics)
 	}
 }
+
+func TestJSONFunctionalIndexDecodedSemanticKey(t *testing.T) {
+	for _, params := range []string{`{"functional_json_\u0073emantics":"1"}`, `{"functional_json_semantics":"1"}`} {
+		present, err := JSONFunctionalIndexSemantics(&IndexDef{IndexAlgoParams: params})
+		require.NoError(t, err)
+		require.True(t, present)
+	}
+	for _, params := range []string{`{"functional_json_\u0073emantics":"2"}`, `{"functional_json_\u0073emantics":1}`, `{"x":`} {
+		_, err := JSONFunctionalIndexSemantics(&IndexDef{IndexAlgoParams: params})
+		require.Error(t, err)
+	}
+	for _, params := range []string{`{"comment":"functional_json_semantics"}`, `{}`} {
+		present, err := JSONFunctionalIndexSemantics(&IndexDef{IndexAlgoParams: params})
+		require.NoError(t, err)
+		require.False(t, present)
+	}
+}
