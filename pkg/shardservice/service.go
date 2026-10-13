@@ -404,14 +404,17 @@ func (s *service) TableReplicaCount(tableID uint64) int64 {
 func (s *service) removeReadCache(
 	table uint64,
 ) {
-	old := s.getReadCache()
-	if !old.hasTableCache(table) {
-		return
+	for {
+		old := s.getReadCache()
+		if !old.hasTableCache(table) {
+			return
+		}
+		new := old.clone()
+		delete(new.shards, table)
+		if s.cache.read.CompareAndSwap(old, new) {
+			return
+		}
 	}
-
-	new := old.clone()
-	delete(new.shards, table)
-	s.cache.read.CompareAndSwap(old, new)
 }
 
 func (s *service) getShards(
@@ -449,10 +452,14 @@ OUT:
 				continue OUT
 			}
 		}
-		cache = s.cache.read.Load()
-		cache = cache.clone()
-		cache.addShards(table, metadata, shards)
-		s.cache.read.Store(cache)
+		for {
+			old := s.cache.read.Load()
+			cache = old.clone()
+			cache.addShards(table, metadata, shards)
+			if s.cache.read.CompareAndSwap(old, cache) {
+				break
+			}
+		}
 		s.logger.Info("add read cache",
 			zap.Uint64("table", table),
 			zap.String("metadata", metadata.String()),
@@ -811,11 +818,7 @@ func (s *service) handleCheckChanged() error {
 func (s *service) removeCache(
 	tableID uint64,
 ) {
-	cache := s.cache.read.Load()
-	if cache != nil {
-		cache.delete(tableID)
-		s.cache.read.Store(cache)
-	}
+	s.removeReadCache(tableID)
 }
 
 func (s *service) maybeRemoveReadCache(
