@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -293,10 +294,15 @@ func prepareRemoteRunSendingDataWithVectorProtocol(
 		return nil, false, nil, false, err
 	}
 
-	// Reserve before encoding; a failed attempt cannot wrap a live range.
-	odkuOrdinalBase, err := proc.NextODKURemoteOrdinalBase()
-	if err != nil {
-		return nil, false, nil, false, err
+	// Only producers (including forwarded producer subtrees) need an ordinal
+	// range. Ordinary nested remote reads must not consume a receiver's bounded
+	// range and prevent the next sibling pipeline from being sent.
+	var odkuOrdinalBase uint64
+	if remoteScopeProducesODKUOrdinals(encodedScope) {
+		odkuOrdinalBase, err = proc.NextODKURemoteOrdinalBase()
+		if err != nil {
+			return nil, false, nil, false, err
+		}
 	}
 
 	// Encode the Process related information.
@@ -311,6 +317,30 @@ func prepareRemoteRunSendingDataWithVectorProtocol(
 	}
 
 	return scopeData, withoutOutput, processData, folded, nil
+}
+
+// PRE_INSERT owns ordinal generation; DEDUP_JOIN only consumes provenance.
+// Inspect all operator children and scope descendants, not just the remote root.
+func remoteScopeProducesODKUOrdinals(scope *Scope) bool {
+	if scope == nil {
+		return false
+	}
+	produces := false
+	_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if pre, ok := op.(*preinsert.PreInsert); ok && pre.TrackODKUResult {
+			produces = true
+		}
+		return nil
+	})
+	if produces {
+		return true
+	}
+	for _, child := range scope.PreScopes {
+		if remoteScopeProducesODKUOrdinals(child) {
+			return true
+		}
+	}
+	return false
 }
 
 func receiveMessageFromCnServer(s *Scope, withoutOutput bool, sender *messageSenderOnClient) error {

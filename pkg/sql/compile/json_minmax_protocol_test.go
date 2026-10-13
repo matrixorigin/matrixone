@@ -94,12 +94,14 @@ func TestJSONMinMaxRemoteDestinationRejectsLegacyComparator(t *testing.T) {
 
 	for _, version := range []int64{defines.MORPCVersion75, defines.MORPCVersion80, defines.MORPCVersion81, defines.MORPCVersion82, defines.MORPCVersion83, defines.MORPCVersion84, defines.MORPCVersion85, defines.MORPCVersion86, defines.MORPCVersion87, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113} {
 		client.version = version
-		data, err := encodeRemoteScope(scope, c.proc)
+		minimum := int64(0)
+		data, err := encodeRemoteScopeWithVectorProtocol(scope, c.proc, &minimum)
 		if version < defines.MORPCVersion113 {
 			require.ErrorContains(t, err, "remote destination does not support versioned expression semantics (MORPC version 113)")
 			continue
 		}
 		require.NoError(t, err)
+		require.Equal(t, defines.MORPCVersion113, minimum, "the execution stream must confirm the typed JSON comparator")
 		wire := new(pipeline.Pipeline)
 		require.NoError(t, wire.Unmarshal(data))
 		require.Equal(t, aggexec.AggIdOfMin, wire.InstructionList[0].Agg.Aggs[0].Op)
