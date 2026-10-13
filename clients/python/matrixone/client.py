@@ -3391,7 +3391,7 @@ class Session(SQLAlchemySession):
 
                 from ._session_execution import execute_session_sql
 
-                result = execute_session_sql(self, final_sql, **kwargs)
+                result = execute_session_sql(super().execute, final_sql, **kwargs)
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = super().execute(sql_or_stmt, params, **kwargs)

@@ -51,6 +51,10 @@ def rows(n):
     return [{'id': i, 'embedding': [float(i), float(i + 1)]} for i in range(n)]
 
 
+def literal_query():
+    return "SELECT ':tag', '% %% %s %(tag)s'"
+
+
 def test_native_batch_values_and_roundtrip_count(client, table):
     inserts = []
 
@@ -104,11 +108,24 @@ async def test_native_literal_payloads_sync_and_async(client, table):
     data = [dict(row, label=label) for row, label in zip(rows(len(labels)), labels)]
     VectorManager(client).batch_insert(table, data, batch_size=2)
     assert client.execute('SELECT label FROM ' + table + ' ORDER BY id').rows == [(label,) for label in labels]
+    with client.session() as session:
+        for no_parameters in [False, True]:
+            assert tuple(
+                session.execute(literal_query(), execution_options={'no_parameters': no_parameters}).one()
+            ) == (
+                ':tag',
+                '% %% %s %(tag)s',
+            )
     client.execute('DELETE FROM ' + table)
     c = AsyncClient(logger=Mock())
     await c.connect(**params(), on_connect=[])
     try:
         await AsyncVectorManager(c).batch_insert(table, data, batch_size=2)
         assert (await c.execute('SELECT label FROM ' + table + ' ORDER BY id')).rows == [(label,) for label in labels]
+        async with c.session() as session:
+            for no_parameters in [False, True]:
+                assert tuple(
+                    (await session.execute(literal_query(), execution_options={'no_parameters': no_parameters})).one()
+                ) == (':tag', '% %% %s %(tag)s')
     finally:
         await c.disconnect()
