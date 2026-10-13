@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/parquetvariant"
 	"github.com/parquet-go/parquet-go"
 )
 
@@ -39,6 +40,7 @@ type ParquetWriter struct {
 	schema      *parquet.Schema
 	columnNames []string
 	columnTypes []defines.MysqlType
+	jsonVariant bool
 
 	bufferedBytes uint64 // Plain value bytes plus definition levels, before encoding.
 	bufferedRows  int
@@ -51,8 +53,14 @@ const (
 	maxParquetRowGroupRows  = 1 << 20
 )
 
+type ParquetWriterOptions struct{ JSONAsVariant bool }
+
 // NewParquetWriter creates a new ParquetWriter
 func NewParquetWriter(ctx context.Context, mrs *MysqlResultSet) (*ParquetWriter, error) {
+	return NewParquetWriterWithOptions(ctx, mrs, ParquetWriterOptions{})
+}
+
+func NewParquetWriterWithOptions(ctx context.Context, mrs *MysqlResultSet, options ParquetWriterOptions) (*ParquetWriter, error) {
 	if mrs == nil || len(mrs.Columns) == 0 {
 		return nil, moerr.NewInternalError(ctx, "no columns for parquet export")
 	}
@@ -77,6 +85,9 @@ func NewParquetWriter(ctx context.Context, mrs *MysqlResultSet) (*ParquetWriter,
 		}
 		columnTypes[i] = mysqlCol.ColumnType()
 		group[columnNames[i]] = buildParquetNode(columnTypes[i], mysqlCol.Flag())
+		if options.JSONAsVariant && columnTypes[i] == defines.MYSQL_TYPE_JSON {
+			group[columnNames[i]] = parquet.Optional(parquet.Variant())
+		}
 	}
 
 	schema := parquet.NewSchema("export", group)
@@ -92,6 +103,7 @@ func NewParquetWriter(ctx context.Context, mrs *MysqlResultSet) (*ParquetWriter,
 		schema:      schema,
 		columnNames: columnNames,
 		columnTypes: columnTypes,
+		jsonVariant: options.JSONAsVariant,
 	}, nil
 }
 
@@ -187,7 +199,7 @@ func (pw *ParquetWriter) writeBatchChunk(bat *batch.Batch, start, end int, maxBu
 		for colIdx, vec := range bat.Vecs {
 			colName := pw.columnNames[colIdx]
 			valueBytes++ // Optional field's definition level, also for NULL.
-			if nulls := vec.GetNulls(); nulls != nil && nulls.Contains(uint64(rowIdx)) {
+			if vec.IsNull(uint64(rowIdx)) {
 				row[colName] = nil
 				continue
 			}
@@ -207,6 +219,10 @@ func (pw *ParquetWriter) writeBatchChunk(bat *batch.Batch, start, end int, maxBu
 				valueBytes += uint64(4 + len(v))
 			case []byte:
 				valueBytes += uint64(4 + len(v))
+			case map[string]any:
+				// Unshredded VARIANT has two BINARY leaves; include their
+				// lengths in the bounded row-group buffering estimate.
+				valueBytes += uint64(8 + len(v["metadata"].([]byte)) + len(v["value"].([]byte)))
 			}
 		}
 		rows = append(rows, row)
@@ -215,7 +231,13 @@ func (pw *ParquetWriter) writeBatchChunk(bat *batch.Batch, start, end int, maxBu
 		}
 	}
 
-	n, err := pw.writer.Write(rows)
+	// GenericWriter.Write's map/any path counts rows twice in v0.25.1.
+	// Writing physical rows preserves row counts at row-group boundaries.
+	physical := make([]parquet.Row, len(rows))
+	for i, row := range rows {
+		physical[i] = pw.schema.Deconstruct(nil, row)
+	}
+	n, err := pw.writer.WriteRows(physical)
 	if err == nil {
 		pw.bufferedBytes += valueBytes
 		pw.bufferedRows += n
@@ -228,6 +250,13 @@ func (pw *ParquetWriter) writeBatchChunk(bat *batch.Batch, start, end int, maxBu
 // DATE vector on the SELECT projection path, but its exported value must still
 // be the four-digit year rather than a calendar date.
 func (pw *ParquetWriter) vectorValueToParquet(vec *vector.Vector, colIdx, rowIdx int, timeZone *time.Location) (any, error) {
+	if pw.jsonVariant && pw.columnTypes[colIdx] == defines.MYSQL_TYPE_JSON {
+		metadata, value, err := parquetvariant.Encode(pw.ctx, types.DecodeJson(vec.GetBytesAt(rowIdx)))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"metadata": metadata, "value": value}, nil
+	}
 	if pw.columnTypes[colIdx] == defines.MYSQL_TYPE_YEAR && vec.GetType().Oid == types.T_date {
 		value := vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIdx)
 		return types.MoYear(value.Year()).String(), nil

@@ -466,6 +466,9 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			continue
 		}
 		h.hasPhysicalCol = true
+		if err := validateParquetVariantSchema(param.Ctx, col); err != nil {
+			return err
+		}
 		// The row reader is only needed for nested columns.  Keeping scalar
 		// siblings out of the projected row group lets them stay on the
 		// vectorized page mapper when a LIST column is present.

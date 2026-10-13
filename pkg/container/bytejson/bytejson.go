@@ -1846,7 +1846,8 @@ func (g *groupSortKeys) Swap(i, j int) {
 }
 
 type byteJsonWriter struct {
-	buf []byte
+	buf          []byte
+	exactNumbers bool
 }
 
 func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error) {
@@ -1965,6 +1966,22 @@ func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error)
 
 func (w *byteJsonWriter) parseNumber(in json.Number) (TpCode, []byte, error) {
 	var data [8]byte
+	if w.exactNumbers {
+		// Keep the existing integer categories where possible. All other
+		// numbers retain their JSON lexeme in the existing DECIMAL encoding;
+		// in particular, never pass a decimal or exponent through float64.
+		if !strings.ContainsAny(string(in), "Ee.") {
+			if val, err := in.Int64(); err == nil {
+				endian.PutUint64(data[:], uint64(val))
+				return TpCodeInt64, data[:], nil
+			}
+			if val, err := strconv.ParseUint(string(in), 10, 64); err == nil {
+				endian.PutUint64(data[:], val)
+				return TpCodeUint64, data[:], nil
+			}
+		}
+		return TpCodeDecimal, addString(nil, string(in)), nil
+	}
 	//check if it is a float
 	if strings.ContainsAny(string(in), "Ee.") {
 		val, err := in.Float64()

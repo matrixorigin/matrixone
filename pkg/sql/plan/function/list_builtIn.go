@@ -1463,6 +1463,23 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// Explicit exact-number ingestion, using the existing JSON storage type.
+	{
+		functionId: JSON_PARSE_EXACT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonParseExactCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload { return JsonParseExact },
+			},
+		},
+	},
+
 	// function `json_extract`
 	{
 		functionId: JSON_EXTRACT,

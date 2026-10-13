@@ -724,12 +724,26 @@ func (h *ParquetHandler) processNestedValue(
 	if mapper != nil && mapper.listValuesMapper != nil {
 		return mapper.listValuesMapper(mapper, colValues, 1, proc, vec)
 	}
+	if lt := col.Type().LogicalType(); lt != nil && lt.Variant != nil {
+		if _, err := variantGroupPresent(proc.Ctx, col, colValues); err != nil {
+			if cause := context.Cause(proc.Ctx); cause != nil {
+				return cause
+			}
+			return moerr.NewInvalidInputf(proc.Ctx, "malformed Parquet VARIANT row: %v", err)
+		}
+	}
 	if isNestedColumnNull(colValues, col) {
 		return appendNull(vec, def, proc)
 	}
 
 	nested, err := reconstructNestedValue(proc.Ctx, col, colValues)
 	if err != nil {
+		if cause := context.Cause(proc.Ctx); cause != nil {
+			return cause
+		}
+		if lt := col.Type().LogicalType(); lt != nil && lt.Variant != nil {
+			return err
+		}
 		return moerr.NewInternalErrorf(proc.Ctx,
 			"failed to reconstruct nested column %s: %v", col.Name(), err)
 	}
@@ -836,6 +850,9 @@ func reconstructNestedValue(ctx context.Context, col *parquet.Column, values []p
 	// Check LogicalType first
 	logicalType := col.Type().LogicalType()
 	if logicalType != nil {
+		if logicalType.Variant != nil {
+			return reconstructParquetVariant(ctx, col, values)
+		}
 		if logicalType.List != nil {
 			return reconstructList(ctx, col, values)
 		}
@@ -1359,12 +1376,16 @@ func filterValuesByColumn(values []parquet.Value, col *parquet.Column) []parquet
 
 // reconstructNestedByType reconstructs nested structure by type
 func reconstructNestedByType(ctx context.Context, col *parquet.Column, values []parquet.Value) (any, error) {
+	if lt := col.Type().LogicalType(); lt != nil && lt.Variant != nil {
+		return reconstructParquetVariant(ctx, col, values)
+	}
 	if col.Optional() && isNestedColumnNull(values, col) {
 		return nil, nil
 	}
 
 	logicalType := col.Type().LogicalType()
 	if logicalType != nil {
+
 		if logicalType.List != nil {
 			return reconstructList(ctx, col, values)
 		}
