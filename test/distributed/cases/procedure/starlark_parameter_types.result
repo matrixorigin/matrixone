@@ -735,6 +735,7 @@ matches
 1
 create table effects(n int);
 create procedure effect_failure(out v int) language 'starlark' $$rs, err = mo.sql('insert into effects values(1)')
+if err != None: fail(err)
 out_v = 'not-an-int'$$;
 set @v=99;
 call effect_failure(@v);

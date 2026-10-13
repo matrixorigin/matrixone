@@ -567,6 +567,7 @@ select @a in (12,13) as matches;
 create table effects(n int);
 -- New output conversion errors must roll back the existing single procedure transaction.
 create procedure effect_failure(out v int) language 'starlark' $$rs, err = mo.sql('insert into effects values(1)')
+if err != None: fail(err)
 out_v = 'not-an-int'$$;
 set @v=99;
 call effect_failure(@v);
