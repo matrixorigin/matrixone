@@ -15,13 +15,13 @@ create fulltext2 index ft on docs(body);
 
 -- Control: direct indexed MATCH uses fulltext2_search.
 -- @separator:table
--- @regex("fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from docs where match(body) against('+needle +anchor' in boolean mode) order by id;
 select id from docs where match(body) against('+needle +anchor' in boolean mode) order by id;
 
 -- Scalar subquery in WHERE / projection / ORDER BY: still indexed, scalar applied normally.
 -- @separator:table
--- @regex("fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from docs where match(body) against('+needle +anchor' in boolean mode)
   and id > (select n from q where name='lo') order by id;
 select id from docs where match(body) against('+needle +anchor' in boolean mode)
@@ -33,7 +33,7 @@ select id from docs where match(body) against('+needle +anchor' in boolean mode)
 
 -- NOT EXISTS (ANTI join): the MATCH is on the preserved docs side. Was 20105.
 -- @separator:table
--- @regex("fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from docs where match(body) against('+needle +anchor' in boolean mode)
   and not exists (select 1 from q where name='missing') order by id;
 -- q has no 'missing' row -> NOT EXISTS true -> all matches returned.
@@ -45,7 +45,7 @@ select id from docs where match(body) against('+needle +anchor' in boolean mode)
 
 -- Correlated EXISTS (MARK join): the MATCH is on the preserved docs side. Was 20105.
 -- @separator:table
--- @regex("fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select d.id from docs d where match(d.body) against('+needle +anchor' in boolean mode)
   and exists (select 1 from q where q.n < d.id) order by d.id;
 -- q.n=0 < every matching id -> all matches returned.
