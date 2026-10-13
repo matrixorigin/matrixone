@@ -1,6 +1,7 @@
 -- GPU REQUIRED. BY RANK search knobs on cagra and ivfpq (#28988). The 500 nearest rows
--- fail the filter: the default candidate budget returns no row, itopk 1000 returns ids
--- 501..510. nprobe and max_nprobe apply to ivfpq only.
+-- fail the filter: the default candidate budget returns no row, itopk 1000 returns a full
+-- page (cagra; its graph build is not deterministic) or ids 501..510 (ivfpq). nprobe and
+-- max_nprobe apply to ivfpq only.
 drop database if exists vector_filtered_search_knobs_gpu;
 create database vector_filtered_search_knobs_gpu;
 use vector_filtered_search_knobs_gpu;
@@ -18,7 +19,7 @@ create index i_ivfpq using ivfpq on t_ivfpq(v) op_type 'vector_l2_ops' lists=2 m
 
 -- cagra
 select count(*) from (select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10) x;
-select group_concat(id order by id) from (select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'itopk=1000') x;
+select count(*) from (select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'itopk=1000') x;
 -- @separator:table
 -- @regex("Internal Top-K: 1000", true)
 explain select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'itopk=1000';

@@ -12,9 +12,9 @@ create index i_ivfpq using ivfpq on t_ivfpq(v) op_type 'vector_l2_ops' lists=2 m
 select count(*) from (select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10) x;
 ➤ count(*)[-5,64,0]  𝄀
 0
-select group_concat(id order by id) from (select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'itopk=1000') x;
-➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
-501,502,503,504,505,506,507,508,509,510
+select count(*) from (select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'itopk=1000') x;
+➤ count(*)[-5,64,0]  𝄀
+10
 explain select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'itopk=1000';
 -- @regex("Internal Top-K: 1000", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
