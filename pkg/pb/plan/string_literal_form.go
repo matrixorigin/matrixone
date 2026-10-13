@@ -24,7 +24,7 @@ import (
 
 func isPlanMySQLStringType(id int32) bool {
 	switch id {
-	case 60, 61, 64, 65, 70, 71, 72:
+	case 60, 61, 64, 65, 70, 71:
 		return true
 	default:
 		return false
@@ -1739,7 +1739,7 @@ func isJSONOpaqueTextContract(expr *Expr, fn *Function, id int32) bool {
 			}
 		}
 		return false
-	case 16, 76, 253, 256, 459, 462: // CONCAT/WS, JSON_EXTRACT_STRING/UNQUOTE/PRETTY/VALUE
+	case 16, 76, 253, 256, 257, 459, 460, 461, 462: // JSON text renderers and schema validators
 		for _, arg := range fn.Args {
 			if arg != nil && arg.Typ.Id == planJSONTypeID {
 				return true

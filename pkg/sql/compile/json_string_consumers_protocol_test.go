@@ -53,6 +53,10 @@ func bindJSONStringConsumerExpr(t *testing.T, name string) *planpb.Expr {
 	}
 	var args []*planpb.Expr
 	switch name {
+	case "json_row":
+		args = []*planpb.Expr{jsonColumn}
+	case "json_schema_valid", "json_schema_validation_report":
+		args = []*planpb.Expr{stringConstant(`{"type":"string","maxLength":95}`), jsonColumn}
 	case "concat":
 		args = []*planpb.Expr{jsonColumn, stringConstant("!")}
 	case "concat_ws":
@@ -70,7 +74,9 @@ func bindJSONStringConsumerExpr(t *testing.T, name string) *planpb.Expr {
 	if name == "elt" {
 		wantOverload = 1
 	}
-	require.Equal(t, wantOverload, overloadID)
+	if name == "concat" || name == "concat_ws" || name == "elt" {
+		require.Equal(t, wantOverload, overloadID)
+	}
 	return expr
 }
 
@@ -314,4 +320,20 @@ func TestJSONStringConsumerAfterMainDateProtocol(t *testing.T) {
 	require.Greater(t, remoteExpressionProtocolVersion(elt), defines.MORPCVersion112)
 	both := planpb.RemoteExpressionFeatures{JSONStringConsumerOverload: true, DateNumericResultContracts: true}
 	require.Equal(t, remoteExpressionProtocolVersion(elt), remoteExpressionProtocolVersion(both))
+}
+
+// Existing stored opaque values need no new CAST/ELT producer in the plan.
+func TestJSONOpaqueExistingConsumerFences(t *testing.T) {
+	for _, name := range []string{"json_row", "json_schema_valid", "json_schema_validation_report"} {
+		t.Run(name, func(t *testing.T) {
+			expr := bindJSONStringConsumerExpr(t, name)
+			features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.True(t, features.JSONOpaqueTextContracts)
+			floor, err := plan2.RequiredPersistedExpressionProtocolVersion(expr)
+			require.NoError(t, err)
+			require.Equal(t, defines.MORPCVersion113, floor)
+			testJSONStringConsumerSerializationFences(t, name)
+		})
+	}
 }

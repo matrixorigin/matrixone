@@ -1124,7 +1124,8 @@ func TestJSONBinaryCastAndStoredOpaqueRenderingFeatures(t *testing.T) {
 		{"storedconcat", 16, 62, 71, false, true}, {"storedconcatws", 76, 62, 71, false, true},
 		{"jsonvarchar", 21, 62, 61, false, true}, {"jsonbinary", 21, 62, 64, false, true}, {"jsonassign", 554, 62, 71, false, true},
 		{"jsonignore", 555, 62, 70, false, true}, {"jsonstrict", 541, 62, 61, false, true},
-		{"jsonunquote", 256, 62, 61, false, true}, {"jsonpretty", 459, 62, 71, false, true}, {"udfjson", 326, 62, 22, false, true},
+		{"jsonunquote", 256, 62, 61, false, true}, {"jsonpretty", 459, 62, 71, false, true},
+		{"jsonrow", 257, 62, 71, false, true}, {"jsonschema", 460, 62, 10, false, true}, {"jsonschemareport", 461, 62, 62, false, true}, {"udfjson", 326, 62, 22, false, true},
 		{"legacySQLbinarykey", 366, 70, 62, false, false}, {"storedobjectkey", 366, 62, 62, false, true},
 		{"plainconcat", 16, 61, 71, false, false},
 		{"jsontype", 456, 62, 61, false, false}, {"numericjsoncast", 21, 22, 62, false, false},
@@ -1145,4 +1146,8 @@ func TestJSONBinaryCastKnownNumericParameterResultNotOpaque(t *testing.T) {
 	features, err := RequiredRemoteExpressionFeatures(outer)
 	require.NoError(t, err)
 	require.False(t, features.JSONOpaqueTextContracts)
+}
+
+func TestJSONOpaqueRendererDoesNotExpandSharedStringTypes(t *testing.T) {
+	require.False(t, isPlanMySQLStringType(72))
 }
