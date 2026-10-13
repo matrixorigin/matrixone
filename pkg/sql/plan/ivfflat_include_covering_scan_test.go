@@ -51,7 +51,7 @@ func TestBuildIvfSearchColDefsIncludesCoveringColumnsWithoutMutatingBase(t *test
 }
 
 func TestApplyIndicesForSortUsingIvfflatBuildsDynamicColsForOptimizerPath(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(false)
+	baseMockCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -165,7 +165,7 @@ func TestApplyIndicesForSortUsingIvfflatBuildsDynamicColsForOptimizerPath(t *tes
 	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
 	tableFuncNode := builder.qry.Nodes[sortNode.Children[0]]
 
-	require.Equal(t, plan.Node_VECTOR_INDEX_SCAN, tableFuncNode.NodeType)
+	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, tableFuncNode.NodeType)
 	require.Len(t, tableFuncNode.TableDef.Cols, 3)
 	require.Equal(t, "pkid", tableFuncNode.TableDef.Cols[0].Name)
 	require.Equal(t, "score", tableFuncNode.TableDef.Cols[1].Name)

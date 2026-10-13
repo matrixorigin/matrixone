@@ -185,85 +185,144 @@ func TestParquetValueConvertersCoverageHack(t *testing.T) {
 
 func TestParquetProcessHelpersCoverageHack(t *testing.T) {
 	ctx := context.Background()
-	proc := testutil.NewProc(t)
+	proc := testutil.NewProc(t, testutil.WithFileService(nil))
+	t.Cleanup(func() {
+		bytes, objects := proc.Mp().OnHeapOutstanding()
+		require.Equal(t, [3]int64{}, [3]int64{proc.Mp().CurrNB(), bytes, objects})
+	})
+	newVec := func(typ types.Type) *vector.Vector {
+		vec := vector.NewVec(typ)
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
+		return vec
+	}
 
 	emptyJSONPage := parquet.ByteArrayType.NewPage(0, 0, encoding.ByteArrayValues(nil, []uint32{0}))
-	require.NoError(t, processStringToJson(ctx, &columnMapper{}, emptyJSONPage, proc, vector.NewVec(types.T_json.ToType())))
+	emptyJSONVec := newVec(types.T_json.ToType())
+	require.NoError(t, processStringToJson(ctx, &columnMapper{}, emptyJSONPage, proc, emptyJSONVec))
+	require.Zero(t, emptyJSONVec.Length())
+	require.True(t, emptyJSONVec.GetNulls().IsEmpty())
 
-	jsonPage := parquetOptionalPage(t, parquet.String(), []parquet.Row{
+	_, jsonPage := writeColumnAndGetPage(t, parquet.Optional(parquet.String()), []parquet.Row{
 		{parquet.ByteArrayValue([]byte(`{"a":1}`)).Level(0, 1, 0)},
 		{parquet.NullValue().Level(0, 0, 0)},
 	})
-	jsonVec := vector.NewVec(types.T_json.ToType())
+	jsonVec := newVec(types.T_json.ToType())
 	require.NoError(t, processStringToJson(ctx, &columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 1}, jsonPage, proc, jsonVec))
 	require.Equal(t, 2, jsonVec.Length())
+	require.Equal(t, []uint64{1}, jsonVec.GetNulls().ToArray())
+	require.Equal(t, `{"a": 1}`, types.DecodeJson(jsonVec.GetBytesAt(0)).String())
 
-	intPage := parquetOptionalPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Row{
+	_, intPage := writeColumnAndGetPage(t, parquet.Optional(parquet.Leaf(parquet.Int32Type)), []parquet.Row{
 		{parquet.NullValue().Level(0, 0, 0)},
 	})
-	intVec := vector.NewVec(types.T_int32.ToType())
+	intVec := newVec(types.T_int32.ToType())
 	require.NoError(t, processParquetValuesToFixed[int32](ctx,
 		&columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 1},
-		intPage, proc, intVec, 0, func(v parquet.Value) (int32, error) { return v.Int32(), nil }))
+		intPage, proc, intVec, 0, func(v parquet.Value) (int32, error) { t.Error("converter called for NULL"); return v.Int32(), nil }))
 	require.Equal(t, 1, intVec.Length())
+	require.Equal(t, []uint64{0}, intVec.GetNulls().ToArray())
 
+	rejectedInt := newVec(types.T_int32.ToType())
 	err := processParquetValuesToFixed[int32](ctx,
 		&columnMapper{srcNull: true, dstNull: false, maxDefinitionLevel: 1},
-		intPage, proc, vector.NewVec(types.T_int32.ToType()), 0,
-		func(v parquet.Value) (int32, error) { return v.Int32(), nil })
+		intPage, proc, rejectedInt, 0,
+		func(v parquet.Value) (int32, error) { t.Error("converter called for NULL"); return v.Int32(), nil })
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
+	require.Zero(t, rejectedInt.Length())
+	require.True(t, rejectedInt.GetNulls().IsEmpty())
 
 	requiredIntPage := parquet.Int32Type.NewPage(0, 1, encoding.Int32Values([]int32{1}))
-	err = processParquetValuesToFixed[int32](ctx, &columnMapper{}, requiredIntPage, proc, vector.NewVec(types.T_int32.ToType()), 0,
-		func(v parquet.Value) (int32, error) { return 0, moerr.NewInvalidInputNoCtx("coverage") })
+	injectedfailedInt := moerr.NewInvalidInputNoCtx("injected failedInt conversion")
+	failedInt := newVec(types.T_int32.ToType())
+	err = processParquetValuesToFixed[int32](ctx, &columnMapper{}, requiredIntPage, proc, failedInt, 0,
+		func(v parquet.Value) (int32, error) { return 0, injectedfailedInt })
 	require.Error(t, err)
+	require.ErrorIs(t, err, injectedfailedInt)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Zero(t, failedInt.Length())
+	require.True(t, failedInt.GetNulls().IsEmpty())
 
-	bytesPage := parquetOptionalPage(t, parquet.Leaf(parquet.ByteArrayType), []parquet.Row{
+	_, bytesPage := writeColumnAndGetPage(t, parquet.Optional(parquet.Leaf(parquet.ByteArrayType)), []parquet.Row{
 		{parquet.NullValue().Level(0, 0, 0)},
 	})
-	bytesVec := vector.NewVec(types.T_varchar.ToType())
+	bytesVec := newVec(types.T_varchar.ToType())
 	require.NoError(t, processParquetValuesToBytes(ctx,
 		&columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 1},
-		bytesPage, proc, bytesVec, func(v parquet.Value) ([]byte, error) { return v.ByteArray(), nil }))
+		bytesPage, proc, bytesVec, func(v parquet.Value) ([]byte, error) { t.Error("converter called for NULL"); return v.ByteArray(), nil }))
 	require.Equal(t, 1, bytesVec.Length())
+	require.Equal(t, []uint64{0}, bytesVec.GetNulls().ToArray())
 
+	rejectedBytes := newVec(types.T_varchar.ToType())
 	err = processParquetValuesToBytes(ctx,
 		&columnMapper{srcNull: true, dstNull: false, maxDefinitionLevel: 1},
-		bytesPage, proc, vector.NewVec(types.T_varchar.ToType()),
-		func(v parquet.Value) ([]byte, error) { return v.ByteArray(), nil })
+		bytesPage, proc, rejectedBytes,
+		func(v parquet.Value) ([]byte, error) { t.Error("converter called for NULL"); return v.ByteArray(), nil })
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
+	require.Zero(t, rejectedBytes.Length())
+	require.True(t, rejectedBytes.GetNulls().IsEmpty())
 
 	requiredBytesPage := parquet.ByteArrayType.NewPage(0, 1, encoding.ByteArrayValues([]byte("x"), []uint32{0, 1}))
-	err = processParquetValuesToBytes(ctx, &columnMapper{}, requiredBytesPage, proc, vector.NewVec(types.T_varchar.ToType()),
-		func(v parquet.Value) ([]byte, error) { return nil, moerr.NewInvalidInputNoCtx("coverage") })
+	injectedfailedBytes := moerr.NewInvalidInputNoCtx("injected failedBytes conversion")
+	failedBytes := newVec(types.T_varchar.ToType())
+	emptyListVec := newVec(types.New(types.T_array_float32, 1, 0))
+	err = processParquetValuesToBytes(ctx, &columnMapper{}, requiredBytesPage, proc, failedBytes,
+		func(v parquet.Value) ([]byte, error) { return nil, injectedfailedBytes })
 	require.Error(t, err)
+	require.ErrorIs(t, err, injectedfailedBytes)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Zero(t, failedBytes.Length())
+	require.True(t, failedBytes.GetNulls().IsEmpty())
 
 	emptyListPage := parquet.FloatType.NewPage(0, 0, encoding.FloatValues(nil))
 	require.NoError(t, processParquetListToArray[float32](ctx, &columnMapper{}, emptyListPage, proc,
-		vector.NewVec(types.New(types.T_array_float32, 1, 0)), 1, func(v parquet.Value) (float32, error) { return v.Float(), nil }))
+		emptyListVec, 1, func(v parquet.Value) (float32, error) {
+			t.Error("converter called for empty/NULL list")
+			return v.Float(), nil
+		}))
 
 	_, nullListPage := writeListNodeAndGetPage(t, parquet.Optional(parquet.List(parquet.Leaf(parquet.FloatType))), []parquet.Row{
 		{parquet.NullValue().Level(0, 0, 0)},
 	})
-	arrayVec := vector.NewVec(types.New(types.T_array_float32, 1, 0))
+	arrayVec := newVec(types.New(types.T_array_float32, 1, 0))
 	require.NoError(t, processParquetListToArray[float32](ctx,
 		&columnMapper{dstNull: true, maxDefinitionLevel: 2, listCanBeNull: true, listEmptyLevel: 1},
-		nullListPage, proc, arrayVec, 1, func(v parquet.Value) (float32, error) { return v.Float(), nil }))
+		nullListPage, proc, arrayVec, 1, func(v parquet.Value) (float32, error) {
+			t.Error("converter called for empty/NULL list")
+			return v.Float(), nil
+		}))
 	require.Equal(t, 1, arrayVec.Length())
+	require.Equal(t, []uint64{0}, arrayVec.GetNulls().ToArray())
 
+	require.Zero(t, emptyListVec.Length())
+	require.True(t, emptyListVec.GetNulls().IsEmpty())
+	rejectedList := newVec(types.New(types.T_array_float32, 1, 0))
 	err = processParquetListToArray[float32](ctx,
 		&columnMapper{dstNull: false, maxDefinitionLevel: 2, listCanBeNull: true, listEmptyLevel: 1},
-		nullListPage, proc, vector.NewVec(types.New(types.T_array_float32, 1, 0)), 1,
-		func(v parquet.Value) (float32, error) { return v.Float(), nil })
+		nullListPage, proc, rejectedList, 1,
+		func(v parquet.Value) (float32, error) {
+			t.Error("converter called for empty/NULL list")
+			return v.Float(), nil
+		})
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
+	require.Zero(t, rejectedList.Length())
+	require.True(t, rejectedList.GetNulls().IsEmpty())
 
 	_, valueListPage := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
 		{parquet.FloatValue(1).Level(0, 1, 0)},
 	})
+	injectedfailedList := moerr.NewInvalidInputNoCtx("injected failedList conversion")
+	failedList := newVec(types.New(types.T_array_float32, 1, 0))
 	err = processParquetListToArray[float32](ctx, &columnMapper{maxDefinitionLevel: 1}, valueListPage, proc,
-		vector.NewVec(types.New(types.T_array_float32, 1, 0)), 1,
-		func(v parquet.Value) (float32, error) { return 0, moerr.NewInvalidInputNoCtx("coverage") })
+		failedList, 1,
+		func(v parquet.Value) (float32, error) { return 0, injectedfailedList })
 	require.Error(t, err)
+	require.ErrorIs(t, err, injectedfailedList)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Zero(t, failedList.Length())
+	require.True(t, failedList.GetNulls().IsEmpty())
 }
 
 func TestParquetSourceKindCoverageHack(t *testing.T) {
@@ -300,22 +359,6 @@ func parquetCoverageBytes(t *testing.T) []byte {
 	require.NoError(t, err)
 	require.NoError(t, w.Close())
 	return buf.Bytes()
-}
-
-func parquetOptionalPage(t *testing.T, node parquet.Node, rows []parquet.Row) parquet.Page {
-	t.Helper()
-	var buf bytes.Buffer
-	schema := parquet.NewSchema("x", parquet.Group{"c": parquet.Optional(node)})
-	w := parquet.NewWriter(&buf, schema)
-	_, err := w.WriteRows(rows)
-	require.NoError(t, err)
-	require.NoError(t, w.Close())
-
-	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-	require.NoError(t, err)
-	page, err := f.Root().Column("c").Pages().ReadPage()
-	require.NoError(t, err)
-	return page
 }
 
 func requireParquetString(t *testing.T, ctx context.Context, st parquet.Type, v parquet.Value, expected string) {

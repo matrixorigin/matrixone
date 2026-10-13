@@ -248,6 +248,7 @@ Ready to dive deeper? Explore our comprehensive collection of hands-on tutorials
 | Tutorial | Language/Framework | Description |
 |----------|-------------------|-------------|
 | [Java CRUD Demo](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/develop-java-crud-demo.html) | Java | Java application development |
+| [Spark JDBC writes](docs/guides/spark-jdbc.md) | Python / Spark | Configure Spark JDBC writes for MatrixOne's supported isolation level |
 | [SpringBoot and JPA CRUD Demo](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/springboot-hibernate-crud-demo.html) | Java | SpringBoot with Hibernate/JPA |
 | [PyMySQL CRUD Demo](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/develop-python-crud-demo.html) | Python | Basic database operations with Python |
 | [SQLAlchemy CRUD Demo](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/sqlalchemy-python-crud-demo.html) | Python | Python with SQLAlchemy ORM |
@@ -307,7 +308,7 @@ One-command deployment and lifecycle management with the official [mo_ctl](https
 
 ### ⚙️ Building from Source
 
-Build MatrixOne from source for development, customization, or contributing. Requires Go 1.26.4 or later, GCC/Clang, Git, and Make.
+Build MatrixOne from source for development, customization, or contributing. Requires Go 1.27.1 or later, GCC/Clang, Git, and Make.
 
 📖 **[Complete Build from Source Guide →](BUILD.md)**
 

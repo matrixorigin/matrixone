@@ -68,12 +68,12 @@ func appendVerifierInput() (api.AppendRequest, *api.CommitAttempt) {
 		Summary:      map[string]string{"idempotency-key": "stmt-append"},
 	}
 	return api.AppendRequest{
-			Namespace: api.Namespace{"sales"}, Table: "orders", TargetRef: "main",
-			IdempotencyKey: "stmt-append",
-		}, &api.CommitAttempt{
-			TargetRef: "main", IdempotencyKey: "stmt-append",
-			Updates: []api.CommitUpdate{{Type: "add-snapshot", Snapshot: &snapshot}},
-		}
+		Namespace: api.Namespace{"sales"}, Table: "orders", TargetRef: "main",
+		IdempotencyKey: "stmt-append",
+	}, &api.CommitAttempt{
+		TargetRef: "main", IdempotencyKey: "stmt-append",
+		Updates: []api.CommitUpdate{{Type: "add-snapshot", Snapshot: &snapshot}},
+	}
 }
 
 func appendVerifierMetadataJSON(idempotencyKey string) []byte {

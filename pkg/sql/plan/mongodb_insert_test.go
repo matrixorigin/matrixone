@@ -26,7 +26,7 @@ import (
 )
 
 func TestMongoDBInsertSelectPrimaryKeyUsesShuffleDedup(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	mapping := mongodb.TableMapping{
 		Connection: "mongodb_ci", Database: "mongodb_source", Collection: "nation",
 		SchemaMode: mongodb.SchemaExplicit, Conversion: mongodb.ConversionStrict, MaxParallelism: 1,

@@ -320,7 +320,9 @@ drop snapshot if exists sp04;
 create snapshot sp04 for account;
 insert into f1 values (3,20);
 insert into f1 values (4,600);
+-- @regex("not supported: can not restore table .* referenced by some foreign key constraint", true)
 restore table test04.f1{snapshot="sp04"};
+not supported: can not restore table 'test04.f1' referenced by some foreign key constraint
 use test04;
 show tables;
 Tables_in_test04
@@ -352,7 +354,9 @@ drop snapshot if exists sp05;
 create snapshot sp05 for account acc01;
 insert into f1 values (3,20);
 insert into f1 values (4,600);
+-- @regex("not supported: can not restore table .* referenced by some foreign key constraint", true)
 restore table test05.f1{snapshot="sp05"};
+not supported: can not restore table 'test05.f1' referenced by some foreign key constraint
 use test04;
 Unknown database test04
 show tables;

@@ -44,7 +44,7 @@ type topKPlan struct {
 func newTopKPlan(t *testing.T, limit uint64, projListLen int) topKPlan {
 	t.Helper()
 
-	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(t), false, true)
 	ctx := NewBindContext(builder, nil)
 	tableDef := newVectorJoinTableDef(true, false)
 
@@ -258,7 +258,7 @@ func TestApplyVectorIndexForSortContext_NilIdxColMap(t *testing.T) {
 // identity; without one, the new subtree root is returned for applyIndices to repoint, and
 // the column remap goes into idxColMap so ancestors pick it up on the way out.
 func TestSpliceVectorRewrite_AnchorAwareness(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, newVectorJoinMockCtx(t), false, true)
 	scoreExpr := &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_float64)},
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 99, ColPos: 1}},

@@ -42,7 +42,6 @@ type state int
 const (
 	running  = state(0)
 	stopping = state(1)
-	stopped  = state(2)
 )
 
 // Option stop option
@@ -98,7 +97,8 @@ type Stopper struct {
 
 	tasks struct {
 		sync.RWMutex
-		m map[uint64]string
+		m       map[uint64]string
+		drained chan struct{} // Coalesced empty notifications; m remains authoritative.
 	}
 
 	mu struct {
@@ -116,6 +116,7 @@ func NewStopper(name string, opts ...Option) *Stopper {
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.tasks.m = make(map[uint64]string)
+	s.tasks.drained = make(chan struct{}, 1)
 	for _, opt := range opts {
 		opt(s.opts)
 	}
@@ -176,49 +177,55 @@ func (s *Stopper) RunNamedTask(name string, task func(context.Context)) error {
 	return nil
 }
 
+// RunNamedRetryTask makes at most retryLimit attempts, including the initial one.
+// Backoff is interruptible by Stop; accepted ordinary tasks keep RunNamedTask's
+// invocation contract, while canceled retries do not start another attempt.
 func (s *Stopper) RunNamedRetryTask(name string, accountId int32, retryLimit uint32, task func(context.Context, int32) error) error {
-	// we use read lock here for avoid race
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if s.mu.state != running {
-		return ErrUnavailable
-	}
-
-	id, ctx := s.allocate()
-	s.doRunCancelableRetryTask(ctx, id, name, accountId, retryLimit, task)
-	return nil
+	return s.RunNamedTask(name, func(ctx context.Context) {
+		wait := time.Second
+		const maxWait = 10 * time.Second
+		for attempt := uint32(0); attempt < retryLimit; attempt++ {
+			if ctx.Err() != nil {
+				return
+			}
+			if err := task(ctx, accountId); err == nil || attempt+1 == retryLimit {
+				return
+			}
+			timer := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			wait = min(wait*2, maxWait)
+		}
+	})
 }
 
 // Stop stops all task, and wait to all tasks canceled. If some tasks do not exit within the specified time,
 // the names of these tasks will be print to the given logger.
 func (s *Stopper) Stop() {
 	s.mu.Lock()
-	state := s.mu.state
+	if s.mu.state == stopping {
+		s.mu.Unlock()
+		<-s.stopC
+		return
+	}
 	s.mu.state = stopping
 	s.mu.Unlock()
-
-	switch state {
-	case stopped:
-		return
-	case stopping:
-		<-s.stopC // wait concurrent stop completed
-		return
-	default:
-	}
-
-	defer func() {
-		close(s.stopC)
-	}()
-
+	defer close(s.stopC)
 	s.cancel()
-
+	if s.getTaskCount() == 0 {
+		return
+	}
 	stopAt := time.Now()
 	ticker := time.NewTicker(s.opts.stopTimeout)
 	defer ticker.Stop()
-
-	for {
+	for s.getTaskCount() != 0 {
 		select {
+		case <-s.tasks.drained:
+			// The task map is authoritative; an earlier empty epoch may have notified us.
 		case <-ticker.C:
 			tasks := s.runningTasks()
 			continuous := time.Since(stopAt)
@@ -229,22 +236,14 @@ func (s *Stopper) Stop() {
 			if s.opts.timeoutTaskHandler != nil {
 				s.opts.timeoutTaskHandler(tasks, continuous)
 			}
-		default:
-			if s.getTaskCount() == 0 {
-				return
-			}
 		}
-
-		// Such 5ms delay can be a problem if we need to repeatedly create different stoppers,
-		// e.g. one stopper for each incoming request.
-		time.Sleep(time.Millisecond * 5)
 	}
 }
 
 func (s *Stopper) runningTasks() []string {
 	s.tasks.RLock()
 	defer s.tasks.RUnlock()
-	if s.getTaskCountLocked() == 0 {
+	if len(s.tasks.m) == 0 {
 		return nil
 	}
 
@@ -265,49 +264,21 @@ func (s *Stopper) shutdownTask(id uint64) {
 	s.tasks.Lock()
 	defer s.tasks.Unlock()
 	delete(s.tasks.m, id)
+	if len(s.tasks.m) == 0 {
+		// Coalesce empty epochs without maintaining a second task count.
+		select {
+		case s.tasks.drained <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (s *Stopper) doRunCancelableTask(ctx context.Context, taskID uint64, name string, task func(context.Context)) {
 	s.setupTask(taskID, name)
 	go func() {
-		defer func() {
-			s.shutdownTask(taskID)
-		}()
+		defer s.shutdownTask(taskID)
 
 		task(ctx)
-	}()
-}
-
-// doRunCancelableRetryTask Canceleable and able to retry execute asynchronous tasks
-func (s *Stopper) doRunCancelableRetryTask(ctx context.Context,
-	taskID uint64,
-	name string,
-	accountId int32,
-	retryLimit uint32,
-	task func(context.Context, int32) error) {
-	s.setupTask(taskID, name)
-	go func() {
-		defer func() {
-			s.shutdownTask(taskID)
-		}()
-
-		wait := time.Second
-		maxWait := time.Second * 10
-		for i := 0; i < int(retryLimit); i++ {
-			if err := task(ctx, accountId); err == nil {
-				return
-			}
-			time.Sleep(wait)
-			wait *= 2
-			if wait > maxWait {
-				wait = maxWait
-			}
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-		}
 	}()
 }
 
@@ -320,10 +291,5 @@ func (s *Stopper) allocate() (uint64, context.Context) {
 func (s *Stopper) getTaskCount() int {
 	s.tasks.RLock()
 	defer s.tasks.RUnlock()
-	return len(s.tasks.m)
-}
-
-// getTaskCountLocked returns number of the running task
-func (s *Stopper) getTaskCountLocked() int {
 	return len(s.tasks.m)
 }

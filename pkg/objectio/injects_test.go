@@ -46,3 +46,23 @@ func TestUpstreamSQLHelperInjected_NotInjected(t *testing.T) {
 	_, injected := UpstreamSQLHelperInjected()
 	assert.False(t, injected)
 }
+
+func TestCommitWaitInjectedTargetsTenant(t *testing.T) {
+	faultEnabledHere := fault.Enable()
+	t.Cleanup(func() {
+		_, _ = fault.RemoveFaultPoint(t.Context(), FJ_CommitWait)
+		_, _ = fault.RemoveFaultPoint(t.Context(), FJ_CommitWaitTargetTenant)
+		if faultEnabledHere {
+			fault.Disable()
+		}
+	})
+
+	require.NoError(t, fault.AddFaultPoint(t.Context(), FJ_CommitWaitTargetTenant, ":::", "ECHO", 7, "", false))
+	require.NoError(t, fault.AddFaultPoint(t.Context(), FJ_CommitWait, "1:1::", "ECHO", 0, "target", false))
+
+	_, injected := CommitWaitInjected(8)
+	require.False(t, injected)
+	message, injected := CommitWaitInjected(7)
+	require.True(t, injected)
+	require.Equal(t, "target", message)
+}

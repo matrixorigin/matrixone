@@ -23,7 +23,7 @@ import (
 )
 
 func TestGroupByProjectionPreservesCollatedPayload(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	optimizer.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
 	table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]
 	pos, ok := tableColumnPosition(table, "ename")
@@ -110,7 +110,7 @@ func TestOnlyFullGroupByDependencyClosure(t *testing.T) {
 		{"inactive key", "select e.empno,d.dname,count(*) from constraint_test.emp e left join constraint_test.dept d on e.deptno=d.deptno group by e.empno with rollup", nil, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			optimizer.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
 			if tc.unique != nil {
 				table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]

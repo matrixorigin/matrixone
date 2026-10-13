@@ -36,7 +36,7 @@ import (
 func testRebalancer(
 	t *testing.T, st *stopper.Stopper, logger *log.MOLogger, mc clusterservice.MOCluster,
 ) *rebalancer {
-	var opts []rebalancerOption
+	opts := make([]rebalancerOption, 0, 2)
 	opts = append(opts,
 		withRebalancerInterval(200*time.Millisecond),
 		withRebalancerTolerance(0.3),

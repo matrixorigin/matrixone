@@ -72,7 +72,7 @@ func (child *countingBroadcastProbeChild) Call(proc *process.Process) (vm.CallRe
 }
 
 func TestHashJoinCallConvertsTerminalBudgetAdmission(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 
 	admission := &process.ExecutionResourceError{
@@ -124,7 +124,7 @@ func TestBroadcastBudgetFailureUnblocksParallelHashJoinConsumers(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	rootProc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rootProc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rootProc.SetMessageBoard(message.NewMessageBoard())
 	rootProc.BuildPipelineContext(ctx)
 	budget, err := rootProc.GetExecutionResourceBudget()

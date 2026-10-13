@@ -1,0 +1,89 @@
+drop database if exists temporal_typed_date_ctas_28851;
+create database temporal_typed_date_ctas_28851;
+use temporal_typed_date_ctas_28851;
+set @old_sql_mode = @@sql_mode;
+set sql_mode = '';
+create table source_dates (d date not null, dt datetime not null);
+insert into source_dates values
+('0000-00-00', '0000-00-00 00:00:00'),
+('2024-01-02', '2024-01-02 03:04:05');
+prepare typed_date_read from
+'select date(d) is null as date_null, cast(dt as date) is null as cast_null
+from source_dates order by d';
+execute typed_date_read;
+➤ date_null[-7,1,0]  ¦  cast_null[-7,1,0]  𝄀
+0  ¦  0  𝄀
+0  ¦  0
+set sql_mode = 'NO_ZERO_DATE';
+execute typed_date_read;
+➤ date_null[-7,1,0]  ¦  cast_null[-7,1,0]  𝄀
+1  ¦  1  𝄀
+0  ¦  0
+set sql_mode = 'STRICT_TRANS_TABLES';
+execute typed_date_read;
+➤ date_null[-7,1,0]  ¦  cast_null[-7,1,0]  𝄀
+0  ¦  0  𝄀
+0  ¦  0
+set sql_mode = 'NO_ZERO_DATE';
+deallocate prepare typed_date_read;
+create table materialized_dates as
+select d as direct_d, dt as direct_dt,
+date(d) as date_d, date(dt) as date_dt,
+cast(d as date) as cast_d, cast(dt as date) as cast_dt
+from (select d, dt from source_dates) as x;
+select column_name, is_nullable from information_schema.columns
+where table_schema = 'temporal_typed_date_ctas_28851'
+and table_name = 'materialized_dates' order by ordinal_position;
+➤ column_name[12,256,0]  ¦  is_nullable[12,3,0]  𝄀
+direct_d  ¦  NO  𝄀
+direct_dt  ¦  NO  𝄀
+date_d  ¦  YES  𝄀
+date_dt  ¦  YES  𝄀
+cast_d  ¦  YES  𝄀
+cast_dt  ¦  YES
+select direct_d, date_d is null as date_d_null, date_dt is null as date_dt_null,
+cast_d is null as cast_d_null, cast_dt is null as cast_dt_null
+from materialized_dates order by direct_d;
+➤ direct_d[91,10,0]  ¦  date_d_null[-7,1,0]  ¦  date_dt_null[-7,1,0]  ¦  cast_d_null[-7,1,0]  ¦  cast_dt_null[-7,1,0]  𝄀
+0000-00-00  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
+2024-01-02  ¦  0  ¦  0  ¦  0  ¦  0
+set sql_mode = '';
+create table extract_source (d date not null, s varchar(30) not null, n bigint not null);
+insert into extract_source values ('0000-00-00', 'bad', 3652425), ('2024-01-07', '2024-01-07', 739257);
+create table extracted as select d,
+extract(week from d) as ew, extract(year from s) as ey, year(s) as sy,
+month(s) as sm, quarter(s) as sq, day(s) as sd,
+week(d) as w, weekofyear(d) as wy, weekday(d) as wd, yearweek(d) as yw,
+dayofweek(d) as dw, dayofyear(d) as dy, dayname(d) as dn, monthname(d) as mn,
+from_days(n) as fd, year(d) as typed_y
+from extract_source;
+select column_name, is_nullable from information_schema.columns
+where table_schema = 'temporal_typed_date_ctas_28851'
+and table_name = 'extracted' order by ordinal_position;
+➤ column_name[12,256,0]  ¦  is_nullable[12,3,0]  𝄀
+d  ¦  NO  𝄀
+ew  ¦  YES  𝄀
+ey  ¦  YES  𝄀
+sy  ¦  YES  𝄀
+sm  ¦  YES  𝄀
+sq  ¦  YES  𝄀
+sd  ¦  YES  𝄀
+w  ¦  YES  𝄀
+wy  ¦  YES  𝄀
+wd  ¦  YES  𝄀
+yw  ¦  YES  𝄀
+dw  ¦  YES  𝄀
+dy  ¦  YES  𝄀
+dn  ¦  YES  𝄀
+mn  ¦  YES  𝄀
+fd  ¦  YES  𝄀
+typed_y  ¦  NO
+select d, ew, ey, sy, sm, sq, sd, w, wy, wd, yw, dw, dy, dn, mn, fd, typed_y from extracted order by d;
+➤ d[91,10,0]  ¦  ew[-5,64,0]  ¦  ey[-5,64,0]  ¦  sy[-5,64,0]  ¦  sm[-6,8,0]  ¦  sq[-6,8,0]  ¦  sd[-6,8,0]  ¦  w[-6,8,0]  ¦  wy[-5,64,0]  ¦  wd[-5,64,0]  ¦  yw[-5,64,0]  ¦  dw[-5,64,0]  ¦  dy[5,16,0]  ¦  dn[12,65535,0]  ¦  mn[12,65535,0]  ¦  fd[91,10,0]  ¦  typed_y[-5,64,0]  𝄀
+0000-00-00  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  𝄀
+2024-01-07  ¦  1  ¦  2024  ¦  2024  ¦  1  ¦  1  ¦  7  ¦  1  ¦  1  ¦  6  ¦  202401  ¦  1  ¦  7  ¦  Sunday  ¦  January  ¦  2024-01-07  ¦  2024
+select extract(week from date '2024-01-01') as mode0_week;
+➤ mode0_week[-5,64,0]  𝄀
+0
+set sql_mode = @old_sql_mode;
+drop database temporal_typed_date_ctas_28851;

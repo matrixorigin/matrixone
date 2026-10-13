@@ -49,6 +49,7 @@ func TestJsonMergePatchWrapperAllocationsDoNotScaleWithRows(t *testing.T) {
 			NewFunctionTestResult(types.T_json.ToType(), false, nil, nil),
 			newOpBuiltInJsonMerge().buildJsonMergePatch,
 		)
+		defer testCase.Free()
 		var runErr error
 		allocs := testing.AllocsPerRun(3, func() {
 			runErr = testCase.result.PreExtendAndReset(rows)

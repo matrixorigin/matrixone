@@ -68,7 +68,6 @@ type Options struct {
 	timeZone                *time.Location
 	statementOptions        StatementOption
 	txnOpts                 []client.TxnOption
-	enableTrace             bool
 	lower                   *int64
 	streaming               bool
 	stream_chan             chan Result
@@ -82,6 +81,8 @@ type Options struct {
 	lockWaitTimeoutSet      bool
 	txnIsolation            txn.TxnIsolation
 	txnIsolationSet         bool
+	txnMode                 txn.TxnMode
+	txnModeSet              bool
 	// isFrontend records whether the caller is a frontend
 	// session-bound invocation. Go zero value (false) means
 	// background: every caller of the internal SQL executor is
@@ -106,7 +107,9 @@ type StatementOption struct {
 	ignoreCheckExperimental  bool
 	params                   []string
 	paramNulls               []bool
+	preparedParamValues      []ParamValue
 	alterCopyOpt             *plan.AlterCopyOpt
+	prePipelineLockTableID   uint64
 	disableDropAutoIncrement bool
 	skipDataBranchReclaim    bool
 	keepAutoIncrement        uint64
@@ -119,6 +122,7 @@ type StatementOption struct {
 	// preparation result of ALTER TABLE ... ALGORITHM=COPY. It is set only by
 	// the owning ALTER compile, never by user SQL.
 	copyAlterPrepare CopyAlterPreparation
+	optimizerHints           string
 }
 
 // Result exec sql result

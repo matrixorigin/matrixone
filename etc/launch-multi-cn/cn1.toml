@@ -34,6 +34,10 @@ backend = "DISK-ETL"
 disableTrace = true
 disableMetric = true
 
+# Fresh local test cluster opt-in; upgrade all CN/TN services before enabling.
+[cn.auto-increment]
+enable-auto-id-cache = true
+
 [cn]
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
 port-base = 18100

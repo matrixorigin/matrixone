@@ -23,6 +23,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
@@ -90,12 +91,72 @@ func (s *publicationReadStorage) Read(ctx context.Context, key string, min, max 
 	}, nil
 }
 
+// This test intentionally blocks asynchronous disk-cache publication. Keep
+// the FileService operation contexts independent from fixture setup and the
+// publication barrier; this is only a per-phase liveness guard.
+const pendingPublicationTestWatchdog = 30 * time.Second
+
+func runPendingPublicationPhase(t *testing.T, phase string, release func(), run func(context.Context) error) error {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx) }()
+
+	timer := time.NewTimer(pendingPublicationTestWatchdog)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		cancel()
+		return err
+	case <-timer.C:
+		cancel()
+		if release != nil {
+			release()
+		}
+		err := <-done
+		t.Fatalf("%s did not complete within %s; returned %v after cancellation", phase, pendingPublicationTestWatchdog, err)
+		return err
+	}
+}
+
+func waitPendingPublicationSignal(t *testing.T, phase string, signal <-chan struct{}, release func()) {
+	t.Helper()
+	timer := time.NewTimer(pendingPublicationTestWatchdog)
+	defer timer.Stop()
+	select {
+	case <-signal:
+	case <-timer.C:
+		if release != nil {
+			release()
+		}
+		t.Fatalf("%s did not occur within %s", phase, pendingPublicationTestWatchdog)
+	}
+}
+
+func waitPendingPublicationResult(t *testing.T, phase string, done <-chan error, cancel, release func()) error {
+	t.Helper()
+	timer := time.NewTimer(pendingPublicationTestWatchdog)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		cancel()
+		if release != nil {
+			release()
+		}
+		err := <-done
+		t.Fatalf("%s did not complete within %s; returned %v after cancellation", phase, pendingPublicationTestWatchdog, err)
+		return err
+	}
+}
+
 func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 	for _, mode := range []string{"sparse", "dense", "partial-hit", "read-to-end", "cancel-between-entries", "error-between-entries", "publication-failure", "custom-cache"} {
 		t.Run(mode, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
-			defer cancel()
-			fs, err := NewS3FS(ctx, ObjectStorageArguments{
+			setupCtx, cancelSetup := context.WithCancel(context.Background())
+			defer cancelSetup()
+			fs, err := NewS3FS(setupCtx, ObjectStorageArguments{
 				Name: "s3", Endpoint: "disk", Bucket: t.TempDir(),
 			}, CacheConfig{
 				DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](32 << 20),
@@ -108,15 +169,21 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 			for i := range data {
 				data[i] = byte(i*31 + i/251)
 			}
-			require.NoError(t, fs.Write(ctx, IOVector{FilePath: "object", Entries: []IOEntry{{Size: int64(len(data)), Data: data}}, Policy: SkipDiskCache | SkipMemoryCache}))
+			require.NoError(t, runPendingPublicationPhase(t, "initial object write", nil, func(ctx context.Context) error {
+				return fs.Write(ctx, IOVector{FilePath: "object", Entries: []IOEntry{{Size: int64(len(data)), Data: data}}, Policy: SkipDiskCache | SkipMemoryCache})
+			}))
 			storage := &publicationReadStorage{ObjectStorage: fs.storage}
 			fs.storage = storage
 			if mode == "partial-hit" {
 				warm := &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 2048, Size: 3}}, Policy: SkipFullFilePreloads}
 				defer warm.Release()
-				require.NoError(t, fs.Read(ctx, warm))
-				fs.FlushCache(ctx)
-				require.NoError(t, ctx.Err())
+				require.NoError(t, runPendingPublicationPhase(t, "partial-hit warm read", nil, func(ctx context.Context) error {
+					return fs.Read(ctx, warm)
+				}))
+				require.NoError(t, runPendingPublicationPhase(t, "partial-hit warm flush", nil, func(ctx context.Context) error {
+					fs.FlushCache(ctx)
+					return ctx.Err()
+				}))
 			}
 			leaderBytes := storage.bytes.Load()
 			started := make(chan struct{})
@@ -135,12 +202,10 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 			}
 			leader := &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 1024, Size: 4}}}
 			defer leader.Release()
-			require.NoError(t, fs.Read(ctx, leader))
-			select {
-			case <-started:
-			case <-ctx.Done():
-				t.Fatal("cache finalizer did not start")
-			}
+			require.NoError(t, runPendingPublicationPhase(t, "leader read", unblock, func(ctx context.Context) error {
+				return fs.Read(ctx, leader)
+			}))
+			waitPendingPublicationSignal(t, "cache finalizer start", started, unblock)
 			require.Equal(t, data[1024:1028], leader.Entries[0].Data)
 			require.Equal(t, int64(len(data)), storage.bytes.Load()-leaderBytes)
 			require.False(t, fs.ioMerger.IsMerging(fs.readMergeKey(leader)))
@@ -169,7 +234,7 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 			before := storage.bytes.Load()
 			opensBefore := storage.opens.Load()
 			if mode == "cancel-between-entries" || mode == "error-between-entries" {
-				readCtx, stop := context.WithCancel(ctx)
+				readCtx, stop := context.WithCancel(context.Background())
 				defer stop()
 				secondRead := make(chan struct{})
 				injected := errors.New("injected range failure")
@@ -188,23 +253,17 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 				}
 				done := make(chan error, 1)
 				go func() { done <- fs.Read(readCtx, follower) }()
-				select {
-				case <-secondRead:
-				case <-ctx.Done():
+				waitPendingPublicationSignal(t, "second bounded read start", secondRead, func() {
 					stop()
+					unblock()
 					<-done
-					t.Fatal("second bounded read did not start")
-				}
+				})
 				stop()
-				select {
-				case err := <-done:
-					if mode == "error-between-entries" {
-						require.ErrorIs(t, err, injected)
-					} else {
-						require.ErrorIs(t, err, context.Canceled)
-					}
-				case <-ctx.Done():
-					t.Fatal("cancelled read did not exit")
+				err := waitPendingPublicationResult(t, "cancelled follower read", done, stop, unblock)
+				if mode == "error-between-entries" {
+					require.ErrorIs(t, err, injected)
+				} else {
+					require.ErrorIs(t, err, context.Canceled)
 				}
 				storage.beforeRead = nil
 				require.Equal(t, int64(13), storage.bytes.Load()-before)
@@ -212,7 +271,9 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 				require.Empty(t, follower.Entries[1].Data)
 				require.Equal(t, int64(1), storage.opens.Load()-opensBefore)
 			} else {
-				require.NoError(t, fs.Read(ctx, follower))
+				require.NoError(t, runPendingPublicationPhase(t, "follower read", unblock, func(ctx context.Context) error {
+					return fs.Read(ctx, follower)
+				}))
 				for _, entry := range follower.Entries {
 					require.Equal(t, data[entry.Offset:entry.Offset+entry.Size], entry.Data)
 				}
@@ -241,18 +302,24 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 			require.NoFileExists(t, diskPath)
 			require.False(t, fs.diskCache.cache.Contains(diskPath))
 			unblock()
-			fs.FlushCache(ctx)
-			require.NoError(t, ctx.Err())
+			require.NoError(t, runPendingPublicationPhase(t, "publication flush", unblock, func(ctx context.Context) error {
+				fs.FlushCache(ctx)
+				return ctx.Err()
+			}))
 			require.False(t, fs.diskCache.isUpdating(diskPath))
 			if mode == "publication-failure" {
 				require.NoFileExists(t, diskPath)
 				require.False(t, fs.diskCache.cache.Contains(diskPath))
 				retry := &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 1024, Size: 4}}}
 				defer retry.Release()
-				require.NoError(t, fs.Read(ctx, retry))
+				require.NoError(t, runPendingPublicationPhase(t, "publication retry read", unblock, func(ctx context.Context) error {
+					return fs.Read(ctx, retry)
+				}))
 				require.Equal(t, data[1024:1028], retry.Entries[0].Data)
-				fs.FlushCache(ctx)
-				require.NoError(t, ctx.Err())
+				require.NoError(t, runPendingPublicationPhase(t, "publication retry flush", unblock, func(ctx context.Context) error {
+					fs.FlushCache(ctx)
+					return ctx.Err()
+				}))
 				require.False(t, fs.diskCache.isUpdating(diskPath))
 			}
 			require.FileExists(t, diskPath)
@@ -270,7 +337,9 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 			before = storage.bytes.Load()
 			hit := &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 4096, Size: 13}, {Offset: secondOffset, Size: 17}}}
 			defer hit.Release()
-			require.NoError(t, fs.Read(ctx, hit))
+			require.NoError(t, runPendingPublicationPhase(t, "published cache hit", nil, func(ctx context.Context) error {
+				return fs.Read(ctx, hit)
+			}))
 			require.Equal(t, data[4096:4109], hit.Entries[0].Data)
 			require.Equal(t, data[secondOffset:secondOffset+17], hit.Entries[1].Data)
 			require.Equal(t, before, storage.bytes.Load(), "published file must satisfy the next read")

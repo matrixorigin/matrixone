@@ -13,14 +13,14 @@ create database statement_query_type;
 /* cloud_nonuser */ create table test_table(col1 int,col2 varchar);
 /* cloud_nonuser */ show create table test_table;
 Table    Create Table
-test_table    CREATE TABLE `test_table` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(65535) DEFAULT NULL\n)
+test_table    CREATE TABLE `test_table` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(16383) DEFAULT NULL\n)
 /* cloud_nonuser */ create view test_view as select * from test_table;
 /* cloud_nonuser */ show create database test_db;
 Database    Create Database
 test_db    CREATE DATABASE `test_db`
 /* cloud_nonuser */ show create table test_table;
 Table    Create Table
-test_table    CREATE TABLE `test_table` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(65535) DEFAULT NULL\n)
+test_table    CREATE TABLE `test_table` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(16383) DEFAULT NULL\n)
 /* cloud_nonuser */ show create view test_view;
 ➤ View[12,6,0]  ¦  Create View[12,84,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
 test_view  ¦  create view `test_view` as select `test_table`.`col1` as `col1`, `test_table`.`col2` as `col2` from `test_table`  ¦  utf8mb4  ¦  utf8mb4_general_ci
@@ -98,7 +98,7 @@ sleep(1)    col    seq    key    path    index    value    this
 0    UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 /* cloud_nonuser */ use system;
 /* cloud_nonuser */ drop database test_db;
-select count(distinct statement_type) = 4 and count(*) = count(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) and min(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) = 1 and max(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) = 1 and max(cast(json_unquote(json_extract(stats, '$[11]')) as bigint) & 8) = 0 as ddl_accounting_ok from system.statement_info where account = 'bvt_query_type' and status = 'Success' and aggr_count = 0 and statement_type in ('Create Index','Create Table','Drop Database','Drop Table') and cast(json_unquote(json_extract(stats, '$[0]')) as bigint) = 6;
+select count(distinct statement_type) = 4 and count(*) = count(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) and min(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) = 1 and max(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) = 1 and max(cast(json_unquote(json_extract(stats, '$[11]')) as bigint) & 8) = 0 as ddl_accounting_ok from system.statement_info where account_id = (select account_id from mo_catalog.mo_account where account_name = 'bvt_query_type') and status = 'Success' and aggr_count = 0 and statement_type in ('Create Index','Create Table','Drop Database','Drop Table') and cast(json_unquote(json_extract(stats, '$[0]')) as bigint) = 6;
 ddl_accounting_ok
 1
 drop account if exists bvt_query_type;

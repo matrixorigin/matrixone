@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -141,7 +142,7 @@ func collectTopInt64(
 }
 
 func TestAccountedTopResidentLifecycle(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedTop(3)
 	state := installTopTestAllocation(t, op, proc, 64<<20)
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
@@ -165,7 +166,7 @@ func TestAccountedTopResidentLifecycle(t *testing.T) {
 }
 
 func TestAccountedTopCopiesLateNullVarchar(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedTop(1)
 	state := installTopTestAllocation(t, op, proc, 64<<20)
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
@@ -191,7 +192,7 @@ func TestAccountedTopCopiesLateNullVarchar(t *testing.T) {
 
 func TestAccountedTopSpillLifecycleAndStableOrder(t *testing.T) {
 	const limit = topSpillThreshold + 1
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedTop(limit)
 	state := installTopTestAllocation(t, op, proc, 64<<20)
 	values := make([]int64, 3*8192)
@@ -226,7 +227,7 @@ func TestAccountedTopSpillLifecycleAndStableOrder(t *testing.T) {
 
 func TestAccountedTopSpillMetadataIndependentOfInputBatchCount(t *testing.T) {
 	const limit = topSpillThreshold + 1
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedTop(limit)
 	state := installTopTestAllocation(t, op, proc, 64<<20)
 	require.NoError(t, op.Prepare(proc))
@@ -258,7 +259,7 @@ func TestAccountedTopSpillMetadataIndependentOfInputBatchCount(t *testing.T) {
 }
 
 func TestAccountedTopResetAndReuse(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedTop(2)
 	first := installTopTestAllocation(t, op, proc, 64<<20)
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
@@ -291,7 +292,7 @@ func TestAccountedTopResetAndReuse(t *testing.T) {
 
 func TestAccountedTopPrepareExactCapacityBoundary(t *testing.T) {
 	prepare := func(t *testing.T, capacity uint64) (uint64, error) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		op := newAccountedTop(3)
 		state := installTopTestAllocation(t, op, proc, capacity)
 		err := op.Prepare(proc)
@@ -315,7 +316,7 @@ func TestAccountedTopPrepareExactCapacityBoundary(t *testing.T) {
 }
 
 func TestAccountedTopRuntimeCapacityRejectionCleans(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	// Fixed-width input retains the resident allocation-rejection contract;
 	// varlen payload now takes the spill-resource admission path.
 	op := newAccountedTop(8192)
@@ -335,6 +336,39 @@ func TestAccountedTopRuntimeCapacityRejectionCleans(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestAccountedTopRecoveryFloorPublishesAtFullOrdinaryBudget(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	op := newAccountedTop(3)
+	state := installTopTestAllocation(t, op, proc, 4<<20)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		newInt64TopBatch(t, proc, []int64{5, 1, 3, 2, 4}),
+	})
+	op.AppendChild(child)
+	require.NoError(t, op.Prepare(proc))
+	capacity, borrowed := op.ctr.recoveryCapacity.Snapshot()
+	require.Positive(t, capacity)
+	require.Positive(t, borrowed)
+	require.Less(t, borrowed, capacity)
+
+	snapshot := state.generation.Snapshot()
+	require.Less(t, snapshot.Used, snapshot.Cap)
+	ordinaryBlocker := snapshot.Cap - snapshot.Used
+	require.NoError(t,
+		state.generation.AcquireAllocationCapacity(ordinaryBlocker))
+
+	require.Equal(t, []int64{1, 2, 3}, collectTopInt64(t, op, proc))
+	capacity, borrowed = op.ctr.recoveryCapacity.Snapshot()
+	require.Positive(t, borrowed)
+	require.Equal(t, borrowed, capacity)
+
+	child.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	state.generation.ReleaseAllocationCapacity(ordinaryBlocker)
+	finalizeTopTestAllocation(t, op, state)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestAccountedTopSmallVarlenSpillRejectionCleans(t *testing.T) {
 	testAccountedTopSmallVarlenSpillRejectionCleans(t, false)
 }
@@ -345,7 +379,7 @@ func TestAccountedTopOrderedSmallVarlenSpillRejectionCleans(t *testing.T) {
 
 func testAccountedTopSmallVarlenSpillRejectionCleans(t *testing.T, ordered bool) {
 	t.Helper()
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedTop(3)
 	op.OrderedOutput = ordered
 	state := installTopTestAllocation(t, op, proc, 64<<20)
@@ -361,9 +395,9 @@ func testAccountedTopSmallVarlenSpillRejectionCleans(t *testing.T, ordered bool)
 	require.NoError(t, op.Prepare(proc))
 	require.False(t, op.ctr.spilling)
 	_, err = vm.Exec(op, proc)
-	var resourceErr *process.ExecutionResourceError
-	require.ErrorAs(t, err, &resourceErr)
-	require.Equal(t, process.ExecutionResourceComponentSpillDisk, resourceErr.Component)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), err)
+	require.Contains(t, err.Error(), "top spill disk budget exceeded")
+	require.NotContains(t, err.Error(), process.ErrExecutionResourceAdmission.Error())
 	child.Free(proc, true, err)
 	op.Free(proc, true, err)
 	blocker.Release()
@@ -374,13 +408,13 @@ func testAccountedTopSmallVarlenSpillRejectionCleans(t *testing.T, ordered bool)
 
 func TestAccountedTopSpillResourceAdmissionCleans(t *testing.T) {
 	tests := []struct {
-		name      string
-		component process.ExecutionResourceComponent
-		reserve   func(*process.ExecutionResourceGeneration) (func(), error)
+		name    string
+		message string
+		reserve func(*process.ExecutionResourceGeneration) (func(), error)
 	}{
 		{
-			name:      "disk",
-			component: process.ExecutionResourceComponentSpillDisk,
+			name:    "disk",
+			message: "top spill disk budget exceeded",
 			reserve: func(g *process.ExecutionResourceGeneration) (func(), error) {
 				token, err := g.ReserveSpillDisk(g.SpillDiskCap())
 				return func() {
@@ -391,8 +425,8 @@ func TestAccountedTopSpillResourceAdmissionCleans(t *testing.T) {
 			},
 		},
 		{
-			name:      "file-descriptor",
-			component: process.ExecutionResourceComponentSpillFD,
+			name:    "file-descriptor",
+			message: "top spill file descriptor budget exceeded",
 			reserve: func(g *process.ExecutionResourceGeneration) (func(), error) {
 				token, err := g.ReserveSpillFD(g.SpillFDCap())
 				return func() {
@@ -405,7 +439,7 @@ func TestAccountedTopSpillResourceAdmissionCleans(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			op := newAccountedTop(topSpillThreshold + 1)
 			state := installTopTestAllocation(t, op, proc, 64<<20)
 			releaseBlocker, err := test.reserve(state.generation)
@@ -422,9 +456,9 @@ func TestAccountedTopSpillResourceAdmissionCleans(t *testing.T) {
 			op.AppendChild(child)
 			require.NoError(t, op.Prepare(proc))
 			_, err = vm.Exec(op, proc)
-			var resourceErr *process.ExecutionResourceError
-			require.ErrorAs(t, err, &resourceErr)
-			require.Equal(t, test.component, resourceErr.Component)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), err)
+			require.Contains(t, err.Error(), test.message)
+			require.NotContains(t, err.Error(), process.ErrExecutionResourceAdmission.Error())
 
 			child.Free(proc, true, err)
 			op.Free(proc, true, err)
@@ -438,7 +472,7 @@ func TestAccountedTopSpillResourceAdmissionCleans(t *testing.T) {
 }
 
 func TestAccountedTopCorruptSpillFailsClosed(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedTop(topSpillThreshold + 1)
 	state := installTopTestAllocation(t, op, proc, 64<<20)
 	require.NoError(t, op.Prepare(proc))
@@ -489,7 +523,7 @@ func TestAccountedTopCorruptSpillFailsClosed(t *testing.T) {
 }
 
 func TestAccountedTopCancellationCleans(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedTop(topSpillThreshold + 1)
 	state := installTopTestAllocation(t, op, proc, 64<<20)
 	baseCtx := proc.Ctx
@@ -513,7 +547,7 @@ func TestAccountedTopCancellationCleans(t *testing.T) {
 }
 
 func TestAccountedTopSetClearContract(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Base.Lim.Size = 64 << 20
 	generation, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
@@ -555,7 +589,7 @@ func BenchmarkTopUnaccountedResident(b *testing.B) {
 }
 
 func benchmarkTopResident(b *testing.B, accounted bool) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	defer proc.Free()
 	b.ReportAllocs()
 	for b.Loop() {

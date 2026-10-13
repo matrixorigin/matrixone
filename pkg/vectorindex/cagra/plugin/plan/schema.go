@@ -79,13 +79,9 @@ func (Hooks) BuildSecondaryIndexDefs(
 						"Cagra does not support '%s' quantization (no GPU bfloat16 storage); use 'float16', 'int8', or 'uint8'",
 						indexInfo.IndexOption.Quantization)
 				}
-				baseSize := types.Type{Oid: types.T(colMap[name].Typ.Id)}.GetArrayElementSize()
-				quantSize := types.Type{Oid: qt}.GetArrayElementSize()
-				if quantSize > baseSize {
-					return nil, nil, moerr.NewNotSupportedf(ctx.GetContext(),
-						"Cagra QUANTIZATION '%s' (%d bytes/element) cannot upcast base column %s (%d bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type",
-						indexInfo.IndexOption.Quantization, quantSize,
-						types.T(colMap[name].Typ.Id).String(), baseSize)
+				if err := quantizer.CheckNoUpcast("Cagra", indexInfo.IndexOption.Quantization,
+					types.T(colMap[name].Typ.Id)); err != nil {
+					return nil, nil, err
 				}
 				// int8/uint8 quantization is L2-only (the affine quantizer breaks
 				// inner-product / cosine geometry). Gated by the per-algo catalog

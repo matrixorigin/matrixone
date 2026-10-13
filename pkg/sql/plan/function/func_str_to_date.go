@@ -128,12 +128,15 @@ func builtInStrToTime(parameters []*vector.Vector, result vector.FunctionResultW
 
 			success := coreStrToDate(proc.Ctx, time, functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
 			if success {
-				if types.ValidTime(uint64(time.hour), uint64(time.minute), uint64(time.second)) {
-					value := types.TimeFromClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)
-					if err := rs.Append(value, false); err != nil {
-						return err
+				hours := uint64(time.day)*24 + uint64(time.hour)
+				if types.ValidTime(hours, uint64(time.minute), uint64(time.second)) {
+					value := types.TimeFromClock(false, hours, time.minute, time.second, time.microsecond)
+					if types.IsMySQLTime(value) {
+						if err := rs.Append(value, false); err != nil {
+							return err
+						}
+						continue
 					}
-					continue
 				}
 			}
 			if err := rs.Append(0, true); err != nil {
@@ -178,7 +181,9 @@ func strToDate2(cctx context.Context, t *GeneralTime, date string, format string
 	}
 
 	if len(date) == 0 {
-		ctx[token] = 0
+		if _, parsed := ctx[token]; !parsed {
+			ctx[token] = 0
+		}
 		return true
 	}
 
@@ -207,9 +212,7 @@ func checkMysqlTime(cctx context.Context, t *GeneralTime, ctx map[string]int) er
 			case timeOfPM:
 				t.setHour(12)
 			}
-			return nil
-		}
-		if valueAMorPm == timeOfPM {
+		} else if valueAMorPm == timeOfPM {
 			t.setHour(t.getHour() + 12)
 		}
 	} else {
@@ -217,7 +220,106 @@ func checkMysqlTime(cctx context.Context, t *GeneralTime, ctx map[string]int) er
 			t.setHour(0)
 		}
 	}
+	if !resolveStrToDateCalendar(t, ctx) {
+		return moerr.NewInvalidInput(cctx, "invalid STR_TO_DATE calendar fields")
+	}
 	return nil
+}
+
+// resolveStrToDateCalendar applies derived dates after all format fields have
+// been parsed. MySQL gives week dates precedence over day-of-year, and both
+// take precedence over directly parsed month and day.
+func resolveStrToDateCalendar(t *GeneralTime, ctx map[string]int) bool {
+	year := int(t.year)
+	ordinal, hasOrdinal := ctx["%j"]
+	if hasOrdinal && ordinal != 0 {
+		if !setStrToDateOrdinal(t, year, ordinal) {
+			return false
+		}
+		year = int(t.year)
+	}
+	week, hasWeek := ctx["week"]
+	weekday, hasWeekday := ctx["weekday"]
+	if !hasWeek || !hasWeekday {
+		return true
+	}
+	mode := ctx["week_mode"]
+	weekYear, hasWeekYear := ctx["week_year"]
+	if mode >= 2 {
+		if !hasWeekYear || ctx["week_year_mode"] != mode {
+			return false
+		}
+		year = weekYear
+	} else if hasWeekYear {
+		return false
+	}
+	if year < 0 || year > 9999 {
+		return false
+	}
+	jan1 := int(types.DayOfWeekFromCalendar(int32(year), 1, 1))
+	first := 0
+	if mode == 0 || mode == 2 {
+		// Week 1 begins on the first Sunday of the calendar year.
+		first = (7 - jan1) % 7
+	} else {
+		// ISO week 1 is the Monday in the week containing January 4.
+		first = 3 - (jan1+3+6)%7
+	}
+	dayOffset := first + (week-1)*7
+	if mode == 0 || mode == 2 {
+		dayOffset += weekday
+	} else {
+		dayOffset += (weekday + 6) % 7
+	}
+	return setStrToDateOrdinal(t, year, dayOffset+1)
+}
+
+// MySQL allows day-of-year values through 999 and week 53 to cross a year
+// boundary. Normalize with its year-zero rule (year zero is not leap).
+func setStrToDateOrdinal(t *GeneralTime, year, ordinal int) bool {
+	for ordinal <= 0 {
+		year--
+		if year < 0 {
+			return false
+		}
+		ordinal += strToDateDaysInYear(year)
+	}
+	for ordinal > strToDateDaysInYear(year) {
+		ordinal -= strToDateDaysInYear(year)
+		year++
+		if year > 9999 {
+			return false
+		}
+	}
+	monthDays := [...]int{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
+	if strToDateDaysInYear(year) == 366 {
+		monthDays[1] = 29
+	}
+	for month, days := range monthDays {
+		if ordinal <= days {
+			// MySQL's day-number conversion reserves year zero for the
+			// zero date. A later week directive may still replace it.
+			if year == 0 {
+				t.setYear(0)
+				t.setMonth(0)
+				t.setDay(0)
+				return true
+			}
+			t.setYear(uint16(year))
+			t.setMonth(uint8(month + 1))
+			t.setDay(uint8(ordinal))
+			return true
+		}
+		ordinal -= days
+	}
+	return false
+}
+
+func strToDateDaysInYear(year int) int {
+	if year != 0 && year%4 == 0 && (year%100 != 0 || year%400 == 0) {
+		return 366
+	}
+	return 365
 }
 
 // trim spaces in strings

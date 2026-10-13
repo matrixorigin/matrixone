@@ -62,24 +62,36 @@ func TestContainsJSONMergeCall(t *testing.T) {
 }
 
 func TestBuildPlanWithPrepareModeReusesJSONMergeWarningLifecycle(t *testing.T) {
-	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL,
-		"select json_merge('{\"a\":1}', '{\"b\":2}')", 1)
-	require.NoError(t, err)
-	defer stmt.Free()
-
-	sink := new(frontendJSONMergeWarningSink)
-	compilerCtx := plan.NewEmptyCompilerContext()
-	compilerCtx.SetContext(plan.WithJSONMergeWarningContext(
-		ctx, sink, plan.JSONMergeWarningUser))
-
-	_, err = buildPlanWithPrepareMode(ctx, nil, compilerCtx, stmt, false)
-	require.NoError(t, err)
-	_, err = buildPlanForCompileRetry(ctx, nil, compilerCtx, stmt, false, nil)
-	require.NoError(t, err)
-
-	require.Equal(t, []uint16{moerr.ER_WARN_DEPRECATED_SYNTAX}, sink.codes)
-	require.Equal(t, []string{plan.JSONMergeDeprecatedWarning}, sink.msgs)
+	for _, tc := range []struct {
+		sql      string
+		warnings int
+	}{
+		{`select json_merge('[1]', '[2]')`, 1},
+		{`create table warning_t as select json_merge('[1]', '[2]') as doc`, 1},
+		{`create table warning_t as select json_merge('[1]', '[2]') as a, json_merge('[1]', '[2]') as b`, 2},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			sink := new(frontendJSONMergeWarningSink)
+			compilerCtx := plan.NewEmptyCompilerContext(newPlanTestProcess(t))
+			originalContext := plan.WithJSONMergeWarningContext(ctx, sink, plan.JSONMergeWarningUser)
+			compilerCtx.SetContext(originalContext)
+			_, err = buildPlanWithPrepareMode(ctx, nil, compilerCtx, stmt, false)
+			require.NoError(t, err)
+			beforeRetry := compilerCtx.GetContext()
+			_, err = buildPlanForCompileRetry(ctx, nil, compilerCtx, stmt, false, nil)
+			require.NoError(t, err)
+			require.Len(t, sink.codes, tc.warnings)
+			require.Same(t, beforeRetry, compilerCtx.GetContext())
+			for i := range sink.codes {
+				require.Equal(t, moerr.ER_WARN_DEPRECATED_SYNTAX, sink.codes[i])
+				require.Equal(t, plan.JSONMergeDeprecatedWarning, sink.msgs[i])
+			}
+		})
+	}
 }
 
 func TestJSONMergeWarningProductionEntrySurvivesCompileRetry(t *testing.T) {
@@ -111,6 +123,46 @@ func TestJSONMergeWarningProductionEntrySurvivesCompileRetry(t *testing.T) {
 
 	info := ses.diagnosticsSnapshot()
 	require.Equal(t, []uint16{moerr.ER_WARN_DEPRECATED_SYNTAX}, info.codes)
+}
+
+func TestCTASPrivilegePlanningDoesNotReplayJSONMergeWarning(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL,
+		"create table warning_t as select json_merge('[1]', '[2]') as doc", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.proc = ses.GetProc()
+	execCtx.stmt = stmt
+	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+	compilerCtx := ses.GetTxnCompileCtx()
+	originalContext := plan.WithJSONMergeWarningContext(ctx, ses, plan.JSONMergeWarningUser)
+	compilerCtx.SetContext(originalContext)
+	for _, before := range []bool{true, false} {
+		if !before {
+			// The private source bind emits the user's warning; the real session
+			// compiler below is used only for the privilege-only source rebind.
+			sourceCompiler := plan.NewEmptyCompilerContext(newPlanTestProcess(t))
+			sourceCompiler.SetContext(originalContext)
+			_, err = buildPlanWithPrepareMode(ctx, ses, sourceCompiler, stmt.(*tree.CreateTable).AsSource, false)
+			require.NoError(t, err)
+			originalContext = sourceCompiler.GetContext()
+			compilerCtx.SetContext(originalContext)
+		}
+		ok, _, err := authenticateCreateTableAsSelectSourcePrivilege(ctx, ses, stmt.(*tree.CreateTable))
+		require.NoError(t, err)
+		require.True(t, ok)
+		if before {
+			require.Empty(t, ses.diagnosticsSnapshot().codes)
+		} else {
+			require.Equal(t, []uint16{moerr.ER_WARN_DEPRECATED_SYNTAX}, ses.diagnosticsSnapshot().codes)
+		}
+		require.Same(t, originalContext, compilerCtx.GetContext())
+	}
 }
 
 func TestBeginJSONMergeWarningStatementRecognizesAllPrepareForms(t *testing.T) {

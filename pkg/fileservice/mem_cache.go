@@ -49,8 +49,11 @@ type MemCache struct {
 	statsRefreshPending atomic.Bool
 	closed              atomic.Bool
 
+	// Capacity decisions and the reservation-to-FIFO handoff share this lock.
+	// Releases only decrease reservedBytes and must not reacquire it from the
+	// handoff callback.
 	capacityMu    sync.Mutex
-	reservedBytes int64
+	reservedBytes atomic.Int64
 
 	// idleCacheData contains native buffers whose capacity was reserved but
 	// which were released before FIFO insertion. Keeping these exact
@@ -375,6 +378,7 @@ func newMemCacheWithMetricScope(
 	}
 
 	dataCache = fifocache.NewDataCacheWithPrepareSet(capacityFunc, prepareSetFn, postSetFn, postGetFn, postEvictFn)
+	dataCache.SetAccountingGuard(&ret.capacityMu)
 	dataCache.SetAdmissionTarget(memoryCachePressureTarget)
 
 	ret.cache = dataCache
@@ -446,8 +450,9 @@ func (m *MemCache) reserveCacheData(ctx context.Context, bytes int) *memoryCache
 		m.capacityMu.Lock()
 		capacity := m.cache.Capacity()
 		used := m.cache.Used()
-		if want <= capacity-used-m.reservedBytes {
-			m.reservedBytes += want
+		reserved := m.reservedBytes.Load()
+		if want <= capacity-used-reserved {
+			m.reservedBytes.Add(want)
 			m.capacityMu.Unlock()
 			return &memoryCacheReservation{cache: m, bytes: want}
 		}
@@ -461,7 +466,7 @@ func (m *MemCache) reserveCacheData(ctx context.Context, bytes int) *memoryCache
 
 		m.capacityMu.Lock()
 		capacity = m.cache.Capacity()
-		target := capacity - m.reservedBytes - want
+		target := capacity - m.reservedBytes.Load() - want
 		m.capacityMu.Unlock()
 
 		if target < 0 {
@@ -555,13 +560,9 @@ func (m *MemCache) releaseIdleCacheData() int {
 }
 
 func (m *MemCache) releaseReservedBytes(bytes int64) {
-	m.capacityMu.Lock()
-	m.reservedBytes -= bytes
-	if m.reservedBytes < 0 {
-		m.capacityMu.Unlock()
+	if m.reservedBytes.Add(-bytes) < 0 {
 		panic("memory cache reservation underflow")
 	}
-	m.capacityMu.Unlock()
 }
 
 func (m *MemCache) refreshAllocatorMetrics(force bool) {
@@ -788,7 +789,7 @@ func (m *MemCache) Update(
 			Sz:     entry.Size,
 		}
 		LogEvent(ctx, str_set_memory_cache_entry_begin)
-		inserted, err := m.cache.Set(ctx, key, entry.CachedData)
+		_, err := m.cache.Set(ctx, key, entry.CachedData)
 		LogEvent(ctx, str_set_memory_cache_entry_end)
 		if errors.Is(err, fscache.ErrCacheAdmissionRejected) {
 			metric.FSCachePressureMemorySkipCounter.Inc()
@@ -796,11 +797,6 @@ func (m *MemCache) Update(
 		}
 		if err != nil {
 			return err
-		}
-		if inserted {
-			if reserved, ok := entry.CachedData.(fscache.DataCacheReservation); ok {
-				reserved.CommitCacheReservation()
-			}
 		}
 	}
 	return nil

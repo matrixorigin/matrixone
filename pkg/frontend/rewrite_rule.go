@@ -56,8 +56,15 @@ type rewriteHintPayload struct {
 // statement in a multi-statement COM_QUERY can mutate session variables. SQL
 // text is still rewritten one staged statement at a time, using the SQL mode
 // that is current when that statement is parsed.
+//
+// Role rules are access control: they are always loaded and applied when the
+// session has any, regardless of enable_remap_hint. sessionEnabled (the
+// enable_remap_hint switch) gates only the optional layers — remap_rewrites,
+// session remapdb, and inline /*+ ... */ rewrites — so an ordinary user cannot
+// disable mandatory role-rule rewriting with a session SET.
 type rewritePolicySnapshot struct {
 	enabled             bool
+	sessionEnabled      bool
 	roleRules           map[string]string
 	sessionRules        map[string]string
 	sessionRemapDb      map[string]string
@@ -117,13 +124,15 @@ func normalizeRewriteRulesWithSelected(
 }
 
 func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnapshot, error) {
+	sessionEnabled := ses.rewriteEnabled.Load()
 	policy := &rewritePolicySnapshot{
-		enabled: ses.rewriteEnabled.Load(), lowerCaseTableNames: parserLowerCaseTableNames(ses),
-	}
-	if !policy.enabled {
-		return policy, nil
+		sessionEnabled:      sessionEnabled,
+		lowerCaseTableNames: parserLowerCaseTableNames(ses),
 	}
 
+	// Role rules are mandatory access control: load them even when the
+	// optional enable_remap_hint switch is off, so a session SET cannot
+	// bypass the role-rule rewrite path (issue #29142).
 	ses.ruleCacheMu.RLock()
 	cacheLoaded := ses.ruleCache != nil
 	if cacheLoaded {
@@ -146,9 +155,14 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 		ses.ruleCacheMu.Unlock()
 	}
 
-	policy.sessionRules, policy.sessionRemapDb = getSessionRewriteRules(ctx, ses)
-	policy.sessionRules = cloneRewriteMap(policy.sessionRules)
-	policy.sessionRemapDb = cloneRewriteMap(policy.sessionRemapDb)
+	// Optional session layers are still gated by enable_remap_hint.
+	if sessionEnabled {
+		policy.sessionRules, policy.sessionRemapDb = getSessionRewriteRules(ctx, ses)
+		policy.sessionRules = cloneRewriteMap(policy.sessionRules)
+		policy.sessionRemapDb = cloneRewriteMap(policy.sessionRemapDb)
+	}
+
+	policy.enabled = sessionEnabled || len(policy.roleRules) > 0
 	return policy, nil
 }
 
@@ -232,7 +246,8 @@ func parseRewriteHint(ctx context.Context, hint string) (map[string]string, erro
 // rule narrows the role-rewritten relation rather than replacing it. See the
 // chain-building comment below for details.
 // If the combined rule set is empty, the original SQL is returned unchanged.
-// This function only injects hints when enable_remap_hint is true.
+// Role rules apply whenever the snapshot has any; enable_remap_hint only gates
+// the optional session/inline layers (see rewritePolicySnapshot).
 // Rule cache load failures are returned to the caller so access-control rewrites
 // do not silently fall back to the unmodified SQL.
 func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
@@ -260,7 +275,7 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 			return sql, nil
 		}
 		return rewriteSingleSQL(ctx, sql, policy.roleRules, policy.sessionRules,
-			policy.sessionRemapDb, policy.lowerCaseTableNames, sqlMode)
+			policy.sessionRemapDb, policy.sessionEnabled, policy.lowerCaseTableNames, sqlMode)
 	}
 
 	for i, fragment := range fragments {
@@ -268,7 +283,7 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 			continue
 		}
 		rewritten, err := rewriteSingleSQL(ctx, fragment, policy.roleRules, policy.sessionRules,
-			policy.sessionRemapDb, policy.lowerCaseTableNames, sqlMode)
+			policy.sessionRemapDb, policy.sessionEnabled, policy.lowerCaseTableNames, sqlMode)
 		if err != nil {
 			return sql, err
 		}
@@ -284,24 +299,40 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 // rewriteSingleSQL merges a policy snapshot with one statement's own leading
 // inline JSON hint. The wrapper above loads/captures role and session policy
 // once per request and passes the same snapshot to every statement.
+// When sessionEnabled is false (enable_remap_hint off), only the mandatory
+// role-rule layer is applied: session rules/remapdb and the statement's own
+// inline hint are ignored so the optional feature cannot reintroduce a
+// broader relation on top of (or instead of) the role filter.
 func rewriteSingleSQL(
 	ctx context.Context,
 	sql string,
 	cache map[string]string,
 	sessionRules map[string]string,
 	sessionRemapDb map[string]string,
+	sessionEnabled bool,
 	lowerCaseTableNames int64,
 	sqlMode string,
 ) (string, error) {
+
+	if !sessionEnabled {
+		sessionRules = nil
+		sessionRemapDb = nil
+	}
 
 	// Inline /*+ {...} */ rewrites and database remaps. A user-provided rewrite
 	// value must be a single SQL string; arrays/objects are rejected here. The
 	// array form exists only internally, to carry the role->session->inline
 	// stacked-view chain to the planner. Validate the inline hint up front so an
 	// invalid value is caught even when there is no role/session config to merge.
-	inlineRules, inlineRemapDb, err := extractInlineRewrites(ctx, sql)
-	if err != nil {
-		return sql, err
+	// Inline hints are part of the optional feature and are skipped when the
+	// switch is off (role rules alone still rewrite the statement).
+	var inlineRules, inlineRemapDb map[string]string
+	var err error
+	if sessionEnabled {
+		inlineRules, inlineRemapDb, err = extractInlineRewrites(ctx, sql)
+		if err != nil {
+			return sql, err
+		}
 	}
 
 	if len(cache) == 0 && len(sessionRules) == 0 && len(sessionRemapDb) == 0 &&
@@ -394,12 +425,14 @@ func rewriteSQLFromMaterializedPolicy(
 	outerSQL, innerSQL string,
 	lowerCaseTableNamesArg ...int64,
 ) (string, error) {
-	return rewriteSQLFromMaterializedPolicyWithSQLMode(ctx, outerSQL, innerSQL, "", lowerCaseTableNamesArg...)
+	return rewriteSQLFromMaterializedPolicyWithSQLModeAndSessionEnabled(
+		ctx, outerSQL, innerSQL, "", true, lowerCaseTableNamesArg...)
 }
 
-func rewriteSQLFromMaterializedPolicyWithSQLMode(
+func rewriteSQLFromMaterializedPolicyWithSQLModeAndSessionEnabled(
 	ctx context.Context,
 	outerSQL, innerSQL, sqlMode string,
+	sessionEnabled bool,
 	lowerCaseTableNamesArg ...int64,
 ) (string, error) {
 	lowerCaseTableNames := int64(0)
@@ -425,26 +458,29 @@ func rewriteSQLFromMaterializedPolicyWithSQLMode(
 		}
 	}
 
-	inlineRules, inlineRemapDb, err := extractInlineRewrites(ctx, innerSQL)
-	if err != nil {
-		return innerSQL, err
-	}
-	normalizedInlineRules, inlineSelected, err := normalizeRewriteRulesWithSelected(ctx, inlineRules, lowerCaseTableNames)
-	if err != nil {
-		return innerSQL, err
-	}
-	if err = validateDiscardedRewriteRules(ctx, inlineRules, inlineSelected, lowerCaseTableNames, sqlMode); err != nil {
-		return innerSQL, err
-	}
-	for key, rule := range normalizedInlineRules {
-		chains[key] = append(chains[key], rule)
-	}
-	normalizedInlineRemap, err := parsers.NormalizeAndValidateRemapDb(ctx, inlineRemapDb, lowerCaseTableNames)
-	if err != nil {
-		return innerSQL, err
-	}
-	for src, dst := range normalizedInlineRemap {
-		remapDb[src] = dst
+	var err error
+	if sessionEnabled {
+		inlineRules, inlineRemapDb, err := extractInlineRewrites(ctx, innerSQL)
+		if err != nil {
+			return innerSQL, err
+		}
+		normalizedInlineRules, inlineSelected, err := normalizeRewriteRulesWithSelected(ctx, inlineRules, lowerCaseTableNames)
+		if err != nil {
+			return innerSQL, err
+		}
+		if err = validateDiscardedRewriteRules(ctx, inlineRules, inlineSelected, lowerCaseTableNames, sqlMode); err != nil {
+			return innerSQL, err
+		}
+		for key, rule := range normalizedInlineRules {
+			chains[key] = append(chains[key], rule)
+		}
+		normalizedInlineRemap, err := parsers.NormalizeAndValidateRemapDb(ctx, inlineRemapDb, lowerCaseTableNames)
+		if err != nil {
+			return innerSQL, err
+		}
+		for src, dst := range normalizedInlineRemap {
+			remapDb[src] = dst
+		}
 	}
 	if _, err = parsers.NormalizeAndValidateRemapDb(ctx, remapDb, lowerCaseTableNames); err != nil {
 		return innerSQL, err

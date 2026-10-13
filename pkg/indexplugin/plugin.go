@@ -30,6 +30,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -62,7 +63,7 @@ type AlgoPlugin interface {
 }
 
 // SearchPlugin is an optional capability implemented by algorithms that have
-// migrated query execution from a table function to VECTOR_INDEX_SCAN.  The
+// migrated query execution from a table function to INDEX_SEARCH_SCAN.  The
 // separate interface lets algorithms migrate independently without a SQL-layer
 // name switch or no-op hooks on unrelated fulltext/GPU plugins.
 type SearchPlugin interface {
@@ -106,26 +107,27 @@ func Get(algo string) (AlgoPlugin, bool) {
 }
 
 // CoversSnapshot asks algo whether its index is current enough to be used as a
-// MANDATORY filter at req.Snapshot.
+// MANDATORY filter at req.Snapshot, and returns the build_ts of the generation a probe would
+// search (0 = unknown) for the planner's partial-plan gap decision.
 //
 // It FAILS CLOSED at every step: an unregistered algo, one that does not
 // implement CoveragePlugin, or a hook that errors all report false. A caller may
 // therefore treat the result as "safe to filter with" without inspecting the
 // error, which is reported only for logging.
-func CoversSnapshot(ctx context.Context, algo string, req coverage.Request) (bool, error) {
+func CoversSnapshot(ctx context.Context, algo string, req coverage.Request) (bool, types.TS, error) {
 	p, ok := Get(algo)
 	if !ok {
-		return false, nil
+		return false, types.TS{}, nil
 	}
 	cp, ok := p.(CoveragePlugin)
 	if !ok {
-		return false, nil
+		return false, types.TS{}, nil
 	}
-	covered, err := cp.Coverage().CoversSnapshot(ctx, req)
+	covered, buildTS, err := cp.Coverage().CoversSnapshot(ctx, req)
 	if err != nil {
-		return false, err
+		return false, types.TS{}, err
 	}
-	return covered, nil
+	return covered, buildTS, nil
 }
 
 // All returns every registered plugin. Useful for catalog enumeration.

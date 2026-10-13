@@ -74,6 +74,85 @@ func BenchmarkLockUnlockWithoutConflict(b *testing.B) {
 	)
 }
 
+// BenchmarkSharedLockUnlockWithoutConflict is the fresh-key Shared-row control.
+// It does not exercise joining an existing Shared holder.
+func BenchmarkSharedLockUnlockWithoutConflict(b *testing.B) {
+	runLockServiceTestsWithLevel(
+		b,
+		zapcore.ErrorLevel,
+		[]string{"s1"},
+		10*time.Second,
+		func(_ *lockTableAllocator, services []*service) {
+			b.StopTimer()
+			service := services[0]
+			ctx := context.Background()
+			txnIDs := make([][]byte, b.N)
+			rows := make([][]byte, b.N)
+			for idx := range b.N {
+				txnIDs[idx] = []byte(fmt.Sprintf("shared-lock-bench-txn-%d", idx))
+				rows[idx] = []byte(fmt.Sprintf("shared-lock-bench-row-%d", idx))
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.StartTimer()
+			for idx := range b.N {
+				if _, err := service.Lock(ctx, 2670604, [][]byte{rows[idx]}, txnIDs[idx], newTestRowSharedOptions()); err != nil {
+					b.Fatal(err)
+				}
+				if err := service.Unlock(ctx, txnIDs[idx], timestamp.Timestamp{}); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+		},
+		nil,
+	)
+}
+
+// BenchmarkSharedJoinHeldRow measures the existing-Shared-holder admission
+// path affected by Shared-cohort notification.
+func BenchmarkSharedJoinHeldRow(b *testing.B) {
+	runLockServiceTestsWithLevel(
+		b,
+		zapcore.ErrorLevel,
+		[]string{"s1"},
+		10*time.Second,
+		func(_ *lockTableAllocator, services []*service) {
+			b.StopTimer()
+			service := services[0]
+			ctx := context.Background()
+			row := [][]byte{[]byte("shared-join-row")}
+			holderID := []byte("shared-join-holder")
+			opts := newTestRowSharedOptions()
+			if _, err := service.Lock(ctx, 2670605, row, holderID, opts); err != nil {
+				b.Fatal(err)
+			}
+			txnIDs := make([][]byte, b.N)
+			for idx := range b.N {
+				txnIDs[idx] = []byte(fmt.Sprintf("shared-join-txn-%d", idx))
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.StartTimer()
+			for _, txnID := range txnIDs {
+				if _, err := service.Lock(ctx, 2670605, row, txnID, opts); err != nil {
+					b.Fatal(err)
+				}
+				if err := service.Unlock(ctx, txnID, timestamp.Timestamp{}); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			if err := service.Unlock(ctx, holderID, timestamp.Timestamp{}); err != nil {
+				b.Fatal(err)
+			}
+		},
+		nil,
+	)
+}
+
 // BenchmarkUnlockWithoutConflict isolates the transaction-close half of the
 // ordinary one-table path. Setup is outside the timer so admission, ledger
 // cleanup and pooled-object reset regressions are not hidden by Lock work.

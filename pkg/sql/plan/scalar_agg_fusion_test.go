@@ -61,7 +61,7 @@ func TestFuseScalarAggregatesPlan(t *testing.T) {
 		 (select sum(l_extendedprice) s from lineitem) b on a.c = b.s`, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			require.Equal(t, tc.scans, countReachableTableScans(p.GetQuery(), "lineitem"))
 		})

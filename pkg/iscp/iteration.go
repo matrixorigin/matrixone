@@ -85,7 +85,7 @@ func ExecuteIterationWithRuntime(
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctxWithoutTimeout := ctx
-	ctx, cancel := context.WithTimeoutCause(ctx, time.Hour, moerr.NewInternalErrorNoCtx("iscp iteration timeout"))
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Hour, moerr.CauseISCPIterationTimeout)
 	defer cancel()
 
 	nowTs := cnEngine.LatestLogtailAppliedTime()
@@ -109,7 +109,7 @@ func ExecuteIterationWithRuntime(
 	}
 
 	statuses := make([]*JobStatus, len(iterCtx.jobNames))
-	jobSpecs, prevStatus, err := GetJobSpecs(
+	jobSpecs, prevStatus, committedWatermark, err := GetJobSpecs(
 		ctx,
 		cnUUID,
 		cnTxnClient,
@@ -235,7 +235,10 @@ func ExecuteIterationWithRuntime(
 		}
 		statuses[i].StartAt = startAt
 	}
-	changes, err := CollectChanges(ctxWithoutTimeout, rel, iterCtx.fromTS, iterCtx.toTS, mp)
+	changes, err := CollectChanges(
+		collectChangesCtxForJobs(ctxWithoutTimeout, jobSpecs, prevStatus, committedWatermark),
+		rel, iterCtx.fromTS, iterCtx.toTS, mp,
+	)
 	if err != nil {
 		return
 	}
@@ -374,6 +377,67 @@ func jobNeedsInitSQL(jobSpec *JobSpec, status *JobStatus) bool {
 		status != nil &&
 		status.Stage == JobStage_Init &&
 		jobSpec.ConsumerInfo.InitSQL != ""
+}
+
+// collectChangesCtxForJobs returns the context one iteration must read its
+// change range with.
+//
+// A key that is both inserted and deleted inside the range is coalesced away as
+// "no net change" (filterBatch Case 2.2). That is sound only while a consumer's
+// materialized state equals the table state at the range start. An InitSQL-seeded
+// job generation breaks the precondition exactly once: RestoreTable / CREATE
+// TABLE ... CLONE / DATA BRANCH copy an index's already-built state and re-arm
+// its CDC at the DDL transaction's PRE-commit snapshot TS, so the clone's own row
+// appends commit inside the FIRST range the copy is maintained from and share it
+// with a DELETE of a row inherited from the copied base. Dropping that tombstone
+// leaves the copied entry queryable forever (#28847).
+//
+// The window is bounded by durable consumption, not by the index algorithm:
+// mo_iscp_log.watermark reaches prevStatus.To only in the transaction that
+// applies the range, and a persisted ErrorCode means the last attempt may have
+// been applied only partially, so its range is retried from the same lagging
+// state. Every later range starts after the clone's appends, where coalescing is
+// sound again, so ordinary insert-then-delete churn keeps cancelling out and no
+// consumer accumulates extra durable deletes. That bound matters: the
+// append-only cuVS sinks retain every distinct deleted pk in their cdc_tail,
+// while CuvsUpdatable counts inserts and upserts only, so an unconditional
+// opt-in would grow their retained history without ever arming the rebuild that
+// reclaims it.
+func collectChangesCtxForJobs(
+	ctx context.Context,
+	jobSpecs []*JobSpec,
+	prevStatus []*JobStatus,
+	committedWatermark []types.TS,
+) context.Context {
+	for i := range prevStatus {
+		if jobStateMayLagRangeStart(jobSpecs[i], prevStatus[i], committedWatermark[i]) {
+			return engine.WithCollectChangesKeepTrailingDeletes(ctx)
+		}
+	}
+	return ctx
+}
+
+// jobStateMayLagRangeStart reports whether a job generation was seeded by
+// InitSQL and its materialized state may still predate the range start.
+//
+// A selected range is not evidence of consumption. ExecuteIterationWithRuntime
+// persists statuses[i].To with ISCPJobState_Running before the consumers run,
+// and repairAbandonedJobs turns such an abandoned row into Completed while
+// leaving To and the zero ErrorCode untouched, so a populated To alone would
+// switch the option off after a stop that consumed nothing. Only the sink
+// transaction's UpdateWatermark advances mo_iscp_log.watermark to that To -- the
+// Snapshot path's final flush does the same -- which makes the watermark the
+// durable commit boundary. The ErrorCode arm stays separate: a maintenance
+// watermark flush advances the column without replacing job_status, so a failed
+// range keeps its retry opt-in even if the column later moves past it.
+func jobStateMayLagRangeStart(jobSpec *JobSpec, status *JobStatus, committed types.TS) bool {
+	if jobSpec == nil || status == nil || jobSpec.ConsumerInfo.InitSQL == "" {
+		return false
+	}
+	if status.ErrorCode != 0 {
+		return true
+	}
+	return status.To.IsEmpty() || !committed.GE(&status.To)
 }
 
 func atomicInitCompletionStatus(previous *JobStatus, nextLSN uint64) JobStatus {
@@ -648,7 +712,7 @@ var FlushJobStatusOnIterationState = func(
 ) (err error) {
 	jobStatuses = normalizeJobStatuses(jobStatuses, lsns)
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp flush job status timeout"))
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.CauseISCPFlushJobStatusTimeout)
 	defer cancel()
 	txnWriter, err := getTxn(ctx, cnEngine, cnTxnClient, "iscp iteration")
 	if err != nil {
@@ -756,9 +820,11 @@ var GetJobSpecs = func(
 	watermark types.TS,
 	jobStatuses []*JobStatus,
 	jobIDs []uint64,
-) (jobSpec []*JobSpec, prevStatus []*JobStatus, err error) {
+) (jobSpec []*JobSpec, prevStatus []*JobStatus, committedWatermark []types.TS, err error) {
 	var buf bytes.Buffer
-	buf.WriteString("SELECT job_name, job_id, job_spec, job_status FROM mo_catalog.mo_iscp_log WHERE")
+	// watermark is the durable consumption boundary: only the transaction that
+	// applies a range advances it to that range's job_status.To.
+	buf.WriteString("SELECT job_name, job_id, job_spec, job_status, watermark FROM mo_catalog.mo_iscp_log WHERE")
 	for i, jobName := range jobName {
 		if i > 0 {
 			buf.WriteString(" OR")
@@ -782,6 +848,7 @@ var GetJobSpecs = func(
 	}
 	jobSpec = make([]*JobSpec, len(jobName))
 	prevStatus = make([]*JobStatus, len(jobName))
+	committedWatermark = make([]types.TS, len(jobName))
 	var foundRows int
 	var permanentErrMsg string
 	execResult.ReadRows(func(rows int, cols []*vector.Vector) bool {
@@ -807,6 +874,7 @@ var GetJobSpecs = func(
 				permanentErrMsg = err.Error()
 				return false
 			}
+			committedWatermark[jobIdx] = types.StringToTS(cols[4].GetStringAt(i))
 			foundRows++
 		}
 		return true
@@ -833,7 +901,7 @@ var GetJobSpecs = func(
 		if err == nil {
 			err = errPermanent
 		}
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	return
 }
@@ -902,7 +970,7 @@ func FlushPermanentErrorMessage(
 		zap.Any("jobIDs", jobIDs),
 		zap.String("errMsg", errMsg),
 	)
-	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp flush permanent error message timeout"))
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.CauseISCPFlushPermanentErrorMessageTimeout)
 	defer cancel()
 	jobStatuses = normalizeJobStatuses(jobStatuses, lsns)
 	for _, status := range jobStatuses {

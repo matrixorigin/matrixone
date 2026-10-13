@@ -16,9 +16,9 @@ package fill
 
 import (
 	"context"
-	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -120,7 +120,7 @@ func collectFillInt64(
 }
 
 func TestAccountedFillResidentLifecycle(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedNextFill(1 << 30)
 	state := installFillTestAllocation(t, op, proc, 64<<20)
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
@@ -171,7 +171,7 @@ func TestAccountedFillValueAndPrevLifecycle(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			op := &Fill{
 				ColLen:          1,
 				FillType:        test.fillType,
@@ -206,7 +206,7 @@ func TestAccountedFillValueAndPrevLifecycle(t *testing.T) {
 }
 
 func TestAccountedFillLinearSpillLifecycle(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := &Fill{
 		ColLen:          1,
 		FillType:        plan.Node_LINEAR,
@@ -309,7 +309,7 @@ func TestAccountedFillLinearDecimal256ExpressionSelection(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			op := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
 			state := installFillTestAllocation(t, op, proc, 64<<20)
 			input := batch.NewWithSize(1)
@@ -348,7 +348,7 @@ func TestAccountedFillLinearDecimal256ExpressionSelection(t *testing.T) {
 }
 
 func TestAccountedFillLinearDecimal256RejectsInvalidExpressionSelection(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
 	op.ctr.expressionAllocation = new(vector.AllocationAccountSelection)
 	input := makeAccountedDecimal256Batch(t, proc, []int64{100, 130}, nil)
@@ -366,7 +366,7 @@ func TestAccountedFillLinearDecimal256RejectsInvalidExpressionSelection(t *testi
 }
 
 func TestUnaccountedFillLinearDecimal256KeepsRegularVector(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
 	input := batch.NewWithSize(1)
 	vec := vector.NewVec(types.New(types.T_decimal256, 76, 0))
@@ -389,7 +389,7 @@ func TestUnaccountedFillLinearDecimal256KeepsRegularVector(t *testing.T) {
 
 func runAccountedDecimal256LinearValue(t *testing.T, capacity uint64) (uint64, error) {
 	t.Helper()
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
 	state := installFillTestAllocation(t, op, proc, capacity)
 	typ := types.New(types.T_decimal256, 76, 0)
@@ -452,7 +452,7 @@ func TestAccountedFillLinearDecimal256ResidentAndSpill(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			op := &Fill{ColLen: 1, FillType: plan.Node_LINEAR, PartitionColIdx: []int32{1}, SpillThreshold: test.spillThreshold}
 			state := installFillTestAllocation(t, op, proc, 64<<20)
 			batches := make([]*batch.Batch, 0, len(test.values))
@@ -503,7 +503,7 @@ func runAccountedDecimal256LinearOperator(
 	trailingCount int,
 ) (decimal256LinearOperatorResult, error) {
 	t.Helper()
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := &Fill{
 		ColLen:          1,
 		FillType:        plan.Node_LINEAR,
@@ -585,7 +585,7 @@ type fillRunResult struct {
 
 func runFillCapacityCase(t *testing.T, capacity uint64) (fillRunResult, error) {
 	t.Helper()
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedNextFill(1 << 30)
 	state := installFillTestAllocation(t, op, proc, capacity)
 	const rows = 2048
@@ -650,13 +650,13 @@ func TestAccountedFillOneByteShortSpillsAndPreservesResult(t *testing.T) {
 
 func TestAccountedFillSpillResourceAdmissionCleans(t *testing.T) {
 	tests := []struct {
-		name      string
-		component process.ExecutionResourceComponent
-		reserve   func(*process.ExecutionResourceGeneration) (func(), error)
+		name    string
+		message string
+		reserve func(*process.ExecutionResourceGeneration) (func(), error)
 	}{
 		{
-			name:      "disk",
-			component: process.ExecutionResourceComponentSpillDisk,
+			name:    "disk",
+			message: "fill spill disk budget exceeded",
 			reserve: func(g *process.ExecutionResourceGeneration) (func(), error) {
 				token, err := g.ReserveSpillDisk(g.SpillDiskCap())
 				return func() {
@@ -667,8 +667,8 @@ func TestAccountedFillSpillResourceAdmissionCleans(t *testing.T) {
 			},
 		},
 		{
-			name:      "file-descriptor",
-			component: process.ExecutionResourceComponentSpillFD,
+			name:    "file-descriptor",
+			message: "fill spill file descriptor budget exceeded",
 			reserve: func(g *process.ExecutionResourceGeneration) (func(), error) {
 				token, err := g.ReserveSpillFD(g.SpillFDCap())
 				return func() {
@@ -681,7 +681,7 @@ func TestAccountedFillSpillResourceAdmissionCleans(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			op := newAccountedNextFill(1)
 			state := installFillTestAllocation(t, op, proc, 64<<20)
 			releaseBlocker, err := test.reserve(state.generation)
@@ -692,9 +692,9 @@ func TestAccountedFillSpillResourceAdmissionCleans(t *testing.T) {
 			op.AppendChild(child)
 			require.NoError(t, op.Prepare(proc))
 			_, err = vm.Exec(op, proc)
-			var resourceErr *process.ExecutionResourceError
-			require.True(t, errors.As(err, &resourceErr))
-			require.Equal(t, test.component, resourceErr.Component)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), err)
+			require.Contains(t, err.Error(), test.message)
+			require.NotContains(t, err.Error(), process.ErrExecutionResourceAdmission.Error())
 
 			child.Free(proc, true, err)
 			op.Free(proc, true, err)
@@ -707,7 +707,7 @@ func TestAccountedFillSpillResourceAdmissionCleans(t *testing.T) {
 }
 
 func TestAccountedFillResetAndReuse(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedNextFill(1 << 30)
 	state := installFillTestAllocation(t, op, proc, 64<<20)
 	first := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
@@ -740,7 +740,7 @@ func TestAccountedFillResetAndReuse(t *testing.T) {
 }
 
 func TestAccountedFillBoundsPendingBatchMetadata(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedNextFill(1 << 30)
 	state := installFillTestAllocation(t, op, proc, 64<<20)
 	batches := make([]*batch.Batch, 0, maxFillPendingBatches+1)
@@ -773,7 +773,7 @@ func TestAccountedFillBoundsPendingBatchMetadata(t *testing.T) {
 }
 
 func TestAccountedFillCancellationReleasesSpill(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedNextFill(1)
 	state := installFillTestAllocation(t, op, proc, 64<<20)
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
@@ -801,7 +801,7 @@ func TestAccountedFillCancellationReleasesSpill(t *testing.T) {
 }
 
 func TestAccountedFillResetReleasesSpillSuffix(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := &Fill{
 		ColLen:          2,
 		FillType:        plan.Node_NEXT,

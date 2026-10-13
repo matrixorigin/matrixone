@@ -55,6 +55,10 @@ type LockOptions struct {
 	group                    uint32
 	lockTable                bool
 	changeDef                bool
+	refreshTableSnapshot     bool
+	admissionOnly            bool
+	admissionResult          *lock.Result
+	waitPolicy               *lock.WaitPolicy
 	parker                   *types.Packer
 	fetchFunc                FetchLockRowsFunc
 	filter                   RowsFilter

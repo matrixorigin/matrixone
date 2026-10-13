@@ -120,10 +120,6 @@ func (h *transferSlabFailureHost) Name() string {
 	return "transfer-slab-failure"
 }
 
-func (h *transferSlabFailureHost) HostHintName() string {
-	return "test"
-}
-
 func (h *transferSlabFailureHost) TaskSourceNote() string {
 	return "test"
 }

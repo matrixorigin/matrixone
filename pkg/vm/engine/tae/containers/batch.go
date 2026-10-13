@@ -433,6 +433,9 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	if tmpn, err = buffer.ReadFrom(r); err != nil {
 		return
 	}
+	if err = validateBatchTypeMetadata(buffer); err != nil {
+		return
+	}
 	n += tmpn
 	pos := 0
 	buf := buffer.Get(pos).([]byte)
@@ -452,6 +455,7 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	for _, vecType := range vecTypes {
 		vec := MakeVector(vecType, common.DefaultAllocator)
 		if tmpn, err = vec.ReadFrom(r); err != nil {
+			vec.Close()
 			return
 		}
 		bat.Vecs = append(bat.Vecs, vec)
@@ -481,12 +485,44 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
+// Validate the shared name/type envelope before any versioned reader allocates
+// vectors. The unchecked copies below consume only these validated slots.
+func validateBatchTypeMetadata(buffer Vector) error {
+	if buffer.Length() == 0 {
+		return moerr.NewInvalidInputNoCtx("missing batch type metadata")
+	}
+	countBytes, ok := buffer.Get(0).([]byte)
+	if !ok || len(countBytes) != 2 {
+		return moerr.NewInvalidInputNoCtx("invalid batch type count")
+	}
+	count := int(types.DecodeFixed[uint16](countBytes))
+	if buffer.Length() < 1+2*count {
+		return moerr.NewInvalidInputNoCtx("short batch type metadata")
+	}
+	for i := 0; i < count; i++ {
+		if _, ok := buffer.Get(1 + 2*i).([]byte); !ok || buffer.IsNull(1+2*i) {
+			return moerr.NewInvalidInputNoCtx("invalid batch column name")
+		}
+		data, ok := buffer.Get(2 + 2*i).([]byte)
+		if !ok || buffer.IsNull(2+2*i) {
+			return moerr.NewInvalidInputNoCtx("invalid batch type metadata")
+		}
+		if _, err := types.DecodeTypeChecked(data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // in version1, batch.Deletes is roaring.Bitmap
 func (bat *Batch) ReadFromV1(r io.Reader) (n int64, err error) {
 	var tmpn int64
 	buffer := MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 	defer buffer.Close()
 	if tmpn, err = buffer.ReadFromV1(r); err != nil {
+		return
+	}
+	if err = validateBatchTypeMetadata(buffer); err != nil {
 		return
 	}
 	n += tmpn
@@ -508,6 +544,7 @@ func (bat *Batch) ReadFromV1(r io.Reader) (n int64, err error) {
 	for _, vecType := range vecTypes {
 		vec := MakeVector(vecType, common.DefaultAllocator)
 		if tmpn, err = vec.ReadFromV1(r); err != nil {
+			vec.Close()
 			return
 		}
 		bat.Vecs = append(bat.Vecs, vec)
@@ -542,6 +579,9 @@ func (bat *Batch) ReadFromV2(r io.Reader) (n int64, err error) {
 	if tmpn, err = buffer.ReadFromV1(r); err != nil {
 		return
 	}
+	if err = validateBatchTypeMetadata(buffer); err != nil {
+		return
+	}
 	n += tmpn
 	pos := 0
 	buf := buffer.Get(pos).([]byte)
@@ -561,6 +601,7 @@ func (bat *Batch) ReadFromV2(r io.Reader) (n int64, err error) {
 	for _, vecType := range vecTypes {
 		vec := MakeVector(vecType, common.DefaultAllocator)
 		if tmpn, err = vec.ReadFromV1(r); err != nil {
+			vec.Close()
 			return
 		}
 		bat.Vecs = append(bat.Vecs, vec)

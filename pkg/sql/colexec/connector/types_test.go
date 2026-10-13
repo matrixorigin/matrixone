@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -31,12 +33,9 @@ import (
 )
 
 func TestConnectorResetAbortsSpoolWhenTerminalSignalCannotBeDelivered(t *testing.T) {
-	oldSignalSendTimeout := process.PipelineSignalSendTimeout
-	process.PipelineSignalSendTimeout = 10 * time.Millisecond
-	t.Cleanup(func() {
-		process.PipelineSignalSendTimeout = oldSignalSendTimeout
-	})
-
+	warnings := metricv2.PipelineCleanupEventCounter.WithLabelValues("connector_cleanup_send_terminal_signal")
+	before := promtestutil.ToFloat64(warnings)
+	t.Cleanup(func() { require.Equal(t, before, promtestutil.ToFloat64(warnings)) })
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() {
 		mpool.DeleteMPool(mp)
@@ -230,6 +229,9 @@ func TestConnectorResetDurableEndWakesReceiverAfterBufferedData(t *testing.T) {
 }
 
 func TestConnectorResetPreservesRecordedTerminalError(t *testing.T) {
+	warnings := metricv2.PipelineCleanupEventCounter.WithLabelValues("connector_cleanup_send_terminal_signal")
+	before := promtestutil.ToFloat64(warnings)
+	t.Cleanup(func() { require.Equal(t, before, promtestutil.ToFloat64(warnings)) })
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() {
 		mpool.DeleteMPool(mp)
@@ -306,6 +308,9 @@ func TestConnectorResetFailedNilErrorSendsTypedErrorWithCause(t *testing.T) {
 }
 
 func TestConnectorResetNilRegAbortsSpoolWithoutPanic(t *testing.T) {
+	warnings := metricv2.PipelineCleanupEventCounter.WithLabelValues("connector_cleanup_nil_reg")
+	before := promtestutil.ToFloat64(warnings)
+	t.Cleanup(func() { require.Equal(t, before+1, promtestutil.ToFloat64(warnings)) })
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() {
 		mpool.DeleteMPool(mp)
@@ -440,8 +445,10 @@ func TestConnectorAllocationAccountContract(t *testing.T) {
 	require.ErrorIs(t, conn.SetAllocationAccount(nil), mpool.ErrAllocationAccountInvalid)
 	require.NoError(t, conn.SetAllocationAccount(first))
 	require.ErrorIs(t, conn.SetAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
+	require.ErrorIs(t, conn.DrainAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
 	require.ErrorIs(t, conn.ClearAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
 	conn.ctr.sp = &pSpool.PipelineSpool{}
+	require.ErrorIs(t, conn.DrainAllocationAccount(first), mpool.ErrAllocationAccountInvariant)
 	require.ErrorIs(t, conn.ClearAllocationAccount(first), mpool.ErrAllocationAccountInvariant)
 	conn.ctr.sp = nil
 	require.NoError(t, conn.ClearAllocationAccount(first))
@@ -501,6 +508,10 @@ func testConnectorAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 	}
 	conn.CleanupDeferredSpool()
 	require.Same(t, sp, conn.cleanupSpool)
+	require.NoError(t, conn.DrainAllocationAccount(account))
+	require.Nil(t, conn.cleanupSpool)
+	require.Same(t, account, conn.allocationAccount)
+	require.NoError(t, conn.DrainAllocationAccount(account))
 	require.NoError(t, conn.ClearAllocationAccount(account))
 	require.Nil(t, conn.cleanupSpool)
 	src.Clean(mp)

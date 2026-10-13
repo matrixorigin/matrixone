@@ -98,4 +98,9 @@ func TestBuildReindexSql(t *testing.T) {
 	require.Equal(t,
 		"ALTER TABLE `db`.`tbl` ALTER REINDEX `idx` ivfflat LISTS=8 FORCE_SYNC",
 		buildReindexSql("db", "tbl", "idx", "ivfflat", "LISTS=8"))
+	// A backtick is legal in a quoted identifier. Raw interpolation would emit SQL the cron
+	// can never execute -- and it would re-issue the same broken statement every cadence.
+	require.Equal(t,
+		"ALTER TABLE `d``b`.`t``bl` ALTER REINDEX `i``dx` cagra FORCE_SYNC",
+		buildReindexSql("d`b", "t`bl", "i`dx", "cagra", ""))
 }

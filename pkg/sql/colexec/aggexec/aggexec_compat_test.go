@@ -337,6 +337,107 @@ func TestLegacyDistinctRestoreCanonicalizesBeforeAppendAndMerge(t *testing.T) {
 	}
 }
 
+func TestCanonicalDistinctSpillRestorePreservesMembershipKey(t *testing.T) {
+	mustJSON := func(t *testing.T, mp *mpool.MPool) *vector.Vector {
+		t.Helper()
+		value, err := types.ParseStringToByteJson("1")
+		require.NoError(t, err)
+		raw, err := types.EncodeJson(value)
+		require.NoError(t, err)
+		vec := vector.NewVec(types.T_json.ToType())
+		require.NoError(t, vector.AppendBytes(vec, raw, false, mp))
+		return vec
+	}
+
+	tests := []struct {
+		name      string
+		argTypes  []types.Type
+		newValues func(*testing.T, *mpool.MPool) []*vector.Vector
+	}{
+		{
+			name:     "json",
+			argTypes: []types.Type{types.T_json.ToType()},
+			newValues: func(t *testing.T, mp *mpool.MPool) []*vector.Vector {
+				return []*vector.Vector{mustJSON(t, mp)}
+			},
+		},
+		{
+			name: "float-json-tuple",
+			argTypes: []types.Type{
+				types.T_float64.ToType(),
+				types.T_json.ToType(),
+			},
+			newValues: func(t *testing.T, mp *mpool.MPool) []*vector.Vector {
+				floatVec := vector.NewVec(types.T_float64.ToType())
+				require.NoError(t, vector.AppendFixed(
+					floatVec,
+					math.Float64frombits(0x7ff8000000000001),
+					false,
+					mp,
+				))
+				return []*vector.Vector{floatVec, mustJSON(t, mp)}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			values := tc.newValues(t, mp)
+			duplicateValues := tc.newValues(t, mp)
+			source := newCountColumnExec(
+				mp, AggIdOfCountColumn, true, tc.argTypes,
+			).(*countColumnExec)
+			decoded := newCountColumnExec(
+				mp, AggIdOfCountColumn, true, tc.argTypes,
+			).(*countColumnExec)
+			restored := newCountColumnExec(
+				mp, AggIdOfCountColumn, true, tc.argTypes,
+			).(*countColumnExec)
+			defer func() {
+				source.Free()
+				decoded.Free()
+				restored.Free()
+				for _, value := range values {
+					value.Free(mp)
+				}
+				for _, value := range duplicateValues {
+					value.Free(mp)
+				}
+				require.Zero(t, mp.CurrNB())
+			}()
+
+			require.NoError(t, source.GroupGrow(1))
+			require.NoError(t, source.BatchFill(
+				0, []uint64{1}, values))
+			SetCanonicalDistinctKeyWire(source, true)
+			var canonical bytes.Buffer
+			require.NoError(t, source.SaveIntermediateResultOfChunk(0, &canonical))
+
+			// Cross a canonical partial-result boundary before creating the
+			// private spill record. This is the sequence used by distributed
+			// aggregate recovery, not just an in-memory spill of the producer.
+			SetCanonicalDistinctKeyWire(decoded, true)
+			require.NoError(t, decoded.UnmarshalFromReader(
+				bytes.NewReader(canonical.Bytes()), mp))
+			var spill bytes.Buffer
+			require.NoError(t, decoded.SaveSpillIntermediateRows(
+				0, []int32{0}, &spill))
+
+			SetCanonicalDistinctKeyWire(restored, true)
+			require.NoError(t, restored.UnmarshalSpillFromReader(
+				bytes.NewReader(spill.Bytes()), mp))
+			require.NoError(t, restored.BatchFill(
+				0, []uint64{1}, duplicateValues))
+			result, err := restored.Flush()
+			require.NoError(t, err)
+			require.Equal(t, int64(1),
+				vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
+			result[0].Free(mp)
+		})
+	}
+}
+
 func TestGroupConcatIntermediateRoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() {

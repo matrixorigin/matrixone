@@ -1,4 +1,4 @@
-FROM matrixorigin/tester:go1.26.4-jdk8
+FROM matrixorigin/tester:go1.27.0-jdk8
 
 ARG GOPROXY="https://proxy.golang.org,direct"
 ENV GOWORK=off

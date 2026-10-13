@@ -19,6 +19,7 @@ import (
 	stdcmp "cmp"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -69,12 +70,23 @@ func ConstructBlockPKFilter(
 		HasFakePK:       isFakePK,
 		ExactMembership: bf != nil && bf.Exact(),
 	}
-	// The scoped cache search must preserve the exact routing contract of the
-	// existing callbacks. Fake PK columns are not physically sorted even when
-	// the block carries the sorted flag, and membership filters may use a
-	// second key column. Keep both cases on the legacy owned-vector path.
+	// CachedSearch only handles the primary-key predicate, not membership on
+	// a second key column. Exact membership uses the separate closed descriptor
+	// below. Fake PK columns are not physically sorted even when the block carries
+	// the sorted flag, so they remain on the legacy owned-vector path.
 	if !isFakePK && bf == nil {
 		readFilter.CachedSearch = buildCachedPKSearch(basePKFilter)
+	}
+	if !isFakePK && readFilter.ExactMembership {
+		var pkSearch *objectio.ReadFilterSearch
+		if basePKFilter.Valid {
+			pkSearch = buildCachedPKSearch(basePKFilter)
+		}
+		if !basePKFilter.Valid || pkSearch != nil {
+			if member, ok := bf.(docfilter.MembershipFilter); ok {
+				readFilter.CachedMembership = objectio.NewReadFilterMembership(pkSearch, member)
+			}
+		}
 	}
 	if basePKFilter.cleanup != nil {
 		readFilter.Cleanup = basePKFilter.cleanup.run
@@ -97,27 +109,34 @@ func ConstructBlockPKFilter(
 		disjuncts = []BasePKFilter{basePKFilter}
 	}
 
+	// BasePKFilter's zero Op is EQUAL. When the planner cannot materialize a
+	// predicate (for example, an internal raw prefix literal), an invalid base
+	// filter must therefore not be handed to the search-function builder: it
+	// would be mistaken for an empty equality and intersect every membership
+	// hit away. With a membership filter, fail open to the membership search.
 	var (
-		sortedMissing bool
-		unsMissing    bool
+		sortedMissing = !basePKFilter.Valid
+		unsMissing    = !basePKFilter.Valid
 		sortedFuncs   []func(*vector.Vector) []int64
 		unsFuncs      []func(*vector.Vector) []int64
 	)
 
-	for idx := range disjuncts {
-		sortedFunc, unsortedFunc, err := buildBlockPKSearchFuncs(disjuncts[idx])
-		if err != nil {
-			return objectio.BlockReadFilter{}, err
-		}
-		if sortedFunc == nil {
-			sortedMissing = true
-		} else {
-			sortedFuncs = append(sortedFuncs, sortedFunc)
-		}
-		if unsortedFunc == nil {
-			unsMissing = true
-		} else {
-			unsFuncs = append(unsFuncs, unsortedFunc)
+	if basePKFilter.Valid {
+		for idx := range disjuncts {
+			sortedFunc, unsortedFunc, err := buildBlockPKSearchFuncs(disjuncts[idx])
+			if err != nil {
+				return objectio.BlockReadFilter{}, err
+			}
+			if sortedFunc == nil {
+				sortedMissing = true
+			} else {
+				sortedFuncs = append(sortedFuncs, sortedFunc)
+			}
+			if unsortedFunc == nil {
+				unsMissing = true
+			} else {
+				unsFuncs = append(unsFuncs, unsortedFunc)
+			}
 		}
 	}
 
@@ -1266,7 +1285,7 @@ func mergeBaseFilterInKind(
 }
 
 // mergeFixedInValues is the ordered set merge used for fixed-size types that
-// are not covered by constraints.Ordered (notably bool and UUID).
+// are not covered by cmp.Ordered (notably bool and UUID).
 func mergeFixedInValues[T types.FixedSizeTExceptStrType](
 	a, b []T,
 	ret *vector.Vector,

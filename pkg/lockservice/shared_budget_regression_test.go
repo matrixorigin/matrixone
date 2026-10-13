@@ -70,6 +70,44 @@ func requireExactMixedModeLockStore(
 	}
 }
 
+func TestFastFailSharedToExclusiveGatePromotion(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(t, []string{"s1"}, time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			const table = uint64(26712)
+			a, b := []byte("gate-a"), []byte("gate-b")
+			shared := newTestRowSharedOptions()
+			exclusive := newTestRowExclusiveOptions()
+			exclusive.Policy = pb.WaitPolicy_FastFail
+			_, err := s.Lock(ctx, table, newTestRows(1), a, shared)
+			require.NoError(t, err)
+			_, err = s.Lock(ctx, table, newTestRows(1), a, exclusive)
+			require.NoError(t, err, "sole shared holder must promote without waiting")
+			lt := s.tableGroups.get(0, table).(*localLockTable)
+			func() {
+				lt.mu.RLock()
+				defer lt.mu.RUnlock()
+				held, ok := lt.mu.store.Get(newTestRows(1)[0])
+				require.True(t, ok)
+				require.Equal(t, pb.LockMode_Exclusive, held.GetLockMode())
+			}()
+			require.NoError(t, s.Unlock(ctx, a, timestamp.Timestamp{}))
+
+			_, err = s.Lock(ctx, table, newTestRows(1), a, shared)
+			require.NoError(t, err)
+			_, err = s.Lock(ctx, table, newTestRows(1), b, shared)
+			require.NoError(t, err)
+			_, err = s.Lock(ctx, table, newTestRows(1), a, exclusive)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockConflict), "%v", err)
+			require.NoError(t, s.Unlock(ctx, b, timestamp.Timestamp{}))
+			_, err = s.Lock(ctx, table, newTestRows(1), a, exclusive)
+			require.NoError(t, err, "remaining holder must promote after competitor rolls back")
+			require.NoError(t, s.Unlock(ctx, a, timestamp.Timestamp{}))
+		}, nil)
+}
+
 func TestMixedModeBudgetKeepsExactOwnership(t *testing.T) {
 	for _, foreignHolder := range []bool{false, true} {
 		name := "sole-holder"
@@ -403,8 +441,10 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 		name       string
 		serviceIDs []string
 		forward    bool
+		exactRows  bool
 	}{
 		{name: "local", serviceIDs: []string{"s1"}},
+		{name: "exact-exclusive", serviceIDs: []string{"s1"}, exactRows: true},
 		{name: "remote", serviceIDs: []string{"s1", "s2"}},
 		{name: "forward", serviceIDs: []string{"s1", "s2"}, forward: true},
 	}
@@ -453,6 +493,10 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 					waitWaiters(t, owner, table, newTestRows(5)[0], 1)
 
 					shared := newTestRowSharedOptions()
+					if tt.exactRows {
+						shared.Mode = pb.LockMode_Exclusive
+						shared.KeepRows = true
+					}
 					if tt.forward {
 						shared.ForwardTo = owner.serviceID
 					}
@@ -477,7 +521,7 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 						require.True(t, lock.isLockRow(),
 							"stale replacement absorbed row %d", row)
 						if row == 4 {
-							require.Equal(t, pb.LockMode_Shared, lock.GetLockMode())
+							require.Equal(t, shared.Mode, lock.GetLockMode())
 						}
 					}
 					_, gapExists := lt.mu.store.Get(newTestRows(5)[0])
@@ -519,8 +563,11 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 					probe := newTestRowSharedOptions()
 					probe.Policy = pb.WaitPolicy_FastFail
 					_, err = owner.Lock(ctx, table, newTestRows(4), probeTxn, probe)
-					require.NoError(t, err,
-						"concurrent Shared ownership was strengthened to Exclusive")
+					if tt.exactRows {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockConflict), "%v", err)
+					} else {
+						require.NoError(t, err, "concurrent Shared ownership was strengthened to Exclusive")
+					}
 					require.NoError(t, owner.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
 
 					gapProbeTxn := []byte("replacement-gap-probe")

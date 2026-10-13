@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -314,4 +315,72 @@ func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 	require.True(t, output.IsDeleted(1))
 	require.False(t, output.IsDeleted(0))
 	require.False(t, output.IsDeleted(2))
+}
+
+func TestAppendableDuplicatedRowsTimestampWindow(t *testing.T) {
+	for _, tombstone := range []bool{false, true} {
+		name := "data"
+		if tombstone {
+			name = "tombstone"
+		}
+		t.Run(name, func(t *testing.T) {
+			schema := catalog.MockSchema(1, 0)
+			table := catalog.MockStaloneTableEntry(1, schema)
+			oid := objectio.NewObjectid()
+			stats := objectio.NewObjectStatsWithObjectID(&oid, true, false, false)
+			meta := catalog.MockObjectEntry(table, stats, tombstone, nil, types.BuildTS(1, 0))
+			mvcc := updates.NewAppendMVCCHandle(meta)
+			base := &baseObject{RWMutex: mvcc.RWMutex, appendMVCC: mvcc}
+			base.meta.Store(meta)
+			node := &memoryNode{object: base, pkIndex: indexwrapper.NewMutIndex(types.T_int8.ToType())}
+			node.OnZeroCB = node.close
+			node.Ref()
+			defer node.Unref()
+			obj := &aobject{baseObject: base}
+			obj.node.Store(NewNode(node))
+			for _, appendRange := range []struct {
+				start, end uint32
+				ts         int64
+			}{{0, 1, 10}, {1, 3, 20}, {3, 4, 30}} {
+				an, _ := mvcc.AddAppendNodeLocked(nil, appendRange.start, appendRange.end)
+				an.Start = types.BuildTS(appendRange.ts, 0)
+				an.Prepare = an.Start
+				an.End = an.Start
+			}
+			keys := containers.MakeVector(types.T_int8.ToType(), common.DefaultAllocator)
+			defer keys.Close()
+			for i := int8(0); i < 4; i++ {
+				keys.Append(i, false)
+			}
+			require.NoError(t, node.pkIndex.BatchUpsert(keys.GetDownstreamVector(), 0))
+			txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(100, 0))
+			for _, tc := range []struct {
+				name     string
+				from, to types.TS
+				want     []bool
+			}{
+				{"multirow equality", types.BuildTS(20, 0), types.BuildTS(20, 0), []bool{false, true, true, false}},
+				{"between appends", types.BuildTS(11, 0), types.BuildTS(19, 0), []bool{false, false, false, false}},
+				{"after lower equality", types.BuildTS(20, 1), types.BuildTS(30, 0), []bool{false, false, false, true}},
+				{"empty lower", types.TS{}, types.BuildTS(10, 0), []bool{true, false, false, false}},
+				{"all appends", types.TS{}, types.MaxTs(), []bool{true, true, true, true}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					rows := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+					defer rows.Close()
+					for i := 0; i < 4; i++ {
+						rows.Append(nil, true)
+					}
+					require.NoError(t, obj.GetDuplicatedRows(context.Background(), txn, keys, nil, tc.from, tc.to, rows, common.DefaultAllocator))
+					for i, visible := range tc.want {
+						require.Equal(t, !visible, rows.IsNull(i), "row %d", i)
+						if visible {
+							rowID := rows.Get(i).(types.Rowid)
+							require.Equal(t, uint32(i), rowID.GetRowOffset())
+						}
+					}
+				})
+			}
+		})
+	}
 }

@@ -71,6 +71,15 @@ func NumericTextToUint64(text string) (uint64, bool) {
 	return numericKeyToUint64(&key)
 }
 
+// IsNumericText reports whether text is a complete exact numeric spelling.
+// It is separate from the range-limited conversion helpers so callers can
+// distinguish an out-of-range numeric value from a character value that merely
+// starts with a numeric prefix.
+func IsNumericText(text string) bool {
+	_, ok := numericKeyFromText(text)
+	return ok
+}
+
 // NumericToInt64 converts a JSON numeric value to int64 without rounding exact
 // INT64, UINT64, or DECIMAL values through float64. FLOAT64 values retain their
 // native floating-point cast semantics.

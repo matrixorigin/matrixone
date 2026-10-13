@@ -38,7 +38,7 @@ EXECUTE p_reuse USING @dynamic, @b;
 null
 SET @dynamic = 'not-a-number';
 EXECUTE p_reuse USING @dynamic, @b;
-invalid input: not-a-number beyond the range, can't be converted to Decimal128(30,0).
+invalid input: "not-a-number" is invalid decimal string
 SET @dynamic = 9007199254740993;
 EXECUTE p_reuse USING @dynamic, @b;
 ➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀

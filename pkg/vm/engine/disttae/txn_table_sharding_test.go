@@ -81,26 +81,6 @@ func TestBuildReadersIsLocalErr(t *testing.T) {
 	)
 }
 
-func TestMergeObjectsIsLocalErr(t *testing.T) {
-	runIsLocalErrTests(
-		t,
-		func(tbl *txnTableDelegate) {
-			_, err := tbl.MergeObjects(context.Background(), nil, 0)
-			require.Error(t, err)
-		},
-	)
-}
-
-func TestGetNonAppendableObjectStatsIsLocalErr(t *testing.T) {
-	runIsLocalErrTests(
-		t,
-		func(tbl *txnTableDelegate) {
-			_, err := tbl.GetNonAppendableObjectStats(context.Background())
-			require.Error(t, err)
-		},
-	)
-}
-
 func runIsLocalErrTests(
 	_ *testing.T,
 	fn func(tbl *txnTableDelegate),

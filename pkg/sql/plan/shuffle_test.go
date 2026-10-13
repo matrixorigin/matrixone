@@ -243,7 +243,7 @@ type ShuffleRangeTestCase struct {
 }
 
 func TestShuffleRange(t *testing.T) {
-	testcase := make([]ShuffleRangeTestCase, 0)
+	testcase := make([]ShuffleRangeTestCase, 0, 3)
 	testcase = append(testcase, ShuffleRangeTestCase{
 		min: []float64{},
 		max: []float64{},
@@ -624,6 +624,72 @@ func TestDetermineShuffleForJoinNDVGuard(t *testing.T) {
 	lowNDVJoin := newJoin(10)
 	determineShuffleForJoin(lowNDVJoin, builder)
 	require.False(t, lowNDVJoin.Stats.HashmapStats.Shuffle)
+}
+
+func TestDetermineShuffleForJoinUsesResidualInequalityCapacityBound(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		operator    string
+		wantShuffle bool
+	}{
+		{name: "inequality uses input bound", operator: "<>", wantShuffle: true},
+		{name: "other residual keeps estimate", operator: ">", wantShuffle: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			left := &plan.Node{
+				NodeType:    plan.Node_TABLE_SCAN,
+				BindingTags: []int32{1},
+				Stats:       &plan.Stats{Outcnt: 1_000_000, HashmapStats: &plan.HashMapStats{}},
+			}
+			buildInput := &plan.Node{
+				NodeType:    plan.Node_TABLE_SCAN,
+				BindingTags: []int32{2},
+				Stats:       &plan.Stats{Outcnt: 5_000_000, HashmapStats: &plan.HashMapStats{}},
+			}
+			buildFilter := &plan.Node{
+				NodeType: plan.Node_FILTER,
+				Children: []int32{1},
+				FilterList: []*plan.Expr{{
+					Expr: &plan.Expr_F{F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: test.operator},
+						Args: []*plan.Expr{
+							{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 2, ColPos: 1}}},
+							{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 2, ColPos: 2}}},
+						},
+					}},
+				}},
+				Stats: &plan.Stats{Outcnt: 250_000, HashmapStats: &plan.HashMapStats{}},
+			}
+			leftKey := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+			}
+			rightKey := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 2, ColPos: 0}},
+			}
+			condition, err := BindFuncExprImplByPlanExpr(
+				context.Background(), "=", []*plan.Expr{leftKey, rightKey})
+			require.NoError(t, err)
+			condition.Ndv = 100_000
+			join := &plan.Node{
+				NodeType: plan.Node_JOIN,
+				JoinType: plan.Node_INNER,
+				Children: []int32{0, 2},
+				OnList:   []*plan.Expr{condition},
+				Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+					HashmapSize: 250_000,
+				}},
+			}
+			builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{left, buildInput, buildFilter, join}}}
+
+			determineShuffleForJoin(join, builder)
+
+			require.Equal(t, test.wantShuffle, join.Stats.HashmapStats.Shuffle)
+			require.Equal(t, float64(250_000), join.Stats.HashmapStats.HashmapSize,
+				"capacity bound must not replace the expected cardinality")
+		})
+	}
 }
 
 func TestDetermineShuffleForGroupByCanUseDependentHighNDVColumn(t *testing.T) {
@@ -1861,7 +1927,7 @@ func TestDetermineShuffleForLatePlanStep(t *testing.T) {
 			HashmapSize: 10_000_000,
 		}},
 	}
-	builder := NewQueryBuilder(plan.Query_INSERT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	builder.qry = &plan.Query{
 		Nodes: []*plan.Node{left, right, join, ivfScanWithoutBindingTag},
 		Steps: []int32{3, 2},
@@ -2238,7 +2304,7 @@ func TestSetOperationOutputType(t *testing.T) {
 }
 
 func TestUnionAllOutputNullabilityBeforeOptimization(t *testing.T) {
-	optimizer := NewMockOptimizer(true)
+	optimizer := NewMockOptimizer(true, newPlanTestProcess(t))
 	statements, err := mysql.Parse(
 		optimizer.CurrentContext().GetContext(),
 		`select n.n_regionkey as regionkey from tpch.nation n
@@ -2301,7 +2367,7 @@ func TestMarkShuffleRejectsOuterJoinNullExtension(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tt.sql)
 			require.NoError(t, err)
 
 			query := logicPlan.GetQuery()
@@ -2360,7 +2426,7 @@ func TestMarkShuffleRejectsOuterJoinNullExtension(t *testing.T) {
 }
 
 func TestMarkShuffleRejectsSingleJoinNullExtension(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
 		select d.regionkey in (
 			select l.l_partkey from tpch.lineitem l
 		)
@@ -2436,7 +2502,7 @@ func buildMarkPlanBeforeOptimization(
 ) (*QueryBuilder, *plan.Node) {
 	t.Helper()
 
-	optimizer := NewMockOptimizer(true)
+	optimizer := NewMockOptimizer(true, newPlanTestProcess(t))
 	statements, err := mysql.Parse(
 		optimizer.CurrentContext().GetContext(),
 		sql,
@@ -2673,7 +2739,7 @@ func TestMarkShuffleRejectsNullExtensionAcrossGroupingMaterializers(t *testing.T
 			require.Equal(t, tt.wantShuffle, preRemapMark.Stats.HashmapStats.Shuffle,
 				"pre-remap eligibility must follow the group expression to its materialized child")
 
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tt.sql)
 			require.NoError(t, err)
 
 			query := logicPlan.GetQuery()
@@ -2826,7 +2892,7 @@ func TestMarkShuffleUsesRecursiveCTEOutputNullability(t *testing.T) {
 			determineShuffleForJoinWithColRefMode(preRemapMark, preRemapBuilder, false)
 			require.Equal(t, tt.wantShuffle, preRemapMark.Stats.HashmapStats.Shuffle)
 
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tt.sql)
 			require.NoError(t, err)
 			query := logicPlan.GetQuery()
 
@@ -2914,7 +2980,7 @@ func TestMarkShuffleUsesSetOperationOutputNullability(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, fmt.Sprintf(`
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, fmt.Sprintf(`
 				select d.regionkey in (
 					select l.l_partkey from tpch.lineitem l
 				)
@@ -2975,7 +3041,7 @@ func TestMarkShuffleUsesSetOperationOutputNullability(t *testing.T) {
 }
 
 func TestUnionAllNullabilitySurvivesColumnPruning(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
 		select d.regionkey
 		from (
 			select n.n_nationkey as unused_key, n.n_regionkey as regionkey

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -169,5 +170,51 @@ func (xcall *XCallFunction) XCall(ivecs []*vector.Vector, result vector.Function
 		}
 	}
 
-	return c_xcall(xcall, proc.Mp(), length, resultVec, ivecs)
+	if err := c_xcall(xcall, proc.Mp(), length, resultVec, ivecs); err != nil {
+		return err
+	}
+	// The C kernels accumulate in double and report success whatever comes out, so a result the
+	// Go l2_distance rejects can reach SQL through the _xc overload. Enforce the same contract
+	// where the values cross back into Go, as the usearch and cuVS boundaries do.
+	return checkXCallDistanceDomain(xcall.xFuncId, resultVec, length)
+}
+
+// checkXCallDistanceDomain rejects an XCall distance that left the domain its scalar counterpart
+// holds to.
+//
+// That domain is not the same for all four overloads. l2_distance is a float32-domain value for
+// every base type, including vecf64, so moarray.L2Distance rounds through float32 before checking:
+// a float64 1e40 is finite but float32(1e40) is +Inf, and the scalar errors on it. The same is true
+// of l2_distance_sq on a float32 base, whose square is accumulated in float32. l2_distance_sq on
+// vecf64 is the one exception -- it returns the raw float64 square by design, as IVF's squared
+// intermediate -- so its domain is float64.
+func checkXCallDistanceDomain(xFuncId int64, resultVec *vector.Vector, length int) error {
+	var narrowToF32 bool
+	switch xFuncId {
+	case XCALL_L2DISTANCE_F32, XCALL_L2DISTANCE_F64, XCALL_L2DISTANCE_SQ_F32:
+		narrowToF32 = true
+	case XCALL_L2DISTANCE_SQ_F64:
+		narrowToF32 = false
+	default:
+		return nil
+	}
+	vals := vector.MustFixedColNoTypeCheck[float64](resultVec)
+	if len(vals) > length {
+		vals = vals[:length]
+	}
+	nsp := resultVec.GetNulls()
+	for i := range vals {
+		if nsp != nil && nsp.Contains(uint64(i)) {
+			continue
+		}
+		d := vals[i]
+		if narrowToF32 {
+			d = metric.RoundDistanceToElemDomain(d)
+		}
+		if d-d != 0 {
+			return moerr.NewInternalErrorNoCtx(
+				"l2 distance: vector magnitude is too large, the result overflows the element domain")
+		}
+	}
+	return nil
 }

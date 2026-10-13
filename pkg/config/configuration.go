@@ -66,9 +66,6 @@ var (
 	//mempool factor.
 	defaultMempoolFactor = 8
 
-	//process.Limitation.Size.  10 << 32 = 42949672960
-	defaultProcessLimitationSize = 42949672960
-
 	//process.Limitation.BatchRows.  10 << 32 = 42949672960
 	defaultProcessLimitationBatchRows = 42949672960
 
@@ -609,7 +606,8 @@ type FrontendParameters struct {
 	//mempool factor. default: 8
 	MempoolFactor int64 `toml:"mempoolFactor"`
 
-	//process.Limitation.Size. default: 10 << 32 = 42949672960
+	// ProcessLimitationSize is an optional per-query execution-memory cap.
+	// Zero leaves the cgroup/host/mpool-derived CN ceiling authoritative.
 	ProcessLimitationSize int64 `toml:"processLimitationSize"`
 
 	// process.Limitation.SpillSize. Zero selects the bounded query default.
@@ -788,10 +786,6 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.MempoolFactor == 0 {
 		fp.MempoolFactor = int64(defaultMempoolFactor)
-	}
-
-	if fp.ProcessLimitationSize == 0 {
-		fp.ProcessLimitationSize = int64(toml.ByteSize(defaultProcessLimitationSize))
 	}
 
 	if fp.ProcessLimitationBatchRows == 0 {
@@ -1014,6 +1008,9 @@ type ObservabilityParameters struct {
 	// LongQueryTime default is 0.0 sec. if 0.0f, record every query. Record with exec time longer than LongQueryTime.
 	LongQueryTime float64 `toml:"long-query-time" user_setting:"advanced"`
 
+	// Legacy keeps old readers usable during a rolling upgrade.
+	StatementDiagnosticsFormat string `toml:"statement-diagnostics-format" user_setting:"advanced"`
+
 	// MetricExportInterval default is 15 sec.
 	MetricExportInterval int `toml:"metric-export-interval"`
 
@@ -1127,6 +1124,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		EnableTraceDebug:                   false,
 		TraceExportInterval:                defaultTraceExportInterval,
 		LongQueryTime:                      defaultLongQueryTime,
+		StatementDiagnosticsFormat:         "compact-v1",
 		MetricExportInterval:               defaultMetricExportInterval,
 		MetricGatherInterval:               defaultMetricGatherInterval,
 		MetricInternalGatherInterval:       toml.Duration{},
@@ -1294,6 +1292,9 @@ func (op *ObservabilityParameters) resetConfigByOld() {
 		defaultMetricUpdateStorageUsageInterval,
 		op.MetricUpdateStorageUsageIntervalV12.Duration)
 	// part statement_info
+	if op.StatementDiagnosticsFormat == "" {
+		op.StatementDiagnosticsFormat = "compact-v1"
+	}
 	resetBoolConfig(&op.EnableStmtMerge, false, op.EnableStmtMergeV12)
 	resetBoolConfig(&op.DisableStmtAggregation, false, op.DisableStmtAggregationV12)
 	resetDurationConfig(&op.AggregationWindow.Duration, defaultAggregationWindow, op.AggregationWindowV12.Duration)

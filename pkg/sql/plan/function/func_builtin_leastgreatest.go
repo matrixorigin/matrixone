@@ -138,6 +138,13 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 		}
 	}
 	if sameOid {
+		if baseOid.IsArrayRelate() {
+			for _, input := range nonNull[1:] {
+				if input.Width != nonNull[0].Width {
+					return leastGreatestResolution{}, false
+				}
+			}
+		}
 		if !leastGreatestExecutorSupportsOid(baseOid) {
 			return leastGreatestResolution{}, false
 		}
@@ -149,6 +156,19 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 			}, true
 		}
 		return leastGreatestResolution{resultType: nonNull[0], overloadID: leastGreatestNormalOverload}, true
+	}
+
+	for _, input := range nonNull {
+		if input.Oid == types.T_uuid {
+			if target, _, ok := textStringCommonType(inputs); ok {
+				return leastGreatestResolution{
+					resultType: target,
+					castTypes:  leastGreatestCastTypes(inputs, target),
+					overloadID: leastGreatestNormalOverload,
+				}, true
+			}
+			break
+		}
 	}
 
 	if hasUnsupportedLeastGreatestMixedType(nonNull) {
@@ -312,6 +332,15 @@ func leastGreatestSameOidAlignedType(inputs []types.Type) (types.Type, bool) {
 	switch target.Oid {
 	case types.T_char, types.T_varchar, types.T_text:
 		mergedCharset := types.MergeStringCharset(inputs, target.Charset)
+		if target.Oid == types.T_varchar && leastGreatestMetadataDiffers(inputs) {
+			// A bounded conditional expression (for example COALESCE(CHAR, VARCHAR))
+			// can arrive here as VARCHAR with the first branch's width.  Do not let
+			// that intermediate width become LEAST/GREATEST's result metadata: the
+			// established string overload contract uses the conservative VARCHAR
+			// capacity when the argument widths need promotion.
+			target = types.MergeStringCollationMetadata(types.T_varchar.ToType(), inputs)
+			return target, true
+		}
 		for i := range inputs {
 			if inputs[i].Charset != mergedCharset {
 				// Aligning collation requires casts even when the OIDs already
@@ -583,8 +612,7 @@ func leastGreatestMergedStringType(inputs []types.Type, targetOID types.T) types
 	// to every applicable argument; the return-type callback receives the same
 	// target. Keep this derivation shared by every mixed-type resolver because
 	// JSON and date-bearing inputs dispatch before the ordinary string path.
-	target.Charset = types.MergeStringCharset(inputs, target.Charset)
-	return target
+	return types.MergeStringCollationMetadata(target, inputs)
 }
 
 // leastGreatestCommonNumericType derives the common type used to compare a set

@@ -231,6 +231,7 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 	} else {
 		dedupJoin.OpAnalyzer.Reset()
 	}
+	dedupJoin.ctr.autoSpill = dedupJoin.SpillThreshold == 0
 	dedupJoin.ctr.spillThreshold = colexec.ResolveSpillThreshold(dedupJoin.SpillThreshold)
 	newEvalVectors := len(dedupJoin.ctr.vecs) == 0
 	newUpdateExecs := len(dedupJoin.ctr.exprExecs) == 0 && len(dedupJoin.UpdateColExprList) > 0
@@ -432,6 +433,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				BuildKeyExprs:             dedupJoin.Conditions[1],
 				ProbeKeyExprs:             dedupJoin.Conditions[0],
 				SpillThreshold:            ctr.spillThreshold,
+				AdaptiveMemory:            ctr.autoSpill,
 				NeedsBuildForEmptyProbe:   true,
 				NeedAllocateSels:          dedupJoin.OnDuplicateAction == plan.Node_UPDATE,
 				NeedBatches:               true,
@@ -1874,6 +1876,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 	warningsEnabled := proc != nil && proc.GetStmtProfile() != nil &&
 		proc.GetStmtProfile().GetStatementIgnore() && ap.OnDuplicateAction == plan.Node_IGNORE
 	var duplicateWarnings process.WarningAccumulator
+	duplicateWarnings.SetWarningRetentionForProcess(proc)
+	defer duplicateWarnings.Reset()
 	recordDuplicateWarning := func(row int) {
 		if !warningsEnabled {
 			return
@@ -1897,7 +1901,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 		}
 		duplicateWarnings.Add(
 			moerr.ER_DUP_ENTRY,
-			moerr.NewDuplicateEntry(proc.Ctx, rowStr, ap.DedupColName).Error(),
+			moerr.FormatDuplicateEntry(rowStr, ap.DedupColName),
 		)
 	}
 	for i := 0; i < count; i += hashmap.UnitLimit {

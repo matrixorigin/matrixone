@@ -151,7 +151,18 @@ t3_ID
 SELECT t3.ID AS t3_ID FROM t3 LIMIT 1;
 t3_ID
 1
-SELECT * FROM t2 left join t3 ON (test.t2.id= TEST.t3.id) WHERE t2.id >= t3.id;
+SELECT * FROM t2 left join t3 ON (test03.t2.id= TEST03.t3.id) WHERE t2.id >= t3.id;
+id    word    id    word
+INSERT INTO t3 VALUES (3, 'matched');
+SELECT * FROM t2 left join t3 ON (test03.t2.id= TEST03.t3.id) WHERE t2.id >= t3.id;
+id    word    id    word
+3    c    3    matched
+SELECT * FROM t2 left join t3 ON (test.t2.id= TEST03.t3.id) WHERE t2.id >= t3.id;
+invalid input: missing FROM-clause entry for table 't2'
+SELECT * FROM t2 left join t3 ON (test03.t2.id= TEST.t3.id) WHERE t2.id >= t3.id;
+invalid input: missing FROM-clause entry for table 't3'
+DELETE FROM t3 WHERE id = 3;
+SELECT * FROM t2 left join t3 ON (test03.t2.id= TEST03.t3.id) WHERE t2.id >= t3.id;
 id    word    id    word
 DROP TABLE t2;
 DROP TABLE t3;

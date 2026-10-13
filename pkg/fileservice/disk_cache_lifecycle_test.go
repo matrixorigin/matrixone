@@ -25,6 +25,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
@@ -216,31 +217,38 @@ func TestDiskCacheReadSharesWaitBudgetAcrossEntries(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cache := newLifecycleTestDiskCache(t)
-			entries := make([]IOEntry, 64)
-			for i := range entries {
-				entries[i] = IOEntry{Offset: int64(i), Size: 1}
-			}
-
-			var releases []func()
-			for _, path := range tc.holdPaths(cache, entries) {
-				releases = append(releases, cache.startUpdate(path))
-			}
-			releaseAll := sync.OnceFunc(func() {
-				for _, release := range releases {
-					release()
+			// Measure the shared timer budget, not scheduler or filesystem delay
+			// on a loaded race runner. Keep all path wait channels in this bubble.
+			synctest.Test(t, func(t *testing.T) {
+				cache := newLifecycleTestDiskCache(t)
+				entries := make([]IOEntry, 64)
+				for i := range entries {
+					entries[i] = IOEntry{Offset: int64(i), Size: 1}
 				}
-			})
-			t.Cleanup(releaseAll)
 
-			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-			defer cancel()
-			require.NoError(t, cache.Read(ctx, &IOVector{
-				FilePath: "foo",
-				Entries:  entries,
-			}))
-			require.NoError(t, ctx.Err(), "one Read exhausted a per-entry wait budget")
-			releaseAll()
+				holdPaths := tc.holdPaths(cache, entries)
+				releases := make([]func(), 0, len(holdPaths))
+				for _, path := range holdPaths {
+					releases = append(releases, cache.startUpdate(path))
+				}
+				releaseAll := sync.OnceFunc(func() {
+					for _, release := range releases {
+						release()
+					}
+				})
+				t.Cleanup(releaseAll)
+
+				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+				defer cancel()
+				started := time.Now()
+				require.NoError(t, cache.Read(ctx, &IOVector{
+					FilePath: "foo",
+					Entries:  entries,
+				}))
+				require.NoError(t, ctx.Err(), "one Read exhausted a per-entry wait budget")
+				require.Equal(t, shortIOWaitDuration, time.Since(started), "all contended paths share one timer budget")
+				releaseAll()
+			})
 		})
 	}
 }
@@ -531,8 +539,12 @@ func TestDiskCacheCompletedOwnerCannotReleaseNextGeneration(t *testing.T) {
 
 func TestDiskCacheAsyncUpdateReturnsBeforePathAvailable(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
+	// This test owns the scheduling gates, not the filesystem's sync latency.
+	syncStarted, unblockSync := installBlockedDiskCacheFileSync(cache)
+	t.Cleanup(unblockSync)
 	diskPath := cache.pathForIOEntry("foo", IOEntry{Offset: 0, Size: 1})
 	release := cache.startUpdate(diskPath)
+	t.Cleanup(release)
 	data := []byte("x")
 	written := make(chan IOEntry, 1)
 	ctx := OnDiskCacheWritten(context.Background(), func(_ string, entry IOEntry) {
@@ -551,8 +563,6 @@ func TestDiskCacheAsyncUpdateReturnsBeforePathAvailable(t *testing.T) {
 	case err := <-done:
 		require.NoError(t, err)
 	case <-time.After(diskCacheLifecycleTestTimeout):
-		release()
-		<-done
 		t.Fatal("async disk-cache update waited for the current path owner")
 	}
 
@@ -563,12 +573,28 @@ func TestDiskCacheAsyncUpdateReturnsBeforePathAvailable(t *testing.T) {
 	}
 	data[0] = 'y'
 	release()
+	select {
+	case <-syncStarted:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("async disk-cache update did not reach finalization after path release")
+	}
+	select {
+	case <-written:
+		t.Fatal("async callback ran before cache finalization completed")
+	default:
+	}
+	unblockSync()
 	flushCtx, cancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
 	defer cancel()
 	cache.Flush(flushCtx)
 	require.NoError(t, flushCtx.Err())
-	writtenEntry := <-written
-	require.Equal(t, []byte("x"), writtenEntry.Data)
+	// Flush drains pending writes, but callbacks run independently afterward.
+	select {
+	case writtenEntry := <-written:
+		require.Equal(t, []byte("x"), writtenEntry.Data)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("async disk-cache update did not deliver its completion callback")
+	}
 
 	vector := &IOVector{FilePath: "foo", Entries: []IOEntry{{Offset: 0, Size: 1}}}
 	defer vector.Release()

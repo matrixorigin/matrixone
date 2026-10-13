@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
@@ -89,174 +88,6 @@ type regularIndexTopSortContext struct {
 	pushOrderedLimit bool
 }
 
-// overFetchDisplayLimit returns the plan-time over-fetched candidate budget for a
-// LITERAL limit, for EXPLAIN display only (IndexReaderParam.OverFetchLimit) — 0
-// for a prepared LIMIT ? (unknown at plan time) or when no over-fetch applies.
-// It calls the same overfetch functions the TVF uses at EXECUTE, so the displayed
-// value equals the runtime budget. filteredPostMode selects ivfflat's factor.
-func overFetchDisplayLimit(limit *plan.Expr, overFetch bool, filteredPostMode bool) uint64 {
-	if !overFetch || limit == nil {
-		return 0
-	}
-	lit := limit.GetLit()
-	if lit == nil {
-		return 0
-	}
-	k := lit.GetU64Val()
-	if filteredPostMode {
-		return overfetch.FilteredPostModeLimit(k)
-	}
-	return overfetch.PostFilterLimit(k)
-}
-
-// BuildOverFetchLimitExpr returns an expression evaluating to the over-fetched
-// candidate budget k' = overfetch.PostFilterLimit(k), for a k that may only be known
-// at EXECUTE (a prepared LIMIT ?). A literal k is folded here; a parameterized one
-// becomes an expression computing the same step function at runtime.
-//
-// Why the budget travels on node.Limit rather than on IndexReaderParam.Limit alone:
-// node.Limit is the ONLY candidate-budget channel a pre-change CN understands. A
-// vector provider child gives the FUNCTION_SCAN a child, so compileTableFunction
-// attaches the search operator to already-compiled child scopes, which may be Remote
-// — a new coordinator can therefore ship this operator to an old CN during a rolling
-// upgrade. That CN's Prepare reads arg.Limit alone, so a nil there makes it default
-// to one candidate and silently under-return before the post-filter JOIN.
-//
-// Carrying k' here needs no protocol capability and no low-version fallback, because
-// every function used (case, greatest, cast, *, +) long predates any CN this can be
-// mixed with, and evalLimitExpression has always evaluated a non-literal arg.Limit
-// through a general expression executor. Old and new CNs compute the same k'.
-//
-// The formula mirrors overfetch.PostFilterLimit exactly:
-//
-//	greatest(cast(k * factor(k) as uint64), k + 10)
-//
-// so the two implementations cannot drift into disagreeing about the budget.
-// TestOverFetchLimitExprMatchesGoFormula pins them together.
-func BuildOverFetchLimitExpr(ctx context.Context, limit *plan.Expr, filteredPostMode bool) (*plan.Expr, error) {
-	if limit == nil {
-		return nil, nil
-	}
-	if lit := limit.GetLit(); lit != nil {
-		k := lit.GetU64Val()
-		if filteredPostMode {
-			return makePlan2Uint64ConstExprWithType(overfetch.FilteredPostModeLimit(k)), nil
-		}
-		return makePlan2Uint64ConstExprWithType(overfetch.PostFilterLimit(k)), nil
-	}
-
-	// factor(k): the same bucketed step function the Go helpers use.
-	bounds := overfetch.PostFilterFactorSteps()
-	if filteredPostMode {
-		bounds = overfetch.FilteredPostModeFactorSteps()
-	}
-	caseArgs := make([]*plan.Expr, 0, len(bounds)*2+1)
-	for _, step := range bounds {
-		cond, err := BindFuncExprImplByPlanExpr(ctx, "<", []*plan.Expr{
-			DeepCopyExpr(limit), makePlan2Uint64ConstExprWithType(step.Below)})
-		if err != nil {
-			return nil, err
-		}
-		caseArgs = append(caseArgs, cond, makePlan2Float64ConstExprWithType(step.Factor))
-	}
-	caseArgs = append(caseArgs, makePlan2Float64ConstExprWithType(overfetch.DefaultFactor(filteredPostMode)))
-	factor, err := BindFuncExprImplByPlanExpr(ctx, "case", caseArgs)
-	if err != nil {
-		return nil, err
-	}
-
-	scaled, err := BindFuncExprImplByPlanExpr(ctx, "*", []*plan.Expr{DeepCopyExpr(limit), factor})
-	if err != nil {
-		return nil, err
-	}
-	// floor() before the cast is required, not cosmetic: Go's uint64(product)
-	// truncates while SQL CAST(... AS UNSIGNED) rounds half away from zero, so
-	// k=51 would give 76 in overfetch.Limit and 77 here. Truncating explicitly
-	// keeps the two definitions equal for every k.
-	truncated, err := BindFuncExprImplByPlanExpr(ctx, "floor", []*plan.Expr{scaled})
-	if err != nil {
-		return nil, err
-	}
-	// SATURATION, HALF ONE: the product.
-	//
-	// overfetch.Limit clamps the product at MaxUint64 rather than overflowing.
-	// The cast below cannot express that on its own -- CAST(... AS UNSIGNED)
-	// raises "data out of range" for anything at or above 2^64, so a perfectly
-	// valid large LIMIT would fail as a bound parameter while succeeding as a
-	// literal.
-	//
-	// The clamp is applied with least() in FLOAT space, before the cast, rather
-	// than by branching around the cast. A CASE cannot be relied on here: the
-	// vectorized evaluator may evaluate both arms and only then select, so an
-	// unguarded cast in the untaken arm would still raise. least() is
-	// branch-free, so the cast never sees an out-of-range input.
-	//
-	// maxU64AsFloat is the largest float64 strictly below 2^64 (2^64 - 2048;
-	// the ULP at that magnitude is 2^11). Clamping there is a no-op for every
-	// value Go would truncate -- float64 cannot represent anything between it
-	// and 2^64 -- so it only ever guards the cast.
-	const maxU64AsFloat = 18446744073709549568.0 // 2^64 - 2048
-	const twoPow64 = 18446744073709551616.0      // == float64(math.MaxUint64) in Go
-	castable, err := BindFuncExprImplByPlanExpr(ctx, "least", []*plan.Expr{
-		truncated, makePlan2Float64ConstExprWithType(maxU64AsFloat)})
-	if err != nil {
-		return nil, err
-	}
-	scaledU64, err := appendCastBeforeExpr(ctx, castable, plan.Type{
-		Id: int32(types.T_uint64), NotNullable: true})
-	if err != nil {
-		return nil, err
-	}
-	// Go compares `product >= float64(math.MaxUint64)`, and that conversion
-	// yields 2^64 exactly (MaxUint64 itself is not representable). Compare
-	// against the same 2^64 so the two agree on which k saturates.
-	overflows, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{
-		DeepCopyExpr(scaled), makePlan2Float64ConstExprWithType(twoPow64)})
-	if err != nil {
-		return nil, err
-	}
-	scaledU64, err = BindFuncExprImplByPlanExpr(ctx, "case", []*plan.Expr{
-		overflows, makePlan2Uint64ConstExprWithType(math.MaxUint64), scaledU64})
-	if err != nil {
-		return nil, err
-	}
-
-	// SATURATION, HALF TWO: the additive floor.
-	//
-	// The +10 floor keeps a small k from over-fetching too little to survive the
-	// filter, but k+10 wraps for k > MaxUint64-10, and unsigned addition raises
-	// rather than wrapping silently. overfetch.Limit clamps to MaxUint64 there.
-	//
-	// Clamping the ADDEND instead of guarding the sum keeps this branch-free for
-	// the same reason as above: least(k, MaxUint64-10) + 10 is at most MaxUint64
-	// by construction, so no evaluation order can overflow it.
-	clampedK, err := BindFuncExprImplByPlanExpr(ctx, "least", []*plan.Expr{
-		DeepCopyExpr(limit),
-		makePlan2Uint64ConstExprWithType(math.MaxUint64 - overfetch.MinExtraCandidates)})
-	if err != nil {
-		return nil, err
-	}
-	minCandidates, err := BindFuncExprImplByPlanExpr(ctx, "+", []*plan.Expr{
-		clampedK, makePlan2Uint64ConstExprWithType(overfetch.MinExtraCandidates)})
-	if err != nil {
-		return nil, err
-	}
-	budget, err := BindFuncExprImplByPlanExpr(ctx, "greatest", []*plan.Expr{scaledU64, minCandidates})
-	if err != nil {
-		return nil, err
-	}
-
-	// overfetch.Limit short-circuits k == 0 to 0; without the same guard the floor
-	// above would turn `LIMIT 0` into a 10-candidate search.
-	isZero, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
-		DeepCopyExpr(limit), makePlan2Uint64ConstExprWithType(0)})
-	if err != nil {
-		return nil, err
-	}
-	return BindFuncExprImplByPlanExpr(ctx, "case", []*plan.Expr{
-		isZero, makePlan2Uint64ConstExprWithType(0), budget})
-}
-
 func containsDynamicParam(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_P, *plan.Expr_V:
@@ -272,31 +103,7 @@ func containsDynamicParam(expr *plan.Expr) bool {
 }
 
 func isRuntimeConstExpr(expr *plan.Expr) bool {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_T:
-		return true
-
-	case *plan.Expr_F:
-		for _, subExpr := range exprImpl.F.Args {
-			if !isRuntimeConstExpr(subExpr) {
-				return false
-			}
-		}
-
-		return true
-
-	case *plan.Expr_List:
-		for _, subExpr := range exprImpl.List.List {
-			if !isRuntimeConstExpr(subExpr) {
-				return false
-			}
-		}
-
-		return true
-
-	default:
-		return false
-	}
+	return function.IsRuntimeConstant(expr)
 }
 
 func checkSpatialIndexFilter(expr *plan.Expr) *plan.ColRef {
@@ -485,6 +292,9 @@ func (builder *QueryBuilder) collectSpecialIndexGuards(nodeID int32) {
 		if scanIDs := builder.detectVectorGuard(node); len(scanIDs) > 0 {
 			builder.registerProjectGuard(node.NodeId, specialIndexKindVector, scanIDs)
 		}
+		if scanIDs := builder.detectEquiVectorJoinGuard(node); len(scanIDs) > 0 {
+			builder.registerProjectGuard(node.NodeId, specialIndexKindVector, scanIDs)
+		}
 		// This pre-pass visits a node before its children, so claiming the Top-K here
 		// settles the anchor for both the guard below and applyIndicesForSort.
 		if len(node.Children) == 1 && builder.qry.Nodes[node.Children[0]].NodeType == plan.Node_SORT {
@@ -604,6 +414,9 @@ func containsInt32(list []int32, target int32) bool {
 }
 
 func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	if builder.isViewSchemaMemoScan(nodeID) {
+		return nodeID, nil
+	}
 	var err error
 
 	if builder.optimizerHints != nil && builder.optimizerHints.applyIndices != 0 {
@@ -658,6 +471,41 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 					filterids, filterFTIdxs, wrappedFTExprs, wrappedFTIdxs, colRefCnt, idxColMap)
 			}
 		}
+
+	case plan.Node_WINDOW:
+		// Fourth fulltext anchor: a WINDOW -> SCAN(MATCH). Adding a window function --
+		// `select ..., row_number() over (...) from t where match(...) against(...)` -- puts a
+		// WINDOW between the query block and the base scan, which the PROJECT-anchored
+		// resolveFullTextIndexPath (SORT/AGG hops only) never sees, so the scan's fulltext_match
+		// survives to execution as error 20105 (#28974). Anchor on the WINDOW like the AGG case:
+		// its single child is the scan, so rewrite the scan's MATCH to the index scan and reparent.
+		// Post-order recursion runs this before the PROJECT pass, which then finds no MATCH and
+		// no-ops -- no double rewrite. resolveScanNodeUnderWindow descends the PARTITION node that
+		// OVER(PARTITION BY ...) inserts between the window and the scan.
+		if len(node.Children) == 1 {
+			if scanNode := builder.resolveScanNodeUnderWindow(builder.qry.Nodes[node.Children[0]]); scanNode != nil {
+				filterids, filterFTIdxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+				wrappedFTExprs, wrappedFTIdxs := builder.getWrappedFullTextMatches(nil, scanNode, filterids, nil)
+				if len(filterids) > 0 || len(wrappedFTExprs) > 0 {
+					return builder.applyIndicesForWindowUsingFullTextIndex(nodeID, node, scanNode,
+						filterids, filterFTIdxs, wrappedFTExprs, wrappedFTIdxs, colRefCnt, idxColMap)
+				}
+			}
+		}
+		// A stacked outer window whose scan MATCH was already consumed by an inner window can
+		// still carry that MATCH in its own OVER spec; resolve it against the scores served
+		// below. No-op when nothing was served or the spec holds no MATCH.
+		builder.rewriteWindowMatchesFromServed(node)
+
+	case plan.Node_FILTER:
+		// A FILTER above a WINDOW can retain a served fulltext_match that predicate pushdown could not
+		// move below the window: it neither references a window column (which would land it in
+		// WINDOW.FilterList, handled above) nor pushes onto the partition keys, so an outer
+		// `... where score > 0` stays here as `fulltext_match(...) > 0`. Child recursion already
+		// served the scan below and published its score (builder.ftJoinServed); rewrite the copy to
+		// that score column in place, so it still evaluates post-window. Binding-tag-aware: a MATCH no
+		// served scan answers is left intact and still raises 20105 (#28974 P2).
+		builder.rewriteServedMatchesInFilterList(node)
 	}
 
 	return nodeID, nil
@@ -684,12 +532,15 @@ func (builder *QueryBuilder) applyVectorIndicesEarly(
 
 	switch node.NodeType {
 	case plan.Node_PROJECT:
+		if id, applied, err := builder.applyVectorIndexForEquiJoin(nodeID, true); applied || err != nil {
+			return id, err
+		}
 		vecCtx := builder.buildVectorSortContext(node)
 		if vecCtx == nil {
 			vecCtx = builder.buildVectorSortContextThroughJoin(node)
 		}
 		if vecCtx == nil {
-			return nodeID, nil
+			return builder.applyScalarVectorIndex(nodeID)
 		}
 		newNodeID, handled, err := builder.applyLogicalVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap)
 		if handled || err != nil {
@@ -728,7 +579,7 @@ func (builder *QueryBuilder) applyLogicalVectorIndexForSortContext(
 	opts := planplugin.ApplyForSortOpts{ColRefCnt: colRefCnt, IdxColMap: idxColMap}
 	for _, multi := range indexes {
 		p, ok := indexplugin.Get(multi.IndexAlgo)
-		if !ok || !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) || !vectorIndexSupportsContext(vecCtx, multi.IndexAlgo) {
+		if !ok || !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) || !builder.vectorIndexSupportsContext(vecCtx, multi.IndexAlgo) {
 			continue
 		}
 		logical, ok := p.Plan().(planplugin.LogicalSearchHooks)
@@ -769,7 +620,8 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 	{
 		masterIndexes := make([]*plan.IndexDef, 0)
 		for _, indexDef := range node.TableDef.Indexes {
-			if indexDef != nil && indexDef.TableExist && !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) {
+			if indexDef != nil && indexDef.TableExist && !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) &&
+				!indexUsesUnicodeCollation(indexDef, node.TableDef) {
 				masterIndexes = append(masterIndexes, indexDef)
 			}
 		}
@@ -834,9 +686,10 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 }
 
 type fullTextIndexPath struct {
-	sortNode *plan.Node
-	aggNode  *plan.Node
-	scanNode *plan.Node
+	sortNode   *plan.Node
+	aggNode    *plan.Node
+	havingNode *plan.Node // FILTER carrying HAVING between the project and the agg, if any
+	scanNode   *plan.Node
 }
 
 // resolveFullTextIndexPath finds the fulltext rewrite boundary. Projection
@@ -854,15 +707,46 @@ func (builder *QueryBuilder) resolveFullTextIndexPath(projNode *plan.Node) *full
 		}
 	}
 
+	var havingNode *plan.Node
 	for node := projNode; node != nil && len(node.Children) == 1; node = builder.qry.Nodes[node.Children[0]] {
+		if node.NodeType == plan.Node_FILTER {
+			// The HAVING clause sits in a FILTER between the project and the agg
+			// (appendAggNode). Its predicates are what can make an aggregate MATCH a driver.
+			havingNode = node
+			continue
+		}
+		// A cardinality/order/position-sensitive operator between a collected FILTER and the AGG
+		// means that FILTER runs AFTER the barrier and is NOT this AGG's HAVING. Driving the index
+		// below the AGG drops each group's non-matching rows before the barrier, which would
+		// silently change a window function's row numbers, a FILL, a PARTITION, or which rows a
+		// LIMIT keeps. Discard any FILTER collected above such a barrier (#29065).
+		if isFullTextAggHavingBarrier(node) {
+			havingNode = nil
+		}
 		if node.NodeType != plan.Node_AGG {
 			continue
 		}
 		if scanNode := builder.resolveScanNodeWithIndex(node, 1); scanNode != nil {
-			return &fullTextIndexPath{aggNode: node, scanNode: scanNode}
+			return &fullTextIndexPath{aggNode: node, havingNode: havingNode, scanNode: scanNode}
 		}
 	}
 	return nil
+}
+
+// isFullTextAggHavingBarrier reports whether a single-input node between the projection and the AGG
+// is cardinality/order/position-sensitive, so a FILTER sitting ABOVE it cannot be treated as the
+// AGG's HAVING for fulltext-index driving. Driving drops each group's non-matching rows before this
+// node, which would silently change a window function's output, a FILL, a PARTITION, or which rows a
+// LIMIT keeps.
+func isFullTextAggHavingBarrier(node *plan.Node) bool {
+	switch node.NodeType {
+	case plan.Node_WINDOW, plan.Node_TIME_WINDOW, plan.Node_FILL, plan.Node_PARTITION:
+		return true
+	}
+	// LIMIT and OFFSET both change which rows survive: a FILTER above either cannot be
+	// treated as the AGG's HAVING, because driving the index below drops each group's
+	// non-matching rows before the paginating node keeps/skips rows.
+	return node.Limit != nil || node.Offset != nil
 }
 
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
@@ -888,6 +772,19 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			// `select count(*) from t where match(...) > 0.5` has no bare match at all.
 			wrappedFTExprs, wrappedFTIdxs := builder.getWrappedFullTextMatches(
 				nil, path.scanNode, filterids, nil)
+
+			// #29065: a grouped query whose only MATCH is an aggregate -- `MAX(match) AS score ...
+			// HAVING score > 0` / `HAVING MAX(match) > 0` -- has no scan-level driver, so the
+			// aggregate MATCH proven present by the membership-implying HAVING must drive the index.
+			var havingPreds []*plan.Expr
+			if path.havingNode != nil {
+				havingPreds = append(havingPreds, path.havingNode.FilterList...)
+			}
+			havingPreds = append(havingPreds, path.aggNode.FilterList...)
+			aggExprs, aggFTIdxs := builder.getFullTextMatchFromAggHaving(
+				havingPreds, path.aggNode, path.scanNode, fullTextDriverFuncs(path.scanNode, filterids, wrappedFTExprs))
+			wrappedFTExprs = append(wrappedFTExprs, aggExprs...)
+			wrappedFTIdxs = append(wrappedFTIdxs, aggFTIdxs...)
 
 			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
 			if len(filterids) > 0 || len(wrappedFTExprs) > 0 {
@@ -934,9 +831,17 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 	// compatible with SQL_CALC_FOUND_ROWS, which must count the complete exact
 	// result before the top-level LIMIT. Keep the exact scan+sort plan instead.
 	if !builder.sqlCalcFoundRows {
+		if id, applied, err := builder.applyVectorIndexForEquiJoin(nodeID, false); applied || err != nil {
+			return id, err
+		}
 		vecCtx := builder.buildVectorSortContext(projNode)
 		if vecCtx == nil {
 			vecCtx = builder.buildVectorSortContextThroughJoin(projNode)
+		}
+		if vecCtx == nil {
+			if rewritten, err := builder.applyScalarVectorIndex(nodeID); err != nil || rewritten != nodeID {
+				return rewritten, err
+			}
 		}
 		if vecCtx != nil {
 			newNodeID, handled, err := builder.applyVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap)
@@ -1020,7 +925,7 @@ func (builder *QueryBuilder) applyVectorIndexForSortContext(
 		// path. indexplugin.Get alone is not sufficient — fulltext
 		// is plugin-registered too.
 		if !indexplugin.IsVectorIndexAlgo(multiTableIndex.IndexAlgo) ||
-			!vectorIndexSupportsContext(vecCtx, multiTableIndex.IndexAlgo) {
+			!builder.vectorIndexSupportsContext(vecCtx, multiTableIndex.IndexAlgo) {
 			continue
 		}
 		p, ok := indexplugin.Get(multiTableIndex.IndexAlgo)
@@ -1193,22 +1098,14 @@ func indexPartFixedByEquality(part string, scanNode *plan.Node) bool {
 		}
 		leftCol := fn.Args[0].GetCol()
 		rightCol := fn.Args[1].GetCol()
-		if leftCol != nil && leftCol.RelPos == tag && leftCol.ColPos == colPos && isScanInvariantRuntimeConstExpr(fn.Args[1]) {
+		if leftCol != nil && leftCol.RelPos == tag && leftCol.ColPos == colPos && isRuntimeConstExpr(fn.Args[1]) {
 			return true
 		}
-		if rightCol != nil && rightCol.RelPos == tag && rightCol.ColPos == colPos && isScanInvariantRuntimeConstExpr(fn.Args[0]) {
+		if rightCol != nil && rightCol.RelPos == tag && rightCol.ColPos == colPos && isRuntimeConstExpr(fn.Args[0]) {
 			return true
 		}
 	}
 	return false
-}
-
-// isScanInvariantRuntimeConstExpr is stricter than isRuntimeConstExpr: an
-// expression can be independent of table columns while still producing a new
-// value for every row. Such volatile expressions cannot fix an index prefix to
-// one value for the duration of a scan.
-func isScanInvariantRuntimeConstExpr(expr *plan.Expr) bool {
-	return !containsVolatileFunction(expr) && isRuntimeConstExpr(expr)
 }
 
 func containsVolatileFunction(expr *plan.Expr) bool {
@@ -1523,6 +1420,12 @@ func (builder *QueryBuilder) applyForcedHintAccessToScan(scanNode *plan.Node, sc
 }
 
 func (builder *QueryBuilder) tryHintedIndexAccess(idxDef *plan.IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, int32, bool, error) {
+	// The current index-table reader still probes serialized Unicode keys as
+	// raw bytes. Do not turn an explicit hint into a wrong-result plan while
+	// the physical probe path is being kept separate from generic SERIAL.
+	if node != nil && indexUsesUnicodeCollation(idxDef, node.TableDef) {
+		return -1, -1, false, nil
+	}
 	idxNodeID, err := builder.tryHintedCoveringIndexScan(idxDef, node, colRefCnt, idxColMap)
 	if err != nil {
 		return -1, -1, false, err
@@ -1535,7 +1438,10 @@ func (builder *QueryBuilder) tryHintedIndexAccess(idxDef *plan.IndexDef, node *p
 }
 
 func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef, node *plan.Node) (int32, int32, error) {
-	if !usableRegularHintIndex(idxDef) || node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
+	if !usableRegularHintIndex(idxDef) || node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 || !hintedIndexContainsQualifyingRows(idxDef, node) {
+		return -1, -1, nil
+	}
+	if indexUsesUnicodeCollation(idxDef, node.TableDef) {
 		return -1, -1, nil
 	}
 	snapshot := node.ScanSnapshot
@@ -1590,7 +1496,13 @@ func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef,
 }
 
 func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
-	if !usableRegularHintIndex(idxDef) || node == nil || len(node.BindingTags) == 0 {
+	if !usableRegularHintIndex(idxDef) || node == nil || node.TableDef == nil || len(node.BindingTags) == 0 || !hintedIndexContainsQualifyingRows(idxDef, node) {
+		return -1, nil
+	}
+	// Serialized secondary-index keys contain UCA weights for native Unicode
+	// collations. serial_extract cannot reconstruct the original text, so an
+	// index-only/covering plan must keep the base-table row as the value source.
+	if indexUsesUnicodeCollation(idxDef, node.TableDef) {
 		return -1, nil
 	}
 	for i, col := range node.TableDef.Cols {
@@ -1679,6 +1591,34 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 	builder.inheritIndexHints(idxNodeID, node.NodeId)
 	forceScanNodeStatsTP(idxNodeID, builder)
 	return idxNodeID, nil
+}
+
+// indexUsesUnicodeCollation reports whether an index part is stored in the
+// opaque native-collation comparison-key domain. Such a key is suitable for
+// lookup, but not for projecting an original value or evaluating a residual
+// predicate through serial_extract.
+func indexUsesUnicodeCollation(idxDef *IndexDef, tableDef *TableDef) bool {
+	if idxDef == nil || tableDef == nil {
+		return false
+	}
+	for partPos := range idxDef.Parts {
+		if indexPartUsesUnicodeCollation(idxDef, tableDef, partPos) {
+			return true
+		}
+	}
+	return false
+}
+
+func indexPartUsesUnicodeCollation(idxDef *IndexDef, tableDef *TableDef, partPos int) bool {
+	if idxDef == nil || tableDef == nil || partPos < 0 || partPos >= len(idxDef.Parts) {
+		return false
+	}
+	part := idxDef.Parts[partPos]
+	colPos, ok := tableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+	if !ok || colPos < 0 || int(colPos) >= len(tableDef.Cols) {
+		return false
+	}
+	return types.IsUnicodeCollation(uint8(tableDef.Cols[colPos].Typ.Charset))
 }
 
 func canUseRegularIndexHiddenSortKey(scanNode *plan.Node, orderByCol *plan.ColRef) bool {
@@ -2006,8 +1946,36 @@ func (builder *QueryBuilder) detectVectorGuardFromSort(sortNode *plan.Node) []in
 	return builder.detectVectorGuardForContext(builder.buildVectorSortContextFromSort(sortNode))
 }
 
-func vectorIndexSupportsContext(vecCtx *vectorSortContext, algo string) bool {
-	return vecCtx == nil || !vecCtx.hasMembership || algo == catalog.MoIndexIvfFlatAlgo.ToString()
+// vectorIndexSupportsContext reports whether algo may serve vecCtx. A membership join or a
+// fulltext MATCH filter on the scan restricts the Top-K to a key set. Algorithms other than
+// ivfflat only post-filter their candidates, which can drop rows of that Top-K, so they leave
+// such a query to the exact sort. A MATCH only in the projection of the Top-K is served by
+// the fulltext rewrite of that projection, which needs the scan directly under it, so no
+// algorithm rewrites the scan.
+func (builder *QueryBuilder) vectorIndexSupportsContext(vecCtx *vectorSortContext, algo string) bool {
+	if vecCtx == nil || vecCtx.scanNode == nil {
+		return true
+	}
+	ivfflat := algo == catalog.MoIndexIvfFlatAlgo.ToString()
+	if builder.scanHasMatchedFullTextFilter(vecCtx.scanNode) {
+		return ivfflat
+	}
+	if builder.projectionMatchesScan(vecCtx) {
+		return false
+	}
+	return ivfflat || !vecCtx.hasMembership
+}
+
+// projectionMatchesScan reports whether the project above or below the Top-K of vecCtx
+// holds a MATCH the fulltext rewrite serves from vecCtx's scan.
+func (builder *QueryBuilder) projectionMatchesScan(vecCtx *vectorSortContext) bool {
+	for _, proj := range []*plan.Node{vecCtx.projNode, vecCtx.childNode} {
+		if proj != nil && proj.NodeType == plan.Node_PROJECT &&
+			containsInt32(builder.detectFullTextGuard(proj), vecCtx.scanNode.NodeId) {
+			return true
+		}
+	}
+	return false
 }
 
 func (builder *QueryBuilder) detectVectorGuardForContext(vecCtx *vectorSortContext) []int32 {
@@ -2035,7 +2003,7 @@ func (builder *QueryBuilder) detectVectorGuardForContext(vecCtx *vectorSortConte
 	// explicit predicate keeps that boundary even if the upstream
 	// collectVectorIndexes filter is ever loosened.
 	for _, multi := range multiTableIndexes {
-		if !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) || !vectorIndexSupportsContext(vecCtx, multi.IndexAlgo) {
+		if !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) || !builder.vectorIndexSupportsContext(vecCtx, multi.IndexAlgo) {
 			continue
 		}
 		p, ok := indexplugin.Get(multi.IndexAlgo)
@@ -2218,6 +2186,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
+	builder.addFunctionalIndexFilters(node)
 
 	forceIndex := builder.scanHintsForceIndexes(node)
 	for i := range node.FilterList { // if already have filter on first pk column and have a good selectivity, no need to go index
@@ -2243,6 +2212,12 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		}
 		if isSpatialIndexDef(node.TableDef.Indexes[i]) {
 			spatialIndexes = append(spatialIndexes, node.TableDef.Indexes[i])
+			continue
+		}
+		if indexUsesUnicodeCollation(node.TableDef.Indexes[i], node.TableDef) {
+			// The physical key is in the tagged UCA domain, while the current
+			// regular-index lookup builders still construct raw SERIAL probes.
+			// Keep the base scan as the correctness-preserving fallback.
 			continue
 		}
 		if !regularIndexPrefixMetadataUsable(node.TableDef.Indexes[i]) {
@@ -2331,6 +2306,9 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 				})
 			}
 		}
+		if functionalIndexColumn(node.TableDef, idxDef) != nil {
+			continue
+		}
 		if filterIdx := costCtx.matchRangeBackfill(idxDef); len(filterIdx) > 0 {
 			filterType := NonEqualIndexCondition
 			if len(filterIdx) == 2 {
@@ -2417,6 +2395,12 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 		access := resolveRegularIndexBackfillResidualAccess(idxDef, node.TableDef, col.ColPos, prefixLengths, nil)
 		switch access.source {
 		case regularIndexResidualIndexKey:
+			// A serial_extract of a Unicode index part returns the UCA weight
+			// bytes, not the original text. Keep this optional pushdown on the
+			// base-table scan and let the normal row comparator evaluate it.
+			if indexPartUsesUnicodeCollation(idxDef, node.TableDef, access.position) {
+				continue
+			}
 			idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[0].Typ, idxTableNode.BindingTags[0], 0)
 			mappedExpr := idxColExpr
 			if indexTableStoresSerializedKey(idxDef) {
@@ -2449,43 +2433,6 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 	}
 }
 
-func tryMatchMoreLeadingFilters(idxDef *IndexDef, node *plan.Node, pos int32) []int32 {
-	leadingPos := []int32{pos}
-	for i := range idxDef.Parts {
-		if i == 0 {
-			continue //already hit
-		}
-		currentPos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[i])]
-		if !ok {
-			break
-		}
-		found := false
-		for j := range node.FilterList {
-			fn := node.FilterList[j].GetF()
-			if fn == nil {
-				continue
-			}
-			switch fn.Func.ObjName {
-			case "=":
-				col := fn.Args[0].GetCol()
-				if col != nil && col.ColPos == currentPos && isRuntimeConstExpr(fn.Args[1]) {
-					leadingPos = append(leadingPos, int32(j))
-					found = true
-				}
-			}
-			if found {
-				break
-			}
-		}
-		// Composite index filters must match a contiguous leading prefix.
-		// If any intermediate part is missing, stop matching immediately.
-		if !found {
-			break
-		}
-	}
-	return leadingPos
-}
-
 func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 	if fn == nil {
 		return UnsupportedIndexCondition, nil
@@ -2497,26 +2444,41 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 		}
 		col := fn.Args[0].GetCol()
 		if col != nil && isRuntimeConstExpr(fn.Args[1]) {
+			// Serialized regular-index keys preserve the physical distinction
+			// between -0 and +0. SQL equality does not, so using this predicate
+			// as an index access condition can silently drop one of the zeros.
+			// Fall back to the base scan until the access path compares decoded
+			// floating-point values.
+			if isFloatIndexFilterExpr(fn.Args[0]) {
+				return UnsupportedIndexCondition, nil
+			}
 			return EqualIndexCondition, col
 		}
 
 	case "in", "between":
 		col := fn.Args[0].GetCol()
-		if col != nil {
+		if col != nil && !isFloatIndexFilterExpr(fn.Args[0]) {
 			return NonEqualIndexCondition, col
 		}
 
 	case ">", ">=", "<", "<=":
 		if fn.Args[0].GetCol() != nil && isRuntimeConstExpr(fn.Args[1]) {
+			if isFloatIndexFilterExpr(fn.Args[0]) {
+				return UnsupportedIndexCondition, nil
+			}
 			return NonEqualIndexCondition, fn.Args[0].GetCol()
 		}
 		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+			if isFloatIndexFilterExpr(fn.Args[1]) {
+				return UnsupportedIndexCondition, nil
+			}
 			return NonEqualIndexCondition, fn.Args[1].GetCol()
 		}
 
 	case "in_range":
 		col := fn.Args[0].GetCol()
-		if col != nil && isRuntimeConstExpr(fn.Args[1]) && isRuntimeConstExpr(fn.Args[2]) {
+		if col != nil && !isFloatIndexFilterExpr(fn.Args[0]) &&
+			isRuntimeConstExpr(fn.Args[1]) && isRuntimeConstExpr(fn.Args[2]) {
 			return NonEqualIndexCondition, col
 		}
 
@@ -2540,23 +2502,12 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 	return UnsupportedIndexCondition, nil
 }
 
-func findLeadingFilter(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {
-	leadingPos := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
-	for i := range node.FilterList {
-		filterType, col := checkIndexFilter(node.FilterList[i].GetF())
-		switch filterType {
-		case EqualIndexCondition:
-			if col.ColPos == leadingPos {
-				return []int32{int32(i)}, true
-			}
-		case NonEqualIndexCondition:
-			if col.ColPos == leadingPos {
-				return []int32{int32(i)}, false
-			}
-		}
-		continue
+func isFloatIndexFilterExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
 	}
-	return nil, false
+	typ := types.T(expr.Typ.Id)
+	return typ == types.T_float32 || typ == types.T_float64
 }
 
 func (builder *QueryBuilder) makeIndexLookupPartExpr(idxDef *IndexDef, partPos int, inputExpr *plan.Expr) (*plan.Expr, error) {
@@ -2579,6 +2530,7 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 		args := expr.GetF().Args
 		args[0].GetCol().RelPos = idxTag
 		args[0].GetCol().ColPos = 0
+		args[0].GetCol().Name = idxTableDef.Cols[0].Name
 		var err error
 		args[1], err = builder.makeIndexLookupPartExpr(idxDef, 0, args[1])
 		if err != nil {
@@ -2618,6 +2570,7 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 		funcName = "prefix_eq"
 	}
 	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
+	leadingColExpr.GetCol().Name = idxTableDef.Cols[0].Name
 	expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{leadingColExpr, rightArg})
 	if err != nil {
 		return nil, err
@@ -2663,6 +2616,7 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 	indexedPartType := fn.Args[0].Typ
 	fn.Args[0].GetCol().RelPos = idxTag
 	fn.Args[0].GetCol().ColPos = 0
+	fn.Args[0].GetCol().Name = idxTableDef.Cols[0].Name
 	fn.Args[0].Typ = idxTableDef.Cols[0].Typ
 	if numParts > 1 {
 		serialFunc := indexTableComparisonSerialFunc()
@@ -3842,7 +3796,13 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 	if idxDef == nil || len(idxDef.Parts) == 0 || node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
 		return nil, false
 	}
+	if indexUsesUnicodeCollation(idxDef, node.TableDef) {
+		return nil, false
+	}
 	if regularIndexHasDeclaredPrefix(idxDef) {
+		return nil, false
+	}
+	if functionalIndexColumn(node.TableDef, idxDef) != nil {
 		return nil, false
 	}
 	if !costCtx.indexCoversRequiredColumns(idxDef) {
@@ -3933,6 +3893,10 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 }
 
 func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
+	// Functional indexes currently require a base-row residual evaluation.
+	if functionalIndexColumn(node.TableDef, idxDef) != nil {
+		return -1
+	}
 	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
 	match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
 	if !ok {
@@ -4207,6 +4171,9 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 	}
 	colPos2Candidates := make(map[int32]indexCandidates)
 	for i, idxDef := range indexes {
+		if indexUsesUnicodeCollation(idxDef, node.TableDef) {
+			continue
+		}
 		// Prefix keys are lossy. IN and range operators can use block-level
 		// pruning implementations that compare the untruncated probe with the
 		// persisted prefix and under-fetch after flush. Keep prefix indexes for
@@ -4427,7 +4394,7 @@ func canSerializeDecimalIndexRangeBound(bound *plan.Expr, indexedPartType plan.T
 	if boundType.Oid == indexedType.Oid && boundType.Scale == indexedType.Scale {
 		return true
 	}
-	return checkNoNeedCast(boundType, indexedType, bound)
+	return checkNoNeedCast(context.Background(), boundType, indexedType, bound)
 }
 
 func canSerializeDecimalIndexRangeBounds(fn *plan.Function, indexedPartType plan.Type) bool {
@@ -4479,6 +4446,7 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 	upperOp := canonicalRangeOp(upperFn)
 
 	colExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
+	colExpr.GetCol().Name = idxTableDef.Cols[0].Name
 	lowerVal := DeepCopyExpr(rangeFilterConstValue(lowerFn))
 	upperVal := DeepCopyExpr(rangeFilterConstValue(upperFn))
 
@@ -4592,6 +4560,7 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 
 	pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 	pkExpr := GetColExpr(node.TableDef.Cols[pkIdx].Typ, node.BindingTags[0], pkIdx)
+	pkExpr.GetCol().Name = node.TableDef.Pkey.PkeyColName
 
 	joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 		DeepCopyExpr(pkExpr),
@@ -4735,6 +4704,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		if idxDef == nil || !idxDef.TableExist ||
 			!catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) ||
 			isSpatialIndexDef(idxDef) ||
+			indexUsesUnicodeCollation(idxDef, leftChild.TableDef) ||
 			!regularIndexPrefixMetadataUsable(idxDef) ||
 			regularIndexHasDeclaredPrefix(idxDef) {
 			continue
@@ -5049,6 +5019,82 @@ func (builder *QueryBuilder) indexAccessUsesIndex(nodeID int32, indexName string
 		if builder.indexAccessUsesIndex(childID, indexName) {
 			return true
 		}
+	}
+	return false
+}
+
+// UNIQUE hidden tables omit rows with any NULL key component. Column coverage
+// alone cannot make them a complete row source, even under FORCE INDEX.
+func hintedIndexContainsQualifyingRows(index *plan.IndexDef, node *plan.Node) bool {
+	if !index.Unique {
+		return true
+	}
+	if node.TableDef == nil || len(node.BindingTags) == 0 || len(index.Parts) == 0 {
+		return false
+	}
+	for _, part := range index.Parts {
+		position, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+		if !ok || position < 0 || int(position) >= len(node.TableDef.Cols) {
+			return false
+		}
+		column := node.TableDef.Cols[position]
+		if column.Typ.NotNullable && (column.Default == nil || !column.Default.NullAbility) {
+			continue
+		}
+		proven := false
+		for _, filter := range node.FilterList {
+			if filterRejectsTargetNull(filter, node.BindingTags[0], position) {
+				proven = true
+				break
+			}
+		}
+		if !proven {
+			return false
+		}
+	}
+	return true
+}
+
+func filterRejectsTargetNull(expr *plan.Expr, tag, position int32) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	switch fn.Func.ObjName {
+	case "and":
+		for _, arg := range fn.Args {
+			if filterRejectsTargetNull(arg, tag, position) {
+				return true
+			}
+		}
+	case "or":
+		if len(fn.Args) == 0 {
+			return false
+		}
+		for _, arg := range fn.Args {
+			if !filterRejectsTargetNull(arg, tag, position) {
+				return false
+			}
+		}
+		return true
+	case "isnotnull", "is_not_null", "in", "not_in", "between":
+		return len(fn.Args) > 0 && nullPreservingTarget(fn.Args[0], tag, position)
+	case "=", "<>", "!=", "<", "<=", ">", ">=":
+		return len(fn.Args) == 2 && (nullPreservingTarget(fn.Args[0], tag, position) || nullPreservingTarget(fn.Args[1], tag, position))
+	}
+	return false
+}
+
+func nullPreservingTarget(expr *plan.Expr, tag, position int32) bool {
+	for expr != nil {
+		if col := expr.GetCol(); col != nil {
+			return col.RelPos == tag && col.ColPos == position
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 {
+			return false
+		}
+		expr = fn.Args[0]
 	}
 	return false
 }

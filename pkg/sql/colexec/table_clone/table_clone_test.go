@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -141,7 +142,7 @@ func TestUpdateDstAutoIncrColumnsReconcilesAllSafeBounds(t *testing.T) {
 			}
 
 			incrSvc.EXPECT().SetOffset(
-				gomock.Any(), def.TblId, 0, "id", tt.want, gomock.Any(),
+				incrservice.WithAutoIDCachePolicy(proc.Ctx, def.TblId, def.AutoIdCache), def.TblId, 0, "id", tt.want, gomock.Any(),
 			)
 			require.NoError(t, tc.updateDstAutoIncrColumns(proc.Ctx, proc))
 		})

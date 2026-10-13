@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -457,6 +459,66 @@ func TestMakeLoadExternalStatsKeepsLargeLoadMultiCN(t *testing.T) {
 		}},
 		Steps: []int32{0},
 	}, false, false))
+}
+
+func TestParquetLoadBlobCapacityDoesNotReduceParallelism(t *testing.T) {
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format: tree.PARQUET, FileSize: 10078239726,
+	}}
+	table := &TableDef{Cols: []*ColDef{
+		{Name: "id", Typ: Type{Id: int32(types.T_int64)}},
+		{Name: "payload", Typ: Type{Id: int32(types.T_blob)}},
+	}}
+	legacy := makeLoadExternalStats(param, table, 0, context.Background())
+	for _, width := range []int32{types.MaxTinyTextLen, types.MaxStringSize, types.MaxMediumTextLen, types.MaxLongTextLen} {
+		table.Cols[1].Typ.Width = width
+		stats := makeLoadExternalStats(param, table, 0, context.Background())
+		require.Equal(t, legacy.Rowsize, stats.Rowsize)
+		require.Equal(t, legacy.BlockNum, stats.BlockNum)
+		require.Equal(t, width, table.Cols[1].Typ.Width, "preserve assignment limit")
+		require.Equal(t, ExecTypeAP_MULTICN, GetExecType(&Query{
+			Nodes: []*Node{{NodeType: pbplan.Node_EXTERNAL_SCAN, Stats: stats}},
+			Steps: []int32{0},
+		}, false, false))
+		t.Logf("width=%d estimated row bytes=%g blocks=%d", width, stats.Rowsize, stats.BlockNum)
+	}
+}
+
+func TestIssue29229ParquetLoadExecutionClass(t *testing.T) {
+	stmt, err := mysql.ParseOne(context.Background(), `create table t (
+row_id bigint, c_tinyint tinyint, c_smallint smallint, c_int int, c_bigint bigint,
+c_uint8 tinyint unsigned, c_uint16 smallint unsigned, c_uint32 int unsigned, c_uint64 bigint unsigned,
+c_float32 float, c_float64 double, c_float_text float, c_double_text double,
+c_decimal decimal(38,10), c_decimal_sci decimal(38,10), c_bool bool,
+c_char char(32), c_varchar varchar(255), c_text text, c_json json, c_blob blob,
+c_binary binary(16), c_varbinary varbinary(32), c_date date, c_datetime datetime,
+c_timestamp timestamp, c_time time, c_uuid uuid,
+c_enum enum('red','green','blue','yellow','purple'), c_vecf32 vecf32(3), c_vecf64 vecf64(3))`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	table := &TableDef{}
+	for _, def := range stmt.(*tree.CreateTable).Defs {
+		col := def.(*tree.ColumnTableDef)
+		typ, err := getTypeFromAst(context.Background(), col.Type)
+		require.NoError(t, err)
+		table.Cols = append(table.Cols, &ColDef{Typ: typ})
+	}
+	const inputSize = int64(10078239726)
+	// Reconstruct the old calculation to demonstrate the scheduling regression.
+	oldRowsize := GetRowSizeFromTableDef(table, true) * 0.8
+	oldCount := math.Ceil(float64(inputSize) / oldRowsize)
+	oldStats := &pbplan.Stats{Rowsize: oldRowsize, Cost: oldCount,
+		BlockNum: int32(math.Ceil(oldCount / float64(options.DefaultBlockMaxRows)))}
+	class := func(stats *pbplan.Stats) ExecType {
+		return GetExecType(&Query{Nodes: []*Node{{NodeType: pbplan.Node_EXTERNAL_SCAN, Stats: stats}}, Steps: []int32{0}}, false, false)
+	}
+	fixed := makeLoadExternalStats(&tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format: tree.PARQUET, FileSize: inputSize,
+	}}, table, 0, context.Background())
+	t.Logf("old row bytes=%g rows=%g blocks=%d class=%v; fixed row bytes=%g rows=%g blocks=%d class=%v",
+		oldStats.Rowsize, oldStats.Cost, oldStats.BlockNum, class(oldStats), fixed.Rowsize, fixed.Cost, fixed.BlockNum, class(fixed))
+	require.Equal(t, ExecTypeTP, class(oldStats))
+	require.Equal(t, ExecTypeAP_MULTICN, class(fixed))
 }
 
 func TestMakeLoadExternalStatsUsesFirstLineForTextLoad(t *testing.T) {

@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -272,11 +273,18 @@ func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result 
 			} else {
 				outArrayF32 = outArrayF32[:len(inArrayF32)]
 			}
-			_ = moarray.NormalizeL2(inArrayF32, outArrayF32)
-			_ = rs.AppendBytes(types.ArrayToBytes[float32](outArrayF32), false)
+			err := moarray.NormalizeL2(inArrayF32, outArrayF32)
+			if err == nil {
+				err = rs.AppendBytes(types.ArrayToBytes[float32](outArrayF32), false)
+			}
 
 			*outArrayF32Ptr = outArrayF32
 			arrayF32Pool.Put(outArrayF32Ptr)
+			if err != nil {
+				// NormalizeL2 leaves normalized untouched when it fails, and the buffer above is
+				// pooled and not zeroed -- appending it would emit an earlier row's vector.
+				return err
+			}
 		case types.T_array_float64:
 			inArrayF64 = types.BytesToArray[float64](data)
 
@@ -288,23 +296,37 @@ func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result 
 			} else {
 				outArrayF64 = outArrayF64[:len(inArrayF64)]
 			}
-			_ = moarray.NormalizeL2(inArrayF64, outArrayF64)
-			_ = rs.AppendBytes(types.ArrayToBytes[float64](outArrayF64), false)
+			err := moarray.NormalizeL2(inArrayF64, outArrayF64)
+			if err == nil {
+				err = rs.AppendBytes(types.ArrayToBytes[float64](outArrayF64), false)
+			}
 
 			*outArrayF64Ptr = outArrayF64
 			arrayF64Pool.Put(outArrayF64Ptr)
+			if err != nil {
+				// See the float32 case: the pooled buffer holds an earlier row on failure.
+				return err
+			}
 		case types.T_array_bf16:
-			_ = appendNormalizedNarrowArray[types.BF16](rs, data)
+			if err := appendNormalizedNarrowArray[types.BF16](rs, data); err != nil {
+				return err
+			}
 		case types.T_array_float16:
-			_ = appendNormalizedNarrowArray[types.Float16](rs, data)
+			if err := appendNormalizedNarrowArray[types.Float16](rs, data); err != nil {
+				return err
+			}
 		case types.T_array_int8:
 			// A normalized vector is a unit vector, which cannot be represented in
 			// an integer element type (components round to 0/±1 and the norm is no
 			// longer 1), so int8/uint8 normalize_l2 widens the result to vecf32.
 			// The overload's retType is T_array_float32 to match (see list_builtIn).
-			_ = appendNormalizedIntArrayAsFloat32[int8](rs, data)
+			if err := appendNormalizedIntArrayAsFloat32[int8](rs, data); err != nil {
+				return err
+			}
 		case types.T_array_uint8:
-			_ = appendNormalizedIntArrayAsFloat32[uint8](rs, data)
+			if err := appendNormalizedIntArrayAsFloat32[uint8](rs, data); err != nil {
+				return err
+			}
 		}
 
 	}
@@ -319,7 +341,9 @@ func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result 
 func appendNormalizedNarrowArray[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
 	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
 	out := make([]float32, len(in))
-	_ = moarray.NormalizeL2(in, out)
+	if err := moarray.NormalizeL2(in, out); err != nil {
+		return err
+	}
 	return rs.AppendBytes(types.ArrayToBytes[T](types.FromFloat32Array[T](out)), false)
 }
 
@@ -332,7 +356,9 @@ func appendNormalizedNarrowArray[T types.ArrayElement](rs *vector.FunctionResult
 func appendNormalizedIntArrayAsFloat32[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
 	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
 	out := make([]float32, len(in))
-	_ = moarray.NormalizeL2(in, out)
+	if err := moarray.NormalizeL2(in, out); err != nil {
+		return err
+	}
 	return rs.AppendBytes(types.ArrayToBytes[float32](out), false)
 }
 
@@ -1036,7 +1062,7 @@ func BitCountBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWr
 }
 
 func BitLengthFunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryStrToFixed[int64](ivecs, result, proc, length, func(v string) int64 {
+	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 {
 		return int64(len(v) * 8)
 	}, selectList)
 }
@@ -1081,15 +1107,41 @@ func UtcDate(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *proc
 }
 
 func DateToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Date, types.Date](ivecs, result, proc, length, func(v types.Date) types.Date {
-		return v
+	modeChecked, rejectZero := false, false
+	var modeErr error
+	err := opUnaryFixedToFixedWithNullCheck[types.Date, types.Date](ivecs, result, length, func(v types.Date) (types.Date, bool) {
+		if v == types.ZeroDate {
+			if !modeChecked {
+				rejectZero, modeErr = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
+				modeChecked = true
+			}
+			return v, rejectZero || modeErr != nil
+		}
+		return v, false
 	}, selectList)
+	if modeErr != nil {
+		return modeErr
+	}
+	return err
 }
 
 func DatetimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Datetime, types.Date](ivecs, result, proc, length, func(v types.Datetime) types.Date {
-		return v.ToDate()
+	modeChecked, rejectZero := false, false
+	var modeErr error
+	err := opUnaryFixedToFixedWithNullCheck[types.Datetime, types.Date](ivecs, result, length, func(v types.Datetime) (types.Date, bool) {
+		if v == types.ZeroDatetime {
+			if !modeChecked {
+				rejectZero, modeErr = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
+				modeChecked = true
+			}
+			return v.ToDate(), rejectZero || modeErr != nil
+		}
+		return v.ToDate(), false
 	}, selectList)
+	if modeErr != nil {
+		return modeErr
+	}
+	return err
 }
 
 func TimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1100,13 +1152,47 @@ func TimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 // DateStringToDate can still speed up if vec is const. but we will do the constant fold. so it does not matter.
 func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[types.Date](ivecs, result, proc, length, func(v []byte) (types.Date, error) {
-		d, e := types.ParseDatetime(functionUtil.QuickBytesToStr(v), 6)
-		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtxf("date", "'%s'", v)
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Date](result)
+	modeChecked, rejectZero := false, false
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
 		}
-		return d.ToDate(), nil
-	}, selectList)
+		value, null := source.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		parsed, err := types.ParseDatetime(functionUtil.QuickBytesToStr(value), 6)
+		if err != nil {
+			return moerr.NewOutOfRangeNoCtxf("date", "'%s'", value)
+		}
+		if parsed == types.ZeroDatetime {
+			if !modeChecked {
+				rejectZero, err = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
+				if err != nil {
+					return err
+				}
+				modeChecked = true
+			}
+			if rejectZero {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if err := rs.Append(parsed.ToDate(), false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func DateToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1170,6 +1256,8 @@ func parseDateExtractParts(value string) (dateExtractParts, bool) {
 	return parts, true
 }
 
+// Raw field extraction inspects accepted calendar fields without applying the
+// SQL mode policy for converting a zero date into a DATE value.
 func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList, fn func(dateExtractParts) (T, bool)) error {
 	source := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[T](result)
@@ -1352,9 +1440,10 @@ func QuoteString(str string) string {
 	return string(result)
 }
 
-func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	parameter := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	isUTF8Text := isExplicitUTF8Charset(ivecs[0].GetType().Charset)
 	for row := uint64(0); row < uint64(length); row++ {
 		if selectList != nil && (selectList.IgnoreAllRow() ||
 			(!selectList.ShouldEvalAllRow() && selectList.Contains(row))) {
@@ -1369,6 +1458,21 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 				return err
 			}
 			continue
+		}
+		if !utf8.Valid(value) {
+			isBinary := ivecs[0].GetIsBinaryStringAt(int(row))
+			if isBinary {
+				return moerr.NewCannotConvertString(proc.Ctx, string(value), "binary", "utf8mb4")
+			}
+			if isUTF8Text {
+				// MySQL's text-domain QUOTE returns an empty string for malformed
+				// multibyte input. Keep the binary-domain conversion error above;
+				// SQL EXECUTE markers can be rebound to text without changing bytes.
+				if err := rs.AppendBytes(nil, false); err != nil {
+					return err
+				}
+				continue
+			}
 		}
 		resultBytes := quotedBytesLength(value)
 		if int64(resultBytes) > maxStringFunctionResultLength(result) {
@@ -1705,7 +1809,7 @@ func geomFromWKBSubtype(payload []byte, maxPoints int64, want string) ([]byte, e
 	return geo.WriteWKB(g), nil
 }
 
-func stFromWKBSubtype(want string) fEvalFn {
+func stFromWKBSubtype(want string) executeLogicOfOverload {
 	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 		maxPoints := maxPointsInGeometryLimit(proc)
 		return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
@@ -2159,8 +2263,9 @@ func geometryTypeNameFromText(wkt string) (string, error) {
 		return "", moerr.NewInvalidInputNoCtx("invalid geometry payload")
 	}
 	upper := strings.ToUpper(s)
-	if strings.HasSuffix(upper, " EMPTY") {
-		typeName := strings.TrimSpace(strings.TrimSuffix(upper, " EMPTY"))
+	fields := strings.Fields(s)
+	if len(fields) == 2 && strings.EqualFold(fields[1], "EMPTY") {
+		typeName := strings.ToUpper(fields[0])
 		switch typeName {
 		case "POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION":
 			return typeName, nil
@@ -2181,6 +2286,12 @@ func geometryTypeNameFromText(wkt string) (string, error) {
 	default:
 		return "", moerr.NewInvalidInputNoCtx("invalid geometry type")
 	}
+}
+
+func isCompleteGeometryEmptyText(wkt, typeName string) bool {
+	fields := strings.Fields(wkt)
+	return len(fields) == 2 && strings.EqualFold(fields[0], typeName) &&
+		strings.EqualFold(fields[1], "EMPTY")
 }
 
 // decodeGeometryPayload returns the WKT text of a stored geometry. The stored
@@ -2840,10 +2951,17 @@ func validateGeometryCollectionNestingDepthFromTextWithDepth(wkt string, depth i
 	if depth >= maxGeometryCollectionNestingDepth {
 		return moerr.NewInvalidInputNoCtxf("geometry collection nesting depth exceeds %d", maxGeometryCollectionNestingDepth)
 	}
+	// GEOMETRYCOLLECTION EMPTY is a complete, valid collection member. It has
+	// no coordinate envelope to inspect, so it must be accepted before looking
+	// for parentheses. Keep this exact match so a valid EMPTY token cannot hide
+	// trailing payload.
+	if isCompleteGeometryEmptyText(s, typeName) {
+		return nil
+	}
 
 	openIdx := strings.IndexByte(s, '(')
 	closeIdx := strings.LastIndexByte(s, ')')
-	if openIdx < 0 || closeIdx <= openIdx {
+	if openIdx <= 0 || closeIdx <= openIdx || closeIdx != len(s)-1 {
 		return moerr.NewInvalidInputNoCtx("invalid geometry payload")
 	}
 	content := strings.TrimSpace(s[openIdx+1 : closeIdx])
@@ -2992,20 +3110,22 @@ func geometryIsEmpty(payload []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	upper := strings.ToUpper(s)
-	if strings.HasSuffix(upper, "EMPTY") {
-		prefix := strings.TrimSpace(strings.TrimSuffix(upper, "EMPTY"))
-		switch prefix {
-		case "POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION":
-			return true, nil
-		default:
-			return false, moerr.NewInvalidInputNoCtx("invalid geometry type")
-		}
-	}
-
-	if _, err := geometryTypeNameFromPayload(payload); err != nil {
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
 		return false, err
 	}
+	if typeName == "GEOMETRYCOLLECTION" {
+		// Empty-result short-circuiting must not hide an invalid collection
+		// envelope such as GEOMETRYCOLLECTION() trailing.
+		if err := validateGeometryCollectionNestingDepthFromText(s); err != nil {
+			return false, err
+		}
+	}
+	if isCompleteGeometryEmptyText(s, typeName) {
+		return true, nil
+	}
+
+	upper := strings.ToUpper(s)
 
 	if upper == "GEOMETRYCOLLECTION()" || upper == "MULTIPOINT()" || upper == "MULTILINESTRING()" || upper == "MULTIPOLYGON()" {
 		return true, nil
@@ -3029,7 +3149,7 @@ func geometryIsExplicitlyEmpty(payload []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return strings.EqualFold(strings.TrimSpace(s), typeName+" EMPTY"), nil
+	return isCompleteGeometryEmptyText(s, typeName), nil
 }
 
 func StGeometryType(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -5562,7 +5682,8 @@ func parseCoordinatePairWithError(point string, errMsg string) (float64, float64
 // soundexCodeMap maps ASCII A-Z to original Soundex digits; '0' means discard.
 const soundexCodeMap = "01230120022455012623010202"
 
-// SoundexString implements MySQL's original Soundex behavior for ASCII input.
+// SoundexString implements MySQL's byte-oriented Soundex behavior for binary
+// strings. Non-ASCII bytes are ignored independently.
 func SoundexString(str string) string {
 	var code strings.Builder
 	firstLetter := true
@@ -5601,12 +5722,107 @@ func SoundexString(str string) string {
 	return code.String()
 }
 
+// soundexTextString implements MySQL 8.0's UTF-8 text path. It preserves the
+// first qualifying non-ASCII character, then emits the usual ASCII Soundex
+// digits. Invalid UTF-8 before the first letter yields empty; invalid UTF-8
+// after it terminates the scan and leaves the result padded.
+func soundexTextString(str string) string {
+	var code strings.Builder
+	firstLetter := true
+	lastCode := byte('0')
+	characters := 0
+	scanFrom := 0
+
+	for i := 0; i < len(str); {
+		start := i
+		r, size := utf8.DecodeRuneInString(str[i:])
+		if r == utf8.RuneError && size == 1 {
+			return ""
+		}
+		i += size
+		if size == 1 {
+			c := str[start]
+			if c >= 'a' && c <= 'z' {
+				c -= 'a' - 'A'
+			}
+			if c < 'A' || c > 'Z' {
+				continue
+			}
+			code.WriteByte(c)
+			lastCode = soundexCodeMap[c-'A']
+		} else {
+			// MySQL 8.0's legacy helper treats every Unicode code point at or
+			// above U+00C0 as alphabetic, and preserves the first one verbatim.
+			if r < 0xC0 {
+				continue
+			}
+			code.WriteString(str[start:i])
+			lastCode = '0'
+		}
+		firstLetter = false
+		characters = 1
+		scanFrom = i
+		break
+	}
+	if firstLetter {
+		return ""
+	}
+
+	for i := scanFrom; i < len(str); {
+		r, size := utf8.DecodeRuneInString(str[i:])
+		if r == utf8.RuneError && size == 1 {
+			break
+		}
+		i += size
+		if size == 1 {
+			c := str[i-size]
+			if c >= 'a' && c <= 'z' {
+				c -= 'a' - 'A'
+			}
+			if c < 'A' || c > 'Z' {
+				continue
+			}
+			r = rune(c)
+		} else if r < 0xC0 {
+			continue
+		}
+
+		codeChar := byte('0')
+		if r >= 'A' && r <= 'Z' {
+			codeChar = soundexCodeMap[byte(r)-'A']
+		}
+		if codeChar != '0' && codeChar != lastCode {
+			code.WriteByte(codeChar)
+			characters++
+			lastCode = codeChar
+		}
+	}
+
+	for characters < 4 {
+		code.WriteByte('0')
+		characters++
+	}
+	return code.String()
+}
+
 func Soundex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytes(ivecs, result, proc, length, func(v []byte) []byte {
-		str := functionUtil.QuickBytesToStr(v)
-		soundex := SoundexString(str)
-		return functionUtil.QuickStrToBytes(soundex)
-	}, selectList)
+	textSoundex := SoundexString
+	if isExplicitUTF8Charset(ivecs[0].GetType().Charset) {
+		textSoundex = soundexTextString
+	}
+	return opUnaryBytesToBytesByStringDomain(
+		ivecs,
+		result,
+		proc,
+		length,
+		func(v []byte) []byte {
+			return functionUtil.QuickStrToBytes(textSoundex(functionUtil.QuickBytesToStr(v)))
+		},
+		func(v []byte) []byte {
+			return functionUtil.QuickStrToBytes(SoundexString(functionUtil.QuickBytesToStr(v)))
+		},
+		selectList,
+	)
 }
 
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
@@ -6082,8 +6298,9 @@ func SpaceDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func TimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := result.GetResultVector().GetType().Scale
 	return opUnaryFixedToFixed[types.Time, types.Time](ivecs, result, proc, length, func(v types.Time) types.Time {
-		return v
+		return clampPublicTimeResult(proc, v, scale).TruncateToScale(scale)
 	}, selectList)
 }
 
@@ -6094,16 +6311,14 @@ func DateToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func DatetimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	scale := ivecs[0].GetType().Scale
-	result.GetResultVector().SetTypeScale(scale)
+	scale := result.GetResultVector().GetType().Scale
 	return opUnaryFixedToFixed[types.Datetime, types.Time](ivecs, result, proc, length, func(v types.Datetime) types.Time {
 		return v.ToTime(scale)
 	}, selectList)
 }
 
 func TimestampToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	scale := ivecs[0].GetType().Scale
-	result.GetResultVector().SetTypeScale(scale)
+	scale := result.GetResultVector().GetType().Scale
 	loc := time.Local
 	if proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
 		loc = proc.GetSessionInfo().TimeZone
@@ -6119,29 +6334,52 @@ func Int64ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		if e != nil {
 			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%d'", v)
 		}
-		return t, nil
+		return clampPublicTimeResult(proc, t, 0), nil
 	}, selectList)
 }
 
 func DateStringToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := result.GetResultVector().GetType().Scale
 	return opUnaryBytesToFixedWithErrorCheck[types.Time](ivecs, result, proc, length, func(v []byte) (types.Time, error) {
-		t, e := types.ParseTime(string(v), 6)
+		t, e := types.ParseTime(string(v), scale)
 		if e != nil {
 			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", string(v))
 		}
-		return t, nil
+		return clampPublicTimeResult(proc, t, scale), nil
 	}, selectList)
 }
 
 func Decimal128ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	scale := ivecs[0].GetType().Scale
+	targetScale := result.GetResultVector().GetType().Scale
 	return opUnaryFixedToFixedWithErrorCheck[types.Decimal128, types.Time](ivecs, result, proc, length, func(v types.Decimal128) (types.Time, error) {
-		t, e := types.ParseDecimal128ToTime(v, scale, 6)
+		t, e := types.ParseTime(v.Format(scale), targetScale)
 		if e != nil {
 			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", v.Format(0))
 		}
-		return t, nil
+		return clampPublicTimeResult(proc, t, targetScale), nil
 	}, selectList)
+}
+
+func Decimal256ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	targetScale := result.GetResultVector().GetType().Scale
+	return opUnaryFixedToFixedWithErrorCheck[types.Decimal256, types.Time](ivecs, result, proc, length, func(v types.Decimal256) (types.Time, error) {
+		text := v.Format(scale)
+		t, err := types.ParseTime(text, targetScale)
+		if err != nil {
+			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", text)
+		}
+		return clampPublicTimeResult(proc, t, targetScale), nil
+	}, selectList)
+}
+
+func clampPublicTimeResult(proc *process.Process, value types.Time, scale int32) types.Time {
+	clamped := types.ClampMySQLTimeForScale(value, scale)
+	if clamped != value {
+		appendTimeRangeWarning(proc, value, scale)
+	}
+	return clamped
 }
 
 func DateToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -6289,6 +6527,13 @@ func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
 			}
 			continue
 		}
+		if clock, ok := zeroCalendarClockForExtract(str, 6); ok {
+			hour, minute, second, _, _ := clock.ClockFormat()
+			if err := rs.Append(fn(uint32(hour), minute, second), false); err != nil {
+				return err
+			}
+			continue
+		}
 
 		hour, minute, second, ok := timeStringToClockForExtract(str)
 		if !ok {
@@ -6303,6 +6548,54 @@ func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
 		}
 	}
 	return nil
+}
+
+// A zero calendar cannot be represented as DATETIME, but its valid clock is
+// still a TIME duration. Both unary fields and EXTRACT use this FSP6 rounding
+// path so a carry beyond 23:59:59 agrees across the two SQL forms.
+func zeroCalendarClockForExtract(value string, scale int32) (types.Time, bool) {
+	// HOUR/MINUTE/SECOND normally see TIME strings. Avoid running the date
+	// grammar for those rows; only a leading zero year can be a zero calendar.
+	start := 0
+	for start < len(value) && (value[start] == ' ' || value[start] == '\t') {
+		start++
+	}
+	if start == len(value) || value[start] != '0' {
+		return 0, false
+	}
+	parts, ok := parseDateExtractParts(value)
+	if !ok || parts.year != 0 || parts.month != 0 || parts.day != 0 {
+		return 0, false
+	}
+	trimmed := strings.TrimSpace(value)
+	separator := strings.IndexAny(trimmed, " T")
+	if separator < 0 {
+		return 0, true
+	}
+	clockText := strings.TrimSpace(trimmed[separator+1:])
+	if strings.IndexByte(clockText, ' ') >= 0 {
+		clockText = strings.ReplaceAll(clockText, " ", "")
+	}
+	fields := 0
+	var canonical []byte
+	for i := 0; i < len(clockText) && fields < 2; i++ {
+		ch := clockText[i]
+		if ch >= '0' && ch <= '9' {
+			continue
+		}
+		if ch != ':' {
+			if canonical == nil {
+				canonical = []byte(clockText)
+			}
+			canonical[i] = ':'
+		}
+		fields++
+	}
+	if canonical != nil {
+		clockText = string(canonical)
+	}
+	clock, err := types.ParseTime(clockText, scale)
+	return clock, err == nil
 }
 
 // timeStringToClockForExtract follows MySQL's string-to-TIME coercion for
@@ -7709,7 +8002,7 @@ func ConnectionID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc 
 // HexString returns a hexadecimal string representation of a string.
 // See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_hex
 func HexString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToStr(ivecs, result, proc, length, hexEncodeString, selectList)
+	return opUnaryBytesToBytes(ivecs, result, proc, length, hexEncodeBytes, selectList)
 }
 
 func HexInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -7895,8 +8188,8 @@ func HexArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}, selectList)
 }
 
-func hexEncodeString(xs []byte) string {
-	return strings.ToUpper(hex.EncodeToString(xs))
+func hexEncodeBytes(xs []byte) []byte {
+	return functionUtil.QuickStrToBytes(strings.ToUpper(hex.EncodeToString(xs)))
 }
 
 func hexEncodeInt64(xs int64) string {
@@ -8425,7 +8718,9 @@ func inetNtoaUnsigned(value uint64) (string, error) {
 }
 
 func inetNtoaSigned(value int64) (string, error) {
-	if value < 0 || uint64(value) > maxInetNtoaValue {
+	// Keep the upper bound in the source signed domain so static analysis can
+	// prove that the narrowing conversion below cannot truncate a parsed value.
+	if value < 0 || value > int64(maxInetNtoaValue) {
 		return "", errInetNtoaOutOfRange
 	}
 	return inetNtoaString(uint32(value)), nil
@@ -8509,14 +8804,259 @@ func InetNtoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}
 }
 
-// IsIPv4 returns 1 if the argument is a valid IPv4 address, 0 otherwise.
-// Returns NULL if the input is NULL.
-func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func inetNtoaPreparedText(value []byte, kind vector.PrepareParamKind) (string, error) {
+	switch kind {
+	case vector.PrepareParamFloat:
+		floating, err := strconv.ParseFloat(string(value), 64)
+		if err != nil {
+			return "", err
+		}
+		return inetNtoaReal(floating)
+	case vector.PrepareParamDecimal:
+		integer, err := roundPreparedDecimalIntegerString(string(value))
+		if err != nil {
+			return "", err
+		}
+		number, err := strconv.ParseInt(integer, 10, 64)
+		if err != nil {
+			return "", err
+		}
+		return inetNtoaSigned(number)
+	case vector.PrepareParamBoolean:
+		switch strings.ToLower(string(value)) {
+		case "true", "1":
+			return inetNtoaUnsigned(1)
+		case "false", "0":
+			return inetNtoaUnsigned(0)
+		default:
+			return inetNtoaUnsigned(0)
+		}
+	default:
+		return inetNtoaSigned(parseMySQLIntegerPrefix(value))
+	}
+}
+
+// InetNtoaDynamic owns the source families whose numeric representation is
+// decided by the value domain rather than by a fixed numeric vector. Keeping
+// this dispatch at the batch boundary preserves the allocation-free native
+// overloads above while allowing MySQL-compatible conversion for strings,
+// BOOL, temporal values, JSON numbers, and prepared parameters.
+func InetNtoaDynamic(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if len(ivecs) != 1 {
+		return moerr.NewInvalidArg(proc.Ctx, "function inet_ntoa", fmt.Sprintf("expected 1 argument, got %d", len(ivecs)))
+	}
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	param := ivecs[0]
+	type valueGetter func(uint64) (string, bool, error)
+	var get valueGetter
+
+	appendSigned := func(value int64, null bool) (string, bool, error) {
+		if null {
+			return "", true, nil
+		}
+		text, err := inetNtoaSigned(value)
+		return text, err != nil, err
+	}
+	appendUnsigned := func(value uint64, null bool) (string, bool, error) {
+		if null {
+			return "", true, nil
+		}
+		text, err := inetNtoaUnsigned(value)
+		return text, err != nil, err
+	}
+
+	switch param.GetType().Oid {
+	case types.T_any:
+		// T_any is a planner-only type and has no physical storage contract. A
+		// non-NULL T_any vector must not be reinterpreted as Varlena: doing so
+		// panics under race/typecheck builds and can corrupt data otherwise.
+		for i := 0; i < length; i++ {
+			if !param.IsNull(uint64(i)) {
+				return moerr.NewInvalidInputNoCtx("INET_NTOA received a non-NULL ANY vector")
+			}
+		}
+		get = func(i uint64) (string, bool, error) {
+			return "", true, nil
+		}
+	case types.T_bool:
+		p := vector.GenerateFunctionFixedTypeParameter[bool](param)
+		get = func(i uint64) (string, bool, error) {
+			v, null := p.GetValue(i)
+			if v {
+				return appendUnsigned(1, null)
+			}
+			return appendUnsigned(0, null)
+		}
+	case types.T_date:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Date](param)
+		get = func(i uint64) (string, bool, error) {
+			v, null := p.GetValue(i)
+			if null {
+				return "", true, nil
+			}
+			year, month, day, _ := v.Calendar(true)
+			value := int64(year)*10000 + int64(month)*100 + int64(day)
+			return appendSigned(value, false)
+		}
+	case types.T_datetime:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Datetime](param)
+		get = func(i uint64) (string, bool, error) {
+			v, null := p.GetValue(i)
+			if null {
+				return "", true, nil
+			}
+			year, month, day, _ := v.ToDate().Calendar(true)
+			hour, minute, second := v.Clock()
+			value := (((int64(year)*100+int64(month))*100+int64(day))*100+int64(hour))*10000 + int64(minute)*100 + int64(second)
+			return appendSigned(value, false)
+		}
+	case types.T_timestamp:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](param)
+		zone := time.Local
+		if proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
+			zone = proc.GetSessionInfo().TimeZone
+		}
+		get = func(i uint64) (string, bool, error) {
+			v, null := p.GetValue(i)
+			if null {
+				return "", true, nil
+			}
+			dt := v.ToDatetime(zone)
+			year, month, day, _ := dt.ToDate().Calendar(true)
+			hour, minute, second := dt.Clock()
+			value := (((int64(year)*100+int64(month))*100+int64(day))*100+int64(hour))*10000 + int64(minute)*100 + int64(second)
+			return appendSigned(value, false)
+		}
+	case types.T_time:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Time](param)
+		roundFraction := param.GetType().Scale > 0
+		get = func(i uint64) (string, bool, error) {
+			v, null := p.GetValue(i)
+			return appendSigned(mysqlTimeInt64(v, roundFraction), null)
+		}
+	case types.T_json:
+		get = func(i uint64) (string, bool, error) {
+			if param.IsNull(i) {
+				return "", true, nil
+			}
+			bj := types.DecodeJson(param.GetBytesAt(int(i)))
+			switch bj.Type {
+			case bytejson.TpCodeLiteral:
+				if len(bj.Data) == 0 {
+					return "", true, nil
+				}
+				switch bj.Data[0] {
+				case bytejson.LiteralNull:
+					return "", true, nil
+				case bytejson.LiteralTrue:
+					return appendUnsigned(1, false)
+				case bytejson.LiteralFalse:
+					return appendUnsigned(0, false)
+				default:
+					return "", true, nil
+				}
+			case bytejson.TpCodeInt64:
+				return appendSigned(bj.GetInt64(), false)
+			case bytejson.TpCodeUint64:
+				return appendUnsigned(bj.GetUint64(), false)
+			case bytejson.TpCodeFloat64:
+				text, err := inetNtoaReal(bj.GetFloat64())
+				return text, err != nil, err
+			case bytejson.TpCodeDecimal:
+				integer, err := roundPreparedDecimalIntegerString(string(bj.GetString()))
+				if err != nil {
+					return "", true, err
+				}
+				number, err := strconv.ParseInt(integer, 10, 64)
+				if err != nil {
+					return "", true, err
+				}
+				return appendSigned(number, false)
+			case bytejson.TpCodeString:
+				value := string(bj.GetString())
+				// JSON strings enter MySQL numeric conversion through the exact
+				// integer domain when the whole value is numeric, while strings
+				// with a trailing nonnumeric suffix retain numeric-prefix behavior.
+				if number, ok := bytejson.NumericTextToInt64(value); ok {
+					return appendSigned(number, false)
+				}
+				if number, ok := bytejson.NumericTextToUint64(value); ok {
+					return appendUnsigned(number, false)
+				}
+				if bytejson.IsNumericText(value) {
+					// A complete numeric spelling that cannot fit the supported
+					// integer domains is an out-of-range number, not a string
+					// with a valid integer prefix. Do not turn 1e100 into 1.
+					return "", true, nil
+				}
+				return appendSigned(parseMySQLIntegerPrefix([]byte(value)), false)
+			default:
+				return "", true, nil
+			}
+		}
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
+		p := vector.GenerateFunctionStrParameter(param)
+		get = func(i uint64) (string, bool, error) {
+			value, null := p.GetStrValue(i)
+			if null {
+				return "", true, nil
+			}
+			if kind := param.GetPrepareParamKindAt(int(i)); kind != vector.PrepareParamNone {
+				text, err := inetNtoaPreparedText(value, kind)
+				return text, err != nil, err
+			}
+			return appendSigned(parseMySQLIntegerPrefix(value), false)
+		}
+	case types.T_year:
+		p := vector.GenerateFunctionFixedTypeParameter[types.MoYear](param)
+		get = func(i uint64) (string, bool, error) {
+			v, null := p.GetValue(i)
+			return appendSigned(v.ToInt64(), null)
+		}
+	default:
+		return moerr.NewInvalidInputNoCtxf("INET_NTOA does not support input type %s", param.GetType().Oid.String())
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		text, null, err := get(i)
+		if null || err != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytes([]byte(text), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ipPredicateResult contains the two result representations used by this
+// family of predicates. New plans use INT32, while serialized plans created
+// before the result-width correction can still arrive with INT64.
+type ipPredicateResult interface {
+	int32 | int64
+}
+
+func executeIPPredicate[T ipPredicateResult](
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	selectList *FunctionSelectList,
+	predicate func([]byte) bool,
+) error {
 	result.UseOptFunctionParamFrame(1)
-	rs := vector.MustFunctionResult[int64](result)
+	rs := vector.MustFunctionResult[T](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[T](rsVec)
 	rsNull := rsVec.GetNulls()
 
 	c1 := ivecs[0].IsConst()
@@ -8542,14 +9082,9 @@ func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 		if null1 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			ipStr := functionUtil.QuickBytesToStr(v1)
-			var resultVal int64
-			if _, ok := parseIPv4DottedQuad(ipStr, 3); ok {
-				// Valid IPv4 address
+			var resultVal T
+			if predicate(v1) {
 				resultVal = 1
-			} else {
-				// Not a valid IPv4 address
-				resultVal = 0
 			}
 			rowCount := uint64(length)
 			for i := uint64(0); i < rowCount; i++ {
@@ -8559,7 +9094,6 @@ func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 		return nil
 	}
 
-	// basic case
 	if p1.WithAnyNullValue() || rsAnyNull {
 		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
 		rowCount := uint64(length)
@@ -8568,8 +9102,7 @@ func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 				continue
 			}
 			v1, _ := p1.GetStrValue(i)
-			ipStr := functionUtil.QuickBytesToStr(v1)
-			if _, ok := parseIPv4DottedQuad(ipStr, 3); ok {
+			if predicate(v1) {
 				rss[i] = 1
 			} else {
 				rss[i] = 0
@@ -8581,8 +9114,7 @@ func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
-		ipStr := functionUtil.QuickBytesToStr(v1)
-		if _, ok := parseIPv4DottedQuad(ipStr, 3); ok {
+		if predicate(v1) {
 			rss[i] = 1
 		} else {
 			rss[i] = 0
@@ -8591,89 +9123,47 @@ func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	return nil
 }
 
+func executeIPPredicateResult(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	selectList *FunctionSelectList,
+	name string,
+	predicate func([]byte) bool,
+) error {
+	resultVec := result.GetResultVector()
+	if resultVec == nil || resultVec.GetType() == nil {
+		return moerr.NewInvalidInputNoCtxf(
+			"%s result has no type; expected INT32 or legacy INT64", name)
+	}
+	switch resultVec.GetType().Oid {
+	case types.T_int32:
+		return executeIPPredicate[int32](ivecs, result, length, selectList, predicate)
+	case types.T_int64:
+		return executeIPPredicate[int64](ivecs, result, length, selectList, predicate)
+	default:
+		return moerr.NewInvalidInputNoCtxf(
+			"%s result type %s is unsupported; expected INT32 or legacy INT64",
+			name, resultVec.GetType().Oid.String())
+	}
+}
+
+// IsIPv4 returns 1 if the argument is a valid IPv4 address, 0 otherwise.
+// Returns NULL if the input is NULL.
+func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return executeIPPredicateResult(ivecs, result, length, selectList, "is_ipv4", func(value []byte) bool {
+		_, ok := parseIPv4DottedQuad(functionUtil.QuickBytesToStr(value), 3)
+		return ok
+	})
+}
+
 // IsIPv6 returns 1 if the argument is a valid IPv6 address, 0 otherwise.
 // Returns NULL if the input is NULL.
 func IsIPv6(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	result.UseOptFunctionParamFrame(1)
-	rs := vector.MustFunctionResult[int64](result)
-	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
-	rsNull := rsVec.GetNulls()
-
-	c1 := ivecs[0].IsConst()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-
-	if c1 {
-		v1, null1 := p1.GetStrValue(0)
-		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			ipStr := functionUtil.QuickBytesToStr(v1)
-			ip, ok := parseIPAddress(ipStr)
-			var resultVal int64
-			if ok && ip.Is6() {
-				// Valid IPv6 address (not IPv4)
-				resultVal = 1
-			} else {
-				// Not a valid IPv6 address (could be IPv4 or invalid)
-				resultVal = 0
-			}
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				rss[i] = resultVal
-			}
-		}
-		return nil
-	}
-
-	// basic case
-	if p1.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
-		rowCount := uint64(length)
-		for i := uint64(0); i < rowCount; i++ {
-			if rsNull.Contains(i) {
-				continue
-			}
-			v1, _ := p1.GetStrValue(i)
-			ipStr := functionUtil.QuickBytesToStr(v1)
-			ip, ok := parseIPAddress(ipStr)
-			if ok && ip.Is6() {
-				rss[i] = 1
-			} else {
-				rss[i] = 0
-			}
-		}
-		return nil
-	}
-
-	rowCount := uint64(length)
-	for i := uint64(0); i < rowCount; i++ {
-		v1, _ := p1.GetStrValue(i)
-		ipStr := functionUtil.QuickBytesToStr(v1)
-		ip, ok := parseIPAddress(ipStr)
-		if ok && ip.Is6() {
-			rss[i] = 1
-		} else {
-			rss[i] = 0
-		}
-	}
-	return nil
+	return executeIPPredicateResult(ivecs, result, length, selectList, "is_ipv6", func(value []byte) bool {
+		ip, ok := parseIPAddress(functionUtil.QuickBytesToStr(value))
+		return ok && ip.Is6()
+	})
 }
 
 // isIPv4Compat checks for the deprecated IPv4-compatible ::/96 range, excluding
@@ -8694,94 +9184,9 @@ func isIPv4Compat(ip net.IP) bool {
 // Returns NULL if the input is NULL.
 // The input should be a binary representation from INET6_ATON (16 bytes for IPv6).
 func IsIPv4Compat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	result.UseOptFunctionParamFrame(1)
-	rs := vector.MustFunctionResult[int64](result)
-	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
-	rsNull := rsVec.GetNulls()
-
-	c1 := ivecs[0].IsConst()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-
-	if c1 {
-		v1, null1 := p1.GetStrValue(0)
-		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			var resultVal int64
-			if len(v1) == 16 {
-				ip := net.IP(v1)
-				if isIPv4Compat(ip) {
-					resultVal = 1
-				} else {
-					resultVal = 0
-				}
-			} else {
-				// Invalid length: not a valid IPv6 binary representation
-				resultVal = 0
-			}
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				rss[i] = resultVal
-			}
-		}
-		return nil
-	}
-
-	// basic case
-	if p1.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
-		rowCount := uint64(length)
-		for i := uint64(0); i < rowCount; i++ {
-			if rsNull.Contains(i) {
-				continue
-			}
-			v1, _ := p1.GetStrValue(i)
-			if len(v1) == 16 {
-				ip := net.IP(v1)
-				if isIPv4Compat(ip) {
-					rss[i] = 1
-				} else {
-					rss[i] = 0
-				}
-			} else {
-				rss[i] = 0
-			}
-		}
-		return nil
-	}
-
-	rowCount := uint64(length)
-	for i := uint64(0); i < rowCount; i++ {
-		v1, _ := p1.GetStrValue(i)
-		if len(v1) == 16 {
-			ip := net.IP(v1)
-			if isIPv4Compat(ip) {
-				rss[i] = 1
-			} else {
-				rss[i] = 0
-			}
-		} else {
-			rss[i] = 0
-		}
-	}
-	return nil
+	return executeIPPredicateResult(ivecs, result, length, selectList, "is_ipv4_compat", func(value []byte) bool {
+		return isIPv4Compat(net.IP(value))
+	})
 }
 
 // IsIPv4Mapped returns 1 if the argument is a valid IPv4-mapped IPv6 address, 0 otherwise.
@@ -8789,94 +9194,9 @@ func IsIPv4Compat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 // The input should be a binary representation from INET6_ATON (16 bytes for IPv6).
 // IPv4-mapped addresses have the format ::ffff:a.b.c.d
 func IsIPv4Mapped(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	result.UseOptFunctionParamFrame(1)
-	rs := vector.MustFunctionResult[int64](result)
-	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
-	rsNull := rsVec.GetNulls()
-
-	c1 := ivecs[0].IsConst()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-
-	if c1 {
-		v1, null1 := p1.GetStrValue(0)
-		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			var resultVal int64
-			if len(v1) == 16 {
-				ip := net.IP(v1)
-				if isIPv4Mapped(ip) {
-					resultVal = 1
-				} else {
-					resultVal = 0
-				}
-			} else {
-				// Invalid length: not a valid IPv6 binary representation
-				resultVal = 0
-			}
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				rss[i] = resultVal
-			}
-		}
-		return nil
-	}
-
-	// basic case
-	if p1.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
-		rowCount := uint64(length)
-		for i := uint64(0); i < rowCount; i++ {
-			if rsNull.Contains(i) {
-				continue
-			}
-			v1, _ := p1.GetStrValue(i)
-			if len(v1) == 16 {
-				ip := net.IP(v1)
-				if isIPv4Mapped(ip) {
-					rss[i] = 1
-				} else {
-					rss[i] = 0
-				}
-			} else {
-				rss[i] = 0
-			}
-		}
-		return nil
-	}
-
-	rowCount := uint64(length)
-	for i := uint64(0); i < rowCount; i++ {
-		v1, _ := p1.GetStrValue(i)
-		if len(v1) == 16 {
-			ip := net.IP(v1)
-			if isIPv4Mapped(ip) {
-				rss[i] = 1
-			} else {
-				rss[i] = 0
-			}
-		} else {
-			rss[i] = 0
-		}
-	}
-	return nil
+	return executeIPPredicateResult(ivecs, result, length, selectList, "is_ipv4_mapped", func(value []byte) bool {
+		return isIPv4Mapped(net.IP(value))
+	})
 }
 
 // UnhexString returns a string representation of a hexadecimal value.
@@ -9059,9 +9379,9 @@ func isBase64Space(b byte) bool {
 	return b == ' ' || (b >= '\t' && b <= '\r') || b == 0xa0
 }
 
-// VecFromBase64 decodes a base64-encoded string into a vector (vecf32 or vecf64).
+// VecFromBase64 decodes a base64-encoded string into a vector of T elements.
 // The base64 payload must be the raw little-endian bytes of the vector elements,
-// as produced by to_base64(vecf32_col) or to_base64(vecf64_col).
+// as produced by to_base64 on a vector value.
 func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -9113,11 +9433,18 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 		}
 		n, err := base64.StdEncoding.Decode(buf, data)
 		if err != nil {
-			return moerr.NewInternalErrorNoCtx("vec_from_base64: invalid base64 input")
+			return moerr.NewInvalidInputNoCtx("vec_from_base64: invalid base64 input")
 		}
 
 		if n%elemSize != 0 {
-			return moerr.NewInternalErrorNoCtxf("vec_from_base64: decoded length %d is not a multiple of %d bytes", n, elemSize)
+			return moerr.NewInvalidInputNoCtxf("vec_from_base64: decoded length %d is not a multiple of %d bytes", n, elemSize)
+		}
+
+		// The payload is raw IEEE-754 bytes, so a NaN/Inf bit pattern would otherwise decode straight
+		// into a vector column, bypassing the finite check the text cast and direct insert enforce
+		// (#29084). Reject non-finite decoded elements before storing.
+		if err = rejectNonFiniteVectorElems(types.BytesToArray[T](buf[:n])); err != nil {
+			return err
 		}
 
 		if err = rs.AppendBytes(buf[:n], false); err != nil {
@@ -9343,6 +9670,8 @@ func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	var warnings process.WarningAccumulator
+	warnings.SetWarningRetentionForProcess(proc)
+	defer warnings.Reset()
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -9389,11 +9718,7 @@ func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func Length(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryStrToFixed[int64](ivecs, result, proc, length, strLength, selectList)
-}
-
-func strLength(xs string) int64 {
-	return int64(len(xs))
+	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 { return int64(len(v)) }, selectList)
 }
 
 func LengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -9748,6 +10073,9 @@ func UncompressedLength(parameters []*vector.Vector, result vector.FunctionResul
 func uncompressedLengthResult[Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, toResult func(uint32) Tr) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
+	var warnings process.WarningAccumulator
+	warnings.SetWarningRetentionForProcess(proc)
+	defer warnings.Reset()
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -9767,6 +10095,9 @@ func uncompressedLengthResult[Tr types.FixedSizeTExceptStrType](parameters []*ve
 		}
 
 		if len(data) <= 4 {
+			if len(data) > 0 {
+				warnings.Add(moerr.ER_ZLIB_Z_DATA_ERROR, uncompressDataWarning)
+			}
 			if err := rs.Append(toResult(0), false); err != nil {
 				return err
 			}
@@ -9777,6 +10108,9 @@ func uncompressedLengthResult[Tr types.FixedSizeTExceptStrType](parameters []*ve
 		if err := rs.Append(toResult(originalLen), false); err != nil {
 			return err
 		}
+	}
+	if warnings.Total > 0 {
+		warnings.Flush(proc)
 	}
 
 	return nil
@@ -10458,36 +10792,9 @@ func DateStringToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWra
 
 // TODO: I will support template soon.
 func DateStringToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	//return opUnaryStrToFixedWithErrorCheck[uint8](ivecs, result, proc, length, func(v string) (uint8, error) {
-	//	d, e := types.ParseDateCast(v)
-	//	if e != nil {
-	//		return 0, e
-	//	}
-	//	return d.Month(), nil
-	//})
-
-	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
-	rs := vector.MustFunctionResult[uint8](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetStrValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			d, e := types.ParseDateCast(functionUtil.QuickBytesToStr(v))
-			if e != nil {
-				if err := rs.Append(0, true); err != nil {
-					return err
-				}
-			} else {
-				if err := rs.Append(d.Month(), false); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (uint8, bool) {
+		return parts.month, true
+	})
 }
 
 func DateToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -10503,25 +10810,56 @@ func DatetimeToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 }
 
 func DateStringToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryStrToFixedWithErrorCheck[int64](ivecs, result, proc, length, func(v string) (int64, error) {
-		d, e := types.ParseDateCast(v)
-		if e != nil {
-			return 0, e
-		}
-		return int64(d.Year()), nil
-	}, selectList)
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (int64, bool) {
+		return int64(parts.year), true
+	})
+}
+
+// normalizeWeekMode applies the same modulo-eight normalization used by the
+// date implementation for both WEEK and YEARWEEK.  The SQL mode argument may
+// be a vector, so callers must invoke this per row rather than reading row 0.
+func normalizeWeekMode(mode int64) int {
+	mode %= 8
+	if mode < 0 {
+		mode += 8
+	}
+	return int(mode)
+}
+
+func weekModeAt(modes vector.FunctionParameterWrapper[int64], row uint64) int {
+	if modes == nil {
+		return 0
+	}
+	// An explicit NULL mode uses mode 0 regardless of whether it is a
+	// literal or a row-dependent expression.
+	mode, null := modes.GetValue(row)
+	if null {
+		return 0
+	}
+	return normalizeWeekMode(mode)
+}
+
+// getDefaultWeekFormatMode reads the session default at execution time so a
+// prepared one-argument WEEK call observes a later SET default_week_format.
+func getDefaultWeekFormatMode(proc *process.Process) (int, error) {
+	mode, _, err := process.ResolveDefaultWeekFormatMode(proc)
+	return mode, err
 }
 
 func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint8](result)
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
-
-	// Get mode (default 0 if not provided)
-	// MySQL uses mode % 8 for out-of-range values
-	mode := 0
-	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
-		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		mode = ((mode % 8) + 8) % 8
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	}
+	defaultMode := 0
+	if modes == nil {
+		var err error
+		defaultMode, err = getDefaultWeekFormatMode(proc)
+		if err != nil {
+			return err
+		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -10532,6 +10870,10 @@ func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			continue
 		}
 
+		mode := weekModeAt(modes, i)
+		if modes == nil {
+			mode = defaultMode
+		}
 		date, null := dates.GetValue(i)
 		if null || date == types.ZeroDate {
 			if err := rs.Append(0, true); err != nil {
@@ -10551,13 +10893,17 @@ func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint8](result)
 	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
-
-	// Get mode (default 0 if not provided)
-	// MySQL uses mode % 8 for out-of-range values
-	mode := 0
-	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
-		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		mode = ((mode % 8) + 8) % 8
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	}
+	defaultMode := 0
+	if modes == nil {
+		var err error
+		defaultMode, err = getDefaultWeekFormatMode(proc)
+		if err != nil {
+			return err
+		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -10568,6 +10914,10 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			continue
 		}
 
+		mode := weekModeAt(modes, i)
+		if modes == nil {
+			mode = defaultMode
+		}
 		dt, null := datetimes.GetValue(i)
 		if null || dt == types.ZeroDatetime {
 			if err := rs.Append(0, true); err != nil {
@@ -10693,30 +11043,33 @@ func TimestampToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWr
 
 // DateToDayName returns the weekday name for date (e.g., "Sunday", "Monday", ...)
 func DateToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Date](ivecs, result, proc, length, func(v types.Date) (string, error) {
 		if v == types.ZeroDate {
 			return "", moerr.NewInvalidInputNoCtx("zero date")
 		}
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return v.DayOfWeek().String(), nil
+		return locale.localizedWeekday(int(v.DayOfWeek())), nil
 	}, selectList)
 }
 
 // DatetimeToDayName returns the weekday name for datetime (e.g., "Sunday", "Monday", ...)
 func DatetimeToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) (string, error) {
 		if v == types.ZeroDatetime {
 			return "", moerr.NewInvalidInputNoCtx("zero datetime")
 		}
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return v.DayOfWeek().String(), nil
+		return locale.localizedWeekday(int(v.DayOfWeek())), nil
 	}, selectList)
 }
 
 // TimestampToDayName returns the weekday name for timestamp (e.g., "Sunday", "Monday", ...)
 func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) (string, error) {
 		if v == types.ZeroTimestamp {
 			return "", moerr.NewInvalidInputNoCtx("zero timestamp")
@@ -10728,24 +11081,26 @@ func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		dt := v.ToDatetime(loc)
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return dt.DayOfWeek().String(), nil
+		return locale.localizedWeekday(int(dt.DayOfWeek())), nil
 	}, selectList)
 }
 
 func DateStringToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (string, bool) {
 		if !parts.valid {
 			return "", false
 		}
 		if parts.year == 0 {
-			return types.DayOfWeekFromCalendar(parts.year, parts.month, parts.day).String(), true
+			return locale.localizedWeekday(int(types.DayOfWeekFromCalendar(parts.year, parts.month, parts.day))), true
 		}
-		return parts.date.DayOfWeek().String(), true
+		return locale.localizedWeekday(int(parts.date.DayOfWeek())), true
 	})
 }
 
 // DateToMonthName returns the month name for date (e.g., "January", "February", ...)
 func DateToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Date](ivecs, result, proc, length, func(v types.Date) (string, error) {
 		if v == types.ZeroDate {
 			return "", moerr.NewInvalidInputNoCtx("zero date")
@@ -10753,7 +11108,7 @@ func DateToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		// Month() returns 1-12
 		month := v.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1], nil
+			return locale.localizedMonth(int(month)), nil
 		}
 		return "", nil
 	}, selectList)
@@ -10761,6 +11116,7 @@ func DateToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 
 // DatetimeToMonthName returns the month name for datetime (e.g., "January", "February", ...)
 func DatetimeToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) (string, error) {
 		if v == types.ZeroDatetime {
 			return "", moerr.NewInvalidInputNoCtx("zero datetime")
@@ -10768,7 +11124,7 @@ func DatetimeToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWra
 		// Month() returns 1-12
 		month := v.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1], nil
+			return locale.localizedMonth(int(month)), nil
 		}
 		return "", nil
 	}, selectList)
@@ -10776,6 +11132,7 @@ func DatetimeToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWra
 
 // TimestampToMonthName returns the month name for timestamp (e.g., "January", "February", ...)
 func TimestampToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) (string, error) {
 		if v == types.ZeroTimestamp {
 			return "", moerr.NewInvalidInputNoCtx("zero timestamp")
@@ -10788,19 +11145,20 @@ func TimestampToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWr
 		// Month() returns 1-12
 		month := dt.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1], nil
+			return locale.localizedMonth(int(month)), nil
 		}
 		return "", nil
 	}, selectList)
 }
 
 func DateStringToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (string, bool) {
 		month := parts.month
 		if month < 1 || month > 12 {
 			return "", false
 		}
-		return MonthNames[month-1], true
+		return locale.localizedMonth(int(month)), true
 	})
 }
 
@@ -13559,60 +13917,74 @@ func SHA1Func(
 	}, selectList)
 }
 
-func LastDay(
-	ivecs []*vector.Vector,
-	result vector.FunctionResultWrapper,
-	_ *process.Process,
-	length int,
-	selectList *FunctionSelectList,
-) error {
+// lastDayDate is shared by native temporal inputs and the tolerant text parser.
+func lastDayDate(dt types.Date) (types.Date, bool) {
+	year, month, _, _ := dt.Calendar(true)
+	if dt == types.ZeroDate || month == 0 {
+		return 0, true
+	}
+	return types.DateFromCalendar(year, month, types.LastDay(year, month)), false
+}
+
+func LastDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
+	_ *process.Process, length int, selectList *FunctionSelectList) error {
+	switch ivecs[0].GetType().Oid {
+	case types.T_date:
+		return opUnaryFixedToFixedWithNullCheck[types.Date, types.Date](ivecs, result, length, lastDayDate, selectList)
+	case types.T_datetime:
+		return opUnaryFixedToFixedWithNullCheck[types.Datetime, types.Date](ivecs, result, length,
+			func(dt types.Datetime) (types.Date, bool) { return lastDayDate(dt.ToDate()) }, selectList)
+	}
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	rs := vector.MustFunctionResult[types.Varlena](result)
-
+	// Stopped upgrades can still load old catalog expressions with VARCHAR
+	// results and released overload IDs. Keep their physical wrapper executable.
+	legacy, oldResult := result.(*vector.FunctionResult[types.Varlena])
+	var dates *vector.FunctionResult[types.Date]
+	if !oldResult {
+		dates = vector.MustFunctionResult[types.Date](result)
+	}
+	appendDate := func(dt types.Date, null bool) error {
+		if oldResult {
+			if null {
+				return legacy.AppendBytes(nil, true)
+			}
+			return legacy.AppendBytes([]byte(dt.String()), false)
+		}
+		return dates.Append(dt, null)
+	}
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		if null1 {
-			if err := rs.AppendBytes(nil, true); err != nil {
+		if functionRowSkipped(selectList, i) {
+			if err := appendDate(0, true); err != nil {
 				return err
 			}
+			continue
+		}
+		v, null := p1.GetStrValue(i)
+		if null {
+			if err := appendDate(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		day := functionUtil.QuickBytesToStr(v)
+		var dt types.Date
+		var err error
+		if len(day) < 14 {
+			dt, err = types.ParseDateCast(day)
 		} else {
-			day := functionUtil.QuickBytesToStr(v1)
-			var dt types.Date
-			var err error
-			var dtt types.Datetime
-			if len(day) < 14 {
-				dt, err = types.ParseDateCast(day)
-				if err != nil {
-					if err := rs.AppendBytes(nil, true); err != nil {
-						return err
-					}
-					continue
-				}
-			} else {
-				dtt, err = types.ParseDatetime(day, 6)
-				if err != nil {
-					if err := rs.AppendBytes(nil, true); err != nil {
-						return err
-					}
-					continue
-				}
-				dt = dtt.ToDate()
-			}
-
-			year := dt.Year()
-			month := dt.Month()
-			if dt == types.ZeroDate || month == 0 {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
-			}
-
-			lastDay := types.LastDay(int32(year), month)
-			resDt := types.DateFromCalendar(int32(year), month, lastDay)
-			if err := rs.AppendBytes([]byte(resDt.String()), false); err != nil {
+			var datetime types.Datetime
+			datetime, err = types.ParseDatetime(day, 6)
+			dt = datetime.ToDate()
+		}
+		if err != nil {
+			if err := appendDate(0, true); err != nil {
 				return err
 			}
+			continue
+		}
+		dt, null = lastDayDate(dt)
+		if err := appendDate(dt, null); err != nil {
+			return err
 		}
 	}
 	return nil

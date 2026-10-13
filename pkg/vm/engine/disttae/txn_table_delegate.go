@@ -211,6 +211,11 @@ func (tbl *txnTableDelegate) Stats(
 		)
 	}
 
+	if tbl.origin.workspaceInsertRowEstimate() > 0 {
+		// The remote owner cannot observe this CN's uncommitted workspace.
+		return transientTableStats(nil, float64(^uint64(0))), nil
+	}
+
 	var stats pb.StatsInfo
 	has := false
 	err = tbl.forwardRead(
@@ -235,8 +240,12 @@ func (tbl *txnTableDelegate) Stats(
 		return nil, err
 	}
 	if !has {
-		return nil, nil
+		return transientTableStats(nil, float64(^uint64(0))), nil
 	}
+	if stats.TableName == "" && stats.TableCnt > 0 {
+		return transientTableStats(&stats, float64(^uint64(0))), nil
+	}
+
 	return &stats, nil
 }
 
@@ -907,90 +916,6 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeUpserted(
 	return modify, nil
 }
 
-func (tbl *txnTableDelegate) MergeObjects(
-	ctx context.Context,
-	objstats []objectio.ObjectStats,
-	targetObjSize uint32,
-) (*api.MergeCommitEntry, error) {
-	if tbl.combined.is {
-		return tbl.combined.tbl.MergeObjects(
-			ctx,
-			objstats,
-			targetObjSize,
-		)
-	}
-
-	is, err := tbl.isLocal()
-	if err != nil {
-		return nil, err
-	}
-	if is {
-		return tbl.origin.MergeObjects(ctx, objstats, targetObjSize)
-	}
-
-	var entry api.MergeCommitEntry
-	err = tbl.forwardRead(
-		ctx,
-		shardservice.ReadMergeObjects,
-		func(param *shard.ReadParam) {
-			os := make([][]byte, len(objstats))
-			for i, o := range objstats {
-				os[i] = o.Marshal()
-			}
-			param.MergeObjectsParam.Objstats = os
-			param.MergeObjectsParam.TargetObjSize = targetObjSize
-		},
-		func(resp []byte) {
-			err := entry.Unmarshal(resp)
-			if err != nil {
-				panic(err)
-			}
-			// TODO: hash shard need to merge all shard in future
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &entry, nil
-}
-
-func (tbl *txnTableDelegate) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
-	if tbl.combined.is {
-		return tbl.combined.tbl.GetNonAppendableObjectStats(ctx)
-	}
-
-	is, err := tbl.isLocal()
-	if err != nil {
-		return nil, err
-	}
-	if is {
-		return tbl.origin.GetNonAppendableObjectStats(
-			ctx,
-		)
-	}
-
-	var stats []objectio.ObjectStats
-	err = tbl.forwardRead(
-		ctx,
-		shardservice.ReadVisibleObjectStats,
-		func(param *shard.ReadParam) {},
-		func(resp []byte) {
-			if len(resp)%objectio.ObjectStatsLen != 0 {
-				panic("invalid resp")
-			}
-			size := len(resp) / objectio.ObjectStatsLen
-			stats = make([]objectio.ObjectStats, size)
-			for i := range size {
-				stats[i].UnMarshal(resp[i*objectio.ObjectStatsLen:])
-			}
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-	return stats, nil
-}
-
 func (tbl *txnTableDelegate) TableDefs(
 	ctx context.Context,
 ) ([]engine.TableDef, error) {
@@ -1436,8 +1361,6 @@ func (tbl *txnTableDelegate) mockForwardRead(
 		shardservice.ReadBuildReader:              HandleShardingReadBuildReader,
 		shardservice.ReadPrimaryKeysMayBeModified: HandleShardingReadPrimaryKeysMayBeModified,
 		shardservice.ReadPrimaryKeysMayBeUpserted: HandleShardingReadPrimaryKeysMayBeUpserted,
-		shardservice.ReadMergeObjects:             HandleShardingReadMergeObjects,
-		shardservice.ReadVisibleObjectStats:       HandleShardingReadVisibleObjectStats,
 		shardservice.ReadClose:                    HandleShardingReadClose,
 		shardservice.ReadNext:                     HandleShardingReadNext,
 		shardservice.ReadCollectTombstones:        HandleShardingReadCollectTombstones,

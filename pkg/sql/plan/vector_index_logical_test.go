@@ -37,7 +37,7 @@ func makeVectorIndexDefForLogicalTest(name, algo, algoTableType string, parts, i
 }
 
 func TestCollectVectorIndexesKeepsIvfFlatIncludeMetadata(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	metaDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Metadata, []string{"embedding"}, []string{"title", "category"})
 	centroidsDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Centroids, []string{"embedding"}, []string{"title", "category"})
 	entriesDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Entries, []string{"embedding"}, []string{"title", "category"})
@@ -64,7 +64,7 @@ func TestCollectVectorIndexesKeepsIvfFlatIncludeMetadata(t *testing.T) {
 }
 
 func TestCollectVectorIndexesRejectsInconsistentIvfFlatIncludeMetadata(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	metaDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Metadata, []string{"embedding"}, []string{"title", "category"})
 	centroidsDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Centroids, []string{"embedding"}, []string{"title", "category"})
 	entriesDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Entries, []string{"embedding"}, []string{"title"})

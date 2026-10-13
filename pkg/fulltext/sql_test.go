@@ -41,7 +41,7 @@ func TestSqlPhraseBM25(t *testing.T) {
 	tests := []TestCase{
 		{
 			pattern: "\"Ma'trix Origin\"",
-			expect:  "select a.*, CAST(COALESCE(dl.pos, 0) AS INT) as doc_len from (SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = 'ma\\'trix' UNION ALL SELECT doc_id, pos - 8 AS anchor FROM `__mo_index_secondary_` WHERE word = 'origin') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 2) phrase GROUP BY doc_id) a LEFT JOIN `__mo_index_secondary_` dl ON a.doc_id = dl.doc_id AND dl.word = '__DocLen'",
+			expect:  "select a.*, CAST(COALESCE(dl.pos, 0) AS INT) as doc_len from (SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = 'ma' UNION ALL SELECT doc_id, pos - 3 AS anchor FROM `__mo_index_secondary_` WHERE word = 'trix' UNION ALL SELECT doc_id, pos - 8 AS anchor FROM `__mo_index_secondary_` WHERE word = 'origin') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 3) phrase GROUP BY doc_id) a LEFT JOIN `__mo_index_secondary_` dl ON a.doc_id = dl.doc_id AND dl.word = '__DocLen'",
 		},
 	}
 
@@ -59,7 +59,7 @@ func TestSqlPhrase(t *testing.T) {
 	tests := []TestCase{
 		{
 			pattern: "\"Ma'trix Origin\"",
-			expect:  "SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = 'ma\\'trix' UNION ALL SELECT doc_id, pos - 8 AS anchor FROM `__mo_index_secondary_` WHERE word = 'origin') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 2) phrase GROUP BY doc_id",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = 'ma' UNION ALL SELECT doc_id, pos - 3 AS anchor FROM `__mo_index_secondary_` WHERE word = 'trix' UNION ALL SELECT doc_id, pos - 8 AS anchor FROM `__mo_index_secondary_` WHERE word = 'origin') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 3) phrase GROUP BY doc_id",
 		},
 		{
 			pattern: "\"Matrix Origin\"",
@@ -79,7 +79,7 @@ func TestSqlPhrase(t *testing.T) {
 		},
 		{
 			pattern: "\"  你好嗎? Hello World  在一起  Happy  再见  \"",
-			expect:  "SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = '你好嗎?' UNION ALL SELECT doc_id, pos - 11 AS anchor FROM `__mo_index_secondary_` WHERE word = 'hello' UNION ALL SELECT doc_id, pos - 17 AS anchor FROM `__mo_index_secondary_` WHERE word = 'world' UNION ALL SELECT doc_id, pos - 24 AS anchor FROM `__mo_index_secondary_` WHERE word = '在一起' UNION ALL SELECT doc_id, pos - 35 AS anchor FROM `__mo_index_secondary_` WHERE word = 'happy' UNION ALL SELECT doc_id, pos - 42 AS anchor FROM `__mo_index_secondary_` WHERE word = '再见') anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 6) phrase GROUP BY doc_id",
+			expect:  "SELECT doc_id, CAST(0 as int) FROM (SELECT doc_id FROM (SELECT doc_id, pos - 0 AS anchor FROM `__mo_index_secondary_` WHERE word = '你好嗎' UNION ALL SELECT doc_id, pos - 11 AS anchor FROM `__mo_index_secondary_` WHERE word = 'hello' UNION ALL SELECT doc_id, pos - 17 AS anchor FROM `__mo_index_secondary_` WHERE word = 'world' UNION ALL SELECT doc_id, pos - 24 AS anchor FROM `__mo_index_secondary_` WHERE word = '在一起' UNION ALL SELECT doc_id, pos - 35 AS anchor FROM `__mo_index_secondary_` WHERE word = 'happy' UNION ALL SELECT doc_id, pos - 42 AS anchor FROM `__mo_index_secondary_` WHERE prefix_eq(word,'再见')) anchors GROUP BY doc_id, anchor HAVING COUNT(*) = 6) phrase GROUP BY doc_id",
 		},
 	}
 

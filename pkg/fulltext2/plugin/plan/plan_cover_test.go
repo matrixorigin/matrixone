@@ -15,7 +15,7 @@
 // CPU-only unit coverage for the fulltext2 plan-layer hooks. plan.go's inert
 // vector-sort redirects (CanApply / ApplyForSort), schema.go's hidden-table
 // builder (BuildFullTextIndexDefs) + buildFullText2Params, and tablefunc.go's
-// pure TVF builders (buildFullText2Create / buildFullText2Search /
+// pure TVF builders (buildFullText2Create /
 // getFullText2Params) are all reachable without a live cluster. The
 // happy-path builders call two planplugin helper vars (production wires them
 // in pkg/sql/plan's init) which the init() below stubs to avoid an import
@@ -34,7 +34,6 @@ import (
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -93,9 +92,8 @@ type stubCompilerContext struct{ ctx context.Context }
 
 func (c stubCompilerContext) GetContext() context.Context { return c.ctx }
 
-// GetProcess hands back a test process on the default service runtime, which carries
-// MORPCLatestVersion -- so these tests plan as a fully activated deployment.
-func (c stubCompilerContext) GetProcess() *process.Process { return testutil.NewProcess(nil) }
+// These tested paths do not require a process or service runtime.
+func (c stubCompilerContext) GetProcess() *process.Process { return nil }
 
 func (c stubCompilerContext) ResolveVariable(string, bool, bool) (interface{}, error) {
 	return nil, nil
@@ -488,19 +486,19 @@ func TestGetFullText2Params_Error(t *testing.T) {
 
 func TestBuildFullText2Create_TooFewArgs(t *testing.T) {
 	b := newStubPlanBuilder()
-	_, err := buildFullText2Create(b, numValTblFunc(`{}`), nil, makeArgs(3), nil)
+	_, err := buildFullText2Create(b, numValTblFunc(`{}`), nil, makeArgs(3), nil, nil)
 	require.Error(t, err)
 }
 
 func TestBuildFullText2Create_BadParams(t *testing.T) {
 	b := newStubPlanBuilder()
-	_, err := buildFullText2Create(b, nonNumValTblFunc(), nil, makeArgs(4), nil)
+	_, err := buildFullText2Create(b, nonNumValTblFunc(), nil, makeArgs(4), nil, nil)
 	require.Error(t, err)
 }
 
 func TestBuildFullText2Create_OK(t *testing.T) {
 	b := newStubPlanBuilder()
-	id, err := buildFullText2Create(b, numValTblFunc(`{"parser":"ngram"}`), nil, makeArgs(4), nil)
+	id, err := buildFullText2Create(b, numValTblFunc(`{"parser":"ngram"}`), nil, makeArgs(4), nil, nil)
 	require.NoError(t, err)
 	node := b.nodes[id]
 	require.Equal(t, plan.Node_FUNCTION_SCAN, node.NodeType)
@@ -511,36 +509,11 @@ func TestBuildFullText2Create_OK(t *testing.T) {
 
 // --- tablefunc.go: buildFullText2Search ------------------------------------
 
-func TestBuildFullText2Search_BadArgCount(t *testing.T) {
-	b := newStubPlanBuilder()
-	_, err := buildFullText2Search(b, numValTblFunc(`{}`), nil, makeArgs(3), nil)
-	require.Error(t, err)
-	_, err = buildFullText2Search(b, numValTblFunc(`{}`), nil, makeArgs(5), nil)
-	require.Error(t, err)
-}
-
-func TestBuildFullText2Search_BadParams(t *testing.T) {
-	b := newStubPlanBuilder()
-	_, err := buildFullText2Search(b, nonNumValTblFunc(), nil, makeArgs(4), nil)
-	require.Error(t, err)
-}
-
-func TestBuildFullText2Search_OK(t *testing.T) {
-	b := newStubPlanBuilder()
-	id, err := buildFullText2Search(b, numValTblFunc(`{"parser":"ngram"}`), nil, makeArgs(4), nil)
-	require.NoError(t, err)
-	node := b.nodes[id]
-	require.Equal(t, plan.Node_FUNCTION_SCAN, node.NodeType)
-	require.Equal(t, FullText2SearchFuncName, node.TableDef.TblFunc.Name)
-	require.False(t, node.TableDef.TblFunc.IsSingle)
-	require.Len(t, node.TblFuncExprList, 3) // param stripped from the 4 args
-}
-
 // --- tablefunc.go: buildFullText2Compact -----------------------------------
 
 func TestBuildFullText2Compact_OK(t *testing.T) {
 	b := newStubPlanBuilder()
-	id, err := buildFullText2Compact(b, numValTblFunc(`{}`), nil, makeArgs(4), nil)
+	id, err := buildFullText2Compact(b, numValTblFunc(`{}`), nil, makeArgs(4), nil, nil)
 	require.NoError(t, err)
 	node := b.nodes[id]
 	require.Equal(t, plan.Node_FUNCTION_SCAN, node.NodeType)

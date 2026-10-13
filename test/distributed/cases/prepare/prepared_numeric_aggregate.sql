@@ -34,7 +34,17 @@ INSERT INTO ntile_input VALUES (1, 1), (2, 1), (3, 1), (4, 2);
 PREPARE p_ntile FROM 'SELECT id, NTILE(?) OVER (PARTITION BY g ORDER BY id) AS bucket FROM ntile_input ORDER BY id';
 SET @value = 2;
 EXECUTE p_ntile USING @value;
+SET @value = '2';
+EXECUTE p_ntile USING @value;
+SET @value = '5';
+EXECUTE p_ntile USING @value;
+SET @value = '2.5';
+EXECUTE p_ntile USING @value;
+SET @value = '2';
+EXECUTE p_ntile USING @value;
 SET @value = NULL;
+EXECUTE p_ntile USING @value;
+SET @value = 2;
 EXECUTE p_ntile USING @value;
 DEALLOCATE PREPARE p_ntile;
 

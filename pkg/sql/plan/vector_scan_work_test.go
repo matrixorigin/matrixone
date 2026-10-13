@@ -58,7 +58,7 @@ func TestIvfScanWorkUsesStoredEntries(t *testing.T) {
 			require.Equal(t, tc.bytes, work.VectorBytesPerRow)
 			require.InDelta(t, 10_000_000.0*5/3162, work.Rows, 0.00001)
 			require.Equal(t, int32(20), work.Objects)
-			require.Equal(t, int32(2), vectorScanDOP(16, &plan.VectorIndexScan{ScanWork: work}, false))
+			require.Equal(t, int32(2), vectorScanDOP(16, &plan.IndexSearchScan{Index: testIvfIndex, ScanWork: work}, false))
 		})
 	}
 	stats := &statsinfo.StatsInfo{TableCnt: 10, BlockNumber: 4, ApproxObjectNumber: 2,
@@ -66,7 +66,7 @@ func TestIvfScanWorkUsesStoredEntries(t *testing.T) {
 	work := ivfScanWorkFromStats(workTestEntries(types.T_array_float32, 768), stats, 1, 5)
 	require.Equal(t, float64(64), work.VectorBytesPerRow, "measured entry-column bytes take precedence")
 	require.Equal(t, int32(4), work.Blocks, "probes cannot exceed the complete index")
-	require.Equal(t, int32(1), vectorScanDOP(16, &plan.VectorIndexScan{ScanWork: work}, false))
+	require.Equal(t, int32(1), vectorScanDOP(16, &plan.IndexSearchScan{Index: testIvfIndex, ScanWork: work}, false))
 	work = ivfScanWorkFromStats(workTestEntries(types.T_array_float32, 768), stats, 4, 0)
 	require.Equal(t, int32(1), work.Blocks, "zero probe uses the execution minimum of one")
 }
@@ -92,11 +92,11 @@ func TestIvfScanWorkUnknownAndBounds(t *testing.T) {
 	work := ivfScanWorkFromStats(table, stats, 1, math.MaxInt64)
 	require.Equal(t, int32(math.MaxInt32), work.Blocks)
 	require.Equal(t, int32(math.MaxInt32), work.Objects)
-	require.Equal(t, int32(3), vectorScanDOP(3, &plan.VectorIndexScan{ScanWork: work}, false))
+	require.Equal(t, int32(3), vectorScanDOP(3, &plan.IndexSearchScan{Index: testIvfIndex, ScanWork: work}, false))
 }
 
 func TestVectorScanDOPPreservesWorkAndOperatorCaps(t *testing.T) {
-	spec := &plan.VectorIndexScan{ScanWork: &plan.VectorIndexScanWork{Rows: 100, Blocks: 40, VectorBytesPerRow: 3072, Objects: 5}}
+	spec := &plan.IndexSearchScan{Index: testIvfIndex, ScanWork: &plan.IndexSearchScanWork{Rows: 100, Blocks: 40, VectorBytesPerRow: 3072, Objects: 5}}
 	require.Equal(t, int32(5), vectorScanDOP(16, spec, false))
 	require.Equal(t, int32(2), vectorScanDOP(2, spec, false))
 	require.Equal(t, int32(1), vectorScanDOP(0, spec, false))
@@ -105,17 +105,19 @@ func TestVectorScanDOPPreservesWorkAndOperatorCaps(t *testing.T) {
 	spec.ScanWork.VectorBytesPerRow = 64
 	require.Equal(t, int32(3), vectorScanDOP(16, spec, false))
 	require.Equal(t, int32(1), vectorScanDOP(16, spec, true))
-	for _, invalid := range []*plan.VectorIndexScan{
-		nil, {}, {BucketExpandStep: 1, ScanWork: spec.ScanWork},
-		{FirstRoundLimit: makePlan2Uint64ConstExprWithType(10), ScanWork: spec.ScanWork},
-		{ScanWork: &plan.VectorIndexScanWork{Rows: math.NaN(), Blocks: 2, VectorBytesPerRow: 3072}},
-		{ScanWork: &plan.VectorIndexScanWork{Rows: 10, Blocks: 2, VectorBytesPerRow: math.Inf(1)}},
-		{ScanWork: &plan.VectorIndexScanWork{Rows: 10, Blocks: -2, VectorBytesPerRow: 3072}},
-		{ScanWork: &plan.VectorIndexScanWork{Rows: 10, Blocks: 2, VectorBytesPerRow: 3072, Objects: -1}},
+	for _, invalid := range []*plan.IndexSearchScan{
+		nil, {}, {ScanWork: spec.ScanWork},
+		{Index: testIvfIndex, AlgoOptions: []byte(`{"bucket_expand_step":1}`), ScanWork: spec.ScanWork},
+		{Index: testIvfIndex, AlgoExprs: []*plan.Expr{makePlan2Uint64ConstExprWithType(10)}, AlgoExprNames: []string{"first_round_limit"}, ScanWork: spec.ScanWork},
+		{Index: testIvfIndex, AlgoOptions: []byte(`{`), ScanWork: spec.ScanWork},
+		{ScanWork: &plan.IndexSearchScanWork{Rows: math.NaN(), Blocks: 2, VectorBytesPerRow: 3072}},
+		{ScanWork: &plan.IndexSearchScanWork{Rows: 10, Blocks: 2, VectorBytesPerRow: math.Inf(1)}},
+		{ScanWork: &plan.IndexSearchScanWork{Rows: 10, Blocks: -2, VectorBytesPerRow: 3072}},
+		{ScanWork: &plan.IndexSearchScanWork{Rows: 10, Blocks: 2, VectorBytesPerRow: 3072, Objects: -1}},
 	} {
 		require.Equal(t, int32(1), vectorScanDOP(16, invalid, false))
 	}
-	node := &plan.Node{NodeType: plan.Node_VECTOR_INDEX_SCAN, Stats: &plan.Stats{Rowsize: 16}, VectorIndexScan: spec}
+	node := &plan.Node{NodeType: plan.Node_INDEX_SEARCH_SCAN, Stats: &plan.Stats{Rowsize: 16}, IndexSearchScan: spec}
 	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{node}, Steps: []int32{0}}}}
 	CalcQueryDOP(p, 16, 1, ExecTypeAP_ONECN)
 	require.Equal(t, int32(3), node.Stats.Dop)
@@ -139,6 +141,14 @@ type scanWorkCompilerContext struct {
 	statsErr   error
 	calls      int
 	ctx        context.Context
+	statsCache *StatsCache
+}
+
+func (c *scanWorkCompilerContext) GetStatsCache() *StatsCache {
+	if c.statsCache != nil {
+		return c.statsCache
+	}
+	return c.CompilerContext.GetStatsCache()
 }
 
 func (c *scanWorkCompilerContext) GetContext() context.Context {
@@ -149,6 +159,9 @@ func (c *scanWorkCompilerContext) GetContext() context.Context {
 }
 
 func (c *scanWorkCompilerContext) ResolveIndexTableByRef(source *plan.ObjectRef, name string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	if name != "entries" {
+		return c.CompilerContext.ResolveIndexTableByRef(source, name, snapshot)
+	}
 	c.calls++
 	require.Equal(c.t, c.source, source)
 	require.Equal(c.t, c.snapshot, snapshot)
@@ -223,8 +236,9 @@ func TestVectorLocalDOPHint(t *testing.T) {
 	}
 }
 
-func TestIvfRewriteGatesWorkButRequiresScalarDomain(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
+func TestIvfRewriteEstimatesWorkWithoutLocalDOPHint(t *testing.T) {
+	for _, tc := range []struct{ hint, plain bool }{{false, false}, {true, false}, {false, true}} {
+		enabled := tc.hint
 		builder, _, scan, scanID, indexes := newIvfIncludeModeTestBuilder(t)
 		if enabled {
 			handleOptimizerHints("vectorLocalDOP=1", builder)
@@ -237,11 +251,30 @@ func TestIvfRewriteGatesWorkButRequiresScalarDomain(t *testing.T) {
 			idx.IndexAlgoParams = `{"op_type":"vector_l2_ops","lists":"1"}`
 			idx.IncludedColumns = nil
 		}
+		scan.ObjRef.Obj, scan.ObjRef.Db = 10, 1
+		if !tc.plain {
+			scan.TableDef.Indexes = append(scan.TableDef.Indexes, &plan.IndexDef{IndexName: "idx_category", IndexAlgo: "btree", IndexTableName: "category_idx", TableExist: true, Parts: []string{"category", catalog.CreateAlias("id")}})
+		}
+		mock := c.CompilerContext.(*customMockCompilerContext)
+		mock.tables["category_idx"] = &plan.TableDef{Name: "category_idx", Cols: []*plan.ColDef{{Name: catalog.IndexTableIndexColName, Typ: plan.Type{Id: int32(types.T_varchar)}}, {Name: catalog.IndexTablePrimaryColName, Typ: scan.TableDef.Cols[0].Typ}}, Name2ColIndex: map[string]int32{catalog.IndexTableIndexColName: 0, catalog.IndexTablePrimaryColName: 1}}
+		mock.objects["category_idx"] = &plan.ObjectRef{Obj: 11, Db: 1, SchemaName: "db", ObjName: "category_idx"}
 		scan.Stats = &plan.Stats{TableCnt: 100, BlockNum: 1, Rowsize: 16}
 		scan.FilterList = []*plan.Expr{makeIvfHelperFnExpr("=", plan.Type{Id: int32(types.T_bool)},
 			makeIvfHelperColExpr(scan.BindingTags[0], 3, scan.TableDef), MakePlan2Int32ConstExprWithType(20))}
-		vc := newIvfIncludeModeVectorSortContext(scan, scanID, "pre", 0, 3)
-		_, err := builder.applyIndicesForSortUsingIvfflat(scanID, vc, indexes, nil, nil)
+		if tc.plain {
+			scan.Stats.TableCnt, scan.Stats.BlockNum = 40000, 8
+			c.statsCache = NewStatsCache()
+			c.statsCache.Set(scan.TableDef.TblId, &statsinfo.StatsInfo{TableCnt: 40000, NdvMap: map[string]float64{"id": 40000}})
+			builder.tag2Table[scan.BindingTags[0]] = scan.TableDef
+			scan.FilterList[0].GetF().Args[0] = makeIvfHelperFnExpr("abs", scan.TableDef.Cols[3].Typ, scan.FilterList[0].GetF().Args[0])
+		}
+		vc := newIvfIncludeModeVectorSortContext(scan, scanID, "pre", 0, 2)
+		colCounts := map[[2]int32]int{}
+		for _, expr := range vc.projNode.ProjectList {
+			increaseRefCnt(expr, 1, colCounts)
+		}
+		indexColumns := map[[2]int32]*plan.Expr{}
+		_, err := builder.applyIndicesForSortUsingIvfflat(scanID, vc, indexes, colCounts, indexColumns)
 		require.NoError(t, err)
 		n := findIvfTableFunctionNode(builder, vc.projNode.Children[0])
 		require.NotNil(t, n)
@@ -259,21 +292,61 @@ func TestIvfRewriteGatesWorkButRequiresScalarDomain(t *testing.T) {
 		p := &plan.Plan{Plan: &plan.Plan_Query{Query: builder.qry}}
 		CalcNodeDOP(p, n.NodeId, 16, 1)
 		if enabled {
-			require.NotNil(t, n.VectorIndexScan.ScanWork)
+			require.NotNil(t, n.IndexSearchScan.ScanWork)
 			require.Equal(t, int32(2), n.Stats.Dop)
 			require.Equal(t, 1, c.calls)
-			copy := DeepCopyVectorIndexScan(n.VectorIndexScan)
-			require.Equal(t, n.VectorIndexScan.ScanWork, copy.ScanWork)
-			require.NotSame(t, n.VectorIndexScan.ScanWork, copy.ScanWork)
+			copy := DeepCopyIndexSearchScan(n.IndexSearchScan)
+			require.Equal(t, n.IndexSearchScan.ScanWork, copy.ScanWork)
+			require.NotSame(t, n.IndexSearchScan.ScanWork, copy.ScanWork)
 			data, err := copy.Marshal()
 			require.NoError(t, err)
-			var decoded plan.VectorIndexScan
+			var decoded plan.IndexSearchScan
 			require.NoError(t, decoded.Unmarshal(data))
 			require.Equal(t, copy.ScanWork, decoded.ScanWork)
 		} else {
-			require.Nil(t, n.VectorIndexScan.ScanWork)
-			require.Equal(t, int32(1), n.Stats.Dop)
-			require.Zero(t, c.calls)
+			require.NotNil(t, n.IndexSearchScan.ScanWork, "distributed placement needs work without the local DOP hint")
+			require.Equal(t, int32(2), n.Stats.Dop, "physical compilation still independently gates local DOP")
+			require.Equal(t, 1, c.calls)
+		}
+		replaceColumnsForNode(vc.projNode, indexColumns)
+		vc.projNode.BindingTags = []int32{builder.genNewBindTag()}
+		rootID := builder.appendNode(vc.projNode, NewBindContext(builder, nil))
+		builder.qry.Steps = []int32{rootID}
+		builder.generateRuntimeFilters(rootID)
+		builder.forceJoinOnOneCN(rootID, false)
+		_, remapErr := builder.remapAllColRefs(rootID, 0, map[[2]int32]int{}, map[[2]int32]bool{}, map[[2]int32]int{})
+		require.NoError(t, remapErr)
+		_, _, localScans, eligible := RequiredIVFPlacement(builder.qry)
+		require.True(t, eligible, "the generated regular-index PRE must remain eligible after actual column remapping")
+		if !tc.plain {
+			require.NotEmpty(t, localScans, "INDEX access flags remain local scan restrictions")
+		} else {
+			require.Empty(t, localScans)
+			var outer, rowFetch *plan.Node
+			for _, node := range builder.qry.Nodes {
+				if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INNER && len(node.RuntimeFilterBuildList) == 1 {
+					outer, rowFetch = node, builder.qry.Nodes[node.Children[0]]
+				}
+			}
+			require.NotNil(t, outer, "real plain-table rewrite must generate the optional outer PK filter")
+			require.Equal(t, plan.Node_TABLE_SCAN, rowFetch.NodeType)
+			require.Len(t, rowFetch.RuntimeFilterProbeList, 1)
+			require.Equal(t, ExecTypeAP_MULTICN, GetExecType(builder.qry, false, false))
+			builds, probes := outer.RuntimeFilterBuildList, rowFetch.RuntimeFilterProbeList
+			assertEligible := func(want bool) {
+				_, _, _, got := RequiredIVFPlacement(builder.qry)
+				require.Equal(t, want, got)
+			}
+			outer.RuntimeFilterBuildList, rowFetch.RuntimeFilterProbeList = nil, nil
+			assertEligible(true)
+			outer.RuntimeFilterBuildList = builds
+			assertEligible(false)
+			outer.RuntimeFilterBuildList, rowFetch.RuntimeFilterProbeList = nil, probes
+			assertEligible(false)
+			outer.RuntimeFilterBuildList = builds
+			assertEligible(true)
 		}
 	}
 }
+
+var testIvfIndex = &plan.IndexDef{IndexAlgo: "ivfflat"}

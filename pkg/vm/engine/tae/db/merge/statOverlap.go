@@ -479,7 +479,6 @@ func splitTasksOnSpan(
 				objs:        stats,
 				note:        note,
 				level:       lv,
-				kind:        taskHostDN,
 				isTombstone: false,
 			})
 			// wider span take higher priority to be merged,

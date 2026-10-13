@@ -29,6 +29,7 @@ import (
 
 func checkUnaryRows[T, R constraints.Signed | constraints.Float](t *testing.T, name string, inputType, resultType types.T, values []T, want []R) {
 	t.Helper()
+	proc := testutil.NewProcess(t)
 	for _, mode := range []struct {
 		name      string
 		selection *FunctionSelectList
@@ -40,7 +41,6 @@ func checkUnaryRows[T, R constraints.Signed | constraints.Float](t *testing.T, n
 		{"none_selected", &FunctionSelectList{AnyNull: true, AllNull: true}, []bool{true, true, true}},
 	} {
 		t.Run(mode.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
 			resolved, err := GetFunctionByName(proc.Ctx, name, []types.Type{inputType.ToType()})
 			require.NoError(t, err)
 			require.Equal(t, resultType, resolved.GetReturnType().Oid)
@@ -106,14 +106,14 @@ func TestUnaryRegisteredTypeAndSelection(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, types.T_int8, resolved.GetReturnType().Oid)
 		tc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_int8.ToType(), []int8{-128, 0, 127}, []bool{false, true, false})}, NewFunctionTestResult(resolved.GetReturnType(), false, []int8{-128, 0, 127}, []bool{false, true, false}), operatorUnaryPlus[int8])
-		defer tc.result.Free()
-		defer tc.parameters[0].Free(proc.Mp())
+		defer tc.Free()
 		ok, info := tc.Run()
 		require.True(t, ok, info)
 	})
 }
 
 func TestUnaryMinusLegacyOverloadsPreserveSerializedContract(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	for _, test := range []struct {
 		name       string
 		overloadID int64
@@ -132,7 +132,6 @@ func TestUnaryMinusLegacyOverloadsPreserveSerializedContract(t *testing.T) {
 		}, int32(-1)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
 			overload, err := GetFunctionById(proc.Ctx, test.overloadID)
 			require.NoError(t, err)
 			in := vector.NewVec(test.typ.ToType())
@@ -156,10 +155,10 @@ func TestUnaryMinusLegacyOverloadsPreserveSerializedContract(t *testing.T) {
 }
 
 func TestUnaryMinusInt64Overflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	for _, constant := range []bool{false, true} {
 		for _, mode := range []string{"overflow", "null", "masked", "all_masked"} {
 			t.Run(mode+map[bool]string{false: "/vector", true: "/constant"}[constant], func(t *testing.T) {
-				proc := testutil.NewProcess(t)
 				var in *vector.Vector
 				if constant {
 					var err error
