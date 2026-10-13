@@ -18,6 +18,8 @@
 package search
 
 import (
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,28 +37,10 @@ import (
 type Hooks struct{}
 
 var _ searchplugin.Hooks = Hooks{}
+var _ searchplugin.ExplainHooks = Hooks{}
 var _ searchplugin.CandidateBudgetHooks = Hooks{}
 var _ searchplugin.IndexFilterHooks = Hooks{}
 var _ searchplugin.AdvancedSearchHooks = Hooks{}
-var _ searchplugin.ExplainHooks = Hooks{}
-
-// ExplainSettings returns the filter the search applies on the device, as SQL.
-func (Hooks) ExplainSettings(spec *plan.IndexSearchScan) ([]string, error) {
-	opts, err := cagraplan.DecodeScanOptions(spec.GetAlgoOptions())
-	if err != nil {
-		return nil, err
-	}
-	include, err := catalog.IncludeColumnsFromIndexParams(spec.GetIndex().GetIndexAlgoParams())
-	if err != nil {
-		return nil, err
-	}
-	filter, err := vectorindex.DescribeIndexFilter(opts.FilterJSON, include,
-		spec.GetSourceTableDef().GetPkey().GetPkeyColName())
-	if err != nil || filter == "" {
-		return nil, err
-	}
-	return []string{"Index Filter: " + filter}, nil
-}
 
 // StartRound is the first round of the CAGRA widening policy (cagra.AdvancedSearch).
 func (Hooks) StartRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats) searchplugin.Round {
@@ -71,6 +55,52 @@ func (Hooks) NextRound(spec *plan.IndexSearchScan, req searchplugin.Request, sta
 // SupportsIndexFilter reports true: the search applies the INCLUDE and
 // primary-key predicates of its filter inside the index search.
 func (Hooks) SupportsIndexFilter() bool { return true }
+
+// ExplainSettings returns the filter the search applies on the device as SQL ("Index
+// Filter"), and on detailed output the static settings first. Compact output prints
+// nothing for algo options or index params it cannot decode.
+func (Hooks) ExplainSettings(spec *plan.IndexSearchScan, detailed bool) ([]string, error) {
+	opts, err := cagraplan.DecodeScanOptions(spec.GetAlgoOptions())
+	if err != nil {
+		if !detailed {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var settings []string
+	if detailed {
+		settings = []string{
+			"ThreadsSearch: " + strconv.FormatInt(int64(opts.ThreadsSearch), 10),
+			"BatchWindow: " + strconv.FormatInt(int64(opts.BatchWindow), 10),
+			"GpuMultiSimulation: " + strconv.FormatInt(int64(opts.GpuMultiSimulation), 10),
+			"KeyPartType: " + strconv.FormatInt(int64(opts.KeyPartType), 10),
+		}
+		if opts.FilterJSON != "" {
+			settings = append(settings, "Filter Predicates: "+opts.FilterJSON)
+		}
+	}
+	filter, err := describeIndexFilter(spec, opts.FilterJSON)
+	if err != nil {
+		if !detailed {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if filter != "" {
+		settings = append(settings, "Index Filter: "+filter)
+	}
+	return settings, nil
+}
+
+// describeIndexFilter renders filterJSON as SQL on the primary key and INCLUDE columns
+// of spec.
+func describeIndexFilter(spec *plan.IndexSearchScan, filterJSON string) (string, error) {
+	include, err := catalog.IncludeColumnsFromIndexParams(spec.GetIndex().GetIndexAlgoParams())
+	if err != nil {
+		return "", err
+	}
+	return vectorindex.DescribeIndexFilter(filterJSON, include, spec.GetSourceTableDef().GetPkey().GetPkeyColName())
+}
 
 // PostFilterCandidateBudget is the cagra post-filter over-fetch of resultLimit.
 func (Hooks) PostFilterCandidateBudget(resultLimit uint64) uint64 {

@@ -131,19 +131,75 @@ func TestExplainSettingsDescribesIndexFilter(t *testing.T) {
 		Index:          &plan.IndexDef{IndexAlgoParams: `{"op_type":"vector_l2_ops","included_columns":"category,note"}`},
 		SourceTableDef: &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"}},
 	}
-	settings, err := Hooks{}.ExplainSettings(spec)
+	settings, err := Hooks{}.ExplainSettings(spec, false)
 	require.NoError(t, err)
 	require.Equal(t, []string{"Index Filter: id BETWEEN 501 AND 1000 AND note = 2"}, settings)
+	settings, err = Hooks{}.ExplainSettings(spec, true)
+	require.NoError(t, err)
+	require.Equal(t, "Index Filter: id BETWEEN 501 AND 1000 AND note = 2", settings[len(settings)-1])
 
 	spec.AlgoOptions, err = cagraplan.EncodeScanOptions(cagraplan.ScanOptions{})
 	require.NoError(t, err)
-	settings, err = Hooks{}.ExplainSettings(spec)
+	settings, err = Hooks{}.ExplainSettings(spec, false)
 	require.NoError(t, err)
 	require.Empty(t, settings)
 
 	spec.Index.IndexAlgoParams = "{"
 	spec.AlgoOptions, err = cagraplan.EncodeScanOptions(cagraplan.ScanOptions{FilterJSON: `[{"col":-1,"op":"=","val":1}]`})
 	require.NoError(t, err)
-	_, err = Hooks{}.ExplainSettings(spec)
+	// compact output prints nothing for index params it cannot decode; detailed fails
+	settings, err = Hooks{}.ExplainSettings(spec, false)
+	require.NoError(t, err)
+	require.Empty(t, settings)
+	_, err = Hooks{}.ExplainSettings(spec, true)
 	require.Error(t, err)
+}
+
+func TestExplainSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts cagraplan.ScanOptions
+		want []string
+	}{
+		{"zero", cagraplan.ScanOptions{}, []string{`ThreadsSearch: 0`, `BatchWindow: 0`, `GpuMultiSimulation: 0`, `KeyPartType: 0`}},
+		{"ThreadsSearch", cagraplan.ScanOptions{ThreadsSearch: 8}, []string{`ThreadsSearch: 8`, `BatchWindow: 0`, `GpuMultiSimulation: 0`, `KeyPartType: 0`}},
+		{"BatchWindow", cagraplan.ScanOptions{BatchWindow: 8}, []string{`ThreadsSearch: 0`, `BatchWindow: 8`, `GpuMultiSimulation: 0`, `KeyPartType: 0`}},
+		{"GpuMultiSimulation", cagraplan.ScanOptions{GpuMultiSimulation: 8}, []string{`ThreadsSearch: 0`, `BatchWindow: 0`, `GpuMultiSimulation: 8`, `KeyPartType: 0`}},
+		{"KeyPartType", cagraplan.ScanOptions{KeyPartType: 8}, []string{`ThreadsSearch: 0`, `BatchWindow: 0`, `GpuMultiSimulation: 0`, `KeyPartType: 8`}},
+		{"maximum signed", cagraplan.ScanOptions{ThreadsSearch: 9223372036854775807, BatchWindow: 9223372036854775807, GpuMultiSimulation: 9223372036854775807, KeyPartType: 2147483647}, []string{"ThreadsSearch: 9223372036854775807", "BatchWindow: 9223372036854775807", "GpuMultiSimulation: 9223372036854775807", "KeyPartType: 2147483647"}},
+		{"integer boundaries", cagraplan.ScanOptions{ThreadsSearch: -9223372036854775808, BatchWindow: -9223372036854775808, GpuMultiSimulation: -9223372036854775808, KeyPartType: -2147483648}, []string{`ThreadsSearch: -9223372036854775808`, `BatchWindow: -9223372036854775808`, `GpuMultiSimulation: -9223372036854775808`, `KeyPartType: -2147483648`}},
+		{"empty array", cagraplan.ScanOptions{FilterJSON: `[]`}, []string{`ThreadsSearch: 0`, `BatchWindow: 0`, `GpuMultiSimulation: 0`, `KeyPartType: 0`, `Filter Predicates: []`}},
+		{"predicates", cagraplan.ScanOptions{FilterJSON: ` [ {"col":-1,"op":"=","val":9007199254740993}, {"col":0,"op":"in","vals":[1,2]} ] `}, []string{`ThreadsSearch: 0`, `BatchWindow: 0`, `GpuMultiSimulation: 0`, `KeyPartType: 0`, `Filter Predicates:  [ {"col":-1,"op":"=","val":9007199254740993}, {"col":0,"op":"in","vals":[1,2]} ] `, `Index Filter:  = 9007199254740993 AND #0 IN (1, 2)`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := cagraplan.EncodeScanOptions(tc.opts)
+			require.NoError(t, err)
+			before := append([]byte(nil), data...)
+			spec := &plan.IndexSearchScan{AlgoOptions: data}
+			got, err := Hooks{}.ExplainSettings(spec, true)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+			compact, err := Hooks{}.ExplainSettings(spec, false)
+			require.NoError(t, err)
+			if tc.name == "predicates" {
+				require.Equal(t, []string{`Index Filter:  = 9007199254740993 AND #0 IN (1, 2)`}, compact)
+			} else {
+				require.Nil(t, compact)
+			}
+			require.Equal(t, before, spec.AlgoOptions)
+		})
+	}
+	for _, spec := range []*plan.IndexSearchScan{nil, {}, {AlgoOptions: []byte(`{}`)}} {
+		got, err := Hooks{}.ExplainSettings(spec, true)
+		require.NoError(t, err)
+		require.Equal(t, []string{`ThreadsSearch: 0`, `BatchWindow: 0`, `GpuMultiSimulation: 0`, `KeyPartType: 0`}, got)
+	}
+	malformed := &plan.IndexSearchScan{AlgoOptions: []byte(`{`)}
+	got, err := Hooks{}.ExplainSettings(malformed, true)
+	require.Error(t, err)
+	require.Nil(t, got)
+	// Compact output must not add decoding or reject metadata it previously ignored.
+	got, err = Hooks{}.ExplainSettings(malformed, false)
+	require.NoError(t, err)
+	require.Nil(t, got)
 }

@@ -136,9 +136,6 @@ func NewService(
 	}
 	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
 
-	configKVMap, _ := dumpCnConfig(*cfg)
-	options = append(options, WithConfigData(configKVMap))
-
 	options = append(options, WithBootstrapOptions(
 		bootstrap.WithUpgradeTenantBatch(cfg.UpgradeTenantBatchSize),
 		bootstrap.WithKek(cfg.Frontend.KeyEncryptionKey),
@@ -205,6 +202,10 @@ func NewService(
 	for _, opt := range options {
 		opt(srv)
 	}
+	// Publish the effective configuration after constructor overrides, retaining
+	// the computed CN map's precedence over caller/common config data.
+	configKVMap, _ := dumpCnConfig(*cfg)
+	WithConfigData(configKVMap)(srv)
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
 	srv.registerServices()

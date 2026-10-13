@@ -71,11 +71,19 @@ func (Hooks) NewReaders(proc *process.Process, spec *plan.IndexSearchScan, req s
 	return ivfflat.NewPlanReaders(proc, spec, req, parallelism)
 }
 
-// ExplainSettings returns the first-round probe count.
-func (Hooks) ExplainSettings(spec *plan.IndexSearchScan) ([]string, error) {
+// ExplainSettings keeps compact text stable and exposes all static search
+// settings for detailed diagnostics.
+func (Hooks) ExplainSettings(spec *plan.IndexSearchScan, detailed bool) ([]string, error) {
 	opts, err := ivfflatplan.DecodeScanOptions(spec.GetAlgoOptions())
 	if err != nil {
 		return nil, err
 	}
-	return []string{"NProbe: " + strconv.FormatUint(uint64(opts.InitialProbeCount), 10)}, nil
+	settings := []string{"NProbe: " + strconv.FormatUint(uint64(opts.InitialProbeCount), 10)}
+	if detailed {
+		settings = append(settings,
+			"BucketExpandStep: "+strconv.FormatUint(uint64(opts.BucketExpandStep), 10),
+			"ThreadsSearch: "+strconv.FormatInt(opts.ThreadsSearch, 10),
+		)
+	}
+	return settings, nil
 }

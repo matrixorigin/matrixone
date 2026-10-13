@@ -15,6 +15,7 @@
 package search
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -153,19 +154,80 @@ func TestExplainSettingsDescribesIndexFilter(t *testing.T) {
 		Index:          &plan.IndexDef{IndexAlgoParams: `{"op_type":"vector_l2_ops","included_columns":"category,note"}`},
 		SourceTableDef: &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"}},
 	}
-	settings, err := Hooks{}.ExplainSettings(spec)
+	settings, err := Hooks{}.ExplainSettings(spec, false)
 	require.NoError(t, err)
 	require.Equal(t, []string{"Index Filter: id BETWEEN 501 AND 1000 AND note = 2"}, settings)
+	settings, err = Hooks{}.ExplainSettings(spec, true)
+	require.NoError(t, err)
+	require.Equal(t, "Index Filter: id BETWEEN 501 AND 1000 AND note = 2", settings[len(settings)-1])
 
 	spec.AlgoOptions, err = ivfpqplan.EncodeScanOptions(ivfpqplan.ScanOptions{})
 	require.NoError(t, err)
-	settings, err = Hooks{}.ExplainSettings(spec)
+	settings, err = Hooks{}.ExplainSettings(spec, false)
 	require.NoError(t, err)
 	require.Empty(t, settings)
 
 	spec.Index.IndexAlgoParams = "{"
 	spec.AlgoOptions, err = ivfpqplan.EncodeScanOptions(ivfpqplan.ScanOptions{FilterJSON: `[{"col":-1,"op":"=","val":1}]`})
 	require.NoError(t, err)
-	_, err = Hooks{}.ExplainSettings(spec)
+	// compact output prints nothing for index params it cannot decode; detailed fails
+	settings, err = Hooks{}.ExplainSettings(spec, false)
+	require.NoError(t, err)
+	require.Empty(t, settings)
+	_, err = Hooks{}.ExplainSettings(spec, true)
 	require.Error(t, err)
+}
+
+func TestExplainSettings(t *testing.T) {
+	maxUint := "18446744073709551615"
+	if strconv.IntSize == 32 {
+		maxUint = "4294967295"
+	}
+	for _, tc := range []struct {
+		name string
+		opts ivfpqplan.ScanOptions
+		want []string
+	}{
+		{"zero", ivfpqplan.ScanOptions{}, []string{`NProbe: 0`, `ThreadsSearch: 0`, `BatchWindow: 0`, `GpuMultiSimulation: 0`, `KeyPartType: 0`}},
+		{"Nprobe", ivfpqplan.ScanOptions{Nprobe: 8}, []string{`NProbe: 8`, `ThreadsSearch: 0`, `BatchWindow: 0`, `GpuMultiSimulation: 0`, `KeyPartType: 0`}},
+		{"ThreadsSearch", ivfpqplan.ScanOptions{ThreadsSearch: 8}, []string{`NProbe: 0`, `ThreadsSearch: 8`, `BatchWindow: 0`, `GpuMultiSimulation: 0`, `KeyPartType: 0`}},
+		{"BatchWindow", ivfpqplan.ScanOptions{BatchWindow: 8}, []string{`NProbe: 0`, `ThreadsSearch: 0`, `BatchWindow: 8`, `GpuMultiSimulation: 0`, `KeyPartType: 0`}},
+		{"GpuMultiSimulation", ivfpqplan.ScanOptions{GpuMultiSimulation: 8}, []string{`NProbe: 0`, `ThreadsSearch: 0`, `BatchWindow: 0`, `GpuMultiSimulation: 8`, `KeyPartType: 0`}},
+		{"KeyPartType", ivfpqplan.ScanOptions{KeyPartType: 8}, []string{`NProbe: 0`, `ThreadsSearch: 0`, `BatchWindow: 0`, `GpuMultiSimulation: 0`, `KeyPartType: 8`}},
+		{"maximum signed", ivfpqplan.ScanOptions{ThreadsSearch: 9223372036854775807, BatchWindow: 9223372036854775807, GpuMultiSimulation: 9223372036854775807, KeyPartType: 2147483647}, []string{"NProbe: 0", "ThreadsSearch: 9223372036854775807", "BatchWindow: 9223372036854775807", "GpuMultiSimulation: 9223372036854775807", "KeyPartType: 2147483647"}},
+		{"integer boundaries", ivfpqplan.ScanOptions{ThreadsSearch: -9223372036854775808, BatchWindow: -9223372036854775808, GpuMultiSimulation: -9223372036854775808, KeyPartType: -2147483648, Nprobe: ^uint(0)}, []string{`NProbe: ` + maxUint + ``, `ThreadsSearch: -9223372036854775808`, `BatchWindow: -9223372036854775808`, `GpuMultiSimulation: -9223372036854775808`, `KeyPartType: -2147483648`}},
+		{"empty array", ivfpqplan.ScanOptions{FilterJSON: `[]`}, []string{`NProbe: 0`, `ThreadsSearch: 0`, `BatchWindow: 0`, `GpuMultiSimulation: 0`, `KeyPartType: 0`, `Filter Predicates: []`}},
+		{"predicates", ivfpqplan.ScanOptions{FilterJSON: ` [ {"col":-1,"op":"=","val":9007199254740993}, {"col":0,"op":"in","vals":[1,2]} ] `}, []string{`NProbe: 0`, `ThreadsSearch: 0`, `BatchWindow: 0`, `GpuMultiSimulation: 0`, `KeyPartType: 0`, `Filter Predicates:  [ {"col":-1,"op":"=","val":9007199254740993}, {"col":0,"op":"in","vals":[1,2]} ] `, `Index Filter:  = 9007199254740993 AND #0 IN (1, 2)`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := ivfpqplan.EncodeScanOptions(tc.opts)
+			require.NoError(t, err)
+			before := append([]byte(nil), data...)
+			spec := &plan.IndexSearchScan{AlgoOptions: data}
+			got, err := Hooks{}.ExplainSettings(spec, true)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+			compact, err := Hooks{}.ExplainSettings(spec, false)
+			require.NoError(t, err)
+			if tc.name == "predicates" {
+				require.Equal(t, []string{`Index Filter:  = 9007199254740993 AND #0 IN (1, 2)`}, compact)
+			} else {
+				require.Nil(t, compact)
+			}
+			require.Equal(t, before, spec.AlgoOptions)
+		})
+	}
+	for _, spec := range []*plan.IndexSearchScan{nil, {}, {AlgoOptions: []byte(`{}`)}} {
+		got, err := Hooks{}.ExplainSettings(spec, true)
+		require.NoError(t, err)
+		require.Equal(t, []string{`NProbe: 0`, `ThreadsSearch: 0`, `BatchWindow: 0`, `GpuMultiSimulation: 0`, `KeyPartType: 0`}, got)
+	}
+	malformed := &plan.IndexSearchScan{AlgoOptions: []byte(`{`)}
+	got, err := Hooks{}.ExplainSettings(malformed, true)
+	require.Error(t, err)
+	require.Nil(t, got)
+	// Compact output must not add decoding or reject metadata it previously ignored.
+	got, err = Hooks{}.ExplainSettings(malformed, false)
+	require.NoError(t, err)
+	require.Nil(t, got)
 }
