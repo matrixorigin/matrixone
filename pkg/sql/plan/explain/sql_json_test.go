@@ -606,6 +606,7 @@ func TestBuildSQLJSONPlanPreservesVectorIndexPayload(t *testing.T) {
 		"direction=INTERNAL",
 		"post_filter_over_fetch=false",
 		"query_payload=1",
+		"query_vector=1",
 		"candidate_limit=10",
 		"pre_filter[0]=2",
 		"first_round_limit=4",
@@ -752,10 +753,66 @@ func TestBuildSQLJSONPlanPreservesVectorExecutionSettings(t *testing.T) {
 	high := buildExpressions(`{"initial_probe_count":16,"bucket_expand_step":8}`, plan.OrderBySpec_DESC, true)
 	require.NotEqual(t, low, high)
 	require.Contains(t, low, `algo_options={"initial_probe_count":1}`)
+	require.Contains(t, low, "initial_probe_count=1")
 	require.Contains(t, low, "direction=ASC")
 	require.Contains(t, high, `algo_options={"initial_probe_count":16,"bucket_expand_step":8}`)
+	require.Contains(t, high, "initial_probe_count=16")
+	require.Contains(t, high, "bucket_expand_step=8")
 	require.Contains(t, high, "direction=DESC")
 	require.Contains(t, high, "post_filter_over_fetch=true")
+}
+
+func TestBuildSQLJSONVectorScanPreservesBVTLabels(t *testing.T) {
+	for _, tt := range []struct {
+		value            float32
+		options, pattern string
+	}{
+		{1, `{"initial_probe_count":1}`, `(?s)Vector Index Scan.*query_vector=0x0000803F0000803F0000803F`},
+		{2, `{"initial_probe_count":1}`, `(?s)Vector Index Scan.*query_vector=0x000000400000004000000040`},
+		{1, `{"initial_probe_count":16}`, `(?s)Vector Index Scan.*initial_probe_count=16`},
+	} {
+		payload := types.ArrayToBytes([]float32{tt.value, tt.value, tt.value})
+		data, err := BuildSQLJSONPlan(t.Context(), &plan.Query{
+			StmtType: plan.Query_SELECT,
+			Steps:    []int32{0},
+			Nodes: []*plan.Node{{
+				NodeId:   0,
+				NodeType: plan.Node_INDEX_SEARCH_SCAN,
+				IndexSearchScan: &plan.IndexSearchScan{
+					Index:            &plan.IndexDef{IndexName: "ix"},
+					DistanceFunction: "l2_distance",
+					AlgoOptions:      []byte(tt.options),
+					QueryPayload: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+						IsBin: true,
+						Value: &plan.Literal_Sval{Sval: string(payload)},
+					}}},
+				},
+			}},
+		})
+		require.NoError(t, err)
+		// These are the original three failing BVT regexes, unchanged.
+		require.Regexp(t, tt.pattern, string(data))
+	}
+}
+
+func TestSQLJSONIndexSearchLegacyOptionAliases(t *testing.T) {
+	options := []byte(`{"threads_search":9223372036854775807,"bucket_expand_step":8,"initial_probe_count":16,"future_option":{"x":1}}`)
+	values, err := sqlJSONIndexSearchExpressions(t.Context(), &plan.IndexSearchScan{
+		Index:       &plan.IndexDef{IndexName: "ix"},
+		AlgoOptions: options,
+	}, &ExplainOptions{Format: EXPLAIN_FORMAT_TEXT})
+	require.NoError(t, err)
+	require.Contains(t, values, "algo_options="+string(options))
+	require.Contains(t, values, "initial_probe_count=16")
+	require.Contains(t, values, "bucket_expand_step=8")
+	require.Contains(t, values, "threads_search=9223372036854775807")
+	// Generic options remain opaque if an algorithm adopts a non-JSON codec.
+	values, err = sqlJSONIndexSearchExpressions(t.Context(), &plan.IndexSearchScan{
+		Index:       &plan.IndexDef{IndexName: "ix"},
+		AlgoOptions: []byte("future-codec"),
+	}, &ExplainOptions{Format: EXPLAIN_FORMAT_TEXT})
+	require.NoError(t, err)
+	require.Contains(t, values, "algo_options=future-codec")
 }
 
 func TestBuildSQLJSONPlanPreservesVectorIndexDistanceRange(t *testing.T) {

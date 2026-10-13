@@ -643,6 +643,18 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 	)
 	if len(spec.AlgoOptions) != 0 {
 		values = append(values, "algo_options="+string(spec.AlgoOptions))
+		// Retain the established vector EXPLAIN names without binding this
+		// generic plan formatter to a particular algorithm's option struct.
+		// RawMessage avoids rounding large integral settings through float64.
+		// The opaque payload remains available even for a future non-JSON codec.
+		var staticOptions map[string]json.RawMessage
+		if json.Unmarshal(spec.AlgoOptions, &staticOptions) == nil {
+			for _, name := range []string{"initial_probe_count", "bucket_expand_step", "threads_search"} {
+				if value, ok := staticOptions[name]; ok {
+					values = append(values, name+"="+string(value))
+				}
+			}
+		}
 	}
 	for i, column := range spec.IncludedColumns {
 		values = append(values, "included_column["+strconv.Itoa(i)+"]="+column)
@@ -660,6 +672,11 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 		}
 		if value != "" {
 			values = append(values, field.name+"="+value)
+			if field.name == "query_payload" && spec.DistanceFunction != "" {
+				// QueryPayload is the generic plan field; vector scans retain
+				// query_vector as a compatibility alias in JSON EXPLAIN.
+				values = append(values, "query_vector="+value)
+			}
 		}
 	}
 	if spec.DistanceRange != nil {
