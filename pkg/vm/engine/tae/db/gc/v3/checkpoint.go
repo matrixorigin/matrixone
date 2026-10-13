@@ -1463,7 +1463,12 @@ func (c *checkpointCleaner) scanCheckpointsAsDebugWindow(
 	ckps []*checkpoint.CheckpointEntry,
 	buffer *containers.OneSchemaBatchBuffer,
 ) (window *GCWindow, err error) {
-	window = NewGCWindow(c.mp, c.fs, WithWindowDir("debug/"))
+	window = NewGCWindow(
+		c.mp,
+		c.fs,
+		WithWindowDir("debug/"),
+		WithUnpublishedCleanup(c.retainUnpublishedObjects),
+	)
 	if _, err = window.ScanCheckpoints(
 		c.ctx, ckps, c.getCkpReader, nil, nil, buffer,
 	); err != nil {
@@ -2680,7 +2685,11 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		return
 	}
 
-	gcWindow = NewGCWindow(c.mp, c.fs)
+	gcWindow = NewGCWindow(
+		c.mp,
+		c.fs,
+		WithUnpublishedCleanup(c.retainUnpublishedObjects),
+	)
 	var gcMetaFile string
 	if gcMetaFile, err = gcWindow.ScanCheckpoints(
 		ctx,
@@ -2707,6 +2716,31 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		),
 	)
 	return
+}
+
+func (c *checkpointCleaner) retainUnpublishedObjects(
+	ctx context.Context,
+	files []string,
+) error {
+	seen := make(map[string]struct{}, len(files))
+	var err error
+	for _, file := range files {
+		if file == "" {
+			continue
+		}
+		if _, ok := seen[file]; ok {
+			continue
+		}
+		seen[file] = struct{}{}
+		_, prepareErr := c.PrepareUnpublishedObject(ctx, 0, 0, false, file)
+		if prepareErr != nil {
+			err = errors.Join(err, prepareErr)
+		}
+		// The scan has already lost its in-memory sinker owner. Transfer the
+		// durable marker to the cleaner even when marker creation was ambiguous.
+		c.AbandonUnpublishedObject(file)
+	}
+	return err
 }
 
 func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(

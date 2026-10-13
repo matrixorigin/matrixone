@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -58,6 +59,14 @@ func WithWindowDir(dir string) WindowOption {
 	}
 }
 
+func WithUnpublishedCleanup(
+	cleanup func(context.Context, []string) error,
+) WindowOption {
+	return func(window *GCWindow) {
+		window.retainUnpublished = cleanup
+	}
+}
+
 func NewGCWindow(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
@@ -80,6 +89,8 @@ type GCWindow struct {
 	dir string
 	mp  *mpool.MPool
 	fs  fileservice.FileService
+
+	retainUnpublished func(context.Context, []string) error
 
 	files []objectio.ObjectStats
 
@@ -257,8 +268,27 @@ func (w *GCWindow) ScanCheckpoints(
 	transferred := false
 	defer func() {
 		if !transferred {
-			if _, cleanupErr := sinker.DeletePersisted(ctx); cleanupErr != nil {
-				err = errors.Join(err, cleanupErr)
+			metaCleanupErr := w.deleteMeta(ctx, metaFile)
+			if metaCleanupErr != nil {
+				err = errors.Join(err, metaCleanupErr)
+				if w.retainUnpublished != nil {
+					persisted, _ := sinker.GetResult()
+					if retainErr := w.retainUnpublished(
+						ctx, objectStatsNames(persisted),
+					); retainErr != nil {
+						err = errors.Join(err, retainErr)
+					}
+				}
+			} else {
+				files, cleanupErr := sinker.DeletePersisted(ctx)
+				if cleanupErr != nil {
+					err = errors.Join(err, cleanupErr)
+					if w.retainUnpublished != nil {
+						if retainErr := w.retainUnpublished(ctx, files); retainErr != nil {
+							err = errors.Join(err, retainErr)
+						}
+					}
+				}
 			}
 		}
 		if closeErr := sinker.Close(); closeErr != nil {
@@ -349,10 +379,29 @@ func (w *GCWindow) writeMetaForRemainings(
 		return "", err
 	}
 	if _, err := writer.WriteWithoutSeqnum(ret); err != nil {
-		return "", err
+		return name, err
 	}
 	_, err = writer.WriteEnd(ctx)
 	return name, err
+}
+
+func (w *GCWindow) deleteMeta(ctx context.Context, name string) error {
+	if name == "" || w.fs == nil {
+		return nil
+	}
+	err := w.fs.Delete(ctx, ioutil.MakeFullName(w.dir, name))
+	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+		return nil
+	}
+	return err
+}
+
+func objectStatsNames(stats []objectio.ObjectStats) []string {
+	files := make([]string, 0, len(stats))
+	for _, stat := range stats {
+		files = append(files, stat.ObjectName().String())
+	}
+	return files
 }
 
 func (w *GCWindow) Merge(o *GCWindow) {

@@ -502,6 +502,93 @@ func NewSnapshotMeta() *SnapshotMeta {
 	return meta
 }
 
+type snapshotMetaState struct {
+	objects          map[uint64]map[objectio.Segmentid]*objectInfo
+	tombstones       map[uint64]map[objectio.Segmentid]*objectInfo
+	aobjDelTsMap     map[types.TS]struct{}
+	pitr             specialTableInfo
+	iscp             specialTableInfo
+	tables           map[uint32]map[uint64]*tableInfo
+	tableIDIndex     map[uint64]*tableInfo
+	tablePKIndex     map[string][]*tableInfo
+	snapshotTableIDs map[uint64]struct{}
+}
+
+func cloneObjectInfoMaps(
+	objects map[uint64]map[objectio.Segmentid]*objectInfo,
+) map[uint64]map[objectio.Segmentid]*objectInfo {
+	cloned := make(map[uint64]map[objectio.Segmentid]*objectInfo, len(objects))
+	for tid, infos := range objects {
+		cloned[tid] = make(map[objectio.Segmentid]*objectInfo, len(infos))
+		for id, info := range infos {
+			copyInfo := *info
+			cloned[tid][id] = &copyInfo
+		}
+	}
+	return cloned
+}
+
+func (sm *SnapshotMeta) cloneStateLocked() snapshotMetaState {
+	state := snapshotMetaState{
+		objects:          cloneObjectInfoMaps(sm.objects),
+		tombstones:       cloneObjectInfoMaps(sm.tombstones),
+		aobjDelTsMap:     make(map[types.TS]struct{}, len(sm.aobjDelTsMap)),
+		pitr:             *sm.pitr.clone(),
+		iscp:             *sm.iscp.clone(),
+		tables:           make(map[uint32]map[uint64]*tableInfo, len(sm.tables)),
+		tableIDIndex:     make(map[uint64]*tableInfo, len(sm.tableIDIndex)),
+		tablePKIndex:     make(map[string][]*tableInfo, len(sm.tablePKIndex)),
+		snapshotTableIDs: make(map[uint64]struct{}, len(sm.snapshotTableIDs)),
+	}
+	for ts := range sm.aobjDelTsMap {
+		state.aobjDelTsMap[ts] = struct{}{}
+	}
+	for tid := range sm.snapshotTableIDs {
+		state.snapshotTableIDs[tid] = struct{}{}
+	}
+
+	tableCopies := make(map[*tableInfo]*tableInfo)
+	cloneTable := func(info *tableInfo) *tableInfo {
+		if info == nil {
+			return nil
+		}
+		if copyInfo, ok := tableCopies[info]; ok {
+			return copyInfo
+		}
+		copyInfo := *info
+		tableCopies[info] = &copyInfo
+		return &copyInfo
+	}
+	for account, infos := range sm.tables {
+		state.tables[account] = make(map[uint64]*tableInfo, len(infos))
+		for tid, info := range infos {
+			state.tables[account][tid] = cloneTable(info)
+		}
+	}
+	for tid, info := range sm.tableIDIndex {
+		state.tableIDIndex[tid] = cloneTable(info)
+	}
+	for pk, infos := range sm.tablePKIndex {
+		state.tablePKIndex[pk] = make([]*tableInfo, len(infos))
+		for i, info := range infos {
+			state.tablePKIndex[pk][i] = cloneTable(info)
+		}
+	}
+	return state
+}
+
+func (sm *SnapshotMeta) restoreStateLocked(state snapshotMetaState) {
+	sm.objects = state.objects
+	sm.tombstones = state.tombstones
+	sm.aobjDelTsMap = state.aobjDelTsMap
+	sm.pitr = state.pitr
+	sm.iscp = state.iscp
+	sm.tables = state.tables
+	sm.tableIDIndex = state.tableIDIndex
+	sm.tablePKIndex = state.tablePKIndex
+	sm.snapshotTableIDs = state.snapshotTableIDs
+}
+
 func copyObjectsLocked(
 	objects map[uint64]map[objectio.Segmentid]*objectInfo,
 ) map[uint64]map[objectio.Segmentid]*objectInfo {
@@ -875,6 +962,12 @@ func (sm *SnapshotMeta) Update(
 ) (err error) {
 	sm.Lock()
 	defer sm.Unlock()
+	previous := sm.cloneStateLocked()
+	defer func() {
+		if err != nil {
+			sm.restoreStateLocked(previous)
+		}
+	}()
 
 	start := time.Now()
 	defer func() {
