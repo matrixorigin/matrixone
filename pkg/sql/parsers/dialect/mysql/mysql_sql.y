@@ -70,6 +70,8 @@ func sqlTaskInt64(v any) int64 {
     }
 }
 
+const restoreSnapshotFromSyntaxHint = `FROM SNAPSHOT is not supported; use RESTORE DATABASE [account.]database{snapshot="snapshot_name"}`
+
 func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.OrderBy, frame *tree.FrameClause) *tree.WindowSpec {
     hasFrame := frame != nil
     if frame == nil {
@@ -702,7 +704,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <selectInto> select_into_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
-%type <str> json_type_opt restore_snapshot_name restore_to_account_name_opt
+%type <str> json_type_opt restore_snapshot_name restore_snapshot_from_name restore_to_account_name_opt
 
 // case statement
 %type <statement> case_stmt
@@ -1587,6 +1589,16 @@ snapshot_restore_stmt:
 
         $$ = result
     }
+|   RESTORE DATABASE ident FROM SNAPSHOT restore_snapshot_from_name
+    {
+        yylex.Error(restoreSnapshotFromSyntaxHint)
+        goto ret1
+    }
+|   RESTORE DATABASE ident '.' ident FROM SNAPSHOT restore_snapshot_from_name
+    {
+        yylex.Error(restoreSnapshotFromSyntaxHint)
+        goto ret1
+    }
 |   RESTORE TABLE restore_table_scope restore_snapshot_name restore_to_account_name_opt
     {
         var account tree.Identifier
@@ -1645,6 +1657,11 @@ snapshot_restore_stmt:
 
         $$ = result
     }
+|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT restore_snapshot_from_name
+    {
+        yylex.Error(restoreSnapshotFromSyntaxHint)
+        goto ret1
+    }
 
 restore_db_scope:
     ident
@@ -1684,6 +1701,16 @@ restore_snapshot_name:
 |   '{' SNAPSHOT '=' STRING '}'
     {
         $$ = strings.ToLower($4)
+    }
+
+restore_snapshot_from_name:
+    ident
+    {
+        $$ = $1.Compare()
+    }
+|   STRING
+    {
+        $$ = $1
     }
 
 restore_to_account_name_opt:
