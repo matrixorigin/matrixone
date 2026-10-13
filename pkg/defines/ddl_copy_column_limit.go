@@ -16,8 +16,9 @@ package defines
 
 import (
 	"context"
-	"errors"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type alterCopyColumnLimitKey struct{}
@@ -91,16 +92,16 @@ func WithAlterCopyPartitionColumnLimit(ctx context.Context, database, parent str
 		return ctx, nil
 	}
 	if grant.derived || database != grant.database || strings.ToLower(parent) != grant.parent {
-		return nil, errors.New("partition COPY column allowance owner mismatch")
+		return nil, moerr.NewInternalError(ctx, "partition COPY column allowance owner mismatch")
 	}
 	names := make(map[string]struct{}, len(children))
 	for _, child := range children {
 		name := strings.ToLower(child)
 		if name == "" || name == grant.parent {
-			return nil, errors.New("invalid partition COPY column allowance target")
+			return nil, moerr.NewInternalError(ctx, "invalid partition COPY column allowance target")
 		}
 		if _, exists := names[name]; exists {
-			return nil, errors.New("duplicate partition COPY column allowance target")
+			return nil, moerr.NewInternalError(ctx, "duplicate partition COPY column allowance target")
 		}
 		names[name] = struct{}{}
 	}
