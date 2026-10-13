@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -34,8 +35,19 @@ func CheckExclusiveWrite(fs FileService) error {
 		return nil
 	case *S3FS:
 		switch f.rawStorage.(type) {
-		case *AwsSDKv2, *MinioSDK, *diskObjectStorage, *HDFS:
+		case *AwsSDKv2, *diskObjectStorage:
 			return nil
+		}
+		if storage, ok := f.rawStorage.(*MinioSDK); ok {
+			endpoint := strings.ToLower(storage.endpoint)
+			// These cloud endpoints are routed through the MinIO SDK for
+			// compatibility, but their conditional-PUT behavior has not been
+			// verified. Do not treat SDK selection as a capability guarantee.
+			if !strings.Contains(endpoint, "ctyunapi.cn") &&
+				!strings.Contains(endpoint, "myqcloud.com") &&
+				!strings.Contains(endpoint, "aliyuncs.com") {
+				return nil
+			}
 		}
 	}
 	return moerr.NewNotSupportedNoCtxf("exclusive publication for %T", fs)

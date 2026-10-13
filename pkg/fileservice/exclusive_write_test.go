@@ -189,6 +189,15 @@ func TestWriteExclusiveObjectStorage(t *testing.T) {
 
 func TestWriteExclusiveRejectsUnsupported(t *testing.T) {
 	require.Error(t, CheckExclusiveWrite(&S3FS{rawStorage: &AliyunSDK{}}))
+	require.Error(t, CheckExclusiveWrite(&S3FS{rawStorage: &QCloudSDK{}}))
+	require.Error(t, CheckExclusiveWrite(&S3FS{rawStorage: &HDFS{}}))
+	for _, endpoint := range []string{
+		"cos.ap-guangzhou.myqcloud.com",
+		"oss-cn-shenzhen.aliyuncs.com",
+		"tos-cn-shanghai.ctyunapi.cn",
+	} {
+		require.Error(t, CheckExclusiveWrite(&S3FS{rawStorage: &MinioSDK{endpoint: endpoint}}), endpoint)
+	}
 	fs, err := NewLocalETLFS("etl", t.TempDir())
 	require.NoError(t, err)
 	defer fs.Close(context.Background())
