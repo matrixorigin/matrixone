@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -145,6 +146,61 @@ func TestCOMStmtPreparedNullWithoutSourceTypes(t *testing.T) {
 					require.NoError(t, err)
 					require.Equal(t, originalPlan, after, "execution must not mutate the cached prepare plan")
 				})
+			}
+		})
+	}
+}
+
+func TestCOMStmtMixedIntegerComparisonWidths(t *testing.T) {
+	for _, op := range []string{"=", "!=", "<", ">", "<=", ">="} {
+		t.Run(op, func(t *testing.T) {
+			query := "select ? " + op + " cast(18446744073709551615 as bigint unsigned)"
+			ses, stmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 30041, query)
+			t.Cleanup(func() { cw.proc.SetPrepareParams(nil); stmt.Close() })
+			proto, _, scratch := newBinaryPrepareProtocolTestCase(t, query)
+			t.Cleanup(scratch.Close)
+			original, err := stmt.PreparePlan.Marshal()
+			require.NoError(t, err)
+			for _, width := range []struct {
+				tp   defines.MysqlType
+				size int
+			}{{defines.MYSQL_TYPE_TINY, 1}, {defines.MYSQL_TYPE_SHORT, 2}, {defines.MYSQL_TYPE_LONG, 4}, {defines.MYSQL_TYPE_LONGLONG, 8}} {
+				for _, unsigned := range []bool{false, true} {
+					for _, value := range []uint64{^uint64(0), 0, ^uint64(0) - 1} {
+						func() {
+							packet := make([]byte, 9+width.size)
+							copy(packet, []byte{0, 1, 0, 0, 0, 0, 1, byte(width.tp), 0})
+							if unsigned {
+								packet[8] = 0x80
+							}
+							var encoded [8]byte
+							binary.LittleEndian.PutUint64(encoded[:], value)
+							copy(packet[9:], encoded[:width.size])
+							require.NoError(t, proto.ParseExecuteData(execCtx.reqCtx, cw.proc, stmt, packet, 0))
+							_, pn, executionStmt, _, owned, err := initExecuteStmtParam(execCtx, ses, cw, nil, stmt.Name)
+							require.NoError(t, err)
+							defer func() {
+								if owned && executionStmt != nil {
+									executionStmt.Free()
+								}
+								stmt.clearBinaryParamState(cw.proc)
+							}()
+							q := pn.GetQuery()
+							expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+							executor, err := colexec.NewExpressionExecutor(cw.proc, expr)
+							require.NoError(t, err)
+							defer executor.Free()
+							result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+							require.NoError(t, err)
+							equal := unsigned && width.size == 8 && value == ^uint64(0)
+							want := map[string]bool{"=": equal, "!=": !equal, "<": !equal, ">": false, "<=": true, ">=": equal}[op]
+							require.Equal(t, want, vector.GetFixedAtNoTypeCheck[bool](result, 0), "wire=%v unsigned=%v value=%v", width.tp, unsigned, value)
+							after, err := stmt.PreparePlan.Marshal()
+							require.NoError(t, err)
+							require.Equal(t, original, after)
+						}()
+					}
+				}
 			}
 		})
 	}
