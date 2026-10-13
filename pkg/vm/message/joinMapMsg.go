@@ -426,7 +426,7 @@ func (f *SpillFile) Close() error {
 		closeErr = fd.Close()
 	}
 	if f.remove != nil {
-		if err := f.remove(); err != nil {
+		if err := f.remove(); err != nil && !errors.Is(err, os.ErrNotExist) {
 			// Keep the remover and disk reservation until the physical file is gone.
 			return errors.Join(closeErr, err)
 		}

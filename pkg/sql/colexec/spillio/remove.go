@@ -16,6 +16,8 @@ package spillio
 
 import (
 	"context"
+	"errors"
+	"os"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -31,7 +33,7 @@ func RemoveFileWithRetry(fs fileservice.MutableFileService, name string) error {
 			time.Sleep(5 * time.Millisecond)
 		}
 		err = fs.RemoveFile(context.Background(), name)
-		if err == nil {
+		if err == nil || errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 	}

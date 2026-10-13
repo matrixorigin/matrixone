@@ -115,6 +115,14 @@ func TestSpillFileCloseRetriesRemovalBeforeReleasingDisk(t *testing.T) {
 	require.Equal(t, int32(1), releases.Load())
 }
 
+func TestSpillFileCloseReleasesDiskWhenFileAlreadyGone(t *testing.T) {
+	var released atomic.Int32
+	file := NewReopenableSpillFile(nil, func() error { return os.ErrNotExist }, 1, 1, func() { released.Add(1) })
+	require.NoError(t, file.Close())
+	require.NoError(t, file.Close())
+	require.Equal(t, int32(1), released.Load())
+}
+
 func TestSpillBuildPayloadRetainsOnlyFilesNeedingCleanup(t *testing.T) {
 	var releases atomic.Int32
 	failed, failedName, failedCalls := newRetryCleanupSpillFile(t, 1, &releases)
