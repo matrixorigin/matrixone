@@ -301,7 +301,7 @@ make dev-restart-cn1       # 仅重启 CN1（快速！）
 
 ### ⚙️ 从源码构建
 
-从源码构建 MatrixOne，适用于开发、定制或参与贡献。需要 Go 1.22、GCC/Clang、Git 和 Make。
+从源码构建 MatrixOne，适用于开发、定制或参与贡献。需要 Go 1.26.4 或更高版本、GCC/Clang、Git 和 Make；具体版本以同一分支的 go.mod 和 BUILD.md 为准。
 
 📖 **[完整源码构建指南 →](BUILD.md)**
 
