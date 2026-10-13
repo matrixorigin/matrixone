@@ -7,8 +7,11 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +20,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 type staticDrainStateReader struct {
@@ -79,6 +87,22 @@ func TestWaitForDrainRejectsGroupOffsetBehindSinkAndLogEnd(t *testing.T) {
 	}
 }
 
+func TestWaitForDrainRejectsRESTOffsetBehindSinkAndLogEnd(t *testing.T) {
+	reader := staticDrainStateReader{
+		rowsValue:        sortedRows(expectedFinalRows()),
+		restOffsetValue:  6,
+		groupOffsetValue: 7,
+		groupFound:       true,
+		logEndValue:      7,
+		logEndFound:      true,
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Millisecond)
+	defer cancel()
+	if _, err := waitForDrain(ctx, reader, expectedFinalRows(), 7); err == nil {
+		t.Fatal("waitForDrain accepted a lagging Connect REST offset")
+	}
+}
+
 func TestPhaseReportIncludesZeroOffsets(t *testing.T) {
 	data, err := json.Marshal(phase{})
 	if err != nil {
@@ -111,6 +135,10 @@ func TestRunResultMarksFailedReport(t *testing.T) {
 	}
 	if got.Status != "failed" || got.Error != "sink offset did not reach the expected value" {
 		t.Fatalf("failed run report = %+v, want failed status and error", got)
+	}
+	setRunResult(&report, nil)
+	if report.Status != "passed" || report.Error != "sink offset did not reach the expected value" {
+		t.Fatalf("successful run result = %+v, want passed status", report)
 	}
 }
 
@@ -373,4 +401,914 @@ func TestJSONConverterEnvelopesPreserveKeyAndNullSemantics(t *testing.T) {
 			}
 		})
 	}
+}
+
+type recoveryTestEvent struct {
+	offset      int64
+	value       *row
+	tombstoneID *int64
+}
+
+type recoveryTestRuntime struct {
+	rowsValue        []row
+	rowsByID         map[int64]row
+	events           []recoveryTestEvent
+	nextOffset       int64
+	groupOffsetValue int64
+	restOffsetValue  int64
+	groupFound       bool
+	workerStopped    bool
+	actions          []string
+	prepareErr       error
+	createTopicErr   error
+}
+
+func (r *recoveryTestRuntime) prepareTarget(context.Context) error {
+	r.actions = append(r.actions, "prepare")
+	if r.prepareErr != nil {
+		return r.prepareErr
+	}
+	r.rowsByID = make(map[int64]row)
+	r.rowsValue = nil
+	r.events = nil
+	r.nextOffset = 0
+	r.groupOffsetValue = 0
+	r.restOffsetValue = 0
+	r.groupFound = false
+	r.workerStopped = false
+	return nil
+}
+
+func (r *recoveryTestRuntime) createTopic(context.Context) error {
+	r.actions = append(r.actions, "topic")
+	return r.createTopicErr
+}
+
+func (r *recoveryTestRuntime) produceRows(_ context.Context, values []row) ([]producedRecord, error) {
+	records := make([]producedRecord, 0, len(values))
+	for _, value := range values {
+		copyValue := value
+		r.events = append(r.events, recoveryTestEvent{offset: r.nextOffset, value: &copyValue})
+		records = append(records, producedRecord{Partition: 0, Offset: r.nextOffset, ID: value.ID})
+		r.nextOffset++
+		if !r.workerStopped {
+			r.apply(r.events[len(r.events)-1])
+		}
+	}
+	if !r.workerStopped {
+		r.groupOffsetValue = r.nextOffset
+		r.restOffsetValue = r.nextOffset
+		r.groupFound = true
+	}
+	r.actions = append(r.actions, "produce")
+	return records, nil
+}
+
+func (r *recoveryTestRuntime) produceTombstone(_ context.Context, id int64) ([]producedRecord, error) {
+	idCopy := id
+	r.events = append(r.events, recoveryTestEvent{offset: r.nextOffset, tombstoneID: &idCopy})
+	record := producedRecord{Partition: 0, Offset: r.nextOffset, ID: id, Tombstone: true}
+	r.nextOffset++
+	if !r.workerStopped {
+		r.apply(r.events[len(r.events)-1])
+		r.groupOffsetValue = r.nextOffset
+		r.restOffsetValue = r.nextOffset
+		r.groupFound = true
+	}
+	r.actions = append(r.actions, "tombstone")
+	return []producedRecord{record}, nil
+}
+
+func (r *recoveryTestRuntime) killWorker(context.Context) error {
+	r.workerStopped = true
+	r.actions = append(r.actions, "kill")
+	return nil
+}
+
+func (r *recoveryTestRuntime) startWorker(context.Context) error {
+	r.workerStopped = false
+	r.rowsByID = make(map[int64]row)
+	for _, event := range r.events {
+		r.apply(event)
+	}
+	r.groupOffsetValue = r.nextOffset
+	r.restOffsetValue = r.nextOffset
+	r.groupFound = true
+	r.actions = append(r.actions, "start")
+	return nil
+}
+
+func (r *recoveryTestRuntime) rows(context.Context) ([]row, error) {
+	return append([]row(nil), r.rowsValue...), nil
+}
+
+func (r *recoveryTestRuntime) restOffset(context.Context) (int64, error) {
+	return r.restOffsetValue, nil
+}
+
+func (r *recoveryTestRuntime) groupOffset(context.Context) (int64, bool, error) {
+	return r.groupOffsetValue, r.groupFound, nil
+}
+
+func (r *recoveryTestRuntime) logEndOffset(context.Context) (int64, bool, error) {
+	return r.nextOffset, r.nextOffset > 0, nil
+}
+
+func (r *recoveryTestRuntime) apply(event recoveryTestEvent) {
+	if event.tombstoneID != nil {
+		delete(r.rowsByID, *event.tombstoneID)
+	} else if event.value != nil {
+		r.rowsByID[event.value.ID] = *event.value
+	}
+	values := make([]row, 0, len(r.rowsByID))
+	for _, value := range r.rowsByID {
+		values = append(values, value)
+	}
+	r.rowsValue = sortedRows(values)
+}
+
+type recoveryTestConnect struct {
+	runtime      *recoveryTestRuntime
+	state        string
+	patchErr     error
+	actions      []string
+	registers    int
+	patchStopped bool
+	stoppedSeen  bool
+}
+
+func (c *recoveryTestConnect) handler(w http.ResponseWriter, request *http.Request) {
+	writeJSON := func(value any) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(value)
+	}
+	switch {
+	case request.Method == http.MethodPost && request.URL.Path == "/connectors":
+		c.registers++
+		c.actions = append(c.actions, "register")
+		c.state = "RUNNING"
+		w.WriteHeader(http.StatusCreated)
+	case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/status"):
+		statusState := c.state
+		if c.state == "STOPPING" {
+			c.state = "STOPPED"
+		} else if statusState == "STOPPED" {
+			c.stoppedSeen = true
+		}
+		writeJSON(connectorStatusResponse{
+			Connector: connectorStatus{Name: "fixture", State: statusState, Worker: "worker-0"},
+			Tasks:     []taskStatus{{ID: 0, State: statusState, Worker: "worker-0"}},
+		})
+	case request.Method == http.MethodPut && strings.HasSuffix(request.URL.Path, "/stop"):
+		c.actions = append(c.actions, "stop")
+		c.state = "STOPPING"
+		w.WriteHeader(http.StatusAccepted)
+	case request.Method == http.MethodPut && strings.HasSuffix(request.URL.Path, "/resume"):
+		c.actions = append(c.actions, "resume")
+		c.state = "RUNNING"
+		c.runtime.restOffsetValue = c.runtime.nextOffset
+		w.WriteHeader(http.StatusAccepted)
+	case request.Method == http.MethodPatch && strings.HasSuffix(request.URL.Path, "/offsets"):
+		c.actions = append(c.actions, "patch")
+		if c.state != "STOPPED" {
+			http.Error(w, "connector is not stopped", http.StatusConflict)
+			return
+		}
+		if c.patchErr != nil {
+			http.Error(w, c.patchErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		var offsets connectorOffsets
+		if err := json.NewDecoder(request.Body).Decode(&offsets); err != nil || len(offsets.Offsets) != 1 || offsets.Offsets[0].Offset == nil {
+			http.Error(w, "malformed offsets", http.StatusBadRequest)
+			return
+		}
+		c.runtime.restOffsetValue = offsets.Offsets[0].Offset.KafkaOffset
+		c.patchStopped = true
+		w.WriteHeader(http.StatusAccepted)
+	case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/offsets"):
+		writeJSON(connectorOffsets{Offsets: []connectorOffset{{
+			Partition: offsetPartition{KafkaTopic: topicName, KafkaPartition: 0},
+			Offset:    &offsetValue{KafkaOffset: c.runtime.restOffsetValue},
+		}}})
+	default:
+		http.NotFound(w, request)
+	}
+}
+
+func newRecoveryFixture(t *testing.T, patchErr error) (*recoveryTestRuntime, *recoveryTestConnect, connectClient, runOptions, *runReport, func()) {
+	t.Helper()
+	runtime := &recoveryTestRuntime{}
+	serverState := &recoveryTestConnect{runtime: runtime, patchErr: patchErr}
+	server := httptest.NewServer(http.HandlerFunc(serverState.handler))
+	opts := runOptions{connectorName: "fixture", reportDir: t.TempDir(), phaseTimeout: 3 * time.Second}
+	report := &runReport{SinkConsumerGroup: "connect-fixture", Phases: []phase{}}
+	connect := connectClient{base: server.URL, client: server.Client()}
+	return runtime, serverState, connect, opts, report, server.Close
+}
+
+func TestRunRecoveryExercisesSuccessfulRecoveryAndReplay(t *testing.T) {
+	runtime, server, connect, opts, report, closeServer := newRecoveryFixture(t, nil)
+	defer closeServer()
+	if err := runRecovery(t.Context(), opts, report, connect, runtime); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.rowsValue == nil || !reflect.DeepEqual(runtime.rowsValue, sortedRows(expectedFinalRows())) {
+		t.Fatalf("final fake rows = %v, want %v", runtime.rowsValue, sortedRows(expectedFinalRows()))
+	}
+	if server.registers != 1 {
+		t.Fatalf("connector registrations = %d, want one registration across recovery", server.registers)
+	}
+	wantActions := []string{"register", "stop", "patch", "resume"}
+	for _, want := range wantActions {
+		found := false
+		for _, action := range server.actions {
+			if action == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("REST actions = %v, missing %q", server.actions, want)
+		}
+	}
+	patchIndex := -1
+	resumeIndex := -1
+	stopIndex := -1
+	for index, action := range server.actions {
+		switch action {
+		case "stop":
+			stopIndex = index
+		case "patch":
+			patchIndex = index
+		case "resume":
+			resumeIndex = index
+		}
+	}
+	if !(stopIndex >= 0 && stopIndex < patchIndex && patchIndex < resumeIndex) {
+		t.Fatalf("REST actions = %v, want STOPPED before PATCH before resume", server.actions)
+	}
+	if !server.patchStopped {
+		t.Fatalf("PATCH was accepted without a confirmed STOPPED status: %v", server.actions)
+	}
+	if !server.stoppedSeen {
+		t.Fatalf("PATCH proceeded without observing a STOPPED status response: %v", server.actions)
+	}
+	if len(report.Phases) != 4 || report.Phases[0].Name != "baseline" || report.Phases[1].Name != "worker-crash-catch-up" || report.Phases[2].Name != "controlled-replay" || report.Phases[3].Name != "empty-work-restart" {
+		t.Fatalf("recovery phases = %+v, want baseline, catch-up, replay, and empty restart", report.Phases)
+	}
+}
+
+func TestRunRecoveryStopsWhenPatchIsRejected(t *testing.T) {
+	patchErr := errors.New("offset patch rejected")
+	runtime, server, connect, opts, report, closeServer := newRecoveryFixture(t, patchErr)
+	defer closeServer()
+	if err := runRecovery(t.Context(), opts, report, connect, runtime); err == nil || !strings.Contains(err.Error(), "rewind owned sink offset") {
+		t.Fatalf("runRecovery error = %v, want offset rewind failure", err)
+	}
+	for _, action := range server.actions {
+		if action == "resume" {
+			t.Fatalf("REST resumed after rejected patch: %v", server.actions)
+		}
+	}
+}
+
+func TestRunRecoveryStopsBeforeConnectorWhenTargetPreparationFails(t *testing.T) {
+	runtime := &recoveryTestRuntime{prepareErr: errors.New("target unavailable")}
+	opts := runOptions{connectorName: "fixture", reportDir: t.TempDir(), phaseTimeout: time.Second}
+	report := &runReport{SinkConsumerGroup: "connect-fixture", Phases: []phase{}}
+	connect := connectClient{base: "http://127.0.0.1:1", client: &http.Client{}}
+	if err := runRecovery(t.Context(), opts, report, connect, runtime); err == nil || !strings.Contains(err.Error(), "target unavailable") {
+		t.Fatalf("runRecovery error = %v, want target preparation failure", err)
+	}
+	if len(runtime.actions) != 1 || runtime.actions[0] != "prepare" {
+		t.Fatalf("runtime actions = %v, want preparation to be the only action", runtime.actions)
+	}
+}
+
+func TestPrepareTargetAndReadRows(t *testing.T) {
+	t.Run("prepare succeeds", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		for _, statement := range []string{
+			"CREATE DATABASE IF NOT EXISTS " + databaseName,
+			"DROP TABLE IF EXISTS " + databaseName + "." + tableName,
+			"CREATE TABLE " + databaseName + "." + tableName,
+		} {
+			mock.ExpectExec(statement).WillReturnResult(sqlmock.NewResult(0, 1))
+		}
+		if err := prepareTarget(t.Context(), db); err != nil {
+			t.Fatal(err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("prepare stops on first failed statement", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		mock.ExpectExec("CREATE DATABASE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("DROP TABLE IF EXISTS").WillReturnError(errors.New("table locked"))
+		if err := prepareTarget(t.Context(), db); err == nil || !strings.Contains(err.Error(), "table locked") {
+			t.Fatalf("prepareTarget error = %v, want table lock failure", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("read rows preserves null and empty values", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		empty := ""
+		mock.ExpectQuery("SELECT id, name, note, counter").WillReturnRows(
+			sqlmock.NewRows([]string{"id", "name", "note", "counter"}).
+				AddRow(int64(1), "null-note", nil, int64(1)).
+				AddRow(int64(2), "empty-note", empty, int64(2)),
+		)
+		got, err := readRows(t.Context(), db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []row{{ID: 1, Name: "null-note", Counter: 1}, {ID: 2, Name: "empty-note", Note: &empty, Counter: 2}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("readRows = %+v, want %+v", got, want)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("read rows reports query and scan failures", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		mock.ExpectQuery("SELECT id, name, note, counter").WillReturnError(errors.New("database offline"))
+		if _, err := readRows(t.Context(), db); err == nil || !strings.Contains(err.Error(), "database offline") {
+			t.Fatalf("readRows query error = %v", err)
+		}
+		mock.ExpectQuery("SELECT id, name, note, counter").WillReturnRows(
+			sqlmock.NewRows([]string{"id", "name", "note", "counter"}).AddRow("bad-id", "name", nil, int64(1)),
+		)
+		if _, err := readRows(t.Context(), db); err == nil {
+			t.Fatal("readRows accepted a row that cannot be scanned")
+		}
+		_ = db.Close()
+	})
+}
+
+func TestConnectClientReadinessAndConnectorOperations(t *testing.T) {
+	var receivedConfig map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/":
+			_, _ = w.Write([]byte(`{"version":"3.8.1","kafka_cluster_id":"cluster-1"}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/connector-plugins":
+			_, _ = w.Write([]byte(`[{"class":"io.debezium.connector.jdbc.JdbcSinkConnector","type":"sink","version":"2.6"}]`))
+		case request.Method == http.MethodPost && request.URL.Path == "/connectors":
+			if err := json.NewDecoder(request.Body).Decode(&receivedConfig); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/status"):
+			_, _ = w.Write([]byte(`{"connector":{"name":"fixture","state":"RUNNING","worker_id":"worker-0"},"tasks":[{"id":0,"state":"RUNNING","worker_id":"worker-0"}]}`))
+		case request.Method == http.MethodPut && (strings.HasSuffix(request.URL.Path, "/stop") || strings.HasSuffix(request.URL.Path, "/resume")):
+			w.WriteHeader(http.StatusNoContent)
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/offsets"):
+			_, _ = w.Write([]byte(`{"offsets":[{"partition":{"kafka_topic":"mo_issue_29848_events","kafka_partition":0},"offset":{"kafka_offset":12}}]}`))
+		case request.Method == http.MethodPatch && strings.HasSuffix(request.URL.Path, "/offsets"):
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	defer server.Close()
+	connect := connectClient{base: server.URL, client: server.Client()}
+	root, err := waitForConnect(t.Context(), connect)
+	if err != nil || root.Version != "3.8.1" || root.KafkaClusterID != "cluster-1" {
+		t.Fatalf("waitForConnect = %+v, %v", root, err)
+	}
+	plugins, err := connect.plugins(t.Context())
+	if err != nil || len(plugins) != 1 || plugins[0].Version != "2.6" {
+		t.Fatalf("plugins = %+v, %v", plugins, err)
+	}
+	if err := connect.createConnector(t.Context(), "fixture", map[string]string{"topics": topicName}); err != nil {
+		t.Fatal(err)
+	}
+	if receivedConfig["name"] != "fixture" {
+		t.Fatalf("connector request = %#v, want connector name", receivedConfig)
+	}
+	status, err := connect.status(t.Context(), "fixture")
+	if err != nil || status.Connector.State != "RUNNING" || len(status.Tasks) != 1 {
+		t.Fatalf("status = %+v, %v", status, err)
+	}
+	if err := connect.stopConnector(t.Context(), "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if err := connect.resumeConnector(t.Context(), "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	offset, err := connect.restOffset(t.Context(), "fixture", topicName, 0)
+	if err != nil || offset != 12 {
+		t.Fatalf("restOffset = %d, %v", offset, err)
+	}
+	if err := connect.patchOffset(t.Context(), "fixture", topicName, 0, 7); err != nil {
+		t.Fatal(err)
+	}
+
+	badJSON := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/connector-plugins" || strings.HasSuffix(request.URL.Path, "/status") {
+			_, _ = w.Write([]byte("{"))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer badJSON.Close()
+	badConnect := connectClient{base: badJSON.URL, client: badJSON.Client()}
+	if _, err := badConnect.plugins(t.Context()); err == nil {
+		t.Fatal("plugins accepted malformed JSON")
+	}
+	if _, err := badConnect.status(t.Context(), "fixture"); err == nil {
+		t.Fatal("status accepted malformed JSON")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := waitForConnect(ctx, badConnect); err == nil {
+		t.Fatal("waitForConnect accepted a canceled readiness context")
+	}
+	if _, err := (connectClient{base: "http://[", client: http.DefaultClient}).request(t.Context(), http.MethodGet, "/", nil, http.StatusOK); err == nil {
+		t.Fatal("request accepted an invalid URL")
+	}
+}
+
+func TestConnectorDrainReaderAndLiveRuntimeDelegations(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("SELECT id, name, note, counter").WillReturnRows(
+		sqlmock.NewRows([]string{"id", "name", "note", "counter"}).AddRow(int64(1), "one", nil, int64(1)),
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"offsets":[{"partition":{"kafka_topic":"mo_issue_29848_events","kafka_partition":0},"offset":{"kafka_offset":1}}]}`))
+	}))
+	defer server.Close()
+	client, err := kgo.NewClient(kgo.SeedBrokers("127.0.0.1:1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	reader := connectorDrainReader{
+		db: db, admin: kadm.NewClient(client),
+		connect: &connectClient{base: server.URL, client: server.Client()}, name: "fixture",
+	}
+	if rows, err := reader.rows(t.Context()); err != nil || len(rows) != 1 {
+		t.Fatalf("connectorDrainReader.rows = %+v, %v", rows, err)
+	}
+	if offset, err := reader.restOffset(t.Context()); err != nil || offset != 1 {
+		t.Fatalf("connectorDrainReader.restOffset = %d, %v", offset, err)
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, _, err := reader.groupOffset(canceled); err == nil {
+		t.Fatal("connectorDrainReader.groupOffset unexpectedly succeeded")
+	}
+	if _, _, err := reader.logEndOffset(canceled); err == nil {
+		t.Fatal("connectorDrainReader.logEndOffset unexpectedly succeeded")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, statement := range []string{
+		"CREATE DATABASE IF NOT EXISTS " + databaseName,
+		"DROP TABLE IF EXISTS " + databaseName + "." + tableName,
+		"CREATE TABLE " + databaseName + "." + tableName,
+	} {
+		mock.ExpectExec(statement).WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	runtime := liveRecoveryRuntime{connectorDrainReader: reader, kafka: client, opts: runOptions{composeProject: "fixture", composeBase: t.TempDir() + "/base.yaml", composeConnect: t.TempDir() + "/connect.yaml"}}
+	if err := runtime.prepareTarget(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := runtime.createTopic(ctx); err == nil {
+		t.Fatal("live runtime createTopic unexpectedly succeeded")
+	}
+	if _, err := runtime.produceRows(ctx, []row{{ID: 1, Name: "one", Counter: 1}}); err == nil {
+		t.Fatal("live runtime produceRows unexpectedly succeeded")
+	}
+	if _, err := runtime.produceTombstone(ctx, 1); err == nil {
+		t.Fatal("live runtime produceTombstone unexpectedly succeeded")
+	}
+	dockerDir := t.TempDir()
+	docker := filepath.Join(dockerDir, "docker")
+	if err := os.WriteFile(docker, []byte("#!/bin/sh\ncase \"$1\" in\ncompose) printf 'container-1\\n' ;;\nkill) ;;\ninspect) printf 'exited\\n' ;;\nesac\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := runtime.killWorker(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.startWorker(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDecodeAndKafkaHelperFailures(t *testing.T) {
+	if _, err := decodeKeyID([]byte("{")); err == nil {
+		t.Fatal("decodeKeyID accepted malformed JSON")
+	}
+	if got, err := decodeKeyID([]byte(`{"payload":{"id":17}}`)); err != nil || got != 17 {
+		t.Fatalf("decodeKeyID = %d, %v, want 17", got, err)
+	}
+	client, err := kgo.NewClient(kgo.SeedBrokers("127.0.0.1:1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	records := []*kgo.Record{{Topic: topicName, Key: []byte(`{"payload":{"id":1}}`), Value: []byte(`{}`)}}
+	if _, err := produce(ctx, client, records); err == nil {
+		t.Fatal("produce unexpectedly succeeded with a canceled context")
+	}
+	if _, err := produceRows(ctx, client, []row{{ID: 1, Name: "one", Counter: 1}}); err == nil {
+		t.Fatal("produceRows unexpectedly succeeded with a canceled context")
+	}
+	if _, err := produceTombstone(ctx, client, 1); err == nil {
+		t.Fatal("produceTombstone unexpectedly succeeded with a canceled context")
+	}
+	_, admin := canceledKafkaAdmin(t)
+	if err := createTopic(ctx, admin); err == nil {
+		t.Fatal("createTopic unexpectedly succeeded with a canceled context")
+	}
+	if _, _, err := groupOffset(ctx, admin, "fixture"); err == nil {
+		t.Fatal("groupOffset unexpectedly succeeded with a canceled context")
+	}
+	if _, _, err := topicLogEndOffset(ctx, admin); err == nil {
+		t.Fatal("topicLogEndOffset unexpectedly succeeded with a canceled context")
+	}
+}
+
+func TestKafkaHelpersAgainstInProcessBroker(t *testing.T) {
+	cluster, err := kfake.NewCluster(kfake.NumBrokers(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cluster.Close()
+	client, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.RequiredAcks(kgo.AllISRAcks()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	admin := kadm.NewClient(client)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := createTopic(ctx, admin); err != nil {
+		t.Fatal(err)
+	}
+	if err := createTopic(ctx, admin); err != nil {
+		t.Fatalf("idempotent topic creation failed: %v", err)
+	}
+	records, err := produceRows(ctx, client, []row{{ID: 1, Name: "one", Counter: 1}, {ID: 2, Name: "two", Note: stringPointer(""), Counter: 2}})
+	if err != nil || len(records) != 2 || records[0].Offset != 0 || records[1].Offset != 1 {
+		t.Fatalf("produceRows records = %+v, err=%v", records, err)
+	}
+	tombstone, err := produceTombstone(ctx, client, 1)
+	if err != nil || len(tombstone) != 1 || !tombstone[0].Tombstone || tombstone[0].Offset != 2 {
+		t.Fatalf("produceTombstone records = %+v, err=%v", tombstone, err)
+	}
+	end, found, err := topicLogEndOffset(ctx, admin)
+	if err != nil || !found || end != 3 {
+		t.Fatalf("topicLogEndOffset = %d, found=%v, err=%v", end, found, err)
+	}
+	responses, err := admin.CommitOffsets(ctx, "fixture", (kadm.OffsetsList{{Topic: topicName, Partition: 0, At: 3}}).Offsets())
+	if err != nil || !responses.Ok() {
+		t.Fatalf("commit fixture offset = %+v, err=%v", responses, err)
+	}
+	group, found, err := groupOffset(ctx, admin, "fixture")
+	if err != nil || !found || group != 3 {
+		t.Fatalf("groupOffset = %d, found=%v, err=%v", group, found, err)
+	}
+}
+
+func TestWaitForDatabaseFailureAndPortParsing(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := waitForDatabase(ctx, alwaysFailPinger{}); err == nil || !strings.Contains(err.Error(), "last ping") {
+		t.Fatalf("waitForDatabase error = %v, want last ping context", err)
+	}
+	for _, test := range []struct {
+		dsn  string
+		want string
+	}{
+		{dsn: "root@tcp(127.0.0.1:6601)/", want: "6601"},
+		{dsn: "root@tcp(127.0.0.1)/", want: "6001"},
+		{dsn: "root@/", want: "6001"},
+	} {
+		if got := portFromDSN(test.dsn); got != test.want {
+			t.Fatalf("portFromDSN(%q) = %q, want %q", test.dsn, got, test.want)
+		}
+	}
+}
+
+func TestPollAndWriteReportFailureBranches(t *testing.T) {
+	if err := poll(t.Context(), "scripted check", time.Second, func(context.Context) (bool, error) {
+		return false, errors.New("check failed")
+	}); err == nil || !strings.Contains(err.Error(), "scripted check") {
+		t.Fatalf("poll error = %v, want scripted check failure", err)
+	}
+	reportDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(reportDir, "report.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeReport(reportDir, runReport{Status: "failed"}); err == nil {
+		t.Fatal("writeReport replaced an existing report directory")
+	}
+}
+
+type alwaysFailPinger struct{}
+
+func (alwaysFailPinger) PingContext(context.Context) error { return errors.New("ping failed") }
+
+func canceledKafkaAdmin(t *testing.T) (*kgo.Client, *kadm.Client) {
+	t.Helper()
+	client, err := kgo.NewClient(kgo.SeedBrokers("127.0.0.1:1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	return client, kadm.NewClient(client)
+}
+
+func TestOwnedConnectDockerHelpers(t *testing.T) {
+	composeDir := t.TempDir()
+	opts := runOptions{composeProject: "fixture", composeBase: filepath.Join(composeDir, "base.yaml"), composeConnect: filepath.Join(composeDir, "connect.yaml")}
+	dockerDir := t.TempDir()
+	docker := filepath.Join(dockerDir, "docker")
+	if err := os.WriteFile(docker, []byte("#!/bin/sh\ncase \"$1\" in\ncompose) case \"$*\" in *\"ps -q connect\"*) printf 'container-1\\n' ;; *\"start connect\"*) printf 'started\\n' ;; *) printf 'compose-output\\n' ;; esac ;;\nkill) ;;\ninspect) printf 'exited\\n' ;;\nesac\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if output, err := composeOutput(t.Context(), opts, "config"); err != nil || !strings.Contains(output, "compose-output") {
+		t.Fatalf("composeOutput = %q, %v", output, err)
+	}
+	if err := startOwnedConnect(t.Context(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if err := killOwnedConnect(t.Context(), opts); err != nil {
+		t.Fatal(err)
+	}
+
+	emptyDockerDir := t.TempDir()
+	emptyDocker := filepath.Join(emptyDockerDir, "docker")
+	if err := os.WriteFile(emptyDocker, []byte("#!/bin/sh\nif [ \"$1\" = compose ]; then exit 0; fi\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", emptyDockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := killOwnedConnect(t.Context(), opts); err == nil || !strings.Contains(err.Error(), "container was not found") {
+		t.Fatal("killOwnedConnect accepted an empty container id")
+	}
+
+	failingDockerDir := t.TempDir()
+	failingDocker := filepath.Join(failingDockerDir, "docker")
+	if err := os.WriteFile(failingDocker, []byte("#!/bin/sh\nprintf 'docker failed\\n'\nexit 17\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", failingDockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if _, err := composeOutput(t.Context(), opts, "config"); err == nil {
+		t.Fatal("composeOutput accepted a failed docker command")
+	}
+}
+
+func TestRunRejectsUnsafeOrUnavailableSetup(t *testing.T) {
+	report := &runReport{Phases: []phase{}}
+	if err := run(t.Context(), runOptions{reportDir: t.TempDir()}, report); err == nil || !strings.Contains(err.Error(), "compose project is required") {
+		t.Fatal("run accepted an empty compose project")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	report = &runReport{Phases: []phase{}}
+	opts := runOptions{
+		composeProject: "fixture",
+		dsn:            "root:111@tcp(127.0.0.1:1)/?timeout=1ms",
+		reportDir:      t.TempDir(),
+		phaseTimeout:   time.Second,
+	}
+	if err := run(ctx, opts, report); err == nil || !strings.Contains(err.Error(), "MatrixOne SQL readiness") {
+		t.Fatalf("run setup error = %v, want MatrixOne readiness failure", err)
+	}
+}
+
+func TestRunMainValidatesArgumentsAndRecordsFailures(t *testing.T) {
+	if code := runMain([]string{"-h"}); code != 0 {
+		t.Fatalf("runMain help code = %d, want 0", code)
+	}
+	if code := runMain([]string{"-timeout=0"}); code != 2 {
+		t.Fatalf("runMain timeout validation code = %d, want 2", code)
+	}
+	if code := runMain([]string{"-unknown-flag"}); code != 2 {
+		t.Fatalf("runMain flag parsing code = %d, want 2", code)
+	}
+	badReportPath := filepath.Join(t.TempDir(), "report-file")
+	if err := os.WriteFile(badReportPath, []byte("occupied"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := runMain([]string{"-report-dir", badReportPath}); code != 1 {
+		t.Fatalf("runMain report setup code = %d, want 1", code)
+	}
+	if code := runMain([]string{"-report-dir", t.TempDir()}); code != 1 {
+		t.Fatalf("runMain setup failure code = %d, want 1", code)
+	}
+}
+
+func TestRunUsesInjectableReadinessAndRecoveryDependencies(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectPing().WillReturnError(nil)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/":
+			_, _ = w.Write([]byte(`{"version":"3.8.1","kafka_cluster_id":"cluster-1"}`))
+		case "/connector-plugins":
+			_, _ = w.Write([]byte(`[{"class":"io.debezium.connector.jdbc.JdbcSinkConnector","type":"sink","version":"2.6"}]`))
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	defer server.Close()
+	client, err := kgo.NewClient(kgo.SeedBrokers("127.0.0.1:1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	recoveryCalled := false
+	dependencies := runDependencies{
+		openDatabase: func(string) (*sql.DB, error) { return db, nil },
+		newKafkaClient: func(...kgo.Opt) (*kgo.Client, error) {
+			return client, nil
+		},
+		runRecoveryFunc: func(_ context.Context, opts runOptions, report *runReport, connect connectClient, runtime recoveryRuntime) error {
+			recoveryCalled = true
+			if opts.connectorName != "fixture" || report.ConnectVersion != "3.8.1" || connect.base != server.URL || runtime == nil {
+				return errors.New("run did not pass initialized dependencies")
+			}
+			return nil
+		},
+	}
+	report := &runReport{Phases: []phase{}}
+	opts := runOptions{
+		composeProject: "fixture", connectorName: "fixture", connectURL: server.URL,
+		reportDir: t.TempDir(), dsn: "ignored", phaseTimeout: time.Second,
+	}
+	if err := run(t.Context(), opts, report, dependencies); err != nil {
+		t.Fatal(err)
+	}
+	if !recoveryCalled || report.ConnectVersion != "3.8.1" || report.KafkaClusterID != "cluster-1" || report.JDBCPluginVersion != "2.6" {
+		t.Fatalf("run report/dependency state = %+v, recovery called=%v", report, recoveryCalled)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunReportsDependencyFailureBranches(t *testing.T) {
+	baseOptions := func(reportDir string, connectURL string) runOptions {
+		return runOptions{composeProject: "fixture", connectURL: connectURL, reportDir: reportDir, phaseTimeout: 20 * time.Millisecond}
+	}
+	newDatabase := func(t *testing.T) *sql.DB {
+		t.Helper()
+		db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mock.ExpectPing().WillReturnError(nil)
+		t.Cleanup(func() {
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Error(err)
+			}
+			_ = db.Close()
+		})
+		return db
+	}
+	root := `{"version":"3.8.1","kafka_cluster_id":"cluster-1"}`
+	plugins := `[{"class":"io.debezium.connector.jdbc.JdbcSinkConnector","type":"sink","version":"2.6"}]`
+	newServer := func(t *testing.T, rootBody, pluginsBody string, pluginStatus int) *httptest.Server {
+		t.Helper()
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch request.URL.Path {
+			case "/":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(rootBody))
+			case "/connector-plugins":
+				w.WriteHeader(pluginStatus)
+				_, _ = w.Write([]byte(pluginsBody))
+			default:
+				http.NotFound(w, request)
+			}
+		}))
+	}
+
+	t.Run("open database", func(t *testing.T) {
+		dependencies := defaultRunDependencies()
+		dependencies.openDatabase = func(string) (*sql.DB, error) { return nil, errors.New("driver unavailable") }
+		report := &runReport{Phases: []phase{}}
+		err := run(t.Context(), baseOptions(t.TempDir(), "http://127.0.0.1:1"), report, dependencies)
+		if err == nil || !strings.Contains(err.Error(), "open MatrixOne DSN") {
+			t.Fatalf("run error = %v, want database open failure", err)
+		}
+	})
+
+	t.Run("initial report stage", func(t *testing.T) {
+		db, _, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		badPath := filepath.Join(t.TempDir(), "report-file")
+		if err := os.WriteFile(badPath, []byte("occupied"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		dependencies := defaultRunDependencies()
+		dependencies.openDatabase = func(string) (*sql.DB, error) { return db, nil }
+		report := &runReport{Phases: []phase{}}
+		runErr := run(t.Context(), baseOptions(badPath, "http://127.0.0.1:1"), report, dependencies)
+		if runErr == nil {
+			t.Fatal("run accepted a report path that is a file")
+		}
+	})
+
+	t.Run("connect readiness", func(t *testing.T) {
+		db := newDatabase(t)
+		server := newServer(t, `{"version":""}`, plugins, http.StatusOK)
+		defer server.Close()
+		dependencies := defaultRunDependencies()
+		dependencies.openDatabase = func(string) (*sql.DB, error) { return db, nil }
+		report := &runReport{Phases: []phase{}}
+		err := run(t.Context(), baseOptions(t.TempDir(), server.URL), report, dependencies)
+		if err == nil || !strings.Contains(err.Error(), "wait for Kafka Connect") {
+			t.Fatalf("run error = %v, want Connect readiness failure", err)
+		}
+	})
+
+	t.Run("plugin REST failure", func(t *testing.T) {
+		db := newDatabase(t)
+		server := newServer(t, root, "plugin unavailable", http.StatusServiceUnavailable)
+		defer server.Close()
+		dependencies := defaultRunDependencies()
+		dependencies.openDatabase = func(string) (*sql.DB, error) { return db, nil }
+		report := &runReport{Phases: []phase{}}
+		err := run(t.Context(), baseOptions(t.TempDir(), server.URL), report, dependencies)
+		if err == nil || !strings.Contains(err.Error(), "list Kafka Connect plugins") {
+			t.Fatalf("run error = %v, want plugin REST failure", err)
+		}
+	})
+
+	t.Run("missing sink plugin", func(t *testing.T) {
+		db := newDatabase(t)
+		server := newServer(t, root, `[]`, http.StatusOK)
+		defer server.Close()
+		dependencies := defaultRunDependencies()
+		dependencies.openDatabase = func(string) (*sql.DB, error) { return db, nil }
+		report := &runReport{Phases: []phase{}}
+		err := run(t.Context(), baseOptions(t.TempDir(), server.URL), report, dependencies)
+		if err == nil || !strings.Contains(err.Error(), "required sink plugin") {
+			t.Fatalf("run error = %v, want missing plugin failure", err)
+		}
+	})
+
+	t.Run("Kafka client creation", func(t *testing.T) {
+		db := newDatabase(t)
+		server := newServer(t, root, plugins, http.StatusOK)
+		defer server.Close()
+		dependencies := defaultRunDependencies()
+		dependencies.openDatabase = func(string) (*sql.DB, error) { return db, nil }
+		dependencies.newKafkaClient = func(...kgo.Opt) (*kgo.Client, error) { return nil, errors.New("broker unavailable") }
+		report := &runReport{Phases: []phase{}}
+		err := run(t.Context(), baseOptions(t.TempDir(), server.URL), report, dependencies)
+		if err == nil || !strings.Contains(err.Error(), "create Kafka client") {
+			t.Fatalf("run error = %v, want Kafka client failure", err)
+		}
+	})
 }

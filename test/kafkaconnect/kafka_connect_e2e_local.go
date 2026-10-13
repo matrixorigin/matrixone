@@ -185,31 +185,96 @@ func (r connectorDrainReader) logEndOffset(ctx context.Context) (int64, bool, er
 	return topicLogEndOffset(ctx, r.admin)
 }
 
+type recoveryRuntime interface {
+	drainStateReader
+	prepareTarget(context.Context) error
+	createTopic(context.Context) error
+	produceRows(context.Context, []row) ([]producedRecord, error)
+	produceTombstone(context.Context, int64) ([]producedRecord, error)
+	killWorker(context.Context) error
+	startWorker(context.Context) error
+}
+
+type liveRecoveryRuntime struct {
+	connectorDrainReader
+	kafka *kgo.Client
+	opts  runOptions
+}
+
+func (r liveRecoveryRuntime) prepareTarget(ctx context.Context) error {
+	return prepareTarget(ctx, r.db)
+}
+
+func (r liveRecoveryRuntime) createTopic(ctx context.Context) error {
+	return createTopic(ctx, r.admin)
+}
+
+func (r liveRecoveryRuntime) produceRows(ctx context.Context, rows []row) ([]producedRecord, error) {
+	return produceRows(ctx, r.kafka, rows)
+}
+
+func (r liveRecoveryRuntime) produceTombstone(ctx context.Context, id int64) ([]producedRecord, error) {
+	return produceTombstone(ctx, r.kafka, id)
+}
+
+func (r liveRecoveryRuntime) killWorker(ctx context.Context) error {
+	return killOwnedConnect(ctx, r.opts)
+}
+
+func (r liveRecoveryRuntime) startWorker(ctx context.Context) error {
+	return startOwnedConnect(ctx, r.opts)
+}
+
 type runOptions struct {
 	dsn, bootstrap, connectURL, composeBase, composeConnect, composeProject string
 	connectorName, sourceSHA, harnessSHA, moBinarySHA, reportDir            string
 	totalTimeout, phaseTimeout                                              time.Duration
 }
 
+type runDependencies struct {
+	openDatabase    func(string) (*sql.DB, error)
+	newKafkaClient  func(...kgo.Opt) (*kgo.Client, error)
+	runRecoveryFunc func(context.Context, runOptions, *runReport, connectClient, recoveryRuntime) error
+}
+
+func defaultRunDependencies() runDependencies {
+	return runDependencies{
+		openDatabase:    func(dsn string) (*sql.DB, error) { return sql.Open("mysql", dsn) },
+		newKafkaClient:  kgo.NewClient,
+		runRecoveryFunc: runRecovery,
+	}
+}
+
 func main() {
+	os.Exit(runMain(os.Args[1:]))
+}
+
+func runMain(args []string) int {
 	var opts runOptions
-	flag.StringVar(&opts.dsn, "dsn", "root:111@tcp(127.0.0.1:6001)/?timeout=5s&readTimeout=30s&writeTimeout=30s", "owned MatrixOne MySQL DSN")
-	flag.StringVar(&opts.bootstrap, "bootstrap", "127.0.0.1:9092", "owned Kafka broker bootstrap address")
-	flag.StringVar(&opts.connectURL, "connect-url", "http://127.0.0.1:8083", "owned Kafka Connect REST URL")
-	flag.StringVar(&opts.composeBase, "compose-base", "etc/launch-kafka-local/compose.yaml", "base Kafka Compose file")
-	flag.StringVar(&opts.composeConnect, "compose-connect", "etc/launch-kafka-local/compose.connect.yaml", "Connect Compose file")
-	flag.StringVar(&opts.composeProject, "compose-project", "", "owned Compose project")
-	flag.StringVar(&opts.connectorName, "connector-name", "mo-issue-29848-recovery", "owned sink connector name")
-	flag.StringVar(&opts.sourceSHA, "source-sha", "unknown", "MatrixOne source revision")
-	flag.StringVar(&opts.harnessSHA, "harness-sha", "unknown", "harness source revision")
-	flag.StringVar(&opts.moBinarySHA, "mo-binary-sha", "unknown", "built MatrixOne binary SHA-256")
-	flag.StringVar(&opts.reportDir, "report-dir", "test/kafkaconnect/reports/local", "evidence output directory")
-	flag.DurationVar(&opts.totalTimeout, "timeout", 10*time.Minute, "maximum duration for the complete recovery run")
-	flag.DurationVar(&opts.phaseTimeout, "phase-timeout", 90*time.Second, "maximum duration for each readiness or drain phase")
-	flag.Parse()
+	flags := flag.NewFlagSet("kafka_connect_e2e_local", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	flags.StringVar(&opts.dsn, "dsn", "root:111@tcp(127.0.0.1:6001)/?timeout=5s&readTimeout=30s&writeTimeout=30s", "owned MatrixOne MySQL DSN")
+	flags.StringVar(&opts.bootstrap, "bootstrap", "127.0.0.1:9092", "owned Kafka broker bootstrap address")
+	flags.StringVar(&opts.connectURL, "connect-url", "http://127.0.0.1:8083", "owned Kafka Connect REST URL")
+	flags.StringVar(&opts.composeBase, "compose-base", "etc/launch-kafka-local/compose.yaml", "base Kafka Compose file")
+	flags.StringVar(&opts.composeConnect, "compose-connect", "etc/launch-kafka-local/compose.connect.yaml", "Connect Compose file")
+	flags.StringVar(&opts.composeProject, "compose-project", "", "owned Compose project")
+	flags.StringVar(&opts.connectorName, "connector-name", "mo-issue-29848-recovery", "owned sink connector name")
+	flags.StringVar(&opts.sourceSHA, "source-sha", "unknown", "MatrixOne source revision")
+	flags.StringVar(&opts.harnessSHA, "harness-sha", "unknown", "harness source revision")
+	flags.StringVar(&opts.moBinarySHA, "mo-binary-sha", "unknown", "built MatrixOne binary SHA-256")
+	flags.StringVar(&opts.reportDir, "report-dir", "test/kafkaconnect/reports/local", "evidence output directory")
+	flags.DurationVar(&opts.totalTimeout, "timeout", 10*time.Minute, "maximum duration for the complete recovery run")
+	flags.DurationVar(&opts.phaseTimeout, "phase-timeout", 90*time.Second, "maximum duration for each readiness or drain phase")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
 	if opts.totalTimeout <= 0 || opts.phaseTimeout <= 0 {
 		fmt.Fprintln(os.Stderr, "timeout values must be positive")
-		os.Exit(2)
+		return 2
 	}
 
 	report := runReport{
@@ -226,7 +291,7 @@ func main() {
 	}
 	if err := writeReport(opts.reportDir, report); err != nil {
 		fmt.Fprintln(os.Stderr, fmt.Errorf("write initial evidence report: %w", err))
-		os.Exit(1)
+		return 1
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), opts.totalTimeout)
 	defer cancel()
@@ -246,8 +311,9 @@ func main() {
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func setRunResult(report *runReport, runErr error) {
@@ -259,12 +325,16 @@ func setRunResult(report *runReport, runErr error) {
 	report.Status = "passed"
 }
 
-func run(ctx context.Context, opts runOptions, report *runReport) error {
+func run(ctx context.Context, opts runOptions, report *runReport, provided ...runDependencies) error {
+	dependencies := defaultRunDependencies()
+	if len(provided) > 0 {
+		dependencies = provided[0]
+	}
 	if opts.composeProject == "" {
 		return errors.New("compose project is required to operate only on run-owned containers")
 	}
 	connect := connectClient{base: strings.TrimRight(opts.connectURL, "/"), client: &http.Client{Timeout: 10 * time.Second}}
-	db, err := sql.Open("mysql", opts.dsn)
+	db, err := dependencies.openDatabase(opts.dsn)
 	if err != nil {
 		return fmt.Errorf("open MatrixOne DSN: %w", err)
 	}
@@ -275,15 +345,6 @@ func run(ctx context.Context, opts runOptions, report *runReport) error {
 	}
 	phaseCtx, phaseCancel := context.WithTimeout(ctx, opts.phaseTimeout)
 	err = waitForDatabase(phaseCtx, db)
-	phaseCancel()
-	if err != nil {
-		return err
-	}
-	if err := setStage(opts, report, "prepare-target-table"); err != nil {
-		return err
-	}
-	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	err = prepareTarget(phaseCtx, db)
 	phaseCancel()
 	if err != nil {
 		return err
@@ -316,18 +377,35 @@ func run(ctx context.Context, opts runOptions, report *runReport) error {
 		return fmt.Errorf("required sink plugin %q is absent from /connector-plugins", connectorClass)
 	}
 	report.JDBCPluginVersion = pluginVersion
-
-	if err := setStage(opts, report, "create-topic-and-connector"); err != nil {
-		return err
-	}
-	kafka, err := kgo.NewClient(kgo.SeedBrokers(opts.bootstrap), kgo.RequiredAcks(kgo.AllISRAcks()))
+	kafka, err := dependencies.newKafkaClient(kgo.SeedBrokers(opts.bootstrap), kgo.RequiredAcks(kgo.AllISRAcks()))
 	if err != nil {
 		return fmt.Errorf("create Kafka client: %w", err)
 	}
 	defer kafka.Close()
 	admin := kadm.NewClient(kafka)
+	runtime := liveRecoveryRuntime{
+		connectorDrainReader: connectorDrainReader{db: db, admin: admin, connect: &connect, name: opts.connectorName},
+		kafka:                kafka,
+		opts:                 opts,
+	}
+	return dependencies.runRecoveryFunc(ctx, opts, report, connect, runtime)
+}
+
+func runRecovery(ctx context.Context, opts runOptions, report *runReport, connect connectClient, runtime recoveryRuntime) error {
+	if err := setStage(opts, report, "prepare-target-table"); err != nil {
+		return err
+	}
+	phaseCtx, phaseCancel := context.WithTimeout(ctx, opts.phaseTimeout)
+	err := runtime.prepareTarget(phaseCtx)
+	phaseCancel()
+	if err != nil {
+		return err
+	}
+	if err := setStage(opts, report, "create-topic-and-connector"); err != nil {
+		return err
+	}
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	err = createTopic(phaseCtx, admin)
+	err = runtime.createTopic(phaseCtx)
 	phaseCancel()
 	if err != nil {
 		return err
@@ -358,7 +436,7 @@ func run(ctx context.Context, opts runOptions, report *runReport) error {
 		return err
 	}
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	baselineRecords, err := produceRows(phaseCtx, kafka, baseline)
+	baselineRecords, err := runtime.produceRows(phaseCtx, baseline)
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("produce baseline: %w", err)
@@ -369,7 +447,7 @@ func run(ctx context.Context, opts runOptions, report *runReport) error {
 		return err
 	}
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	baselineReceipt, err := waitForDrain(phaseCtx, connectorDrainReader{db: db, admin: admin, connect: &connect, name: opts.connectorName}, baselineWant, baselineOffset)
+	baselineReceipt, err := waitForDrain(phaseCtx, runtime, baselineWant, baselineOffset)
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("baseline drain: %w", err)
@@ -387,13 +465,13 @@ func run(ctx context.Context, opts runOptions, report *runReport) error {
 		return err
 	}
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	err = killOwnedConnect(phaseCtx, opts)
+	err = runtime.killWorker(phaseCtx)
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("SIGKILL owned Connect worker: %w", err)
 	}
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	currentOffset, ok, err := groupOffset(phaseCtx, admin, report.SinkConsumerGroup)
+	currentOffset, ok, err := runtime.groupOffset(phaseCtx)
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("read sink consumer group offset after worker crash: %w", err)
@@ -410,27 +488,27 @@ func run(ctx context.Context, opts runOptions, report *runReport) error {
 		return err
 	}
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	offlineRecords, err := produceRows(phaseCtx, kafka, offline[:1])
+	offlineRecords, err := runtime.produceRows(phaseCtx, offline[:1])
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("produce offline insert: %w", err)
 	}
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	updateRecords, err := produceRows(phaseCtx, kafka, offline[1:2])
+	updateRecords, err := runtime.produceRows(phaseCtx, offline[1:2])
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("produce offline update: %w", err)
 	}
 	offlineRecords = append(offlineRecords, updateRecords...)
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	tombstoneRecords, err := produceTombstone(phaseCtx, kafka, 1)
+	tombstoneRecords, err := runtime.produceTombstone(phaseCtx, 1)
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("produce keyed tombstone: %w", err)
 	}
 	offlineRecords = append(offlineRecords, tombstoneRecords...)
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	lastRecords, err := produceRows(phaseCtx, kafka, offline[2:])
+	lastRecords, err := runtime.produceRows(phaseCtx, offline[2:])
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("produce final offline insert: %w", err)
@@ -438,7 +516,7 @@ func run(ctx context.Context, opts runOptions, report *runReport) error {
 	offlineRecords = append(offlineRecords, lastRecords...)
 	finalOffset := lastOffset(offlineRecords) + 1
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	unchangedRows, err := readRows(phaseCtx, db)
+	unchangedRows, err := runtime.rows(phaseCtx)
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("read MatrixOne during worker outage: %w", err)
@@ -447,7 +525,7 @@ func run(ctx context.Context, opts runOptions, report *runReport) error {
 		return fmt.Errorf("MatrixOne changed while Connect was stopped: got %v, want baseline %v", unchangedRows, sortedRows(baselineWant))
 	}
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	got, ok, err := groupOffset(phaseCtx, admin, report.SinkConsumerGroup)
+	got, ok, err := runtime.groupOffset(phaseCtx)
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("read sink group offset while worker stopped: %w", err)
@@ -462,7 +540,7 @@ func run(ctx context.Context, opts runOptions, report *runReport) error {
 		return err
 	}
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	err = startOwnedConnect(phaseCtx, opts)
+	err = runtime.startWorker(phaseCtx)
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("restart same Connect worker: %w", err)
@@ -474,7 +552,7 @@ func run(ctx context.Context, opts runOptions, report *runReport) error {
 		return fmt.Errorf("connector recovery: %w", err)
 	}
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	catchUpReceipt, err := waitForDrain(phaseCtx, connectorDrainReader{db: db, admin: admin, connect: &connect, name: opts.connectorName}, allOffline, finalOffset)
+	catchUpReceipt, err := waitForDrain(phaseCtx, runtime, allOffline, finalOffset)
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("post-crash catch-up: %w", err)
@@ -530,7 +608,7 @@ func run(ctx context.Context, opts runOptions, report *runReport) error {
 		return err
 	}
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	replayReceipt, err := waitForDrain(phaseCtx, connectorDrainReader{db: db, admin: admin, connect: &connect, name: opts.connectorName}, allOffline, finalOffset)
+	replayReceipt, err := waitForDrain(phaseCtx, runtime, allOffline, finalOffset)
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("controlled replay: %w", err)
@@ -549,13 +627,13 @@ func run(ctx context.Context, opts runOptions, report *runReport) error {
 		return err
 	}
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	err = killOwnedConnect(phaseCtx, opts)
+	err = runtime.killWorker(phaseCtx)
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("empty-work restart: stop owned Connect worker: %w", err)
 	}
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	err = startOwnedConnect(phaseCtx, opts)
+	err = runtime.startWorker(phaseCtx)
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("empty-work restart: start same Connect worker: %w", err)
@@ -567,13 +645,13 @@ func run(ctx context.Context, opts runOptions, report *runReport) error {
 		return fmt.Errorf("empty-work restart: connector did not recover: %w", err)
 	}
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	stableRows, err := readRows(phaseCtx, db)
+	stableRows, err := runtime.rows(phaseCtx)
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("empty-work restart: read final rows: %w", err)
 	}
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	stableGroup, ok, err := groupOffset(phaseCtx, admin, report.SinkConsumerGroup)
+	stableGroup, ok, err := runtime.groupOffset(phaseCtx)
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("empty-work restart: read sink offset: %w", err)
@@ -585,7 +663,7 @@ func run(ctx context.Context, opts runOptions, report *runReport) error {
 		return fmt.Errorf("empty-work restart: read Connect REST offset: %w", err)
 	}
 	phaseCtx, phaseCancel = context.WithTimeout(ctx, opts.phaseTimeout)
-	stableLogEnd, endFound, err := topicLogEndOffset(phaseCtx, admin)
+	stableLogEnd, endFound, err := runtime.logEndOffset(phaseCtx)
 	phaseCancel()
 	if err != nil {
 		return fmt.Errorf("empty-work restart: read topic log end: %w", err)
@@ -924,7 +1002,7 @@ func (c connectClient) request(ctx context.Context, method, path string, body []
 			return data, nil
 		}
 	}
-	return nil, fmt.Errorf("Connect REST %s %s returned HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(data)))
+	return nil, fmt.Errorf("connect REST %s %s returned HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(data)))
 }
 
 func waitForConnector(ctx context.Context, connect connectClient, name, want string) error {
@@ -1037,7 +1115,8 @@ func startOwnedConnect(ctx context.Context, opts runOptions) error {
 }
 
 func composeOutput(ctx context.Context, opts runOptions, args ...string) (string, error) {
-	commandArgs := []string{"compose", "-p", opts.composeProject, "-f", opts.composeBase, "-f", opts.composeConnect}
+	commandArgs := make([]string, 0, 7+len(args))
+	commandArgs = append(commandArgs, "compose", "-p", opts.composeProject, "-f", opts.composeBase, "-f", opts.composeConnect)
 	commandArgs = append(commandArgs, args...)
 	cmd := exec.CommandContext(ctx, "docker", commandArgs...)
 	cmd.Dir = filepath.Dir(opts.composeBase)
@@ -1062,7 +1141,7 @@ func toRowReports(rows []row) []rowReport {
 	sorted := sortedRows(rows)
 	out := make([]rowReport, 0, len(sorted))
 	for _, item := range sorted {
-		out = append(out, rowReport{ID: item.ID, Name: item.Name, Note: item.Note, Counter: item.Counter})
+		out = append(out, rowReport(item))
 	}
 	return out
 }
