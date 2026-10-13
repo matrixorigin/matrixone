@@ -83,6 +83,7 @@ func TestIssue30084ODKUPartitionSnapshotValidation(t *testing.T) {
 				for _, predicate := range []string{"", " where id=1", " where uk=10"} {
 					rows, err := db.QueryContext(ctx, "select id,uk,v from "+table+predicate)
 					require.NoError(t, err)
+					defer rows.Close()
 					var actual [][3]int
 					for rows.Next() {
 						var row [3]int
@@ -90,7 +91,6 @@ func TestIssue30084ODKUPartitionSnapshotValidation(t *testing.T) {
 						actual = append(actual, row)
 					}
 					require.NoError(t, rows.Err())
-					require.NoError(t, rows.Close())
 					require.Equal(t, [][3]int{{1, 10, 3}}, actual, predicate)
 				}
 			})
