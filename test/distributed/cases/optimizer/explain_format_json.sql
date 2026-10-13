@@ -50,12 +50,12 @@ create table vectors(id bigint primary key, v vecf32(3));
 insert into vectors values (1,'[0,0,0]'),(2,'[1,1,1]'),(3,'[2,2,2]');
 create index ix using ivfflat on vectors(v) lists=1 op_type 'vector_l2_ops';
 set probe_limit=1;
--- @regex("(?s)Vector Index Scan.*query_vector=0x0000803F0000803F0000803F",true)
+-- @regex("(?s)Vector Index Scan.*query_payload=0x0000803F0000803F0000803F",true)
 explain format=json select id from vectors order by l2_distance(v,'[1,1,1]') limit 2;
--- @regex("(?s)Vector Index Scan.*query_vector=0x000000400000004000000040",true)
+-- @regex("(?s)Vector Index Scan.*query_payload=0x000000400000004000000040",true)
 explain format=json select id from vectors order by l2_distance(v,'[2,2,2]') limit 2;
 set probe_limit=16;
--- @regex("(?s)Vector Index Scan.*initial_probe_count=16",true)
+-- @regex("(?s)Vector Index Scan.*algo_setting[^=]*=NProbe: 16([^0-9]|$)",true)
 explain format=json select id from vectors order by l2_distance(v,'[1,1,1]') limit 2;
 -- @regex("(?s)Vector Index Scan.*distance_upper_bound_type=EXCLUSIVE.*distance_upper_bound=5[^0-9]",true)
 explain format=json select id from vectors where l2_distance(v,'[1,1,1]') < 5 order by l2_distance(v,'[1,1,1]') limit 2;
@@ -75,9 +75,9 @@ explain format=json select id from vectors where l2_distance(v,'[1,1,1]') > 1 or
 create table vectors_include(id bigint primary key, v vecf32(3), tag varchar(10));
 insert into vectors_include values (1,'[0,0,0]','zero'),(2,'[1,1,1]','one'),(3,'[2,2,2]','two');
 create index ix_include using ivfflat on vectors_include(v) lists=1 op_type 'vector_l2_ops' include(tag);
--- @regex("(?s)Vector Index Scan.*first_round_limit=2",true)
+-- @regex("(?s)Vector Index Scan.*algo_expr[^=]*first_round_limit[^=]*=2([^0-9]|$)",true)
 explain format=json select id, tag from vectors_include order by l2_distance(v,'[1,1,1]') limit 2 by rank with option 'mode=include';
--- @regex("(?s)Vector Index Scan.*first_round_limit=3",true)
+-- @regex("(?s)Vector Index Scan.*algo_expr[^=]*first_round_limit[^=]*=3([^0-9]|$)",true)
 explain format=json select id, tag from vectors_include order by l2_distance(v,'[1,1,1]') limit 3 by rank with option 'mode=include';
 drop table vectors_include;
 set probe_limit=default;
