@@ -126,8 +126,12 @@ func isGossipFixtureBindCollision(err error) bool {
 
 func makeGossipFixtureConfigs(t *testing.T, rt runtime.Runtime, nodeCount int) ([]Config, error) {
 	t.Helper()
+	first, limit, err := testPortRange()
+	if err != nil {
+		return nil, err
+	}
 	return makeGossipFixtureConfigsWithAllocator(t, rt, nodeCount, func() (int, error) {
-		return randomPorts.allocate(probeTestPort)
+		return randomPorts.allocate(first, limit, probeTestPort)
 	})
 }
 
@@ -530,6 +534,8 @@ func TestGossipFixtureStartupRealBindCollision(t *testing.T) {
 				injectedAttempt := 0
 				var currentConfigs, injectedConfigs []Config
 				var failedConfigs [][]Config
+				// Match memberlist's network family: on Darwin a tcp4 wildcard listener
+				// can coexist with the tcp wildcard listener used by its transport.
 				var occupied, earlierOccupied, competitor net.Listener
 				var collisionErr, earlierErr error
 				reopenedNode := false
@@ -552,13 +558,13 @@ func TestGossipFixtureStartupRealBindCollision(t *testing.T) {
 							var err error
 							if tc.occupiedInjection {
 								// Model an independent listener winning the probe-to-injection race.
-								competitor, err = net.Listen("tcp4", cfg.GossipListenAddr())
+								competitor, err = net.Listen("tcp", cfg.GossipListenAddr())
 								if err != nil {
 									earlierErr = fmt.Errorf("earlier competitor bind failed: %w", err)
 									return nil, earlierErr
 								}
 							}
-							earlierOccupied, err = net.Listen("tcp4", cfg.GossipListenAddr())
+							earlierOccupied, err = net.Listen("tcp", cfg.GossipListenAddr())
 							if err != nil {
 								earlierErr = fmt.Errorf("earlier collision injection failed: %w", err)
 								return nil, earlierErr
@@ -571,7 +577,7 @@ func TestGossipFixtureStartupRealBindCollision(t *testing.T) {
 						// this node. Inject once in the first generation that gets here.
 						if occupied == nil && cfg.UUID == currentConfigs[1].UUID {
 							var err error
-							occupied, err = net.Listen("tcp4", cfg.GossipListenAddr())
+							occupied, err = net.Listen("tcp", cfg.GossipListenAddr())
 							if err != nil {
 								return nil, fmt.Errorf("collision injection failed: %w", err)
 							}
