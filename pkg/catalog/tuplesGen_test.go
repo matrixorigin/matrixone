@@ -15,6 +15,9 @@
 package catalog
 
 import (
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -69,4 +72,30 @@ func TestGenCreateColumnTuplesPreservesUnsignedFlag(t *testing.T) {
 	require.Equal(t, Row_ID, cols[len(tests)].Name)
 	require.Zero(t, cols[len(tests)].IsUnsigned)
 	require.Zero(t, flags[len(tests)])
+}
+
+func TestGenColumnsFromDefsSequenceLimit(t *testing.T) {
+	defs := make([]engine.TableDef, 0, objectio.SEQNUM_UPPER+2)
+	// The last ordinary slot is hidden; a hidden column still consumes capacity.
+	for i := 0; i < objectio.SEQNUM_UPPER; i++ {
+		defs = append(defs, &engine.AttributeDef{Attr: engine.Attribute{Name: fmt.Sprintf("c%d", i), Type: types.T_int32.ToType(), IsHidden: i == objectio.SEQNUM_UPPER-1}})
+	}
+	defs = append(defs, &engine.AttributeDef{Attr: engine.Attribute{Name: Row_ID, Type: types.T_Rowid.ToType()}}, &engine.CommentDef{Comment: "not a column"})
+	cols, err := GenColumnsFromDefs(0, "wide", "test", 1, 1, defs)
+	require.NoError(t, err)
+	require.Len(t, cols, objectio.SEQNUM_UPPER+1)
+	require.Equal(t, uint16(objectio.SEQNUM_UPPER-1), cols[objectio.SEQNUM_UPPER-1].Seqnum)
+	// Existing rowid treatment is preserved; it does not occupy an ordinary slot.
+	require.Equal(t, Row_ID, cols[len(cols)-1].Name)
+	extra := &engine.AttributeDef{Attr: engine.Attribute{Name: "extra", Type: types.T_int32.ToType(), ID: 42, Seqnum: 17}}
+	defs = append(defs, extra)
+	first := defs[0].(*engine.AttributeDef)
+	first.Attr.ID = 99
+	first.Attr.Seqnum = 77
+	_, err = GenColumnsFromDefs(0, "wide", "test", 1, 1, defs)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTooManyFields), "%v", err)
+	require.Equal(t, uint64(99), first.Attr.ID)
+	require.Equal(t, uint16(77), first.Attr.Seqnum)
+	require.Equal(t, uint64(42), extra.Attr.ID)
+	require.Equal(t, uint16(17), extra.Attr.Seqnum)
 }

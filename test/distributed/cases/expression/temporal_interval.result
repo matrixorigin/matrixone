@@ -404,7 +404,7 @@ select date(date_sub("1998-01-01 00:00:00",INTERVAL 1 DAY));
 ➤ date(date_sub(1998-01-01 00:00:00, INTERVAL 1 day))[91,64,0]  𝄀
 1997-12-31
 select dayofyear(date_sub("1998-01-01 00:00:00",INTERVAL 1 MONTH));
-➤ dayofyear(date_sub(1998-01-01 00:00:00, INTERVAL 1 month))[5,16,0]  𝄀
+➤ dayofyear(date_sub(1998-01-01 00:00:00, INTERVAL 1 month))[-5,4,0]  𝄀
 335
 select month(date_add("1997-12-31 23:59:59",INTERVAL "1:1" MINUTE_SECOND));
 ➤ month(date_add(1997-12-31 23:59:59, INTERVAL 1:1 minute_second))[-6,8,0]  𝄀
@@ -416,7 +416,7 @@ select date(date_add("1997-12-31 23:59:59",INTERVAL "1 1" YEAR_MONTH));
 ➤ date(date_add(1997-12-31 23:59:59, INTERVAL 1 1 year_month))[91,64,0]  𝄀
 1999-01-31
 select dayofyear(date_add("1997-12-31 23:59:59",INTERVAL "1:1:1" HOUR_SECOND));
-➤ dayofyear(date_add(1997-12-31 23:59:59, INTERVAL 1:1:1 hour_second))[5,16,0]  𝄀
+➤ dayofyear(date_add(1997-12-31 23:59:59, INTERVAL 1:1:1 hour_second))[-5,4,0]  𝄀
 1
 select date("1997-12-31 23:59:59" + INTERVAL 1 SECOND) + INTERVAL "1:1:1" HOUR_SECOND;
 ➤ date(1997-12-31 23:59:59 + INTERVAL 1 second) + INTERVAL 1:1:1 hour_second[93,64,0]  𝄀

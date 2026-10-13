@@ -19,6 +19,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"net"
@@ -1366,7 +1367,8 @@ func makeMysqlStringResultSet() *MysqlResultSet {
 	return rs
 }
 
-func makeMysqlGeometryResultSet() *MysqlResultSet {
+func makeMysqlGeometryResultSet(t *testing.T) *MysqlResultSet {
+	t.Helper()
 	var rs = &MysqlResultSet{}
 
 	name := "Geometry"
@@ -1374,11 +1376,10 @@ func makeMysqlGeometryResultSet() *MysqlResultSet {
 	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(defines.MYSQL_TYPE_GEOMETRY)
+	require.NoError(t, setMysqlColumnTypeInfo(context.Background(), types.T_geometry.ToType(), mysqlCol))
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
 
 	rs.AddColumn(mysqlCol)
 
@@ -1938,7 +1939,7 @@ func TestMysqlResultSet(t *testing.T) {
 		},
 		{
 			sql: "select geometry",
-			mrs: makeMysqlGeometryResultSet(),
+			mrs: makeMysqlGeometryResultSet(t),
 		},
 		{
 			sql: "select date",
@@ -2251,7 +2252,7 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 							require.NoError(t, err)
 							data = strconv.AppendInt(data, value, 10)
 						}
-					case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_GEOMETRY:
+					case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING:
 						value, err := mrs.GetString(context.TODO(), rowIdx, i)
 						require.NoError(t, err)
 						data = []byte(value)
@@ -2263,6 +2264,18 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 						value, err := mrs.GetFloat64(context.TODO(), rowIdx, i)
 						require.NoError(t, err)
 						data = strconv.AppendFloat(data, value, 'g', -1, 64)
+					case defines.MYSQL_TYPE_GEOMETRY:
+						text, err := mrs.GetString(context.TODO(), rowIdx, i)
+						require.NoError(t, err)
+						golden := map[string]string{
+							"POINT(1 1)":          "000000000101000000000000000000f03f000000000000f03f",
+							"POINT(2 2)":          "00000000010100000000000000000000400000000000000040",
+							"LINESTRING(0 0,1 1)": "0000000001020000000200000000000000000000000000000000000000000000000000f03f000000000000f03f",
+						}
+						encoded, ok := golden[text]
+						require.True(t, ok, text)
+						data, err = hex.DecodeString(encoded)
+						require.NoError(t, err)
 					case defines.MYSQL_TYPE_DATE:
 						value, err := mrs.GetValue(context.TODO(), rowIdx, i)
 						require.NoError(t, err)
