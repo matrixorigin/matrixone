@@ -1719,26 +1719,89 @@ func TestFilteringOrOfExistsRewriteControls(t *testing.T) {
 }
 
 func TestFallibleExistsPredicateKeepsIsTrueBarrier(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `select exists (
-		select 1 from tpch.region r
-		where hll_cardinality(cast(r.r_comment as varbinary)) = n.n_regionkey
-	) from tpch.nation n`)
-	require.NoError(t, err)
-
-	var mark *plan.Node
-	for _, node := range logicPlan.GetQuery().Nodes {
-		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
-			mark = node
-			break
-		}
+	for _, tc := range []struct {
+		name, sql string
+		want      int32
+	}{
+		{"direct fallible key", `select exists (select 1 from tpch.region r where hll_cardinality(cast(r.r_comment as varbinary)) = n.n_regionkey) from tpch.nation n`, function.ISTRUE},
+		{"sorted fallible key", `select exists (select r.r_regionkey from tpch.region r where hll_cardinality(cast(r.r_comment as varbinary)) = n.n_regionkey order by r.r_regionkey) from tpch.nation n`, function.ISTRUE},
+		{"derived sorted fallible key", `select exists (select d.k from (select r.r_regionkey as k, hll_cardinality(cast(r.r_comment as varbinary)) as v from tpch.region r) d where d.v = n.n_regionkey order by d.k) from tpch.nation n`, function.ISTRUE},
+		{"sorted non-null fallible key", `select exists (select r.r_regionkey from tpch.region r where coalesce(hll_cardinality(cast(r.r_comment as varbinary)), 0) = coalesce(n.n_regionkey, 0) order by r.r_regionkey) from tpch.nation n`, function.ISTRUE},
+		{"sorted stored key", `select exists (select r.r_regionkey from tpch.region r where r.r_regionkey = n.n_regionkey order by r.r_regionkey) from tpch.nation n`, function.EQUAL},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			var mark *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+					mark = node
+					break
+				}
+			}
+			require.NotNil(t, mark)
+			require.Len(t, mark.OnList, 1)
+			condition := mark.OnList[0].GetF()
+			require.NotNil(t, condition)
+			funcID, _ := function.DecodeOverloadID(condition.Func.GetObj())
+			require.Equal(t, tc.want, funcID, "only proven-total existential keys may be exposed")
+		})
 	}
-	require.NotNil(t, mark)
-	require.Len(t, mark.OnList, 1)
-	condition := mark.OnList[0].GetF()
-	require.NotNil(t, condition)
-	funcID, _ := function.DecodeOverloadID(condition.Func.GetObj())
-	require.Equal(t, int32(function.ISTRUE), funcID,
-		"a fallible existential predicate must not become a raw hash key")
+}
+
+func TestExistentialKeyOriginsAreTotalAndReadOnly(t *testing.T) {
+	col := func(tag int32) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag}}}
+	}
+	for _, tc := range []struct {
+		name       string
+		mutate     func(*plan.Query)
+		key, input int32
+		want       bool
+	}{
+		{"unreferenced fallible slot", nil, 30, 4, true},
+		{"referenced fallible slot", func(q *plan.Query) { q.Nodes[2].ProjectList[0] = q.Nodes[2].ProjectList[1] }, 30, 4, false},
+		{"distinct forwarding", func(q *plan.Query) { q.Nodes[3].NodeType = plan.Node_DISTINCT }, 30, 4, true},
+		{"partition forwarding", func(q *plan.Query) { q.Nodes[3].NodeType = plan.Node_PARTITION }, 30, 4, true},
+		{"join forwarding", func(q *plan.Query) {
+			q.Nodes = append(q.Nodes, &plan.Node{NodeType: plan.Node_JOIN, Children: []int32{4, 1}})
+		}, 30, 5, true},
+		{"unknown producer", func(q *plan.Query) {
+			q.Nodes = append(q.Nodes, &plan.Node{NodeType: plan.Node_AGG, BindingTags: []int32{40}, Children: []int32{4}})
+		}, 40, 5, false},
+		{"unknown tag", nil, 99, 4, false},
+		{"origin cycle", func(q *plan.Query) { q.Nodes[2].ProjectList[0] = col(30) }, 30, 4, false},
+		{"input cycle", func(q *plan.Query) { q.Nodes[3].Children[0] = 4 }, 30, 4, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := &plan.Query{Nodes: []*plan.Node{
+				{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{10}, TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Typ: col(10).Typ}}}},
+				{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{11}, TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Typ: col(11).Typ}}}},
+				{NodeType: plan.Node_PROJECT, BindingTags: []int32{20}, Children: []int32{1}, ProjectList: []*plan.Expr{col(11), {Typ: col(11).Typ, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "fallible"}}}}}},
+				{NodeType: plan.Node_SORT, Children: []int32{2}},
+				{NodeType: plan.Node_PROJECT, BindingTags: []int32{30}, Children: []int32{3}, ProjectList: []*plan.Expr{col(20)}},
+			}}
+			if tc.mutate != nil {
+				tc.mutate(q)
+			}
+			predicate, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{col(10), col(tc.key)})
+			require.NoError(t, err)
+			before, err := q.Marshal()
+			require.NoError(t, err)
+			predBefore, err := predicate.Marshal()
+			require.NoError(t, err)
+			builder := &QueryBuilder{qry: q}
+			require.Equal(t, tc.want, builder.existentialJoinPredicatesAreTotal([]*plan.Expr{predicate}, 0, tc.input))
+			// Both sides must be inspected, independent of input ordering.
+			require.Equal(t, tc.want, builder.existentialJoinPredicatesAreTotal([]*plan.Expr{predicate}, tc.input, 0))
+			after, err := q.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+			predAfter, err := predicate.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, predBefore, predAfter)
+		})
+	}
 }
 
 func TestNullableNotExistsJoinPredicateNormalization(t *testing.T) {
