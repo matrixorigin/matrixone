@@ -271,6 +271,20 @@ func buildColumnAndConstraint(
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}
 	}
+	// Attribute parsing above finalizes AutoIncr. Preserve the early representation
+	// check before binding, but do not let COPY retain an illegal final dependency.
+	for _, col := range targetTableDef.Cols {
+		expr := col.GetGeneratedCol().GetExpr()
+		if !containsLegacyCRC32(expr) {
+			continue
+		}
+		if err := validateLegacyCRC32GeneratedInputs(ctx.GetContext(), expr, defaultScope); err != nil {
+			return nil, err
+		}
+		if err := checkGeneratedExprReferences(ctx.GetContext(), expr, col.GetOriginCaseName(), defaultScope, make(map[int32]bool)); err != nil {
+			return nil, err
+		}
+	}
 	if newCol.GeneratedCol != nil {
 		// Reject VIRTUAL generated columns as PRIMARY KEY
 		if newCol.Primary && !newCol.GeneratedCol.IsStored {

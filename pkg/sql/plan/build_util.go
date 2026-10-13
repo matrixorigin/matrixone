@@ -1139,6 +1139,9 @@ func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ p
 		if err := validateLegacyCRC32GeneratedInputs(bindCtx, source.GeneratedCol.Expr, existingCols); err != nil {
 			return nil, err
 		}
+		if err := checkGeneratedExprReferences(bindCtx, source.GeneratedCol.Expr, col.Name.ColNameOrigin(), existingCols, make(map[int32]bool)); err != nil {
+			return nil, err
+		}
 		value := *source.GeneratedCol
 		value.Expr = DeepCopyExpr(value.Expr)
 		if err := RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, value.Expr); err != nil {

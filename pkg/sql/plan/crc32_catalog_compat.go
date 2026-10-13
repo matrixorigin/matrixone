@@ -89,7 +89,7 @@ func validateLegacyCRC32GeneratedInputs(ctx context.Context, expr *planpb.Expr, 
 			return moerr.NewNotSupported(ctx, "changing a legacy CRC32 JSON generated column requires an explicit table rebuild")
 		}
 		typ := cols[ref.ColPos].Typ
-		if e.Typ.Id != typ.Id || e.Typ.Width != typ.Width || e.Typ.Scale != typ.Scale ||
+		if e.Typ.Id != typ.Id || e.Typ.Width != typ.Width || e.Typ.Scale != typ.Scale || e.Typ.AutoIncr != typ.AutoIncr ||
 			e.Typ.Enumvalues != typ.Enumvalues || !e.Typ.SameCollation(typ) || e.Typ.PadSpace != typ.PadSpace {
 			return moerr.NewNotSupported(ctx, "changing a legacy CRC32 JSON generated column requires an explicit table rebuild")
 		}
