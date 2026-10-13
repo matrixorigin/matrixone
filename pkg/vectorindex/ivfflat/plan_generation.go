@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -63,7 +64,7 @@ func (s *planSearchGeneration) release() {
 // NewPlanReaders creates PRE readers within one logical CN partition, retaining
 // its identity for centroid cache keys and persisted-object ownership. No entry reader opens until initialization
 // has sealed the shared domain, snapshot, version and centroid route.
-func NewPlanReaders(proc *process.Process, spec *plan.VectorIndexScan, req searchplugin.Request, parallelism int) ([]engine.Reader, error) {
+func NewPlanReaders(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request, parallelism int) ([]engine.Reader, error) {
 	if parallelism <= 0 || int64(parallelism) > int64(^uint32(0)>>1) {
 		return nil, moerr.NewInvalidInputNoCtx("invalid local vector parallelism")
 	}
@@ -85,7 +86,11 @@ func NewPlanReaders(proc *process.Process, spec *plan.VectorIndexScan, req searc
 	if err != nil {
 		return nil, err
 	}
-	if (parallelism > 1 || distributed) && (async || req.HasFirstRound || spec.FirstRoundLimit != nil || spec.BucketExpandStep > 0 || spec.ScanWork == nil) {
+	multiRound, err := ivfflatplan.MultiRound(spec)
+	if err != nil {
+		return nil, err
+	}
+	if (parallelism > 1 || distributed) && (async || multiRound || spec.ScanWork == nil) {
 		return nil, moerr.NewInvalidInputNoCtx("vector execution mode does not support local DOP")
 	}
 	if distributed && (parallelism != 1 || spec.ScanWork.Objects < 2 || spec.ScanWork.Rows <= 0 || math.IsNaN(spec.ScanWork.Rows) || math.IsInf(spec.ScanWork.Rows, 0) || spec.ScanWork.VectorBytesPerRow <= 0 || math.IsNaN(spec.ScanWork.VectorBytesPerRow) || math.IsInf(spec.ScanWork.VectorBytesPerRow, 0) || spec.ScanWork.Blocks <= 0) {

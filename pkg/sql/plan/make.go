@@ -972,6 +972,10 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 // preservation. DDL-specific error mapping is applied by the DDL validation
 // layer rather than changing cast_strict's execution contract.
 func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	if isMediumIntPlanType(targetType) {
+		return forceAssignmentCastExprWithName(
+			ctx, expr, targetType, assignmentCastFunctionName(targetType, false, nil))
+	}
 	if types.T(targetType.Id).IsArrayRelate() {
 		// 生成列即使类型元数据相同，也必须校验实际载荷的维度。
 		return forceAssignmentCastExprWithName(ctx, expr, targetType, "cast")
@@ -990,6 +994,10 @@ func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Typ
 // semantics. Stored procedure declarations and assignments use the same
 // conversion contract as values written to SQL columns.
 func MakePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	if isMediumIntPlanType(targetType) {
+		return forceAssignmentCastExprWithName(
+			ctx, expr, targetType, assignmentCastFunctionName(targetType, false, nil))
+	}
 	return makePlan2CastExprWithName(
 		ctx,
 		expr,
@@ -1107,8 +1115,18 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 		}
 		args[idx] = argExpr
 	}
+	if types.T(sourceExpr.Typ.Id).IsInteger() && sourceExpr.Typ.Id != int32(types.T_int64) && sourceExpr.Typ.Id != int32(types.T_uint64) {
+		numericType := Type{Id: int32(types.T_int64)}
+		if types.T(sourceExpr.Typ.Id).IsUnsignedInt() {
+			numericType.Id = int32(types.T_uint64)
+		}
+		sourceExpr, err = appendCastBeforeExpr(ctx, sourceExpr, numericType)
+		if err != nil {
+			return nil, err
+		}
+	}
 	args[len(args)-1] = sourceExpr
-	if 20 <= sourceExpr.Typ.Id && sourceExpr.Typ.Id <= 29 {
+	if types.T(sourceExpr.Typ.Id).IsInteger() {
 		expr, err = BindFuncExprImplByPlanExpr(ctx, moEnumCastIndexValueToIndexFun, args)
 		if err != nil {
 			return nil, err
@@ -1149,6 +1167,16 @@ func funcCastForSetType(ctx context.Context, expr *Expr, targetType Type) (*Expr
 			return nil, err
 		}
 		args[idx] = argExpr
+	}
+	if types.T(sourceExpr.Typ.Id).IsInteger() && sourceExpr.Typ.Id != int32(types.T_int64) && sourceExpr.Typ.Id != int32(types.T_uint64) {
+		numericType := Type{Id: int32(types.T_int64)}
+		if types.T(sourceExpr.Typ.Id).IsUnsignedInt() {
+			numericType.Id = int32(types.T_uint64)
+		}
+		sourceExpr, err = appendCastBeforeExpr(ctx, sourceExpr, numericType)
+		if err != nil {
+			return nil, err
+		}
 	}
 	args[len(args)-1] = sourceExpr
 	if types.T(sourceExpr.Typ.Id).IsInteger() {

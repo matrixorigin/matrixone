@@ -22,7 +22,7 @@ alter table h_norm alter reindex h_cos hnsw force_sync;
 
 -- A normalized query is served by the cosine index (native ANN), not the exact scan.
 -- @separator:table
--- @regex("hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 explain select id, cosine_distance(v, '[1,0,0]') as d
   from h_norm order by cosine_distance(v, '[1,0,0]') limit 3;
 
