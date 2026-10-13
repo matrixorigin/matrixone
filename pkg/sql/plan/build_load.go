@@ -1042,6 +1042,12 @@ func (builder *QueryBuilder) appendLoadDefaultProjections(
 }
 
 func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
+	// Binding consumes assignment expressions before serializing ExternParam.
+	// A consumed first assignment means this AST was already normalized; keep
+	// its rules when PREPARE or a transaction retry builds another plan.
+	if param.NullMap != nil && len(param.Tail.Assignments) > 0 && param.Tail.Assignments[0].Expr == nil {
+		return nil
+	}
 	param.NullMap = make(map[string][]string)
 
 	for i := 0; i < len(param.Tail.Assignments); i++ {
