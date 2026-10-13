@@ -1193,8 +1193,18 @@ func canonicalSystemVariableName(name string) string {
 		return transactionIsolationSystemVariable
 	case transactionReadOnlySystemVariableAlias:
 		return transactionReadOnlySystemVariable
+	case "innodb_lock_wait_timeout":
+		return "lock_wait_timeout"
 	}
 	return name
+}
+
+func init() {
+	// The compatibility spelling shares the native scope, validator and default.
+	// SystemVariables resolves both names to the same lock_wait_timeout state.
+	alias := gSysVarsDefs["lock_wait_timeout"]
+	alias.Name = "innodb_lock_wait_timeout"
+	gSysVarsDefs[alias.Name] = alias
 }
 
 func isTransactionIsolationSystemVariable(name string) bool {
@@ -3862,6 +3872,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 	// TODO(retire-txn-trace, #29249): remove this declaration and its inert-setting
 	// tests once the rollback window excludes collector-bearing versions and
 	// client/session initialization no longer sends this setting.
+	"mo_sirius_campaign_evidence": {
+		Name:              "mo_sirius_campaign_evidence",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("mo_sirius_campaign_evidence"),
+		Default:           int64(0),
+	},
 	"disable_txn_trace": {
 		Name:              "disable_txn_trace",
 		Scope:             ScopeSession,

@@ -1533,18 +1533,26 @@ read -r observed <&8
 wait "$child_pid"
 printf 'CHILD %s %s\n' "$observed" "$child_pid"
 handled=0
-trap 'fixture_self_pid trap_pid; [[ "$trap_pid" == "$main" ]] || exit 97; handled=$((handled+1)); printf "ack\n" >&7' TERM
+pending_ack=0
+trap 'fixture_self_pid trap_pid; [[ "$trap_pid" == "$main" ]] || exit 97; handled=$((handled+1)); pending_ack=1' TERM
 (
+ # Unblock the main loop on protocol failure as well as normal completion.
+ trap ': > "$scratch/done"' EXIT
  for ((j=0; j<200; j++)); do
   kill -TERM "$main"
-  read -r acknowledgment <&7
-  [[ "$acknowledgment" == ack ]] || exit 98
+  read -r acknowledgment sequence pending <&7
+  [[ "$acknowledgment" == ack && "$sequence" == "$((j+1))" && "$pending" == 0 ]] || exit 98
  done
- touch "$scratch/done"
 ) &
 sender=$!
 trap 'kill "$sender" 2>/dev/null || :; wait "$sender" 2>/dev/null || :' EXIT
 while [[ ! -f "$scratch/done" ]]; do
+ # ACK means the previous trap has returned, so the sender can safely issue
+ # the next TERM. Publishing it inside the trap can lose that next signal.
+ if (( pending_ack )); then
+  pending_ack=0
+  printf 'ack %s %s\n' "$handled" "$pending_ack" >&7
+ fi
  # Reenter BASHPID expansion in modern Bash. The legacy fallback spawns
  # a child, whose output can be interrupted by TERM; its PID is checked
  # at startup, in the subshell, and by each TERM handler instead.
@@ -1554,6 +1562,7 @@ while [[ ! -f "$scratch/done" ]]; do
  fi
 done
 wait "$sender"
+trap - EXIT
 printf 'TERMS %s\n' "$handled"
 `
 	root := t.TempDir()

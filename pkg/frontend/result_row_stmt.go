@@ -354,6 +354,7 @@ func publishSelectResultMetadata(ses *Session, execCtx *ExecCtx) error {
 	}
 	ses.rs = &plan.ResultColDef{ResultCols: colDefs}
 	freezeResultMetadata(execCtx.runner)
+	recordCampaignResultMetadata(ses, colDefs)
 	return execCtx.resper.RespPreMeta(execCtx, columns)
 }
 
