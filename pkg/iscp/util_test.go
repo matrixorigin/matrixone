@@ -257,8 +257,6 @@ func TestConvertColIntoSQLSpecialValues(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func ptrType(t types.Type) *types.Type { return &t }
-
 func TestRowFromVector(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
