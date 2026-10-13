@@ -28,6 +28,14 @@ variables. The binder rejects a plan that would allow an assignment to escape
 the coordinator-only projection scope. An assignment is a user-variable side
 effect; it is never a write to catalog or transactional table data.
 
+The public `BuildPlan` entry point also performs a statement-level DML fence
+before table resolution or fallback planning. If an assignment AST occurs
+anywhere in INSERT (including VALUES and INSERT SELECT), multi-table INSERT,
+REPLACE, UPDATE, DELETE, MERGE, or LOAD, planning fails immediately. This
+prevents a direct value binder such as INSERT's `buildValueScan` from bypassing
+the SELECT projection validator and guarantees that no DML plan can mutate data
+or publish a variable before the scope error is returned.
+
 ## SQL and binding contract
 
 The parser represents `@name := expr` as `UserVarAssignmentExpr`. Assignment
@@ -178,6 +186,7 @@ The public contract is covered at the following layers:
 | overlay publication/discard and batch reset | `pkg/vm/process/user_var_assignment_test.go` |
 | real frontend execution and prepared execution | `pkg/frontend/mysql_cmd_executor_test.go`, `computation_wrapper_test.go`, and the user-variable integration cases |
 | plan serialization | generated `pkg/pb/plan/plan.pb.go` from `proto/plan.proto` |
+| DML scope admission and no-side-effect rejection | `pkg/sql/plan/user_var_assignment_test.go` (`TestUserVariableAssignmentRejectsDMLBeforeBinding`) |
 
 The regression set includes empty input, multiple physical batches, nested
 self-reference, skipped conditional rows, prepared reuse, cancellation, and
