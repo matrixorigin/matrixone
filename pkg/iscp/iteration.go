@@ -383,7 +383,7 @@ func ExecuteIterationWithRuntime(
 	}
 	// MV consumers need the tombstone rowid to recover the deleted row at the
 	// iteration's fromTS. Other consumers keep the historical batch shape.
-	collectCtx := ctxWithoutTimeout
+	collectCtx := collectChangesCtxForJobs(ctxWithoutTimeout, jobSpecs, prevStatus, committedWatermark)
 	for _, spec := range jobSpecs {
 		if spec.ConsumerType == int8(ConsumerType_MaterializedView) {
 			collectCtx = engine.WithRetainRowID(collectCtx, true)
