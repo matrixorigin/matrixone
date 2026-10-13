@@ -1208,6 +1208,8 @@ func rewriteExprIsMergeSafe(expr tree.Expr) bool {
 		return rewriteExprIsMergeSafe(e.SerialExpr) && rewriteExprIsMergeSafe(e.IndexExpr)
 	case *tree.CastExpr:
 		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.CollateExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
 	case *tree.BitCastExpr:
 		return rewriteExprIsMergeSafe(e.Expr)
 	case *tree.Tuple:

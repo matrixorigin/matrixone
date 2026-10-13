@@ -1596,6 +1596,49 @@ func TestMergeRewriteRules(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestMergeRewriteRulesCollatedProjection(t *testing.T) {
+	for _, tc := range []struct {
+		projection string
+		mergeable  bool
+	}{
+		{"a, age", true},
+		{"a, cast(age as char) as age", true},
+		{"a, age collate utf8mb4_bin as age", true},
+		{"a, cast(age as char) collate utf8mb4_bin as age", true},
+		{"a, (age collate utf8mb4_bin) collate utf8mb4_bin as age", true},
+		{"sum(age) collate utf8mb4_bin as age", false},
+		{"row_number() over () collate utf8mb4_bin as age", false},
+		{"(select age from db1.t2 limit 1) collate utf8mb4_bin as age", false},
+		{"@@sql_mode collate utf8mb4_bin as age", false},
+	} {
+		t.Run(tc.projection, func(t *testing.T) {
+			left := "select " + tc.projection + " from db1.t1 where a = 1"
+			right := "select " + tc.projection + " from db1.t1 where a = 2"
+			merged, err := mergeRewriteRules(t.Context(), left, right)
+			require.NoError(t, err)
+			if !tc.mergeable {
+				require.Equal(t, right, merged)
+				return
+			}
+			require.Contains(t, merged, "where (a = 1) or (a = 2)")
+			original, err := parsers.ParseOne(t.Context(), dialect.MYSQL, left, 1)
+			require.NoError(t, err)
+			defer original.Free()
+			combined, err := parsers.ParseOne(t.Context(), dialect.MYSQL, merged, 1)
+			require.NoError(t, err)
+			defer combined.Free()
+			require.Equal(t,
+				tree.String(&original.(*tree.Select).Select.(*tree.SelectClause).Exprs, dialect.MYSQL),
+				tree.String(&combined.(*tree.Select).Select.(*tree.SelectClause).Exprs, dialect.MYSQL))
+		})
+	}
+	left := "select age collate utf8mb4_bin as age from db1.t1 where a = 1"
+	right := "select age collate utf8mb4_general_ci as age from db1.t1 where a = 2"
+	merged, err := mergeRewriteRules(t.Context(), left, right)
+	require.NoError(t, err)
+	require.Equal(t, right, merged)
+}
+
 func TestMergeRewriteRulesFallbackWhenEitherSideIsUnmergeable(t *testing.T) {
 	ctx := context.Background()
 
