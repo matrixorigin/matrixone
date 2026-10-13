@@ -17,6 +17,7 @@ package merge
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -53,6 +54,20 @@ func (merge *Merge) Prepare(proc *process.Process) error {
 	return nil
 }
 
+// ActivateReceiverRange 只切换已完全消费的局部输入；调用者随后才启动对应
+// producer。未选分支没有 receiver，也不会被 Reset 当作活动输入等待。
+func (merge *Merge) ActivateReceiverRange(proc *process.Process, start, end int32) error {
+	if !merge.Partial || merge.MaterializedSource != nil || start < 0 || end <= start || int(end) > len(proc.Reg.MergeReceivers) {
+		return moerr.NewInternalErrorNoCtx("invalid scalar vector receiver range")
+	}
+	if merge.ctr.receiver == nil || merge.ctr.receiver.State().Alive != 0 {
+		return moerr.NewInternalErrorNoCtx("scalar vector receiver is still active")
+	}
+	merge.WithPartial(start, end)
+	merge.ctr.receiver = process.InitPipelineSignalReceiver(proc.Ctx, proc.Reg.MergeReceivers[start:end])
+	return nil
+}
+
 func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := merge.OpAnalyzer
 	if merge.MaterializedSource != nil {
@@ -64,6 +79,13 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 		if end {
 			result.Status = vm.ExecStop
 			return result, nil
+		}
+		if merge.MaterializedSingleBatch {
+			if merge.ctr.materializedBatch != nil {
+				bat.Clean(proc.Mp())
+				return vm.CancelResult, moerr.NewInternalErrorNoCtx("scalar vector source exceeded one batch")
+			}
+			merge.ctr.materializedBatch = bat
 		}
 		merge.ctr.materializedPosition++
 		result.Batch = bat

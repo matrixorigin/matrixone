@@ -1327,6 +1327,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Selectivity = 1
 		}
 
+	case plan.Node_VECTOR_QUERY_TOP:
+		node.Stats = DeepCopyStats(builder.qry.Nodes[node.Children[1]].Stats)
+		node.Stats.ForceOneCN = true
+	case plan.Node_VECTOR_QUERY_SOURCE:
+		node.Stats = DefaultStats()
+		node.Stats.Outcnt, node.Stats.TableCnt, node.Stats.Selectivity = 1, 1, 1
+
 	case plan.Node_SINK_SCAN:
 		sourceNode := builder.qry.Steps[node.GetSourceStep()[0]]
 		node.Stats = builder.qry.Nodes[sourceNode].Stats

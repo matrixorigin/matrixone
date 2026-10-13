@@ -360,6 +360,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.EndIDX = t.EndIDX
 		op.MaterializedSource = t.MaterializedSource
 		op.MaterializedReaderID = t.MaterializedReaderID
+		op.MaterializedSingleBatch = t.MaterializedSingleBatch
 		op.SetInfo(&info)
 		return op
 	case vm.MergeRecursive:

@@ -188,7 +188,7 @@ func (c *Compile) Release() {
 	doCompileRelease(c)
 }
 
-func (c Compile) TypeName() string {
+func (c *Compile) TypeName() string {
 	return "compile.Compile"
 }
 
@@ -244,9 +244,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		}
 	}
 
-	for _, e := range c.filterExprExes {
-		e.ResetForNextQuery()
-	}
+	c.resetFilterExprExecutors()
 
 	c.MessageBoard = c.MessageBoard.Reset()
 	proc.SetMessageBoard(c.MessageBoard)
@@ -356,10 +354,7 @@ func (c *Compile) clear() {
 	c.disableLock = false
 	c.icebergScanPlanner = nil
 
-	for _, exe := range c.filterExprExes {
-		exe.Free()
-	}
-	c.filterExprExes = nil
+	c.freeFilterExprExecutors()
 
 	for k := range c.lockTables {
 		delete(c.lockTables, k)
@@ -1062,7 +1057,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare)
+	c.execType = vectorQueryExecType(plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry)
 
 	c.cnList, err = c.scheduleQueryWorkers()
 	if err != nil {
@@ -1570,6 +1565,10 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		}
 		ss = c.compileProjection(node, ss)
 		return ss, nil
+	case plan.Node_VECTOR_QUERY_TOP:
+		return c.compileVectorQueryTop(step, node, nodes, curNodeIdx)
+	case plan.Node_VECTOR_QUERY_SOURCE:
+		return c.compileVectorQuerySource(node)
 	case plan.Node_FUNCTION_SCAN:
 		if len(node.Children) != 0 {
 			ss, err = c.compilePlanScope(step, node.Children[0], nodes)
@@ -4017,14 +4016,14 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	if len(node.FilterList) != len(s.DataSource.FilterList) {
 		s.DataSource.FilterList = plan2.DeepCopyExprList(node.FilterList)
 		for _, e := range s.DataSource.FilterList {
-			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
+			err := c.replaceFoldExpr(c.proc, e)
 			if err != nil {
 				return err
 			}
 		}
 	}
 	for _, e := range s.DataSource.FilterList {
-		err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
+		err = c.evalFoldExpr(c.proc, e)
 		if err != nil {
 			return err
 		}
@@ -4034,7 +4033,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	if len(node.BlockFilterList) != len(s.DataSource.BlockFilterList) {
 		s.DataSource.BlockFilterList = plan2.DeepCopyExprList(node.BlockFilterList)
 		for _, e := range s.DataSource.BlockFilterList {
-			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
+			err := c.replaceFoldExpr(c.proc, e)
 			if err != nil {
 				return err
 			}

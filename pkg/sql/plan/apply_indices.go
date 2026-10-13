@@ -355,6 +355,9 @@ func (builder *QueryBuilder) collectSpecialIndexGuards(nodeID int32) {
 		if scanIDs := builder.detectVectorGuard(node); len(scanIDs) > 0 {
 			builder.registerProjectGuard(node.NodeId, specialIndexKindVector, scanIDs)
 		}
+		if scanIDs := builder.detectScalarVectorGuard(node); len(scanIDs) > 0 {
+			builder.registerProjectGuard(node.NodeId, specialIndexKindVector, scanIDs)
+		}
 		if scanIDs := builder.detectEquiVectorJoinGuard(node); len(scanIDs) > 0 {
 			builder.registerProjectGuard(node.NodeId, specialIndexKindEquiVector, scanIDs)
 		}
@@ -655,6 +658,9 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 	}
 END_FULLTEXT:
 
+	if rewritten, err := builder.applyScalarVectorIndex(nodeID); rewritten != nodeID || err != nil {
+		return rewritten, err
+	}
 	if rewritten, applied, err := builder.applyVectorIndexForEquiJoin(nodeID); applied || err != nil {
 		return rewritten, err
 	}

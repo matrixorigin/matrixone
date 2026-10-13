@@ -81,6 +81,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.MultiUpdate:             "multi update",
 	vm.PostDml:                 "postdml",
 	vm.TableClone:              "table clone",
+	vm.VectorQuery:             "scalar vector query",
 }
 
 var debugMagicNames = map[magicType]string{
