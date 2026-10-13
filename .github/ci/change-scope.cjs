@@ -13,7 +13,7 @@
 // limitations under the License.
 'use strict';
 
-// Kernel exemptions remain narrow. SDK changes have their own complete suite;
+// Ordinary documentation and SDK changes have their own checks; fixtures,
 // shared helpers, build/CI configuration and unknown paths retain kernel CI.
 function validPath(path) {
   return typeof path === 'string' && !path.split('/').some(p => !p || p === '.' || p === '..');
@@ -24,8 +24,10 @@ const sdkControlPaths = ['.github/workflows/python-sdk.yml',
 function category(path) {
   if (!validPath(path)) return 'full';
   if (path.startsWith('clients/python/')) return 'sdk';
-  if (/^(README(?:_CN)?|CONTRIBUTING|CHANGELOG)\.md$/.test(path) ||
-      /^docs\/.*\.(md|png|jpg|jpeg|gif|svg)$/.test(path)) return 'docs';
+  if (/(^|\/)(testdata|fixtures)\//i.test(path)) return 'full';
+  const extension = path.slice(path.lastIndexOf('.')).toLowerCase();
+  if (extension === '.md' || extension === '.rst' ||
+      /^docs\/.*\.(png|jpg|jpeg|gif|svg)$/.test(path)) return 'docs';
   if (/^pkg\/.*_test\.go$/.test(path)) return 'ut';
   if (/^test\/distributed\/cases\/.*\.(sql|test|result)$/.test(path)) return 'bvt';
   return 'full';

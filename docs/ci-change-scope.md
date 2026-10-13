@@ -8,7 +8,7 @@ suites; this does not shard or select individual test cases.
 
 | Changed files | Scope | Work performed |
 | --- | --- | --- |
-| Root README/README_CN/CONTRIBUTING/CHANGELOG Markdown, or Markdown/images under `docs/` | docs | Documentation whitespace check and PR metadata checks |
+| Ordinary `.md`/`.rst` files anywhere (case-insensitive), or images under `docs/` | docs | Documentation whitespace check and PR metadata/size-label checks |
 | Only `pkg/**/*_test.go`, optionally with the documentation above | ut | Existing race UT and static analysis |
 | Only `.test`/`.sql`/`.result` under `test/distributed/cases/`, optionally with documentation | bvt | Shared build and both complementary BVT jobs |
 | Only `clients/python/**`, optionally with the documentation above | sdk | Installed-package SDK offline/compatibility, fatal-code lint and distribution checks; no kernel jobs, including utils |
@@ -16,8 +16,14 @@ suites; this does not shard or select individual test cases.
 
 Go helpers, kernel test fixtures, shared build scripts/dependencies, runtime
 configuration and workflow changes deliberately retain full kernel CI. Python
-SDK dependencies, packaging and tests belong to the SDK scope. Deleted paths are classified too;
-renames consider both names. Missing/incomplete/capped file lists fall back to
+SDK dependencies, packaging, tests and documentation belong to the SDK scope;
+packaging consumes its README.
+Files under `testdata/` or `fixtures/` directory segments retain their owning
+suite (SDK inside `clients/python/`, full kernel elsewhere), even with a documentation
+extension. Executable `.mdx`, text inputs, scripts and configuration are not
+documentation exemptions; images are exempt only under `docs/`.
+Deleted paths are classified too; renames consider both names.
+Missing/incomplete/capped file lists fall back to
 full kernel and SDK CI. `CI_FORCE_FULL` also requires both suites. SDK impact
 follows both rename paths: moving kernel code into the SDK still requires full
 kernel CI, and moving SDK code out does not lose its SDK checks. The classifier,

@@ -25,22 +25,36 @@ const modified = filename => ({ filename, status: 'modified' });
 test('only narrow kernel test, documentation and SDK paths receive exemptions', () => {
   for (const [paths, expected] of [
     [['README.md', 'docs/design/a.md'], 'docs'],
+    [['BUILD.md', 'pkg/common/moerr/error_handling.md', 'etc/DEV_README.md'], 'docs'],
+    [['.agents/skills/mo-dev/SKILL.md', '.claude/skills/mo-dev/SKILL.md', '.github/copilot-instructions.md'], 'docs'],
+    [['docs/cn/source/index.rst', 'pkg/sql/README.MD', 'optools/guide.RST'], 'docs'],
+    [['fixtures.md', 'pkg/fixtures-notes/README.md'], 'docs'],
+    [['docs/design/a.svg'], 'docs'],
     [['pkg/sql/plan/a_test.go'], 'ut'],
-    [['pkg/tests/upgrade/a_test.go', 'docs/a.md'], 'ut'],
+    [['pkg/tests/upgrade/a_test.go', 'pkg/sql/README.md'], 'ut'],
     [['test/distributed/cases/a.test', 'test/distributed/cases/a.result'], 'bvt'],
-    [['test/distributed/cases/a.sql', 'README_CN.md'], 'bvt'],
+    [['test/distributed/cases/a.sql', 'BUILD.md'], 'bvt'],
     [['pkg/a_test.go', 'test/distributed/cases/a.test'], 'full'],
     [['pkg/a_test.go', 'pkg/a.go'], 'full'],
     [['pkg/tests/testutils/helper.go'], 'full'],
     [['pkg/embed/testing.go'], 'full'],
     [['pkg/a/testdata/input.json'], 'full'],
+    [['pkg/a/testdata/input.md'], 'full'],
+    [['pkg/Fixtures/input.rst'], 'full'],
+    [['pkg/fixtures/a_test.go'], 'full'],
+    [['docs/fixtures/example.svg'], 'full'],
+    [['pkg/a/README.md', 'pkg/a.go'], 'full'],
+    [['docs/example.mdx'], 'full'], [['docs/input.txt'], 'full'],
+    [['docs/example.html'], 'full'], [['pkg/a.svg'], 'full'],
+    [['pkg/input.md\n'], 'full'], [['docs/input.rst\r\n'], 'full'],
     [['go.mod'], 'full'], [['Makefile'], 'full'],
     [['.github/workflows/entrypoint.yaml'], 'full'],
     [['test/distributed/run.sh'], 'full'],
     [['docs/example.sh'], 'full'], [['etc/cn.toml'], 'full'],
     [['pkg/../main_test.go'], 'full'],
     [['clients/python/matrixone/client.py'], 'sdk'],
-    [['clients/python/tests/offline/a.py', 'docs/a.md'], 'sdk'],
+    [['clients/python/tests/offline/a.py', 'pkg/sql/README.md'], 'sdk'],
+    [['clients/python/tests/fixtures/input.md'], 'sdk'],
     [['clients/python/pyproject.toml', 'clients/python/requirements.txt'], 'sdk'],
     [['clients/python/client.py', 'pkg/a_test.go'], 'full'],
     [['clients/python/client.py', 'test/distributed/cases/a.sql'], 'full'],
@@ -48,11 +62,19 @@ test('only narrow kernel test, documentation and SDK paths receive exemptions', 
 });
 
 test('renames consider the old path, including production-to-doc and production-to-test', () => {
-  for (const filename of ['docs/a.md', 'pkg/a_test.go']) {
+  for (const filename of ['docs/a.md', 'pkg/README.md', 'BUILD.rst', 'pkg/a_test.go']) {
     assert.deepEqual(classify([{ filename, previous_filename: 'pkg/a.go', status: 'renamed' }], 1), { scope: 'full', sdk_required: false });
   }
   assert.deepEqual(classify([{ filename: 'pkg/b_test.go', previous_filename: 'pkg/a_test.go', status: 'renamed' }], 1), { scope: 'ut', sdk_required: false });
   assert.deepEqual(classify([{ filename: 'pkg/a_test.go', status: 'removed' }], 1), { scope: 'ut', sdk_required: false });
+  assert.deepEqual(classify([{ filename: 'pkg/README.md', previous_filename: 'BUILD.rst', status: 'renamed' }], 1), { scope: 'docs', sdk_required: false });
+  for (const [filename, previous_filename] of [
+    ['pkg/README.md', 'pkg/testdata/input.md'],
+    ['pkg/fixtures/input.rst', 'BUILD.rst'],
+  ]) assert.deepEqual(classify([{ filename, previous_filename, status: 'renamed' }], 1), { scope: 'full', sdk_required: false });
+  for (const status of ['added', 'removed']) {
+    assert.deepEqual(classify([{ filename: 'pkg/README.md', status }], 1), { scope: 'docs', sdk_required: false });
+  }
 });
 
 test('empty, capped, incomplete, duplicate and malformed lists fail closed', () => {
@@ -117,8 +139,13 @@ test('actual preflight script publishes the authoritative plan as strict string 
   const script = block.match(/          script: \|\n([\s\S]*?)(?=      - id: plan)/)[1]
     .split('\n').map(line => line.slice(12)).join('\n');
   for (const [paths, expected] of [
+    [['BUILD.md', 'pkg/sql/README.md', 'docs/cn/source/index.rst'], { scope: 'docs', sdk_required: 'false' }],
     [['clients/python/pyproject.toml'], { scope: 'sdk', sdk_required: 'true' }],
+    [['clients/python/client.py', '.agents/skills/mo-dev/SKILL.md'], { scope: 'sdk', sdk_required: 'true' }],
     [['clients/python/client.py', 'pkg/a.go'], { scope: 'full', sdk_required: 'true' }],
+    [['pkg/a_test.go', 'BUILD.md'], { scope: 'ut', sdk_required: 'false' }],
+    [['test/distributed/cases/a.sql', 'pkg/sql/README.md'], { scope: 'bvt', sdk_required: 'false' }],
+    [['pkg/testdata/input.md'], { scope: 'full', sdk_required: 'false' }],
     [['pkg/a.go'], { scope: 'full', sdk_required: 'false' }],
   ]) {
     const fixture = client({ files: paths.map(modified) });
@@ -453,6 +480,8 @@ test('SDK impact is retained across mixed changes, control files and both rename
     [[{ filename: 'clients/python/a.py', previous_filename: 'pkg/a.go', status: 'renamed' }], { scope: 'full', sdk_required: true }],
     [[{ filename: 'pkg/a.go', previous_filename: 'clients/python/a.py', status: 'renamed' }], { scope: 'full', sdk_required: true }],
     [[{ filename: 'clients/python/b.py', previous_filename: 'clients/python/a.py', status: 'renamed' }], { scope: 'sdk', sdk_required: true }],
+    [[{ filename: 'pkg/README.md', previous_filename: 'clients/python/README.md', status: 'renamed' }], { scope: 'sdk', sdk_required: true }],
+    [[{ filename: 'clients/python/README.md', previous_filename: 'BUILD.rst', status: 'renamed' }], { scope: 'sdk', sdk_required: true }],
     [[modified('clients/python//a.py')], { scope: 'full', sdk_required: true }],
     [[{ filename: 'clients/python/a.py', previous_filename: 'pkg/../a.go', status: 'renamed' }], { scope: 'full', sdk_required: true }],
   ]) assert.deepEqual(classify(files, files.length), expected, JSON.stringify(files));
