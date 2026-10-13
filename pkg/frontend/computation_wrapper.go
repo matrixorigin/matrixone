@@ -1417,8 +1417,10 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	cwft.planGenerationReused = !needRebuild
 	fieldTypes := prepareStmt.fieldTypes
-	// Statistics and compile-only refreshes do not start a new SQL type generation.
-	if prepareStmt.needsRebuild || change || modeMismatch || protocolMismatch {
+	// Plan invalidation (including locale/vector defaults and compile retries)
+	// does not by itself change the statement's resolved SQL types.
+	resetFieldTypes := change || modeMismatch || protocolMismatch || prepareStmt.fieldTypesResetPending
+	if resetFieldTypes {
 		fieldTypes = nil
 	}
 	var pendingGroupConcatColDefData [][]byte
@@ -1433,6 +1435,9 @@ func initExecuteStmtParamWithResolverInSession(
 			// pair the new plan with the previous wire metadata.
 			prepareStmt.needsRebuild = true
 			prepareStmt.compileNeedsRebuild = true
+			if resetFieldTypes {
+				prepareStmt.fieldTypesResetPending = true
+			}
 		}
 	}()
 
@@ -1890,6 +1895,7 @@ func initExecuteStmtParamWithResolverInSession(
 		// Publish only after binding, diagnostics, metadata, and AST cloning
 		// succeed. A rejected execution leaves the previous snapshot intact.
 		prepareStmt.fieldTypes = fieldTypes
+		prepareStmt.fieldTypesResetPending = false
 	}
 	rebuildPublished = true
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil

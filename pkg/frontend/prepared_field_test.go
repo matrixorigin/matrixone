@@ -117,7 +117,24 @@ func TestPreparedFieldHistoryCacheAndMigration(t *testing.T) {
 	}
 	require.Positive(t, cacheHits, "the lifecycle test must reach specialization cache hits")
 	prior := prepared.fieldTypes
-	prepared.needsRebuild = true
+	priorPlan := prepared.PreparePlan
+	prepared.NativeMode = !prepared.NativeMode
+	setParams(defines.MYSQL_TYPE_VAR_STRING, "a", false)
+	metadataCalls := 0
+	writer.makeColumnDefDataFunc = func(context.Context, []*plan.ColDef) ([][]byte, error) {
+		metadataCalls++
+		if metadataCalls == 2 {
+			return nil, errors.New("field generation metadata failure")
+		}
+		return nil, nil
+	}
+	t.Cleanup(func() { writer.makeColumnDefDataFunc = nil })
+	_, _, _, _, _, err = initExecuteStmtParam(ec, ses, cw, nil, prepared.Name)
+	require.ErrorContains(t, err, "field generation metadata failure")
+	require.NotSame(t, priorPlan, prepared.PreparePlan, "the new generation must already be committed")
+	require.Same(t, prior, prepared.fieldTypes, "failed metadata must not publish a replacement snapshot")
+	require.True(t, prepared.fieldTypesResetPending)
+	writer.makeColumnDefDataFunc = nil
 	setParams(defines.MYSQL_TYPE_VAR_STRING, "a", false)
 	_, p, clone, _, owned, err := initExecuteStmtParam(ec, ses, cw, nil, prepared.Name)
 	if owned && clone != nil {
@@ -125,6 +142,7 @@ func TestPreparedFieldHistoryCacheAndMigration(t *testing.T) {
 	}
 	require.NoError(t, err)
 	require.NotSame(t, prior, prepared.fieldTypes, "new generation must not inherit numeric history")
+	require.False(t, prepared.fieldTypesResetPending)
 	q := p.GetQuery()
 	func() {
 		result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0], []*batch.Batch{batch.EmptyForConstFoldBatch})
@@ -301,6 +319,78 @@ func TestPreparedFieldCandidateHistory(t *testing.T) {
 				}()
 				prepared.clearBinaryParamState(cw.proc)
 			}
+		})
+	}
+}
+
+func TestPreparedFieldPlanInvalidationKeepsHistory(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		before, after any
+	}{
+		{"lc_time_names", "en_US", "fr_FR"},
+		{"enable_vector_prefilter_by_default", int64(0), int64(1)},
+		{"enable_vector_auto_mode_by_default", int64(0), int64(1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 25304, "select field(case when ? then ? else null end,'A','a')")
+			prepared.proc = cw.proc
+			t.Cleanup(func() { cw.proc.SetPrepareParams(nil); ses.Close() })
+			original, err := ses.GetSessionSysVar(tc.name)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, ses.SetSessionSysVar(ec.reqCtx, tc.name, original)) })
+			require.NoError(t, ses.SetSessionSysVar(ec.reqCtx, tc.name, tc.before))
+			execute := func(null bool, want uint64, fail bool) {
+				cw.discardRuntimeCacheCandidate()
+				prepared.clearBinaryParamState(cw.proc)
+				prepared.params = vector.NewVec(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(prepared.params, []byte("1"), false, cw.proc.Mp()))
+				require.NoError(t, vector.AppendBytes(prepared.params, []byte("a"), null, cw.proc.Mp()))
+				typ := defines.MYSQL_TYPE_VAR_STRING
+				if null {
+					typ = defines.MYSQL_TYPE_NULL
+				}
+				prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(typ), 0}
+				_, p, stmt, _, owned, err := initExecuteStmtParam(ec, ses, cw, nil, prepared.Name)
+				if owned && stmt != nil {
+					stmt.Free()
+				}
+				if fail {
+					require.ErrorContains(t, err, "field plan invalidation metadata failure")
+					return
+				}
+				require.NoError(t, err)
+				q := p.GetQuery()
+				result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0], []*batch.Batch{batch.EmptyForConstFoldBatch})
+				require.NoError(t, err)
+				defer free()
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[uint64](result, 0))
+			}
+			execute(true, 0, false)
+			execute(false, 2, false)
+			snapshot := prepared.fieldTypes
+			oldPlan := prepared.PreparePlan
+			require.NotNil(t, snapshot)
+			require.NoError(t, ses.SetSessionSysVar(ec.reqCtx, tc.name, tc.after))
+			require.True(t, prepared.needsRebuild, "the public setter must actually invalidate the prepared plan")
+			writer := ec.resper.MysqlRrWr().(*testMysqlWriter)
+			metadataCalls := 0
+			writer.makeColumnDefDataFunc = func(context.Context, []*plan.ColDef) ([][]byte, error) {
+				metadataCalls++
+				if metadataCalls == 2 {
+					return nil, errors.New("field plan invalidation metadata failure")
+				}
+				return nil, nil
+			}
+			t.Cleanup(func() { writer.makeColumnDefDataFunc = nil })
+			execute(false, 2, true)
+			require.Same(t, snapshot, prepared.fieldTypes)
+			require.NotSame(t, oldPlan, prepared.PreparePlan)
+			require.False(t, prepared.fieldTypesResetPending, "plan-only failure must not reset types on retry")
+			writer.makeColumnDefDataFunc = nil
+			execute(false, 2, false)
+			require.NotSame(t, oldPlan, prepared.PreparePlan, "the stale plan must still be rebuilt")
+			require.Same(t, snapshot, prepared.fieldTypes, "plan invalidation must preserve immutable SQL type history")
 		})
 	}
 }

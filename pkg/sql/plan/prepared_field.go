@@ -133,7 +133,10 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) preparedFieldStringDomain
 	}
 	if sub := expr.GetSub(); sub != nil && sub.Typ == planpb.SubqueryRef_SCALAR {
 		result = r.output(sub.NodeId, -1, 0, result)
-		if result.kind == fieldStringMarker {
+		// A scalar marker has a materialized TEXT declaration even when its
+		// first value is NULL. A resolved CASE inside that projection keeps its
+		// own history instead of being reinterpreted as an unresolved marker.
+		if result.kind == fieldStringMarker || result.kind == fieldStringNull && result.parameter && !result.history {
 			result.kind = fieldStringText
 		}
 		return result
@@ -160,7 +163,27 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) preparedFieldStringDomain
 		values = fn.Args[1:]
 	case "coalesce", "greatest", "least":
 		values = fn.Args
-	case "min", "max", "any_value", "first_value", "last_value", "lag", "lead", "nth_value":
+	case "concat", "concat_ws":
+		// These functions always return strings. Every string contributor can
+		// supply a binary domain; numeric and NULL arguments retain TEXT as the
+		// default declaration. Keep parameter dependencies for enclosing CASEs.
+		previous := r.defaultMarker
+		r.defaultMarker = fieldStringText
+		result = r.common(fn.Args)
+		r.defaultMarker = previous
+		result.resolved = types.Type{}
+		if result.kind != fieldStringBinary {
+			result.kind = fieldStringText
+		}
+		return result
+	case "lag", "lead":
+		if len(fn.Args) > 0 {
+			values = []*Expr{fn.Args[0]}
+			if len(fn.Args) > 2 {
+				values = append(values, fn.Args[2])
+			}
+		}
+	case "min", "max", "any_value", "first_value", "last_value", "nth_value":
 		if len(fn.Args) > 0 {
 			previous := r.defaultMarker
 			r.defaultMarker = fieldStringBinary
