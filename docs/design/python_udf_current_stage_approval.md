@@ -193,3 +193,21 @@ its admission, exclusion, failure, and cleanup assertions remain in force.
 
 Historical r10 records remain immutable. Independent Architecture and
 SQL/Planner approval remains pending; rebase and validation do not supply it.
+
+## r12 protocol allocation addendum (2026-10-14)
+
+Official main `1b66ff135c64ef1c642a297105bf599cd3173dee` assigns
+MORPC 112 to signed INT WEEK/DAYOFYEAR result vectors. The current
+`python-udf-current-stage-r12-2026-10-14` contract moves Python's single new
+capability to 113, with 112 as the immediate predecessor rejection case.
+The signed date result capability remains at 112 and IndexSearchScan remains
+at 111. Shared catalog publication and reads, prepared reuse, physical
+execution, remote placement/send/receive admission, the 4.0.15 repair, and
+`GetPythonUdfStatus` all use the Python 113 floor. Predecessor-only and mixed
+113/112 CNs are rejected before catalog mutation; legacy SQL fallback is
+retained. Catalog versions, Python ABI, and the test/development scope are
+unchanged.
+
+Historical r11 and earlier artifacts above remain immutable. Independent
+Architecture and SQL/Planner approval of r12 remains pending; mechanical
+rebase and validation do not supply an approval decision.
