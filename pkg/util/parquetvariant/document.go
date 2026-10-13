@@ -16,7 +16,7 @@ package parquetvariant
 
 import (
 	"context"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"unicode/utf8"
 
@@ -128,7 +128,7 @@ func (d *Document) Array(values []any, depth int) (bytejson.ByteJson, error) {
 // CheckElementCount prevents overflow when charging a caller's array storage.
 func (d *Document) CheckElementCount(n int) error {
 	if n < 0 || n > maxDecodedBytes/64 {
-		return fmt.Errorf("parquet VARIANT array exceeds decoding limit")
+		return moerr.NewInvalidInputNoCtxf("parquet VARIANT array exceeds decoding limit")
 	}
 	return d.Reserve(n * 64)
 }

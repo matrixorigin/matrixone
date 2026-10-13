@@ -17,7 +17,7 @@ package parquetvariant
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"math/big"
 	"slices"
@@ -38,7 +38,7 @@ func Encode(ctx context.Context, bj bytejson.ByteJson) (metadata, value []byte, 
 		return nil, nil, err
 	}
 	if len(bj.Data) > maxDecodedBytes || !bytejson.IsValidByteJson(bj) {
-		return nil, nil, fmt.Errorf("invalid or oversized MO JSON for Parquet VARIANT")
+		return nil, nil, moerr.NewInvalidInputNoCtxf("invalid or oversized MO JSON for Parquet VARIANT")
 	}
 	keys := make(map[string]int)
 	// Match the decoder's conservative expansion budget before allocating
@@ -47,7 +47,7 @@ func Encode(ctx context.Context, bj bytejson.ByteJson) (metadata, value []byte, 
 	remaining := maxDecodedBytes
 	reserve := func(n int) error {
 		if n > remaining {
-			return fmt.Errorf("Parquet VARIANT expansion exceeds 64 MiB limit")
+			return moerr.NewInvalidInputNoCtxf("Parquet VARIANT expansion exceeds 64 MiB limit")
 		}
 		remaining -= n
 		return nil
@@ -69,7 +69,7 @@ func Encode(ctx context.Context, bj bytejson.ByteJson) (metadata, value []byte, 
 			for i := 0; i < v.GetElemCnt(); i++ {
 				key := string(v.GetObjectKey(i))
 				if !utf8.ValidString(key) || i > 0 && prev >= key {
-					return fmt.Errorf("Parquet VARIANT requires unique sorted UTF-8 object keys")
+					return moerr.NewInvalidInputNoCtxf("Parquet VARIANT requires unique sorted UTF-8 object keys")
 				}
 				prev = key
 				if err := reserve(len(key)); err != nil {
@@ -136,7 +136,7 @@ func Encode(ctx context.Context, bj bytejson.ByteJson) (metadata, value []byte, 
 		return nil, nil, err
 	}
 	if len(metadata) > maxDecodedBytes || len(value) > maxDecodedBytes {
-		return nil, nil, fmt.Errorf("Parquet VARIANT encoding exceeds 64 MiB limit")
+		return nil, nil, moerr.NewInvalidInputNoCtxf("Parquet VARIANT encoding exceeds 64 MiB limit")
 	}
 	return metadata, value, nil
 }
@@ -146,7 +146,7 @@ func encodeValue(ctx context.Context, out []byte, v bytejson.ByteJson, keys map[
 		return nil, err
 	}
 	if len(out) > maxDecodedBytes {
-		return nil, fmt.Errorf("Parquet VARIANT encoding exceeds 64 MiB limit")
+		return nil, moerr.NewInvalidInputNoCtxf("Parquet VARIANT encoding exceeds 64 MiB limit")
 	}
 	switch v.Type {
 	case bytejson.TpCodeLiteral:
@@ -173,7 +173,7 @@ func encodeValue(ctx context.Context, out []byte, v bytejson.ByteJson, keys map[
 	case bytejson.TpCodeString:
 		data := v.GetString()
 		if !utf8.Valid(data) {
-			return nil, fmt.Errorf("Parquet VARIANT requires UTF-8 strings")
+			return nil, moerr.NewInvalidInputNoCtxf("Parquet VARIANT requires UTF-8 strings")
 		}
 		if len(data) < 64 {
 			return append(append(out, byte(len(data)<<2)|1), data...), nil
@@ -183,7 +183,7 @@ func encodeValue(ctx context.Context, out []byte, v bytejson.ByteJson, keys map[
 	case bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
 		canonical, ok := bytejson.AppendCanonicalBinary(nil, v)
 		if !ok || canonical[1] != 252 {
-			return nil, fmt.Errorf("MO JSON binary subtype has no lossless Parquet VARIANT mapping")
+			return nil, moerr.NewInvalidInputNoCtxf("MO JSON binary subtype has no lossless Parquet VARIANT mapping")
 		}
 		data := canonical[2:]
 		out = binary.LittleEndian.AppendUint32(append(out, 15<<2), uint32(len(data)))
@@ -197,7 +197,7 @@ func encodeValue(ctx context.Context, out []byte, v bytejson.ByteJson, keys map[
 		}
 		t, err := time.ParseInLocation(layout, string(v.GetString()), time.UTC)
 		if err != nil || v.Type != bytejson.TpCodeTime && (t.Year() < 1 || t.Year() > 9999) || t.Nanosecond()%1000 != 0 {
-			return nil, fmt.Errorf("MO JSON temporal value cannot be represented as Parquet VARIANT microseconds")
+			return nil, moerr.NewInvalidInputNoCtxf("MO JSON temporal value cannot be represented as Parquet VARIANT microseconds")
 		}
 		if v.Type == bytejson.TpCodeDate {
 			return binary.LittleEndian.AppendUint32(append(out, 11<<2), uint32(t.Unix()/86400)), nil
@@ -241,7 +241,7 @@ func encodeValue(ctx context.Context, out []byte, v bytejson.ByteJson, keys map[
 		binary.LittleEndian.PutUint32(out[table+n*4:], uint32(len(out)-dataStart))
 		return compactVariantContainer(out, start, table, dataStart, n, object), nil
 	default:
-		return nil, fmt.Errorf("unsupported MO JSON type %d for Parquet VARIANT", v.Type)
+		return nil, moerr.NewInvalidInputNoCtxf("unsupported MO JSON type %d for Parquet VARIANT", v.Type)
 	}
 }
 
@@ -344,12 +344,12 @@ func appendDecimal(out []byte, text string) ([]byte, error) {
 		text = text[:pos]
 		// Never allocate big.Int powers for an unbounded JSON exponent.
 		if len(strings.TrimLeft(expText, "+-0")) > 6 {
-			return nil, fmt.Errorf("decimal exponent exceeds Parquet VARIANT range")
+			return nil, moerr.NewInvalidInputNoCtxf("decimal exponent exceeds Parquet VARIANT range")
 		}
 		var err error
 		exponent, err = strconv.Atoi(expText)
 		if err != nil || exponent < -100000 || exponent > 100000 {
-			return nil, fmt.Errorf("decimal exponent exceeds Parquet VARIANT range")
+			return nil, moerr.NewInvalidInputNoCtxf("decimal exponent exceeds Parquet VARIANT range")
 		}
 	}
 	scale := -exponent
@@ -368,18 +368,18 @@ func appendDecimal(out []byte, text string) ([]byte, error) {
 		}
 		if scale < 0 {
 			if len(text)-scale > 38 {
-				return nil, fmt.Errorf("decimal exceeds Parquet VARIANT precision 38")
+				return nil, moerr.NewInvalidInputNoCtxf("decimal exceeds Parquet VARIANT precision 38")
 			}
 			text += strings.Repeat("0", -scale)
 			scale = 0
 		}
 	}
 	if len(text) > 38 || scale > 38 {
-		return nil, fmt.Errorf("decimal exceeds Parquet VARIANT precision/scale 38")
+		return nil, moerr.NewInvalidInputNoCtxf("decimal exceeds Parquet VARIANT precision/scale 38")
 	}
 	n, ok := new(big.Int).SetString(text, 10)
 	if !ok {
-		return nil, fmt.Errorf("invalid MO JSON decimal")
+		return nil, moerr.NewInvalidInputNoCtxf("invalid MO JSON decimal")
 	}
 	width, tag := 16, byte(10)
 	// Include scale when choosing width so consumers with a conventional

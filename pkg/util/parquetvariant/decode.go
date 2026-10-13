@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"math/big"
 	"slices"
@@ -49,7 +50,7 @@ func Decode(ctx context.Context, metadata, value []byte) (bytejson.ByteJson, err
 		return bytejson.ByteJson{}, err
 	}
 	if len(metadata) > maxDecodedBytes || len(value) > maxDecodedBytes {
-		return bytejson.ByteJson{}, fmt.Errorf("parquet VARIANT exceeds 64 MiB decoding limit")
+		return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("parquet VARIANT exceeds 64 MiB decoding limit")
 	}
 	d := decoder{ctx: ctx, remaining: maxDecodedBytes}
 	if err := d.metadata(metadata); err != nil {
@@ -58,7 +59,9 @@ func Decode(ctx context.Context, metadata, value []byte) (bytejson.ByteJson, err
 	return d.value(value, 0)
 }
 
-func invalid(reason string) error { return fmt.Errorf("malformed parquet VARIANT: %s", reason) }
+func invalid(reason string) error {
+	return moerr.NewInvalidInputNoCtxf("malformed parquet VARIANT: %s", reason)
+}
 
 func uintLE(b []byte, width int) (int, bool) {
 	if len(b) < width || width < 1 || width > 4 {
@@ -73,7 +76,7 @@ func uintLE(b []byte, width int) (int, bool) {
 
 func (d *decoder) charge(n int) error {
 	if n < 0 || n > d.remaining {
-		return fmt.Errorf("parquet VARIANT expanded JSON exceeds 64 MiB decoding limit")
+		return moerr.NewInvalidInputNoCtxf("parquet VARIANT expanded JSON exceeds 64 MiB decoding limit")
 	}
 	d.remaining -= n
 	return nil
@@ -327,7 +330,7 @@ func (d *decoder) primitive(tag int, b []byte) (bytejson.ByteJson, error) {
 			tp, layout = bytejson.TpCodeDatetime, "2006-01-02 15:04:05.000000"
 		}
 		if t.Year() < 1 || t.Year() > 9999 {
-			return bytejson.ByteJson{}, fmt.Errorf("parquet VARIANT temporal value outside supported years 1..9999")
+			return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("parquet VARIANT temporal value outside supported years 1..9999")
 		}
 		return typed(tp, t.Format(layout)), nil
 	case 15, 16:
@@ -352,9 +355,9 @@ func (d *decoder) primitive(tag int, b []byte) (bytejson.ByteJson, error) {
 		}
 		return typed(bytejson.TpCodeTime, fmt.Sprintf("%02d:%02d:%02d.%06d", micros/3600e6, micros/60e6%60, micros/1e6%60, micros%1e6)), nil
 	case 12, 18, 19, 20:
-		return bytejson.ByteJson{}, fmt.Errorf("parquet VARIANT primitive type %d has no lossless MO JSON mapping", tag)
+		return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("parquet VARIANT primitive type %d has no lossless MO JSON mapping", tag)
 	default:
-		return bytejson.ByteJson{}, fmt.Errorf("unsupported parquet VARIANT primitive type %d", tag)
+		return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("unsupported parquet VARIANT primitive type %d", tag)
 	}
 	return bytejson.CreateByteJSON(value)
 }

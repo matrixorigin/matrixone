@@ -253,13 +253,13 @@ func variantLeafValue(col *parquet.Column, values []parquet.Value) (parquet.Valu
 		}
 	}
 	if count != 1 {
-		return result, fmt.Errorf("missing or duplicate VARIANT leaf %s", col.Name())
+		return result, moerr.NewInvalidInputNoCtxf("missing or duplicate VARIANT leaf %s", col.Name())
 	}
 	if !result.IsNull() && (result.Kind() != col.Type().Kind() || int(result.DefinitionLevel()) != col.MaxDefinitionLevel()) {
-		return result, fmt.Errorf("invalid VARIANT leaf %s", col.Name())
+		return result, moerr.NewInvalidInputNoCtxf("invalid VARIANT leaf %s", col.Name())
 	}
 	if result.IsNull() && int(result.DefinitionLevel()) != col.MaxDefinitionLevel()-1 {
-		return result, fmt.Errorf("NULL VARIANT leaf at a defined level")
+		return result, moerr.NewInvalidInputNoCtxf("NULL VARIANT leaf at a defined level")
 	}
 	return result, nil
 }
@@ -281,7 +281,7 @@ func validateVariantDictionary(ctx context.Context, d *parquetvariant.Document, 
 			return err
 		}
 		if !ok {
-			return fmt.Errorf("typed field %q missing from metadata dictionary", field.Name())
+			return moerr.NewInvalidInputNoCtxf("typed field %q missing from metadata dictionary", field.Name())
 		}
 		if err := validateVariantDictionary(ctx, d, field); err != nil {
 			return err
@@ -310,7 +310,7 @@ func variantGroupPresent(ctx context.Context, col *parquet.Column, values []parq
 				continue
 			}
 			if !found && int(v.RepetitionLevel()) > col.MaxRepetitionLevel() {
-				return false, fmt.Errorf("invalid initial VARIANT repetition level")
+				return false, moerr.NewInvalidInputNoCtxf("invalid initial VARIANT repetition level")
 			}
 			found = true
 			count++
@@ -319,18 +319,18 @@ func variantGroupPresent(ctx context.Context, col *parquet.Column, values []parq
 				p = 1
 			}
 			if present != -1 && present != p {
-				return false, fmt.Errorf("inconsistent VARIANT group definition levels")
+				return false, moerr.NewInvalidInputNoCtxf("inconsistent VARIANT group definition levels")
 			}
 			if p == 0 && (!v.IsNull() || int(v.DefinitionLevel()) != col.MaxDefinitionLevel()-1) {
-				return false, fmt.Errorf("invalid absent VARIANT group placeholder")
+				return false, moerr.NewInvalidInputNoCtxf("invalid absent VARIANT group placeholder")
 			}
 			present = p
 		}
 		if present == 0 && count != 1 {
-			return false, fmt.Errorf("duplicate absent VARIANT group placeholder")
+			return false, moerr.NewInvalidInputNoCtxf("duplicate absent VARIANT group placeholder")
 		}
 		if !found {
-			return false, fmt.Errorf("missing VARIANT descendant %s", leaf.Name())
+			return false, moerr.NewInvalidInputNoCtxf("missing VARIANT descendant %s", leaf.Name())
 		}
 	}
 	return present == 1, nil
@@ -345,7 +345,7 @@ func readVariantGroup(ctx context.Context, d *parquetvariant.Document, col *parq
 		return bytejson.ByteJson{}, false, presenceErr
 	}
 	if !present {
-		return bytejson.ByteJson{}, false, fmt.Errorf("undefined VARIANT field group")
+		return bytejson.ByteJson{}, false, moerr.NewInvalidInputNoCtxf("undefined VARIANT field group")
 	}
 	_, rawCol, typed := variantChildren(col)
 	var raw parquet.Value
@@ -370,13 +370,13 @@ func readVariantGroup(ctx context.Context, d *parquetvariant.Document, col *parq
 		}
 		bj, err := d.DecodeValue(raw.ByteArray(), depth)
 		if err == nil && bj.Type == bytejson.TpCodeObject && typed != nil && !typed.Leaf() && parquetLogicalType(ctx, typed) == nil {
-			err = fmt.Errorf("residual object requires a present typed object")
+			err = moerr.NewInvalidInputNoCtxf("residual object requires a present typed object")
 		}
 		return bj, true, err
 	}
 	object := !typed.Leaf() && parquetLogicalType(ctx, typed) == nil
 	if rawPresent && !object {
-		return bytejson.ByteJson{}, false, fmt.Errorf("both value and typed_value populated for a non-object")
+		return bytejson.ByteJson{}, false, moerr.NewInvalidInputNoCtxf("both value and typed_value populated for a non-object")
 	}
 	if typed.Leaf() {
 		v, err := variantLeafValue(typed, values)
@@ -387,7 +387,7 @@ func readVariantGroup(ctx context.Context, d *parquetvariant.Document, col *parq
 		return bj, true, err
 	}
 	if depth >= bytejson.JSONDocumentMaxNestingDepth {
-		return bytejson.ByteJson{}, false, fmt.Errorf("VARIANT nesting exceeds 100 containers")
+		return bytejson.ByteJson{}, false, moerr.NewInvalidInputNoCtxf("VARIANT nesting exceeds 100 containers")
 	}
 	if !object {
 		bj, err := readVariantArray(ctx, d, typed, values, depth)
@@ -403,7 +403,7 @@ func readVariantGroup(ctx context.Context, d *parquetvariant.Document, col *parq
 			return bytejson.ByteJson{}, false, err
 		}
 		if residual.Type != bytejson.TpCodeObject {
-			return bytejson.ByteJson{}, false, fmt.Errorf("typed object has a non-object residual")
+			return bytejson.ByteJson{}, false, moerr.NewInvalidInputNoCtxf("typed object has a non-object residual")
 		}
 		for i := 0; i < residual.GetElemCnt(); i++ {
 			fields[string(residual.GetObjectKey(i))] = residual.GetObjectVal(i)
@@ -411,7 +411,7 @@ func readVariantGroup(ctx context.Context, d *parquetvariant.Document, col *parq
 	}
 	for _, field := range typed.Columns() {
 		if _, ok := fields[field.Name()]; ok {
-			return bytejson.ByteJson{}, false, fmt.Errorf("residual duplicates typed schema field %q", field.Name())
+			return bytejson.ByteJson{}, false, moerr.NewInvalidInputNoCtxf("residual duplicates typed schema field %q", field.Name())
 		}
 		bj, present, err := readVariantGroup(ctx, d, field, extractNestedColumnValues(values, field), depth+1)
 		if err != nil {
@@ -442,19 +442,19 @@ func readVariantArray(ctx context.Context, d *parquetvariant.Document, col *parq
 			}
 		}
 		if expected != -1 && expected != count {
-			return bytejson.ByteJson{}, fmt.Errorf("inconsistent VARIANT array element counts")
+			return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("inconsistent VARIANT array element counts")
 		}
 		expected = count
 	}
 	if expected <= 0 {
-		return bytejson.ByteJson{}, fmt.Errorf("missing VARIANT array placeholders")
+		return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("missing VARIANT array placeholders")
 	}
 	if err := d.CheckElementCount(expected); err != nil {
 		return bytejson.ByteJson{}, err
 	}
 	if isEmptyListValues(elem, local) {
 		if len(local) != len(leaves) {
-			return bytejson.ByteJson{}, fmt.Errorf("duplicate empty VARIANT array placeholders")
+			return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("duplicate empty VARIANT array placeholders")
 		}
 		return d.Array([]any{}, depth)
 	}
@@ -466,14 +466,14 @@ func readVariantArray(ctx context.Context, d *parquetvariant.Document, col *parq
 			return bytejson.ByteJson{}, err
 		}
 		if !present {
-			return bytejson.ByteJson{}, fmt.Errorf("undefined VARIANT array element")
+			return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("undefined VARIANT array element")
 		}
 		bj, present, err := readVariantGroup(ctx, d, elem, group, depth+1)
 		if err != nil {
 			return bytejson.ByteJson{}, err
 		}
 		if !present {
-			return bytejson.ByteJson{}, fmt.Errorf("missing VARIANT array element")
+			return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("missing VARIANT array element")
 		}
 		result = append(result, bj)
 	}
@@ -491,7 +491,7 @@ func readVariantScalar(ctx context.Context, d *parquetvariant.Document, col *par
 		if kind == parquet.ByteArray || kind == parquet.FixedLenByteArray {
 			size := len(v.ByteArray())
 			if size < 1 || size > 16 || kind == parquet.FixedLenByteArray && size != col.Type().Length() {
-				return bytejson.ByteJson{}, fmt.Errorf("invalid typed decimal byte width")
+				return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("invalid typed decimal byte width")
 			}
 		}
 		n, err := parquetDecimalValueToBigInt(ctx, col.Type(), v)
@@ -503,7 +503,7 @@ func readVariantScalar(ctx context.Context, d *parquetvariant.Document, col *par
 			digits = digits[1:]
 		}
 		if len(digits) > int(lt.Decimal.Precision) {
-			return bytejson.ByteJson{}, fmt.Errorf("typed decimal exceeds declared precision")
+			return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("typed decimal exceeds declared precision")
 		}
 		width, tag := 16, 10
 		if lt.Decimal.Precision <= 9 {
@@ -557,7 +557,7 @@ func readVariantScalar(ctx context.Context, d *parquetvariant.Document, col *par
 		if lt != nil && lt.Integer != nil {
 			w := lt.Integer.BitWidth
 			if w < 64 && (n < -(int64(1)<<(w-1)) || n >= int64(1)<<(w-1)) {
-				return bytejson.ByteJson{}, fmt.Errorf("typed integer exceeds declared width")
+				return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("typed integer exceeds declared width")
 			}
 		}
 		wire = binary.LittleEndian.AppendUint64([]byte{6 << 2}, uint64(n))
@@ -566,7 +566,7 @@ func readVariantScalar(ctx context.Context, d *parquetvariant.Document, col *par
 	case kind == parquet.Double:
 		wire = binary.LittleEndian.AppendUint64([]byte{7 << 2}, math.Float64bits(v.Double()))
 	default:
-		return bytejson.ByteJson{}, fmt.Errorf("unsupported typed VARIANT leaf")
+		return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("unsupported typed VARIANT leaf")
 	}
 	return d.DecodeValue(wire, depth)
 }
