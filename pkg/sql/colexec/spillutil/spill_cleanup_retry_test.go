@@ -237,3 +237,40 @@ func TestScatterProbeRetainsFailedRemovalUntilCleanup(t *testing.T) {
 		t.Errorf("spill file remains after cleanup: %s", entry.Name)
 	}
 }
+
+func TestReSpillQueueFailureRetainsTemporaryFiles(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	values := make([]int32, 100)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	build := makeInt32Batch(proc, values)
+	defer build.Clean(proc.Mp())
+	engine := newExactTestSpillEngine(t, SpillEngineConfig{
+		BuildKeyExprs:           makeTestKeyExpr(),
+		SpillThreshold:          1,
+		MaxQueue:                1,
+		NeedsBuildForEmptyProbe: true,
+	})
+	engine.InitFromSpilledFiles([]*message.SpillFile{
+		newTestSpillFile(writeBuildFile(proc, t.Name(), build), int64(len(values))),
+	})
+	baseFS, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	fault := &blockedRemoveFS{MutableFileService: baseFS, blocked: true}
+	engine.spillFS.once.Do(func() { engine.spillFS.fs = fault })
+	_, _, err = engine.RebuildHashmap(proc, process.NewAnalyzer(0, false, false, "test"))
+	require.ErrorContains(t, err, "spill queue limit exceeded")
+	require.True(t, engine.CleanupPending(), "re-spill failure must retain failed removals")
+	require.Positive(t, engine.cfg.Budget.SpillDiskUsed())
+	fault.blocked = false
+	engine.Cleanup(proc)
+	require.False(t, engine.CleanupPending())
+	require.Zero(t, engine.cfg.Budget.SpillDiskUsed())
+	require.Zero(t, engine.cfg.Budget.SpillFDUsed())
+	for entry, listErr := range baseFS.List(context.Background(), "/") {
+		require.NoError(t, listErr)
+		t.Errorf("spill file remains after re-spill cleanup: %s", entry.Name)
+	}
+}
