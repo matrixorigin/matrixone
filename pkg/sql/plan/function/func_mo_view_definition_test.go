@@ -197,10 +197,46 @@ func TestViewMetadataPreservesLegacyCheckOption(t *testing.T) {
 			checkOption: "CASCADED",
 		},
 		{
+			name:        "legacy lowercase local",
+			persisted:   `{"Stmt":"create view v as select 1 with local check option"}`,
+			definition:  "select 1",
+			checkOption: "LOCAL",
+		},
+		{
+			name:        "legacy lowercase cascaded",
+			persisted:   `{"Stmt":"create view v as select 1 with cascaded check option"}`,
+			definition:  "select 1",
+			checkOption: "CASCADED",
+		},
+		{
+			name:        "legacy mixed case cascaded",
+			persisted:   `{"Stmt":"create view v as select 1 with CaScAdEd check option"}`,
+			definition:  "select 1",
+			checkOption: "CASCADED",
+		},
+		{
+			name:        "legacy without check option",
+			persisted:   `{"Stmt":"create view v as select 1"}`,
+			definition:  "select 1",
+			checkOption: "NONE",
+		},
+		{
 			name:        "current frozen metadata",
 			persisted:   `{"Stmt":"CREATE VIEW v AS SELECT 1","definition":"select frozen","check_option":"LOCAL"}`,
 			definition:  "select frozen",
 			checkOption: "LOCAL",
+		},
+		{
+			name:        "current mixed case check option",
+			persisted:   `{"definition":"select frozen","check_option":"lOcAl"}`,
+			definition:  "select frozen",
+			checkOption: "LOCAL",
+		},
+		{
+			name:        "current without check option",
+			persisted:   `{"definition":"select frozen"}`,
+			definition:  "select frozen",
+			checkOption: "NONE",
 		},
 	}
 	for _, test := range tests {
@@ -566,17 +602,27 @@ func TestBuiltInViewCheckOption(t *testing.T) {
 	input := vector.NewVec(types.T_varchar.ToType())
 	defer input.Free(proc.Mp())
 	require.NoError(t, vector.AppendStringList(input,
-		[]string{`{"Stmt":"CREATE VIEW v AS SELECT 1 WITH CASCADED CHECK OPTION"}`, `{"Stmt":"CREATE VIEW"}`},
-		[]bool{false, false}, proc.Mp()))
+		[]string{
+			`{"Stmt":"CREATE VIEW v AS SELECT 1 WITH CASCADED CHECK OPTION"}`,
+			`{"Stmt":"create view v as select 1 with local check option"}`,
+			`{"Stmt":"create view v as select 1 with CaScAdEd check option"}`,
+			`{"Stmt":"create view v as select 1"}`,
+			`{"definition":"select frozen","check_option":"lOcAl"}`,
+			`{"Stmt":"CREATE VIEW"}`,
+			"",
+		},
+		[]bool{false, false, false, false, false, false, true}, proc.Mp()))
 	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(input.Length()))
 	require.NoError(t, builtInViewCheckOption(
 		[]*vector.Vector{input}, result, proc, input.Length(), nil))
 	values := vector.GenerateFunctionStrParameter(result.GetResultVector())
-	value, isNull := values.GetStrValue(0)
-	require.False(t, isNull)
-	require.Equal(t, "CASCADED", string(value))
-	_, isNull = values.GetStrValue(1)
-	require.True(t, isNull)
+	for row, want := range []string{"CASCADED", "LOCAL", "CASCADED", "NONE", "LOCAL", "", ""} {
+		value, isNull := values.GetStrValue(uint64(row))
+		require.Equal(t, row >= 5, isNull)
+		if !isNull {
+			require.Equal(t, want, string(value))
+		}
+	}
 }
