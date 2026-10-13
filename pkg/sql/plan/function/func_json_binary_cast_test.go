@@ -51,7 +51,7 @@ func TestJSONBinaryCastPreservesOpaqueSubtype(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%s", tc.oid, cast.name), func(t *testing.T) {
 				// Fixed bytes and independent visible MySQL subtype oracle; do not use
 				// the production FromBinary helper to construct expected values.
-				expected := []string{}
+				expected := make([]string, 0, 4)
 				for _, payload := range []string{"e30=", "AP8=", "", ""} {
 					expected = append(expected, encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeBlob, fmt.Sprintf("base64:type%d:%s", tc.subtype, payload))))
 				}
