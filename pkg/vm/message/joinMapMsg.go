@@ -614,6 +614,17 @@ func (jm *JoinMap) RetainSpillCleanup(payload *SpillBuildPayload) {
 	*payload = SpillBuildPayload{}
 }
 
+// CloseOrRetainSpillPayload cleans up a payload that cannot be transferred to
+// its consumer. If a file cannot be removed, the JoinMap keeps the remaining
+// ownership so its terminal release can retry instead of losing the handle.
+func (jm *JoinMap) CloseOrRetainSpillPayload(payload *SpillBuildPayload, cause error) error {
+	if cleanupErr := payload.Close(); cleanupErr != nil {
+		jm.RetainSpillCleanup(payload)
+		return errors.Join(cause, cleanupErr)
+	}
+	return cause
+}
+
 func (jm *JoinMap) IsDeleted(row uint64) bool {
 	return jm.delRows != nil && jm.delRows.Contains(uint64(row))
 }

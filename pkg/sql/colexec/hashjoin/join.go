@@ -81,6 +81,13 @@ func (hashJoin *HashJoin) OpType() vm.OpType {
 }
 
 func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
+	if hashJoin.ctr.spillEngine != nil {
+		hashJoin.ctr.spillEngine.Cleanup(proc)
+		if hashJoin.ctr.spillEngine.CleanupPending() {
+			return moerr.NewInternalError(proc.Ctx, "previous join spill cleanup is pending")
+		}
+		hashJoin.ctr.spillEngine = nil
+	}
 	if hashJoin.IsAsof() {
 		if hashJoin.NonEqCond == nil || len(hashJoin.EqConds) != 2 || len(hashJoin.EqConds[0]) == 0 ||
 			len(hashJoin.EqConds[0]) != len(hashJoin.EqConds[1]) || hashJoin.HashOnPK ||
@@ -510,10 +517,10 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				return takeErr
 			}
 			if hashJoin.allocationAccount == nil {
-				_ = payload.Close()
+				cleanupErr := ctr.mp.CloseOrRetainSpillPayload(&payload, mpool.ErrAllocationAccountInvalid)
 				ctr.mp.Free()
 				ctr.mp = nil
-				return mpool.ErrAllocationAccountInvalid
+				return cleanupErr
 			}
 			buildKeyExprs, probeKeyExprs := hashJoin.EqConds[1], hashJoin.EqConds[0]
 			needsProbeForEmptyBuild := hashJoin.EmitUnmatchedProbe() || hashJoin.IsMark()
@@ -536,7 +543,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				Budget:                  budget,
 			}, hashJoin.allocationAccount, mpool.AllocationOwnerHashBuild)
 			if engineErr != nil {
-				_ = payload.Close()
+				engineErr = ctr.mp.CloseOrRetainSpillPayload(&payload, engineErr)
 				ctr.mp.Free()
 				ctr.mp = nil
 				ctr.cleanEqCondExecutors()
@@ -560,7 +567,9 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				ctr.mp.Free()
 				ctr.mp = nil
 				engine.Cleanup(proc)
-				ctr.spillEngine = nil
+				if !engine.CleanupPending() {
+					ctr.spillEngine = nil
+				}
 				return err
 			}
 			ctr.mp.Free()

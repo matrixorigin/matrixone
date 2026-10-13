@@ -140,6 +140,13 @@ func (dedupJoin *DedupJoin) OpType() vm.OpType {
 	return vm.DedupJoin
 }
 func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
+	if dedupJoin.ctr.spillEngine != nil {
+		dedupJoin.ctr.spillEngine.Cleanup(proc)
+		if dedupJoin.ctr.spillEngine.CleanupPending() {
+			return moerr.NewInternalError(proc.Ctx, "previous join spill cleanup is pending")
+		}
+		dedupJoin.ctr.spillEngine = nil
+	}
 	if dedupJoin.allocationAccount == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
@@ -426,10 +433,10 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				return takeErr
 			}
 			if dedupJoin.allocationAccount == nil {
-				_ = payload.Close()
+				cleanupErr := ctr.mp.CloseOrRetainSpillPayload(&payload, mpool.ErrAllocationAccountInvalid)
 				ctr.mp.Free()
 				ctr.mp = nil
-				return mpool.ErrAllocationAccountInvalid
+				return cleanupErr
 			}
 			engine, engineErr := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:             dedupJoin.Conditions[1],
@@ -450,7 +457,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				Budget:                    budget,
 			}, dedupJoin.allocationAccount, mpool.AllocationOwnerHashBuild)
 			if engineErr != nil {
-				_ = payload.Close()
+				engineErr = ctr.mp.CloseOrRetainSpillPayload(&payload, engineErr)
 				ctr.mp.Free()
 				ctr.mp = nil
 				ctr.cleanEvalVectors()
@@ -474,7 +481,9 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				ctr.mp.Free()
 				ctr.mp = nil
 				engine.Cleanup(proc)
-				ctr.spillEngine = nil
+				if !engine.CleanupPending() {
+					ctr.spillEngine = nil
+				}
 				return err
 			}
 			ctr.mp.Free()

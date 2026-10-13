@@ -122,3 +122,23 @@ func TestJoinMapFreeMemoryRetainsFailedSpillCleanup(t *testing.T) {
 	require.Equal(t, int32(2), calls.Load())
 	require.Equal(t, int32(1), releases.Load())
 }
+
+func TestJoinMapCloseOrRetainRejectedPayload(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	var releases atomic.Int32
+	file, name, calls := newRetryCleanupSpillFile(t, 1, &releases)
+	jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
+	cause := errors.New("injected constructor rejection")
+	payload := SpillBuildPayload{Files: []*SpillFile{file}, BudgetRef: struct{}{}}
+	err := jm.CloseOrRetainSpillPayload(&payload, cause)
+	require.ErrorIs(t, err, cause)
+	require.ErrorContains(t, err, "injected remove failure")
+	require.Empty(t, payload.Files)
+	require.FileExists(t, name)
+	require.Zero(t, releases.Load())
+	jm.FreeMemory()
+	require.NoFileExists(t, name)
+	require.Equal(t, int32(2), calls.Load())
+	require.Equal(t, int32(1), releases.Load())
+}

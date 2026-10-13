@@ -1627,11 +1627,7 @@ func (e *SpillEngine) makeBucketWriters(prefix string) []BucketWriter {
 
 // closeRejectedSpillPayload returns failed deletion ownership to the map.
 func closeRejectedSpillPayload(jm *message.JoinMap, payload *message.SpillBuildPayload, cause error) error {
-	if cleanupErr := payload.Close(); cleanupErr != nil {
-		jm.RetainSpillCleanup(payload)
-		return errors.Join(cause, cleanupErr)
-	}
-	return cause
+	return jm.CloseOrRetainSpillPayload(payload, cause)
 }
 
 // TakeSpillBuildPayload transfers and validates the sole build-side spill
@@ -2657,6 +2653,13 @@ func (e *SpillEngine) closeSpillFile(file *message.SpillFile) {
 		logutil.Errorf("join handed-off spill cleanup failed: %v", err)
 		e.orphanFiles = append(e.orphanFiles, file)
 	}
+}
+
+// CleanupPending reports whether a failed deletion still has an owner inside
+// the engine. Callers must keep the engine reachable for a later Cleanup.
+func (e *SpillEngine) CleanupPending() bool {
+	return e != nil && (len(e.orphanFiles) > 0 || len(e.orphanWriters) > 0 ||
+		e.probeReader.spillFile != nil || e.buildReader.spillFile != nil)
 }
 
 // Cleanup releases all engine resources.

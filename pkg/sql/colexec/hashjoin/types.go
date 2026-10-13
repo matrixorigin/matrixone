@@ -543,7 +543,9 @@ func (ctr *container) cleanBucketBatches(proc *process.Process) {
 	ctr.probeBucketActive = false
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
-		ctr.spillEngine = nil
+		if !ctr.spillEngine.CleanupPending() {
+			ctr.spillEngine = nil
+		}
 	}
 }
 

@@ -226,8 +226,9 @@ func (hashBuild *HashBuild) sendJoinMap(proc *process.Process) error {
 				BudgetRef: ctr.hashmapBuilder.budget,
 			}
 			if err := jm.SetSpillBuildPayload(payload); err != nil {
-				_ = payload.Close()
-				return moerr.NewInternalError(proc.Ctx, err.Error())
+				return jm.CloseOrRetainSpillPayload(
+					&payload, moerr.NewInternalError(proc.Ctx, err.Error()),
+				)
 			}
 			ctr.spillBundle = nil
 		}
