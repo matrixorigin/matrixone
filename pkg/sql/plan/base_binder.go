@@ -1022,7 +1022,11 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32, isRoot bo
 		args = append(args, tree.NewNumVal("", "", false, tree.P_null))
 	}
 
-	return b.bindFuncExprImplByAstExpr("case", args, depth)
+	expr, err := b.bindFuncExprImplByAstExpr("case", args, depth)
+	if err == nil {
+		return b.bindPreparedFieldCase(expr, astExpr)
+	}
+	return expr, err
 }
 
 func bindCaseConditionParam(expr tree.Expr) tree.Expr {
@@ -4192,6 +4196,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	isIfNull := name == "ifnull"
+	isNullIf := name == "nullif"
 
 	// rewrite some ast Exprs before binding
 	switch name {
@@ -4700,6 +4705,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 
+	if name == "field" {
+		var err error
+		args, err = b.bindFieldStringArguments(args)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if b.builder != nil {
 		var e *plan.Expr
 		var err error
@@ -4713,6 +4725,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.observePersistedExpressionProtocol)
 		}
 		if err == nil {
+			if isNullIf {
+				b.rememberPreparedFieldNullIfDomain(e, args)
+			}
 			if fn := e.GetF(); fn != nil {
 				for i, source := range preparedPeerSources {
 					if source == nil || i >= len(fn.Args) {

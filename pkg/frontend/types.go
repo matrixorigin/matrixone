@@ -295,6 +295,7 @@ func (ec *engineColumnInfo) GetType() types.T {
 }
 
 type PrepareStmt struct {
+	fieldTypes *plan2.PreparedFieldTypes
 	// Monotonic high-water mark for GROUP_CONCAT across this prepared lifetime,
 	// including executions whose AP or specialization path discards the compile.
 	groupConcatMaxLenFloor uint64
@@ -865,6 +866,7 @@ func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
 }
 
 func (prepareStmt *PrepareStmt) Close() {
+	prepareStmt.fieldTypes = nil
 	prepareStmt.closeCursor()
 	prepareStmt.releaseLongDataBuffers()
 	prepareStmt.longDataErr = nil

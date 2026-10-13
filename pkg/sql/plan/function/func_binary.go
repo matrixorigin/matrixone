@@ -5567,9 +5567,9 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) < 2 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
-	// Binary SQL variables use the same byte-preserving, case-insensitive
-	// string comparison as text variables. Without this family check, mixed
-	// BINARY/VARBINARY/BLOB inputs fall through to DOUBLE and distinct byte
+	// Binary and text inputs both belong to the string comparison overload.
+	// Without this family check, mixed BINARY/VARBINARY/BLOB inputs fall
+	// through to DOUBLE and distinct byte
 	// sequences with nonnumeric prefixes compare equal.
 	allStrings := true
 	for _, input := range inputs {
@@ -5815,6 +5815,9 @@ func FieldNumber[T number](ivecs []*vector.Vector, result vector.FunctionResultW
 
 func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[uint64](result)
+	// FIELD compares using the subject expression's resolved domain, including
+	// a selector's common type, rather than its selected row's provenance.
+	binary := types.StaticStringDomain(*ivecs[0].GetType()) == types.StringDomainBinary
 
 	fs := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs))
 	for i := range ivecs {
@@ -5826,15 +5829,24 @@ func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 	for j := 1; j < len(ivecs); j++ {
 
 		for i := uint64(0); i < uint64(length); i++ {
+			if nums[i] != 0 || functionRowSkipped(selectList, i) {
+				continue
+			}
 
 			v1, null1 := fs[0].GetStrValue(i)
 			v2, null2 := fs[j].GetStrValue(i)
 
-			if (nums[i] != 0) || (null1 || null2) {
+			if null1 || null2 {
 				continue
 			}
 
-			if strings.EqualFold(functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2)) {
+			var equal bool
+			if binary {
+				equal = bytes.Equal(v1, v2)
+			} else {
+				equal = strings.EqualFold(functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
+			}
+			if equal {
 				nums[i] = uint64(j)
 			}
 
@@ -5842,7 +5854,7 @@ func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.Append(nums[i], false); err != nil {
+		if err := rs.Append(nums[i], functionRowSkipped(selectList, i)); err != nil {
 			return err
 		}
 	}

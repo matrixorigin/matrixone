@@ -830,6 +830,11 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	resp.LastInsertIDExported = true
 	prepareStmts := ses.GetPrepareStmts()
 	for _, st := range prepareStmts {
+		// The migration payload cannot preserve execution-resolved FIELD
+		// return types. Reject under the request owner before exporting handles.
+		if st.fieldTypes != nil {
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
 		// Migration replays SQL against the current assignment; it does not
 		// transfer this statement's original static type and row-domain binding.
 		// Keep the connection here until the statement is deallocated.
