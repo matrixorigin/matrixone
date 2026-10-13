@@ -63,7 +63,7 @@ func TestExecuteIterationClosesEarlierSourcesOnOpenFailure(t *testing.T) {
 	second.EXPECT().GetTableID(gomock.Any()).Return(uint64(12))
 	first.EXPECT().CopyTableDef(gomock.Any()).Return(&planpb.TableDef{TblId: 11}).AnyTimes()
 	sources := []TableInfo{{DBName: "db", TableName: "first", TableID: 11}, {DBName: "db", TableName: "second", TableID: 12}}
-	stub := gostub.StubFunc(&GetJobSpecs, []*JobSpec{{ConsumerInfo: ConsumerInfo{SrcTable: sources[0], SrcTables: sources}}}, []*JobStatus{{LSN: 1, Stage: JobStage_Running}}, nil)
+	stub := gostub.StubFunc(&GetJobSpecs, []*JobSpec{{ConsumerInfo: ConsumerInfo{SrcTable: sources[0], SrcTables: sources}}}, []*JobStatus{{LSN: 1, Stage: JobStage_Running}}, []types.TS{{}}, nil)
 	t.Cleanup(stub.Reset)
 	opened := &closeCountingChanges{}
 	failure := errors.New("second source open failed")
