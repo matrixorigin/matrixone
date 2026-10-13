@@ -15,13 +15,14 @@
 package plan
 
 import (
+	"testing"
+
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestFunctionalJSONTypedKeyDDLAndMetadata(t *testing.T) {
@@ -81,4 +82,71 @@ func TestFunctionalJSONTypedKeyDDLAndMetadata(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
 	_, err = build("create table child(id int primary key,pid int,index j((cast(json_unquote(json_extract(cast(pid as json),'$')) as char(20)))))")
 	require.NoError(t, err)
+}
+
+// Exercise the existing SQL replay and physical equality matcher with a JSON
+// key. This complements the metadata-only protocol tests; it is not runtime
+// index/scan or checkpoint/restart evidence.
+func TestFunctionalJSONReplayAndEqualityPlan(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, had := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
+	t.Cleanup(func() {
+		if had {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion115)
+		}
+	})
+	ctx := NewMockCompilerContext(false, proc)
+	build := func(sql string) (*Plan, error) {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		if err != nil {
+			return nil, err
+		}
+		defer stmt.Free()
+		return BuildPlan(ctx, stmt, false)
+	}
+	p, err := build("create table docs(id int primary key,doc json,index idx_kind((cast(doc ->> '$.kind' as char(20)))))")
+	require.NoError(t, err)
+	table := p.GetDdl().GetCreateTable().TableDef
+	ctx.tables["docs"] = table
+	ctx.objects["docs"] = &ObjectRef{ObjName: "docs", SchemaName: "tpch"}
+	for _, it := range p.GetDdl().GetCreateTable().IndexTables {
+		ctx.tables[it.Name] = it
+		ctx.objects[it.Name] = &ObjectRef{ObjName: it.Name, SchemaName: "tpch"}
+	}
+	qp, err := build("select id from docs where cast(doc ->> '$.kind' as char(20))='alpha'")
+	require.NoError(t, err)
+	physical, residual := false, false
+	for _, n := range qp.GetQuery().Nodes {
+		if n.NodeType == pb.Node_TABLE_SCAN && n.TableDef != nil {
+			if n.TableDef.Name == table.Indexes[0].IndexTableName {
+				physical = true
+			}
+			if n.TableDef.Name == "docs" && len(n.FilterList) > 0 {
+				residual = true
+			}
+		}
+	}
+	require.True(t, physical, "identical typed JSON predicate must select its physical index")
+	require.True(t, residual, "the base-row predicate must remain as a residual")
+	ddl, _, err := constructCreateTableSQL(ctx, table, nil, false, nil, false, nil)
+	require.NoError(t, err)
+	require.NotContains(t, ddl, functionalColumnPrefix)
+	replay, err := build(ddl)
+	require.NoError(t, err)
+	replayTable := replay.GetDdl().GetCreateTable().TableDef
+	require.NoError(t, validateFunctionalTable(t.Context(), replayTable))
+	marked, err := pb.JSONFunctionalIndexSemantics(replayTable.Indexes[0])
+	require.NoError(t, err)
+	require.True(t, marked)
+	require.True(t, sameFunctionalValueType(functionalIndexColumn(table, table.Indexes[0]).Typ, functionalIndexColumn(replayTable, replayTable.Indexes[0]).Typ))
+	for _, sql := range []string{"create index idx_more on docs ((cast(doc ->> '$.other' as char(20))))", "alter table docs add index idx_more ((cast(doc ->> '$.other' as char(20)))), algorithm=copy"} {
+		ap, err := build(sql)
+		require.NoError(t, err, sql)
+		require.Equal(t, pb.AlterTable_COPY, ap.GetDdl().GetAlterTable().AlgorithmType)
+		require.NotContains(t, ap.GetDdl().GetAlterTable().CreateTmpTableSql, functionalColumnPrefix)
+	}
 }
