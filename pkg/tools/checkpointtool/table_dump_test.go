@@ -3238,7 +3238,9 @@ func TestJSONFunctionalIndexTypedCheckpointRequiresMarker(t *testing.T) {
 				{"o", "0", "0", "42", "g", "2", "0", string(dependency)},
 			}}
 			attachFunctionalIndexExpressions(schema, columns, 42)
+			require.True(t, schema.UniqueKeys[0].requiresJSONSemantics)
 			clone := cloneTableSchema(schema)
+			require.True(t, clone.UniqueKeys[0].requiresJSONSemantics)
 			indexes := &LogicalTableView{Headers: []string{"object", "block", "row", "table_id", "name", "column_name", "type", "ordinal_position", catalog.IndexAlgoParams}, Rows: [][]string{{"o", "0", "0", "42", "idx_kind", backing, "INDEX", "1", params}}}
 			ddl := RenderCreateTableDDLFromSchema(clone)
 			statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "docs", clone)

@@ -1695,6 +1695,7 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 		clone.UniqueKeys = make([]TableUniqueKey, len(schema.UniqueKeys))
 		for i, key := range schema.UniqueKeys {
 			clone.UniqueKeys[i].Expressions = maps.Clone(key.Expressions)
+			clone.UniqueKeys[i].requiresJSONSemantics = key.requiresJSONSemantics
 			clone.UniqueKeys[i].Name = strings.Clone(key.Name)
 			clone.UniqueKeys[i].Unique = key.Unique
 			clone.UniqueKeys[i].Algo = strings.Clone(key.Algo)
