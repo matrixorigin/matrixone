@@ -1755,6 +1755,26 @@ func (c *Compile) materializeSQLSelectLimit(queryPlan *plan.Plan) (sqlSelectLimi
 	return materialization, nil
 }
 
+// Parentheses are flattened during binding, but prepared execution retains the
+// original AST. Only this wrapper chain belongs to the statement's result limit.
+func statementHasExplicitTopLevelLimit(stmt tree.Statement) bool {
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok {
+		return false
+	}
+	for selectStmt != nil {
+		if selectStmt.Limit != nil && selectStmt.Limit.Count != nil {
+			return true
+		}
+		paren, ok := selectStmt.Select.(*tree.ParenSelect)
+		if !ok || paren == nil {
+			return false
+		}
+		selectStmt = paren.Select
+	}
+	return false
+}
+
 // materializePreparedLimitZero uses the existing empty-result topology for a
 // bound outer LIMIT. Parameterized pagination is compiled afresh by the frontend;
 // restoring the borrowed plan prevents a zero execution contaminating later ones.
@@ -1762,8 +1782,7 @@ func (c *Compile) materializePreparedLimitZero(pn *plan.Plan) (func(), error) {
 	if c.isPrepare || pn == nil || !pn.IsPrepare || c.proc.GetPrepareParams() == nil || statementHasSQLCalcFoundRows(c.stmt) {
 		return nil, nil
 	}
-	stmt, ok := c.stmt.(*tree.Select)
-	if !ok || stmt.Limit == nil || stmt.Limit.Count == nil {
+	if !statementHasExplicitTopLevelLimit(c.stmt) {
 		return nil, nil
 	}
 	q := pn.GetQuery()

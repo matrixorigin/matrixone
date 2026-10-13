@@ -58,7 +58,11 @@ func TestPreparedZeroLimitReuse(t *testing.T) {
 			exec("use prepared_zero_limit")
 			exec("create table t(k int primary key,v int)")
 			exec("insert into t values(1,10),(2,20),(3,30)")
-			for _, q := range []string{"select a.k,b.v from t a join t b on a.k=b.k order by a.k limit ?", "select v,count(*) from t group by v order by v limit ?", "with recursive r(n) as (select 1 union all select n+1 from r where n<3) select n from r limit ?"} {
+			queries := []string{"select a.k,b.v from t a join t b on a.k=b.k order by a.k limit ?", "select v,count(*) from t group by v order by v limit ?", "with recursive r(n) as (select 1 union all select n+1 from r where n<3) select n from r limit ?"}
+			for _, q := range append([]string(nil), queries...) {
+				queries = append(queries, "("+q+")", "(("+q+"))")
+			}
+			for _, q := range queries {
 				func() {
 					stmt, err := conn.PrepareContext(ctx, q)
 					require.NoError(t, err)
@@ -90,13 +94,15 @@ func TestPreparedZeroLimitReuse(t *testing.T) {
 				}()
 			}
 			require.Zero(t, query("select a.k,b.v from t a join t b on a.k=b.k limit 0"))
-			exec("prepare counted from 'select sql_calc_found_rows k from t order by k limit ?'")
-			exec("set @lim=0")
-			require.Zero(t, query("execute counted using @lim"))
-			var found int
-			require.NoError(t, conn.QueryRowContext(ctx, "select found_rows()").Scan(&found))
-			require.Equal(t, 3, found)
-			exec("deallocate prepare counted")
+			for _, q := range []string{"select sql_calc_found_rows k from t order by k limit ?", "(select sql_calc_found_rows k from t order by k limit ?)"} {
+				exec("prepare counted from '" + q + "'")
+				exec("set @lim=0")
+				require.Zero(t, query("execute counted using @lim"))
+				var found int
+				require.NoError(t, conn.QueryRowContext(ctx, "select found_rows()").Scan(&found))
+				require.Equal(t, 3, found)
+				exec("deallocate prepare counted")
+			}
 			exec("prepare z from 'select k from t order by k limit ?'")
 			exec("set @lim=-1")
 			_, err = conn.ExecContext(ctx, "execute z using @lim")

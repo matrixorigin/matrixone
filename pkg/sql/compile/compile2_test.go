@@ -1209,3 +1209,90 @@ func TestPreparedOuterLimitZeroMaterialization(t *testing.T) {
 	require.Nil(t, restore)
 	require.Nil(t, root.Limit)
 }
+
+func TestPreparedParenthesizedLimitZeroProducerOmission(t *testing.T) {
+	for _, tc := range []struct {
+		sql  string
+		want bool
+	}{
+		{"select 1 limit ?", true},
+		{"(select 1 limit ?)", true},
+		{"((select 1 limit ?))", true},
+		{"(select 1) limit ?", true},
+		{"select * from (select 1 limit ?) s", false},
+		{"(select 1 limit ?) union all select 2", false},
+		{"((select 1 limit ?) union all select 2)", false},
+		{"(select sql_calc_found_rows 1 limit ?)", false},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			c := newLazyUnionAllTestCompile(t)
+			c.isPrepare = false
+			params := vector.NewVec(types.T_text.ToType())
+			c.proc.SetPrepareParams(params)
+			defer func() { c.proc.SetPrepareParams(nil); params.Free(c.proc.Mp()) }()
+			stmts, err := mysql.Parse(c.proc.Ctx, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmts[0].Free()
+			c.stmt = stmts[0]
+			source := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+			target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_uint64)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+			limit, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "cast", []*plan.Expr{source, target})
+			require.NoError(t, err)
+			// This child cannot compile. Empty rows alone would not prove that
+			// the zero execution omitted the blocking producer graph.
+			producer := &plan.Node{NodeId: 0, NodeType: plan.Node_UNKNOWN}
+			root := &plan.Node{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, Limit: limit}
+			q := &plan.Query{StmtType: plan.Query_SELECT, Nodes: []*plan.Node{producer, root}, Steps: []int32{0, 1}}
+			pn := &plan.Plan{IsPrepare: true, Plan: &plan.Plan_Query{Query: q}}
+			c.pn = pn
+			for _, value := range []string{"2", "0", "1", "0"} {
+				params.Reset(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(params, []byte(value), false, c.proc.Mp()))
+				restore, err := c.materializePreparedLimitZero(pn)
+				require.NoError(t, err)
+				if tc.want && value == "0" {
+					require.NotNil(t, restore)
+					require.Equal(t, 1, c.firstStepToCompile(q))
+					scopes, compileErr := c.compilePlanScope(1, 1, q.Nodes)
+					restore()
+					require.NoError(t, compileErr)
+					require.Len(t, scopes, 1)
+					require.Empty(t, scopes[0].PreScopes)
+					ReleaseScopes(scopes)
+				} else {
+					require.Nil(t, restore)
+					require.Zero(t, c.firstStepToCompile(q))
+					if tc.want {
+						scopes, compileErr := c.compilePlanScope(1, 1, q.Nodes)
+						require.Error(t, compileErr, "positive bounds must still compile the producer")
+						require.Empty(t, scopes)
+					}
+				}
+				require.Same(t, limit, root.Limit, "borrowed plan restored between executions")
+			}
+			if tc.want {
+				params.Reset(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(params, nil, true, c.proc.Mp()))
+				restore, err := c.materializePreparedLimitZero(pn)
+				require.NoError(t, err)
+				require.Nil(t, restore, "NULL retains ordinary execution")
+				params.Reset(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(params, []byte("0"), false, c.proc.Mp()))
+				c.isPrepare = true
+				restore, err = c.materializePreparedLimitZero(pn)
+				require.NoError(t, err)
+				require.Nil(t, restore)
+				c.isPrepare = false
+				root.NodeType = plan.Node_RECURSIVE_CTE
+				restore, err = c.materializePreparedLimitZero(pn)
+				require.NoError(t, err)
+				require.Nil(t, restore, "recursive receiver lifecycle retained")
+				c.stmt = (*tree.Select)(nil)
+				restore, err = c.materializePreparedLimitZero(pn)
+				require.NoError(t, err)
+				require.Nil(t, restore)
+				require.Same(t, limit, root.Limit)
+			}
+		})
+	}
+}
