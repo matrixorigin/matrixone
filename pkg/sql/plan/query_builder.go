@@ -5238,7 +5238,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		node := builder.qry.Nodes[lastNodeID]
 		node.Limit = boundLimit
 		node.Offset = boundOffset
-		if unionRankOption != nil && unionRankOption.Mode != "" {
+		if unionRankOption != nil {
 			node.RankOption = unionRankOption
 		}
 	}
@@ -14053,15 +14053,29 @@ func (builder *QueryBuilder) checkPlanningCanceled() error {
 }
 
 // parseRankOption parses rank options from a map of option key-value pairs.
-// It extracts the "mode" option case-insensitively and validates it.
-// Returns a RankOption with the parsed mode if valid, or nil if no mode is specified.
-// Returns an error if the mode value is invalid (must be "pre", "post", "force", or "include").
+// Supported options are mode and nprobe. Unsupported keys and invalid values
+// must fail here rather than silently falling back to session defaults.
 func parseRankOption(options map[string]string, ctx context.Context) (*plan.RankOption, error) {
 	if len(options) == 0 {
 		return nil, nil
 	}
 
 	rankOption := &plan.RankOption{}
+	for key, value := range options {
+		switch strings.ToLower(key) {
+		case "mode":
+			// Validated below, retaining case-insensitive mode lookup.
+		case "nprobe":
+			nprobe, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+			// Match the supported probe_limit session-variable domain.
+			if err != nil || nprobe < 1 || nprobe > 80000 {
+				return nil, moerr.NewInvalidInputf(ctx, "nprobe must be an integer between 1 and 80000, got '%s'", value)
+			}
+			rankOption.Nprobe = nprobe
+		default:
+			return nil, moerr.NewInvalidInputf(ctx, "unsupported rank option '%s'", key)
+		}
+	}
 
 	// Helper function to get value from map case-insensitively
 	getOptionValue := func(key string) (string, bool) {
@@ -14086,10 +14100,6 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre', 'post', 'force', 'auto', or 'include', got '%s'", mode)
 		}
 		rankOption.Mode = modeLower
-	}
-
-	if rankOption.Mode == "" {
-		return nil, nil
 	}
 
 	return rankOption, nil

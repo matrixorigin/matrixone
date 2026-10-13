@@ -2098,6 +2098,13 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	if err := convertEngineColumnTypeToMysqlType(ctx, typ, col); err != nil {
 		return err
 	}
+	if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
+		col.geometryOid, col.geometryWidth = typ.Oid, typ.Width
+		setMysqlColumnTypeMetadata(col, typ)
+		col.SetCharset(charsetBinary)
+		col.SetFlag(col.Flag() | uint16(defines.BINARY_FLAG))
+		return nil
+	}
 	if typ.Oid == types.T_blob {
 		length := uint32(math.MaxUint32)
 		if typ.Width > 0 {

@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -288,112 +289,120 @@ func TestApplyIndicesForSortUsingIvfpq_PrepareReturnsNil(t *testing.T) {
 }
 
 func TestApplyIndicesForSortUsingIvfpq_Success(t *testing.T) {
-	mock := &customMockCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
-		resolveVarFunc: func(name string, isSys, isGlobal bool) (interface{}, error) {
-			switch name {
-			case "ivfpq_threads_search":
-				return int64(4), nil
-			case "ivfpq_batch_window":
-				return int64(64), nil
-			case "probe_limit":
-				return int64(10), nil
+	for _, nprobe := range []int64{0, 3} {
+		t.Run(fmt.Sprintf("nprobe=%d", nprobe), func(t *testing.T) {
+			mock := &customMockCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+				resolveVarFunc: func(name string, isSys, isGlobal bool) (interface{}, error) {
+					switch name {
+					case "ivfpq_threads_search":
+						return int64(4), nil
+					case "ivfpq_batch_window":
+						return int64(64), nil
+					case "probe_limit":
+						return int64(10), nil
+					}
+					return int64(0), nil
+				},
 			}
-			return int64(0), nil
-		},
-	}
-	builder := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
-	bindCtx := NewBindContext(builder, nil)
+			builder := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
+			bindCtx := NewBindContext(builder, nil)
 
-	tableDef := &plan.TableDef{
-		Name: "t",
-		Cols: []*plan.ColDef{
-			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
-			{Name: "v", Typ: plan.Type{Id: int32(types.T_array_float32)}},
-		},
-		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "id"},
-		Name2ColIndex: map[string]int32{"id": 0, "v": 1},
-	}
-	scanNode := &plan.Node{
-		NodeType:    plan.Node_TABLE_SCAN,
-		TableDef:    tableDef,
-		ObjRef:      &plan.ObjectRef{SchemaName: "db"},
-		BindingTags: []int32{builder.genNewBindTag()},
-	}
-	scanNodeID := builder.appendNode(scanNode, bindCtx)
-	for i := 0; i < 30; i++ {
-		builder.ctxByNode = append(builder.ctxByNode, bindCtx)
-	}
+			tableDef := &plan.TableDef{
+				Name: "t",
+				Cols: []*plan.ColDef{
+					{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+					{Name: "v", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+				},
+				Pkey:          &plan.PrimaryKeyDef{PkeyColName: "id"},
+				Name2ColIndex: map[string]int32{"id": 0, "v": 1},
+			}
+			scanNode := &plan.Node{
+				NodeType:    plan.Node_TABLE_SCAN,
+				TableDef:    tableDef,
+				ObjRef:      &plan.ObjectRef{SchemaName: "db"},
+				BindingTags: []int32{builder.genNewBindTag()},
+			}
+			scanNodeID := builder.appendNode(scanNode, bindCtx)
+			for i := 0; i < 30; i++ {
+				builder.ctxByNode = append(builder.ctxByNode, bindCtx)
+			}
 
-	vecTyp := plan.Type{Id: int32(types.T_array_float32)}
-	distFnExpr := &plan.Function{
-		Func: &ObjectRef{ObjName: "l2_distance"},
-		Args: []*plan.Expr{
-			{Typ: vecTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanNode.BindingTags[0], ColPos: 1}}},
-			{Typ: vecTyp, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[1,1,1]"}}}},
-		},
-	}
-	vecCtx := &vectorSortContext{
-		scanNode: scanNode,
-		sortNode: &plan.Node{NodeType: plan.Node_SORT, Offset: &plan.Expr{}},
-		projNode: &plan.Node{
-			NodeType: plan.Node_PROJECT,
-			Children: []int32{scanNodeID},
-			ProjectList: []*plan.Expr{
-				{Typ: vecTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanNode.BindingTags[0], ColPos: 1}}},
-			},
-		},
-		distFnExpr: distFnExpr,
-		orderExpr: &plan.Expr{
-			Typ:  plan.Type{Id: int32(types.T_float64)},
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
-		},
-		limit:       &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
-		resultLimit: makePlan2Uint64ConstExprWithType(10),
-		rankOption:  &plan.RankOption{Mode: "pre"},
-	}
-	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
-	mti := &MultiTableIndex{
-		IndexAlgo: catalog.MoIndexIvfpqAlgo.ToString(),
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.Ivfpq_TblType_Metadata: {
-				IndexTableName:  "meta",
-				IndexAlgoParams: idxAlgoParams,
-			},
-			catalog.Ivfpq_TblType_Storage: {
-				IndexTableName:  "idx",
-				Parts:           []string{"v"},
-				IndexAlgoParams: idxAlgoParams,
-			},
-		},
-	}
+			vecTyp := plan.Type{Id: int32(types.T_array_float32)}
+			distFnExpr := &plan.Function{
+				Func: &ObjectRef{ObjName: "l2_distance"},
+				Args: []*plan.Expr{
+					{Typ: vecTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanNode.BindingTags[0], ColPos: 1}}},
+					{Typ: vecTyp, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[1,1,1]"}}}},
+				},
+			}
+			vecCtx := &vectorSortContext{
+				scanNode: scanNode,
+				sortNode: &plan.Node{NodeType: plan.Node_SORT, Offset: &plan.Expr{}},
+				projNode: &plan.Node{
+					NodeType: plan.Node_PROJECT,
+					Children: []int32{scanNodeID},
+					ProjectList: []*plan.Expr{
+						{Typ: vecTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanNode.BindingTags[0], ColPos: 1}}},
+					},
+				},
+				distFnExpr: distFnExpr,
+				orderExpr: &plan.Expr{
+					Typ:  plan.Type{Id: int32(types.T_float64)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+				},
+				limit:       &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
+				resultLimit: makePlan2Uint64ConstExprWithType(10),
+				rankOption:  &plan.RankOption{Mode: "pre", Nprobe: nprobe},
+			}
+			idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
+			mti := &MultiTableIndex{
+				IndexAlgo: catalog.MoIndexIvfpqAlgo.ToString(),
+				IndexDefs: map[string]*plan.IndexDef{
+					catalog.Ivfpq_TblType_Metadata: {
+						IndexTableName:  "meta",
+						IndexAlgoParams: idxAlgoParams,
+					},
+					catalog.Ivfpq_TblType_Storage: {
+						IndexTableName:  "idx",
+						Parts:           []string{"v"},
+						IndexAlgoParams: idxAlgoParams,
+					},
+				},
+			}
 
-	_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti, nil)
-	require.NoError(t, err)
+			_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti, nil)
+			require.NoError(t, err)
 
-	sortID := vecCtx.projNode.Children[0]
-	sort := builder.qry.Nodes[sortID]
-	require.Equal(t, plan.Node_SORT, sort.NodeType)
-	joinID := sort.Children[0]
-	join := builder.qry.Nodes[joinID]
-	require.Equal(t, plan.Node_JOIN, join.NodeType)
-	right := builder.qry.Nodes[join.Children[1]]
-	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, right.NodeType)
-	spec := right.IndexSearchScan
-	require.NotNil(t, spec)
-	assert.Equal(t, "l2_distance", spec.DistanceFunction)
-	assert.False(t, spec.PostFilterOverFetch)
-	assert.Equal(t, uint64(10), spec.CandidateLimit.GetLit().GetU64Val())
-	require.Len(t, spec.HiddenTables, 2)
-	assert.Equal(t, catalog.Ivfpq_TblType_Metadata, spec.HiddenTables[0].Role)
-	assert.Equal(t, "meta", spec.HiddenTables[0].Object.ObjName)
-	assert.Equal(t, catalog.Ivfpq_TblType_Storage, spec.HiddenTables[1].Role)
-	assert.Equal(t, "idx", spec.HiddenTables[1].Object.ObjName)
-	opts, err := ivfpqplan.DecodeScanOptions(spec.AlgoOptions)
-	require.NoError(t, err)
-	assert.Equal(t, int32(types.T_array_float32), opts.KeyPartType)
-	assert.Empty(t, opts.FilterJSON)
-	assert.Equal(t, uint(10), opts.Nprobe)
+			sortID := vecCtx.projNode.Children[0]
+			sort := builder.qry.Nodes[sortID]
+			require.Equal(t, plan.Node_SORT, sort.NodeType)
+			joinID := sort.Children[0]
+			join := builder.qry.Nodes[joinID]
+			require.Equal(t, plan.Node_JOIN, join.NodeType)
+			right := builder.qry.Nodes[join.Children[1]]
+			require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, right.NodeType)
+			spec := right.IndexSearchScan
+			require.NotNil(t, spec)
+			assert.Equal(t, "l2_distance", spec.DistanceFunction)
+			assert.False(t, spec.PostFilterOverFetch)
+			assert.Equal(t, uint64(10), spec.CandidateLimit.GetLit().GetU64Val())
+			require.Len(t, spec.HiddenTables, 2)
+			assert.Equal(t, catalog.Ivfpq_TblType_Metadata, spec.HiddenTables[0].Role)
+			assert.Equal(t, "meta", spec.HiddenTables[0].Object.ObjName)
+			assert.Equal(t, catalog.Ivfpq_TblType_Storage, spec.HiddenTables[1].Role)
+			assert.Equal(t, "idx", spec.HiddenTables[1].Object.ObjName)
+			opts, err := ivfpqplan.DecodeScanOptions(spec.AlgoOptions)
+			require.NoError(t, err)
+			assert.Equal(t, int32(types.T_array_float32), opts.KeyPartType)
+			assert.Empty(t, opts.FilterJSON)
+			expected := uint(10)
+			if nprobe != 0 {
+				expected = uint(nprobe)
+			}
+			require.Equal(t, expected, opts.Nprobe)
+		})
+	}
 }
 
 // TestApplyIndicesForSortUsingIvfpq_RichPushdown drives the optimizer through
