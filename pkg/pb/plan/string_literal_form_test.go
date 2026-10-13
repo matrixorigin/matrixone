@@ -1105,3 +1105,44 @@ func TestDateNumericResultFeaturesRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestJSONBinaryCastAndStoredOpaqueRenderingFeatures(t *testing.T) {
+	function := func(id, source, target int32, param bool) *Expr {
+		arg := &Expr{Typ: Type{Id: source}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
+		if param {
+			arg.Expr = &Expr_P{P: &ParamRef{Pos: 2}}
+		}
+		return &Expr{Typ: Type{Id: target}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(id) << 32}, Args: []*Expr{arg}}}}
+	}
+	for _, tc := range []struct {
+		name               string
+		id, source, target int32
+		param, want        bool
+	}{
+		{"binarycast", 21, 64, 62, false, true}, {"varbinarycast", 21, 65, 62, false, true}, {"blobcast", 21, 70, 62, false, true},
+		{"knowntextcast", 21, 61, 62, false, false}, {"unknowncast", 21, 0, 62, false, true}, {"textparametercast", 21, 71, 62, true, true},
+		{"storedconcat", 16, 62, 71, false, true}, {"storedconcatws", 76, 62, 71, false, true},
+		{"jsonvarchar", 21, 62, 61, false, true}, {"jsonbinary", 21, 62, 64, false, true}, {"jsonassign", 554, 62, 71, false, true},
+		{"jsonignore", 555, 62, 70, false, true}, {"jsonstrict", 541, 62, 61, false, true},
+		{"jsonunquote", 256, 62, 61, false, true}, {"jsonpretty", 459, 62, 71, false, true}, {"udfjson", 326, 62, 22, false, true},
+		{"legacySQLbinarykey", 366, 70, 62, false, false}, {"storedobjectkey", 366, 62, 62, false, true},
+		{"plainconcat", 16, 61, 71, false, false},
+		{"jsontype", 456, 62, 61, false, false}, {"numericjsoncast", 21, 22, 62, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := function(tc.id, tc.source, tc.target, tc.param)
+			features, err := RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.JSONOpaqueTextContracts)
+		})
+	}
+}
+
+func TestJSONBinaryCastKnownNumericParameterResultNotOpaque(t *testing.T) {
+	marker := &Expr{Typ: Type{Id: 71}, Expr: &Expr_P{P: &ParamRef{Pos: 0}}}
+	numeric := &Expr{Typ: Type{Id: 22}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(21)<<32 | 1}, Args: []*Expr{marker}}}}
+	outer := &Expr{Typ: Type{Id: 62}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(21)<<32 | 1}, Args: []*Expr{numeric}}}}
+	features, err := RequiredRemoteExpressionFeatures(outer)
+	require.NoError(t, err)
+	require.False(t, features.JSONOpaqueTextContracts)
+}

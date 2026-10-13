@@ -42,6 +42,15 @@ func bindJSONStringConsumerExpr(t *testing.T, name string) *planpb.Expr {
 		return plan2.MakePlan2StringConstExprWithType(value)
 	}
 
+	if name == "binary_cast" {
+		target := planpb.Type{Id: int32(types.T_json)}
+		expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*planpb.Expr{
+			{Typ: planpb.Type{Id: int32(types.T_blob)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+			{Typ: target, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}},
+		})
+		require.NoError(t, err)
+		return expr
+	}
 	var args []*planpb.Expr
 	switch name {
 	case "concat":
@@ -95,7 +104,7 @@ func TestJSONStringConsumerProtocolPlanAdmissionAndCachedRun(t *testing.T) {
 		}
 	})
 
-	for _, name := range []string{"elt"} {
+	for _, name := range []string{"elt", "concat", "concat_ws", "binary_cast"} {
 		t.Run(name, func(t *testing.T) {
 			expr := bindJSONStringConsumerExpr(t, name)
 			for _, owner := range []string{"check", "default", "generated", "on_update"} {
@@ -121,9 +130,15 @@ func TestJSONStringConsumerProtocolPlanAdmissionAndCachedRun(t *testing.T) {
 // checks placement and serialized-scope admission, without starting an old
 // binary or executing a remote pipeline.
 func TestJSONStringConsumerSimulatedVersionSerializationFences(t *testing.T) {
+	for _, name := range []string{"elt", "concat", "concat_ws", "binary_cast"} {
+		t.Run(name, func(t *testing.T) { testJSONStringConsumerSerializationFences(t, name) })
+	}
+}
+
+func testJSONStringConsumerSerializationFences(t *testing.T, name string) {
 	c, client := expressionProtocolTestCompile(t)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	expr := bindJSONStringConsumerExpr(t, "elt")
+	expr := bindJSONStringConsumerExpr(t, name)
 	qry := &planpb.Query{
 		Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}},
 		Steps: []int32{0},
@@ -182,8 +197,8 @@ func TestJSONStringConsumerActualOwnerProtocolFloors(t *testing.T) {
 		floor    int64
 		overload int32
 	}{
-		{"concat", defines.MORPCVersion101, 0},
-		{"concat_ws", defines.MORPCVersion101, 0},
+		{"concat", defines.MORPCVersion113, 0},
+		{"concat_ws", defines.MORPCVersion113, 0},
 		{"elt", defines.MORPCVersion113, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

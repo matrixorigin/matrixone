@@ -24,7 +24,7 @@ import (
 
 func isPlanMySQLStringType(id int32) bool {
 	switch id {
-	case 60, 61, 64, 65, 70, 71:
+	case 60, 61, 64, 65, 70, 71, 72:
 		return true
 	default:
 		return false
@@ -388,6 +388,7 @@ const (
 // DAYOFYEAR vectors; historical narrow serialized results remain supported.
 type RemoteExpressionFeatures struct {
 	JSONStringConsumerOverload      bool
+	JSONOpaqueTextContracts         bool
 	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
 	YearBitCast                     bool
@@ -423,7 +424,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.JSONStringConsumerOverload || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -910,6 +911,7 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
 				features.JSONStringConsumerOverload = features.JSONStringConsumerOverload || isRemoteJSONStringConsumerOverload(id, overload)
+				features.JSONOpaqueTextContracts = features.JSONOpaqueTextContracts || isJSONOpaqueTextContract(current, fn, id)
 				mediumIntAssignmentTarget := len(fn.Args) > 1 && fn.Args[1] != nil &&
 					isPlanMediumIntType(fn.Args[1].Typ)
 				if (id == mediumIntStrictCastFunctionID ||
@@ -1672,11 +1674,11 @@ func expressionOwnerContainer(kind reflect.Kind) bool {
 }
 
 // RequiresMORPCVersion113JSONStringConsumerOverload detects the distinct JSON-aware
-// ELT identity. Current-main v101 retains the existing JSON-aware
-// CONCAT and CONCAT_WS overload 0 contracts.
+// ELT identity and the independent opaque producer/rendering contract.
+// CONCAT and CONCAT_WS keep overload 0 but require corrected visible text.
 func RequiresMORPCVersion113JSONStringConsumerOverload(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
-	return features.JSONStringConsumerOverload, err
+	return features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts, err
 }
 
 const (
@@ -1690,6 +1692,60 @@ func isRemoteJSONStringConsumerOverload(functionID, overloadID int32) bool {
 	switch functionID {
 	case remoteJSONStringConsumerELTFunctionID:
 		return true
+	default:
+		return false
+	}
+}
+
+// isJSONOpaqueTextContract fences operations that create subtype-preserving
+// opaque JSON or render its MySQL line-wrapped visible text. Stored JSON can
+// contain an opaque value at any nesting depth, without a CAST in this plan.
+func isJSONOpaqueTextContract(expr *Expr, fn *Function, id int32) bool {
+	stringType := func(id int32) bool {
+		switch id {
+		case 60, 61, 64, 65, 70, 71, 72:
+			return true
+		}
+		return false
+	}
+	switch id {
+	case 21, mediumIntStrictCastFunctionID, mediumIntAssignmentCastFunctionID, mediumIntIgnoreCastFunctionID:
+		if len(fn.Args) == 0 || fn.Args[0] == nil {
+			return false
+		}
+		source := fn.Args[0].Typ.Id
+		// A marker itself can be provisionally TEXT before binary binding.
+		// A deterministic numeric or explicit text conversion around a marker
+		// owns its result type; do not rescan its subtree or infer uncertainty.
+		parameterSource := fn.Args[0].GetP() != nil
+		if expr.Typ.Id == planJSONTypeID {
+			return parameterSource || source == 0 || source == 64 || source == 65 || source == 70
+		}
+		return source == planJSONTypeID && stringType(expr.Typ.Id)
+	case 326: // Python UDF transports JSON as its visible text, regardless of return type.
+		for _, arg := range fn.Args {
+			if arg != nil && arg.Typ.Id == planJSONTypeID {
+				return true
+			}
+		}
+		return false
+	case 366: // JSON_OBJECT renders typed keys; values retain their binary JSON.
+		for i := 0; i < len(fn.Args); i += 2 {
+			if arg := fn.Args[i]; arg != nil {
+				switch arg.Typ.Id {
+				case planJSONTypeID:
+					return true
+				}
+			}
+		}
+		return false
+	case 16, 76, 253, 256, 459, 462: // CONCAT/WS, JSON_EXTRACT_STRING/UNQUOTE/PRETTY/VALUE
+		for _, arg := range fn.Args {
+			if arg != nil && arg.Typ.Id == planJSONTypeID {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}

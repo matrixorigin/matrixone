@@ -146,7 +146,7 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
 	}
-	if requiredVectorProtocol != nil && features.JSONStringConsumerOverload {
+	if requiredVectorProtocol != nil && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
 		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion113)
 	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
@@ -2235,7 +2235,7 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
-	if features.JSONStringConsumerOverload && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
+	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
 		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 113")
 	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {

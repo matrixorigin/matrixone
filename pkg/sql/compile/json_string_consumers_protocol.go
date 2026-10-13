@@ -20,11 +20,12 @@ import (
 )
 
 // validateJSONStringConsumerProtocol applies the shared expression source fence
-// to local and cached plans containing the JSON-aware ELT identity. CONCAT and
-// CONCAT_WS retain the existing v101 contracts and do not need a new identity.
+// to local and cached plans containing JSON-aware ELT, subtype-preserving
+// binary CAST, or corrected opaque text rendering. CONCAT/WS keep overload 0
+// while their JSON text rendering requires the independently detected floor.
 func validateJSONStringConsumerProtocol(proc *process.Process, owner any) error {
 	features, err := plan.RequiredRemoteExpressionFeatures(owner)
-	if err != nil || !features.JSONStringConsumerOverload {
+	if err != nil || !(features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
 		return err
 	}
 	return validateRemoteExpressionFeatures(proc, features)
