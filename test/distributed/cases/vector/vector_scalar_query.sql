@@ -64,6 +64,22 @@ execute nested using @id,@k;
 deallocate prepare nested;
 -- 多行 provider 不作新改写，仍产生标量子查询基数错误。
 select id from items order by l2_distance(v,(select v from items ref where ref.id in ('a','b'))) limit 2;
+-- nullable 候选必须保留 NULL 优先及 OFFSET；与 FORCE/移除索引后的同数据对照。
+create table nullable_items(id int primary key,v vecf64(3));
+insert into nullable_items values (0,null),(1,'[0,0,0]'),(2,'[1,0,0]');
+create index nix using ivfflat on nullable_items(v) lists=1 op_type 'vector_l2_ops';
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id='q')) limit 1;
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id='q')) limit 1 offset 1;
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id='q')) limit 1 by rank with option 'mode=pre';
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id='q')) limit 1 by rank with option 'mode=force';
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id='q')) limit 1 offset 1 by rank with option 'mode=force';
+prepare nullable_p from 'select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=''q'')) limit ?';
+set @nullable_limit=1;
+execute nullable_p using @nullable_limit;
+deallocate prepare nullable_p;
+drop index nix on nullable_items;
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id='q')) limit 1;
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id='q')) limit 1 offset 1;
 drop database vector_scalar_query;
 set experimental_ivf_index=@saved_ivf;
 
@@ -130,5 +146,21 @@ with a as (select concat(id,'') as id from items order by l2_distance(v,(select 
 b as (select concat(id,'') as id from items order by l2_distance(v,(select v from query_vectors {snapshot='scalar_vector_snap'} where id=1)) limit 1 by rank with option 'mode=force')
 select a.id,b.id from a cross join b;
 drop snapshot scalar_vector_snap;
+-- 同一 NULL/非 NULL 小表验证 HNSW 默认/PRE/参数化 LIMIT 与两个精确对照。
+create table nullable_items(id bigint primary key,v vecf32(3));
+insert into nullable_items values (0,null),(1,'[0,0,0]'),(2,'[1,0,0]');
+create index nix using hnsw on nullable_items(v) op_type 'vector_l2_ops' M 4 EF_CONSTRUCTION 16 EF_SEARCH 16;
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1;
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1 offset 1;
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1 by rank with option 'mode=pre';
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1 by rank with option 'mode=force';
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1 offset 1 by rank with option 'mode=force';
+prepare nullable_p from 'select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=1)) limit ?';
+set @nullable_limit=1;
+execute nullable_p using @nullable_limit;
+deallocate prepare nullable_p;
+drop index nix on nullable_items;
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1;
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1 offset 1;
 drop database vector_scalar_query;
 set experimental_hnsw_index=@saved_hnsw;

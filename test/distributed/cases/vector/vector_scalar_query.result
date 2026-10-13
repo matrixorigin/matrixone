@@ -157,6 +157,37 @@ b
 deallocate prepare nested;
 select id from items order by l2_distance(v,(select v from items ref where ref.id in ('a','b'))) limit 2;
 Subquery returns more than 1 row
+create table nullable_items(id int primary key,v vecf64(3));
+insert into nullable_items values (0,null),(1,'[0,0,0]'),(2,'[1,0,0]');
+create index nix using ivfflat on nullable_items(v) lists=1 op_type 'vector_l2_ops';
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id='q')) limit 1;
+➤ id[4,32,0]  𝄀
+0
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id='q')) limit 1 offset 1;
+➤ id[4,32,0]  𝄀
+2
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id='q')) limit 1 by rank with option 'mode=pre';
+➤ id[4,32,0]  𝄀
+0
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id='q')) limit 1 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+0
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id='q')) limit 1 offset 1 by rank with option 'mode=force';
+➤ id[4,32,0]  𝄀
+2
+prepare nullable_p from 'select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=''q'')) limit ?';
+set @nullable_limit=1;
+execute nullable_p using @nullable_limit;
+➤ id[4,32,0]  𝄀
+0
+deallocate prepare nullable_p;
+drop index nix on nullable_items;
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id='q')) limit 1;
+➤ id[4,32,0]  𝄀
+0
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id='q')) limit 1 offset 1;
+➤ id[4,32,0]  𝄀
+2
 drop database vector_scalar_query;
 set experimental_ivf_index=@saved_ivf;
 set @saved_hnsw=@@experimental_hnsw_index;
@@ -290,5 +321,36 @@ select a.id,b.id from a cross join b;
 ➤ id[12,-1,0]  ¦  id[12,-1,0]  𝄀
 3  ¦  2
 drop snapshot scalar_vector_snap;
+create table nullable_items(id bigint primary key,v vecf32(3));
+insert into nullable_items values (0,null),(1,'[0,0,0]'),(2,'[1,0,0]');
+create index nix using hnsw on nullable_items(v) op_type 'vector_l2_ops' M 4 EF_CONSTRUCTION 16 EF_SEARCH 16;
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1;
+➤ id[-5,64,0]  𝄀
+0
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1 offset 1;
+➤ id[-5,64,0]  𝄀
+2
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+0
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+0
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1 offset 1 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+2
+prepare nullable_p from 'select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=1)) limit ?';
+set @nullable_limit=1;
+execute nullable_p using @nullable_limit;
+➤ id[-5,64,0]  𝄀
+0
+deallocate prepare nullable_p;
+drop index nix on nullable_items;
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1;
+➤ id[-5,64,0]  𝄀
+0
+select id from nullable_items order by l2_distance(v,(select v from query_vectors where id=1)) limit 1 offset 1;
+➤ id[-5,64,0]  𝄀
+2
 drop database vector_scalar_query;
 set experimental_hnsw_index=@saved_hnsw;

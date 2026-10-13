@@ -49,6 +49,18 @@ func (builder *QueryBuilder) scalarVectorContext(proj *plan.Node) (*vectorSortCo
 	if arg == nil || !builder.isJoinThroughProjectionSafe(proj, nil, sort.OrderBy[0].Expr, providerTags) {
 		return nil, nil
 	}
+	// ANN 不包含 NULL 候选，不能替代 NULL 优先的原关系排序/分页。
+	// extract 已确认两参数均为列引用；按扫描绑定定位，不能信任 provider
+	// 或插件类型对齐后的 Expr.NotNullable，非空证明必须来自实际候选列。
+	scanCol := fn.Args[0].GetCol()
+	if scanCol.RelPos != scan.BindingTags[0] {
+		scanCol = fn.Args[1].GetCol()
+	}
+	pos := scanCol.ColPos
+	if pos < 0 || int(pos) >= len(scan.TableDef.Cols) || scan.TableDef.Cols[pos] == nil ||
+		!scan.TableDef.Cols[pos].Typ.NotNullable {
+		return nil, nil
+	}
 	limit, offset, _ := pickVectorPagination(sort, scan, proj)
 	candidate, ok := buildCandidateLimit(limit, offset)
 	if !ok {

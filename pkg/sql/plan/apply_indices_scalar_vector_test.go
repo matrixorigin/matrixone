@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func scalarVectorPlanFixture(t *testing.T, sql string, hnsw bool) *plan.Query {
+func scalarVectorPlanFixture(t *testing.T, sql string, hnsw bool, configure ...func(*plan.TableDef)) *plan.Query {
 	t.Helper()
 	ctx := newVectorJoinMockCtx()
 	table := newVectorJoinTableDef(false, true)
@@ -50,6 +50,9 @@ func scalarVectorPlanFixture(t *testing.T, sql string, hnsw bool) *plan.Query {
 	provider := DeepCopyTableDef(table, true)
 	provider.Name, provider.TblId, provider.Indexes = "scalar_provider", 902, nil
 	provider.Cols[1].Typ.NotNullable = false
+	for _, configureTable := range configure {
+		configureTable(table)
+	}
 	for _, tab := range []*plan.TableDef{table, provider} {
 		ctx.tables[tab.Name] = tab
 		ctx.objects[tab.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: tab.Name, Obj: int64(tab.TblId)}
@@ -212,6 +215,57 @@ func TestScalarVectorPreparedAndNested(t *testing.T) {
 	}
 }
 
+func TestScalarVectorCandidateNullability(t *testing.T) {
+	for _, hnsw := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, predicate, pagination string
+			notNull, reversed, prepared bool
+		}{
+			{name: "nullable", pagination: "limit 1"},
+			{name: "not_null", notNull: true, pagination: "limit 1"},
+			{name: "nullable_reversed", reversed: true, pagination: "limit 1"},
+			{name: "not_null_reversed", notNull: true, reversed: true, pagination: "limit 1"},
+			{name: "nullable_offset", pagination: "limit 1 offset 1"},
+			{name: "nullable_pre", pagination: "limit 2 by rank with option 'mode=pre'"},
+			{name: "nullable_prepared", prepared: true, pagination: "limit ?"},
+			{name: "nullable_filter", predicate: "where v is not null", pagination: "limit 1"},
+		} {
+			t.Run(fmt.Sprintf("hnsw=%t/%s", hnsw, tc.name), func(t *testing.T) {
+				key := "'ref'"
+				if hnsw {
+					key = "1"
+				}
+				if tc.prepared {
+					key = "?"
+				}
+				left, right := "v", "(select v from scalar_provider where id="+key+")"
+				if tc.reversed {
+					left, right = right, left
+				}
+				sql := fmt.Sprintf("select id from scalar_items %s order by l2_distance(%s,%s) %s", tc.predicate, left, right, tc.pagination)
+				if tc.prepared {
+					sql = "prepare p from '" + sql + "'"
+				}
+				q := scalarVectorPlanFixture(t, sql, hnsw, func(table *plan.TableDef) {
+					// 实际索引列放在位置 2；无关向量列的 nullable 恰好相反。
+					// 不能假定 v 总在位置 1，也不能拿 provider/其它列的非空性替代。
+					v := table.Cols[1]
+					v.Typ.NotNullable = tc.notNull
+					other := &plan.ColDef{Name: "other", Typ: v.Typ}
+					other.Typ.NotNullable = !tc.notNull
+					table.Cols = []*plan.ColDef{table.Cols[0], other, v}
+					table.Name2ColIndex = map[string]int32{"id": 0, "other": 1, "v": 2}
+				})
+				if tc.notNull {
+					require.Len(t, scalarVectorSelectors(q), 1)
+				} else {
+					require.Empty(t, scalarVectorSelectors(q))
+				}
+			})
+		}
+	}
+}
+
 func TestScalarVectorConservativeBoundaries(t *testing.T) {
 	for _, tc := range []struct{ name, sql string }{
 		{"multirow", `select id from scalar_items order by l2_distance(v,(select v from scalar_provider where id>'a')) limit 2`},
@@ -243,9 +297,17 @@ func TestScalarVectorGuardDoesNotMutateProvider(t *testing.T) {
 	v.projNode.ProjectList = []*plan.Expr{newVectorJoinColExpr(scan.BindingTags[0], 0, "id", scan.TableDef.Cols[0].Typ)}
 	sort := v.builder.qry.Nodes[v.projNode.Children[0]]
 	sort.OrderBy[0].Expr.GetF().Args[0].Typ.NotNullable = true
-	before := v.builder.qry.String()
-	require.NotEmpty(t, v.builder.detectScalarVectorGuard(v.projNode))
-	require.Equal(t, before, v.builder.qry.String())
+	for _, notNull := range []bool{true, false} {
+		// 表达式仍标注 NOT NULL，真实 schema 列可以为空时也必须拒绝。
+		scan.TableDef.Cols[1].Typ.NotNullable = notNull
+		before := v.builder.qry.String()
+		if notNull {
+			require.NotEmpty(t, v.builder.detectScalarVectorGuard(v.projNode))
+		} else {
+			require.Empty(t, v.builder.detectScalarVectorGuard(v.projNode))
+		}
+		require.Equal(t, before, v.builder.qry.String())
+	}
 }
 
 func TestScalarVectorJoinConsumers(t *testing.T) {

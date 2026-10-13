@@ -160,3 +160,15 @@ TP 本来就在协调 CN，不能为 locality 把它升级到 AP_ONECN，否则 
 - native build、gofmt、diff 检查通过。BVT 数据目录先完整保留到本地证据目录，再以新数据启动自有双 CN；两个入口各 scalar **103/103** + 原 IVF 四套 **275/275**，合计 **378/378**。新增双旧快照 `(2,2)`、混合当前/旧快照 `(3,2)` 均与 FORCE 一致，结果生成后人工核对并正常 comparison。服务已停止，检查至 shutdown 没有 mpool 泄漏、cleanup timeout 或 panic。
 - 本轮修改语句块 **11/11（100%）**；以新 profile 替换相应文件、未变文件复用既有证据，整个 PR **528/611（86.42%）**。frontend 最后补齐测试外层 AST 释放后，聚焦/重复/full normal/full race 均重新通过；不影响生产 profile 或 native/BVT 输入。
 - Q1：快照不增加 owner；缓存 Compile 仍归 PrepareStmt，AST/Compile 清理由唯一归属承担。Q2：不新增锁或等待，cache Reset 仍在旧执行退出后；不改变取消/join。Q3：不新增状态或积累，反而删除重复 dispatch 策略及临时 key slice。无协议、持久化、权限、租户或原 v1 内容/hash 变化。
+
+## 8. Review 修复：候选向量 NULL 与排序/分页（2026-10-13）
+
+非 NULL provider 不能证明候选列非空。IVF/HNSW 索引都不包含 NULL 向量候选，直接选 ANN 会丢掉升序中本应排在前面的行。修复前，在 `b930f9dc05` 的二进制上以一条 NULL、两条不同距离的向量复现：两个索引的 `LIMIT 1` 返回 **2**、`LIMIT 1 OFFSET 1` 返回 **1**，而同数据 FORCE/删除索引后的结果分别为 **0/2**。
+
+在 guard 预探测与最终改写共享的 `scalarVectorContext` 中，按距离参数的扫描绑定和真实 ColPos 找到候选列，要求 **schema `Typ.NotNullable`**，否则不建立 selector、保留原关系路径。不以 provider 或表达式类型标注代替 schema 证明，不依赖参数顺序或固定物理列位置。即使 nullable 列在查询中有 `IS NOT NULL`，本轮仍保守回退；没有新建 NULL 补偿分支。符合条件的 NOT NULL 候选仍优化，provider 的 NULL/空分支语义不变。
+
+- `TestScalarVectorCandidateNullability`：公共 SQL planner 验证 IVF/HNSW × nullable/NOT NULL、参数交换、真实索引列位置 2 与非空性相反的无关列，并覆盖 OFFSET、PRE、PREPARE、IS NOT NULL。修复前 nullable 断言失败，正例通过；修复后全部通过。
+- 扩展非变异 guard 测试：即使表达式标注 NOT NULL，schema nullable 时必须拒绝；两种准入结果都不修改原计划。
+- Go 1.26.4/CGo wrapper 的 scalar 聚焦测试、完整 planner normal + vet、实际 PREPARE Compile 缓存聚焦测试，以及 native build/gofmt/diff 检查通过。仅新增无状态 planner 准入检查，不修改并发/生命周期；§7 的 runtime race 证据按未变实现复用，不声称本轮重跑。
+- 新数据双 CN，每入口 scalar **133/133** + 原 IVF 四套 **275/275**，共 **408/408**，无忽略或异常。新增普通/PRE/参数化 LIMIT、OFFSET 与 FORCE/无索引对照的结果已生成、人工检查，再正常 comparison；NULL 行为 **0**，OFFSET 行为 **2**。自有服务已停止，shutdown 日志无 mpool 泄漏、cleanup timeout 或 panic。
+- 本修复生产语句块 **6/6（100%）**；以新 planner profile 替换对应文件、未变文件复用旧证据后，整个 PR 为 **534/617（86.55%）**。Q1–Q3 均未新增资源、等待或状态；原设计 v1 字节/hash、协议、持久化格式不变。本节不是新的设计批准或 GitHub APPROVED。
