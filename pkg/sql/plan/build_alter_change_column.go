@@ -240,7 +240,7 @@ func buildColumnAndConstraint(
 			newCol.Default = defaultValue
 			hasNullFlag = defaultValue.NullAbility
 		case *tree.AttributeOnUpdate:
-			onUpdateExpr, err := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), unchangedCRC32ColumnClauses(oldCol, specNewColumn, colType))
+			onUpdateExpr, err := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope, unchangedCRC32ColumnClauses(oldCol, specNewColumn, colType))
 			if err != nil {
 				return nil, err
 			}

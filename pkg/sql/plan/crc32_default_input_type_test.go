@@ -200,3 +200,97 @@ func TestCRC32DefaultCopyRebuildRejectsConvertedInput(t *testing.T) {
 	require.ErrorContains(t, err, "explicit table rebuild")
 	require.True(t, proto.Equal(original, mock.ctxt.tables["t_on_update_gen"]))
 }
+
+// A retained legacy CRC32 ON UPDATE whose referenced input no longer has the
+// bound representation must not be copied. Same contract as DEFAULT.
+// Public ON UPDATE grammar accepts only datetime functions, so the AST is
+// constructed the way catalog rebuild / table dump callers do.
+func TestCRC32OnUpdatePreserveRejectsConvertedInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := planpb.Type{Id: int32(types.T_uint64)}
+	source := &planpb.ColDef{
+		Name: "c",
+		Typ:  typ,
+		OnUpdate: &planpb.OnUpdate{
+			OriginString: "(crc32(j))",
+			Expr:         legacyCRC32Expr(),
+		},
+	}
+	col := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("c"),
+		nil,
+		[]tree.ColumnAttribute{&tree.AttributeOnUpdate{Expr: tree.NewNumVal("0", "0", false, tree.P_char)}},
+	)
+
+	for _, inputType := range []types.T{types.T_int64, types.T_varchar, types.T_uint64} {
+		t.Run(inputType.String(), func(t *testing.T) {
+			copied := proto.Clone(source).(*planpb.ColDef)
+			changed := []*planpb.ColDef{
+				{Name: "j", Typ: planpb.Type{Id: int32(inputType)}},
+				copied,
+			}
+			got, err := buildOnUpdate(proc.Ctx, col, typ, proc, changed, copied)
+			require.ErrorContains(t, err, "explicit table rebuild")
+			require.Nil(t, got)
+			require.Equal(t, int32(types.T_json), copied.OnUpdate.Expr.GetF().Args[0].Typ.Id,
+				"rejected preserve must not mutate the source on-update")
+		})
+	}
+}
+
+// Unchanged JSON inputs keep their bound ON UPDATE identity across COPY.
+func TestCRC32OnUpdatePreserveKeepsMatchingInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := planpb.Type{Id: int32(types.T_uint64)}
+	source := &planpb.ColDef{
+		Name: "c",
+		Typ:  typ,
+		OnUpdate: &planpb.OnUpdate{
+			OriginString: "(crc32(j))",
+			Expr:         legacyCRC32Expr(),
+		},
+	}
+	col := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("c"),
+		nil,
+		[]tree.ColumnAttribute{&tree.AttributeOnUpdate{Expr: tree.NewNumVal("0", "0", false, tree.P_char)}},
+	)
+	matching := []*planpb.ColDef{
+		{Name: "j", Typ: planpb.Type{Id: int32(types.T_json)}},
+		source,
+	}
+	got, err := buildOnUpdate(proc.Ctx, col, typ, proc, matching, source)
+	require.NoError(t, err)
+	require.True(t, containsLegacyCRC32(got.Expr))
+	require.NotSame(t, source.OnUpdate.Expr, got.Expr)
+}
+
+// Sibling input conversion is rejected even when the ON UPDATE column itself
+// is not the column being rewritten (COPY / table rebuild).
+func TestCRC32OnUpdateUnchangedClauseRejectsConvertedSiblingInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := planpb.Type{Id: int32(types.T_uint64)}
+	source := &planpb.ColDef{
+		Name: "c",
+		Typ:  typ,
+		OnUpdate: &planpb.OnUpdate{
+			OriginString: "(crc32(j))",
+			Expr:         legacyCRC32Expr(),
+		},
+	}
+	col := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("c"),
+		nil,
+		[]tree.ColumnAttribute{&tree.AttributeOnUpdate{Expr: tree.NewNumVal("0", "0", false, tree.P_char)}},
+	)
+	copied := proto.Clone(source).(*planpb.ColDef)
+	converted := []*planpb.ColDef{
+		{Name: "j", Typ: planpb.Type{Id: int32(types.T_int64)}},
+		copied,
+	}
+	_, err := buildOnUpdate(proc.Ctx, col, typ, proc, converted, copied)
+	require.ErrorContains(t, err, "explicit table rebuild")
+}

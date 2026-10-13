@@ -1041,10 +1041,16 @@ func requireExpressionDefaultProtocol(proc *process.Process) error {
 		"column-reference defaults require all CNs to support protocol version 60")
 }
 
-func buildOnUpdate(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, proc *process.Process, sources ...*ColDef) (*plan.OnUpdate, error) {
+func buildOnUpdate(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, proc *process.Process, columns []*ColDef, sources ...*ColDef) (*plan.OnUpdate, error) {
 	if source := crc32SourceColumn(proc.Ctx, col.Name.ColName(), sources); source != nil && source.OnUpdate != nil && containsLegacyCRC32(source.OnUpdate.Expr) {
 		value := *source.OnUpdate
 		value.Expr = DeepCopyExpr(value.Expr)
+		// Same contract as retained DEFAULT: a preserved ON UPDATE may hash a
+		// referenced column, and its bound ColRef types must still describe that
+		// column after COPY/rebuild.
+		if err := validateLegacyCRC32ExprInputs(bindCtx, value.Expr, columns, "on-update expression"); err != nil {
+			return nil, err
+		}
 		if err := RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, value.Expr); err != nil {
 			return nil, err
 		}

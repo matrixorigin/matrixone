@@ -179,7 +179,7 @@ func TestPersistedFormatLegacyPrecisionDomains(t *testing.T) {
 			require.NoError(t, err)
 			col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
 			col.Attributes = append(col.Attributes, tree.NewAttributeOnUpdate(col.Attributes[0].(*tree.AttributeDefault).Expr))
-			update, err := buildOnUpdate(proc.Ctx, col, loaded.Cols[0].Typ, proc)
+			update, err := buildOnUpdate(proc.Ctx, col, loaded.Cols[0].Typ, proc, nil)
 			require.NoError(t, err)
 			for i, expr := range []*planpb.Expr{def.Expr, rebuilt.Expr, loaded.Cols[1].GeneratedCol.Expr, update.Expr} {
 				t.Run(fmt.Sprint(i), func(t *testing.T) {
@@ -245,7 +245,7 @@ func TestPersistedFormatDefaultCompatibility(t *testing.T) {
 	typ := planpb.Type{Id: int32(types.T_varchar), Width: 100}
 	def, err := buildDefaultExpr(proc.Ctx, col, typ, proc)
 	require.NoError(t, err)
-	update, err := buildOnUpdate(proc.Ctx, col, typ, proc)
+	update, err := buildOnUpdate(proc.Ctx, col, typ, proc, nil)
 	require.NoError(t, err)
 	ctas, err := buildCTASDefaultFromOrigin(NewMockCompilerContext(false, newPlanTestProcess(t)), typ, true, "format(2.5, 0)")
 	require.NoError(t, err)

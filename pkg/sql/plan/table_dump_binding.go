@@ -175,7 +175,7 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 			Name:       tree.NewUnresolvedColName(item.name),
 			Attributes: []tree.ColumnAttribute{&tree.AttributeOnUpdate{Expr: ast}},
 		}
-		bound, err := buildOnUpdate(bindCtx, col, item.col.Typ, proc)
+		bound, err := buildOnUpdate(bindCtx, col, item.col.Typ, proc, def.Cols)
 		if err != nil {
 			return nil, err
 		}

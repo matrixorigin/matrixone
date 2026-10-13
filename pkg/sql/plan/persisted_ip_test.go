@@ -677,7 +677,7 @@ func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc, columns)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
-			_, err = buildOnUpdate(proc.Ctx, onUpdateCol, planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc)
+			_, err = buildOnUpdate(proc.Ctx, onUpdateCol, planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc, columns)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
 			_, err = buildGeneratedExpr(proc.Ctx, generatedCol,

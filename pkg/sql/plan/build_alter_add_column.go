@@ -192,7 +192,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		//	newCol.Default = defaultValue
 		//	hasDefaultValue = true
 		case *tree.AttributeOnUpdate:
-			onUpdateExpr, err := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess())
+			onUpdateExpr, err := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), scopeCols)
 			if err != nil {
 				return nil, err
 			}

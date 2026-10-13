@@ -112,3 +112,14 @@ Existing CRC32 DEFAULT/generated/CHECK/AUTO_INCREMENT regressions remain green
   is `not supported: changing a legacy CRC32 JSON default expression requires an
   explicit table rebuild` (or the matching subject for ON UPDATE / COPY rebuild),
   with catalog left unchanged on rejection.
+
+## buildOnUpdate preserve gap (follow-up)
+
+`buildOnUpdate` retained a legacy CRC32 ON UPDATE by wholesale copy without
+`validateLegacyCRC32ExprInputs`, the same defect class as DEFAULT. Fixed
+symmetrically: preserve branch now type-checks against the column scope
+(`on-update expression`), and CREATE/COPY (`build_ddl` `allColDefs`), ALTER
+(`defaultScope`), ADD COLUMN (`scopeCols`) and table-dump (`def.Cols`) all pass
+that scope. Regression: `TestCRC32OnUpdatePreserveRejectsConvertedInput`,
+`TestCRC32OnUpdatePreserveKeepsMatchingInput`,
+`TestCRC32OnUpdateUnchangedClauseRejectsConvertedSiblingInput`.
