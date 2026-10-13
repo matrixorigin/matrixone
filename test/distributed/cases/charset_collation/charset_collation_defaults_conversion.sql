@@ -118,6 +118,7 @@ insert into explicit_binary(v) values ('🧪');
 alter table explicit_binary convert to character set binary;
 select hex(v),hex(g) from explicit_binary;
 show create table explicit_binary;
+show full columns from explicit_binary;
 
 -- Replay and inheritance never mutate the originating declaration.
 create table source_like(v varchar(8)) collate=utf8mb4_bin;

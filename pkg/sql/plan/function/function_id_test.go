@@ -825,8 +825,10 @@ var predefinedFunids = map[int]int{
 	ASINH:                    593,
 	ACOSH:                    594,
 	ATANH:                    595,
-	INTERNAL_TABLE_COLLATION: 596,
-	FUNCTION_END_NUMBER:      597,
+	FORMAT_BYTES:             596,
+	FORMAT_PICO_TIME:         597,
+	INTERNAL_TABLE_COLLATION: 598,
+	FUNCTION_END_NUMBER:      599,
 }
 
 func Test_funids(t *testing.T) {

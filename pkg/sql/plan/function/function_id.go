@@ -876,12 +876,17 @@ const (
 	ACOSH = 594
 	ATANH = 595
 
-	INTERNAL_TABLE_COLLATION = 596
-	FUNCTION_END_NUMBER      = 597
+	FORMAT_BYTES     = 596
+	FORMAT_PICO_TIME = 597
+
+	INTERNAL_TABLE_COLLATION = 598
+	FUNCTION_END_NUMBER      = 599
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"format_bytes":            FORMAT_BYTES,
+	"format_pico_time":        FORMAT_PICO_TIME,
 	"to_interval_microsecond": TO_INTERVAL_MICROSECOND,
 	"extractvalue":            EXTRACTVALUE,
 	"updatexml":               UPDATEXML,

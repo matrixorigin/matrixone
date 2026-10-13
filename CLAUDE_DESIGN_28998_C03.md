@@ -2,7 +2,9 @@
 
 修订：r1，2026-10-10。状态：**用户已用 `go ahead` 批准实施**。批准草案 SHA-256：`075264245dfa4bd5a921cf2b7d3ba8d28dfe2a190b9639e2d6d5f7232e06cfea`。
 
-任务：[#28998](https://github.com/matrixorigin/matrixone/issues/28998)，承接 [C03/#29482](https://github.com/matrixorigin/matrixone/issues/29482) 的全部范围；上位任务 [#29479](https://github.com/matrixorigin/matrixone/issues/29479)。拟接续 draft PR [#29374](https://github.com/matrixorigin/matrixone/pull/29374)，不另做重复 no-op 修复。
+任务：[#28998](https://github.com/matrixorigin/matrixone/issues/28998)，承接 [C03/#29482](https://github.com/matrixorigin/matrixone/issues/29482) 的全部范围；上位任务 [#29479](https://github.com/matrixorigin/matrixone/issues/29479)。接续既有 PR [#29374](https://github.com/matrixorigin/matrixone/pull/29374)，批准时为draft，当前ready状态保持不变，不另做重复 no-op 修复。
+
+当前维护编号（2026-10-13，冻结main `175a645a85`）：C03协议能力 **112**、独立迁移 **4.0.15**、`CreateTable.database_defaults#18`、`INTERNAL_TABLE_COLLATION=598`、`FUNCTION_END_NUMBER=599`。下文r1批准时事实及各历史补充保留各自时间范围，不代表当前分配。
 
 开发基线：`e5dd4724f782067e1c76c38c9d2f55cebceda4a9`，已经在独立 worktree pull `mo/main`。旧 PR 的设计批准仅覆盖其原有范围，不自动批准此次 C03 扩展。本文批准后记录内容 SHA-256，并在交付 revision 中保留可追溯设计。
 
@@ -229,3 +231,11 @@ MySQL oracle：实际连接并记录版本/digest/config，再固定默认值 AL
 - 原批准设计/历史验收不自动覆盖这些组合。新增typed UT、真实emoji/cluster恢复反例与公开case保留原fixture、正负oracle、teardown和普通比较，具体失败→修复结果见验证记录。
 
 2026-10-12 上游080365f0已使用591–595作为TANH/COSH/ASINH/ACOSH/ATANH。按r1的未占用编号顺延规则，本PR尚未发布的`INTERNAL_TABLE_COLLATION`从历史591移至**596**，`FUNCTION_END_NUMBER=597`；保留上游全部编号及588–590。本补充不改变SQL函数名字、C03 classifier0展示、wire tags、protocol110或4.0.15迁移，历史591证据不当作当前编号。
+
+## 2026-10-13 上游协议、生成合同和展示交互
+
+- 正常合并cd8d5abf及175a645a，保留已发布MEDIUMINT协议110、IndexSearchScan协议111、FORMAT_BYTES596/FORMAT_PICO_TIME597。仅将本PR未发布能力顺延112、internal函数顺延598/END599；协议生产、消费、恢复、sysview和4.0.15升级门及负控同步，不把111视为已拥有C03能力。
+- 完整PB descriptor相对175只允许C03 DatabaseDefaults及CREATE DATABASE#5/ALTER DATABASE#3/CREATE TABLE#18；上游IndexSearchScan全部layout、reserved、enum和pipeline保持。parser/PB正常生成，不选择整文件ours/theirs或手改生成字节。生成噪声仅在源schema不变时从精确预像恢复。
+- Binary COPY同域stored ColRef保留历史bytes的优化不得覆盖MEDIUMINT Width24目标赋值边界。共用严格目标集合保留双方binary/varbinary及int32/uint32，原MORPC110 authoring/remote-expression fence不变。
+- SHOW FULL COLUMNS的上游投影已不再使用null占位符，因此不能沿用末端字符串替换。建query前按C03能力选择既有ColumnCollationSQL或上游selector，两种账户路径共享投影；112下binary classifier2仍展示binary，低版本保持上游合同。复用现有binary转换fixture作真实SQL正控并加一条公开SHOW，零新增fixture/数据，既有失败/显式CAST/清理控制保留。
+- 本轮不新增持久状态、cache、worker、goroutine、锁序、retry或数据扫描；协议检查、ID lookup及常数规模SQL投影构造由原owner持有。历史race/restart证据只维持已证明不变的合同，不冒称本轮全部重跑；当前验证状态见配套验证记录。
