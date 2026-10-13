@@ -175,3 +175,12 @@ constructor policy, after the complete license check passed. Catalog metadata
 errors now use `moerr`, with a typed error-class oracle. The full catalog suite,
 `make err-check`, and configured catalog lint passed. Earlier success-path,
 restore/admission, and cron evidence is unchanged; the new full CI is pending.
+
+
+The complete CI at `955c3f787a` passed build, arm64 SCA, full coverage UT and
+PROXY BVT. Pessimistic BVT had only three missing-catalog-row result mismatches
+in two additional fixtures. All eight full inventory fixtures were audited;
+the two corrected files passed complete isolated mo-tester runs. This is an
+R0 fixture/documentation follow-up with unchanged source behavior. Prior code
+and concurrency evidence is reused; full fixture-head CI and the still-queued
+ordinary UT remain explicitly pending.

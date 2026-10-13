@@ -246,7 +246,9 @@
     "test/materialized_view/additional.go": "77d16e6914bda7986f784482569993019fe3788d9245ad461d6b50797ccbba68",
     "test/materialized_view/main.go": "1d6ffcc617d807964cb6045f9f5d95bcbae6331ad83aef645a594e7797577640",
     "test/materialized_view/multi_cn.go": "236b8b3ad561db85b7890ab5ef71abc7b484670191980627d6248c8fea9ca145",
-    "test/materialized_view/performance.go": "3e14c1055f34f40bf7d6154e0beba5b449489fbc20140a386d422394b15ddc94"
+    "test/materialized_view/performance.go": "3e14c1055f34f40bf7d6154e0beba5b449489fbc20140a386d422394b15ddc94",
+    "test/distributed/cases/snapshot/cluster_level_snapshot_restore_cluster.result": "d4ae4a1f71a20d6747770ab4ca426bc66bfa6ad3361f8e25745ce268008fa44c",
+    "test/distributed/cases/tenant/privilege/create_user_default_role.result": "2c3701b7ab3d60dac5f595e7d8e1b0c1a6d0c8a9d209467aff4645e7b0a1f0b6"
   },
   "full_ci": "new correction-head CI must be tracked separately; local results are not full CI green",
   "cron_race": {
@@ -274,5 +276,52 @@
     "catalog_lint_new_issues": 0,
     "evidence_reuse": "prior success-path/native/cron evidence remains unchanged; error-class behavior verified in complete catalog suite",
     "full_ci": "pending follow-up head"
+  },
+  "current_code_ci": {
+    "run": 38372120590,
+    "head": "955c3f787a1698fdf0c9a8c0ac50029d4b20b41d",
+    "shared_build": "success",
+    "arm64_sca": "success, full-repository lint: 0 issues",
+    "coverage_ut": "success, command exit 0; no failed package/test events",
+    "proxy_bvt": {
+      "total": 45474,
+      "success": 44841,
+      "ignored": 633,
+      "failed": 0
+    },
+    "pessimistic_bvt": {
+      "total": 83520,
+      "success": 83062,
+      "ignored": 455,
+      "failed": 3,
+      "cause": "four new catalog rows missing from two result fixtures"
+    },
+    "ordinary_ut": "queued, no runner assigned; label amd64-mo-shanghai-8c16g"
+  },
+  "fixture_followup": {
+    "code_changed": false,
+    "complete_inventory_files_audited": 8,
+    "cases": [
+      {
+        "case": "cluster_level_snapshot_restore_cluster.sql",
+        "total": 296,
+        "success": 296,
+        "failed": 0,
+        "ignored": 0,
+        "abnoraml": 0,
+        "log_sha256": "95951d1689385a97cb3c595633efacca0bd1868ef5aff45be3bb16b9895e3aa8"
+      },
+      {
+        "case": "create_user_default_role.sql",
+        "total": 127,
+        "success": 127,
+        "failed": 0,
+        "ignored": 0,
+        "abnoraml": 0,
+        "log_sha256": "3677900d1bae90112803289d044f2e9349be058b7577c037eb4b07c069bd2236"
+      }
+    ],
+    "source_behavior": "all Go/native source matches the successful current-code CI checks; only two exact result fixtures and evidence docs changed",
+    "full_ci": "new fixture-head CI must confirm the full pessimistic group and ordinary UT"
   }
 }

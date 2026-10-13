@@ -106,3 +106,24 @@ The follow-up passed `make err-check`, the complete catalog suite, and configure
 catalog lint. Earlier native BVT, race, and owning-package results are reused
 only for their unchanged successful-metadata and lifecycle behavior. Full CI
 must still be assessed at the follow-up head.
+
+
+## Full-group result inventory follow-up
+
+At `955c3f787a`, shared build, complete arm64 SCA (zero lint issues), and the
+complete coverage UT passed. The readable UT producer report records exit 0
+and no failed package/test event. PROXY BVT passed all 44,841 executed statements
+(633 existing ignored statements). Pessimistic BVT reported only three failures
+among 83,520 statements: two `show tables` results in
+`snapshot/cluster_level_snapshot_restore_cluster.result` and one in
+`tenant/privilege/create_user_default_role.result`, each missing the four new
+catalog rows. The earlier runtime/restore/admission failures did not recur.
+
+Both complete inventories now include the four visible cluster catalogs.
+A repository-wide search audited all eight complete inventory result files;
+all include the new rows. Both newly identified files passed isolated native
+mo-tester execution with their complete statement sets. This follow-up changes
+only result fixtures and evidence documentation. Code-level SCA, coverage UT,
+PROXY BVT, and local lifecycle/race evidence remain valid for unchanged source;
+the new full-group CI status must be tracked separately. Ordinary UT was still
+queued for an `amd64-mo-shanghai-8c16g` runner when this evidence was captured.
