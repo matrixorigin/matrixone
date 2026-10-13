@@ -164,7 +164,7 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 		// A parent UPDATE with ON UPDATE CASCADE must lock the same canonical
 		// V1 key as the child-side FK probe, rather than the raw Unicode value.
 		exec("create table update_fk_parent (id int primary key, s varchar(64) collate utf8mb4_unicode_ci, unique key uk_s (s))")
-		exec("create table update_fk_child (id int primary key, parent_s varchar(64) collate utf8mb4_unicode_ci, foreign key (parent_s) references update_fk_parent(s) on update cascade)")
+		exec("create table update_fk_child (id int primary key, parent_s varchar(64) collate utf8mb4_unicode_ci, unique key uk_parent_s (parent_s), foreign key (parent_s) references update_fk_parent(s) on update cascade)")
 		exec("insert into update_fk_parent values (1, 'Alpha')")
 		exec("insert into update_fk_child values (1, 'alpha')")
 		exec("update update_fk_parent set s='Beta' where id=1")

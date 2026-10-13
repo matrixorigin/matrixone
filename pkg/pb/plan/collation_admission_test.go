@@ -98,6 +98,12 @@ func TestNativeUnicodeUniqueTableAdmission(t *testing.T) {
 		}}},
 	}
 	require.NoError(t, RequireLegacyCollations(hidden))
+	// Catalog-resolved physical index relations carry the system index table
+	// type, while planner-created shells may leave it empty.  Both forms must
+	// pass the physical-index compatibility gate.
+	resolvedPhysical := proto.Clone(hidden).(*TableDef)
+	resolvedPhysical.TableType = "i"
+	require.NoError(t, RequireLegacyCollations(resolvedPhysical))
 
 	withoutUnique := *table
 	withoutUnique.Indexes = nil

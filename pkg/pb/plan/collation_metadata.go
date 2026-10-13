@@ -100,7 +100,8 @@ func isNativeUnicodeUniqueType(typ Type) bool {
 
 func isPhysicalIndexTable(value *TableDef) bool {
 	if value == nil || value.IsTemporary || value.TableType == SystemExternalRel ||
-		value.TableType != "" || !strings.HasPrefix(value.Name, "__mo_index_unique_") || tableRelKind(value) != "i" {
+		(value.TableType != "" && value.TableType != "i") ||
+		!strings.HasPrefix(value.Name, "__mo_index_unique_") || tableRelKind(value) != "i" {
 		return false
 	}
 	if value.Pkey == nil || len(value.Cols) == 0 {
@@ -188,6 +189,7 @@ func isNativeUnicodeUniqueTable(value *TableDef) bool {
 	relKind := tableRelKind(value)
 	if value == nil || value.KeyFormat != collation.KeyFormatV1 || value.IsTemporary ||
 		value.TableType == SystemExternalRel || value.TableType == "cluster" ||
+		(value.TableType != "" && value.TableType != "r") ||
 		relKind == SystemExternalRel || relKind == "cluster" ||
 		(relKind != "" && relKind != "r") ||
 		hasNativeUnicodePrimaryKey(value) {

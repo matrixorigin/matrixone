@@ -4336,12 +4336,30 @@ func appendPreInsertPlan(
 		if err != nil {
 			return -1, err
 		}
-		projection := make([]*Expr, len(lastProject), len(lastProject)+1)
-		for i, expr := range lastProject {
-			projection[i] = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(i)}}}
+		// UPDATE index maintenance consumes a trailing rowid column in the
+		// PRE_INSERT_UK input.  Keep that ABI intact: insert the computed V1
+		// physical key immediately before the rowid rather than appending it
+		// after the rowid.  INSERT streams have no trailing rowid and retain the
+		// ordinary append-at-end layout.
+		lastProjectionLen := len(lastProject)
+		keyPos := int32(lastProjectionLen)
+		projection := make([]*Expr, 0, lastProjectionLen+1)
+		if isUpddate && lastProjectionLen > 0 {
+			lastRowIDPos := lastProjectionLen - 1
+			for i, expr := range lastProject[:lastRowIDPos] {
+				projection = append(projection, &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(i)}}})
+			}
+			keyPos = int32(len(projection))
+			projection = append(projection, keyExpr)
+			rowIDExpr := lastProject[lastRowIDPos]
+			projection = append(projection, &plan.Expr{Typ: rowIDExpr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(lastRowIDPos)}}})
+		} else {
+			for i, expr := range lastProject {
+				projection = append(projection, &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(i)}}})
+			}
+			keyPos = int32(len(projection))
+			projection = append(projection, keyExpr)
 		}
-		keyPos := int32(len(projection))
-		projection = append(projection, keyExpr)
 		lastNodeId = builder.appendNode(&plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{lastNodeId}, ProjectList: projection}, bindCtx)
 		useColumns = []int32{keyPos}
 	}
