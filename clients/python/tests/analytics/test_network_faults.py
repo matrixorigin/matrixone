@@ -19,6 +19,7 @@ def proxied(proxy):
     return Client(
         host="127.0.0.1",
         port=proxy.port,
+        ssl_mode="disabled",  # This local packet proxy deliberately inspects plaintext protocol frames.
         user="root",
         password="111",
         database="mo_analytics_test",
