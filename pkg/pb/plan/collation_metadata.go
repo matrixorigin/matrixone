@@ -195,6 +195,16 @@ func isNativeUnicodeUniqueTable(value *TableDef) bool {
 		hasNativeUnicodePrimaryKey(value) {
 		return false
 	}
+	// A versioned table marker is meaningful only for a table that actually
+	// owns a versioned unique-key definition.  Without this guard, an
+	// arbitrary TableDef carrying KeyFormatV1/CollationVersionV1 but no index
+	// could bypass the legacy admission fence merely because the all-index
+	// validation below is vacuously true.  Optimizer-pruned shells retain the
+	// index definitions, so requiring one here does not discard the durable
+	// native-unique proof.
+	if len(value.Indexes) == 0 {
+		return false
+	}
 	// Optimizer pruning intentionally removes unrelated columns from scan and
 	// DML table shells.  The durable table-level revision marker therefore
 	// carries the native-unique proof after the native column itself is no
