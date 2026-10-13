@@ -402,6 +402,21 @@ func (builder *QueryBuilder) assignCorrelationStages() error {
 		aliases map[*plan.DependentExpr]uint32
 	}
 	return plan.WalkQueryNodes(q, func(id int32, node *plan.Node) error {
+		// Stage identity belongs to an expression's evaluation owner, not to
+		// binder aliases shared by nodes (for example PARTITION and WINDOW).
+		// Detach before marking roles so mutations cannot overwrite another owner.
+		hasDependent := false
+		if err := plan.VisitExpressionsInOwner(node, func(e *plan.Expr) error {
+			return plan.VisitExprTree(e, func(e *plan.Expr) error {
+				hasDependent = hasDependent || e.GetDependent() != nil
+				return nil
+			})
+		}); err != nil {
+			return err
+		}
+		if hasDependent {
+			*node = *DeepCopyNode(node)
+		}
 		ordinary := &stageBinding{kind: plan.CorrelationStage_INPUT}
 		roles := make(map[*plan.DependentExpr]*stageBinding)
 		mark := func(expr *plan.Expr, stage *stageBinding) {
