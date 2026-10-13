@@ -14,6 +14,8 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -99,6 +101,34 @@ func TestCharsetAdmissionBeforeSessionOrGlobalMutation(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(t.Context(), "collation_connection", "default"))
 	require.NoError(t, validateCharsetSystemVariable("unrelated_variable", nil))
 	require.Error(t, validateCharsetSystemVariable("character_set_client", 123))
+}
+
+func TestSetNamesCollationUpdatesConnectionCollation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+
+	for _, tc := range []struct {
+		sql      string
+		wantName string
+	}{
+		{sql: "set names utf8 collate utf8_unicode_ci", wantName: "utf8_unicode_ci"},
+		{sql: "set names utf8mb4 collate utf8mb4_unicode_ci", wantName: "utf8mb4_unicode_ci"},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			execCtx := newTestExecCtx(ctx, ctrl)
+			execCtx.ses = ses
+			execCtx.singleStatementQuery = true
+			require.NoError(t, doSetVar(ses, execCtx, stmt.(*tree.SetVar), tc.sql, false))
+			got, err := ses.GetSessionSysVar("collation_connection")
+			require.NoError(t, err)
+			require.Equal(t, tc.wantName, got)
+		})
+	}
 }
 
 func TestCharsetAdmissionHandshake(t *testing.T) {

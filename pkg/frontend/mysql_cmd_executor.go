@@ -1508,6 +1508,7 @@ func doSetVar(
 		if assign.SetNames {
 			for _, name := range []string{
 				"character_set_client", "character_set_connection", "character_set_results",
+				"collation_connection",
 			} {
 				captureSystemReplayability(name)
 			}
@@ -1650,6 +1651,7 @@ func doSetVar(
 		if assign.SetNames {
 			for _, name := range []string{
 				"character_set_client", "character_set_connection", "character_set_results",
+				"collation_connection",
 			} {
 				mark(name, replayable)
 			}
@@ -1695,6 +1697,18 @@ func doSetVar(
 			for _, rb := range replacedBy {
 				err = setVarFunc(assign.System, assign.Global, rb, value, sql)
 				if err != nil {
+					return err
+				}
+			}
+			// SET NAMES ... COLLATE ... also changes the connection collation.
+			// The parser keeps COLLATE in Reserved so the charset and collation
+			// are validated together before any session variable is mutated.
+			if assign.Reserved != nil {
+				literal, ok := assign.Reserved.(*tree.NumVal)
+				if !ok {
+					return moerr.NewInvalidInputNoCtx("SET NAMES requires a constant collation")
+				}
+				if err = setVarFunc(true, false, "collation_connection", literal.String(), sql); err != nil {
 					return err
 				}
 			}
