@@ -445,6 +445,10 @@ func (s *service) Lock(
 		return pb.Result{}, err
 	}
 	options = s.applyLockWaitTimeoutCeiling(options)
+	if options.NoWait && (!validNoWaitLockOptions(options) || len(rows) == 0) {
+		return pb.Result{}, moerr.NewNotSupportedNoCtx(
+			"nonblocking row lock admission requires exact row keys and FastFail policy")
+	}
 	if lockWaitDeadlineExpired(options, time.Now()) {
 		return pb.Result{}, ErrLockTimeout
 	}
@@ -605,10 +609,11 @@ func (s *service) Lock(
 			result = r
 			err = e
 		})
+	noWaitConflict := options.NoWait && err == ErrLockConflict
 	if terminalErr := txn.terminalLockErrorLocked(txnID); terminalErr != nil {
 		result = pb.Result{}
 		err = terminalErr
-	} else if err == nil {
+	} else if err == nil || noWaitConflict {
 		if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
 			result = pb.Result{}
 			err = e

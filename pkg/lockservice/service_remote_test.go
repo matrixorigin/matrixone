@@ -103,6 +103,17 @@ func TestLockProtocolCapabilitiesFollowProtocolVersion(t *testing.T) {
 			require.NoError(t, checkMethodVersion(context.Background(), "", &pb.Request{Method: method}))
 		}
 
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112-1)
+		for _, method := range []pb.Method{pb.Method_TryLock, pb.Method_ForwardTryLock} {
+			err := checkMethodVersion(context.Background(), "", &pb.Request{Method: method})
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported),
+				"old protocol peers must reject nonblocking lock admission before dispatch")
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+		for _, method := range []pb.Method{pb.Method_TryLock, pb.Method_ForwardTryLock} {
+			require.NoError(t, checkMethodVersion(context.Background(), "", &pb.Request{Method: method}))
+		}
+
 		s := &service{
 			serviceID: "",
 			cfg: Config{

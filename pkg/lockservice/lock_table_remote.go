@@ -136,7 +136,10 @@ func (l *remoteLockTable) lock(
 		req.Lock.Rows = opts.originalRows
 		req.Lock.Options = opts.originalOptions
 	}
-	writerFairAdmission := req.Lock.Options.Mode == pb.LockMode_Shared &&
+	if req.Lock.Options.NoWait {
+		req.Method = pb.Method_TryLock
+	}
+	writerFairAdmission := !req.Lock.Options.NoWait && req.Lock.Options.Mode == pb.LockMode_Shared &&
 		req.Lock.Options.Granularity == pb.Granularity_Row &&
 		req.Lock.Options.WriterFair
 	if writerFairAdmission {
@@ -181,6 +184,35 @@ func (l *remoteLockTable) lock(
 		req.Lock.Options.WriterFair = false
 		resp, err = l.client.Send(rpcCtx, req)
 	}
+	if resp != nil {
+		defer releaseResponse(resp)
+	}
+	noWaitConflictAck := req.Method == pb.Method_TryLock && err == nil &&
+		resp != nil && resp.Lock.NoWaitConflict
+	noWaitAckHasBinding := noWaitConflictAck && resp.NewBind == nil &&
+		resp.Lock.Result.LockedOn.Valid &&
+		!resp.Lock.Result.LockedOn.Changed(l.bind)
+	noWaitAckComplete := noWaitAckHasBinding &&
+		resp.Lock.TxnWaitingListOnLockTableSupported &&
+		resp.Lock.BatchUnlockSupported
+	if req.Method == pb.Method_TryLock {
+		if noWaitConflictAck {
+			// The method-specific response is the only wire proof that a FastFail
+			// conflict is settled and that any prefix grants are known. Preserve
+			// the physical result for cleanup even if a required capability is
+			// missing; the caller will fail closed instead of exposing NOWAIT.
+			if noWaitAckComplete {
+				err = ErrLockConflict
+			} else {
+				err = ErrLockTableBindChanged
+			}
+		} else if err != nil && moerr.IsMoErrCode(err, moerr.ErrLockConflict) {
+			// Old or malformed peers must not turn a generic application error
+			// into the recoverable 3572 path. Ownership is indeterminate, so retain
+			// a cleanup witness and fence the transaction below.
+			err = errors.Join(ErrLockTableBindChanged, err)
+		}
+	}
 
 	txn.Lock()
 
@@ -190,13 +222,65 @@ func (l *remoteLockTable) lock(
 		cb(pb.Result{}, ErrTxnNotFound)
 		return
 	}
+	// A complete negative acknowledgement may follow a partial grant. Record
+	// the physical cleanup route before any origin-side bind fence can suppress
+	// it. The table-scoped route is bounded and the owner remains authoritative
+	// for the exact prefix that was acquired.
+	if noWaitConflictAck {
+		bind := l.bind
+		confirmed := noWaitAckHasBinding
+		if noWaitAckHasBinding {
+			bind = resp.Lock.Result.LockedOn
+		}
+		txn.markRemoteUnlockRequiredLocked(bind.Group, bind.Table)
+		txn.setBatchUnlockSupportedLocked(
+			bind.Group,
+			bind.Table,
+			noWaitAckHasBinding && resp.Lock.BatchUnlockSupported,
+		)
+		if noWaitAckHasBinding && resp.Lock.TxnWaitingListOnLockTableSupported {
+			txn.markOwnerLocalWaitSnapshotLocked(bind.Group, bind.Table)
+		}
+		trackErr := txn.ensureRemoteLockTableTracked(
+			bind.Group,
+			bind,
+			req.Lock.Rows,
+			req.Lock.Options,
+			confirmed,
+			l.logger,
+		)
+		if trackErr != nil {
+			err = errors.Join(ErrLockTableBindChanged, err, trackErr)
+		}
+		if !noWaitAckComplete {
+			txn.markBindChangedLocked(l.logger)
+			if err == ErrLockTableBindChanged {
+				err = errors.Join(ErrLockTableBindChanged, trackErr)
+			}
+		}
+	}
 	if txn.bindChanged {
-		cb(pb.Result{}, ErrLockTableBindChanged)
+		result := pb.Result{}
+		if noWaitAckHasBinding {
+			result = resp.Lock.Result
+		} else if req.Method == pb.Method_TryLock {
+			result.LockedOn = l.bind
+		}
+		cb(result, ErrLockTableBindChanged)
+		return
+	}
+
+	if noWaitConflictAck {
+		logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
+		if noWaitAckComplete && err == ErrLockConflict {
+			cb(resp.Lock.Result, ErrLockConflict)
+		} else {
+			cb(pb.Result{}, err)
+		}
 		return
 	}
 
 	if err == nil {
-		defer releaseResponse(resp)
 		if resp.NewBind != nil {
 			txn.Unlock()
 			err = l.maybeHandleBindChanged(ctx, resp)
@@ -353,6 +437,28 @@ func (l *remoteLockTable) lock(
 		return
 	}
 
+	// A TryLock conflict without the typed capability acknowledgement is not a
+	// recoverable NOWAIT result. Retain only an unconfirmed table cleanup route;
+	// the physical owner remains authoritative for grants after a lost reply.
+	if req.Method == pb.Method_TryLock &&
+		moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+		txn.markRemoteUnlockRequiredLocked(l.bind.Group, l.bind.Table)
+		if trackingErr := txn.ensureRemoteLockTableTracked(
+			l.bind.Group,
+			l.bind,
+			req.Lock.Rows,
+			req.Lock.Options,
+			false,
+			l.logger,
+		); trackingErr != nil {
+			err = errors.Join(err, trackingErr)
+		}
+		txn.markBindChangedLocked(l.logger)
+		logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
+		cb(pb.Result{LockedOn: l.bind}, err)
+		return
+	}
+
 	// Transport failures are indeterminate. Keep one unconfirmed witness for
 	// cleanup; remote unlock releases the owner's complete table ownership by
 	// transaction ID. Unconfirmed rows are excluded from wait-for traversal, so
@@ -371,6 +477,13 @@ func (l *remoteLockTable) lock(
 		); trackingErr != nil {
 			err = errors.Join(err, trackingErr)
 		}
+	}
+	if req.Method == pb.Method_TryLock && err != nil {
+		// A no-wait request can fail after its physical-owner RPC was sent. Return
+		// the known proxy binding so the coordinator can retain its transaction
+		// unlock route even when the remote result was lost.
+		cb(pb.Result{LockedOn: l.bind}, err)
+		return
 	}
 	logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 	if moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout) {

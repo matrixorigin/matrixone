@@ -1817,6 +1817,92 @@ func TestCallLockOpWithConflict(t *testing.T) {
 	)
 }
 
+func TestDoLockNowaitConflictMaps3572AndLeavesTransactionUsable(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		const tableID = uint64(756)
+		service := proc.GetLockService()
+		foreignTxn := []byte("nowait-3572-holder")
+		keyFor := func(value int32) []byte {
+			packer := types.NewPacker()
+			defer packer.Close()
+			packer.EncodeInt32(value)
+			return bytes.Clone(packer.Bytes())
+		}
+		_, err := service.Lock(
+			proc.Ctx,
+			tableID,
+			[][]byte{keyFor(42)},
+			foreignTxn,
+			lock.LockOptions{
+				Granularity: lock.Granularity_Row,
+				Mode:        lock.LockMode_Exclusive,
+				Policy:      lock.WaitPolicy_Wait,
+			},
+		)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, service.Unlock(proc.Ctx, foreignTxn, timestamp.Timestamp{})) }()
+
+		lockOne := func(value int32, noWait bool) error {
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
+			bat.SetRowCount(1)
+			defer bat.Clean(proc.Mp())
+			parker := types.NewPacker()
+			defer parker.Close()
+			options := DefaultLockOptions(parker).
+				WithLockMode(lock.LockMode_Shared).
+				WithNoWait(noWait).
+				WithHasNewVersionInRangeFunc(testFunc)
+			_, _, _, err := doLock(
+				proc.Ctx,
+				nil,
+				process.NewTempAnalyzer(),
+				nil,
+				tableID,
+				proc,
+				bat,
+				0,
+				types.T_int32.ToType(),
+				-1,
+				options,
+				0,
+			)
+			return err
+		}
+
+		txnID := bytes.Clone(proc.GetTxnOperator().Txn().ID)
+		require.NoError(t, lockOne(41, false), "the explicit txn acquires an earlier Shared row")
+		err = lockOne(42, true)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNowait))
+		var mysqlErr *moerr.Error
+		require.ErrorAs(t, err, &mysqlErr)
+		require.Equal(t, uint16(moerr.ER_LOCK_NOWAIT), mysqlErr.MySQLCode(),
+			"the settled conflict must surface to SQL as MySQL 3572 / HY000")
+		require.Equal(t, txnID, proc.GetTxnOperator().Txn().ID,
+			"the failed NOWAIT statement must leave the explicit transaction active")
+
+		// A later ordinary operation in the same transaction still succeeds,
+		// and both earlier and later Shared grants remain owned until txn end.
+		require.NoError(t, lockOne(43, false))
+		for _, value := range []int32{41, 43} {
+			_, probeErr := service.Lock(
+				proc.Ctx,
+				tableID,
+				[][]byte{keyFor(value)},
+				[]byte("nowait-3572-probe"),
+				lock.LockOptions{
+					Granularity: lock.Granularity_Row,
+					Mode:        lock.LockMode_Exclusive,
+					Policy:      lock.WaitPolicy_FastFail,
+				},
+			)
+			require.ErrorIs(t, probeErr, lockservice.ErrLockConflict,
+				"the same transaction must keep its valid Shared grants")
+		}
+		require.NoError(t, service.Unlock(proc.Ctx, []byte("nowait-3572-probe"), timestamp.Timestamp{}))
+	})
+}
+
 func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 	tableID := uint64(10)
 	runLockNonBlockingOpTest(
@@ -2407,6 +2493,14 @@ func runLockOpTest(
 	t *testing.T,
 	fn func(*process.Process),
 	opts ...client.TxnClientCreateOption) {
+	runLockOpTestWithTxnOptions(t, fn, nil, opts...)
+}
+
+func runLockOpTestWithTxnOptions(
+	t *testing.T,
+	fn func(*process.Process),
+	txnOptions []client.TxnOption,
+	opts ...client.TxnClientCreateOption) {
 	defer leaktest.AfterTest(t)()
 	runtime.RunTest(
 		sid,
@@ -2433,7 +2527,7 @@ func runLockOpTest(
 					defer func() {
 						assert.NoError(t, c.Close())
 					}()
-					txnOp, err := c.New(ctx, timestamp.Timestamp{})
+					txnOp, err := c.New(ctx, timestamp.Timestamp{}, txnOptions...)
 					require.NoError(t, err)
 
 					proc := process.NewTopProcess(
@@ -2787,6 +2881,271 @@ func TestLockOpSharedTargetsUseIndependentRows(t *testing.T) {
 		require.NoError(t, err)
 		require.Same(t, bat, result.Batch)
 	})
+}
+
+func TestLockOpSkipLockedFiltersRowsAndContinuesAfterAllSkippedBatch(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		const tableID = uint64(753)
+		foreignTxn := []byte("skip-locked-holder")
+		service := proc.GetLockService()
+		keyFor := func(value int32) []byte {
+			packer := types.NewPacker()
+			defer packer.Close()
+			packer.EncodeInt32(value)
+			return bytes.Clone(packer.Bytes())
+		}
+		for _, value := range []int32{2, 4} {
+			_, err := service.Lock(
+				proc.Ctx,
+				tableID,
+				[][]byte{keyFor(value)},
+				foreignTxn,
+				lock.LockOptions{
+					Granularity: lock.Granularity_Row,
+					Mode:        lock.LockMode_Exclusive,
+					Policy:      lock.WaitPolicy_Wait,
+				},
+			)
+			require.NoError(t, err)
+		}
+		defer func() {
+			require.NoError(t, service.Unlock(proc.Ctx, foreignTxn, timestamp.Timestamp{}))
+		}()
+
+		makeBatch := func(values []int32) *batch.Batch {
+			bat := batch.NewWithSize(2)
+			bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+			payload := make([]int32, len(values))
+			for i, value := range values {
+				payload[i] = value * 10
+			}
+			bat.Vecs[1] = testutil.MakeInt32Vector(payload, nil, proc.Mp())
+			bat.SetRowCount(len(values))
+			return bat
+		}
+		first := makeBatch([]int32{1, 2, 3})
+		allSkipped := makeBatch([]int32{4})
+		last := makeBatch([]int32{5})
+		defer first.Clean(proc.Mp())
+		defer allSkipped.Clean(proc.Mp())
+		defer last.Clean(proc.Mp())
+
+		arg := NewArgumentByEngine(nil)
+		defer arg.Free(proc, false, nil)
+		arg.AddLockTargetWithPolicy(
+			tableID, nil, lock.LockMode_Shared, 0, types.T_int32.ToType(),
+			-1, -1, nil, false, false, true,
+		)
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, allSkipped, last}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Equal(t, []int32{1, 3}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+		require.Equal(t, []int32{10, 30}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[1]))
+		require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColWithTypeCheck[int32](first.Vecs[0]),
+			"the candidate source batch must remain unchanged")
+		result.Batch.Clean(proc.Mp())
+
+		// The second source batch has no admissible row. The operator must keep
+		// pulling instead of returning a false EOF, then expose the next free row.
+		result, err = vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Equal(t, []int32{5}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+		result.Batch.Clean(proc.Mp())
+
+		result, err = vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Nil(t, result.Batch)
+
+		for _, value := range []int32{1, 3, 5} {
+			_, err = service.Lock(
+				proc.Ctx,
+				tableID,
+				[][]byte{keyFor(value)},
+				[]byte("skip-locked-probe"),
+				lock.LockOptions{
+					Granularity: lock.Granularity_Row,
+					Mode:        lock.LockMode_Exclusive,
+					Policy:      lock.WaitPolicy_FastFail,
+				},
+			)
+			require.ErrorIs(t, err, lockservice.ErrLockConflict,
+				"each returned tuple must retain its actual Shared lock")
+		}
+		require.NoError(t, service.Unlock(proc.Ctx, []byte("skip-locked-probe"), timestamp.Timestamp{}))
+	})
+}
+
+func TestLockOpSkipLockedAllSkippedEOFDoesNotSynthesizeLockRows(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		const tableID = uint64(754)
+		service := proc.GetLockService()
+		keyFor := func(value int32) []byte {
+			packer := types.NewPacker()
+			defer packer.Close()
+			packer.EncodeInt32(value)
+			return bytes.Clone(packer.Bytes())
+		}
+		holder := []byte("skip-locked-eof-holder")
+		_, err := service.Lock(
+			proc.Ctx,
+			tableID,
+			[][]byte{keyFor(7)},
+			holder,
+			lock.LockOptions{
+				Granularity: lock.Granularity_Row,
+				Mode:        lock.LockMode_Exclusive,
+				Policy:      lock.WaitPolicy_Wait,
+			},
+		)
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, service.Unlock(proc.Ctx, holder, timestamp.Timestamp{}))
+		}()
+
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = testutil.MakeInt32Vector([]int32{7}, nil, proc.Mp())
+		input.SetRowCount(1)
+		defer input.Clean(proc.Mp())
+
+		arg := NewArgumentByEngine(nil)
+		defer arg.Free(proc, false, nil)
+		arg.AddLockTargetWithPolicy(
+			tableID, nil, lock.LockMode_Shared, 0, types.T_int32.ToType(),
+			-1, -1, plan2.MakePlan2Int32ConstExprWithType(99), true, false, true,
+		)
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Nil(t, result.Batch, "the all-skipped stream should reach child EOF")
+
+		// The lockRows/lockTableAtTheEnd metadata is intentionally ignored by
+		// ShareSkip: no absent-key or table grant may be synthesized at EOF.
+		_, err = service.Lock(
+			proc.Ctx,
+			tableID,
+			[][]byte{keyFor(99)},
+			[]byte("skip-locked-eof-probe"),
+			lock.LockOptions{
+				Granularity: lock.Granularity_Row,
+				Mode:        lock.LockMode_Exclusive,
+				Policy:      lock.WaitPolicy_FastFail,
+			},
+		)
+		require.NoError(t, err)
+		require.NoError(t, service.Unlock(proc.Ctx, []byte("skip-locked-eof-probe"), timestamp.Timestamp{}))
+	})
+}
+
+func TestLockOpSkipLockedAllowsCompatibleSharedHolder(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		const tableID = uint64(755)
+		service := proc.GetLockService()
+		packer := types.NewPacker()
+		defer packer.Close()
+		packer.EncodeInt32(9)
+		row := bytes.Clone(packer.Bytes())
+		sharedHolder := []byte("skip-locked-shared-holder")
+		_, err := service.Lock(
+			proc.Ctx,
+			tableID,
+			[][]byte{row},
+			sharedHolder,
+			lock.LockOptions{
+				Granularity: lock.Granularity_Row,
+				Mode:        lock.LockMode_Shared,
+				Policy:      lock.WaitPolicy_Wait,
+			},
+		)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, service.Unlock(proc.Ctx, sharedHolder, timestamp.Timestamp{})) }()
+
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = testutil.MakeInt32Vector([]int32{9}, nil, proc.Mp())
+		input.SetRowCount(1)
+		defer input.Clean(proc.Mp())
+
+		arg := NewArgumentByEngine(nil)
+		defer arg.Free(proc, false, nil)
+		arg.AddLockTargetWithPolicy(
+			tableID, nil, lock.LockMode_Shared, 0, types.T_int32.ToType(),
+			-1, -1, nil, false, false, true,
+		)
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Equal(t, []int32{9}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+		result.Batch.Clean(proc.Mp())
+
+		// The result's Shared grant is compatible with another Shared owner but
+		// blocks an Exclusive request, matching FOR SHARE rather than a queue claim.
+		_, err = service.Lock(
+			proc.Ctx,
+			tableID,
+			[][]byte{row},
+			[]byte("skip-locked-shared-probe"),
+			lock.LockOptions{
+				Granularity: lock.Granularity_Row,
+				Mode:        lock.LockMode_Shared,
+				Policy:      lock.WaitPolicy_FastFail,
+			},
+		)
+		require.NoError(t, err)
+		require.NoError(t, service.Unlock(proc.Ctx, []byte("skip-locked-shared-probe"), timestamp.Timestamp{}))
+
+		_, err = service.Lock(
+			proc.Ctx,
+			tableID,
+			[][]byte{row},
+			[]byte("skip-locked-exclusive-probe"),
+			lock.LockOptions{
+				Granularity: lock.Granularity_Row,
+				Mode:        lock.LockMode_Exclusive,
+				Policy:      lock.WaitPolicy_FastFail,
+			},
+		)
+		require.ErrorIs(t, err, lockservice.ErrLockConflict)
+		require.NoError(t, service.Unlock(proc.Ctx, []byte("skip-locked-exclusive-probe"), timestamp.Timestamp{}))
+	})
+}
+
+func TestLockOpSkipLockedCannotSilentlyHonorTransactionLockSkip(t *testing.T) {
+	const tableID = uint64(757)
+	runLockOpTestWithTxnOptions(
+		t,
+		func(proc *process.Process) {
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = testutil.MakeInt32Vector([]int32{9}, nil, proc.Mp())
+			input.SetRowCount(1)
+			defer input.Clean(proc.Mp())
+
+			arg := NewArgumentByEngine(nil)
+			defer arg.Free(proc, false, nil)
+			arg.AddLockTargetWithPolicy(
+				tableID, nil, lock.LockMode_Shared, 0, types.T_int32.ToType(),
+				-1, -1, nil, false, false, true,
+			)
+			arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+			require.NoError(t, arg.Prepare(proc))
+			arg.ctr.hasNewVersionInRange = testFunc
+
+			_, err := vm.Exec(arg, proc)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported),
+				"a transaction-level skipped-lock optimization must not return an unlocked tuple")
+		},
+		[]client.TxnOption{client.WithTxnSkipLock(
+			[]uint64{tableID}, []lock.LockMode{lock.LockMode_Shared},
+		)},
+	)
 }
 
 func TestLockOpExclusiveTargetsStayRowLocked(t *testing.T) {

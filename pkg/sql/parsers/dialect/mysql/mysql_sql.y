@@ -1051,6 +1051,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> RESPECT
 %left <str> MEMBER
 %token <str> AUTO_ID_CACHE
+// Keep new lock-option tokens at the end so parser regeneration does not
+// renumber every existing token constant.
+%token <str> NOWAIT LOCKED
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -16475,6 +16478,8 @@ non_reserved_keyword:
 |   NAMESPACE
 |   NAMESPACES
 |   NCHAR
+|   NOWAIT
+|   LOCKED
 |   NUMERIC
 |   NEVER
 |   NO
@@ -16840,6 +16845,28 @@ nth_value_from_first_opt:
     }
 |   FROM FIRST
     {
+    }
+
+// Keep new lock options at the end of the grammar so generated parser tables
+// retain existing production numbers wherever possible.
+select_lock_opt:
+    FOR UPDATE NOWAIT
+    {
+        $$ = &tree.SelectLockInfo{
+            LockType:tree.SelectLockForUpdateNoWait,
+        }
+    }
+|   FOR SHARE NOWAIT
+    {
+        $$ = &tree.SelectLockInfo{
+            LockType:tree.SelectLockForShareNoWait,
+        }
+    }
+|   FOR SHARE CONFLICT_SKIP LOCKED
+    {
+        $$ = &tree.SelectLockInfo{
+            LockType:tree.SelectLockForShareSkipLocked,
+        }
     }
 
 //mo_keywords:

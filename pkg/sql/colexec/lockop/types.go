@@ -58,6 +58,8 @@ type LockOptions struct {
 	refreshTableSnapshot     bool
 	admissionOnly            bool
 	admissionResult          *lock.Result
+	noWait                   bool
+	skipLocked               bool
 	waitPolicy               *lock.WaitPolicy
 	parker                   *types.Packer
 	fetchFunc                FetchLockRowsFunc
@@ -119,6 +121,8 @@ type lockTarget struct {
 	lockTable                    bool
 	changeDef                    bool
 	mode                         lock.LockMode
+	noWait                       bool
+	skipLocked                   bool
 	lockRows                     *plan.Expr
 	lockTableAtTheEnd            bool
 }

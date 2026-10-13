@@ -5248,6 +5248,45 @@ func TestRowLockFastFailConflictActiveTxnCleanup(t *testing.T) {
 	}
 }
 
+func TestRowLockNoWaitConflictKeepsPartialGrantAndTxnUsable(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			runner(t, 0, func(ctx context.Context, s *service, lt *localLockTable) {
+				holderTxn := newTestTxnID(41)
+				probeTxn := newTestTxnID(42)
+				ordinary := newTestRowExclusiveOptions()
+				noWait := ordinary
+				noWait.Policy = pb.WaitPolicy_FastFail
+				noWait.NoWait = true
+
+				_, err := s.Lock(ctx, 0, newTestRows(2), holderTxn, ordinary)
+				require.NoError(t, err)
+				defer func() {
+					assert.NoError(t, s.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+				}()
+
+				result, err := s.Lock(ctx, 0, newTestRows(1, 2), probeTxn, noWait)
+				require.ErrorIs(t, err, ErrLockConflict)
+				require.True(t, result.LockedOn.Valid,
+					"the settled partial outcome must retain its physical binding")
+				checkLock(t, lt, []byte{1}, [][]byte{probeTxn}, nil, nil)
+				checkLock(t, lt, []byte{2}, [][]byte{holderTxn}, nil, nil)
+
+				// A direct lock conflict must not poison the explicit transaction or
+				// leave the FastFail policy on the service/session state.
+				_, err = s.Lock(ctx, 0, newTestRows(3), probeTxn, ordinary)
+				require.NoError(t, err)
+				checkLock(t, lt, []byte{3}, [][]byte{probeTxn}, nil, nil)
+
+				require.NoError(t, s.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
+				checkLock(t, lt, []byte{1}, nil, nil, nil)
+				checkLock(t, lt, []byte{2}, [][]byte{holderTxn}, nil, nil)
+				checkLock(t, lt, []byte{3}, nil, nil, nil)
+			})
+		})
+	}
+}
+
 func TestRangeLockWithFailFast(t *testing.T) {
 	for name, runner := range runners {
 		t.Run(name, func(t *testing.T) {

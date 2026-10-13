@@ -8243,6 +8243,115 @@ func TestReplaceAndChildInsertUseCanonicalForeignKeyLockOrder(t *testing.T) {
 		"REPLACE must lock the base table first and hidden unique indexes by physical table name")
 }
 
+func TestSelectLockPoliciesReachOnlyTheirQueryBlockTargets(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		mode       lockpb.LockMode
+		noWait     bool
+		skipLocked bool
+	}{
+		{name: "ordinary share", sql: "SELECT N_NATIONKEY FROM NATION FOR SHARE", mode: lockpb.LockMode_Shared},
+		{name: "update nowait", sql: "SELECT N_NATIONKEY FROM NATION FOR UPDATE NOWAIT", mode: lockpb.LockMode_Exclusive, noWait: true},
+		{name: "share nowait", sql: "SELECT N_NATIONKEY FROM NATION FOR SHARE NOWAIT", mode: lockpb.LockMode_Shared, noWait: true},
+		{name: "share skip locked", sql: "SELECT N_NATIONKEY FROM NATION FOR SHARE SKIP LOCKED", mode: lockpb.LockMode_Shared, skipLocked: true},
+		{
+			name:   "nested clause does not leak to outer target",
+			sql:    "SELECT N_NATIONKEY FROM NATION WHERE N_NATIONKEY IN (SELECT N_NATIONKEY FROM NATION FOR SHARE NOWAIT)",
+			mode:   lockpb.LockMode_Shared,
+			noWait: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			var targets []*plan.LockTarget
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_LOCK_OP {
+					targets = append(targets, node.LockTargets...)
+				}
+			}
+			require.NotEmpty(t, targets)
+			for _, target := range targets {
+				assert.Equal(t, test.mode, target.Mode)
+				assert.Equal(t, test.noWait, target.GetNoWait())
+				assert.Equal(t, test.skipLocked, target.GetSkipLocked())
+			}
+		})
+	}
+}
+
+func TestShareSkipLockedKeepsLimitAboveLockFilterAfterPlanBuild(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT N_NATIONKEY FROM NATION ORDER BY N_NATIONKEY LIMIT 3 FOR SHARE SKIP LOCKED",
+		"SELECT N.N_NATIONKEY FROM NATION N LEFT JOIN REGION R ON N.N_REGIONKEY = R.R_REGIONKEY ORDER BY N.N_NATIONKEY LIMIT 3 FOR SHARE SKIP LOCKED",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+
+			var lockNodes []int32
+			var limitNodes []int32
+			for id, node := range query.Nodes {
+				if node.NodeType == plan.Node_LOCK_OP {
+					lockNodes = append(lockNodes, int32(id))
+				}
+				if node.Limit != nil || node.Offset != nil {
+					limitNodes = append(limitNodes, int32(id))
+				}
+			}
+			require.NotEmpty(t, lockNodes)
+			require.NotEmpty(t, limitNodes)
+
+			contains := func(root int32, want func(*plan.Node) bool) bool {
+				seen := make(map[int32]bool)
+				var visit func(int32) bool
+				visit = func(id int32) bool {
+					if id < 0 || int(id) >= len(query.Nodes) || seen[id] {
+						return false
+					}
+					seen[id] = true
+					node := query.Nodes[id]
+					if want(node) {
+						return true
+					}
+					for _, child := range node.Children {
+						if visit(child) {
+							return true
+						}
+					}
+					return false
+				}
+				return visit(root)
+			}
+
+			for _, lockID := range lockNodes {
+				node := query.Nodes[lockID]
+				require.Len(t, node.Children, 1)
+				require.False(t, contains(node.Children[0], func(descendant *plan.Node) bool {
+					return descendant.Limit != nil || descendant.Offset != nil
+				}), "finite pagination must not be pushed beneath the row-removing lock node")
+			}
+			hasLimitAboveLock := false
+			for _, limitID := range limitNodes {
+				if contains(limitID, func(descendant *plan.Node) bool {
+					return descendant.NodeType == plan.Node_LOCK_OP
+				}) {
+					hasLimitAboveLock = true
+					break
+				}
+			}
+			require.True(t, hasLimitAboveLock,
+				"the final LIMIT must consume rows after ShareSkip removes conflicts")
+		})
+	}
+}
+
 func TestDeepCopyPreservesSharedLockMode(t *testing.T) {
 	assert.Nil(t, DeepCopyLockTarget(nil))
 	target := &plan.LockTarget{
