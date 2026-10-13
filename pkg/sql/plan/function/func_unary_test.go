@@ -3968,9 +3968,16 @@ func initDayOfYearTestCase() []tcTemp {
 					[]types.Date{types.Date(20040403), types.Date(20211003), types.Date(20200823)},
 					[]bool{false, false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint16.ToType(), false,
-				[]uint16{278, 311, 358},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{278, 311, 358},
 				[]bool{false, false, false}),
+		},
+		{
+			info: "leap boundary, zero date and NULL",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_date.ToType(),
+				[]types.Date{types.DateFromCalendar(2024, 12, 31), types.DateFromCalendar(2025, 1, 1), types.ZeroDate, types.DateFromCalendar(2024, 1, 1)},
+				[]bool{false, false, false, true})},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false, []int32{366, 1, 0, 0}, []bool{false, false, true, true}),
 		},
 	}
 }
@@ -8403,8 +8410,8 @@ func initDateToWeekTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			// Mode 0 (default): Week starts on Sunday, range 0-53
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{52, 0, 52, 0},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{52, 0, 52, 0},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -8415,8 +8422,8 @@ func initDateToWeekTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			// Mode 0 (default): Week starts on Sunday, range 0-53
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{6, 25, 38, 49},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{6, 25, 38, 49},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -8426,8 +8433,8 @@ func initDateToWeekTestCase() []tcTemp {
 					[]types.Date{d11},
 					[]bool{true}),
 			},
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{0},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{0},
 				[]bool{true}),
 		},
 		//TODO: Ignoring Scalar Nulls: Original code:https://github.com/m-schen/matrixone/blob/749eb739130decdbbf3dcc3dd5b21f656620edd9/pkg/sql/plan/function/builtin/unary/week_test.go#L52
@@ -8591,8 +8598,8 @@ func initDateTimeToWeekTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			// Mode 0 (default): Week starts on Sunday, range 0-53
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{52, 0, 52, 0},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{52, 0, 52, 0},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -8603,8 +8610,8 @@ func initDateTimeToWeekTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			// Mode 0 (default): Week starts on Sunday, range 0-53
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{6, 25, 38, 49},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{6, 25, 38, 49},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -8615,8 +8622,8 @@ func initDateTimeToWeekTestCase() []tcTemp {
 					[]bool{true}),
 			},
 			// null input returns null, value doesn't matter but should match mode 0
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{52},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{52},
 				[]bool{true}),
 		},
 	}
@@ -8642,9 +8649,9 @@ func TestWeekUsesPerRowMode(t *testing.T) {
 		types.DateFromCalendar(2008, 12, 31),
 	}
 	modes := []int64{0, 1, 2, -1}
-	wanted := make([]uint8, len(dates))
+	wanted := make([]int32, len(dates))
 	for i := range dates {
-		wanted[i] = uint8(dates[i].Week(normalizeWeekMode(modes[i])))
+		wanted[i] = int32(dates[i].Week(normalizeWeekMode(modes[i])))
 	}
 
 	proc := testutil.NewProcess(t)
@@ -8653,7 +8660,7 @@ func TestWeekUsesPerRowMode(t *testing.T) {
 			NewFunctionTestInput(types.T_date.ToType(), dates, nil),
 			NewFunctionTestInput(types.T_int64.ToType(), modes, nil),
 		},
-		NewFunctionTestResult(types.T_uint8.ToType(), false, wanted, nil),
+		NewFunctionTestResult(types.T_int32.ToType(), false, wanted, nil),
 		DateToWeek)
 	ok, info := caseWithRows.RunAndFree()
 	require.True(t, ok, info)
@@ -8663,8 +8670,8 @@ func TestWeekUsesPerRowMode(t *testing.T) {
 			NewFunctionTestInput(types.T_date.ToType(), dates[:3], nil),
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1, 2}, []bool{false, true, false}),
 		},
-		NewFunctionTestResult(types.T_uint8.ToType(), false,
-			[]uint8{wanted[0], 1, wanted[2]}, nil),
+		NewFunctionTestResult(types.T_int32.ToType(), false,
+			[]int32{wanted[0], 1, wanted[2]}, nil),
 		DateToWeek)
 	ok, info = caseWithNullMode.RunAndFree()
 	require.True(t, ok, info)
@@ -8676,7 +8683,7 @@ func TestWeekUsesPerRowMode(t *testing.T) {
 			}, nil),
 			NewFunctionTestInput(types.T_int64.ToType(), modes, nil),
 		},
-		NewFunctionTestResult(types.T_uint8.ToType(), false, wanted, nil),
+		NewFunctionTestResult(types.T_int32.ToType(), false, wanted, nil),
 		DatetimeToWeek)
 	ok, info = caseDatetime.RunAndFree()
 	require.True(t, ok, info)
@@ -13354,5 +13361,29 @@ func TestLastDayDateResultContracts(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, types.T_date, f.GetReturnType().Oid)
 		require.False(t, DeduceNotNullable(f.GetEncodedOverloadID(), []*plan.Expr{{Typ: plan.Type{Id: int32(typ.Oid), NotNullable: true}}}))
+	}
+}
+
+func TestCalendarNumericMaskedResults(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+		fn    executeLogicOfOverload
+		want  []int32
+	}{
+		{"dayofyear", NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.DateFromCalendar(2024, 12, 31), types.DateFromCalendar(2025, 1, 1)}, nil), DayOfYear, []int32{0, 1}},
+		{"week date", NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.DateFromCalendar(2024, 12, 31), types.DateFromCalendar(2025, 1, 1)}, nil), DateToWeek, []int32{0, 1}},
+		{"week datetime", NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.DateFromCalendar(2024, 12, 31).ToDatetime(), types.DateFromCalendar(2025, 1, 1).ToDatetime()}, nil), DatetimeToWeek, []int32{0, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{tc.input}
+			if tc.name != "dayofyear" {
+				inputs = append(inputs, NewFunctionTestConstInput(types.T_int64.ToType(), []int64{3}, nil))
+			}
+			fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_int32.ToType(), false, tc.want, []bool{true, false}), tc.fn).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
 	}
 }
