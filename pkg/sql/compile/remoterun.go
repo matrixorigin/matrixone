@@ -146,6 +146,9 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
 	}
+	if requiredVectorProtocol != nil && features.JSONStringConsumerOverload {
+		*requiredVectorProtocol = max(*requiredVectorProtocol, defines.MORPCVersion112)
+	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
 	}
