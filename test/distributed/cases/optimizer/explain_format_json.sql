@@ -55,7 +55,7 @@ explain format=json select id from vectors order by l2_distance(v,'[1,1,1]') lim
 -- @regex("(?s)Vector Index Scan.*query_vector=0x000000400000004000000040",true)
 explain format=json select id from vectors order by l2_distance(v,'[2,2,2]') limit 2;
 set probe_limit=16;
--- @regex("(?s)Vector Index Scan.*initial_probe_count=16",true)
+-- @regex("(?s)Vector Index Scan.*NProbe: 16",true)
 explain format=json select id from vectors order by l2_distance(v,'[1,1,1]') limit 2;
 -- @regex("(?s)Vector Index Scan.*distance_upper_bound_type=EXCLUSIVE.*distance_upper_bound=5[^0-9]",true)
 explain format=json select id from vectors where l2_distance(v,'[1,1,1]') < 5 order by l2_distance(v,'[1,1,1]') limit 2;
