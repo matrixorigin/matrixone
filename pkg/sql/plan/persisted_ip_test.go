@@ -1219,3 +1219,14 @@ func checkAdmissionResult(t *testing.T, version int64, err error, required int64
 		require.NoError(t, err)
 	}
 }
+
+func TestPersistedDependentProgramRequiresV112(t *testing.T) {
+	for _, expr := range []*planpb.Expr{
+		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Dependent{Dependent: &planpb.DependentExpr{ProgramId: 1}}},
+		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Slot{Slot: &planpb.CorrelationSlot{ProgramId: 1}}},
+	} {
+		version, err := RequiredPersistedExpressionProtocolVersion(expr)
+		require.NoError(t, err)
+		require.Equal(t, defines.MORPCVersion112, version)
+	}
+}

@@ -34,6 +34,7 @@ const (
 )
 
 type Minus struct {
+	colexec.SetOperationAllocation
 	ctr      container
 	KeyExprs []*plan.Expr
 
@@ -100,6 +101,7 @@ func (minus *Minus) Free(proc *process.Process, pipelineFailed bool, err error) 
 	minus.ctr.cleanBatch(mp)
 	minus.ctr.cleanHashMap()
 	minus.ctr.keyEvaluator.Free()
+	minus.FreeMetadata()
 }
 
 func (minus *Minus) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
