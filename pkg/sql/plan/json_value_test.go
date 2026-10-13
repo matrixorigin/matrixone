@@ -129,14 +129,15 @@ func TestJSONValueProtocolGatePreservesLegacyPlans(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, legacy.GetF().Args, 2)
 
-	_, err = bind(defines.MORPCVersion111, `select json_value('1', '$' returning unsigned)`)
-	require.ErrorContains(t, err, "MORPC protocol version 112")
+	_, err = bind(defines.MORPCVersion112, `select json_value('1', '$' returning unsigned)`)
+	require.ErrorContains(t, err, "MORPC protocol version 113")
 
-	contract, err := bind(defines.MORPCVersion112, `select json_value('1', '$' returning unsigned)`)
+	contract, err := bind(defines.MORPCVersion113, `select json_value('1', '$' returning unsigned)`)
 	require.NoError(t, err)
 	require.Len(t, contract.GetF().Args, 7)
 
 	for _, sql := range []string{
+		`select week(cast('2024-12-31' as date), 3), dayofyear(cast('2024-12-31' as date)), json_value('1', '$' returning unsigned)`,
 		`select json_value('1', '$' null on error), count(*) group by json_value('1', '$')`,
 		`select count(*) group by json_value('1', '$') having json_value('1', '$' null on error) is not null`,
 	} {
@@ -144,10 +145,10 @@ func TestJSONValueProtocolGatePreservesLegacyPlans(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
-			_, err = BuildPlan(compilerContext, stmt, false)
-			require.ErrorContains(t, err, "protocol version 112")
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+			_, err = BuildPlan(compilerContext, stmt, false)
+			require.ErrorContains(t, err, "protocol version 113")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
 			_, err = BuildPlan(compilerContext, stmt, false)
 			require.NoError(t, err)
 		})

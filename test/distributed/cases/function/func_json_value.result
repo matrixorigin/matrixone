@@ -331,3 +331,9 @@ id	d	g	extra
 1	seed	alpha	7
 2	seed	beta	7
 drop table json_value_char_origin;
+drop view if exists json_value_calendar_view;
+create view json_value_calendar_view as select week(cast('2024-12-31' as date), 3) as w, dayofyear(cast('2024-12-31' as date)) as d, json_value('1', '$' returning signed) as v;
+select w, d, v from json_value_calendar_view;
+w	d	v
+1	366	1
+drop view json_value_calendar_view;

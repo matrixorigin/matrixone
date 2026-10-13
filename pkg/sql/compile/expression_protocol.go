@@ -94,12 +94,15 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	if features.MediumIntAssignmentBounds {
 		required = max(required, defines.MORPCVersion110)
 	}
+	if features.DateNumericResultContracts {
+		required = max(required, defines.MORPCVersion112)
+	}
 	return required
 }
 
 func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	if features.JSONValueContract {
-		return defines.MORPCVersion112
+		return defines.MORPCVersion113
 	}
 	if features.JSONScalarLiteralContracts {
 		return defines.MORPCVersion104

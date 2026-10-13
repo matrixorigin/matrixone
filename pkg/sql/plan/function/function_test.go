@@ -1927,3 +1927,24 @@ func TestIntegerComparisonDomainsAreSymmetricAndExact(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+func TestCalendarNumericResultTypes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []types.Type
+		want types.T
+	}{
+		{"week", []types.Type{types.T_date.ToType()}, types.T_int32},
+		{"week", []types.Type{types.T_datetime.ToType()}, types.T_int32},
+		{"week", []types.Type{types.T_date.ToType(), types.T_int64.ToType()}, types.T_int32},
+		{"week", []types.Type{types.T_datetime.ToType(), types.T_int64.ToType()}, types.T_int32},
+		{"dayofyear", []types.Type{types.T_date.ToType()}, types.T_int32},
+		{"weekofyear", []types.Type{types.T_date.ToType()}, types.T_int64},
+	} {
+		t.Run(fmt.Sprint(tc.name, tc.args), func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), tc.name, tc.args)
+			require.NoError(t, err)
+			require.Equal(t, tc.want.ToType(), resolved.retType)
+		})
+	}
+}

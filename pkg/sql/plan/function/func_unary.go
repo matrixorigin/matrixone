@@ -1336,12 +1336,20 @@ func DateStringToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	})
 }
 
+// Historical serialized expressions still allocate their narrow result vectors.
 func DayOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithNullOnError[types.Date, uint16](ivecs, result, proc, length, func(v types.Date) (uint16, error) {
+	if _, legacy := result.(*vector.FunctionResult[uint16]); legacy {
+		return dayOfYearResult[uint16](ivecs, result, proc, length, selectList)
+	}
+	return dayOfYearResult[int32](ivecs, result, proc, length, selectList)
+}
+
+func dayOfYearResult[T uint16 | int32](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithNullOnError[types.Date, T](ivecs, result, proc, length, func(v types.Date) (T, error) {
 		if v == types.ZeroDate {
 			return 0, moerr.NewInvalidInputNoCtx("zero date")
 		}
-		return v.DayOfYear(), nil
+		return T(v.DayOfYear()), nil
 	}, selectList)
 }
 
@@ -10847,7 +10855,14 @@ func getDefaultWeekFormatMode(proc *process.Process) (int, error) {
 }
 
 func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[uint8](result)
+	if _, legacy := result.(*vector.FunctionResult[uint8]); legacy {
+		return dateToWeekResult[uint8](ivecs, result, proc, length, selectList)
+	}
+	return dateToWeekResult[int32](ivecs, result, proc, length, selectList)
+}
+
+func dateToWeekResult[T uint8 | int32](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[T](result)
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
 	var modes vector.FunctionParameterWrapper[int64]
 	if len(ivecs) > 1 {
@@ -10883,7 +10898,7 @@ func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		}
 
 		week := date.Week(mode)
-		if err := rs.Append(uint8(week), false); err != nil {
+		if err := rs.Append(T(week), false); err != nil {
 			return err
 		}
 	}
@@ -10891,7 +10906,14 @@ func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[uint8](result)
+	if _, legacy := result.(*vector.FunctionResult[uint8]); legacy {
+		return datetimeToWeekResult[uint8](ivecs, result, proc, length, selectList)
+	}
+	return datetimeToWeekResult[int32](ivecs, result, proc, length, selectList)
+}
+
+func datetimeToWeekResult[T uint8 | int32](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[T](result)
 	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
 	var modes vector.FunctionParameterWrapper[int64]
 	if len(ivecs) > 1 {
@@ -10927,7 +10949,7 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 		}
 
 		week := dt.ToDate().Week(mode)
-		if err := rs.Append(uint8(week), false); err != nil {
+		if err := rs.Append(T(week), false); err != nil {
 			return err
 		}
 	}

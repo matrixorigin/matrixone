@@ -190,3 +190,9 @@ alter table json_value_char_origin add column extra int default 7, algorithm=cop
 insert into json_value_char_origin(id, doc) values (2, '"beta"');
 select id, d, g, extra from json_value_char_origin order by id;
 drop table json_value_char_origin;
+
+-- Landed signed WEEK/DAYOFYEAR compose with the provisional JSON_VALUE contract.
+drop view if exists json_value_calendar_view;
+create view json_value_calendar_view as select week(cast('2024-12-31' as date), 3) as w, dayofyear(cast('2024-12-31' as date)) as d, json_value('1', '$' returning signed) as v;
+select w, d, v from json_value_calendar_view;
+drop view json_value_calendar_view;

@@ -565,7 +565,7 @@ func TestRequiredRemoteExpressionFeaturesBoundedConditionalStringDomains(t *test
 		"the existing character overload remains wire-compatible")
 }
 
-func TestRequiresMORPCVersion112JSONValueContract(t *testing.T) {
+func TestRequiresMORPCVersion113JSONValueContract(t *testing.T) {
 	text := func(value string) *Expr {
 		return &Expr{Typ: Type{Id: planVarcharTypeID}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: value}}}}
 	}
@@ -584,11 +584,11 @@ func TestRequiresMORPCVersion112JSONValueContract(t *testing.T) {
 		Args: []*Expr{text(`{"a":1}`), text("$.a")},
 	}}}
 
-	required, err := RequiresMORPCVersion112JSONValueContract(jsonValueContract)
+	required, err := RequiresMORPCVersion113JSONValueContract(jsonValueContract)
 	require.NoError(t, err)
 	require.True(t, required)
 
-	required, err = RequiresMORPCVersion112JSONValueContract(legacy)
+	required, err = RequiresMORPCVersion113JSONValueContract(legacy)
 	require.NoError(t, err)
 	require.False(t, required)
 
@@ -618,7 +618,7 @@ func TestRequiresMORPCVersion112JSONValueContract(t *testing.T) {
 			decoded := &Plan{}
 			require.NoError(t, decoded.Unmarshal(encoded))
 			for _, value := range []any{scan, node, query, owner, decoded} {
-				required, err := RequiresMORPCVersion112JSONValueContract(value)
+				required, err := RequiresMORPCVersion113JSONValueContract(value)
 				require.NoError(t, err)
 				require.Equal(t, tc.want, required)
 				features, err := RequiredRemoteExpressionFeatures(value)
@@ -1099,6 +1099,36 @@ func TestRequiredRemoteExpressionFeaturesMediumIntAssignmentBounds(t *testing.T)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, features.MediumIntAssignmentBounds)
 			require.Equal(t, tc.want, features.Any())
+		})
+	}
+}
+
+func TestDateNumericResultFeaturesRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		id, overload, result int32
+		want                 bool
+	}{
+		{"week date", 216, 0, 22, true}, {"week datetime", 216, 1, 22, true},
+		{"week date mode", 216, 2, 22, true}, {"week datetime mode", 216, 3, 22, true},
+		{"dayofyear", 206, 0, 22, true},
+		{"legacy week", 216, 2, 25, false}, {"legacy dayofyear", 206, 0, 26, false},
+		{"weekofyear control", 217, 0, 23, false}, {"other int function", 218, 0, 22, false},
+		{"unknown overload", 216, 4, 22, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := &Expr{Typ: Type{Id: tc.result}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(tc.id)<<32 | int64(tc.overload)}}}}
+			data, err := expr.Marshal()
+			require.NoError(t, err)
+			decoded := &Expr{}
+			require.NoError(t, decoded.Unmarshal(data))
+			features, err := RequiredRemoteExpressionFeatures(&TableDef{Cols: []*ColDef{{Default: &Default{Expr: decoded}}}})
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.DateNumericResultContracts)
+			if tc.want {
+				require.True(t, features.Any())
+			}
+			require.Equal(t, tc.id == 216 && tc.overload < 2, features.WeekSessionDefault)
 		})
 	}
 }

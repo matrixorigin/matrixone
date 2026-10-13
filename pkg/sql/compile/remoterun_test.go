@@ -1396,7 +1396,7 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 	// A successful sender needs an observed capable destination, not only a
 	// coordinator floor. Reuse the protocol fixture's real endpoint mapping.
 	c, client := expressionProtocolTestCompile(t)
-	client.version = defines.MORPCVersion112
+	client.version = defines.MORPCVersion113
 	proc := c.proc
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
 	proc.Base.TxnOperator = fakeTxnOperator{}
@@ -1714,9 +1714,29 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		{
 			name:                "JSON_VALUE seven-argument plan",
 			expressions:         []*planpb.Expr{jsonValueContract()},
+			incompatibleVersion: defines.MORPCVersion112,
+			compatibleVersion:   defines.MORPCVersion113,
+			errorContains:       "seven-argument JSON_VALUE plans require MORPC protocol version 113",
+		},
+		{
+			name: "signed WEEK without JSON_VALUE",
+			expressions: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: planfunction.EncodeOverloadID(planfunction.WEEK, 2), ObjName: "week"},
+				Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_date)}}, {Typ: planpb.Type{Id: int32(types.T_int64)}}},
+			}}}},
 			incompatibleVersion: defines.MORPCVersion111,
 			compatibleVersion:   defines.MORPCVersion112,
-			errorContains:       "seven-argument JSON_VALUE plans require MORPC protocol version 112",
+			errorContains:       "signed date result contracts require MORPC protocol version 112",
+		},
+		{
+			name: "signed WEEK with JSON_VALUE",
+			expressions: []*planpb.Expr{jsonValueContract(), {Typ: planpb.Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: planfunction.EncodeOverloadID(planfunction.WEEK, 2), ObjName: "week"},
+				Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_date)}}, {Typ: planpb.Type{Id: int32(types.T_int64)}}},
+			}}}},
+			incompatibleVersion: defines.MORPCVersion112,
+			compatibleVersion:   defines.MORPCVersion113,
+			errorContains:       "seven-argument JSON_VALUE plans require MORPC protocol version 113",
 		},
 		{
 			name:                "numeric prefix and JSON comparison",
