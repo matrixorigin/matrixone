@@ -12,11 +12,12 @@ package frontend
 
 import (
 	"encoding/binary"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestCharsetAdmissionParsedRequests(t *testing.T) {
@@ -33,6 +34,8 @@ func TestCharsetAdmissionParsedRequests(t *testing.T) {
 		{"set names utf8 collate 'binary'", "utf8", "is not valid for CHARACTER SET"},
 		{"set names utf8mb3 collate utf8_bin", "utf8mb3", ""},
 		{"set names utf8mb4 collate utf8mb4_0900_ai_ci", "utf8mb4", ""},
+		{"set names utf8 collate utf8_unicode_ci", "utf8", ""},
+		{"set names utf8mb4 collate utf8mb4_unicode_ci", "utf8mb4", ""},
 		{"set character set utf8mb3", "utf8mb3", ""},
 		{"set names default", "default", ""},
 		{"set charset default", "default", ""},
@@ -84,8 +87,11 @@ func TestCharsetAdmissionBeforeSessionOrGlobalMutation(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, name, got)
 	}
-	for _, name := range []string{"utf8_general_ci", "utf8mb3_bin", "utf8mb4_0900_ai_ci"} {
+	for _, name := range []string{"utf8_general_ci", "utf8mb3_bin", "utf8mb4_0900_ai_ci", "utf8_unicode_ci", "utf8mb4_unicode_ci"} {
 		require.NoError(t, ses.SetSessionSysVar(t.Context(), "collation_connection", name))
+		got, err := ses.GetSessionSysVar("collation_connection")
+		require.NoError(t, err)
+		require.Equal(t, name, got)
 	}
 	require.Error(t, ses.SetSessionSysVar(t.Context(), "default_collation_for_utf8mb4", "utf8mb4_0900_bin"))
 	require.Error(t, validateCharsetSystemVariable("default_collation_for_utf8mb4", "utf8mb4_0900_bin"))
@@ -108,6 +114,10 @@ func TestCharsetAdmissionHandshake(t *testing.T) {
 		if admitted {
 			require.NoError(t, err, "ID=%d", id)
 			require.Equal(t, int(id), proto.collationID)
+			name, ok := lookupSupportedProtocolCollation(int(id))
+			require.True(t, ok)
+			require.Equal(t, name.collationName, proto.collationName)
+			require.Equal(t, name.charset, proto.charset)
 		} else {
 			require.ErrorContains(t, err, "unsupported handshake character set", "ID=%d", id)
 			require.Equal(t, 45, proto.collationID)
@@ -123,7 +133,7 @@ func TestCharsetAdmissionChangeUserProtocol(t *testing.T) {
 		admitted bool
 	}{
 		{33, true}, {45, true}, {46, true}, {63, true}, {83, true}, {255, true},
-		{8, false}, {47, false}, {65, false}, {28, false}, {87, false}, {192, false}, {224, false}, {309, false}, {65535, false},
+		{8, false}, {47, false}, {65, false}, {28, false}, {87, false}, {192, true}, {224, true}, {309, false}, {65535, false},
 	} {
 		proto := &MysqlProtocolImpl{io: gIO, capability: CLIENT_SECURE_CONNECTION | CLIENT_PROTOCOL_41}
 		// username, empty secure auth, empty database, full uint16 protocol ID.

@@ -44,7 +44,7 @@ func validateCharsetSystemVariable(name string, value interface{}) error {
 		if _, ok := collation.ResolveCharset(text); !ok {
 			return moerr.NewInvalidInputNoCtxf("unsupported character set '%s'", text)
 		}
-	} else if _, ok := collation.ResolveSQL(text); !ok {
+	} else if _, _, ok := collation.ResolveSession(text); !ok {
 		return moerr.NewInvalidInputNoCtxf("unsupported collation '%s'", text)
 	}
 	return nil
@@ -72,12 +72,23 @@ func validateCharsetAssignment(assign *tree.VarAssignmentExpr, value interface{}
 			return err
 		}
 		charsetID, _ := collation.ResolveCharset(value.(string))
-		collationID, ok := collation.ResolveSQL(name)
+		collationID, collationRevision, ok := collation.ResolveSession(name)
 		if !ok {
 			return moerr.NewInvalidInputNoCtxf("unsupported collation '%s'", name)
 		}
 		charset, _ := collation.EffectiveDefinition(uint32(charsetID), 0)
-		coll, _ := collation.EffectiveDefinition(uint32(collationID), 0)
+		coll, _ := collation.EffectiveDefinition(uint32(collationID), uint32(collationRevision))
+		// ResolveCharset intentionally preserves MatrixOne's historical utf8
+		// compatibility alias as utf8mb4.  Native UCA400 collations carry their
+		// actual charset, so compare the requested spelling directly here rather
+		// than accidentally rejecting utf8_unicode_ci or accepting a mismatch.
+		if coll.Semantics == collation.UCA400 {
+			requestedCharset := collation.CanonicalCharsetName(value.(string))
+			if requestedCharset != coll.Charset.Name() {
+				return moerr.NewInvalidInputNoCtxf("COLLATION '%s' is not valid for CHARACTER SET '%s'", name, value)
+			}
+			return nil
+		}
 		if charset.Charset != coll.Charset {
 			return moerr.NewInvalidInputNoCtxf("COLLATION '%s' is not valid for CHARACTER SET '%s'", name, value)
 		}
@@ -90,7 +101,7 @@ func lookupSupportedProtocolCollation(id int) (charsetCollationName, bool) {
 		return charsetCollationName{}, false
 	}
 	d, ok := collation.LookupProtocol(uint16(id))
-	if !ok || d.LegacyIdentity == collation.LegacyIdentity {
+	if !ok || !collation.IsProtocolAdmitted(d) {
 		return charsetCollationName{}, false
 	}
 	return charsetCollationName{charset: d.Charset.Name(), collationName: d.Name}, true
