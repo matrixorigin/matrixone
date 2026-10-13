@@ -156,8 +156,13 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		}
 
 	default:
+		childParentType := node.NodeType
+		if isSetOperation(parentType) && isSetOperationInputWrapper(node) {
+			// Keep the operand's positional schema boundary through identity wrappers.
+			childParentType = parentType
+		}
 		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, flag, colRefCnt)
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, childParentType, flag, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr

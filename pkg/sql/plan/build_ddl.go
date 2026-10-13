@@ -3373,7 +3373,33 @@ func makeClusterTableAttributeDefault(colType plan.Type) *plan.Default {
 	}
 }
 
+// userColumnCount excludes MO-owned columns, including the cluster-table
+// account column, while counting user-defined generated columns normally.
+func userColumnCount(cols []*ColDef, clusterTable bool) int {
+	count := 0
+	for _, col := range cols {
+		if !col.Hidden && !(clusterTable && col.Name == util.GetClusterTableAttributeName()) {
+			count++
+		}
+	}
+	return count
+}
+
+func validateAlterColumnCount(ctx context.Context, original, target *TableDef) error {
+	limit := max(TableColumnCountLimit, userColumnCount(original.Cols, util.TableIsClusterTable(original.TableType)))
+	if userColumnCount(target.Cols, util.TableIsClusterTable(target.TableType)) > limit {
+		return moerr.NewErrTooManyFields(ctx)
+	}
+	return nil
+}
+
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
+	columnLimit := TableColumnCountLimit
+	columnLimit = max(columnLimit, defines.AlterCopyColumnLimit(ctx.GetContext(), createTable.Database, string(stmt.Table.ObjectName)))
+	if userColumnCount(asSelectCols, stmt.IsClusterTable) > columnLimit {
+		return moerr.NewErrTooManyFields(ctx.GetContext())
+	}
+
 	// Observe the name-lock generation before reading FK catalog facts. A
 	// cache miss remains unknown and forces execution to refresh before effects.
 	if proc := ctx.GetProcess(); proc != nil && !createTable.Temporary && !IsFkBannedDatabase(createTable.Database) {
@@ -3438,8 +3464,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	// base columns defined later in the CREATE TABLE statement (forward reference).
 	var allColDefs []*ColDef
 	var isGeneratedCol []bool
+	explicitColumnCount := 0
 	for _, item := range stmt.Defs {
 		if def, ok := item.(*tree.ColumnTableDef); ok {
+			if !stmt.IsClusterTable || def.Name.ColName() != util.GetClusterTableAttributeName() {
+				explicitColumnCount++
+				if explicitColumnCount > columnLimit {
+					return moerr.NewErrTooManyFields(ctx.GetContext())
+				}
+			}
 			cType, err := getColumnTypeFromAst(ctx.GetContext(), def, tableCharset, replay)
 			if err != nil {
 				return err
@@ -3886,6 +3919,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		default:
 			return moerr.NewNYIf(ctx.GetContext(), "table def: '%v'", def)
 		}
+	}
+
+	// Matching explicit CTAS definitions replace SELECT slots; only target-only
+	// columns are in TableDef.Cols here. Check their union before CTAS remapping.
+	if userColumnCount(createTable.TableDef.Cols, stmt.IsClusterTable)+userColumnCount(asSelectCols, stmt.IsClusterTable) > columnLimit {
+		return moerr.NewErrTooManyFields(ctx.GetContext())
 	}
 
 	if err := validateDefaultColumnDependencies(ctx.GetContext(), allColDefs); err != nil {
