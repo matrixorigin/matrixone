@@ -236,12 +236,12 @@ func TestRemoteExpressionPlacementRechecksGenerationAndWorkers(t *testing.T) {
 		qry.Nodes[0].ProjectList = []*planpb.Expr{{Expr: &planpb.Expr_F{F: &planpb.Function{
 			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(id, 0)},
 		}}}}
-		client.versions["worker:9000"] = defines.MORPCVersion112
+		client.versions["worker:9000"] = defines.MORPCVersion113
 		client.versions["second:9000"] = defines.MORPCVersion109
 		place(plan2.ExecTypeAP_ONECN, 2)
-		client.versions["second:9000"] = defines.MORPCVersion111
-		place(plan2.ExecTypeAP_ONECN, 2)
 		client.versions["second:9000"] = defines.MORPCVersion112
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion113
 		place(plan2.ExecTypeAP_MULTICN, 2)
 	}
 	qry.Nodes[0].ProjectList = []*planpb.Expr{plan2.MakePlan2Int64ConstExprWithType(1)}
