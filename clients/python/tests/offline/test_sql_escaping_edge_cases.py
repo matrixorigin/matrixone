@@ -394,12 +394,9 @@ class TestSQLEscapingEdgeCases:
 
         sql = client._build_batch_insert_sql("test_table", data_list)
 
-        # Verify backslashes are preserved
-        assert "C:\\\\Users" in sql or "C:\\Users" in sql
-        assert "\\\\d+" in sql or "\\d+" in sql
-
-        print(f"Generated SQL with backslashes:\n{sql}\n")
-        print("⚠️  WARNING: Backslash handling may need review for SQL injection safety.\n")
+        # Hex UTF-8 text preserves exact bytes in both backslash SQL modes.
+        for row in data_list:
+            assert "CONVERT(X'%s' USING utf8mb4)" % row['text'].encode().hex() in sql
 
     def test_sql_injection_attempt_in_json(self):
         """Test potential SQL injection in JSON strings"""

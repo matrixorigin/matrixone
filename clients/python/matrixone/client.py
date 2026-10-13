@@ -1372,7 +1372,7 @@ class Client(BaseMatrixOneClient):
                         # Fallback for testing or older SQLAlchemy versions
                         from sqlalchemy import text
 
-                        result = conn.execute(text(final_sql))
+                        result = conn.execute(text(final_sql.replace(':', r'\:')))
                 except BaseException:
                     execution_failed = True
                     raise
@@ -1558,65 +1558,10 @@ class Client(BaseMatrixOneClient):
         return executor.batch_insert(table_name, data_list)
 
     def _substitute_parameters(self, sql: str, params=None) -> str:
-        """
-        Substitute ? placeholders or named parameters with actual values since MatrixOne
-        doesn't support prepared statements
+        """Render legacy parameters outside SQL literals, identifiers and comments."""
+        from ._sql_literals import substitute_parameters
 
-        Args::
-
-            sql: SQL query string with ? placeholders or named parameters (:name)
-            params: Tuple of parameter values or dict of named parameters
-
-        Returns::
-
-            SQL string with parameters substituted
-        """
-        if not params:
-            return sql
-
-        final_sql = sql
-
-        # Handle named parameters (dict)
-        if isinstance(params, dict):
-            for key, value in params.items():
-                placeholder = f":{key}"
-                if placeholder in final_sql:
-                    if isinstance(value, str):
-                        # Escape single quotes in string values
-                        escaped_value = value.replace("'", "''")
-                        final_sql = final_sql.replace(placeholder, f"'{escaped_value}'")
-                    elif value is None:
-                        final_sql = final_sql.replace(placeholder, "NULL")
-                    else:
-                        final_sql = final_sql.replace(placeholder, str(value))
-        # Handle positional parameters (tuple/list)
-        elif isinstance(params, (tuple, list)):
-            for param in params:
-                # Skip empty lists that might come from CTE queries
-                if isinstance(param, list) and len(param) == 0:
-                    continue
-                elif isinstance(param, str):
-                    # Escape single quotes in string values
-                    escaped_param = param.replace("'", "''")
-                    # Handle both ? and %s placeholders
-                    if "?" in final_sql:
-                        final_sql = final_sql.replace("?", f"'{escaped_param}'", 1)
-                    elif "%s" in final_sql:
-                        final_sql = final_sql.replace("%s", f"'{escaped_param}'", 1)
-                elif param is None:
-                    # Handle both ? and %s placeholders
-                    if "?" in final_sql:
-                        final_sql = final_sql.replace("?", "NULL", 1)
-                    elif "%s" in final_sql:
-                        final_sql = final_sql.replace("%s", "NULL", 1)
-                else:
-                    # Handle both ? and %s placeholders
-                    if "?" in final_sql:
-                        final_sql = final_sql.replace("?", str(param), 1)
-                    elif "%s" in final_sql:
-                        final_sql = final_sql.replace("%s", str(param), 1)
-
-        return final_sql
+        return substitute_parameters(sql, params)
 
     def get_sqlalchemy_engine(self) -> Engine:
         """

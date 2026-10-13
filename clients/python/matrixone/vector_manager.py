@@ -110,18 +110,9 @@ class _VectorManagerBase:
     @staticmethod
     def _build_insert_sql(table_name: str, data: Dict[str, Any]) -> str:
         """Build SQL for inserting vector data."""
-        columns = ", ".join(data.keys())
-        values = []
-        for v in data.values():
-            if isinstance(v, list):
-                vector_str = "[" + ",".join(str(x) for x in v) + "]"
-                values.append(f"'{vector_str}'")
-            elif isinstance(v, str):
-                values.append(f"'{v}'")
-            else:
-                values.append(str(v))
-        values_str = ", ".join(values)
-        return f"INSERT INTO {table_name} ({columns}) VALUES ({values_str})"
+        from .base_client import BaseMatrixOneClient
+
+        return BaseMatrixOneClient()._build_insert_sql(table_name, data)
 
     @staticmethod
     def _build_similarity_search_sql(
