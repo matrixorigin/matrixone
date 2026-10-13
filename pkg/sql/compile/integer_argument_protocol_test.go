@@ -79,16 +79,20 @@ func TestIntegerArgumentProtocolBoundaries(t *testing.T) {
 				if features.OrdinaryFloatInt64Bounds {
 					// These FLOAT -> INT64 identities use the corrected bounds,
 					// independently of the v85 private integer-argument casts.
-					require.ErrorContains(t, err, "version 110")
-					// Upstream v101–v109 floors do not establish this independent
-					// numeric contract; it begins at v110.
+					require.ErrorContains(t, err, "version 112")
+					// Upstream v101–v111 floors do not establish this independent
+					// numeric contract; it begins at v112.
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(101))
-					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 110")
+					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 112")
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(102))
-					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 110")
+					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 112")
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
-					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 110")
+					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 112")
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
+					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 112")
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 112")
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
 					require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 					// The same ordinary identity with an integer source remains
 					// executable on old peers; do not fence every CAST0/2/3.
