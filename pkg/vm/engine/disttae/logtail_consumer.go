@@ -238,12 +238,32 @@ func (c *PushClient) LatestLogtailAppliedTime() timestamp.Timestamp {
 func (c *PushClient) AcquireLogtailReadBarrier(
 	ctx context.Context,
 ) (timestamp.Timestamp, error) {
-	if c.subscriber == nil {
+	c.lifecycleMu.Lock()
+	ownerCtx := c.ctx
+	subscriber := c.subscriber
+	closed := c.closed.Load()
+	c.lifecycleMu.Unlock()
+	if closed {
+		return timestamp.Timestamp{}, context.Canceled
+	}
+	if subscriber == nil {
 		return timestamp.Timestamp{}, moerr.NewInternalError(
 			ctx, "logtail subscriber is not initialized")
 	}
+	// Reconnect may replace a transport while this caller is waiting. Keep
+	// the read bounded by both the request and the existing PushClient owner.
+	if ownerCtx != nil {
+		barrierCtx, cancel := context.WithCancelCause(ctx)
+		stop := context.AfterFunc(ownerCtx, func() { cancel(context.Cause(ownerCtx)) })
+		defer cancel(context.Canceled)
+		defer stop()
+		if ownerCtx.Err() != nil {
+			cancel(context.Cause(ownerCtx))
+		}
+		ctx = barrierCtx
+	}
 	return acquireAppliedLogtailReadBarrier(
-		ctx, c.timestampWaiter, c.subscriber.readBarrier,
+		ctx, c.timestampWaiter, subscriber.readBarrier,
 	)
 }
 
@@ -2285,11 +2305,26 @@ func (s *logTailSubscriber) receiveResponse(deadlineCtx context.Context) logTail
 }
 
 func (s *logTailSubscriber) readBarrier(ctx context.Context) (timestamp.Timestamp, error) {
-	client, err := s.waitReadyClient(ctx)
-	if err != nil {
-		return timestamp.Timestamp{}, err
+	for {
+		client, err := s.waitReadyClient(ctx)
+		if err != nil {
+			return timestamp.Timestamp{}, err
+		}
+		frontier, err := client.ReadBarrier(ctx)
+		if err == nil {
+			return frontier, nil
+		}
+		if ctx.Err() != nil {
+			return timestamp.Timestamp{}, context.Cause(ctx)
+		}
+		// The old stream's private cancellation must not cancel a live SQL
+		// caller. Retry only this read-only barrier, only after its transport
+		// was replaced, and obtain a new TN frontier before the apply wait.
+		if (!errors.Is(err, context.Canceled) && !moerr.IsMoErrCode(err, moerr.ErrStreamClosed)) ||
+			s.client() == client {
+			return timestamp.Timestamp{}, err
+		}
 	}
-	return client.ReadBarrier(ctx)
 }
 
 func waitServerReady(ctx context.Context, addr string) error {
