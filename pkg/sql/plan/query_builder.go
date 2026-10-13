@@ -8870,7 +8870,7 @@ func (builder *QueryBuilder) bindGroupBy(
 	astTimeWindow *tree.TimeWindow,
 	helpFunc *helpFunc,
 ) (boundTimeWindowGroupBy *plan.Expr, err error) {
-	if ctx.bindingRecurStmt() {
+	if ctx.bindingRecurQueryBlock() {
 		err = moerr.NewParseErrorf(builder.GetContext(), "not support group by in recursive cte: '%v'", tree.String(clause, dialect.MYSQL))
 		return
 	}
@@ -8963,7 +8963,7 @@ func (builder *QueryBuilder) bindHaving(
 	clause *tree.Where,
 	havingBinder *HavingBinder,
 ) (boundHavingList []*plan.Expr, err error) {
-	if ctx.bindingRecurStmt() {
+	if ctx.bindingRecurQueryBlock() {
 		err = moerr.NewParseErrorf(builder.GetContext(), "not support having in recursive cte: '%v'", tree.String(clause, dialect.MYSQL))
 		return
 	}
