@@ -159,4 +159,12 @@ create table mx (id int, v vecf8(33));
 insert into mx values (1, '[1.329228e36,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]'), (2, '[1.329228e36,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]');
 select vector_matmul(2, id, v, '[[1.329228e36,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]]', '{"metric":"l2sq"}') from mx;
 
+-- a finite query value that narrows to infinity in the column type is rejected
+create table nf (id int primary key, h vecf16(1), g vecbf16(1));
+insert into nf values (1, '[1]', '[1]');
+select vector_matmul(1, id, h, '[[70000]]', '{"metric":"l2sq"}') from nf;
+select vector_matmul(1, id, h, '[[-70000]]', '{"metric":"l2sq"}') from nf;
+select vector_matmul(1, id, g, '[[3.4028234663852886e38]]', '{"metric":"l2sq"}') from nf;
+select vector_matmul(1, id, h, '[[2]]', '{"metric":"l2sq"}') from nf;
+
 drop database vector_matmul_db;

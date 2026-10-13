@@ -82,3 +82,40 @@ func TestLoadNumericPredicatesLowPrecisionFloat(t *testing.T) {
 		require.True(t, isLoadNumericAdjustedValueType(oid), oid.String())
 	}
 }
+
+// TestParquetLoadLowPrecisionFloatExactSource checks that INT64, UINT64 and DECIMAL parquet
+// values round once from their exact value into bf16, as the SQL cast does: 18084767253659649
+// lies above the bf16 midpoint 18084767253659648, which a float64 conversion rounds onto.
+func TestParquetLoadLowPrecisionFloatExactSource(t *testing.T) {
+	proc := testutil.NewProc(t)
+	load := func(st parquet.Type, values encoding.Values, n int) *vector.Vector {
+		page := st.NewPage(0, n, values)
+		var buf bytes.Buffer
+		w := parquet.NewWriter(&buf, parquet.NewSchema("x", parquet.Group{"c": parquet.Leaf(st)}))
+		vals := make([]parquet.Value, page.NumRows())
+		_, _ = page.Values().ReadValues(vals)
+		_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(vals)})
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+		vec := vector.NewVec(types.T_bf16.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bf16), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		return vec
+	}
+	const above, midpoint = int64(18084767253659649), int64(18084767253659648)
+	signed := []int64{above, -above, midpoint, -midpoint, 42}
+	want := []types.BF16{0x5a81, 0xda81, 0x5a80, 0xda80, types.BF16FromFloat32(42)}
+	for _, st := range []parquet.Type{parquet.Int64Type, parquet.Decimal(0, 18, parquet.Int64Type).Type()} {
+		vec := load(st, encoding.Int64Values(signed), len(signed))
+		require.Equal(t, want, vector.MustFixedColWithTypeCheck[types.BF16](vec), st.String())
+		vec.Free(proc.Mp())
+	}
+	unsigned := []uint64{uint64(above), uint64(midpoint)}
+	vec := load(parquet.Uint(64).Type(), encoding.Uint64Values(unsigned), len(unsigned))
+	require.Equal(t, []types.BF16{0x5a81, 0x5a80}, vector.MustFixedColWithTypeCheck[types.BF16](vec))
+	vec.Free(proc.Mp())
+}

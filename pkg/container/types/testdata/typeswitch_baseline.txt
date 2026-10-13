@@ -332,10 +332,6 @@ pkg/vm/engine/tae/containers/mock.go	MockVector	float	1
 pkg/vm/engine/tae/containers/mock.go	MockVector	vector	1
 pkg/vm/engine/tae/containers/mock.go	MockVector2	float	1
 pkg/vm/engine/tae/containers/mock.go	MockVector2	vector	1
-pkg/vm/engine/tae/containers/utils.go	ForeachVectorWindow	float	1
-pkg/vm/engine/tae/containers/utils.go	MakeForeachVectorOp	float	1
-pkg/vm/engine/tae/containers/utils.go	UpdateValue	float	1
-pkg/vm/engine/tae/containers/utils.go	getNonNullValue	float	1
 pkg/vm/engine/tae/index/zm.go	AnyIn	vector	1
 pkg/vm/engine/tae/index/zm.go	SubVecIn	vector	1
 pkg/vm/engine/tae/index/zm.go	applyArithmetic	float	1

@@ -63,8 +63,41 @@ func TestLowPrecisionFloatBatchWALRoundTrip(t *testing.T) {
 	for i, name := range got.Attrs {
 		require.Equal(t, bat.Vecs[i].GetType().Oid, got.Vecs[i].GetType().Oid, name)
 		require.Equal(t, 2, got.Vecs[i].Length(), name)
+		require.Equal(t, bat.Vecs[i].Get(0), got.Vecs[i].Get(0), name)
 		if name != "id" {
 			require.True(t, w.Vecs[i].IsNull(0), name)
 		}
 	}
+}
+
+// TestLowPrecisionFloatVectorGetUpdate reads and updates non-null bf16, float16, float8 and
+// float4 values through the vector wrapper.
+func TestLowPrecisionFloatVectorGetUpdate(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, tc := range []struct {
+		oid      types.T
+		one, two any
+	}{
+		{types.T_bf16, types.BF16FromFloat32(1.5), types.BF16FromFloat32(2)},
+		{types.T_float16, types.Float16FromFloat32(1.5), types.Float16FromFloat32(2)},
+		{types.T_float8, types.Float8FromFloat32(1.5), types.Float8FromFloat32(2)},
+		{types.T_float4, types.Float4FromFloat32(1.5), types.Float4FromFloat32(2)},
+	} {
+		vec := MakeVector(tc.oid.ToType(), mp)
+		vec.Append(tc.one, false)
+		vec.Append(nil, true)
+		require.Equal(t, tc.one, vec.Get(0), tc.oid.String())
+		v, isNull := vec.ShallowGet(0), vec.IsNull(0)
+		require.Equal(t, tc.one, v, tc.oid.String())
+		require.False(t, isNull, tc.oid.String())
+		vec.Update(0, tc.two, false)
+		require.Equal(t, tc.two, vec.Get(0), tc.oid.String())
+		vec.Update(1, tc.one, false)
+		require.False(t, vec.IsNull(1), tc.oid.String())
+		require.Equal(t, tc.one, vec.Get(1), tc.oid.String())
+		vec.Update(0, nil, true)
+		require.True(t, vec.IsNull(0), tc.oid.String())
+		vec.Close()
+	}
+	require.Zero(t, mp.CurrNB())
 }

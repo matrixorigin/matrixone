@@ -1536,3 +1536,45 @@ func TestVectorMatmulConfigAdmission(t *testing.T) {
 		require.Zero(t, account.Snapshot().Used)
 	})
 }
+
+// A finite float32 query that narrows to infinity in the column type is rejected, from JSON
+// and binary queries, with and without the GPU flag.
+func TestVectorMatmulQueryNarrowsToInfinity(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	blob := func(v float32) []byte { return types.ArrayToBytes([]float32{v}) }
+	setup := func(oid types.T, cfg []byte) error {
+		exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), types.New(oid, 1, 0)})
+		require.NoError(t, err)
+		defer exec.Free()
+		return exec.SetExtraInformation(cfg, 0)
+	}
+	for _, gpu := range []bool{false, true} {
+		for _, tc := range []struct {
+			oid  types.T
+			v    float32
+			text string
+			ok   bool
+		}{
+			{types.T_array_float16, 70000, "70000", false},
+			{types.T_array_float16, -70000, "-70000", false},
+			{types.T_array_bf16, math.MaxFloat32, "3.4028234663852886e+38", false},
+			{types.T_array_float16, 65504, "65504", true},
+			{types.T_array_float16, 2, "2", true},
+			{types.T_array_bf16, 2, "2", true},
+			{types.T_array_float32, 70000, "70000", true},
+		} {
+			for name, cfg := range map[string][]byte{
+				"json":   EncodeVectorMatmulConfig(1, "[["+tc.text+"]]", `{"metric":"l2sq"}`, gpu),
+				"binary": EncodeVectorMatmulBinaryConfig(1, blob(tc.v), `{"metric":"l2sq"}`, gpu),
+			} {
+				err := setup(tc.oid, cfg)
+				if tc.ok {
+					require.NoError(t, err, "%s %v %s gpu=%v", tc.oid, tc.v, name, gpu)
+				} else {
+					require.ErrorContains(t, err, "not representable in the column type", "%s %v %s gpu=%v", tc.oid, tc.v, name, gpu)
+				}
+			}
+		}
+	}
+}

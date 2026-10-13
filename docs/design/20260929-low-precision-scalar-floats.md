@@ -77,8 +77,8 @@ GPU kernels agree on the encoding.
 - **Rounding and range.** A value rounds once, to nearest even, from its exact value:
   a float32 source directly; a wider source (float64, decimal, an integer above 2^24,
   decimal text) through float32 rounded to odd from the exact value — the integer's bits,
-  the decimal's or the text's exact rational value — which keeps the information the
-  final rounding needs, so text far beyond float64 precision still rounds on the right
+  the decimal's or the text's exact rational value, also for parquet `LOAD` from integer
+  and decimal columns — which keeps the information the final rounding needs, so text far beyond float64 precision still rounds on the right
   side of a tie. Vector elements (`vecbf16`, `vecf16`, `vecf64` casts to narrower vectors)
   round the same way. An out-of-range error names the value given. Every
   cast and write rejects a value outside the type's finite range with a "data out of

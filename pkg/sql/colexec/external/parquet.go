@@ -3662,17 +3662,54 @@ func parquetLowPrecFloatMapper[T types.LowPrecFloat](st parquet.Type, oid types.
 	return func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 		var zero T
 		return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, zero, func(v parquet.Value) (T, error) {
-			f64, err := parquetValueToFloat64(proc.Ctx, st, v)
+			f, d, input, err := parquetValueToFloat32RoundToOdd(proc.Ctx, st, v)
 			if err != nil {
 				return zero, err
 			}
-			f := types.Float32RoundToOdd(f64)
-			if err := types.RejectNarrowFloatInput(f, oid, f64, f64); err != nil {
+			if err := types.RejectNarrowFloatInput(f, oid, d, input); err != nil {
 				return zero, err
 			}
 			return types.CanonicalLowPrecFloat(ctor(f)), nil
 		})
 	}
+}
+
+// parquetValueToFloat32RoundToOdd returns v rounded to odd float32 from its exact source
+// value, as the SQL cast to a low-precision float does: integers from their bits, decimals
+// from their exact text. d is v as float64 and input is the value for error messages.
+func parquetValueToFloat32RoundToOdd(ctx context.Context, st parquet.Type, v parquet.Value) (f float32, d float64, input any, err error) {
+	if isDecimalLogicalType(st.LogicalType()) {
+		dec, err := parquetValueToDecimal256(ctx, st, v)
+		if err != nil {
+			return 0, 0, nil, err
+		}
+		text := dec.Format(parquetDecimalScale(st))
+		f, d, err := types.Float32RoundToOddString(text)
+		if err != nil {
+			return 0, 0, nil, moerr.NewInvalidInputf(ctx, "invalid float value %q", text)
+		}
+		return f, d, text, nil
+	}
+	switch st.Kind() {
+	case parquet.Int32, parquet.Int64:
+		if lt := st.LogicalType(); lt != nil && lt.Integer != nil && !lt.Integer.IsSigned {
+			u, err := parquetValueToUint64(ctx, st, v)
+			if err != nil {
+				return 0, 0, nil, err
+			}
+			return types.Float32RoundToOddUint(u), float64(u), u, nil
+		}
+		i, err := parquetValueToInt64(ctx, st, v)
+		if err != nil {
+			return 0, 0, nil, err
+		}
+		return types.Float32RoundToOddInt(i), float64(i), i, nil
+	}
+	d, err = parquetValueToFloat64(ctx, st, v)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	return types.Float32RoundToOdd(d), d, d, nil
 }
 
 func isParquetFloatConvertibleSource(st parquet.Type) bool {

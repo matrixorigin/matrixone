@@ -466,6 +466,14 @@ func getNonNullValue(col *vector.Vector, row uint32) any {
 		return vector.GetFixedAtNoTypeCheck[float32](col, int(row))
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](col, int(row))
+	case types.T_bf16:
+		return vector.GetFixedAtNoTypeCheck[types.BF16](col, int(row))
+	case types.T_float16:
+		return vector.GetFixedAtNoTypeCheck[types.Float16](col, int(row))
+	case types.T_float8:
+		return vector.GetFixedAtNoTypeCheck[types.Float8](col, int(row))
+	case types.T_float4:
+		return vector.GetFixedAtNoTypeCheck[types.Float4](col, int(row))
 	case types.T_date:
 		return vector.GetFixedAtNoTypeCheck[types.Date](col, int(row))
 	case types.T_time:
@@ -559,6 +567,14 @@ func UpdateValue(col *vector.Vector, row uint32, val any, isNull bool, mp *mpool
 		GenericUpdateFixedValue[float32](col, row, val, isNull, mp)
 	case types.T_float64:
 		GenericUpdateFixedValue[float64](col, row, val, isNull, mp)
+	case types.T_bf16:
+		GenericUpdateFixedValue[types.BF16](col, row, val, isNull, mp)
+	case types.T_float16:
+		GenericUpdateFixedValue[types.Float16](col, row, val, isNull, mp)
+	case types.T_float8:
+		GenericUpdateFixedValue[types.Float8](col, row, val, isNull, mp)
+	case types.T_float4:
+		GenericUpdateFixedValue[types.Float4](col, row, val, isNull, mp)
 	case types.T_date:
 		GenericUpdateFixedValue[types.Date](col, row, val, isNull, mp)
 	case types.T_time:
@@ -674,6 +690,7 @@ func ForeachVectorWindow(
 			op2,
 			sel)
 	}
+	// typeswitch:partial low-precision floats cannot be primary keys; callers iterate keys, row ids or object stats
 	switch typ.Oid {
 	case types.T_bool:
 		var op func(bool, bool, int) error
@@ -1285,6 +1302,7 @@ func MakeForeachVectorOp(t types.T, overloads map[types.T]any, args ...any) any 
 		overload := overloads[t].(func(...any) func([]byte, bool, int) error)
 		return overload(args...)
 	}
+	// typeswitch:partial low-precision floats cannot be primary keys; callers iterate keys, row ids or object stats
 	switch t {
 	case types.T_bool:
 		overload := overloads[t].(func(...any) func(bool, bool, int) error)
