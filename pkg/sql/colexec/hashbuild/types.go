@@ -151,8 +151,8 @@ type container struct {
 }
 
 // spillFileBundle is deliberately owned by hashbuild. A bucket retains its
-// durable name and disk reservation, but owns an FD only around one physical
-// read/write. Build converts each dormant entry to message.SpillFile at
+// durable name and disk reservation, and may reuse an admitted writer FD.
+// Build closes every writer before converting entries to message.SpillFile at
 // handoff. Keeping all tokens together prevents a file from becoming an
 // unaccounted orphan on partial failures.
 type spillFileBundle struct {
@@ -162,16 +162,19 @@ type spillFileBundle struct {
 }
 
 type spillFileEntry struct {
-	file       *os.File
-	fdToken    *process.ExecutionSpillFDReservation
-	diskToken  *process.ExecutionSpillDiskReservation
-	fs         fileservice.MutableFileService
-	name       string
-	created    bool
-	rows       int64
-	bytes      uint64
-	bucket     int
-	writeCache spillio.SequentialWriteCache
+	file           *os.File
+	fdToken        *process.ExecutionSpillFDReservation
+	reusable       bool
+	cacheToken     *process.ExecutionTransientMemoryReservation
+	diskToken      *process.ExecutionSpillDiskReservation
+	fs             fileservice.MutableFileService
+	name           string
+	created        bool
+	cacheAttempted bool
+	rows           int64
+	bytes          uint64
+	bucket         int
+	writeCache     spillio.SequentialWriteCache
 }
 
 func (b *spillFileBundle) release() {
@@ -203,6 +206,7 @@ func (b *spillFileBundle) release() {
 		if entry.diskToken != nil {
 			entry.diskToken.Release()
 		}
+		entry.cacheToken.Release()
 	}
 }
 
@@ -230,12 +234,34 @@ func (b *spillFileBundle) openFile(
 		entry = &spillFileEntry{bucket: bucket, fs: fs, name: name}
 		b.entries[bucket] = entry
 	}
-	if entry.file != nil || entry.fdToken != nil || entry.name != name {
+	if entry.name != name {
 		return nil, process.ErrExecutionResourceInvalid
 	}
-	token, err := budget.ReserveSpillFD(1)
+	if entry.file != nil {
+		if entry.fdToken == nil {
+			return nil, process.ErrExecutionResourceInvalid
+		}
+		return entry.file, nil
+	}
+	token, err := budget.ReserveReusableSpillFD()
 	if err != nil {
 		return nil, err
+	}
+	reusable := token != nil
+	if !reusable {
+		// Every writer in this bundle is idle between sequential calls. Give
+		// its cached descriptors back before asking for a transient FD.
+		for _, idle := range b.entries {
+			if idle != nil && idle.file != nil {
+				if err := closeSpillEntry(idle); err != nil {
+					return nil, err
+				}
+			}
+		}
+		token, err = budget.ReserveSpillFD(1)
+		if err != nil {
+			return nil, err
+		}
 	}
 	var file *os.File
 	if entry.created {
@@ -255,28 +281,49 @@ func (b *spillFileBundle) openFile(
 	}
 	entry.file = file
 	entry.fdToken = token
+	entry.reusable = reusable
 	entry.created = true
+	if !entry.cacheAttempted {
+		entry.cacheAttempted = true
+		// Optional page cache must not crowd tiny recovery envelopes. Admit
+		// its full capacity before the first write; refusal keeps the old
+		// small window and cannot prevent draining a build to spill.
+		const cacheBytes = uint64(4 << 20)
+		if budget.Cap()/128 >= cacheBytes {
+			entry.cacheToken, _ = budget.ReserveTransientMemory(cacheBytes)
+			if entry.cacheToken != nil {
+				entry.writeCache = spillio.NewSequentialWriteCache(int64(cacheBytes))
+			}
+		}
+	}
 	return file, nil
 }
 
-func (b *spillFileBundle) closeFile(bucket int) error {
-	if b == nil || bucket < 0 || bucket >= spillNumBuckets {
-		return process.ErrExecutionResourceInvalid
-	}
-	b.mu.Lock()
-	entry := b.entries[bucket]
-	if entry == nil || entry.file == nil || entry.fdToken == nil {
-		b.mu.Unlock()
-		return process.ErrExecutionResourceInvalid
-	}
+func closeSpillEntry(entry *spillFileEntry) error {
 	file := entry.file
 	token := entry.fdToken
 	entry.file = nil
 	entry.fdToken = nil
-	b.mu.Unlock()
+	entry.reusable = false
 	err := file.Close()
 	token.Release()
 	return err
+}
+
+func (b *spillFileBundle) finishWrite(bucket int, failed bool) error {
+	if b == nil || bucket < 0 || bucket >= spillNumBuckets {
+		return process.ErrExecutionResourceInvalid
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	entry := b.entries[bucket]
+	if entry == nil || entry.file == nil || entry.fdToken == nil {
+		return process.ErrExecutionResourceInvalid
+	}
+	if entry.reusable && !failed {
+		return nil
+	}
+	return closeSpillEntry(entry)
 }
 
 func (b *spillFileBundle) growDisk(bucket int, budget *process.ExecutionResourceGeneration, bytes uint64) (uint64, bool, error) {
@@ -347,6 +394,35 @@ func (b *spillFileBundle) accountedFiles(
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	files := make([]*message.SpillFile, spillNumBuckets)
+	if b.released {
+		return nil, process.ErrExecutionSpillReservationInactive
+	}
+	// Submit all larger-window tails before waiting on any one bucket. Small
+	// files may not have crossed their batch threshold; serial Finish calls
+	// would otherwise turn the larger window into a synchronous I/O burst.
+	// Queued reader payloads never retain writer descriptors.
+	for _, entry := range b.entries {
+		if entry != nil && entry.file == nil && entry.cacheToken != nil {
+			token, err := budget.ReserveSpillFD(1)
+			if err != nil {
+				return nil, err
+			}
+			file, err := entry.fs.OpenFile(ctx, entry.name)
+			if err != nil {
+				token.Release()
+				return nil, err
+			}
+			entry.file, entry.fdToken = file, token
+		}
+		if entry != nil && entry.file != nil {
+			if entry.cacheToken != nil {
+				entry.writeCache.SubmitTail(entry.file)
+			}
+			if err := closeSpillEntry(entry); err != nil {
+				return nil, err
+			}
+		}
+	}
 	for bucket, entry := range b.entries {
 		if entry == nil || entry.fs == nil || entry.name == "" ||
 			entry.file != nil || entry.fdToken != nil || !entry.created ||
@@ -368,6 +444,10 @@ func (b *spillFileBundle) accountedFiles(
 			return nil, err
 		}
 		entry.writeCache.Finish(file)
+		// Return optional writer memory before the recovery reader is admitted.
+		// Queued buckets retain neither FDs nor write-cache memory grants.
+		entry.cacheToken.Release()
+		entry.cacheToken = nil
 		if err := file.Close(); err != nil {
 			fdToken.Release()
 			return nil, err

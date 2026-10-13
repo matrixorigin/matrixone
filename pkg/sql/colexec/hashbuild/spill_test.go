@@ -74,6 +74,136 @@ func newSpillTestHarness(t *testing.T, limit uint64) *spillTestHarness {
 	}
 }
 
+func TestSpillWriterReuseAndAccountedCacheHandoff(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		limit    uint64
+		pressure bool
+	}{
+		{"admitted", 1 << 30, false},
+		{"tiny-envelope", 8 << 20, false},
+		{"memory-pressure", 1 << 30, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newSpillTestHarness(t, tc.limit)
+			t.Cleanup(func() { h.close(t) })
+			if tc.pressure {
+				require.NoError(t, h.budget.UpdateAggregateCap(1))
+			}
+			payload := []byte("complete-record")
+			for range 2 {
+				require.NoError(t, h.op.ctr.writeSpillPayload(h.proc, h.files, 0, payload, 1, nil))
+			}
+			entry := h.op.ctr.spillBundle.entries[0]
+			require.NotNil(t, entry.file)
+			original := entry.file
+			require.NoError(t, h.op.ctr.writeSpillPayload(h.proc, h.files, 0, payload, 1, nil))
+			require.Same(t, original, entry.file)
+			require.Equal(t, uint64(1), h.generation.SpillFDUsed())
+			if tc.limit >= 1<<30 && !tc.pressure {
+				require.NotNil(t, entry.cacheToken)
+				require.Equal(t, uint64(4<<20), h.generation.Used())
+			} else {
+				require.Nil(t, entry.cacheToken)
+				require.Zero(t, h.generation.Used())
+			}
+			files, err := h.op.ctr.spillBundle.accountedFiles(h.proc.Ctx, h.generation)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				for _, f := range files {
+					require.NoError(t, f.Close())
+				}
+			})
+			require.Zero(t, h.generation.SpillFDUsed())
+			require.Zero(t, h.generation.Used(), "writer grants must not crowd reader recovery")
+			require.True(t, files[0].NeedsOpen())
+			// Cleanup of the old owner cannot release the reader's disk.
+			h.op.ctr.spillBundle.release()
+			token, err := h.generation.ReserveSpillFD(1)
+			require.NoError(t, err)
+			t.Cleanup(func() { token.Release() })
+			fd, err := files[0].Open(h.proc.Ctx)
+			require.NoError(t, err)
+			actual, err := io.ReadAll(fd)
+			require.NoError(t, err)
+			require.Equal(t, strings.Repeat(string(payload), 3), string(actual))
+			require.NoError(t, files[0].Close())
+			require.NoError(t, files[0].Close())
+			token.Release()
+			require.Zero(t, h.generation.Used())
+			require.Zero(t, h.generation.SpillDiskUsed())
+		})
+	}
+}
+
+func TestSpillWriterPressureFallbackAndCleanup(t *testing.T) {
+	h := newSpillTestHarness(t, 1<<30)
+	t.Cleanup(func() { h.close(t) })
+	require.NoError(t, h.budget.SetSpillCaps(1<<20, 2))
+	// OpenGeneration snapshots its caps, so publish a generation under the
+	// finite FD cap before starting the writer.
+	g, err := h.budget.OpenGenerationWithSpillCaps(2, 1<<30, 1<<20, 2)
+	require.NoError(t, err)
+	h.op.ctr.hashmapBuilder.setBudget(g)
+	require.NoError(t, h.op.ctr.writeSpillPayload(h.proc, h.files, 0, []byte("a"), 1, nil))
+	first := h.op.ctr.spillBundle.entries[0].file
+	require.NotNil(t, first)
+	// One reusable writer reaches half the FD envelope. The second bucket
+	// releases idle writers and uses a transient FD, instead of rejecting.
+	require.NoError(t, h.op.ctr.writeSpillPayload(h.proc, h.files, 1, []byte("b"), 1, nil))
+	require.Zero(t, g.SpillFDUsed())
+	_, err = first.Stat()
+	require.ErrorIs(t, err, os.ErrClosed)
+	ctx, cancel := context.WithCancelCause(h.proc.Ctx)
+	h.proc.Ctx = ctx
+	t.Cleanup(func() { cancel(context.Canceled) })
+	cancel(context.Canceled)
+	err = h.op.ctr.writeSpillPayload(h.proc, h.files, 0, []byte("stale"), 1, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	h.op.ctr.spillBundle.release()
+	h.op.ctr.spillBundle.release()
+	require.Zero(t, g.Used())
+	require.Zero(t, g.SpillFDUsed())
+	require.Zero(t, g.SpillDiskUsed())
+	_, err = h.op.ctr.spillBundle.accountedFiles(context.Background(), g)
+	require.ErrorIs(t, err, process.ErrExecutionSpillReservationInactive)
+	_, err = h.op.ctr.spillBundle.openFile(context.Background(), g, 0, h.op.ctr.spillFS, "after-release")
+	require.ErrorIs(t, err, process.ErrExecutionSpillReservationInactive)
+}
+
+func TestSpillWriterFailedAdmissionReturnsResources(t *testing.T) {
+	for _, phase := range []string{"open", "disk", "handoff"} {
+		t.Run(phase, func(t *testing.T) {
+			h := newSpillTestHarness(t, 1<<30)
+			t.Cleanup(func() { h.close(t) })
+			fs, err := h.op.ctr.getSpillFS(h.proc)
+			require.NoError(t, err)
+			switch phase {
+			case "open":
+				b := &spillFileBundle{entries: map[int]*spillFileEntry{
+					0: {bucket: 0, fs: fs, name: h.op.ctr.spillUUID, created: true},
+				}}
+				h.op.ctr.spillBundle = b
+				_, err = b.openFile(h.proc.Ctx, h.generation, 0, fs, h.op.ctr.spillUUID)
+				require.Error(t, err)
+			case "disk":
+				require.NoError(t, h.budget.SetSpillCaps(1, 2))
+				err = h.op.ctr.writeSpillPayload(h.proc, h.files, 0, []byte("too-large"), 1, nil)
+				require.ErrorIs(t, err, process.ErrExecutionResourceAdmission)
+			case "handoff":
+				require.NoError(t, h.op.ctr.writeSpillPayload(h.proc, h.files, 0, []byte("ok"), 1, nil))
+				h.op.ctr.spillBundle.entries[0].bytes++
+				_, err = h.op.ctr.spillBundle.accountedFiles(h.proc.Ctx, h.generation)
+				require.ErrorContains(t, err, "corrupted spill file size")
+			}
+			require.Zero(t, h.generation.SpillFDUsed())
+			h.op.ctr.spillBundle.release()
+			require.Zero(t, h.generation.Used())
+			require.Zero(t, h.generation.SpillDiskUsed())
+		})
+	}
+}
+
 func TestDirectSpillKeepsAdmittedRecoveryUntilBuildEnds(t *testing.T) {
 	for _, cancelAtEnd := range []bool{false, true} {
 		t.Run(fmt.Sprintf("cancel=%t", cancelAtEnd), func(t *testing.T) {

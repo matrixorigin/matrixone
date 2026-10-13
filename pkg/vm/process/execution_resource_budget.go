@@ -1294,9 +1294,10 @@ func (g *ExecutionResourceGeneration) ReleaseAllocationCapacity(size uint64) {
 	observeExecutionResourceBudget("memory", "release", "cn", size)
 }
 
-// ExecutionTransientMemoryReservation owns a bounded Go-heap scratch charge.
+// ExecutionTransientMemoryReservation owns a bounded non-MPool memory charge,
+// including temporary Go buffers and explicitly retained spill page cache.
 // Physical MPool allocations continue to use AllocationAccount as their sole
-// owner; this token is only for temporary buffers that cannot carry one.
+// owner; this token is only for temporary memory that cannot carry one.
 type ExecutionTransientMemoryReservation struct {
 	budget     *ExecutionResourceBudget
 	generation *ExecutionResourceGeneration
@@ -1741,6 +1742,18 @@ func (r *ExecutionSpillDiskReservation) Grow(additional uint64) error {
 }
 
 func (g *ExecutionResourceGeneration) ReserveSpillFD(size uint64) (*ExecutionSpillFDReservation, error) {
+	return g.reserveSpillFD(size, false)
+}
+
+// ReserveReusableSpillFD optionally admits a cached writer. At most half of
+// each query/CN FD cap may be occupied at its admission boundary, leaving room
+// for active readers and transient writers. A nil token with no error means
+// use a transient descriptor instead; it is not a resource rejection.
+func (g *ExecutionResourceGeneration) ReserveReusableSpillFD() (*ExecutionSpillFDReservation, error) {
+	return g.reserveSpillFD(1, true)
+}
+
+func (g *ExecutionResourceGeneration) reserveSpillFD(size uint64, reusable bool) (*ExecutionSpillFDReservation, error) {
 	if g == nil || g.budget == nil {
 		return nil, &ExecutionResourceError{Kind: ExecutionResourceErrorInvalid}
 	}
@@ -1760,6 +1773,9 @@ func (g *ExecutionResourceGeneration) ReserveSpillFD(size uint64) (*ExecutionSpi
 	g.spillFDCap = g.spillFDConfiguredCap
 	if g.spillFDCap > b.spillFDCap {
 		g.spillFDCap = b.spillFDCap
+	}
+	if reusable && (b.spillFDUsed >= b.spillFDCap/2 || g.spillFDUsed >= g.spillFDCap/2) {
+		return nil, nil
 	}
 	if b.spillFDUsed > b.spillFDCap || size > b.spillFDCap-b.spillFDUsed {
 		g.rejectCount++
