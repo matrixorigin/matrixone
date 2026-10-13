@@ -442,11 +442,31 @@ func splitRepeatedRingWithRepeatedVertices(ring []Coord) ([][]Coord, error) {
 func connectEdges(sweptEdges []*ovEvent, op BoolOp) (Geometry, error) {
 	edges := make([]*ovEvent, 0, len(sweptEdges))
 	forwardEdges := make([]bool, 0, len(sweptEdges))
+	unselectedSubject, unselectedClipping := 0, 0
+	var unselectedBounds [2]BBox
+	if op == OpIntersection {
+		unselectedBounds[0] = BBox{MinX: math.Inf(1), MinY: math.Inf(1), MaxX: math.Inf(-1), MaxY: math.Inf(-1)}
+		unselectedBounds[1] = unselectedBounds[0]
+	}
 	for _, e := range sweptEdges {
 		if e == nil || e.other == nil || !e.left {
 			return nil, overlayGraphError("sweep returned a noncanonical segment event")
 		}
 		if !e.inResult {
+			if op == OpIntersection {
+				operand := 0
+				if e.subject {
+					unselectedSubject++
+				} else {
+					unselectedClipping++
+					operand = 1
+				}
+				bounds := &unselectedBounds[operand]
+				bounds.MinX = min(bounds.MinX, e.p.X, e.other.p.X)
+				bounds.MinY = min(bounds.MinY, e.p.Y, e.other.p.Y)
+				bounds.MaxX = max(bounds.MaxX, e.p.X, e.other.p.X)
+				bounds.MaxY = max(bounds.MaxY, e.p.Y, e.other.p.Y)
+			}
 			continue
 		}
 		forward, err := resultEdgeForward(e, op)
@@ -463,45 +483,35 @@ func connectEdges(sweptEdges []*ovEvent, op BoolOp) (Geometry, error) {
 		edges = append(edges, e)
 		forwardEdges = append(forwardEdges, forward)
 	}
-	vertexIDs := make(map[Coord]int, len(edges))
+	findPointCandidates := op == OpIntersection && unselectedSubject > 0 && unselectedClipping > 0
+	if findPointCandidates {
+		a, b := unselectedBounds[0], unselectedBounds[1]
+		// These are bounds of actual noded endpoint sets, not input geometry
+		// envelopes. Strict separation excludes shared coordinate keys only.
+		// Unordered/NaN bounds retain complete point discovery.
+		valid := a.MinX <= a.MaxX && a.MinY <= a.MaxY && b.MinX <= b.MaxX && b.MinY <= b.MaxY
+		if valid && (a.MaxX < b.MinX || b.MaxX < a.MinX || a.MaxY < b.MinY || b.MaxY < a.MinY) {
+			findPointCandidates = false
+		}
+	}
+	vertexCapacity := len(edges)
+	if findPointCandidates {
+		vertexCapacity += min(unselectedSubject, unselectedClipping)
+	}
+	vertexIDs := make(map[Coord]int, vertexCapacity)
 	vertices := make([]overlayBoundaryVertex, 0, len(edges))
 	var branchRaysByVertex map[int][]int
-	var contactFlags []uint8
-	var contactEdges []*ovEvent
 	vertexIDFor := func(vertex Coord) int {
 		id, ok := vertexIDs[vertex]
 		if !ok {
 			id = len(vertices)
 			vertexIDs[vertex] = id
 			vertices = append(vertices, overlayBoundaryVertex{})
-			if op == OpIntersection {
-				contactFlags = append(contactFlags, 0)
-			}
 		}
 		return id
 	}
-	// The area connector and contact connector share this endpoint index. Every
-	// noded event participates, including the noncontributing overlap partner.
-	if op == OpIntersection {
-		for _, e := range sweptEdges {
-			mask := intersectionSubject
-			if !e.subject {
-				mask = intersectionClipping
-			}
-			if e.inResult {
-				mask |= intersectionArea
-			}
-			if e.kind == edgeDifferentTransition {
-				contactEdges = append(contactEdges, e)
-				mask |= intersectionLine
-			}
-			first, last := vertexIDFor(e.p), vertexIDFor(e.other.p)
-			contactFlags[first] |= mask
-			contactFlags[last] |= mask
-		}
-	}
-	if len(edges) == 0 {
-		return assembleIntersection(nil, contactEdges, vertexIDs, contactFlags), nil
+	if len(edges) == 0 && op != OpIntersection {
+		return Polygon{}, nil
 	}
 	appendRay := func(vertex Coord, edge int, outgoing bool) {
 		vertexID := vertexIDFor(vertex)
@@ -539,9 +549,6 @@ func connectEdges(sweptEdges []*ovEvent, op BoolOp) (Geometry, error) {
 	var branchVertices map[Coord]struct{}
 	for vertex, vertexID := range vertexIDs {
 		state := vertices[vertexID]
-		if state.degree == 0 {
-			continue
-		}
 		if state.degree > 2 {
 			if branchVertices == nil {
 				branchVertices = make(map[Coord]struct{})
@@ -692,6 +699,58 @@ func connectEdges(sweptEdges []*ovEvent, op BoolOp) (Geometry, error) {
 		}
 	}
 	if op == OpIntersection {
+		// The area graph is complete and validated. Extend its endpoint index
+		// for contacts without allocating area ray state for those new IDs.
+		contactFlags := make([]uint8, len(vertices), max(vertexCapacity, len(vertices)))
+		for i := range contactFlags {
+			contactFlags[i] = intersectionArea
+		}
+		var contactEdges []*ovEvent
+		markContact := func(vertex Coord, mask uint8, insert bool) {
+			id, ok := vertexIDs[vertex]
+			if !ok {
+				if !insert {
+					return
+				}
+				id = len(contactFlags)
+				vertexIDs[vertex] = id
+				contactFlags = append(contactFlags, 0)
+			}
+			contactFlags[id] |= mask
+		}
+		accumulateContact := func(e *ovEvent, insert bool) {
+			mask := intersectionSubject
+			if !e.subject {
+				mask = intersectionClipping
+			}
+			if e.kind == edgeDifferentTransition {
+				contactEdges = append(contactEdges, e)
+				mask |= intersectionLine
+				insert = true
+			}
+			markContact(e.p, mask, insert)
+			markContact(e.other.p, mask, insert)
+		}
+		// A point outside the area must belong to both operands' unselected
+		// endpoints. Index one complete set, then probe the other, including
+		// noncontributing overlap partners. Actual line endpoints always enter
+		// the index. No contact-only ID is used to index the area vertices.
+		if findPointCandidates {
+			indexedSubject := unselectedSubject <= unselectedClipping
+			for _, subject := range [2]bool{indexedSubject, !indexedSubject} {
+				for _, e := range sweptEdges {
+					if !e.inResult && e.subject == subject {
+						accumulateContact(e, subject == indexedSubject)
+					}
+				}
+			}
+		} else {
+			for _, e := range sweptEdges {
+				if !e.inResult && e.kind == edgeDifferentTransition {
+					accumulateContact(e, true)
+				}
+			}
+		}
 		return assembleIntersection(result, contactEdges, vertexIDs, contactFlags), nil
 	}
 	return assembleResult(result), nil

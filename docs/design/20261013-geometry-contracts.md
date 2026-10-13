@@ -25,8 +25,17 @@ repeated-vertex lines, admitted unclosed rings, and ASCII WKT under MySQL type
 
 The existing sweep runs once. Its canonical noded edges include operand identity
 and overlap transitions. Opposite-transition overlaps become contact lines.
-The connector shares one endpoint index for area boundaries and contact membership;
-noncontributing overlap partners still supply operand membership at their vertices.
+The connector first completes and validates the selected area graph. Only its
+endpoints receive area ray state; their IDs are then frozen and marked covered.
+Contact discovery extends the same coordinate index with compact flags, never
+additional area state. It indexes every unselected endpoint of the operand with
+fewer unselected segments, then probes the other operand, including noncontributing
+overlap partners. Actual contact-line endpoints always enter the index.
+
+An isolated point outside the area must be an unselected endpoint of both
+operands, so indexing either complete set preserves every possible point.
+Other-only endpoints cannot produce a point and need no entry. Selected area
+edges need no repeated contact lookup because their endpoints are already covered.
 A contact vertex covered by a selected area boundary or contact line is suppressed.
 This coverage proof applies to valid polygon/multipolygon operands, not an expansion
 to arbitrary overlapping or heterogeneous geometry collections.
@@ -42,6 +51,26 @@ The extra intersection work is O(E log E) time and O(E) space for E noded edges,
 without a second O(N*M) pairwise intersection pass. Existing ring nesting costs
 are unchanged. The existing geodetic projection, snapping grids, bounded recovery
 and recursive unprojection also handle the lower-dimensional result.
+
+Optimization designs O1/O2/O3 passed before their respective implementations using
+`gpt-6.1-sol/xhigh`, session `01a13341-4167-7360-8e24-724a1b6f7db3`. Capacity hints
+count selected area edges plus the smaller unselected segment count; ordinary
+growth remains valid when a hint is insufficient. Union/difference/XOR retain
+their existing allocation path. This removes unused area state and redundant
+index entries without a second coordinate map, cache, or topology classifier.
+The validation/count loop also bounds both actual unselected endpoint sets.
+If either is empty or the closed boxes are strictly separated, no common point
+key can exist. Point indexing is skipped, while every transition line and all
+area graph validation still execute. NaN/unordered bounds retain complete discovery.
+This gate follows noding; it neither returns geometry early nor compares raw input
+envelopes. NaN-propagating built-in `min`/`max` preserve that fallback while avoiding
+nested scalar helper calls. In-place output canonicalization is not required.
+
+`BenchmarkOverlayIntersection` reuses the existing polygon fixture and covers
+256/1024/4096 vertices with overlap, disjointness and point contact. Compare serial
+`-benchmem -benchtime=500ms -count=3` runs; benchmark timing is not a UT assertion.
+Point contact is checked independently before timing. Allocation and latency
+claims require measured comparison, including the existing union controls.
 
 ## Admission and compatibility
 
