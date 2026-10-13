@@ -91,6 +91,21 @@ func TestShouldUseFixedAlterCopySnapshot(t *testing.T) {
 	require.False(t, shouldUseFixedAlterCopySnapshot(false, true))
 }
 
+func TestAlterCopyPublicationEligibilityRejectsRetainedLocks(t *testing.T) {
+	for _, snapshotErr := range []error{nil, errors.New("snapshot unavailable")} {
+		ctrl := gomock.NewController(t)
+		proc := testutil.NewProcess(t)
+		op := mock_frontend.NewMockTxnOperator(ctrl)
+		proc.Base.TxnOperator = op
+		op.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC}).AnyTimes()
+		op.EXPECT().GetWorkspace().Return(nil).AnyTimes()
+		op.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{LockTables: []lock.LockTable{{Table: 1, Valid: true}}}, snapshotErr)
+		c := &Compile{proc: proc}
+		require.False(t, c.alterCopyPublicationEligible())
+		require.False(t, c.alterCopyPublicationEligible(), "retry must retain the fallback admission")
+	}
+}
+
 func TestAlterCopyPublicationRetryMarker(t *testing.T) {
 	txnID := []byte("first transaction")
 	cause := moerr.NewTxnNeedRetryWithDefChanged(context.Background())

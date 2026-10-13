@@ -357,6 +357,8 @@ func TestIssue28319Performance(t *testing.T) {
 			manifest.Error = runErr.Error()
 		}
 		if err := writers.close(); err != nil {
+			manifest.Status = "FAIL"
+			manifest.Error = errors.Join(runErr, err).Error()
 			t.Errorf("close performance artifacts: %v", err)
 		}
 		if err := issue28319PerfWriteManifest(outputDir, manifest); err != nil {

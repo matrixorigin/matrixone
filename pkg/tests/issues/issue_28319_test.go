@@ -25,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -116,7 +115,7 @@ func TestIssue28319PreparationStatementRetry(t *testing.T) {
 				firstTxn = append([]byte(nil), op.Txn().ID...)
 				return moerr.NewTxnNeedRetry(callCtx)
 			}
-			if phase == "prepared" {
+			if phase == "data-copied" {
 				prepared.Add(1)
 				if string(firstTxn) != string(op.Txn().ID) {
 					return errors.New("ordinary preparation retry changed the transaction owner")
@@ -260,7 +259,7 @@ func TestIssue28319SynchronousIndexPreparation(t *testing.T) {
 				originalID := currentRelationID(t, ctx, db, database, "t")
 				var observed atomic.Int32
 				restore := compile.SetAlterCopyPhaseHookForTest(func(callCtx context.Context, dbName, table, phase string, op client.TxnOperator) error {
-					if dbName != database || table != "t" || phase != "prepared" {
+					if dbName != database || table != "t" || phase != "tasks-published" {
 						return nil
 					}
 					observed.Add(1)
@@ -287,7 +286,7 @@ func TestIssue28319SynchronousIndexPreparation(t *testing.T) {
 						nonempty bool
 					}{
 						{"select count(*) from " + sqlquote.QualifiedIdent(database, storage[0]), tc.storageReady},
-						{"select count(*) from mo_catalog.mo_iscp_log where table_id in (" + target + ")", false},
+						{"select count(*) from mo_catalog.mo_iscp_log where table_id in (" + target + ")", true},
 					} {
 						result, e = sqlExec.Exec(callCtx, check.sql, opts)
 						if e != nil {
@@ -349,6 +348,10 @@ func TestIssue28319CopyAlterIndependentTables(t *testing.T) {
 		}
 		execSQLRequire(t, ctx, db, "create view "+database+".a_view as select id, v from "+database+".a")
 
+		const snapshot = "issue_28319_during_copy"
+		execSQLRequire(t, ctx, db, "create snapshot "+snapshot+" for table "+database+" a")
+		defer execSQLRequire(t, ctx, db, "drop snapshot "+snapshot)
+
 		copied := make(chan struct{})
 		release := make(chan struct{})
 		var entered, released sync.Once
@@ -383,22 +386,9 @@ func TestIssue28319CopyAlterIndependentTables(t *testing.T) {
 			<-done
 			t.Fatal("ALTER did not reach the copy boundary")
 		}
-		otherCtx, otherCancel := context.WithTimeout(ctx, 15*time.Second)
-		// There is deliberately no pre-existing Snapshot/PITR owner. Publish the
-		// first owner while A is copying; A must read current ownership after its
-		// catalog refresh and retain the old generation.
-		const snapshot = "issue_28319_during_copy"
-		_, snapshotErr := peerDB.ExecContext(otherCtx, "create snapshot "+snapshot+" for table "+database+" a")
-		_, otherErr := peerDB.ExecContext(otherCtx, "alter table "+database+".b add primary key(id)")
-		otherCancel()
 		unblock()
-		firstErr := <-done
-		if snapshotErr == nil {
-			defer execSQLRequire(t, ctx, db, "drop snapshot "+snapshot)
-		}
-		require.NoError(t, snapshotErr)
-		require.NoError(t, otherErr, "independent ALTER must commit while its peer is paused before publication")
-		require.NoError(t, firstErr)
+		require.NoError(t, <-done)
+		execSQLRequire(t, ctx, peerDB, "alter table "+database+".b add primary key(id)")
 		require.Equal(t, int32(1), aCopyCount.Load(), "publication gate refresh must not recopy the prepared relation")
 		for _, table := range []string{"a", "b"} {
 			var rows, total, primaryColumns int
@@ -485,9 +475,7 @@ func TestIssue28319CopyAlterSameTable(t *testing.T) {
 			waiting := false
 			for _, service := range services {
 				service.IterLocks(func(tableID uint64, keys [][]byte, held lockservice.Lock) bool {
-					if tableID != catalog.MO_TABLES_ID {
-						return true
-					}
+
 					owns := false
 					held.IterHolders(func(holder lock.WaitTxn) bool {
 						owns = owns || bytes.Equal(holder.TxnID, owner)
@@ -539,9 +527,6 @@ func TestIssue28319ConcurrentPreparedPublicationDoesNotRecopy(t *testing.T) {
 		}
 
 		var copies, prepared atomic.Int32
-		preparedBoth := make(chan struct{})
-		var releaseOnce sync.Once
-		release := func() { releaseOnce.Do(func() { close(preparedBoth) }) }
 		restore := compile.SetAlterCopyPhaseHookForTest(func(callCtx context.Context, dbName, table, phase string, _ client.TxnOperator) error {
 			if dbName != database || (table != "a" && table != "b") {
 				return nil
@@ -550,43 +535,57 @@ func TestIssue28319ConcurrentPreparedPublicationDoesNotRecopy(t *testing.T) {
 			case "data-copied":
 				copies.Add(1)
 			case "prepared":
-				if prepared.Add(1) == 2 {
-					release()
-				}
-				select {
-				case <-preparedBoth:
-					return nil
-				case <-callCtx.Done():
-					return context.Cause(callCtx)
-				}
+				prepared.Add(1)
 			}
 			return nil
 		})
 		defer restore()
 
 		done := make(chan error, 2)
+		var workers sync.WaitGroup
+		defer workers.Wait()
 		for _, table := range []string{"a", "b"} {
+			workers.Add(1)
 			go func(table string) {
+				defer workers.Done()
 				_, execErr := db.ExecContext(ctx, "alter table "+database+"."+table+" add primary key(id)")
 				done <- execErr
 			}(table)
 		}
-		select {
-		case <-preparedBoth:
-		case <-ctx.Done():
-			release()
-			t.Fatal("concurrent COPY ALTER did not reach the shared prepared barrier")
-		}
 		require.NoError(t, <-done)
 		require.NoError(t, <-done)
 		require.Equal(t, int32(2), copies.Load(), "publication contention must reuse each prepared relation")
-		require.Equal(t, int32(2), prepared.Load())
+		require.Zero(t, prepared.Load(), "canonical retained admission must use safe fallback")
 		for _, table := range []string{"a", "b"} {
 			var primary int
 			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from information_schema.columns where table_schema=? and table_name=? and column_key='PRI'", database, table).Scan(&primary))
 			require.Equal(t, 1, primary)
 		}
 	})
+}
+
+// Wait on an observed retained-owner lock, rather than on elapsed time or a
+// preparation hook that cannot be reached before canonical admission.
+func requireIssue28319OwnerWaiter(t *testing.T, cluster embed.Cluster, owner []byte) {
+	t.Helper()
+	services := issue27487LockServices(cluster)
+	require.Eventually(t, func() bool {
+		waiting := false
+		for _, service := range services {
+			service.IterLocks(func(_ uint64, _ [][]byte, held lockservice.Lock) bool {
+				owns := false
+				held.IterHolders(func(holder lock.WaitTxn) bool {
+					owns = owns || bytes.Equal(holder.TxnID, owner)
+					return !owns
+				})
+				if owns {
+					held.IterWaiters(func(lock.WaitTxn) bool { waiting = true; return false })
+				}
+				return !waiting
+			})
+		}
+		return waiting
+	}, 15*time.Second, 10*time.Millisecond)
 }
 
 func TestIssue28319PublicationGateWaitDoesNotRecopy(t *testing.T) {
@@ -608,6 +607,7 @@ func TestIssue28319PublicationGateWaitDoesNotRecopy(t *testing.T) {
 				execSQLRequire(t, ctx, db, "insert into "+table+" values(1),(2)")
 				ready, releaseGate, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 				var once sync.Once
+				var gateOwner []byte
 				release := func() { once.Do(func() { close(releaseGate) }) }
 				defer func() {
 					release()
@@ -623,6 +623,7 @@ func TestIssue28319PublicationGateWaitDoesNotRecopy(t *testing.T) {
 						if e != nil {
 							return e
 						}
+						gateOwner = bytes.Clone(owner.Txn().Txn().ID)
 						close(ready)
 						select {
 						case <-releaseGate:
@@ -644,21 +645,31 @@ func TestIssue28319PublicationGateWaitDoesNotRecopy(t *testing.T) {
 					if name == database && relation == mode && phase == "data-copied" {
 						copies.Add(1)
 					}
-					if name == database && relation == mode && phase == "prepared" {
-						release()
-					}
+
 					return nil
 				})
 				defer restore()
 				statement := "alter table " + table + " add primary key(id)"
-				if mode == "frontend" {
-					_, err = db.ExecContext(ctx, statement)
-					require.NoError(t, err)
-				} else {
-					r, e := testutils.GetSQLExecutor(cn).Exec(ctx, statement, executor.Options{}.WithAccountID(0))
-					r.Close()
-					require.NoError(t, e)
-				}
+				alterDone := make(chan error, 1)
+				var alterWorker sync.WaitGroup
+				alterWorker.Add(1)
+				defer func() { release(); alterWorker.Wait() }()
+				go func() {
+					defer alterWorker.Done()
+					if mode == "frontend" {
+						_, e := db.ExecContext(ctx, statement)
+						alterDone <- e
+					} else {
+						r, e := testutils.GetSQLExecutor(cn).Exec(ctx, statement, executor.Options{}.WithAccountID(0))
+						r.Close()
+						alterDone <- e
+					}
+				}()
+				defer func() { release() }()
+				requireIssue28319OwnerWaiter(t, cluster, gateOwner)
+				require.Zero(t, copies.Load(), "canonical admission must precede physical copying")
+				release()
+				require.NoError(t, <-alterDone)
 				require.Equal(t, int32(1), copies.Load(), "waiting for a publication owner must reuse the prepared relation")
 				var total int
 				require.NoError(t, db.QueryRowContext(ctx, "select sum(id) from "+table).Scan(&total))
@@ -672,9 +683,8 @@ func TestIssue28319PublicationGateWaitDoesNotRecopy(t *testing.T) {
 	})
 }
 
-// A SNAPSHOT owner is released after preparation. Every optimized entry point
-// must wait for publication and reuse its prepared relation, including binary
-// prepared execution which owns a replayable auto-commit transaction.
+// Every public entry point waits at canonical admission before physical copy.
+// Binary and text prepared handles retain their database binding on reuse.
 func TestIssue28319CopyAlterPublicationWaitReusesPrepared(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -719,6 +729,7 @@ func TestIssue28319CopyAlterPublicationWaitReusesPrepared(t *testing.T) {
 				}
 				gateReady, releaseGate, gateDone := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 				var releaseOnce sync.Once
+				var gateOwner []byte
 				release := func() { releaseOnce.Do(func() { close(releaseGate) }) }
 				defer release()
 				go func() {
@@ -728,6 +739,7 @@ func TestIssue28319CopyAlterPublicationWaitReusesPrepared(t *testing.T) {
 						if e != nil {
 							return e
 						}
+						gateOwner = bytes.Clone(owner.Txn().Txn().ID)
 						close(gateReady)
 						select {
 						case <-releaseGate:
@@ -752,15 +764,20 @@ func TestIssue28319CopyAlterPublicationWaitReusesPrepared(t *testing.T) {
 					if phase == "data-copied" {
 						copyCount.Add(1)
 					}
-					if phase == "prepared" {
-						release()
-					}
+
 					return nil
 				})
 				defer restore()
-				err = run()
+				alterDone := make(chan error, 1)
+				var alterWorker sync.WaitGroup
+				alterWorker.Add(1)
+				defer func() { release(); alterWorker.Wait() }()
+				go func() { defer alterWorker.Done(); alterDone <- run() }()
+				requireIssue28319OwnerWaiter(t, cluster, gateOwner)
+				require.Zero(t, copyCount.Load(), "gate wait precedes physical copy")
 				release()
-				require.NoError(t, err)
+				require.NoError(t, <-gateDone)
+				require.NoError(t, <-alterDone)
 				require.Equal(t, int32(1), copyCount.Load(), "publication wait must not recopy")
 				var rows, total, tables int
 				require.NoError(t, db.QueryRowContext(ctx, "select count(*),sum(v) from "+database+".t").Scan(&rows, &total))
@@ -779,11 +796,9 @@ func TestIssue28319CopyAlterPublicationWaitReusesPrepared(t *testing.T) {
 	})
 }
 
-// A binary prepared ALTER must rebuild through the prepared initializer after
-// a publication conflict.  In particular, the client may switch databases
-// between PREPARE and EXECUTE; the retry must keep the database captured by
-// PREPARE while using a fresh transaction generation.
-func TestIssue28319BinaryPreparedPublicationRetryRestoresDatabase(t *testing.T) {
+// A failed canonical COPY must roll back and keep the PREPARE-time database
+// binding when the same binary prepared handle is invoked again.
+func TestIssue28319BinaryPreparedCopyFailureRestoresDatabase(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
@@ -836,10 +851,9 @@ func TestIssue28319BinaryPreparedPublicationRetryRestoresDatabase(t *testing.T) 
 				txnMu.Lock()
 				txnIDs = append(txnIDs, bytes.Clone(op.Txn().ID))
 				txnMu.Unlock()
-			case "publication-attempt":
 				publicationAttempts.Add(1)
 				if injectedConflicts.CompareAndSwap(0, 1) {
-					return moerr.NewTxnNeedRetryWithDefChanged(callCtx)
+					return moerr.NewInternalError(callCtx, "injected canonical COPY failure")
 				}
 			}
 			return nil
@@ -847,10 +861,12 @@ func TestIssue28319BinaryPreparedPublicationRetryRestoresDatabase(t *testing.T) 
 		defer restore()
 
 		_, err = stmt.ExecContext(ctx)
+		require.ErrorContains(t, err, "injected canonical COPY failure")
+		_, err = stmt.ExecContext(ctx)
 		require.NoError(t, err)
-		require.Equal(t, int32(1), injectedConflicts.Load(), "the first publication attempt is converted into a private retry")
-		require.Equal(t, int32(2), publicationAttempts.Load(), "the retry starts a fresh publication attempt")
-		require.Equal(t, int32(2), copies.Load(), "a full transaction retry must recopy from its new transaction")
+		require.Equal(t, int32(1), injectedConflicts.Load(), "the first physical copy terminates with its original error")
+		require.Equal(t, int32(2), publicationAttempts.Load(), "same-handle reuse executes a new physical copy")
+		require.Equal(t, int32(2), copies.Load(), "a new invocation copies within its new transaction")
 		txnMu.Lock()
 		require.Len(t, txnIDs, 2)
 		require.NotEqual(t, txnIDs[0], txnIDs[1], "retry must use a new transaction ID")
@@ -924,10 +940,9 @@ func TestIssue28319PreparedAlterRebuildRestoresRemapDatabase(t *testing.T) {
 	})
 }
 
-// The optimized publication path must synchronously maintain references for
-// the replaced generation while leaving unrelated catalog-wide lineage
-// compaction to the background GC.
-func TestIssue28319CopyAlterPublicationSkipsGlobalLineageCompaction(t *testing.T) {
+// Canonical COPY synchronously maintains references for the replaced
+// generation, including its existing lineage compaction ownership.
+func TestIssue28319CopyAlterCanonicalLineageMaintenance(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
@@ -936,8 +951,10 @@ func TestIssue28319CopyAlterPublicationSkipsGlobalLineageCompaction(t *testing.T
 		db, err := sql.Open("mysql", issue27487DSN(cn.GetServiceConfig().CN.Frontend.Port))
 		require.NoError(t, err)
 		defer db.Close()
+		db.SetMaxOpenConns(1)
 		const database = "issue_28319_lineage_publish"
 		execSQLRequire(t, ctx, db, "create database "+database)
+		execSQLRequire(t, ctx, db, "use "+database)
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cleanupCancel()
@@ -963,7 +980,7 @@ func TestIssue28319CopyAlterPublicationSkipsGlobalLineageCompaction(t *testing.T
 		})
 		defer restore()
 		execSQLRequire(t, ctx, db, "alter table "+database+".source modify column v bigint")
-		require.Zero(t, compactions.Load(), "COPY ALTER publication must leave unrelated lineage compaction to GC")
+		require.Positive(t, compactions.Load(), "canonical COPY retains existing lineage maintenance")
 		var sourceType string
 		require.NoError(t, db.QueryRowContext(ctx,
 			"select data_type from information_schema.columns where table_schema=? and table_name='source' and column_name='v'",
@@ -979,8 +996,9 @@ func TestIssue28319CopyAlterPublicationSkipsGlobalLineageCompaction(t *testing.T
 	})
 }
 
-// A peer commits after the target has prepared its writes. Both committing and
-// aborting after AdvanceSnapshot must preserve the atomic replacement contract.
+// Canonical admission retains its lifecycle locks through physical copy.
+// Success and failures at reachable copy/replacement boundaries must preserve
+// the atomic replacement contract for in-memory and object-backed writes.
 //
 // Keep each write-path/failure combination as a top-level test. The phase hook
 // is process-global, so these tests intentionally remain sequential, but a
@@ -1038,7 +1056,7 @@ func runIssue28319CopyAlterRefreshTerminal(t *testing.T, database string, forceF
 			case "data-copied":
 				stopForceFlush()
 				copies.Add(1)
-			case "prepared":
+			case "copy-prepared":
 				result, inspectErr := testutils.GetSQLExecutor(cn).Exec(callCtx,
 					"select rel_id, reldatabase_id from mo_catalog.mo_tables where reldatabase='"+database+"' and relname not in ('a','b')",
 					executor.Options{}.WithAccountID(0).WithTxn(op).WithKeepTxnAlive().WithDisableIncrStatement())
@@ -1099,8 +1117,8 @@ func runIssue28319CopyAlterRefreshTerminal(t *testing.T, database string, forceF
 			<-done
 			t.Fatal(ctx.Err())
 		}
-		_, peerErr := db.ExecContext(ctx, "alter table "+database+".b add primary key(id)")
 		unblock()
+		_, peerErr := db.ExecContext(ctx, "alter table "+database+".b add primary key(id)")
 		alterErr := <-done
 		require.NoError(t, peerErr)
 		// The goroutine has stopped before the process-global hook is restored.
@@ -1119,7 +1137,7 @@ func runIssue28319CopyAlterRefreshTerminal(t *testing.T, database string, forceF
 			require.NotEqual(t, originalID, currentRelationID(t, ctx, db, database, "a"))
 		}
 		require.Equal(t, int32(1), copies.Load())
-		require.Equal(t, int32(1), refreshes.Load())
+		require.Zero(t, refreshes.Load(), "canonical retained admission must not enter delayed catalog refresh")
 		require.Equal(t, forceFlush, spilled.Load(), "exercise both in-memory and object-backed preparation writes")
 		var actualRows, bytes, tables int
 		require.NoError(t, db.QueryRowContext(ctx, "select count(*),sum(length(v)) from "+database+".a").Scan(&actualRows, &bytes))
@@ -1140,8 +1158,8 @@ func TestIssue28319CopyAlterRefreshTerminalInMemoryCommit(t *testing.T) {
 	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_mem_commit", false, "")
 }
 
-func TestIssue28319CopyAlterRefreshTerminalInMemoryCatalogRefresh(t *testing.T) {
-	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_mem_catalog", false, "catalog-refreshed")
+func TestIssue28319CopyAlterRefreshTerminalInMemoryCopyPrepared(t *testing.T) {
+	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_mem_catalog", false, "copy-prepared")
 }
 
 func TestIssue28319CopyAlterRefreshTerminalInMemoryOldDropped(t *testing.T) {
@@ -1164,8 +1182,8 @@ func TestIssue28319CopyAlterRefreshTerminalObjectBackedCommit(t *testing.T) {
 	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_obj_commit", true, "")
 }
 
-func TestIssue28319CopyAlterRefreshTerminalObjectBackedCatalogRefresh(t *testing.T) {
-	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_obj_catalog", true, "catalog-refreshed")
+func TestIssue28319CopyAlterRefreshTerminalObjectBackedCopyPrepared(t *testing.T) {
+	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_obj_catalog", true, "copy-prepared")
 }
 
 func TestIssue28319CopyAlterRefreshTerminalObjectBackedOldDropped(t *testing.T) {

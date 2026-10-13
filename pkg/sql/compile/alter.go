@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -234,10 +235,10 @@ func (c *Compile) alterTableHasHistoricalBranchSource(
 		},
 		[]string{
 			alterDataBranchHistoricalSnapshotSourceProbeSQL(
-				c.proc.GetSessionInfo().Account, databaseName, tableName, oldTableID, !c.alterCopySplitPreparation,
+				c.proc.GetSessionInfo().Account, databaseName, tableName, oldTableID, !c.alterCopySplitPreparation, 0,
 			),
 			alterDataBranchHistoricalPitrSourceProbeSQL(
-				c.proc.GetSessionInfo().Account, databaseName, tableName, oldTableID, !c.alterCopySplitPreparation,
+				c.proc.GetSessionInfo().Account, databaseName, tableName, oldTableID, !c.alterCopySplitPreparation, 0,
 			),
 		},
 	)
@@ -1762,6 +1763,10 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	if err = cloneUnaffectedIndexes(
 		c, dbName, qry.Options.SkipIndexesCopy, qry.AffectedCols, newRel, qry.TableDef, nil,
 	); err != nil {
+		return err
+	}
+
+	if err = c.observeAlterCopyPhase(dbName, tblName, "copy-prepared"); err != nil {
 		return err
 	}
 
