@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -534,17 +535,21 @@ func TestApplyVectorIndexForSortContext_SemiMembershipUsesIvfWithMixedIndexes(t 
 	newNodeID, applied, err := tc.builder.applyVectorIndexForSortContext(
 		tc.projNodeID, vecCtx, map[[2]int32]int{}, map[[2]int32]*plan.Expr{})
 	require.NoError(t, err)
-	require.True(t, applied, "central dispatch must select IVF-FLAT for a membership context")
+	require.True(t, applied, "central dispatch must select a membership-capable index for a membership context")
 	require.Equal(t, tc.projNodeID, newNodeID)
 	vectorScan := findFirstNodeByType(tc.builder, plan.Node_INDEX_SEARCH_SCAN)
 	require.NotNil(t, vectorScan)
-	require.Equal(t, catalog.MoIndexIvfFlatAlgo.ToString(), vectorScan.IndexSearchScan.Index.IndexAlgo)
+	require.True(t, indexplugin.SupportsMembership(vectorScan.IndexSearchScan.Index.IndexAlgo), vectorScan.IndexSearchScan.Index.IndexAlgo)
 	require.NotNil(t, findReachableSemiJoinWithRight(tc.builder.qry, tc.projNodeID, tc.providerNodeID))
 }
 
-func TestBuildVectorSortContextThroughJoin_SemiMembershipRejectsNonIvfIndex(t *testing.T) {
+func TestBuildVectorSortContextThroughJoin_SemiMembershipRejectsIndexWithoutMembership(t *testing.T) {
 	tc := newVectorJoinPlanCase(t, vectorJoinPlanOptions{joinType: plan.Node_SEMI})
 	tc.builder.qry.Nodes[tc.mainScanNodeID].TableDef.Indexes = newVectorJoinTableDef(true, false).Indexes
+	require.NotNil(t, tc.builder.buildVectorSortContextThroughJoin(tc.projNode), "hnsw supports membership")
+	for _, def := range tc.builder.qry.Nodes[tc.mainScanNodeID].TableDef.Indexes {
+		def.IndexAlgo = catalog.MoIndexCagraAlgo.ToString()
+	}
 	require.Nil(t, tc.builder.buildVectorSortContextThroughJoin(tc.projNode))
 }
 

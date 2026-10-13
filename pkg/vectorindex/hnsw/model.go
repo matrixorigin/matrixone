@@ -29,6 +29,7 @@ import (
 
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -40,6 +41,7 @@ import (
 	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/usearchex"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
@@ -980,6 +982,12 @@ func (idx *HnswModel[T]) Unload() error {
 
 // Call usearch.Search
 func (idx *HnswModel[T]) Search(query []T, limit uint) (keys []usearch.Key, distances []float32, err error) {
+	return idx.SearchWithMembership(query, limit, nil)
+}
+
+// SearchWithMembership searches for the nearest limit keys that membership holds; a nil
+// membership searches every key.
+func (idx *HnswModel[T]) SearchWithMembership(query []T, limit uint, membership docfilter.MembershipFilter) (keys []usearch.Key, distances []float32, err error) {
 	if idx.Index == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
@@ -998,7 +1006,12 @@ func (idx *HnswModel[T]) Search(query []T, limit uint) (keys []usearch.Key, dist
 	}
 
 	defer runtime.KeepAlive(query)
-	keys, distances, serr := idx.Index.SearchUnsafe(util.UnsafePointer(&query[0]), limit)
+	var serr error
+	if membership == nil {
+		keys, distances, serr = idx.Index.SearchUnsafe(util.UnsafePointer(&query[0]), limit)
+	} else {
+		keys, distances, serr = usearchex.FilteredSearchUnsafeWithMembership(idx.Index, util.UnsafePointer(&query[0]), limit, membership)
+	}
 	if serr != nil {
 		return nil, nil, serr
 	}

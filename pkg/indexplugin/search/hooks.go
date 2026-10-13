@@ -139,6 +139,33 @@ type ProbeKnobsHooks interface {
 	SupportsProbeKnobs() bool
 }
 
+// Round is one search round of an advanced search: the internal top-k it requests and,
+// for an IVF index, the lists it probes (0 for a graph index).
+type Round struct {
+	ITopK  uint64
+	NProbe uint64
+}
+
+// SearchStats is what the caller of an advanced-search policy knows about the search; a
+// zero field is unknown.
+type SearchStats struct {
+	// IndexRows is the number of indexed rows.
+	IndexRows uint64
+	// Members is the number of keys of the membership filter.
+	Members uint64
+}
+
+// AdvancedSearchHooks optionally describes the widening policy of an algorithm: the round
+// a search starts with and the round after one that returned too few rows. The
+// algorithm's membership (pre) search runs these rounds itself; a plan-level post retry
+// asks the same hooks. The search of each round is the algorithm's regular search.
+type AdvancedSearchHooks interface {
+	StartRound(spec *plan.IndexSearchScan, req Request, stats SearchStats) Round
+	// NextRound returns the round after prev, which returned got rows, and false when the
+	// search stops: got reached its target, or the caps or the index are exhausted.
+	NextRound(spec *plan.IndexSearchScan, req Request, stats SearchStats, prev Round, got uint64) (Round, bool)
+}
+
 // CandidateBudgetHooks optionally sizes the candidate budget of a scan whose
 // results are post-filtered (IndexSearchScan.PostFilterOverFetch). Without it
 // the budget is overfetch.FilteredPostModeLimit(resultLimit).

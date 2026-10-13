@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -135,6 +136,22 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 			return nil, nil, err
 		}
 	}
+	if rt.Membership != nil {
+		return s.searchAdvanced(sqlproc, query, indexCounts, rt)
+	}
+	return s.searchOnce(sqlproc, query, indexCounts, limit, nil, rt.OrigFuncName)
+}
+
+// searchOnce searches every sub-index for its nearest limit keys that membership holds
+// (every key when membership is nil) and returns the global best limit, nearest first.
+func (s *HnswSearch[T]) searchOnce(
+	sqlproc *sqlexec.SqlProcess,
+	query []T,
+	indexCounts []uint,
+	limit uint,
+	membership docfilter.MembershipFilter,
+	origFuncName string,
+) (keys []int64, distances []float64, err error) {
 	indexLimits, limit := boundedHnswSearchLimits(indexCounts, limit)
 	if limit == 0 {
 		return []int64{}, []float64{}, nil
@@ -164,7 +181,7 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 					return ctx.Err()
 				}
 
-				keys, distances, err2 := subindex[j].Search(query, indexLimits[start+j])
+				keys, distances, err2 := subindex[j].SearchWithMembership(query, indexLimits[start+j], membership)
 				if err2 != nil {
 					return err2
 				}
@@ -192,7 +209,7 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 			return nil, nil, moerr.NewInternalError(sqlproc.GetContext(), "heap return key is not int64")
 		}
 		reskeys[i] = sr.Id
-		sr.Distance = metric.DistanceTransformHnsw(sr.Distance, metric.DistFuncNameToMetricType[rt.OrigFuncName], s.Idxcfg.Usearch.Metric)
+		sr.Distance = metric.DistanceTransformHnsw(sr.Distance, metric.DistFuncNameToMetricType[origFuncName], s.Idxcfg.Usearch.Metric)
 		resdistances[i] = sr.Distance
 	}
 

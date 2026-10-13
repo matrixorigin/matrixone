@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -308,6 +309,15 @@ type RuntimeConfig struct {
 	Probe             uint
 	OrigFuncName      string
 	BackgroundQueries []*plan.Query
+
+	// Membership, when non-nil, restricts an HNSW search to the primary keys it
+	// holds; MembershipCount is the number of keys. ResultLimit is the number of
+	// rows the query returns and MaxLimit caps Limit while the search widens
+	// (0 = DefaultMaxInternalTopK). Other algorithms ignore these fields.
+	Membership      docfilter.MembershipFilter
+	MembershipCount uint64
+	ResultLimit     uint
+	MaxLimit        uint
 
 	// FilterJSON is a JSON predicate array forwarded verbatim to CGo
 	// (gpu_<idx>_search_with_filter). Empty → unfiltered search path.

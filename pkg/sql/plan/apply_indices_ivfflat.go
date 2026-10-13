@@ -951,226 +951,43 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 	if canIndexOnly {
 		joinRootID = candidateNodeID
 	} else if pushdownEnabled {
-		// secondScanNode: copy original scanNode for JOIN(ivf, table)
-		secondScanNodeID := builder.copyNode(ctx, scanNode.NodeId)
-		secondScanNode := builder.qry.Nodes[secondScanNodeID]
-		oldTag := secondScanNode.BindingTags[0]
-		builder.rebindScanNode(secondScanNode)
-		newTag := secondScanNode.BindingTags[0]
-
-		// The copied scan is an internal producer. Keep its regular-index remaps local so
-		// they cannot affect the original row-fetch side, while preserving any mappings
-		// already published for the original scan tag.
-		secondIdxColMap := make(map[[2]int32]*plan.Expr)
-		if oldTag != newTag {
-			for key, value := range idxColMap {
-				if key[0] == oldTag {
-					secondIdxColMap[[2]int32{newTag, key[1]}] = DeepCopyExpr(value)
+		preInput := vectorPreFilterInput{
+			ctx:             ctx,
+			scanNode:        scanNode,
+			colRefCnt:       colRefCnt,
+			idxColMap:       idxColMap,
+			pkPos:           ivfCtx.pkPos,
+			pkType:          ivfCtx.pkType,
+			tableFuncTag:    tableFuncTag,
+			tableFuncNodeID: tableFuncNodeID,
+			candidateNodeID: candidateNodeID,
+			annotateRequiredDomain: func(tableFuncNode *plan.Node, requiredDomain bool) error {
+				if asyncIndex || candidateNodeID != tableFuncNodeID || !requiredDomain ||
+					bucketExpandStep != 0 || firstRoundLimitExpr != nil ||
+					!types.T(ivfCtx.pkType.Id).IsInteger() {
+					return nil
 				}
-			}
-		}
-
-		var originalMembershipNode *plan.Node
-		if vecCtx.hasMembership {
-			originalMembershipNode = builder.qry.Nodes[vecCtx.membershipNodeID]
-			if originalMembershipNode.NodeType != plan.Node_JOIN || originalMembershipNode.JoinType != plan.Node_SEMI ||
-				len(originalMembershipNode.Children) != 2 || originalMembershipNode.Children[0] != scanNode.NodeId {
-				return nodeID, nil
-			}
-		}
-
-		if builder.canApplyRegularIndex(secondScanNode) {
-			// Membership is enforced before candidate Top-K. Only predicates implied
-			// by synchronous IVF candidates may be removed from its producer.
-			if !asyncIndex {
-				secondScanNode.FilterList, _ = removeIvfCandidateImpliedNotNullFilter(
-					secondScanNode.FilterList, newTag, ivfCtx.partPos)
-			}
-
-			// Retained predicates must participate in column-use accounting.
-			secondColRefCnt := make(map[[2]int32]int)
-			secondColRefCnt[[2]int32{newTag, ivfCtx.pkPos}] = 1
-			for _, expr := range secondScanNode.FilterList {
-				extractColRefs(expr, newTag, secondColRefCnt)
-			}
-			// A covering-index decision must account for every left-side column that
-			// the copied membership JOIN will consume after this scan is optimized.
-			if originalMembershipNode != nil {
-				for _, expr := range originalMembershipNode.OnList {
-					rebound := DeepCopyExpr(expr)
-					replaceColRefTag(rebound, oldTag, newTag)
-					extractColRefs(rebound, newTag, secondColRefCnt)
+				work, err := builder.estimateIvfScanWork(scanNode.ObjRef, scanNode.ScanSnapshot,
+					ivfCtx.entriesDef.IndexTableName, ivfCtx.totalLists, ivfCtx.nProbe)
+				if err != nil {
+					return err
 				}
+				tableFuncNode.IndexSearchScan.ScanWork = work
+				return nil
+			},
+		}
+		if !asyncIndex {
+			// Only predicates implied by synchronous IVF candidates may be removed.
+			preInput.trimProducerFilters = func(filters []*plan.Expr, tag int32) []*plan.Expr {
+				trimmed, _ := removeIvfCandidateImpliedNotNullFilter(filters, tag, ivfCtx.partPos)
+				return trimmed
 			}
-			optimizedSecondScanID := builder.applyIndicesForFilters(
-				secondScanNodeID, secondScanNode, secondColRefCnt, secondIdxColMap)
-			secondScanNodeID = optimizedSecondScanID
 		}
-
-		// Otherwise the runtime filter will only see the truncated primary key set, causing data loss.
-		// Clear candidate limits only from the copied indexed-table side. A membership subquery may
-		// have its own semantic LIMIT/OFFSET, which must remain intact.
-		clearLimitOffsetInSubtree(builder.qry, secondScanNodeID)
-
-		membershipProducerID := secondScanNodeID
-		if originalMembershipNode != nil {
-			membershipNode := DeepCopyNode(originalMembershipNode)
-			membershipNode.Children[0] = secondScanNodeID
-			membershipNode.Limit = nil
-			membershipNode.Offset = nil
-			for _, expr := range membershipNode.OnList {
-				replaceColRefTag(expr, oldTag, newTag)
-			}
-			// An index-only rewrite replaces the copied scan tag with hidden-index
-			// output expressions. Rebind every membership expression to that output.
-			replaceColumnsForNode(membershipNode, secondIdxColMap)
-			membershipProducerID = builder.appendNode(membershipNode, ctx)
+		preJoinID, ok, err := builder.buildVectorPreFilterJoin(vecCtx, preInput)
+		if err != nil || !ok {
+			return nodeID, err
 		}
-
-		// Add a PROJECT above the filtered relation to output only the primary key column.
-		secondProjectTag := builder.genNewBindTag()
-		secondPkExpr := builder.buildPkExprFromNode(membershipProducerID, ivfCtx.pkType, scanNode.TableDef.Pkey.PkeyColName)
-		if secondPkExpr == nil {
-			// If an optimized second-scan subtree can't provide a stable PK expression,
-			// skip IVF rewrite to avoid wiring stale bindings into join/runtime-filter paths.
-			return nodeID, nil
-		}
-		secondProjectNodeID := builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_PROJECT,
-			Children:    []int32{membershipProducerID},
-			ProjectList: []*plan.Expr{secondPkExpr},
-			BindingTags: []int32{secondProjectTag},
-		}, ctx)
-
-		// membership SEMI join: (vector scan SEMI JOIN second table project)
-		innerJoinOn, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-			{
-				Typ: ivfCtx.pkType,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: tableFuncTag,
-						ColPos: 0, // tf.pkid
-					},
-				},
-			},
-			{
-				Typ: ivfCtx.pkType,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: secondProjectTag,
-						ColPos: 0, // only pk column from second scan
-					},
-				},
-			},
-		})
-
-		innerJoinNodeID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{candidateNodeID, secondProjectNodeID},
-			// The filtered relation is only a membership producer; none of its
-			// columns escape this node. SEMI is both the exact relational shape
-			// and an optimizer barrier that prevents the runtime-filter producer
-			// from being flattened into a three-way INNER join with its consumer.
-			JoinType: plan.Node_SEMI,
-			OnList:   []*Expr{innerJoinOn},
-			// Don't set Limit/Offset on JOIN - they should be applied after SORT
-		}, ctx)
-
-		// Construct BloomFilter type runtime filter for inner join + table function
-		rfTag := builder.genNewMsgTag()
-
-		// build side: primary key from secondScanNode (consistent with BloomFilter build column)
-		buildExpr := &plan.Expr{
-			Typ: ivfCtx.pkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: secondProjectTag,
-					ColPos: 0,
-				},
-			},
-		}
-		buildSpec := MakeRuntimeFilter(rfTag, false, 0, buildExpr, false)
-		buildSpec.UseMembershipFilter = true
-		requiredDomain := vecCtx.hasMembership || candidateNodeID == tableFuncNodeID
-		buildSpec.MustApply = requiredDomain
-		innerJoinNode := builder.qry.Nodes[innerJoinNodeID]
-		innerJoinNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
-
-		// probe side: pkid column from table function
-		probeExpr := &plan.Expr{
-			Typ: ivfCtx.pkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: tableFuncTag,
-					ColPos: 0,
-				},
-			},
-		}
-		probeSpec := MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)
-		probeSpec.UseMembershipFilter = true
-		probeSpec.MustApply = requiredDomain
-		tableFuncNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
-		// The final placement proof decides whether every CN can receive the
-		// complete domain. Unproved shapes retain the local execution restriction.
-		tableFuncNode.Stats.ForceOneCN = true
-		if !asyncIndex && candidateNodeID == tableFuncNodeID && requiredDomain &&
-			bucketExpandStep == 0 && firstRoundLimitExpr == nil &&
-			types.T(ivfCtx.pkType.Id).IsInteger() {
-			work, workErr := builder.estimateIvfScanWork(scanNode.ObjRef, scanNode.ScanSnapshot,
-				ivfCtx.entriesDef.IndexTableName, ivfCtx.totalLists, ivfCtx.nProbe)
-			if workErr != nil {
-				return nodeID, workErr
-			}
-			tableFuncNode.IndexSearchScan.ScanWork = work
-		}
-
-		// The original scan was guarded during the recursive planner pass so the vector rewrite
-		// could see the raw table scan shape. Once the IVF subtree is constructed, we can
-		// temporarily suspend that protection and apply regular secondary-index optimization
-		// to the row-fetch side of the outer join.
-		outerScanNodeID := scanNode.NodeId
-		if builder.canApplyRegularIndex(scanNode) {
-			builder.withSuspendedScanProtection(scanNode.NodeId, func() {
-				outerScanNodeID = builder.applyIndicesForFilters(scanNode.NodeId, scanNode, colRefCnt, idxColMap)
-			})
-		}
-
-		outerPkExpr := builder.buildPkExprFromNode(outerScanNodeID, ivfCtx.pkType, scanNode.TableDef.Pkey.PkeyColName)
-		if outerPkExpr == nil && outerScanNodeID != scanNode.NodeId {
-			// If a future regular-index rewrite produces an unsupported subtree shape,
-			// fall back to the original scan instead of wiring stale bindings into the IVF join.
-			logutil.Debugf("IVF outer PK fallback: optimized node %d -> original scan %d", outerScanNodeID, scanNode.NodeId)
-			outerScanNodeID = scanNode.NodeId
-			outerPkExpr = builder.buildPkExprFromNode(outerScanNodeID, ivfCtx.pkType, scanNode.TableDef.Pkey.PkeyColName)
-		}
-		if outerPkExpr == nil {
-			return nodeID, nil
-		}
-
-		// outer join: optimized outer subtree JOIN (inner ivf join)
-		outerOn, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-			DeepCopyExpr(outerPkExpr),
-			{
-				Typ: ivfCtx.pkType,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: tableFuncTag, // tf pkid from inner join subtree
-						ColPos: 0,
-					},
-				},
-			},
-		})
-
-		outerJoinNodeID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{outerScanNodeID, innerJoinNodeID},
-			JoinType: plan.Node_INNER,
-			OnList:   []*Expr{outerOn},
-			// Don't set Limit/Offset on JOIN - they should be applied after SORT
-		}, ctx)
-
-		// Outer join doesn't add extra project, let global column pruning optimizer handle it
-		joinRootID = outerJoinNodeID
+		joinRootID = preJoinID
 	} else {
 		outerScanNodeID := scanNode.NodeId
 		outerPkExpr := builder.buildPkExprFromNode(outerScanNodeID, ivfCtx.pkType, scanNode.TableDef.Pkey.PkeyColName)

@@ -36,6 +36,7 @@ func TestVectorIndexSupportsContext(t *testing.T) {
 
 	ivfflat := catalog.MoIndexIvfFlatAlgo.ToString()
 	hnsw := catalog.MoIndexHnswAlgo.ToString()
+	cagra := catalog.MoIndexCagraAlgo.ToString()
 	for _, c := range []struct {
 		name string
 		ctx  *vectorSortContext
@@ -44,9 +45,11 @@ func TestVectorIndexSupportsContext(t *testing.T) {
 	}{
 		{"no context", nil, hnsw, true},
 		{"plain scan", &vectorSortContext{scanNode: plainScan}, hnsw, true},
-		{"MATCH filter, hnsw", &vectorSortContext{scanNode: matchScan}, hnsw, false},
+		{"MATCH filter, cagra", &vectorSortContext{scanNode: matchScan}, cagra, false},
+		{"MATCH filter, hnsw", &vectorSortContext{scanNode: matchScan}, hnsw, true},
 		{"MATCH filter, ivfflat", &vectorSortContext{scanNode: matchScan}, ivfflat, true},
-		{"membership, hnsw", &vectorSortContext{scanNode: plainScan, hasMembership: true}, hnsw, false},
+		{"membership, cagra", &vectorSortContext{scanNode: plainScan, hasMembership: true}, cagra, false},
+		{"membership, hnsw", &vectorSortContext{scanNode: plainScan, hasMembership: true}, hnsw, true},
 		{"membership, ivfflat", &vectorSortContext{scanNode: plainScan, hasMembership: true}, ivfflat, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -71,7 +74,7 @@ func TestCheckVectorSearchMode(t *testing.T) {
 	ctx := context.Background()
 	ivfflat := catalog.MoIndexIvfFlatAlgo.ToString()
 	for _, algo := range []string{
-		catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString(),
+		catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString(),
 	} {
 		for _, mode := range []string{"pre", "auto"} {
 			err := checkVectorSearchMode(ctx, &vectorSortContext{rankOption: &planpb.RankOption{Mode: mode}}, algo)
@@ -86,6 +89,7 @@ func TestCheckVectorSearchMode(t *testing.T) {
 	}
 	for _, mode := range []string{"pre", "auto"} {
 		require.NoError(t, checkVectorSearchMode(ctx, &vectorSortContext{rankOption: &planpb.RankOption{Mode: mode}}, ivfflat))
+		require.NoError(t, checkVectorSearchMode(ctx, &vectorSortContext{rankOption: &planpb.RankOption{Mode: mode}}, catalog.MoIndexHnswAlgo.ToString()))
 	}
 }
 
@@ -99,8 +103,9 @@ func TestHasMembershipVectorIndex(t *testing.T) {
 	}
 	require.False(t, hasMembershipVectorIndex(nil))
 	require.False(t, hasMembershipVectorIndex(def()))
-	require.False(t, hasMembershipVectorIndex(def(catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString())))
-	require.True(t, hasMembershipVectorIndex(def(catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexIvfFlatAlgo.ToString())))
+	require.False(t, hasMembershipVectorIndex(def(catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString())))
+	require.True(t, hasMembershipVectorIndex(def(catalog.MoIndexHnswAlgo.ToString())))
+	require.True(t, hasMembershipVectorIndex(def(catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfFlatAlgo.ToString())))
 }
 
 func TestCheckVectorSearchModeProbeKnobs(t *testing.T) {

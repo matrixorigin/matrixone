@@ -56,6 +56,9 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 	if err := checkVectorSearchMode(builder.GetContext(), vecCtx, catalog.MoIndexHnswAlgo.ToString()); err != nil {
 		return nil, err
 	}
+	if vectorRankMode(vecCtx) == "auto" {
+		return nil, moerr.NewNotSupportedf(builder.GetContext(), "mode=auto on index type %s", catalog.MoIndexHnswAlgo.ToString())
+	}
 
 	rewriteAllowed, err := builder.validateVectorIndexSortRewrite(vecCtx)
 	if err != nil || !rewriteAllowed {
@@ -148,6 +151,20 @@ func (builder *QueryBuilder) resolveInt64Variable(name string, def int64) (int64
 }
 
 func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	return builder.applyIndicesForSortUsingHnswWithColRefCnt(nodeID, vecCtx, multiTableIndex, nil, idxColMap)
+}
+
+// hnswUsesPreFilter reports whether the hnsw search of vecCtx is restricted to the keys
+// of a filtered copy of its scan: under a membership join, a fulltext MATCH filter, or
+// mode=pre with a filter.
+func (builder *QueryBuilder) hnswUsesPreFilter(vecCtx *vectorSortContext) bool {
+	if vecCtx.hasMembership || builder.scanHasMatchedFullTextFilter(vecCtx.scanNode) {
+		return true
+	}
+	return vectorRankMode(vecCtx) == "pre" && len(vecCtx.scanNode.FilterList) > 0
+}
+
+func (builder *QueryBuilder) applyIndicesForSortUsingHnswWithColRefCnt(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
 	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
@@ -166,8 +183,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 
 	// With a residual filter the hnsw search is JOIN-ed against the scan and the
 	// filter drops index candidates, so execution over-fetches the candidate
-	// budget from k (#26869).
-	postFilterOverFetch := len(scanNode.FilterList) > 0
+	// budget from k (#26869). A PRE search returns only qualifying keys.
+	usePreFilter := builder.hnswUsesPreFilter(vecCtx)
+	if usePreFilter && vecCtx.providerNodeID >= 0 {
+		// A per-row query vector runs the search in APPLY, which receives no membership
+		// runtime filter: leave the query to the exact sort.
+		return nodeID, nil
+	}
+	postFilterOverFetch := len(scanNode.FilterList) > 0 && !usePreFilter
 
 	algoOptions, err := hnswplan.EncodeScanOptions(hnswplan.ScanOptions{ThreadsSearch: hnswCtx.nThread})
 	if err != nil {
@@ -228,35 +251,54 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 		}, ctx)
 	}
 
-	// oncond
-	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-		{
-			Typ: hnswCtx.pkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: scanNode.BindingTags[0],
-					ColPos: hnswCtx.pkPos, // tbl.pk
+	var joinNodeID int32
+	if usePreFilter {
+		preJoinID, ok, err := builder.buildVectorPreFilterJoin(vecCtx, vectorPreFilterInput{
+			ctx:             ctx,
+			scanNode:        scanNode,
+			colRefCnt:       colRefCnt,
+			idxColMap:       idxColMap,
+			pkPos:           hnswCtx.pkPos,
+			pkType:          hnswCtx.pkType,
+			tableFuncTag:    tableFuncTag,
+			tableFuncNodeID: tableFuncNodeID,
+			candidateNodeID: candidateNodeID,
+		})
+		if err != nil || !ok {
+			return nodeID, err
+		}
+		joinNodeID = preJoinID
+	} else {
+		// oncond
+		wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+			{
+				Typ: hnswCtx.pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: scanNode.BindingTags[0],
+						ColPos: hnswCtx.pkPos, // tbl.pk
+					},
 				},
 			},
-		},
-		{
-			Typ: hnswCtx.pkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: tableFuncTag, // last idxTbl (may be join) relPos
-					ColPos: 0,            // idxTbl.pk
+			{
+				Typ: hnswCtx.pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: tableFuncTag, // last idxTbl (may be join) relPos
+						ColPos: 0,            // idxTbl.pk
+					},
 				},
 			},
-		},
-	})
+		})
 
-	joinNodeID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		Children: []int32{scanNode.NodeId, candidateNodeID},
-		JoinType: plan.Node_INNER,
-		OnList:   []*Expr{wherePkEqPk},
-		// Don't set Limit/Offset on JOIN - they should be applied after SORT
-	}, ctx)
+		joinNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{scanNode.NodeId, candidateNodeID},
+			JoinType: plan.Node_INNER,
+			OnList:   []*Expr{wherePkEqPk},
+			// Don't set Limit/Offset on JOIN - they should be applied after SORT
+		}, ctx)
+	}
 
 	// Keep FilterList on scanNode so filters are applied during table scan
 	// Clear Limit/Offset from scanNode since they should be applied after SORT

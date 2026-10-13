@@ -1,6 +1,6 @@
--- Rank modes by index capability (#28988). mode=pre and mode=auto need the membership
--- capability: ivfflat accepts them; hnsw rejects them. mode=post, mode=force and no clause
--- are accepted on both.
+-- Rank modes by index capability (#28988). mode=pre needs the membership capability,
+-- which ivfflat and hnsw have; mode=auto is implemented for ivfflat only. mode=post,
+-- mode=force and no clause are accepted on both.
 drop database if exists vector_filtered_search_modes;
 create database vector_filtered_search_modes;
 use vector_filtered_search_modes;
@@ -16,7 +16,10 @@ create table t_ivf(id bigint primary key, v vecf32(2), category int);
 insert into t_ivf select id, v, category from t_hnsw;
 create index i_ivf using ivfflat on t_ivf(v) lists = 2 op_type 'vector_l2_ops';
 
--- hnsw: pre and auto are rejected
+-- hnsw: pre searches the qualifying keys (ids 51..53); auto is rejected
+-- @separator:table
+-- @regex("Join Type: SEMI", true)
+explain select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 3 by rank with option 'mode=pre';
 select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 3 by rank with option 'mode=pre';
 select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 3 by rank with option 'mode=auto';
 

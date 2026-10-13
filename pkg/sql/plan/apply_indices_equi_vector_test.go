@@ -221,9 +221,9 @@ func TestEquiVectorTopKEligibilityRejectsWithoutMutation(t *testing.T) {
 		{"null_vector", func(tc vectorJoinPlanCase) {
 			tc.builder.qry.Nodes[tc.projNode.Children[0]].OrderBy[0].Expr.GetF().Args[1].Expr = &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}
 		}},
-		{"hnsw", func(tc vectorJoinPlanCase) {
+		{"index_without_membership", func(tc vectorJoinPlanCase) {
 			for _, def := range tc.builder.qry.Nodes[tc.mainScanNodeID].TableDef.Indexes {
-				def.IndexAlgo = "hnsw"
+				def.IndexAlgo = "cagra"
 			}
 		}},
 		{"other_limit", func(tc vectorJoinPlanCase) {

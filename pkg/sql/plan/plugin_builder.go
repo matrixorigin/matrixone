@@ -98,7 +98,7 @@ func vectorSortApplyResult(
 func (builder *QueryBuilder) ApplyIndicesForSortUsingHnsw(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, opts planplugin.ApplyForSortOpts) (int32, bool, error) {
 	vc, m := fromPlanplugin(vctx, mti)
 	childBefore, hadChildBefore := vectorSortProjectChild(vc)
-	newID, err := builder.applyIndicesForSortUsingHnsw(nodeID, vc, m, opts.IdxColMap)
+	newID, err := builder.applyIndicesForSortUsingHnswWithColRefCnt(nodeID, vc, m, opts.ColRefCnt, opts.IdxColMap)
 	return vectorSortApplyResult(nodeID, newID, vc, childBefore, hadChildBefore, err)
 }
 

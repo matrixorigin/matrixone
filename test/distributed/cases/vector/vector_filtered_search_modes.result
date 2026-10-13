@@ -9,8 +9,34 @@ create index i_hnsw using hnsw on t_hnsw(v) op_type 'vector_l2_ops';
 create table t_ivf(id bigint primary key, v vecf32(2), category int);
 insert into t_ivf select id, v, category from t_hnsw;
 create index i_ivf using ivfflat on t_ivf(v) lists = 2 op_type 'vector_l2_ops';
+explain select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 3 by rank with option 'mode=pre';
+-- @regex("Join Type: SEMI", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_hnsw.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_filtered_search_modes.t_hnsw  𝄀
+                    Filter Cond: (t_hnsw.category = 1)  𝄀
+                    Runtime Filter Probe: t_hnsw.id  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_hnsw.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on i_hnsw [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: i_hnsw, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Table Scan on vector_filtered_search_modes.t_hnsw  𝄀
+                          Filter Cond: (t_hnsw.category = 1)
 select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 3 by rank with option 'mode=pre';
-not supported: mode=pre on index type hnsw
+➤ id[-5,64,0]  𝄀
+51  𝄀
+52  𝄀
+53
 select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 3 by rank with option 'mode=auto';
 not supported: mode=auto on index type hnsw
 explain select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 3 by rank with option 'mode=post';
