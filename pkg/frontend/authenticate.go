@@ -11164,7 +11164,7 @@ func protocolVersionForTenantInitializationWithContext(
 	if !ok {
 		return legacyVersion, nil
 	}
-	if version < defines.MORPCVersion112 {
+	if version < defines.MORPCVersion113 {
 		// Preserve every pre-existing protocol-specific information_schema
 		// contract. Only the new VIEWS function needs the v109 predecessor
 		// fallback; promoting an older known protocol would also install newer
@@ -11173,21 +11173,21 @@ func protocolVersionForTenantInitializationWithContext(
 	}
 	// The local protocol version and the authoring floor advance at different
 	// points during admission. The former only says that this CN can decode
-	// v112; the latter says that the local catalog fence has completed and new
-	// v112 metadata may be published. Keep account creation on the predecessor
+	// v113; the latter says that the local catalog fence has completed and new
+	// v113 metadata may be published. Keep account creation on the predecessor
 	// until that write-side fence is ready. A missing key preserves the
 	// standalone/unit-test behavior used by runtimes created before admission.
 	if floorValue, present := rt.GetGlobalVariables(
 		moruntime.PersistedExpressionProtocolAuthoringFloor); present {
 		floor, valid := floorValue.(int64)
-		if !valid || floor < defines.MORPCVersion112 {
+		if !valid || floor < defines.MORPCVersion113 {
 			if err := ctx.Err(); err != nil {
 				return 0, err
 			}
 			return predecessorViewsVersion, nil
 		}
 	}
-	supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion112)
+	supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion113)
 	if err != nil {
 		// Capability discovery is deliberately best-effort for account
 		// creation. Do not turn a temporary inventory/RPC failure into a

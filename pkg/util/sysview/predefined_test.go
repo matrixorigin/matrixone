@@ -320,7 +320,7 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 	definitions := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion118)
 	require.Contains(t, definitions, InformationSchemaSchemataDDL)
 	require.Contains(t, definitions, InformationSchemaTablesV118DDL)
-	current := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion112)
+	current := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion113)
 	assert.Equal(t, InitInformationSchemaSysTables, current)
 	assert.Contains(t, current, InformationSchemaColumnsDDL)
 	assert.Contains(t, strings.Join(current, "\n"), "mo_view_definition(")
