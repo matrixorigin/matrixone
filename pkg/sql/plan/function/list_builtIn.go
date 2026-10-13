@@ -595,6 +595,35 @@ func wkbConstructor(id int, fn executeLogicOfOverload) FuncNew {
 }
 
 var supportedStringBuiltIns = []FuncNew{
+	// MySQL Performance Schema formatting functions evaluate in the DOUBLE domain.
+	{
+		functionId: FORMAT_BYTES,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType:    func([]types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:      func() executeLogicOfOverload { return formatBytes },
+			},
+		},
+	},
+	{
+		functionId: FORMAT_PICO_TIME,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType:    func([]types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:      func() executeLogicOfOverload { return formatPicoTime },
+			},
+		},
+	},
 	// function `ascii`
 	{
 		functionId: ASCII,
