@@ -25,9 +25,6 @@ import (
 // SET_VAR overrides without mutating session state. The first override for a
 // variable wins, matching optimizer-hint duplicate semantics.
 func querySchedulingIntentForStatement(ses FeSession, sql string) schedule.SchedulingIntent {
-	if intent, ok := inheritedQuerySchedulingIntent(ses); ok {
-		return intent
-	}
 	if !hasSchedulingOptimizerHint(sql) {
 		return querySchedulingIntent(ses)
 	}
@@ -39,12 +36,6 @@ func querySchedulingIntentForStatementWithSQLMode(
 	sql string,
 	sqlMode string,
 ) schedule.SchedulingIntent {
-	if intent, ok := inheritedQuerySchedulingIntent(ses); ok {
-		// The SQL here may be generated internal work. Its text is not the
-		// owner of the parent statement's SET_VAR policy, so never rebuild or
-		// widen the routing intent from child SQL.
-		return intent
-	}
 	intent := querySchedulingIntent(ses)
 	if !hasSchedulingOptimizerHint(sql) {
 		return intent
@@ -75,14 +66,6 @@ func querySchedulingIntentForStatementWithSQLMode(
 		intent.PoolFallback = schedule.PoolFallbackPolicy(255)
 	}
 	return intent
-}
-
-func inheritedQuerySchedulingIntent(ses FeSession) (schedule.SchedulingIntent, bool) {
-	backSes, ok := ses.(*backSession)
-	if !ok || !backSes.hasRoutingIntent {
-		return schedule.SchedulingIntent{}, false
-	}
-	return backSes.routingIntent, true
 }
 
 func hasSchedulingOptimizerHint(sql string) bool {

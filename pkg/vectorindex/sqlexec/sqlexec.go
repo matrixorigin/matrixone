@@ -401,8 +401,6 @@ func runSql(sqlproc *SqlProcess, sql string, optimizerHints string) (executor.Re
 			WithDatabase(sqlproc.executionDatabase(proc.GetSessionInfo().Database)).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
-			WithCNLabels(proc.GetSessionInfo().CNLabels).
-			WithQuerySchedulingIntent(proc.GetSessionInfo().QuerySchedulingIntent).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
 			WithFrontend(proc.Base.IsFrontend).
 			WithStatementOption(stmtOpt)
@@ -543,8 +541,6 @@ func runStreamingSql(
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
 			WithStreaming(stream_chan, error_chan).
-			WithCNLabels(proc.GetSessionInfo().CNLabels).
-			WithQuerySchedulingIntent(proc.GetSessionInfo().QuerySchedulingIntent).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
 			WithFrontend(proc.Base.IsFrontend).
 			WithStatementOption(stmtOpt)
@@ -607,8 +603,6 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 			WithDatabase(proc.GetSessionInfo().Database).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
-			WithCNLabels(proc.GetSessionInfo().CNLabels).
-			WithQuerySchedulingIntent(proc.GetSessionInfo().QuerySchedulingIntent).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
 			WithFrontend(proc.Base.IsFrontend)
 		return exec.ExecTxn(topContext, execFunc, opts)

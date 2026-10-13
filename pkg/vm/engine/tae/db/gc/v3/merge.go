@@ -71,6 +71,7 @@ func MergeCheckpoint(
 			fs,
 			ckpEntry.GetLocation(),
 			ckpEntry.GetVersion(),
+			nil,
 			&types.TS{},
 		); err != nil {
 			return

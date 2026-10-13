@@ -217,10 +217,7 @@ type BackupObject struct {
 	Location Location
 	CrateTS  types.TS
 	DropTS   types.TS
-	// Checkpoint row ownership; zero TableID denotes a checkpoint file.
-	TableID    uint64
-	ObjectType int8
-	NeedCopy   bool
+	NeedCopy bool
 }
 
 func MakeBlockInfoSlice(cnt int) BlockInfoSlice {

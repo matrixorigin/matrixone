@@ -556,7 +556,6 @@ func TestSQLTaskStatementsRequireAdminPrivilege(t *testing.T) {
 
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
-	mockAuthorizationUser(t, ses)
 	ctx := context.Background()
 	stmts := []tree.Statement{
 		&tree.CreateSQLTask{Name: tree.Identifier("task_auth"), SQLBody: "select 1"},
@@ -566,8 +565,8 @@ func TestSQLTaskStatementsRequireAdminPrivilege(t *testing.T) {
 	}
 
 	for _, stmt := range stmts {
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
+		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
 		require.NoError(t, err)
 		require.True(t, ok)
 	}
@@ -581,8 +580,8 @@ func TestSQLTaskStatementsRequireAdminPrivilege(t *testing.T) {
 		DefaultRoleID: 30,
 	})
 	for _, stmt := range stmts {
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt, priv)
+		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ctx, ses, stmt)
 		require.NoError(t, err)
 		require.False(t, ok)
 	}

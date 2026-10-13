@@ -93,12 +93,6 @@ type TxnClient interface {
 	GetState() TxnState
 }
 
-// ReadSnapshotClient is an optional capability for metadata reads that share
-// normal RC visibility but do not create a user transaction or workspace.
-type ReadSnapshotClient interface {
-	ReadSnapshot(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error)
-}
-
 type TxnState struct {
 	State int
 	// user active txns

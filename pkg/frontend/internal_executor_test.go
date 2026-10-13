@@ -16,14 +16,10 @@ package frontend
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"testing"
 
-	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -32,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
@@ -57,315 +51,18 @@ func TestIe(t *testing.T) {
 			ctx := context.TODO()
 			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 			setPu("", pu)
-			bh := &backgroundExecTest{}
-			bh.init()
-			bh.sql2result[getSqlForRoleNameOfRoleId(0)] = newMrsForRestoreStringRows([]string{"role_name"}, [][]interface{}{{moAdminRoleName}})
-			stub := gostub.StubFunc(&NewBackgroundExec, bh)
-			defer stub.Reset()
 			executor := newIe(sid)
 			executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
-			sess, err := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
-			require.NoError(t, err)
-			defer sess.Close()
+			sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
 			assert.Equal(t, "dump", sess.GetResponser().GetStr(USERNAME))
-			assert.Equal(t, "dump", sess.GetTenantInfo().GetUser())
 
-			err = executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
+			err := executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
 			assert.Error(t, err)
 			res := executor.Query(ctx, "whatever", ie.NewOptsBuilder().Finish())
 			assert.Error(t, err)
 			assert.Equal(t, uint64(0), res.RowCount())
 		},
 	)
-}
-
-func TestInternalExecutorAuthorizationIdentity(t *testing.T) {
-	runtime.RunTest("", func(rt runtime.Runtime) {
-		setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
-		bh := &backgroundExecTest{}
-		bh.init()
-		bh.sql2result["select account_name from mo_catalog.mo_account where account_id = 10"] = newMrsForRestoreStringRows([]string{"account_name"}, [][]interface{}{{"tenant"}})
-		bh.sql2result[getSqlForRoleNameOfRoleId(43)] = newMrsForRestoreStringRows([]string{"role_name"}, [][]interface{}{{"selected_writer"}})
-		bh.sql2result[getSqlForRoleNameOfRoleId(0)] = newMrsForRestoreStringRows([]string{"role_name"}, [][]interface{}{{moAdminRoleName}})
-		bh.sql2result["select account_name from mo_catalog.mo_account where account_id = 99"] = newMrsForRestoreStringRows([]string{"account_name"}, nil)
-		bh.sql2result[getSqlForRoleNameOfRoleId(99)] = newMrsForRestoreStringRows([]string{"role_name"}, nil)
-		stub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer stub.Reset()
-		checkSource := func(t *testing.T, sess *Session, defaultSystem, wantInternal bool) {
-			t.Helper()
-			input := &UserInput{sql: "/* cloud_nonuser */ select 1; select 2", internalSQLSource: defaultSystem}
-			require.False(t, input.isInternal(), "source provenance must not become an internal AST input")
-			require.False(t, sess.GetIsInternal(), "source provenance must not bypass authorization")
-			require.Equal(t, wantInternal, input.isInternalSQLSource(sess))
-			fragments, sources, err := schedulingSQLByStatementWithSQLMode(t.Context(), input.sql, "", input.isInternalSQLSource(sess))
-			require.NoError(t, err)
-			require.Len(t, fragments, 2)
-			wantSources := []string{constant.CloudNoUserSql, constant.ExternSql}
-			plainSource := constant.ExternSql
-			if wantInternal {
-				wantSources = []string{constant.InternalSql, constant.InternalSql}
-				plainSource = constant.InternalSql
-			}
-			require.Equal(t, wantSources, sources)
-			input.setSqlSourceTypes(sess, sources)
-			require.Equal(t, wantSources, input.getSqlSourceTypes())
-			plain := &UserInput{sql: "select 1", internalSQLSource: defaultSystem}
-			plain.genSqlSourceType(sess)
-			require.Equal(t, []string{plainSource}, plain.getSqlSourceTypes())
-		}
-		// The default numeric sys/root/moadmin identity must agree with the username
-		// checked by authorization. This must not turn internal execution into
-		// an authorization bypass or replace any explicitly supplied principal.
-		sysContext := defines.AttachAccount(t.Context(), 0, 0, 0)
-		tenantContext := defines.AttachAccount(t.Context(), 10, 42, 43)
-		for _, tc := range []struct {
-			name                      string
-			ctx                       context.Context
-			base, command             ie.SessionOverrideOptions
-			user                      string
-			accountID, userID, roleID uint32
-			defaultSystem             bool
-		}{
-			{name: "default without context identity", ctx: t.Context(), user: "root", defaultSystem: true},
-			{name: "default sys account only", ctx: defines.AttachAccountId(t.Context(), 0), user: "root", defaultSystem: true},
-			{name: "default sys zero IDs", ctx: sysContext, user: "root", defaultSystem: true},
-			{name: "default sys public role stays fail-closed", ctx: defines.AttachAccount(t.Context(), 0, 0, publicRoleID), user: "internal", roleID: publicRoleID},
-			{name: "default sys selected role stays fail-closed", ctx: defines.AttachAccount(t.Context(), 0, 0, 43), user: "internal", roleID: 43},
-			{name: "non-sys zero user is not root", ctx: defines.AttachAccount(t.Context(), 10, 0, 43), accountID: 10, roleID: 43},
-			{name: "sys nonzero user is not root", ctx: defines.AttachAccount(t.Context(), 0, 42, 43), user: "internal", userID: 42, roleID: 43},
-			{
-				name: "base changes account", ctx: sysContext,
-				base: ie.NewOptsBuilder().AccountId(10).DefaultRoleId(43).Finish(),
-				user: "internal", accountID: 10, roleID: 43,
-			},
-			{
-				name: "command changes account", ctx: sysContext,
-				command: ie.NewOptsBuilder().AccountId(10).DefaultRoleId(43).Finish(),
-				user:    "internal", accountID: 10, roleID: 43,
-			},
-			{
-				name: "base changes user", ctx: sysContext,
-				base: ie.NewOptsBuilder().UserId(42).DefaultRoleId(43).Finish(),
-				user: "internal", userID: 42, roleID: 43,
-			},
-			{
-				name: "command changes user", ctx: sysContext,
-				command: ie.NewOptsBuilder().UserId(42).DefaultRoleId(43).Finish(),
-				user:    "internal", userID: 42, roleID: 43,
-			},
-			{
-				name: "base restores sys root but preserves non-admin role", ctx: tenantContext,
-				base:   ie.NewOptsBuilder().AccountId(0).UserId(0).Finish(),
-				roleID: 43,
-			},
-			{
-				name: "command restores sys root but preserves non-admin role", ctx: tenantContext,
-				command: ie.NewOptsBuilder().AccountId(0).UserId(0).Finish(),
-				roleID:  43,
-			},
-			{
-				name: "base restores full sys root moadmin identity", ctx: tenantContext,
-				base: ie.NewOptsBuilder().AccountId(0).UserId(0).DefaultRoleId(0).Finish(),
-				user: "root", defaultSystem: true,
-			},
-			{
-				name: "explicit base internal stays internal", ctx: sysContext,
-				base: ie.NewOptsBuilder().Username("internal").DefaultRoleId(43).Finish(),
-				user: "internal", roleID: 43,
-			},
-			{
-				name: "explicit command internal stays internal", ctx: sysContext,
-				command: ie.NewOptsBuilder().Username("sys:internal:moadmin").DefaultRoleId(43).Finish(),
-				user:    "internal", roleID: 43,
-			},
-			{
-				name: "command restores root after base numeric identity", ctx: sysContext,
-				base:    ie.NewOptsBuilder().AccountId(10).UserId(42).DefaultRoleId(43).Finish(),
-				command: ie.NewOptsBuilder().AccountId(0).UserId(0).DefaultRoleId(0).Finish(),
-				user:    "root", defaultSystem: true,
-			},
-			{
-				name: "command overrides base root IDs", ctx: sysContext,
-				base:    ie.NewOptsBuilder().AccountId(0).UserId(0).DefaultRoleId(43).Finish(),
-				command: ie.NewOptsBuilder().AccountId(10).UserId(42).Finish(),
-				user:    "internal", accountID: 10, userID: 42, roleID: 43,
-			},
-			{
-				name: "numeric command retains explicit base name", ctx: tenantContext,
-				base:    ie.NewOptsBuilder().Username("internal").Finish(),
-				command: ie.NewOptsBuilder().AccountId(0).UserId(0).Finish(),
-				user:    "internal", roleID: 43,
-			},
-			{
-				name: "command explicit name overrides base root", ctx: sysContext,
-				base:    ie.NewOptsBuilder().Username("root").Finish(),
-				command: ie.NewOptsBuilder().Username("internal").DefaultRoleId(43).Finish(),
-				user:    "internal", roleID: 43,
-			},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				executor := newIe("")
-				executor.ApplySessionOverride(tc.base)
-				sess, err := executor.newCmdSession(tc.ctx, tc.command)
-				require.NoError(t, err)
-				defer sess.Close()
-				principal := sess.GetTenantInfo()
-				require.Equal(t, tc.user, principal.GetUser())
-				require.Equal(t, tc.accountID, principal.GetTenantID())
-				require.Equal(t, tc.userID, principal.GetUserID())
-				require.Equal(t, tc.roleID, principal.GetDefaultRoleID())
-				require.False(t, sess.GetIsInternal(), "normalization must not bypass catalog authorization")
-				defaultSystem := executor.usesDefaultSystemPrincipal(sess, tc.command)
-				require.Equal(t, tc.defaultSystem, defaultSystem)
-				if tc.defaultSystem {
-					require.Equal(t, sysAccountName, principal.GetTenant())
-				}
-				checkSource(t, sess, defaultSystem, tc.defaultSystem || tc.user == "internal")
-				for _, trusted := range []bool{false, true} {
-					authSQL := getSqlForActiveRolesForAuthorization(principal, trusted)
-					require.Contains(t, authSQL, fmt.Sprintf("u.user_id = %d", tc.userID))
-					require.Contains(t, authSQL, "u.user_name = '"+tc.user+"'")
-				}
-			})
-		}
-		for _, username := range []string{"definer", "tenant:definer", "tenant:definer:writer", "tenant#definer#writer", "tenant%3Adefiner%3Awriter", "tenant:definer:writer?label=value"} {
-			t.Run(username, func(t *testing.T) {
-				executor := newIe("")
-				executor.ApplySessionOverride(ie.NewOptsBuilder().Username("base").Finish())
-				ctx := defines.AttachAccount(t.Context(), 0, 0, 0)
-				opts := taskservice.DefinerOpts(taskservice.SQLTask{AccountID: 10, Creator: username, CreatorUserID: 42, CreatorRoleID: 43})
-				sess, err := executor.newCmdSession(ctx, opts)
-				require.NoError(t, err)
-				defer sess.Close()
-				principal := sess.GetTenantInfo()
-				require.Equal(t, "definer", principal.GetUser())
-				require.Equal(t, username, sess.GetUserName())
-				require.Equal(t, uint32(10), principal.GetTenantID())
-				require.Equal(t, uint32(42), principal.GetUserID())
-				require.Equal(t, uint32(43), principal.GetDefaultRoleID())
-				require.Equal(t, "tenant", principal.GetTenant())
-				require.Equal(t, "selected_writer", principal.GetDefaultRole(), "selected numeric role, not login role")
-				require.Contains(t, getSqlForActiveRolesForAuthorization(principal, false), "u.user_name = 'definer'")
-				require.False(t, executor.usesDefaultSystemPrincipal(sess, opts))
-				checkSource(t, sess, false, false)
-			})
-		}
-		t.Run("root zero IDs", func(t *testing.T) {
-			executor := newIe("")
-			ctx := defines.AttachAccount(t.Context(), 0, 0, 0)
-			opts := taskservice.DefinerOpts(taskservice.SQLTask{Creator: "root"})
-			sess, err := executor.newCmdSession(ctx, opts)
-			require.NoError(t, err)
-			defer sess.Close()
-			require.Equal(t, "root", sess.GetTenantInfo().GetUser())
-			require.Zero(t, sess.GetTenantInfo().GetTenantID())
-			require.Zero(t, sess.GetTenantInfo().GetUserID())
-			require.Zero(t, sess.GetTenantInfo().GetDefaultRoleID())
-			require.False(t, executor.usesDefaultSystemPrincipal(sess, opts))
-			checkSource(t, sess, false, false)
-		})
-		for _, tc := range []struct {
-			name, externalUser string
-			roleID             uint32
-			present            bool
-			failure            error
-		}{
-			{name: "default root catalog present", present: true},
-			{name: "default root catalog missing"},
-			{name: "default root catalog lookup error", failure: errors.New("catalog lookup failed")},
-			{name: "default public role cannot normalize into root", roleID: publicRoleID},
-			{name: "default selected role cannot normalize into root", roleID: 43},
-			{name: "external root name is not an authorization bypass", externalUser: "root"},
-			{name: "external internal name is not an authorization bypass", externalUser: "internal"},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				var sess *Session
-				if tc.externalUser == "" {
-					executor := newIe("")
-					opts := ie.NewOptsBuilder().Finish()
-					var err error
-					sess, err = executor.newCmdSession(defines.AttachAccount(t.Context(), sysAccountID, rootID, tc.roleID), opts)
-					require.NoError(t, err)
-					defer sess.Close()
-					defaultSystem := executor.usesDefaultSystemPrincipal(sess, opts)
-					require.Equal(t, tc.roleID == moAdminRoleID, defaultSystem)
-					checkSource(t, sess, defaultSystem, true)
-				} else {
-					// An ordinary session has neither the executor's origin nor
-					// isInternal set, even when its login name is "internal".
-					sess = &Session{}
-					sess.SetTenantInfo(&TenantInfo{Tenant: "sys", User: tc.externalUser, DefaultRole: moAdminRoleName})
-					checkSource(t, sess, false, tc.externalUser == "internal")
-				}
-				authBH := &backgroundExecTest{}
-				authBH.init()
-				require.Equal(t, tc.roleID, sess.GetTenantInfo().GetDefaultRoleID())
-				query := getSqlForActiveRolesForAuthorization(sess.GetTenantInfo(), tc.roleID == moAdminRoleID || tc.roleID == publicRoleID)
-				wantUser := tc.externalUser
-				if wantUser == "" {
-					wantUser = "root"
-					if tc.roleID != moAdminRoleID {
-						wantUser = "internal"
-					}
-				}
-				require.Contains(t, query, "u.user_id = 0 and u.user_name = '"+wantUser+"'")
-				var rows [][]interface{}
-				if tc.present {
-					rows = [][]interface{}{{int64(0)}}
-				}
-				authBH.sql2result[query] = newMrsForRoleIdOfUserId(rows)
-				if tc.failure != nil {
-					authBH.sql2err[query] = tc.failure
-				}
-				roles := &btree.Set[int64]{}
-				err := loadActiveRolesForAuthorization(t.Context(), authBH, sess, roles)
-				switch {
-				case tc.failure != nil:
-					require.ErrorIs(t, err, tc.failure)
-				case !tc.present:
-					require.ErrorContains(t, err, "authenticated user no longer matches current catalog")
-				default:
-					require.NoError(t, err)
-				}
-				require.Equal(t, tc.present, roles.Contains(int64(tc.roleID)))
-				require.Equal(t, []string{query}, authBH.executedSQLs, "default root must still validate current catalog identity")
-			})
-		}
-		for _, username := range []string{"tenant:", "tenant::writer"} {
-			for _, base := range []bool{false, true} {
-				t.Run("invalid/"+username+map[bool]string{false: "/command", true: "/base"}[base], func(t *testing.T) {
-					executor := newIe("")
-					opts := ie.NewOptsBuilder().Username(username).Finish()
-					if base {
-						executor.ApplySessionOverride(opts)
-						opts = ie.NewOptsBuilder().Finish()
-					}
-					require.ErrorContains(t, executor.Exec(t.Context(), "select 1", opts), "invalid user name")
-					require.ErrorContains(t, executor.Query(t.Context(), "select 1", opts).Error(), "invalid user name")
-				})
-			}
-		}
-		for _, tc := range []struct {
-			name      string
-			accountID uint32
-			roleID    uint32
-			errorText string
-		}{
-			{"missing account", 99, 43, "there is no account id 99"},
-			{"missing selected role", 10, 99, "there is no role id 99"},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				executor := newIe("")
-				opts := ie.NewOptsBuilder().Username("tenant:definer:writer").AccountId(tc.accountID).DefaultRoleId(tc.roleID).Finish()
-				execErr := executor.Exec(t.Context(), "select 1", opts)
-				require.ErrorContains(t, execErr, tc.errorText)
-				require.True(t, moerr.IsMoErrCode(execErr, moerr.ErrInternal))
-				queryErr := executor.Query(t.Context(), "select 1", opts).Error()
-				require.ErrorContains(t, queryErr, tc.errorText)
-				require.True(t, moerr.IsMoErrCode(queryErr, moerr.ErrInternal))
-			})
-		}
-	})
 }
 
 func TestIeProto(t *testing.T) {
@@ -462,8 +159,7 @@ func Test_internalProtocol_Write(t *testing.T) {
 	assert.Nil(t, ip.WriteOK(1, 1, 0, 0, ""))
 	assert.Nil(t, ip.WriteEOFOrOK(0, 1))
 
-	ses, err := executorVar.newCmdSession(ctx, ie.NewOptsBuilder().Finish())
-	require.NoError(t, err)
+	ses := executorVar.newCmdSession(ctx, ie.NewOptsBuilder().Finish())
 	col1 := &MysqlColumn{}
 	col1.SetName("col1")
 	col1.SetColumnType(defines.MYSQL_TYPE_LONG)
@@ -493,7 +189,7 @@ func Test_internalProtocol_Write(t *testing.T) {
 
 	// ======================= main ===================
 	ip.Reset(ses)
-	err = ip.Write(execCtx, nil, batch1)
+	err := ip.Write(execCtx, nil, batch1)
 	require.NoError(t, err)
 	require.Equal(t, 1, int(ip.result.affectedRows))
 	require.Equal(t, 1, len(ip.result.resultSet.Data))

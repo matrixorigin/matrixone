@@ -30,7 +30,7 @@ func TestGetVariables(t *testing.T) {
 
 	ctx := context.Background()
 
-	ses := newSes(ctrl)
+	ses := newSes(nil, ctrl)
 	defer ses.Close()
 
 	tempExecCtx := ExecCtx{

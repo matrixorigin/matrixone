@@ -1680,18 +1680,14 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if err := collectObjectsFromCheckpointData(c.ctx, ckpReader, ickpObjects); err != nil {
-			return err
-		}
+		collectObjectsFromCheckpointData(c.ctx, ckpReader, ickpObjects)
 	}
 	cptCkpObjects := make(map[string]map[uint64]*ObjectEntry, 0)
 	ckpReader, err := c.getCkpReader(c.ctx, cpt)
 	if err != nil {
 		return err
 	}
-	if err := collectObjectsFromCheckpointData(c.ctx, ckpReader, cptCkpObjects); err != nil {
-		return err
-	}
+	collectObjectsFromCheckpointData(c.ctx, ckpReader, cptCkpObjects)
 
 	tList, pList := c.mutation.snapshotMeta.AccountToTableSnapshots(snapshots, pitr)
 	for name, tables := range ickpObjects {

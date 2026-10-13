@@ -603,10 +603,6 @@ func recreateTableFromTS(
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore table: %v, restore timestamp: %d", restoreAccount, snapshotTs, tblInfo.tblName, snapshotTs))
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
-	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
-	if err != nil {
-		return err
-	}
 	if err = bh.Exec(ctx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 		return
 	}
