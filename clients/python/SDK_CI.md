@@ -2,7 +2,8 @@
 
 Repository Actions discovers `.github/workflows/python-sdk.yml` at the repository
 root. Python-only PRs run the installed-package offline suite and wheel/sdist
-validation on Python 3.10/3.12 and SQLAlchemy 1.4/2.0/2.1. Installing the package
+validation on Python 3.10/3.12 with SQLAlchemy 1.4/2.0 and Python 3.11/3.12
+with SQLAlchemy 2.1 (which requires Python >=3.11). Installing the package
 registers its dialect entry points; installing SQLAlchemy's asyncio extra supplies
 the async runtime. Python 3.8/3.9 qualification and optional-extra contract cleanup
 remain separately tracked; this matrix does not certify those runtimes.
