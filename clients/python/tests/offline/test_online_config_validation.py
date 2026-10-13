@@ -13,12 +13,10 @@
 # limitations under the License.
 
 """
-Test configuration validation for online tests
+Offline validation of the online test configuration
 """
 
-import pytest
-import os
-from .test_config import online_config
+from tests.online.test_config import online_config
 
 
 class TestConfigValidation:
@@ -73,26 +71,16 @@ class TestConfigValidation:
         assert isinstance(dimensions, int)
         assert isinstance(data_size, int)
 
-    def test_config_respects_environment_variables(self):
-        """Test that config respects environment variables"""
-        # Save original values
-        original_host = online_config.host
-        original_port = online_config.port
-        original_user = online_config.user
-        original_password = online_config.password
-        original_database = online_config.database
+    def test_config_respects_environment_variables(self, monkeypatch):
+        """Environment overrides do not change the deployment used by the next test."""
+        from tests.online.test_config import OnlineTestConfig
 
-        try:
-            # Set test environment variables
-            os.environ['MATRIXONE_HOST'] = 'test_host'
-            os.environ['MATRIXONE_PORT'] = '9999'
-            os.environ['MATRIXONE_USER'] = 'test_user'
-            os.environ['MATRIXONE_PASSWORD'] = 'test_password'
-            os.environ['MATRIXONE_DATABASE'] = 'test_db'
-
-            # Create new config instance to test env vars
-            from .test_config import OnlineTestConfig
-
+        with monkeypatch.context() as patch:
+            patch.setenv('MATRIXONE_HOST', 'test_host')
+            patch.setenv('MATRIXONE_PORT', '9999')
+            patch.setenv('MATRIXONE_USER', 'test_user')
+            patch.setenv('MATRIXONE_PASSWORD', 'test_password')
+            patch.setenv('MATRIXONE_DATABASE', 'test_db')
             test_config = OnlineTestConfig()
 
             assert test_config.host == 'test_host'
@@ -100,18 +88,6 @@ class TestConfigValidation:
             assert test_config.user == 'test_user'
             assert test_config.password == 'test_password'
             assert test_config.database == 'test_db'
-
-        finally:
-            # Clean up environment variables
-            for key in [
-                'MATRIXONE_HOST',
-                'MATRIXONE_PORT',
-                'MATRIXONE_USER',
-                'MATRIXONE_PASSWORD',
-                'MATRIXONE_DATABASE',
-            ]:
-                if key in os.environ:
-                    del os.environ[key]
 
     def test_config_string_representation(self):
         """Test config string representation"""
