@@ -182,27 +182,27 @@ func numericBinaryLiteralProtocolVersion(
 	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion) })
 	// The coordinator is on the new contract while the fake worker is varied
 	// across protocol versions to prove mixed-version admission.
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion112)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion118)
 	client.version = version
 	c.execType = plan.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 
-	if version < defines.MORPCVersion112 {
+	if version < defines.MORPCVersion118 {
 		require.Equal(t, plan.ExecTypeAP_ONECN, c.execType,
-			"pre-v112 placement must fall back locally")
+			"pre-v118 placement must fall back locally")
 		require.Equal(t, c.addr, c.cnList[0].Addr)
 		_, err := encodeRemoteScope(scope, c.proc)
-		require.ErrorContains(t, err, fmt.Sprintf("version %d", defines.MORPCVersion112),
+		require.ErrorContains(t, err, fmt.Sprintf("version %d", defines.MORPCVersion118),
 			"a destination downgrade after placement must be rejected before send")
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline), fmt.Sprintf("version %d", defines.MORPCVersion112),
-			"pre-v112 receivers must fail closed")
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline), fmt.Sprintf("version %d", defines.MORPCVersion118),
+			"pre-v118 receivers must fail closed")
 		return
 	}
 
 	require.Equal(t, plan.ExecTypeAP_MULTICN, c.execType,
-		"v112 placement must retain distributed execution")
+		"v118 placement must retain distributed execution")
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
@@ -234,16 +234,20 @@ func TestNumericBinaryLiteralProvenanceAdmissionEveryMode(t *testing.T) {
 			info := c.proc.GetSessionInfo()
 			info.MySQLNumericCompatibilityMode = mode.mysql
 			info.LegacyNumericCompatibilityMode = false
-			for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112} {
+			for _, version := range []int64{
+				defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112,
+				defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116,
+				defines.MORPCVersion117, defines.MORPCVersion118,
+			} {
 				numericBinaryLiteralProtocolVersion(t, c, client, qry, scope, wirePipeline, version)
 			}
 
 			info.LegacyNumericCompatibilityMode = true
 			c.execType = plan.ExecTypeAP_MULTICN
 			c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-			client.version = defines.MORPCVersion112
+			client.version = defines.MORPCVersion118
 			rt := runtime.ServiceRuntime(c.proc.GetService())
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion112)
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion118)
 			require.ErrorContains(t, c.constrainRemoteExpressionWorkers(qry), "legacy session contract")
 			_, err = encodeRemoteScope(scope, c.proc)
 			require.ErrorContains(t, err, "legacy session contract")
@@ -319,20 +323,24 @@ func TestStringNumericCompatibilityAdmissionBoundaries(t *testing.T) {
 			oldVersion, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
 			t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion) })
 			wirePipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
-			for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112} {
-				// The coordinator uses v112 while worker placement varies; then
+			for _, version := range []int64{
+				defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112,
+				defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116,
+				defines.MORPCVersion117, defines.MORPCVersion118,
+			} {
+				// The coordinator uses v118 while worker placement varies; then
 				// receiver validation is run at the worker's actual version.
-				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion112)
+				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion118)
 				client.version = version
 				c.execType = plan.ExecTypeAP_MULTICN
 				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 				require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-				denied := tc.requiresCurrent && version < defines.MORPCVersion112
+				denied := tc.requiresCurrent && version < defines.MORPCVersion118
 				if denied {
 					require.Equal(t, plan.ExecTypeAP_ONECN, c.execType)
 					require.Equal(t, c.addr, c.cnList[0].Addr)
 					_, err = encodeRemoteScope(scope, c.proc)
-					require.ErrorContains(t, err, fmt.Sprintf("version %d", defines.MORPCVersion112))
+					require.ErrorContains(t, err, fmt.Sprintf("version %d", defines.MORPCVersion118))
 				} else {
 					require.Equal(t, plan.ExecTypeAP_MULTICN, c.execType)
 					data, sendErr := encodeRemoteScope(scope, c.proc)
@@ -342,7 +350,7 @@ func TestStringNumericCompatibilityAdmissionBoundaries(t *testing.T) {
 				rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
 				err = validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline)
 				if denied {
-					require.ErrorContains(t, err, fmt.Sprintf("version %d", defines.MORPCVersion112))
+					require.ErrorContains(t, err, fmt.Sprintf("version %d", defines.MORPCVersion118))
 				} else {
 					require.NoError(t, err)
 				}
