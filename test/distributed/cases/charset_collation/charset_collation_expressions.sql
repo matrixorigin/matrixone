@@ -131,4 +131,46 @@ SELECT LEAST(COALESCE(CAST('a' AS CHAR(3)) COLLATE utf8mb4_bin, 'a'),
 SELECT LEAST(COALESCE(CAST(NULL AS CHAR(3)) COLLATE utf8mb4_unicode_ci, 'Á'), 'zz') = 'a';
 SELECT CAST(LEAST(COALESCE(c COLLATE utf8mb4_bin, 'a'), COALESCE(c, 'bb')) AS CHAR(20))
        = 'a' COLLATE utf8mb4_general_ci FROM pad_values;
+
+-- Frontend AST consumers traverse the operand of COLLATE.
+-- Distinct source data detects a missed remap even while the source exists.
+DROP DATABASE IF EXISTS collation_expression_source;
+CREATE DATABASE collation_expression_source;
+CREATE TABLE collation_expression_source.source_values (id INT PRIMARY KEY, v VARCHAR(20));
+INSERT INTO collation_expression_source.source_values VALUES (1, 'source');
+SELECT HEX((SELECT v FROM collation_expression_source.source_values WHERE id = 1) COLLATE utf8mb4_bin);
+SET enable_remap_hint = 1;
+SET remap_rewrites = '{"remapdb":{"collation_expression_source":"collation_expression_test"}}';
+SELECT HEX((SELECT v FROM collation_expression_source.source_values WHERE id = 1) COLLATE utf8mb4_bin);
+SELECT HEX(collation_expression_source.source_values.v COLLATE utf8mb4_bin)
+       FROM collation_expression_source.source_values WHERE id = 1;
+SET remap_rewrites = '';
+DROP DATABASE collation_expression_source;
+SET remap_rewrites = '{"remapdb":{"collation_expression_source":"collation_expression_test"}}';
+SELECT HEX((SELECT v FROM collation_expression_source.source_values WHERE id = 1) COLLATE utf8mb4_bin);
+SET remap_rewrites = '';
+SET enable_remap_hint = 0;
+
+-- Materialize collated scalar subqueries in prepared SET, in argument order.
+PREPARE collated_set FROM 'SET @collated_value = (SELECT ''a'') COLLATE utf8mb4_bin';
+EXECUTE collated_set;
+SELECT HEX(@collated_value);
+DEALLOCATE PREPARE collated_set;
+PREPARE collated_set FROM 'SET @collated_value = CONCAT((SELECT ''left'') COLLATE utf8mb4_bin, (SELECT ''right'') COLLATE utf8mb4_bin)';
+EXECUTE collated_set;
+SELECT HEX(@collated_value);
+DEALLOCATE PREPARE collated_set;
+
+-- Reuse the same cached plan across changing scalar results, including NULL.
+PREPARE collated_set FROM 'SET @collated_value = (SELECT v FROM source_values WHERE id = 1) COLLATE utf8mb4_bin';
+EXECUTE collated_set;
+SELECT HEX(@collated_value);
+UPDATE source_values SET v = NULL WHERE id = 1;
+EXECUTE collated_set;
+SELECT @collated_value IS NULL;
+UPDATE source_values SET v = 'Z' WHERE id = 1;
+EXECUTE collated_set;
+SELECT HEX(@collated_value);
+DEALLOCATE PREPARE collated_set;
+SET @collated_value = NULL;
 DROP DATABASE collation_expression_test;
