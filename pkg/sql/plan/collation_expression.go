@@ -83,7 +83,14 @@ func (b *baseBinder) bindCollateExpr(ast *tree.CollateExpr, depth int32) (*Expr,
 			// SQL encoding remains utf8mb4 even without a comparison rule.
 			sourceCharset = collation.CharsetUTF8MB4
 		}
-		if sourceCharset != definition.Charset {
+		// Validate the resolved domain, not the native spelling: historical
+		// utf8/utf8mb3 aliases resolve to utf8mb4, while UCA keeps its native
+		// identity and therefore still rejects cross-charset requests.
+		targetDefinition, err := collation.EffectiveDefinition(uint32(identity), version)
+		if err != nil {
+			return nil, err
+		}
+		if sourceCharset != targetDefinition.Charset {
 			return nil, moerr.NewCollationCharsetMismatch(ctx, definition.Name, sourceCharset.Name())
 		}
 	}

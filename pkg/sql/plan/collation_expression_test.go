@@ -140,7 +140,7 @@ func TestExpressionCollationUTF8CharsetAdmission(t *testing.T) {
 		defer stmt.Free()
 		return BuildPlan(compiler, stmt, false)
 	}
-	created, err := build("create table collation_charset(s3 varchar(4) collate utf8_unicode_ci,s4 varchar(4) collate utf8mb4_unicode_ci)")
+	created, err := build("create table collation_charset(s3 varchar(4) collate utf8_unicode_ci,s4 varchar(4) collate utf8mb4_unicode_ci,legacy varchar(4))")
 	require.NoError(t, err)
 	compiler.tables["collation_charset"] = created.GetDdl().GetCreateTable().TableDef
 	compiler.objects["collation_charset"] = &ObjectRef{ObjName: "collation_charset", SchemaName: "tpch"}
@@ -159,6 +159,9 @@ func TestExpressionCollationUTF8CharsetAdmission(t *testing.T) {
 		{"select s4 collate utf8_unicode_ci from collation_charset", false},
 		{"select _utf8mb4'a' collate utf8_unicode_ci", false},
 		{"select 'a' collate utf8mb3_unicode_ci", false},
+		{"select s3 collate utf8_general_ci from collation_charset", false},
+		{"select _binary'a' collate utf8_bin", false},
+		{"select null collate utf8_general_ci", false},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
 			_, err := build(tc.sql)
@@ -170,6 +173,29 @@ func TestExpressionCollationUTF8CharsetAdmission(t *testing.T) {
 				require.Equal(t, uint16(1253), sqlErr.MySQLCode())
 			}
 		})
+	}
+	for _, alias := range []struct {
+		name     string
+		identity uint32
+	}{
+		{"utf8_general_ci", uint32(types.CharsetUTF8)},
+		{"utf8mb3_general_ci", uint32(types.CharsetUTF8)},
+		{"utf8_bin", uint32(types.CharsetUTF8MB4Bin)},
+		{"utf8mb3_bin", uint32(types.CharsetUTF8MB4Bin)},
+	} {
+		for _, source := range []string{"'a'", "legacy", "s4"} {
+			sql := "select " + source + " collate " + alias.name + " from collation_charset"
+			t.Run(sql, func(t *testing.T) {
+				p, err := build(sql)
+				require.NoError(t, err)
+				query := p.GetQuery()
+				expr := query.Nodes[query.Steps[0]].ProjectList[0]
+				require.Equal(t, alias.identity, expr.Typ.Charset)
+				require.Zero(t, expr.Typ.CollationVersion)
+				require.True(t, expr.Typ.CollationCoercibilitySet)
+				require.Zero(t, expr.Typ.CollationCoercibility)
+			})
+		}
 	}
 	require.True(t, proto.Equal(original, compiler.tables["collation_charset"]), "COLLATE admission must not relabel the source columns")
 }
