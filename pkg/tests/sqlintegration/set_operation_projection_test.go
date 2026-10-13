@@ -113,6 +113,80 @@ func TestSetOperationExternalColumnPruning(t *testing.T) {
 	})
 }
 
+func TestSharedCTEUnionProjection(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		defer cleanupSQLIntegration(t, cn, "drop database if exists shared_cte_projection")
+		for _, q := range []string{
+			"create database shared_cte_projection", "use shared_cte_projection",
+			"create table source_values(k int,n bigint,p varchar(44))",
+			"insert into source_values select result%3+1,result,case when result%3=1 then NULL else '7' end from generate_series(1,1000) g",
+		} {
+			_, err := conn.ExecContext(ctx, q)
+			require.NoError(t, err)
+		}
+		numeric := "with c as (select k,max(n) payload from source_values group by k) "
+		variable := "with c as (select k,max(p) payload from source_values group by k) "
+		numericQuery := numeric + "select k from (select k,payload from c union all select k,payload from c) u order by k"
+		variableQuery := variable + "select k from (select a.k,a.payload from c a join c b on a.k=b.k union all select 0,cast(NULL as varchar(44))) u order by k"
+		for _, query := range []string{numericQuery, variableQuery} {
+			rows, err := conn.QueryContext(ctx, "explain "+query)
+			require.NoError(t, err)
+			require.Equal(t, 2, strings.Count(strings.Join(readWindowNullRows(t, rows), "\n"), "Sink Scan"),
+				"the public fixture must execute two readers of an admitted shared producer")
+		}
+		for _, tc := range []struct {
+			name, query string
+			want        []string
+		}{
+			{"numeric-duplicates", numericQuery, []string{"1", "1", "2", "2", "3", "3"}},
+			{"variable-width", variableQuery, []string{"0", "1", "2", "3"}},
+			{"independent-producer-control", "select k from (select a.k,a.payload from (select k,max(p) payload from source_values group by k) a join (select k,max(p) payload from source_values group by k) b on a.k=b.k union all select 0,cast(NULL as varchar(44))) u order by k", []string{"0", "1", "2", "3"}},
+			{"retained-null-payload", variable + "select k,payload from (select k,payload from c union all select k,payload from c) u order by k", []string{"1:7", "1:7", "2:NULL", "2:NULL", "3:7", "3:7"}},
+			{"having-demand", "with c as (select k,max(p) payload from source_values group by k having max(p)='7') select k from (select a.k,a.payload from c a join c b on a.k=b.k union all select 0,cast(NULL as varchar(44))) u order by k", []string{"0", "1", "3"}},
+			{"count-carrier", variable + "select count(*) from c a join c b on a.k=b.k", []string{"3"}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				rows, err := conn.QueryContext(ctx, tc.query)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, readWindowNullRows(t, rows))
+			})
+		}
+		_, err = conn.ExecContext(ctx, "update source_values set p='invalid' where k=1")
+		require.NoError(t, err)
+		err = func() error {
+			rows, err := conn.QueryContext(ctx, "with c as (select k,cast(max(p) as bigint) payload from source_values group by k) select k from (select k,payload from c union all select k,payload from c) u")
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+			}
+			return rows.Err()
+		}()
+		require.Error(t, err, "unused fallible shared outputs must retain their error contract")
+		_, err = conn.ExecContext(ctx, "delete from source_values")
+		require.NoError(t, err)
+		for _, query := range []string{numericQuery, variable + "select k from (select a.k,a.payload from c a join c b on a.k=b.k union all select 0,cast(NULL as varchar(44))) u where k>0"} {
+			rows, err := conn.QueryContext(ctx, query)
+			require.NoError(t, err)
+			require.Empty(t, readWindowNullRows(t, rows))
+		}
+		rows, err := conn.QueryContext(ctx, "with c as (select 1 k,max(p) payload from source_values) select k from (select a.k,a.payload from c a join c b on a.k=b.k union all select 0,cast(NULL as varchar(44))) u order by k")
+		require.NoError(t, err)
+		require.Equal(t, []string{"0", "1"}, readWindowNullRows(t, rows), "scalar aggregate preserves its row on empty input")
+	})
+}
+
 func TestFilteredSetOperationProjection(t *testing.T) {
 	runSQLIntegration(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)

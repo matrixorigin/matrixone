@@ -37,6 +37,7 @@ import (
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1093,6 +1094,78 @@ func (builder *QueryBuilder) setOperationOutputCanPrune(node *plan.Node, pos int
 	return result
 }
 
+// sharedCTESinkOutputCanPrune proves totality inside the producer subtree.
+// Reader tags point back to SINK_SCAN, so following the global tag owner would
+// close a self-reference rather than establish the producer output contract.
+func (builder *QueryBuilder) sharedCTESinkOutputCanPrune(sink *plan.Node, pos int, memo map[[2]int32]bool) bool {
+	if sink == nil || sink.NodeType != plan.Node_SINK || sink.ExtraOptions != materialized.CTESinkOption ||
+		len(sink.BindingTags) != 1 || len(sink.Children) != 1 || pos < 0 || pos >= len(sink.ProjectList) {
+		return false
+	}
+	if _, preserve := builder.preserveSinkProjection[sink.NodeId]; preserve {
+		return false
+	}
+	root := sink.Children[0]
+	if root < 0 || int(root) >= len(builder.qry.Nodes) || builder.qry.Nodes[root] == nil {
+		return false
+	}
+	expr := sink.ProjectList[pos]
+	if expr == nil {
+		return false
+	}
+	col := expr.GetCol()
+	if col == nil || col.RelPos != sink.BindingTags[0] || col.ColPos != int32(pos) {
+		return false
+	}
+	key := [2]int32{sink.NodeId, int32(pos)}
+	if result, ok := memo[key]; ok {
+		return result
+	}
+	memo[key] = false
+	var ctx *BindContext
+	if int(sink.NodeId) < len(builder.ctxByNode) && sink.NodeId >= 0 {
+		ctx = builder.ctxByNode[sink.NodeId]
+	}
+	result := builder.cteExprIsTotal(root, expr, ctx, make(map[[2]int32]bool))
+	memo[key] = result
+	return result
+}
+
+func (builder *QueryBuilder) sharedCTEScanOutputCanPrune(scan *plan.Node, pos int, memo map[[2]int32]bool) bool {
+	if scan == nil || scan.NodeType != plan.Node_SINK_SCAN || len(scan.SourceStep) != 1 || len(scan.BindingTags) != 1 ||
+		pos < 0 || pos >= len(scan.ProjectList) {
+		return false
+	}
+	if _, preserve := builder.preserveScanProjection[scan.NodeId]; preserve {
+		return false
+	}
+	step := scan.SourceStep[0]
+	if step < 0 || int(step) >= len(builder.qry.Steps) {
+		return false
+	}
+	sinkID := builder.qry.Steps[step]
+	if sinkID < 0 || int(sinkID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	sink := builder.qry.Nodes[sinkID]
+	expr := scan.ProjectList[pos]
+	if expr == nil || sink == nil || len(scan.ProjectList) != len(sink.ProjectList) {
+		return false
+	}
+	if pos >= len(sink.ProjectList) || sink.ProjectList[pos] == nil {
+		return false
+	}
+	typ := sink.ProjectList[pos].Typ
+	if expr.Typ.Id != typ.Id || expr.Typ.Width != typ.Width || expr.Typ.Scale != typ.Scale || expr.Typ.Enumvalues != typ.Enumvalues || expr.Typ.Charset != typ.Charset {
+		return false
+	}
+	col := expr.GetCol()
+	if col == nil || col.RelPos != scan.BindingTags[0] || col.ColPos != int32(pos) {
+		return false
+	}
+	return builder.sharedCTESinkOutputCanPrune(sink, pos, memo)
+}
+
 // A pure expression may reference a side effect behind a projection alias.
 // Follow column lineage even inside arithmetic/casts, using the existing tag owner.
 func (builder *QueryBuilder) setOperationAliasesCanPrune(expr *plan.Expr, memo map[[2]int32]bool) bool {
@@ -1118,6 +1191,8 @@ func (builder *QueryBuilder) setOperationAliasesCanPrune(expr *plan.Expr, memo m
 			return len(source.BindingTags) == 1
 		case plan.Node_PROJECT, plan.Node_MATERIAL:
 			return builder.setOperationOutputCanPrune(source, int(col.ColPos), memo)
+		case plan.Node_SINK_SCAN:
+			return builder.sharedCTEScanOutputCanPrune(source, int(col.ColPos), memo)
 		default:
 			// Other schema owners can expose self references or computed slots,
 			// not projection definitions. Preserve unresolved evaluations.
@@ -4276,9 +4351,31 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID := builder.qry.Steps[i]
 		rootNode := builder.qry.Nodes[rootID]
 		colRefCnt := make(map[[2]int32]int)
+
 		if len(rootNode.BindingTags) > 0 {
 			resultTag := rootNode.BindingTags[0]
+			// A shared SINK reuses its producer tag. Seeding every root output
+			// pins unused producer work even after readers narrow colRefBool.
+			// Keep legacy seeding unless a real materialized column is demanded.
+			pruneSharedSink := false
+			if rootNode.NodeType == plan.Node_SINK && rootNode.ExtraOptions == materialized.CTESinkOption {
+				for j := range rootNode.ProjectList {
+					if colRefBool[[2]int32{int32(i), int32(j)}] {
+						pruneSharedSink = true
+						break
+					}
+				}
+			}
+			var sinkMemo map[[2]int32]bool
 			for j := range rootNode.ProjectList {
+				if pruneSharedSink && !colRefBool[[2]int32{int32(i), int32(j)}] {
+					if sinkMemo == nil {
+						sinkMemo = make(map[[2]int32]bool)
+					}
+					if builder.sharedCTESinkOutputCanPrune(rootNode, j, sinkMemo) {
+						continue
+					}
+				}
 				colRefCnt[[2]int32{resultTag, int32(j)}] = 1
 			}
 		}
