@@ -17,17 +17,18 @@ package explain
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"math"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	ft2plan "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	planpkg "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -605,8 +606,6 @@ func TestBuildSQLJSONPlanPreservesVectorIndexPayload(t *testing.T) {
 		"index=idx_embedding",
 		"metric=l2_distance",
 		"direction=INTERNAL",
-		"initial_probe_count=0",
-		"bucket_expand_step=0",
 		"post_filter_over_fetch=false",
 		"query_vector=1",
 		"candidate_limit=10",
@@ -639,8 +638,6 @@ func TestBuildSQLJSONPlanPreservesLiteralVectorQuery(t *testing.T) {
 	require.Equal(t, []string{
 		"index=idx_embedding",
 		"direction=INTERNAL",
-		"initial_probe_count=0",
-		"bucket_expand_step=0",
 		"post_filter_over_fetch=false",
 		"query_vector=[1,2]",
 	}, decoded.MatrixOne.Nodes[0].Expressions)
@@ -728,7 +725,9 @@ func buildPlannerSQLJSONNodes(t *testing.T, sql string) []sqlJSONNode {
 }
 
 func TestBuildSQLJSONPlanPreservesVectorExecutionSettings(t *testing.T) {
-	buildExpressions := func(probe uint32, direction plan.OrderBySpec_OrderByFlag, expand uint32, overfetch bool) []string {
+	buildExpressions := func(opts ivfflatplan.ScanOptions, direction plan.OrderBySpec_OrderByFlag, overfetch bool) []string {
+		settings, err := ivfflatplan.EncodeScanOptions(opts)
+		require.NoError(t, err)
 		data, err := BuildSQLJSONPlan(context.Background(), &plan.Query{
 			StmtType: plan.Query_SELECT,
 			Steps:    []int32{0},
@@ -736,9 +735,9 @@ func TestBuildSQLJSONPlanPreservesVectorExecutionSettings(t *testing.T) {
 				NodeId:   0,
 				NodeType: plan.Node_INDEX_SEARCH_SCAN,
 				IndexSearchScan: &plan.IndexSearchScan{
-					Index:               &plan.IndexDef{IndexName: "idx_embedding"},
+					Index:               &plan.IndexDef{IndexName: "idx_embedding", IndexAlgo: "ivfflat"},
 					Direction:           direction,
-					AlgoOptions:         []byte(fmt.Sprintf(`{"initial_probe_count":%d,"bucket_expand_step":%d}`, probe, expand)),
+					AlgoOptions:         settings,
 					PostFilterOverFetch: overfetch,
 				},
 			}},
@@ -753,15 +752,24 @@ func TestBuildSQLJSONPlanPreservesVectorExecutionSettings(t *testing.T) {
 		return decoded.MatrixOne.Nodes[0].Expressions
 	}
 
-	low := buildExpressions(1, plan.OrderBySpec_ASC, 2, false)
-	high := buildExpressions(16, plan.OrderBySpec_DESC, 8, true)
+	low := buildExpressions(ivfflatplan.ScanOptions{InitialProbeCount: 1}, plan.OrderBySpec_ASC, false)
+	high := buildExpressions(ivfflatplan.ScanOptions{InitialProbeCount: 16}, plan.OrderBySpec_DESC, true)
 	require.NotEqual(t, low, high)
-	require.Contains(t, low, "initial_probe_count=1")
+	require.Contains(t, low, "NProbe: 1")
 	require.Contains(t, low, "direction=ASC")
-	require.Contains(t, high, "initial_probe_count=16")
+	require.Contains(t, high, "NProbe: 16")
 	require.Contains(t, high, "direction=DESC")
-	require.Contains(t, high, "bucket_expand_step=8")
 	require.Contains(t, high, "post_filter_over_fetch=true")
+	base := buildExpressions(ivfflatplan.ScanOptions{InitialProbeCount: 1}, plan.OrderBySpec_ASC, false)
+	expanded := buildExpressions(ivfflatplan.ScanOptions{InitialProbeCount: 1, BucketExpandStep: 8}, plan.OrderBySpec_ASC, false)
+	threaded := buildExpressions(ivfflatplan.ScanOptions{InitialProbeCount: 1, ThreadsSearch: 8}, plan.OrderBySpec_ASC, false)
+	require.Contains(t, base, "BucketExpandStep: 0")
+	require.Contains(t, base, "ThreadsSearch: 0")
+	require.Contains(t, expanded, "BucketExpandStep: 8")
+	require.Contains(t, threaded, "ThreadsSearch: 8")
+	require.NotEqual(t, base, expanded)
+	require.NotEqual(t, base, threaded)
+
 }
 
 func TestBuildSQLJSONPlanPreservesVectorIndexDistanceRange(t *testing.T) {
@@ -798,8 +806,6 @@ func TestBuildSQLJSONPlanPreservesVectorIndexDistanceRange(t *testing.T) {
 	require.Equal(t, []string{
 		"index=idx_embedding",
 		"direction=INTERNAL",
-		"initial_probe_count=0",
-		"bucket_expand_step=0",
 		"post_filter_over_fetch=false",
 		"distance_upper_bound_type=INCLUSIVE",
 		"distance_upper_bound=5",
@@ -807,8 +813,6 @@ func TestBuildSQLJSONPlanPreservesVectorIndexDistanceRange(t *testing.T) {
 	require.Equal(t, []string{
 		"index=idx_embedding",
 		"direction=INTERNAL",
-		"initial_probe_count=0",
-		"bucket_expand_step=0",
 		"post_filter_over_fetch=false",
 		"distance_upper_bound_type=INCLUSIVE",
 		"distance_upper_bound=50",
@@ -906,4 +910,68 @@ func TestSQLJSONTableAndTargetNameFallbacks(t *testing.T) {
 	require.Empty(t, sqlJSONBoundTableAlias(&plan.Node{TableDef: &plan.TableDef{Name: "t", Cols: []*plan.ColDef{sqlJSONTestColumn("id")}}, ProjectList: []*plan.Expr{{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0, Name: "a.id"}}}, {Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0, Name: "b.id"}}}}}))
 	require.Equal(t, []*plan.Expr{sqlJSONTestInt32(1), sqlJSONTestInt32(2)}, sqlJSONLimitExpressions(&plan.Node{Limit: sqlJSONTestInt32(1), Offset: sqlJSONTestInt32(2)}))
 	require.Empty(t, sqlJSONLimitExpressions(nil))
+}
+
+func TestBuildSQLJSONPlanPreservesFulltextIndexPayload(t *testing.T) {
+	node := fulltextSearchScanNode(t)
+	node.NodeId = 0
+	opts, err := ft2plan.EncodeScanOptions(ft2plan.ScanOptions{
+		Config: `{"include_columns":["status"]}`, Mode: 3,
+		IncludePreds: `[{"col":0,"op":"=","val":1}]`, ScoreRange: `{"has_min":true,"min":0}`,
+	})
+	require.NoError(t, err)
+	node.IndexSearchScan.AlgoOptions = opts
+	node.IndexSearchScan.QueryPayload = &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "search terms"}}}}
+	node.IndexSearchScan.AlgoExprNames = []string{"zero_relevance_guard"}
+	node.IndexSearchScan.AlgoExprs = []*plan.Expr{{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: true}}}}}
+	before, err := json.Marshal(node.IndexSearchScan)
+	require.NoError(t, err)
+	data, err := BuildSQLJSONPlan(t.Context(), &plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{node}})
+	require.NoError(t, err)
+	var decoded sqlJSONPlan
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	require.Len(t, decoded.MatrixOne.Nodes, 1)
+	scan := decoded.MatrixOne.Nodes[0]
+	require.Equal(t, "Fulltext Index Scan", scan.Operator)
+	require.Contains(t, scan.Expressions, "index=ft_body")
+	require.Contains(t, scan.Expressions, "zero_relevance_guard=true")
+	require.Contains(t, scan.Expressions, "Match Mode: 3")
+	require.Contains(t, scan.Expressions, "Include Column[0]: status")
+	require.Contains(t, scan.Expressions, `Include Predicates: [{"col":0,"op":"=","val":1}]`)
+	require.Contains(t, scan.Expressions, `Score Range: {"has_min":true,"min":0}`)
+	require.Contains(t, strings.Join(scan.Expressions, " "), "query_payload=")
+	require.Contains(t, strings.Join(scan.Expressions, " "), "search terms")
+	require.NotContains(t, strings.Join(scan.Expressions, " "), "query_vector=")
+	require.NotContains(t, strings.Join(scan.Expressions, " "), "metric=")
+	after, err := json.Marshal(node.IndexSearchScan)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "EXPLAIN must not mutate the reusable scan")
+}
+
+func TestBuildSQLJSONPlanRejectsMalformedIndexSearchMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		scan *plan.IndexSearchScan
+	}{
+		{name: "missing scan"},
+		{name: "missing index", scan: &plan.IndexSearchScan{}},
+		{name: "missing index name", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{}}},
+		{name: "invalid algorithm options", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ix", IndexAlgo: "ivfflat"}, AlgoOptions: []byte("{")}},
+		{name: "invalid fulltext options", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ft", IndexAlgo: "fulltext"}, AlgoOptions: []byte("{")}},
+		{name: "missing fulltext2 options", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ft", IndexAlgo: "fulltext2"}}},
+		{name: "invalid fulltext2 options", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ft", IndexAlgo: "fulltext2"}, AlgoOptions: []byte("{")}},
+		{name: "invalid fulltext2 config", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ft", IndexAlgo: "fulltext2"}, AlgoOptions: []byte(`{"config":"{"}`)}},
+		{name: "expression without name", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ix"}, AlgoExprs: []*plan.Expr{sqlJSONTestInt32(1)}}},
+		{name: "name without expression", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ix"}, AlgoExprNames: []string{"budget"}}},
+		{name: "empty expression name", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ix"}, AlgoExprNames: []string{""}, AlgoExprs: []*plan.Expr{sqlJSONTestInt32(1)}}},
+		{name: "nil expression", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ix"}, AlgoExprNames: []string{"budget"}, AlgoExprs: []*plan.Expr{nil}}},
+		{name: "invalid direction", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ix"}, Direction: plan.OrderBySpec_OrderByFlag(99)}},
+		{name: "invalid bound type", scan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexName: "ix"}, DistanceRange: &plan.DistRange{UpperBoundType: plan.BoundType(99), UpperBound: sqlJSONTestInt32(1)}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := BuildSQLJSONPlan(t.Context(), &plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{{NodeId: 0, NodeType: plan.Node_INDEX_SEARCH_SCAN, IndexSearchScan: tc.scan}}})
+			require.Error(t, err)
+			require.Empty(t, data, "malformed metadata must not publish partial JSON")
+		})
+	}
 }
