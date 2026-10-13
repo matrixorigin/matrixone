@@ -248,7 +248,7 @@ func TestPrepareIvfpqIndexContext_Success(t *testing.T) {
 	assert.Equal(t, "l2_distance", r.origFuncName)
 	assert.Equal(t, int32(0), r.partPos)
 	assert.Equal(t, int32(1), r.pkPos)
-	assert.Equal(t, algo, r.params)
+	assert.Equal(t, algo, r.idxDef.IndexAlgoParams)
 	assert.Equal(t, int64(8), r.nThread)
 	assert.Equal(t, int64(64), r.batchWindow)
 	assert.Equal(t, int64(15), r.nProbe)
@@ -378,8 +378,22 @@ func TestApplyIndicesForSortUsingIvfpq_Success(t *testing.T) {
 	join := builder.qry.Nodes[joinID]
 	require.Equal(t, plan.Node_JOIN, join.NodeType)
 	right := builder.qry.Nodes[join.Children[1]]
-	assert.Equal(t, plan.Node_FUNCTION_SCAN, right.NodeType)
-	assert.Equal(t, ivfpqplan.IVFPQSearchFuncName, right.TableDef.TblFunc.Name)
+	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, right.NodeType)
+	spec := right.IndexSearchScan
+	require.NotNil(t, spec)
+	assert.Equal(t, "l2_distance", spec.DistanceFunction)
+	assert.False(t, spec.PostFilterOverFetch)
+	assert.Equal(t, uint64(10), spec.CandidateLimit.GetLit().GetU64Val())
+	require.Len(t, spec.HiddenTables, 2)
+	assert.Equal(t, catalog.Ivfpq_TblType_Metadata, spec.HiddenTables[0].Role)
+	assert.Equal(t, "meta", spec.HiddenTables[0].Object.ObjName)
+	assert.Equal(t, catalog.Ivfpq_TblType_Storage, spec.HiddenTables[1].Role)
+	assert.Equal(t, "idx", spec.HiddenTables[1].Object.ObjName)
+	opts, err := ivfpqplan.DecodeScanOptions(spec.AlgoOptions)
+	require.NoError(t, err)
+	assert.Equal(t, int32(types.T_array_float32), opts.KeyPartType)
+	assert.Empty(t, opts.FilterJSON)
+	assert.Equal(t, uint(10), opts.Nprobe)
 }
 
 // TestApplyIndicesForSortUsingIvfpq_RichPushdown drives the optimizer through
@@ -539,9 +553,14 @@ func TestApplyIndicesForSortUsingIvfpq_RichPushdown(t *testing.T) {
 	sort := builder.qry.Nodes[sortID]
 	join := builder.qry.Nodes[sort.Children[0]]
 	tf := builder.qry.Nodes[join.Children[1]]
-	assert.Equal(t, plan.Node_FUNCTION_SCAN, tf.NodeType)
-	assert.Equal(t, 3, len(tf.TblFuncExprList), "expected predsJSON arg appended")
+	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, tf.NodeType)
+	assert.True(t, tf.IndexSearchScan.PostFilterOverFetch)
+	opts, err := ivfpqplan.DecodeScanOptions(tf.IndexSearchScan.AlgoOptions)
+	require.NoError(t, err)
+	assert.NotEmpty(t, opts.FilterJSON, "INCLUDE predicate should be pushed to the search")
+	// The distance filter moves onto the index search scan.
 	assert.NotEmpty(t, tf.FilterList)
+	assert.Len(t, scanNode.FilterList, 1)
 }
 
 func TestApplyIndicesForSortUsingIvfpq_Success_WithFiltersOverFetch(t *testing.T) {
@@ -630,4 +649,87 @@ func TestApplyIndicesForSortUsingIvfpq_Success_WithFiltersOverFetch(t *testing.T
 
 	_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti, nil)
 	require.NoError(t, err)
+
+	sort := builder.qry.Nodes[vecCtx.projNode.Children[0]]
+	join := builder.qry.Nodes[sort.Children[0]]
+	right := builder.qry.Nodes[join.Children[1]]
+	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, right.NodeType)
+	assert.True(t, right.IndexSearchScan.PostFilterOverFetch)
+	// The candidate limit stays the raw k; execution over-fetches.
+	assert.NotNil(t, right.IndexSearchScan.CandidateLimit.GetCol())
+	assert.Nil(t, right.Limit)
+}
+
+// Exercise the actual GPU context builders: nil settings use their defaults,
+// while procedure-local values and resolver errors cannot cause an assertion panic.
+func TestPrepareIvfpqAndCagraIndexContext_Variables(t *testing.T) {
+	resolverErr := moerr.NewInternalError(context.Background(), "probe resolver failed")
+	for _, tc := range []struct {
+		name       string
+		probe      any
+		resolveErr error
+		nonzero    bool
+		wantProbe  int64
+		wantErr    bool
+	}{
+		{"nil defaults", nil, nil, false, 20, false},
+		{"explicit settings", int64(7), nil, true, 7, false},
+		{"string procedure variable", "7", nil, false, 0, true},
+		{"boolean procedure variable", true, nil, false, 0, true},
+		{"resolver error", nil, resolverErr, false, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			settings := map[string]int64{}
+			if tc.nonzero {
+				settings = map[string]int64{"ivfpq_threads_search": 3, "ivfpq_batch_window": 5,
+					"cagra_threads_search": 7, "cagra_batch_window": 11, "gpu_multi_simulation": 4}
+			}
+			mock := &customMockCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
+				resolveVarFunc: func(name string, _, _ bool) (interface{}, error) {
+					if name == "probe_limit" {
+						return tc.probe, tc.resolveErr
+					}
+					if value, ok := settings[name]; ok {
+						return value, nil
+					}
+					return nil, nil
+				},
+			}
+			b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
+			var err error
+			var pq *ivfpqIndexContext
+			algo := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": "100", "m": "8"}`
+			require.NotPanics(t, func() {
+				pq, err = b.prepareIvfpqIndexContext(vectorProviderVecCtx(vectorProviderScanNode()), ivfpqMTI(algo))
+			})
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Nil(t, pq)
+				if tc.resolveErr != nil {
+					require.ErrorIs(t, err, tc.resolveErr)
+				} else {
+					require.Contains(t, err.Error(), "probe_limit")
+				}
+				return
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, pq)
+				assert.Equal(t, settings["ivfpq_threads_search"], pq.nThread)
+				assert.Equal(t, settings["ivfpq_batch_window"], pq.batchWindow)
+				assert.Equal(t, settings["gpu_multi_simulation"], pq.gpuMultiSim)
+				assert.Equal(t, tc.wantProbe, pq.nProbe)
+			}
+			var cg *cagraIndexContext
+			algo = `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "m": 32}`
+			require.NotPanics(t, func() {
+				cg, err = b.prepareCagraIndexContext(vectorProviderVecCtx(vectorProviderScanNode()), cagraMTI(algo))
+			})
+			require.NoError(t, err)
+			require.NotNil(t, cg)
+			assert.Equal(t, settings["cagra_threads_search"], cg.nThread)
+			assert.Equal(t, settings["cagra_batch_window"], cg.batchWindow)
+			assert.Equal(t, settings["gpu_multi_simulation"], cg.gpuMultiSim)
+		})
+	}
 }

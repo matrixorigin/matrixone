@@ -179,19 +179,25 @@ func (col *columnCache) insertAutoValues(
 			txnOp,
 			options)
 	case types.T_int32:
+		maxValue := uint64(math.MaxInt32)
+		typeName := "int"
+		if vec.GetType().IsMediumInt() {
+			maxValue = 1<<23 - 1
+			typeName = "mediumint"
+		}
 		return insertAutoValues[int32](
 			ctx,
 			tableID,
 			vec, rows,
-			math.MaxInt32,
+			int32(maxValue),
 			col,
 			func(v uint64) error {
 				if v == 0 {
-					v = math.MaxInt32 + 1
+					v = maxValue + 1
 				}
 				return moerr.NewOutOfRangef(
 					ctx,
-					"int",
+					typeName,
 					"value %v",
 					v)
 			},
@@ -258,20 +264,26 @@ func (col *columnCache) insertAutoValues(
 			txnOp,
 			options)
 	case types.T_uint32:
+		maxValue := uint64(math.MaxUint32)
+		typeName := "int unsigned"
+		if vec.GetType().IsMediumInt() {
+			maxValue = 1<<24 - 1
+			typeName = "mediumint unsigned"
+		}
 		return insertAutoValues[uint32](
 			ctx,
 			tableID,
 			vec,
 			rows,
-			math.MaxUint32,
+			uint32(maxValue),
 			col,
 			func(v uint64) error {
 				if v == 0 {
-					v = math.MaxUint32 + 1
+					v = maxValue + 1
 				}
 				return moerr.NewOutOfRangef(
 					ctx,
-					"int unsigned",
+					typeName,
 					"value %v",
 					v)
 			},

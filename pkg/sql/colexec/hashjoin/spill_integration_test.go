@@ -85,7 +85,7 @@ func installHashJoinTestAllocation(
 // TestGetSpilledInputBatchNoBuckets verifies that getSpilledInputBatch
 // returns nil when the engine has no buckets.
 func TestGetSpilledInputBatchNoBuckets(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	engine := newAccountedTestSpillEngine(t, spillutil.SpillEngineConfig{})
@@ -197,7 +197,7 @@ func TestAsofBuildLeftAcrossSpilledBuckets(t *testing.T) {
 // (ctr.mp == nil) without panicking. This is the path taken when a spill
 // bucket returns BucketEmptyBuild for outer joins.
 func TestEmptyProbeDoesNotPanic(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	hashJoin := &HashJoin{

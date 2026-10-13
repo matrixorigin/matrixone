@@ -96,7 +96,7 @@ func newAccountedMergeOrder() *MergeOrder {
 }
 
 func TestAccountedMergeOrderResidentLifecycle(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeOrder()
 	state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
 	batches := []*batch.Batch{
@@ -122,7 +122,7 @@ func TestAccountedMergeOrderResidentLifecycle(t *testing.T) {
 }
 
 func TestAccountedMergeOrderResetAndReuse(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeOrder()
 	first := installMergeOrderTestAllocation(t, op, proc, 64<<20)
 	resetChildren(op, []*batch.Batch{
@@ -156,7 +156,7 @@ func TestAccountedMergeOrderResetAndReuse(t *testing.T) {
 }
 
 func TestAccountedMergeOrderSpillRunBoundAndResources(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeOrder()
 	state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
 	require.NoError(t, op.Prepare(proc))
@@ -188,7 +188,7 @@ func TestAccountedMergeOrderSpillRunBoundAndResources(t *testing.T) {
 }
 
 func TestAccountedMergeOrderResidentMetadataBoundSpills(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeOrder()
 	op.SpillThreshold = 1 << 30
 	state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
@@ -211,7 +211,7 @@ func TestAccountedMergeOrderResidentMetadataBoundSpills(t *testing.T) {
 }
 
 func TestAccountedMergeOrderForcedSpillKeepsOrdering(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeOrder()
 	op.SpillThreshold = 1
 	state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
@@ -239,7 +239,7 @@ func TestAccountedMergeOrderForcedSpillKeepsOrdering(t *testing.T) {
 }
 
 func TestAccountedMergeOrderPhysicalPressureSpillsBelowPolicyHint(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeOrder()
 	// Keep the logical policy ceiling well above this input while disabling
 	// append-tail state. The only spill trigger below is real account pressure.
@@ -283,7 +283,7 @@ func TestAccountedMergeOrderPhysicalPressureSpillsBelowPolicyHint(t *testing.T) 
 }
 
 func TestAccountedMergeOrderDynamicShareSpillsBelowPolicyHint(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeOrder()
 	op.SpillThreshold = 1 << 30
 	state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
@@ -349,7 +349,7 @@ func TestAccountedMergeOrderSpillResourceAdmissionCleans(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			op := newAccountedMergeOrder()
 			state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
 			releaseBlocker, err := tc.reserve(state.generation)
@@ -386,7 +386,7 @@ func TestAccountedMergeOrderSpillResourceAdmissionCleans(t *testing.T) {
 }
 
 func TestAccountedMergeOrderShortDiskWriteReconciles(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeOrder()
 	state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
 	require.NoError(t, op.Prepare(proc))
@@ -414,7 +414,7 @@ func TestAccountedMergeOrderShortDiskWriteReconciles(t *testing.T) {
 }
 
 func TestAccountedMergeOrderOptionalTailFallsBackToCommittedRun(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Base.Lim.Size = 64 << 20
 	generation, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
@@ -498,7 +498,7 @@ func BenchmarkMergeOrderUnaccountedResident(b *testing.B) {
 }
 
 func benchmarkMergeOrderResident(b *testing.B, accounted bool) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	defer proc.Free()
 	b.ReportAllocs()
 	for b.Loop() {

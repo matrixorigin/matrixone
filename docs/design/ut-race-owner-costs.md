@@ -36,10 +36,13 @@ An explicit local `StateQuery.StateOnly` returns a new CheckerState containing
 only State. Zero-value and typed-nil queries retain full independent snapshots.
 The query is neither replicated state nor an RPC schema.
 
-Only `assertHAKeeperState` requests the projection. Every assertion still
-performs its own authoritative SyncRead with existing timeout, cause attachment,
-retry and error behavior. Public/private full getters, GET_CLUSTER_STATE,
-scheduling, truncation, recovery and WAL configuration consumers remain full.
+`assertHAKeeperState` requests StateOnly. Every assertion still performs its
+own authoritative SyncRead with existing timeout, cause attachment, retry and
+error behavior. PR #29760 additionally introduces a scheduling projection,
+retaining store/runtime state and LOG WAL recovery status while omitting display
+configuration. Public/private full getters, GET_CLUSTER_STATE and existing full
+truncation queries remain complete. The current consumer and failure contracts
+are defined in [Race UT critical path](pr29760-race-ut-critical-path.md).
 There is no cache, aliased mutable map, assertion reuse or cadence change.
 Dragonboat retains lookup serialization ownership.
 

@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -282,44 +283,33 @@ func TestCheckCDCSourcePrimaryKeyRejectsEmptyAndMalformedResults(t *testing.T) {
 	}
 }
 
-// Global stub for GetTableDetector - initialized in init() to prevent panics across all tests
-var _globalTableDetectorStub *gostub.Stubs
-
 const testPermanentDetectorTask = "__test_permanent_dummy__"
 
-// init sets up global mock for GetTableDetector once for all tests in this package
-// This stub is NEVER reset to ensure consistent behavior across all tests
-func init() {
-	_globalTableDetectorStub = gostub.Stub(&cdc.GetTableDetector, createMockTableDetectorForTest())
-}
-
-// createMockTableDetectorForTest creates a mock TableDetector that never starts
+// createMockTableDetector creates a mock TableDetector that never starts
 // the background scan loop. Frontend tests only need registration semantics; the
 // permanent callback makes every test registration non-initial.
-func createMockTableDetectorForTest() func(cnUUID string) *cdc.TableDetector {
-	return func(cnUUID string) *cdc.TableDetector {
-		return &cdc.TableDetector{
-			Mp: make(map[uint32]cdc.TblMap),
-			Callbacks: map[string]cdc.TableCallback{
-				testPermanentDetectorTask: func(map[uint32]cdc.TblMap) error {
-					return nil
-				},
+func createMockTableDetector() *cdc.TableDetector {
+	return &cdc.TableDetector{
+		Mp: make(map[uint32]cdc.TblMap),
+		Callbacks: map[string]cdc.TableCallback{
+			testPermanentDetectorTask: func(map[uint32]cdc.TblMap) error {
+				return nil
 			},
-			CallBackAccountId: map[string]uint32{
-				testPermanentDetectorTask: 1,
-			},
-			SubscribedAccountIds: map[uint32][]string{
-				1: {testPermanentDetectorTask},
-			},
-			CallBackDbName: map[string][]string{
-				testPermanentDetectorTask: {},
-			},
-			SubscribedDbNames: make(map[string][]string),
-			CallBackTableName: map[string][]string{
-				testPermanentDetectorTask: {},
-			},
-			SubscribedTableNames: make(map[string][]string),
-		}
+		},
+		CallBackAccountId: map[string]uint32{
+			testPermanentDetectorTask: 1,
+		},
+		SubscribedAccountIds: map[uint32][]string{
+			1: {testPermanentDetectorTask},
+		},
+		CallBackDbName: map[string][]string{
+			testPermanentDetectorTask: {},
+		},
+		SubscribedDbNames: make(map[string][]string),
+		CallBackTableName: map[string][]string{
+			testPermanentDetectorTask: {},
+		},
+		SubscribedTableNames: make(map[string][]string),
 	}
 }
 
@@ -1624,8 +1614,6 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	assert.NoError(t, err)
 	defer mpool.DeleteMPool(mp)
 
-	gostub.Stub(&cdc.GetTableDetector, createMockTableDetectorForTest())
-
 	tests := []struct {
 		name string
 		args args
@@ -1647,7 +1635,12 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.args.ts.curDTaskId = tt.args.curDTaskId
+			rt := runtime.NewRuntime(0, tt.args.cnUUID, zap.NewNop())
+			rt.SetGlobalVariables(runtime.CDCTableDetector, createMockTableDetector())
+			updater := cdc.InitCDCWatermarkUpdater(rt, tt.args.ieFactory())
+			t.Cleanup(updater.Stop)
 			fun := CDCTaskExecutorFactory(
+				rt,
 				tt.args.logger,
 				tt.args.ieFactory,
 				tt.args.attachToTask,
@@ -1690,7 +1683,7 @@ func TestCDCFactoryRejectsSupersededClaim(t *testing.T) {
 				cn = "cn2"
 			}
 			ts := &testTaskService{dTask: []task.DaemonTask{current}}
-			factory := CDCTaskExecutorFactory(nil, func() ie.InternalExecutor {
+			factory := CDCTaskExecutorFactory(nil, nil, func() ie.InternalExecutor {
 				t.Fatal("obsolete factory must not initialize resources")
 				return nil
 			}, func(context.Context, uint64, taskservice.ActiveRoutine) error {
@@ -2873,7 +2866,7 @@ func TestCdcTask_Resume(t *testing.T) {
 
 	// Initialize minimal ie for clearAllTableErrors
 	u, ie := cdc.InitCDCWatermarkUpdaterForTest(t)
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 	executor.ie = ie
 
@@ -2930,10 +2923,9 @@ func TestCdcTask_Restart(t *testing.T) {
 	})
 	t.Cleanup(func() { errutil.SetErrorReporter(previousReporter) })
 	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 
-	// Note: GetTableDetector is already stubbed globally in init()
 	cdcTask := &CDCTaskExecutor{
 		activeRoutine:    cdc.NewCdcActiveRoutine(),
 		watermarkUpdater: u,
@@ -3750,14 +3742,13 @@ func TestCdcTask_PauseWhileStarting(t *testing.T) {
 }
 
 func TestCdcTask_Cancel(t *testing.T) {
-	// Note: GetTableDetector is already stubbed globally in init()
 	ch := make(chan int, 1)
 	go func() {
 		<-ch
 	}()
 
 	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 	executor := &CDCTaskExecutor{
 		activeRoutine:    cdc.NewCdcActiveRoutine(),
@@ -3792,7 +3783,7 @@ func TestCdcTaskCancelFinalizesWatermarks(t *testing.T) {
 				capture,
 				cdc.WithCronJobInterval(time.Hour),
 			)
-			updater.Start()
+			updater.Start(context.Background())
 			defer updater.Stop()
 
 			key := cdc.WatermarkKey{
@@ -3843,7 +3834,7 @@ func TestCdcTaskCancelWithoutWatermarkCleanupPreservesProgress(t *testing.T) {
 		capture,
 		cdc.WithCronJobInterval(time.Hour),
 	)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	key := cdc.WatermarkKey{
@@ -3888,7 +3879,7 @@ func TestCdcTaskClaimLossDelayedCancelPreservesReplacementWatermark(t *testing.T
 		t.Name(), catalog,
 		cdc.WithCronJobInterval(time.Hour),
 	)
-	updater.Start()
+	updater.Start(context.Background())
 	defer updater.Stop()
 
 	key := &cdc.WatermarkKey{
@@ -3930,7 +3921,7 @@ func TestCdcTaskClaimLossDelayedCancelPreservesReplacementWatermark(t *testing.T
 			Accounts: []*task.Account{{Id: key.AccountId}},
 		}
 		exec := NewCDCTaskExecutor(
-			zap.NewNop(), nil, spec, runner, nil, nil, nil, nil,
+			nil, zap.NewNop(), nil, spec, runner, nil, nil, nil, nil,
 		)
 		exec.taskService = service
 		exec.watermarkUpdater = updater
@@ -5031,19 +5022,15 @@ func TestCdcTask_handleNewTables_PermanentTableErrorFailsTask(t *testing.T) {
 }
 
 func TestCdcTask_RestartRunningTaskUnregistersOldDetector(t *testing.T) {
-	detector := createMockTableDetectorForTest()("test-cn")
+	detector := createMockTableDetector()
 	require.True(t, detector.RegisterIfAbsent("task-1", 0, []string{"db1"}, []string{"tb1"}, func(map[uint32]cdc.TblMap) error {
 		return nil
 	}))
 	require.True(t, detector.IsTaskRegistered("task-1"))
 
-	stubDetector := gostub.Stub(&cdc.GetTableDetector, func(string) *cdc.TableDetector {
-		return detector
-	})
-	defer stubDetector.Reset()
-
 	started := make(chan struct{}, 1)
 	cdcTask := &CDCTaskExecutor{
+		tableDetector: detector,
 		spec: &task.CreateCdcDetails{
 			TaskId:   "task-1",
 			TaskName: "task-name",
@@ -6426,7 +6413,7 @@ func TestCDCTaskExecutor_Pause_WithWatermarkFlushSuccess(t *testing.T) {
 	}()
 
 	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
-	u.Start()
+	u.Start(context.Background())
 	defer u.Stop()
 
 	executor := &CDCTaskExecutor{

@@ -1193,8 +1193,18 @@ func canonicalSystemVariableName(name string) string {
 		return transactionIsolationSystemVariable
 	case transactionReadOnlySystemVariableAlias:
 		return transactionReadOnlySystemVariable
+	case "innodb_lock_wait_timeout":
+		return "lock_wait_timeout"
 	}
 	return name
+}
+
+func init() {
+	// The compatibility spelling shares the native scope, validator and default.
+	// SystemVariables resolves both names to the same lock_wait_timeout state.
+	alias := gSysVarsDefs["lock_wait_timeout"]
+	alias.Name = "innodb_lock_wait_timeout"
+	gSysVarsDefs[alias.Name] = alias
 }
 
 func isTransactionIsolationSystemVariable(name string) bool {
@@ -3862,6 +3872,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 	// TODO(retire-txn-trace, #29249): remove this declaration and its inert-setting
 	// tests once the rollback window excludes collector-bearing versions and
 	// client/session initialization no longer sends this setting.
+	"mo_sirius_campaign_evidence": {
+		Name:              "mo_sirius_campaign_evidence",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("mo_sirius_campaign_evidence"),
+		Default:           int64(0),
+	},
 	"disable_txn_trace": {
 		Name:              "disable_txn_trace",
 		Scope:             ScopeSession,
@@ -4577,12 +4595,24 @@ type UserDefinedVar struct {
 	// compatibility, but MySQL fixes their effective type at statement start.
 	// Keeping the assignment type here prevents a numeric sibling operand from
 	// silently narrowing a decimal or floating-point variable.
-	Type                planpb.Type
+	Type planpb.Type
+	// RegexpStringResult retains only the assignment result-category history
+	// needed by unsized binary CAST compatibility. It never supplies the
+	// ordinary SQL or prepared-parameter conversion type of a NULL value.
+	RegexpStringResult  bool
 	PrepareParamKind    vector.PrepareParamKind
 	RuntimeStringDomain types.RuntimeStringDomain
 	// Replayable is true only when the proxy can replay the assignment as a
 	// captured raw COM_QUERY SET statement during legacy migration.
 	Replayable bool
+}
+
+// userVariableRegexpStringResult models MySQL's user-variable result category,
+// not its physical SQL type. JSON and temporal values are string results too;
+// numeric, Boolean, BIT and YEAR values are not.
+func userVariableRegexpStringResult(typ planpb.Type) bool {
+	oid := types.T(typ.Id)
+	return oid != types.T_any && oid != types.T_bool && oid != types.T_year && !oid.ToType().IsNumeric()
 }
 
 // inferUserDefinedVarType supplies a conservative type for callers which set

@@ -206,6 +206,9 @@ func lifecycleColumnTypeSQL(column SchemaColumn) (string, error) {
 	case types.T_int16:
 		return "SMALLINT", nil
 	case types.T_int32:
+		if column.Width == 24 {
+			return "MEDIUMINT", nil
+		}
 		return "INT", nil
 	case types.T_int64:
 		return "BIGINT", nil
@@ -214,6 +217,9 @@ func lifecycleColumnTypeSQL(column SchemaColumn) (string, error) {
 	case types.T_uint16:
 		return "SMALLINT UNSIGNED", nil
 	case types.T_uint32:
+		if column.Width == 24 {
+			return "MEDIUMINT UNSIGNED", nil
+		}
 		return "INT UNSIGNED", nil
 	case types.T_uint64:
 		return "BIGINT UNSIGNED", nil

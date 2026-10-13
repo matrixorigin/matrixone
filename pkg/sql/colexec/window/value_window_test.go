@@ -222,7 +222,7 @@ func TestProcessValueFuncHonorsCancellation(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			bat := makeInt32Batch(mp, []int32{10, 20})
 			ctr := &container{bat: bat}
 			ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
@@ -246,7 +246,7 @@ func TestProcessValueFuncHonorsCancellation(t *testing.T) {
 
 func TestValidateLagLeadOffsetsHonorsCancellation(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	bat := makeInt32Batch(mp, []int32{10, 20})
 	offsetVec := testutil.MakeInt64Vector([]int64{0, 1}, nil, mp)
 	ctr := &container{bat: bat, aggVecs: make([]colexec.ExprEvalVector, 1)}
@@ -492,7 +492,7 @@ func TestProcessValueFunc_UnsupportedErrorPathFreesLocalResult(t *testing.T) {
 // TestProcessValueFunc_NthValueWithN tests nth_value(expr, 3) with unbounded frame.
 func TestProcessValueFunc_NthValueWithN(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeNthValueWindowSpec()
@@ -524,7 +524,7 @@ func TestProcessValueFunc_NthValueWithN(t *testing.T) {
 // TestProcessValueFunc_NthValueOutOfBounds tests nth_value with n exceeding frame size.
 func TestProcessValueFunc_NthValueOutOfBounds(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20})
 	spec := makeNthValueWindowSpec()
@@ -553,7 +553,7 @@ func TestProcessValueFunc_NthValueOutOfBounds(t *testing.T) {
 // TestProcessValueFunc_LeadWithOffset tests lead with offset=2.
 func TestProcessValueFunc_LeadWithOffset(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeLeadWindowSpec()
@@ -584,7 +584,7 @@ func TestProcessValueFunc_LeadWithOffset(t *testing.T) {
 
 func TestProcessValueFunc_LeadWithMaxInt64Offset(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30})
 	spec := makeLeadWindowSpec()
@@ -613,7 +613,7 @@ func TestProcessValueFunc_LeadWithMaxInt64Offset(t *testing.T) {
 
 func TestProcessValueFunc_NthValueWithMaxInt64Position(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeNthValueWindowSpec()
@@ -651,7 +651,7 @@ func TestProcessValueFunc_NthValueWithMaxInt64Position(t *testing.T) {
 
 func TestProcessValueFunc_NthValueWithOverflowingRowsFrame(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30})
 	spec := makeNthValueWindowSpec()
@@ -693,7 +693,7 @@ func TestProcessValueFunc_NthValueWithOverflowingRowsFrame(t *testing.T) {
 // TestProcessValueFunc_NthValueWithFrame tests nth_value with explicit frame.
 func TestProcessValueFunc_NthValueWithFrame(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeNthValueWindowSpec()
@@ -842,7 +842,7 @@ func TestAppendDefaultOrNull(t *testing.T) {
 // Simulates two partitions by manually setting ctr.ps.
 func TestProcessValueFunc_LagWithPartition(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	// Data: partition1=[10,20,30], partition2=[40,50] (already sorted)
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40, 50})
@@ -879,7 +879,7 @@ func TestProcessValueFunc_LagWithPartition(t *testing.T) {
 // TestProcessValueFunc_LeadWithPartition tests lead across partition boundaries.
 func TestProcessValueFunc_LeadWithPartition(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40, 50})
 	spec := makeLeadWindowSpec()
@@ -913,7 +913,7 @@ func TestProcessValueFunc_LeadWithPartition(t *testing.T) {
 // TestProcessValueFunc_LagWithOffset tests lag with offset=2.
 func TestProcessValueFunc_LagWithOffset(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeLagWindowSpec()
@@ -946,7 +946,7 @@ func TestProcessValueFunc_LagWithOffset(t *testing.T) {
 // TestProcessValueFunc_LagWithDefault tests lag with offset=1 and default value.
 func TestProcessValueFunc_LagWithDefault(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30})
 	spec := makeLagWindowSpec()
@@ -979,7 +979,7 @@ func TestProcessValueFunc_LagWithDefault(t *testing.T) {
 // TestProcessValueFunc_FirstValueWithFrame tests first_value with ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING.
 func TestProcessValueFunc_FirstValueWithFrame(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeValueWindowSpecWithName("first_value", int32(types.T_int32))
@@ -1030,7 +1030,7 @@ func TestProcessValueFunc_FirstValueWithFrame(t *testing.T) {
 // TestProcessValueFunc_LastValueWithFrame tests last_value with ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING.
 func TestProcessValueFunc_LastValueWithFrame(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeValueWindowSpecWithName("last_value", int32(types.T_int32))
@@ -1080,7 +1080,7 @@ func TestProcessValueFunc_LastValueWithFrame(t *testing.T) {
 // TestProcessValueFunc_LagNonConstOffset tests lag with a non-const offset vector.
 func TestProcessValueFunc_LagNonConstOffset(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeLagWindowSpec()
@@ -1113,7 +1113,7 @@ func TestProcessValueFunc_LagNonConstOffset(t *testing.T) {
 // TestProcessValueFunc_LeadNonConstOffset tests lead with a non-const offset vector.
 func TestProcessValueFunc_LeadNonConstOffset(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeLeadWindowSpec()
@@ -1159,7 +1159,7 @@ func TestProcessValueFunc_RejectsNegativeLagLeadOffset(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 
 			var offsetVec *vector.Vector
@@ -1238,7 +1238,7 @@ func TestProcessValueFunc_RejectsNonIntegralOrNullLagLeadOffset(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 			offsetVec, err := test.makeOffset(mp, bat.RowCount())
 			require.NoError(t, err)
@@ -1266,7 +1266,7 @@ func TestProcessValueFunc_RejectsNonIntegralOrNullLagLeadOffset(t *testing.T) {
 // TestProcessValueFunc_NthValueNonConst tests nth_value with a non-const n vector.
 func TestProcessValueFunc_NthValueNonConst(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
 	spec := makeNthValueWindowSpec()
@@ -1299,7 +1299,7 @@ func TestProcessValueFunc_NthValueNonConst(t *testing.T) {
 // TestProcessValueFunc_FirstValueWithPartition tests first_value with partitions.
 func TestProcessValueFunc_FirstValueWithPartition(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40, 50})
 	spec := makeFirstValueWindowSpec()
@@ -1333,7 +1333,7 @@ func TestProcessValueFunc_FirstValueWithPartition(t *testing.T) {
 // TestProcessValueFunc_LastValueWithPartition tests last_value with partitions.
 func TestProcessValueFunc_LastValueWithPartition(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40, 50})
 	spec := makeLastValueWindowSpec()
@@ -1370,7 +1370,7 @@ func TestProcessValueFunc_Varchar(t *testing.T) {
 	bat := makeVarcharBatch(mp, []string{"aaa", "bbb", "ccc"})
 
 	spec := makeValueWindowSpecWithName("lag", int32(types.T_varchar))
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	arg := &Window{
 		WinSpecList: []*plan.Expr{spec},

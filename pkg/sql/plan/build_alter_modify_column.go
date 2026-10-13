@@ -34,12 +34,11 @@ func updateNewColumnInTableDef(
 ) (bool, error) {
 	ctx := cctx.GetContext()
 
-	nTy, err := getTypeFromAst(ctx, nColSpec.Type)
+	nTy, err := getColumnTypeFromAst(ctx, nColSpec, tableDef.DefaultCharset, nil)
 	if err != nil {
 		return false, err
 	}
-	nTy.Charset = uint32(types.CharsetType(types.T(nTy.Id)))
-	if err = applyDefaultAndColumnAttributesToType(ctx, &nTy, tableDef.DefaultCharset, nColSpec.Attributes); err != nil {
+	if err = requireMediumIntProtocolForAuthoring(ctx, cctx.GetProcess(), nTy); err != nil {
 		return false, err
 	}
 

@@ -76,10 +76,12 @@ func (s *service) closeViewMetadataAdmission() {
 		return
 	}
 	s.viewMetadataEpochFence.Close()
-	runtime.ServiceRuntime(s.cfg.UUID).CompareAndDeleteGlobalVariables(
-		compile.ViewMetadataEpochFenceRuntimeKey,
-		s.viewMetadataEpochFence,
-	)
+	if rt := runtime.ServiceRuntime(s.cfg.UUID); rt != nil {
+		rt.CompareAndDeleteGlobalVariables(
+			compile.ViewMetadataEpochFenceRuntimeKey,
+			s.viewMetadataEpochFence,
+		)
+	}
 }
 
 func (s *service) notifyViewMetadataAdmissionUpdated() {
@@ -297,6 +299,7 @@ func (s *service) fenceViewMetadataCatalog(
 	}
 	if snapshot.CatalogFencedEpoch >= snapshot.Epoch {
 		s.viewMetadataCatalogFencedEpoch.Store(snapshot.Epoch)
+		s.notifyHeartbeat()
 		return nil
 	}
 	if !s.viewMetadataCatalogFenceReady.Load() || s.sqlExecutor == nil {
@@ -306,6 +309,7 @@ func (s *service) fenceViewMetadataCatalog(
 		return err
 	}
 	s.viewMetadataCatalogFencedEpoch.Store(snapshot.Epoch)
+	s.notifyHeartbeat()
 	return nil
 }
 

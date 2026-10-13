@@ -137,7 +137,7 @@ func chunksFromSql(t *testing.T, sqls []string, startId int64) []cuvscdc.EventCh
 // into the same overflow set.
 func TestCagraSync_Update_AllInsert(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	defer installNextChunkIdMock(t, proc, 0)()
@@ -183,7 +183,7 @@ func TestCagraSync_Update_AllInsert(t *testing.T) {
 // produces deleted={42} overflow={100}.
 func TestCagraSync_Update_DeleteAndInsert(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	defer installNextChunkIdMock(t, proc, 7)()
@@ -225,7 +225,7 @@ func TestCagraSync_Update_DeleteAndInsert(t *testing.T) {
 // final state has pkid=1 deleted and overflow empty.
 func TestCagraSync_Update_DeleteInsertDelete(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	defer installNextChunkIdMock(t, proc, 0)()
@@ -262,7 +262,7 @@ func TestCagraSync_Update_DeleteInsertDelete(t *testing.T) {
 // pkid in Deleted (delete_id is idempotent on the cuvs side too).
 func TestCagraSync_Update_DeleteIdempotent(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	defer installNextChunkIdMock(t, proc, 0)()
@@ -294,7 +294,7 @@ func TestCagraSync_Update_DeleteIdempotent(t *testing.T) {
 // replay collapses to a single overflow entry with the latest vec.
 func TestCagraSync_Update_Upsert(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	defer installNextChunkIdMock(t, proc, 0)()
@@ -330,7 +330,7 @@ func TestCagraSync_Update_Upsert(t *testing.T) {
 // as an error at Update time (writer-side validation).
 func TestCagraSync_Update_DimMismatch(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
@@ -352,7 +352,7 @@ func TestCagraSync_Update_DimMismatch(t *testing.T) {
 // Round-trip the bytes through Update + Save + replay.
 func TestCagraSync_Update_WithIncludeBytes(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	defer installNextChunkIdMock(t, proc, 0)()
@@ -397,7 +397,7 @@ func TestCagraSync_Update_WithIncludeBytes(t *testing.T) {
 // asking for a chunk_id.
 func TestCagraSync_Update_NoOpSaveSkipsSql(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	rec := &recordingTxn{}
@@ -425,7 +425,7 @@ func TestCagraSync_Update_NoOpSaveSkipsSql(t *testing.T) {
 // flushes by construction.
 func TestCagraSync_NewSync_Stateless(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	called := 0
@@ -447,7 +447,7 @@ func TestCagraSync_NewSync_Stateless(t *testing.T) {
 // TestCagraSync_RunOnce: smoke test the full Update + Save + Destroy chain.
 func TestCagraSync_RunOnce(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	defer installNextChunkIdMock(t, proc, 0)()
@@ -476,7 +476,7 @@ func TestCagraSync_RunOnce(t *testing.T) {
 // next Update + Save cycle appends fresh records at the next chunk_id.
 func TestCagraSync_MultiFlush(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// Two consecutive saves: both ask for nextChunkId; serve 0 then 1.
@@ -539,7 +539,7 @@ func TestCagraSync_MultiFlush(t *testing.T) {
 // un-upgraded CN reads this table with SELECT * and would treat 'cdc_tail:N' as a sub-index.
 func TestCagraSyncWritesTheFrameRowOnceTheTableHasIt(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	defer installNextChunkIdMock(t, proc, 0)()
@@ -585,7 +585,7 @@ func TestCagraSyncWritesTheFrameRowOnceTheTableHasIt(t *testing.T) {
 // CdcTailRowsUpperBound added a chunk's worth of phantom rows for every chunk it could not see.
 func TestCagraSyncWritesOneFrameRowPerChunk(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	defer installNextChunkIdMock(t, proc, 0)()

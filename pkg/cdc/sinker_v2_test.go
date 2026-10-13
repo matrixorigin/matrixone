@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -113,6 +114,101 @@ func TestWatermarkValidationUsesGenerationBeforeTimestamp(t *testing.T) {
 		"an obsolete pipeline must reject progress from a newer generation")
 	require.True(t, isWatermarkAheadOfOutput(highOld, 12, lowNew, 12),
 		"timestamp order remains monotonic within one generation")
+}
+
+func TestMysqlSinker2_TargetOwnershipCleanupSerializesWithCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		cleanup func(*mysqlSinker2) error
+	}{
+		{"release", func(s *mysqlSinker2) error { return s.releaseTargetOwnership() }},
+		{"reset", func(s *mysqlSinker2) error { s.Reset(); return nil }},
+		{"close", func(s *mysqlSinker2) error { s.Close(); return nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+			mock.ExpectQuery("SELECT GET_LOCK").
+				WithArgs(sqlmock.AnyArg(), targetLockPollSeconds).
+				WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(1))
+			mock.ExpectQuery("SELECT RELEASE_LOCK").
+				WithArgs(sqlmock.AnyArg()).
+				WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(1))
+			mock.ExpectClose()
+
+			entered, finishFence := make(chan struct{}), make(chan struct{})
+			var finishOnce sync.Once
+			releaseFence := func() { finishOnce.Do(func() { close(finishFence) }) }
+			fence := NewOwnerFence(func(ctx context.Context) error {
+				return moerr.NewInvalidTask(ctx, "old-owner", 1)
+			})
+			executor := &Executor{
+				conn:               db,
+				targetLockIdentity: "account/task/db/table",
+				targetOwnerFence: func(ctx context.Context) error {
+					close(entered)
+					select {
+					case <-finishFence:
+						return fence.Check(ctx)
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				},
+			}
+			sinker := NewMysqlSinker2(executor, 0, "task", &DbTableInfo{}, nil, nil, nil)
+			defer func() {
+				releaseFence()
+				sinker.Close()
+			}()
+			commandDone := make(chan struct{})
+			go func() {
+				sinker.processCommand(ctx, NewBeginCommand())
+				close(commandDone)
+			}()
+			select {
+			case <-entered:
+			case <-commandDone:
+				t.Fatal("BEGIN did not reach the target ownership fence")
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			// The fence runs after the pinned target session is published. That
+			// session must remain exclusively owned until BEGIN has unwound.
+			if sinker.executorMu.TryLock() {
+				sinker.executorMu.Unlock()
+				t.Fatal("command does not own the executor during the target fence")
+			}
+			cleanupStarted := make(chan struct{})
+			cleanupDone := make(chan error, 1)
+			go func() {
+				close(cleanupStarted)
+				cleanupDone <- tc.cleanup(sinker)
+			}()
+			<-cleanupStarted
+			releaseFence()
+			select {
+			case <-commandDone:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			select {
+			case err = <-cleanupDone:
+				require.NoError(t, err)
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if tc.name != "reset" {
+				require.True(t, IsOwnerFenceLostError(sinker.Error()))
+			}
+			require.Nil(t, executor.targetLockConn)
+			require.False(t, executor.HasActiveTx())
+			sinker.Close()
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestMysqlSinker2_TransactionLifecycle(t *testing.T) {
@@ -536,6 +632,10 @@ func TestMysqlSinker2_SendAfterClose_NoPanic(t *testing.T) {
 }
 
 func TestMysqlSinker2_CloseWhileSendUnblocks(t *testing.T) {
+	synctest.Test(t, testMysqlSinker2CloseWhileSend)
+}
+
+func testMysqlSinker2CloseWhileSend(t *testing.T) {
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -572,7 +672,7 @@ func TestMysqlSinker2_CloseWhileSendUnblocks(t *testing.T) {
 		sinker.SendDummy()
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	synctest.Wait()
 
 	done := make(chan struct{})
 	go func() {
@@ -857,33 +957,35 @@ func TestMysqlSinker2_SendCommandCleanupOnClose(t *testing.T) {
 	})
 
 	t.Run("SendCommandWhileCloseCh_CleansBatch", func(t *testing.T) {
-		sinker := NewMysqlSinker2(
-			executor, 1, "task-2",
-			&DbTableInfo{SourceDbName: "src", SourceTblName: "test"},
-			nil, builder, NewCdcActiveRoutine(),
-		)
+		synctest.Test(t, func(t *testing.T) {
+			sinker := NewMysqlSinker2(
+				executor, 1, "task-2",
+				&DbTableInfo{SourceDbName: "src", SourceTblName: "test"},
+				nil, builder, NewCdcActiveRoutine(),
+			)
 
-		// Create a batch command
-		insertBatch := NewAtomicBatch(nil)
-		deleteBatch := NewAtomicBatch(nil)
-		cmd := NewInsertDeleteBatchCommand(insertBatch, deleteBatch, types.BuildTS(1, 0), types.BuildTS(2, 0))
+			// Create a batch command
+			insertBatch := NewAtomicBatch(nil)
+			deleteBatch := NewAtomicBatch(nil)
+			cmd := NewInsertDeleteBatchCommand(insertBatch, deleteBatch, types.BuildTS(1, 0), types.BuildTS(2, 0))
 
-		// cmdCh is unbuffered — sendCommand will block on it.
-		// Close sinker in another goroutine to unblock via closeCh.
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sinker.sendCommand(cmd)
-		}()
+			// cmdCh is unbuffered — sendCommand will block on it.
+			// Close sinker in another goroutine to unblock via closeCh.
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sinker.sendCommand(cmd)
+			}()
 
-		time.Sleep(10 * time.Millisecond)
-		sinker.Close()
-		wg.Wait()
+			synctest.Wait()
+			sinker.Close()
+			wg.Wait()
 
-		// Batch should be cleaned via closeCh path
-		assert.Nil(t, cmd.InsertAtmBatch, "insert batch should be cleaned on closeCh")
-		assert.Nil(t, cmd.DeleteAtmBatch, "delete batch should be cleaned on closeCh")
+			// Batch should be cleaned via closeCh path
+			assert.Nil(t, cmd.InsertAtmBatch, "insert batch should be cleaned on closeCh")
+			assert.Nil(t, cmd.DeleteAtmBatch, "delete batch should be cleaned on closeCh")
+		})
 	})
 }
 

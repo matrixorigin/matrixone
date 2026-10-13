@@ -488,6 +488,7 @@ type BaseProcess struct {
 	UdfService                          udf.Service
 	WaitPolicy                          lock.WaitPolicy
 	messageBoard                        *message.MessageBoard
+	executionResourceBudgetBorrowed     bool
 	executionResourceBudgetMu           sync.Mutex
 	executionResourceBudget             *ExecutionResourceGeneration
 	warningDiagnosticBudgetMu           sync.Mutex
@@ -523,7 +524,8 @@ type BaseProcess struct {
 	groupConcatSourceRowProvenanceUntrusted bool
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
-	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
+	// (frontend derived execution or executor.Options.WithDisableIncrStatement).
+	// Compiles on such a process
 	// must not advance the workspace snapshot write offset: that is a
 	// statement-boundary action, and moving the boundary mid-statement breaks
 	// the positional visibility of the caller's workspace entries.
@@ -646,8 +648,11 @@ func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
 	proc.Base.executionResourceBudgetMu.Lock()
 	if proc.Base.executionResourceBudget != nil {
-		proc.Base.executionResourceBudget.Close()
+		if !proc.Base.executionResourceBudgetBorrowed {
+			proc.Base.executionResourceBudget.Close()
+		}
 		proc.Base.executionResourceBudget = nil
+		proc.Base.executionResourceBudgetBorrowed = false
 	}
 	proc.Base.executionResourceBudgetMu.Unlock()
 	proc.Base.warningDiagnosticBudgetMu.Lock()

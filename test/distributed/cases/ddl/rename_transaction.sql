@@ -30,4 +30,10 @@ select * from markers order by id;
 select @@autocommit;
 show tables;
 set autocommit=1;
+-- Legal quoted names must survive the idxcron metadata update even without jobs (#29864).
+create table `old\`(id int);
+insert into `old\` values(7);
+rename table `old\` to `new\`;
+select id from `new\`;
+drop table `new\`;
 drop database rename_transaction;

@@ -17,8 +17,10 @@ package lockservice
 import (
 	"context"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -2407,8 +2409,18 @@ func TestUnlockWithBindTimeout(t *testing.T) {
 
 			waitBindDisabled(t, alloc, l1.serviceID)
 
+			// The stale backend may fail at write before detecting owner shutdown.
+			remote := l2.tableGroups.get(0, table).(*remoteLockTable)
+			failed := &failOnceSendClient{
+				Client: remote.client, method: pb.Method_Unlock,
+				err: &net.OpError{Op: "write", Net: "unix", Err: syscall.EPIPE},
+			}
+			remote.client = failed
+
 			txnID2 := []byte("txn2")
-			assert.NoError(t, l2.Unlock(ctx, txnID2, timestamp.Timestamp{}))
+			require.NoError(t, l2.Unlock(ctx, txnID2, timestamp.Timestamp{}))
+			require.True(t, failed.failed.Load(), "injected write failure was not exercised")
+			require.Nil(t, l2.activeTxnHolder.getActiveTxn(txnID2, false, ""))
 			// l2 get the bind
 			l := l2.tableGroups.get(0, table)
 			assert.Equal(t, l2.serviceID, l.getBind().ServiceID)

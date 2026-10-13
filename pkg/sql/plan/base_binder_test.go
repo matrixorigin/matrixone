@@ -49,6 +49,23 @@ func TestMissingColumnWithStaleAliasUsesBadFieldError(t *testing.T) {
 	require.EqualError(t, moErr, "invalid input: column missing_col does not exist")
 }
 
+func TestSerialExtractBinaryAssignment(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select serial_extract(serial(x'4142'),0 as binary(255))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+	require.True(t, valuesExprIsFuncCall(ast))
+	require.True(t, valuesExprIsFuncCall(&tree.ParenExpr{Expr: ast}))
+	binder := NewDefaultBinder(t.Context(), nil, nil, plan.Type{}, nil)
+	bound, err := binder.BindExpr(ast, 0, false)
+	require.NoError(t, err)
+	target := types.New(types.T_binary, 255, 0).PlanType()
+	require.Equal(t, target, bound.Typ)
+	assigned, err := forceAssignmentCastExpr(t.Context(), bound, target)
+	require.NoError(t, err)
+	require.Same(t, bound, assigned)
+}
+
 func TestStoredProcedureVariablesUseDeclaredDecimalType(t *testing.T) {
 	scopes := []map[string]interface{}{{
 		"p1": "10.00",
@@ -368,6 +385,16 @@ func (c *sqlUdfMockCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*fu
 			Body:     "select 1 // '\n + $1",
 			Language: string(tree.SQL),
 		}, nil
+	case "f_qualified_begin":
+		return &function.Udf{
+			Body:     "select t.begin + $1 from (select 7 as `begin`) t",
+			Language: string(tree.SQL),
+		}, nil
+	case "f_qualified_begin_comment":
+		return &function.Udf{
+			Body:     "select t. /* component */ begin + $1 from (select 7 as `begin`) t",
+			Language: string(tree.SQL),
+		}, nil
 	default:
 		return nil, nil
 	}
@@ -405,6 +432,8 @@ func TestBindSQLUDFArgumentMarkersFollowLexerSemantics(t *testing.T) {
 		{name: "ANSI composite mode identifier", query: "select f_ansi(2)"},
 		{name: "executable comment", query: "select f_executable_comment(2)"},
 		{name: "slash line comment", query: "select f_slash_comment(2)"},
+		{name: "qualified BEGIN", query: "select f_qualified_begin(2)"},
+		{name: "comment separated qualified BEGIN", query: "select f_qualified_begin_comment(2)"},
 	}
 
 	for _, test := range tests {
@@ -471,9 +500,10 @@ func TestExpandSQLUdfArgumentsAvoidsIdentifierCollision(t *testing.T) {
 func TestReplaceSQLUdfArgMarkers(t *testing.T) {
 	marker := func(ordinal int) string { return fmt.Sprintf("<arg%d>", ordinal) }
 	tests := []struct {
-		name string
-		sql  string
-		want string
+		name    string
+		sql     string
+		sqlMode string
+		want    string
 	}{
 		{
 			name: "repeated parameter",
@@ -505,11 +535,73 @@ func TestReplaceSQLUdfArgMarkers(t *testing.T) {
 			sql:  "select $1suffix, $1",
 			want: "select $1suffix, <arg1>",
 		},
+		{
+			name: "qualified BEGIN",
+			sql:  "select t.begin + $1 from t",
+			want: "select t.begin + <arg1> from t",
+		},
+		{
+			name: "qualification across ordinary comment",
+			sql:  "select t. /* component */ begin + $1 from t",
+			want: "select t. /* component */ begin + <arg1> from t",
+		},
+		{
+			name: "quoted BEGIN control",
+			sql:  "select t.`begin` + $1 from t",
+			want: "select t.`begin` + <arg1> from t",
+		},
+		{
+			name: "qualified RANK control",
+			sql:  "select t.rank + $1 from t",
+			want: "select t.rank + <arg1> from t",
+		},
+		{
+			name: "parameters before and after qualified keyword",
+			sql:  "select $1, t.begin + $2 from t",
+			want: "select <arg1>, t.begin + <arg2> from t",
+		},
+		{
+			name: "comment marker after qualified keyword",
+			sql:  "select t.begin/* '$1 */ + $2 from t",
+			want: "select t.begin/* '$1 */ + <arg2> from t",
+		},
+		{
+			name: "qualified keyword inside executable comment",
+			sql:  "/*! select t.begin + $1 from t */",
+			want: "/*! select t.begin + <arg1> from t */",
+		},
+		{
+			name: "genuine lexical error retains remainder",
+			sql:  "select $1, t.begin, 'unterminated $2",
+			want: "select <arg1>, t.begin, 'unterminated $2",
+		},
+		{
+			name: "unqualified BEGIN retains lexical rules",
+			sql:  "select begin + $1",
+			want: "select begin + $1",
+		},
+		{
+			name:    "ANSI_QUOTES identifiers retain bytes",
+			sql:     `select t."begin" + $1 from t`,
+			sqlMode: "ANSI_QUOTES",
+			want:    `select t."begin" + <arg1> from t`,
+		},
+		{
+			name: "default backslash escape keeps unterminated string",
+			sql:  `select t.begin, 'x\', $1`,
+			want: `select t.begin, 'x\', $1`,
+		},
+		{
+			name:    "NO_BACKSLASH_ESCAPES string before parameter",
+			sql:     `select t.begin, 'x\', $1`,
+			sqlMode: "NO_BACKSLASH_ESCAPES",
+			want:    `select t.begin, 'x\', <arg1>`,
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.want, replaceSQLUdfArgMarkers(test.sql, 2, "", marker))
+			require.Equal(t, test.want, replaceSQLUdfArgMarkers(test.sql, 2, test.sqlMode, marker))
 		})
 	}
 }

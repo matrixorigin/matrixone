@@ -82,6 +82,7 @@ type TxnCompilerContext struct {
 	tcw     ComputationWrapper
 	execCtx *ExecCtx
 	// cached backExec for subscription meta queries, reused within the same transaction
+	viewSchemaRead bool
 	cachedBackExec BackgroundExec
 	mu             sync.Mutex
 }
@@ -342,6 +343,11 @@ func (tcc *TxnCompilerContext) resolvePhysicalObjectAccount(
 	snapshot *plan2.Snapshot,
 ) uint32 {
 	accountID := tcc.execCtx.ses.GetAccountId()
+	if tcc.viewSchemaRead {
+		if current, err := defines.GetAccountId(tcc.GetContext()); err == nil {
+			accountID = current
+		}
+	}
 	if snapshot != nil && snapshot.Tenant != nil {
 		accountID = snapshot.Tenant.TenantID
 	}
@@ -755,10 +761,23 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		}
 	}
 
-	// Check if it is a temporary table in the current session
-	realName, isTmpTable := tcc.GetSession().GetTempTable(dbName, tableName)
-	if isTmpTable {
-		tableName = realName
+	// Session temporary names belong to its account, not to a publisher (or
+	// historical foreign tenant) whose catalog this private View reader uses.
+	useSessionTemporary := true
+	if tcc.viewSchemaRead {
+		identity := &plan2.ObjectRef{SchemaName: dbName, ObjName: tableName}
+		if sub != nil {
+			identity.SchemaName = sub.DbName
+			identity.PubInfo = &plan.PubInfo{TenantId: sub.AccountId}
+		}
+		useSessionTemporary = tcc.resolvePhysicalObjectAccount(identity, nil, snapshot) == tcc.GetSession().GetAccountId()
+	}
+	isTmpTable := false
+	if useSessionTemporary {
+		realName, temporary := tcc.GetSession().GetTempTable(dbName, tableName)
+		if temporary {
+			tableName, isTmpTable = realName, true
+		}
 	}
 
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
@@ -773,7 +792,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		return nil, nil, err
 	}
 	ownedTemporary := false
-	if owner, ok := tcc.GetSession().(process.TemporaryTableDDL); ok {
+	if owner, ok := tcc.GetSession().(process.TemporaryTableDDL); ok && useSessionTemporary {
 		ownedTemporary = owner.OwnsTemporaryTable(dbName, tableName)
 	}
 	tableDef.IsTemporary = isTmpTable || ownedTemporary
@@ -825,10 +844,13 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		}
 	}
 
-	// Check if it is a temporary table in the current session
-	realName, isTmpTable := tcc.GetSession().GetTempTable(ref.SchemaName, tblName)
-	if isTmpTable {
-		tblName = realName
+	// The caller's temporary index names cannot replace a foreign publisher's
+	// physical index relation in a private View read.
+	if !tcc.viewSchemaRead || tcc.resolvePhysicalObjectAccount(ref, nil, snapshot) == tcc.GetSession().GetAccountId() {
+		realName, isTmpTable := tcc.GetSession().GetTempTable(ref.SchemaName, tblName)
+		if isTmpTable {
+			tblName = realName
+		}
 	}
 
 	ctx, table, err := tcc.getRelation(ref.SchemaName, tblName, subMeta, snapshot)
@@ -1144,6 +1166,24 @@ func (tcc *TxnCompilerContext) ResolveVariableType(varName string, isSystemVar, 
 		return udVar.Type, nil
 	}
 	return inferUserDefinedVarType(udVar.Value), nil
+}
+
+// ResolveVariableRegexpStringResult exposes compatibility-only history without
+// changing ResolveVariableType or general numeric/parameter binding.
+func (tcc *TxnCompilerContext) ResolveVariableRegexpStringResult(varName string) (bool, error) {
+	if tcc.execCtx != nil {
+		if value, typ, declared, ok := resolveStoredProcedureVariableWithType(tcc.execCtx.reqCtx, varName); ok {
+			if !declared {
+				typ = inferUserDefinedVarType(value)
+			}
+			return userVariableRegexpStringResult(typ), nil
+		}
+	}
+	variable, err := tcc.GetSession().GetUserDefinedVar(varName)
+	if err != nil {
+		return false, nil // An absent variable has no assignment history.
+	}
+	return variable.RegexpStringResult || userVariableRegexpStringResult(variable.Type), nil
 }
 
 func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar, _ bool) (bool, error) {
@@ -1502,6 +1542,15 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 		}
 	}
 
+	if tcc.viewSchemaRead && plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(tcc.GetTxnHandler().GetTxn().SnapshotTS()) {
+		ses := tcc.GetSession()
+		bh := ses.InitBackExec(txn, ses.GetDatabaseName(), fakeDataSetFetcher2)
+		if back, ok := bh.(*backExec); ok {
+			back.backSes.ReplaceDerivedStmt(true)
+		}
+		defer bh.Close()
+		return getSubscriptionMeta(tempCtx, dbName, ses, txn, bh)
+	}
 	bh := tcc.getOrCreateBackExec(tempCtx)
 	bh.ClearExecResultSet()
 	return getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn, bh)

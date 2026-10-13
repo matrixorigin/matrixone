@@ -40,6 +40,9 @@ type baseTable struct {
 	schema      *catalog.Schema
 	isTombstone bool
 
+	// dedupTS covers completed incremental checks for this stream only.
+	dedupTS types.TS
+
 	tableSpace *tableSpace
 }
 

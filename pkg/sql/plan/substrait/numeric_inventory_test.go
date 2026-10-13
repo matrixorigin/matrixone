@@ -54,10 +54,14 @@ func TestTPCHNumericEligibilityInventory(t *testing.T) {
 		{14, nil, EligibilityExpression, `substrait: not eligible (expression): aggregate overload "sum" has no declared Sirius semantic equivalence`, `sum([DECIMAL256(53,4)!])->DECIMAL256(65,4)!`},
 		{15, nil, EligibilityExpression, `substrait: not eligible (expression): aggregate overload "sum" has no declared Sirius semantic equivalence`, `sum([DECIMAL256(53,4)!])->DECIMAL256(65,4)!`},
 		{16, []string{`VARCHAR(10)!`, `VARCHAR(25)!`, `INT!`, `BIGINT!`}, "", "", ""},
-		{17, nil, EligibilityExpression, `substrait: not eligible (expression): scalar overload "*" has no declared Sirius semantic equivalence`, `*([DECIMAL128(38,1)! DECIMAL128(19,6)!])->DECIMAL128(38,7)!`},
+		// The correlated AVG may have no input rows, making the scalar
+		// multiplication nullable after the aggregate is lifted above the join.
+		{17, nil, EligibilityExpression, `substrait: not eligible (expression): scalar overload "*" has no declared Sirius semantic equivalence`, `*([DECIMAL128(38,1)! DECIMAL128(19,6)?])->DECIMAL128(38,7)?`},
 		{18, []string{`VARCHAR(25)!`, `INT!`, `BIGINT!`, `DATE!`, `DECIMAL64(15,2)!`, `DECIMAL128(37,2)?`}, "", "", `sum([DECIMAL64(15,2)!])->DECIMAL128(37,2)!`},
 		{19, nil, EligibilityExpression, `substrait: not eligible (expression): aggregate overload "sum" has no declared Sirius semantic equivalence`, `sum([DECIMAL256(53,4)!])->DECIMAL256(65,4)!`},
-		{20, nil, EligibilityExpression, `substrait: not eligible (expression): scalar overload "*" has no declared Sirius semantic equivalence`, `*([DECIMAL128(38,1)! DECIMAL128(37,2)!])->DECIMAL128(38,3)!`},
+		// The correlated SUM and the resulting multiplication are nullable
+		// when no lineitems match this partsupp row.
+		{20, nil, EligibilityExpression, `substrait: not eligible (expression): scalar overload "*" has no declared Sirius semantic equivalence`, `*([DECIMAL128(38,1)! DECIMAL128(37,2)?])->DECIMAL128(38,3)?`},
 		{21, []string{`VARCHAR(25)!`, `BIGINT!`}, "", "", ""},
 		{22, []string{`VARCHAR(2)!`, `BIGINT!`, `DECIMAL128(37,2)?`}, "", "", `avg([DECIMAL64(15,2)!])->DECIMAL128(19,6)!`},
 	}

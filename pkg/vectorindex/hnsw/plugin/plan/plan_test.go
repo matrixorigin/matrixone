@@ -136,6 +136,9 @@ func TestHooks_Redirects(t *testing.T) {
 		{"ApplyForSort", func() {
 			_, _, _ = Hooks{}.ApplyForSort(newStubPlanBuilder(), &planplugin.VectorSortContext{}, &planplugin.MultiTableIndexRef{}, 0, planplugin.ApplyForSortOpts{})
 		}},
+		{"BuildLogicalSearch", func() {
+			_, _, _ = Hooks{}.BuildLogicalSearch(newStubPlanBuilder(), &planplugin.VectorSortContext{}, &planplugin.MultiTableIndexRef{}, 0, planplugin.ApplyForSortOpts{})
+		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			defer func() { require.Equal(t, "hnsw", recover()) }()
@@ -310,12 +313,12 @@ func TestGetHnswParams_Error(t *testing.T) {
 }
 
 func TestBuildHnswCreate_TooFewArgs(t *testing.T) {
-	_, err := buildHnswCreate(newStubPlanBuilder(), makeNumValTblFunc(`{}`), nil, makeBuildArgs(3), nil)
+	_, err := buildHnswCreate(newStubPlanBuilder(), makeNumValTblFunc(`{}`), nil, makeBuildArgs(3), nil, nil)
 	require.Error(t, err)
 }
 
 func TestBuildHnswCreate_BadParams(t *testing.T) {
-	_, err := buildHnswCreate(newStubPlanBuilder(), nonLiteralTblFunc(), nil, makeBuildArgs(4), nil)
+	_, err := buildHnswCreate(newStubPlanBuilder(), nonLiteralTblFunc(), nil, makeBuildArgs(4), nil, nil)
 	require.Error(t, err)
 }
 
@@ -323,7 +326,7 @@ func TestBuildHnswCreate_BadParams(t *testing.T) {
 // and marks the node single-threaded.
 func TestBuildHnswCreate_OK(t *testing.T) {
 	b := newStubPlanBuilder()
-	id, err := buildHnswCreate(b, makeNumValTblFunc(`{"m":"48"}`), nil, makeBuildArgs(4), nil)
+	id, err := buildHnswCreate(b, makeNumValTblFunc(`{"m":"48"}`), nil, makeBuildArgs(4), nil, nil)
 	require.NoError(t, err)
 	node := b.nodes[id]
 	require.Equal(t, planpb.Node_FUNCTION_SCAN, node.NodeType)
@@ -331,31 +334,4 @@ func TestBuildHnswCreate_OK(t *testing.T) {
 	require.Equal(t, `{"m":"48"}`, string(node.TableDef.TblFunc.Param))
 	require.Len(t, node.TblFuncExprList, 3)
 	require.True(t, node.TableDef.TblFunc.IsSingle)
-}
-
-// Search takes 3 args, or 4 with a filter payload.
-func TestBuildHnswSearch_BadArgCount(t *testing.T) {
-	_, err := buildHnswSearch(newStubPlanBuilder(), makeNumValTblFunc(`{}`), nil, makeBuildArgs(2), nil)
-	require.Error(t, err)
-	_, err = buildHnswSearch(newStubPlanBuilder(), makeNumValTblFunc(`{}`), nil, makeBuildArgs(5), nil)
-	require.Error(t, err)
-}
-
-func TestBuildHnswSearch_BadParams(t *testing.T) {
-	_, err := buildHnswSearch(newStubPlanBuilder(), nonLiteralTblFunc(), nil, makeBuildArgs(3), nil)
-	require.Error(t, err)
-}
-
-// Search is not single-threaded, unlike create.
-func TestBuildHnswSearch_OK(t *testing.T) {
-	for _, n := range []int{3, 4} {
-		b := newStubPlanBuilder()
-		id, err := buildHnswSearch(b, makeNumValTblFunc(`{"m":"48"}`), nil, makeBuildArgs(n), nil)
-		require.NoError(t, err)
-		node := b.nodes[id]
-		require.Equal(t, planpb.Node_FUNCTION_SCAN, node.NodeType)
-		require.Equal(t, HNSWSearchFuncName, node.TableDef.TblFunc.Name)
-		require.Len(t, node.TblFuncExprList, n-1)
-		require.False(t, node.TableDef.TblFunc.IsSingle)
-	}
 }

@@ -15,9 +15,14 @@
 package export
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
+	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/DATA-DOG/go-sqlmock"
 	"path"
 	"reflect"
 	"strings"
@@ -620,4 +625,68 @@ func TestInitMerge(t *testing.T) {
 			tt.wantErr(t, InitMerge(tt.args.ctx, tt.args.SV), fmt.Sprintf("InitMerge(%v, %v)", tt.args.ctx, tt.args.SV))
 		})
 	}
+}
+
+func TestMergeStatementInfoOversizedCSVRecovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fs := testutil.NewFS(t)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	tbl := &table.Table{Database: "system", Table: "statement_info", Columns: []table.Column{table.TextColumn("statement", ""), table.TextColumn("error", ""), table.TextColumn("exec_plan", "")}}
+	var content bytes.Buffer
+	writer := csv.NewWriter(&content)
+	require.NoError(t, writer.Write([]string{strings.Repeat("s", 65536), strings.Repeat("e", 65536), `{"plan":"` + strings.Repeat("p", 65536) + `"}`}))
+	writer.Flush()
+	require.NoError(t, writer.Error())
+	filePath := "etl:sys/logs/oversized-statement-info.csv"
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{FilePath: filePath, Entries: []fileservice.IOEntry{{Size: int64(content.Len()), Data: content.Bytes()}}}))
+	fail := true
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherFunc(func(_, query string) error {
+		const prefix = "LOAD DATA INLINE FORMAT='csv', DATA='"
+		const suffix = "' INTO TABLE system.statement_info FIELDS TERMINATED BY ','"
+		if !strings.HasPrefix(query, prefix) || !strings.HasSuffix(query, suffix) {
+			return fmt.Errorf("unexpected LOAD envelope")
+		}
+		decoded, err := csv.NewReader(strings.NewReader(strings.TrimSuffix(strings.TrimPrefix(query, prefix), suffix))).ReadAll()
+		if err != nil {
+			return err
+		}
+		require.Len(t, decoded, 1)
+		for _, value := range decoded[0] {
+			require.LessOrEqual(t, len(value), 65535)
+		}
+		require.True(t, strings.HasSuffix(decoded[0][0], db_holder.StatementInfoTruncationMarker))
+		require.True(t, strings.HasSuffix(decoded[0][1], db_holder.StatementInfoTruncationMarker))
+		var summary map[string]any
+		require.NoError(t, json.Unmarshal([]byte(decoded[0][2]), &summary))
+		require.Equal(t, true, summary["truncated"])
+		require.Equal(t, float64(65547), summary["original_bytes"])
+		if fail {
+			cancel()
+		}
+		return nil
+	})))
+	require.NoError(t, err)
+	defer db.Close()
+	oldProvider := db_holder.GetOrInitDBConn
+	oldBackoff := db_holder.DBConnErrCount
+	db_holder.DBConnErrCount = db_holder.NewReConnectionBackOff(time.Minute, db_holder.DBConnRetryThreshold)
+	db_holder.GetOrInitDBConn = func(bool, bool) (*sql.DB, error) { return db, nil }
+	t.Cleanup(func() { db_holder.GetOrInitDBConn = oldProvider; db_holder.DBConnErrCount = oldBackoff })
+	merge, err := NewMerge(context.Background(), "", WithFileService(fs), WithTable(tbl))
+	require.NoError(t, err)
+	defer merge.Stop()
+	merge.isRecordExisted = func(context.Context, []string, *table.Table, db_holder.DBConnProvider) (bool, error) {
+		return false, nil
+	}
+	mock.ExpectExec("load").WillReturnError(errors.New("temporary DB failure"))
+	require.ErrorIs(t, merge.doMergeFiles(ctx, []*FileMeta{{FilePath: filePath}}), context.Canceled)
+	_, err = fs.StatFile(context.Background(), filePath)
+	require.NoError(t, err, "failed upload must retain original CSV")
+	fail = false
+	mock.ExpectExec("load").WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, merge.doMergeFiles(context.Background(), []*FileMeta{{FilePath: filePath}}))
+	_, err = fs.StatFile(context.Background(), filePath)
+	require.Error(t, err, "successful upload must remove source CSV")
+	require.NoError(t, mock.ExpectationsWereMet())
 }

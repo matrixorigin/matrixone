@@ -26,7 +26,6 @@ import (
 )
 
 const (
-	walRecoveryStatusConfigKey          = "logservice.internal.wal-recovery-status"
 	walRecoveryStatusPending            = "pending"
 	walRecoveryStatusCoordinatorPending = "coordinator-pending"
 	walRecoveryStatusComplete           = "complete"
@@ -57,8 +56,8 @@ func (s *Service) addWALRecoveryStatus(hb *pb.LogStoreHeartbeat) {
 			content[key] = item
 		}
 	}
-	content[walRecoveryStatusConfigKey] = &pb.ConfigItem{
-		Name:         walRecoveryStatusConfigKey,
+	content[pb.WALRecoveryStatusConfigKey] = &pb.ConfigItem{
+		Name:         pb.WALRecoveryStatusConfigKey,
 		CurrentValue: status,
 		DefaultValue: walRecoveryStatusComplete,
 		Internal:     "internal",
@@ -82,7 +81,7 @@ func walRecoveryPending(state *pb.CheckerState) bool {
 		if store.ConfigData == nil {
 			continue
 		}
-		item := store.ConfigData.Content[walRecoveryStatusConfigKey]
+		item := store.ConfigData.Content[pb.WALRecoveryStatusConfigKey]
 		if item != nil && (item.CurrentValue == walRecoveryStatusPending ||
 			item.CurrentValue == walRecoveryStatusCoordinatorPending) {
 			return true
@@ -113,7 +112,7 @@ func walRecoveryCoordinator(state *pb.CheckerState, expectedReplicas uint64) (st
 		if store.ConfigData == nil {
 			return "", false
 		}
-		item := store.ConfigData.Content[walRecoveryStatusConfigKey]
+		item := store.ConfigData.Content[pb.WALRecoveryStatusConfigKey]
 		if item == nil {
 			return "", false
 		}

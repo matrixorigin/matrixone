@@ -1190,6 +1190,34 @@ func TestBranchHashmapForEachShardParallelRespectsParallelism(t *testing.T) {
 	}
 }
 
+func TestBranchHashmapSerialIterationStopsOnError(t *testing.T) {
+	bh, err := NewBranchHashmap(WithBranchHashmapShardCount(2))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, bh.Close()) })
+	sentinel := errors.New("first shard failed")
+	visits := 0
+	err = bh.ForEachShardParallel(func(ShardCursor) error {
+		visits++
+		return sentinel
+	}, 1)
+	require.ErrorIs(t, err, sentinel)
+	require.Equal(t, 1, visits, "later shards must not run after failure")
+	visits = 0
+	require.PanicsWithValue(t, sentinel, func() {
+		_ = bh.ForEachShardParallel(func(ShardCursor) error {
+			visits++
+			panic(sentinel)
+		}, 1)
+	})
+	require.Equal(t, 1, visits)
+	visits = 0
+	require.NoError(t, bh.ForEachShardParallel(func(ShardCursor) error {
+		visits++
+		return nil
+	}, 1))
+	require.Equal(t, bh.ShardCount(), visits, "iteration guards must be released for reuse")
+}
+
 func TestBranchHashmapForEachShardParallelSerialPop(t *testing.T) {
 	testBranchHashmapForEachShardParallelPop(t, 1)
 }

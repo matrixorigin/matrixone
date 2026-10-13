@@ -1,0 +1,113 @@
+drop database if exists varchar_ddl_width;
+create database varchar_ddl_width;
+use varchar_ddl_width;
+create table rejected (c bool, v varchar(65535));
+Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead
+create table rejected (v varchar(16384));
+Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead
+create table rejected (v varchar(65536));
+Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead
+create table rejected (v varchar(65536)) as select 'value' as v;
+Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead
+show tables like 'rejected';
+➤ Tables_in_varchar_ddl_width[12,5000,0]
+create table boundary (v varchar(16383));
+insert into boundary values ('😀');
+select v, length(v), char_length(v) from boundary;
+➤ v[12,16383,0]  ¦  length(v)[-5,64,0]  ¦  char_length(v)[-5,64,0]  𝄀
+😀  ¦  4  ¦  1
+show create table boundary;
+➤ Table[12,8,0]  ¦  Create Table[12,61,0]  𝄀
+boundary  ¦  CREATE TABLE `boundary` (
+  `v` varchar(16383) DEFAULT NULL
+)
+create table rejected (v varchar(16384) character set utf8mb4) character set binary;
+Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead
+create table binary_column (v varchar(65535) character set binary);
+show create table binary_column;
+➤ Table[12,13,0]  ¦  Create Table[12,68,0]  𝄀
+binary_column  ¦  CREATE TABLE `binary_column` (
+  `v` varbinary(65535) DEFAULT NULL
+)
+create table binary_table (v varchar(65535)) character set binary;
+show create table binary_table;
+➤ Table[12,12,0]  ¦  Create Table[12,88,0]  𝄀
+binary_table  ¦  CREATE TABLE `binary_table` (
+  `v` varbinary(65535) DEFAULT NULL
+) CHARACTER SET=binary
+create table rejected (v varchar(65536) character set binary);
+Column length too big for column 'v' (max = 65535); use BLOB or TEXT instead
+create table rejected (v varchar(65536)) character set binary;
+Column length too big for column 'v' (max = 65535); use BLOB or TEXT instead
+create table implicit_width (v varchar);
+show create table implicit_width;
+➤ Table[12,14,0]  ¦  Create Table[12,67,0]  𝄀
+implicit_width  ¦  CREATE TABLE `implicit_width` (
+  `v` varchar(16383) DEFAULT NULL
+)
+create table alter_width (v varchar(10));
+insert into alter_width values ('before');
+alter table alter_width add column extra varchar(16384);
+Column length too big for column 'extra' (max = 16383); use BLOB or TEXT instead
+alter table alter_width modify column v varchar(16384);
+Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead
+alter table alter_width change column v renamed varchar(16384);
+Column length too big for column 'renamed' (max = 16383); use BLOB or TEXT instead
+alter table alter_width add column extra varchar(65536);
+Column length too big for column 'extra' (max = 16383); use BLOB or TEXT instead
+alter table alter_width modify column v varchar(65536);
+Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead
+alter table alter_width change column v renamed varchar(65536);
+Column length too big for column 'renamed' (max = 16383); use BLOB or TEXT instead
+alter table alter_width modify column v varchar(65536), add column flag bool;
+Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead
+show create table alter_width;
+➤ Table[12,11,0]  ¦  Create Table[12,61,0]  𝄀
+alter_width  ¦  CREATE TABLE `alter_width` (
+  `v` varchar(10) DEFAULT NULL
+)
+select * from alter_width;
+➤ v[12,10,0]  𝄀
+before
+alter table alter_width modify column v varchar(16383);
+show create table alter_width;
+➤ Table[12,11,0]  ¦  Create Table[12,64,0]  𝄀
+alter_width  ¦  CREATE TABLE `alter_width` (
+  `v` varchar(16383) DEFAULT NULL
+)
+alter table alter_width modify column v varchar(16384), add column flag bool;
+Column length too big for column 'v' (max = 16383); use BLOB or TEXT instead
+show create table alter_width;
+➤ Table[12,11,0]  ¦  Create Table[12,64,0]  𝄀
+alter_width  ¦  CREATE TABLE `alter_width` (
+  `v` varchar(16383) DEFAULT NULL
+)
+select cast('value' as varchar(65536));
+Data truncation: data out of range: data type varchar,  typeLen is over the MaxVarcharLen: 65535
+create table rejected (v varbinary(65536));
+Data truncation: data out of range: data type varbinary,  typeLen is over the MaxVarcharLen: 65535
+create table inferred as select cast('old' as varchar(65535)) as v;
+create table copied like inferred;
+alter table inferred add column extra int;
+show create table copied;
+➤ Table[12,6,0]  ¦  Create Table[12,55,0]  𝄀
+copied  ¦  CREATE TABLE `copied` (
+  `v` varchar(65535) NOT NULL
+)
+show create table inferred;
+➤ Table[12,8,0]  ¦  Create Table[12,85,0]  𝄀
+inferred  ¦  CREATE TABLE `inferred` (
+  `v` varchar(65535) NOT NULL,
+  `extra` int DEFAULT NULL
+)
+select v, extra from inferred;
+➤ v[12,65535,0]  ¦  extra[4,32,0]  𝄀
+old  ¦  null
+use mo_catalog;
+drop database varchar_ddl_width;
+drop account if exists varchar_width_account;
+create account varchar_width_account admin_name 'admin' identified by '111';
+drop account varchar_width_account;
+select count(*) as remaining_accounts from mo_catalog.mo_account where account_name = 'varchar_width_account';
+➤ remaining_accounts[-5,64,0]  𝄀
+0

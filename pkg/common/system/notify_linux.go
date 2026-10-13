@@ -82,12 +82,21 @@ func watchCgroupConfig(stopper *stopper.Stopper, cgDir string, changed func(stri
 			buffer [unix.SizeofInotifyEvent + unix.PathMax + 1]byte
 			offset uint32
 		)
-		defer func() {
+		closeDone := make(chan struct{})
+		stopClose := context.AfterFunc(ctx, func() {
+			defer close(closeDone)
 			file.Close()
+		})
+		defer func() {
+			if stopClose() {
+				file.Close()
+			} else {
+				// A second Close can return while the first is still closing.
+				// Task completion must include the cancellation callback's close.
+				<-closeDone
+			}
 			logutil.Info("exit cgroup config watcher")
 		}()
-		stopClose := context.AfterFunc(ctx, func() { file.Close() })
-		defer stopClose()
 
 		for {
 			n, err := file.Read(buffer[:])

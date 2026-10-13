@@ -311,7 +311,7 @@ func foldExpressionForTest(t *testing.T, proc *process.Process, expr *plan.Expr)
 
 func Test_ConstructBasePKFilter(t *testing.T) {
 	m := mpool.MustNew(t.Name())
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	var needFreeVecs []*vector.Vector
 	var exes []colexec.ExpressionExecutor
 	t.Cleanup(func() {
@@ -1114,7 +1114,7 @@ func encodeIntToUUID(x int32) types.Uuid {
 
 func TestConstructBasePKFilterWithOr(t *testing.T) {
 	m := mpool.MustNew(t.Name())
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 
 	tableDef := &plan.TableDef{
 		Name: "test",
@@ -2359,6 +2359,83 @@ func TestConstructBasePKFilterMalformedInFailsOpen(t *testing.T) {
 	}
 
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestConstructBasePKFilterUnicodeFailsOpen(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer func() {
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI)
+	tableDef := &plan.TableDef{
+		Name:          "unicode_pk",
+		Name2ColIndex: map[string]int32{"a": 0},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{{
+			Name: "a",
+			Typ:  plan2.MakePlan2Type(&typ),
+		}},
+	}
+	value := &plan.Expr{
+		Typ: plan2.MakePlan2Type(&typ),
+		Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+			IsConst: true,
+			Data:    []byte("a"),
+		}},
+	}
+	expr := MakeFunctionExprForTest("=", []*plan.Expr{MakeColExprForTest(0, types.T_varchar), value})
+	expr.GetF().Args[0].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+
+	filter, err := ConstructBasePKFilter(expr, tableDef, mp)
+	require.NoError(t, err)
+	require.False(t, filter.Valid)
+	filter.Cleanup()
+}
+
+func TestConstructBasePKFilterUnicodeFailsOpenWithoutColumnIndex(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+
+	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI)
+	tableDef := &plan.TableDef{
+		Name: "unicode_pk_without_name_index",
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{{Name: "a", Typ: plan2.MakePlan2Type(&typ)}},
+	}
+	value := &plan.Expr{
+		Typ:  plan2.MakePlan2Type(&typ),
+		Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: []byte("a")}},
+	}
+	expr := MakeFunctionExprForTest("=", []*plan.Expr{MakeColExprForTest(0, types.T_varchar), value})
+	expr.GetF().Args[0].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+
+	filter, err := ConstructBasePKFilter(expr, tableDef, mp)
+	require.NoError(t, err)
+	require.False(t, filter.Valid)
+	filter.Cleanup()
+}
+
+func TestCompileFilterExprUnicodeFailsOpen(t *testing.T) {
+	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI)
+	tableDef := &plan.TableDef{
+		Name:          "unicode_filter",
+		Name2ColIndex: map[string]int32{"a": 0},
+		Cols:          []*plan.ColDef{{Name: "a", Typ: plan2.MakePlan2Type(&typ)}},
+	}
+	expr := MakeFunctionExprForTest("=", []*plan.Expr{
+		MakeColExprForTest(0, types.T_varchar),
+		{
+			Typ: plan2.MakePlan2Type(&typ),
+			Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+				IsConst: true,
+				Data:    []byte("a"),
+			}},
+		},
+	})
+	expr.GetF().Args[0].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+	_, _, _, _, _, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+	require.False(t, canCompile)
 }
 
 func TestUnmarshalPKInVectorValidatesConstPhysicalValueOnce(t *testing.T) {
@@ -3897,7 +3974,7 @@ func TestMergedInFilterCleanupHandoff(t *testing.T) {
 
 func TestConstructBasePKFilterOrFallbackRetainsMergedDisjunct(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	t.Cleanup(func() {
 		proc.GetFileService().Close(proc.Ctx)
 		proc.Free()
@@ -4176,7 +4253,13 @@ func TestCompileFilterExpr_PrefixInRangeAllFlags(t *testing.T) {
 		},
 	}
 
-	m := mpool.MustNew(t.Name())
+	poolTag := t.Name()
+	t.Cleanup(func() { require.Equal(t, "[]", mpool.ReportMemUsage(poolTag)) })
+	m := mpool.MustNew(poolTag)
+	t.Cleanup(func() { mpool.DeleteMPool(m) })
+	t.Cleanup(func() {
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "shared pool must survive process and file-service cleanup")
+	})
 
 	flags := []struct {
 		flag uint8
@@ -4369,7 +4452,7 @@ func TestCompileFilterExprsPreservesSupportedConjuncts(t *testing.T) {
 		MakeColExprForTest(0, types.T_int64, "id"),
 	})
 	mp := mpool.MustNew(t.Name())
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	var executors []colexec.ExpressionExecutor
 	plan2.ReplaceFoldExpr(proc, supported, &executors)
 	plan2.EvalFoldExpr(proc, supported, &executors)
@@ -4438,7 +4521,7 @@ func TestCompileFilterExpr_Between(t *testing.T) {
 	})
 
 	m := mpool.MustNew(t.Name())
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	var exes []colexec.ExpressionExecutor
 	plan2.ReplaceFoldExpr(proc, expr, &exes)
 	plan2.EvalFoldExpr(proc, expr, &exes)
@@ -4489,7 +4572,13 @@ func TestCompileFilterExpr_InRange(t *testing.T) {
 		{3, RangeBothOpen},
 	}
 
-	m := mpool.MustNew(t.Name())
+	poolTag := t.Name()
+	t.Cleanup(func() { require.Equal(t, "[]", mpool.ReportMemUsage(poolTag)) })
+	m := mpool.MustNew(poolTag)
+	t.Cleanup(func() { mpool.DeleteMPool(m) })
+	t.Cleanup(func() {
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "shared pool must survive process and file-service cleanup")
+	})
 
 	for _, tc := range flags {
 		expr := MakeFunctionExprForTest("in_range", []*plan.Expr{
@@ -4526,10 +4615,17 @@ func TestCompileFilterExpr_InRange(t *testing.T) {
 // bare `return` in the switch default leave Valid=true,Op=0 (= EQUAL), which
 // would corrupt range ops into equality filters.
 func TestConstructBasePKFilter_InvalidRangeFlagNotValid(t *testing.T) {
-	m := mpool.MustNew(t.Name())
+	poolTag := t.Name()
+	t.Cleanup(func() { require.Equal(t, "[]", mpool.ReportMemUsage(poolTag)) })
+	m := mpool.MustNew(poolTag)
+	t.Cleanup(func() { mpool.DeleteMPool(m) })
+	t.Cleanup(func() {
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "shared pool must survive process and file-service cleanup")
+	})
 
 	for _, fn := range []string{"in_range", "prefix_in_range"} {
 		t.Run(fn, func(t *testing.T) {
+			require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "parent pool must survive sibling cleanup")
 			tableDef := &plan.TableDef{
 				Name:          "test_idx",
 				Name2ColIndex: map[string]int32{"k": 0},
@@ -4561,6 +4657,7 @@ func TestConstructBasePKFilter_InvalidRangeFlagNotValid(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, basePKFilter.Valid, "invalid flag must produce Valid=false")
 		})
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "child cleanup must not delete the parent pool")
 	}
 }
 
@@ -4583,7 +4680,13 @@ func TestCompileFilterExpr_PrefixSortedSeekOps(t *testing.T) {
 		},
 	}
 
-	m := mpool.MustNew(t.Name())
+	poolTag := t.Name()
+	t.Cleanup(func() { require.Equal(t, "[]", mpool.ReportMemUsage(poolTag)) })
+	m := mpool.MustNew(poolTag)
+	t.Cleanup(func() { mpool.DeleteMPool(m) })
+	t.Cleanup(func() {
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "shared pool must survive process and file-service cleanup")
+	})
 
 	exprs := map[string]*plan.Expr{
 		"prefix_eq": MakeFunctionExprForTest("prefix_eq", []*plan.Expr{
@@ -4599,6 +4702,7 @@ func TestCompileFilterExpr_PrefixSortedSeekOps(t *testing.T) {
 
 	for name, expr := range exprs {
 		t.Run(name, func(t *testing.T) {
+			require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "parent pool must survive sibling cleanup")
 			proc := testutil.NewProcessWithMPool(t, "", m)
 			var exes []colexec.ExpressionExecutor
 			plan2.ReplaceFoldExpr(proc, expr, &exes)
@@ -4613,6 +4717,7 @@ func TestCompileFilterExpr_PrefixSortedSeekOps(t *testing.T) {
 			require.NotNil(t, blockFilterOp)
 			require.NotNil(t, seekOp, "seekOp should be set for sorted %s", name)
 		})
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "child cleanup must not delete the parent pool")
 	}
 }
 

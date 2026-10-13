@@ -19,12 +19,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -141,6 +143,36 @@ func TestLifecycleRestoreAutoIncrementOffsetValidatesColumnTypeLimit(t *testing.
 		lifecyclepkg.AutoIncrementMax{ColumnOrdinal: 0, Value: "256"},
 	)
 	require.Error(t, err)
+
+	for _, tc := range []struct {
+		name  string
+		typ   types.T
+		limit uint64
+	}{
+		{name: "signed mediumint", typ: types.T_int32, limit: 1<<23 - 1},
+		{name: "unsigned mediumint", typ: types.T_uint32, limit: 1<<24 - 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			schema := lifecyclepkg.SchemaDescriptor{Columns: []lifecyclepkg.SchemaColumn{{
+				Name:          "id",
+				TypeID:        int32(tc.typ),
+				Width:         24,
+				Scale:         -1,
+				AutoIncrement: true,
+			}}}
+			_, _, offset, err := lifecycleRestoreAutoIncrementOffset(
+				context.Background(), schema,
+				lifecyclepkg.AutoIncrementMax{Value: strconv.FormatUint(tc.limit, 10)},
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.limit, offset)
+			_, _, _, err = lifecycleRestoreAutoIncrementOffset(
+				context.Background(), schema,
+				lifecyclepkg.AutoIncrementMax{Value: strconv.FormatUint(tc.limit+1, 10)},
+			)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+		})
+	}
 }
 
 func TestLifecycleRestoreRepositoryRejectsIncompleteStateAndInvalidPersistentIdentifiers(t *testing.T) {

@@ -35,5 +35,20 @@ insert into precision_decimals values
 (9999999999999999.99,999999999999999999999999999999999999.99,999999999999999999999999999999999999999999999999999999999999999.99,2),
 (1,1,1,null);
 select a,d,round(a,d),truncate(a,d),round(b,d),truncate(b,d),round(c,d),truncate(c,d) from precision_decimals order by a;
+
+-- The reported DECIMAL(10,4) input with an INT precision column must use the
+-- runtime precision path, including negative and NULL values.
+create table precision_decimal_int(a decimal(10,4), d int);
+insert into precision_decimal_int values (1.2345,2),(1.2395,2),(123.4567,-1),(2.9876,null);
+select a,d,truncate(a,d) from precision_decimal_int order by a;
+select a,d,truncate(a,d + 0) from precision_decimal_int order by a;
+-- Use an integer oracle because mo-tester's DECIMAL comparison is tolerant.
+select sum(case
+    when d = 2 and truncate(a,d) = 1.2300 and truncate(a,d + 0) = 1.2300 then 0
+    when d = -1 and truncate(a,d) = 120.0000 and truncate(a,d + 0) = 120.0000 then 0
+    when d is null and truncate(a,d) is null and truncate(a,d + 0) is null then 0
+    else 1
+end) as mismatches from precision_decimal_int;
+
 set optimizer_hints = @saved_optimizer_hints;
 drop database math_dynamic_precision;

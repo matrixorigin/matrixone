@@ -280,7 +280,7 @@ func geometrySRIDSourceIsNull(ctx context.Context, expr *plan.Expr) bool {
 }
 
 func isEnumPlanType(typ *plan.Type) bool {
-	return typ != nil && typ.Id == int32(types.T_enum) && len(typ.GetEnumvalues()) > 0
+	return typ != nil && typ.Id == int32(types.T_enum)
 }
 
 // isSetPlanType identifies a SET column. SET is stored as T_uint64 with a non-empty
@@ -361,7 +361,7 @@ func mysqlEnumLiteralIndex(enumValues string, value *tree.NumVal) (types.Enum, e
 
 func mysqlSetIgnoreLiteralBits(setValues string, value *tree.NumVal) uint64 {
 	if value.ValType == tree.P_int64 {
-		if v, ok := value.Int64(); ok && v >= 0 {
+		if v, ok := value.Int64(); ok {
 			return uint64(v) & mysqlSetValidBitmap(setValues)
 		}
 	}
@@ -382,11 +382,8 @@ func mysqlSetIgnoreLiteralBits(setValues string, value *tree.NumVal) uint64 {
 }
 
 func mysqlSetValidBitmap(setValues string) uint64 {
-	memberCount := len(strings.Split(setValues, ","))
-	if memberCount >= types.MaxSetMembers {
-		return ^uint64(0)
-	}
-	return (uint64(1) << uint(memberCount)) - 1
+	bitmap, _ := types.SetValidBitmap(setValues)
+	return bitmap
 }
 
 func mysqlYearLiteralIsValid(value *tree.NumVal) bool {
@@ -430,6 +427,19 @@ func arrayPlanTypeString(typ *plan.Type) string {
 		return metadata
 	}
 	return ""
+}
+
+func typedArrayTypeHasMediumInt(typ *plan.Type) bool {
+	if !isTypedArrayPlanType(typ) {
+		return false
+	}
+	normalized := strings.ToLower(strings.NewReplacer("(", " ", ")", " ", ",", " ").Replace(arrayPlanTypeString(typ)))
+	for _, token := range strings.Fields(normalized) {
+		if token == "mediumint" || token == "int3" {
+			return true
+		}
+	}
+	return false
 }
 
 func validateTypedArrayElementType(ctx context.Context, elem *tree.T) error {
@@ -753,7 +763,7 @@ func enumFoldKey(value string) string {
 func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
 	switch {
 	case isSetPlanType(typ):
-		values, err := types.NormalizeSetValues(strings.Split(typ.Enumvalues, ","))
+		values, err := types.NormalizeSetValues(types.DecodeSetValues(typ.Enumvalues))
 		if err != nil {
 			return false
 		}
@@ -1027,7 +1037,7 @@ func setTypeHasEmptyMember(typ *plan.Type) bool {
 	if !isSetPlanType(typ) {
 		return false
 	}
-	values, err := types.NormalizeSetValues(strings.Split(typ.Enumvalues, ","))
+	values, err := types.NormalizeSetValues(types.DecodeSetValues(typ.Enumvalues))
 	if err != nil {
 		return false
 	}
@@ -1187,19 +1197,27 @@ func funcCastForTypedArrayType(ctx context.Context, expr *Expr, targetType Type)
 		return expr, nil
 	}
 	targetType.NotNullable = expr.Typ.NotNullable
-	if types.T(expr.Typ.Id) == types.T_any || isNullLiteralExpr(expr) {
+	mediumIntArray := typedArrayTypeHasMediumInt(&targetType)
+	if isNullLiteralExpr(expr) || (types.T(expr.Typ.Id) == types.T_any && !mediumIntArray) {
 		expr.Typ = targetType
 		return expr, nil
 	}
-	if isTypedArrayPlanType(&expr.Typ) && expr.Typ.GetEnumvalues() == targetType.GetEnumvalues() {
+	if isTypedArrayPlanType(&expr.Typ) && expr.Typ.GetEnumvalues() == targetType.GetEnumvalues() && !mediumIntArray {
 		expr.Typ = targetType
 		return expr, nil
 	}
 
 	jsonType := plan.Type{Id: int32(types.T_json), NotNullable: expr.Typ.NotNullable}
-	jsonExpr, err := forceCastExpr(ctx, expr, jsonType)
-	if err != nil {
-		return nil, err
+	var jsonExpr *Expr
+	if types.T(expr.Typ.Id) == types.T_json || types.T(expr.Typ.Id) == types.T_any {
+		jsonExpr = DeepCopyExpr(expr)
+		jsonExpr.Typ = jsonType
+	} else {
+		var err error
+		jsonExpr, err = forceCastExpr(ctx, expr, jsonType)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	args := make([]*Expr, 2)

@@ -390,22 +390,28 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 			av.Vec.DecimalLiteralRequiresV82 == bv.Vec.DecimalLiteralRequiresV82 &&
 			bytes.Equal(av.Vec.Data, bv.Vec.Data)
 	default:
-		// Fallback: compare proto bytes.
-		ab, aerr := a.Marshal()
-		bb, berr := b.Marshal()
-		if aerr != nil || berr != nil {
-			return false
-		}
-		if len(ab) != len(bb) {
-			return false
-		}
-		for i := range ab {
-			if ab[i] != bb[i] {
-				return false
-			}
-		}
-		return true
+		return exprWireEqual(a, b)
 	}
+}
+
+// exprWireEqual retains complete protobuf identity for uncommon variants.
+// Small messages share one bounded allocation; large messages keep their
+// original allocation sizes. Each backwards encoder receives an exact slice.
+func exprWireEqual(a, b *plan.Expr) bool {
+	size := a.ProtoSize()
+	if size != b.ProtoSize() {
+		return false
+	}
+	var ab, bb []byte
+	if size <= 64 {
+		wire := make([]byte, 2*size)
+		ab, bb = wire[:size:size], wire[size:]
+	} else {
+		ab, bb = make([]byte, size), make([]byte, size)
+	}
+	an, aerr := a.MarshalToSizedBuffer(ab)
+	bn, berr := b.MarshalToSizedBuffer(bb)
+	return aerr == nil && berr == nil && bytes.Equal(ab[:an], bb[:bn])
 }
 
 func literalEqual(typ plan.Type, a, b *plan.Literal) bool {
@@ -510,18 +516,20 @@ func objectRefEqual(a, b *plan.ObjectRef) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	ab, aerr := a.Marshal()
-	bb, berr := b.Marshal()
-	if aerr != nil || berr != nil {
+	size := a.ProtoSize()
+	if size != b.ProtoSize() {
 		return false
 	}
-	if len(ab) != len(bb) {
-		return false
+	// Most function references fit locally. Preserve complete protobuf identity,
+	// including nested metadata and unknown fields, for references of any size.
+	var aLocal, bLocal [64]byte
+	ab, bb := aLocal[:], bLocal[:]
+	if size > len(aLocal) {
+		ab, bb = make([]byte, size), make([]byte, size)
+	} else {
+		ab, bb = ab[:size], bb[:size]
 	}
-	for i := range ab {
-		if ab[i] != bb[i] {
-			return false
-		}
-	}
-	return true
+	an, aerr := a.MarshalToSizedBuffer(ab)
+	bn, berr := b.MarshalToSizedBuffer(bb)
+	return aerr == nil && berr == nil && bytes.Equal(ab[:an], bb[:bn])
 }

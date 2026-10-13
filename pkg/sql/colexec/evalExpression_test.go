@@ -69,6 +69,20 @@ func bindTestCast(t *testing.T, proc *process.Process, overload int32, source *p
 	}}}
 }
 
+func TestSemanticParameterVectorsRestoresUnicodeMetadataWithoutMutatingInput(t *testing.T) {
+	mp := mpool.MustNewZero()
+	physical := vector.NewVec(types.T_varchar.ToType())
+	defer physical.Free(mp)
+	require.NoError(t, vector.AppendBytes(physical, []byte("A"), false, mp))
+
+	semantic := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	expr := &FunctionExpressionExecutor{parameterTypes: []types.Type{semantic}}
+	view := expr.semanticParameterVectors([]*vector.Vector{physical})[0]
+	require.Equal(t, semantic, *view.GetType())
+	require.Equal(t, types.T_varchar.ToType(), *physical.GetType())
+	require.Equal(t, []byte("A"), view.GetBytesAt(0))
+}
+
 // evalTestTextParameter scopes transport ownership and restores the exact prior state.
 func evalTestTextParameter(t *testing.T, proc *process.Process, executor ExpressionExecutor, value string, isNull bool, kind vector.PrepareParamKind, batches []*batch.Batch, mask []bool) *vector.Vector {
 	t.Helper()

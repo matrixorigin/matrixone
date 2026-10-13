@@ -1084,7 +1084,7 @@ func lifecycleRestoreAutoIncrementOffset(
 	column := schema.Columns[maximum.ColumnOrdinal]
 	if err = incrservice.ValidateAutoColumnOffset(
 		ctx,
-		types.T(column.TypeID),
+		types.New(types.T(column.TypeID), column.Width, column.Scale),
 		offset,
 	); err != nil {
 		return 0, "", 0, err

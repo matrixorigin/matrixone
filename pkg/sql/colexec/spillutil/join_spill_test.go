@@ -104,7 +104,7 @@ func makeCorruptBatchFile(t *testing.T) *os.File {
 }
 
 func TestTakeSpillBuildPayloadRejectsWrongBudgetRef(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	_, _, err := TakeSpillBuildPayload(proc, nil)
 	require.ErrorContains(t, err, message.ErrSpillBuildPayloadEmpty.Error())
@@ -134,7 +134,7 @@ func TestTakeSpillBuildPayloadRejectsWrongBudgetRef(t *testing.T) {
 }
 
 func TestTakeSpillBuildPayloadRejectsGlobalRowMismatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
 	generation, err := budget.OpenGeneration(1)
@@ -165,7 +165,7 @@ func TestTakeSpillBuildPayloadRejectsGlobalRowMismatch(t *testing.T) {
 }
 
 func TestBucketWriterQueuesWithoutOpenFD(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
 	generation, err := budget.OpenGeneration(1)
@@ -247,7 +247,7 @@ func TestClassifyRowsConservesRows(t *testing.T) {
 }
 
 func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	budget := process.MustNewExecutionResourceBudget(8<<20, 8<<20)
 	generation, err := budget.OpenGeneration(1)
@@ -309,7 +309,7 @@ func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
 }
 
 func TestBucketReaderRejectsSchemaChangeBeforeMerge(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	textBatch := batch.NewWithSize(1)
@@ -343,7 +343,7 @@ func TestBucketReaderRejectsSchemaChangeBeforeMerge(t *testing.T) {
 }
 
 func TestRebuildHashmapBasic(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	values := make([]int32, 100)
 	for i := range values {
@@ -415,7 +415,7 @@ func TestReSpillDecisionKeepsStaticBoundAndAddsAdaptiveBound(t *testing.T) {
 }
 
 func TestReSpillConservesBuildAndProbeRows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	values := make([]int32, 5_000)
 	for i := range values {
@@ -467,7 +467,7 @@ func TestSpillRejectsCompleteRecordTruncation(t *testing.T) {
 	} {
 		for _, metadataRows := range []int64{0, 6} {
 			t.Run(fmt.Sprintf("%s/metadata-%d", test.name, metadataRows), func(t *testing.T) {
-				proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+				proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 				defer proc.Free()
 				first := makeInt32Batch(proc, []int32{1, 2, 3})
 				defer first.Clean(proc.Mp())
@@ -494,7 +494,7 @@ func TestSpillRejectsCompleteRecordTruncation(t *testing.T) {
 }
 
 func TestSpillRejectsPhysicalTruncationBeforeFirstRecord(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	baseline := proc.Mp().CurrNB()
 	first := makeInt32Batch(proc, []int32{1})
@@ -540,7 +540,7 @@ func TestProbeRejectsCompleteRecordTruncation(t *testing.T) {
 		{name: "complete record truncation", values: []int32{1}, metadataRows: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			defer proc.Free()
 			build := makeInt32Batch(proc, []int32{1})
 			probe := makeInt32Batch(proc, test.values)
@@ -587,7 +587,7 @@ func TestProbeRejectsCompleteRecordTruncation(t *testing.T) {
 }
 
 func TestReSpillRejectsProbeRowMetadata(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	values := make([]int32, 100)
 	for i := range values {
@@ -620,7 +620,7 @@ func TestReSpillRejectsProbeRowMetadata(t *testing.T) {
 }
 
 func TestRebuildRejectsRowsWithoutFile(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	for _, bucket := range []SpillBucket{
 		{BuildRows: 1},
@@ -640,7 +640,7 @@ func TestRebuildRejectsRowsWithoutFile(t *testing.T) {
 }
 
 func TestReSpillOmitsUnusedBatchMetadata(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	values := make([]int32, 100)
 	for i := range values {
@@ -682,7 +682,7 @@ func TestReSpillOmitsUnusedBatchMetadata(t *testing.T) {
 }
 
 func TestCleanupDoubleSafe(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	engine := newExactTestSpillEngine(t, SpillEngineConfig{
 		BuildKeyExprs: makeTestKeyExpr(),
