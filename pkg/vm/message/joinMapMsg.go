@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
@@ -639,6 +640,11 @@ func (jm *JoinMap) FreeMemory() {
 	jm.spillMu.Lock()
 	if err := jm.spillPayload.Close(); err != nil {
 		logutil.Errorf("join spill payload cleanup failed: %v", err)
+		// The map may lose its last reference after this terminal call.
+		// Detach the payload so retries do not depend on another FreeMemory.
+		pending := jm.spillPayload
+		jm.spillPayload = SpillBuildPayload{}
+		spillcleanup.Enqueue(pending.Close)
 	}
 	jm.spillPayloadTaken = true
 	jm.spillMu.Unlock()

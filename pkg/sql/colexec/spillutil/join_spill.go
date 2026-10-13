@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -2660,6 +2661,30 @@ func (e *SpillEngine) closeSpillFile(file *message.SpillFile) {
 func (e *SpillEngine) CleanupPending() bool {
 	return e != nil && (len(e.orphanFiles) > 0 || len(e.orphanWriters) > 0 ||
 		e.probeReader.spillFile != nil || e.buildReader.spillFile != nil)
+}
+
+// DeferCleanup transfers failed file removals after Cleanup has released all
+// query-owned memory and FDs. The queued callbacks never capture the engine or
+// process, so an operator can safely release or reuse its execution state.
+func (e *SpillEngine) DeferCleanup() {
+	if e == nil {
+		return
+	}
+	for _, file := range e.orphanFiles {
+		spillcleanup.Enqueue(file.Close)
+	}
+	e.orphanFiles = nil
+	for i := range e.orphanWriters {
+		writer := e.orphanWriters[i]
+		spillcleanup.Enqueue(writer.Close)
+	}
+	e.orphanWriters = nil
+	for _, reader := range []*BucketReader{&e.buildReader, &e.probeReader} {
+		if reader.spillFile != nil {
+			spillcleanup.Enqueue(reader.spillFile.Close)
+			reader.spillFile = nil
+		}
+	}
 }
 
 // Cleanup releases all engine resources.

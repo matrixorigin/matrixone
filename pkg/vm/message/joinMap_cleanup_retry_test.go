@@ -21,10 +21,42 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/stretchr/testify/require"
 )
+
+func TestJoinMapTerminalFreeRetriesAfterFilesystemRecovery(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fd, err := os.CreateTemp(t.TempDir(), "terminal-spill-*")
+	require.NoError(t, err)
+	name := fd.Name()
+	require.NoError(t, fd.Close())
+	var blocked atomic.Bool
+	blocked.Store(true)
+	var released atomic.Int32
+	file := NewReopenableSpillFile(
+		func(context.Context) (*os.File, error) { return os.Open(name) },
+		func() error {
+			if blocked.Load() {
+				return errors.New("injected remove error")
+			}
+			return os.Remove(name)
+		}, 1, 1, func() { released.Add(1) },
+	)
+	jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
+	jm.IncRef(1)
+	require.NoError(t, jm.SetSpillBuildPayload(SpillBuildPayload{Files: []*SpillFile{file}, BudgetRef: struct{}{}}))
+	jm.Free()
+	jm = nil
+	require.FileExists(t, name)
+	require.Zero(t, released.Load())
+	blocked.Store(false)
+	require.Eventually(t, func() bool { return released.Load() == 1 }, 3*time.Second, 10*time.Millisecond)
+	require.NoFileExists(t, name)
+}
 
 func newRetryCleanupSpillFile(t *testing.T, failures int32, releases *atomic.Int32) (*SpillFile, string, *atomic.Int32) {
 	t.Helper()
@@ -115,9 +147,9 @@ func TestJoinMapFreeMemoryRetainsFailedSpillCleanup(t *testing.T) {
 		Files: []*SpillFile{file}, BudgetRef: struct{}{},
 	}))
 	jm.FreeMemory()
-	require.FileExists(t, name)
-	require.Zero(t, releases.Load())
+	require.Empty(t, jm.spillPayload.Files, "terminal cleanup must have an owner independent of the map")
 	jm.FreeMemory()
+	require.Eventually(t, func() bool { return releases.Load() == 1 }, 3*time.Second, 10*time.Millisecond)
 	require.NoFileExists(t, name)
 	require.Equal(t, int32(2), calls.Load())
 	require.Equal(t, int32(1), releases.Load())

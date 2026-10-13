@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -720,6 +721,13 @@ func (ctr *container) freeSpillBkts() {
 	ctr.currentSpillBkt = nil
 }
 
+func (ctr *container) deferSpillCleanup() {
+	for _, bucket := range ctr.spillCleanupPending {
+		spillcleanup.Enqueue(bucket.free)
+	}
+	ctr.spillCleanupPending = nil
+}
+
 func (ctr *container) freeGroupByBatches() {
 	for i := range ctr.groupByBatches {
 		if ctr.groupByBatches[i] != nil {
@@ -1032,6 +1040,7 @@ func NewArgument() *Group {
 
 func (group *Group) Release() {
 	if group != nil {
+		group.ctr.deferSpillCleanup()
 		reuse.Free(group, nil)
 	}
 }
@@ -1153,6 +1162,7 @@ func NewArgumentMergeGroup() *MergeGroup {
 
 func (mergeGroup *MergeGroup) Release() {
 	if mergeGroup != nil {
+		mergeGroup.ctr.deferSpillCleanup()
 		reuse.Free(mergeGroup, nil)
 	}
 }
