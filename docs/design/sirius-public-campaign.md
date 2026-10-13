@@ -89,7 +89,8 @@ Measured captures retain their actual identities; no source or binary is
 relabeled. Public writer/compiler normal/race cleanup, owning function/compiler,
 actual GPU bridge and same-process cuVS checks, all 86 tooling tests and full
 SCA pass. Fail-closed artifact acceptance reports local completion, with CI and
-reviewer approval remaining. Generated evidence remains outside Git.
+reviewer approval remaining. Generated evidence is preserved separately from
+this source change, in the contributor-fork evidence branch described below.
 
 The deep delivery review rejects CPU budgets beyond Go's signed 32-bit range:
 the runtime silently ignores those values, so accepting them would misreport
@@ -104,6 +105,48 @@ parser/function/compiler suites, all 22 native preparations and real GPU
 bridge/cancellation/cuVS coexistence checks pass. Main `e5111936b9`'s
 qualified-identifier parser consumers pass separately. The unchanged complete
 archive passes the tightened acceptance validator; raw runs are not relabeled.
+
+## Optimization evidence preservation
+
+The matched optimization archive and merged #34 qualification are preserved at
+contributor-fork commit `56a5c86936fbda06d4c41dbf2ccbcb717e82901d`,
+on branch `evidence/sirius-perf-30021-c5b77a2594`. The
+[qualification ledger](https://github.com/aunjgr/matrixone/blob/56a5c86936fbda06d4c41dbf2ccbcb717e82901d/docs/design/evidence/sirius-perf-30021/qualification.json)
+records the original baseline/candidate identities, all captured artifact
+checksums, and the source/build/provider equivalence through merged `06400cf4`.
+The bundle retains the 744-run candidate and matched baseline, 264 resource runs,
+all 42 numeric samples per case, raw sanitizer/control logs, and merged-SDK
+build, control, 22-query preparation and actual GPU bridge evidence.
+
+Product validation identifies MO `4e330e4219` separately from the earlier
+measured `8fafa3ae3e` capture. Review fix `c5b77a2594` changes archive verification
+and its tests/documentation; Go/CGo/native product code is unchanged. Its 89
+tooling tests pass, the original checksum-bound v2 archive verifies unchanged,
+and new execution still requires an explicit valid profile. Neither historical
+nor optimized measurements are relabeled as a new benchmark run. CI and
+reviewer approval remain external gates.
+
+From the review-fixed source checkout, export and verify the immutable bundle:
+
+```sh
+git fetch https://github.com/aunjgr/matrixone.git \
+  refs/heads/evidence/sirius-perf-30021-c5b77a2594
+task_optimization_dir=$(mktemp -d)
+git show 56a5c86936fbda06d4c41dbf2ccbcb717e82901d:docs/design/evidence/sirius-perf-30021/sirius-perf-30021.tar.gz \
+  > "$task_optimization_dir/qualification.tar.gz"
+printf '%s  %s\n' \
+  dad13b3c3fc6bf7a2aba545fbb173e0aea7e457e0b65080b66ec8fceb43583cc \
+  "$task_optimization_dir/qualification.tar.gz" | sha256sum -c -
+tar -xzf "$task_optimization_dir/qualification.tar.gz" -C "$task_optimization_dir"
+task_optimization_root="$task_optimization_dir/sirius-perf-30021/acceptance"
+python3 optools/sirius_acceptance.py \
+  --timing "$task_optimization_root/timing" \
+  --resource "$task_optimization_root/resource" \
+  --allocations "$task_optimization_root/allocations.json" \
+  --lifecycle "$task_optimization_root/lifecycle.json" \
+  --sanitizer "$task_optimization_root/sanitizer.json" \
+  --baselines "$task_optimization_root/numeric-baselines.json"
+```
 
 ## Contract and choice
 
