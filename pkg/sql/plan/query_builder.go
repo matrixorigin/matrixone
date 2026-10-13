@@ -638,6 +638,7 @@ func (builder *QueryBuilder) copyNode(ctx *BindContext, nodeId int32) int32 {
 		newNode.Children = append(newNode.Children, builder.copyNode(ctx, child))
 	}
 	newNodeId := builder.appendNode(newNode, ctx)
+	builder.inheritIndexHints(newNodeId, nodeId)
 	return newNodeId
 }
 

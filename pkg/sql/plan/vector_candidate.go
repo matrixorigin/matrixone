@@ -56,6 +56,15 @@ func vectorCandidateModeSupported(option *plan.RankOption) bool {
 	return option == nil || option.Mode == "" || option.Mode == "pre"
 }
 
+// This snapshot is collected lazily before rewrites and discarded at the end
+// of each index pass. Candidates use PRE, so their added nodes cannot introduce
+// AUTO replay; retaining original candidates is conservative if later rewrites
+// remove their access paths.
+type vectorCandidateAutoSummary struct {
+	explicit bool
+	implicit []int32
+}
+
 // 4.2 的 AUTO 会重放整条语句。只允许本区域无副作用，且其它区域不可能
 // 触发 AUTO 的查询；普通候选明确使用 PRE，不改会话默认值或原计划的模式。
 func (builder *QueryBuilder) vectorCandidateRegionSafe(root int32) bool {
@@ -96,20 +105,33 @@ func (builder *QueryBuilder) vectorCandidateRegionSafe(root int32) bool {
 	if !visit(root) {
 		return false
 	}
-	auto, _ := builder.compCtx.ResolveVariable("enable_vector_auto_mode_by_default", true, false)
-	for _, node := range builder.qry.Nodes {
-		if node.RankOption != nil && node.RankOption.Mode == "auto" {
-			return false
+	if builder.vectorCandidateAuto == nil {
+		summary := &vectorCandidateAutoSummary{}
+		auto, _ := builder.compCtx.ResolveVariable("enable_vector_auto_mode_by_default", true, false)
+		for _, node := range builder.qry.Nodes {
+			if node.RankOption != nil && node.RankOption.Mode == "auto" {
+				summary.explicit = true
+				break
+			}
+			if auto == int8(1) && node.NodeType == plan.Node_PROJECT &&
+				(node.RankOption == nil || node.RankOption.Mode == "") {
+				ctx := builder.buildVectorSortContext(node)
+				if ctx == nil {
+					ctx = builder.buildVectorSortContextThroughJoin(node)
+				}
+				if ctx != nil && (ctx.rankOption == nil || ctx.rankOption.Mode == "") {
+					summary.implicit = append(summary.implicit, node.NodeId)
+				}
+			}
 		}
-		if !region[node.NodeId] && auto == int8(1) && node.NodeType == plan.Node_PROJECT &&
-			(node.RankOption == nil || node.RankOption.Mode == "") {
-			ctx := builder.buildVectorSortContext(node)
-			if ctx == nil {
-				ctx = builder.buildVectorSortContextThroughJoin(node)
-			}
-			if ctx != nil && (ctx.rankOption == nil || ctx.rankOption.Mode == "") {
-				return false
-			}
+		builder.vectorCandidateAuto = summary
+	}
+	if builder.vectorCandidateAuto.explicit {
+		return false
+	}
+	for _, id := range builder.vectorCandidateAuto.implicit {
+		if !region[id] {
+			return false
 		}
 	}
 	return true

@@ -244,6 +244,7 @@ type QueryBuilder struct {
 	nameByColRef                map[[2]int32]string
 	protectedScans              map[int32]int
 	projectSpecialGuards        map[int32]*specialIndexGuard
+	vectorCandidateAuto         *vectorCandidateAutoSummary
 	setBitmapByDisplayNode      map[[2]int32]int32
 	indexHintsByScan            map[int32]*indexHintSet
 	indexHintOwnerByNode        map[int32]int32

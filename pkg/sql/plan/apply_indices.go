@@ -70,6 +70,7 @@ type specialIndexKind uint8
 const (
 	specialIndexKindFullText specialIndexKind = 1 << iota
 	specialIndexKindVector
+	specialIndexKindEquiVector
 )
 
 type specialIndexGuard struct {
@@ -311,6 +312,7 @@ func exprUsesOnlyMappedCols(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) bo
 }
 
 func (builder *QueryBuilder) prepareSpecialIndexGuards(rootID int32) {
+	builder.vectorCandidateAuto = nil
 	if builder.protectedScans == nil {
 		builder.protectedScans = make(map[int32]int)
 	} else {
@@ -331,6 +333,7 @@ func (builder *QueryBuilder) prepareSpecialIndexGuards(rootID int32) {
 }
 
 func (builder *QueryBuilder) resetSpecialIndexGuards() {
+	builder.vectorCandidateAuto = nil
 	if builder.protectedScans != nil {
 		for k := range builder.protectedScans {
 			delete(builder.protectedScans, k)
@@ -354,6 +357,9 @@ func (builder *QueryBuilder) collectSpecialIndexGuards(nodeID int32) {
 		}
 		if scanIDs := builder.detectScalarVectorGuard(node); len(scanIDs) > 0 {
 			builder.registerProjectGuard(node.NodeId, specialIndexKindVector, scanIDs)
+		}
+		if scanIDs := builder.detectEquiVectorJoinGuard(node); len(scanIDs) > 0 {
+			builder.registerProjectGuard(node.NodeId, specialIndexKindEquiVector, scanIDs)
 		}
 	}
 
@@ -580,8 +586,14 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 	return fmt.Sprintf("%d", tblCol.GetSeqnum())
 }
 
-func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
-	defer builder.clearProjectGuard(projNode.NodeId)
+func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (rootID int32, err error) {
+	rootID = -1 // A planning panic must only release protection, not start another rewrite.
+	defer func() {
+		defer builder.clearProjectGuard(projNode.NodeId)
+		if guard := builder.projectSpecialGuards[projNode.NodeId]; err == nil && rootID >= 0 && guard != nil && guard.kinds&specialIndexKindEquiVector != 0 {
+			rootID = builder.applyDeferredEquiJoinIndexes(rootID, guard.scanNodeIDs, colRefCnt, idxColMap)
+		}
+	}()
 	var vecCtx *vectorSortContext
 	// FullText
 	{
@@ -649,6 +661,9 @@ END_FULLTEXT:
 	if rewritten, err := builder.applyScalarVectorIndex(nodeID); rewritten != nodeID || err != nil {
 		return rewritten, err
 	}
+	if rewritten, applied, err := builder.applyVectorIndexForEquiJoin(nodeID); applied || err != nil {
+		return rewritten, err
+	}
 
 	// 1. Vector Index Check
 	// Handle Queries like
@@ -658,12 +673,23 @@ END_FULLTEXT:
 		vecCtx = builder.buildVectorSortContextThroughJoin(projNode)
 	}
 	if vecCtx != nil {
-		newNodeID, applied, err := builder.applyVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap)
-		if applied || err != nil {
-			return newNodeID, err
+		if rewritten, applied, err := builder.applyVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap); applied || err != nil {
+			return rewritten, err
 		}
-
 		builder.stabilizeExactVectorSort(vecCtx)
+	}
+	if guard := builder.projectSpecialGuards[nodeID]; guard != nil && guard.kinds&specialIndexKindEquiVector != 0 {
+		// No special rewrite was adopted. Return the original subtree to the
+		// ordinary index owner, including its FORCE JOIN-before-filter ordering
+		// and error propagation. Do not revisit this PROJECT or an adopted ANN plan.
+		builder.clearProjectGuard(nodeID)
+		for i, childID := range projNode.Children {
+			projNode.Children[i], err = builder.applyIndices(childID, colRefCnt, idxColMap)
+			if err != nil {
+				return -1, err
+			}
+		}
+		replaceColumnsForNode(projNode, idxColMap)
 	}
 	// 2. Regular Index Check
 	{

@@ -172,3 +172,14 @@ TP 本来就在协调 CN，不能为 locality 把它升级到 AP_ONECN，否则 
 - Go 1.26.4/CGo wrapper 的 scalar 聚焦测试、完整 planner normal + vet、实际 PREPARE Compile 缓存聚焦测试，以及 native build/gofmt/diff 检查通过。仅新增无状态 planner 准入检查，不修改并发/生命周期；§7 的 runtime race 证据按未变实现复用，不声称本轮重跑。
 - 新数据双 CN，每入口 scalar **133/133** + 原 IVF 四套 **275/275**，共 **408/408**，无忽略或异常。新增普通/PRE/参数化 LIMIT、OFFSET 与 FORCE/无索引对照的结果已生成、人工检查，再正常 comparison；NULL 行为 **0**，OFFSET 行为 **2**。自有服务已停止，shutdown 日志无 mpool 泄漏、cleanup timeout 或 panic。
 - 本修复生产语句块 **6/6（100%）**；以新 planner profile 替换对应文件、未变文件复用旧证据后，整个 PR 为 **534/617（86.55%）**。Q1–Q3 均未新增资源、等待或状态；原设计 v1 字节/hash、协议、持久化格式不变。本节不是新的设计批准或 GitHub APPROVED。
+
+## 9. 合并最新目标及冲突闭包（2026-10-13）
+
+目标 `4.2-dev` 的 `9978492f11baaefc5dd516bf093acdea84be1aaa` 已包含 #30013；从 scalar 修订 `e1a4eeb104` 正常 merge，没有 rebase/force push。两处冲突按行为合并：
+
+- `apply_indices.go` 同时保留 scalar 与 equi JOIN guard/dispatch；SINGLE/LEFT 与 INNER 准入不互相替代。共享插件派发仍只有一个 owner，保留上游普通索引 fallback/defer 的错误与清理规则，以及 scalar 的 nullable/snapshot 回退。
+- `vector_candidate.go` 采用已合入目标的共享实现；AUTO 摘要由 QueryBuilder 在一次 index pass 内持有、prepare/reset 清空，新候选明确 PRE。自动合并同时保留 copyNode 的索引 hint 继承、scalar remap 及根节点发布。未删除两项功能的测试或改写 SQL 结果。
+
+Go 1.26.4/CGo wrapper：完整 planner/compiler normal + vet、真实 frontend PREPARE Compile 缓存回归、native build、gofmt/diff 检查通过。planner profile 重新生成；相对合并前 HEAD 的新增生产语句块（含上游 JOIN）**180/186（96.77%）**。相对新目标的整个 scalar PR 为 **484/546（88.64%）**，未变 runtime 文件复用原 profile；helper 已属于目标，所以计数不同于 §8。
+
+新数据自有双 CN 从每个入口正常比较 scalar **133/133**、最新 JOIN **128/128**、原 IVF 四套 **275/275**，总计各 **536/536**，无 ignored/abnormal。这是当前合并实现的真实组合验证，不再只有历史临时 merge 的 440/440。服务已停止，shutdown 无 mpool 泄漏、cleanup timeout 或 panic；旧数据保留。runtime 同步/selector 生命周期未修改，既有 race 证明复用，不宣称本轮重跑。原设计/批准字节和协议保持不变，本节不表示 GitHub reviewer APPROVED。

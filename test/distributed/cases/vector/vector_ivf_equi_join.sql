@@ -1,0 +1,180 @@
+-- 普通等值 INNER JOIN：资格域不能替代最终重复行关系。
+drop database if exists vector_ivf_equi_join;
+create database vector_ivf_equi_join;
+use vector_ivf_equi_join;
+set @saved_experimental_ivf_index = @@experimental_ivf_index;
+set experimental_ivf_index = 1;
+set probe_limit = 1;
+create table chunks (id varchar(32) primary key, v vecf32(2) not null, document_id varchar(32), category varchar(32));
+insert into chunks values ('c0','[0,0]','u','x'),('c1','[0.01,0]','u','x'),('c2','[0.1,0]','d1','x'),('c3','[0.2,0]','d2','z'),('c4','[0.3,0]','d1','y'),('c5','[0.6,0]','d3','outside'),('c6','[0.15,0]',null,'null');
+create index chunks_ivf using ivfflat on chunks(v) lists=1 op_type 'vector_l2_ops';
+create table documents (row_id int primary key, document_id varchar(32), label varchar(32), payload varchar(32));
+insert into documents values (1,'d1','x','first'),(2,'d1','y','second'),(3,'d2','z','third'),(4,'d3','outside','fourth'),(5,null,'null','fifth');
+create table unique_documents (document_id varchar(32) primary key, label varchar(32));
+insert into unique_documents values ('d1','x'),('d2','z'),('d3','outside');
+-- @regex("ivf_search",true)
+explain select a.id from chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("ivf_search",true)
+explain select a.id from chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=pre';
+-- @regex("ivf_search",false)
+explain select a.id from chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+-- 最近的两行不合格；重复展开后前三行应为 c2,c2,c3。
+select a.id from chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=pre';
+select a.id from chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+select a.id from chunks a where a.document_id in (select document_id from documents) order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from chunks a join unique_documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 3;
+-- @sortkey:0,1
+select a.id,b.label from chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 3;
+-- @sortkey:0,1
+select a.id,b.label,l2_distance(a.v,'[0,0]') as distance from chunks a join documents b on a.document_id=b.document_id order by distance limit 3;
+select a.id,b.label from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from documents b join chunks a on b.document_id=a.document_id order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id,b.label from chunks a join documents b on a.document_id=b.document_id and a.category=b.label order by l2_distance(a.v,'[0,0]') limit 3;
+-- 阈值、重复展开后的 OFFSET、空资格域及零 LIMIT。
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.15 order by l2_distance(a.v,'[0,0]') limit 10;
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.15 order by l2_distance(a.v,'[0,0]') limit 10 by rank with option 'mode=force';
+-- 下界不能只在 Top-K 后重检，否则近距离的不合格候选会耗尽预算。
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+-- 距离提取不能让后面的普通谓词覆盖距离条件；复用数据并在本节后恢复。
+update chunks set category='x' where id='c4';
+-- 下界 + 普通谓词的两个顺序都必须先排除 c2，再选到 c4，而不是截断后得到空结果。
+-- @regex("ivf_search",true)
+explain select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where a.category='x' and l2_distance(a.v,'[0,0]')>0.15 order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1 by rank with option 'mode=force';
+-- 上界应只返回 c2 的两条 JOIN 结果，不能混入距离 0.3 的 c4。
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.25 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from chunks a join documents b on a.document_id=b.document_id where a.category='x' and l2_distance(a.v,'[0,0]')<=0.25 order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.25 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+-- 双边界的六个顺序都必须为空：c2 太近，c4 太远，区间内 c3 的 category 不合格。
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and l2_distance(a.v,'[0,0]')<=0.25 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.25 and l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and a.category='x' and l2_distance(a.v,'[0,0]')<=0.25 order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.25 and a.category='x' and l2_distance(a.v,'[0,0]')>0.15 order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where a.category='x' and l2_distance(a.v,'[0,0]')>0.15 and l2_distance(a.v,'[0,0]')<=0.25 order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where a.category='x' and l2_distance(a.v,'[0,0]')<=0.25 and l2_distance(a.v,'[0,0]')>0.15 order by l2_distance(a.v,'[0,0]') limit 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')>0.15 and l2_distance(a.v,'[0,0]')<=0.25 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1 by rank with option 'mode=force';
+-- 直接 IN/SEMI 使用同一 membership 路径，也必须保留下界并返回 c4。
+select a.id from chunks a where a.document_id in (select document_id from documents) and l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1 by rank with option 'mode=pre';
+select a.id from chunks a where a.document_id in (select document_id from documents) and a.category='x' and l2_distance(a.v,'[0,0]')>0.15 order by l2_distance(a.v,'[0,0]') limit 1 by rank with option 'mode=pre';
+select a.id from chunks a where a.document_id in (select document_id from documents) and l2_distance(a.v,'[0,0]')>0.15 and a.category='x' order by l2_distance(a.v,'[0,0]') limit 1 by rank with option 'mode=force';
+update chunks set category='y' where id='c4';
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.5 order by l2_distance(a.v,'[0,0]') limit 3 offset 1;
+select a.id from chunks a join documents b on a.document_id=b.document_id where l2_distance(a.v,'[0,0]')<=0.5 order by l2_distance(a.v,'[0,0]') limit 3 offset 1 by rank with option 'mode=force';
+select a.id from chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 2 offset 20;
+select a.id from chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 0;
+select a.id from chunks a join documents b on a.document_id=b.document_id where b.label='absent' order by l2_distance(a.v,'[0,0]') limit 3;
+prepare p from 'select a.id from chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,"[0,0]") limit ?';
+set @k=0;
+execute p using @k;
+set @k=3;
+execute p using @k;
+update documents set document_id='u' where document_id='d1';
+execute p using @k;
+update documents set document_id='d1' where document_id='u';
+execute p using @k;
+set @k=0;
+execute p using @k;
+deallocate prepare p;
+-- NULL 参数不能变成空资格域。
+prepare null_vector from 'select count(*) from (select a.id from chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,?) limit 3) q';
+set @query_vector=null;
+execute null_vector using @query_vector;
+set @query_vector='[0,0]';
+execute null_vector using @query_vector;
+deallocate prepare null_vector;
+create table nullable_chunks (id varchar(32) primary key,v vecf32(2),document_id varchar(32));
+insert into nullable_chunks values ('n0',null,'d1'),('n1','[0.1,0]','d1');
+create index nullable_ivf using ivfflat on nullable_chunks(v) lists=1 op_type 'vector_l2_ops';
+-- @regex("ivf_search",false)
+explain select a.id from nullable_chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 2;
+select a.id from nullable_chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 2;
+select a.id from nullable_chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 2 by rank with option 'mode=force';
+-- @regex("ivf_search",true)
+explain select a.id from nullable_chunks a join documents b on a.document_id=b.document_id where a.v is not null order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from nullable_chunks a join documents b on a.document_id=b.document_id where a.v is not null order by l2_distance(a.v,'[0,0]') limit 3;
+-- 整数主键走精确 membership 协议，重复重数与字符串主键保持一致。
+create table int_chunks (id bigint primary key,v vecf32(2) not null,document_id varchar(32));
+insert into int_chunks values (1,'[0,0]','u'),(2,'[0.1,0]','d1'),(3,'[0.2,0]','d2');
+create index int_ivf using ivfflat on int_chunks(v) lists=1 op_type 'vector_l2_ops';
+-- @regex("ivf_search",true)
+explain select a.id from int_chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from int_chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from int_chunks a join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+create table empty_documents (document_id varchar(32));
+select a.id from chunks a join empty_documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("ivf_search",false)
+explain select a.id from chunks a left join documents b on a.document_id=b.document_id order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("ivf_search",false)
+explain select a.id from chunks a join documents b on a.document_id<b.document_id order by l2_distance(a.v,'[0,0]') limit 3;
+-- B 的普通索引既用于资格域，也用于保留重复行的最终 JOIN；非覆盖投影仍需回表。
+insert into documents values (6,'d1','x','duplicate');
+create index idx_label_document on documents(label,document_id);
+-- @regex("documents.idx_label_document",true)
+explain select a.id from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("ivf_search",true)
+explain select a.id from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+select a.id,b.document_id from documents b join chunks a on b.document_id=a.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id,b.document_id from documents b join chunks a on b.document_id=a.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+-- @sortkey:0,1
+select a.id,b.payload from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 4;
+-- @sortkey:0,1
+select a.id,b.payload from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 4 by rank with option 'mode=force';
+-- @regex("documents.idx_label_document",false)
+explain select a.id from chunks a join documents b ignore index(idx_label_document) on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from chunks a join documents b ignore index(idx_label_document) on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- A 的 hint 必须约束资格扫描与后续 membership 扫描，且不关闭 IVF。
+create index idx_category_document on chunks(category,document_id);
+-- @regex("chunks.idx_category_document",true)
+-- @regex("ivf_search",true)
+explain select a.id from chunks a join documents b on a.document_id=b.document_id where a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("chunks.idx_category_document",false)
+-- @regex("ivf_search",true)
+explain select a.id from chunks a ignore index(idx_category_document) join documents b on a.document_id=b.document_id where a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("chunks.idx_category_document",false)
+-- @regex("ivf_search",true)
+explain select a.id from chunks a use index(chunks_ivf) join documents b on a.document_id=b.document_id where a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("chunks.idx_category_document",false)
+-- @regex("ivf_search",true)
+explain select a.id from documents b join chunks a ignore index(idx_category_document) on b.document_id=a.document_id where a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("chunks.idx_category_document",false)
+-- @regex("ivf_search",true)
+explain select a.id from chunks a ignore index(idx_category_document) where a.document_id in(select document_id from documents) and a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from chunks a ignore index(idx_category_document) join documents b on a.document_id=b.document_id where a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from chunks a use index(chunks_ivf) join documents b on a.document_id=b.document_id where a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from chunks a join documents b on a.document_id=b.document_id where a.category='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+-- FOR JOIN 不能扩展成禁止普通过滤扫描的约束。
+-- @regex("chunks.idx_category_document",true)
+explain select a.id from chunks a ignore index for join(idx_category_document) join documents b on a.document_id=b.document_id where a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- FORCE INDEX FOR JOIN 的两个方向都须保留正确列绑定及重复行。
+select a.id from chunks a force index for join(idx_category_document) join documents b on a.document_id=b.document_id where a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id from documents b join chunks a force index for join(idx_category_document) on b.document_id=a.document_id where a.category='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- 显式 JOIN 访问优先于可选 ANN，普通/PRE 模式与 JOIN 顺序不能改变该契约。
+create index idx_document on chunks(document_id);
+create index idx_document on documents(document_id);
+-- @regex("ivf_search",true)
+explain select a.id,b.label from chunks a join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("chunks.idx_document",true)
+-- @regex("ivf_search",false)
+explain select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("chunks.idx_document",true)
+-- @regex("ivf_search",false)
+explain select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=pre';
+-- @regex("chunks.idx_document",true)
+-- @regex("ivf_search",false)
+explain select a.id,b.label from documents b join chunks a force index for join(idx_document) on b.document_id=a.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+-- @regex("documents.idx_document",true)
+-- @regex("ivf_search",false)
+explain select a.id,b.label from documents b force index for join(idx_document) join chunks a on b.document_id=a.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=pre';
+select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3 by rank with option 'mode=force';
+select a.id,b.label from documents b force index for join(idx_document) join chunks a on b.document_id=a.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 3;
+select a.id,b.label from chunks a force index for join(idx_document) join documents b on a.document_id=b.document_id where b.label='x' order by l2_distance(a.v,'[0,0]') limit 2 offset 1;
+drop database vector_ivf_equi_join;
+set experimental_ivf_index=@saved_experimental_ivf_index;
