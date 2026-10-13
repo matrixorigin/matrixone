@@ -722,19 +722,37 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 	case *tree.ExplainPhyPlan:
 		return buildExplainPhyPlan(ctx, stmt, isPrepareStmt)
 	case *tree.Insert:
+		if err := rejectUserVarAssignmentInDML(ctx.GetContext(), stmt, "INSERT"); err != nil {
+			return nil, err
+		}
 		return bindAndOptimizeInsertQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.MultiInsert:
+		if err := rejectUserVarAssignmentInDML(ctx.GetContext(), stmt, "multi-table INSERT"); err != nil {
+			return nil, err
+		}
 		return bindAndOptimizeMultiInsertQuery(ctx, stmt, isPrepareStmt)
 	case *tree.Replace:
+		if err := rejectUserVarAssignmentInDML(ctx.GetContext(), stmt, "REPLACE"); err != nil {
+			return nil, err
+		}
 		if stmt.HasReturning() {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "DML RETURNING does not support REPLACE")
 		}
 		return bindAndOptimizeReplaceQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Update:
+		if err := rejectUserVarAssignmentInDML(ctx.GetContext(), stmt, "UPDATE"); err != nil {
+			return nil, err
+		}
 		return bindAndOptimizeUpdateQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Delete:
+		if err := rejectUserVarAssignmentInDML(ctx.GetContext(), stmt, "DELETE"); err != nil {
+			return nil, err
+		}
 		return bindAndOptimizeDeleteQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Merge:
+		if err := rejectUserVarAssignmentInDML(ctx.GetContext(), stmt, "MERGE"); err != nil {
+			return nil, err
+		}
 		if stmt.HasReturning() {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "DML RETURNING does not support MERGE")
 		}
@@ -834,6 +852,9 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 	case *tree.Deallocate:
 		return buildDeallocate(stmt, ctx)
 	case *tree.Load:
+		if err := rejectUserVarAssignmentInDML(ctx.GetContext(), stmt, "LOAD"); err != nil {
+			return nil, err
+		}
 		return bindAndOptimizeLoadQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.PrepareStmt, *tree.PrepareString:
 		return buildPrepare(stmt, ctx)
