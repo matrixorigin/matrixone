@@ -18,6 +18,8 @@
 package search
 
 import (
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,7 +38,30 @@ import (
 type Hooks struct{}
 
 var _ searchplugin.Hooks = Hooks{}
+var _ searchplugin.ExplainHooks = Hooks{}
 var _ searchplugin.CandidateBudgetHooks = Hooks{}
+
+// ExplainSettings preserves compact text and exposes static settings on detailed output.
+func (Hooks) ExplainSettings(spec *plan.IndexSearchScan, detailed bool) ([]string, error) {
+	if !detailed {
+		return nil, nil
+	}
+	opts, err := ivfpqplan.DecodeScanOptions(spec.GetAlgoOptions())
+	if err != nil {
+		return nil, err
+	}
+	settings := []string{
+		"NProbe: " + strconv.FormatUint(uint64(opts.Nprobe), 10),
+		"ThreadsSearch: " + strconv.FormatInt(int64(opts.ThreadsSearch), 10),
+		"BatchWindow: " + strconv.FormatInt(int64(opts.BatchWindow), 10),
+		"GpuMultiSimulation: " + strconv.FormatInt(int64(opts.GpuMultiSimulation), 10),
+		"KeyPartType: " + strconv.FormatInt(int64(opts.KeyPartType), 10),
+	}
+	if opts.FilterJSON != "" {
+		settings = append(settings, "Filter Predicates: "+opts.FilterJSON)
+	}
+	return settings, nil
+}
 
 // PostFilterCandidateBudget is the ivfpq post-filter over-fetch of resultLimit.
 func (Hooks) PostFilterCandidateBudget(resultLimit uint64) uint64 {
