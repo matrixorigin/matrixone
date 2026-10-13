@@ -530,6 +530,11 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 		}
 	}
 	for i, key := range uniqueKeys {
+		// Restored SQL rederives the current semantic marker. Reject an
+		// unsupported source revision before that identity could be erased.
+		if _, err := plan.JSONFunctionalIndexSemantics(&plan.IndexDef{IndexAlgoParams: key.AlgoParams}); err != nil {
+			return ""
+		}
 		for _, part := range key.Columns {
 			if strings.HasPrefix(part, "__mo_fi_") && !hasVisibleColumn(cols, part) && key.Expressions[part] == "" {
 				return "" // Never restore a reference to an absent hidden column.
@@ -4882,6 +4887,11 @@ func needsExplicitPartitionDefinitions(method string) bool {
 }
 
 func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, error) {
+	if info != nil {
+		if _, err := plan.JSONFunctionalIndexSemantics(&plan.IndexDef{IndexAlgoParams: info.algoParams}); err != nil {
+			return "", err
+		}
+	}
 	if info == nil || tableName == "" || len(info.columns) == 0 {
 		return "", nil
 	}
