@@ -94,6 +94,9 @@ func buildCloneTable(
 			"table %v-%v does not exist", stmt.SrcTable.Schema(), stmt.SrcTable.Name())
 	}
 
+	if srcTblDef.TableType == catalog.SystemMaterializedViewRel {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "CLONE of materialized views")
+	}
 	var (
 		dstTableName    string
 		dstDatabaseName string

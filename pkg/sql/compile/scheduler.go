@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -505,6 +506,9 @@ func (c *Compile) executionRequiresCurrentCN() bool {
 // exists only at the ingress CN and cannot be sent through a remote scheduler
 // decision.
 func (c *Compile) ingressOnlyExecution() bool {
+	if c != nil && c.proc != nil && defines.MaterializedViewWriteActive(c.proc.Ctx) {
+		return true
+	}
 	if c == nil || c.stmt == nil {
 		return false
 	}

@@ -3940,6 +3940,10 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("remap_rewrites"),
 		Default:           "",
 	},
+	"experimental_materialized_view": {
+		Name: "experimental_materialized_view", Scope: ScopeBoth, Dynamic: true, SetVarHintApplies: false,
+		Type: InitSystemVariableBoolType("experimental_materialized_view"), Default: int8(0),
+	},
 	"experimental_ivf_index": {
 		Name:              "experimental_ivf_index",
 		Scope:             ScopeBoth,

@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/mv"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
@@ -399,6 +400,9 @@ func (s *service) registerExecutorsLocked() {
 		task.TaskCode_DataBranchLineageGC,
 		compile.DataBranchLineageGCExecutor(s.sqlExecutor),
 	)
+	if service, ok := runtime.ServiceRuntime(s.cfg.UUID).GetGlobalVariables(mv.RuntimeKey); ok {
+		s.task.runner.RegisterExecutor(task.TaskCode_MaterializedView, service.(*mv.Service).TaskExecutor(ts, ieFactory))
+	}
 	// Register outside task.Lock and the heartbeat/startup command paths. The
 	// stopper owns both retries and cancellation before task storage is closed.
 	if err := s.stopper.RunNamedTask("register lineage GC cron", func(ctx context.Context) {
@@ -421,6 +425,11 @@ func (s *service) registerLineageGCCron(ctx context.Context, ts taskservice.Task
 		attempt = defines.AttachAccount(attempt, catalog.System_Account, catalog.System_User, catalog.System_Role)
 		err := ts.CreateCronTask(attempt, databranchutils.LineageGCTaskMetadata(), databranchutils.LineageGCTaskCronExpr)
 		cancel()
+		if err == nil {
+			attempt, cancel = context.WithTimeout(ctx, 30*time.Second)
+			err = ts.CreateCronTask(attempt, mv.CronMetadata(), mv.CronExpression)
+			cancel()
+		}
 		if err == nil || ctx.Err() != nil {
 			return
 		}

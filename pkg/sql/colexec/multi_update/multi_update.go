@@ -219,6 +219,11 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 			return result, nil
 		}
 
+		if update.ctr.action == actionInsert {
+			if err := defines.ChargeMaterializedViewOutput(proc.Ctx, update.mainTable, input.Batch.Size()); err != nil {
+				return vm.CancelResult, err
+			}
+		}
 		w, err := update.getS3WriterFunc(proc.GetService(), update.mainTable)
 		if err != nil {
 			return vm.CancelResult, err
@@ -281,6 +286,11 @@ func (update *MultiUpdate) update(proc *process.Process, analyzer process.Analyz
 	}
 
 	input := update.input
+	if update.ctr.action == actionInsert {
+		if err := defines.ChargeMaterializedViewOutput(proc.Ctx, update.mainTable, input.Batch.Size()); err != nil {
+			return vm.CancelResult, err
+		}
+	}
 	err := update.updateOneBatch(proc, analyzer, input.Batch)
 	if err != nil {
 		return vm.CancelResult, err

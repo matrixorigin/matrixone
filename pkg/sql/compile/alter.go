@@ -1110,6 +1110,11 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 
 func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetCleanup) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
+	if !qry.TableDef.IsTemporary {
+		if err := c.guardMaterializedViewDDL(qry.Database, qry.TableDef.Name, false); err != nil {
+			return err
+		}
+	}
 	dbName := qry.Database
 
 	if dbName == "" {

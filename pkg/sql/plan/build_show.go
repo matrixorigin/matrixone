@@ -339,7 +339,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 
 	var tableType string
 	if stmt.Full {
-		tableType = fmt.Sprintf(", case relkind when 'v' then 'VIEW' when '%s' then 'CLUSTER TABLE' else 'BASE TABLE' end as Table_type", catalog.SystemClusterRel)
+		tableType = fmt.Sprintf(", case relkind when 'v' then 'VIEW' when 'm' then 'MATERIALIZED VIEW' when '%s' then 'CLUSTER TABLE' else 'BASE TABLE' end as Table_type", catalog.SystemClusterRel)
 	}
 
 	subName := dbName

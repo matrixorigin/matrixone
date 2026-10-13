@@ -2857,6 +2857,9 @@ func fillTableCreateSQLsForRestore(
 	sequences := make([]*tableInfo, 0)
 	restorable := make([]*tableInfo, 0, len(tableInfos))
 	for _, tblInfo := range tableInfos {
+		if tblInfo.relKind == catalog.SystemMaterializedViewRel {
+			return nil, moerr.NewNotSupportedNoCtx("logical restore/clone of materialized views; drop and recreate their definitions")
+		}
 		createSQL, err := getCreateSQL(tblInfo)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {

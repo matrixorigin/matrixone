@@ -1452,6 +1452,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	c.execType = vectorQueryExecType(sequenceExecType(
 		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry), qry)
 
+	if defines.MaterializedViewWriteActive(c.proc.Ctx) {
+		c.execType = plan2.ExecTypeAP_ONECN
+	}
 	c.cnList, err = c.scheduleQueryWorkers()
 	if err != nil {
 		return nil, err
@@ -5351,6 +5354,9 @@ func (c *Compile) compileValueScan(node *plan.Node) ([]*Scope, error) {
 }
 
 func (c *Compile) compileTableScan(node *plan.Node) ([]*Scope, error) {
+	if err := c.validateMaterializedViewScan(node.TableDef); err != nil {
+		return nil, err
+	}
 	stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 	compileStart := time.Now()
 	defer func() {
@@ -9079,6 +9085,11 @@ func (c *Compile) compilePreInsert(nodes []*plan.Node, node *plan.Node, ss []*Sc
 }
 
 func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	if node.InsertCtx != nil {
+		if err := c.validateMaterializedViewWrite(node.InsertCtx.TableDef); err != nil {
+			return nil, err
+		}
+	}
 	if ok, err := isIcebergAppendInsert(c.proc.Ctx, node); err != nil {
 		return nil, err
 	} else if ok {
@@ -9290,6 +9301,11 @@ func icebergInsertNeedsSingleWriterMerge(ss []*Scope, currentCN engine.Node) boo
 }
 
 func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	for _, update := range node.UpdateCtxList {
+		if err := c.validateMaterializedViewWrite(update.TableDef); err != nil {
+			return nil, err
+		}
+	}
 	// Determine whether to Write S3
 	toWriteS3 := node.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) >
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
@@ -9404,6 +9420,11 @@ func (c *Compile) compilePreInsertSK(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileDelete(node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	if node.DeleteCtx != nil {
+		if err := c.validateMaterializedViewWrite(node.DeleteCtx.TableDef); err != nil {
+			return nil, err
+		}
+	}
 	currentFirstFlag := c.anal.isFirst
 	op, err := constructDeletion(c.proc, node, c.e)
 	if err != nil {

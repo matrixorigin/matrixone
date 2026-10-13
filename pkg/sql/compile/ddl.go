@@ -151,6 +151,9 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
+	if err := c.guardMaterializedViewDatabaseDDL(dbName); err != nil {
+		return err
+	}
 	rcAdmission := c.isLifecycleRC()
 	var dropDomain map[uint64]dropLifecycleIdentity
 	var branchExclusiveGate bool
@@ -892,6 +895,11 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		qry.TableDef.Name = tblName
 		if qry.CopyTableDef != nil {
 			qry.CopyTableDef.Name = tblName
+		}
+	}
+	if !isTemp {
+		if err := c.guardMaterializedViewDDL(dbName, tblName, false); err != nil {
+			return err
 		}
 	}
 	targetTableDef := persistedIPFunctionAlterTarget(qry)
@@ -2422,6 +2430,9 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		}
 	}
 
+	if err := c.registerMaterializedView(dbSource, dbName, tblName, qry.TableDef); err != nil {
+		return err
+	}
 	if err := c.populateCreatedTable(qry, isTemp, dbName, aliasName, tblName); err != nil {
 		return err
 	}
@@ -3029,6 +3040,9 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateIndex()
+	if err := c.guardMaterializedViewDDL(qry.Database, qry.Table, false); err != nil {
+		return err
+	}
 	tempIndexNameMap := map[string]string{}
 	var tempTableSession process.Session
 
@@ -3412,6 +3426,12 @@ func (s *Scope) DropIndex(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetDropIndex()
+	if qry.GetIndexName() == "" {
+		return nil
+	}
+	if err := c.guardMaterializedViewDDL(qry.Database, qry.Table, false); err != nil {
+		return err
+	}
 	if qry.GetIndexName() == "" {
 		// Planner uses an empty index name for DROP INDEX IF EXISTS no-op plans.
 		return nil
@@ -3945,6 +3965,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	truncate := s.Plan.GetDdl().GetTruncateTable()
 	db := truncate.GetDatabase()
 	table := truncate.GetTable()
+	if err := c.guardMaterializedViewDDL(db, table, false); err != nil {
+		return err
+	}
 	relationName := table
 	var session process.Session
 	isTemp := false
@@ -4514,6 +4537,13 @@ func (s *Scope) dropTable(c *Compile) (retErr error) {
 	tables := qry.GetTables()
 	if len(tables) == 0 {
 		tables = []*plan.DropTable{qry}
+	}
+	for _, entry := range tables {
+		if entry != nil && entry.TableDef != nil && !entry.TableDef.IsTemporary {
+			if err := c.guardMaterializedViewDDL(entry.Database, entry.Table, false); err != nil {
+				return err
+			}
+		}
 	}
 	lifecycleAdmitted, err := c.borrowedDropLifecycle(tables...)
 	if err != nil {

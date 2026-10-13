@@ -1,0 +1,80 @@
+{
+  "design_revision": 2,
+  "matrixone": {
+    "head": "dd38098853ea197699ed3fac3e69dc53975ac061",
+    "branch": "work",
+    "worktree_clean_at_task_start": true,
+    "local_base": "23d8f61252f3017dff218b530817a240206fd762",
+    "remote_freshness": "not fetched; local base only"
+  },
+  "starrocks": {
+    "repository": "StarRocks/starrocks",
+    "ref": "3.5.7",
+    "files": [
+      {
+        "path": "fe/fe-core/src/main/java/com/starrocks/catalog/MaterializedView.java",
+        "blob_sha": "410f549902e82b0fffac7ee144c64f3b9aaea620",
+        "url": "https://github.com/StarRocks/starrocks/blob/3.5.7/fe/fe-core/src/main/java/com/starrocks/catalog/MaterializedView.java",
+        "lines": 2420
+      },
+      {
+        "path": "fe/fe-core/src/main/java/com/starrocks/scheduler/PartitionBasedMvRefreshProcessor.java",
+        "blob_sha": "02a6cf4240f74ce8d944a13cdef92ad3eec7361c",
+        "url": "https://github.com/StarRocks/starrocks/blob/3.5.7/fe/fe-core/src/main/java/com/starrocks/scheduler/PartitionBasedMvRefreshProcessor.java",
+        "lines": 1435
+      },
+      {
+        "path": "fe/fe-core/src/main/java/com/starrocks/scheduler/mv/MVVersionManager.java",
+        "blob_sha": "6888f4d73a8d45d81defc1536bf887b7e44a82e2",
+        "url": "https://github.com/StarRocks/starrocks/blob/3.5.7/fe/fe-core/src/main/java/com/starrocks/scheduler/mv/MVVersionManager.java",
+        "lines": 275
+      },
+      {
+        "path": "fe/fe-core/src/main/java/com/starrocks/sql/optimizer/MvRewritePreprocessor.java",
+        "blob_sha": "d01dc156cc0e228d08154cd8c2c773b52d41ec21",
+        "url": "https://github.com/StarRocks/starrocks/blob/3.5.7/fe/fe-core/src/main/java/com/starrocks/sql/optimizer/MvRewritePreprocessor.java",
+        "lines": 1066
+      },
+      {
+        "path": "fe/fe-core/src/main/java/com/starrocks/sql/optimizer/rule/transformation/materialization/AggregatedMaterializedViewRewriter.java",
+        "blob_sha": "8930d92ad3a292e78d5f18a8ad2f1aec0270bb3c",
+        "url": "https://github.com/StarRocks/starrocks/blob/3.5.7/fe/fe-core/src/main/java/com/starrocks/sql/optimizer/rule/transformation/materialization/AggregatedMaterializedViewRewriter.java",
+        "lines": 866
+      },
+      {
+        "path": "fe/fe-core/src/main/java/com/starrocks/sql/optimizer/rule/transformation/materialization/MaterializedViewRewriter.java",
+        "blob_sha": "3e3103db0437b4df93db69951d818b64956fb98f",
+        "url": "https://github.com/StarRocks/starrocks/blob/3.5.7/fe/fe-core/src/main/java/com/starrocks/sql/optimizer/rule/transformation/materialization/MaterializedViewRewriter.java",
+        "lines": 3076
+      },
+      {
+        "path": "fe/fe-core/src/main/java/com/starrocks/sql/analyzer/MaterializedViewAnalyzer.java",
+        "blob_sha": "562d527a8e2a9831faa069b4a3eac3d69095e969",
+        "url": "https://github.com/StarRocks/starrocks/blob/3.5.7/fe/fe-core/src/main/java/com/starrocks/sql/analyzer/MaterializedViewAnalyzer.java",
+        "lines": 2079
+      },
+      {
+        "path": "fe/fe-core/src/main/java/com/starrocks/scheduler/TaskBuilder.java",
+        "blob_sha": "92ee65f46bafa57c92fa2c3bbfa15c8148b23471",
+        "url": "https://github.com/StarRocks/starrocks/blob/3.5.7/fe/fe-core/src/main/java/com/starrocks/scheduler/TaskBuilder.java",
+        "lines": 288
+      }
+    ]
+  },
+  "delivery": "Experimental P1 implemented and locally validated on the original baseline; publication verification is recorded separately.",
+  "git4data_sources": [
+    "pkg/frontend/snapshot.go",
+    "pkg/frontend/databranchutils/lineage_publication_lock.go",
+    "pkg/frontend/databranchutils/branch_protect_snapshot.go",
+    "pkg/frontend/data_branch_hashdiff.go"
+  ],
+  "publication": {
+    "repository": "matrixorigin/matrixone",
+    "issue": 30079,
+    "base": "3e50e1b32d8da61bbbf70c89989fb08b671809de",
+    "branch": "feat/materialized-views-p1-20261013",
+    "base_freshness": "origin/main fetched and verified on 2026-10-13",
+    "protocol_floor": 112,
+    "prototype_protocol_floor": 110
+  }
+}

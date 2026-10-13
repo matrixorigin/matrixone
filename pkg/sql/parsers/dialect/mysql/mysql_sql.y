@@ -660,6 +660,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt create_iceberg_catalog_stmt create_mongodb_connection_stmt
 %type <statement> pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt create_sql_task_stmt drop_sql_task_stmt alter_sql_task_stmt show_sql_tasks_stmt show_sql_task_runs_stmt
+%type <statement> create_materialized_view_stmt refresh_materialized_view_stmt drop_materialized_view_stmt alter_materialized_view_stmt show_materialized_views_stmt
+%type <int64Val> mv_refresh_policy mv_interval_unit
+%token <str> MATERIALIZED REFRESH MANUAL EVERY VIEWS REFRESHES
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt show_upgrade_stmt show_rules_on_role_stmt show_iceberg_stmt show_mongodb_connections_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
@@ -1165,6 +1168,8 @@ normal_stmt:
 |   reset_stmt
 |   execute_stmt
 |   show_stmt
+|   show_materialized_views_stmt
+|   refresh_materialized_view_stmt
 |   alter_stmt
 |   analyze_stmt
 |   check_table_stmt
@@ -3912,6 +3917,7 @@ alter_stmt:
 |   alter_pitr_stmt
 |   alter_role_stmt
 |   alter_sql_task_stmt
+|   alter_materialized_view_stmt
 |   alter_iceberg_catalog_stmt
 |   alter_mongodb_connection_stmt
 |   rename_stmt
@@ -5671,6 +5677,7 @@ drop_ddl_stmt:
 |   drop_pitr_stmt
 |   drop_cdc_stmt
 |   drop_sql_task_stmt
+|   drop_materialized_view_stmt
 |   drop_iceberg_catalog_stmt
 |   drop_mongodb_connection_stmt
 
@@ -8435,6 +8442,7 @@ create_ddl_stmt:
 |   create_database_stmt
 |   create_index_stmt
 |   create_view_stmt
+|   create_materialized_view_stmt
 |   create_function_stmt
 |   create_extension_stmt
 |   create_sequence_stmt
@@ -8759,6 +8767,40 @@ func_handler:
     {
     	$$ = $2
     }
+
+
+create_materialized_view_stmt:
+    CREATE MATERIALIZED VIEW not_exists_opt table_name mv_refresh_policy AS ctas_select_stmt
+    { $$ = &tree.CreateMaterializedView{Name:$5, IfNotExists:$4, IntervalSeconds:$6, AsSource:$8} }
+
+mv_refresh_policy:
+    REFRESH MANUAL { $$ = 0 }
+|   REFRESH EVERY INTERVAL INTEGRAL mv_interval_unit
+    {
+        n := sqlTaskInt64($4)
+        if n <= 0 || n > 31536000 / $5 { yylex.Error("invalid materialized view refresh interval"); goto ret1 }
+        $$ = n * $5
+    }
+
+mv_interval_unit:
+    SECOND { $$ = 1 }
+|   MINUTE { $$ = 60 }
+|   HOUR { $$ = 3600 }
+|   DAY { $$ = 86400 }
+
+refresh_materialized_view_stmt:
+    REFRESH MATERIALIZED VIEW table_name { $$ = &tree.RefreshMaterializedView{Name:$4} }
+
+drop_materialized_view_stmt:
+    DROP MATERIALIZED VIEW exists_opt table_name { $$ = &tree.DropMaterializedView{Name:$5, IfExists:$4} }
+
+alter_materialized_view_stmt:
+    ALTER MATERIALIZED VIEW table_name mv_refresh_policy { $$ = &tree.AlterMaterializedView{Name:$4, IntervalSeconds:$5} }
+
+show_materialized_views_stmt:
+    SHOW MATERIALIZED VIEWS { $$ = &tree.ShowMaterializedViews{} }
+|   SHOW MATERIALIZED VIEW REFRESHES table_name { $$ = &tree.ShowMaterializedViews{Name:$5, Runs:true} }
+|   SHOW CREATE MATERIALIZED VIEW table_name { $$ = &tree.ShowMaterializedViews{Name:$5, Create:true} }
 
 create_view_stmt:
     CREATE view_list_opt VIEW not_exists_opt table_name column_list_opt AS ctas_select_stmt view_tail
@@ -16207,7 +16249,13 @@ equal_opt:
 //|   MYSQL_COMPATIBILITY_MODE
 
 non_reserved_keyword:
-    ACCOUNT
+    MATERIALIZED
+|   REFRESH
+|   MANUAL
+|   EVERY
+|   VIEWS
+|   REFRESHES
+|   ACCOUNT
 |   JSON_TABLE_PATH
 |   JSON_TABLE_NESTED
 |   JSON_TABLE_ORDINALITY
