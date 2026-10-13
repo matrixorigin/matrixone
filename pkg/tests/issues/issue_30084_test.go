@@ -51,16 +51,22 @@ func TestIssue30084ODKUPartitionSnapshotValidation(t *testing.T) {
 		for _, tc := range []struct {
 			name      string
 			partition string
+			composite bool
 		}{
 			{name: "plain"},
 			{name: "key", partition: "partition by key(id) partitions 8"},
 			{name: "range", partition: "partition by range(id) (partition p0 values less than (2), partition p1 values less than maxvalue)"},
 			{name: "non_pk_partition", partition: "partition by hash(uk) partitions 2"},
+			{name: "composite", partition: "partition by key(id) partitions 8", composite: true},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				table := fmt.Sprintf("`%s`.`%s`", name, tc.name)
-				execSQLRequire(t, ctx, db, "create table "+table+"(id int primary key, uk int unique, v int) "+tc.partition)
-				execSQLRequire(t, ctx, db, "insert into "+table+" values(1,10,1)")
+				columns, seed, incoming := "(id int primary key, uk int unique, v int)", "(1,10,1)", "(100099,10,999)"
+				if tc.composite {
+					columns, seed, incoming = "(id int, shard int, uk int unique, v int, primary key(id,shard))", "(1,7,10,1)", "(100099,7,10,999)"
+				}
+				execSQLRequire(t, ctx, db, "create table "+table+columns+" "+tc.partition)
+				execSQLRequire(t, ctx, db, "insert into "+table+" values"+seed)
 				commitTS := cn.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
 				testutils.WaitLogtailApplied(t, commitTS, cn)
 				var tableID uint64
@@ -70,7 +76,7 @@ func TestIssue30084ODKUPartitionSnapshotValidation(t *testing.T) {
 				writer, err := db.Conn(ctx)
 				require.NoError(t, err)
 				defer writer.Close()
-				statement := "insert into " + table + " values(100099,10,999) on duplicate key update v=v+1"
+				statement := "insert into " + table + " values" + incoming + " on duplicate key update v=v+1"
 				issue30084CommitBetweenScanAndLock(t, ctx, cn, writer, db, tableID, statement)
 				commitTS = cn.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
 				testutils.WaitLogtailApplied(t, commitTS, cn)
