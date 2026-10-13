@@ -118,7 +118,7 @@ func TestFunctionalJSONReplayAndEqualityPlan(t *testing.T) {
 	target.Id = int32(types.T_varchar)
 	target.Width = 65535
 	wrap := &Expr{Typ: target, Expr: &pb.Expr_F{F: &pb.Function{Func: &ObjectRef{Obj: int64(function.CAST)<<32 | 2, ObjName: "cast"}, Args: []*Expr{key, {Typ: target, Expr: &pb.Expr_T{T: &pb.TargetType{}}}}}}}
-	require.Same(t, key, functionalJSONComparisonOperand(wrap, table.Cols))
+	require.Same(t, key, functionalJSONComparisonOperand(wrap, table.Cols, 0))
 	for _, change := range []func(*Expr){
 		func(e *Expr) { e.Typ.Width = 19; e.GetF().Args[1].Typ = e.Typ },
 		func(e *Expr) { e.Typ.Charset = uint32(types.CharsetBinary); e.GetF().Args[1].Typ = e.Typ },
@@ -128,7 +128,7 @@ func TestFunctionalJSONReplayAndEqualityPlan(t *testing.T) {
 	} {
 		bad := DeepCopyExpr(wrap)
 		change(bad)
-		require.Same(t, bad, functionalJSONComparisonOperand(bad, table.Cols))
+		require.Same(t, bad, functionalJSONComparisonOperand(bad, table.Cols, 0))
 	}
 	ctx.tables["docs"] = table
 	ctx.objects["docs"] = &ObjectRef{ObjName: "docs", SchemaName: "tpch"}

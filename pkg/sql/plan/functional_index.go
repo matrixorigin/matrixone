@@ -433,7 +433,7 @@ func (builder *QueryBuilder) addFunctionalIndexFilters(node *pb.Node) {
 					if constant.GetLit() == nil || constant.GetLit().Isnull {
 						continue
 					}
-					candidate := DeepCopyExpr(functionalJSONComparisonOperand(f.Args[side], node.TableDef.Cols))
+					candidate := DeepCopyExpr(functionalJSONComparisonOperand(f.Args[side], node.TableDef.Cols, node.BindingTags[0]))
 					persisted := DeepCopyExpr(col.GeneratedCol.Expr)
 					if !normalizeFunctionalExpression(candidate, node.BindingTags[0]) || !normalizeFunctionalExpression(persisted, 0) ||
 						!functionalExpressionEligible(candidate, node.TableDef.Cols, make(map[int32]bool)) || !proto.Equal(candidate, persisted) {

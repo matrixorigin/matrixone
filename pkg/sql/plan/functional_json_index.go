@@ -204,7 +204,7 @@ func validateFunctionalJSONIndexSemantics(ctx context.Context, table *TableDef, 
 // The equality binder widens CHAR keys into its VARCHAR comparison domain.
 // Match only this known value-preserving wrapper; the original predicate stays
 // as a residual and the persisted JSON expression still matches exactly.
-func functionalJSONComparisonOperand(expr *Expr, cols []*ColDef) *Expr {
+func functionalJSONComparisonOperand(expr *Expr, cols []*ColDef, tag int32) *Expr {
 	if expr == nil || !functionalKnownFunction(expr, function.CAST, 2) {
 		return expr
 	}
@@ -214,7 +214,11 @@ func functionalJSONComparisonOperand(expr *Expr, cols []*ColDef) *Expr {
 	}
 	inner := fn.Args[0]
 	from, to := inner.Typ, expr.Typ
-	if from.Id != int32(types.T_char) || to.Id != int32(types.T_varchar) || to.Width < from.Width || from.Charset != to.Charset || from.CollationVersion != to.CollationVersion || from.PadSpace != to.PadSpace || from.Scale != to.Scale || !functionalJSONTextCastEligible(inner, cols, make(map[int32]bool)) {
+	if from.Id != int32(types.T_char) || to.Id != int32(types.T_varchar) || to.Width < from.Width || from.Charset != to.Charset || from.CollationVersion != to.CollationVersion || from.PadSpace != to.PadSpace || from.Scale != to.Scale {
+		return expr
+	}
+	normalized := DeepCopyExpr(inner)
+	if !normalizeFunctionalExpression(normalized, tag) || !functionalJSONTextCastEligible(normalized, cols, make(map[int32]bool)) {
 		return expr
 	}
 	return inner
