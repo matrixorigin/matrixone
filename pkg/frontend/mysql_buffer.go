@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -351,6 +352,56 @@ func (c *Conn) ID() uint64 {
 
 func (c *Conn) RawConn() net.Conn {
 	return c.conn
+}
+
+// connForTLS returns a connection that preserves bytes read ahead of the
+// MySQL packet being processed. During the SSLRequest transition, Conn.Read
+// can read the SSLRequest and the first TLS record in one read. Those TLS
+// bytes live in fixBuf rather than the underlying net.Conn, so tls.Server must
+// consume them before reading from the underlying connection.
+func (c *Conn) connForTLS() net.Conn {
+	pending := c.fixBuf.AvailableData()
+	if len(pending) == 0 {
+		return c.conn
+	}
+
+	prefix := make([]byte, len(pending))
+	copy(prefix, pending)
+	c.fixBuf.ResetIndices()
+	return &bufferedNetConn{
+		Conn:   c.conn,
+		prefix: prefix,
+	}
+}
+
+// bufferedNetConn exposes prefix bytes before delegating reads to Conn. It is
+// used only while upgrading a MySQL connection to TLS; embedding net.Conn
+// keeps deadlines, writes, addresses and close behavior unchanged.
+type bufferedNetConn struct {
+	net.Conn
+	prefix []byte
+}
+
+func (c *bufferedNetConn) Read(p []byte) (int, error) {
+	if len(c.prefix) == 0 {
+		return c.Conn.Read(p)
+	}
+
+	n := copy(p, c.prefix)
+	c.prefix = c.prefix[n:]
+	return n, nil
+}
+
+// SyscallConn forwards access to the underlying socket so the routine
+// manager can continue probing client disconnects after TLS takes ownership
+// of this buffered connection.
+func (c *bufferedNetConn) SyscallConn() (syscall.RawConn, error) {
+	syscallConn, ok := c.Conn.(syscall.Conn)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"buffered connection does not expose syscall connection")
+	}
+	return syscallConn.SyscallConn()
 }
 
 // GetSequenceID returns the sequence expected for the next MySQL packet.

@@ -212,7 +212,7 @@ client.disconnect()
 ...
 from matrixone.sqlalchemy_ext import boolean_match
 
-# Create fulltext index using SDK 
+# Create fulltext index using SDK
 client.fulltext_index.create(
     Article,name='ftidx_content',columns=['title', 'content']
 )
@@ -358,8 +358,8 @@ If you use MatrixOne in academic work or refer to its Git for Data design, pleas
 
 ## 🙌 <a id="contributing">Contributing</a>
 
-Contributions to MatrixOne are welcome from everyone.  
- See [Contribution Guide](https://docs.matrixorigin.cn/en/latest/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow.
+Contributions to MatrixOne are welcome from everyone.
+ See [Contribution Guide](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Contribution-Guide/make-your-first-contribution.html) for details on submitting patches and the contribution workflow.
 
 ### 👏 All contributors
 

@@ -1339,13 +1339,23 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	if err != nil {
 		return err
 	}
+	sourceTableDef := qry.TableDef
+	if !isTemp && !plan2.IsFkBannedDatabase(dbName) || len(qry.TableDef.Cols) > plan2.TableColumnCountLimit {
+		sourceTableDef = originRel.CopyTableDef(c.proc.Ctx)
+	}
+	// A wide COPY allowance belongs to the live source generation, not the
+	// potentially stale planner definition. Locks/snapshot refresh precede this.
+	if len(qry.TableDef.Cols) > plan2.TableColumnCountLimit &&
+		(sourceTableDef.TblId != qry.TableDef.TblId || sourceTableDef.Version != qry.TableDef.Version) {
+		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
 	if !isTemp && !plan2.IsFkBannedDatabase(dbName) {
 		// Validate every potentially changed preexisting endpoint before creating
 		// the replacement; planner metadata may predate a recently committed FK.
 		// Constraints introduced by this statement are enforced while rows are
 		// inserted into the replacement relation.
 		if err = checkAlterCopyForeignKeyColumns(
-			c, qry, originRel.CopyTableDef(c.proc.Ctx), sourceForeignKeys,
+			c, qry, sourceTableDef, sourceForeignKeys,
 			sourceRefChildTbls, oldId, dbName, tblName,
 		); err != nil {
 			return err
@@ -1362,7 +1372,11 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		if baseCtx == nil {
 			baseCtx = c.proc.GetTopContext()
 		}
-		c.proc.Ctx = plan2.WithPersistedDDLReplay(baseCtx, qry.TableDef, qry.CopyTableDef)
+		replayCtx, err := plan2.WithAlterTableDDLReplay(baseCtx, dbName, sourceTableDef, qry.CopyTableDef)
+		if err != nil {
+			return err
+		}
+		c.proc.Ctx = replayCtx
 		defer func() { c.proc.Ctx = originalCtx }()
 		create := func() error { return c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts) }
 		if !isTemp && c.isLifecycleRC() {

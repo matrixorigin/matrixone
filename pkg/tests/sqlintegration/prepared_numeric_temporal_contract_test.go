@@ -148,12 +148,6 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 						{"recovery after category changes", []any{int64(0), int64(0), int64(8), int64(8)}, []int64{4, 7}},
 					} {
 						got, err := readPreparedContractIDs(p.QueryContext(ctx, tc.bounds...))
-						if tc.name == "unsigned" && path.name != "explicit cast" {
-							// The existing unsigned comparison domain rejects negative
-							// column values. Signed admission must not hide that error.
-							require.ErrorContains(t, err, "data out of range")
-							continue
-						}
 						require.NoError(t, err, tc.name)
 						require.Equal(t, tc.want, got, tc.name)
 					}
