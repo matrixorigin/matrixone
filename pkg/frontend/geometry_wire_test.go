@@ -28,6 +28,31 @@ import (
 	"testing"
 )
 
+func cleanupGeometryWireFixture(t *testing.T, proto *MysqlProtocolImpl, stmt *PrepareStmt) {
+	t.Helper()
+	ioConn := proto.GetTcpConnection()
+	allocator := ioConn.allocator.allocator
+
+	// Cleanup runs in reverse registration order, before the process cleanup.
+	t.Cleanup(func() {
+		alloc, ok := allocator.(*LeakCheckAllocator)
+		require.True(t, ok, "expected fixture leak-check allocator")
+		alloc.Lock()
+		allocated, freed, records := alloc.allocated, alloc.freed, len(alloc.records)
+		alloc.Unlock()
+		require.Positive(t, allocated, "fixture must exercise allocation")
+		require.Equal(t, allocated, freed, "unreleased IO buffers")
+		require.Zero(t, records, "live IO allocations")
+	})
+	t.Cleanup(func() {
+		if err := ioConn.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	t.Cleanup(proto.Close)
+	t.Cleanup(stmt.Close)
+}
+
 func TestGeometryWireWriters(t *testing.T) {
 	// Independent standard WKB for POINT(1 2), not the production codec's output.
 	point, _ := hex.DecodeString("0101000000000000000000f03f0000000000000040")
@@ -37,7 +62,8 @@ func TestGeometryWireWriters(t *testing.T) {
 				for _, binaryRow := range []bool{false, true} {
 					t.Run(fmt.Sprintf("%s/srid=%d/vector=%v/binary=%v", oid, srid, fast, binaryRow), func(t *testing.T) {
 						conn := &prepareResponseCaptureConn{}
-						proto, proc, _ := newBinaryPrepareProtocolTestCaseWithConn(t, "select 1", conn)
+						proto, proc, stmt := newBinaryPrepareProtocolTestCaseWithConn(t, "select 1", conn)
+						cleanupGeometryWireFixture(t, proto, stmt)
 						typ := oid.ToType()
 						typ.Width = srid + 1
 						col := new(MysqlColumn)
@@ -146,9 +172,7 @@ func TestHistoricalGeometryCursorCaptureAndFetch(t *testing.T) {
 				ctx := context.Background()
 				conn := &prepareResponseCaptureConn{}
 				proto, proc, stmt := newBinaryPrepareProtocolTestCaseWithConn(t, "select 1", conn)
-				t.Cleanup(proto.Close)
-				defer proc.Free()
-				defer stmt.Close()
+				cleanupGeometryWireFixture(t, proto, stmt)
 				ses := proto.GetSession()
 				ses.proc = proc
 				ses.respr = NewMysqlResp(proto)
