@@ -96,13 +96,11 @@ class TestAsyncORMOnline:
     @pytest_asyncio.fixture(scope="function")
     async def test_async_client(self, test_database):
         """Create and connect AsyncClient for testing"""
-        host, port, user, password, _ = online_config.get_connection_params()
+        host, port, user, password, database = online_config.get_connection_params()
 
-        # First create the database using default connection
+        # First create the fixture database through the configured base database
         temp_client = AsyncClient()
-        await temp_client.connect(
-            host=host, port=port, user=user, password=password, database="test"
-        )  # Connect to default database
+        await temp_client.connect(host=host, port=port, user=user, password=password, database=database)
         await temp_client.execute(f"CREATE DATABASE IF NOT EXISTS {test_database}")
         await temp_client.disconnect()
 
@@ -152,7 +150,7 @@ class TestAsyncORMOnline:
                 await client.disconnect()
                 # Clean up database
                 cleanup_client = AsyncClient()
-                await cleanup_client.connect(host=host, port=port, user=user, password=password, database="test")
+                await cleanup_client.connect(host=host, port=port, user=user, password=password, database=database)
                 await cleanup_client.execute(f"DROP DATABASE IF EXISTS {test_database}")
                 await cleanup_client.disconnect()
             except Exception as e:
