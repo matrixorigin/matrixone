@@ -67,3 +67,12 @@ id    is_ring    is_simple
 2    0    1
 drop table rings;
 drop database geo_valid;
+select st_isvalid(st_geomfromtext('LINESTRING(0 0,0 0,1 0,1 0)',0)) as repeated_valid;
+repeated_valid
+1
+select st_isvalid(st_geomfromtext('LINESTRING(0 0,0 0)',0)) as degenerate_invalid;
+degenerate_invalid
+0
+select st_isvalid(st_geomfromtext('LINESTRING(0 0,0.0000000001 0)',0)) as tiny_valid;
+tiny_valid
+1
