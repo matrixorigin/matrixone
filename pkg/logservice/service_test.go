@@ -21,7 +21,6 @@ import (
 	"math"
 	"net"
 	"runtime/debug"
-	"sync"
 	"testing"
 	"time"
 
@@ -1365,68 +1364,15 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				// half-converged gossip state. Require complete short-suite coverage.
 				maxNotReady = 0
 			}
-			seedCount := min(nodeCount, 10)
-			gossipPorts := make([]int, nodeCount)
-			for i := range gossipPorts {
-				gossipPorts[i] = getTestGossipPort()
-			}
-			seedAddresses := make([]string, seedCount)
-			for i := range seedCount {
-				seedAddresses[i] = getTestGossipAddress(gossipPorts[i])
-			}
-			configs := make([]Config, 0, nodeCount)
-			services := make([]*Service, 0, nodeCount)
-			defer func() {
-				testLogger.Info("going to close all services")
-				var wg sync.WaitGroup
-				var closeErr error
-				var closeErrMu sync.Mutex
-				for _, s := range services {
-					if s != nil {
-						selected := s
-						wg.Add(1)
-						go func() {
-							defer wg.Done()
-							if err := selected.Close(); err != nil {
-								closeErrMu.Lock()
-								closeErr = errors.Join(closeErr, err)
-								closeErrMu.Unlock()
-							}
-							testLogger.Info("closed a service")
-						}()
-					}
-				}
-				wg.Wait()
-				require.NoError(t, closeErr)
-			}()
-			for i := 0; i < nodeCount; i++ {
-				cfg := DefaultConfig()
-				cfg.FS = vfs.NewStrictMem()
-				cfg.UUID = uuid.New().String()
-				cfg.DeploymentID = 1
-				cfg.RTTMillisecond = 200
-				cfg.DataDir = fmt.Sprintf("data-%d", i)
-				cfg.LogServicePort = getTestServicePort()
-				cfg.RaftPort = getAvailablePort()
-				cfg.GossipPort = gossipPorts[i]
-				cfg.GossipSeedAddresses = append([]string(nil), seedAddresses...)
-				cfg.DisableWorkers = true
-				cfg.LogDBBufferSize = 1024 * 16
-				cfg.GossipProbeInterval.Duration = 350 * time.Millisecond
-				configs = append(configs, cfg)
-
-				runtime.SetupServiceBasedRuntime(cfg.UUID, rt)
-
-				service, err := NewService(cfg,
-					newFS(),
-					nil,
-					WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-						return true
-					}),
-				)
-				require.NoError(t, err)
-				services = append(services, service)
-			}
+			configs, services, err := startGossipFixture(t, t.Context(),
+				func() ([]Config, error) { return makeGossipFixtureConfigs(t, rt, nodeCount) },
+				newGossipFixtureService,
+				func(configs []Config, services []*Service) error {
+					return closeGossipFixture(rt, configs, services)
+				},
+			)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, closeGossipFixture(rt, configs, services)) }()
 			// start all replicas
 			// shardID: [1, 16]
 			id := uint64(100)
